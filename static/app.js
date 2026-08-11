@@ -47483,19 +47483,61 @@
             + '<button type="button" class="conv-sticky-header__close" data-csh-close title="Hide this panel completely">×</button>'
             + '<div class="csh-row">'
             +   '<div class="csh-col csh-col-ask">'
-            +     '<div class="csh-ask-original">'
-            +       '<div class="label">Original ask</div>'
-            +       (function () {
-                      const parts = splitFirstSentence(mobileOriginalAskText);
-                      const imagesHtml = renderImageDescriptors(ev.images);
-                      let h = '<div class="user-msg" dir="auto">';
-                      h += '<span class="ask-first">' + linkifyPastedImages(escapeHtml(parts[0])) + '</span>';
-                      h += '<span class="ask-rest"' + (parts[1] ? '' : ' style="display:none"') + '>' + linkifyPastedImages(escapeHtml(parts[1] || '')) + '</span>';
-                      h += imagesHtml;
+            +     (function () {
+                      // CCC-785: a long-running WatchTower drain worker's
+                      // "Original ask" is forever the queue-drain instruction
+                      // it was launched with — stale the moment it claims its
+                      // first ticket. Swap to the most recent ticket it
+                      // claimed/closed, plus a list of every ticket it has
+                      // handled this session, when that data is available.
+                      // Matches via `conv.session_id` against each queue
+                      // item's `claimed_session_id` (permanent — survives the
+                      // worker process ending, unlike resolving a `wt
+                      // --worker <id>` string through the live-workers cache).
+                      const handled = (typeof _uxFixesHandledTicketsForRow === 'function')
+                        ? _uxFixesHandledTicketsForRow(conv) : [];
+                      const current = (typeof _uxFixesQueueProgressForRow === 'function')
+                        ? _uxFixesQueueProgressForRow(conv) : null;
+                      const mostRecent = (current && current.kind === 'working')
+                        ? { ref: current.ref, title: current.title, note: current.note }
+                        : (handled[0] || null);
+                      if (!mostRecent || !mostRecent.ref) {
+                        const parts = splitFirstSentence(mobileOriginalAskText);
+                        const imagesHtml = renderImageDescriptors(ev.images);
+                        let h = '<div class="csh-ask-original"><div class="label">Original ask</div>';
+                        h += '<div class="user-msg" dir="auto">';
+                        h += '<span class="ask-first">' + linkifyPastedImages(escapeHtml(parts[0])) + '</span>';
+                        h += '<span class="ask-rest"' + (parts[1] ? '' : ' style="display:none"') + '>' + linkifyPastedImages(escapeHtml(parts[1] || '')) + '</span>';
+                        h += imagesHtml;
+                        h += '</div></div>';
+                        return h;
+                      }
+                      const recentLabel = (current && current.kind === 'working') ? 'Working on' : 'Most recent ticket';
+                      // Prefer the close resolution (what actually got fixed)
+                      // over the raw complaint text; `title` on older queue
+                      // items is just the generic page title captured at
+                      // screenshot time, not a real ticket title — last resort.
+                      const _truncate = (s, n) => (s.length > n ? s.slice(0, n - 1) + '…' : s);
+                      const recentText = _truncate(mostRecent.summary || mostRecent.note || mostRecent.title || '', 220);
+                      let h = '<div class="csh-ask-original is-worker-summary">';
+                      h += '<div class="label">' + escapeHtml(recentLabel) + '</div>';
+                      h += '<div class="user-msg" dir="auto">';
+                      h += '<span class="ux-ticket-ref">' + escapeHtml(mostRecent.ref) + '</span> ';
+                      h += '<span class="ask-first">' + escapeHtml(recentText) + '</span>';
+                      h += '</div>';
+                      if (handled.length) {
+                        h += '<details class="csh-tickets-handled">';
+                        h += '<summary>Tickets handled this session (' + handled.length + ')</summary>';
+                        h += '<ul>';
+                        for (const t of handled) {
+                          const label = _truncate(t.summary || t.note || t.title || '', 120);
+                          h += '<li><span class="ux-ticket-ref">' + escapeHtml(t.ref) + '</span> ' + escapeHtml(label) + '</li>';
+                        }
+                        h += '</ul></details>';
+                      }
                       h += '</div>';
                       return h;
                     })()
-            +     '</div>'
             +     '<div class="csh-ask-earlier" data-earlier-block>'
             +       '<div class="label">Earlier ask</div>'
             +       '<div class="user-msg" dir="auto"><span class="earlier-first" data-earlier-first></span></div>'
@@ -52132,19 +52174,33 @@
         const csid = _uxFixesIdentityKey(rawSid);
         if (!csid) continue; // unclaimed close (e.g. a manual probe) → no row to credit
         const closedAt = _uxFixesClosedAtMs(item);
+        // CCC-785: prefer the actual close resolution (what got fixed) over
+        // the raw complaint text — far more useful for "most recent ticket".
+        const _summary = (item.resolution && item.resolution.summary) || '';
         const prevC = projectLastClosed.get(project);
         if (!prevC || closedAt > prevC.closedAt) {
           projectLastClosed.set(project, {
             seq, project, ref: item.ref || '', closedAt, sid: csid,
-            title: item.title || '', note: item.note || '',
+            title: item.title || '', note: item.note || '', summary: _summary,
           });
         }
         // CCC-785: keep every closed ticket credited to this session (not
         // just the latest), so the status rail can list "tickets handled
-        // this session" for a long-running WatchTower drain worker.
-        let list = closedTicketsBySession.get(csid);
-        if (!list) { list = []; closedTicketsBySession.set(csid, list); }
-        list.push({ ref: item.ref || '', title: item.title || '', note: item.note || '', project, closedAt });
+        // this session" for a long-running WatchTower drain worker. Credit
+        // both the worker-id identity (closed_by/claimed_by) AND the literal
+        // session id that performed the claim (`claimed_session_id`) — the
+        // worker-id string only resolves to a live session via a cache that
+        // goes stale the moment the worker process ends, but the session id
+        // is permanent.
+        const creditKeys = [csid];
+        const sessKey = _uxFixesIdentityKey(item.claimed_session_id);
+        if (sessKey && creditKeys.indexOf(sessKey) === -1) creditKeys.push(sessKey);
+        const entry = { ref: item.ref || '', title: item.title || '', note: item.note || '', summary: _summary, project, closedAt };
+        for (const key of creditKeys) {
+          let list = closedTicketsBySession.get(key);
+          if (!list) { list = []; closedTicketsBySession.set(key, list); }
+          list.push(entry);
+        }
         continue;
       }
       if (status !== 'in_progress') continue;
@@ -52155,17 +52211,22 @@
       // highest seq — otherwise a freshly-claimed low-seq fix loses to a stale
       // parked one, and a parked ticket can masquerade as the active fix.
       const claimedAt = _uxFixesClaimedAtMs(item);
-      const prev = byClaimedSession.get(sid);
-      if (!prev || claimedAt > prev.claimedAt) {
-        const rec = {
-          seq, project, ref: item.ref || '', lane: item.lane || 'normal', claimedAt,
-          title: item.title || '', note: item.note || '',
-        };
-        byClaimedSession.set(sid, rec);
-        const prevProject = activeByProject.get(project);
-        if (!prevProject || claimedAt > prevProject.claimedAt) {
-          activeByProject.set(project, rec);
-        }
+      const rec = {
+        seq, project, ref: item.ref || '', lane: item.lane || 'normal', claimedAt,
+        title: item.title || '', note: item.note || '',
+      };
+      // Credit both the worker-id identity and the literal claiming session
+      // id (CCC-785) — same reasoning as the closed-ticket credit below.
+      const claimKeys = [sid];
+      const claimSessKey = _uxFixesIdentityKey(item.claimed_session_id);
+      if (claimSessKey && claimKeys.indexOf(claimSessKey) === -1) claimKeys.push(claimSessKey);
+      for (const key of claimKeys) {
+        const prev = byClaimedSession.get(key);
+        if (!prev || claimedAt > prev.claimedAt) byClaimedSession.set(key, rec);
+      }
+      const prevProject = activeByProject.get(project);
+      if (!prevProject || claimedAt > prevProject.claimedAt) {
+        activeByProject.set(project, rec);
       }
     }
     // Credit each project's latest close to the session that closed it (one

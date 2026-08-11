@@ -17035,6 +17035,45 @@ body.is-issue-view .conv-input-context { display: none !important; }
   text-decoration: underline;
 }
 
+/* CCC-785: worker-session variant — "Original ask" replaced with the most
+   recently claimed/closed ticket, plus a collapsible list of every ticket
+   this session has handled. Same shape as `.csh-ask-original`. */
+.csh-ask-original.is-worker-summary .ux-ticket-ref {
+  display: inline-block;
+  font-family: var(--mono, monospace);
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--accent);
+  background: rgba(88,166,255,0.12);
+  border-radius: 4px;
+  padding: 1px 5px;
+  margin-right: 2px;
+}
+.csh-ask-original.is-worker-summary .csh-tickets-handled {
+  margin-top: 8px;
+  font-size: 11.5px;
+}
+.csh-ask-original.is-worker-summary .csh-tickets-handled summary {
+  cursor: pointer;
+  color: var(--text-muted);
+  user-select: none;
+}
+.csh-ask-original.is-worker-summary .csh-tickets-handled ul {
+  list-style: none;
+  margin: 6px 0 0;
+  padding: 0;
+  max-height: 160px;
+  overflow-y: auto;
+}
+.csh-ask-original.is-worker-summary .csh-tickets-handled li {
+  padding: 3px 0;
+  color: var(--text-muted);
+  border-top: 1px solid var(--border, rgba(255,255,255,0.06));
+}
+.csh-ask-original.is-worker-summary .csh-tickets-handled li:first-child {
+  border-top: none;
+}
+
 /* Issue close-action buttons inside the rail. They were styled inline
    with green/grey ghost-button look; in the rail context we want them to
    read as a stacked group of actions, not loose buttons. Override the
