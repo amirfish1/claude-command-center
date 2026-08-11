@@ -9,6 +9,13 @@ import time
 from pathlib import Path
 
 
+# A worker restart re-adopts every live transport within seconds, so an
+# uncertain item still unexplained a quarter of an hour later is not coming
+# back. Long enough that a slow Codex app-server handshake is never retired
+# out from under a reconcile; short enough that the count actually drains.
+RETIRE_UNCERTAIN_AFTER_S = 900.0
+
+
 ASYNC_OPERATIONS = {
     ("kimi", "spawn"),
     ("kimi", "prompt"),
@@ -177,6 +184,46 @@ class EngineHost:
             self._track_async(item["id"], engine, operation, args, result)
             reconciled.append(running)
         return reconciled
+
+    def retire_stale_uncertain(self, older_than_s=None):
+        """Close out uncertain work that no reconcile can ever reclaim.
+
+        ``reconcile_uncertain`` only *reclaims*; anything without live
+        execution evidence was left in ``uncertain`` forever. Every worker
+        restart adds a fresh batch, none of them ever leave, and the count is
+        monotonic — so "N items need reconciliation" pinned the System status
+        chip amber permanently and stopped meaning anything. Items measured up
+        to 16 days old, all of them from processes that exited long ago.
+
+        The terminal state is ``cancelled``, not ``failed``: the outcome is
+        genuinely unknown (an inject may well have landed before the worker
+        died), and recording an unknown as a failure would corrupt the failure
+        count the same way this corrupted the uncertain one. The real reason
+        goes on the item and into the event log.
+        """
+        cutoff = time.time() - (
+            RETIRE_UNCERTAIN_AFTER_S if older_than_s is None else float(older_than_s)
+        )
+        retired = []
+        for item in self.ledger.list(states=["uncertain"], limit=2000):
+            touched = item.get("updated_at") or item.get("created_at") or 0
+            if float(touched or 0) > cutoff:
+                continue
+            age_h = max(0.0, (time.time() - float(touched or 0)) / 3600.0)
+            try:
+                retired.append(self.ledger.transition(
+                    item["id"], "cancelled",
+                    error=(
+                        "retired by reconciler: no live execution evidence "
+                        f"{age_h:.0f}h after the worker restart that orphaned it"
+                    ),
+                    event_payload={"resolution": "reconciler retired stale uncertain"},
+                ))
+            except (KeyError, ValueError):
+                # Raced another reconcile or an operator resolve. Either way it
+                # left `uncertain`, which is the only outcome this wants.
+                continue
+        return retired
 
     def adopt_registry(self):
         """Adopt live legacy-owned transports before a dashboard restart."""

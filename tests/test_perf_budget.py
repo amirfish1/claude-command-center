@@ -3006,8 +3006,8 @@ def test_watchtower_process_argv_is_memoised_per_pid(monkeypatch):
 def test_watchtower_api_probe_is_cached_and_never_blocks_twice(monkeypatch):
     """A degraded WatchTower must not cost 0.8s of an HTTP thread per poll.
 
-    `_watchtower_api_probe` is a urlopen with a 0.8s timeout. When the daemon
-    is up but its API is not answering, that timeout is paid in full — and the
+    `_watchtower_api_probe` is a urlopen with a bounded timeout. When the
+    daemon is up but its API is not answering, that timeout is paid in full — and the
     System status panel polls on a 5s cadence against a 3s payload TTL, so
     nearly every poll paid it, in exactly the degraded state the panel exists
     to report. It also stretched the window where a settled restart still

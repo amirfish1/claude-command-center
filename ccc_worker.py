@@ -163,10 +163,16 @@ class WorkerRuntime:
         if method == "work.graph":
             return {"ok": True, "graph": self.ledger.graph(params.get("root_id"))}
         if method == "work.reconcile":
-            reconciled = self._engines().reconcile_uncertain()
+            host = self._engines()
+            reconciled = host.reconcile_uncertain()
+            # Reclaim first, retire second: anything with live evidence has
+            # already left `uncertain` by the time the retirement pass reads
+            # the table, so the two can never fight over the same item.
+            retired = host.retire_stale_uncertain()
             return {
                 "ok": True,
                 "reconciled": len(reconciled),
+                "retired": len(retired),
                 "work": reconciled,
                 **self.ledger.summary(),
             }
@@ -313,6 +319,7 @@ def serve(path=None):
     ):
         def recover():
             runtime._engines().reconcile_uncertain()
+            runtime._engines().retire_stale_uncertain()
             runtime._engines().dispatch_queued()
         threading.Thread(
             target=recover,

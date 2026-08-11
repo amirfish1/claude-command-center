@@ -723,23 +723,40 @@ def _watchtower_endpoint_from_argv(argv):
     return host, port, f"http://{probe_host}:{port}"
 
 
+# Liveness is asked of a path the router does NOT know, on purpose. /api/status
+# is an aggregate, not a health check: it walks every queue on disk and measured
+# >3s at 19 queues, so probing it under a sub-second budget reported a perfectly
+# healthy WatchTower as "degraded" forever, and widening the budget would just
+# move the false alarm to the next queue someone adds. A 404 answers in under a
+# millisecond and proves the socket, the process and the router are all alive —
+# which is exactly, and only, what this verdict claims. Process identity is a
+# separate check (`command_verified`), so "something else 404s on 8787" is not
+# this function's problem to solve.
+_WT_API_LIVENESS_PATH = "/api/_ccc_liveness"
+_WT_API_PROBE_TIMEOUT = 2.0
+
+
 def _watchtower_api_probe(base_url):
-    """The actual network call. Blocks up to 0.8s; never call it on a poll."""
+    """The actual network call. Blocks up to 2s; never call it on a poll."""
+    request = urllib.request.Request(
+        base_url.rstrip("/") + _WT_API_LIVENESS_PATH,
+        headers={"User-Agent": "CCC-WatchTower-health"},
+    )
     try:
-        request = urllib.request.Request(
-            base_url.rstrip("/") + "/api/status",
-            headers={"User-Agent": "CCC-WatchTower-health"},
-        )
-        with urllib.request.urlopen(request, timeout=0.8) as response:
-            payload = json.load(response)
-        return response.status == 200 and isinstance(payload, dict)
+        with urllib.request.urlopen(request, timeout=_WT_API_PROBE_TIMEOUT) as response:
+            # Any HTTP status short of a server-side blow-up means it answered.
+            return int(response.status) < 500
+    except urllib.error.HTTPError as exc:
+        # The expected happy path: 404 from a live router. Caught first —
+        # HTTPError subclasses both URLError and OSError below.
+        return int(getattr(exc, "code", 0) or 0) < 500
     except (OSError, ValueError, urllib.error.URLError):
         return False
 
 
-# A degraded WatchTower makes urlopen() sit on the full 0.8s timeout, and the
+# A degraded WatchTower makes urlopen() sit on the full probe timeout, and the
 # System status panel polls this on a 5s cadence, so an uncached probe burned
-# 0.8s of an HTTP handler thread precisely in the state the panel exists to
+# that whole budget on an HTTP handler thread precisely in the state the panel exists to
 # report. Cache the verdict, and once we have any verdict, refresh it off the
 # request thread: the caller gets last-known instantly plus an age so it can
 # say how fresh that is.
