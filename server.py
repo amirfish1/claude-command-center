@@ -45196,6 +45196,67 @@ def _headless_log_result_count(entry):
     return count
 
 
+def _strict_headless_busy_gate_enabled():
+    """CCC_STRICT_HEADLESS_BUSY_GATE=1 opt-in — see _headless_log_turn_open.
+
+    Off by default (2026-08-11): the stricter gate got stuck reporting
+    "turn open" indefinitely for at least one live session, blocking ALL
+    further composer input into it. Kept behind a flag rather than deleted
+    outright so both behaviors can be A/B tested without a code revert.
+    """
+    return os.environ.get("CCC_STRICT_HEADLESS_BUSY_GATE", "0").strip() == "1"
+
+
+def _headless_log_turn_open(entry):
+    """True if a Claude headless's own stdout log ends mid-turn.
+
+    Each completed turn ends with exactly one `{"type":"result"}` line (see
+    `_headless_log_result_count`). If the LAST event in the log is anything
+    else — plain text delta, tool_use, system, whatever — the turn the last
+    user input triggered hasn't finished yet. This is the only busy signal
+    that covers a turn that's streaming text with no tool child running at
+    all: `_spawn_entry_active_tool_child` and the sidecar hook markers are
+    both tool-boundary-only (PreToolUse/PostToolUse/Stop), so neither one
+    fires during a pure-text turn. Returns False (not busy) if the log is
+    missing, empty, or unreadable — same fail-open default as the rest of
+    the busy-detection chain.
+
+    Only called when _strict_headless_busy_gate_enabled() is true — see
+    that function's docstring for why this is opt-in, not the default.
+    """
+    if not isinstance(entry, dict):
+        return False
+    log = entry.get("log")
+    if not log:
+        return False
+    last_type = None
+    try:
+        with open(log, "rb") as f:
+            try:
+                size = os.fstat(f.fileno()).st_size
+            except OSError:
+                size = 0
+            if size > 65536:
+                f.seek(size - 65536)
+                f.readline()  # discard partial first line
+            for raw in f:
+                raw = raw.strip()
+                if not raw:
+                    continue
+                try:
+                    ev = json.loads(raw)
+                except (json.JSONDecodeError, ValueError):
+                    continue
+                t = ev.get("type") if isinstance(ev, dict) else None
+                if t:
+                    last_type = t
+    except OSError:
+        return False
+    if last_type is None:
+        return False
+    return last_type != "result"
+
+
 def _transcript_tail_signature(session_id):
     """Return (size_bytes, last_event_uuid) for a session's transcript.
 
@@ -50472,18 +50533,26 @@ def _inject_text_into_session(
                     }
             active_child = _spawn_entry_active_tool_child(spawn)
             if not _from_terminal_queue:
-                # Reverted 2026-08-11 (see c115c5cc, and this revert): a
-                # log-tail-based busy gate got stuck reporting "turn open"
-                # indefinitely for at least one live session, which blocked
-                # ALL further composer input into it forever — worse than
-                # the mid-turn-interrupt bug it was meant to fix. Back to
-                # only queuing when input is ALREADY queued, to preserve
-                # delivery order; accepting the occasional mid-turn
-                # interrupt as the lesser problem until busy-detection for
-                # a pure-text (no tool child) turn is fixed properly.
-                if _terminal_input_queue_has_pending(session_id):
+                # A/B flag (default off, 2026-08-11) — see
+                # _strict_headless_busy_gate_enabled's docstring. Default
+                # path only queues when input is ALREADY queued (preserves
+                # delivery order); the write below still falls back to the
+                # queue if the pipe genuinely rejects the message. Strict
+                # path additionally defers to the next turn boundary on
+                # ANY busy signal, closer to the TTY path's contract, at
+                # the cost of the stuck-forever failure mode that got it
+                # turned off by default.
+                if _strict_headless_busy_gate_enabled() and mode != "steer":
+                    is_busy = (
+                        _session_status_is_busy(status)
+                        or _headless_log_turn_open(spawn)
+                        or _terminal_input_queue_has_pending(session_id)
+                    )
+                else:
+                    is_busy = _terminal_input_queue_has_pending(session_id)
+                if is_busy:
                     queued_status = dict(status or {})
-                    queued_status["status"] = "busy"
+                    queued_status["status"] = queued_status.get("status") or "busy"
                     queued_status["pid"] = queued_status.get("pid") or spawn.get("pid")
                     if active_child:
                         queued_status["active_child_pid"] = active_child.get("pid")
