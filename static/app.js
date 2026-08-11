@@ -38190,6 +38190,10 @@
     const age = row ? _uxqFmtAge(row.oldest_open_age_seconds) : '';
     const workers = (liveWorkers || []).filter(w => w && _uxqProjectKey(w.queue) === key);
     const workerItem = (w) => (items || []).find(it => {
+      // A just-closed ticket's claim fields linger in the cached items list
+      // (CCC-803): without this guard the worker kept showing "busy" on the
+      // ticket it JUST closed until the next full items refresh evicted it.
+      if (!it || it.status === 'closed' || it.closed_at) return false;
       const claimedSession = String((it && it.claimed_session_id) || '').trim();
       const claimedBy = String((it && it.claimed_by) || '').trim();
       const session = String(w.session_id || '').trim();
@@ -38234,7 +38238,10 @@
           // waiting. Blue+fast is reserved for a real claim; idle gets a
           // slow, dim green breathe instead.
           const idleCls = on ? '' : ' is-idle';
-          return '<span class="fq-status-worker is-live' + idleCls + '" title="' + escapeAttr(w.worker_id || 'worker') + '">'
+          const sid = String(w.session_id || '').trim();
+          const sidAttr = sid ? (' data-fq-worker-sid="' + escapeAttr(sid) + '"') : '';
+          return '<span class="fq-status-worker is-live' + idleCls + (sid ? ' is-clickable' : '') + '"' + sidAttr
+            + ' title="' + escapeAttr((w.worker_id || 'worker') + (sid ? ' — open session' : '')) + '">'
             + '<span class="fq-status-spin' + idleCls + '" aria-hidden="true"></span>'
             + escapeHtml(w.worker_id || 'worker') + '<b>' + escapeHtml(label) + '</b>'
             + '</span>';

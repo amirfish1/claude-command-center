@@ -20245,6 +20245,8 @@ body:has(.gc-reader) .pwa-install-banner {
   flex-basis: 100%;
 }
 .fq-status-worker.is-empty { color: var(--text-muted); }
+.fq-status-worker.is-clickable { cursor: pointer; }
+.fq-status-worker.is-clickable:hover { color: var(--accent, #4a9eff); }
 .fq-status-worker b { font-weight: 500; color: var(--text-muted); margin-left: 2px; }
 .fq-status-learnings-toggle, .fq-status-workers-toggle {
   flex-shrink: 0; cursor: pointer;
