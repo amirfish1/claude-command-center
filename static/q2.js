@@ -533,6 +533,24 @@
     return state.items.filter(function (it) { return projectKey(it && it.project) === key; });
   }
 
+  // CCC-809: same ordering renderTickets() uses for the visible list (open
+  // rows by operational bucket, then priority, then oldest-first), so
+  // "first ticket" here means the same thing "top of the list" means there.
+  function firstOpenTicketForQueue(queue) {
+    var items = itemsForQueue(queue).filter(function (it) { return statusOf(it) !== 'closed'; });
+    items.sort(function (a, b) {
+      var bucket = operationalBucket(a) - operationalBucket(b);
+      if (bucket) return bucket;
+      if (statusOf(a) === 'open') {
+        var p = prioRank(a) - prioRank(b);
+        if (p) return p;
+        return (a.number || 0) - (b.number || 0);
+      }
+      return (b.number || 0) - (a.number || 0);
+    });
+    return items.length ? items[0].ref : '';
+  }
+
   function queueLearningsPath(queue) {
     return '/api/queue/learnings?queue=' + encodeURIComponent(String(queue || ''));
   }
@@ -2522,6 +2540,11 @@
     showMobileColumn('tickets');
     loadQueueLearnings(name);
     loadLog(name).then(renderLogBar);
+    // CCC-809: clicking a queue is "show me what's happening in it" — land
+    // on its topmost open ticket instead of leaving the RHS on the queue's
+    // learnings doc (that's still one click away via the Learnings button).
+    var first = firstOpenTicketForQueue(name);
+    if (first) selectTicket(first);
   }
 
   function showQueueLearningsInDetail() {
