@@ -975,7 +975,7 @@
           + '<div class="q2-dg-worker-head">'
           + '<span class="q2-dg-spin" aria-hidden="true"></span>'
           + '<span class="q2-dg-worker-id">' + esc(w.worker_id || 'worker') + '</span>'
-          + (w.session_id ? sessionBtn(w.session_id, 'open') : '')
+          + (w.session_id ? sessionBtn(w.session_id, 'open ' + String(w.session_id).slice(0, 8)) : '')
           + '<button type="button" class="q2-dg-worker-release"'
           + ' data-q2-release-worker="' + esc(w.worker_id || '') + '"'
           + ' title="Release this worker and requeue its ticket"'
