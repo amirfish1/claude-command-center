@@ -38243,16 +38243,17 @@
         if (_effectiveStatus(it) !== 'open') return false;
         return !_isStaleClaim(it) && it.claimable !== false && it.watchtower_runnable !== false && !_unready(it);
       };
-      // WIP → needs input → unresolved attention → claimable work → clean
-      // closes → non-claimable, unready, or otherwise inert open work.
+      // WIP → needs input → unresolved attention → claimable work →
+      // non-claimable, unready, or otherwise inert open work → clean closes.
+      // Open work of any kind stays above closed, full stop.
       const _operationalBucket = it => {
         const status = _effectiveStatus(it);
         if (_isLiveWip(it)) return 0;
         if (status === 'blocked') return 1;
         if (_hasUnresolved(it)) return 2;
         if (_isWaitingToDrain(it)) return 3;
-        if (status === 'closed') return 4;
-        return 5;
+        if (status === 'closed') return 5;
+        return 4;
       };
       const historyOrder = _uxqGetFilter() === 'all';
       const rows = scoped.slice().sort((a, b) => {
