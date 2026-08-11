@@ -4108,17 +4108,25 @@ class TestServerImports(unittest.TestCase):
         self.assertIn("return '__queue_global__';", key_body)
 
     def test_explicit_queue_scope_survives_automatic_conversation_restore(self):
-        """A Queue scope picked by the user must not follow a restored session ID."""
+        """A Queue scope picked by the user must not follow a restored session ID,
+        and must not leak into an unrelated session for a different repo (CCC-788)."""
         app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
+        key_start = app_js.index("function _uxqSelectedScopeKey()")
+        key_body = app_js[key_start:app_js.index("function _uxqLoadScopeMap", key_start)]
         get_start = app_js.index("function _uxqGetScopeOverride()")
         get_body = app_js[get_start:app_js.index("function _uxqSetScopeOverride", get_start)]
         set_body = app_js[app_js.index("function _uxqSetScopeOverride"):app_js.index("// Status filter", app_js.index("function _uxqSetScopeOverride"))]
 
         self.assertIn("const _UXQ_SELECTED_SCOPE_LS = 'ccc-uxq-selected-scope';", app_js)
-        self.assertIn("const selected = _uxqProjectKey(localStorage.getItem(_UXQ_SELECTED_SCOPE_LS) || '');", get_body)
+        # Pinned per repo (stable across a session-id restore), not globally
+        # (which would leak one session's pin into every other session).
+        self.assertIn("const repo = (typeof activeConvRepoPath === 'function') ? activeConvRepoPath() : '';", key_body)
+        self.assertIn("if (repo) return repo;", key_body)
+        self.assertIn("return _uxqScopeKey();", key_body)
+        self.assertIn("const selected = _uxqProjectKey(_uxqLoadSelectedScopeMap()[_uxqSelectedScopeKey()] || '');", get_body)
         self.assertIn("return selected || sessionScope;", get_body)
-        self.assertIn("localStorage.setItem(_UXQ_SELECTED_SCOPE_LS, v);", set_body)
-        self.assertIn("localStorage.removeItem(_UXQ_SELECTED_SCOPE_LS);", set_body)
+        self.assertIn("const sk = _uxqSelectedScopeKey();", set_body)
+        self.assertIn("if (!v || v === 'AUTO') delete selectedMap[sk]; else selectedMap[sk] = v;", set_body)
 
     def test_queue_scope_switch_repaints_from_completed_caches(self):
         """Scope changes keep responsive caches, with feedback until rows repaint."""

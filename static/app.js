@@ -37223,9 +37223,9 @@
   // derive from the session's repo (default). Persisted in localStorage so a
   // CCC session can be told "show WT here" without hunting for a WT session.
   const _UXQ_SCOPE_LS = 'ccc-uxq-scope';
-  // An explicit Queue selection is a view preference, not conversation state.
-  // Keep it separate from the legacy per-session map so automatic conversation
-  // restores cannot silently turn "All queues" back into Auto (repo).
+  // An explicit Queue selection is a view preference, not conversation state,
+  // so it's kept in its own map rather than reusing the legacy per-session
+  // map's write path.
   const _UXQ_SELECTED_SCOPE_LS = 'ccc-uxq-selected-scope';
   function _uxqScopeKey() {
     try {
@@ -37236,14 +37236,31 @@
       return '__queue_global__';
     } catch (_) { return '__queue_global__'; }
   }
+  // Explicit Queue selections are pinned per REPO, not per session id: a
+  // session's id can change across a WatchTower resume/restore (this must
+  // not silently drop the pin back to Auto), but its repo does not — and
+  // pinning per-repo also means picking a queue in one session no longer
+  // leaks into an unrelated session for a different repo/project (CCC-788:
+  // a fully global value here meant "All CCC" picked in one session opened
+  // as the default for every other session's Queue tab too).
+  function _uxqSelectedScopeKey() {
+    try {
+      const repo = (typeof activeConvRepoPath === 'function') ? activeConvRepoPath() : '';
+      if (repo) return repo;
+    } catch (_) {}
+    return _uxqScopeKey();
+  }
   function _uxqLoadScopeMap() {
     try { return JSON.parse(localStorage.getItem(_UXQ_SCOPE_LS) || '{}') || {}; } catch (_) { return {}; }
+  }
+  function _uxqLoadSelectedScopeMap() {
+    try { return JSON.parse(localStorage.getItem(_UXQ_SELECTED_SCOPE_LS) || '{}') || {}; } catch (_) { return {}; }
   }
   function _uxqGetScopeOverride() {
     const k = _uxqScopeKey(); if (!k) return '';
     const sessionScope = _uxqProjectKey(_uxqLoadScopeMap()[k] || '');
     try {
-      const selected = _uxqProjectKey(localStorage.getItem(_UXQ_SELECTED_SCOPE_LS) || '');
+      const selected = _uxqProjectKey(_uxqLoadSelectedScopeMap()[_uxqSelectedScopeKey()] || '');
       return selected || sessionScope;
     } catch (_) { return sessionScope; }
   }
@@ -37254,8 +37271,10 @@
     if (!v || v === 'AUTO') delete map[k]; else map[k] = v;
     try {
       localStorage.setItem(_UXQ_SCOPE_LS, JSON.stringify(map));
-      if (!v || v === 'AUTO') localStorage.removeItem(_UXQ_SELECTED_SCOPE_LS);
-      else localStorage.setItem(_UXQ_SELECTED_SCOPE_LS, v);
+      const sk = _uxqSelectedScopeKey();
+      const selectedMap = _uxqLoadSelectedScopeMap();
+      if (!v || v === 'AUTO') delete selectedMap[sk]; else selectedMap[sk] = v;
+      localStorage.setItem(_UXQ_SELECTED_SCOPE_LS, JSON.stringify(selectedMap));
     } catch (_) {}
     _uxqResetHistoryPage();
   }
