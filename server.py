@@ -61334,6 +61334,15 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                     with open(tmp, "w") as f:
                         json.dump(cfg, f, indent=2)
                     tmp.replace(cfg_path)
+                # A settings change (e.g. flipping auto_drain on, raising
+                # desired_workers) should act now, not sit until the
+                # reconciler's next ~30s tick (CCC-790). Best-effort: a
+                # reconcile hiccup must never fail the config save itself.
+                if _WT_WORKERS_AVAILABLE and _wt_workers is not None:
+                    try:
+                        _wt_workers.reconcile_once()
+                    except Exception:
+                        pass
                 self.send_json({"ok": True, **normalized})
             except ValueError as e:
                 self.send_json({"ok": False, "error": str(e)}, 400)
@@ -61375,6 +61384,14 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                     with open(tmp, "w") as f:
                         json.dump(cfg, f, indent=2)
                     tmp.replace(cfg_path)
+                # Turning auto-drain on should staff the queue now rather than
+                # wait for the reconciler's next tick (CCC-790); turning it off
+                # needs no push — reconcile_once only ever spawns, never stops.
+                if auto_drain and _WT_WORKERS_AVAILABLE and _wt_workers is not None:
+                    try:
+                        _wt_workers.reconcile_once()
+                    except Exception:
+                        pass
                 self.send_json({"ok": True, "queue": key, "auto_drain": auto_drain})
             except Exception as e:
                 self.send_json({"ok": False, "error": str(e)}, 500)
