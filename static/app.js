@@ -7261,8 +7261,7 @@
         return;
       }
       if (data && data.queued_preserved) {
-        const reason = data.error || data.message || 'the active turn cannot be steered from CCC';
-        showOpToast('Still queued: ' + reason, 'error');
+        showOpToast(data.error ? ('Still queued: ' + data.error) : 'Queued', 'error');
         setTimeout(refreshConversationList, 500);
         return;
       }
@@ -36448,11 +36447,6 @@
   // Per-project queue-health snapshot (GET /api/ux-fixes/health). Same cache
   // window as the ticket list so a Queue refresh costs one extra cheap GET.
   let _uxqHealthCache = { ts: 0, rows: [], wt_workers: [], queues: [], worker_session_ids: [], past_workers: [] };
-  // Compact status strip's inline "Learnings" panel (CCC-789 follow-up 2):
-  // which queue's file is currently expanded (null = closed) + rendered-HTML
-  // cache per queue so repaints while open don't re-fetch every time.
-  let _uxqStatusLearningsOpenFor = null;
-  const _uxqLearningsCache = new Map();
   // A queue-health refresh can finish after a drain click but before its POST.
   // Keep the requested state separately so that stale snapshot cannot repaint
   // the button back to its former value or hide its in-progress spinner.
@@ -36924,10 +36918,14 @@
       }).join('')
       + '</div>';
   }
-  // Compact label for the claim-types restriction shown on the toggle.
-  function _uxqClaimLabel(ct) {
-    if (!ct || !ct.length) return 'any';
-    if (ct.length === 1) return ct[0] + 's';
+  // Compact label for the claim-types restriction shown on the toggle. The
+  // dense health-row list keeps the terse "any"/"bugs"/"features"; the
+  // single-row compact status strip spells it out ("Bugs only") since it has
+  // room and no neighboring context to lean on (verbose opt, CCC-789
+  // follow-up 3).
+  function _uxqClaimLabel(ct, verbose) {
+    if (!ct || !ct.length) return verbose ? 'All types' : 'any';
+    if (ct.length === 1) return verbose ? (ct[0][0].toUpperCase() + ct[0].slice(1) + 's only') : (ct[0] + 's');
     return ct.join(',');
   }
   // Auto-drain toggle + claim-type cycle + config-gear controls for one
@@ -36971,11 +36969,22 @@
       + ' data-claim-queue="' + escapeAttr(project) + '"'
       + ' data-claim-types="' + escapeAttr(JSON.stringify(claimTypes || [])) + '"'
       + ' title="Claim filter - click to cycle all / bug / feature">'
-      + '<span class="fq-health-type-val">' + escapeHtml(_uxqClaimLabel(claimTypes)) + '</span>'
+      + '<span class="fq-health-type-val">' + escapeHtml(_uxqClaimLabel(claimTypes, verbose)) + '</span>'
       + '</span>';
     const configBtn = '<button class="fq-health-config" data-fq-config-queue="' + escapeAttr(project) + '"'
       + ' title="Edit ' + escapeAttr(project) + ' queue configuration" aria-label="Edit ' + escapeAttr(project) + ' queue configuration">⚙</button>';
-    return { drainToggle, typeToggle, configBtn };
+    // Desired-worker count cycle (1x/2x/3x) — only meaningful next to the
+    // verbose (compact-strip) controls; the dense health row doesn't show it.
+    let workersToggle = '';
+    if (verbose) {
+      const desiredWorkers = Math.max(1, Math.min(3, Number(opts.desiredWorkers) || 1));
+      workersToggle = '<button type="button" class="fq-status-workers-toggle"'
+        + ' data-workers-queue="' + escapeAttr(project) + '"'
+        + ' data-workers-current="' + desiredWorkers + '"'
+        + ' title="Desired workers when auto-drain is on - click to cycle 1x / 2x / 3x">'
+        + desiredWorkers + 'x</button>';
+    }
+    return { drainToggle, typeToggle, configBtn, workersToggle };
   }
   // Bust the health cache and repaint whichever queue strip(s) are on
   // screen (the full health list and/or the compact single-queue status
@@ -38181,18 +38190,20 @@
         || (claimedBy && (claimedBy === session || claimedBy === id));
     });
     // CCC-789 follow-up: a read-only "Auto-drain off" line left no path to
-    // actually change it (or claim types) from this compact view — reuse
-    // the same live controls (gear/drain-toggle/claim-cycle) the full
-    // health-strip row has, not just a label. Spelled-out "auto-drain
-    // on/off" label and a bigger gear since this is the only queue summary
-    // on screen, not one of many dense rows.
-    const controls = _uxqQueueControlsHtml(key, auto, claimTypes, { verboseDrainLabel: true });
-    const learningsOpen = _uxqStatusLearningsOpenFor === key;
-    const learningsToggle = '<button type="button" class="fq-status-learnings-toggle'
-      + (learningsOpen ? ' is-open' : '') + '"'
+    // actually change it (or claim types/worker count) from this compact
+    // view — reuse the same live controls (gear/drain-toggle/claim-cycle)
+    // the full health-strip row has, not just a label. Spelled-out
+    // "auto-drain on/off" + "Bugs only" labels and a bigger gear since this
+    // is the only queue summary on screen, not one of many dense rows.
+    const desiredWorkers = q ? Math.max(1, Number(q.desired_workers) || 1) : 1;
+    const controls = _uxqQueueControlsHtml(key, auto, claimTypes,
+      { verboseDrainLabel: true, desiredWorkers });
+    // Opens the SAME status-rail file viewer a Files-tab .md row opens
+    // (loadMarkdownIntoFileViewer), not a bespoke inline panel — one
+    // markdown-viewing UX everywhere in CCC (CCC-789 follow-up 2).
+    const learningsLink = '<button type="button" class="fq-status-learnings-toggle"'
       + ' data-learnings-queue="' + escapeAttr(key) + '"'
-      + ' aria-expanded="' + (learningsOpen ? 'true' : 'false') + '"'
-      + ' title="Show this queue\'s learnings file (accumulated worker notes)">Learnings</button>';
+      + ' title="Open this queue\'s learnings file (accumulated worker notes)">Learnings</button>';
     const watchHtml = controls.configBtn
       + '<span class="fq-status-proj">' + escapeHtml(key) + '</span>'
       + (row ? ('<span class="fq-status-sep">·</span>'
@@ -38201,8 +38212,9 @@
           + '<span class="fq-status-age" title="' + escapeAttr('oldest ' + age) + '">' + escapeHtml(age) + '</span>') : '')
       + (workers.length ? '<span class="fq-status-live">LIVE</span>' : '')
       + controls.drainToggle
+      + controls.workersToggle
       + controls.typeToggle
-      + learningsToggle;
+      + learningsLink;
     const workerHtml = workers.length
       ? workers.map(w => {
           const on = workerItem(w);
@@ -38214,15 +38226,8 @@
             + '</span>';
         }).join('')
       : '<span class="fq-status-worker is-empty">No live worker</span>';
-    const learningsHtml = learningsOpen
-      ? '<div class="fq-status-learnings markdown-body" id="queueStatusLearnings">'
-        + (_uxqLearningsCache.has(key)
-          ? _uxqLearningsCache.get(key)
-          : '<div class="fq-status-learnings-loading">Loading…</div>')
-        + '</div>'
-      : '';
     $el.hidden = false;
-    $el.innerHTML = watchHtml + workerHtml + learningsHtml;
+    $el.innerHTML = watchHtml + workerHtml;
   }
   function _uxqRepaintStatusStrip() {
     const liveWorkers = ((_uxqHealthCache && _uxqHealthCache.wt_workers) || [])

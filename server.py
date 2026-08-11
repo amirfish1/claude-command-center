@@ -37513,8 +37513,6 @@ def _finalize_queued_steer_result(session_id, text, result):
         return result
     result["queued"] = True
     result["queued_preserved"] = True
-    if not result.get("error") and not result.get("message"):
-        result["message"] = "Steer failed; your message stays queued and will send once the turn ends."
     return result
 
 
@@ -61457,6 +61455,58 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                     except Exception:
                         pass
                 self.send_json({"ok": True, "queue": key, "auto_drain": auto_drain})
+            except Exception as e:
+                self.send_json({"ok": False, "error": str(e)}, 500)
+            return
+        if path == "/api/wt/queue/workers":
+            # Set desired_workers for a queue (the compact status strip's
+            # 1x/2x/3x cycle, CCC-789 follow-up 3) — same posture as
+            # /api/queue/drain, just a different field of the same config file.
+            # Body: {queue: "CCC", desired_workers: 2}
+            length = int(self.headers.get("Content-Length", "0"))
+            body = self.rfile.read(length) if length > 0 else b""
+            try:
+                payload = json.loads(body) if body else {}
+            except json.JSONDecodeError:
+                payload = {}
+            if not isinstance(payload, dict):
+                self.send_json({"ok": False, "error": "expected JSON object"}, 400)
+                return
+            queue_name = str(payload.get("queue") or "").strip().upper()
+            if not queue_name:
+                self.send_json({"ok": False, "error": "queue required"}, 400)
+                return
+            try:
+                desired_workers = int(payload.get("desired_workers", 1))
+            except (TypeError, ValueError):
+                self.send_json({"ok": False, "error": "desired_workers must be a whole number"}, 400)
+                return
+            if not 1 <= desired_workers <= 16:
+                self.send_json({"ok": False, "error": "desired_workers must be between 1 and 16"}, 400)
+                return
+            cfg_path = _wt_config_path()
+            try:
+                cfg = _wt_read_config() or {}
+                matched = next((k for k in cfg if k.strip().upper() == queue_name), None)
+                key = matched if matched else queue_name
+                if _WT_CONFIG_AVAILABLE and _wt_config is not None:
+                    _wt_config.set_desired_workers(key, desired_workers)
+                else:
+                    if key not in cfg or not isinstance(cfg[key], dict):
+                        cfg[key] = {}
+                    cfg[key]["desired_workers"] = desired_workers
+                    tmp = cfg_path.with_suffix(".json.tmp")
+                    with open(tmp, "w") as f:
+                        json.dump(cfg, f, indent=2)
+                    tmp.replace(cfg_path)
+                # Raising the count should staff up now, same reasoning as the
+                # drain toggle (CCC-790) — lowering it needs no push.
+                if _WT_WORKERS_AVAILABLE and _wt_workers is not None:
+                    try:
+                        _wt_workers.reconcile_once()
+                    except Exception:
+                        pass
+                self.send_json({"ok": True, "queue": key, "desired_workers": desired_workers})
             except Exception as e:
                 self.send_json({"ok": False, "error": str(e)}, 500)
             return
