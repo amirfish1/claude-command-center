@@ -37481,8 +37481,14 @@
     for (const name of loose.concat([...roots]).sort(_uxqScopeCmp)) {
       const kids = (families.get(name) || []).slice().sort(_uxqScopeCmp);
       if (!kids.length) { opts.push(plain(name)); continue; }
+      // Label starts with the queue's own name, not "All" — the <optgroup>
+      // label above it (also just "CCC") is native, unclickable HTML, so a
+      // "All CCC (+1)" option below it read as a DIFFERENT, broader thing
+      // than the queue itself, leaving no option that visibly says "CCC".
+      // This option's value is still the family root, so it keeps scoping
+      // to root + sub-queues (see _uxqInScope) — only the label changed.
       opts.push('<optgroup label="' + escapeAttr(name) + '">');
-      opts.push(plain(name, 'All ' + name + ' (+' + kids.length + ')'));
+      opts.push(plain(name, name + ' (+' + kids.length + ' sub-queue' + (kids.length === 1 ? '' : 's') + ')'));
       for (const kid of kids) opts.push(plain(kid));
       opts.push('</optgroup>');
     }
