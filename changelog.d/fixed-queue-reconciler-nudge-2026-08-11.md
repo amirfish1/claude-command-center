@@ -1,1 +1,0 @@
-Saving queue config (auto-drain, workers, engine) now nudges the WatchTower reconciler immediately instead of waiting for its own ~30 second tick, so turning on auto-drain no longer leaves a queue looking idle for up to half a minute.

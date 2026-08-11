@@ -1,1 +1,0 @@
-Moved the session title/context/token block in the right-hand status rail from above the Metadata/Files/Queue tab bar into the top of the Metadata pane's content, so the tab bar is now the first thing in the rail.

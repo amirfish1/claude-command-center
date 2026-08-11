@@ -1,1 +1,0 @@
-"Continue in new session" and Submit+ (phone mode) — previously two always-on buttons crowding the composer — are now collapsed into a small caret dropdown next to Send, opening on click and closing on an outside click or selection.

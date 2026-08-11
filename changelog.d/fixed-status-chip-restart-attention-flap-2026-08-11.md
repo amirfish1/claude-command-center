@@ -1,1 +1,0 @@
-System status chip no longer flags "needs attention" for the routine burst of `uncertain` work every worker restart produces on its own; it only alarms once an item has survived a full sweep past the automatic retirement window and is actually stuck.

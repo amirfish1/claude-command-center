@@ -1,1 +1,0 @@
-- Added Kimi Code, Antigravity CLI, and Codex installation + 1-click authentication to the startup engine check: missing engines now display install instructions and a `⚡ Install` button (opens Terminal/iTerm2 installer), while unauthenticated engines offer 1-click `🔑 Log in` auth.

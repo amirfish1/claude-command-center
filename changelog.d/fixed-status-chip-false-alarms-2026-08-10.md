@@ -1,1 +1,0 @@
-System status chip can reach green again: the WatchTower liveness probe no longer times out against the multi-second `/api/status` aggregate, orphaned `uncertain` work is retired instead of accumulating forever, and a queue whose only open tickets are unshaped reads `backlog` instead of `stuck`.

@@ -1,1 +1,0 @@
-Fixed every conversation popout (q2.html iframe) hanging forever on "Loading conversations…" due to a `ReferenceError` thrown before a required property shim was installed — it aborted the rest of the page's boot script, including the code that hides the loading overlay.

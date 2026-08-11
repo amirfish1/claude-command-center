@@ -1,1 +1,0 @@
-Added a "who?" button to dirty rows in the Worktrees modal that answers "which session made these uncommitted edits?" — useful in a shared main clone where several sessions share one working tree. Uses the existing evidence-ranking logic (hook writes > worktree ownership > transcript tool paths > timestamp correlation).

@@ -1,1 +1,0 @@
-Open tickets now always rank above closed ones in the queue rail — previously a closed ticket could outrank an open one that wasn't immediately claimable. Also relabeled the timeline's synthetic current-status row from a bare "Open" to "Open · unclaimed" with a tooltip clarifying it reflects current status, not a new event.

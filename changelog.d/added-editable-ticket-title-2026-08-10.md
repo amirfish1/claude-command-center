@@ -1,1 +1,0 @@
-Ticket titles are now editable in the queue detail pane (q2) — click the title to open a text box (Enter/Save to commit, Escape/Cancel to back out), matching the existing click-to-edit behavior for type/priority/readiness/value/confidence.

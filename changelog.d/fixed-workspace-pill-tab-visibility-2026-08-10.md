@@ -1,1 +1,0 @@
-Fixed the workspace pill (repo/branch/worktree shown in the input-context strip) going stale and staying blank after a browser tab was hidden and re-shown. It now re-fetches on tab-visibility regain, the same way the usage pill already did.

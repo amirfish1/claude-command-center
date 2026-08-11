@@ -1,1 +1,0 @@
-- Add a browser-local Debug mode that reveals diagnostic dashboard controls and manual interrupt decisions only when enabled.

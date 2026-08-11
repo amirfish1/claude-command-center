@@ -1,1 +1,0 @@
-Fixed newly created queues sometimes starting with auto-drain on even though every creation dialog defaults the toggle to off. A brand-new queue now always starts with auto-drain off; editing an existing queue still respects whatever value you submit.

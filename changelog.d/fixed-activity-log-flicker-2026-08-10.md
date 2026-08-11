@@ -1,1 +1,0 @@
-- Fixed flickering in the bottom-left CCC activity log panel. Prewarm/kill events no longer trigger a full DOM rebuild on every event — the panel now debounces renders via `requestAnimationFrame` and prepends new lines incrementally instead of wiping `innerHTML`.

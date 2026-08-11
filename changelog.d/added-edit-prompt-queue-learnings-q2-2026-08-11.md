@@ -1,1 +1,0 @@
-Added an "Edit Prompt" button on the queue board's (q2) right-hand side that opens the queue's learnings doc directly — same effect as clicking the queue name in the left column, but without losing which queue/tickets you're currently looking at.

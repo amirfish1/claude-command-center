@@ -1,1 +1,0 @@
-Moved the "All" sidebar tab to the end of the tab bar (both the separate-tabs and combined-tabs layouts), and removed the duplicate nested Coding/Workers/Messages/Group-chats filter bar that showed inside the Coding or Workers tab even though that tab is already the filter.

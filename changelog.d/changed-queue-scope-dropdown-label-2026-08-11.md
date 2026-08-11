@@ -1,1 +1,0 @@
-Relabeled the queue-scope dropdown's family-root option (e.g. "All CCC (+1)") to "CCC (+1 sub-queue)" so it visibly starts with the same name as the `<optgroup>` header directly above it — previously there was no option that actually read as the queue you were scanning for.
