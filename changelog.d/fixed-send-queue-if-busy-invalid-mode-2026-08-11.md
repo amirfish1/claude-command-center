@@ -1,1 +1,0 @@
-Fixed the "Send (queue if busy)" button always failing with "invalid mode" — it POSTed a `send_queue` mode the server never accepted. It now sends `mode: "send"` with a `force_queue` flag, which actually holds delivery for the next turn boundary on a live tty session as the button always claimed to do.

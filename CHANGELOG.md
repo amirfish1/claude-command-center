@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [5.22.1] - 2026-08-11
+
+### Fixed
+- Dashboard restarts no longer sit on "No sessions yet" for ~30s. The first `/api/sessions` after a restart went from 31.9s to 7.2s: `git rev-parse` and `git worktree list` are no longer re-forked per scan (204 subprocess forks down to 110), the GitHub issue caches now survive a restart on disk and serve stale while refreshing, and the WatchTower ticket list is warmed off the request path at boot.
+- A cold archive scan (first run, or after a cache-schema bump) now parses transcripts across a process pool instead of one at a time: 147s down to 56s on a 6.9 GB corpus. Set `CCC_ARCHIVE_PARALLEL=0` to force the old serial path.
+- Fixed the "Send (queue if busy)" button always failing with "invalid mode" — it POSTed a `send_queue` mode the server never accepted. It now sends `mode: "send"` with a `force_queue` flag, which actually holds delivery for the next turn boundary on a live tty session as the button always claimed to do.
+- Fixed WatchTower sitting on stale code for up to a day after a CCC upgrade. `brew upgrade`, a Sparkle DMG update, or a plain `git pull` relaunch previously only refreshed and restarted WatchTower on the existing once-a-day cadence; CCC's own version change now bypasses that rate limit immediately.
+
 ## [5.22.0] - 2026-08-11
 
 ### Added
@@ -2576,7 +2584,8 @@ Initial public release.
 - `/api/repo/switch` validates targets against the picker allow-list.
 - See [`SECURITY.md`](SECURITY.md) for the full threat model.
 
-[Unreleased]: https://github.com/amirfish1/claude-command-center/compare/v5.22.0...HEAD
+[Unreleased]: https://github.com/amirfish1/claude-command-center/compare/v5.22.1...HEAD
+[5.22.1]: https://github.com/amirfish1/claude-command-center/releases/tag/v5.22.1
 [5.22.0]: https://github.com/amirfish1/claude-command-center/releases/tag/v5.22.0
 [5.21.0]: https://github.com/amirfish1/claude-command-center/releases/tag/v5.21.0
 [5.20.2]: https://github.com/amirfish1/claude-command-center/releases/tag/v5.20.2

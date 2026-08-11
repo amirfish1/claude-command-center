@@ -1,1 +1,0 @@
-Fixed WatchTower sitting on stale code for up to a day after a CCC upgrade. `brew upgrade`, a Sparkle DMG update, or a plain `git pull` relaunch previously only refreshed and restarted WatchTower on the existing once-a-day cadence; CCC's own version change now bypasses that rate limit immediately.

@@ -1,1 +1,0 @@
-A cold archive scan (first run, or after a cache-schema bump) now parses transcripts across a process pool instead of one at a time: 147s down to 56s on a 6.9 GB corpus. Set `CCC_ARCHIVE_PARALLEL=0` to force the old serial path.
