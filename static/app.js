@@ -64033,7 +64033,6 @@
 
     const engines = ['claude', 'antigravity', 'codex', 'kimi', 'cursor'];
     let addedCount = 0;
-    let addedCount = 0;
 
     engines.forEach(key => {
       const cli = onbCliStatus[key];
