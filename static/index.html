@@ -883,47 +883,50 @@
             <button class="status-rail-close" id="statusRailCloseBtn" type="button" title="Hide status rail" aria-label="Hide status rail" aria-controls="statusRail">&times;</button>
           </div>
           <div class="status-rail-shell" id="statusRailShell">
-            <div class="status-rail-head">
-              <div>
-                <!-- Shows the active session's name (set by updatePaneHeader);
-                     falls back to "Session Utilities" when nothing is selected. -->
-                <div class="status-rail-title-row">
-                  <div class="status-rail-title" id="statusRailTitle">Session Utilities</div>
-                  <button type="button" id="statusRailTitleRenameBtn" class="status-rail-title-rename-btn" title="Rename session" aria-label="Rename session" style="display:none;">
-                    <svg class="status-rail-title-rename-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20h9"></path><path d="M16.5 3.5a2.12 2.12 0 0 1 3 3L7 19l-4 1 1-4Z"></path></svg>
-                  </button>
-                  <!-- CCC-467: assign-to-object moved off the per-row "+" chip
-                       to here — the RHS, for the selected session. -->
-                  <button type="button" id="statusRailAddObjectBtn" class="status-rail-add-object-btn" title="Add to object" aria-label="Add session to object" style="display:none;">+&#8202;Object</button>
-                  <!-- Activity log: opens the unified spawn/inject/kill/app-server
-                       log for the selected session. Lives here (not the sticky
-                       header) because updatePaneHeader sets this on every
-                       selection, before the transcript finishes loading --
-                       unlike the sticky header, which only exists once the
-                       first user_text event renders (gated behind full-history
-                       load on long/truncated transcripts). -->
-                  <button type="button" id="statusRailActivityLogBtn" data-debug-hide class="status-rail-activity-log-btn" title="View CCC's spawn/inject/kill activity log for this session" aria-label="View activity log" style="display:none;">Log</button>
-                </div>
-                <!-- CCC-505: the bold title above is clipped (WT ticket
-                     context is hard-capped at 60 chars); show whatever got
-                     cut off here, unbold, instead of losing it. -->
-                <div class="status-rail-title-rest" id="statusRailTitleRest" hidden></div>
-                <div class="status-rail-context">Context: Active</div>
-                <!-- Transcript size (CCC-475) — moved out of the pane
-                     titlebar; filled by updatePaneHeader for the active pane. -->
-                <div class="status-rail-size" id="statusRailSize" hidden></div>
-                <!-- Accumulated token usage for the selected conversation,
-                     shown big. Filled by _renderRailTokens() from the same
-                     /usage payload the composer strip already fetches. -->
-                <div class="status-rail-tokens" id="statusRailTokens" hidden></div>
-              </div>
-            </div>
+            <!-- CCC-779: the tab bar starts flush at the top of the rail
+                 shell now — the title/context/tokens block that used to sit
+                 above it moved down into the Metadata pane's content. -->
             <div class="status-rail-tabs" role="tablist" aria-label="Session utility panes">
               <button class="status-rail-tab is-active" type="button" role="tab" aria-selected="true" aria-controls="statusRailMetadataPane" data-rail-tab="metadata">Metadata</button>
               <button class="status-rail-tab" type="button" role="tab" aria-selected="false" aria-controls="statusRailFilesPane" data-rail-tab="files">Files</button>
               <button class="status-rail-tab" type="button" role="tab" aria-selected="false" aria-controls="statusRailQueuePane" data-rail-tab="queue">Queue</button>
             </div>
             <div class="status-rail-pane is-active" id="statusRailMetadataPane" role="tabpanel" data-rail-pane="metadata">
+              <div class="status-rail-head">
+                <div>
+                  <!-- Shows the active session's name (set by updatePaneHeader);
+                       falls back to "Session Utilities" when nothing is selected. -->
+                  <div class="status-rail-title-row">
+                    <div class="status-rail-title" id="statusRailTitle">Session Utilities</div>
+                    <button type="button" id="statusRailTitleRenameBtn" class="status-rail-title-rename-btn" title="Rename session" aria-label="Rename session" style="display:none;">
+                      <svg class="status-rail-title-rename-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20h9"></path><path d="M16.5 3.5a2.12 2.12 0 0 1 3 3L7 19l-4 1 1-4Z"></path></svg>
+                    </button>
+                    <!-- CCC-467: assign-to-object moved off the per-row "+" chip
+                         to here — the RHS, for the selected session. -->
+                    <button type="button" id="statusRailAddObjectBtn" class="status-rail-add-object-btn" title="Add to object" aria-label="Add session to object" style="display:none;">+&#8202;Object</button>
+                    <!-- Activity log: opens the unified spawn/inject/kill/app-server
+                         log for the selected session. Lives here (not the sticky
+                         header) because updatePaneHeader sets this on every
+                         selection, before the transcript finishes loading --
+                         unlike the sticky header, which only exists once the
+                         first user_text event renders (gated behind full-history
+                         load on long/truncated transcripts). -->
+                    <button type="button" id="statusRailActivityLogBtn" data-debug-hide class="status-rail-activity-log-btn" title="View CCC's spawn/inject/kill activity log for this session" aria-label="View activity log" style="display:none;">Log</button>
+                  </div>
+                  <!-- CCC-505: the bold title above is clipped (WT ticket
+                       context is hard-capped at 60 chars); show whatever got
+                       cut off here, unbold, instead of losing it. -->
+                  <div class="status-rail-title-rest" id="statusRailTitleRest" hidden></div>
+                  <div class="status-rail-context">Context: Active</div>
+                  <!-- Transcript size (CCC-475) — moved out of the pane
+                       titlebar; filled by updatePaneHeader for the active pane. -->
+                  <div class="status-rail-size" id="statusRailSize" hidden></div>
+                  <!-- Accumulated token usage for the selected conversation,
+                       shown big. Filled by _renderRailTokens() from the same
+                       /usage payload the composer strip already fetches. -->
+                  <div class="status-rail-tokens" id="statusRailTokens" hidden></div>
+                </div>
+              </div>
               <!-- Connection-type chip: headless / stream-json / terminal /
                    app-server / managed app-server / ACP, mirrored from the
                    same computation that drives the pane-header proc pill
