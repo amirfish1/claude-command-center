@@ -12668,6 +12668,16 @@
     $mobileOriginalAsk.setAttribute('aria-expanded', 'false');
     $mobileOriginalAsk.title = cleaned ? 'Show the full original ask' : '';
   }
+  function syncPaneLastUserMessage(paneId, text) {
+    const pane = document.querySelector(`.conv-pane[data-pane-id="${paneId || activePaneId()}"]`);
+    const messageEl = pane && pane.querySelector('[data-role="pane-last-user-message"]');
+    if (!pane || !messageEl) return;
+    const cleaned = String(text || '').replace(/\s+/g, ' ').trim();
+    messageEl.textContent = cleaned;
+    messageEl.hidden = !cleaned;
+    messageEl.title = cleaned;
+    pane.classList.toggle('has-last-user-message', !!cleaned);
+  }
   if ($mobileOriginalAsk) {
     $mobileOriginalAsk.addEventListener('click', () => {
       const expanded = !$mobileOriginalAsk.classList.contains('is-expanded');
@@ -25889,7 +25899,6 @@
   // when neither slot is present (non-Claude session, or breadcrumb hidden).
   function updateConvProcessIndicator() {
     const targets = [
-      document.querySelector('[data-role="ccc-breadcrumb-proc"]'),
       document.querySelector('[data-role="pane-proc"]'),
       document.querySelector('[data-role="rail-proc"]'),
     ].filter(Boolean);
@@ -33171,7 +33180,7 @@
   // the active pane is currently showing (same target as the
   // drag-to-out-of-window gesture, just a click instead of a drag).
   document.addEventListener('click', (ev) => {
-    const btn = ev.target && ev.target.closest && ev.target.closest('[data-role="ccc-breadcrumb-popout"]');
+    const btn = ev.target && ev.target.closest && ev.target.closest('[data-role~="ccc-breadcrumb-popout"]');
     if (!btn) return;
     ev.preventDefault();
     ev.stopPropagation();
@@ -34086,26 +34095,6 @@
       // sticky top bar (see the .conv-sticky-header build), which exists
       // in every mode and never sits inside the rail. Do NOT move it back.
       if (isActive && (category || title)) {
-        // Process-presence indicator — shows whether this Claude session has a
-        // CCC-spawned headless and/or a live terminal (TTY), plus when it was
-        // last checked. (The Compact button lives in the input box now.) Filled
-        // imperatively by updateConvProcessIndicator() so the "checked Xs ago"
-        // label stays fresh between full breadcrumb rebuilds. Claude-only.
-        // Read via window: `currentSession` is a window-property shim
-        // installed much later in this file (Object.defineProperty over
-        // splitState). The popout's top-level updatePaneHeader call runs
-        // BEFORE that shim exists, and a bare identifier read of a
-        // not-yet-defined global throws ReferenceError — killing the boot
-        // IIFE and leaving the popout stuck on its spinner (CCC-71).
-        const _cs = window.currentSession;
-        const procSlot = (_cs && (isClaudeSource(_cs.source) || _cs.source === 'codex' || _cs.source === 'antigravity'))
-          ? '<span class="ccc-breadcrumb-proc" data-role="ccc-breadcrumb-proc"></span>'
-          : '';
-        // Proc slot (headless/terminal indication) sits right after the
-        // category, BEFORE the greedy title — otherwise the title's flex-grow
-        // pushes the pills past the breadcrumb's overflow:hidden clip edge and
-        // the terminal-vs-headless indication disappears (CCC-35). The title
-        // ellipsizes instead; it's secondary and also shown in the pane.
         // UX-fixes worker badge (CCC-90): when this row is one of the
         // queue-worker sessions (same detection as the sidebar's x/y chip),
         // put a designer-pen badge + progress right in the top bar.
@@ -34129,7 +34118,6 @@
         breadcrumbEl.innerHTML = ''
           + (category ? '<span class="ccc-breadcrumb-category">' + escapeHtml(category) + '</span>' : '')
           + uxBadge
-          + procSlot
           + sidChip
           + (typeof window._cccHandoffMovedChipHtml === 'function' ? window._cccHandoffMovedChipHtml(row) : '')
           + (title ? '<span class="ccc-breadcrumb-title">' + escapeHtml(title) + '</span>' : '')
@@ -35750,6 +35738,7 @@
     pane.loadBeforeLine = 0;
     pane.wantFull = false;
     if (paneId === activePaneId()) syncMobileOriginalAsk('');
+    syncPaneLastUserMessage(paneId, '');
     // Drop any visual "Clear" watermark (CCC-474) — a fresh (re)select of a
     // conversation always shows full history.
     const _selClearView = getConvViewForPane(paneId);
@@ -47716,6 +47705,7 @@
         const bridgeSenderHtml = whatsappBridgeSenderHtml(ev);
         const notification = parseTaskNotificationBlock(cleanedText);
         if (notification) div.classList.add('task-notification-event');
+        if (!notification && cleanedText) syncPaneLastUserMessage(paneId, cleanedText);
         // Collapse /compact-resume blocks into a styled card — they're
         // multi-page walls of text that drown the actual conversation.
         // The card shows just the intro line + a click-to-expand toggle;
