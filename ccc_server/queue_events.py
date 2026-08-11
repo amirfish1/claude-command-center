@@ -684,6 +684,21 @@ def _build_ux_fixes_health_payload_uncached():
         wt_workers = _core._wt_read_workers()
     except Exception:
         wt_workers = []
+    # A released worker's process is deliberately kept alive (WatchTower
+    # design: release detaches it from staffing but leaves the conversation
+    # resumable) -- but it is no longer doing anything. Surfacing it here
+    # reads as still-working (spinning "live" dot, claimed-ticket label, LIVE
+    # badge) everywhere this payload's wt_workers/queues feed the UI, which is
+    # actively misleading. Filter it out of every normal-view consumer; the
+    # count survives separately so a debug affordance can still list them on
+    # request (GET /api/wt/workers?include_released=1).
+    wt_workers_released_count = sum(
+        1 for w in wt_workers if isinstance(w, dict) and w.get("released_at")
+    )
+    wt_workers = [
+        w for w in wt_workers
+        if not (isinstance(w, dict) and w.get("released_at"))
+    ]
     # Per-queue rollup (durable) for the dashboard's Evergreen section.
     try:
         queues = _core.compute_queues_health(health, wt_workers, items=items)
@@ -705,6 +720,7 @@ def _build_ux_fixes_health_payload_uncached():
         "projects": health,
         "count": len(health),
         "wt_workers": wt_workers,
+        "wt_workers_released_count": wt_workers_released_count,
         "queues": queues,
         "worker_session_ids": worker_session_ids,
         "past_workers": past_workers,

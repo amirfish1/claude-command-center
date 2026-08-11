@@ -1449,6 +1449,16 @@
           <div class="wt-pop-list" id="cccWtPopList"></div>
           <button type="button" class="wt-pop-cta" id="cccWtPopCta">Open queue list <span aria-hidden="true">&#8595;</span></button>
         </div>
+        <!-- Released workers: WatchTower keeps a worker's process alive after
+             release so its conversation stays resumable, but it is no longer
+             staffed or doing anything. It is excluded from every count/badge
+             above (a released worker would otherwise look like it's still
+             working). This is the one place it stays visible -- collapsed by
+             default, for debugging only. -->
+        <button type="button" class="wt-pop-cta is-quiet" id="cccWtReleasedToggle" hidden aria-expanded="false">
+          <span id="cccWtReleasedCount">0</span> released worker(s) kept alive - debug <span aria-hidden="true">&#8595;</span>
+        </button>
+        <div class="wt-pop-list wt-pop-released-list" id="cccWtReleasedList" hidden></div>
         <div class="sys-svc-result" id="sysWtResult" hidden></div>
       </div>
 
@@ -2716,6 +2726,7 @@
   }).catch(function() {});
 })();
 </script>
+<script src="/static/q2-worker-idle.js"></script>
 <script src="/static/app.js"></script>
 
 <!-- ── In-UI terminal panel ──────────────────────────────────────────────

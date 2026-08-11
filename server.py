@@ -886,6 +886,13 @@ def _watchtower_queue_rollup():
         ),
         "stuck_total": sum(1 for queue in queues if (queue or {}).get("stuck")),
         "workers_live": len(workers) if isinstance(workers, list) else 0,
+        # Already excluded from `workers` above (see
+        # _build_ux_fixes_health_payload_uncached) -- carried separately so
+        # the debug affordance can show a count without a second fetch.
+        "workers_released": int(
+            (payload.get("wt_workers_released_count") or 0)
+            if isinstance(payload, dict) else 0
+        ),
     }
 
 
@@ -28687,6 +28694,7 @@ def _system_services_watchtower_entry():
         "stuck_total": int(status.get("stuck_total") or 0),
         "workers_live": int(status.get("workers_live") or 0),
         "busy_count": int(status.get("workers_live") or 0),
+        "released_workers_count": int(status.get("workers_released") or 0),
         "api_probe_age_s": status.get("api_probe_age_s"),
         "restart_endpoint": "/api/watchtower/service",
         "restart_body": {"action": "restart" if running else "start"},
@@ -57303,8 +57311,20 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
         elif path == "/api/wt/workers":
             # Live worker list read straight from workers.json (no watchtower
             # import dependency). Each row carries queue + cloud session_id.
+            # A released worker's process is kept alive on purpose (WatchTower
+            # design) but is no longer doing anything -- excluded by default so
+            # every normal consumer (TRIGGERED WORKERS sidebar, lane
+            # membership) stops rendering it as still-working. The count
+            # survives regardless of the flag so a caller can show a cheap
+            # badge without opting in; pass ?include_released=1 for the debug
+            # view that actually lists them.
             try:
+                qs = urllib.parse.parse_qs(parsed.query)
+                include_released = (qs.get("include_released", ["0"])[0] or "0").strip().lower() in ("1", "true", "yes")
                 rows = _wt_read_workers()
+                released_count = sum(1 for w in rows if w.get("released_at"))
+                if not include_released:
+                    rows = [w for w in rows if not w.get("released_at")]
                 counts = {}
                 for w in rows:
                     q = str(w.get("queue") or "")
@@ -57312,7 +57332,8 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                     c["total"] += 1
                     c["live"] += 1
                 self.send_json({"ok": True, "workers": rows, "counts": counts,
-                                "total": len(rows)})
+                                "total": len(rows),
+                                "released_count": released_count})
             except Exception as e:
                 self.send_json({"ok": False, "error": str(e)}, 500)
         elif path == "/api/telemetry/status":

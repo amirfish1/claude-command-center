@@ -55944,6 +55944,7 @@
     }
     sysPaintRestartButton(id, svc);
     sysPaintSvcMeta(id, svc);
+    if (id === 'watchtower' && typeof _wtReleasedRender === 'function') _wtReleasedRender(svc);
   }
 
   // Why this service's Restart is unavailable, or '' when it is available.
@@ -56580,6 +56581,73 @@
     _wtQueueRefresh = refresh;
     refresh();
     setInterval(refresh, 20000);
+  })();
+
+  // ── Released-worker debug panel (collapsed, off by default) ──────────
+  // Every "live worker" count/badge elsewhere excludes released-but-alive
+  // workers (see _build_ux_fixes_health_payload_uncached server-side) so a
+  // worker WatchTower is done with never again reads as still-working. This
+  // is the one deliberate exception: a quiet, collapsed toggle for anyone
+  // debugging why a queue "only" shows N live workers when more processes
+  // are still running. svc.released_workers_count is cheap (already computed
+  // server-side on every poll); the actual list is fetched lazily, only when
+  // expanded, via the one endpoint that still knows about them.
+  let _wtReleasedRender = null;
+  (() => {
+    const $toggle = document.getElementById('cccWtReleasedToggle');
+    const $count = document.getElementById('cccWtReleasedCount');
+    const $list = document.getElementById('cccWtReleasedList');
+    if (!$toggle || !$count || !$list) return;
+
+    let expanded = false;
+
+    function renderRows(workers) {
+      if (!workers.length) {
+        $list.innerHTML = '<div class="wt-pop-empty">No released workers right now.</div>';
+        return;
+      }
+      $list.innerHTML = workers.map((w) => {
+        const idle = (typeof Q2WorkerIdle !== 'undefined' && Q2WorkerIdle && typeof w.idle_seconds === 'number')
+          ? Q2WorkerIdle.presentation(w.idle_seconds).label
+          : 'idle age unknown';
+        return '<div class="wt-pop-row">'
+          + '<span class="wt-pop-dot" aria-hidden="true"></span>'
+          + '<span class="wt-pop-q">' + escapeHtml(String(w.worker_id || 'worker')) + '</span>'
+          + '<span class="wt-pop-depth">' + escapeHtml(String(w.queue || '?')) + ' · ' + escapeHtml(idle) + '</span>'
+          + '</div>';
+      }).join('');
+    }
+
+    async function loadAndRender() {
+      $list.innerHTML = '<div class="wt-pop-empty">Loading…</div>';
+      try {
+        const res = await fetch('/api/wt/workers?include_released=1', { cache: 'no-store' });
+        const data = await res.json();
+        const rows = (data && Array.isArray(data.workers) ? data.workers : [])
+          .filter((w) => w && w.released_at);
+        renderRows(rows);
+      } catch (_) {
+        $list.innerHTML = '<div class="wt-pop-empty">Could not load released workers.</div>';
+      }
+    }
+
+    $toggle.addEventListener('click', () => {
+      expanded = !expanded;
+      $list.hidden = !expanded;
+      $toggle.setAttribute('aria-expanded', String(expanded));
+      if (expanded) loadAndRender();
+    });
+
+    _wtReleasedRender = function (svc) {
+      const n = Number((svc && svc.released_workers_count) || 0);
+      $count.textContent = String(n);
+      $toggle.hidden = n <= 0;
+      if (n <= 0 && expanded) {
+        expanded = false;
+        $list.hidden = true;
+        $toggle.setAttribute('aria-expanded', 'false');
+      }
+    };
   })();
 
   // ── What's New Feature Showcasing ──────────────────────────────
