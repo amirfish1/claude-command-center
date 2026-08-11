@@ -121,6 +121,11 @@ short delay in an ad-hoc verification script, use
 `page.waitForSelector()`, `page.waitForFunction()`, or `page.waitForNetworkIdle()`
 when a specific condition is available.
 
+Puppeteer's locator implementation does not provide `Locator.first()`. When a
+verification needs one matching element, use `page.evaluate()` with DOM selectors
+such as `document.querySelector()` (or evaluate an explicit `querySelectorAll()`
+choice) rather than Playwright-style locator chaining.
+
 **Do not use the Codex in-app browser (`iab`) backend or Playwright for this.** `iab` is unavailable outside a desktop app context, and Playwright is not a CCC dependency — "iab browser not available" / "cannot import playwright" means wrong tool, not a breakage. Use `node snapshot.js` (Chromium is sufficient; no WebKit/Firefox needed).
 
 ## Restart requirements

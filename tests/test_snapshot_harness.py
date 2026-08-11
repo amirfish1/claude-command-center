@@ -31,6 +31,12 @@ class SnapshotHarnessTests(unittest.TestCase):
         self.assertIn(helper_import, snapshot_source)
         self.assertIn(helper_import, config_source)
 
+    def test_agent_guidance_avoids_unsupported_locator_first(self):
+        guidance = (ROOT / "AGENTS.md").read_text()
+
+        self.assertIn("does not provide `Locator.first()`", guidance)
+        self.assertIn("`page.evaluate()` with DOM selectors", guidance)
+
 
 if __name__ == "__main__":
     unittest.main()
