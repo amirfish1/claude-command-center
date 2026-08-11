@@ -710,6 +710,15 @@ body.q2-resizing-v .q2-col { pointer-events: none; }
 }
 .q2-qrow:hover { background: var(--surface); }
 .q2-qrow.is-selected { background: var(--surface-2); border-left-color: var(--accent); }
+.q2-qrow-del {
+  flex: 0 0 auto; align-self: center; width: 16px; height: 16px; margin-left: 2px;
+  display: flex; align-items: center; justify-content: center;
+  border: none; background: transparent; color: var(--text-muted);
+  font-size: 14px; line-height: 1; padding: 0; border-radius: 3px;
+  cursor: pointer; opacity: 0; transition: opacity 0.12s, background 0.12s, color 0.12s;
+}
+.q2-qrow:hover .q2-qrow-del { opacity: 0.6; }
+.q2-qrow-del:hover { opacity: 1 !important; background: rgba(248,81,73,0.18); color: var(--red, #f85149); }
 .q2-qrow-main { flex: 1 1 auto; min-width: 0; }
 .q2-qrow-head { display: flex; align-items: center; gap: 6px; min-width: 0; }
 .q2-qname {

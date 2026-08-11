@@ -710,9 +710,20 @@
       + '<span class="q2-qrow-br">' + allCounts.needsInput + '</span></span></span></div>';
 
     host.innerHTML = allRow + ordered.map(function (q) {
-      var f = facts[projectKey(q.queue)];
+      var f = facts[projectKey(q.queue)] || {};
       var isSel = projectKey(q.queue) === selected;
       var c = countParts(f, q.closed, claimTypesFor(projectKey(q.queue)));
+      // CCC-808: total tickets ever, not just currently-open — a queue with
+      // 0 open but old closed history still has something to lose, so it
+      // gets a confirm too. Only a truly untouched queue (0 and 0) deletes
+      // with no prompt.
+      var totalTickets = (f.waiting || 0) + (f.wip || 0) + (f.needsInput || 0) + (q.closed || 0);
+      var delTitle = totalTickets > 0
+        ? ('Delete queue ' + q.queue + ' (' + totalTickets + ' ticket' + (totalTickets === 1 ? '' : 's') + ' - asks to confirm)')
+        : ('Delete queue ' + q.queue + ' (empty - no confirmation needed)');
+      var delBtn = '<button type="button" class="q2-qrow-del" data-q2-del-queue="' + esc(q.queue)
+        + '" data-q2-del-total="' + totalTickets + '"'
+        + ' title="' + esc(delTitle) + '" aria-label="' + esc(delTitle) + '">&times;</button>';
       return '<div class="q2-qrow' + (isSel ? ' is-selected' : '')
         + (q.state === 'stuck' ? ' is-stuck' : '') + '"'
         + ' role="button" tabindex="0"'
@@ -745,6 +756,7 @@
         + '</span>'
         // Spans both rows: the policy governs the whole queue, not one line.
         + drainControl(q)
+        + delBtn
         + '</div>';
     }).join('');
   }
@@ -2424,6 +2436,26 @@
     }
   }
 
+  // CCC-808: an empty queue (never had a ticket) deletes with no prompt;
+  // anything with ticket history - open or just closed - asks to confirm,
+  // since deleting it also drops that history from the queue panel.
+  async function deleteQueueRow(queue, total) {
+    if (!queue) return;
+    if (total > 0 && !window.confirm('Delete queue ' + queue + '? It has ' + total
+        + ' ticket' + (total === 1 ? '' : 's') + ' (open and/or closed). This removes it from the queue panel.')) {
+      return;
+    }
+    try {
+      await postJson('/api/queue/delete', { queue: queue });
+      note('Deleted queue ' + queue);
+      if (projectKey(state.queue) === projectKey(queue)) selectAllQueues();
+      await loadConfigs();
+      await refresh();
+    } catch (e) {
+      note('Could not delete ' + queue + ': ' + e.message);
+    }
+  }
+
   async function releaseWorker(workerId) {
     if (!workerId) return;
     if (!window.confirm('Release this worker? Its claimed ticket will be requeued.')) return;
@@ -2579,6 +2611,12 @@
     var act = e.target.closest('[data-q2-act]');
     if (act) { e.stopPropagation(); detailAction(act.getAttribute('data-q2-act'), act); return; }
     if (e.target.closest('[data-q2-learnings-open]')) { openQueueLearnings(); return; }
+    var delQBtn = e.target.closest('[data-q2-del-queue]');
+    if (delQBtn) {
+      e.stopPropagation();
+      deleteQueueRow(delQBtn.getAttribute('data-q2-del-queue'), Number(delQBtn.getAttribute('data-q2-del-total')) || 0);
+      return;
+    }
     if (e.target.closest('[data-q2-all-queues]')) { selectAllQueues(); return; }
     var qBtn = e.target.closest('[data-q2-queue]');
     if (qBtn) { selectQueue(qBtn.getAttribute('data-q2-queue')); return; }

@@ -1,0 +1,1 @@
+- Added a delete button to each queue row in the Queues (q2) sidebar: an empty queue (never had a ticket) deletes with no prompt, anything with ticket history asks to confirm first.
