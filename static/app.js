@@ -24103,7 +24103,7 @@
   }
 
   function showOpToast(msg, kind, action) {
-    if (!debugModeEnabled() && (kind === 'error' || kind === 'info')) return;
+    if (!debugModeEnabled() && kind === 'info') return;
     const toast = document.createElement('div');
     const color = kind === 'error' ? 'var(--red)'
       : (kind === 'info' ? 'var(--accent, #5b8def)' : 'var(--green)');

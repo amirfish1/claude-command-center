@@ -39,10 +39,10 @@ class TestDebugModeStatic(unittest.TestCase):
         self.assertIn("if (!debugModeEnabled()) {\n      const host", self.app)
         self.assertIn("resolveInterruptAsk(ask, 'dismiss')", self.app)
 
-    def test_debug_off_suppresses_diagnostic_operation_toasts(self):
+    def test_debug_off_suppresses_info_toasts_but_not_errors(self):
         self.assertIn("function showOpToast(msg, kind, action)", self.app)
         self.assertIn(
-            "if (!debugModeEnabled() && (kind === 'error' || kind === 'info')) return;",
+            "if (!debugModeEnabled() && kind === 'info') return;",
             self.app,
         )
 
