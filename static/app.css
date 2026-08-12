@@ -10456,6 +10456,12 @@
   .spawn-stats-summary strong { color: var(--text); }
   .spawn-stats-summary:hover { color: var(--text); }
   .spawn-stats-sub { opacity: 0.75; }
+  .spawn-stats-copy { float: right; margin-left: 8px;
+    background: transparent; border: 1px solid transparent; border-radius: 5px;
+    color: var(--text-muted); font-size: 12px; line-height: 1; padding: 3px 5px;
+    cursor: pointer; }
+  .spawn-stats-copy:hover { color: var(--text); background: rgba(255, 255, 255, 0.06);
+    border-color: var(--border); }
   .spawn-stats-body { padding: 4px 10px 9px; border-top: 1px solid var(--border); }
   .spawn-stat-row { display: flex; justify-content: space-between; gap: 12px;
     padding: 2px 0; }

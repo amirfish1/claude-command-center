@@ -41569,7 +41569,8 @@
       + '<summary class="spawn-stats-summary">&#9201; Session start: '
       + '<strong>' + fmtStatMs(visible) + '</strong> to first visible output'
       + '<span class="spawn-stats-sub"> &middot; accepted in '
-      + fmtStatMs(marks.spawn_response_sent) + '</span></summary>'
+      + fmtStatMs(marks.spawn_response_sent) + '</span>'
+      + '<button type="button" class="spawn-stats-copy" title="Copy timeline">&#128203;</button></summary>'
       + '<div class="spawn-stats-body">' + rows
       + '<div class="spawn-stats-note">Times are from the browser submit action. '
       + 'Hide with <code>localStorage[\'ccc-spawn-stats\']=\'0\'</code>.</div></div></details>';
@@ -41577,6 +41578,21 @@
       existing.outerHTML = html;
     } else {
       $view.insertAdjacentHTML('afterbegin', html);
+    }
+    const $panel = $view.querySelector('.spawn-stats');
+    const $copyBtn = $panel && $panel.querySelector('.spawn-stats-copy');
+    if ($copyBtn) {
+      $copyBtn.addEventListener('click', async (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        const lines = statRows
+          .filter(([k]) => marks[k] != null)
+          .map(([k, label]) => label + ': ' + fmtStatMs(marks[k]));
+        const text = 'Session start: ' + fmtStatMs(visible) + ' to first visible output '
+          + '(accepted in ' + fmtStatMs(marks.spawn_response_sent) + ')\n' + lines.join('\n');
+        const ok = await copyTextValue(text);
+        showOpToast(ok ? 'Timeline copied' : 'Copy failed', ok ? 'success' : 'error');
+      });
     }
   }
 
