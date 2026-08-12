@@ -102,7 +102,7 @@
 
 <div class="tabs" role="tablist">
   <button class="tab active" data-tab="opt-in" role="tab" aria-selected="true">Opt-in pings</button>
-  <button class="tab" data-tab="beacon" role="tab" aria-selected="false">Anonymous boot beacons</button>
+  <button class="tab" data-tab="beacon" role="tab" aria-selected="false">Anonymous daily beacons</button>
   <button class="tab" data-tab="downloads" role="tab" aria-selected="false">Download clicks</button>
 </div>
 
@@ -159,6 +159,7 @@ function renderOptIn(d) {
       Richer payload — install id, version, engines on PATH, last-active date, sessions in last 24h.
       Fires once per UTC day, <strong>only after</strong> the user clicks <em>Enable</em> on the dashboard banner.
       <code>CCC_TELEMETRY_DISABLED=1</code> kills it.
+      <br><strong>"Active today" is the honest daily-user number</strong> — installs that had CCC running today and have opted in. It is a floor: installs that never opted in are only visible on the anonymous tab.
     </p>
     <div class="grid">
       <div class="card">
@@ -242,46 +243,47 @@ function renderBeacon(d) {
   const opens30 = sumBuckets(opens.slice(0, 30), "boots");
   return `
     <p class="tab-intro">
-      Fires once per CCC server boot. Three fields total — schema, version, platform — <strong>no install id</strong>.
+      Fires at most <strong>once per UTC day</strong> from any running CCC install. Three fields total — schema, version, platform — <strong>no install id</strong>.
       We persist a daily-rotated <code>SHA-256(date || secret || ip)</code> so we can count distinct IPs per day without storing the raw IP or linking the same machine across days.
       Not gated on opt-in (because no identifier). <code>CCC_TELEMETRY_DISABLED=1</code> kills it.
+      <br><strong>Before 2026-08-12</strong> this beacon fired once per <em>server boot</em> instead, so earlier days count restarts, not installs — one machine restarting 20 times looked like 20 events, and an install left running for a week looked like none at all. Days from 2026-08-12 onward are one event per install per day.
     </p>
     <div class="grid">
       <div class="card">
-        <h2>Boots today</h2>
+        <h2>Installs that ran today</h2>
         <div class="stat-big">${opensToday}</div>
-        <div class="stat-sub">CCC servers booted today (incl. restarts)</div>
+        <div class="stat-sub">one beacon per install per day</div>
       </div>
       <div class="card">
         <h2>Distinct IPs today</h2>
         <div class="stat-big">${ipsToday}</div>
-        <div class="stat-sub">unique sources, hashed daily salt</div>
+        <div class="stat-sub">unique sources, hashed daily salt — installs sharing a network collapse into one</div>
       </div>
       <div class="card">
-        <h2>Boots last 7d</h2>
+        <h2>Beacons last 7d</h2>
         <div class="stat-big">${opens7}</div>
-        <div class="stat-sub">total boots</div>
+        <div class="stat-sub">install-days, summed (not unique installs)</div>
       </div>
       <div class="card">
-        <h2>Boots last 30d</h2>
+        <h2>Beacons last 30d</h2>
         <div class="stat-big">${opens30}</div>
-        <div class="stat-sub">total boots</div>
+        <div class="stat-sub">install-days, summed (not unique installs)</div>
       </div>
 
       <div class="card wide">
         <h2>Distinct IPs over time (last 30 days)</h2>
         ${timelineChart(opens, "distinct_ips", { stroke: "#ffd266", fill: "rgba(255,210,102,0.18)" })}
-        <p class="muted">Empty days mean the boot beacon didn't fire (or rows captured before 2026-06-08 had no ip_hash column yet).</p>
+        <p class="muted">This is the closest thing here to a daily-active-installs line. It undercounts installs behind one shared address, and before 2026-08-12 it only saw machines that happened to restart that day. Empty days mean no beacon fired (rows captured before 2026-06-08 had no ip_hash column yet).</p>
       </div>
 
       <div class="card wide">
-        <h2>Total boots over time (last 30 days)</h2>
+        <h2>Total beacons over time (last 30 days)</h2>
         ${timelineChart(opens, "boots", { stroke: "#2563eb", fill: "rgba(37,99,235,0.18)" })}
         <details style="margin-top:10px">
           <summary class="muted" style="cursor:pointer">exact daily numbers</summary>
           <div style="margin-top:10px">
             <table>
-              <thead><tr><th>day</th><th class="num">boots</th><th class="num">distinct IPs</th></tr></thead>
+              <thead><tr><th>day</th><th class="num">beacons</th><th class="num">distinct IPs</th></tr></thead>
               <tbody>
                 ${opens.slice(0, 14).map(r => `
                   <tr>

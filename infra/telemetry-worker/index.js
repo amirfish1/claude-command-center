@@ -10,9 +10,12 @@
 // Endpoints:
 //   POST /v1/ping  — opt-in daily ping with install_id (schema v1 or v2).
 //                    Five fields in v1, six in v2 (adds sessions_today).
-//   POST /v1/open  — anonymous open beacon, fires once per server boot,
-//                    not gated on opt-in. THREE FIELDS ONLY: schema_version,
-//                    version, platform. No install_id, no identity.
+//   POST /v1/open  — anonymous open beacon, fires at most once per UTC day
+//                    per running install (was once per boot before
+//                    2026-08-12), not gated on opt-in. THREE FIELDS ONLY:
+//                    schema_version, version, platform. No install_id, no
+//                    identity. Rows therefore count install-days, and the
+//                    `opens` table mixes both eras before 2026-08-12.
 //   POST /v1/download — empty landing-page click event. The handler receives
 //                       no request object and binds three fixed/bounded values.
 //   GET  /v1/stats — aggregate counts only; never returns event rows.
@@ -27,7 +30,27 @@ const ALLOWED_PLATFORMS = new Set([
   "aix", "cygwin", "darwin", "freebsd", "haiku", "linux",
   "netbsd", "openbsd", "sunos", "win32", "wasi", "emscripten",
 ]);
-const ALLOWED_ENGINES = new Set(["claude", "codex", "gemini", "cursor", "antigravity"]);
+// Known engine names. An engine the client detects but this list doesn't
+// know about must NEVER fail the whole ping — see normalizeEngines(). The
+// old behavior (400 on unknown engine) silently dropped every ping from
+// installs that had `kilo` or `opencode` on PATH, which is exactly the
+// forward-compat failure rule 2 exists to prevent.
+const ALLOWED_ENGINES = new Set([
+  "claude", "codex", "gemini", "cursor", "antigravity", "kilo", "opencode",
+]);
+const MAX_ENGINES = 12;
+
+// Keep the recognized engine names, drop the rest. Bounded on both count
+// and the caller's string length so an unknown future name can't grow the
+// stored row. Returns the canonical comma-joined string to persist.
+function normalizeEngines(raw) {
+  if (raw === "") return "";
+  return raw
+    .split(",")
+    .filter((e) => ALLOWED_ENGINES.has(e))
+    .slice(0, MAX_ENGINES)
+    .join(",");
+}
 const SEMVER_RE = /^\d+\.\d+\.\d+(?:[-.+][\w.-]+)?$/;
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
 const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
@@ -47,10 +70,9 @@ function validatePing(body) {
     return "platform must be a known sys.platform value";
   }
   if (typeof body.engines !== "string") return "engines must be a string";
-  const engines = body.engines === "" ? [] : body.engines.split(",");
-  for (const e of engines) {
-    if (!ALLOWED_ENGINES.has(e)) return `unknown engine: ${e}`;
-  }
+  // Length guard only. Unknown names are dropped at write time by
+  // normalizeEngines(), never rejected — a newer client must not 400.
+  if (body.engines.length > 200) return "engines string too long";
   if (typeof body.last_active_date !== "string" ||
       (body.last_active_date !== "" && !DATE_RE.test(body.last_active_date))) {
     return "last_active_date must be YYYY-MM-DD or empty";
@@ -73,7 +95,7 @@ function validatePing(body) {
 
 // Open beacon body — three required fields plus one optional `dev` flag.
 // No install_id, no identity, no engines list, no last_active_date. The
-// `dev` flag lets the maintainer's own restarts exclude themselves from
+// `dev` flag lets the maintainer's own installs exclude themselves from
 // the stats page counts; setting it doesn't reveal identity, just marks
 // the row as "not-a-real-user" for filtering.
 function validateOpen(body) {
@@ -113,7 +135,7 @@ async function handlePing(request, env) {
       body.install_id,
       body.version,
       body.platform,
-      body.engines,
+      normalizeEngines(body.engines),
       body.last_active_date || "",
       body.schema_version >= 2 ? body.sessions_today : null,
       body.schema_version === 3 ? body.active_seconds_today : null,

@@ -71201,14 +71201,17 @@ _TELEMETRY_ACTIVE_HEARTBEAT_S = 30
 _TELEMETRY_DEFAULT_ENDPOINT = (
     "https://telemetry.claude-command-center.workers.dev/v1/ping"
 )
-# Anonymous open beacon. Fires once per server boot, not gated on opt-in
-# (carries NO install_id and NO identity — three fields total: schema,
-# version, platform). Still honors the CCC_TELEMETRY_DISABLED env var so
-# users have one switch that kills every wire byte from this process.
+# Anonymous open beacon. Fires at most ONCE PER UTC DAY while the server
+# is running, not gated on opt-in (carries NO install_id and NO identity —
+# three fields total: schema, version, platform). Daily rather than
+# per-boot so the aggregate answers "how many installs ran today", which
+# a boot-only beacon cannot: an install left running under launchd for a
+# week produces zero boots. Restart-heavy machines now send *fewer* bytes
+# than before, not more. Still honors the CCC_TELEMETRY_DISABLED env var
+# so users have one switch that kills every wire byte from this process.
 _TELEMETRY_OPEN_DEFAULT_ENDPOINT = (
     "https://telemetry.claude-command-center.workers.dev/v1/open"
 )
-_TELEMETRY_OPEN_FIRED = False
 _TELEMETRY_STATE_DIR_PATH = Path.home() / ".config" / "claude-command-center"
 _TELEMETRY_DOCS_URL = (
     "https://github.com/amirfish1/claude-command-center/blob/main/docs/telemetry.md"
@@ -71249,6 +71252,15 @@ def _telemetry_state_path():
 
 def _telemetry_last_ping_path():
     return _telemetry_state_dir() / "telemetry-last-ping"
+
+
+def _telemetry_last_open_path():
+    """Date of the last anonymous open beacon (YYYY-MM-DD, UTC).
+
+    Local-only bookkeeping so the beacon fires at most once per UTC day
+    across restarts. Nothing about this file ever goes on the wire.
+    """
+    return _telemetry_state_dir() / "telemetry-last-open"
 
 
 def _telemetry_disabled_env():
@@ -71626,25 +71638,70 @@ def _send_telemetry_open_beacon():
         return False
 
 
-def _telemetry_fire_open_beacon_once():
+def _telemetry_read_last_open_date():
+    try:
+        s = _telemetry_last_open_path().read_text(encoding="utf-8").strip()
+    except OSError:
+        return ""
+    # Stored as YYYY-MM-DD; reject anything else.
+    if re.match(r"^\d{4}-\d{2}-\d{2}$", s):
+        return s
+    return ""
+
+
+def _telemetry_write_last_open_date(date_str):
+    try:
+        _telemetry_state_dir()
+        _telemetry_last_open_path().write_text(date_str + "\n", encoding="utf-8")
+        try:
+            os.chmod(_telemetry_last_open_path(), 0o600)
+        except OSError:
+            pass
+        return True
+    except OSError:
+        return False
+
+
+def _maybe_send_telemetry_open_beacon():
+    """Send the anonymous beacon if it hasn't gone out yet this UTC day.
+
+    Returns one of: "disabled-env", "already-today", "sent", "failed".
+    The string is only used for log routing by the background loop.
+    """
+    if _telemetry_disabled_env():
+        return "disabled-env"
+    today = datetime.now(tz=timezone.utc).strftime("%Y-%m-%d")
+    last = _telemetry_read_last_open_date()
+    if last and last >= today:
+        return "already-today"
+    if _send_telemetry_open_beacon():
+        _telemetry_write_last_open_date(today)
+        return "sent"
+    return "failed"
+
+
+def _telemetry_open_beacon_loop():
     """Daemon thread target. Sleeps the same initial delay as the opt-in
-    loop so the dashboard paints first, then fires the beacon once. Sets
-    a module-global flag so a watchdog-driven restart inside the same
-    process can't double-fire."""
-    global _TELEMETRY_OPEN_FIRED
-    if _TELEMETRY_OPEN_FIRED:
-        return
+    loop so the dashboard paints first, then fires the beacon at most once
+    per UTC day for as long as this process lives.
+
+    The at-most-once-a-day gate is a date file in the telemetry state dir,
+    so a restart (or twenty) inside the same day sends nothing extra."""
     try:
         time.sleep(_TELEMETRY_INITIAL_DELAY_S)
     except Exception:
         return
-    if _TELEMETRY_OPEN_FIRED:
-        return
-    _TELEMETRY_OPEN_FIRED = True
-    try:
-        _send_telemetry_open_beacon()
-    except Exception:
-        pass
+    while True:
+        try:
+            if _maybe_send_telemetry_open_beacon() == "sent":
+                print("  [telemetry] anonymous daily beacon sent")
+        except Exception:
+            # Defensive: never crash the daemon thread.
+            pass
+        try:
+            time.sleep(_TELEMETRY_CHECK_INTERVAL_S)
+        except Exception:
+            return
 
 
 def _telemetry_read_last_ping_date():
@@ -71963,12 +72020,12 @@ def main():
         daemon=True,
         name="ccc-productivity-presence",
     ).start()
-    # Anonymous open beacon — fires ONCE per boot. NOT opt-in, but carries
-    # no install_id and no identity (3 fields: schema, version, platform).
-    # The CCC_TELEMETRY_DISABLED env var kills it; that single switch is
-    # the user's guarantee that nothing leaves the host. See
-    # docs/telemetry.md#anonymous-open-beacon.
-    threading.Thread(target=_telemetry_fire_open_beacon_once, daemon=True, name="ccc-telemetry-open").start()
+    # Anonymous open beacon — fires at most ONCE PER UTC DAY while running.
+    # NOT opt-in, but carries no install_id and no identity (3 fields:
+    # schema, version, platform). The CCC_TELEMETRY_DISABLED env var kills
+    # it; that single switch is the user's guarantee that nothing leaves
+    # the host. See docs/telemetry.md#anonymous-open-beacon.
+    threading.Thread(target=_telemetry_open_beacon_loop, daemon=True, name="ccc-telemetry-open").start()
     # Recover in-progress group-chat coordinations and start background watcher.
     _start_coordination_watcher()
     _start_resume_queue_watcher()
