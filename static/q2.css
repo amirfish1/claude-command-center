@@ -1687,6 +1687,23 @@ h1.q2-detail-title[data-q2-title-open]:hover { background: var(--bg-hover, rgba(
 .q2-tdot-wrap.is-queued { color: var(--orange); }
 .q2-tdot-wrap.is-queued .q2-tdot { opacity: 0; }
 .q2-tdot-wrap.is-queued .q2-tdot-play { opacity: 1; }
+/* Click-to-run round trip: the row doesn't re-render until /api/ux-fixes/run
+   resolves and refresh() comes back, so without this the click looked like
+   nothing happened. */
+.q2-tdot-wrap.is-pending { pointer-events: none; color: var(--accent); }
+.q2-tdot-wrap.is-pending .q2-tdot,
+.q2-tdot-wrap.is-pending .q2-tdot-play { opacity: 0; }
+.q2-tdot-wrap.is-pending::after {
+  content: '';
+  position: absolute;
+  width: 9px;
+  height: 9px;
+  border: 1.5px solid currentColor;
+  border-right-color: transparent;
+  border-radius: 50%;
+  animation: q2-run-spin 0.7s linear infinite;
+}
+@keyframes q2-run-spin { to { transform: rotate(360deg); } }
 
 .q2-icon-btn svg { display: block; }
 

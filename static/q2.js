@@ -2465,7 +2465,8 @@
 
   // Run-now straight from the ticket list. Same endpoint as the detail pane's
   // button; a second press on a still-queued ticket cancels it.
-  async function runTicket(ref, queued) {
+  async function runTicket(ref, queued, dotEl) {
+    if (dotEl) dotEl.classList.add('is-pending');
     try {
       await postJson('/api/ux-fixes/run', { ref: ref, cancel: !!queued });
       note(queued ? 'Run cancelled for ' + ref : 'Queued ' + ref + ' to run');
@@ -2473,6 +2474,7 @@
       await refresh();
     } catch (e) {
       note('Could not run ' + ref + ': ' + e.message);
+      if (dotEl) dotEl.classList.remove('is-pending');
     }
   }
 
@@ -2638,7 +2640,7 @@
     var runDot = e.target.closest('[data-q2-run]');
     if (runDot) {
       e.stopPropagation();
-      runTicket(runDot.getAttribute('data-q2-run'), runDot.getAttribute('data-q2-queued') === '1');
+      runTicket(runDot.getAttribute('data-q2-run'), runDot.getAttribute('data-q2-queued') === '1', runDot);
       return;
     }
     var releaseWorkerBtn = e.target.closest('[data-q2-release-worker]');
