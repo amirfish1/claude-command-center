@@ -158,20 +158,41 @@ wt_write_version_marker() {
 #   - inside a venv, --user is rejected outright
 #   - Homebrew/Debian pythons are PEP 668 "externally managed" and refuse a
 #     plain --user install without --break-system-packages
+
+# Portable wall-clock timeout. macOS ships no `timeout` binary (that's GNU
+# coreutils only), and these network calls sit between run.sh's start and its
+# final `exec server.py` — on a slow connection an unbounded git/pip call
+# there blocks the local server from ever binding its port, which reads to
+# the user as CCC.app hanging on a blank white window forever. Best-effort:
+# kills the direct child PID, not necessarily grandchildren (e.g. git's https
+# helper) — good enough to unblock run.sh.
+wt_bounded() {
+  local secs="$1"; shift
+  "$@" >/dev/null 2>&1 &
+  local pid=$!
+  ( sleep "$secs"; kill -9 "$pid" 2>/dev/null ) &
+  local watcher=$!
+  local rc=0
+  wait "$pid" 2>/dev/null || rc=$?
+  kill "$watcher" 2>/dev/null
+  wait "$watcher" 2>/dev/null
+  return "$rc"
+}
+
 wt_pip_install() {
   local in_venv
   in_venv="$("$WT_PYTHON" -c 'import sys; print(1 if sys.prefix != sys.base_prefix else 0)' 2>/dev/null || echo 0)"
 
   if [ "$in_venv" = "1" ]; then
-    "$WT_PYTHON" -m pip install --quiet "$@" >/dev/null 2>&1
+    wt_bounded 20 "$WT_PYTHON" -m pip install --quiet "$@"
     return $?
   fi
 
-  if "$WT_PYTHON" -m pip install --user --quiet "$@" >/dev/null 2>&1; then
+  if wt_bounded 20 "$WT_PYTHON" -m pip install --user --quiet "$@"; then
     return 0
   fi
   # PEP 668. Scoped to --user, so this never writes into the system prefix.
-  "$WT_PYTHON" -m pip install --user --break-system-packages --quiet "$@" >/dev/null 2>&1
+  wt_bounded 20 "$WT_PYTHON" -m pip install --user --break-system-packages --quiet "$@"
 }
 
 # Clone the public repo into the CCC-managed directory. Sets WT_CLONE_DIR.
@@ -190,7 +211,7 @@ wt_clone_managed() {
   fi
   wt_say "fetching WatchTower (CCC's queue engine) from $WATCHTOWER_REPO_URL"
   mkdir -p "$(dirname "$WATCHTOWER_INSTALL_DIR")" 2>/dev/null || return 1
-  if git clone --depth 1 "$WATCHTOWER_REPO_URL" "$WATCHTOWER_INSTALL_DIR" >/dev/null 2>&1; then
+  if wt_bounded 20 git clone --depth 1 "$WATCHTOWER_REPO_URL" "$WATCHTOWER_INSTALL_DIR"; then
     WT_CLONE_DIR="$WATCHTOWER_INSTALL_DIR"
     return 0
   fi
@@ -209,7 +230,7 @@ wt_refresh_managed_clone() {
   if ! command -v git >/dev/null 2>&1; then
     return 0
   fi
-  if git -C "$WATCHTOWER_INSTALL_DIR" pull --ff-only >/dev/null 2>&1; then
+  if wt_bounded 20 git -C "$WATCHTOWER_INSTALL_DIR" pull --ff-only; then
     wt_say "updated $WATCHTOWER_INSTALL_DIR"
   fi
   return 0
