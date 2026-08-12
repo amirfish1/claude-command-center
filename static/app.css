@@ -20176,7 +20176,7 @@ body:has(.gc-reader) .pwa-install-banner {
   color: var(--accent); background: var(--surface-hover); outline: none;
 }
 .fq-create-session-queue-wrap {
-  flex: 1; min-height: 32px; display: flex; align-items: center; justify-content: center;
+  flex: 1 0 auto; min-height: 32px; display: flex; align-items: center; justify-content: center;
   padding: 12px 10px;
 }
 .fq-create-session-queue {
