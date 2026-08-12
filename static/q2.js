@@ -75,6 +75,9 @@
   // screen. Torn down on every queue change so a stale poll can never leak
   // past the selection that started it.
   var briefPollTimer = null;
+  // When the brief was last fetched for the on-screen queue -- drives the
+  // once-a-minute staleness re-read in refresh(), NOT the 3s generating poll.
+  var briefLoadedAt = 0;
   var briefPollQueue = '';
 
   function markNewTicket(ref) {
@@ -658,6 +661,18 @@
     }
     if (!state.viewAll && state.queue && projectKey(state.briefQueue) !== projectKey(state.queue)) {
       loadQueueBrief(state.queue);
+    } else if (!state.viewAll && state.queue && !state.briefGenerating
+        && Date.now() - briefLoadedAt > 60000) {
+      // Same queue on screen for a while: re-read the cheap GET so the
+      // "N ticket updates since" staleness hint tracks the queue as workers
+      // churn it, without the full reload's flicker (state stays populated;
+      // setBriefHtml drops identical repaints anyway).
+      briefLoadedAt = Date.now();
+      getJson(briefPath(state.queue)).then(function (data) {
+        if (!state.viewAll && projectKey(state.queue) === projectKey(state.briefQueue)) {
+          applyBriefResponse(state.queue, data);
+        }
+      }).catch(function () { /* next minute retries */ });
     }
     // One extra tail per poll, only for the queue on screen.
     if (!state.viewAll && state.queue) await loadLog(state.queue);
@@ -751,6 +766,7 @@
   }
 
   async function loadQueueBrief(queue) {
+    briefLoadedAt = Date.now();
     state.briefQueue = queue;
     state.brief = null;
     state.briefError = '';
