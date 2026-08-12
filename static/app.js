@@ -269,6 +269,17 @@
   // health metrics in the footer with healthy/warning/critical coloring.
   // Gated like every other poller so it pauses while typing / when killed.
   function _renderHealth(host, h) {
+    // Footer "needs you N" (design handoff §5). Piggybacks on the health tick
+    // so it needs no poller of its own; hidden entirely at zero, per the spec
+    // ("only when non-zero").
+    try {
+      const nyPill = document.getElementById('cccNeedsYouFooter');
+      if (nyPill) {
+        const n = document.querySelectorAll('.conv-item.is-needs-you').length;
+        nyPill.hidden = n === 0;
+        if (n > 0) nyPill.textContent = 'needs you ' + n;
+      }
+    } catch (_) { /* footer decoration only — never break health rendering */ }
     function _set(k, txt, cls, title) {
       const m = host.querySelector('.ccchealth-metric[data-k="' + k + '"]');
       if (!m) return;
@@ -1265,6 +1276,24 @@
     _soundToggleBtn = soundToggle;
     _renderSoundToggle();
     wrap.appendChild(health);
+    // design_handoff_sidebar_session_list (§5): the footer carries a
+    // "needs you N" counter beside the triggers toggle. Deliberately NOT
+    // inside #cccHealth — that cluster is debug-mode-only, and this number
+    // has to be readable in the default UI. Counts rendered rows rather than
+    // re-deriving state: the sidebar has already done that work, so this is
+    // one querySelectorAll per health tick and never a per-row computation.
+    const needsYouPill = document.createElement('div');
+    needsYouPill.id = 'cccNeedsYouFooter';
+    needsYouPill.hidden = true;
+    needsYouPill.title = 'Sessions blocked on your input right now. Click to jump to the first one.';
+    needsYouPill.addEventListener('click', () => {
+      const first = document.querySelector('.conv-item.is-needs-you');
+      if (first) {
+        first.scrollIntoView({ block: 'center', behavior: 'smooth' });
+        first.click();
+      }
+    });
+    wrap.appendChild(needsYouPill);
     wrap.appendChild(soundToggle);
     // Model Advisor pill: opens the drift/savings monitor; badge shows how many
     // live sessions are on the wrong model right now.
@@ -2832,7 +2861,7 @@
   // never asserts.
   // "Large" means a reload actually worth interrupting for. Below this the
   // gate stays silent and the composer keeps its ordinary Send.
-  const F2_TOKEN_THRESHOLD = 200000;  // ~200k+ estimated context
+  const F2_TOKEN_THRESHOLD = 100000;  // ~100k+ estimated context (CCC-823)
 
   // Per-engine cache-decay profiles. These are measured, not guessed: 390,600
   // real turns. The previous code warned on Claude only, on a comment claiming
