@@ -13078,8 +13078,8 @@
      from for this session (per-session override). Compact, sits in the header. */
   .fq-scope-select {
     background: transparent; color: var(--text);
-    border: 1px solid var(--border); border-radius: 4px;
-    font-size: 14px; font-weight: 800; padding: 2px 5px; max-width: 220px; cursor: pointer;
+    border: 1px solid var(--border); border-radius: 6px;
+    font-size: 14px; font-weight: 800; padding: 8px 10px; max-width: 220px; cursor: pointer;
   }
   .fq-scope-select:hover { color: var(--text); border-color: var(--accent); }
   .fq-scope-select:focus { outline: none; border-color: var(--accent); }
