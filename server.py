@@ -38958,9 +38958,7 @@ def _terminal_input_queue_has_pending(session_id):
 
 def _terminal_queue_waits_for_headless_turn(session_id, status):
     """Hold durable input while a CCC-owned Claude turn owes a result."""
-    if not isinstance(status, dict) or not status.get("live"):
-        return False
-    if _is_real_tty(status.get("tty")):
+    if isinstance(status, dict) and _is_real_tty(status.get("tty")):
         return False
     spawn = _find_live_spawn_entry_for_session(session_id)
     if spawn is None or (spawn.get("engine") or "claude") != "claude":
@@ -46771,8 +46769,10 @@ def _retire_idle_headless_for_session(session_id, *, reason="", defer_if_busy=Fa
     spawn = _find_live_spawn_entry_for_session(session_id)
     if spawn is None or spawn.get("engine") != "claude":
         return {"retired": False}
-    # Never retire a busy headless (mid-turn / running a tool).
-    if _spawn_entry_active_tool_child(spawn):
+    # Never retire a busy headless. The owned-input boundary covers thinking,
+    # pure-text streaming, and between-tool gaps that have no child process;
+    # the tool-child probe remains defense in depth for legacy spawn entries.
+    if _headless_turn_in_progress(spawn) or _spawn_entry_active_tool_child(spawn):
         if defer_if_busy:
             spawn["retire_when_idle"] = True
             spawn["retire_requires_approval"] = require_approval
@@ -47052,16 +47052,16 @@ def resume_session_headless(session_id, text, cwd=None, idempotency_key=None):
                     lifetime_s=(round(time.time() - _se, 1) if _se else None),
                 )
                 return {"ok": True, "pid": s["pid"], "resumed": True, "reused": True}
-            if not _spawn_entry_active_tool_child(s):
-                _retire_unresponsive_spawn_entry(s, terminate=True, reason="write_failed")
-                break
-            return {
-                "ok": False,
-                "pid": s["pid"],
-                "resumed": True,
-                "reused": True,
-                "error": "session input pipe is busy",
-            }
+            if _headless_turn_in_progress(s) or _spawn_entry_active_tool_child(s):
+                return {
+                    "ok": False,
+                    "pid": s["pid"],
+                    "resumed": True,
+                    "reused": True,
+                    "error": "session input pipe is busy",
+                }
+            _retire_unresponsive_spawn_entry(s, terminate=True, reason="write_failed")
+            break
 
     if cwd:
         try:
@@ -50460,7 +50460,10 @@ def _compact_via_hidden_pty(session_id, cwd):
     # stop_headless warning.
     spawn = _find_live_spawn_entry_for_session(sid)
     if spawn is not None:
-        if _spawn_entry_active_tool_child(spawn):
+        if (
+            _headless_turn_in_progress(spawn)
+            or _spawn_entry_active_tool_child(spawn)
+        ):
             return {"ok": False, "via": "hidden-pty", "error": "headless is mid-turn"}
         hpid = spawn.get("pid")
         _retire_unresponsive_spawn_entry(spawn, terminate=True, caller="hidden-pty-compact")
@@ -52075,6 +52078,31 @@ def _inject_text_into_session(
                     # external writer that arrived in between.
                     _update_spawn_transcript_watermark(spawn, session_id)
                 return {"ok": True, "pid": spawn["pid"], "via": "spawn-fifo"}
+            # A transient FIFO failure is not permission to kill an owned
+            # active turn. Preserve the user's text in the durable queue and
+            # let the watcher retry after the tracked boundary. A drained row
+            # returns a failure so the watcher requeues it at the front.
+            if (
+                _headless_turn_in_progress(spawn)
+                or _spawn_entry_active_tool_child(spawn)
+            ):
+                if not _from_terminal_queue:
+                    queued_status = dict(status or {})
+                    queued_status["status"] = (
+                        queued_status.get("status") or "headless"
+                    )
+                    queued_status["pid"] = (
+                        queued_status.get("pid") or spawn.get("pid")
+                    )
+                    return _queue_terminal_input(
+                        session_id, text, queued_status,
+                    )
+                return {
+                    "ok": False,
+                    "pid": spawn["pid"],
+                    "via": "spawn-fifo",
+                    "error": "session input pipe is busy",
+                }
             if not _spawn_entry_active_tool_child(spawn):
                 _retire_unresponsive_spawn_entry(spawn, terminate=True, reason="write_failed")
                 return _maybe_queue_on_invalid_cwd(

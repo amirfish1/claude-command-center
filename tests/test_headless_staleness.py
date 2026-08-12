@@ -301,6 +301,27 @@ def test_retire_idle_helper_skips_busy(server_mod, tmp_path):
     retire.assert_not_called()
 
 
+def test_retire_idle_helper_skips_owned_pure_text_turn(server_mod, tmp_path):
+    sid, entry, _transcript, log = _stage(
+        server_mod, tmp_path, [_event("a")], 4
+    )
+    log.write_text(_result_lines(4))
+    entry["input_result_target"] = 5
+
+    with mock.patch.object(server_mod, "_detect_session_engine", return_value="claude"), \
+         mock.patch.object(server_mod, "_find_live_spawn_entry_for_session", return_value=entry), \
+         mock.patch.object(server_mod, "_spawn_entry_active_tool_child", return_value=None), \
+         mock.patch.object(server_mod, "_ensure_headless_staleness_watcher_started"), \
+         mock.patch.object(server_mod, "_retire_unresponsive_spawn_entry") as retire:
+        result = server_mod._retire_idle_headless_for_session(
+            sid, reason="terminal-takeover", defer_if_busy=True
+        )
+
+    assert result == {"retired": False, "reason": "busy", "deferred": True}
+    assert entry["retire_when_idle"] is True
+    retire.assert_not_called()
+
+
 def test_retire_idle_helper_retires_idle(server_mod, tmp_path):
     sid, entry, _t, _l = _stage(server_mod, tmp_path, [_event("a")], 0)
     with mock.patch.object(server_mod, "_detect_session_engine", return_value="claude"), \
@@ -700,8 +721,82 @@ def test_terminal_queue_waits_for_owned_headless_turn(server_mod, tmp_path):
         server_mod, "_find_live_spawn_entry_for_session", return_value=entry
     ):
         assert server_mod._terminal_queue_waits_for_headless_turn(sid, status) is True
+        assert server_mod._terminal_queue_waits_for_headless_turn(
+            sid, {"live": False, "tty": None}
+        ) is True
         log.write_text(_result_lines(5))
         assert server_mod._terminal_queue_waits_for_headless_turn(sid, status) is False
+
+
+def test_failed_write_during_owned_turn_queues_without_retiring(
+    server_mod, tmp_path
+):
+    sid, entry, _transcript, log = _stage(
+        server_mod, tmp_path, [_event("a")], 4
+    )
+    log.write_text(_result_lines(4))
+    entry["input_result_target"] = 5
+    status = {"live": False, "tty": None, "status": None}
+
+    with mock.patch.object(server_mod, "find_session_cwd", return_value="/fake/cwd"), \
+         mock.patch.object(server_mod, "session_live_status", return_value=status), \
+         mock.patch.object(server_mod, "_is_codex_session", return_value=False), \
+         mock.patch.object(server_mod, "_is_cursor_session", return_value=False), \
+         mock.patch.object(server_mod, "_is_gemini_session", return_value=False), \
+         mock.patch.object(server_mod, "_is_antigravity_session", return_value=False), \
+         mock.patch.object(server_mod, "_find_live_spawn_entry_for_session", return_value=entry), \
+         mock.patch.object(server_mod, "_session_has_live_terminal", return_value=False), \
+         mock.patch.object(server_mod, "_terminal_input_queue_has_pending", return_value=False), \
+         mock.patch.object(server_mod, "_spawn_entry_active_tool_child", return_value=None), \
+         mock.patch.object(server_mod, "_pending_ask_user_question_for_session", return_value=False), \
+         mock.patch.object(server_mod, "_write_stream_json_user_message", return_value=False), \
+         mock.patch.object(
+             server_mod,
+             "_queue_terminal_input",
+             return_value={"ok": True, "queued": True, "via": "terminal-queued"},
+         ) as queue, \
+         mock.patch.object(server_mod, "_retire_unresponsive_spawn_entry") as retire, \
+         mock.patch.object(server_mod, "resume_session_headless") as resume:
+        result = server_mod._inject_text_into_session(sid, "do not lose this")
+
+    assert result["queued"] is True
+    queue.assert_called_once()
+    retire.assert_not_called()
+    resume.assert_not_called()
+
+
+def test_resume_reuse_failed_write_during_owned_turn_does_not_retire(
+    server_mod, tmp_path
+):
+    sid, entry, _transcript, log = _stage(
+        server_mod, tmp_path, [_event("a")], 4
+    )
+    log.write_text(_result_lines(4))
+    entry["input_result_target"] = 5
+    original = list(server_mod._spawned_sessions)
+    server_mod._spawned_sessions[:] = [entry]
+    try:
+        with mock.patch.object(
+            server_mod, "_claude_subagent_parent_session_id", return_value=None
+        ), mock.patch.object(
+            server_mod, "_control_plane_engine_call", return_value=None
+        ), mock.patch.object(
+            server_mod, "_poll_spawn_entry", return_value=None
+        ), mock.patch.object(
+            server_mod, "_write_stream_json_user_message", return_value=False
+        ), mock.patch.object(
+            server_mod, "_spawn_entry_active_tool_child", return_value=None
+        ), mock.patch.object(
+            server_mod, "_retire_unresponsive_spawn_entry"
+        ) as retire:
+            result = server_mod.resume_session_headless(sid, "keep this safe")
+
+        assert result["ok"] is False
+        assert "busy" in result["error"]
+        retire.assert_not_called()
+    finally:
+        server_mod._spawned_sessions.clear()
+        server_mod._spawned_sessions.extend(original)
 
 
 def test_record_spawn_registry_persists_result_target_state(
