@@ -1415,6 +1415,11 @@
       </div>
       <p class="sys-live-region" id="sysLiveRegion" role="status" aria-live="polite" aria-atomic="true"></p>
 
+      <div class="sys-restart" id="sysRestartRow" style="margin-bottom: 16px; border-bottom: 1px solid var(--border); padding-bottom: 12px; display: flex; align-items: center; gap: 8px;">
+        <button type="button" class="upd-btn upd-primary sys-restart-btn" id="sysRestartAllBtn" style="margin: 0;">Restart all</button>
+        <div class="sys-restart-status" id="sysRestartStatus" hidden style="font-size: 11px; font-weight: 600; color: var(--text-muted);"></div>
+      </div>
+
       <!-- Dashboard -->
       <div class="sys-section sys-svc is-checking" id="sysRowDash" data-service="dashboard">
         <div class="sys-svc-head">
@@ -1535,28 +1540,7 @@
            is stated once, here. -->
       <p class="sys-keepalive-note">All three run under launchd KeepAlive, so they come back on their own after a crash or a reboot.</p>
 
-      <details class="sys-wedged-details">
-        <summary>What is WEDGED?</summary>
-        <div class="upd-warning sys-wedged">
-          The verdict CCC logs when the Codex app-server fails to answer the
-          liveness probe <span id="sysWedgedThreshold"></span> in a row,
-          triggering teardown and respawn. It affects only the worker's Codex
-          sessions, never the dashboard or WatchTower. A healthy app-server
-          shows no WEDGED lines in the activity log.
-        </div>
-      </details>
-
-      <!-- A code fix only goes live in the process that loaded it, and
-           server.py runs in BOTH the dashboard and the worker
-           (worker_engines.py lazily imports it). Hence "Restart all". -->
-      <div class="sys-restart" id="sysRestartRow">
-        <div class="sys-restart-label">After new code lands</div>
-        <div class="sys-restart-btns">
-          <button type="button" class="upd-btn upd-primary sys-restart-btn" id="sysRestartAllBtn">Restart all</button>
-        </div>
-        <div class="sys-restart-hint" id="sysRestartHint">A <code>server.py</code> fix runs in both the dashboard and the worker, so <strong>Restart all</strong> is the honest default after pulling new code.</div>
-        <div class="sys-restart-status" id="sysRestartStatus" hidden></div>
-      </div>
+      <span id="sysWedgedThreshold" hidden></span>
 
       <div class="upd-actions">
         <button type="button" class="upd-btn upd-primary" id="sysCloseBtn">Close</button>

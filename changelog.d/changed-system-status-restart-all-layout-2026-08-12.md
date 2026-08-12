@@ -1,0 +1,2 @@
+- Relocated the "Restart all" action button to the top of the System Status modal and removed its extra explanations and hint text.
+- Removed the "What is WEDGED?" detail section from the modal.
