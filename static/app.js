@@ -48408,7 +48408,7 @@
         // reads as though the human typed those words, and the turn just looks
         // like it quietly ended ("Done"). Render it as an explicit interrupted
         // marker instead, so the conversation itself says what happened.
-        if (/^\[Request interrupted by user/.test(_rawText)) {
+        if (/^\[Request interrupted by user/.test(_rawText) && debugModeEnabled()) {
           div.classList.add('session-interrupted-event');
           div.innerHTML = '<span class="label">Session</span>'
             + (ev.line != null ? '<span class="line-num">L' + ev.line + '</span>' : '')
