@@ -3003,7 +3003,16 @@
     const engineRaw = String((ctx.session && ctx.session.source) || cf.engine || 'claude');
     const engine = f2EngineKey(engineRaw);
     const tokens = Math.max(Number(cf.live_context_tokens) || 0, Number(cf.latest_input_tokens) || 0);
-    const mtime = Number(row.modified || row.mtime || 0);
+    // The sidebar row's mtime is cached and refreshes on its own slow cadence
+    // (paused entirely while the CCC tab is backgrounded — see sessionsList
+    // in _PAUSE_WHEN_HIDDEN), so it can lag well behind reality. liveStatus is
+    // polled every 5s for whichever session is actually open and carries the
+    // real transcript mtime straight off disk (CCC-828: rail said "idle 2 hr"
+    // on a session whose last message was 29 min ago — the cached row simply
+    // hadn't refreshed since before the tab regained focus). Prefer whichever
+    // source is fresher rather than trusting the cache blindly.
+    const liveMtime = (liveStatus.forSessionId === sid) ? Number(liveStatus.transcriptMtime) || 0 : 0;
+    const mtime = Math.max(Number(row.modified || row.mtime || 0), liveMtime);
     const model = row.model || (ctx.session && ctx.session.model) || cf.model || 'the current model';
     const forced = f2DemoForceMatches(sid);
     if (forced) {
@@ -4723,6 +4732,7 @@
         // produce no live deltas (TUI-originated kimi turns).
         status: data.status || null,
         recentlyWritten: !!data.recently_written,
+        transcriptMtime: Number(data.transcript_mtime) || 0,
         pid: data.pid || null,
         tty: data.tty || null,
         terminalApp: data.terminal_app || null,

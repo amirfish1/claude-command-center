@@ -18699,6 +18699,7 @@ def session_live_status(session_id, session_cwd):
     # Recency check on the .jsonl file (for the "is actively being used" signal)
     jsonl_name = session_id + ".jsonl"
     recent = False
+    transcript_mtime = None
     if PROJECTS_ROOT.is_dir():
         now = time.time()
         for project_dir in PROJECTS_ROOT.iterdir():
@@ -18707,12 +18708,22 @@ def session_live_status(session_id, session_cwd):
             candidate = project_dir / jsonl_name
             if candidate.is_file():
                 try:
-                    if now - candidate.stat().st_mtime < 300:  # 5 min
+                    mtime = candidate.stat().st_mtime
+                    transcript_mtime = mtime
+                    if now - mtime < 300:  # 5 min
                         recent = True
                 except OSError:
                     pass
                 break
     result["recently_written"] = recent
+    # Exact mtime, not just the 5-min recent bucket — this session-status poll
+    # runs every 5s for the open pane (see _POLLER_META.liveStatus), far
+    # tighter than the sidebar's ~60s/hidden-paused session-list refresh. The
+    # F2 cold-session composer (CCC-828) reads it to avoid quoting an idle
+    # time computed from a stale cached row (e.g. the dashboard tab was
+    # backgrounded through the session's last real message).
+    if transcript_mtime is not None:
+        result["transcript_mtime"] = transcript_mtime
 
     # Primary lookup: session registry (authoritative)
     registry = _load_session_registry()
