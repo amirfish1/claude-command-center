@@ -27468,6 +27468,18 @@
             + '</span>';
         }
       }
+      // design_handoff_sidebar_session_list (variant 2c): a small pulsing
+      // dot mirroring the row's working state, additive to the existing
+      // conv-needs-you dot and conv-live-tool pill above — neither is
+      // replaced, this just gives "is something actually happening here"
+      // a glanceable signal that doesn't require reading pill text.
+      // Deliberately excludes "stale"/"sending" pills: those read as
+      // stuck/pending, not confirmed active work. (workingDotHtml itself
+      // is built further down, once _needsYouRow is known — needs-you
+      // takes priority and suppresses this dot.)
+      const _isWorkingRow = !!liveToolHtml
+        && (liveToolHtml.indexOf('conv-live-tool in-flight') !== -1
+          || liveToolHtml.indexOf('conv-live-tool is-question') !== -1);
       const isCodexRow = c.source === 'codex' || c.engine === 'codex';
       const isKimiRow = c.source === 'kimi' || c.engine === 'kimi';
       const isGeminiRow = c.source === 'gemini' || c.engine === 'gemini';
@@ -28158,6 +28170,9 @@
         ? '<span class="conv-needs-you" title="Needs you - the agent is blocked on your input" aria-label="Needs you">&#9679;</span>'
         : '';
       const needsYouRowClass = _needsYouRow ? ' is-needs-you' : '';
+      const workingDotHtml = (_isWorkingRow && !_needsYouRow)
+        ? '<span class="conv-working-dot" title="Actively working" aria-label="Actively working"></span>'
+        : '';
       // Shared badge block — same markup whether it sits on its own meta line
       // (default evergreen) or inline in the main row (single-line variant).
       const _evergreenBadgesInner = evergreenGoalHtml
@@ -28231,6 +28246,7 @@
             + _nyaChevronHtml
             + cooTrackHtml
             + needsYouHtml
+            + workingDotHtml
             + '<div class="conv-title ' + titleClass + '" data-role="title" aria-label="' + escapeAttr(title) + '">' + escapeHtml(title) + '</div>'
             + subagentClusterDisclosureHtml
             + (goalIconOnly ? goalIconHtml : '')

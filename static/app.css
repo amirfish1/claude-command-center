@@ -6352,7 +6352,8 @@
   .conv-item .conv-object-chip,
   .conv-item .conv-folder-chip,
   .conv-item .conv-repo-pin { display: none; }
-  /* Brief reveals only when the row is selected/active (was hover/focus-within). */
+  /* Brief reveals when the row is selected/active — the full metadata line
+     wraps under the title and the row grows to two lines. */
   .conv-item.active .conv-hover-meta-row { display: flex; }
   .conv-item.active .conv-hover-meta-row .conv-meta-inline,
   .conv-item.active .conv-hover-meta-row .conv-branch-slot,
@@ -6360,6 +6361,29 @@
   .conv-item.active .conv-hover-meta-row .conv-folder-chip,
   .conv-item.active .conv-hover-meta-row .conv-repo-pin { display: inline-flex; }
   .conv-item.active .conv-hover-meta-row .conv-meta-inline .sep { display: inline-flex; }
+  /* Hover (design_handoff_sidebar_session_list, 2c) keeps the row at ONE
+     line: instead of adding a second row, the meta line is lifted out of
+     flow and right-aligned on the title line, so the list never reflows
+     under the cursor. Only the compact identifiers are surfaced there —
+     session id and branch — the rest stays an active-only affordance. */
+  .conv-item:hover:not(.active) .conv-hover-meta-row {
+    display: flex;
+    position: absolute;
+    /* clears the time column so "2d" stays readable */
+    right: calc(12px + var(--conv-time-col));
+    top: 50%;
+    transform: translateY(-50%);
+    margin: 0;
+    max-width: 55%;
+    justify-content: flex-end;
+    background: var(--surface-2);
+    padding-left: 8px;
+    pointer-events: auto;
+    z-index: 2;
+  }
+  .conv-item:hover:not(.active) .conv-hover-meta-row > * { display: none; }
+  .conv-item:hover:not(.active) .conv-hover-meta-row .conv-sidebar-session-id-chip,
+  .conv-item:hover:not(.active) .conv-hover-meta-row .conv-branch-slot { display: inline-flex; }
   .conv-item .conv-meta-inline .sep { opacity: 0.4; }
   .conv-item .conv-rel {
     /* Time chip — bumped 10 → 11.5px for legibility (Omnara's looks
@@ -6484,16 +6508,8 @@
   .conv-folder-group[data-object-drop-zone] > .conv-item.is-grouped-row {
     padding-left: 29px;
   }
-  .conv-folder-group:not(.collapsed) .conv-item.is-grouped-row::before {
-    content: '';
-    position: absolute;
-    left: var(--folder-tree-x);
-    top: 50%;
-    width: 9px;
-    height: 1px;
-    background: var(--folder-tree-color);
-    pointer-events: none;
-  }
+  /* Tree tick stubs removed with the vertical spine — see
+     .conv-folder-group:not(.collapsed) note in the sidebar section. */
   /* Keep min-width: 0 on the inline meta so the right-side chip cluster
      can shrink/wrap inside the narrower grouped-row width without forcing
      horizontal overflow. Everything else inherits the same .conv-main-row /
@@ -7044,6 +7060,37 @@
   }
   @media (prefers-reduced-motion: reduce) {
     .conv-item .conv-needs-you { animation: none; }
+  }
+  /* design_handoff_sidebar_session_list (2c): small working-state dot,
+     additive next to .conv-needs-you — teal pulse instead of amber, and
+     never both at once (JS suppresses this one when needs-you is set). */
+  .conv-item .conv-working-dot {
+    flex: 0 0 auto;
+    position: relative;
+    width: 6px; height: 6px;
+    border-radius: 50%;
+    margin-right: 5px;
+    /* Teal per the design handoff's state palette — kept literal rather
+       than a theme var; the handoff explicitly calls out state colors
+       (needs-you amber, working teal) as meaning-carrying and exempt from
+       the blue-gray palette substitution applied elsewhere. */
+    background: #39d2c0;
+  }
+  .conv-item .conv-working-dot::after {
+    content: '';
+    position: absolute; inset: 0;
+    border-radius: 50%;
+    background: rgba(57,210,192,0.55);
+    animation: ccc-working-dot-pulse 1.8s ease-in-out infinite;
+    will-change: transform, opacity;
+    pointer-events: none;
+  }
+  @keyframes ccc-working-dot-pulse {
+    0%, 100% { transform: scale(1);   opacity: 0.55; }
+    50%      { transform: scale(2.2); opacity: 0.15; }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .conv-item .conv-working-dot::after { animation: none; opacity: 0.3; }
   }
   #convList .conv-openask-label { color: var(--purple); }
   #convList .conv-openask-count {
@@ -11866,16 +11913,11 @@
     --folder-tree-color: rgba(139,148,158,0.26);
     position: relative;
   }
-  .conv-folder-group:not(.collapsed)::before {
-    content: '';
-    position: absolute;
-    left: var(--folder-tree-x);
-    top: 28px;
-    bottom: 10px;
-    width: 1px;
-    background: var(--folder-tree-color);
-    pointer-events: none;
-  }
+  /* design_handoff_sidebar_session_list (2c): the vertical tree spine that
+     used to connect a lane's rows is gone. With hairline lane headers the
+     grouping is already legible from the header boundary + indentation, and
+     the rail added a second, louder grouping signal. Its horizontal tick
+     stubs on .is-grouped-row are removed with it. */
   /* GOAL-5 object hierarchy — a group nested under another object indents by
      its depth and carries a guide rail so the day reads as a tree. Depth comes
      from a --obj-depth inline var set in _renderObjGroup. */
@@ -11898,28 +11940,34 @@
     color: var(--text-muted);
     cursor: pointer;
     border-radius: 4px;
-    /* CCC-95: the colored left border read as visual noise down the rail —
-       the folder chip itself already carries the hue. */
-    /* CCC-95 dropped the hue'd left border as noise. Restored at low
-       saturation together with a hue-tinted band: with 5+ project clusters
-       in one list, an untinted 1px rule was not enough to tell where one
-       cluster ends and the next begins. */
-    border-left: 3px solid hsla(var(--chip-hue), 55%, 55%, 0.5);
     user-select: none;
     margin-top: 3px;
-    border-top: 1px solid hsla(var(--chip-hue), 45%, 55%, 0.28);
-    background: hsla(var(--chip-hue), 55%, 50%, 0.09);
+    /* design_handoff_sidebar_session_list (2c): hairline sticky lane header.
+       The old hue-tinted band (colored fill + top/left borders) read as
+       visual weight the design calls "chip/bar treatment" and asks to
+       remove — cluster identity now lives in the small swatch on
+       .conv-folder-group-chip (::before) instead of a colored band, and the
+       boundary between lanes is one quiet hairline. Sticky + opaque so rows
+       scrolling under it don't show through. */
+    border-top: none;
+    border-bottom: 1px solid var(--border);
+    /* Must match the sidebar's own background (--surface), not --bg: sticky
+       needs an opaque fill, and --bg is darker than the sidebar so it read
+       as a black band sitting on top of the list. */
+    background: var(--surface);
+    position: sticky;
+    top: 0;
+    z-index: 2;
   }
   .conv-folder-group-header:first-child { margin-top: 0; }
   .conv-folder-group-header:hover {
-    background: hsla(var(--chip-hue), 55%, 50%, 0.16);
+    background: var(--surface-2);
     color: var(--text);
   }
-  /* Muted ("no colors") mode can't use the hue band, so the cluster boundary
-     leans on a neutral band + a visible left rail instead. */
+  /* Muted ("no colors") mode: same hairline treatment, no hue at all. */
   body.chips-muted .conv-folder-group-header {
-    background: rgba(139,148,158,0.08) !important;
-    border-top-color: rgba(139,148,158,0.22) !important;
+    background: var(--surface) !important;
+    border-bottom-color: var(--border) !important;
   }
   /* GOAL-1 object status + immediate-objective line. Under the header; stays
      visible when the group is collapsed (it is not a .conv-item). */
@@ -12017,19 +12065,38 @@
     width: auto;
     min-width: 26px;
   }
+  /* design_handoff_sidebar_session_list (2c): the repo name is quiet text,
+     not a colored pill — project identity moves to a small swatch square
+     (::before) ahead of the name, matching the mock's "swatch, not chip"
+     treatment. body.chips-level below still wants the old pill look when
+     the user explicitly opts into it, so that override is untouched. */
   .conv-folder-group-chip {
     grid-column: 2 / 4;
     justify-self: start;
     min-width: 0;
-    padding: 2px 8px;
+    padding: 2px 4px;
     border-radius: 3px;
     font-size: 11px;
     font-weight: 600;
-    background: hsla(var(--chip-hue), 55%, 50%, 0.14);
-    color: hsl(var(--chip-hue), 55%, 65%);
-    border: 1px solid hsla(var(--chip-hue), 45%, 50%, 0.42);
+    font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    background: none;
+    color: var(--text);
+    border: 1px solid transparent;
     white-space: nowrap;
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
   }
+  .conv-folder-group-chip::before {
+    content: '';
+    flex: 0 0 auto;
+    width: 7px; height: 7px;
+    border-radius: 2px;
+    background: hsl(var(--chip-hue), 55%, 55%);
+  }
+  /* Object headers reuse this chip for a task/goal title, which has no repo
+     identity color behind it — no swatch there. */
+  .conv-folder-group-chip[data-role="object-title"]::before { display: none; }
   .conv-folder-group-header[data-object-drop] .conv-folder-group-chip {
     grid-column: 2;
     max-width: 220px;
@@ -12189,6 +12256,16 @@
     align-items: center;
     gap: 5px;
     min-width: 0;
+    /* design_handoff_sidebar_session_list (2c): "Push all" / "+" reveal on
+       lane hover instead of sitting on the header permanently — the ship
+       status text (dirty/clean) stays visible so a scan of the list still
+       shows which repos have uncommitted work without hovering. */
+    opacity: 0;
+    transition: opacity 0.1s ease-out;
+  }
+  .conv-folder-group-header:hover .conv-folder-repo-actions,
+  .conv-folder-group-header:focus-within .conv-folder-repo-actions {
+    opacity: 1;
   }
   .conv-folder-new-session-btn {
     flex: 0 0 auto;
