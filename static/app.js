@@ -36606,6 +36606,11 @@
   // the button back to its former value or hide its in-progress spinner.
   const _uxqPendingDrainStates = new Map();
   const _UXQ_DRAIN_MIN_PENDING_MS = 400;
+  // Same race, same fix, for the desired-workers cycle (CCC-819): a health
+  // GET already in flight when the click lands can resolve after the POST
+  // and repaint the button back to its pre-click value with no visible
+  // change, reading as "clicked, nothing happened".
+  const _uxqPendingWorkersStates = new Map();
   // ── Service health (SERVER STATUS chip + System status panel) ────────
   // One endpoint, one round trip: GET /api/system/services returns the
   // dashboard, the execution worker, WatchTower and the Codex app-server in
@@ -37131,7 +37136,15 @@
     // verbose (compact-strip) controls; the dense health row doesn't show it.
     let workersToggle = '';
     if (verbose) {
-      const desiredWorkers = Math.max(1, Math.min(3, Number(opts.desiredWorkers) || 1));
+      const workersKey = String(project || '').toUpperCase();
+      const pendingWorkers = _uxqPendingWorkersStates.get(workersKey);
+      // Same stale-repaint guard as auto-drain above: trust a just-confirmed
+      // click over a health snapshot that started before it landed.
+      const workersConfirmed = pendingWorkers && !pendingWorkers.pending
+        && Number(opts.desiredWorkers) === pendingWorkers.on;
+      if (workersConfirmed) _uxqPendingWorkersStates.delete(workersKey);
+      const displayedDesiredWorkers = pendingWorkers ? pendingWorkers.on : Number(opts.desiredWorkers);
+      const desiredWorkers = Math.max(1, Math.min(3, displayedDesiredWorkers || 1));
       workersToggle = '<button type="button" class="fq-status-workers-toggle"'
         + ' data-workers-queue="' + escapeAttr(project) + '"'
         + ' data-workers-current="' + desiredWorkers + '"'
@@ -38985,9 +38998,19 @@
         ev.preventDefault();
         ev.stopPropagation();
         const queue = btn.getAttribute('data-workers-queue');
+        const workersKey = String(queue || '').toUpperCase();
         const current = Math.max(1, Math.min(3, parseInt(btn.getAttribute('data-workers-current'), 10) || 1));
         const next = current >= 3 ? 1 : current + 1;
+        // A health GET already in flight can report the pre-click count after
+        // the write succeeds (CCC-819). Show the requested value immediately
+        // and wait for that in-flight fetch before releasing the override, so
+        // a stale repaint can't silently undo the click.
+        const healthInFlightAtClick = _uxqHealthPromise;
+        _uxqPendingWorkersStates.set(workersKey, { on: next, pending: true });
+        btn.setAttribute('data-workers-current', String(next));
+        btn.textContent = next + 'x';
         btn.style.opacity = '0.4';
+        let succeeded = false;
         try {
           const res = await fetch('/api/wt/queue/workers', {
             method: 'POST',
@@ -38996,10 +39019,20 @@
           });
           const data = await res.json().catch(() => ({}));
           if (!res.ok || !data.ok) throw new Error(data.error || ('HTTP ' + res.status));
+          succeeded = true;
         } catch (e) {
           showOpToast('Could not update worker count: ' + ((e && e.message) || 'unknown'), 'error');
+          btn.setAttribute('data-workers-current', String(current));
+          btn.textContent = current + 'x';
+          _uxqPendingWorkersStates.delete(workersKey);
         }
         btn.style.opacity = '';
+        if (succeeded) {
+          const pendingWorkersState = _uxqPendingWorkersStates.get(workersKey);
+          if (pendingWorkersState) pendingWorkersState.pending = false;
+          _uxqHealthCache.ts = 0;
+          if (healthInFlightAtClick) await healthInFlightAtClick.catch(() => {});
+        }
         void _uxqRefreshQueueStrips();
       };
       $health.addEventListener('click', openWorkerSession);
