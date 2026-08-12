@@ -56433,6 +56433,71 @@
     }).join('');
   }
 
+  function renderSysNextServers(list) {
+    const $list = document.getElementById('sysNextList');
+    const $count = document.getElementById('sysNextCount');
+    if (!$list) return;
+    const rows = Array.isArray(list) ? list : [];
+    if ($count) $count.textContent = String(rows.length);
+    if (!rows.length) {
+      $list.innerHTML = '<div class="sys-spawned-empty">No running Next.js servers found.</div>';
+      return;
+    }
+    const sorted = rows.slice().sort((a, b) => b.memory_mb - a.memory_mb);
+    $list.innerHTML = sorted.map(s => {
+      const displayPath = s.path;
+      const pid = s.pid;
+      const port = s.port;
+      const project = s.project;
+      const mem = s.memory_mb;
+      return (
+        '<div class="sys-spawned-row">'
+        + '<span class="sys-spawned-dot" aria-hidden="true" style="background:#f4a261;"></span>'
+        + '<span class="sys-spawned-main">'
+        + '<span class="sys-spawned-name">' + escapeHtml(project) + ' <span style="color:var(--text-muted); font-size:10px;">(port ' + escapeHtml(String(port)) + ')</span></span>'
+        + '<span class="sys-spawned-meta">' + escapeHtml(displayPath) + ' · pid ' + escapeHtml(String(pid)) + '</span>'
+        + '</span>'
+        + '<span class="sys-spawned-ttl" style="margin-right:12px;">' + escapeHtml(String(mem)) + ' MB</span>'
+        + '<button type="button" class="pkood-kill-btn" data-pid="' + escapeHtml(String(pid)) + '" onclick="sysKillNextServer(this)">STOP/KILL</button>'
+        + '</div>'
+      );
+    }).join('');
+  }
+
+  window.sysKillNextServer = async function(btn) {
+    const pidVal = btn.getAttribute('data-pid');
+    if (!pidVal) return;
+    const pid = parseInt(pidVal, 10);
+    if (isNaN(pid)) return;
+    
+    btn.disabled = true;
+    const oldText = btn.textContent;
+    btn.textContent = 'Killing...';
+    try {
+      const res = await backgroundApiFetch('/api/system/next-server/kill', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ pid })
+      });
+      const data = await res.json();
+      if (data && data.ok) {
+        btn.textContent = 'Killed';
+        setTimeout(() => {
+          if (typeof sysRefresh === 'function') sysRefresh(true);
+        }, 800);
+      } else {
+        btn.textContent = 'Failed';
+        btn.disabled = false;
+        setTimeout(() => { btn.textContent = oldText; }, 2000);
+      }
+    } catch (e) {
+      btn.textContent = 'Error';
+      btn.disabled = false;
+      setTimeout(() => { btn.textContent = oldText; }, 2000);
+    }
+  };
+
+
   async function sysRefresh(force) {
     if (!_sysFirstAttemptAt) _sysFirstAttemptAt = Date.now();
     const cache = await _fetchSystemServices(force);
@@ -56444,6 +56509,8 @@
     renderSysAppServerRow(map.get('app_server'), map.get('worker'));
     _sysSpawnedList = Array.isArray(payload && payload.spawned_processes) ? payload.spawned_processes : [];
     renderSysSpawnedList(_sysSpawnedList);
+    const nextServers = Array.isArray(payload && payload.next_servers) ? payload.next_servers : [];
+    renderSysNextServers(nextServers);
     const rollup = computeServerRollup(payload);
     paintSysRollup(rollup);
     paintServerChip(rollup);

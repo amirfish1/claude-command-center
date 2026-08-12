@@ -1,0 +1,1 @@
+- Added running Next.js development servers to the System Status page with an option to stop/kill them.

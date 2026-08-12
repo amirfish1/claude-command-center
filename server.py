@@ -29695,6 +29695,168 @@ def _system_services_spawned_processes():
     return rows
 
 
+_NEXT_SERVERS_CACHE = []
+_NEXT_SERVERS_LOCK = threading.Lock()
+
+
+def _scan_next_servers():
+    global _NEXT_SERVERS_CACHE
+    cmd = ["ps", "-A", "-o", "pid,ppid,rss,command"]
+    try:
+        res = subprocess.run(cmd, capture_output=True, text=True, check=True)
+        lines = res.stdout.strip().split('\n')
+    except Exception:
+        return
+
+    procs = []
+    for line in lines[1:]:
+        parts = line.split(None, 3)
+        if len(parts) < 4:
+            continue
+        try:
+            pid = int(parts[0])
+            ppid = int(parts[1])
+            rss = int(parts[2])
+            command = parts[3]
+            procs.append({
+                "pid": pid,
+                "ppid": ppid,
+                "rss": rss,
+                "command": command
+            })
+        except ValueError:
+            continue
+
+    proc_map = {p['pid']: p for p in procs}
+
+    def get_ancestors(pid):
+        ancestors = []
+        curr = pid
+        while curr in proc_map:
+            ppid = proc_map[curr]['ppid']
+            if ppid <= 0 or ppid == 1 or ppid in ancestors:
+                break
+            ancestors.append(ppid)
+            curr = ppid
+        return ancestors
+
+    next_processes = []
+    for p in procs:
+        cmd_lower = p['command'].lower()
+        if "next-server" in cmd_lower or "next dev" in cmd_lower or "next/dev" in cmd_lower or "node_modules/.bin/next" in cmd_lower or "turbo dev" in cmd_lower:
+            next_processes.append(p)
+
+    if not next_processes:
+        with _NEXT_SERVERS_LOCK:
+            _NEXT_SERVERS_CACHE = []
+        return
+
+    trees = {}
+    for p in next_processes:
+        ancestors = get_ancestors(p['pid'])
+        root_pid = p['pid']
+        for anc in reversed(ancestors):
+            anc_cmd = proc_map[anc]['command'].lower()
+            if any(k in anc_cmd for k in ["npm", "yarn", "node", "turbo", "next", "pnpm", "bun"]):
+                root_pid = anc
+                break
+        if root_pid not in trees:
+            trees[root_pid] = []
+        trees[root_pid].append(p)
+
+    results = []
+    for root_pid, member_procs in trees.items():
+        root_proc = proc_map.get(root_pid)
+        if not root_proc:
+            continue
+
+        all_tree_pids = {root_pid}
+        for p in procs:
+            if root_pid in get_ancestors(p['pid']):
+                all_tree_pids.add(p['pid'])
+
+        total_rss = sum(proc_map[pid]['rss'] for pid in all_tree_pids if pid in proc_map)
+
+        port = None
+        for pid in all_tree_pids:
+            cmd = proc_map[pid]['command']
+            m = re.search(r'(?:-p|--port)\s+(\d+)', cmd)
+            if m:
+                port = int(m.group(1))
+                break
+        if not port:
+            port = 3000
+
+        project_path = ""
+        for pid in all_tree_pids:
+            cmd = proc_map[pid]['command']
+            m = re.search(r'(/Users/[^/]+/Apps/[^/\s]+|/Users/[^/]+/[^/\s]+)', cmd)
+            if m:
+                p_candidate = m.group(1)
+                if "node_modules" not in p_candidate and "Library" not in p_candidate and ".claude" not in p_candidate:
+                    project_path = p_candidate
+                    break
+            node_idx = cmd.find("node_modules")
+            if node_idx != -1:
+                parts = cmd[:node_idx].split()
+                if parts:
+                    project_path = parts[-1].rstrip("/")
+                    break
+
+        if project_path:
+            project_name = project_path.rstrip("/").split("/")[-1]
+        else:
+            project_name = "Next.js App"
+            project_path = "Unknown Path"
+
+        results.append({
+            "pid": root_pid,
+            "port": port,
+            "project": project_name,
+            "path": project_path,
+            "memory_mb": round(total_rss / 1024.0, 1),
+            "command": root_proc['command'],
+            "all_pids": list(all_tree_pids)
+        })
+
+    with _NEXT_SERVERS_LOCK:
+        _NEXT_SERVERS_CACHE = results
+
+
+def _next_servers_scanner_loop():
+    # Warm immediately on startup, then poll every 10s
+    _scan_next_servers()
+    while True:
+        try:
+            _scan_next_servers()
+        except Exception:
+            pass
+        time.sleep(10.0)
+
+
+def _system_services_next_servers():
+    with _NEXT_SERVERS_LOCK:
+        return list(_NEXT_SERVERS_CACHE)
+
+
+def kill_next_server(pid):
+    pids_to_kill = [pid]
+    with _NEXT_SERVERS_LOCK:
+        for item in _NEXT_SERVERS_CACHE:
+            if item["pid"] == pid:
+                pids_to_kill = item["all_pids"]
+                break
+    killed = []
+    for p in pids_to_kill:
+        try:
+            os.kill(p, signal.SIGKILL)
+            killed.append(p)
+        except Exception:
+            pass
+    threading.Thread(target=_scan_next_servers, daemon=True).start()
+    return {"ok": True, "killed": killed}
+
+
 def _build_system_services_uncached():
     worker = _system_services_worker_entry()
     return {
@@ -29708,7 +29870,9 @@ def _build_system_services_uncached():
             _system_services_app_server_entry(worker),
         ],
         "spawned_processes": _system_services_spawned_processes(),
+        "next_servers": _system_services_next_servers(),
     }
+
 
 
 def build_system_services(force=False):
@@ -65240,6 +65404,22 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
             else:
                 res = system_health_quit_app(app_id)
                 self.send_json(res, 200 if res.get("ok") else 400)
+        elif path == "/api/system/next-server/kill":
+            length = int(self.headers.get("Content-Length", "0"))
+            body = self.rfile.read(length) if length > 0 else b""
+            try:
+                payload = json.loads(body) if body else {}
+            except json.JSONDecodeError:
+                payload = {}
+            pid = payload.get("pid")
+            if not pid:
+                self.send_json({"ok": False, "error": "missing pid"}, 400)
+            else:
+                try:
+                    self.send_json(kill_next_server(int(pid)))
+                except ValueError:
+                    self.send_json({"ok": False, "error": "invalid pid"}, 400)
+
         elif path in ("/api/coordinate", "/api/group-chat/create", "/api/group-chats/create"):
             length = int(self.headers.get("Content-Length", "0"))
             body = self.rfile.read(length) if length > 0 else b""
@@ -72402,6 +72582,8 @@ def main():
     # whose JSONL has been quiet for >24h. Catches abandoned-but-not-archived
     # sessions and forgotten cron agents that the archive-time kill misses.
     threading.Thread(target=_idle_reaper_loop, daemon=True).start()
+    # Next.js detached background scanner
+    threading.Thread(target=_next_servers_scanner_loop, daemon=True, name="ccc-next-servers-scanner").start()
     # Chuck iMessage monitor: polls chat.db every 2 minutes, injects new
     # messages from +17035592946 into the CHUCK session via inject-input.
     threading.Thread(target=_chuck_imessage_poller, daemon=True).start()
