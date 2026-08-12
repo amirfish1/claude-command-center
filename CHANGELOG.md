@@ -7,6 +7,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [5.23.0] - 2026-08-11
+
+### Added
+- Claude peer-registry integration: session rows now carry `bridge_session_id` (the 24-char id from `claude.ai/code/session_<id>` links and Claude-Session commit trailers), `registry_status` (Claude's own idle/busy), `registry_tmux`, and `messaging_socket_path` from `~/.claude/sessions/<pid>.json`. Sidebar search matches the bridge id, `session_<id>`, or the full claude.ai/code URL, and `/api/inject-input` accepts all three as a `session_id` alias for cross-session ask/inject.
+- Added a delete button to each queue row in the Queues (q2) sidebar: an empty queue (never had a ticket) deletes with no prompt, anything with ticket history asks to confirm first.
+- Sessions running inside tmux now receive injected messages via `tmux send-keys` (bracketed paste + Enter) using the pane target Claude Code registers in `~/.claude/sessions/<pid>.json` — no terminal-app window matching, no macOS Automation permission, and detached tmux sessions are reachable. Falls back to the AppleScript keystroke path on any tmux failure.
+
+### Changed
+- Changed: clicking a queue in the Queues (q2) sidebar now opens its topmost open ticket on the right, instead of falling back to the queue's learnings doc.
+
+### Fixed
+- Fixed a "needs input" GitHub-synced ticket in the Queues detail pane showing no way to respond at all; it now explains the ticket is read-only here and links to answer it on GitHub instead of silently omitting the answer box.
+- Fixed "Send answer" (and Comment/Close/Reopen) in the Queues (q2) detail pane looking unresponsive on click; they now show a pending label and in-flight styling until the request completes, matching the existing Run button.
+- Fixed a queue row in the Queues (q2) sidebar showing "0 open" when it actually had open tickets that were all parked (excluded from claiming by ticket type or a missing GitHub label); it now shows "N parked" instead of a misleading zero.
+- Fixed "Create queue for this session" minting a new NAME-2/NAME-3 queue on every repeat click; a session now reuses the queue it already created.
+- Fixed the status-rail live-worker badge running the worker id directly into the claimed ticket ref with no separator (e.g. `ccc-efbe070bCCC-805`), making the ticket # unreadable.
+- Fixed the Workers-tab lane heuristic misclassifying user-renamed sessions as WatchTower workers: a `QUEUE#N`-shaped title (e.g. `CLI#1: done`) now only marks a worker when the prefix is a real WatchTower queue from `/api/queue/status`; the bare pattern remains only as a cold-start fallback before the queue list loads.
+
 ## [5.22.1] - 2026-08-11
 
 ### Fixed
@@ -2584,7 +2602,8 @@ Initial public release.
 - `/api/repo/switch` validates targets against the picker allow-list.
 - See [`SECURITY.md`](SECURITY.md) for the full threat model.
 
-[Unreleased]: https://github.com/amirfish1/claude-command-center/compare/v5.22.1...HEAD
+[Unreleased]: https://github.com/amirfish1/claude-command-center/compare/v5.23.0...HEAD
+[5.23.0]: https://github.com/amirfish1/claude-command-center/releases/tag/v5.23.0
 [5.22.1]: https://github.com/amirfish1/claude-command-center/releases/tag/v5.22.1
 [5.22.0]: https://github.com/amirfish1/claude-command-center/releases/tag/v5.22.0
 [5.21.0]: https://github.com/amirfish1/claude-command-center/releases/tag/v5.21.0

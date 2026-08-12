@@ -1,1 +1,0 @@
-- Changed: clicking a queue in the Queues (q2) sidebar now opens its topmost open ticket on the right, instead of falling back to the queue's learnings doc.

@@ -1,1 +1,0 @@
-- Fixed a queue row in the Queues (q2) sidebar showing "0 open" when it actually had open tickets that were all parked (excluded from claiming by ticket type or a missing GitHub label); it now shows "N parked" instead of a misleading zero.

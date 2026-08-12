@@ -1,1 +1,0 @@
-- Fixed the Workers-tab lane heuristic misclassifying user-renamed sessions as WatchTower workers: a `QUEUE#N`-shaped title (e.g. `CLI#1: done`) now only marks a worker when the prefix is a real WatchTower queue from `/api/queue/status`; the bare pattern remains only as a cold-start fallback before the queue list loads.

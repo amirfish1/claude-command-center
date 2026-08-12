@@ -1,1 +1,0 @@
-- Sessions running inside tmux now receive injected messages via `tmux send-keys` (bracketed paste + Enter) using the pane target Claude Code registers in `~/.claude/sessions/<pid>.json` — no terminal-app window matching, no macOS Automation permission, and detached tmux sessions are reachable. Falls back to the AppleScript keystroke path on any tmux failure.
