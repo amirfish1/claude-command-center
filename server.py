@@ -44952,16 +44952,17 @@ def spawn_session(prompt, name=None, cwd=None, repo_path=None, worktree=False, m
     # Note: headless `claude -p` doesn't support TUI slash commands like /rename
     # or /color — they're treated as unknown skills. Tab naming/coloring only
     # happens when the user "jumps" into the TUI (see launch_terminal_for_session).
-    # If this is a prewarm, wait for Claude to finish booting (system/init event)
-    # before writing the prompt — otherwise the prompt sits in the FIFO while
-    # Claude is still running SessionStart hooks, and the user pays the full
-    # boot latency after claim instead of during prewarm.
+    # Do NOT wait for the prewarm's system/init event before writing here.
+    # Measured against Claude Code 2.1.228: system/init is only emitted once
+    # Claude starts processing the *first* input message, not once boot/MCP
+    # setup finishes. So waiting for it before writing that first message is a
+    # deadlock-by-construction — it can never resolve early and previously
+    # burned the full 30s timeout on effectively every prewarmed spawn. The
+    # FIFO write end is already held open (_open_fifo_writer), so writing
+    # immediately is safe: the bytes sit buffered until Claude's own stdin
+    # read loop is ready, whether that's before or after SessionStart hooks.
     if entry and entry.get("prewarmed"):
-        ready_ev = entry.get("ready_event")
-        if ready_ev and not ready_ev.is_set():
-            _spawn_timeline_mark(session_id, "prewarm_waiting_for_ready")
-            ready_ev.wait(timeout=30)
-            _spawn_timeline_mark(session_id, "prewarm_ready")
+        _spawn_timeline_mark(session_id, "prewarm_ready")
     prompt_written = _write_stream_json_user_message(entry, prompt, timeout=30)
     if not prompt_written:
         message = "Claude Code started, but CCC could not write the initial prompt to stdin."

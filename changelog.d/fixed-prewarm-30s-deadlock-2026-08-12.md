@@ -1,0 +1,1 @@
+- Fixed a guaranteed 30-second stall on every prewarmed Claude session spawn: CCC was waiting for Claude's `system/init` event before writing the first prompt, but current Claude Code only emits `system/init` once it starts processing that prompt — so the wait always timed out. Prewarmed spawns now write immediately; measured accept time dropped from ~30.2s to ~0.1s.
