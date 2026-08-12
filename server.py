@@ -14936,6 +14936,11 @@ _PREVIEW_FLAGS = {
         "label": "Conversation presentation",
         "desc": "Show the Present controls that turn assistant answers into local slides.",
     },
+    "auto_handover_pill": {
+        "default": False,
+        "label": "Auto handover toggle",
+        "desc": "Show the Auto handover ON/OFF pill in the status bar of Claude sessions.",
+    },
     # "flow_v2": {
     #     "default": False,
     #     "label": "Flow v2 canvas",

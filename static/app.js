@@ -43494,9 +43494,12 @@
     // request): needs to clearly read on/off at a glance, so it's a labeled
     // pill with explicit ON/OFF text rather than an icon whose state only
     // shows via a subtle color change. Claude sessions only, matching the
-    // server-side watchdog's own claude-only scope.
+    // server-side watchdog's own claude-only scope. Gated behind the
+    // "auto_handover_pill" preview flag (default off, Settings > Experimental)
+    // — the watchdog feature itself was cluttering every session's status bar
+    // even for users who never touch it (CCC-817).
     let handoverPill = '';
-    if (engine === 'claude') {
+    if (engine === 'claude' && ff('auto_handover_pill')) {
       const handoverOn = !!u.auto_handover_enabled;
       const handoverTip = handoverOn
       ? 'Auto handover is ON. When this session goes idle 55 min, CCC asks it to file a WatchTower checkpoint. Click to turn off.'
