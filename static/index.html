@@ -1189,14 +1189,25 @@
                   <path d="M12 7v5l3.5 2"></path>
                 </svg>
               </button>
-              <!-- CCC-776: Send plus its two alternate modes ("continue in a
-                   new session" and Submit+ phone-mode) used to sit as three
+              <!-- Submit+ : appends a "reply phone-style, short & conversational"
+                   instruction to the message, sends it, then auto-reads the
+                   reply aloud when it lands (summary block excluded).
+                   CCC-830: promoted back out of the send caret dropdown to its
+                   own one-tap button, same treatment #convSendQueueBtn got
+                   under CCC-776/744 — a one-click action people reach for
+                   often, not a rarely-used mode. -->
+              <button class="submit-plus-btn" id="convSubmitPlusBtn" title="Submit+ - phone-mode reply (short, conversational, multi-turn) and auto-read it aloud" aria-label="Submit Plus - phone mode">
+                <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                  <path d="M5 4h3l2 5-2.5 1.5a11 11 0 0 0 5 5L15 13l5 2v3a2 2 0 0 1-2.2 2A16 16 0 0 1 4 6.2 2 2 0 0 1 5 4Z"></path>
+                  <path d="M17 3v5M14.5 5.5h5"></path>
+                </svg>
+              </button>
+              <!-- CCC-776: Send plus "continue in a new session" used to sit as
                    always-on buttons, eating title/textarea width. They now
                    collapse into a triangle-caret dropdown next to Send, same
-                   pattern as #localhostCaret/#localhostMenu. The two mode
-                   buttons keep their original classes/ids so the existing
-                   delegated click handler (.continue-new-btn, app.js ~3571)
-                   and direct listener ($convSubmitPlusBtn) still fire unchanged. -->
+                   pattern as #localhostCaret/#localhostMenu. The mode button
+                   keeps its original class/id so the existing delegated click
+                   handler (.continue-new-btn, app.js ~3571) still fires unchanged. -->
               <span class="conv-send-group" id="convSendGroup">
                 <button class="send-btn" id="convSendBtn" title="Send to terminal" aria-label="Send to terminal">
                   <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
@@ -1213,16 +1224,6 @@
                       <path d="M14 3h7v7M21 3l-9 9M10 5H5a2 2 0 0 0-2 2v12a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-5"></path>
                     </svg>
                     <span>Continue in new session</span>
-                  </button>
-                  <!-- Submit+ : appends a "reply phone-style, short & conversational"
-                       instruction to the message, sends it, then auto-reads the
-                       reply aloud when it lands (summary block excluded). -->
-                  <button class="submit-plus-btn conv-send-menu-item" id="convSubmitPlusBtn" role="menuitem" title="Submit+ - phone-mode reply (short, conversational, multi-turn) and auto-read it aloud" aria-label="Submit Plus - phone mode">
-                    <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-                      <path d="M5 4h3l2 5-2.5 1.5a11 11 0 0 0 5 5L15 13l5 2v3a2 2 0 0 1-2.2 2A16 16 0 0 1 4 6.2 2 2 0 0 1 5 4Z"></path>
-                      <path d="M17 3v5M14.5 5.5h5"></path>
-                    </svg>
-                    <span>Telephone submit (phone mode)</span>
                   </button>
                 </div>
               </span>
