@@ -470,7 +470,8 @@
      standard edge chevron is intentionally compact there, but this focused
      reader needs an explicit, discoverable way to restore its side panel. */
   .popout-side-panel-btn { display: none; }
-  body.conversation-popout.status-rail-collapsed #popoutSidePanelBtn {
+  body.conversation-popout.status-rail-collapsed #popoutSidePanelBtn,
+  body.conversation-popout.popout-rail-forced #popoutSidePanelBtn {
     display: inline-flex;
     position: fixed;
     right: 12px;
@@ -490,7 +491,9 @@
     font: 600 12px/1 inherit;
   }
   body.conversation-popout.status-rail-collapsed #popoutSidePanelBtn:hover,
-  body.conversation-popout.status-rail-collapsed #popoutSidePanelBtn:focus-visible {
+  body.conversation-popout.status-rail-collapsed #popoutSidePanelBtn:focus-visible,
+  body.conversation-popout.popout-rail-forced #popoutSidePanelBtn:hover,
+  body.conversation-popout.popout-rail-forced #popoutSidePanelBtn:focus-visible {
     background: rgba(57,210,192,0.16);
     outline: none;
   }
@@ -23784,8 +23787,8 @@ a.settings-row:focus-visible .settings-launcher-btn { text-decoration: underline
    content is re-parented by _applyStatusRailLayout when the breakpoint
    changes, so the rail never consumes phone-width conversation space. */
 @media (max-width: 1200px) {
-  body.status-pos-right .conv-pane:has(> .status-rail),
-  body.status-pos-right.status-rail-collapsed .conv-pane:has(> .status-rail) {
+  body.status-pos-right:not(.popout-rail-forced) .conv-pane:has(> .status-rail),
+  body.status-pos-right.status-rail-collapsed:not(.popout-rail-forced) .conv-pane:has(> .status-rail) {
     grid-template-columns: minmax(0, 1fr);
     grid-template-areas:
       "header"
@@ -23796,12 +23799,12 @@ a.settings-row:focus-visible .settings-launcher-btn { text-decoration: underline
       "input"
       "hint";
   }
-  body.status-pos-right .conv-pane:has(> .status-rail) > .status-rail,
-  body.status-pos-right.status-rail-collapsed .conv-pane:has(> .status-rail) > .status-rail {
+  body.status-pos-right:not(.popout-rail-forced) .conv-pane:has(> .status-rail) > .status-rail,
+  body.status-pos-right.status-rail-collapsed:not(.popout-rail-forced) .conv-pane:has(> .status-rail) > .status-rail {
     display: none;
   }
-  body.status-pos-right .conv-pane:has(> .status-rail) > .status-rail-restore,
-  body.status-pos-right.status-rail-collapsed .conv-pane:has(> .status-rail) > .status-rail-restore {
+  body.status-pos-right:not(.popout-rail-forced) .conv-pane:has(> .status-rail) > .status-rail-restore,
+  body.status-pos-right.status-rail-collapsed:not(.popout-rail-forced) .conv-pane:has(> .status-rail) > .status-rail-restore {
     display: none;
   }
   body.status-pos-right .conv-sticky-header {
@@ -23810,6 +23813,44 @@ a.settings-row:focus-visible .settings-launcher-btn { text-decoration: underline
   }
   body.status-pos-right .conversations-view .event.user_text.is-pinned-in-sticky {
     display: none;
+  }
+  /* Narrow popout windows are still a real desktop window, not a phone —
+     the mobile-collapse fallback above hides the rail with no way back
+     (CCC-831: "no side knob to open the RHS view"). #popoutSidePanelBtn
+     toggles this override so the user can force the full rail back even
+     under the 1200px breakpoint; the rail becomes horizontally scrollable
+     at its min width rather than vanishing outright. */
+  body.conversation-popout:not(.popout-rail-forced) #popoutSidePanelBtn {
+    display: inline-flex;
+    position: fixed;
+    right: 12px;
+    top: 50%;
+    transform: translateY(-50%);
+    z-index: 9000;
+    align-items: center;
+    justify-content: center;
+    min-height: 30px;
+    padding: 0 10px;
+    border: 1px solid rgba(57,210,192,0.55);
+    border-radius: 999px;
+    background: var(--panel, #161b22);
+    color: var(--text);
+    box-shadow: 0 2px 10px rgba(0,0,0,0.35);
+    cursor: pointer;
+    font: 600 12px/1 inherit;
+  }
+  body.conversation-popout.popout-rail-forced .conv-pane:has(> .status-rail) {
+    grid-template-columns: minmax(0, 1fr) var(--status-rail-width, 260px);
+    grid-template-areas:
+      "header  rail"
+      "conv    rail"
+      "goal    rail"
+      "input   rail"
+      "context rail"
+      "hint    rail";
+  }
+  body.conversation-popout.popout-rail-forced .conv-pane:has(> .status-rail) > .status-rail {
+    display: flex;
   }
 }
 

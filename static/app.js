@@ -49747,7 +49747,8 @@
     const sticky = document.querySelector('.conv-sticky-header');
     const rail = document.getElementById('statusRail');
     if (!rail) return;
-    const inRail = document.body.classList.contains('status-pos-right') && !isMobile();
+    const inRail = document.body.classList.contains('status-pos-right')
+      && (!isMobile() || document.body.classList.contains('popout-rail-forced'));
     const metadataPane = rail.querySelector('#statusRailMetadataPane') || rail;
 
     // Sticky-side fresh nodes (post-rebuild) always win as the source of
@@ -49999,7 +50000,16 @@
     }
     if ($popoutSidePanel) {
       $popoutSidePanel.addEventListener('click', () => {
-        if ($statusRailRestore) $statusRailRestore.click();
+        if (document.body.classList.contains('status-rail-collapsed')) {
+          if ($statusRailRestore) $statusRailRestore.click();
+          return;
+        }
+        // Narrow popout window: no collapsed-rail state to restore, the
+        // rail is just hidden by the mobile width breakpoint. Force it
+        // back on (CCC-831) rather than delegating to the restore button,
+        // which only clears `status-rail-collapsed`.
+        document.body.classList.toggle('popout-rail-forced');
+        _applyStatusRailLayout();
       });
     }
     if ($statusRail && $statusRailResizer) {
