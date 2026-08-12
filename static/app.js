@@ -2927,6 +2927,10 @@
   // Keyed by sid too so switching sessions in the same pane doesn't leave a
   // stale panel pinned open on the wrong conversation.
   const f2ManualPanes = new Map();
+  // paneKey -> sid the user explicitly kept working in ("Continue here").
+  // Keyed by sid for the same reason as f2ManualPanes: a dismissal must not
+  // follow the pane onto a different conversation.
+  const f2DismissedPanes = new Map();
 
   function f2ClearComposer() {
     try {
@@ -3341,12 +3345,17 @@
       + (efforts.length
           ? '<span>at</span>' + f2SelectHtml('effort', efforts, launch.effort) + '<span>effort</span>'
           : '')
+      // No Done button: the caret that opened the picker closes it, and every
+      // change applies immediately, so there is nothing to confirm.
       + (note ? '<span class="rate">' + escapeHtml(note) + '</span>' : '')
-      + '<button type="button" class="f2c-config-done" data-f2-chip>Done</button>'
       + '</div>';
   }
 
-  function f2RoutesHtml(st, verdictText) {
+  // The offer renders as a card (headline / rationale / actions), not a bare
+  // pill: this is a decision with a cost on both sides, so it states what the
+  // user saves, what carries over, and gives the "stay here" option equal
+  // billing instead of making dismissal a guess.
+  function f2RoutesHtml(st, verdictText, headline) {
     const r = F2_ROUTES.continue;
       const title = (verdictText ? verdictText + ' ' : '') + r.name + ': ' + r.desc;
     // Name all three parts of the spec the click will actually use. The engine
@@ -3356,19 +3365,33 @@
     const chipTitle = 'Launches on ' + f2EngineLabel(st.launch) + ' ' + f2ModelLabel(st.launch)
       + (effortLabel ? ' at ' + effortLabel + ' effort' : '')
           + '. Click to change';
-    return '<div class="route is-recommended" data-f2-route="continue">'
-      // .route is a div, .route-main the button: the ▾ caret is a real
-      // control and a button may not nest inside a button.
-      + '<button type="button" class="route-main" data-f2-act="continue"'
-        + ' title="' + escapeAttr(title) + '">'
-        + '<span class="route-glyph" aria-hidden="true">' + r.glyph + '</span>'
-        + '<span class="route-name">' + escapeHtml(r.short) + '</span>'
-        + '<span class="cost-badge ' + r.costClass + '">' + escapeHtml(r.cost) + '</span>'
-      + '</button>'
-      + '<button type="button" class="f2c-chip" data-f2-chip'
-        + ' aria-expanded="' + (st.configOpen ? 'true' : 'false') + '"'
-        + ' aria-label="Change engine, model, or effort"'
-        + ' title="' + escapeAttr(chipTitle) + '">▾</button>'
+    return '<div class="f2-card" data-f2-route="continue">'
+      + '<div class="f2-card-head">'
+        + '<div class="f2-card-title">' + escapeHtml(headline || r.name) + '</div>'
+        + '<div class="f2-card-sub">Your repo and files stay put. The new session '
+          + 'carries a summary of this one and pulls the rest from the transcript on demand.</div>'
+      + '</div>'
+      + '<div class="f2-card-actions">'
+        + '<button type="button" class="f2-card-primary" data-f2-act="continue"'
+          + ' title="' + escapeAttr(title) + '">'
+          + '<span class="route-glyph" aria-hidden="true">' + r.glyph + '</span>'
+          + '<span class="route-name">' + escapeHtml(r.short) + '</span>'
+          + '<span class="cost-badge ' + r.costClass + '">' + escapeHtml(r.cost) + '</span>'
+        + '</button>'
+        + '<button type="button" class="f2-card-ghost" data-f2-act="dismiss"'
+          + ' title="Keep working in this session and hide this suggestion">Continue here</button>'
+        + '<button type="button" class="f2c-chip" data-f2-chip'
+          + ' aria-expanded="' + (st.configOpen ? 'true' : 'false') + '"'
+          + ' aria-label="Change engine, model, or effort"'
+          + ' title="' + escapeAttr(chipTitle) + '">'
+          + '<span class="f2c-chip-label">' + escapeHtml(f2ModelLabel(st.launch)) + '</span>'
+          + '<span class="f2c-chip-caret" aria-hidden="true">▾</span>'
+        + '</button>'
+      + '</div>'
+      // The picker belongs to the card, not the toolbar: the card is
+      // absolutely positioned above the input bar, so a sibling panel would
+      // detach and render down among the send buttons.
+      + (st.configOpen ? f2ConfigHtml(st.launch) : '')
       + '</div>';
   }
 
@@ -3420,6 +3443,7 @@
       }
       gate = f2ResumeGate(ctx);
       if (!gate && f2ManualPanes.get(f2PaneKey(paneId)) === sid) gate = f2ManualGate(ctx);
+      if (gate && f2DismissedPanes.get(f2PaneKey(paneId)) === sid) gate = null;
     } catch (_) { clear(); return; }
     if (!gate) { clear(); return; }
 
@@ -3461,8 +3485,13 @@
       : (gate.idleOnly
         ? 'Idle ' + ageLabel + '. Start fresh with just the context you need.'
         : 'Resuming here reloads ~' + tokensLabel + ' tokens on ' + modelLabel + '.');
-    panel.innerHTML = '<div class="routes">' + f2RoutesHtml(st, verdictText) + '</div>'
-      + (st.configOpen ? f2ConfigHtml(st.launch) : '');
+    // Lead with what the move buys. A token count is the one number that
+    // makes the offer concrete; when there is no size claim behind it (manual
+    // or plain-idle), say so instead of inventing a saving.
+    const headline = (gate.manual || gate.idleOnly)
+      ? 'Start a new session with only the context you need'
+      : 'Start a new session to save ' + tokensLabel + ' tokens of context';
+    panel.innerHTML = '<div class="routes">' + f2RoutesHtml(st, verdictText, headline) + '</div>';
   }
 
   // ── route action ───────────────────────────────────────────────────────
@@ -3577,6 +3606,8 @@
       const cbPane = continueBtn.closest('.conv-pane');
       const cbPaneId = (cbPane && cbPane.getAttribute('data-pane-id')) || null;
       if (cbPaneId && typeof setActivePaneById === 'function') { try { setActivePaneById(cbPaneId); } catch (_) {} }
+      // Asking for it explicitly overrides an earlier "Continue here".
+      f2DismissedPanes.delete(f2PaneKey(cbPaneId));
       try { f2ManualOpen(cbPaneId); } catch (_) {}
       return;
     }
@@ -3604,6 +3635,15 @@
     const st = f2PaneState.get(f2PaneKey(paneId));
     if (!st) return;
     ev.preventDefault();
+    // "Continue here" is a real choice, not a no-op close: it suppresses the
+    // offer for this pane+sid so it cannot immediately repaint on the next
+    // keystroke. Switching sessions in the pane clears it (keyed by sid).
+    if (el.getAttribute('data-f2-act') === 'dismiss') {
+      f2ManualPanes.delete(f2PaneKey(paneId));
+      f2DismissedPanes.set(f2PaneKey(paneId), st.sid);
+      try { f2RenderComposer(paneId, { force: true }); } catch (_) {}
+      return;
+    }
     try { f2RunContinue(paneId, st, el); } catch (_) {}
   });
 
@@ -13095,15 +13135,40 @@
   // (refresh/history/board/chips, New Group chat/live/manage) that are
   // collapsed by default so "New session" isn't crowded on every visit.
   const $sidebarMoreBtn = document.getElementById('sidebarMoreBtn');
-  const $sidebarHeaderActions = document.getElementById('sidebarHeaderActions');
-  const $newSessionSecondaryRow = document.getElementById('newSessionSecondaryRow');
-  if ($sidebarMoreBtn) {
+  const $sidebarMoreMenu = document.getElementById('sidebarMoreMenu');
+  if ($sidebarMoreBtn && $sidebarMoreMenu) {
+    const closeSidebarMore = () => {
+      $sidebarMoreMenu.hidden = true;
+      $sidebarMoreBtn.setAttribute('aria-expanded', 'false');
+    };
     $sidebarMoreBtn.addEventListener('click', (ev) => {
       ev.stopPropagation();
-      const next = $sidebarMoreBtn.getAttribute('aria-expanded') !== 'true';
-      $sidebarMoreBtn.setAttribute('aria-expanded', String(next));
-      if ($sidebarHeaderActions) $sidebarHeaderActions.classList.toggle('sh-more-collapsed', !next);
-      if ($newSessionSecondaryRow) $newSessionSecondaryRow.classList.toggle('sh-more-collapsed', !next);
+      const open = $sidebarMoreMenu.hidden;
+      $sidebarMoreMenu.hidden = !open;
+      $sidebarMoreBtn.setAttribute('aria-expanded', String(open));
+    });
+    // The rows this menu replaced still hold the real buttons (collapsed via
+    // .sh-more-collapsed), so an item just forwards its click to the original
+    // control -- no handler in this file needs to know the menu exists.
+    $sidebarMoreMenu.addEventListener('click', (ev) => {
+      const item = ev.target.closest('[data-proxy]');
+      if (!item) {
+        // What's new / Check for updates keep their own bound handlers; only
+        // close for them (and swallow the "#" navigation).
+        if (ev.target.closest('.sh-more-item')) closeSidebarMore();
+        return;
+      }
+      ev.preventDefault();
+      const target = document.getElementById(item.getAttribute('data-proxy'));
+      closeSidebarMore();
+      if (target) target.click();
+    });
+    document.addEventListener('click', (ev) => {
+      if ($sidebarMoreMenu.hidden) return;
+      if (!ev.target.closest('.sh-more-wrap')) closeSidebarMore();
+    });
+    document.addEventListener('keydown', (ev) => {
+      if (ev.key === 'Escape' && !$sidebarMoreMenu.hidden) closeSidebarMore();
     });
   }
 
@@ -50013,6 +50078,14 @@
         _syncChipsIcon();
       });
     }
+    // Settings > Appearance picks a mode directly instead of cycling. Exposed
+    // rather than duplicated so both entry points share one persist+apply path.
+    window.cccGetChipsMode = _chipsMode;
+    window.cccSetChipsMode = (mode) => {
+      _applyChipsMode(mode);
+      try { localStorage.setItem('ccc-chips-mode', mode); } catch (_) {}
+      _syncChipsIcon();
+    };
     _syncChipsIcon();
     _applyStatusRailLayout();
 
@@ -55610,7 +55683,7 @@
       ev.preventDefault();
       if ($cccCheckUpdatesLink.classList.contains('checking')) return;
       $cccCheckUpdatesLink.classList.add('checking');
-      $cccCheckUpdatesLink.textContent = 'checking…';
+      $cccCheckUpdatesLink.textContent = 'Checking…';
       try {
         const r = await fetch('/api/version/check?force=1', { cache: 'no-store' });
         const d = await r.json();
@@ -55630,7 +55703,7 @@
         showOpToast('Update check failed: ' + (e.message || 'network error'), 'error');
       } finally {
         $cccCheckUpdatesLink.classList.remove('checking');
-        $cccCheckUpdatesLink.textContent = 'check for updates';
+        $cccCheckUpdatesLink.textContent = 'Check for updates';
       }
     });
   }
@@ -55938,6 +56011,19 @@
     $sysChip.classList.add('is-' + rollup.level);
     if (rollup.critical) $sysChip.classList.add('is-critical');
     if ($sysChipVerdict) $sysChipVerdict.textContent = rollup.verdict;
+    // The chip itself is hidden; its signal rides the "..." menu LED and a
+    // corner dot on the collapsed button so a degraded service is still
+    // noticeable without opening the menu.
+    const $moreLed = document.getElementById('sidebarMoreStatusLed');
+    if ($moreLed) {
+      $moreLed.classList.remove('is-green', 'is-yellow', 'is-red', 'is-unknown');
+      $moreLed.classList.add('is-' + rollup.level);
+    }
+    const $moreBtn = document.getElementById('sidebarMoreBtn');
+    if ($moreBtn) {
+      $moreBtn.classList.toggle('has-alert', rollup.level === 'yellow' || rollup.level === 'red');
+      $moreBtn.classList.toggle('is-red', rollup.level === 'red');
+    }
     if ($sysChipCount) {
       const show = rollup.level !== 'green' && rollup.count > 0;
       $sysChipCount.hidden = !show;
@@ -59114,6 +59200,48 @@
   _syncVerboseButtons(convVerboseOn());
   const $verboseToggleBtn = document.getElementById('verboseToggleBtn');
   if ($verboseToggleBtn) $verboseToggleBtn.addEventListener('click', toggleConvVerbose);
+
+  // ── Share Command Center ────────────────────────────────────────
+  (function initShareCcc() {
+    const $btn = document.getElementById('shareCccBtn');
+    const $modal = document.getElementById('shareCccModal');
+    const $backdrop = document.getElementById('shareCccBackdrop');
+    const $close = document.getElementById('shareCccCloseBtn');
+    const $message = document.getElementById('shareCccMessage');
+    const $reddit = document.getElementById('shareCccRedditBtn');
+    const $x = document.getElementById('shareCccXBtn');
+    const $copy = document.getElementById('shareCccCopyBtn');
+    if (!$btn || !$modal) return;
+
+    const SHARE_URL = 'https://github.com/amirfish1/claude-command-center';
+    const SHARE_TEXT = 'Try Claude Command Center. One dashboard to run and ' +
+      'manage your Claude, Codex, Cursor, and Anti-Gravity coding sessions. ' + SHARE_URL;
+
+    function openShare() {
+      $message.value = SHARE_TEXT;
+      $reddit.href = 'https://www.reddit.com/submit?url=' + encodeURIComponent(SHARE_URL) +
+        '&title=' + encodeURIComponent('Claude Command Center - one dashboard for Claude, Codex, Cursor, and Anti-Gravity sessions');
+      $x.href = 'https://twitter.com/intent/tweet?text=' + encodeURIComponent(SHARE_TEXT);
+      $modal.classList.add('open');
+    }
+    function closeShare() { $modal.classList.remove('open'); }
+
+    $btn.addEventListener('click', openShare);
+    if ($backdrop) $backdrop.addEventListener('click', closeShare);
+    if ($close) $close.addEventListener('click', closeShare);
+    document.addEventListener('keydown', (ev) => {
+      if (ev.key === 'Escape' && $modal.classList.contains('open')) closeShare();
+    });
+    if ($copy) $copy.addEventListener('click', async () => {
+      try {
+        await navigator.clipboard.writeText($message.value);
+        if (typeof showOpToast === 'function') showOpToast('Copied', 'success');
+      } catch (_) {
+        $message.select();
+        document.execCommand('copy');
+      }
+    });
+  })();
 
   // ── In-app bug reporting ────────────────────────────────────────
   // Topbar link → modal → POST /api/bug-report → server shells out
@@ -62913,6 +63041,16 @@
         btn.setAttribute('aria-checked', String(active));
       });
     }
+    // Chip-colour segments live only in the settings modal, and the mode is
+    // read off <body> (not a pref getter), so query document-wide.
+    const chipsMode = typeof window.cccGetChipsMode === 'function'
+      ? window.cccGetChipsMode()
+      : 'color';
+    document.querySelectorAll('[data-segmented-group="chips"] [data-chips-mode]').forEach(btn => {
+      const active = btn.getAttribute('data-chips-mode') === chipsMode;
+      btn.classList.toggle('is-active', active);
+      btn.setAttribute('aria-checked', String(active));
+    });
     const ghOn = getViewGhPref() !== 'hide';
     const $ghToggle = document.getElementById('settingsGhIssuesToggle');
     if ($ghToggle) {
@@ -63534,6 +63672,15 @@
         applyTheme(v);
         refreshAppearanceChecks();
         showSettingsSavedPulse(themeBtn.closest('.settings-row'));
+        return;
+      }
+      const chipsBtn = e.target.closest('[data-chips-mode]');
+      if (chipsBtn) {
+        if (typeof window.cccSetChipsMode === 'function') {
+          window.cccSetChipsMode(chipsBtn.getAttribute('data-chips-mode'));
+        }
+        refreshAppearanceChecks();
+        showSettingsSavedPulse(chipsBtn.closest('.settings-row'));
         return;
       }
       const fontBtn = e.target.closest('[data-font]');

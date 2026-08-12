@@ -182,6 +182,20 @@
     line-height: 1.2;
   }
   .sidebar-header-brand .sh-version:empty { display: none; }
+  /* Paper-plane share affordance. Pushed to the right edge of the title
+     row (margin-left: auto) rather than sitting tight against the version
+     number, so it reads as a header-level action, not part of the title. */
+  .sidebar-header-brand .sh-share-btn {
+    flex: 0 0 auto; display: inline-flex; align-items: center; justify-content: center;
+    margin-left: auto;
+    width: 24px; height: 24px; padding: 0;
+    background: transparent; border: 0; border-radius: 6px;
+    color: var(--text-muted); cursor: pointer;
+    opacity: 0.65; transition: opacity 0.12s ease, background 0.12s ease, color 0.12s ease;
+  }
+  .sidebar-header-brand .sh-share-btn:hover {
+    opacity: 1; color: var(--text); background: rgba(255, 255, 255, 0.07);
+  }
   .sidebar-header-brand .sh-meta-row {
     font-size: 10px; font-weight: 400; line-height: 1.25;
     color: var(--text-muted);
@@ -10200,6 +10214,12 @@
     white-space: pre-wrap; word-break: break-word; }
   .upd-error.visible { display: block; }
 
+  /* ── Share Command Center modal ─────── */
+  .share-ccc-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; }
+  .share-ccc-row { display: flex; gap: 8px; }
+  .share-ccc-btn { flex: 1 1 0; display: flex; align-items: center;
+    justify-content: center; gap: 6px; text-decoration: none; }
+
   /* ── Update-modal "What's in this update" promo section ─────── */
   .upd-promo { border: 1px solid var(--border); border-radius: 8px;
     padding: 10px 12px; background: var(--bg); }
@@ -16258,7 +16278,12 @@ body.status-pos-right.status-rail-collapsed .conv-pane:has(> .status-rail) > .co
   position: relative;
 }
 .sh-service-badges {
-  display: flex;
+  /* Hidden, not deleted (see the comment above this element in index.html):
+     the header shows identity only now, the rollup verdict rides the "..."
+     button's alert dot instead. display:none (not the `hidden` attribute)
+     so the opening tag stays `<div class="sh-service-badges">`, which
+     test_whats_new_notice_static.py uses as a text-slice boundary. */
+  display: none;
   align-items: center;
   flex-wrap: wrap;
   gap: 5px;
@@ -16721,7 +16746,89 @@ body.status-pos-right.status-rail-collapsed .conv-pane:has(> .status-rail) > .co
 .sh-more-collapsed {
   display: none !important;
 }
+/* Screen-reader-only: keeps a node in the a11y tree while removing it from
+   the layout (used by the STATUS chip, whose verdict is carried by the LED
+   colour visually and by this text for assistive tech). */
+.sr-only {
+  position: absolute !important;
+  width: 1px; height: 1px;
+  margin: -1px; padding: 0; border: 0;
+  overflow: hidden; white-space: nowrap;
+  clip: rect(0 0 0 0); clip-path: inset(50%);
+}
+
+/* ── Sidebar "..." dropdown ── */
+.sh-more-wrap {
+  position: relative;
+  display: inline-flex;
+  flex-shrink: 0;
+}
+.sh-more-menu {
+  position: absolute;
+  top: calc(100% + 4px);
+  right: 0;
+  min-width: 200px;
+  padding: 5px 0;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.4);
+  z-index: 300;
+}
+.sh-more-menu[hidden] { display: none; }
+.sh-more-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 7px 12px;
+  background: transparent;
+  border: none;
+  border-radius: 0;
+  color: var(--text);
+  font-family: inherit;
+  font-size: 12.5px;
+  line-height: 1.3;
+  text-align: left;
+  text-decoration: none;
+  cursor: pointer;
+}
+.sh-more-item:hover { background: var(--surface-2); }
+/* Service rollup LED, mirrored from the (now hidden) STATUS chip. */
+.sh-more-led {
+  flex: 0 0 auto;
+  width: 7px; height: 7px;
+  border-radius: 50%;
+  background: var(--text-muted);
+}
+.sh-more-led.is-green  { background: #4ade80; }
+.sh-more-led.is-yellow { background: #e0b341; }
+.sh-more-led.is-red    { background: #e5534b; }
+/* Same signal on the collapsed "..." button, so a degraded service is still
+   visible without opening the menu -- the one job the header chip had. */
+.sh-more-btn.has-alert::after {
+  content: "";
+  position: absolute;
+  top: 3px; right: 3px;
+  width: 6px; height: 6px;
+  border-radius: 50%;
+  background: #e0b341;
+  box-shadow: 0 0 0 2px var(--bg, #14161a);
+}
+.sh-more-btn.has-alert.is-red::after { background: #e5534b; }
+.sh-more-divider {
+  height: 1px;
+  margin: 5px 0;
+  background: var(--border);
+}
+.sh-more-info {
+  padding: 5px 12px 2px;
+  color: var(--text-muted);
+  font-size: 10.5px;
+  line-height: 1.3;
+}
 .sh-more-btn {
+  position: relative;
   flex-shrink: 0;
   width: 30px;
   height: 30px;
@@ -23266,12 +23373,93 @@ a.settings-row:focus-visible .settings-launcher-btn { text-decoration: underline
 .f2c-panel .f2c-config .f2c-select:hover { border-color: var(--accent); }
 .f2c-panel .f2c-config .f2c-select:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
 .f2c-panel .f2c-config .rate { color: #3fb950; font-weight: 600; }
-.f2c-panel .f2c-config .f2c-config-done {
-  margin-left: auto; font: inherit; font-size: 11px; font-weight: 600;
-  color: var(--text); background: var(--surface-2); border: 1px solid var(--border);
-  border-radius: 5px; padding: 2px 9px; cursor: pointer;
+
+/* ── Continue-in-new-session card ──────────────────────────────────────
+   The inline pill was a control; this is a proposal, so it needs room for a
+   headline, a rationale, and a symmetric pair of choices. The toolbar row
+   flattens .f2c-panel/.routes with `display: contents`, so a card inside it
+   would become a stray flex item between the mic and send buttons. Undo that
+   locally and float the card above the input bar instead — the toolbar keeps
+   its layout and the card gets a full-width line of its own. */
+.conv-input-bar { position: relative; }
+.conv-input-buttons > .f2c-panel:has(.f2-card),
+.f2c-panel:has(.f2-card) .routes { display: block; }
+.f2c-panel .f2-card {
+  position: absolute; left: 0; right: 0; bottom: calc(100% + 8px);
+  z-index: 30;
+  display: flex; flex-direction: column;
+  background: var(--surface-2); border: 1px solid var(--border);
+  border-left: 3px solid #58a6ff;
+  border-radius: 10px;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.35);
+  animation: f2cSettle .16s ease both;
+  text-align: left;
 }
-.f2c-panel .f2c-config .f2c-config-done:hover { border-color: var(--accent); }
+.f2c-panel .f2-card-head { padding: 12px 14px 10px; }
+.f2c-panel .f2-card-title {
+  font-size: 13.5px; font-weight: 650; line-height: 1.35;
+  color: #58a6ff; letter-spacing: -0.01em;
+}
+.f2c-panel .f2-card-sub {
+  margin-top: 4px;
+  font-size: 12px; line-height: 1.45; color: var(--text-muted);
+}
+.f2c-panel .f2-card-actions {
+  display: flex; align-items: center; gap: 8px;
+  padding: 9px 12px; border-top: 1px solid var(--border);
+}
+.f2c-panel .f2-card-primary {
+  display: inline-flex; align-items: center; gap: 7px;
+  height: 30px; padding: 0 12px;
+  background: var(--surface-1, transparent);
+  border: 1px solid var(--border); border-radius: 7px;
+  font: inherit; font-size: 12px; font-weight: 600; color: var(--text);
+  cursor: pointer;
+  transition: border-color .14s ease, background .14s ease;
+}
+.f2c-panel .f2-card-primary:hover { border-color: rgba(63, 185, 80, 0.7); }
+.f2c-panel .f2-card-primary:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+.f2c-panel .f2-card-primary:disabled { opacity: 0.55; cursor: progress; }
+.f2c-panel .f2-card-primary .route-glyph { color: #3fb950; }
+/* The caret sits inside the card's action row and names the target model, so
+   the spec is readable on the card face instead of only in a tooltip. */
+.f2c-panel .f2-card-actions .f2c-chip {
+  display: inline-flex; align-items: center; gap: 5px;
+  margin-left: auto; height: 30px; padding: 0 9px;
+  font: inherit; font-size: 11.5px; font-weight: 600;
+  color: var(--text-muted); background: transparent;
+  border: 1px solid var(--border); border-radius: 7px; cursor: pointer;
+  max-width: 45%;
+}
+.f2c-panel .f2-card-actions .f2c-chip:hover { border-color: var(--accent); color: var(--text); }
+.f2c-panel .f2-card-actions .f2c-chip[aria-expanded="true"] { border-color: var(--accent); color: var(--text); }
+.f2c-panel .f2c-chip-label { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.f2c-panel .f2c-chip-caret { flex: 0 0 auto; opacity: 0.8; }
+
+/* Picker lives in the card as its own row below the actions. */
+.f2c-panel .f2-card .f2c-config {
+  margin: 0; padding: 9px 12px;
+  border: 0; border-top: 1px solid var(--border); border-radius: 0;
+  background: rgba(255, 255, 255, 0.02);
+}
+
+.f2c-panel .f2-card-ghost {
+  height: 30px; padding: 0 10px;
+  background: none; border: 1px solid transparent; border-radius: 7px;
+  font: inherit; font-size: 12px; color: var(--text-muted); cursor: pointer;
+  transition: color .14s ease, background .14s ease;
+}
+.f2c-panel .f2-card-ghost:hover { color: var(--text); background: rgba(255, 255, 255, 0.06); }
+.f2c-panel .f2-card-ghost:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+/* Push the launch-spec caret to the trailing edge; it is a modifier on the
+   primary action, not a third choice. */
+.f2c-panel .f2-card-actions .f2c-chip {
+  margin-left: auto; border-left: 0;
+  padding: 0 6px; height: 30px; border-radius: 7px;
+}
+@media (prefers-reduced-motion: reduce) {
+  .f2c-panel .f2-card { animation: none !important; }
+}
 
 @keyframes f2cSettle { from { opacity: 0; transform: translateY(-3px); } to { opacity: 1; transform: none; } }
 .f2c-panel .routes > .route { animation: f2cSettle .16s ease both; }

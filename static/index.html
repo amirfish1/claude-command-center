@@ -479,8 +479,18 @@
       <div class="sidebar-header-brand">
       <div class="sh-title-row">
           <img class="sh-app-icon" src="/static/icon.svg" alt="" aria-hidden="true">
-          <a class="sh-title-link" href="https://github.com/amirfish1/claude-command-center" target="_blank" rel="noopener" title="Command Center for Claude, Codex, Cursor, and Anti-Gravity - open the README on GitHub"><span class="sh-title-main">Command Center</span><span class="sh-title-sub">for Claude, Codex, Cursor, and Anti-Gravity</span></a>
+          <a class="sh-title-link" href="https://github.com/amirfish1/claude-command-center" target="_blank" rel="noopener" title="Command Center for Claude, Codex, Cursor, and Anti-Gravity - open the README on GitHub"><span class="sh-title-main">Claude Command Center</span></a>
           <span class="sh-version" id="cccVersionLabel" title="Installed Command Center version"></span>
+          <!-- Share sits next to the brand (Bullet-style paper plane) rather
+               than buried in the "..." menu: it is a one-click invite, not an
+               app action. Keeps id #shareCccBtn so the existing wiring in
+               app.js (initShareCcc) binds unchanged. -->
+          <button type="button" id="shareCccBtn" class="sh-share-btn" title="Share Command Center with a friend" aria-label="Share Command Center">
+            <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+              <path d="M21.5 2.5 11 13"></path>
+              <path d="M21.5 2.5 15 21.5 11 13 2.5 9z"></path>
+            </svg>
+          </button>
           <div id="whatsNewNotice" class="whats-new-notice" role="group" aria-label="New features available">
             <button type="button" id="whatsNewNoticeOpen" class="whats-new-notice-open" title="See what is new in this version">
               <span class="whats-new-notice-dot" aria-hidden="true"></span>
@@ -494,9 +504,12 @@
              for the same 20px of sidebar; both still live inside #sysModal,
              which is where the detail belongs. The chip only carries the
              verdict. -->
+        <!-- Hidden, not deleted: the chip is still the element that owns the
+             "open system status" click and the rollup render target, so the
+             "Restart servers…" item in #sidebarMoreMenu forwards to it. The
+             header shows identity only; the rollup colour rides the "..." LED. -->
         <div class="sh-service-badges">
           <button type="button" class="sh-status-chip is-unknown" id="cccServerStatusChip"
-                  data-tour="watchtower"
                   aria-haspopup="dialog" aria-expanded="false"
                   aria-label="Server status: checking. Open system status."
                   title="Server status: checking">
@@ -507,17 +520,19 @@
                  at every breakpoint so the chip never reads as a bare verdict
                  that could be about anything on the page. -->
             <span class="ssc-word">STATUS</span>
-            <span class="ssc-verdict" id="cccServerStatusVerdict">checking</span>
-            <span class="ssc-count" id="cccServerStatusCount" hidden>0</span>
+            <!-- The verdict word and the count are deliberately NOT rendered:
+                 the LED colour already carries the level, and "attention (1)"
+                 spent a third of the brand column restating it. Both nodes stay
+                 in the DOM (visually hidden) so the existing render path and the
+                 screen-reader label keep working unchanged. -->
+            <span class="ssc-verdict sr-only" id="cccServerStatusVerdict">checking</span>
+            <span class="ssc-count sr-only" id="cccServerStatusCount" hidden>0</span>
           </button>
         </div>
-        <span class="sh-meta-row">
-          Last updated <span id="cccLastUpdated">…</span>
-          <span class="sh-meta-sep">·</span>
-          <a href="#" class="sh-check-updates" id="cccCheckUpdatesLink" title="Check GitHub for a newer release">check for updates</a>
-          <span class="sh-meta-sep">·</span>
-          <a href="#" class="sh-whats-new-link" id="cccWhatsNewLink" title="View what is new in this version">what's new</a>
-        </span>
+        <!-- "Last updated · check for updates · what's new" used to live here
+             as a third line of 10px text under the brand. It now lives in the
+             "..." menu (#sidebarMoreMenu) -- version chores are occasional, and
+             the header should carry identity plus status, not chores. -->
         <a class="sh-repo-link" id="cccRepoLink" href="https://github.com/amirfish1/claude-command-center" target="_blank" rel="noopener" title="Open the repo on GitHub">git: amirfish1/claude-command-center</a>
       </div>
       <!-- Top-left alerts strip. Hosts always-visible app-level signals
@@ -560,7 +575,35 @@
           <button type="button" id="convSearchClear" class="conv-search-clear" title="Clear search" aria-label="Clear search">&times;</button>
         </div>
         <button type="button" id="convListCollapseBtn" class="conv-list-collapse-btn" title="Collapse conversation list" aria-label="Collapse conversation list" aria-expanded="true">&laquo;</button>
-        <button type="button" id="sidebarMoreBtn" class="sh-btn sh-more-btn" title="More actions" aria-label="More actions" aria-haspopup="true" aria-expanded="false">&#8942;</button>
+        <!-- Real dropdown, not a row-reveal. The buttons it drives still live
+             in #sidebarHeaderActions / #newSessionSecondaryRow (kept collapsed)
+             so every existing id and click handler stays untouched; each item
+             here forwards to one of them via data-proxy. -->
+        <div class="sh-more-wrap">
+          <button type="button" id="sidebarMoreBtn" class="sh-btn sh-more-btn" data-tour="watchtower" title="More actions" aria-label="More actions" aria-haspopup="menu" aria-expanded="false">&#8942;</button>
+          <div class="sh-more-menu" id="sidebarMoreMenu" role="menu" aria-label="More actions" hidden>
+            <button type="button" class="sh-more-item" role="menuitem" data-proxy="historyBtn">Search history…</button>
+            <div class="sh-more-divider" role="separator"></div>
+            <button type="button" class="sh-more-item" role="menuitem" data-proxy="sidebarNewGroupChatBtn">New group chat</button>
+            <button type="button" class="sh-more-item" role="menuitem" data-proxy="sidebarGroupChatLiveBtn">Group chat live view</button>
+            <div class="sh-more-divider" role="separator"></div>
+            <button type="button" class="sh-more-item" role="menuitem" data-proxy="sidebarRefreshBtn">Reload page</button>
+            <!-- Opens #sysModal, which is the restart UI (Dashboard / Worker /
+                 WatchTower rows plus "Restart all") and also the detail behind
+                 the old header STATUS chip. The LED keeps the chip's signal:
+                 it is the only reason that chip needed to be always-on. -->
+            <button type="button" class="sh-more-item" role="menuitem" data-proxy="cccServerStatusChip">
+              <span class="sh-more-led is-unknown" id="sidebarMoreStatusLed" aria-hidden="true"></span>
+              <span>Restart servers…</span>
+            </button>
+            <div class="sh-more-divider" role="separator"></div>
+            <!-- These two keep their original ids: the version/update wiring in
+                 app.js binds them directly, so they are moved, not proxied. -->
+            <a href="#" class="sh-more-item sh-whats-new-link" role="menuitem" id="cccWhatsNewLink" title="View what is new in this version">What's new</a>
+            <a href="#" class="sh-more-item sh-check-updates" role="menuitem" id="cccCheckUpdatesLink" title="Check GitHub for a newer release">Check for updates</a>
+            <div class="sh-more-info">Last updated <span id="cccLastUpdated">…</span></div>
+          </div>
+        </div>
       </div>
       <div class="new-session-secondary-row sh-more-collapsed" id="newSessionSecondaryRow">
         <button class="new-session-btn new-session-btn-secondary" id="sidebarNewGroupChatBtn" data-tour="group-chat" title="Create a new empty group chat - drag sessions in afterwards to add them" aria-label="New group chat"><span class="plus" aria-hidden="true">+</span> New Group chat</button>
@@ -1806,6 +1849,29 @@
     </div>
   </div>
 
+  <!-- Share modal: reuses the .upd-overlay/.upd-dialog shell. -->
+  <div id="shareCccModal" class="upd-overlay" role="dialog" aria-modal="true" aria-labelledby="shareCccTitle">
+    <div class="upd-backdrop" id="shareCccBackdrop"></div>
+    <div class="upd-dialog" style="width:min(480px,92vw);">
+      <div class="share-ccc-head">
+        <div class="upd-title" id="shareCccTitle">Share Command Center</div>
+        <button type="button" class="settings-modal-close" id="shareCccCloseBtn" aria-label="Close">&times;</button>
+      </div>
+      <div class="upd-versions">Help a friend discover a faster way to run Claude, Codex, Cursor, and Anti-Gravity sessions.</div>
+      <div class="share-ccc-row">
+        <a class="upd-btn share-ccc-btn" id="shareCccRedditBtn" href="#" target="_blank" rel="noopener">
+          <span aria-hidden="true">&#128172;</span> Share on Reddit
+        </a>
+        <a class="upd-btn share-ccc-btn" id="shareCccXBtn" href="#" target="_blank" rel="noopener">
+          <span aria-hidden="true">&#120143;</span> Share on X
+        </a>
+      </div>
+      <label class="bug-label" for="shareCccMessage">Or copy this message</label>
+      <textarea id="shareCccMessage" class="bug-input bug-textarea" readonly rows="3"></textarea>
+      <button type="button" class="upd-btn upd-primary" id="shareCccCopyBtn">Copy message</button>
+    </div>
+  </div>
+
   <!-- Spawn-defaults modal. These values are server-side so the New
        session UI and ccc-orchestration use the same engine/model when a
        caller does not pass explicit spawn choices. -->
@@ -1986,6 +2052,20 @@
                   <button type="button" class="settings-segment" data-theme="light" role="radio" aria-checked="false">Light</button>
                   <button type="button" class="settings-segment" data-theme="dark" role="radio" aria-checked="false">Dark</button>
                   <button type="button" class="settings-segment" data-theme="system" role="radio" aria-checked="false">System</button>
+                </div>
+              </div>
+            </div>
+
+            <div class="settings-row" data-keywords="folder chip chips color colors colour hue palette muted level hierarchy repo">
+              <div class="settings-row-main">
+                <div class="settings-row-label">Folder chip colors</div>
+                <div class="settings-row-desc">How repo and object chips are tinted in the session list.</div>
+              </div>
+              <div class="settings-row-control">
+                <div class="settings-segmented" data-segmented-group="chips" role="group" aria-label="Folder chip colors">
+                  <button type="button" class="settings-segment" data-chips-mode="muted" role="radio" aria-checked="false">Muted</button>
+                  <button type="button" class="settings-segment" data-chips-mode="color" role="radio" aria-checked="false">Per folder</button>
+                  <button type="button" class="settings-segment" data-chips-mode="level" role="radio" aria-checked="false">By level</button>
                 </div>
               </div>
             </div>
