@@ -36657,10 +36657,26 @@
   }
 
   let _uxqHealthPromise = null;
-  async function _fetchUxqHealth(allowStale) {
+  // Monotonic request counter so an older, slower-to-resolve fetch can never
+  // clobber a newer one's result (CCC-818): the 1x/2x/3x worker-count toggle
+  // POSTs a write, then forces a fresh health fetch to observe it. If a
+  // background poll's fetch had already started (using pre-write server
+  // state) and happens to resolve AFTER the forced one, "last response wins"
+  // would silently re-cache the stale value — reading as "I clicked it and
+  // nothing happened" until the next 15s TTL window.
+  let _uxqHealthReqSeq = 0;
+  let _uxqHealthAppliedSeq = 0;
+  async function _fetchUxqHealth(allowStale, force) {
     if (allowStale && _uxqHealthCache.ts) return _uxqHealthCache;
-    if (Date.now() - _uxqHealthCache.ts < 15000) return _uxqHealthCache;
-    if (_uxqHealthPromise) return _uxqHealthPromise;
+    if (!force && Date.now() - _uxqHealthCache.ts < 15000) return _uxqHealthCache;
+    if (_uxqHealthPromise) {
+      if (!force) return _uxqHealthPromise;
+      // A forced fetch can't be satisfied by an in-flight one that may have
+      // started collecting data before the write it needs to observe —
+      // let it finish, then issue a real fetch of our own.
+      await _uxqHealthPromise.catch(() => {});
+    }
+    const seq = ++_uxqHealthReqSeq;
     _uxqHealthPromise = (async () => {
     try {
       const res = await backgroundApiFetch('/api/queue/status', { cache: 'no-store' });
@@ -36676,10 +36692,15 @@
         ? data.worker_session_ids : [];
       // Past workers from the last 24h (log file scan, excludes live workers).
       const past_workers = Array.isArray(data && data.past_workers) ? data.past_workers : [];
-      _uxqHealthCache = { ts: Date.now(), rows, wt_workers, queues, worker_session_ids, past_workers };
-      // A brand-new sub-queue can arrive here before any of its tickets do, so
-      // re-derive the families off the fresh queue list.
-      _uxqRefreshFamilyRoots();
+      // Out-of-order guard: only the most recently INITIATED request may
+      // write the cache, regardless of resolve order.
+      if (seq >= _uxqHealthAppliedSeq) {
+        _uxqHealthAppliedSeq = seq;
+        _uxqHealthCache = { ts: Date.now(), rows, wt_workers, queues, worker_session_ids, past_workers };
+        // A brand-new sub-queue can arrive here before any of its tickets do, so
+        // re-derive the families off the fresh queue list.
+        _uxqRefreshFamilyRoots();
+      }
     } catch (_) { /* keep stale cache */ }
     finally { _uxqHealthPromise = null; }
     return _uxqHealthCache;
@@ -37170,7 +37191,7 @@
     const $strip = document.getElementById('queueHealthStrip');
     if (!$strip) return;
     if (force) _uxqHealthCache.ts = 0;
-    const health = await _fetchUxqHealth(allowStale);
+    const health = await _fetchUxqHealth(allowStale, force);
     let rows = (health.rows || []).slice();
     // Keep recently-active queues visible even when fully drained (0 open), and
     // always keep explicitly configured queues visible even before their first
