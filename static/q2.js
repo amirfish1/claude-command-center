@@ -1379,7 +1379,7 @@
     var dotTitle = unresolved ? 'closed, unresolved follow-up'
       : unverified ? 'claimed by ' + String(it.claimed_by || '') + ', liveness unverified'
       : (stale && st !== 'blocked') ? 'stale claim, no live worker is on this'
-      : queued ? 'run requested'
+      : queued ? 'launching\u2026'
       : statusLabel(st);
     return '<button type="button" class="q2-trow is-' + esc(st)
       + (ref === state.ref ? ' is-selected' : '')
@@ -1401,7 +1401,7 @@
           ? '<span class="q2-tdot-wrap' + (queued ? ' is-queued' : '') + '"'
             + ' data-q2-run="' + esc(ref) + '" data-q2-queued="' + (queued ? '1' : '0') + '"'
             + ' role="button" tabindex="0"'
-            + ' title="' + esc(queued ? 'Queued to run - click to cancel' : dotTitle + ' - click to run now') + '">'
+            + ' title="' + esc(queued ? 'Launching\u2026 - click to cancel' : dotTitle + ' - click to run now') + '">'
             + '<span class="q2-tdot" aria-hidden="true"></span>'
             + (queued ? ICON_TINY_STOP : ICON_TINY_PLAY)
             + '</span>'
@@ -1737,7 +1737,7 @@
     // Everything editable lives on one chip row, next to the read-only state.
     var chips = ''
       + '<span class="q2-status is-' + esc(st) + (runQueued ? ' is-run-requested' : '') + '">'
-      + esc(runQueued ? 'run requested' : statusLabel(st)) + '</span>'
+      + esc(runQueued ? 'launching\u2026' : statusLabel(st)) + '</span>'
       + (item.lane ? '<span class="q2-chip is-lane">' + esc(item.lane) + '</span>' : '')
       + editChip('type', item.type ? (TYPE_SHORT[item.type] || item.type) : 'type?',
                  item.type, item.type ? 'is-type-' + item.type : '')
@@ -2469,7 +2469,7 @@
     if (dotEl) dotEl.classList.add('is-pending');
     try {
       await postJson('/api/ux-fixes/run', { ref: ref, cancel: !!queued });
-      note(queued ? 'Run cancelled for ' + ref : 'Queued ' + ref + ' to run');
+      note(queued ? 'Run cancelled for ' + ref : 'Launching ' + ref + '\u2026');
       if (state.ref === ref) await loadDetail(ref);
       await refresh();
     } catch (e) {
