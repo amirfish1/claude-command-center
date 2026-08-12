@@ -558,6 +558,7 @@ class EngineHost:
                     wt_origin=bool(args.get("wt_origin")),
                     skip_wt=bool(args.get("skip_wt")),
                     preserve_queued_steer=bool(args.get("preserve_queued_steer")),
+                    force_queue=bool(args.get("force_queue")),
                 )
             if operation == "interrupt":
                 return legacy._interrupt_claude_headless_local(

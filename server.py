@@ -38956,6 +38956,18 @@ def _terminal_input_queue_has_pending(session_id):
         return bool(_pending_terminal_input_queue.get(session_id))
 
 
+def _terminal_queue_waits_for_headless_turn(session_id, status):
+    """Hold durable input while a CCC-owned Claude turn owes a result."""
+    if not isinstance(status, dict) or not status.get("live"):
+        return False
+    if _is_real_tty(status.get("tty")):
+        return False
+    spawn = _find_live_spawn_entry_for_session(session_id)
+    if spawn is None or (spawn.get("engine") or "claude") != "claude":
+        return False
+    return _headless_turn_in_progress(spawn)
+
+
 def _load_daemon_roster():
     """Read Claude Code's background-agent roster, if the daemon is running."""
     try:
@@ -40207,6 +40219,8 @@ def _start_resume_queue_watcher() -> None:
                     if _terminal_queue_waits_for_active_acp(status):
                         continue
                     if status.get("live") and status.get("tty") and _session_status_is_busy(status):
+                        continue
+                    if _terminal_queue_waits_for_headless_turn(sid, status):
                         continue
                     if status.get("live") and status.get("kind") == "bg":
                         if not _bg_agent_ready_for_input(sid, status):
@@ -45319,6 +45333,8 @@ def spawn_session(prompt, name=None, cwd=None, repo_path=None, worktree=False, m
         model=model_to_use,
         parent_session_id=parent_session_id,
         reasoning_effort=reasoning_effort,
+        input_result_target=entry.get("input_result_target"),
+        input_accepted_at=entry.get("input_accepted_at"),
     )
     # Cwd determines the ~/.claude/projects/ bucket the new session
     # logs to, which is how the kanban groups it by repo. Print it so
@@ -45981,6 +45997,8 @@ def spawn_session_remote(prompt, name=None, cwd=None, repo_path=None, worktree=F
         model=model_to_use,
         session_id=session_id,
         parent_session_id=parent_session_id,
+        input_result_target=entry.get("input_result_target"),
+        input_accepted_at=entry.get("input_accepted_at"),
     )
     resp = {
         "ok": True,
@@ -46293,9 +46311,37 @@ def _write_stream_json_user_message(target, text, timeout=0.25):
     line = (json.dumps(msg) + "\n").encode("utf-8")
 
     if isinstance(target, dict):
-        if _write_via_spawn_fd(target, line, timeout=timeout):
+        # Serialize physical delivery and boundary accounting so simultaneous
+        # composer submits cannot race the same spawn state. Multiple messages
+        # accepted during one active response intentionally share a boundary.
+        # The lock is process-local and omitted from the JSON spawn registry.
+        write_lock = target.setdefault("_input_write_lock", threading.Lock())
+        with write_lock:
+            current_results = _headless_log_result_count(target)
+            previous_target = _valid_input_result_target(target)
+            delivered = _write_via_spawn_fd(target, line, timeout=timeout)
+            if not delivered:
+                delivered = _write_via_pipe(target.get("proc"), line)
+            if not delivered:
+                return False
+
+            # Inputs accepted during one active Claude response can coalesce
+            # into that same terminal result (for example, a correction sent
+            # while a tool is running). Share its existing boundary instead
+            # of demanding one result line per write, which Claude does not
+            # guarantee. Once the previous boundary is complete, the next
+            # accepted input establishes exactly one new boundary.
+            if previous_target is not None and current_results < previous_target:
+                next_target = previous_target
+            else:
+                next_target = current_results + 1
+            accepted_at = time.time()
+            target["input_result_target"] = next_target
+            target["input_accepted_at"] = accepted_at
+            _update_spawn_input_state_in_registry(
+                target.get("pid"), next_target, accepted_at,
+            )
             return True
-        return _write_via_pipe(target.get("proc"), line)
 
     return _write_via_pipe(target, line)
 
@@ -46460,31 +46506,64 @@ def _headless_log_result_count(entry):
     return count
 
 
+def _valid_input_result_target(entry):
+    """Return a spawn's valid owned-input result target, else ``None``."""
+    value = entry.get("input_result_target") if isinstance(entry, dict) else None
+    if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+        return None
+    return value
+
+
+def _valid_input_accepted_at(entry):
+    """Return a finite accepted-input timestamp, else ``None``."""
+    value = entry.get("input_accepted_at") if isinstance(entry, dict) else None
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return None
+    value = float(value)
+    return value if math.isfinite(value) and value >= 0 else None
+
+
+def _headless_turn_in_progress(entry):
+    """True while a CCC-owned Claude input still owes a terminal result.
+
+    Explicit result accounting is authoritative whenever present. Legacy
+    registry rows fall back to the stdout-tail heuristic until their next
+    successful CCC write establishes a target.
+    """
+    target = _valid_input_result_target(entry)
+    if target is not None:
+        if _headless_log_result_count(entry) < target:
+            return True
+        # A mid-turn input may be handled as a separate response after the
+        # result that closed the preceding response. Meaningful stdout after
+        # the tracked boundary proves that next response has begun. Benign
+        # post-result trailers are filtered by `_headless_log_turn_open`.
+        return _headless_log_turn_open(entry)
+    return _headless_log_turn_open(entry)
+
+
 def _headless_log_turn_open(entry):
     """True if a Claude headless's own stdout log ends mid-turn.
 
     Each completed turn ends with exactly one `{"type":"result"}` line (see
-    `_headless_log_result_count`). If the LAST event in the log is anything
-    else — plain text delta, tool_use, system, whatever — the turn the last
-    user input triggered hasn't finished yet. This is the only busy signal
-    that covers a turn that's streaming text with no tool child running at
-    all: `_spawn_entry_active_tool_child` and the sidecar hook markers are
-    both tool-boundary-only (PreToolUse/PostToolUse/Stop), so neither one
-    fires during a pure-text turn. Returns False (not busy) if the log is
-    missing, empty, or unreadable — same fail-open default as the rest of
-    the busy-detection chain.
+    `_headless_log_result_count`). A later assistant/user/stream event, or an
+    active system status, opens the next turn until its result. Benign events
+    that can trail a completed result (`command_lifecycle`, rate-limit and
+    background-task notifications) do not reopen it; treating every trailing
+    event as busy previously stranded queued input indefinitely.
 
-    Only called for mode="send_queue" — CCC's composer "Send (queue if
-    busy)" option — not for the default "send", because this signal got
-    stuck reporting "turn open" indefinitely for at least one live
-    session, which would block ALL further input if it were the default.
+    This is the only signal that covers a separately queued next response
+    streaming text without a tool child. Returns False (not busy) if the log
+    is missing, empty, or unreadable — the same fail-open default as the rest
+    of the busy-detection chain.
     """
     if not isinstance(entry, dict):
         return False
     log = entry.get("log")
     if not log:
         return False
-    last_type = None
+    turn_open = False
+    active_system_subtypes = {"init", "status", "thinking_tokens"}
     try:
         with open(log, "rb") as f:
             try:
@@ -46502,14 +46581,21 @@ def _headless_log_turn_open(entry):
                     ev = json.loads(raw)
                 except (json.JSONDecodeError, ValueError):
                     continue
-                t = ev.get("type") if isinstance(ev, dict) else None
-                if t:
-                    last_type = t
+                if not isinstance(ev, dict):
+                    continue
+                event_type = ev.get("type")
+                if event_type == "result":
+                    turn_open = False
+                elif event_type in ("assistant", "user", "stream_event"):
+                    turn_open = True
+                elif (
+                    event_type == "system"
+                    and ev.get("subtype") in active_system_subtypes
+                ):
+                    turn_open = True
     except OSError:
         return False
-    if last_type is None:
-        return False
-    return last_type != "result"
+    return turn_open
 
 
 def _transcript_tail_signature(session_id):
@@ -47119,6 +47205,8 @@ def resume_session_headless(session_id, text, cwd=None, idempotency_key=None):
         engine="claude",
         session_id=session_id,
         repo_path=ctx["repo_path"],
+        input_result_target=entry.get("input_result_target"),
+        input_accepted_at=entry.get("input_accepted_at"),
     )
     # Diagnostic: a fresh warm process is now live. Record the gap since this
     # sid's last exit/cold_resume — a short gap right after `server_start`
@@ -47365,7 +47453,8 @@ def _record_spawn_to_registry(
     pid, name, log_path, cwd, spawned_at, command_summary,
     fifo=None, engine="claude", session_id=None, model=None, repo_path=None,
     parent_session_id=None, prewarm=False, prewarm_id=None, client_id=None,
-    reasoning_effort="", created_at_epoch=None,
+    reasoning_effort="", created_at_epoch=None, input_result_target=None,
+    input_accepted_at=None,
 ):
     """Append a freshly-spawned session to the on-disk registry. The
     session_id is provided for known resume calls and otherwise filled in
@@ -47405,6 +47494,16 @@ def _record_spawn_to_registry(
         "reasoning_effort": str(reasoning_effort or ""),
         "parent_session_id": parent_session_id or "",
     }
+    input_state = {
+        "input_result_target": input_result_target,
+        "input_accepted_at": input_accepted_at,
+    }
+    valid_target = _valid_input_result_target(input_state)
+    valid_accepted_at = _valid_input_accepted_at(input_state)
+    if valid_target is not None:
+        record["input_result_target"] = valid_target
+    if valid_accepted_at is not None:
+        record["input_accepted_at"] = valid_accepted_at
     if prewarm:
         record.update({
             "prewarm": True,
@@ -47472,6 +47571,33 @@ def _update_spawn_session_id_in_registry(pid, session_id):
             _save_spawn_registry(entries)
     except Exception as e:
         print(f"  [spawn-registry] could not update session_id for pid {pid} ({e})")
+
+
+def _update_spawn_input_state_in_registry(
+    pid, input_result_target, input_accepted_at,
+):
+    """Persist one spawn's owned-input state without replacing other fields."""
+    if pid is None:
+        return
+    try:
+        entries = _load_spawn_registry()
+        updated = False
+        for entry in entries:
+            if str(entry.get("pid") or "") != str(pid):
+                continue
+            if (
+                entry.get("input_result_target") != input_result_target
+                or entry.get("input_accepted_at") != input_accepted_at
+            ):
+                entry["input_result_target"] = input_result_target
+                entry["input_accepted_at"] = input_accepted_at
+                updated = True
+        if updated:
+            _save_spawn_registry(entries)
+    except Exception as e:
+        print(
+            f"  [spawn-registry] could not update input state for pid {pid} ({e})"
+        )
 
 
 def _recover_spawn_parent_session_id(entry):
@@ -47746,11 +47872,17 @@ def _reattach_spawned_orphans(skip_engines=None, only_engines=None):
             "model": entry.get("model") or "",
             "parent_session_id": entry.get("parent_session_id") or "",
         }
+        valid_input_target = _valid_input_result_target(entry)
+        valid_input_accepted_at = _valid_input_accepted_at(entry)
+        if valid_input_target is not None:
+            synthetic["input_result_target"] = valid_input_target
+        if valid_input_accepted_at is not None:
+            synthetic["input_accepted_at"] = valid_input_accepted_at
         if session_id:
             synthetic["session_id"] = session_id
             synthetic["resumed_sid"] = session_id
         _spawned_sessions.append(synthetic)
-        survivors.append({
+        survivor = {
             "pid": pid,
             "session_id": session_id,
             "name": entry.get("name"),
@@ -47763,7 +47895,12 @@ def _reattach_spawned_orphans(skip_engines=None, only_engines=None):
             "engine": engine,
             "model": entry.get("model") or "",
             "parent_session_id": entry.get("parent_session_id") or "",
-        })
+        }
+        if valid_input_target is not None:
+            survivor["input_result_target"] = valid_input_target
+        if valid_input_accepted_at is not None:
+            survivor["input_accepted_at"] = valid_input_accepted_at
+        survivors.append(survivor)
         reattached += 1
 
     _save_spawn_registry(survivors)
@@ -51455,7 +51592,10 @@ def _inject_text_into_session(
     session_id, owner_node = _federation_resolve_target(session_id)
     if owner_node:
         return _federation_proxy_session_action(owner_node, "inject", {
-            "session_id": session_id, "text": text, "mode": mode,
+            "session_id": session_id,
+            "text": text,
+            "mode": mode,
+            "force_queue": bool(force_queue),
         })
     # Total Recall may return a Claude child transcript's bare ``agent-*``
     # id. It is searchable, but Claude cannot resume it independently; route
@@ -51526,6 +51666,7 @@ def _inject_text_into_session(
                 "wt_origin": bool(wt_origin),
                 "skip_wt": bool(skip_wt),
                 "preserve_queued_steer": bool(preserve_queued_steer),
+                "force_queue": bool(force_queue),
             },
             idempotency_key=idempotency_key,
         )
@@ -51869,21 +52010,17 @@ def _inject_text_into_session(
                 # occasionally interrupt a busy turn (mid-turn stdin writes
                 # aren't guaranteed to defer — see c115c5cc's history).
                 #
-                # mode="send_queue" (the composer's explicit "Send (queue
-                # if busy)" option) opts into deferring to the next turn
-                # boundary on ANY busy signal instead, closer to the TTY
-                # path's contract — never interrupts, at the cost of
-                # sometimes waiting. Not the default because the busy
-                # signal it relies on (_headless_log_turn_open, reading the
-                # headless's own stdout log) got stuck reporting "turn
-                # open" indefinitely for at least one live session,
-                # blocking ALL further input — a worse failure than the
-                # occasional interrupt. Left as an explicit per-message
-                # choice rather than forced on everyone.
-                if mode == "send_queue":
+                # force_queue is the composer's explicit "Send (queue if
+                # busy)" opt-in. The browser intentionally keeps the public
+                # mode as "send" and transmits this separate flag, so headless
+                # routing must inspect the flag rather than the obsolete
+                # internal mode="send_queue" spelling. Explicit result-target
+                # state is authoritative; the log-tail fallback is used only
+                # for legacy spawn records that predate that state.
+                if force_queue:
                     is_busy = (
                         _session_status_is_busy(status)
-                        or _headless_log_turn_open(spawn)
+                        or _headless_turn_in_progress(spawn)
                         or _terminal_input_queue_has_pending(session_id)
                     )
                 else:
@@ -51901,11 +52038,13 @@ def _inject_text_into_session(
             # the session — our headless's in-memory state is behind disk.
             # Writing to it now would answer from frozen memory (the "rollback").
             # Retire the stale headless and route through a fresh resume, which
-            # reads current disk. Guarded so we NEVER retire a busy headless
-            # (an active tool child means it's mid-turn): a fresh resume is
-            # always correct, so we only ever risk an unnecessary respawn.
+            # reads current disk. An outstanding owned-input result target is
+            # the authoritative mid-turn signal across thinking, text
+            # streaming, and between-tool gaps; a tool child is additional
+            # defense for legacy entries. Never retire while either is active.
             if (
                 spawn.get("engine") == "claude"
+                and not _headless_turn_in_progress(spawn)
                 and not _spawn_entry_active_tool_child(spawn)
                 and _headless_spawn_is_stale(spawn, session_id)
             ):

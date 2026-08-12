@@ -15,6 +15,7 @@ The hard contracts under test:
     when there is no concurrency.
 """
 import json
+import os
 import sys
 import threading
 from unittest import mock
@@ -173,7 +174,7 @@ def test_successful_stream_write_advances_and_persists_result_target(
     }]
 
 
-def test_multiple_stream_writes_accumulate_result_targets(
+def test_multiple_stream_writes_share_active_result_target(
     server_mod, tmp_path, monkeypatch
 ):
     _sid, entry, _transcript, _log = _stage(
@@ -187,8 +188,10 @@ def test_multiple_stream_writes_accumulate_result_targets(
     assert server_mod._write_stream_json_user_message(entry, "first") is True
     assert server_mod._write_stream_json_user_message(entry, "second") is True
 
-    assert entry["input_result_target"] == 6
-    assert json.loads(registry.read_text())[0]["input_result_target"] == 6
+    # Claude may absorb both messages into one active response (live protocol
+    # evidence: one result with num_turns=2), so one next result closes both.
+    assert entry["input_result_target"] == 5
+    assert json.loads(registry.read_text())[0]["input_result_target"] == 5
 
 
 def test_failed_stream_write_does_not_advance_result_target(
@@ -215,7 +218,7 @@ def test_failed_stream_write_does_not_advance_result_target(
     assert "input_accepted_at" not in json.loads(registry.read_text())[0]
 
 
-def test_concurrent_stream_writes_get_distinct_result_targets(
+def test_concurrent_stream_writes_share_one_active_result_target(
     server_mod, tmp_path, monkeypatch
 ):
     _sid, entry, _transcript, _log = _stage(
@@ -250,8 +253,40 @@ def test_concurrent_stream_writes_get_distinct_result_targets(
     assert sorted(
         item["message"]["content"][0]["text"] for item in delivered
     ) == ["first", "second"]
-    assert entry["input_result_target"] == 6
-    assert json.loads(registry.read_text())[0]["input_result_target"] == 6
+    assert entry["input_result_target"] == 5
+    assert json.loads(registry.read_text())[0]["input_result_target"] == 5
+
+
+def test_post_result_stream_activity_keeps_next_turn_open(server_mod, tmp_path):
+    _sid, entry, _transcript, log = _stage(
+        server_mod, tmp_path, [_event("a")], 4
+    )
+    entry["input_result_target"] = 5
+    log.write_text(
+        _result_lines(5)
+        + json.dumps({"type": "system", "subtype": "init"}) + "\n"
+        + json.dumps({"type": "assistant", "message": {"content": []}}) + "\n"
+    )
+
+    assert server_mod._headless_turn_in_progress(entry) is True
+
+    log.write_text(_result_lines(6))
+    assert server_mod._headless_turn_in_progress(entry) is False
+
+
+def test_benign_post_result_trailer_does_not_reopen_turn(server_mod, tmp_path):
+    _sid, entry, _transcript, log = _stage(
+        server_mod, tmp_path, [_event("a")], 4
+    )
+    entry["input_result_target"] = 5
+    log.write_text(
+        _result_lines(5)
+        + json.dumps({"type": "command_lifecycle", "subtype": "completed"})
+        + "\n"
+        + json.dumps({"type": "rate_limit_event"}) + "\n"
+    )
+
+    assert server_mod._headless_turn_in_progress(entry) is False
 
 
 def test_retire_idle_helper_skips_busy(server_mod, tmp_path):
@@ -598,6 +633,62 @@ def test_ordinary_send_steers_busy_headless_followup(server_mod, tmp_path):
     queue.assert_not_called()
 
 
+def test_control_plane_inject_forwards_explicit_queue_flag(server_mod):
+    sid = "11111111-2222-3333-4444-555555555555"
+    status = {"live": False, "tty": None, "status": None}
+
+    with mock.patch.object(server_mod, "_is_codex_session", return_value=False), \
+         mock.patch.object(server_mod, "_is_cursor_session", return_value=False), \
+         mock.patch.object(server_mod, "_is_kimi_session", return_value=False), \
+         mock.patch.object(server_mod, "_is_hermes_session", return_value=False), \
+         mock.patch.object(server_mod, "_is_opencode_session", return_value=False), \
+         mock.patch.object(server_mod, "_is_devin_cli_session", return_value=False), \
+         mock.patch.object(server_mod, "_is_gemini_session", return_value=False), \
+         mock.patch.object(server_mod, "_is_antigravity_session", return_value=False), \
+         mock.patch.object(server_mod, "find_session_cwd", return_value="/fake/cwd"), \
+         mock.patch.object(server_mod, "session_live_status", return_value=status), \
+         mock.patch.object(server_mod, "_control_plane_routes_engines", return_value=True), \
+         mock.patch.object(
+             server_mod,
+             "_control_plane_engine_call",
+             return_value={"ok": True, "queued": True},
+         ) as routed:
+        result = server_mod._inject_text_into_session(
+            sid, "wait until next turn", force_queue=True
+        )
+
+    assert result == {"ok": True, "queued": True}
+    args = routed.call_args.args
+    assert args[:2] == ("claude", "inject")
+    assert args[2]["force_queue"] is True
+
+
+def test_federated_inject_forwards_explicit_queue_flag(server_mod):
+    sid = "11111111-2222-3333-4444-555555555555"
+    with mock.patch.object(
+        server_mod,
+        "_federation_resolve_target",
+        return_value=(sid, "peer-node"),
+    ), mock.patch.object(
+        server_mod,
+        "_federation_proxy_session_action",
+        return_value={"ok": True, "queued": True},
+    ) as proxy:
+        result = server_mod._inject_text_into_session(
+            "peer-node:" + sid,
+            "wait until next turn",
+            force_queue=True,
+        )
+
+    assert result == {"ok": True, "queued": True}
+    proxy.assert_called_once_with("peer-node", "inject", {
+        "session_id": sid,
+        "text": "wait until next turn",
+        "mode": "send",
+        "force_queue": True,
+    })
+
+
 def test_terminal_queue_waits_for_owned_headless_turn(server_mod, tmp_path):
     sid, entry, _transcript, log = _stage(
         server_mod, tmp_path, [_event("a")], 4
@@ -611,3 +702,104 @@ def test_terminal_queue_waits_for_owned_headless_turn(server_mod, tmp_path):
         assert server_mod._terminal_queue_waits_for_headless_turn(sid, status) is True
         log.write_text(_result_lines(5))
         assert server_mod._terminal_queue_waits_for_headless_turn(sid, status) is False
+
+
+def test_record_spawn_registry_persists_result_target_state(
+    server_mod, tmp_path, monkeypatch
+):
+    registry = tmp_path / "spawned-pids.json"
+    monkeypatch.setattr(server_mod, "SPAWNED_PIDS_FILE", registry)
+
+    server_mod._record_spawn_to_registry(
+        pid=4242,
+        name="followup-safe",
+        log_path=tmp_path / "spawn.log",
+        cwd=tmp_path,
+        spawned_at="20260812T120000",
+        command_summary="test prompt",
+        engine="claude",
+        input_result_target=1,
+        input_accepted_at=1234.5,
+    )
+
+    row = json.loads(registry.read_text())[0]
+    assert row["input_result_target"] == 1
+    assert row["input_accepted_at"] == 1234.5
+
+
+def test_reattach_preserves_result_target_state(
+    server_mod, tmp_path, monkeypatch
+):
+    registry = tmp_path / "spawned-pids.json"
+    log = tmp_path / "spawn.log"
+    log.write_text(_result_lines(4))
+    registry.write_text(json.dumps([{
+        "pid": os.getpid(),
+        "session_id": "11111111-2222-3333-4444-555555555555",
+        "name": "followup-safe",
+        "log": str(log),
+        "fifo": None,
+        "cwd": str(tmp_path),
+        "spawned_at": "20260812T120000",
+        "command_summary": "test prompt",
+        "engine": "claude",
+        "input_result_target": 5,
+        "input_accepted_at": 1234.5,
+    }]))
+    monkeypatch.setattr(server_mod, "SPAWNED_PIDS_FILE", registry)
+    original = list(server_mod._spawned_sessions)
+    server_mod._spawned_sessions.clear()
+    try:
+        with mock.patch.object(server_mod, "_pid_is_engine_process", return_value=True), \
+             mock.patch.object(server_mod, "_open_fifo_writer", return_value=None):
+            server_mod._reattach_spawned_orphans()
+
+        assert len(server_mod._spawned_sessions) == 1
+        entry = server_mod._spawned_sessions[0]
+        assert entry["input_result_target"] == 5
+        assert entry["input_accepted_at"] == 1234.5
+        assert server_mod._headless_turn_in_progress(entry) is True
+        saved = json.loads(registry.read_text())[0]
+        assert saved["input_result_target"] == 5
+        assert saved["input_accepted_at"] == 1234.5
+    finally:
+        server_mod._spawned_sessions.clear()
+        server_mod._spawned_sessions.extend(original)
+
+
+def test_reattach_drops_malformed_result_target_state(
+    server_mod, tmp_path, monkeypatch
+):
+    registry = tmp_path / "spawned-pids.json"
+    log = tmp_path / "spawn.log"
+    log.write_text(_result_lines(1))
+    registry.write_text(json.dumps([{
+        "pid": os.getpid(),
+        "session_id": "11111111-2222-3333-4444-555555555555",
+        "name": "legacy",
+        "log": str(log),
+        "fifo": None,
+        "cwd": str(tmp_path),
+        "spawned_at": "20260812T120000",
+        "command_summary": "test prompt",
+        "engine": "claude",
+        "input_result_target": -4,
+        "input_accepted_at": "not-a-time",
+    }]))
+    monkeypatch.setattr(server_mod, "SPAWNED_PIDS_FILE", registry)
+    original = list(server_mod._spawned_sessions)
+    server_mod._spawned_sessions.clear()
+    try:
+        with mock.patch.object(server_mod, "_pid_is_engine_process", return_value=True), \
+             mock.patch.object(server_mod, "_open_fifo_writer", return_value=None):
+            server_mod._reattach_spawned_orphans()
+
+        entry = server_mod._spawned_sessions[0]
+        assert "input_result_target" not in entry
+        assert "input_accepted_at" not in entry
+        saved = json.loads(registry.read_text())[0]
+        assert "input_result_target" not in saved
+        assert "input_accepted_at" not in saved
+    finally:
+        server_mod._spawned_sessions.clear()
+        server_mod._spawned_sessions.extend(original)

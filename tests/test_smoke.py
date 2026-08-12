@@ -6126,6 +6126,25 @@ class TestServerImports(unittest.TestCase):
         ]
         self.assertNotIn("postInjectInput(sid, text, 'send', { announcedFrom })", send_handler)
 
+    def test_claude_explicit_queue_is_distinct_from_ordinary_send(self):
+        app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(
+            encoding="utf-8"
+        )
+        send_handler = app_js[
+            app_js.index("async function sendToTerminal"):
+            app_js.index("function insertPendingSpawnCard")
+        ]
+
+        self.assertIn("sendToTerminal('p1', 'send_queue')", app_js)
+        self.assertIn(
+            "mode: injectMode === 'send_queue' ? 'send' : injectMode",
+            send_handler,
+        )
+        self.assertIn(
+            "if (injectMode === 'send_queue') payload.force_queue = true;",
+            send_handler,
+        )
+
     def test_claude_headless_steer_uses_interrupt_control_request(self):
         """Steering a wedged Claude headless writes an `interrupt` control
         request to its FIFO, so a turn stuck on a long tool child reaches a

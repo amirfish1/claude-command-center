@@ -580,6 +580,7 @@ class TestEngineHost(unittest.TestCase):
             self._spawned_sessions = []
             self.reattach_calls = 0
             self.kimi_attach_calls = []
+            self.inject_calls = []
 
         def _acp_set_config(self, harness, sid, config_id, value):
             self.config_calls += 1
@@ -591,7 +592,8 @@ class TestEngineHost(unittest.TestCase):
                 "value": value,
             }
 
-        def _inject_text_into_session(self, session_id, text, **_kwargs):
+        def _inject_text_into_session(self, session_id, text, **kwargs):
+            self.inject_calls.append((session_id, text, kwargs))
             return {
                 "ok": True,
                 "queued": True,
@@ -684,6 +686,22 @@ class TestEngineHost(unittest.TestCase):
         self.assertEqual(first["work"]["state"], "completed")
         self.assertTrue(duplicate["deduplicated"])
         self.assertEqual(first["work_id"], duplicate["work_id"])
+
+    def test_claude_inject_forwards_explicit_queue_flag(self):
+        response = self.host.execute({
+            "engine": "claude",
+            "operation": "inject",
+            "idempotency_key": "claude-explicit-queue",
+            "args": {
+                "session_id": "session-claude",
+                "text": "wait until next turn",
+                "force_queue": True,
+            },
+        })
+
+        self.assertTrue(response["ok"])
+        self.assertEqual(len(self.fake.inject_calls), 1)
+        self.assertTrue(self.fake.inject_calls[0][2]["force_queue"])
 
     def test_parent_session_creates_durable_child_edge(self):
         parent, _ = self.runtime.ledger.submit(
