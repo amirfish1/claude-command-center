@@ -33662,9 +33662,21 @@
     return [0, Number.isFinite(rank) ? rank : 0];
   }
 
+  // Extract the id from a Claude bridge session reference: bare id,
+  // session_<id>, or a full https://claude.ai/code/session_<id> URL —
+  // the id format Claude Code shows in the TUI and commit trailers.
+  // ULID-shaped but not strict Crockford: observed ids are 24 chars and
+  // contain U, L, and lowercase letters — accept 24-26 alphanumerics.
+  function _bridgeSearchNeedle(q) {
+    const m = String(q || '').trim().match(/^(?:https?:\/\/claude\.ai\/code\/)?(?:session_)?([0-9a-z]{24,26})$/i);
+    return m ? m[1].toLowerCase() : null;
+  }
+
   function _uuidSearchNeedle(q) {
     const raw = String(q || '').trim().toLowerCase();
     if (raw.length < 4) return null;
+    const bridge = _bridgeSearchNeedle(raw);
+    if (bridge) return { raw: bridge, compact: bridge };
     const compact = raw.replace(/-/g, '');
     if (compact.length < 4 || !/^[0-9a-f]+$/.test(compact)) return null;
     return { raw, compact };
@@ -33673,7 +33685,7 @@
   function _sessionIdSearchRank(c, needle) {
     if (!c || !needle) return Infinity;
     let best = Infinity;
-    for (const rawId of [c.session_id, c.id]) {
+    for (const rawId of [c.session_id, c.id, c.bridge_session_id]) {
       if (!rawId) continue;
       const id = String(rawId).toLowerCase();
       const compact = id.replace(/-/g, '');
@@ -49083,6 +49095,10 @@
 
   function filterConversations(q) {
     q = (q || '').toLowerCase();
+    // Bridge-id queries (session_<ULID> or a claude.ai/code URL) match
+    // c.bridge_session_id via this extracted needle — the raw query is longer
+    // than the field, so .includes(q) alone could never hit.
+    const bridgeNeedle = _bridgeSearchNeedle(q);
     const recentCutoff = recencyCutoffSec();
     // Re-apply persisted local archive for TODO/parking cards on every filter pass
     // (each server response sets c.archived=false for them; we flip it back).
@@ -49117,6 +49133,8 @@
         || (c.source || '').toLowerCase().includes(q)
         || (c.session_id || '').toLowerCase().includes(q)
         || (c.id || '').toLowerCase().includes(q)
+        || (c.bridge_session_id || '').toLowerCase().includes(q)
+        || (bridgeNeedle && (c.bridge_session_id || '').toLowerCase() === bridgeNeedle)
         // Engine/model/platform metadata. Lets Hermes rows surface by their
         // provider ("hermes"), source platform ("cli", "whatsapp",
         // "whatsapp_cloud", "cron", or any future value), and model. The

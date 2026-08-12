@@ -8396,6 +8396,7 @@ def _live_registry_conversation_row(
         "question_options": [],
         "question_option_details": [],
         "parent_session_id": parent_session_id,
+        **_registry_row_overlay(meta),
     }
     try:
         _add_sidecar_fields(row)
@@ -9279,6 +9280,15 @@ def find_all_conversations(
             url = r.get("tail_pr_url")
             if url:
                 r["pr_state"] = _get_pr_state(url)
+    # Live peer-registry overlay (bridge session id, Claude busy/idle status,
+    # tmux/socket coordinates) — same layering as find_conversations.
+    try:
+        registry = _load_session_registry()
+        for r in out:
+            if r.get("engine") == "claude":
+                r.update(_registry_row_overlay(registry.get(r.get("session_id"))))
+    except Exception:
+        pass
     _apply_pinned_conversation_fields(out, pinned_list)
     out.sort(key=lambda r: r["mtime"], reverse=True)
     _sort_pinned_conversations_first(out, pinned_list)
@@ -10077,6 +10087,8 @@ _ARCHIVE_LIST_FIELDS = (
     "question_header", "question_preamble", "question_options",
     "question_option_details", "can_headless_resume", "can_app_resume", "codex_state",
     "codex_fresh", "codex_state_reason", "codex_writer", "codex_desktop_attached",
+    "bridge_session_id", "registry_status", "registry_status_updated_at",
+    "registry_tmux", "messaging_socket_path",
 )
 
 
@@ -10935,6 +10947,13 @@ def _rehydrate_archive_cached_rows(rows):
         live_candidates = _discover_live_session_ids()
     except Exception:
         live_candidates = set()
+    # Peer-registry state (bridge session id, Claude busy/idle, tmux/socket)
+    # changes as fast as liveness, so re-layer it per serve like the rest of
+    # the volatile fields above; _load_session_registry is 3s-memoized.
+    try:
+        session_registry = _load_session_registry()
+    except Exception:
+        session_registry = {}
     _now_rehydrate = time.time()
 
     # Codex names a thread seconds AFTER the spawn returns, and that name lands
@@ -11046,6 +11065,8 @@ def _rehydrate_archive_cached_rows(rows):
             else:
                 is_live = False
             row["is_live"] = is_live
+            if row.get("engine") == "claude":
+                row.update(_registry_row_overlay(session_registry.get(sid)))
             for k, v in _ARCHIVE_SIDECAR_DEFAULTS.items():
                 row[k] = copy.deepcopy(v)
             if is_live:
@@ -17935,6 +17956,73 @@ def _load_session_registry():
     return registry
 
 
+def _registry_row_overlay(meta):
+    """Live-session fields from Claude's peer registry, layered onto rows.
+
+    The registry (~/.claude/sessions/<pid>.json) carries data transcripts
+    never see: the bridge session id (the ULID in claude.ai/code/session_<id>
+    links and Claude-Session commit trailers), Claude's own busy/idle status,
+    and the session's tmux / messaging-socket coordinates. Only running
+    processes have registry entries, so dormant sessions overlay as blank —
+    never serve a stale bridge id for a dead session.
+    """
+    meta = meta or {}
+    bridge = str(meta.get("bridgeSessionId") or "").strip()
+    if bridge.startswith("session_"):
+        bridge = bridge[len("session_"):]
+    try:
+        status_ts = float(meta.get("statusUpdatedAt") or 0) / 1000.0
+    except (TypeError, ValueError):
+        status_ts = 0
+    tmux = meta.get("tmux")
+    if tmux and not isinstance(tmux, str):
+        tmux = json.dumps(tmux)
+    return {
+        "bridge_session_id": bridge,
+        "registry_status": str(meta.get("status") or "").strip(),
+        "registry_status_updated_at": status_ts,
+        "registry_tmux": str(tmux or "").strip(),
+        "messaging_socket_path": str(meta.get("messagingSocketPath") or "").strip(),
+    }
+
+
+# Claude's bridge ids are 24-char alphanumeric tokens (ULID-shaped but NOT
+# strict Crockford base32 — observed ids contain U, L, and lowercase letters,
+# e.g. 01M5QU7CyjBCpVsLPM9vfDQJ). Accept 24-26 chars to also tolerate true
+# 26-char ULIDs, optionally wrapped as session_<id> or a full
+# claude.ai/code/session_<id> URL.
+_BRIDGE_SESSION_ALIAS_RE = re.compile(
+    r"^(?:https?://claude\.ai/code/)?(?:session_)?([0-9A-Za-z]{24,26})$"
+)
+
+
+def _resolve_bridge_session_alias(session_id):
+    """Map a Claude bridge session id to the local session UUID.
+
+    Claude Code 2.1.228+ shows users the bridge id (in the TUI, in
+    Claude-Session commit trailers, and in claude.ai/code/session_<id> links)
+    while the local transcript — and every CCC API — keys on the UUID. Accept
+    the bare ULID, session_<ULID>, or the full URL; return the local UUID
+    when a live session claims that bridge id, else the input unchanged.
+    """
+    raw = str(session_id or "").strip()
+    m = _BRIDGE_SESSION_ALIAS_RE.match(raw)
+    if not m:
+        return session_id
+    token = m.group(1).lower()
+    try:
+        registry = _load_session_registry()
+    except Exception:
+        return session_id
+    for sid, meta in (registry or {}).items():
+        bridge = str((meta or {}).get("bridgeSessionId") or "").strip()
+        if bridge.startswith("session_"):
+            bridge = bridge[len("session_"):]
+        if bridge and bridge.lower() == token:
+            return sid
+    return session_id
+
+
 def session_live_status(session_id, session_cwd):
     """Look up a session's running process via ~/.claude/sessions/<pid>.json.
 
@@ -18802,6 +18890,80 @@ def inject_input_via_keystroke(tty, terminal_app, text, submit_key="return"):
     """
     with _tty_keystroke_lock(tty):
         return _inject_input_via_keystroke_impl(tty, terminal_app, text, submit_key=submit_key)
+
+
+# Claude Code 2.1.228+ writes a ready-made send-keys target into its peer
+# registry when it detects tmux: "<session>:@<window>.%<pane>" (e.g.
+# "ccc-tmux-probe:@0.%0"). Validate strictly before interpolating into a
+# tmux command line — the value comes from an on-disk JSON file.
+_REGISTRY_TMUX_TARGET_RE = re.compile(r"^[A-Za-z0-9_.=-]+:@\d+\.%\d+$")
+
+
+def _registry_tmux_target_for_session(session_id):
+    """The session's validated tmux pane target, or "" when not tmux-hosted."""
+    try:
+        meta = _load_session_registry().get(session_id) or {}
+    except Exception:
+        return ""
+    target = str(meta.get("tmux") or "").strip()
+    if not target or not _REGISTRY_TMUX_TARGET_RE.match(target):
+        return ""
+    if not shutil.which("tmux"):
+        return ""
+    return target
+
+
+def _inject_via_tmux(target, text):
+    """Paste `text` into a Claude session's tmux pane and submit with Enter.
+
+    Exact-address delivery: no terminal-app window matching, no macOS
+    Automation/Accessibility permission, and it reaches detached sessions
+    that AppleScript cannot see at all. Bracketed paste (-p) lands multi-line
+    text as one paste burst instead of a cascade of Enter keypresses; the
+    submit is a separate Enter, mirroring the two-burst semantics the TUIs
+    already rely on in _inject_input_via_keystroke_impl.
+    """
+    buf = f"ccc-inject-{os.getpid()}-{uuid.uuid4().hex[:8]}"
+    try:
+        load = subprocess.run(
+            ["tmux", "load-buffer", "-b", buf, "-"],
+            input=text, text=True, capture_output=True, timeout=10,
+        )
+        if load.returncode != 0:
+            return {"ok": False, "via": "tmux", "tmux_target": target,
+                    "error": (load.stderr or "").strip() or "tmux load-buffer failed"}
+        paste = subprocess.run(
+            ["tmux", "paste-buffer", "-p", "-d", "-b", buf, "-t", target],
+            capture_output=True, timeout=10,
+        )
+        if paste.returncode != 0:
+            return {"ok": False, "via": "tmux", "tmux_target": target,
+                    "error": (paste.stderr or "").strip() or "tmux paste-buffer failed"}
+        submit = subprocess.run(
+            ["tmux", "send-keys", "-t", target, "Enter"],
+            capture_output=True, timeout=10,
+        )
+        if submit.returncode != 0:
+            return {"ok": False, "via": "tmux", "tmux_target": target,
+                    "error": (submit.stderr or "").strip() or "tmux send-keys failed"}
+        return {"ok": True, "via": "tmux", "tmux_target": target}
+    except (subprocess.TimeoutExpired, FileNotFoundError, OSError) as e:
+        return {"ok": False, "via": "tmux", "tmux_target": target,
+                "error": str(e) or "tmux failed"}
+    finally:
+        # paste-buffer -d already consumed the buffer; this is the safety net
+        # for the load-then-fail paths.
+        try:
+            subprocess.run(["tmux", "delete-buffer", "-b", buf],
+                           capture_output=True, timeout=5)
+        except (subprocess.TimeoutExpired, FileNotFoundError, OSError):
+            pass
+
+
+def inject_input_via_tmux(target, text):
+    """Serialize per-pane (same CCC-797 splice hazard as keystrokes), then send."""
+    with _tty_keystroke_lock(f"tmux:{target}"):
+        return _inject_via_tmux(target, text)
 
 
 def _inject_input_via_keystroke_impl(tty, terminal_app, text, submit_key="return"):
@@ -22633,6 +22795,18 @@ def find_conversations(repo_path, progress=None, include_old=True, live_sids=Non
             if row:
                 conversations.append(row)
                 seen_jsonl.add(sid_jsonl_name)
+    except Exception:
+        pass
+
+    # Layer live peer-registry fields (bridge session id, Claude's busy/idle
+    # status, tmux/socket coordinates) onto every Claude row. Registry-only
+    # rows already carry them from _live_registry_conversation_row; this
+    # covers transcript-backed rows. Blank for sessions with no live process.
+    try:
+        registry = _load_session_registry()
+        for c in conversations:
+            if c.get("engine") == "claude":
+                c.update(_registry_row_overlay(registry.get(c.get("session_id"))))
     except Exception:
         pass
 
@@ -50781,6 +50955,15 @@ def _inject_text_into_session(
                 return _queue_terminal_input(session_id, text, status)
         if answering_tty_question:
             _drop_matching_terminal_queue_entries(session_id, text)
+        # tmux-hosted session: the peer registry carries Claude's own pane
+        # target, and send-keys reaches it exactly — no terminal-app window
+        # matching, no Automation permission, and detached sessions AppleScript
+        # can't see at all. Fall through to keystrokes on any tmux failure.
+        tmux_target = "" if (is_codex or is_cursor) else _registry_tmux_target_for_session(session_id)
+        if tmux_target:
+            tmux_result = inject_input_via_tmux(tmux_target, text)
+            if tmux_result.get("ok"):
+                return tmux_result
         keystroke_result = inject_input_via_keystroke(tty, term_app or "Terminal", text)
         # Codex/Cursor fallback: their TUIs accept input through their own
         # resume/steer delivery, so when keystroke injection ISN'T viable —
@@ -65099,6 +65282,11 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
             except json.JSONDecodeError:
                 payload = {}
             sid = payload.get("session_id", "")
+            # Accept the Claude bridge id (bare ULID, session_<ULID>, or a
+            # claude.ai/code/session_<ULID> URL) as an alias for the local
+            # session UUID — that's the id users see in the TUI and commit
+            # trailers now.
+            sid = _resolve_bridge_session_alias(sid)
             text = payload.get("text", "")
             mode = (payload.get("mode") or ("steer" if payload.get("steer") else "send") or "send")
             mode = str(mode).strip().lower()
