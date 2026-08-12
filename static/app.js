@@ -35934,6 +35934,14 @@
       // CCC-131: stash the outgoing transcript's scroll before the view is
       // wiped, so returning to this conversation restores where we left off.
       rememberConvScroll(previousConvId, getConvViewForPane(paneId));
+      // CCC-822: only stamp the composer's current text as a draft when
+      // actually leaving this conversation for a different one. Re-selecting
+      // the SAME conversation (a boot-time restore of the last-open session,
+      // or just re-clicking the already-open row) also hit this
+      // unconditionally, and on a fresh page load the box is still empty at
+      // that point — clobbering a real draft just restored from localStorage
+      // with "" a split second before the user ever saw it.
+      rememberComposerDraftForPane(paneId);
     }
     if (typeof ffcUpdateSidebar === 'function') ffcUpdateSidebar(null);
     if (typeof closeStatusRailFileViewer === 'function') closeStatusRailFileViewer();
@@ -35945,7 +35953,6 @@
       || (Array.isArray(archiveData) ? archiveData.find(x => (x.id || x.session_id) === id) : null)
       || {};
     const source = sessionSourceByConv[id] || selectedConv.source || 'interactive';
-    rememberComposerDraftForPane(paneId);
     // Make this pane active so the existing globals (which proxy through
     // splitState.activeIndex) target the right pane while we run.
     setActivePaneById(paneId, id);
