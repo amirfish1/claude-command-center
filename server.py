@@ -29697,10 +29697,12 @@ def _system_services_spawned_processes():
 
 _NEXT_SERVERS_CACHE = []
 _NEXT_SERVERS_LOCK = threading.Lock()
+_CLAUDE_PROCESSES_CACHE = []
+_CLAUDE_PROCESSES_LOCK = threading.Lock()
 
 
-def _scan_next_servers():
-    global _NEXT_SERVERS_CACHE
+def _scan_system_processes():
+    global _NEXT_SERVERS_CACHE, _CLAUDE_PROCESSES_CACHE
     cmd = ["ps", "-A", "-o", "pid,ppid,rss,command"]
     try:
         res = subprocess.run(cmd, capture_output=True, text=True, check=True)
@@ -29740,95 +29742,151 @@ def _scan_next_servers():
             curr = ppid
         return ancestors
 
+    # 1. NEXT.JS DEV SERVERS DISCOVERY
     next_processes = []
     for p in procs:
         cmd_lower = p['command'].lower()
         if "next-server" in cmd_lower or "next dev" in cmd_lower or "next/dev" in cmd_lower or "node_modules/.bin/next" in cmd_lower or "turbo dev" in cmd_lower:
             next_processes.append(p)
 
-    if not next_processes:
-        with _NEXT_SERVERS_LOCK:
-            _NEXT_SERVERS_CACHE = []
-        return
+    next_results = []
+    if next_processes:
+        trees = {}
+        for p in next_processes:
+            ancestors = get_ancestors(p['pid'])
+            root_pid = p['pid']
+            for anc in reversed(ancestors):
+                anc_cmd = proc_map[anc]['command'].lower()
+                if any(k in anc_cmd for k in ["npm", "yarn", "node", "turbo", "next", "pnpm", "bun"]):
+                    root_pid = anc
+                    break
+            if root_pid not in trees:
+                trees[root_pid] = []
+            trees[root_pid].append(p)
 
-    trees = {}
-    for p in next_processes:
-        ancestors = get_ancestors(p['pid'])
-        root_pid = p['pid']
-        for anc in reversed(ancestors):
-            anc_cmd = proc_map[anc]['command'].lower()
-            if any(k in anc_cmd for k in ["npm", "yarn", "node", "turbo", "next", "pnpm", "bun"]):
-                root_pid = anc
-                break
-        if root_pid not in trees:
-            trees[root_pid] = []
-        trees[root_pid].append(p)
+        for root_pid, member_procs in trees.items():
+            root_proc = proc_map.get(root_pid)
+            if not root_proc:
+                continue
 
-    results = []
-    for root_pid, member_procs in trees.items():
-        root_proc = proc_map.get(root_pid)
-        if not root_proc:
-            continue
+            all_tree_pids = {root_pid}
+            for p in procs:
+                if root_pid in get_ancestors(p['pid']):
+                    all_tree_pids.add(p['pid'])
 
-        all_tree_pids = {root_pid}
+            total_rss = sum(proc_map[pid]['rss'] for pid in all_tree_pids if pid in proc_map)
+
+            port = None
+            for pid in all_tree_pids:
+                cmd = proc_map[pid]['command']
+                m = re.search(r'(?:-p|--port)\s+(\d+)', cmd)
+                if m:
+                    port = int(m.group(1))
+                    break
+            if not port:
+                port = 3000
+
+            project_path = ""
+            for pid in all_tree_pids:
+                cmd = proc_map[pid]['command']
+                m = re.search(r'(/Users/[^/]+/Apps/[^/\s]+|/Users/[^/]+/[^/\s]+)', cmd)
+                if m:
+                    p_candidate = m.group(1)
+                    if "node_modules" not in p_candidate and "Library" not in p_candidate and ".claude" not in p_candidate:
+                        project_path = p_candidate
+                        break
+                node_idx = cmd.find("node_modules")
+                if node_idx != -1:
+                    parts = cmd[:node_idx].split()
+                    if parts:
+                        project_path = parts[-1].rstrip("/")
+                        break
+
+            if project_path:
+                project_name = project_path.rstrip("/").split("/")[-1]
+            else:
+                project_name = "Next.js App"
+                project_path = "Unknown Path"
+
+            next_results.append({
+                "pid": root_pid,
+                "port": port,
+                "project": project_name,
+                "path": project_path,
+                "memory_mb": round(total_rss / 1024.0, 1),
+                "command": root_proc['command'],
+                "all_pids": list(all_tree_pids)
+            })
+
+    # 2. CLAUDE & AGY AGENT PROCESSES DISCOVERY
+    claude_results = []
+    my_pid = os.getpid()
+    my_ancestry = set(get_ancestors(my_pid))
+    my_ancestry.add(my_pid)
+
+    # Propagate active descendants tree
+    changed = True
+    while changed:
+        changed = False
         for p in procs:
-            if root_pid in get_ancestors(p['pid']):
-                all_tree_pids.add(p['pid'])
+            if p['pid'] not in my_ancestry and p['ppid'] in my_ancestry:
+                my_ancestry.add(p['pid'])
+                changed = True
 
-        total_rss = sum(proc_map[pid]['rss'] for pid in all_tree_pids if pid in proc_map)
+    for p in procs:
+        cmd_lower = p['command'].lower()
+        if ("bin/claude" in cmd_lower or "bin/agy" in cmd_lower) and not "server.py" in cmd_lower:
+            session_id = ""
+            m_res = re.search(r'--resume\s+([a-f0-9\-]+)', p['command'])
+            if m_res:
+                session_id = m_res.group(1)
+            else:
+                m_conv = re.search(r'--conversation\s+([a-f0-9\-]+)', p['command'])
+                if m_conv:
+                    session_id = m_conv.group(1)
 
-        port = None
-        for pid in all_tree_pids:
-            cmd = proc_map[pid]['command']
-            m = re.search(r'(?:-p|--port)\s+(\d+)', cmd)
-            if m:
-                port = int(m.group(1))
-                break
-        if not port:
-            port = 3000
+            project_path = ""
+            m_dir = re.search(r'--add-dir\s+([^\s]+)', p['command'])
+            if m_dir:
+                project_path = m_dir.group(1)
 
-        project_path = ""
-        for pid in all_tree_pids:
-            cmd = proc_map[pid]['command']
-            m = re.search(r'(/Users/[^/]+/Apps/[^/\s]+|/Users/[^/]+/[^/\s]+)', cmd)
-            if m:
-                p_candidate = m.group(1)
-                if "node_modules" not in p_candidate and "Library" not in p_candidate and ".claude" not in p_candidate:
-                    project_path = p_candidate
-                    break
-            node_idx = cmd.find("node_modules")
-            if node_idx != -1:
-                parts = cmd[:node_idx].split()
-                if parts:
-                    project_path = parts[-1].rstrip("/")
-                    break
+            if project_path:
+                project_name = project_path.rstrip("/").split("/")[-1]
+            else:
+                project_name = "Unknown Project"
+                project_path = "Unknown Path"
 
-        if project_path:
-            project_name = project_path.rstrip("/").split("/")[-1]
-        else:
-            project_name = "Next.js App"
-            project_path = "Unknown Path"
+            is_orphaned = p['ppid'] == 1 or (p['ppid'] not in proc_map) or (p['ppid'] not in my_ancestry and proc_map[p['ppid']]['command'].lower() == "init")
+            killable = p['pid'] not in my_ancestry
 
-        results.append({
-            "pid": root_pid,
-            "port": port,
-            "project": project_name,
-            "path": project_path,
-            "memory_mb": round(total_rss / 1024.0, 1),
-            "command": root_proc['command'],
-            "all_pids": list(all_tree_pids)
-        })
+            label = f"resume-{session_id[:8]}" if session_id else f"claude-{p['pid']}"
+            claude_results.append({
+                "pid": p['pid'],
+                "ppid": p['ppid'],
+                "name": label,
+                "engine": "agy" if "bin/agy" in cmd_lower else "claude",
+                "cwd": project_path,
+                "repo_path": project_path,
+                "model": "",
+                "started": "",
+                "prewarm": False,
+                "expires_at_epoch": None,
+                "memory_mb": round(p['rss'] / 1024.0, 1),
+                "is_orphaned": is_orphaned,
+                "killable": killable,
+            })
 
     with _NEXT_SERVERS_LOCK:
-        _NEXT_SERVERS_CACHE = results
+        _NEXT_SERVERS_CACHE = next_results
+    with _CLAUDE_PROCESSES_LOCK:
+        _CLAUDE_PROCESSES_CACHE = claude_results
 
 
-def _next_servers_scanner_loop():
-    # Warm immediately on startup, then poll every 10s
-    _scan_next_servers()
+def _system_processes_scanner_loop():
+    _scan_system_processes()
     while True:
         try:
-            _scan_next_servers()
+            _scan_system_processes()
         except Exception:
             pass
         time.sleep(10.0)
@@ -29839,13 +29897,70 @@ def _system_services_next_servers():
         return list(_NEXT_SERVERS_CACHE)
 
 
+def _system_services_spawned_processes():
+    with _CLAUDE_PROCESSES_LOCK:
+        rows = list(_CLAUDE_PROCESSES_CACHE)
+    
+    seen_pids = set(r["pid"] for r in rows if r["pid"])
+    for entry in list_spawned_sessions():
+        if not entry.get("running") or entry.get("pid") in seen_pids:
+            continue
+        rows.append({
+            "pid": entry.get("pid"),
+            "name": entry.get("name") or "",
+            "engine": entry.get("engine") or "claude",
+            "cwd": entry.get("cwd") or "",
+            "repo_path": entry.get("repo_path") or "",
+            "model": entry.get("model") or "",
+            "started": entry.get("started") or entry.get("spawned_at") or "",
+            "prewarm": bool(entry.get("prewarm")),
+            "created_at_epoch": entry.get("created_at_epoch"),
+            "expires_at_epoch": entry.get("expires_at_epoch"),
+            "memory_mb": 0.0,
+            "is_orphaned": False,
+            "killable": True,
+        })
+    return rows
+
+
 def kill_next_server(pid):
     pids_to_kill = [pid]
+    in_next_cache = False
     with _NEXT_SERVERS_LOCK:
         for item in _NEXT_SERVERS_CACHE:
             if item["pid"] == pid:
                 pids_to_kill = item["all_pids"]
+                in_next_cache = True
                 break
+
+    if not in_next_cache:
+        try:
+            cmd = ["ps", "-A", "-o", "pid,ppid"]
+            res = subprocess.run(cmd, capture_output=True, text=True, check=True)
+            lines = res.stdout.strip().split('\n')
+            proc_map = {}
+            for line in lines[1:]:
+                parts = line.split()
+                if len(parts) >= 2:
+                    proc_map[int(parts[0])] = int(parts[1])
+
+            descendants = {pid}
+            for p in list(proc_map.keys()):
+                curr = p
+                visited = set()
+                while curr in proc_map:
+                    pp = proc_map[curr]
+                    if pp == pid:
+                        descendants.add(p)
+                        break
+                    if pp <= 1 or pp in visited:
+                        break
+                    visited.add(pp)
+                    curr = pp
+            pids_to_kill = list(descendants)
+        except Exception:
+            pids_to_kill = [pid]
+
     killed = []
     for p in pids_to_kill:
         try:
@@ -29853,7 +29968,7 @@ def kill_next_server(pid):
             killed.append(p)
         except Exception:
             pass
-    threading.Thread(target=_scan_next_servers, daemon=True).start()
+    threading.Thread(target=_scan_system_processes, daemon=True).start()
     return {"ok": True, "killed": killed}
 
 
@@ -29872,6 +29987,7 @@ def _build_system_services_uncached():
         "spawned_processes": _system_services_spawned_processes(),
         "next_servers": _system_services_next_servers(),
     }
+
 
 
 
@@ -72582,8 +72698,8 @@ def main():
     # whose JSONL has been quiet for >24h. Catches abandoned-but-not-archived
     # sessions and forgotten cron agents that the archive-time kill misses.
     threading.Thread(target=_idle_reaper_loop, daemon=True).start()
-    # Next.js detached background scanner
-    threading.Thread(target=_next_servers_scanner_loop, daemon=True, name="ccc-next-servers-scanner").start()
+    # Next.js and Claude/Agy detached background scanner
+    threading.Thread(target=_system_processes_scanner_loop, daemon=True, name="ccc-system-processes-scanner").start()
     # Chuck iMessage monitor: polls chat.db every 2 minutes, injects new
     # messages from +17035592946 into the CHUCK session via inject-input.
     threading.Thread(target=_chuck_imessage_poller, daemon=True).start()

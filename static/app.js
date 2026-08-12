@@ -56419,15 +56419,20 @@
         ? relDuration((now - startedDate.getTime()) / 1000, false) : '';
       const proj = (p.repo_path || p.cwd || '').split('/').filter(Boolean).pop() || '-';
       const label = String(p.name || (isPrewarm ? 'prewarm' : p.engine || 'claude'));
+      const killBtn = (p.killable !== false && p.pid)
+        ? '<button type="button" class="pkood-kill-btn" style="margin-left: 8px;" data-pid="' + escapeHtml(String(p.pid)) + '" onclick="sysKillNextServer(this)">STOP/KILL</button>'
+        : '';
+      const memText = (p.memory_mb && p.memory_mb > 0) ? ' · ' + escapeHtml(String(p.memory_mb)) + ' MB' : '';
       return (
         '<div class="sys-spawned-row' + (isPrewarm ? ' is-prewarm' : '') + (expiring ? ' is-expiring' : '') + '">'
         + '<span class="sys-spawned-dot" aria-hidden="true"></span>'
         + '<span class="sys-spawned-main">'
         + '<span class="sys-spawned-name">' + escapeHtml(label) + '</span>'
         + '<span class="sys-spawned-meta">' + escapeHtml(proj) + ' · pid ' + escapeHtml(String(p.pid || '?'))
-        + (startedText ? ' · ' + escapeHtml(startedText) : '') + '</span>'
+        + (startedText ? ' · ' + escapeHtml(startedText) : '') + memText + '</span>'
         + '</span>'
         + '<span class="sys-spawned-ttl">' + escapeHtml(ttlText) + '</span>'
+        + killBtn
         + '</div>'
       );
     }).join('');
