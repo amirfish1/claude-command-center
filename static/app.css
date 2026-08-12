@@ -10318,6 +10318,35 @@
   .sys-svc-result .sys-now-btn:focus-visible {
     border-color: var(--accent); color: var(--accent); outline: none; }
 
+  /* Spawned processes: a dynamic-length list, not a fixed service row, so
+     it gets its own light structure instead of reusing .sys-svc's LED/
+     online states (there's no "degraded" concept for a plain process
+     list — a row is either running, or it isn't in the list). */
+  .sys-spawned-list { display: flex; flex-direction: column; gap: 5px;
+    margin-top: 6px; max-height: 200px; overflow-y: auto; }
+  .sys-spawned-empty { padding: 8px 4px; font-size: 12px;
+    color: var(--text-muted); text-align: center; }
+  .sys-spawned-row { display: flex; align-items: center; gap: 8px;
+    padding: 6px 8px; border-radius: 7px; background: var(--surface-2);
+    font-size: 12px; }
+  .sys-spawned-dot { width: 7px; height: 7px; border-radius: 50%;
+    background: var(--green, #3fb950); flex: 0 0 auto; }
+  /* Orange = prewarm (bounded pool, will auto-kill); red = about to. */
+  .sys-spawned-row.is-prewarm .sys-spawned-dot { background: var(--orange); }
+  .sys-spawned-row.is-expiring .sys-spawned-dot { background: var(--red);
+    animation: sscBlink 1.1s ease-in-out infinite; }
+  .sys-spawned-main { flex: 1 1 auto; min-width: 0; display: flex;
+    flex-direction: column; gap: 1px; }
+  .sys-spawned-name { color: var(--text); font-weight: 600;
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .sys-spawned-meta { color: var(--text-muted); font-size: 11px;
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .sys-spawned-ttl { flex: 0 0 auto; font-size: 11px; font-weight: 600;
+    color: var(--text-muted); font-variant-numeric: tabular-nums;
+    white-space: nowrap; }
+  .sys-spawned-row.is-prewarm .sys-spawned-ttl { color: var(--orange); }
+  .sys-spawned-row.is-expiring .sys-spawned-ttl { color: var(--red); }
+
   .sys-keepalive-note { margin: 2px 0 0; font-size: 11px;
     color: var(--text-muted); line-height: 1.5; }
 
