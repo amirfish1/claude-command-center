@@ -2863,11 +2863,6 @@
   const F2_STALE_MINUTES = 60;         // claude: the cliff
   const F2_STALE_MINUTES_CODEX = 25;   // codex: where graded loss is material
   const F2_STALE_MINUTES_KIMI = 35;    // kimi: measured rise in cache-miss risk
-  // Below the cache/size gate, offer the same "continue in a new session"
-  // route on plain idle time alone — no token-size claim, no cache-decay
-  // claim, just "you haven't touched this in a while". Requested directly:
-  // the cache warning isn't the only reason to want a fresh session.
-  const F2_IDLE_ONLY_MINUTES = 60;
   const F2_ENGINE_CACHE = {
     claude: {
       staleMinutes: F2_STALE_MINUTES,
@@ -3001,17 +2996,18 @@
         return { tokens, ageMin, model, engine, cache, idleOnly: false, forced: false };
       }
     }
-    // Plain idle offer: same route, no cache/size claim attached, since
-    // neither may apply here.
-    if (ageMin >= F2_IDLE_ONLY_MINUTES) {
-      return { tokens, ageMin, model, engine: engine || 'claude', cache: null, idleOnly: true, forced: false };
-    }
+    // CCC-823 follow-up: plain idle time alone (no cache/size claim behind
+    // it) used to also trigger this automatically past F2_IDLE_ONLY_MINUTES.
+    // That fired on any session left open overnight regardless of how small
+    // it was, and read as nagging rather than a real cache-miss warning.
+    // idleOnly framing is kept for the manual "start fresh" trigger below
+    // (f2ManualGate) — only the automatic firing is removed here.
     return null;
   }
 
   // Manual trigger (CCC-744): the gate above only offers this route once a
-  // session is big+stale or plain idle past F2_IDLE_ONLY_MINUTES. Users asked
-  // for it on demand regardless — a not-live session they simply want to
+  // session is big+stale (CCC-823 dropped the plain-idle auto-trigger). Users
+  // asked for it on demand regardless — a not-live session they simply want to
   // hand off fresh, with no size or idle claim behind it. Reuses the same
   // panel/launch/spawn plumbing; only the copy differs (see gate.manual in
   // f2RenderComposer).
@@ -3256,12 +3252,6 @@
     } catch (_) {}
     return F2_LAUNCH_EFFORTS;
   }
-  function f2LaunchNote(launch) {
-    // Only claims a saving it can actually justify: the Claude ladder is the
-    // one place we know the relative rate. Silent everywhere else.
-    return (launch.engine === 'claude' && launch.model !== 'opus-4-8') ? '~5x cheaper than Opus' : '';
-  }
-
   // One alternative, one pill. Send stays the ordinary submit (full resume,
   // priced by the verdict line); the pill offers the cheap continuation. The
   // full description lives in the pill's tooltip.
@@ -3271,7 +3261,6 @@
       short: 'Continue new',
       name: 'Continue in a new session',
       desc: 'Carries your text and this session’s id. Tails the transcript for recent state, greps for anything older.',
-      cost: '~2k', costClass: 'slice',
       launches: true,
     },
   };
@@ -3336,7 +3325,6 @@
   // "sonnet-5" sitting in the box.
   function f2ConfigHtml(launch) {
     const engines = F2_LAUNCH_ENGINES.map(e => ({ id: e.id, label: e.label }));
-    const note = f2LaunchNote(launch);
     const efforts = f2EffortsForEngine(launch.engine);
     return '<div class="f2c-config">'
       + '<span>Launches on</span>'
@@ -3347,17 +3335,16 @@
           : '')
       // No Done button: the caret that opened the picker closes it, and every
       // change applies immediately, so there is nothing to confirm.
-      + (note ? '<span class="rate">' + escapeHtml(note) + '</span>' : '')
       + '</div>';
   }
 
-  // The offer renders as a card (headline / rationale / actions), not a bare
-  // pill: this is a decision with a cost on both sides, so it states what the
-  // user saves, what carries over, and gives the "stay here" option equal
-  // billing instead of making dismissal a guess.
-  function f2RoutesHtml(st, verdictText, headline) {
+  // CCC-823: back to a single inline pill in the toolbar row (CCC-740's
+  // original shape) instead of the full-width card that used to float above
+  // the input bar — "Continue new (model)" belongs next to Esc/TTS/mic/send,
+  // not as its own banner. The price/rationale text rides in the tooltip.
+  function f2RoutesHtml(st, verdictText) {
     const r = F2_ROUTES.continue;
-      const title = (verdictText ? verdictText + ' ' : '') + r.name + ': ' + r.desc;
+    const title = (verdictText ? verdictText + ' ' : '') + r.name + ': ' + r.desc;
     // Name all three parts of the spec the click will actually use. The engine
     // was missing (two engines can offer look-alike model labels), and the
     // effort clause is dropped rather than invented for engines without one.
@@ -3365,32 +3352,24 @@
     const chipTitle = 'Launches on ' + f2EngineLabel(st.launch) + ' ' + f2ModelLabel(st.launch)
       + (effortLabel ? ' at ' + effortLabel + ' effort' : '')
           + '. Click to change';
-    return '<div class="f2-card" data-f2-route="continue">'
-      + '<div class="f2-card-head">'
-        + '<div class="f2-card-title">' + escapeHtml(headline || r.name) + '</div>'
-        + '<div class="f2-card-sub">Your repo and files stay put. The new session '
-          + 'carries a summary of this one and pulls the rest from the transcript on demand.</div>'
-      + '</div>'
-      + '<div class="f2-card-actions">'
-        + '<button type="button" class="f2-card-primary" data-f2-act="continue"'
-          + ' title="' + escapeAttr(title) + '">'
-          + '<span class="route-glyph" aria-hidden="true">' + r.glyph + '</span>'
-          + '<span class="route-name">' + escapeHtml(r.short) + '</span>'
-          + '<span class="cost-badge ' + r.costClass + '">' + escapeHtml(r.cost) + '</span>'
-        + '</button>'
-        + '<button type="button" class="f2-card-ghost" data-f2-act="dismiss"'
-          + ' title="Keep working in this session and hide this suggestion">Continue here</button>'
-        + '<button type="button" class="f2c-chip" data-f2-chip'
-          + ' aria-expanded="' + (st.configOpen ? 'true' : 'false') + '"'
-          + ' aria-label="Change engine, model, or effort"'
-          + ' title="' + escapeAttr(chipTitle) + '">'
-          + '<span class="f2c-chip-label">' + escapeHtml(f2ModelLabel(st.launch)) + '</span>'
-          + '<span class="f2c-chip-caret" aria-hidden="true">▾</span>'
-        + '</button>'
-      + '</div>'
-      // The picker belongs to the card, not the toolbar: the card is
-      // absolutely positioned above the input bar, so a sibling panel would
-      // detach and render down among the send buttons.
+    return '<div class="route is-recommended" data-f2-route="continue">'
+      // .route is a div, .route-main the button: the ▾ caret is a real
+      // control and a button may not nest inside a button.
+      + '<button type="button" class="route-main" data-f2-act="continue"'
+        + ' title="' + escapeAttr(title) + '">'
+        + '<span class="route-glyph" aria-hidden="true">' + r.glyph + '</span>'
+        + '<span class="route-name">' + escapeHtml(r.short) + '</span>'
+      + '</button>'
+      + '<button type="button" class="f2c-chip" data-f2-chip'
+        + ' aria-expanded="' + (st.configOpen ? 'true' : 'false') + '"'
+        + ' aria-label="Change engine, model, or effort"'
+        + ' title="' + escapeAttr(chipTitle) + '">'
+        + '<span class="f2c-chip-label">' + escapeHtml(f2ModelLabel(st.launch)) + '</span>'
+        + '<span class="f2c-chip-caret" aria-hidden="true">▾</span>'
+      + '</button>'
+      // Nested inside .route (not a sibling in .routes) so it can anchor via
+      // CSS to the pill it belongs to and drop directly below it instead of
+      // floating wherever the toolbar row's flex flow happens to place it.
       + (st.configOpen ? f2ConfigHtml(st.launch) : '')
       + '</div>';
   }
@@ -3485,13 +3464,7 @@
       : (gate.idleOnly
         ? 'Idle ' + ageLabel + '. Start fresh with just the context you need.'
         : 'Resuming here reloads ~' + tokensLabel + ' tokens on ' + modelLabel + '.');
-    // Lead with what the move buys. A token count is the one number that
-    // makes the offer concrete; when there is no size claim behind it (manual
-    // or plain-idle), say so instead of inventing a saving.
-    const headline = (gate.manual || gate.idleOnly)
-      ? 'Start a new session with only the context you need'
-      : 'Start a new session to save ' + tokensLabel + ' tokens of context';
-    panel.innerHTML = '<div class="routes">' + f2RoutesHtml(st, verdictText, headline) + '</div>';
+    panel.innerHTML = '<div class="routes">' + f2RoutesHtml(st, verdictText) + '</div>';
   }
 
   // ── route action ───────────────────────────────────────────────────────

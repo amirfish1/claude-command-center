@@ -23382,6 +23382,7 @@ a.settings-row:focus-visible .settings-launcher-btn { text-decoration: underline
 
 .f2c-panel .routes { flex: 0 0 auto; display: flex; }
 .f2c-panel .route {
+  position: relative;
   display: flex; align-items: stretch; height: 32px;
   background: var(--surface-2); border: 1px solid var(--border);
   border-radius: 8px;
@@ -23439,10 +23440,13 @@ a.settings-row:focus-visible .settings-launcher-btn { text-decoration: underline
 
 /* The follow-up dialog: engine + model + effort stated as a sentence rather
    than a form. Never a required decision — the caret's tooltip already says
-   what the route will launch on. */
+   what the route will launch on. Anchored to .route (its parent, position:
+   relative) so it drops directly below the pill regardless of where the
+   toolbar's flex flow happens to place the pill itself. */
 .f2c-panel .f2c-config {
-  flex-basis: 100%;
+  position: absolute; top: calc(100% + 6px); left: 0; z-index: 30;
   display: flex; align-items: center; gap: 6px; flex-wrap: wrap;
+  width: max-content; max-width: 320px;
   margin: 0; padding: 8px 10px;
   background: var(--surface); border: 1px solid var(--border); border-radius: 6px;
   box-shadow: 0 4px 12px rgba(0,0,0,0.25);
@@ -23455,7 +23459,6 @@ a.settings-row:focus-visible .settings-launcher-btn { text-decoration: underline
 }
 .f2c-panel .f2c-config .f2c-select:hover { border-color: var(--accent); }
 .f2c-panel .f2c-config .f2c-select:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
-.f2c-panel .f2c-config .rate { color: #3fb950; font-weight: 600; }
 
 /* ── Continue-in-new-session card ──────────────────────────────────────
    The inline pill was a control; this is a proposal, so it needs room for a
