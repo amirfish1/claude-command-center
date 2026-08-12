@@ -1134,7 +1134,8 @@ def _wt_queue_brief_prompt(queue, items):
         "3. Give short, concrete next steps.\n\n"
         "Output ONLY a single JSON object -- no prose, no code fences -- "
         "matching exactly this shape:\n"
-        '{"headline": "<=120 chars", "summary": "2-4 sentences", '
+        '{"headline": "ONE short sentence, under 100 chars, stating only the '
+        'single most important finding", "summary": "2-4 sentences", '
         '"clusters": [{"title": "...", "refs": ["..."], "note": "..."}], '
         '"decisions": [{"refs": ["..."], "text": "..."}], '
         '"next_steps": ["..."]}\n'
@@ -1206,8 +1207,13 @@ def _wt_queue_brief_parse(raw):
                 "text": _s(d.get("text")),
             })
     next_steps = [str(s) for s in _l(obj.get("next_steps"))]
+    # Models overshoot the headline budget despite instructions; a hard slice
+    # at 120 cut mid-word ("...Becky memor"). Break at a word boundary instead.
+    headline = _s(obj.get("headline"))
+    if len(headline) > 120:
+        headline = headline[:120].rsplit(" ", 1)[0].rstrip(",;:-") + "…"
     return {
-        "headline": _s(obj.get("headline"))[:120],
+        "headline": headline,
         "summary": _s(obj.get("summary")),
         "clusters": clusters,
         "decisions": decisions,
