@@ -1416,6 +1416,15 @@
       </div>
       <p class="sys-live-region" id="sysLiveRegion" role="status" aria-live="polite" aria-atomic="true"></p>
 
+      <!-- Tabs navigation -->
+      <div class="sys-tabs">
+        <button type="button" class="sys-tab active" id="sysTabBtnStatus">Status</button>
+        <button type="button" class="sys-tab" id="sysTabBtnHealth">Health</button>
+      </div>
+
+      <!-- Tab Content: Status -->
+      <div id="sysTabContentStatus">
+
       <div class="sys-restart" id="sysRestartRow" style="margin-bottom: 16px; border-bottom: 1px solid var(--border); padding-bottom: 12px; display: flex; align-items: center; gap: 8px;">
         <button type="button" class="upd-btn upd-primary sys-restart-btn" id="sysRestartAllBtn" style="margin: 0;">Restart all</button>
         <div class="sys-restart-status" id="sysRestartStatus" hidden style="font-size: 11px; font-weight: 600; color: var(--text-muted);"></div>
@@ -1542,8 +1551,16 @@
       <p class="sys-keepalive-note">All three run under launchd KeepAlive, so they come back on their own after a crash or a reboot.</p>
 
       <span id="sysWedgedThreshold" hidden></span>
+      </div>
 
-      <div class="upd-actions">
+      <!-- Tab Content: Health -->
+      <div id="sysTabContentHealth" style="display: none;">
+        <div class="sh-body" id="sysHealthBody" style="padding: 0; display: flex; flex-direction: column; gap: 16px;">
+          <div style="opacity:.6">Loading…</div>
+        </div>
+      </div>
+
+      <div class="upd-actions" style="margin-top: 16px;">
         <button type="button" class="upd-btn upd-primary" id="sysCloseBtn">Close</button>
       </div>
     </div>

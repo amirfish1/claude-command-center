@@ -442,36 +442,13 @@
         '.sh-btn-danger:hover{background:rgba(248,81,73,.14);}';
       document.head.appendChild(st);
     }
-    let ov = document.getElementById('sysHealthOverlay');
-    if (ov) return ov;
-    ov = document.createElement('div');
-    ov.id = 'sysHealthOverlay';
-    ov.innerHTML =
-      '<div id="sysHealthBackdrop"></div>' +
-      '<div id="sysHealthPanel" role="dialog" aria-modal="true" aria-label="System Health">' +
-        '<div class="sh-head"><h2>System Health</h2>' +
-        '<button class="sh-close" aria-label="Close">&times;</button></div>' +
-        '<div class="sh-body" id="sysHealthBody"><div style="opacity:.6">Loading…</div></div>' +
-      '</div>';
-    document.body.appendChild(ov);
-    ov.querySelector('#sysHealthBackdrop').addEventListener('click', _closeSystemHealth);
-    ov.querySelector('.sh-close').addEventListener('click', _closeSystemHealth);
-    document.addEventListener('keydown', function (e) {
-      if (e.key === 'Escape' && ov.classList.contains('open')) _closeSystemHealth();
-    });
-    return ov;
   }
   function _openSystemHealth() {
-    const ov = _ensureSysHealthModal();
-    ov.classList.add('open');
-    _pollSystemHealth();
-    if (_sysHealthTimer) clearInterval(_sysHealthTimer);
-    _sysHealthTimer = setInterval(_pollSystemHealth, 4000);
+    _ensureSysHealthModal();
+    sysOpenModal(document.getElementById('cccSystemPill'), 'health');
   }
   function _closeSystemHealth() {
-    const ov = document.getElementById('sysHealthOverlay');
-    if (ov) ov.classList.remove('open');
-    if (_sysHealthTimer) { clearInterval(_sysHealthTimer); _sysHealthTimer = null; }
+    sysCloseModal();
   }
   let _sysHealthPollPromise = null;
   function _pollSystemHealth() {
@@ -56558,7 +56535,32 @@
     }
   }
 
-  function sysOpenModal(opener) {
+  function sysSelectTab(tabName) {
+    const $btnStatus = document.getElementById('sysTabBtnStatus');
+    const $btnHealth = document.getElementById('sysTabBtnHealth');
+    const $contentStatus = document.getElementById('sysTabContentStatus');
+    const $contentHealth = document.getElementById('sysTabContentHealth');
+    
+    if (tabName === 'health') {
+      if ($btnStatus) $btnStatus.classList.remove('active');
+      if ($btnHealth) $btnHealth.classList.add('active');
+      if ($contentStatus) $contentStatus.style.display = 'none';
+      if ($contentHealth) $contentHealth.style.display = 'block';
+      
+      _pollSystemHealth();
+      if (_sysHealthTimer) clearInterval(_sysHealthTimer);
+      _sysHealthTimer = setInterval(_pollSystemHealth, 4000);
+    } else {
+      if ($btnStatus) $btnStatus.classList.add('active');
+      if ($btnHealth) $btnHealth.classList.remove('active');
+      if ($contentStatus) $contentStatus.style.display = 'block';
+      if ($contentHealth) $contentHealth.style.display = 'none';
+      
+      if (_sysHealthTimer) { clearInterval(_sysHealthTimer); _sysHealthTimer = null; }
+    }
+  }
+
+  function sysOpenModal(opener, defaultTab) {
     if (!$sysModal) return;
     // Remember the opener explicitly rather than trusting activeElement: a
     // click on a <button> focuses it in a real browser but not when the click
@@ -56569,6 +56571,9 @@
     $sysModal.classList.add('open');
     if ($sysChip) $sysChip.setAttribute('aria-expanded', 'true');
     _sysLastRollupLevel = '';
+    
+    sysSelectTab(defaultTab || 'status');
+
     sysRefresh(true);
     // The worker pill inside the worker row is painted by the control-plane
     // poller, which ticks every 20s. Re-read on open so it is never stale.
@@ -56596,6 +56601,7 @@
     if ($sysChip) $sysChip.setAttribute('aria-expanded', 'false');
     if (_sysPollTimer) { clearInterval(_sysPollTimer); _sysPollTimer = null; }
     if (_sysSpawnedTickTimer) { clearInterval(_sysSpawnedTickTimer); _sysSpawnedTickTimer = null; }
+    if (_sysHealthTimer) { clearInterval(_sysHealthTimer); _sysHealthTimer = null; }
     document.removeEventListener('keydown', _sysTrapTab, true);
     const back = (_sysReturnFocus && document.contains(_sysReturnFocus)
       && _sysReturnFocus.offsetParent !== null) ? _sysReturnFocus : $sysChip;
@@ -56619,6 +56625,10 @@
   const $sysCloseBtn = document.getElementById('sysCloseBtn');
   if ($sysCloseBtn) $sysCloseBtn.addEventListener('click', sysRequestClose);
   if ($sysBackdrop) $sysBackdrop.addEventListener('click', sysRequestClose);
+  const $tabBtnStatus = document.getElementById('sysTabBtnStatus');
+  const $tabBtnHealth = document.getElementById('sysTabBtnHealth');
+  if ($tabBtnStatus) $tabBtnStatus.addEventListener('click', () => sysSelectTab('status'));
+  if ($tabBtnHealth) $tabBtnHealth.addEventListener('click', () => sysSelectTab('health'));
   document.addEventListener('keydown', (e) => {
     if (e.key === 'Escape' && $sysModal && $sysModal.classList.contains('open')) {
       if (_sysRestartInFlight) {

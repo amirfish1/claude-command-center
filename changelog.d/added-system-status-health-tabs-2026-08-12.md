@@ -1,0 +1,2 @@
+- Integrated the System Status and System Health views into a single unified System status dialog with tabbed navigation ("Status" and "Health").
+- Clicking the footer "system" pill now opens the modal directly to the "Health" tab.

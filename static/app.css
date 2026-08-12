@@ -10293,6 +10293,17 @@
      line, an explainer and a Restart button, and the WatchTower row inlines
      the queue list. The old width wrapped every head row. */
   .sys-dialog { width: min(680px, 94vw); max-height: 84vh; overflow-y: auto; }
+  .sys-tabs { display: flex; align-items: center; gap: 6px; border-bottom: 1px solid var(--border); padding-bottom: 8px; margin-bottom: 16px; }
+  .sys-tab {
+    padding: 6px 14px; border-radius: 8px; font-size: 13px;
+    border: 1px solid transparent; background: transparent;
+    color: var(--text-muted); cursor: pointer; font-family: inherit; font-weight: 600;
+  }
+  .sys-tab:hover { color: var(--text); }
+  .sys-tab.active {
+    background: var(--surface-2); color: var(--text);
+    border-color: var(--border);
+  }
   .sys-section { border: 1px solid var(--border); border-radius: 8px;
     padding: 10px 12px; background: var(--bg); }
   .sys-name { font-size: 13px; font-weight: 600; color: var(--text);
