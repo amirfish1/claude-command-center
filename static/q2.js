@@ -1472,7 +1472,11 @@
     closed.sort(function (a, b) { return touchedAt(b) - touchedAt(a); });
     var recentClosedCutoff = Date.now() - RECENT_CLOSED_WINDOW_MS;
     function isRecentClosed(it) { return touchedAt(it) >= recentClosedCutoff; }
-    var recentClosed = closed.filter(isRecentClosed);
+    // A closed-unresolved follow-up is a signal someone still needs to act on,
+    // so it stays visible under "Hide closed" even once it ages out of the
+    // 12h recent window - the 12h cutoff is about noise reduction, not about
+    // hiding open follow-up work.
+    var recentClosed = closed.filter(function (it) { return isRecentClosed(it) || unresolvedNotes(it).length > 0; });
 
     // Same counts renderer as the queue rows. Derived from the rows actually on
     // screen (so it honours the search filter) but split by the same statuses,
