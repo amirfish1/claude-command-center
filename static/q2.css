@@ -613,18 +613,26 @@ body.q2-resizing-v .q2-col { pointer-events: none; }
    ticket list (the thing you actually act on) off screen. */
 .q2-brief {
   flex: 0 0 auto;
-  max-height: 40%;
+  /* Height is user-adjustable via the handle below the band (sets the var
+     in px); the 40% default returns on double-click reset. */
+  max-height: var(--q2-brief-h, 40%);
   display: flex;
   flex-direction: column;
   min-height: 0;
   border-bottom: 1px solid var(--border);
-  background: var(--surface);
+  /* A faint wash of the in-progress blue: analysis reads as its own layer,
+     distinct from the mechanical chrome above and the ticket list below. */
+  background: linear-gradient(180deg, rgba(88, 166, 255, 0.07), rgba(88, 166, 255, 0.02)), var(--surface);
+}
+:root[data-theme="light"] .q2-brief {
+  background: linear-gradient(180deg, rgba(9, 105, 218, 0.06), rgba(9, 105, 218, 0.015)), var(--surface);
 }
 .q2-brief-generating {
   padding: 7px 10px;
-  font-size: 11.5px;
+  font-size: 12.5px;
   color: var(--text-muted);
 }
+.q2-brief-elapsed { font-family: var(--font-mono); color: var(--text); }
 .q2-brief-head {
   flex: 0 0 auto;
   display: flex;
@@ -669,22 +677,22 @@ body.q2-resizing-v .q2-col { pointer-events: none; }
   flex: 1 1 auto;
   min-height: 0;
   overflow-y: auto;
-  padding: 0 10px 10px;
-  font-size: 12.5px;
-  line-height: 1.5;
+  padding: 0 12px 12px;
+  font-size: 14px;
+  line-height: 1.55;
 }
 .q2-brief-error {
   color: var(--text-muted);
   opacity: 0.85;
-  font-size: 11.5px;
+  font-size: 12.5px;
   margin-bottom: 6px;
 }
 .q2-brief-error a { color: var(--accent); }
 .q2-brief-headline {
-  font-size: 13.5px;
+  font-size: 15.5px;
   font-weight: 650;
   color: var(--text);
-  margin-bottom: 5px;
+  margin-bottom: 6px;
 }
 .q2-brief-summary { color: var(--text-muted); margin-bottom: 8px; }
 .q2-brief-cluster { color: var(--text-muted); margin-bottom: 8px; }
@@ -704,7 +712,7 @@ body.q2-resizing-v .q2-col { pointer-events: none; }
 .q2-brief-ref {
   display: inline-block;
   font-family: var(--font-mono);
-  font-size: 10.5px;
+  font-size: 11.5px;
   color: var(--accent);
   border: 1px solid var(--border);
   border-radius: 4px;
@@ -726,6 +734,67 @@ body.q2-resizing-v .q2-col { pointer-events: none; }
   color: var(--text-muted);
 }
 .q2-brief-steps li { margin-bottom: 3px; }
+
+/* ── queue mechanics collapse ─────────────────────────────────────────────
+   The full backlog→watcher→worker→closed diagram folds down to one line:
+   a live dot plus the in-progress refs. The board's owner mostly wants the
+   analysis; the mechanics stay one click away. */
+.q2-diagram { position: relative; }
+.q2-dg-fold {
+  position: absolute;
+  top: 6px;
+  right: 8px;
+  font: inherit;
+  font-size: 10px;
+  color: var(--text-muted);
+  background: transparent;
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  padding: 2px 6px;
+  cursor: pointer;
+  z-index: 2;
+}
+.q2-dg-fold:hover { color: var(--text); }
+.q2-diagram-mini {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 7px 12px;
+  cursor: pointer;
+  font-size: 12px;
+  color: var(--text-muted);
+  min-width: 0;
+}
+.q2-diagram-mini:hover { color: var(--text); }
+.q2-diagram-mini .q2-mini-refs {
+  font-family: var(--font-mono);
+  color: var(--text);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.q2-mini-dot {
+  flex: none;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--green);
+  box-shadow: 0 0 7px var(--green);
+  animation: q2MiniPulse 2.4s ease-in-out infinite;
+}
+.q2-mini-dot.is-idle {
+  background: var(--text-muted);
+  box-shadow: none;
+  animation: none;
+  opacity: 0.6;
+}
+@keyframes q2MiniPulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.45; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .q2-mini-dot { animation: none; }
+}
 
 /* ── reconciler log (bottom band) ─────────────────────────────────────── */
 .q2-logbar {

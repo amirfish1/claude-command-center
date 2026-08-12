@@ -78,6 +78,32 @@
   // When the brief was last fetched for the on-screen queue -- drives the
   // once-a-minute staleness re-read in refresh(), NOT the 3s generating poll.
   var briefLoadedAt = 0;
+  // Live "Analyzing… 42s" timer: anchored to the server's elapsed seconds,
+  // ticked client-side every second so the owner can see it isn't stuck.
+  var briefGenAnchor = 0;
+  var briefTickTimer = null;
+
+  function fmtElapsed(ms) {
+    var s = Math.max(0, Math.round(ms / 1000));
+    return s < 60 ? (s + 's') : (Math.floor(s / 60) + 'm ' + (s % 60) + 's');
+  }
+
+  // The ticker writes ONLY the elapsed span's text. It must not go through
+  // renderBrief: the band's html string is deliberately kept constant while
+  // generating so the repaint-skip cache preserves scroll and selection.
+  function briefTick() {
+    var el = document.querySelector('.q2-brief-elapsed');
+    if (el) el.textContent = fmtElapsed(Date.now() - briefGenAnchor);
+  }
+  function syncBriefTicker() {
+    if (state.briefGenerating && !briefTickTimer) {
+      briefTickTimer = window.setInterval(briefTick, 1000);
+    } else if (!state.briefGenerating && briefTickTimer) {
+      window.clearInterval(briefTickTimer);
+      briefTickTimer = null;
+    }
+    if (state.briefGenerating) briefTick();
+  }
   var briefPollQueue = '';
 
   function markNewTicket(ref) {
@@ -745,7 +771,12 @@
     state.briefStaleCount = (data && data.stale_count) || 0;
     state.briefTicketCount = (data && data.ticket_count) || 0;
     state.briefGenerating = !!(data && data.generating);
-    state.briefError = (data && data.error) || '';
+    state.briefError = (data && data.error) ? ('Analysis failed: ' + data.error) : '';
+    if (state.briefGenerating) {
+      // Anchor the live elapsed timer to the server's clock, so a page
+      // opened mid-generation still shows the true "working for 40s".
+      briefGenAnchor = Date.now() - ((data && data.generating_for_s) || 0) * 1000;
+    }
     renderBrief();
 
     if (state.briefGenerating) { startBriefPoll(queue); return; }
@@ -798,6 +829,7 @@
       if (data && data.started && projectKey(state.queue) === projectKey(queue)) {
         state.briefGenerating = true;
         state.briefError = '';
+        briefGenAnchor = Date.now();
         renderBrief();
         startBriefPoll(queue);
       }
@@ -1245,6 +1277,23 @@
       + '</div>';
   }
 
+  // Mechanics-view fold: one global preference, not per queue -- if the
+  // pipeline chrome is in the way, it's in the way on every queue.
+  function diagramCollapsed() {
+    try { return localStorage.getItem('q2.diagram.collapsed') === '1'; } catch (_) { return false; }
+  }
+  function setDiagramCollapsed(on) {
+    try { localStorage.setItem('q2.diagram.collapsed', on ? '1' : '0'); } catch (_) {}
+    var host = $('q2Diagram');
+    if (host) host.removeAttribute('data-sig');  // bust the render cache
+    renderDiagram();
+  }
+
+  function miniRef(ref) {
+    var m = String(ref || '').match(/(\d+)$/);
+    return m ? '#' + m[1] : String(ref || '');
+  }
+
   function renderDiagram() {
     var host = $('q2Diagram');
     if (!host) return;
@@ -1252,9 +1301,25 @@
     if (!state.queue) { host.innerHTML = ''; return; }
 
     var m = flowModel();
-    var sig = flowSignature(m);
+    var collapsed = diagramCollapsed();
+    var sig = (collapsed ? 'mini|' : 'full|') + flowSignature(m);
     if (host.getAttribute('data-sig') === sig) return;
     host.setAttribute('data-sig', sig);
+
+    if (collapsed) {
+      // The SUPER-short strip: live dot + which refs are being worked right
+      // now. Click anywhere on it to unfold the full pipeline.
+      var live = m.working.length > 0;
+      var label = live
+        ? 'In progress: ' + m.working.map(function (it) { return miniRef(it.ref); }).join(', ')
+        : 'Idle' + (m.blocked.length ? ' · ' + m.blocked.length + ' need input' : '');
+      host.innerHTML = '<div class="q2-diagram-mini" data-q2-dg-expand'
+        + ' title="Expand queue mechanics" role="button" tabindex="0">'
+        + '<span class="q2-mini-dot' + (live ? '' : ' is-idle') + '" aria-hidden="true"></span>'
+        + '<span class="q2-mini-refs">' + esc(label) + '</span>'
+        + '</div>';
+      return;
+    }
 
     // Flow is only animated where work can actually move. A manual queue draws
     // the same pipeline with the links dead, which is the honest picture.
@@ -1341,7 +1406,9 @@
       + '<div class="q2-dg-sub" title="Closed in this queue, all time">'
       + (m.q.closed || 0) + ' total</div>'
       + '</div>'
-      + '</div>';
+      + '</div>'
+      + '<button type="button" class="q2-dg-fold" data-q2-dg-fold'
+      + ' title="Collapse queue mechanics to one line">&#9650;</button>';
   }
 
   // ── render: status brief ─────────────────────────────────────────────────
@@ -1434,14 +1501,21 @@
     if (state.viewAll || !state.queue
         || (!hasBrief && !generating && !state.briefError && ticketCount === 0)) {
       setBriefHtml(host, '');
+      setBriefHandleHidden(true);
+      syncBriefTicker();
       return;
     }
 
     // Generating with nothing cached yet: the one quiet line the design doc
-    // asks for, no header chrome (there is nothing yet to collapse).
+    // asks for, no header chrome (there is nothing yet to collapse). The
+    // elapsed span is left empty here and filled by the 1s ticker, so this
+    // html string stays constant across polls (repaint-skip keeps working).
     if (generating && !hasBrief) {
       setBriefHtml(host, '<div class="q2-brief-generating">Analyzing ' + ticketCount
-        + ' ticket' + (ticketCount === 1 ? '' : 's') + '&hellip;</div>');
+        + ' ticket' + (ticketCount === 1 ? '' : 's') + '&hellip; '
+        + '<span class="q2-brief-elapsed"></span></div>');
+      setBriefHandleHidden(true);
+      syncBriefTicker();
       return;
     }
 
@@ -1450,7 +1524,8 @@
     if (generating) {
       // A refresh landed while a good brief was already on screen (e.g. the
       // stale_count>=3 auto-trigger); keep showing that brief below.
-      freshBits.push('<span class="q2-brief-fresh">Analyzing&hellip;</span>');
+      freshBits.push('<span class="q2-brief-fresh">Analyzing&hellip; '
+        + '<span class="q2-brief-elapsed"></span></span>');
     } else if (state.briefGeneratedAt) {
       freshBits.push('<span class="q2-brief-fresh">Last updated ' + esc(relTime(state.briefGeneratedAt)) + '</span>');
       if (state.briefStaleCount > 0) {
@@ -1477,6 +1552,14 @@
               : '')
           + briefContentHtml(state.brief)
           + '</div>'));
+    // The drag handle only earns its pixels when there is a body to resize.
+    setBriefHandleHidden(collapsed);
+    syncBriefTicker();
+  }
+
+  function setBriefHandleHidden(hidden) {
+    var handle = document.querySelector('[data-q2-resize-v="brief"]');
+    if (handle) handle.hidden = hidden;
   }
 
   // ALL is a triage view, not a synthetic queue. Its summary therefore shows
@@ -2980,6 +3063,10 @@
     if (qBtn) { selectQueue(qBtn.getAttribute('data-q2-queue')); return; }
     var tBtn = e.target.closest('[data-q2-ref]');
     if (tBtn) { selectTicket(tBtn.getAttribute('data-q2-ref')); return; }
+    var dgFold = e.target.closest('[data-q2-dg-fold]');
+    if (dgFold) { e.stopPropagation(); setDiagramCollapsed(true); return; }
+    var dgExpand = e.target.closest('[data-q2-dg-expand]');
+    if (dgExpand) { e.stopPropagation(); setDiagramCollapsed(false); return; }
     var briefToggle = e.target.closest('[data-q2-brief-toggle]');
     if (briefToggle) {
       e.stopPropagation();
@@ -3298,6 +3385,78 @@
         document.documentElement.style.removeProperty('--q2-logbar-h');
         try { localStorage.removeItem(LOGBAR_KEY); } catch (_) {}
       }
+    });
+  }
+
+  // ── status-brief height handle ───────────────────────────────────────────
+  // Same idiom as the logbar handle above, with the drag direction inverted:
+  // this handle sits BELOW the band it resizes, so dragging DOWN grows it.
+  var BRIEF_HMIN = 90;
+  var BRIEF_HKEY = 'q2.brief.height';
+
+  function briefHeightMax() {
+    var host = $('q2Brief');
+    var avail = (host && host.parentElement) ? host.parentElement.clientHeight : window.innerHeight;
+    return Math.max(BRIEF_HMIN, Math.round(avail * 0.75));
+  }
+
+  function setBriefHeight(px, persist) {
+    var h = Math.round(Math.max(BRIEF_HMIN, Math.min(briefHeightMax(), px)));
+    document.documentElement.style.setProperty('--q2-brief-h', h + 'px');
+    if (persist) {
+      try { localStorage.setItem(BRIEF_HKEY, String(h)); } catch (_) {}
+    }
+    return h;
+  }
+
+  function resetBriefHeight() {
+    document.documentElement.style.removeProperty('--q2-brief-h');
+    try { localStorage.removeItem(BRIEF_HKEY); } catch (_) {}
+  }
+
+  (function initBriefHeight() {
+    var saved = null;
+    try { saved = localStorage.getItem(BRIEF_HKEY); } catch (_) {}
+    var n = parseFloat(saved);
+    if (!isNaN(n)) setBriefHeight(n, false);
+  })();
+
+  var briefHandle = document.querySelector('[data-q2-resize-v="brief"]');
+  if (briefHandle) {
+    briefHandle.addEventListener('pointerdown', function (e) {
+      if (e.button !== 0) return;
+      e.preventDefault();
+      var startY = e.clientY;
+      var host = $('q2Brief');
+      var startH = host ? host.getBoundingClientRect().height : BRIEF_HMIN;
+      briefHandle.setPointerCapture(e.pointerId);
+      briefHandle.classList.add('is-dragging');
+      document.body.classList.add('q2-resizing-v');
+
+      function onMove(ev) { setBriefHeight(startH + (ev.clientY - startY), false); }
+      function onUp() {
+        briefHandle.removeEventListener('pointermove', onMove);
+        briefHandle.removeEventListener('pointerup', onUp);
+        briefHandle.removeEventListener('pointercancel', onUp);
+        briefHandle.classList.remove('is-dragging');
+        document.body.classList.remove('q2-resizing-v');
+        var host2 = $('q2Brief');
+        if (host2) setBriefHeight(host2.getBoundingClientRect().height, true);
+      }
+      briefHandle.addEventListener('pointermove', onMove);
+      briefHandle.addEventListener('pointerup', onUp);
+      briefHandle.addEventListener('pointercancel', onUp);
+    });
+
+    briefHandle.addEventListener('dblclick', resetBriefHeight);
+
+    briefHandle.addEventListener('keydown', function (e) {
+      var step = e.shiftKey ? 60 : 20;
+      var host = $('q2Brief');
+      var cur = host ? host.getBoundingClientRect().height : BRIEF_HMIN;
+      if (e.key === 'ArrowDown') { e.preventDefault(); setBriefHeight(cur + step, true); }
+      else if (e.key === 'ArrowUp') { e.preventDefault(); setBriefHeight(cur - step, true); }
+      else if (e.key === 'Home') { e.preventDefault(); resetBriefHeight(); }
     });
   }
 

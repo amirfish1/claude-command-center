@@ -1139,6 +1139,8 @@ def _wt_queue_brief_prompt(queue, items):
         '"clusters": [{"title": "...", "refs": ["..."], "note": "..."}], '
         '"decisions": [{"refs": ["..."], "text": "..."}], '
         '"next_steps": ["..."]}\n'
+        "The output must be strictly valid JSON (parseable by json.loads): "
+        "escape any double quotes inside string values, no trailing commas.\n"
     )
     # Oldest first so truncation (below) drops the least-fresh tickets.
     ordered = sorted(items, key=lambda it: str(it.get("created_at") or it.get("updated_at") or ""))
@@ -1241,14 +1243,24 @@ def _wt_queue_brief_generate(queue):
         claude_bin = _resolve_claude_bin()
         if not claude_bin.get("available"):
             raise RuntimeError(claude_bin.get("reason") or "Claude Code CLI not found")
-        proc = subprocess.run(
-            [claude_bin["bin"], "-p", "--model", _QUEUE_BRIEF_MODEL, prompt],
-            capture_output=True, text=True, timeout=180,
-            cwd=str(_SCRATCH_DIR),  # keep throwaway JSONLs out of repo scans
-        )
-        if proc.returncode != 0:
-            raise RuntimeError((proc.stderr or "").strip()[:300] or f"claude exited {proc.returncode}")
-        brief = _wt_queue_brief_parse(proc.stdout)
+        # One retry, on malformed-JSON only: the model occasionally emits an
+        # unescaped quote ("Expecting ',' delimiter" seen live on the first
+        # day), and a fresh sample usually parses. Other failures (CLI gone,
+        # timeout, non-zero exit) are environmental and retry wouldn't help.
+        for attempt in (1, 2):
+            proc = subprocess.run(
+                [claude_bin["bin"], "-p", "--model", _QUEUE_BRIEF_MODEL, prompt],
+                capture_output=True, text=True, timeout=180,
+                cwd=str(_SCRATCH_DIR),  # keep throwaway JSONLs out of repo scans
+            )
+            if proc.returncode != 0:
+                raise RuntimeError((proc.stderr or "").strip()[:300] or f"claude exited {proc.returncode}")
+            try:
+                brief = _wt_queue_brief_parse(proc.stdout)
+                break
+            except ValueError:
+                if attempt == 2:
+                    raise
     except Exception as e:
         error = str(e)[:500]
     duration_s = round(time.time() - started, 1)
@@ -1326,12 +1338,15 @@ def _wt_queue_brief_status(queue):
         if cache.get("brief") else 0
     )
     with _QUEUE_BRIEF_LOCK:
-        generating = queue in _QUEUE_BRIEF_GENERATING
+        started = _QUEUE_BRIEF_GENERATING.get(queue)
+    generating = started is not None
     return {
         "ok": True,
         "queue": queue,
         "exists": bool(cache.get("brief")),
         "generating": generating,
+        # Elapsed seconds, so the board can show a live "not stuck" timer.
+        "generating_for_s": round(time.time() - started, 1) if generating else 0,
         "brief": cache.get("brief"),
         "generated_at": cache.get("generated_at"),
         "model": cache.get("model"),
