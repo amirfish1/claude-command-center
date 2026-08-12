@@ -787,6 +787,10 @@
       }
     } catch (e) {
       if (projectKey(state.queue) !== projectKey(queue)) return;
+      // A refusal of the auto-trigger (server cooldown, race with another
+      // tab) is not the user's problem -- painting it as an error would
+      // blame them for a click they never made. Only manual refreshes report.
+      if (!force) return;
       state.briefError = e.message || 'Could not refresh status brief.';
       renderBrief();
     }
@@ -1389,6 +1393,18 @@
     return html;
   }
 
+  // renderBrief runs on every main poll (renderAll), so an unchanged band
+  // must not be repainted: resetting innerHTML would throw away the body's
+  // scroll position and any text selection every few seconds while the
+  // owner is reading. Compare against the last string we set instead.
+  var briefRenderedHtml = null;
+  function setBriefHtml(host, html) {
+    if (briefRenderedHtml === html) return;
+    briefRenderedHtml = html;
+    host.hidden = (html === '');
+    host.innerHTML = html;
+  }
+
   function renderBrief() {
     var host = $('q2Brief');
     if (!host) return;
@@ -1401,17 +1417,15 @@
     // a queue with nothing analyzable and nothing cached from when it did.
     if (state.viewAll || !state.queue
         || (!hasBrief && !generating && !state.briefError && ticketCount === 0)) {
-      host.hidden = true;
-      host.innerHTML = '';
+      setBriefHtml(host, '');
       return;
     }
-    host.hidden = false;
 
     // Generating with nothing cached yet: the one quiet line the design doc
     // asks for, no header chrome (there is nothing yet to collapse).
     if (generating && !hasBrief) {
-      host.innerHTML = '<div class="q2-brief-generating">Analyzing ' + ticketCount
-        + ' ticket' + (ticketCount === 1 ? '' : 's') + '&hellip;</div>';
+      setBriefHtml(host, '<div class="q2-brief-generating">Analyzing ' + ticketCount
+        + ' ticket' + (ticketCount === 1 ? '' : 's') + '&hellip;</div>');
       return;
     }
 
@@ -1429,7 +1443,7 @@
       }
     }
 
-    host.innerHTML = '<div class="q2-brief-head">'
+    setBriefHtml(host, '<div class="q2-brief-head">'
       + '<span class="q2-brief-title">Status brief</span>'
       + freshBits.join(' ')
       + '<span class="q2-spacer"></span>'
@@ -1446,7 +1460,7 @@
                 + ' &middot; <a href="#" data-q2-brief-retry>retry</a></div>'
               : '')
           + briefContentHtml(state.brief)
-          + '</div>');
+          + '</div>'));
   }
 
   // ALL is a triage view, not a synthetic queue. Its summary therefore shows
