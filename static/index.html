@@ -1491,14 +1491,7 @@
              #sysModal's z-index, and it lost the positioned ancestor it used to
              hang off. Same ids and child classes, so the existing CSS and
              renderPop() keep working unchanged. -->
-        <div class="wt-pop is-inline" id="cccWtPop" aria-label="WatchTower queue health">
-          <div class="wt-pop-head">
-            <span class="wt-pop-title">Queues</span>
-            <span class="wt-pop-sub" id="cccWtPopSub">watching…</span>
-          </div>
-          <div class="wt-pop-list" id="cccWtPopList"></div>
-          <button type="button" class="wt-pop-cta" id="cccWtPopCta">Open queue list <span aria-hidden="true">&#8595;</span></button>
-        </div>
+
         <!-- Released workers: WatchTower keeps a worker's process alive after
              release so its conversation stays resumable, but it is no longer
              staffed or doing anything. It is excluded from every count/badge

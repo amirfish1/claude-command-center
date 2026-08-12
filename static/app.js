@@ -56976,12 +56976,13 @@
     const $popSub = document.getElementById('cccWtPopSub');
     const $popList = document.getElementById('cccWtPopList');
     const $popCta = document.getElementById('cccWtPopCta');
-    if (!$badge || !$pop) return;
+    if (!$badge) return;
     if (typeof READER_ONLY_POPOUT !== 'undefined' && READER_ONLY_POPOUT) return;
 
     let lastQueues = [];
 
     function renderPop() {
+      if (!$pop) return;
       const total = lastQueues.length;
       const openSum = lastQueues.reduce((n, q) => n + (q.depth || 0), 0);
       const stuck = lastQueues.filter(q => q.stuck);

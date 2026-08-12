@@ -1,0 +1,1 @@
+- Removed the inline Queues display panel from the WatchTower row inside the System Status modal.
