@@ -545,6 +545,24 @@ class EngineHost:
                     "codex", args.get("session_id")
                 )
         if engine == "claude":
+            if operation == "input_state":
+                spawn = legacy._find_live_spawn_entry_for_session(
+                    args.get("session_id")
+                )
+                if spawn is None or (spawn.get("engine") or "claude") != "claude":
+                    return {"ok": True, "owned": False, "busy": False}
+                tool_child = legacy._spawn_entry_active_tool_child(spawn)
+                return {
+                    "ok": True,
+                    "owned": True,
+                    "busy": bool(
+                        legacy._headless_turn_in_progress(spawn) or tool_child
+                    ),
+                    "pid": spawn.get("pid"),
+                    "active_child_pid": (
+                        tool_child.get("pid") if isinstance(tool_child, dict) else None
+                    ),
+                }
             if operation == "prewarm":
                 return legacy._start_claude_prewarm(**args)
             if operation == "spawn":

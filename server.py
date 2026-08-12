@@ -26,6 +26,7 @@ import gzip
 import html
 import hashlib
 import collections
+import contextlib
 import http.server
 import ipaddress
 import json
@@ -38956,14 +38957,24 @@ def _terminal_input_queue_has_pending(session_id):
         return bool(_pending_terminal_input_queue.get(session_id))
 
 
+def _worker_owned_claude_input_state(session_id):
+    """Ask the persistent engine owner about its live Claude FIFO."""
+    result = _control_plane_engine_call(
+        "claude", "input_state", {"session_id": session_id}, mutate=False,
+    )
+    if not isinstance(result, dict) or not result.get("ok"):
+        return {}
+    return result
+
+
 def _terminal_queue_waits_for_headless_turn(session_id, status):
     """Hold durable input while a CCC-owned Claude turn owes a result."""
     if isinstance(status, dict) and _is_real_tty(status.get("tty")):
         return False
     spawn = _find_live_spawn_entry_for_session(session_id)
-    if spawn is None or (spawn.get("engine") or "claude") != "claude":
-        return False
-    return _headless_turn_in_progress(spawn)
+    if spawn is not None and (spawn.get("engine") or "claude") == "claude":
+        return _headless_turn_in_progress(spawn)
+    return bool(_worker_owned_claude_input_state(session_id).get("busy"))
 
 
 def _load_daemon_roster():
@@ -40242,10 +40253,15 @@ def _start_resume_queue_watcher() -> None:
                             spawn is None
                             and _wt_worker_fifo_entry_for_session(sid) is not None
                         )
+                        engine_worker_reachable = (
+                            spawn is None
+                            and _worker_owned_claude_input_state(sid).get("owned")
+                        )
                         # Foreign live writer (not ours, no channel): hold the
                         # queue until that process exits — injecting now would
                         # spawn a parallel resume and fork the transcript.
                         if (spawn is None and not wt_worker_reachable
+                                and not engine_worker_reachable
                                 and status.get("kind") != "bg" and status.get("pid")):
                             if _note_foreign_writer_hold(sid, status.get("pid")):
                                 _log_activity(
@@ -45333,6 +45349,7 @@ def spawn_session(prompt, name=None, cwd=None, repo_path=None, worktree=False, m
         reasoning_effort=reasoning_effort,
         input_result_target=entry.get("input_result_target"),
         input_accepted_at=entry.get("input_accepted_at"),
+        input_command_uuids=entry.get("input_command_uuids"),
     )
     # Cwd determines the ~/.claude/projects/ bucket the new session
     # logs to, which is how the kanban groups it by repo. Print it so
@@ -45997,6 +46014,7 @@ def spawn_session_remote(prompt, name=None, cwd=None, repo_path=None, worktree=F
         parent_session_id=parent_session_id,
         input_result_target=entry.get("input_result_target"),
         input_accepted_at=entry.get("input_accepted_at"),
+        input_command_uuids=entry.get("input_command_uuids"),
     )
     resp = {
         "ok": True,
@@ -46299,8 +46317,14 @@ def _write_stream_json_user_message(target, text, timeout=0.25):
     text = _strip_lone_surrogates(str(text or ""))
     if not text:
         return False
+    command_uuid = str(uuid.uuid4())
     msg = {
         "type": "user",
+        # Claude echoes this as command_lifecycle.command_uuid and as the
+        # result's user_message_uuid. That gives us a causal acknowledgement
+        # for this exact input; result counts sampled around a FIFO write do
+        # not, because the preceding turn can finish during the write.
+        "uuid": command_uuid,
         "message": {
             "role": "user",
             "content": [{"type": "text", "text": text}],
@@ -46315,29 +46339,20 @@ def _write_stream_json_user_message(target, text, timeout=0.25):
         # The lock is process-local and omitted from the JSON spawn registry.
         write_lock = target.setdefault("_input_write_lock", threading.Lock())
         with write_lock:
-            current_results = _headless_log_result_count(target)
-            previous_target = _valid_input_result_target(target)
+            pending_commands = _pending_input_command_uuids(target)
             delivered = _write_via_spawn_fd(target, line, timeout=timeout)
             if not delivered:
                 delivered = _write_via_pipe(target.get("proc"), line)
             if not delivered:
                 return False
 
-            # Inputs accepted during one active Claude response can coalesce
-            # into that same terminal result (for example, a correction sent
-            # while a tool is running). Share its existing boundary instead
-            # of demanding one result line per write, which Claude does not
-            # guarantee. Once the previous boundary is complete, the next
-            # accepted input establishes exactly one new boundary.
-            if previous_target is not None and current_results < previous_target:
-                next_target = previous_target
-            else:
-                next_target = current_results + 1
             accepted_at = time.time()
-            target["input_result_target"] = next_target
+            target.pop("input_result_target", None)
+            target["input_command_uuids"] = pending_commands + [command_uuid]
             target["input_accepted_at"] = accepted_at
             _update_spawn_input_state_in_registry(
-                target.get("pid"), next_target, accepted_at,
+                target.get("pid"), None, accepted_at,
+                target["input_command_uuids"],
             )
             return True
 
@@ -46521,13 +46536,71 @@ def _valid_input_accepted_at(entry):
     return value if math.isfinite(value) and value >= 0 else None
 
 
-def _headless_turn_in_progress(entry):
-    """True while a CCC-owned Claude input still owes a terminal result.
+def _valid_input_command_uuids(entry):
+    """Return persisted CCC-owned Claude command UUIDs, else ``None``.
 
-    Explicit result accounting is authoritative whenever present. Legacy
-    registry rows fall back to the stdout-tail heuristic until their next
-    successful CCC write establishes a target.
+    An empty list is meaningful: it says the entry uses lifecycle accounting
+    and currently owes no command acknowledgement. Missing/malformed state is
+    legacy and falls back to result-target/log-tail accounting.
     """
+    if not isinstance(entry, dict) or "input_command_uuids" not in entry:
+        return None
+    values = entry.get("input_command_uuids")
+    if not isinstance(values, list):
+        return None
+    cleaned = []
+    for value in values:
+        value = str(value or "").strip()
+        try:
+            parsed = uuid.UUID(value)
+        except (ValueError, TypeError, AttributeError):
+            return None
+        canonical = str(parsed)
+        if canonical not in cleaned:
+            cleaned.append(canonical)
+    return cleaned
+
+
+def _pending_input_command_uuids(entry):
+    """Return owned command UUIDs lacking Claude's completed lifecycle event."""
+    command_uuids = _valid_input_command_uuids(entry)
+    if command_uuids is None:
+        return []
+    pending = set(command_uuids)
+    log = entry.get("log") if isinstance(entry, dict) else None
+    if not log or not pending:
+        return command_uuids
+    try:
+        with open(log, "rb") as fh:
+            for raw in fh:
+                if b'"command_lifecycle"' not in raw or b'"completed"' not in raw:
+                    continue
+                try:
+                    event = json.loads(raw)
+                except (json.JSONDecodeError, ValueError):
+                    continue
+                if (
+                    event.get("type") == "command_lifecycle"
+                    and event.get("state") == "completed"
+                ):
+                    pending.discard(str(event.get("command_uuid") or ""))
+    except OSError:
+        return command_uuids
+    return [value for value in command_uuids if value in pending]
+
+
+def _headless_turn_in_progress(entry):
+    """True while a CCC-owned Claude input still owes completion.
+
+    Command UUID lifecycle acknowledgements are authoritative for new writes.
+    Legacy result targets and stdout-tail state remain readable across an
+    upgrade until the next successful CCC write establishes UUID tracking.
+    """
+    command_uuids = _valid_input_command_uuids(entry)
+    if command_uuids is not None:
+        if _pending_input_command_uuids(entry):
+            return True
+        return _headless_log_turn_open(entry)
     target = _valid_input_result_target(entry)
     if target is not None:
         if _headless_log_result_count(entry) < target:
@@ -47207,6 +47280,7 @@ def resume_session_headless(session_id, text, cwd=None, idempotency_key=None):
         repo_path=ctx["repo_path"],
         input_result_target=entry.get("input_result_target"),
         input_accepted_at=entry.get("input_accepted_at"),
+        input_command_uuids=entry.get("input_command_uuids"),
     )
     # Diagnostic: a fresh warm process is now live. Record the gap since this
     # sid's last exit/cold_resume — a short gap right after `server_start`
@@ -47239,9 +47313,9 @@ def resume_session_headless(session_id, text, cwd=None, idempotency_key=None):
 # verified-alive entries and prunes dead/reused PIDs from the file so it
 # doesn't grow forever.
 #
-# Concurrency: assumed single CCC server per host. If two boot at once
-# they'll race on this file; last-writer-wins is acceptable since the only
-# downside is a missed reattach (the orphan stays orphaned, same as today).
+# The dashboard and persistent worker both update this file. Every
+# read/modify/write transaction uses a shared flock; atomic replacement gives
+# unlocked readers either the complete old snapshot or the complete new one.
 
 class _ReattachedProc:
     """Stand-in for a real subprocess.Popen for processes we recovered from
@@ -47299,6 +47373,38 @@ def _load_spawn_registry():
         print(f"  [spawn-registry] ignoring registry with unexpected shape (not a list)")
         return []
     return data
+
+
+_SPAWN_REGISTRY_THREAD_LOCK = threading.RLock()
+
+
+def _spawn_registry_lock_path():
+    return SPAWNED_PIDS_FILE.with_suffix(".lock")
+
+
+@contextlib.contextmanager
+def _spawn_registry_exclusive_lock():
+    """Serialize registry mutations across dashboard and worker processes."""
+    with _SPAWN_REGISTRY_THREAD_LOCK:
+        lock_path = _spawn_registry_lock_path()
+        try:
+            lock_path.parent.mkdir(parents=True, exist_ok=True)
+            lock_fh = lock_path.open("a+")
+        except OSError as exc:
+            # Preserve the registry's historical best-effort behavior on a
+            # read-only state directory. The in-process lock still prevents
+            # local thread races; the eventual save logs its own failure.
+            print(f"  [spawn-registry] could not lock {lock_path} ({exc})")
+            yield
+            return
+        try:
+            fcntl.flock(lock_fh.fileno(), fcntl.LOCK_EX)
+            yield
+        finally:
+            try:
+                fcntl.flock(lock_fh.fileno(), fcntl.LOCK_UN)
+            finally:
+                lock_fh.close()
 
 
 _codex_parent_links_cache = {"data": None}
@@ -47437,16 +47543,44 @@ def _process_tty(pid):
     return _normalized_tty(tty)
 
 
-def _save_spawn_registry(entries):
-    """Atomically rewrite the spawn registry. Best-effort — failures are logged
-    so a read-only HOME doesn't crash the server."""
+def _save_spawn_registry_unlocked(entries):
+    """Atomically rewrite the registry while its exclusive lock is held."""
+    tmp_path = None
     try:
         COMMAND_CENTER_STATE_DIR.mkdir(parents=True, exist_ok=True)
-        tmp = SPAWNED_PIDS_FILE.with_suffix(".tmp")
-        tmp.write_text(json.dumps(entries, indent=2))
-        os.replace(tmp, SPAWNED_PIDS_FILE)
+        SPAWNED_PIDS_FILE.parent.mkdir(parents=True, exist_ok=True)
+        with tempfile.NamedTemporaryFile(
+            mode="w", encoding="utf-8", delete=False,
+            dir=SPAWNED_PIDS_FILE.parent,
+            prefix=f".{SPAWNED_PIDS_FILE.name}.", suffix=".tmp",
+        ) as tmp_fh:
+            tmp_path = Path(tmp_fh.name)
+            json.dump(entries, tmp_fh, indent=2)
+            tmp_fh.flush()
+            os.fsync(tmp_fh.fileno())
+        os.replace(tmp_path, SPAWNED_PIDS_FILE)
+        tmp_path = None
     except OSError as e:
         print(f"  [spawn-registry] could not write {SPAWNED_PIDS_FILE} ({e})")
+    finally:
+        if tmp_path is not None:
+            _unlink_quiet(tmp_path)
+
+
+def _save_spawn_registry(entries):
+    """Atomically replace the registry under a cross-process lock."""
+    with _spawn_registry_exclusive_lock():
+        _save_spawn_registry_unlocked(entries)
+
+
+def _mutate_spawn_registry(mutator):
+    """Apply one locked read/modify/write transaction."""
+    with _spawn_registry_exclusive_lock():
+        entries = _load_spawn_registry()
+        changed = bool(mutator(entries))
+        if changed:
+            _save_spawn_registry_unlocked(entries)
+        return changed
 
 
 def _record_spawn_to_registry(
@@ -47454,7 +47588,7 @@ def _record_spawn_to_registry(
     fifo=None, engine="claude", session_id=None, model=None, repo_path=None,
     parent_session_id=None, prewarm=False, prewarm_id=None, client_id=None,
     reasoning_effort="", created_at_epoch=None, input_result_target=None,
-    input_accepted_at=None,
+    input_accepted_at=None, input_command_uuids=None,
 ):
     """Append a freshly-spawned session to the on-disk registry. The
     session_id is provided for known resume calls and otherwise filled in
@@ -47473,10 +47607,6 @@ def _record_spawn_to_registry(
     serves the System status panel's process list (the worker vs. the
     dashboard), so the kill deadline has to live on disk, not just in the
     owning process's in-memory _CLAUDE_PREWARMS dict."""
-    entries = [
-        entry for entry in _load_spawn_registry()
-        if str(entry.get("pid") or "") != str(pid)
-    ]
     record = {
         "pid": pid,
         "session_id": session_id,
@@ -47497,6 +47627,7 @@ def _record_spawn_to_registry(
     input_state = {
         "input_result_target": input_result_target,
         "input_accepted_at": input_accepted_at,
+        "input_command_uuids": input_command_uuids,
     }
     valid_target = _valid_input_result_target(input_state)
     valid_accepted_at = _valid_input_accepted_at(input_state)
@@ -47504,6 +47635,9 @@ def _record_spawn_to_registry(
         record["input_result_target"] = valid_target
     if valid_accepted_at is not None:
         record["input_accepted_at"] = valid_accepted_at
+    valid_command_uuids = _valid_input_command_uuids(input_state)
+    if valid_command_uuids is not None:
+        record["input_command_uuids"] = valid_command_uuids
     if prewarm:
         record.update({
             "prewarm": True,
@@ -47515,45 +47649,61 @@ def _record_spawn_to_registry(
                 if created_at_epoch is not None else None
             ),
         })
-    entries.append(record)
-    _save_spawn_registry(entries)
+    def _append_record(entries):
+        entries[:] = [
+            entry for entry in entries
+            if str(entry.get("pid") or "") != str(pid)
+        ]
+        entries.append(record)
+        return True
+
+    _mutate_spawn_registry(_append_record)
 
 
 def _reap_orphaned_claude_prewarms():
     """Terminate disposable reservations left behind by a dead owner."""
-    entries = _load_spawn_registry()
-    survivors = []
     reaped = 0
-    for entry in entries:
-        if entry.get("engine") != "claude" or not entry.get("prewarm"):
-            survivors.append(entry)
-            continue
-        pid = entry.get("pid")
-        if pid is not None:
-            try:
-                os.killpg(int(pid), signal.SIGTERM)
-            except ProcessLookupError:
-                pass
-            except (PermissionError, OSError, ValueError):
+    def _reap(entries):
+        nonlocal reaped
+        survivors = []
+        for entry in entries:
+            if entry.get("engine") != "claude" or not entry.get("prewarm"):
+                survivors.append(entry)
+                continue
+            pid = entry.get("pid")
+            if pid is not None:
                 try:
-                    os.kill(int(pid), signal.SIGTERM)
-                except (ProcessLookupError, PermissionError, OSError, ValueError):
+                    os.killpg(int(pid), signal.SIGTERM)
+                except ProcessLookupError:
                     pass
-        _unlink_quiet(entry.get("fifo"))
-        _unlink_quiet(entry.get("log"))
-        reaped += 1
-    if reaped:
-        _save_spawn_registry(survivors)
+                except (PermissionError, OSError, ValueError):
+                    try:
+                        os.kill(int(pid), signal.SIGTERM)
+                    except (ProcessLookupError, PermissionError, OSError, ValueError):
+                        pass
+            _unlink_quiet(entry.get("fifo"))
+            _unlink_quiet(entry.get("log"))
+            reaped += 1
+        if reaped:
+            entries[:] = survivors
+            return True
+        return False
+
+    _mutate_spawn_registry(_reap)
     return reaped
 
 
 def _remove_spawn_from_registry(pid):
     """Drop a PID from the registry — called when a session exits gracefully
     or is explicitly torn down. Safe to call when the entry isn't present."""
-    entries = _load_spawn_registry()
-    pruned = [e for e in entries if e.get("pid") != pid]
-    if len(pruned) != len(entries):
-        _save_spawn_registry(pruned)
+    def _remove(entries):
+        pruned = [e for e in entries if e.get("pid") != pid]
+        if len(pruned) == len(entries):
+            return False
+        entries[:] = pruned
+        return True
+
+    _mutate_spawn_registry(_remove)
 
 
 def _update_spawn_session_id_in_registry(pid, session_id):
@@ -47561,39 +47711,52 @@ def _update_spawn_session_id_in_registry(pid, session_id):
     if not pid or not session_id:
         return
     try:
-        entries = _load_spawn_registry()
-        updated = False
-        for entry in entries:
-            if entry.get("pid") == pid and entry.get("session_id") != session_id:
-                entry["session_id"] = session_id
-                updated = True
-        if updated:
-            _save_spawn_registry(entries)
+        def _update(entries):
+            updated = False
+            for entry in entries:
+                if entry.get("pid") == pid and entry.get("session_id") != session_id:
+                    entry["session_id"] = session_id
+                    updated = True
+            return updated
+
+        _mutate_spawn_registry(_update)
     except Exception as e:
         print(f"  [spawn-registry] could not update session_id for pid {pid} ({e})")
 
 
 def _update_spawn_input_state_in_registry(
-    pid, input_result_target, input_accepted_at,
+    pid, input_result_target, input_accepted_at, input_command_uuids=None,
 ):
     """Persist one spawn's owned-input state without replacing other fields."""
     if pid is None:
         return
     try:
-        entries = _load_spawn_registry()
-        updated = False
-        for entry in entries:
-            if str(entry.get("pid") or "") != str(pid):
-                continue
-            if (
-                entry.get("input_result_target") != input_result_target
-                or entry.get("input_accepted_at") != input_accepted_at
-            ):
-                entry["input_result_target"] = input_result_target
-                entry["input_accepted_at"] = input_accepted_at
-                updated = True
-        if updated:
-            _save_spawn_registry(entries)
+        def _update(entries):
+            updated = False
+            for entry in entries:
+                if str(entry.get("pid") or "") != str(pid):
+                    continue
+                before = dict(entry)
+                desired_commands = _valid_input_command_uuids({
+                    "input_command_uuids": input_command_uuids,
+                })
+                if input_result_target is None:
+                    entry.pop("input_result_target", None)
+                else:
+                    entry["input_result_target"] = input_result_target
+                if input_accepted_at is None:
+                    entry.pop("input_accepted_at", None)
+                else:
+                    entry["input_accepted_at"] = input_accepted_at
+                if desired_commands is None:
+                    entry.pop("input_command_uuids", None)
+                else:
+                    entry["input_command_uuids"] = desired_commands
+                if before != entry:
+                    updated = True
+            return updated
+
+        _mutate_spawn_registry(_update)
     except Exception as e:
         print(
             f"  [spawn-registry] could not update input state for pid {pid} ({e})"
@@ -47676,7 +47839,6 @@ def backfill_spawn_parent_session_ids(dry_run=False):
         if dry_run:
             continue
 
-        entry["parent_session_id"] = parent
         sid = update["session_id"]
         for live_entry in _spawned_sessions:
             if (
@@ -47689,7 +47851,21 @@ def backfill_spawn_parent_session_ids(dry_run=False):
         changed = True
 
     if changed:
-        _save_spawn_registry(entries)
+        updates_by_pid = {
+            str(item.get("pid") or ""): item["parent_session_id"]
+            for item in result["updates"] if item.get("pid") is not None
+        }
+
+        def _persist_updates(current_entries):
+            updated = False
+            for current in current_entries:
+                parent = updates_by_pid.get(str(current.get("pid") or ""))
+                if parent and not current.get("parent_session_id"):
+                    current["parent_session_id"] = parent
+                    updated = True
+            return updated
+
+        _mutate_spawn_registry(_persist_updates)
     return result
 
 
@@ -47747,6 +47923,14 @@ def _pid_is_engine_process(pid, engine):
 
 
 def _reattach_spawned_orphans(skip_engines=None, only_engines=None):
+    """Reattach under the same lock used by registry mutations."""
+    with _spawn_registry_exclusive_lock():
+        return _reattach_spawned_orphans_locked(
+            skip_engines=skip_engines, only_engines=only_engines,
+        )
+
+
+def _reattach_spawned_orphans_locked(skip_engines=None, only_engines=None):
     """Boot-time sweep that re-populates `_spawned_sessions` from the on-disk
     registry. Verifies every entry's PID is alive AND is still a process of
     the recorded engine (PIDs can be reused), drops dead/reused ones, and rewrites the
@@ -47764,7 +47948,7 @@ def _reattach_spawned_orphans(skip_engines=None, only_engines=None):
         # Still touch the file so a stale corrupt blob is replaced with a
         # known-good empty list on first boot after upgrade.
         if SPAWNED_PIDS_FILE.exists():
-            _save_spawn_registry([])
+            _save_spawn_registry_unlocked([])
         return
 
     reattached = 0
@@ -47874,10 +48058,13 @@ def _reattach_spawned_orphans(skip_engines=None, only_engines=None):
         }
         valid_input_target = _valid_input_result_target(entry)
         valid_input_accepted_at = _valid_input_accepted_at(entry)
+        valid_input_commands = _valid_input_command_uuids(entry)
         if valid_input_target is not None:
             synthetic["input_result_target"] = valid_input_target
         if valid_input_accepted_at is not None:
             synthetic["input_accepted_at"] = valid_input_accepted_at
+        if valid_input_commands is not None:
+            synthetic["input_command_uuids"] = valid_input_commands
         if session_id:
             synthetic["session_id"] = session_id
             synthetic["resumed_sid"] = session_id
@@ -47900,10 +48087,12 @@ def _reattach_spawned_orphans(skip_engines=None, only_engines=None):
             survivor["input_result_target"] = valid_input_target
         if valid_input_accepted_at is not None:
             survivor["input_accepted_at"] = valid_input_accepted_at
+        if valid_input_commands is not None:
+            survivor["input_command_uuids"] = valid_input_commands
         survivors.append(survivor)
         reattached += 1
 
-    _save_spawn_registry(survivors)
+    _save_spawn_registry_unlocked(survivors)
     print(f"  [spawn-registry] reattached {reattached} orphans, dropped {dropped} dead/reused entries")
 
 
@@ -58024,7 +58213,25 @@ def _reap_idle_spawned_headless(now=None):
             "idle_hours": idle_hours,
         })
     if changed:
-        _save_spawn_registry(entries)
+        retired_by_pid = {
+            str(entry.get("pid") or ""): {
+                "retired": entry.get("retired"),
+                "retired_at": entry.get("retired_at"),
+                "retire_reason": entry.get("retire_reason"),
+            }
+            for entry in entries if entry.get("retire_reason") == "idle-ttl"
+        }
+
+        def _persist_retired(current_entries):
+            updated = False
+            for current in current_entries:
+                values = retired_by_pid.get(str(current.get("pid") or ""))
+                if values and any(current.get(k) != v for k, v in values.items()):
+                    current.update(values)
+                    updated = True
+            return updated
+
+        _mutate_spawn_registry(_persist_retired)
     return reaped
 
 

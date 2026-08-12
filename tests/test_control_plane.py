@@ -581,6 +581,7 @@ class TestEngineHost(unittest.TestCase):
             self.reattach_calls = 0
             self.kimi_attach_calls = []
             self.inject_calls = []
+            self.claude_busy = True
 
         def _acp_set_config(self, harness, sid, config_id, value):
             self.config_calls += 1
@@ -605,6 +606,19 @@ class TestEngineHost(unittest.TestCase):
         @staticmethod
         def _headless_log_result_count(_entry):
             return 0
+
+        @staticmethod
+        def _find_live_spawn_entry_for_session(session_id):
+            if session_id == "session-claude":
+                return {"pid": 42, "engine": "claude"}
+            return None
+
+        def _headless_turn_in_progress(self, entry):
+            return self.claude_busy and entry.get("pid") == 42
+
+        @staticmethod
+        def _spawn_entry_active_tool_child(_entry):
+            return None
 
         def _reattach_spawned_orphans(self, **_kwargs):
             self.reattach_calls += 1
@@ -703,6 +717,27 @@ class TestEngineHost(unittest.TestCase):
         self.assertEqual(len(self.fake.inject_calls), 1)
         self.assertTrue(self.fake.inject_calls[0][2]["force_queue"])
 
+    def test_claude_input_state_exposes_worker_owned_busy_spawn(self):
+        response = self.host.query({
+            "engine": "claude",
+            "operation": "input_state",
+            "args": {"session_id": "session-claude"},
+        })
+
+        self.assertTrue(response["ok"])
+        self.assertTrue(response["owned"])
+        self.assertTrue(response["busy"])
+        self.assertEqual(response["pid"], 42)
+
+        self.fake.claude_busy = False
+        idle = self.host.query({
+            "engine": "claude",
+            "operation": "input_state",
+            "args": {"session_id": "session-claude"},
+        })
+        self.assertTrue(idle["owned"])
+        self.assertFalse(idle["busy"])
+
     def test_parent_session_creates_durable_child_edge(self):
         parent, _ = self.runtime.ledger.submit(
             engine="claude",
@@ -733,6 +768,13 @@ class TestEngineHost(unittest.TestCase):
         self.assertTrue(adopted["ok"])
         self.assertEqual(adopted["adopted"], 1)
         self.assertEqual(adopted["tracked"], 1)
+        state = self.host.query({
+            "engine": "claude",
+            "operation": "input_state",
+            "args": {"session_id": "session-claude"},
+        })
+        self.assertTrue(state["owned"])
+        self.assertTrue(state["busy"])
         self.assertEqual(adopted["kimi_attached"], 1)
         self.assertEqual(self.fake.reattach_calls, 1)
         self.assertEqual(

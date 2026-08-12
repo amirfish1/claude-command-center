@@ -15,6 +15,7 @@ The hard contracts under test:
     when there is no concurrency.
 """
 import json
+import multiprocessing
 import os
 import sys
 import threading
@@ -67,6 +68,15 @@ def _stage(server_mod, tmp_path, transcript_events, hl_result_count):
         "stdin_fd": None,
     }
     return sid, entry, transcript, log
+
+
+def _hold_spawn_registry_lock(registry_path, entered, release):
+    import server
+
+    server.SPAWNED_PIDS_FILE = server.Path(registry_path)
+    with server._spawn_registry_exclusive_lock():
+        entered.set()
+        release.wait(5)
 
 
 def test_no_watermark_is_not_stale(server_mod, tmp_path):
@@ -150,7 +160,7 @@ def test_headless_turn_in_progress_ignores_malformed_targets(server_mod, tmp_pat
         assert server_mod._headless_turn_in_progress(entry) is False
 
 
-def test_successful_stream_write_advances_and_persists_result_target(
+def test_successful_stream_write_persists_command_uuid(
     server_mod, tmp_path, monkeypatch
 ):
     _sid, entry, _transcript, _log = _stage(
@@ -163,18 +173,19 @@ def test_successful_stream_write_advances_and_persists_result_target(
 
     assert server_mod._write_stream_json_user_message(entry, "follow up") is True
 
-    assert entry["input_result_target"] == 5
+    assert "input_result_target" not in entry
+    assert len(entry["input_command_uuids"]) == 1
     assert isinstance(entry["input_accepted_at"], float)
     saved = json.loads(registry.read_text())
     assert saved == [{
         "pid": entry["pid"],
         "engine": "claude",
-        "input_result_target": 5,
+        "input_command_uuids": entry["input_command_uuids"],
         "input_accepted_at": entry["input_accepted_at"],
     }]
 
 
-def test_multiple_stream_writes_share_active_result_target(
+def test_multiple_stream_writes_track_each_command_uuid(
     server_mod, tmp_path, monkeypatch
 ):
     _sid, entry, _transcript, _log = _stage(
@@ -188,10 +199,12 @@ def test_multiple_stream_writes_share_active_result_target(
     assert server_mod._write_stream_json_user_message(entry, "first") is True
     assert server_mod._write_stream_json_user_message(entry, "second") is True
 
-    # Claude may absorb both messages into one active response (live protocol
-    # evidence: one result with num_turns=2), so one next result closes both.
-    assert entry["input_result_target"] == 5
-    assert json.loads(registry.read_text())[0]["input_result_target"] == 5
+    # Claude may absorb both messages into one result, but it emits a completed
+    # command_lifecycle event for each UUID.
+    assert len(entry["input_command_uuids"]) == 2
+    assert json.loads(registry.read_text())[0]["input_command_uuids"] == entry[
+        "input_command_uuids"
+    ]
 
 
 def test_failed_stream_write_does_not_advance_result_target(
@@ -218,7 +231,7 @@ def test_failed_stream_write_does_not_advance_result_target(
     assert "input_accepted_at" not in json.loads(registry.read_text())[0]
 
 
-def test_concurrent_stream_writes_share_one_active_result_target(
+def test_concurrent_stream_writes_serialize_command_uuid_state(
     server_mod, tmp_path, monkeypatch
 ):
     _sid, entry, _transcript, _log = _stage(
@@ -253,8 +266,95 @@ def test_concurrent_stream_writes_share_one_active_result_target(
     assert sorted(
         item["message"]["content"][0]["text"] for item in delivered
     ) == ["first", "second"]
-    assert entry["input_result_target"] == 5
-    assert json.loads(registry.read_text())[0]["input_result_target"] == 5
+    assert len(entry["input_command_uuids"]) == 2
+    assert {item["uuid"] for item in delivered} == set(entry["input_command_uuids"])
+    assert json.loads(registry.read_text())[0]["input_command_uuids"] == entry[
+        "input_command_uuids"
+    ]
+
+
+def test_stream_write_tracks_claude_command_uuid_across_result_race(
+    server_mod, tmp_path, monkeypatch
+):
+    """A preceding result may land while the FIFO write is in progress.
+
+    The accepted message must stay owned until Claude's command lifecycle
+    acknowledges that exact UUID; a result count sampled on either side of the
+    physical write cannot establish that causal relationship.
+    """
+    _sid, entry, _transcript, log = _stage(
+        server_mod, tmp_path, [_event("a")], 4
+    )
+    entry["input_result_target"] = 5
+    registry = tmp_path / "spawned-pids.json"
+    registry.write_text(json.dumps([{
+        "pid": entry["pid"],
+        "engine": "claude",
+        "input_result_target": 5,
+    }]))
+    monkeypatch.setattr(server_mod, "SPAWNED_PIDS_FILE", registry)
+    command_uuid = "aaaaaaaa-1111-4111-8111-111111111111"
+    monkeypatch.setattr(server_mod.uuid, "uuid4", lambda: command_uuid)
+
+    def accept_after_old_result(_entry, line, timeout=0.25):
+        payload = json.loads(line)
+        assert payload["uuid"] == command_uuid
+        log.write_text(_result_lines(5))
+        return True
+
+    monkeypatch.setattr(server_mod, "_write_via_spawn_fd", accept_after_old_result)
+
+    assert server_mod._write_stream_json_user_message(entry, "follow up") is True
+    assert server_mod._headless_turn_in_progress(entry) is True
+    assert entry["input_command_uuids"] == [command_uuid]
+
+    with log.open("a") as fh:
+        fh.write(json.dumps({
+            "type": "command_lifecycle",
+            "command_uuid": command_uuid,
+            "state": "completed",
+        }) + "\n")
+
+    assert server_mod._headless_turn_in_progress(entry) is False
+    saved = json.loads(registry.read_text())[0]
+    assert saved["input_command_uuids"] == [command_uuid]
+
+
+def test_coalesced_stream_writes_wait_for_every_command_uuid(
+    server_mod, tmp_path, monkeypatch
+):
+    _sid, entry, _transcript, log = _stage(
+        server_mod, tmp_path, [_event("a")], 4
+    )
+    registry = tmp_path / "spawned-pids.json"
+    registry.write_text(json.dumps([{"pid": entry["pid"], "engine": "claude"}]))
+    monkeypatch.setattr(server_mod, "SPAWNED_PIDS_FILE", registry)
+    command_uuids = iter([
+        "aaaaaaaa-1111-4111-8111-111111111111",
+        "bbbbbbbb-2222-4222-8222-222222222222",
+    ])
+    monkeypatch.setattr(server_mod.uuid, "uuid4", lambda: next(command_uuids))
+    monkeypatch.setattr(server_mod, "_write_via_spawn_fd", lambda *_a, **_k: True)
+
+    assert server_mod._write_stream_json_user_message(entry, "first") is True
+    assert server_mod._write_stream_json_user_message(entry, "second") is True
+
+    first, second = entry["input_command_uuids"]
+    log.write_text(
+        _result_lines(5)
+        + json.dumps({
+            "type": "command_lifecycle", "command_uuid": second,
+            "state": "completed",
+        }) + "\n"
+    )
+    assert server_mod._headless_turn_in_progress(entry) is True
+
+    with log.open("a") as fh:
+        fh.write(json.dumps({
+            "type": "command_lifecycle", "command_uuid": first,
+            "state": "completed",
+        }) + "\n")
+    assert server_mod._headless_turn_in_progress(entry) is False
 
 
 def test_post_result_stream_activity_keeps_next_turn_open(server_mod, tmp_path):
@@ -624,6 +724,24 @@ def test_force_queue_holds_busy_headless_followup(server_mod, tmp_path):
     write.assert_not_called()
 
 
+def test_terminal_queue_waits_for_worker_owned_headless(server_mod, monkeypatch):
+    sid = "11111111-2222-3333-4444-555555555555"
+    monkeypatch.setattr(
+        server_mod, "_find_live_spawn_entry_for_session", lambda _sid: None,
+    )
+    monkeypatch.setattr(
+        server_mod, "_control_plane_engine_call",
+        lambda engine, operation, args, **kwargs: {
+            "ok": True, "owned": True, "busy": True, "pid": 42,
+        },
+    )
+
+    assert server_mod._terminal_queue_waits_for_headless_turn(
+        sid, {"live": True, "tty": None, "pid": 42},
+    ) is True
+    assert server_mod._worker_owned_claude_input_state(sid)["owned"] is True
+
+
 def test_ordinary_send_steers_busy_headless_followup(server_mod, tmp_path):
     sid, entry, _transcript, log = _stage(
         server_mod, tmp_path, [_event("a")], 4
@@ -862,6 +980,51 @@ def test_reattach_preserves_result_target_state(
         server_mod._spawned_sessions.extend(original)
 
 
+def test_reattach_preserves_command_uuid_state(
+    server_mod, tmp_path, monkeypatch
+):
+    registry = tmp_path / "spawned-pids.json"
+    log = tmp_path / "spawn.log"
+    command_uuid = "aaaaaaaa-1111-4111-8111-111111111111"
+    log.write_text(_result_lines(1))
+    registry.write_text(json.dumps([{
+        "pid": os.getpid(),
+        "session_id": "11111111-2222-3333-4444-555555555555",
+        "name": "followup-safe",
+        "log": str(log),
+        "fifo": None,
+        "cwd": str(tmp_path),
+        "spawned_at": "20260812T120000",
+        "command_summary": "test prompt",
+        "engine": "claude",
+        "input_command_uuids": [command_uuid],
+        "input_accepted_at": 1234.5,
+    }]))
+    monkeypatch.setattr(server_mod, "SPAWNED_PIDS_FILE", registry)
+    original = list(server_mod._spawned_sessions)
+    server_mod._spawned_sessions.clear()
+    try:
+        with mock.patch.object(server_mod, "_pid_is_engine_process", return_value=True), \
+             mock.patch.object(server_mod, "_open_fifo_writer", return_value=None):
+            server_mod._reattach_spawned_orphans()
+
+        entry = server_mod._spawned_sessions[0]
+        assert entry["input_command_uuids"] == [command_uuid]
+        assert server_mod._headless_turn_in_progress(entry) is True
+        with log.open("a") as fh:
+            fh.write(json.dumps({
+                "type": "command_lifecycle", "command_uuid": command_uuid,
+                "state": "completed",
+            }) + "\n")
+        assert server_mod._headless_turn_in_progress(entry) is False
+        assert json.loads(registry.read_text())[0]["input_command_uuids"] == [
+            command_uuid
+        ]
+    finally:
+        server_mod._spawned_sessions.clear()
+        server_mod._spawned_sessions.extend(original)
+
+
 def test_reattach_drops_malformed_result_target_state(
     server_mod, tmp_path, monkeypatch
 ):
@@ -898,3 +1061,40 @@ def test_reattach_drops_malformed_result_target_state(
     finally:
         server_mod._spawned_sessions.clear()
         server_mod._spawned_sessions.extend(original)
+
+
+def test_spawn_registry_lock_serializes_separate_processes(
+    server_mod, tmp_path, monkeypatch
+):
+    registry = tmp_path / "spawned-pids.json"
+    registry.write_text("[]")
+    monkeypatch.setattr(server_mod, "SPAWNED_PIDS_FILE", registry)
+    context = multiprocessing.get_context("fork")
+    first_entered = context.Event()
+    first_release = context.Event()
+    second_entered = context.Event()
+    second_release = context.Event()
+    first = context.Process(
+        target=_hold_spawn_registry_lock,
+        args=(str(registry), first_entered, first_release),
+    )
+    second = context.Process(
+        target=_hold_spawn_registry_lock,
+        args=(str(registry), second_entered, second_release),
+    )
+    first.start()
+    assert first_entered.wait(2)
+    second.start()
+    try:
+        assert not second_entered.wait(0.3)
+        first_release.set()
+        assert second_entered.wait(2)
+    finally:
+        first_release.set()
+        second_release.set()
+        first.join(3)
+        second.join(3)
+        if first.is_alive():
+            first.terminate()
+        if second.is_alive():
+            second.terminate()
