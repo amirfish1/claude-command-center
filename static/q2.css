@@ -1223,6 +1223,11 @@ h1.q2-detail-title[data-q2-title-open]:hover { background: var(--bg-hover, rgba(
 }
 .q2-actrow { display: flex; justify-content: flex-end; gap: 6px; margin-top: 6px; }
 
+/* Resolution actions below the full prompt: close-as-completed,
+   close-as-not-relevant, run now. Left-aligned, unlike .q2-actrow's
+   confirm/cancel row — these are the primary next step, not a footer. */
+.q2-resolve-row { display: flex; flex-wrap: wrap; gap: 6px; }
+
 /* Chips that edit on click. */
 .q2-echip { cursor: pointer; font: inherit; font-size: 10px; }
 .q2-echip:hover { border-color: var(--accent); color: var(--accent); }

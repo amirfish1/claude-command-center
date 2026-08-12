@@ -1755,22 +1755,19 @@
         + (state.arm === k ? ' is-armed' : '') + '" data-q2-arm="' + esc(k) + '">'
         + esc(label) + '</button>';
     }
-    var toolbar = githubBacked
-      ? '<div class="q2-actions">'
-        + '<span class="q2-dim">Synced from GitHub — read-only here.'
-        + (item.url ? ' <a class="q2-linklike" href="' + esc(item.url) + '" target="_blank" rel="noopener">Open on GitHub &#8599;</a>' : '')
-        + '</span>'
-        + '<span class="q2-spacer"></span>'
-        + '<button type="button" class="q2-btn" data-q2-act="copy">Copy prompt</button>'
-        + '</div>'
-      : '<div class="q2-actions">'
-      + (closed ? '' :
-          '<button type="button" class="q2-btn' + (runQueued ? ' is-armed' : '') + '"'
-          + ' data-q2-act="run" title="' + (runQueued
-              ? 'Queued to run. Click to cancel.'
-              : 'Ask WatchTower to run this ticket next.') + '">'
-          + (runQueued ? '&#9632; Queued' : '&#9654; Run now') + '</button>')
-      + (closed ? act('reopen', 'Reopen') : act('close', 'Close'))
+    // GitHub-backed queues used to be read-only here (CCC-759) because the
+    // write endpoints 404'd against the local store. WatchTower's GitHub
+    // backend now implements close/reopen/mark_runnable for real (it shells
+    // to `gh issue close/reopen/edit`), so gate on nothing here — every
+    // action below already round-trips through `_q`, which dispatches to the
+    // right backend server-side. Only the info line changes for GitHub.
+    var toolbar = '<div class="q2-actions">'
+      + (closed ? act('reopen', 'Reopen') : '')
+      + (githubBacked
+          ? '<span class="q2-dim">Synced from GitHub.'
+            + (item.url ? ' <a class="q2-linklike" href="' + esc(item.url) + '" target="_blank" rel="noopener">Open on GitHub &#8599;</a>' : '')
+            + '</span>'
+          : '')
       + '<span class="q2-spacer"></span>'
       + '<button type="button" class="q2-btn" data-q2-act="copy">Copy prompt</button>'
       + '</div>';
@@ -1780,21 +1777,45 @@
     // ticket to do, and hiding them behind a button made the ticket read-only
     // until you found the toolbar.
     var FORMS = {
-      close:   ['Resolution summary (optional)', 'Mark as closed', 'close'],
-      reopen:  ['Reason for reopening (optional)', 'Reopen ticket', 'reopen'],
+      close_completed:    ['Resolution summary (optional)', 'Mark as completed', 'close_completed'],
+      close_not_relevant: ['Reason (optional)', 'Mark as not relevant', 'close_not_relevant'],
+      reopen:              ['Reason for reopening (optional)', 'Reopen ticket', 'reopen'],
     };
-    var armed = githubBacked ? null : FORMS[state.arm];
-    var formHtml = armed
-      ? '<section class="q2-sec q2-armed">'
-        + (state.arm === 'answer' && item.block_question
-            ? '<div class="q2-block-q">' + esc(item.block_question) + '</div>' : '')
-        + '<textarea class="q2-input" data-q2-input="' + esc(armed[2]) + '" rows="2" autofocus'
-        + ' placeholder="' + esc(armed[0]) + '" aria-label="' + esc(armed[1]) + '"></textarea>'
+    function armedForm(key) {
+      var spec = FORMS[key];
+      if (state.arm !== key || !spec) return '';
+      return '<section class="q2-sec q2-armed">'
+        + '<textarea class="q2-input" data-q2-input="' + esc(spec[2]) + '" rows="2" autofocus'
+        + ' placeholder="' + esc(spec[0]) + '" aria-label="' + esc(spec[1]) + '"></textarea>'
         + '<div class="q2-actrow">'
         + '<button type="button" class="q2-btn" data-q2-arm="">Cancel</button>'
-        + '<button type="button" class="q2-btn q2-btn-primary" data-q2-act="' + esc(armed[2]) + '">'
-        + esc(armed[1]) + '</button></div></section>'
-      : '';
+        + '<button type="button" class="q2-btn q2-btn-primary" data-q2-act="' + esc(spec[2]) + '">'
+        + esc(spec[1]) + '</button></div></section>';
+    }
+    var reopenFormHtml = armedForm('reopen');
+    // Resolution actions live below the full prompt, not buried in the
+    // toolbar: this is where you land after reading what the ticket asks
+    // for, so "what do I do with this" and "here's the answer" are adjacent.
+    // Close is split into two outcomes (completed vs not relevant) because a
+    // single generic "Close" button couldn't tell the difference later when
+    // triaging a queue's history. Run now stays a one-click action — it
+    // doesn't need a comment, it needs to happen now.
+    var resolveActionsHtml = closed ? '' :
+      '<section class="q2-sec q2-resolve-actions">'
+      + '<div class="q2-resolve-row">'
+      + '<button type="button" class="q2-btn' + (state.arm === 'close_completed' ? ' is-armed' : '') + '"'
+      + ' data-q2-arm="close_completed">Close as completed</button>'
+      + '<button type="button" class="q2-btn' + (state.arm === 'close_not_relevant' ? ' is-armed' : '') + '"'
+      + ' data-q2-arm="close_not_relevant">Close as not relevant</button>'
+      + '<button type="button" class="q2-btn' + (runQueued ? ' is-armed' : '') + '"'
+      + ' data-q2-act="run" title="' + (runQueued
+          ? 'Queued to run. Click to cancel.'
+          : 'Ask WatchTower to run this ticket next.') + '">'
+      + (runQueued ? '&#9632; Queued' : '&#9654; Run now') + '</button>'
+      + '</div>'
+      + armedForm('close_completed')
+      + armedForm('close_not_relevant')
+      + '</section>';
 
     // What the ticket is running ON, resolved from the live worker roster we
     // already poll. Only a claimed ticket with a still-live worker can answer
@@ -1840,11 +1861,12 @@
             + (parts[1] ? '<span class="q2-title-rest"> ' + esc(parts[1]) + '</span>' : '')
             + '</h1>')
       + toolbar
-      + formHtml
+      + reopenFormHtml
       + (showPrompt
           ? '<section class="q2-sec"><div class="q2-sec-label">Full prompt</div>'
             + '<pre class="q2-pre">' + esc(prompt) + '</pre></section>'
           : '')
+      + resolveActionsHtml
       + '<section class="q2-sec"><div class="q2-sec-label">Activity'
       + (editCount
           ? '<label class="q2-show-edits"><input type="checkbox" data-q2-show-edits> show edits (' + editCount + ')</label>'
@@ -2081,10 +2103,19 @@
     // required"); only comment happened to match. Verified against
     // server.py:52747 (answer.text), :52943 (close.note), :52890 (reopen.note),
     // :52913 (comment.text).
+    // Outcome tags prefix the resolution note so "closed as not relevant" is
+    // legible later in the timeline, not just a generic "Closed" event —
+    // there is no separate outcome field on the ticket, just the resolution
+    // text (see /api/ux-fixes/close in server.py).
     var plan = {
       answer:  ['/api/ux-fixes/answer',  { ref: ref, text: detailInput('answer') },  true,  'Answer sent',    'Sending…'],
       comment: ['/api/ux-fixes/comment', { ref: ref, text: detailInput('comment') }, true,  'Comment added',  'Adding…'],
-      close:   ['/api/ux-fixes/close',   { ref: ref, note: detailInput('close') },   false, 'Ticket closed',  'Closing…'],
+      close_completed: ['/api/ux-fixes/close', { ref: ref,
+        note: 'Completed' + (detailInput('close_completed') ? ': ' + detailInput('close_completed') : '') },
+        false, 'Closed as completed', 'Closing…'],
+      close_not_relevant: ['/api/ux-fixes/close', { ref: ref,
+        note: 'Not relevant' + (detailInput('close_not_relevant') ? ': ' + detailInput('close_not_relevant') : '') },
+        false, 'Closed as not relevant', 'Closing…'],
       reopen:  ['/api/ux-fixes/reopen',  { ref: ref, note: detailInput('reopen') },  false, 'Ticket reopened', 'Reopening…'],
     }[act];
     if (!plan) return;
