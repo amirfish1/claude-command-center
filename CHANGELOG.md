@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [5.24.0] - 2026-08-12
+
+### Added
+- The q2 queue board grew a **Status brief**: an AI analysis of the selected queue's open and needs-input tickets, rendered above the ticket list so commonalities are read before any single ticket. It clusters tickets that share a root cause (with clickable refs), lists the decisions the owner must make, and ends with next steps. Generated on demand by a `claude -p` sonnet-5 call (auto only on first visit or after 3+ ticket changes, 15-minute server cooldown otherwise), cached per queue with a "Last updated … · N ticket updates since" freshness line and a live elapsed timer while analyzing. The band is height-adjustable via a drag handle, collapsible per queue, and the mechanics diagram above it can fold to a one-line "In progress: #677" strip.
+- The stats page opens on a new **What these numbers mean** view: one table stating, for every headline number, what it counts, whether it is a floor or a ceiling, how much to trust it, and whether it includes the maintainer's own machine. Every user count is now reported twice — with and without the maintainer — because `CCC_TELEMETRY_DEV_MODE=1` now marks the opt-in ping as well as the anonymous beacon. The view also lists the known reasons the numbers are wrong (opt-in floor, NAT collapsing distinct IPs, installs not humans, and the two counting bugs fixed on 2026-08-12).
+
+### Changed
+- The anonymous open beacon now fires **at most once per UTC day** from a running install instead of once per server boot. The old behavior measured restarts rather than usage: an install left running under launchd for a week sent zero beacons while one restart-heavy machine sent dozens, so the public anonymous count could sit *below* the opt-in count. The wire payload is unchanged (same three fields — schema, version, platform — no install id); the gate is a local `telemetry-last-open` date file, and restart-heavy machines now send strictly fewer bytes than before. The stats page relabels the tab accordingly and marks the 2026-08-12 semantics break. See `docs/telemetry.md`.
+
+### Fixed
+- Fixed a guaranteed 30-second stall on every prewarmed Claude session spawn: CCC was waiting for Claude's `system/init` event before writing the first prompt, but current Claude Code only emits `system/init` once it starts processing that prompt — so the wait always timed out. Prewarmed spawns now write immediately; measured accept time dropped from ~30.2s to ~0.1s.
+
 ## [5.23.0] - 2026-08-11
 
 ### Added
@@ -2602,7 +2614,8 @@ Initial public release.
 - `/api/repo/switch` validates targets against the picker allow-list.
 - See [`SECURITY.md`](SECURITY.md) for the full threat model.
 
-[Unreleased]: https://github.com/amirfish1/claude-command-center/compare/v5.23.0...HEAD
+[Unreleased]: https://github.com/amirfish1/claude-command-center/compare/v5.24.0...HEAD
+[5.24.0]: https://github.com/amirfish1/claude-command-center/releases/tag/v5.24.0
 [5.23.0]: https://github.com/amirfish1/claude-command-center/releases/tag/v5.23.0
 [5.22.1]: https://github.com/amirfish1/claude-command-center/releases/tag/v5.22.1
 [5.22.0]: https://github.com/amirfish1/claude-command-center/releases/tag/v5.22.0
