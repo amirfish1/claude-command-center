@@ -1,0 +1,1 @@
+Prevented ordinary Claude composer follow-ups from falsely retiring the active headless process and showing `[Request interrupted by user]`; explicit queued sends now wait for the tracked turn boundary.
