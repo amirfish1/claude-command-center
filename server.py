@@ -4565,7 +4565,15 @@ def _ensure_session_jsonl_for_cwd(session_id, cwd):
 
 
 def _discover_repo_paths_from_projects():
-    """Best-effort repo paths inferred from Claude project-folder slugs."""
+    """Best-effort repo paths inferred from Claude project-folder slugs.
+
+    Requires a live `.git` at the decoded path (CCC-821): a merged/renamed
+    project can leave its old folder behind as an empty shell (just the
+    `.claude/` dir Claude Code itself creates) while its transcripts keep
+    referencing the path forever, so `is_dir()` alone kept resurrecting it
+    as a "known repo" — a ghost quick-chip for a project that no longer
+    exists in any usable sense.
+    """
     out = []
     decoder = globals().get("_decode_project_slug")
     if not decoder or not PROJECTS_ROOT.is_dir():
@@ -4578,7 +4586,7 @@ def _discover_repo_paths_from_projects():
                 decoded = decoder(project_dir.name)
             except Exception:
                 decoded = None
-            if decoded and decoded.is_dir():
+            if decoded and (decoded / ".git").is_dir():
                 out.append(str(decoded.resolve()))
     except OSError:
         pass
