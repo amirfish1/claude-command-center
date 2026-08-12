@@ -1476,16 +1476,42 @@
     return html;
   }
 
-  // renderBrief runs on every main poll (renderAll), so an unchanged band
-  // must not be repainted: resetting innerHTML would throw away the body's
-  // scroll position and any text selection every few seconds while the
-  // owner is reading. Compare against the last string we set instead.
-  var briefRenderedHtml = null;
-  function setBriefHtml(host, html) {
-    if (briefRenderedHtml === html) return;
-    briefRenderedHtml = html;
-    host.hidden = (html === '');
-    host.innerHTML = html;
+  // renderBrief runs on every main poll (renderAll). The band is split into
+  // two independently-repainted regions so the header's freshness text
+  // ("Last updated 2m ago" flips every minute; every few SECONDS right
+  // after a generation, which is exactly when the owner is reading) can
+  // update without rebuilding the scrollable body -- an innerHTML reset on
+  // the body throws away its scroll position and any text selection.
+  // `briefShape` tracks which skeleton is mounted; the head/body strings
+  // gate their own region's repaint.
+  var briefShape = null;
+  var briefHeadHtml = null;
+  var briefBodyHtml = null;
+
+  function setBriefRegions(host, shape, headHtml, bodyHtml, bodyHidden) {
+    host.hidden = (shape === 'hidden');
+    if (shape !== briefShape) {
+      briefShape = shape;
+      briefHeadHtml = null;
+      briefBodyHtml = null;
+      if (shape === 'hidden') { host.innerHTML = ''; return; }
+      host.innerHTML = (shape === 'line')
+        ? '<div class="q2-brief-generating"></div>'
+        : '<div class="q2-brief-head"></div><div class="q2-brief-body"></div>';
+    }
+    if (shape === 'hidden') return;
+    if (shape === 'line') {
+      var line = host.querySelector('.q2-brief-generating');
+      if (line && briefHeadHtml !== headHtml) { briefHeadHtml = headHtml; line.innerHTML = headHtml; }
+      return;
+    }
+    var head = host.querySelector('.q2-brief-head');
+    var body = host.querySelector('.q2-brief-body');
+    if (head && briefHeadHtml !== headHtml) { briefHeadHtml = headHtml; head.innerHTML = headHtml; }
+    if (body) {
+      if (briefBodyHtml !== bodyHtml) { briefBodyHtml = bodyHtml; body.innerHTML = bodyHtml; }
+      body.hidden = !!bodyHidden;
+    }
   }
 
   function renderBrief() {
@@ -1500,7 +1526,7 @@
     // a queue with nothing analyzable and nothing cached from when it did.
     if (state.viewAll || !state.queue
         || (!hasBrief && !generating && !state.briefError && ticketCount === 0)) {
-      setBriefHtml(host, '');
+      setBriefRegions(host, 'hidden', '', '', false);
       setBriefHandleHidden(true);
       syncBriefTicker();
       return;
@@ -1509,11 +1535,11 @@
     // Generating with nothing cached yet: the one quiet line the design doc
     // asks for, no header chrome (there is nothing yet to collapse). The
     // elapsed span is left empty here and filled by the 1s ticker, so this
-    // html string stays constant across polls (repaint-skip keeps working).
+    // html string stays constant across polls.
     if (generating && !hasBrief) {
-      setBriefHtml(host, '<div class="q2-brief-generating">Analyzing ' + ticketCount
+      setBriefRegions(host, 'line', 'Analyzing ' + ticketCount
         + ' ticket' + (ticketCount === 1 ? '' : 's') + '&hellip; '
-        + '<span class="q2-brief-elapsed"></span></div>');
+        + '<span class="q2-brief-elapsed"></span>', '', false);
       setBriefHandleHidden(true);
       syncBriefTicker();
       return;
@@ -1534,8 +1560,7 @@
       }
     }
 
-    setBriefHtml(host, '<div class="q2-brief-head">'
-      + '<span class="q2-brief-title">Status brief</span>'
+    var headHtml = '<span class="q2-brief-title">Status brief</span>'
       + freshBits.join(' ')
       + '<span class="q2-spacer"></span>'
       + '<button type="button" class="q2-icon-btn q2-brief-refresh" data-q2-brief-refresh'
@@ -1543,15 +1568,14 @@
       + '<button type="button" class="q2-brief-toggle" data-q2-brief-toggle'
       + ' aria-expanded="' + (collapsed ? 'false' : 'true') + '"'
       + ' title="' + (collapsed ? 'Expand' : 'Collapse') + '">'
-      + (collapsed ? '&#9660;' : '&#9650;') + '</button>'
-      + '</div>'
-      + (collapsed ? '' : '<div class="q2-brief-body">'
-          + (state.briefError
-              ? '<div class="q2-brief-error">' + esc(state.briefError)
-                + ' &middot; <a href="#" data-q2-brief-retry>retry</a></div>'
-              : '')
-          + briefContentHtml(state.brief)
-          + '</div>'));
+      + (collapsed ? '&#9660;' : '&#9650;') + '</button>';
+    var bodyHtml = (state.briefError
+        ? '<div class="q2-brief-error">' + esc(state.briefError)
+          + ' &middot; <a href="#" data-q2-brief-retry>retry</a></div>'
+        : '')
+      + briefContentHtml(state.brief);
+
+    setBriefRegions(host, 'full', headHtml, bodyHtml, collapsed);
     // The drag handle only earns its pixels when there is a body to resize.
     setBriefHandleHidden(collapsed);
     syncBriefTicker();
