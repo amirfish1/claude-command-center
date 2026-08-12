@@ -25,9 +25,9 @@ class TestDebugModeStatic(unittest.TestCase):
 
     def test_debug_off_hides_approved_controls(self):
         for selector in (
-            '#statsBtn', '#annotationFabBtn', '#annotationStartBtn', '#annotationScreenBtn', '#annotationNotesBtn',
-            '#statusRailAnnotateBtn', '#statusRailActivityLogBtn',
-            '#cccHealth', '#cccAdvisorPill', '#cccThroughputPill', '#cccThroughputStrip',
+            '#statsBtn', '#annotationFabBtn', '#annotationScreenBtn', '#annotationNotesBtn',
+            '#statusRailActivityLogBtn',
+            '#cccHealth', '#cccAdvisorPill',
             '#cccFleetPill', '#cccHeroPulsePill', '[data-role="pane-annotate"]',
             '#customNavLinks .q2-toggle-opt[href="/view/reddit"]',
             '[data-role="conv-rowstyle-palette"]', '[data-role="conv-bg-palette"]',

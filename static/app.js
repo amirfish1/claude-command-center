@@ -1201,7 +1201,7 @@
         '#pollerWrap::-webkit-scrollbar{display:none;}' +
         '#cccHealth{gap:4px;font-size:9px;}' +
         '#pollerToggle,#cccSoundToggle{font-size:9px !important;padding:1px 4px !important;}' +
-        '#cccAdvisorPill,#cccProductivityPill,#cccThroughputPill,#cccFleetPill{' +
+        '#cccAdvisorPill,#cccProductivityPill,#cccSystemPill,#cccThroughputPill,#cccFleetPill{' +
         'font-size:10px !important;padding:2px 6px !important;gap:3px !important;}}';
       document.head.appendChild(st);
     }
@@ -1332,6 +1332,18 @@
     productivityPill.addEventListener('mouseenter', function () { productivityPill.style.opacity = '1'; });
     productivityPill.addEventListener('mouseleave', function () { productivityPill.style.opacity = '.8'; });
     wrap.appendChild(productivityPill);
+
+    const systemPill = document.createElement('div');
+    systemPill.id = 'cccSystemPill';
+    systemPill.title = 'System Status - dev servers, memory, CPU, and running processes. Click to open.';
+    systemPill.style.cssText = 'display:flex;align-items:center;gap:5px;flex:0 0 auto;cursor:pointer;' +
+      'font:600 11px/1 ui-monospace,Menlo,monospace;padding:3px 8px;border-radius:6px;' +
+      'border:1px solid var(--border-color,#30363d);opacity:.8;';
+    systemPill.innerHTML = '<span style="opacity:.7;">&#128187;</span><span>system</span>';
+    systemPill.addEventListener('click', _openSystemHealth);
+    systemPill.addEventListener('mouseenter', function () { systemPill.style.opacity = '1'; });
+    systemPill.addEventListener('mouseleave', function () { systemPill.style.opacity = '.8'; });
+    wrap.appendChild(systemPill);
     // Throughput pill: opens the standalone throughput dashboard tab; badge
     // shows today's total token count fetched from the history endpoint.
     const tputPill = document.createElement('div');
