@@ -56,8 +56,26 @@
     learningsQueue: '',
     learnings: null,    // selected queue's learnings file, loaded on demand
     learningsError: '',
+    briefQueue: '',      // which queue state.brief belongs to
+    brief: null,         // selected queue's status brief ({headline, summary, clusters, decisions, next_steps}), loaded on demand
+    briefError: '',       // last generation error, if any (kept alongside a still-good cached brief)
+    briefGenerating: false,
+    briefStaleCount: 0,  // ticket adds/removes/changes since the cached brief was generated
+    briefTicketCount: 0, // analyzable (non-closed) tickets right now
+    briefGeneratedAt: '',
+    briefModel: '',
   };
   var newTicketExpires = {};
+  // Auto-generate is "at most once per queue per page load" (design doc):
+  // a plain object keyed by queue name, not state, because it must NOT
+  // survive a queue's brief being reloaded -- only a hard page reload resets
+  // it. The server's own cooldown backstops this if it ever double-fires.
+  var briefAutoTried = {};
+  // Only one brief can be generating-and-polled at a time: the queue on
+  // screen. Torn down on every queue change so a stale poll can never leak
+  // past the selection that started it.
+  var briefPollTimer = null;
+  var briefPollQueue = '';
 
   function markNewTicket(ref) {
     if (!ref) return;
@@ -638,6 +656,9 @@
     if (!state.viewAll && state.queue && projectKey(state.learningsQueue) !== projectKey(state.queue)) {
       loadQueueLearnings(state.queue);
     }
+    if (!state.viewAll && state.queue && projectKey(state.briefQueue) !== projectKey(state.queue)) {
+      loadQueueBrief(state.queue);
+    }
     // One extra tail per poll, only for the queue on screen.
     if (!state.viewAll && state.queue) await loadLog(state.queue);
     renderAll();
@@ -671,6 +692,104 @@
       state.learningsError = e.message || 'Could not load queue learnings.';
     }
     renderDetail();
+  }
+
+  function briefPath(queue) {
+    return '/api/queue/brief?queue=' + encodeURIComponent(String(queue || ''));
+  }
+
+  function stopBriefPoll() {
+    if (briefPollTimer) { window.clearInterval(briefPollTimer); briefPollTimer = null; }
+    briefPollQueue = '';
+  }
+
+  // Polls every 3s while the server reports `generating`, and only for the
+  // queue that started it -- a poll for a queue the user has since left
+  // would repaint state nobody is looking at, and would leak forever if the
+  // user bounces between queues fast enough to never see `generating: false`.
+  function startBriefPoll(queue) {
+    if (briefPollTimer && briefPollQueue === projectKey(queue)) return;  // already polling this one
+    stopBriefPoll();
+    briefPollQueue = projectKey(queue);
+    briefPollTimer = window.setInterval(function () {
+      if (state.viewAll || projectKey(state.queue) !== briefPollQueue) { stopBriefPoll(); return; }
+      getJson(briefPath(queue)).then(function (data) {
+        if (projectKey(state.queue) !== projectKey(queue)) return;
+        applyBriefResponse(queue, data);
+      }).catch(function () {
+        // Swallow poll errors; the next tick (or the main 5s poll, on its own
+        // schedule) will retry rather than surfacing a flicker every 3s.
+      });
+    }, 3000);
+  }
+
+  function applyBriefResponse(queue, data) {
+    state.brief = (data && data.brief) || null;
+    state.briefGeneratedAt = (data && data.generated_at) || '';
+    state.briefModel = (data && data.model) || '';
+    state.briefStaleCount = (data && data.stale_count) || 0;
+    state.briefTicketCount = (data && data.ticket_count) || 0;
+    state.briefGenerating = !!(data && data.generating);
+    state.briefError = (data && data.error) || '';
+    renderBrief();
+
+    if (state.briefGenerating) { startBriefPoll(queue); return; }
+    stopBriefPoll();
+
+    // Auto-generate policy (design doc, "err toward manual"): a fresh POST
+    // only when there is nothing cached yet, or the cache is stale enough
+    // (>=3 ticket changes) to be actively misleading -- and only once per
+    // queue per page load. Everything else is the manual (force) button;
+    // the server's own 15-minute cooldown backstops this if it ever fires
+    // more than once anyway.
+    var key = projectKey(queue);
+    var exists = !!(data && data.exists);
+    if (!briefAutoTried[key] && state.briefTicketCount > 0 && (!exists || state.briefStaleCount >= 3)) {
+      briefAutoTried[key] = true;
+      triggerBriefRefresh(queue, false);
+    }
+  }
+
+  async function loadQueueBrief(queue) {
+    state.briefQueue = queue;
+    state.brief = null;
+    state.briefError = '';
+    state.briefGenerating = false;
+    state.briefStaleCount = 0;
+    state.briefTicketCount = 0;
+    state.briefGeneratedAt = '';
+    state.briefModel = '';
+    renderBrief();
+    try {
+      var data = await getJson(briefPath(queue));
+      if (projectKey(state.queue) !== projectKey(queue)) return;  // user moved on
+      applyBriefResponse(queue, data);
+    } catch (e) {
+      if (projectKey(state.queue) !== projectKey(queue)) return;
+      state.briefError = e.message || 'Could not load status brief.';
+      renderBrief();
+    }
+  }
+
+  // Manual (↻, retry link) or auto-triggered refresh. `force` maps straight
+  // to the server's cooldown bypass -- everything the UI itself initiates
+  // without a click (the auto-generate policy above) sends force:false so
+  // the server's cooldown is the real backstop, not this function.
+  async function triggerBriefRefresh(queue, force) {
+    if (!queue) return;
+    try {
+      var data = await postJson('/api/queue/brief/refresh', { queue: queue, force: !!force });
+      if (data && data.started && projectKey(state.queue) === projectKey(queue)) {
+        state.briefGenerating = true;
+        state.briefError = '';
+        renderBrief();
+        startBriefPoll(queue);
+      }
+    } catch (e) {
+      if (projectKey(state.queue) !== projectKey(queue)) return;
+      state.briefError = e.message || 'Could not refresh status brief.';
+      renderBrief();
+    }
   }
 
   // ── render: chrome ───────────────────────────────────────────────────────
@@ -1203,6 +1322,131 @@
       + (m.q.closed || 0) + ' total</div>'
       + '</div>'
       + '</div>';
+  }
+
+  // ── render: status brief ─────────────────────────────────────────────────
+  // Collapse state is per-queue (a decision-dense queue's owner wants it
+  // open; a quiet one gets collapsed once and should stay that way), and
+  // persists the same way the logbar height does: a plain localStorage key,
+  // read fresh on every render rather than cached in `state`.
+  function briefCollapsedKey(queue) { return 'q2.brief.collapsed.' + projectKey(queue); }
+  function briefCollapsed(queue) {
+    try { return localStorage.getItem(briefCollapsedKey(queue)) === '1'; } catch (_) { return false; }
+  }
+  function setBriefCollapsed(queue, on) {
+    try { localStorage.setItem(briefCollapsedKey(queue), on ? '1' : '0'); } catch (_) {}
+  }
+
+  // A ref the model cites is only a link if it names a ticket actually in
+  // the current item list -- otherwise clicking it would either 404 the
+  // detail pane or silently select nothing.
+  function briefRefExists(ref) {
+    return (state.items || []).some(function (it) { return it.ref === ref; });
+  }
+  function briefRefsHtml(refs) {
+    return (refs || []).map(function (ref) {
+      ref = String(ref || '').trim();
+      if (!ref) return '';
+      // Reuses data-q2-ref, the same attribute the ticket rows use --
+      // one delegated click handler (below) already turns it into
+      // selectTicket() for both.
+      var known = briefRefExists(ref);
+      return '<span class="q2-brief-ref' + (known ? '' : ' is-plain') + '"'
+        + (known ? ' data-q2-ref="' + esc(ref) + '"' : '')
+        + '>' + esc(ref) + '</span>';
+    }).join('');
+  }
+
+  // headline (bold) -> summary -> clusters (commonalities across tickets,
+  // the brief's primary value) -> decisions (orange left border, same
+  // affordance as the mock) -> next steps. Every string here is model- or
+  // server-provided and must be escaped; nothing in this function trusts it.
+  function briefContentHtml(brief) {
+    if (!brief) return '';
+    var html = '';
+    if (brief.headline) html += '<div class="q2-brief-headline">' + esc(brief.headline) + '</div>';
+    if (brief.summary) html += '<p class="q2-brief-summary">' + esc(brief.summary) + '</p>';
+    (brief.clusters || []).forEach(function (c) {
+      if (!c) return;
+      html += '<p class="q2-brief-cluster">'
+        + (c.title ? '<b>' + esc(c.title) + '</b> ' : '')
+        + (c.note ? esc(c.note) + ' ' : '')
+        + briefRefsHtml(c.refs)
+        + '</p>';
+    });
+    (brief.decisions || []).forEach(function (d) {
+      if (!d) return;
+      html += '<div class="q2-brief-decision">'
+        + briefRefsHtml(d.refs)
+        + '<span>' + esc(d.text || '') + '</span>'
+        + '</div>';
+    });
+    if (brief.next_steps && brief.next_steps.length) {
+      html += '<ol class="q2-brief-steps">' + brief.next_steps.map(function (s) {
+        return '<li>' + esc(s) + '</li>';
+      }).join('') + '</ol>';
+    }
+    return html;
+  }
+
+  function renderBrief() {
+    var host = $('q2Brief');
+    if (!host) return;
+
+    var ticketCount = state.briefTicketCount || 0;
+    var hasBrief = !!state.brief;
+    var generating = !!state.briefGenerating;
+
+    // Hidden: all-queues view (a brief is per-queue), no queue selected, or
+    // a queue with nothing analyzable and nothing cached from when it did.
+    if (state.viewAll || !state.queue
+        || (!hasBrief && !generating && !state.briefError && ticketCount === 0)) {
+      host.hidden = true;
+      host.innerHTML = '';
+      return;
+    }
+    host.hidden = false;
+
+    // Generating with nothing cached yet: the one quiet line the design doc
+    // asks for, no header chrome (there is nothing yet to collapse).
+    if (generating && !hasBrief) {
+      host.innerHTML = '<div class="q2-brief-generating">Analyzing ' + ticketCount
+        + ' ticket' + (ticketCount === 1 ? '' : 's') + '&hellip;</div>';
+      return;
+    }
+
+    var collapsed = briefCollapsed(state.queue);
+    var freshBits = [];
+    if (generating) {
+      // A refresh landed while a good brief was already on screen (e.g. the
+      // stale_count>=3 auto-trigger); keep showing that brief below.
+      freshBits.push('<span class="q2-brief-fresh">Analyzing&hellip;</span>');
+    } else if (state.briefGeneratedAt) {
+      freshBits.push('<span class="q2-brief-fresh">Last updated ' + esc(relTime(state.briefGeneratedAt)) + '</span>');
+      if (state.briefStaleCount > 0) {
+        freshBits.push('<span class="q2-brief-stale">&middot; ' + state.briefStaleCount
+          + ' ticket update' + (state.briefStaleCount === 1 ? '' : 's') + ' since</span>');
+      }
+    }
+
+    host.innerHTML = '<div class="q2-brief-head">'
+      + '<span class="q2-brief-title">Status brief</span>'
+      + freshBits.join(' ')
+      + '<span class="q2-spacer"></span>'
+      + '<button type="button" class="q2-icon-btn q2-brief-refresh" data-q2-brief-refresh'
+      + (generating ? ' disabled' : '') + ' title="Regenerate this brief">&#8635;</button>'
+      + '<button type="button" class="q2-brief-toggle" data-q2-brief-toggle'
+      + ' aria-expanded="' + (collapsed ? 'false' : 'true') + '"'
+      + ' title="' + (collapsed ? 'Expand' : 'Collapse') + '">'
+      + (collapsed ? '&#9660;' : '&#9650;') + '</button>'
+      + '</div>'
+      + (collapsed ? '' : '<div class="q2-brief-body">'
+          + (state.briefError
+              ? '<div class="q2-brief-error">' + esc(state.briefError)
+                + ' &middot; <a href="#" data-q2-brief-retry>retry</a></div>'
+              : '')
+          + briefContentHtml(state.brief)
+          + '</div>');
   }
 
   // ALL is a triage view, not a synthetic queue. Its summary therefore shows
@@ -2545,6 +2789,7 @@
     renderChrome();
     renderQueues();
     renderDiagram();
+    renderBrief();
     renderLogBar();
     renderTickets();
     // The detail pane owns its own fetch; only repaint from cache here so a
@@ -2594,6 +2839,8 @@
     renderAll();
     showMobileColumn('tickets');
     loadQueueLearnings(name);
+    stopBriefPoll();
+    loadQueueBrief(name);
     loadLog(name).then(renderLogBar);
     // CCC-809: clicking a queue is "show me what's happening in it" — land
     // on its topmost open ticket instead of leaving the RHS on the queue's
@@ -2625,6 +2872,9 @@
     var search = $('q2Search');
     if (search) search.value = '';
     state.log = [];
+    // No per-queue brief in the all-queues view; stop polling rather than
+    // leaving an interval running for a band that's now hidden.
+    stopBriefPoll();
     rememberSelection();
     renderAll();
     showMobileColumn('tickets');
@@ -2700,6 +2950,26 @@
     if (qBtn) { selectQueue(qBtn.getAttribute('data-q2-queue')); return; }
     var tBtn = e.target.closest('[data-q2-ref]');
     if (tBtn) { selectTicket(tBtn.getAttribute('data-q2-ref')); return; }
+    var briefToggle = e.target.closest('[data-q2-brief-toggle]');
+    if (briefToggle) {
+      e.stopPropagation();
+      setBriefCollapsed(state.queue, !briefCollapsed(state.queue));
+      renderBrief();
+      return;
+    }
+    var briefRefresh = e.target.closest('[data-q2-brief-refresh]');
+    if (briefRefresh) {
+      e.stopPropagation();
+      if (!briefRefresh.disabled) triggerBriefRefresh(state.queue, true);
+      return;
+    }
+    var briefRetry = e.target.closest('[data-q2-brief-retry]');
+    if (briefRetry) {
+      e.preventDefault();
+      e.stopPropagation();
+      triggerBriefRefresh(state.queue, true);
+      return;
+    }
     var convT = e.target.closest('[data-q2-conv-toggle], .q2-conv-head');
     if (convT && !e.target.closest('a')) {
       setConvOpen(!convOpen());

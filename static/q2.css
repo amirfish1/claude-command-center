@@ -606,6 +606,127 @@ body.q2-resizing-v .q2-col { pointer-events: none; }
   .q2-dg-spin { animation: none; }
 }
 
+/* ── status brief (content analysis, above the ticket list) ──────────────
+   Sits between the diagram and the ticket list, so the commonalities across
+   a queue's tickets are read before any single ticket. Height-capped at 40%
+   of the column with its own scroll -- a long brief must not push the
+   ticket list (the thing you actually act on) off screen. */
+.q2-brief {
+  flex: 0 0 auto;
+  max-height: 40%;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  border-bottom: 1px solid var(--border);
+  background: var(--surface);
+}
+.q2-brief-generating {
+  padding: 7px 10px;
+  font-size: 11.5px;
+  color: var(--text-muted);
+}
+.q2-brief-head {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  padding: 6px 10px;
+  min-height: 28px;
+}
+.q2-brief-title {
+  font-size: 11px;
+  font-weight: 650;
+  text-transform: uppercase;
+  letter-spacing: 0.6px;
+  color: var(--text-muted);
+  white-space: nowrap;
+}
+.q2-brief-fresh {
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  color: var(--text-muted);
+  white-space: nowrap;
+}
+.q2-brief-stale { color: var(--orange); }
+.q2-brief-refresh {
+  font-size: 13px;
+  border-radius: 5px;
+}
+.q2-brief-refresh[disabled] { opacity: 0.5; cursor: default; }
+.q2-brief-toggle {
+  flex: 0 0 auto;
+  font: inherit;
+  font-size: 10px;
+  color: var(--text-muted);
+  background: transparent;
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  padding: 2px 6px;
+  cursor: pointer;
+}
+.q2-brief-toggle:hover { color: var(--text); }
+.q2-brief-body {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 0 10px 10px;
+  font-size: 12.5px;
+  line-height: 1.5;
+}
+.q2-brief-error {
+  color: var(--text-muted);
+  opacity: 0.85;
+  font-size: 11.5px;
+  margin-bottom: 6px;
+}
+.q2-brief-error a { color: var(--accent); }
+.q2-brief-headline {
+  font-size: 13.5px;
+  font-weight: 650;
+  color: var(--text);
+  margin-bottom: 5px;
+}
+.q2-brief-summary { color: var(--text-muted); margin-bottom: 8px; }
+.q2-brief-cluster { color: var(--text-muted); margin-bottom: 8px; }
+.q2-brief-cluster b { color: var(--text); font-weight: 650; }
+.q2-brief-decision {
+  display: flex;
+  gap: 8px;
+  align-items: flex-start;
+  border: 1px solid var(--border);
+  border-left: 3px solid var(--orange);
+  border-radius: 6px;
+  padding: 6px 9px;
+  margin: 6px 0;
+  background: var(--surface-2);
+}
+.q2-brief-decision > span:last-child { color: var(--text); }
+.q2-brief-ref {
+  display: inline-block;
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  color: var(--accent);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 0 5px;
+  margin: 0 3px 3px 0;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.q2-brief-ref:hover { border-color: var(--accent); }
+/* A ref the model mentioned that isn't in the current item list (renamed,
+   closed off-queue, or the brief is just stale) -- shown, not clickable. */
+.q2-brief-ref.is-plain {
+  color: var(--text-muted);
+  cursor: default;
+}
+.q2-brief-ref.is-plain:hover { border-color: var(--border); }
+.q2-brief-steps {
+  margin: 6px 0 0 18px;
+  color: var(--text-muted);
+}
+.q2-brief-steps li { margin-bottom: 3px; }
+
 /* ── reconciler log (bottom band) ─────────────────────────────────────── */
 .q2-logbar {
   flex: 0 0 auto;

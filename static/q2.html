@@ -51,6 +51,12 @@
       </div>
       <!-- Flow diagram for this queue: backlog -> watcher -> worker -> done. -->
       <section class="q2-diagram" id="q2Diagram" aria-label="Queue flow"></section>
+      <!-- Content analysis for this queue: commonalities across tickets, the
+           decisions they imply, and what to do next. Read before the list
+           below it, not beside it -- see docs/superpowers/specs/
+           2026-08-12-q2-status-brief-design.md. Hidden in all-queues view,
+           with no queue selected, or when the queue has nothing to analyze. -->
+      <section class="q2-brief" id="q2Brief" aria-label="Status brief" hidden></section>
       <div class="q2-col-sub">
         <input type="search" class="q2-search" id="q2Search" placeholder="Search tickets&hellip;" aria-label="Search tickets">
       </div>
