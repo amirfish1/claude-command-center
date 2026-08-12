@@ -29132,6 +29132,31 @@ def _system_services_app_server_entry(worker_entry):
     }
 
 
+def _system_services_spawned_processes():
+    """Every currently-running claude/codex/kimi process CCC has spawned, for
+    the System status panel's process list. Prewarm entries carry
+    expires_at_epoch so the panel can show a live countdown to their
+    auto-kill; regular spawns have no TTL today, so it's left as None and
+    the panel shows them as having no scheduled kill."""
+    rows = []
+    for entry in list_spawned_sessions():
+        if not entry.get("running"):
+            continue
+        rows.append({
+            "pid": entry.get("pid"),
+            "name": entry.get("name") or "",
+            "engine": entry.get("engine") or "claude",
+            "cwd": entry.get("cwd") or "",
+            "repo_path": entry.get("repo_path") or "",
+            "model": entry.get("model") or "",
+            "started": entry.get("started") or entry.get("spawned_at") or "",
+            "prewarm": bool(entry.get("prewarm")),
+            "created_at_epoch": entry.get("created_at_epoch"),
+            "expires_at_epoch": entry.get("expires_at_epoch"),
+        })
+    return rows
+
+
 def _build_system_services_uncached():
     worker = _system_services_worker_entry()
     return {
@@ -29144,6 +29169,7 @@ def _build_system_services_uncached():
             _system_services_watchtower_entry(),
             _system_services_app_server_entry(worker),
         ],
+        "spawned_processes": _system_services_spawned_processes(),
     }
 
 
@@ -44011,6 +44037,7 @@ def _start_claude_prewarm(
         prewarm_id=prewarm_id,
         client_id=entry["client_id"],
         reasoning_effort=reasoning_effort,
+        created_at_epoch=entry["created_at_epoch"],
     )
     expiry_timer = threading.Timer(
         _CLAUDE_PREWARM_TTL_S + 1, _prune_claude_prewarms,
@@ -46513,7 +46540,7 @@ def _record_spawn_to_registry(
     pid, name, log_path, cwd, spawned_at, command_summary,
     fifo=None, engine="claude", session_id=None, model=None, repo_path=None,
     parent_session_id=None, prewarm=False, prewarm_id=None, client_id=None,
-    reasoning_effort="",
+    reasoning_effort="", created_at_epoch=None,
 ):
     """Append a freshly-spawned session to the on-disk registry. The
     session_id is provided for known resume calls and otherwise filled in
@@ -46525,7 +46552,13 @@ def _record_spawn_to_registry(
     write side after a restart and continue injecting messages (Claude
     only — Codex/Gemini/Cursor headless runs are one-shot).
     `engine` ("claude", "codex", "gemini", "cursor", or "antigravity") tells the boot-time reattach sweep
-    which ps-grep to use and which JSONL ingestion path to skip."""
+    which ps-grep to use and which JSONL ingestion path to skip.
+    `created_at_epoch`, when given, is persisted alongside a prewarm record as
+    `expires_at_epoch` (deadline = created_at_epoch + _CLAUDE_PREWARM_TTL_S).
+    A prewarm can be owned by a different process than whichever one later
+    serves the System status panel's process list (the worker vs. the
+    dashboard), so the kill deadline has to live on disk, not just in the
+    owning process's in-memory _CLAUDE_PREWARMS dict."""
     entries = [
         entry for entry in _load_spawn_registry()
         if str(entry.get("pid") or "") != str(pid)
@@ -46552,6 +46585,11 @@ def _record_spawn_to_registry(
             "prewarm": True,
             "prewarm_id": str(prewarm_id or ""),
             "client_id": str(client_id or ""),
+            "created_at_epoch": created_at_epoch,
+            "expires_at_epoch": (
+                created_at_epoch + _CLAUDE_PREWARM_TTL_S
+                if created_at_epoch is not None else None
+            ),
         })
     entries.append(record)
     _save_spawn_registry(entries)
@@ -46972,6 +47010,10 @@ def list_spawned_sessions():
                 "running": running,
                 "exit_code": None,
                 "status": "running" if running else "finished",
+                "prewarm": bool(entry.get("prewarm")),
+                "prewarm_id": entry.get("prewarm_id") or "",
+                "created_at_epoch": entry.get("created_at_epoch"),
+                "expires_at_epoch": entry.get("expires_at_epoch"),
             })
     for s in _spawned_sessions:
         poll = _poll_spawn_entry(s)
@@ -46998,6 +47040,50 @@ def list_spawned_sessions():
             "running": poll is None,
             "exit_code": poll,
             "status": "running" if poll is None else f"finished (exit {poll})",
+        })
+    # Prewarm reservations: their kill deadline (expires_at_epoch) is only
+    # durable in the on-disk registry (see _record_spawn_to_registry), since
+    # the process that owns a prewarm (the worker, under control-plane
+    # routing) can differ from whichever process serves this call. Merge
+    # them in unconditionally, deduped against pids already surfaced above.
+    # A claimed prewarm graduates into a normal entry via _spawned_sessions
+    # (or the worker-owned branch above) and its registry record loses the
+    # "prewarm" flag at claim time (_record_spawn_to_registry is called
+    # again without prewarm=True, which overwrites by pid) — so it naturally
+    # drops out of this branch once it's a real working session.
+    seen_pids = {str(r.get("pid")) for r in result}
+    for entry in _load_spawn_registry():
+        if not entry.get("prewarm"):
+            continue
+        pid = entry.get("pid")
+        if pid is None or str(pid) in seen_pids:
+            continue
+        seen_pids.add(str(pid))
+        running = bool(_is_pid_alive(pid))
+        result.append({
+            "pid": pid,
+            "spawn_id": str(entry.get("spawn_id") or pid or ""),
+            "session_id": entry.get("session_id") or "",
+            "session_id_pending": not bool(entry.get("session_id")),
+            "name": entry.get("name") or "",
+            "log": entry.get("log") or "",
+            "prompt": entry.get("command_summary") or "",
+            "started": entry.get("spawned_at") or "",
+            "spawned_at": entry.get("spawned_at") or "",
+            "engine": entry.get("engine") or "claude",
+            "cwd": entry.get("cwd") or "",
+            "repo_path": entry.get("repo_path") or "",
+            "model": entry.get("model") or "",
+            "reasoning_effort": entry.get("reasoning_effort") or "",
+            "parent_session_id": entry.get("parent_session_id") or "",
+            "command_summary": entry.get("command_summary") or "",
+            "running": running,
+            "exit_code": None,
+            "status": "running" if running else "finished",
+            "prewarm": True,
+            "prewarm_id": entry.get("prewarm_id") or "",
+            "created_at_epoch": entry.get("created_at_epoch"),
+            "expires_at_epoch": entry.get("expires_at_epoch"),
         })
     return result
 

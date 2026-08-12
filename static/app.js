@@ -55668,6 +55668,8 @@
   };
 
   let _sysPollTimer = null;
+  let _sysSpawnedList = [];
+  let _sysSpawnedTickTimer = null;
   let _sysReturnFocus = null;
   let _sysRestartInFlight = null;
   // Armed but not fired: the dashboard restart counts down for 5s with an
@@ -56147,6 +56149,75 @@
     meta.textContent = text;
   }
 
+  // ── Spawned processes (System status panel) ──────────────────────
+  // Every claude/codex/kimi subprocess CCC has running right now. Prewarm
+  // slots carry a kill deadline (expires_at_epoch, server-side TTL is
+  // _CLAUDE_PREWARM_TTL_S); everything else has no scheduled kill today.
+  // The countdown ticks locally off Date.now() every second
+  // (_sysSpawnedTickTimer, started/stopped alongside the modal like
+  // _sysPollTimer) so it moves smoothly between the normal 5s data polls
+  // instead of jumping once per poll.
+  function _sysFmtCountdown(msLeft) {
+    if (msLeft <= 0) return 'expiring…';
+    const s = Math.ceil(msLeft / 1000);
+    if (s < 60) return s + 's';
+    return Math.floor(s / 60) + 'm ' + (s % 60) + 's';
+  }
+
+  // spawned_at/started is written server-side via time.strftime('%Y%m%dT%H%M%S')
+  // — local time on the machine running CCC, not UTC/epoch.
+  function _sysParseSpawnedTimestamp(raw) {
+    const m = /^(\d{4})(\d{2})(\d{2})T(\d{2})(\d{2})(\d{2})$/.exec(String(raw || ''));
+    if (!m) return null;
+    const d = new Date(
+      Number(m[1]), Number(m[2]) - 1, Number(m[3]),
+      Number(m[4]), Number(m[5]), Number(m[6]),
+    );
+    return isNaN(d.getTime()) ? null : d;
+  }
+
+  function renderSysSpawnedList(list) {
+    const $list = document.getElementById('sysSpawnedList');
+    const $count = document.getElementById('sysSpawnedCount');
+    if (!$list) return;
+    const rows = Array.isArray(list) ? list : [];
+    if ($count) $count.textContent = String(rows.length);
+    if (!rows.length) {
+      $list.innerHTML = '<div class="sys-spawned-empty">No spawned processes right now.</div>';
+      return;
+    }
+    const now = Date.now();
+    const sorted = rows.slice().sort((a, b) => {
+      const aExp = a.expires_at_epoch ? a.expires_at_epoch * 1000 : Infinity;
+      const bExp = b.expires_at_epoch ? b.expires_at_epoch * 1000 : Infinity;
+      return aExp - bExp;
+    });
+    $list.innerHTML = sorted.map(p => {
+      const isPrewarm = !!p.prewarm;
+      const expiresMs = p.expires_at_epoch ? (p.expires_at_epoch * 1000 - now) : null;
+      const expiring = isPrewarm && expiresMs != null && expiresMs <= 15000;
+      const ttlText = isPrewarm
+        ? (expiresMs != null ? _sysFmtCountdown(expiresMs) : 'expiring…')
+        : 'no scheduled kill';
+      const startedDate = _sysParseSpawnedTimestamp(p.started);
+      const startedText = startedDate
+        ? relDuration((now - startedDate.getTime()) / 1000, false) : '';
+      const proj = (p.repo_path || p.cwd || '').split('/').filter(Boolean).pop() || '-';
+      const label = String(p.name || (isPrewarm ? 'prewarm' : p.engine || 'claude'));
+      return (
+        '<div class="sys-spawned-row' + (isPrewarm ? ' is-prewarm' : '') + (expiring ? ' is-expiring' : '') + '">'
+        + '<span class="sys-spawned-dot" aria-hidden="true"></span>'
+        + '<span class="sys-spawned-main">'
+        + '<span class="sys-spawned-name">' + escapeHtml(label) + '</span>'
+        + '<span class="sys-spawned-meta">' + escapeHtml(proj) + ' · pid ' + escapeHtml(String(p.pid || '?'))
+        + (startedText ? ' · ' + escapeHtml(startedText) : '') + '</span>'
+        + '</span>'
+        + '<span class="sys-spawned-ttl">' + escapeHtml(ttlText) + '</span>'
+        + '</div>'
+      );
+    }).join('');
+  }
+
   async function sysRefresh(force) {
     if (!_sysFirstAttemptAt) _sysFirstAttemptAt = Date.now();
     const cache = await _fetchSystemServices(force);
@@ -56156,6 +56227,8 @@
     renderSysRow('worker', map.get('worker'));
     renderSysRow('watchtower', map.get('watchtower'));
     renderSysAppServerRow(map.get('app_server'), map.get('worker'));
+    _sysSpawnedList = Array.isArray(payload && payload.spawned_processes) ? payload.spawned_processes : [];
+    renderSysSpawnedList(_sysSpawnedList);
     const rollup = computeServerRollup(payload);
     paintSysRollup(rollup);
     paintServerChip(rollup);
@@ -56209,6 +56282,10 @@
     document.addEventListener('keydown', _sysTrapTab, true);
     if (_sysPollTimer) clearInterval(_sysPollTimer);
     _sysPollTimer = setInterval(() => sysRefresh(false), 5000);
+    // The prewarm countdown ticks once a second, independent of the 5s data
+    // poll above, so it counts down smoothly instead of jumping in 5s steps.
+    if (_sysSpawnedTickTimer) clearInterval(_sysSpawnedTickTimer);
+    _sysSpawnedTickTimer = setInterval(() => renderSysSpawnedList(_sysSpawnedList), 1000);
   }
 
   function sysCloseModal() {
@@ -56219,6 +56296,7 @@
     $sysModal.classList.remove('open');
     if ($sysChip) $sysChip.setAttribute('aria-expanded', 'false');
     if (_sysPollTimer) { clearInterval(_sysPollTimer); _sysPollTimer = null; }
+    if (_sysSpawnedTickTimer) { clearInterval(_sysSpawnedTickTimer); _sysSpawnedTickTimer = null; }
     document.removeEventListener('keydown', _sysTrapTab, true);
     const back = (_sysReturnFocus && document.contains(_sysReturnFocus)
       && _sysReturnFocus.offsetParent !== null) ? _sysReturnFocus : $sysChip;

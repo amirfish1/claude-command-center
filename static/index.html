@@ -1476,6 +1476,23 @@
         <div class="sys-svc-result" id="sysWtResult" hidden></div>
       </div>
 
+      <!-- Spawned processes: every claude/codex/kimi subprocess CCC has
+           running right now. Prewarm slots are a bounded, disposable pool
+           (max 4, see worker-row explainer) and carry a live countdown to
+           their auto-kill; everything else has no scheduled kill today, so
+           it's labelled as such rather than showing a fake countdown.
+           #sysSpawnedList is rebuilt with innerHTML on each refresh — the
+           same sanctioned exception as #cccWtPopList above (dynamic-length
+           list, not one of the fixed rows this block's structural rule
+           covers). -->
+      <div class="sys-section" id="sysRowSpawned">
+        <div class="sys-svc-head">
+          <div class="sys-name">Spawned processes <span class="sys-state" id="sysSpawnedCount">0</span></div>
+        </div>
+        <div class="sys-desc" id="sysSpawnedDetail">Headless claude/codex/kimi processes CCC has started. Prewarm slots (at most 4) auto-expire 120s after they're reserved if nothing claims them.</div>
+        <div class="sys-spawned-list" id="sysSpawnedList"></div>
+      </div>
+
       <!-- The KeepAlive fact used to be restated in all three row explainers,
            in three different phrasings. It is one fact about all three, so it
            is stated once, here. -->
