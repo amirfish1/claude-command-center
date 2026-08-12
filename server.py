@@ -6816,6 +6816,7 @@ def _get_pr_state(pr_url):
     """
     if not pr_url:
         return None
+    _hydrate_gh_cache("pr_states", _PR_STATE_CACHE)
     now = time.time()
     with _PR_STATE_LOCK:
         cached = _PR_STATE_CACHE.get(pr_url)
@@ -6858,8 +6859,10 @@ def _get_pr_state(pr_url):
         _PR_STATE_CACHE[pr_url] = {
             "state": state,
             "at": now,
+            "ts": now,
             "ttl": _PR_STATE_TTL if state else _PR_STATE_FAILURE_TTL,
         }
+    _persist_gh_cache("pr_states", _PR_STATE_CACHE)
     return state
 
 
@@ -6900,6 +6903,7 @@ def _bust_pr_state_cache(url=None):
             _PR_STATE_CACHE.pop(url, None)
         else:
             _PR_STATE_CACHE.clear()
+    _persist_gh_cache("pr_states", _PR_STATE_CACHE)
 
 
 # Cache of session ids whose engine CLI (codex/gemini/cursor) is currently
@@ -21787,6 +21791,7 @@ def _fetch_one_repo_issues(repo_path):
     Never raises — every failure mode lands in the `error` field so the
     aggregator can degrade gracefully."""
     cache_key = str(repo_path)
+    _hydrate_gh_cache("cross_repo_issues", _CROSS_REPO_ISSUES_CACHE)
     now = time.time()
     with _CROSS_REPO_ISSUES_LOCK:
         cached = _CROSS_REPO_ISSUES_CACHE.get(cache_key)
@@ -21841,6 +21846,7 @@ def _fetch_one_repo_issues(repo_path):
     result = {"issues": issues, "error": error, "ts": now}
     with _CROSS_REPO_ISSUES_LOCK:
         _CROSS_REPO_ISSUES_CACHE[cache_key] = result
+    _persist_gh_cache("cross_repo_issues", _CROSS_REPO_ISSUES_CACHE)
     return result
 
 
