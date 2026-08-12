@@ -207,7 +207,7 @@
        on Chrome/Edge; Safari (mac) and iOS get instruction text only. -->
   <div id="pwaInstallBanner" class="pwa-install-banner" hidden role="dialog" aria-live="polite" aria-label="Install CCC as a standalone app">
     <button class="pwa-install-banner__close" id="pwaInstallClose" type="button" aria-label="Dismiss install banner">&times;</button>
-    <div class="pwa-install-banner__title">Install Command Center</div>
+    <div class="pwa-install-banner__title">Install CCC as an App</div>
     <div class="pwa-install-banner__body" id="pwaInstallBody"></div>
     <div class="pwa-install-banner__actions">
       <button id="pwaInstallBtn" class="pwa-install-banner__cta" type="button" hidden>Install</button>
@@ -2022,6 +2022,18 @@
               </div>
               <div class="settings-row-control">
                 <button type="button" class="settings-toggle" id="settingsDebugModeToggle" data-debug-mode-toggle role="switch" aria-checked="false" aria-label="Debug mode">
+                  <span class="settings-toggle-track"><span class="settings-toggle-thumb"></span></span>
+                </button>
+              </div>
+            </div>
+
+            <div class="settings-row" data-keywords="sound sounds audio beep chime mute silence notification volume">
+              <div class="settings-row-main">
+                <div class="settings-row-label">Completion sounds</div>
+                <div class="settings-row-desc">Play a short chime when the open conversation finishes a turn or goes idle.</div>
+              </div>
+              <div class="settings-row-control">
+                <button type="button" class="settings-toggle" id="settingsSoundsToggle" data-sounds-toggle role="switch" aria-checked="true" aria-label="Completion sounds">
                   <span class="settings-toggle-track"><span class="settings-toggle-thumb"></span></span>
                 </button>
               </div>

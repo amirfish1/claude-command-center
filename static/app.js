@@ -162,6 +162,9 @@
   function _setCccSoundsEnabled(on) {
     try { localStorage.setItem(_CCC_SOUNDS_LS, on ? '1' : '0'); } catch (_) {}
     _renderSoundToggle();
+    // Keep the Settings > Appearance switch in sync when the footer pill is
+    // the thing that was clicked (either control can flip the pref).
+    try { refreshAppearanceChecks(); } catch (_) {}
   }
   function _renderSoundToggle() {
     if (!_soundToggleBtn) return;
@@ -62929,6 +62932,12 @@
       $debugToggle.classList.toggle('is-on', on);
       $debugToggle.setAttribute('aria-checked', String(on));
     }
+    const $soundsToggle = document.getElementById('settingsSoundsToggle');
+    if ($soundsToggle) {
+      const on = _cccSoundsEnabled();
+      $soundsToggle.classList.toggle('is-on', on);
+      $soundsToggle.setAttribute('aria-checked', String(on));
+    }
     const $separateTabsToggle = document.getElementById('settingsSeparateTabsToggle');
     if ($separateTabsToggle) {
       const on = getSeparateTabsPref();
@@ -63579,6 +63588,16 @@
         try { localStorage.setItem('ccc-hero-live-variant', lv === 'B' ? 'A' : 'B'); } catch (_) {}
         refreshAppearanceChecks();
         showSettingsSavedPulse(liveVariantToggle.closest('.settings-row'));
+        return;
+      }
+      const soundsToggle = e.target.closest('[data-sounds-toggle]');
+      if (soundsToggle) {
+        const next = !_cccSoundsEnabled();
+        _setCccSoundsEnabled(next);
+        // Preview the chime on enable so the choice is audible, not just visual.
+        if (next) _cccPlayTurnEnd();
+        refreshAppearanceChecks();
+        showSettingsSavedPulse(soundsToggle.closest('.settings-row'));
         return;
       }
       const debugModeToggle = e.target.closest('[data-debug-mode-toggle]');
