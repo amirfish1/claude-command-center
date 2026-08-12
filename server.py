@@ -1016,6 +1016,325 @@ def _wt_queue_learnings_path(queue):
     return _WT_HOME / "learnings" / (name + ".md")
 
 
+def _wt_queue_brief_path(queue):
+    """Return the one status-brief cache file belonging to a valid WatchTower
+    queue, same name validation as _wt_queue_learnings_path."""
+    name = str(queue or "").strip().upper()
+    if not _QUEUE_CONFIG_NAME_RE.fullmatch(name):
+        return None
+    return COMMAND_CENTER_STATE_DIR / "queue-briefs" / (name + ".json")
+
+
+def _wt_queue_brief_read(path):
+    """Best-effort cache read -- a missing or corrupt file just means "no
+    brief yet", never an error the caller has to special-case."""
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        return data if isinstance(data, dict) else None
+    except FileNotFoundError:
+        return None
+    except (OSError, ValueError):
+        return None
+
+
+def _wt_queue_brief_write(path, record):
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_suffix(path.suffix + ".tmp")
+    tmp.write_text(json.dumps(record, indent=2), encoding="utf-8")
+    os.replace(tmp, path)  # atomic -- a poller must never see a half-written file
+
+
+def _wt_queue_brief_items(queue):
+    """Non-closed tickets belonging to ``queue``, filtered out of the same
+    memoized list /api/queue/list serves so this never adds its own `gh`
+    round-trip on top of an already-warm memo."""
+    queue_norm = ux_fixes_queue._norm_project(queue)
+    if not queue_norm:
+        return []
+    try:
+        all_items = _ux_fixes_list_items_cached(None, None) or []
+    except Exception:
+        return []
+    return [
+        it for it in all_items
+        if isinstance(it, dict)
+        and ux_fixes_queue._norm_project(it.get("project")) == queue_norm
+        and it.get("status") != "closed"
+    ]
+
+
+def _wt_queue_brief_signature(item):
+    """status|needs_input|updated -- cheap enough to compute on every GET so
+    staleness never needs its own cache."""
+    status = str(item.get("status") or "open")
+    needs_input = bool(item.get("needs_input"))
+    ts = item.get("updated_at") or item.get("created_at") or ""
+    return f"{status}|{needs_input}|{ts}"
+
+
+def _wt_queue_brief_signatures(items):
+    out = {}
+    for it in items:
+        ref = str(it.get("ref") or "")
+        if ref:
+            out[ref] = _wt_queue_brief_signature(it)
+    return out
+
+
+def _wt_queue_brief_stale_count(cached_sigs, current_sigs):
+    """Count added + removed + changed refs since the cached brief was
+    generated -- drives the "N ticket updates since" hint in the UI."""
+    cached_sigs = cached_sigs or {}
+    changed = sum(1 for ref, sig in current_sigs.items() if cached_sigs.get(ref) != sig)
+    removed = sum(1 for ref in cached_sigs if ref not in current_sigs)
+    return changed + removed
+
+
+_QUEUE_BRIEF_MODEL = "claude-sonnet-5"
+_QUEUE_BRIEF_PROMPT_CAP = 24000
+_QUEUE_BRIEF_BODY_EXCERPT = 700
+_QUEUE_BRIEF_COOLDOWN_S = 15 * 60
+# Per-queue in-flight generation tracker (queue -> start time). Guards the
+# refresh POST against a double-fire and lets GET report "generating" without
+# reading process state off disk.
+_QUEUE_BRIEF_GENERATING = {}
+_QUEUE_BRIEF_LOCK = threading.Lock()
+
+
+def _wt_queue_brief_ticket_block(item, include_body):
+    ref = str(item.get("ref") or "")
+    title = str(item.get("title") or item.get("note") or "").strip()
+    status = str(item.get("status") or "open")
+    if item.get("needs_input"):
+        status += " (needs_input)"
+    ts = item.get("updated_at") or item.get("created_at") or ""
+    lines = [f"### {ref}", f"Title: {title}", f"Status: {status}", f"Updated: {ts}"]
+    if include_body:
+        body = str(item.get("text") or item.get("note") or "").strip()
+        if body:
+            lines.append("Body: " + body[:_QUEUE_BRIEF_BODY_EXCERPT])
+    return "\n".join(lines)
+
+
+def _wt_queue_brief_prompt(queue, items):
+    """Build the `claude -p` prompt: commonalities first (the brief's whole
+    value on a queue where most open tickets are symptoms of one cause), then
+    decisions, then next steps. Capped at ~24k chars -- drop bodies first,
+    then whole tickets oldest-first, since a ticket that's survived several
+    brief cycles unaddressed is less likely to be what just changed.
+    """
+    instructions = (
+        f"You are analyzing the WatchTower queue {queue} for its owner, from "
+        f"{len(items)} open/in-progress tickets.\n\n"
+        "Priority order:\n"
+        "1. Lead with commonalities and shared root causes across tickets -- "
+        "this is the brief's primary value. Group tickets that share a cause.\n"
+        "2. List concrete decisions the owner must make.\n"
+        "3. Give short, concrete next steps.\n\n"
+        "Output ONLY a single JSON object -- no prose, no code fences -- "
+        "matching exactly this shape:\n"
+        '{"headline": "<=120 chars", "summary": "2-4 sentences", '
+        '"clusters": [{"title": "...", "refs": ["..."], "note": "..."}], '
+        '"decisions": [{"refs": ["..."], "text": "..."}], '
+        '"next_steps": ["..."]}\n'
+    )
+    # Oldest first so truncation (below) drops the least-fresh tickets.
+    ordered = sorted(items, key=lambda it: str(it.get("created_at") or it.get("updated_at") or ""))
+
+    def render(entries, include_body):
+        return "\n\n".join(_wt_queue_brief_ticket_block(it, include_body) for it in entries)
+
+    budget = _QUEUE_BRIEF_PROMPT_CAP - len(instructions) - len("\nTickets:\n") - 200
+    note = ""
+    body_text = render(ordered, True)
+    if len(body_text) > budget:
+        body_text = render(ordered, False)
+        note = "\n(Note: ticket bodies were omitted to fit the prompt budget.)\n"
+        if len(body_text) > budget:
+            kept = list(ordered)
+            while len(kept) > 1 and len(render(kept, False)) > budget:
+                kept.pop(0)
+            body_text = render(kept, False)
+            note = (
+                f"\n(Note: only the {len(kept)} most recently updated of "
+                f"{len(ordered)} tickets are shown; bodies omitted to fit the "
+                "prompt budget.)\n"
+            )
+    return instructions + note + "\nTickets:\n" + body_text
+
+
+def _wt_queue_brief_parse(raw):
+    """Defensive parse of the model's reply: strip code fences, slice the
+    first `{` to the last `}` (models routinely wrap JSON in a sentence or a
+    fence despite instructions), then coerce missing/wrong-typed keys to the
+    schema's empty defaults rather than raising on a near-miss.
+    """
+    text = (raw or "").strip()
+    if text.startswith("```"):
+        text = text.split("\n", 1)[1] if "\n" in text else ""
+        if text.endswith("```"):
+            text = text[:-3]
+        text = text.strip()
+    start = text.find("{")
+    end = text.rfind("}")
+    if start == -1 or end == -1 or end <= start:
+        raise ValueError("model did not return a JSON object")
+    obj = json.loads(text[start:end + 1])
+    if not isinstance(obj, dict):
+        raise ValueError("model response was not a JSON object")
+
+    def _s(v):
+        return v if isinstance(v, str) else ""
+
+    def _l(v):
+        return v if isinstance(v, list) else []
+
+    clusters = []
+    for c in _l(obj.get("clusters")):
+        if isinstance(c, dict):
+            clusters.append({
+                "title": _s(c.get("title")),
+                "refs": [str(r) for r in _l(c.get("refs"))],
+                "note": _s(c.get("note")),
+            })
+    decisions = []
+    for d in _l(obj.get("decisions")):
+        if isinstance(d, dict):
+            decisions.append({
+                "refs": [str(r) for r in _l(d.get("refs"))],
+                "text": _s(d.get("text")),
+            })
+    next_steps = [str(s) for s in _l(obj.get("next_steps"))]
+    return {
+        "headline": _s(obj.get("headline"))[:120],
+        "summary": _s(obj.get("summary")),
+        "clusters": clusters,
+        "decisions": decisions,
+        "next_steps": next_steps,
+    }
+
+
+def _wt_queue_brief_generate(queue):
+    """Background worker for the refresh POST. Runs on a daemon thread so the
+    request that triggered it returns immediately; a failure here must not
+    erase a previously-good brief -- the owner keeps seeing the last good
+    read while a bad regen gets retried.
+    """
+    path = _wt_queue_brief_path(queue)
+    started = time.time()
+    brief = None
+    error = None
+    ticket_signatures = {}
+    try:
+        items = _wt_queue_brief_items(queue)
+        ticket_signatures = _wt_queue_brief_signatures(items)
+        if not items:
+            raise ValueError("no analyzable tickets")
+        prompt = _wt_queue_brief_prompt(queue, items)
+        claude_bin = _resolve_claude_bin()
+        if not claude_bin.get("available"):
+            raise RuntimeError(claude_bin.get("reason") or "Claude Code CLI not found")
+        proc = subprocess.run(
+            [claude_bin["bin"], "-p", "--model", _QUEUE_BRIEF_MODEL, prompt],
+            capture_output=True, text=True, timeout=180,
+            cwd=str(_SCRATCH_DIR),  # keep throwaway JSONLs out of repo scans
+        )
+        if proc.returncode != 0:
+            raise RuntimeError((proc.stderr or "").strip()[:300] or f"claude exited {proc.returncode}")
+        brief = _wt_queue_brief_parse(proc.stdout)
+    except Exception as e:
+        error = str(e)[:500]
+    duration_s = round(time.time() - started, 1)
+    now_iso = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    if brief is not None:
+        record = {
+            "queue": queue,
+            "generated_at": now_iso,
+            "model": _QUEUE_BRIEF_MODEL,
+            "duration_s": duration_s,
+            "ticket_signatures": ticket_signatures,
+            "brief": brief,
+        }
+    else:
+        # Keep whatever good brief was already on disk; only the error fields
+        # move. A stale-but-good brief beats no brief on a flaky regen.
+        record = _wt_queue_brief_read(path) or {"queue": queue}
+        record["error"] = error or "unknown error"
+        record["error_at"] = now_iso
+    try:
+        _wt_queue_brief_write(path, record)
+    except OSError:
+        pass
+    with _QUEUE_BRIEF_LOCK:
+        _QUEUE_BRIEF_GENERATING.pop(queue, None)
+
+
+def _wt_queue_brief_start(queue, force):
+    """Validate the refresh guards and, if they pass, launch generation on a
+    daemon thread. Never blocks on the `claude -p` round-trip itself.
+    """
+    path = _wt_queue_brief_path(queue)
+    if path is None:
+        return {"ok": False, "error": "invalid queue"}
+    queue = str(queue).strip().upper()
+    with _QUEUE_BRIEF_LOCK:
+        if queue in _QUEUE_BRIEF_GENERATING:
+            return {"ok": False, "error": f"already generating a brief for {queue}"}
+    if not _wt_queue_brief_items(queue):
+        return {"ok": False, "error": "no analyzable (non-closed) tickets in this queue"}
+    if not force:
+        existing = _wt_queue_brief_read(path) or {}
+        generated_at = existing.get("generated_at")
+        if generated_at:
+            try:
+                generated_dt = datetime.strptime(generated_at, "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=timezone.utc)
+                age_s = (datetime.now(timezone.utc) - generated_dt).total_seconds()
+            except ValueError:
+                age_s = None
+            if age_s is not None and age_s < _QUEUE_BRIEF_COOLDOWN_S:
+                minutes_left = int((_QUEUE_BRIEF_COOLDOWN_S - age_s) // 60) + 1
+                return {
+                    "ok": False,
+                    "error": f"brief is {int(age_s // 60)}m old -- cooldown for {minutes_left}m more (use force to refresh now)",
+                }
+    with _QUEUE_BRIEF_LOCK:
+        if queue in _QUEUE_BRIEF_GENERATING:
+            return {"ok": False, "error": f"already generating a brief for {queue}"}
+        _QUEUE_BRIEF_GENERATING[queue] = time.time()
+    threading.Thread(target=_wt_queue_brief_generate, args=(queue,), daemon=True, name="queue-brief-gen").start()
+    return {"ok": True, "started": True}
+
+
+def _wt_queue_brief_status(queue):
+    """Cheap GET-time payload: cache read + signature diff, no generation."""
+    path = _wt_queue_brief_path(queue)
+    if path is None:
+        return None
+    queue = str(queue).strip().upper()
+    cache = _wt_queue_brief_read(path) or {}
+    items = _wt_queue_brief_items(queue)
+    current_sigs = _wt_queue_brief_signatures(items)
+    stale_count = (
+        _wt_queue_brief_stale_count(cache.get("ticket_signatures"), current_sigs)
+        if cache.get("brief") else 0
+    )
+    with _QUEUE_BRIEF_LOCK:
+        generating = queue in _QUEUE_BRIEF_GENERATING
+    return {
+        "ok": True,
+        "queue": queue,
+        "exists": bool(cache.get("brief")),
+        "generating": generating,
+        "brief": cache.get("brief"),
+        "generated_at": cache.get("generated_at"),
+        "model": cache.get("model"),
+        "stale_count": stale_count,
+        "ticket_count": len(items),
+        "error": cache.get("error"),
+    }
+
+
 def _queue_config_from_payload(payload):
     """Validate and normalize the complete WatchTower queue form payload.
 
@@ -57909,6 +58228,20 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                                 "exists": False, "content": ""})
             except OSError as e:
                 self.send_json({"ok": False, "error": str(e)}, 500)
+        elif path == "/api/queue/brief":
+            # Content analysis of a queue's open tickets (Q2 status brief).
+            # Cheap: cache read + signature diff off the memoized item list --
+            # never triggers generation, so a poll never costs a `claude -p`.
+            qs = urllib.parse.parse_qs(parsed.query)
+            queue = (qs.get("queue", [""])[0] or "").strip()
+            try:
+                status = _wt_queue_brief_status(queue)
+                if status is None:
+                    self.send_json({"ok": False, "error": "invalid queue"}, 400)
+                    return
+                self.send_json(status)
+            except Exception as e:
+                self.send_json({"ok": False, "error": str(e)}, 500)
         elif path == "/api/ux-fixes/item":
             qs = urllib.parse.parse_qs(parsed.query)
             ref = (qs.get("ref", [""])[0] or "").strip()
@@ -61610,6 +61943,31 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                     learnings_path.write_text(f"# {queue.upper()} learnings\n", encoding="utf-8")
                 subprocess.Popen(["open", str(learnings_path)])
                 self.send_json({"ok": True, "path": str(learnings_path)})
+            except Exception as e:
+                self.send_json({"ok": False, "error": str(e)}, 500)
+            return
+        if path == "/api/queue/brief/refresh":
+            # Manual (force) refresh + the board's own auto-trigger both post
+            # here. Guards (in-flight, cooldown, ticket count) live in
+            # _wt_queue_brief_start so this branch stays a thin dispatcher;
+            # generation itself runs on a daemon thread and this returns
+            # immediately.
+            length = int(self.headers.get("Content-Length", "0"))
+            body = self.rfile.read(length) if length > 0 else b""
+            try:
+                payload = json.loads(body) if body else {}
+            except json.JSONDecodeError:
+                payload = {}
+            queue = str((payload or {}).get("queue") or "").strip()
+            force = bool((payload or {}).get("force"))
+            try:
+                result = _wt_queue_brief_start(queue, force)
+                if result.get("ok"):
+                    self.send_json(result)
+                elif result.get("error") == "invalid queue":
+                    self.send_json(result, 400)
+                else:
+                    self.send_json(result, 409)
             except Exception as e:
                 self.send_json({"ok": False, "error": str(e)}, 500)
             return
