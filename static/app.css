@@ -19787,6 +19787,33 @@ body:has(.gc-reader) .pwa-install-banner {
 }
 .fq-run:hover { border-color: var(--accent, #58a6ff); background: rgba(88,166,255,0.18); }
 .fq-run:disabled { opacity: 0.45; cursor: wait; }
+/* Spinning wheel from the moment ▶ is pressed through "queued to run" — the
+   ticket hasn't visibly changed state yet (queue-add or store-write can take
+   a beat), so the still triangle read as an unresponsive click. Covers both
+   the in-flight POST (:disabled, briefly) and the queued-run wait (until a
+   worker claims it and .is-in_progress's pulsing dot takes over). */
+.fq-run:disabled,
+.fq-row.is-queued-run .fq-run {
+  color: transparent;
+  position: relative;
+}
+.fq-run:disabled::after,
+.fq-row.is-queued-run .fq-run::after {
+  content: '';
+  position: absolute;
+  width: 11px; height: 11px; box-sizing: border-box;
+  border: 2px solid rgba(88,166,255,0.35);
+  border-top-color: var(--accent, #58a6ff);
+  border-radius: 50%;
+  animation: fq-status-pending-spin 0.7s linear infinite;
+}
+.fq-row.is-queued-run .fq-run::after {
+  border-color: color-mix(in srgb, var(--warn, #d29922) 35%, transparent);
+  border-top-color: var(--warn, #d29922);
+}
+@media (prefers-reduced-motion: reduce) {
+  .fq-run:disabled::after, .fq-row.is-queued-run .fq-run::after { animation: none; }
+}
 .files-queue-panel.queue-wrap-titles .fq-row {
   align-items: flex-start;
   flex-wrap: wrap;
@@ -23481,11 +23508,23 @@ a.settings-row:focus-visible .settings-launcher-btn { text-decoration: underline
   animation: f2cSettle .16s ease both;
   text-align: left;
 }
-.f2c-panel .f2-card-head { padding: 12px 14px 10px; }
+.f2c-panel .f2-card-head { position: relative; padding: 12px 14px 10px; }
 .f2c-panel .f2-card-title {
   font-size: 13.5px; font-weight: 650; line-height: 1.35;
   color: #58a6ff; letter-spacing: -0.01em;
+  padding-right: 26px;
 }
+.f2c-panel .f2-card-close {
+  position: absolute; top: 9px; right: 9px;
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 24px; height: 24px;
+  font-size: 18px; line-height: 1; color: var(--text-muted);
+  background: transparent; border: 1px solid transparent; border-radius: 6px;
+  cursor: pointer;
+  transition: color .14s ease, background .14s ease, border-color .14s ease;
+}
+.f2c-panel .f2-card-close:hover { color: var(--text); background: rgba(255, 255, 255, 0.06); border-color: var(--border); }
+.f2c-panel .f2-card-close:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
 .f2c-panel .f2-card-sub {
   margin-top: 4px;
   font-size: 12px; line-height: 1.45; color: var(--text-muted);
@@ -23821,3 +23860,142 @@ html:not(.ccc-debug-mode) [data-role="conv-bg-palette"],
 html:not(.ccc-debug-mode) #statsModal {
   display: none !important;
 }
+
+/* ===================================================================
+   Sidebar session list — design_handoff_sidebar_session_list (variant 2c)
+   Slice 2: row content model (§4c), trash lane (§4d), footer line (§5),
+   action row (§2), and the reduced-width / reduced-motion polish.
+
+   Slice 1 (hairline lane headers, hover-reveal meta, working dot) shipped
+   in v5.23.0; this block finishes the variant.
+
+   State colors (#e0a34a needs-you, #39d2c0 working) stay literal on
+   purpose: the handoff calls them out as meaning-carrying and exempt from
+   the blue-gray palette substitution applied to surfaces and text.
+   =================================================================== */
+
+/* §4c — Time forms a clean right-aligned column across every lane.
+   Narrowed 43px → 26px and 11.5px → 11px per the handoff; tabular-nums
+   (already set upstream) keeps "9m" / "13h" / "2d" optically aligned. */
+#convList .conv-item {
+  --conv-time-col: 26px;
+}
+#convList .conv-item .conv-rel {
+  font-size: 11px;
+}
+
+/* §4c — the live tool label is 2c's defining addition: a bare mono note
+   right after the title, not a filled pill. Only the *working* states get
+   the teal treatment; stale / interrupted / needs-approval keep their own
+   warning colors, because dropping those to a neutral note would hide a
+   real problem behind a design preference. */
+#convList .conv-item .conv-live-tool {
+  background: transparent;
+  border-left: 0;
+  padding: 1px 0;
+  font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
+  font-size: 10.5px;
+}
+#convList .conv-item .conv-live-tool .conv-live-name {
+  font-weight: 500;
+}
+#convList .conv-item .conv-live-tool.in-flight,
+#convList .conv-item .conv-live-tool.is-question {
+  color: #39d2c0;
+  background: transparent;
+  border-left: 0;
+}
+
+/* §4c — the handoff's hover strip also lists engine glyph / context % /
+   cost tier. Engine glyph and cost tier already render at rest on the left
+   of every row, and the context % badge sits in the always-visible main row
+   (a deliberate CCC divergence: % is worth reading without hovering). So
+   the hover strip stays id + branch rather than duplicating them. */
+
+/* §"Reduced width" — below ~300px the hover strip is dropped entirely and
+   the row falls back to dot + title + time. A container query (rather than
+   a viewport media query) so it tracks the *sidebar* width, which is
+   user-resizable and independent of the window. */
+#convList {
+  container-type: inline-size;
+  container-name: convlist;
+}
+@container convlist (max-width: 300px) {
+  .conv-item:hover:not(.active) .conv-hover-meta-row { display: none; }
+}
+
+/* §4d — Trash reads as a quiet terminal marker after the last lane, not as
+   another section header competing with the project lanes. */
+#convList .conv-trash-section {
+  margin-top: 14px;
+}
+#convList .conv-trash-header {
+  height: 30px;
+  padding: 0 6px;
+  gap: 6px;
+  font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
+  font-size: 10.5px;
+  font-weight: 500;
+  letter-spacing: 0.06em;
+  color: var(--text-muted);
+  opacity: 0.85;
+}
+#convList .conv-trash-header:hover { opacity: 1; }
+#convList .conv-trash-count {
+  /* the pill treatment is dropped — a plain right-aligned number in the
+     same type as the label, per the handoff */
+  background: transparent;
+  border: 0;
+  border-radius: 0;
+  padding: 0;
+  font: inherit;
+  font-variant-numeric: tabular-nums;
+}
+
+/* §2 — Action row. "+ New session" becomes the one amber accent in the
+   sidebar (it is the only creative action); search recedes into a well so
+   it stops competing with it; collapse is a plain square control. */
+.new-session-primary-row .new-session-btn:not(.new-session-btn-secondary) {
+  min-height: 30px;
+  background: rgba(224,163,74,0.10);
+  border-color: rgba(224,163,74,0.38);
+  color: #e0a34a;
+  font-size: 12.5px;
+}
+.new-session-primary-row .new-session-btn:not(.new-session-btn-secondary):hover {
+  background: rgba(224,163,74,0.18);
+  border-color: rgba(224,163,74,0.58);
+}
+.new-session-primary-row .conv-search-input {
+  min-height: 30px;
+  background: var(--bg);
+  border-color: var(--border);
+  font-size: 12.5px;
+}
+.new-session-primary-row .conv-search-input:focus {
+  border-color: rgba(224,163,74,0.45);
+}
+.new-session-primary-row .conv-list-collapse-btn {
+  width: 30px;
+  height: 30px;
+}
+
+/* §5 — Footer "needs you N". Amber, mono, and absent at zero so the line
+   stays quiet when nothing is blocked. */
+#cccNeedsYouFooter {
+  flex: 0 0 auto;
+  cursor: pointer;
+  user-select: none;
+  font: 600 10px/1 ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-variant-numeric: tabular-nums;
+  padding: 3px 7px;
+  border-radius: 5px;
+  border: 1px solid rgba(224,163,74,0.38);
+  background: rgba(224,163,74,0.10);
+  color: #e0a34a;
+}
+#cccNeedsYouFooter:hover {
+  background: rgba(224,163,74,0.18);
+  border-color: rgba(224,163,74,0.58);
+}
+#cccNeedsYouFooter[hidden] { display: none; }
