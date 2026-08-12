@@ -153,7 +153,11 @@ function renderOptIn(d) {
   const platforms = d.platforms || [];
   const sessionsTodayAll = d.sessions_today_per_install || [];
   const today = pings[0] && pings[0].active_installs || 0;
-  const last30 = uniqueInstallsFromBuckets(pings.slice(0, 30));
+  // Real distinct-install counts from the Worker. Older Worker deploys
+  // don't send them; fall back to the busiest-day approximation and say so.
+  const last7 = t.active_7d;
+  const last30 = t.active_30d;
+  const approx30 = uniqueInstallsFromBuckets(pings.slice(0, 30));
   return `
     <p class="tab-intro">
       Richer payload — install id, version, engines on PATH, last-active date, sessions in last 24h.
@@ -170,12 +174,17 @@ function renderOptIn(d) {
       <div class="card">
         <h2>Active today</h2>
         <div class="stat-big">${today}</div>
-        <div class="stat-sub">opt-in installs that pinged today</div>
+        <div class="stat-sub">opt-in installs that ran today — the daily-user floor</div>
+      </div>
+      <div class="card">
+        <h2>Active last 7d</h2>
+        <div class="stat-big">${last7 ?? "—"}</div>
+        <div class="stat-sub">distinct install ids over 7 days</div>
       </div>
       <div class="card">
         <h2>Active last 30d</h2>
-        <div class="stat-big">${last30}</div>
-        <div class="stat-sub">distinct install ids over 30 days</div>
+        <div class="stat-big">${last30 ?? approx30}</div>
+        <div class="stat-sub">${last30 === undefined ? "busiest single day (worker predates the 30d count)" : "distinct install ids over 30 days"}</div>
       </div>
       <div class="card">
         <h2>Total opt-in pings</h2>

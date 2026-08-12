@@ -239,6 +239,17 @@ async function handleStats(_request, env) {
       "GROUP BY day ORDER BY day DESC LIMIT 30"
     ).all()).results;
 
+    // Real distinct-install counts over a window. The page used to derive
+    // "active last 30d" as the max of the daily buckets, which is the busiest
+    // single day, not the number of humans — it under-reports whenever
+    // installs run on different days.
+    const activeWindows = await env.DB.prepare(
+      "SELECT " +
+      "  COUNT(DISTINCT CASE WHEN received_at >= date('now','-6 days') THEN install_id END) AS active_7d, " +
+      "  COUNT(DISTINCT CASE WHEN received_at >= date('now','-29 days') THEN install_id END) AS active_30d " +
+      "FROM pings WHERE install_id NOT LIKE '00000000%' AND install_id NOT LIKE '11111111%' AND install_id NOT LIKE '22222222%' AND install_id NOT LIKE '33333333%'"
+    ).first();
+
     const pingsByDay = (await env.DB.prepare(
       "SELECT substr(received_at, 1, 10) AS day, COUNT(DISTINCT install_id) AS active_installs " +
       "FROM pings WHERE install_id NOT LIKE '00000000%' AND install_id NOT LIKE '11111111%' AND install_id NOT LIKE '22222222%' AND install_id NOT LIKE '33333333%' " +
@@ -274,7 +285,7 @@ async function handleStats(_request, env) {
 
     const body = JSON.stringify({
       generated_at: new Date().toISOString(),
-      totals,
+      totals: { ...totals, ...activeWindows },
       opens_by_day: opensByDay,
       pings_by_day: pingsByDay,
       downloads_by_day: downloadsByDay,
