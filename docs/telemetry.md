@@ -51,6 +51,12 @@ single HTTPS endpoint:
 | `active_seconds_today`   | int    | `5430`                             | sum of dashboard-tab-visible time today (rounded to 30s ticks); capped at 86400                 |
 | `total_sessions_managed` | int    | `287`                              | lifetime count of `*.jsonl` files ever seen under `~/.claude/projects/`; capped at 10000000     |
 
+One optional field may also be present:
+
+| field | type | example | notes                                                                     |
+|-------|------|---------|---------------------------------------------------------------------------|
+| `dev` | bool | `true`  | only when `CCC_TELEMETRY_DEV_MODE=1`; marks the row "not-a-real-user"     |
+
 The HTTP request also carries:
 - `User-Agent: claude-command-center/<version> (telemetry)`.
 - `Content-Type: application/json`.
@@ -107,11 +113,12 @@ and un-reversible without the server secret, the same env var still
 kills the beacon entirely.
 
 **Maintainer dev-mode flag.** If `CCC_TELEMETRY_DEV_MODE=1` is set,
-the beacon adds a `dev: true` field that the worker persists as an
-`is_dev=1` marker on the row. Public stats then filter these rows
-out so the maintainer's own installs do not inflate the daily-run /
-distinct-IP counts on the public page. The flag adds no
-identity — it only says "not-a-real-user, exclude from the totals."
+**both** the beacon and the opt-in daily ping add a `dev: true` field
+that the worker persists as an `is_dev=1` marker on the row. The public
+stats page then reports every user count twice, with and without those
+rows, so the maintainer's own machine is never silently counted as a
+user. The flag adds no identity — it only says "not-a-real-user, keep
+me out of the user totals."
 
 If you are uneasy about the beacon despite it carrying no identity,
 set `CCC_TELEMETRY_DISABLED=1` before launching `server.py` / the

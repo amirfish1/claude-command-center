@@ -91,6 +91,26 @@
   .chart-wrap { width: 100%; }
   .chart-svg { width: 100%; height: auto; display: block; max-height: 220px; }
   .chart-svg text { font-family: ui-sans-serif, system-ui, -apple-system, sans-serif; }
+  .headline { background: linear-gradient(180deg, #131a24, var(--panel)); }
+  .headline-row { display: flex; align-items: flex-end; gap: 22px; flex-wrap: wrap; }
+  .headline-sep { color: var(--ink-dim); font-size: 13px; padding-bottom: 22px; }
+  .headline-note { margin: 14px 0 0; max-width: 74ch; }
+  .stat-dim { color: var(--ink-dim); }
+  table.explain td, table.explain th { vertical-align: top; padding: 10px 8px; }
+  table.explain td.stat-cell { font-size: 20px; font-weight: 600; font-variant-numeric: tabular-nums; }
+  table.explain .pill { white-space: nowrap; }
+  .kind-floor { border-color: #2f5d3a; color: var(--good); }
+  .kind-ceiling { border-color: #5d4a2f; color: var(--accent); }
+  .trust { display: inline-block; font-size: 11px; text-transform: uppercase; letter-spacing: 0.05em; font-weight: 600; margin-right: 4px; }
+  .trust-high { color: var(--good); }
+  .trust-medium { color: var(--accent); }
+  .trust-low { color: #ff8f6b; }
+  .two-col { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 14px; }
+  .counter-box { background: var(--panel2); border: 1px solid var(--line); border-radius: 8px; padding: 14px; }
+  .counter-box h3 { margin: 0 0 8px; font-size: 14px; font-weight: 600; }
+  .counter-box p { margin: 0 0 8px; }
+  ul.caveats { margin: 0; padding-left: 20px; }
+  ul.caveats li { margin-bottom: 6px; }
 </style>
 </head>
 <body>
@@ -101,7 +121,8 @@
 </header>
 
 <div class="tabs" role="tablist">
-  <button class="tab active" data-tab="opt-in" role="tab" aria-selected="true">Opt-in pings</button>
+  <button class="tab active" data-tab="overview" role="tab" aria-selected="true">What these numbers mean</button>
+  <button class="tab" data-tab="opt-in" role="tab" aria-selected="false">Opt-in pings</button>
   <button class="tab" data-tab="beacon" role="tab" aria-selected="false">Anonymous daily beacons</button>
   <button class="tab" data-tab="downloads" role="tab" aria-selected="false">Download clicks</button>
 </div>
@@ -139,11 +160,208 @@ function renderActiveTab() {
   if (!_data) return;
   const active = document.querySelector(".tab.active").dataset.tab;
   const root = document.getElementById("root");
-  root.innerHTML = active === "opt-in"
-    ? renderOptIn(_data)
-    : active === "beacon"
-      ? renderBeacon(_data)
-      : renderDownloads(_data);
+  root.innerHTML = active === "overview"
+    ? renderOverview(_data)
+    : active === "opt-in"
+      ? renderOptIn(_data)
+      : active === "beacon"
+        ? renderBeacon(_data)
+        : renderDownloads(_data);
+}
+
+// ---------------------------------------------------------------------------
+// Overview: the one view that answers "how many users do I have" without
+// making the reader hold four definitions in their head. Every row states
+// what it counts, whether it includes the maintainer, and whether it is a
+// floor, a ceiling, or an estimate.
+// ---------------------------------------------------------------------------
+
+// The build where the anonymous beacon became once-per-day instead of
+// once-per-boot. Installs older than this are invisible in the daily
+// anonymous count unless they happen to restart.
+const DAILY_BEACON_SINCE = "5.24.0";
+
+function semverGte(a, b) {
+  const pa = String(a).split(/[-+]/)[0].split(".").map(Number);
+  const pb = String(b).split(/[-+]/)[0].split(".").map(Number);
+  for (let i = 0; i < 3; i++) {
+    const x = pa[i] || 0, y = pb[i] || 0;
+    if (x !== y) return x > y;
+  }
+  return true;
+}
+
+function renderOverview(d) {
+  const t = d.totals || {};
+  const pings = d.pings_by_day || [];
+  const opens = d.opens_by_day || [];
+  const today = pings[0] || {};
+  const openToday = opens[0] || {};
+
+  // "Without me" is the honest headline. "With me" is kept beside it so the
+  // gap is visible instead of being a thing you have to remember.
+  const dailyFloor = today.active_installs ?? 0;
+  const dailyFloorWithMe = today.active_installs_all ?? dailyFloor;
+  const weekly = t.active_7d;
+  const weeklyWithMe = t.active_7d_all;
+  const monthly = t.active_30d;
+  const monthlyWithMe = t.active_30d_all;
+  const everOptedIn = t.distinct_installs ?? 0;
+  const anonToday = openToday.boots ?? 0;
+  const anonIpsToday = openToday.distinct_ips ?? 0;
+
+  // How far the fleet has rolled onto the daily-beacon build. Until this is
+  // high, the anonymous daily number is still mostly measuring restarts.
+  const v7 = d.versions_7d || [];
+  const v7Total = v7.reduce((a, r) => a + (r.installs || 0), 0);
+  const v7New = v7.filter(r => semverGte(r.version, DAILY_BEACON_SINCE))
+    .reduce((a, r) => a + (r.installs || 0), 0);
+  const rolloutPct = v7Total ? Math.round(100 * v7New / v7Total) : 0;
+  const anonTrusted = rolloutPct >= 80;
+
+  const rows = [
+    {
+      name: "Daily users",
+      value: dailyFloor,
+      withMe: dailyFloorWithMe,
+      kind: "floor",
+      what: "Opt-in installs that had CCC running today.",
+      trust: "high",
+      why: "Each one is a real machine that reported in today. Nothing here is inferred.",
+    },
+    {
+      name: "Weekly users",
+      value: weekly,
+      withMe: weeklyWithMe,
+      kind: "floor",
+      what: "Distinct opt-in installs seen in the last 7 days.",
+      trust: "high",
+      why: "Deduped by install id, so a machine active all week counts once.",
+    },
+    {
+      name: "Monthly users",
+      value: monthly,
+      withMe: monthlyWithMe,
+      kind: "floor",
+      what: "Distinct opt-in installs seen in the last 30 days.",
+      trust: "high",
+      why: "Same dedupe over a longer window.",
+    },
+    {
+      name: "Anonymous installs today",
+      value: anonToday,
+      withMe: openToday.boots_all ?? anonToday,
+      kind: anonTrusted ? "real total" : "still rolling out",
+      what: "Installs that ran today and sent the anonymous daily beacon. No opt-in needed.",
+      trust: anonTrusted ? "high" : "low",
+      why: anonTrusted
+        ? "Most of the fleet is on the daily beacon, so this is the closest thing to true daily usage."
+        : v7New === 0
+          ? `No active install is on ${DAILY_BEACON_SINCE}+ yet, so this still counts restarts rather than installs and reads far too low. It becomes the real daily number as the fleet updates.`
+          : `Only ${rolloutPct}% of active installs are on ${DAILY_BEACON_SINCE}+. The rest only beacon when they restart, so this number still reads too low.`,
+    },
+    {
+      name: "Ever opted in",
+      value: everOptedIn,
+      withMe: t.distinct_installs_all ?? everOptedIn,
+      kind: "ceiling",
+      what: "Distinct install ids that have ever sent an opt-in ping.",
+      trust: "medium",
+      why: "Includes machines long since gone, reinstalls, and one person's several machines. It is an upper bound on opt-in users, not a user count.",
+    },
+  ];
+
+  const KIND_CLASS = { floor: "kind-floor", ceiling: "kind-ceiling" };
+
+  return `
+    <p class="tab-intro">
+      Two independent counters feed this page and they answer different questions. This view says which number to believe for which question, and whether it counts the maintainer's own machine.
+    </p>
+
+    <div class="grid">
+      <div class="card wide headline">
+        <h2>How many daily users are there</h2>
+        <div class="headline-row">
+          <div>
+            <div class="stat-big">${dailyFloor}</div>
+            <div class="stat-sub">without me — opt-in installs that ran today</div>
+          </div>
+          <div class="headline-sep">vs</div>
+          <div>
+            <div class="stat-big stat-dim">${dailyFloorWithMe}</div>
+            <div class="stat-sub">with me included</div>
+          </div>
+        </div>
+        <p class="muted headline-note">
+          This is a <strong>floor</strong>, not the truth: it only counts installs whose owner clicked <em>Enable</em> on the telemetry banner. Real daily usage is this number plus an unknown number of installs that never opted in.
+          ${anonTrusted
+            ? `The anonymous counter now covers those too — see <strong>Anonymous installs today (${anonToday})</strong> below for the fuller picture.`
+            : `The anonymous counter is meant to cover those, but it only became a true daily count in ${DAILY_BEACON_SINCE}; until installs update it still reads too low${v7New === 0 ? "" : ` (${rolloutPct}% updated so far)`}.`}
+        </p>
+      </div>
+
+      <div class="card wide">
+        <h2>Every number on this page, in plain words</h2>
+        <table class="explain">
+          <thead>
+            <tr>
+              <th>number</th>
+              <th class="num">without me</th>
+              <th class="num">with me</th>
+              <th>floor or ceiling</th>
+              <th>what it counts</th>
+              <th>how much to trust it</th>
+            </tr>
+          </thead>
+          <tbody>
+            ${rows.map(r => `
+              <tr>
+                <td><strong>${escapeHtml(r.name)}</strong></td>
+                <td class="num stat-cell">${r.value ?? "—"}</td>
+                <td class="num stat-cell stat-dim">${r.withMe ?? "—"}</td>
+                <td><span class="pill ${KIND_CLASS[r.kind] || ""}">${escapeHtml(r.kind)}</span></td>
+                <td class="muted">${escapeHtml(r.what)}</td>
+                <td class="muted"><span class="trust trust-${r.trust}">${r.trust}</span> ${escapeHtml(r.why)}</td>
+              </tr>
+            `).join("")}
+          </tbody>
+        </table>
+      </div>
+
+      <div class="card wide">
+        <h2>Why there are two counters at all</h2>
+        <div class="two-col">
+          <div class="counter-box">
+            <h3>Opt-in ping <span class="pill">needs consent</span></h3>
+            <p class="muted">Carries an install id, so it can dedupe machines and answer "how many <em>distinct</em> installs". Fires once per UTC day while CCC runs. Only sent after the user clicks Enable, so it sees a <strong>subset</strong> of users — that is why it is a floor.</p>
+            <p class="muted">Today: <strong>${dailyFloor}</strong> installs.</p>
+          </div>
+          <div class="counter-box">
+            <h3>Anonymous beacon <span class="pill">no consent needed</span></h3>
+            <p class="muted">Three fields, no install id, so it cannot dedupe machines — only count events and distinct hashed IPs per day. Fires once per UTC day from <strong>every</strong> running install. Should be a superset of the opt-in count once the fleet is updated.</p>
+            <p class="muted">Today: <strong>${anonToday}</strong> beacons from <strong>${anonIpsToday}</strong> distinct IPs.</p>
+          </div>
+        </div>
+        <p class="muted">
+          Neither counter measures people. Both measure <strong>installs</strong>: one human with a laptop and a server is two.
+        </p>
+      </div>
+
+      <div class="card wide">
+        <h2>Known reasons these numbers are wrong</h2>
+        <ul class="caveats muted">
+          <li><strong>Opt-in is a floor.</strong> Anyone who never clicked Enable is missing from every "users" row above.</li>
+          <li><strong>Distinct IPs undercount.</strong> Two installs on one home or office network share an address and collapse into one. The IP hash re-salts daily on purpose, so it can never be summed across days.</li>
+          <li><strong>Installs, not humans.</strong> Laptop plus desktop plus a server is three installs, one person.</li>
+          <li><strong>"Ever opted in" never shrinks.</strong> Uninstalls leave their install id behind, so it drifts upward forever.</li>
+          <li><strong>Before 2026-08-12</strong> the anonymous beacon fired once per <em>boot</em>, so earlier days on that tab count restarts, not installs.</li>
+          <li><strong>Before 2026-08-12</strong> the Worker rejected any ping listing an engine it did not recognise, so installs with <code>kilo</code> or <code>opencode</code> on PATH were dropped from the opt-in counts entirely. Days before that are undercounted by an unknown amount.</li>
+        </ul>
+      </div>
+
+      <div class="card wide muted">Updated ${escapeHtml(d.generated_at)}. Cached at the edge for 5 minutes.</div>
+    </div>
+  `;
 }
 
 function renderOptIn(d) {

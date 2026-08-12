@@ -344,3 +344,41 @@ class TestAnonymousOpenBeacon(TelemetryTestBase):
         self.assertTrue(captured["url"].endswith("/v1/open"))
         self.assertEqual(sorted(captured["body"].keys()),
                          ["platform", "schema_version", "version"])
+
+
+class TestMaintainerDevFlag(TelemetryTestBase):
+    """CCC_TELEMETRY_DEV_MODE marks a row as "not-a-real-user" on both
+    endpoints so the public page can show counts with and without it."""
+
+    def test_ping_payload_omits_dev_by_default(self):
+        self.server._telemetry_load_or_init_install_id()
+        self.assertNotIn("dev", self.server._build_telemetry_payload())
+
+    def test_ping_payload_carries_dev_when_env_set(self):
+        os.environ["CCC_TELEMETRY_DEV_MODE"] = "1"
+        try:
+            self.server._telemetry_load_or_init_install_id()
+            self.assertIs(self.server._build_telemetry_payload()["dev"], True)
+        finally:
+            os.environ.pop("CCC_TELEMETRY_DEV_MODE", None)
+
+    def test_dev_flag_never_carries_an_identifier(self):
+        os.environ["CCC_TELEMETRY_DEV_MODE"] = "1"
+        try:
+            captured = {}
+
+            class _Resp:
+                status = 204
+                def __enter__(self): return self
+                def __exit__(self, *a): return False
+
+            def _fake_urlopen(req, timeout=None):
+                captured["body"] = json.loads(req.data.decode("utf-8"))
+                return _Resp()
+
+            with mock.patch.object(self.server.urllib.request, "urlopen", _fake_urlopen):
+                self.server._send_telemetry_open_beacon()
+            self.assertEqual(sorted(captured["body"].keys()),
+                             ["dev", "platform", "schema_version", "version"])
+        finally:
+            os.environ.pop("CCC_TELEMETRY_DEV_MODE", None)

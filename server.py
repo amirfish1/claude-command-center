@@ -71576,7 +71576,7 @@ def _build_telemetry_payload():
     install_id = _telemetry_load_or_init_install_id()
     if not install_id:
         return None
-    return {
+    payload = {
         "schema_version": _TELEMETRY_SCHEMA_VERSION,
         "install_id": install_id,
         "version": __version__,
@@ -71587,6 +71587,12 @@ def _build_telemetry_payload():
         "active_seconds_today": _telemetry_active_seconds_today(),
         "total_sessions_managed": _telemetry_count_total_sessions_managed(),
     }
+    # Same maintainer marker the anonymous beacon carries. Lets the public
+    # stats page report user counts both with and without the maintainer's
+    # own machine instead of quietly counting it as a user.
+    if _telemetry_dev_mode_env():
+        payload["dev"] = True
+    return payload
 
 
 def _telemetry_resolved_open_endpoint():
