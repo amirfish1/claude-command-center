@@ -16,6 +16,7 @@ The hard contracts under test:
 """
 import json
 import sys
+import threading
 from unittest import mock
 
 import pytest
@@ -123,6 +124,134 @@ def test_no_change_not_stale(server_mod, tmp_path):
     sid, entry, _t, _l = _stage(server_mod, tmp_path, [_event("a")], 0)
     server_mod._update_spawn_transcript_watermark(entry, sid)
     assert server_mod._headless_spawn_is_stale(entry, sid) is False
+
+
+def test_headless_turn_in_progress_uses_result_target(server_mod, tmp_path):
+    _sid, entry, _transcript, log = _stage(
+        server_mod, tmp_path, [_event("a")], 4
+    )
+    entry["input_result_target"] = 5
+
+    assert server_mod._headless_turn_in_progress(entry) is True
+
+    log.write_text(_result_lines(5))
+    assert server_mod._headless_turn_in_progress(entry) is False
+
+
+def test_headless_turn_in_progress_ignores_malformed_targets(server_mod, tmp_path):
+    _sid, entry, _transcript, log = _stage(
+        server_mod, tmp_path, [_event("a")], 1
+    )
+    log.write_text(_result_lines(1))
+
+    for value in (-1, "bad", None):
+        entry["input_result_target"] = value
+        assert server_mod._headless_turn_in_progress(entry) is False
+
+
+def test_successful_stream_write_advances_and_persists_result_target(
+    server_mod, tmp_path, monkeypatch
+):
+    _sid, entry, _transcript, _log = _stage(
+        server_mod, tmp_path, [_event("a")], 4
+    )
+    registry = tmp_path / "spawned-pids.json"
+    registry.write_text(json.dumps([{"pid": entry["pid"], "engine": "claude"}]))
+    monkeypatch.setattr(server_mod, "SPAWNED_PIDS_FILE", registry)
+    monkeypatch.setattr(server_mod, "_write_via_spawn_fd", lambda *_a, **_k: True)
+
+    assert server_mod._write_stream_json_user_message(entry, "follow up") is True
+
+    assert entry["input_result_target"] == 5
+    assert isinstance(entry["input_accepted_at"], float)
+    saved = json.loads(registry.read_text())
+    assert saved == [{
+        "pid": entry["pid"],
+        "engine": "claude",
+        "input_result_target": 5,
+        "input_accepted_at": entry["input_accepted_at"],
+    }]
+
+
+def test_multiple_stream_writes_accumulate_result_targets(
+    server_mod, tmp_path, monkeypatch
+):
+    _sid, entry, _transcript, _log = _stage(
+        server_mod, tmp_path, [_event("a")], 4
+    )
+    registry = tmp_path / "spawned-pids.json"
+    registry.write_text(json.dumps([{"pid": entry["pid"], "engine": "claude"}]))
+    monkeypatch.setattr(server_mod, "SPAWNED_PIDS_FILE", registry)
+    monkeypatch.setattr(server_mod, "_write_via_spawn_fd", lambda *_a, **_k: True)
+
+    assert server_mod._write_stream_json_user_message(entry, "first") is True
+    assert server_mod._write_stream_json_user_message(entry, "second") is True
+
+    assert entry["input_result_target"] == 6
+    assert json.loads(registry.read_text())[0]["input_result_target"] == 6
+
+
+def test_failed_stream_write_does_not_advance_result_target(
+    server_mod, tmp_path, monkeypatch
+):
+    _sid, entry, _transcript, _log = _stage(
+        server_mod, tmp_path, [_event("a")], 4
+    )
+    entry["input_result_target"] = 5
+    registry = tmp_path / "spawned-pids.json"
+    registry.write_text(json.dumps([{
+        "pid": entry["pid"],
+        "engine": "claude",
+        "input_result_target": 5,
+    }]))
+    monkeypatch.setattr(server_mod, "SPAWNED_PIDS_FILE", registry)
+    monkeypatch.setattr(server_mod, "_write_via_spawn_fd", lambda *_a, **_k: False)
+    monkeypatch.setattr(server_mod, "_write_via_pipe", lambda *_a, **_k: False)
+
+    assert server_mod._write_stream_json_user_message(entry, "lost") is False
+
+    assert entry["input_result_target"] == 5
+    assert "input_accepted_at" not in entry
+    assert "input_accepted_at" not in json.loads(registry.read_text())[0]
+
+
+def test_concurrent_stream_writes_get_distinct_result_targets(
+    server_mod, tmp_path, monkeypatch
+):
+    _sid, entry, _transcript, _log = _stage(
+        server_mod, tmp_path, [_event("a")], 4
+    )
+    registry = tmp_path / "spawned-pids.json"
+    registry.write_text(json.dumps([{"pid": entry["pid"], "engine": "claude"}]))
+    monkeypatch.setattr(server_mod, "SPAWNED_PIDS_FILE", registry)
+    delivered = []
+
+    def accept_line(_entry, line, timeout=0.25):
+        delivered.append(json.loads(line))
+        return True
+
+    monkeypatch.setattr(server_mod, "_write_via_spawn_fd", accept_line)
+    outcomes = []
+    threads = [
+        threading.Thread(
+            target=lambda text=text: outcomes.append(
+                server_mod._write_stream_json_user_message(entry, text)
+            )
+        )
+        for text in ("first", "second")
+    ]
+
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join(timeout=2)
+
+    assert outcomes == [True, True]
+    assert sorted(
+        item["message"]["content"][0]["text"] for item in delivered
+    ) == ["first", "second"]
+    assert entry["input_result_target"] == 6
+    assert json.loads(registry.read_text())[0]["input_result_target"] == 6
 
 
 def test_retire_idle_helper_skips_busy(server_mod, tmp_path):
@@ -361,3 +490,124 @@ def test_inject_busy_headless_never_retired_even_if_tail_moved(server_mod, tmp_p
     assert res.get("ok") is False or "busy" in str(res.get("error", "")).lower() or res.get("queued") is True
     # q may or may not be called depending on exact write outcome; the old "always queue on busy"
     # contract was intentionally relaxed.
+
+
+def test_inject_owned_mid_turn_transcript_growth_never_retires(
+    server_mod, tmp_path
+):
+    """Production regression: a live owned turn may grow the transcript
+    before its terminal result appears and while no tool child is running."""
+    sid, entry, transcript, log = _stage(
+        server_mod, tmp_path, [_event("a")], 4
+    )
+    log.write_text(_result_lines(4))
+    server_mod._update_spawn_transcript_watermark(entry, sid)
+    entry["input_result_target"] = 5
+    _write_jsonl(transcript, [_event("a"), _event("owned-mid-turn")])
+    status = {"live": False, "tty": None, "status": None}
+
+    with mock.patch.object(server_mod, "find_session_cwd", return_value="/fake/cwd"), \
+         mock.patch.object(server_mod, "session_live_status", return_value=status), \
+         mock.patch.object(server_mod, "_is_codex_session", return_value=False), \
+         mock.patch.object(server_mod, "_is_cursor_session", return_value=False), \
+         mock.patch.object(server_mod, "_is_gemini_session", return_value=False), \
+         mock.patch.object(server_mod, "_is_antigravity_session", return_value=False), \
+         mock.patch.object(server_mod, "_find_live_spawn_entry_for_session", return_value=entry), \
+         mock.patch.object(server_mod, "_session_has_live_terminal", return_value=False), \
+         mock.patch.object(server_mod, "_terminal_input_queue_has_pending", return_value=False), \
+         mock.patch.object(server_mod, "_spawn_entry_active_tool_child", return_value=None), \
+         mock.patch.object(server_mod, "_pending_ask_user_question_for_session", return_value=False), \
+         mock.patch.object(server_mod, "_write_stream_json_user_message", return_value=True) as write, \
+         mock.patch.object(
+             server_mod,
+             "_headless_spawn_is_stale",
+             wraps=server_mod._headless_spawn_is_stale,
+         ) as stale, \
+         mock.patch.object(server_mod, "_retire_unresponsive_spawn_entry") as retire, \
+         mock.patch.object(server_mod, "resume_session_headless") as resume:
+        result = server_mod._inject_text_into_session(sid, "follow up")
+
+    assert result == {"ok": True, "pid": entry["pid"], "via": "spawn-fifo"}
+    write.assert_called_once_with(entry, "follow up")
+    stale.assert_not_called()
+    retire.assert_not_called()
+    resume.assert_not_called()
+
+
+def test_force_queue_holds_busy_headless_followup(server_mod, tmp_path):
+    sid, entry, _transcript, log = _stage(
+        server_mod, tmp_path, [_event("a")], 4
+    )
+    log.write_text(_result_lines(4))
+    entry["input_result_target"] = 5
+    status = {"live": False, "tty": None, "status": None}
+
+    with mock.patch.object(server_mod, "find_session_cwd", return_value="/fake/cwd"), \
+         mock.patch.object(server_mod, "session_live_status", return_value=status), \
+         mock.patch.object(server_mod, "_is_codex_session", return_value=False), \
+         mock.patch.object(server_mod, "_is_cursor_session", return_value=False), \
+         mock.patch.object(server_mod, "_is_gemini_session", return_value=False), \
+         mock.patch.object(server_mod, "_is_antigravity_session", return_value=False), \
+         mock.patch.object(server_mod, "_find_live_spawn_entry_for_session", return_value=entry), \
+         mock.patch.object(server_mod, "_session_has_live_terminal", return_value=False), \
+         mock.patch.object(server_mod, "_terminal_input_queue_has_pending", return_value=False), \
+         mock.patch.object(server_mod, "_spawn_entry_active_tool_child", return_value=None), \
+         mock.patch.object(server_mod, "_pending_ask_user_question_for_session", return_value=False), \
+         mock.patch.object(
+             server_mod,
+             "_queue_terminal_input",
+             return_value={"ok": True, "queued": True, "via": "terminal-queued"},
+         ) as queue, \
+         mock.patch.object(server_mod, "_write_stream_json_user_message") as write:
+        result = server_mod._inject_text_into_session(
+            sid, "wait for next turn", force_queue=True
+        )
+
+    assert result["queued"] is True
+    queue.assert_called_once()
+    write.assert_not_called()
+
+
+def test_ordinary_send_steers_busy_headless_followup(server_mod, tmp_path):
+    sid, entry, _transcript, log = _stage(
+        server_mod, tmp_path, [_event("a")], 4
+    )
+    log.write_text(_result_lines(4))
+    entry["input_result_target"] = 5
+    status = {"live": False, "tty": None, "status": None}
+
+    with mock.patch.object(server_mod, "find_session_cwd", return_value="/fake/cwd"), \
+         mock.patch.object(server_mod, "session_live_status", return_value=status), \
+         mock.patch.object(server_mod, "_is_codex_session", return_value=False), \
+         mock.patch.object(server_mod, "_is_cursor_session", return_value=False), \
+         mock.patch.object(server_mod, "_is_gemini_session", return_value=False), \
+         mock.patch.object(server_mod, "_is_antigravity_session", return_value=False), \
+         mock.patch.object(server_mod, "_find_live_spawn_entry_for_session", return_value=entry), \
+         mock.patch.object(server_mod, "_session_has_live_terminal", return_value=False), \
+         mock.patch.object(server_mod, "_terminal_input_queue_has_pending", return_value=False), \
+         mock.patch.object(server_mod, "_spawn_entry_active_tool_child", return_value=None), \
+         mock.patch.object(server_mod, "_pending_ask_user_question_for_session", return_value=False), \
+         mock.patch.object(server_mod, "_headless_spawn_is_stale", return_value=False), \
+         mock.patch.object(server_mod, "_queue_terminal_input") as queue, \
+         mock.patch.object(server_mod, "_write_stream_json_user_message", return_value=True) as write:
+        result = server_mod._inject_text_into_session(sid, "context for this turn")
+
+    assert result["ok"] is True
+    assert result["via"] == "spawn-fifo"
+    write.assert_called_once_with(entry, "context for this turn")
+    queue.assert_not_called()
+
+
+def test_terminal_queue_waits_for_owned_headless_turn(server_mod, tmp_path):
+    sid, entry, _transcript, log = _stage(
+        server_mod, tmp_path, [_event("a")], 4
+    )
+    entry["input_result_target"] = 5
+    status = {"live": True, "tty": None, "pid": entry["pid"]}
+
+    with mock.patch.object(
+        server_mod, "_find_live_spawn_entry_for_session", return_value=entry
+    ):
+        assert server_mod._terminal_queue_waits_for_headless_turn(sid, status) is True
+        log.write_text(_result_lines(5))
+        assert server_mod._terminal_queue_waits_for_headless_turn(sid, status) is False
