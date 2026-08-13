@@ -1680,6 +1680,11 @@
   .conv-pane.is-webui-session .kimi-answer-meta:hover { opacity: 0.9; }
   .conv-pane.is-webui-session .kimi-answer-meta .line-num,
   .conv-pane.is-webui-session .kimi-answer-meta .msg-ts { float: none; margin-right: 0; }
+  /* CCC-845: .msg-ts's own opacity:0.4 (base rule) was compounding with this
+     row's opacity:0.6, landing the timestamp at ~0.24 — unreadably dim. The
+     row wrapper already carries the dimming (and brightens on hover), so the
+     timestamp itself should render at full opacity within it. */
+  .conv-pane.is-webui-session .kimi-answer-meta .msg-ts { opacity: 1; }
   .conv-pane.is-webui-session .kimi-answer-meta .assistant-message-actions {
     float: none; position: static; display: inline-flex; align-items: center; gap: 2px;
   }
