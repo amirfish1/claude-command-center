@@ -1357,6 +1357,220 @@ def _wt_queue_brief_status(queue):
     }
 
 
+# --- Q2 queue attendant ------------------------------------------------
+# Manually-activated janitor session (spec: 2026-08-13-q2-queue-attendant-
+# design.md). Unlike the status brief above (analysis only, nothing calls
+# it anymore), the attendant runs `wt close` / `wt answer` / `wt dedup` /
+# `wt release` itself, inside the queue's own repo, and reports back via
+# POST when it stops. State is one small JSON file per queue -- no DB, no
+# in-memory registry beyond what spawn_session already tracks.
+
+_QUEUE_ATTENDANT_MODEL = "opus-5"
+_QUEUE_ATTENDANT_EFFORT = "high"
+_QUEUE_ATTENDANT_REPORT_CAP = 500
+
+# {Q}/{repo}/{port} are substituted with str.replace (not str.format) --
+# the JSON example in the last paragraph has literal braces that .format()
+# would try to parse as fields.
+_QUEUE_ATTENDANT_PROMPT = """You are the queue attendant for WatchTower queue {Q}, running inside its repo at {repo}. Your job is to CLEAN this queue, not to summarize it. Use the `wt` CLI (the `watchtower` and `wt-triage-queue` skills document it). Survey with `wt ls -q {Q} --status all --json` and `wt blocked -q {Q} --json`, then work oldest-first:
+
+1. VERIFY-AND-CLOSE: for each open bug, check the code and git history for whether it is already fixed or obsolete. Close only what you can verify, citing the commit or observed behavior in the close summary (`wt close`); client reporting follows automatically. Never fabricate a fix.
+2. DEDUP: `wt dedup -q {Q}` dry-run first, `--apply` only for true dupes.
+3. NEEDS INPUT: try to answer autonomously from the repo, ticket history, and queue learnings (`wt answer <ref> "..."`). When you lack high confidence, distill the decision to its gist and use the AskUserQuestion tool: ONE question at a time, at most 3 sentences of context, your recommended direction as the FIRST option. Apply the owner's answer via `wt answer`.
+4. STALE CLAIMS: `wt release <ref> --worker <id>` when the claiming worker is dead (`wt workers --json`).
+5. Do NOT implement fixes for open tickets -- that is the workers' job. You only close, answer, release, dedup, and escalate.
+
+When the queue is as clean as you can make it, POST `{"queue": "{Q}", "summary": "closed N · answered N · released N · escalated N — <one skimmable sentence>"}` to `http://127.0.0.1:{port}/api/queue/attend/report`, then stop."""
+
+
+def _wt_queue_attend_path(queue):
+    """Return the one attendant-state file belonging to a valid WatchTower
+    queue, same name validation as _wt_queue_brief_path."""
+    name = str(queue or "").strip().upper()
+    if not _QUEUE_CONFIG_NAME_RE.fullmatch(name):
+        return None
+    return COMMAND_CENTER_STATE_DIR / "queue-attendants" / (name + ".json")
+
+
+def _wt_queue_attend_read(path):
+    """Best-effort state read -- a missing or corrupt file just means "never
+    attended", never an error the caller has to special-case."""
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        return data if isinstance(data, dict) else None
+    except FileNotFoundError:
+        return None
+    except (OSError, ValueError):
+        return None
+
+
+def _wt_queue_attend_write(path, record):
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_suffix(path.suffix + ".tmp")
+    tmp.write_text(json.dumps(record, indent=2), encoding="utf-8")
+    os.replace(tmp, path)  # atomic -- a poller must never see a half-written file
+
+
+def _wt_queue_attend_resolve_repo(queue):
+    """Look up ``queue``'s repo_path from queue-config.json, tolerating the
+    same legacy case-mismatched keys /api/queue/config already accounts for.
+    Returns (repo_path, error) -- exactly one is truthy.
+    """
+    queue_norm = str(queue or "").strip().upper()
+    cfg = _wt_read_config() or {}
+    matched = next((k for k in cfg if str(k).strip().upper() == queue_norm), None)
+    conf = cfg.get(matched) if matched is not None else None
+    repo_path = str((conf or {}).get("repo_path") or "").strip() if isinstance(conf, dict) else ""
+    if not repo_path:
+        return None, f"queue {queue_norm} has no repo_path configured -- configure the queue's repo path first"
+    if not Path(repo_path).expanduser().is_dir():
+        return None, f"queue {queue_norm}'s configured repo_path ({repo_path}) is not a directory -- configure the queue's repo path first"
+    return repo_path, None
+
+
+def _wt_queue_attend_session_running(session_id):
+    """Same liveness primitive the idle-reaper and interrupt-ask endpoints
+    use for claude sessions: resolve the spawn registry entry for the
+    session id, then verify its pid is still an actual claude process (pids
+    get recycled, so a bare os.kill(pid, 0) is not enough)."""
+    sid = str(session_id or "").strip()
+    if not sid:
+        return False
+    entry = _spawn_registry_entry_for_session(sid, engine="claude")
+    if not entry:
+        return False
+    pid = entry.get("pid")
+    if not pid:
+        return False
+    return _pid_is_engine_process(pid, "claude")
+
+
+def _wt_queue_attend_prompt(queue, repo_path):
+    return (
+        _QUEUE_ATTENDANT_PROMPT
+        .replace("{Q}", queue)
+        .replace("{repo}", repo_path)
+        .replace("{port}", str(PORT))
+    )
+
+
+def _wt_queue_attend_status(queue):
+    """Cheap GET-time payload: state-file read + a liveness probe. Never
+    spawns anything."""
+    path = _wt_queue_attend_path(queue)
+    if path is None:
+        return None
+    queue_norm = str(queue).strip().upper()
+    record = _wt_queue_attend_read(path)
+    if record is None:
+        return {
+            "ok": True,
+            "queue": queue_norm,
+            "exists": False,
+            "running": False,
+            "session_id": None,
+            "started_at": None,
+            "running_for_s": 0,
+            "last_report": None,
+            "question": None,
+        }
+    session_id = record.get("session_id")
+    running = _wt_queue_attend_session_running(session_id)
+    running_for_s = 0
+    started_at = record.get("started_at")
+    if running and started_at:
+        try:
+            started_dt = datetime.strptime(started_at, "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=timezone.utc)
+            running_for_s = max(0, round((datetime.now(timezone.utc) - started_dt).total_seconds()))
+        except ValueError:
+            running_for_s = 0
+    question = _read_question_request(session_id) if session_id else None
+    question_payload = (
+        {"nonce": question.get("nonce"), "questions": question.get("questions") or []}
+        if question else None
+    )
+    return {
+        "ok": True,
+        "queue": queue_norm,
+        "exists": True,
+        "running": running,
+        "session_id": session_id,
+        "started_at": started_at,
+        "running_for_s": running_for_s,
+        "last_report": record.get("last_report"),
+        "question": question_payload,
+    }
+
+
+def _wt_queue_attend_start(queue):
+    """Validate + resolve repo, guard against a still-live attendant, spawn
+    the opus-5 janitor, and persist the state file. Returns a dict with
+    "ok" plus either "session_id" or "error"/"code" for the caller to map
+    to an HTTP status.
+    """
+    path = _wt_queue_attend_path(queue)
+    if path is None:
+        return {"ok": False, "error": "invalid queue", "code": "invalid_queue"}
+    queue_norm = str(queue).strip().upper()
+    existing = _wt_queue_attend_read(path)
+    if existing and _wt_queue_attend_session_running(existing.get("session_id")):
+        return {
+            "ok": False,
+            "error": f"attendant for {queue_norm} is already running (session {existing.get('session_id')})",
+            "code": "already_running",
+        }
+    repo_path, error = _wt_queue_attend_resolve_repo(queue_norm)
+    if error:
+        return {"ok": False, "error": error, "code": "no_repo_path"}
+    prompt = _wt_queue_attend_prompt(queue_norm, repo_path)
+    result = spawn_session(
+        prompt,
+        name=f"attendant: {queue_norm}",
+        repo_path=repo_path,
+        model=_QUEUE_ATTENDANT_MODEL,
+        reasoning_effort=_QUEUE_ATTENDANT_EFFORT,
+    )
+    if not isinstance(result, dict) or not result.get("ok"):
+        err = (result or {}).get("error") if isinstance(result, dict) else None
+        code = (result or {}).get("code") if isinstance(result, dict) else None
+        return {"ok": False, "error": err or "spawn failed", "code": code or "spawn_failed"}
+    now_iso = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    record = {
+        "queue": queue_norm,
+        "session_id": result.get("session_id"),
+        "spawn_id": result.get("spawn_id"),
+        "started_at": now_iso,
+        "repo_path": repo_path,
+        "model": _QUEUE_ATTENDANT_MODEL,
+    }
+    try:
+        _wt_queue_attend_write(path, record)
+    except OSError:
+        pass
+    return {"ok": True, "session_id": result.get("session_id")}
+
+
+def _wt_queue_attend_report(queue, summary):
+    """Stamp last_report into the state file. Must work even while the
+    attendant session is still live -- this is the attendant's own last
+    act, called before it exits."""
+    path = _wt_queue_attend_path(queue)
+    if path is None:
+        return {"ok": False, "error": "invalid queue"}
+    record = _wt_queue_attend_read(path) or {"queue": str(queue).strip().upper()}
+    now_iso = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    record["last_report"] = {
+        "summary": str(summary or "").strip()[:_QUEUE_ATTENDANT_REPORT_CAP],
+        "at": now_iso,
+    }
+    try:
+        _wt_queue_attend_write(path, record)
+    except OSError as e:
+        return {"ok": False, "error": str(e)}
+    return {"ok": True}
+
+
 def _queue_config_from_payload(payload):
     """Validate and normalize the complete WatchTower queue form payload.
 
@@ -59210,6 +59424,20 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                 self.send_json(status)
             except Exception as e:
                 self.send_json({"ok": False, "error": str(e)}, 500)
+        elif path == "/api/queue/attend":
+            # Q2 queue attendant (spec: 2026-08-13-q2-queue-attendant-design.md).
+            # Cheap: state-file read + a pid liveness probe. Never spawns --
+            # the POST does that. Polled every 3s by the band while running.
+            qs = urllib.parse.parse_qs(parsed.query)
+            queue = (qs.get("queue", [""])[0] or "").strip()
+            try:
+                status = _wt_queue_attend_status(queue)
+                if status is None:
+                    self.send_json({"ok": False, "error": "invalid queue"}, 400)
+                    return
+                self.send_json(status)
+            except Exception as e:
+                self.send_json({"ok": False, "error": str(e)}, 500)
         elif path == "/api/ux-fixes/item":
             qs = urllib.parse.parse_qs(parsed.query)
             ref = (qs.get("ref", [""])[0] or "").strip()
@@ -62936,6 +63164,53 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                     self.send_json(result, 400)
                 else:
                     self.send_json(result, 409)
+            except Exception as e:
+                self.send_json({"ok": False, "error": str(e)}, 500)
+            return
+        if path == "/api/queue/attend":
+            # Spawn (or refuse to duplicate) the Q2 queue attendant -- an
+            # opus-5/high-effort headless session that cleans the queue in
+            # its own repo (wt close/answer/dedup/release), per the spec.
+            length = int(self.headers.get("Content-Length", "0"))
+            body = self.rfile.read(length) if length > 0 else b""
+            try:
+                payload = json.loads(body) if body else {}
+            except json.JSONDecodeError:
+                payload = {}
+            queue = str((payload or {}).get("queue") or "").strip()
+            try:
+                result = _wt_queue_attend_start(queue)
+                if result.get("ok"):
+                    self.send_json({"ok": True, "session_id": result.get("session_id")})
+                else:
+                    code = result.get("code")
+                    status = {
+                        "invalid_queue": 400,
+                        "no_repo_path": 400,
+                        "already_running": 409,
+                        "claude_unavailable": 503,
+                    }.get(code, 500)
+                    self.send_json(result, status)
+            except Exception as e:
+                self.send_json({"ok": False, "error": str(e)}, 500)
+            return
+        if path == "/api/queue/attend/report":
+            # The attendant's own last act before it stops (curl to
+            # localhost) -- tolerated if it never arrives; the band falls
+            # back to "session ended". Must work while the session is still
+            # live, so this only ever touches the state file, never the
+            # spawn registry.
+            length = int(self.headers.get("Content-Length", "0"))
+            body = self.rfile.read(length) if length > 0 else b""
+            try:
+                payload = json.loads(body) if body else {}
+            except json.JSONDecodeError:
+                payload = {}
+            queue = str((payload or {}).get("queue") or "").strip()
+            summary = (payload or {}).get("summary")
+            try:
+                result = _wt_queue_attend_report(queue, summary)
+                self.send_json(result, 200 if result.get("ok") else 400)
             except Exception as e:
                 self.send_json({"ok": False, "error": str(e)}, 500)
             return
