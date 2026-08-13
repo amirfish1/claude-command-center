@@ -11630,6 +11630,11 @@ def _rehydrate_archive_cached_rows(rows):
                         row["ai_title"] = (
                             title if (title and title != first_message) else None
                         )
+                        if row["ai_title"] is None:
+                            try:
+                                _request_codex_auto_title(sid, fresh=fresh)
+                            except Exception:
+                                pass
 
             # A just-spawned session reaches the list BEFORE its engine has
             # written the prompt anywhere we read it: the row lands at ~5s,
@@ -17766,14 +17771,15 @@ def summarize_issue_title(issue_number, repo_path):
     return result
 
 
-def summarize_session_title(session_id, validate=False):
-    """Use `claude -p` to produce a concise title for a session's opening prompt.
+def _summarize_title_text(first_msg, validate=False):
+    """Use `claude -p` to produce a concise title for an opening prompt string.
 
-    `validate=True` (the auto-titler path) rejects an answer that is really the
-    summarizer asking us for a prompt, rather than writing it onto the row.
+    Engine-agnostic: callers resolve the opening prompt however fits their
+    transcript format (Claude JSONL, Codex rollout) and pass the text in.
+    `validate=True` rejects an answer that is really the summarizer asking us
+    for a prompt, rather than a usable title.
     """
     result = {"ok": False}
-    first_msg = _extract_first_message(session_id)
     if not first_msg:
         result["error"] = "no opening prompt found"
         return result
@@ -17831,11 +17837,26 @@ def summarize_session_title(session_id, validate=False):
     if validate and _auto_title_looks_bogus(title):
         result["error"] = f"model answered instead of titling: {title[:80]}"
         return result
+    result["ok"] = True
+    result["title"] = title
+    return result
+
+
+def summarize_session_title(session_id, validate=False):
+    """Use `claude -p` to produce a concise title for a Claude session's opening prompt.
+
+    `validate=True` (the auto-titler path) rejects an answer that is really the
+    summarizer asking us for a prompt, rather than writing it onto the row.
+    """
+    first_msg = _extract_first_message(session_id)
+    result = _summarize_title_text(first_msg, validate=validate)
+    if not result.get("ok"):
+        return result
+    title = result["title"]
     # source="auto": writes the JSONL custom-title (so the title sticks) but
     # skips the sidecar — keeps name_overridden False / ✏️ off the row.
     rename_result = rename_session(session_id, title, source="auto")
     result["ok"] = bool(rename_result.get("ok"))
-    result["title"] = title
     result["rename_method"] = rename_result.get("method")
     if not result["ok"]:
         result["error"] = rename_result.get("error") or "rename failed"
@@ -18061,6 +18082,87 @@ def request_auto_title(session_id):
         return {"ok": True, "queued": False, "reason": "already_attempted"}
     threading.Thread(target=_auto_title_worker, args=(sid,), daemon=True).start()
     return {"ok": True, "queued": True}
+
+
+# ── Codex auto-titler ──────────────────────────────────────────────────────
+# Codex only writes an AI-summarized `title` when its own model bothers to;
+# for a lot of CCC-spawned/continued threads (e.g. "You are continuing a task
+# from an earlier Codex session…") it just copies the first user message, same
+# gap as Claude Code sessions launched outside the interactive TUI. Codex has
+# no Stop hook to poke us, so this is driven from the sidebar hydrate path
+# instead (_apply_watchtower_worker_display_names' caller) — cheap idempotency
+# checks below make repeated polling calls a no-op after the first attempt.
+def _codex_auto_title_needed(session_id):
+    """True when a Codex session's own title is just a copy of its first prompt."""
+    if _load_session_name_overrides().get(session_id):
+        return False
+    try:
+        fresh = _codex_titles_snapshot().get(session_id)
+    except Exception:
+        fresh = None
+    if not fresh:
+        return None  # Codex hasn't written title/first_user_message yet
+    first_message = (fresh.get("first_user_message") or "").strip()
+    if not first_message:
+        return False
+    title = (fresh.get("title") or "").strip()
+    if title and title != first_message:
+        return False  # Codex already produced a real summary
+    return True
+
+
+def _codex_auto_title_worker(session_id, first_message):
+    acquired = _auto_title_sem.acquire(blocking=False)
+    if not acquired:
+        # Fleet-wide Stop storm equivalent — let a later poll retry.
+        _auto_title_release(session_id)
+        return
+    try:
+        result = _summarize_title_text(first_message, validate=True)
+        if not result.get("ok"):
+            _auto_title_release(session_id)
+            _log_activity("autotitle", "FAILED",
+                          f"sid={session_id[:8]} codex err={str(result.get('error') or '')[:120]}")
+            return
+        title = result["title"]
+        rename_result = rename_session(session_id, title, source="auto")
+        if rename_result.get("ok"):
+            _auto_title_record(session_id, title)
+            _log_activity("autotitle", "TITLED", f"sid={session_id[:8]} codex title={title[:60]}")
+        else:
+            _auto_title_release(session_id)
+            _log_activity("autotitle", "FAILED",
+                          f"sid={session_id[:8]} codex rename err={str(rename_result.get('error') or '')[:120]}")
+    except Exception as e:
+        _auto_title_release(session_id)
+        _log_activity("autotitle", "ERROR", f"sid={session_id[:8]} codex {str(e)[:120]}")
+    finally:
+        _auto_title_sem.release()
+
+
+def _request_codex_auto_title(session_id, fresh=None):
+    """Queue a background auto-title for a Codex session. Returns immediately."""
+    sid = str(session_id or "").strip()
+    if not sid or not _auto_title_enabled():
+        return
+    if _auto_title_marker_path(sid).exists():
+        return
+    needed = _codex_auto_title_needed(sid)
+    if not needed:
+        return
+    if fresh is None:
+        try:
+            fresh = _codex_titles_snapshot().get(sid)
+        except Exception:
+            fresh = None
+    first_message = ((fresh or {}).get("first_user_message") or "").strip()
+    if not first_message:
+        return
+    if not _auto_title_claim(sid):
+        return
+    threading.Thread(
+        target=_codex_auto_title_worker, args=(sid, first_message), daemon=True
+    ).start()
 
 
 # Terminal apps we know how to focus via AppleScript. Matched case-insensitively
