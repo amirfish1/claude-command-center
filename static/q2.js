@@ -2327,7 +2327,15 @@
         focused = k; selStart = el.selectionStart; selEnd = el.selectionEnd;
       }
     });
+    // .q2-pre blocks (prompt/learnings text) scroll internally; rewriting
+    // innerHTML on every 5s poll reset that scroll to 0 mid-read (CCC-847).
+    // Preserve by position since these blocks have no stable id.
+    var preScroll = [];
+    top.querySelectorAll('.q2-pre').forEach(function (el) { preScroll.push(el.scrollTop); });
     top.innerHTML = topHtml;
+    top.querySelectorAll('.q2-pre').forEach(function (el, i) {
+      if (preScroll[i]) el.scrollTop = preScroll[i];
+    });
     top.querySelectorAll('[data-q2-input]').forEach(function (el) {
       var k = el.getAttribute('data-q2-input');
       if (drafts[k] != null) el.value = drafts[k];
