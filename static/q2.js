@@ -56,32 +56,29 @@
     learningsQueue: '',
     learnings: null,    // selected queue's learnings file, loaded on demand
     learningsError: '',
-    briefQueue: '',      // which queue state.brief belongs to
-    brief: null,         // selected queue's status brief ({headline, summary, clusters, decisions, next_steps}), loaded on demand
-    briefError: '',       // last generation error, if any (kept alongside a still-good cached brief)
-    briefGenerating: false,
-    briefStaleCount: 0,  // ticket adds/removes/changes since the cached brief was generated
-    briefTicketCount: 0, // analyzable (non-closed) tickets right now
-    briefGeneratedAt: '',
-    briefModel: '',
+    attendQueue: '',      // which queue state.attend* belongs to
+    attendExists: false,  // has this queue ever had an attendant run
+    attendRunning: false,
+    attendSessionId: '',
+    attendStartedAt: '',
+    attendLastReport: null,  // {summary, at} | null
+    attendQuestion: null,    // {nonce, questions:[...]} | null, proxies _read_question_request
+    attendError: '',         // inline error for the band (load/tend failures) -- never alert()
+    attendStarting: false,   // POST /api/queue/attend in flight
+    attendAnswering: false,  // POST /api/answer-question in flight
+    attendAnswerError: '',
   };
   var newTicketExpires = {};
-  // Auto-generate is "at most once per queue per page load" (design doc):
-  // a plain object keyed by queue name, not state, because it must NOT
-  // survive a queue's brief being reloaded -- only a hard page reload resets
-  // it. The server's own cooldown backstops this if it ever double-fires.
-  var briefAutoTried = {};
-  // Only one brief can be generating-and-polled at a time: the queue on
-  // screen. Torn down on every queue change so a stale poll can never leak
-  // past the selection that started it.
-  var briefPollTimer = null;
-  // When the brief was last fetched for the on-screen queue -- drives the
-  // once-a-minute staleness re-read in refresh(), NOT the 3s generating poll.
-  var briefLoadedAt = 0;
-  // Live "Analyzing… 42s" timer: anchored to the server's elapsed seconds,
-  // ticked client-side every second so the owner can see it isn't stuck.
-  var briefGenAnchor = 0;
-  var briefTickTimer = null;
+  // Only one attendant can be polled at a time: the queue on screen. Torn
+  // down on every queue change so a stale poll can never leak past the
+  // selection that started it.
+  var attendPollTimer = null;
+  var attendPollQueue = '';
+  // Live "Attendant working… 4m 12s" timer: anchored to the server's
+  // elapsed seconds, ticked client-side every second so the owner can see
+  // it isn't stuck. Same trick the old analyze timer used.
+  var attendRunAnchor = 0;
+  var attendTickTimer = null;
 
   function fmtElapsed(ms) {
     var s = Math.max(0, Math.round(ms / 1000));
@@ -89,22 +86,22 @@
   }
 
   // The ticker writes ONLY the elapsed span's text. It must not go through
-  // renderBrief: the band's html string is deliberately kept constant while
-  // generating so the repaint-skip cache preserves scroll and selection.
-  function briefTick() {
+  // renderAttend: the band's html string is deliberately kept constant while
+  // running so the repaint-skip cache preserves scroll, selection, and any
+  // in-progress free-text answer.
+  function attendTick() {
     var el = document.querySelector('.q2-brief-elapsed');
-    if (el) el.textContent = fmtElapsed(Date.now() - briefGenAnchor);
+    if (el) el.textContent = fmtElapsed(Date.now() - attendRunAnchor);
   }
-  function syncBriefTicker() {
-    if (state.briefGenerating && !briefTickTimer) {
-      briefTickTimer = window.setInterval(briefTick, 1000);
-    } else if (!state.briefGenerating && briefTickTimer) {
-      window.clearInterval(briefTickTimer);
-      briefTickTimer = null;
+  function syncAttendTicker() {
+    if (state.attendRunning && !attendTickTimer) {
+      attendTickTimer = window.setInterval(attendTick, 1000);
+    } else if (!state.attendRunning && attendTickTimer) {
+      window.clearInterval(attendTickTimer);
+      attendTickTimer = null;
     }
-    if (state.briefGenerating) briefTick();
+    if (state.attendRunning) attendTick();
   }
-  var briefPollQueue = '';
 
   function markNewTicket(ref) {
     if (!ref) return;
@@ -685,20 +682,8 @@
     if (!state.viewAll && state.queue && projectKey(state.learningsQueue) !== projectKey(state.queue)) {
       loadQueueLearnings(state.queue);
     }
-    if (!state.viewAll && state.queue && projectKey(state.briefQueue) !== projectKey(state.queue)) {
-      loadQueueBrief(state.queue);
-    } else if (!state.viewAll && state.queue && !state.briefGenerating
-        && Date.now() - briefLoadedAt > 60000) {
-      // Same queue on screen for a while: re-read the cheap GET so the
-      // "N ticket updates since" staleness hint tracks the queue as workers
-      // churn it, without the full reload's flicker (state stays populated;
-      // setBriefHtml drops identical repaints anyway).
-      briefLoadedAt = Date.now();
-      getJson(briefPath(state.queue)).then(function (data) {
-        if (!state.viewAll && projectKey(state.queue) === projectKey(state.briefQueue)) {
-          applyBriefResponse(state.queue, data);
-        }
-      }).catch(function () { /* next minute retries */ });
+    if (!state.viewAll && state.queue && projectKey(state.attendQueue) !== projectKey(state.queue)) {
+      loadQueueAttend(state.queue);
     }
     // One extra tail per poll, only for the queue on screen.
     if (!state.viewAll && state.queue) await loadLog(state.queue);
@@ -735,112 +720,135 @@
     renderDetail();
   }
 
-  function briefPath(queue) {
-    return '/api/queue/brief?queue=' + encodeURIComponent(String(queue || ''));
+  function attendPath(queue) {
+    return '/api/queue/attend?queue=' + encodeURIComponent(String(queue || ''));
   }
 
-  function stopBriefPoll() {
-    if (briefPollTimer) { window.clearInterval(briefPollTimer); briefPollTimer = null; }
-    briefPollQueue = '';
+  function stopAttendPoll() {
+    if (attendPollTimer) { window.clearInterval(attendPollTimer); attendPollTimer = null; }
+    attendPollQueue = '';
   }
 
-  // Polls every 3s while the server reports `generating`, and only for the
+  // Polls every 3s only while the attendant is `running`, and only for the
   // queue that started it -- a poll for a queue the user has since left
   // would repaint state nobody is looking at, and would leak forever if the
-  // user bounces between queues fast enough to never see `generating: false`.
-  function startBriefPoll(queue) {
-    if (briefPollTimer && briefPollQueue === projectKey(queue)) return;  // already polling this one
-    stopBriefPoll();
-    briefPollQueue = projectKey(queue);
-    briefPollTimer = window.setInterval(function () {
-      if (state.viewAll || projectKey(state.queue) !== briefPollQueue) { stopBriefPoll(); return; }
-      getJson(briefPath(queue)).then(function (data) {
+  // user bounces between queues fast enough to never see `running: false`.
+  function startAttendPoll(queue) {
+    if (attendPollTimer && attendPollQueue === projectKey(queue)) return;  // already polling this one
+    stopAttendPoll();
+    attendPollQueue = projectKey(queue);
+    attendPollTimer = window.setInterval(function () {
+      if (state.viewAll || projectKey(state.queue) !== attendPollQueue) { stopAttendPoll(); return; }
+      getJson(attendPath(queue)).then(function (data) {
         if (projectKey(state.queue) !== projectKey(queue)) return;
-        applyBriefResponse(queue, data);
+        applyAttendResponse(queue, data);
       }).catch(function () {
-        // Swallow poll errors; the next tick (or the main 5s poll, on its own
-        // schedule) will retry rather than surfacing a flicker every 3s.
+        // Swallow poll errors; the next tick will retry rather than
+        // surfacing a flicker every 3s.
       });
     }, 3000);
   }
 
-  function applyBriefResponse(queue, data) {
-    state.brief = (data && data.brief) || null;
-    state.briefGeneratedAt = (data && data.generated_at) || '';
-    state.briefModel = (data && data.model) || '';
-    state.briefStaleCount = (data && data.stale_count) || 0;
-    state.briefTicketCount = (data && data.ticket_count) || 0;
-    state.briefGenerating = !!(data && data.generating);
-    state.briefError = (data && data.error) ? ('Analysis failed: ' + data.error) : '';
-    if (state.briefGenerating) {
+  function applyAttendResponse(queue, data) {
+    state.attendExists = !!(data && data.exists);
+    state.attendRunning = !!(data && data.running);
+    state.attendSessionId = (data && data.session_id) || '';
+    state.attendStartedAt = (data && data.started_at) || '';
+    state.attendLastReport = (data && data.last_report) || null;
+    state.attendQuestion = (data && data.question) || null;
+    // A fresh GET landed -- any earlier load/tend error is stale now.
+    state.attendError = '';
+    if (state.attendRunning) {
       // Anchor the live elapsed timer to the server's clock, so a page
-      // opened mid-generation still shows the true "working for 40s".
-      briefGenAnchor = Date.now() - ((data && data.generating_for_s) || 0) * 1000;
+      // opened mid-run still shows the true "working for 4m 12s".
+      attendRunAnchor = Date.now() - ((data && data.running_for_s) || 0) * 1000;
+      startAttendPoll(queue);
+    } else {
+      stopAttendPoll();
     }
-    renderBrief();
-
-    if (state.briefGenerating) { startBriefPoll(queue); return; }
-    stopBriefPoll();
-
-    // Auto-generate policy (design doc, "err toward manual"): a fresh POST
-    // only when there is nothing cached yet, or the cache is stale enough
-    // (>=3 ticket changes) to be actively misleading -- and only once per
-    // queue per page load. Everything else is the manual (force) button;
-    // the server's own 15-minute cooldown backstops this if it ever fires
-    // more than once anyway.
-    var key = projectKey(queue);
-    var exists = !!(data && data.exists);
-    if (!briefAutoTried[key] && state.briefTicketCount > 0 && (!exists || state.briefStaleCount >= 3)) {
-      briefAutoTried[key] = true;
-      triggerBriefRefresh(queue, false);
-    }
+    renderAttend();
   }
 
-  async function loadQueueBrief(queue) {
-    briefLoadedAt = Date.now();
-    state.briefQueue = queue;
-    state.brief = null;
-    state.briefError = '';
-    state.briefGenerating = false;
-    state.briefStaleCount = 0;
-    state.briefTicketCount = 0;
-    state.briefGeneratedAt = '';
-    state.briefModel = '';
-    renderBrief();
+  async function loadQueueAttend(queue) {
+    state.attendQueue = queue;
+    state.attendExists = false;
+    state.attendRunning = false;
+    state.attendSessionId = '';
+    state.attendStartedAt = '';
+    state.attendLastReport = null;
+    state.attendQuestion = null;
+    state.attendError = '';
+    renderAttend();
     try {
-      var data = await getJson(briefPath(queue));
+      var data = await getJson(attendPath(queue));
       if (projectKey(state.queue) !== projectKey(queue)) return;  // user moved on
-      applyBriefResponse(queue, data);
+      applyAttendResponse(queue, data);
     } catch (e) {
       if (projectKey(state.queue) !== projectKey(queue)) return;
-      state.briefError = e.message || 'Could not load status brief.';
-      renderBrief();
+      state.attendError = e.message || 'Could not load the queue attendant.';
+      renderAttend();
     }
   }
 
-  // Manual (↻, retry link) or auto-triggered refresh. `force` maps straight
-  // to the server's cooldown bypass -- everything the UI itself initiates
-  // without a click (the auto-generate policy above) sends force:false so
-  // the server's cooldown is the real backstop, not this function.
-  async function triggerBriefRefresh(queue, force) {
-    if (!queue) return;
+  // The [Tend queue] click. Optimistically flips to the running head the
+  // moment the POST resolves rather than waiting on the next poll tick, so
+  // the disabled-while-running button and the pulsing dot land together.
+  async function tendQueue() {
+    if (!state.queue || state.viewAll || state.attendRunning || state.attendStarting) return;
+    var queue = state.queue;
+    state.attendStarting = true;
+    state.attendError = '';
+    renderAttend();
     try {
-      var data = await postJson('/api/queue/brief/refresh', { queue: queue, force: !!force });
-      if (data && data.started && projectKey(state.queue) === projectKey(queue)) {
-        state.briefGenerating = true;
-        state.briefError = '';
-        briefGenAnchor = Date.now();
-        renderBrief();
-        startBriefPoll(queue);
-      }
+      var data = await postJson('/api/queue/attend', { queue: queue });
+      state.attendStarting = false;
+      if (projectKey(state.queue) !== projectKey(queue)) return;  // user moved on
+      state.attendExists = true;
+      state.attendRunning = true;
+      state.attendSessionId = (data && data.session_id) || state.attendSessionId;
+      state.attendQuestion = null;
+      attendRunAnchor = Date.now();
+      renderAttend();
+      startAttendPoll(queue);
     } catch (e) {
+      state.attendStarting = false;
       if (projectKey(state.queue) !== projectKey(queue)) return;
-      // A refusal of the auto-trigger (server cooldown, race with another
-      // tab) is not the user's problem -- painting it as an error would
-      // blame them for a click they never made. Only manual refreshes report.
-      if (!force) return;
-      state.briefError = e.message || 'Could not refresh status brief.';
-      renderBrief();
+      // Shown inline in the band, not alert() -- a queue with a stale wt
+      // config ("configure the queue's repo path first") is common enough
+      // that a modal would just be one more click to dismiss.
+      state.attendError = e.message || 'Could not start the attendant.';
+      renderAttend();
+    }
+  }
+
+  // Answering the attendant's one pending question. `index` selects an
+  // option (0-based, matching _write_question_answer's contract); -1 means
+  // "use `text` as a free-text answer" -- the same shape the existing
+  // AskUserQuestion relay consumer (static/app.js submitRelayedQuestionAnswers)
+  // sends. Since the attendant asks exactly one question at a time, the
+  // answers array always holds a single entry.
+  async function answerAttendQuestion(index, text) {
+    if (!state.attendSessionId || state.attendAnswering) return;
+    var sid = state.attendSessionId;
+    state.attendAnswering = true;
+    state.attendAnswerError = '';
+    renderAttend();
+    try {
+      await postJson('/api/answer-question', {
+        session_id: sid,
+        answers: [{ index: index, text: text }],
+      });
+      state.attendAnswering = false;
+      if (state.attendSessionId !== sid) return;  // moved on mid-request
+      state.attendQuestion = null;
+      renderAttend();
+      // The session is still running (just unblocked) -- the existing poll
+      // keeps going and will pick up whatever it does next.
+    } catch (e) {
+      state.attendAnswering = false;
+      if (state.attendSessionId !== sid) return;
+      state.attendAnswerError = e.message || 'Could not send the answer.';
+      renderAttend();
     }
   }
 
@@ -1411,11 +1419,13 @@
       + ' title="Collapse queue mechanics to one line">&#9650;</button>';
   }
 
-  // ── render: status brief ─────────────────────────────────────────────────
-  // Collapse state is per-queue (a decision-dense queue's owner wants it
-  // open; a quiet one gets collapsed once and should stay that way), and
-  // persists the same way the logbar height does: a plain localStorage key,
-  // read fresh on every render rather than cached in `state`.
+  // ── render: queue attendant ──────────────────────────────────────────────
+  // Collapse state is per-queue (a queue mid-question wants it open; a quiet
+  // one gets collapsed once and should stay that way), and persists the same
+  // way the logbar height does: a plain localStorage key, read fresh on
+  // every render rather than cached in `state`. Same keys as the old status
+  // brief -- it's the same band, just repurposed, so an existing collapse
+  // preference carries over.
   function briefCollapsedKey(queue) { return 'q2.brief.collapsed.' + projectKey(queue); }
   function briefCollapsed(queue) {
     try { return localStorage.getItem(briefCollapsedKey(queue)) === '1'; } catch (_) { return false; }
@@ -1424,161 +1434,160 @@
     try { localStorage.setItem(briefCollapsedKey(queue), on ? '1' : '0'); } catch (_) {}
   }
 
-  // A ref the model cites is only a link if it names a ticket actually in
-  // the current item list -- otherwise clicking it would either 404 the
-  // detail pane or silently select nothing.
-  function briefRefExists(ref) {
-    return (state.items || []).some(function (it) { return it.ref === ref; });
-  }
-  function briefRefsHtml(refs) {
-    return (refs || []).map(function (ref) {
-      ref = String(ref || '').trim();
-      if (!ref) return '';
-      // Reuses data-q2-ref, the same attribute the ticket rows use --
-      // one delegated click handler (below) already turns it into
-      // selectTicket() for both.
-      var known = briefRefExists(ref);
-      return '<span class="q2-brief-ref' + (known ? '' : ' is-plain') + '"'
-        + (known ? ' data-q2-ref="' + esc(ref) + '"' : '')
-        + '>' + esc(ref) + '</span>';
+  // The pending question's answer form. Escaped throughout -- question text,
+  // header, and option labels are model-provided. One button per option
+  // (the attendant prompt puts its recommended direction first) plus a
+  // free-text field for anything else. `data-q2-attend-draft` marks the
+  // input whose value setAttendRegions() preserves across a same-content
+  // repaint (mirrors the detail pane's comment/answer draft preservation).
+  function attendQuestionHtml(question) {
+    var qq = (question && Array.isArray(question.questions)) ? question.questions[0] : null;
+    if (!qq) return '';
+    var opts = Array.isArray(qq.options) ? qq.options : [];
+    var busy = !!state.attendAnswering;
+    var optsHtml = opts.map(function (opt, oi) {
+      return '<button type="button" class="q2-btn q2-attend-opt" data-q2-attend-answer-opt="' + oi + '"'
+        + (busy ? ' disabled' : '')
+        + (opt && opt.description ? ' title="' + esc(opt.description) + '"' : '')
+        + '>' + esc((opt && opt.label) || '') + '</button>';
     }).join('');
+    return '<div class="q2-attend-question">'
+      + '<div class="q2-attend-question-title">Attendant asks:</div>'
+      + (qq.header ? '<div class="q2-attend-question-header">' + esc(qq.header) + '</div>' : '')
+      + (qq.question ? '<div class="q2-attend-question-text">' + esc(qq.question) + '</div>' : '')
+      + (optsHtml ? '<div class="q2-attend-options">' + optsHtml + '</div>' : '')
+      + '<div class="q2-attend-freeform">'
+      + '<input type="text" class="q2-input q2-attend-freetext" data-q2-attend-draft="answer"'
+      + ' placeholder="Or type your own answer&hellip;" aria-label="Type your own answer"'
+      + (busy ? ' disabled' : '') + '>'
+      + '<button type="button" class="q2-btn q2-btn-primary" data-q2-attend-answer-send'
+      + (busy ? ' disabled' : '') + '>' + (busy ? 'Sending&hellip;' : 'Send') + '</button>'
+      + '</div>'
+      + (state.attendAnswerError ? '<div class="q2-attend-error">' + esc(state.attendAnswerError) + '</div>' : '')
+      + '</div>';
   }
 
-  // headline (bold) -> summary -> clusters (commonalities across tickets,
-  // the brief's primary value) -> decisions (orange left border, same
-  // affordance as the mock) -> next steps. Every string here is model- or
-  // server-provided and must be escaped; nothing in this function trusts it.
-  function briefContentHtml(brief) {
-    if (!brief) return '';
-    var html = '';
-    if (brief.headline) html += '<div class="q2-brief-headline">' + esc(brief.headline) + '</div>';
-    if (brief.summary) html += '<p class="q2-brief-summary">' + esc(brief.summary) + '</p>';
-    (brief.clusters || []).forEach(function (c) {
-      if (!c) return;
-      html += '<p class="q2-brief-cluster">'
-        + (c.title ? '<b>' + esc(c.title) + '</b> ' : '')
-        + (c.note ? esc(c.note) + ' ' : '')
-        + briefRefsHtml(c.refs)
-        + '</p>';
-    });
-    (brief.decisions || []).forEach(function (d) {
-      if (!d) return;
-      html += '<div class="q2-brief-decision">'
-        + briefRefsHtml(d.refs)
-        + '<span>' + esc(d.text || '') + '</span>'
-        + '</div>';
-    });
-    if (brief.next_steps && brief.next_steps.length) {
-      html += '<ol class="q2-brief-steps">' + brief.next_steps.map(function (s) {
-        return '<li>' + esc(s) + '</li>';
-      }).join('') + '</ol>';
-    }
-    return html;
-  }
+  // renderAttend runs on every main poll (renderAll) plus after every action
+  // (tend, answer). The band is split into two independently-repainted
+  // regions so the header's live elapsed timer can tick every second without
+  // rebuilding the body -- an innerHTML reset on the body would throw away
+  // scroll position, text selection, and any half-typed free-text answer.
+  // `attendShape` tracks which skeleton is mounted; the head/body strings
+  // gate their own region's repaint. Kept from the old status-brief band.
+  var attendShape = null;
+  var attendHeadHtml = null;
+  var attendBodyHtml = null;
 
-  // renderBrief runs on every main poll (renderAll). The band is split into
-  // two independently-repainted regions so the header's freshness text
-  // ("Last updated 2m ago" flips every minute; every few SECONDS right
-  // after a generation, which is exactly when the owner is reading) can
-  // update without rebuilding the scrollable body -- an innerHTML reset on
-  // the body throws away its scroll position and any text selection.
-  // `briefShape` tracks which skeleton is mounted; the head/body strings
-  // gate their own region's repaint.
-  var briefShape = null;
-  var briefHeadHtml = null;
-  var briefBodyHtml = null;
-
-  function setBriefRegions(host, shape, headHtml, bodyHtml, bodyHidden) {
+  function setAttendRegions(host, shape, headHtml, bodyHtml, bodyHidden) {
     host.hidden = (shape === 'hidden');
-    if (shape !== briefShape) {
-      briefShape = shape;
-      briefHeadHtml = null;
-      briefBodyHtml = null;
+    if (shape !== attendShape) {
+      attendShape = shape;
+      attendHeadHtml = null;
+      attendBodyHtml = null;
       if (shape === 'hidden') { host.innerHTML = ''; return; }
-      host.innerHTML = (shape === 'line')
-        ? '<div class="q2-brief-generating"></div>'
-        : '<div class="q2-brief-head"></div><div class="q2-brief-body"></div>';
+      host.innerHTML = '<div class="q2-brief-head"></div><div class="q2-brief-body"></div>';
     }
     if (shape === 'hidden') return;
-    if (shape === 'line') {
-      var line = host.querySelector('.q2-brief-generating');
-      if (line && briefHeadHtml !== headHtml) { briefHeadHtml = headHtml; line.innerHTML = headHtml; }
-      return;
-    }
     var head = host.querySelector('.q2-brief-head');
     var body = host.querySelector('.q2-brief-body');
-    if (head && briefHeadHtml !== headHtml) { briefHeadHtml = headHtml; head.innerHTML = headHtml; }
-    if (body) {
-      if (briefBodyHtml !== bodyHtml) { briefBodyHtml = bodyHtml; body.innerHTML = bodyHtml; }
-      body.hidden = !!bodyHidden;
+    if (head && attendHeadHtml !== headHtml) { attendHeadHtml = headHtml; head.innerHTML = headHtml; }
+    if (body && attendBodyHtml !== bodyHtml) {
+      // Preserve a focused free-text draft across a body rebuild (e.g. the
+      // answer-error line appearing after a failed send) -- same pattern
+      // renderDetail() uses for its always-open comment/answer boxes.
+      var drafts = {}, focused = null, selStart = 0, selEnd = 0;
+      body.querySelectorAll('[data-q2-attend-draft]').forEach(function (el) {
+        var k = el.getAttribute('data-q2-attend-draft');
+        if (el.value) drafts[k] = el.value;
+        if (document.activeElement === el) { focused = k; selStart = el.selectionStart; selEnd = el.selectionEnd; }
+      });
+      attendBodyHtml = bodyHtml;
+      body.innerHTML = bodyHtml;
+      body.querySelectorAll('[data-q2-attend-draft]').forEach(function (el) {
+        var k = el.getAttribute('data-q2-attend-draft');
+        if (drafts[k] != null) el.value = drafts[k];
+        if (focused === k) {
+          el.focus();
+          try { el.setSelectionRange(selStart, selEnd); } catch (_) {}
+        }
+      });
     }
+    if (body) body.hidden = !!bodyHidden;
   }
 
-  function renderBrief() {
+  function renderAttend() {
     var host = $('q2Brief');
     if (!host) return;
 
-    var ticketCount = state.briefTicketCount || 0;
-    var hasBrief = !!state.brief;
-    var generating = !!state.briefGenerating;
-
-    // Hidden: all-queues view (a brief is per-queue), no queue selected, or
-    // a queue with nothing analyzable and nothing cached from when it did.
-    if (state.viewAll || !state.queue
-        || (!hasBrief && !generating && !state.briefError && ticketCount === 0)) {
-      setBriefRegions(host, 'hidden', '', '', false);
+    // Hidden: all-queues view (the attendant is per-queue) or no queue
+    // selected.
+    if (state.viewAll || !state.queue) {
+      setAttendRegions(host, 'hidden', '', '', false);
       setBriefHandleHidden(true);
-      syncBriefTicker();
-      return;
-    }
-
-    // Generating with nothing cached yet: the one quiet line the design doc
-    // asks for, no header chrome (there is nothing yet to collapse). The
-    // elapsed span is left empty here and filled by the 1s ticker, so this
-    // html string stays constant across polls.
-    if (generating && !hasBrief) {
-      setBriefRegions(host, 'line', 'Analyzing ' + ticketCount
-        + ' ticket' + (ticketCount === 1 ? '' : 's') + '&hellip; '
-        + '<span class="q2-brief-elapsed"></span>', '', false);
-      setBriefHandleHidden(true);
-      syncBriefTicker();
+      syncAttendTicker();
       return;
     }
 
     var collapsed = briefCollapsed(state.queue);
-    var freshBits = [];
-    if (generating) {
-      // A refresh landed while a good brief was already on screen (e.g. the
-      // stale_count>=3 auto-trigger); keep showing that brief below.
-      freshBits.push('<span class="q2-brief-fresh">Analyzing&hellip; '
-        + '<span class="q2-brief-elapsed"></span></span>');
-    } else if (state.briefGeneratedAt) {
-      freshBits.push('<span class="q2-brief-fresh">Last updated ' + esc(relTime(state.briefGeneratedAt)) + '</span>');
-      if (state.briefStaleCount > 0) {
-        freshBits.push('<span class="q2-brief-stale">&middot; ' + state.briefStaleCount
-          + ' ticket update' + (state.briefStaleCount === 1 ? '' : 's') + ' since</span>');
+    var running = !!state.attendRunning;
+    var headHtml, bodyHtml, bodyHidden;
+
+    if (running) {
+      // Pulsing dot + live elapsed (anchored to the server's running_for_s,
+      // ticked client-side) + a link to the spawned session.
+      headHtml = '<span class="q2-mini-dot" aria-hidden="true"></span>'
+        + '<span class="q2-brief-title">Attendant working&hellip; <span class="q2-brief-elapsed"></span></span>'
+        + '<span class="q2-spacer"></span>'
+        + sessionBtn(state.attendSessionId, 'open session')
+        + '<button type="button" class="q2-brief-toggle" data-q2-brief-toggle'
+        + ' aria-expanded="' + (collapsed ? 'false' : 'true') + '"'
+        + ' title="' + (collapsed ? 'Expand' : 'Collapse') + '">'
+        + (collapsed ? '&#9660;' : '&#9650;') + '</button>';
+
+      var question = state.attendQuestion;
+      if (question && Array.isArray(question.questions) && question.questions.length) {
+        bodyHtml = attendQuestionHtml(question);
+        bodyHidden = collapsed;
+      } else {
+        bodyHtml = '';
+        bodyHidden = true;
+      }
+    } else {
+      // Idle (never run, or ended) -- one manual trigger, disabled only
+      // while the POST that starts it is in flight (once it lands, the
+      // `running` branch above takes over and the button disappears).
+      headHtml = '<span class="q2-brief-title">Queue attendant</span>'
+        + '<span class="q2-spacer"></span>'
+        + (state.attendError ? '<span class="q2-attend-error">' + esc(state.attendError) + '</span>' : '')
+        + '<button type="button" class="q2-btn q2-btn-ghost q2-attend-tend" data-q2-attend-tend'
+        + (state.attendStarting ? ' disabled' : '') + '>'
+        + (state.attendStarting ? 'Tending&hellip;' : 'Tend queue') + '</button>'
+        + '<button type="button" class="q2-brief-toggle" data-q2-brief-toggle'
+        + ' aria-expanded="' + (collapsed ? 'false' : 'true') + '"'
+        + ' title="' + (collapsed ? 'Expand' : 'Collapse') + '">'
+        + (collapsed ? '&#9660;' : '&#9650;') + '</button>';
+
+      if (state.attendLastReport && state.attendLastReport.summary) {
+        bodyHtml = '<div class="q2-attend-report">Last tended '
+          + esc(relTime(state.attendLastReport.at)) + ' &mdash; '
+          + esc(state.attendLastReport.summary) + '</div>';
+        bodyHidden = collapsed;
+      } else if (state.attendExists) {
+        // Ran to completion but never posted its report (e.g. the process
+        // died mid-cleanup) -- still one click away via the session link.
+        bodyHtml = '<div class="q2-attend-report">Attendant finished &mdash; '
+          + sessionBtn(state.attendSessionId, 'open session') + '</div>';
+        bodyHidden = collapsed;
+      } else {
+        bodyHtml = '';
+        bodyHidden = true;
       }
     }
 
-    var headHtml = '<span class="q2-brief-title">Status brief</span>'
-      + freshBits.join(' ')
-      + '<span class="q2-spacer"></span>'
-      + '<button type="button" class="q2-icon-btn q2-brief-refresh" data-q2-brief-refresh'
-      + (generating ? ' disabled' : '') + ' title="Regenerate this brief">&#8635;</button>'
-      + '<button type="button" class="q2-brief-toggle" data-q2-brief-toggle'
-      + ' aria-expanded="' + (collapsed ? 'false' : 'true') + '"'
-      + ' title="' + (collapsed ? 'Expand' : 'Collapse') + '">'
-      + (collapsed ? '&#9660;' : '&#9650;') + '</button>';
-    var bodyHtml = (state.briefError
-        ? '<div class="q2-brief-error">' + esc(state.briefError)
-          + ' &middot; <a href="#" data-q2-brief-retry>retry</a></div>'
-        : '')
-      + briefContentHtml(state.brief);
-
-    setBriefRegions(host, 'full', headHtml, bodyHtml, collapsed);
+    setAttendRegions(host, 'full', headHtml, bodyHtml, bodyHidden);
     // The drag handle only earns its pixels when there is a body to resize.
-    setBriefHandleHidden(collapsed);
-    syncBriefTicker();
+    setBriefHandleHidden(collapsed || bodyHidden);
+    syncAttendTicker();
   }
 
   function setBriefHandleHidden(hidden) {
@@ -2926,7 +2935,7 @@
     renderChrome();
     renderQueues();
     renderDiagram();
-    renderBrief();
+    renderAttend();
     renderLogBar();
     renderTickets();
     // The detail pane owns its own fetch; only repaint from cache here so a
@@ -2976,8 +2985,8 @@
     renderAll();
     showMobileColumn('tickets');
     loadQueueLearnings(name);
-    stopBriefPoll();
-    loadQueueBrief(name);
+    stopAttendPoll();
+    loadQueueAttend(name);
     loadLog(name).then(renderLogBar);
     // CCC-809: clicking a queue is "show me what's happening in it" — land
     // on its topmost open ticket instead of leaving the RHS on the queue's
@@ -3009,9 +3018,9 @@
     var search = $('q2Search');
     if (search) search.value = '';
     state.log = [];
-    // No per-queue brief in the all-queues view; stop polling rather than
-    // leaving an interval running for a band that's now hidden.
-    stopBriefPoll();
+    // No per-queue attendant in the all-queues view; stop polling rather
+    // than leaving an interval running for a band that's now hidden.
+    stopAttendPoll();
     rememberSelection();
     renderAll();
     showMobileColumn('tickets');
@@ -3095,20 +3104,32 @@
     if (briefToggle) {
       e.stopPropagation();
       setBriefCollapsed(state.queue, !briefCollapsed(state.queue));
-      renderBrief();
+      renderAttend();
       return;
     }
-    var briefRefresh = e.target.closest('[data-q2-brief-refresh]');
-    if (briefRefresh) {
+    var tendBtn = e.target.closest('[data-q2-attend-tend]');
+    if (tendBtn) {
       e.stopPropagation();
-      if (!briefRefresh.disabled) triggerBriefRefresh(state.queue, true);
+      if (!tendBtn.disabled) tendQueue();
       return;
     }
-    var briefRetry = e.target.closest('[data-q2-brief-retry]');
-    if (briefRetry) {
-      e.preventDefault();
+    var attendOptBtn = e.target.closest('[data-q2-attend-answer-opt]');
+    if (attendOptBtn) {
       e.stopPropagation();
-      triggerBriefRefresh(state.queue, true);
+      if (!attendOptBtn.disabled) {
+        var oi = parseInt(attendOptBtn.getAttribute('data-q2-attend-answer-opt'), 10) || 0;
+        answerAttendQuestion(oi, '');
+      }
+      return;
+    }
+    var attendSendBtn = e.target.closest('[data-q2-attend-answer-send]');
+    if (attendSendBtn) {
+      e.stopPropagation();
+      if (!attendSendBtn.disabled) {
+        var attendInput = document.querySelector('[data-q2-attend-draft="answer"]');
+        var attendText = attendInput ? String(attendInput.value || '').trim() : '';
+        if (attendText) answerAttendQuestion(-1, attendText);
+      }
       return;
     }
     var convT = e.target.closest('[data-q2-conv-toggle], .q2-conv-head');
@@ -3412,9 +3433,12 @@
     });
   }
 
-  // ── status-brief height handle ───────────────────────────────────────────
+  // ── attendant band height handle ─────────────────────────────────────────
   // Same idiom as the logbar handle above, with the drag direction inverted:
   // this handle sits BELOW the band it resizes, so dragging DOWN grows it.
+  // Variable/localStorage names still say "brief" -- it's the same band,
+  // now showing the queue attendant instead of the status brief, and an
+  // existing saved height/collapse preference should carry over unchanged.
   var BRIEF_HMIN = 90;
   var BRIEF_HKEY = 'q2.brief.height';
 

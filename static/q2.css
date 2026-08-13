@@ -606,11 +606,13 @@ body.q2-resizing-v .q2-col { pointer-events: none; }
   .q2-dg-spin { animation: none; }
 }
 
-/* ── status brief (content analysis, above the ticket list) ──────────────
-   Sits between the diagram and the ticket list, so the commonalities across
-   a queue's tickets are read before any single ticket. Height-capped at 40%
-   of the column with its own scroll -- a long brief must not push the
-   ticket list (the thing you actually act on) off screen. */
+/* ── queue attendant (manual, above the ticket list) ──────────────────────
+   Sits between the diagram and the ticket list. Was the status-brief band
+   (docs/superpowers/specs/2026-08-12-q2-status-brief-design.md); now the
+   queue attendant (2026-08-13-q2-queue-attendant-design.md) -- same shell,
+   tint, resizer and collapse toggle (class names below still say "brief"),
+   new content. Height-capped at 40% of the column with its own scroll -- a
+   long question or report must not push the ticket list off screen. */
 .q2-brief {
   flex: 0 0 auto;
   /* Height is user-adjustable via the handle below the band (sets the var
@@ -620,17 +622,13 @@ body.q2-resizing-v .q2-col { pointer-events: none; }
   flex-direction: column;
   min-height: 0;
   border-bottom: 1px solid var(--border);
-  /* A faint wash of the in-progress blue: analysis reads as its own layer,
-     distinct from the mechanical chrome above and the ticket list below. */
+  /* A faint wash of the in-progress blue: the attendant reads as its own
+     layer, distinct from the mechanical chrome above and the ticket list
+     below. */
   background: linear-gradient(180deg, rgba(88, 166, 255, 0.07), rgba(88, 166, 255, 0.02)), var(--surface);
 }
 :root[data-theme="light"] .q2-brief {
   background: linear-gradient(180deg, rgba(9, 105, 218, 0.06), rgba(9, 105, 218, 0.015)), var(--surface);
-}
-.q2-brief-generating {
-  padding: 7px 10px;
-  font-size: 12.5px;
-  color: var(--text-muted);
 }
 .q2-brief-elapsed { font-family: var(--font-mono); color: var(--text); }
 .q2-brief-head {
@@ -649,18 +647,6 @@ body.q2-resizing-v .q2-col { pointer-events: none; }
   color: var(--text-muted);
   white-space: nowrap;
 }
-.q2-brief-fresh {
-  font-family: var(--font-mono);
-  font-size: 10.5px;
-  color: var(--text-muted);
-  white-space: nowrap;
-}
-.q2-brief-stale { color: var(--orange); }
-.q2-brief-refresh {
-  font-size: 13px;
-  border-radius: 5px;
-}
-.q2-brief-refresh[disabled] { opacity: 0.5; cursor: default; }
 .q2-brief-toggle {
   flex: 0 0 auto;
   font: inherit;
@@ -681,59 +667,65 @@ body.q2-resizing-v .q2-col { pointer-events: none; }
   font-size: 14px;
   line-height: 1.55;
 }
-.q2-brief-error {
+
+/* ── queue attendant: idle / ended body (last-report line) ──────────────── */
+.q2-attend-report {
   color: var(--text-muted);
-  opacity: 0.85;
   font-size: 12.5px;
-  margin-bottom: 6px;
+  padding-top: 2px;
 }
-.q2-brief-error a { color: var(--accent); }
-.q2-brief-headline {
-  font-size: 15.5px;
+.q2-attend-error {
+  color: var(--red);
+  font-size: 11.5px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 32ch;
+}
+.q2-attend-tend { flex: 0 0 auto; }
+.q2-attend-tend[disabled] { opacity: 0.6; cursor: default; }
+
+/* ── queue attendant: pending question ───────────────────────────────────
+   "Attendant asks:" card -- one option button per choice (the attendant's
+   recommended direction arrives first), plus a free-text fallback. */
+.q2-attend-question { padding-top: 2px; }
+.q2-attend-question-title {
+  font-size: 11px;
+  font-weight: 650;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  color: var(--text-muted);
+  margin-bottom: 4px;
+}
+.q2-attend-question-header {
+  font-size: 12.5px;
   font-weight: 650;
   color: var(--text);
-  margin-bottom: 6px;
+  margin-bottom: 2px;
 }
-.q2-brief-summary { color: var(--text-muted); margin-bottom: 8px; }
-.q2-brief-cluster { color: var(--text-muted); margin-bottom: 8px; }
-.q2-brief-cluster b { color: var(--text); font-weight: 650; }
-.q2-brief-decision {
+.q2-attend-question-text {
+  color: var(--text);
+  margin-bottom: 8px;
+}
+.q2-attend-options {
   display: flex;
-  gap: 8px;
-  align-items: flex-start;
-  border: 1px solid var(--border);
-  border-left: 3px solid var(--orange);
-  border-radius: 6px;
-  padding: 6px 9px;
-  margin: 6px 0;
-  background: var(--surface-2);
+  flex-direction: column;
+  gap: 6px;
+  margin-bottom: 8px;
 }
-.q2-brief-decision > span:last-child { color: var(--text); }
-.q2-brief-ref {
-  display: inline-block;
-  font-family: var(--font-mono);
-  font-size: 11.5px;
-  color: var(--accent);
-  border: 1px solid var(--border);
-  border-radius: 4px;
-  padding: 0 5px;
-  margin: 0 3px 3px 0;
-  cursor: pointer;
-  white-space: nowrap;
+.q2-attend-opt {
+  text-align: left;
+  white-space: normal;
 }
-.q2-brief-ref:hover { border-color: var(--accent); }
-/* A ref the model mentioned that isn't in the current item list (renamed,
-   closed off-queue, or the brief is just stale) -- shown, not clickable. */
-.q2-brief-ref.is-plain {
-  color: var(--text-muted);
-  cursor: default;
+.q2-attend-opt[disabled] { opacity: 0.6; cursor: default; }
+.q2-attend-freeform {
+  display: flex;
+  gap: 6px;
+  align-items: center;
 }
-.q2-brief-ref.is-plain:hover { border-color: var(--border); }
-.q2-brief-steps {
-  margin: 6px 0 0 18px;
-  color: var(--text-muted);
-}
-.q2-brief-steps li { margin-bottom: 3px; }
+.q2-attend-freeform .q2-attend-freetext { flex: 1 1 auto; }
+.q2-attend-freeform .q2-btn[disabled] { opacity: 0.6; cursor: default; }
+.q2-attend-question .q2-attend-error { max-width: none; margin-top: 6px; white-space: normal; }
 
 /* ── queue mechanics collapse ─────────────────────────────────────────────
    The full backlog→watcher→worker→closed diagram folds down to one line:

@@ -51,14 +51,14 @@
       </div>
       <!-- Flow diagram for this queue: backlog -> watcher -> worker -> done. -->
       <section class="q2-diagram" id="q2Diagram" aria-label="Queue flow"></section>
-      <!-- Content analysis for this queue: commonalities across tickets, the
-           decisions they imply, and what to do next. Read before the list
-           below it, not beside it -- see docs/superpowers/specs/
-           2026-08-12-q2-status-brief-design.md. Hidden in all-queues view,
-           with no queue selected, or when the queue has nothing to analyze. -->
-      <section class="q2-brief" id="q2Brief" aria-label="Status brief" hidden></section>
+      <!-- Queue attendant for this queue: manually triggered, cleans the
+           queue (closes verified-resolved bugs, answers what it can, asks
+           at most one question at a time) rather than just summarizing it.
+           See docs/superpowers/specs/2026-08-13-q2-queue-attendant-design.md.
+           Hidden in all-queues view or with no queue selected. -->
+      <section class="q2-brief" id="q2Brief" aria-label="Queue attendant" hidden></section>
       <div class="q2-resizer q2-resizer-h" data-q2-resize-v="brief" role="separator" aria-orientation="horizontal"
-           tabindex="0" aria-label="Resize the status brief. Drag, or use arrow keys. Double-click to reset."
+           tabindex="0" aria-label="Resize the queue attendant band. Drag, or use arrow keys. Double-click to reset."
            title="Drag to resize &middot; double-click to reset" hidden></div>
       <div class="q2-col-sub">
         <input type="search" class="q2-search" id="q2Search" placeholder="Search tickets&hellip;" aria-label="Search tickets">
