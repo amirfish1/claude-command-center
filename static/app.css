@@ -23617,6 +23617,15 @@ a.settings-row:focus-visible .settings-launcher-btn { text-decoration: underline
    rather than borrowing the amber "notice" tint the cache warning earns. */
 .conv-input-bar.is-f2-idle-only { border-color: rgba(139,148,158,0.38); }
 
+/* CCC-844: this session already moved to a new one (started from this
+   window or another). The textarea is disabled in JS; the red border and
+   dimmed field make that unmissable instead of reading as an ordinary
+   idle composer with an extra pill. */
+.conv-input-bar.is-f2-continued { border-color: rgba(248,81,73,0.55); }
+.conv-input-bar.is-f2-continued textarea { opacity: 0.55; cursor: not-allowed; }
+.conv-input-bar.is-f2-continued .f2c-rail { color: #f85149; }
+.conv-input-bar.is-f2-continued .f2c-rail .rail-dot { background: #f85149; }
+
 /* The whole gate is ONE line: the price on the left, the one alternative
    pill on the right. The launch dialog (when open) wraps to its own row. The
    price verdict that used to render here as visible text now rides in the

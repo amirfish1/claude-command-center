@@ -3397,7 +3397,14 @@
     const clear = () => {
       rail.hidden = true; rail.innerHTML = '';
       panel.hidden = true; panel.innerHTML = '';
-      if (bar) bar.classList.remove('is-f2-cold', 'is-f2-idle-only');
+      if (bar) bar.classList.remove('is-f2-cold', 'is-f2-idle-only', 'is-f2-continued');
+      const input = f2InputEl(paneId);
+      if (input && input.dataset.f2ContinuedDisabled) {
+        input.disabled = false;
+        input.placeholder = input.dataset.f2OrigPlaceholder || input.placeholder;
+        delete input.dataset.f2ContinuedDisabled;
+        delete input.dataset.f2OrigPlaceholder;
+      }
       f2PaneState.delete(f2PaneKey(paneId));
     };
     let gate = null;
@@ -3428,6 +3435,19 @@
           + '<span class="route-glyph" aria-hidden="true">&#8617;</span>'
           + '<span class="route-name">Continued in new session</span>'
           + '</button></div></div>';
+        // CCC-844: typing here reads as picking up work that already moved.
+        // Lock the composer instead of just showing a rail above it, and
+        // point at the click-through above rather than a blocking confirm.
+        try {
+          const input = f2InputEl(paneId);
+          if (input && !input.dataset.f2ContinuedDisabled) {
+            input.dataset.f2OrigPlaceholder = input.placeholder || '';
+            input.dataset.f2ContinuedDisabled = '1';
+            input.value = '';
+            input.disabled = true;
+            input.placeholder = 'This session was continued — open the new one above to keep working';
+          }
+        } catch (_) {}
         return;
       }
       gate = f2ResumeGate(ctx);
