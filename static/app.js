@@ -34094,6 +34094,10 @@
               ac.name_overridden = !!newName;
             }
           }
+          // Guard against a background archive refresh that was already
+          // in flight (or hit the server's stale-response cache) resolving
+          // with the pre-rename name and clobbering the patch above.
+          _rememberRenameOverride(item.dataset.sessionId, newName || null, !!newName);
           // If this conversation is open in any pane, refresh its RHS header
           // title now — the sidebar re-render below only repaints the list,
           // not the open conversation's top-right title. Without this the
@@ -52818,11 +52822,25 @@
     return c.session_id || c.id || (c.tail_pr_url ? 'pr-url:' + c.tail_pr_url : '');
   }
 
+  // A background archive refresh (`staleOk: true`, up to the server's 5min
+  // response cache) can resolve with a display_name fetched before a rename
+  // the user just made, silently reverting it in the sidebar a beat later.
+  // Rename commit records the just-saved value here; the merge below prefers
+  // it over a fresh row that hasn't caught up yet. Entries self-expire once
+  // the fresh data matches, or after RENAME_OVERRIDE_MAX_AGE_MS as a backstop
+  // so a genuinely reverted name (e.g. edited elsewhere) isn't stuck forever.
+  const _recentRenameOverrides = new Map(); // session_id -> {display_name, name_overridden, at}
+  const RENAME_OVERRIDE_MAX_AGE_MS = 6 * 60 * 1000;
+  function _rememberRenameOverride(sessionId, displayName, nameOverridden) {
+    if (!sessionId) return;
+    _recentRenameOverrides.set(sessionId, {
+      display_name: displayName, name_overridden: nameOverridden, at: Date.now(),
+    });
+  }
+
   function _mergeArchivePrSnapshot(freshRows, previousRows) {
     const fresh = Array.isArray(freshRows) ? freshRows : [];
     const previous = Array.isArray(previousRows) ? previousRows : [];
-    if (!previous.length) return fresh;
-
     const prevByKey = new Map();
     for (const row of previous) {
       const key = _archiveRowStableKey(row);
@@ -52834,8 +52852,21 @@
       const key = _archiveRowStableKey(row);
       if (key) seen.add(key);
       const prev = key ? prevByKey.get(key) : null;
-      if (!prev) return row;
       const merged = Object.assign({}, row);
+      if (key) {
+        const override = _recentRenameOverrides.get(key);
+        if (override) {
+          if (merged.display_name === override.display_name) {
+            _recentRenameOverrides.delete(key);
+          } else if (Date.now() - override.at < RENAME_OVERRIDE_MAX_AGE_MS) {
+            merged.display_name = override.display_name;
+            merged.name_overridden = override.name_overridden;
+          } else {
+            _recentRenameOverrides.delete(key);
+          }
+        }
+      }
+      if (!prev) return merged;
       const copyIfMissing = (field) => {
         const val = merged[field];
         const emptyArray = Array.isArray(val) && val.length === 0;
