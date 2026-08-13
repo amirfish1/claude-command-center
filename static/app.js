@@ -44455,8 +44455,29 @@
   }
 
   function renderSessionTimelineIntoSticky() {
-    const slot = document.querySelector('.conv-sticky-header [data-timeline]')
+    let slot = document.querySelector('.conv-sticky-header [data-timeline]')
       || document.querySelector('#statusRail .csh-col-activity [data-timeline]');
+    // .conv-sticky-header (the timeline's usual home) only gets built once
+    // the first user_text event actually renders — which a long/truncated
+    // transcript may not reach until the user scrolls all the way back
+    // (CCC-838: "Session activity" / commits list was missing entirely for
+    // a large session). The timeline itself is fetched independently of
+    // transcript loading, so in right-rail mode give it a standalone home
+    // in the Metadata pane instead of waiting on a full scroll-back.
+    // `_applyStatusRailLayout`'s reconciler already prefers a sticky-built
+    // `.csh-col-activity` over any other copy and removes this one once
+    // that happens, so no extra cleanup is needed here.
+    if (!slot && document.body.classList.contains('status-pos-right')) {
+      const rail = document.getElementById('statusRail');
+      const metadataPane = rail && rail.querySelector('#statusRailMetadataPane');
+      if (metadataPane && !metadataPane.querySelector('.csh-col-activity')) {
+        const col = document.createElement('div');
+        col.className = 'csh-col csh-col-activity';
+        col.innerHTML = '<div class="session-timeline" data-timeline></div>';
+        metadataPane.appendChild(col);
+      }
+      slot = metadataPane && metadataPane.querySelector('.csh-col-activity [data-timeline]');
+    }
     if (!slot || !_timelineData) return;
     const evs = _timelineData.events || [];
     const total = _timelineData.total_turns || 0;
