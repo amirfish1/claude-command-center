@@ -27170,19 +27170,30 @@
         || shortSessionId(fallbackId);
       return sidebarRowDisplayTitle(raw);
     };
+    // A row's own parent_session_id* fields; used both for this row's chip
+    // and to walk one level further up (grandparent) below.
+    const _sessionProvenanceParentId = (row) => String(
+      (row && (row.parent_session_id || row.hermes_parent_session_id || row.hermes_continued_from)) || ''
+    ).trim();
     const _sessionProvenanceChipHtml = (c) => {
       if (!c || c.source === 'backlog' || c.source === 'github_pr' || c.backlog_type === 'github') return '';
-      const parentId = String(
-        c.parent_session_id || c.hermes_parent_session_id || c.hermes_continued_from || ''
-      ).trim();
+      const parentId = _sessionProvenanceParentId(c);
       let label = '';
       let title = '';
       let className = '';
+      let chipAttrs = '';
       if (parentId) {
         const parentTitle = _sessionProvenanceTitle(_sessionProvenanceById.get(parentId), parentId);
         label = '\u21b3 ' + parentTitle;
-        title = 'Spawned by ' + parentTitle + ' (' + parentId + ')';
+        title = 'Spawned by ' + parentTitle + ' (' + parentId + ') \u2014 click to open it';
         className = ' is-parent';
+        // Only wire up navigation when the parent row is actually resolvable
+        // (its data has to be loaded in this render for selectConversation
+        // to find it) \u2014 an id we can't resolve to a title also can't be
+        // safely jumped to.
+        if (_sessionProvenanceById.has(parentId)) {
+          chipAttrs = ' role="button" tabindex="0" data-parent-sid="' + escapeAttr(parentId) + '"';
+        }
       } else {
         const threadSource = String(c.thread_source || '').trim().toLowerCase();
         if (threadSource === 'ccc') {
@@ -27200,9 +27211,25 @@
           return '';
         }
       }
-      return '<span class="conv-session-origin-chip' + className + '" title="' + escapeAttr(title) + '">'
-        + escapeHtml(label)
-        + '</span>';
+      let html = '<span class="conv-session-origin-chip' + className + '"' + chipAttrs
+        + ' title="' + escapeAttr(title) + '">' + escapeHtml(label) + '</span>';
+      // One more rung up the chain (CCC-840: "what about the previous
+      // previous session?"). Only shown when the parent's own row is loaded
+      // AND has a resolvable parent of its own \u2014 otherwise there's nothing
+      // to click through to.
+      if (parentId) {
+        const parentRow = _sessionProvenanceById.get(parentId);
+        const grandparentId = parentRow ? _sessionProvenanceParentId(parentRow) : '';
+        if (grandparentId && _sessionProvenanceById.has(grandparentId)) {
+          const grandparentTitle = _sessionProvenanceTitle(_sessionProvenanceById.get(grandparentId), grandparentId);
+          html += '<span class="conv-session-origin-chip is-grandparent" role="button" tabindex="0"'
+            + ' data-parent-sid="' + escapeAttr(grandparentId) + '"'
+            + ' title="Spawned by ' + escapeAttr(grandparentTitle) + ' (' + escapeAttr(grandparentId) + ') \u2014 click to open it">'
+            + '\u21b3\u21b3 ' + escapeHtml(grandparentTitle)
+            + '</span>';
+        }
+      }
+      return html;
     };
     // The inline NYA block — mirrors the attention-panel row markup so it looks
     // identical, minus the panel-only chrome (verify button, id chip, debug
@@ -32291,6 +32318,20 @@
         ev.stopPropagation();
         ev.preventDefault();
         const sid = chip.getAttribute('data-fq-worker-sid') || chip.getAttribute('data-cepw-sid') || '';
+        if (sid) selectConversation(sid);
+      });
+    }
+    // Parent / grandparent origin chips (CCC-840: "how do I get back to the
+    // previous session?") — jump straight to the session this one was
+    // spawned from, or the one before that.
+    if (!$convList._originChipWired) {
+      $convList._originChipWired = true;
+      $convList.addEventListener('click', (ev) => {
+        const chip = ev.target && ev.target.closest && ev.target.closest('.conv-session-origin-chip[data-parent-sid]');
+        if (!chip) return;
+        ev.stopPropagation();
+        ev.preventDefault();
+        const sid = chip.getAttribute('data-parent-sid') || '';
         if (sid) selectConversation(sid);
       });
     }

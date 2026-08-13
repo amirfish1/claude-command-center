@@ -6255,10 +6255,20 @@
     text-overflow: ellipsis;
     flex-shrink: 1;
   }
-  .conv-item .conv-hover-meta-row .conv-session-origin-chip.is-parent {
+  .conv-item .conv-hover-meta-row .conv-session-origin-chip.is-parent,
+  .conv-item .conv-hover-meta-row .conv-session-origin-chip.is-grandparent {
     border-color: rgba(188,140,255,0.30);
     background: rgba(188,140,255,0.10);
     color: var(--purple, #bc8cff);
+  }
+  /* Clickable only when a resolvable parent id was wired up (data-parent-sid) —
+     an origin chip with no known parent (CCC/user/unknown) stays inert. */
+  .conv-item .conv-hover-meta-row .conv-session-origin-chip[data-parent-sid] {
+    cursor: pointer;
+  }
+  .conv-item .conv-hover-meta-row .conv-session-origin-chip[data-parent-sid]:hover {
+    border-color: var(--purple, #bc8cff);
+    background: rgba(188,140,255,0.20);
   }
   .conv-item .conv-hover-meta-row .conv-session-origin-chip.is-ccc {
     border-color: rgba(88,166,255,0.28);
