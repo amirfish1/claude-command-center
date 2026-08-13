@@ -36908,8 +36908,15 @@ def _acp_cancel(harness, sid):
         )
         if routed is not None:
             return routed
-    if _acp_ensure(harness) is None:
-        return {"ok": False, "error": _acp_conn_error(harness)}
+    # session/cancel targets a sessionId inside the live ACP connection —
+    # if this sid was never loaded onto the current connection (fresh
+    # reconnect after a restart, or a session driven outside CCC), the CLI
+    # has no such session and silently drops the notification while we'd
+    # still report ok:true. Attach first so Esc actually reaches a turn the
+    # process knows about (same pattern as _acp_set_config).
+    attach_err = _acp_ensure_session_loaded(harness, sid)
+    if attach_err is not None:
+        return attach_err
     # ACP session/cancel is a notification (no id, no response).
     sent = _acp_send(harness, {
         "jsonrpc": "2.0", "method": "session/cancel", "params": {"sessionId": sid},

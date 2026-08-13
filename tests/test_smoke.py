@@ -18904,6 +18904,31 @@ class TestAcpKimiEngine(unittest.TestCase):
         )
         self.assertFalse(self.server._is_kimi_session(""))
 
+    def test_acp_cancel_attaches_session_before_sending(self):
+        """CCC-833: Esc on a kimi session must not report ok:true while
+        silently no-oping. session/cancel targets a sessionId inside the
+        live ACP connection — if the sid was never loaded onto it (fresh
+        reconnect after a restart, or a session driven outside CCC), the
+        harness process has no such session and the notification is a
+        no-op even though the write itself succeeds."""
+        server = self.server
+        with mock.patch.object(server, "_control_plane_engine_call", return_value=None), \
+             mock.patch.object(server, "_acp_ensure_session_loaded",
+                                return_value={"ok": False, "error": "not attached"}) as attach, \
+             mock.patch.object(server, "_acp_send") as send:
+            result = server._acp_cancel("kimi", "session-not-loaded")
+        attach.assert_called_once_with("kimi", "session-not-loaded")
+        send.assert_not_called()
+        self.assertFalse(result["ok"])
+
+        with mock.patch.object(server, "_control_plane_engine_call", return_value=None), \
+             mock.patch.object(server, "_acp_ensure_session_loaded", return_value=None), \
+             mock.patch.object(server, "_acp_send", return_value=True) as send:
+            result = server._acp_cancel("kimi", "session-loaded")
+        send.assert_called_once()
+        self.assertEqual(send.call_args[0][1]["params"]["sessionId"], "session-loaded")
+        self.assertTrue(result["ok"])
+
     def test_engine_registration_pins(self):
         server_py = pathlib.Path(PROJECT_ROOT, "server.py").read_text(encoding="utf-8")
         self.assertIn('"/api/sessions/spawn-kimi"', server_py)
