@@ -3180,7 +3180,32 @@
       const ts = Number(edge.ts) || 0;
       if (ts >= newestTs) { newestTs = ts; newest = String(newSid || '').trim(); }
     }
-    return (newest && newest !== s) ? newest : '';
+    if (newest && newest !== s) return newest;
+    // CCC-844: the localStorage edge above only knows about continuations
+    // started from THIS browser/webview. "Continue new" was clicked from a
+    // different window/device (or the .app shell vs. the browser tab — each
+    // has its own localStorage), so the origin composer never learns it and
+    // keeps offering "Continue new" as if nothing happened. The new
+    // session's own opening prompt always embeds "Origin session id: <sid>"
+    // (see f2RetrievalPrompt) and every row's first_message is already in
+    // the corpus we have in memory, so fall back to scanning that.
+    try {
+      const marker = 'Origin session id: ' + s;
+      const rows = (typeof conversationsData !== 'undefined' && Array.isArray(conversationsData))
+        ? conversationsData : [];
+      let bestSid = '';
+      let bestTs = -1;
+      for (const row of rows) {
+        const fm = row && row.first_message;
+        if (!fm || fm.indexOf(marker) === -1) continue;
+        const rid = (row.session_id || row.id || '').trim();
+        if (!rid || rid === s) continue;
+        const ts = Number(row.last_interacted || row.modified || row.mtime || 0);
+        if (ts >= bestTs) { bestTs = ts; bestSid = rid; }
+      }
+      if (bestSid) return bestSid;
+    } catch (_) {}
+    return '';
   }
 
   // ── composer plumbing ──────────────────────────────────────────────────
