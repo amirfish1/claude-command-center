@@ -13344,7 +13344,8 @@ def _write_annotations(items):
 
 
 def _frontmost_window_bounds_for_capture():
-    """Return the frontmost macOS window's on-screen bounds (points), or None.
+    """Return (bounds_dict, None) or (None, reason) for the frontmost macOS
+    window's on-screen bounds (points).
 
     `id of window` (needed for `screencapture -l <id>`) stopped resolving
     reliably on recent macOS versions for many apps -- not just Electron/
@@ -13354,7 +13355,7 @@ def _frontmost_window_bounds_for_capture():
     capture by absolute screen rect instead of by window id.
     """
     if platform.system() != "Darwin":
-        return None
+        return None, "window capture is macOS-only"
     script = r'''
 tell application "System Events"
   tell (first application process whose frontmost is true)
@@ -13400,10 +13401,23 @@ end tell
         if width <= 0 or height <= 0:
             last_err = f"zero-size window ({width}x{height})"
             continue
-        return {"x": x, "y": y, "width": width, "height": height}
+        return {"x": x, "y": y, "width": width, "height": height}, None
+    reason = last_err or "could not resolve front window"
     if last_err:
         print(f"[annotation-capture] frontmost window bounds failed after retries: {last_err}", file=sys.stderr, flush=True)
-    return None
+        # "not allowed assistive access" (-25211) means macOS denied
+        # Accessibility to whatever process runs the CCC server -- a
+        # DIFFERENT permission than Screen Recording, and the generic
+        # screencapture-failure hint below doesn't mention it. Surface the
+        # actual fix instead of sending the user to the wrong settings pane.
+        if "assistive access" in last_err.lower() or "-25211" in last_err:
+            reason = (
+                "macOS denied Accessibility access to the CCC server process "
+                "(osascript/System Events, -25211) -- grant Accessibility to "
+                "the app/binary running CCC's server in System Settings -> "
+                "Privacy & Security -> Accessibility, then retry"
+            )
+    return None, reason
 
 
 def _capture_annotation_window_crop(screen, viewport_crop, annotation_id):
@@ -13419,9 +13433,9 @@ def _capture_annotation_window_crop(screen, viewport_crop, annotation_id):
     screencapture_bin = _resolve_screencapture_bin()
     if not screencapture_bin:
         return None, "screencapture not found"
-    bounds = _frontmost_window_bounds_for_capture()
+    bounds, bounds_err = _frontmost_window_bounds_for_capture()
     if not bounds:
-        return None, "could not resolve front window"
+        return None, bounds_err or "could not resolve front window"
     crop = _annotation_rect(viewport_crop)
     if crop["width"] < 3 or crop["height"] < 3:
         return None, "crop region too small"
