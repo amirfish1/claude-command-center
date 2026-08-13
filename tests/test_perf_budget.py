@@ -1513,6 +1513,120 @@ def test_archive_cache_clear_rejects_inflight_stale_write(isolated_archive_cache
     assert server._archive_serve_cache[_ALL_KEY]["rows"][0]["archived"] is True
 
 
+def test_archive_mutation_restamps_warm_snapshot_and_refreshes_async(
+    isolated_archive_cache, monkeypatch,
+):
+    """Archive/lane writes keep first paint current while refresh stays detached."""
+    old_generation = server._archive_serve_generation
+    cached_rows = [{
+        "session_id": "sid-a", "archived": False, "trashed": False,
+        "all_lane_override": "", "mtime": 1,
+    }]
+    assert server._archive_serve_cache_store(_ALL_KEY, cached_rows, old_generation)
+    monkeypatch.setattr(
+        server, "_load_conversation_lifecycle_sets", lambda: ({"sid-a"}, {"sid-a"}),
+    )
+    monkeypatch.setattr(server, "_load_session_lane_overrides", lambda: {"sid-a": "review"})
+
+    server._restamp_archive_serve_cache_after_mutation()
+
+    assert server._archive_serve_generation == old_generation + 1
+    with server._archive_serve_lock:
+        snapshot = server._archive_serve_cache[_ALL_KEY]
+        assert snapshot["rows"] == [{
+            "session_id": "sid-a", "archived": True, "trashed": True,
+            "all_lane_override": "review", "mtime": 1,
+        }]
+        assert snapshot["ts"] == 0.0
+    assert server._archive_serve_cache_store(
+        _ALL_KEY, [{"session_id": "sid-a", "archived": False}], old_generation,
+    ) is False
+
+    spawned = []
+
+    class FakeThread:
+        def __init__(self, *, target, args=(), daemon=None, **_kwargs):
+            self.target = target
+            self.args = args
+            self.daemon = daemon
+
+        def start(self):
+            spawned.append(self)
+
+    monkeypatch.setattr(server.threading, "Thread", FakeThread)
+    rows, from_cache, _ver = server._archive_serve_rows_versioned(_ALL_KEY, _ALL_OPTS)
+
+    assert rows[0]["archived"] is True
+    assert rows[0]["trashed"] is True
+    assert rows[0]["all_lane_override"] == "review"
+    assert from_cache is True
+    assert len(spawned) == 1
+    assert spawned[0].target is server._archive_serve_refresh
+
+
+def test_archive_mutation_restamps_are_serialized_by_publish_order(
+    isolated_archive_cache, monkeypatch,
+):
+    """A slower older mutation must not overwrite a newer restamped snapshot."""
+    generation = server._archive_serve_generation
+    assert server._archive_serve_cache_store(
+        _ALL_KEY,
+        [{"session_id": "sid-a", "archived": False, "trashed": False,
+          "all_lane_override": "", "mtime": 1}],
+        generation,
+    )
+    with server._archive_serve_lock:
+        initial_version = server._archive_serve_cache[_ALL_KEY]["ver"]
+
+    older_loaded = threading.Event()
+    newer_loaded = threading.Event()
+    release_older = threading.Event()
+
+    def lifecycle_state():
+        if threading.current_thread().name == "older-mutation":
+            older_loaded.set()
+            assert release_older.wait(timeout=2)
+            return {"sid-a"}, {"sid-a"}
+        newer_loaded.set()
+        return set(), set()
+
+    def lane_overrides():
+        return {"sid-a": "review"} if threading.current_thread().name == "older-mutation" else {"sid-a": "queued"}
+
+    monkeypatch.setattr(server, "_load_conversation_lifecycle_sets", lifecycle_state)
+    monkeypatch.setattr(server, "_load_session_lane_overrides", lane_overrides)
+    older = threading.Thread(
+        name="older-mutation", target=server._restamp_archive_serve_cache_after_mutation,
+    )
+    newer = threading.Thread(
+        name="newer-mutation", target=server._restamp_archive_serve_cache_after_mutation,
+    )
+    older.start()
+    assert older_loaded.wait(timeout=1)
+    newer.start()
+
+    # Before the fix, the newer mutation reads and publishes while the older
+    # mutation waits, then the older pre-lock sidecar snapshot overwrites it.
+    if newer_loaded.wait(timeout=1):
+        deadline = time.time() + 1
+        while time.time() < deadline:
+            with server._archive_serve_lock:
+                entry = server._archive_serve_cache[_ALL_KEY]
+                if entry["ver"] > initial_version:
+                    break
+            time.sleep(0.01)
+
+    release_older.set()
+    older.join(timeout=2)
+    newer.join(timeout=2)
+    assert not older.is_alive() and not newer.is_alive()
+    with server._archive_serve_lock:
+        row = server._archive_serve_cache[_ALL_KEY]["rows"][0]
+    assert row["archived"] is False
+    assert row["trashed"] is False
+    assert row["all_lane_override"] == "queued"
+
+
 def test_archive_build_cache_skips_rebuild_when_unchanged(big_projects, isolated_archive_cache, monkeypatch):
     """The signature-gated build cache must NOT re-scan all sessions when the
     transcript corpus is unchanged.
