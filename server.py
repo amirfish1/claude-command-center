@@ -26938,6 +26938,125 @@ def _codex_managed_app_server_enabled():
     return os.environ.get("CCC_CODEX_MANAGED_APP_SERVER", "1").lower() not in ("0", "false", "no")
 
 
+def _codex_shared_state_db_files():
+    """Codex SQLite files that must not be held by more than one app-server writer."""
+    return [
+        Path.home() / ".codex" / "state_5.sqlite",
+        Path.home() / ".codex" / "logs_2.sqlite",
+    ]
+
+
+_CODEX_SHARED_STATE_HOLDER_CACHE = {"ts": 0.0, "holders": None}
+_CODEX_SHARED_STATE_HOLDER_LOCK = threading.Lock()
+_CODEX_SHARED_STATE_HOLDER_TTL_S = 5.0
+
+
+def _codex_shared_state_db_holders(now=None):
+    """Processes other than CCC's own app-server that hold the shared state DBs.
+
+    Returns a list of {pid, command, file} dicts. The result is TTL-cached
+    because the callers are spawn/resume operations and the underlying lsof
+    fork is expensive.
+    """
+    now = time.time() if now is None else float(now)
+    with _CODEX_SHARED_STATE_HOLDER_LOCK:
+        if now - _CODEX_SHARED_STATE_HOLDER_CACHE["ts"] < _CODEX_SHARED_STATE_HOLDER_TTL_S:
+            cached = _CODEX_SHARED_STATE_HOLDER_CACHE["holders"]
+            return list(cached) if cached is not None else []
+        _CODEX_SHARED_STATE_HOLDER_CACHE["ts"] = now
+    files = [str(p) for p in _codex_shared_state_db_files() if p.exists()]
+    if not files:
+        with _CODEX_SHARED_STATE_HOLDER_LOCK:
+            _CODEX_SHARED_STATE_HOLDER_CACHE["holders"] = []
+        return []
+    own_pgid = None
+    try:
+        proc = _CODEX_APP_SERVER_PROC
+        if proc is not None and proc.pid:
+            own_pgid = os.getpgid(proc.pid)
+    except Exception:
+        own_pgid = None
+    lsof_bin = shutil.which("lsof") or "/usr/sbin/lsof"
+    if not os.path.isfile(lsof_bin):
+        with _CODEX_SHARED_STATE_HOLDER_LOCK:
+            _CODEX_SHARED_STATE_HOLDER_CACHE["holders"] = []
+        return []
+    try:
+        out = subprocess.run(
+            [lsof_bin, "-w", "-Fpcn", *files],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
+            text=True,
+            timeout=3.0,
+            check=False,
+        ).stdout
+    except (OSError, subprocess.SubprocessError):
+        with _CODEX_SHARED_STATE_HOLDER_LOCK:
+            _CODEX_SHARED_STATE_HOLDER_CACHE["holders"] = []
+        return []
+    holders = []
+    pid = None
+    cmd = None
+    for line in out.splitlines():
+        if not line:
+            continue
+        tag, rest = line[0], line[1:]
+        if tag == "p":
+            try:
+                pid = int(rest)
+            except ValueError:
+                pid = None
+            cmd = None
+        elif tag == "c":
+            cmd = rest
+        elif tag == "n" and pid is not None:
+            try:
+                if own_pgid is not None and os.getpgid(pid) == own_pgid:
+                    continue
+            except Exception:
+                pass
+            holders.append({"pid": pid, "command": cmd or "codex", "file": rest})
+    seen = set()
+    unique = []
+    for h in holders:
+        if h["pid"] not in seen:
+            seen.add(h["pid"])
+            unique.append(h)
+    with _CODEX_SHARED_STATE_HOLDER_LOCK:
+        _CODEX_SHARED_STATE_HOLDER_CACHE["holders"] = unique
+    return unique
+
+
+def _codex_shared_state_conflict(now=None):
+    """Return a human-readable conflict summary if another Codex writer holds the shared DBs."""
+    holders = _codex_shared_state_db_holders(now)
+    if not holders:
+        return None
+    pids = ",".join(str(h["pid"]) for h in holders)
+    cmds = " / ".join(h["command"] or "codex" for h in holders)
+    return {
+        "holders": holders,
+        "summary": f"pids={pids} commands={cmds}",
+        "message": (
+            f"Another Codex process is already using the shared state database "
+            f"(pids {pids}: {cmds}). Running two Codex writers against the same "
+            f"state store can cross-post messages between sessions. Quit the other "
+            f"Codex process and retry."
+        ),
+    }
+
+
+def _codex_app_server_stdio_safe_to_spawn(now=None):
+    """True when no foreign Codex process holds the shared state DBs.
+
+    CCC's private stdio app-server must be the only persistent writer against
+    ~/.codex/state_5.sqlite. If a terminal `codex` TUI, the managed daemon, or
+    another integration already holds those files, spawning a second private
+    app-server risks cross-posting input between sessions.
+    """
+    return _codex_shared_state_conflict(now) is None
+
+
 class _CodexAppServerTransport:
     def __init__(self, kind, *, proc=None, sock=None):
         self.kind = kind
@@ -28866,9 +28985,13 @@ def _codex_app_server_request(method, params=None, timeout=20):
                 state = _CODEX_APP_SERVER_THREAD_STATE.setdefault(thread_id, {})
                 state.pop("ccc_turn_start_pending", None)
                 state.pop("ccc_turn_start_pending_at", None)
+        error = "Codex app-server is unavailable"
+        conflict = _codex_shared_state_conflict()
+        if conflict:
+            error = conflict["message"]
         return {
             "ok": False,
-            "error": "Codex app-server is unavailable",
+            "error": error,
             "fallback": "exec",
         }
     response = _codex_app_server_request_to_transport(
@@ -29267,7 +29390,20 @@ def _ensure_codex_app_server(*, allow_stdio=True):
     if _codex_managed_app_server_enabled() and managed_path.exists():
         candidates.append(("managed-unix", managed_path))
     if allow_stdio:
-        candidates.append(("stdio", None))
+        conflict = _codex_shared_state_conflict()
+        if conflict is None:
+            candidates.append(("stdio", None))
+        else:
+            _app_server_trace(
+                "shared-state-block",
+                reason="foreign codex process holds shared state db",
+                conflict=conflict["summary"],
+            )
+            _log_activity(
+                "codex",
+                "SHARED_STATE_BLOCK",
+                f"private stdio app-server blocked: {conflict['summary']}",
+            )
 
     for kind, arg in candidates:
         transport = None
@@ -29377,6 +29513,9 @@ def _codex_app_server_shutdown():
         _CODEX_APP_SERVER_INITIALIZED = False
         _CODEX_APP_SERVER_INITIALIZING = False
         _CODEX_APP_SERVER_LOCK.notify_all()
+    with _CODEX_SHARED_STATE_HOLDER_LOCK:
+        _CODEX_SHARED_STATE_HOLDER_CACHE["ts"] = 0.0
+        _CODEX_SHARED_STATE_HOLDER_CACHE["holders"] = None
     if transport is not None:
         transport.close()
 

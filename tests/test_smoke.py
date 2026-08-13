@@ -13122,6 +13122,75 @@ class TestRepoContextHelpers(unittest.TestCase):
                 server._CODEX_APP_SERVER_TRANSPORT = old_transport
                 server._CODEX_APP_SERVER_INITIALIZED = old_initialized
 
+    def test_codex_shared_state_holders_exclude_own_process_group(self):
+        server = self.server
+        codex_home = pathlib.Path.home() / ".codex"
+        codex_home.mkdir(parents=True, exist_ok=True)
+        state_db = codex_home / "state_5.sqlite"
+        logs_db = codex_home / "logs_2.sqlite"
+        state_db.write_text("")
+        logs_db.write_text("")
+        fake_lsof = (
+            f"p100\n"
+            f"ccodex\n"
+            f"f3\n"
+            f"n{state_db}\n"
+            f"p200\n"
+            f"ccodex\n"
+            f"f4\n"
+            f"n{state_db}\n"
+            f"p300\n"
+            f"ccodex\n"
+            f"f5\n"
+            f"n{logs_db}\n"
+        )
+        own_proc = mock.Mock()
+        own_proc.pid = 100
+        server._CODEX_APP_SERVER_PROC = own_proc
+        try:
+            with mock.patch.object(server.subprocess, "run", return_value=mock.Mock(stdout=fake_lsof)) as run, \
+                 mock.patch("os.getpgid", side_effect=lambda pid: {100: 100, 200: 200, 300: 200}.get(pid, pid)) as getpgid:
+                holders = server._codex_shared_state_db_holders()
+                self.assertTrue(getpgid.called)
+                run.assert_called_once()
+        finally:
+            server._CODEX_APP_SERVER_PROC = None
+        pids = {h["pid"] for h in holders}
+        self.assertNotIn(100, pids)
+        self.assertIn(200, pids)
+        self.assertIn(300, pids)
+
+    def test_codex_shared_state_conflict_message_includes_pids_and_commands(self):
+        server = self.server
+        fake_holders = [
+            {"pid": 200, "command": "codex", "file": "/home/user/.codex/state_5.sqlite"},
+            {"pid": 300, "command": "codex", "file": "/home/user/.codex/logs_2.sqlite"},
+        ]
+        with mock.patch.object(server, "_codex_shared_state_db_holders", return_value=fake_holders):
+            conflict = server._codex_shared_state_conflict()
+        self.assertIsNotNone(conflict)
+        self.assertIn("pids=200,300", conflict["summary"])
+        self.assertIn("Quit the other Codex process", conflict["message"])
+
+    def test_codex_ensure_app_server_blocks_stdio_when_foreign_writer_holds_state(self):
+        server = self.server
+        conflict = {
+            "summary": "pids=200 commands=codex",
+            "message": "Another Codex process is already using the shared state database",
+        }
+        with tempfile.TemporaryDirectory() as td:
+            sock = pathlib.Path(td) / "app-server.sock"
+            sock.write_text("")
+            server._codex_app_server_shutdown()
+            try:
+                with mock.patch.object(server, "_codex_managed_app_server_socket_path", return_value=sock), \
+                     mock.patch.object(server, "_connect_codex_managed_app_server", side_effect=OSError("nope")), \
+                     mock.patch.object(server, "_codex_shared_state_conflict", return_value=conflict):
+                    result = server._ensure_codex_app_server()
+            finally:
+                server._codex_app_server_shutdown()
+        self.assertIsNone(result)
+
     def test_codex_managed_app_server_ui_label_is_present(self):
         app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
         self.assertIn("managed app-server", app_js)
