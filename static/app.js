@@ -47837,6 +47837,25 @@
     _loadActivityLogInto(overlay, body, sessionId, false);
   }
 
+  // CCC-846: live-tool indicators (.conv-live-tool-strip / .conv-live-tool-inline)
+  // and the streaming bubble (.stream-bubble) get torn down and re-appended at
+  // $view's tail by other code paths between poll ticks, independent of the
+  // tool-call-group loop below. Comparing an open group straight against
+  // $view.lastElementChild made those leftover trailing nodes look like "someone
+  // else closed the group", forcing a spurious second "Ran N commands" header to
+  // open mid-burst and land visually stacked on the still-live one.
+  function _lastRealTranscriptChild($view) {
+    let node = $view.lastElementChild;
+    while (node && (
+      node.classList.contains('conv-live-tool-strip')
+      || node.classList.contains('conv-live-tool-inline')
+      || node.classList.contains('stream-bubble')
+    )) {
+      node = node.previousElementSibling;
+    }
+    return node;
+  }
+
   function renderConversationEvents(events, paneId, opts) {
     if (!Array.isArray(events)) return true;  // defensive: backlog/unknown responses
     // Do not defer transcript rendering while the composer is focused.
@@ -49054,7 +49073,7 @@
       const isToolOnly = div.classList.contains('tool-only')
         && !div.classList.contains('is-silent-thinking-only');
       if (isToolOnly) {
-        if (!_currentToolGroup || _currentToolGroup !== $view.lastElementChild) {
+        if (!_currentToolGroup || _currentToolGroup !== _lastRealTranscriptChild($view)) {
           // No open group, or another event closed it — start a new one.
           const grp = document.createElement('div');
           grp.className = 'tool-call-group' + (convVerboseOn() ? '' : ' collapsed');
