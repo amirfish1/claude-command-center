@@ -26742,10 +26742,18 @@
   // WIP/bash stopped refreshing until the next structural rebuild. (CCC-288)
   const _VOLATILE_STATUS_RE = /(<span class="conv-status-slot">)((?:[^<]|<span\b[^>]*>(?:[^<]|<span\b[^>]*>[^<]*<\/span>)*<\/span>)*)(<\/span>)/g;
 
-  // Update only the volatile bits (time labels + live status slot) in place
-  // from freshly-built markup, leaving the rest of the live DOM (and its
-  // attached handlers) untouched. Called when the structural signature is
-  // unchanged, i.e. only clocks / live activity moved.
+  // Context-usage badge (.conv-pct-badge): for an active session, `data-pct`,
+  // the tooltip (embeds live token counts) and the "N%" text all change on
+  // nearly every poll — the same wholesale-rebuild flicker CCC-288 fixed for
+  // the live-status slot, just for the pct badge. The class list (is-warn /
+  // is-danger) is left OUT of the blanked/patched groups on purpose: crossing
+  // a warn/danger threshold is rare and genuinely worth a real rebuild.
+  const _VOLATILE_PCT_RE = /(<span class="conv-pct-badge[^"]*" role="button" tabindex="[^"]*" data-role="conv-pct-compact" data-pct=")([^"]*)(" title=")([^"]*)("\s*>)([^<]*)(<\/span>)/g;
+
+  // Update only the volatile bits (time labels + live status slot + pct
+  // badge) in place from freshly-built markup, leaving the rest of the live
+  // DOM (and its attached handlers) untouched. Called when the structural
+  // signature is unchanged, i.e. only clocks / live activity / context% moved.
   function _patchVolatileTimes(newHtml) {
     const $convList = document.getElementById('convList');
     if (!$convList) return;
@@ -26766,6 +26774,19 @@
     _patchByOrder(_VOLATILE_TIME_RE, 2,
       'span.conv-rel, span.conv-ingroupchat-row-when, span.conv-ingroupchat-participant-when');
     _patchByOrder(_VOLATILE_STATUS_RE, 2, 'span.conv-status-slot');
+    const pctVals = [];
+    let pm;
+    _VOLATILE_PCT_RE.lastIndex = 0;
+    while ((pm = _VOLATILE_PCT_RE.exec(newHtml)) !== null) pctVals.push({ pct: pm[2], title: pm[4], text: pm[6] });
+    const pctEls = $convList.querySelectorAll('[data-role="conv-pct-compact"]');
+    if (pctEls.length === pctVals.length) {
+      for (let i = 0; i < pctEls.length; i++) {
+        const el = pctEls[i], v = pctVals[i];
+        if (el.dataset.pct !== v.pct) el.dataset.pct = v.pct;
+        if (el.title !== v.title) el.title = v.title;
+        if (el.textContent !== v.text) el.textContent = v.text;
+      }
+    }
   }
 
   function renderConversationList(convs) {
@@ -30914,7 +30935,8 @@
     // and falls through to a normal rebuild.
     const _structSig = _convListHtml
       .replace(_VOLATILE_TIME_RE, '$1$3')
-      .replace(_VOLATILE_STATUS_RE, '$1$3');
+      .replace(_VOLATILE_STATUS_RE, '$1$3')
+      .replace(_VOLATILE_PCT_RE, '$1$3$5$7');
     // Refresh the Subagents rail panel each tick so spawn count + running
     // status reflect the latest /api/sessions data even when the conv-list
     // structure is otherwise unchanged (we short-circuit below in that case).
