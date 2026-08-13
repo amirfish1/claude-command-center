@@ -58,14 +58,14 @@
     learningsError: '',
     attendQueue: '',      // which queue state.attend* belongs to
     attendExists: false,  // has this queue ever had an attendant run
-    attendRunning: false,
+    attendPhase: 'idle',  // idle | working | waiting (on the owner) | done | gone
     attendSessionId: '',
     attendStartedAt: '',
     attendLastReport: null,  // {summary, at} | null
-    attendQuestion: null,    // {nonce, questions:[...]} | null, proxies _read_question_request
+    attendQuestion: null,    // {ref, question, options:[str], at} | null -- the ONE escalated decision
     attendError: '',         // inline error for the band (load/tend failures) -- never alert()
     attendStarting: false,   // POST /api/queue/attend in flight
-    attendAnswering: false,  // POST /api/answer-question in flight
+    attendAnswering: false,  // POST /api/queue/attend/answer in flight
     attendAnswerError: '',
   };
   var newTicketExpires = {};
@@ -94,13 +94,14 @@
     if (el) el.textContent = fmtElapsed(Date.now() - attendRunAnchor);
   }
   function syncAttendTicker() {
-    if (state.attendRunning && !attendTickTimer) {
+    var working = state.attendPhase === 'working';
+    if (working && !attendTickTimer) {
       attendTickTimer = window.setInterval(attendTick, 1000);
-    } else if (!state.attendRunning && attendTickTimer) {
+    } else if (!working && attendTickTimer) {
       window.clearInterval(attendTickTimer);
       attendTickTimer = null;
     }
-    if (state.attendRunning) attendTick();
+    if (working) attendTick();
   }
 
   function markNewTicket(ref) {
@@ -751,16 +752,18 @@
 
   function applyAttendResponse(queue, data) {
     state.attendExists = !!(data && data.exists);
-    state.attendRunning = !!(data && data.running);
+    state.attendPhase = (data && data.phase) || (data && data.running ? 'working' : 'idle');
     state.attendSessionId = (data && data.session_id) || '';
     state.attendStartedAt = (data && data.started_at) || '';
     state.attendLastReport = (data && data.last_report) || null;
     state.attendQuestion = (data && data.question) || null;
     // A fresh GET landed -- any earlier load/tend error is stale now.
     state.attendError = '';
-    if (state.attendRunning) {
+    if (state.attendPhase === 'working' || state.attendPhase === 'waiting') {
       // Anchor the live elapsed timer to the server's clock, so a page
-      // opened mid-run still shows the true "working for 4m 12s".
+      // opened mid-run still shows the true "working for 4m 12s". Keep
+      // polling through `waiting` too: the attendant can give up on an
+      // unanswered question and report, and the band must notice.
       attendRunAnchor = Date.now() - ((data && data.running_for_s) || 0) * 1000;
       startAttendPoll(queue);
     } else {
@@ -772,7 +775,7 @@
   async function loadQueueAttend(queue) {
     state.attendQueue = queue;
     state.attendExists = false;
-    state.attendRunning = false;
+    state.attendPhase = 'idle';
     state.attendSessionId = '';
     state.attendStartedAt = '';
     state.attendLastReport = null;
@@ -794,7 +797,8 @@
   // moment the POST resolves rather than waiting on the next poll tick, so
   // the disabled-while-running button and the pulsing dot land together.
   async function tendQueue() {
-    if (!state.queue || state.viewAll || state.attendRunning || state.attendStarting) return;
+    if (!state.queue || state.viewAll || state.attendStarting
+        || state.attendPhase === 'working' || state.attendPhase === 'waiting') return;
     var queue = state.queue;
     state.attendStarting = true;
     state.attendError = '';
@@ -804,7 +808,7 @@
       state.attendStarting = false;
       if (projectKey(state.queue) !== projectKey(queue)) return;  // user moved on
       state.attendExists = true;
-      state.attendRunning = true;
+      state.attendPhase = 'working';
       state.attendSessionId = (data && data.session_id) || state.attendSessionId;
       state.attendQuestion = null;
       attendRunAnchor = Date.now();
@@ -821,32 +825,28 @@
     }
   }
 
-  // Answering the attendant's one pending question. `index` selects an
-  // option (0-based, matching _write_question_answer's contract); -1 means
-  // "use `text` as a free-text answer" -- the same shape the existing
-  // AskUserQuestion relay consumer (static/app.js submitRelayedQuestionAnswers)
-  // sends. Since the attendant asks exactly one question at a time, the
-  // answers array always holds a single entry.
-  async function answerAttendQuestion(index, text) {
-    if (!state.attendSessionId || state.attendAnswering) return;
-    var sid = state.attendSessionId;
+  // Answering the attendant's one pending question: the server clears the
+  // question from the state file and resumes the session by injecting the
+  // answer as its next message (there is no AskUserQuestion tool in headless
+  // sessions -- the question arrived over HTTP and the answer goes back the
+  // same way). `text` is either a clicked option's full label or free text.
+  async function answerAttendQuestion(text) {
+    if (!state.queue || state.attendAnswering || !String(text || '').trim()) return;
+    var queue = state.queue;
     state.attendAnswering = true;
     state.attendAnswerError = '';
     renderAttend();
     try {
-      await postJson('/api/answer-question', {
-        session_id: sid,
-        answers: [{ index: index, text: text }],
-      });
+      await postJson('/api/queue/attend/answer', { queue: queue, text: text });
       state.attendAnswering = false;
-      if (state.attendSessionId !== sid) return;  // moved on mid-request
+      if (projectKey(state.queue) !== projectKey(queue)) return;  // moved on mid-request
       state.attendQuestion = null;
+      state.attendPhase = 'working';  // resumed; the poll confirms shortly
       renderAttend();
-      // The session is still running (just unblocked) -- the existing poll
-      // keeps going and will pick up whatever it does next.
+      startAttendPoll(queue);
     } catch (e) {
       state.attendAnswering = false;
-      if (state.attendSessionId !== sid) return;
+      if (projectKey(state.queue) !== projectKey(queue)) return;
       state.attendAnswerError = e.message || 'Could not send the answer.';
       renderAttend();
     }
@@ -1441,20 +1441,22 @@
   // input whose value setAttendRegions() preserves across a same-content
   // repaint (mirrors the detail pane's comment/answer draft preservation).
   function attendQuestionHtml(question) {
-    var qq = (question && Array.isArray(question.questions)) ? question.questions[0] : null;
-    if (!qq) return '';
-    var opts = Array.isArray(qq.options) ? qq.options : [];
+    if (!question || !question.question) return '';
+    var opts = Array.isArray(question.options) ? question.options : [];
     var busy = !!state.attendAnswering;
+    // The prompt contract puts the attendant's recommended direction first;
+    // give that one the primary treatment so "approve their direction" is
+    // the biggest target.
     var optsHtml = opts.map(function (opt, oi) {
-      return '<button type="button" class="q2-btn q2-attend-opt" data-q2-attend-answer-opt="' + oi + '"'
+      return '<button type="button" class="q2-btn q2-attend-opt' + (oi === 0 ? ' q2-btn-primary' : '') + '"'
+        + ' data-q2-attend-answer-opt="' + oi + '"'
         + (busy ? ' disabled' : '')
-        + (opt && opt.description ? ' title="' + esc(opt.description) + '"' : '')
-        + '>' + esc((opt && opt.label) || '') + '</button>';
+        + '>' + esc(String(opt || '')) + '</button>';
     }).join('');
     return '<div class="q2-attend-question">'
-      + '<div class="q2-attend-question-title">Attendant asks:</div>'
-      + (qq.header ? '<div class="q2-attend-question-header">' + esc(qq.header) + '</div>' : '')
-      + (qq.question ? '<div class="q2-attend-question-text">' + esc(qq.question) + '</div>' : '')
+      + '<div class="q2-attend-question-title">Attendant asks'
+      + (question.ref ? ' <span class="q2-mono">(' + esc(question.ref) + ')</span>' : '') + ':</div>'
+      + '<div class="q2-attend-question-text">' + esc(question.question) + '</div>'
       + (optsHtml ? '<div class="q2-attend-options">' + optsHtml + '</div>' : '')
       + '<div class="q2-attend-freeform">'
       + '<input type="text" class="q2-input q2-attend-freetext" data-q2-attend-draft="answer"'
@@ -1529,10 +1531,10 @@
     }
 
     var collapsed = briefCollapsed(state.queue);
-    var running = !!state.attendRunning;
+    var phase = state.attendPhase;
     var headHtml, bodyHtml, bodyHidden;
 
-    if (running) {
+    if (phase === 'working') {
       // Pulsing dot + live elapsed (anchored to the server's running_for_s,
       // ticked client-side) + a link to the spawned session.
       headHtml = '<span class="q2-mini-dot" aria-hidden="true"></span>'
@@ -1543,15 +1545,19 @@
         + ' aria-expanded="' + (collapsed ? 'false' : 'true') + '"'
         + ' title="' + (collapsed ? 'Expand' : 'Collapse') + '">'
         + (collapsed ? '&#9660;' : '&#9650;') + '</button>';
-
-      var question = state.attendQuestion;
-      if (question && Array.isArray(question.questions) && question.questions.length) {
-        bodyHtml = attendQuestionHtml(question);
-        bodyHidden = collapsed;
-      } else {
-        bodyHtml = '';
-        bodyHidden = true;
-      }
+      bodyHtml = '';
+      bodyHidden = true;
+    } else if (phase === 'waiting') {
+      // The attendant escalated ONE decision and ended its turn. This is
+      // the state the whole feature exists for -- the question card gets
+      // the body, and collapse is ignored (a hidden question would look
+      // like a hung attendant).
+      headHtml = '<span class="q2-mini-dot" style="animation:none" aria-hidden="true"></span>'
+        + '<span class="q2-brief-title">Attendant needs a decision</span>'
+        + '<span class="q2-spacer"></span>'
+        + sessionBtn(state.attendSessionId, 'open session');
+      bodyHtml = attendQuestionHtml(state.attendQuestion);
+      bodyHidden = false;
     } else {
       // Idle (never run, or ended) -- one manual trigger, disabled only
       // while the POST that starts it is in flight (once it lands, the
@@ -3118,7 +3124,9 @@
       e.stopPropagation();
       if (!attendOptBtn.disabled) {
         var oi = parseInt(attendOptBtn.getAttribute('data-q2-attend-answer-opt'), 10) || 0;
-        answerAttendQuestion(oi, '');
+        var q = state.attendQuestion || {};
+        var optText = (q.options || [])[oi];
+        if (optText) answerAttendQuestion(optText);
       }
       return;
     }
@@ -3128,7 +3136,7 @@
       if (!attendSendBtn.disabled) {
         var attendInput = document.querySelector('[data-q2-attend-draft="answer"]');
         var attendText = attendInput ? String(attendInput.value || '').trim() : '';
-        if (attendText) answerAttendQuestion(-1, attendText);
+        if (attendText) answerAttendQuestion(attendText);
       }
       return;
     }

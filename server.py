@@ -1376,7 +1376,7 @@ _QUEUE_ATTENDANT_PROMPT = """You are the queue attendant for WatchTower queue {Q
 
 1. VERIFY-AND-CLOSE: for each open bug, check the code and git history for whether it is already fixed or obsolete. Close only what you can verify, citing the commit or observed behavior in the close summary (`wt close`); client reporting follows automatically. Never fabricate a fix.
 2. DEDUP: `wt dedup -q {Q}` dry-run first, `--apply` only for true dupes.
-3. NEEDS INPUT: try to answer autonomously from the repo, ticket history, and queue learnings (`wt answer <ref> "..."`). When you lack high confidence, distill the decision to its gist and use the AskUserQuestion tool: ONE question at a time, at most 3 sentences of context, your recommended direction as the FIRST option. Apply the owner's answer via `wt answer`.
+3. NEEDS INPUT: try to answer autonomously from the repo, ticket history, and queue learnings (`wt answer <ref> "..."`). When you lack high confidence, escalate to the owner: POST `{"queue": "{Q}", "ref": "<ticket ref>", "question": "<the gist, at most 3 sentences>", "options": ["<your recommended direction> (recommended)", "<alternative>", ...]}` to `http://127.0.0.1:{port}/api/queue/attend/question` via curl, then END YOUR TURN and wait -- the owner's answer arrives as your next message, prefixed "Owner answer:". Ask about ONE ticket at a time; never POST a second question before the previous answer arrives. Apply the owner's answer via `wt answer`.
 4. STALE CLAIMS: `wt release <ref> --worker <id>` when the claiming worker is dead (`wt workers --json`).
 5. Do NOT implement fixes for open tickets -- that is the workers' job. You only close, answer, release, dedup, and escalate.
 
@@ -1457,7 +1457,15 @@ def _wt_queue_attend_prompt(queue, repo_path):
 
 def _wt_queue_attend_status(queue):
     """Cheap GET-time payload: state-file read + a liveness probe. Never
-    spawns anything."""
+    spawns anything.
+
+    ``phase`` is the field the board renders from -- a live pid alone cannot
+    distinguish "working" from "turn over, idling on its stdin FIFO until the
+    idle reaper retires it", which is the normal resting state of a spawned
+    session. The state file disambiguates: a pending question means the
+    attendant ended its turn waiting on the owner; a report newer than the
+    start means it finished.
+    """
     path = _wt_queue_attend_path(queue)
     if path is None:
         return None
@@ -1468,6 +1476,7 @@ def _wt_queue_attend_status(queue):
             "ok": True,
             "queue": queue_norm,
             "exists": False,
+            "phase": "idle",
             "running": False,
             "session_id": None,
             "started_at": None,
@@ -1485,21 +1494,33 @@ def _wt_queue_attend_status(queue):
             running_for_s = max(0, round((datetime.now(timezone.utc) - started_dt).total_seconds()))
         except ValueError:
             running_for_s = 0
-    question = _read_question_request(session_id) if session_id else None
-    question_payload = (
-        {"nonce": question.get("nonce"), "questions": question.get("questions") or []}
-        if question else None
+    question = record.get("pending_question")
+    if not isinstance(question, dict) or not question.get("question"):
+        question = None
+    last_report = record.get("last_report")
+    reported_after_start = bool(
+        isinstance(last_report, dict)
+        and str(last_report.get("at") or "") >= str(started_at or "")
     )
+    if question:
+        phase = "waiting"
+    elif reported_after_start:
+        phase = "done"
+    elif running:
+        phase = "working"
+    else:
+        phase = "gone"  # ran, never reported, pid no longer alive
     return {
         "ok": True,
         "queue": queue_norm,
         "exists": True,
+        "phase": phase,
         "running": running,
         "session_id": session_id,
         "started_at": started_at,
         "running_for_s": running_for_s,
-        "last_report": record.get("last_report"),
-        "question": question_payload,
+        "last_report": last_report,
+        "question": question,
     }
 
 
@@ -1564,11 +1585,68 @@ def _wt_queue_attend_report(queue, summary):
         "summary": str(summary or "").strip()[:_QUEUE_ATTENDANT_REPORT_CAP],
         "at": now_iso,
     }
+    # A report ends the run: a question left dangling (owner never answered,
+    # attendant gave up and reported anyway) must not wedge phase=waiting.
+    record.pop("pending_question", None)
     try:
         _wt_queue_attend_write(path, record)
     except OSError as e:
         return {"ok": False, "error": str(e)}
     return {"ok": True}
+
+
+def _wt_queue_attend_question(queue, ref, question, options):
+    """The attendant's escalation path: it POSTs its one pending question
+    here and ends its turn (headless sessions have no AskUserQuestion tool,
+    so the ask-the-owner channel is this state file + the board's poll).
+    """
+    path = _wt_queue_attend_path(queue)
+    if path is None:
+        return {"ok": False, "error": "invalid queue"}
+    text = str(question or "").strip()
+    if not text:
+        return {"ok": False, "error": "missing question"}
+    options = [str(o).strip() for o in (options or []) if str(o or "").strip()][:6]
+    record = _wt_queue_attend_read(path) or {"queue": str(queue).strip().upper()}
+    record["pending_question"] = {
+        "ref": str(ref or "").strip()[:64],
+        "question": text[:2000],
+        "options": options,
+        "at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+    }
+    try:
+        _wt_queue_attend_write(path, record)
+    except OSError as e:
+        return {"ok": False, "error": str(e)}
+    return {"ok": True}
+
+
+def _wt_queue_attend_answer(queue, text):
+    """Owner's reply to the pending question: clear it from the state file,
+    then resume the attendant session by injecting the answer as its next
+    message (same routing as /api/inject-input)."""
+    path = _wt_queue_attend_path(queue)
+    if path is None:
+        return {"ok": False, "error": "invalid queue"}
+    answer = str(text or "").strip()
+    if not answer:
+        return {"ok": False, "error": "missing answer text"}
+    record = _wt_queue_attend_read(path)
+    session_id = (record or {}).get("session_id")
+    if not session_id:
+        return {"ok": False, "error": "no attendant session recorded for this queue"}
+    record.pop("pending_question", None)
+    try:
+        _wt_queue_attend_write(path, record)
+    except OSError:
+        pass
+    try:
+        result = _inject_text_into_session(
+            session_id, "Owner answer: " + answer, mode="send", source="api",
+        )
+    except Exception as e:
+        return {"ok": False, "error": str(e) or "inject failed"}
+    return result if isinstance(result, dict) else {"ok": False, "error": "inject failed"}
 
 
 def _queue_config_from_payload(payload):
@@ -63355,6 +63433,45 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
             summary = (payload or {}).get("summary")
             try:
                 result = _wt_queue_attend_report(queue, summary)
+                self.send_json(result, 200 if result.get("ok") else 400)
+            except Exception as e:
+                self.send_json({"ok": False, "error": str(e)}, 500)
+            return
+        if path == "/api/queue/attend/question":
+            # The attendant escalates ONE decision to the owner and ends its
+            # turn; the board's poll picks this up and renders the card.
+            length = int(self.headers.get("Content-Length", "0"))
+            body = self.rfile.read(length) if length > 0 else b""
+            try:
+                payload = json.loads(body) if body else {}
+            except json.JSONDecodeError:
+                payload = {}
+            try:
+                result = _wt_queue_attend_question(
+                    str((payload or {}).get("queue") or "").strip(),
+                    (payload or {}).get("ref"),
+                    (payload or {}).get("question"),
+                    (payload or {}).get("options"),
+                )
+                self.send_json(result, 200 if result.get("ok") else 400)
+            except Exception as e:
+                self.send_json({"ok": False, "error": str(e)}, 500)
+            return
+        if path == "/api/queue/attend/answer":
+            # Owner's reply from the board: clears the pending question and
+            # resumes the attendant session with the answer as its next
+            # message.
+            length = int(self.headers.get("Content-Length", "0"))
+            body = self.rfile.read(length) if length > 0 else b""
+            try:
+                payload = json.loads(body) if body else {}
+            except json.JSONDecodeError:
+                payload = {}
+            try:
+                result = _wt_queue_attend_answer(
+                    str((payload or {}).get("queue") or "").strip(),
+                    (payload or {}).get("text"),
+                )
                 self.send_json(result, 200 if result.get("ok") else 400)
             except Exception as e:
                 self.send_json({"ok": False, "error": str(e)}, 500)
