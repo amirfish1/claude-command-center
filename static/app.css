@@ -20381,7 +20381,7 @@ body:has(.gc-reader) .pwa-install-banner {
 .uxq-tl-res-k {
   flex: 0 0 74px; font-weight: 600; color: var(--text-muted); font-size: 12px;
 }
-.uxq-tl-res-v { color: var(--text); overflow-wrap: anywhere; }
+.uxq-tl-res-v { color: var(--text); overflow-wrap: anywhere; white-space: pre-wrap; }
 .uxq-tl-res-caveat     .uxq-tl-res-v { color: #f59e0b; }
 .uxq-tl-res-unresolved .uxq-tl-res-v { color: #f87171; }
 /* Answer section */
