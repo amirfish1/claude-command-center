@@ -4807,6 +4807,28 @@ def _detect_session_engine(session_id):
     return engine
 
 
+def _resolve_local_spawn_session_prefix(session_id):
+    """Expand an unambiguous displayed spawn-id prefix to its native ID.
+
+    CCC's UI presents the first eight characters of a session ID in several
+    places. Fresh non-Claude spawns are already in the in-memory or durable
+    spawn registry, so resolve that display form before engine detection rather
+    than treating it as a new Claude session.
+    """
+    sid = str(session_id or "").strip()
+    if len(sid) < 8:
+        return sid
+    candidates = set()
+    for entry in list(_spawned_sessions) + _load_spawn_registry():
+        if not isinstance(entry, dict):
+            continue
+        for key in ("session_id", "resumed_sid"):
+            candidate = str(entry.get(key) or "").strip()
+            if candidate.startswith(sid):
+                candidates.add(candidate)
+    return next(iter(candidates)) if len(candidates) == 1 else sid
+
+
 def _detect_session_engine_uncached(session_id):
     if not session_id:
         return "claude"
@@ -54266,6 +54288,7 @@ def ask_session_and_wait(session_id, text, timeout_ms=30000, cwd=None):
             "session_id": session_id, "text": text, "timeout_ms": timeout_ms,
         }, timeout=min(660.0, max(60.0, timeout_ms / 1000.0 + 45.0)))
 
+    session_id = _resolve_local_spawn_session_prefix(session_id)
     engine = _detect_session_engine(session_id)
     if engine in ("codex", "gemini", "antigravity", "hermes", "opencode"):
         return ask_engine_session_and_wait(session_id, text, timeout_ms, engine)

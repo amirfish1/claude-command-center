@@ -13514,6 +13514,27 @@ class TestRepoContextHelpers(unittest.TestCase):
         ask_engine.assert_called_once_with(sid, "probe", 1000, "hermes")
         headless.assert_not_called()
 
+    def test_ask_session_resolves_fresh_antigravity_session_prefix(self):
+        """A copied eight-character spawn ID must not fall back to Claude."""
+        server = self.server
+        full_sid = "193ce224-1111-4222-8333-444444444444"
+        original_spawns = list(server._spawned_sessions)
+        server._spawned_sessions[:] = [{
+            "engine": "antigravity",
+            "session_id": full_sid,
+        }]
+        try:
+            with mock.patch.object(server, "ask_engine_session_and_wait", return_value={"ok": True}) as ask_engine, \
+                 mock.patch.object(server, "resume_session_headless", return_value={"ok": False, "error": "wrong route"}) as headless:
+                result = server.ask_session_and_wait(full_sid[:8], "probe", timeout_ms=1000)
+        finally:
+            server._spawned_sessions.clear()
+            server._spawned_sessions.extend(original_spawns)
+
+        self.assertTrue(result["ok"])
+        ask_engine.assert_called_once_with(full_sid, "probe", 1000, "antigravity")
+        headless.assert_not_called()
+
     def test_open_target_allows_executable_session_cwd_files(self):
         """Post-sandbox-removal: scripts in the session cwd resolve cleanly."""
         for mod in ("server",):
