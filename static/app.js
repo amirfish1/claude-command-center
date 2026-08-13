@@ -47415,8 +47415,7 @@
       const body = g.querySelector('.kimi-tool-group-body');
       while (body && body.firstElementChild) {
         const row = body.firstElementChild;
-        if (g.classList.contains('collapsed')) row.dataset.kimiCollapsed = '1';
-        else delete row.dataset.kimiCollapsed;
+        row.dataset.kimiCollapsed = g.classList.contains('collapsed') ? '1' : '0';
         g.parentNode.insertBefore(row, g);
       }
       g.remove();
@@ -47426,7 +47425,9 @@
       if (run.length >= 2) {
         const grp = document.createElement('div');
         grp.className = 'kimi-tool-group';
-        if (run.every(r => r.dataset.kimiCollapsed === '1')) grp.classList.add('collapsed');
+        // Default to collapsed: only stay open when the run's rows carry an
+        // explicit "was expanded" flag from a prior regroup.
+        if (run.every(r => r.dataset.kimiCollapsed !== '0')) grp.classList.add('collapsed');
         grp.innerHTML = '<div class="kimi-tool-group-head" onclick="this.parentElement.classList.toggle(\'collapsed\')">'
           + '<span class="kimi-tg-dot"></span>'
           + '<span class="kimi-tg-ic">' + _KIMI_GLYPHS['list'] + '</span>'
@@ -47463,7 +47464,15 @@
     else if (rows.some(r => r.querySelector('.kimi-tool-status.error'))) state = 'failed';
     grp.dataset.kimiGroupState = state;
     const title = grp.querySelector('.kimi-tg-title');
-    if (title) title.textContent = count + ' tool call' + (count === 1 ? '' : 's');
+    if (title) {
+      const names = [];
+      for (const r of rows) {
+        const label = r.querySelector('.kimi-tool-name')?.textContent.trim();
+        if (label && !names.includes(label)) names.push(label);
+      }
+      const namesSuffix = names.length ? ' (' + names.join(', ') + ')' : '';
+      title.textContent = count + ' tool call' + (count === 1 ? '' : 's') + namesSuffix;
+    }
     const meta = grp.querySelector('.kimi-tg-meta');
     if (meta) meta.textContent = '· ' + state;
   }
