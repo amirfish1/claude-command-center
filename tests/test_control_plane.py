@@ -295,7 +295,7 @@ class TestWorkerServiceDefinition(unittest.TestCase):
             )
         ]
         self.assertEqual(local_uuid_imports, [])
-        self.assertIn('restart_id = str(uuid.uuid4())', source)
+        self.assertIn('f"{reason_prefix}:{uuid.uuid4()}"', source)
         self.assertIn('"engine.adopt", {}, engine_timeout=True', source)
         self.assertIn("if active_kimi:", source)
         self.assertIn('"engine-execution-v1" in worker_capabilities', source)
