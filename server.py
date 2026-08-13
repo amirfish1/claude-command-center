@@ -1534,11 +1534,15 @@ def _wt_queue_attend_start(queue):
     if path is None:
         return {"ok": False, "error": "invalid queue", "code": "invalid_queue"}
     queue_norm = str(queue).strip().upper()
-    existing = _wt_queue_attend_read(path)
-    if existing and _wt_queue_attend_session_running(existing.get("session_id")):
+    # Refuse only a genuinely in-flight run (working or waiting on the
+    # owner). A bare pid check is wrong here: a FINISHED attendant idles
+    # alive on its stdin FIFO for up to an hour before the idle reaper
+    # retires it, and that must not block the next run.
+    status = _wt_queue_attend_status(queue_norm) or {}
+    if status.get("phase") in ("working", "waiting"):
         return {
             "ok": False,
-            "error": f"attendant for {queue_norm} is already running (session {existing.get('session_id')})",
+            "error": f"attendant for {queue_norm} is already {status.get('phase')} (session {status.get('session_id')})",
             "code": "already_running",
         }
     repo_path, error = _wt_queue_attend_resolve_repo(queue_norm)
