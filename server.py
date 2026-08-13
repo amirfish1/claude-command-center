@@ -9319,6 +9319,9 @@ def find_all_conversations(
                 # and they reflect where Claude actually edited (after
                 # any `cd` into a worktree), not the launch values.
                 "session_cwd": effective_cwd,
+                "session_cwd_exists": bool(
+                    effective_cwd and Path(effective_cwd).is_dir()
+                ),
                 "session_cwd_is_worktree": cwd_is_worktree,
                 # Both keys carry the same recency timestamp. The per-repo
                 # /api/sessions builder emits "modified"; this archive builder
@@ -10313,6 +10316,62 @@ def _clear_archive_serve_cache():
     with _archive_serve_lock:
         _archive_serve_cache.clear()
         _archive_serve_generation += 1
+
+
+def _restamp_archive_serve_cache_after_mutation():
+    """Keep first paint correct after archive/trash/lane state changes.
+
+    These mutations used to clear the warm serve cache outright. The next
+    poll then fell back to the persisted (pre-mutation) response cache, where
+    lifecycle flags can be overlaid but lane assignments cannot, leaving the
+    conversation list visibly stale until a detached rebuild completed. Keep
+    the newest in-memory rows instead, apply the cheap sidecar-backed fields,
+    and age the snapshot so the next poll starts that rebuild off-thread.
+
+    Advancing the generation still prevents an older detached refresh from
+    publishing rows it built before the mutation. Response bodies are
+    intentionally discarded by creating fresh snapshot entries.
+    """
+    global _archive_serve_generation, _archive_serve_version
+    with _archive_serve_lock:
+        # Read the mutation sidecars while holding the publication lock. A
+        # concurrent mutation that starts earlier but waits longer must not
+        # publish its now-obsolete view after a newer mutation has restamped
+        # the snapshot.
+        try:
+            archived_set, trashed_set = _load_conversation_lifecycle_sets()
+        except Exception:
+            archived_set, trashed_set = set(), set()
+        try:
+            lane_overrides = _load_session_lane_overrides()
+        except Exception:
+            lane_overrides = {}
+        _archive_serve_generation += 1
+        refreshed = {}
+        for key, entry in _archive_serve_cache.items():
+            rows = []
+            for original in entry.get("rows") or []:
+                if not isinstance(original, dict):
+                    continue
+                row = dict(original)
+                sid = row.get("session_id") or row.get("id")
+                if sid:
+                    row["archived"] = sid in archived_set
+                    row["trashed"] = sid in trashed_set
+                    row["all_lane_override"] = lane_overrides.get(str(sid), "")
+                rows.append(row)
+            _archive_serve_version += 1
+            refreshed[key] = {
+                "ts": 0.0,
+                "rows": rows,
+                "ver": _archive_serve_version,
+            }
+        _archive_serve_cache.clear()
+        _archive_serve_cache.update(refreshed)
+        # Existing workers are for the previous generation. Their finally
+        # blocks only remove their own timestamp, so clearing these slots lets
+        # the next poll queue a current-generation detached refresh at once.
+        _archive_serve_refreshing.clear()
 
 
 # Coalescing cache for the spawned-session list on the ?all=1 hot path.
@@ -20117,6 +20176,76 @@ def _first_existing_dir(*paths):
                 return p
         except (OSError, ValueError, RuntimeError):
             continue
+    return None
+
+
+def _fallback_cwd_for_deleted_worktree(cwd, parent_session_id=None):
+    """Return a usable directory when `cwd` is a deleted git worktree.
+
+    Continuing a session in a new session from a worktree that has since been
+    removed should land in the parent repo instead of failing with an invalid
+    cwd error. Tries the parent session's recorded repo_path first, then common
+    CCC worktree path layouts.
+    """
+    if not cwd:
+        return None
+
+    # 1. Parent session's spawn registry: for CCC worktree spawns repo_path is
+    #    the parent repo. This is the most reliable source.
+    if parent_session_id:
+        try:
+            entry = _spawn_registry_entry_for_session(parent_session_id)
+        except Exception:
+            entry = None
+        if entry:
+            repo_path = entry.get("repo_path")
+            if repo_path:
+                existing = _first_existing_dir(repo_path)
+                if existing:
+                    return str(existing)
+
+    # 2. CCC current layout: <parent>/<repo>-wt/<slug> -> parent repo is
+    #    <parent>/<repo>.
+    try:
+        p = Path(cwd).expanduser()
+        parts = p.parts
+        for i in range(len(parts) - 1, 0, -1):
+            part = parts[i]
+            if part.endswith("-wt"):
+                candidate = Path(*parts[:i]) / part[:-3]
+                existing = _first_existing_dir(candidate)
+                if existing:
+                    return str(existing)
+    except (OSError, ValueError, RuntimeError):
+        pass
+
+    # 3. Legacy CCC layout: <parent>/<repo>-wt-<slug> -> parent repo is
+    #    <parent>/<repo>. Split from the right so repo names that contain `-wt-`
+    #    still resolve to the longest matching prefix.
+    try:
+        p = Path(cwd).expanduser()
+        name = p.name
+        parent = p.parent
+        if "-wt-" in name:
+            segments = name.split("-wt-")
+            for i in range(len(segments) - 1, 0, -1):
+                repo_name = "-wt-".join(segments[:i])
+                candidate = parent / repo_name
+                existing = _first_existing_dir(candidate)
+                if existing:
+                    return str(existing)
+    except (OSError, ValueError, RuntimeError):
+        pass
+
+    # 4. Nested worktree layouts: <repo>/.worktrees/<name> and
+    #    <repo>/.claude/worktrees/<name>.
+    for marker in ("/.claude/worktrees/", "/.worktrees/"):
+        if marker in cwd:
+            base = cwd.split(marker)[0]
+            existing = _first_existing_dir(base)
+            if existing:
+                return str(existing)
+
     return None
 
 
@@ -64313,7 +64442,38 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                     try:
                         st = os.stat(candidate)
                     except OSError as e:
-                        cwd_error = f"path does not exist ({e.strerror or e})"
+                        # If the requested cwd is a deleted worktree, fall back
+                        # to the parent repo so "Continue in a new session" still
+                        # has a usable spawn folder.
+                        fallback = _fallback_cwd_for_deleted_worktree(
+                            cwd_input, parent_session_id
+                        )
+                        if fallback:
+                            try:
+                                expanded = os.path.expanduser(fallback)
+                                candidate = Path(expanded).resolve()
+                                st = os.stat(candidate)
+                            except OSError as e2:
+                                cwd_error = f"path does not exist ({e.strerror or e})"
+                            else:
+                                if not stat.S_ISDIR(st.st_mode):
+                                    cwd_error = f"not a directory: {candidate}"
+                                else:
+                                    try:
+                                        candidate.relative_to(home)
+                                    except ValueError:
+                                        if _spawn_cwd_outside_home_allowed(candidate):
+                                            cwd_resolved = candidate
+                                            cwd_input = fallback
+                                            payload["repo_path"] = fallback
+                                        else:
+                                            cwd_error = f"path is not an accessible directory: {candidate}"
+                                    else:
+                                        cwd_resolved = candidate
+                                        cwd_input = fallback
+                                        payload["repo_path"] = fallback
+                        else:
+                            cwd_error = f"path does not exist ({e.strerror or e})"
                     else:
                         if not stat.S_ISDIR(st.st_mode):
                             cwd_error = f"not a directory: {candidate}"
@@ -65316,7 +65476,7 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                     payload.get("conversation_id"),
                     conv_id,
                 ], lane)
-                _clear_archive_serve_cache()
+                _restamp_archive_serve_cache_after_mutation()
                 self.send_json({
                     "ok": True,
                     "session_id": sid,
@@ -65422,7 +65582,7 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                         _bust_issue_state_cache(repo_from_session(sid)["repo_path"])
                     except RepoContextError:
                         _bust_issue_state_cache()
-                _clear_archive_serve_cache()
+                _restamp_archive_serve_cache_after_mutation()
                 self.send_json({"ok": True, "archived": now_archived, "github": gh_result, "killed": kill_result})
             except OSError as e:
                 self.send_json({"ok": False, "error": str(e)}, 500)
@@ -65458,7 +65618,7 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                 return
             try:
                 result = _set_conversation_trashed(sid, desired)
-                _clear_archive_serve_cache()
+                _restamp_archive_serve_cache_after_mutation()
                 self.send_json({"ok": True, **result})
             except OSError as e:
                 self.send_json({"ok": False, "error": str(e)}, 500)
@@ -65509,7 +65669,7 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                             (SIDECAR_STATE_DIR / f"{sid}_needs_approval.json").unlink()
                         except (OSError, FileNotFoundError):
                             pass
-                _clear_archive_serve_cache()
+                _restamp_archive_serve_cache_after_mutation()
                 self.send_json({
                     "ok": True,
                     "archived": want,
@@ -65598,7 +65758,7 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                             _now_archived, archived_now = _set_conversation_archived(
                                 sid, True, source="merge",
                             )
-                            _clear_archive_serve_cache()
+                            _restamp_archive_serve_cache_after_mutation()
                         _bust_issue_state_cache(ctx["repo_path"])
                         self.send_json({
                             "ok": True,
@@ -65657,7 +65817,7 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                     # user mental model: merged → done.
                     if sid:
                         _set_conversation_archived(sid, True, source="merge")
-                        _clear_archive_serve_cache()
+                        _restamp_archive_serve_cache_after_mutation()
                     # PR merges typically close the linked issue (via
                     # "Closes #N" in the body); refresh the GH issues
                     # section so it reflects that on next poll. Also bust
@@ -65850,7 +66010,7 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
             # Success — same archive + cache-bust as the direct merge path.
             if sid:
                 _set_conversation_archived(sid, True, source="merge")
-                _clear_archive_serve_cache()
+                _restamp_archive_serve_cache_after_mutation()
             _bust_issue_state_cache(ctx["repo_path"])
             self.send_json({
                 "ok": True,
