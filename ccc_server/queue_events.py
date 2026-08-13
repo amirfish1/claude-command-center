@@ -20,6 +20,7 @@ import time
 import ux_fixes_queue  # kept as fallback when watchtower is not installed
 
 from ccc_server import core as _core
+from ccc_server.github_issues import github_rate_limited
 
 # ---------------------------------------------------------------------------
 # Queue / ticket-appearance events for replay (W22 / B4)
@@ -620,6 +621,7 @@ def _gh_queue_poll_once():
 
 
 def _gh_queue_watch_loop():
+    interval = _GH_POLL_INTERVAL_S
     while True:
         with _gh_watch_lock:
             if _gh_watch["subscribers"] <= 0:
@@ -628,11 +630,28 @@ def _gh_queue_watch_loop():
         # Re-read config every pass so a queue switched to the GitHub backend
         # starts being watched without needing a reconnect.
         if _github_queue_configured():
+            # Refresh the shared rate-limit snapshot before spending GraphQL quota
+            # via WatchTower's `gh issue list`. The check itself is cached, so the
+            # extra call is cheap; if we are rate-limited or nearly out of quota,
+            # skip this poll and back off instead of hammering the API.
+            try:
+                rl = github_rate_limited(refresh=True)
+                if rl.get("rate_limited"):
+                    interval = max(
+                        _GH_POLL_INTERVAL_S,
+                        min(rl.get("backoff_seconds", 60), 300),
+                    )
+                    _gh_watch_wake.wait(interval)
+                    _gh_watch_wake.clear()
+                    continue
+            except Exception:
+                pass
+            interval = _GH_POLL_INTERVAL_S
             try:
                 _gh_queue_poll_once()
             except Exception:
                 pass
-        _gh_watch_wake.wait(_GH_POLL_INTERVAL_S)
+        _gh_watch_wake.wait(interval)
         _gh_watch_wake.clear()
 
 

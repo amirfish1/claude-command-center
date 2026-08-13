@@ -28,6 +28,106 @@ from ccc_server import core as _core
 # GitHub issues
 # ---------------------------------------------------------------------------
 
+# Rate-limit awareness: when GitHub's GraphQL quota is exhausted, back off
+# aggressively and serve cached data rather than hammering the API.
+_GH_RATE_LIMIT_LOCK = threading.Lock()
+_GH_RATE_LIMIT_STATE = {
+    "last_error_ts": 0.0,      # epoch of the most recent rate-limit error
+    "last_error_reset": 0,     # GitHub's reset timestamp (seconds since epoch)
+    "last_remaining": None,    # last known remaining quota
+    "last_check_ts": 0.0,      # epoch of last gh api rate_limit check
+}
+_GH_RATE_LIMIT_ERROR_TTL = 300.0   # seconds to treat a rate-limit hit as active
+_GH_RATE_LIMIT_CHECK_TTL = 30.0    # seconds to cache gh api rate_limit responses
+_GH_RATE_LIMIT_LOW_THRESHOLD = 200   # GraphQL remaining below this is "low"
+
+
+def _is_rate_limit_error(stderr):
+    """True when gh stderr indicates a GitHub API rate-limit rejection."""
+    if not stderr:
+        return False
+    text = str(stderr).lower()
+    return "rate limit" in text or "api rate limit" in text
+
+
+def _record_rate_limit_error(reset_epoch=None):
+    """Mark that we just hit a rate limit. Optional reset_epoch from headers."""
+    with _GH_RATE_LIMIT_LOCK:
+        _GH_RATE_LIMIT_STATE["last_error_ts"] = time.time()
+        if reset_epoch:
+            try:
+                _GH_RATE_LIMIT_STATE["last_error_reset"] = int(reset_epoch)
+            except (TypeError, ValueError):
+                pass
+
+
+def github_rate_limited(refresh=False):
+    """Public query: are we currently in a rate-limit backoff window?
+
+    Returns a dict with enough detail for callers to decide whether to skip
+    optional GitHub API work. The backoff is conservative: it lasts until the
+    recorded reset time (if known) or a fixed TTL after the error.
+
+    ``refresh=True`` updates the snapshot from ``gh api rate_limit`` (cached for
+    30s) before returning the status. Optional polling loops can use this to
+    back off before they spend quota.
+    """
+    if refresh:
+        _check_gh_rate_limit()
+    with _GH_RATE_LIMIT_LOCK:
+        state = dict(_GH_RATE_LIMIT_STATE)
+    now = time.time()
+    if state["last_error_ts"] == 0.0:
+        return {"rate_limited": False, "backoff_seconds": 0, "last_remaining": state["last_remaining"]}
+
+    # Prefer GitHub's reset timestamp when we know it.
+    reset_at = state["last_error_reset"]
+    if reset_at and reset_at > now:
+        backoff = int(reset_at - now) + 1
+    else:
+        backoff = max(0, int(_GH_RATE_LIMIT_ERROR_TTL - (now - state["last_error_ts"])))
+
+    return {
+        "rate_limited": backoff > 0,
+        "backoff_seconds": backoff,
+        "last_remaining": state["last_remaining"],
+    }
+
+
+def _check_gh_rate_limit():
+    """Fetch GitHub's current rate-limit status via the REST API.
+
+    This uses the REST quota (not GraphQL) and is cached for
+    _GH_RATE_LIMIT_CHECK_TTL seconds. Updates the shared state so other
+    modules can avoid optional GitHub API calls when quota is low.
+    """
+    now = time.time()
+    with _GH_RATE_LIMIT_LOCK:
+        if now - _GH_RATE_LIMIT_STATE["last_check_ts"] < _GH_RATE_LIMIT_CHECK_TTL:
+            return
+        _GH_RATE_LIMIT_STATE["last_check_ts"] = now
+
+    try:
+        result = subprocess.run(
+            ["gh", "api", "rate_limit", "--jq", ".resources.graphql"],
+            capture_output=True, text=True, timeout=10,
+        )
+        if result.returncode == 0 and result.stdout.strip():
+            data = json.loads(result.stdout)
+            remaining = data.get("remaining")
+            reset = data.get("reset")
+            with _GH_RATE_LIMIT_LOCK:
+                _GH_RATE_LIMIT_STATE["last_remaining"] = remaining
+                if isinstance(reset, (int, float)) and reset > time.time():
+                    _GH_RATE_LIMIT_STATE["last_error_reset"] = int(reset)
+            # Pre-emptively treat low remaining as a soft rate-limit window so
+            # optional polling backs off before we actually hit the hard limit.
+            if isinstance(remaining, int) and remaining < _GH_RATE_LIMIT_LOW_THRESHOLD:
+                _record_rate_limit_error(reset)
+    except Exception:
+        pass
+
+
 def _gh(repo_path, *args, timeout=10):
     """Run a gh CLI command and return parsed JSON or None."""
     repo_path = _core.resolve_repo_path(repo_path)
@@ -38,15 +138,28 @@ def _gh(repo_path, *args, timeout=10):
         )
         if result.returncode == 0 and result.stdout.strip():
             return json.loads(result.stdout)
+        if _is_rate_limit_error(result.stderr):
+            _record_rate_limit_error()
     except (subprocess.TimeoutExpired, json.JSONDecodeError, FileNotFoundError):
         pass
     return None
+
+
+# Small TTL cache for list_issues() so dashboard polling doesn't multiply
+# gh CLI calls. Stale data is returned during rate-limit backoff. Keyed by
+# resolved repo path so switching repos doesn't serve the wrong cache.
+_LIST_ISSUES_CACHE = {"by_repo": {}, "lock": threading.Lock()}
+_LIST_ISSUES_TTL = 30.0
+_LIST_ISSUES_RATE_LIMIT_TTL = 300.0
 
 
 def github_issue_title(url):
     """Return the title for a canonical GitHub Issue URL, if it can be read."""
     match = re.match(r"^https?://github\.com/([^/\s]+)/([^/\s]+)/issues/(\d+)(?:[/?#].*)?$", str(url or "").strip())
     if not match:
+        return ""
+    # Skip optional API work when we know we are rate-limited.
+    if github_rate_limited()["rate_limited"]:
         return ""
     owner, repo, number = match.groups()
     try:
@@ -58,15 +171,35 @@ def github_issue_title(url):
         )
         if result.returncode == 0:
             return str((json.loads(result.stdout or "{}")).get("title") or "").strip()
+        if _is_rate_limit_error(result.stderr):
+            _record_rate_limit_error()
     except (subprocess.TimeoutExpired, json.JSONDecodeError, FileNotFoundError):
         pass
     return ""
 
 
 def list_issues(repo_path):
-    """Return open issues + recently closed issues (last 24h)."""
+    """Return open issues + recently closed issues (last 24h).
+
+    Results are cached for a short TTL so the dashboard's polling doesn't
+    generate a storm of gh CLI calls. During a GitHub API rate-limit backoff
+    the cached/stale result is returned (or an empty list if nothing cached).
+    """
     repo_path = _core.resolve_repo_path(repo_path)
-    # Open issues
+    cache_key = str(repo_path)
+    now = time.time()
+    with _LIST_ISSUES_CACHE["lock"]:
+        rate_limited = github_rate_limited()["rate_limited"]
+        ttl = _LIST_ISSUES_RATE_LIMIT_TTL if rate_limited else _LIST_ISSUES_TTL
+        ent = _LIST_ISSUES_CACHE["by_repo"].get(cache_key)
+        if ent and now - ent["ts"] < ttl:
+            return list(ent["data"])
+
+    # Opportunistically refresh the shared rate-limit snapshot before spending
+    # GraphQL quota; if it shows we are low, the TTL check above will short-
+    # circuit on the next call, and we will keep serving the cached copy.
+    _check_gh_rate_limit()
+
     open_issues = _gh(
         repo_path,
         "issue", "list", "--state", "open", "--limit", "50",
@@ -74,7 +207,6 @@ def list_issues(repo_path):
     ) or []
 
     # Recently closed (last day)
-    from datetime import datetime, timedelta, timezone
     since = (datetime.now(timezone.utc) - timedelta(days=1)).strftime("%Y-%m-%dT%H:%M:%SZ")
     closed_issues = _gh(
         repo_path,
@@ -111,6 +243,9 @@ def list_issues(repo_path):
     # Sort: in_progress first, then queued, then open, then closed
     order = {"in_progress": 0, "queued": 1, "failed": 2, "open": 3, "closed": 4}
     all_issues.sort(key=lambda x: (order.get(x["claude_status"], 9), -x["number"]))
+
+    with _LIST_ISSUES_CACHE["lock"]:
+        _LIST_ISSUES_CACHE["by_repo"][cache_key] = {"ts": time.time(), "data": all_issues}
     return all_issues
 
 
