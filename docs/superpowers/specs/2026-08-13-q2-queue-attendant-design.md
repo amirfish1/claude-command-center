@@ -22,10 +22,17 @@ work getting done." This spec replaces the passive analyzer with an active
 - The `wt` CLI already implements every attendant action: `wt close` (skimmable
   close summaries, auto-reported), `wt answer` (resumes the blocked worker),
   `wt dedup`, `wt release` — see the `watchtower` and `wt-triage-queue` skills.
-- CCC's AskUserQuestion relay (GET `/api/question?session_id=`, POST
-  `/api/answer-question {session_id, answers: [{index, text}]}`) blocks the
-  headless session until answered — "one question at a time" is enforced by
-  construction, and the q2 band can render it inline.
+- ~~CCC's AskUserQuestion relay~~ **Correction (found in the smoke test):
+  headless spawned sessions do not expose the AskUserQuestion tool at all**,
+  so the relay never fires. The shipped mechanism instead: the attendant
+  POSTs its ONE pending question to `/api/queue/attend/question`
+  `{queue, ref, question, options}` and ends its turn; the owner answers via
+  `/api/queue/attend/answer {queue, text}`, which clears the question and
+  resumes the session by injecting the answer (prefixed "Owner answer:") as
+  its next message. One-at-a-time is enforced by the prompt contract plus
+  the single pending_question slot. GET reports `phase`
+  (working/waiting/done/gone) because a live pid cannot distinguish working
+  from turn-over-idling-on-the-stdin-FIFO.
 
 ## Backend (server.py)
 
