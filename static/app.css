@@ -13274,6 +13274,11 @@
   .fq-scope-select:hover { color: var(--text); border-color: var(--accent); }
   .fq-scope-select:focus { outline: none; border-color: var(--accent); }
   .fq-scope-select:disabled { cursor: wait; opacity: 0.7; }
+  /* Taller rows in the native dropdown popup — the default UA row height
+     reads as cramped once a project has several sub-queues nested under it. */
+  .fq-scope-select option, .fq-scope-select optgroup {
+    font-size: 14px; padding: 10px 12px;
+  }
   .fq-scope-busy { display: none; width: 10px; height: 10px; flex: 0 0 10px; }
   .fq-scope-busy.is-loading {
     display: inline-block;
