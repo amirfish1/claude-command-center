@@ -357,6 +357,59 @@ def test_coalesced_stream_writes_wait_for_every_command_uuid(
     assert server_mod._headless_turn_in_progress(entry) is False
 
 
+def test_ask_waits_for_its_own_command_result_when_prior_turn_finishes(
+    server_mod, tmp_path, monkeypatch
+):
+    """A synchronous ask must not return an older active turn's result.
+
+    A fleet verifier can complete just after its parent sends a corrective
+    follow-up.  Both inputs share one persistent headless process, so the
+    follow-up must wait for its own ``user_message_uuid`` rather than accept
+    the next terminal result in the shared stream.
+    """
+    sid, entry, _transcript, log = _stage(
+        server_mod, tmp_path, [_event("a")], 0
+    )
+    earlier_command = "aaaaaaaa-1111-4111-8111-111111111111"
+    asked_command = "bbbbbbbb-2222-4222-8222-222222222222"
+    entry["input_command_uuids"] = [earlier_command]
+    entry["proc"] = mock.Mock()
+    entry["proc"].poll.return_value = None
+    original = list(server_mod._spawned_sessions)
+    server_mod._spawned_sessions[:] = [entry]
+
+    def write_ask(target, _text):
+        target["input_command_uuids"] = [earlier_command, asked_command]
+        log.write_text(
+            json.dumps({
+                "type": "result",
+                "result": "stale verifier report",
+                "user_message_uuid": earlier_command,
+            }) + "\n" + json.dumps({
+                "type": "result",
+                "result": "fresh corrective report",
+                "user_message_uuid": asked_command,
+            }) + "\n"
+        )
+        return True
+
+    try:
+        with mock.patch.object(server_mod, "_detect_session_engine", return_value="claude"), \
+             mock.patch.object(server_mod, "find_session_cwd", return_value=str(tmp_path)), \
+             mock.patch.object(
+                 server_mod, "session_live_status", return_value={"live": False, "tty": None}
+             ), \
+             mock.patch.object(server_mod, "_poll_spawn_entry", return_value=None), \
+             mock.patch.object(server_mod, "_write_stream_json_user_message", side_effect=write_ask):
+            result = server_mod.ask_session_and_wait(sid, "verify current head", timeout_ms=100)
+    finally:
+        server_mod._spawned_sessions.clear()
+        server_mod._spawned_sessions.extend(original)
+
+    assert result["ok"] is True
+    assert result["text"] == "fresh corrective report"
+
+
 def test_post_result_stream_activity_keeps_next_turn_open(server_mod, tmp_path):
     _sid, entry, _transcript, log = _stage(
         server_mod, tmp_path, [_event("a")], 4

@@ -54099,6 +54099,7 @@ def ask_session_and_wait(session_id, text, timeout_ms=30000, cwd=None):
     # Resume-headless path (original behaviour). Reuse an existing live
     # resume if we already have one (same path resume_session_headless takes).
     entry = None
+    expected_command_uuid = None
     for s in _spawned_sessions:
         if s.get("resumed_sid") == session_id and _poll_spawn_entry(s) is None:
             entry = s
@@ -54142,6 +54143,7 @@ def ask_session_and_wait(session_id, text, timeout_ms=30000, cwd=None):
             start_offset = os.path.getsize(entry["log"])
         except OSError:
             start_offset = 0
+        prior_command_uuids = set(_valid_input_command_uuids(entry) or [])
         ok = _write_stream_json_user_message(entry, text)
         if not ok:
             return {
@@ -54149,6 +54151,13 @@ def ask_session_and_wait(session_id, text, timeout_ms=30000, cwd=None):
                 "error": "failed to write user message (broken pipe?)",
                 "source": "resume-headless",
             }
+        written_command_uuids = _valid_input_command_uuids(entry) or []
+        new_command_uuids = [
+            value for value in written_command_uuids
+            if value not in prior_command_uuids
+        ]
+        if len(new_command_uuids) == 1:
+            expected_command_uuid = new_command_uuids[0]
 
     log_path = entry["log"]
     proc = entry["proc"]
@@ -54197,6 +54206,19 @@ def ask_session_and_wait(session_id, text, timeout_ms=30000, cwd=None):
                                 if t:
                                     partial_chunks.append(t)
                     elif ev_type == "result":
+                        # A reused headless can finish an older active turn
+                        # after we append this ask. Its result is not an
+                        # answer to the new request: Claude supplies the
+                        # accepted input UUID on the matching terminal event.
+                        # Older stream-json versions omit that field, so keep
+                        # the historical next-result fallback for those logs.
+                        result_command_uuid = ev.get("user_message_uuid")
+                        if (
+                            expected_command_uuid
+                            and result_command_uuid
+                            and result_command_uuid != expected_command_uuid
+                        ):
+                            continue
                         return {
                             "ok": True,
                             "text": ev.get("result") or "",
@@ -54224,6 +54246,13 @@ def ask_session_and_wait(session_id, text, timeout_ms=30000, cwd=None):
                             except (json.JSONDecodeError, UnicodeDecodeError):
                                 continue
                             if isinstance(ev, dict) and ev.get("type") == "result":
+                                result_command_uuid = ev.get("user_message_uuid")
+                                if (
+                                    expected_command_uuid
+                                    and result_command_uuid
+                                    and result_command_uuid != expected_command_uuid
+                                ):
+                                    continue
                                 return {
                                     "ok": True,
                                     "text": ev.get("result") or "",
