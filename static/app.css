@@ -6617,6 +6617,20 @@
     color: var(--text-muted);
     font-weight: 500;
   }
+  /* CCC-842: auto-titling only fires from the session's Stop hook (after its
+     first turn ends), so a still-live session showing its raw first message
+     hasn't reached that point yet — this pulses an hourglass instead of
+     leaving the raw text looking permanently stuck. Cleared the moment a
+     real title lands (see the titlePending computation in app.js). */
+  .conv-item .conv-title.title-pending::before {
+    content: "⏳ ";
+    display: inline-block;
+    animation: conv-title-pending-pulse 1.4s ease-in-out infinite;
+  }
+  @keyframes conv-title-pending-pulse {
+    0%, 100% { opacity: 0.35; }
+    50% { opacity: 1; }
+  }
   .conv-item .conv-edit-btn {
     opacity: 0; font-size: 13px; cursor: pointer;
     background: none; border: none; color: var(--text-muted);

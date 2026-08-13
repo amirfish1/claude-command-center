@@ -27338,6 +27338,15 @@
       // you actually scan for machine-named rows, and hiding it there would
       // make the marker invisible in the view that needs it most.
       else if (c.auto_titled && !titleSource) title = '🪄 ' + title;
+      // Auto-titling only fires from the session's Stop hook (after the
+      // first assistant turn ends) — a still-live session showing its raw
+      // first message hasn't reached that point yet, not stuck. Flagged via
+      // a class (not a text glyph, since `title` still goes through
+      // escapeHtml below) so CSS can render + animate an hourglass; cleared
+      // the moment display_name/ai_title/auto_titled lands.
+      const titlePending = c.is_live && !titleSource && !c.auto_titled
+        && !c.display_name && !c.ai_title && !c.recently_unarchived
+        && c.source !== 'backlog' && c.source !== 'github_pr';
       // A session the auto-unarchive sweep just pulled back out of Archived
       // (CCC-443) — flag it so the user notices it reappeared rather than
       // wondering why an "archived" session is back in Current sessions.
@@ -27345,6 +27354,7 @@
       let titleClass = '';
       if (c.name_overridden && !quietTitleChrome) titleClass = 'user-renamed';
       else if (!c.display_name && !c.ai_title && !c.first_message) titleClass = 'untitled';
+      if (titlePending) titleClass += (titleClass ? ' ' : '') + 'title-pending';
       const uxFixesQueueProgressHtml = _uxFixesQueueProgressHtml(c);
       // Prefer the last assistant "outcome" (summary) over the original ask —
       // mirrors the kanban card behavior so list view shows what the session did.
