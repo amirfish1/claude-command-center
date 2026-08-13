@@ -5742,7 +5742,7 @@ class TestServerImports(unittest.TestCase):
         self.assertIn("function _convShouldLiveRevealStickToBottom(view)", app_js)
         self.assertIn("conversationDistanceFromBottom(view) <= CONV_LIVE_REVEAL_BOTTOM_EPSILON", app_js)
         self.assertIn("const shouldStick = _convShouldLiveRevealStickToBottom($view);", app_js)
-        self.assertIn("if (ev.type === 'assistant') _convLiveRevealNewText(div, paneId, opts);", app_js)
+        self.assertIn("if (ev.type === 'assistant' && !handedOffStreamingBubble) _convLiveRevealNewText(div, paneId, opts);", app_js)
         self.assertIn("function _replayRevealRun(runEl)", app_js)
         self.assertIn("data-replay-shell-first-run-id", app_js)
         self.assertIn("const shellSelector = 'p, li, ul, ol, blockquote, table, thead, tbody, tr, th, td, h1, h2, h3, h4, h5, h6';", app_js)

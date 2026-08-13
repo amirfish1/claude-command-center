@@ -36162,6 +36162,9 @@
     const _ica = document.getElementById('issueCloseActions');
     if (_ica) _ica.remove();
     const $view = getConvView();
+    if (previousConvId !== id) {
+      if ($view._streamedAssistantMessageIds) $view._streamedAssistantMessageIds.clear();
+    }
     $view.innerHTML = '<div class="empty-state" style="height:auto;padding:40px;">Loading...</div>';
     // Reset per-Task subagent tabs — they belong to the previous conv.
     // The strip stays in the DOM (sibling of $view) and updates on next
@@ -40664,6 +40667,7 @@
   // so it doesn't claim "streaming · stalled" indefinitely. A resumed stream
   // cancels the timer in ensureStreamingBubble.
   const STALE_BUBBLE_CLEAR_MS = 8000;
+  const MAX_STREAM_HANDOFF_MARKERS = 256;
   function _dropStreamBubble(node) {
     if (!node) return;
     if (node.parentNode) node.parentNode.removeChild(node);
@@ -40715,6 +40719,17 @@
       const escId = (window.CSS && CSS.escape) ? CSS.escape(msgId) : msgId;
       if ($view.querySelector('.event.assistant[data-msg-id="' + escId + '"]')) {
         return null;
+      }
+      // A result can clear the transient bubble before the durable transcript
+      // poll catches up. Retain a per-view marker until that row arrives.
+      if (!$view._streamedAssistantMessageIds) {
+        $view._streamedAssistantMessageIds = new Set();
+      }
+      $view._streamedAssistantMessageIds.add(msgId);
+      if ($view._streamedAssistantMessageIds.size > MAX_STREAM_HANDOFF_MARKERS) {
+        $view._streamedAssistantMessageIds.delete(
+          $view._streamedAssistantMessageIds.values().next().value,
+        );
       }
     }
     // Multi-bubble safe: when a subagent (Task tool) is running concurrently
@@ -47956,12 +47971,20 @@
       const _evEpoch = ev.ts ? Date.parse(ev.ts) : NaN;
       if (!isNaN(_evEpoch)) div.dataset.tsEpoch = String(_evEpoch);
       // Tag assistant rows with the source message_id so the streaming
-      // bubble can detect "JSONL already won" and hand off cleanly.
+      // bubble can detect "JSONL already won" and hand off cleanly. Remember
+      // that handoff so the authoritative row appears fully formed instead
+      // of replaying text the user already read in the streaming bubble.
+      let handedOffStreamingBubble = false;
       if (ev.type === 'assistant' && ev.message_id) {
+        if ($view._streamedAssistantMessageIds
+            && $view._streamedAssistantMessageIds.delete(ev.message_id)) {
+          handedOffStreamingBubble = true;
+        }
         div.dataset.msgId = ev.message_id;
         const escId = (window.CSS && CSS.escape) ? CSS.escape(ev.message_id) : ev.message_id;
         const liveBubble = $view.querySelector('.stream-bubble[data-msg-id="' + escId + '"]');
         if (liveBubble) {
+          handedOffStreamingBubble = true;
           if (liveBubble.parentNode) liveBubble.parentNode.removeChild(liveBubble);
           if (_streamingBubble === liveBubble) {
             _streamingBubble = null;
@@ -49129,7 +49152,7 @@
         _currentToolGroup = null;
         _currentToolCount = 0;
         $view.appendChild(div);
-        if (ev.type === 'assistant') _convLiveRevealNewText(div, paneId, opts);
+        if (ev.type === 'assistant' && !handedOffStreamingBubble) _convLiveRevealNewText(div, paneId, opts);
       }
     }
     // Defensive sweep: a tool group whose body has no events renders as a
