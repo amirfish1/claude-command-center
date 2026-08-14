@@ -53341,7 +53341,19 @@ def _interrupt_session(session_id):
             }
         return {"ok": False, "error": "Codex session is not live — nothing to interrupt"}
     if _is_kimi_session(session_id):
-        return _acp_cancel("kimi", session_id)
+        result = _acp_cancel("kimi", session_id)
+        # Unlike Claude/Codex, a kimi cancel never appends a
+        # request_interrupted event the transcript-scan path can pick up
+        # (_kimi_wire_tail_meta only sees turn.cancel/turn.ended in the
+        # wire log), so _session_recently_interrupted stayed permanently
+        # False and the "Interrupted" badge never appeared — Esc looked
+        # like a no-op even when the cancel notification landed (CCC-848).
+        # Mark it directly from the one place that knows CCC just asked
+        # kimi to cancel.
+        if result.get("ok"):
+            with _RECENT_INTERRUPT_LOCK:
+                _RECENT_INTERRUPT_BY_SID[session_id] = time.time()
+        return result
     tty = status.get("tty")
     term_app = status.get("terminal_app")
     has_tty = _is_real_tty(tty)

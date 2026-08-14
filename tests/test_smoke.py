@@ -19019,6 +19019,35 @@ class TestAcpKimiEngine(unittest.TestCase):
         self.assertEqual(send.call_args[0][1]["params"]["sessionId"], "session-loaded")
         self.assertTrue(result["ok"])
 
+    def test_interrupt_session_marks_kimi_recently_interrupted(self):
+        """CCC-848: a successful kimi Esc must flip recently_interrupted so
+        the "Interrupted" badge appears — kimi's wire log never produces a
+        request_interrupted event the transcript-scan path can pick up, so
+        without this the badge stayed permanently off and Esc looked broken
+        even though the cancel notification landed."""
+        server = self.server
+        sid = "session-kimi-esc-badge"
+        server._RECENT_INTERRUPT_BY_SID.pop(sid, None)
+        with mock.patch.object(server, "find_session_cwd", return_value=""), \
+             mock.patch.object(server, "session_live_status", return_value={}), \
+             mock.patch.object(server, "_is_codex_session", return_value=False), \
+             mock.patch.object(server, "_is_kimi_session", return_value=True), \
+             mock.patch.object(server, "_acp_cancel", return_value={"ok": True, "via": "acp-cancel"}):
+            result = server._interrupt_session(sid)
+        self.assertTrue(result["ok"])
+        self.assertTrue(server._session_recently_interrupted(sid))
+
+        sid_failed = "session-kimi-esc-badge-failed"
+        server._RECENT_INTERRUPT_BY_SID.pop(sid_failed, None)
+        with mock.patch.object(server, "find_session_cwd", return_value=""), \
+             mock.patch.object(server, "session_live_status", return_value={}), \
+             mock.patch.object(server, "_is_codex_session", return_value=False), \
+             mock.patch.object(server, "_is_kimi_session", return_value=True), \
+             mock.patch.object(server, "_acp_cancel", return_value={"ok": False, "error": "no-op"}):
+            result = server._interrupt_session(sid_failed)
+        self.assertFalse(result["ok"])
+        self.assertFalse(server._session_recently_interrupted(sid_failed))
+
     def test_engine_registration_pins(self):
         server_py = pathlib.Path(PROJECT_ROOT, "server.py").read_text(encoding="utf-8")
         self.assertIn('"/api/sessions/spawn-kimi"', server_py)
