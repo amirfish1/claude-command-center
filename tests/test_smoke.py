@@ -19051,6 +19051,8 @@ class TestAcpKimiEngine(unittest.TestCase):
     def test_engine_registration_pins(self):
         server_py = pathlib.Path(PROJECT_ROOT, "server.py").read_text(encoding="utf-8")
         self.assertIn('"/api/sessions/spawn-kimi"', server_py)
+        self.assertIn('"/api/sessions/spawn-grok"', server_py)
+        self.assertIn("def spawn_session_grok(", server_py)
         self.assertIn('"/api/acp/approval"', server_py)
         self.assertIn('if _is_kimi_session(session_id):', server_py)
         self.assertIn('result = _acp_prompt(', server_py)

@@ -54471,7 +54471,7 @@
   const $kptSearch = document.getElementById('kptSearch');
   const $kptRefreshBtn = document.getElementById('kptRefreshBtn');
   const $kptRecentBtn = document.getElementById('kptRecentBtn');
-  const SPAWN_DEFAULT_ENGINES = ['claude', 'codex', 'cursor', 'antigravity', 'kilo', 'hermes', 'kimi', 'opencode', 'devin'];
+  const SPAWN_DEFAULT_ENGINES = ['claude', 'codex', 'cursor', 'antigravity', 'kilo', 'hermes', 'kimi', 'opencode', 'devin', 'grok'];
   const SPAWN_DEFAULT_OTHER = '__other__';
   function normalizeSpawnDefaultEngine(v) {
     if (v === 'gemini') return 'antigravity';
@@ -54481,7 +54481,7 @@
     try { return normalizeSpawnDefaultEngine(localStorage.getItem('ccc.spawnEngine')); }
     catch (_) { return 'claude'; }
   }
-  let _defaultModelsByEngine = { claude: 'fable-5', codex: 'gpt-5.5', cursor: 'auto', antigravity: '', kilo: 'kilo/stepfun/step-3.7-flash:free', hermes: 'auto', kimi: 'kimi-code/k3', opencode: 'anthropic/claude-sonnet-4-5' };
+  let _defaultModelsByEngine = { claude: 'fable-5', codex: 'gpt-5.5', cursor: 'auto', antigravity: '', kilo: 'kilo/stepfun/step-3.7-flash:free', hermes: 'auto', kimi: 'kimi-code/k3', opencode: 'anthropic/claude-sonnet-4-5', grok: 'grok-4.6' };
   let _spawnDefaultsLoaded = false;
   let spawnDefaultsState = {
     engine: readLegacySpawnEnginePref(),
@@ -54522,6 +54522,7 @@
     if (engine === 'kimi') return 'Kimi';
     if (engine === 'opencode') return 'OpenCode';
     if (engine === 'devin') return 'Devin';
+    if (engine === 'grok') return 'Grok';
     if (engine === 'pkood') return 'pkood';
     return 'Claude';
   }
@@ -54535,6 +54536,7 @@
     if (engine === 'kimi') return 'kimi';
     if (engine === 'opencode') return 'opencode';
     if (engine === 'devin') return 'devin';
+    if (engine === 'grok') return 'grok';
     if (engine === 'pkood') return 'pkood';
     return 'interactive';
   }
@@ -54548,6 +54550,7 @@
     if (engine === 'hermes') return '/api/sessions/spawn-hermes';
     if (engine === 'kimi') return '/api/sessions/spawn-kimi';
     if (engine === 'opencode') return '/api/sessions/spawn-opencode';
+    if (engine === 'grok') return '/api/sessions/spawn-grok';
     return '/api/sessions/spawn';
   }
   function durableActionId(kind) {
@@ -54561,7 +54564,7 @@
   function spawnSupportsWorktree(engine) {
     // pkood orchestrates remote agents and has its own workspace contract,
     // so it doesn't participate in the CCC-managed git-worktree flow.
-    return engine === 'claude' || engine === 'gemini' || engine === 'codex' || engine === 'cursor' || engine === 'antigravity' || engine === 'kilo' || engine === 'kimi' || engine === 'opencode' || engine === 'devin';
+    return engine === 'claude' || engine === 'gemini' || engine === 'codex' || engine === 'cursor' || engine === 'antigravity' || engine === 'kilo' || engine === 'kimi' || engine === 'opencode' || engine === 'devin' || engine === 'grok';
   }
   function spawnUsesLogPlaceholder(engine) {
     return engine === 'codex' || engine === 'gemini' || engine === 'cursor' || engine === 'antigravity' || engine === 'kilo' || engine === 'hermes' || engine === 'opencode' || engine === 'devin';
@@ -54940,6 +54943,7 @@
       probe('hermes', '/api/sessions/spawn-hermes/availability', 'Hermes'),
       probe('opencode', '/api/sessions/spawn-opencode/availability', 'OpenCode'),
       probe('devin', '/api/sessions/spawn-devin/availability', 'Devin'),
+      probe('grok', '/api/sessions/spawn-grok/availability', 'Grok'),
     ]);
     syncSpawnEngineDependentUi();
   }

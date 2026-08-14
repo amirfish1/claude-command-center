@@ -264,9 +264,10 @@ def _dashboard_owned_active_executions():
     """Describe live execution still owned by this restartable process."""
     active = []
     with _ACP_LOCK:
-        for sid, state in (_ACP_SESSION_STATE.get("kimi") or {}).items():
-            if str((state or {}).get("status") or "").lower() == "active":
-                active.append({"engine": "kimi", "session_id": sid})
+        for harness in _ACP_WORKER_HARNESSES:
+            for sid, state in (_ACP_SESSION_STATE.get(harness) or {}).items():
+                if str((state or {}).get("status") or "").lower() == "active":
+                    active.append({"engine": harness, "session_id": sid})
     for entry in list(_spawned_sessions):
         try:
             running = _poll_spawn_entry(entry) is None
@@ -1685,8 +1686,8 @@ def _queue_config_from_payload(payload):
     if backend not in ("file", "github"):
         raise ValueError("backend must be file or github")
     engine = str(payload.get("engine", "claude") or "").strip().lower()
-    if engine not in ("", "claude", "codex", "kimi"):
-        raise ValueError("engine must be claude, codex, kimi, or blank for CCC spawn default")
+    if engine not in ("", "claude", "codex", "kimi", "grok"):
+        raise ValueError("engine must be claude, codex, kimi, grok, or blank for CCC spawn default")
     try:
         workers = int(payload.get("workers", 1))
     except (TypeError, ValueError):
@@ -4850,10 +4851,10 @@ def _detect_session_engine_uncached(session_id):
     for s in _spawned_sessions:
         if s.get("session_id") == session_id or s.get("resumed_sid") == session_id:
             engine = s.get("engine")
-            if engine in ("claude", "codex", "gemini", "cursor", "antigravity", "kilo", "opencode", "hermes", "kimi", "devin"):
+            if engine in ("claude", "codex", "gemini", "cursor", "antigravity", "kilo", "opencode", "hermes", "kimi", "devin", "grok"):
                 return engine
     spawned = _spawn_registry_entry_for_session(session_id)
-    if spawned and spawned.get("engine") in ("claude", "codex", "gemini", "cursor", "antigravity", "kilo", "opencode", "hermes", "kimi", "devin"):
+    if spawned and spawned.get("engine") in ("claude", "codex", "gemini", "cursor", "antigravity", "kilo", "opencode", "hermes", "kimi", "devin", "grok"):
         return spawned.get("engine")
     if _is_codex_session(session_id):
         return "codex"
@@ -5904,7 +5905,7 @@ def _spawn_repo_context(cwd=None, repo_path=None):
     return {"repo_path": resolved, "cwd": str(p)}
 
 
-_ORCHESTRATION_SPAWN_ENGINES = ("claude", "codex", "cursor", "antigravity", "kilo", "opencode", "hermes", "kimi", "devin")
+_ORCHESTRATION_SPAWN_ENGINES = ("claude", "codex", "cursor", "antigravity", "kilo", "opencode", "hermes", "kimi", "devin", "grok")
 _ORCHESTRATION_SPAWN_ENGINE_ALIASES = {
     "claude": "claude",
     "claude-code": "claude",
@@ -5928,6 +5929,10 @@ _ORCHESTRATION_SPAWN_ENGINE_ALIASES = {
     "kimi": "kimi",
     "kimi-code": "kimi",
     "kimi_code": "kimi",
+    "grok": "grok",
+    "grok-build": "grok",
+    "xai": "grok",
+    "xai-grok": "grok",
     "devin": "devin",
     "devin-cli": "devin",
     "devin_cli": "devin",
@@ -5981,6 +5986,8 @@ def _spawn_fallback_model_for_engine(engine):
         return os.environ.get("CCC_HERMES_MODEL", "auto")
     if engine == "kimi":
         return os.environ.get("CCC_KIMI_MODEL", "kimi-code/k3")
+    if engine == "grok":
+        return os.environ.get("CCC_GROK_MODEL", "grok-4.6")
     if engine == "devin":
         return os.environ.get("CCC_DEVIN_MODEL", "adaptive")
     return ""
@@ -6051,6 +6058,10 @@ _ENGINE_CURATED_MODELS = {
         {"id": "kimi-code/kimi-for-coding", "label": "K2.7 Coding"},
         {"id": "kimi-code/kimi-for-coding-highspeed", "label": "K2.7 Coding Highspeed"},
     ),
+    "grok": (
+        {"id": "grok-4.6", "label": "Grok 4.6"},
+        {"id": "grok-4.5", "label": "Grok 4.5"},
+    ),
     "devin": (
         {"id": "adaptive", "label": "Adaptive (default)"},
         {"id": "claude-opus-5", "label": "Claude Opus 5"},
@@ -6079,6 +6090,7 @@ _ENGINE_SUPPORTS_CUSTOM_MODELS = {
     "opencode": True,
     "hermes": True,
     "kimi": True,
+    "grok": True,
     "devin": True,
 }
 
@@ -6091,6 +6103,7 @@ _ENGINE_SUPPORTS_CUSTOM_MODELS = {
 _ENGINE_REASONING_EFFORTS = {
     "claude": CLAUDE_REASONING_EFFORTS,
     "codex": CODEX_REASONING_EFFORTS,
+    "grok": ("low", "medium", "high", "xhigh"),
 }
 
 # Display order, cheap→expensive. Set membership is the contract; this is only
@@ -6703,6 +6716,7 @@ def _build_engine_model_catalog(force_refresh=False):
         "opencode": os.environ.get("CCC_OPENCODE_MODEL"),
         "hermes": os.environ.get("CCC_HERMES_MODEL"),
         "kimi": os.environ.get("CCC_KIMI_MODEL"),
+        "grok": os.environ.get("CCC_GROK_MODEL"),
     }
     for engine, model in env_defaults.items():
         _model_catalog_add(catalog, engine, model, source="env")
@@ -7433,8 +7447,8 @@ def _archive_session_is_live_uncached(session_id):
     # Kimi sessions share one ACP harness rather than owning a per-session
     # process. As long as that harness is available, a Kimi session can receive
     # queued input once its current turn becomes idle.
-    if engine == "kimi":
-        return bool(_acp_resolve_bin("kimi").get("available"))
+    if engine in ("kimi", "grok"):
+        return bool(_acp_resolve_bin(engine).get("available"))
     is_non_claude_engine = engine in {
         "codex", "cursor", "gemini", "antigravity", "kilo", "opencode",
     }
@@ -25013,6 +25027,17 @@ def parse_conversation(conversation_id, after_line=0, repo_path=None, use_cache=
             except (TypeError, ValueError):
                 continue
         return {"events": events, "last_line": last_line}
+    if engine == "grok":
+        if _acp_is_session("grok", conversation_id):
+            events = _acp_transcript_events_after("grok", conversation_id, after_line)
+            if events:
+                last_line = after_line
+                for ev in events:
+                    try:
+                        last_line = max(last_line, int(ev.get("line") or 0))
+                    except (TypeError, ValueError):
+                        continue
+                return {"events": events, "last_line": last_line}
     if engine == "copilot":
         result = _parse_copilot_conversation(conversation_id, after_line=after_line)
         _conv_parse_cache_put(conversation_id, after_line, repo_path, result)
@@ -36347,7 +36372,24 @@ _ACP_HARNESSES = {
         "acp_args": (),
         "kill_env": "CCC_GLM_ACP",
     },
+    # xAI Grok Build. Official long-lived path is `grok agent stdio` (ACP).
+    # --no-leader keeps CCC off the user's TUI leader socket. Always-approve
+    # is per-session via session/new `_meta.yoloMode`, not a process flag.
+    "grok": {
+        "label": "Grok",
+        "bin_env": "CCC_GROK_BIN",
+        "bin_names": ("grok",),
+        "acp_args": ("agent", "--no-leader", "stdio"),
+        "kill_env": "CCC_GROK_ACP",
+        "home_env": "GROK_HOME",
+        "home_default": "~/.grok",
+    },
 }
+
+# Harnesses whose ACP subprocess lives in the persistent worker (same
+# control-plane hop as Kimi). Dashboard HTTP handlers must route through
+# _control_plane_engine_call so they do not start a second grok/kimi agent.
+_ACP_WORKER_HARNESSES = frozenset({"kimi", "grok"})
 
 _ACP_LOCK = threading.Condition()
 _ACP_CONNS = {}          # harness -> {"proc","reader","initialized","initializing","next_id","caps","send_lock"}
@@ -37403,7 +37445,16 @@ def _acp_session_new(harness, cwd, prompt=None, model=None, mode=None, effort=No
     if conn is None:
         resolved = _acp_resolve_bin(harness)
         return {"ok": False, "error": resolved.get("reason") or f"ACP {harness} unavailable"}
-    resp = _acp_request(harness, "session/new", {"cwd": cwd, "mcpServers": []}, timeout=25)
+    new_params = {"cwd": cwd, "mcpServers": []}
+    if harness == "grok":
+        # Grok's official always-approve is session/new `_meta.yoloMode`.
+        # CCC-spawned sessions are unattended, same as Kimi's spawn mode.
+        spawn_mode = (mode or os.environ.get("CCC_GROK_SPAWN_MODE") or "yolo").strip() or "yolo"
+        if spawn_mode == "auto":
+            new_params["_meta"] = {"autoMode": True}
+        elif spawn_mode != "default":
+            new_params["_meta"] = {"yoloMode": True}
+    resp = _acp_request(harness, "session/new", new_params, timeout=25)
     if not resp.get("ok"):
         return resp
     result = resp.get("result") or {}
@@ -37432,12 +37483,18 @@ def _acp_session_new(harness, cwd, prompt=None, model=None, mode=None, effort=No
     if model:
         _acp_set_config(harness, sid, "model", model)
     if effort:
-        # Kimi's ACP "thinking" option: binary on/off on older CLI builds
-        # (any non-off value coerces to the model's default effort — a
-        # harmless no-op), a real effort picker (low/high/max from the
-        # model's support_efforts) on newer ones. Set AFTER the model so the
-        # effort validates against the right support_efforts list.
-        _acp_set_config(harness, sid, "thinking", effort)
+        if harness == "grok":
+            # Grok advertises effort as sessionConfig options with category
+            # "mode" and ids low/medium/high/xhigh. Best-effort; spawn still
+            # succeeds if the option name is not accepted.
+            _acp_set_config(harness, sid, effort, True)
+        else:
+            # Kimi's ACP "thinking" option: binary on/off on older CLI builds
+            # (any non-off value coerces to the model's default effort — a
+            # harmless no-op), a real effort picker (low/high/max from the
+            # model's support_efforts) on newer ones. Set AFTER the model so the
+            # effort validates against the right support_efforts list.
+            _acp_set_config(harness, sid, "thinking", effort)
     _acp_wire_tail_start(harness)
     if prompt:
         sent = _acp_prompt(harness, sid, prompt)
@@ -37475,9 +37532,9 @@ def _acp_prompt(
 ):
     """Async session/prompt: ACK returns immediately; the turn streams via
     session/update notifications and finishes in _acp_finalize_turn."""
-    if harness == "kimi":
+    if harness in _ACP_WORKER_HARNESSES:
         routed = _control_plane_engine_call(
-            "kimi", "prompt", {
+            harness, "prompt", {
                 "session_id": sid,
                 "text": text,
                 "mode": mode,
@@ -37565,9 +37622,9 @@ def _acp_ask_and_wait(harness, sid, text, timeout_ms=30000):
     """Synchronous inject+wait for an ACP harness session (the /api/ask
     contract): drive session/prompt, block for the turn-end response, and
     return the assistant text the turn produced."""
-    if harness == "kimi":
+    if harness in _ACP_WORKER_HARNESSES:
         routed = _control_plane_engine_call(
-            "kimi", "ask", {
+            harness, "ask", {
                 "session_id": sid,
                 "text": text,
                 "timeout_ms": timeout_ms,
@@ -37619,9 +37676,9 @@ def _acp_ask_and_wait(harness, sid, text, timeout_ms=30000):
 
 
 def _acp_cancel(harness, sid):
-    if harness == "kimi":
+    if harness in _ACP_WORKER_HARNESSES:
         routed = _control_plane_engine_call(
-            "kimi", "cancel", {"session_id": sid},
+            harness, "cancel", {"session_id": sid},
         )
         if routed is not None:
             return routed
@@ -37709,9 +37766,9 @@ def _acp_maybe_attach_on_view(harness, sid):
     """
     if not _acp_harness_enabled(harness):
         return None
-    if harness == "kimi":
+    if harness in _ACP_WORKER_HARNESSES:
         routed = _control_plane_engine_call(
-            "kimi", "attach", {"session_id": sid}, mutate=False,
+            harness, "attach", {"session_id": sid}, mutate=False,
         )
         if routed is not None:
             return routed
@@ -37723,6 +37780,10 @@ def _acp_maybe_attach_on_view(harness, sid):
     cwd = (state or {}).get("cwd") or ""
     if not cwd and harness == "kimi":
         cwd = (_kimi_session_index().get(sid) or {}).get("work_dir") or ""
+    if not cwd and harness == "grok":
+        session_dir = _grok_session_dir(sid)
+        if session_dir is not None:
+            cwd = _grok_decode_bucket_cwd(session_dir.parent.name) or ""
     # Viewed sessions are watched for TUI-originated turns (KIMI-FIXES-3) —
     # independent of whether an attach/backfill is needed this process.
     with _ACP_LOCK:
@@ -37747,9 +37808,9 @@ def _acp_maybe_attach_on_view(harness, sid):
 
 
 def _acp_set_config(harness, sid, config_id, value):
-    if harness == "kimi":
+    if harness in _ACP_WORKER_HARNESSES:
         routed = _control_plane_engine_call(
-            "kimi", "config", {
+            harness, "config", {
                 "session_id": sid,
                 "config_id": config_id,
                 "value": value,
@@ -37800,6 +37861,10 @@ def _acp_ensure_session_loaded(harness, sid):
         return None
     if not cwd and harness == "kimi":
         cwd = (_kimi_session_index().get(sid) or {}).get("work_dir") or ""
+    if not cwd and harness == "grok":
+        session_dir = _grok_session_dir(sid)
+        if session_dir is not None:
+            cwd = _grok_decode_bucket_cwd(session_dir.parent.name) or ""
     if not cwd:
         return {"ok": False, "error": "session cwd unknown — cannot attach", "code": "no_cwd"}
     attached = _acp_load(harness, sid, cwd)
@@ -37810,9 +37875,9 @@ def _acp_ensure_session_loaded(harness, sid):
 
 def _acp_resolve_approval(harness, sid, request_id, option_id=None):
     """Answer a pending session/request_permission. option_id None = cancel."""
-    if harness == "kimi":
+    if harness in _ACP_WORKER_HARNESSES:
         routed = _control_plane_engine_call(
-            "kimi", "approval", {
+            harness, "approval", {
                 "session_id": sid,
                 "request_id": request_id,
                 "option_id": option_id,
@@ -37838,9 +37903,9 @@ def _acp_resolve_approval(harness, sid, request_id, option_id=None):
 
 
 def _acp_session_snapshot(harness, sid):
-    if harness == "kimi":
+    if harness in _ACP_WORKER_HARNESSES:
         routed = _control_plane_engine_call(
-            "kimi", "snapshot", {"session_id": sid}, mutate=False,
+            harness, "snapshot", {"session_id": sid}, mutate=False,
         )
         if routed is not None:
             return routed.get("snapshot")
@@ -37878,6 +37943,8 @@ def _acp_is_session(harness, sid):
         return True
     if harness == "kimi" and sid in _kimi_session_index():
         return True
+    if harness == "grok" and _is_grok_session(sid):
+        return True
     return False
 
 
@@ -37885,8 +37952,24 @@ def _is_kimi_session(session_id):
     return _acp_is_session("kimi", str(session_id or ""))
 
 
+def _session_acp_harness(session_id):
+    """ACP harness name for a session, or None if it is not ACP-backed."""
+    sid = str(session_id or "").strip()
+    if not sid:
+        return None
+    if _is_kimi_session(sid):
+        return "kimi"
+    if _acp_is_session("grok", sid):
+        return "grok"
+    return None
+
+
 def _resolve_kimi_bin():
     return _acp_resolve_bin("kimi")
+
+
+def _resolve_grok_bin():
+    return _acp_resolve_bin("grok")
 
 
 _adopt_ccc_module("wire_tail")
@@ -41279,6 +41362,7 @@ def _detect_engines_installed():
         ("kimi", "Kimi Code", _resolve_kimi_bin),
         ("hermes", "Hermes", _resolve_hermes_bin),
         ("devin", "Devin", _resolve_devin_bin),
+        ("grok", "Grok", _resolve_grok_bin),
     ):
         installed, detail = _spawn_engine_installed(resolver)
         engines.append({
@@ -41300,14 +41384,6 @@ def _detect_engines_installed():
         ))
     except Exception:
         readonly.append(("copilot", "Copilot", (False, "")))
-    try:
-        home = _grok_home()
-        readonly.append((
-            "grok", "Grok",
-            _readonly_store_installed([home / "grok.db", home / "sessions"]),
-        ))
-    except Exception:
-        readonly.append(("grok", "Grok", (False, "")))
     try:
         chat_dirs = _copilotchat_chat_dirs()
         result = (True, str(chat_dirs[0])) if chat_dirs else (False, "")
@@ -46532,6 +46608,88 @@ def spawn_session_kimi(
     resp = {
         "ok": True, "pid": None, "session_id": sid, "name": session_name,
         "spawn_id": sid, "via": "kimi-acp",
+    }
+    if worktree_path:
+        resp["worktree_path"] = worktree_path
+        resp["worktree_branch"] = worktree_branch
+    return resp
+
+
+def spawn_session_grok(
+    prompt, name=None, cwd=None, repo_path=None, worktree=False, model=None,
+    parent_session_id=None, effort=None,
+):
+    """Spawn a Grok session via the ACP harness (session/new + first prompt).
+
+    Same shape as spawn_session_kimi: no per-session process. The session
+    lives in CCC's shared ``grok agent stdio`` subprocess (worker-owned).
+    """
+    routed = _control_plane_engine_call(
+        "grok", "spawn", {
+            "prompt": prompt,
+            "name": name,
+            "cwd": cwd,
+            "repo_path": repo_path,
+            "worktree": bool(worktree),
+            "model": model,
+            "parent_session_id": parent_session_id,
+            "effort": effort,
+        },
+        idempotency_key=_take_control_plane_action_id(),
+    )
+    if routed is not None:
+        return routed
+    prompt = _strip_ccc_session_state_instruction(prompt)
+    resolved = _resolve_grok_bin()
+    if not resolved["available"]:
+        return {"ok": False, "error": resolved["reason"], "code": resolved.get("code")}
+    ctx = _spawn_repo_context(cwd=cwd, repo_path=repo_path)
+    spawn_cwd = ctx["cwd"]
+    repo_for_logs = ctx["repo_path"]
+    session_name = _slugify(name or prompt) or "unnamed"
+    timestamp = time.strftime("%Y%m%dT%H%M%S")
+    worktree_path = None
+    worktree_branch = None
+    if worktree:
+        try:
+            worktree_path, worktree_branch = _create_worktree_for_spawn(spawn_cwd, session_name)
+            spawn_cwd = worktree_path
+        except RuntimeError as e:
+            return {"ok": False, "error": f"worktree creation failed: {e}"}
+    model_to_use = _spawn_model_for_engine("grok", model)
+    spawn_mode = (os.environ.get("CCC_GROK_SPAWN_MODE") or "yolo").strip() or "yolo"
+    result = _acp_session_new(
+        "grok", spawn_cwd, prompt=prompt or None,
+        model=model_to_use or None, mode=spawn_mode, effort=effort or None,
+    )
+    if not result.get("ok"):
+        return {
+            "ok": False,
+            "error": result.get("error") or "grok ACP session/new failed",
+            "code": result.get("code") or "grok_spawn_failed",
+            "via": "grok-acp",
+        }
+    sid = result["session_id"]
+    entry = {
+        "pid": None, "name": session_name, "log": None,
+        "prompt": prompt[:200], "started": timestamp, "proc": None,
+        "log_fh": None, "fifo": None, "stdin_fd": None,
+        "engine": "grok", "session_id": sid, "cwd": spawn_cwd,
+        "repo_path": repo_for_logs, "model": model_to_use or "",
+        "reasoning_effort": effort or "",
+        "parent_session_id": parent_session_id or "",
+    }
+    _spawned_sessions.append(entry)
+    _record_spawn_to_registry(
+        pid=None, name=session_name, log_path=_acp_transcript_path("grok", sid),
+        cwd=spawn_cwd, spawned_at=timestamp, command_summary=prompt[:200],
+        fifo=None, engine="grok", session_id=sid, model=model_to_use,
+        repo_path=repo_for_logs, parent_session_id=parent_session_id,
+        reasoning_effort=effort or "",
+    )
+    resp = {
+        "ok": True, "pid": None, "session_id": sid, "name": session_name,
+        "spawn_id": sid, "via": "grok-acp",
     }
     if worktree_path:
         resp["worktree_path"] = worktree_path
@@ -52560,11 +52718,13 @@ def _inject_text_into_session(
     is_cursor = _is_cursor_session(session_id)
     is_hermes = _is_hermes_session(session_id)
     is_kimi = _is_kimi_session(session_id)
+    is_grok = _session_acp_harness(session_id) == "grok"
     is_opencode = _is_opencode_session(session_id)
     is_devin_cli = _is_devin_cli_session(session_id)
     if (
         not is_codex
         and not is_kimi
+        and not is_grok
         and not is_cursor
         and not is_hermes
         and not is_opencode
@@ -52828,7 +52988,8 @@ def _inject_text_into_session(
                 session_id, text, idempotency_key=idempotency_key,
             )
         return resume_session_codex(session_id, text)
-    if is_kimi:
+    acp_harness = "kimi" if is_kimi else ("grok" if is_grok else None)
+    if acp_harness:
         if (
             not _from_terminal_queue
             and mode != "steer"
@@ -52841,13 +53002,13 @@ def _inject_text_into_session(
         }
         if idempotency_key:
             prompt_kwargs["idempotency_key"] = idempotency_key
-        result = _acp_prompt("kimi", session_id, text, **prompt_kwargs)
+        result = _acp_prompt(acp_harness, session_id, text, **prompt_kwargs)
         if (
             result.get("code") == "busy"
             and not _from_terminal_queue
         ):
             # ACP transports do not support Codex-style turn steering.  A
-            # queued-row Steer from the shared UI must therefore wait in Kimi's
+            # queued-row Steer from the shared UI must therefore wait in the
             # durable FIFO instead of surfacing the transport's busy failure.
             return _queue_terminal_input(session_id, text, {"status": "running"})
         return result
@@ -53340,16 +53501,13 @@ def _interrupt_session(session_id):
                 "note": "Codex process interrupted",
             }
         return {"ok": False, "error": "Codex session is not live — nothing to interrupt"}
-    if _is_kimi_session(session_id):
-        result = _acp_cancel("kimi", session_id)
-        # Unlike Claude/Codex, a kimi cancel never appends a
-        # request_interrupted event the transcript-scan path can pick up
-        # (_kimi_wire_tail_meta only sees turn.cancel/turn.ended in the
-        # wire log), so _session_recently_interrupted stayed permanently
-        # False and the "Interrupted" badge never appeared — Esc looked
-        # like a no-op even when the cancel notification landed (CCC-848).
-        # Mark it directly from the one place that knows CCC just asked
-        # kimi to cancel.
+    acp_harness = _session_acp_harness(session_id)
+    if acp_harness:
+        result = _acp_cancel(acp_harness, session_id)
+        # Unlike Claude/Codex, an ACP cancel never appends a
+        # request_interrupted event the transcript-scan path can pick up,
+        # so mark the badge from the one place that knows CCC just asked
+        # the harness to cancel.
         if result.get("ok"):
             with _RECENT_INTERRUPT_LOCK:
                 _RECENT_INTERRUPT_BY_SID[session_id] = time.time()
@@ -60097,6 +60255,23 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
             info = _resolve_opencode_bin()
             info["model"] = os.environ.get("CCC_OPENCODE_MODEL", "anthropic/claude-sonnet-4-5")
             self.send_json(info)
+        elif path == "/api/sessions/spawn-grok/availability":
+            routed = _control_plane_engine_call(
+                "grok", "availability", {}, mutate=False,
+            )
+            info = (
+                routed.get("availability")
+                if isinstance(routed, dict) and routed.get("availability")
+                else _resolve_grok_bin()
+            )
+            info.setdefault("model", _spawn_model_for_engine("grok"))
+            if "acp" not in info:
+                _conn = _acp_conn("grok")
+                info["acp"] = bool(
+                    _conn and _conn.get("initialized")
+                    and _conn["transport"].alive()
+                )
+            self.send_json(info)
         elif path == "/api/sessions/spawn-kimi/availability":
             routed = _control_plane_engine_call(
                 "kimi", "availability", {}, mutate=False,
@@ -60938,9 +61113,10 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
             self._stream_conversation(conv_id, after_line)
         elif re.match(r"^/api/session/[^/]+/spawn-info$", path):
             sid = path.split("/")[-2]
-            if _is_kimi_session(sid):
+            acp_harness = _session_acp_harness(sid)
+            if acp_harness:
                 # No spawn log — the ACP delta stream serves the live preview.
-                resolved = _acp_resolve_bin("kimi")
+                resolved = _acp_resolve_bin(acp_harness)
                 self.send_json({
                     "has_log": True,
                     "alive": bool(resolved.get("available")),
@@ -60979,13 +61155,15 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
             _before_raw = (qs.get("before", [""])[0] or "")
             before = int(_before_raw) if _before_raw.isdigit() else None
             windowed = bool(tail) or (before is not None)
-            is_kimi_conv = _is_kimi_session(conv_id)
-            if is_kimi_conv:
-                # A TUI-launched kimi session has no CCC transcript until it
+            acp_harness = _session_acp_harness(conv_id)
+            is_kimi_conv = acp_harness == "kimi"
+            is_acp_conv = acp_harness is not None
+            if acp_harness:
+                # A TUI-launched ACP session has no CCC transcript until it
                 # is attached — attach on view (throttled) so the pane
                 # backfills instead of showing empty.
                 try:
-                    _acp_maybe_attach_on_view("kimi", conv_id)
+                    _acp_maybe_attach_on_view(acp_harness, conv_id)
                 except Exception:
                     pass
             # Look for a fully-baked response (JSON-encoded body + matching
@@ -60994,7 +61172,7 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
             # path collapses to a hashmap lookup + socket write. Kimi convs
             # bypass: an attach can change the content at any time, with no
             # file mtime to invalidate on.
-            cached_bytes = None if (windowed or is_kimi_conv) else _conv_response_bytes_get(conv_id, after_line)
+            cached_bytes = None if (windowed or is_acp_conv) else _conv_response_bytes_get(conv_id, after_line)
             if cached_bytes is not None:
                 accept = self.headers.get("Accept-Encoding", "") or ""
                 want_gzip = "gzip" in accept.lower()
@@ -61027,7 +61205,7 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                     gz = gzip.compress(raw, compresslevel=5)
                 except Exception:
                     gz = None
-            if not windowed and not is_kimi_conv:
+            if not windowed and not is_acp_conv:
                 _conv_response_bytes_put(conv_id, after_line, raw, gz)
             accept = self.headers.get("Accept-Encoding", "") or ""
             want_gzip = "gzip" in accept.lower()
@@ -65174,6 +65352,17 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                             parent_session_id=parent_session_id,
                             effort=_spawn_request_kimi_effort(payload),
                         )
+                    elif engine == "grok":
+                        result = spawn_session_grok(
+                            prompt,
+                            name=name,
+                            cwd=spawn_cwd,
+                            repo_path=payload.get("repo_path"),
+                            worktree=worktree_flag,
+                            model=model,
+                            parent_session_id=parent_session_id,
+                            effort=_spawn_request_reasoning_effort(payload, "grok"),
+                        )
                     elif engine == "antigravity":
                         result = spawn_session_antigravity(
                             prompt,
@@ -65710,6 +65899,38 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                         effort=_spawn_request_kimi_effort(payload),
                     )
                     if result.get("code") in ("kimi_spawn_failed", "not_installed"):
+                        self.send_json(result, 503)
+                    else:
+                        self.send_json(result)
+                except RepoContextError as e:
+                    self.send_json(e.as_payload(), e.status)
+                except Exception as e:
+                    self.send_json({"ok": False, "error": str(e)}, 500)
+        elif path == "/api/sessions/spawn-grok":
+            length = int(self.headers.get("Content-Length", "0"))
+            body = self.rfile.read(length) if length > 0 else b""
+            try:
+                payload = json.loads(body) if body else {}
+            except json.JSONDecodeError:
+                payload = {}
+            prompt = _decode_over_url_encoded_text(payload.get("prompt") or "").strip()
+            name = (payload.get("name") or "").strip() or None
+            if not prompt:
+                self.send_json({"ok": False, "error": "missing prompt"}, 400)
+            else:
+                try:
+                    _set_control_plane_action_id(payload.get("idempotency_key"))
+                    result = spawn_session_grok(
+                        prompt,
+                        name=name,
+                        cwd=(payload.get("cwd") or "").strip() or None,
+                        repo_path=payload.get("repo_path"),
+                        worktree=bool(payload.get("worktree")),
+                        model=payload.get("model"),
+                        parent_session_id=payload.get("parent_session_id"),
+                        effort=_spawn_request_reasoning_effort(payload, "grok"),
+                    )
+                    if result.get("code") in ("grok_spawn_failed", "not_installed"):
                         self.send_json(result, 503)
                     else:
                         self.send_json(result)
@@ -67712,8 +67933,9 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
         an in-flight preview that the client clears once the matching
         finalized event lands via /api/conversations/<id>/stream.
         """
-        if _is_kimi_session(session_id):
-            self._stream_acp_deltas("kimi", session_id)
+        acp_harness = _session_acp_harness(session_id)
+        if acp_harness:
+            self._stream_acp_deltas(acp_harness, session_id)
             return
         self._stream_spawn_deltas_log(session_id, replay=replay)
 
@@ -67723,14 +67945,14 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
         no polling — chunk latency is the Condition wake (~ms). Deltas are
         in-memory only; the finalized transcript stays authoritative.
         """
-        if harness == "kimi":
+        if harness in _ACP_WORKER_HARNESSES:
             initial = _control_plane_engine_call(
-                "kimi", "deltas",
+                harness, "deltas",
                 {"session_id": session_id, "after": 0},
                 mutate=False,
             )
             if initial is not None:
-                self._stream_worker_acp_deltas(session_id, initial)
+                self._stream_worker_acp_deltas(session_id, initial, harness=harness)
                 return
         self.send_response(200)
         self.send_header("Content-Type", "text/event-stream")
@@ -67778,7 +68000,7 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
         except (BrokenPipeError, ConnectionResetError, OSError):
             pass
 
-    def _stream_worker_acp_deltas(self, session_id, initial):
+    def _stream_worker_acp_deltas(self, session_id, initial, harness="kimi"):
         """SSE bridge for ACP deltas owned by the persistent worker."""
         self.send_response(200)
         self.send_header("Content-Type", "text/event-stream")
@@ -67807,7 +68029,7 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                     last_keepalive = time.time()
                 time.sleep(0.25)
                 response = _control_plane_engine_call(
-                    "kimi", "deltas",
+                    harness, "deltas",
                     {"session_id": session_id, "after": last_seq},
                     mutate=False,
                 )
@@ -68362,7 +68584,8 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
             except (BrokenPipeError, ConnectionResetError, OSError):
                 pass
             return
-        if _is_kimi_session(conversation_id):
+        acp_harness = _session_acp_harness(conversation_id)
+        if acp_harness:
             # ACP sessions: no mtime polling. The reader thread notifies
             # _ACP_LOCK as notifications fold, so finalized events reach the
             # browser within ~ms of the harness emitting them. Events are read
@@ -68387,13 +68610,13 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                         with _ACP_LOCK:
                             _ACP_LOCK.wait(5.0)
                     try:
-                        size = _acp_transcript_path("kimi", conversation_id).stat().st_size
+                        size = _acp_transcript_path(acp_harness, conversation_id).stat().st_size
                     except OSError:
                         size = -1
                     events = []
                     if size != last_size:
                         last_size = size
-                        events = _acp_transcript_events_after("kimi", conversation_id, after_line)
+                        events = _acp_transcript_events_after(acp_harness, conversation_id, after_line)
                     # CCC-764: a busy-turn follow-up parks in the durable
                     # input queue with no channel of its own until Kimi goes
                     # idle. This branch reads the ACP transcript directly and

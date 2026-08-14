@@ -19,6 +19,8 @@ RETIRE_UNCERTAIN_AFTER_S = 900.0
 ASYNC_OPERATIONS = {
     ("kimi", "spawn"),
     ("kimi", "prompt"),
+    ("grok", "spawn"),
+    ("grok", "prompt"),
     ("codex", "spawn"),
     ("codex", "resume"),
     ("claude", "spawn"),
@@ -83,7 +85,7 @@ class EngineHost:
                 # their durable FIFOs here, in the process that owns engine
                 # execution, rather than in the restartable dashboard.
                 server._reattach_spawned_orphans(
-                    skip_engines=("kimi",),
+                    skip_engines=("kimi", "grok"),
                     only_engines=("claude", "codex"),
                 )
         return self._module
@@ -168,9 +170,9 @@ class EngineHost:
                     live = live or legacy._codex_app_server_thread_is_active(
                         sid, start_if_needed=True
                     )
-            elif engine == "kimi" and sid:
-                legacy._acp_maybe_attach_on_view("kimi", sid)
-                snap = legacy._acp_session_snapshot("kimi", sid) or {}
+            elif engine in ("kimi", "grok") and sid:
+                legacy._acp_maybe_attach_on_view(engine, sid)
+                snap = legacy._acp_session_snapshot(engine, sid) or {}
                 live = snap.get("status") == "active"
             if not live:
                 continue
@@ -234,19 +236,20 @@ class EngineHost:
             if item.get("pid") is not None
         }
         legacy._reattach_spawned_orphans(
-            skip_engines=("kimi",),
+            skip_engines=("kimi", "grok"),
             only_engines=("claude", "codex"),
         )
-        attached_kimi = 0
+        attached_acp = 0
         for entry in legacy._load_spawn_registry():
-            if (entry.get("engine") or "") != "kimi":
+            harness = entry.get("engine") or ""
+            if harness not in ("kimi", "grok"):
                 continue
             sid = entry.get("session_id") or entry.get("resumed_sid")
             if not sid:
                 continue
-            result = legacy._acp_maybe_attach_on_view("kimi", sid)
+            result = legacy._acp_maybe_attach_on_view(harness, sid)
             if result is None or not isinstance(result, dict) or result.get("ok", True):
-                attached_kimi += 1
+                attached_acp += 1
         after = {
             str(item.get("pid") or "")
             for item in legacy._spawned_sessions
@@ -256,7 +259,7 @@ class EngineHost:
             "ok": True,
             "adopted": len(after - before),
             "tracked": len(after),
-            "kimi_attached": attached_kimi,
+            "kimi_attached": attached_acp,
         }
 
     def resolve_uncertain(self, work_id, action):
@@ -410,11 +413,15 @@ class EngineHost:
 
     def _call(self, engine, operation, args, query=False):
         legacy = self._legacy()
-        if engine == "kimi":
+        if engine in ("kimi", "grok"):
             if operation == "availability":
-                info = legacy._resolve_kimi_bin()
-                info["model"] = legacy._spawn_model_for_engine("kimi")
-                conn = legacy._acp_conn("kimi")
+                resolve = (
+                    legacy._resolve_kimi_bin if engine == "kimi"
+                    else legacy._resolve_grok_bin
+                )
+                info = resolve()
+                info["model"] = legacy._spawn_model_for_engine(engine)
+                conn = legacy._acp_conn(engine)
                 info["acp"] = bool(
                     conn
                     and conn.get("initialized")
@@ -422,12 +429,18 @@ class EngineHost:
                 )
                 return {"ok": True, "availability": info}
             if operation == "verify":
+                if engine != "kimi":
+                    return {"ok": False, "error": "verify is kimi-only"}
                 return legacy._kimi_setup_verify()
             if operation == "spawn":
-                return legacy.spawn_session_kimi(**args)
+                spawn_fn = (
+                    legacy.spawn_session_kimi if engine == "kimi"
+                    else legacy.spawn_session_grok
+                )
+                return spawn_fn(**args)
             if operation == "prompt":
                 return legacy._acp_prompt(
-                    "kimi",
+                    engine,
                     args.get("session_id") or args.get("sid"),
                     args.get("text") or "",
                     mode=args.get("mode") or "send",
@@ -435,52 +448,52 @@ class EngineHost:
                 )
             if operation == "ask":
                 return legacy._acp_ask_and_wait(
-                    "kimi",
+                    engine,
                     args.get("session_id") or args.get("sid"),
                     args.get("text") or "",
                     timeout_ms=int(args.get("timeout_ms") or 30000),
                 )
             if operation == "cancel":
                 return legacy._acp_cancel(
-                    "kimi", args.get("session_id") or args.get("sid")
+                    engine, args.get("session_id") or args.get("sid")
                 )
             if operation == "approval":
                 return legacy._acp_resolve_approval(
-                    "kimi",
+                    engine,
                     args.get("session_id") or args.get("sid"),
                     args.get("request_id"),
                     args.get("option_id"),
                 )
             if operation == "config":
                 return legacy._acp_set_config(
-                    "kimi",
+                    engine,
                     args.get("session_id") or args.get("sid"),
                     args.get("config_id"),
                     args.get("value"),
                 )
             if operation == "attach":
                 return legacy._acp_maybe_attach_on_view(
-                    "kimi", args.get("session_id") or args.get("sid")
+                    engine, args.get("session_id") or args.get("sid")
                 ) or {"ok": True}
             if operation == "snapshot":
                 snap = legacy._acp_session_snapshot(
-                    "kimi", args.get("session_id") or args.get("sid")
+                    engine, args.get("session_id") or args.get("sid")
                 )
                 return {"ok": True, "snapshot": snap}
             if operation == "bridge_status":
                 return legacy._engine_bridge_status_local(
-                    "kimi", args.get("session_id") or args.get("sid")
+                    engine, args.get("session_id") or args.get("sid")
                 )
             if operation == "bridge_restart":
                 return legacy._restart_engine_bridge_local(
-                    "kimi", args.get("session_id") or args.get("sid")
+                    engine, args.get("session_id") or args.get("sid")
                 )
             if operation == "deltas":
                 sid = args.get("session_id") or args.get("sid")
                 after = int(args.get("after") or 0)
                 with legacy._ACP_LOCK:
                     state = (
-                        legacy._ACP_SESSION_STATE.get("kimi") or {}
+                        legacy._ACP_SESSION_STATE.get(engine) or {}
                     ).get(sid) or {}
                     deltas = [
                         delta for delta in (state.get("deltas") or [])
@@ -693,8 +706,8 @@ class EngineHost:
     @staticmethod
     def _async_state(legacy, engine, operation, sid, result, args=None):
         args = args if isinstance(args, dict) else {}
-        if engine == "kimi":
-            snap = legacy._acp_session_snapshot("kimi", sid) or {}
+        if engine in ("kimi", "grok"):
+            snap = legacy._acp_session_snapshot(engine, sid) or {}
             active = snap.get("status") == "active"
             return active, not active, {
                 "stop_reason": snap.get("stop_reason"),

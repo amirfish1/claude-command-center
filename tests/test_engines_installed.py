@@ -14,8 +14,8 @@ TOUR_JS = ROOT / "static" / "tour.js"
 
 ALL_ENGINES = [
     "claude", "codex", "gemini", "cursor", "antigravity",
-    "kilo", "kimi", "hermes",
-    "copilot", "grok", "copilotchat",
+    "kilo", "opencode", "kimi", "hermes", "devin", "grok",
+    "copilot", "copilotchat",
 ]
 
 
@@ -42,26 +42,22 @@ def test_returns_all_eleven_engines_in_stable_order():
         assert isinstance(row["label"], str) and row["label"]
         assert isinstance(row["detail"], str)
     kinds = [row["kind"] for row in payload["engines"]]
-    assert kinds == ["spawn"] * 8 + ["readonly"] * 3
+    assert kinds == ["spawn"] * 11 + ["readonly"] * 2
 
 
 def test_readonly_engines_absent_stores(monkeypatch, tmp_path):
     _point_readonly_stores_at(monkeypatch, tmp_path)
     rows = _by_engine(server._detect_engines_installed())
     assert rows["copilot"]["installed"] is False
-    assert rows["grok"]["installed"] is False
     assert rows["copilotchat"]["installed"] is False
 
 
 def test_readonly_engines_present_stores(monkeypatch, tmp_path):
-    copilot_home, grok_home, vscode_user = _point_readonly_stores_at(
+    copilot_home, _grok_home, vscode_user = _point_readonly_stores_at(
         monkeypatch, tmp_path
     )
     # Copilot: session-state/ dir alone (no db) counts as installed.
     (copilot_home / "session-state").mkdir(parents=True)
-    # Grok: grok.db alone (no sessions/ dir) counts as installed.
-    grok_home.mkdir(parents=True)
-    (grok_home / "grok.db").write_bytes(b"fake-sqlite")
     # Copilot Chat: any chatSessions dir under the User dir counts.
     chat = vscode_user / "workspaceStorage" / "fakehash" / "chatSessions"
     chat.mkdir(parents=True)
@@ -69,7 +65,6 @@ def test_readonly_engines_present_stores(monkeypatch, tmp_path):
     rows = _by_engine(server._detect_engines_installed())
     assert rows["copilot"]["installed"] is True
     assert rows["copilot"]["detail"]
-    assert rows["grok"]["installed"] is True
     assert rows["copilotchat"]["installed"] is True
     assert rows["copilotchat"]["detail"] == str(chat)
 

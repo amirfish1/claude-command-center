@@ -19,7 +19,7 @@ import urllib.request
 from ccc_server import core as _core
 
 # ---------------------------------------------------------------------------
-# Grok CLI conversation ingestion (read-only).
+# Grok CLI conversation ingestion + ACP spawn (xAI Grok Build).
 #
 # Two different tools install a `grok` binary under ~/.grok (overridable via
 # the GROK_HOME env var) and overwrite each other:
@@ -30,8 +30,9 @@ from ccc_server import core as _core
 #   Variant B — superagent-ai/grok-cli (npm): a single SQLite grok.db with
 #     workspaces / sessions / messages tables.
 # Both stores may coexist (one tool overwrote the other's binary while old
-# data remained), so both are scanned and their rows merged. Listing +
-# transcript view only; no spawn / resume support.
+# data remained), so both are scanned and their rows merged.
+# Spawn / follow-up / cancel for variant A go through `grok agent stdio`
+# (ACP) in server.py; this module stays the on-disk listing + replay path.
 # ---------------------------------------------------------------------------
 
 GROK_LIVE_WINDOW_S = 180
