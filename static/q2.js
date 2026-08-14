@@ -1977,8 +1977,13 @@
 
   function sessionBtn(sid, label) {
     if (!sid) return '';
+    // Must match the ccc_popout=conversation&conv= link built elsewhere in
+    // this file (renderConvPane) and in app.js -- a bare ?session= is not
+    // read by any boot param (app.js only checks conv/conversation/
+    // session_id), so the page ignored it and opened whatever conversation
+    // was last selected instead of this one.
     return '<a class="q2-linkbtn" target="_blank" rel="noopener"'
-      + ' href="/?session=' + encodeURIComponent(sid) + '"'
+      + ' href="/?ccc_popout=conversation&conv=' + encodeURIComponent(sid) + '"'
       + ' title="' + esc(sid) + '">' + esc(label) + ' &#8599;</a>';
   }
 
