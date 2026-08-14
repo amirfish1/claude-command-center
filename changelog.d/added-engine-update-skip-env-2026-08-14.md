@@ -1,0 +1,1 @@
+Added `CCC_ENGINE_UPDATE_SKIP` (comma-separated engine ids) to exclude specific agent CLIs from the engine update pass — e.g. `CCC_ENGINE_UPDATE_SKIP=hermes` for engines whose updater restarts a long-running service and should be updated deliberately instead.

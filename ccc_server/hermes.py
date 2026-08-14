@@ -390,8 +390,19 @@ _ENGINE_UPDATE_THREAD_ACTIVE = False
 
 
 def _engine_update_specs():
-    """Return only CLIs with a confirmed, non-interactive update command."""
-    return [
+    """Return only CLIs with a confirmed, non-interactive update command.
+
+    ``CCC_ENGINE_UPDATE_SKIP`` (comma-separated engine ids, e.g.
+    ``hermes,cursor``) excludes engines from the update pass. Useful when an
+    engine's updater restarts a long-running service (killing live sessions)
+    and updates should happen deliberately instead of on the hourly pass.
+    """
+    skip = {
+        item.strip().lower()
+        for item in os.environ.get("CCC_ENGINE_UPDATE_SKIP", "").split(",")
+        if item.strip()
+    }
+    specs = [
         {
             "id": "claude",
             "label": "Claude Code",
@@ -428,6 +439,9 @@ def _engine_update_specs():
             "install": "Install Hermes Agent, then restart CCC.",
         },
     ]
+    if not skip:
+        return specs
+    return [spec for spec in specs if spec["id"] not in skip]
 
 
 def _read_engine_update_state():
