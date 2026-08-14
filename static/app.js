@@ -4663,6 +4663,43 @@
   let _lastStatusCheckedAt = 0;
   let _liveStatusFetchingKey = '';
   const _codexAppServerStatusKeys = new Map();
+  const _acpWireMtimeKeys = new Map();
+
+  // CCC-849: a Kimi (ACP) turn driven from a real terminal, not this browser
+  // pane, appends to wire.jsonl server-side within ~1s (see wire_tail.py's
+  // watcher) but never touches anything an open pane was already listening
+  // for — so the pane sat stale until the user switched away and back or
+  // sent a message. Mirrors maybeCatchUpCodexConversationFromAppServer: diff
+  // the wire mtime poll-to-poll and re-fetch the open pane's transcript when
+  // it moves.
+  // CCC-850: a non-live Codex session (no headless/terminal process, so
+  // maybeCatchUpCodexConversationFromAppServer never fires because there's
+  // no app-server to report codex_app_server_event_seq) left a delivered
+  // queued send stuck showing "ready to steer" in the composer forever —
+  // nothing ever re-fetched the transcript to reconcile it. transcript_mtime
+  // is exposed for that case too now (session_live_status), so drop the
+  // ACP-only gate and catch up from it whenever it moves, on any session kind.
+  function maybeCatchUpAcpConversationFromWire(sessionId, data) {
+    if (!sessionId || !data) return;
+    const mtime = Number(data.transcript_mtime || 0);
+    if (!mtime) return;
+    const previous = _acpWireMtimeKeys.get(sessionId);
+    _acpWireMtimeKeys.set(sessionId, mtime);
+    if (previous === mtime) return;
+    const paneId = activePaneId();
+    const pane = paneByPaneId(paneId);
+    if (!pane || !pane.conversationId) return;
+    const paneSid = sessionIdByConv[pane.conversationId] || pane.conversationId;
+    if (paneSid !== sessionId || currentSession.id !== sessionId) return;
+    setTimeout(() => {
+      const latestPane = paneByPaneId(paneId);
+      const latestSid = latestPane && latestPane.conversationId
+        ? (sessionIdByConv[latestPane.conversationId] || latestPane.conversationId)
+        : '';
+      if (!latestPane || latestSid !== sessionId || currentSession.id !== sessionId) return;
+      try { fetchConversationEvents(paneId); } catch (_) {}
+    }, previous ? 0 : 250);
+  }
 
   function maybeCatchUpCodexConversationFromAppServer(sessionId, data) {
     if (!sessionId || !data || !data.codex_app_server) return;
@@ -4814,6 +4851,7 @@
         }
       }
       maybeCatchUpCodexConversationFromAppServer(_fetchedFor, data);
+      maybeCatchUpAcpConversationFromWire(_fetchedFor, data);
       // Detect server-side spawns we didn't initiate from this client
       // (e.g. agent calls /api/sessions/spawn for a sibling Codex /
       // Gemini session). Server returns a running count of CCC-spawned

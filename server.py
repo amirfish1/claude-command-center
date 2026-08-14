@@ -18998,7 +18998,14 @@ def session_live_status(session_id, session_cwd):
         path = _resolve_codex_rollout_path(session_id)
         if path:
             try:
-                result["recently_written"] = (time.time() - path.stat().st_mtime) < 300
+                mtime = path.stat().st_mtime
+                result["recently_written"] = (time.time() - mtime) < 300
+                # Exposed unconditionally (not just while live) so a non-live
+                # session with no headless/terminal process still gives the
+                # frontend a way to notice new transcript content — mirrors
+                # the ACP wire-mtime catch-up (CCC-849); see
+                # maybeCatchUpAcpConversationFromWire.
+                result["transcript_mtime"] = mtime
             except OSError:
                 pass
         registry_known = _spawn_registry_has_session(session_id, "codex")
