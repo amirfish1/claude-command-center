@@ -393,9 +393,10 @@ def _engine_update_specs():
     """Return only CLIs with a confirmed, non-interactive update command.
 
     ``CCC_ENGINE_UPDATE_SKIP`` (comma-separated engine ids, e.g.
-    ``hermes,cursor``) excludes engines from the update pass. Useful when an
-    engine's updater restarts a long-running service (killing live sessions)
-    and updates should happen deliberately instead of on the hourly pass.
+    ``cursor,antigravity``) excludes engines from the update pass. Useful when
+    an engine's updater restarts a long-running service (killing live
+    sessions) and updates should happen deliberately instead of on the
+    hourly pass.
     """
     skip = {
         item.strip().lower()
@@ -431,13 +432,10 @@ def _engine_update_specs():
             "args": ("update",),
             "install": "Install the AGY CLI, then restart CCC.",
         },
-        {
-            "id": "hermes",
-            "label": "Hermes",
-            "resolver": _core._resolve_hermes_bin,
-            "args": ("update", "--yes"),
-            "install": "Install Hermes Agent, then restart CCC.",
-        },
+        # Hermes is deliberately NOT in this list: `hermes update` drains and
+        # restarts the gateway service, killing live messaging sessions, so an
+        # unattended update pass must never trigger it. Hermes users update
+        # deliberately (or via `hermes update` themselves).
     ]
     if not skip:
         return specs
