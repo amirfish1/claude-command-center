@@ -213,7 +213,7 @@ def _control_plane_routes_engines():
 
 def _control_plane_engine_call(
     engine, operation, args, *, mutate=True, idempotency_key=None,
-    parent_work_id=None,
+    parent_work_id=None, timeout_ms=None,
 ):
     """Return worker result, or None only when no worker accepted the request."""
     if not _control_plane_routes_engines():
@@ -231,7 +231,22 @@ def _control_plane_engine_call(
     # Engine reads may lazily initialize a native transport too, so they need
     # the same timeout budget as writes. The mutate flag controls durability,
     # not how quickly an engine can answer.
-    response = _control_plane_request(method, payload, engine_timeout=True)
+    if timeout_ms is not None:
+        try:
+            requested_timeout = max(
+                _CONTROL_PLANE_ENGINE_CLIENT.timeout,
+                float(timeout_ms) / 1000.0 + 5.0,
+            )
+        except (TypeError, ValueError):
+            requested_timeout = _CONTROL_PLANE_ENGINE_CLIENT.timeout
+        client = ControlPlaneClient(
+            path=_CONTROL_PLANE_ENGINE_CLIENT.path,
+            token_file=_CONTROL_PLANE_ENGINE_CLIENT.token_file,
+            timeout=requested_timeout,
+        )
+        response = client.request(method, payload)
+    else:
+        response = _control_plane_request(method, payload, engine_timeout=True)
     if response.get("code") == "method_not_found":
         # Version skew during a rolling dashboard update: an older worker has
         # definitively rejected (and therefore did not execute) the request.
@@ -54290,6 +54305,25 @@ def ask_session_and_wait(session_id, text, timeout_ms=30000, cwd=None):
 
     session_id = _resolve_local_spawn_session_prefix(session_id)
     engine = _detect_session_engine(session_id)
+    # The persistent worker owns Claude headless subprocesses, their FIFOs,
+    # and the in-memory entries used to tail a result.  A dashboard process
+    # cannot safely send the input there and then wait locally: its own spawn
+    # list is intentionally empty after worker handoff.  Keep the entire
+    # synchronous exchange in the owning process instead.
+    if engine == "claude":
+        routed = _control_plane_engine_call(
+            "claude",
+            "ask",
+            {
+                "session_id": session_id,
+                "text": text,
+                "timeout_ms": timeout_ms,
+                "cwd": cwd,
+            },
+            timeout_ms=timeout_ms,
+        )
+        if routed is not None:
+            return routed
     if engine in ("codex", "gemini", "antigravity", "hermes", "opencode"):
         return ask_engine_session_and_wait(session_id, text, timeout_ms, engine)
     if engine == "kimi":

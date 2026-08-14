@@ -600,6 +600,13 @@ class EngineHost:
                     args.get("text") or "",
                     cwd=args.get("cwd"),
                 )
+            if operation == "ask":
+                return legacy.ask_session_and_wait(
+                    args.get("session_id"),
+                    args.get("text") or "",
+                    timeout_ms=int(args.get("timeout_ms") or 30000),
+                    cwd=args.get("cwd"),
+                )
             if operation == "compact":
                 return legacy.compact_session_context(
                     args.get("session_id"),

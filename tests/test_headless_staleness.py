@@ -410,6 +410,66 @@ def test_ask_waits_for_its_own_command_result_when_prior_turn_finishes(
     assert result["text"] == "fresh corrective report"
 
 
+def test_ask_routes_claude_to_persistent_worker(server_mod):
+    """The process that owns a warm Claude must also wait for its reply."""
+    sid = "11111111-2222-3333-4444-555555555555"
+    expected = {
+        "ok": True,
+        "text": "worker-owned reply",
+        "source": "resume-headless",
+    }
+    with mock.patch.object(server_mod, "_detect_session_engine", return_value="claude"), \
+         mock.patch.object(server_mod, "_control_plane_routes_engines", return_value=True), \
+         mock.patch.object(
+             server_mod,
+             "_control_plane_engine_call",
+             return_value=expected,
+         ) as ask, \
+         mock.patch.object(server_mod, "find_session_cwd", return_value="/repo"), \
+         mock.patch.object(
+             server_mod,
+             "session_live_status",
+             return_value={"live": False, "tty": None},
+         ), \
+         mock.patch.object(server_mod, "_try_wt_ask_for_headless_delivery", return_value=None), \
+         mock.patch.object(
+             server_mod,
+             "resume_session_headless",
+             return_value={"ok": False, "error": "should not resume locally"},
+         ):
+        result = server_mod.ask_session_and_wait(sid, "status?", timeout_ms=12_000)
+
+    assert result == expected
+    ask.assert_called_once_with(
+        "claude",
+        "ask",
+        {"session_id": sid, "text": "status?", "timeout_ms": 12_000, "cwd": None},
+        timeout_ms=12_000,
+    )
+
+
+def test_worker_executes_claude_ask_in_its_owned_process(server_mod):
+    """Worker-owned spawns keep their FIFO and in-memory state available."""
+    from worker_engines import EngineHost
+
+    expected = {"ok": True, "text": "worker-owned reply"}
+    server_mod.ask_session_and_wait = mock.Mock(return_value=expected)
+    host = EngineHost(mock.Mock())
+    host._module = server_mod
+
+    result = host._call("claude", "ask", {
+        "session_id": "worker-session",
+        "text": "status?",
+        "timeout_ms": 12_000,
+        "cwd": "/repo",
+    })
+
+    assert result == expected
+    server_mod.ask_session_and_wait.assert_called_once_with(
+        "worker-session", "status?", timeout_ms=12_000, cwd="/repo"
+    )
+
+
 def test_post_result_stream_activity_keeps_next_turn_open(server_mod, tmp_path):
     _sid, entry, _transcript, log = _stage(
         server_mod, tmp_path, [_event("a")], 4
