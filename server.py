@@ -36909,6 +36909,7 @@ def _acp_handle_session_update(harness, sid, update):
                 entry = {
                     "title": title, "status": update.get("status") or "running",
                     "detail": detail, "emitted": False,
+                    "acp_kind": update.get("kind") or "",
                 }
                 if isinstance(raw_input, dict) and raw_input:
                     entry["input"] = _tool_input_payload(raw_input)
@@ -36942,6 +36943,8 @@ def _acp_handle_session_update(harness, sid, update):
                 # The started-upgrade replaces the lazy create's name-only
                 # title with the canonical one (description ?? name).
                 tool["title"] = update["title"]
+            if update.get("kind"):
+                tool["acp_kind"] = update["kind"]
             if update.get("status"):
                 tool["status"] = update["status"]
             raw_input = update.get("rawInput")
@@ -37056,12 +37059,38 @@ def _acp_tool_content_diff(update):
     return None
 
 
+def _acp_tool_name(tool):
+    """Map an ACP tool call to a stable Claude-style tool name.
+
+    ACP's own ``title`` is per-call human prose (often the raw argument
+    text — a grep pattern, a shell command, a file path) with no generic
+    identifier behind it. Using ``title`` as the tool's *name* (as CCC used
+    to) makes every call look like a distinct tool to the client's grouping
+    logic, which assumes ``name`` is a stable category the way Claude's own
+    tool names are — collapsing a run of reads/searches into one unreadable
+    "Used A, B, and C" header instead of "read 5 files" (CCC-854). ACP's
+    ``kind`` enum IS that stable category; map it onto the Claude names the
+    client already knows how to summarize/group, falling back to the raw
+    title only for kinds with no clean Claude equivalent (``other``,
+    ``think``, MCP-sourced calls, calls made before ``kind`` arrives).
+    """
+    acp_kind = tool.get("acp_kind") or ""
+    title = tool.get("title") or ""
+    if acp_kind == "edit":
+        return "Write" if title.strip().lower().startswith("write") else "Edit"
+    mapped = {
+        "read": "Read", "search": "Grep", "execute": "Bash", "fetch": "WebFetch",
+        "delete": "Edit", "move": "Edit",
+    }.get(acp_kind)
+    return mapped or title or "tool"
+
+
 def _acp_tool_event(turn, tool_id, tool):
     """One finalized conv event per tool call, emitted once rawInput (or
     completion) gives us the real detail — never a kind-only placeholder."""
     block = {
         "kind": "tool_use",
-        "name": tool.get("title") or "tool",
+        "name": _acp_tool_name(tool),
         "detail": tool.get("detail") or "",
         "id": tool_id,
     }
