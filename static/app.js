@@ -20617,10 +20617,18 @@
   // pointer movement and auto-expires, so a parked cursor doesn't freeze the
   // list. User-initiated renders bypass this (they don't go through the
   // scheduler), so the archive's own re-render still runs immediately.
+  // CCC-826: the same rebuild-drops-hover problem also flickers plain row
+  // hover — the kebab-button reveal and the time->repo-chip meta swap are
+  // pure `.conv-item:hover` CSS (app.css ~5163), not scoped to
+  // `.conv-row-actions`. A poll tick replacing the row's DOM node mid-hover
+  // drops that :hover the instant the new node lands, so it flashed off and
+  // back on (sometimes mid-transition) every time a poller landed while the
+  // pointer sat still over a row. Widened from `.conv-row-actions` to any
+  // `.conv-item` so hovering the row body pauses rebuilds the same way.
   let _convRowActionHoverUntil = 0;
   document.addEventListener('pointermove', (ev) => {
     const t = ev.target;
-    if (t && t.closest && t.closest('.conv-row-actions')) {
+    if (t && t.closest && t.closest('.conv-item')) {
       _convRowActionHoverUntil = Date.now() + 1200;
     }
   }, true);
@@ -20966,6 +20974,7 @@
     '[data-role="coo-track-wrap"]',
     '[data-role="nya-collapse"]',
     '[data-role="subagent-cluster-toggle"]',
+    '[data-role="move-lane"]',
     '.conv-title-input',
     '.conv-session-origin-chip[data-parent-sid]',
   ].join(',');
@@ -28007,6 +28016,17 @@
       const pinBtn = lifecycleContext !== 'trash'
         ? '<button class="conv-pin-btn' + (c.pinned ? ' is-unpin' : '') + '" data-role="pin" title="' + pinTitle + '" aria-label="' + pinTitle + '"><span class="conv-pin-glyph">&#128204;</span></button>'
         : '';
+      // CCC-841: the only way to move a session into the Workers tab used to
+      // be an undiscoverable drag onto the tiny tab-bar button (see
+      // assignAllLaneFromDrop). Give All/Coding/Workers-tab rows a one-click
+      // equivalent; toggles all_lane_override via the same /api/conversations/
+      // all-lane endpoint the drag path already uses.
+      const currentLane = String(c.all_lane_override || '').trim();
+      const moveLaneBtn = (lifecycleContext === 'all-main' && !isBacklogRow && !isGithubPrRow)
+        ? (currentLane === 'workers'
+          ? '<button class="conv-lane-btn is-workers" data-role="move-lane" data-lane="coding" title="Move to Coding tab" aria-label="Move to Coding tab">&#128188;</button>'
+          : '<button class="conv-lane-btn" data-role="move-lane" data-lane="workers" title="Move to Workers tab" aria-label="Move to Workers tab">&#128188;</button>')
+        : '';
       if (isBacklogRow) {
         const _issueAttr = escapeAttr(c.issue_number || '');
         const _titleAttr = escapeAttr(c.display_name || c.ai_title || c.first_message || '');
@@ -28400,7 +28420,7 @@
             + '<span class="conv-row-end">'
             +   '<span class="conv-rel" data-role="rel" title="Last activity">' + escapeHtml(rel) + '</span>'
             +   '<button type="button" class="conv-kebab-btn" data-role="kebab" title="Actions" aria-label="Row actions"><span class="conv-kebab-dot"></span><span class="conv-kebab-dot"></span></button>'
-            +   '<span class="conv-row-actions">' + ((opts.evergreenAgent && !_egSingleLine) ? '' : pctBadgeRowActionHtml) + wakeBtn + summaryActionBtn + mergeBtn + startBtn + pinBtn + lifecycleButtons + elevateObjectBtn + '</span>'
+            +   '<span class="conv-row-actions">' + ((opts.evergreenAgent && !_egSingleLine) ? '' : pctBadgeRowActionHtml) + wakeBtn + summaryActionBtn + mergeBtn + startBtn + pinBtn + moveLaneBtn + lifecycleButtons + elevateObjectBtn + '</span>'
             + '</span>'
           + '</div>'
           + evergreenMetaRowHtml
@@ -32877,6 +32897,44 @@
           showOpToast(data.pinned ? 'Pinned to top' : 'Unpinned');
         } catch (err) {
           showOpToast('Pin failed (' + err.message + ')', 'error');
+        }
+      });
+    });
+    // CCC-841: one-click equivalent of dragging a row onto the Coding/
+    // Workers tab-bar button (see assignAllLaneFromDrop below) — same
+    // /api/conversations/all-lane endpoint, just from a per-row button so
+    // the capability doesn't require discovering the drag target.
+    $convList.querySelectorAll('.conv-lane-btn').forEach(btn => {
+      btn.addEventListener('click', async (ev) => {
+        ev.stopPropagation();
+        ev.preventDefault();
+        const item = btn.closest('.conv-item');
+        const convId = item && item.dataset.id;
+        const sessionId = item && item.dataset.sessionId;
+        const lane = btn.getAttribute('data-lane') === 'coding' ? 'coding' : 'workers';
+        if (!convId || !sessionId) return;
+        const patchRows = (rows) => {
+          if (!Array.isArray(rows)) return;
+          for (const row of rows) {
+            if (!row) continue;
+            const rowSid = row.session_id || row.id;
+            if (rowSid === sessionId || row.id === convId) row.all_lane_override = lane;
+          }
+        };
+        try {
+          const data = await ccPostJson('/api/conversations/all-lane', {
+            session_id: sessionId,
+            conversation_id: convId,
+            lane,
+          });
+          if (!data.ok) throw new Error(data.error || 'lane move failed');
+          patchRows(conversationsData);
+          patchRows(archiveData);
+          _convListRenderSig = null;
+          renderArchiveList(document.getElementById('convSearch')?.value || '', { force: true });
+          showOpToast('Moved to ' + (lane === 'workers' ? 'Workers' : 'Coding') + ' tab');
+        } catch (err) {
+          showOpToast('Move failed (' + err.message + ')', 'error');
         }
       });
     });
