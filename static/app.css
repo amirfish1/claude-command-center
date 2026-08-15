@@ -6275,6 +6275,13 @@
     border-color: var(--purple, #bc8cff);
     background: rgba(188,140,255,0.20);
   }
+  /* CCC-864: the parent/grandparent origin chip ("continued from") is
+     provenance worth surfacing at a glance — keep it visible even when the
+     row is neither hovered nor selected, unlike the rest of the meta row. */
+  .conv-item .conv-hover-meta-row:has(.conv-session-origin-chip.is-parent),
+  .conv-item .conv-hover-meta-row:has(.conv-session-origin-chip.is-grandparent) {
+    display: flex;
+  }
   .conv-item .conv-hover-meta-row .conv-session-origin-chip.is-ccc {
     border-color: rgba(88,166,255,0.28);
     background: rgba(88,166,255,0.10);
@@ -6401,7 +6408,9 @@
   }
   .conv-item:hover:not(.active) .conv-hover-meta-row > * { display: none; }
   .conv-item:hover:not(.active) .conv-hover-meta-row .conv-sidebar-session-id-chip,
-  .conv-item:hover:not(.active) .conv-hover-meta-row .conv-branch-slot { display: inline-flex; }
+  .conv-item:hover:not(.active) .conv-hover-meta-row .conv-branch-slot,
+  .conv-item:hover:not(.active) .conv-hover-meta-row .conv-session-origin-chip.is-parent,
+  .conv-item:hover:not(.active) .conv-hover-meta-row .conv-session-origin-chip.is-grandparent { display: inline-flex; }
   /* Current-sessions rows already surface the full meta row by default; the
      generic one-line hover treatment above would shrink them back to a single
      line and cause a visible height flicker. Keep them in normal two-line flow
