@@ -1,0 +1,1 @@
+- Fixed sidebar conversation-list flicker by skipping full innerHTML rebuilds when only volatile time labels, live status, context percentage, or evergreen tooltips change; these are now patched in place.

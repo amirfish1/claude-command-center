@@ -26802,13 +26802,15 @@
   let _convListRenderSig = null;
 
   // Per-tick volatile time labels in the sidebar rows: the relative "last
-  // activity" stamp (.conv-rel) and the group-chat "when" labels. These tick
-  // every few seconds and, baked into row markup, were the sole driver of the
-  // periodic full-list rebuild flicker. The capture groups are (open-tag,
-  // inner-text, close-tag) so a `$1$3` replace blanks just the text for the
-  // structural signature, and exec() can lift the fresh text for in-place
-  // patching. Leaf spans (no nested tags), so [^<]* for the inner text is safe.
-  const _VOLATILE_TIME_RE = /(<span class="[^"]*\b(?:conv-rel|conv-ingroupchat-row-when|conv-ingroupchat-participant-when)\b[^"]*"[^>]*>)([^<]*)(<\/span>)/g;
+  // activity" stamp (.conv-rel), the group-chat "when" labels, repeat-group
+  // recency, subagent-cluster completed age, COO status age, and worker/queue
+  // ages (cepw/cewf). These tick every few seconds and, baked into row markup,
+  // were drivers of the periodic full-list rebuild flicker. The capture groups
+  // are (open-tag, inner-text, close-tag) so a `$1$3` replace blanks just the
+  // text for the structural signature, and exec() can lift the fresh text for
+  // in-place patching. Leaf spans (no nested tags), so [^<]* for the inner text
+  // is safe.
+  const _VOLATILE_TIME_RE = /(<span class="[^"]*\b(?:conv-rel|conv-ingroupchat-row-when|conv-ingroupchat-participant-when|conv-repeat-group-rel|conv-subagent-completed-age|coo-status-age|cepw-age|cewf-age)\b[^"]*"[^>]*>)([^<]*)(<\/span>)/g;
 
   // The live activity slot (.conv-status-slot) holds the live-tool indicator
   // ("Reading file…" / "Bash command…", with an in-flight class) and the
@@ -26834,10 +26836,17 @@
   // a warn/danger threshold is rare and genuinely worth a real rebuild.
   const _VOLATILE_PCT_RE = /(<span class="conv-pct-badge[^"]*" role="button" tabindex="[^"]*" data-role="conv-pct-compact" data-pct=")([^"]*)(" title=")([^"]*)("\s*>)([^<]*)(<\/span>)/g;
 
+  // Evergreen worker state tooltip embeds the relative "last run" age, which
+  // ticks every minute and was forcing a full sidebar rebuild even though the
+  // visible label ("idle"/"WIP"/"waiting") stayed the same. Blank the tooltip
+  // from the structural signature and patch the title attribute in place.
+  const _VOLATILE_EG_STATE_RE = /(<span class="conv-evergreen-state[^"]*" title=")([^"]*)(")/g;
+
   // Update only the volatile bits (time labels + live status slot + pct
-  // badge) in place from freshly-built markup, leaving the rest of the live
-  // DOM (and its attached handlers) untouched. Called when the structural
-  // signature is unchanged, i.e. only clocks / live activity / context% moved.
+  // badge + evergreen tooltip) in place from freshly-built markup, leaving the
+  // rest of the live DOM (and its attached handlers) untouched. Called when the
+  // structural signature is unchanged, i.e. only clocks / live activity /
+  // context% / evergreen tooltip moved.
   function _patchVolatileTimes(newHtml) {
     const $convList = document.getElementById('convList');
     if (!$convList) return;
@@ -26856,7 +26865,7 @@
       }
     };
     _patchByOrder(_VOLATILE_TIME_RE, 2,
-      'span.conv-rel, span.conv-ingroupchat-row-when, span.conv-ingroupchat-participant-when');
+      'span.conv-rel, span.conv-ingroupchat-row-when, span.conv-ingroupchat-participant-when, span.conv-repeat-group-rel, span.conv-subagent-completed-age, span.coo-status-age, span.cepw-age, span.cewf-age');
     _patchByOrder(_VOLATILE_STATUS_RE, 2, 'span.conv-status-slot');
     const pctVals = [];
     let pm;
@@ -26869,6 +26878,16 @@
         if (el.dataset.pct !== v.pct) el.dataset.pct = v.pct;
         if (el.title !== v.title) el.title = v.title;
         if (el.textContent !== v.text) el.textContent = v.text;
+      }
+    }
+    const egVals = [];
+    let egm;
+    _VOLATILE_EG_STATE_RE.lastIndex = 0;
+    while ((egm = _VOLATILE_EG_STATE_RE.exec(newHtml)) !== null) egVals.push(egm[2]);
+    const egEls = $convList.querySelectorAll('.conv-evergreen-state');
+    if (egEls.length === egVals.length) {
+      for (let i = 0; i < egEls.length; i++) {
+        if (egEls[i].title !== egVals[i]) egEls[i].title = egVals[i];
       }
     }
   }
@@ -28241,9 +28260,10 @@
           : _cs === 'ended' ? ' is-ended'
           : ' is-idle';
         // working/idle get an age suffix; waiting/ended read on their own.
+        // The age is wrapped in its own span so it can be patched in place
+        // without treating the whole COO status chip as volatile (state changes
+        // are rare and should still trigger a real rebuild).
         const _showAge = (_cs === 'working' || _cs === 'idle') && rel;
-        const _label = _showAge ? (_cs + ' · ' + rel) : _cs;
-        const _displayLabel = 'COO · ' + _label;
         const _cooStatusTip = "COO status from Command Center's COO tracker. "
           + (_cs === 'working' ? 'The tracked session is currently working.'
             : _cs === 'waiting' ? 'The tracked session is waiting for input.'
@@ -28252,7 +28272,9 @@
         cooStatusHtml = '<span class="coo-status' + _stateCls
           + '" title="' + escapeAttr(_cooStatusTip)
           + '" aria-label="' + escapeAttr(_cooStatusTip) + '">'
-          + escapeHtml(_displayLabel) + '</span>';
+          + escapeHtml('COO · ' + _cs)
+          + (_showAge ? '<span class="coo-status-age"> · ' + escapeHtml(rel) + '</span>' : '')
+          + '</span>';
       }
       const cooTrackedRowClass = _cooTracked ? ' is-coo-tracked' : '';
 
@@ -28614,7 +28636,10 @@
             const label = _subagentChipLabel(card);
             const ts = card.modified || card.last_interacted || 0;
             const age = ts ? relativeTime(ts) : '';
-            const tip = label + (age ? ' · completed ' + age : '') + (sid ? ' · ' + sid : '');
+            // The visible age is in .conv-subagent-completed-age (patched in
+            // place). Keep the tooltip static so the title attribute doesn't
+            // force a full rebuild every time the age ticks.
+            const tip = label + (sid ? ' · ' + sid : '');
             return '<button type="button" class="conv-subagent-completed-chip"'
               + ' data-subagent-chip-sid="' + escapeAttr(sid) + '" title="' + escapeAttr(tip) + '">'
               + '<span class="conv-subagent-completed-check" aria-hidden="true">&#10003;</span>'
@@ -29323,9 +29348,10 @@
           const _addedSec = flowTimestampSec(d.created_at);
           let _tipAttr = '';
           if (_addedSec) {
-            const _rel = relativeTime(_addedSec);
             const _abs = new Date(_addedSec * 1000).toLocaleString([], { dateStyle: 'medium', timeStyle: 'short' });
-            const _tip = 'Added ' + _abs + (_rel === 'now' ? ' (just now)' : ' (' + _rel + ' ago)');
+            // Keep the tooltip static; relative text ticks and would otherwise
+            // churn the structural signature for draft rows.
+            const _tip = 'Added ' + _abs;
             _tipAttr = ' title="' + escapeAttr(_tip) + '"';
           }
           return '<div class="conv-draft-row" data-draft-id="' + did + '"' + _tipAttr
@@ -31028,7 +31054,8 @@
     const _structSig = _convListHtml
       .replace(_VOLATILE_TIME_RE, '$1$3')
       .replace(_VOLATILE_STATUS_RE, '$1$3')
-      .replace(_VOLATILE_PCT_RE, '$1$3$5$7');
+      .replace(_VOLATILE_PCT_RE, '$1$3$5$7')
+      .replace(_VOLATILE_EG_STATE_RE, '$1$3');
     // Refresh the Subagents rail panel each tick so spawn count + running
     // status reflect the latest /api/sessions data even when the conv-list
     // structure is otherwise unchanged (we short-circuit below in that case).
@@ -37162,7 +37189,7 @@
     const startedAge = Number.isFinite(startedMs)
       ? _uxqFmtAge(Math.max(0, (Date.now() - startedMs) / 1000))
       : '';
-    const meta = [model, startedAge ? ('live ' + startedAge) : ''].filter(Boolean).join(' · ');
+    const meta = [model, startedAge ? 'live ' : ''].filter(Boolean).join(' · ');
     const clickAttrs = sid
       ? ' role="button" tabindex="0" data-fq-worker-sid="' + escapeAttr(sid) + '"'
       : '';
@@ -37172,7 +37199,9 @@
       + ' title="' + escapeAttr(tip) + '">'
       + '<span class="cewf-dot" aria-hidden="true">&#9679;</span>'
       + '<span class="cewf-id">' + escapeHtml(wid.slice(0, 28)) + '</span>'
-      + (meta ? '<span class="wt-worker-session-meta">' + escapeHtml(meta) + '</span>' : '')
+      + (meta ? '<span class="wt-worker-session-meta">' + escapeHtml(meta)
+          + (startedAge ? '<span class="cewf-age">' + escapeHtml(startedAge) + '</span>' : '')
+          + '</span>' : '')
       + (opts && opts.showQueue && queue ? '<span class="cewf-queue">' + escapeHtml(queue) + '</span>' : '')
       + '</div>';
   }

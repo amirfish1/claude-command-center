@@ -3049,7 +3049,8 @@ class TestServerImports(unittest.TestCase):
         """The COO activity badge should explain what creates the status."""
         app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
 
-        self.assertIn("const _displayLabel = 'COO · ' + _label;", app_js)
+        self.assertIn("escapeHtml('COO · ' + _cs)", app_js)
+        self.assertIn("<span class=\"coo-status-age\">", app_js)
         self.assertIn("COO status from Command Center's COO tracker", app_js)
         self.assertIn("aria-label=\"' + escapeAttr(_cooStatusTip) + '\"", app_js)
 
