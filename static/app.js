@@ -28040,10 +28040,13 @@
       } else if (lifecycleContext === 'trash') {
         lifecycleButtons = '<button class="conv-trash-btn is-restore" data-role="untrash" title="Untrash to Archived" aria-label="Untrash to Archived">&#8617;</button>';
       } else if (lifecycleContext === 'all-main') {
+        // CCC-859: worker sessions (Workers tab) can't be trashed -- they're
+        // owned by a WatchTower/Hermes queue, not the user, so "move to
+        // trash" would silently orphan a claimed ticket.
         lifecycleButtons = (c.archived
           ? '<button class="conv-archive-btn is-restore" data-role="archive" data-archived="false" title="Move to Active" aria-label="Move to Active"><span class="conv-archive-glyph">&#8617;</span><span class="conv-archive-label">Active</span></button>'
           : '')
-          + '<button class="conv-trash-btn" data-role="trash" title="Move to Trash" aria-label="Move to Trash">&#128465;</button>';
+          + (opts.hideTrash ? '' : '<button class="conv-trash-btn" data-role="trash" title="Move to Trash" aria-label="Move to Trash">&#128465;</button>');
       } else {
         lifecycleButtons = '<button class="conv-archive-btn" data-role="archive" data-archived="true" title="Archive" aria-label="Archive">&#128229;</button>';
       }
@@ -28497,7 +28500,7 @@
       const groupArchiveAction = opts.lifecycleContext === 'active'
         ? '<button type="button" class="conv-repeat-group-archive" data-role="repeat-row-group-archive" data-session-ids="' + sessionIdsAttr + '" title="Archive ' + cards.length + ' sessions">Archive</button>'
         : '';
-      const groupTrashAction = opts.lifecycleContext === 'all-main'
+      const groupTrashAction = (opts.lifecycleContext === 'all-main' && !opts.hideTrash)
         ? '<button type="button" class="conv-repeat-group-trash" data-role="repeat-row-group-trash" data-session-ids="' + sessionIdsAttr + '" title="Move ' + cards.length + ' sessions to Trash">Trash</button>'
         : '';
       return '<div class="conv-repeat-group' + (expanded ? '' : ' is-collapsed') + '"'
@@ -30643,14 +30646,14 @@
     const _allTabClusterMtime = (cluster) => (cluster.rows || []).reduce((m, item) => Math.max(
       m, item.card.modified || item.card.last_interacted || 0
     ), 0);
-    const _renderAllTabClusters = (clusters, suppressFolderChip) => {
+    const _renderAllTabClusters = (clusters, suppressFolderChip, hideTrash) => {
       const chunks = [];
       let repeatCards = [];
       let repeatKey = null;
       const flushRepeats = () => {
         if (!repeatCards.length) return;
         chunks.push(_renderRowsWithRepeatGroups(repeatCards, {
-          lifecycleContext: 'all-main', suppressFolderChip, goalIconOnly: true
+          lifecycleContext: 'all-main', suppressFolderChip, goalIconOnly: true, hideTrash
         }));
         repeatCards = [];
         repeatKey = null;
@@ -30660,7 +30663,7 @@
         if (cluster.rows.length > 1) {
           flushRepeats();
           chunks.push(_renderSubagentCluster(cluster, {
-            lifecycleContext: 'all-main', suppressFolderChip, goalIconOnly: true
+            lifecycleContext: 'all-main', suppressFolderChip, goalIconOnly: true, hideTrash
           }));
           return;
         }
@@ -30669,7 +30672,7 @@
         if (!key) {
           flushRepeats();
           chunks.push(_renderRow(card, {
-            lifecycleContext: 'all-main', suppressFolderChip, goalIconOnly: true
+            lifecycleContext: 'all-main', suppressFolderChip, goalIconOnly: true, hideTrash
           }));
           return;
         }
@@ -30775,7 +30778,7 @@
         const countWithLiveBadge = collapsed ? (count + _folderGroupLiveBadgeHtml(clusters)) : count;
         return '<div class="conv-folder-group' + (collapsed ? ' collapsed' : '') + '">'
           + _folderGroupHeaderHtml('archived', folder, countWithLiveBadge, hue, orphan, collapseKey, '', archivedRepoPath)
-          + _renderAllTabClusters(clusters, true)
+          + _renderAllTabClusters(clusters, true, _allTabView === 'workers')
           + '</div>';
       }).join('');
       _arcRows = _folderRowsHtml + (_allTabView === 'other'
@@ -30847,7 +30850,7 @@
         const sep = _arcSeparatorBefore(mtime, pinRank);
         _arcChunks.push(sep + _renderRowsWithRepeatGroups(
           _arcCurCards,
-          { lifecycleContext: 'all-main', suppressFolderChip: _isSpecificFolderFilter, goalIconOnly: true }
+          { lifecycleContext: 'all-main', suppressFolderChip: _isSpecificFolderFilter, goalIconOnly: true, hideTrash: _allTabView === 'workers' }
         ));
         _arcCurCards = [];
         _arcCurKey = null;
@@ -30862,7 +30865,7 @@
         if (it.cluster.rows.length > 1) {
           _arcFlushCards();
           const sep = _arcSeparatorBefore(it.mtime, it.pinRank);
-          _arcChunks.push(sep + _renderAllTabClusters([it.cluster], _isSpecificFolderFilter));
+          _arcChunks.push(sep + _renderAllTabClusters([it.cluster], _isSpecificFolderFilter, _allTabView === 'workers'));
           continue;
         }
         const card = it.cluster.rows[0].card;
@@ -30870,7 +30873,7 @@
         if (!key) {
           _arcFlushCards();
           const sep = _arcSeparatorBefore(it.mtime, it.pinRank);
-          _arcChunks.push(sep + _renderRow(card, { lifecycleContext: 'all-main', suppressFolderChip: _isSpecificFolderFilter, goalIconOnly: true }));
+          _arcChunks.push(sep + _renderRow(card, { lifecycleContext: 'all-main', suppressFolderChip: _isSpecificFolderFilter, goalIconOnly: true, hideTrash: _allTabView === 'workers' }));
           continue;
         }
         if (_arcCurKey && _arcCurKey !== key) _arcFlushCards();
@@ -30897,8 +30900,10 @@
     // flat and recency-sorted, in a collapsed-by-default section at the very
     // bottom of the All tab. An active sidebar search force-expands it so
     // matching archived rows aren't invisibly folded away.
+    // CCC-859: the Workers tab has no Trash section -- worker sessions
+    // belong to a queue, not the user, so there's nothing to restore there.
     let _trashHtml = '';
-    {
+    if (_allTabView !== 'workers') {
       const _trashItems = [];
       for (const c of _allTabTrashConvs) {
         _trashItems.push({
