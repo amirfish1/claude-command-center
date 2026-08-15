@@ -13346,8 +13346,11 @@ class TestRepoContextHelpers(unittest.TestCase):
         self.assertEqual(result["engine"], "antigravity")
         self.assertEqual(result["repo_path"], str(self.repo))
         self.assertEqual(result["cwd"], str(self.repo))
-        self.assertRegex(result["session_id"], r"^[0-9a-f-]{36}$")
-        self.assertFalse(result["session_id_pending"])
+        # A new AGY print run cannot be assigned an arbitrary ID: AGY only
+        # accepts --conversation for a session it already owns. The real ID
+        # arrives asynchronously once the CLI persists it.
+        self.assertIsNone(result["session_id"])
+        self.assertTrue(result["session_id_pending"])
         settings = json.loads(settings_path.read_text())
         self.assertEqual(settings["model"], "Gemini 3.5 Flash (High)")
         self.assertEqual(settings["colorScheme"], "dark")

@@ -43188,9 +43188,8 @@ def find_antigravity_conversations(
             "context_limit": ag_limit,
         })
     # Synthesize stub rows for live AGY spawns whose JSONL transcript hasn't
-    # materialized on disk yet. AGY allocates the conversation uuid up front
-    # (spawn_session_antigravity passes --conversation <uuid>), but the brain
-    # dir / transcript.jsonl can take several seconds to appear. Without this,
+    # materialized on disk yet. AGY may need several seconds to expose its own
+    # conversation ID and brain transcript. Without this,
     # an agent that spawned a sibling AGY session would not see the new row in
     # the conv list until that file landed — defeating the spawn_registry_count
     # ping that's supposed to surface spawns within ~5s.
@@ -44613,9 +44612,6 @@ def spawn_session_antigravity(prompt, name=None, cwd=None, repo_path=None, workt
     cmd = _antigravity_command_words(resolved)
     user_args = cmd[1:]
     
-    session_id = str(uuid.uuid4())
-    brain_dir = None
-
     if (
         os.environ.get("CCC_ANTIGRAVITY_SKIP_PERMISSIONS", "1").strip().lower()
         not in ("0", "false", "no", "off")
@@ -44633,7 +44629,6 @@ def spawn_session_antigravity(prompt, name=None, cwd=None, repo_path=None, workt
     if not _antigravity_has_arg(user_args, "--print-timeout"):
         cmd.extend(["--print-timeout", _antigravity_print_timeout()])
 
-    cmd.extend(["--conversation", session_id])
     cmd.extend(["-p", prompt])
 
     log_fh = open(log_path, "w")
@@ -44659,11 +44654,6 @@ def spawn_session_antigravity(prompt, name=None, cwd=None, repo_path=None, workt
         except OSError:
             pass
         log_fh.close()
-        if brain_dir:
-            try:
-                shutil.rmtree(brain_dir, ignore_errors=True)
-            except OSError:
-                pass
         detail = _antigravity_read_log_tail(log_path, max_bytes=4000).strip()
         first_line = next((line.strip() for line in detail.splitlines() if line.strip()), "")
         return {
@@ -44687,7 +44677,6 @@ def spawn_session_antigravity(prompt, name=None, cwd=None, repo_path=None, workt
         "fifo": None,
         "stdin_fd": None,
         "engine": "antigravity",
-        "session_id": session_id,
         "cwd": spawn_cwd,
         "repo_path": repo_for_logs,
         "model": model_to_use,
@@ -44703,7 +44692,6 @@ def spawn_session_antigravity(prompt, name=None, cwd=None, repo_path=None, workt
         command_summary=prompt[:200],
         fifo=None,
         engine="antigravity",
-        session_id=session_id,
         repo_path=repo_for_logs,
         model=model_to_use,
         parent_session_id=parent_session_id,
@@ -44719,7 +44707,10 @@ def spawn_session_antigravity(prompt, name=None, cwd=None, repo_path=None, workt
     if worktree_path:
         resp["worktree_path"] = worktree_path
         resp["worktree_branch"] = worktree_branch
-    return _finalize_spawn_response(resp, entry, ctx, wait_for_session_id=False)
+    # AGY's --conversation option only resumes an existing conversation.  A
+    # generated UUID here is not durable state, so wait briefly for AGY's real
+    # session ID instead of returning a fabricated, unresumable one.
+    return _finalize_spawn_response(resp, entry, ctx)
 
 
 def _resume_session_antigravity_app(session_id, text):

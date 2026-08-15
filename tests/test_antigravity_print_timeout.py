@@ -83,6 +83,15 @@ def _spawn_with_mocked_popen(server_mod, tmp_path, extra_env=None):
 
 
 class TestSpawnCommand:
+    def test_spawn_does_not_invent_a_resume_only_conversation_id(self, server_mod, tmp_path):
+        """AGY's --conversation flag resumes an existing conversation only."""
+        result, cmd = _spawn_with_mocked_popen(server_mod, tmp_path)
+
+        assert result["ok"]
+        assert "--conversation" not in cmd
+        assert result["session_id"] is None
+        assert result["session_id_pending"] is True
+
     def test_spawn_passes_print_timeout(self, server_mod, tmp_path):
         result, cmd = _spawn_with_mocked_popen(server_mod, tmp_path)
         assert result["ok"]
