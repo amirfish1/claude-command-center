@@ -48748,7 +48748,15 @@ def _detect_claude_usage_limit_stop(session_id, path):
     return None
 
 
-_USAGE_LIMIT_CANDIDATE_WINDOW_SECS = 20 * 60  # only tail-scan recently-touched files
+# A stopped session's mtime freezes the moment it stops -- a short window
+# only catches a stop while the watcher happens to already be polling right
+# then. Anything already stuck (or the watcher restarting after the fact)
+# ages out of a short window and is never discovered. 24h is still bounded
+# (each candidate is a cheap 32KB tail read, not a full parse; observed on
+# this machine: ~160 kimi cache files total, ~20 codex rollouts/day, ~769
+# claude transcripts/day) and covers "stuck since earlier today", which is
+# the actual failure mode reported (CCC-863 follow-up).
+_USAGE_LIMIT_CANDIDATE_WINDOW_SECS = 24 * 3600
 
 
 def _usage_limit_kimi_candidates(now):
