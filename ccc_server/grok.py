@@ -167,9 +167,20 @@ def _grok_content_text(content):
 def _grok_event_role_text(ev):
     """(role, text) for one line of a Grok ACP updates.jsonl or a raw
     chat_history.jsonl — role is 'user' | 'assistant' | 'tool' | ''.
-    Unknown shapes return ('', '') and are skipped by callers."""
+    Unknown shapes return ('', '') and are skipped by callers.
+
+    Newer Grok Build releases wrap each line in a JSON-RPC envelope
+    (`{"method": "session/update", "params": {"update": {...}}}`) instead of
+    writing the session-update fields at the top level; unwrap that before
+    looking for `sessionUpdate`/`role`, or every line reads as unrecognized
+    and the session shows as EMPTY despite having a full transcript."""
     if not isinstance(ev, dict):
         return "", ""
+    if "sessionUpdate" not in ev and "role" not in ev:
+        params = ev.get("params")
+        update = params.get("update") if isinstance(params, dict) else None
+        if isinstance(update, dict):
+            ev = update
     kind = str(ev.get("sessionUpdate") or "").lower()
     if kind:
         if "user" in kind:
