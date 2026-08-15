@@ -27848,6 +27848,17 @@
         && (_antigravityHasOpenTool
           || (!!(c.last_event_type === 'user' || c.last_event_type === 'assistant')
             && _rowActivityAge < _OPEN_TURN_FRESH_S));
+      // CCC-861: kimi rows had isKimiRow computed but never fed an open-turn
+      // flag, so _isAgentRunning stayed false for a live kimi session and
+      // the row time fell back to stale last_interacted/modified instead of
+      // reading "now" — a live session showed "1h ago".
+      const _kimiHasOpenTool = isKimiRow && !c.sidecar_status && !!c.pending_tool;
+      const _kimiOpenTurn = isKimiRow
+        && c.is_live
+        && !c.sidecar_status
+        && (_kimiHasOpenTool
+          || (!!(c.last_event_type === 'user' || c.last_event_type === 'assistant')
+            && _rowActivityAge < _OPEN_TURN_FRESH_S));
       // _isWip = "the session is actually doing something right now". The
       // gh_in_progress flag (linked GitHub issue carries the
       // claude-in-progress label) is NOT a liveness signal — the label
@@ -27894,6 +27905,7 @@
         || _geminiOpenTurn
         || _cursorOpenTurn
         || _antigravityOpenTurn
+        || _kimiOpenTurn
         || _claudeWipFromSidecar
         || _isOptimisticallySending;
       // Final sanity gate: if the agent's last event was a `result`
@@ -27939,7 +27951,7 @@
         const wipTitle = _knownActivityTool
           ? ((c.sidecar_in_flight ? 'Currently running' : 'Last known tool') + ': ' + _knownActivityTool)
           : (isCodexRow ? 'Codex is working' : (isGeminiRow ? 'Gemini is working' : (isCursorRow ? 'Cursor is working' : (isAntigravityRow ? 'Antigravity is working' : 'Agent is working'))));
-        const wipLabel = (_codexOpenTurn || _codexStateWorking || _geminiOpenTurn || _cursorOpenTurn || _antigravityOpenTurn) ? 'WIP' : (_knownActivityTool || 'WIP');
+        const wipLabel = (_codexOpenTurn || _codexStateWorking || _geminiOpenTurn || _cursorOpenTurn || _antigravityOpenTurn || _kimiOpenTurn) ? 'WIP' : (_knownActivityTool || 'WIP');
         signals += '<span class="conv-signal activity-working" title="' + escapeHtml(wipTitle) + '">' + escapeHtml(wipLabel) + '</span>';
       } else if (c.gh_in_progress && !liveToolHtml) {
         // Calmer "issue is in progress" chip — distinct from live WIP so
