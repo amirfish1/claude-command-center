@@ -138,6 +138,39 @@ def _is_grok_session(session_id):
         con.close()
 
 
+def grok_session_cwd(session_id):
+    """cwd for a Grok CLI session (variant-A dir bucket or variant-B db row),
+    or None. Used by server.py's find_session_cwd — without this, a Grok
+    session with no live spawn-registry entry has no cwd resolution path at
+    all, so "Launch" fails with "could not derive repo context"."""
+    sid = _grok_sid_ok(session_id)
+    if not sid:
+        return None
+    session_dir = _grok_session_dir(sid)
+    if session_dir is not None:
+        cwd = _grok_decode_bucket_cwd(session_dir.parent)
+        if cwd:
+            return cwd
+    con = _grok_db_connect()
+    if con is None:
+        return None
+    try:
+        cols = {r["name"] for r in con.execute("PRAGMA table_info(sessions)")}
+        if "id" not in cols:
+            return None
+        cwd_col = _core._copilot_first_col(cols, ("cwd_at_start", "cwd_last", "cwd"))
+        if not cwd_col:
+            return None
+        row = con.execute(
+            f"SELECT {cwd_col} AS cwd FROM sessions WHERE id=? LIMIT 1", (sid,)
+        ).fetchone()
+        return str(row["cwd"]).strip() if row and row["cwd"] else None
+    except sqlite3.Error:
+        return None
+    finally:
+        con.close()
+
+
 def _grok_content_text(content):
     """Pull text out of a Grok/ACP content payload: a plain string, a
     {type: "text", text: ...} part, a list of parts, or a nested message

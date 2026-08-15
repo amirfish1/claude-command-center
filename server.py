@@ -21222,6 +21222,12 @@ def find_session_cwd(session_id):
             cwd = _resolve_session_cwd(session_id, cwd)
             _session_cwd_cache[session_id] = cwd
             return cwd
+    if _is_grok_session(session_id):
+        cwd = grok_session_cwd(session_id)
+        if cwd:
+            cwd = _resolve_session_cwd(session_id, cwd)
+            _session_cwd_cache[session_id] = cwd
+            return cwd
     if not PROJECTS_ROOT.is_dir():
         return None
 
