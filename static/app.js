@@ -54224,6 +54224,10 @@
         // The row's "done" chip ages from this — mtime lags real turn-end for
         // engines whose transcript isn't the row's `modified` source.
         last_event_ts: c.last_event_ts || 0,
+        // CCC-863: the epoch a usage-limit-stopped session auto-resumes at.
+        // Same allowlist trap as session_state/auto_titled above — drops
+        // silently if not named here.
+        usage_limit_resume_at: typeof c.usage_limit_resume_at === 'number' ? c.usage_limit_resume_at : null,
         needs_approval: !!c.needs_approval,
         needs_approval_message: c.needs_approval_message || '',
         question_waiting: !!c.question_waiting,
