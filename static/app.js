@@ -20967,6 +20967,7 @@
     '[data-role="nya-collapse"]',
     '[data-role="subagent-cluster-toggle"]',
     '.conv-title-input',
+    '.conv-session-origin-chip[data-parent-sid]',
   ].join(',');
   let _mobileRowTap = null;
   let _lastMobileRowOpenId = '';
@@ -27270,13 +27271,14 @@
         label = '\u21b3 ' + parentTitle;
         title = 'Spawned by ' + parentTitle + ' (' + parentId + ') \u2014 click to open it';
         className = ' is-parent';
-        // Only wire up navigation when the parent row is actually resolvable
-        // (its data has to be loaded in this render for selectConversation
-        // to find it) \u2014 an id we can't resolve to a title also can't be
-        // safely jumped to.
-        if (_sessionProvenanceById.has(parentId)) {
-          chipAttrs = ' role="button" tabindex="0" data-parent-sid="' + escapeAttr(parentId) + '"';
-        }
+        // CCC-852: always wire up navigation, even when the parent row isn't
+        // loaded in THIS render's lists yet (e.g. an archived/old session
+        // outside the current lane or page). selectConversation() accepts a
+        // raw session id and loads it from scratch \u2014 same path the
+        // WatchTower "Open CCC" deep link uses \u2014 so gating this on
+        // _sessionProvenanceById silently made the chip look clickable but
+        // do nothing for exactly the sessions users most wanted to reach.
+        chipAttrs = ' role="button" tabindex="0" data-parent-sid="' + escapeAttr(parentId) + '"';
       } else {
         const threadSource = String(c.thread_source || '').trim().toLowerCase();
         if (threadSource === 'ccc') {
