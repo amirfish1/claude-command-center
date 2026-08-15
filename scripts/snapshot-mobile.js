@@ -1,8 +1,8 @@
 // Mobile-viewport variant of snapshot.js for verifying phone layout changes.
 // Usage: SNAPSHOT_OUT=before-mobile.png node snapshot-mobile.js
 const path = require('path');
-const puppeteer = require('./require-puppeteer.js');
-const { findChromePath } = require('./puppeteer-browser-config.js');
+const puppeteer = require('../require-puppeteer.js');
+const { findChromePath } = require('../puppeteer-browser-config.js');
 
 (async () => {
   const url = process.env.SNAPSHOT_URL || 'http://127.0.0.1:8090';

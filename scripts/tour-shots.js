@@ -5,7 +5,7 @@
 // Server should be a fresh-install CCC (empty HOME) started separately.
 const fs = require('fs');
 const path = require('path');
-const puppeteer = require('./require-puppeteer.js');
+const puppeteer = require('../require-puppeteer.js');
 
 function findChromePath() {
   if (process.env.SNAPSHOT_CHROME) return process.env.SNAPSHOT_CHROME;
@@ -20,7 +20,7 @@ function findChromePath() {
 }
 
 const URL = process.env.SHOTS_URL || 'http://127.0.0.1:8199';
-const OUT = path.join(__dirname, 'docs', 'first-flight-shots');
+const OUT = path.join(__dirname, '..', 'docs', 'first-flight-shots');
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 async function cardTitle(page) {

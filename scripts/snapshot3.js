@@ -1,4 +1,4 @@
-const puppeteer = require('./require-puppeteer.js');
+const puppeteer = require('../require-puppeteer.js');
 
 (async () => {
   const browser = await puppeteer.launch();
