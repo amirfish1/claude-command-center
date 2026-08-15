@@ -3161,6 +3161,25 @@
     if (newestContinuation && newestContinuation !== sid) return newestContinuation;
     const edge = _continuationEdges[sid];
     if (edge && String(edge.continued_from || '').trim() === parentId) return '';
+    // CCC-860: the localStorage edge above only knows about continuations
+    // recorded in THIS browser. When "Continue in a new session" happened
+    // elsewhere (another window/device/app-shell), the server-reported
+    // parent_session_id still points a continuation session at the OLD
+    // session it replaced -- which buries the newer, more relevant session
+    // as a collapsed "subagent" of the one it continued from, instead of
+    // showing it as its own row. Detect that shape directly: a continuation
+    // session's own first_message always embeds "Origin session id:
+    // <parentId>" (see f2RetrievalPrompt); a genuinely spawned subagent's
+    // never does.
+    if (parentId) {
+      try {
+        const rows = (typeof conversationsData !== 'undefined' && Array.isArray(conversationsData))
+          ? conversationsData : [];
+        const self = rows.find(r => String((r && (r.session_id || r.id)) || '').trim() === sid);
+        const fm = self && self.first_message;
+        if (fm && fm.indexOf('Origin session id: ' + parentId) !== -1) return '';
+      } catch (_) {}
+    }
     return parentId;
   }
 
