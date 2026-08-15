@@ -30566,35 +30566,18 @@
     const _allTabCodingConvs = _allTabConvs.filter(c => _allTabLaneFor(c) === 'coding');
     const _allTabWorkerConvs = _allTabConvs.filter(c => _allTabLaneFor(c) === 'workers');
     const _allTabHermesMessageConvs = _allTabConvs.filter(c => _allTabLaneFor(c) === 'messages');
-    const _allTabUnfilteredLanes = new Set(
-      _allTabUnfilteredConvs.map(c => _allTabLaneFor(c))
-    );
-    const _savedAllTabView = (() => {
-      try {
-        const v = localStorage.getItem('ccc-all-hermes-tab');
-        return (v === 'workers' || v === 'messages' || v === 'group-chats') ? v : 'coding';
-      } catch (_) { return 'coding'; }
-    })();
-    const _allTabHasLaneOverride = _allTabUnfilteredConvs.some(c => !!_allTabLaneOverride(c));
-    const _allTabHasHermesSplit = (
-      _allTabHasLaneOverride
-      || _allTabUnfilteredLanes.has('workers')
-      || _allTabUnfilteredLanes.has('messages')
-      || _allTabGroupChatItems.length > 0
-      || _savedAllTabView !== 'coding'
-    );
-    const _allTabGroupChatView = _savedAllTabView === 'group-chats' ? 'group-chats' : _savedAllTabView;
     // CCC-778: the top-level Coding/Workers tabs (shown instead of Issues/
     // Queues when "Show issues and queues as separate tabs" is off) are just
-    // the All tab pre-filtered to that lane, regardless of the nested
-    // Hermes-split tab's own saved state.
+    // the All tab pre-filtered to that lane.
     const _topLevelLaneOverride = _sidebarTab === 'coding' ? 'coding' : _sidebarTab === 'workers' ? 'workers' : null;
-    const _allTabView = _topLevelLaneOverride || (_allTabHasHermesSplit ? _allTabGroupChatView : 'coding');
-    const _allTabMainConvs = (_allTabHasHermesSplit && _allTabView === 'workers')
+    // CCC-851: Coding and Workers sessions now live exclusively under their
+    // own top-level tabs, so the old "All" tab (renamed "Other") no longer
+    // needs a nested Coding/Workers/Messages/Group-chats filter -- it always
+    // shows the leftover lanes (Hermes messages + group chats) together.
+    const _allTabView = _topLevelLaneOverride || 'other';
+    const _allTabMainConvs = _allTabView === 'workers'
       ? _allTabWorkerConvs
-      : ((_allTabHasHermesSplit && _allTabView === 'messages')
-        ? _allTabHermesMessageConvs
-        : (_allTabView === 'group-chats' ? [] : _allTabCodingConvs));
+      : (_allTabView === 'coding' ? _allTabCodingConvs : _allTabHermesMessageConvs);
     const _allTabTreeRows = _allTabTreeRowsFor(_allTabMainConvs);
     const _allTabRowsToClusters = (rows) => {
       const clusters = [];
@@ -30747,7 +30730,7 @@
           + _renderAllTabClusters(clusters, true)
           + '</div>';
       }).join('');
-      _arcRows = _folderRowsHtml + (_allTabView === 'group-chats'
+      _arcRows = _folderRowsHtml + (_allTabView === 'other'
         ? _allTabGroupChatItems.map(it => it.allHtml || it.html).join('') + _mainArchivedGroupChats.map(gc => _renderArchivedGcRow(gc, 'all-main')).join('')
         : '');
       _arcCount = _allTabConvs.length + _archivedGroupChatsForRender.length + _allTabGroupChatItems.length + _allTabTrashConvs.length;
@@ -30765,7 +30748,7 @@
       // Archived group chats live in the Trash section (CCC-468).
       // Active/paused/closed (unarchived) group chats still interleave here
       // so they appear in the All view, not just in Current Sessions.
-      if (_allTabView === 'group-chats') {
+      if (_allTabView === 'other') {
         for (const gci of _allTabGroupChatItems) {
           _archivedItems.push({ pinRank: Infinity, mtime: gci.mtime || 0, html: gci.allHtml || gci.html });
         }
@@ -30855,28 +30838,12 @@
     }
     const _allTabTotalCount = _allTabConvs.length + _archivedGroupChatsForRender.length + _allTabGroupChatItems.length + _allTabTrashConvs.length;
     _arcCount = _allTabTotalCount;
-    // CCC-780: the nested Coding/Workers/Messages/Group-chats filter bar is
-    // redundant (and confusing) when we're already inside the top-level
-    // Coding or Workers tab — that tab IS the filter. Only show it on the
-    // actual All tab.
-    const _allHermesTabBarHtml = (_allTabHasHermesSplit && !_topLevelLaneOverride)
-      ? '<div class="conv-all-hermes-tabs" data-role="all-hermes-tabs" role="tablist" aria-label="All Hermes lanes">'
-        + '<button type="button" class="conv-all-hermes-tab' + (_allTabView === 'coding' ? ' is-active' : '') + '" data-all-hermes-tab="coding" role="tab" aria-selected="' + (_allTabView === 'coding') + '" title="Drop a session here to show it under Coding">'
-        +   'Coding<span class="conv-tab-count">' + _allTabCodingConvs.length + '</span>'
-        + '</button>'
-        + '<button type="button" class="conv-all-hermes-tab' + (_allTabView === 'workers' ? ' is-active' : '') + '" data-all-hermes-tab="workers" role="tab" aria-selected="' + (_allTabView === 'workers') + '" title="Drop a session here to show it under Workers">'
-        +   'Workers<span class="conv-tab-count">' + _allTabWorkerConvs.length + '</span>'
-        + '</button>'
-        + ((_allTabHermesMessageConvs.length === 0 && _allTabView !== 'messages') ? '' :
-          '<button type="button" class="conv-all-hermes-tab' + (_allTabView === 'messages' ? ' is-active' : '') + '" data-all-hermes-tab="messages" role="tab" aria-selected="' + (_allTabView === 'messages') + '" title="Drop a session here to show it under Messages">'
-          +   'Messages<span class="conv-tab-count">' + _allTabHermesMessageConvs.length + '</span>'
-          + '</button>')
-        + ((_allTabGroupChatCount === 0 && _allTabView !== 'group-chats') ? '' :
-          '<button type="button" class="conv-all-hermes-tab' + (_allTabView === 'group-chats' ? ' is-active' : '') + '" data-all-hermes-tab="group-chats" role="tab" aria-selected="' + (_allTabView === 'group-chats') + '">'
-          +   'Group chats<span class="conv-tab-count">' + _allTabGroupChatCount + '</span>'
-          + '</button>')
-        + '</div>'
-      : '';
+    // CCC-851: the nested Coding/Workers/Messages/Group-chats filter bar is
+    // gone -- Coding and Workers now only ever show under their own
+    // top-level tabs, and the "Other" tab (née All) always shows the
+    // remaining lanes (messages + group chats) together, so there is
+    // nothing left to filter.
+    const _allHermesTabBarHtml = '';
 
     // Trash section (CCC-468): archived sessions + archived group chats,
     // flat and recency-sorted, in a collapsed-by-default section at the very
@@ -30915,9 +30882,7 @@
           + '</div>';
       }
     }
-    // The Group chats lane is a dedicated chat list. Keep the general All
-    // view's mixed session/chat Trash section out of it.
-    const _trashHtmlForAllTabView = _allTabView === 'group-chats' ? '' : _trashHtml;
+    const _trashHtmlForAllTabView = _trashHtml;
 
     if (_allTabUnfilteredCount > 0) {
       const _arcGroupingToggle = _arcHasFolderChips && !_isSpecificFolderFilter
@@ -30992,24 +30957,29 @@
         + _trashHtmlForAllTabView
         + '</div>';
     }
-    // Tabs (CCC-85): Active / All / GH Issues / WatchTower queues
+    // Tabs (CCC-85): Active / Other / GH Issues / WatchTower queues
     // are tabs now, one section visible at a time. Search result rows
     // (id/repo search) always render above the active tab's content.
     // CCC-778: "Show issues and queues as separate tabs" (default off) gates
     // whether Issues/Queues get their own top-level tabs, or Coding/Workers
-    // (the All tab, pre-filtered to that lane) stand in for them instead.
+    // (the Other tab, pre-filtered to that lane) stand in for them instead.
+    // CCC-851: "Other" (née All) holds only the leftover lanes -- Hermes
+    // messages + group chats -- since Coding/Workers sessions now live
+    // exclusively under their own top-level tabs. Hidden entirely when empty.
+    const _otherTabCount = _allTabGroupChatCount + _allTabHermesMessageConvs.length;
+    const _otherTabDef = ['archived', 'Other', _otherTabCount];
     const _tabDefs = getSeparateTabsPref()
       ? [
         ['inprogress', 'Active', ((_openAskConvs && _openAskConvs.length) || 0) + ((_visibleSessionConvs && _visibleSessionConvs.length) || 0) + ((_gcItems && _gcItems.length) || 0)],
         ['issues', 'Issues', (_ghIssueConvs && _ghIssueConvs.length) || 0],
         ['queues', 'Queues', ((_uxqHealthCache && _uxqHealthCache.queues) || []).length],
-        ['archived', 'All', _arcCount || 0],
+        ...(_otherTabCount > 0 ? [_otherTabDef] : []),
       ]
       : [
         ['inprogress', 'Active', ((_openAskConvs && _openAskConvs.length) || 0) + ((_visibleSessionConvs && _visibleSessionConvs.length) || 0) + ((_gcItems && _gcItems.length) || 0)],
         ['coding', 'Coding', _allTabCodingConvs.length],
         ['workers', 'Workers', _allTabWorkerConvs.length],
-        ['archived', 'All', _arcCount || 0],
+        ...(_otherTabCount > 0 ? [_otherTabDef] : []),
       ];
     const _tabBarHtml = '<div class="conv-tab-bar" data-role="conv-tab-bar">'
       + _tabDefs.map(([k, label, n]) =>
@@ -31321,11 +31291,14 @@
         _refreshArchiveWindow(value);
       });
     }
-    const $allHermesTabs = $convList.querySelector('[data-role="all-hermes-tabs"]');
-    if ($allHermesTabs) {
+    // CCC-851: dragging a session onto the top-level Coding or Workers tab
+    // header moves it into that lane (mirrors the old nested Coding/Workers/
+    // Messages/Group-chats filter bar's drop targets, now gone).
+    const $laneTabBar = $convList.querySelector('[data-role="conv-tab-bar"]');
+    if ($laneTabBar) {
       const laneLabel = (lane) => lane === 'workers' ? 'Workers' : (lane === 'messages' ? 'Messages' : 'Coding');
       const clearTabDropTargets = () => {
-        $allHermesTabs.querySelectorAll('.conv-all-hermes-tab').forEach(tab => tab.classList.remove('is-drop-target'));
+        $laneTabBar.querySelectorAll('.conv-tab').forEach(tab => tab.classList.remove('is-drop-target'));
       };
       const rowForAllLaneId = (id) => {
         if (!id) return null;
@@ -31401,40 +31374,33 @@
           : 'Moved ' + rows.length + ' sessions to ' + laneLabel(lane));
         renderArchiveList(document.getElementById('convSearch')?.value || '', { force: true });
       };
-      $allHermesTabs.addEventListener('click', (ev) => {
-        ev.stopPropagation();
-        const opt = ev.target.closest('[data-all-hermes-tab]');
-        if (!opt) return;
-        const raw = opt.getAttribute('data-all-hermes-tab');
-        const value = raw === 'workers' || raw === 'messages' || raw === 'group-chats' ? raw : 'coding';
-        try { localStorage.setItem('ccc-all-hermes-tab', value); } catch (_) {}
-        renderArchiveList(document.getElementById('convSearch')?.value || '');
-      });
-      $allHermesTabs.addEventListener('dragover', (ev) => {
+      const _laneDropTarget = (ev) => {
+        const opt = ev.target.closest('[data-conv-tab]');
+        if (!opt) return null;
+        const lane = opt.getAttribute('data-conv-tab');
+        return (lane === 'coding' || lane === 'workers') ? { opt, lane } : null;
+      };
+      $laneTabBar.addEventListener('dragover', (ev) => {
         if (!dragSourceId) return;
-        const opt = ev.target.closest('[data-all-hermes-tab]');
-        if (!opt) return;
-        if (opt.getAttribute('data-all-hermes-tab') === 'group-chats') return;
+        const target = _laneDropTarget(ev);
+        if (!target) return;
         ev.preventDefault();
         try { ev.dataTransfer.dropEffect = 'move'; } catch (_) {}
         clearTabDropTargets();
-        opt.classList.add('is-drop-target');
+        target.opt.classList.add('is-drop-target');
       });
-      $allHermesTabs.addEventListener('dragleave', (ev) => {
-        const opt = ev.target.closest('[data-all-hermes-tab]');
+      $laneTabBar.addEventListener('dragleave', (ev) => {
+        const opt = ev.target.closest('[data-conv-tab]');
         if (opt && !opt.contains(ev.relatedTarget)) opt.classList.remove('is-drop-target');
       });
-      $allHermesTabs.addEventListener('drop', (ev) => {
+      $laneTabBar.addEventListener('drop', (ev) => {
         if (!dragSourceId) return;
-        const opt = ev.target.closest('[data-all-hermes-tab]');
-        if (!opt) return;
-        if (opt.getAttribute('data-all-hermes-tab') === 'group-chats') return;
+        const target = _laneDropTarget(ev);
+        if (!target) return;
         ev.preventDefault();
         ev.stopPropagation();
-        const raw = opt.getAttribute('data-all-hermes-tab');
-        const lane = raw === 'workers' || raw === 'messages' ? raw : 'coding';
         clearTabDropTargets();
-        assignAllLaneFromDrop(ev, lane);
+        assignAllLaneFromDrop(ev, target.lane);
       });
     }
     const $archivedExpandAll = $convList.querySelector('[data-role="archived-expand-all"]');

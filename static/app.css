@@ -7970,6 +7970,35 @@
       padding: 7px 10px;
       font-size: 13px;
     }
+    /* On a phone the two-column new-session strip squishes the folder path
+       so only the first few directories show. Stack object/chips/cwd/worktree
+       vertically and let the folder input fill the full width. */
+    .conv-input-context.visible.is-new-session {
+      grid-template-columns: 1fr;
+      grid-template-areas:
+        "object"
+        "chips"
+        "cwd"
+        "worktree";
+    }
+    .conv-input-context.is-new-session .new-session-object-context,
+    .conv-input-context.is-new-session .nso-combo,
+    .conv-input-context.is-new-session .spawn-cwd-row,
+    .conv-input-context.is-new-session .spawn-cwd-combo {
+      width: 100%;
+      max-width: none;
+    }
+    .conv-input-context.is-new-session .nso-combo { display: flex; }
+    .conv-input-context.is-new-session .spawn-cwd-picker {
+      width: auto;
+      flex: 1 1 auto;
+      min-width: 0;
+      max-width: none;
+      box-sizing: border-box;
+    }
+    .conv-input-context.is-new-session .spawn-worktree-row {
+      justify-self: start;
+    }
   }
 
   /* ── Goal #5: tighten message + status row vertical rhythm ────────────────
@@ -19847,6 +19876,12 @@ body:has(.gc-reader) .pwa-install-banner {
   color: var(--accent, #58a6ff);
   border-bottom-color: var(--accent, #58a6ff);
 }
+.conv-tab.is-drop-target {
+  color: var(--text);
+  background: rgba(88,166,255,0.14);
+  outline: 2px dashed var(--accent, #58a6ff);
+  outline-offset: -2px;
+}
 .conv-tab-count {
   font-size: 10px; padding: 1px 6px; border-radius: 999px;
   background: rgba(139,148,158,0.18); color: var(--text-muted);
@@ -19877,47 +19912,6 @@ body:has(.gc-reader) .pwa-install-banner {
   padding: 0 8px 10px;
   border-top: 0;
   background: transparent;
-}
-.conv-all-hermes-tabs {
-  display: inline-flex;
-  gap: 2px;
-  margin: 2px 8px 8px;
-  padding: 2px;
-  border: 1px solid var(--border);
-  border-radius: 6px;
-  background: var(--bg);
-}
-.conv-all-hermes-tab {
-  border: 0;
-  background: transparent;
-  color: var(--text-muted);
-  border-radius: 4px;
-  padding: 4px 8px;
-  font-size: 11px;
-  font-weight: 600;
-  display: inline-flex;
-  align-items: center;
-  gap: 5px;
-  cursor: pointer;
-  white-space: nowrap;
-}
-.conv-all-hermes-tab:hover {
-  color: var(--text);
-  background: var(--surface-2);
-}
-.conv-all-hermes-tab.is-drop-target {
-  color: var(--text);
-  background: rgba(88,166,255,0.14);
-  outline: 2px dashed var(--accent, #58a6ff);
-  outline-offset: -2px;
-}
-.conv-all-hermes-tab.is-active {
-  color: var(--text);
-  background: color-mix(in srgb, var(--accent, #58a6ff) 18%, transparent);
-}
-.conv-all-hermes-tab.is-active .conv-tab-count {
-  background: color-mix(in srgb, var(--accent, #58a6ff) 22%, transparent);
-  color: var(--accent, #58a6ff);
 }
 /* Section headers double as collapse toggles; inside a tab the section
    label is redundant with the tab itself but harmless — keep for tools
@@ -23826,6 +23820,27 @@ a.settings-row:focus-visible .settings-launcher-btn { text-decoration: underline
   .f2c-panel .route { transition: none !important; }
 }
 
+/* ── Mobile: keep the Continue-new pill from shoving TTS/mic/send off-screen.
+   The pill is flattened into .conv-input-buttons via display:contents; without
+   an explicit min-width it refuses to shrink and forces the whole button row
+   past the viewport edge. Let the pill and its label/model chip compress, and
+   allow the button cluster itself to shrink rather than staying flex-shrink:0. */
+@media (max-width: 1200px) {
+  .conv-input-buttons { flex: 0 1 auto; min-width: 0; }
+  .conv-input-buttons .route {
+    min-width: 0;
+    flex: 0 1 auto;
+  }
+  .conv-input-buttons .route-main { min-width: min(70px, 20vw); flex: 1 1 auto; }
+  .conv-input-buttons .route-name { min-width: 0; }
+  .conv-input-buttons .f2c-chip {
+    flex: 0 0 auto;
+    min-width: 0;
+    max-width: min(90px, 24vw);
+  }
+  .conv-input-buttons .f2c-chip-label { min-width: 0; }
+}
+
 /* The desktop status rail becomes the top status layout on mobile. Its
    content is re-parented by _applyStatusRailLayout when the breakpoint
    changes, so the rail never consumes phone-width conversation space. */
@@ -24104,8 +24119,6 @@ a.q2-toggle-opt:hover { color: var(--text); background: var(--surface-2); }
 
   .conv-tab-bar { padding: 3px 4px 0; margin-bottom: 3px; }
   .conv-tab { padding: 4px 3px 5px; }
-  .conv-all-hermes-tabs { margin: 1px 4px 4px; padding: 1px; }
-  .conv-all-hermes-tab { padding: 3px 6px; }
   #convList .conv-inprogress-toolbar { padding: 3px 6px; gap: 4px; }
 
   .sidebar-footer { padding: 3px 6px; }
