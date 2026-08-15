@@ -11692,6 +11692,79 @@
     }
   }
 
+  // CCC-863: unattended usage/rate-limit auto-resume countdown. When a
+  // session's row carries `usage_limit_resume_at` (set server-side by the
+  // usage-limit watcher after it detects a "STOPPED - NO TOKENS REMAINING"
+  // class of stop for claude/codex/kimi), show a live "RESUMING IN
+  // HH:MM:SS" banner above that session's composer. No manual "Resume"
+  // button by design -- the server sends the literal "continue" itself the
+  // moment the countdown reaches zero. Self-contained polling (does not
+  // hook into every row-render call site) so it works across every open
+  // pane regardless of which refresh path last touched conversationsData.
+  function _usageLimitFormatCountdown(seconds) {
+    const s = Math.max(0, Math.round(seconds));
+    const h = Math.floor(s / 3600);
+    const m = Math.floor((s % 3600) / 60);
+    const sec = s % 60;
+    return String(h).padStart(2, '0') + ':' + String(m).padStart(2, '0') + ':' + String(sec).padStart(2, '0');
+  }
+  function _usageLimitRowForSession(sid) {
+    if (!sid) return null;
+    if (Array.isArray(conversationsData)) {
+      const r = conversationsData.find((c) => c.session_id === sid || c.id === sid);
+      if (r) return r;
+    }
+    if (typeof archiveData !== 'undefined' && Array.isArray(archiveData)) {
+      return archiveData.find((c) => c.session_id === sid || c.id === sid) || null;
+    }
+    return null;
+  }
+  function syncUsageLimitCountdowns() {
+    try {
+      document.querySelectorAll('.conv-pane[data-pane-id]').forEach((pane) => {
+        const paneId = pane.dataset.paneId;
+        let sid = null;
+        if (paneId && typeof paneByPaneId === 'function') {
+          const st = paneByPaneId(paneId);
+          sid = st && st.conversationId;
+        }
+        if (!sid && currentSession) sid = currentSession.id;
+        const inputBar = pane.querySelector('.conv-input-bar');
+        if (!inputBar) return;
+        const row = _usageLimitRowForSession(sid);
+        const resumeAt = row && typeof row.usage_limit_resume_at === 'number'
+          ? row.usage_limit_resume_at : null;
+        let banner = inputBar.querySelector('.usage-limit-resume-banner');
+        // Defensive staleness cutoff (independent of the server's own):
+        // never let a countdown sit frozen past zero forever client-side.
+        const stale = resumeAt && (resumeAt * 1000 <= Date.now() - 5 * 60 * 1000);
+        if (!resumeAt || stale) {
+          if (banner) banner.remove();
+          return;
+        }
+        if (!banner) {
+          banner = document.createElement('div');
+          banner.className = 'usage-limit-resume-banner';
+          banner.setAttribute('role', 'status');
+          inputBar.prepend(banner);
+        }
+        banner.dataset.resumeAt = String(resumeAt);
+      });
+    } catch (e) { /* best-effort UI only */ }
+  }
+  function _tickUsageLimitCountdowns() {
+    document.querySelectorAll('.usage-limit-resume-banner').forEach((banner) => {
+      const resumeAt = parseFloat(banner.dataset.resumeAt || '0');
+      if (!resumeAt) { banner.remove(); return; }
+      const remaining = resumeAt - Date.now() / 1000;
+      banner.textContent = remaining > 0
+        ? 'RESUMING IN ' + _usageLimitFormatCountdown(remaining)
+        : 'Resuming…';
+    });
+  }
+  setInterval(syncUsageLimitCountdowns, 5000);
+  setInterval(_tickUsageLimitCountdowns, 1000);
+
   // Delegated toggle for compact-resume cards — one listener handles
   // every card past, present, and future without per-render wiring.
   document.addEventListener('click', (ev) => {
