@@ -1,0 +1,1 @@
+Stopped re-polling GitHub for PRs in terminal states. MERGED pull requests are now cached permanently and CLOSED ones for a day, instead of re-checking every PR in your history every 5 minutes — this was single-handedly burning ~4,000 of the account's 5,000/hour GraphQL quota and could lock out all GitHub access with a rate-limit banner.

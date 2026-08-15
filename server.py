@@ -7121,8 +7121,10 @@ _ARCHIVE_PILLS_RECENT_WINDOW = 3 * 86400
 # PR state cache for the sidebar's "Ready to merge" bucket. Without this,
 # every session that ever ran `gh pr create` sticks in "Ready to merge"
 # forever — even after the PR is merged or closed. We cache the resolved
-# state ("OPEN"/"MERGED"/"CLOSED") per PR URL with a short TTL so the
-# bucket reflects reality without paying gh-network cost on every refresh.
+# state ("OPEN"/"MERGED"/"CLOSED") per PR URL with a TTL so the bucket
+# reflects reality without paying gh-network cost on every refresh. OPEN
+# entries expire quickly (a merge should show up within minutes); terminal
+# states are cached (near-)permanently — see the TTL constants below.
 # Keyed by full PR URL because two sessions can refer to the same PR; the
 # cache is shared across them.
 _PR_STATE_CACHE = {}
@@ -7130,6 +7132,13 @@ _PR_STATE_LOCK = threading.Lock()
 _PR_STATE_TTL = 300  # 5 minutes — short enough to catch a merge, long
 # enough that the dashboard's ~10s refresh cadence doesn't fan out to gh.
 _PR_STATE_FAILURE_TTL = 30  # Retry gh failures soon; don't pin stale RTM rows.
+# Terminal states: MERGED is immutable, so never re-query (10y ≈ forever —
+# JSON can't encode inf). A CLOSED-unmerged PR can be reopened, so re-check
+# those daily instead of permanently. Before this split, every historical PR
+# was re-polled every 5 min: ~85 URLs × 4 GraphQL pts each ≈ 4k pts/hr
+# against the account's 5k/hr quota.
+_PR_STATE_MERGED_TTL = 10 * 365 * 24 * 3600
+_PR_STATE_CLOSED_TTL = 24 * 3600
 
 
 def _github_pull_api_path(pr_url):
@@ -7203,12 +7212,20 @@ def _get_pr_state(pr_url):
                     state = _valid_pr_state(r.stdout)
             except (subprocess.SubprocessError, OSError):
                 state = None
+    if state == "MERGED":
+        ttl = _PR_STATE_MERGED_TTL
+    elif state == "CLOSED":
+        ttl = _PR_STATE_CLOSED_TTL
+    elif state:
+        ttl = _PR_STATE_TTL
+    else:
+        ttl = _PR_STATE_FAILURE_TTL
     with _PR_STATE_LOCK:
         _PR_STATE_CACHE[pr_url] = {
             "state": state,
             "at": now,
             "ts": now,
-            "ttl": _PR_STATE_TTL if state else _PR_STATE_FAILURE_TTL,
+            "ttl": ttl,
         }
     _persist_gh_cache("pr_states", _PR_STATE_CACHE)
     return state
