@@ -48609,6 +48609,163 @@ def _tail_read_lines(path, max_bytes=32768):
     return [ln for ln in (l.strip() for l in lines) if ln]
 
 
+# ---------------------------------------------------------------------------
+# Auto-resume continuation policy: a stopped session with a small context
+# just gets "continue" sent back in-place. One whose context is large gets
+# the same "Continue in a new session" treatment as the manual button
+# (f2RunContinue, static/app.js ~3058) instead -- resuming a huge context
+# in-place unattended just re-triggers the same slow/expensive reload the
+# manual flow exists to avoid. Same model/effort as the origin session,
+# parent_session_id set so CCC's continuation-lineage UI (CCC-860) treats
+# it as a continuation, not an unrelated spawn.
+# ---------------------------------------------------------------------------
+_USAGE_LIMIT_CONTEXT_THRESHOLD = 120_000
+
+_USAGE_LIMIT_ENGINE_LOCATE = {
+    "claude": (
+        "Claude",
+        "Its transcript is a JSONL under ~/.claude/projects/. Locate it with:",
+        lambda sid: f"  ls ~/.claude/projects/*/{sid}.jsonl",
+    ),
+    "codex": (
+        "Codex",
+        "Its transcript is a rollout JSONL under ~/.codex/sessions/. Locate it with:",
+        lambda sid: f'  find ~/.codex/sessions -name "*{sid}.jsonl"',
+    ),
+    "kimi": (
+        "Kimi",
+        "Its transcript path is recorded in ~/.kimi-code/session_index.jsonl. Locate it with:",
+        lambda sid: f"  grep {sid} ~/.kimi-code/session_index.jsonl",
+    ),
+}
+
+
+def _usage_limit_row_for_session(sid, engine=None):
+    """One-shot conversation-row lookup by session id, from the same cached
+    archive rows every other view reads (no fresh scan). Rare call -- once
+    per newly-detected exhaustion stop, not a hot path. Kimi rows carry
+    CCC's own "session_" display prefix on session_id (see CCC-861's
+    lookup-side normalization fix); codex/claude ids never do -- try both
+    so this works regardless of engine."""
+    try:
+        rows, _ = _archive_all_rows_cached({})
+    except Exception:
+        return None
+    sid = str(sid or "")
+    candidates = {sid, "session_" + sid}
+    for r in rows or []:
+        if not isinstance(r, dict):
+            continue
+        rid = str(r.get("session_id") or r.get("id") or "")
+        if rid in candidates:
+            return r
+    return None
+
+
+def _usage_limit_context_tokens(engine, path, row):
+    """Best-available "current context size" estimate. Claude/codex rows
+    already carry a live per-turn figure (live_context_tokens /
+    latest_input_tokens -- the same fields the composer's own large-context
+    gate reads, static/app.js ~2767 _contextFieldsFromRow). Kimi never
+    populates those (its tail meta only tracks turn-shape, not tokens) --
+    fall back to the last assistant event's own token_usage on the same
+    normalized cache file already tailed for detection, which is exactly
+    what feeds each message's token chip (_apply_kimi_turn_usage)."""
+    if engine == "kimi":
+        for line in reversed(_tail_read_lines(path)):
+            try:
+                ev = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            if ev.get("type") != "assistant":
+                continue
+            usage = ev.get("token_usage")
+            if isinstance(usage, dict):
+                return (
+                    int(usage.get("input_tokens") or 0)
+                    + int(usage.get("cache_read_input_tokens") or 0)
+                    + int(usage.get("cache_creation_input_tokens") or 0)
+                )
+            tin = ev.get("tokens_in")
+            if isinstance(tin, (int, float)):
+                return int(tin)
+        return int((row or {}).get("lifetime_tokens") or 0)
+    return max(
+        int((row or {}).get("live_context_tokens") or 0),
+        int((row or {}).get("latest_input_tokens") or 0),
+    )
+
+
+def _usage_limit_attach_continuation_fields(found, session_id, path):
+    """Called once at detection time by each _detect_*_usage_limit_stop, so
+    the fire-time decision (in-place "continue" vs spawn a new session) and
+    the new session's own model/effort/cwd never need a second, possibly
+    stale, row lookup hours later when resume_at finally arrives."""
+    engine = found.get("engine")
+    row = _usage_limit_row_for_session(session_id, engine=engine) or {}
+    found["context_tokens"] = _usage_limit_context_tokens(engine, path, row)
+    found["model"] = row.get("model") or None
+    found["effort"] = row.get("reasoning_effort") or None
+    found["cwd"] = row.get("session_cwd") or row.get("folder_path") or None
+    found["display_name"] = row.get("display_name") or row.get("ai_title") or None
+    return found
+
+
+def _usage_limit_retrieval_prompt(engine, sid, context_tokens):
+    """Python port of f2RetrievalPrompt's large-context branch (static/
+    app.js ~3058) -- must run unattended with no browser, so this can't
+    call the client's own function. Only that one branch is needed: this
+    is only ever called once context_tokens has already cleared
+    _USAGE_LIMIT_CONTEXT_THRESHOLD, so worthSelectiveRetrieval is always
+    true here. Kept in sync with the JS version by hand."""
+    label, note, cmd_fn = _USAGE_LIMIT_ENGINE_LOCATE.get(
+        engine, _USAGE_LIMIT_ENGINE_LOCATE["claude"]
+    )
+    tokens_label = f"{context_tokens / 1000:.0f}k" if context_tokens >= 1000 else str(context_tokens)
+    lines = [
+        f"You are continuing a task from an earlier {label} session, which ran long.",
+        "",
+        f"Origin session id: {sid}",
+        note,
+        cmd_fn(sid),
+        "",
+        "Task: Continue the work from where it left off. This session was",
+        "auto-resumed after hitting a usage-limit wall; there is no new",
+        "instruction beyond continuing.",
+        "",
+        "Retrieve context SELECTIVELY. Never open or Read the whole transcript",
+        f"(it is ~{tokens_label} tokens). Pull only the slice you need:",
+        '  - Total Recall:  total-recall recall --query "<terms>" --limit 10',
+        "  - grep/rg the transcript for specific strings",
+        "  - tail the transcript for the most recent turns",
+        "",
+        "Load the minimum slice that answers the task, then proceed.",
+    ]
+    return "\n".join(lines)
+
+
+def _usage_limit_spawn_continuation(entry, sid):
+    """Server-side equivalent of the manual "Continue in a new session"
+    button's spawn (f2RunContinue, static/app.js ~3175) for the unattended
+    auto-resume path. Same model/effort as the origin session (captured at
+    detection time by _usage_limit_attach_continuation_fields), same cwd,
+    parent_session_id set for continuation lineage."""
+    engine = entry.get("engine")
+    prompt = _usage_limit_retrieval_prompt(engine, sid, entry.get("context_tokens") or 0)
+    cwd = entry.get("cwd")
+    name = "Continue " + str(entry.get("display_name") or sid)[:60]
+    model = entry.get("model") or None
+    effort = entry.get("effort") or None
+    kwargs = dict(name=name, cwd=cwd, repo_path=cwd, parent_session_id=sid, model=model)
+    if engine == "kimi":
+        return spawn_session_kimi(prompt, effort=effort, **kwargs)
+    if engine == "codex":
+        return spawn_session_codex(prompt, reasoning_effort=effort or "", **kwargs)
+    if engine == "claude":
+        return spawn_session(prompt, reasoning_effort=effort or "", **kwargs)
+    return None
+
+
 def _detect_kimi_usage_limit_stop(session_id, path):
     """Tail `path` (CCC's normalized kimi cache, session_<id>.jsonl) for the
     most recent exhaustion stop. Real fixture confirmed on this machine:
@@ -48651,13 +48808,13 @@ def _detect_kimi_usage_limit_stop(session_id, path):
                 estimated = False
         except Exception:
             pass
-        return {
+        return _usage_limit_attach_continuation_fields({
             "engine": "kimi",
             "detected_at": detected_at,
             "resume_at": resume_at,
             "resume_at_estimated": estimated,
             "source_text_snippet": err[:200],
-        }
+        }, session_id, path)
     return None
 
 
@@ -48717,13 +48874,13 @@ def _detect_codex_usage_limit_stop(session_id, path):
             estimated = False
         if resume_at is None:
             resume_at = detected_at + 5 * 3600
-        return {
+        return _usage_limit_attach_continuation_fields({
             "engine": "codex",
             "detected_at": detected_at,
             "resume_at": resume_at,
             "resume_at_estimated": estimated,
             "source_text_snippet": (msg or info)[:200],
-        }
+        }, session_id, path)
     return None
 
 
@@ -48768,13 +48925,13 @@ def _detect_claude_usage_limit_stop(session_id, path):
         else:
             resume_at = detected_at + 5 * 3600
             estimated = True
-        return {
+        return _usage_limit_attach_continuation_fields({
             "engine": "claude",
             "detected_at": detected_at,
             "resume_at": resume_at,
             "resume_at_estimated": estimated,
             "source_text_snippet": blob[:200],
-        }
+        }, session_id, path)
     return None
 
 
@@ -48920,14 +49077,30 @@ def _usage_limit_scan_once(now=None):
         if not _mark_usage_limit_resume_fired(sid):
             continue  # a sibling thread/process won the race
         try:
-            _inject_text_into_session(
-                sid, "continue", mode="send", source="usage-limit-watcher",
-            )
-            _log_activity(
-                "usage-limit-resume", "AUTO-RESUME",
-                f"session={sid} engine={entry.get('engine')} "
-                f"resume_at={resume_at}",
-            )
+            context_tokens = entry.get("context_tokens") or 0
+            if context_tokens > _USAGE_LIMIT_CONTEXT_THRESHOLD:
+                # Large context: same treatment as the manual "Continue in a
+                # new session" button instead of resuming a huge context
+                # in-place unattended (CCC-863 follow-up, explicit product
+                # decision -- same model/effort as the origin, captured at
+                # detection time).
+                result = _usage_limit_spawn_continuation(entry, sid)
+                new_sid = (result or {}).get("session_id") or (result or {}).get("id")
+                _log_activity(
+                    "usage-limit-resume", "AUTO-RESUME-NEW-SESSION",
+                    f"session={sid} engine={entry.get('engine')} "
+                    f"context_tokens={context_tokens} resume_at={resume_at} "
+                    f"new_session={new_sid} ok={(result or {}).get('ok')}",
+                )
+            else:
+                _inject_text_into_session(
+                    sid, "continue", mode="send", source="usage-limit-watcher",
+                )
+                _log_activity(
+                    "usage-limit-resume", "AUTO-RESUME",
+                    f"session={sid} engine={entry.get('engine')} "
+                    f"resume_at={resume_at}",
+                )
         except Exception:
             pass
 
