@@ -6402,6 +6402,27 @@
   .conv-item:hover:not(.active) .conv-hover-meta-row > * { display: none; }
   .conv-item:hover:not(.active) .conv-hover-meta-row .conv-sidebar-session-id-chip,
   .conv-item:hover:not(.active) .conv-hover-meta-row .conv-branch-slot { display: inline-flex; }
+  /* Current-sessions rows already surface the full meta row by default; the
+     generic one-line hover treatment above would shrink them back to a single
+     line and cause a visible height flicker. Keep them in normal two-line flow
+     while hovered. (CCC-843) */
+  .conv-current-sessions-scroll:not(.is-search-results) .conv-item:hover .conv-hover-meta-row {
+    position: static;
+    right: auto;
+    top: auto;
+    transform: none;
+    margin: 4px 48px 0 var(--conv-content-left);
+    max-width: calc(100% - var(--conv-content-left) - 70px);
+    justify-content: flex-start;
+    background: transparent;
+    padding-left: 0;
+    z-index: auto;
+  }
+  .conv-current-sessions-scroll:not(.is-search-results) .conv-item:hover .conv-hover-meta-row .conv-meta-inline,
+  .conv-current-sessions-scroll:not(.is-search-results) .conv-item:hover .conv-hover-meta-row .conv-branch-slot,
+  .conv-current-sessions-scroll:not(.is-search-results) .conv-item:hover .conv-hover-meta-row .conv-object-chip,
+  .conv-current-sessions-scroll:not(.is-search-results) .conv-item:hover .conv-hover-meta-row .conv-folder-chip,
+  .conv-current-sessions-scroll:not(.is-search-results) .conv-item:hover .conv-hover-meta-row .conv-repo-pin { display: inline-flex; }
   .conv-item .conv-meta-inline .sep { opacity: 0.4; }
   .conv-item .conv-rel {
     /* Time chip — bumped 10 → 11.5px for legibility (Omnara's looks
