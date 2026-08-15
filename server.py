@@ -48548,8 +48548,18 @@ def usage_limit_resume_at_for_session(session_id):
     """Cheap in-memory lookup for the row-serialization path: the epoch a
     stopped session will auto-resume at, or None if it isn't tracked, is
     already fired, or the time has passed (stale defensive cutoff so a
-    countdown never sits frozen forever if the watcher missed a beat)."""
-    entry = _load_usage_limit_resumes().get(str(session_id or ""))
+    countdown never sits frozen forever if the watcher missed a beat).
+
+    Row session_id for kimi always carries CCC's own "session_" display
+    prefix (e.g. "session_1a72..."), but the durable store's kimi entries
+    are keyed by the bare id (matching the kimi cache filename convention
+    stripped in _usage_limit_kimi_candidates / rebuilt in
+    _usage_limit_session_path) -- strip it here so the two agree. Codex/
+    claude ids never carry this prefix, so this is a no-op for them."""
+    sid = str(session_id or "")
+    if sid.startswith("session_"):
+        sid = sid[len("session_"):]
+    entry = _load_usage_limit_resumes().get(sid)
     if not entry or entry.get("fired"):
         return None
     resume_at = entry.get("resume_at")
