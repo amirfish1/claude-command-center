@@ -65625,6 +65625,7 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                         worktree=bool(payload.get("worktree")),
                         model=model,
                         reasoning_effort=reasoning_effort,
+                        parent_session_id=payload.get("parent_session_id"),
                     )
                     # Resolver-side failures (binary not found, CCC_CODEX_BIN
                     # misconfigured) carry a stable `"code": "codex_unavailable"`
