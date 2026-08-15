@@ -60935,6 +60935,7 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                     rows = [r for r in rows if (r.get("engine") or r.get("source") or "").lower() == engine_filter]
                     spawned = [r for r in spawned if (r.get("engine") or "").lower() == engine_filter]
                 rows = _apply_session_query_params(rows, qs)
+                _attach_usage_limit_resume_fields(rows)
                 payload = {
                     "ok": True,
                     "sessions": rows,
@@ -60960,7 +60961,13 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                 progress=True,
             )
             _save_conv_meta_cache()
-            self.send_json(_apply_session_query_params(rows, qs))
+            rows = _apply_session_query_params(rows, qs)
+            # CCC-863 follow-up: this is the endpoint loadConversationList()
+            # actually calls to populate conversationsData -- the field was
+            # only wired into /api/conversations, a different endpoint the
+            # frontend's main session list doesn't use.
+            _attach_usage_limit_resume_fields(rows)
+            self.send_json(rows)
         elif path == "/api/conversations":
             qs = urllib.parse.parse_qs(parsed.query)
             if qs.get("all", ["0"])[0] in ("1", "true"):
