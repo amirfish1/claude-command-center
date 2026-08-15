@@ -37837,7 +37837,7 @@ def _acp_maybe_attach_on_view(harness, sid):
     if not cwd and harness == "grok":
         session_dir = _grok_session_dir(sid)
         if session_dir is not None:
-            cwd = _grok_decode_bucket_cwd(session_dir.parent.name) or ""
+            cwd = _grok_decode_bucket_cwd(session_dir.parent) or ""
     # Viewed sessions are watched for TUI-originated turns (KIMI-FIXES-3) —
     # independent of whether an attach/backfill is needed this process.
     with _ACP_LOCK:
@@ -37918,7 +37918,7 @@ def _acp_ensure_session_loaded(harness, sid):
     if not cwd and harness == "grok":
         session_dir = _grok_session_dir(sid)
         if session_dir is not None:
-            cwd = _grok_decode_bucket_cwd(session_dir.parent.name) or ""
+            cwd = _grok_decode_bucket_cwd(session_dir.parent) or ""
     if not cwd:
         return {"ok": False, "error": "session cwd unknown — cannot attach", "code": "no_cwd"}
     attached = _acp_load(harness, sid, cwd)
