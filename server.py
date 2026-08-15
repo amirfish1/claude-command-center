@@ -37729,6 +37729,18 @@ def _acp_load(harness, sid, cwd):
     resp = _acp_request(harness, method, {
         "sessionId": sid, "cwd": cwd, "mcpServers": [],
     }, timeout=30, sid=sid)
+    # A dormant harness session can be mid-write from another live consumer
+    # of its own on-disk store (e.g. a native TUI the user has open outside
+    # CCC) right as we attach — the harness's own resume handler can trip
+    # over that half-written state and return a transient, cryptic error
+    # (observed: a Grok internal TypeError string). One quiet retry after a
+    # short beat covers the common case instead of surfacing a raw crash
+    # message the user has to notice and manually resend around (CCC-853).
+    if not resp.get("ok") and not resp.get("auth_required"):
+        time.sleep(0.75)
+        resp = _acp_request(harness, method, {
+            "sessionId": sid, "cwd": cwd, "mcpServers": [],
+        }, timeout=30, sid=sid)
     with _ACP_LOCK:
         state = _acp_session(harness, sid, create=True, cwd=cwd)
         replay = state.get("replay")
