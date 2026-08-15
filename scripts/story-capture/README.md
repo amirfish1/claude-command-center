@@ -107,3 +107,14 @@ Useful extra keys: `ccc-sidebar-width`, `ccc-status-rail-collapsed`,
   `window._historyIndexStatus = {exists: true}` before typing.
 - Chrome for Testing v149 crashes on screenshot on macOS ARM; the harness
   prefers installed Chrome/Chrome Beta (same as snapshot.js, OPS-4).
+- The sidebar's default archive window is 7d; the demo fixtures have fixed
+  timestamps and age out of it within a week, leaving an empty board. The
+  CLEAN seed pins `ccc-archive-window: 'all'` — keep that key in every seed.
+- FIRST FLIGHT auto-starts on fresh installs; CLEAN also pins
+  `ccc-tour-done: '1'`.
+- The sidebar reads `/api/conversations/list` (projected fields), not
+  `/all`. `docs/demo/api/conversations/list.json` is generated from
+  `all.json` through server.py's `_ARCHIVE_LIST_FIELDS` allowlist —
+  regenerate it when `all.json` changes:
+  project each conversation to the allowlisted keys and wrap as
+  `{ok, conversations, count, total_count, window: "all", fields, cached}`.

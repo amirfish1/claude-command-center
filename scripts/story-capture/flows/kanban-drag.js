@@ -10,22 +10,14 @@
 //            --out docs/product-story/assets/video/V-06-kanban-drag.mp4 \
 //            --poster docs/product-story/assets/video/posters/V-06.png
 'use strict';
+const { BOARD } = require('./_seeds.js');
 
 module.exports = {
   path: '/static/index.html?demo=1',
   fixtureBase: '/docs/demo/api',
   lead: 1600,
   tail: 1600,
-  localStorage: {
-    'ccc-last-seen-version': 'demo',
-    'ccc-whats-new-dismissed-version': 'demo',
-    'ccc-pwa-install-dismissed': '9999999999999',
-    'ccc-telemetry-bar-dismissed': '1',
-    'ccc-session-view': 'board',
-    'ccc-kanban-view': 'true',
-    'ccc-sidebar-width': '1020',
-    'ccc-status-rail-collapsed': '1',
-  },
+  localStorage: BOARD,
   async run(ctx) {
     const iceCard = '#kanbanBoard .kanban-column[data-col="icebox"] .kanban-card';
     const workCol = '#kanbanBoard .kanban-column[data-col="working"]';

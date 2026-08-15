@@ -33,23 +33,131 @@ Try the read-only demo first: [ccc.amirfish.ai/demo](https://ccc.amirfish.ai/dem
 
 ## See CCC at work
 
-**Scan every coding-agent session, then open the one that needs you.**
+<table>
+<tr>
+<td width="50%" valign="middle">
 
-<video src="docs/product-story/assets/video/V-01-fleet-scan.mp4" controls muted width="100%" poster="docs/product-story/assets/video/posters/V-01.png">
-  Your browser doesn't support inline video. <a href="docs/product-story/assets/video/V-01-fleet-scan.mp4">Watch the fleet scan</a>.
-</video>
+### One board, eight engines
 
-**Organize projects and sessions on the Flow canvas.**
+Every **Claude Code**, **Codex**, **Cursor**, **Antigravity**, **Kilo Code**, **Kimi Code**, **OpenCode**, and **Devin** session lands on one board — however you launched it. CCC reads each engine's on-disk state, so even sessions you started by hand in a terminal show up.
 
-<video src="docs/product-story/assets/video/V-07-flow-canvas.mp4" controls muted width="100%" poster="docs/product-story/assets/video/posters/V-07.png">
-  Your browser doesn't support inline video. <a href="docs/product-story/assets/video/V-07-flow-canvas.mp4">Watch the Flow canvas</a>.
-</video>
+</td>
+<td width="50%">
+  <img src="docs/images/feature-wall/fleet-scan.gif" alt="CCC scanning every coding-agent session onto one board" width="100%" />
+</td>
+</tr>
+<tr>
+<td width="50%">
+  <img src="docs/images/feature-wall/kanban-drag.gif" alt="Dragging a session card across the CCC kanban" width="100%" />
+</td>
+<td width="50%" valign="middle">
 
-**Move work across the kanban, then jump into its session.**
+### Kanban that knows the state
 
-<video src="docs/product-story/assets/video/V-06-kanban-drag.mp4" controls muted width="100%" poster="docs/product-story/assets/video/posters/V-06.png">
-  Your browser doesn't support inline video. <a href="docs/product-story/assets/video/V-06-kanban-drag.mp4">Watch the kanban workflow</a>.
-</video>
+Backlog → Planning → Working → Review → Verified. Columns are derived from real session state — live? commits? pushed? — and overridable by drag.
+
+</td>
+</tr>
+<tr>
+<td width="50%" valign="middle">
+
+### Flow canvas & Project tree
+
+Group sessions under named, nestable Flow objects — a hierarchical map of your day's work, with a live "Current sessions" triage band riding on top.
+
+</td>
+<td width="50%">
+  <img src="docs/images/feature-wall/flow-canvas.gif" alt="Organizing sessions on the CCC Flow canvas" width="100%" />
+</td>
+</tr>
+<tr>
+<td width="50%">
+  <img src="docs/images/feature-wall/split-pane.gif" alt="Two agent transcripts side by side in CCC" width="100%" />
+</td>
+<td width="50%" valign="middle">
+
+### Split conversations
+
+Drag any session onto the edge of an open transcript to read two agents side by side — each pane keeps its own input bar.
+
+</td>
+</tr>
+<tr>
+<td width="50%" valign="middle">
+
+### Find anything, from any session
+
+Full-text search across your entire session history, built in and zero-setup — with an optional semantic mode for when you can't remember the words you used.
+
+</td>
+<td width="50%">
+  <img src="docs/images/feature-wall/search.gif" alt="Searching across session history in CCC" width="100%" />
+</td>
+</tr>
+<tr>
+<td width="50%">
+  <img src="docs/images/feature-wall/group-chat.gif" alt="Three agent sessions coordinating in a CCC group chat" width="100%" />
+</td>
+<td width="50%" valign="middle">
+
+### Sessions that coordinate without you
+
+Group chats keep two sessions on one goal in sync — post once and every participant is pinged, instead of you relaying output between terminals.
+
+</td>
+</tr>
+<tr>
+<td width="50%" valign="middle">
+
+### Issue → session → verify
+
+Start a session from a GitHub issue in one click; verifying closes the issue with a commit-SHA comment. The whole pipeline lives on the board.
+
+</td>
+<td width="50%">
+  <img src="docs/images/feature-wall/issue-to-session.gif" alt="Starting a session from a GitHub issue in CCC" width="100%" />
+</td>
+</tr>
+<tr>
+<td width="50%">
+  <img src="docs/images/feature-wall/attention.gif" alt="The CCC card that needs your approval, flagged in the Waiting column" width="100%" />
+</td>
+<td width="50%" valign="middle">
+
+### Tells you which session needs you
+
+Approvals, questions, and blocked ends are read straight from the transcript and surfaced as a needs-you signal — scan one column instead of nine terminals.
+
+</td>
+</tr>
+<tr>
+<td width="50%" valign="middle">
+
+### Work from anywhere
+
+The whole fleet on your phone — monitor sessions, answer agents, and steer from anywhere on your trusted network. Loopback by default, never the open internet.
+
+</td>
+<td width="50%" align="center">
+  <img src="docs/images/feature-wall/mobile.gif" alt="CCC session list and transcript on a phone screen" width="46%" />
+</td>
+</tr>
+</table>
+
+**Also in the box:**
+
+- **Cost-aware cold-session composer** — ranked cheaper routes (continue fresh on a lower tier, search history) instead of a blind expensive resume.
+- **FIRST FLIGHT tour** — a spotlight walkthrough on first run, replayable any time from Settings.
+- **Settings modal** — instant search (Cmd/Ctrl+,), keyboard navigation, per-section reset.
+- **Plan-to-fleet** — import a plan or mission brief into a WatchTower queue and drain it with workers.
+- **Fresh worktree spawns** — launch a session in `<repo>-wt/<slug>/` on `feat/<slug>`, with optional init scripts.
+- **Headless spawn with follow-up** — `claude -p` sessions you keep talking to from the browser, no terminal needed.
+- **Resume-on-demand** — messaging a dormant session auto-spawns a headless resume to deliver it.
+- **Auto-fix deploys** — polls Vercel, spawns a `/fix-deploy` session on new production errors.
+- **AI-assisted titles** — regenerate a card's title via `claude -p` (Haiku by default).
+- **Workers that specialize over time** — queues carry a shared learnings file each worker reads before and writes after, via [WatchTower](https://github.com/amirfish1/watchtower).
+- **Orchestration skill + 12-skill pack** — one Claude session can spawn, inject into, and synchronously ask sibling sessions over plain HTTP.
+- **Usage tracking** — your pace against plan limits, per engine, before you hit the wall.
 
 All captures use seeded demo data.
 

@@ -8,6 +8,12 @@ const CLEAN = {
   'ccc-whats-new-dismissed-version': 'demo',
   'ccc-pwa-install-dismissed': '9999999999999',
   'ccc-telemetry-bar-dismissed': '1',
+  // FIRST FLIGHT tour auto-starts on fresh installs; suppress for captures.
+  'ccc-tour-done': '1',
+  // The demo fixtures have fixed July timestamps; the default 7d archive
+  // window filters them all out once the fixtures age past a week. 'all'
+  // keeps every seeded row visible regardless of capture date.
+  'ccc-archive-window': 'all',
 };
 
 // Kanban board view in a widened sidebar, right utilities rail collapsed.
