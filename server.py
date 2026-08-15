@@ -48614,7 +48614,17 @@ def _detect_kimi_usage_limit_stop(session_id, path):
     most recent exhaustion stop. Real fixture confirmed on this machine:
     session_15de1a69-ee07-4a22-ba60-63561a5d544f.jsonl line 271. Kimi's own
     error text carries no parseable reset time ("refreshed in the next
-    cycle") -- per explicit product decision, resume_at = stop_ts + 5h."""
+    cycle") -- but CCC already tracks the real one, zero-config, via the
+    same usages-API mechanism that powers the Throughput page's Kimi
+    provider (_read_kimi_usage(), ccc_server/recall_usage.py): it reads the
+    access token kimi-code CLI already manages at
+    ~/.kimi-code/credentials/kimi-code.json (no separate setup), fetches
+    https://api.kimi.com/coding/v1/usages, and falls back to the last
+    persisted usage-snapshots.jsonl entry on failure. `session` in its
+    return shape IS the 5h (300-minute) window with a precise `resets_at`.
+    Prefer that; only fall back to stop_ts+5h if the fetch/cache fails or
+    returns a resets_at that isn't even after the stop (a stale snapshot
+    from a PRIOR exhaustion cycle, not this one)."""
     for line in reversed(_tail_read_lines(path)):
         try:
             ev = json.loads(line)
@@ -48631,11 +48641,21 @@ def _detect_kimi_usage_limit_stop(session_id, path):
         if dt is None:
             return None
         detected_at = dt.timestamp()
+        resume_at = detected_at + 5 * 3600
+        estimated = True
+        try:
+            session_window = (_read_kimi_usage() or {}).get("session") or {}
+            resume_dt = _stats_parse_ts(session_window.get("resets_at"))
+            if resume_dt is not None and resume_dt.timestamp() > detected_at:
+                resume_at = resume_dt.timestamp()
+                estimated = False
+        except Exception:
+            pass
         return {
             "engine": "kimi",
             "detected_at": detected_at,
-            "resume_at": detected_at + 5 * 3600,
-            "resume_at_estimated": True,
+            "resume_at": resume_at,
+            "resume_at_estimated": estimated,
             "source_text_snippet": err[:200],
         }
     return None
