@@ -3433,7 +3433,7 @@
           + '<button type="button" class="route-main" data-f2-open-continuation data-target-sid="'
           + escapeAttr(continuedInto) + '" title="Open the session this was continued into">'
           + '<span class="route-glyph" aria-hidden="true">&#8617;</span>'
-          + '<span class="route-name">Continued in new session</span>'
+          + '<span class="route-name">Go to newer session (' + escapeHtml(shortSessionId(continuedInto)) + ')</span>'
           + '</button></div></div>';
         // CCC-844: typing here reads as picking up work that already moved.
         // Lock the composer instead of just showing a rail above it, and
