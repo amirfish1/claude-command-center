@@ -8275,8 +8275,9 @@
                       : 'Steer needs a live headless, Codex, or Kimi session')));
       }
       // Compact button — only for compaction-capable open sessions (Claude
-      // AND Codex). cursor/gemini/antigravity return compact_unsupported_engine
-      // server-side, so we don't show it for them. Clicking runs the same path
+      // AND Codex). cursor/gemini/antigravity/kimi return
+      // compact_unsupported_engine server-side, so we don't show it for them.
+      // Clicking runs the same path
       // as typing /compact (routed via postRunCompactForSession).
       if (activeCompactBtn) {
         const canCompact = hasSession && !isNewSession && !isBacklogIssue && !isPkood
@@ -26136,12 +26137,12 @@
 
   // Engines whose /compact runs through /api/session/compact (a real
   // compaction). Claude opens an interactive TUI; Codex routes to the
-  // app-server's thread/compact RPC. cursor/gemini/antigravity return
+  // app-server's thread/compact RPC. cursor/gemini/antigravity/kimi return
   // compact_unsupported_engine server-side, so we don't expose compaction
   // for them. Exclusion-based because Claude sessions carry assorted source
   // values ('interactive', 'sdk-cli', 'claude', 'bg', or empty) — anything
   // that isn't a known unsupported engine is treated as Claude-family.
-  const COMPACT_UNSUPPORTED_SOURCES = new Set(['cursor', 'gemini', 'antigravity', 'pkood']);
+  const COMPACT_UNSUPPORTED_SOURCES = new Set(['cursor', 'gemini', 'antigravity', 'pkood', 'kimi']);
   function isCompactionCapableSource(source) {
     return !COMPACT_UNSUPPORTED_SOURCES.has(source);
   }
