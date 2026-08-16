@@ -1,0 +1,1 @@
+Applications rail: a fixed column on the left edge is now CCC's top-level navigation, replacing the Queues/Sessions toggle. Built-in surfaces sit alongside your own apps, which are discovered from `~/.claude/command-center/apps/*/app.json` or declared in `custom-links.json`.
