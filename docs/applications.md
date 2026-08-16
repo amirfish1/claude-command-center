@@ -8,7 +8,7 @@ Built-ins are Sessions (`/`) and Queues (`/q2.html`). Everything else is yours.
 
 ## Adding an app
 
-The quickest way is the **+** at the bottom of the rail. It opens the
+The quickest way is the **+** just below the last app in the rail. It opens the
 Applications panel over whatever you were looking at — name it, pick an icon,
 say whether it is a web page, something running on a port, or an empty app to
 build into. Drag rows to reorder, toggle to hide, `×` to remove.
