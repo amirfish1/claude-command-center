@@ -7183,6 +7183,42 @@
     }, 1000);
   });
 
+  // CCC-870: the "Done" footer at the end of a turn only had a copy button —
+  // no way to read the reply aloud without scrolling back up to find the
+  // assistant text row's own speaker button (easy to miss/lose in a long
+  // transcript). Mirror data-read-assistant-message here, sourcing text the
+  // same way the Done row's copy button already does.
+  document.addEventListener('click', (ev) => {
+    const btn = ev.target.closest('[data-read-agent-answer]');
+    if (!btn) return;
+    ev.preventDefault();
+    ev.stopPropagation();
+    if (btn === _ttsDirectBtn && _ttsUtterance) {
+      if (_ttsActive && !_ttsPaused) {
+        try { window.speechSynthesis.pause(); } catch (_) {}
+        _ttsPaused = true;
+        _setTtsDirectBtnState(btn, 'paused');
+      } else if (_ttsPaused) {
+        try { window.speechSynthesis.resume(); } catch (_) {}
+        _ttsPaused = false;
+        _setTtsDirectBtnState(btn, 'speaking');
+      }
+      return;
+    }
+    const resultEl = btn.closest('.event.result');
+    const text = agentAnswerTextBeforeResult(resultEl);
+    if (!text) {
+      showOpToast('No agent answer to read', 'error');
+      return;
+    }
+    const pane = resultEl && resultEl.closest ? resultEl.closest('.conv-pane') : null;
+    const paneId = (pane && pane.getAttribute('data-pane-id')) || activePaneId();
+    const paneState = paneId && typeof paneByPaneId === 'function' ? paneByPaneId(paneId) : null;
+    const convId = (paneState && paneState.conversationId) || currentConversation || '';
+    const ok = speakTextDirect(text, convId, paneId, btn);
+    if (!ok) showOpToast('Your browser does not support text-to-speech.', 'error');
+  });
+
   document.addEventListener('click', async (ev) => {
     const btn = ev.target.closest('[data-copy-agent-answer]');
     if (!btn) return;
@@ -49180,6 +49216,7 @@
           // muted footer when there's real meta to show).
           if (_kimiPane && !statsHtml) div.classList.add('kimi-result-empty');
           div.innerHTML = '<span class="label">Done</span>'
+            + '<button type="button" class="result-copy-agent-answer" data-read-agent-answer title="Read agent answer aloud" aria-label="Read agent answer aloud">&#128266;</button>'
             + '<button type="button" class="result-copy-agent-answer" data-copy-agent-answer title="Copy agent answer" aria-label="Copy agent answer">&#128203;</button>'
             + '<span class="line-num">L' + ev.line + '</span>'
             + tsSpan(ev.ts)

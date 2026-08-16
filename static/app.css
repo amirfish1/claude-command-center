@@ -1164,6 +1164,11 @@
     border-color: rgba(63,185,80,0.5);
     background: rgba(63,185,80,0.08);
   }
+  .result-copy-agent-answer.speaking {
+    opacity: 1; color: var(--accent);
+    border-color: var(--accent);
+  }
+  .result-copy-agent-answer.speaking.paused { color: var(--text-muted); opacity: 0.7; }
   .event.result .stats { margin-top: 4px; }
   .event.result .stats span { margin-right: 16px; }
   /* Error / exhaustion results: a turn that stopped because of a token /
