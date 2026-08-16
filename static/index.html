@@ -443,38 +443,13 @@
     })();
   </script>
 
+  <!-- Applications rail. Replaces the old Queues/Sessions chip toggle that
+       used to sit at the top of the sidebar: navigation between surfaces is
+       now the fixed 52px column on the left edge, shared with q2.html and
+       /view/<app> pages. See static/app-rail.js. -->
+  <script src="/static/app-rail.js" defer></script>
+
   <div class="sidebar">
-    <!-- Queues / Sessions toggle. Identical markup and position on both pages
-         (see static/q2.html); only which side carries .is-active differs, so
-         the control never moves as you switch. Plain links — the mac app
-         treats any URL on the dashboard port as in-app
-         (scripts/macapp/main.swift:132). -->
-    <div class="q2-toggle" role="group" aria-label="Switch view">
-      <a class="q2-toggle-opt" href="/q2.html">Queues</a>
-      <span class="q2-toggle-opt is-active" aria-current="page">Sessions</span>
-      <span id="customNavLinks"></span>
-    </div>
-    <script>
-      // User-defined nav links (e.g. a local companion dashboard) from
-      // /api/custom-links; renders nothing when the config file is absent.
-      fetch('/api/custom-links').then(function (r) { return r.json(); }).then(function (d) {
-        var host = document.getElementById('customNavLinks');
-        if (!host || !d || !Array.isArray(d.links)) return;
-        d.links.forEach(function (l) {
-          var a = document.createElement('a');
-          a.className = 'q2-toggle-opt';
-          a.href = l.url;
-          if (!/^\//.test(l.url)) {
-            // External links open a new tab; same-origin paths switch views
-            // in place like the Queues/Sessions toggle.
-            a.target = '_blank';
-            a.rel = 'noopener';
-          }
-          a.textContent = l.label;
-          host.appendChild(a);
-        });
-      }).catch(function () {});
-    </script>
     <div class="sidebar-header">
       <div class="sidebar-header-brand">
       <div class="sh-title-row">

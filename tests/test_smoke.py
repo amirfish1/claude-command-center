@@ -19717,3 +19717,71 @@ class TestSessionRegistryTruncatedComm(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+def test_apps_rail_route_and_manifest_parsing():
+    """The Applications rail's manifest endpoint.
+
+    /api/apps is the rail's only data source, so a missing or malformed
+    custom-links.json must still yield the built-ins, and hostile entries must
+    be dropped rather than reaching an href.
+    """
+    server_py = pathlib.Path(PROJECT_ROOT, "server.py").read_text(encoding="utf-8")
+    assert 'elif path == "/api/apps":' in server_py
+    import server as _server
+
+    # Absent config file: three-tuple, all empty. The rail falls back to the
+    # built-ins it hardcodes, so core never depends on the user's file.
+    with mock.patch.object(_server, "COMMAND_CENTER_STATE_DIR",
+                           pathlib.Path(tempfile.mkdtemp())):
+        assert _server._custom_links_config() == ([], {}, [])
+
+    with tempfile.TemporaryDirectory() as tmp:
+        cfg = pathlib.Path(tmp, "custom-links.json")
+        cfg.write_text(json.dumps({
+            "proxies": {"reddit": 9137},
+            "apps": [
+                {"id": "reddit", "label": "Reddit", "icon": "R",
+                 "url": "/view/reddit"},
+                {"id": "hub", "label": "Hub", "url": "https://example.com"},
+                # Dropped: javascript: would execute from the rendered href.
+                {"id": "evil", "label": "Evil", "url": "javascript:alert(1)"},
+                # Dropped: protocol-relative, ambiguous scheme.
+                {"id": "rel", "label": "Rel", "url": "//example.com"},
+                # Dropped: duplicate id.
+                {"id": "reddit", "label": "Dupe", "url": "/view/other"},
+                # Dropped: id outside [a-z0-9_-].
+                {"id": "Bad Id", "label": "Bad", "url": "/view/bad"},
+                # Dropped: no label.
+                {"id": "nolabel", "url": "/view/nolabel"},
+            ],
+        }))
+        with mock.patch.object(_server, "COMMAND_CENTER_STATE_DIR",
+                               pathlib.Path(tmp)):
+            links, proxies, apps = _server._custom_links_config()
+        assert proxies == {"reddit": 9137}
+        assert [a["id"] for a in apps] == ["reddit", "hub"]
+        assert all(a["builtin"] is False for a in apps)
+        # Absent icon falls back to a bullet rather than rendering empty.
+        assert apps[1]["icon"] == "•"
+
+    # Malformed JSON must not raise — the rail would lose its nav.
+    with tempfile.TemporaryDirectory() as tmp:
+        pathlib.Path(tmp, "custom-links.json").write_text("{not json")
+        with mock.patch.object(_server, "COMMAND_CENTER_STATE_DIR",
+                               pathlib.Path(tmp)):
+            assert _server._custom_links_config() == ([], {}, [])
+
+
+def test_apps_rail_static_is_wired_into_pages():
+    """Every CCC surface loads the shared rail, and the old chip toggle that
+    it replaces is gone from both core pages."""
+    static = pathlib.Path(PROJECT_ROOT, "static")
+    rail = (static / "app-rail.js").read_text(encoding="utf-8")
+    assert "ccc-side-nav" in rail
+    # Shares the Morning side-nav's style id so the two never double-render.
+    assert 'STYLE_ID = "ccc-side-nav-style"' in rail
+    for page in ("index.html", "q2.html"):
+        html = (static / page).read_text(encoding="utf-8")
+        assert '/static/app-rail.js' in html, page
+        assert 'class="q2-toggle"' not in html, page

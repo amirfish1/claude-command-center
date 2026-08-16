@@ -14577,32 +14577,128 @@ def _build_healthcheck():
 
 STATIC_DIR = CCC_ROOT / "static"
 MORNING_STATIC_DIR = STATIC_DIR / "morning"
+# Where a user's own Applications-rail apps live: one directory per app id,
+# each with an index.html served at /view/<id> and assets at /app-static/<id>/.
+# Deliberately outside the repo checkout — a public clone is the wrong place
+# for personal apps, and `git clean` or a reinstall would wipe them.
+USER_APPS_DIR = COMMAND_CENTER_STATE_DIR / "apps"
+# Extension allowlist + Content-Type map shared by the /static/ and
+# /app-static/ asset routes. Adding a type here is the only place to do it.
+# .html is intentionally absent: pages are served by /view/<id>, not as assets.
+STATIC_CT_MAP = {
+    ".css": "text/css",
+    ".js": "application/javascript",
+    ".svg": "image/svg+xml",
+    ".webmanifest": "application/manifest+json",
+    ".json": "application/json",
+    ".png": "image/png",
+    ".jpg": "image/jpeg",
+    ".jpeg": "image/jpeg",
+    ".ico": "image/x-icon",
+}
+
+
+def _safe_nav_url(url):
+    """True when `url` is safe to drop into an href we render ourselves.
+
+    Only same-origin absolute paths (`/foo`) and http(s) URLs qualify. The
+    config file is user-owned, but its values reach the DOM as `href`, so a
+    `javascript:` entry would execute — cheap to refuse, so we refuse."""
+    u = str(url or "").strip()
+    if not u or len(u) > 500:
+        return False
+    if u.startswith("//"):          # protocol-relative — scheme is ambiguous
+        return False
+    return u.startswith("/") or u.startswith("http://") or u.startswith("https://")
 
 
 def _custom_links_config():
     """Parse ~/.claude/command-center/custom-links.json.
 
     Accepts the original bare list of {label, url} links, or
-    {"links": [...], "proxies": {"<name>": <port>}} where proxies feeds the
-    /proxy/<name>/ loopback forwarder. Returns (links, proxies); malformed
-    or absent file returns empty both."""
+    {"links": [...], "proxies": {"<name>": <port>}, "apps": [...]} where
+    proxies feeds the /proxy/<name>/ loopback forwarder and apps feeds the
+    left Applications rail (see /api/apps). Returns (links, proxies, apps);
+    malformed or absent file returns empty all three."""
     try:
         raw = json.loads(
             (COMMAND_CENTER_STATE_DIR / "custom-links.json").read_text())
     except Exception:
-        return [], {}
+        return [], {}, []
     raw_links = raw.get("links", []) if isinstance(raw, dict) else raw
     raw_proxies = raw.get("proxies", {}) if isinstance(raw, dict) else {}
+    raw_apps = raw.get("apps", []) if isinstance(raw, dict) else []
     links = [{"label": str(l.get("label", ""))[:40],
               "url": str(l.get("url", ""))[:500]}
              for l in (raw_links if isinstance(raw_links, list) else [])
-             if isinstance(l, dict) and l.get("label") and l.get("url")]
+             if isinstance(l, dict) and l.get("label")
+             and _safe_nav_url(l.get("url"))]
     proxies = {}
     if isinstance(raw_proxies, dict):
         for name, port in raw_proxies.items():
             if re.fullmatch(r"[a-z0-9_-]+", str(name)) and str(port).isdigit():
                 proxies[str(name)] = int(port)
-    return links, proxies
+    apps = []
+    seen_ids = set()
+    for a in (raw_apps if isinstance(raw_apps, list) else []):
+        if not isinstance(a, dict):
+            continue
+        app_id = str(a.get("id", "")).strip()
+        if not re.fullmatch(r"[a-z0-9_-]{1,40}", app_id) or app_id in seen_ids:
+            continue
+        if not a.get("label") or not _safe_nav_url(a.get("url")):
+            continue
+        seen_ids.add(app_id)
+        apps.append({
+            "id": app_id,
+            # 24 chars: the rail is 64px wide, longer labels wrap badly.
+            "label": str(a.get("label"))[:24],
+            "icon": str(a.get("icon", "") or "•")[:8],
+            "url": str(a.get("url"))[:500],
+            "builtin": False,
+        })
+    return links, proxies, apps
+
+def _discover_user_apps():
+    """Scan ~/.claude/command-center/apps/*/app.json for installed apps.
+
+    Discovery rather than registration: dropping a folder in is enough, no
+    second edit to custom-links.json. A directory without a readable app.json
+    is skipped silently — half-written or half-removed apps must not break the
+    rail, which is the only navigation CCC has.
+
+    Directory scan of one shallow folder, no subprocess and no session work;
+    /api/apps is fetched once per page load, never polled."""
+    apps = []
+    try:
+        entries = sorted(USER_APPS_DIR.iterdir())
+    except OSError:
+        return apps
+    for d in entries:
+        if not d.is_dir() or not re.fullmatch(r"[a-z0-9_-]{1,40}", d.name):
+            continue
+        try:
+            meta = json.loads((d / "app.json").read_text())
+        except Exception:
+            continue
+        if not isinstance(meta, dict) or not meta.get("label"):
+            continue
+        # `url` is optional: an app that ships an index.html is served at
+        # /view/<id> and needs to declare nothing beyond its label.
+        url = meta.get("url") or f"/view/{d.name}"
+        if not _safe_nav_url(url):
+            continue
+        if url.startswith("/view/") and not (d / "index.html").is_file():
+            continue
+        apps.append({
+            "id": d.name,
+            "label": str(meta.get("label"))[:24],
+            "icon": str(meta.get("icon", "") or "\N{LARGE BLUE CIRCLE}")[:8],
+            "url": str(url)[:500],
+            "builtin": False,
+        })
+    return apps
+
 
 # ── Optional Morning view plugin ──────────────────────────────────────────
 # The Morning view (goals/strategic/tactical/braindump) is highly opinionated
@@ -62299,6 +62395,46 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                     self.send_header("Vary", "Accept-Encoding")
                 self.end_headers()
                 self.wfile.write(body)
+        elif path.startswith("/app-static/"):
+            # Assets for user apps: /app-static/<id>/<file> maps to
+            # ~/.claude/command-center/apps/<id>/<file>. Same extension
+            # allowlist and traversal clamp as /static/ — an app directory is
+            # user-authored, but it must not become a read-anything route.
+            rel = path[len("/app-static/"):]
+            ext = next((c for c in STATIC_CT_MAP if rel.endswith(c)), "")
+            if not ext:
+                self.send_json({"error": f"not found: {path}"}, 404)
+                return
+            try:
+                resolved = (USER_APPS_DIR / rel).resolve(strict=False)
+                base = USER_APPS_DIR.resolve()
+            except OSError as e:
+                self.send_json({"error": str(e)}, 500)
+                return
+            try:
+                resolved.relative_to(base)
+            except ValueError:
+                self.send_json({"error": f"not found: {path}"}, 404)
+                return
+            if not resolved.is_file():
+                self.send_json({"error": f"not found: {path}"}, 404)
+                return
+            try:
+                body = resolved.read_bytes()
+            except OSError as e:
+                self.send_json({"error": str(e)}, 500)
+                return
+            ct = STATIC_CT_MAP[ext]
+            body, enc = self._maybe_gzip(body, ct)
+            self.send_response(200)
+            self.send_header("Content-Type", ct)
+            self.send_header("Cache-Control", "no-store, must-revalidate")
+            self.send_header("Content-Length", str(len(body)))
+            if enc:
+                self.send_header("Content-Encoding", enc)
+                self.send_header("Vary", "Accept-Encoding")
+            self.end_headers()
+            self.wfile.write(body)
         elif path.startswith("/static/"):
             # Serve allow-listed assets from the static/ directory.
             # index.html is intentionally excluded (extension allowlist blocks .html).
@@ -62530,15 +62666,24 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
             except OSError as e:
                 self.send_json({"error": "morning/index.html missing", "detail": str(e)}, 500)
         elif re.match(r"^/view/[a-z0-9_-]+$", path):
-            # Local view plugins: serve a (typically gitignored) per-user
-            # static/<name>/index.html as an in-app page. Pairs with
-            # /api/custom-links, which puts the nav chip beside the
-            # Queues/Sessions toggle. The regex confines <name> to a single
-            # safe path segment; only that directory's index.html is served
-            # (its assets go through the extension-allowlisted /static/ route).
-            target = STATIC_DIR / path[len("/view/"):] / "index.html"
-            if target.is_file():
-                self.send_html(target.read_text())
+            # Local view plugins: serve a per-user <name>/index.html as an
+            # in-app page, reachable from the Applications rail (/api/apps).
+            #
+            # Resolution order matters. USER_APPS_DIR comes first because that
+            # is where a user's own apps belong: it survives reinstall and
+            # `git clean`, and it keeps personal apps out of a public repo
+            # checkout. STATIC_DIR stays as the fallback for apps that ship
+            # with CCC and for the older gitignored static/<name>/ layout.
+            #
+            # The regex confines <name> to a single safe path segment; only
+            # that directory's index.html is served (its assets go through the
+            # extension-allowlisted /static/ and /app-static/ routes).
+            name = path[len("/view/"):]
+            for base in (USER_APPS_DIR, STATIC_DIR):
+                target = base / name / "index.html"
+                if target.is_file():
+                    self.send_html(target.read_text())
+                    break
             else:
                 self.send_json({"error": f"not found: {path}"}, 404)
         elif re.match(r"^/morning/goals/[A-Za-z0-9_-]+$", path):
@@ -62594,7 +62739,35 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
             # toggle. Read from ~/.claude/command-center/custom-links.json;
             # absent file means no links. Personal workflow config stays out
             # of the public repo.
+            #
+            # Superseded by /api/apps and the Applications rail. Still served
+            # because /api/* is a stable contract external tooling binds to.
             self.send_json({"links": _custom_links_config()[0]})
+        elif path == "/api/apps":
+            # Ordered app list for the left Applications rail. Built-ins
+            # first, then feature-gated surfaces, then the user's own apps
+            # from custom-links.json. One small file read — never a session
+            # scan, never a subprocess — and the rail fetches it once per
+            # page load rather than on a poll.
+            apps = [
+                {"id": "sessions", "label": "Sessions", "icon": "\N{SPEECH BALLOON}",
+                 "url": "/", "builtin": True},
+                {"id": "queues", "label": "Queues", "icon": "\N{CLIPBOARD}",
+                 "url": "/q2.html", "builtin": True},
+            ]
+            if MORNING_ENABLED:
+                apps.append({"id": "morning", "label": "Morning",
+                             "icon": "\N{BLACK SUN WITH RAYS}", "url": "/morning",
+                             "builtin": True})
+            manifest_apps = _custom_links_config()[2]
+            apps.extend(manifest_apps)
+            # Installed apps come last, and an id already declared in the
+            # manifest wins — that is how a user overrides a discovered app's
+            # label, icon, or position without editing its folder.
+            claimed = {a["id"] for a in apps}
+            apps.extend(a for a in _discover_user_apps()
+                        if a["id"] not in claimed)
+            self.send_json({"apps": apps})
         elif path.startswith("/proxy/"):
             self._proxy_local_view("GET")
         elif path == "/api/version":

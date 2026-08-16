@@ -9,10 +9,9 @@
 <body>
   <header class="q2-topbar">
     <!-- Same toggle, same corner, same markup as the dashboard's. -->
-    <div class="q2-toggle" role="group" aria-label="Switch view">
-      <span class="q2-toggle-opt is-active" aria-current="page">Queues</span>
-      <a class="q2-toggle-opt" href="/">Sessions</a>
-    </div>
+    <!-- Surface switching lives in the Applications rail (static/app-rail.js),
+         not a chip toggle. -->
+    <script src="/static/app-rail.js" defer></script>
     <span class="q2-brand-sub">q2</span>
     <span class="q2-spacer"></span>
     <span class="q2-note" id="q2Note" role="status" hidden></span>
