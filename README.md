@@ -6,7 +6,7 @@ CCC puts every session on one local board and tells you which one needs you.
 
 _Start the next while Claude builds the first._
 
-One local dashboard that attaches to every **Claude Code**, **Codex**, **Cursor**, **Antigravity**, **Kilo Code**, **Kimi Code**, and **OpenCode** session on your machine, however you launched it. Spawn, monitor, and ingest all seven; steer six of them with follow-up. Local, source-available, free for non-commercial use.
+One local dashboard that attaches to every **Claude Code**, **Codex**, **Cursor**, **Antigravity**, **Kilo Code**, **Kimi Code**, **OpenCode**, and **Devin** session on your machine, however you launched it — plus read-only ingestion of **GitHub Copilot CLI**, **VS Code Copilot Chat**, and **Grok CLI** sessions. Spawn, monitor, and ingest all eight; steer seven of them with follow-up. Local, source-available, free for non-commercial use.
 
 > 📢 Shipping fast. **Watch → Releases** (top-right) to get pinged on new versions without the noise.
 
@@ -29,7 +29,7 @@ ccc
 Or download the macOS DMG and drag `CCC.app` to Applications:
 [github.com/amirfish1/claude-command-center/releases/latest](https://github.com/amirfish1/claude-command-center/releases/latest)
 
-Try the read-only demo first: [ccc.amirfish.ai/demo](https://ccc.amirfish.ai/demo/) (or [amirfish1.github.io/claude-command-center/demo](https://amirfish1.github.io/claude-command-center/demo/)) - full kanban with seeded fake data, no install required.
+Try the read-only demo first: [ccc.amirfish.ai/demo](https://ccc.amirfish.ai/demo/) (or [amirfish1.github.io/claude-command-center/demo](https://amirfish1.github.io/claude-command-center/demo/)) - the full dashboard with seeded fake data, no install required.
 
 ## See CCC at work
 
@@ -48,26 +48,14 @@ Every **Claude Code**, **Codex**, **Cursor**, **Antigravity**, **Kilo Code**, **
 </tr>
 <tr>
 <td width="50%">
-  <img src="docs/images/feature-wall/kanban-drag.gif" alt="Dragging a session card across the CCC kanban" width="100%" />
+  <img src="docs/images/feature-wall/flow-canvas.gif" alt="Organizing sessions on the CCC Flow canvas" width="100%" />
 </td>
-<td width="50%" valign="middle">
-
-### Kanban that knows the state
-
-Backlog → Planning → Working → Review → Verified. Columns are derived from real session state — live? commits? pushed? — and overridable by drag.
-
-</td>
-</tr>
-<tr>
 <td width="50%" valign="middle">
 
 ### Flow canvas & Project tree
 
 Group sessions under named, nestable Flow objects — a hierarchical map of your day's work, with a live "Current sessions" triage band riding on top.
 
-</td>
-<td width="50%">
-  <img src="docs/images/feature-wall/flow-canvas.gif" alt="Organizing sessions on the CCC Flow canvas" width="100%" />
 </td>
 </tr>
 <tr>
@@ -146,6 +134,10 @@ The whole fleet on your phone — monitor sessions, answer agents, and steer fro
 
 **Also in the box:**
 
+- **Durable queues with workers that specialize over time** — [WatchTower](https://github.com/amirfish1/watchtower) queues carry a shared learnings file each worker reads before and writes after; an all-queues inbox, per-queue AI status briefs, and one-click "create a queue for this session" included.
+- **Answer permission prompts from the dashboard** — Claude Code's approve/deny prompts surface inline; CCC never interrupts a possibly-mid-turn session without your Approve.
+- **Board view (kanban, optional)** — drag-drop columns derived from session state, with rubber-band multi-select. The list is the primary surface; the board is an opt-in lens.
+- **System status** — a health modal over the whole fleet: restart-all, spawned-process cleanup, delivery receipts.
 - **Cost-aware cold-session composer** — ranked cheaper routes (continue fresh on a lower tier, search history) instead of a blind expensive resume.
 - **FIRST FLIGHT tour** — a spotlight walkthrough on first run, replayable any time from Settings.
 - **Settings modal** — instant search (Cmd/Ctrl+,), keyboard navigation, per-section reset.
@@ -155,15 +147,14 @@ The whole fleet on your phone — monitor sessions, answer agents, and steer fro
 - **Resume-on-demand** — messaging a dormant session auto-spawns a headless resume to deliver it.
 - **Auto-fix deploys** — polls Vercel, spawns a `/fix-deploy` session on new production errors.
 - **AI-assisted titles** — regenerate a card's title via `claude -p` (Haiku by default).
-- **Workers that specialize over time** — queues carry a shared learnings file each worker reads before and writes after, via [WatchTower](https://github.com/amirfish1/watchtower).
 - **Orchestration skill + 12-skill pack** — one Claude session can spawn, inject into, and synchronously ask sibling sessions over plain HTTP.
-- **Usage tracking** — your pace against plan limits, per engine, before you hit the wall.
+- **Usage tracking** — your pace against plan limits, per engine, with cache-adjusted token rankings, before you hit the wall.
 
 All captures use seeded demo data.
 
-CCC latches onto every Claude Code, Codex, Cursor, Antigravity, Kilo Code, Kimi Code, and OpenCode session on your machine: terminal sessions, headless processes, and sessions you spawned from the dashboard. It treats each agent's on-disk state as the source of truth, so nothing slips through. Spawn the next task while the first is still building. Switch between projects without losing context. Ship multiple things at once.
+CCC latches onto every Claude Code, Codex, Cursor, Antigravity, Kilo Code, Kimi Code, OpenCode, and Devin session on your machine: terminal sessions, headless processes, and sessions you spawned from the dashboard. It treats each agent's on-disk state as the source of truth, so nothing slips through. Spawn the next task while the first is still building. Switch between projects without losing context. Ship multiple things at once.
 
-See the [engine support matrix](#engine-support) below for what each engine does. Spawn, monitor, and transcript ingestion work across all seven; follow-up (steering a dormant session) works on six (Kilo Code is fire-and-forget), and Cursor IDE sync is metadata-only by design.
+See the [engine support matrix](#engine-support) below for what each engine does. Spawn, monitor, and transcript ingestion work across all eight; follow-up (steering a dormant session) works on seven (Kilo Code is fire-and-forget), and Cursor IDE sync is metadata-only by design.
 
 ## What you get
 
@@ -203,16 +194,23 @@ that already exists.
 
 ## How it compares
 
-|  | Raw terminal + tmux | Wrapper that owns execution | CCC |
-|---|:---:|:---:|:---:|
-| Sees sessions you launched by hand | if you remember the tab | no, only what it spawned | yes, reads on-disk state |
-| Survives closing the dashboard | yes | varies | yes, the dashboard is a lens, not a runtime |
-| One board across engines | no | usually one engine | yes, seven engines |
-| Tells you which session needs you | no | no | yes, read from the transcript |
-| Coordinates sessions without you as the relay | no | no | yes, group chats + sibling-ask |
-| Setup | none | proxy or routing config | one curl line, no accounts |
+|  | CCC | Orca | Vibe Kanban | Conductor | Claude Squad | opcode |
+|---|:---:|:---:|:---:|:---:|:---:|:---:|
+| Sees sessions you launched by hand, outside the tool | ✅ | ❌ | ⚠️ partial | ❌ | ❌ | ✅ |
+| One dashboard across many agent engines | ✅ 8 spawnable + 3 read-only | ✅ | ✅ | ❌ | ✅ | ❌ |
+| Tells you which session needs you | ✅ read from the transcript | ⚠️ finish notifications | ❌ | ❌ | ❌ | ❌ |
+| Sessions coordinate without you as the relay | ✅ group chats + sibling-ask | ❌ | ❌ | ❌ | ❌ | ❌ |
+| Durable queues with workers that learn | ✅ WatchTower | ❌ | ❌ | ❌ | ❌ | ❌ |
+| GitHub issue → session → verify → close loop | ✅ closes with commit-SHA comment | ⚠️ PR/issue browsing | ⚠️ PR-focused | ❌ | ⚠️ | ❌ |
+| Survives closing the dashboard | ✅ the dashboard is a lens, not a runtime | ❌ | ⚠️ | ❌ | ✅ | ✅ |
+| Mobile companion | ✅ full dashboard in your phone browser | ✅ native app | ✅ | ❌ | ❌ | ❌ |
+| Worktree-per-task isolation | ❌ attach-first by design | ✅ | ✅ | ✅ | ✅ | ❌ |
+| No account, no cloud, runs locally | ✅ stdlib Python, no build | ⚠️ | ⚠️ Postgres | ⚠️ | ✅ | ✅ |
+| Setup | one curl line, or brew / DMG | desktop download | desktop / self-host | desktop download | terminal install | desktop download |
 
-The whole point is the first row: the moment you touch a terminal, a tool that owns execution goes blind. CCC reads the state the engines already write, so it never does.
+Competitor cells reflect a survey of 20+ tools in this space (April–August 2026) — everyone ships weekly, so check their current docs before quoting. The one deliberate ❌: CCC doesn't own worktrees per task. It attaches to the work you already have instead of wrapping every run.
+
+The whole point is the first row: the moment you touch a terminal, a tool that owns execution goes blind. CCC reads the state the engines already write, so it never does. Deeper dives: [vs claude-squad / Conductor / Sculptor](docs/index.html), [vs heavyweight IDEs](docs/vs-heavyweight-ides.html).
 
 ## Recent
 
@@ -229,7 +227,14 @@ The whole point is the first row: the moment you touch a terminal, a tool that o
 - **2026-05-19**: Static GitHub Pages demo with seeded mock data (no install required). ([#49](https://github.com/amirfish1/claude-command-center/issues/49))
 - **2026-05-18**: Local macOS `say` text-to-speech button on conversations.
 
-[![Star History Chart](https://api.star-history.com/svg?repos=amirfish1/claude-command-center&type=Date)](https://star-history.com/#amirfish1/claude-command-center&Date)
+<!-- star-history:start -->
+<a href="https://star-history.com/#amirfish1/claude-command-center&Date">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/amirfish1/claude-command-center/main/assets/star-history/star-history-dark.svg" />
+    <img alt="Star History Chart" src="https://raw.githubusercontent.com/amirfish1/claude-command-center/main/assets/star-history/star-history-light.svg" />
+  </picture>
+</a>
+<!-- star-history:end -->
 
 > **If you install it, I'd love to hear how.** Drop a ⭐, open an issue with
 > what worked or what broke, or just say hi. This is a one-person project
@@ -238,7 +243,7 @@ The whole point is the first row: the moment you touch a terminal, a tool that o
 
 ## Quickstart
 
-**Try the demo:** [ccc.amirfish.ai/demo](https://ccc.amirfish.ai/demo/): read-only kanban with seeded fake data, no install required.
+**Try the demo:** [ccc.amirfish.ai/demo](https://ccc.amirfish.ai/demo/): the read-only dashboard with seeded fake data, no install required.
 
 Requirements: Git and Python 3.9+. Install at least one supported agent CLI to
 launch sessions: [Claude Code](https://docs.claude.com/en/docs/claude-code),
@@ -365,7 +370,7 @@ and use the Linux instructions below.
 ### Running on Linux
 
 CCC runs on Linux as a headless service you reach from the browser on another
-machine. The core (kanban, `~/.claude` transcript ingestion, session spawn and
+machine. The core (the session board, `~/.claude` transcript ingestion, session spawn and
 drive) works the same as on macOS. The native folder picker works on Linux
 desktops too when `zenity`, `kdialog`, or `yad` is installed; on headless
 boxes the Browse buttons fall back to an in-browser picker that walks the
@@ -434,7 +439,7 @@ the UI uses for the kanban.
                                           v
                               ┌───────────────────────┐
                               │ static/index.html     │
-                              │ kanban + detail pane  │
+                              │ session list + detail │
                               └───────────────────────┘
 ```
 
@@ -442,9 +447,10 @@ the UI uses for the kanban.
 - **Attach**: the server reads Claude's own files + sidecar state the
   installed hooks write after every tool call. Nothing to configure
   per-session.
-- **Columns**: Backlog → Planning → Working → Review → In Testing →
-  Verified / Inactive / Archived. Columns are derived from session state
-  (live? commits? pushed? sidecar activity?), overridable by drag.
+- **Board columns** (optional board view): Backlog → Planning → Working →
+  Review → In Testing → Verified / Inactive / Archived. Columns are derived
+  from session state (live? commits? pushed? sidecar activity?),
+  overridable by drag.
 - **Backlog**: open GitHub issues + `TODO.md` entries, surfaced as cards
   next to your active sessions so everything lives on one board.
 - **Objects & the Project tree**: group sessions under named, nestable
@@ -473,6 +479,10 @@ guessing one, and drops a `reasoning_effort` sent to it over the API. The live
 per-engine ladders are published at `GET /api/engines/models` under
 `efforts_by_engine`.
 
+Three further engines are ingested **read-only** today: **GitHub Copilot CLI**,
+**VS Code Copilot Chat**, and **Grok CLI** sessions appear on the board with
+their transcripts, but can't be spawned or steered from the dashboard yet.
+
 **Note on Cursor IDE integration:** While CCC spawns Cursor agents headlessly via the CLI, the Desktop IDE manages UI state internally using a highly-nested, proprietary Protobuf Merkle tree in `store.db`. Full "two-way chat sync" into the IDE is unsupported due to the extreme risk of workspace corruption. Instead, CCC performs a **metadata integration**: CLI sessions are injected into the IDE sidebar as bookmarks (with correct titles and timestamps) so you don't lose track of them, but they cannot be interacted with natively inside the IDE window. Use the CCC dashboard for full history.
 
 If you'd like to see an engine bumped from "partial" to first-class, open an issue — it's mostly adapter work, the ingestion layer is engine-agnostic.
@@ -485,8 +495,9 @@ If you'd like to see an engine bumped from "partial" to first-class, open an iss
 - **Settings modal**: the gear menu is a full settings modal with instant search (Cmd/Ctrl+, to open), keyboard navigation, and per-section reset — appearance, layout, sessions, fleet & network, tools, maintenance, help.
 - **Plan-to-fleet**: import a plan or mission-brief document into a WatchTower queue from the dashboard — preview the tickets `wt import` extracts, file them on confirm, optionally drain with a worker.
 - **ACP adapter** (optional): expose CCC over the [Agent Client Protocol](https://agentclientprotocol.com) so editors and ACP clients (VS Code, JetBrains, Zed, and agents like Hermes) can drive Claude Code sessions over JSON-RPC stdio. Runs as a separate process (`python3 ccc_acp.py`); install with the `acp` extra. The core server stays stdlib-only.
-- **Kanban** across every session, with drag-drop between columns,
-  rubber-band multi-select, and per-column tinting.
+- **Board view (kanban, optional)**: every session on drag-drop columns
+  with rubber-band multi-select and per-column tinting. The list view is
+  the primary surface; the board is an opt-in lens on the same state.
 - **Project tree**: the sidebar's **By objects** view stacks a live
   **Current sessions** band (everything active in the last 5h) over a
   **Project tree** — your day's work as a hierarchy, with sessions grouped
@@ -722,7 +733,7 @@ The signal is unavailable on Windows.
 ## Roadmap
 
 **Shipped**
-- Kanban over all live + dormant Claude Code, Codex, Cursor, Antigravity, Kilo Code, Kimi Code, and OpenCode sessions
+- Session board over all live + dormant Claude Code, Codex, Cursor, Antigravity, Kilo Code, Kimi Code, OpenCode, and Devin sessions
 - GitHub issue → session → verify → close pipeline
 - Headless spawn with stdin-pipe follow-up
 - Resume-on-demand
