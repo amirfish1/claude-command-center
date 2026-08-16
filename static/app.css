@@ -8071,6 +8071,14 @@
   /* ── Phone-specific (portrait) extra squeeze ──────────────────────────────
      Below 600px every pixel counts; push the sticky ask even smaller and
      drop the topbar gaps further. Still mobile-only, still no base changes. */
+  /* Kill the keyboard-hint line (dormant · ⏎ send) — no hardware Enter on a
+     phone; it just steals a row above the composer. CCC-868: gated on
+     pointer:coarse (not just max-width:1200px) — any desktop window
+     narrower than 1200px was losing the send/newline hint even though it
+     has a real Enter key. */
+  @media (max-width: 1200px) and (pointer: coarse) {
+    .conv-input-hint { display: none !important; }
+  }
   @media (max-width: 600px) {
     .conv-sticky-header .csh-row {
       height: 78px;
@@ -8118,9 +8126,6 @@
     #cccTopbar #cooPopButton,
     #cccTopbar #todayToggleBtn { display: none !important; }
     #cccBreadcrumb .ccc-breadcrumb-proc { order: 1; flex: 0 0 auto; }
-    /* Kill the keyboard-hint line (dormant · ⏎ send) — no hardware Enter on a
-       phone; it just steals a row above the composer. */
-    .conv-input-hint { display: none !important; }
     /* The "last ask" sticky uses full width with fewer boxes — drop the card
        border / radius / box background and the inner divider. */
     .conv-sticky-header .csh-row {
