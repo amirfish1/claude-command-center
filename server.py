@@ -14700,6 +14700,257 @@ def _discover_user_apps():
     return apps
 
 
+_APPS_WRITE_LOCK = threading.Lock()
+
+
+def _apps_config_path():
+    return COMMAND_CENTER_STATE_DIR / "custom-links.json"
+
+
+def _apps_config_mutate(fn):
+    """Read custom-links.json, hand the dict to `fn`, write it back.
+
+    Serialised on a lock and written through a temp file: the Applications
+    settings page and the rail both touch this file, and a torn write would
+    cost the user every app they have."""
+    with _APPS_WRITE_LOCK:
+        path = _apps_config_path()
+        try:
+            cfg = json.loads(path.read_text())
+            if not isinstance(cfg, dict):        # legacy bare list of links
+                cfg = {"links": cfg}
+        except Exception:
+            cfg = {}
+        result = fn(cfg)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        tmp = path.with_suffix(".json.tmp")
+        tmp.write_text(json.dumps(cfg, indent=2) + "\n")
+        tmp.replace(path)
+        return result
+
+
+def _resolve_apps(include_disabled=False):
+    """The ordered app list behind /api/apps and the rail.
+
+    Built-ins, then manifest apps, then discovered folders. `app_order` in the
+    config reorders by id; anything unlisted keeps its natural position at the
+    end. Disabled apps are dropped unless the settings page asks for them."""
+    apps = [
+        {"id": "sessions", "label": "Sessions", "icon": "\N{SPEECH BALLOON}",
+         "url": "/", "builtin": True},
+        {"id": "queues", "label": "Queues", "icon": "\N{CLIPBOARD}",
+         "url": "/q2.html", "builtin": True},
+    ]
+    if MORNING_ENABLED:
+        apps.append({"id": "morning", "label": "Morning",
+                     "icon": "\N{BLACK SUN WITH RAYS}", "url": "/morning",
+                     "builtin": True})
+    manifest_apps = _custom_links_config()[2]
+    apps.extend(manifest_apps)
+    # An id already declared in the manifest wins: that is how a user renames,
+    # re-icons, or repositions a discovered app without editing its folder.
+    claimed = {a["id"] for a in apps}
+    apps.extend(a for a in _discover_user_apps() if a["id"] not in claimed)
+
+    try:
+        raw = json.loads(_apps_config_path().read_text())
+        order = raw.get("app_order") if isinstance(raw, dict) else None
+        disabled = raw.get("app_disabled") if isinstance(raw, dict) else None
+    except Exception:
+        order, disabled = None, None
+    disabled = set(disabled) if isinstance(disabled, list) else set()
+    for a in apps:
+        # Core navigation cannot be switched off — the rail would strand you.
+        a["enabled"] = a["id"] not in disabled or a.get("builtin", False)
+    if isinstance(order, list):
+        rank = {str(i): n for n, i in enumerate(order)}
+        apps.sort(key=lambda a: rank.get(a["id"], len(rank) + 1))
+    if not include_disabled:
+        apps = [a for a in apps if a["enabled"]]
+    return apps
+
+
+_APP_STARTER_HTML = """<!DOCTYPE html>
+<html lang="en" data-theme="dark">
+<head>
+<meta charset="utf-8">
+<title>{label}</title>
+<script src="/static/app-rail.js" defer></script>
+<style>
+  body {{ margin: 0; background: #0f1115; color: #e6e9ee;
+         font: 14px/1.6 -apple-system, BlinkMacSystemFont, sans-serif; }}
+  .wrap {{ padding: 40px; max-width: 720px; }}
+  h1 {{ font-size: 20px; margin: 0 0 8px; }}
+  p {{ color: #8a929e; }}
+  code {{ color: #5ac8fa; font-family: ui-monospace, Menlo, monospace; }}
+</style>
+</head>
+<body>
+  <div class="wrap">
+    <h1>{label}</h1>
+    <p>Empty app. Edit <code>index.html</code> in this folder, or point an agent at it.</p>
+    <p>It is served same-origin, so it can call any CCC <code>/api/*</code> route.
+       Assets in the folder are available at <code>/app-static/{app_id}/</code>.</p>
+  </div>
+</body>
+</html>
+"""
+
+_APP_EMBED_HTML = """<!DOCTYPE html>
+<html lang="en" data-theme="dark">
+<head>
+<meta charset="utf-8">
+<title>{label}</title>
+<script src="/static/app-rail.js" defer></script>
+<style>
+  html, body {{ height: 100%; margin: 0; background: #0f1115; }}
+  body {{ display: flex; flex-direction: column; }}
+  iframe {{ flex: 1; border: 0; width: 100%; }}
+  .offline {{ padding: 40px; text-align: center; color: #9aa4b2;
+             font: 14px/1.7 -apple-system, sans-serif; display: none; }}
+</style>
+</head>
+<body>
+  <!-- Same-origin via CCC's /proxy route: a direct iframe to another local
+       port renders blank in the Mac app, which cancels navigation off the
+       dashboard port. -->
+  <iframe id="f" src="/proxy/{app_id}/" title="{label}"></iframe>
+  <div class="offline" id="off">Nothing is serving on port {port}.</div>
+  <script>
+    fetch('/proxy/{app_id}/').then(function (r) {{
+      if (!r.ok) {{ throw new Error(String(r.status)); }}
+    }}).catch(function () {{
+      document.getElementById('f').style.display = 'none';
+      document.getElementById('off').style.display = 'block';
+    }});
+  </script>
+</body>
+</html>
+"""
+
+
+def _app_id_from_label(label, taken):
+    """Slugify a label into a free app id."""
+    base = re.sub(r"[^a-z0-9]+", "-", str(label).lower()).strip("-")[:32]
+    base = base or "app"
+    candidate = base
+    n = 2
+    while candidate in taken:
+        candidate = f"{base}-{n}"[:40]
+        n += 1
+    return candidate
+
+
+def _apps_add(payload):
+    """Create an app from the Applications settings form.
+
+    kind=url    → a manifest entry, no files.
+    kind=port   → a folder whose index.html iframes /proxy/<id>/, plus the
+                  proxy port registration.
+    kind=blank  → a folder with a starter page to build into.
+    """
+    label = str(payload.get("label") or "").strip()[:24]
+    if not label:
+        return {"ok": False, "error": "A name is required."}
+    icon = str(payload.get("icon") or "").strip()[:8] or "\N{LARGE BLUE CIRCLE}"
+    kind = str(payload.get("kind") or "url")
+    taken = {a["id"] for a in _resolve_apps(include_disabled=True)}
+    app_id = _app_id_from_label(label, taken)
+
+    if kind == "url":
+        url = str(payload.get("url") or "").strip()
+        if not _safe_nav_url(url):
+            return {"ok": False,
+                    "error": "Enter a web address starting with https://"}
+        entry = {"id": app_id, "label": label, "icon": icon, "url": url}
+    elif kind == "port":
+        port = str(payload.get("port") or "").strip()
+        if not port.isdigit() or not (1 <= int(port) <= 65535):
+            return {"ok": False, "error": "Enter a port number, like 8770."}
+        d = USER_APPS_DIR / app_id
+        d.mkdir(parents=True, exist_ok=True)
+        (d / "app.json").write_text(
+            json.dumps({"label": label, "icon": icon}, indent=2) + "\n")
+        (d / "index.html").write_text(_APP_EMBED_HTML.format(
+            label=html.escape(label), app_id=app_id, port=int(port)))
+        _apps_config_mutate(lambda cfg: cfg.setdefault("proxies", {}).update(
+            {app_id: int(port)}))
+        entry = None
+    elif kind == "blank":
+        d = USER_APPS_DIR / app_id
+        d.mkdir(parents=True, exist_ok=True)
+        (d / "app.json").write_text(
+            json.dumps({"label": label, "icon": icon}, indent=2) + "\n")
+        (d / "index.html").write_text(_APP_STARTER_HTML.format(
+            label=html.escape(label), app_id=app_id))
+        entry = None
+    else:
+        return {"ok": False, "error": f"Unknown app kind: {kind}"}
+
+    # Pin the new app to the end of the rail. Without this it lands wherever
+    # the merge order puts it — manifest apps sort ahead of discovered ones —
+    # and "I just added it, where did it go?" is a bad first impression.
+    order = [a["id"] for a in _resolve_apps(include_disabled=True)]
+
+    def commit(cfg):
+        if entry is not None:
+            cfg.setdefault("apps", []).append(entry)
+        cfg["app_order"] = [i for i in order if i != app_id] + [app_id]
+    _apps_config_mutate(commit)
+    return {"ok": True, "id": app_id}
+
+
+def _apps_remove(app_id):
+    """Drop an app from the rail. Folder contents are moved aside, never
+    deleted — an app can hold the only copy of something the user wrote."""
+    app_id = str(app_id or "")
+    if not re.fullmatch(r"[a-z0-9_-]{1,40}", app_id):
+        return {"ok": False, "error": "Unknown app."}
+    if app_id in ("sessions", "queues", "morning"):
+        return {"ok": False, "error": "Built-in apps can't be removed."}
+
+    def drop(cfg):
+        cfg["apps"] = [a for a in cfg.get("apps", [])
+                       if isinstance(a, dict) and a.get("id") != app_id]
+        cfg.get("proxies", {}).pop(app_id, None)
+        for key in ("app_order", "app_disabled"):
+            if isinstance(cfg.get(key), list):
+                cfg[key] = [i for i in cfg[key] if i != app_id]
+    _apps_config_mutate(drop)
+
+    folder = USER_APPS_DIR / app_id
+    if folder.is_dir():
+        graveyard = USER_APPS_DIR / ".removed"
+        graveyard.mkdir(parents=True, exist_ok=True)
+        dest = graveyard / app_id
+        n = 2
+        while dest.exists():
+            dest = graveyard / f"{app_id}-{n}"
+            n += 1
+        try:
+            folder.replace(dest)
+        except OSError as e:
+            return {"ok": True, "warning": f"App removed; folder kept: {e}"}
+    return {"ok": True}
+
+
+def _apps_arrange(payload):
+    """Persist rail order and which apps are switched off."""
+    ids = payload.get("order")
+    disabled = payload.get("disabled")
+    valid = re.compile(r"[a-z0-9_-]{1,40}")
+
+    def apply(cfg):
+        if isinstance(ids, list):
+            cfg["app_order"] = [str(i) for i in ids
+                                if valid.fullmatch(str(i))][:200]
+        if isinstance(disabled, list):
+            cfg["app_disabled"] = [str(i) for i in disabled
+                                   if valid.fullmatch(str(i))][:200]
+    _apps_config_mutate(apply)
+    return {"ok": True}
+
+
 # ── Optional Morning view plugin ──────────────────────────────────────────
 # The Morning view (goals/strategic/tactical/braindump) is highly opinionated
 # to one user's workflow. Files (morning.py, morning_store.py, static/morning/,
@@ -62615,6 +62866,27 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                 self.send_header("Vary", "Accept-Encoding")
             self.end_headers()
             self.wfile.write(body)
+        elif path == "/applications":
+            # Applications settings: add, reorder, switch off, remove. Its own
+            # page rather than a section of the dashboard settings modal so it
+            # loads no app.js/app.css and cannot affect the main dashboard —
+            # same pattern as /q2.html below.
+            try:
+                body = (STATIC_DIR / "applications.html").read_bytes()
+            except OSError as e:
+                self.send_json({"error": "applications.html missing",
+                                "detail": str(e)}, 500)
+                return
+            body, enc = self._maybe_gzip(body, "text/html")
+            self.send_response(200)
+            self.send_header("Content-Type", "text/html; charset=utf-8")
+            self.send_header("Cache-Control", "no-store, must-revalidate")
+            self.send_header("Content-Length", str(len(body)))
+            if enc:
+                self.send_header("Content-Encoding", enc)
+                self.send_header("Vary", "Accept-Encoding")
+            self.end_headers()
+            self.wfile.write(body)
         elif path == "/q2.html":
             # Standalone three-column queue board (queues | tickets | ticket).
             # Same narrow-route pattern as /group-chat-live.html above: the
@@ -62753,30 +63025,17 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
             # because /api/* is a stable contract external tooling binds to.
             self.send_json({"links": _custom_links_config()[0]})
         elif path == "/api/apps":
-            # Ordered app list for the left Applications rail. Built-ins
-            # first, then feature-gated surfaces, then the user's own apps
-            # from custom-links.json. One small file read — never a session
-            # scan, never a subprocess — and the rail fetches it once per
-            # page load rather than on a poll.
-            apps = [
-                {"id": "sessions", "label": "Sessions", "icon": "\N{SPEECH BALLOON}",
-                 "url": "/", "builtin": True},
-                {"id": "queues", "label": "Queues", "icon": "\N{CLIPBOARD}",
-                 "url": "/q2.html", "builtin": True},
-            ]
-            if MORNING_ENABLED:
-                apps.append({"id": "morning", "label": "Morning",
-                             "icon": "\N{BLACK SUN WITH RAYS}", "url": "/morning",
-                             "builtin": True})
-            manifest_apps = _custom_links_config()[2]
-            apps.extend(manifest_apps)
-            # Installed apps come last, and an id already declared in the
-            # manifest wins — that is how a user overrides a discovered app's
-            # label, icon, or position without editing its folder.
-            claimed = {a["id"] for a in apps}
-            apps.extend(a for a in _discover_user_apps()
-                        if a["id"] not in claimed)
-            self.send_json({"apps": apps})
+            # Ordered app list for the left Applications rail: built-ins, then
+            # feature-gated surfaces, then the user's own apps. One small file
+            # read plus a shallow directory scan — never a session scan, never
+            # a subprocess — and the rail fetches it once per page load rather
+            # than on a poll.
+            #
+            # ?all=1 is the Applications settings page, which needs to show
+            # the apps you have switched off so you can switch them back on.
+            want_all = urllib.parse.parse_qs(
+                urllib.parse.urlparse(self.path).query).get("all", ["0"])[0] == "1"
+            self.send_json({"apps": _resolve_apps(include_disabled=want_all)})
         elif path.startswith("/proxy/"):
             self._proxy_local_view("GET")
         elif path == "/api/version":
@@ -64269,6 +64528,28 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
             return
         if path == "/api/engines/update-now":
             self.send_json(_start_engine_update_pass(), 202)
+            return
+        if path in ("/api/apps/add", "/api/apps/remove", "/api/apps/arrange"):
+            # Applications settings writes. Same-origin already enforced at
+            # the top of do_POST; these only ever touch the user's own
+            # ~/.claude/command-center/ state, never the repo.
+            length = int(self.headers.get("Content-Length", "0"))
+            body = self.rfile.read(length) if length > 0 else b""
+            try:
+                payload = json.loads(body) if body else {}
+            except json.JSONDecodeError:
+                self.send_json({"ok": False, "error": "invalid JSON"}, 400)
+                return
+            if not isinstance(payload, dict):
+                self.send_json({"ok": False, "error": "invalid payload"}, 400)
+                return
+            if path == "/api/apps/add":
+                result = _apps_add(payload)
+            elif path == "/api/apps/remove":
+                result = _apps_remove(payload.get("id"))
+            else:
+                result = _apps_arrange(payload)
+            self.send_json(result, 200 if result.get("ok") else 400)
             return
         if path == "/api/features/flag":
             # Toggle one preview flag for THIS machine (writes the override

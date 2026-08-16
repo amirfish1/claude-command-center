@@ -65,6 +65,15 @@
     ".ccc-side-nav a .icon { font-size: 20px; margin-bottom: 3px; display: block; }",
     ".ccc-side-nav a:hover { background: #1a1d23; color: #ccc; }",
     ".ccc-side-nav a.active { background: #23272e; color: #5ac8fa; }",
+    /* Pushes the + to the bottom of the rail, away from the apps. */
+    ".ccc-side-nav .spacer { flex: 1; min-height: 8px; }",
+    ".ccc-side-nav .add {",
+    "  width: 34px; height: 34px; flex-shrink: 0; border-radius: 8px;",
+    "  border: 1px dashed #333a44; background: none; color: #5f6772;",
+    "  font-size: 18px; line-height: 1; cursor: pointer; display: grid;",
+    "  place-items: center; padding: 0; text-decoration: none;",
+    "}",
+    ".ccc-side-nav .add:hover { border-color: #5ac8fa; color: #5ac8fa; }",
     "body { padding-left: " + RAIL_W + "px; box-sizing: border-box; }",
     /* Morning's own wrappers hug the old nav; keep them off the rail. */
     ".mv-wrap, .mk-wrap { padding-left: 20px !important; }",
@@ -121,19 +130,39 @@
       a.appendChild(document.createTextNode(app.label));
       nav.appendChild(a);
     }
+    var spacer = document.createElement("div");
+    spacer.className = "spacer";
+    nav.appendChild(spacer);
+    // Adding an app is a rail action, so the affordance belongs in the rail
+    // rather than buried in dashboard settings.
+    var add = document.createElement("a");
+    add.className = "add";
+    add.href = "/applications#add";
+    add.title = "Add an app";
+    add.setAttribute("aria-label", "Add an app");
+    add.textContent = "+";
+    nav.appendChild(add);
+  }
+
+  function refresh() {
+    return fetch("/api/apps")
+      .then(function (r) { return r.ok ? r.json() : null; })
+      .then(function (d) {
+        if (d && Array.isArray(d.apps) && d.apps.length) render(d.apps);
+      })
+      .catch(function () { /* keep whatever is already rendered */ });
   }
 
   function mount() {
     if (!document.body) return;
     render(FALLBACK);
     document.body.appendChild(nav);
-    fetch("/api/apps")
-      .then(function (r) { return r.ok ? r.json() : null; })
-      .then(function (d) {
-        if (d && Array.isArray(d.apps) && d.apps.length) render(d.apps);
-      })
-      .catch(function () { /* keep the fallback rail */ });
+    refresh();
   }
+
+  // The Applications settings page calls this after a toggle, reorder, or
+  // removal so the rail beside it stops disagreeing with the list.
+  window.cccRefreshRail = refresh;
 
   if (document.readyState === "loading") {
     document.addEventListener("DOMContentLoaded", mount);

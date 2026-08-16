@@ -19785,3 +19785,71 @@ def test_apps_rail_static_is_wired_into_pages():
         html = (static / page).read_text(encoding="utf-8")
         assert '/static/app-rail.js' in html, page
         assert 'class="q2-toggle"' not in html, page
+
+
+def test_applications_settings_routes_and_mutations():
+    """Adding, arranging, and removing apps from the Applications page.
+
+    These are the only write paths into the rail, so a regression here means
+    a user's apps silently stop appearing or cannot be removed.
+    """
+    server_py = pathlib.Path(PROJECT_ROOT, "server.py").read_text(encoding="utf-8")
+    assert 'elif path == "/applications":' in server_py
+    assert '"/api/apps/add", "/api/apps/remove", "/api/apps/arrange"' in server_py
+    import server as _server
+
+    with tempfile.TemporaryDirectory() as tmp:
+        state = pathlib.Path(tmp)
+        with mock.patch.object(_server, "COMMAND_CENTER_STATE_DIR", state), \
+             mock.patch.object(_server, "USER_APPS_DIR", state / "apps"):
+            # A URL app is a manifest entry with no files on disk.
+            added = _server._apps_add({"label": "Hub", "icon": "H",
+                                       "kind": "url",
+                                       "url": "https://example.com"})
+            assert added == {"ok": True, "id": "hub"}
+            assert not (state / "apps" / "hub").exists()
+
+            # A blank app gets a folder it can be built into.
+            blank = _server._apps_add({"label": "Scratch", "kind": "blank"})
+            assert blank["ok"] and blank["id"] == "scratch"
+            assert (state / "apps" / "scratch" / "index.html").is_file()
+
+            # A port app also registers the proxy the iframe depends on.
+            port_app = _server._apps_add({"label": "Local", "kind": "port",
+                                          "port": "8770"})
+            assert port_app["ok"]
+            assert _server._custom_links_config()[1]["local"] == 8770
+
+            # Newly added apps land at the end of the rail, not mid-list.
+            ids = [a["id"] for a in _server._resolve_apps()]
+            assert ids[-3:] == ["hub", "scratch", "local"]
+
+            # Rejections: no name, a bad address, a non-numeric port.
+            assert _server._apps_add({"label": "", "kind": "url"})["ok"] is False
+            assert _server._apps_add({"label": "X", "kind": "url",
+                                      "url": "javascript:alert(1)"})["ok"] is False
+            assert _server._apps_add({"label": "Y", "kind": "port",
+                                      "port": "nope"})["ok"] is False
+
+            # Disabling hides an app from the rail but keeps it on the
+            # settings page so it can be switched back on.
+            _server._apps_arrange({"order": ["hub", "sessions", "queues"],
+                                   "disabled": ["hub"]})
+            assert "hub" not in [a["id"] for a in _server._resolve_apps()]
+            assert "hub" in [a["id"] for a
+                             in _server._resolve_apps(include_disabled=True)]
+
+            # Core navigation cannot be switched off — the rail would strand you.
+            _server._apps_arrange({"disabled": ["sessions"]})
+            assert "sessions" in [a["id"] for a in _server._resolve_apps()]
+
+            # Removing preserves the folder: an app may hold the only copy of
+            # something the user wrote.
+            assert _server._apps_remove("scratch")["ok"] is True
+            assert not (state / "apps" / "scratch").exists()
+            assert (state / "apps" / ".removed" / "scratch" / "index.html").is_file()
+            assert "scratch" not in [a["id"] for a
+                                     in _server._resolve_apps(include_disabled=True)]
+
+            assert _server._apps_remove("sessions")["ok"] is False
+            assert _server._apps_remove("../etc")["ok"] is False
