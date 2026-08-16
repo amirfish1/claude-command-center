@@ -6744,11 +6744,15 @@
       const canApprove = !!(approvalItem && approvalItem.needs_approval && approvalItem.request_id && approvalItem.can_approve);
       // Claude has no approval API — its prompt can only be answered by driving
       // the TUI picker with a keystroke, which is macOS + live-TTY only. Offer
-      // Approve/Deny when the server reports that capability; on Linux/headless
-      // hosts there is no route, so point the user at the terminal instead.
+      // Approve/Deny when the server reports that capability AND the session
+      // currently has a live tty; otherwise the click reaches the server just
+      // to bounce off "No live terminal for this session" (CCC-869) — point
+      // the user at resuming the session instead of offering dead buttons.
       const _isClaudeSess = !!(currentSession && isClaudeSource(currentSession.source));
       const _caps = (APP_CONFIG && APP_CONFIG.capabilities) || {};
-      const canAnswerClaude = !canApprove && _isClaudeSess && !!_caps.answerPermission;
+      const _claudeLiveTty = !!(liveStatus.live && liveStatus.tty);
+      const canAnswerClaude = !canApprove && _isClaudeSess && !!_caps.answerPermission && _claudeLiveTty;
+      const claudeDormant = !canApprove && _isClaudeSess && !!_caps.answerPermission && !_claudeLiveTty;
       const claudeNoRoute = !canApprove && _isClaudeSess && !_caps.answerPermission;
       const hasButtons = canApprove || canAnswerClaude;
       let actionsHtml;
@@ -6765,6 +6769,10 @@
         actionsHtml = '<span class="cl-approval-actions">'
               + '<button type="button" class="cl-approval-btn" data-claude-decision="accept" title="Approve this once. Sends Return to the session\'s terminal picker">Approve</button>'
               + '<button type="button" class="cl-approval-btn is-negative" data-claude-decision="decline" title="Deny. Sends Esc to the session\'s terminal picker">Deny</button>'
+          + '</span>';
+      } else if (claudeDormant) {
+        actionsHtml = '<span class="cl-approval-actions">'
+              + '<span class="cl-approval-note" title="This session has no live terminal right now, so CCC can\'t drive its approval picker. Resume the session, then approve or deny in its terminal">Resume to answer</span>'
           + '</span>';
       } else if (claudeNoRoute) {
         actionsHtml = '<span class="cl-approval-actions">'
