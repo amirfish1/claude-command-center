@@ -1,0 +1,1 @@
+- Release completion now verifies the stable public download page after the appcast is published, so a failed landing-page update cannot be reported as a completed DMG release.
