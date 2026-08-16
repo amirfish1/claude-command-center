@@ -53753,6 +53753,15 @@ def _inject_text_into_session(
             if _write_stream_json_interrupt(spawn):
                 delivered = _write_stream_json_user_message(spawn, text)
                 if delivered:
+                    # The text just landed straight on the live process's
+                    # stdin, bypassing the durable FIFO queue entirely. A
+                    # matching entry already parked in the terminal queue
+                    # (e.g. from an earlier queued send of the same text)
+                    # would otherwise sit there forever — never popped,
+                    # since nothing routes back through the queue on this
+                    # success path — leaving the UI showing "queued" for a
+                    # message that was actually delivered.
+                    _drop_matching_terminal_queue_entries(session_id, text)
                     return {
                         "ok": True,
                         "via": "claude-interrupt-steer",
