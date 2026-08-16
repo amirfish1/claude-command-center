@@ -19853,3 +19853,37 @@ def test_applications_settings_routes_and_mutations():
 
             assert _server._apps_remove("sessions")["ok"] is False
             assert _server._apps_remove("../etc")["ok"] is False
+
+
+def test_apps_open_inside_the_ccc_window():
+    """Every app opens in-window; absolute URLs go through /app/<id>.
+
+    A rail entry with target=_blank throws the user into a browser tab, which
+    defeats the point of having the app in CCC at all.
+    """
+    server_py = pathlib.Path(PROJECT_ROOT, "server.py").read_text(encoding="utf-8")
+    assert 'elif re.match(r"^/app/[a-z0-9_-]+$", path):' in server_py
+    import server as _server
+
+    with tempfile.TemporaryDirectory() as tmp:
+        state = pathlib.Path(tmp)
+        with mock.patch.object(_server, "COMMAND_CENTER_STATE_DIR", state), \
+             mock.patch.object(_server, "USER_APPS_DIR", state / "apps"):
+            _server._apps_add({"label": "Hub", "kind": "url",
+                               "url": "https://example.com/x"})
+            by_id = {a["id"]: a for a in _server._resolve_apps()}
+            # Same-origin apps navigate straight to their path...
+            assert by_id["sessions"]["nav"] == "/"
+            # ...absolute URLs are wrapped so they render inside CCC.
+            assert by_id["hub"]["nav"] == "/app/hub"
+            page = _server._render_app_frame(by_id["hub"])
+            assert 'src="https://example.com/x"' in page
+            # Always leave a way out for a site that refuses to be framed.
+            assert "Open in browser" in page
+
+    rail = pathlib.Path(PROJECT_ROOT, "static", "app-rail.js").read_text(encoding="utf-8")
+    assert 'a.target = "_blank"' not in rail
+    # The + opens a popup rather than navigating away from the current page.
+    assert "ccc-apps-scrim" in rail
+    # A framed page must not draw a second rail inside the first.
+    assert "window.self !== window.top" in rail

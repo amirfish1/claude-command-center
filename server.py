@@ -14762,12 +14762,79 @@ def _resolve_apps(include_disabled=False):
     for a in apps:
         # Core navigation cannot be switched off — the rail would strand you.
         a["enabled"] = a["id"] not in disabled or a.get("builtin", False)
+        # Where the rail actually navigates. Absolute URLs go through the
+        # /app/<id> wrapper so an app opens inside the CCC window instead of
+        # throwing you into a browser tab.
+        a["nav"] = a["url"] if a["url"].startswith("/") else f"/app/{a['id']}"
     if isinstance(order, list):
         rank = {str(i): n for n, i in enumerate(order)}
         apps.sort(key=lambda a: rank.get(a["id"], len(rank) + 1))
     if not include_disabled:
         apps = [a for a in apps if a["enabled"]]
     return apps
+
+
+_APP_FRAME_HTML = """<!DOCTYPE html>
+<html lang="en" data-theme="dark">
+<head>
+<meta charset="utf-8">
+<title>{label}</title>
+<script src="/static/app-rail.js" defer></script>
+<style>
+  html, body {{ height: 100%; margin: 0; background: #0f1115; }}
+  body {{ display: flex; flex-direction: column; }}
+  iframe {{ flex: 1; border: 0; width: 100%; }}
+  .blocked {{
+    display: none; margin: auto; text-align: center; padding: 40px;
+    color: #9aa4b2; font: 14px/1.7 -apple-system, BlinkMacSystemFont, sans-serif;
+  }}
+  .blocked a {{ color: #5ac8fa; }}
+  .bar {{
+    display: flex; align-items: center; gap: 10px; padding: 6px 12px;
+    background: #12151a; border-bottom: 1px solid #232830; color: #5f6772;
+    font: 11.5px -apple-system, BlinkMacSystemFont, sans-serif;
+  }}
+  .bar .grow {{ flex: 1; }}
+  .bar a {{ color: #8a929e; text-decoration: none; }}
+  .bar a:hover {{ color: #5ac8fa; }}
+</style>
+</head>
+<body>
+  <div class="bar">
+    <span>{host}</span>
+    <span class="grow"></span>
+    <a href="{url}" target="_blank" rel="noopener">Open in browser &#8599;</a>
+  </div>
+  <iframe id="f" src="{url}" title="{label}"></iframe>
+  <div class="blocked" id="blocked">
+    <b>{host}</b> will not display inside another window.<br>
+    <a href="{url}" target="_blank" rel="noopener">Open it in your browser &#8599;</a>
+  </div>
+  <script>
+    // A cross-origin frame that refuses to render fires no error we can read,
+    // so fall back on a deadline: no load event in time means show the way out.
+    var done = false;
+    document.getElementById('f').addEventListener('load', function () {{ done = true; }});
+    setTimeout(function () {{
+      if (done) return;
+      document.getElementById('f').style.display = 'none';
+      document.getElementById('blocked').style.display = 'block';
+    }}, 6000);
+  </script>
+</body>
+</html>
+"""
+
+def _render_app_frame(app):
+    """Fill in the external-app wrapper.
+
+    Module scope on purpose: `_do_GET` binds a local named `html` further
+    down, which shadows the stdlib module for the whole function."""
+    return _APP_FRAME_HTML.format(
+        label=html.escape(app["label"]),
+        url=html.escape(app["url"], quote=True),
+        host=html.escape(urllib.parse.urlparse(app["url"]).netloc or app["url"]),
+    )
 
 
 _APP_STARTER_HTML = """<!DOCTYPE html>
@@ -62946,6 +63013,17 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                 self.send_html((MORNING_STATIC_DIR / "index.html").read_text())
             except OSError as e:
                 self.send_json({"error": "morning/index.html missing", "detail": str(e)}, 500)
+        elif re.match(r"^/app/[a-z0-9_-]+$", path):
+            # Wrapper that frames an external app's URL so it opens inside the
+            # CCC window rather than kicking you out to a browser tab. Only
+            # ever frames a URL the user themselves configured.
+            app_id = path[len("/app/"):]
+            target = next((a for a in _resolve_apps(include_disabled=True)
+                           if a["id"] == app_id), None)
+            if not target or target["url"].startswith("/"):
+                self.send_json({"error": f"not found: {path}"}, 404)
+                return
+            self.send_html(_render_app_frame(target))
         elif re.match(r"^/view/[a-z0-9_-]+$", path):
             # Local view plugins: serve a per-user <name>/index.html as an
             # in-app page, reachable from the Applications rail (/api/apps).

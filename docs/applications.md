@@ -8,6 +8,14 @@ Built-ins are Sessions (`/`) and Queues (`/q2.html`). Everything else is yours.
 
 ## Adding an app
 
+The quickest way is the **+** at the bottom of the rail. It opens the
+Applications panel over whatever you were looking at — name it, pick an icon,
+say whether it is a web page, something running on a port, or an empty app to
+build into. Drag rows to reorder, toggle to hide, `×` to remove.
+
+Everything below is what that panel writes for you, for when you would rather
+do it by hand or have an agent do it.
+
 An app is a label, an icon, and a URL. There are two ways to add one, and you
 can mix them.
 
@@ -59,8 +67,12 @@ skip the folder and add an entry to
 Entries here also override a discovered app with the same `id`, which is how
 you rename, re-icon, or reorder an installed app without editing its folder.
 
-Only same-origin paths (`/…`) and `http(s)` URLs are accepted. Absolute URLs
-open in a new tab; same-origin paths navigate in place.
+Only same-origin paths (`/…`) and `http(s)` URLs are accepted.
+
+Apps always open **inside the CCC window**. An absolute URL is framed by
+`/app/<id>`, which shows the host and an "Open in browser" link in case the
+site refuses to be embedded (many sites set `X-Frame-Options`); if the frame
+has not loaded after a few seconds, that link becomes the whole page.
 
 ## What an app can do
 

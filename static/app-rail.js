@@ -30,6 +30,9 @@
   var STYLE_ID = "ccc-side-nav-style";
   if (document.getElementById(STYLE_ID)) return;
   if (document.querySelector(".ccc-side-nav")) return;
+  // Framed pages (the Applications popup, an embedded app) get no rail of
+  // their own — the parent window already has one.
+  try { if (window.self !== window.top) return; } catch (e) { return; }
 
   var RAIL_W = 64;
 
@@ -65,15 +68,32 @@
     ".ccc-side-nav a .icon { font-size: 20px; margin-bottom: 3px; display: block; }",
     ".ccc-side-nav a:hover { background: #1a1d23; color: #ccc; }",
     ".ccc-side-nav a.active { background: #23272e; color: #5ac8fa; }",
-    /* Pushes the + to the bottom of the rail, away from the apps. */
-    ".ccc-side-nav .spacer { flex: 1; min-height: 8px; }",
     ".ccc-side-nav .add {",
     "  width: 34px; height: 34px; flex-shrink: 0; border-radius: 8px;",
     "  border: 1px dashed #333a44; background: none; color: #5f6772;",
     "  font-size: 18px; line-height: 1; cursor: pointer; display: grid;",
-    "  place-items: center; padding: 0; text-decoration: none;",
+    "  place-items: center; padding: 0; margin-top: 2px;",
     "}",
     ".ccc-side-nav .add:hover { border-color: #5ac8fa; color: #5ac8fa; }",
+    /* Applications popup: keeps you on the page you were already on. */
+    ".ccc-apps-scrim {",
+    "  position: fixed; inset: 0; background: rgba(0,0,0,.55); z-index: 4000;",
+    "  display: grid; place-items: center; padding: 28px;",
+    "}",
+    ".ccc-apps-modal {",
+    "  width: 940px; max-width: 100%; height: 82vh; background: #0b0d11;",
+    "  border: 1px solid #232830; border-radius: 13px; overflow: hidden;",
+    "  box-shadow: 0 24px 70px rgba(0,0,0,.55); display: flex;",
+    "  flex-direction: column; position: relative;",
+    "}",
+    ".ccc-apps-modal iframe { flex: 1; border: 0; width: 100%; }",
+    ".ccc-apps-close {",
+    "  position: absolute; top: 10px; right: 12px; z-index: 2; width: 28px;",
+    "  height: 28px; border-radius: 7px; border: 1px solid #232830;",
+    "  background: #171b21; color: #8a929e; font-size: 15px; cursor: pointer;",
+    "  line-height: 1; display: grid; place-items: center; padding: 0;",
+    "}",
+    ".ccc-apps-close:hover { color: #e6e9ee; border-color: #39414d; }",
     "body { padding-left: " + RAIL_W + "px; box-sizing: border-box; }",
     /* Morning's own wrappers hug the old nav; keep them off the rail. */
     ".mv-wrap, .mk-wrap { padding-left: 20px !important; }",
@@ -92,8 +112,8 @@
     var best = null;
     var bestLen = -1;
     for (var i = 0; i < apps.length; i++) {
-      var u = apps[i].url;
-      if (u.charAt(0) !== "/") continue;         // external — never "current"
+      var u = apps[i].nav || apps[i].url;
+      if (u.charAt(0) !== "/") continue;
       var hit = (u === "/") ? (here === "/" || here === "") : (here.indexOf(u) === 0);
       if (hit && u.length > bestLen) { best = apps[i].id; bestLen = u.length; }
     }
@@ -110,19 +130,17 @@
     for (var i = 0; i < apps.length; i++) {
       var app = apps[i];
       var a = document.createElement("a");
-      a.href = app.url;
+      a.href = app.nav || app.url;
       a.title = app.label;
       a.setAttribute("data-app-id", app.id);
       if (app.id === activeId) {
         a.className = "active";
         a.setAttribute("aria-current", "page");
       }
-      if (app.url.charAt(0) !== "/") {
-        // Absolute URLs leave the dashboard origin; give them their own tab
-        // rather than replacing CCC.
-        a.target = "_blank";
-        a.rel = "noopener";
-      }
+      // Everything stays inside the CCC window. An absolute URL is wrapped
+      // by /app/<id>, which frames it and offers a way out if the site
+      // refuses to be embedded.
+      a.href = app.nav || app.url;
       var icon = document.createElement("span");
       icon.className = "icon";
       icon.textContent = app.icon || "•";
@@ -130,17 +148,16 @@
       a.appendChild(document.createTextNode(app.label));
       nav.appendChild(a);
     }
-    var spacer = document.createElement("div");
-    spacer.className = "spacer";
-    nav.appendChild(spacer);
     // Adding an app is a rail action, so the affordance belongs in the rail
-    // rather than buried in dashboard settings.
-    var add = document.createElement("a");
+    // rather than buried in dashboard settings. It opens a popup instead of
+    // navigating: you should not lose the session you were reading.
+    var add = document.createElement("button");
     add.className = "add";
-    add.href = "/applications#add";
+    add.type = "button";
     add.title = "Add an app";
     add.setAttribute("aria-label", "Add an app");
     add.textContent = "+";
+    add.onclick = openApps;
     nav.appendChild(add);
   }
 
@@ -163,6 +180,42 @@
   // The Applications settings page calls this after a toggle, reorder, or
   // removal so the rail beside it stops disagreeing with the list.
   window.cccRefreshRail = refresh;
+
+  function openApps() {
+    var scrim = document.createElement("div");
+    scrim.className = "ccc-apps-scrim";
+    var modal = document.createElement("div");
+    modal.className = "ccc-apps-modal";
+    var close = document.createElement("button");
+    close.className = "ccc-apps-close";
+    close.type = "button";
+    close.textContent = "\u00d7";
+    close.setAttribute("aria-label", "Close");
+    var frame = document.createElement("iframe");
+    frame.src = "/applications#add";
+    frame.title = "Applications";
+    modal.appendChild(close);
+    modal.appendChild(frame);
+    scrim.appendChild(modal);
+
+    function shut() {
+      document.removeEventListener("keydown", onKey);
+      scrim.remove();
+      refresh();          // apps may have been added, renamed, or removed
+    }
+    function onKey(e) { if (e.key === "Escape") shut(); }
+    close.onclick = shut;
+    scrim.onclick = function (e) { if (e.target === scrim) shut(); };
+    document.addEventListener("keydown", onKey);
+    // The settings page focuses its own name field, so Escape lands inside
+    // the frame and never reaches the listener above. Same-origin, so we can
+    // listen in there too.
+    frame.addEventListener("load", function () {
+      try { frame.contentDocument.addEventListener("keydown", onKey); }
+      catch (e) { /* cross-origin: parent listener is all we get */ }
+    });
+    document.body.appendChild(scrim);
+  }
 
   if (document.readyState === "loading") {
     document.addEventListener("DOMContentLoaded", mount);
