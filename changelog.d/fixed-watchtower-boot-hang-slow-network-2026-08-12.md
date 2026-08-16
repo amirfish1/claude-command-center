@@ -1,1 +1,0 @@
-- Fixed CCC.app hanging on a blank white window on slow internet connections — WatchTower's background git/pip calls during boot are now bounded to 20s instead of blocking the local server from starting.

@@ -1,1 +1,0 @@
-Renamed the sidebar's "All" tab to "Other" and scoped it to just messages and group chats (Coding/Workers already have their own tabs); it hides when empty. Dropped the redundant nested Coding/Workers/Messages/Group-chats filter bar and replaced it with drag-and-drop onto the top-level Coding/Workers tab headers to move sessions between lanes.

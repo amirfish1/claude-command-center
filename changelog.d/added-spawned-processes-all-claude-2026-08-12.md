@@ -1,1 +1,0 @@
-- Expanded the Spawned Processes list in System Status to scan and display all running Claude Code and agy processes on the system, with a STOP/KILL option to recursively clean up their process trees.

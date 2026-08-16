@@ -7,6 +7,48 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [5.25.0] - 2026-08-16
+
+### Added
+- Added `CCC_ENGINE_UPDATE_SKIP` (comma-separated engine ids) to exclude specific engines from the automatic engine update pass.
+- Added running Next.js development servers to the System Status page with an option to stop/kill them.
+- Expanded the Spawned Processes list in System Status to scan and display all running Claude Code and agy processes on the system, with a STOP/KILL option to recursively clean up their process trees.
+- Integrated the System Status and System Health views into a single unified System status dialog with tabbed navigation ("Status" and "Health").
+- Clicking the footer "system" pill now opens the modal directly to the "Health" tab.
+- Added unattended usage-limit auto-resume: when a claude/codex/kimi session stops on a rate/usage-limit wall, CCC now detects it, shows a live "RESUMING IN HH:MM:SS" countdown above the composer, and automatically sends "continue" the moment the quota resets, no manual button required.
+
+### Changed
+- Queue views no longer make the CCC server pay for its own GitHub issue-list fetches. The queue-events poller now reads the WatchTower daemon's persisted snapshot (soft `list_items()`), which already refreshes every few seconds — previously CCC forced its own full fetch, doubling GraphQL quota spend on busy repos.
+- Queue timeline resolution blocks (Summary/Caveat/Follow-up/Unresolved) now
+preserve line breaks via `white-space: pre-wrap` on `.uxq-tl-res-v`, so
+structured multi-line `wt close --summary` text renders readably instead of
+collapsing into one dense paragraph (the q2 board already did this).
+- Renamed the sidebar's "All" tab to "Other" and scoped it to just messages and group chats (Coding/Workers already have their own tabs); it hides when empty. Dropped the redundant nested Coding/Workers/Messages/Group-chats filter bar and replaced it with drag-and-drop onto the top-level Coding/Workers tab headers to move sessions between lanes.
+- Moved access to the System Status panel to a new "system" pill on the bottom left next to "productivity" so it is always visible.
+- Re-enabled the token "throughput" pill and strip for non-debug mode users.
+- Polished the System status modal with clearer tabs and more legible Health rows, controls, and status indicators.
+- Relocated the "Restart all" action button to the top of the System Status modal and removed its extra explanations and hint text.
+- Removed the "What is WEDGED?" detail section from the modal.
+
+### Removed
+- Removed Hermes from the automatic engine update pass: `hermes update` restarts the Hermes gateway service and kills live messaging sessions, so unattended updates must never trigger it.
+- Removed the inline Queues display panel from the WatchTower row inside the System Status modal.
+
+### Fixed
+- Prevented ordinary Claude composer follow-ups from falsely retiring the active headless process and showing `[Request interrupted by user]`; explicit queued sends now follow Claude's acknowledged command lifecycle, including sessions owned by the persistent worker.
+- Block CCC's private Codex app-server from starting when another Codex process (terminal TUI, managed daemon, etc.) already holds the shared `~/.codex/state_5.sqlite` database. This prevents cross-posting of messages between concurrent Codex sessions and surfaces a clear error telling the user which process is in conflict.
+- Continuing a session in a new session now falls back to the parent repo when the original worktree directory no longer exists, instead of failing with an invalid cwd error.
+- Fixed conversation-list updates after archiving, trashing, merging, or moving a session between lanes so the sidebar keeps its current snapshot while refreshing in the background.
+- Fixed current-sessions row flicker in the sidebar: rows no longer shrink from two lines to one on hover, keeping the full metadata row visible.
+- Cache `/api/issues` responses and back off GitHub-backed queue polling when GitHub API rate limits are low or exceeded, instead of repeatedly calling `gh issue list` into the limit.
+- Fixed bottom toolbar overflow on mobile so the Continue-new pill no longer pushes TTS/mic/send off-screen, and widened the new-session folder input to use the full viewport width.
+- Fixed the purple "spawned by" origin chip in the sidebar not reliably navigating to the parent session; the row's own click handler was racing it.
+- Stopped re-polling GitHub for PRs in terminal states. MERGED pull requests are now cached permanently and CLOSED ones for a day, instead of re-checking every PR in your history every 5 minutes — this was single-handedly burning ~4,000 of the account's 5,000/hour GraphQL quota and could lock out all GitHub access with a rate-limit banner.
+- Release completion now verifies the stable public download page after the appcast is published, so a failed landing-page update cannot be reported as a completed DMG release.
+- Fixed sidebar conversation-list flicker by skipping full innerHTML rebuilds when only volatile time labels, live status, context percentage, or evergreen tooltips change; these are now patched in place.
+- Finalized Claude replies now replace their matching stream-json preview without replaying the same text word by word.
+- Fixed CCC.app hanging on a blank white window on slow internet connections — WatchTower's background git/pip calls during boot are now bounded to 20s instead of blocking the local server from starting.
+
 ## [5.24.0] - 2026-08-12
 
 ### Added
@@ -2614,7 +2656,8 @@ Initial public release.
 - `/api/repo/switch` validates targets against the picker allow-list.
 - See [`SECURITY.md`](SECURITY.md) for the full threat model.
 
-[Unreleased]: https://github.com/amirfish1/claude-command-center/compare/v5.24.0...HEAD
+[Unreleased]: https://github.com/amirfish1/claude-command-center/compare/v5.25.0...HEAD
+[5.25.0]: https://github.com/amirfish1/claude-command-center/releases/tag/v5.25.0
 [5.24.0]: https://github.com/amirfish1/claude-command-center/releases/tag/v5.24.0
 [5.23.0]: https://github.com/amirfish1/claude-command-center/releases/tag/v5.23.0
 [5.22.1]: https://github.com/amirfish1/claude-command-center/releases/tag/v5.22.1

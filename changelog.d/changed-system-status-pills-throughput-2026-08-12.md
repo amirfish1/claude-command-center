@@ -1,2 +1,0 @@
-- Moved access to the System Status panel to a new "system" pill on the bottom left next to "productivity" so it is always visible.
-- Re-enabled the token "throughput" pill and strip for non-debug mode users.

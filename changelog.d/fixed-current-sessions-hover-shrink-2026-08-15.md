@@ -1,1 +1,0 @@
-Fixed current-sessions row flicker in the sidebar: rows no longer shrink from two lines to one on hover, keeping the full metadata row visible.

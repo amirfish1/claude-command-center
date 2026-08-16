@@ -1,1 +1,0 @@
-- Polished the System status modal with clearer tabs and more legible Health rows, controls, and status indicators.

@@ -1,1 +1,0 @@
-Block CCC's private Codex app-server from starting when another Codex process (terminal TUI, managed daemon, etc.) already holds the shared `~/.codex/state_5.sqlite` database. This prevents cross-posting of messages between concurrent Codex sessions and surfaces a clear error telling the user which process is in conflict.

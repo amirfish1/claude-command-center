@@ -1,1 +1,0 @@
-Queue views no longer make the CCC server pay for its own GitHub issue-list fetches. The queue-events poller now reads the WatchTower daemon's persisted snapshot (soft `list_items()`), which already refreshes every few seconds — previously CCC forced its own full fetch, doubling GraphQL quota spend on busy repos.

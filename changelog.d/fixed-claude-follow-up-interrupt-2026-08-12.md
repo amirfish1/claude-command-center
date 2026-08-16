@@ -1,1 +1,0 @@
-Prevented ordinary Claude composer follow-ups from falsely retiring the active headless process and showing `[Request interrupted by user]`; explicit queued sends now follow Claude's acknowledged command lifecycle, including sessions owned by the persistent worker.

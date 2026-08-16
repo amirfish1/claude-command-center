@@ -1,1 +1,0 @@
-Added unattended usage-limit auto-resume: when a claude/codex/kimi session stops on a rate/usage-limit wall, CCC now detects it, shows a live "RESUMING IN HH:MM:SS" countdown above the composer, and automatically sends "continue" the moment the quota resets, no manual button required.
