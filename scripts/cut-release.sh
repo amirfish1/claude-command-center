@@ -11,6 +11,7 @@
 #   ./scripts/cut-release.sh X.Y.Z --dry-run    # print steps, change nothing
 #   ./scripts/cut-release.sh X.Y.Z --skip-dmg   # source/brew only, no DMG
 #   ./scripts/cut-release.sh X.Y.Z --allow-dirty  # cut anyway with a dirty tree
+#   ./scripts/cut-release.sh X.Y.Z --release-site URL  # verify public release page
 #
 # A dirty working tree is refused by default: this script stages a fixed file
 # list, so uncommitted work in static/ (or anywhere outside that list) would be
@@ -30,26 +31,29 @@ DRY_RUN=0
 SKIP_DMG=0
 SKIP_BREW=0
 ALLOW_DIRTY=0
+RELEASE_SITE="${CCC_RELEASE_SITE:-https://ccc.amirfish.ai}"
 BREW_TAP="${CCC_BREW_TAP:-$HOME/Apps/homebrew-ccc}"
 BREW_FORMULA_UPDATED=0
 BREW_FORMULA_SHA=""
 
-for arg in "$@"; do
-  case "$arg" in
-    --dry-run) DRY_RUN=1 ;;
-    --skip-dmg) SKIP_DMG=1 ;;
-    --skip-brew) SKIP_BREW=1 ;;
-    --allow-dirty) ALLOW_DIRTY=1 ;;
-    --notes-file=*) NOTES_FILE="${arg#*=}" ;;
-    --notes-file) shift; NOTES_FILE="${1:-}" ;;
-    -*) echo "cut-release: unknown flag $arg" >&2; exit 2 ;;
-    *) [ -z "$VERSION" ] && VERSION="$arg" ;;
+while [ "$#" -gt 0 ]; do
+  case "$1" in
+    --dry-run) DRY_RUN=1; shift ;;
+    --skip-dmg) SKIP_DMG=1; shift ;;
+    --skip-brew) SKIP_BREW=1; shift ;;
+    --allow-dirty) ALLOW_DIRTY=1; shift ;;
+    --release-site=*) RELEASE_SITE="${1#*=}"; shift ;;
+    --release-site) RELEASE_SITE="${2:-}"; shift 2 ;;
+    --notes-file=*) NOTES_FILE="${1#*=}"; shift ;;
+    --notes-file) NOTES_FILE="${2:-}"; shift 2 ;;
+    -*) echo "cut-release: unknown flag $1" >&2; exit 2 ;;
+    *) [ -z "$VERSION" ] && VERSION="$1"; shift ;;
   esac
 done
 
 if ! printf '%s' "$VERSION" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+$'; then
   echo "cut-release: version must be X.Y.Z, got '${VERSION:-<none>}'" >&2
-  echo "usage: ./scripts/cut-release.sh X.Y.Z [--skip-dmg] [--skip-brew] [--allow-dirty] [--dry-run] [--notes-file F]" >&2
+  echo "usage: ./scripts/cut-release.sh X.Y.Z [--skip-dmg] [--skip-brew] [--allow-dirty] [--dry-run] [--release-site URL] [--notes-file F]" >&2
   exit 2
 fi
 
@@ -187,6 +191,10 @@ if [ "$SKIP_DMG" = 0 ]; then
   run "cp ccc-v${VERSION}.dmg ccc.dmg && gh release upload v${VERSION} ccc.dmg --clobber && rm -f ccc.dmg"
   run "git commit --only docs/appcast.xml -m 'chore(release): publish v${VERSION} appcast'"
   run "git push origin main"
+  if [ "$DRY_RUN" = 0 ]; then
+    step "     Verify release site: ${RELEASE_SITE}"
+    curl --fail --silent --show-error --max-time 20 "$RELEASE_SITE" > /dev/null
+  fi
 else
   warn "6-7/9  --skip-dmg: no DMG, no appcast (DMG users will NOT get this update)"
 fi

@@ -21,6 +21,25 @@ def test_full_release_validates_notary_profile_before_mutating_release_state():
     assert "notarization profile 'ccc-notary' is unavailable" in script
 
 
+def test_full_release_probes_the_stable_release_site_after_publishing_appcast():
+    script = (ROOT / "scripts" / "cut-release.sh").read_text(encoding="utf-8")
+
+    assert '--release-site URL' in script
+    assert 'RELEASE_SITE="${CCC_RELEASE_SITE:-https://ccc.amirfish.ai}"' in script
+    probe = 'curl --fail --silent --show-error --max-time 20 "$RELEASE_SITE" > /dev/null'
+
+    assert probe in script
+    assert script.index('git commit --only docs/appcast.xml') < script.index(probe)
+    assert script.index(probe) < script.index('step "Done — v${VERSION} shipped')
+
+
+def test_release_site_value_is_consumed_as_its_own_argument():
+    script = (ROOT / "scripts" / "cut-release.sh").read_text(encoding="utf-8")
+
+    assert 'while [ "$#" -gt 0 ]; do' in script
+    assert '--release-site) RELEASE_SITE="${2:-}"; shift 2 ;;' in script
+
+
 def test_homebrew_publish_syncs_and_verifies_the_remote_formula():
     script = (ROOT / "scripts" / "cut-release.sh").read_text(encoding="utf-8")
 
