@@ -228,12 +228,10 @@ The whole point is the first row: the moment you touch a terminal, a tool that o
 - **2026-05-18**: Local macOS `say` text-to-speech button on conversations.
 
 <!-- star-history:start -->
-<a href="https://star-history.com/#amirfish1/claude-command-center&Date">
-  <picture>
-    <source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/amirfish1/claude-command-center/main/assets/star-history/star-history-dark.svg" />
-    <img alt="Star History Chart" src="https://raw.githubusercontent.com/amirfish1/claude-command-center/main/assets/star-history/star-history-light.svg" />
-  </picture>
-</a>
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="assets/star-history/star-history-dark.svg">
+  <img alt="Star history" src="assets/star-history/star-history-light.svg">
+</picture>
 <!-- star-history:end -->
 
 > **If you install it, I'd love to hear how.** Drop a ⭐, open an issue with
