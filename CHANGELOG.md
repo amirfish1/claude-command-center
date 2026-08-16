@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [5.25.1] - 2026-08-16
+
+### Added
+- Applications rail: a fixed column on the left edge is now CCC's top-level navigation, replacing the Queues/Sessions toggle. Built-in surfaces sit alongside your own apps, which are discovered from `~/.claude/command-center/apps/*/app.json` or declared in `custom-links.json`.
+- Add apps from the UI: the rail has a `+` that opens an Applications page where you can add, reorder, hide, and remove apps without touching a config file.
+
+### Fixed
+- The Applications rail is now resizable — drag its right edge, double-click to reset — and external apps render inside the Mac app instead of being thrown out to your browser.
+
 ## [5.25.0] - 2026-08-16
 
 ### Added
@@ -2656,7 +2665,8 @@ Initial public release.
 - `/api/repo/switch` validates targets against the picker allow-list.
 - See [`SECURITY.md`](SECURITY.md) for the full threat model.
 
-[Unreleased]: https://github.com/amirfish1/claude-command-center/compare/v5.25.0...HEAD
+[Unreleased]: https://github.com/amirfish1/claude-command-center/compare/v5.25.1...HEAD
+[5.25.1]: https://github.com/amirfish1/claude-command-center/releases/tag/v5.25.1
 [5.25.0]: https://github.com/amirfish1/claude-command-center/releases/tag/v5.25.0
 [5.24.0]: https://github.com/amirfish1/claude-command-center/releases/tag/v5.24.0
 [5.23.0]: https://github.com/amirfish1/claude-command-center/releases/tag/v5.23.0
