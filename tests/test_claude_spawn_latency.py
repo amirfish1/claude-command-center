@@ -488,8 +488,13 @@ def test_orphaned_registered_prewarm_is_reaped_on_owner_restart(monkeypatch):
     saved = []
     killed = []
     unlinked = []
-    monkeypatch.setattr(server, "_load_spawn_registry", lambda: list(entries))
-    monkeypatch.setattr(server, "_save_spawn_registry", lambda rows: saved.append(rows))
+
+    def mutate_registry(mutator):
+        rows = list(entries)
+        if mutator(rows):
+            saved.append(rows)
+
+    monkeypatch.setattr(server, "_mutate_spawn_registry", mutate_registry)
     monkeypatch.setattr(server.os, "killpg", lambda pid, sig: killed.append(pid))
     monkeypatch.setattr(server, "_unlink_quiet", lambda path: unlinked.append(path))
 

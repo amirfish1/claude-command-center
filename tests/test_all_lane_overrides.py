@@ -59,7 +59,8 @@ def test_all_lane_drop_wiring_posts_to_persistent_endpoint():
     server_py = (ROOT / "server.py").read_text(encoding="utf-8")
 
     assert "assignAllLaneFromDrop" in app_js
-    assert "data-all-hermes-tab" in app_js
+    assert "data-conv-tab" in app_js
+    assert "const $laneTabBar" in app_js
     assert "/api/conversations/all-lane" in app_js
     assert 'all_lane_override' in app_js
     assert 'path == "/api/conversations/all-lane"' in server_py
@@ -72,7 +73,7 @@ def test_all_lane_drop_updates_render_state_immediately():
     assert app_js.count("all_lane_override: c.all_lane_override || ''") >= 2
     drop_handler = app_js[
         app_js.index("const assignAllLaneFromDrop = async")
-        : app_js.index("$allHermesTabs.addEventListener('click'")
+        : app_js.index("const _laneDropTarget =")
     ]
     assert "setLocalAllLaneOverride(sid, lane, row.id || '')" in drop_handler
     assert "_convListRenderSig = null;" in drop_handler
@@ -90,11 +91,10 @@ def test_all_lane_override_never_controls_trash_membership():
     assert "expandAllLaneDestinationGroup(row);" in app_js
 
 
-def test_saved_all_lane_survives_a_transient_empty_worker_snapshot():
+def test_top_level_lane_drop_targets_only_accept_coding_and_workers():
     app_js = (ROOT / "static" / "app.js").read_text(encoding="utf-8")
-    split_start = app_js.index("const _savedAllTabView")
-    split_js = app_js[split_start:app_js.index("const _allTabMainConvs", split_start)]
+    split_start = app_js.index("const _laneDropTarget =")
+    split_js = app_js[split_start:app_js.index("$laneTabBar.addEventListener('dragover'", split_start)]
 
-    assert "const _savedAllTabView" in split_js
-    assert "|| _savedAllTabView !== 'coding'" in split_js
-    assert "const _allTabView = _allTabHasHermesSplit ? _savedAllTabView : 'coding';" in split_js
+    assert "data-conv-tab" in split_js
+    assert "lane === 'coding' || lane === 'workers'" in split_js

@@ -150,7 +150,11 @@ class BridgeRecoveryTests(unittest.TestCase):
         self.assertTrue(result["ok"])
         self.assertTrue(result["retried"])
         inject.assert_called_once_with(
-            sid, "selected", _from_terminal_queue=True, skip_wt=True,
+            sid,
+            "selected",
+            _from_terminal_queue=True,
+            skip_wt=True,
+            source="engine-bridge-recover",
         )
         with server._pending_terminal_input_lock:
             self.assertEqual(

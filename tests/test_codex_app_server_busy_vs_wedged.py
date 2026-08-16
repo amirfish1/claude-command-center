@@ -80,6 +80,7 @@ class BusyNotWedgedTests(unittest.TestCase):
         proc = mock.Mock()
         proc.poll.return_value = None
         with mock.patch.object(server, "_codex_managed_app_server_enabled", return_value=False), \
+             mock.patch.object(server, "_codex_shared_state_conflict", return_value=None), \
              mock.patch.object(server, "_resolve_codex_bin",
                                 return_value={"available": True, "bin": "/usr/bin/codex"}), \
              mock.patch.object(server, "_codex_app_server_reap_stray_children"), \

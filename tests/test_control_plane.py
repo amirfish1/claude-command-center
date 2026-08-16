@@ -525,7 +525,7 @@ class TestWatchTowerServiceControl(unittest.TestCase):
         ), mock.patch.object(
             server, "_watchtower_process_argv", return_value=argv
         ), mock.patch.object(
-            server.shutil, "which", return_value="/test/bin/wt"
+            server, "_wt_cli_path", return_value="/test/bin/wt"
         ), mock.patch.object(
             server.platform, "system", return_value="Linux"
         ), mock.patch.object(
