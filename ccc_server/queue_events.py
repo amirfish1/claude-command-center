@@ -594,9 +594,16 @@ def _gh_queue_signature(items):
 
 
 def _gh_queue_poll_once():
-    """One forced remote refresh. Warms the list memo, returns True on change."""
+    """One remote-list read. Warms the list memo, returns True on change."""
     try:
-        items = _core._q.list_items(fresh=True) or []
+        # Soft read on purpose: the WatchTower daemon's background poller
+        # already pays the live `gh` cost and persists a fresh snapshot every
+        # few seconds, and a soft list_items() serves that snapshot (it
+        # self-heals with an ETag-probed live read when the daemon is down).
+        # A forced fresh=True here bypassed the snapshot and made every CCC
+        # server pay its own full GraphQL fetch on busy repos — duplicating
+        # the daemon's spend against the account's hourly quota.
+        items = _core._q.list_items() or []
     except TypeError:
         # The stdlib fallback engine has no `fresh` kwarg — and no remote to
         # refresh either, so this degrades to a plain read.

@@ -5,9 +5,10 @@ the local ticket store the SSE stats — remote changes used to surface only via
 blind 60s beat against a stale-while-revalidate endpoint, which cost up to two
 beats (~2 minutes) before a newly filed issue appeared without a manual reload.
 
-These tests pin the replacement: a subscriber-gated poller that forces a remote
-refresh, warms the memo `/api/queue/list` serves, and bumps a version counter
-the SSE folds into its change detection.
+These tests pin the replacement: a subscriber-gated poller that reads the
+daemon-polled remote snapshot (a soft `list_items()` — the WatchTower daemon's
+persisted cache owns live `gh` spending), warms the memo `/api/queue/list`
+serves, and bumps a version counter the SSE folds into its change detection.
 
 No network and no private data — `_q.list_items` is stubbed with synthetic rows
 shaped like the GitHub backend's output (`github_repo` stamped on every row).
@@ -89,7 +90,10 @@ def test_first_poll_is_baseline_then_change_bumps_version():
 
     assert qe._gh_queue_poll_once() is False, "baseline poll must not fire an event"
     assert qe.gh_queue_version() == 0
-    assert stub.fresh_calls == 1, "the poller must force a remote refresh"
+    assert stub.fresh_calls == 0, (
+        "soft read: the WT daemon's persisted snapshot owns remote freshness; "
+        "a forced refresh here duplicated the daemon's GraphQL spend"
+    )
 
     assert qe._gh_queue_poll_once() is False, "unchanged remote must not fire"
     assert qe.gh_queue_version() == 0
