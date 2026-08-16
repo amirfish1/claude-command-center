@@ -6411,6 +6411,25 @@
   .conv-item:hover:not(.active) .conv-hover-meta-row .conv-branch-slot,
   .conv-item:hover:not(.active) .conv-hover-meta-row .conv-session-origin-chip.is-parent,
   .conv-item:hover:not(.active) .conv-hover-meta-row .conv-session-origin-chip.is-grandparent { display: inline-flex; }
+  /* CCC-865: CCC-864 kept the origin chip visible on hover but the row
+     around it still switched to the absolute single-line overlay above,
+     collapsing the normal two-row layout back to one line under the
+     cursor. Rows with a parent/grandparent chip should stay in normal
+     flow on hover instead, same treatment as the current-sessions
+     exception below (CCC-843). */
+  .conv-item:hover:not(.active) .conv-hover-meta-row:has(.conv-session-origin-chip.is-parent),
+  .conv-item:hover:not(.active) .conv-hover-meta-row:has(.conv-session-origin-chip.is-grandparent) {
+    position: static;
+    right: auto;
+    top: auto;
+    transform: none;
+    margin: 4px 48px 0 var(--conv-content-left);
+    max-width: calc(100% - var(--conv-content-left) - 70px);
+    justify-content: flex-start;
+    background: transparent;
+    padding-left: 0;
+    z-index: auto;
+  }
   /* Current-sessions rows already surface the full meta row by default; the
      generic one-line hover treatment above would shrink them back to a single
      line and cause a visible height flicker. Keep them in normal two-line flow
