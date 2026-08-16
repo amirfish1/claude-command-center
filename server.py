@@ -68379,6 +68379,23 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                     "cancelled": 0,
                     "error": "queued message no longer exists",
                 }, 409)
+        elif path == "/api/usage-limit/cancel":
+            length = int(self.headers.get("Content-Length", "0"))
+            body = self.rfile.read(length) if length > 0 else b""
+            try:
+                payload = json.loads(body) if body else {}
+            except json.JSONDecodeError:
+                payload = {}
+            sid = str(payload.get("session_id") or "").strip()
+            if not sid:
+                self.send_json({"ok": False, "error": "missing session_id"}, 400)
+            else:
+                # Tracked entries are keyed by the bare id (see
+                # usage_limit_resume_at_for_session); kimi rows carry CCC's
+                # "session_" display prefix, so strip it the same way.
+                key = sid[len("session_"):] if sid.startswith("session_") else sid
+                _clear_usage_limit_resume(key)
+                self.send_json({"ok": True, "session_id": sid})
         elif path == "/api/inject-input":
             length = int(self.headers.get("Content-Length", "0"))
             body = self.rfile.read(length) if length > 0 else b""

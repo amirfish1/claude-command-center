@@ -11747,9 +11747,12 @@
           banner = document.createElement('div');
           banner.className = 'usage-limit-resume-banner';
           banner.setAttribute('role', 'status');
+          banner.innerHTML = '<span class="usage-limit-resume-text"></span>'
+            + '<button type="button" class="usage-limit-resume-cancel" title="Cancel auto-resume" aria-label="Cancel auto-resume">&times;</button>';
           inputBar.prepend(banner);
         }
         banner.dataset.resumeAt = String(resumeAt);
+        banner.dataset.sid = sid;
       });
     } catch (e) { /* best-effort UI only */ }
   }
@@ -11758,11 +11761,28 @@
       const resumeAt = parseFloat(banner.dataset.resumeAt || '0');
       if (!resumeAt) { banner.remove(); return; }
       const remaining = resumeAt - Date.now() / 1000;
-      banner.textContent = remaining > 0
+      const textEl = banner.querySelector('.usage-limit-resume-text');
+      const text = remaining > 0
         ? 'RESUMING IN ' + _usageLimitFormatCountdown(remaining)
         : 'Resuming…';
+      if (textEl) textEl.textContent = text;
+      else banner.textContent = text;
     });
   }
+  document.addEventListener('click', (ev) => {
+    const btn = ev.target && ev.target.closest && ev.target.closest('.usage-limit-resume-cancel');
+    if (!btn) return;
+    ev.preventDefault();
+    const banner = btn.closest('.usage-limit-resume-banner');
+    const sid = banner && banner.dataset.sid;
+    if (!sid) return;
+    banner.remove();
+    fetch('/api/usage-limit/cancel', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ session_id: sid }),
+    }).catch(() => {});
+  });
   setInterval(syncUsageLimitCountdowns, 5000);
   setInterval(_tickUsageLimitCountdowns, 1000);
 
