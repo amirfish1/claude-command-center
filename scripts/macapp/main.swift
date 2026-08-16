@@ -380,6 +380,14 @@ final class CCCWebWindow: NSObject, WKNavigationDelegate, WKUIDelegate, NSWindow
             decisionHandler(.allow)
             return
         }
+        // Sub-frame loads are page content, not the user leaving the app. An
+        // Applications-rail app that frames an external dashboard
+        // (/app/<id>) would otherwise be cancelled here and thrown into the
+        // browser, which is exactly what the rail exists to avoid.
+        if !(navigationAction.targetFrame?.isMainFrame ?? true) {
+            decisionHandler(.allow)
+            return
+        }
         if isLocalDashboardURL(url) {
             decisionHandler(.allow)
         } else {

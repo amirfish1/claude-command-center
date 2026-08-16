@@ -1,4 +1,4 @@
-/* Applications rail — the fixed 64px column of app icons on the left edge.
+/* Applications rail — the resizable column of app icons on the left edge.
  *
  * Replaces the old Queues/Sessions chip toggle. Every CCC surface is an app:
  * built-ins (Sessions, Queues, Morning) come from the server, and the user's
@@ -34,7 +34,25 @@
   // their own — the parent window already has one.
   try { if (window.self !== window.top) return; } catch (e) { return; }
 
-  var RAIL_W = 64;
+  // Width is a user preference: emoji-plus-label wants more room than a bare
+  // icon strip, and how much depends on how long your app names are.
+  var RAIL_DEFAULT = 76;
+  var RAIL_MIN = 56;
+  var RAIL_MAX = 160;
+  var RAIL_KEY = "ccc-rail-width";
+
+  function storedWidth() {
+    var n = parseInt(localStorage.getItem(RAIL_KEY) || "", 10);
+    if (!n || isNaN(n)) return RAIL_DEFAULT;
+    return Math.min(RAIL_MAX, Math.max(RAIL_MIN, n));
+  }
+
+  var railW = storedWidth();
+
+  function applyWidth(px) {
+    railW = Math.min(RAIL_MAX, Math.max(RAIL_MIN, Math.round(px)));
+    document.documentElement.style.setProperty("--ccc-rail-w", railW + "px");
+  }
 
   // Rendered before /api/apps answers, and kept if it never does. The rail is
   // the only navigation once the chip toggle is gone, so it must not depend on
@@ -48,7 +66,8 @@
   style.id = STYLE_ID;
   style.textContent = [
     ".ccc-side-nav {",
-    "  position: fixed; top: 0; left: 0; bottom: 0; width: " + RAIL_W + "px;",
+    "  position: fixed; top: 0; left: 0; bottom: 0;",
+    "  width: var(--ccc-rail-w, " + RAIL_DEFAULT + "px);",
     "  background: #0f1115; border-right: 1px solid #20252c;",
     "  display: flex; flex-direction: column; align-items: center;",
     "  padding: 12px 0 8px; gap: 6px; z-index: 1000; overflow-y: auto;",
@@ -58,7 +77,8 @@
     ".ccc-side-nav::-webkit-scrollbar { display: none; }",
     ".ccc-side-nav a {",
     "  display: flex; flex-direction: column; align-items: center;",
-    "  justify-content: center; width: 58px; padding: 8px 1px; border-radius: 7px;",
+    "  justify-content: center; padding: 8px 3px; border-radius: 7px;",
+    "  width: calc(var(--ccc-rail-w, " + RAIL_DEFAULT + "px) - 12px);",
     "  color: #888; text-decoration: none; flex-shrink: 0;",
     "  font-size: 9px; text-transform: uppercase; letter-spacing: 0.2px;",
     "  transition: background 0.1s, color 0.1s; text-align: center;",
@@ -94,12 +114,26 @@
     "  line-height: 1; display: grid; place-items: center; padding: 0;",
     "}",
     ".ccc-apps-close:hover { color: #e6e9ee; border-color: #39414d; }",
-    "body { padding-left: " + RAIL_W + "px; box-sizing: border-box; }",
+    "body { padding-left: var(--ccc-rail-w, " + RAIL_DEFAULT + "px);",
+    "       box-sizing: border-box; }",
+    /* Drag handle straddling the rail's right edge. */
+    ".ccc-rail-resizer {",
+    "  position: fixed; top: 0; bottom: 0; width: 7px; z-index: 1001;",
+    "  left: calc(var(--ccc-rail-w, " + RAIL_DEFAULT + "px) - 3px);",
+    "  cursor: col-resize;",
+    "}",
+    ".ccc-rail-resizer::before {",
+    "  content: ''; position: absolute; inset: 0 3px; background: transparent;",
+    "  transition: background .12s;",
+    "}",
+    ".ccc-rail-resizer:hover::before,",
+    ".ccc-rail-resizer.dragging::before { background: #5ac8fa; }",
+    "body.ccc-rail-dragging { cursor: col-resize; user-select: none; }",
     /* Morning's own wrappers hug the old nav; keep them off the rail. */
     ".mv-wrap, .mk-wrap { padding-left: 20px !important; }",
     /* Phones and the PWA have no room for the gutter. */
     "@media (max-width: 700px) {",
-    "  .ccc-side-nav { display: none; }",
+    "  .ccc-side-nav, .ccc-rail-resizer { display: none; }",
     "  body { padding-left: 0; }",
     "}"
   ].join("\n");
@@ -170,10 +204,38 @@
       .catch(function () { /* keep whatever is already rendered */ });
   }
 
+  function mountResizer() {
+    var grip = document.createElement("div");
+    grip.className = "ccc-rail-resizer";
+    grip.title = "Drag to resize \u00b7 double-click to reset";
+    grip.addEventListener("mousedown", function (e) {
+      e.preventDefault();
+      grip.classList.add("dragging");
+      document.body.classList.add("ccc-rail-dragging");
+      function move(ev) { applyWidth(ev.clientX); }
+      function up() {
+        document.removeEventListener("mousemove", move);
+        document.removeEventListener("mouseup", up);
+        grip.classList.remove("dragging");
+        document.body.classList.remove("ccc-rail-dragging");
+        try { localStorage.setItem(RAIL_KEY, String(railW)); } catch (err) {}
+      }
+      document.addEventListener("mousemove", move);
+      document.addEventListener("mouseup", up);
+    });
+    grip.addEventListener("dblclick", function () {
+      applyWidth(RAIL_DEFAULT);
+      try { localStorage.setItem(RAIL_KEY, String(railW)); } catch (err) {}
+    });
+    document.body.appendChild(grip);
+  }
+
   function mount() {
     if (!document.body) return;
+    applyWidth(railW);
     render(FALLBACK);
     document.body.appendChild(nav);
+    mountResizer();
     refresh();
   }
 

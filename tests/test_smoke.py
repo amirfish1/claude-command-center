@@ -19887,3 +19887,12 @@ def test_apps_open_inside_the_ccc_window():
     assert "ccc-apps-scrim" in rail
     # A framed page must not draw a second rail inside the first.
     assert "window.self !== window.top" in rail
+    # Rail width is a user preference, persisted across reloads.
+    assert "ccc-rail-resizer" in rail
+    assert "ccc-rail-width" in rail
+
+    # The Mac app cancels navigation off the dashboard port and hands the URL
+    # to the browser. Without the sub-frame exemption an /app/<id> wrapper
+    # framing an external dashboard gets thrown out of the app entirely.
+    swift = pathlib.Path(PROJECT_ROOT, "scripts", "macapp", "main.swift").read_text(encoding="utf-8")
+    assert "navigationAction.targetFrame?.isMainFrame ?? true" in swift
