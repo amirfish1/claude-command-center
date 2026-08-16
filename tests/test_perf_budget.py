@@ -2631,6 +2631,12 @@ def test_throughput_refresh_persists_completed_metadata(monkeypatch):
     monkeypatch.setattr(server, "_throughput_payload", fake_payload)
     monkeypatch.setattr(server, "_throughput_build_bootstrap", fake_build)
     monkeypatch.setattr(server, "_throughput_write_bootstrap", lambda *_: True)
+    # The refresh thread also calls _weekly_usage_block() for real. That is
+    # several seconds of filesystem work on a cold cache — longer than the
+    # wait below — and it has nothing to do with the metadata this test
+    # asserts. Left unpatched, the test passes or fails on whether some other
+    # process happened to warm the cache first.
+    monkeypatch.setattr(server, "_weekly_usage_block", lambda *a, **k: {})
     with server._THROUGHPUT_REFRESH_LOCK:
         server._THROUGHPUT_REFRESH_JOBS.clear()
         server._THROUGHPUT_REFRESH_LAST_SUCCESS.clear()
