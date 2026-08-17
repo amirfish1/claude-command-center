@@ -13933,6 +13933,17 @@
 
   async function bootConversationPopoutDirect() {
     if (!CONV_POPOUT_MODE || !CONV_POPOUT_TARGET) return false;
+    // CCC-872: '__new__' is the not-yet-spawned "new session" composer, not a
+    // real conversation — selectConversation() would try to stream a
+    // conversation that doesn't exist and leave the popout blank. Boot
+    // straight into the same composer the main window shows instead.
+    if (CONV_POPOUT_TARGET === '__new__') {
+      document.title = 'New session - Command Center for Claude, Codex, Cursor, and Anti-Gravity';
+      hideLoadingOverlay();
+      _markFirstSessionsLoaded();
+      enterNewSessionMode();
+      return true;
+    }
     const row = findPopoutConversationRow() || buildSyntheticPopoutRow();
     installSyntheticPopoutRow(row);
     setPopoutTitle(row);
@@ -33735,7 +33746,14 @@
   // second full CCC window (not conversation-popout mode) so the user gets
   // an independent "Start a new session" composer to work in.
   function openNewSessionPopout() {
-    const url = window.location.origin + window.location.pathname;
+    const u = new URL(window.location.pathname || '/', window.location.href);
+    u.search = '';
+    u.hash = '';
+    u.searchParams.set('ccc_popout', 'conversation');
+    u.searchParams.set('conv', '__new__');
+    const repoPath = popoutRepoPath();
+    if (repoPath) u.searchParams.set('repo_path', repoPath);
+    const url = u.toString();
     const name = 'ccc-new-session-' + Date.now();
     const width = 920;
     const height = 900;
