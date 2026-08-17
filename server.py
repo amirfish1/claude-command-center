@@ -7321,7 +7321,7 @@ def _live_engine_session_ids():
         return cached["sids"]
     sids = set()
     try:
-        for engine in ("codex", "gemini", "cursor"):
+        for engine in ("codex", "gemini", "cursor", "grok"):
             for _pid_s, cmd in _raw_engine_process_commands(engine):
                 # Pull any resume-arg session id out of the command line. The
                 # matcher needs a candidate id, so test each whitespace token
@@ -19127,6 +19127,7 @@ def _raw_engine_process_commands(engine):
         "codex": "codex",
         "gemini": "gemini",
         "cursor": "cursor-agent",
+        "grok": "grok",
     }.get(engine)
     if not wanted:
         return
@@ -19283,6 +19284,14 @@ def _command_targets_engine_session(command, session_id, engine):
             tok == session_id and (
                 "--conversation" in tokens[:idx] or
                 (idx > 0 and tokens[idx - 1] in ("--conversation", "conversation"))
+            )
+            for idx, tok in enumerate(tokens)
+        )
+    if engine == "grok":
+        return any(
+            tok == session_id and (
+                any(t in ("--resume", "resume") for t in tokens[:idx]) or
+                (idx > 0 and tokens[idx - 1] in ("--resume", "resume"))
             )
             for idx, tok in enumerate(tokens)
         )
@@ -25422,6 +25431,14 @@ def _conv_parse_jsonl_mtime(conversation_id, repo_path=None):
             return _hermes_cache_key()
         elif _is_devin_cli_session(conversation_id):
             return _devin_cli_cache_key()
+        elif _is_grok_session(conversation_id):
+            resolved = _grok_conversation_source(conversation_id)
+            if not resolved.exists() or resolved.stat().st_size == 0:
+                return (0, 0)
+            with _CONV_PATH_CACHE_LOCK:
+                _CONV_PATH_CACHE[conversation_id] = str(resolved)
+            st = resolved.stat()
+            return (st.st_mtime_ns, st.st_size)
         else:
             resolved, _ = _resolve_conversation_reader(conversation_id, repo_path=repo_path)
         if resolved and Path(resolved).is_file():
@@ -25589,24 +25606,19 @@ def parse_conversation(conversation_id, after_line=0, repo_path=None, use_cache=
                 continue
         return {"events": events, "last_line": last_line}
     if engine == "grok":
-        if _acp_is_session("grok", conversation_id):
+        src = _grok_conversation_source(conversation_id)
+        if src == _acp_transcript_path("grok", conversation_id):
             events = _acp_transcript_events_after("grok", conversation_id, after_line)
-            if events:
-                last_line = after_line
-                for ev in events:
-                    try:
-                        last_line = max(last_line, int(ev.get("line") or 0))
-                    except (TypeError, ValueError):
-                        continue
-                return {"events": events, "last_line": last_line}
-    if engine == "copilot":
-        result = _parse_copilot_conversation(conversation_id, after_line=after_line)
+            last_line = _acp_transcript_last_line("grok", conversation_id)
+            events = _merge_synthetic_conversation_events(list(events), _get_queued_events_for_session(conversation_id))
+            return {"events": events, "last_line": last_line}
+        result = _parse_grok_conversation(conversation_id, after_line=after_line)
         _conv_parse_cache_put(conversation_id, after_line, repo_path, result)
         events_copy = list(result.get("events") or [])
         events_copy = _merge_synthetic_conversation_events(events_copy, _get_queued_events_for_session(conversation_id))
         return {"events": events_copy, "last_line": result.get("last_line", 0)}
-    if engine == "grok":
-        result = _parse_grok_conversation(conversation_id, after_line=after_line)
+    if engine == "copilot":
+        result = _parse_copilot_conversation(conversation_id, after_line=after_line)
         _conv_parse_cache_put(conversation_id, after_line, repo_path, result)
         events_copy = list(result.get("events") or [])
         events_copy = _merge_synthetic_conversation_events(events_copy, _get_queued_events_for_session(conversation_id))
@@ -37121,6 +37133,100 @@ def _acp_session(harness, sid, create=False, cwd=""):
     return state
 
 
+def _acp_transcript_last_line(harness, sid):
+    """Return the highest `line` value in the ACP transcript, or 0.
+
+    Prefer the in-memory session's `next_line - 1` when available; otherwise
+    scan the transcript file."""
+    state = _acp_session(harness, sid)
+    if state is not None:
+        return max(0, state.get("next_line", 1) - 1)
+    path = _acp_transcript_path(harness, sid)
+    last_line = 0
+    try:
+        with path.open("r", encoding="utf-8", errors="replace") as f:
+            for raw in f:
+                raw = raw.strip()
+                if not raw:
+                    continue
+                try:
+                    ev = json.loads(raw)
+                except json.JSONDecodeError:
+                    continue
+                try:
+                    line = int(ev.get("line") or 0)
+                except (TypeError, ValueError):
+                    line = 0
+                if line > last_line:
+                    last_line = line
+    except OSError:
+        pass
+    return last_line
+
+
+def _grok_acp_session_loaded(sid):
+    """True when the grok ACP connection currently has `sid` loaded and alive."""
+    with _ACP_LOCK:
+        conn = _ACP_CONNS.get("grok")
+        if conn is None:
+            return False
+        transport = conn.get("transport")
+        if transport is None or not transport.alive():
+            return False
+        state = _acp_session("grok", sid)
+        return state is not None and state.get("loaded_conn") == id(conn)
+
+
+_grok_external_writer_cache = {}
+_grok_external_writer_lock = threading.Lock()
+
+
+def _grok_external_writer_active(sid):
+    """True when a `grok --resume <sid>` TUI process is running.
+
+    Cached per sid for 4 seconds — ps scans are expensive and a TUI stays
+    open across multiple CCC operations."""
+    now = time.time()
+    with _grok_external_writer_lock:
+        entry = _grok_external_writer_cache.get(sid)
+        if entry and now - entry["ts"] < 4.0:
+            return entry["active"]
+    active = False
+    try:
+        for _pid_s, cmd in _raw_engine_process_commands("grok"):
+            for tok in cmd.split():
+                if len(tok) >= 16 and tok == sid and _command_targets_engine_session(cmd, tok, "grok"):
+                    active = True
+                    break
+            if active:
+                break
+    except Exception:
+        pass
+    with _grok_external_writer_lock:
+        _grok_external_writer_cache[sid] = {"ts": time.time(), "active": active}
+    return active
+
+
+def _grok_conversation_source(sid):
+    """Return the current ground-truth transcript Path for a Grok session.
+
+    Prefers the CCC ACP transcript when this process has the session loaded;
+    otherwise uses the on-disk Grok store so a terminal TUI's writes are
+    reflected. Falls back to the ACP transcript path when neither has data."""
+    if _grok_acp_session_loaded(sid):
+        return _acp_transcript_path("grok", sid)
+    session_dir = _grok_session_dir(sid)
+    if session_dir is not None:
+        for name in ("updates.jsonl", "chat_history.jsonl"):
+            p = session_dir / name
+            try:
+                if p.is_file() and p.stat().st_size > 0:
+                    return p
+            except OSError:
+                continue
+    return _acp_transcript_path("grok", sid)
+
+
 def _acp_save_state_unlocked(harness):
     """Persist the last-known session registry; volatile fields excluded."""
     try:
@@ -38134,6 +38240,8 @@ def _acp_prompt(
         )
         if routed is not None:
             return routed
+    if harness == "grok" and _grok_external_writer_active(sid):
+        return {"ok": False, "error": "Grok session is active in a terminal — close it before sending.", "code": "grok_external_active"}
     if not text:
         return {"ok": False, "error": "empty prompt"}
     text = _strip_lone_surrogates(str(text))
@@ -38297,6 +38405,8 @@ def _acp_load(harness, sid, cwd):
     history — e.g. re-attaching after a CCC restart.
     """
     conn = _acp_ensure(harness)
+    if harness == "grok" and _grok_external_writer_active(sid):
+        return {"ok": False, "error": "Grok session is active in a terminal — close it before sending.", "code": "grok_external_active"}
     if conn is None:
         return {"ok": False, "error": _acp_conn_error(harness)}
     has_history = False
@@ -38453,6 +38563,8 @@ def _acp_ensure_session_loaded(harness, sid):
     from the harness's on-disk store when needed). Returns an error dict on
     failure, None when the session is loaded."""
     conn = _acp_ensure(harness)
+    if harness == "grok" and _grok_external_writer_active(sid):
+        return {"ok": False, "error": "Grok session is active in a terminal — close it before sending.", "code": "grok_external_active"}
     if conn is None:
         return {"ok": False, "error": _acp_conn_error(harness)}
     with _ACP_LOCK:
@@ -70050,6 +70162,44 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                             time.perf_counter() - sse_start,
                             f"sid={conversation_id} after_line={after_line} "
                             f"events={len(result.get('events') or [])}",
+                        )
+                        events = result.get("events") or []
+                        if events:
+                            after_line = result.get("last_line") or after_line
+                            payload = {"events": events, "last_line": after_line}
+                            self.wfile.write(f"data: {json.dumps(payload)}\n\n".encode())
+                            self.wfile.flush()
+                            last_keepalive = time.time()
+                            time.sleep(0.5)
+                            continue
+                    now = time.time()
+                    if now - last_keepalive >= 5:
+                        self.wfile.write(b"event: keepalive\ndata: {}\n\n")
+                        self.wfile.flush()
+                        last_keepalive = now
+                    time.sleep(0.5)
+            except (BrokenPipeError, ConnectionResetError, OSError):
+                pass
+            return
+        if _is_grok_session(conversation_id) and not _grok_acp_session_loaded(conversation_id):
+            # Grok sessions not loaded in CCC's ACP are being written by a
+            # terminal TUI. Poll the on-disk transcript's mtime so the pane
+            # reflects terminal activity; once CCC loads the session the ACP
+            # reader below takes over.
+            self.send_response(200)
+            self.send_header("Content-Type", "text/event-stream")
+            self.send_header("Cache-Control", "no-cache")
+            self.send_header("Connection", "keep-alive")
+            self.end_headers()
+            last_key = None
+            last_keepalive = time.time()
+            try:
+                while True:
+                    cur_key = _conv_parse_jsonl_mtime(conversation_id)
+                    if cur_key != last_key:
+                        last_key = cur_key
+                        result = parse_conversation(
+                            conversation_id, after_line=after_line, use_cache=True
                         )
                         events = result.get("events") or []
                         if events:

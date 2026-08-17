@@ -427,3 +427,73 @@ def test_variant_a_chat_history_with_type_and_tool_calls(monkeypatch, tmp_path):
     assert events[3]["text"] == "pong"
     assert events[3]["tool_use_id"] == "tc-1"
     assert events[4]["blocks"][0]["text"] == "Array ponged."
+
+
+# --- Codex-style single-writer coordination (terminal vs CCC ACP) ---------
+
+
+def test_command_targets_engine_session_grok_resume(monkeypatch, tmp_path):
+    home = _make_variant_a_home(tmp_path)
+    monkeypatch.setenv("GROK_HOME", str(home))
+
+    assert server._command_targets_engine_session(
+        f"grok --resume {SID_A}", SID_A, "grok"
+    ) is True
+    assert server._command_targets_engine_session(
+        f"grok --resume {SID_A} --dangerously-skip-permissions", SID_A, "grok"
+    ) is True
+    assert server._command_targets_engine_session(
+        f"grok chat --resume {SID_A}", SID_A, "grok"
+    ) is True
+    assert server._command_targets_engine_session(
+        "grok agent stdio", SID_A, "grok"
+    ) is False
+    assert server._command_targets_engine_session(
+        f"grok --resume {SID_A}", SID_B, "grok"
+    ) is False
+
+
+def test_grok_external_writer_active_false_when_no_tui(monkeypatch, tmp_path):
+    home = _make_variant_a_home(tmp_path)
+    monkeypatch.setenv("GROK_HOME", str(home))
+    monkeypatch.setattr(server, "_raw_engine_process_commands", lambda engine: iter([]))
+    server._grok_external_writer_cache.clear()
+    assert server._grok_external_writer_active(SID_A) is False
+
+
+def test_grok_conversation_source_prefers_disk_when_acp_not_loaded(monkeypatch, tmp_path):
+    home = _make_variant_a_home(tmp_path)
+    monkeypatch.setenv("GROK_HOME", str(home))
+    # Ensure no ACP session is loaded for this sid.
+    server._ACP_CONNS.pop("grok", None)
+    server._ACP_SESSION_STATE.setdefault("grok", {}).pop(SID_A, None)
+
+    src = server._grok_conversation_source(SID_A)
+    assert src.name == "updates.jsonl"
+
+
+def test_grok_conversation_source_prefers_acp_when_loaded(monkeypatch, tmp_path):
+    home = _make_variant_a_home(tmp_path)
+    monkeypatch.setenv("GROK_HOME", str(home))
+    server._grok_external_writer_cache.clear()
+
+    # Fake an alive ACP connection with the session loaded.
+    class _FakeTransport:
+        def alive(self):
+            return True
+
+    conn = {"transport": _FakeTransport()}
+    server._ACP_CONNS["grok"] = conn
+    server._ACP_SESSION_STATE.setdefault("grok", {})[SID_A] = {
+        "loaded_conn": id(conn),
+    }
+    try:
+        src = server._grok_conversation_source(SID_A)
+        assert src == server._acp_transcript_path("grok", SID_A)
+    finally:
+        server._ACP_CONNS.pop("grok", None)
+        server._ACP_SESSION_STATE.setdefault("grok", {}).pop(SID_A, None)
+
+
+def test_acp_transcript_last_line_missing_returns_zero():
+    assert server._acp_transcript_last_line("grok", "does-not-exist-0000") == 0
