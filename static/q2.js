@@ -66,6 +66,7 @@
     attendError: '',         // inline error for the band (load/tend failures) -- never alert()
     attendStarting: false,   // POST /api/queue/attend in flight
     attendAnswering: false,  // POST /api/queue/attend/answer in flight
+    attendRefreshing: false, // manual GET /api/queue/attend in flight (Refresh button)
     attendAnswerError: '',
   };
   var newTicketExpires = {};
@@ -789,6 +790,27 @@
     } catch (e) {
       if (projectKey(state.queue) !== projectKey(queue)) return;
       state.attendError = e.message || 'Could not load the queue attendant.';
+      renderAttend();
+    }
+  }
+
+  // The [Refresh] click on a "waiting" question card -- lets the operator
+  // check right now (e.g. after answering elsewhere) instead of waiting up
+  // to 3s for the next poll tick.
+  async function refreshAttend() {
+    if (!state.queue || state.viewAll || state.attendRefreshing) return;
+    var queue = state.queue;
+    state.attendRefreshing = true;
+    renderAttend();
+    try {
+      var data = await getJson(attendPath(queue));
+      if (projectKey(state.queue) !== projectKey(queue)) return;
+      applyAttendResponse(queue, data);
+    } catch (e) {
+      if (projectKey(state.queue) !== projectKey(queue)) return;
+      state.attendError = e.message || 'Could not load the queue attendant.';
+    } finally {
+      state.attendRefreshing = false;
       renderAttend();
     }
   }
@@ -1554,7 +1576,12 @@
       // like a hung attendant).
       headHtml = '<span class="q2-mini-dot" style="animation:none" aria-hidden="true"></span>'
         + '<span class="q2-brief-title">Attendant needs a decision</span>'
+        + (state.attendQuestion && state.attendQuestion.at
+          ? '<span class="q2-attend-updated">Updated ' + esc(relTime(state.attendQuestion.at)) + '</span>' : '')
         + '<span class="q2-spacer"></span>'
+        + '<button type="button" class="q2-btn q2-btn-ghost q2-attend-refresh" data-q2-attend-refresh'
+        + (state.attendRefreshing ? ' disabled' : '') + ' title="Check for a new question now">'
+        + (state.attendRefreshing ? 'Refreshing&hellip;' : 'Refresh') + '</button>'
         + sessionBtn(state.attendSessionId, 'open session');
       bodyHtml = attendQuestionHtml(state.attendQuestion);
       bodyHidden = false;
@@ -3130,6 +3157,12 @@
     if (tendBtn) {
       e.stopPropagation();
       if (!tendBtn.disabled) tendQueue();
+      return;
+    }
+    var attendRefreshBtn = e.target.closest('[data-q2-attend-refresh]');
+    if (attendRefreshBtn) {
+      e.stopPropagation();
+      if (!attendRefreshBtn.disabled) refreshAttend();
       return;
     }
     var attendOptBtn = e.target.closest('[data-q2-attend-answer-opt]');

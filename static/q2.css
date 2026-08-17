@@ -682,6 +682,12 @@ body.q2-resizing-v .q2-col { pointer-events: none; }
   text-overflow: ellipsis;
   max-width: 32ch;
 }
+.q2-attend-updated {
+  color: var(--text-muted);
+  font-size: 11px;
+  white-space: nowrap;
+  margin-left: 8px;
+}
 .q2-attend-tend { flex: 0 0 auto; }
 .q2-attend-tend[disabled] { opacity: 0.6; cursor: default; }
 
