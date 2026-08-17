@@ -14797,6 +14797,13 @@ _APP_FRAME_HTML = """<!DOCTYPE html>
   .bar .grow {{ flex: 1; }}
   .bar a {{ color: #8a929e; text-decoration: none; }}
   .bar a:hover {{ color: #5ac8fa; }}
+  .needs-login {{
+    display: flex; align-items: flex-start; gap: 10px; padding: 11px 14px;
+    background: #1d1710; border-bottom: 1px solid #3d2f14; color: #e3cfa6;
+    font: 12.5px/1.55 -apple-system, BlinkMacSystemFont, sans-serif;
+  }}
+  .needs-login a {{ color: #f5d99a; white-space: nowrap; }}
+  .needs-login .grow {{ flex: 1; }}
 </style>
 </head>
 <body>
@@ -14805,6 +14812,7 @@ _APP_FRAME_HTML = """<!DOCTYPE html>
     <span class="grow"></span>
     <a href="{url}" target="_blank" rel="noopener">Open in browser &#8599;</a>
   </div>
+  {notice}
   <iframe id="f" src="{url}" title="{label}"></iframe>
   <div class="blocked" id="blocked">
     <b>{host}</b> will not display inside another window.<br>
@@ -14825,15 +14833,78 @@ _APP_FRAME_HTML = """<!DOCTYPE html>
 </html>
 """
 
+# Shown above a framed app that bounces anonymous visitors to a login. The
+# explanation matters: the user IS signed in, in their own tab, and without
+# this the frame just looks broken.
+_APP_LOGIN_NOTICE = """<div class="needs-login">
+    <span>&#9888;</span>
+    <div class="grow">This page needs you signed in, and a signed-in session
+      cannot travel into an embedded page &mdash; browsers withhold
+      <code>SameSite=Lax</code> cookies from a frame on another site. You will
+      see it logged out here even though your own tab is fine.</div>
+    <a href="{url}" target="_blank" rel="noopener">Open in browser &#8599;</a>
+  </div>"""
+
+
+_LOGIN_PROBE_CACHE = {}
+_LOGIN_PROBE_TTL = 300.0
+
+
+def _requires_login(url):
+    """Best-effort: does this URL bounce an anonymous visitor to a login?
+
+    Worth knowing because a framed page can never be signed in. Session
+    cookies are almost always `SameSite=Lax`, which browsers refuse to send
+    on a cross-site iframe request, so the frame renders logged-out no matter
+    who you are in your own tab. Detecting it lets us say so instead of
+    showing a login form that cannot succeed.
+
+    Unauthenticated HEAD with redirects disabled, 4s cap, cached for 5
+    minutes. Any failure answers False — a wrong banner is worse than none."""
+    now = time.time()
+    hit = _LOGIN_PROBE_CACHE.get(url)
+    if hit and now - hit[0] < _LOGIN_PROBE_TTL:
+        return hit[1]
+
+    class _NoRedirect(urllib.request.HTTPRedirectHandler):
+        def redirect_request(self, *a, **k):
+            return None
+
+    verdict = False
+    try:
+        req = urllib.request.Request(url, method="HEAD")
+        req.add_header("User-Agent", "CCC-app-probe")
+        try:
+            resp = urllib.request.build_opener(_NoRedirect).open(req, timeout=4)
+            status, location = resp.status, resp.headers.get("Location", "")
+        except urllib.error.HTTPError as e:
+            status, location = e.code, e.headers.get("Location", "")
+        if status in (401, 403):
+            verdict = True
+        elif 300 <= status < 400:
+            target = (location or "").lower()
+            verdict = any(w in target for w in
+                          ("login", "signin", "sign-in", "auth", "sso"))
+    except Exception:
+        verdict = False
+    _LOGIN_PROBE_CACHE[url] = (now, verdict)
+    return verdict
+
+
 def _render_app_frame(app):
     """Fill in the external-app wrapper.
 
     Module scope on purpose: `_do_GET` binds a local named `html` further
     down, which shadows the stdlib module for the whole function."""
+    notice = ""
+    if _requires_login(app["url"]):
+        notice = _APP_LOGIN_NOTICE.format(
+            url=html.escape(app["url"], quote=True))
     return _APP_FRAME_HTML.format(
         label=html.escape(app["label"]),
         url=html.escape(app["url"], quote=True),
         host=html.escape(urllib.parse.urlparse(app["url"]).netloc or app["url"]),
+        notice=notice,
     )
 
 

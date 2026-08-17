@@ -19896,3 +19896,41 @@ def test_apps_open_inside_the_ccc_window():
     # framing an external dashboard gets thrown out of the app entirely.
     swift = pathlib.Path(PROJECT_ROOT, "scripts", "macapp", "main.swift").read_text(encoding="utf-8")
     assert "navigationAction.targetFrame?.isMainFrame ?? true" in swift
+
+
+def test_framed_app_warns_when_the_page_needs_a_login():
+    """A login-walled page cannot be signed in inside a frame.
+
+    Session cookies are near-always SameSite=Lax, which browsers withhold from
+    a cross-site frame, so the page renders logged out however the user is
+    authenticated in their own tab. Saying so beats a dead login form.
+    """
+    import server as _server
+
+    _server._LOGIN_PROBE_CACHE.clear()
+    # Seed the cache directly: the probe itself makes a network call, and the
+    # smoke suite must not depend on a remote host being reachable.
+    _server._LOGIN_PROBE_CACHE["https://example.com/admin"] = (time.time(), True)
+    _server._LOGIN_PROBE_CACHE["https://example.com/public"] = (time.time(), False)
+
+    # Match the rendered banner, not the stylesheet: `.needs-login` CSS ships
+    # on every wrapper page whether or not the warning is shown.
+    banner = '<div class="needs-login">'
+    walled = _server._render_app_frame(
+        {"label": "Admin", "url": "https://example.com/admin"})
+    assert banner in walled
+    assert "SameSite=Lax" in walled
+
+    public = _server._render_app_frame(
+        {"label": "Public", "url": "https://example.com/public"})
+    assert banner not in public
+    # The way out is always present, warning or not.
+    assert "Open in browser" in public
+
+    # A probe failure must not produce a false warning.
+    _server._LOGIN_PROBE_CACHE.clear()
+    assert _server._requires_login("http://127.0.0.1:1/nothing-here") is False
+
+    # The add-form says the same thing before you create such an app.
+    page = pathlib.Path(PROJECT_ROOT, "static", "applications.html").read_text(encoding="utf-8")
+    assert "cannot travel into an" in page
