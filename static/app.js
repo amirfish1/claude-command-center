@@ -12067,6 +12067,20 @@
         out.push(renderSessionStateBlock(body));
         continue;
       }
+      // CCC-874: Devin CLI sometimes wraps a whole reply body in a bare
+      // <summary>...</summary> tag (no enclosing <details>). Rendered
+      // literally that's a huge wall of text under a stray "<summary>"
+      // line, so collapse it into a real <details> instead.
+      if (/^\s*<summary>\s*$/i.test(line)) {
+        i++;
+        const start = i;
+        while (i < lines.length && !/^\s*<\/summary>\s*$/i.test(lines[i])) i++;
+        const body = lines.slice(start, i).join('\n');
+        if (i < lines.length) i++;  // skip closing tag
+        out.push('<details class="ctx-usage-details devin-summary-details"><summary>Summary</summary>'
+          + renderMarkdown(body) + '</details>');
+        continue;
+      }
       // Fenced code block: ```lang\n...code...\n```
       // Runs BEFORE table/header detection so ``` inside code doesn't get
       // misinterpreted as markdown.
