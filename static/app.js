@@ -7452,12 +7452,41 @@
       showOpToast('No message text to steer', 'error');
       return;
     }
+    // If this steer is being clicked on an optimistic/queued echo, it is
+    // meant to replace the durable queued copy of the same message. Use
+    // replaceQueued so the backend withdraws the queued copy before steering
+    // and the echo is removed.
+    const isPending = row && (
+      row.classList.contains('pending')
+      || row.classList.contains('send-queued')
+      || row.classList.contains('not-acknowledged')
+      || row._pendingRef
+    );
     const original = btn.textContent;
     btn.disabled = true;
-    btn.textContent = '...';
+    btn.textContent = isPending ? 'Steering…' : '...';
     try {
-      const data = await postInjectInput(sid, text, 'steer');
+      const data = await postInjectInput(sid, text, 'steer', isPending ? { replaceQueued: true } : undefined);
+      if (data && data.queue_pump_started) {
+        showOpToast('Turn ended; sending the oldest queued message now.');
+        setTimeout(refreshConversationList, 500);
+        return;
+      }
+      if (data && data.queued_preserved) {
+        showOpToast(data.error ? ('Still queued: ' + data.error) : 'Queued', 'error');
+        setTimeout(refreshConversationList, 500);
+        return;
+      }
       if (!data || !data.ok) throw new Error((data && (formatInjectFailure(data, 0) || data.error)) || 'steer failed');
+      if (isPending && !data.queued_consumed) {
+        showOpToast('Queue changed while steering; refreshing.', 'error');
+        setTimeout(refreshConversationList, 200);
+        return;
+      }
+      if (isPending) {
+        if (row && row._pendingRef) removePendingSendEcho(row._pendingRef);
+        else if (row) row.remove();
+      }
       btn.textContent = '✓';
       showOpToast(data.via === 'codex-steer' ? 'Steered running Codex turn.' : 'Sent to Codex.');
       setTimeout(refreshConversationList, 1500);
@@ -7467,6 +7496,7 @@
       showOpToast('Steer failed: ' + ((err && err.message) || 'unknown'), 'error');
     } finally {
       setTimeout(() => {
+        if (!btn.isConnected) return;
         btn.disabled = false;
         btn.textContent = original || 'Steer';
       }, 900);

@@ -1,0 +1,1 @@
+Fix Codex steer sending the same message twice when a queued send is also pending: steering the active turn (or its fallback turn/start) now consumes the matching durable resume queue entry, and the user-message steer button on pending/queued echoes uses `replace_queued` to withdraw the queued copy before steering.

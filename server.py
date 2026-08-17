@@ -54157,10 +54157,20 @@ def _inject_text_into_session(
                 steer_result["queued_preserved"] = True
                 return steer_result
             if idempotency_key:
-                return resume_session_codex(
+                steer_result = resume_session_codex(
                     session_id, text, idempotency_key=idempotency_key,
                 )
-            return resume_session_codex(session_id, text)
+            else:
+                steer_result = resume_session_codex(session_id, text)
+        if (
+            steer_result.get("ok")
+            and not steer_result.get("queued")
+            and not preserve_queued_steer
+        ):
+            # A confirmed Codex steer (or the fallback turn/start it took)
+            # has delivered this text. Drop any durable queued copy so the
+            # queue pump cannot later resend the same message.
+            _consume_matching_pending_input(session_id, text)
         return steer_result
     if (
         mode == "steer"
