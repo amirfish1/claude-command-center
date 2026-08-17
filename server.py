@@ -14057,15 +14057,23 @@ def enqueue_annotation_ux_fixes_queue(
         with _ANNOTATION_QUEUE_SUBMISSIONS_LOCK:
             _ANNOTATION_QUEUE_SUBMISSIONS_IN_FLIGHT.discard(_submission_key)
 
-    # Dispatch NOW (nudge a live worker, else spawn) + log the decision so a
-    # captured ticket is handled immediately and the activity log explains the
-    # outcome instead of going silent after ENQUEUE. Best-effort.
+    # Dispatch (nudge a live worker, else spawn) after persisting. Reconciliation
+    # can read other GitHub-backed queues and take several seconds while GitHub
+    # is degraded; the annotation POST must acknowledge its durable ticket
+    # without waiting for that best-effort follow-up.
     if item and _WT_WORKERS_AVAILABLE and _wt_workers is not None:
-        try:
-            _wt_workers.dispatch_after_enqueue(
-                str(item.get("project") or ""), str(item.get("ref") or ""))
-        except Exception:
-            pass
+        def _dispatch():
+            try:
+                _wt_workers.dispatch_after_enqueue(
+                    str(item.get("project") or ""), str(item.get("ref") or ""))
+            except Exception:
+                pass
+
+        threading.Thread(
+            target=_dispatch,
+            name="ccc-annotation-dispatch",
+            daemon=True,
+        ).start()
 
     if not inject:
         if item:
