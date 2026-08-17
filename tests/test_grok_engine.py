@@ -167,6 +167,8 @@ def test_variant_a_transcript_from_updates_jsonl(monkeypatch, tmp_path):
     tool_block = events[1]["blocks"][0]
     assert tool_block["kind"] == "tool_use"
     assert tool_block["name"] == "run_shell"
+    assert tool_block["detail"] == "ls fake"
+    assert tool_block["command"] == "ls fake"
     assert events[2]["text"] == "fake.txt"
     assert events[2]["is_error"] is False
     assert events[3]["blocks"][0]["text"] == "Relay routed."
@@ -285,3 +287,143 @@ def test_is_grok_session(monkeypatch, tmp_path):
     assert server._detect_session_engine_uncached(SID_A) == "grok"
     assert server._detect_session_engine_uncached(SID_B) == "grok"
     assert server._detect_session_engine_uncached("deadbeef-0000-0000-0000-000000000000") == "claude"
+
+
+def _wrap_rpc(update, timestamp="2026-07-20T09:00:05Z"):
+    """Wrap an update in the newer Grok Build JSON-RPC envelope."""
+    return {
+        "timestamp": timestamp,
+        "method": "session/update",
+        "params": {"sessionId": SID_A, "update": update},
+    }
+
+
+def _fixture_updates_rpc():
+    """Same logical events as _fixture_updates but wrapped in JSON-RPC and
+    enriched with agent_thought_chunk, hook_execution, image_dropped, and
+    retry_state updates."""
+    base = _fixture_updates()
+    return [
+        _wrap_rpc({
+            "sessionUpdate": "hook_execution",
+            "event_name": "session_start",
+            "runs": [
+                {"name": "global/orca-status:session_start[0].hooks[0]", "status": {"status": "success", "elapsed_ms": 11}},
+                {"name": "global/settings:session_start[0].hooks[0]", "status": {"status": "failed", "error": "not found", "elapsed_ms": 0}},
+            ],
+        }, timestamp="2026-07-20T09:00:04Z"),
+        _wrap_rpc(base[0], timestamp="2026-07-20T09:00:05Z"),
+        _wrap_rpc({
+            "sessionUpdate": "agent_thought_chunk",
+            "content": {"type": "text", "text": "The user wants to route the plasma relay."},
+        }, timestamp="2026-07-20T09:00:05.500Z"),
+        _wrap_rpc(base[1], timestamp="2026-07-20T09:00:06Z"),
+        _wrap_rpc({
+            "sessionUpdate": "hook_execution",
+            "event_name": "pre_tool_use",
+            "tool_name": "run_shell",
+            "runs": [
+                {"name": "global/orca-status:pre_tool_use[0].hooks[0]", "status": {"status": "success", "elapsed_ms": 5}},
+            ],
+        }, timestamp="2026-07-20T09:00:06.100Z"),
+        _wrap_rpc(base[2], timestamp="2026-07-20T09:00:07Z"),
+        _wrap_rpc({
+            "sessionUpdate": "image_dropped",
+            "notes": ["This request failed over its images; 1 image(s) were left out of the retry."],
+        }, timestamp="2026-07-20T09:00:07.500Z"),
+        _wrap_rpc({
+            "sessionUpdate": "retry_state",
+            "type": "retrying",
+            "attempt": 1,
+            "max_retries": 5,
+            "reason": "request error: connection refused",
+        }, timestamp="2026-07-20T09:00:07.600Z"),
+        _wrap_rpc(base[3], timestamp="2026-07-20T09:00:09Z"),
+    ]
+
+
+def test_variant_a_transcript_from_updates_jsonl_rpc_envelope(monkeypatch, tmp_path):
+    """Newer Grok Build wraps updates in JSON-RPC; the parser must unwrap and
+    surface hook_execution, agent_thought_chunk, image_dropped, and retry_state
+    events."""
+    home = tmp_path / ".grok"
+    session_dir = home / "sessions" / FAKE_CWD_ENCODED / SID_A
+    session_dir.mkdir(parents=True, exist_ok=True)
+    (session_dir / "summary.json").write_text(json.dumps({"title": "RPC session"}), encoding="utf-8")
+    _write_jsonl(session_dir / "updates.jsonl", _fixture_updates_rpc())
+    monkeypatch.setenv("GROK_HOME", str(home))
+
+    result = server._parse_grok_conversation(SID_A)
+    events = result["events"]
+    types = [e["type"] for e in events]
+    assert types == [
+        "system",       # session_start hook summary
+        "user_text",
+        "assistant",    # thinking
+        "assistant",    # tool_call run_shell
+        "system",       # pre_tool_use hook summary
+        "tool_result",
+        "system",       # image_dropped
+        "system",       # retry_state
+        "assistant",    # final assistant text
+    ]
+    assert events[0]["subtype"] == "grok_hook_execution"
+    assert "session_start" in events[0]["text"]
+    assert "1 ok, 1 failed" in events[0]["text"]
+    assert events[2]["blocks"][0]["kind"] == "thinking"
+    assert "plasma relay" in events[2]["blocks"][0]["text"]
+    assert events[3]["blocks"][0]["name"] == "run_shell"
+    assert events[4]["subtype"] == "grok_hook_execution"
+    assert "pre_tool_use" in events[4]["text"]
+    assert events[5]["text"] == "fake.txt"
+    assert events[6]["subtype"] == "grok_note"
+    assert "image" in events[6]["text"]
+    assert events[7]["subtype"] == "grok_retry"
+    assert "Retrying (1/5)" in events[7]["text"]
+    assert all(e["ts"] for e in events)
+
+
+def test_variant_a_chat_history_with_type_and_tool_calls(monkeypatch, tmp_path):
+    """Real Grok Build chat_history.jsonl uses `type` (not `role`) and places
+    tool_calls on assistant turns; tool_result turns carry `content`."""
+    home = tmp_path / ".grok"
+    session_dir = home / "sessions" / FAKE_CWD_ENCODED / SID_A
+    session_dir.mkdir(parents=True, exist_ok=True)
+    (session_dir / "summary.json").write_text(json.dumps({"title": "CH session"}), encoding="utf-8")
+    _write_jsonl(session_dir / "chat_history.jsonl", [
+        {"type": "user", "content": [{"type": "text", "text": "ping the fake array"}]},
+        {
+            "type": "reasoning",
+            "summary": [{"type": "summary_text", "text": "Need to ping the array."}],
+            "encrypted_content": "abc123",
+        },
+        {
+            "type": "assistant",
+            "content": "I will ping it.",
+            "tool_calls": [
+                {
+                    "id": "tc-1",
+                    "name": "run_shell",
+                    "arguments": {"command": "ping fake-array"},
+                },
+            ],
+        },
+        {"type": "tool_result", "tool_call_id": "tc-1", "content": "pong"},
+        {"type": "assistant", "content": "Array ponged."},
+    ])
+    # No updates.jsonl, so chat_history is the fallback.
+    monkeypatch.setenv("GROK_HOME", str(home))
+
+    result = server._parse_grok_conversation(SID_A)
+    events = result["events"]
+    types = [e["type"] for e in events]
+    assert types == ["user_text", "assistant", "assistant", "tool_result", "assistant"]
+    assert events[0]["text"] == "ping the fake array"
+    assert events[1]["blocks"][0]["kind"] == "thinking"
+    assert events[2]["blocks"][0]["kind"] == "text"
+    assert events[2]["blocks"][1]["kind"] == "tool_use"
+    assert events[2]["blocks"][1]["name"] == "run_shell"
+    assert events[2]["blocks"][1]["detail"] == "ping fake-array"
+    assert events[3]["text"] == "pong"
+    assert events[3]["tool_use_id"] == "tc-1"
+    assert events[4]["blocks"][0]["text"] == "Array ponged."

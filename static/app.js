@@ -48683,6 +48683,16 @@
             + (_detail ? ' <span class="codex-app-item-detail">' + escapeHtml(truncate(_detail, 260)) + '</span>' : '')
             + '</span>'
             + tsSpan(ev.ts);
+        } else if (ev.subtype === 'grok_hook_execution' || ev.subtype === 'grok_note' || ev.subtype === 'grok_retry') {
+          // Grok ACP status updates (hook runs, image-dropped notes, retries)
+          // are meta, not model text — render as a compact Grok row so the
+          // conversation view shows the same lifecycle the terminal does.
+          const _grokText = String(ev.text || '').trim();
+          div.classList.add('system-compact', 'system-grok');
+          div.innerHTML = '<span class="label">Grok</span>'
+            + '<span class="line-num">L' + ev.line + '</span>'
+            + tsSpan(ev.ts)
+            + '<span class="system-compact-text" title="' + escapeAttr(_grokText) + '">' + escapeHtml(_grokText) + '</span>';
         } else {
           div.innerHTML = '<span class="label">System</span>'
             + '<span class="line-num">L' + ev.line + '</span>'
