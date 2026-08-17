@@ -1,0 +1,1 @@
+Grok sessions respect a single active writer. CCC detects a running `grok --resume` terminal TUI, refuses to load or send to that session via ACP, and reads the terminal's on-disk `updates.jsonl` instead of the private ACP transcript so new terminal content appears in the conversation view.
