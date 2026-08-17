@@ -6104,6 +6104,10 @@ _ENGINE_REASONING_EFFORTS = {
     "claude": CLAUDE_REASONING_EFFORTS,
     "codex": CODEX_REASONING_EFFORTS,
     "grok": ("low", "medium", "high", "xhigh"),
+    # Devin encodes effort in the model name itself (claude-opus-5-max,
+    # gpt-5-6-sol-low, etc.). The UI still shows the Claude ladder; at spawn
+    # time the selected base model + effort are resolved to a concrete uid.
+    "devin": CLAUDE_REASONING_EFFORTS,
 }
 
 # Display order, cheap→expensive. Set membership is the contract; this is only
@@ -6764,6 +6768,28 @@ def _build_engine_model_catalog(force_refresh=False):
             label=row.get("label"),
             source=row.get("source") or "observed",
         )
+
+    # Devin's model catalog is generated from ``devin models list --format json``
+    # so CCC can expose effort suffixes (max, xhigh, low, ...) directly in the
+    # model picker. We keep it scoped to the curated families so the list stays
+    # usable; Devin accepts custom uids too, so users can still type e.g.
+    # claude-opus-5-max-fast.
+    try:
+        curated_devin_families = [
+            opt["id"]
+            for opt in _ENGINE_CURATED_MODELS.get("devin", ())
+        ]
+        for row in _devin_model_catalog_records(curated_devin_families):
+            _model_catalog_add(
+                catalog,
+                "devin",
+                row.get("id"),
+                label=row.get("label"),
+                source=row.get("source") or "devin-cli",
+                oneM=row.get("oneM"),
+            )
+    except Exception:
+        pass
 
     if "claude" in catalog:
         catalog["claude"]["models"] = _prune_claude_models_to_latest_tiers(
@@ -44612,12 +44638,16 @@ def spawn_session_gemini(prompt, name=None, cwd=None, repo_path=None, worktree=F
     )
 
 
-def spawn_session_devin(prompt, name=None, cwd=None, repo_path=None, worktree=False, model=None, parent_session_id=None):
+def spawn_session_devin(prompt, name=None, cwd=None, repo_path=None, worktree=False, model=None, parent_session_id=None, reasoning_effort=None):
     """Spawn a headless Devin CLI run and return tracking info.
 
     Uses `devin -p "prompt" --permission-mode dangerous` (one-shot, like
     gemini). The session ID is assigned by the Devin CLI and discovered
     later from its SQLite DB via find_devin_cli_conversations().
+
+    Devin encodes reasoning effort in the model uid (claude-opus-5-max,
+    gpt-5-6-sol-low, etc.). ``_devin_resolve_model`` maps the user's
+    selected base model + reasoning_effort to the concrete uid.
     """
     prompt = _strip_ccc_session_state_instruction(prompt)
     resolved = _resolve_devin_bin()
@@ -44629,8 +44659,12 @@ def spawn_session_devin(prompt, name=None, cwd=None, repo_path=None, worktree=Fa
     session_name = _slugify(name or prompt) or "unnamed"
     timestamp = time.strftime("%Y%m%dT%H%M%S")
     log_filename = f"spawn-devin-{session_name}-{timestamp}.log"
-    if model:
-        _set_session_model(log_filename[:-4], model, False)
+    model_to_use = _devin_resolve_model(
+        (model or os.environ.get("CCC_DEVIN_MODEL")),
+        reasoning_effort,
+    )
+    if model_to_use:
+        _set_session_model(log_filename[:-4], model_to_use, False)
     log_dir = repo_log_dir(repo_for_logs)
     log_dir.mkdir(parents=True, exist_ok=True)
     log_path = log_dir / log_filename
@@ -44639,7 +44673,6 @@ def spawn_session_devin(prompt, name=None, cwd=None, repo_path=None, worktree=Fa
         "--permission-mode", os.environ.get("CCC_DEVIN_PERMISSION_MODE", "dangerous"),
         "--respect-workspace-trust", "false",
     ]
-    model_to_use = model or os.environ.get("CCC_DEVIN_MODEL")
     if model_to_use:
         cmd.extend(["--model", model_to_use])
     cmd.extend(["-p", prompt])
@@ -44675,6 +44708,7 @@ def spawn_session_devin(prompt, name=None, cwd=None, repo_path=None, worktree=Fa
         "cwd": spawn_cwd,
         "repo_path": repo_for_logs,
         "model": model_to_use or "",
+        "reasoning_effort": reasoning_effort or "",
         "parent_session_id": parent_session_id or "",
     }
     _spawned_sessions.append(entry)
@@ -44690,6 +44724,7 @@ def spawn_session_devin(prompt, name=None, cwd=None, repo_path=None, worktree=Fa
         repo_path=repo_for_logs,
         model=model_to_use,
         parent_session_id=parent_session_id,
+        reasoning_effort=reasoning_effort or "",
     )
     return _finalize_spawn_response(
         {"ok": True, "pid": proc.pid, "name": session_name, "log": str(log_path)},
@@ -66835,6 +66870,7 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                             worktree=worktree_flag,
                             model=model,
                             parent_session_id=parent_session_id,
+                            reasoning_effort=reasoning_effort,
                         )
                     elif engine == "remote" or payload.get("remote") or (os.environ.get("CCC_SSH_HOST") and payload.get("remote") is not False and engine in ("claude", "hermes", "remote", None)):
                         remote_engine = "hermes" if engine == "hermes" else "claude"

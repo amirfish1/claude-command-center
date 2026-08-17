@@ -1,0 +1,1 @@
+Devin CLI sessions now display their model, reasoning effort, and subagent calls in the CCC board. Spawning Devin exposes the same effort ladder as Claude; CCC maps `low`..`max` to the matching Devin model uid. The model picker is populated from `devin models list` and still supports custom uids.

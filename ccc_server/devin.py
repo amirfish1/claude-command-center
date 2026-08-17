@@ -29,6 +29,7 @@ import re
 import shlex
 import shutil
 import sqlite3
+import subprocess
 import threading
 import time
 import urllib.request
@@ -44,6 +45,9 @@ DEVIN_SESSION_PREFIX = "devin-"
 DEVIN_SESSIONS_CACHE_TTL_S = 60
 DEVIN_DETAIL_ACTIVE_TTL_S = 30
 DEVIN_DETAIL_DONE_TTL_S = 7 * 24 * 3600
+DEVIN_MODEL_LIST_TIMEOUT_S = 15
+DEVIN_MODEL_LIST_TTL_S = 300
+_DEVIN_MODEL_LIST_CACHE = {"ts": 0.0, "data": None, "lock": threading.Lock()}
 # A session counts as live while Devin reports it actively working.
 _DEVIN_ACTIVE_STATUSES = frozenset({
     "working", "running", "blocked", "pending", "queued", "in_progress",
@@ -884,6 +888,273 @@ def _devin_cli_first_messages_from_nodes(con, raw_ids):
     return first_messages
 
 
+def _devin_cli_latest_models_for_raw_ids(con, raw_ids):
+    """Best-effort {raw_id: generation_model} from the latest assistant turn.
+
+    Some Devin frontends (e.g. the Windsurf/Cursor integration) do not write
+    the model into the ``sessions`` row, so CCC's row model stays empty. The
+    latest assistant ``message_nodes`` row carries ``metadata.generation_model``,
+    which is good enough for the model pill and usage estimates."""
+    if not raw_ids or con is None:
+        return {}
+    placeholders = ",".join("?" * len(raw_ids))
+    latest_models = {}
+    qstart = time.perf_counter()
+    try:
+        query = (
+            "WITH latest AS ("
+            "  SELECT session_id, chat_message, "
+            "         ROW_NUMBER() OVER (PARTITION BY session_id ORDER BY row_id DESC) AS rn "
+            "  FROM message_nodes "
+            "  WHERE session_id IN ({}) "
+            "    AND json_extract(chat_message, '$.role') = 'assistant' "
+            ") "
+            "SELECT session_id, chat_message FROM latest WHERE rn = 1"
+        ).format(placeholders)
+        for row in con.execute(query, raw_ids):
+            try:
+                msg = json.loads(row["chat_message"])
+            except (ValueError, TypeError):
+                continue
+            if not isinstance(msg, dict):
+                continue
+            gm = (msg.get("metadata") or {}).get("generation_model")
+            if gm:
+                latest_models[str(row["session_id"] or "").strip()] = str(gm)
+    except sqlite3.Error:
+        pass
+    _devin_cli_profile_log(
+        "latest_models_for_raw_ids",
+        time.perf_counter() - qstart,
+        f"raw_ids={len(raw_ids)} found={len(latest_models)}",
+    )
+    return latest_models
+
+
+def _devin_cli_subagent_meta_for_raw_ids(con, raw_ids):
+    """Subagent counts + recent list from the ``tool_call_state`` table.
+
+    Devin stores ``run_subagent`` tool calls in ``tool_call_state``.
+    The update row tells us whether the subagent is still running."""
+    if not raw_ids or con is None:
+        return {}
+    placeholders = ",".join("?" * len(raw_ids))
+    by_sid = {}
+    qstart = time.perf_counter()
+    try:
+        query = (
+            "SELECT session_id, tool_call_json, tool_call_update_json "
+            "FROM tool_call_state "
+            "WHERE session_id IN ({}) "
+            "  AND json_extract(tool_call_json, '$._meta.\"cognition.ai/inferenceToolName\"') = 'run_subagent' "
+            "ORDER BY session_id, rowid"
+        ).format(placeholders)
+        for row in con.execute(query, raw_ids):
+            sid = str(row["session_id"] or "").strip()
+            try:
+                call = json.loads(row["tool_call_json"] or "{}")
+                update = json.loads(row["tool_call_update_json"] or "{}")
+            except (ValueError, TypeError):
+                continue
+            if not isinstance(call, dict):
+                continue
+            raw = call.get("rawInput") or {}
+            title = (
+                str(raw.get("title") or "").strip()
+                or str(call.get("title") or "").strip()
+                or str(raw.get("task") or "").strip()
+            )[:80]
+            subagent_type = str(raw.get("profile") or "").strip()[:40]
+            status = str(update.get("status") or "").strip().lower()
+            if status == "completed":
+                status = "done"
+            elif status == "failed":
+                status = "failed"
+            else:
+                status = "in-flight"
+            entry = {
+                "description": title or "(unnamed subagent)",
+                "subagent_type": subagent_type,
+                "status": status,
+            }
+            by_sid.setdefault(sid, []).append(entry)
+    except sqlite3.Error:
+        pass
+    _devin_cli_profile_log(
+        "subagent_meta_for_raw_ids",
+        time.perf_counter() - qstart,
+        f"raw_ids={len(raw_ids)} sids_with_subagents={len(by_sid)}",
+    )
+    out = {}
+    for sid, entries in by_sid.items():
+        out[sid] = {
+            "subagent_count": len(entries),
+            "subagent_in_flight_count": sum(
+                1 for e in entries if e.get("status") == "in-flight"
+            ),
+            "subagent_recent": entries[-8:],
+        }
+    return out
+
+
+def _devin_model_list_json():
+    """Run ``devin models list --format json`` and cache the parsed result.
+
+    The cache is process-local, bounded, and degrades to an empty catalog when
+    the binary is missing or the command fails."""
+    now = time.monotonic()
+    with _DEVIN_MODEL_LIST_CACHE["lock"]:
+        cached = _DEVIN_MODEL_LIST_CACHE["data"]
+        if cached is not None and now - _DEVIN_MODEL_LIST_CACHE["ts"] < DEVIN_MODEL_LIST_TTL_S:
+            return cached
+    resolved = _resolve_devin_bin()
+    if not resolved.get("available"):
+        return {"families": [], "uid_to_family": {}, "family_to_uids": {}}
+    try:
+        proc = subprocess.run(
+            [resolved["bin"], "models", "list", "--format", "json"],
+            capture_output=True,
+            text=True,
+            timeout=DEVIN_MODEL_LIST_TIMEOUT_S,
+        )
+        if proc.returncode != 0:
+            return {"families": [], "uid_to_family": {}, "family_to_uids": {}}
+        data = json.loads(proc.stdout)
+    except (subprocess.TimeoutExpired, OSError, ValueError, TypeError):
+        return {"families": [], "uid_to_family": {}, "family_to_uids": {}}
+    families = data.get("families") or []
+    uid_to_family = {}
+    family_to_uids = {}
+    for fam in families:
+        family_uid = fam.get("family_uid") or fam.get("slug")
+        if not family_uid:
+            continue
+        family_to_uids[family_uid] = []
+        for alias in fam.get("aliases") or []:
+            uid_to_family[str(alias).strip().lower()] = family_uid
+        for variant in fam.get("variants") or []:
+            model_uid = str(variant.get("model_uid") or "").strip().lower()
+            if not model_uid:
+                continue
+            uid_to_family[model_uid] = family_uid
+            family_to_uids[family_uid].append(model_uid)
+    result = {
+        "families": families,
+        "uid_to_family": uid_to_family,
+        "family_to_uids": family_to_uids,
+    }
+    with _DEVIN_MODEL_LIST_CACHE["lock"]:
+        _DEVIN_MODEL_LIST_CACHE["ts"] = now
+        _DEVIN_MODEL_LIST_CACHE["data"] = result
+    return result
+
+
+def _devin_family_levels():
+    """Map family_uid -> {effort_level: model_uid} using the live Devin catalog.
+
+    Effort levels are encoded in the model uid (``claude-opus-5-max``,
+    ``gpt-5-6-sol-low``, etc.). The base variant of a family is also assigned
+    an effort from its label when the label is unambiguous (e.g. ``SWE-1.7 Max``
+    means the base variant is the ``max`` effort)."""
+    data = _devin_model_list_json()
+    families = data.get("families") or []
+    known = {"low", "medium", "high", "xhigh", "max", "none", "minimal"}
+    levels = {}
+    for fam in families:
+        family_uid = fam.get("family_uid") or fam.get("slug")
+        if not family_uid:
+            continue
+        norm_family = str(family_uid).lower().replace(".", "-")
+        fam_levels = {}
+        for variant in fam.get("variants") or []:
+            model_uid = str(variant.get("model_uid") or "").strip().lower()
+            if not model_uid:
+                continue
+            tokens = model_uid.split("-")
+            flags = set()
+            while tokens and tokens[-1] in ("fast", "priority"):
+                flags.add(tokens.pop())
+            level = ""
+            if tokens and tokens[-1] in known:
+                level = tokens.pop()
+            base = "-".join(tokens)
+            if not level and base == norm_family:
+                label = str(variant.get("label") or "").lower()
+                words = re.split(r"[\s\-]+", label)
+                for w in reversed(words):
+                    if w in known:
+                        level = w
+                        break
+            if not level or flags:
+                continue
+            fam_levels[level] = model_uid
+        levels[family_uid] = fam_levels
+    return levels
+
+
+def _devin_resolve_model(model, effort=None):
+    """Translate a Devin model + reasoning effort into a concrete model uid.
+
+    Devin does not have a separate ``--effort`` flag; the effort is part of the
+    model name. CCC exposes the same effort ladder as Claude, and this helper
+    resolves it to the right Devin model uid. If the effort cannot be satisfied
+    (e.g. ``adaptive`` has no levels), the original model is returned so the
+    spawn still succeeds with the family's default."""
+    model = _core._clean_spawn_default_model(model) or ""
+    if not model:
+        return ""
+    effort = (effort or "").strip().lower()
+    if not effort:
+        return model
+    data = _devin_model_list_json()
+    uid_to_family = data.get("uid_to_family") or {}
+    family_to_uids = data.get("family_to_uids") or {}
+    family = uid_to_family.get(model)
+    if not family:
+        if model in family_to_uids:
+            family = model
+        else:
+            return model
+    levels = _devin_family_levels()
+    chosen = levels.get(family, {}).get(effort)
+    if chosen:
+        return chosen
+    return model
+
+
+def _devin_model_catalog_records(allowed_families=None):
+    """Return Devin model catalog records for the engine picker.
+
+    The catalog is built from ``devin models list --format json``. To keep the
+    picker usable, fast/priority variants are omitted; users can still type them
+    as custom models because ``_ENGINE_SUPPORTS_CUSTOM_MODELS["devin"]`` is
+    True."""
+    data = _devin_model_list_json()
+    families = data.get("families") or []
+    if allowed_families is None:
+        allowed_families = set(data.get("family_to_uids", {}).keys())
+    else:
+        allowed_families = set(allowed_families or ())
+    records = []
+    for fam in families:
+        family_uid = fam.get("family_uid") or fam.get("slug")
+        if family_uid not in allowed_families:
+            continue
+        for variant in fam.get("variants") or []:
+            model_uid = str(variant.get("model_uid") or "").strip()
+            if not model_uid:
+                continue
+            if re.search(r"-(fast|priority)$", model_uid, re.I):
+                continue
+            records.append({
+                "id": model_uid,
+                "label": str(variant.get("label") or model_uid),
+                "source": "devin-cli",
+                "oneM": (variant.get("max_context_tokens") or 0) >= 1_000_000,
+            })
+    return records
+
+
 def find_devin_cli_conversations(
     repo_path=None,
     include_old=False,
@@ -1094,6 +1365,9 @@ def find_devin_cli_conversations(
                 "model": model,
                 "reasoning_effort": "",
                 "session_url": None,
+                "subagent_count": 0,
+                "subagent_in_flight_count": 0,
+                "subagent_recent": [],
             })
         qelapsed = time.perf_counter() - qstart
         _devin_cli_profile_log(
@@ -1111,6 +1385,8 @@ def find_devin_cli_conversations(
             first_prompts = _devin_cli_first_prompts_from_history(con, raw_ids)
             missing_ids = [rid for rid in raw_ids if rid not in first_prompts]
             first_messages = _devin_cli_first_messages_from_nodes(con, missing_ids)
+            latest_models = _devin_cli_latest_models_for_raw_ids(con, raw_ids)
+            subagent_meta = _devin_cli_subagent_meta_for_raw_ids(con, raw_ids)
             for r in rows:
                 raw_id = r.pop("_raw_id", "")
                 title = r.pop("_title", "")
@@ -1130,6 +1406,13 @@ def find_devin_cli_conversations(
                 r["first_message"] = first_message[:200]
                 r["display_name"] = display_name
                 r["last_prompt"] = first_message[:200]
+                if not r.get("model"):
+                    r["model"] = latest_models.get(raw_id, "")
+                sm = subagent_meta.get(raw_id)
+                if sm:
+                    r["subagent_count"] = sm["subagent_count"]
+                    r["subagent_in_flight_count"] = sm["subagent_in_flight_count"]
+                    r["subagent_recent"] = sm["subagent_recent"]
         _devin_cli_profile_log(
             "find_devin_cli_first_messages",
             time.perf_counter() - fmstart,
