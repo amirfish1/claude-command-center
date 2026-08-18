@@ -446,6 +446,8 @@ def parse_conversation_by_sid(session_id, after_line=0):
     Morning-spawned sessions can land in any ~/.claude/projects/<slug>/
     depending on spawn cwd, so repo-specific lookup misses them.
     """
+    if _core._is_devin_cli_session(session_id):
+        return _core._parse_devin_cli_conversation(session_id, after_line=after_line)
     if not _core.PROJECTS_ROOT.is_dir():
         stub = _core._registry_only_conversation_stub(session_id, after_line=after_line)
         return stub or {"events": [], "last_line": 0}
@@ -1583,6 +1585,8 @@ def extract_session_timeline(session_id):
         return _core._extract_antigravity_timeline(session_id)
     if _core._is_hermes_session(session_id):
         return _core._extract_hermes_timeline(session_id)
+    if _core._is_devin_cli_session(session_id):
+        return _core._extract_devin_cli_timeline(session_id)
     if not _core.PROJECTS_ROOT.is_dir():
         return {"events": [], "total_turns": 0}
     jsonl = None

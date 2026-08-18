@@ -22,7 +22,7 @@ reached via ``_core`` at call time."""
 
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import datetime, timezone
 import json
 import os
 import re
@@ -997,6 +997,89 @@ def _devin_cli_subagent_meta_for_raw_ids(con, raw_ids):
     return out
 
 
+def _devin_cli_last_assistant_text_for_raw_ids(con, raw_ids):
+    """{raw_id: latest assistant message text} for the session list.
+
+    Uses a window-function query so the DB does the work instead of parsing
+    every row in Python. Returns at most one text per session.
+    """
+    if not raw_ids or con is None:
+        return {}
+    placeholders = ",".join("?" * len(raw_ids))
+    out = {}
+    qstart = time.perf_counter()
+    try:
+        # SQLite 3.25+ supports window functions.
+        query = (
+            "WITH ranked AS ("
+            "  SELECT session_id, chat_message,"
+            "    ROW_NUMBER() OVER (PARTITION BY session_id ORDER BY node_id DESC) AS rn"
+            "  FROM message_nodes"
+            "  WHERE session_id IN ({})"
+            "    AND json_extract(chat_message, '$.role') = 'assistant'"
+            ")"
+            "SELECT session_id, chat_message FROM ranked WHERE rn = 1"
+        ).format(placeholders)
+        for row in con.execute(query, raw_ids):
+            sid = str(row["session_id"] or "").strip()
+            try:
+                msg = json.loads(row["chat_message"] or "{}")
+            except (ValueError, TypeError):
+                continue
+            if not isinstance(msg, dict):
+                continue
+            text = str(msg.get("content") or "").strip()
+            if text:
+                out[sid] = text
+    except sqlite3.Error:
+        pass
+    _devin_cli_profile_log(
+        "last_assistant_text_for_raw_ids",
+        time.perf_counter() - qstart,
+        f"raw_ids={len(raw_ids)} found={len(out)}",
+    )
+    return out
+
+
+def _devin_cli_ship_flags_for_raw_ids(con, raw_ids):
+    """{raw_id: {'has_commit': bool, 'has_push': bool, 'has_pr': bool}}.
+
+    A cheap, single-pass LIKE scan of all messages in the session set.
+    """
+    if not raw_ids or con is None:
+        return {}
+    placeholders = ",".join("?" * len(raw_ids))
+    out = {}
+    qstart = time.perf_counter()
+    try:
+        query = (
+            "SELECT session_id,"
+            "  MAX(CASE WHEN chat_message LIKE '%git%commit%' THEN 1 ELSE 0 END) AS has_commit,"
+            "  MAX(CASE WHEN chat_message LIKE '%git%push%' THEN 1 ELSE 0 END) AS has_push,"
+            "  MAX(CASE WHEN chat_message LIKE '%gh%pr%create%' THEN 1 ELSE 0 END) AS has_pr"
+            " FROM message_nodes"
+            " WHERE session_id IN ({})"
+            "   AND (json_extract(chat_message, '$.role') = 'assistant' OR"
+            "        json_extract(chat_message, '$.role') = 'tool')"
+            " GROUP BY session_id"
+        ).format(placeholders)
+        for row in con.execute(query, raw_ids):
+            sid = str(row["session_id"] or "").strip()
+            out[sid] = {
+                "has_commit": bool(row["has_commit"]),
+                "has_push": bool(row["has_push"]),
+                "has_pr": bool(row["has_pr"]),
+            }
+    except sqlite3.Error:
+        pass
+    _devin_cli_profile_log(
+        "ship_flags_for_raw_ids",
+        time.perf_counter() - qstart,
+        f"raw_ids={len(raw_ids)} found={len(out)}",
+    )
+    return out
+
+
 def _devin_model_list_json():
     """Run ``devin models list --format json`` and cache the parsed result.
 
@@ -1387,6 +1470,8 @@ def find_devin_cli_conversations(
             first_messages = _devin_cli_first_messages_from_nodes(con, missing_ids)
             latest_models = _devin_cli_latest_models_for_raw_ids(con, raw_ids)
             subagent_meta = _devin_cli_subagent_meta_for_raw_ids(con, raw_ids)
+            last_assistant_texts = _devin_cli_last_assistant_text_for_raw_ids(con, raw_ids)
+            ship_flags = _devin_cli_ship_flags_for_raw_ids(con, raw_ids)
             for r in rows:
                 raw_id = r.pop("_raw_id", "")
                 title = r.pop("_title", "")
@@ -1406,6 +1491,21 @@ def find_devin_cli_conversations(
                 r["first_message"] = first_message[:200]
                 r["display_name"] = display_name
                 r["last_prompt"] = first_message[:200]
+                r["last_assistant_text"] = (
+                    _core._strip_ccc_session_state_instruction(
+                        last_assistant_texts.get(raw_id, "")
+                    ).strip()[:2000]
+                )
+                flags = ship_flags.get(raw_id, {})
+                r["has_commit"] = bool(flags.get("has_commit"))
+                r["has_push"] = bool(flags.get("has_push"))
+                r["has_pr"] = bool(flags.get("has_pr"))
+                if r["has_commit"]:
+                    r["last_commit_pos"] = 1
+                if r["has_push"]:
+                    r["last_push_pos"] = 1
+                if r["has_pr"]:
+                    r["tail_pr_number"] = 1
                 if not r.get("model"):
                     r["model"] = latest_models.get(raw_id, "")
                 sm = subagent_meta.get(raw_id)
@@ -1684,14 +1784,19 @@ def _extract_devin_cli_usage(session_id):
             metrics = meta.get("metrics") or {}
             if not isinstance(metrics, dict):
                 continue
-            in_tok = metrics.get("input_tokens") or 0
-            out_tok = metrics.get("output_tokens") or 0
-            cache_read = metrics.get("cache_read_tokens") or 0
-            cache_creation = metrics.get("cache_creation_tokens") or 0
-            if in_tok:
-                latest = in_tok
-                peak = max(peak, in_tok)
-            total_in += max(in_tok - cache_read, 0)
+            in_tok = int(metrics.get("input_tokens") or 0)
+            out_tok = int(metrics.get("output_tokens") or 0)
+            cache_read = int(metrics.get("cache_read_tokens") or 0)
+            cache_creation = int(metrics.get("cache_creation_tokens") or 0)
+            # The context window is non-cached input + cached read + newly
+            # created cached prefix. input_tokens alone is the non-cached
+            # portion, so the live/peak bars must add cache to match the
+            # model's real window.
+            window = in_tok + cache_read + cache_creation
+            if window:
+                latest = window
+                peak = max(peak, window)
+            total_in += in_tok
             total_out += out_tok
             total_cache_read += cache_read
             total_cache_creation += cache_creation
@@ -1713,3 +1818,245 @@ def _extract_devin_cli_usage(session_id):
         "model": model,
         "override": _core._get_session_override(session_id),
     }
+
+
+# Regexes for the session-activity strip. Keep them in sync with the
+# timeline patterns in ccc_server/morning_launch.py where possible.
+_DEVIN_CLI_COMMIT_RE = re.compile(r"\bgit\s+(?:-\w+\s+\S+\s+)*commit\b")
+_DEVIN_CLI_COMMIT_MSG_RE = re.compile(r"-m\s+['\"]([^'\"]{1,200})['\"]")
+_DEVIN_CLI_PUSH_RE = re.compile(r"\bgit\s+(?:-\w+\s+\S+\s+)*push\b")
+_DEVIN_CLI_PR_CREATE_RE = re.compile(r"\bgh\s+pr\s+create\b")
+_DEVIN_CLI_PR_TITLE_RE = re.compile(r"--title\s+['\"]([^'\"]{1,200})['\"]")
+_DEVIN_CLI_COMMIT_RESULT_RE = re.compile(
+    r"\[[^\]]+\s+([0-9a-f]{7,40})\]\s*(.+)"
+)
+_DEVIN_CLI_COMMIT_LINE_RE = re.compile(
+    r"^\s*Commit:\s+([0-9a-f]{7,40})\s*[-—]\s*(.+)$", re.MULTILINE
+)
+
+
+def _extract_devin_cli_timeline(session_id):
+    """Build a commit/push/PR activity strip from a Devin CLI session.
+
+    Reads the message_nodes table, counting assistant messages as turns and
+    matching git commands/output. Returns the same shape as
+    `extract_session_timeline`.
+    """
+    raw_id = _devin_cli_raw_id(session_id)
+    if not raw_id:
+        return {"events": [], "total_turns": 0}
+    con = _devin_cli_connect()
+    if con is None:
+        return {"events": [], "total_turns": 0}
+
+    events = []
+    seen = set()
+    turn = 0
+
+    def add_event(kind, subject, text, sha=None, pr_number=None):
+        if turn == 0:
+            return
+        key = (kind, sha, subject)
+        if key in seen:
+            return
+        seen.add(key)
+        lower = text.lower()
+        success = None
+        if "fatal:" in lower or "error:" in lower or "exited with code" in lower and "code 0" not in lower:
+            success = False
+        elif kind in ("commit", "push"):
+            success = True
+        event = {
+            "kind": kind,
+            "turn": turn,
+            "ts": ts,
+            "subject": subject,
+            "success": success,
+        }
+        if sha:
+            event["sha"] = sha
+        if pr_number:
+            event["pr_number"] = pr_number
+        events.append(event)
+
+    try:
+        for row in con.execute(
+            "SELECT chat_message, created_at FROM message_nodes "
+            "WHERE session_id = ? ORDER BY node_id",
+            (raw_id,),
+        ):
+            try:
+                msg = json.loads(row["chat_message"])
+            except (ValueError, TypeError):
+                continue
+            if not isinstance(msg, dict):
+                continue
+            role = str(msg.get("role") or "").lower()
+            if role == "assistant":
+                turn += 1
+            if role not in ("assistant", "tool"):
+                continue
+
+            created = row["created_at"]
+            if created:
+                ts = (
+                    datetime.fromtimestamp(float(created), tz=timezone.utc)
+                    .isoformat()
+                )
+            else:
+                ts = ""
+
+            content = msg.get("content")
+            if not isinstance(content, str) or not content:
+                continue
+
+            # Commit commands and output lines.
+            for m in _DEVIN_CLI_COMMIT_LINE_RE.finditer(content):
+                add_event("commit", m.group(2).strip(), content, sha=m.group(1))
+            for m in _DEVIN_CLI_COMMIT_RESULT_RE.finditer(content):
+                add_event("commit", m.group(2).strip(), content, sha=m.group(1))
+            if _DEVIN_CLI_COMMIT_RE.search(content):
+                subject = ""
+                m = _DEVIN_CLI_COMMIT_MSG_RE.search(content)
+                if m:
+                    subject = m.group(1)
+                add_event("commit", subject, content)
+            if _DEVIN_CLI_PUSH_RE.search(content):
+                add_event("push", "", content)
+            if _DEVIN_CLI_PR_CREATE_RE.search(content):
+                subject = ""
+                m = _DEVIN_CLI_PR_TITLE_RE.search(content)
+                if m:
+                    subject = m.group(1)
+                add_event("pr", subject, content)
+    except sqlite3.Error:
+        pass
+    finally:
+        con.close()
+
+    return {"events": events, "total_turns": turn}
+
+
+def _extract_files_from_devin_cli_conversation(session_id):
+    """Extract file-like paths from a Devin CLI transcript for the Files panel.
+
+    Walks message_nodes and runs the same path/URL extraction used for
+    JSONL sessions, then groups by file category.
+    """
+    raw_id = _devin_cli_raw_id(session_id)
+    if not raw_id:
+        return {"count": 0, "truncated": False, "groups": {}}
+    con = _devin_cli_connect()
+    if con is None:
+        return {"count": 0, "truncated": False, "groups": {}}
+
+    seen = {}
+    truncated = False
+    line = 0
+    try:
+        for row in con.execute(
+            "SELECT chat_message FROM message_nodes "
+            "WHERE session_id = ? ORDER BY node_id",
+            (raw_id,),
+        ):
+            line += 1
+            try:
+                msg = json.loads(row["chat_message"])
+            except (ValueError, TypeError):
+                continue
+            if not isinstance(msg, dict):
+                continue
+            role = str(msg.get("role") or "").lower()
+            if role == "system":
+                continue
+            content = msg.get("content")
+            if not isinstance(content, str) or not content:
+                continue
+            for target, kind in _core._ffc_iter_targets(content):
+                # Drop skill definition files injected into the system context.
+                if (
+                    ("/.claude/skills/" in target
+                     or "/.config/devin/skills/" in target
+                     or "/.agents/skills/" in target)
+                    and target.rsplit("/", 1)[-1] == "SKILL.md"
+                ):
+                    continue
+                truncated = _core._ffc_consider_file_target(
+                    seen, target, kind, line, truncated
+                )
+    except sqlite3.Error:
+        pass
+    finally:
+        con.close()
+
+    groups = {}
+    for row in seen.values():
+        cat = row["category"]
+        groups.setdefault(cat, []).append(row)
+    for rows in groups.values():
+        rows.sort(key=lambda r: r["first_line"])
+
+    return {"count": len(seen), "truncated": truncated, "groups": groups}
+
+
+def _devin_cli_session_detail(session_id):
+    """Lightweight drill-in for /api/session/<id> for a Devin CLI session.
+
+    Returns the same shape as `compute_session_detail`: state, last assistant
+    text, and the last few turns from the SQLite transcript.
+    """
+    raw_id = _devin_cli_raw_id(session_id)
+    if not raw_id:
+        return {"ok": False, "error": "session not found", "session_id": session_id}, 404
+
+    parsed = _parse_devin_cli_conversation(session_id)
+    events = parsed.get("events", [])
+    last_assistant_text = ""
+    turns = []
+    for ev in reversed(events):
+        if ev.get("type") == "assistant" and not last_assistant_text:
+            blocks = ev.get("blocks")
+            if isinstance(blocks, list) and blocks and isinstance(blocks[0], dict):
+                last_assistant_text = blocks[0].get("text", "")
+            else:
+                last_assistant_text = ev.get("text", "")
+        turns.insert(0, ev)
+        if len(turns) >= 3:
+            break
+    turns = turns[:3][::-1] if turns else []
+
+    con = _devin_cli_connect()
+    mtime = None
+    cwd = ""
+    if con:
+        try:
+            row = con.execute(
+                "SELECT working_directory, last_activity_at FROM sessions "
+                "WHERE id = ?",
+                (raw_id,),
+            ).fetchone()
+            if row:
+                cwd = row["working_directory"] or ""
+                mtime = row["last_activity_at"]
+        finally:
+            con.close()
+
+    row = {
+        "session_id": session_id,
+        "last_assistant_text": last_assistant_text,
+        "is_live": _devin_cli_session_live(raw_id),
+    }
+    return {
+        "ok": True,
+        "session_id": session_id,
+        "state": _core._stamp_session_state(row),
+        "ended_blocked": _core._session_ended_blocked(row),
+        "is_live": row["is_live"],
+        "mtime": mtime,
+        "folder_label": _core._slug_to_label(Path(cwd).name) if cwd else None,
+        "sidecar_in_flight": False,
+        "question_text": "",
+        "soft_block": None,
+        "last_assistant_text": (last_assistant_text or "")[:2000],
+        "turns": turns,
+    }, 200

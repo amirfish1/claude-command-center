@@ -26699,6 +26699,8 @@ def _extract_files_from_conversation(conversation_id):
         return _extract_files_from_antigravity_conversation(conversation_id)
     if _is_hermes_session(conversation_id):
         return _extract_files_from_hermes_conversation(conversation_id)
+    if _is_devin_cli_session(conversation_id):
+        return _extract_files_from_devin_cli_conversation(conversation_id)
 
     filepath = _resolve_conversation_path(conversation_id)
     seen = {}  # target -> {label, target, kind, category, first_line}
@@ -71553,6 +71555,8 @@ def compute_session_detail(session_id):
     sid = (session_id or "").strip()
     if not sid:
         return {"ok": False, "error": "missing session_id"}, 400
+    if _is_devin_cli_session(sid):
+        return _devin_cli_session_detail(sid)
     path = _find_session_jsonl(sid)
     if not path:
         return {"ok": False, "error": "session not found", "session_id": sid}, 404
