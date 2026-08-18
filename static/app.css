@@ -4419,6 +4419,13 @@
     margin-bottom: 6px; opacity: 0.85;
   }
   .stream-bubble-blocks { display: flex; flex-direction: column; gap: 8px; }
+  /* CCC-875: the header ("streaming"/"subagent") flashes on and off many
+   * times per turn if shown before any block has landed — spawn events can
+   * arrive well before the first visible text/tool block. Hide it until the
+   * bubble actually has content. */
+  .stream-bubble:not(.stream-bubble-has-content) .stream-bubble-header {
+    display: none;
+  }
   .stream-block-text { white-space: normal; }
   .stream-block-tool {
     display: inline-flex; align-items: center; gap: 6px;

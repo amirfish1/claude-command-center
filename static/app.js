@@ -41156,6 +41156,7 @@
       });
       if (!slot) continue;
       _streamingMsgId = ev.message_id || _streamingMsgId;
+      const bubbleNode = slot.parentNode;
       for (const b of (ev.blocks || [])) {
         if (b.type === 'text') {
           // Append-or-merge: consecutive text blocks for the same message
@@ -41254,6 +41255,9 @@
           // happening. (If --include-partial-messages is ever enabled, real
           // thinking_delta text could be shown here instead.)
         }
+      }
+      if (bubbleNode && slot.children.length) {
+        bubbleNode.classList.add('stream-bubble-has-content');
       }
     }
     if (wasAtBottom && $view) scrollConversationToEnd($view);
