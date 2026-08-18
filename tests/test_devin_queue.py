@@ -1,7 +1,12 @@
 """Regression coverage for Devin CLI message queue drain."""
 
 import importlib
+import os
+import sqlite3
+import tempfile
+import time
 import unittest
+from datetime import datetime
 from unittest import mock
 
 
@@ -60,6 +65,73 @@ class DevinQueueTests(unittest.TestCase):
         }
         with mock.patch.object(server, "_spawned_sessions", [entry]):
             self.assertFalse(server._resume_queue_engine_busy(sid))
+
+    def test_devin_spawn_session_id_resolved_from_cli_db(self):
+        """A Devin spawn without a session id should resolve from the CLI DB."""
+        server = importlib.import_module("server")
+
+        # Build a throwaway Devin CLI sessions DB with one matching session.
+        db_fd, db_path = tempfile.mkstemp(suffix=".db")
+        os.close(db_fd)
+        self.addCleanup(lambda: os.unlink(db_path) if os.path.exists(db_path) else None)
+
+        con = sqlite3.connect(db_path)
+        con.executescript(
+            """
+            CREATE TABLE sessions (
+                id TEXT PRIMARY KEY,
+                working_directory TEXT,
+                created_at REAL,
+                last_activity_at REAL
+            );
+            CREATE TABLE prompt_history (
+                session_id TEXT,
+                content TEXT,
+                timestamp REAL,
+                is_shell INTEGER
+            );
+            """
+        )
+        spawn_ts = 1700000000.0
+        spawned_at = datetime.fromtimestamp(spawn_ts).strftime("%Y%m%dT%H%M%S")
+        con.execute(
+            "INSERT INTO sessions (id, working_directory, created_at, last_activity_at) "
+            "VALUES (?, ?, ?, ?)",
+            ("ferret-test", "/tmp/bym", spawn_ts, spawn_ts),
+        )
+        con.execute(
+            "INSERT INTO prompt_history (session_id, content, timestamp, is_shell) "
+            "VALUES (?, ?, ?, ?)",
+            ("ferret-test", "fix the client portal bug", spawn_ts, 0),
+        )
+        con.commit()
+        con.close()
+
+        prev_db = os.environ.get("CCC_DEVIN_DB")
+        os.environ["CCC_DEVIN_DB"] = db_path
+        self.addCleanup(
+            lambda: (
+                os.environ.__setitem__("CCC_DEVIN_DB", prev_db)
+                if prev_db is not None
+                else os.environ.pop("CCC_DEVIN_DB", None)
+            )
+        )
+
+        entry = {
+            "engine": "devin",
+            "cwd": "/tmp/bym",
+            "repo_path": "/tmp/bym",
+            "command_summary": "fix the client portal bug",
+            "spawned_at": spawned_at,
+        }
+        self.assertEqual(
+            server._devin_cli_session_id_for_spawn_entry(entry),
+            "devincli-ferret-test",
+        )
+        self.assertEqual(
+            server._spawn_session_id_from_entry(dict(entry)),
+            "devincli-ferret-test",
+        )
 
 
 if __name__ == "__main__":

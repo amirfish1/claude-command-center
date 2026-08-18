@@ -44976,6 +44976,80 @@ def _devin_cli_session_cwd(raw_id):
     return None
 
 
+def _devin_cli_session_id_for_spawn_entry(entry):
+    """Best-effort Devin CLI session id for a live CCC spawn entry.
+
+    The Devin CLI does not emit its session id on stdout, so CCC resolves it
+    from the CLI's SQLite DB by matching the working directory, the first
+    prompt, and the start time.
+    """
+    if not isinstance(entry, dict):
+        return None
+    engine = str(entry.get("engine") or "").lower()
+    if engine != "devin":
+        return None
+    cwd = str(entry.get("cwd") or entry.get("repo_path") or "").strip()
+    if not cwd:
+        return None
+    prompt = str(entry.get("command_summary") or entry.get("prompt") or "").strip()
+    if not prompt:
+        return None
+    spawned_at = str(entry.get("spawned_at") or "").strip()
+    spawn_ts = 0.0
+    if spawned_at:
+        try:
+            spawn_ts = datetime.strptime(spawned_at, "%Y%m%dT%H%M%S").timestamp()
+        except (ValueError, OSError):
+            pass
+    con = _devin_cli_connect()
+    if con is None:
+        return None
+    try:
+        # Look for a session in the same cwd, started around the same time.
+        for row in con.execute(
+            "SELECT id, working_directory, created_at FROM sessions "
+            "WHERE working_directory = ? AND created_at >= ? AND created_at <= ? "
+            "ORDER BY created_at DESC",
+            (cwd, spawn_ts - 300, spawn_ts + 300),
+        ):
+            raw_id = str(row["id"] or "").strip()
+            if not raw_id:
+                continue
+            ph = con.execute(
+                "SELECT content FROM prompt_history "
+                "WHERE session_id = ? AND is_shell = 0 "
+                "ORDER BY timestamp ASC LIMIT 1",
+                (raw_id,),
+            ).fetchone()
+            if not ph:
+                continue
+            first_prompt = str(ph["content"] or "").strip()
+            if not _devin_cli_first_prompts_match(prompt, first_prompt):
+                continue
+            return DEVIN_CLI_SESSION_PREFIX + raw_id
+    except sqlite3.Error:
+        pass
+    finally:
+        con.close()
+    return None
+
+
+def _devin_cli_first_prompts_match(summary, db_prompt):
+    """Compare the spawn command summary to the DB's first prompt.
+
+    Either string may be truncated or have trailing whitespace; a shared
+    leading prefix is enough to confirm the match.
+    """
+    a = (summary or "").strip()
+    b = (db_prompt or "").strip()
+    if a == b:
+        return True
+    n = min(len(a), len(b), 100)
+    if n < 10:
+        return a == b
+    return a[:n] == b[:n]
+
+
 def resume_session_cursor(session_id, text):
     """Resume a Cursor Agent chat with a one-shot headless prompt."""
     text = _strip_ccc_session_state_instruction(text)
@@ -45793,6 +45867,8 @@ def _spawn_session_id_from_entry(entry):
             if not meta.get("session_id"):
                 meta = _antigravity_cli_log_meta(log)
         sid = meta.get("session_id") or None
+    elif engine == "devin":
+        sid = _devin_cli_session_id_for_spawn_entry(entry)
     else:
         sid = extract_session_id(log)
     if sid:
@@ -50193,10 +50269,10 @@ def _pid_is_engine_process(pid, engine):
     (any python process whose argv mentions the engine name would otherwise
     pass).
 
-    `engine` is one of "claude", "codex", "gemini", "cursor", or "antigravity" — the basename we expect
-    at argv[0] (Gemini's npm wrapper may appear as a node process whose argv
-    includes the gemini script path)."""
-    if engine not in ("claude", "codex", "gemini", "cursor", "antigravity"):
+    `engine` is one of "claude", "codex", "gemini", "cursor", "antigravity",
+    or "devin" — the basename we expect at argv[0] (Gemini's npm wrapper may
+    appear as a node process whose argv includes the gemini script path)."""
+    if engine not in ("claude", "codex", "gemini", "cursor", "antigravity", "devin"):
         return False
     if _pid_is_zombie(pid):
         return False
@@ -50343,6 +50419,11 @@ def _reattach_spawned_orphans_locked(skip_engines=None, only_engines=None):
                     _extract_cursor_chat_id_from_log(log_path)
                     or _cursor_session_id_for_spawn_entry(entry)
                 )
+            except Exception:
+                session_id = None
+        elif engine == "devin" and not session_id:
+            try:
+                session_id = _devin_cli_session_id_for_spawn_entry(entry)
             except Exception:
                 session_id = None
         # Looks legit — re-add to the in-memory map with a stub proc.
