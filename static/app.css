@@ -20881,9 +20881,9 @@ a.settings-row:focus-visible .settings-launcher-btn { text-decoration: underline
 
 /* =========================================================================
    MOBILE REDESIGN (body.ccc-mobile-redesign)
-   Gated by isMobileRedesign() in app.js — matchMedia(max-width:768px),
-   ?mobile=1, or window.CCC_FORCE_MOBILE_REDESIGN. Independent of the
-   existing isMobile()/_mobileMQ (1200px) pane-navigation system above;
+   Gated by isMobileRedesign() in app.js — matchMedia(max-width:1200px),
+   ?mobile=1, or window.CCC_FORCE_MOBILE_REDESIGN. Aligned with the
+   existing isMobile()/_mobileMQ pane-navigation breakpoint;
    these rules only ever apply under the .ccc-mobile-redesign body class,
    so desktop and the 768-1200px pane-nav range are unaffected.
    ========================================================================= */
@@ -21469,4 +21469,291 @@ body.ccc-mobile-redesign.ccc-simple-mode .session-tier-cost,
 body.ccc-mobile-redesign.ccc-simple-mode .conv-item .mobile-details-toggle,
 body.ccc-mobile-redesign.ccc-simple-mode .conv-item .mobile-details-panel {
   display: none !important;
+}
+
+/* =========================================================================
+   SIMPLE HOME — Simple-UI redesign, iteration 1
+   The landing surface in Simple mode (body.ccc-simple-mode +
+   body.ccc-simple-home-open, toggled by _syncSimpleHomeVisibility() in
+   app.js). Plain-language cards, large text, one decision per card, ≥56px
+   touch targets. Advanced mode is untouched: every rule is gated on
+   body.ccc-simple-mode, and the conv-split/toolbar hides only apply while
+   the home screen itself is open.
+   #simpleHome lives inside .sidebar: at the ≤1200px mobile breakpoint
+   .main is position:fixed and translated off-canvas until
+   body.mobile-show-main, so anything in .main is unreachable on the home
+   screen. The sidebar is the always-visible layer (and hosts the slim
+   header), so home open = sidebar shows #simpleHome in place of its
+   usual list chrome.
+   ========================================================================= */
+
+#simpleHome { display: none; }
+
+body.ccc-simple-mode.ccc-simple-home-open #simpleHome {
+  display: block;
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 20px 16px 96px; /* bottom padding clears the mobile bottom nav */
+}
+body.ccc-simple-mode.ccc-simple-home-open #convSplit,
+body.ccc-simple-mode.ccc-simple-home-open #convToolbar {
+  display: none !important;
+}
+/* While home is open, the sidebar's only visible content is the slim
+   header + the home screen — the tab bar, conversation list, and other
+   dashboard chrome reappear when home closes (Tasks/Automations nav). */
+body.ccc-mobile-redesign.ccc-simple-mode.ccc-simple-home-open .sidebar > :not(.mobile-simple-header):not(#simpleHome) {
+  display: none !important;
+}
+
+body.ccc-simple-mode #simpleHome > .simple-card,
+body.ccc-simple-mode #simpleHome .simple-section {
+  max-width: 680px;
+  margin-left: auto;
+  margin-right: auto;
+}
+
+/* --- Composer card --- */
+body.ccc-simple-mode .simple-card {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  padding: 18px;
+  margin-bottom: 14px;
+}
+body.ccc-simple-mode .simple-composer-card .simple-h1 {
+  font-size: 22px;
+  font-weight: 700;
+  margin: 0 0 12px;
+  color: var(--text);
+}
+body.ccc-simple-mode .simple-composer-input {
+  width: 100%;
+  min-height: 84px;
+  font-size: 17px;
+  line-height: 1.45;
+  padding: 12px 14px;
+  border: 2px solid var(--border);
+  border-radius: 10px;
+  background: var(--bg, var(--surface));
+  color: var(--text);
+  resize: vertical;
+  box-sizing: border-box;
+}
+body.ccc-simple-mode .simple-composer-input:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+body.ccc-simple-mode .simple-chip-label {
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--text);
+  margin: 14px 0 8px;
+}
+body.ccc-simple-mode .simple-chip-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+body.ccc-simple-mode .simple-chip {
+  display: inline-flex;
+  flex-direction: column;
+  align-items: flex-start;
+  justify-content: center;
+  gap: 2px;
+  min-height: 56px;
+  padding: 8px 14px;
+  font-size: 16px;
+  border: 2px solid var(--border);
+  border-radius: 12px;
+  background: var(--surface);
+  color: var(--text);
+  cursor: pointer;
+  text-align: left;
+}
+body.ccc-simple-mode .simple-chip .simple-chip-name { font-weight: 650; }
+body.ccc-simple-mode .simple-chip .simple-chip-sub {
+  font-size: 13px;
+  color: var(--text-muted);
+}
+body.ccc-simple-mode .simple-chip.is-selected {
+  border-color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 12%, var(--surface));
+}
+body.ccc-simple-mode .simple-chip:focus-visible {
+  outline: 3px solid var(--accent);
+  outline-offset: 2px;
+}
+body.ccc-simple-mode .simple-start-btn {
+  display: block;
+  width: 100%;
+  min-height: 56px;
+  margin-top: 16px;
+  font-size: 19px;
+  font-weight: 700;
+  border: none;
+  border-radius: 12px;
+  background: var(--accent);
+  color: #fff;
+  cursor: pointer;
+}
+body.ccc-simple-mode .simple-start-btn:disabled { opacity: 0.6; cursor: default; }
+body.ccc-simple-mode .simple-toast {
+  margin-top: 12px;
+  padding: 12px 14px;
+  font-size: 15px;
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--green, #2ea043) 14%, var(--surface));
+  border: 1px solid var(--green, #2ea043);
+  color: var(--text);
+}
+body.ccc-simple-mode .simple-toast.is-error {
+  background: color-mix(in srgb, var(--red) 12%, var(--surface));
+  border-color: var(--red);
+}
+body.ccc-simple-mode .simple-toast[hidden] { display: none; }
+
+/* --- Home sections --- */
+body.ccc-simple-mode .simple-section { margin-top: 22px; }
+body.ccc-simple-mode .simple-section .simple-h2 {
+  font-size: 18px;
+  font-weight: 700;
+  margin: 0 0 10px;
+  color: var(--text);
+}
+body.ccc-simple-mode .simple-empty {
+  font-size: 15px;
+  color: var(--text-muted);
+  padding: 14px 4px;
+}
+
+/* --- Needs-you cards --- */
+body.ccc-simple-mode .simple-nya-card.is-answered { opacity: 0.65; }
+body.ccc-simple-mode .simple-nya-title {
+  font-size: 17px;
+  font-weight: 700;
+  color: var(--text);
+  margin-bottom: 4px;
+}
+body.ccc-simple-mode .simple-nya-need {
+  font-size: 15.5px;
+  line-height: 1.45;
+  color: var(--text);
+  margin: 6px 0 10px;
+  white-space: pre-wrap;
+}
+body.ccc-simple-mode .simple-nya-options {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-bottom: 10px;
+}
+body.ccc-simple-mode .simple-nya-answer-row {
+  display: flex;
+  gap: 8px;
+}
+body.ccc-simple-mode .simple-nya-answer-input {
+  flex: 1 1 auto;
+  min-height: 52px;
+  min-width: 0;
+  font-size: 16px;
+  padding: 10px 12px;
+  border: 2px solid var(--border);
+  border-radius: 10px;
+  background: var(--bg, var(--surface));
+  color: var(--text);
+}
+body.ccc-simple-mode .simple-nya-answer-input:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+body.ccc-simple-mode .simple-nya-send {
+  flex: 0 0 auto;
+  min-height: 52px;
+  min-width: 84px;
+  font-size: 16px;
+  font-weight: 700;
+  border: none;
+  border-radius: 10px;
+  background: var(--accent);
+  color: #fff;
+  cursor: pointer;
+}
+body.ccc-simple-mode .simple-nya-done {
+  margin-top: 8px;
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--green, #2ea043);
+}
+body.ccc-simple-mode .simple-nya-error {
+  margin-top: 8px;
+  font-size: 14px;
+  color: var(--red);
+}
+
+/* --- Working / Finished task cards --- */
+body.ccc-simple-mode button.simple-task-card {
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 4px;
+  width: 100%;
+  min-height: 56px;
+  text-align: left;
+  cursor: pointer;
+  color: var(--text);
+}
+body.ccc-simple-mode .simple-task-card .simple-card-name,
+body.ccc-simple-mode .simple-nya-card .simple-card-name {
+  font-size: 16.5px;
+  font-weight: 650;
+  line-height: 1.35;
+}
+body.ccc-simple-mode .simple-status-line { font-size: 15px; color: var(--text); }
+body.ccc-simple-mode .simple-memory-line { font-size: 14px; color: var(--text-muted); }
+body.ccc-simple-mode .simple-task-card:focus-visible {
+  outline: 3px solid var(--accent);
+  outline-offset: 2px;
+}
+body.ccc-simple-mode .simple-see-all {
+  display: block;
+  width: 100%;
+  max-width: 680px;
+  margin: 4px auto 0;
+  min-height: 52px;
+  font-size: 16px;
+  font-weight: 600;
+  border: 2px solid var(--border);
+  border-radius: 12px;
+  background: var(--surface);
+  color: var(--accent);
+  cursor: pointer;
+}
+
+/* --- Conversation view additions (Simple mode) --- */
+.simple-back-home-btn { display: none; }
+body.ccc-simple-mode .simple-back-home-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  min-height: 44px;
+  padding: 6px 12px;
+  font-size: 15px;
+  font-weight: 600;
+  border: 1px solid var(--border);
+  border-radius: 9px;
+  background: var(--surface);
+  color: var(--text);
+  cursor: pointer;
+}
+#simpleUsageLine { display: none; }
+body.ccc-simple-mode #simpleUsageLine.has-data {
+  display: block;
+  padding: 10px 16px;
+  font-size: 15px;
+  line-height: 1.4;
+  color: var(--text);
+  background: color-mix(in srgb, var(--accent) 8%, var(--surface));
+  border-top: 1px solid var(--border);
 }

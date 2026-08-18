@@ -441,6 +441,46 @@
            wired handlers keep working. -->
       <div class="msh-search-bar" id="mshSearchBar" hidden></div>
     </header>
+    <!-- SIMPLE HOME (Iteration 1 of the Simple-UI redesign). The landing
+         surface when Simple mode is on (body.ccc-simple-mode +
+         body.ccc-simple-home-open, driven by _syncSimpleHomeVisibility() in
+         app.js). Plain-language, one decision per card: a composer that
+         starts a task, workers waiting on the user, work in progress, and
+         recently finished conversations. All data comes from the same
+         /api/* endpoints the full UI uses — no parallel store. Hidden
+         everywhere else via the #simpleHome base rule in app.css. Lives in
+         the SIDEBAR (not .main): at the mobile breakpoint .main is fixed
+         off-canvas until body.mobile-show-main, while the sidebar is the
+         always-visible layer that also hosts the slim header and bottom
+         nav. Home open therefore means "sidebar shows #simpleHome instead
+         of the list chrome"; opening a conversation slides .main in. -->
+    <div class="simple-home" id="simpleHome" aria-label="Home">
+      <section class="simple-card simple-composer-card" aria-label="Start a new task">
+        <h1 class="simple-h1">What would you like help with?</h1>
+        <textarea id="simpleComposerInput" class="simple-composer-input" rows="3"
+                  placeholder="What would you like help with?"
+                  aria-label="What would you like help with?"></textarea>
+        <div class="simple-chip-label" id="simpleAgentLabel">Who should do it?</div>
+        <div class="simple-chip-row" id="simpleAgentRow" role="group" aria-label="Choose a helper"></div>
+        <div class="simple-chip-label" id="simpleEffortLabel">How hard should it think?</div>
+        <div class="simple-chip-row" id="simpleEffortRow" role="group" aria-label="Choose thinking effort"></div>
+        <button type="button" class="simple-start-btn" id="simpleStartBtn">Start</button>
+        <div class="simple-toast" data-simple-toast role="status" aria-live="polite" hidden></div>
+      </section>
+      <section class="simple-section" aria-label="Needs you">
+        <h2 class="simple-h2">Needs you</h2>
+        <div id="simpleNeedsYou" class="simple-card-list"></div>
+      </section>
+      <section class="simple-section" aria-label="Working on it">
+        <h2 class="simple-h2">Working on it</h2>
+        <div id="simpleWorking" class="simple-card-list"></div>
+      </section>
+      <section class="simple-section" aria-label="Finished">
+        <h2 class="simple-h2">Finished</h2>
+        <div id="simpleFinished" class="simple-card-list"></div>
+        <button type="button" class="simple-see-all" id="simpleSeeAllFinished">See all past tasks &rarr;</button>
+      </section>
+    </div>
     <div class="sidebar-header">
       <div class="sidebar-header-brand">
         <div class="sh-title-row">
@@ -603,6 +643,10 @@
     </div>
     <div class="toolbar" id="convToolbar">
       <button class="mobile-back-btn" id="mobileBackBtn" title="Back to sidebar">&#8592;<span class="mb-label"> Back</span></button>
+      <!-- Simple mode only (body.ccc-simple-mode): returns from an open
+           conversation to the Simple Home screen (#simpleHome). Wired by
+           _wireSimpleHome() in app.js; hidden outside Simple mode by CSS. -->
+      <button class="simple-back-home-btn" id="simpleBackHomeBtn" title="Back to Home">&#8592;<span class="mb-label"> Home</span></button>
       <button class="pkood-kill-btn" id="pkoodKillBtn" style="display:none;" title="Kill this pkood agent">Kill</button>
       <button class="conv-replay-launch-btn" id="convReplayBtn" style="display:none;" title="Replay this conversation message by message">&#9654; Replay</button>
       <button class="announce-btn-conv" id="announceBtnConv" style="display:none;" title="Run /announce-feature - ships and broadcasts to every studio">Close &amp; announce</button>
@@ -822,6 +866,12 @@
         <div class="conversations-view" id="conversationsView">
           <div class="empty-state" style="height:auto;padding:40px;">Select a session from the sidebar</div>
         </div>
+        <!-- Simple mode only (body.ccc-simple-mode): plain-language
+             memory/usage line for the open conversation ("Memory: 71% full
+             — plenty of room left"). Populated by _simpleUpdateUsageLine()
+             in app.js from GET /api/session/<sid>/usage; empty + hidden
+             outside Simple mode. -->
+        <div class="simple-usage-line" id="simpleUsageLine" role="status" aria-live="polite"></div>
         <div class="conv-input-context" id="convInputContext" data-role="input-context">
           <span class="wp-row" data-workspace></span>
           <span id="newSessionObjectContext" class="new-session-object-context" aria-label="Object for new session"></span>

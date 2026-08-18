@@ -10928,9 +10928,10 @@
   // navigation (single-column + back button) at 1200px. This gate controls
   // whether cards/topbar/session-id/view-mode actually render the
   // simplified mobile UI (one status line, labeled copy chip, plain-language
-  // view buttons, collapsed "More" menu) — a different concern, a different
-  // (narrower) breakpoint, and independently forceable for desktop testing.
-  const _mobileRedesignMQ = window.matchMedia('(max-width: 768px)');
+  // view buttons, collapsed "More" menu). Keep it aligned with _mobileMQ so
+  // tablets, narrow windows, and phone landscape get the same non-technical
+  // chrome as the single-column pane layout.
+  const _mobileRedesignMQ = window.matchMedia('(max-width: 1200px)');
   const _mobileRedesignForcedByUrl = (function () {
     try { return new URLSearchParams(window.location.search || '').get('mobile') === '1'; }
     catch (_) { return false; }
@@ -11044,6 +11045,7 @@
     }
     if (typeof _syncMobileBottomNav === 'function') _syncMobileBottomNav();
     if (typeof _syncMobileSimpleHeader === 'function') _syncMobileSimpleHeader();
+    if (typeof _syncSimpleHomeVisibility === 'function') _syncSimpleHomeVisibility();
   }
   _syncUiModeBodyClass();
   try {
@@ -11111,7 +11113,11 @@
     if (!show) return;
     let tab = 'inprogress';
     try { tab = localStorage.getItem('ccc-sidebar-tab') || 'inprogress'; } catch (_) {}
-    const activeNavKey = tab === 'archived' ? 'tasks' : tab === 'queues' ? 'automations' : 'home';
+    let activeNavKey = tab === 'archived' ? 'tasks' : tab === 'queues' ? 'automations' : 'home';
+    // Simple Home open → the Home nav item is the current surface regardless
+    // of which sidebar tab is selected underneath.
+    if (typeof _simpleHomeShowing !== 'undefined' && _simpleHomeShowing && isSimpleMode()
+        && document.getElementById('simpleHome')) activeNavKey = 'home';
     nav.querySelectorAll('[data-mobile-nav]').forEach(btn => {
       const active = btn.getAttribute('data-mobile-nav') === activeNavKey;
       btn.classList.toggle('is-active', active);
@@ -11133,6 +11139,16 @@
       const tabByDest = { home: 'inprogress', tasks: 'archived', automations: 'queues' };
       const targetTab = tabByDest[dest];
       if (!targetTab) return;
+      // Simple Home: in Simple mode the Home tab lands on #simpleHome (the
+      // inprogress feed stays selected underneath); Tasks/Automations leave
+      // home and show the corresponding existing surface.
+      if (isSimpleMode() && document.getElementById('simpleHome')) {
+        if (dest === 'home') {
+          _simpleShowHome();
+        } else {
+          _simpleHideHome();
+        }
+      }
       // Reuse the existing tab bar's own click handler by clicking its
       // matching button when present, instead of duplicating its
       // re-render logic here.
@@ -11270,6 +11286,524 @@
     });
   }
   _wireSimpleActionsMenu();
+
+  // ── Simple Home (Simple-UI redesign, iteration 1) ──
+  // The landing surface when Simple mode is on: a plain-language composer
+  // ("What would you like help with?"), workers waiting on the user, work in
+  // progress, and recently finished conversations — all rendered from the
+  // SAME /api/* endpoints the full UI uses (/api/spawn-defaults,
+  // /api/engines/models, /api/attention, /api/sessions, /api/conversations/all,
+  // /api/session/<sid>/usage). No parallel store, no jargon. Visibility is a
+  // body-class toggle: body.ccc-simple-mode.ccc-simple-home-open shows
+  // #simpleHome (which lives in the SIDEBAR — at the mobile breakpoint .main
+  // is fixed off-canvas until body.mobile-show-main) and hides #convSplit
+  // (CSS at the end of app.css); opening a conversation flips the class off,
+  // #simpleBackHomeBtn flips it back on. Showing home also clears
+  // mobile-show-main so the off-canvas .main slides away.
+  // `var` (not let) for state so the hoisted binding is safely `undefined`
+  // when _syncMobileBottomNav/_syncUiModeBodyClass run earlier in boot.
+  var _simpleHomeShowing = true;   // Simple mode lands on home, not a conv
+  var _simpleHomeData = { defaults: null, catalog: null };
+  var _simpleComposer = { engine: '', effort: '' };
+  var _simpleHomeRefreshTimer = null;
+
+  function _syncSimpleHomeVisibility() {
+    const home = document.getElementById('simpleHome');
+    if (!home) return;
+    const show = isSimpleMode() && !!_simpleHomeShowing;
+    document.body.classList.toggle('ccc-simple-home-open', show);
+    home.style.display = show ? '' : 'none';
+    if (show) {
+      // Home lives in the sidebar layer; .main (off-canvas fixed at the
+      // mobile breakpoint) must not cover it.
+      document.body.classList.remove('mobile-show-main');
+      try { _simpleHomeRefresh(); } catch (_) {}
+      if (!_simpleHomeRefreshTimer) {
+        _simpleHomeRefreshTimer = setInterval(() => {
+          if (isSimpleMode() && _simpleHomeShowing
+              && document.body.classList.contains('ccc-simple-home-open')) {
+            try { _simpleHomeRefresh(); } catch (_) {}
+          }
+        }, 45000);
+      }
+    }
+  }
+  function _simpleShowHome() {
+    _simpleHomeShowing = true;
+    _syncSimpleHomeVisibility();
+    if (typeof _syncMobileBottomNav === 'function') _syncMobileBottomNav();
+  }
+  function _simpleHideHome() {
+    _simpleHomeShowing = false;
+    _syncSimpleHomeVisibility();
+  }
+  // Called from selectConversation(). Boot/refresh auto-restore
+  // (_qfBootRestore) must NOT yank the user off the home screen; a deliberate
+  // open (list row, simple card, search result) does.
+  function _simpleOnConversationOpen(id) {
+    try {
+      if (!isSimpleMode()) return;
+      if (typeof _qfBootRestore !== 'undefined' && !_qfBootRestore) _simpleHideHome();
+      _simpleUpdateUsageLine(id);
+    } catch (_) {}
+  }
+
+  // ── composer: agent/model/effort chips ──
+  const _SIMPLE_ENGINE_LABELS = {
+    claude: 'Claude', codex: 'Codex', kimi: 'Kimi', gemini: 'Gemini',
+    cursor: 'Cursor', antigravity: 'Antigravity', kilo: 'Kilo',
+    hermes: 'Hermes', opencode: 'OpenCode', devin: 'Devin', grok: 'Grok',
+  };
+  const _SIMPLE_EFFORT_LABELS = {
+    low: 'Light thinking', medium: 'Normal thinking', high: 'Deep thinking',
+    xhigh: 'Extra deep thinking', max: 'Maximum thinking',
+  };
+  // "sonnet-5" → "Sonnet 5"; "kimi-code/k3" → "K3" via the catalog label.
+  // Plain words on the chip, never a raw model id with slashes.
+  function _simplePrettifyModel(engine, modelId) {
+    const raw = String(modelId || '').trim();
+    if (!raw) return 'Auto';
+    let label = raw;
+    try {
+      const opt = (MODEL_OPTIONS_BY_ENGINE[engine] || [])
+        .find(o => _normalizeModelId(o.id) === _normalizeModelId(raw));
+      if (opt && opt.label) label = String(opt.label);
+    } catch (_) {}
+    label = label.replace(/^[a-z0-9-]+\//i, '');           // strip "vendor/"
+    label = label.replace(/\s*\((default|free[^)]*)\)\s*/gi, '').trim();
+    if (/^[0-9.]+$/.test(label)) return label;             // "5.5" stays "5.5"
+    return label.split(/[-_]/).map(w => w ? w[0].toUpperCase() + w.slice(1) : w).join(' ');
+  }
+  function _simpleModelForEngine(engine) {
+    const d = _simpleHomeData.defaults || {};
+    const models = d.models && typeof d.models === 'object' ? d.models : {};
+    return String(models[engine] || '').trim();
+  }
+  function _simpleEffortsForEngine(engine) {
+    const d = _simpleHomeData.defaults || {};
+    const byEngine = d.efforts_by_engine && typeof d.efforts_by_engine === 'object' ? d.efforts_by_engine : {};
+    const list = byEngine[engine];
+    return Array.isArray(list) ? list.filter(x => typeof x === 'string' && x) : [];
+  }
+  function _simpleRenderAgentChips() {
+    const row = document.getElementById('simpleAgentRow');
+    if (!row) return;
+    const d = _simpleHomeData.defaults || {};
+    const engines = Array.isArray(d.supported_engines) && d.supported_engines.length
+      ? d.supported_engines : ['claude'];
+    if (!_simpleComposer.engine || engines.indexOf(_simpleComposer.engine) === -1) {
+      _simpleComposer.engine = engines.indexOf(d.engine) !== -1 ? d.engine : engines[0];
+    }
+    row.innerHTML = engines.map(engine => {
+      const name = _SIMPLE_ENGINE_LABELS[engine]
+        || engine.charAt(0).toUpperCase() + engine.slice(1);
+      const model = _simplePrettifyModel(engine, _simpleModelForEngine(engine));
+      const sel = engine === _simpleComposer.engine;
+      return '<button type="button" class="simple-chip' + (sel ? ' is-selected' : '') + '"'
+        + ' data-simple-agent="' + escapeAttr(engine) + '"'
+        + ' aria-pressed="' + (sel ? 'true' : 'false') + '">'
+        + '<span class="simple-chip-name">' + escapeHtml(name) + '</span>'
+        + '<span class="simple-chip-sub">' + escapeHtml(model) + '</span>'
+        + '</button>';
+    }).join('');
+    _simpleRenderEffortChips();
+  }
+  function _simpleRenderEffortChips() {
+    const row = document.getElementById('simpleEffortRow');
+    const label = document.getElementById('simpleEffortLabel');
+    if (!row) return;
+    const efforts = _simpleEffortsForEngine(_simpleComposer.engine);
+    if (!efforts.length) {
+      row.innerHTML = '';
+      row.style.display = 'none';
+      if (label) label.style.display = 'none';
+      _simpleComposer.effort = '';
+      return;
+    }
+    row.style.display = '';
+    if (label) label.style.display = '';
+    const d = _simpleHomeData.defaults || {};
+    const preferred = efforts.indexOf(d.reasoning_effort) !== -1 ? d.reasoning_effort
+      : efforts.indexOf('medium') !== -1 ? 'medium'
+      : efforts[Math.floor((efforts.length - 1) / 2)];
+    if (!_simpleComposer.effort || efforts.indexOf(_simpleComposer.effort) === -1) {
+      _simpleComposer.effort = preferred;
+    }
+    row.innerHTML = efforts.map(level => {
+      const sel = level === _simpleComposer.effort;
+      return '<button type="button" class="simple-chip' + (sel ? ' is-selected' : '') + '"'
+        + ' data-simple-effort="' + escapeAttr(level) + '"'
+        + ' aria-pressed="' + (sel ? 'true' : 'false') + '">'
+        + '<span class="simple-chip-name">' + escapeHtml(_SIMPLE_EFFORT_LABELS[level] || level) + '</span>'
+        + '</button>';
+    }).join('');
+  }
+  function _simpleToast(text, isError) {
+    const toast = document.querySelector('#simpleHome [data-simple-toast]');
+    if (!toast) return;
+    toast.textContent = text || '';
+    toast.hidden = !text;
+    toast.classList.toggle('is-error', !!isError);
+  }
+  async function _simpleStartTask() {
+    const input = document.getElementById('simpleComposerInput');
+    const btn = document.getElementById('simpleStartBtn');
+    const prompt = (input && input.value || '').trim();
+    if (!prompt) {
+      _simpleToast('Tell me what you need first — one sentence is plenty.', true);
+      if (input) input.focus();
+      return;
+    }
+    const engine = _simpleComposer.engine || 'claude';
+    // Mirror the existing new-session flow: engine + model + effort, with the
+    // server falling back to the persisted spawn defaults for anything
+    // omitted (server.py _spawn_request_engine_and_model).
+    const body = { prompt: prompt, engine: engine };
+    const model = _simpleModelForEngine(engine);
+    if (model) body.model = model;
+    if (_simpleComposer.effort && _simpleEffortsForEngine(engine).length) {
+      body.reasoning_effort = _simpleComposer.effort;
+    }
+    if (btn) { btn.disabled = true; btn.textContent = 'Starting…'; }
+    try {
+      const res = await fetch('/api/sessions/spawn', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (res.ok && data && data.ok !== false) {
+        if (input) input.value = '';
+        const name = _SIMPLE_ENGINE_LABELS[engine] || engine;
+        _simpleToast('Started — ' + name + ' is on it. It will show up under "Working on it" below.');
+        setTimeout(() => { try { _simpleHomeRefresh(); } catch (_) {} }, 1500);
+        setTimeout(() => { try { _simpleHomeRefresh(); } catch (_) {} }, 5000);
+      } else {
+        _simpleToast('Could not start that: ' + ((data && data.error) || ('HTTP ' + res.status)), true);
+      }
+    } catch (e) {
+      _simpleToast('Could not start that: ' + ((e && e.message) || 'network error'), true);
+    } finally {
+      if (btn) { btn.disabled = false; btn.textContent = 'Start'; }
+    }
+  }
+
+  // ── Needs you: workers waiting on the user ──
+  const _SIMPLE_NYA_KINDS = {
+    needs_input: 'Waiting for your answer',
+    question: 'Waiting for your answer',
+    pending_tool: 'Needs your approval',
+    stale_tool_call: 'May be stuck',
+    approval: 'Needs your approval',
+  };
+  function _simpleNyaKindLabel(kind) {
+    return _SIMPLE_NYA_KINDS[kind] || 'Waiting for you';
+  }
+  function _simpleNyaCardHtml(item) {
+    const sid = String(item.session_id || '');
+    const title = _simpleNyaKindLabel(String(item.kind || ''));
+    const task = String(item.name || '').trim();
+    const need = String(item.question_text || item.next_step || item.where || '').trim();
+    const options = Array.isArray(item.question_options) ? item.question_options : [];
+    let html = '<div class="simple-card simple-nya-card" data-session-id="' + escapeAttr(sid) + '">'
+      + '<div class="simple-nya-title">' + escapeHtml(title) + '</div>'
+      + (task ? '<div class="simple-card-name">' + escapeHtml(task.length > 110 ? task.slice(0, 110) + '…' : task) + '</div>' : '')
+      + (need ? '<div class="simple-nya-need">' + escapeHtml(need) + '</div>' : '');
+    if (options.length) {
+      html += '<div class="simple-nya-options">' + options.map((opt, i) => {
+        const text = typeof opt === 'string' ? opt : String((opt && (opt.label || opt.text || opt.title)) || 'Option ' + (i + 1));
+        return '<button type="button" class="simple-chip simple-nya-option" data-answer-option="' + i + '">'
+          + escapeHtml(text) + '</button>';
+      }).join('') + '</div>';
+    }
+    html += '<div class="simple-nya-answer-row">'
+      + '<input type="text" class="simple-nya-answer-input" placeholder="Type your answer…" aria-label="Your answer">'
+      + '<button type="button" class="simple-nya-send" data-answer-send>Send</button>'
+      + '</div></div>';
+    return html;
+  }
+  async function _simpleSendAnswer(card, text) {
+    const sid = card.getAttribute('data-session-id') || '';
+    if (!sid || !text) return;
+    try {
+      const res = await fetch('/api/inject-input', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ session_id: sid, text: text, mode: 'answer' }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (res.ok && data && data.ok !== false) _simpleMarkCardAnswered(card);
+      else _simpleCardError(card, (data && data.error) || ('HTTP ' + res.status));
+    } catch (e) {
+      _simpleCardError(card, (e && e.message) || 'network error');
+    }
+  }
+  async function _simpleSendAnswerOption(card, index, label) {
+    const sid = card.getAttribute('data-session-id') || '';
+    if (!sid) return;
+    try {
+      const res = await fetch('/api/answer-question', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ session_id: sid, answers: [{ index: index, text: label || '' }] }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (res.ok && data && data.ok !== false) _simpleMarkCardAnswered(card);
+      else _simpleCardError(card, (data && data.error) || ('HTTP ' + res.status));
+    } catch (e) {
+      _simpleCardError(card, (e && e.message) || 'network error');
+    }
+  }
+  function _simpleMarkCardAnswered(card) {
+    card.classList.add('is-answered');
+    const note = document.createElement('div');
+    note.className = 'simple-nya-done';
+    note.textContent = 'Answer sent ✓';
+    card.appendChild(note);
+    setTimeout(() => { card.remove(); }, 1800);
+  }
+  function _simpleCardError(card, msg) {
+    let err = card.querySelector('.simple-nya-error');
+    if (!err) {
+      err = document.createElement('div');
+      err.className = 'simple-nya-error';
+      card.appendChild(err);
+    }
+    err.textContent = 'Could not send: ' + msg;
+  }
+
+  // ── Working / Finished cards ──
+  function _simpleMemoryPercent(row) {
+    if (!row) return null;
+    const direct = Number(row.live_context_percent);
+    if (direct > 0) return direct;
+    const limit = Number(row.live_context_limit || row.context_limit) || 0;
+    const tokens = Number(row.live_context_tokens || row.latest_input_tokens) || 0;
+    if (limit > 0 && tokens > 0) return (tokens / limit) * 100;
+    return null;
+  }
+  function _simpleMemoryLine(row) {
+    const pct = _simpleMemoryPercent(row);
+    if (pct === null) return 'Memory: not reported yet';
+    const p = Math.round(pct);
+    if (p >= 90) return 'Memory ' + p + '% full — almost full, a fresh task may work better';
+    if (p >= 70) return 'Memory ' + p + '% full — getting full';
+    return 'Memory ' + p + '% full — plenty of room left';
+  }
+  function _simpleBaseName(p) {
+    const s = String(p || '');
+    const i = s.replace(/\\/g, '/').lastIndexOf('/');
+    return i === -1 ? s : s.slice(i + 1);
+  }
+  function _simpleWorkingStatusLine(row) {
+    if (row.question_waiting) return 'Waiting for you';
+    const live = !!(row.is_live || row.sidecar_in_flight
+      || ['running', 'working', 'active'].indexOf(String(row.status || row.session_state || '')) !== -1);
+    let line = live ? 'Working' : 'Recently active';
+    const file = row.pending_file || row.sidecar_file || '';
+    if (live && file) line += ' — editing ' + _simpleBaseName(file);
+    const folder = row.folder_label || _simpleBaseName(row.folder_path || '');
+    if (folder) line += ' · ' + folder;
+    return line;
+  }
+  function _simpleTaskCardHtml(row, statusLine) {
+    const sid = String(row.id || row.session_id || '');
+    const name = String(row.display_name || row.first_message || row.status_rail_title || 'Untitled task').trim();
+    return '<button type="button" class="simple-card simple-task-card" data-session-id="' + escapeAttr(sid) + '">'
+      + '<span class="simple-card-name">' + escapeHtml(name.length > 90 ? name.slice(0, 90) + '…' : name) + '</span>'
+      + '<span class="simple-status-line">' + escapeHtml(statusLine) + '</span>'
+      + '<span class="simple-memory-line">' + escapeHtml(_simpleMemoryLine(row)) + '</span>'
+      + '</button>';
+  }
+  function _simpleIsWorkingRow(row) {
+    if (!row || row.archived || row.trashed) return false;
+    if (row.id && String(row.id).indexOf('spawning-') === 0) return false;
+    if (row.is_live || row.question_waiting || row.sidecar_in_flight) return true;
+    const st = String(row.status || row.session_state || '');
+    if (['running', 'working', 'active', 'idle'].indexOf(st) !== -1 && row.is_live) return true;
+    // Nothing reports live? Fall back to "touched in the last 6 hours" so the
+    // section still answers "what is happening now" for recent work.
+    const mtime = Number(row.mtime || row.modified) || 0;
+    return mtime > 0 && (Date.now() / 1000 - mtime) < 6 * 3600;
+  }
+
+  // ── data loading + section rendering ──
+  async function _simpleHomeRefresh() {
+    const home = document.getElementById('simpleHome');
+    if (!home || !isSimpleMode()) return;
+    let attention = null, sessions = null, archive = null;
+    try {
+      const results = await Promise.all([
+        fetch('/api/attention', { cache: 'no-store' }).then(r => r.json()).catch(() => null),
+        fetch('/api/sessions?all=1', { cache: 'no-store' }).then(r => r.json()).catch(() => null),
+        fetch('/api/conversations/all', { cache: 'no-store' }).then(r => r.json()).catch(() => null),
+      ]);
+      attention = results[0]; sessions = results[1]; archive = results[2];
+    } catch (_) { return; }
+
+    // Needs you
+    const nyaEl = document.getElementById('simpleNeedsYou');
+    if (nyaEl) {
+      const items = (attention && Array.isArray(attention.items) ? attention.items : [])
+        .filter(it => it && it.session_id
+          && Object.prototype.hasOwnProperty.call(_SIMPLE_NYA_KINDS, String(it.kind || '')));
+      nyaEl.innerHTML = items.length
+        ? items.slice(0, 5).map(_simpleNyaCardHtml).join('')
+        : '<div class="simple-empty">Nothing needs you right now.</div>';
+    }
+
+    // Working on it
+    const workEl = document.getElementById('simpleWorking');
+    const sessionRows = (sessions && Array.isArray(sessions.sessions)) ? sessions.sessions : [];
+    const workingRows = sessionRows.filter(_simpleIsWorkingRow)
+      .sort((a, b) => (Number(b.mtime || b.modified) || 0) - (Number(a.mtime || a.modified) || 0));
+    const workingIds = {};
+    workingRows.forEach(r => { workingIds[String(r.id || r.session_id || '')] = true; });
+    if (workEl) {
+      workEl.innerHTML = workingRows.length
+        ? workingRows.slice(0, 6).map(r => _simpleTaskCardHtml(r, _simpleWorkingStatusLine(r))).join('')
+        : '<div class="simple-empty">Nothing is running right now.</div>';
+    }
+
+    // Finished
+    const finEl = document.getElementById('simpleFinished');
+    if (finEl) {
+      const convRows = (archive && Array.isArray(archive.conversations)) ? archive.conversations : [];
+      const done = convRows
+        .filter(r => r && !workingIds[String(r.id || r.session_id || '')])
+        .sort((a, b) => (Number(b.mtime || b.modified) || 0) - (Number(a.mtime || a.modified) || 0))
+        .slice(0, 5);
+      finEl.innerHTML = done.length
+        ? done.map(r => _simpleTaskCardHtml(r, 'Past task')).join('')
+        : '<div class="simple-empty">Finished tasks will show up here.</div>';
+    }
+  }
+  async function _simpleLoadComposerData() {
+    try {
+      const res = await fetch('/api/spawn-defaults', { cache: 'no-store' });
+      const d = await res.json().catch(() => null);
+      if (d && d.ok !== false) _simpleHomeData.defaults = d;
+    } catch (_) {}
+    _simpleRenderAgentChips();
+  }
+
+  // ── conversation view: usage line + back-home ──
+  async function _simpleUpdateUsageLine(sid) {
+    const el = document.getElementById('simpleUsageLine');
+    if (!el) return;
+    if (!isSimpleMode() || !sid || sid === '__new__' || String(sid).indexOf('spawning-') === 0) {
+      el.classList.remove('has-data');
+      el.textContent = '';
+      return;
+    }
+    const render = (pct, cost) => {
+      let text;
+      if (pct === null) text = 'Memory: 0% full — no usage reported yet.';
+      else {
+        const p = Math.round(pct);
+        text = 'Memory: ' + p + '% full — '
+          + (p >= 90 ? 'almost full. A fresh task may work better.'
+            : p >= 70 ? 'getting full.'
+            : 'plenty of room left.');
+      }
+      if (cost !== null) text += ' About $' + cost.toFixed(2) + ' spent so far.';
+      el.textContent = text;
+      el.classList.add('has-data');
+    };
+    // Render the best-known value immediately — the /usage fetch can be slow,
+    // and the line must not stay invisible (it only displays with .has-data).
+    // Fall back to the list row the sidebar already computed for this conv.
+    let fallbackPct = null;
+    try {
+      const row = (conversationsData || []).find(x => x.id === sid)
+        || (Array.isArray(archiveData) ? archiveData.find(x => (x.id || x.session_id) === sid) : null);
+      fallbackPct = _simpleMemoryPercent(row);
+    } catch (_) {}
+    render(fallbackPct, null);
+    // Then refine from the live usage endpoint.
+    let pct = null;
+    let cost = null;
+    try {
+      const res = await fetch('/api/session/' + encodeURIComponent(sid) + '/usage', { cache: 'no-store' });
+      const d = await res.json().catch(() => null);
+      if (d) {
+        const limit = Number(d.live_context_limit || d.context_limit) || 0;
+        const tokens = Number(d.live_context_tokens || d.latest_input_tokens) || 0;
+        if (Number(d.live_context_percent) > 0) pct = Number(d.live_context_percent);
+        else if (limit > 0 && tokens > 0) pct = (tokens / limit) * 100;
+        if (typeof d.cost_usd === 'number' && d.cost_usd > 0) cost = d.cost_usd;
+      }
+    } catch (_) {}
+    if (pct === null && cost === null) return; // keep the fallback render
+    render(pct === null ? fallbackPct : pct, cost);
+  }
+
+  function _wireSimpleHome() {
+    const home = document.getElementById('simpleHome');
+    if (!home) return;
+    // Chip + card clicks are delegated because rows re-render on refresh.
+    home.addEventListener('click', (ev) => {
+      const agentChip = ev.target.closest('[data-simple-agent]');
+      if (agentChip) {
+        _simpleComposer.engine = agentChip.getAttribute('data-simple-agent') || _simpleComposer.engine;
+        _simpleComposer.effort = '';   // re-pick the recommended level for the new engine
+        _simpleRenderAgentChips();
+        return;
+      }
+      const effortChip = ev.target.closest('[data-simple-effort]');
+      if (effortChip) {
+        _simpleComposer.effort = effortChip.getAttribute('data-simple-effort') || '';
+        _simpleRenderEffortChips();
+        return;
+      }
+      if (ev.target.closest('#simpleStartBtn')) { _simpleStartTask(); return; }
+      const sendBtn = ev.target.closest('[data-answer-send]');
+      if (sendBtn) {
+        const card = sendBtn.closest('.simple-nya-card');
+        const input = card && card.querySelector('.simple-nya-answer-input');
+        const text = (input && input.value || '').trim();
+        if (!text) { if (input) input.focus(); return; }
+        _simpleSendAnswer(card, text);
+        return;
+      }
+      const optBtn = ev.target.closest('[data-answer-option]');
+      if (optBtn) {
+        const card = optBtn.closest('.simple-nya-card');
+        _simpleSendAnswerOption(card, parseInt(optBtn.getAttribute('data-answer-option') || '0', 10), optBtn.textContent.trim());
+        return;
+      }
+      if (ev.target.closest('#simpleSeeAllFinished')) {
+        _simpleHideHome();
+        const tabBtn = document.querySelector('[data-conv-tab="archived"]');
+        if (tabBtn) tabBtn.click();
+        if (typeof _syncMobileBottomNav === 'function') _syncMobileBottomNav();
+        return;
+      }
+      const taskCard = ev.target.closest('.simple-task-card');
+      if (taskCard) {
+        const sid = taskCard.getAttribute('data-session-id') || '';
+        if (sid && typeof selectConversation === 'function') selectConversation(sid);
+        return;
+      }
+    });
+    // Enter in a needs-you answer box sends, same as the Send button.
+    home.addEventListener('keydown', (ev) => {
+      if (ev.key !== 'Enter') return;
+      const input = ev.target.closest('.simple-nya-answer-input');
+      if (!input) return;
+      const card = input.closest('.simple-nya-card');
+      const text = (input.value || '').trim();
+      if (card && text) _simpleSendAnswer(card, text);
+    });
+    const backBtn = document.getElementById('simpleBackHomeBtn');
+    if (backBtn) backBtn.addEventListener('click', _simpleShowHome);
+    // Landing surface: home on load in Simple mode. Deferred one tick so the
+    // module-scope lets this section references at runtime (spawn defaults,
+    // model catalog) finish initializing first.
+    _syncSimpleHomeVisibility();
+    setTimeout(() => {
+      _simpleLoadComposerData();
+      _simpleHomeRefresh();
+    }, 0);
+  }
+  _wireSimpleHome();
 
   // ---------------------------------------------------------------------------
   // Mobile swipe-to-rotate among recently-opened conversations.
@@ -33225,6 +33759,9 @@
       try { stopFlowNodeInspector(); } catch (_) {}
     }
     mobileShowForCurrentMode();
+    // Simple Home: a deliberate conversation open leaves the home screen (and
+    // refreshes the plain-language usage line); boot auto-restore does not.
+    try { if (typeof _simpleOnConversationOpen === 'function') _simpleOnConversationOpen(id); } catch (_) {}
     currentConversation = id;
     // The terminal panel (index.html) keys its cwd off the open
     // conversation's repo — tell it the repo may have changed.

@@ -3534,6 +3534,20 @@ class TestServerImports(unittest.TestCase):
         self.assertNotIn("mobile-show-main .conv-split[data-orientation=\"\"] .conv-pane > .conv-pane-header", app_css)
         self.assertNotIn("_captureRailEl(document.getElementById('mobileBackBtn'))", app_js)
 
+    def test_non_programmer_mobile_mode_matches_mobile_breakpoint(self):
+        """The simplified mobile chrome must activate anywhere the app is in
+        single-column mobile layout, including tablets and phone landscape."""
+        app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
+        app_css = pathlib.Path(PROJECT_ROOT, "static", "app.css").read_text(encoding="utf-8")
+        index_html = pathlib.Path(PROJECT_ROOT, "static", "index.html").read_text(encoding="utf-8")
+
+        self.assertIn("const _mobileRedesignMQ = window.matchMedia('(max-width: 1200px)')", app_js)
+        self.assertNotIn("const _mobileRedesignMQ = window.matchMedia('(max-width: 768px)')", app_js)
+        self.assertIn("return isMobileRedesign() ? 'simple' : 'advanced';", app_js)
+        self.assertIn("body.ccc-mobile-redesign.ccc-simple-mode .mobile-bottom-nav", app_css)
+        self.assertIn('id="mobileSimpleHeader"', index_html)
+        self.assertIn("Start a task", index_html)
+
     def test_mobile_back_button_stays_in_stable_toolbar(self):
         """Dynamic task-tab rendering must never own the only mobile exit."""
         index_html = pathlib.Path(PROJECT_ROOT, "static", "index.html").read_text(encoding="utf-8")
