@@ -29142,6 +29142,35 @@ def _codex_app_server_record_item_notification(state, method, params, now):
         state["last_item"] = current
         return
 
+    if method in ("item/reasoning/summaryTextDelta", "item/reasoning/textDelta"):
+        # Codex streams its reasoning summary token-by-token before the first
+        # visible agentMessage delta (5-45s of otherwise-silent "Thinking…").
+        # Accumulate it into the active item's detail so the sidecar shows
+        # live progress instead of a static spinner (CCC-885).
+        delta = params.get("delta") or ""
+        if not item_id:
+            return
+        current = active.get(item_id)
+        if not isinstance(current, dict):
+            current = _codex_app_server_item_summary(
+                {"id": item_id, "type": "reasoning", "status": "inProgress"},
+                params,
+                in_flight=True,
+                now=now,
+            )
+            active[item_id] = current
+        # Deltas can end/start mid-word or on whitespace; trimming on every
+        # append (like _codex_app_server_trim_text does) would eat the join
+        # points between chunks, so only cap total length here.
+        accumulated = (current.get("detail") or "") + str(delta)
+        if len(accumulated) > 240:
+            accumulated = accumulated[-240:]
+        current["detail"] = accumulated
+        current["updated_at"] = now
+        state["active_item"] = current
+        state["last_item"] = current
+        return
+
     if method == "item/fileChange/patchUpdated":
         changes = params.get("changes")
         if not item_id:
@@ -29634,6 +29663,8 @@ def _codex_app_server_handle_notification(method, params):
             "item/commandExecution/outputDelta",
             "item/fileChange/patchUpdated",
             "item/fileChange/outputDelta",
+            "item/reasoning/summaryTextDelta",
+            "item/reasoning/textDelta",
         ):
             _codex_app_server_record_item_notification(state, method, params, now)
             item = params.get("item") if isinstance(params.get("item"), dict) else {}
