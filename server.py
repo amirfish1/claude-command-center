@@ -19551,6 +19551,27 @@ def session_live_status(session_id, session_cwd):
                 pass
         return result
 
+    if _is_grok_session(session_id):
+        # Same ACP shape as kimi above: no per-session process, so "live"
+        # means the shared `grok acp` subprocess is available to drive it.
+        # Grok is declared in _ACP_WORKER_HARNESSES alongside kimi but was
+        # never given a status branch here, so every grok session reported
+        # live=False forever — always "dormant"/"ended" no matter what was
+        # actually happening (CCC-877).
+        resolved = _acp_resolve_bin("grok")
+        if resolved.get("available"):
+            snap = _acp_session_snapshot("grok", session_id) or {}
+            result["live"] = True
+            result["status"] = "running" if snap.get("status") == "active" else "idle"
+            result["kind"] = "acp"
+            result["cwd"] = snap.get("cwd") or session_cwd
+            result["match_count"] = 1
+            result["model"] = snap.get("model")
+            if snap.get("pending_permissions"):
+                result["needs_approval"] = True
+                result["needs_approval_message"] = "Grok is waiting for a tool approval"
+        return result
+
     if _is_codex_session(session_id):
         path = _resolve_codex_rollout_path(session_id)
         if path:
