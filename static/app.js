@@ -37237,9 +37237,7 @@
       ]);
       if (sig !== _evergreenQueuesSig || gotNewCards) {
         _evergreenQueuesSig = sig;
-        if (typeof conversationsData !== 'undefined' && conversationsData) {
-          try { renderConversationList(conversationsData); } catch (_) {}
-        }
+        try { renderArchiveList(document.getElementById('convSearch')?.value || ''); } catch (_) {}
       }
     } catch (_) { /* keep stale cache */ }
   }
