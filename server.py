@@ -19930,6 +19930,32 @@ def _build_resume_command(session_id, cwd, cwd_exists):
         resume_cmd = f"gemini --resume {session_id}"
     elif _is_cursor_session(session_id):
         resume_cmd = f"cursor-agent --resume {session_id}"
+    elif _is_grok_session(session_id):
+        resume_cmd = f"grok --resume {session_id}"
+    elif _is_devin_cli_session(session_id):
+        raw_id = _devin_cli_raw_id(session_id)
+        resume_cmd = f"devin --resume {raw_id}"
+    elif _is_devin_session(session_id):
+        # Cloud Devin sessions have no local CLI counterpart — the
+        # transcript lives on Devin's servers, not in a resumable local
+        # process (see the isDevin composer block in app.js: "read-only
+        # in CCC - reply at app.devin.ai"). Falling through to
+        # `claude --resume` here would try to resume a session Claude Code
+        # has never heard of. Mirror the Antigravity app-only fallback:
+        # open the web app and drop the user into a plain shell instead.
+        url_slug = (
+            session_id[len(DEVIN_SESSION_PREFIX):]
+            if session_id.startswith(DEVIN_SESSION_PREFIX) else session_id
+        )
+        resume_cmd = (
+            "echo " + _shell_quote(
+                "CCC: this is a cloud Devin session - it has no local CLI to "
+                "resume. Opening app.devin.ai so you can continue it there."
+            )
+            + "; open " + _shell_quote(f"https://app.devin.ai/sessions/{url_slug}")
+            + " >/dev/null 2>&1 || true"
+            + "; exec ${SHELL:-/bin/zsh} -l"
+        )
     elif is_antigravity:
         # Two flavors of Antigravity session live on disk:
         #   1. AGY CLI sessions — have a `.pb` in ~/.gemini/antigravity-cli/
