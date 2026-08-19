@@ -901,21 +901,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 DispatchQueue.main.async { completion(0, []) }
                 return
             }
-            var total = 0
+            // The badge/pulse must match exactly what the menu lists below it
+            // — no counting activity the user can't see and verify. Only
+            // watchtower's claimed workers are listed, so only those drive
+            // the busy state; dashboard/worker activity isn't shown here and
+            // was making the badge pulse while every listed worker read
+            // "idle" (the whole complaint that led to this rewrite).
             var liveWorkers: [[String: Any]] = []
-            for svc in services {
-                switch svc["id"] as? String {
-                case "dashboard":
-                    total += (svc["busy_count"] as? Int) ?? 0
-                case "worker":
-                    total += (svc["active"] as? Int) ?? 0
-                case "watchtower":
-                    total += (svc["claimed_worker_count"] as? Int) ?? 0
-                    liveWorkers = (svc["live_workers"] as? [[String: Any]]) ?? []
-                default:
-                    break
-                }
+            for svc in services where svc["id"] as? String == "watchtower" {
+                liveWorkers = (svc["live_workers"] as? [[String: Any]]) ?? []
             }
+            let total = liveWorkers.filter { ($0["ticket_ref"] as? String)?.isEmpty == false }.count
             DispatchQueue.main.async { completion(total, liveWorkers) }
         }.resume()
     }
