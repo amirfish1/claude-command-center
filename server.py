@@ -31002,6 +31002,34 @@ def _system_services_worker_entry():
     }
 
 
+def _wt_claimed_worker_count():
+    """Live WatchTower workers currently executing a claimed, in-progress
+    ticket -- distinct from workers_live, which also counts alive-but-idle
+    workers sitting warm between claims (see the menu-bar busy pulse, which
+    used workers_live and lit up for a worker idle 23m with nothing claimed)."""
+    try:
+        items = _q.list_items() or []
+    except Exception:
+        items = []
+    claimed_ids = set()
+    for item in items:
+        if not isinstance(item, dict) or item.get("status") != "in_progress":
+            continue
+        for key in ("claimed_by", "claimed_session_id"):
+            val = item.get(key)
+            if val:
+                claimed_ids.add(str(val))
+    if not claimed_ids:
+        return 0
+    count = 0
+    for worker in _wt_read_workers():
+        worker_id = str(worker.get("worker_id") or "")
+        session_id = str(worker.get("session_id") or "")
+        if worker_id in claimed_ids or session_id in claimed_ids:
+            count += 1
+    return count
+
+
 def _system_services_watchtower_entry():
     status = _watchtower_service_status(include_queues=True)
     running = bool(status.get("running"))
@@ -31027,6 +31055,7 @@ def _system_services_watchtower_entry():
         "stuck_total": int(status.get("stuck_total") or 0),
         "workers_live": int(status.get("workers_live") or 0),
         "busy_count": int(status.get("workers_live") or 0),
+        "claimed_worker_count": _wt_claimed_worker_count(),
         "released_workers_count": int(status.get("workers_released") or 0),
         "api_probe_age_s": status.get("api_probe_age_s"),
         "restart_endpoint": "/api/watchtower/service",
