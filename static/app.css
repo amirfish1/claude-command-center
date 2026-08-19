@@ -20819,7 +20819,7 @@ body:has(.gc-reader) .pwa-install-banner {
 .fq-status-worker.is-clickable { cursor: pointer; }
 .fq-status-worker.is-clickable:hover { color: var(--accent, #4a9eff); }
 .fq-status-worker b { font-weight: 500; color: var(--text-muted); margin-left: 2px; }
-.fq-status-learnings-toggle, .fq-status-workers-toggle {
+.fq-status-learnings-toggle, .fq-status-workers-toggle, .fq-status-log-toggle {
   flex-shrink: 0; cursor: pointer;
   font-size: 10.5px; font-weight: 500; letter-spacing: 0.02em;
   padding: 1px 7px; border-radius: 999px;
@@ -20828,7 +20828,7 @@ body:has(.gc-reader) .pwa-install-banner {
   transition: background 0.12s, border-color 0.12s;
   white-space: nowrap;
 }
-.fq-status-learnings-toggle:hover, .fq-status-workers-toggle:hover {
+.fq-status-learnings-toggle:hover, .fq-status-workers-toggle:hover, .fq-status-log-toggle:hover {
   background: rgba(139,148,158,0.18); border-color: rgba(139,148,158,0.30);
 }
 .fq-status-spin {

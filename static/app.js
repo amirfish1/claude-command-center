@@ -37349,8 +37349,14 @@
     if (_wtLogTimer) { clearInterval(_wtLogTimer); _wtLogTimer = null; }
   }
 
-  function _openWtLogPanel() {
+  function _openWtLogPanel(presetQueue) {
+    if (presetQueue) _wtLogQueueFilter = presetQueue;
     let panel = document.getElementById('wtLogPanel');
+    if (panel) {
+      const $sel = document.getElementById('wtLogQueueSelect');
+      if (presetQueue && $sel) $sel.value = presetQueue;
+      if (presetQueue) $sel.dispatchEvent(new Event('change'));
+    }
     if (!panel) {
       panel = document.createElement('div');
       panel.id = 'wtLogPanel';
@@ -38822,6 +38828,12 @@
     const learningsLink = '<button type="button" class="fq-status-learnings-toggle"'
       + ' data-learnings-queue="' + escapeAttr(key) + '"'
       + ' title="Open this queue\'s learnings file (accumulated worker notes)">Learnings</button>';
+    // CCC-881: same idea as the Learnings button, but for this queue's slice
+    // of ~/.watchtower/activity.log (reconciler SPAWN/STOP/REAP + worker
+    // claim/close events) — reuses the same status-rail file-viewer panel.
+    const logLink = '<button type="button" class="fq-status-log-toggle"'
+      + ' data-log-queue="' + escapeAttr(key) + '"'
+      + ' title="View this queue\'s activity log">Log</button>';
     const watchHtml = controls.configBtn
       + '<span class="fq-status-proj">' + escapeHtml(key) + '</span>'
       + (row ? ('<span class="fq-status-sep">·</span>'
@@ -38832,7 +38844,8 @@
       + controls.drainToggle
       + controls.workersToggle
       + controls.typeToggle
-      + learningsLink;
+      + learningsLink
+      + logLink;
     const workerHtml = workers.length
       ? workers.map(w => {
           const on = workerItem(w);
@@ -39432,6 +39445,16 @@
           showOpToast('Could not open learnings: ' + ((e && e.message) || 'network error'), 'error');
         }
       };
+      // CCC-881: reuse the SAME "See log" panel the health-strip log button
+      // opens (_openWtLogPanel), just pre-filtered to this queue — one log
+      // viewer, not a second bespoke one.
+      const openQueueLog = (ev) => {
+        const btn = ev.target && ev.target.closest && ev.target.closest('.fq-status-log-toggle[data-log-queue]');
+        if (!btn) return;
+        ev.preventDefault();
+        ev.stopPropagation();
+        _openWtLogPanel(btn.getAttribute('data-log-queue'));
+      };
       // Desired-workers cycle (1x → 2x → 3x → 1x) for the compact strip.
       const cycleWorkers = async (ev) => {
         const btn = ev.target && ev.target.closest && ev.target.closest('.fq-status-workers-toggle[data-workers-queue]');
@@ -39483,6 +39506,7 @@
       $health.addEventListener('click', cycleWorkers);
       $health.addEventListener('click', deleteQueue);
       $health.addEventListener('click', openLearnings);
+      $health.addEventListener('click', openQueueLog);
       $health.addEventListener('click', async (ev) => {
         const btn = ev.target && ev.target.closest && ev.target.closest('[data-fq-config-queue], #filesQueueConfigure');
         if (!btn) return;
@@ -39491,7 +39515,7 @@
       });
       $health.addEventListener('click', scopeFromRow);
       $health.addEventListener('keydown', (ev) => {
-        if (ev.key === 'Enter' || ev.key === ' ') { openWorkerSession(ev); nudgeFromBadge(ev); toggleDrain(ev); cycleClaimTypes(ev); cycleWorkers(ev); deleteQueue(ev); openLearnings(ev); scopeFromRow(ev); }
+        if (ev.key === 'Enter' || ev.key === ' ') { openWorkerSession(ev); nudgeFromBadge(ev); toggleDrain(ev); cycleClaimTypes(ev); cycleWorkers(ev); deleteQueue(ev); openLearnings(ev); openQueueLog(ev); scopeFromRow(ev); }
       });
     }
   }
