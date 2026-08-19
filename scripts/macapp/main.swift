@@ -530,6 +530,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     var updaterController: SPUStandardUpdaterController!
     let updaterDelegate = CCCUpdaterDelegate()
     var updaterStarted = false
+    // Menu-bar "is CCC actually running" indicator (see the WhatsApp thread this
+    // came from: the server can keep serving in the background — launchd, or
+    // this app just sitting with its window closed per
+    // applicationShouldTerminateAfterLastWindowClosed — with zero visible sign
+    // of it). A colored dot in the system menu bar is the one thing that's
+    // visible with the app window closed and even after Cmd+Q, as long as the
+    // server itself (launchd-managed) is still bound to CCC_PORT.
+    var statusItem: NSStatusItem!
+    var statusPollTimer: Timer?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         installTerminationSignalHandlers()
@@ -543,6 +552,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             userDriverDelegate: nil
         )
         buildMenuBar()
+        buildStatusItem()
         buildWindow()
         bootstrap()
     }
@@ -591,6 +601,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     func applicationWillTerminate(_ notification: Notification) {
         watchdogTimer?.invalidate()
         pollTimer?.invalidate()
+        statusPollTimer?.invalidate()
         // Only kill the server if we started it. If it was already up
         // (launchd service, foreground ./run.sh elsewhere), leave it alone.
         stopOwnedProcess()
@@ -772,6 +783,56 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         NSApp.mainMenu = mainMenu
         NSApp.windowsMenu = windowMenu
+    }
+
+    // MARK: Status item (menu bar running indicator)
+
+    func buildStatusItem() {
+        let item = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
+        if let button = item.button {
+            let symbolConfig = NSImage.SymbolConfiguration(pointSize: 12, weight: .regular)
+            let image = NSImage(systemSymbolName: "circle.fill", accessibilityDescription: "CCC server status")?
+                .withSymbolConfiguration(symbolConfig)
+            image?.isTemplate = true
+            button.image = image
+            button.contentTintColor = .secondaryLabelColor
+        }
+        statusItem = item
+        refreshStatusItem()
+        statusPollTimer = Timer.scheduledTimer(withTimeInterval: 5.0, repeats: true) { [weak self] _ in
+            self?.refreshStatusItem()
+        }
+    }
+
+    func refreshStatusItem() {
+        let running = portIsBound(CCC_PORT)
+        statusItem?.button?.contentTintColor = running ? .systemGreen : .systemGray
+        statusItem?.button?.toolTip = running
+            ? "CCC server is running on port \(CCC_PORT)"
+            : "CCC server is not running"
+
+        let menu = NSMenu()
+        let statusLabel = NSMenuItem(
+            title: running ? "Server: Running (port \(CCC_PORT))" : "Server: Not running",
+            action: nil,
+            keyEquivalent: ""
+        )
+        statusLabel.isEnabled = false
+        menu.addItem(statusLabel)
+        menu.addItem(NSMenuItem.separator())
+        menu.addItem(withTitle: "Open Dashboard",
+                     action: #selector(showMainWindowFromStatusItem),
+                     keyEquivalent: "")
+        menu.addItem(NSMenuItem.separator())
+        menu.addItem(withTitle: "Quit Command Center",
+                     action: #selector(NSApplication.terminate(_:)),
+                     keyEquivalent: "")
+        statusItem?.menu = menu
+    }
+
+    @objc func showMainWindowFromStatusItem() {
+        mainWebWindow?.window.makeKeyAndOrderFront(nil)
+        NSApp.activate(ignoringOtherApps: true)
     }
 
     @objc func showAbout() {
