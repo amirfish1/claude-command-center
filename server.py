@@ -49382,6 +49382,29 @@ def _clear_usage_limit_resume(session_id):
     _usage_limit_resume_rewrite(_mutate)
 
 
+def _dismiss_usage_limit_resume(session_id):
+    """User hit the banner's cancel (x): mark the tracked stop dismissed
+    rather than deleting it outright (CCC-887). The transcript that
+    triggered detection doesn't change, so a plain delete let the next
+    _usage_limit_scan_once pass re-detect the same stop and re-arm the
+    countdown -- the banner "kept coming back" after being dismissed.
+    Keeping a dismissed marker around (until the candidate window ages it
+    out) suppresses re-detection for that stop."""
+    if not session_id:
+        return
+
+    def _mutate(existing):
+        entry = existing.get(str(session_id))
+        if entry is None:
+            entry = {}
+        entry["dismissed"] = True
+        entry["dismissed_at"] = time.time()
+        existing[str(session_id)] = entry
+        return existing, None
+
+    _usage_limit_resume_rewrite(_mutate)
+
+
 def usage_limit_resume_at_for_session(session_id):
     """Cheap in-memory lookup for the row-serialization path: the epoch a
     stopped session will auto-resume at, or None if it isn't tracked, is
@@ -49398,7 +49421,7 @@ def usage_limit_resume_at_for_session(session_id):
     if sid.startswith("session_"):
         sid = sid[len("session_"):]
     entry = _load_usage_limit_resumes().get(sid)
-    if not entry or entry.get("fired"):
+    if not entry or entry.get("fired") or entry.get("dismissed"):
         return None
     resume_at = entry.get("resume_at")
     if not isinstance(resume_at, (int, float)):
@@ -49883,8 +49906,10 @@ def _usage_limit_scan_once(now=None):
             if not sid:
                 continue
             existing = tracked.get(sid)
-            if existing and not existing.get("fired"):
+            if existing and not existing.get("fired") and not existing.get("dismissed"):
                 continue  # already tracking an unresolved stop for this session
+            if existing and existing.get("dismissed"):
+                continue  # user cancelled this stop; don't re-arm from the same transcript
             try:
                 found = detect_fn(sid, path)
             except Exception:
@@ -49897,7 +49922,7 @@ def _usage_limit_scan_once(now=None):
 
     tracked = _load_usage_limit_resumes()
     for sid, entry in list(tracked.items()):
-        if entry.get("fired"):
+        if entry.get("fired") or entry.get("dismissed"):
             continue
         resume_at = entry.get("resume_at")
         if not isinstance(resume_at, (int, float)) or now < resume_at:
@@ -69378,7 +69403,7 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                 # usage_limit_resume_at_for_session); kimi rows carry CCC's
                 # "session_" display prefix, so strip it the same way.
                 key = sid[len("session_"):] if sid.startswith("session_") else sid
-                _clear_usage_limit_resume(key)
+                _dismiss_usage_limit_resume(key)
                 self.send_json({"ok": True, "session_id": sid})
         elif path == "/api/inject-input":
             length = int(self.headers.get("Content-Length", "0"))
