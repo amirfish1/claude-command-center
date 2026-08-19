@@ -2902,6 +2902,10 @@
   // Keyed by sid for the same reason as f2ManualPanes: a dismissal must not
   // follow the pane onto a different conversation.
   const f2DismissedPanes = new Map();
+  // paneKey -> sid the user explicitly chose to keep typing in even though it
+  // was continued into a newer session (CCC-883). Keyed by sid so switching
+  // to a different continued session in the same pane re-locks the composer.
+  const f2ContinuedDismissedPanes = new Map();
 
   function f2ClearComposer() {
     try {
@@ -3439,7 +3443,23 @@
       // child. Re-offering the same "Continue new" button here reads as if
       // nothing happened -- link straight to the child instead.
       const continuedInto = f2ContinuedIntoSessionId(sid);
-      if (continuedInto) {
+      const continuedDismissed = continuedInto && f2ContinuedDismissedPanes.get(f2PaneKey(paneId)) === sid;
+      if (continuedDismissed) {
+        // Re-enable the composer left disabled from before "Continue here
+        // instead" was clicked; whatever renders next (gate or clear) is
+        // free to leave it enabled.
+        try {
+          const input = f2InputEl(paneId);
+          if (input && input.dataset.f2ContinuedDisabled) {
+            input.disabled = false;
+            input.placeholder = input.dataset.f2OrigPlaceholder || input.placeholder;
+            delete input.dataset.f2ContinuedDisabled;
+            delete input.dataset.f2OrigPlaceholder;
+          }
+        } catch (_) {}
+        if (bar) bar.classList.remove('is-f2-continued');
+      }
+      if (continuedInto && !continuedDismissed) {
         rail.hidden = false;
         rail.setAttribute('role', 'status');
         rail.innerHTML = '<span class="rail-dot" aria-hidden="true"></span>'
@@ -3453,10 +3473,16 @@
           + escapeAttr(continuedInto) + '" title="Open the session this was continued into">'
           + '<span class="route-glyph" aria-hidden="true">&#8617;</span>'
           + '<span class="route-name">Go to newer session (' + escapeHtml(shortSessionId(continuedInto)) + ')</span>'
+          + '</button>'
+          + '<button type="button" class="route-alt" data-f2-continue-here-anyway title="Keep working in this session instead">'
+          + 'Continue here instead'
           + '</button></div></div>';
         // CCC-844: typing here reads as picking up work that already moved.
         // Lock the composer instead of just showing a rail above it, and
         // point at the click-through above rather than a blocking confirm.
+        // CCC-883: some users genuinely want to keep working in the older
+        // session even after starting a newer one -- "Continue here instead"
+        // unlocks it for this sid until they switch sessions again.
         try {
           const input = f2InputEl(paneId);
           if (input && !input.dataset.f2ContinuedDisabled) {
@@ -3617,6 +3643,20 @@
       const clPaneId = (clPane && clPane.getAttribute('data-pane-id')) || null;
       if (targetSid && typeof selectConversation === 'function') {
         try { selectConversation(targetSid, clPaneId); } catch (_) {}
+      }
+      return;
+    }
+    // CCC-883: "Continue here instead" on a continued-into-newer-session
+    // panel — user wants to keep typing in this (older) session anyway.
+    const continueHereAnyway = ev.target && ev.target.closest && ev.target.closest('[data-f2-continue-here-anyway]');
+    if (continueHereAnyway) {
+      ev.preventDefault();
+      const chaPane = continueHereAnyway.closest('.conv-pane');
+      const chaPaneId = (chaPane && chaPane.getAttribute('data-pane-id')) || null;
+      const sid = (currentSession && currentSession.id) || '';
+      if (chaPaneId && sid) {
+        f2ContinuedDismissedPanes.set(f2PaneKey(chaPaneId), sid);
+        try { f2RenderComposer(chaPaneId, { force: true }); } catch (_) {}
       }
       return;
     }

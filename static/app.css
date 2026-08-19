@@ -23764,6 +23764,16 @@ a.settings-row:focus-visible .settings-launcher-btn { text-decoration: underline
 .f2c-panel .route.is-continued { border-color: rgba(88,166,255,0.45); }
 .f2c-panel .route.is-continued:hover { border-color: rgba(88,166,255,0.7); }
 .f2c-panel .route.is-continued .route-glyph { color: #58a6ff; }
+/* CCC-883: secondary escape hatch next to .route-main -- lets someone keep
+   typing in the older session instead of following the link above. Muted so
+   it doesn't compete with the primary "go to newer session" action. */
+.f2c-panel .route-alt {
+  flex: none; align-self: center; margin-right: 6px;
+  background: none; border: 1px solid var(--border); border-radius: 6px;
+  padding: 3px 8px; font: inherit; font-size: 11px; color: var(--text-muted);
+  cursor: pointer; white-space: nowrap;
+}
+.f2c-panel .route-alt:hover { color: var(--text); border-color: var(--accent); }
 
 /* The clickable surface is a separate element from .route so the ▾ caret
    can be a real control rather than a button nested inside a button. */
