@@ -787,17 +787,21 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     // MARK: Status item (menu bar running indicator)
 
+    // NSStatusBarButton ignores contentTintColor on a template image (renders
+    // monochrome regardless — a known quirk), so the running/stopped state is
+    // drawn as an actual colored dot instead of a tinted SF Symbol.
+    func dotImage(color: NSColor, diameter: CGFloat = 12) -> NSImage {
+        let image = NSImage(size: NSSize(width: diameter, height: diameter))
+        image.lockFocus()
+        color.setFill()
+        NSBezierPath(ovalIn: NSRect(x: 0, y: 0, width: diameter, height: diameter)).fill()
+        image.unlockFocus()
+        image.isTemplate = false
+        return image
+    }
+
     func buildStatusItem() {
-        let item = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
-        if let button = item.button {
-            let symbolConfig = NSImage.SymbolConfiguration(pointSize: 12, weight: .regular)
-            let image = NSImage(systemSymbolName: "circle.fill", accessibilityDescription: "CCC server status")?
-                .withSymbolConfiguration(symbolConfig)
-            image?.isTemplate = true
-            button.image = image
-            button.contentTintColor = .secondaryLabelColor
-        }
-        statusItem = item
+        statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
         refreshStatusItem()
         statusPollTimer = Timer.scheduledTimer(withTimeInterval: 5.0, repeats: true) { [weak self] _ in
             self?.refreshStatusItem()
@@ -806,7 +810,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     func refreshStatusItem() {
         let running = portIsBound(CCC_PORT)
-        statusItem?.button?.contentTintColor = running ? .systemGreen : .systemGray
+        statusItem?.button?.image = dotImage(color: running ? .systemGreen : .systemGray)
         statusItem?.button?.toolTip = running
             ? "CCC server is running on port \(CCC_PORT)"
             : "CCC server is not running"
