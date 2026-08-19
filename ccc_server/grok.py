@@ -171,6 +171,65 @@ def grok_session_cwd(session_id):
         con.close()
 
 
+def _extract_grok_usage(session_id):
+    """Usage stats for a Grok session — model + reasoning effort only.
+
+    Grok's local session store (variant-A summary.json / variant-B db row)
+    doesn't record per-turn token usage the way kimi's wire.jsonl does, so
+    token counts stay at 0 (same "unknown" shape cursor's usage uses).
+    Without a model/engine here the conv-pane model pill has nothing to
+    render and disappears entirely — the pill's `if (displayModel)` guard
+    in app.js silently no-ops on an empty model (CCC-879).
+    """
+    override = _core._get_session_override(session_id)
+    result = {
+        "latest_input_tokens": 0,
+        "peak_input_tokens": 0,
+        "total_output_tokens": 0,
+        "total_input_tokens": 0,
+        "total_cache_creation_tokens": 0,
+        "total_cache_read_tokens": 0,
+        "model": "",
+        "context_limit": 0,
+        "cost_usd": 0.0,
+        "cost_breakdown_usd": {"input": 0.0, "cache_creation": 0.0,
+                               "cache_read": 0.0, "output": 0.0},
+        "engine": "grok",
+        "override": override,
+        "reasoning_effort": (override or {}).get("reasoning_effort") or "",
+    }
+    sid = _grok_sid_ok(session_id)
+    if not sid:
+        return result
+    session_dir = _grok_session_dir(sid)
+    if session_dir is not None:
+        try:
+            summary = json.loads((session_dir / "summary.json").read_text())
+            result["model"] = str(summary.get("current_model_id") or "")
+            if not result["reasoning_effort"]:
+                result["reasoning_effort"] = str(summary.get("reasoning_effort") or "")
+            return result
+        except (OSError, ValueError, json.JSONDecodeError):
+            pass
+    con = _grok_db_connect()
+    if con is None:
+        return result
+    try:
+        cols = {r["name"] for r in con.execute("PRAGMA table_info(sessions)")}
+        model_col = _core._copilot_first_col(cols, ("model", "model_id", "current_model_id"))
+        if model_col:
+            row = con.execute(
+                f"SELECT {model_col} AS model FROM sessions WHERE id=? LIMIT 1", (sid,)
+            ).fetchone()
+            if row and row["model"]:
+                result["model"] = str(row["model"]).strip()
+    except sqlite3.Error:
+        pass
+    finally:
+        con.close()
+    return result
+
+
 def _grok_content_text(content):
     """Pull text out of a Grok/ACP content payload: a plain string, a
     {type: "text", text: ...} part, a list of parts, or a nested message

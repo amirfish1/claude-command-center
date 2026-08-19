@@ -2254,6 +2254,8 @@ def extract_session_usage(session_id):
         return _with_token_optimizer_quality(_core._extract_hermes_usage(session_id), session_id)
     if _core._is_kimi_session(session_id):
         return _with_token_optimizer_quality(_extract_kimi_usage(session_id), session_id)
+    if _core._is_grok_session(session_id):
+        return _with_token_optimizer_quality(_core._extract_grok_usage(session_id), session_id)
     if _core._is_devin_cli_session(session_id):
         result = _core._extract_devin_cli_usage(session_id)
         result.setdefault("engine", "devin")
