@@ -48837,7 +48837,10 @@ def resume_session_headless(session_id, text, cwd=None, idempotency_key=None):
         return {"ok": False, "error": "missing text"}
     # Reuse existing resumed process
     for s in list(_spawned_sessions):
-        if s.get("resumed_sid") == session_id and _poll_spawn_entry(s) is None:
+        if (
+            (s.get("resumed_sid") == session_id or s.get("session_id") == session_id)
+            and _poll_spawn_entry(s) is None
+        ):
             ok = _write_stream_json_user_message(s, text)
             if ok:
                 _se = _resume_entry_started_epoch(s)
@@ -56093,7 +56096,10 @@ def ask_session_and_wait(session_id, text, timeout_ms=30000, cwd=None):
     entry = None
     expected_command_uuid = None
     for s in _spawned_sessions:
-        if s.get("resumed_sid") == session_id and _poll_spawn_entry(s) is None:
+        if (
+            (s.get("resumed_sid") == session_id or s.get("session_id") == session_id)
+            and _poll_spawn_entry(s) is None
+        ):
             entry = s
             break
 
@@ -56116,7 +56122,7 @@ def ask_session_and_wait(session_id, text, timeout_ms=30000, cwd=None):
             return spawn_result
         # The brand new entry is the last one matching this sid.
         for s in reversed(_spawned_sessions):
-            if s.get("resumed_sid") == session_id:
+            if s.get("resumed_sid") == session_id or s.get("session_id") == session_id:
                 entry = s
                 break
         if entry is None:

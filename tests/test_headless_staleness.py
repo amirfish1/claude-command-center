@@ -399,6 +399,7 @@ def test_ask_waits_for_its_own_command_result_when_prior_turn_finishes(
              mock.patch.object(
                  server_mod, "session_live_status", return_value={"live": False, "tty": None}
              ), \
+             mock.patch.object(server_mod, "_control_plane_engine_call", return_value=None), \
              mock.patch.object(server_mod, "_poll_spawn_entry", return_value=None), \
              mock.patch.object(server_mod, "_write_stream_json_user_message", side_effect=write_ask):
             result = server_mod.ask_session_and_wait(sid, "verify current head", timeout_ms=100)
@@ -408,6 +409,47 @@ def test_ask_waits_for_its_own_command_result_when_prior_turn_finishes(
 
     assert result["ok"] is True
     assert result["text"] == "fresh corrective report"
+
+
+def test_ask_reuses_fresh_spawn_before_transcript_exists(server_mod, tmp_path):
+    """A just-spawned Claude session owns a FIFO before its JSONL lands."""
+    sid, entry, _transcript, log = _stage(
+        server_mod, tmp_path, [_event("a")], 0
+    )
+    entry.pop("resumed_sid")
+    entry["session_id"] = sid
+    entry["proc"] = mock.Mock()
+    entry["proc"].poll.return_value = None
+    original = list(server_mod._spawned_sessions)
+    server_mod._spawned_sessions[:] = [entry]
+
+    def write_ask(target, _text):
+        target["input_command_uuids"] = ["new-command"]
+        log.write_text(json.dumps({
+            "type": "result",
+            "result": "fresh spawn reply",
+            "user_message_uuid": "new-command",
+        }) + "\n")
+        return True
+
+    try:
+        with mock.patch.object(server_mod, "_detect_session_engine", return_value="claude"), \
+             mock.patch.object(server_mod, "find_session_cwd", return_value=str(tmp_path)), \
+             mock.patch.object(
+                 server_mod, "session_live_status", return_value={"live": False, "tty": None}
+             ), \
+             mock.patch.object(server_mod, "_control_plane_engine_call", return_value=None), \
+             mock.patch.object(server_mod, "_poll_spawn_entry", return_value=None), \
+             mock.patch.object(server_mod, "_write_stream_json_user_message", side_effect=write_ask), \
+             mock.patch.object(server_mod, "resume_session_headless") as resume:
+            result = server_mod.ask_session_and_wait(sid, "follow up", timeout_ms=100)
+    finally:
+        server_mod._spawned_sessions.clear()
+        server_mod._spawned_sessions.extend(original)
+
+    assert result["ok"] is True
+    assert result["text"] == "fresh spawn reply"
+    resume.assert_not_called()
 
 
 def test_ask_routes_claude_to_persistent_worker(server_mod):
@@ -1028,6 +1070,37 @@ def test_resume_reuse_failed_write_during_owned_turn_does_not_retire(
     finally:
         server_mod._spawned_sessions.clear()
         server_mod._spawned_sessions.extend(original)
+
+
+def test_resume_reuses_fresh_spawn_before_transcript_exists(server_mod, tmp_path):
+    """Direct resume also uses the fresh spawn FIFO instead of disk lookup."""
+    sid, entry, _transcript, _log = _stage(
+        server_mod, tmp_path, [_event("a")], 0
+    )
+    entry.pop("resumed_sid")
+    entry["session_id"] = sid
+    entry["proc"] = mock.Mock()
+    entry["proc"].poll.return_value = None
+    original = list(server_mod._spawned_sessions)
+    server_mod._spawned_sessions[:] = [entry]
+    try:
+        with mock.patch.object(
+            server_mod, "_claude_subagent_parent_session_id", return_value=None
+        ), mock.patch.object(
+            server_mod, "_control_plane_engine_call", return_value=None
+        ), mock.patch.object(
+            server_mod, "_poll_spawn_entry", return_value=None
+        ), mock.patch.object(
+            server_mod, "_write_stream_json_user_message", return_value=True
+        ) as write:
+            result = server_mod.resume_session_headless(sid, "follow up")
+    finally:
+        server_mod._spawned_sessions.clear()
+        server_mod._spawned_sessions.extend(original)
+
+    assert result["ok"] is True
+    assert result["reused"] is True
+    write.assert_called_once_with(entry, "follow up")
 
 
 def test_record_spawn_registry_persists_result_target_state(
