@@ -13440,9 +13440,16 @@
   .fq-scope-select:focus { outline: none; border-color: var(--accent); }
   .fq-scope-select:disabled { cursor: wait; opacity: 0.7; }
   /* Taller rows in the native dropdown popup — the default UA row height
-     reads as cramped once a project has several sub-queues nested under it. */
+     reads as cramped once a project has several sub-queues nested under it.
+     CCC-882: padding/line-height on <option> are ignored by macOS's native
+     select popup (Chrome/Safari both render it via the OS menu there, not
+     Blink/WebKit), which is why an earlier pass at this via padding alone
+     never visibly changed anything for this user. font-size IS respected —
+     the native row height derives from it — so that's the lever that
+     actually adds space between rows on macOS; padding stays for platforms
+     (Windows/Linux Chrome, Firefox) that do honor it. */
   .fq-scope-select option, .fq-scope-select optgroup {
-    font-size: 14px; padding: 10px 12px;
+    font-size: 16px; padding: 12px 14px;
   }
   .fq-scope-busy { display: none; width: 10px; height: 10px; flex: 0 0 10px; }
   .fq-scope-busy.is-loading {
