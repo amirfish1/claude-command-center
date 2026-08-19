@@ -875,9 +875,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         rebuildStatusMenu()
     }
 
-    // Sums busy_count across every row of /api/system/services (dashboard's
-    // own owned executions + the execution worker's active+queued) — the
-    // same signal the in-page SERVER STATUS chip reads.
+    // Counts actually-executing work from /api/system/services — deliberately
+    // NOT the generic busy_count field, which for watchtower means
+    // workers_live (alive, including idle-and-warm workers with nothing
+    // claimed — that field exists for the restart-safety chip, not this).
+    // dashboard.busy_count is genuine in-flight executions; worker.active
+    // (not active+queued — queued hasn't started yet) is genuinely running;
+    // watchtower.claimed_worker_count is live workers matched to an
+    // in-progress claimed ticket.
     func fetchBusyCount(completion: @escaping (Int) -> Void) {
         guard let url = URL(string: "http://127.0.0.1:\(CCC_PORT)/api/system/services") else {
             completion(0)
@@ -892,8 +897,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 DispatchQueue.main.async { completion(0) }
                 return
             }
-            let total = services.reduce(0) { sum, svc in
-                sum + ((svc["busy_count"] as? Int) ?? 0)
+            var total = 0
+            for svc in services {
+                switch svc["id"] as? String {
+                case "dashboard":
+                    total += (svc["busy_count"] as? Int) ?? 0
+                case "worker":
+                    total += (svc["active"] as? Int) ?? 0
+                case "watchtower":
+                    total += (svc["claimed_worker_count"] as? Int) ?? 0
+                default:
+                    break
+                }
             }
             DispatchQueue.main.async { completion(total) }
         }.resume()
