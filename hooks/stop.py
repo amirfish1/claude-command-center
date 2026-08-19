@@ -95,6 +95,7 @@ def main():
             title="Claude Command Center",
             message="Ready for your input",
             subtitle=session_id[:8],
+            session_id=session_id,
         )
 
         request_auto_title(session_id)
