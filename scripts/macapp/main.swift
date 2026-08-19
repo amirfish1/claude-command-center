@@ -539,6 +539,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     // server itself (launchd-managed) is still bound to CCC_PORT.
     var statusItem: NSStatusItem!
     var statusPollTimer: Timer?
+    var statusPulseTimer: Timer?
+    var statusServerRunning = false
+    var statusBusyCount = 0
+    var statusPulseOn = false
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         installTerminationSignalHandlers()
@@ -602,6 +606,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         watchdogTimer?.invalidate()
         pollTimer?.invalidate()
         statusPollTimer?.invalidate()
+        statusPulseTimer?.invalidate()
         // Only kill the server if we started it. If it was already up
         // (launchd service, foreground ./run.sh elsewhere), leave it alone.
         stopOwnedProcess()
@@ -786,15 +791,39 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     // MARK: Status item (menu bar running indicator)
-
+    //
+    // Base glyph is the app icon itself (recognizable at a glance); a small
+    // badge in the corner carries state: gray = server not running, green =
+    // running and idle, blue/yellow alternating = a worker is actually
+    // executing right now (from /api/system/services' busy_count).
+    //
     // NSStatusBarButton ignores contentTintColor on a template image (renders
-    // monochrome regardless — a known quirk), so the running/stopped state is
-    // drawn as an actual colored dot instead of a tinted SF Symbol.
-    func dotImage(color: NSColor, diameter: CGFloat = 12) -> NSImage {
-        let image = NSImage(size: NSSize(width: diameter, height: diameter))
+    // monochrome regardless — a known quirk), so every state is composited
+    // as real color, never a tinted template.
+
+    func statusIconImage() -> NSImage {
+        let size = NSSize(width: 20, height: 20)
+        let image = NSImage(size: size)
         image.lockFocus()
-        color.setFill()
-        NSBezierPath(ovalIn: NSRect(x: 0, y: 0, width: diameter, height: diameter)).fill()
+        let iconRect = NSRect(x: 1, y: 3, width: 16, height: 16)
+        NSApp.applicationIconImage?.draw(
+            in: iconRect, from: .zero, operation: .sourceOver,
+            fraction: statusServerRunning ? 1.0 : 0.35
+        )
+        let badgeColor: NSColor
+        if !statusServerRunning {
+            badgeColor = .systemGray
+        } else if statusBusyCount > 0 {
+            badgeColor = statusPulseOn ? .systemBlue : .systemYellow
+        } else {
+            badgeColor = .systemGreen
+        }
+        let d: CGFloat = 8
+        let badgeRect = NSRect(x: size.width - d - 1, y: 0, width: d, height: d)
+        NSColor.white.setFill()
+        NSBezierPath(ovalIn: badgeRect.insetBy(dx: -1, dy: -1)).fill()
+        badgeColor.setFill()
+        NSBezierPath(ovalIn: badgeRect).fill()
         image.unlockFocus()
         image.isTemplate = false
         return image
@@ -802,25 +831,85 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     func buildStatusItem() {
         statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
-        refreshStatusItem()
+        pollStatusItemState()
         statusPollTimer = Timer.scheduledTimer(withTimeInterval: 5.0, repeats: true) { [weak self] _ in
-            self?.refreshStatusItem()
+            self?.pollStatusItemState()
+        }
+        // Separate, faster timer just to alternate the busy badge's color —
+        // decoupled from the network poll above so the pulse stays smooth
+        // regardless of request latency.
+        statusPulseTimer = Timer.scheduledTimer(withTimeInterval: 0.6, repeats: true) { [weak self] _ in
+            guard let self = self, self.statusBusyCount > 0 else { return }
+            self.statusPulseOn.toggle()
+            self.redrawStatusIcon()
         }
     }
 
-    func refreshStatusItem() {
-        let running = portIsBound(CCC_PORT)
-        statusItem?.button?.image = dotImage(color: running ? .systemGreen : .systemGray)
-        statusItem?.button?.toolTip = running
-            ? "CCC server is running on port \(CCC_PORT)"
-            : "CCC server is not running"
+    func redrawStatusIcon() {
+        statusItem?.button?.image = statusIconImage()
+        statusItem?.button?.toolTip = !statusServerRunning
+            ? "CCC server is not running"
+            : statusBusyCount > 0
+                ? "CCC server running — \(statusBusyCount) worker\(statusBusyCount == 1 ? "" : "s") executing"
+                : "CCC server is running on port \(CCC_PORT)"
+    }
 
+    func pollStatusItemState() {
+        let running = portIsBound(CCC_PORT)
+        statusServerRunning = running
+        if !running {
+            statusBusyCount = 0
+            redrawStatusIcon()
+            rebuildStatusMenu()
+            return
+        }
+        fetchBusyCount { [weak self] count in
+            guard let self = self else { return }
+            self.statusBusyCount = count
+            self.redrawStatusIcon()
+            self.rebuildStatusMenu()
+        }
+        // Draw immediately with whatever we already know; the busy count
+        // above lands a moment later and redraws again.
+        redrawStatusIcon()
+        rebuildStatusMenu()
+    }
+
+    // Sums busy_count across every row of /api/system/services (dashboard's
+    // own owned executions + the execution worker's active+queued) — the
+    // same signal the in-page SERVER STATUS chip reads.
+    func fetchBusyCount(completion: @escaping (Int) -> Void) {
+        guard let url = URL(string: "http://127.0.0.1:\(CCC_PORT)/api/system/services") else {
+            completion(0)
+            return
+        }
+        var req = URLRequest(url: url)
+        req.timeoutInterval = 4
+        URLSession.shared.dataTask(with: req) { data, _, _ in
+            guard let data = data,
+                  let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+                  let services = json["services"] as? [[String: Any]] else {
+                DispatchQueue.main.async { completion(0) }
+                return
+            }
+            let total = services.reduce(0) { sum, svc in
+                sum + ((svc["busy_count"] as? Int) ?? 0)
+            }
+            DispatchQueue.main.async { completion(total) }
+        }.resume()
+    }
+
+    func rebuildStatusMenu() {
         let menu = NSMenu()
-        let statusLabel = NSMenuItem(
-            title: running ? "Server: Running (port \(CCC_PORT))" : "Server: Not running",
-            action: nil,
-            keyEquivalent: ""
-        )
+        let title: String
+        if !statusServerRunning {
+            title = "Server: Not running"
+        } else if statusBusyCount > 0 {
+            title = "Server: Running — \(statusBusyCount) worker\(statusBusyCount == 1 ? "" : "s") executing"
+        } else {
+            title = "Server: Running, idle (port \(CCC_PORT))"
+        }
+        let statusLabel = NSMenuItem(title: title, action: nil, keyEquivalent: "")
         statusLabel.isEnabled = false
         menu.addItem(statusLabel)
         menu.addItem(NSMenuItem.separator())
