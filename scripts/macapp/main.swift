@@ -543,6 +543,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     var statusServerRunning = false
     var statusBusyCount = 0
     var statusPulseOn = false
+    var statusLiveWorkers: [[String: Any]] = []
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         installTerminationSignalHandlers()
@@ -863,9 +864,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             rebuildStatusMenu()
             return
         }
-        fetchBusyCount { [weak self] count in
+        fetchSystemServicesState { [weak self] count, workers in
             guard let self = self else { return }
             self.statusBusyCount = count
+            self.statusLiveWorkers = workers
             self.redrawStatusIcon()
             self.rebuildStatusMenu()
         }
@@ -882,10 +884,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     // dashboard.busy_count is genuine in-flight executions; worker.active
     // (not active+queued — queued hasn't started yet) is genuinely running;
     // watchtower.claimed_worker_count is live workers matched to an
-    // in-progress claimed ticket.
-    func fetchBusyCount(completion: @escaping (Int) -> Void) {
+    // in-progress claimed ticket. Also returns watchtower's per-worker
+    // breakdown (live_workers) so the menu can list each one by name with
+    // its actual ticket, instead of asking for trust in a single number.
+    func fetchSystemServicesState(completion: @escaping (Int, [[String: Any]]) -> Void) {
         guard let url = URL(string: "http://127.0.0.1:\(CCC_PORT)/api/system/services") else {
-            completion(0)
+            completion(0, [])
             return
         }
         var req = URLRequest(url: url)
@@ -894,10 +898,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             guard let data = data,
                   let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
                   let services = json["services"] as? [[String: Any]] else {
-                DispatchQueue.main.async { completion(0) }
+                DispatchQueue.main.async { completion(0, []) }
                 return
             }
             var total = 0
+            var liveWorkers: [[String: Any]] = []
             for svc in services {
                 switch svc["id"] as? String {
                 case "dashboard":
@@ -906,11 +911,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                     total += (svc["active"] as? Int) ?? 0
                 case "watchtower":
                     total += (svc["claimed_worker_count"] as? Int) ?? 0
+                    liveWorkers = (svc["live_workers"] as? [[String: Any]]) ?? []
                 default:
                     break
                 }
             }
-            DispatchQueue.main.async { completion(total) }
+            DispatchQueue.main.async { completion(total, liveWorkers) }
         }.resume()
     }
 
@@ -927,6 +933,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let statusLabel = NSMenuItem(title: title, action: nil, keyEquivalent: "")
         statusLabel.isEnabled = false
         menu.addItem(statusLabel)
+
+        if statusServerRunning && !statusLiveWorkers.isEmpty {
+            menu.addItem(NSMenuItem.separator())
+            let header = NSMenuItem(title: "WatchTower workers", action: nil, keyEquivalent: "")
+            header.isEnabled = false
+            menu.addItem(header)
+            for worker in statusLiveWorkers {
+                menu.addItem(statusWorkerMenuItem(worker))
+            }
+        }
+
         menu.addItem(NSMenuItem.separator())
         menu.addItem(withTitle: "Open Dashboard",
                      action: #selector(showMainWindowFromStatusItem),
@@ -936,6 +953,44 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                      action: #selector(NSApplication.terminate(_:)),
                      keyEquivalent: "")
         statusItem?.menu = menu
+    }
+
+    // One line per live WatchTower worker: which queue it belongs to, and
+    // the exact ticket it's claiming right now — or "idle" if it's alive but
+    // has nothing claimed (the case that made the old single-number pulse
+    // unconvincing: a worker idle 23m still counted as "busy").
+    func statusWorkerMenuItem(_ worker: [String: Any]) -> NSMenuItem {
+        let queue = (worker["queue"] as? String)?.isEmpty == false ? (worker["queue"] as! String) : "?"
+        let ref = worker["ticket_ref"] as? String
+        let rawTitle = worker["ticket_title"] as? String
+        let idleSeconds = worker["idle_seconds"] as? Int
+
+        let dotColor: NSColor
+        let line: String
+        if let ref = ref, !ref.isEmpty {
+            let full = rawTitle ?? ""
+            let short = full.count > 56 ? String(full.prefix(56)) + "…" : full
+            line = "\(queue) · \(ref)" + (short.isEmpty ? "" : ": \(short)")
+            dotColor = .systemBlue
+        } else {
+            let idleText = idleSeconds.map { " (idle \(max(0, $0) / 60)m)" } ?? ""
+            line = "\(queue) · idle\(idleText)"
+            dotColor = .systemGray
+        }
+
+        let attributed = NSMutableAttributedString(
+            string: "●  ", attributes: [.foregroundColor: dotColor]
+        )
+        attributed.append(NSAttributedString(
+            string: line, attributes: [.foregroundColor: NSColor.labelColor]
+        ))
+        let item = NSMenuItem(title: "", action: nil, keyEquivalent: "")
+        item.attributedTitle = attributed
+        item.isEnabled = false
+        if let ref = ref, let full = rawTitle, !full.isEmpty {
+            item.toolTip = "\(ref): \(full)"
+        }
+        return item
     }
 
     @objc func showMainWindowFromStatusItem() {
