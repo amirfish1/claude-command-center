@@ -1184,45 +1184,10 @@ def resume_session_codex(
         reasoning_effort=reasoning_effort,
     )
     if app_result.get("ok"):
-        if (
-            app_result.get("accepted")
-            and app_result.get("confirmed") is not True
-            and not _from_queue
-        ):
-            reason = (
-                app_result.get("warning")
-                or "Codex accepted the turn but the input is not visible yet"
-            )
-            queued = _core._queue_codex_resume(session_id, text, reason=reason)
-            # Close the notification-vs-enqueue race: if the authoritative
-            # userMessage arrived just before the durable copy was added, its
-            # state marker is still available and can reconcile the copy now.
-            delivered = _core._codex_app_server_thread_state(session_id)
-            if (
-                str(delivered.get("last_delivered_user_text") or "").strip()
-                == str(text or "").strip()
-                and (
-                    not app_result.get("turn_id")
-                    or str(delivered.get("last_delivered_user_turn_id") or "")
-                    == str(app_result.get("turn_id"))
-                )
-            ):
-                _core._consume_matching_pending_input(session_id, text)
-                confirmed = dict(app_result)
-                confirmed["confirmed"] = True
-                confirmed["confirmation_source"] = "app-server-notification"
-                return confirmed
-            accepted_via = app_result.get("via")
-            queued.update({
-                key: value
-                for key, value in app_result.items()
-                if key not in ("via", "queued", "queued_reason", "error")
-            })
-            if accepted_via:
-                queued["accepted_via"] = accepted_via
-            queued["queued"] = True
-            queued["queued_reason"] = reason
-            return queued
+        # Accepted means the engine already started this turn. Re-queueing
+        # the same text (especially a lone "continue") fires a second turn
+        # when the first completes — the unattended quota burn. Still queue
+        # below when the turn was not accepted.
         return app_result
     if app_result.get("fallback") == "queue":
         if _from_queue:
