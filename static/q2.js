@@ -1486,6 +1486,9 @@
       + (busy ? ' disabled' : '') + '>'
       + '<button type="button" class="q2-btn q2-btn-primary" data-q2-attend-answer-send'
       + (busy ? ' disabled' : '') + '>' + (busy ? 'Sending&hellip;' : 'Send') + '</button>'
+      + '<button type="button" class="q2-btn q2-btn-ghost q2-attend-skip" data-q2-attend-skip'
+      + (busy ? ' disabled' : '') + ' title="Let the attendant use its own judgment and move on">'
+      + 'Skip' + '</button>'
       + '</div>'
       + (state.attendAnswerError ? '<div class="q2-attend-error">' + esc(state.attendAnswerError) + '</div>' : '')
       + '</div>';
@@ -3183,6 +3186,14 @@
         var attendInput = document.querySelector('[data-q2-attend-draft="answer"]');
         var attendText = attendInput ? String(attendInput.value || '').trim() : '';
         if (attendText) answerAttendQuestion(attendText);
+      }
+      return;
+    }
+    var attendSkipBtn = e.target.closest('[data-q2-attend-skip]');
+    if (attendSkipBtn) {
+      e.stopPropagation();
+      if (!attendSkipBtn.disabled) {
+        answerAttendQuestion('Skip -- use your own best judgment, proceed without waiting on me, and do not re-ask this.');
       }
       return;
     }
