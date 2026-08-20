@@ -6561,6 +6561,28 @@
       _liveStripLastKeyTs = Date.now();
     }
   }, true);
+  // Two independent tail-anchor mechanisms share $view: the live-tool
+  // status card (this function, ~1s poll) and the streaming text bubble
+  // (per-SSE-chunk, see ensureStreamingBubble). Each one wants to be
+  // $view's literal last child and re-appends itself there whenever it
+  // isn't — so whichever one last ran shoves the other out of "last",
+  // which then reclaims it on its own next tick. That ping-pong visibly
+  // jittered both the streamed text and the tool activity card, moving
+  // up and down every tick with no real content change. Skip the reclaim
+  // when the only thing currently displacing `el` is the other transient
+  // node — only move it when genuinely new committed content (a JSONL
+  // row) landed after it.
+  function _reanchorToTailUnlessOnlyTransientBetween($view, el) {
+    if (!el || el.parentNode !== $view || el === $view.lastElementChild) return;
+    for (let n = el.nextElementSibling; n; n = n.nextElementSibling) {
+      if (!n.classList || !(n.classList.contains('stream-bubble')
+        || n.classList.contains('conv-live-tool-inline')
+        || n.classList.contains('conv-live-tool-strip'))) {
+        $view.appendChild(el);
+        return;
+      }
+    }
+  }
   function updateLiveToolStrip() {
     // Skip only while the user is actively typing (keystroke in the last
     // 1.5s). The per-tick querySelectorAll + innerHTML write can stall
@@ -6822,9 +6844,7 @@
           });
         }
       }
-      if (inline.parentElement !== $view || inline !== $view.lastElementChild) {
-        $view.appendChild(inline);
-      }
+      _reanchorToTailUnlessOnlyTransientBetween($view, inline);
       _liveStripShown = true;
       return;
     }
@@ -6862,9 +6882,7 @@
       inline.title = _activeItem.label
         ? ('Codex is running: ' + _activeItem.label + (_activeItem.detail ? ' - ' + _activeItem.detail : '') + (_tokTxt ? ' (' + _tokTxt + ')' : ''))
         : ('Session is live - model is generating' + (_tokTxt ? ' (' + _tokTxt + ')' : ''));
-      if (inline.parentElement !== $view || inline !== $view.lastElementChild) {
-        $view.appendChild(inline);
-      }
+      _reanchorToTailUnlessOnlyTransientBetween($view, inline);
       _liveStripShown = true;
       return;
     }
@@ -6919,9 +6937,7 @@
       + (isQuestion ? detailHtml : '')
       + (showWakeBtn ? '<button type="button" class="cl-agy-wake-btn" title="Session looks stuck - push a wake message to Antigravity">Push input</button>' : '');
     inline.innerHTML = expandHtml;
-    if (inline.parentElement !== $view || inline !== $view.lastElementChild) {
-      $view.appendChild(inline);
-    }
+    _reanchorToTailUnlessOnlyTransientBetween($view, inline);
     _liveStripShown = true;
   }
 
@@ -41142,10 +41158,10 @@
       clearTimeout(_staleBubbleClearTimer);
       _staleBubbleClearTimer = null;
     }
-    // Re-anchor to the bottom in case JSONL events were appended after us.
-    if (node.parentNode === $view && node !== $view.lastElementChild) {
-      $view.appendChild(node);
-    }
+    // Re-anchor to the bottom in case JSONL events were appended after us
+    // (but not just because the live-tool status card reclaimed "last" on
+    // its own poll tick — see _reanchorToTailUnlessOnlyTransientBetween).
+    _reanchorToTailUnlessOnlyTransientBetween($view, node);
     // Subagent activity bumps the lastSeen timestamp so a flurry of blocks
     // doesn't trip the auto-close watchdog mid-stream.
     if (isSubagent) {
