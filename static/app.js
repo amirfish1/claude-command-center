@@ -40964,6 +40964,7 @@
   }
 
   function clearStreamingBubble(opts) {
+    flushScheduledStreamTextRenders();
     if (_streamingBubbleLingerTimer) {
       clearTimeout(_streamingBubbleLingerTimer);
       _streamingBubbleLingerTimer = null;
@@ -41153,6 +41154,29 @@
     return node.querySelector('.stream-bubble-blocks');
   }
 
+  // Coalesce rapid SSE text deltas: markdown re-parse + innerHTML write is
+  // O(message length) per call, so doing it on every chunk flickers/janks
+  // on long streamed replies. Collapse bursts to one write per frame.
+  const _scheduledStreamTextEls = new Set();
+  function scheduleStreamTextRender(el) {
+    if (_scheduledStreamTextEls.has(el)) return;
+    _scheduledStreamTextEls.add(el);
+    requestAnimationFrame(() => {
+      _scheduledStreamTextEls.delete(el);
+      el.innerHTML = renderMarkdown(el.dataset.raw || '');
+    });
+  }
+
+  // Called before a streaming bubble is cleared/handed off, so the last
+  // accumulated chunk isn't dropped while its render is still pending.
+  function flushScheduledStreamTextRenders() {
+    if (!_scheduledStreamTextEls.size) return;
+    for (const el of _scheduledStreamTextEls) {
+      el.innerHTML = renderMarkdown(el.dataset.raw || '');
+    }
+    _scheduledStreamTextEls.clear();
+  }
+
   function handleSpawnEvents(events, paneId, convId, streamSid) {
     if (!Array.isArray(events)) return;
     const pane = paneId ? paneByPaneId(paneId) : null;
@@ -41188,7 +41212,7 @@
           if (last && last.classList.contains('stream-block-text')) {
             const raw = (last.dataset.raw || '') + (b.text || '');
             last.dataset.raw = raw;
-            last.innerHTML = renderMarkdown(raw);
+            scheduleStreamTextRender(last);
           } else {
             const div = document.createElement('div');
             div.className = 'stream-block-text assistant-text';
