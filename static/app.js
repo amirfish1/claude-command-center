@@ -44224,6 +44224,25 @@
         openModelPicker(modelBtn);
       });
     }
+    // Live-mirror this pane's context % into its sidebar row badge (CCC-892):
+    // the sidebar .conv-pct-badge otherwise only refreshes on the next
+    // polled conversation-list render/patch, so an actively-streaming
+    // session showed a stale sidebar % while the strip right above it
+    // already had the live count. Same pct formula as _convRowContextPct so
+    // the number matches once the next real poll lands.
+    const _sidebarSid = _usageSessionIdByPane[paneId];
+    if (_sidebarSid && displayTokens) {
+      const sidebarPct = (hasLiveContext && livePct) ? livePct : calcPct;
+      const sidebarTip = sourceLabel + ' ' + displayTokens.toLocaleString() + ' / ' + limit.toLocaleString() + ' tokens - click to run /compact';
+      document.querySelectorAll('.conv-item[data-session-id="' + CSS.escape(_sidebarSid) + '"] [data-role="conv-pct-compact"]').forEach(el => {
+        if (el.dataset.pct !== String(sidebarPct)) el.dataset.pct = String(sidebarPct);
+        if (el.title !== sidebarTip) el.title = sidebarTip;
+        const text = sidebarPct + '%';
+        if (el.textContent !== text) el.textContent = text;
+        el.classList.toggle('is-danger', sidebarPct > 60);
+        el.classList.toggle('is-warn', sidebarPct > 30 && sidebarPct <= 60);
+      });
+    }
     // Mirror rendered HTML into any OTHER pane that shows the same session.
     const _mirrorSid = _usageSessionIdByPane[paneId];
     if (_mirrorSid && typeof splitState !== 'undefined') {
