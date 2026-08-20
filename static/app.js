@@ -45336,8 +45336,8 @@
     }
     if (isCommandActivityTool(displayName)) {
       const full = fullCommandSummaryLabel(detail);
-      const verb = tc.classList.contains('tool-call-ok') ? 'Completed ' : 'Ran ';
-      return full ? verb + full : verb + 'shell command';
+      const verb = tc.classList.contains('tool-call-ok') ? '' : 'Ran ';
+      return full ? verb + full : (verb || 'Ran ') + 'shell command';
     }
     if (source) {
       return detail
@@ -45718,7 +45718,7 @@
       const raw = out.textContent.replace(/^\[J[^\]]*\]\s{0,2}/, '');
       const line = raw.split('\n').map(l => l.trim()).find(Boolean);
       if (!line) return 'no output';
-      return line.length > 44 ? line.slice(0, 43) + '…' : line;
+      return line.length > 90 ? line.slice(0, 89) + '…' : line;
     }
     if (tc.querySelector('.tool-result-code-preview')) return '';
     return '';

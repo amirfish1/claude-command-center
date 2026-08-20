@@ -3270,7 +3270,7 @@
   /* CCC-501: a short hint of what the command actually returned, right of the
      label — "Completed git status" alone gave no sense of the outcome. */
   .conversations-view .tool-call-group-header .tcg-result {
-    flex-shrink: 0; max-width: 34%; overflow: hidden; text-overflow: ellipsis;
+    flex-shrink: 0; max-width: 50%; overflow: hidden; text-overflow: ellipsis;
     white-space: nowrap; opacity: 0.6; font-size: 12px; font-style: italic;
   }
   .conversations-view .tool-call-group-header .tcg-result:empty { display: none; }
