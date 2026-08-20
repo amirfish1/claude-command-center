@@ -8049,6 +8049,7 @@ def build_ccc_health():
         "uptime_s": round(time.time() - _SERVER_START_TS),
         "pid": os.getpid(),
         "resume": _resume_ledger_stats(),
+        "stray_processes_reaped": _stray_reaper_recent_entries(),
     }
 
 
@@ -39983,6 +39984,13 @@ _pending_inputs_watcher_lock_file = None
 _pending_inputs_watcher_retry_started = False
 _codex_queue_pump_locks = {}
 _codex_queue_pump_locks_guard = threading.Lock()
+# Per-session opt-in for unattended auto-resume ("continue") pokes. Default
+# is NOT opted in -- see CCC-863 zombie-process incident (a leaked process
+# running pre-fix code injected literal "continue" into a live Codex session
+# 118 times because that path used to be opt-out). Persisted alongside the
+# resume/terminal queues in PENDING_INPUTS_FILE so it survives a restart.
+_auto_resume_opt_in: dict = {}   # session_id → True
+_auto_resume_opt_in_lock = threading.Lock()
 
 
 def _acquire_pending_inputs_watcher_lock(lock_path):
@@ -40050,6 +40058,12 @@ def _load_pending_inputs():
                 empty.append(sid)
         for sid in empty:
             _pending_terminal_input_queue.pop(sid, None)
+    with _auto_resume_opt_in_lock:
+        flags = data.get("auto_resume_opt_in")
+        if isinstance(flags, dict):
+            _auto_resume_opt_in.update(
+                {str(sid): True for sid, v in flags.items() if v}
+            )
     if stripped:
         _save_pending_inputs()
 def _save_pending_inputs():
@@ -40070,9 +40084,12 @@ def _save_pending_inputs():
                 for sid, queue in _pending_terminal_input_queue.items()
             }
             tq = {sid: queue for sid, queue in tq.items() if queue}
+        with _auto_resume_opt_in_lock:
+            opt_in = dict(_auto_resume_opt_in)
         payload = {
             "resume_queue": rq,
             "terminal_queue": tq,
+            "auto_resume_opt_in": opt_in,
         }
         try:
             PENDING_INPUTS_FILE.parent.mkdir(parents=True, exist_ok=True)
@@ -40084,6 +40101,45 @@ def _save_pending_inputs():
             print(f"  [pending-inputs] save failed: {e}")
             return False
     return True
+
+
+def _is_auto_resume_opted_in(session_id):
+    """True only when `session_id` has explicitly opted in to unattended
+    auto-resume ("continue") pokes. Default is NOT opted in -- see CCC-863
+    zombie-process incident (opt-out by default is how a leaked process
+    running pre-fix code burned a weekly quota unattended)."""
+    if not session_id:
+        return False
+    with _auto_resume_opt_in_lock:
+        return bool(_auto_resume_opt_in.get(str(session_id)))
+
+
+def _set_auto_resume_opt_in(session_id, value=True):
+    """Durably set (or clear) the per-session auto-resume opt-in flag."""
+    if not session_id:
+        return
+    with _auto_resume_opt_in_lock:
+        if value:
+            _auto_resume_opt_in[str(session_id)] = True
+        else:
+            _auto_resume_opt_in.pop(str(session_id), None)
+    _save_pending_inputs()
+
+
+def _apply_spawn_auto_resume_opt_in(payload, result):
+    """Wire /api/sessions/spawn's `"auto_resume": true` field to the durable
+    opt-in flag on the freshly spawned session. This is the main legitimate
+    use case: a WatchTower queue-drain worker that is SUPPOSED to keep
+    draining and should be nudged after a transient error opts in at spawn
+    time, rather than every session getting unattended "continue" pokes by
+    default. No-op when the spawn failed or the field was not requested."""
+    if not isinstance(result, dict) or not result.get("ok"):
+        return
+    if not payload.get("auto_resume"):
+        return
+    session_id = result.get("session_id")
+    if session_id:
+        _set_auto_resume_opt_in(session_id, True)
 
 
 class _PendingInputHandoff(str):
@@ -41735,6 +41791,194 @@ def _verify_terminal_drain_receipts(now=None):
             )
 
 
+# ── Stray process reaper ────────────────────────────────────────────────────
+# A leaked server.py/ccc_worker.py process (e.g. escaped from a test harness
+# with a faked $HOME) can sit around for days running stale code — and if it
+# wins the pending-inputs watcher flock, that stale code runs with authority
+# over live sessions. Incident: a 5-day-old orphan ran pre-fix auto-resume
+# code and injected "continue" into a live Codex session 118 times before
+# anyone noticed. This reaper runs inside the same watcher tick that already
+# owns that flock, throttled to once per _STRAY_REAPER_INTERVAL_S so it never
+# slows the 5s tick, and kills any candidate PID that: matches this repo's
+# absolute server.py/ccc_worker.py path, is not this process, is not the
+# dashboard's or worker's own launchd-managed PID, is not an
+# --archive-refresh-worker child (this dashboard's own short-lived helper),
+# and has been alive longer than _STRAY_REAPER_AGE_THRESHOLD_S.
+_STRAY_REAPER_INTERVAL_S = 60
+_STRAY_REAPER_AGE_THRESHOLD_S = 600
+_STRAY_REAPER_LAST_RUN = {"ts": 0.0}
+_STRAY_REAPER_LOG = []
+_STRAY_REAPER_LOG_LOCK = threading.Lock()
+_STRAY_REAPER_LAUNCHD_LABELS = (
+    "com.github.claude-command-center",
+    "com.github.claude-command-center.worker",
+)
+_STRAY_REAPER_PID_RE = re.compile(r'"PID"\s*=\s*(\d+);')
+
+
+def _stray_reaper_recent_entries():
+    """Last N reaped-process entries for /api/health. Never raises."""
+    with _STRAY_REAPER_LOG_LOCK:
+        return list(_STRAY_REAPER_LOG[-20:])
+
+
+def _stray_reaper_target_paths():
+    """Absolute paths of this repo's server.py and ccc_worker.py."""
+    base = os.path.dirname(os.path.abspath(__file__))
+    return (
+        os.path.join(base, "server.py"),
+        os.path.join(base, "ccc_worker.py"),
+    )
+
+
+def _stray_reaper_candidate_pids():
+    """PIDs of any process whose command line mentions this repo's
+    server.py or ccc_worker.py by absolute path. Never raises."""
+    pids = set()
+    for path in _stray_reaper_target_paths():
+        try:
+            out = subprocess.run(
+                ["pgrep", "-f", path],
+                capture_output=True, text=True, timeout=5,
+            ).stdout
+        except Exception:
+            continue
+        for line in (out or "").splitlines():
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                pids.add(int(line))
+            except ValueError:
+                pass
+    return pids
+
+
+def _stray_reaper_pid_args(pid):
+    """Full command line for `pid`, or "" if the process is already gone."""
+    try:
+        out = subprocess.run(
+            ["ps", "-p", str(pid), "-o", "args="],
+            capture_output=True, text=True, timeout=5,
+        ).stdout
+    except Exception:
+        return ""
+    return (out or "").strip()
+
+
+def _stray_reaper_pid_age_s(pid, now):
+    """Seconds since `pid` started, or None if unknown (never guess)."""
+    try:
+        out = subprocess.run(
+            ["ps", "-p", str(pid), "-o", "lstart="],
+            capture_output=True, text=True, timeout=5,
+        ).stdout
+    except Exception:
+        return None
+    raw = (out or "").strip()
+    if not raw:
+        return None
+    try:
+        started = datetime.strptime(raw, "%a %b %d %H:%M:%S %Y")
+    except ValueError:
+        return None
+    return now - started.timestamp()
+
+
+def _stray_reaper_legitimate_pids():
+    """PIDs launchd already recognizes as this dashboard's or worker's own,
+    plus this process itself. A failed/absent launchctl lookup just means
+    nothing is excluded from that label -- never raises."""
+    legit = {os.getpid()}
+    for label in _STRAY_REAPER_LAUNCHD_LABELS:
+        try:
+            out = subprocess.run(
+                ["launchctl", "list", label],
+                capture_output=True, text=True, timeout=5,
+            ).stdout
+        except Exception:
+            continue
+        m = _STRAY_REAPER_PID_RE.search(out or "")
+        if m:
+            try:
+                legit.add(int(m.group(1)))
+            except ValueError:
+                pass
+    return legit
+
+
+def _stray_reaper_wait_for_death(pid, checks=6, interval=0.5):
+    """Poll for up to ~checks*interval seconds for `pid` to exit."""
+    for _ in range(checks):
+        try:
+            os.kill(pid, 0)
+        except ProcessLookupError:
+            return True
+        except Exception:
+            pass
+        time.sleep(interval)
+    return False
+
+
+def _stray_reaper_reap(pid, args, age_s):
+    """SIGTERM, then SIGKILL if still alive after the poll window. Never
+    raises -- a kill race (already gone) or a permission failure (not ours
+    to kill) just means no log entry."""
+    try:
+        os.kill(pid, signal.SIGTERM)
+    except (ProcessLookupError, PermissionError):
+        return
+    if not _stray_reaper_wait_for_death(pid):
+        try:
+            os.kill(pid, signal.SIGKILL)
+        except ProcessLookupError:
+            pass
+        except PermissionError:
+            return
+    entry = {
+        "pid": pid,
+        "args": args,
+        "age_s": round(age_s),
+        "killed_at": time.time(),
+    }
+    with _STRAY_REAPER_LOG_LOCK:
+        _STRAY_REAPER_LOG.append(entry)
+        del _STRAY_REAPER_LOG[:-20]
+    print(f"[stray-reaper] killed pid {pid} (alive {round(age_s)}s): {args}", flush=True)
+
+
+def _stray_reaper_scan_and_reap(now):
+    legitimate = _stray_reaper_legitimate_pids()
+    for pid in _stray_reaper_candidate_pids():
+        if pid in legitimate:
+            continue
+        args = _stray_reaper_pid_args(pid)
+        if not args:
+            continue  # race: already gone
+        if "--archive-refresh-worker" in args:
+            continue  # this dashboard's own short-lived archive-refresh child
+        age_s = _stray_reaper_pid_age_s(pid, now)
+        if age_s is None:
+            continue  # unknown age: never guess, skip
+        if age_s <= _STRAY_REAPER_AGE_THRESHOLD_S:
+            continue
+        _stray_reaper_reap(pid, args, age_s)
+
+
+def _run_stray_process_reaper_once(now=None):
+    """Throttled entry point for the resume-queue watcher tick. Internally
+    caps itself to once per _STRAY_REAPER_INTERVAL_S so the caller's 5s tick
+    stays fast; never raises."""
+    now = now if now is not None else time.time()
+    if now - _STRAY_REAPER_LAST_RUN["ts"] < _STRAY_REAPER_INTERVAL_S:
+        return
+    _STRAY_REAPER_LAST_RUN["ts"] = now
+    try:
+        _stray_reaper_scan_and_reap(now)
+    except Exception:
+        pass
+
+
 def _start_resume_queue_watcher() -> None:
     """Drain queued prompts once fire-and-watch engines or live terminal sessions go idle."""
     global _pending_inputs_watcher_lock_file, _pending_inputs_watcher_retry_started
@@ -41788,6 +42032,9 @@ def _start_resume_queue_watcher() -> None:
             # conversation's automatic continuation instead of racing it.
             _run_codex_recovery_watchdog_once()
             _run_auto_handover_watchdog_once()
+            # Throttled internally to once per _STRAY_REAPER_INTERVAL_S; safe
+            # to call every tick.
+            _run_stray_process_reaper_once()
             with _pending_resume_lock:
                 queued_sids = list(_pending_resume_queue.keys())
             for sid in queued_sids:
@@ -67279,6 +67526,12 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                         result["report_to"] = report_to
                     if parent_session_id and isinstance(result, dict):
                         result["parent_session_id"] = parent_session_id
+                    # Opt in to unattended auto-resume ("continue") pokes at
+                    # spawn time -- the main legitimate use case is a
+                    # WatchTower queue-drain worker that should be nudged
+                    # after a transient error. Default (field absent) stays
+                    # opted out (CCC-863 zombie-process incident).
+                    _apply_spawn_auto_resume_opt_in(payload, result)
                     if result.get("ok"):
                         _log_activity(
                             "spawn", "SPAWN",

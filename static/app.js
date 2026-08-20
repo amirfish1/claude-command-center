@@ -342,11 +342,48 @@
       warmPct < 50 ? 'ccchealth-crit' : (warmPct < 80 ? 'ccchealth-warn' : 'ccchealth-ok'),
       cacheTitle);
   }
+  // Persisted across reloads so a page refresh doesn't re-toast a stray-kill
+  // the health poll already reported once. Keyed by "pid:killed_at" since a
+  // pid can be reused across separate reap events.
+  const STRAY_REAP_SEEN_KEY = 'ccc-seen-stray-reaps';
+  function _loadSeenStrayReaps() {
+    try { return new Set(JSON.parse(localStorage.getItem(STRAY_REAP_SEEN_KEY) || '[]')); }
+    catch (_) { return new Set(); }
+  }
+  function _saveSeenStrayReaps(set) {
+    try {
+      // Cap so this can't grow unbounded across a long-running dashboard tab.
+      const arr = Array.from(set).slice(-200);
+      localStorage.setItem(STRAY_REAP_SEEN_KEY, JSON.stringify(arr));
+    } catch (_) { /* localStorage full/unavailable — best effort only */ }
+  }
+  let _seenStrayReaps = null;
+  function _reportStrayReaps(entries) {
+    if (!Array.isArray(entries) || !entries.length) return;
+    if (_seenStrayReaps === null) _seenStrayReaps = _loadSeenStrayReaps();
+    let changed = false;
+    for (const entry of entries) {
+      if (!entry || entry.killed_at == null || entry.pid == null) continue;
+      const key = entry.pid + ':' + entry.killed_at;
+      if (_seenStrayReaps.has(key)) continue;
+      _seenStrayReaps.add(key);
+      changed = true;
+      const ageMin = Math.round((entry.age_s || 0) / 60);
+      if (typeof showOpToast === 'function') {
+        showOpToast('Killed stray CCC process (pid ' + entry.pid + ', alive ' + ageMin + 'm)', 'error');
+      }
+    }
+    if (changed) _saveSeenStrayReaps(_seenStrayReaps);
+  }
   function _startHealthPoll(host) {
     const tick = _gated('cccHealth', function () {
       return fetch('/api/health', { cache: 'no-store' })
         .then((r) => (r.ok ? r.json() : null))
-        .then((h) => { if (h) _renderHealth(host, h); })
+        .then((h) => {
+          if (!h) return;
+          _renderHealth(host, h);
+          _reportStrayReaps(h.stray_processes_reaped);
+        })
         .catch(() => {});
     });
     tick();

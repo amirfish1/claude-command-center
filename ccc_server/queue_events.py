@@ -810,6 +810,20 @@ def _queue_codex_resume(session_id, text, pid=None, reason=None, *, only_if_pend
     with _core._pending_resume_lock:
         if only_if_pending and not _core._pending_resume_queue.get(session_id):
             return None
+        # The unattended auto-resume marker ("continue") is opt-in per
+        # session (CCC-863 zombie-process incident: opt-out by default let a
+        # leaked stale process burn a weekly quota unattended). Real user
+        # text is never gated here.
+        if (
+            _core._is_unattended_auto_continue(text)
+            and not _core._is_auto_resume_opted_in(session_id)
+        ):
+            return {
+                "ok": False,
+                "queued": False,
+                "error": "auto-resume not opted in for this session",
+                "auto_resume_opt_in_required": True,
+            }
         queue = _core._pending_resume_queue.setdefault(session_id, [])
         # Deduplicate identical text so a slow-to-confirm delivery (e.g. a
         # verifier report landing on a finished Codex thread) cannot pile up
