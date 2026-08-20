@@ -21659,13 +21659,66 @@ body.ccc-simple-mode .simple-toast.is-error {
 }
 body.ccc-simple-mode .simple-toast[hidden] { display: none; }
 
-/* --- Home sections --- */
+/* --- Home sections: reorderable + collapsible --- */
 body.ccc-simple-mode .simple-section { margin-top: 22px; }
+body.ccc-simple-mode .simple-section-head {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+body.ccc-simple-mode .simple-section-drag {
+  flex: 0 0 auto;
+  width: 32px;
+  height: 32px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: none;
+  background: transparent;
+  color: var(--text-muted);
+  cursor: grab;
+  touch-action: none;
+  border-radius: 8px;
+}
+body.ccc-simple-mode .simple-section-drag:hover { background: var(--surface-2); color: var(--text); }
+body.ccc-simple-mode .simple-section-toggle {
+  flex: 1 1 auto;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  border: none;
+  background: transparent;
+  padding: 4px 2px;
+  cursor: pointer;
+  text-align: left;
+}
 body.ccc-simple-mode .simple-section .simple-h2 {
   font-size: 18px;
   font-weight: 700;
-  margin: 0 0 10px;
+  margin: 0;
   color: var(--text);
+}
+body.ccc-simple-mode .simple-section-chevron {
+  flex: 0 0 auto;
+  color: var(--text-muted);
+  transition: transform 0.15s;
+}
+body.ccc-simple-mode .simple-section-body {
+  margin-top: 10px;
+}
+/* Collapsed: only the heading row shows. */
+body.ccc-simple-mode .simple-section-collapsed .simple-section-body { display: none; }
+body.ccc-simple-mode .simple-section-collapsed .simple-section-chevron { transform: rotate(-90deg); }
+/* Dragging: lift the section above its siblings while it follows the pointer
+   (transform applied inline by _wireSimpleSectionDrag() in app.js). */
+body.ccc-simple-mode .simple-section-dragging {
+  position: relative;
+  z-index: 5;
+  opacity: 0.92;
+  box-shadow: 0 8px 24px rgba(0,0,0,0.28);
+  border-radius: 12px;
+  background: var(--surface);
 }
 body.ccc-simple-mode .simple-empty {
   font-size: 15px;

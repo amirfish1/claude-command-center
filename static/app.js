@@ -11893,11 +11893,127 @@
     render(pct === null ? fallbackPct : pct, cost);
   }
 
+  // ── Home sections: user-orderable + collapsible ──
+  // (Needs you / Working on it / Finished). Order and collapsed state persist
+  // in localStorage as a real preference — not per-session like the
+  // technical strip. The composer card above them is pinned first and is
+  // neither draggable nor collapsible; it's the primary action.
+  var _SIMPLE_SECTION_ORDER_KEY = 'ccc-simple-section-order';
+  var _SIMPLE_SECTION_COLLAPSED_KEY = 'ccc-simple-section-collapsed';
+  var _SIMPLE_DEFAULT_SECTION_ORDER = ['needs-you', 'working', 'finished'];
+  var _simpleCollapsedSections = _simpleLoadCollapsedSections();
+
+  function _simpleLoadCollapsedSections() {
+    try {
+      const arr = JSON.parse(localStorage.getItem(_SIMPLE_SECTION_COLLAPSED_KEY) || '[]');
+      return new Set(Array.isArray(arr) ? arr : []);
+    } catch (_) { return new Set(); }
+  }
+  function _simpleSaveCollapsedSections() {
+    try { localStorage.setItem(_SIMPLE_SECTION_COLLAPSED_KEY, JSON.stringify(Array.from(_simpleCollapsedSections))); } catch (_) {}
+  }
+  function _simpleApplyCollapsedState() {
+    document.querySelectorAll('#simpleHome [data-simple-section]').forEach((el) => {
+      const id = el.getAttribute('data-simple-section');
+      const collapsed = _simpleCollapsedSections.has(id);
+      el.classList.toggle('simple-section-collapsed', collapsed);
+      const toggle = el.querySelector('.simple-section-toggle');
+      if (toggle) toggle.setAttribute('aria-expanded', collapsed ? 'false' : 'true');
+    });
+  }
+  function _simpleToggleSectionCollapse(id) {
+    if (_simpleCollapsedSections.has(id)) _simpleCollapsedSections.delete(id);
+    else _simpleCollapsedSections.add(id);
+    _simpleSaveCollapsedSections();
+    _simpleApplyCollapsedState();
+  }
+  function _simpleLoadSectionOrder() {
+    let saved = [];
+    try { saved = JSON.parse(localStorage.getItem(_SIMPLE_SECTION_ORDER_KEY) || '[]'); } catch (_) {}
+    const order = (Array.isArray(saved) ? saved : []).filter((id) => _SIMPLE_DEFAULT_SECTION_ORDER.indexOf(id) !== -1);
+    _SIMPLE_DEFAULT_SECTION_ORDER.forEach((id) => { if (order.indexOf(id) === -1) order.push(id); });
+    return order;
+  }
+  function _simpleApplySectionOrder() {
+    const home = document.getElementById('simpleHome');
+    if (!home) return;
+    _simpleLoadSectionOrder().forEach((id) => {
+      const el = home.querySelector('[data-simple-section="' + id + '"]');
+      if (el) home.appendChild(el);   // appendChild on an existing child moves it
+    });
+  }
+  function _simpleSaveSectionOrderFromDom() {
+    const order = Array.from(document.querySelectorAll('#simpleHome [data-simple-section]'))
+      .map((el) => el.getAttribute('data-simple-section'));
+    try { localStorage.setItem(_SIMPLE_SECTION_ORDER_KEY, JSON.stringify(order)); } catch (_) {}
+  }
+  // Drag-to-reorder via Pointer Events (not HTML5 dragstart/drop — that API
+  // doesn't fire reliably on touch browsers, and this is a mobile-first
+  // surface). Dragging the handle moves the whole section; siblings swap in
+  // live as the dragged section's center crosses their midpoint.
+  function _wireSimpleSectionDrag() {
+    const home = document.getElementById('simpleHome');
+    if (!home) return;
+    let dragEl = null, startClientY = 0, startTop = 0, pointerId = null;
+    home.addEventListener('pointerdown', (ev) => {
+      const handle = ev.target.closest('.simple-section-drag');
+      if (!handle) return;
+      dragEl = handle.closest('[data-simple-section]');
+      if (!dragEl) return;
+      ev.preventDefault();
+      pointerId = ev.pointerId;
+      startClientY = ev.clientY;
+      startTop = dragEl.getBoundingClientRect().top;
+      dragEl.classList.add('simple-section-dragging');
+      try { handle.setPointerCapture(pointerId); } catch (_) {}
+    });
+    home.addEventListener('pointermove', (ev) => {
+      if (!dragEl || ev.pointerId !== pointerId) return;
+      const dy = ev.clientY - startClientY;
+      dragEl.style.transform = 'translateY(' + dy + 'px)';
+      const draggedMid = startTop + dy + dragEl.offsetHeight / 2;
+      const siblings = Array.from(home.querySelectorAll('[data-simple-section]')).filter((el) => el !== dragEl);
+      for (const sib of siblings) {
+        const rect = sib.getBoundingClientRect();
+        const sibMid = rect.top + rect.height / 2;
+        const draggedIsBefore = !!(dragEl.compareDocumentPosition(sib) & Node.DOCUMENT_POSITION_FOLLOWING);
+        if (draggedIsBefore && draggedMid > sibMid) {
+          home.insertBefore(dragEl, sib.nextSibling);
+          startTop = dragEl.getBoundingClientRect().top - dy;
+          break;
+        } else if (!draggedIsBefore && draggedMid < sibMid) {
+          home.insertBefore(dragEl, sib);
+          startTop = dragEl.getBoundingClientRect().top - dy;
+          break;
+        }
+      }
+    });
+    function endDrag(ev) {
+      if (!dragEl || (pointerId != null && ev.pointerId !== pointerId)) return;
+      dragEl.classList.remove('simple-section-dragging');
+      dragEl.style.transform = '';
+      _simpleSaveSectionOrderFromDom();
+      dragEl = null;
+      pointerId = null;
+    }
+    home.addEventListener('pointerup', endDrag);
+    home.addEventListener('pointercancel', endDrag);
+  }
+
   function _wireSimpleHome() {
     const home = document.getElementById('simpleHome');
     if (!home) return;
+    _simpleApplySectionOrder();
+    _simpleApplyCollapsedState();
+    _wireSimpleSectionDrag();
     // Chip + card clicks are delegated because rows re-render on refresh.
     home.addEventListener('click', (ev) => {
+      const sectionToggle = ev.target.closest('.simple-section-toggle');
+      if (sectionToggle) {
+        const section = sectionToggle.closest('[data-simple-section]');
+        if (section) _simpleToggleSectionCollapse(section.getAttribute('data-simple-section'));
+        return;
+      }
       const agentChip = ev.target.closest('[data-simple-agent]');
       if (agentChip) {
         _simpleComposer.engine = agentChip.getAttribute('data-simple-agent') || _simpleComposer.engine;
