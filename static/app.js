@@ -30727,7 +30727,7 @@
         && _archiveEngineAllowsRow(c, _arcEngineFilter)
     );
     const _allTabTrashConvs = _trashConvs.filter(
-      c => _archiveEngineAllowsRow(c, _arcEngineFilter)
+      c => _archiveEngineAllowsRow(c, _arcEngineFilter) && _archiveWindowAllowsRow(c, _ipWindowCutoff)
     );
     const _allTabGroupChatItems = _arcEngineFilter ? [] : (_gcItems || []);
     const _allTabUnfilteredCount = _allTabUnfilteredConvs.length
