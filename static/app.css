@@ -22339,6 +22339,21 @@ body:has(.gc-reader) .pwa-install-banner {
   margin-bottom: 16px !important;
   font-size: 14px !important;
 }
+/* The finalized row (.event.assistant .assistant-text, above) gets its own
+   font override that beats the base 16px/-apple-system rule via higher
+   specificity + !important. This bubble's own font-size:14px above only
+   reaches the text by inheritance, which loses to that base rule's more
+   specific *direct* selector on .assistant-text — so text rendered 16px
+   -apple-system while streaming, then visibly snapped to 14px Inter the
+   instant it finalized. Match it explicitly so streaming and finalized
+   text render identically and nothing reflows at hand-off. */
+.conv-pane[data-conv-bg="stitch"] .stream-bubble .assistant-text {
+  font-family: 'Inter', sans-serif !important;
+  font-size: 14px !important;
+  font-weight: 500 !important;
+  letter-spacing: 0.05em !important;
+  line-height: 1.6 !important;
+}
 
 /* Code block wrapping */
 .conv-pane[data-conv-bg="stitch"] .cb-wrap {
