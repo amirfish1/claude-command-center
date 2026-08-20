@@ -48372,8 +48372,15 @@
       // of replaying text the user already read in the streaming bubble.
       let handedOffStreamingBubble = false;
       if (ev.type === 'assistant' && ev.message_id) {
+        // .has(), not .delete(): "already shown live" must survive this
+        // row being rebuilt later (pane refresh, resync, scroll-reload of
+        // history) — a one-time consume protected only the FIRST render
+        // pass, so any later rebuild re-triggered the word-by-word reveal
+        // on text the user already read live. Bounded by
+        // MAX_STREAM_HANDOFF_MARKERS / conv-switch clear, so retaining
+        // entries here doesn't leak.
         if ($view._streamedAssistantMessageIds
-            && $view._streamedAssistantMessageIds.delete(ev.message_id)) {
+            && $view._streamedAssistantMessageIds.has(ev.message_id)) {
           handedOffStreamingBubble = true;
         }
         div.dataset.msgId = ev.message_id;
