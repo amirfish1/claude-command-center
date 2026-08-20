@@ -12115,6 +12115,12 @@
       position: fixed; inset: 0; z-index: 800; background: var(--bg);
       transform: translateX(100%); transition: transform 0.2s ease-out;
     }
+    /* While off-canvas (incl. mid slide-out animation) .main must not eat
+       taps destined for what is underneath — e.g. the simple-mode bottom
+       nav during the 0.2s transform transition after returning home. */
+    body:not(.kanban-split):not(.mobile-show-main) .main {
+      pointer-events: none;
+    }
     body:not(.kanban-split).mobile-show-main .main {
       transform: translateX(0);
     }
@@ -21489,15 +21495,18 @@ body.ccc-mobile-redesign.ccc-simple-mode .conv-item .mobile-details-panel {
 
 #simpleHome { display: none; }
 
-body.ccc-simple-mode.ccc-simple-home-open #simpleHome {
+/* Every visibility rule here is gated on ccc-mobile-redesign: Simple Home
+   is a mobile-breakpoint surface. A stored ccc-ui-mode=simple at desktop
+   width must fall back to the normal dashboard, not a squished home. */
+body.ccc-mobile-redesign.ccc-simple-mode.ccc-simple-home-open #simpleHome {
   display: block;
   flex: 1 1 auto;
   min-height: 0;
   overflow-y: auto;
   padding: 20px 16px 96px; /* bottom padding clears the mobile bottom nav */
 }
-body.ccc-simple-mode.ccc-simple-home-open #convSplit,
-body.ccc-simple-mode.ccc-simple-home-open #convToolbar {
+body.ccc-mobile-redesign.ccc-simple-mode.ccc-simple-home-open #convSplit,
+body.ccc-mobile-redesign.ccc-simple-mode.ccc-simple-home-open #convToolbar {
   display: none !important;
 }
 /* While home is open, the sidebar's only visible content is the slim
@@ -21756,4 +21765,249 @@ body.ccc-simple-mode #simpleUsageLine.has-data {
   color: var(--text);
   background: color-mix(in srgb, var(--accent) 8%, var(--surface));
   border-top: 1px solid var(--border);
+}
+
+/* ==========================================================================
+   SIMPLE UI — depth 2 (conversation) + depth 3 (history / automations /
+   settings) screens. Iteration 2 of the Simple-UI redesign: every screen
+   reachable within 3 taps of home must itself be simple, so opening a
+   conversation shows a plain chat surface (body.ccc-simple-conv-open,
+   toggled by _syncSimpleHomeVisibility() in app.js) and the depth-3 screens
+   (body.ccc-simple-screen-open) replace the advanced sidebar lists, queue
+   board, and settings modal. Advanced mode is untouched: every rule is
+   gated on body.ccc-mobile-redesign.ccc-simple-mode + one of those classes.
+   ========================================================================== */
+
+/* --- Depth-3 screens (same sidebar layer as #simpleHome) --- */
+.simple-screen { display: none; }
+body.ccc-mobile-redesign.ccc-simple-mode.ccc-simple-screen-open .simple-screen:not([hidden]) {
+  display: block;
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 20px 16px 96px; /* bottom padding clears the mobile bottom nav */
+}
+/* While a depth-3 screen is open, the sidebar's only visible content is the
+   slim header + that screen, and the conversation pane stays hidden — same
+   pattern as ccc-simple-home-open above. */
+body.ccc-mobile-redesign.ccc-simple-mode.ccc-simple-screen-open .sidebar > :not(.mobile-simple-header):not(.simple-screen) {
+  display: none !important;
+}
+body.ccc-mobile-redesign.ccc-simple-mode.ccc-simple-screen-open #convSplit,
+body.ccc-mobile-redesign.ccc-simple-mode.ccc-simple-screen-open #convToolbar {
+  display: none !important;
+}
+
+body.ccc-simple-mode .simple-screen > * {
+  max-width: 680px;
+  margin-left: auto;
+  margin-right: auto;
+}
+body.ccc-simple-mode .simple-screen-head {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 14px;
+}
+body.ccc-simple-mode .simple-screen-head .simple-h2 {
+  font-size: 20px;
+  font-weight: 700;
+  margin: 0;
+  color: var(--text);
+}
+body.ccc-simple-mode .simple-back-btn {
+  min-height: 48px;
+  padding: 8px 16px;
+  font-size: 16px;
+  font-weight: 600;
+  border: 2px solid var(--border);
+  border-radius: 12px;
+  background: var(--surface);
+  color: var(--text);
+  cursor: pointer;
+}
+body.ccc-simple-mode .simple-screen-sub {
+  font-size: 15px;
+  color: var(--text-muted);
+  margin: -6px 0 14px;
+}
+body.ccc-simple-mode .simple-search-input {
+  width: 100%;
+  min-height: 52px;
+  font-size: 16px;
+  padding: 10px 14px;
+  margin-bottom: 14px;
+  border: 2px solid var(--border);
+  border-radius: 12px;
+  background: var(--bg, var(--surface));
+  color: var(--text);
+  box-sizing: border-box;
+}
+body.ccc-simple-mode .simple-search-input:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+body.ccc-simple-mode .simple-h3 {
+  font-size: 17px;
+  font-weight: 700;
+  margin: 18px 0 10px;
+  color: var(--text);
+}
+body.ccc-simple-mode .simple-queue-item { margin-bottom: 10px; }
+body.ccc-simple-mode .simple-settings-row { margin-bottom: 14px; }
+body.ccc-simple-mode .simple-settings-label {
+  font-size: 17px;
+  font-weight: 700;
+  color: var(--text);
+  margin-bottom: 6px;
+}
+body.ccc-simple-mode .simple-settings-desc {
+  font-size: 15px;
+  line-height: 1.45;
+  color: var(--text-muted);
+  margin-bottom: 10px;
+}
+
+/* --- Depth-2 conversation view: simple chat surface --- */
+/* The conversation title span only exists for this view. */
+.simple-conv-title { display: none; }
+body.ccc-mobile-redesign.ccc-simple-mode.ccc-simple-conv-open .simple-conv-title {
+  display: block;
+  flex: 1 1 auto;
+  min-width: 0;
+  font-size: 17px;
+  font-weight: 700;
+  color: var(--text);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+/* In the simple conversation view the toolbar is just: back home, the plain
+   title, and the simple Actions menu. Every advanced control (topbar buttons,
+   breadcrumb, session id, font steppers, more menu, overflow, replay/launch/
+   live badges) is hidden. */
+body.ccc-mobile-redesign.ccc-simple-mode.ccc-simple-conv-open #convToolbar {
+  gap: 8px;
+  padding: 6px 10px;
+}
+body.ccc-mobile-redesign.ccc-simple-mode.ccc-simple-conv-open #convToolbar > :not(#simpleBackHomeBtn):not(#simpleConvTitle):not(.mobile-actions-wrap) {
+  display: none !important;
+}
+body.ccc-mobile-redesign.ccc-simple-mode.ccc-simple-conv-open #mobileBackBtn {
+  display: none !important;
+}
+/* Advanced pane chrome: pane header (proc pills, verbose/replay/annotate
+   actions), presentation toolbar, status rail, goal strip, and the input
+   context strip (folder pickers, worktree toggle, workspace/usage rows). */
+body.ccc-mobile-redesign.ccc-simple-mode.ccc-simple-conv-open .conv-pane-header,
+body.ccc-mobile-redesign.ccc-simple-mode.ccc-simple-conv-open .conv-presentation-toolbar,
+body.ccc-mobile-redesign.ccc-simple-mode.ccc-simple-conv-open #statusRail,
+body.ccc-mobile-redesign.ccc-simple-mode.ccc-simple-conv-open #statusRailRestoreBtn,
+body.ccc-mobile-redesign.ccc-simple-mode.ccc-simple-conv-open #convInputContext,
+body.ccc-mobile-redesign.ccc-simple-mode.ccc-simple-conv-open #convInputHint,
+body.ccc-mobile-redesign.ccc-simple-mode.ccc-simple-conv-open .conv-goal-strip,
+body.ccc-mobile-redesign.ccc-simple-mode.ccc-simple-conv-open [data-role="conv-f2-rail"],
+body.ccc-mobile-redesign.ccc-simple-mode.ccc-simple-conv-open [data-role="conv-f2-panel"] {
+  display: none !important;
+}
+/* Transcript noise: tool-call groups (already collapsed summaries), system
+   events, model/effort meta lines, per-turn cost. User + assistant bubbles
+   stay. All of this is the "technical strip" content: hidden by default,
+   revealed only when the user taps #simpleTechToggle for THIS open
+   conversation (body.ccc-simple-tech-open, set/cleared per session id by
+   _simpleSyncTechStrip() in app.js — see _simpleOnConversationOpen). Token/
+   context usage and the agent/model name shown in #simpleConvTitle are NOT
+   technical and are never gated by this class. */
+body.ccc-mobile-redesign.ccc-simple-mode.ccc-simple-conv-open:not(.ccc-simple-tech-open) .conversations-view .tool-call-group,
+body.ccc-mobile-redesign.ccc-simple-mode.ccc-simple-conv-open:not(.ccc-simple-tech-open) .conversations-view .event.system,
+body.ccc-mobile-redesign.ccc-simple-mode.ccc-simple-conv-open:not(.ccc-simple-tech-open) .conversations-view .event-model-meta,
+body.ccc-mobile-redesign.ccc-simple-mode.ccc-simple-conv-open:not(.ccc-simple-tech-open) .conversations-view .codex-ambient-context,
+body.ccc-mobile-redesign.ccc-simple-mode.ccc-simple-conv-open:not(.ccc-simple-tech-open) .conversations-view .event.result .stats .simple-tech-cost {
+  display: none !important;
+}
+/* Toggle button: lives in the depth-2 toolbar next to the plain title. */
+.simple-tech-toggle { display: none; }
+body.ccc-mobile-redesign.ccc-simple-mode.ccc-simple-conv-open .simple-tech-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  flex: 0 0 auto;
+  padding: 5px 10px;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  background: var(--panel-2, transparent);
+  color: var(--text-muted);
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+}
+body.ccc-mobile-redesign.ccc-simple-mode.ccc-simple-conv-open.ccc-simple-tech-open .simple-tech-toggle {
+  color: var(--text);
+  border-color: var(--accent, var(--border));
+}
+/* Plain chat bubbles: worker on the left, you on the right. */
+body.ccc-mobile-redesign.ccc-simple-mode.ccc-simple-conv-open .conversations-view .event.user_text,
+body.ccc-mobile-redesign.ccc-simple-mode.ccc-simple-conv-open .conversations-view .event.assistant {
+  max-width: 88%;
+  border-left: none;
+  border-radius: 16px;
+  padding: 12px 16px;
+  margin-bottom: 12px;
+  font-size: 16px;
+}
+body.ccc-mobile-redesign.ccc-simple-mode.ccc-simple-conv-open .conversations-view .event.user_text {
+  margin-left: auto;
+  background: color-mix(in srgb, var(--accent) 18%, var(--surface));
+  border: 1px solid color-mix(in srgb, var(--accent) 45%, var(--border));
+}
+body.ccc-mobile-redesign.ccc-simple-mode.ccc-simple-conv-open .conversations-view .event.assistant {
+  margin-right: auto;
+  background: var(--surface);
+  border: 1px solid var(--border);
+}
+body.ccc-mobile-redesign.ccc-simple-mode.ccc-simple-conv-open .conversations-view .event .label {
+  font-size: 12px;
+  letter-spacing: 0;
+  text-transform: none;
+}
+/* Simple composer: big textarea + a labeled Send button; the engine/model/
+   effort selectors and Esc/steer/compact/Submit+ buttons are advanced-only.
+   TTS (read aloud) and mic (speak instead of type) stay — both are
+   grandma-friendly. */
+body.ccc-mobile-redesign.ccc-simple-mode.ccc-simple-conv-open #convInputBar {
+  padding: 10px 12px calc(10px + env(safe-area-inset-bottom, 0px));
+}
+body.ccc-mobile-redesign.ccc-simple-mode.ccc-simple-conv-open #convExpandBtn,
+body.ccc-mobile-redesign.ccc-simple-mode.ccc-simple-conv-open .conv-input-selectors,
+body.ccc-mobile-redesign.ccc-simple-mode.ccc-simple-conv-open #convEscBtn,
+body.ccc-mobile-redesign.ccc-simple-mode.ccc-simple-conv-open #convSteerBtn,
+body.ccc-mobile-redesign.ccc-simple-mode.ccc-simple-conv-open #convCompactBtn,
+body.ccc-mobile-redesign.ccc-simple-mode.ccc-simple-conv-open #convSubmitPlusBtn,
+body.ccc-mobile-redesign.ccc-simple-mode.ccc-simple-conv-open #convTtsRateControl {
+  display: none !important;
+}
+body.ccc-mobile-redesign.ccc-simple-mode.ccc-simple-conv-open #convInput {
+  min-height: 56px;
+  font-size: 17px;
+  line-height: 1.45;
+  padding: 12px 14px;
+  border: 2px solid var(--border);
+  border-radius: 12px;
+}
+body.ccc-mobile-redesign.ccc-simple-mode.ccc-simple-conv-open #convInput:focus {
+  border-color: var(--accent);
+}
+.send-btn .send-btn-label { display: none; }
+body.ccc-mobile-redesign.ccc-simple-mode.ccc-simple-conv-open #convSendBtn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 84px;
+  min-height: 48px;
+  justify-content: center;
+  font-size: 16px;
+  font-weight: 700;
+}
+body.ccc-mobile-redesign.ccc-simple-mode.ccc-simple-conv-open #convSendBtn .send-btn-label {
+  display: inline;
 }

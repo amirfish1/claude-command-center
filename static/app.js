@@ -11115,9 +11115,16 @@
     try { tab = localStorage.getItem('ccc-sidebar-tab') || 'inprogress'; } catch (_) {}
     let activeNavKey = tab === 'archived' ? 'tasks' : tab === 'queues' ? 'automations' : 'home';
     // Simple Home open → the Home nav item is the current surface regardless
-    // of which sidebar tab is selected underneath.
-    if (typeof _simpleHomeShowing !== 'undefined' && _simpleHomeShowing && isSimpleMode()
+    // of which sidebar tab is selected underneath. A depth-3 simple screen
+    // (history/automations/settings) marks its own nav item instead.
+    if (isSimpleMode()) {
+      if (typeof _simpleScreen !== 'undefined' && _simpleScreen) {
+        activeNavKey = _simpleScreen === 'history' ? 'tasks'
+          : (_simpleScreen === 'automations' || _simpleScreen === 'automation-detail') ? 'automations'
+          : _simpleScreen === 'settings' ? 'more' : 'home';
+      } else if (typeof _simpleHomeShowing !== 'undefined' && _simpleHomeShowing
         && document.getElementById('simpleHome')) activeNavKey = 'home';
+    }
     nav.querySelectorAll('[data-mobile-nav]').forEach(btn => {
       const active = btn.getAttribute('data-mobile-nav') === activeNavKey;
       btn.classList.toggle('is-active', active);
@@ -11132,6 +11139,16 @@
       const btn = ev.target.closest('[data-mobile-nav]');
       if (!btn) return;
       const dest = btn.getAttribute('data-mobile-nav');
+      // Simple mode: every bottom-nav destination is a SIMPLE screen (the
+      // grandma test — nothing within 3 taps of home may be advanced UI).
+      // More → simple settings list; Tasks → simple history; Automations →
+      // simple queue list. None of them touch the advanced sidebar tabs.
+      if (isSimpleMode() && document.getElementById('simpleHome')) {
+        if (dest === 'home') { _simpleShowHome(); return; }
+        if (dest === 'tasks') { _simpleOpenScreen('history'); return; }
+        if (dest === 'automations') { _simpleOpenScreen('automations'); return; }
+        if (dest === 'more') { _simpleOpenScreen('settings'); return; }
+      }
       if (dest === 'more') {
         if (typeof openSettingsModal === 'function') openSettingsModal();
         return;
@@ -11139,16 +11156,8 @@
       const tabByDest = { home: 'inprogress', tasks: 'archived', automations: 'queues' };
       const targetTab = tabByDest[dest];
       if (!targetTab) return;
-      // Simple Home: in Simple mode the Home tab lands on #simpleHome (the
-      // inprogress feed stays selected underneath); Tasks/Automations leave
-      // home and show the corresponding existing surface.
-      if (isSimpleMode() && document.getElementById('simpleHome')) {
-        if (dest === 'home') {
-          _simpleShowHome();
-        } else {
-          _simpleHideHome();
-        }
-      }
+      // (Simple mode returned early above — every nav destination there is a
+      // simple screen, not an advanced sidebar tab.)
       // Reuse the existing tab bar's own click handler by clicking its
       // matching button when present, instead of duplicating its
       // re-render logic here.
@@ -11208,6 +11217,14 @@
     const searchBar = document.getElementById('mshSearchBar');
     if (searchBtn && searchBar) {
       searchBtn.addEventListener('click', () => {
+        // Simple mode: search lives on the simple history screen (plain
+        // cards, no advanced list chrome) instead of the slide-down bar.
+        if (isSimpleMode() && isMobileRedesign() && document.getElementById('simpleHistory')) {
+          _simpleOpenScreen('history');
+          const inp = document.getElementById('simpleHistorySearch');
+          if (inp) { try { inp.focus(); } catch (_) {} }
+          return;
+        }
         if (!searchBar.hidden) {
           _mshCloseSearch();
           return;
@@ -11306,17 +11323,50 @@
   var _simpleHomeData = { defaults: null, catalog: null };
   var _simpleComposer = { engine: '', effort: '' };
   var _simpleHomeRefreshTimer = null;
+  // Depth-3 simple screens (iteration 2): which full-screen simple surface is
+  // open, if any. 'history' | 'automations' | 'automation-detail' | 'settings'.
+  // Exactly one of {home, a screen, a conversation} is visible at a time.
+  var _simpleScreen = null;
+  var _simpleAutomationQueue = '';   // queue name shown in automation-detail
+  // var (not const) for the lookup tables too: _syncUiModeBodyClass() can run
+  // _syncSimpleHomeVisibility() during early boot, before these lines execute.
+  var _SIMPLE_SCREENS = ['history', 'automations', 'automation-detail', 'settings'];
+  var _SIMPLE_SCREEN_IDS = {
+    'history': 'simpleHistory',
+    'automations': 'simpleAutomations',
+    'automation-detail': 'simpleAutomationDetail',
+    'settings': 'simpleSettings',
+  };
 
   function _syncSimpleHomeVisibility() {
     const home = document.getElementById('simpleHome');
     if (!home) return;
-    const show = isSimpleMode() && !!_simpleHomeShowing;
+    const simpleOn = isSimpleMode();
+    const show = simpleOn && !!_simpleHomeShowing && !_simpleScreen;
     document.body.classList.toggle('ccc-simple-home-open', show);
     home.style.display = show ? '' : 'none';
-    if (show) {
-      // Home lives in the sidebar layer; .main (off-canvas fixed at the
-      // mobile breakpoint) must not cover it.
+    // Depth-3 screens: one visible at a time, same sidebar layer as home.
+    const screenOpen = simpleOn && !!_simpleScreen;
+    document.body.classList.toggle('ccc-simple-screen-open', screenOpen);
+    // _SIMPLE_SCREENS may still be undefined on the early-boot call from
+    // _syncUiModeBodyClass (var hoists the binding, not the value).
+    (_SIMPLE_SCREENS || []).forEach(name => {
+      const el = document.getElementById(_SIMPLE_SCREEN_IDS[name]);
+      if (el) el.hidden = !(screenOpen && _simpleScreen === name);
+      document.body.classList.toggle('ccc-simple-screen-' + name, screenOpen && _simpleScreen === name);
+    });
+    // Depth-2: a conversation is open under simple chrome when neither home
+    // nor a depth-3 screen is showing. The CSS keyed on this class hides the
+    // advanced chrome (toolbar buttons, pane header, status rail, composer
+    // selectors) and re-styles the transcript as plain chat bubbles.
+    document.body.classList.toggle('ccc-simple-conv-open',
+      simpleOn && !_simpleHomeShowing && !_simpleScreen);
+    if (show || screenOpen) {
+      // Home and the depth-3 screens live in the sidebar layer; .main
+      // (off-canvas fixed at the mobile breakpoint) must not cover them.
       document.body.classList.remove('mobile-show-main');
+    }
+    if (show) {
       try { _simpleHomeRefresh(); } catch (_) {}
       if (!_simpleHomeRefreshTimer) {
         _simpleHomeRefreshTimer = setInterval(() => {
@@ -11327,9 +11377,13 @@
         }, 45000);
       }
     }
+    if (screenOpen) {
+      try { _simpleRefreshScreen(_simpleScreen); } catch (_) {}
+    }
   }
   function _simpleShowHome() {
     _simpleHomeShowing = true;
+    _simpleScreen = null;
     _syncSimpleHomeVisibility();
     if (typeof _syncMobileBottomNav === 'function') _syncMobileBottomNav();
   }
@@ -11337,16 +11391,79 @@
     _simpleHomeShowing = false;
     _syncSimpleHomeVisibility();
   }
+  // Open a depth-3 simple screen (history / automations / automation-detail /
+  // settings). Replaces home; a later conversation open replaces it.
+  function _simpleOpenScreen(name) {
+    if (_SIMPLE_SCREENS.indexOf(name) === -1) return;
+    _simpleScreen = name;
+    _simpleHomeShowing = false;
+    _syncSimpleHomeVisibility();
+    if (typeof _syncMobileBottomNav === 'function') _syncMobileBottomNav();
+  }
+  // Data load for the screen that just became visible.
+  function _simpleRefreshScreen(name) {
+    if (name === 'history') _simpleRenderHistory();
+    else if (name === 'automations') _simpleRenderAutomations();
+    else if (name === 'automation-detail') _simpleRenderAutomationDetail();
+    else if (name === 'settings') _simpleSyncSettingsScreen();
+  }
   // Called from selectConversation(). Boot/refresh auto-restore
   // (_qfBootRestore) must NOT yank the user off the home screen; a deliberate
   // open (list row, simple card, search result) does.
   function _simpleOnConversationOpen(id) {
     try {
       if (!isSimpleMode()) return;
-      if (typeof _qfBootRestore !== 'undefined' && !_qfBootRestore) _simpleHideHome();
+      if (typeof _qfBootRestore !== 'undefined' && !_qfBootRestore) {
+        _simpleScreen = null;
+        _simpleHideHome();
+      }
       _simpleUpdateUsageLine(id);
+      _simpleUpdateConvTitle(id);
+      _simpleSyncTechStrip(id);
     } catch (_) {}
   }
+  // Plain-language title for the depth-2 simple conversation header.
+  function _simpleUpdateConvTitle(id) {
+    const el = document.getElementById('simpleConvTitle');
+    if (!el) return;
+    let name = '';
+    try {
+      const row = (conversationsData || []).find(x => x.id === id)
+        || (Array.isArray(archiveData) ? archiveData.find(x => (x.id || x.session_id) === id) : null);
+      name = String((row && (row.display_name || row.first_message || row.status_rail_title)) || '').trim();
+    } catch (_) {}
+    el.textContent = name.length > 60 ? name.slice(0, 60) + '…' : (name || 'This task');
+  }
+
+  // ── Technical strip: reveal tool-call logs / diffs / cost, per session ──
+  // Hidden by default (see app.css .ccc-simple-conv-open:not(.ccc-simple-tech-open)).
+  // "Revealed" is remembered per conversation id for this browser session only
+  // (in-memory Set, not persisted) — comes back if you leave and reopen the
+  // same task, resets on reload. Token/context usage and the agent/model name
+  // are never gated here; they're not technical.
+  var _simpleTechRevealedSessions = new Set();
+  var _simpleTechCurrentId = null;
+  function _simpleSyncTechStrip(id) {
+    _simpleTechCurrentId = id;
+    const revealed = !!id && _simpleTechRevealedSessions.has(id);
+    document.body.classList.toggle('ccc-simple-tech-open', revealed);
+    const btn = document.getElementById('simpleTechToggle');
+    const label = document.getElementById('simpleTechToggleLabel');
+    if (btn) btn.setAttribute('aria-pressed', revealed ? 'true' : 'false');
+    if (label) label.textContent = revealed ? 'Hide technical details' : 'Show technical details';
+  }
+  function _simpleToggleTechStrip() {
+    const id = _simpleTechCurrentId;
+    if (!id) return;
+    if (_simpleTechRevealedSessions.has(id)) _simpleTechRevealedSessions.delete(id);
+    else _simpleTechRevealedSessions.add(id);
+    _simpleSyncTechStrip(id);
+  }
+  function _wireSimpleTechToggle() {
+    const btn = document.getElementById('simpleTechToggle');
+    if (btn) btn.addEventListener('click', _simpleToggleTechStrip);
+  }
+  _wireSimpleTechToggle();
 
   // ── composer: agent/model/effort chips ──
   const _SIMPLE_ENGINE_LABELS = {
@@ -11770,10 +11887,7 @@
         return;
       }
       if (ev.target.closest('#simpleSeeAllFinished')) {
-        _simpleHideHome();
-        const tabBtn = document.querySelector('[data-conv-tab="archived"]');
-        if (tabBtn) tabBtn.click();
-        if (typeof _syncMobileBottomNav === 'function') _syncMobileBottomNav();
+        _simpleOpenScreen('history');
         return;
       }
       const taskCard = ev.target.closest('.simple-task-card');
@@ -11804,6 +11918,259 @@
     }, 0);
   }
   _wireSimpleHome();
+
+  // ── Simple depth-3 screens (Simple-UI redesign, iteration 2) ──
+  // Full-screen plain-language surfaces one tap from home / the bottom nav:
+  // History (all past tasks + search), Automations (queue list → detail),
+  // Settings (theme, text size, what's new, switch to Advanced). Same data
+  // endpoints the advanced UI uses; actions FORWARD to existing controls via
+  // .click() or the same /api/* calls — no parallel logic. Rendering reuses
+  // the home screen's card helpers (_simpleTaskCardHtml, _simpleMemoryLine).
+  function _simplePlainAge(seconds) {
+    const s = Number(seconds);
+    if (!(s >= 0)) return 'not yet';
+    if (s < 90) return 'just now';
+    const m = Math.round(s / 60);
+    if (m < 60) return m + (m === 1 ? ' minute ago' : ' minutes ago');
+    const h = Math.round(m / 60);
+    if (h < 48) return h + (h === 1 ? ' hour ago' : ' hours ago');
+    const d = Math.round(h / 24);
+    if (d < 30) return d + (d === 1 ? ' day ago' : ' days ago');
+    const w = Math.round(d / 7);
+    if (w < 9) return w + (w === 1 ? ' week ago' : ' weeks ago');
+    const mo = Math.round(d / 30);
+    return mo + (mo === 1 ? ' month ago' : ' months ago');
+  }
+
+  // ── History (also the simple Search surface — one search box on top) ──
+  // Rows are fetched once per screen open and filtered client-side while
+  // typing: a fetch per keystroke would flood the local server, and stale
+  // responses could land after a newer keystroke and resurrect old results.
+  var _simpleHistoryRows = null;
+  function _simpleHistoryApply() {
+    const list = document.getElementById('simpleHistoryList');
+    if (!list) return;
+    const query = String((document.getElementById('simpleHistorySearch') || {}).value || '')
+      .trim().toLowerCase();
+    let rows = (_simpleHistoryRows || []);
+    if (query) {
+      rows = rows.filter(r => {
+        const hay = [r.display_name, r.first_message, r.status_rail_title, r.folder_label, r.folder_path]
+          .map(x => String(x || '').toLowerCase()).join(' ');
+        return hay.indexOf(query) !== -1;
+      });
+    }
+    const limited = rows.slice(0, 60);
+    list.innerHTML = limited.length
+      ? limited.map(r => _simpleTaskCardHtml(r, _simpleHistoryStatusLine(r))).join('')
+      : '<div class="simple-empty">'
+        + (query ? 'Nothing matches that search.' : 'Past tasks will show up here once you start some.')
+        + '</div>';
+  }
+  async function _simpleRenderHistory() {
+    try {
+      const res = await fetch('/api/conversations/all', { cache: 'no-store' });
+      const data = await res.json().catch(() => null);
+      const rows = (data && Array.isArray(data.conversations)) ? data.conversations : [];
+      _simpleHistoryRows = rows
+        .filter(r => r && (r.id || r.session_id))
+        .sort((a, b) => (Number(b.mtime || b.modified) || 0) - (Number(a.mtime || a.modified) || 0));
+    } catch (_) { /* keep the previous cache */ }
+    _simpleHistoryApply();
+  }
+  function _simpleHistoryStatusLine(row) {
+    const age = Number(row.mtime || row.modified) || 0;
+    return age > 0 ? 'Last worked on ' + _simplePlainAge(Date.now() / 1000 - age) : 'Past task';
+  }
+
+  // ── Automations: plain-language queue list + detail ──
+  function _simpleAutomationStatusLine(q) {
+    const depth = Number(q.depth) || 0;
+    const workers = Number(q.workers) || 0;
+    if (q.stuck) return 'Needs attention — something looks stuck';
+    if (workers > 0) return 'Working on it now (' + workers + (workers === 1 ? ' helper' : ' helpers') + ')';
+    if (depth > 0 && q.auto_drain) return depth + ' waiting — a helper will pick them up';
+    if (depth > 0) return depth + (depth === 1 ? ' job waiting' : ' jobs waiting') + ' — nobody on it yet';
+    return 'Nothing waiting';
+  }
+  function _simpleAutomationCardHtml(q) {
+    const name = String(q.queue || 'Automation');
+    return '<button type="button" class="simple-card simple-task-card simple-automation-card"'
+      + ' data-simple-queue="' + escapeAttr(name) + '">'
+      + '<span class="simple-card-name">' + escapeHtml(name.charAt(0) + name.slice(1).toLowerCase()) + '</span>'
+      + '<span class="simple-status-line">' + escapeHtml(_simpleAutomationStatusLine(q)) + '</span>'
+      + '<span class="simple-memory-line">'
+      + escapeHtml(q.last_activity_seconds != null
+        ? 'Last activity ' + _simplePlainAge(q.last_activity_seconds)
+        : 'No activity yet')
+      + '</span></button>';
+  }
+  async function _simpleRenderAutomations() {
+    const list = document.getElementById('simpleAutomationsList');
+    if (!list) return;
+    let queues = [];
+    try {
+      const res = await fetch('/api/queue/status', { cache: 'no-store' });
+      const data = await res.json().catch(() => ({}));
+      queues = Array.isArray(data && data.queues) ? data.queues : [];
+    } catch (_) { /* keep empty */ }
+    list.innerHTML = queues.length
+      ? queues.map(_simpleAutomationCardHtml).join('')
+      : '<div class="simple-empty">No automations set up yet.</div>';
+  }
+  async function _simpleRenderAutomationDetail() {
+    const nameEl = document.getElementById('simpleAutomationDetailName');
+    const body = document.getElementById('simpleAutomationDetailBody');
+    if (!nameEl || !body) return;
+    const queue = _simpleAutomationQueue;
+    nameEl.textContent = queue ? (queue.charAt(0) + queue.slice(1).toLowerCase()) : 'Automation';
+    let q = null, items = [];
+    try {
+      const res = await fetch('/api/queue/status', { cache: 'no-store' });
+      const data = await res.json().catch(() => ({}));
+      const queues = Array.isArray(data && data.queues) ? data.queues : [];
+      q = queues.find(x => String(x.queue || '').toUpperCase() === String(queue).toUpperCase()) || null;
+    } catch (_) {}
+    try {
+      const res = await fetch('/api/queue/list', { cache: 'no-store' });
+      const data = await res.json().catch(() => ({}));
+      items = (Array.isArray(data && data.items) ? data.items : [])
+        .filter(it => String(it.project || '').toUpperCase() === String(queue).toUpperCase());
+    } catch (_) {}
+    const open = items.filter(it => String(it.status || '') === 'open');
+    const done = items.filter(it => String(it.status || '') === 'closed');
+    let html = '<div class="simple-card">'
+      + '<div class="simple-settings-label">How it is doing</div>'
+      + '<div class="simple-settings-desc">' + escapeHtml(q ? _simpleAutomationStatusLine(q) : 'Status unknown') + '</div>'
+      + '<div class="simple-memory-line">'
+      + escapeHtml(q && q.last_activity_seconds != null
+        ? 'Last activity ' + _simplePlainAge(q.last_activity_seconds)
+        : 'No activity yet')
+      + '</div>'
+      + '<div class="simple-memory-line">' + escapeHtml(
+        open.length + (open.length === 1 ? ' job waiting' : ' jobs waiting')
+        + ' · ' + done.length + ' finished') + '</div>'
+      + '</div>'
+      + '<button type="button" class="simple-start-btn" id="simpleAutomationDrainBtn">'
+      + escapeHtml(q && q.auto_drain ? 'Stop working on these automatically' : 'Work on these automatically')
+      + '</button>';
+    if (open.length) {
+      html += '<h3 class="simple-h3">Waiting jobs</h3><div class="simple-card-list">'
+        + open.slice(0, 20).map(it => {
+          const text = String(it.note || it.text || it.title || it.ref || 'Untitled job');
+          return '<div class="simple-card simple-queue-item">'
+            + '<span class="simple-card-name">' + escapeHtml(text.length > 110 ? text.slice(0, 110) + '…' : text) + '</span>'
+            + '</div>';
+        }).join('') + '</div>';
+    }
+    body.innerHTML = html;
+  }
+  async function _simpleToggleAutomationDrain() {
+    const queue = _simpleAutomationQueue;
+    if (!queue) return;
+    let q = null;
+    try {
+      const res = await fetch('/api/queue/status', { cache: 'no-store' });
+      const data = await res.json().catch(() => ({}));
+      q = (Array.isArray(data && data.queues) ? data.queues : [])
+        .find(x => String(x.queue || '').toUpperCase() === String(queue).toUpperCase()) || null;
+    } catch (_) {}
+    const newVal = !(q && q.auto_drain);
+    const btn = document.getElementById('simpleAutomationDrainBtn');
+    if (btn) btn.disabled = true;
+    try {
+      const res = await fetch('/api/queue/drain', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ queue: queue, auto_drain: newVal }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok || !data.ok) throw new Error((data && data.error) || ('HTTP ' + res.status));
+    } catch (e) {
+      if (typeof showOpToast === 'function') {
+        showOpToast('Could not change that: ' + ((e && e.message) || 'unknown'), 'error');
+      }
+    } finally {
+      _simpleRenderAutomationDetail();
+    }
+  }
+
+  // ── Settings: forward to the existing advanced controls via .click() ──
+  function _simpleSyncSettingsScreen() {
+    let theme = 'dark';
+    try { theme = localStorage.getItem('ccc-theme') || 'dark'; } catch (_) {}
+    document.querySelectorAll('#simpleThemeRow [data-simple-theme]').forEach(btn => {
+      const sel = btn.getAttribute('data-simple-theme') === theme;
+      btn.classList.toggle('is-selected', sel);
+      btn.setAttribute('aria-pressed', sel ? 'true' : 'false');
+    });
+  }
+  function _wireSimpleScreens() {
+    // Back buttons on every depth-3 screen (data-simple-back-to overrides the
+    // destination, e.g. automation-detail → automations).
+    document.querySelectorAll('.simple-screen [data-simple-back]').forEach(btn => {
+      btn.addEventListener('click', () => {
+        const to = btn.getAttribute('data-simple-back-to');
+        if (to) _simpleOpenScreen(to);
+        else _simpleShowHome();
+      });
+    });
+    // History / search: live-filter on typing (client-side, from the cached
+    // rows), tap a card to open it.
+    const histSearch = document.getElementById('simpleHistorySearch');
+    if (histSearch) histSearch.addEventListener('input', () => { _simpleHistoryApply(); });
+    const histList = document.getElementById('simpleHistoryList');
+    if (histList) {
+      histList.addEventListener('click', (ev) => {
+        const card = ev.target.closest('.simple-task-card');
+        const sid = card && card.getAttribute('data-session-id');
+        if (sid && typeof selectConversation === 'function') selectConversation(sid);
+      });
+    }
+    // Automations: tap a card → detail; detail's primary button toggles
+    // auto-drain through the same endpoint the advanced queue strip uses.
+    const autoList = document.getElementById('simpleAutomationsList');
+    if (autoList) {
+      autoList.addEventListener('click', (ev) => {
+        const card = ev.target.closest('[data-simple-queue]');
+        if (!card) return;
+        _simpleAutomationQueue = card.getAttribute('data-simple-queue') || '';
+        _simpleOpenScreen('automation-detail');
+      });
+    }
+    const autoDetail = document.getElementById('simpleAutomationDetailBody');
+    if (autoDetail) {
+      autoDetail.addEventListener('click', (ev) => {
+        if (ev.target.closest('#simpleAutomationDrainBtn')) _simpleToggleAutomationDrain();
+      });
+    }
+    // Settings: theme chips forward to the settings modal's segmented
+    // control; text size forwards to the global A-/A+ steppers; what's new
+    // forwards to the sidebar link; Advanced flips the UI mode.
+    const themeRow = document.getElementById('simpleThemeRow');
+    if (themeRow) {
+      themeRow.addEventListener('click', (ev) => {
+        const chip = ev.target.closest('[data-simple-theme]');
+        if (!chip) return;
+        const real = document.querySelector('.settings-segmented[data-segmented-group="theme"] [data-theme="'
+          + chip.getAttribute('data-simple-theme') + '"]');
+        if (real) real.click();
+        _simpleSyncSettingsScreen();
+      });
+    }
+    const fwd = (id, targetId) => {
+      const el = document.getElementById(id);
+      if (el) el.addEventListener('click', () => {
+        const target = document.getElementById(targetId);
+        if (target) target.click();
+      });
+    };
+    fwd('simpleFontMinus', 'fontMinus');
+    fwd('simpleFontPlus', 'fontPlus');
+    fwd('simpleWhatsNewBtn', 'cccWhatsNewLink');
+    const advBtn = document.getElementById('simpleAdvancedBtn');
+    if (advBtn) advBtn.addEventListener('click', () => setUiMode('advanced'));
+  }
+  _wireSimpleScreens();
 
   // ---------------------------------------------------------------------------
   // Mobile swipe-to-rotate among recently-opened conversations.
@@ -44821,7 +45188,10 @@
             + ' · out ' + escapeHtml(_formatTokens(output) + reasoningText) + '</span>';
         } else if (ev.cost_usd != null && ev.cost_usd !== '') {
           const cost = typeof ev.cost_usd === 'number' ? '$' + ev.cost_usd.toFixed(4) : ev.cost_usd;
-          statsHtml += '<span>Cost: ' + escapeHtml(String(cost)) + '</span>';
+          // simple-tech-cost: gated behind the Simple-mode technical strip
+          // (see app.css .ccc-simple-tech-open) — cost is "technical", not
+          // shown by default in Simple mode.
+          statsHtml += '<span class="simple-tech-cost">Cost: ' + escapeHtml(String(cost)) + '</span>';
         }
         statsHtml += '<span>Duration: ' + escapeHtml(String(dur)) + '</span>';
         // A turn can end in error — most importantly a token/quota/subscription
@@ -51498,7 +51868,11 @@
         whatsNewVersion = String(d.version);
         const lastSeen = localStorage.getItem('ccc-last-seen-version');
         const dismissedVer = localStorage.getItem('ccc-whats-new-dismissed-version');
-        if (lastSeen !== whatsNewVersion && dismissedVer !== whatsNewVersion && !CONV_POPOUT_MODE) {
+        if (typeof isSimpleMode === 'function' && isSimpleMode()) {
+          // Simple mode: the changelog modal is jargon-heavy and covers the
+          // home screen. Mark the version seen silently instead of popping it.
+          try { localStorage.setItem('ccc-last-seen-version', whatsNewVersion); } catch (_) {}
+        } else if (lastSeen !== whatsNewVersion && dismissedVer !== whatsNewVersion && !CONV_POPOUT_MODE) {
           whatsNewOpenModal();
         }
       }

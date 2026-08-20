@@ -481,6 +481,73 @@
         <button type="button" class="simple-see-all" id="simpleSeeAllFinished">See all past tasks &rarr;</button>
       </section>
     </div>
+    <!-- SIMPLE DEPTH-3 SCREENS (Simple-UI redesign, iteration 2). Full-screen
+         plain-language surfaces reachable in one tap from home / the bottom
+         nav — every screen within 3 taps of home must itself be simple, so
+         these replace the advanced sidebar lists, queue board, settings
+         modal, and search bar in Simple mode. Same sidebar layer as
+         #simpleHome (see its comment above); visibility is driven by
+         _simpleOpenScreen()/_syncSimpleHomeVisibility() in app.js via
+         body.ccc-simple-screen-open. All data comes from the same /api/*
+         endpoints the full UI uses; actions forward to existing controls
+         (theme segmented buttons, font steppers) via .click(). -->
+    <div class="simple-screen" id="simpleHistory" hidden aria-label="Past tasks">
+      <div class="simple-screen-head">
+        <button type="button" class="simple-back-btn" data-simple-back>&#8592; Home</button>
+        <h2 class="simple-h2">All past tasks</h2>
+      </div>
+      <input type="search" id="simpleHistorySearch" class="simple-search-input"
+             placeholder="Search past tasks&hellip;" aria-label="Search past tasks">
+      <div id="simpleHistoryList" class="simple-card-list"></div>
+    </div>
+    <div class="simple-screen" id="simpleAutomations" hidden aria-label="Automations">
+      <div class="simple-screen-head">
+        <button type="button" class="simple-back-btn" data-simple-back>&#8592; Home</button>
+        <h2 class="simple-h2">Automations</h2>
+      </div>
+      <div class="simple-screen-sub">Jobs that run on their own. Tap one to see how it is doing.</div>
+      <div id="simpleAutomationsList" class="simple-card-list"></div>
+    </div>
+    <div class="simple-screen" id="simpleAutomationDetail" hidden aria-label="Automation details">
+      <div class="simple-screen-head">
+        <button type="button" class="simple-back-btn" data-simple-back data-simple-back-to="automations">&#8592; Back</button>
+        <h2 class="simple-h2" id="simpleAutomationDetailName">Automation</h2>
+      </div>
+      <div id="simpleAutomationDetailBody"></div>
+    </div>
+    <div class="simple-screen" id="simpleSettings" hidden aria-label="Settings">
+      <div class="simple-screen-head">
+        <button type="button" class="simple-back-btn" data-simple-back>&#8592; Home</button>
+        <h2 class="simple-h2">Settings</h2>
+      </div>
+      <div class="simple-settings-list">
+        <div class="simple-card simple-settings-row">
+          <div class="simple-settings-label">Colors</div>
+          <div class="simple-chip-row" id="simpleThemeRow" role="group" aria-label="Choose colors">
+            <button type="button" class="simple-chip" data-simple-theme="light"><span class="simple-chip-name">Light</span></button>
+            <button type="button" class="simple-chip" data-simple-theme="dark"><span class="simple-chip-name">Dark</span></button>
+            <button type="button" class="simple-chip" data-simple-theme="system"><span class="simple-chip-name">Match my device</span></button>
+          </div>
+        </div>
+        <div class="simple-card simple-settings-row">
+          <div class="simple-settings-label">Text size</div>
+          <div class="simple-chip-row" role="group" aria-label="Change text size">
+            <button type="button" class="simple-chip" id="simpleFontMinus"><span class="simple-chip-name">Smaller</span></button>
+            <button type="button" class="simple-chip" id="simpleFontPlus"><span class="simple-chip-name">Bigger</span></button>
+          </div>
+        </div>
+        <div class="simple-card simple-settings-row">
+          <div class="simple-settings-label">What&rsquo;s new</div>
+          <div class="simple-settings-desc">See what changed in the latest update.</div>
+          <button type="button" class="simple-chip" id="simpleWhatsNewBtn"><span class="simple-chip-name">Show me</span></button>
+        </div>
+        <div class="simple-card simple-settings-row">
+          <div class="simple-settings-label">Advanced view</div>
+          <div class="simple-settings-desc">The full technical dashboard, with every knob and dial.</div>
+          <button type="button" class="simple-chip" id="simpleAdvancedBtn"><span class="simple-chip-name">Switch to Advanced</span></button>
+        </div>
+      </div>
+    </div>
     <div class="sidebar-header">
       <div class="sidebar-header-brand">
         <div class="sh-title-row">
@@ -647,6 +714,20 @@
            conversation to the Simple Home screen (#simpleHome). Wired by
            _wireSimpleHome() in app.js; hidden outside Simple mode by CSS. -->
       <button class="simple-back-home-btn" id="simpleBackHomeBtn" title="Back to Home">&#8592;<span class="mb-label"> Home</span></button>
+      <!-- Simple mode only (body.ccc-simple-conv-open): plain-language title
+           for the open conversation, set by _simpleUpdateConvTitle() in
+           app.js. In the Simple depth-2 view the rest of this toolbar is
+           hidden by CSS, so this span + the back button ARE the header. -->
+      <span class="simple-conv-title" id="simpleConvTitle"></span>
+      <!-- Simple mode only: reveals the "technical strip" (tool-call logs,
+           file diffs, per-turn cost) for THIS open conversation only. Stays
+           revealed while you're on this conversation and if you come back to
+           it later this browser session; resets on reload. Wired by
+           _wireSimpleTechToggle() / _simpleSyncTechStrip() in app.js. -->
+      <button type="button" class="simple-tech-toggle" id="simpleTechToggle"
+              aria-pressed="false" title="Show or hide technical details for this task">
+        <span id="simpleTechToggleLabel">Show technical details</span>
+      </button>
       <button class="pkood-kill-btn" id="pkoodKillBtn" style="display:none;" title="Kill this pkood agent">Kill</button>
       <button class="conv-replay-launch-btn" id="convReplayBtn" style="display:none;" title="Replay this conversation message by message">&#9654; Replay</button>
       <button class="announce-btn-conv" id="announceBtnConv" style="display:none;" title="Run /announce-feature - ships and broadcasts to every studio">Close &amp; announce</button>
@@ -1146,6 +1227,10 @@
                 <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
                   <path d="M12 19 L12 5 M6 11 L12 5 L18 11"></path>
                 </svg>
+                <!-- Simple mode only: a plain word on the send button (the
+                     bare arrow icon is not obvious to a non-programmer).
+                     Hidden outside body.ccc-simple-mode by CSS. -->
+                <span class="send-btn-label">Send</span>
               </button>
               <!-- Submit+ : appends a "reply phone-style, short & conversational"
                    instruction to the message, sends it, then auto-reads the
