@@ -21945,6 +21945,25 @@ body.ccc-mobile-redesign.ccc-simple-mode.ccc-simple-conv-open.ccc-simple-tech-op
   color: var(--text);
   border-color: var(--accent, var(--border));
 }
+/* Stop: one plain, unmissable action to interrupt the open task. */
+.simple-stop-btn { display: none; }
+body.ccc-mobile-redesign.ccc-simple-mode.ccc-simple-conv-open .simple-stop-btn {
+  display: inline-flex;
+  align-items: center;
+  flex: 0 0 auto;
+  padding: 5px 14px;
+  border-radius: 999px;
+  border: 1px solid var(--danger, #d33);
+  background: var(--danger, #d33);
+  color: #fff;
+  font-size: 13px;
+  font-weight: 700;
+  cursor: pointer;
+}
+body.ccc-mobile-redesign.ccc-simple-mode.ccc-simple-conv-open .simple-stop-btn:disabled {
+  opacity: 0.55;
+  cursor: default;
+}
 /* Plain chat bubbles: worker on the left, you on the right. */
 body.ccc-mobile-redesign.ccc-simple-mode.ccc-simple-conv-open .conversations-view .event.user_text,
 body.ccc-mobile-redesign.ccc-simple-mode.ccc-simple-conv-open .conversations-view .event.assistant {

@@ -728,6 +728,12 @@
               aria-pressed="false" title="Show or hide technical details for this task">
         <span id="simpleTechToggleLabel">Show technical details</span>
       </button>
+      <!-- Simple mode only: one plain Stop action for the open task. Forwards
+           to the existing #convEscBtn handler (sendEscToTerminal) — same
+           interrupt path the advanced UI uses, just relabeled and always
+           visible instead of buried in the hidden advanced toolbar. Wired by
+           _wireSimpleStopBtn() in app.js. -->
+      <button type="button" class="simple-stop-btn" id="simpleStopBtn" title="Stop this task">Stop</button>
       <button class="pkood-kill-btn" id="pkoodKillBtn" style="display:none;" title="Kill this pkood agent">Kill</button>
       <button class="conv-replay-launch-btn" id="convReplayBtn" style="display:none;" title="Replay this conversation message by message">&#9654; Replay</button>
       <button class="announce-btn-conv" id="announceBtnConv" style="display:none;" title="Run /announce-feature - ships and broadcasts to every studio">Close &amp; announce</button>

@@ -11465,6 +11465,43 @@
   }
   _wireSimpleTechToggle();
 
+  // ── Stop: one plain button, same interrupt path as the advanced Esc
+  // button (/api/inject-esc), just relabeled and always reachable instead of
+  // hidden inside the advanced toolbar. ──
+  async function _simpleStopTask() {
+    const btn = document.getElementById('simpleStopBtn');
+    if (!btn || !currentSession.id) return;
+    if (currentSession.source === 'pkood') {
+      _simpleToast("Can't stop this task from here yet.", true);
+      return;
+    }
+    btn.disabled = true;
+    const orig = btn.textContent;
+    btn.textContent = 'Stopping…';
+    try {
+      const res = await fetch('/api/inject-esc', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ session_id: currentSession.id }),
+      });
+      let data = {};
+      try { data = await res.json(); } catch (_) {}
+      btn.textContent = (res.ok && data.ok) ? 'Stopped' : "Couldn't stop";
+      if (!(res.ok && data.ok)) {
+        _simpleToast('Could not stop that: ' + ((data && data.error) || ('HTTP ' + res.status)), true);
+      }
+    } catch (e) {
+      btn.textContent = "Couldn't stop";
+      _simpleToast('Could not stop that: ' + ((e && e.message) || 'network error'), true);
+    }
+    setTimeout(() => { btn.textContent = orig; btn.disabled = false; }, 1200);
+  }
+  function _wireSimpleStopBtn() {
+    const btn = document.getElementById('simpleStopBtn');
+    if (btn) btn.addEventListener('click', _simpleStopTask);
+  }
+  _wireSimpleStopBtn();
+
   // ── composer: agent/model/effort chips ──
   const _SIMPLE_ENGINE_LABELS = {
     claude: 'Claude', codex: 'Codex', kimi: 'Kimi', gemini: 'Gemini',
