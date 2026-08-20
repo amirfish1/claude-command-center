@@ -39742,6 +39742,22 @@ def _acquire_pending_inputs_watcher_lock(lock_path):
         return None
 
 
+def _is_unattended_auto_continue(text):
+    """True for the exact auto-resume poke, not a real user follow-up."""
+    return str(text or "").strip().lower() == "continue"
+
+
+def _drop_unattended_auto_continues(queue):
+    """Remove lone ``continue`` items from a pending-input list in place."""
+    if not isinstance(queue, list):
+        return False
+    kept = [item for item in queue if not _is_unattended_auto_continue(item)]
+    if kept == list(queue):
+        return False
+    queue[:] = kept
+    return True
+
+
 def _load_pending_inputs():
     """Load pending queues from PENDING_INPUTS_FILE into memory."""
     global _pending_resume_queue, _pending_terminal_input_queue
@@ -39752,14 +39768,33 @@ def _load_pending_inputs():
         return
     if not isinstance(data, dict):
         return
+    stripped = False
     with _pending_resume_lock:
         rq = data.get("resume_queue")
         if isinstance(rq, dict):
             _pending_resume_queue.update({k: list(v) for k, v in rq.items() if isinstance(v, list)})
+        empty = []
+        for sid, queue in list(_pending_resume_queue.items()):
+            if _drop_unattended_auto_continues(queue):
+                stripped = True
+            if not queue:
+                empty.append(sid)
+        for sid in empty:
+            _pending_resume_queue.pop(sid, None)
     with _pending_terminal_input_lock:
         tq = data.get("terminal_queue")
         if isinstance(tq, dict):
             _pending_terminal_input_queue.update({k: list(v) for k, v in tq.items() if isinstance(v, list)})
+        empty = []
+        for sid, queue in list(_pending_terminal_input_queue.items()):
+            if _drop_unattended_auto_continues(queue):
+                stripped = True
+            if not queue:
+                empty.append(sid)
+        for sid in empty:
+            _pending_terminal_input_queue.pop(sid, None)
+    if stripped:
+        _save_pending_inputs()
 def _save_pending_inputs():
     """Save pending queues from memory to PENDING_INPUTS_FILE."""
     with _pending_inputs_lock:
@@ -40682,16 +40717,13 @@ def _pump_codex_resume_queue(session_id):
             return {"ok": True, "empty": True}
 
         result = resume_session_codex(session_id, text, _from_queue=True)
-        delivery_unconfirmed = bool(
-            result
-            and result.get("accepted")
-            and result.get("confirmed") is not True
-        )
+        # An accepted turn already started. Holding the same text because
+        # app-server events were not observed re-sends it after the turn
+        # ends. Treat accepted as delivered; retry only when not accepted.
         if (
             not result
             or not result.get("ok")
             or result.get("queued")
-            or delivery_unconfirmed
         ):
             _mark_pending_resume_retry(session_id)
             return {"ok": False, "delivered": False, "result": result}
@@ -49103,14 +49135,11 @@ def _tail_read_lines(path, max_bytes=32768):
 
 
 # ---------------------------------------------------------------------------
-# Auto-resume continuation policy: a stopped session with a small context
-# just gets "continue" sent back in-place. One whose context is large gets
-# the same "Continue in a new session" treatment as the manual button
-# (f2RunContinue, static/app.js ~3058) instead -- resuming a huge context
-# in-place unattended just re-triggers the same slow/expensive reload the
-# manual flow exists to avoid. Same model/effort as the origin session,
-# parent_session_id set so CCC's continuation-lineage UI (CCC-860) treats
-# it as a continuation, not an unrelated spawn.
+# Usage-limit detection still arms a countdown banner. Unattended auto-send
+# is disabled: the scan pass must not inject "continue" or spawn a
+# continuation session. Manual Continue / Continue-in-a-new-session (F2)
+# is unchanged. Helpers below stay so the banner can show origin
+# model/effort/cwd if the user resumes by hand.
 # ---------------------------------------------------------------------------
 _USAGE_LIMIT_CONTEXT_THRESHOLD = 120_000
 
@@ -49569,31 +49598,18 @@ def _usage_limit_scan_once(now=None):
             continue
         if not _mark_usage_limit_resume_fired(sid):
             continue  # a sibling thread/process won the race
+        # Auto-send is killed. Detection and the countdown banner remain so
+        # a parked session is visible, but this pass must not inject
+        # "continue" or spawn a continuation — that unattended poke, plus
+        # Codex re-queueing an accepted-but-unconfirmed turn, burned a
+        # weekly quota overnight. Marking fired (above) makes the stop
+        # inert across a CCC restart.
         try:
-            context_tokens = entry.get("context_tokens") or 0
-            if context_tokens > _USAGE_LIMIT_CONTEXT_THRESHOLD:
-                # Large context: same treatment as the manual "Continue in a
-                # new session" button instead of resuming a huge context
-                # in-place unattended (CCC-863 follow-up, explicit product
-                # decision -- same model/effort as the origin, captured at
-                # detection time).
-                result = _usage_limit_spawn_continuation(entry, sid)
-                new_sid = (result or {}).get("session_id") or (result or {}).get("id")
-                _log_activity(
-                    "usage-limit-resume", "AUTO-RESUME-NEW-SESSION",
-                    f"session={sid} engine={entry.get('engine')} "
-                    f"context_tokens={context_tokens} resume_at={resume_at} "
-                    f"new_session={new_sid} ok={(result or {}).get('ok')}",
-                )
-            else:
-                _inject_text_into_session(
-                    sid, "continue", mode="send", source="usage-limit-watcher",
-                )
-                _log_activity(
-                    "usage-limit-resume", "AUTO-RESUME",
-                    f"session={sid} engine={entry.get('engine')} "
-                    f"resume_at={resume_at}",
-                )
+            _log_activity(
+                "usage-limit-resume", "AUTO-RESUME-DISABLED",
+                f"session={sid} engine={entry.get('engine')} "
+                f"resume_at={resume_at}",
+            )
         except Exception:
             pass
 

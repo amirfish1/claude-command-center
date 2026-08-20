@@ -11950,6 +11950,12 @@ class TestRepoContextHelpers(unittest.TestCase):
                 server._pending_resume_queue.update(original_queue)
 
     def test_resume_codex_keeps_unconfirmed_app_server_input_durable(self):
+        """Accepted-but-unconfirmed must NOT re-queue the same already-sent text.
+
+        Re-queueing that copy started a second turn when the first completed
+        (the unattended usage-limit continue loop). Not-accepted follow-ups
+        still go through the durable queue.
+        """
         server = self.server
         sid = "019e2bbb-d5e0-7df2-a1f7-26fbcf363484"
         with server._pending_resume_lock:
@@ -11975,13 +11981,10 @@ class TestRepoContextHelpers(unittest.TestCase):
                 result = server.resume_session_codex(sid, "must become visible")
 
             self.assertTrue(result["ok"])
-            self.assertTrue(result["queued"])
-            self.assertFalse(result["confirmed"])
+            self.assertTrue(result.get("accepted"))
+            self.assertNotEqual(result.get("queued"), True)
             with server._pending_resume_lock:
-                self.assertEqual(
-                    server._pending_resume_queue.get(sid),
-                    ["must become visible"],
-                )
+                self.assertFalse(server._pending_resume_queue.get(sid))
         finally:
             with server._pending_resume_lock:
                 server._pending_resume_queue.clear()
@@ -16667,6 +16670,8 @@ class TestPendingInputs(unittest.TestCase):
             self.assertEqual(self.server._pending_resume_queue[sid], ["keep"])
 
     def test_codex_queue_pump_retains_head_until_delivery_is_confirmed(self):
+        """Accepted (even unconfirmed) counts as delivered so the same text
+        is not re-sent after the turn ends."""
         sid = "sid-unconfirmed"
         with self.server._pending_resume_lock:
             self.server._pending_resume_queue[sid] = ["keep until visible"]
@@ -16680,9 +16685,9 @@ class TestPendingInputs(unittest.TestCase):
              ):
             result = self.server._pump_codex_resume_queue(sid)
 
-        self.assertFalse(result["delivered"])
+        self.assertTrue(result["delivered"])
         with self.server._pending_resume_lock:
-            self.assertEqual(self.server._pending_resume_queue[sid], ["keep until visible"])
+            self.assertFalse(self.server._pending_resume_queue.get(sid))
 
     def test_codex_queue_pump_suppresses_concurrent_delivery(self):
         sid = "sid-concurrent"
