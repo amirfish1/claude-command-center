@@ -21594,11 +21594,47 @@ body.ccc-simple-mode .simple-chip:focus-visible {
   outline: 3px solid var(--accent);
   outline-offset: 2px;
 }
+/* Mic + Start sit in one row: mic is a fixed-size circle, Start fills the
+   rest so it stays the dominant, unmissable action. */
+body.ccc-simple-mode .simple-composer-actions {
+  display: flex;
+  align-items: stretch;
+  gap: 10px;
+  margin-top: 16px;
+}
+body.ccc-simple-mode .simple-mic-btn {
+  width: 56px;
+  height: 56px;
+  flex: 0 0 auto;
+  border-radius: 999px;
+  border: 2px solid var(--border);
+  background: transparent;
+  color: var(--text-muted);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  transition: background 0.15s, color 0.15s, border-color 0.15s, transform 0.05s;
+}
+body.ccc-simple-mode .simple-mic-btn svg { width: 22px; height: 22px; display: block; }
+body.ccc-simple-mode .simple-mic-btn:hover {
+  background: var(--surface-2);
+  color: var(--text);
+}
+body.ccc-simple-mode .simple-mic-btn:active { transform: translateY(1px); }
+body.ccc-simple-mode .simple-mic-btn.recording {
+  color: #fff;
+  border-color: var(--red);
+  background: var(--red);
+  animation: ccc-mic-pulse 1.5s infinite;
+}
+body.ccc-simple-mode .simple-mic-btn:disabled { opacity: 0.5; cursor: not-allowed; }
 body.ccc-simple-mode .simple-start-btn {
   display: block;
-  width: 100%;
+  flex: 1 1 auto;
+  width: auto;
   min-height: 56px;
-  margin-top: 16px;
+  margin-top: 0;
   font-size: 19px;
   font-weight: 700;
   border: none;

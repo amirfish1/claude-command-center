@@ -8325,11 +8325,13 @@
   let _sttUpdatingText = false;
 
   function micButtons() {
-    return Array.from(document.querySelectorAll('.conv-input-bar .mic-btn, .gc-reader .mic-btn'));
+    return Array.from(document.querySelectorAll(
+      '.conv-input-bar .mic-btn, .gc-reader .mic-btn, .simple-composer-card .mic-btn'));
   }
 
   function micButtonPaneId(btn) {
     if (btn && btn.closest && btn.closest('.gc-reader')) return 'gc';
+    if (btn && btn.closest && btn.closest('.simple-composer-card')) return 'simple-home';
     const pane = btn && btn.closest && btn.closest('.conv-pane');
     return pane && pane.dataset ? pane.dataset.paneId : 'p1';
   }
@@ -8365,6 +8367,8 @@
     let textarea = null;
     if (paneId === 'gc') {
       textarea = document.getElementById('gcHumanInput');
+    } else if (paneId === 'simple-home') {
+      textarea = document.getElementById('simpleComposerInput');
     } else {
       textarea = composerInputForPane(paneId) || $convInput;
     }
@@ -11945,6 +11949,14 @@
     });
     const backBtn = document.getElementById('simpleBackHomeBtn');
     if (backBtn) backBtn.addEventListener('click', _simpleShowHome);
+    // Speak instead of type — same STT engine as the advanced composer,
+    // targeting #simpleComposerInput (see toggleSpeechRecognition/
+    // micButtonPaneId 'simple-home' branches above).
+    const micBtn = document.getElementById('simpleMicBtn');
+    if (micBtn) {
+      micBtn.addEventListener('mousedown', (ev) => ev.preventDefault());
+      micBtn.addEventListener('click', () => toggleSpeechRecognition('simple-home'));
+    }
     // Landing surface: home on load in Simple mode. Deferred one tick so the
     // module-scope lets this section references at runtime (spawn defaults,
     // model catalog) finish initializing first.
