@@ -41313,28 +41313,41 @@
           }
           if (b.text) visibleContentAdded = true;
         } else if (b.type === 'tool_use') {
-          const div = document.createElement('div');
-          div.dataset.renderTs = nowStamp();
-          if (_kimiStream) {
-            // webui panes: same ToolRow look as the finalized transcript —
-            // per-kind glyph, display name, muted summary, pulsing status dot.
-            div.className = 'stream-block-tool kimi-tool kimi-stream-tool';
-            const summary = b.summary ? String(b.summary) : '';
-            div.innerHTML = '<div class="kimi-tool-head">'
-              + '<span class="kimi-tool-glyph">' + _kimiToolGlyph(b.name) + '</span>'
-              + '<span class="kimi-tool-name">' + escapeHtml(b.name === 'AskUserQuestion' ? 'Question' : _webuiToolDisplayName(b.name || 'tool')) + '</span>'
-              + (summary ? '<span class="kimi-tool-arg" title="' + escapeAttr(summary) + '">' + escapeHtml(summary) + '</span>' : '')
-              + '<span class="kimi-tool-rt"><span class="kimi-tool-status running"><span class="kimi-pulse-dot"></span></span></span>'
-              + '</div>';
-          } else {
-            div.className = 'stream-block-tool';
-            const summary = b.summary ? ' - ' + b.summary : '';
-            const toolName = b.name === 'AskUserQuestion' ? 'Question' : (b.name || 'tool');
-            div.innerHTML = '<span>⚙</span> <span class="stream-tool-name">'
-              + escapeHtml(toolName) + '</span>'
-              + '<span style="opacity:0.8;">' + escapeHtml(summary) + '</span>';
+          // Top-level (non-subagent) tool activity for non-kimi panes is
+          // already surfaced by the live-tool-status card
+          // (conv-live-tool-inline, e.g. "Reading file…"), driven
+          // independently by the sidecar poll. Rendering a second,
+          // SSE-driven pill here duplicated that signal, and the pill
+          // vanishing the moment the tool-call-group's collapsed summary
+          // absorbed it (a completely different DOM shape) read as a
+          // flicker. Kimi panes keep their pill — it's styled to match the
+          // finalized ToolRow, no jump. Subagent bubbles keep theirs too —
+          // a subagent's own tool activity has no other live indicator.
+          const isSubagentBlock = !!ev.parent_tool_use_id;
+          if (_kimiStream || isSubagentBlock) {
+            const div = document.createElement('div');
+            div.dataset.renderTs = nowStamp();
+            if (_kimiStream) {
+              // webui panes: same ToolRow look as the finalized transcript —
+              // per-kind glyph, display name, muted summary, pulsing status dot.
+              div.className = 'stream-block-tool kimi-tool kimi-stream-tool';
+              const summary = b.summary ? String(b.summary) : '';
+              div.innerHTML = '<div class="kimi-tool-head">'
+                + '<span class="kimi-tool-glyph">' + _kimiToolGlyph(b.name) + '</span>'
+                + '<span class="kimi-tool-name">' + escapeHtml(b.name === 'AskUserQuestion' ? 'Question' : _webuiToolDisplayName(b.name || 'tool')) + '</span>'
+                + (summary ? '<span class="kimi-tool-arg" title="' + escapeAttr(summary) + '">' + escapeHtml(summary) + '</span>' : '')
+                + '<span class="kimi-tool-rt"><span class="kimi-tool-status running"><span class="kimi-pulse-dot"></span></span></span>'
+                + '</div>';
+            } else {
+              div.className = 'stream-block-tool';
+              const summary = b.summary ? ' - ' + b.summary : '';
+              const toolName = b.name === 'AskUserQuestion' ? 'Question' : (b.name || 'tool');
+              div.innerHTML = '<span>⚙</span> <span class="stream-tool-name">'
+                + escapeHtml(toolName) + '</span>'
+                + '<span style="opacity:0.8;">' + escapeHtml(summary) + '</span>';
+            }
+            slot.appendChild(div);
           }
-          slot.appendChild(div);
           visibleContentAdded = true;
           // If this is a Task tool_use from the master (no parent_tool_use_id
           // on the event), seed the subagent tab label so the tab gets a
