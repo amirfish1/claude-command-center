@@ -3605,6 +3605,79 @@
     }
   }
 
+  // CCC-891: the rail/panel above are informational-only (see the F2
+  // cold-session composer comment) — Enter always sent straight through even
+  // while the rail read "Large and stale", so the warning was easy to blow
+  // past mid-type. This is the one case Enter itself gates: a real measured
+  // cache-miss verdict (not the idle-only or manual variants, which carry no
+  // size/cache claim worth interrupting a keystroke for).
+  function f2GateStateForPane(paneId) {
+    const st = f2PaneState.get(f2PaneKey(paneId));
+    if (!st || !st.gate || st.gate.manual || st.gate.idleOnly) return null;
+    return st;
+  }
+
+  // Resolves to 'here' (send into this session anyway), 'new' (start fresh —
+  // caller runs f2RunContinue), or null (cancel, do nothing).
+  function f2ConfirmStaleSend(st) {
+    return new Promise((resolve) => {
+      const gate = st.gate;
+      const tokensLabel = f2FmtTokens(gate.tokens);
+      const ageLabel = f2FmtAge(gate.ageMin);
+      const overlay = document.createElement('div');
+      overlay.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.5);display:flex;align-items:center;justify-content:center;z-index:10000;';
+      const box = document.createElement('div');
+      box.style.cssText = 'background:var(--surface);border:1px solid var(--border);border-radius:8px;padding:20px 24px;max-width:440px;width:90%;box-shadow:0 8px 24px rgba(0,0,0,0.4);';
+      const title = document.createElement('div');
+      title.style.cssText = 'font-size:14px;font-weight:600;color:var(--text);margin-bottom:8px;';
+      title.textContent = 'Large and stale session';
+      const body = document.createElement('div');
+      body.style.cssText = 'font-size:13px;color:var(--text-muted);margin-bottom:16px;line-height:1.5;';
+      body.textContent = 'Idle ' + ageLabel + ' with ~' + tokensLabel + ' tokens of context'
+        + (gate.cache && gate.cache.verdictNote ? ' — ' + gate.cache.verdictNote + '.' : '. Resuming here likely reloads most of it.');
+      const btnRow = document.createElement('div');
+      btnRow.style.cssText = 'display:flex;gap:8px;justify-content:flex-end;';
+      const mkBtn = (label, kind) => {
+        const btn = document.createElement('button');
+        btn.type = 'button';
+        btn.textContent = label;
+        const isPrimary = kind === 'primary';
+        btn.style.cssText = 'cursor:pointer;border-radius:4px;padding:6px 14px;font-size:12px;border:1px solid ' + (isPrimary ? 'var(--accent, #5b8def)' : 'var(--border)') + ';background:' + (isPrimary ? 'var(--accent, #5b8def)' : 'transparent') + ';color:' + (isPrimary ? 'var(--button-text, #fff)' : 'var(--text)') + ';';
+        return btn;
+      };
+      const newBtn = mkBtn('Start new session', 'primary');
+      const hereBtn = mkBtn('Send to this session', 'secondary');
+      const cancelBtn = mkBtn('Cancel', 'secondary');
+      const cleanup = (val) => { overlay.remove(); resolve(val); };
+      newBtn.addEventListener('click', () => cleanup('new'));
+      hereBtn.addEventListener('click', () => cleanup('here'));
+      cancelBtn.addEventListener('click', () => cleanup(null));
+      overlay.addEventListener('click', (e) => { if (e.target === overlay) cleanup(null); });
+      btnRow.appendChild(cancelBtn);
+      btnRow.appendChild(hereBtn);
+      btnRow.appendChild(newBtn);
+      box.appendChild(title);
+      box.appendChild(body);
+      box.appendChild(btnRow);
+      overlay.appendChild(box);
+      document.body.appendChild(overlay);
+      newBtn.focus();
+    });
+  }
+
+  // Shared by both composer keydown handlers below: true means this Enter
+  // press was intercepted (a dialog is deciding what happens next), false
+  // means the caller should send immediately as usual.
+  function f2InterceptEnterSend(paneId) {
+    const st = f2GateStateForPane(paneId);
+    if (!st) return false;
+    f2ConfirmStaleSend(st).then((choice) => {
+      if (choice === 'here') sendToTerminal(paneId);
+      else if (choice === 'new') f2RunContinue(paneId, st, null);
+    });
+    return true;
+  }
+
   // One delegated listener for every pane's composer — the panel DOM is
   // rebuilt on repaint, so per-node handlers would leak.
   document.addEventListener('click', (ev) => {
@@ -11336,7 +11409,7 @@
       const _expanded = $convInputBar && $convInputBar.classList.contains('is-composer-expanded');
       if (e.key === 'Enter' && !e.shiftKey && !isTouchPrimary() && !(_expanded && !(e.ctrlKey || e.metaKey))) {
         e.preventDefault();
-        sendToTerminal();
+        if (!f2InterceptEnterSend(activePaneId())) sendToTerminal();
       } else if (e.key === 'Escape') {
         const presentationPane = presentationPaneElement(activePaneId());
         if (presentationPane
@@ -35600,7 +35673,7 @@
         if (recallLastComposerCommand(input, ev)) return;
         if (ev.key === 'Enter' && !ev.shiftKey && !isTouchPrimary()) {
           ev.preventDefault();
-          sendToTerminal(paneId);
+          if (!f2InterceptEnterSend(paneId)) sendToTerminal(paneId);
         }
       });
     }
