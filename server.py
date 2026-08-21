@@ -38491,15 +38491,17 @@ def _acp_prompt(
     visible_text = text
     if harness == "kimi":
         text = _kimi_goal_prompt_text(text)
+    # ACP transports (kimi/grok) don't support mid-turn steering the way
+    # Codex/Claude do — a session/prompt sent while a turn is active gets
+    # rejected by the agent itself ("Invalid request: another turn is
+    # already in progress"), which then surfaces as a raw STOPPED error in
+    # the UI instead of queueing. Steer must be treated the same as a
+    # regular send here so the caller's busy-code handling queues it.
     with _ACP_LOCK:
         state = _acp_session(harness, sid, create=True)
-        if state.get("status") == "active" and mode != "steer":
+        if state.get("status") == "active":
             return {"ok": False, "error": "turn already in progress", "code": "busy"}
-    if (
-        harness == "kimi"
-        and mode != "steer"
-        and _kimi_wire_turn_active(sid)
-    ):
+    if harness == "kimi" and _kimi_wire_turn_active(sid):
         return {"ok": False, "error": "turn already in progress", "code": "busy"}
     attach_err = _acp_ensure_session_loaded(harness, sid)
     if attach_err is not None:
