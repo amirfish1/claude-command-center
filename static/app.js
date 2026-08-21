@@ -11287,7 +11287,7 @@
       // on-screen keyboard's return key is for line breaks, and Enter-to-send
       // fires constantly mid-typing (and when accepting autocorrect).
       const _expanded = $convInputBar && $convInputBar.classList.contains('is-composer-expanded');
-      if (e.key === 'Enter' && !e.shiftKey && !isTouchPrimary() && !(_expanded && !(e.ctrlKey || e.metaKey))) {
+      if (e.key === 'Enter' && !e.shiftKey && !e.isComposing && !isTouchPrimary() && !(_expanded && !(e.ctrlKey || e.metaKey))) {
         e.preventDefault();
         sendToTerminal();
       } else if (e.key === 'Escape') {
@@ -23732,7 +23732,7 @@
         }
         gcHumanInput.addEventListener('keydown', ev => {
           if (_gcMentionMenuHandleKeydown(ev)) return;
-          if (ev.key === 'Enter' && !ev.shiftKey && !isTouchPrimary()) {
+          if (ev.key === 'Enter' && !ev.shiftKey && !ev.isComposing && !isTouchPrimary()) {
             ev.preventDefault();
             sendHumanGcPost();
           }
@@ -35519,7 +35519,7 @@
       input.addEventListener('keydown', (ev) => {
         if (handleSlashCommandKeydown(input, ev)) return;
         if (recallLastComposerCommand(input, ev)) return;
-        if (ev.key === 'Enter' && !ev.shiftKey && !isTouchPrimary()) {
+        if (ev.key === 'Enter' && !ev.shiftKey && !ev.isComposing && !isTouchPrimary()) {
           ev.preventDefault();
           sendToTerminal(paneId);
         }
