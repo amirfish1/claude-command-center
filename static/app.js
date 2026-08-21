@@ -1455,7 +1455,12 @@
     const el = document.createElement('div');
     el.id = 'frameHealth';
     el.style.cssText = 'flex:0 0 auto;font:600 10px/1 ui-monospace,Menlo,monospace;' +
-      'color:var(--text-secondary,#9aa);padding:2px 6px;border-radius:5px;white-space:nowrap;cursor:pointer;';
+      'color:var(--text-secondary,#9aa);padding:2px 6px;border-radius:5px;white-space:nowrap;cursor:pointer;' +
+      // Fixed width so the 1.5s-refreshed "Xms" text (1-3 digits, sometimes
+      // + " ⏸") never changes this box's rendered size — otherwise it steals
+      // or frees space from the flex:1 sibling holding the tag pills, which
+      // flips their wrap point every cycle (visible as constant flicker).
+      'min-width:52px;text-align:right;';
     footer.insertBefore(el, footer.lastElementChild);
     // Click to pause ALL CSS animations — a one-click A/B test for whether the
     // infinite box-shadow pulses (which WebKit can't GPU-composite) are the
