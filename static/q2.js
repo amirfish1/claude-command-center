@@ -1807,6 +1807,14 @@
       : (stale && st !== 'blocked') ? 'stale claim, no live worker is on this'
       : queued ? 'launching\u2026'
       : statusLabel(st);
+    // Hover-only detail for the stale-claim dot: names the actual source
+    // (workers.json + a liveness check) so "stale claim" isn't an opaque
+    // label -- kept out of dotTitle since that string also renders as
+    // visible row text via .q2-tstatus.
+    var dotHoverTitle = (stale && st !== 'blocked' && !unresolved && !unverified)
+      ? dotTitle + ' (source: claimed_by/claimed_session_id on this ticket matches no worker in '
+        + 'workers.json whose process is still alive -- os.kill liveness check, per worker record)'
+      : dotTitle;
     return '<button type="button" class="q2-trow is-' + esc(st)
       + (ref === state.ref ? ' is-selected' : '')
       + (isNewTicket(ref) ? ' q2-new-ticket' : '')
@@ -1827,11 +1835,11 @@
           ? '<span class="q2-tdot-wrap' + (queued ? ' is-queued' : '') + '"'
             + ' data-q2-run="' + esc(ref) + '" data-q2-queued="' + (queued ? '1' : '0') + '"'
             + ' role="button" tabindex="0"'
-            + ' title="' + esc(queued ? 'Launching\u2026 - click to cancel' : dotTitle + ' - click to run now') + '">'
+            + ' title="' + esc(queued ? 'Launching\u2026 - click to cancel' : dotHoverTitle + ' - click to run now') + '">'
             + '<span class="q2-tdot" aria-hidden="true"></span>'
             + (queued ? ICON_TINY_STOP : ICON_TINY_PLAY)
             + '</span>'
-          : '<span class="q2-tdot" title="' + esc(dotTitle) + '" aria-label="' + esc(dotTitle) + '"></span>')
+          : '<span class="q2-tdot" title="' + esc(dotHoverTitle) + '" aria-label="' + esc(dotHoverTitle) + '"></span>')
       + '<span class="q2-tstatus">' + esc(dotTitle) + '</span>'
       + '</span>'
       + '</button>';
