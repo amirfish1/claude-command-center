@@ -11796,32 +11796,32 @@
   async function _simpleHomeRefresh() {
     const home = document.getElementById('simpleHome');
     if (!home || !isSimpleMode()) return;
-    let attention = null, sessions = null, archive = null, queueStatus = null;
+    let attention = null, sessions = null, archive = null;
     try {
       const results = await Promise.all([
         fetch('/api/attention', { cache: 'no-store' }).then(r => r.json()).catch(() => null),
         fetch('/api/sessions?all=1', { cache: 'no-store' }).then(r => r.json()).catch(() => null),
         fetch('/api/conversations/all', { cache: 'no-store' }).then(r => r.json()).catch(() => null),
-        fetch('/api/queue/status', { cache: 'no-store' }).then(r => r.json()).catch(() => null),
       ]);
-      attention = results[0]; sessions = results[1]; archive = results[2]; queueStatus = results[3];
+      attention = results[0]; sessions = results[1]; archive = results[2];
     } catch (_) { return; }
 
-    // Needs you: sessions waiting on the user, plus (R4) any helper queue
-    // that's stuck — no live worker draining claimable jobs. Queue alerts
-    // sort first since nobody else is going to notice them; tapping one
-    // jumps straight to that queue's Helpers detail screen.
+    // Needs you: sessions waiting on the user. (R4's stuck-queue alerts are
+    // fetched separately below, not awaited here — /api/queue/status was
+    // briefly bundled into this same Promise.all, which meant a slow queue
+    // response delayed EVERY section, not just the alert; a real-device
+    // repro showed the whole home screen going blank while it hung. Keep
+    // this render on the fast/reliable path and let alerts arrive later.)
     const nyaEl = document.getElementById('simpleNeedsYou');
     if (nyaEl) {
       const items = (attention && Array.isArray(attention.items) ? attention.items : [])
         .filter(it => it && it.session_id
           && Object.prototype.hasOwnProperty.call(_SIMPLE_NYA_KINDS, String(it.kind || '')));
-      const stuckQueues = (queueStatus && Array.isArray(queueStatus.queues) ? queueStatus.queues : [])
-        .filter(q => q && q.stuck);
-      const cardsHtml = stuckQueues.map(_simpleQueueAlertCardHtml).join('')
-        + items.slice(0, 5).map(_simpleNyaCardHtml).join('');
-      nyaEl.innerHTML = cardsHtml || '<div class="simple-empty">Nothing needs you right now.</div>';
+      nyaEl.innerHTML = items.length
+        ? items.slice(0, 5).map(_simpleNyaCardHtml).join('')
+        : '<div class="simple-empty">Nothing needs you right now.</div>';
     }
+    _simpleRefreshQueueAlerts();
 
     // Working on it
     const workEl = document.getElementById('simpleWorking');
@@ -11848,6 +11848,28 @@
         ? done.map(r => _simpleTaskCardHtml(r, 'Past task')).join('')
         : '<div class="simple-empty">Finished tasks will show up here.</div>';
     }
+  }
+  // R4: stuck helper-queue alerts, fetched independently of the main home
+  // refresh and never awaited by it (see the comment above _simpleHomeRefresh)
+  // so a slow /api/queue/status can't blank the rest of the screen. Prepends
+  // alert cards ahead of whatever session-based needs-you cards are already
+  // rendered; safe to call repeatedly (drops its own previous cards first).
+  async function _simpleRefreshQueueAlerts() {
+    const nyaEl = document.getElementById('simpleNeedsYou');
+    if (!nyaEl || !isSimpleMode()) return;
+    let queueStatus = null;
+    try {
+      const res = await fetch('/api/queue/status', { cache: 'no-store' });
+      queueStatus = await res.json().catch(() => null);
+    } catch (_) { return; }
+    if (!isSimpleMode()) return;   // mode may have changed while this was in flight
+    nyaEl.querySelectorAll('.simple-queue-alert-card').forEach(el => el.remove());
+    const stuckQueues = (queueStatus && Array.isArray(queueStatus.queues) ? queueStatus.queues : [])
+      .filter(q => q && q.stuck);
+    if (!stuckQueues.length) return;
+    const emptyState = nyaEl.querySelector('.simple-empty');
+    if (emptyState) emptyState.remove();
+    nyaEl.insertAdjacentHTML('afterbegin', stuckQueues.map(_simpleQueueAlertCardHtml).join(''));
   }
   async function _simpleLoadComposerData() {
     try {
