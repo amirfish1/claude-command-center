@@ -11832,11 +11832,18 @@
     try { localStorage.setItem(_SIMPLE_SEEN_KEY, JSON.stringify(map)); } catch (_) {}
   }
 
-  function _simpleTaskCardHtml(row, statusLine) {
+  function _simpleTaskCardHtml(row, statusLine, isRunning) {
     const sid = String(row.id || row.session_id || '');
     const mtime = String(row.mtime || row.modified || '');
     const name = String(row.display_name || row.first_message || row.status_rail_title || 'Untitled task').trim();
-    const working = _simpleIsWorkingRow(row);
+    // isRunning is caller-supplied where the caller already knows for sure
+    // (the Working/Finished sections are built from a definitive is-working
+    // filter) — falling back to _simpleIsWorkingRow()'s "touched in the last
+    // 6 hours" heuristic only where no authoritative flag exists (History).
+    // Recomputing the heuristic unconditionally here previously put the
+    // "running" color on cards already filed under Finished, just because
+    // the user had recently opened them.
+    const working = (isRunning !== undefined) ? isRunning : _simpleIsWorkingRow(row);
     // "Running" and "unseen finished" are mutually exclusive, plain-color
     // signals: blue means it's actively working right now, amber means it
     // finished and you haven't looked yet. A seen/finished card gets neither.
@@ -11902,7 +11909,7 @@
     workingRows.forEach(r => { workingIds[String(r.id || r.session_id || '')] = true; });
     if (workEl) {
       workEl.innerHTML = workingRows.length
-        ? workingRows.slice(0, 6).map(r => _simpleTaskCardHtml(r, _simpleWorkingStatusLine(r))).join('')
+        ? workingRows.slice(0, 6).map(r => _simpleTaskCardHtml(r, _simpleWorkingStatusLine(r), true)).join('')
         : '<div class="simple-empty">Nothing is running right now.</div>';
     }
 
@@ -11915,7 +11922,7 @@
         .sort((a, b) => (Number(b.mtime || b.modified) || 0) - (Number(a.mtime || a.modified) || 0))
         .slice(0, 5);
       finEl.innerHTML = done.length
-        ? done.map(r => _simpleTaskCardHtml(r, 'Past task')).join('')
+        ? done.map(r => _simpleTaskCardHtml(r, 'Past task', false)).join('')
         : '<div class="simple-empty">Finished tasks will show up here.</div>';
     }
   }
