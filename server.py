@@ -62270,6 +62270,23 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                 self.send_json(build_ux_fixes_health_payload())
             except Exception as e:
                 self.send_json({"ok": False, "error": str(e)}, 500)
+        elif path == "/api/wt/queue/history":
+            # All-queues open/needs_input/closed series for the Queues
+            # dashboard's history graph (CCC-903). ?days= (default 7, cap 30),
+            # ?bucket_hours= (default 1, cap 24) — see compute_queue_history.
+            qs = urllib.parse.parse_qs(parsed.query)
+            try:
+                days = int(qs.get("days", ["7"])[0])
+            except (ValueError, IndexError):
+                days = 7
+            try:
+                bucket_hours = int(qs.get("bucket_hours", ["1"])[0])
+            except (ValueError, IndexError):
+                bucket_hours = 1
+            try:
+                self.send_json({"ok": True, **compute_queue_history(days=days, bucket_hours=bucket_hours)})
+            except Exception as e:
+                self.send_json({"ok": False, "error": str(e)}, 500)
         elif path == "/api/wt/activity-log":
             # Last N lines of ~/.watchtower/activity.log for the log panel.
             # Optional ?queue= filters to one queue's rows (or "reconciler" for
