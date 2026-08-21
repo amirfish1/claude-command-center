@@ -22119,6 +22119,15 @@ body.ccc-mobile-redesign.ccc-simple-mode.ccc-simple-conv-open #convSubmitPlusBtn
 body.ccc-mobile-redesign.ccc-simple-mode.ccc-simple-conv-open #convTtsRateControl {
   display: none !important;
 }
+/* A message sent while the agent is still busy on a prior turn shows in a
+   queued-steer tray with Cancel/Steer actions — both advanced concepts. Keep
+   the queued message itself visible (so "did my message send?" still has an
+   answer) but drop the two jargon buttons; the message auto-delivers once
+   the agent is free either way. */
+body.ccc-mobile-redesign.ccc-simple-mode.ccc-simple-conv-open .queued-steer-tray .cancel-queued-message,
+body.ccc-mobile-redesign.ccc-simple-mode.ccc-simple-conv-open .queued-steer-tray .send-queued-steer {
+  display: none !important;
+}
 body.ccc-mobile-redesign.ccc-simple-mode.ccc-simple-conv-open #convInput {
   min-height: 56px;
   font-size: 17px;
