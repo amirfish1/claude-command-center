@@ -21737,6 +21737,37 @@ body.ccc-simple-mode .simple-empty {
 }
 
 /* --- Needs-you cards --- */
+/* Swipe wrapper: "Not now" sits behind the card at a fixed width, revealed
+   by dragging the card left (_wireSimpleNyaSwipe in app.js). overflow:hidden
+   clips the card when it's translated, so give the wrapper its own
+   margin-bottom instead of relying on the (now-clipped) card's. */
+body.ccc-simple-mode .simple-nya-swipe {
+  position: relative;
+  overflow: hidden;
+  border-radius: 14px;
+  margin-bottom: 14px;
+}
+body.ccc-simple-mode .simple-nya-swipe .simple-nya-card {
+  position: relative;
+  z-index: 1;
+  margin-bottom: 0;
+  touch-action: pan-y;
+  transition: transform 0.18s ease;
+  will-change: transform;
+}
+body.ccc-simple-mode .simple-nya-dismiss-btn {
+  position: absolute;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  width: 76px;
+  border: none;
+  background: var(--danger, #d33);
+  color: #fff;
+  font-size: 13px;
+  font-weight: 700;
+  cursor: pointer;
+}
 body.ccc-simple-mode .simple-nya-card.is-answered { opacity: 0.65; }
 body.ccc-simple-mode .simple-nya-title {
   font-size: 17px;

@@ -11668,11 +11668,17 @@
   }
   function _simpleNyaCardHtml(item) {
     const sid = String(item.session_id || '');
+    const mtime = String(item.mtime || '');
     const title = _simpleNyaKindLabel(String(item.kind || ''));
     const task = String(item.name || '').trim();
     const need = String(item.question_text || item.next_step || item.where || '').trim();
     const options = Array.isArray(item.question_options) ? item.question_options : [];
-    let html = '<div class="simple-card simple-nya-card" data-session-id="' + escapeAttr(sid) + '">'
+    // Swipe wrapper: a "Not now" action sits behind the card, revealed by
+    // dragging the card left (see _wireSimpleNyaSwipe). Dismissing is
+    // self-healing, not permanent — see _simpleDismissNya.
+    let html = '<div class="simple-nya-swipe" data-simple-nya-swipe>'
+      + '<button type="button" class="simple-nya-dismiss-btn" data-dismiss-nya="' + escapeAttr(sid) + '" data-dismiss-mtime="' + escapeAttr(mtime) + '">Not now</button>'
+      + '<div class="simple-card simple-nya-card" data-session-id="' + escapeAttr(sid) + '" data-mtime="' + escapeAttr(mtime) + '">'
       + '<div class="simple-nya-title">' + escapeHtml(title) + '</div>'
       + (task ? '<div class="simple-card-name">' + escapeHtml(task.length > 110 ? task.slice(0, 110) + '…' : task) + '</div>' : '')
       + (need ? '<div class="simple-nya-need">' + escapeHtml(need) + '</div>' : '');
@@ -11686,8 +11692,36 @@
     html += '<div class="simple-nya-answer-row">'
       + '<input type="text" class="simple-nya-answer-input" placeholder="Type your answer…" aria-label="Your answer">'
       + '<button type="button" class="simple-nya-send" data-answer-send>Send</button>'
-      + '</div></div>';
+      + '</div></div></div>';
     return html;
+  }
+  // ── Needs-you dismissal: "Not now", self-healing ──
+  // Remembered as {sessionId: mtime} in localStorage. A dismissed item stays
+  // hidden only as long as its mtime doesn't change — new activity on that
+  // session (the stuck call finishes, fails, whatever) invalidates the
+  // dismissal so a genuinely new problem can't go permanently silent because
+  // of an unrelated earlier one.
+  var _SIMPLE_NYA_DISMISSED_KEY = 'ccc-simple-nya-dismissed';
+  function _simpleLoadNyaDismissed() {
+    try {
+      const obj = JSON.parse(localStorage.getItem(_SIMPLE_NYA_DISMISSED_KEY) || '{}');
+      return (obj && typeof obj === 'object') ? obj : {};
+    } catch (_) { return {}; }
+  }
+  function _simpleSaveNyaDismissed(map) {
+    try { localStorage.setItem(_SIMPLE_NYA_DISMISSED_KEY, JSON.stringify(map)); } catch (_) {}
+  }
+  function _simpleIsNyaDismissed(item) {
+    const map = _simpleLoadNyaDismissed();
+    const sid = String(item.session_id || '');
+    if (!sid || !(sid in map)) return false;
+    return String(map[sid]) === String(item.mtime || '');
+  }
+  function _simpleDismissNya(sid, mtime) {
+    if (!sid) return;
+    const map = _simpleLoadNyaDismissed();
+    map[sid] = mtime;
+    _simpleSaveNyaDismissed(map);
   }
   async function _simpleSendAnswer(card, text) {
     const sid = card.getAttribute('data-session-id') || '';
@@ -11816,7 +11850,8 @@
     if (nyaEl) {
       const items = (attention && Array.isArray(attention.items) ? attention.items : [])
         .filter(it => it && it.session_id
-          && Object.prototype.hasOwnProperty.call(_SIMPLE_NYA_KINDS, String(it.kind || '')));
+          && Object.prototype.hasOwnProperty.call(_SIMPLE_NYA_KINDS, String(it.kind || ''))
+          && !_simpleIsNyaDismissed(it));
       nyaEl.innerHTML = items.length
         ? items.slice(0, 5).map(_simpleNyaCardHtml).join('')
         : '<div class="simple-empty">Nothing needs you right now.</div>';
@@ -12038,14 +12073,92 @@
     home.addEventListener('pointercancel', endDrag);
   }
 
+  // Swipe left on a needs-you card to reveal "Not now" (dismiss). Pointer
+  // Events, not HTML5 drag — same reasoning as _wireSimpleSectionDrag(): this
+  // is a touch-first surface. touch-action:pan-y on the card (see app.css)
+  // lets vertical list scrolling stay native while horizontal drags are
+  // tracked here. Only one card stays open at a time.
+  var _SIMPLE_NYA_REVEAL_PX = 76;
+  var _simpleNyaOpenCard = null;
+  function _simpleCloseNyaCard(card) {
+    if (!card) return;
+    card.style.transform = '';
+    card.classList.remove('is-swipe-open');
+    if (_simpleNyaOpenCard === card) _simpleNyaOpenCard = null;
+  }
+  function _wireSimpleNyaSwipe() {
+    const home = document.getElementById('simpleHome');
+    if (!home) return;
+    let card = null, startX = 0, startY = 0, dragging = false, moved = false, pointerId = null;
+    home.addEventListener('pointerdown', (ev) => {
+      const target = ev.target.closest('input, textarea, button, .simple-nya-option');
+      if (target) return;   // let taps on interactive controls behave normally
+      const found = ev.target.closest('.simple-nya-swipe .simple-nya-card');
+      if (!found) return;
+      card = found;
+      startX = ev.clientX; startY = ev.clientY;
+      dragging = false; moved = false;
+      pointerId = ev.pointerId;
+    });
+    home.addEventListener('pointermove', (ev) => {
+      if (!card || ev.pointerId !== pointerId) return;
+      const dx = ev.clientX - startX, dy = ev.clientY - startY;
+      if (!dragging) {
+        if (Math.abs(dx) < 8 && Math.abs(dy) < 8) return;
+        if (Math.abs(dy) > Math.abs(dx)) { card = null; return; }   // vertical: let it scroll
+        dragging = true;
+        if (_simpleNyaOpenCard && _simpleNyaOpenCard !== card) _simpleCloseNyaCard(_simpleNyaOpenCard);
+        try { card.setPointerCapture(pointerId); } catch (_) {}
+      }
+      moved = true;
+      const base = card.classList.contains('is-swipe-open') ? -_SIMPLE_NYA_REVEAL_PX : 0;
+      const next = Math.max(-_SIMPLE_NYA_REVEAL_PX, Math.min(0, base + dx));
+      card.style.transform = 'translateX(' + next + 'px)';
+    });
+    function endDrag(ev) {
+      if (!card || (pointerId != null && ev.pointerId !== pointerId)) { card = null; return; }
+      if (dragging && moved) {
+        const current = parseFloat((card.style.transform.match(/-?\d+(\.\d+)?/) || ['0'])[0]) || 0;
+        if (current <= -_SIMPLE_NYA_REVEAL_PX / 2) {
+          card.style.transform = 'translateX(-' + _SIMPLE_NYA_REVEAL_PX + 'px)';
+          card.classList.add('is-swipe-open');
+          _simpleNyaOpenCard = card;
+        } else {
+          _simpleCloseNyaCard(card);
+        }
+      } else if (card.classList.contains('is-swipe-open')) {
+        // Plain tap on an already-open card closes it instead of doing
+        // nothing (there's no other click behavior on the card itself).
+        _simpleCloseNyaCard(card);
+      }
+      card = null; dragging = false; moved = false; pointerId = null;
+    }
+    home.addEventListener('pointerup', endDrag);
+    home.addEventListener('pointercancel', endDrag);
+  }
+
   function _wireSimpleHome() {
     const home = document.getElementById('simpleHome');
     if (!home) return;
     _simpleApplySectionOrder();
     _simpleApplyCollapsedState();
     _wireSimpleSectionDrag();
+    _wireSimpleNyaSwipe();
     // Chip + card clicks are delegated because rows re-render on refresh.
     home.addEventListener('click', (ev) => {
+      const dismissBtn = ev.target.closest('[data-dismiss-nya]');
+      if (dismissBtn) {
+        const sid = dismissBtn.getAttribute('data-dismiss-nya') || '';
+        const mtime = dismissBtn.getAttribute('data-dismiss-mtime') || '';
+        _simpleDismissNya(sid, mtime);
+        const wrap = dismissBtn.closest('.simple-nya-swipe');
+        if (wrap) wrap.remove();
+        const nyaListEl = document.getElementById('simpleNeedsYou');
+        if (nyaListEl && !nyaListEl.children.length) {
+          nyaListEl.innerHTML = '<div class="simple-empty">Nothing needs you right now.</div>';
+        }
+        return;
+      }
       const sectionToggle = ev.target.closest('.simple-section-toggle');
       if (sectionToggle) {
         const section = sectionToggle.closest('[data-simple-section]');
