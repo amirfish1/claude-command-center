@@ -653,7 +653,7 @@
           <li><span class="hl-pain">Thirty rows in a flat list mean nothing.</span> <span class="hl-out">Kanban states, a project tree, and a Flow canvas give the operation a shape.</span></li>
           <li><span class="hl-pain">Strategy sinks under execution.</span> <span class="hl-out">Pin strategy sessions to the top and spawned sub-sessions nest beneath them.</span></li>
           <li><span class="hl-pain">Comparing two transcripts is window Tetris.</span> <span class="hl-out">Split pane puts two conversations side by side, each with its own input bar.</span></li>
-          <li><span class="hl-pain">"What did I decide last week?"</span> <span class="hl-out">Search across all session history from the sidebar returns it in seconds.</span></li>
+          <li><span class="hl-pain">"What did I decide last week?"</span> <span class="hl-out">Search across your Claude Code and Codex session history from the sidebar returns it in seconds.</span></li>
         </ul>
         <details class="chapter-details">
           <summary>Every way CCC helps here</summary>
@@ -664,7 +664,7 @@
               <tr><td>Sessions belong to projects and features, not just columns.</td><td>Project tree: group sessions under nestable named objects.</td></tr>
               <tr><td>You want the whole operation laid out spatially, like a whiteboard.</td><td>Flow canvas: drag repos, sessions, group chats, and objects on an infinite zoomable board with edges.</td></tr>
               <tr><td>Comparing two transcripts means window Tetris.</td><td>Split pane: two conversations side by side, each with its own input bar.</td></tr>
-              <tr><td>"What did I decide about this last week?" takes minutes of grep.</td><td>Search across all session history from the sidebar.</td></tr>
+              <tr><td>"What did I decide about this last week?" takes minutes of grep.</td><td>Search across all Claude Code and Codex session history from the sidebar.</td></tr>
               <tr><td>Auto-generated session titles are useless slugs.</td><td>One-click AI-regenerated titles.</td></tr>
             </table>
           </div>
@@ -735,10 +735,10 @@
       <div class="chapter-copy fade-target">
         <div class="chapter-eyebrow">05 &middot; Let work run unattended</div>
         <h2 class="chapter-title" id="f5-title">Tickets in. Verified closures out.</h2>
-        <p class="chapter-promise">Queues that drain, issues that close verified, deploys that fix themselves.</p>
+        <p class="chapter-promise">Queues that drain, issues that close verified, failed deploys that wake an agent instead of you.</p>
         <ul class="chapter-highlights">
           <li><span class="hl-pain">Drop tickets in a queue overnight.</span> <span class="hl-out">A bound worker claims, fixes, verifies, and closes them while you sleep.</span></li>
-          <li><span class="hl-pain">A worker gets stuck and nothing notices.</span> <span class="hl-out">A queue-health watcher judges stuck queues from ground truth and nudges workers automatically.</span></li>
+          <li><span class="hl-pain">A worker gets stuck and nothing notices.</span> <span class="hl-out">A health watcher flags stuck queues from ground truth, and Watchtower, installed by default as CCC's queue engine, nudges stalled workers back into motion.</span></li>
           <li><span class="hl-pain">A GitHub issue should become a session in one click.</span> <span class="hl-out">It does, and verify closes the issue with a commit-SHA comment.</span></li>
           <li><span class="hl-pain">Production breaks while you sleep.</span> <span class="hl-out">Optional Vercel watch spawns a fix session on a failed deploy. Opt-in, requires the Vercel CLI.</span></li>
         </ul>
@@ -747,7 +747,7 @@
           <div class="mini-wrap">
             <table class="mini">
               <tr><td>You want to drop tickets in a queue and have agents drain it overnight.</td><td>Work queue with claim, fix, verify, close lifecycle and bound agent workers.</td></tr>
-              <tr><td>A worker got stuck an hour ago and nothing noticed.</td><td>Queue-health watcher flags stuck queues from ground truth and nudges workers automatically.</td></tr>
+              <tr><td>A worker got stuck an hour ago and nothing noticed.</td><td>Queue-health watcher flags stuck queues from ground truth; Watchtower, installed by default as CCC's queue engine, nudges stalled workers back into motion.</td></tr>
               <tr><td>Filing a bug from your running app takes ten steps.</td><td>Annotate mode: click an element in your app, type a note, it becomes a queue ticket.</td></tr>
               <tr><td>A GitHub issue should become a working session with one click.</td><td>Issue board: one click spawns a session on the issue; verify closes it with a commit-SHA comment. Requires the gh CLI.</td></tr>
               <tr><td>Parallel agents on one repo clobber each other's working tree.</td><td>One-click fresh git worktrees per task, with optional repo init scripts.</td></tr>
@@ -780,7 +780,7 @@
         <p class="chapter-promise">Phone in hand or a different machine entirely. The fleet does not care where you are.</p>
         <ul class="chapter-highlights">
           <li><span class="hl-pain">Phone in hand.</span> <span class="hl-out">A responsive mobile UI shows the whole fleet and lets you steer any session from your network.</span></li>
-          <li><span class="hl-pain">A different machine entirely.</span> <span class="hl-out">Continue-on-another-machine hands a session off atomically, repo state and transcript included, to a paired peer.</span></li>
+          <li><span class="hl-pain">A different machine entirely.</span> <span class="hl-out">Install CCC where the fleet lives (a home server, a VM) and, with a trusted-network opt-in, reach it from any browser on that network. Never the open internet.</span></li>
           <li><span class="hl-pain">The fleet does not care where you are.</span> <span class="hl-out">Check it from the couch, pick it up at another desk.</span></li>
         </ul>
         <details class="chapter-details">
@@ -788,7 +788,8 @@
           <div class="mini-wrap">
             <table class="mini">
               <tr><td>You stepped away; the fleet kept going; your phone shows nothing.</td><td>Responsive mobile UI: monitor and steer sessions from a phone on your network.</td></tr>
-              <tr><td>The session you need lives on the other machine.</td><td>Continue-on-another-machine: atomic handoff of a session, repo state and transcript included, to a paired peer.</td></tr>
+              <tr><td>The fleet lives on a machine that isn't the one in front of you.</td><td>Loopback-only by default; opt in on a trusted network (<code>CCC_TRUST_TAILNET=1</code>) and reach that machine's CCC from any browser on it. Never the open internet or an untrusted LAN.</td></tr>
+              <tr><td>A session needs to move machines, not just be viewed.</td><td>Cross-machine handoff can transfer a session to a paired peer (a niche path; the everyday answer is reaching the fleet where it already runs).</td></tr>
             </table>
           </div>
         </details>
@@ -808,7 +809,7 @@
                 <img class="frame-fallback" src="./product-story/assets/shots/S-F6a.png" alt="The continue-on-another-machine handoff dialog, ready to move a session to a paired peer" loading="lazy" onerror="this.onerror=null; this.src='./images/demo.png';">
               </div>
             </div>
-            <div class="media-cap">Continue on another machine, atomically</div>
+            <div class="media-cap">Handing a session to a paired machine</div>
           </div>
         </div>
       </div>
@@ -1086,7 +1087,7 @@ brew install ccc</pre>
     frameVideos.forEach(v => videoObserver.observe(v));
   });
 
-  // Rotate the engine name on its own line in the hero — one big word
+  // Rotate the engine name on its own line in the hero, one big word
   // cycling through every engine CCC supports, each in its own brand color
   // with a slide-up animation. The word sits on its own line between
   // "All your" and "sessions in one place." so no width reservation is needed.
@@ -1106,7 +1107,7 @@ brew install ccc</pre>
     var i = 0;
     function showEngine(idx) {
       var e = engines[idx];
-      // Replace the element — recreating it re-triggers the CSS animation
+      // Replace the element; recreating it re-triggers the CSS animation
       // (engineSlideIn) without needing to toggle classes.
       var next = document.createElement('span');
       next.className = 'engine-word ' + e.cls;
