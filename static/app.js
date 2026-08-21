@@ -30950,8 +30950,15 @@
       const sid = String(c.session_id || c.id || '').trim();
       return !!(c._worker_id || (sid && _wtWorkerSessionIds.has(sid)) || _looksLikeWtWorkerTitle(c));
     };
+    // CCC-893: a session an external tool spawned (e.g. the reddit-writer
+    // skill, a separate repo) carries a `spawned_via` marker the server
+    // attaches from a sidecar file the spawning tool drops (see
+    // _apply_spawn_markers / SPAWN_MARKERS_DIR in server.py). Generic by
+    // design: ANY non-empty spawned_via routes to Workers, so a new external
+    // tool needs zero CCC changes to get auto-routed the same way.
+    const _isExternalSpawnRow = (c) => !!(c && String(c.spawned_via || '').trim());
     const _allTabNaturalLane = (c) => {
-      if (_isHermesWorkerRow(c) || _isWatchTowerWorkerRow(c)) return 'workers';
+      if (_isHermesWorkerRow(c) || _isWatchTowerWorkerRow(c) || _isExternalSpawnRow(c)) return 'workers';
       if (_isHermesMessageRow(c)) return 'messages';
       return 'coding';
     };

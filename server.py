@@ -3870,6 +3870,71 @@ def _apply_session_lane_overrides(rows, overrides=None):
     return rows
 
 
+# CCC-893: external tools that spawn a Claude Code session (e.g. the
+# reddit-writer skill, which lives outside this repo) currently land on the
+# All tab's "Coding" lane by default, same as any interactively-typed
+# session. There's no way for the spawning tool to say "this one's a worker,
+# not a person typing" short of the user manually dragging it to Workers
+# every time.
+#
+# Marker contract: the spawning tool drops one small JSON file per session at
+# SPAWN_MARKERS_DIR/<session_id>.json containing {"spawned_via": "<tool>"}
+# (e.g. "reddit-writer") right after it has the new session's id. This is a
+# plain filesystem write — no CCC API call, no auth, matching how an external
+# tool has filesystem access but not a running CCC to talk to at spawn time.
+# The check on the read side is deliberately generic: ANY non-empty
+# spawned_via value routes the row to Workers. CCC does not maintain an
+# allowlist of known external tool names — reddit-writer is just the first
+# consumer, not a hardcoded special case.
+SPAWN_MARKERS_DIR = COMMAND_CENTER_STATE_DIR / "spawn-markers"  # <session_id>.json -> {"spawned_via": "<tool>"}
+_SPAWN_MARKER_VALUE_MAX_CHARS = 64
+
+
+def _load_spawn_markers():
+    """Return {session_id: spawned_via} from SPAWN_MARKERS_DIR/<sid>.json files."""
+    out = {}
+    try:
+        files = list(SPAWN_MARKERS_DIR.iterdir())
+    except OSError:
+        return out
+    for f in files:
+        if not f.name.endswith(".json") or not f.is_file():
+            continue
+        sid = f.name[: -len(".json")].strip()
+        if not sid:
+            continue
+        try:
+            data = json.loads(f.read_text())
+        except (OSError, json.JSONDecodeError):
+            continue
+        if not isinstance(data, dict):
+            continue
+        via = str(data.get("spawned_via") or "").strip()
+        if via:
+            out[sid] = via[:_SPAWN_MARKER_VALUE_MAX_CHARS]
+    return out
+
+
+def _apply_spawn_markers(rows, markers=None):
+    """Stamp the external-spawn marker (CCC-893) onto any row shape."""
+    if markers is None:
+        try:
+            markers = _load_spawn_markers()
+        except Exception:
+            markers = {}
+    if not markers:
+        return rows
+    for row in rows or []:
+        if not isinstance(row, dict):
+            continue
+        sid = row.get("session_id") or row.get("id")
+        if sid:
+            via = markers.get(str(sid))
+            if via:
+                row["spawned_via"] = via
+    return rows
+
+
 def _load_session_overrides():
     """Return {session_id: {model, context_1m, engine, set_at}} or {}."""
     try:
@@ -9839,6 +9904,7 @@ def find_all_conversations(
         _apply_pinned_conversation_fields(out, pinned_list)
         _apply_watchtower_worker_display_names(out)
         _apply_session_lane_overrides(out)
+        _apply_spawn_markers(out)
         return out
 
     # Claude can have a live process registry entry before it has written
@@ -10045,6 +10111,7 @@ def find_all_conversations(
     # unclipped rest attached — it just looked permanently truncated here.
     _apply_watchtower_worker_display_names(out)
     _apply_session_lane_overrides(out)
+    _apply_spawn_markers(out)
     return out
 
 
@@ -11921,6 +11988,7 @@ def _rehydrate_archive_cached_rows(rows):
     hydrated.sort(key=lambda r: r.get("mtime") or r.get("modified") or 0, reverse=True)
     _sort_pinned_conversations_first(hydrated, pinned_list)
     _apply_session_lane_overrides(hydrated)
+    _apply_spawn_markers(hydrated)
     _stamp_archive_state(hydrated)
     # Layer the current codex goal on every rehydrate (one batched, cached read)
     # so the stale_ok serve the dashboard polls reflects goal set/clear without
@@ -24478,6 +24546,7 @@ def find_conversations(repo_path, progress=None, include_old=True, live_sids=Non
         if sid is not None:
             c["is_live"] = sid in _reg_live_sids
     _apply_session_lane_overrides(conversations)
+    _apply_spawn_markers(conversations)
     _dec_inflight()
     return conversations
 
@@ -25280,6 +25349,7 @@ def find_all_sessions(repo_path, progress=None, include_old=True):
     _apply_pinned_conversation_fields(conversations, _pinned_list)
     _sort_pinned_conversations_first(conversations, _pinned_list)
     _apply_session_lane_overrides(conversations)
+    _apply_spawn_markers(conversations)
 
     if progress:
         progress(
