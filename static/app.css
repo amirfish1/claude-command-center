@@ -10398,6 +10398,14 @@
   }
   .upd-pill.visible { display: inline-flex; }
   .upd-pill:hover { background: rgba(88,166,255,0.22); }
+  /* Danger variant — inject circuit breaker trips. Same shape as the update
+     pill but red, so a runaway-inject block reads as urgent, not routine. */
+  .upd-pill-danger {
+    background: rgba(248,81,73,0.14); color: #f85149;
+    border-color: rgba(248,81,73,0.45);
+  }
+  .upd-pill-danger:hover { background: rgba(248,81,73,0.24); }
+  .upd-pill-danger .upd-pill-dot { background: #f85149; box-shadow: 0 0 0 0 rgba(248,81,73,0.4); }
   .upd-pill .upd-pill-dot {
     width: 6px; height: 6px; border-radius: 50%;
     background: var(--accent); box-shadow: 0 0 0 0 rgba(88,166,255,0.4);

@@ -375,6 +375,45 @@
     }
     if (changed) _saveSeenStrayReaps(_seenStrayReaps);
   }
+  // Circuit-breaker trips (CCC-863 follow-up / FEAT-NEXT-144). Held-blocked
+  // entries are a rolling window with no latch — this pill mirrors that:
+  // visible only while a trip happened in the last hour, then self-hides.
+  // A silent runaway is exactly the failure mode this replaces (118 pokes
+  // burned a weekly Codex quota overnight with zero surfaced signal), so the
+  // pill uses the same "loud until acted on" red treatment as a real alert,
+  // not the calmer "update available" blue.
+  function _renderRunawayWatch(entries) {
+    const $pill = document.getElementById('runawayWatchPill');
+    const $text = document.getElementById('runawayWatchPillText');
+    if (!$pill) return;
+    const nowS = Date.now() / 1000;
+    const recent = (Array.isArray(entries) ? entries : [])
+      .filter((e) => e && typeof e.ts === 'number' && nowS - e.ts <= 3600);
+    if (!recent.length) {
+      $pill.hidden = true;
+      $pill.classList.remove('visible');
+      return;
+    }
+    $pill.hidden = false;
+    $pill.classList.add('visible');
+    const latest = recent[recent.length - 1];
+    const sessions = new Set(recent.map((e) => e.session_id)).size;
+    if ($text) {
+      $text.textContent = 'Runaway blocked ×' + recent.length;
+    }
+    const detail = 'Inject circuit breaker tripped ' + recent.length +
+      ' time(s) in the last hour across ' + sessions + ' session(s). Latest: ' +
+      (latest.reason || 'limit') + ' (' + latest.count + '/' + latest.limit + ') on session ' +
+      (latest.session_id || '?') + (latest.source ? (' via ' + latest.source) : '') +
+      (latest.preview ? (' — "' + latest.preview + '"') : '');
+    $pill.title = detail;
+    if (!$pill._runawayClickBound) {
+      $pill._runawayClickBound = true;
+      $pill.addEventListener('click', () => {
+        if (typeof showOpToast === 'function') showOpToast($pill.title, 'error');
+      });
+    }
+  }
   function _startHealthPoll(host) {
     const tick = _gated('cccHealth', function () {
       return fetch('/api/health', { cache: 'no-store' })
@@ -383,6 +422,7 @@
           if (!h) return;
           _renderHealth(host, h);
           _reportStrayReaps(h.stray_processes_reaped);
+          _renderRunawayWatch(h.inject_blocked);
         })
         .catch(() => {});
     });
@@ -29135,7 +29175,11 @@
       if (!rootItem || !rootItem.card) return '';
       if (!presentation.total) return _renderRow(rootItem.card, opts);
       const parentId = _subagentRowId(rootItem.card);
-      const expanded = _subagentExpandedParents.has(parentId);
+      // A collapsed cluster hides a subagent asking a question or blocked on
+      // you just as effectively as if it weren't rendered at all. Default to
+      // expanded whenever a descendant needs attention, regardless of the
+      // user's manual toggle history for this parent.
+      const expanded = _subagentExpandedParents.has(parentId) || presentation.attention > 0;
       const parentOpts = Object.assign({}, opts, {
         subagentClusterMeta: {
           parentId,
@@ -51191,6 +51235,7 @@
     };
     if ($topAlerts) {
       _moveToHome('updPill', $topAlerts);
+      _moveToHome('runawayWatchPill', $topAlerts);
     }
     if ($settingsSlot) {
       _moveToHome('termToggleBtn',     $settingsSlot);
