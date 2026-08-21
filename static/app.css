@@ -22004,7 +22004,7 @@ body.ccc-mobile-redesign.ccc-simple-mode.ccc-simple-conv-open #convToolbar {
   gap: 8px;
   padding: 6px 10px;
 }
-body.ccc-mobile-redesign.ccc-simple-mode.ccc-simple-conv-open #convToolbar > :not(#simpleBackHomeBtn):not(#simpleConvTitle):not(.mobile-actions-wrap) {
+body.ccc-mobile-redesign.ccc-simple-mode.ccc-simple-conv-open #convToolbar > :not(#simpleBackHomeBtn):not(#simpleConvEngineIcon):not(#simpleConvTitle):not(#simpleTechToggle):not(#simpleStopBtn):not(.mobile-actions-wrap) {
   display: none !important;
 }
 body.ccc-mobile-redesign.ccc-simple-mode.ccc-simple-conv-open #mobileBackBtn {
