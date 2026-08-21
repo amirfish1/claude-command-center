@@ -2574,8 +2574,12 @@
     var prevLabel = btn.textContent;
     btn.textContent = plan[4];
     try {
-      await postJson(plan[0], plan[1]);
-      note(plan[3]);
+      var sent = await postJson(plan[0], plan[1]);
+      // GitHub-backed tickets: the server relays text only — pasted-image
+      // path tokens are stripped rather than failing the reply (issue #101).
+      note(sent && sent.images_stripped
+        ? plan[3] + ' — images not supported for GitHub-backed tickets, text sent without them'
+        : plan[3]);
       state.arm = '';
       var box = document.querySelector('[data-q2-input="' + act + '"]');
       if (box) box.value = '';
@@ -2624,6 +2628,15 @@
     var imgs = Array.prototype.filter.call(files, function (f) { return /^image\//.test(f.type || ''); });
     if (!imgs.length) return;
     e.preventDefault();
+    // GitHub-backed ticket: the reply relays to the GitHub issue as text via
+    // `gh issue comment`; a local pasted-image path would leak a private path
+    // and never render there. Be honest at paste time instead of erroring at
+    // send time (issue #101).
+    var d = state.detail;
+    if (d && (String(d.source || '') === 'github' || d.github_repo)) {
+      note("Images aren't supported for GitHub-backed tickets — the reply sends text only");
+      return;
+    }
     imgs.forEach(function (f) {
       uploadImage(f).then(function (path) {
         insertPastedPath(el, path);

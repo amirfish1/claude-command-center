@@ -2728,6 +2728,59 @@ _MANAGED_ATTACHMENT_IMAGE_PATH_RE = re.compile(
     r"attachments/attachment-[\w.-]+\.(?:png|jpe?g|gif|webp))",
     re.IGNORECASE,
 )
+# Inline base64 image payloads (some paste paths embed these instead of a
+# local file path). Matched alongside the path tokens above when scrubbing a
+# reply bound for a GitHub-backed ticket.
+_DATA_URL_IMAGE_RE = re.compile(
+    r"data:image/[\w.+-]+;base64,[A-Za-z0-9+/=]+",
+    re.IGNORECASE,
+)
+
+
+def _queue_ref_is_github_backed(ref):
+    """True when ``ref``'s queue stores its tickets as GitHub issues.
+
+    Mirrors watchtower.queue's ref convention (``<PROJECT>-<n>``, project
+    normalized to an uppercase alnum/-_ code) and reads the durable queue
+    config. Cheap: two small JSON reads, no subprocess. False whenever
+    WatchTower config is unavailable — the file-backed store handles local
+    paths fine, so only real GitHub relays need the image scrub."""
+    if not _WT_CONFIG_AVAILABLE or _wt_config is None:
+        return False
+    m = re.match(r"^([A-Za-z0-9_-]+)-\d+$", str(ref or "").strip())
+    if not m:
+        return False
+    project = "".join(
+        ch for ch in m.group(1).upper() if ch.isalnum() or ch in "-_"
+    ).strip("-_")
+    if not project:
+        return False
+    try:
+        return _wt_config.backend(project) == "github"
+    except Exception:
+        return False
+
+
+def _strip_reply_images_for_github(text):
+    """Drop pasted-image tokens from a reply relayed to a GitHub issue.
+
+    The dashboard's ticket reply boxes turn a pasted screenshot into a LOCAL
+    absolute path token (``~/.claude/command-center/pasted-images/paste-*.png``)
+    — meaningful to local workers, but useless (and a private-path leak) on a
+    GitHub issue, where CCC has no image-upload path (issue #101). Returns
+    ``(clean_text, stripped_count)``; callers surface the count so the UI can
+    say the text went through without the images instead of failing the reply.
+    """
+    stripped = 0
+    out = str(text or "")
+    for rx in (_PASTED_IMAGE_PATH_RE, _MANAGED_ATTACHMENT_IMAGE_PATH_RE,
+               _DATA_URL_IMAGE_RE):
+        out, n = rx.subn("", out)
+        stripped += n
+    if stripped:
+        out = re.sub(r"[ \t]{2,}", " ", out)
+        out = re.sub(r"\n{3,}", "\n\n", out).strip()
+    return out, stripped
 
 # Files-from-conversation: extension whitelist driving both the
 # /api/conversations/<id>/files extractor and the /api/reveal-file
@@ -65733,6 +65786,22 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
             if not ref or not text:
                 self.send_json({"ok": False, "error": "ref and text required"}, 400)
                 return
+            # GitHub-backed tickets: the reply is relayed to the GitHub issue
+            # as-is via `gh issue comment`. Pasted screenshots arrive here as
+            # LOCAL path tokens that mean nothing on GitHub (and leak private
+            # paths), so strip them and send the text (issue #101). CCC does
+            # not upload images to GitHub from this path by design.
+            images_stripped = 0
+            if _queue_ref_is_github_backed(ref):
+                text, images_stripped = _strip_reply_images_for_github(text)
+                if not text:
+                    self.send_json({
+                        "ok": False,
+                        "error": "reply was only images — image upload isn't "
+                                 "supported for GitHub-backed tickets; add "
+                                 "text and resend",
+                    }, 400)
+                    return
             try:
                 # Use the same liveness-aware delivery path as `wt answer`.
                 # Merely clearing needs_input strands an idle claimed worker:
@@ -65746,6 +65815,7 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                     "ok": True,
                     "item": _uxq_item_payload(item),
                     "delivery": delivery,
+                    "images_stripped": images_stripped,
                 })
             except Exception as e:
                 self.send_json({"ok": False, "error": str(e)}, 400)
@@ -66071,6 +66141,20 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
             if not callable(comment_fn):
                 self.send_json({"ok": False, "error": "WatchTower comments unavailable"}, 400)
                 return
+            # Same GitHub-relay image scrub as /api/ux-fixes/answer above
+            # (issue #101): local pasted-image path tokens don't upload to
+            # GitHub, so send the text without them rather than fail or leak.
+            images_stripped = 0
+            if _queue_ref_is_github_backed(ref):
+                text, images_stripped = _strip_reply_images_for_github(text)
+                if not text:
+                    self.send_json({
+                        "ok": False,
+                        "error": "comment was only images — image upload isn't "
+                                 "supported for GitHub-backed tickets; add "
+                                 "text and resend",
+                    }, 400)
+                    return
             try:
                 item, delivery = _comment_queue_item_and_notify_worker(ref, text)
                 if not item:
@@ -66080,6 +66164,7 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                     "ok": True,
                     "item": _uxq_item_payload(item),
                     "delivery": delivery,
+                    "images_stripped": images_stripped,
                 })
             except Exception as e:
                 self.send_json({"ok": False, "error": str(e)}, 400)

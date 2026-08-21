@@ -38953,7 +38953,11 @@
           });
           const d = await res.json().catch(() => ({}));
           if (res.ok && d.ok) {
-            showOpToast('Comment added', 'success');
+            // GitHub-backed tickets relay text only; pasted-image path tokens
+            // are stripped server-side rather than failing (issue #101).
+            showOpToast(d.images_stripped
+              ? 'Comment added — images not supported for GitHub-backed tickets, text sent without them'
+              : 'Comment added', 'success');
             _uxqItemsCache.ts = 0;
             _renderQueuePanel();
             _uxqOpenItemModal(d.item || item);
@@ -39045,7 +39049,9 @@
           });
           const d = await res.json().catch(() => ({}));
           if (res.ok && d.ok) {
-            showOpToast('Answered - block cleared', 'success');
+            showOpToast(d.images_stripped
+              ? 'Answered - block cleared (images not supported for GitHub-backed tickets, text sent without them)'
+              : 'Answered - block cleared', 'success');
             _uxqItemsCache.ts = 0; _uxqHealthCache.ts = 0;
             _renderQueuePanel(); close();
           } else {
