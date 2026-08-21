@@ -8168,6 +8168,7 @@ def build_ccc_health():
         "pid": os.getpid(),
         "resume": _resume_ledger_stats(),
         "stray_processes_reaped": _stray_reaper_recent_entries(),
+        "inject_blocked": _inject_blocked_recent_entries(),
     }
 
 
@@ -42201,7 +42202,11 @@ def _start_resume_queue_watcher() -> None:
                         result = resume_session_devin(sid, text)
                 except Exception:
                     result = {"ok": False}
-                if not result or not result.get("ok"):
+                if result and result.get("blocked"):
+                    # Circuit-breaker trip: drop, never requeue (see the
+                    # terminal-queue watcher below for the same rule).
+                    _pending_resume_retry_after.pop(sid, None)
+                elif not result or not result.get("ok"):
                     with _pending_resume_lock:
                         _pending_resume_queue.setdefault(sid, []).insert(0, text)
                     _save_pending_inputs()
@@ -42371,6 +42376,14 @@ def _start_resume_queue_watcher() -> None:
                             _mark_terminal_queue_retry(sid, delay=5.0)
                         else:
                             _mark_terminal_queue_retry(sid)
+                    elif result.get("blocked"):
+                        # Circuit-breaker trip: TERMINAL, not a delivery
+                        # failure. Requeueing at the front (the branch below)
+                        # would re-offer the same blocked text every tick and
+                        # turn a rate limit into a hot loop. Drop it; the
+                        # attempt is in the held bucket for the human.
+                        _complete_pending_input_handoff(text)
+                        _pending_terminal_retry_after.pop(sid, None)
                     elif not result.get("ok"):
                         _requeue_terminal_input_front(sid, text)
                         _mark_terminal_queue_retry(sid)
@@ -54675,6 +54688,235 @@ def _try_wt_ask_for_headless_delivery(session_id, text, timeout_ms):
     return _map_wt_ask_json_to_ccc_result(payload)
 
 
+# ── Inject circuit breaker ──────────────────────────────────────────────────
+# Blast-radius cap under the CCC-863 opt-in fix. That incident burned a Codex
+# weekly quota by injecting the literal "continue" into ONE live session 118
+# times in 114 minutes (02:28-04:22 UTC, roughly one poke a minute, 54.8M
+# cumulative tokens). Making unattended auto-resume opt-in closed that
+# specific vector; this caps the next one, whoever sends it.
+#
+# Two properties, both easy to get wrong:
+#
+#   1. THE COUNTER IS A FILE, NOT PROCESS MEMORY. The incident's injector was
+#      a different process (a 5-day-old orphan running pre-fix code), which is
+#      why CCC's own activity.log holds 1 of those 118 pokes. An in-process
+#      counter would have counted to 1 and waved the other 117 through. Every
+#      process running this code shares one flock'd ledger.
+#   2. A TRIP IS TERMINAL, NOT A DELIVERY FAILURE. The terminal-queue watcher
+#      requeues `ok:false` at the FRONT of the queue and retries every tick,
+#      so returning a plain failure would convert a rate limit into a hot
+#      loop. Blocked results carry `blocked: True`; every requeue site drops
+#      them into the held bucket instead of retrying them.
+#
+# What this does NOT cover: a process running code from before the gate
+# existed -- precisely the CCC-863 orphan. Nothing retrofits a gate into an
+# already-running interpreter; that failure mode belongs to the stray reaper
+# above. Reaper kills stale code, breaker caps live code.
+if "pytest" in sys.modules:
+    INJECT_BUDGET_FILE = Path(tempfile.gettempdir()) / "ccc-test-inject-budget.json"
+else:
+    INJECT_BUDGET_FILE = COMMAND_CENTER_STATE_DIR / "inject-budget.json"
+
+_INJECT_BUDGET_WINDOW_S = 3600
+_INJECT_BUDGET_DAY_S = 86400
+# Identical text to one session, ANY source. Twelve byte-identical messages in
+# an hour is not a human changing their mind, it is something in a loop.
+_INJECT_REPEAT_LIMIT = 12
+# Unattended pokes only: nobody is watching these land, so tighter leash.
+_INJECT_UNATTENDED_HOURLY_LIMIT = 6
+_INJECT_UNATTENDED_DAILY_LIMIT = 40
+_INJECT_BUDGET_MAX_EVENTS = 500
+_INJECT_HELD_MAX = 50
+_INJECT_BUDGET_LOCK_ATTEMPTS = 50
+_INJECT_BUDGET_LOCK_DELAY_S = 0.01
+
+# Sources with no human waiting on the result. `terminal-queue-watcher` is
+# deliberately absent: it delivers text a human typed and queued, so ten of
+# those in a minute is a person working, not a runaway. Those still get the
+# identical-text cap above, which is what would have caught the incident.
+_INJECT_UNATTENDED_SOURCES = frozenset({
+    "usage-limit-watcher",
+    "group-chat-auto-nudge",
+    "fleet-ping",
+    "fleet-step",
+    "archive-bulk",
+})
+
+_inject_blocked_memo = {"mtime": None, "value": []}
+
+
+def _inject_budget_text_key(text):
+    """Stable short hash of normalised text.
+
+    Hashed rather than stored raw: the ledger is bookkeeping, not a second
+    copy of every message anyone sends. The held bucket keeps a short preview
+    (same rule activity.log already follows) so a human can see what stopped.
+    """
+    norm = " ".join(str(text or "").split()).lower()
+    return hashlib.sha1(norm.encode("utf-8", "replace")).hexdigest()[:16]
+
+
+def _inject_budget_acquire(lock_fh):
+    """Bounded non-blocking flock. False when someone else holds it too long.
+
+    Bounded on purpose: a wedged holder must not be able to stall every inject
+    in the fleet. Giving up here means failing OPEN (see _inject_budget_check).
+    """
+    for _ in range(_INJECT_BUDGET_LOCK_ATTEMPTS):
+        try:
+            fcntl.flock(lock_fh.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+            return True
+        except OSError:
+            time.sleep(_INJECT_BUDGET_LOCK_DELAY_S)
+    return False
+
+
+def _inject_budget_read():
+    """Ledger contents, or {} for missing/corrupt. Never raises."""
+    try:
+        with open(INJECT_BUDGET_FILE) as f:
+            data = json.load(f)
+    except (OSError, json.JSONDecodeError):
+        return {}
+    return data if isinstance(data, dict) else {}
+
+
+def _inject_budget_write(data):
+    """Atomically replace the ledger. False on any OS error (fail open)."""
+    try:
+        INJECT_BUDGET_FILE.parent.mkdir(parents=True, exist_ok=True)
+        tmp = INJECT_BUDGET_FILE.with_suffix(".json.tmp")
+        with open(tmp, "w") as f:
+            json.dump(data, f, indent=2, sort_keys=True)
+        tmp.replace(INJECT_BUDGET_FILE)
+        return True
+    except OSError:
+        return False
+
+
+def _inject_budget_check(session_id, text, source, now=None):
+    """Record one inject attempt; return None to proceed, or a blocked result.
+
+    Fails OPEN on a missing, corrupt, locked, or unwritable ledger: a broken
+    counter must never wedge every message in the fleet. Only a real trip
+    refuses, and it self-heals as the rolling window rolls off.
+
+    Blocked attempts are recorded too, so an injector that keeps hammering
+    keeps its own window full and stays blocked until it actually stops.
+    """
+    now_ts = time.time() if now is None else float(now)
+    sid = str(session_id or "")
+    if not sid:
+        return None
+    lock_path = INJECT_BUDGET_FILE.with_suffix(".lock")
+    try:
+        INJECT_BUDGET_FILE.parent.mkdir(parents=True, exist_ok=True)
+        lock_fh = open(lock_path, "a+")
+    except OSError:
+        return None
+    try:
+        if not _inject_budget_acquire(lock_fh):
+            return None
+        data = _inject_budget_read()
+        sessions = data.get("sessions")
+        if not isinstance(sessions, dict):
+            sessions = {}
+            data["sessions"] = sessions
+        entry = sessions.get(sid)
+        if not isinstance(entry, dict):
+            entry = {}
+            sessions[sid] = entry
+        raw_events = entry.get("events")
+        events = [
+            e for e in (raw_events if isinstance(raw_events, list) else [])
+            if isinstance(e, list) and len(e) == 3 and now_ts - e[0] <= _INJECT_BUDGET_DAY_S
+        ]
+        key = _inject_budget_text_key(text)
+        unattended = str(source or "") in _INJECT_UNATTENDED_SOURCES
+        hour = [e for e in events if now_ts - e[0] <= _INJECT_BUDGET_WINDOW_S]
+        repeats = sum(1 for e in hour if e[1] == key)
+        unattended_hour = sum(1 for e in hour if e[2])
+        unattended_day = sum(1 for e in events if e[2])
+
+        trip = None
+        if repeats >= _INJECT_REPEAT_LIMIT:
+            trip = ("repeat", repeats, _INJECT_REPEAT_LIMIT, _INJECT_BUDGET_WINDOW_S,
+                    f"{repeats} identical messages to this session in the last "
+                    f"{_INJECT_BUDGET_WINDOW_S // 60} min")
+        elif unattended and unattended_hour >= _INJECT_UNATTENDED_HOURLY_LIMIT:
+            trip = ("unattended_hourly", unattended_hour,
+                    _INJECT_UNATTENDED_HOURLY_LIMIT, _INJECT_BUDGET_WINDOW_S,
+                    f"{unattended_hour} unattended pokes to this session in the "
+                    f"last {_INJECT_BUDGET_WINDOW_S // 60} min")
+        elif unattended and unattended_day >= _INJECT_UNATTENDED_DAILY_LIMIT:
+            trip = ("unattended_daily", unattended_day,
+                    _INJECT_UNATTENDED_DAILY_LIMIT, _INJECT_BUDGET_DAY_S,
+                    f"{unattended_day} unattended pokes to this session in the "
+                    f"last 24h")
+
+        events.append([now_ts, key, 1 if unattended else 0])
+        entry["events"] = events[-_INJECT_BUDGET_MAX_EVENTS:]
+
+        blocked = None
+        if trip is not None:
+            reason, count, limit, window_s, human = trip
+            blocked = {
+                "ok": False,
+                "blocked": True,
+                "code": "inject_rate_limit",
+                "error": f"Inject blocked by circuit breaker: {human}.",
+                "reason": reason,
+                "count": count,
+                "limit": limit,
+                "window_s": window_s,
+                "session_id": sid,
+                "source": source,
+            }
+            held = data.get("held")
+            if not isinstance(held, list):
+                held = []
+            held.append({
+                "ts": now_ts,
+                "session_id": sid,
+                "source": source,
+                "reason": reason,
+                "count": count,
+                "limit": limit,
+                "preview": _activity_log_preview(text),
+            })
+            data["held"] = held[-_INJECT_HELD_MAX:]
+
+        _inject_budget_write(data)
+        return blocked
+    except Exception:
+        # Any unexpected failure in the meter allows the inject. The meter is
+        # a safety net, not a gate the fleet's messaging depends on.
+        return None
+    finally:
+        try:
+            fcntl.flock(lock_fh.fileno(), fcntl.LOCK_UN)
+        except OSError:
+            pass
+        lock_fh.close()
+
+
+def _inject_blocked_recent_entries(limit=20):
+    """Recent circuit-breaker trips for /api/health. Never raises.
+
+    Memoised on the ledger's mtime: this is on a polled dashboard path, so it
+    must not re-read and re-parse the file on every tick.
+    """
+    try:
+        mtime = INJECT_BUDGET_FILE.stat().st_mtime
+    except OSError:
+        return []
+    if _inject_blocked_memo["mtime"] != mtime:
+        held = _inject_budget_read().get("held")
+        _inject_blocked_memo["value"] = held if isinstance(held, list) else []
+        _inject_blocked_memo["mtime"] = mtime
+    return list(_inject_blocked_memo["value"])[-limit:]
+
+
 def _inject_text_into_session(
     session_id,
     text,
@@ -54737,6 +54979,18 @@ def _inject_text_into_session(
         f"idem={idempotency_key or '-'} wt_origin={wt_origin} "
         f"text=\"{_activity_log_preview(text)}\"",
     )
+    # Circuit breaker. Logged as an attempt above (so the log still shows what
+    # was tried), refused here. See the _inject_budget_* block for why the
+    # counter is a file and why a trip returns `blocked` and not just `ok:false`.
+    _blocked = _inject_budget_check(session_id, text, source)
+    if _blocked is not None:
+        _log_activity(
+            "inject", "BLOCKED",
+            f"session={session_id} source={source} reason={_blocked['reason']} "
+            f"count={_blocked['count']}/{_blocked['limit']} "
+            f"text=\"{_activity_log_preview(text)}\"",
+        )
+        return _blocked
     is_codex = _is_codex_session(session_id)
     compact_command = bool(_COMPACT_TRIGGER_RE.match(text))
     slash_command = bool(_SLASH_COMMAND_TRIGGER_RE.match(text))
@@ -56033,7 +56287,7 @@ def _recover_engine_bridge(session_id, selected_text="", idempotency_key=None):
     )
     if not isinstance(retry, dict):
         retry = {"ok": False, "error": "Retry returned no result"}
-    if not retry.get("ok") and not retry.get("queued"):
+    if not retry.get("ok") and not retry.get("queued") and not retry.get("blocked"):
         _requeue_terminal_input_front(sid, text)
         _mark_terminal_queue_retry(sid, delay=5.0)
         retry["requeued"] = True
