@@ -1,0 +1,1 @@
+Added a manual "Attach as sub-session of…" row action (with a matching Detach action) for linking sessions that are related but have no real spawn/continuation lineage, so they render nested in the sidebar the same way a genuine subagent does.
