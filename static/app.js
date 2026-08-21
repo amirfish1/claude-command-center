@@ -11367,6 +11367,27 @@
       wasPaused,
     );
   }
+  // ">" button next to the rate knob: skip past the rest of the sentence
+  // currently playing and resume from the start of the next one. Sentence
+  // boundary is the same naive punctuation heuristic _chunkTtsText already
+  // uses elsewhere in this file (no NLP) -- good enough for narration.
+  function _ttsJumpToNextSentence() {
+    if (!_ttsBoundUtteranceText || (!_ttsActive && !_ttsPaused)) return;
+    const text = _ttsBoundUtteranceText;
+    const from = _ttsLastCharIndex || 0;
+    const sentenceEnd = /[.!?]+[)\]"'”]?(\s+|$)/g;
+    sentenceEnd.lastIndex = from;
+    const m = sentenceEnd.exec(text);
+    if (!m || m.index + m[0].length >= text.length) {
+      // No further sentence in this message — nothing to jump to.
+      stopTextToSpeech();
+      return;
+    }
+    _ttsLastCharIndex = m.index + m[0].length;
+    _restartTtsAtCurrentPosition();
+  }
+  const $convTtsNextBtn = document.getElementById('convTtsNextBtn');
+  if ($convTtsNextBtn) $convTtsNextBtn.addEventListener('click', () => _ttsJumpToNextSentence());
   // Rate is adjusted with − / + buttons (replaced the drag slider). Each click
   // steps ±0.05 within [MIN, MAX]; persist, relabel, disable at the ends, and
   // restart playback (debounced) so an active read picks up the new speed.
