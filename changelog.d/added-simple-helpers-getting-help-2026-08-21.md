@@ -1,0 +1,1 @@
+Simple mode's Automations screen is renamed "Helpers" with plainer copy; a stuck helper queue now surfaces as a "Needs attention" card on the Home screen (tap to jump to it); and the Helpers detail screen gained a one-tap "Get extra help on this right now" button that spawns a worker immediately, separate from the recurring auto-drain toggle.

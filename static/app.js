@@ -11332,6 +11332,7 @@
   // Exactly one of {home, a screen, a conversation} is visible at a time.
   var _simpleScreen = null;
   var _simpleAutomationQueue = '';   // queue name shown in automation-detail
+  var _simpleAutomationRepoPath = '';   // repo_path for _simpleSpawnQueueHelper()
   // var (not const) for the lookup tables too: _syncUiModeBodyClass() can run
   // _syncSimpleHomeVisibility() during early boot, before these lines execute.
   var _SIMPLE_SCREENS = ['history', 'automations', 'automation-detail', 'settings'];
@@ -11786,25 +11787,31 @@
   async function _simpleHomeRefresh() {
     const home = document.getElementById('simpleHome');
     if (!home || !isSimpleMode()) return;
-    let attention = null, sessions = null, archive = null;
+    let attention = null, sessions = null, archive = null, queueStatus = null;
     try {
       const results = await Promise.all([
         fetch('/api/attention', { cache: 'no-store' }).then(r => r.json()).catch(() => null),
         fetch('/api/sessions?all=1', { cache: 'no-store' }).then(r => r.json()).catch(() => null),
         fetch('/api/conversations/all', { cache: 'no-store' }).then(r => r.json()).catch(() => null),
+        fetch('/api/queue/status', { cache: 'no-store' }).then(r => r.json()).catch(() => null),
       ]);
-      attention = results[0]; sessions = results[1]; archive = results[2];
+      attention = results[0]; sessions = results[1]; archive = results[2]; queueStatus = results[3];
     } catch (_) { return; }
 
-    // Needs you
+    // Needs you: sessions waiting on the user, plus (R4) any helper queue
+    // that's stuck — no live worker draining claimable jobs. Queue alerts
+    // sort first since nobody else is going to notice them; tapping one
+    // jumps straight to that queue's Helpers detail screen.
     const nyaEl = document.getElementById('simpleNeedsYou');
     if (nyaEl) {
       const items = (attention && Array.isArray(attention.items) ? attention.items : [])
         .filter(it => it && it.session_id
           && Object.prototype.hasOwnProperty.call(_SIMPLE_NYA_KINDS, String(it.kind || '')));
-      nyaEl.innerHTML = items.length
-        ? items.slice(0, 5).map(_simpleNyaCardHtml).join('')
-        : '<div class="simple-empty">Nothing needs you right now.</div>';
+      const stuckQueues = (queueStatus && Array.isArray(queueStatus.queues) ? queueStatus.queues : [])
+        .filter(q => q && q.stuck);
+      const cardsHtml = stuckQueues.map(_simpleQueueAlertCardHtml).join('')
+        + items.slice(0, 5).map(_simpleNyaCardHtml).join('');
+      nyaEl.innerHTML = cardsHtml || '<div class="simple-empty">Nothing needs you right now.</div>';
     }
 
     // Working on it
@@ -12047,6 +12054,12 @@
         _simpleOpenScreen('history');
         return;
       }
+      const queueAlert = ev.target.closest('[data-simple-queue-alert]');
+      if (queueAlert) {
+        _simpleAutomationQueue = queueAlert.getAttribute('data-simple-queue-alert') || '';
+        _simpleOpenScreen('automation-detail');
+        return;
+      }
       const taskCard = ev.target.closest('.simple-task-card');
       if (taskCard) {
         const sid = taskCard.getAttribute('data-session-id') || '';
@@ -12189,8 +12202,20 @@
       + '<span class="simple-status-line">' + escapeHtml(statusLine) + '</span>'
       + '</' + tag + '>';
   }
+  // R4: a stuck helper queue surfaced on Home's "Needs you" — same card look
+  // as a session waiting on the user, but taps through to the Helpers detail
+  // screen instead of a conversation (data-simple-queue-alert, not
+  // data-session-id; see the home click delegate in _wireSimpleHome).
+  function _simpleQueueAlertCardHtml(q) {
+    const name = String(q.queue || 'Helper queue');
+    return '<div class="simple-card simple-nya-card simple-queue-alert-card" data-simple-queue-alert="' + escapeAttr(name) + '">'
+      + '<div class="simple-nya-title">Needs attention</div>'
+      + '<div class="simple-card-name">' + escapeHtml(name.charAt(0) + name.slice(1).toLowerCase()) + '</div>'
+      + '<div class="simple-nya-need">Jobs are waiting but nobody’s on them — tap to see what’s stuck.</div>'
+      + '</div>';
+  }
   function _simpleAutomationCardHtml(q) {
-    const name = String(q.queue || 'Automation');
+    const name = String(q.queue || 'Helper queue');
     return '<button type="button" class="simple-card simple-task-card simple-automation-card"'
       + ' data-simple-queue="' + escapeAttr(name) + '">'
       + '<span class="simple-card-name">' + escapeHtml(name.charAt(0) + name.slice(1).toLowerCase()) + '</span>'
@@ -12219,7 +12244,7 @@
     const body = document.getElementById('simpleAutomationDetailBody');
     if (!nameEl || !body) return;
     const queue = _simpleAutomationQueue;
-    nameEl.textContent = queue ? (queue.charAt(0) + queue.slice(1).toLowerCase()) : 'Automation';
+    nameEl.textContent = queue ? (queue.charAt(0) + queue.slice(1).toLowerCase()) : 'Helper queue';
     let q = null, items = [];
     try {
       const res = await fetch('/api/queue/status', { cache: 'no-store' });
@@ -12237,6 +12262,11 @@
       .sort((a, b) => (Date.parse(a.created_at || '') || 0) - (Date.parse(b.created_at || '') || 0));
     const done = items.filter(it => String(it.status || '') === 'closed')
       .sort((a, b) => (Date.parse(b.closed_at || '') || 0) - (Date.parse(a.closed_at || '') || 0));
+    // Remembered for _simpleSpawnQueueHelper() (R3) — the spawn-worker
+    // endpoint is queue-scoped (it can't target one specific ticket), so
+    // this is one "get help now" action for the whole list, distinct from
+    // the recurring auto-drain toggle above it.
+    _simpleAutomationRepoPath = (q && q.repo_path) || '';
     let html = '<div class="simple-card">'
       + '<div class="simple-settings-label">How it is doing</div>'
       + '<div class="simple-settings-desc">' + escapeHtml(q ? _simpleAutomationStatusLine(q) : 'Status unknown') + '</div>'
@@ -12252,6 +12282,10 @@
       + '<button type="button" class="simple-start-btn" id="simpleAutomationDrainBtn">'
       + escapeHtml(q && q.auto_drain ? 'Stop working on these automatically' : 'Work on these automatically')
       + '</button>';
+    if (open.length && _simpleAutomationRepoPath) {
+      html += '<button type="button" class="simple-chip simple-automation-help-btn" id="simpleAutomationHelpBtn">'
+        + 'Get extra help on this right now</button>';
+    }
     if (open.length) {
       html += '<h3 class="simple-h3">Waiting jobs</h3><div class="simple-card-list">'
         + open.slice(0, 20).map(it => _simpleQueueItemCardHtml(it, true)).join('') + '</div>';
@@ -12285,6 +12319,31 @@
     } catch (e) {
       if (typeof showOpToast === 'function') {
         showOpToast('Could not change that: ' + ((e && e.message) || 'unknown'), 'error');
+      }
+    } finally {
+      _simpleRenderAutomationDetail();
+    }
+  }
+  // R3: a one-time "get help now" for this whole list — one worker, right
+  // away — distinct from the auto-drain toggle (which is recurring/hands-
+  // off). Same endpoint the advanced queue strip's spawn button uses.
+  async function _simpleSpawnQueueHelper() {
+    const queue = _simpleAutomationQueue;
+    const repoPath = _simpleAutomationRepoPath;
+    if (!queue || !repoPath) return;
+    const btn = document.getElementById('simpleAutomationHelpBtn');
+    if (btn) { btn.disabled = true; btn.textContent = 'Asking for help…'; }
+    try {
+      const res = await fetch('/api/queue/spawn-worker', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ repo_path: repoPath, project: queue }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok || !data.ok) throw new Error((data && data.error) || ('HTTP ' + res.status));
+      _simpleToast('On it — an extra helper just started on ' + queue.charAt(0) + queue.slice(1).toLowerCase() + '.');
+    } catch (e) {
+      if (typeof showOpToast === 'function') {
+        showOpToast('Could not get help: ' + ((e && e.message) || 'unknown'), 'error');
       }
     } finally {
       _simpleRenderAutomationDetail();
@@ -12338,6 +12397,7 @@
     if (autoDetail) {
       autoDetail.addEventListener('click', (ev) => {
         if (ev.target.closest('#simpleAutomationDrainBtn')) { _simpleToggleAutomationDrain(); return; }
+        if (ev.target.closest('#simpleAutomationHelpBtn')) { _simpleSpawnQueueHelper(); return; }
         // A queue item with a session attached (someone's already working it)
         // opens straight into that conversation, same as any other task card.
         const item = ev.target.closest('.simple-queue-item[data-session-id]');

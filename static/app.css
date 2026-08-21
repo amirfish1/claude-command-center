@@ -21644,6 +21644,16 @@ body.ccc-simple-mode .simple-start-btn {
   cursor: pointer;
 }
 body.ccc-simple-mode .simple-start-btn:disabled { opacity: 0.6; cursor: default; }
+/* R3: one-time "get help now" for a helper queue's waiting jobs. */
+body.ccc-simple-mode .simple-automation-help-btn {
+  display: block;
+  width: 100%;
+  min-height: 48px;
+  margin-top: 10px;
+  text-align: center;
+  font-weight: 700;
+}
+body.ccc-simple-mode .simple-automation-help-btn:disabled { opacity: 0.6; cursor: default; }
 body.ccc-simple-mode .simple-toast {
   margin-top: 12px;
   padding: 12px 14px;
