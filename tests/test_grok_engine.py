@@ -497,3 +497,81 @@ def test_grok_conversation_source_prefers_acp_when_loaded(monkeypatch, tmp_path)
 
 def test_acp_transcript_last_line_missing_returns_zero():
     assert server._acp_transcript_last_line("grok", "does-not-exist-0000") == 0
+
+
+# ── CCC-884: terminal-vs-ACP conflict should queue, not hard-error ─────────
+# Mirrors Codex's write-gate (_codex_writer_gate_response): a live
+# `grok --resume` TUI and CCC's ACP connection can't safely write the same
+# session at once, but the send UX should still match Claude's "just works"
+# feel instead of surfacing the raw conflict to the user.
+
+def test_grok_external_writer_conflict_queues_the_message(monkeypatch):
+    sid = "grok-terminal-conflict-session"
+    with server._pending_terminal_input_lock:
+        original_queue = dict(server._pending_terminal_input_queue)
+        server._pending_terminal_input_queue.clear()
+    try:
+        monkeypatch.setattr(server, "_is_codex_session", lambda sid: False)
+        monkeypatch.setattr(server, "_is_kimi_session", lambda sid: False)
+        monkeypatch.setattr(server, "_session_acp_harness", lambda sid: "grok")
+        monkeypatch.setattr(server, "find_session_cwd", lambda sid: "/tmp")
+        monkeypatch.setattr(server, "session_live_status", lambda sid, cwd: {
+            "live": True, "status": "running", "kind": "acp",
+            "tty": None, "terminal_app": None,
+        })
+        monkeypatch.setattr(server, "_acp_prompt", lambda *a, **k: {
+            "ok": False, "code": "grok_external_active",
+            "error": "Grok session is active in a terminal — close it before sending.",
+        })
+        monkeypatch.setattr(server, "_save_pending_inputs", lambda: None)
+
+        result = server._inject_text_into_session(sid, "follow up")
+
+        assert result["ok"] is True
+        assert result["queued"] is True
+        assert result["via"] == "terminal-queued"
+        assert "terminal" in result["queued_reason"]
+        with server._pending_terminal_input_lock:
+            assert server._pending_terminal_input_queue[sid] == ["follow up"]
+    finally:
+        with server._pending_terminal_input_lock:
+            server._pending_terminal_input_queue.clear()
+            server._pending_terminal_input_queue.update(original_queue)
+
+
+def test_grok_external_writer_retry_from_queue_does_not_requeue_itself(monkeypatch):
+    """A watcher-driven retry (_from_terminal_queue=True) must return the raw
+    failure so the existing terminal-queue watcher re-parks it via its own
+    front-of-queue + backoff logic -- double-queuing here would duplicate
+    the message once the TUI finally closes."""
+    sid = "grok-terminal-conflict-retry"
+    with server._pending_terminal_input_lock:
+        original_queue = dict(server._pending_terminal_input_queue)
+        server._pending_terminal_input_queue.clear()
+    try:
+        monkeypatch.setattr(server, "_is_codex_session", lambda sid: False)
+        monkeypatch.setattr(server, "_is_kimi_session", lambda sid: False)
+        monkeypatch.setattr(server, "_session_acp_harness", lambda sid: "grok")
+        monkeypatch.setattr(server, "find_session_cwd", lambda sid: "/tmp")
+        monkeypatch.setattr(server, "session_live_status", lambda sid, cwd: {
+            "live": True, "status": "running", "kind": "acp",
+            "tty": None, "terminal_app": None,
+        })
+        monkeypatch.setattr(server, "_acp_prompt", lambda *a, **k: {
+            "ok": False, "code": "grok_external_active",
+            "error": "Grok session is active in a terminal — close it before sending.",
+        })
+        monkeypatch.setattr(server, "_save_pending_inputs", lambda: None)
+
+        result = server._inject_text_into_session(
+            sid, "follow up", _from_terminal_queue=True,
+        )
+
+        assert result["ok"] is False
+        assert result["code"] == "grok_external_active"
+        with server._pending_terminal_input_lock:
+            assert sid not in server._pending_terminal_input_queue
+    finally:
+        with server._pending_terminal_input_lock:
+            server._pending_terminal_input_queue.clear()
+            server._pending_terminal_input_queue.update(original_queue)

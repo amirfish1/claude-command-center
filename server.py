@@ -55016,6 +55016,23 @@ def _inject_text_into_session(
             prompt_kwargs["idempotency_key"] = idempotency_key
         result = _acp_prompt(acp_harness, session_id, text, **prompt_kwargs)
         if (
+            result.get("code") == "grok_external_active"
+            and not _from_terminal_queue
+        ):
+            # Mirrors Codex's write-gate (_codex_writer_gate_response): a live
+            # `grok --resume` TUI and CCC's ACP connection can't safely write
+            # the same session at once (CCC-884), but the user experience
+            # should still match Claude's "just works" send -- queue instead
+            # of surfacing the raw conflict, and the terminal-queue watcher
+            # retries via this same path until the TUI closes and
+            # _grok_external_writer_active() clears.
+            queued = _queue_terminal_input(session_id, text, {"status": "busy"})
+            queued["queued_reason"] = (
+                "Grok is open in a terminal — your message is queued and will "
+                "send once that terminal session closes"
+            )
+            return queued
+        if (
             result.get("code") == "busy"
             and not _from_terminal_queue
         ):
