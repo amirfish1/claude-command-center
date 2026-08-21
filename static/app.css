@@ -23413,6 +23413,17 @@ body.status-pos-right.status-rail-collapsed .conv-pane:has(> .status-rail):has(>
   margin: -2px 0 12px;
 }
 
+/* Sub-group heading nested inside a section (e.g. "Default for new
+   sessions" / "Default for workers" inside Sessions & Spawning). Smaller
+   and less prominent than .settings-section-eyebrow so it reads as a
+   subdivision, not a new section. */
+.settings-subsection-label {
+  font-size: 10.5px; font-weight: 600; text-transform: uppercase;
+  letter-spacing: 0.05em; color: var(--text-muted);
+  margin: 14px 0 4px;
+}
+.settings-subsection-label:first-of-type { margin-top: 2px; }
+
 /* Rows: label/desc on the left, control on the right. One of three
    affordances per row (setting / action / launcher) — never mixed.
    No per-row borders (kimi-web look: the section hairline does the

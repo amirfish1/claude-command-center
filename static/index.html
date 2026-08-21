@@ -1852,100 +1852,6 @@
     </div>
   </div>
 
-  <!-- Spawn-defaults modal. These values are server-side so the New
-       session UI and ccc-orchestration use the same engine/model when a
-       caller does not pass explicit spawn choices. -->
-  <div id="spawnDefaultsModal" class="upd-overlay" role="dialog" aria-modal="true" aria-labelledby="spawnDefaultsTitle">
-    <div class="upd-backdrop" id="spawnDefaultsBackdrop"></div>
-    <div class="upd-dialog" style="width:min(560px,94vw);">
-      <div class="upd-title" id="spawnDefaultsTitle">Spawn defaults</div>
-      <div class="upd-versions">
-        Used by New session and by ccc-orchestration when engine, model, or effort is omitted.
-      </div>
-      <div style="display:flex;flex-direction:column;gap:14px;font-size:13px;">
-        <div>
-          <label class="bug-label" for="spawnDefaultsEngine">Default engine</label>
-          <select id="spawnDefaultsEngine" class="bug-input">
-            <option value="claude">Claude</option>
-            <option value="codex">Codex</option>
-            <option value="cursor">Cursor</option>
-            <option value="antigravity">Antigravity</option>
-            <option value="kilo">Kilo</option>
-            <option value="hermes">Hermes</option>
-            <option value="kimi">Kimi</option>
-            <option value="opencode">OpenCode</option>
-            <option value="grok">Grok</option>
-          </select>
-        </div>
-        <div>
-          <label class="bug-label" for="spawnDefaultsModel">Default model</label>
-          <select id="spawnDefaultsModel" class="bug-input"></select>
-          <input id="spawnDefaultsOtherModel" class="bug-input" type="text" style="display:none;margin-top:8px;" placeholder="Model id or Antigravity label">
-          <div style="color:var(--text-muted);font-size:12px;margin-top:4px;">
-            The New session model picker mirrors this value. Explicit API payloads still win.
-          </div>
-        </div>
-        <div>
-          <label class="bug-label" for="spawnDefaultsWorkerEngine">Worker engine</label>
-          <select id="spawnDefaultsWorkerEngine" class="bug-input">
-            <option value="">WatchTower default</option>
-            <option value="claude">Claude</option>
-            <option value="codex">Codex</option>
-            <option value="kimi">Kimi</option>
-            <option value="grok">Grok</option>
-          </select>
-          <div style="color:var(--text-muted);font-size:12px;margin-top:4px;">
-            WatchTower queue workers spawn with this engine when the queue has no explicit override. Blank lets WatchTower pick (Codex when installed, else Claude).
-          </div>
-        </div>
-        <div id="spawnDefaultsWorkerModelField">
-          <label class="bug-label" for="spawnDefaultsWorkerModel">Worker model</label>
-          <select id="spawnDefaultsWorkerModel" class="bug-input"></select>
-          <input id="spawnDefaultsWorkerOtherModel" class="bug-input" type="text" style="display:none;margin-top:8px;" placeholder="Model id">
-          <div style="color:var(--text-muted);font-size:12px;margin-top:4px;">
-            The default model for WatchTower workers using the selected Worker engine. Queue-specific models still win.
-          </div>
-        </div>
-        <div>
-          <label class="bug-label" for="spawnDefaultsWorkerEffort">Worker reasoning effort</label>
-          <!-- No worker engine chosen means WatchTower picks one at claim
-               time, so the option list here has to be the union of every
-               ladder; app.js narrows it once a worker engine is selected. -->
-          <select id="spawnDefaultsWorkerEffort" class="bug-input">
-            <option value="">Engine default</option>
-            <option value="low">Light</option>
-            <option value="medium">Medium</option>
-            <option value="high">High</option>
-            <option value="xhigh">Extra High</option>
-            <option value="max">Max</option>
-          </select>
-          <div style="color:var(--text-muted);font-size:12px;margin-top:4px;">
-            WatchTower queue workers spawn at this effort when the queue has no explicit override. Engines with no reasoning-effort setting ignore it.
-          </div>
-        </div>
-        <div id="spawnDefaultsEffortField" style="display:none;">
-          <label class="bug-label" for="spawnDefaultsEffort">Default reasoning effort</label>
-          <select id="spawnDefaultsEffort" class="bug-input">
-            <option value="">Engine default</option>
-            <option value="low">Light</option>
-            <option value="medium">Medium</option>
-            <option value="high">High</option>
-            <option value="xhigh">Extra High</option>
-            <option value="max">Max</option>
-          </select>
-          <div style="color:var(--text-muted);font-size:12px;margin-top:4px;">
-            Used for new sessions on the default engine unless a request chooses an explicit effort. The field is hidden for engines that have no reasoning-effort setting.
-          </div>
-        </div>
-      </div>
-      <div class="upd-error" id="spawnDefaultsError"></div>
-      <div class="upd-actions">
-        <button type="button" class="upd-btn" id="spawnDefaultsCancelBtn">Cancel</button>
-        <button type="button" class="upd-btn upd-primary" id="spawnDefaultsSaveBtn">Save</button>
-      </div>
-    </div>
-  </div>
-
   <!-- Settings modal (W93). Replaces the old gear-button popover menu
        (removed) with a command-palette-style modal: search bar up top,
        a left rail of 7 sections, a scrollable content
@@ -1961,7 +1867,7 @@
 
        IDs load-bearing for existing JS (verbatim, moved from the old
        popover, do not rename): runOnboardingBtn, takeTourBtn,
-       spawnDefaultsBtn, networkAccessBtn, federationPeersBtn,
+       networkAccessBtn, federationPeersBtn,
        fleetViewBtn, carModeMenuBtn, restartServerBtn/restartServerLabel,
        openTotalRecallBtn, openTokenOptimizerBtn. `#appearancePopover` is
        kept as the Appearance section's container id for the same reason
@@ -2186,16 +2092,106 @@
               </div>
             </div>
 
-            <div class="settings-row" data-keywords="spawn defaults engine model effort reasoning new session codex claude kimi">
+            <div class="settings-subsection-label">Default for new sessions</div>
+
+            <div class="settings-row" data-keywords="spawn defaults engine new session codex claude kimi">
               <div class="settings-row-main">
-                <div class="settings-row-label">Spawn defaults</div>
-                <div class="settings-row-desc">Default engine, model, and effort used when you spawn a new session.</div>
+                <div class="settings-row-label">Engine</div>
+                <div class="settings-row-desc">Default engine used when you spawn a new session. Used by New session and by ccc-orchestration when engine is omitted.</div>
               </div>
               <div class="settings-row-control">
-                <span class="settings-row-value" id="settingsSpawnEngineValue">Not set</span>
-                <button type="button" class="settings-action-btn" id="spawnDefaultsBtn">Configure…</button>
+                <select id="spawnDefaultsEngine" class="bug-input" style="width:auto;">
+                  <option value="claude">Claude</option>
+                  <option value="codex">Codex</option>
+                  <option value="cursor">Cursor</option>
+                  <option value="antigravity">Antigravity</option>
+                  <option value="kilo">Kilo</option>
+                  <option value="hermes">Hermes</option>
+                  <option value="kimi">Kimi</option>
+                  <option value="opencode">OpenCode</option>
+                  <option value="grok">Grok</option>
+                </select>
               </div>
             </div>
+
+            <div class="settings-row" data-keywords="spawn defaults model new session">
+              <div class="settings-row-main">
+                <div class="settings-row-label">Model</div>
+                <div class="settings-row-desc">The New session model picker mirrors this value. Explicit API payloads still win.</div>
+              </div>
+              <div class="settings-row-control">
+                <select id="spawnDefaultsModel" class="bug-input" style="width:auto;"></select>
+                <input id="spawnDefaultsOtherModel" class="bug-input" type="text" style="display:none;width:auto;" placeholder="Model id or Antigravity label">
+              </div>
+            </div>
+
+            <div class="settings-row" id="spawnDefaultsEffortField" style="display:none;" data-keywords="spawn defaults reasoning effort new session">
+              <div class="settings-row-main">
+                <div class="settings-row-label">Reasoning effort</div>
+                <div class="settings-row-desc">Used for new sessions on the default engine unless a request chooses an explicit effort. Hidden for engines with no reasoning-effort setting.</div>
+              </div>
+              <div class="settings-row-control">
+                <select id="spawnDefaultsEffort" class="bug-input" style="width:auto;">
+                  <option value="">Engine default</option>
+                  <option value="low">Light</option>
+                  <option value="medium">Medium</option>
+                  <option value="high">High</option>
+                  <option value="xhigh">Extra High</option>
+                  <option value="max">Max</option>
+                </select>
+              </div>
+            </div>
+
+            <div class="settings-subsection-label">Default for workers</div>
+
+            <div class="settings-row" data-keywords="worker engine watchtower spawn defaults">
+              <div class="settings-row-main">
+                <div class="settings-row-label">Worker engine</div>
+                <div class="settings-row-desc">WatchTower queue workers spawn with this engine when the queue has no explicit override. Blank lets WatchTower pick (Codex when installed, else Claude).</div>
+              </div>
+              <div class="settings-row-control">
+                <select id="spawnDefaultsWorkerEngine" class="bug-input" style="width:auto;">
+                  <option value="">WatchTower default</option>
+                  <option value="claude">Claude</option>
+                  <option value="codex">Codex</option>
+                  <option value="kimi">Kimi</option>
+                  <option value="grok">Grok</option>
+                </select>
+              </div>
+            </div>
+
+            <div class="settings-row" id="spawnDefaultsWorkerModelField" data-keywords="worker model watchtower spawn defaults">
+              <div class="settings-row-main">
+                <div class="settings-row-label">Worker model</div>
+                <div class="settings-row-desc">The default model for WatchTower workers using the selected Worker engine. Queue-specific models still win.</div>
+              </div>
+              <div class="settings-row-control">
+                <select id="spawnDefaultsWorkerModel" class="bug-input" style="width:auto;"></select>
+                <input id="spawnDefaultsWorkerOtherModel" class="bug-input" type="text" style="display:none;width:auto;" placeholder="Model id">
+              </div>
+            </div>
+
+            <div class="settings-row" id="spawnDefaultsWorkerEffortField" data-keywords="worker reasoning effort watchtower spawn defaults">
+              <div class="settings-row-main">
+                <div class="settings-row-label">Worker reasoning effort</div>
+                <div class="settings-row-desc">WatchTower queue workers spawn at this effort when the queue has no explicit override. Engines with no reasoning-effort setting ignore it.</div>
+              </div>
+              <div class="settings-row-control">
+                <!-- No worker engine chosen means WatchTower picks one at claim
+                     time, so the option list here has to be the union of every
+                     ladder; app.js narrows it once a worker engine is selected. -->
+                <select id="spawnDefaultsWorkerEffort" class="bug-input" style="width:auto;">
+                  <option value="">Engine default</option>
+                  <option value="low">Light</option>
+                  <option value="medium">Medium</option>
+                  <option value="high">High</option>
+                  <option value="xhigh">Extra High</option>
+                  <option value="max">Max</option>
+                </select>
+              </div>
+            </div>
+
+            <div class="settings-row-note" id="spawnDefaultsError" hidden></div>
 
             <div class="settings-reset-row">
               <button type="button" class="settings-reset-btn" id="settingsResetSessions">Reset Sessions &amp; Spawning to defaults</button>

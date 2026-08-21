@@ -55462,9 +55462,10 @@
   // setSpawnDefaultModel/setSpawnEngine only ever mutate in-memory +
   // session-local state (see below) — they must NOT write back to
   // /api/spawn-defaults. That file is a one-way settings artifact: only
-  // saveSpawnDefaultsDraft() (Settings -> Spawn defaults, human-driven Save
-  // click) is allowed to persist it. Otherwise picking a one-off engine/model
-  // for a single new session silently overwrites the human's saved default.
+  // persistSpawnDefaults() (Settings > Sessions & Spawning, human-driven
+  // field edit) is allowed to persist it. Otherwise picking a one-off
+  // engine/model for a single new session silently overwrites the human's
+  // saved default.
   function setSpawnDefaultModel(engine, model) {
     engine = normalizeSpawnDefaultEngine(engine);
     let value = String(model == null ? '' : model).trim();
@@ -60926,47 +60927,38 @@
 
   bugOpenDiagnosticFromLocation();
 
-  // Spawn defaults modal — the ONLY writer of /api/spawn-defaults. New
-  // session / Kanban toolbar dropdowns read this default on load but only
-  // mutate in-memory state (setSpawnEngine/setSpawnDefaultModel); a one-off
-  // engine pick for a single session must never overwrite the saved default.
-  const $spawnDefaultsBtn = document.getElementById('spawnDefaultsBtn');
-  const $spawnDefaultsModal = document.getElementById('spawnDefaultsModal');
-  const $spawnDefaultsBackdrop = document.getElementById('spawnDefaultsBackdrop');
+  // Spawn defaults — inlined directly into Settings > Sessions & Spawning
+  // (CCC-902). These controls are the ONLY writer of /api/spawn-defaults;
+  // New session / Kanban toolbar dropdowns read this default on load but
+  // only mutate in-memory state (setSpawnEngine/setSpawnDefaultModel) — a
+  // one-off engine pick for a single session must never overwrite the saved
+  // default. There is no separate draft/Save/Cancel step anymore: each
+  // control persists spawnDefaultsState immediately on change via
+  // persistSpawnDefaults(), which POSTs the full current state (the server
+  // API only accepts the whole object) and re-renders from the response.
   const $spawnDefaultsEngine = document.getElementById('spawnDefaultsEngine');
   const $spawnDefaultsWorkerEngine = document.getElementById('spawnDefaultsWorkerEngine');
   const $spawnDefaultsWorkerModelField = document.getElementById('spawnDefaultsWorkerModelField');
   const $spawnDefaultsWorkerModel = document.getElementById('spawnDefaultsWorkerModel');
   const $spawnDefaultsWorkerOtherModel = document.getElementById('spawnDefaultsWorkerOtherModel');
   const $spawnDefaultsWorkerEffort = document.getElementById('spawnDefaultsWorkerEffort');
+  const $spawnDefaultsWorkerEffortField = document.getElementById('spawnDefaultsWorkerEffortField');
   const $spawnDefaultsModel = document.getElementById('spawnDefaultsModel');
   const $spawnDefaultsOtherModel = document.getElementById('spawnDefaultsOtherModel');
   const $spawnDefaultsEffortField = document.getElementById('spawnDefaultsEffortField');
   const $spawnDefaultsEffort = document.getElementById('spawnDefaultsEffort');
   const $spawnDefaultsError = document.getElementById('spawnDefaultsError');
-  const $spawnDefaultsCancelBtn = document.getElementById('spawnDefaultsCancelBtn');
-  const $spawnDefaultsSaveBtn = document.getElementById('spawnDefaultsSaveBtn');
-  let spawnDefaultsDraft = null;
 
-  function cloneSpawnDefaults() {
-    return {
-      engine: getSpawnEngine(),
-      models: Object.assign({}, spawnDefaultsState.models || {}),
-      reasoning_effort: spawnDefaultsState.reasoning_effort,
-      worker_engine: spawnDefaultsState.worker_engine || '',
-      worker_model: spawnDefaultsState.worker_model || '',
-      worker_reasoning_effort: spawnDefaultsState.worker_reasoning_effort || '',
-    };
-  }
-  function spawnDefaultsModalError(text) {
+  function spawnDefaultsInlineError(text) {
     if (!$spawnDefaultsError) return;
     $spawnDefaultsError.textContent = text || '';
-    $spawnDefaultsError.classList.toggle('visible', !!text);
+    $spawnDefaultsError.hidden = !text;
+    $spawnDefaultsError.classList.toggle('is-error', !!text);
   }
-  function renderSpawnDefaultsModelDraft() {
-    if (!$spawnDefaultsModel || !spawnDefaultsDraft) return;
-    const engine = normalizeSpawnDefaultEngine(spawnDefaultsDraft.engine);
-    const currentModel = String((spawnDefaultsDraft.models || {})[engine] || '').trim();
+  function renderSpawnDefaultsModelInline() {
+    if (!$spawnDefaultsModel) return;
+    const engine = normalizeSpawnDefaultEngine(spawnDefaultsState.engine);
+    const currentModel = String((spawnDefaultsState.models || {})[engine] || '').trim();
     const options = modelOptionsForSpawnEngine(engine, currentModel, true);
     $spawnDefaultsModel.innerHTML = '';
     options.forEach(opt => {
@@ -60988,13 +60980,13 @@
       $spawnDefaultsOtherModel.value = other ? currentModel : '';
     }
   }
-  function renderSpawnDefaultsWorkerModelDraft() {
-    if (!$spawnDefaultsWorkerModel || !spawnDefaultsDraft) return;
-    const engine = spawnDefaultsDraft.worker_engine || '';
+  function renderSpawnDefaultsWorkerModelInline() {
+    if (!$spawnDefaultsWorkerModel) return;
+    const engine = spawnDefaultsState.worker_engine || '';
     if ($spawnDefaultsWorkerModelField) $spawnDefaultsWorkerModelField.style.display = engine ? '' : 'none';
     if (!engine) return;
-    const inheritedModel = String((spawnDefaultsDraft.models || {})[engine] || '').trim();
-    const currentModel = String(spawnDefaultsDraft.worker_model || inheritedModel).trim();
+    const inheritedModel = String((spawnDefaultsState.models || {})[engine] || '').trim();
+    const currentModel = String(spawnDefaultsState.worker_model || inheritedModel).trim();
     const options = modelOptionsForSpawnEngine(engine, currentModel, true);
     $spawnDefaultsWorkerModel.innerHTML = '';
     options.forEach(opt => {
@@ -61016,48 +61008,32 @@
       $spawnDefaultsWorkerOtherModel.value = other ? currentModel : '';
     }
   }
-  function renderSpawnDefaultsDraft() {
-    if (!spawnDefaultsDraft) return;
-    if ($spawnDefaultsEngine) $spawnDefaultsEngine.value = normalizeSpawnDefaultEngine(spawnDefaultsDraft.engine);
-    if ($spawnDefaultsWorkerEngine) $spawnDefaultsWorkerEngine.value = spawnDefaultsDraft.worker_engine || '';
+  function renderSpawnDefaultsInline() {
+    if ($spawnDefaultsEngine) $spawnDefaultsEngine.value = normalizeSpawnDefaultEngine(spawnDefaultsState.engine);
+    if ($spawnDefaultsWorkerEngine) $spawnDefaultsWorkerEngine.value = spawnDefaultsState.worker_engine || '';
     // No worker engine chosen means WatchTower picks one at claim time, so the
     // widest ladder is the honest option list here.
-    const workerEngine = spawnDefaultsDraft.worker_engine || '';
+    const workerEngine = spawnDefaultsState.worker_engine || '';
     const workerLevels = workerEngine ? effortLevelsForEngine(workerEngine) : allEffortLevels();
     renderEffortOptions(
       $spawnDefaultsWorkerEffort,
       workerLevels,
-      spawnDefaultsDraft.worker_reasoning_effort,
+      spawnDefaultsState.worker_reasoning_effort,
       'Engine default',
     );
-    if ($spawnDefaultsWorkerEffort && $spawnDefaultsWorkerEffort.parentElement) {
-      $spawnDefaultsWorkerEffort.parentElement.style.display = workerLevels.length ? '' : 'none';
+    if ($spawnDefaultsWorkerEffortField) {
+      $spawnDefaultsWorkerEffortField.style.display = workerLevels.length ? '' : 'none';
     }
-    renderSpawnDefaultsModelDraft();
-    renderSpawnDefaultsWorkerModelDraft();
-    const draftEngine = normalizeSpawnDefaultEngine(spawnDefaultsDraft.engine);
-    const draftLevels = effortLevelsForEngine(draftEngine);
-    if ($spawnDefaultsEffortField) $spawnDefaultsEffortField.style.display = draftLevels.length ? '' : 'none';
-    renderEffortOptions($spawnDefaultsEffort, draftLevels, spawnDefaultsDraft.reasoning_effort, 'Engine default');
+    renderSpawnDefaultsModelInline();
+    renderSpawnDefaultsWorkerModelInline();
+    const engine = normalizeSpawnDefaultEngine(spawnDefaultsState.engine);
+    const levels = effortLevelsForEngine(engine);
+    if ($spawnDefaultsEffortField) $spawnDefaultsEffortField.style.display = levels.length ? '' : 'none';
+    renderEffortOptions($spawnDefaultsEffort, levels, spawnDefaultsState.reasoning_effort, 'Engine default');
   }
-  async function openSpawnDefaultsModal() {
-    if (!$spawnDefaultsModal) return;
-    spawnDefaultsModalError('');
-    if ($spawnDefaultsSaveBtn) { $spawnDefaultsSaveBtn.disabled = false; $spawnDefaultsSaveBtn.textContent = 'Save'; }
-    // Always re-fetch from server on open so the modal reflects any changes
-    // made by other sessions or orchestration scripts since startup.
-    try { await loadSpawnDefaults(); } catch (_) {}
-    spawnDefaultsDraft = cloneSpawnDefaults();
-    renderSpawnDefaultsDraft();
-    $spawnDefaultsModal.classList.add('open');
-  }
-  function closeSpawnDefaultsModal() {
-    if ($spawnDefaultsModal) $spawnDefaultsModal.classList.remove('open');
-    spawnDefaultsDraft = null;
-  }
-  function updateSpawnDefaultsDraftModelFromControls() {
-    if (!spawnDefaultsDraft || !$spawnDefaultsModel) return;
-    const engine = normalizeSpawnDefaultEngine(spawnDefaultsDraft.engine);
+  function updateSpawnDefaultsModelFromControls() {
+    if (!$spawnDefaultsModel) return;
+    const engine = normalizeSpawnDefaultEngine(spawnDefaultsState.engine);
     let model = $spawnDefaultsModel.value;
     if (model === SPAWN_DEFAULT_OTHER) {
       model = ($spawnDefaultsOtherModel && $spawnDefaultsOtherModel.value || '').trim();
@@ -61065,61 +61041,58 @@
     if (engine === 'claude' && !model) model = 'opus';
     if (engine === 'codex' && !model) model = 'gpt-5.5';
     if (engine === 'cursor' && !model) model = 'auto';
-    spawnDefaultsDraft.models[engine] = model;
+    spawnDefaultsState.models[engine] = model;
   }
-  function updateSpawnDefaultsDraftWorkerModelFromControls() {
-    if (!spawnDefaultsDraft || !$spawnDefaultsWorkerModel) return;
-    if (!spawnDefaultsDraft.worker_engine) {
-      spawnDefaultsDraft.worker_model = '';
+  function updateSpawnDefaultsWorkerModelFromControls() {
+    if (!$spawnDefaultsWorkerModel) return;
+    if (!spawnDefaultsState.worker_engine) {
+      spawnDefaultsState.worker_model = '';
       return;
     }
     let model = $spawnDefaultsWorkerModel.value;
     if (model === SPAWN_DEFAULT_OTHER) {
       model = ($spawnDefaultsWorkerOtherModel && $spawnDefaultsWorkerOtherModel.value || '').trim();
     }
-    spawnDefaultsDraft.worker_model = model;
+    spawnDefaultsState.worker_model = model;
   }
-  async function saveSpawnDefaultsDraft() {
-    if (!$spawnDefaultsSaveBtn || !spawnDefaultsDraft) return;
-    updateSpawnDefaultsDraftModelFromControls();
-    if ($spawnDefaultsWorkerEngine) spawnDefaultsDraft.worker_engine = $spawnDefaultsWorkerEngine.value || '';
-    updateSpawnDefaultsDraftWorkerModelFromControls();
-    spawnDefaultsModalError('');
-    const engine = normalizeSpawnDefaultEngine(spawnDefaultsDraft.engine);
-    // Read each effort control only while its engine actually has a ladder.
-    // Reading a hidden select persisted the previous engine's rung under the
-    // new one; leaving the draft value alone keeps a stored choice intact for
-    // when the user switches back.
-    if ($spawnDefaultsEffort && engineSupportsEffort(engine)) {
-      spawnDefaultsDraft.reasoning_effort = $spawnDefaultsEffort.value;
-    }
-    const workerEngine = spawnDefaultsDraft.worker_engine || '';
-    if ($spawnDefaultsWorkerEffort && (!workerEngine || engineSupportsEffort(workerEngine))) {
-      spawnDefaultsDraft.worker_reasoning_effort = $spawnDefaultsWorkerEffort.value || '';
-    }
-    const model = String((spawnDefaultsDraft.models || {})[engine] || '').trim();
+  // Single POST helper every inline control's change handler routes through.
+  // The server API takes the whole spawn-defaults object at once (there is no
+  // per-field endpoint), so "save on change" still means sending the full
+  // current spawnDefaultsState each time — just without a separate Save
+  // button or draft copy gating it.
+  async function persistSpawnDefaults(rowEl) {
+    spawnDefaultsInlineError('');
+    const engine = normalizeSpawnDefaultEngine(spawnDefaultsState.engine);
+    const model = String((spawnDefaultsState.models || {})[engine] || '').trim();
     if ((engine === 'claude' || engine === 'codex' || engine === 'cursor') && !model) {
-      spawnDefaultsModalError('Claude, Codex, and Cursor need an explicit default model.');
+      spawnDefaultsInlineError('Claude, Codex, and Cursor need an explicit default model.');
       return;
     }
-    const workerModel = String(spawnDefaultsDraft.worker_model || '').trim();
+    const workerEngine = spawnDefaultsState.worker_engine || '';
+    const workerModel = String(spawnDefaultsState.worker_model || '').trim();
     const workerUnavailableReason = workerEngine && _modelUnavailableReason(workerEngine, workerModel);
     if (workerUnavailableReason) {
-      spawnDefaultsModalError(workerUnavailableReason);
+      spawnDefaultsInlineError(workerUnavailableReason);
       return;
     }
     const unavailableReason = _modelUnavailableReason(engine, model);
     if (unavailableReason) {
-      spawnDefaultsModalError(unavailableReason);
+      spawnDefaultsInlineError(unavailableReason);
       return;
     }
-    $spawnDefaultsSaveBtn.disabled = true;
-    $spawnDefaultsSaveBtn.textContent = 'Saving...';
+    const payload = {
+      engine,
+      models: Object.assign({}, spawnDefaultsState.models || {}),
+      reasoning_effort: spawnDefaultsState.reasoning_effort,
+      worker_engine: workerEngine,
+      worker_model: workerModel,
+      worker_reasoning_effort: spawnDefaultsState.worker_reasoning_effort || '',
+    };
     try {
       const res = await fetch('/api/spawn-defaults', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(spawnDefaultsDraft),
+        body: JSON.stringify(payload),
       });
       const data = await res.json().catch(() => ({}));
       if (!res.ok || !data.ok) throw new Error((data && data.error) || ('HTTP ' + res.status));
@@ -61127,19 +61100,13 @@
       _spawnDefaultsLoaded = true;
       syncSpawnEngineDependentUi();
       if (typeof updateInputBar === 'function') updateInputBar();
-      closeSpawnDefaultsModal();
-      showOpToast('Spawn defaults saved', 'ok');
+      renderSpawnDefaultsInline();
+      if (rowEl && typeof showSettingsSavedPulse === 'function') showSettingsSavedPulse(rowEl);
     } catch (err) {
-      spawnDefaultsModalError((err && err.message) || 'Save failed.');
-      $spawnDefaultsSaveBtn.disabled = false;
-      $spawnDefaultsSaveBtn.textContent = 'Save';
+      spawnDefaultsInlineError((err && err.message) || 'Save failed.');
     }
   }
 
-  if ($spawnDefaultsBtn) $spawnDefaultsBtn.addEventListener('click', () => {
-    closeSettingsModal();
-    openSpawnDefaultsModal();
-  });
   const $runOnboardingBtn = document.getElementById('runOnboardingBtn');
   if ($runOnboardingBtn) $runOnboardingBtn.addEventListener('click', async () => {
     closeSettingsModal();
@@ -61153,10 +61120,6 @@
       showOpToast('Failed to trigger onboarding.', 'error');
     }
   });
-  if ($spawnDefaultsBackdrop) $spawnDefaultsBackdrop.addEventListener('click', closeSpawnDefaultsModal);
-  if ($spawnDefaultsCancelBtn) $spawnDefaultsCancelBtn.addEventListener('click', closeSpawnDefaultsModal);
-  if ($spawnDefaultsSaveBtn) $spawnDefaultsSaveBtn.addEventListener('click', saveSpawnDefaultsDraft);
-
   // ── Car Mode (hands-free voice operator) ──────────────────────────────
   // Explainer + cost + optional key setup + start/stop. Status/keys go through
   // /api/car-mode/*; the server never echoes key values, only booleans.
@@ -61287,41 +61250,55 @@
   if ($carModeStopBtn) $carModeStopBtn.addEventListener('click', stopCarMode);
   // One status read at load keeps the Car Mode settings state current.
   fetchCarModeStatus();
+  // Each control below mutates spawnDefaultsState in place and immediately
+  // persists it — there is no draft object or Save button now that the
+  // fields live inline in Settings instead of behind a modal launcher.
   if ($spawnDefaultsEngine) $spawnDefaultsEngine.addEventListener('change', () => {
-    if (!spawnDefaultsDraft) return;
-    updateSpawnDefaultsDraftModelFromControls();
-    spawnDefaultsDraft.engine = normalizeSpawnDefaultEngine($spawnDefaultsEngine.value);
-    renderSpawnDefaultsDraft();
+    updateSpawnDefaultsModelFromControls();
+    spawnDefaultsState.engine = normalizeSpawnDefaultEngine($spawnDefaultsEngine.value);
+    renderSpawnDefaultsInline();
+    persistSpawnDefaults($spawnDefaultsEngine.closest('.settings-row'));
   });
   if ($spawnDefaultsModel) $spawnDefaultsModel.addEventListener('change', () => {
     if ($spawnDefaultsOtherModel) {
       $spawnDefaultsOtherModel.style.display = $spawnDefaultsModel.value === SPAWN_DEFAULT_OTHER ? '' : 'none';
-      if ($spawnDefaultsModel.value === SPAWN_DEFAULT_OTHER) $spawnDefaultsOtherModel.focus();
+      if ($spawnDefaultsModel.value === SPAWN_DEFAULT_OTHER) { $spawnDefaultsOtherModel.focus(); return; }
     }
-    updateSpawnDefaultsDraftModelFromControls();
+    updateSpawnDefaultsModelFromControls();
+    persistSpawnDefaults($spawnDefaultsModel.closest('.settings-row'));
   });
   if ($spawnDefaultsWorkerEngine) $spawnDefaultsWorkerEngine.addEventListener('change', () => {
-    if (!spawnDefaultsDraft) return;
-    spawnDefaultsDraft.worker_engine = $spawnDefaultsWorkerEngine.value || '';
-    spawnDefaultsDraft.worker_model = '';
-    renderSpawnDefaultsWorkerModelDraft();
+    spawnDefaultsState.worker_engine = $spawnDefaultsWorkerEngine.value || '';
+    spawnDefaultsState.worker_model = '';
+    renderSpawnDefaultsWorkerModelInline();
+    persistSpawnDefaults($spawnDefaultsWorkerEngine.closest('.settings-row'));
   });
   if ($spawnDefaultsWorkerModel) $spawnDefaultsWorkerModel.addEventListener('change', () => {
     if ($spawnDefaultsWorkerOtherModel) {
       $spawnDefaultsWorkerOtherModel.style.display = $spawnDefaultsWorkerModel.value === SPAWN_DEFAULT_OTHER ? '' : 'none';
-      if ($spawnDefaultsWorkerModel.value === SPAWN_DEFAULT_OTHER) $spawnDefaultsWorkerOtherModel.focus();
+      if ($spawnDefaultsWorkerModel.value === SPAWN_DEFAULT_OTHER) { $spawnDefaultsWorkerOtherModel.focus(); return; }
     }
-    updateSpawnDefaultsDraftWorkerModelFromControls();
+    updateSpawnDefaultsWorkerModelFromControls();
+    persistSpawnDefaults($spawnDefaultsWorkerModel.closest('.settings-row'));
   });
-  if ($spawnDefaultsOtherModel) $spawnDefaultsOtherModel.addEventListener('input', updateSpawnDefaultsDraftModelFromControls);
-  if ($spawnDefaultsWorkerOtherModel) $spawnDefaultsWorkerOtherModel.addEventListener('input', updateSpawnDefaultsDraftWorkerModelFromControls);
+  // "Other…" free-text fallback: input events save-as-you-type would spam
+  // the server, so these only persist on blur (change), matching every other
+  // free-text settings field in this panel.
+  if ($spawnDefaultsOtherModel) {
+    $spawnDefaultsOtherModel.addEventListener('input', updateSpawnDefaultsModelFromControls);
+    $spawnDefaultsOtherModel.addEventListener('change', () => persistSpawnDefaults($spawnDefaultsOtherModel.closest('.settings-row')));
+  }
+  if ($spawnDefaultsWorkerOtherModel) {
+    $spawnDefaultsWorkerOtherModel.addEventListener('input', updateSpawnDefaultsWorkerModelFromControls);
+    $spawnDefaultsWorkerOtherModel.addEventListener('change', () => persistSpawnDefaults($spawnDefaultsWorkerOtherModel.closest('.settings-row')));
+  }
   if ($spawnDefaultsEffort) $spawnDefaultsEffort.addEventListener('change', () => {
-    if (spawnDefaultsDraft) spawnDefaultsDraft.reasoning_effort = $spawnDefaultsEffort.value;
+    spawnDefaultsState.reasoning_effort = $spawnDefaultsEffort.value;
+    persistSpawnDefaults($spawnDefaultsEffort.closest('.settings-row'));
   });
-  document.addEventListener('keydown', (e) => {
-    if (e.key === 'Escape' && $spawnDefaultsModal && $spawnDefaultsModal.classList.contains('open')) {
-      closeSpawnDefaultsModal();
-    }
+  if ($spawnDefaultsWorkerEffort) $spawnDefaultsWorkerEffort.addEventListener('change', () => {
+    spawnDefaultsState.worker_reasoning_effort = $spawnDefaultsWorkerEffort.value || '';
+    persistSpawnDefaults($spawnDefaultsWorkerEffort.closest('.settings-row'));
   });
 
   // Network access modal — opt in to non-loopback access via Tailscale or
@@ -64255,21 +64232,14 @@
     if (getThemePref() === 'system') applyTheme('system');
   });
 
+  // Spawn defaults (CCC-902) live inline in the Sessions & Spawning section
+  // now, not behind a "Configure…" modal launcher, so refreshing the row
+  // just means re-rendering those controls from the current state. Kept as
+  // its own function (rather than inlining calls to renderSpawnDefaultsInline)
+  // because it is called from several places (settings-modal open, Reset,
+  // mergeSpawnDefaults after any save) that predate the inline layout.
   function refreshSpawnEngineValue() {
-    const el = document.getElementById('settingsSpawnEngineValue');
-    if (!el) return;
-    let engine = '';
-    try { engine = localStorage.getItem('ccc.spawnEngine') || ''; } catch (_) {}
-    if (!engine) { el.textContent = 'Not set'; el.title = ''; return; }
-    // The row summarises the whole spawn spec, not just the engine: a user who
-    // set Claude at Max effort should not have to open the modal to see it.
-    const model = String((spawnDefaultsState.models || {})[engine] || '').trim();
-    const effortId = engineSupportsEffort(engine) ? String(spawnDefaultsState.reasoning_effort || '') : '';
-    const effort = effortLevelsForEngine(engine).find(lvl => lvl.id === effortId);
-    const summary = [engine, model, effort ? effort.label + ' effort' : ''].filter(Boolean).join(' · ');
-    el.textContent = summary;
-    // The value column is narrow; the title carries the untruncated spec.
-    el.title = summary;
+    if (typeof renderSpawnDefaultsInline === 'function') renderSpawnDefaultsInline();
   }
 
   function refreshMonthlyClaudePlanInput() {
