@@ -42824,6 +42824,15 @@
     const pid = paneId || ((typeof activePaneId === 'function') ? activePaneId() : 'p1');
     return document.querySelector('#convSplit > .conv-pane[data-pane-id="' + pid + '"] > .conv-input-context[data-role="input-context"]');
   }
+  // CCC-823: the model pill lives in the composer's real action-button row
+  // (alongside Esc/TTS/mic/send), not in the #convInputContext strip above
+  // it. Same pane-scoping rule as getInputContextSlot — scope to pane
+  // chrome so a literal `data-role="composer-model-pill"` string pasted
+  // into a transcript can never resolve here.
+  function getComposerModelPillSlot(paneId) {
+    const pid = paneId || ((typeof activePaneId === 'function') ? activePaneId() : 'p1');
+    return document.querySelector('#convSplit > .conv-pane[data-pane-id="' + pid + '"] .conv-input-buttons [data-role="composer-model-pill"]');
+  }
   // Split mode: the usage/workspace strip is per-pane chrome. Resolve which
   // pane is showing a given session so a fetch triggered for the right pane
   // never paints the left pane's strip (CCC-477).
@@ -44046,14 +44055,11 @@
         + (queued ? '\n(Switch to ' + (ovr && ovr.model || '') + ' is queued - applies on the session\'s next CCC-resumed ask)' : '')
         + (queuedEffort ? '\n(Switch to effort ' + queuedEffort + ' is queued - applies on the session\'s next CCC-resumed ask)' : '')
         + (engine === 'antigravity' ? '' : '\n\nClick to change model');
-      // The effort segment is the third knob of engine/model/effort, so on an
-      // effort-capable engine it renders even when CCC never set one: a blank
-      // gap read as "this session has no effort", when it is really running at
-      // the CLI default. Engines with no effort concept still render nothing.
-      const effortInner = showsEffort
-        ? ' <span class="wp-model-effort' + (currentReasoningEffort ? '' : ' is-default') + '">'
-          + escapeHtml(currentReasoningEffort || 'default') + '</span>'
-        : '';
+      // CCC-823: the pill's visible label is now JUST the model short name
+      // (plus 1M / pending-switch badges where relevant) — reasoning effort
+      // no longer renders in the label itself. It still surfaces via
+      // modelTip's "Reasoning effort: ..." line above, and the full effort
+      // ladder still lives inside the picker this pill opens.
       const pendingModelText = queued ? ((liveModel && shortOvrModel) ? shortOvrModel : 'next') : '';
       const pendingText = pendingModelText
         ? formatModelEffort(pendingModelText, queuedEffort)
@@ -44061,7 +44067,6 @@
       const modelInner = escapeHtml(shortModel)
         + (isOneM ? ' <span class="wp-model-1m">1M</span>' : '')
         + (pendingText ? ' <span class="wp-model-pending">→ ' + escapeHtml(pendingText) + '</span>' : '')
-        + effortInner
         + ' <span class="wp-model-chevron">&#x25be;</span>';
       if (engine === 'antigravity' || engine === 'hermes') {
         modelPill = ' <span class="wp-model-pill is-static" title="' + escapeHtml(modelTip) + '">'
@@ -44076,6 +44081,22 @@
           + ' title="' + escapeHtml(modelTip) + '">'
           + modelInner
           + '</button>';
+      }
+    }
+    // CCC-823: the model pill physically lives in the composer's action
+    // button row (alongside Esc/TTS/mic/send) now, not in this usage strip.
+    // Update that slot here — every branch below (including the early
+    // "ctx unavailable" return) reaches this point first.
+    const pillSlot = getComposerModelPillSlot(paneId);
+    if (pillSlot) {
+      pillSlot.innerHTML = modelPill;
+      const composerModelBtn = pillSlot.querySelector('[data-model-picker]');
+      if (composerModelBtn) {
+        composerModelBtn.addEventListener('click', (e) => {
+          e.preventDefault();
+          e.stopPropagation();
+          openModelPicker(composerModelBtn);
+        });
       }
     }
     // Click-toggle override: if you're on the 1M variant the server's
@@ -44096,7 +44117,7 @@
         + 'Model: ' + (displayModel || u.model || 'unknown');
       uSlot.innerHTML = qualityPill + '<span class="wp-usage-pill wp-usage-missing" title="' + escapeHtml(title) + '">'
         + 'ctx unavailable'
-        + '</span>' + modelPill;
+        + '</span>';
       syncInputContextVisibility(slot);
       scheduleInputContextFit();
       return;
@@ -44193,18 +44214,15 @@
         + '<span class="wp-handover-dot"></span>Auto handover: ' + (handoverOn ? 'ON' : 'OFF')
         + '</button>';
     }
-    // Model pill renders LAST in the wp-usage cluster — rightmost slot,
-    // matching the Claude Desktop convention users expect. The chevron
-    // cover bug (#convInputContext right edge covered by .status-rail-
-    // restore in collapsed-rail mode) is handled via the 40px right
-    // padding rule in app.css; narrow-pane overflow clipping is the
-    // remaining risk and only manifests in thin split panes.
+    // CCC-823: the model pill no longer renders here — it moved into the
+    // composer's action-button row (see pillSlot above). This strip keeps
+    // the token-count / cost / handover pills only.
     uSlot.innerHTML = qualityPill + '<span class="' + cls + '" title="' + escapeHtml(title) + '">'
       + _contextRingSvg(calcPct)
       + sourceLabel + ' ' + _formatTokens(displayTokens) + ' / ' + _formatTokens(limit)
       + ' <span class="wp-usage-pct">(' + calcPct + '%)</span>'
       + slashContextText
-      + '</span>' + peakNote + costPill + antigravityTotalsPill + modelPill + handoverPill;
+      + '</span>' + peakNote + costPill + antigravityTotalsPill + handoverPill;
     syncInputContextVisibility(slot);
     scheduleInputContextFit();
     const handoverBtn = uSlot.querySelector('[data-auto-handover-toggle]');
@@ -44221,14 +44239,6 @@
         e.preventDefault();
         e.stopPropagation();
         openPlanUsagePopover(pill);
-      });
-    }
-    const modelBtn = uSlot.querySelector('[data-model-picker]');
-    if (modelBtn) {
-      modelBtn.addEventListener('click', (e) => {
-        e.preventDefault();
-        e.stopPropagation();
-        openModelPicker(modelBtn);
       });
     }
     // Live-mirror this pane's context % into its sidebar row badge (CCC-892):
@@ -44260,15 +44270,23 @@
         const paneEl = document.querySelector('.conv-pane[data-pane-id="' + pane.id + '"]');
         const paneCtx = paneEl && paneEl.querySelector('.conv-input-context[data-role="input-context"]');
         const paneUSlot = paneCtx && paneCtx.querySelector('[data-usage]');
-        if (!paneUSlot) return;
-        paneUSlot.innerHTML = uSlot.innerHTML;
-        if (paneCtx) paneCtx.classList.toggle('visible', slot.classList.contains('visible'));
-        const pu = paneUSlot.querySelector('.wp-usage-clickable');
-        if (pu) pu.addEventListener('click', (e) => { e.preventDefault(); e.stopPropagation(); openPlanUsagePopover(pu); });
-        const pm = paneUSlot.querySelector('[data-model-picker]');
-        if (pm) pm.addEventListener('click', (e) => { e.preventDefault(); e.stopPropagation(); openModelPicker(pm); });
-        const ph = paneUSlot.querySelector('[data-auto-handover-toggle]');
-        if (ph) ph.addEventListener('click', (e) => { e.preventDefault(); e.stopPropagation(); toggleAutoHandoverForPane(pane.id, _usageSessionIdByPane[pane.id]); });
+        if (paneUSlot) {
+          paneUSlot.innerHTML = uSlot.innerHTML;
+          if (paneCtx) paneCtx.classList.toggle('visible', slot.classList.contains('visible'));
+          const pu = paneUSlot.querySelector('.wp-usage-clickable');
+          if (pu) pu.addEventListener('click', (e) => { e.preventDefault(); e.stopPropagation(); openPlanUsagePopover(pu); });
+          const ph = paneUSlot.querySelector('[data-auto-handover-toggle]');
+          if (ph) ph.addEventListener('click', (e) => { e.preventDefault(); e.stopPropagation(); toggleAutoHandoverForPane(pane.id, _usageSessionIdByPane[pane.id]); });
+        }
+        // CCC-823: mirror the composer-row model pill into this pane's own
+        // button row too — it lives outside #convInputContext now, so the
+        // paneUSlot copy above no longer carries it.
+        const panePillSlot = paneEl && paneEl.querySelector('.conv-input-buttons [data-role="composer-model-pill"]');
+        if (panePillSlot && pillSlot) {
+          panePillSlot.innerHTML = pillSlot.innerHTML;
+          const pm = panePillSlot.querySelector('[data-model-picker]');
+          if (pm) pm.addEventListener('click', (e) => { e.preventDefault(); e.stopPropagation(); openModelPicker(pm); });
+        }
       });
     }
     // Keep the per-session advisor nudge in sync with whatever session is open.
