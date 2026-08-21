@@ -521,6 +521,22 @@
     gap: 4px 8px;
     min-width: 0;
   }
+  /* A meter fed by a stale provider snapshot (e.g. Kimi, whose usage API is
+     only reachable ~15 min after its own CLI runs) renders dimmed with a
+     "stale" tag instead of the live visual language. */
+  .weekly-meter.is-stale { opacity: 0.45; filter: grayscale(0.6); }
+  .weekly-stale-tag {
+    font-size: 9px;
+    font-weight: 700;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: rgba(255,255,255,0.55);
+    border: 1px solid rgba(255,255,255,0.25);
+    border-radius: 4px;
+    padding: 0 4px;
+    margin-left: 6px;
+    vertical-align: middle;
+  }
   .weekly-gauge {
     grid-area: gauge;
     width: 100%;
@@ -1693,15 +1709,22 @@
     // 14-day view, so keep the last good quota until its own reset passes.
     function stabilizeWeeklyQuota(weekly) {
       const out = weekly && typeof weekly === 'object' ? weekly : {};
+      // Past this age a resurrected quota is rendered as stale (dimmed meter,
+      // excluded from the combined chart) instead of in the live visual
+      // language. Matches the server's 24h `stale` threshold.
+      const QUOTA_STALE_MS = 24 * 3600 * 1000;
       ['codex', 'kimi'].forEach(engine => {
         const live = out[engine];
-        if (isUsableWeeklyQuota(live)) {
-          try { localStorage.setItem(quotaFallbackKey(engine), JSON.stringify(live)); } catch (_e) {}
+        if (isUsableWeeklyQuota(live) && !live.stale) {
+          try { localStorage.setItem(quotaFallbackKey(engine), JSON.stringify({ ...live, saved_at: Date.now() })); } catch (_e) {}
           return;
         }
         try {
           const cached = JSON.parse(localStorage.getItem(quotaFallbackKey(engine)) || 'null');
-          if (isUsableWeeklyQuota(cached)) out[engine] = { ...cached, stale: true };
+          if (isUsableWeeklyQuota(cached)) {
+            const age = Date.now() - (Number(cached.saved_at) || 0);
+            out[engine] = { ...cached, stale: age > QUOTA_STALE_MS };
+          }
         } catch (_e) {}
       });
       return out;
@@ -2598,12 +2621,12 @@
       if (!weeklyData) return null;
       if (engine === 'codex') {
         const codex = weeklyData.codex;
-        if (!codex || !codex.ok || codex.weekly_pct == null) return null;
+        if (!codex || !codex.ok || codex.stale || codex.weekly_pct == null) return null;
         return { pct: Number(codex.weekly_pct), start: codex.week_start, resetAt: codex.weekly_resets_at };
       }
       if (engine === 'kimi') {
         const kimi = weeklyData.kimi;
-        if (!kimi || !kimi.ok || kimi.weekly_pct == null) return null;
+        if (!kimi || !kimi.ok || kimi.stale || kimi.weekly_pct == null) return null;
         return { pct: Number(kimi.weekly_pct), start: kimi.week_start, resetAt: kimi.weekly_resets_at };
       }
       if (weeklyData.display_pct == null) return null;
@@ -3346,14 +3369,14 @@
       }
       const codex = weeklyData.codex;
       if ((activeThroughputEngine === 'codex' || activeThroughputEngine === 'combined') &&
-          codex && codex.weekly_pct != null && codex.week_start && codex.weekly_resets_at) {
+          codex && !codex.stale && codex.weekly_pct != null && codex.week_start && codex.weekly_resets_at) {
         crossings.push(forecastCrossingAt100(
           Number(codex.weekly_pct), codex.week_start, codex.weekly_resets_at
         ));
       }
       const kimi = weeklyData.kimi;
       if ((activeThroughputEngine === 'kimi' || activeThroughputEngine === 'combined') &&
-          kimi && kimi.weekly_pct != null && kimi.week_start && kimi.weekly_resets_at) {
+          kimi && !kimi.stale && kimi.weekly_pct != null && kimi.week_start && kimi.weekly_resets_at) {
         crossings.push(forecastCrossingAt100(
           Number(kimi.weekly_pct), kimi.week_start, kimi.weekly_resets_at
         ));
@@ -3369,7 +3392,7 @@
       // Codex and Kimi derive their own pct-per-token: the provider's weekly %
       // over this period's locally-counted tokens (same math, per engine).
       const quota = weeklyData && (activeThroughputEngine === 'kimi' ? weeklyData.kimi : weeklyData.codex);
-      if (!quota || !quota.ok || quota.weekly_pct == null || !quota.weekly_resets_at) return null;
+      if (!quota || !quota.ok || quota.stale || quota.weekly_pct == null || !quota.weekly_resets_at) return null;
       const resetAt = new Date(quota.weekly_resets_at);
       const periodStart = new Date(resetAt.getTime() - 7 * 86400000);
       const periodTokens = ((summary && summary.hourly) || []).reduce((total, row) => {
@@ -4081,8 +4104,12 @@
         const codexCurrentTokens = codexEvents.reduce((sum, event) => sum + event.tokens, 0);
         const kimiCurrentTokens = kimiEvents.reduce((sum, event) => sum + event.tokens, 0);
         const claudePpt = claudeCurrentTokens > 0 ? weeklyData.display_pct / claudeCurrentTokens : 0;
-        const codexPpt = codexCurrentTokens > 0 ? weeklyData.codex.weekly_pct / codexCurrentTokens : 0;
-        const kimiPpt = kimiCurrentTokens > 0 ? kimiWeekly.weekly_pct / kimiCurrentTokens : 0;
+        // A stale provider snapshot (e.g. Kimi's days-old cached quota) must
+        // not draw as a live series in the combined weekly overlay.
+        const codexQuotaStale = !!(weeklyData.codex && weeklyData.codex.stale);
+        const kimiQuotaStale = !!kimiWeekly.stale;
+        const codexPpt = (!codexQuotaStale && codexCurrentTokens > 0) ? weeklyData.codex.weekly_pct / codexCurrentTokens : 0;
+        const kimiPpt = (!kimiQuotaStale && kimiCurrentTokens > 0) ? kimiWeekly.weekly_pct / kimiCurrentTokens : 0;
         const claudeSeries = claudePpt > 0 ? buildQuotaSeries(
           claudeComponent, weeklyData.week_start, sourceRows, claudePpt, weeklyData.display_pct, chartSlotMs
         ) : null;
@@ -4672,6 +4699,26 @@
         : 'linear-gradient(90deg, var(--accent), var(--blue))';
     }
 
+    // Dim a provider meter whose snapshot the server (or the localStorage
+    // fallback in stabilizeWeeklyQuota) marked stale, and tag it "stale" so an
+    // old number never reads in the same visual language as a live one.
+    function markMeterStale(meterEl, pctEl, stale, label) {
+      if (!meterEl) return;
+      meterEl.classList.toggle('is-stale', !!stale);
+      meterEl.title = stale
+        ? `${label} usage snapshot is stale — the provider has not reported fresh usage recently`
+        : '';
+      if (!pctEl) return;
+      const existing = pctEl.querySelector('.weekly-stale-tag');
+      if (existing) existing.remove();
+      if (stale) {
+        const tag = document.createElement('span');
+        tag.className = 'weekly-stale-tag';
+        tag.textContent = 'stale';
+        pctEl.appendChild(tag);
+      }
+    }
+
     function setWeeklyPctText(el, pct) {
       if (!el) return;
       if (pct >= 100) {
@@ -4859,10 +4906,11 @@
           codexMeter.style.display = 'grid';
           setWeeklyPctText(document.getElementById('weekly-codex-pct'), d.codex.weekly_pct);
           setWeeklyFill(document.getElementById('weekly-codex-fill'), d.codex.weekly_pct);
+          markMeterStale(codexMeter, document.getElementById('weekly-codex-pct'), d.codex.stale, 'Codex');
           if (d.codex.plan_type) bits.push(`Codex plan ${d.codex.plan_type}`);
           const cProj = d.codex.projected_pct != null ? ` · projected ${Math.round(d.codex.projected_pct)}%` : '';
-          bits.push(`Codex weekly ${Math.round(d.codex.weekly_pct)}%${cProj}`);
-          if (d.codex.projected_pct != null) resetBits.push(`Codex ${Math.round(d.codex.projected_pct)}% projected`);
+          bits.push(`Codex weekly ${Math.round(d.codex.weekly_pct)}%${cProj}${d.codex.stale ? ' (stale)' : ''}`);
+          if (d.codex.projected_pct != null && !d.codex.stale) resetBits.push(`Codex ${Math.round(d.codex.projected_pct)}% projected`);
           const cSession = d.codex.session;
           if (cSession && cSession.pct != null) bits.push(`Codex session ${Math.round(cSession.pct)}%`);
         } else if (codexMeter) {
@@ -4873,10 +4921,11 @@
           kimiMeter.style.display = 'grid';
           setWeeklyPctText(document.getElementById('weekly-kimi-pct'), d.kimi.weekly_pct);
           setWeeklyFill(document.getElementById('weekly-kimi-fill'), d.kimi.weekly_pct);
+          markMeterStale(kimiMeter, document.getElementById('weekly-kimi-pct'), d.kimi.stale, 'Kimi');
           if (d.kimi.plan_type) bits.push(`Kimi plan ${d.kimi.plan_type}`);
           const kProj = d.kimi.projected_pct != null ? ` · projected ${Math.round(d.kimi.projected_pct)}%` : '';
-          bits.push(`Kimi weekly ${Math.round(d.kimi.weekly_pct)}%${kProj}`);
-          if (d.kimi.projected_pct != null) resetBits.push(`Kimi ${Math.round(d.kimi.projected_pct)}% projected`);
+          bits.push(`Kimi weekly ${Math.round(d.kimi.weekly_pct)}%${kProj}${d.kimi.stale ? ' (stale)' : ''}`);
+          if (d.kimi.projected_pct != null && !d.kimi.stale) resetBits.push(`Kimi ${Math.round(d.kimi.projected_pct)}% projected`);
           const kSession = d.kimi.session;
           if (kSession && kSession.pct != null) bits.push(`Kimi session ${Math.round(kSession.pct)}%`);
         } else if (kimiMeter) {
