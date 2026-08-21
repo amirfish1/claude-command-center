@@ -1031,6 +1031,9 @@
     position: absolute;
     top: 6px;
     right: 8px;
+    opacity: 1;
+    border-color: color-mix(in srgb, var(--orange, #d29922) 70%, transparent);
+    color: #f0b93a;
   }
   .queued-steer-tray .cancel-queued-message {
     position: absolute;
