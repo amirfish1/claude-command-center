@@ -11430,14 +11430,23 @@
   // Plain-language title for the depth-2 simple conversation header.
   function _simpleUpdateConvTitle(id) {
     const el = document.getElementById('simpleConvTitle');
+    const iconEl = document.getElementById('simpleConvEngineIcon');
     if (!el) return;
     let name = '';
+    let row = null;
     try {
-      const row = (conversationsData || []).find(x => x.id === id)
+      row = (conversationsData || []).find(x => x.id === id)
         || (Array.isArray(archiveData) ? archiveData.find(x => (x.id || x.session_id) === id) : null);
       name = String((row && (row.display_name || row.first_message || row.status_rail_title)) || '').trim();
     } catch (_) {}
     el.textContent = name.length > 60 ? name.slice(0, 60) + '…' : (name || 'This task');
+    // Which engine (Claude/Codex/Kimi/…) is running this task — same icon
+    // set as the advanced sidebar (sessionEngineIconHtml), just placed next
+    // to the plain title instead of a session row.
+    if (iconEl) {
+      try { iconEl.innerHTML = row ? sessionEngineIconHtml(row, { context: 'pane' }) : ''; }
+      catch (_) { iconEl.innerHTML = ''; }
+    }
   }
 
   // ── Technical strip: reveal tool-call logs / diffs / cost, per session ──

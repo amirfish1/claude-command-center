@@ -775,6 +775,11 @@
            conversation to the Simple Home screen (#simpleHome). Wired by
            _wireSimpleHome() in app.js; hidden outside Simple mode by CSS. -->
       <button class="simple-back-home-btn" id="simpleBackHomeBtn" title="Back to Home">&#8592;<span class="mb-label"> Home</span></button>
+      <!-- Simple mode only (body.ccc-simple-conv-open): which engine (Claude/
+           Codex/Kimi/…) is running this task, same icon set as the advanced
+           sidebar (sessionEngineIconHtml). Set by _simpleUpdateConvTitle()
+           in app.js alongside the title. -->
+      <span class="simple-conv-engine-icon" id="simpleConvEngineIcon"></span>
       <!-- Simple mode only (body.ccc-simple-conv-open): plain-language title
            for the open conversation, set by _simpleUpdateConvTitle() in
            app.js. In the Simple depth-2 view the rest of this toolbar is

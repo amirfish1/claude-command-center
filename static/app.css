@@ -21968,6 +21968,21 @@ body.ccc-simple-mode .simple-settings-desc {
 }
 
 /* --- Depth-2 conversation view: simple chat surface --- */
+/* Which engine is running this task, right before the plain title. */
+.simple-conv-engine-icon { display: none; }
+body.ccc-mobile-redesign.ccc-simple-mode.ccc-simple-conv-open .simple-conv-engine-icon {
+  display: inline-flex;
+  align-items: center;
+  flex: 0 0 auto;
+}
+body.ccc-mobile-redesign.ccc-simple-mode.ccc-simple-conv-open .simple-conv-engine-icon .conv-pane-cat-icon {
+  width: 22px;
+  height: 20px;
+}
+body.ccc-mobile-redesign.ccc-simple-mode.ccc-simple-conv-open .simple-conv-engine-icon svg {
+  width: 17px;
+  height: 17px;
+}
 /* The conversation title span only exists for this view. */
 .simple-conv-title { display: none; }
 body.ccc-mobile-redesign.ccc-simple-mode.ccc-simple-conv-open .simple-conv-title {
