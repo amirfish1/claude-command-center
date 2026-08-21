@@ -72248,7 +72248,7 @@ def _get_onboarding_status():
                 "logged_in": antigravity_logged_in,
                 "email": antigravity_email,
                 "signup_url": "https://antigravity.google",
-                "install_instruction": "curl -fsSL https://antigravity.google/install.sh | bash",
+                "install_instruction": "curl -fsSL https://antigravity.google/cli/install.sh | bash",
                 "login_instruction": "agy login"
             },
             "codex": {
