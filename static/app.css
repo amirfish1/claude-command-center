@@ -21849,11 +21849,45 @@ body.ccc-simple-mode .simple-nya-card .simple-card-name {
   font-weight: 650;
   line-height: 1.35;
 }
+/* Engine icon sits inline before the task name (same icon set as the Simple
+   conversation header — sessionEngineIconHtml). */
+body.ccc-simple-mode .simple-card-title-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+body.ccc-simple-mode .simple-card-title-row .simple-card-name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+body.ccc-simple-mode .simple-card-title-row .conv-pane-cat-icon {
+  flex: 0 0 auto;
+  width: 22px;
+  height: 18px;
+}
+body.ccc-simple-mode .simple-card-title-row .conv-pane-cat-icon svg {
+  width: 15px;
+  height: 15px;
+}
 body.ccc-simple-mode .simple-status-line { font-size: 15px; color: var(--text); }
 body.ccc-simple-mode .simple-memory-line { font-size: 14px; color: var(--text-muted); }
 body.ccc-simple-mode .simple-task-card:focus-visible {
   outline: 3px solid var(--accent);
   outline-offset: 2px;
+}
+/* Running now vs. finished-and-unseen: a plain left-edge color bar, not just
+   text, so it reads at a glance while scanning. A seen/finished card gets
+   neither (plain border like any other card). */
+body.ccc-simple-mode .simple-task-card.is-running {
+  border-left: 4px solid var(--accent);
+  padding-left: 15px;
+}
+body.ccc-simple-mode .simple-task-card.is-unseen-finished {
+  border-left: 4px solid var(--warning, #d29922);
+  padding-left: 15px;
 }
 body.ccc-simple-mode .simple-see-all {
   display: block;

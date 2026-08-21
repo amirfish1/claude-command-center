@@ -11805,11 +11805,46 @@
     if (folder) line += ' · ' + folder;
     return line;
   }
+  // ── "Seen" tracking: which finished tasks has the user actually opened ──
+  // {sessionId: mtime} in localStorage — the same self-healing shape as the
+  // needs-you dismissal. A finished row is "unseen" if it either has no
+  // recorded seen-mtime, or its mtime has moved past what was last seen (new
+  // activity since the user last looked): both cases genuinely deserve the
+  // highlight.
+  var _SIMPLE_SEEN_KEY = 'ccc-simple-seen-mtimes';
+  function _simpleLoadSeenMtimes() {
+    try {
+      const obj = JSON.parse(localStorage.getItem(_SIMPLE_SEEN_KEY) || '{}');
+      return (obj && typeof obj === 'object') ? obj : {};
+    } catch (_) { return {}; }
+  }
+  function _simpleIsUnseenFinished(row) {
+    const sid = String(row.id || row.session_id || '');
+    if (!sid) return false;
+    const mtime = String(row.mtime || row.modified || '');
+    const seenMtime = _simpleLoadSeenMtimes()[sid];
+    return seenMtime == null || String(seenMtime) !== mtime;
+  }
+  function _simpleMarkTaskSeen(sid, mtime) {
+    if (!sid) return;
+    const map = _simpleLoadSeenMtimes();
+    map[sid] = mtime;
+    try { localStorage.setItem(_SIMPLE_SEEN_KEY, JSON.stringify(map)); } catch (_) {}
+  }
+
   function _simpleTaskCardHtml(row, statusLine) {
     const sid = String(row.id || row.session_id || '');
+    const mtime = String(row.mtime || row.modified || '');
     const name = String(row.display_name || row.first_message || row.status_rail_title || 'Untitled task').trim();
-    return '<button type="button" class="simple-card simple-task-card" data-session-id="' + escapeAttr(sid) + '">'
-      + '<span class="simple-card-name">' + escapeHtml(name.length > 90 ? name.slice(0, 90) + '…' : name) + '</span>'
+    const working = _simpleIsWorkingRow(row);
+    // "Running" and "unseen finished" are mutually exclusive, plain-color
+    // signals: blue means it's actively working right now, amber means it
+    // finished and you haven't looked yet. A seen/finished card gets neither.
+    const stateClass = working ? ' is-running' : (_simpleIsUnseenFinished(row) ? ' is-unseen-finished' : '');
+    return '<button type="button" class="simple-card simple-task-card' + stateClass + '"'
+      + ' data-session-id="' + escapeAttr(sid) + '" data-mtime="' + escapeAttr(mtime) + '">'
+      + '<span class="simple-card-title-row">' + sessionEngineIconHtml(row, { context: 'pane' })
+      + '<span class="simple-card-name">' + escapeHtml(name.length > 90 ? name.slice(0, 90) + '…' : name) + '</span></span>'
       + '<span class="simple-status-line">' + escapeHtml(statusLine) + '</span>'
       + '<span class="simple-memory-line">' + escapeHtml(_simpleMemoryLine(row)) + '</span>'
       + '</button>';
@@ -12207,6 +12242,7 @@
       const taskCard = ev.target.closest('.simple-task-card');
       if (taskCard) {
         const sid = taskCard.getAttribute('data-session-id') || '';
+        _simpleMarkTaskSeen(sid, taskCard.getAttribute('data-mtime') || '');
         if (sid && typeof selectConversation === 'function') selectConversation(sid);
         return;
       }
@@ -12523,6 +12559,7 @@
       histList.addEventListener('click', (ev) => {
         const card = ev.target.closest('.simple-task-card');
         const sid = card && card.getAttribute('data-session-id');
+        if (card) _simpleMarkTaskSeen(sid, card.getAttribute('data-mtime') || '');
         if (sid && typeof selectConversation === 'function') selectConversation(sid);
       });
     }
