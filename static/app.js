@@ -3165,6 +3165,38 @@
     } catch (_) {}
   }
 
+  // CCC-880: manual "Attach as sub-session of…" links. Unlike the F2
+  // continuation edges below (which flip an existing real provenance link),
+  // these exist purely because a user asserted the relationship — there is
+  // no parent_session_id backing it at all. Stored client-side only, same
+  // spirit as continuation edges, but a plain forward child->parent map with
+  // no flip semantics.
+  const MANUAL_SUBSESSION_KEY = 'ccc-manual-subsession-edges';
+  let _manualSubsessionEdgesCache = { raw: null, edges: {} };
+  function _manualSubsessionEdges() {
+    let raw = '';
+    try { raw = localStorage.getItem(MANUAL_SUBSESSION_KEY) || ''; } catch (_) {}
+    if (raw === _manualSubsessionEdgesCache.raw) return _manualSubsessionEdgesCache.edges;
+    let edges = {};
+    try { edges = JSON.parse(raw) || {}; } catch (_) {}
+    _manualSubsessionEdgesCache = { raw, edges };
+    return edges;
+  }
+  function manualSubsessionParentId(sid) {
+    const edges = _manualSubsessionEdges();
+    const edge = edges[String(sid || '').trim()];
+    return (edge && edge.parent) ? String(edge.parent).trim() : '';
+  }
+  function setManualSubsessionParent(childSid, parentSid) {
+    const child = String(childSid || '').trim();
+    if (!child) return;
+    const edges = _manualSubsessionEdges();
+    if (parentSid) edges[child] = { parent: String(parentSid).trim(), ts: Date.now() };
+    else delete edges[child];
+    try { localStorage.setItem(MANUAL_SUBSESSION_KEY, JSON.stringify(edges)); } catch (_) {}
+    _manualSubsessionEdgesCache = { raw: null, edges: {} };
+  }
+
   // F2 continuations are deliberately the inverse of a spawn relationship:
   // the fresh session is the primary row and its older origin belongs beneath
   // it.  The server keeps parent_session_id as provenance (new -> origin), so
@@ -3184,6 +3216,11 @@
     const sid = String(sessionId || '').trim();
     const parentId = String(recordedParentId || '').trim();
     if (!sid) return parentId;
+    // CCC-880: a manual "Attach as sub-session of…" always wins — it's an
+    // explicit user assertion, independent of (and takes priority over) any
+    // real provenance or continuation-flip logic below.
+    const manualParent = manualSubsessionParentId(sid);
+    if (manualParent && manualParent !== sid) return manualParent;
     const _continuationEdges = _f2ContinuationEdges();
     let newestContinuation = '';
     let newestTs = -1;
@@ -17627,6 +17664,78 @@
     _render();
   }
 
+  // CCC-880: "Attach as sub-session of…" — same picker chrome as
+  // _flowOpenObjectAssignPicker above, but the list is sessions, not Flow
+  // objects, and the edge it writes is a plain client-side manual override
+  // (manualSubsessionParentId), not a Flow parent assignment.
+  function _openAttachSubsessionPicker(sessionId, sessionTitle) {
+    sessionId = String(sessionId || '').trim();
+    if (!sessionId) return;
+    document.querySelectorAll('.flow-object-assign-picker').forEach(n => n.remove());
+    const modal = document.createElement('div');
+    modal.className = 'upd-overlay flow-object-assign-picker open';
+    const safeTitle = String(sessionTitle || '').trim() || 'session';
+    modal.innerHTML =
+        '<div class="upd-backdrop" data-asp-close></div>'
+      + '<div class="upd-dialog" style="width:min(520px,94vw);max-height:76vh;display:flex;flex-direction:column;">'
+      +   '<div class="upd-header">'
+      +     '<h2 class="upd-title">Attach as sub-session of…</h2>'
+      +     '<button class="upd-close" type="button" data-asp-close aria-label="Close">&times;</button>'
+      +   '</div>'
+      +   '<div class="upd-body" style="overflow:hidden;display:flex;flex-direction:column;gap:8px;min-height:0;">'
+      +     '<div style="font-size:12px;color:var(--text-muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">' + escapeHtml(safeTitle) + '</div>'
+      +     '<input type="text" id="attachSubsessionSearch" class="repo-picker-search" placeholder="Search sessions..." style="width:100%;">'
+      +     '<div id="attachSubsessionList" style="flex:1 1 auto;overflow-y:auto;border:1px solid var(--border);border-radius:6px;"></div>'
+      +   '</div>'
+      + '</div>';
+    document.body.appendChild(modal);
+    const $list = modal.querySelector('#attachSubsessionList');
+    const $search = modal.querySelector('#attachSubsessionSearch');
+    const close = () => { modal.remove(); };
+    modal.querySelectorAll('[data-asp-close]').forEach(el => el.addEventListener('click', close));
+    document.addEventListener('keydown', function onKey(ev) {
+      if (ev.key === 'Escape') { close(); document.removeEventListener('keydown', onKey); }
+    });
+    function _render() {
+      const q = ($search.value || '').trim().toLowerCase();
+      const rows = (typeof conversationsData !== 'undefined' && Array.isArray(conversationsData)) ? conversationsData : [];
+      const candidates = rows
+        .map(c => ({
+          id: String((c && (c.session_id || c.id)) || '').trim(),
+          title: (c && (c.display_name || c.ai_title || cleanIssuePrompt(c.first_message || '') || c.id)) || '(untitled)',
+        }))
+        .filter(o => o.id && o.id !== sessionId);
+      const matches = (o) => (o.title + ' ' + o.id).toLowerCase().indexOf(q) >= 0;
+      const filtered = q ? candidates.filter(matches) : candidates;
+      if (!filtered.length) {
+        $list.innerHTML = '<div style="padding:24px;color:var(--text-muted);text-align:center;font-size:13px;">No sessions match.</div>';
+        return;
+      }
+      $list.innerHTML = filtered.map(o => (
+        '<button type="button" class="flow-object-assign-row" data-session-id="' + escapeAttr(o.id) + '">'
+        +   '<div class="flow-object-assign-title">' + escapeHtml(sidebarRowDisplayTitle(o.title)) + '</div>'
+        + '</button>'
+      )).join('');
+      $list.querySelectorAll('.flow-object-assign-row').forEach(row => {
+        row.addEventListener('click', () => {
+          const parentId = row.getAttribute('data-session-id') || '';
+          if (!parentId) return;
+          setManualSubsessionParent(sessionId, parentId);
+          close();
+          if (typeof showOpToast === 'function') showOpToast('Attached as sub-session', 'success');
+          if (typeof renderArchiveList === 'function') {
+            renderArchiveList(document.getElementById('convSearch')?.value || '', { force: true });
+          }
+        });
+      });
+    }
+    if ($search) {
+      $search.addEventListener('input', _render);
+      setTimeout(() => { try { $search.focus(); } catch (_) {} }, 50);
+    }
+    _render();
+  }
+
   function expandFlowNodeAndAncestors(nodeId) {
     if (!nodeId) return false;
     let changed = false;
@@ -21308,6 +21417,8 @@
     '[data-role="wake-codex"]',
     '[data-role="start"]',
     '[data-role="elevate-to-object"]',
+    '[data-role="attach-subsession"]',
+    '[data-role="detach-subsession"]',
     '[data-role="unpin-repo"]',
     '[data-role="conv-pct-compact"]',
     '[data-role="coo-track-wrap"]',
@@ -28360,6 +28471,18 @@
           + ' data-conv-id="' + escapeAttr(c.id) + '"'
           + ' title="Elevate to its own object" aria-label="Elevate to its own object">&#8593;</button>'
         : '';
+      // CCC-880: manual "Attach as sub-session of…" — for sessions a user
+      // knows are related but that CCC has no real parent_session_id for
+      // (no actual spawn/continuation happened). Toggles to a Detach button
+      // once attached; see manualSubsessionParentId / setManualSubsessionParent.
+      const _manualParentOf = (!isBacklogRow && !isGithubPrRow) ? manualSubsessionParentId(sidVal) : '';
+      const attachSubsessionBtn = (isBacklogRow || isGithubPrRow) ? '' : (_manualParentOf
+        ? '<button class="conv-attach-subsession-btn is-detach" data-role="detach-subsession"'
+          + ' data-conv-id="' + escapeAttr(sidVal) + '"'
+          + ' title="Detach from parent session" aria-label="Detach from parent session">&#128268;</button>'
+        : '<button class="conv-attach-subsession-btn" data-role="attach-subsession"'
+          + ' data-conv-id="' + escapeAttr(sidVal) + '"'
+          + ' title="Attach as sub-session of…" aria-label="Attach as sub-session of…">&#128279;</button>');
 
       let startBtn = '';
       let lifecycleButtons = '';
@@ -28774,7 +28897,7 @@
             + '<span class="conv-row-end">'
             +   '<span class="conv-rel" data-role="rel" title="Last activity">' + escapeHtml(rel) + '</span>'
             +   '<button type="button" class="conv-kebab-btn" data-role="kebab" title="Actions" aria-label="Row actions"><span class="conv-kebab-dot"></span><span class="conv-kebab-dot"></span></button>'
-            +   '<span class="conv-row-actions">' + ((opts.evergreenAgent && !_egSingleLine) ? '' : pctBadgeRowActionHtml) + wakeBtn + summaryActionBtn + mergeBtn + startBtn + pinBtn + moveLaneBtn + lifecycleButtons + elevateObjectBtn + '</span>'
+            +   '<span class="conv-row-actions">' + ((opts.evergreenAgent && !_egSingleLine) ? '' : pctBadgeRowActionHtml) + wakeBtn + summaryActionBtn + mergeBtn + startBtn + pinBtn + moveLaneBtn + lifecycleButtons + elevateObjectBtn + attachSubsessionBtn + '</span>'
             + '</span>'
           + '</div>'
           + evergreenMetaRowHtml
@@ -32273,6 +32396,31 @@
         ev.preventDefault();
         ev.stopPropagation();
         elevateConversationToOwnObject(btn.getAttribute('data-conv-id') || '');
+      });
+    });
+    $convList.querySelectorAll('[data-role="attach-subsession"]').forEach(btn => {
+      btn.addEventListener('click', (ev) => {
+        ev.preventDefault();
+        ev.stopPropagation();
+        const sid = btn.getAttribute('data-conv-id') || '';
+        const row = (typeof conversationsData !== 'undefined' && Array.isArray(conversationsData))
+          ? conversationsData.find(c => String((c && (c.session_id || c.id)) || '').trim() === sid)
+          : null;
+        const title = row && (row.display_name || row.ai_title || cleanIssuePrompt(row.first_message || '') || row.id);
+        _openAttachSubsessionPicker(sid, title);
+      });
+    });
+    $convList.querySelectorAll('[data-role="detach-subsession"]').forEach(btn => {
+      btn.addEventListener('click', (ev) => {
+        ev.preventDefault();
+        ev.stopPropagation();
+        const sid = btn.getAttribute('data-conv-id') || '';
+        if (!sid) return;
+        setManualSubsessionParent(sid, '');
+        if (typeof showOpToast === 'function') showOpToast('Detached from parent', 'success');
+        if (typeof renderArchiveList === 'function') {
+          renderArchiveList(document.getElementById('convSearch')?.value || '', { force: true });
+        }
       });
     });
     $convList.querySelectorAll('[data-role="assign-object-chip"]').forEach(btn => {
