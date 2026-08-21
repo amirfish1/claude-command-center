@@ -13,27 +13,33 @@ thing that differs per project is **which repo the session runs in** and
 
 ## The queue — what it is
 
-- One shared JSON file for the whole machine:
-  `~/.claude/command-center/ux-fixes-queue.json`
-  (override with `CCC_STATE_DIR` / `UX_FIXES_QUEUE_FILE`).
-- **Every project lives in that one file**, namespaced by an item's `project`
+- A single durable store for the whole machine (SQLite; a frozen legacy JSON
+  file may still exist alongside it, see `watchtower.queue`'s module
+  docstring), resolved by `watchtower.queue._resolve_store_path()`
+  (override with `$WATCHTOWER_STORE`).
+- **Every project lives in that one store**, namespaced by an item's `project`
   field. A `BYMPROD` fixer only ever touches `project == "BYMPROD"`; it never sees or
   edits `CCC` items.
-- Annotations route to a project automatically by repo basename (see
-  `_REPO_PROJECT` in `ux_fixes_queue.py`) — e.g. `bookyourmat` / `bym+finie`
-  → `BYMPROD`, `claude-command-center` → `CCC`. So you do not "create" a queue;
-  annotating a project's pages files tickets into it.
+- Annotations route to a project automatically by repo basename / configured
+  repo_path (see `_project_for` in `watchtower/queue.py`) — e.g.
+  `claude-command-center` → `CCC`. So you do not "create" a queue; annotating
+  a project's pages files tickets into it. (Note: as of 2026-08-21, this
+  basename routing has no special-case alias table — a repo like
+  `bookyourmat` or `BYM+Finie` routes by its literal basename unless its
+  `repo_path` is registered in `queue-config.json` or the caller passes an
+  explicit `project=`.)
 
-## The tooling lives in the CCC repo
+## The tooling lives in the WatchTower repo
 
-The `ux_fixes_queue` Python module is **only** in the CCC checkout
-(`ux_fixes_queue.py` at the repo root), not in your project repo. Drive it
-cross-repo by putting the CCC repo on `sys.path`:
+CCC's queue engine is the `watchtower` Python package (`watchtower.queue`) —
+a **hard dependency**, installed as an editable install
+(`github.com/amirfish1/watchtower`), not a module inside the CCC checkout.
+Drive it cross-repo by putting the WatchTower repo on `sys.path` (or simply
+`import watchtower.queue` if it's already installed, e.g. via the editable
+`.pth` finder):
 
 ```bash
-CCC_REPO="${CCC_REPO:-$HOME/.ccc/claude-command-center}"
-python3 -c "import os, sys; sys.path.insert(0, os.environ['CCC_REPO']); \
-  import ux_fixes_queue as q; print(q.list_items(status='open', project='<PROJECT>'))"
+python3 -c "import watchtower.queue as q; print(q.list_items(status='open', project='<PROJECT>'))"
 ```
 
 ### API (the only functions you need)
@@ -61,9 +67,7 @@ basename, then `source`, else `GEN`. `note` (short, ≤4000 chars) or `text`
 (detailed, ≤24000) is required; everything else is optional.
 
 ```bash
-CCC_REPO="${CCC_REPO:-$HOME/.ccc/claude-command-center}"
-python3 -c "import os, sys; sys.path.insert(0, os.environ['CCC_REPO']); \
-import ux_fixes_queue as q; \
+python3 -c "import watchtower.queue as q; \
 item = q.enqueue( \
     project='OPS', \
     title='Short headline', \
@@ -122,7 +126,7 @@ Fill in `<PROJECT>` and the repo path:
 ```
 /goal Drain the <PROJECT>-* UX-fixes queue and keep it empty. Read
 docs/ux-fixes-worker-brief.md in the CCC repo
-for exactly where the queue is, the ux_fixes_queue API (list_items /
+for exactly where the queue is, the watchtower.queue API (list_items /
 claim_next / update_status / close, scoped to project='<PROJECT>'), and the
 claim → fix → verify → commit --only → close loop. Also read this repo's
 CLAUDE.md before touching deploy/CI. Never busy-wait — idle-poll for new

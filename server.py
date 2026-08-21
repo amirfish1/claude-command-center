@@ -551,17 +551,21 @@ def _annotation_queue_spawn_lock(queue_name):
             lock = threading.Lock()
             _ANNOTATION_QUEUE_SPAWN_LOCKS[key] = lock
         return lock
-import ux_fixes_queue  # kept as fallback when watchtower is not installed
-# WT-32 Phase 2: watchtower.queue is now the primary engine. ux_fixes_queue is
-# the fallback so CCC works without WT installed. Both read/write the same store.
+# WT-32 Phase 2 / WT-92: watchtower.queue is CCC's queue engine. There is no
+# standalone fallback (the old ux_fixes_queue module was deleted) -- if
+# watchtower isn't importable, queue features must fail loudly at import
+# time rather than silently falling back to a frozen JSON store.
 try:
     import watchtower.queue as _wt_q
-    _WT_QUEUE_AVAILABLE = True
-except ImportError:
-    _wt_q = None
-    _WT_QUEUE_AVAILABLE = False
+except ImportError as e:
+    raise ImportError(
+        "CCC's queue system requires the `watchtower` package (watchtower.queue) "
+        "to be installed and importable -- it is a hard dependency with no "
+        "standalone fallback. Install/activate watchtower (e.g. `pip install -e "
+        "<path-to-watchtower>`) and restart."
+    ) from e
 # _q is the active queue engine — use it for all queue operations.
-_q = _wt_q if _WT_QUEUE_AVAILABLE else ux_fixes_queue
+_q = _wt_q
 try:
     import watchtower.workers as _wt_workers
     _WT_WORKERS_AVAILABLE = True
@@ -610,23 +614,13 @@ def _wt_workers_path():
 def _queue_store_path():
     """The WT ticket store file whose mtime/size the queue-events SSE watches.
 
-    Mirrors watchtower.queue._resolve_store_path's order ($WATCHTOWER_STORE →
-    legacy CCC store → ~/.watchtower/queues.json) and prefers the watchtower
-    package's own resolver when it is importable, so a future resolver change
-    lands here automatically.
+    Delegates straight to watchtower.queue.store_path(), which already
+    implements the full resolution order ($WATCHTOWER_STORE → legacy CCC
+    store → ~/.watchtower/queues.json, preferring the SQLite .db once it
+    exists) -- watchtower.queue is a hard dependency now, so there is no
+    fallback path to duplicate here.
     """
-    env = os.environ.get("WATCHTOWER_STORE")
-    if env:
-        return Path(env).expanduser()
-    try:
-        if _WT_QUEUE_AVAILABLE and getattr(_q, "store_path", None):
-            return _q.store_path()
-    except Exception:
-        pass
-    legacy = COMMAND_CENTER_STATE_DIR / "ux-fixes-queue.json"
-    if legacy.exists():
-        return legacy
-    return _WT_HOME / "queues.json"
+    return _q.store_path()
 
 
 def _wt_read_config():
@@ -1066,7 +1060,7 @@ def _wt_queue_brief_items(queue):
     """Non-closed tickets belonging to ``queue``, filtered out of the same
     memoized list /api/queue/list serves so this never adds its own `gh`
     round-trip on top of an already-warm memo."""
-    queue_norm = ux_fixes_queue._norm_project(queue)
+    queue_norm = _q._norm_project(queue)
     if not queue_norm:
         return []
     try:
@@ -1076,7 +1070,7 @@ def _wt_queue_brief_items(queue):
     return [
         it for it in all_items
         if isinstance(it, dict)
-        and ux_fixes_queue._norm_project(it.get("project")) == queue_norm
+        and _q._norm_project(it.get("project")) == queue_norm
         and it.get("status") != "closed"
     ]
 
@@ -2469,7 +2463,6 @@ def _answer_queue_item_and_notify_worker(ref, text):
     target = (item or {}).get("claimed_session_id") or (item or {}).get("claimed_by")
     if (
         item
-        and _WT_QUEUE_AVAILABLE
         and item.get("status") == "in_progress"
         and target
     ):
@@ -2502,7 +2495,6 @@ def _comment_queue_item_and_notify_worker(ref, text):
     target = (item or {}).get("claimed_session_id") or (item or {}).get("claimed_by")
     if (
         item
-        and _WT_QUEUE_AVAILABLE
         and item.get("status") == "in_progress"
         and target
     ):
@@ -14100,7 +14092,7 @@ def enqueue_annotation_ux_fixes_queue(
 
     By default this no longer interrupts any session: it records a numbered
     ``open`` item that survives across sessions and that any session can later
-    *claim* when it is free (see ``ux_fixes_queue``). This is the anti-
+    *claim* when it is free (see ``watchtower.queue``). This is the anti-
     interruption behaviour — captures stop derailing long-running work.
 
     Pass ``inject=True`` to additionally fall back to the legacy behaviour of
@@ -66075,7 +66067,7 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
             # Edit triage fields of a queue item from the detail modal (CCC-338).
             # Accepts any subset of: note, title, priority, type, readiness,
             # value, confidence, lane. Unknown keys are silently ignored by
-            # ux_fixes_queue.update().
+            # watchtower.queue.update().
             length = int(self.headers.get("Content-Length", "0"))
             body = self.rfile.read(length) if length > 0 else b""
             try:
@@ -66186,10 +66178,7 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                 self.send_json({"ok": False, "error": "ref required"}, 400)
                 return
             try:
-                if _WT_QUEUE_AVAILABLE:
-                    item = _q.close(ref, resolution=(note or None))
-                else:
-                    item = _q.update_status(ref, "closed")
+                item = _q.close(ref, resolution=(note or None))
                 if not item:
                     self.send_json({"ok": False, "error": _uxq_not_found_error(ref)}, 404)
                     return

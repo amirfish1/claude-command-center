@@ -37,8 +37,9 @@ The queue fixes all three:
   interrupted. Multiple sessions can drain the queue in parallel; cross-process
   locking and numbering are CCC's problem, not yours.
 
-CCC owns the queue file, locking, and claim semantics
-([`ux_fixes_queue.py`](../ux_fixes_queue.py)). Your app only speaks HTTP.
+CCC owns the queue file, locking, and claim semantics (via `watchtower.queue`,
+a hard dependency — see `github.com/amirfish1/watchtower`). Your app only
+speaks HTTP.
 
 ## Architecture
 
@@ -135,8 +136,9 @@ on http://127.0.0.1:8090. It owns a durable, numbered UX-fixes queue
 (~/.claude/command-center/ux-fixes-queue.json) and exposes HTTP endpoints for
 it. Read that repo first — the authoritative reference is:
 - cookbook/annotate-to-ux-fixes-queue.md (this recipe: contract + payloads)
-- ux_fixes_queue.py (queue semantics: numbered items, per-project refs like
-  "MYAPP-3", statuses open|in_progress|closed, claim/next workflow)
+- watchtower/queue.py (queue semantics: numbered items, per-project refs like
+  "MYAPP-3", statuses open|in_progress|closed, claim/next workflow — a hard
+  dependency of CCC, see github.com/amirfish1/watchtower)
 - server.py — search for "/api/annotations/ux-fixes-queue", "/api/ux-fixes/claim",
   "/api/ux-fixes/next", "/api/ux-fixes/update", "/api/ux-fixes/list"
 

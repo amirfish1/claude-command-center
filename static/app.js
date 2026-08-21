@@ -38070,9 +38070,13 @@
     html += '<button class="fq-health-add" id="filesQueueConfigure" type="button" title="Create a WatchTower queue" aria-label="Add a queue">⚙ Add queue</button>';
     $strip.innerHTML = html;
   }
-  // Repo-basename → project code, mirroring ux_fixes_queue.py `_REPO_PROJECT`
-  // / `_project_for` so the client can scope the Queue by the open session's
-  // repo even when it is not a queue-worker (CCC-175).
+  // Repo-basename → project code, so the client can scope the Queue by the
+  // open session's repo even when it is not a queue-worker (CCC-175). Note:
+  // this alias table is CCC's own client-side copy; watchtower.queue's
+  // server-side _project_for() has no equivalent alias table (only basename/
+  // source normalization plus configured-repo_path matching) -- the old
+  // ux_fixes_queue.py fallback (removed WT-92) used to mirror this table
+  // server-side too, but watchtower.queue never carried it forward.
   const _REPO_PROJECT_MAP = {
     'bym+finie': 'BYMPROD', 'bym-finie': 'BYMPROD', 'bookyourmat': 'BYMPROD', 'bymprod': 'BYMPROD',
     'claude-command-center': 'CCC', 'command-center': 'CCC',

@@ -17,7 +17,6 @@ import os
 import subprocess
 import threading
 import time
-import ux_fixes_queue  # kept as fallback when watchtower is not installed
 
 from ccc_server import core as _core
 from ccc_server.github_issues import github_rate_limited
@@ -43,17 +42,10 @@ _queue_replay_cache_lock = threading.Lock()
 def _queue_store_path_for_cache():
     """Resolve the durable queue-store file so we can cache by (mtime, size).
 
-    The active engine (`_q`) owns disk layout: WatchTower exposes
-    `_resolve_store_path()`; the stdlib fallback uses `ux_fixes_queue.QUEUE_FILE`
-    (the same file). Returns a Path or None."""
-    resolve = getattr(_core._q, "_resolve_store_path", None)
-    if callable(resolve):
-        try:
-            return Path(resolve())
-        except Exception:
-            pass
+    `_core._q` is watchtower.queue (a hard dependency, no fallback), which
+    always exposes `_resolve_store_path()`. Returns a Path or None."""
     try:
-        return Path(ux_fixes_queue.QUEUE_FILE)
+        return Path(_core._q._resolve_store_path())
     except Exception:
         return None
 
