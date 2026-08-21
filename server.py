@@ -54713,7 +54713,18 @@ def _try_wt_ask_for_headless_delivery(session_id, text, timeout_ms):
 # already-running interpreter; that failure mode belongs to the stray reaper
 # above. Reaper kills stale code, breaker caps live code.
 if "pytest" in sys.modules:
-    INJECT_BUDGET_FILE = Path(tempfile.gettempdir()) / "ccc-test-inject-budget.json"
+    # Per-process and truncated at import: the ledger is deliberately durable
+    # across restarts in production, which in a test process would mean one
+    # suite's injects metering the next suite's -- a slow-building, order-
+    # dependent flake. Tests that care monkeypatch this to a tmp_path.
+    INJECT_BUDGET_FILE = (
+        Path(tempfile.gettempdir()) / f"ccc-test-inject-budget-{os.getpid()}.json"
+    )
+    for _stale in (INJECT_BUDGET_FILE, INJECT_BUDGET_FILE.with_suffix(".lock")):
+        try:
+            _stale.unlink()
+        except OSError:
+            pass
 else:
     INJECT_BUDGET_FILE = COMMAND_CENTER_STATE_DIR / "inject-budget.json"
 
