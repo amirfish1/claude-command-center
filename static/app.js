@@ -28923,7 +28923,7 @@
             + '<span class="conv-row-end">'
             +   '<span class="conv-rel" data-role="rel" title="Last activity">' + escapeHtml(rel) + '</span>'
             +   '<button type="button" class="conv-kebab-btn" data-role="kebab" title="Actions" aria-label="Row actions"><span class="conv-kebab-dot"></span><span class="conv-kebab-dot"></span></button>'
-            +   '<span class="conv-row-actions">' + ((opts.evergreenAgent && !_egSingleLine) ? '' : pctBadgeRowActionHtml) + wakeBtn + summaryActionBtn + mergeBtn + startBtn + pinBtn + moveLaneBtn + lifecycleButtons + elevateObjectBtn + attachSubsessionBtn + '</span>'
+            +   '<span class="conv-row-actions">' + ((opts.evergreenAgent && !_egSingleLine) ? '' : pctBadgeRowActionHtml) + wakeBtn + summaryActionBtn + mergeBtn + startBtn + pinBtn + moveLaneBtn + elevateObjectBtn + attachSubsessionBtn + lifecycleButtons + '</span>'
             + '</span>'
           + '</div>'
           + evergreenMetaRowHtml
