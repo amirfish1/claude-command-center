@@ -12158,6 +12158,37 @@
     if (depth > 0) return depth + (depth === 1 ? ' job waiting' : ' jobs waiting') + ' — nobody on it yet';
     return 'Nothing waiting';
   }
+  // ISO timestamp (queue items use "2026-07-24T20:04:32Z") → plain age via
+  // the same wording as everywhere else in Simple mode.
+  function _simplePlainAgeIso(iso) {
+    const ms = Date.parse(String(iso || ''));
+    if (!(ms > 0)) return '';
+    return _simplePlainAge((Date.now() - ms) / 1000);
+  }
+  // One queue ticket, plain-language: what it is, how long it's been
+  // waiting/done, and who (if anyone) is on it. Clickable straight into the
+  // attached conversation when one exists — same "tap a card to open it"
+  // pattern as every other list in Simple mode.
+  function _simpleQueueItemCardHtml(it, isOpen) {
+    const text = String(it.note || it.text || it.title || it.ref || 'Untitled job');
+    const short = text.length > 110 ? text.slice(0, 110) + '…' : text;
+    const sid = String(it.claimed_session_id || '').trim();
+    let statusLine;
+    if (isOpen) {
+      statusLine = it.claimed_by
+        ? 'Someone is already on it' + (it.claimed_at ? ' — since ' + _simplePlainAgeIso(it.claimed_at) : '')
+        : 'Waiting' + (it.created_at ? ' since ' + _simplePlainAgeIso(it.created_at) : '');
+    } else {
+      statusLine = 'Finished' + (it.closed_at ? ' ' + _simplePlainAgeIso(it.closed_at) : '');
+    }
+    const tag = sid ? 'button' : 'div';
+    return '<' + tag + (sid ? ' type="button"' : '') + ' class="simple-card simple-task-card simple-queue-item"'
+      + (sid ? ' data-session-id="' + escapeAttr(sid) + '"' : '')
+      + '>'
+      + '<span class="simple-card-name">' + escapeHtml(short) + '</span>'
+      + '<span class="simple-status-line">' + escapeHtml(statusLine) + '</span>'
+      + '</' + tag + '>';
+  }
   function _simpleAutomationCardHtml(q) {
     const name = String(q.queue || 'Automation');
     return '<button type="button" class="simple-card simple-task-card simple-automation-card"'
@@ -12202,8 +12233,10 @@
       items = (Array.isArray(data && data.items) ? data.items : [])
         .filter(it => String(it.project || '').toUpperCase() === String(queue).toUpperCase());
     } catch (_) {}
-    const open = items.filter(it => String(it.status || '') === 'open');
-    const done = items.filter(it => String(it.status || '') === 'closed');
+    const open = items.filter(it => String(it.status || '') === 'open')
+      .sort((a, b) => (Date.parse(a.created_at || '') || 0) - (Date.parse(b.created_at || '') || 0));
+    const done = items.filter(it => String(it.status || '') === 'closed')
+      .sort((a, b) => (Date.parse(b.closed_at || '') || 0) - (Date.parse(a.closed_at || '') || 0));
     let html = '<div class="simple-card">'
       + '<div class="simple-settings-label">How it is doing</div>'
       + '<div class="simple-settings-desc">' + escapeHtml(q ? _simpleAutomationStatusLine(q) : 'Status unknown') + '</div>'
@@ -12221,12 +12254,11 @@
       + '</button>';
     if (open.length) {
       html += '<h3 class="simple-h3">Waiting jobs</h3><div class="simple-card-list">'
-        + open.slice(0, 20).map(it => {
-          const text = String(it.note || it.text || it.title || it.ref || 'Untitled job');
-          return '<div class="simple-card simple-queue-item">'
-            + '<span class="simple-card-name">' + escapeHtml(text.length > 110 ? text.slice(0, 110) + '…' : text) + '</span>'
-            + '</div>';
-        }).join('') + '</div>';
+        + open.slice(0, 20).map(it => _simpleQueueItemCardHtml(it, true)).join('') + '</div>';
+    }
+    if (done.length) {
+      html += '<h3 class="simple-h3">Recently finished</h3><div class="simple-card-list">'
+        + done.slice(0, 10).map(it => _simpleQueueItemCardHtml(it, false)).join('') + '</div>';
     }
     body.innerHTML = html;
   }
@@ -12305,7 +12337,14 @@
     const autoDetail = document.getElementById('simpleAutomationDetailBody');
     if (autoDetail) {
       autoDetail.addEventListener('click', (ev) => {
-        if (ev.target.closest('#simpleAutomationDrainBtn')) _simpleToggleAutomationDrain();
+        if (ev.target.closest('#simpleAutomationDrainBtn')) { _simpleToggleAutomationDrain(); return; }
+        // A queue item with a session attached (someone's already working it)
+        // opens straight into that conversation, same as any other task card.
+        const item = ev.target.closest('.simple-queue-item[data-session-id]');
+        if (item) {
+          const sid = item.getAttribute('data-session-id');
+          if (sid && typeof selectConversation === 'function') selectConversation(sid);
+        }
       });
     }
     // Settings: theme chips forward to the settings modal's segmented

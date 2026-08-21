@@ -1,0 +1,1 @@
+Simple mode's Automations detail screen now lists the actual waiting and recently-finished jobs (plain text, plain age, who's on it) instead of just counts, and tapping a job that already has a worker attached opens straight into that conversation.
