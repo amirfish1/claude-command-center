@@ -1230,6 +1230,24 @@ body.q2-resizing-v .q2-col { pointer-events: none; }
   margin-top: 7px;
 }
 .q2-live-workers-grid .q2-dg-worker { width: 220px; }
+
+/* All-queues history graph (CCC-903): open / needs input / closed over the
+   last 7 days. Plain inline SVG, no chart library -- three <path> lines
+   drawn against a viewBox, matching q2's zero-dependency static/ posture. */
+.q2-history-chart { padding: 10px 12px 4px; border-bottom: 1px solid var(--border); background: var(--surface); }
+.q2-history-head { display: flex; align-items: center; gap: 10px; font-size: 11px; font-weight: 650; color: var(--text-muted); }
+.q2-history-title { white-space: nowrap; }
+.q2-history-legend-item { display: inline-flex; align-items: center; gap: 4px; font-weight: 500; white-space: nowrap; }
+.q2-history-legend-item b { font-weight: 700; color: var(--text); }
+.q2-history-swatch { width: 8px; height: 8px; border-radius: 50%; display: inline-block; }
+.q2-history-legend-open .q2-history-swatch { background: var(--cyan); }
+.q2-history-legend-needs_input .q2-history-swatch { background: var(--orange); }
+.q2-history-legend-closed .q2-history-swatch { background: var(--green); }
+.q2-history-svg { width: 100%; height: 88px; display: block; margin-top: 4px; }
+.q2-history-line { fill: none; stroke-width: 1.6; vector-effect: non-scaling-stroke; }
+.q2-history-line-open { stroke: var(--cyan); }
+.q2-history-line-needs_input { stroke: var(--orange); stroke-dasharray: 3 2; }
+.q2-history-line-closed { stroke: var(--green); }
 /* Only present with showQueue: true (the ALL view) -- a single-queue diagram
    never needs to say which queue a card belongs to, it's the whole column.
    Its own line rather than squeezed into the header row, which already

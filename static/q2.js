@@ -40,6 +40,7 @@
     items: [],
     queue: '',
     viewAll: false,     // global inbox mode; never overloaded onto a queue name
+    queueHistory: null, // all-queues open/needs_input/closed series (CCC-903)
     ref: '',
     detail: null,       // full item payload for state.ref
     showClosed: false,
@@ -1327,7 +1328,15 @@
   function renderDiagram() {
     var host = $('q2Diagram');
     if (!host) return;
-    if (state.viewAll) { renderLiveWorkersStrip(host); return; }
+    if (state.viewAll) {
+      if (!host.querySelector('.q2-history-chart') || !host.querySelector('.q2-live-workers-wrap')) {
+        host.innerHTML = '<div class="q2-history-chart" id="q2HistoryChart"></div>'
+          + '<div class="q2-live-workers-wrap" id="q2LiveWorkersWrap"></div>';
+      }
+      renderQueueHistoryChart($('q2HistoryChart'));
+      renderLiveWorkersStrip($('q2LiveWorkersWrap'));
+      return;
+    }
     if (!state.queue) { host.innerHTML = ''; return; }
 
     var m = flowModel();
@@ -1639,6 +1648,88 @@
   // workerCardHtml() cards, just matched against every queue's tickets
   // instead of one, with a queue badge added since that context is no
   // longer implicit from a single selected column.
+  // History graph for the all-queues view (CCC-903): open / needs input /
+  // closed counts over the last 7 days. Backend snapshots at most once every
+  // 15 minutes (see compute_queue_history in ccc_server/queue_events.py), so
+  // polling here on a slower cadence than the rest of q2 is enough -- a
+  // tighter poll would just re-fetch the same cached backend response.
+  var HISTORY_POLL_MS = 5 * 60 * 1000;
+  var historyFetchedAt = 0;
+  var historyFetching = false;
+
+  function fetchQueueHistoryIfStale() {
+    if (historyFetching || Date.now() - historyFetchedAt < HISTORY_POLL_MS) return;
+    historyFetching = true;
+    fetch('/api/wt/queue/history?days=7&bucket_hours=1')
+      .then(function (r) { return r.json(); })
+      .then(function (data) {
+        historyFetchedAt = Date.now();
+        if (data && data.ok) {
+          state.queueHistory = data.points || [];
+          renderDiagram();
+        }
+      })
+      .catch(function () {})
+      .then(function () { historyFetching = false; });
+  }
+
+  function renderQueueHistoryChart(host) {
+    if (!host) return;
+    fetchQueueHistoryIfStale();
+    var pts = state.queueHistory;
+    if (pts == null) { host.innerHTML = '<div class="q2-dg-empty">Loading history…</div>'; return; }
+    if (!pts.length) { host.innerHTML = '<div class="q2-dg-empty">No history yet.</div>'; return; }
+
+    var w = 720, h = 120, padL = 4, padR = 4, padT = 8, padB = 18;
+    var innerW = w - padL - padR, innerH = h - padT - padB;
+    var tMin = pts[0].ts, tMax = pts[pts.length - 1].ts;
+    var tSpan = Math.max(1, tMax - tMin);
+
+    function x(ts) { return padL + ((ts - tMin) / tSpan) * innerW; }
+
+    // closed is a monotonic cumulative total (thousands) while open/needs_input
+    // are small live counts -- one shared y-scale would flatten the latter two
+    // to a barely-visible line at the bottom. Each series gets its own y-scale
+    // so shape/trend is legible for all three; the legend numbers carry the
+    // real magnitude comparison.
+    function pathFor(field, requireNonNull) {
+      var vMax = 1;
+      pts.forEach(function (p) {
+        var v = p[field];
+        if (v != null) vMax = Math.max(vMax, v);
+      });
+      function y(v) { return padT + innerH - (v / vMax) * innerH; }
+      var d = '', pen = false;
+      pts.forEach(function (p) {
+        var v = p[field];
+        if (requireNonNull && (v == null)) { pen = false; return; }
+        d += (pen ? ' L ' : ' M ') + x(p.ts).toFixed(1) + ' ' + y(v || 0).toFixed(1);
+        pen = true;
+      });
+      return d.trim();
+    }
+
+    var latest = pts[pts.length - 1];
+    var legend = [
+      ['open', 'Open', latest.open],
+      ['needs_input', 'Needs input', latest.needs_input],
+      ['closed', 'Closed', latest.closed],
+    ].map(function (row) {
+      return '<span class="q2-history-legend-item q2-history-legend-' + row[0] + '">'
+        + '<span class="q2-history-swatch"></span>' + row[1]
+        + (row[2] == null ? '' : ' <b>' + row[2] + '</b>') + '</span>';
+    }).join('');
+
+    host.innerHTML = '<div class="q2-history-head">'
+      + '<span class="q2-history-title">Last 7 days</span>'
+      + '<span class="q2-spacer"></span>' + legend + '</div>'
+      + '<svg class="q2-history-svg" viewBox="0 0 ' + w + ' ' + h + '" preserveAspectRatio="none" aria-hidden="true">'
+      + '<path class="q2-history-line q2-history-line-open" d="' + esc(pathFor('open', false)) + '"></path>'
+      + '<path class="q2-history-line q2-history-line-needs_input" d="' + esc(pathFor('needs_input', true)) + '"></path>'
+      + '<path class="q2-history-line q2-history-line-closed" d="' + esc(pathFor('closed', false)) + '"></path>'
+      + '</svg>';
+  }
+
   function renderLiveWorkersStrip(host) {
     var workers = state.workers || [];
     var working = [], blocked = [];
