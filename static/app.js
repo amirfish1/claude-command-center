@@ -44220,6 +44220,24 @@
     return 'CACHE MISS: ' + _formatTokensAntigravity(missed) + ' input tokens uncached';
   }
 
+  // Cache-adjusted tokens for a single turn (CCC-930). Mirrors the same
+  // discount the aggregate "cache-adjusted tokens this conversation" rail
+  // headline applies server-side (server.py _throughput_usage_weights):
+  // cache-read tokens are worth ~10% of a fresh input token across every
+  // priced Claude model (Sonnet 0.30/3.00, Opus 1.50/15.00, Haiku 0.08/0.80
+  // — all the same 0.1 ratio), so it's a fixed constant rather than a
+  // per-model lookup. Output tokens are NOT reweighted here, same as the
+  // server-side total (only the input side has a cache-vs-fresh price
+  // split; effective_total = effective_input + output).
+  const CACHE_READ_TOKEN_WEIGHT = 0.10;
+
+  function _cacheAdjustedTurnTokens(tIn, tOut, tCached) {
+    const total = Number(tIn) || 0;
+    const cached = Math.min(Number(tCached) || 0, total);
+    const fresh = total - cached;
+    return Math.round(fresh + cached * CACHE_READ_TOKEN_WEIGHT + (Number(tOut) || 0));
+  }
+
   // A running, cross-turn log of cache misses (CCC-750): a chip on screen
   // only shows the one turn, not whether it followed close on the heels of
   // the previous turn (a burst) or after a long gap (an expected cold
@@ -49608,6 +49626,10 @@
                 metaEl.innerHTML += '<span class="event-token-chips is-merged" title="'
                   + escapeAttr(_kimiChipTitle) + '">' + escapeHtml(_kimiChipText) + '</span>';
               }
+              const _kimiCacheAdjusted = _cacheAdjustedTurnTokens(ev.tokens_in, ev.tokens_out, _kimiChipCached);
+              metaEl.innerHTML += '<span class="event-token-chips cache-adjusted is-merged" title="'
+                + escapeAttr('Cache-read input tokens are discounted to ' + (CACHE_READ_TOKEN_WEIGHT * 100) + '% of a fresh input token before summing with output.')
+                + '">Cached-adjusted tokens this turn: ' + _kimiCacheAdjusted.toLocaleString() + '</span>';
             }
             kimiBlockEls.push(metaEl);
           }
@@ -49825,6 +49847,12 @@
             blockParts.push('<div class="event-token-chips cache-miss" title="' + escapeAttr(
               'Cache read covered ' + chipCached.toLocaleString() + ' of ' + (Number(ev.tokens_in) || 0).toLocaleString() + ' input tokens.'
             ) + '">' + escapeHtml(cacheMiss) + '</div>');
+          }
+          if (Number(ev.tokens_in) || Number(ev.tokens_out)) {
+            const cacheAdjustedTurn = _cacheAdjustedTurnTokens(ev.tokens_in, ev.tokens_out, chipCached);
+            blockParts.push('<div class="event-token-chips cache-adjusted" title="'
+              + escapeAttr('Cache-read input tokens are discounted to ' + (CACHE_READ_TOKEN_WEIGHT * 100) + '% of a fresh input token before summing with output.')
+              + '">Cached-adjusted tokens this turn: ' + cacheAdjustedTurn.toLocaleString() + '</div>');
           }
           _recordCacheMissLog(renderedConversationId, ev, ev.tokens_in, chipCached);
         }
