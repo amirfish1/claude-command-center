@@ -1,0 +1,1 @@
+Fixed a bug where duplicate `/compact` requests for the same session (e.g. from a mobile tab reloading mid-request, or two tabs/devices on the same session) could each run a real compaction instead of being collapsed into one.
