@@ -38335,6 +38335,25 @@ _KIMI_GOAL_CREATE_PREFIX = (
 )
 
 
+def _strip_ccc_kimi_goal_prefix(text):
+    """Remove only the exact <ccc-kimi-goal> compatibility prefix CCC generated.
+
+    User-authored <ccc-kimi-goal> blocks — including blocks inside a /goal
+    objective — are ordinary visible text and must survive byte-for-byte;
+    this only matches CCC's own two injected wrapper strings.
+
+    Kimi's ACP agent titles a session from the raw first user message, so
+    when that message is CCC's /goal-command shim, the injected instruction
+    text (not the user's actual goal) ends up as the session's title unless
+    this is applied there too (CCC-920).
+    """
+    t = (text or "").strip()
+    for prefix in (_KIMI_GOAL_READ_PREFIX, _KIMI_GOAL_CREATE_PREFIX):
+        if t.startswith(prefix):
+            return t[len(prefix):].strip()
+    return t
+
+
 def _acp_message_event(state, speaker, text):
     """Replayed user/assistant text → conv event. Control bookkeeping
     (system-reminders, skill-load wrappers, command XML) is dropped like the
@@ -38342,14 +38361,8 @@ def _acp_message_event(state, speaker, text):
     text = (text or "").strip()
     if not text or _is_transcript_control_text(text):
         return None
-    # Remove only the exact compatibility prefix CCC generated. User-authored
-    # <ccc-kimi-goal> blocks — including blocks inside a /goal objective —
-    # are ordinary visible text and must survive replay byte-for-byte.
     if speaker == "user":
-        for prefix in (_KIMI_GOAL_READ_PREFIX, _KIMI_GOAL_CREATE_PREFIX):
-            if text.startswith(prefix):
-                text = text[len(prefix):].strip()
-                break
+        text = _strip_ccc_kimi_goal_prefix(text)
     # Kimi ACP appends injected control XML to the user's real prose instead
     # of delivering it as a standalone message — strip the embedded blocks,
     # then re-check for control-only / empty text.
@@ -39664,10 +39677,14 @@ def find_kimi_conversations(
             pass
         if cutoff and modified and modified < cutoff:
             continue
-        title = _strip_ccc_session_state_instruction(str(meta.get("title") or "")).strip()
-        last_prompt = _strip_ccc_session_state_instruction(str(meta.get("lastPrompt") or "")).strip()
+        title = _strip_ccc_kimi_goal_prefix(
+            _strip_ccc_session_state_instruction(str(meta.get("title") or "")).strip()
+        )
+        last_prompt = _strip_ccc_kimi_goal_prefix(
+            _strip_ccc_session_state_instruction(str(meta.get("lastPrompt") or "")).strip()
+        )
         wire_info = _kimi_wire_head(idx.get("session_dir"))
-        first_message = wire_info["first_prompt"] or last_prompt
+        first_message = _strip_ccc_kimi_goal_prefix(wire_info["first_prompt"]) or last_prompt
         wire_path = wire_info["wire_path"]
         display_name = (
             name_overrides.get(sid)
