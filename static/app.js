@@ -41682,6 +41682,15 @@
               }
               node.textContent = node.dataset.raw;
               node.scrollTop = node.scrollHeight;
+              // CCC-911: unlike text/tool_use above, this never flagged
+              // visibleContentAdded, so a thinking-only step (kimi reasons,
+              // then calls a tool with no interim text) hit the 'result'
+              // handler's lingerMs:0 path -- clearStreamingBubble ran
+              // immediately, wiping the thinking box before the JSONL
+              // re-render (the primary hand-off) had a chance to replace it
+              // with the persisted version. Looked like the thoughts just
+              // vanished. Flag it so the same paint-grace linger applies.
+              visibleContentAdded = true;
             }
           }
           // Headless stream-json carries no thinking text (only a signature is
