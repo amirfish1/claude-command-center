@@ -1,0 +1,1 @@
+The Claude prewarm reservation now carries the autocompact threshold (per-send override or saved new-session default) and uses it in the dedup key, so changing the setting no longer silently falls back to a cold spawn.

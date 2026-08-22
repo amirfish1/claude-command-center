@@ -63195,11 +63195,21 @@
       const picked = $convInputEffortSelect.value;
       if (picked && effortLevelsForEngine('claude').some(lvl => lvl.id === picked)) effort = picked;
     }
+    // The reservation also bakes the autocompact window into its argv and
+    // match key. Use the per-send override if one is typed, otherwise fall
+    // back to the saved new-session default so a changed setting does not
+    // claim a stale-reservation and silently cold-fall back.
+    const $autoCompactInput = document.getElementById('convSendAutoCompactK');
+    const autoCompactInputRaw = $autoCompactInput ? parseInt($autoCompactInput.value, 10) : NaN;
+    const autoCompactK = Number.isFinite(autoCompactInputRaw) && autoCompactInputRaw > 0
+      ? autoCompactInputRaw
+      : (Number.isFinite(spawnDefaultsState.auto_compact_k) ? spawnDefaultsState.auto_compact_k : 250);
     return {
       cwd,
       model,
       name,
       reasoning_effort: effort,
+      auto_compact_k: autoCompactK,
       client_id: _claudePrewarmClientId,
     };
   }
@@ -63207,13 +63217,13 @@
   function requestClaudePrewarm(opts) {
     const spec = claudePrewarmSpec(opts);
     if (!spec) return Promise.resolve(null);
-    // Dedup on cwd+model+effort only, NOT the session name. The name changes
-    // on every keystroke (it's derived from the first sentence the user
-    // types), so including it in the key would spawn a new claude process
-    // for every character. The old prewarm is evicted server-side by
-    // client_id, but that still means N processes for N keystrokes. By
-    // excluding the name, one prewarm serves the whole typing session.
-    const key = JSON.stringify({ cwd: spec.cwd, model: spec.model, reasoning_effort: spec.reasoning_effort });
+    // Dedup on cwd+model+effort+autocompact only, NOT the session name. The
+    // name changes on every keystroke (it's derived from the first sentence
+    // the user types), so including it would spawn a new claude process per
+    // character. The old prewarm is evicted server-side by client_id, but that
+    // still means N processes for N keystrokes. By excluding the name, one
+    // prewarm serves the whole typing session.
+    const key = JSON.stringify({ cwd: spec.cwd, model: spec.model, reasoning_effort: spec.reasoning_effort, auto_compact_k: spec.auto_compact_k });
     if (_claudePrewarmPromise && _claudePrewarmKey === key) return _claudePrewarmPromise;
     _claudePrewarmKey = key;
     const request = fetch('/api/sessions/prewarm-claude', {
