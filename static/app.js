@@ -31581,6 +31581,12 @@
     }
     if (_arcEngineFilter && !_arcRows) {
       _arcRows = '<div class="archive-empty-state">No ' + escapeHtml(_arcEngineFilterLabel) + ' sessions.</div>';
+    } else if (!_arcRows) {
+      // CCC-928: without this, an empty result (e.g. the "Now" window
+      // filtering out every session) rendered the tools header (Now/1d/7d/
+      // All + engine icons) over a blank body — no text explained why the
+      // list looked empty, reading as "the conv list view disappeared."
+      _arcRows = '<div class="archive-empty-state">No sessions in this view.</div>';
     }
     const _allTabTotalCount = _allTabConvs.length + _archivedGroupChatsForRender.length + _allTabGroupChatItems.length + _allTabTrashConvs.length;
     _arcCount = _allTabTotalCount;
