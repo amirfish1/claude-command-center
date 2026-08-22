@@ -1120,12 +1120,6 @@
                    (Esc/TTS/mic/expand/send) instead of its own row, so the
                    idle/cold nudge never crowds the textarea above it. -->
               <div class="f2c-panel" data-role="conv-f2-panel" hidden></div>
-              <!-- CCC-823: model pill lives in the real composer action row now
-                   (was in #convInputContext above). Filled by
-                   renderSessionUsageIntoStrip() via getComposerModelPillSlot();
-                   click opens openModelPicker(). Split panes get their own copy,
-                   mirrored in the same function. -->
-              <span class="composer-model-pill-slot" data-role="composer-model-pill"></span>
               <button class="esc-btn" id="convEscBtn" title="Send Esc to terminal - cancels in-flight response (or kills a headless spawn)">Esc</button>
               <button class="tts-btn" id="convTtsBtn" title="Read last message" aria-label="Read last message" aria-pressed="false">
                 <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
