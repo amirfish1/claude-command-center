@@ -10280,7 +10280,7 @@ class TestRepoContextHelpers(unittest.TestCase):
         self.assertEqual(list(sig.parameters), [
             "prompt", "name", "cwd", "repo_path", "worktree", "model",
             "parent_session_id", "timeline_t0_epoch_ms", "prewarm_id",
-            "reasoning_effort",
+            "auto_compact_k", "reasoning_effort",
         ])
         self.assertTrue(hasattr(server, "spawn_session_codex"))
         sig = inspect.signature(server.spawn_session_codex)

@@ -6981,9 +6981,11 @@ def _load_spawn_defaults():
     defaults = {
         "engine": "claude",
         "reasoning_effort": "",
+        "auto_compact_k": 250,
         "worker_engine": "",
         "worker_model": "",
         "worker_reasoning_effort": "",
+        "worker_auto_compact_k": 250,
         "models": {
             engine: _spawn_fallback_model_for_engine(engine)
             for engine in _ORCHESTRATION_SPAWN_ENGINES
@@ -7035,11 +7037,17 @@ def _load_spawn_defaults():
     worker_model = _clean_spawn_default_model(raw.get("worker_model"))
     if len(worker_model) > 200:
         worker_model = ""
+
+    auto_compact_k = _validate_auto_compact_k(raw.get("auto_compact_k"))
+    worker_auto_compact_k = _validate_auto_compact_k(raw.get("worker_auto_compact_k"))
     return {
         "engine": engine, "models": models,
-        "reasoning_effort": reasoning_effort, "worker_engine": worker_engine,
+        "reasoning_effort": reasoning_effort,
+        "auto_compact_k": auto_compact_k,
+        "worker_engine": worker_engine,
         "worker_model": worker_model,
         "worker_reasoning_effort": worker_reasoning_effort,
+        "worker_auto_compact_k": worker_auto_compact_k,
     }
 
 
@@ -7107,6 +7115,12 @@ def _save_spawn_defaults(config):
             }
         current["worker_reasoning_effort"] = worker_reasoning_effort
 
+    if "auto_compact_k" in config:
+        current["auto_compact_k"] = _validate_auto_compact_k(config.get("auto_compact_k"))
+
+    if "worker_auto_compact_k" in config:
+        current["worker_auto_compact_k"] = _validate_auto_compact_k(config.get("worker_auto_compact_k"))
+
     raw_models = config.get("models")
     if raw_models is not None and not isinstance(raw_models, dict):
         return {"ok": False, "error": "models must be an object"}
@@ -7129,9 +7143,11 @@ def _save_spawn_defaults(config):
     payload = {
         "engine": current["engine"],
         "reasoning_effort": current.get("reasoning_effort", ""),
+        "auto_compact_k": current.get("auto_compact_k", 250),
         "worker_engine": current.get("worker_engine", ""),
         "worker_model": current.get("worker_model", ""),
         "worker_reasoning_effort": current.get("worker_reasoning_effort", ""),
+        "worker_auto_compact_k": current.get("worker_auto_compact_k", 250),
         "models": {
             engine: current["models"].get(engine, "")
             for engine in _ORCHESTRATION_SPAWN_ENGINES
@@ -7144,6 +7160,32 @@ def _save_spawn_defaults(config):
         f.write("\n")
     tmp.replace(SPAWN_DEFAULTS_FILE)
     return {"ok": True, **payload}
+
+
+def _validate_auto_compact_k(value, default=250):
+    try:
+        v = int(value)
+    except (TypeError, ValueError):
+        return default
+    return max(50, min(1000, v))
+
+
+def _spawn_auto_compact_k_tokens(auto_compact_k=None):
+    """Return autocompact threshold in tokens for the current process role."""
+    if auto_compact_k is not None:
+        return _validate_auto_compact_k(auto_compact_k) * 1000
+    is_worker = os.environ.get("CCC_WORKER_PROCESS") == "1"
+    key = "worker_auto_compact_k" if is_worker else "auto_compact_k"
+    return _validate_auto_compact_k((_load_spawn_defaults() or {}).get(key, 250)) * 1000
+
+
+def _spawn_env(auto_compact_k=None):
+    """Child env for a new spawned session, including autocompact window."""
+    env = _question_relay_env()
+    tokens = _spawn_auto_compact_k_tokens(auto_compact_k=auto_compact_k)
+    if tokens:
+        env["CLAUDE_CODE_AUTO_COMPACT_WINDOW"] = str(tokens)
+    return env
 
 
 def _spawn_model_for_engine(engine, explicit_model=None):
@@ -47173,7 +47215,7 @@ def _start_claude_prewarm(
         stderr=subprocess.STDOUT,
         cwd=spawn_cwd,
         start_new_session=True,
-        env=_question_relay_env(),
+        env=_spawn_env(),
     )
     popen_kwargs["stdin"] = child_stdin_fd if child_stdin_fd is not None else subprocess.PIPE
     try:
@@ -47416,7 +47458,7 @@ def _route_claude_call_with_kwarg_fallback(operation, route_args, idempotency_ke
 
 def spawn_session(prompt, name=None, cwd=None, repo_path=None, worktree=False, model=None,
                   parent_session_id=None, timeline_t0_epoch_ms=None, prewarm_id=None,
-                  reasoning_effort=""):
+                  auto_compact_k=None, reasoning_effort=""):
     """Spawn a headless Claude Code session and return tracking info.
 
     The spawned subprocess requires an explicit cwd or repo_path.
@@ -47441,6 +47483,7 @@ def spawn_session(prompt, name=None, cwd=None, repo_path=None, worktree=False, m
         "parent_session_id": parent_session_id,
         "timeline_t0_epoch_ms": timeline_t0_epoch_ms,
         "prewarm_id": prewarm_id,
+        "auto_compact_k": auto_compact_k,
         "reasoning_effort": reasoning_effort,
     }
     routed, dropped = _route_claude_call_with_kwarg_fallback(
@@ -47458,7 +47501,8 @@ def spawn_session(prompt, name=None, cwd=None, repo_path=None, worktree=False, m
             if ssh_multiplexer.get_global_multiplexer():
                 return spawn_session_remote(
                     prompt, name=name, cwd=cwd, repo_path=repo_path, worktree=worktree,
-                    model=model, parent_session_id=parent_session_id, engine="claude"
+                    model=model, parent_session_id=parent_session_id,
+                    auto_compact_k=auto_compact_k, engine="claude"
                 )
         except Exception:
             pass
@@ -47587,7 +47631,7 @@ def spawn_session(prompt, name=None, cwd=None, repo_path=None, worktree=False, m
             stderr=subprocess.STDOUT,
             cwd=spawn_cwd,
             start_new_session=True,
-            env=_question_relay_env(),
+            env=_spawn_env(auto_compact_k=auto_compact_k),
         )
         popen_kwargs["stdin"] = child_stdin_fd if child_stdin_fd is not None else subprocess.PIPE
         if session_id:
@@ -48335,7 +48379,7 @@ def _find_remote_sessions(repo_path=None, progress=None, limit=None):
         return []
 
 
-def spawn_session_remote(prompt, name=None, cwd=None, repo_path=None, worktree=False, model=None, parent_session_id=None, engine="claude"):
+def spawn_session_remote(prompt, name=None, cwd=None, repo_path=None, worktree=False, model=None, parent_session_id=None, auto_compact_k=None, engine="claude"):
     """Spawn a remote CLI session over SSH using OpenSSH ControlMaster multiplexing."""
     try:
         import ssh_multiplexer
@@ -48383,7 +48427,7 @@ def spawn_session_remote(prompt, name=None, cwd=None, repo_path=None, worktree=F
         stdout=log_fh,
         stderr=subprocess.STDOUT,
         start_new_session=True,
-        env=_question_relay_env(),
+        env=_spawn_env(auto_compact_k=auto_compact_k),
     )
     popen_kwargs["stdin"] = child_stdin_fd if child_stdin_fd is not None else subprocess.PIPE
     try:
@@ -67969,6 +68013,9 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
             engine_raw = payload.get("engine")
             engine, model = _spawn_request_engine_and_model(payload)
             reasoning_effort = _spawn_request_reasoning_effort(payload, engine)
+            auto_compact_k = _load_spawn_defaults().get("auto_compact_k", 250)
+            if "auto_compact_k" in payload:
+                auto_compact_k = _validate_auto_compact_k(payload.get("auto_compact_k"))
             model_error = None
             if engine == "codex":
                 model, model_error = _validate_codex_model(model, require_available=True)
@@ -68200,6 +68247,7 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                             worktree=worktree_flag,
                             model=model,
                             parent_session_id=parent_session_id,
+                            auto_compact_k=auto_compact_k,
                             engine=remote_engine,
                         )
                     else:
@@ -68213,6 +68261,7 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                             parent_session_id=parent_session_id,
                             timeline_t0_epoch_ms=payload.get("timeline_t0_epoch_ms"),
                             prewarm_id=payload.get("prewarm_id"),
+                            auto_compact_k=auto_compact_k,
                             reasoning_effort=reasoning_effort,
                         )
                     result.setdefault("engine", engine)

@@ -55300,9 +55300,11 @@
     engine: readLegacySpawnEnginePref(),
     models: Object.assign({}, _defaultModelsByEngine),
     reasoning_effort: '',
+    auto_compact_k: 250,
     worker_engine: '',
     worker_model: '',
     worker_reasoning_effort: '',
+    worker_auto_compact_k: 250,
     codex_context_1m: true,
   };
   // The "new session modal" was removed from index.html, but several call
@@ -55491,6 +55493,12 @@
     spawnDefaultsState.worker_reasoning_effort = allEffortLevels().some(level => level.id === data.worker_reasoning_effort)
       ? data.worker_reasoning_effort
       : '';
+    function _mergeAutoCompactK(value) {
+      const n = parseInt(value, 10);
+      return Number.isFinite(n) ? Math.max(50, Math.min(1000, n)) : 250;
+    }
+    spawnDefaultsState.auto_compact_k = _mergeAutoCompactK(data.auto_compact_k);
+    spawnDefaultsState.worker_auto_compact_k = _mergeAutoCompactK(data.worker_auto_compact_k);
     if (typeof data.codex_context_1m === 'boolean') spawnDefaultsState.codex_context_1m = data.codex_context_1m;
     try { localStorage.setItem('ccc.spawnEngine', spawnDefaultsState.engine); } catch (_) {}
     // The engine <select> DOM nodes are set synchronously at boot from the
@@ -60991,10 +60999,12 @@
   const $spawnDefaultsWorkerOtherModel = document.getElementById('spawnDefaultsWorkerOtherModel');
   const $spawnDefaultsWorkerEffort = document.getElementById('spawnDefaultsWorkerEffort');
   const $spawnDefaultsWorkerEffortField = document.getElementById('spawnDefaultsWorkerEffortField');
+  const $spawnDefaultsWorkerAutoCompact = document.getElementById('spawnDefaultsWorkerAutoCompact');
   const $spawnDefaultsModel = document.getElementById('spawnDefaultsModel');
   const $spawnDefaultsOtherModel = document.getElementById('spawnDefaultsOtherModel');
   const $spawnDefaultsEffortField = document.getElementById('spawnDefaultsEffortField');
   const $spawnDefaultsEffort = document.getElementById('spawnDefaultsEffort');
+  const $spawnDefaultsAutoCompact = document.getElementById('spawnDefaultsAutoCompact');
   const $spawnDefaultsError = document.getElementById('spawnDefaultsError');
 
   function spawnDefaultsInlineError(text) {
@@ -61078,6 +61088,8 @@
     const levels = effortLevelsForEngine(engine);
     if ($spawnDefaultsEffortField) $spawnDefaultsEffortField.style.display = levels.length ? '' : 'none';
     renderEffortOptions($spawnDefaultsEffort, levels, spawnDefaultsState.reasoning_effort, 'Engine default');
+    if ($spawnDefaultsAutoCompact) $spawnDefaultsAutoCompact.value = spawnDefaultsState.auto_compact_k;
+    if ($spawnDefaultsWorkerAutoCompact) $spawnDefaultsWorkerAutoCompact.value = spawnDefaultsState.worker_auto_compact_k;
   }
   function updateSpawnDefaultsModelFromControls() {
     if (!$spawnDefaultsModel) return;
@@ -61132,9 +61144,11 @@
       engine,
       models: Object.assign({}, spawnDefaultsState.models || {}),
       reasoning_effort: spawnDefaultsState.reasoning_effort,
+      auto_compact_k: Number.isFinite(spawnDefaultsState.auto_compact_k) ? spawnDefaultsState.auto_compact_k : 250,
       worker_engine: workerEngine,
       worker_model: workerModel,
       worker_reasoning_effort: spawnDefaultsState.worker_reasoning_effort || '',
+      worker_auto_compact_k: Number.isFinite(spawnDefaultsState.worker_auto_compact_k) ? spawnDefaultsState.worker_auto_compact_k : 250,
     };
     try {
       const res = await fetch('/api/spawn-defaults', {
@@ -61347,6 +61361,18 @@
   if ($spawnDefaultsWorkerEffort) $spawnDefaultsWorkerEffort.addEventListener('change', () => {
     spawnDefaultsState.worker_reasoning_effort = $spawnDefaultsWorkerEffort.value || '';
     persistSpawnDefaults($spawnDefaultsWorkerEffort.closest('.settings-row'));
+  });
+  if ($spawnDefaultsAutoCompact) $spawnDefaultsAutoCompact.addEventListener('change', () => {
+    const n = parseInt($spawnDefaultsAutoCompact.value, 10);
+    spawnDefaultsState.auto_compact_k = Number.isFinite(n) ? Math.max(50, Math.min(1000, n)) : 250;
+    $spawnDefaultsAutoCompact.value = spawnDefaultsState.auto_compact_k;
+    persistSpawnDefaults($spawnDefaultsAutoCompact.closest('.settings-row'));
+  });
+  if ($spawnDefaultsWorkerAutoCompact) $spawnDefaultsWorkerAutoCompact.addEventListener('change', () => {
+    const n = parseInt($spawnDefaultsWorkerAutoCompact.value, 10);
+    spawnDefaultsState.worker_auto_compact_k = Number.isFinite(n) ? Math.max(50, Math.min(1000, n)) : 250;
+    $spawnDefaultsWorkerAutoCompact.value = spawnDefaultsState.worker_auto_compact_k;
+    persistSpawnDefaults($spawnDefaultsWorkerAutoCompact.closest('.settings-row'));
   });
 
   // Network access modal — opt in to non-loopback access via Tailscale or

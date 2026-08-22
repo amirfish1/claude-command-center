@@ -2140,6 +2140,17 @@
               </div>
             </div>
 
+            <div class="settings-row" data-keywords="spawn defaults autocompact compact new session">
+              <div class="settings-row-main">
+                <div class="settings-row-label">Autocompact threshold</div>
+                <div class="settings-row-desc">Claude Code auto-compacts when context reaches this many tokens. Applies to new sessions you spawn.</div>
+              </div>
+              <div class="settings-row-control">
+                <input type="number" id="spawnDefaultsAutoCompact" class="settings-number-input" min="50" max="1000" step="10" inputmode="numeric" value="250" aria-label="Autocompact threshold in thousands of tokens">
+                <span class="settings-suffix" aria-hidden="true">K tokens</span>
+              </div>
+            </div>
+
             <div class="settings-subsection-label">Default for workers</div>
 
             <div class="settings-row" data-keywords="worker engine watchtower spawn defaults">
@@ -2186,6 +2197,17 @@
                   <option value="xhigh">Extra High</option>
                   <option value="max">Max</option>
                 </select>
+              </div>
+            </div>
+
+            <div class="settings-row" data-keywords="worker autocompact compact watchtower spawn defaults">
+              <div class="settings-row-main">
+                <div class="settings-row-label">Worker autocompact threshold</div>
+                <div class="settings-row-desc">Claude Code auto-compacts for WatchTower queue workers at this token count. Separate from the new-session default.</div>
+              </div>
+              <div class="settings-row-control">
+                <input type="number" id="spawnDefaultsWorkerAutoCompact" class="settings-number-input" min="50" max="1000" step="10" inputmode="numeric" value="250" aria-label="Worker autocompact threshold in thousands of tokens">
+                <span class="settings-suffix" aria-hidden="true">K tokens</span>
               </div>
             </div>
 
