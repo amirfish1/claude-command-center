@@ -48288,7 +48288,7 @@ def _pick_color_for_session(name):
 
 
 def _make_stdin_fifo(log_path):
-    """Create a named pipe alongside the spawn log and open it RDWR.
+    """Create a named pipe for the spawn log and open it RDWR.
 
     The RDWR open is the trick that makes headless agents survive a
     CCC restart: when we pass this fd to the child as its stdin (Popen
@@ -48298,6 +48298,14 @@ def _make_stdin_fifo(log_path):
     count stays ≥ 1 as long as the child is alive, which means no EOF,
     which means no premature exit.
 
+    The FIFO lives under COMMAND_CENTER_STATE_DIR, not next to the log
+    file in the target repo's .claude/logs/. A FIFO inside a project
+    tree hangs any tool that walks the tree and opens every file it
+    finds (e.g. `next build --turbopack`, `rg` without excludes) —
+    open() on a FIFO blocks until a peer opens the other end, which
+    never happens (OPS-726). The log file itself stays in the repo
+    since callers/users tail it there; only the transient pipe moves.
+
     Returns (fifo_path, rdwr_fd), or (None, None) on failure (e.g. a
     filesystem that doesn't support FIFOs). Callers should fall back
     to subprocess.PIPE in that case — same behavior as before this
@@ -48305,7 +48313,9 @@ def _make_stdin_fifo(log_path):
     """
     try:
         log_path = Path(log_path)
-        fifo_path = Path(str(log_path) + ".stdin")
+        fifo_dir = COMMAND_CENTER_STATE_DIR / "fifos"
+        fifo_dir.mkdir(parents=True, exist_ok=True)
+        fifo_path = fifo_dir / (log_path.name + ".stdin")
         # mkfifo refuses if the path already exists; clear any stale
         # leftover from a previous spawn that didn't get cleaned up.
         if fifo_path.exists():
