@@ -4163,17 +4163,16 @@ def _maybe_fire_auto_handover(session_id, entry, now):
 
 
 def _run_auto_handover_watchdog_once(now=None):
-    now = time.time() if now is None else float(now)
-    if now - _auto_handover_last_checked_at["ts"] < _AUTO_HANDOVER_CHECK_INTERVAL_S:
-        return
-    _auto_handover_last_checked_at["ts"] = now
-    for sid, entry in list(_load_auto_handover_flags().items()):
-        if not isinstance(entry, dict) or not entry.get("enabled"):
-            continue
-        try:
-            _maybe_fire_auto_handover(sid, entry, now)
-        except Exception as e:
-            print(f"[auto-handover] {sid[:8]} check failed: {e}", flush=True)
+    """No-op since the toggle started injecting `token-sitter auto-snapshot on`
+    directly (see toggleAutoHandoverForPane in app.js). That injected command
+    already arms token-sitter's own idle checkpoint for the session, so this
+    server-side watchdog firing its own "[CCC auto-handover]" prompt on top
+    was a second, redundant checkpoint for the same idle window -- both fired
+    within minutes of each other for the same session. Left as a no-op (vs.
+    deleted) so the AUTO_HANDOVER_FILE flag + toggle UI keep working; only the
+    actual injection is disabled.
+    """
+    return
 
 
 def _get_session_override(session_id):
