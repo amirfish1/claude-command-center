@@ -22088,7 +22088,16 @@ body.ccc-mobile-redesign.ccc-simple-mode.ccc-simple-conv-open .simple-conv-title
    live badges) is hidden. */
 body.ccc-mobile-redesign.ccc-simple-mode.ccc-simple-conv-open #convToolbar {
   gap: 8px;
+  row-gap: 6px;
   padding: 6px 10px;
+  flex-wrap: wrap;
+}
+/* Back + icon + title claim the first row; everything else (tech toggle,
+   Stop, font controls) wraps to a second row rather than overflowing off
+   the right edge of a narrow phone — confirmed cut off at 390px wide
+   before this fix. */
+body.ccc-mobile-redesign.ccc-simple-mode.ccc-simple-conv-open .simple-conv-title {
+  flex-basis: 0;
 }
 body.ccc-mobile-redesign.ccc-simple-mode.ccc-simple-conv-open #convToolbar > :not(#simpleBackHomeBtn):not(#simpleConvEngineIcon):not(#simpleConvTitle):not(#simpleTechToggle):not(#simpleStopBtn):not(.simple-conv-font-controls):not(.mobile-actions-wrap) {
   display: none !important;
