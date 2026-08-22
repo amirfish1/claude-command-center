@@ -11300,6 +11300,19 @@
         const picker = document.querySelector('.conv-pane.is-active [data-model-picker]')
           || document.querySelector('[data-model-picker]');
         if (picker) picker.click();
+      } else if (action === 'copy-reference') {
+        // Simple mode never shows the raw session id inline (see the
+        // convSessionIdMobileWrap hide rule in simple.css) — this is the
+        // grandma-mode-friendly way to still hand a session id to another
+        // session/tool without exposing the id in the UI itself.
+        const sid = (typeof currentSession !== 'undefined' && currentSession) ? currentSession.id : '';
+        if (!sid) {
+          showOpToast('No task reference to copy yet', 'error');
+        } else {
+          copyTextValue(sid).then((ok) => {
+            showOpToast(ok ? 'Copied task reference' : 'Copy failed - try again', ok ? 'ok' : 'error');
+          });
+        }
       } else if (action === 'technical-details') {
         const restore = document.getElementById('statusRailRestoreBtn');
         if (restore && restore.offsetParent !== null) restore.click();
@@ -11325,7 +11338,7 @@
   // when _syncMobileBottomNav/_syncUiModeBodyClass run earlier in boot.
   var _simpleHomeShowing = true;   // Simple mode lands on home, not a conv
   var _simpleHomeData = { defaults: null, catalog: null };
-  var _simpleComposer = { engine: '', effort: '' };
+  var _simpleComposer = { engine: '', effort: '', cwd: '' };
   var _simpleHomeRefreshTimer = null;
   // Depth-3 simple screens (iteration 2): which full-screen simple surface is
   // open, if any. 'history' | 'automations' | 'automation-detail' | 'settings'.
@@ -11645,6 +11658,7 @@
     if (_simpleComposer.effort && _simpleEffortsForEngine(engine).length) {
       body.reasoning_effort = _simpleComposer.effort;
     }
+    if (_simpleComposer.cwd) { body.cwd = _simpleComposer.cwd; body.repo_path = _simpleComposer.cwd; }
     if (btn) { btn.disabled = true; btn.textContent = 'Starting…'; }
     try {
       const res = await fetch('/api/sessions/spawn', {
@@ -11974,6 +11988,38 @@
       if (d && d.ok !== false) _simpleHomeData.defaults = d;
     } catch (_) {}
     _simpleRenderAgentChips();
+    _simplePopulateFolderPicker();
+  }
+
+  // Which project/folder a new Simple-mode task spawns into. Previously
+  // absent entirely — every Simple-mode task silently spawned wherever the
+  // server's spawn-defaults cwd happened to be, with no way to change it.
+  // Reuses the same /api/repo/list the Advanced composer's cwd picker uses
+  // (loadRepoList() in the known-repos section), just rendered as a plain
+  // <select> instead of the Advanced combobox — Simple mode doesn't need
+  // autocomplete over an arbitrary path, just "pick one of my repos".
+  async function _simplePopulateFolderPicker() {
+    const sel = document.getElementById('simpleFolderSelect');
+    if (!sel) return;
+    if (!repoListState || !Array.isArray(repoListState.repos) || !repoListState.repos.length) {
+      try { await loadRepoList(); } catch (_) {}
+    }
+    const repos = (repoListState && Array.isArray(repoListState.repos)) ? repoListState.repos : [];
+    if (!repos.length) {
+      sel.innerHTML = '<option value="">(current project)</option>';
+      sel.disabled = true;
+      return;
+    }
+    sel.disabled = false;
+    const current = (repoListState && repoListState.current) || '';
+    if (!_simpleComposer.cwd || !repos.some(r => r.path === _simpleComposer.cwd)) {
+      _simpleComposer.cwd = repos.some(r => r.path === current) ? current : repos[0].path;
+    }
+    sel.innerHTML = repos.map(repo => {
+      const label = repo.label || _pathLeaf(repo.path) || repo.path;
+      const selAttr = repo.path === _simpleComposer.cwd ? ' selected' : '';
+      return '<option value="' + escapeAttr(repo.path) + '"' + selAttr + '>' + escapeHtml(label) + '</option>';
+    }).join('');
   }
 
   // ── conversation view: usage line + back-home ──
@@ -12207,6 +12253,12 @@
     _simpleApplyCollapsedState();
     _wireSimpleSectionDrag();
     _wireSimpleNyaSwipe();
+    const folderSelect = document.getElementById('simpleFolderSelect');
+    if (folderSelect) {
+      folderSelect.addEventListener('change', () => {
+        _simpleComposer.cwd = folderSelect.value || '';
+      });
+    }
     // Chip + card clicks are delegated because rows re-render on refresh.
     home.addEventListener('click', (ev) => {
       const dismissBtn = ev.target.closest('[data-dismiss-nya]');

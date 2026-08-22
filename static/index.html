@@ -490,6 +490,15 @@
             <div class="simple-chip-row" id="simpleAgentRow" role="group" aria-label="Choose a helper"></div>
             <div class="simple-chip-label" id="simpleEffortLabel">How hard should it think?</div>
             <div class="simple-chip-row" id="simpleEffortRow" role="group" aria-label="Choose thinking effort"></div>
+            <!-- Which project/folder the new task runs in. Populated from
+                 /api/repo/list by _simplePopulateFolderPicker() in app.js;
+                 defaults to the last-used repo so most starts need no
+                 attention, but it's always visible/changeable — silently
+                 defaulting to "whatever repo was last open" was the bug. -->
+            <div class="simple-chip-label" id="simpleFolderLabel">Which project?</div>
+            <select class="simple-folder-select" id="simpleFolderSelect" aria-label="Choose a project/folder">
+              <option value="">Loading projects…</option>
+            </select>
             <!-- Speak instead of type: same Web Speech recognition as the
                  advanced composer's #convMicBtn, targeting #simpleComposerInput.
                  Wired via toggleSpeechRecognition('simple-home') in app.js. -->
@@ -946,6 +955,7 @@
           <button type="button" class="mobile-actions-item" data-simple-action="rename" role="menuitem"><span aria-hidden="true">&#9998;&nbsp;</span>Rename task</button>
           <button type="button" class="mobile-actions-item" data-simple-action="move-to-project" role="menuitem"><span aria-hidden="true">&#128193;&nbsp;</span>Move to project</button>
           <button type="button" class="mobile-actions-item" data-simple-action="change-model" role="menuitem"><span aria-hidden="true">&#129302;&nbsp;</span>Change assistant/model</button>
+          <button type="button" class="mobile-actions-item" data-simple-action="copy-reference" role="menuitem"><span aria-hidden="true">&#128203;&nbsp;</span>Copy task reference</button>
           <button type="button" class="mobile-actions-item" data-simple-action="technical-details" role="menuitem"><span aria-hidden="true">&#8505;&nbsp;</span>Open technical details</button>
         </div>
       </div>

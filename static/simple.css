@@ -364,6 +364,25 @@ body.ccc-simple-mode .simple-chip-row {
   flex-wrap: wrap;
   gap: 8px;
 }
+body.ccc-simple-mode .simple-folder-select {
+  width: 100%;
+  min-height: 44px;
+  font-size: 15px;
+  font-family: inherit;
+  padding: 8px 12px;
+  border: 2px solid var(--border);
+  border-radius: 10px;
+  background: var(--bg, var(--surface));
+  color: var(--text);
+  box-sizing: border-box;
+}
+body.ccc-simple-mode .simple-folder-select:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+body.ccc-simple-mode .simple-folder-select:disabled {
+  opacity: 0.6;
+}
 body.ccc-simple-mode .simple-chip {
   display: inline-flex;
   flex-direction: column;
