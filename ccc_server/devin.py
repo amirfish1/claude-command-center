@@ -1531,7 +1531,6 @@ def find_devin_cli_conversations(
                     wd_exists = Path(session_cwd).is_dir()
                 except OSError:
                     pass
-            devin_latest, devin_limit = _devin_cli_list_context_usage(sid, is_live=is_live)
             rows.append({
                 "_raw_id": raw_id,
                 "_title": title,
@@ -1595,8 +1594,8 @@ def find_devin_cli_conversations(
                 "subagent_count": 0,
                 "subagent_in_flight_count": 0,
                 "subagent_recent": [],
-                "latest_input_tokens": devin_latest,
-                "context_limit": devin_limit,
+                "latest_input_tokens": 0,
+                "context_limit": DEVIN_CLI_CONTEXT_LIMIT,
             })
         qelapsed = time.perf_counter() - qstart
         _devin_cli_profile_log(
@@ -1615,6 +1614,7 @@ def find_devin_cli_conversations(
             missing_ids = [rid for rid in raw_ids if rid not in first_prompts]
             first_messages = _devin_cli_first_messages_from_nodes(con, missing_ids)
             latest_models = _devin_cli_latest_models_for_raw_ids(con, raw_ids)
+            context_usage = _devin_cli_context_usage_for_raw_ids(con, raw_ids)
             subagent_meta = _devin_cli_subagent_meta_for_raw_ids(con, raw_ids)
             last_assistant_texts = _devin_cli_last_assistant_text_for_raw_ids(con, raw_ids)
             ship_flags = _devin_cli_ship_flags_for_raw_ids(con, raw_ids)
@@ -1622,6 +1622,8 @@ def find_devin_cli_conversations(
                 raw_id = r.pop("_raw_id", "")
                 title = r.pop("_title", "")
                 sid = r["session_id"]
+                if raw_id in context_usage:
+                    r["latest_input_tokens"] = context_usage[raw_id]
                 first_message = (
                     first_prompts.get(raw_id, "") or first_messages.get(raw_id, "")
                 )
@@ -1878,45 +1880,69 @@ def _parse_devin_cli_conversation(session_id, after_line=0):
 
 DEVIN_CLI_CONTEXT_LIMIT = 200_000
 
-_devin_cli_list_usage_cache = {}
-_devin_cli_list_usage_cache_lock = threading.Lock()
+# How many of a session's most-recent message_nodes rows to pull looking for
+# the latest assistant turn with usable metrics. Assistant/user/tool-result
+# rows interleave, so 1 is not always enough (a dangling tool call or a
+# not-yet-answered user turn can be the literal last row); 8 comfortably
+# covers a normal turn's node count without pulling meaningful data volume.
+_DEVIN_CLI_CONTEXT_TAIL_ROWS = 8
 
 
-def _devin_cli_list_context_usage(session_id, *, is_live=False):
-    """Context % for archive/list rows — live sessions only.
+def _devin_cli_context_usage_for_raw_ids(con, raw_ids):
+    """{raw_id: latest_input_tokens} for the archive/list build — ALL rows,
+    not just the live session.
 
-    `_extract_devin_cli_usage` walks every `message_nodes` row for a
-    session, and Devin CLI's sessions.db stores full turn content inline
-    (observed: a few thousand rows spanning multiple GB) — cheap for the one
-    open session a user is looking at, but running it for every archived
-    session on every archive rebuild turned a ~40s cold build into one that
-    never finished (it re-parses gigabytes of chat history JSON per poll).
-    Mirrors `_antigravity_list_context_usage`: only the live session pays
-    the real cost, archived rows report no data rather than stall the
-    dashboard."""
-    sid = str(session_id or "").strip()
-    if not sid:
-        return 0, DEVIN_CLI_CONTEXT_LIMIT
-    now = time.time()
-    with _devin_cli_list_usage_cache_lock:
-        cached = _devin_cli_list_usage_cache.get(sid)
-        if cached and now - cached.get("ts", 0) < 30:
-            return cached.get("latest_input_tokens", 0), cached.get("context_limit", DEVIN_CLI_CONTEXT_LIMIT)
-    if not is_live:
-        return 0, DEVIN_CLI_CONTEXT_LIMIT
-    try:
-        usage = _extract_devin_cli_usage(sid)
-        latest = int(usage.get("latest_input_tokens") or 0)
-        limit = int(usage.get("context_limit") or DEVIN_CLI_CONTEXT_LIMIT) or DEVIN_CLI_CONTEXT_LIMIT
-    except Exception:
-        latest, limit = 0, DEVIN_CLI_CONTEXT_LIMIT
-    with _devin_cli_list_usage_cache_lock:
-        _devin_cli_list_usage_cache[sid] = {
-            "ts": now,
-            "latest_input_tokens": latest,
-            "context_limit": limit,
-        }
-    return latest, limit
+    `_extract_devin_cli_usage`'s single-session query (SELECT ... WHERE
+    session_id = ? ORDER BY node_id, scanning every row) is fine for the one
+    open session a user is looking at, but Devin CLI's sessions.db stores
+    full turn content inline (observed: multi-GB across a few thousand rows)
+    — a batched version of that same full-history query across every
+    archived session turned a ~40s cold archive build into one that never
+    finished (it re-parses gigabytes of chat JSON per poll).
+
+    This instead asks SQLite for only the last `_DEVIN_CLI_CONTEXT_TAIL_ROWS`
+    node_ids per session (`ORDER BY node_id DESC LIMIT N`, one query per raw
+    id, cheap: node_id is the natural insertion order and this never touches
+    the bulk of the table). Only those handful of rows' chat_message blobs
+    are read and parsed — micro-benchmarked at <50ms across the full local
+    DB, vs. minutes for the whole-table window-function approach."""
+    if not raw_ids or con is None:
+        return {}
+    out = {}
+    qstart = time.perf_counter()
+    for raw_id in raw_ids:
+        try:
+            cur = con.execute(
+                "SELECT chat_message FROM message_nodes WHERE session_id = ? "
+                "ORDER BY node_id DESC LIMIT ?",
+                (raw_id, _DEVIN_CLI_CONTEXT_TAIL_ROWS),
+            )
+            for row in cur:
+                try:
+                    msg = json.loads(row["chat_message"])
+                except (ValueError, TypeError):
+                    continue
+                if not isinstance(msg, dict) or str(msg.get("role") or "").lower() != "assistant":
+                    continue
+                metrics = (msg.get("metadata") or {}).get("metrics") or {}
+                if not isinstance(metrics, dict):
+                    continue
+                window = (
+                    int(metrics.get("input_tokens") or 0)
+                    + int(metrics.get("cache_read_tokens") or 0)
+                    + int(metrics.get("cache_creation_tokens") or 0)
+                )
+                if window:
+                    out[raw_id] = window
+                break
+        except sqlite3.Error:
+            continue
+    _devin_cli_profile_log(
+        "context_usage_for_raw_ids",
+        time.perf_counter() - qstart,
+        f"raw_ids={len(raw_ids)} found={len(out)}",
+    )
+    return out
 
 
 def _extract_devin_cli_usage(session_id):
