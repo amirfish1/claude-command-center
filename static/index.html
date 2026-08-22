@@ -37,6 +37,11 @@
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&family=Space+Grotesk:wght@600;700&display=swap">
 <title>Command Center for Claude, Codex, Cursor, and Anti-Gravity</title>
 <link rel="stylesheet" href="/static/app.css">
+<!-- Simple-mode CSS lives in its own file (extracted from app.css) so that
+     file's diff against upstream stays small — see simple.css's own header
+     comment. Loaded unconditionally; it's inert (never matches) outside
+     body.ccc-simple-mode. -->
+<link rel="stylesheet" href="/static/simple.css">
 <style>
   body.hide-gh-issues .is-github-issue {
     display: none !important;

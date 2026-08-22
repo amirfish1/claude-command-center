@@ -59046,6 +59046,10 @@ def _load_index_html():
             f'href="{_static_asset_url("app.css")}"',
         )
         html_text = html_text.replace(
+            'href="/static/simple.css"',
+            f'href="{_static_asset_url("simple.css")}"',
+        )
+        html_text = html_text.replace(
             'src="/static/app.js"',
             f'src="{_static_asset_url("app.js")}"',
         )
