@@ -455,37 +455,55 @@
          nav. Home open therefore means "sidebar shows #simpleHome instead
          of the list chrome"; opening a conversation slides .main in. -->
     <div class="simple-home" id="simpleHome" aria-label="Home">
-      <section class="simple-card simple-composer-card" aria-label="Start a new task">
-        <h1 class="simple-h1">What would you like help with?</h1>
-        <textarea id="simpleComposerInput" class="simple-composer-input" rows="3"
-                  placeholder="What would you like help with?"
-                  aria-label="What would you like help with?"></textarea>
-        <div class="simple-chip-label" id="simpleAgentLabel">Who should do it?</div>
-        <div class="simple-chip-row" id="simpleAgentRow" role="group" aria-label="Choose a helper"></div>
-        <div class="simple-chip-label" id="simpleEffortLabel">How hard should it think?</div>
-        <div class="simple-chip-row" id="simpleEffortRow" role="group" aria-label="Choose thinking effort"></div>
-        <!-- Speak instead of type: same Web Speech recognition as the
-             advanced composer's #convMicBtn, targeting #simpleComposerInput.
-             Wired via toggleSpeechRecognition('simple-home') in app.js. -->
-        <div class="simple-composer-actions">
-          <button type="button" class="mic-btn simple-mic-btn" id="simpleMicBtn"
-                  title="Record speech to input" aria-label="Record speech to input" aria-pressed="false">
-            <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-              <path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"></path>
-              <path d="M19 10v2a7 7 0 0 1-14 0v-2"></path>
-              <line x1="12" y1="19" x2="12" y2="23"></line>
-              <line x1="8" y1="23" x2="16" y2="23"></line>
-            </svg>
-          </button>
-          <button type="button" class="simple-start-btn" id="simpleStartBtn">Start</button>
-        </div>
-        <div class="simple-toast" data-simple-toast role="status" aria-live="polite" hidden></div>
-      </section>
       <!-- Home sections: user-orderable (drag handle) and collapsible (tap
            the heading row) so a section can be shrunk down to just its
-           title. Order + collapsed state persist in localStorage — a real
+           title, INCLUDING the composer itself (starts collapsed — see
+           _simpleLoadCollapsedSections()'s default-collapsed seed in
+           app.js). Order + collapsed state persist in localStorage — a real
            preference, not per-session. Wired by _wireSimpleSectionDrag() /
            _simpleToggleSectionCollapse() in app.js. -->
+      <section class="simple-section" data-simple-section="composer" aria-label="Start a new task">
+        <div class="simple-section-head">
+          <button type="button" class="simple-section-drag" aria-label="Drag to reorder this section" title="Drag to reorder">
+            <svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor" aria-hidden="true">
+              <circle cx="9" cy="6" r="1.6"></circle><circle cx="15" cy="6" r="1.6"></circle>
+              <circle cx="9" cy="12" r="1.6"></circle><circle cx="15" cy="12" r="1.6"></circle>
+              <circle cx="9" cy="18" r="1.6"></circle><circle cx="15" cy="18" r="1.6"></circle>
+            </svg>
+          </button>
+          <button type="button" class="simple-section-toggle" aria-expanded="true">
+            <h2 class="simple-h2">What would you like help with?</h2>
+            <svg class="simple-section-chevron" viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 9l6 6 6-6"></path></svg>
+          </button>
+        </div>
+        <div class="simple-section-body">
+          <div class="simple-card simple-composer-card">
+            <textarea id="simpleComposerInput" class="simple-composer-input" rows="3"
+                      placeholder="What would you like help with?"
+                      aria-label="What would you like help with?"></textarea>
+            <div class="simple-chip-label" id="simpleAgentLabel">Who should do it?</div>
+            <div class="simple-chip-row" id="simpleAgentRow" role="group" aria-label="Choose a helper"></div>
+            <div class="simple-chip-label" id="simpleEffortLabel">How hard should it think?</div>
+            <div class="simple-chip-row" id="simpleEffortRow" role="group" aria-label="Choose thinking effort"></div>
+            <!-- Speak instead of type: same Web Speech recognition as the
+                 advanced composer's #convMicBtn, targeting #simpleComposerInput.
+                 Wired via toggleSpeechRecognition('simple-home') in app.js. -->
+            <div class="simple-composer-actions">
+              <button type="button" class="mic-btn simple-mic-btn" id="simpleMicBtn"
+                      title="Record speech to input" aria-label="Record speech to input" aria-pressed="false">
+                <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                  <path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"></path>
+                  <path d="M19 10v2a7 7 0 0 1-14 0v-2"></path>
+                  <line x1="12" y1="19" x2="12" y2="23"></line>
+                  <line x1="8" y1="23" x2="16" y2="23"></line>
+                </svg>
+              </button>
+              <button type="button" class="simple-start-btn" id="simpleStartBtn">Start</button>
+            </div>
+            <div class="simple-toast" data-simple-toast role="status" aria-live="polite" hidden></div>
+          </div>
+        </div>
+      </section>
       <section class="simple-section" data-simple-section="needs-you" aria-label="Needs you">
         <div class="simple-section-head">
           <button type="button" class="simple-section-drag" aria-label="Drag to reorder this section" title="Drag to reorder">
@@ -504,7 +522,12 @@
           <div id="simpleNeedsYou" class="simple-card-list"></div>
         </div>
       </section>
-      <section class="simple-section" data-simple-section="working" aria-label="Working on it">
+      <!-- Working + Finished merged into one last-activity-ordered list
+           (was two separate sections; users found the split hid ordering
+           and made "what happened most recently" hard to answer). Each
+           card's own color/badge (see _simpleTaskCardHtml) says whether
+           it's still running or finished-and-unseen. -->
+      <section class="simple-section" data-simple-section="tasks" aria-label="Your conversations">
         <div class="simple-section-head">
           <button type="button" class="simple-section-drag" aria-label="Drag to reorder this section" title="Drag to reorder">
             <svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor" aria-hidden="true">
@@ -514,30 +537,12 @@
             </svg>
           </button>
           <button type="button" class="simple-section-toggle" aria-expanded="true">
-            <h2 class="simple-h2">Working on it</h2>
+            <h2 class="simple-h2">Your conversations</h2>
             <svg class="simple-section-chevron" viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 9l6 6 6-6"></path></svg>
           </button>
         </div>
         <div class="simple-section-body">
-          <div id="simpleWorking" class="simple-card-list"></div>
-        </div>
-      </section>
-      <section class="simple-section" data-simple-section="finished" aria-label="Finished">
-        <div class="simple-section-head">
-          <button type="button" class="simple-section-drag" aria-label="Drag to reorder this section" title="Drag to reorder">
-            <svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor" aria-hidden="true">
-              <circle cx="9" cy="6" r="1.6"></circle><circle cx="15" cy="6" r="1.6"></circle>
-              <circle cx="9" cy="12" r="1.6"></circle><circle cx="15" cy="12" r="1.6"></circle>
-              <circle cx="9" cy="18" r="1.6"></circle><circle cx="15" cy="18" r="1.6"></circle>
-            </svg>
-          </button>
-          <button type="button" class="simple-section-toggle" aria-expanded="true">
-            <h2 class="simple-h2">Finished</h2>
-            <svg class="simple-section-chevron" viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 9l6 6 6-6"></path></svg>
-          </button>
-        </div>
-        <div class="simple-section-body">
-          <div id="simpleFinished" class="simple-card-list"></div>
+          <div id="simpleTasks" class="simple-card-list"></div>
           <button type="button" class="simple-see-all" id="simpleSeeAllFinished">See all past tasks &rarr;</button>
         </div>
       </section>
@@ -800,6 +805,15 @@
            visible instead of buried in the hidden advanced toolbar. Wired by
            _wireSimpleStopBtn() in app.js. -->
       <button type="button" class="simple-stop-btn" id="simpleStopBtn" title="Stop this task">Stop</button>
+      <!-- Simple mode only: text-size control right in the conversation
+           (was buried 3 taps away in Settings). Forwards to the existing
+           global #fontMinus/#fontPlus buttons, same as Settings' A-/A+
+           chips already do. Wired by _wireSimpleConvFontControls() in
+           app.js. -->
+      <div class="simple-conv-font-controls">
+        <button type="button" class="simple-conv-font-btn" id="simpleConvFontMinus" title="Smaller text" aria-label="Smaller text">A-</button>
+        <button type="button" class="simple-conv-font-btn" id="simpleConvFontPlus" title="Bigger text" aria-label="Bigger text">A+</button>
+      </div>
       <button class="pkood-kill-btn" id="pkoodKillBtn" style="display:none;" title="Kill this pkood agent">Kill</button>
       <button class="conv-replay-launch-btn" id="convReplayBtn" style="display:none;" title="Replay this conversation message by message">&#9654; Replay</button>
       <button class="announce-btn-conv" id="announceBtnConv" style="display:none;" title="Run /announce-feature - ships and broadcasts to every studio">Close &amp; announce</button>

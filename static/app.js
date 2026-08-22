@@ -11516,6 +11516,19 @@
   }
   _wireSimpleStopBtn();
 
+  // Text size in the conversation: forwards to the existing global
+  // #fontMinus/#fontPlus buttons (same ones Settings' A-/A+ chips already
+  // forward to) so there's one font-size mechanism, not two.
+  function _wireSimpleConvFontControls() {
+    const minus = document.getElementById('simpleConvFontMinus');
+    const plus = document.getElementById('simpleConvFontPlus');
+    const realMinus = document.getElementById('fontMinus');
+    const realPlus = document.getElementById('fontPlus');
+    if (minus && realMinus) minus.addEventListener('click', () => realMinus.click());
+    if (plus && realPlus) plus.addEventListener('click', () => realPlus.click());
+  }
+  _wireSimpleConvFontControls();
+
   // ── composer: agent/model/effort chips ──
   const _SIMPLE_ENGINE_LABELS = {
     claude: 'Claude', codex: 'Codex', kimi: 'Kimi', gemini: 'Gemini',
@@ -11847,11 +11860,19 @@
     // "Running" and "unseen finished" are mutually exclusive, plain-color
     // signals: blue means it's actively working right now, amber means it
     // finished and you haven't looked yet. A seen/finished card gets neither.
-    const stateClass = working ? ' is-running' : (_simpleIsUnseenFinished(row) ? ' is-unseen-finished' : '');
+    const unseen = !working && _simpleIsUnseenFinished(row);
+    const stateClass = working ? ' is-running' : (unseen ? ' is-unseen-finished' : '');
+    // The color bar alone tested as unclear ("one is blue, another has a
+    // yellow tint" — not obvious what either meant); a plain-word badge
+    // next to the name carries the same signal without relying on color.
+    const badge = working
+      ? '<span class="simple-card-badge simple-card-badge-running">Working…</span>'
+      : (unseen ? '<span class="simple-card-badge simple-card-badge-unseen">New</span>' : '');
     return '<button type="button" class="simple-card simple-task-card' + stateClass + '"'
       + ' data-session-id="' + escapeAttr(sid) + '" data-mtime="' + escapeAttr(mtime) + '">'
       + '<span class="simple-card-title-row">' + sessionEngineIconHtml(row, { context: 'pane' })
-      + '<span class="simple-card-name">' + escapeHtml(name.length > 90 ? name.slice(0, 90) + '…' : name) + '</span></span>'
+      + '<span class="simple-card-name">' + escapeHtml(name.length > 90 ? name.slice(0, 90) + '…' : name) + '</span>'
+      + badge + '</span>'
       + '<span class="simple-status-line">' + escapeHtml(statusLine) + '</span>'
       + '<span class="simple-memory-line">' + escapeHtml(_simpleMemoryLine(row)) + '</span>'
       + '</button>';
@@ -11900,30 +11921,28 @@
     }
     _simpleRefreshQueueAlerts();
 
-    // Working on it
-    const workEl = document.getElementById('simpleWorking');
+    // Your conversations: working + finished merged into one list ordered
+    // strictly by last activity (was two separate sections; split them out
+    // and users lost the ability to answer "what happened most recently").
+    // Each card's own color/badge (_simpleTaskCardHtml) still says whether
+    // it's running or finished-and-unseen.
+    const tasksEl = document.getElementById('simpleTasks');
     const sessionRows = (sessions && Array.isArray(sessions.sessions)) ? sessions.sessions : [];
-    const workingRows = sessionRows.filter(_simpleIsWorkingRow)
-      .sort((a, b) => (Number(b.mtime || b.modified) || 0) - (Number(a.mtime || a.modified) || 0));
+    const workingRows = sessionRows.filter(_simpleIsWorkingRow);
     const workingIds = {};
     workingRows.forEach(r => { workingIds[String(r.id || r.session_id || '')] = true; });
-    if (workEl) {
-      workEl.innerHTML = workingRows.length
-        ? workingRows.slice(0, 6).map(r => _simpleTaskCardHtml(r, _simpleWorkingStatusLine(r), true)).join('')
-        : '<div class="simple-empty">Nothing is running right now.</div>';
-    }
-
-    // Finished
-    const finEl = document.getElementById('simpleFinished');
-    if (finEl) {
-      const convRows = (archive && Array.isArray(archive.conversations)) ? archive.conversations : [];
-      const done = convRows
-        .filter(r => r && !workingIds[String(r.id || r.session_id || '')])
-        .sort((a, b) => (Number(b.mtime || b.modified) || 0) - (Number(a.mtime || a.modified) || 0))
-        .slice(0, 5);
-      finEl.innerHTML = done.length
-        ? done.map(r => _simpleTaskCardHtml(r, 'Past task', false)).join('')
-        : '<div class="simple-empty">Finished tasks will show up here.</div>';
+    const convRows = (archive && Array.isArray(archive.conversations)) ? archive.conversations : [];
+    const finishedRows = convRows.filter(r => r && !workingIds[String(r.id || r.session_id || '')]);
+    const merged = workingRows.concat(finishedRows)
+      .sort((a, b) => (Number(b.mtime || b.modified) || 0) - (Number(a.mtime || a.modified) || 0))
+      .slice(0, 10);
+    if (tasksEl) {
+      tasksEl.innerHTML = merged.length
+        ? merged.map(r => {
+            const working = !!workingIds[String(r.id || r.session_id || '')];
+            return _simpleTaskCardHtml(r, working ? _simpleWorkingStatusLine(r) : 'Past task', working);
+          }).join('')
+        : '<div class="simple-empty">Your conversations will show up here.</div>';
     }
   }
   // R4: stuck helper-queue alerts, fetched independently of the main home
@@ -12011,18 +12030,20 @@
   // ── Home sections: user-orderable + collapsible ──
   // (Needs you / Working on it / Finished). Order and collapsed state persist
   // in localStorage as a real preference — not per-session like the
-  // technical strip. The composer card above them is pinned first and is
-  // neither draggable nor collapsible; it's the primary action.
+  // technical strip. The composer is a section like any other now — user
+  // feedback was that it should start collapsed and be reorderable too.
   var _SIMPLE_SECTION_ORDER_KEY = 'ccc-simple-section-order';
   var _SIMPLE_SECTION_COLLAPSED_KEY = 'ccc-simple-section-collapsed';
-  var _SIMPLE_DEFAULT_SECTION_ORDER = ['needs-you', 'working', 'finished'];
+  var _SIMPLE_DEFAULT_SECTION_ORDER = ['composer', 'needs-you', 'tasks'];
   var _simpleCollapsedSections = _simpleLoadCollapsedSections();
 
   function _simpleLoadCollapsedSections() {
     try {
-      const arr = JSON.parse(localStorage.getItem(_SIMPLE_SECTION_COLLAPSED_KEY) || '[]');
+      const raw = localStorage.getItem(_SIMPLE_SECTION_COLLAPSED_KEY);
+      if (raw == null) return new Set(['composer']);   // first-ever load: composer starts collapsed
+      const arr = JSON.parse(raw);
       return new Set(Array.isArray(arr) ? arr : []);
-    } catch (_) { return new Set(); }
+    } catch (_) { return new Set(['composer']); }
   }
   function _simpleSaveCollapsedSections() {
     try { localStorage.setItem(_SIMPLE_SECTION_COLLAPSED_KEY, JSON.stringify(Array.from(_simpleCollapsedSections))); } catch (_) {}
