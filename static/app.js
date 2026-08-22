@@ -1611,6 +1611,21 @@
       try { if (typeof pollVercelDeploy === 'function') pollVercelDeploy(); } catch (_) {}
       try { if (typeof pollLocalhost === 'function') pollLocalhost(); } catch (_) {}
       try { if (typeof refreshWorktreesBadge === 'function') refreshWorktreesBadge(); } catch (_) {}
+      // CCC-910: a session created straight from a terminal (no CCC spawn)
+      // only reaches the sidebar via the 60s sessionsList poll, which is
+      // itself paused while the window is backgrounded/occluded (the common
+      // case — Terminal.app in front, CCC behind). Returning focus resumed
+      // every OTHER poller above but not this one, so the new row sat
+      // invisible until the next scheduled tick landed. Force it here so
+      // switching back to CCC deterministically shows it, same as the rest
+      // of this function.
+      try {
+        if (typeof refreshArchiveData === 'function') {
+          refreshArchiveData().then(function () {
+            if (typeof _scheduleSidebarRender === 'function') _scheduleSidebarRender();
+          }).catch(function () {});
+        }
+      } catch (_) {}
     }
   }
   document.addEventListener('visibilitychange', _resumeForegroundPollers);
