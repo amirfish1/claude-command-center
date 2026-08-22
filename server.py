@@ -53162,6 +53162,7 @@ def _list_active_group_chat_summaries(now: float | None = None) -> list:
             # established field name.
             "status": chat_state if chat_state in {"active", "paused"} else "closed",
             "session_ids": meta.get("session_ids") or [],
+            "name_map": meta.get("name_map") or {},
             # Current-session filtering and ordering use these timestamps.
             # They are available from the sidecar/stat call, so including them
             # keeps an active empty chat visible without reading its messages.
