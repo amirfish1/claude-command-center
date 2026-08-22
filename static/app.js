@@ -27173,9 +27173,10 @@
     // (we watched its stdout for compact_result:"success"), so say so plainly
     // rather than "waiting for the boundary" — there's nothing left to wait for.
     if (data && data.via === 'live-spawn-stdin') return 'Conversation compacted in place.';
-    if (data && data.launched) return 'Opened Claude terminal and requested /compact.';
+    const engineLabel = SESSION_ENGINE_LABELS[source] || 'Claude';
+    if (data && data.launched) return 'Opened ' + engineLabel + ' terminal and requested /compact.';
     if (data && data.via === 'bg-agent-pty') return '/compact sent to background agent.';
-    return 'Compact requested. Waiting for Claude to write the compact boundary.';
+    return 'Compact requested. Waiting for ' + engineLabel + ' to write the compact boundary.';
   }
 
   // Shared helper: inject text to a session via API
