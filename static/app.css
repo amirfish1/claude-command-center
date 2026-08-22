@@ -142,13 +142,18 @@
     transition: background 0.15s, color 0.15s, border-color 0.15s;
   }
   .conv-list-restore:hover { background: var(--surface-2, rgba(255,255,255,0.06)); color: var(--text); border-color: var(--accent); }
-  @media (min-width: 951px) {
+  @media (min-width: 1201px) {
     body.conv-list-collapsed .sidebar,
     body.conv-list-collapsed .sidebar-resizer { display: none !important; }
     body.conv-list-collapsed .conv-list-restore { display: inline-flex; }
   }
   /* On mobile the conv list is full-screen; never hide it via this toggle,
-     and hide both affordances (the mobile back/forward nav owns that flow). */
+     and hide both affordances (the mobile back/forward nav owns that flow).
+     Must be the exact complement of the block above (1201px vs 1200px) —
+     a gap between the two thresholds let a collapsed sidebar (hidden by
+     the block above) land in a width range where the restore button was
+     ALSO force-hidden by this block, with no affordance left to reopen it
+     (CCC-918). */
   @media (max-width: 1200px) {
     .conv-list-collapse-btn, .conv-list-restore { display: none !important; }
   }
