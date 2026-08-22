@@ -15897,7 +15897,11 @@
 .assistant-text strong { font-weight: 700; color: var(--text); }
 .assistant-text ol,
 .assistant-text ul {
-  padding-left: 26px;
+  /* Logical (not padding-left): dir="auto" flips these to RTL for
+     Hebrew-heavy replies (common on the Kimi engine) — a physical
+     left-padding stranded the bullet indent on the wrong side while the
+     text right-aligned, producing a torn-looking list (CCC-919). */
+  padding-inline-start: 26px;
   margin: 8px 0;
 }
 .assistant-text ol {
@@ -18051,8 +18055,9 @@ body.status-pos-right #convToolbar {
    doesn't dim quotes either — the italic alone carries the signal). */
 .assistant-text blockquote {
   margin: 10px 0;
-  padding: 4px 0 4px 14px;
-  border-left: 2px solid var(--border);
+  padding-block: 4px;
+  padding-inline: 14px 0;
+  border-inline-start: 2px solid var(--border);
   color: var(--text);
   font-style: italic;
 }
