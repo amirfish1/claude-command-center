@@ -39430,15 +39430,35 @@ _KIMI_WIRE_TAIL_CACHE = {}  # wire path -> ((mtime_ns, size), meta)
 _KIMI_WIRE_USAGE_CACHE = {}  # wire path -> incremental usage scan state
 
 
-def _kimi_wire_lifetime_tokens(session_dir):
-    """Return cumulative per-turn token usage without re-reading old rows."""
+try:
+    _KIMI_CONTEXT_LIMIT = int(os.environ.get("CCC_KIMI_CONTEXT_LIMIT", "256000") or "256000")
+except ValueError:
+    _KIMI_CONTEXT_LIMIT = 256000
+
+
+def _kimi_wire_usage_meta(session_dir):
+    """Cumulative per-turn token usage AND the latest context-window size,
+    without re-reading old rows.
+
+    Incrementally scans agents/main/wire.jsonl (resumable via a cached
+    (inode, offset) checkpoint, same shape as the tail-meta cache above) so
+    repeat polls only cost the bytes appended since the last read. Mirrors
+    the parsing `_extract_kimi_usage` does on the full file, but keeps it
+    cheap enough to run on every kimi row in the archive/list build:
+    `context.update_token_count` carries the live context size the Kimi TUI
+    itself shows; when a session never emits one (older wire format), the
+    latest `usage.record` turn window is the closest estimate.
+
+    Returns {"lifetime_tokens": int, "latest_input_tokens": int}.
+    """
     wire = Path(session_dir) / "agents" / "main" / "wire.jsonl" if session_dir else None
+    empty = {"lifetime_tokens": 0, "latest_input_tokens": 0}
     if wire is None:
-        return 0
+        return empty
     try:
         st = wire.stat()
     except OSError:
-        return 0
+        return empty
     cache_key = str(wire)
     cached = _KIMI_WIRE_USAGE_CACHE.get(cache_key) or {}
     can_resume = (
@@ -39447,6 +39467,8 @@ def _kimi_wire_lifetime_tokens(session_dir):
     )
     offset = cached.get("offset", 0) if can_resume else 0
     total = cached.get("total", 0) if can_resume else 0
+    latest_from_count = cached.get("latest_from_count", 0) if can_resume else 0
+    latest_from_step = cached.get("latest_from_step", 0) if can_resume else 0
     try:
         with wire.open("rb") as handle:
             if offset:
@@ -39460,13 +39482,21 @@ def _kimi_wire_lifetime_tokens(session_dir):
                     offset = line_start
                     break
                 offset = handle.tell()
-                if b'"usage.record"' not in raw and b'"usage"' not in raw:
+                if (
+                    b'"usage.record"' not in raw
+                    and b'"usage"' not in raw
+                    and b'"context.update_token_count"' not in raw
+                ):
                     continue
                 try:
                     record = json.loads(raw)
                 except (json.JSONDecodeError, UnicodeDecodeError):
                     continue
-                if record.get("type") != "usage.record":
+                rtype = record.get("type")
+                if rtype == "context.update_token_count":
+                    latest_from_count = _codex_int(record.get("tokenCount"))
+                    continue
+                if rtype != "usage.record":
                     continue
                 if record.get("usageScope") not in (None, "turn"):
                     continue
@@ -39479,16 +39509,31 @@ def _kimi_wire_lifetime_tokens(session_dir):
                     "inputCacheCreation",
                     "output",
                 ))
+                latest_from_step = sum(_codex_int(usage.get(key)) for key in (
+                    "inputOther",
+                    "inputCacheRead",
+                    "inputCacheCreation",
+                ))
     except OSError:
-        return total
+        pass
     if len(_KIMI_WIRE_USAGE_CACHE) > 512:
         _KIMI_WIRE_USAGE_CACHE.clear()
     _KIMI_WIRE_USAGE_CACHE[cache_key] = {
         "inode": st.st_ino,
         "offset": offset,
         "total": total,
+        "latest_from_count": latest_from_count,
+        "latest_from_step": latest_from_step,
     }
-    return total
+    return {
+        "lifetime_tokens": total,
+        "latest_input_tokens": latest_from_count or latest_from_step,
+    }
+
+
+def _kimi_wire_lifetime_tokens(session_dir):
+    """Back-compat wrapper — see _kimi_wire_usage_meta."""
+    return _kimi_wire_usage_meta(session_dir)["lifetime_tokens"]
 
 
 def _kimi_wire_tail_meta(session_dir):
@@ -39626,7 +39671,11 @@ def _restamp_kimi_row_tail_fields(row):
     sid = row.get("session_id") or row.get("id")
     idx = _kimi_session_index().get(sid) or {}
     tail_meta = _kimi_wire_tail_meta(idx.get("session_dir"))
-    row["lifetime_tokens"] = _kimi_wire_lifetime_tokens(idx.get("session_dir"))
+    usage_meta = _kimi_wire_usage_meta(idx.get("session_dir"))
+    row["lifetime_tokens"] = usage_meta["lifetime_tokens"]
+    if usage_meta["latest_input_tokens"]:
+        row["latest_input_tokens"] = usage_meta["latest_input_tokens"]
+    row.setdefault("context_limit", _KIMI_CONTEXT_LIMIT)
     row["last_event_type"] = tail_meta.get("last_event_type")
     if tail_meta.get("wire_mtime"):
         row["last_event_ts"] = tail_meta["wire_mtime"]
@@ -39824,7 +39873,10 @@ def find_kimi_conversations(
         # (result + recent), a dangling tool names the Stuck pill, and the
         # stale fields light the same stuck indicators codex rows use.
         tail_meta = _kimi_wire_tail_meta(idx.get("session_dir"))
-        row["lifetime_tokens"] = _kimi_wire_lifetime_tokens(idx.get("session_dir"))
+        usage_meta = _kimi_wire_usage_meta(idx.get("session_dir"))
+        row["lifetime_tokens"] = usage_meta["lifetime_tokens"]
+        row["latest_input_tokens"] = usage_meta["latest_input_tokens"]
+        row["context_limit"] = _KIMI_CONTEXT_LIMIT
         row["last_event_type"] = tail_meta.get("last_event_type")
         if tail_meta.get("wire_mtime"):
             row["last_event_ts"] = tail_meta["wire_mtime"]

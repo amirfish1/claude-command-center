@@ -1531,6 +1531,7 @@ def find_devin_cli_conversations(
                     wd_exists = Path(session_cwd).is_dir()
                 except OSError:
                     pass
+            devin_latest, devin_limit = _devin_cli_list_context_usage(sid, is_live=is_live)
             rows.append({
                 "_raw_id": raw_id,
                 "_title": title,
@@ -1594,6 +1595,8 @@ def find_devin_cli_conversations(
                 "subagent_count": 0,
                 "subagent_in_flight_count": 0,
                 "subagent_recent": [],
+                "latest_input_tokens": devin_latest,
+                "context_limit": devin_limit,
             })
         qelapsed = time.perf_counter() - qstart
         _devin_cli_profile_log(
@@ -1874,6 +1877,46 @@ def _parse_devin_cli_conversation(session_id, after_line=0):
 
 
 DEVIN_CLI_CONTEXT_LIMIT = 200_000
+
+_devin_cli_list_usage_cache = {}
+_devin_cli_list_usage_cache_lock = threading.Lock()
+
+
+def _devin_cli_list_context_usage(session_id, *, is_live=False):
+    """Context % for archive/list rows — live sessions only.
+
+    `_extract_devin_cli_usage` walks every `message_nodes` row for a
+    session, and Devin CLI's sessions.db stores full turn content inline
+    (observed: a few thousand rows spanning multiple GB) — cheap for the one
+    open session a user is looking at, but running it for every archived
+    session on every archive rebuild turned a ~40s cold build into one that
+    never finished (it re-parses gigabytes of chat history JSON per poll).
+    Mirrors `_antigravity_list_context_usage`: only the live session pays
+    the real cost, archived rows report no data rather than stall the
+    dashboard."""
+    sid = str(session_id or "").strip()
+    if not sid:
+        return 0, DEVIN_CLI_CONTEXT_LIMIT
+    now = time.time()
+    with _devin_cli_list_usage_cache_lock:
+        cached = _devin_cli_list_usage_cache.get(sid)
+        if cached and now - cached.get("ts", 0) < 30:
+            return cached.get("latest_input_tokens", 0), cached.get("context_limit", DEVIN_CLI_CONTEXT_LIMIT)
+    if not is_live:
+        return 0, DEVIN_CLI_CONTEXT_LIMIT
+    try:
+        usage = _extract_devin_cli_usage(sid)
+        latest = int(usage.get("latest_input_tokens") or 0)
+        limit = int(usage.get("context_limit") or DEVIN_CLI_CONTEXT_LIMIT) or DEVIN_CLI_CONTEXT_LIMIT
+    except Exception:
+        latest, limit = 0, DEVIN_CLI_CONTEXT_LIMIT
+    with _devin_cli_list_usage_cache_lock:
+        _devin_cli_list_usage_cache[sid] = {
+            "ts": now,
+            "latest_input_tokens": latest,
+            "context_limit": limit,
+        }
+    return latest, limit
 
 
 def _extract_devin_cli_usage(session_id):
