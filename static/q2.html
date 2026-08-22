@@ -59,10 +59,6 @@
       <div class="q2-resizer q2-resizer-h" data-q2-resize-v="brief" role="separator" aria-orientation="horizontal"
            tabindex="0" aria-label="Resize the queue attendant band. Drag, or use arrow keys. Double-click to reset."
            title="Drag to resize &middot; double-click to reset" hidden></div>
-      <div class="q2-col-sub">
-        <input type="search" class="q2-search" id="q2Search" placeholder="Search tickets&hellip;" aria-label="Search tickets">
-      </div>
-      <div class="q2-list" id="q2Tickets"></div>
       <div class="q2-resizer q2-resizer-h" data-q2-resize-v="logbar" role="separator" aria-orientation="horizontal"
            tabindex="0" aria-label="Resize the activity log. Drag, or use arrow keys. Double-click to reset."
            title="Drag to resize &middot; double-click to reset"></div>
@@ -75,10 +71,16 @@
          tabindex="0" aria-label="Resize the tickets column. Drag, or use arrow keys. Double-click to reset."
          title="Drag to resize &middot; double-click to reset"></div>
 
-    <!-- Column 3: the selected ticket. Conversation pane goes here later. -->
-    <section class="q2-col q2-col-detail" aria-label="Ticket">
-      <button type="button" class="q2-mobile-back q2-detail-mobile-back" data-q2-mobile-back="tickets" aria-label="Back to tickets">&#8592; Tickets</button>
-      <div class="q2-detail" id="q2Detail"></div>
+    <!-- Column 3 (RHS): the ticket list + search, moved here from column 2
+         (CCC-904) so column 2 has room for the attendant/activity log without
+         fighting the list for vertical space. A ticket opens as a popup (see
+         openDetailModal() in q2.js) instead of an inline third-column pane --
+         there is no third-column detail view left to render into. -->
+    <section class="q2-col q2-col-detail" aria-label="Tickets">
+      <div class="q2-col-sub">
+        <input type="search" class="q2-search" id="q2Search" placeholder="Search tickets&hellip;" aria-label="Search tickets">
+      </div>
+      <div class="q2-list" id="q2Tickets"></div>
     </section>
   </main>
 

@@ -589,24 +589,6 @@
     return state.items.filter(function (it) { return projectKey(it && it.project) === key; });
   }
 
-  // CCC-809: same ordering renderTickets() uses for the visible list (open
-  // rows by operational bucket, then priority, then oldest-first), so
-  // "first ticket" here means the same thing "top of the list" means there.
-  function firstOpenTicketForQueue(queue) {
-    var items = itemsForQueue(queue).filter(function (it) { return statusOf(it) !== 'closed'; });
-    items.sort(function (a, b) {
-      var bucket = operationalBucket(a) - operationalBucket(b);
-      if (bucket) return bucket;
-      if (statusOf(a) === 'open') {
-        var p = prioRank(a) - prioRank(b);
-        if (p) return p;
-        return (a.number || 0) - (b.number || 0);
-      }
-      return (b.number || 0) - (a.number || 0);
-    });
-    return items.length ? items[0].ref : '';
-  }
-
   function queueLearningsPath(queue) {
     return '/api/queue/learnings?queue=' + encodeURIComponent(String(queue || ''));
   }
@@ -649,10 +631,9 @@
     // the board on an empty column with no way back.
     if (!state.booted && state.queues.length) {
       state.booted = true;
-      var savedQueue = '', savedRef = '', savedAll = false;
+      var savedQueue = '', savedAll = false;
       try {
         savedQueue = localStorage.getItem(LS_QUEUE) || '';
-        savedRef = localStorage.getItem(LS_REF) || '';
         savedAll = localStorage.getItem(LS_VIEW_ALL) === '1';
       } catch (_) {}
       var match = state.queues.filter(function (q) {
@@ -660,21 +641,10 @@
       })[0];
       if (savedAll) {
         state.viewAll = true;
-        if (savedRef && state.items.some(function (it) { return it.ref === savedRef; })) {
-          state.ref = savedRef;
-          loadDetail(savedRef);
-        }
+        // Ticket ref is intentionally NOT restored (CCC-904): detail is a
+        // popup now, and popping one open on page load would be intrusive.
       } else if (match) {
         state.queue = match.queue;
-        // The ticket is only restored if it is still in that queue. Validating
-        // against the item list rather than trusting the id avoids a detail
-        // pane stuck on "Loading" for a ref that no longer exists.
-        if (savedRef && state.items.some(function (it) {
-          return it.ref === savedRef && projectKey(it.project) === projectKey(match.queue);
-        })) {
-          state.ref = savedRef;
-          loadDetail(savedRef);
-        }
       }
     }
     // Default selection: first queue with open work, else the first queue.
@@ -2745,13 +2715,22 @@
     });
   });
 
-  // ── modals: new ticket, queue configuration ──────────────────────────────
+  // ── modals: new ticket, queue configuration, ticket detail ───────────────
   function closeModal() {
     var host = $('q2Modal');
     if (!host) return;
     host.hidden = true;
     host.innerHTML = '';
     document.removeEventListener('keydown', modalKey, true);
+    // Closing the detail popup (CCC-904) is how a ticket gets deselected now
+    // — nothing else clears state.ref. Harmless no-op for the other modals
+    // (new ticket / queue settings), which never set state.ref.
+    if (state.ref) {
+      state.ref = '';
+      state.detail = null;
+      rememberSelection();
+      renderTickets();
+    }
   }
   function modalKey(e) {
     if (e.key === 'Escape') { e.preventDefault(); closeModal(); }
@@ -2764,6 +2743,20 @@
     host.hidden = false;
     document.addEventListener('keydown', modalKey, true);
     if (onMount) onMount(host.querySelector('.q2-modal'));
+  }
+
+  // Ticket detail (and the queue-learnings fallback renderDetail() shows when
+  // state.ref is empty) now opens as a popup instead of a third-column pane
+  // (CCC-904) -- renderDetail() itself is unchanged, only its host moved.
+  function openDetailModal() {
+    openModal(
+      '<button type="button" class="q2-icon-btn q2-modal-detail-close" data-q2-modal-close aria-label="Close">&times;</button>'
+      + '<div class="q2-detail" id="q2Detail"></div>',
+      function (modalEl) {
+        modalEl.classList.add('q2-modal-detail');
+        renderDetail();
+      }
+    );
   }
 
   // ── new ticket ───────────────────────────────────────────────────────────
@@ -3127,7 +3120,9 @@
   function showMobileColumn(column) {
     if (!window.matchMedia('(max-width: 700px)').matches) return;
     var shell = document.querySelector('.q2-shell');
-    if (!shell || ['queues', 'tickets', 'detail'].indexOf(column) === -1) return;
+    // 'detail' dropped (CCC-904): ticket detail is a popup on every viewport,
+    // not a third mobile panel to route to.
+    if (!shell || ['queues', 'tickets'].indexOf(column) === -1) return;
     shell.setAttribute('data-mobile-panel', column);
   }
 
@@ -3149,24 +3144,22 @@
     stopAttendPoll();
     loadQueueAttend(name);
     loadLog(name).then(renderLogBar);
-    // CCC-809: clicking a queue is "show me what's happening in it" — land
-    // on its topmost open ticket instead of leaving the RHS on the queue's
-    // learnings doc (that's still one click away via the Learnings button).
-    var first = firstOpenTicketForQueue(name);
-    if (first) selectTicket(first);
+    // CCC-904: ticket detail is a popup now, so picking a queue must not pop
+    // one open automatically (CCC-809's old "land on the topmost ticket"
+    // behavior would mean a modal on every queue click). The RHS list is
+    // already scoped to this queue; opening a ticket is an explicit click.
   }
 
   function showQueueLearningsInDetail() {
-    // Same effect as clicking the queue name in the left column: deselect
-    // the ticket so the detail pane (RHS) falls back to the queue's
-    // learnings doc, without changing which queue is selected.
+    // Opens the queue's learnings doc in the same popup renderDetail() uses
+    // for a ticket (CCC-904) — deselect the ticket first so renderDetail()'s
+    // no-ref branch renders learnings instead.
     if (!state.queue || state.viewAll) return;
     state.ref = '';
     state.detail = null;
     rememberSelection();
     renderTickets();
-    renderDetail();
-    showMobileColumn('detail');
+    openDetailModal();
   }
 
   function selectAllQueues() {
@@ -3198,7 +3191,9 @@
   }
 
   function selectTicket(ref) {
-    if (ref === state.ref) return;
+    // No same-ref early-return: the detail pane is a popup now (CCC-904), so
+    // clicking a ticket whose ref is already state.ref (e.g. re-clicking
+    // after closing the popup) must still reopen it.
     state.ref = ref;
     state.detail = null;
     state.arm = '';
@@ -3206,7 +3201,7 @@
     rememberSelection();
     renderQueues();
     renderTickets();
-    showMobileColumn('detail');
+    openDetailModal();
     loadDetail(ref);
   }
 

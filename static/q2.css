@@ -1752,9 +1752,12 @@ h1.q2-detail-title[data-q2-title-open]:hover { background: var(--bg-hover, rgba(
     overflow: hidden;
   }
   .q2-col { display: none; height: 100%; border-right: 0; }
+  /* Ticket detail is a popup on every viewport (CCC-904), so there is no
+     third mobile panel to route to any more -- "tickets" shows column 2
+     (attendant/log) and column 3 (search + list) together. */
   .q2-shell[data-mobile-panel="queues"] .q2-col-queues,
   .q2-shell[data-mobile-panel="tickets"] .q2-col-tickets,
-  .q2-shell[data-mobile-panel="detail"] .q2-col-detail { display: flex; }
+  .q2-shell[data-mobile-panel="tickets"] .q2-col-detail { display: flex; }
   .q2-mobile-back {
     display: inline-flex;
     flex: 0 0 auto;
@@ -1768,10 +1771,6 @@ h1.q2-detail-title[data-q2-title-open]:hover { background: var(--bg-hover, rgba(
     font: inherit;
     font-size: 11px;
     font-weight: 600;
-  }
-  .q2-detail-mobile-back {
-    margin: 6px 8px 0;
-    align-self: flex-start;
   }
   .q2-resizer { display: none; }
 }
@@ -1818,6 +1817,20 @@ h1.q2-detail-title[data-q2-title-open]:hover { background: var(--bg-hover, rgba(
 .q2-modal-hint { flex: 1 1 auto; font-size: 10.5px; }
 .q2-modal-sys { font-size: 10.5px; white-space: nowrap; }
 .q2-btn-primary { border-color: var(--accent); color: var(--accent); }
+
+/* Ticket detail popup (CCC-904): wider than the form modals since it carries
+   the full detail pane (chips, prompt, timeline, answer box). The close
+   button floats over renderDetail()'s own markup rather than living inside
+   it, because renderDetail() replaces #q2Detail's innerHTML wholesale on
+   every repaint and would wipe a button placed inside it. */
+.q2-modal.q2-modal-detail { width: min(760px, calc(100vw - 40px)); }
+.q2-modal-detail-close {
+  position: absolute;
+  top: 10px;
+  right: 10px;
+  z-index: 1;
+  background: var(--surface);
+}
 
 /* Paste / drop target for ticket screenshots. */
 .q2-drop {
