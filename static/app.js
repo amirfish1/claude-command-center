@@ -27075,6 +27075,7 @@
       if (res.ok && data.ok) {
         if (_usageDataByPane[paneId]) _usageDataByPane[paneId].auto_handover_enabled = !!data.enabled;
         showOpToast(data.enabled ? 'Auto handover on for this session' : 'Auto handover off', 'success');
+        postInjectInput(sid, 'token-sitter auto-snapshot ' + (data.enabled ? 'on' : 'off'), 'send').catch(() => {});
       } else {
         showOpToast('Could not update auto handover: ' + (data.error || ('HTTP ' + res.status)), 'error');
       }
