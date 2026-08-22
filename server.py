@@ -38090,12 +38090,17 @@ def _acp_handle_session_update(harness, sid, update):
         state = _acp_session(harness, sid, create=True)
         state["updated_at"] = time.time()
 
-        # session/load history replay: accumulate per speaker and finalize on
-        # speaker switches; the load response flushes the tail (see
-        # _acp_load). Thought chunks are dropped during replay.
+        # session/load history replay: accumulate per speaker/kind and finalize
+        # on switches; the load response flushes the tail (see _acp_load).
+        # CCC-932: agent_thought_chunk used to be dropped during replay
+        # (unhandled here, then swallowed by the "no active_turn" branch
+        # below) — a resumed Kimi session showed only text/tool_use, no
+        # thinking. Track it as its own "thought" bucket so it flushes into
+        # its own thinking-kind block instead of merging into surrounding text.
         replay = state.get("replay")
-        if replay is not None and kind in ("user_message_chunk", "agent_message_chunk"):
-            speaker = "user" if kind == "user_message_chunk" else "assistant"
+        if replay is not None and kind in ("user_message_chunk", "agent_message_chunk", "agent_thought_chunk"):
+            speaker = "user" if kind == "user_message_chunk" else (
+                "thought" if kind == "agent_thought_chunk" else "assistant")
             if replay.get("kind") and replay["kind"] != speaker and replay.get("text"):
                 ev = _acp_message_event(state, replay["kind"], replay["text"])
                 if ev is not None:
@@ -38408,9 +38413,21 @@ def _strip_ccc_kimi_goal_prefix(text):
 
 
 def _acp_message_event(state, speaker, text):
-    """Replayed user/assistant text → conv event. Control bookkeeping
+    """Replayed user/assistant/thought text → conv event. Control bookkeeping
     (system-reminders, skill-load wrappers, command XML) is dropped like the
     Claude transcript path; empty-after-filter messages return None."""
+    if speaker == "thought":
+        # Matches the live agent_thought_chunk path (see below): thinking is
+        # not XML-stripped, the model quoting a wrapper while reasoning about
+        # it is legitimate content.
+        text = (text or "").strip()
+        if not text:
+            return None
+        return {
+            "type": "assistant",
+            "message_id": f"acp-replay-{state['sid']}-{state['next_line']}",
+            "blocks": [{"kind": "thinking", "text": text}],
+        }
     text = (text or "").strip()
     if not text or _is_transcript_control_text(text):
         return None
