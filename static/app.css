@@ -8463,6 +8463,19 @@
   .conv-send-menu .continue-new-btn:active { background: var(--surface-3, rgba(255,255,255,0.06)); border: none; }
   .conv-send-menu .submit-plus-btn:hover,
   .conv-send-menu .submit-plus-btn:active { background: rgba(63,185,80,0.16); border: none; }
+  /* CCC-923: auto-compact size + token-sitter toggle only make sense before
+     a session exists — hidden once a real session is attached. */
+  .conv-send-menu .new-session-only { display: none; }
+  .conv-input-bar.is-new-session-launch .conv-send-menu .new-session-only { display: flex; }
+  .conv-send-menu #convSendAutoCompactRow { flex-direction: column; align-items: flex-start; gap: 5px; cursor: default; }
+  .conv-send-menu #convSendAutoCompactRow label { color: var(--text-muted); white-space: normal; }
+  .conv-send-menu #convSendAutoCompactK {
+    width: 100%; background: var(--surface-1, rgba(0,0,0,0.2));
+    border: 1px solid var(--border); border-radius: 5px; color: var(--text);
+    font-size: 12.5px; padding: 4px 7px;
+  }
+  .conv-send-menu #convSendTokenSitterRow { cursor: pointer; }
+  .conv-send-menu #convSendTokenSitterRow input[type="checkbox"] { flex-shrink: 0; }
   /* Codex app-server indicator — a subtle pill in the input hint row. */
   .conv-input-hint .codex-appsrv {
     display: none; align-items: center; gap: 4px;

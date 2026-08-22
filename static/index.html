@@ -1206,6 +1206,16 @@
                     </svg>
                     <span>Continue in new session</span>
                   </button>
+                  <!-- CCC-923: auto-compact size + token-sitter toggle, only
+                       meaningful before a session exists yet. -->
+                  <div class="conv-send-menu-item new-session-only" id="convSendAutoCompactRow" role="menuitem">
+                    <label for="convSendAutoCompactK">Auto-compact size (K tokens)</label>
+                    <input type="number" id="convSendAutoCompactK" min="10" max="990" step="10" placeholder="250">
+                  </div>
+                  <label class="conv-send-menu-item new-session-only" id="convSendTokenSitterRow" for="convSendTokenSitter">
+                    <input type="checkbox" id="convSendTokenSitter">
+                    <span>token-sitter auto-snapshot</span>
+                  </label>
                 </div>
               </span>
             </div>
