@@ -4969,10 +4969,10 @@ def _detect_session_engine_uncached(session_id):
     for s in _spawned_sessions:
         if s.get("session_id") == session_id or s.get("resumed_sid") == session_id:
             engine = s.get("engine")
-            if engine in ("claude", "codex", "gemini", "cursor", "antigravity", "kilo", "opencode", "hermes", "kimi", "devin", "grok"):
+            if engine in ("claude", "codex", "gemini", "cursor", "antigravity", "kilo", "opencode", "aider", "hermes", "kimi", "devin", "grok"):
                 return engine
     spawned = _spawn_registry_entry_for_session(session_id)
-    if spawned and spawned.get("engine") in ("claude", "codex", "gemini", "cursor", "antigravity", "kilo", "opencode", "hermes", "kimi", "devin", "grok"):
+    if spawned and spawned.get("engine") in ("claude", "codex", "gemini", "cursor", "antigravity", "kilo", "opencode", "aider", "hermes", "kimi", "devin", "grok"):
         return spawned.get("engine")
     if _is_codex_session(session_id):
         return "codex"
@@ -4986,6 +4986,8 @@ def _detect_session_engine_uncached(session_id):
         return "kilo"
     if _is_opencode_session(session_id):
         return "opencode"
+    if _is_aider_session(session_id):
+        return "aider"
     if _is_hermes_session(session_id):
         return "hermes"
     if _is_kimi_session(session_id):
@@ -6023,7 +6025,7 @@ def _spawn_repo_context(cwd=None, repo_path=None):
     return {"repo_path": resolved, "cwd": str(p)}
 
 
-_ORCHESTRATION_SPAWN_ENGINES = ("claude", "codex", "cursor", "antigravity", "kilo", "opencode", "hermes", "kimi", "devin", "grok")
+_ORCHESTRATION_SPAWN_ENGINES = ("claude", "codex", "cursor", "antigravity", "kilo", "opencode", "aider", "hermes", "kimi", "devin", "grok")
 _ORCHESTRATION_SPAWN_ENGINE_ALIASES = {
     "claude": "claude",
     "claude-code": "claude",
@@ -6043,6 +6045,7 @@ _ORCHESTRATION_SPAWN_ENGINE_ALIASES = {
     "opencode": "opencode",
     "open-code": "opencode",
     "open_code": "opencode",
+    "aider": "aider",
     "hermes": "hermes",
     "kimi": "kimi",
     "kimi-code": "kimi",
@@ -6100,6 +6103,8 @@ def _spawn_fallback_model_for_engine(engine):
         return os.environ.get("CCC_KILO_MODEL", "kilo/stepfun/step-3.7-flash:free")
     if engine == "opencode":
         return os.environ.get("CCC_OPENCODE_MODEL", "anthropic/claude-sonnet-4-5")
+    if engine == "aider":
+        return os.environ.get("CCC_AIDER_MODEL", "")
     if engine == "hermes":
         return os.environ.get("CCC_HERMES_MODEL", "auto")
     if engine == "kimi":
@@ -6165,6 +6170,7 @@ _ENGINE_CURATED_MODELS = {
         {"id": "anthropic/claude-opus-4-1", "label": "claude-opus-4-1"},
         {"id": "openai/gpt-5", "label": "gpt-5"},
     ),
+    "aider": (),
     "hermes": (
         {"id": "auto", "label": "Auto (default)"},
         {"id": "hermes-3-llama-3.1-405b", "label": "hermes-3-llama-3.1-405b"},
@@ -6206,6 +6212,7 @@ _ENGINE_SUPPORTS_CUSTOM_MODELS = {
     "antigravity": True,
     "kilo": True,
     "opencode": True,
+    "aider": True,
     "hermes": True,
     "kimi": True,
     "grok": True,
@@ -10048,6 +10055,16 @@ def find_all_conversations(
         pass
     try:
         out.extend(find_opencode_conversations(
+            include_old=True,
+            repo_only=False,
+            limit=limit_per_folder,
+            resolve_pr_states=resolve_pr_states,
+            resolve_worktree_dirty=resolve_worktree_dirty,
+        ))
+    except Exception:
+        pass
+    try:
+        out.extend(find_aider_conversations(
             include_old=True,
             repo_only=False,
             limit=limit_per_folder,
@@ -25086,6 +25103,21 @@ def find_all_sessions(repo_path, progress=None, include_old=True):
             progress("opencode", state="error", detail=f"OpenCode session scan failed: {exc}")
 
     if progress:
+        progress("aider", state="running", detail="Reading CCC-owned Aider sessions.")
+    try:
+        conversations.extend(find_aider_conversations(
+            repo_path=repo_path,
+            include_old=include_old,
+            repo_only=True,
+            progress=progress,
+        ))
+        if progress:
+            progress("aider", state="done")
+    except Exception as exc:
+        if progress:
+            progress("aider", state="error", detail=f"Aider session scan failed: {exc}")
+
+    if progress:
         progress("hermes", state="running", detail="Reading Hermes sessions.")
     try:
         conversations.extend(find_hermes_conversations(
@@ -25759,6 +25791,12 @@ def parse_conversation(conversation_id, after_line=0, repo_path=None, use_cache=
         return {"events": events_copy, "last_line": result.get("last_line", 0)}
     if engine == "opencode":
         result = _parse_opencode_conversation(conversation_id, after_line=after_line)
+        _conv_parse_cache_put(conversation_id, after_line, repo_path, result)
+        events_copy = list(result.get("events") or [])
+        events_copy = _merge_synthetic_conversation_events(events_copy, _get_queued_events_for_session(conversation_id))
+        return {"events": events_copy, "last_line": result.get("last_line", 0)}
+    if engine == "aider":
+        result = _parse_aider_conversation(conversation_id, after_line=after_line)
         _conv_parse_cache_put(conversation_id, after_line, repo_path, result)
         events_copy = list(result.get("events") or [])
         events_copy = _merge_synthetic_conversation_events(events_copy, _get_queued_events_for_session(conversation_id))
@@ -42552,6 +42590,11 @@ _adopt_ccc_module("kilo")
 
 _adopt_ccc_module("opencode")
 
+# CCC owns durable Aider transcripts. This deliberately does not point at
+# Aider's mutable project-level history file, which has no session identity.
+AIDER_SESSIONS_DIR = COMMAND_CENTER_STATE_DIR / "aider-sessions"
+_adopt_ccc_module("aider")
+
 _adopt_ccc_module("copilot_cli")
 
 _adopt_ccc_module("grok")
@@ -55371,6 +55414,8 @@ def _inject_text_into_session(
         return resume_session_hermes(session_id, text)
     if is_opencode:
         return resume_session_opencode(session_id, text)
+    if _is_aider_session(session_id):
+        return resume_session_aider(session_id, text)
     if _is_devin_cli_session(session_id):
         return resume_session_devin(session_id, text)
     # force_terminal: the user confirmed a terminal is running and wants the
