@@ -31344,9 +31344,24 @@ _CLAUDE_PROCESSES_CACHE = []
 _CLAUDE_PROCESSES_LOCK = threading.Lock()
 
 
+def _parse_ps_etime_s(raw):
+    """Parse `ps -o etime` output ('[[dd-]hh:]mm:ss') into elapsed seconds."""
+    raw = (raw or "").strip()
+    m = re.match(r'^(?:(\d+)-)?(?:(\d+):)?(\d+):(\d+)$', raw)
+    if not m:
+        return None
+    days, hours, minutes, seconds = m.groups()
+    return (
+        int(days or 0) * 86400
+        + int(hours or 0) * 3600
+        + int(minutes) * 60
+        + int(seconds)
+    )
+
+
 def _scan_system_processes():
     global _NEXT_SERVERS_CACHE, _CLAUDE_PROCESSES_CACHE
-    cmd = ["ps", "-A", "-o", "pid,ppid,rss,command"]
+    cmd = ["ps", "-A", "-o", "pid,ppid,rss,etime,command"]
     try:
         res = subprocess.run(cmd, capture_output=True, text=True, check=True)
         lines = res.stdout.strip().split('\n')
@@ -31355,18 +31370,20 @@ def _scan_system_processes():
 
     procs = []
     for line in lines[1:]:
-        parts = line.split(None, 3)
-        if len(parts) < 4:
+        parts = line.split(None, 4)
+        if len(parts) < 5:
             continue
         try:
             pid = int(parts[0])
             ppid = int(parts[1])
             rss = int(parts[2])
-            command = parts[3]
+            etime_s = _parse_ps_etime_s(parts[3])
+            command = parts[4]
             procs.append({
                 "pid": pid,
                 "ppid": ppid,
                 "rss": rss,
+                "etime_s": etime_s,
                 "command": command
             })
         except ValueError:
@@ -31503,6 +31520,9 @@ def _scan_system_processes():
             killable = p['pid'] not in my_ancestry
 
             label = f"resume-{session_id[:8]}" if session_id else f"claude-{p['pid']}"
+            started = ""
+            if p.get('etime_s') is not None:
+                started = time.strftime('%Y%m%dT%H%M%S', time.localtime(time.time() - p['etime_s']))
             claude_results.append({
                 "pid": p['pid'],
                 "ppid": p['ppid'],
@@ -31511,7 +31531,7 @@ def _scan_system_processes():
                 "cwd": project_path,
                 "repo_path": project_path,
                 "model": "",
-                "started": "",
+                "started": started,
                 "prewarm": False,
                 "expires_at_epoch": None,
                 "memory_mb": round(p['rss'] / 1024.0, 1),
