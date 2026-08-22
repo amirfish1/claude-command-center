@@ -1,0 +1,1 @@
+Kimi/Grok sessions spawned from CCC now advertise the ACP terminal capability and service `terminal/*` requests as local subprocesses, so their shell/search tools (Bash, Glob, Grep) work instead of failing with "ACP terminal capability is unavailable".
