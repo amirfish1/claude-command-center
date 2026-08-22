@@ -35949,7 +35949,7 @@
       input.addEventListener('keydown', (ev) => {
         if (handleSlashCommandKeydown(input, ev)) return;
         if (recallLastComposerCommand(input, ev)) return;
-        if (ev.key === 'Enter' && !ev.shiftKey && !isTouchPrimary()) {
+        if (ev.key === 'Enter' && !ev.shiftKey && !ev.isComposing && !isTouchPrimary()) {
           ev.preventDefault();
           if (!f2InterceptEnterSend(paneId)) sendToTerminal(paneId);
         }
