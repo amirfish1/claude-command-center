@@ -233,6 +233,23 @@
   .moment-close { margin: 40px 0 0; font-size: 19px; color: var(--fg-dim); text-align: center; }
   .moment-close strong { color: var(--fg); font-weight: 600; }
 
+  /* Featured testimonial */
+  .testimonial { text-align: center; }
+  .testimonial-quote {
+    margin: 0 auto;
+    max-width: 36ch;
+    font-size: clamp(22px, 3.2vw, 32px);
+    line-height: 1.35;
+    letter-spacing: -0.015em;
+    color: var(--fg);
+    quotes: none;
+  }
+  .testimonial-attr {
+    margin-top: 20px;
+    font-family: var(--mono); font-size: 13px;
+    color: var(--fg-mute);
+  }
+
   /* Families intro */
   .families-intro h2 .orange { color: var(--orange); }
 
@@ -517,6 +534,13 @@
       <div class="demo-link fade-target">
         Nothing to install. All data in the demo is fake. <a href="/demo">Tour the read-only demo &rarr;</a>
       </div>
+    </div>
+  </section>
+
+  <section class="testimonial" style="border-top: 0; padding: 20px 0 60px;">
+    <div class="wrap-narrow fade-target">
+      <blockquote class="testimonial-quote">“Hey Amir, great product. I tried about 20 before finding yours. I have been really enjoying it.”</blockquote>
+      <div class="testimonial-attr">— CCC user</div>
     </div>
   </section>
 

@@ -6,6 +6,9 @@ CCC puts every session on one local board and tells you which one needs you.
 
 _Start the next while Claude builds the first._
 
+> “Hey Amir, great product. I tried about 20 before finding yours. I have been really enjoying it.”  
+> — CCC user
+
 One local dashboard that attaches to every **Claude Code**, **Codex**, **Cursor**, **Antigravity**, **Kilo Code**, **Kimi Code**, **OpenCode**, and **Devin** session on your machine, however you launched it — plus read-only ingestion of **GitHub Copilot CLI**, **VS Code Copilot Chat**, and **Grok CLI** sessions. Spawn, monitor, and ingest all eight; steer seven of them with follow-up. Local, source-available, free for non-commercial use.
 
 > 📢 Shipping fast. **Watch → Releases** (top-right) to get pinged on new versions without the noise.
