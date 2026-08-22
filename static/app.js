@@ -14576,7 +14576,7 @@
     if (!placeholder) return null;
     placeholder.spawn_pid = realPid;
     placeholder.expected_session_id = sessionId || '';
-    if ((placeholder.source === 'codex' || placeholder.source === 'gemini' || placeholder.source === 'cursor' || placeholder.source === 'antigravity' || placeholder.source === 'kilo' || placeholder.source === 'opencode') && logPath) {
+    if (isSpawnLogPlaceholderSource(placeholder.source) && logPath) {
       placeholder.agent_log_path = logPath;
       if (placeholder.source === 'codex') placeholder.codex_log_path = logPath;
     }
@@ -14830,7 +14830,7 @@
       name_overridden: false,
       // Fire-and-watch engines also get durable engine-native sessions; the
       // log path is only a fallback while the real row is materializing.
-      agent_log_path: (source === 'codex' || source === 'gemini' || source === 'cursor' || source === 'antigravity' || source === 'kilo' || source === 'opencode') ? (logPath || null) : null,
+      agent_log_path: isSpawnLogPlaceholderSource(source) ? (logPath || null) : null,
       codex_log_path: source === 'codex' ? (logPath || null) : null,
     };
     if (meta && typeof meta === 'object') {
@@ -14868,7 +14868,7 @@
     // Registration watch for Claude placeholders. Fire-and-watch placeholders
     // stick around until the durable thread row appears, with the spawn log
     // as a fallback if the CLI exits before creating a thread.
-    if (source !== 'codex' && source !== 'gemini' && source !== 'cursor' && source !== 'antigravity' && source !== 'kilo' && source !== 'opencode') {
+    if (!isSpawnLogPlaceholderSource(source)) {
       _watchPendingSpawnRegistration(pid, id);
     }
   }
@@ -35040,7 +35040,7 @@
     if (source === 'copilot') return 'copilot';
     if (source === 'copilotchat') return 'copilotchat';
     if (source === 'grok') return 'grok';
-    if (source === 'devin') return 'devin';
+    if (source === 'devin' || source === 'devin-cli') return 'devin';
     if (source === 'opencode') return 'opencode';
     if (source === 'pkood') return 'pkood';
     if (source === 'backlog') return row && row.issue_number ? 'issue' : 'backlog';
@@ -41871,17 +41871,17 @@
   // engine-native row is still materializing. Once /api/sessions returns a
   // real card, normal conversation rendering takes over.
   async function loadCodexLog(card) {
+    const logEngine = (card && isSpawnLogPlaceholderSource(card.source)) ? card.source : 'codex';
     if (!card || typeof card.spawn_pid !== 'number') {
       // Pre-swap (toolbar Run): spawn_pid is still 'tmp-...'. Show a
       // placeholder until the spawn POST returns and re-selects this card.
       const $view = getConvView();
-      const engine = card && card.source === 'gemini' ? 'gemini' : (card && card.source === 'cursor' ? 'cursor' : (card && card.source === 'antigravity' ? 'antigravity' : 'codex'));
-      $view.innerHTML = '<div class="empty-state" style="height:auto;padding:40px;">Spawning ' + engine + ' run…</div>';
+      $view.innerHTML = '<div class="empty-state" style="height:auto;padding:40px;">Spawning ' + logEngine + ' run…</div>';
       updateConversationEndAffordance($view);
       return;
     }
     const $view = getConvView();
-    const engine = card.source === 'gemini' ? 'gemini' : (card.source === 'cursor' ? 'cursor' : (card.source === 'antigravity' ? 'antigravity' : 'codex'));
+    const engine = logEngine;
     try {
       const res = await fetch('/api/sessions/spawned/' + encodeURIComponent(card.spawn_pid) + '/log?_=' + Date.now());
       const data = await res.json().catch(() => ({ ok: false, error: 'invalid JSON response' }));
@@ -42620,7 +42620,7 @@
     if (id.startsWith('spawning-')) {
       const c = (conversationsData || []).find(x => x.id === id);
       if (!c) return;
-      if (c && (c.source === 'codex' || c.source === 'gemini' || c.source === 'cursor' || c.source === 'antigravity') && typeof c.spawn_pid === 'number') {
+      if (c && isSpawnLogPlaceholderSource(c.source) && typeof c.spawn_pid === 'number') {
         await loadCodexLog(c);
         stopCodexLogPoller();
         codexLogPoller = setInterval(() => { if (_pollerOff('codexLog')) return;
@@ -55416,6 +55416,9 @@
   }
   function spawnUsesLogPlaceholder(engine) {
     return engine === 'codex' || engine === 'gemini' || engine === 'cursor' || engine === 'antigravity' || engine === 'kilo' || engine === 'hermes' || engine === 'opencode' || engine === 'devin';
+  }
+  function isSpawnLogPlaceholderSource(source) {
+    return source === 'codex' || source === 'gemini' || source === 'cursor' || source === 'antigravity' || source === 'kilo' || source === 'hermes' || source === 'opencode' || source === 'devin';
   }
 
   // The one spawn payload builder. Four call sites grew their own and drifted:

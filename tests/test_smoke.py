@@ -418,6 +418,11 @@ class TestServerImports(unittest.TestCase):
         self.assertIn("def resume_session_devin(", server_py)
         self.assertIn('"/api/sessions/spawn-devin/availability"', server_py)
 
+        app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
+        self.assertIn("function isSpawnLogPlaceholderSource(", app_js)
+        self.assertIn("source === 'devin'", app_js)
+        self.assertIn("source === 'devin-cli'", app_js)
+
         # adapter markers: v1 API base, bearer env key, cache file, CLI DB
         devin_py = pathlib.Path(PROJECT_ROOT, "ccc_server", "devin.py").read_text(encoding="utf-8")
         self.assertIn("https://api.devin.ai/v1", devin_py)
@@ -3264,9 +3269,9 @@ class TestServerImports(unittest.TestCase):
 
         self.assertIn('id="spawnDefaultsWorkerModel"', html)
         self.assertIn('id="spawnDefaultsWorkerOtherModel"', html)
-        self.assertIn("function renderSpawnDefaultsWorkerModelDraft()", js)
+        self.assertIn("function renderSpawnDefaultsWorkerModelInline()", js)
         self.assertIn("modelOptionsForSpawnEngine(engine, currentModel, true)", js)
-        self.assertIn("worker_model: spawnDefaultsState.worker_model || ''", js)
+        self.assertIn("worker_model: workerModel", js)
 
     def test_spawn_defaults_worker_effort_is_independent_and_validated(self):
         """WatchTower workers retain their own global effort default.

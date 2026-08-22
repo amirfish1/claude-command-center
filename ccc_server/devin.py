@@ -722,15 +722,157 @@ def _devin_cli_raw_id(session_id):
     return str(session_id or "")
 
 
-def _devin_cli_session_live(raw_id):
-    """True when a lock file exists for the session (process is running)."""
+def _devin_cli_lock_pid(raw_id):
+    """PID recorded in ``session_locks/<id>.lock``, or None."""
     if not raw_id:
-        return False
+        return None
     lock = DEVIN_CLI_LOCKS_DIR / f"{raw_id}.lock"
     try:
-        return lock.is_file()
+        text = lock.read_text(encoding="utf-8").strip()
     except OSError:
+        return None
+    if not text:
+        return None
+    token = text.split()[0]
+    try:
+        pid = int(token)
+    except ValueError:
+        return None
+    return pid if pid > 0 else None
+
+
+def _devin_cli_pid_alive(pid):
+    """True when ``os.kill(pid, 0)`` succeeds."""
+    try:
+        os.kill(int(pid), 0)
+        return True
+    except (OSError, ProcessLookupError, ValueError, TypeError):
         return False
+
+
+def _devin_cli_session_live(raw_id):
+    """True when the session lock's recorded pid is still alive.
+
+    A leftover lock file after the CLI exits is not liveness — every Devin
+    CLI row was showing as live because locks were never reaped.
+    """
+    pid = _devin_cli_lock_pid(raw_id)
+    if not pid:
+        return False
+    return _devin_cli_pid_alive(pid)
+
+
+def _devin_cli_raw_id_for_pid(pid):
+    """Raw Devin CLI session id whose lock file holds ``pid``, or a child of it.
+
+    CCC's spawn pid is the ``devin`` wrapper. The CLI records the ACP child
+    pid in the lock file, so a direct pid match can miss.
+    """
+    try:
+        want = int(pid)
+    except (TypeError, ValueError):
+        return None
+    if want <= 0:
+        return None
+    lock_pids = {}
+    try:
+        for p in DEVIN_CLI_LOCKS_DIR.iterdir():
+            if p.suffix != ".lock" or len(p.name) <= 5:
+                continue
+            raw_id = p.name[:-5]
+            lock_pid = _devin_cli_lock_pid(raw_id)
+            if lock_pid:
+                lock_pids[lock_pid] = raw_id
+    except OSError:
+        return None
+    if want in lock_pids:
+        return lock_pids[want]
+    if not lock_pids:
+        return None
+    try:
+        proc = subprocess.run(
+            ["ps", "-ax", "-o", "pid=,ppid="],
+            capture_output=True, text=True, timeout=2,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+    if proc.returncode != 0:
+        return None
+    for line in proc.stdout.splitlines():
+        parts = line.split()
+        if len(parts) < 2:
+            continue
+        try:
+            child_pid, ppid = int(parts[0]), int(parts[1])
+        except ValueError:
+            continue
+        if ppid == want and child_pid in lock_pids:
+            return lock_pids[child_pid]
+    return None
+
+
+def _devin_spawn_pid_by_session_id():
+    """Map ``devincli-*`` session ids to the CCC spawn pid that owns them.
+
+    Mirrors ``_gemini_spawn_pid_by_session_id`` / ``_cursor_spawn_pid_by_session_id``
+    so the sidebar placeholder can swap onto the durable row. Resolves the
+    native id from the CLI DB / lock file when the spawn registry still has
+    ``session_id: null`` (Devin does not print its id on stdout).
+    """
+    out = {}
+    entries = []
+    seen_pids = set()
+    for s in list(getattr(_core, "_spawned_sessions", []) or []):
+        if not isinstance(s, dict):
+            continue
+        if str(s.get("engine") or "").lower() != "devin":
+            continue
+        entries.append(s)
+        if s.get("pid") is not None:
+            seen_pids.add(s.get("pid"))
+    try:
+        for s in _core._load_spawn_registry():
+            if not isinstance(s, dict):
+                continue
+            if str(s.get("engine") or "").lower() != "devin":
+                continue
+            if s.get("pid") in seen_pids:
+                continue
+            entries.append(s)
+    except Exception:
+        pass
+    for s in entries:
+        sid = s.get("session_id") or s.get("resumed_sid")
+        if not sid:
+            try:
+                sid = _core._devin_cli_session_id_for_spawn_entry(s)
+            except Exception:
+                sid = None
+        if not sid:
+            continue
+        if not s.get("session_id"):
+            s["session_id"] = sid
+            try:
+                _core._update_spawn_session_id_in_registry(s.get("pid"), sid)
+            except Exception:
+                pass
+        if sid in out:
+            continue
+        alive = False
+        try:
+            alive = _core._poll_spawn_entry(s) is None
+        except Exception:
+            alive = False
+        if not alive:
+            alive = _devin_cli_session_live(_devin_cli_raw_id(sid))
+        out[sid] = {
+            "pid": s.get("pid"),
+            "alive": alive,
+            "log": s.get("log") or "",
+            "cwd": s.get("cwd") or "",
+            "repo_path": s.get("repo_path") or "",
+        }
+    return out
 
 
 def _devin_cli_cache_key():
@@ -1312,7 +1454,7 @@ def find_devin_cli_conversations(
 
     rows = []
     try:
-        lock_set = _devin_cli_lock_set()
+        spawn_by_sid = _devin_spawn_pid_by_session_id()
         query = (
             "SELECT id, working_directory, backend_type, model, agent_mode, "
             "created_at, last_activity_at, title, main_chain_id "
@@ -1354,7 +1496,8 @@ def find_devin_cli_conversations(
             # batched prompt_history query (plus a message_nodes fallback).
             first_message = ""
             display_name = ""
-            is_live = raw_id in lock_set
+            spawn_info = spawn_by_sid.get(sid) or {}
+            is_live = _devin_cli_session_live(raw_id) or bool(spawn_info.get("alive"))
 
             # Resolve the session's folder the same way other CLI engines do:
             # honor a repo pin, walk up to the git root for the label, and split
@@ -1442,7 +1585,7 @@ def find_devin_cli_conversations(
                 "pinned_repo": pinned_repo,
                 "last_interacted": last_interactions.get(sid),
                 "is_live": is_live,
-                "spawn_pid": None,
+                "spawn_pid": spawn_info.get("pid"),
                 "needs_approval": False,
                 "needs_approval_message": "",
                 "model": model,

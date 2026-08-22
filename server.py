@@ -45812,40 +45812,59 @@ def _devin_cli_session_id_for_spawn_entry(entry):
     """Best-effort Devin CLI session id for a live CCC spawn entry.
 
     The Devin CLI does not emit its session id on stdout, so CCC resolves it
-    from the CLI's SQLite DB by matching the working directory, the first
-    prompt, and the start time.
+    from (in order):
+      1. The CLI lock file whose recorded pid matches the spawn pid.
+      2. The CLI SQLite DB, matching working directory + first prompt +
+         start time, with whitespace-normalized prompt comparison.
     """
     if not isinstance(entry, dict):
         return None
     engine = str(entry.get("engine") or "").lower()
     if engine != "devin":
         return None
+    pid = entry.get("pid")
+    if pid:
+        raw_from_lock = _devin_cli_raw_id_for_pid(pid)
+        if raw_from_lock:
+            return DEVIN_CLI_SESSION_PREFIX + raw_from_lock
     cwd = str(entry.get("cwd") or entry.get("repo_path") or "").strip()
-    if not cwd:
-        return None
     prompt = str(entry.get("command_summary") or entry.get("prompt") or "").strip()
-    if not prompt:
+    if not cwd or not prompt:
         return None
-    spawned_at = str(entry.get("spawned_at") or "").strip()
+    spawned_at = str(entry.get("spawned_at") or entry.get("started") or "").strip()
     spawn_ts = 0.0
     if spawned_at:
         try:
             spawn_ts = datetime.strptime(spawned_at, "%Y%m%dT%H%M%S").timestamp()
         except (ValueError, OSError):
             pass
+    try:
+        cwd_norm = os.path.realpath(cwd)
+    except OSError:
+        cwd_norm = os.path.normpath(cwd)
     con = _devin_cli_connect()
     if con is None:
         return None
     try:
-        # Look for a session in the same cwd, started around the same time.
+        # Wider than the original ±5 min window: Devin can take >1s to
+        # create the DB row, and list-time resolution may run minutes later.
+        lo = (spawn_ts - 900) if spawn_ts else 0
+        hi = (spawn_ts + 900) if spawn_ts else time.time() + 60
         for row in con.execute(
             "SELECT id, working_directory, created_at FROM sessions "
-            "WHERE working_directory = ? AND created_at >= ? AND created_at <= ? "
+            "WHERE created_at >= ? AND created_at <= ? "
             "ORDER BY created_at DESC",
-            (cwd, spawn_ts - 300, spawn_ts + 300),
+            (lo, hi),
         ):
             raw_id = str(row["id"] or "").strip()
             if not raw_id:
+                continue
+            row_cwd = str(row["working_directory"] or "").strip()
+            try:
+                row_cwd_norm = os.path.realpath(row_cwd) if row_cwd else ""
+            except OSError:
+                row_cwd_norm = os.path.normpath(row_cwd)
+            if row_cwd_norm != cwd_norm and os.path.normpath(row_cwd) != os.path.normpath(cwd):
                 continue
             ph = con.execute(
                 "SELECT content FROM prompt_history "
@@ -45869,11 +45888,12 @@ def _devin_cli_session_id_for_spawn_entry(entry):
 def _devin_cli_first_prompts_match(summary, db_prompt):
     """Compare the spawn command summary to the DB's first prompt.
 
-    Either string may be truncated or have trailing whitespace; a shared
-    leading prefix is enough to confirm the match.
+    Either string may be truncated, have trailing whitespace, or differ in
+    newlines vs spaces (the spawn registry flattens the prompt). A shared
+    leading prefix of collapsed whitespace is enough to confirm the match.
     """
-    a = (summary or "").strip()
-    b = (db_prompt or "").strip()
+    a = " ".join((summary or "").split())
+    b = " ".join((db_prompt or "").split())
     if a == b:
         return True
     n = min(len(a), len(b), 100)
@@ -47167,7 +47187,7 @@ def _watch_prewarm_readiness(entry, log_path):
 
 def _start_claude_prewarm(
     cwd=None, repo_path=None, model=None, name=None, client_id=None,
-    reasoning_effort="",
+    reasoning_effort="", auto_compact_k=None,
 ):
     """Start a prompt-less Claude stream process for the new-session composer.
 
@@ -47179,6 +47199,7 @@ def _start_claude_prewarm(
     a spawn asking for a different level must not adopt this process.
     """
     reasoning_effort = _validate_reasoning_effort(reasoning_effort, "claude")
+    auto_compact_k = _validate_auto_compact_k(auto_compact_k)
     routed, _dropped = _route_claude_call_with_kwarg_fallback(
         "prewarm", {
             "cwd": cwd,
@@ -47187,6 +47208,7 @@ def _start_claude_prewarm(
             "name": name,
             "client_id": client_id,
             "reasoning_effort": reasoning_effort,
+            "auto_compact_k": auto_compact_k,
         },
     )
     if routed is not None:
@@ -47241,7 +47263,7 @@ def _start_claude_prewarm(
         stderr=subprocess.STDOUT,
         cwd=spawn_cwd,
         start_new_session=True,
-        env=_spawn_env(),
+        env=_spawn_env(auto_compact_k=auto_compact_k),
     )
     popen_kwargs["stdin"] = child_stdin_fd if child_stdin_fd is not None else subprocess.PIPE
     try:
@@ -47279,6 +47301,7 @@ def _start_claude_prewarm(
         "prewarmed": True,
         "client_id": str(client_id or "").strip(),
         "reasoning_effort": reasoning_effort,
+        "auto_compact_k": auto_compact_k,
         "ready": False,
         "ready_lock": threading.Lock(),
         "ready_event": threading.Event(),
@@ -47311,6 +47334,7 @@ def _start_claude_prewarm(
         prewarm_id=prewarm_id,
         client_id=entry["client_id"],
         reasoning_effort=reasoning_effort,
+        auto_compact_k=auto_compact_k,
         created_at_epoch=entry["created_at_epoch"],
     )
     expiry_timer = threading.Timer(
@@ -47334,10 +47358,11 @@ def _start_claude_prewarm(
         "repo_path": ctx["repo_path"],
         "model": model_to_use,
         "reasoning_effort": reasoning_effort,
+        "auto_compact_k": auto_compact_k,
     }
 
 
-def _take_claude_prewarm(prewarm_id, cwd, model, name=None, effort=""):
+def _take_claude_prewarm(prewarm_id, cwd, model, name=None, effort="", auto_compact_k=None):
     if not prewarm_id:
         return None
     _prune_claude_prewarms()
@@ -47353,6 +47378,7 @@ def _take_claude_prewarm(prewarm_id, cwd, model, name=None, effort=""):
             entry.get("cwd") != cwd
             or entry.get("model") != model
             or str(entry.get("reasoning_effort") or "") != str(effort or "")
+            or str(entry.get("auto_compact_k") or "") != str(auto_compact_k or "")
         ):
             return None
         entry = _CLAUDE_PREWARMS.pop(str(prewarm_id))
@@ -47374,6 +47400,7 @@ def _take_claude_prewarm(prewarm_id, cwd, model, name=None, effort=""):
 
 def _take_claude_prewarm_for_request(
     prewarm_id, cwd=None, repo_path=None, model=None, name=None, effort="",
+    auto_compact_k=None,
 ):
     """Claim a reservation using its already-validated launch context.
 
@@ -47407,6 +47434,8 @@ def _take_claude_prewarm_for_request(
         # The reserved argv already carries --effort, so a different level is a
         # miss: adopting it would silently launch at the wrong effort.
         if str(entry.get("reasoning_effort") or "") != str(effort or ""):
+            return None
+        if str(entry.get("auto_compact_k") or "") != str(auto_compact_k or ""):
             return None
         if not same_path(cwd, entry.get("cwd")):
             return None
@@ -47548,6 +47577,7 @@ def spawn_session(prompt, name=None, cwd=None, repo_path=None, worktree=False, m
         model=model_to_use,
         name=session_name,
         effort=reasoning_effort,
+        auto_compact_k=auto_compact_k,
     )
     if entry is not None:
         ctx = {"cwd": entry["cwd"], "repo_path": entry["repo_path"]}
@@ -47711,6 +47741,7 @@ def spawn_session(prompt, name=None, cwd=None, repo_path=None, worktree=False, m
             "command": list(cmd),
             "prewarmed": False,
             "reasoning_effort": reasoning_effort,
+            "auto_compact_k": auto_compact_k,
         }
     # Write the initial prompt as the first stream-json user message.
     # Note: headless `claude -p` doesn't support TUI slash commands like /rename
@@ -47771,6 +47802,7 @@ def spawn_session(prompt, name=None, cwd=None, repo_path=None, worktree=False, m
         model=model_to_use,
         parent_session_id=parent_session_id,
         reasoning_effort=reasoning_effort,
+        auto_compact_k=auto_compact_k,
         input_result_target=entry.get("input_result_target"),
         input_accepted_at=entry.get("input_accepted_at"),
         input_command_uuids=entry.get("input_command_uuids"),
@@ -48726,6 +48758,28 @@ def _poll_spawn_entry(entry):
             poll = proc.poll() if proc is not None else -1
         except Exception:
             poll = -1
+    # Devin's CLI wrapper can exit while the real agent child (recorded in
+    # session_locks/<id>.lock) is still running. Treat that as live so the
+    # spawn placeholder can swap onto the durable row.
+    if (
+        poll is not None
+        and isinstance(entry, dict)
+        and str(entry.get("engine") or "").lower() == "devin"
+    ):
+        sid = entry.get("session_id") or entry.get("resumed_sid")
+        if not sid:
+            try:
+                sid = _devin_cli_session_id_for_spawn_entry(entry)
+            except Exception:
+                sid = None
+            if sid:
+                entry["session_id"] = sid
+                try:
+                    _update_spawn_session_id_in_registry(entry.get("pid"), sid)
+                except Exception:
+                    pass
+        if sid and _devin_cli_session_live(_devin_cli_raw_id(sid)):
+            return None
     if poll is not None and isinstance(entry, dict) and not entry.get("_cleanup_done"):
         # Diagnostic: a tracked child just EXITED. Log lifetime + cache/cost
         # from the resume log's final result event before we drop its handles.
@@ -50833,8 +50887,8 @@ def _record_spawn_to_registry(
     pid, name, log_path, cwd, spawned_at, command_summary,
     fifo=None, engine="claude", session_id=None, model=None, repo_path=None,
     parent_session_id=None, prewarm=False, prewarm_id=None, client_id=None,
-    reasoning_effort="", created_at_epoch=None, input_result_target=None,
-    input_accepted_at=None, input_command_uuids=None,
+    reasoning_effort="", auto_compact_k=None, created_at_epoch=None,
+    input_result_target=None, input_accepted_at=None, input_command_uuids=None,
 ):
     """Append a freshly-spawned session to the on-disk registry. The
     session_id is provided for known resume calls and otherwise filled in
@@ -50868,6 +50922,7 @@ def _record_spawn_to_registry(
         # The level this process launched with, so the spawned-sessions list
         # still knows it after a restart. Older entries simply lack the key.
         "reasoning_effort": str(reasoning_effort or ""),
+        "auto_compact_k": int(auto_compact_k) if auto_compact_k is not None else None,
         "parent_session_id": parent_session_id or "",
     }
     input_state = {
@@ -68002,6 +68057,7 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                     reasoning_effort=(
                         payload.get("reasoning_effort") or payload.get("effort") or ""
                     ),
+                    auto_compact_k=payload.get("auto_compact_k"),
                 )
                 self.send_json(result, 200 if result.get("ok") else 503)
             except RepoContextError as exc:
