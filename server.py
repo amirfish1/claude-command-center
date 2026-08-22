@@ -1526,6 +1526,12 @@ def _wt_queue_attend_status(queue):
         "exists": True,
         "phase": phase,
         "running": running,
+        # "waiting" is driven by pending_question alone (a session that dies
+        # mid-question must still show the unanswered question), but that
+        # means the card can go stale forever with no visible signal -- the
+        # Refresh button needs *something* to change when the session is
+        # actually gone, or it looks like it does nothing (CCC-907).
+        "session_running": running,
         "session_id": session_id,
         "started_at": started_at,
         "running_for_s": running_for_s,
@@ -37251,6 +37257,14 @@ _ACP_RECOVERY_LOCKS = {}
 # fresh ACP state becomes authoritative as soon as the retried prompt starts.
 _KIMI_WIRE_BUSY_SUPPRESS_UNTIL = {}
 
+# Agent-side shell tools (kimi's Bash/Glob/Grep) run through the ACP terminal
+# capability: the agent sends terminal/* requests and WE execute the command
+# as a local subprocess. One registry entry per live terminal, keyed by the
+# terminalId we hand back from terminal/create.
+_ACP_TERMINALS = {}        # terminalId -> {"proc","buf","limit","truncated","exit","signal","exited","harness","sid","exit_event"}
+_ACP_TERMINALS_LOCK = threading.Lock()
+_ACP_TERMINAL_DEFAULT_LIMIT = 1024 * 1024  # retained-output cap when the agent passes no outputByteLimit
+
 
 def _acp_harness_enabled(harness):
     cfg = _ACP_HARNESSES.get(harness) or {}
@@ -37742,8 +37756,8 @@ def _acp_handle_message(harness, payload):
 
 
 def _acp_handle_agent_request(harness, req_id, method, params):
-    """Agent→client requests. Only permission prompts are serviced; anything
-    else gets methodNotFound so the agent never hangs waiting on us."""
+    """Agent→client requests. Permission prompts and terminal/* are serviced;
+    anything else gets methodNotFound so the agent never hangs waiting on us."""
     if method == "session/request_permission":
         sid = str(params.get("sessionId") or "")
         with _ACP_LOCK:
@@ -37773,6 +37787,169 @@ def _acp_handle_agent_request(harness, req_id, method, params):
                     "acp_options": params.get("options") or [],
                 }],
             }, save=True)
+        return
+    if method.startswith("terminal/"):
+        _acp_handle_terminal_request(harness, req_id, method, params)
+        return
+    _acp_respond(harness, req_id, error={"code": -32601, "message": f"method not found: {method}"})
+
+
+def _acp_terminal_pump(tid):
+    """Drain a terminal subprocess's combined stdout/stderr into its bounded
+    buffer, then record the exit status. One pump thread per terminal."""
+    with _ACP_TERMINALS_LOCK:
+        entry = _ACP_TERMINALS.get(tid)
+    if entry is None:
+        return
+    proc = entry["proc"]
+    try:
+        while True:
+            chunk = proc.stdout.read1(65536) if hasattr(proc.stdout, "read1") else proc.stdout.read(65536)
+            if not chunk:
+                break
+            with _ACP_TERMINALS_LOCK:
+                buf = entry["buf"]
+                buf += chunk
+                limit = entry["limit"]
+                if len(buf) > limit:
+                    # Truncate from the front at a UTF-8 character boundary
+                    # (skip continuation bytes) as the spec requires.
+                    start = len(buf) - limit
+                    while start < len(buf) and (buf[start] & 0xC0) == 0x80:
+                        start += 1
+                    entry["buf"] = bytearray(buf[start:])
+                    entry["truncated"] = True
+    except (OSError, ValueError):
+        pass
+    finally:
+        rc = proc.wait()
+        sig = None
+        code = rc
+        if rc is not None and rc < 0:
+            signum = -rc
+            try:
+                sig = signal.Signals(signum).name
+            except ValueError:
+                sig = str(signum)
+            code = None
+        with _ACP_TERMINALS_LOCK:
+            entry["exit"] = code
+            entry["signal"] = sig
+            entry["exited"] = True
+            entry["exit_event"].set()
+
+
+def _acp_terminal_output_result(entry):
+    with _ACP_TERMINALS_LOCK:
+        result = {
+            "output": bytes(entry["buf"]).decode("utf-8", errors="replace"),
+            "truncated": entry["truncated"],
+        }
+        if entry["exited"]:
+            result["exitStatus"] = {"exitCode": entry["exit"], "signal": entry["signal"]}
+    return result
+
+
+def _acp_terminal_wait_and_respond(harness, req_id, tid):
+    """terminal/wait_for_exit runs off the ACP reader thread: blocking it would
+    stall every session on the harness connection for the command's lifetime."""
+    with _ACP_TERMINALS_LOCK:
+        entry = _ACP_TERMINALS.get(tid)
+    if entry is None:
+        _acp_respond(harness, req_id, error={"code": -32602, "message": f"unknown terminalId: {tid}"})
+        return
+    entry["exit_event"].wait()
+    with _ACP_TERMINALS_LOCK:
+        result = {"exitCode": entry["exit"], "signal": entry["signal"]}
+    _acp_respond(harness, req_id, result)
+
+
+def _acp_handle_terminal_request(harness, req_id, method, params):
+    """Service ACP terminal/* requests by running the agent's shell commands
+    as local subprocesses. This is what powers kimi's Bash/Glob/Grep tools."""
+    sid = str(params.get("sessionId") or "")
+    if method == "terminal/create":
+        command = str(params.get("command") or "")
+        if not command:
+            _acp_respond(harness, req_id, error={"code": -32602, "message": "terminal/create: command is required"})
+            return
+        args = params.get("args")
+        argv = [command] + [str(a) for a in args] if isinstance(args, list) else [command]
+        cwd = params.get("cwd") or None
+        if not cwd and sid:
+            state = _acp_session(harness, sid)
+            cwd = (state or {}).get("cwd") or None
+        env = os.environ.copy()
+        extra = params.get("env")
+        if isinstance(extra, dict):
+            env.update({str(k): str(v) for k, v in extra.items()})
+        elif isinstance(extra, list):
+            for item in extra:
+                if isinstance(item, dict) and item.get("name"):
+                    env[str(item["name"])] = str(item.get("value") or "")
+        try:
+            limit = int(params.get("outputByteLimit") or 0) or _ACP_TERMINAL_DEFAULT_LIMIT
+        except (TypeError, ValueError):
+            limit = _ACP_TERMINAL_DEFAULT_LIMIT
+        try:
+            proc = subprocess.Popen(
+                argv,
+                stdin=subprocess.DEVNULL,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
+                cwd=cwd,
+                env=env,
+                start_new_session=True,
+            )
+        except (FileNotFoundError, OSError) as exc:
+            _acp_respond(harness, req_id, error={"code": -32602, "message": f"terminal/create failed: {exc}"})
+            return
+        tid = str(uuid.uuid4())
+        with _ACP_TERMINALS_LOCK:
+            _ACP_TERMINALS[tid] = {
+                "proc": proc,
+                "buf": bytearray(),
+                "limit": max(limit, 4096),
+                "truncated": False,
+                "exit": None,
+                "signal": None,
+                "exited": False,
+                "harness": harness,
+                "sid": sid,
+                "exit_event": threading.Event(),
+            }
+        threading.Thread(
+            target=_acp_terminal_pump, args=(tid,),
+            daemon=True, name=f"acp-term-{tid[:8]}",
+        ).start()
+        _acp_respond(harness, req_id, {"terminalId": tid})
+        return
+    tid = str(params.get("terminalId") or "")
+    with _ACP_TERMINALS_LOCK:
+        entry = _ACP_TERMINALS.get(tid)
+    if entry is None:
+        _acp_respond(harness, req_id, error={"code": -32602, "message": f"unknown terminalId: {tid}"})
+        return
+    if method == "terminal/output":
+        _acp_respond(harness, req_id, _acp_terminal_output_result(entry))
+        return
+    if method == "terminal/wait_for_exit":
+        threading.Thread(
+            target=_acp_terminal_wait_and_respond, args=(harness, req_id, tid),
+            daemon=True, name=f"acp-term-wait-{tid[:8]}",
+        ).start()
+        return
+    if method in ("terminal/kill", "terminal/release"):
+        proc = entry["proc"]
+        if proc.poll() is None:
+            try:
+                proc.kill()
+            except OSError:
+                pass
+        if method == "terminal/release":
+            with _ACP_TERMINALS_LOCK:
+                _ACP_TERMINALS.pop(tid, None)
+        _acp_respond(harness, req_id, {})
         return
     _acp_respond(harness, req_id, error={"code": -32601, "message": f"method not found: {method}"})
 
@@ -38307,6 +38484,21 @@ def _acp_reader(harness, conn):
                 # A folding bug must never kill the reader loop.
                 pass
     finally:
+        # Agent shell tools outlive nothing: kill every terminal this harness's
+        # sessions created so they don't leak as orphans past the connection.
+        with _ACP_TERMINALS_LOCK:
+            orphan_tids = [
+                tid for tid, term in _ACP_TERMINALS.items()
+                if term["harness"] == harness
+            ]
+            for tid in orphan_tids:
+                term = _ACP_TERMINALS.pop(tid)
+                if term["proc"].poll() is None:
+                    try:
+                        term["proc"].kill()
+                    except OSError:
+                        pass
+                term["exit_event"].set()
         with _ACP_LOCK:
             current = _ACP_CONNS.get(harness)
             if current is conn:
@@ -38380,9 +38572,11 @@ def _acp_ensure(harness):
             "title": "Claude Command Center",
             "version": __version__,
         },
-        # No fs capability: the agent executes file I/O locally. No terminal
-        # capability: shell runs in the harness's own environment.
-        "clientCapabilities": {},
+        # terminal capability: the agent's shell tools (kimi Bash/Glob/Grep)
+        # route through terminal/* requests, which CCC executes as local
+        # subprocesses (_acp_handle_terminal_request). No fs capability: the
+        # agent reads/writes files locally on the same machine.
+        "clientCapabilities": {"terminal": True},
     })
     response = _acp_wait_response(harness, req_id, timeout=10) if req_id is not None else None
     result = (response or {}).get("result")

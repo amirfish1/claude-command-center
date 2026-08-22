@@ -61,6 +61,8 @@
     attendExists: false,  // has this queue ever had an attendant run
     attendPhase: 'idle',  // idle | working | waiting (on the owner) | done | gone
     attendSessionId: '',
+    attendSessionRunning: false,  // liveness probe from the last GET -- lets the "waiting" card
+                                   // show a dead session instead of looking permanently frozen
     attendStartedAt: '',
     attendLastReport: null,  // {summary, at} | null
     attendQuestion: null,    // {ref, question, options:[str], at} | null -- the ONE escalated decision
@@ -726,6 +728,7 @@
     state.attendExists = !!(data && data.exists);
     state.attendPhase = (data && data.phase) || (data && data.running ? 'working' : 'idle');
     state.attendSessionId = (data && data.session_id) || '';
+    state.attendSessionRunning = !!(data && data.session_running);
     state.attendStartedAt = (data && data.started_at) || '';
     state.attendLastReport = (data && data.last_report) || null;
     state.attendQuestion = (data && data.question) || null;
@@ -1560,6 +1563,9 @@
         + '<span class="q2-brief-title">Attendant needs a decision</span>'
         + (state.attendQuestion && state.attendQuestion.at
           ? '<span class="q2-attend-updated">Updated ' + esc(relTime(state.attendQuestion.at)) + '</span>' : '')
+        + (!state.attendSessionRunning
+          ? '<span class="q2-attend-error" title="The attendant session that asked this ended -- Refresh will not get a new answer. Tend queue to start a fresh run.">session ended</span>'
+          : '')
         + '<span class="q2-spacer"></span>'
         + '<button type="button" class="q2-btn q2-btn-ghost q2-attend-refresh" data-q2-attend-refresh'
         + (state.attendRefreshing ? ' disabled' : '') + ' title="Check for a new question now">'
