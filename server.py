@@ -38796,6 +38796,16 @@ def _acp_prompt(
     visible_text = text
     if harness == "kimi":
         text = _kimi_goal_prompt_text(text)
+    if harness in ("kimi", "grok") and re.match(r"^\s*/context(\s|$)", text, re.IGNORECASE):
+        return {
+            "ok": False,
+            "error": (
+                f"{harness.capitalize()} sessions don't support /context (that's a "
+                "Claude Code CLI command) — check the token-usage strip above the "
+                "composer for this session's context instead."
+            ),
+            "code": "unsupported_command",
+        }
     # ACP transports (kimi/grok) don't support IN-PLACE mid-turn steering the
     # way Codex/Claude do — a session/prompt sent while a turn is active gets
     # rejected by the agent itself ("Invalid request: another turn is
