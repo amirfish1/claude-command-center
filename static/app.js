@@ -12522,6 +12522,33 @@
   // alone doesn't change the element's `direction` property).
   const RTL_TARGET_SEL = '.assistant-text,.user-msg,.gc-message-body,.gc-chat-doc';
   const RTL_BLOCK_TAGS = 'p,li,blockquote,h1,h2,h3,h4,h5,h6,td,th,dt,dd';
+  // `dir="auto"` picks direction from the FIRST strong-directional character
+  // only (Unicode bidi algorithm), not the majority. A Hebrew paragraph that
+  // happens to open with a Latin term/acronym ("App Password של ה-.env...")
+  // gets misjudged as LTR wholesale — the block stays left-aligned and the
+  // Hebrew reads torn instead of flowing right-to-left with the Latin term
+  // embedded. Count strong-directional characters and pick the majority
+  // instead (CCC-919 follow-up: dir="auto" alone wasn't enough).
+  const _RTL_CHAR_RE = /[\u0590-\u08FF\uFB1D-\uFDFF\uFE70-\uFEFF]/;
+  const _LTR_CHAR_RE = /[A-Za-z]/;
+  function _bidiMajorityDir(text) {
+    if (!text) return null;
+    // Word-level, not character-level: a short Hebrew sentence that embeds
+    // one long English term/acronym ("App Password", "Google") has more
+    // LATIN CHARACTERS than Hebrew ones even though a reader calls it a
+    // Hebrew sentence. Counting which SCRIPT each whitespace-delimited word
+    // belongs to (majority-vote across words) matches that reading.
+    const words = text.split(/\s+/);
+    let rtl = 0, ltr = 0;
+    for (let i = 0; i < words.length; i++) {
+      const w = words[i];
+      if (!w) continue;
+      if (_RTL_CHAR_RE.test(w)) rtl++;
+      else if (_LTR_CHAR_RE.test(w)) ltr++;
+    }
+    if (!rtl && !ltr) return null;
+    return rtl >= ltr ? 'rtl' : 'ltr';
+  }
   function tagBlocksForRtl(root) {
     if (!root || typeof root.querySelectorAll !== 'function') return;
     const containers = [];
@@ -12529,9 +12556,11 @@
     root.querySelectorAll(RTL_TARGET_SEL).forEach(el => containers.push(el));
     if (!containers.length) return;
     containers.forEach(el => {
-      if (!el.hasAttribute('dir')) el.setAttribute('dir', 'auto');
+      const dir = _bidiMajorityDir(el.textContent) || 'auto';
+      el.setAttribute('dir', dir);
       el.querySelectorAll(RTL_BLOCK_TAGS).forEach(child => {
-        if (!child.hasAttribute('dir')) child.setAttribute('dir', 'auto');
+        const childDir = _bidiMajorityDir(child.textContent) || 'auto';
+        child.setAttribute('dir', childDir);
       });
     });
   }
