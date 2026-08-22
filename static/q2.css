@@ -627,6 +627,15 @@ body.q2-resizing-v .q2-col { pointer-events: none; }
      below. */
   background: linear-gradient(180deg, rgba(88, 166, 255, 0.07), rgba(88, 166, 255, 0.02)), var(--surface);
 }
+/* When the attendant has a body worth showing (a question, a report), it
+   should grow into whatever room the logbar handle frees up below it,
+   capped at the same max-height -- otherwise dragging that handle down just
+   shrinks the log with nothing absorbing the freed space. Collapsed/empty
+   states stay content-sized (no flex-grow) so they don't stretch into a
+   blank gap. */
+.q2-brief.q2-brief-has-body {
+  flex: 1 1 auto;
+}
 :root[data-theme="light"] .q2-brief {
   background: linear-gradient(180deg, rgba(9, 105, 218, 0.06), rgba(9, 105, 218, 0.015)), var(--surface);
 }

@@ -1600,6 +1600,10 @@
     }
 
     setAttendRegions(host, 'full', headHtml, bodyHtml, bodyHidden);
+    // Only stretch into space freed by the logbar handle when there's a body
+    // to actually show more of -- collapsed/empty states stay content-sized
+    // so shrinking the log doesn't just open a blank gap above it.
+    host.classList.toggle('q2-brief-has-body', !bodyHidden);
     // The drag handle only earns its pixels when there is a body to resize.
     setBriefHandleHidden(collapsed || bodyHidden);
     syncAttendTicker();
