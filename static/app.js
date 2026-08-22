@@ -12271,6 +12271,40 @@
     return html;
   }
 
+  // CCC-913: split a Devin CLI <summary> body into one <details> per
+  // top-level markdown section (Overview / Key Details & Breadcrumbs /
+  // Current State / …) instead of one giant collapse-everything block —
+  // "Current state" ships open by default since that's the section people
+  // actually want to see at a glance; the rest starts collapsed.
+  function renderDevinSummaryBlock(body) {
+    const lines = body.split('\n');
+    const sections = [];
+    let current = null;
+    for (const line of lines) {
+      const h = line.match(/^(#{1,6})\s+(.+)$/);
+      if (h) {
+        current = { title: h[2].trim(), lines: [] };
+        sections.push(current);
+      } else if (current) {
+        current.lines.push(line);
+      } else {
+        if (!sections.length) sections.push({ title: '', lines: [] });
+        sections[sections.length - 1].lines.push(line);
+      }
+    }
+    const namedSections = sections.filter(s => s.title);
+    if (namedSections.length < 2) {
+      return '<details class="ctx-usage-details devin-summary-details"><summary>Summary</summary>'
+        + renderMarkdown(body) + '</details>';
+    }
+    return namedSections.map(s => {
+      const isCurrentState = /current\s+state/i.test(s.title);
+      return '<details class="ctx-usage-details devin-summary-details"' + (isCurrentState ? ' open' : '') + '>'
+        + '<summary>' + escapeHtml(s.title) + '</summary>'
+        + renderMarkdown(s.lines.join('\n')) + '</details>';
+    }).join('');
+  }
+
   function renderMarkdown(text) {
     const lines = text.split('\n');
     const out = [];
@@ -12322,8 +12356,7 @@
         while (i < lines.length && !/^\s*<\/summary>\s*$/i.test(lines[i])) i++;
         const body = lines.slice(start, i).join('\n');
         if (i < lines.length) i++;  // skip closing tag
-        out.push('<details class="ctx-usage-details devin-summary-details"><summary>Summary</summary>'
-          + renderMarkdown(body) + '</details>');
+        out.push(renderDevinSummaryBlock(body));
         continue;
       }
       // Fenced code block: ```lang\n...code...\n```
