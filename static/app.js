@@ -3293,6 +3293,32 @@
       }
     }
     if (newestContinuation && newestContinuation !== sid) return newestContinuation;
+    // CCC-927: the localStorage edge loop above only knows about
+    // continuations started in THIS browser. When "Continue in a new
+    // session" happened elsewhere, no local edge exists for either side, so
+    // the OLD session never learns a newer session continued from it and
+    // renders as an orphaned standalone row even though the NEW session's
+    // origin chip already links back to it -- the same relationship shown
+    // twice, disconnected. Fall back to the same first_message "Origin
+    // session id: <sid>" marker CCC-860 uses below, but scanned across all
+    // loaded rows so it works regardless of which browser recorded it.
+    if (!newestContinuation) {
+      try {
+        const rows = (typeof conversationsData !== 'undefined' && Array.isArray(conversationsData))
+          ? conversationsData : [];
+        const marker = 'Origin session id: ' + sid;
+        let bestTs = -1;
+        rows.forEach(r => {
+          const rid = String((r && (r.session_id || r.id)) || '').trim();
+          if (!rid || rid === sid) return;
+          const fm = r && r.first_message;
+          if (!fm || fm.indexOf(marker) === -1) return;
+          const ts = Number(r.modified || r.last_interacted || 0) || 0;
+          if (ts >= bestTs) { bestTs = ts; newestContinuation = rid; }
+        });
+      } catch (_) {}
+      if (newestContinuation && newestContinuation !== sid) return newestContinuation;
+    }
     const edge = _continuationEdges[sid];
     if (edge && String(edge.continued_from || '').trim() === parentId) return '';
     // CCC-860: the localStorage edge above only knows about continuations
