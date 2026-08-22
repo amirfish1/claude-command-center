@@ -49591,6 +49591,24 @@
             metaEl._agentAnswerText = _kimiAnswerText;
             metaEl.innerHTML = '<span class="line-num">L' + ev.line + '</span>'
               + tsSpan(ev.ts) + assistantMessageActionsHtml(ev);
+            // CCC-929: wire_tail._attach_kimi_wire_usage already stamps
+            // tokens_in/tokens_out/tokens_cached on each Kimi assistant
+            // event server-side — the generic (Claude/Antigravity) branch
+            // below renders a chip from the same fields, but the kimi
+            // branch `continue`s before reaching it, so this row never
+            // got one. Reuse the same chip formatter for parity.
+            if (ev.tokens_in || ev.tokens_out || ev.tokens_cached) {
+              const _kimiChipCached = Number(ev.tokens_cached
+                || (ev.token_usage && (ev.token_usage.cache_read_input_tokens || ev.token_usage.cached_input_tokens)) || 0);
+              const _kimiChipText = _formatAntigravityTokenChips(ev.tokens_in, ev.tokens_out, ev.tokens_thinking, _kimiChipCached);
+              if (_kimiChipText) {
+                const _kimiChipTitle = 'Input:    ' + (Number(ev.tokens_in) || 0).toLocaleString() + ' tokens'
+                  + '\nCached input:    ' + _kimiChipCached.toLocaleString() + ' tokens'
+                  + '\nOutput:   ' + (Number(ev.tokens_out) || 0).toLocaleString() + ' tokens';
+                metaEl.innerHTML += '<span class="event-token-chips is-merged" title="'
+                  + escapeAttr(_kimiChipTitle) + '">' + escapeHtml(_kimiChipText) + '</span>';
+              }
+            }
             kimiBlockEls.push(metaEl);
           }
           _kimiAppendAssistantEvent($view, div, kimiBlockEls);

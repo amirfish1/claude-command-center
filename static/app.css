@@ -1720,6 +1720,12 @@
     background: rgba(255,255,255,0.06); color: var(--text);
   }
   .conv-pane.is-webui-session .kimi-answer-meta .assistant-message-action.copied { color: var(--green); }
+  /* CCC-929: per-turn token chip on the kimi meta row, right-aligned like the
+     merged chip on a .tool-call line (app.css ~2078) since this row is its
+     own flex container rather than a tool-call. */
+  .conv-pane.is-webui-session .kimi-answer-meta .event-token-chips.is-merged {
+    margin: 0 0 0 auto; align-self: center; white-space: nowrap;
+  }
   .conv-pane.is-webui-session .kimi-answer-meta .assistant-message-action.speaking { color: var(--accent); }
   .conv-pane.is-webui-session .kimi-answer-meta .assistant-message-action.speaking.paused { color: var(--text-muted); opacity: 0.7; }
 
