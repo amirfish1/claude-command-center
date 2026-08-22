@@ -3537,6 +3537,37 @@
       + '</div>';
   }
 
+  // CCC-926: a token-sitter checkpoint means this session's state was
+  // already durably saved — the "Continue" route needs no typed prompt to
+  // pick that up, so flag it with a small badge instead of making the user
+  // guess whether resuming will lose anything.
+  const _tokenSitterCheckpointCache = new Map();
+  async function f2TokenSitterCheckpointExists(sid) {
+    if (!sid) return false;
+    if (_tokenSitterCheckpointCache.has(sid)) return _tokenSitterCheckpointCache.get(sid);
+    let exists = false;
+    try {
+      const res = await fetch('/api/session/' + encodeURIComponent(sid) + '/token-sitter-checkpoint', { cache: 'no-store' });
+      const data = await res.json().catch(() => ({}));
+      exists = !!(res.ok && data && data.exists);
+    } catch (_) {}
+    _tokenSitterCheckpointCache.set(sid, exists);
+    return exists;
+  }
+  function f2PaintTokenSitterBadge(panel, sid) {
+    f2TokenSitterCheckpointExists(sid).then((exists) => {
+      if (!exists || !panel || !panel.isConnected) return;
+      const nameEl = panel.querySelector('.route.is-recommended .route-name');
+      if (!nameEl || nameEl.querySelector('.f2-checkpoint-badge')) return;
+      const badge = document.createElement('span');
+      badge.className = 'f2-checkpoint-badge';
+      badge.setAttribute('aria-hidden', 'true');
+      badge.title = 'token-sitter checkpoint ready — continuing needs no typed prompt';
+      badge.textContent = ' ✅🪑';
+      nameEl.appendChild(badge);
+    }).catch(() => {});
+  }
+
   // Paint (or clear) the cold-session composer for a pane. Called from
   // updateInputBar — i.e. as soon as a session is focused, before any text
   // exists — and again from the composer's input handler so the ranking can
@@ -3649,6 +3680,7 @@
         ? 'Idle ' + ageLabel + '. Start fresh with just the context you need.'
         : 'Resuming here reloads ~' + tokensLabel + ' tokens on ' + modelLabel + '.');
     panel.innerHTML = '<div class="routes">' + f2RoutesHtml(st, verdictText) + '</div>';
+    f2PaintTokenSitterBadge(panel, ctx.sid);
   }
 
   // ── route action ───────────────────────────────────────────────────────

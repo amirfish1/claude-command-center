@@ -4920,6 +4920,42 @@ def extract_session_slash_commands(session_id):
     return result
 
 
+_TOKEN_SITTER_CHECKPOINT_DIR = Path.home() / ".claude" / "token-optimizer" / "checkpoints"
+
+
+def extract_session_token_sitter_checkpoint(session_id):
+    """Does token-sitter have a durable checkpoint written for this session?
+
+    Checkpoint files are named ``<session-uuid>-<timestamp>-<label>.md`` under
+    ``_TOKEN_SITTER_CHECKPOINT_DIR`` (token-sitter/token-optimizer skill, not a
+    CCC feature — CCC only reads what it already wrote). Used by the F2 cold
+    composer to show a "checkpoint ready" affordance so continuing needs no
+    typed prompt (CCC-926).
+    """
+    result = {"ok": True, "session_id": session_id, "exists": False}
+    if not session_id or not re.match(r"^[a-zA-Z0-9_-]+$", session_id):
+        return result
+    try:
+        matches = sorted(
+            _TOKEN_SITTER_CHECKPOINT_DIR.glob(session_id + "-*.md"),
+            key=lambda p: p.stat().st_mtime,
+            reverse=True,
+        )
+    except OSError:
+        return result
+    if not matches:
+        return result
+    latest = matches[0]
+    try:
+        mtime = latest.stat().st_mtime
+    except OSError:
+        mtime = 0
+    result["exists"] = True
+    result["path"] = str(latest)
+    result["mtime"] = mtime
+    return result
+
+
 # Per-session engine cache. A session's engine is immutable, but the detection
 # fallback is expensive — _is_gemini_session JSON-parses every Gemini chat on
 # disk, so for a Claude session (no match) it scans the whole Gemini store.
@@ -63499,6 +63535,9 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
             # personal custom skills.
             sid = path.rsplit("/", 2)[-2]
             self.send_json(extract_session_slash_commands(sid))
+        elif re.match(r"^/api/session/[a-zA-Z0-9_-]+/token-sitter-checkpoint$", path):
+            sid = path.rsplit("/", 2)[-2]
+            self.send_json(extract_session_token_sitter_checkpoint(sid))
         elif re.match(r"^/api/session/[a-zA-Z0-9_-]+/workspace$", path):
             # Workspace info — cwd, branch, worktree?, ahead/behind, co-tenants.
             sid = path.rsplit("/", 2)[-2]
