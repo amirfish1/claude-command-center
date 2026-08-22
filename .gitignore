@@ -152,3 +152,14 @@ static/reddit/
 
 # Hunch local index cache (was accidentally committed once at 47MB — never again)
 .hunch/
+# >>> hunch (derived runtime index — regenerable from .hunch/*.json) >>>
+.hunch/*.sqlite
+.hunch/*.sqlite-shm
+.hunch/*.sqlite-wal
+.hunch/*.sqlite-journal
+.hunch/**/*.tmp*
+.hunch-cache/
+.hunch/local.json
+.hunch/events.log
+.hunch-private/
+# <<< hunch <<<
