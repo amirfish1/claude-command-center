@@ -1,9 +1,9 @@
 /* Simple-mode CSS — extracted from app.css to shrink its merge-conflict
    surface against main (see CLAUDE.md's git-conflict-reduction note).
-   Every rule here is scoped to body.ccc-simple-mode or a #simple*/.simple-*
-   selector; nothing here affects Advanced mode. Loaded unconditionally from
-   index.html (cheap: it's dead weight, not dead code, when Simple mode is
-   off — same reasoning as any other CSS file). */
+   Every rule here is scoped to body.ccc-simple-mode or a #simple-prefixed /
+   .simple- prefixed selector; nothing here affects Advanced mode. Loaded
+   unconditionally from index.html (cheap: it's dead weight, not dead code,
+   when Simple mode is off — same reasoning as any other CSS file). */
 
 body.ccc-mobile-redesign.ccc-simple-mode .mobile-bottom-nav {
   position: fixed;
