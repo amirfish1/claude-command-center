@@ -1812,8 +1812,9 @@ class TestServerImports(unittest.TestCase):
         # Server-driven warm of BOTH caches with a single sig-gated re-render.
         self.assertIn("async function _fetchWtWorkers()", app_js)
         self.assertIn("await Promise.all([_fetchUxqHealth(), _fetchWtWorkers()]);", app_js)
-        # Section header renamed to Triggered Workers.
-        self.assertIn("+ 'Triggered Workers'", app_js)
+        # Section header renamed to Triggered Workers (routed through
+        # simpleLabel() so Simple mode can relabel it to plain language).
+        self.assertIn("escapeHtml(simpleLabel('Triggered Workers'))", app_js)
         self.assertIn('data-role="evergreen-agents-header"', app_js)
         self.assertIn('data-role="evergreen-agents-scroll"', app_js)
         self.assertIn(
@@ -3547,6 +3548,58 @@ class TestServerImports(unittest.TestCase):
         self.assertIn("body.ccc-mobile-redesign.ccc-simple-mode .mobile-bottom-nav", app_css)
         self.assertIn('id="mobileSimpleHeader"', index_html)
         self.assertIn("Start a task", index_html)
+
+    def test_simple_home_lives_in_sidebar_layer(self):
+        """Simple Home (grandma-test landing screen) must render inside the
+        sidebar, not .main: at the <=1200px breakpoint .main is fixed
+        off-canvas until body.mobile-show-main, so a home screen in .main is
+        unreachable. All its visibility rules must also be gated on
+        ccc-mobile-redesign so a stored simple-mode pref never blanks the
+        desktop dashboard."""
+        app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
+        app_css = pathlib.Path(PROJECT_ROOT, "static", "app.css").read_text(encoding="utf-8")
+        index_html = pathlib.Path(PROJECT_ROOT, "static", "index.html").read_text(encoding="utf-8")
+
+        sidebar_pos = index_html.index('<div class="sidebar">')
+        home_pos = index_html.index('id="simpleHome"')
+        conv_split_pos = index_html.index('id="convSplit"')
+        self.assertLess(sidebar_pos, home_pos)
+        self.assertLess(home_pos, conv_split_pos)
+        self.assertIn('id="simpleComposerInput"', index_html)
+        self.assertIn('id="simpleBackHomeBtn"', index_html)
+        self.assertIn(
+            "body.ccc-mobile-redesign.ccc-simple-mode.ccc-simple-home-open #simpleHome",
+            app_css)
+        self.assertIn("document.body.classList.remove('mobile-show-main')", app_js)
+
+    def test_simple_depth_screens_have_dom_hooks(self):
+        """Simple-mode depth 2/3 (grandma test: every screen within 3 taps of
+        home must be simple): the depth-2 conversation view toggles
+        body.ccc-simple-conv-open with a plain-language title, and the
+        depth-3 full-screen surfaces (history/search, automations + detail,
+        settings) exist in the sidebar layer with their CSS gates. The
+        What's New modal must be suppressed in Simple mode."""
+        app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
+        app_css = pathlib.Path(PROJECT_ROOT, "static", "app.css").read_text(encoding="utf-8")
+        index_html = pathlib.Path(PROJECT_ROOT, "static", "index.html").read_text(encoding="utf-8")
+
+        # Depth 3 containers live in the sidebar layer (same as #simpleHome).
+        for hook in ('id="simpleHistory"', 'id="simpleHistorySearch"',
+                     'id="simpleAutomations"', 'id="simpleAutomationDetail"',
+                     'id="simpleSettings"', 'id="simpleAdvancedBtn"',
+                     'data-simple-theme="dark"'):
+            self.assertIn(hook, index_html)
+        # Depth 2: plain title + labeled Send button.
+        self.assertIn('id="simpleConvTitle"', index_html)
+        self.assertIn('class="send-btn-label"', index_html)
+        # View-state machinery + CSS gates.
+        self.assertIn("ccc-simple-conv-open", app_js)
+        self.assertIn("ccc-simple-screen-open", app_js)
+        self.assertIn("body.ccc-mobile-redesign.ccc-simple-mode.ccc-simple-conv-open #statusRail", app_css)
+        self.assertIn("body.ccc-mobile-redesign.ccc-simple-mode.ccc-simple-screen-open #convSplit", app_css)
+        # What's New suppression in Simple mode.
+        self.assertIn("isSimpleMode()) {", app_js)
+        self.assertIn("ccc-last-seen-version', whatsNewVersion", app_js)
 
     def test_mobile_back_button_stays_in_stable_toolbar(self):
         """Dynamic task-tab rendering must never own the only mobile exit."""
