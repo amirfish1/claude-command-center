@@ -27089,13 +27089,13 @@
       const data = await res.json().catch(() => ({}));
       if (res.ok && data.ok) {
         if (_usageDataByPane[paneId]) _usageDataByPane[paneId].auto_handover_enabled = !!data.enabled;
-        showOpToast(data.enabled ? 'Auto handover on for this session' : 'Auto handover off', 'success');
+        showOpToast(data.enabled ? 'token-sitter on for this session' : 'token-sitter off', 'success');
         postInjectInput(sid, 'token-sitter auto-snapshot ' + (data.enabled ? 'on' : 'off'), 'send').catch(() => {});
       } else {
-        showOpToast('Could not update auto handover: ' + (data.error || ('HTTP ' + res.status)), 'error');
+        showOpToast('Could not update token-sitter: ' + (data.error || ('HTTP ' + res.status)), 'error');
       }
     } catch (err) {
-      showOpToast('Auto handover update failed: ' + ((err && err.message) || 'network error'), 'error');
+      showOpToast('token-sitter update failed: ' + ((err && err.message) || 'network error'), 'error');
     } finally {
       _autoHandoverToggleInFlight = false;
       renderSessionUsageIntoStrip(paneId);
@@ -44434,12 +44434,12 @@
     if (engine === 'claude' && ff('auto_handover_pill')) {
       const handoverOn = !!u.auto_handover_enabled;
       const handoverTip = handoverOn
-      ? 'Auto handover is ON. When this session goes idle 55 min, CCC asks it to file a WatchTower checkpoint. Click to turn off.'
-      : 'Auto handover is OFF. Click to turn on. When this session goes idle 55 min, CCC will ask it to file a WatchTower checkpoint.';
+      ? 'token-sitter is ON. When this session goes idle 55 min, CCC asks it to file a WatchTower checkpoint. Click to turn off.'
+      : 'token-sitter is OFF. Click to turn on. When this session goes idle 55 min, CCC will ask it to file a WatchTower checkpoint.';
       handoverPill = ' <button type="button" class="wp-handover-toggle' + (handoverOn ? ' is-on' : ' is-off') + '"'
         + ' data-auto-handover-toggle aria-pressed="' + (handoverOn ? 'true' : 'false') + '"'
         + ' title="' + escapeHtml(handoverTip) + '">'
-        + '<span class="wp-handover-dot"></span>Auto handover: ' + (handoverOn ? 'ON' : 'OFF')
+        + '<span class="wp-handover-dot"></span>token-sitter: ' + (handoverOn ? 'ON' : 'OFF')
         + '</button>';
     }
     // Model pill renders LAST in the wp-usage cluster — rightmost slot,
