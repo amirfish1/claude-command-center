@@ -8763,7 +8763,12 @@
   }
 
   function slashFallbackCommandsForSource(source) {
-    return source === 'codex' ? CODEX_SLASH_FALLBACK_COMMANDS : SLASH_FALLBACK_COMMANDS;
+    if (source === 'codex') return CODEX_SLASH_FALLBACK_COMMANDS;
+    // Kimi/Grok expose their own ACP-reported catalog (fetched below) —
+    // Claude's fallback list would show commands like /context that don't
+    // exist for those engines, so start empty rather than misleading.
+    if (source === 'kimi' || source === 'grok') return [];
+    return SLASH_FALLBACK_COMMANDS;
   }
 
   function slashCommandUnavailableReason() {
@@ -8772,7 +8777,6 @@
     const sess = activeConvSession();
     const source = sess && sess.source;
     if (source === 'gemini') return 'Slash commands are not wired for Gemini sessions';
-    if (source === 'kimi') return 'Slash commands are not wired for Kimi sessions';
     if (source === 'cursor') return 'Slash commands are not wired for Cursor sessions';
     if (source === 'antigravity') return 'Slash commands are not wired for Antigravity sessions';
     if (source === 'pkood') return 'pkood agents do not use slash commands';
@@ -11346,6 +11350,9 @@
       toggle();
     });
     menu.addEventListener('click', (ev) => {
+      // CCC-923: the auto-compact/token-sitter rows take input rather than
+      // firing an action — don't close the menu when they're clicked.
+      if (ev.target && ev.target.closest && ev.target.closest('.new-session-only')) return;
       if (ev.target && ev.target.closest && ev.target.closest('.conv-send-menu-item')) hide();
     });
     document.addEventListener('click', (ev) => {
@@ -63749,7 +63756,13 @@
   async function spawnFromInlineInput(body) {
     const spawnAskedAt = Date.now();
     const subject = spawnFirstSentence(body);
-    const prompt = body;
+    const $tokenSitterToggle = document.getElementById('convSendTokenSitter');
+    const wantsTokenSitter = !!($tokenSitterToggle && $tokenSitterToggle.checked);
+    const prompt = wantsTokenSitter
+      ? 'turn on token-sitter auto snapshot on\n\n' + body
+      : body;
+    const $autoCompactInput = document.getElementById('convSendAutoCompactK');
+    const autoCompactK = $autoCompactInput ? parseInt($autoCompactInput.value, 10) : NaN;
     const engine = getSpawnEngine();
     const spawnCwd = (typeof getSpawnCwd === 'function') ? getSpawnCwd() : '';
     const launchCwd = spawnCwd || popoutRepoPath();
@@ -63820,10 +63833,10 @@
         cwd: launchCwd,
         repoPath,
         worktree: useWorktree,
-      }), {
+      }), Object.assign({
         timeline_t0_epoch_ms: spawnAskedAt,
         idempotency_key: durableActionId('spawn'),
-      });
+      }, Number.isFinite(autoCompactK) && autoCompactK > 0 ? { auto_compact_k: autoCompactK } : {}));
       if (engine === 'claude') abortBackgroundApiReadsForSpawn();
       if (engine === 'claude' && !useWorktree) {
         const prewarm = await claudePrewarmPromise;

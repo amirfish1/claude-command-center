@@ -4849,6 +4849,23 @@ def extract_session_slash_commands(session_id):
             "commands": list(_CODEX_FALLBACK_SLASH_COMMANDS),
             "source": "codex-fallback",
         }
+    if engine in ("kimi", "grok"):
+        # Kimi/Grok ACP push their own catalog once per session via an
+        # `available_commands_update` notification (session/new, load, or
+        # resume) — see docs/kimi-code-reference.md. No transcript fallback:
+        # the CLI hasn't sent it yet only briefly, right after session start.
+        raw_commands = []
+        with _ACP_LOCK:
+            state = _acp_session(engine, session_id)
+            if state:
+                raw_commands = list(state.get("available_commands") or [])
+        return {
+            "ok": True,
+            "session_id": session_id,
+            "engine": engine,
+            "commands": _merge_slash_commands(raw_commands),
+            "source": "acp" if raw_commands else "acp-empty",
+        }
     result = {
         "ok": True,
         "session_id": session_id,
