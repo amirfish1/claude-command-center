@@ -480,7 +480,7 @@
   }
   function _openSystemHealth() {
     _ensureSysHealthModal();
-    sysOpenModal(document.getElementById('cccSystemPill'), 'health');
+    sysOpenModal(document.getElementById('cccSystemPill'), 'status');
   }
   function _closeSystemHealth() {
     sysCloseModal();
