@@ -1,0 +1,1 @@
+Commit the Simple-UI click-count verification harness (simple-ui-clicks.js), updated to match the current Home layout (merged #simpleTasks list, collapsible composer section) after today's restructure.
