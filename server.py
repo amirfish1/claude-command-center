@@ -38796,12 +38796,15 @@ def _acp_prompt(
     visible_text = text
     if harness == "kimi":
         text = _kimi_goal_prompt_text(text)
-    # ACP transports (kimi/grok) don't support mid-turn steering the way
-    # Codex/Claude do — a session/prompt sent while a turn is active gets
+    # ACP transports (kimi/grok) don't support IN-PLACE mid-turn steering the
+    # way Codex/Claude do — a session/prompt sent while a turn is active gets
     # rejected by the agent itself ("Invalid request: another turn is
-    # already in progress"), which then surfaces as a raw STOPPED error in
-    # the UI instead of queueing. Steer must be treated the same as a
-    # regular send here so the caller's busy-code handling queues it.
+    # already in progress"), which would surface as a raw STOPPED error if
+    # sent straight through. Steer is therefore returned here exactly like a
+    # regular send (a plain busy code) — the inject_input caller is the one
+    # that turns a steer's busy code into cancel-then-resend (session/cancel,
+    # the same primitive the Esc button uses) before ever falling back to
+    # the durable queue (CCC-922).
     with _ACP_LOCK:
         state = _acp_session(harness, sid, create=True)
         if state.get("status") == "active":
@@ -55737,9 +55740,31 @@ def _inject_text_into_session(
             result.get("code") == "busy"
             and not _from_terminal_queue
         ):
-            # ACP transports do not support Codex-style turn steering.  A
-            # queued-row Steer from the shared UI must therefore wait in the
-            # durable FIFO instead of surfacing the transport's busy failure.
+            if mode == "steer":
+                # ACP has no Codex-style mid-turn steer -- a session/prompt
+                # sent while a turn is active is rejected outright by the
+                # agent -- but session/cancel DOES interrupt the active turn:
+                # it's the exact primitive the Esc button already uses
+                # successfully for Kimi/Grok (see interrupt_session). Cancel,
+                # wait briefly for the turn to actually end, then resend as a
+                # fresh turn (mirrors Claude's interrupt-then-write steer).
+                cancel_result = _acp_cancel(acp_harness, session_id)
+                if cancel_result.get("ok"):
+                    with _RECENT_INTERRUPT_LOCK:
+                        _RECENT_INTERRUPT_BY_SID[session_id] = time.time()
+                    deadline = time.monotonic() + 5.0
+                    while time.monotonic() < deadline:
+                        snap = _acp_session_snapshot(acp_harness, session_id) or {}
+                        if snap.get("status") != "active":
+                            break
+                        time.sleep(0.15)
+                    retry = _acp_prompt(acp_harness, session_id, text, **prompt_kwargs)
+                    if retry.get("code") != "busy":
+                        return retry
+                    result = retry
+            # Turn couldn't be cancelled (or the retry above still lost the
+            # race) -- fall back to the durable FIFO instead of surfacing
+            # the transport's busy failure.
             return _queue_terminal_input(session_id, text, {"status": "running"})
         return result
     if _is_gemini_session(session_id):
