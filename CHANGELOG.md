@@ -10,6 +10,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Changed
 - `watchtower.queue` is now a hard, unconditional dependency of CCC's queue system (ticket lifecycle: claim/close/edit/answer/comment/reopen). Removed the standalone `ux_fixes_queue.py` stdlib fallback that let CCC's queue features work without WatchTower installed — it had gone stale since WatchTower's own storage migrated from JSON to SQLite and was never updated, a latent risk of silent data divergence if watchtower ever became unimportable. If `watchtower.queue` can't be imported, CCC now fails loudly at startup with a clear error instead of silently falling back to a frozen JSON store.
 
+## [5.25.2] - 2026-08-20
+
+### Added
+- Apps that frame a login-protected page now say why it shows up logged out, instead of rendering a sign-in form that cannot succeed.
+
+### Fixed
+- **Unattended usage-limit auto-resume no longer sends `continue`.** Hitting a
+rate/usage-limit wall still shows the countdown banner, but CCC will not
+inject a follow-up or spawn a continuation when the timer elapses. Codex also
+stops re-queueing an already-accepted turn just because app-server events
+were not observed — that retry loop was burning weekly quota overnight.
+
 ## [5.25.1] - 2026-08-16
 
 ### Added
@@ -2668,7 +2680,8 @@ Initial public release.
 - `/api/repo/switch` validates targets against the picker allow-list.
 - See [`SECURITY.md`](SECURITY.md) for the full threat model.
 
-[Unreleased]: https://github.com/amirfish1/claude-command-center/compare/v5.25.1...HEAD
+[Unreleased]: https://github.com/amirfish1/claude-command-center/compare/v5.25.2...HEAD
+[5.25.2]: https://github.com/amirfish1/claude-command-center/releases/tag/v5.25.2
 [5.25.1]: https://github.com/amirfish1/claude-command-center/releases/tag/v5.25.1
 [5.25.0]: https://github.com/amirfish1/claude-command-center/releases/tag/v5.25.0
 [5.24.0]: https://github.com/amirfish1/claude-command-center/releases/tag/v5.24.0
