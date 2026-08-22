@@ -133,7 +133,14 @@
   .conv-list-collapse-btn:hover { background: var(--surface-2, rgba(255,255,255,0.04)); color: var(--text); border-color: var(--accent); }
   .conv-list-restore {
     display: none;
-    position: fixed; top: 12px; left: 8px; z-index: 950;
+    /* The CCC app-rail (static/app-rail.js) is `position:fixed; left:0;
+       z-index:1000` and shifts normal-flow content over via
+       `body{padding-left:var(--ccc-rail-w)}` — but this button is
+       fixed-positioned so it never inherits that padding, and its old
+       z-index:950 lost to the rail's 1000. It rendered directly under the
+       rail: invisible and unclickable, with the sidebar stuck collapsed and
+       no way back (CCC-918 follow-up). Offset past the rail and outrank it. */
+    position: fixed; top: 12px; left: calc(var(--ccc-rail-w, 76px) + 8px); z-index: 1001;
     width: 28px; height: 40px; padding: 0;
     align-items: center; justify-content: center;
     background: var(--surface); border: 1px solid var(--border); border-radius: 0 8px 8px 0;
