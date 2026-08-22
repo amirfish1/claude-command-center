@@ -1,6 +1,7 @@
 """Regression coverage for Devin CLI message queue drain."""
 
 import importlib
+import json
 import os
 import sqlite3
 import tempfile
@@ -260,6 +261,84 @@ class DevinQueueTests(unittest.TestCase):
         match = [r for r in rows if r.get("id") == "devincli-mighty-outfit"]
         self.assertTrue(match)
         self.assertEqual(match[0].get("spawn_pid"), 67663)
+
+    def test_devin_spawn_session_id_resolved_from_message_nodes(self):
+        """One-shot `devin -p` writes message_nodes, not prompt_history."""
+        server = importlib.import_module("server")
+
+        db_fd, db_path = tempfile.mkstemp(suffix=".db")
+        os.close(db_fd)
+        self.addCleanup(lambda: os.unlink(db_path) if os.path.exists(db_path) else None)
+
+        spawn_ts = 1700000000.0
+        spawned_at = datetime.fromtimestamp(spawn_ts).strftime("%Y%m%dT%H%M%S")
+        con = sqlite3.connect(db_path)
+        con.executescript(
+            """
+            CREATE TABLE sessions (
+                id TEXT PRIMARY KEY,
+                working_directory TEXT,
+                created_at REAL,
+                last_activity_at REAL
+            );
+            CREATE TABLE prompt_history (
+                session_id TEXT,
+                content TEXT,
+                timestamp REAL,
+                is_shell INTEGER
+            );
+            CREATE TABLE message_nodes (
+                row_id INTEGER PRIMARY KEY,
+                session_id TEXT,
+                node_id INTEGER,
+                chat_message TEXT,
+                created_at REAL
+            );
+            """
+        )
+        con.execute(
+            "INSERT INTO sessions (id, working_directory, created_at, last_activity_at) "
+            "VALUES (?, ?, ?, ?)",
+            ("mighty-outfit", "/tmp/ccc", spawn_ts * 1000, spawn_ts * 1000),
+        )
+        con.execute(
+            "INSERT INTO message_nodes "
+            "(session_id, node_id, chat_message, created_at) VALUES (?, ?, ?, ?)",
+            (
+                "mighty-outfit",
+                1,
+                json.dumps({
+                    "role": "user",
+                    "content": "can we add here: autocompact settings",
+                    "metadata": {"is_user_input": True},
+                }),
+                spawn_ts,
+            ),
+        )
+        con.commit()
+        con.close()
+
+        prev_db = os.environ.get("CCC_DEVIN_DB")
+        os.environ["CCC_DEVIN_DB"] = db_path
+        self.addCleanup(
+            lambda: (
+                os.environ.__setitem__("CCC_DEVIN_DB", prev_db)
+                if prev_db is not None
+                else os.environ.pop("CCC_DEVIN_DB", None)
+            )
+        )
+
+        entry = {
+            "engine": "devin",
+            "cwd": "/tmp/ccc",
+            "repo_path": "/tmp/ccc",
+            "command_summary": "can we add here: autocompact settings",
+            "spawned_at": spawned_at,
+        }
+        self.assertEqual(
+            server._devin_cli_session_id_for_spawn_entry(entry),
+            "devincli-mighty-outfit",
+        )
 
 
 if __name__ == "__main__":

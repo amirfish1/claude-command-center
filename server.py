@@ -45898,7 +45898,8 @@ def _devin_cli_session_id_for_spawn_entry(entry):
     from (in order):
       1. The CLI lock file whose recorded pid matches the spawn pid.
       2. The CLI SQLite DB, matching working directory + first prompt +
-         start time, with whitespace-normalized prompt comparison.
+         start time. First prompt comes from prompt_history, then
+         message_nodes (one-shot ``devin -p`` often skips prompt_history).
     """
     if not isinstance(entry, dict):
         return None
@@ -45929,18 +45930,22 @@ def _devin_cli_session_id_for_spawn_entry(entry):
     if con is None:
         return None
     try:
-        # Wider than the original ±5 min window: Devin can take >1s to
-        # create the DB row, and list-time resolution may run minutes later.
-        lo = (spawn_ts - 900) if spawn_ts else 0
-        hi = (spawn_ts + 900) if spawn_ts else time.time() + 60
-        for row in con.execute(
-            "SELECT id, working_directory, created_at FROM sessions "
-            "WHERE created_at >= ? AND created_at <= ? "
-            "ORDER BY created_at DESC",
-            (lo, hi),
-        ):
+        # Filter time in Python via _devin_epoch so millisecond created_at
+        # values still match a local spawned_at stamp. SQL comparison against
+        # unix-seconds lo/hi misses those rows entirely.
+        candidates = list(con.execute(
+            "SELECT id, working_directory, created_at FROM sessions"
+        ))
+        candidates.sort(
+            key=lambda r: _devin_epoch(r["created_at"]),
+            reverse=True,
+        )
+        for row in candidates:
             raw_id = str(row["id"] or "").strip()
             if not raw_id:
+                continue
+            created = _devin_epoch(row["created_at"])
+            if spawn_ts and created and abs(created - spawn_ts) > 900:
                 continue
             row_cwd = str(row["working_directory"] or "").strip()
             try:
@@ -45949,15 +45954,9 @@ def _devin_cli_session_id_for_spawn_entry(entry):
                 row_cwd_norm = os.path.normpath(row_cwd)
             if row_cwd_norm != cwd_norm and os.path.normpath(row_cwd) != os.path.normpath(cwd):
                 continue
-            ph = con.execute(
-                "SELECT content FROM prompt_history "
-                "WHERE session_id = ? AND is_shell = 0 "
-                "ORDER BY timestamp ASC LIMIT 1",
-                (raw_id,),
-            ).fetchone()
-            if not ph:
+            first_prompt = _devin_cli_first_prompt_for_session(con, raw_id)
+            if not first_prompt:
                 continue
-            first_prompt = str(ph["content"] or "").strip()
             if not _devin_cli_first_prompts_match(prompt, first_prompt):
                 continue
             return DEVIN_CLI_SESSION_PREFIX + raw_id
@@ -45966,6 +45965,32 @@ def _devin_cli_session_id_for_spawn_entry(entry):
     finally:
         con.close()
     return None
+
+
+def _devin_cli_first_prompt_for_session(con, raw_id):
+    """First user prompt for a Devin CLI session, history then message_nodes.
+
+    One-shot ``devin -p`` often writes the user turn to message_nodes and
+    never inserts prompt_history. Listing already falls back; spawn-id
+    matching must too or session_id stays null and the row never opens.
+    """
+    if not raw_id:
+        return ""
+    try:
+        ph = con.execute(
+            "SELECT content FROM prompt_history "
+            "WHERE session_id = ? AND is_shell = 0 "
+            "ORDER BY timestamp ASC LIMIT 1",
+            (raw_id,),
+        ).fetchone()
+    except sqlite3.Error:
+        ph = None
+    if ph:
+        text = str(ph["content"] or "").strip()
+        if text:
+            return text
+    nodes = _devin_cli_first_messages_from_nodes(con, [raw_id])
+    return str(nodes.get(raw_id) or "").strip()
 
 
 def _devin_cli_first_prompts_match(summary, db_prompt):
