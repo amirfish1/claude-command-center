@@ -22011,6 +22011,12 @@ def find_session_cwd(session_id):
             cwd = _resolve_session_cwd(session_id, cwd)
             _session_cwd_cache[session_id] = cwd
             return cwd
+    if _is_devin_cli_session(session_id):
+        cwd = _devin_cli_session_cwd(_devin_cli_raw_id(session_id))
+        if cwd:
+            cwd = _resolve_session_cwd(session_id, cwd)
+            _session_cwd_cache[session_id] = cwd
+            return cwd
     if not PROJECTS_ROOT.is_dir():
         return None
 
