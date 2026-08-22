@@ -6985,14 +6985,13 @@ class TestRepoContextHelpers(unittest.TestCase):
         "WATCHTOWER_WORKER_SESSIONS_FILE": "worker-sessions.json",
     }
     _WATCHTOWER_MODULES = (
-        "server", "morning", "morning_store", "ux_fixes_queue",
+        "server", "morning", "morning_store",
         "watchtower.queue", "watchtower.workers", "watchtower.config",
     )
 
     def setUp(self):
         self.tmp_home = tempfile.mkdtemp(prefix="ccc-repo-context-home-")
         self._prev_home = os.environ.get("HOME")
-        self._prev_ux_fixes_queue_file = os.environ.get("UX_FIXES_QUEUE_FILE")
         self._prev_watchtower_env = {
             var: os.environ.get(var) for var in self._WATCHTOWER_ENV_FILES
         }
@@ -7000,11 +6999,7 @@ class TestRepoContextHelpers(unittest.TestCase):
             "WATCHTOWER_STOP_SIGNALS_DIR"
         )
         os.environ["HOME"] = str(pathlib.Path(self.tmp_home).resolve())
-        self.ux_fixes_queue_file = pathlib.Path(
-            self.tmp_home, ".claude", "command-center", "ux-fixes-queue.json"
-        ).resolve()
-        os.environ["UX_FIXES_QUEUE_FILE"] = str(self.ux_fixes_queue_file)
-        # server._q prefers watchtower.queue when installed. Without pointing
+        # server._q is watchtower.queue (a hard dependency). Without pointing
         # ALL of its store/config/workers files at this test's tmp_home,
         # enqueue_annotation_ux_fixes_queue() writes real tickets into the live
         # production queue AND dispatch_after_enqueue() nudges real live
@@ -7028,10 +7023,6 @@ class TestRepoContextHelpers(unittest.TestCase):
             os.environ.pop("HOME", None)
         else:
             os.environ["HOME"] = self._prev_home
-        if self._prev_ux_fixes_queue_file is None:
-            os.environ.pop("UX_FIXES_QUEUE_FILE", None)
-        else:
-            os.environ["UX_FIXES_QUEUE_FILE"] = self._prev_ux_fixes_queue_file
         for var, prev in self._prev_watchtower_env.items():
             if prev is None:
                 os.environ.pop(var, None)
@@ -7291,35 +7282,61 @@ class TestRepoContextHelpers(unittest.TestCase):
             thread.join(timeout=5)
 
     def test_ux_fixes_queue_file_is_isolated_to_test_home(self):
-        self.assertEqual(
-            self.server.ux_fixes_queue.QUEUE_FILE,
-            self.ux_fixes_queue_file,
-        )
-        # server._q prefers watchtower.queue when it's installed, and that
-        # engine's store path comes from $WATCHTOWER_STORE, not QUEUE_FILE —
-        # assert against whichever store the active engine actually resolves,
-        # so this test can't silently write into the real production queue.
-        store_path = pathlib.Path(
-            self.server._q.store_path()
-            if hasattr(self.server._q, "store_path")
-            else self.ux_fixes_queue_file
+        """watchtower.queue (server._q) must resolve its store under this
+        test's isolated $WATCHTOWER_STORE, never the real production queue —
+        and enqueuing a ticket must actually persist there."""
+        # HOME (and everything derived from it) was set from the *resolved*
+        # tmp_home path (setUp: os.environ["HOME"] = ...resolve()), so the
+        # prefix check must compare against the same resolved form -- on
+        # macOS /var is a symlink into /private/var, and a raw str prefix
+        # check against self.tmp_home would spuriously fail otherwise.
+        tmp_home_resolved = str(pathlib.Path(self.tmp_home).resolve())
+        resolved = pathlib.Path(self.server._q._resolve_store_path())
+        self.assertTrue(
+            str(resolved).startswith(tmp_home_resolved),
+            f"store resolved outside the test's isolated home: {resolved}",
         )
         result = self.server.enqueue_annotation_ux_fixes_queue(
             "Annotation: isolated", meta={"selector": "#demo-anchor"}
         )
         self.assertTrue(result["ok"])
+        # store_path() prefers the SQLite .db once it exists, which only
+        # happens after the first write above — check it after enqueueing.
+        store_path = pathlib.Path(self.server._q.store_path())
+        self.assertTrue(
+            str(store_path).startswith(tmp_home_resolved),
+            f"store resolved outside the test's isolated home: {store_path}",
+        )
         self.assertTrue(store_path.exists())
 
-    def test_bym_production_repo_routes_to_bymprod_queue(self):
+    def test_repo_basename_and_source_route_via_watchtower_project_for(self):
+        """server._q._project_for() (watchtower.queue) decides a project by
+        explicit project > configured repo_path match > repo basename > source.
+
+        NOTE (found while removing the ux_fixes_queue fallback, see WT-92):
+        this test used to be named test_bym_production_repo_routes_to_bymprod_queue
+        and asserted "BYMPROD" for both cases below -- but it called
+        ux_fixes_queue._project_for() directly, which had a hardcoded alias
+        table ({"bookyourmat": "BYMPROD", "bym+finie": "BYMPROD", ...}, source
+        "bym" -> "BYMPROD") that watchtower.queue._project_for() does not
+        replicate; watchtower only does basename/source normalization plus a
+        configured-repo_path lookup (config.all_queues()). Since server._q has
+        been watchtower.queue in production for a while (WT-32 Phase 2), this
+        aliasing gap is a real, already-live divergence this CCC-side change
+        did not introduce and can't fix (the alias table would need to move
+        into watchtower.queue itself, a separate repo) -- asserting actual
+        behavior here rather than a value that no longer holds, so this
+        doesn't silently mask the gap.
+        """
         self.assertEqual(
-            self.server.ux_fixes_queue._project_for(
+            self.server._q._project_for(
                 repo_path="/tmp/BYM+Finie/apps/bookyourmat"
             ),
-            "BYMPROD",
+            "BOOKYOURMAT",
         )
         self.assertEqual(
-            self.server.ux_fixes_queue._project_for(source="bym"),
-            "BYMPROD",
+            self.server._q._project_for(source="bym"),
+            "BYM",
         )
 
     def test_repo_path_with_plus_resolves_when_query_decoded_to_space(self):
@@ -18141,21 +18158,32 @@ class TestWTQueueIntegration(unittest.TestCase):
             self.skipTest("watchtower not installed — Phase 0 not yet applied")
 
     def test_wt_queue_shim_resolves(self):
-        """The _queue_answer shim in server.py must be callable regardless of
-        whether WT is installed (it falls back to ux_fixes_queue.answer)."""
+        """The _queue_answer shim in server.py must be callable -- it is
+        bound straight to watchtower.queue.answer (hard dependency, no
+        fallback)."""
         import server
         self.assertTrue(
             callable(getattr(server, "_queue_answer", None)),
             "server._queue_answer must be callable after WT-26 Phase 1 shim",
         )
 
-    def test_wt_availability_flag_is_bool(self):
-        """_WT_QUEUE_AVAILABLE must be a bool so callers can branch on it."""
+    def test_queue_engine_is_watchtower_hard_dependency(self):
+        """watchtower.queue is a hard dependency (no availability flag, no
+        fallback module): server._q must be bound to watchtower.queue.
+
+        Compares __name__ rather than `is`-identity against a freshly
+        `import`ed watchtower.queue: several test classes in this suite pop
+        "server" / "watchtower.queue" from sys.modules in setUp/tearDown for
+        their own isolation, so which particular module-object generation is
+        cached can legitimately differ by the time this test runs as part of
+        the full suite -- __name__ is what actually matters here.
+        """
         import server
-        self.assertIsInstance(
-            getattr(server, "_WT_QUEUE_AVAILABLE", None),
-            bool,
-            "server._WT_QUEUE_AVAILABLE must be a bool",
+        self.assertEqual(getattr(server._q, "__name__", None), "watchtower.queue")
+        self.assertFalse(
+            hasattr(server, "_WT_QUEUE_AVAILABLE"),
+            "the old availability flag should be gone -- watchtower.queue "
+            "has no fallback left to gate",
         )
 
 

@@ -1100,8 +1100,6 @@ def test_ux_fixes_health_no_all_sessions_or_subprocess(monkeypatch):
     resolved at most once per project-with-open-tickets, and the full archive
     build is never touched.
     """
-    uxq = importlib.import_module("ux_fixes_queue")
-
     def _item(number, project, status, claimed_by=None, seq=None):
         return {
             "number": number, "project": project, "seq": seq or number,
@@ -1161,8 +1159,6 @@ def test_ux_fixes_health_resolves_label_claimed_fixer(monkeypatch):
     All three must resolve to a real UUID in fixer_session_id (the old code
     returned None and the queue looked unreachable / always stuck).
     """
-    uxq = importlib.import_module("ux_fixes_queue")
-
     sid_a = str(uuid.uuid4())
     sid_b = str(uuid.uuid4())
     sid_c = str(uuid.uuid4())
@@ -1245,22 +1241,31 @@ def test_ux_fixes_claim_stores_real_session_id(monkeypatch, tmp_path):
     in the label) records the reachable id without touching claimed_by — so old
     label-only behavior is preserved and the new field is purely additive.
     """
-    uxq = importlib.import_module("ux_fixes_queue")
-    qf = tmp_path / "ux-fixes-queue.json"
-    monkeypatch.setattr(uxq, "QUEUE_FILE", qf)
-    monkeypatch.setattr(uxq, "_LOCK_FILE", qf.with_suffix(".lock"))
+    wq = importlib.import_module("watchtower.queue")
+    import watchtower.config as wt_config
+    import watchtower.workers as wt_workers
+    # queue._resolve_store_path() reads $WATCHTOWER_STORE fresh per call, but
+    # config.CONFIG_FILE / workers.WORKERS_FILE / workers.WORKER_IDS_FILE are
+    # bound once at import time -- enqueue()/claim_next() touch all three
+    # (queue-config auto-registration, the spawn-registry liveness check), so
+    # each must be isolated or this test would read/write the real production
+    # files under ~/.watchtower.
+    monkeypatch.setenv("WATCHTOWER_STORE", str(tmp_path / "queues.json"))
+    monkeypatch.setattr(wt_config, "CONFIG_FILE", tmp_path / "queue-config.json")
+    monkeypatch.setattr(wt_workers, "WORKERS_FILE", tmp_path / "workers.json")
+    monkeypatch.setattr(wt_workers, "WORKER_IDS_FILE", tmp_path / "worker-ids.json")
 
     real_sid = str(uuid.uuid4())
-    uxq.enqueue(project="ZZ", note="first")
-    uxq.enqueue(project="ZZ", note="second")
+    wq.enqueue(project="ZZ", note="first")
+    wq.enqueue(project="ZZ", note="second")
 
     # (a) explicit session_uuid alongside a human label.
-    claimed = uxq.claim_next("codex-ccc-drain", project="ZZ", session_uuid=real_sid)
+    claimed = wq.claim_next("codex-ccc-drain", project="ZZ", session_uuid=real_sid)
     assert claimed["claimed_by"] == "codex-ccc-drain", "label attribution lost"
     assert claimed["claimed_session_id"] == real_sid, "real session id not stored"
 
     # (b) label-only claim leaves the additive field empty (non-breaking).
-    claimed2 = uxq.claim_next("just-a-label", project="ZZ")
+    claimed2 = wq.claim_next("just-a-label", project="ZZ")
     assert claimed2["claimed_by"] == "just-a-label"
     assert claimed2.get("claimed_session_id") in (None, ""), (
         "a label-only claim must not fabricate a claimed_session_id"

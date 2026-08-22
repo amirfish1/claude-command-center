@@ -21,7 +21,6 @@ class TestWatchtowerAnswerNotification(unittest.TestCase):
         package.messages = messages
 
         with mock.patch.object(server, "_queue_answer", answer), \
-             mock.patch.object(server, "_WT_QUEUE_AVAILABLE", True), \
              mock.patch.dict("sys.modules", {
                  "watchtower": package,
                  "watchtower.messages": messages,
