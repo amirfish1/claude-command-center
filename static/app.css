@@ -3453,6 +3453,11 @@
     vertical-align: middle;
     overflow: hidden;
     text-overflow: ellipsis;
+    cursor: pointer;
+  }
+  .conv-input-context .wp-path:hover {
+    color: var(--text);
+    text-decoration: underline;
   }
   /* Progressive drop-out as the strip narrows so the model pill
      (rightmost, most-valued slot) stops getting clipped. Original

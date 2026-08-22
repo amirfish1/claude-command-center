@@ -43317,7 +43317,7 @@
     const _branchSubsumes = pillBranch && _pathTail
       && pillBranch.toLowerCase().includes(_pathTail.toLowerCase());
     if (!_branchSubsumes) {
-      parts.push('<span class="wp-path" title="' + escapeHtml(pillPath) + '">' + escapeHtml(tilde) + '</span>');
+      parts.push('<span class="wp-path" data-action="reveal-path" data-path="' + escapeAttr(pillPath) + '" role="button" tabindex="0" title="' + escapeHtml(pillPath) + ' — click to reveal in Finder">' + escapeHtml(tilde) + '</span>');
     }
 
     // Sibling-worktrees pill removed — topbar Worktrees button is the
@@ -63004,6 +63004,31 @@
     ev.preventDefault();
     ev.stopPropagation();
     setSessionCwdViaPicker(btn.getAttribute('data-sid') || '', btn);
+  });
+  // CCC-921: the workspace-pill path (e.g. "~/Apps/content-engine") is
+  // read-only info elsewhere in the strip — clicking it should reveal the
+  // folder in Finder like every other path chip in CCC does via /api/open.
+  document.addEventListener('click', (ev) => {
+    const el = ev.target && ev.target.closest && ev.target.closest('[data-action="reveal-path"]');
+    if (!el) return;
+    ev.preventDefault();
+    ev.stopPropagation();
+    const p = el.getAttribute('data-path') || '';
+    if (!p) return;
+    fetch('/api/open', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ path: p }),
+    }).then(res => res.json()).then(data => {
+      if (!data.ok) showOpToast('Could not open in Finder: ' + (data.error || 'unknown error'), 'error');
+    }).catch(() => showOpToast('Could not open in Finder: network error', 'error'));
+  });
+  document.addEventListener('keydown', (ev) => {
+    if (ev.key !== 'Enter' && ev.key !== ' ') return;
+    const el = ev.target && ev.target.closest && ev.target.closest('[data-action="reveal-path"]');
+    if (!el) return;
+    ev.preventDefault();
+    el.click();
   });
 
   function updateNewSessionCwdNotice() {
