@@ -45053,13 +45053,18 @@
     // Auto handover toggle — status-bar pill, not an input-bar icon (user
     // request): needs to clearly read on/off at a glance, so it's a labeled
     // pill with explicit ON/OFF text rather than an icon whose state only
-    // shows via a subtle color change. Claude sessions only, matching the
-    // server-side watchdog's own claude-only scope. Gated behind the
-    // "auto_handover_pill" preview flag (default off, Settings > Experimental)
-    // — the watchdog feature itself was cluttering every session's status bar
-    // even for users who never touch it (CCC-817).
+    // shows via a subtle color change. Scoped to engines whose harness home
+    // directory actually receives the token-sitter skill via
+    // watchtower/skills_sync.py ENGINE_HOMES (CCC-939 — this used to be
+    // claude-only, matching a server-side watchdog that has since been
+    // replaced by the skill-based injected toggle, which works on any synced
+    // engine). Gated behind the "auto_handover_pill" preview flag (default
+    // off, Settings > Experimental) — the watchdog feature itself was
+    // cluttering every session's status bar even for users who never touch
+    // it (CCC-817).
+    const TOKEN_SITTER_SYNCED_ENGINES = ['claude', 'codex', 'kimi', 'grok', 'devin', 'gemini', 'antigravity'];
     let handoverPill = '';
-    if (engine === 'claude' && ff('auto_handover_pill')) {
+    if (TOKEN_SITTER_SYNCED_ENGINES.includes(engine) && ff('auto_handover_pill')) {
       const handoverOn = !!u.auto_handover_enabled;
       const handoverTip = handoverOn
       ? 'token-sitter is ON. When this session goes idle 55 min, CCC asks it to file a WatchTower checkpoint. Click to turn off.'
