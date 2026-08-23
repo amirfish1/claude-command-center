@@ -45407,6 +45407,10 @@ def _extract_antigravity_usage(session_id):
     total_cached_create = 0
     total_out = 0
     total_thinking = 0
+    # Per-turn tail for the status-rail column graph — one entry per
+    # trajectory step that carried usage, same raw-count shape Claude's
+    # turn_series uses. Steps don't carry a timestamp, so ts stays "".
+    turn_series = collections.deque(maxlen=USAGE_TURN_SERIES_MAX)
 
     steps = _antigravity_trajectory_steps(session_id)
     for step in steps:
@@ -45440,6 +45444,15 @@ def _extract_antigravity_usage(session_id):
         total_out += out_tokens
         total_thinking += thinking_tokens
 
+        turn_out = out_tokens + thinking_tokens
+        if window or turn_out:
+            turn_series.append({
+                "ts": "",
+                "tokens_in": window,
+                "tokens_cached": cr_tokens,
+                "tokens_out": turn_out,
+            })
+
     return {
         **empty,
         "latest_input_tokens": latest,
@@ -45452,6 +45465,7 @@ def _extract_antigravity_usage(session_id):
         "model": model,
         "engine": "antigravity",
         "override": _get_session_override(session_id),
+        "turn_series": list(turn_series),
     }
 
 

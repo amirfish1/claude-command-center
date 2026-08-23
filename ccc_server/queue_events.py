@@ -1502,6 +1502,10 @@ def _extract_codex_usage(session_id):
     context_limit = 0
     model = row.get("model") or ""
     reasoning_effort = row.get("reasoning_effort") or ""
+    # Per-turn tail for the status-rail column graph — one entry per
+    # token_count event (Codex writes one per completed turn), same raw-count
+    # shape Claude's turn_series uses.
+    turn_series = collections.deque(maxlen=_core.USAGE_TURN_SERIES_MAX)
     try:
         with open(path, "r", encoding="utf-8", errors="replace") as f:
             for line in f:
@@ -1535,6 +1539,18 @@ def _extract_codex_usage(session_id):
                 # into impossible context-window numbers.
                 window = _core._codex_int(usage.get("input_tokens"))
                 peak = max(peak, window)
+                turn_cached = _core._codex_int(usage.get("cached_input_tokens"))
+                turn_out = (
+                    _core._codex_int(usage.get("output_tokens"))
+                    + _core._codex_int(usage.get("reasoning_output_tokens"))
+                )
+                if window or turn_out:
+                    turn_series.append({
+                        "ts": ev.get("timestamp") or "",
+                        "tokens_in": window,
+                        "tokens_cached": turn_cached,
+                        "tokens_out": turn_out,
+                    })
     except OSError:
         return empty
     if not latest:
@@ -1559,6 +1575,7 @@ def _extract_codex_usage(session_id):
         "reasoning_effort": reasoning_effort,
         "context_limit": context_limit,
         "override": _core._get_session_override(session_id),
+        "turn_series": list(turn_series),
         **cost,
     }
 

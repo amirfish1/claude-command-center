@@ -18,6 +18,7 @@ from ccc_server.antigravity import (
 )
 from datetime import datetime
 from pathlib import Path
+import collections
 import json
 import os
 import re
@@ -1495,6 +1496,9 @@ def _extract_gemini_usage(session_id):
     total_cached = 0
     total_out = 0
     model = ""
+    # Per-turn tail for the status-rail column graph — one entry per Gemini
+    # reply that carried usage, same raw-count shape Claude's turn_series uses.
+    turn_series = collections.deque(maxlen=_core.USAGE_TURN_SERIES_MAX)
     for msg in data.get("messages") or []:
         if not isinstance(msg, dict) or msg.get("type") != "gemini":
             continue
@@ -1509,7 +1513,15 @@ def _extract_gemini_usage(session_id):
             peak = max(peak, window)
         total_cached += usage["cached_input_tokens"]
         total_in += max(usage["input_tokens"] - usage["cached_input_tokens"], 0)
-        total_out += usage["output_tokens"] + usage["reasoning_output_tokens"] + usage.get("tool_tokens", 0)
+        turn_out = usage["output_tokens"] + usage["reasoning_output_tokens"] + usage.get("tool_tokens", 0)
+        total_out += turn_out
+        if window or turn_out:
+            turn_series.append({
+                "ts": msg.get("timestamp") or "",
+                "tokens_in": window,
+                "tokens_cached": usage["cached_input_tokens"],
+                "tokens_out": turn_out,
+            })
     return {
         **empty,
         "latest_input_tokens": latest,
@@ -1519,6 +1531,7 @@ def _extract_gemini_usage(session_id):
         "total_cache_read_tokens": total_cached,
         "model": model,
         "override": _core._get_session_override(session_id),
+        "turn_series": list(turn_series),
     }
 
 
