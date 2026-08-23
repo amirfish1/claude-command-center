@@ -54691,6 +54691,25 @@ def compact_session_context(session_id, *, terminal_app=None, _from_terminal_que
         result = _compact_result(result, backup_path=backup_path)
         result.setdefault("engine", "codex")
         return result
+    if engine == "kimi":
+        # CCC-934: Kimi's own ACP adapter intercepts "/compact" as one of its
+        # BUILTIN slash commands (MoonshotAI/kimi-code
+        # packages/acp-adapter/src/{slash,builtin-commands}.ts) — it never
+        # reaches the model; the adapter runs session.compact() directly and
+        # reports back over session/update (compaction.started/completed/
+        # blocked). Deliver it the same way normal text reaches a Kimi
+        # session instead of hard-blocking with "unsupported engine". (This
+        # is distinct from the kap-server daemon's REST `:compact`, which is
+        # a different, out-of-band mechanism for sessions with no live ACP
+        # connection at all.)
+        result = _acp_prompt("kimi", sid, "/compact")
+        if result.get("code") == "busy":
+            queued = _queue_terminal_input(sid, "/compact", {"status": "running"})
+            queued.setdefault("engine", "kimi")
+            return queued
+        result = _compact_result(result)
+        result.setdefault("engine", "kimi")
+        return result
     if engine != "claude":
         return {
             "ok": False,
