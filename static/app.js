@@ -38933,11 +38933,24 @@
       + '<div class="uxq-td-pg">'
       + '<div class="uxq-td-pg-label">Assignment</div>'
       + (item.claimed_by ? _propRow('Worker', '<span class="uxq-td-worker-id">' + escapeHtml(item.claimed_by) + '</span>') : _propRow('Worker', '<span class="uxq-td-pr-empty">unassigned</span>'))
-      + (item.claimed_session_id
-          ? '<div class="uxq-td-pr"><span class="uxq-td-pr-k">Session</span>'
-            + '<button type="button" class="uxq-td-session-btn" data-sid="' + escapeAttr(item.claimed_session_id) + '">open in CCC ↗</button>'
-            + '</div>'
-          : '')
+      + (function () {
+          // claimed_session_id is backfilled by the queue reconciler and can
+          // stay empty for a worker-id claim (e.g. "bymprod-cda69c9a") even
+          // long after claim — the button then silently vanishes (CCC-937).
+          // Fall back to matching claimed_by against a live conversation's
+          // _worker_id so the link still resolves.
+          const raw = String(item.claimed_session_id || '').trim();
+          let sid = raw;
+          if (!sid && item.claimed_by) {
+            const key = _uxFixesIdentityKey(item.claimed_by);
+            const hit = (conversationsData || []).find(c => c && _uxFixesRowIdentityKeys(c).indexOf(key) !== -1);
+            if (hit) sid = hit.session_id || hit.id || '';
+          }
+          if (!sid) return '';
+          return '<div class="uxq-td-pr"><span class="uxq-td-pr-k">Session</span>'
+            + '<button type="button" class="uxq-td-session-btn" data-sid="' + escapeAttr(sid) + '">open in CCC ↗</button>'
+            + '</div>';
+        })()
       + (function () {
           // Live engine/model/effort of the worker's session, so the
           // detail page shows who is actually doing the work right now
