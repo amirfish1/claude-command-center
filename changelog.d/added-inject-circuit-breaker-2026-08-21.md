@@ -1,1 +1,0 @@
-Runaway-inject circuit breaker: CCC now caps how many messages one session can be injected with (12 identical per hour from any source; 6/hour and 40/day for unattended auto-resume and fleet pokes). A trip is recorded in the held bucket and surfaces on `/api/health` instead of being retried, so a looping injector stops at a dozen pokes instead of a night of quota.

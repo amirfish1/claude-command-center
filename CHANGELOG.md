@@ -10,6 +10,46 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Changed
 - `watchtower.queue` is now a hard, unconditional dependency of CCC's queue system (ticket lifecycle: claim/close/edit/answer/comment/reopen). Removed the standalone `ux_fixes_queue.py` stdlib fallback that let CCC's queue features work without WatchTower installed — it had gone stale since WatchTower's own storage migrated from JSON to SQLite and was never updated, a latent risk of silent data divergence if watchtower ever became unimportable. If `watchtower.queue` can't be imported, CCC now fails loudly at startup with a clear error instead of silently falling back to a frozen JSON store.
 
+## [5.26.0] - 2026-08-23
+
+### Added
+- Added a manual "Attach as sub-session of…" row action (with a matching Detach action) for linking sessions that are related but have no real spawn/continuation lineage, so they render nested in the sidebar the same way a genuine subagent does.
+- Devin CLI sessions now display their model, reasoning effort, and subagent calls in the CCC board. Spawning Devin exposes the same effort ladder as Claude; CCC maps `low`..`max` to the matching Devin model uid. The model picker is populated from `devin models list` and still supports custom uids.
+- Runaway-inject circuit breaker: CCC now caps how many messages one session can be injected with (12 identical per hour from any source; 6/hour and 40/day for unattended auto-resume and fleet pokes). A trip is recorded in the held bucket and surfaces on `/api/health` instead of being retried, so a looping injector stops at a dozen pokes instead of a night of quota.
+- Added a menu bar status indicator (green/gray dot) showing whether the CCC server is actually running, independent of the app window's open/closed state.
+- Continued sessions now read as one conversation: scrolling past the top of an F2-continued session seamlessly loads the previous session's messages with a "⤴︎ continued as …" seam marker, and a floating "Sessions" button (plus the seam's own "end ⇡" button) jumps to the end of each session in the chain.
+- Added a user testimonial quote to the landing page and README.
+
+### Changed
+- A continuation chain now shows a single main row in Current sessions and in Coding/Workers/Archived — the newest session. Earlier sessions in the chain are folded away (not nested as extra rows) and appear as purple ↳ chips only while that row is selected. Continuation titles drop the literal "Continue " prefix in favor of the ⤴︎ badge.
+
+### Fixed
+- Kimi/Grok sessions spawned from CCC now advertise the ACP terminal capability and service `terminal/*` requests as local subprocesses, so their shell/search tools (Bash, Glob, Grep) work instead of failing with "ACP terminal capability is unavailable".
+- The Claude prewarm reservation now carries the autocompact threshold (per-send override or saved new-session default) and uses it in the dedup key, so changing the setting no longer silently falls back to a cold spawn.
+- Fix Codex steer sending the same message twice when a queued send is also pending: steering the active turn (or its fallback turn/start) now consumes the matching durable resume queue entry, and the user-message steer button on pending/queued echoes uses `replace_queued` to withdraw the queued copy before steering.
+- **Devin sessions now open in CCC.** Spawning Devin no longer leaves a stuck
+placeholder: CCC matches the CLI session (including wrapper vs child pid and
+newline-flattened prompts), attaches `spawn_pid` so the card swaps, shows the
+spawn log while it materializes, and only treats a Devin session as live when
+the lock file's process is actually running.
+- **Fresh Claude sessions** now accept immediate follow-up asks before their transcript file is created.
+- Grok conversation view now mirrors the terminal by surfacing `agent_thought_chunk` reasoning, `hook_execution` lifecycle rows, `image_dropped` / `retry_state` notes, and accurate tool-call details. The parser also unwraps the newer Grok Build JSON-RPC envelope and handles `chat_history.jsonl`'s `type`-based schema.
+- Grok sessions respect a single active writer. CCC detects a running `grok --resume` terminal TUI, refuses to load or send to that session via ACP, and reads the terminal's on-disk `updates.jsonl` instead of the private ACP transcript so new terminal content appears in the conversation view.
+- Sidebar context-% chip now shows for Kimi sessions and for the live Devin CLI session (previously silently missing because their archive rows never carried token/context data).
+- Periodic reaper kills stray `server.py`/`ccc_worker.py` processes older than
+  10 minutes that aren't recognized as the dashboard's or worker's own
+  launchd-managed PID, reported on `/api/health` with an in-app toast — closes
+  the hole where a leaked process could sit around for days running stale
+  code with authority over live sessions.
+- Unattended "continue" auto-resume pokes into a Codex session now require an
+  explicit per-session opt-in (default off), settable via `"auto_resume": true`
+  on `/api/sessions/spawn`, instead of being opt-out by default.
+- **Unattended usage-limit auto-resume no longer sends `continue`.** Hitting a
+rate/usage-limit wall still shows the countdown banner, but CCC will not
+inject a follow-up or spawn a continuation when the timer elapses. Codex also
+stops re-queueing an already-accepted turn just because app-server events
+were not observed — that retry loop was burning weekly quota overnight.
+
 ## [5.25.2] - 2026-08-20
 
 ### Added
@@ -2680,7 +2720,8 @@ Initial public release.
 - `/api/repo/switch` validates targets against the picker allow-list.
 - See [`SECURITY.md`](SECURITY.md) for the full threat model.
 
-[Unreleased]: https://github.com/amirfish1/claude-command-center/compare/v5.25.2...HEAD
+[Unreleased]: https://github.com/amirfish1/claude-command-center/compare/v5.26.0...HEAD
+[5.26.0]: https://github.com/amirfish1/claude-command-center/releases/tag/v5.26.0
 [5.25.2]: https://github.com/amirfish1/claude-command-center/releases/tag/v5.25.2
 [5.25.1]: https://github.com/amirfish1/claude-command-center/releases/tag/v5.25.1
 [5.25.0]: https://github.com/amirfish1/claude-command-center/releases/tag/v5.25.0

@@ -1,1 +1,0 @@
-Grok conversation view now mirrors the terminal by surfacing `agent_thought_chunk` reasoning, `hook_execution` lifecycle rows, `image_dropped` / `retry_state` notes, and accurate tool-call details. The parser also unwraps the newer Grok Build JSON-RPC envelope and handles `chat_history.jsonl`'s `type`-based schema.
