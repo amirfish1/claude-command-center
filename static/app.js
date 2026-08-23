@@ -4390,7 +4390,9 @@
           ? 'agy --conversation ' + sid
           : (engine === 'cursor'
             ? 'cursor-agent --resume ' + sid
-            : 'claude --resume ' + sid + ' --dangerously-skip-permissions')));
+            : (engine === 'kimi'
+              ? 'kimi'
+              : 'claude --resume ' + sid + ' --dangerously-skip-permissions'))));
     if (!cwd) return resumeCmd;
     // Derive worktree branch from a `.claude/worktrees/...` path:
     // e.g. /Users/.../.claude/worktrees/claude-fix/issue-88 -> branch "claude-fix/issue-88"

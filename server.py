@@ -20164,6 +20164,12 @@ def _build_resume_command(session_id, cwd, cwd_exists):
         resume_cmd = f"cursor-agent --resume {session_id}"
     elif _is_grok_session(session_id):
         resume_cmd = f"grok --resume {session_id}"
+    elif _is_kimi_session(session_id):
+        # Kimi has no standalone `--resume <id>` CLI flag (ACP-driven sessions
+        # are resumed by CCC's own `kimi acp` subprocess, not a bare CLI
+        # invocation) and, being a non-Claude engine, must never get Claude's
+        # `--dangerously-skip-permissions` flag (CCC-938).
+        resume_cmd = "kimi"
     elif _is_devin_cli_session(session_id):
         raw_id = _devin_cli_raw_id(session_id)
         resume_cmd = f"devin --resume {raw_id}"
