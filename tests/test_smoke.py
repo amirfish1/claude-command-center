@@ -7898,7 +7898,7 @@ class TestRepoContextHelpers(unittest.TestCase):
                  },
              ), \
              mock.patch.object(self.server, "_find_live_spawn_entry_for_session", return_value=spawn), \
-             mock.patch.object(self.server, "_spawn_entry_active_tool_child", return_value=True), \
+             mock.patch.object(self.server, "_tool_child_blocks_inject", return_value=True), \
              mock.patch.object(self.server, "_backup_jsonl_before_compact") as backup, \
              mock.patch.object(self.server, "_queue_terminal_input", return_value={"ok": True, "queued": True}) as queue, \
              mock.patch.object(self.server, "launch_terminal_for_session") as launch, \

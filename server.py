@@ -54060,6 +54060,11 @@ def _backup_jsonl_before_compact(session_id):
 
 
 _COMPACT_TRIGGER_RE = re.compile(r"^\s*/compact(?:\s|$)", re.IGNORECASE)
+# CCC-935: a queued "/clear" used to be delivered as plain FIFO text with no
+# special-casing — Claude does execute it, but CCC never re-keyed the spawn
+# entry/UI the way _clear_via_live_spawn_stdin does, so the conversation went
+# dead and the fresh session appeared as an unrelated stranger.
+_CLEAR_TRIGGER_RE = re.compile(r"^\s*/clear(?:\s|$)", re.IGNORECASE)
 _SLASH_COMMAND_TRIGGER_RE = re.compile(
     r"^\s*/[A-Za-z][A-Za-z0-9_-]*(?::[A-Za-z0-9_-]+)*(?=\s|$)"
 )
@@ -54625,7 +54630,12 @@ def clear_session_context(session_id, *, terminal_app=None, initial_message=None
 
     live_spawn = _find_live_spawn_entry_for_session(sid) if not has_tty else None
     if live_spawn is not None:
-        if not _spawn_entry_active_tool_child(live_spawn):
+        # CCC-935: was the raw (unbounded) tool-child check — a stuck
+        # background tool child (e.g. a dangling `npx vercel deploy`) held
+        # /clear queued forever even after the enclosing turn genuinely
+        # finished. `_tool_child_blocks_inject` is the same signal capped at
+        # _INJECT_TOOL_CHILD_MAX_HOLD_S, like the queue-drain gate uses.
+        if not _tool_child_blocks_inject(live_spawn):
             result = _clear_via_live_spawn_stdin(live_spawn, sid)
             if result.get("ok") and initial_message:
                 _write_stream_json_user_message(live_spawn, initial_message)
@@ -54742,7 +54752,9 @@ def compact_session_context(session_id, *, terminal_app=None, _from_terminal_que
 
     live_spawn = _find_live_spawn_entry_for_session(sid) if not has_tty else None
     if live_spawn is not None:
-        if not _spawn_entry_active_tool_child(live_spawn):
+        # CCC-935: bounded check (see clear_session_context above) — a stuck
+        # tool child should not hold /compact queued past _INJECT_TOOL_CHILD_MAX_HOLD_S.
+        if not _tool_child_blocks_inject(live_spawn):
             # IDLE live spawn: send /compact natively in-stream and watch the
             # spawn's stdout for status:compacting → compact_result. Back up
             # first (compaction is lossy). The live session stays up.
@@ -55545,6 +55557,7 @@ def _inject_text_into_session(
         return _blocked
     is_codex = _is_codex_session(session_id)
     compact_command = bool(_COMPACT_TRIGGER_RE.match(text))
+    clear_command = bool(_CLEAR_TRIGGER_RE.match(text))
     slash_command = bool(_SLASH_COMMAND_TRIGGER_RE.match(text))
     mode_value = str(mode or "").strip().lower()
     mode = mode_value if mode_value in ("answer", "steer", "send_queue") else "send"
@@ -55561,6 +55574,20 @@ def _inject_text_into_session(
             if spawn is not None and (spawn.get("engine") or "claude") == "claude":
                 _write_stream_json_interrupt(spawn)
         return compact_session_context(
+            session_id,
+            _from_terminal_queue=_from_terminal_queue,
+        )
+    if clear_command and not is_codex:
+        # CCC-935: route "/clear" the same way as "/compact" above — through
+        # clear_session_context, which re-keys the spawn entry/UI to the fresh
+        # post-clear session — instead of writing it to the FIFO as literal
+        # user text (Claude executes it, but CCC then has no idea the session
+        # was reset and the transcript view goes stale).
+        if mode == "steer":
+            spawn = _find_live_spawn_entry_for_session(session_id)
+            if spawn is not None and (spawn.get("engine") or "claude") == "claude":
+                _write_stream_json_interrupt(spawn)
+        return clear_session_context(
             session_id,
             _from_terminal_queue=_from_terminal_queue,
         )

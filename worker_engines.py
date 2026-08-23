@@ -565,12 +565,20 @@ class EngineHost:
                 if spawn is None or (spawn.get("engine") or "claude") != "claude":
                     return {"ok": True, "owned": False, "busy": False}
                 tool_child = legacy._spawn_entry_active_tool_child(spawn)
+                turn_in_progress = bool(legacy._headless_turn_in_progress(spawn))
+                # CCC-935: a stuck/long-running tool child (e.g. a background
+                # `npx vercel deploy` that never exits) used to hold queued
+                # input forever — this call's "busy" folded in the RAW tool
+                # child presence with no age cap. `_tool_child_blocks_inject`
+                # is the same signal but bounded (_INJECT_TOOL_CHILD_MAX_HOLD_S),
+                # matching the in-process terminal-queue gate's intent.
+                tool_child_blocks = bool(legacy._tool_child_blocks_inject(spawn))
                 return {
                     "ok": True,
                     "owned": True,
-                    "busy": bool(
-                        legacy._headless_turn_in_progress(spawn) or tool_child
-                    ),
+                    "busy": turn_in_progress or tool_child_blocks,
+                    "turn_in_progress": turn_in_progress,
+                    "tool_child_blocks": tool_child_blocks,
                     "pid": spawn.get("pid"),
                     "active_child_pid": (
                         tool_child.get("pid") if isinstance(tool_child, dict) else None
