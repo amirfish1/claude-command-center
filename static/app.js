@@ -4391,7 +4391,7 @@
           : (engine === 'cursor'
             ? 'cursor-agent --resume ' + sid
             : (engine === 'kimi'
-              ? 'kimi'
+              ? 'kimi --session ' + sid
               : 'claude --resume ' + sid + ' --dangerously-skip-permissions'))));
     if (!cwd) return resumeCmd;
     // Derive worktree branch from a `.claude/worktrees/...` path:
