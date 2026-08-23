@@ -48897,6 +48897,39 @@
       + rows.join('') + '</div>';
   }
 
+  // Checklist rendering for todo/plan tool calls (CCC-940) — the raw JSON
+  // args ({"todos":[{"status":"done","title":"..."}]}) is noise once you
+  // already have the glyph + name; show the list itself instead. Returns ''
+  // if the input doesn't parse into a todo-shaped array so the caller falls
+  // back to the raw JSON body.
+  function _kimiTodoChecklistHtml(input) {
+    let d = input;
+    if (typeof d === 'string') {
+      const s = d.trim();
+      if (!s.startsWith('{') && !s.startsWith('[')) return '';
+      try { d = JSON.parse(s); } catch (_) { return ''; }
+    }
+    const items = Array.isArray(d) ? d
+      : (d && typeof d === 'object') ? (d.todos || d.items || d.plan) : null;
+    if (!Array.isArray(items) || !items.length) return '';
+    const rows = items.map(function (it) {
+      if (typeof it === 'string') it = { title: it };
+      if (!it || typeof it !== 'object') return '';
+      const title = String(it.title || it.content || it.text || it.step || '').trim();
+      if (!title) return '';
+      const status = String(it.status || '').toLowerCase();
+      const cls = status === 'done' || status === 'completed' ? 'done'
+        : status === 'in_progress' || status === 'active' ? 'active' : '';
+      const mark = cls === 'done' ? _KIMI_GLYPHS['check'] : '';
+      return '<div class="kimi-todo-row' + (cls ? ' ' + cls : '') + '">'
+        + '<span class="kimi-todo-mark">' + mark + '</span>'
+        + '<span class="kimi-todo-title">' + escapeHtml(title) + '</span>'
+        + '</div>';
+    }).filter(Boolean);
+    if (!rows.length) return '';
+    return '<div class="kimi-todo-list">' + rows.join('') + '</div>';
+  }
+
   // One kimi-web ToolRow: glyph + display name + muted arg summary + status
   // indicator, with an expandable sunken body (diff → input/command → output
   // preview). ACP permission buttons render inside the body and force it open.
@@ -48936,7 +48969,13 @@
     // beats the one-line activity label `detail` as the expandable body.
     if (typeof b.command === 'string' && b.command.trim()) inputText = b.command.trim();
     const outputText = String(b.output_preview || '').trim();
-    if (inputText && !diffHtml) bodyParts.push('<pre class="kimi-tool-io">' + escapeHtml(inputText) + '</pre>');
+    // Todo/plan tool calls: a checklist reads far better than the raw JSON
+    // args dump (CCC-940). Falls through to the raw <pre> if it can't parse.
+    const todoHtml = (_kimiNormToolName(b.name) === 'todo')
+      ? _kimiTodoChecklistHtml(b.input != null ? b.input : b.detail)
+      : '';
+    if (todoHtml) bodyParts.push(todoHtml);
+    else if (inputText && !diffHtml) bodyParts.push('<pre class="kimi-tool-io">' + escapeHtml(inputText) + '</pre>');
     if (outputText) bodyParts.push('<pre class="kimi-tool-io is-output">' + escapeHtml(outputText) + '</pre>');
     if (acpPermOpts) bodyParts.push(acpPermOpts);
     const expandable = bodyParts.length > 0;

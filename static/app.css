@@ -1896,6 +1896,18 @@
   }
   .conv-pane.is-webui-session .kimi-diff-row.del .kimi-diff-sign { color: var(--kw-danger); }
 
+  /* ── Todo/plan checklist (CCC-940): readable rows instead of raw JSON args ── */
+  .conv-pane.is-webui-session .kimi-todo-list { display: flex; flex-direction: column; gap: 4px; margin: 0 0 4px; }
+  .conv-pane.is-webui-session .kimi-todo-row {
+    display: flex; align-items: flex-start; gap: 8px;
+    font-family: var(--font-sans, inherit); font-size: 13px; line-height: 1.5; color: var(--kw-text);
+  }
+  .conv-pane.is-webui-session .kimi-todo-mark {
+    flex: none; width: 14px; height: 14px; margin-top: 2px; color: var(--kw-success);
+  }
+  .conv-pane.is-webui-session .kimi-todo-row.done .kimi-todo-title { color: var(--kw-muted); text-decoration: line-through; }
+  .conv-pane.is-webui-session .kimi-todo-row.active .kimi-todo-title { font-weight: 600; }
+
   /* ── Thinking (kimi-web ThinkingBlock.vue): no label header; teaser = last
      paragraph (faint), click toggles the full text inline. ── */
   .conv-pane.is-webui-session .kimi-thinking .kimi-thinking-teaser,
