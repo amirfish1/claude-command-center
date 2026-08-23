@@ -100,6 +100,23 @@ if [ -n "$DIRTY" ]; then
   fi
 fi
 git rev-parse "v${VERSION}" >/dev/null 2>&1 && { echo "${RED}tag v${VERSION} already exists${NC}" >&2; exit 1; } || true
+# Sync with origin BEFORE bumping anything. Step 4 pushes main, and a rejected
+# push there leaves the release commit + tag local-only with no resume path
+# (bit v5.26.0: a bot "update star history" commit landed on origin mid-day).
+# Fast-forward if we're simply behind; refuse if histories diverged.
+step "     syncing with origin/main"
+git fetch --quiet origin main || { echo "${RED}git fetch origin main failed${NC}" >&2; exit 1; }
+BEHIND=$(git rev-list --count HEAD..origin/main)
+if [ "$BEHIND" != 0 ]; then
+  if [ "$DRY_RUN" = 1 ]; then
+    warn "local main is ${BEHIND} commit(s) behind origin/main; the real run will git pull --ff-only first"
+  elif ! git pull --ff-only --quiet origin main; then
+    echo "${RED}local main is behind origin/main and cannot fast-forward; rebase first${NC}" >&2
+    exit 1
+  else
+    echo "   fast-forwarded ${BEHIND} commit(s) from origin/main"
+  fi
+fi
 command -v gh >/dev/null || { echo "${RED}gh not found${NC}" >&2; exit 1; }
 gh auth status >/dev/null 2>&1 || { echo "${RED}gh not authenticated${NC}" >&2; exit 1; }
 if [ "$SKIP_DMG" = 0 ] && [ "$DRY_RUN" = 0 ]; then
