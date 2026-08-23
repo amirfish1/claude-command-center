@@ -9358,6 +9358,7 @@ def _live_registry_conversation_row(
         "question_options": [],
         "question_option_details": [],
         "parent_session_id": parent_session_id,
+        "continued_from_session_id": _continued_from_session_id_from_text(spawn_prompt),
         **_registry_row_overlay(meta),
     }
     try:
@@ -10014,6 +10015,7 @@ def find_all_conversations(
                 "goal": tail_meta.get("goal") or "",
                 "goal_status": tail_meta.get("goal_status") or "",
                 "parent_session_id": parent_session_id,
+                "continued_from_session_id": _continued_from_session_id_from_text(first_message),
                 # Context % badge — same fields as find_conversations so
                 # archive rows can render sidebar usage without opening the
                 # session pane.
@@ -11107,7 +11109,8 @@ _ARCHIVE_LIST_FIELDS = (
     "pending_tool_ts", "stale_tool_call", "stale_tool_age_s",
     "stale_tool_threshold_s", "stale_tool_queued_input", "subagent_count",
     "subagent_in_flight_count", "subagent_recent", "workflows", "session_state", "goal",
-    "goal_status", "parent_session_id", "hermes_parent_session_id",
+    "goal_status", "parent_session_id", "continued_from_session_id",
+    "hermes_parent_session_id",
     "hermes_continued_from", "hermes_child_session_ids",
     "hermes_lineage_session_ids", "hermes_lineage_count", "hermes_is_parent",
     "model", "reasoning_effort", "latest_input_tokens", "lifetime_tokens", "cost_usd", "cost_breakdown_usd",
@@ -12104,6 +12107,22 @@ def _rehydrate_archive_cached_rows(rows):
                 row["parent_session_id"] = spawn_parent_id
             else:
                 row.setdefault("parent_session_id", "")
+            # Continuation lineage specifically (F2 "Continue in a new
+            # session" / usage-limit auto-resume): the origin marker only
+            # appears in continuation prompts, never in subagent spawns, so
+            # this stays empty for ordinary spawned workers.
+            continued_from = _continued_from_session_id_from_text(
+                row.get("first_message")
+            )
+            if (
+                not continued_from
+                and sid in spawn_registry_by_sid
+                and row.get("jsonl_path")
+            ):
+                continued_from = _continued_from_session_id_from_transcript(
+                    row.get("jsonl_path")
+                )
+            row["continued_from_session_id"] = continued_from
 
             row_ts = row.get("mtime") or row.get("modified") or 0
             if sid in live_candidates or (_now_rehydrate - row_ts) < _LIVE_MTIME_WINDOW:
@@ -24561,6 +24580,7 @@ def find_conversations(repo_path, progress=None, include_old=True, live_sids=Non
             "goal": tail_meta.get("goal") or "",
             "goal_status": tail_meta.get("goal_status") or "",
             "parent_session_id": parent_session_id,
+            "continued_from_session_id": _continued_from_session_id_from_text(first_message),
             "model": tail_meta.get("model"),
             # Transcript-first, like the model beside it: the tail states the
             # effort the last turn actually ran at, including a `/effort` typed
@@ -47129,6 +47149,28 @@ def _parent_session_id_from_return_address_text(text):
     return sid if _RETURN_ADDRESS_RE.match(sid) else ""
 
 
+_CONTINUATION_ORIGIN_RE = re.compile(
+    r"Origin session id: ([A-Za-z0-9][A-Za-z0-9_.-]{7,127})"
+)
+
+
+def _continued_from_session_id_from_text(text):
+    """Recover the origin session of an F2/auto-resume continuation.
+
+    Continuation prompts (f2RetrievalPrompt in static/app.js, and the
+    server-side _usage_limit_retrieval_prompt port) embed an
+    "Origin session id: <sid>" line. A genuinely spawned subagent's prompt
+    never does, so unlike the return-address footer this marks continuation
+    lineage specifically.
+    """
+    if not isinstance(text, str) or "Origin session id:" not in text:
+        return ""
+    m = _CONTINUATION_ORIGIN_RE.search(text)
+    if not m:
+        return ""
+    return m.group(1).strip()
+
+
 def _parent_session_id_from_transcript_return_address(path):
     """Read a transcript's first user prompt and extract a CCC return address."""
     try:
@@ -47150,6 +47192,33 @@ def _parent_session_id_from_transcript_return_address(path):
                 )
                 if parent:
                     return parent
+                return ""
+    except (OSError, UnicodeDecodeError):
+        pass
+    return ""
+
+
+def _continued_from_session_id_from_transcript(path):
+    """Read a transcript's first user prompt and extract the continuation origin."""
+    try:
+        with open(path, "r") as fh:
+            for i, line in enumerate(fh):
+                if i >= 20:
+                    break
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    ev = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                if ev.get("type") != "user" or ev.get("isMeta"):
+                    continue
+                origin = _continued_from_session_id_from_text(
+                    _extract_user_prompt_text(ev)
+                )
+                if origin:
+                    return origin
                 return ""
     except (OSError, UnicodeDecodeError):
         pass
@@ -64196,6 +64265,17 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                 result["engine"] = _detect_session_engine(conv_id)
             except Exception:
                 pass
+            # Continuation origin ("Origin session id:" marker in the first
+            # prompt) so the viewer can seamlessly load the previous session
+            # when the reader scrolls past the top of this one.
+            try:
+                _cont_fp = _resolve_conversation_path(conv_id)
+                result["continued_from_session_id"] = (
+                    _continued_from_session_id_from_transcript(_cont_fp)
+                    if _cont_fp and _cont_fp.is_file() else ""
+                )
+            except Exception:
+                result["continued_from_session_id"] = ""
             raw = json.dumps(result).encode()
             gz = None
             if len(raw) >= self._GZIP_MIN_BYTES:

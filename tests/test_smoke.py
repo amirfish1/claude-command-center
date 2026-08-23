@@ -19962,3 +19962,29 @@ def test_framed_app_warns_when_the_page_needs_a_login():
     # The add-form says the same thing before you create such an app.
     page = pathlib.Path(PROJECT_ROOT, "static", "applications.html").read_text(encoding="utf-8")
     assert "cannot travel into an" in page
+
+
+def test_continued_from_session_id_marker_parsing():
+    """Continuation lineage comes from the "Origin session id:" marker only.
+
+    The marker is what separates an F2/auto-resume continuation from an
+    ordinary subagent spawn (which carries the return-address footer but
+    never the origin marker) — the merged conversation view and the
+    single-row folding both key off it.
+    """
+    import server as _server
+
+    prompt = (
+        "You are continuing a task from an earlier Claude session, which ran long.\n"
+        "\n"
+        "Origin session id: 698c6d33-1234-4abc-8def-0123456789ab\n"
+        "Its transcript is a JSONL under ~/.claude/projects/.\n"
+    )
+    assert (
+        _server._continued_from_session_id_from_text(prompt)
+        == "698c6d33-1234-4abc-8def-0123456789ab"
+    )
+    # No marker, no continuation.
+    assert _server._continued_from_session_id_from_text("just a task") == ""
+    assert _server._continued_from_session_id_from_text(None) == ""
+    assert _server._continued_from_session_id_from_text("") == ""

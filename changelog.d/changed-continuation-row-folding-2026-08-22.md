@@ -1,0 +1,1 @@
+- A continuation chain now shows a single main row in Current sessions and in Coding/Workers/Archived — the newest session. Earlier sessions in the chain are folded away (not nested as extra rows) and appear as purple ↳ chips only while that row is selected. Continuation titles drop the literal "Continue " prefix in favor of the ⤴︎ badge.

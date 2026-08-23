@@ -1,0 +1,1 @@
+- Continued sessions now read as one conversation: scrolling past the top of an F2-continued session seamlessly loads the previous session's messages with a "⤴︎ continued as …" seam marker, and a floating "Sessions" button (plus the seam's own "end ⇡" button) jumps to the end of each session in the chain.

@@ -2726,7 +2726,8 @@
 
   .conv-scroll-end-btn,
   .conv-scroll-last-btn,
-  .conv-scroll-next-btn {
+  .conv-scroll-next-btn,
+  .conv-scroll-segment-btn {
     position: absolute;
     right: 20px;
     bottom: 96px;
@@ -2750,26 +2751,79 @@
   }
   .conv-scroll-end-btn.visible,
   .conv-scroll-last-btn.visible,
-  .conv-scroll-next-btn.visible {
+  .conv-scroll-next-btn.visible,
+  .conv-scroll-segment-btn.visible {
     opacity: 1;
     pointer-events: auto;
     transform: translateY(0);
   }
   .conv-scroll-end-btn:hover,
   .conv-scroll-last-btn:hover,
-  .conv-scroll-next-btn:hover {
+  .conv-scroll-next-btn:hover,
+  .conv-scroll-segment-btn:hover {
     border-color: var(--accent);
     background: var(--surface-2);
   }
   .conv-scroll-end-btn svg,
   .conv-scroll-last-btn svg,
-  .conv-scroll-next-btn svg { flex: none; }
+  .conv-scroll-next-btn svg,
+  .conv-scroll-segment-btn svg { flex: none; }
   .conv-scroll-end-btn span,
   .conv-scroll-last-btn span,
-  .conv-scroll-next-btn span {
+  .conv-scroll-next-btn span,
+  .conv-scroll-segment-btn span {
     font-size: 12px;
     font-weight: 600;
     line-height: 1;
+  }
+
+  /* Seam marker between two CCC continuation segments in the merged
+     conversation view: messages above came from the earlier session,
+     messages below are the session that continued from it. */
+  .event.conv-session-boundary {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin: 18px 12px;
+  }
+  .conv-session-boundary .csb-line {
+    flex: 1 1 auto;
+    height: 1px;
+    background: var(--border);
+  }
+  .conv-session-boundary .csb-label {
+    flex: 0 1 auto;
+    max-width: 70%;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    font-size: 11.5px;
+    font-weight: 500;
+    color: var(--text-muted);
+    cursor: pointer;
+    padding: 3px 10px;
+    border-radius: 999px;
+    border: 1px solid var(--border);
+    background: var(--surface-2);
+  }
+  .conv-session-boundary .csb-label:hover {
+    color: var(--text);
+    border-color: var(--accent);
+  }
+  .conv-session-boundary .csb-jump {
+    flex: 0 0 auto;
+    font-size: 11px;
+    font-weight: 500;
+    color: var(--text-muted);
+    cursor: pointer;
+    padding: 3px 8px;
+    border-radius: 999px;
+    border: 1px dashed var(--border);
+    background: none;
+  }
+  .conv-session-boundary .csb-jump:hover {
+    color: var(--text);
+    border-color: var(--accent);
   }
 
   /* Bottom-left "Live refresh" pill: shows when setInterval callbacks
@@ -6034,6 +6088,9 @@
      reveal on hover. */
   .conv-project-tree .conv-item > :not(.conv-title-row) { display: none; }
   .conv-project-tree .conv-item .conv-main-row > :not(.conv-title):not(.conv-title-input) { display: none; }
+  .conv-project-tree .conv-item.active .conv-main-row > .conv-session-origin-chip.is-continuation {
+    display: inline-flex;
+  }
   .conv-project-tree .conv-item .conv-title-input {
     min-width: 0;
     height: 24px;
@@ -6320,6 +6377,33 @@
     border-color: rgba(188,140,255,0.30);
     background: rgba(188,140,255,0.10);
     color: var(--purple, #bc8cff);
+  }
+  /* Folded continuation ancestors: purple ↳ chips on the title row,
+     only while that conversation is selected. */
+  .conv-item .conv-main-row > .conv-session-origin-chip.is-continuation {
+    display: none;
+    flex: 0 0 auto;
+    height: 18px;
+    max-width: 140px;
+    padding: 0 6px;
+    border: 1px solid rgba(188,140,255,0.35);
+    border-radius: 4px;
+    background: rgba(188,140,255,0.14);
+    color: var(--purple, #bc8cff);
+    font-size: 11px;
+    line-height: 18px;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    cursor: pointer;
+  }
+  .conv-item.active .conv-main-row > .conv-session-origin-chip.is-continuation {
+    display: inline-flex;
+    align-items: center;
+  }
+  .conv-item.active .conv-main-row > .conv-session-origin-chip.is-continuation:hover {
+    border-color: var(--purple, #bc8cff);
+    background: rgba(188,140,255,0.24);
   }
   /* Clickable only when a resolvable parent id was wired up (data-parent-sid) —
      an origin chip with no known parent (CCC/user/unknown) stays inert. */

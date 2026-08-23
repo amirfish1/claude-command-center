@@ -3262,6 +3262,124 @@
   // it.  The server keeps parent_session_id as provenance (new -> origin), so
   // sidebar trees need this small presentation-only inversion instead of
   // treating a continuation as an ordinary subagent spawn.
+  // Continuation lineage (F2 "Continue in a new session" / usage-limit
+  // auto-resume): the continuation's first prompt embeds "Origin session id:
+  // <sid>" — a genuinely spawned subagent's never does — so unlike
+  // parent_session_id this edge kind is continuation-specific. The server
+  // exposes it as continued_from_session_id; the first_message scan is the
+  // fallback for rows built before that field existed.
+  const _CONTINUATION_ORIGIN_RE = /Origin session id: ([A-Za-z0-9][A-Za-z0-9_.-]{7,127})/;
+  // survivorSid -> number of earlier chain sessions folded into it by the
+  // Current-sessions pipeline (one main row per continuation chain).
+  const _continuationFoldedCounts = new Map();
+  // headSid -> ancestor session ids (oldest first at render time).
+  const _continuationFoldedAncestors = new Map();
+  function continuationParentId(c) {
+    if (!c) return '';
+    const serverField = String(c.continued_from_session_id || '').trim();
+    if (serverField) return serverField;
+    // Hermes conversation lineage (not worker-spawn parent).
+    const hermes = String(c.hermes_continued_from || '').trim();
+    if (hermes) return hermes;
+    const fm = c.first_message;
+    if (!fm || fm.indexOf('Origin session id:') === -1) return '';
+    const m = _CONTINUATION_ORIGIN_RE.exec(fm);
+    return m ? m[1] : '';
+  }
+  function _continuationRowForSid(sid) {
+    const target = String(sid || '').trim();
+    if (!target) return null;
+    const pools = [];
+    if (typeof conversationsData !== 'undefined' && Array.isArray(conversationsData)) pools.push(conversationsData);
+    if (typeof archiveData !== 'undefined' && Array.isArray(archiveData)) pools.push(archiveData);
+    for (const rows of pools) {
+      const row = rows.find(r => String((r && (r.session_id || r.id)) || '').trim() === target);
+      if (row) return row;
+    }
+    return null;
+  }
+  function continuationParentIdForSid(sid) {
+    const row = _continuationRowForSid(sid);
+    return row ? continuationParentId(row) : '';
+  }
+  function _continuationRowId(c) {
+    return String((c && (c.session_id || c.id)) || '').trim();
+  }
+  // Hide origin/ancestor rows when a newer continuation is in the same
+  // list. The surviving head keeps the ⤴︎ +N chip; the ancestor is still
+  // reachable via that chip / scrolling up in the merged view.
+  function _foldContinuationAncestorRows(rows, opts) {
+    const list = Array.isArray(rows) ? rows : [];
+    const recordCounts = !opts || opts.recordCounts !== false;
+    const forward = new Map();
+    const note = (r) => {
+      if (!r) return;
+      const pid = continuationParentId(r);
+      if (!pid) return;
+      const rid = _continuationRowId(r);
+      if (!rid || rid === pid) return;
+      const ts = Number(r.modified || r.last_interacted || r.mtime || 0) || 0;
+      const prev = forward.get(pid);
+      if (!prev || ts >= prev.ts) forward.set(pid, { sid: rid, ts });
+    };
+    if (typeof conversationsData !== 'undefined' && Array.isArray(conversationsData)) {
+      conversationsData.forEach(note);
+    }
+    if (typeof archiveData !== 'undefined' && Array.isArray(archiveData)) {
+      archiveData.forEach(note);
+    }
+    list.forEach(note);
+    const windowIds = new Set(list.map(_continuationRowId));
+    return list.filter(c => {
+      const id = _continuationRowId(c);
+      if (!id || !continuationParentId(c) && !forward.has(id)) return true;
+      let head = id;
+      const seen = new Set([id]);
+      for (;;) {
+        const next = forward.get(head);
+        if (!next || seen.has(next.sid)) break;
+        seen.add(next.sid);
+        head = next.sid;
+      }
+      if (head === id || !windowIds.has(head)) return true;
+      if (recordCounts) {
+        _continuationFoldedCounts.set(head, (_continuationFoldedCounts.get(head) || 0) + 1);
+        const anc = _continuationFoldedAncestors.get(head) || [];
+        if (anc.indexOf(id) === -1) anc.push(id);
+        _continuationFoldedAncestors.set(head, anc);
+      }
+      return false;
+    });
+  }
+  function _continuationAncestorSidsForRow(c) {
+    const id = _continuationRowId(c);
+    const mapped = _continuationFoldedAncestors.get(id)
+      || _continuationFoldedAncestors.get(String((c && c.id) || ''))
+      || _continuationFoldedAncestors.get(String((c && c.session_id) || ''))
+      || [];
+    if (mapped.length) return mapped.slice();
+    const out = [];
+    let pid = continuationParentId(c);
+    const seen = new Set(id ? [id] : []);
+    while (pid && !seen.has(pid) && out.length < 20) {
+      seen.add(pid);
+      out.push(pid);
+      pid = continuationParentIdForSid(pid);
+    }
+    return out;
+  }
+  function _isContinuationPair(childCard, parentCard) {
+    if (!childCard || !parentCard) return false;
+    const cid = _continuationRowId(childCard);
+    const pid = _continuationRowId(parentCard);
+    if (!cid || !pid) return false;
+    if (continuationParentId(childCard) === pid) return true;
+    if (continuationParentId(parentCard) === cid) return true;
+    const underParent = _continuationFoldedAncestors.get(pid) || [];
+    const underChild = _continuationFoldedAncestors.get(cid) || [];
+    return underParent.indexOf(cid) !== -1 || underChild.indexOf(pid) !== -1;
+  }
+
   let _f2ContinuationEdgesCache = { raw: null, edges: {} };
   function _f2ContinuationEdges() {
     let raw = '';
@@ -3721,11 +3839,13 @@
     const ctx = Object.assign({}, st.ctx || {}, { text: f2ComposerText(paneId) });
     const launch = st.launch;
     // The parent row already has the human-facing title. Keep it on the
-    // continuation instead of exposing an opaque session-id fragment.
+    // continuation instead of exposing an opaque session-id fragment. No
+    // "Continue " prefix: the row's ⤴ badge (keyed off the Origin-marker
+    // continuation edge, not the name) carries that meaning now.
     const parentTitle = sidebarRowDisplayTitle(
       (ctx.row && (ctx.row.display_name || ctx.row.name || ctx.row.title)) || ''
     ) || 'session';
-    const subject = 'Continue ' + parentTitle;
+    const subject = parentTitle;
     const tempPid = 'tmp-f2-' + Date.now();
     try {
       const cwd = f2ResolveSpawnCwd(ctx);
@@ -21637,6 +21757,7 @@
     '[data-role="move-lane"]',
     '.conv-title-input',
     '.conv-session-origin-chip[data-parent-sid]',
+    '.conv-session-origin-chip[data-continuation-sid]',
   ].join(',');
   let _mobileRowTap = null;
   let _lastMobileRowOpenId = '';
@@ -28102,6 +28223,14 @@
         rawTitle = stripGhIssueProjectTag(rawTitle);
       }
       let title = sidebarRowDisplayTitle(rawTitle);
+      // Continuation rows (F2 "Continue in a new session" / auto-resume):
+      // the ⤴ badge says "this carries on an earlier session", so legacy
+      // spawn names that still carry a literal "Continue " prefix get it
+      // stripped — the word is noise next to the glyph.
+      const _continuationParentId = continuationParentId(c);
+      if (_continuationParentId) {
+        title = title.replace(/^Continue\s+/, '').replace(/^⤴︎\s*/, '');
+      }
       // ✨ = AI-generated (Claude/Codex/Antigravity). User renames get NO
       // glyph; the .user-renamed CSS class gives them a quiet dotted underline
       // instead so the row doesn't shout.
@@ -28113,6 +28242,7 @@
       // you actually scan for machine-named rows, and hiding it there would
       // make the marker invisible in the view that needs it most.
       else if (c.auto_titled && !titleSource) title = '🪄 ' + title;
+      if (_continuationParentId) title = '⤴︎ ' + title;
       // Auto-titling only fires from the session's Stop hook (after the
       // first assistant turn ends) — a still-live session showing its raw
       // first message hasn't reached that point yet, not stuck. Flagged via
@@ -28403,7 +28533,8 @@
           signals += '<span class="conv-signal hermes-model" title="' + escapeAttr(hermesModelTitle) + '">' + escapeHtml(hermesModelLabel) + '</span>';
         }
         const lineageCount = Number(c.hermes_lineage_count || 0);
-        if (lineageCount > 1) {
+        const _foldedHermes = (_continuationFoldedAncestors.get(_summarySid) || []).length;
+        if (lineageCount > 1 && !_foldedHermes) {
           const parent = c.hermes_continued_from || c.parent_session_id || '';
           signals += '<span class="conv-signal hermes-lineage" title="Continuation session'
             + (parent ? ' continued from ' + escapeAttr(parent) : '')
@@ -28425,6 +28556,9 @@
           : ('🤖 ' + _subCount);
         signals += '<span class="conv-signal subagents' + (_subInFlight > 0 ? ' in-flight' : '') + '" title="' + escapeAttr(_subTip) + '">' + _subInner + '</span>';
       }
+      // Folded continuation ancestors are listed as purple chips on the
+      // selected row only (see continuationChipsHtml), not as a permanent
+      // sidebar signal.
       // Workflow chip — Workflow tool runs found under the session's
       // subagents/workflows dir. A running run adds the ▶ suffix + pulse so
       // live fan-out reads differently from historic runs. Hidden when the
@@ -28832,7 +28966,28 @@
       // important to hide in the hover row or bury in the branch slot. (CCC-294)
       const branchSlotHtml = worktreeBadgeHtml + branch;
       const sessionIdChipHtml = sidebarSessionIdChipHtml(c);
-      const sessionProvenanceChipHtml = _sessionProvenanceChipHtml(c);
+      const _foldedAncestorSids = _continuationAncestorSidsForRow(c).slice().sort((a, b) => {
+        const ra = _continuationRowForSid(a);
+        const rb = _continuationRowForSid(b);
+        return (Number(ra && (ra.modified || ra.last_interacted)) || 0)
+          - (Number(rb && (rb.modified || rb.last_interacted)) || 0);
+      });
+      const continuationChipsHtml = _foldedAncestorSids.map(sid => {
+        const row = _continuationRowForSid(sid);
+        const label = String(_sessionProvenanceTitle(row, sid) || '')
+          .replace(/^Continue\s+/, '')
+          .replace(/^⤴︎\s*/, '');
+        return '<span class="conv-session-origin-chip is-continuation" role="button" tabindex="0"'
+          + ' data-continuation-sid="' + escapeAttr(sid) + '"'
+          + ' title="Jump to this earlier session in the merged conversation">'
+          + '\u21b3 ' + escapeHtml(label)
+          + '</span>';
+      }).join('');
+      // Continuation heads list folded ancestors as selected-only chips
+      // instead of the always-visible ↳ parent/grandparent provenance.
+      const sessionProvenanceChipHtml = _foldedAncestorSids.length
+        ? ''
+        : _sessionProvenanceChipHtml(c);
       const objectChipHtml = flowObjectChipHtml(c);
       // Current-goal chip — codex sessions only (the native `/goal` feature,
       // read server-side from ~/.codex/goals_1.sqlite into c.goal). Status
@@ -29081,6 +29236,7 @@
             + needsYouHtml
             + workingDotHtml
             + '<div class="conv-title ' + titleClass + '" data-role="title" aria-label="' + escapeAttr(title) + '">' + escapeHtml(title) + '</div>'
+            + continuationChipsHtml
             + subagentClusterDisclosureHtml
             + (goalIconOnly ? goalIconHtml : '')
             + (opts.evergreenAgent ? '' : evergreenGoalHtml)
@@ -29985,6 +30141,9 @@
       };
       const _byObject = new Map();
       const _unclassified = [];
+      const _objectKeepIds = (!_ipSearchActive)
+        ? new Set(_foldContinuationAncestorRows(_visibleSessionConvs, { recordCounts: false }).map(_continuationRowId))
+        : null;
       const _objectHasVisibleDrafts = (node) =>
         (flowDraftSessions || []).some(d => d && flowDraftParentNode(d) === node);
       // Match any object whose title starts with "evergreen" — "Evergreen
@@ -29994,6 +30153,7 @@
       const _isEvergreenAgentsObjectTitle = (title) =>
         String(title || '').trim().toLowerCase().replace(/[^a-z0-9]+/g, '').startsWith('evergreen');
       for (const c of _visibleSessionConvs) {
+        if (_objectKeepIds && !_objectKeepIds.has(_continuationRowId(c))) continue;
         const grp = _groupForSession(c);
         if (grp && grp.archived) continue;
         if (!grp) { _unclassified.push(c); continue; }
@@ -30482,6 +30642,18 @@
       const _currentSessionLineage = _ipSearchActive
         ? { rows: _currentSessionWindowed, openAsks: [] }
         : _currentSessionsKeepClusteredDescendants(_currentSessionWindowed);
+      // Continuation folding — ONE main row per F2-continue chain. A session
+      // whose continuation descendant is visible collapses into the chain's
+      // head: its transcript is reachable by scrolling up in the head's
+      // merged conversation view, and the head's ↳ chip still opens it
+      // directly. Only continuation edges (Origin-marker) fold; subagent /
+      // worker nesting is untouched. Skipped while searching so results
+      // stay complete.
+      _continuationFoldedCounts.clear();
+      _continuationFoldedAncestors.clear();
+      if (!_ipSearchActive) {
+        _currentSessionLineage.rows = _foldContinuationAncestorRows(_currentSessionLineage.rows);
+      }
       const _currentSessionVisibleIds = new Set(_currentSessionLineage.rows.map(_currentSessionId));
       const _currentSessionRehomedOpenAsks = new Map();
       if (!_ipSearchActive) {
@@ -30536,6 +30708,7 @@
           const id = _currentSessionId(c);
           const pid = _currentSessionParentId(c);
           if (!id || !pid || id === pid || !byId.has(pid)) return;
+          if (_isContinuationPair(c, byId.get(pid))) return;
           childIds.add(id);
           (childrenByParent.get(pid) || childrenByParent.set(pid, []).get(pid)).push(c);
         });
@@ -31187,7 +31360,7 @@
     // Synthesized open-PR rows (source 'github_pr') are kept out of the All
     // list — mixed into the session list they read as sessions and confuse.
     // Real sessions still carry their PR state via pr_* decoration fields.
-    const _allTabConvs = _allTabUnfilteredConvs.filter(
+    let _allTabConvs = _allTabUnfilteredConvs.filter(
       c => c.source !== 'github_pr'
         && _archiveEngineAllowsRow(c, _arcEngineFilter)
     );
@@ -31200,6 +31373,21 @@
       + ((_gcItems || []).length || 0)
       + ((Array.isArray(_archivedGroupChats) ? _archivedGroupChats : []).length || 0);
     const _allTabSessionId = (c) => String((c && (c.session_id || c.id)) || '').trim();
+    // Same one-row-per-continuation-chain fold as Current sessions. Coding /
+    // Workers / Archived all render through this All-tab pipeline, so without
+    // this the origin session stays a sibling of its continuation.
+    if (!_ipSearchActive) {
+      const _allTabIsVisible = _sidebarTab === 'archived'
+        || _sidebarTab === 'coding'
+        || _sidebarTab === 'workers';
+      if (_allTabIsVisible) {
+        _continuationFoldedCounts.clear();
+        _continuationFoldedAncestors.clear();
+      }
+      _allTabConvs = _foldContinuationAncestorRows(_allTabConvs, {
+        recordCounts: _allTabIsVisible,
+      });
+    }
     const _allTabParentId = (c) => f2EffectiveParentSessionId(
       _allTabSessionId(c), c && (c.parent_session_id || c.hermes_parent_session_id || c.hermes_continued_from)
     );
@@ -31215,6 +31403,7 @@
         const id = _allTabSessionId(c);
         const pid = _allTabParentId(c);
         if (!id || !pid || id === pid || !byId.has(pid)) return;
+        if (_isContinuationPair(c, byId.get(pid))) return;
         childIds.add(id);
         (childrenByParent.get(pid) || childrenByParent.set(pid, []).get(pid)).push(c);
       });
@@ -33168,6 +33357,14 @@
     if (!$convList._originChipWired) {
       $convList._originChipWired = true;
       $convList.addEventListener('click', (ev) => {
+        const contChip = ev.target && ev.target.closest && ev.target.closest('.conv-session-origin-chip[data-continuation-sid]');
+        if (contChip) {
+          ev.stopPropagation();
+          ev.preventDefault();
+          const sid = contChip.getAttribute('data-continuation-sid') || '';
+          if (sid) _jumpToContinuationSegment(sid);
+          return;
+        }
         const chip = ev.target && ev.target.closest && ev.target.closest('.conv-session-origin-chip[data-parent-sid]');
         if (!chip) return;
         ev.stopPropagation();
@@ -35494,6 +35691,12 @@
     if (lastBtn) {
       lastBtn.style.right = right + 'px';
       lastBtn.style.bottom = above + 'px';
+      if (lastBtn.classList.contains('visible')) above += 42;
+    }
+    const segBtn = view._convSegmentButton;
+    if (segBtn) {
+      segBtn.style.right = right + 'px';
+      segBtn.style.bottom = above + 'px';
     }
   }
 
@@ -35549,6 +35752,15 @@
       nextBtn.classList.toggle('visible', showNext);
       nextBtn.setAttribute('aria-hidden', showNext ? 'false' : 'true');
       nextBtn.tabIndex = showNext ? 0 : -1;
+    }
+    // "Sessions" shows only while the merged view actually holds more than
+    // one session — i.e. at least one continuation seam marker is rendered.
+    const segBtn = view._convSegmentButton;
+    if (segBtn) {
+      const showSeg = !!view.querySelector('.conv-session-boundary');
+      segBtn.classList.toggle('visible', showSeg);
+      segBtn.setAttribute('aria-hidden', showSeg ? 'false' : 'true');
+      segBtn.tabIndex = showSeg ? 0 : -1;
     }
     positionConversationEndAffordance(view);
   }
@@ -35841,6 +36053,59 @@
       updateConversationEndAffordance(v);
     });
     view._convNextButton = nextBtn;
+    // "Sessions" steps through continuation seam markers (.conv-session-
+    // boundary) in a merged continuation chain. Each click lands on the END
+    // of the next-earlier session (its seam scrolled to the bottom edge, so
+    // that session's final messages fill the screen); once the oldest seam
+    // is reached, the next click returns to the live bottom — the end of
+    // the current session.
+    let segBtn = host.querySelector(':scope > .conv-scroll-segment-btn');
+    if (!segBtn) {
+      segBtn = document.createElement('button');
+      segBtn.type = 'button';
+      segBtn.className = 'conv-scroll-segment-btn';
+      segBtn.title = 'Jump to the end of each session in this continued conversation';
+      segBtn.setAttribute('aria-label', 'Jump to the end of each session in this continued conversation');
+      segBtn.innerHTML = '<svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3v6"></path><path d="M8 6l4-4 4 4"></path><path d="M12 21v-6"></path><path d="M8 18l4 4 4-4"></path></svg><span>Sessions</span>';
+      host.appendChild(segBtn);
+    }
+    segBtn._convTargetView = view;
+    segBtn.addEventListener('click', () => {
+      const v = segBtn._convTargetView || view;
+      const bounds = Array.from(v.querySelectorAll('.conv-session-boundary'));
+      if (!bounds.length) return;
+      v._pinnedToBottom = false;
+      const above = bounds.filter(b => b.offsetTop < v.scrollTop - 8);
+      if (above.length) {
+        above[above.length - 1].scrollIntoView({ behavior: 'smooth', block: 'end' });
+      } else {
+        v._pinnedToBottom = true;
+        scrollConversationToEnd(v, 'smooth');
+      }
+      updateConversationEndAffordance(v);
+    });
+    view._convSegmentButton = segBtn;
+    // Seam marker clicks: the label jumps to the START of the continued
+    // session (below the seam); "end ⇡" jumps to the END of the earlier one
+    // (above the seam).
+    if (!view._convBoundaryNavAttached) {
+      view._convBoundaryNavAttached = true;
+      view.addEventListener('click', (ev) => {
+        const t = ev.target;
+        if (!t || typeof t.closest !== 'function') return;
+        const boundary = t.closest('.conv-session-boundary');
+        if (!boundary) return;
+        if (t.closest('.csb-jump')) {
+          boundary.scrollIntoView({ behavior: 'smooth', block: 'end' });
+        } else if (t.closest('.csb-label')) {
+          boundary.scrollIntoView({ behavior: 'smooth', block: 'start' });
+        } else {
+          return;
+        }
+        view._pinnedToBottom = false;
+        updateConversationEndAffordance(view);
+      });
+    }
     view._convEndAffordanceAttached = true;
     // Pin-to-bottom: true means the user wants to follow new content.
     // Initialized true so a brand-new pane auto-scrolls; user scrolling
@@ -42439,6 +42704,73 @@
     }
   }
 
+  // ── continuation segments (merged view) ──────────────────────────────
+  // pane.contSegments: [{ sid, nextParent }], oldest loaded segment first;
+  // the last entry is the pane's open conversation. Scrolling past the top
+  // of one segment fetches the continuation parent's tail and stitches it
+  // above with a seam marker, so a continued chain reads as ONE conversation.
+  function _contEnsureSegments(pane, openId) {
+    const sid = String(openId || '').trim();
+    if (!pane || !sid) return [];
+    const segs = Array.isArray(pane.contSegments) ? pane.contSegments : null;
+    if (!segs || !segs.length || String(segs[segs.length - 1].sid) !== sid) {
+      pane.contSegments = [{ sid, nextParent: continuationParentIdForSid(sid) }];
+    }
+    return pane.contSegments;
+  }
+  function _contNextParentForPane(pane, openId) {
+    const segs = _contEnsureSegments(pane, openId);
+    if (!segs.length || segs.length >= 20) return '';
+    const next = String(segs[0].nextParent || '').trim();
+    if (!next) return '';
+    // Cycle guard: never load the same segment twice.
+    if (segs.some(s => String(s.sid) === next)) return '';
+    return next;
+  }
+  function _jumpToContinuationSegment(sid) {
+    const target = String(sid || '').trim();
+    if (!target) return;
+    const paneId = (typeof activePaneId === 'function') ? activePaneId() : '';
+    const pane = paneByPaneId(paneId);
+    const $view = (typeof getConvViewForPane === 'function' ? getConvViewForPane(paneId) : null)
+      || $conversationsView;
+    if (!pane || !$view) return;
+    const findBoundary = () => $view.querySelector(
+      '.conv-session-boundary[data-boundary-parent-sid="' + target.replace(/"/g, '') + '"]'
+    );
+    const scrollTo = (el) => {
+      if (!el) return;
+      $view._pinnedToBottom = false;
+      el.scrollIntoView({ behavior: 'smooth', block: 'end' });
+      if (typeof updateConversationEndAffordance === 'function') updateConversationEndAffordance($view);
+    };
+    const already = findBoundary();
+    if (already) { scrollTo(already); return; }
+    (async () => {
+      const openId = pane.conversationId;
+      for (let i = 0; i < 20; i++) {
+        if (findBoundary()) break;
+        const beforeLine = Number(pane.firstLine || 0);
+        if (beforeLine > 1) pane.loadBeforeLine = beforeLine;
+        else if (_contNextParentForPane(pane, openId)) pane.loadAncestorHop = true;
+        else break;
+        await fetchConversationEvents(paneId);
+        if (!paneByPaneId(paneId) || paneByPaneId(paneId).conversationId !== openId) return;
+      }
+      scrollTo(findBoundary());
+    })().catch(() => {});
+  }
+  function _contSegmentTitle(sid) {
+    const row = _continuationRowForSid(sid);
+    if (row) {
+      const raw = String(
+        row.display_name || row.ai_title || row.first_message || ''
+      ).replace(/^Continue\s+/, '').replace(/^⤴︎\s*/, '').trim();
+      if (raw) return sidebarRowDisplayTitle(raw.slice(0, 80));
+    }
+    return String(sid || '').slice(0, 8);
+  }
+
   function _insertLoadEarlierBanner($view, id, paneId) {
     if (!$view || $view.querySelector('.conv-load-earlier')) return;
     _ensureLoadEarlierStyle();
@@ -42455,8 +42787,15 @@
       // Anchor to where the reader is, so loading history above doesn't move it.
       const anchor = _topVisibleAnchor($view);
       const beforeLine = Number(pane.firstLine || 0);
-      if (!beforeLine || beforeLine <= 1) { loading = false; return; }
-      pane.loadBeforeLine = beforeLine;
+      if (!beforeLine || beforeLine <= 1) {
+        // Current segment exhausted — if this session continued from an
+        // earlier one, hop the fetch window up to that session's tail so
+        // the merged conversation keeps scrolling seamlessly.
+        if (!_contNextParentForPane(pane, id)) { loading = false; return; }
+        pane.loadAncestorHop = true;
+      } else {
+        pane.loadBeforeLine = beforeLine;
+      }
       banner.textContent = 'Loading earlier messages…';
       banner.disabled = true;
       // Overlay survives the view clear/re-render so there's a clear "working"
@@ -42464,6 +42803,16 @@
       const overlay = _showConvLoading($view);
       try {
         await fetchConversationEvents(paneId);
+        // Empty prefix windows (non-renderable JSONL lines before the first
+        // event) pin firstLine to 1. Hop to the continuation parent in this
+        // same click so the reader doesn't have to press Load earlier twice.
+        const paneAfter = paneByPaneId(paneId);
+        if (paneAfter && paneAfter.conversationId === id
+            && Number(paneAfter.firstLine || 0) <= 1
+            && _contNextParentForPane(paneAfter, id)) {
+          paneAfter.loadAncestorHop = true;
+          await fetchConversationEvents(paneId);
+        }
         // Restore the reader's spot, then force a paint: the freshly rendered
         // content can stay blank until a real scroll event fires (a browser
         // quirk the user hit — "black screen until I move the scroll").
@@ -42755,12 +43104,22 @@
       const _pane0 = paneByPaneId(fetchPaneId);
       const _wantFull = !!(_pane0 && _pane0.wantFull);
       const _loadBefore = _pane0 ? Number(_pane0.loadBeforeLine || 0) : 0;
-      const _loadingEarlier = !!_loadBefore;
+      const _hop = !!(_pane0 && _pane0.loadAncestorHop);
       if (_pane0) _pane0.wantFull = false;   // one-shot: consumed on this fetch
       if (_pane0) _pane0.loadBeforeLine = 0; // one-shot: consumed on this fetch
+      if (_pane0) _pane0.loadAncestorHop = 0; // one-shot: consumed on this fetch
       const _freshOpen = convLastLine === 0;
-      const _url = _loadingEarlier
-        ? '/api/conversations/' + id + '?before=' + encodeURIComponent(_loadBefore) + '&tail=' + convTailLines()
+      if (_freshOpen && _pane0) _pane0.contSegments = null; // re-init chain on reopen
+      const _segs = _pane0 ? _contEnsureSegments(_pane0, id) : [];
+      const _hopSid = _hop ? _contNextParentForPane(_pane0, id) : '';
+      const _loadingEarlier = !!_loadBefore || !!_hopSid;
+      // Earlier-window fetches walk the continuation chain: within the top
+      // segment's own file first, then (hop) the previous session's tail.
+      const _fetchSid = _hopSid || (_loadBefore && _segs.length ? String(_segs[0].sid) : id);
+      const _url = _hopSid
+        ? '/api/conversations/' + encodeURIComponent(_fetchSid) + '?tail=' + convTailLines()
+        : _loadBefore
+        ? '/api/conversations/' + encodeURIComponent(_fetchSid) + '?before=' + encodeURIComponent(_loadBefore) + '&tail=' + convTailLines()
         : (_freshOpen && !_wantFull)
         ? '/api/conversations/' + id + '?tail=' + convTailLines()
         : '/api/conversations/' + id + '?after=' + convLastLine;
@@ -42801,21 +43160,68 @@
         if (convLastLine === 0) {
           $view.innerHTML = '';
         }
+        // Remember the fetched segment's own continuation parent (from the
+        // transcript marker, server-side) so the next scroll-up can hop to
+        // it — works even for sessions absent from every loaded list.
+        if (_segs.length && data && typeof data.continued_from_session_id === 'string'
+            && data.continued_from_session_id) {
+          const _seg = _segs.find(s => String(s.sid) === String(_fetchSid));
+          if (_seg) _seg.nextParent = data.continued_from_session_id;
+        }
+        if (_hopSid) {
+          // Stitch the previous session above, with a seam marker between
+          // the two segments.
+          const _childSid = _segs.length ? String(_segs[0].sid) : '';
+          _segs.unshift({
+            sid: _hopSid,
+            nextParent: String((data && data.continued_from_session_id) || ''),
+          });
+          if (Array.isArray(data.events)) {
+            data.events.push({
+              // Negative line: real JSONL lines start at 1, and each seam
+              // needs a unique value so the data-jsonl-line dedup above
+              // never swallows a second boundary.
+              type: 'system', subtype: 'ccc_segment', line: -(1000 + _segs.length), ts: '',
+              parent_sid: _hopSid, child_sid: _childSid,
+              parent_title: _contSegmentTitle(_hopSid),
+              child_title: _contSegmentTitle(_childSid),
+            });
+          }
+        }
         if (_loadingEarlier) {
           const _prepended = _prependConversationEvents(data.events, fetchPaneId);
           const pane = paneByPaneId(fetchPaneId);
-          if (pane) pane.firstLine = data.first_line || pane.firstLine || 0;
-          if (_prepended !== false) convLastLine = Math.max(convLastLine, data.last_line || 0);
+          if (pane) {
+            const emptyEvents = !Array.isArray(data.events) || data.events.length === 0;
+            if (emptyEvents && !_hopSid) {
+              // No renderable events remain in this segment. Pin firstLine
+              // to 1 so the next Load-earlier click (or the same-click hop
+              // in loadEarlier) fetches the continuation parent instead of
+              // walking before=N-1 on empty windows.
+              pane.firstLine = 1;
+            } else {
+              pane.firstLine = data.first_line || pane.firstLine || 0;
+            }
+          }
+          // convLastLine tracks the OPEN conversation's live tail only — an
+          // ancestor file's line count must never inflate it.
+          if (_prepended !== false && _fetchSid === id) convLastLine = Math.max(convLastLine, data.last_line || 0);
         } else if (renderConversationEvents(data.events, fetchPaneId, { initialLoad: _freshOpen, isTruncated: data.truncated_before }) !== false) {
           convLastLine = data.last_line;
         }
-        if (!_loadingEarlier) {
+        // Live after= polls must not clobber the history cursor. Their
+        // first_line is the start of the new tail slice (or absent), which
+        // would rewind Load-earlier back into the already-loaded window.
+        if (!_loadingEarlier && _freshOpen) {
           const pane = paneByPaneId(fetchPaneId);
           if (pane) pane.firstLine = data.first_line || pane.firstLine || 0;
         }
-        if (_freshOpen && !_wantFull && data && data.truncated_before) {
+        // The banner stays available while EITHER the top segment has more
+        // of its own file OR a continuation parent remains to hop to.
+        const _contMore = !!_contNextParentForPane(_pane0, id);
+        if (_freshOpen && !_wantFull && data && (data.truncated_before || _contMore)) {
           _insertLoadEarlierBanner($view, id, fetchPaneId);
-        } else if (_loadingEarlier && data && data.truncated_before) {
+        } else if (_loadingEarlier && data && (data.truncated_before || _contMore)) {
           _insertLoadEarlierBanner($view, id, fetchPaneId);
         }
         restorePendingSendEchoes(id, fetchPaneId);
@@ -49278,6 +49684,26 @@
             + ' · ' + escapeHtml(countText)
             + meta
             + ' <span class="system-compact-help" aria-hidden="true">?</span></span>';
+        } else if (ev.subtype === 'ccc_segment') {
+          // Seam between two CCC continuation segments in the merged view:
+          // messages ABOVE came from the earlier session, messages BELOW are
+          // the session that continued from it. The divider doubles as the
+          // jump target for "end of each session" navigation (wired in
+          // attachConversationEndAffordance's delegated click handler).
+          const _csChild = String(ev.child_title || '').trim();
+          const _csParent = String(ev.parent_title || '').trim();
+          const _csTip = 'Messages above were recorded in the earlier session'
+            + (_csParent ? ' “' + _csParent + '”' : '') + '.'
+            + ' The session below continued from it.'
+            + '\nClick the label to jump to the start of the continued session; “end ⇡” jumps to the end of the earlier one.';
+          div.classList.add('conv-session-boundary');
+          if (ev.child_sid) div.dataset.boundaryChildSid = String(ev.child_sid);
+          if (ev.parent_sid) div.dataset.boundaryParentSid = String(ev.parent_sid);
+          div.innerHTML = '<span class="csb-line" aria-hidden="true"></span>'
+            + '<span class="csb-label" role="button" tabindex="0" title="' + escapeAttr(_csTip) + '">'
+            + '⤴︎ continued' + (_csChild ? ' as &ldquo;' + escapeHtml(_csChild) + '&rdquo;' : '') + '</span>'
+            + '<button type="button" class="csb-jump" title="Jump to the end of the earlier session">end ⇡</button>'
+            + '<span class="csb-line" aria-hidden="true"></span>';
         } else if (ev.subtype === 'hermes_segment') {
           const parent = ev.parent_session_id || '';
           const bits = [];
