@@ -16342,6 +16342,39 @@ body.status-pos-right .conv-pane:has(> .status-rail) > .status-rail {
   font-size: 11px;
   line-height: 1.3;
 }
+/* Per-turn cache-adjusted token columns (last 30 billed turns), newest on
+   the right. Built by _railTurnGraphHtml(); bars are flex children with a
+   percent height, so the strip scales to the visible max with no axis. */
+.status-rail-tokens .rail-turn-graph {
+  display: flex;
+  align-items: flex-end;
+  gap: 2px;
+  height: 40px;
+  margin-top: 8px;
+  padding-bottom: 1px;
+  border-bottom: 1px solid var(--border);
+}
+.status-rail-tokens .rail-turn-bar {
+  flex: 1 1 0;
+  min-width: 3px;
+  max-width: 10px;
+  border-radius: 2px 2px 0 0;
+  background: color-mix(in srgb, var(--accent, #6ea8fe) 55%, var(--surface));
+  transition: height 180ms ease-out;
+}
+.status-rail-tokens .rail-turn-bar:hover {
+  background: var(--accent, #6ea8fe);
+}
+.status-rail-tokens .rail-turn-bar.is-latest {
+  background: var(--accent, #6ea8fe);
+}
+.status-rail-tokens .rail-turn-graph-caption {
+  margin-top: 2px;
+  color: var(--text-muted);
+  font-size: 10px;
+  line-height: 1.3;
+  font-variant-numeric: tabular-nums;
+}
 .status-rail-tokens .rail-tokens-cache {
   margin-top: 2px;
   color: var(--text-muted);

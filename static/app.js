@@ -44492,6 +44492,44 @@
   }
   // RAIL_SESSION_COST_PRESENTATION_END
 
+  // Per-turn column graph under the rail headline: one bar per billed
+  // assistant message, newest on the right, last RAIL_TURN_GRAPH_MAX turns.
+  // Bar height = cache-adjusted tokens via the same _cacheAdjustedTurnTokens
+  // the per-turn chip uses, so a bar equals the "Cached-adjusted tokens this
+  // turn" number on that turn. Scaled to the visible max; caption names it so
+  // the y-axis is readable without an axis.
+  const RAIL_TURN_GRAPH_MAX = 30;
+  function _railTurnGraphHtml(series) {
+    if (!Array.isArray(series) || !series.length) return '';
+    const rows = series.slice(-RAIL_TURN_GRAPH_MAX).map(t => ({
+      ts: t.ts || '',
+      v: _cacheAdjustedTurnTokens(t.tokens_in, t.tokens_out, t.tokens_cached),
+      tin: Number(t.tokens_in) || 0,
+      tcached: Number(t.tokens_cached) || 0,
+      tout: Number(t.tokens_out) || 0,
+    })).filter(r => r.v > 0);
+    if (rows.length < 2) return '';
+    const max = Math.max.apply(null, rows.map(r => r.v));
+    if (!max) return '';
+    let bars = '';
+    rows.forEach((r, i) => {
+      const pct = Math.max(4, Math.round((r.v / max) * 100));
+      let when = '';
+      if (r.ts) {
+        const d = new Date(r.ts);
+        if (!isNaN(d)) when = ' · ' + d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+      }
+      const title = r.v.toLocaleString() + ' cache-adjusted tokens' + when
+        + '\n' + _cacheAdjustedTurnTitle(r.tin, r.tout, r.tcached);
+      bars += '<span class="rail-turn-bar' + (i === rows.length - 1 ? ' is-latest' : '')
+        + '" style="height:' + pct + '%" title="' + escapeAttr(title) + '"></span>';
+    });
+    return '<div class="rail-turn-graph" role="img" aria-label="Cache-adjusted tokens per turn, last '
+      + rows.length + ' turns">' + bars + '</div>'
+      + '<div class="rail-turn-graph-caption">last ' + rows.length + ' turns &middot; max '
+      + _formatTokens(max) + '</div>';
+  }
+
   // Big accumulated-token headline in the status rail head. When the server
   // provides a cache-adjusted total, the headline shows that number instead of
   // raw window size; the raw in / cached / out breakdown still appears below.
@@ -44535,6 +44573,7 @@
       + '<div class="rail-tokens-label">' + headlineLabel
       + (presentation ? ' &middot; ' + costText.label : '')
       + '</div>'
+      + _railTurnGraphHtml(u && u.turn_series)
       + '<div class="rail-tokens-cache">in ' + _formatTokens(inFresh)
       + ' &middot; in cached ' + _formatTokens(inCached)
       + ' &middot; out ' + _formatTokens(outTok)

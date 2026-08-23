@@ -9,6 +9,7 @@ in server.py are reached via `_core` at call time."""
 from __future__ import annotations
 
 from pathlib import Path
+import collections
 import json
 import math
 import os
@@ -19,6 +20,11 @@ import threading
 import time
 
 from ccc_server import core as _core
+
+# How many trailing assistant turns /usage ships for the status-rail
+# per-turn token graph. Older turns are noise in the rail; the full history
+# stays in the transcript.
+USAGE_TURN_SERIES_MAX = 30
 
 # ---------------------------------------------------------------------------
 # Morning launch — spawn-or-resume for a strategy's Claude session.
@@ -2300,6 +2306,11 @@ def extract_session_usage(session_id):
     # Claude Code builds also include `postTokens`; use that as the live value
     # until the next assistant turn writes a normal `usage` block.
     compact_count = 0
+    # Per-turn tail for the status-rail column graph: one entry per billed
+    # assistant message (same message.id dedupe as the totals above), newest
+    # last. Raw counts only — the client applies the same cache-read discount
+    # it uses for the per-turn chip, so a bar equals the chip's number.
+    turn_series = collections.deque(maxlen=USAGE_TURN_SERIES_MAX)
     try:
         with open(jsonl, "r") as f:
             for line in f:
@@ -2386,6 +2397,13 @@ def extract_session_usage(session_id):
                     total_cr += tcr
                 if isinstance(tout, int):
                     total_out += tout
+                if window or tout:
+                    turn_series.append({
+                        "ts": ev.get("timestamp") or "",
+                        "tokens_in": window,
+                        "tokens_cached": tcr if isinstance(tcr, int) else 0,
+                        "tokens_out": tout if isinstance(tout, int) else 0,
+                    })
     except OSError:
         return _with_token_optimizer_quality({**empty, "model": model}, session_id)
 
@@ -2436,6 +2454,7 @@ def extract_session_usage(session_id):
         "live_context_source": "/context" if live_context else "",
         "engine": "claude",
         "override": override,
+        "turn_series": list(turn_series),
         "cost_usd": round(cost_total, 4),
         "cost_breakdown_usd": {
             "input": round(cost_in, 4),
