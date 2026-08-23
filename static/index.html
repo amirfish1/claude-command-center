@@ -949,13 +949,24 @@
            _wireSimpleActionsMenu() in app.js. Technical details reveals the
            status rail's own Metadata tab (session id, branch, model,
            tokens) instead of duplicating that content here. -->
+      <!-- Standalone icon, not buried in the Actions menu — copies the
+           session id without ever displaying it (see copy-reference's old
+           menu-only home; users couldn't find it there). Same delegated
+           handler as the sidebar/list copy icons: data-simple-copy-ref-btn
+           reads the current session from currentSession.id at click time
+           (wired in _wireSimpleActionsMenu()). -->
+      <button type="button" class="mobile-actions-btn" id="convSimpleCopyRefBtn" title="Copy task reference" aria-label="Copy task reference">
+        <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+          <rect x="8" y="2" width="8" height="4" rx="1"></rect>
+          <path d="M8 4H6a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V6a2 2 0 0 0-2-2h-2"></path>
+        </svg>
+      </button>
       <div class="mobile-actions-wrap">
         <button type="button" class="mobile-actions-btn" id="convSimpleActionsBtn" aria-haspopup="menu" aria-expanded="false" aria-label="Actions"><span aria-hidden="true">&#9881;</span></button>
         <div class="mobile-actions-menu" id="convSimpleActionsMenu" role="menu" hidden>
           <button type="button" class="mobile-actions-item" data-simple-action="rename" role="menuitem"><span aria-hidden="true">&#9998;&nbsp;</span>Rename task</button>
           <button type="button" class="mobile-actions-item" data-simple-action="move-to-project" role="menuitem"><span aria-hidden="true">&#128193;&nbsp;</span>Move to project</button>
           <button type="button" class="mobile-actions-item" data-simple-action="change-model" role="menuitem"><span aria-hidden="true">&#129302;&nbsp;</span>Change assistant/model</button>
-          <button type="button" class="mobile-actions-item" data-simple-action="copy-reference" role="menuitem"><span aria-hidden="true">&#128203;&nbsp;</span>Copy task reference</button>
           <button type="button" class="mobile-actions-item" data-simple-action="technical-details" role="menuitem"><span aria-hidden="true">&#8505;&nbsp;</span>Open technical details</button>
         </div>
       </div>

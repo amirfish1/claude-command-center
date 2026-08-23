@@ -11300,19 +11300,6 @@
         const picker = document.querySelector('.conv-pane.is-active [data-model-picker]')
           || document.querySelector('[data-model-picker]');
         if (picker) picker.click();
-      } else if (action === 'copy-reference') {
-        // Simple mode never shows the raw session id inline (see the
-        // convSessionIdMobileWrap hide rule in simple.css) — this is the
-        // grandma-mode-friendly way to still hand a session id to another
-        // session/tool without exposing the id in the UI itself.
-        const sid = (typeof currentSession !== 'undefined' && currentSession) ? currentSession.id : '';
-        if (!sid) {
-          showOpToast('No task reference to copy yet', 'error');
-        } else {
-          copyTextValue(sid).then((ok) => {
-            showOpToast(ok ? 'Copied task reference' : 'Copy failed - try again', ok ? 'ok' : 'error');
-          });
-        }
       } else if (action === 'technical-details') {
         const restore = document.getElementById('statusRailRestoreBtn');
         if (restore && restore.offsetParent !== null) restore.click();
@@ -11320,6 +11307,49 @@
     });
   }
   _wireSimpleActionsMenu();
+
+  // Simple mode never shows the raw session id inline (see the
+  // convSessionIdMobileWrap hide rule in simple.css) — this is the
+  // grandma-mode-friendly way to still hand a session id to another
+  // session/tool without exposing the id in the UI itself. Shared by the
+  // conversation-header icon (#convSimpleCopyRefBtn) and the icon on each
+  // task card in the list (_simpleTaskCardHtml's [data-simple-copy-ref]).
+  function _simpleCopySessionReference(sid) {
+    if (!sid) {
+      showOpToast('No task reference to copy yet', 'error');
+      return;
+    }
+    copyTextValue(sid).then((ok) => {
+      showOpToast(ok ? 'Copied task reference' : 'Copy failed - try again', ok ? 'ok' : 'error');
+    });
+  }
+  (function _wireSimpleCopyRefBtn() {
+    const btn = document.getElementById('convSimpleCopyRefBtn');
+    if (!btn) return;
+    btn.addEventListener('click', () => {
+      const sid = (typeof currentSession !== 'undefined' && currentSession) ? currentSession.id : '';
+      _simpleCopySessionReference(sid);
+    });
+  })();
+  // Capture phase (like handleSidebarSessionIdCopyClick) so the click never
+  // reaches the enclosing task card's own open-conversation handler.
+  document.addEventListener('click', (ev) => {
+    const btn = ev.target.closest('[data-simple-copy-ref]');
+    if (!btn) return;
+    ev.preventDefault();
+    ev.stopPropagation();
+    _simpleCopySessionReference(btn.getAttribute('data-simple-copy-ref') || '');
+  }, true);
+  // _simpleTaskCardHtml's root is a div[role=button] (a real <button> can't
+  // nest the copy-reference <button> — see the comment there), so restore
+  // the Enter/Space activation a native button gives for free.
+  document.addEventListener('keydown', (ev) => {
+    if (ev.key !== 'Enter' && ev.key !== ' ') return;
+    const card = ev.target.closest && ev.target.closest('.simple-task-card[role="button"]');
+    if (!card || ev.target.closest('[data-simple-copy-ref]')) return;
+    ev.preventDefault();
+    card.click();
+  });
 
   // ── Simple Home (Simple-UI redesign, iteration 1) ──
   // The landing surface when Simple mode is on: a plain-language composer
@@ -11882,14 +11912,31 @@
     const badge = working
       ? '<span class="simple-card-badge simple-card-badge-running">Working…</span>'
       : (unseen ? '<span class="simple-card-badge simple-card-badge-unseen">New</span>' : '');
-    return '<button type="button" class="simple-card simple-task-card' + stateClass + '"'
+    // The copy-reference icon is a real <button>, which means the card's
+    // own root element CANNOT be a <button> too — nested interactive
+    // content is invalid HTML and the parser silently auto-closes the
+    // outer <button> the moment it hits the inner one, detaching everything
+    // after it from the card (this broke the icon's rendering entirely on
+    // first attempt). Root is a div[role=button] instead, matching the
+    // existing simple-nya-card pattern; click-to-open is delegated (doesn't
+    // care about tag), and a keydown listener below restores Enter/Space
+    // activation that a real <button> would have given for free.
+    const copyRefBtn = sid
+      ? '<button type="button" class="simple-card-copy-ref-btn" data-simple-copy-ref="' + escapeAttr(sid) + '"'
+        + ' title="Copy task reference" aria-label="Copy task reference">'
+        + '<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">'
+        + '<rect x="8" y="2" width="8" height="4" rx="1"></rect>'
+        + '<path d="M8 4H6a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V6a2 2 0 0 0-2-2h-2"></path>'
+        + '</svg></button>'
+      : '';
+    return '<div role="button" tabindex="0" class="simple-card simple-task-card' + stateClass + '"'
       + ' data-session-id="' + escapeAttr(sid) + '" data-mtime="' + escapeAttr(mtime) + '">'
       + '<span class="simple-card-title-row">' + sessionEngineIconHtml(row, { context: 'pane' })
       + '<span class="simple-card-name">' + escapeHtml(name.length > 90 ? name.slice(0, 90) + '…' : name) + '</span>'
-      + badge + '</span>'
+      + badge + copyRefBtn + '</span>'
       + '<span class="simple-status-line">' + escapeHtml(statusLine) + '</span>'
       + '<span class="simple-memory-line">' + escapeHtml(_simpleMemoryLine(row)) + '</span>'
-      + '</button>';
+      + '</div>';
   }
   function _simpleIsWorkingRow(row) {
     if (!row || row.archived || row.trashed) return false;
