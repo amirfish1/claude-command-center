@@ -1694,7 +1694,7 @@
      the parity Claude turns get from .assistant-message-actions, reused here
      since kimi merges into .kimi-turn and has no visible per-event container. */
   .conv-pane.is-webui-session .kimi-answer-meta {
-    display: flex; align-items: center; gap: 8px;
+    display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
     font-size: 11px; opacity: 0.6;
   }
   .conv-pane.is-webui-session .kimi-answer-meta:hover { opacity: 0.9; }
@@ -1725,6 +1725,13 @@
      own flex container rather than a tool-call. */
   .conv-pane.is-webui-session .kimi-answer-meta .event-token-chips.is-merged {
     margin: 0 0 0 auto; align-self: center; white-space: nowrap;
+  }
+  /* CCC-933: the cache-adjusted chip's text ("Cached-adjusted tokens this
+     turn: 778,583") is long enough to overflow the column when the raw
+     in/cached/out chip already ate most of the row's width — drop it to its
+     own wrapped line instead of running off the right edge. */
+  .conv-pane.is-webui-session .kimi-answer-meta .event-token-chips.cache-adjusted.is-merged {
+    flex-basis: 100%; white-space: normal; word-break: break-word;
   }
   .conv-pane.is-webui-session .kimi-answer-meta .assistant-message-action.speaking { color: var(--accent); }
   .conv-pane.is-webui-session .kimi-answer-meta .assistant-message-action.speaking.paused { color: var(--text-muted); opacity: 0.7; }
