@@ -115,6 +115,14 @@ External reader: `reduceWireRecords()` — pure wire→full-transcript reducer a
 
 ## Daemon REST (kap-server, `/api/v1`) — what ACP cannot do
 
+CCC-934: `:compact` here is an OUT-OF-BAND path for compacting a session with
+no live ACP connection — it is NOT the only way to compact. Within an active
+ACP session, "/compact" is one of the adapter's own BUILTIN slash commands
+(`packages/acp-adapter/src/slash.ts` + `builtin-commands.ts`) — intercepted
+before the model ever sees it, running `session.compact()` directly and
+reporting via `session/update` (`compaction.started/completed/blocked`). CCC
+sends it as plain `session/prompt` text, same as Claude's "/clear" (CCC-935).
+
 Envelope `{ code, msg, data, request_id }`. Sessions CRUD + `:fork/:compact/:undo/
 :archive/:restore`; `GET /sessions/{id}/status` → model, thinking_level,
 permission, plan_mode, **context_tokens/max_context_tokens**; prompts POST +
