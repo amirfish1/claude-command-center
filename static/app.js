@@ -44238,6 +44238,22 @@
     return Math.round(fresh + cached * CACHE_READ_TOKEN_WEIGHT + (Number(tOut) || 0));
   }
 
+  // CCC-936: the formula-only tooltip ("discounted to 10%...") told people
+  // the rule but not how THIS turn's number came from it — a user staring at
+  // "184,350" next to "683.3k in | 565.2k cached | 9.7k out" had to do the
+  // arithmetic themselves to believe it. Plug the turn's actual numbers into
+  // the explanation so the tooltip proves the total instead of asserting it.
+  function _cacheAdjustedTurnTitle(tIn, tOut, tCached) {
+    const total = Number(tIn) || 0;
+    const cached = Math.min(Number(tCached) || 0, total);
+    const fresh = total - cached;
+    const out = Number(tOut) || 0;
+    const cachedWeighted = Math.round(cached * CACHE_READ_TOKEN_WEIGHT);
+    const grand = fresh + cachedWeighted + out;
+    return 'Cache-read input tokens are discounted to ' + (CACHE_READ_TOKEN_WEIGHT * 100) + '% of a fresh input token before summing with output.\n'
+      + fresh.toLocaleString() + ' fresh in + ' + cachedWeighted.toLocaleString() + ' (' + cached.toLocaleString() + ' cached × ' + (CACHE_READ_TOKEN_WEIGHT * 100) + '%) + ' + out.toLocaleString() + ' out = ' + grand.toLocaleString();
+  }
+
   // A running, cross-turn log of cache misses (CCC-750): a chip on screen
   // only shows the one turn, not whether it followed close on the heels of
   // the previous turn (a burst) or after a long gap (an expected cold
@@ -49628,7 +49644,7 @@
               }
               const _kimiCacheAdjusted = _cacheAdjustedTurnTokens(ev.tokens_in, ev.tokens_out, _kimiChipCached);
               metaEl.innerHTML += '<span class="event-token-chips cache-adjusted is-merged" title="'
-                + escapeAttr('Cache-read input tokens are discounted to ' + (CACHE_READ_TOKEN_WEIGHT * 100) + '% of a fresh input token before summing with output.')
+                + escapeAttr(_cacheAdjustedTurnTitle(ev.tokens_in, ev.tokens_out, _kimiChipCached))
                 + '">Cached-adjusted tokens this turn: ' + _kimiCacheAdjusted.toLocaleString() + '</span>';
             }
             kimiBlockEls.push(metaEl);
@@ -49851,7 +49867,7 @@
           if (Number(ev.tokens_in) || Number(ev.tokens_out)) {
             const cacheAdjustedTurn = _cacheAdjustedTurnTokens(ev.tokens_in, ev.tokens_out, chipCached);
             blockParts.push('<div class="event-token-chips cache-adjusted" title="'
-              + escapeAttr('Cache-read input tokens are discounted to ' + (CACHE_READ_TOKEN_WEIGHT * 100) + '% of a fresh input token before summing with output.')
+              + escapeAttr(_cacheAdjustedTurnTitle(ev.tokens_in, ev.tokens_out, chipCached))
               + '">Cached-adjusted tokens this turn: ' + cacheAdjustedTurn.toLocaleString() + '</div>');
           }
           _recordCacheMissLog(renderedConversationId, ev, ev.tokens_in, chipCached);
