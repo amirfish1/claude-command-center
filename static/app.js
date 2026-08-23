@@ -34248,9 +34248,24 @@
   if (window.visualViewport && window.matchMedia('(pointer: coarse)').matches) {
     const vv = window.visualViewport;
     let _vvRaf = 0;
+    // iOS Safari can report a bogus/stale visualViewport.height on the very
+    // first read (e.g. mid-way through the address-bar collapse animation on
+    // cold load) — small enough to make `body { height: var(--app-vh) }`
+    // collapse toward zero. Since `body` also has `overflow: hidden`, that
+    // reads as a blank page: everything in the flex flow gets clipped, while
+    // `position: fixed` chrome (the bottom nav) is unaffected by body's
+    // height and keeps rendering — matching reports of "blank page, but the
+    // bottom icons are visible." Pinch-zooming "fixes" it only because it
+    // forces Safari to fire a fresh visualViewport resize/scroll event that
+    // recomputes a sane value; that shouldn't be the only way to recover.
+    // Guard: never lock in a value implausibly smaller than the layout
+    // viewport, and re-sync on load/pageshow/orientationchange so a bad
+    // initial reading self-heals without user interaction.
     const syncVisualViewport = () => {
       _vvRaf = 0;
-      document.documentElement.style.setProperty('--app-vh', vv.height + 'px');
+      const h = vv.height;
+      if (!h || h < window.innerHeight * 0.5) return;
+      document.documentElement.style.setProperty('--app-vh', h + 'px');
     };
     const queueVisualViewportSync = () => {
       if (_vvRaf) return;
@@ -34258,7 +34273,14 @@
     };
     vv.addEventListener('resize', queueVisualViewportSync);
     vv.addEventListener('scroll', queueVisualViewportSync);
+    window.addEventListener('pageshow', queueVisualViewportSync);
+    window.addEventListener('orientationchange', queueVisualViewportSync);
     syncVisualViewport();
+    // Belt-and-suspenders: a delayed re-sync catches the case where the very
+    // first reading passed the sanity check but was still stale (address bar
+    // still animating) — no visible effect if the first sync was already
+    // correct, since setting the same value again is a no-op paint-wise.
+    setTimeout(queueVisualViewportSync, 400);
   }
 
   const STICKY_HEADER_HEIGHT_KEY = 'ccc-sticky-header-height';
