@@ -29618,6 +29618,22 @@ def _acquire_pending_inputs_watcher_lock(lock_path):
         return None
 
 
+def _is_unattended_auto_continue(text):
+    """True for the exact auto-resume poke, not a real user follow-up."""
+    return str(text or "").strip().lower() == "continue"
+
+
+def _drop_unattended_auto_continues(queue):
+    """Remove lone ``continue`` items from a pending-input list in place."""
+    if not isinstance(queue, list):
+        return False
+    kept = [item for item in queue if not _is_unattended_auto_continue(item)]
+    if kept == list(queue):
+        return False
+    queue[:] = kept
+    return True
+
+
 def _load_pending_inputs():
     """Load pending queues from PENDING_INPUTS_FILE into memory."""
     global _pending_resume_queue, _pending_terminal_input_queue
@@ -29628,16 +29644,33 @@ def _load_pending_inputs():
         return
     if not isinstance(data, dict):
         return
+    stripped = False
     with _pending_resume_lock:
         rq = data.get("resume_queue")
         if isinstance(rq, dict):
             _pending_resume_queue.update({k: list(v) for k, v in rq.items() if isinstance(v, list)})
+        empty = []
+        for sid, queue in list(_pending_resume_queue.items()):
+            if _drop_unattended_auto_continues(queue):
+                stripped = True
+            if not queue:
+                empty.append(sid)
+        for sid in empty:
+            _pending_resume_queue.pop(sid, None)
     with _pending_terminal_input_lock:
         tq = data.get("terminal_queue")
         if isinstance(tq, dict):
             _pending_terminal_input_queue.update({k: list(v) for k, v in tq.items() if isinstance(v, list)})
-
-
+        empty = []
+        for sid, queue in list(_pending_terminal_input_queue.items()):
+            if _drop_unattended_auto_continues(queue):
+                stripped = True
+            if not queue:
+                empty.append(sid)
+        for sid in empty:
+            _pending_terminal_input_queue.pop(sid, None)
+    if stripped:
+        _save_pending_inputs()
 def _save_pending_inputs():
     """Save pending queues from memory to PENDING_INPUTS_FILE."""
     with _pending_inputs_lock:
@@ -30285,16 +30318,13 @@ def _pump_codex_resume_queue(session_id):
             return {"ok": True, "empty": True}
 
         result = resume_session_codex(session_id, text, _from_queue=True)
-        delivery_unconfirmed = bool(
-            result
-            and result.get("accepted")
-            and result.get("confirmed") is not True
-        )
+        # An accepted turn already started. Holding the same text because
+        # app-server events were not observed re-sends it after the turn
+        # ends. Treat accepted as delivered; retry only when not accepted.
         if (
             not result
             or not result.get("ok")
             or result.get("queued")
-            or delivery_unconfirmed
         ):
             _mark_pending_resume_retry(session_id)
             return {"ok": False, "delivered": False, "result": result}
@@ -42730,6 +42760,708 @@ def _persist_codex_parent_link(thread_id, parent_session_id):
             _codex_parent_links_cache["data"] = existing
         except OSError:
             pass
+
+
+# ---------------------------------------------------------------------------
+# Usage-limit auto-resume (CCC-863)
+#
+# When a claude/codex/kimi session stops because it hit a usage/rate-limit
+# wall, detect it, compute the reset time, show a countdown, and send the
+# literal message "continue" the moment the limit clears -- fully
+# unattended, no confirmation dialog (explicit product decision; no manual
+# fallback button by design).
+#
+# Shared "does this look like an exhaustion stop" regex -- kept byte-for-byte
+# in sync with _resultOutcomeInfo()'s `exhausted` pattern in static/app.js
+# (~line 45665) so client and server never disagree about what counts.
+# ---------------------------------------------------------------------------
+_USAGE_LIMIT_EXHAUSTED_RE = re.compile(
+    r"(rate.?limit|usage.?limit|quota|exhaust|insufficient.?quota|"
+    r"resource_exhausted|no tokens?\b|out of (tokens|credit)|credit balance|"
+    r"reached your[^.]*limit|429|too many requests|subscription)",
+    re.IGNORECASE,
+)
+_ROLLOUT_SID_RE = re.compile(
+    r"([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12})$"
+)
+
+_usage_limit_resume_lock = threading.Lock()
+_usage_limit_resume_cache = {"data": None}
+
+
+def _load_usage_limit_resumes():
+    """Return {session_id: entry} from the durable resume-tracking file.
+
+    In-memory cache; refreshed lazily on every write (own or a sibling
+    process's, via the file). Tolerant of a missing/malformed file (both
+    yield {})."""
+    with _usage_limit_resume_lock:
+        cached = _usage_limit_resume_cache["data"]
+        if cached is not None:
+            return cached
+    try:
+        data = (
+            json.loads(USAGE_LIMIT_RESUME_FILE.read_text())
+            if USAGE_LIMIT_RESUME_FILE.exists() else {}
+        )
+    except (OSError, json.JSONDecodeError):
+        data = {}
+    if not isinstance(data, dict):
+        data = {}
+    with _usage_limit_resume_lock:
+        _usage_limit_resume_cache["data"] = data
+    return data
+
+
+def _usage_limit_resume_lock_path():
+    return USAGE_LIMIT_RESUME_FILE.with_suffix(".lock")
+
+
+def _usage_limit_resume_rewrite(mutate):
+    """Read-modify-write the durable store under an flock (cross-process
+    safe -- both the dashboard and worker process run the watcher). `mutate`
+    takes the current dict and returns (new_dict, retval)."""
+    lock_path = _usage_limit_resume_lock_path()
+    lock_path.parent.mkdir(parents=True, exist_ok=True)
+    with open(lock_path, "a+") as lock_fh:
+        fcntl.flock(lock_fh.fileno(), fcntl.LOCK_EX)
+        try:
+            try:
+                existing = (
+                    json.loads(USAGE_LIMIT_RESUME_FILE.read_text())
+                    if USAGE_LIMIT_RESUME_FILE.exists() else {}
+                )
+            except (OSError, json.JSONDecodeError):
+                existing = {}
+            if not isinstance(existing, dict):
+                existing = {}
+            new_data, retval = mutate(existing)
+            tmp = USAGE_LIMIT_RESUME_FILE.with_suffix(".tmp")
+            tmp.write_text(json.dumps(new_data, indent=2))
+            os.replace(tmp, USAGE_LIMIT_RESUME_FILE)
+            with _usage_limit_resume_lock:
+                _usage_limit_resume_cache["data"] = new_data
+            return retval
+        finally:
+            fcntl.flock(lock_fh.fileno(), fcntl.LOCK_UN)
+
+
+def _save_usage_limit_resume_entry(session_id, entry):
+    """Merge `entry` into the durable store under `session_id`."""
+    if not session_id:
+        return
+
+    def _mutate(existing):
+        existing[str(session_id)] = entry
+        return existing, None
+
+    _usage_limit_resume_rewrite(_mutate)
+
+
+def _mark_usage_limit_resume_fired(session_id):
+    """Atomically flip an entry's `fired` flag True. Returns True only for
+    the caller that actually made the transition -- the guard that prevents
+    two watcher threads (or two processes) from double-sending "continue"
+    for the same detected stop."""
+    if not session_id:
+        return False
+
+    def _mutate(existing):
+        entry = existing.get(str(session_id))
+        if not entry or entry.get("fired"):
+            return existing, False
+        entry["fired"] = True
+        entry["fired_at"] = time.time()
+        existing[str(session_id)] = entry
+        return existing, True
+
+    return _usage_limit_resume_rewrite(_mutate)
+
+
+def _clear_usage_limit_resume(session_id):
+    """Drop a tracked entry (fired-and-done, or superseded by fresh
+    activity showing the session already moved on without our help)."""
+    if not session_id:
+        return
+
+    def _mutate(existing):
+        existing.pop(str(session_id), None)
+        return existing, None
+
+    _usage_limit_resume_rewrite(_mutate)
+
+
+def usage_limit_resume_at_for_session(session_id):
+    """Cheap in-memory lookup for the row-serialization path: the epoch a
+    stopped session will auto-resume at, or None if it isn't tracked, is
+    already fired, or the time has passed (stale defensive cutoff so a
+    countdown never sits frozen forever if the watcher missed a beat).
+
+    Row session_id for kimi always carries CCC's own "session_" display
+    prefix (e.g. "session_1a72..."), but the durable store's kimi entries
+    are keyed by the bare id (matching the kimi cache filename convention
+    stripped in _usage_limit_kimi_candidates / rebuilt in
+    _usage_limit_session_path) -- strip it here so the two agree. Codex/
+    claude ids never carry this prefix, so this is a no-op for them."""
+    sid = str(session_id or "")
+    if sid.startswith("session_"):
+        sid = sid[len("session_"):]
+    entry = _load_usage_limit_resumes().get(sid)
+    if not entry or entry.get("fired"):
+        return None
+    resume_at = entry.get("resume_at")
+    if not isinstance(resume_at, (int, float)):
+        return None
+    if time.time() - resume_at > 3600:
+        return None
+    return resume_at
+
+
+def _attach_usage_limit_resume_fields(rows):
+    """Mutate `rows` in place, adding usage_limit_resume_at to any row whose
+    session is tracked as parked on a usage-limit auto-resume. Cheap: one
+    in-memory dict lookup per row, no file I/O (see
+    usage_limit_resume_at_for_session)."""
+    if not rows:
+        return
+    tracked = _load_usage_limit_resumes()
+    if not tracked:
+        return
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        sid = row.get("session_id") or row.get("id")
+        if not sid:
+            continue
+        resume_at = usage_limit_resume_at_for_session(sid)
+        if resume_at:
+            row["usage_limit_resume_at"] = resume_at
+
+
+def _tail_read_lines(path, max_bytes=32768):
+    """Read the last `max_bytes` of `path` and return complete lines (the
+    first partial line, if any, is dropped)."""
+    try:
+        with open(path, "rb") as f:
+            f.seek(0, os.SEEK_END)
+            size = f.tell()
+            f.seek(max(0, size - max_bytes))
+            raw = f.read()
+    except OSError:
+        return []
+    text = raw.decode("utf-8", "replace")
+    lines = text.split("\n")
+    if len(lines) > 1 and size > max_bytes:
+        lines = lines[1:]  # drop the (likely truncated) first partial line
+    return [ln for ln in (l.strip() for l in lines) if ln]
+
+
+# ---------------------------------------------------------------------------
+# Usage-limit detection still arms a countdown banner. Unattended auto-send
+# is disabled: the scan pass must not inject "continue" or spawn a
+# continuation session. Manual Continue / Continue-in-a-new-session (F2)
+# is unchanged. Helpers below stay so the banner can show origin
+# model/effort/cwd if the user resumes by hand.
+# ---------------------------------------------------------------------------
+_USAGE_LIMIT_CONTEXT_THRESHOLD = 120_000
+
+_USAGE_LIMIT_ENGINE_LOCATE = {
+    "claude": (
+        "Claude",
+        "Its transcript is a JSONL under ~/.claude/projects/. Locate it with:",
+        lambda sid: f"  ls ~/.claude/projects/*/{sid}.jsonl",
+    ),
+    "codex": (
+        "Codex",
+        "Its transcript is a rollout JSONL under ~/.codex/sessions/. Locate it with:",
+        lambda sid: f'  find ~/.codex/sessions -name "*{sid}.jsonl"',
+    ),
+    "kimi": (
+        "Kimi",
+        "Its transcript path is recorded in ~/.kimi-code/session_index.jsonl. Locate it with:",
+        lambda sid: f"  grep {sid} ~/.kimi-code/session_index.jsonl",
+    ),
+}
+
+
+def _usage_limit_row_for_session(sid, engine=None):
+    """One-shot conversation-row lookup by session id, from the same cached
+    archive rows every other view reads (no fresh scan). Rare call -- once
+    per newly-detected exhaustion stop, not a hot path. Kimi rows carry
+    CCC's own "session_" display prefix on session_id (see CCC-861's
+    lookup-side normalization fix); codex/claude ids never do -- try both
+    so this works regardless of engine."""
+    try:
+        rows, _ = _archive_all_rows_cached({})
+    except Exception:
+        return None
+    sid = str(sid or "")
+    candidates = {sid, "session_" + sid}
+    for r in rows or []:
+        if not isinstance(r, dict):
+            continue
+        rid = str(r.get("session_id") or r.get("id") or "")
+        if rid in candidates:
+            return r
+    return None
+
+
+def _usage_limit_context_tokens(engine, path, row):
+    """Best-available "current context size" estimate. Claude/codex rows
+    already carry a live per-turn figure (live_context_tokens /
+    latest_input_tokens -- the same fields the composer's own large-context
+    gate reads, static/app.js ~2767 _contextFieldsFromRow). Kimi never
+    populates those (its tail meta only tracks turn-shape, not tokens) --
+    fall back to the last assistant event's own token_usage on the same
+    normalized cache file already tailed for detection, which is exactly
+    what feeds each message's token chip (_apply_kimi_turn_usage)."""
+    if engine == "kimi":
+        for line in reversed(_tail_read_lines(path)):
+            try:
+                ev = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            if ev.get("type") != "assistant":
+                continue
+            usage = ev.get("token_usage")
+            if isinstance(usage, dict):
+                return (
+                    int(usage.get("input_tokens") or 0)
+                    + int(usage.get("cache_read_input_tokens") or 0)
+                    + int(usage.get("cache_creation_input_tokens") or 0)
+                )
+            tin = ev.get("tokens_in")
+            if isinstance(tin, (int, float)):
+                return int(tin)
+        return int((row or {}).get("lifetime_tokens") or 0)
+    return max(
+        int((row or {}).get("live_context_tokens") or 0),
+        int((row or {}).get("latest_input_tokens") or 0),
+    )
+
+
+def _usage_limit_attach_continuation_fields(found, session_id, path):
+    """Called once at detection time by each _detect_*_usage_limit_stop, so
+    the fire-time decision (in-place "continue" vs spawn a new session) and
+    the new session's own model/effort/cwd never need a second, possibly
+    stale, row lookup hours later when resume_at finally arrives."""
+    engine = found.get("engine")
+    row = _usage_limit_row_for_session(session_id, engine=engine) or {}
+    found["context_tokens"] = _usage_limit_context_tokens(engine, path, row)
+    found["model"] = row.get("model") or None
+    found["effort"] = row.get("reasoning_effort") or None
+    found["cwd"] = row.get("session_cwd") or row.get("folder_path") or None
+    found["display_name"] = row.get("display_name") or row.get("ai_title") or None
+    return found
+
+
+def _usage_limit_retrieval_prompt(engine, sid, context_tokens):
+    """Python port of f2RetrievalPrompt's large-context branch (static/
+    app.js ~3058) -- must run unattended with no browser, so this can't
+    call the client's own function. Only that one branch is needed: this
+    is only ever called once context_tokens has already cleared
+    _USAGE_LIMIT_CONTEXT_THRESHOLD, so worthSelectiveRetrieval is always
+    true here. Kept in sync with the JS version by hand."""
+    label, note, cmd_fn = _USAGE_LIMIT_ENGINE_LOCATE.get(
+        engine, _USAGE_LIMIT_ENGINE_LOCATE["claude"]
+    )
+    tokens_label = f"{context_tokens / 1000:.0f}k" if context_tokens >= 1000 else str(context_tokens)
+    lines = [
+        f"You are continuing a task from an earlier {label} session, which ran long.",
+        "",
+        f"Origin session id: {sid}",
+        note,
+        cmd_fn(sid),
+        "",
+        "Task: Continue the work from where it left off. This session was",
+        "auto-resumed after hitting a usage-limit wall; there is no new",
+        "instruction beyond continuing.",
+        "",
+        "Retrieve context SELECTIVELY. Never open or Read the whole transcript",
+        f"(it is ~{tokens_label} tokens). Pull only the slice you need:",
+        '  - Total Recall:  total-recall recall --query "<terms>" --limit 10',
+        "  - grep/rg the transcript for specific strings",
+        "  - tail the transcript for the most recent turns",
+        "",
+        "Load the minimum slice that answers the task, then proceed.",
+    ]
+    return "\n".join(lines)
+
+
+def _usage_limit_spawn_continuation(entry, sid):
+    """Server-side equivalent of the manual "Continue in a new session"
+    button's spawn (f2RunContinue, static/app.js ~3175) for the unattended
+    auto-resume path. Same model/effort as the origin session (captured at
+    detection time by _usage_limit_attach_continuation_fields), same cwd,
+    parent_session_id set for continuation lineage."""
+    engine = entry.get("engine")
+    prompt = _usage_limit_retrieval_prompt(engine, sid, entry.get("context_tokens") or 0)
+    cwd = entry.get("cwd")
+    name = "Continue " + str(entry.get("display_name") or sid)[:60]
+    model = entry.get("model") or None
+    effort = entry.get("effort") or None
+    kwargs = dict(name=name, cwd=cwd, repo_path=cwd, parent_session_id=sid, model=model)
+    if engine == "kimi":
+        return spawn_session_kimi(prompt, effort=effort, **kwargs)
+    if engine == "codex":
+        return spawn_session_codex(prompt, reasoning_effort=effort or "", **kwargs)
+    if engine == "claude":
+        return spawn_session(prompt, reasoning_effort=effort or "", **kwargs)
+    return None
+
+
+def _detect_kimi_usage_limit_stop(session_id, path):
+    """Tail `path` (CCC's normalized kimi cache, session_<id>.jsonl) for the
+    most recent exhaustion stop. Real fixture confirmed on this machine:
+    session_15de1a69-ee07-4a22-ba60-63561a5d544f.jsonl line 271. Kimi's own
+    error text carries no parseable reset time ("refreshed in the next
+    cycle") -- but CCC already tracks the real one, zero-config, via the
+    same usages-API mechanism that powers the Throughput page's Kimi
+    provider (_read_kimi_usage(), ccc_server/recall_usage.py): it reads the
+    access token kimi-code CLI already manages at
+    ~/.kimi-code/credentials/kimi-code.json (no separate setup), fetches
+    https://api.kimi.com/coding/v1/usages, and falls back to the last
+    persisted usage-snapshots.jsonl entry on failure. `session` in its
+    return shape IS the 5h (300-minute) window with a precise `resets_at`.
+    Prefer that; only fall back to stop_ts+5h if the fetch/cache fails or
+    returns a resets_at that isn't even after the stop (a stale snapshot
+    from a PRIOR exhaustion cycle, not this one)."""
+    for line in reversed(_tail_read_lines(path)):
+        try:
+            ev = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if ev.get("type") != "result":
+            continue
+        if ev.get("subtype") != "error":
+            return None  # most recent result was a clean stop; not exhausted
+        err = str(ev.get("error") or "")
+        if not _USAGE_LIMIT_EXHAUSTED_RE.search(err):
+            return None
+        dt = _stats_parse_ts(ev.get("ts"))
+        if dt is None:
+            return None
+        detected_at = dt.timestamp()
+        resume_at = detected_at + 5 * 3600
+        estimated = True
+        try:
+            session_window = (_read_kimi_usage() or {}).get("session") or {}
+            resume_dt = _stats_parse_ts(session_window.get("resets_at"))
+            if resume_dt is not None and resume_dt.timestamp() > detected_at:
+                resume_at = resume_dt.timestamp()
+                estimated = False
+        except Exception:
+            pass
+        return _usage_limit_attach_continuation_fields({
+            "engine": "kimi",
+            "detected_at": detected_at,
+            "resume_at": resume_at,
+            "resume_at_estimated": estimated,
+            "source_text_snippet": err[:200],
+        }, session_id, path)
+    return None
+
+
+def _detect_codex_usage_limit_stop(session_id, path):
+    """Tail a Codex rollout.jsonl for the `task_complete` shape Codex emits
+    on usage-limit exhaustion:
+      {"type":"event_msg","payload":{"type":"task_complete",
+       "last_agent_message":null,
+       "error":{"message":"...","codex_error_info":"usage_limit_exceeded"}}}
+    Confirmed against real fixtures on this machine (CCC-863 research; see
+    rollout-2026-08-06T17-13-36-*.jsonl). resume_at prefers the nearest
+    preceding `rate_limits.primary.resets_at` (primary = the ~5h short
+    window, window_minutes==300; secondary = weekly, window_minutes==10080
+    -- confirmed from a real populated example). That field is already a
+    Unix epoch. When both primary/secondary are null (seen for a
+    credits-exhausted account on this machine, no window to read), fall
+    back to detected_at + 5h, flagged estimated."""
+    lines = _tail_read_lines(path)
+    last_rate_limits = None
+    for line in lines:
+        try:
+            ev = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        payload = ev.get("payload") if isinstance(ev.get("payload"), dict) else {}
+        ptype = payload.get("type")
+        if ptype == "token_count":
+            rl = payload.get("rate_limits")
+            if isinstance(rl, dict):
+                last_rate_limits = rl
+            continue
+        if ptype != "task_complete":
+            continue
+        if payload.get("last_agent_message") is not None:
+            last_rate_limits = None
+            continue  # a completed turn with real output supersedes any stop
+        err = payload.get("error")
+        if not isinstance(err, dict):
+            last_rate_limits = None
+            continue
+        info = str(err.get("codex_error_info") or "")
+        msg = str(err.get("message") or "")
+        if info != "usage_limit_exceeded" and not _USAGE_LIMIT_EXHAUSTED_RE.search(msg):
+            last_rate_limits = None
+            continue
+        dt = _stats_parse_ts(ev.get("timestamp"))
+        detected_at = dt.timestamp() if dt is not None else time.time()
+        resume_at = None
+        estimated = True
+        primary = (last_rate_limits or {}).get("primary") or {}
+        secondary = (last_rate_limits or {}).get("secondary") or {}
+        if isinstance(primary.get("resets_at"), (int, float)):
+            resume_at = float(primary["resets_at"])
+            estimated = False
+        elif isinstance(secondary.get("resets_at"), (int, float)):
+            resume_at = float(secondary["resets_at"])
+            estimated = False
+        if resume_at is None:
+            resume_at = detected_at + 5 * 3600
+        return _usage_limit_attach_continuation_fields({
+            "engine": "codex",
+            "detected_at": detected_at,
+            "resume_at": resume_at,
+            "resume_at_estimated": estimated,
+            "source_text_snippet": (msg or info)[:200],
+        }, session_id, path)
+    return None
+
+
+def _detect_claude_usage_limit_stop(session_id, path):
+    """Tail a Claude Code transcript for a rate/usage-limit stop.
+
+    No local example of a terminal stop event existed on this machine when
+    this was written -- only transient, auto-retried 429/529 `api_error`
+    system events were found, and Claude Code retries those internally, so
+    they are deliberately NOT matched here (matching them would fire on a
+    session that recovers on its own). This also checks for the literal
+    marker string other tools use ("Claude AI usage limit reached", per
+    ccusage's own parser). Claude's limit is account-wide, so resume_at
+    comes from the shared `_live_weekly_usage()` session_resets_at, not
+    anything in this file -- every blocked Claude session resolves to the
+    same account-level reset time."""
+    for line in reversed(_tail_read_lines(path)):
+        try:
+            ev = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        etype = ev.get("type")
+        if etype == "result":
+            if not ev.get("is_error"):
+                return None  # most recent result was a clean stop
+            blob = str(ev.get("result") or ev.get("error") or "")
+        else:
+            continue  # system/api_error (incl. transient 429/529) intentionally skipped
+        if "usage limit reached" not in blob.lower() and not _USAGE_LIMIT_EXHAUSTED_RE.search(blob):
+            return None
+        dt = _stats_parse_ts(ev.get("ts") or ev.get("timestamp"))
+        detected_at = dt.timestamp() if dt is not None else time.time()
+        live = _live_weekly_usage() or {}
+        resets_at_raw = live.get("session_resets_at")
+        resume_dt = _stats_parse_ts(resets_at_raw) if isinstance(resets_at_raw, str) else None
+        if resume_dt is not None:
+            resume_at = resume_dt.timestamp()
+            estimated = False
+        elif isinstance(resets_at_raw, (int, float)):
+            resume_at = float(resets_at_raw)
+            estimated = False
+        else:
+            resume_at = detected_at + 5 * 3600
+            estimated = True
+        return _usage_limit_attach_continuation_fields({
+            "engine": "claude",
+            "detected_at": detected_at,
+            "resume_at": resume_at,
+            "resume_at_estimated": estimated,
+            "source_text_snippet": blob[:200],
+        }, session_id, path)
+    return None
+
+
+# A stopped session's mtime freezes the moment it stops -- a short window
+# only catches a stop while the watcher happens to already be polling right
+# then. Anything already stuck (or the watcher restarting after the fact)
+# ages out of a short window and is never discovered. 24h is still bounded
+# (each candidate is a cheap 32KB tail read, not a full parse; observed on
+# this machine: ~160 kimi cache files total, ~20 codex rollouts/day, ~769
+# claude transcripts/day) and covers "stuck since earlier today", which is
+# the actual failure mode reported (CCC-863 follow-up).
+_USAGE_LIMIT_CANDIDATE_WINDOW_SECS = 24 * 3600
+
+
+def _usage_limit_kimi_candidates(now):
+    kimi_dir = COMMAND_CENTER_STATE_DIR / "acp" / "kimi"
+    out = []
+    try:
+        for p in kimi_dir.glob("*.jsonl"):
+            try:
+                if now - p.stat().st_mtime <= _USAGE_LIMIT_CANDIDATE_WINDOW_SECS:
+                    sid = p.stem[len("session_"):] if p.stem.startswith("session_") else p.stem
+                    out.append((sid, p))
+            except OSError:
+                continue
+    except OSError:
+        pass
+    return out
+
+
+def _usage_limit_codex_candidates(now):
+    # Rollout files are organized YYYY/MM/DD -- only today's (and, near
+    # midnight, yesterday's) directory can hold anything inside the
+    # candidacy window, so this never scans the full multi-thousand-file
+    # corpus under CODEX_SESSIONS_ROOT.
+    out = []
+    for days_back in (0, 1):
+        day = datetime.fromtimestamp(now - days_back * 86400)
+        day_dir = CODEX_SESSIONS_ROOT / f"{day.year:04d}" / f"{day.month:02d}" / f"{day.day:02d}"
+        try:
+            for p in day_dir.glob("rollout-*.jsonl"):
+                try:
+                    if now - p.stat().st_mtime <= _USAGE_LIMIT_CANDIDATE_WINDOW_SECS:
+                        m = _ROLLOUT_SID_RE.search(p.stem)
+                        sid = m.group(1) if m else p.stem
+                        out.append((sid, p))
+                except OSError:
+                    continue
+        except OSError:
+            continue
+    return out
+
+
+def _usage_limit_claude_candidates(now):
+    out = []
+    try:
+        for p in Path.home().joinpath(".claude", "projects").glob("*/*.jsonl"):
+            try:
+                if now - p.stat().st_mtime <= _USAGE_LIMIT_CANDIDATE_WINDOW_SECS:
+                    out.append((p.stem, p))
+            except OSError:
+                continue
+    except OSError:
+        pass
+    return out
+
+
+def _usage_limit_session_path(engine, sid):
+    """Locate the same transcript file the detector for `engine` reads, for
+    the post-detection freshness re-check in _usage_limit_scan_once."""
+    if engine == "kimi":
+        return COMMAND_CENTER_STATE_DIR / "acp" / "kimi" / f"session_{sid}.jsonl"
+    if engine == "codex":
+        for days_back in range(0, 3):
+            day = datetime.fromtimestamp(time.time() - days_back * 86400)
+            day_dir = CODEX_SESSIONS_ROOT / f"{day.year:04d}" / f"{day.month:02d}" / f"{day.day:02d}"
+            try:
+                for p in day_dir.glob(f"rollout-*{sid}.jsonl"):
+                    return p
+            except OSError:
+                continue
+        return None
+    if engine == "claude":
+        try:
+            for p in Path.home().joinpath(".claude", "projects").glob(f"*/{sid}.jsonl"):
+                return p
+        except OSError:
+            return None
+    return None
+
+
+def _usage_limit_scan_once(now=None):
+    """One pass: discover fresh exhaustion stops among plausible candidates
+    (recently-touched session files only, see _USAGE_LIMIT_CANDIDATE_WINDOW_SECS
+    -- never an O(all sessions) scan), persist any newly-detected stop, then
+    fire "continue" for any tracked entry whose resume_at has passed and
+    which has shown no new activity since we detected the stop."""
+    now = now if now is not None else time.time()
+    detectors = (
+        ("kimi", _usage_limit_kimi_candidates, _detect_kimi_usage_limit_stop),
+        ("codex", _usage_limit_codex_candidates, _detect_codex_usage_limit_stop),
+        ("claude", _usage_limit_claude_candidates, _detect_claude_usage_limit_stop),
+    )
+    tracked = _load_usage_limit_resumes()
+    for engine, candidates_fn, detect_fn in detectors:
+        try:
+            candidates = candidates_fn(now)
+        except Exception:
+            continue
+        for sid, path in candidates:
+            if not sid:
+                continue
+            existing = tracked.get(sid)
+            if existing and not existing.get("fired"):
+                continue  # already tracking an unresolved stop for this session
+            try:
+                found = detect_fn(sid, path)
+            except Exception:
+                continue
+            if not found:
+                continue
+            if existing and existing.get("detected_at") == found["detected_at"]:
+                continue  # same stop already recorded (incl. already fired)
+            _save_usage_limit_resume_entry(sid, found)
+
+    tracked = _load_usage_limit_resumes()
+    for sid, entry in list(tracked.items()):
+        if entry.get("fired"):
+            continue
+        resume_at = entry.get("resume_at")
+        if not isinstance(resume_at, (int, float)) or now < resume_at:
+            continue
+        # Re-check the session hasn't already resumed on its own (new
+        # activity after the stop we detected) before firing.
+        try:
+            path = _usage_limit_session_path(entry.get("engine"), sid)
+            newest_mtime = path.stat().st_mtime if path else 0
+        except OSError:
+            newest_mtime = 0
+        if newest_mtime and newest_mtime > entry.get("detected_at", 0) + 5:
+            _clear_usage_limit_resume(sid)
+            continue
+        if not _mark_usage_limit_resume_fired(sid):
+            continue  # a sibling thread/process won the race
+        # Auto-send is killed. Detection and the countdown banner remain so
+        # a parked session is visible, but this pass must not inject
+        # "continue" or spawn a continuation — that unattended poke, plus
+        # Codex re-queueing an accepted-but-unconfirmed turn, burned a
+        # weekly quota overnight. Marking fired (above) makes the stop
+        # inert across a CCC restart.
+        try:
+            _log_activity(
+                "usage-limit-resume", "AUTO-RESUME-DISABLED",
+                f"session={sid} engine={entry.get('engine')} "
+                f"resume_at={resume_at}",
+            )
+        except Exception:
+            pass
+
+
+_USAGE_LIMIT_WATCHER_LOCK = threading.Lock()
+_USAGE_LIMIT_WATCHER_STARTED = False
+
+
+def _start_usage_limit_watcher():
+    """daemon=True background poller modeled on
+    _start_headless_staleness_watcher(): idempotent per-process start,
+    polls every 45s. Cross-process double-fire is guarded by the atomic
+    flock in _mark_usage_limit_resume_fired, not by this in-process flag --
+    both the dashboard and worker process running their own copy of this
+    loop is safe, just mildly redundant."""
+    global _USAGE_LIMIT_WATCHER_STARTED
+    with _USAGE_LIMIT_WATCHER_LOCK:
+        if _USAGE_LIMIT_WATCHER_STARTED:
+            return
+        _USAGE_LIMIT_WATCHER_STARTED = True
+
+    def _watcher():
+        while True:
+            time.sleep(45)
+            try:
+                _usage_limit_scan_once()
+            except Exception:
+                continue
+
+    threading.Thread(target=_watcher, daemon=True, name="usage-limit-resume-watcher").start()
 
 
 @_ttl_memo(3.0)
