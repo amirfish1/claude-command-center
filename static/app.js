@@ -12499,6 +12499,7 @@
     _compactRunMount();
     _compactRunPaint();
     _compactRunPollAfter(run);
+    _compactRefreshContextPill(run.sid);
   }
 
   // Reads /api/session/<id>/usage DIRECTLY rather than going through
@@ -12537,6 +12538,20 @@
     });
   }
 
+  // The context pill is the number the user compacted FOR — leaving it at the
+  // pre-compact figure puts two contradictory sizes on screen at once. Force
+  // it past the composer-focus deferral (the composer always has focus right
+  // after Enter) and retry, since the usage rollup lands in the JSONL a little
+  // after the boundary does.
+  function _compactRefreshContextPill(sid) {
+    if (!sid || typeof fetchSessionUsage !== 'function') return;
+    [400, 2000, 6000, 15000, 40000].forEach((delay) => {
+      setTimeout(() => {
+        if (!currentSession || currentSession.id !== sid) return;
+        try { fetchSessionUsage(sid, undefined, true); } catch (_) {}
+      }, delay);
+    });
+  }
   // This run's summary may be (re)built by any render pass, including ones
   // that happen after the run already reached `done`. Claim the newest
   // unclaimed summary row here rather than only at row-build time — a missed
@@ -44839,8 +44854,8 @@
     }
   }
 
-  async function fetchSessionUsage(sid, paneId) {
-    if (sid && _isComposerFocused()) {
+  async function fetchSessionUsage(sid, paneId, force) {
+    if (sid && !force && _isComposerFocused()) {
       _deferredUsageSid = sid;
       _deferredUsagePaneId = paneId || '';
       return;
@@ -44849,7 +44864,7 @@
     const currentSid = _usageSessionIdByPane[pid] || null;
     const inFlight = _usageRequestByPane[pid] || null;
     const lastFetch = _usageLastFetchByPane[pid] || null;
-    const recentlyFetchedSid = lastFetch && (Date.now() - lastFetch.at < SESSION_USAGE_REFRESH_MIN_MS)
+    const recentlyFetchedSid = (!force && lastFetch && (Date.now() - lastFetch.at < SESSION_USAGE_REFRESH_MIN_MS))
       ? lastFetch.sid : '';
     const paneVisible = sid ? _sessionUsagePaneIsVisible(pid, sid) : false;
     const decision = sessionUsageRefreshDecision(
