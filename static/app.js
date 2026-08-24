@@ -6158,7 +6158,7 @@
     // A live /compact owns the progress surface. Letting the generic
     // "Sending…/🧠 Thinking…" pill through here is what made compaction
     // indistinguishable from an ordinary turn.
-    if (typeof _compactRunActive === 'function' && _compactRunActive()) return;
+    if (typeof _compactRunActive === 'function' && _compactRunActive() && _compactRunIsForeground()) return;
     let el = $view.querySelector('.conv-live-tool-inline.optimistic');
     const fresh = !el;
     if (!el) {
@@ -12204,6 +12204,13 @@
   function _compactRunActive() {
     return !!(_compactRun && (_compactRun.stage === 'requested' || _compactRun.stage === 'working'));
   }
+  // The card is scoped to ONE conversation view. Anything that suppresses or
+  // mounts UI must check the run belongs to the session on screen — otherwise
+  // a compact left running on session A silences session B's Thinking pill and
+  // drops A's card into B's transcript.
+  function _compactRunIsForeground() {
+    return !!(_compactRun && currentSession && _compactRun.sid === currentSession.id);
+  }
   function _compactRunFor(sid) {
     return _compactRun && sid && _compactRun.sid === sid ? _compactRun : null;
   }
@@ -12346,8 +12353,12 @@
         + ' <code>~/.claude/command-center/compact-backups/</code>.</div>'
       : '';
     const result = run.stage === 'done' ? _compactRunResultHtml(run) : '';
-    const summary = run.summaryHtml
-      ? '<div class="compact-run-summary">' + run.summaryHtml + '</div>'
+    // Carried across as a NODE, not re-parsed HTML: re-serialising would reset
+    // the summary's expand/collapse state on every repaint (the result poll
+    // repaints for up to 75s after the card is done).
+    const liveSummaryNode = el.querySelector('.compact-run-summary .compact-resume-card');
+    const summary = (run.summaryHtml || liveSummaryNode)
+      ? '<div class="compact-run-summary">' + (liveSummaryNode ? '' : run.summaryHtml) + '</div>'
       : '';
 
     el.innerHTML =
@@ -12365,6 +12376,10 @@
       + backup
       + extra
       + summary;
+    if (liveSummaryNode) {
+      const slot = el.querySelector('.compact-run-summary');
+      if (slot) slot.appendChild(liveSummaryNode);
+    }
   }
 
   function _compactRunView() {
@@ -12378,6 +12393,7 @@
   function _compactRunMount($view) {
     const run = _compactRun;
     if (!run) return;
+    if (!_compactRunIsForeground()) return;
     const view = $view || _compactRunView();
     if (!view) return;
     if (!run.el) {
@@ -12472,7 +12488,7 @@
   // Terminal success. `after` fills in as the post-compact usage rollup lands,
   // so the headline number is polled a few times rather than guessed once.
   function completeCompactRun(sid) {
-    const run = _compactRunFor(sid) || _compactRun;
+    const run = sid ? _compactRunFor(sid) : _compactRun;
     if (!run) return;
     if (run.stage === 'done' || run.stage === 'failed') return;
     run.stage = 'done';
@@ -12521,6 +12537,29 @@
     });
   }
 
+  // This run's summary may be (re)built by any render pass, including ones
+  // that happen after the run already reached `done`. Claim the newest
+  // unclaimed summary row here rather than only at row-build time — a missed
+  // claim leaves a stray sibling that _foldCompactRecords turns into a second
+  // card for the same compaction.
+  function _compactRunClaimSummary($view) {
+    const run = _compactRun;
+    if (!run || run.stage === 'failed') return;
+    const view = $view || _compactRunView();
+    if (!view) return;
+    if (view.querySelector('.compact-resume-event.compact-absorbed-by-run')) return;
+    const rows = view.querySelectorAll('.compact-resume-event');
+    const row = rows.length ? rows[rows.length - 1] : null;
+    // A summary already folded into a historical record card belongs to an
+    // EARLIER compaction, not this run.
+    if (!row || row.dataset.compactFolded === '1' || row.classList.contains('compact-record-hidden')) return;
+    const inner = row.querySelector('.compact-resume-card');
+    if (!inner) return;
+    run.summaryHtml = inner.outerHTML;
+    row.classList.add('compact-absorbed-by-run');
+    completeCompactRun(run.sid);
+    _compactRunAnchorTo(row);
+  }
   // Adopt the engine's own pre/post/duration off the boundary row when it is
   // on screen. Those are measured server-side; the card's own before/after is
   // a client-side estimate that also charges the HTTP round trip to the clock.
@@ -12652,7 +12691,7 @@
   }
 
   function failCompactRun(sid, reason) {
-    const run = _compactRunFor(sid) || _compactRun;
+    const run = sid ? _compactRunFor(sid) : _compactRun;
     if (!run) return;
     run.stage = 'failed';
     run.error = String(reason || '');
@@ -12673,7 +12712,7 @@
       : [document.getElementById('conversationsView')].filter(Boolean));
     for (const v of views) {
       if (!v) continue;
-      v.querySelectorAll('.compact-run-card, .compact-in-progress-banner').forEach(el => el.remove());
+      v.querySelectorAll('.compact-run-card:not(.is-record), .compact-in-progress-banner').forEach(el => el.remove());
     }
   }
 
@@ -12688,6 +12727,9 @@
     const btn = ev.target && ev.target.closest && ev.target.closest('.compact-run-retry');
     if (!btn) return;
     ev.preventDefault();
+    const card = btn.closest('.compact-run-card');
+    const sid = card && card.dataset.sid;
+    if (sid && !(currentSession && currentSession.id === sid)) return;
     if (typeof compactCurrentSession === 'function') compactCurrentSession();
   });
 
@@ -51267,6 +51309,7 @@
     // summary it absorbed when there is one (chronological slot) and to the
     // tail while the run is still in flight.
     if (_compactRun && currentSession && _compactRun.sid === currentSession.id) {
+      try { _compactRunClaimSummary($view); } catch (_) {}
       const _absorbed = $view.querySelector('.compact-resume-event.compact-absorbed-by-run');
       if (_absorbed) _compactRunAnchorTo(_absorbed);
       else if (!_compactRun.anchored) _compactRunMount($view);
