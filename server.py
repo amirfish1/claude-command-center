@@ -38114,7 +38114,12 @@ def _acp_handle_session_update(harness, sid, update):
         chunk = _strip_lone_surrogates(chunk)
     with _ACP_LOCK:
         state = _acp_session(harness, sid, create=True)
-        state["updated_at"] = time.time()
+        # CCC-941: only content-bearing updates count as "activity" — bumping
+        # this on every kind (incl. available_commands_update/
+        # config_option_update, which the harness can resend on reconnect
+        # with no real turn happening) made old idle sessions show "1h ago".
+        if kind not in ("available_commands_update", "config_option_update"):
+            state["updated_at"] = time.time()
 
         # session/load history replay: accumulate per speaker/kind and finalize
         # on switches; the load response flushes the tail (see _acp_load).
