@@ -42754,8 +42754,23 @@ def _codex_recovery_watchdog_session_ids(goals, now):
                 isinstance(recovery, dict)
                 and _codex_recovery_is_silent_turn(recovery)
                 and str(recovery.get("source_turn_id") or "") == source_turn_id
-                and not has_user_input
+                and (
+                    not has_user_input
+                    or (
+                        recovery.get("suppressed_reason") == "interrupt-declined"
+                        and now - float(recovery.get("suppressed_at") or 0.0)
+                        < _INTERRUPT_ASK_DISMISS_SNOOZE_S
+                    )
+                )
             ):
+                # A queued user message normally justifies re-arming recovery
+                # for the same stalled turn (new intent worth retrying for).
+                # But when the last attempt was declined, `_file_interrupt_ask`
+                # will just hand back the same dismissed entry for
+                # _INTERRUPT_ASK_DISMISS_SNOOZE_S — re-arming on every 5s
+                # watchdog tick during that window only spams
+                # turn_recovery_armed/interrupt-declined events with no
+                # chance of a different outcome (OPS-749).
                 continue
 
             episode_id = f"silent-turn-{source_turn_id}"

@@ -16627,6 +16627,42 @@ class TestCodexCompactionRecovery(unittest.TestCase):
         source = inspect.getsource(self.server._start_resume_queue_watcher)
         self.assertIn("_run_codex_recovery_watchdog_once()", source)
 
+    def test_declined_silent_turn_with_queued_input_does_not_rearm_every_tick(self):
+        """OPS-749: once an interrupt-ask is declined (e.g. auto-dismissed by
+        the dashboard outside debug mode), the ask is snoozed for
+        _INTERRUPT_ASK_DISMISS_SNOOZE_S — re-arming recovery for the same
+        stalled turn on every 5s watchdog tick just because input is queued
+        produced an armed/declined spam loop with no chance of a different
+        outcome."""
+        sid = "sid-silent-declined-loop"
+        server = self.server
+        with server._CODEX_APP_SERVER_LOCK:
+            server._CODEX_APP_SERVER_THREAD_STATE[sid] = {
+                "thread_id": sid,
+                "status": "active",
+                "active_turn_id": "turn-stalled",
+                "last_activity_at": 100.0,
+            }
+        with server._pending_resume_lock:
+            server._pending_resume_queue[sid] = ["user message queued"]
+        with mock.patch.object(server, "_codex_goals_snapshot", return_value={}), \
+             mock.patch.object(
+                 server, "_file_interrupt_ask",
+                 return_value={"id": "ask-1", "status": "dismissed"},
+             ) as file_ask:
+            first = server._run_codex_recovery_watchdog_once(now=1001.0)
+            second = server._run_codex_recovery_watchdog_once(now=1006.0)
+
+        self.assertEqual(first[0][1].get("suppressed"), "interrupt-declined")
+        # Second tick, seconds later, still has queued input and the same
+        # stalled turn: must not re-arm (empty result set), not re-ask.
+        self.assertEqual(second, [])
+        self.assertEqual(file_ask.call_count, 1)
+        recovery = server._codex_app_server_thread_state(sid)["compaction_recovery"]
+        self.assertEqual(recovery["status"], "suppressed")
+        self.assertEqual(recovery["suppressed_reason"], "interrupt-declined")
+        self.assertEqual(recovery["source_turn_id"], "turn-stalled")
+
 
 class TestPendingInputs(unittest.TestCase):
     def setUp(self):
