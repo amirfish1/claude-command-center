@@ -46236,8 +46236,9 @@
     return { display: full, full, className: '' };
   }
 
-  // CCC-454: Verbose transcript mode. When on, tool-call groups, command/edit
-  // disclosures, and thinking bodies render expanded instead of collapsed.
+  // CCC-454: Verbose transcript mode. When on, tool-call groups and
+  // command/edit disclosures render expanded instead of collapsed (thinking
+  // bodies render expanded always, regardless of this toggle — CCC-942).
   // Persisted so it survives reloads; the topbar toggle (left of Annotate)
   // flips it and re-applies to already-rendered conversation DOM.
   function convVerboseOn() {
@@ -46251,7 +46252,8 @@
       g.classList.toggle('collapsed', !on);
     });
     document.querySelectorAll('details.tool-command-disclosure').forEach(d => { d.open = on; });
-    document.querySelectorAll('.thinking-block .t-body').forEach(b => { b.style.display = on ? 'block' : 'none'; });
+    // CCC-942: thinking stays expanded regardless of Verbose — only tool
+    // output/groups are gated by this toggle.
   }
 
   function renderToolCommandDisclosure(block, detail) {
@@ -50348,9 +50350,11 @@
               // summary — the "lots of wasted space" a whole run of these
               // produces back-to-back.
             } else {
-              // Text present: visible block with an expandable body (collapsed
-              // unless Verbose transcript mode is on — CCC-454).
-              blockParts.push('<div class="thinking-block"><span class="thinking-toggle" onclick="this.parentElement.querySelector(\'.t-body\').style.display=this.parentElement.querySelector(\'.t-body\').style.display===\'none\'?\'block\':\'none\'">💭 Thinking</span><div class="t-body" style="display:' + (convVerboseOn() ? 'block' : 'none') + '">' + escapeHtml(b.text) + '</div></div>');
+              // Text present: visible block with an expandable body. Shown
+              // expanded by default regardless of Verbose transcript mode
+              // (CCC-942) — Verbose still gates tool output, but thinking is
+              // useful even outside that mode and shouldn't require a click.
+              blockParts.push('<div class="thinking-block"><span class="thinking-toggle" onclick="this.parentElement.querySelector(\'.t-body\').style.display=this.parentElement.querySelector(\'.t-body\').style.display===\'none\'?\'block\':\'none\'">💭 Thinking</span><div class="t-body" style="display:block">' + escapeHtml(b.text) + '</div></div>');
               hasNonTool = true;
             }
           }
