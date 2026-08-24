@@ -130,3 +130,98 @@ class KimiBusyQueueTests(unittest.TestCase):
                 "kind": "acp", "status": "idle",
             })
         )
+
+
+class KimiSteerCancelResendTests(unittest.TestCase):
+    """Steer on an ACP session: cancel the active turn, then actually resend."""
+
+    def _run_steer(self, prompt_side_effect, idempotency_key):
+        server = importlib.import_module("server")
+        sid = "kimi-steer-resend-session"
+        calls = []
+
+        def _prompt(harness, session_id, text, **kwargs):
+            calls.append(kwargs)
+            return prompt_side_effect(len(calls))
+
+        with server._pending_terminal_input_lock:
+            original_queue = dict(server._pending_terminal_input_queue)
+            server._pending_terminal_input_queue.clear()
+        try:
+            with mock.patch.object(server, "_is_codex_session", return_value=False), \
+                 mock.patch.object(server, "_is_kimi_session", return_value=True), \
+                 mock.patch.object(server, "find_session_cwd", return_value="/tmp"), \
+                 mock.patch.object(server, "session_live_status", return_value={
+                     "live": True, "status": "running", "kind": "acp",
+                     "tty": None, "terminal_app": None,
+                 }), \
+                 mock.patch.object(server, "_acp_prompt", side_effect=_prompt), \
+                 mock.patch.object(server, "_acp_cancel", return_value={"ok": True}), \
+                 mock.patch.object(server, "_acp_session_snapshot", return_value={
+                     "status": "idle",
+                 }), \
+                 mock.patch.object(server, "_save_pending_inputs"):
+                result = server._inject_text_into_session(
+                    sid, "actually, do it the other way",
+                    mode="steer", idempotency_key=idempotency_key,
+                )
+        finally:
+            with server._pending_terminal_input_lock:
+                server._pending_terminal_input_queue.clear()
+                server._pending_terminal_input_queue.update(original_queue)
+        return result, calls
+
+    def test_post_cancel_resend_uses_a_fresh_idempotency_key(self):
+        """The pre-cancel attempt burns the caller's key.
+
+        Reusing it made the worker's WorkLedger dedupe the resend back to the
+        already-failed "turn already in progress" record, so Steer cancelled
+        Kimi's turn and then silently queued the message instead of sending
+        it.
+        """
+        result, calls = self._run_steer(
+            lambda n: (
+                {"ok": False, "code": "busy", "error": "turn already in progress"}
+                if n == 1 else {"ok": True, "via": "acp"}
+            ),
+            "inject:3278baff",
+        )
+
+        self.assertEqual(len(calls), 2)
+        self.assertEqual(calls[0]["idempotency_key"], "inject:3278baff")
+        self.assertNotEqual(
+            calls[1]["idempotency_key"], calls[0]["idempotency_key"],
+        )
+        self.assertTrue(result["ok"])
+        self.assertFalse(result.get("queued"))
+
+    def test_retry_key_is_stable_across_replays_of_the_same_inject(self):
+        _, first = self._run_steer(
+            lambda n: (
+                {"ok": False, "code": "busy", "error": "turn already in progress"}
+                if n == 1 else {"ok": True}
+            ),
+            "inject:abc",
+        )
+        _, second = self._run_steer(
+            lambda n: (
+                {"ok": False, "code": "busy", "error": "turn already in progress"}
+                if n == 1 else {"ok": True}
+            ),
+            "inject:abc",
+        )
+        self.assertEqual(
+            first[1]["idempotency_key"], second[1]["idempotency_key"],
+        )
+
+    def test_still_busy_after_cancel_falls_back_to_the_durable_queue(self):
+        result, calls = self._run_steer(
+            lambda n: {
+                "ok": False, "code": "busy", "error": "turn already in progress",
+            },
+            "inject:xyz",
+        )
+
+        self.assertEqual(len(calls), 2)
+        self.assertTrue(result["ok"])
+        self.assertTrue(result["queued"])

@@ -56212,7 +56212,24 @@ def _inject_text_into_session(
                         if snap.get("status") != "active":
                             break
                         time.sleep(0.15)
-                    retry = _acp_prompt(acp_harness, session_id, text, **prompt_kwargs)
+                    # The resend MUST carry its own idempotency key. The
+                    # pre-cancel attempt already consumed `idempotency_key`
+                    # and is sitting in the worker's ledger as `failed`
+                    # ("turn already in progress"); reusing the same key made
+                    # WorkLedger.submit dedupe the retry straight back to that
+                    # failed row, so the post-cancel prompt was never sent and
+                    # every steer fell through to the durable queue — the
+                    # cancel landed, the message did not (CCC-922 follow-up).
+                    # Deriving the key keeps replay-safety: the same inject
+                    # request always derives the same retry key.
+                    retry_kwargs = dict(prompt_kwargs)
+                    if idempotency_key:
+                        retry_kwargs["idempotency_key"] = (
+                            f"{idempotency_key}:steer-retry"
+                        )
+                    retry = _acp_prompt(
+                        acp_harness, session_id, text, **retry_kwargs
+                    )
                     if retry.get("code") != "busy":
                         return retry
                     result = retry
