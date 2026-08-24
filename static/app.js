@@ -43554,7 +43554,7 @@
     if (id.startsWith('pkood-') || id.startsWith('issue-')) return null;
     const existing = _convTailPrefetches.get(id);
     if (existing) return existing;
-    const pending = fetch('/api/conversations/' + encodeURIComponent(id) + '?tail=' + convTailLines(), {
+    const pending = fetch('/api/conversations/' + encodeURIComponent(id) + '?tail=' + convFirstOpenLines(), {
       cache: 'no-store',
     }).then(r => r.ok ? r.json() : null).catch(() => null);
     _convTailPrefetches.set(id, pending);
@@ -43604,6 +43604,10 @@
   // window at a time. Live `after=` polling is unaffected (tail returns the real
   // last_line, so streamed events keep appending from there).
   const CONV_TAIL_LINES = 400;
+  // First window of a fresh open. Deliberately small so the tail paints
+  // fast (~40 events instead of ~120); the rest of CONV_TAIL_LINES is
+  // backfilled above it one frame after paint (_scheduleConvOpenBackfill).
+  const CONV_TAIL_FIRST_LINES = 120;
   // Phones parse and paint the same transcript on a CPU roughly 4-6x slower
   // than a laptop's. Measured at 4x CPU throttle on a 390px viewport, opening a
   // conversation spent ~2.5s inside renderConversationEvents with the main
@@ -43612,6 +43616,9 @@
   // already pages older history in on demand, so a narrower first window is
   // lossless: it costs one tap for anyone who wants to read further back.
   const CONV_TAIL_LINES_MOBILE = 120;
+  function convFirstOpenLines() {
+    return Math.min(CONV_TAIL_FIRST_LINES, convTailLines());
+  }
   function convTailLines() {
     return (typeof isMobile === 'function' && isMobile())
       ? CONV_TAIL_LINES_MOBILE : CONV_TAIL_LINES;
@@ -43853,6 +43860,28 @@
     $view.insertBefore(banner, $view.firstChild);
   }
 
+  // Second stage of a fresh open: prepend the rest of the usual tail window
+  // above the small first window. Runs one frame after the first paint, so
+  // the reader sees the tail immediately; _prependConversationEvents keeps
+  // the scroll position where it was. Skipped if the pane moved on, or a
+  // Load-earlier is already queued (its render dedups by JSONL line anyway).
+  function _scheduleConvOpenBackfill(id, paneId, lines) {
+    if (!(lines > 0)) return;
+    requestAnimationFrame(() => setTimeout(() => {
+      const pane = paneByPaneId(paneId);
+      if (!pane || pane.conversationId !== id) return;
+      if (pane.loadBeforeLine || pane.loadAncestorHop || pane.wantFull) return;
+      const beforeLine = Number(pane.firstLine || 0);
+      if (!(beforeLine > 1)) return;
+      pane.loadBeforeLine = beforeLine;
+      pane.loadBeforeTail = lines;
+      try {
+        const r = fetchConversationEvents(paneId);
+        if (r && typeof r.catch === 'function') r.catch(() => {});
+      } catch (_) {}
+    }, 0));
+  }
+
   function _prependConversationEvents(events, paneId) {
     const $view = getConvViewForPane(paneId) || $conversationsView;
     if (!$view) return false;
@@ -44091,9 +44120,11 @@
       const _pane0 = paneByPaneId(fetchPaneId);
       const _wantFull = !!(_pane0 && _pane0.wantFull);
       const _loadBefore = _pane0 ? Number(_pane0.loadBeforeLine || 0) : 0;
+      const _loadBeforeTail = _pane0 ? Number(_pane0.loadBeforeTail || 0) : 0;
       const _hop = !!(_pane0 && _pane0.loadAncestorHop);
       if (_pane0) _pane0.wantFull = false;   // one-shot: consumed on this fetch
       if (_pane0) _pane0.loadBeforeLine = 0; // one-shot: consumed on this fetch
+      if (_pane0) _pane0.loadBeforeTail = 0; // one-shot: consumed on this fetch
       if (_pane0) _pane0.loadAncestorHop = 0; // one-shot: consumed on this fetch
       const _freshOpen = convLastLine === 0;
       if (_freshOpen && _pane0) _pane0.contSegments = null; // re-init chain on reopen
@@ -44106,9 +44137,9 @@
       const _url = _hopSid
         ? '/api/conversations/' + encodeURIComponent(_fetchSid) + '?tail=' + convTailLines()
         : _loadBefore
-        ? '/api/conversations/' + encodeURIComponent(_fetchSid) + '?before=' + encodeURIComponent(_loadBefore) + '&tail=' + convTailLines()
+        ? '/api/conversations/' + encodeURIComponent(_fetchSid) + '?before=' + encodeURIComponent(_loadBefore) + '&tail=' + (_loadBeforeTail || convTailLines())
         : (_freshOpen && !_wantFull)
-        ? '/api/conversations/' + id + '?tail=' + convTailLines()
+        ? '/api/conversations/' + id + '?tail=' + convFirstOpenLines()
         : '/api/conversations/' + id + '?after=' + convLastLine;
       let data = null;
       if (_freshOpen && !_wantFull && !_loadingEarlier) {
@@ -44122,6 +44153,9 @@
         const res = await fetch(_url);
         data = await res.json();
       }
+      // Tail is in hand: release the parked select-time fetches once this
+      // render has painted (see _afterConvTail).
+      if (typeof _flushAfterConvTailAfterPaint === 'function') _flushAfterConvTailAfterPaint();
       // Guard: if the pane's conv id shifted (e.g. user navigated away
       // while the fetch was in-flight), discard the stale response.
       const currentPane = paneByPaneId(fetchPaneId);
@@ -44210,6 +44244,12 @@
           _insertLoadEarlierBanner($view, id, fetchPaneId);
         } else if (_loadingEarlier && data && (data.truncated_before || _contMore)) {
           _insertLoadEarlierBanner($view, id, fetchPaneId);
+        }
+        // Two-stage open: the first window was CONV_TAIL_FIRST_LINES; fill
+        // the rest of the usual window in above it once this paint is out.
+        if (_freshOpen && !_wantFull && data && data.truncated_before
+            && convFirstOpenLines() < convTailLines()) {
+          _scheduleConvOpenBackfill(id, fetchPaneId, convTailLines() - convFirstOpenLines());
         }
         restorePendingSendEchoes(id, fetchPaneId);
         // Codex writes its rollout lazily: measured, the user's own message
