@@ -2917,16 +2917,13 @@
     box-shadow: 0 0 6px rgba(254, 202, 202, 0.9);
   }
   /* Hide the pill whenever a text input is focused — that's exactly
-     when setInterval callbacks are muted in app.js. Uses :has() so no
-     JS state needs to track focus changes. */
-  body:has(textarea:focus) .live-refresh-cluster,
-  body:has(input[type="text"]:focus) .live-refresh-cluster,
-  body:has(input[type="search"]:focus) .live-refresh-cluster,
-  body:has(input[type="email"]:focus) .live-refresh-cluster,
-  body:has(input[type="url"]:focus) .live-refresh-cluster,
-  body:has(input[type="tel"]:focus) .live-refresh-cluster,
-  body:has(input[type="password"]:focus) .live-refresh-cluster,
-  body:has(input:not([type]):focus) .live-refresh-cluster {
+     when setInterval callbacks are muted in app.js. body.has-text-focus
+     is kept in sync by focusin/focusout in app.js. (This used to be
+     body:has(textarea:focus); Blink folds every :has() rule into one
+     shared invalidation set and re-fires it on the anchor for any DOM
+     mutation under it, so a body-anchored :has() re-styled ~500 sidebar
+     badges on every forced layout read during a session open.) */
+  body.has-text-focus .live-refresh-cluster {
     opacity: 0;
     transform: translateY(4px);
     pointer-events: none;
@@ -16345,7 +16342,7 @@
    Status row order in right-rail mode: header → conversation → INPUT BAR
    → status row → keyboard hint. Input reads as the primary action; the
    status (worktree / context / cost / model) is reference info underneath. */
-body.status-pos-right .conv-pane:has(> .status-rail) {
+body.status-pos-right .conv-pane.has-status-rail {
   display: grid;
   grid-template-columns: minmax(0, 1fr) var(--status-rail-width, 260px);
   grid-template-rows: auto 1fr auto auto auto auto;
@@ -16358,7 +16355,7 @@ body.status-pos-right .conv-pane:has(> .status-rail) {
     "hint    rail";
   min-height: 0;
 }
-body.status-pos-right .conv-pane:has(> .status-rail):has(> .conv-input-context.is-new-session) {
+body.status-pos-right .conv-pane.has-status-rail.has-new-session-context {
   grid-template-areas:
     "header  rail"
     "conv    rail"
@@ -16367,13 +16364,13 @@ body.status-pos-right .conv-pane:has(> .status-rail):has(> .conv-input-context.i
     "input   rail"
     "hint    rail";
 }
-body.status-pos-right .conv-pane:has(> .status-rail) > .conv-pane-header   { grid-area: header;  min-width: 0; }
-body.status-pos-right .conv-pane:has(> .status-rail) > .conversations-view { grid-area: conv;    min-width: 0; min-height: 0; }
-body.status-pos-right .conv-pane:has(> .status-rail) > .conv-goal-strip    { grid-area: goal;    min-width: 0; }
-body.status-pos-right .conv-pane:has(> .status-rail) > .conv-input-bar     { grid-area: input;   min-width: 0; }
-body.status-pos-right .conv-pane:has(> .status-rail) > .conv-input-hint    { grid-area: hint;    min-width: 0; }
-body.status-pos-right .conv-pane:has(> .status-rail) > .conv-input-context { grid-area: context; min-width: 0; }
-body.status-pos-right .conv-pane:has(> .status-rail) > .status-rail {
+body.status-pos-right .conv-pane.has-status-rail > .conv-pane-header   { grid-area: header;  min-width: 0; }
+body.status-pos-right .conv-pane.has-status-rail > .conversations-view { grid-area: conv;    min-width: 0; min-height: 0; }
+body.status-pos-right .conv-pane.has-status-rail > .conv-goal-strip    { grid-area: goal;    min-width: 0; }
+body.status-pos-right .conv-pane.has-status-rail > .conv-input-bar     { grid-area: input;   min-width: 0; }
+body.status-pos-right .conv-pane.has-status-rail > .conv-input-hint    { grid-area: hint;    min-width: 0; }
+body.status-pos-right .conv-pane.has-status-rail > .conv-input-context { grid-area: context; min-width: 0; }
+body.status-pos-right .conv-pane.has-status-rail > .status-rail {
   grid-area: rail;
   display: flex; flex-direction: column;
   position: relative;
@@ -16907,7 +16904,7 @@ body.status-rail-resizing * {
   color: var(--accent);
   background: var(--surface-2);
 }
-body.status-pos-right.status-rail-collapsed .conv-pane:has(> .status-rail) {
+body.status-pos-right.status-rail-collapsed .conv-pane.has-status-rail {
   grid-template-columns: minmax(0, 1fr);
   grid-template-areas:
     "header"
@@ -16917,7 +16914,7 @@ body.status-pos-right.status-rail-collapsed .conv-pane:has(> .status-rail) {
     "hint"
     "context";
 }
-body.status-pos-right.status-rail-collapsed .conv-pane:has(> .status-rail):has(> .conv-input-context.is-new-session) {
+body.status-pos-right.status-rail-collapsed .conv-pane.has-status-rail.has-new-session-context {
   grid-template-areas:
     "header"
     "conv"
@@ -16926,10 +16923,10 @@ body.status-pos-right.status-rail-collapsed .conv-pane:has(> .status-rail):has(>
     "input"
     "hint";
 }
-body.status-pos-right.status-rail-collapsed .conv-pane:has(> .status-rail) > .status-rail {
+body.status-pos-right.status-rail-collapsed .conv-pane.has-status-rail > .status-rail {
   display: none;
 }
-body.status-pos-right.status-rail-collapsed .conv-pane:has(> .status-rail) > .status-rail-restore {
+body.status-pos-right.status-rail-collapsed .conv-pane.has-status-rail > .status-rail-restore {
   display: inline-flex;
 }
 /* When the rail-restore chevron is visible it sits absolutely positioned
@@ -16938,7 +16935,7 @@ body.status-pos-right.status-rail-collapsed .conv-pane:has(> .status-rail) > .st
    model pill — which made the model name "superseded by other stuff"
    per a user annotation. Reserve enough room (chevron width + breathing
    room) so the model pill stays clickable. */
-body.status-pos-right.status-rail-collapsed .conv-pane:has(> .status-rail) > .conv-input-context {
+body.status-pos-right.status-rail-collapsed .conv-pane.has-status-rail > .conv-input-context {
   padding-right: 40px;
 }
 
@@ -19476,7 +19473,7 @@ body.status-pos-right #convToolbar {
    plus the bottom of .gc-orchestrator-panel. The dismissal-persist key in
    index.html now keeps it down for ~5 years once closed, so the auto-hide
    here just covers the "not yet dismissed" case. */
-body:has(.gc-reader) .pwa-install-banner {
+body.has-gc-reader .pwa-install-banner {
   display: none !important;
 }
 
@@ -23609,7 +23606,7 @@ body:has(.gc-reader) .pwa-install-banner {
 /* The optional right-side status rail turns each pane into a grid. Reserve
    an explicit row for the per-pane selector so it does not fall
    into implicit-grid placement or displaces the composer. */
-body.status-pos-right .conv-pane:has(> .status-rail) {
+body.status-pos-right .conv-pane.has-status-rail {
   grid-template-rows: auto auto 1fr auto auto auto auto;
   grid-template-areas:
     "header rail"
@@ -23620,7 +23617,7 @@ body.status-pos-right .conv-pane:has(> .status-rail) {
     "context rail"
     "hint rail";
 }
-body.status-pos-right .conv-pane:has(> .status-rail):has(> .conv-input-context.is-new-session) {
+body.status-pos-right .conv-pane.has-status-rail.has-new-session-context {
   grid-template-areas:
     "header rail"
     "present-toolbar rail"
@@ -23630,8 +23627,8 @@ body.status-pos-right .conv-pane:has(> .status-rail):has(> .conv-input-context.i
     "input rail"
     "hint rail";
 }
-body.status-pos-right .conv-pane:has(> .status-rail) > .conv-presentation-toolbar { grid-area: present-toolbar; min-width: 0; }
-body.status-pos-right.status-rail-collapsed .conv-pane:has(> .status-rail) {
+body.status-pos-right .conv-pane.has-status-rail > .conv-presentation-toolbar { grid-area: present-toolbar; min-width: 0; }
+body.status-pos-right.status-rail-collapsed .conv-pane.has-status-rail {
   grid-template-areas:
     "header"
     "present-toolbar"
@@ -23641,7 +23638,7 @@ body.status-pos-right.status-rail-collapsed .conv-pane:has(> .status-rail) {
     "hint"
     "context";
 }
-body.status-pos-right.status-rail-collapsed .conv-pane:has(> .status-rail):has(> .conv-input-context.is-new-session) {
+body.status-pos-right.status-rail-collapsed .conv-pane.has-status-rail.has-new-session-context {
   grid-template-areas:
     "header"
     "present-toolbar"
@@ -24400,8 +24397,8 @@ a.settings-row:focus-visible .settings-launcher-btn { text-decoration: underline
    content is re-parented by _applyStatusRailLayout when the breakpoint
    changes, so the rail never consumes phone-width conversation space. */
 @media (max-width: 1200px) {
-  body.status-pos-right:not(.popout-rail-forced) .conv-pane:has(> .status-rail),
-  body.status-pos-right.status-rail-collapsed:not(.popout-rail-forced) .conv-pane:has(> .status-rail) {
+  body.status-pos-right:not(.popout-rail-forced) .conv-pane.has-status-rail,
+  body.status-pos-right.status-rail-collapsed:not(.popout-rail-forced) .conv-pane.has-status-rail {
     grid-template-columns: minmax(0, 1fr);
     grid-template-areas:
       "header"
@@ -24412,12 +24409,12 @@ a.settings-row:focus-visible .settings-launcher-btn { text-decoration: underline
       "input"
       "hint";
   }
-  body.status-pos-right:not(.popout-rail-forced) .conv-pane:has(> .status-rail) > .status-rail,
-  body.status-pos-right.status-rail-collapsed:not(.popout-rail-forced) .conv-pane:has(> .status-rail) > .status-rail {
+  body.status-pos-right:not(.popout-rail-forced) .conv-pane.has-status-rail > .status-rail,
+  body.status-pos-right.status-rail-collapsed:not(.popout-rail-forced) .conv-pane.has-status-rail > .status-rail {
     display: none;
   }
-  body.status-pos-right:not(.popout-rail-forced) .conv-pane:has(> .status-rail) > .status-rail-restore,
-  body.status-pos-right.status-rail-collapsed:not(.popout-rail-forced) .conv-pane:has(> .status-rail) > .status-rail-restore {
+  body.status-pos-right:not(.popout-rail-forced) .conv-pane.has-status-rail > .status-rail-restore,
+  body.status-pos-right.status-rail-collapsed:not(.popout-rail-forced) .conv-pane.has-status-rail > .status-rail-restore {
     display: none;
   }
   body.status-pos-right .conv-sticky-header {
@@ -24452,7 +24449,7 @@ a.settings-row:focus-visible .settings-launcher-btn { text-decoration: underline
     cursor: pointer;
     font: 600 12px/1 inherit;
   }
-  body.conversation-popout.popout-rail-forced .conv-pane:has(> .status-rail) {
+  body.conversation-popout.popout-rail-forced .conv-pane.has-status-rail {
     grid-template-columns: minmax(0, 1fr) var(--status-rail-width, 260px);
     grid-template-areas:
       "header  rail"
@@ -24462,7 +24459,7 @@ a.settings-row:focus-visible .settings-launcher-btn { text-decoration: underline
       "context rail"
       "hint    rail";
   }
-  body.conversation-popout.popout-rail-forced .conv-pane:has(> .status-rail) > .status-rail {
+  body.conversation-popout.popout-rail-forced .conv-pane.has-status-rail > .status-rail {
     display: flex;
   }
 }

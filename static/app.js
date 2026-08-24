@@ -7955,7 +7955,10 @@
     // class is set in enterNewSessionMode(); this is the symmetric clear.
     if (sid || currentConversation !== '__new__') {
       const _cic = document.getElementById('convInputContext');
-      if (_cic) _cic.classList.remove('is-new-session');
+      if (_cic) {
+        _cic.classList.remove('is-new-session');
+        if (typeof syncPaneHasFlags === 'function') syncPaneHasFlags(_cic.closest('.conv-pane'));
+      }
       // Return the CWD picker row + quick chips home if the new-session
       // chooser borrowed them (see _adoptCwdControlsIntoChooser, CCC-86).
       try { _restoreCwdControlsToInputBar(); } catch (_) {}
@@ -25037,6 +25040,7 @@
           + '</div>'
         : '')
       + '</div>';
+    if (typeof syncBodyGcReaderFlag === 'function') syncBodyGcReaderFlag();
 
     const inputBar = document.getElementById('convInputBar');
     const inputCtx = document.getElementById('convInputContext');
@@ -37027,6 +37031,72 @@
   }
   ensureAllConversationEndAffordances();
 
+  // Flag classes that stand in for `body:has(...)` / `.conv-pane:has(...)`
+  // selectors. Blink folds every `:has()` rule into one shared invalidation
+  // set and re-schedules it on the anchor whenever anything under the anchor
+  // mutates; with body / .conv-pane as anchors, every DOM write during a
+  // session open re-styled ~500 sidebar badges at each forced layout read
+  // (measured 20-390ms per recalc). The CSS now keys off these classes:
+  //   .conv-pane.has-status-rail           (child .status-rail present)
+  //   .conv-pane.has-new-session-context   (child .conv-input-context.is-new-session)
+  //   body.has-text-focus                  (a text input / textarea is focused)
+  //   body.has-gc-reader                   (#gcReader mounted in #conversationsView)
+  function syncPaneHasFlags(pane) {
+    if (!pane || !pane.classList) return;
+    let rail = false, newCtx = false, ctxEl = null;
+    for (const ch of pane.children) {
+      if (ch.classList.contains('status-rail')) rail = true;
+      else if (ch.classList.contains('conv-input-context')) {
+        ctxEl = ch;
+        if (ch.classList.contains('is-new-session')) newCtx = true;
+      }
+    }
+    if (pane.classList.contains('has-status-rail') !== rail) pane.classList.toggle('has-status-rail', rail);
+    if (pane.classList.contains('has-new-session-context') !== newCtx) pane.classList.toggle('has-new-session-context', newCtx);
+    if (typeof MutationObserver !== 'function') return;
+    // Backstops for code paths that move the rail / toggle is-new-session
+    // without calling us: direct-children only, so they stay cheap.
+    if (!pane._hasFlagObserver) {
+      pane._hasFlagObserver = new MutationObserver(() => syncPaneHasFlags(pane));
+      pane._hasFlagObserver.observe(pane, { childList: true });
+    }
+    if (ctxEl && !ctxEl._hasFlagObserver) {
+      ctxEl._hasFlagObserver = new MutationObserver(() => syncPaneHasFlags(pane));
+      ctxEl._hasFlagObserver.observe(ctxEl, { attributes: true, attributeFilter: ['class'] });
+    }
+  }
+  function syncAllPaneHasFlags() {
+    document.querySelectorAll('.conv-pane').forEach(syncPaneHasFlags);
+  }
+  const _TEXT_FOCUS_SEL = 'textarea, input[type="text"], input[type="search"], input[type="email"], input[type="url"], input[type="tel"], input[type="password"], input:not([type])';
+  function syncBodyTextFocusFlag() {
+    const el = document.activeElement;
+    const on = !!(el && el !== document.body && typeof el.matches === 'function' && el.matches(_TEXT_FOCUS_SEL));
+    if (document.body.classList.contains('has-text-focus') !== on) document.body.classList.toggle('has-text-focus', on);
+  }
+  function syncBodyGcReaderFlag() {
+    const view = document.getElementById('conversationsView');
+    const gc = document.getElementById('gcReader');
+    const on = !!(view && gc && gc.parentElement === view);
+    if (document.body.classList.contains('has-gc-reader') !== on) document.body.classList.toggle('has-gc-reader', on);
+  }
+  (function _initHasFlagSync() {
+    const init = () => {
+      syncAllPaneHasFlags();
+      syncBodyTextFocusFlag();
+      syncBodyGcReaderFlag();
+      const view = document.getElementById('conversationsView');
+      if (view && typeof MutationObserver === 'function' && !view._gcFlagObserver) {
+        view._gcFlagObserver = new MutationObserver(syncBodyGcReaderFlag);
+        view._gcFlagObserver.observe(view, { childList: true });
+      }
+    };
+    document.addEventListener('focusin', syncBodyTextFocusFlag, true);
+    document.addEventListener('focusout', () => setTimeout(syncBodyTextFocusFlag, 0), true);
+    if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', init);
+    else init();
+  })();
+
   function mountStatusRailForPaneId(paneId) {
     const pane = document.querySelector(`.conv-pane[data-pane-id="${paneId || 'p1'}"]`);
     if (!pane) return;
@@ -37034,6 +37104,7 @@
     const restore = document.getElementById('statusRailRestoreBtn');
     if (rail && rail.parentElement !== pane) pane.appendChild(rail);
     if (restore && restore.parentElement !== pane) pane.appendChild(restore);
+    syncAllPaneHasFlags();
   }
 
   function mountStatusRailForActivePane() {
@@ -37043,6 +37114,7 @@
   function removeSplitPaneSingletonChrome(paneEl) {
     if (!paneEl) return;
     paneEl.querySelectorAll('.status-rail, .status-rail-restore').forEach(el => el.remove());
+    syncPaneHasFlags(paneEl);
   }
 
   // Build a fresh `.conv-pane` element for paneId, cloning the chrome of
@@ -37162,6 +37234,7 @@
         const pane = paneByPaneId(paneId);
         rememberInputDraft(input, pane && pane.conversationId);
         refreshSlashCommandMenu(input);
+        _autosizeTextareaLike(input, input.closest('.conv-input-bar'));
       });
       input.addEventListener('focus', () => refreshSlashCommandMenu(input));
       input.addEventListener('click', () => refreshSlashCommandMenu(input));
@@ -65132,6 +65205,7 @@
     if (_cic) {
       _cic.classList.add('is-new-session');
       _cic.classList.add('visible');
+      if (typeof syncPaneHasFlags === 'function') syncPaneHasFlags(_cic.closest('.conv-pane'));
     }
     if (typeof mobileShowForCurrentMode === 'function') mobileShowForCurrentMode();
     requestClaudePrewarm();
