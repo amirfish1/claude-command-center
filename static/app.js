@@ -10193,11 +10193,17 @@
       } else if (compactCommand) {
         // A real refusal from the engine (e.g. "Not enough messages to
         // compact."). Say so on the card, not only in a toast that fades.
-        removePendingSendEcho(pendingSend);
-        restoreInputAfterSendFailure($input, text);
-        flashRed();
-        failCompactRun(sid, (data && (data.compact_error || data.error))
-          || formatInjectFailure(data, res.status) || 'unknown error');
+        const _reason = (data && (data.compact_error || data.error))
+          || formatInjectFailure(data, res.status) || 'unknown error';
+        if (_isCompactTimeoutReason(_reason)) {
+          // Not a refusal — nobody knows yet. Keep watching.
+          handleCompactTimeout(sid);
+        } else {
+          removePendingSendEcho(pendingSend);
+          restoreInputAfterSendFailure($input, text);
+          flashRed();
+          failCompactRun(sid, _reason);
+        }
       } else {
         const reason = formatInjectFailure(data, res.status);
         if (isCursorUsageLimitFailure(data, reason)) {
@@ -10225,7 +10231,12 @@
       restoreInputAfterSendFailure($input, text);
       flashRed();
       if (compactRunStarted) {
-        failCompactRun(sid, (err && err.message) || 'network error');
+        if (_isCompactTimeoutReason((err && (err.name + ' ' + err.message)) || '')) {
+          // The request gave up; the engine may well still be compacting.
+          handleCompactTimeout(sid);
+        } else {
+          failCompactRun(sid, (err && err.message) || 'network error');
+        }
       } else {
         const failurePrefix = (injectMode === 'steer' ? 'Steer' : (injectMode === 'answer' ? 'Answer' : 'Send')) + ' failed';
         showOpToast(failurePrefix + ': ' + (err.message || 'network error'), 'error');
@@ -12559,7 +12570,7 @@
   // card for the same compaction.
   function _compactRunClaimSummary($view) {
     const run = _compactRun;
-    if (!run || run.stage === 'failed') return;
+    if (!run) return;
     const view = $view || _compactRunView();
     if (!view) return;
     if (view.querySelector('.compact-resume-event.compact-absorbed-by-run')) return;
@@ -12572,6 +12583,12 @@
     if (!inner) return;
     run.summaryHtml = inner.outerHTML;
     row.classList.add('compact-absorbed-by-run');
+    if (run.stage === 'failed') {
+      // We were wrong: the summary is proof it ran. Re-open the run so
+      // completeCompactRun can land it on a real result.
+      run.stage = 'working';
+      run.error = '';
+    }
     completeCompactRun(run.sid);
     _compactRunAnchorTo(row);
   }
@@ -27794,6 +27811,12 @@
     else showOpToast('Compacting conversation… (usually 1-3 min)', 'info');
   }
 
+  // "It took too long" is not "it failed" — the compaction very often lands
+  // moments later (CCC-786, and re-observed on the lifecycle card: a run whose
+  // boundary + summary are on disk was reported as "Compaction didn't run").
+  function _isCompactTimeoutReason(reason) {
+    return /abort|timed out|timeout|network|failed to fetch|load failed/i.test(String(reason || ''));
+  }
   // code: 'compact_timeout' means CCC's own poll gave up waiting for the
   // compact boundary — NOT that compaction failed. The server only returns
   // this when the live session is still up and may still be running
