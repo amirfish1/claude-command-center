@@ -9906,8 +9906,13 @@ def find_all_conversations(
             row_mtime = tail_meta.get("last_meaningful_ts") or stat.st_mtime
             model = tail_meta.get("model") or ""
             latest_tok = tail_meta.get("latest_input_tokens") or 0
+            peak_tok = tail_meta.get("peak_input_tokens") or 0
             _ov_1m = (session_overrides.get(session_id) or {}).get("context_1m")
-            if _ov_1m or "[1m]" in model.lower() or latest_tok > 200_000:
+            # Peak, not latest: a turn that once exceeded 200k proves the
+            # session is running the 1M variant even if a later turn (e.g.
+            # after /compact) reports fewer tokens — the variant doesn't
+            # revert mid-session, so the limit shouldn't either (CCC-943).
+            if _ov_1m or "[1m]" in model.lower() or max(latest_tok, peak_tok) > 200_000:
                 ctx_limit = 1_000_000
             else:
                 ctx_limit = 200_000
@@ -17110,6 +17115,7 @@ def _extract_tail_meta(path):
         "last_assistant_text": None,  # last text block from an assistant message (the "outcome")
         "model": None,
         "latest_input_tokens": 0,
+        "peak_input_tokens": 0,
         "lifetime_tokens": 0,
         "total_input_tokens": 0,
         "total_cache_creation_tokens": 0,
@@ -17316,6 +17322,9 @@ def _extract_tail_meta(path):
                         tcr = u.get("cache_read_input_tokens") or 0
                         if ti or tcw or tcr:
                             meta["latest_input_tokens"] = ti + tcw + tcr
+                            meta["peak_input_tokens"] = max(
+                                meta["peak_input_tokens"], meta["latest_input_tokens"],
+                            )
                         mid = msg.get("id") if isinstance(msg.get("id"), str) else ""
                         if not mid or mid not in _usage_message_ids:
                             meta["lifetime_tokens"] += (
@@ -24472,8 +24481,12 @@ def find_conversations(repo_path, progress=None, include_old=True, live_sids=Non
 
         model = tail_meta.get("model") or ""
         latest_tok = tail_meta.get("latest_input_tokens") or 0
+        peak_tok = tail_meta.get("peak_input_tokens") or 0
         _ov_1m = (session_overrides.get(sid) or {}).get("context_1m")
-        if _ov_1m or "[1m]" in model.lower() or latest_tok > 200_000:
+        # Peak, not latest — see the matching comment in the archive-row
+        # builder above (CCC-943): a turn that once exceeded 200k proves 1M,
+        # even if a later (e.g. post-/compact) turn reports fewer tokens.
+        if _ov_1m or "[1m]" in model.lower() or max(latest_tok, peak_tok) > 200_000:
             limit = 1_000_000
         else:
             limit = 200_000
