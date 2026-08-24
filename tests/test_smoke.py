@@ -16870,7 +16870,7 @@ class TestPendingInputs(unittest.TestCase):
             source.index('elif path == "/api/session/compact"')
         ]
         inject_pos = branch.index("_inject_text_into_session(")
-        finalize_pos = branch.index("_finalize_queued_steer_result(sid, queued_text, result)")
+        finalize_pos = branch.index("_finalize_queued_steer_result(sid, text, result)")
 
         self.assertLess(inject_pos, finalize_pos)
         self.assertIn('inject_options["preserve_queued_steer"] = True', branch)

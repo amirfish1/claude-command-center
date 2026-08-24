@@ -71898,7 +71898,14 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                     # Turn it into a readable error instead.
                     result = {"ok": False, "error": str(e) or "internal error"}
                 if replace_queued:
-                    result = _finalize_queued_steer_result(sid, queued_text, result)
+                    # Match against the text actually delivered/enqueued by
+                    # _inject_text_into_session (`text`, post-wrap), not the
+                    # raw pre-wrap `queued_text` — when announced_from is set,
+                    # the durable queue holds the wrapped string, so matching
+                    # on the unwrapped one never finds it. The stale queued
+                    # copy then survives a successful steer and the queue
+                    # pump resends it later, delivering the message twice.
+                    result = _finalize_queued_steer_result(sid, text, result)
                 self.send_json(result)
         elif path == "/api/session/compact":
             length = int(self.headers.get("Content-Length", "0"))
