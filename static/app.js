@@ -8170,6 +8170,11 @@
   const AUTO_HANDOVER_MODE_LABELS = { compact: 'compact', mdfile: 'md', both: 'both', off: 'OFF' };
   const _AUTO_HANDOVER_CYCLE_DEBOUNCE_MS = 450;
   const _autoHandoverCycleTimers = {};
+  // Last state actually confirmed by the server (initial usage fetch, or a
+  // prior successful commit) -- distinct from _usageDataByPane's optimistic
+  // per-click value, so a click-flurry that lands back where it started can
+  // be detected and skipped rather than re-committing a no-op.
+  const _autoHandoverConfirmedState = {};
   const INPUT_DRAFTS_KEY = 'ccc-input-drafts-v1';
   const INPUT_DRAFTS_MAX = 200;
   const INPUT_DRAFT_MAX_CHARS = 50000;
@@ -27933,6 +27938,7 @@
           _usageDataByPane[paneId].auto_handover_enabled = !!data.enabled;
           _usageDataByPane[paneId].auto_handover_mode = data.mode || 'mdfile';
         }
+        _autoHandoverConfirmedState[paneId] = data.enabled ? (data.mode || 'mdfile') : 'off';
         showOpToast('token-sitter: ' + AUTO_HANDOVER_MODE_LABELS[state], 'success');
         const injectText = enabled
           ? 'token-sitter auto-snapshot on, mode ' + mode
@@ -27966,6 +27972,12 @@
     _autoHandoverCycleTimers[paneId] = setTimeout(() => {
       delete _autoHandoverCycleTimers[paneId];
       if (_usageDataByPane[paneId]) _usageDataByPane[paneId]._auto_handover_pending = false;
+      // A click-flurry that lands back on the state the server already has
+      // is a no-op: no POST, no chat injection, just clear the pending dot.
+      if (_autoHandoverConfirmedState[paneId] === next) {
+        renderSessionUsageIntoStrip(paneId);
+        return;
+      }
       commitAutoHandoverMode(paneId, sid, next);
     }, _AUTO_HANDOVER_CYCLE_DEBOUNCE_MS);
   }
@@ -44981,6 +44993,18 @@
         if (_usageRequestGenerationByPane[pid] !== generation) return;
         if (_usageSessionIdByPane[pid] !== sid) return;
         if (!_sessionUsagePaneIsVisible(pid, sid)) return;
+        _autoHandoverConfirmedState[pid] = data && data.auto_handover_enabled
+          ? (AUTO_HANDOVER_MODE_CYCLE.includes(data.auto_handover_mode) ? data.auto_handover_mode : 'mdfile')
+          : 'off';
+        if (_autoHandoverCycleTimers[pid]) {
+          // A click-cycle debounce is still pending for this pane -- keep its
+          // optimistic pill fields instead of overwriting them with this
+          // pre-commit poll snapshot, which would flash the wrong label.
+          const prev = _usageDataByPane[pid] || {};
+          data.auto_handover_enabled = prev.auto_handover_enabled;
+          data.auto_handover_mode = prev.auto_handover_mode;
+          data._auto_handover_pending = prev._auto_handover_pending;
+        }
         _usageDataByPane[pid] = data;
         renderSessionUsageIntoStrip(pid);
         _renderRailTokens(pid);
