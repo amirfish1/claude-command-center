@@ -6148,6 +6148,10 @@
   }
   function showOptimisticAgentIndicator($view) {
     if (!$view) return;
+    // A live /compact owns the progress surface. Letting the generic
+    // "Sending…/🧠 Thinking…" pill through here is what made compaction
+    // indistinguishable from an ordinary turn.
+    if (typeof _compactRunActive === 'function' && _compactRunActive()) return;
     let el = $view.querySelector('.conv-live-tool-inline.optimistic');
     const fresh = !el;
     if (!el) {
@@ -9886,7 +9890,18 @@
     // TTS, the inject-input fetch) happens after — previously an in-flight TTS
     // teardown was awaited before this line, so sends during playback felt laggy
     // ("sometimes ok" = only when TTS was off).
-    const pendingSend = appendPendingSendEcho(announcedInjectionPreview(text, announcedFrom), sid, paneId || activePaneId());
+    // `/compact` gets the lifecycle card instead of a normal send echo. The
+    // echo was actively harmful here: `/compact` is consumed by the engine and
+    // never lands in the JSONL as durable user text, so it never deduped, and
+    // the "keep unacknowledged echoes pinned above the composer" pass
+    // re-anchored it to the tail on every render — which is why the resume
+    // summary appeared ABOVE the command that produced it.
+    const compactRunStarted = compactCommand && isCompactionCapableSource(currentSession.source);
+    if (compactRunStarted) beginCompactRun(sid, currentSession.source);
+    const pendingSend = compactRunStarted
+      ? null
+      : appendPendingSendEcho(announcedInjectionPreview(text, announcedFrom), sid, paneId || activePaneId());
+    if (compactRunStarted && sid) markSessionSending(sid);
     updateInputBar();
     $input.value = '';
     clearInputDraftForConversation(draftConversation);
@@ -10141,14 +10156,16 @@
           });
           showOpToast('Accepted by WatchTower' + (data.transport ? ' - ' + data.transport + ' transport.' : '.'));
         } else if (compactCommand) {
-          showOpToast(compactRequestSuccessMessage(data, currentSession.source));
           if (currentSession.source === 'codex' || (data && data.via === 'live-spawn-stdin')) {
-            // Finished compacting server-side — nothing left to poll for.
-            clearCompactInProgressBanner();
+            // Finished compacting server-side — nothing left to poll for, so
+            // the card goes straight to its result instead of spinning.
+            completeCompactRun(sid);
+            clearOptimisticAgentIndicator(getConvViewForPane(paneId || activePaneId()) || getConvView());
+            clearSessionSending(sid);
             setTimeout(refreshConversationList, 1500);
             setTimeout(refreshConversationList, 3500);
           } else {
-            showCompactInProgressBanner(sid);
+            markCompactRunWorking(sid);
             scheduleCompactUsageRefresh(sid);
           }
         } else if (data.via === 'live-spawn-clear') {
@@ -10166,6 +10183,14 @@
         }
       } else if (compactCommand && data && data.code === 'compact_timeout') {
         handleCompactTimeout(sid);
+      } else if (compactCommand) {
+        // A real refusal from the engine (e.g. "Not enough messages to
+        // compact."). Say so on the card, not only in a toast that fades.
+        removePendingSendEcho(pendingSend);
+        restoreInputAfterSendFailure($input, text);
+        flashRed();
+        failCompactRun(sid, (data && (data.compact_error || data.error))
+          || formatInjectFailure(data, res.status) || 'unknown error');
       } else {
         const reason = formatInjectFailure(data, res.status);
         if (isCursorUsageLimitFailure(data, reason)) {
@@ -10192,8 +10217,12 @@
       removePendingSendEcho(pendingSend);
       restoreInputAfterSendFailure($input, text);
       flashRed();
-      const failurePrefix = compactCommand ? '/compact failed' : ((injectMode === 'steer' ? 'Steer' : (injectMode === 'answer' ? 'Answer' : 'Send')) + ' failed');
-      showOpToast(failurePrefix + ': ' + (err.message || 'network error'), 'error');
+      if (compactRunStarted) {
+        failCompactRun(sid, (err && err.message) || 'network error');
+      } else {
+        const failurePrefix = (injectMode === 'steer' ? 'Steer' : (injectMode === 'answer' ? 'Answer' : 'Send')) + ' failed';
+        showOpToast(failurePrefix + ': ' + (err.message || 'network error'), 'error');
+      }
     }
     if ($actionBtn) $actionBtn.disabled = false;
     $input.focus();
@@ -12119,85 +12148,359 @@
     return { intro, body };
   }
 
-  // Persistent in-progress banner shown while /compact is running.
-  // Claude takes 1-3 minutes to write the compact boundary; users
-  // previously had no visible signal that anything was happening (just
-  // a toast that disappeared after 3 seconds). The banner mounts into
-  // the active pane's conv view and clears when the compact-resume
-  // user_text event lands (see renderConversationEvents below).
-  // Heartbeat for the compact banner. A static "compacting…" banner can't
-  // tell a live compact from a dead one (CCC-26: "actively poll … to really
-  // know there's work in progress"). The timer ticks elapsed once a second
-  // (visible proof the UI is alive) and, every few ticks, refetches the
-  // transcript so the resume boundary is picked up promptly instead of
-  // waiting on the slow background poll. After the usual window it flips to
-  // a calm "longer than usual" hint rather than spinning forever silently.
-  let _compactBannerTimer = null;
-  let _compactBannerStart = 0;
-  const _COMPACT_STALL_MS = 4 * 60 * 1000; // past the typical 1-3 min window
-  function _stopCompactBannerTimer() {
-    if (_compactBannerTimer) { clearInterval(_compactBannerTimer); _compactBannerTimer = null; }
-    _compactBannerStart = 0;
+  // ── /compact lifecycle card (CCC) ─────────────────────────────────────
+  // One card owns the ENTIRE compaction, from the keystroke to the receipt.
+  //
+  // Before this, /compact was three disconnected artefacts in three places:
+  // a generic "Sending…/🧠 Thinking…" pill (indistinguishable from a normal
+  // turn, so you could not tell compaction had even started), a resume
+  // summary that rendered ABOVE the stuck `/compact` echo (the echo never
+  // dedupes — `/compact` is consumed by the engine and never lands in the
+  // JSONL as durable user text, so it got re-anchored to the tail forever),
+  // and a 3-second toast carrying the only "it worked" signal. On an Opus or
+  // Fable session, where compaction runs for minutes, that reads as a hang.
+  //
+  // The card is mounted SYNCHRONOUSLY on submit (before any fetch), names the
+  // stage it is in, ticks a live clock, and ends on a number: what the context
+  // was, what it is now, and how much was freed. When the resume summary
+  // arrives it is absorbed INTO the card rather than rendered as a sibling, so
+  // there is exactly one element and no ordering to get wrong.
+  const _COMPACT_STALL_MS = 4 * 60 * 1000;   // past the typical 1-3 min window
+  const _COMPACT_TYPICAL_MS = 90 * 1000;     // used only to pace the progress bar
+  // Stage copy. Honest about what is happening, in the user's terms.
+  const _COMPACT_STEPS = [
+    { key: 'ask',   label: 'Handing the transcript over' },
+    { key: 'write', label: 'Writing the summary' },
+    { key: 'swap',  label: 'Rebuilding the context window' },
+  ];
+  let _compactRun = null;
+  let _compactRunTimer = null;
+
+  function _compactRunActive() {
+    return !!(_compactRun && (_compactRun.stage === 'requested' || _compactRun.stage === 'working'));
+  }
+  function _compactRunFor(sid) {
+    return _compactRun && sid && _compactRun.sid === sid ? _compactRun : null;
+  }
+  function _compactEngineLabel(source) {
+    if (typeof SESSION_ENGINE_LABELS !== 'undefined' && SESSION_ENGINE_LABELS[source]) {
+      return SESSION_ENGINE_LABELS[source];
+    }
+    return 'Claude';
+  }
+  // Context size for the before/after headline. Same numbers the composer's
+  // context pill shows (`live_context_tokens` / `live_context_limit`), so the
+  // card can never disagree with the pill sitting right above it.
+  function _compactContextNow(sid) {
+    try {
+      const pid = typeof paneIdForSessionId === 'function' ? paneIdForSessionId(sid) : null;
+      const u = (pid && _usageDataByPane[pid]) || null;
+      if (!u) return null;
+      const tokens = Number(u.live_context_tokens || 0);
+      const limit = Number(u.live_context_limit || 0);
+      if (!tokens) return null;
+      return { tokens, limit };
+    } catch (_) { return null; }
+  }
+  function _compactTokenLabel(n) {
+    if (typeof _formatTokens === 'function') return _formatTokens(n);
+    return String(n || 0);
   }
   function _compactElapsedLabel(ms) {
     const s = Math.max(0, Math.round(ms / 1000));
     const m = Math.floor(s / 60);
     return m + ':' + String(s % 60).padStart(2, '0');
   }
-  function _tickCompactBanner(sid) {
-    const $view = typeof getConvView === 'function' ? getConvView() : document.getElementById('conversationsView');
-    const banner = $view && $view.querySelector('.compact-in-progress-banner');
-    if (!banner) { _stopCompactBannerTimer(); return; }
-    const elapsed = Date.now() - _compactBannerStart;
-    const elEl = banner.querySelector('.compact-banner-elapsed');
-    if (elEl) elEl.textContent = _compactElapsedLabel(elapsed);
-    if (elapsed >= _COMPACT_STALL_MS) banner.classList.add('is-slow');
-    // Active poll: every ~4s pull the transcript so the boundary (which
-    // tears this banner down) is caught quickly — only while this session
-    // is still the foreground one.
+  function _compactStepIndexFor(run) {
+    if (!run) return 0;
+    if (run.stage === 'requested') return 0;
+    if (run.stage === 'done') return _COMPACT_STEPS.length;
+    // "swap" only becomes truthful once the engine has answered; until then
+    // the honest position is "writing the summary".
+    return run.acked ? 2 : 1;
+  }
+
+  function _compactRunStepsHtml(run) {
+    const at = _compactStepIndexFor(run);
+    return '<div class="compact-run-steps">' + _COMPACT_STEPS.map((s, i) => {
+      const cls = i < at ? 'is-done' : (i === at ? 'is-active' : 'is-todo');
+      const glyph = i < at ? '✓' : (i === at ? '<span class="compact-run-step-dot"></span>' : '·');
+      return '<span class="compact-run-step ' + cls + '">'
+        + '<span class="compact-run-step-mark">' + glyph + '</span>'
+        + escapeHtml(s.label) + '</span>';
+    }).join('') + '</div>';
+  }
+
+  function _compactRunResultHtml(run) {
+    const before = run.before && run.before.tokens ? run.before.tokens : 0;
+    const after = run.after && run.after.tokens ? run.after.tokens : 0;
+    const took = run.endedAt && run.startedAt ? _compactElapsedLabel(run.endedAt - run.startedAt) : '';
+    const bits = [];
+    if (before && after && after < before) {
+      const freed = before - after;
+      const pct = Math.round((freed / before) * 100);
+      bits.push('<span class="compact-run-delta">'
+        + '<b>' + escapeHtml(_compactTokenLabel(before)) + '</b>'
+        + ' <span class="compact-run-arrow">→</span> '
+        + '<b>' + escapeHtml(_compactTokenLabel(after)) + '</b> tokens</span>');
+      bits.push('<span class="compact-run-freed">' + escapeHtml(_compactTokenLabel(freed))
+        + ' freed <span class="compact-run-pct">(−' + pct + '%)</span></span>');
+    } else if (before && !after) {
+      // The post-compact usage rollup lands sporadically in the JSONL; say we
+      // are still reading it rather than printing a wrong or missing number.
+      bits.push('<span class="compact-run-delta">was <b>'
+        + escapeHtml(_compactTokenLabel(before)) + '</b> · reading the new size…</span>');
+    }
+    if (took) bits.push('<span class="compact-run-took">took ' + escapeHtml(took) + '</span>');
+    if (!bits.length) return '';
+    return '<div class="compact-run-result">' + bits.join('<span class="compact-run-sep">·</span>') + '</div>';
+  }
+
+  function _compactRunPaint() {
+    const run = _compactRun;
+    if (!run || !run.el) return;
+    const el = run.el;
+    el.dataset.stage = run.stage;
+    el.classList.toggle('is-slow', !!run.slow);
+    const engine = escapeHtml(run.engineLabel || 'Claude');
+    const elapsed = _compactElapsedLabel((run.endedAt || Date.now()) - run.startedAt);
+    const before = run.before && run.before.tokens ? run.before.tokens : 0;
+
+    let glyph, title, note, extra = '';
+    if (run.stage === 'failed') {
+      glyph = '⚠';
+      title = 'Compaction didn’t run';
+      note = escapeHtml(run.error || 'The engine did not confirm the compaction.')
+        + ' <span class="compact-run-quiet">Nothing was changed — your conversation is intact.</span>';
+      extra = '<button type="button" class="compact-run-retry">Try /compact again</button>';
+    } else if (run.stage === 'done') {
+      glyph = '✓';
+      title = 'Context compacted';
+      note = engine + ' replaced the earlier turns with a summary. Everything below this'
+        + ' point is the conversation it kept.';
+    } else if (run.stage === 'requested') {
+      glyph = '<span class="compact-run-spinner"></span>';
+      title = 'Starting compaction…';
+      note = 'Asking ' + engine + ' to summarize this conversation so the context window has room again.';
+    } else {
+      glyph = '<span class="compact-run-spinner"></span>';
+      title = 'Compacting context';
+      note = engine + ' is reading the whole transcript and writing a summary of it.'
+        + (before ? ' Compacting <b>' + escapeHtml(_compactTokenLabel(before)) + '</b> of context.' : '')
+        + ' On a long session this usually takes 1–3 minutes.';
+    }
+
+    // Progress bar: honest about being an estimate. It eases toward — but
+    // never reaches — 100% while working, and only fills on the real result.
+    let bar = '';
+    if (run.stage === 'requested' || run.stage === 'working') {
+      const frac = 1 - Math.exp(-((Date.now() - run.startedAt) / _COMPACT_TYPICAL_MS));
+      const pct = Math.min(92, Math.max(4, Math.round(frac * 92)));
+      bar = '<div class="compact-run-bar" role="progressbar" aria-valuemin="0" aria-valuemax="100"'
+        + ' aria-valuenow="' + pct + '" aria-label="Compaction progress (estimated)">'
+        + '<span class="compact-run-bar-fill" style="width:' + pct + '%"></span></div>';
+    }
+
+    const heartbeat = (run.stage === 'requested' || run.stage === 'working')
+      ? '<div class="compact-run-heartbeat">CCC is watching for the new boundary'
+        + ' · <span class="compact-run-elapsed">' + escapeHtml(elapsed) + '</span> elapsed</div>'
+      : '';
+    const slowNote = run.slow
+      ? '<div class="compact-run-slownote">Longer than usual — still watching. If the engine'
+        + ' went idle, re-running <code>/compact</code> is safe.'
+        + '<button type="button" class="compact-run-retry">Run /compact again</button></div>'
+      : '';
+    const backup = (run.stage === 'requested' || run.stage === 'working')
+      ? '<div class="compact-run-backup">A snapshot of the pre-compact transcript is saved to'
+        + ' <code>~/.claude/command-center/compact-backups/</code>.</div>'
+      : '';
+    const result = run.stage === 'done' ? _compactRunResultHtml(run) : '';
+    const summary = run.summaryHtml
+      ? '<div class="compact-run-summary">' + run.summaryHtml + '</div>'
+      : '';
+
+    el.innerHTML =
+      '<div class="compact-run-head">'
+      +   '<span class="compact-run-glyph">' + glyph + '</span>'
+      +   '<span class="compact-run-title">' + title + '</span>'
+      +   '<span class="compact-run-clock">' + escapeHtml(elapsed) + '</span>'
+      + '</div>'
+      + (run.stage === 'failed' ? '' : _compactRunStepsHtml(run))
+      + bar
+      + result
+      + '<div class="compact-run-note">' + note + '</div>'
+      + heartbeat
+      + slowNote
+      + backup
+      + extra
+      + summary;
+  }
+
+  function _compactRunView() {
+    if (typeof getConvView === 'function') return getConvView();
+    return document.getElementById('conversationsView');
+  }
+  // Keep the card in the DOM across the incremental re-renders that append
+  // new events. Mounts at the tail while the run is live; once the resume
+  // summary has been absorbed the render pass re-anchors it in the summary's
+  // chronological slot instead (see _compactRunAnchorTo).
+  function _compactRunMount($view) {
+    const run = _compactRun;
+    if (!run) return;
+    const view = $view || _compactRunView();
+    if (!view) return;
+    if (!run.el) {
+      run.el = document.createElement('div');
+      run.el.className = 'compact-run-card';
+      if (run.sid) run.el.dataset.sid = run.sid;
+    }
+    if (run.el.parentNode !== view && !run.anchored) view.appendChild(run.el);
+    else if (!run.anchored && run.el !== view.lastElementChild) view.appendChild(run.el);
+  }
+  function _compactRunAnchorTo(node) {
+    const run = _compactRun;
+    if (!run || !run.el || !node || !node.parentNode) return;
+    run.anchored = true;
+    if (run.el.nextSibling !== node || run.el.parentNode !== node.parentNode) {
+      node.parentNode.insertBefore(run.el, node);
+    }
+  }
+
+  function _stopCompactRunTimer() {
+    if (_compactRunTimer) { clearInterval(_compactRunTimer); _compactRunTimer = null; }
+  }
+  function _tickCompactRun() {
+    const run = _compactRun;
+    if (!run) { _stopCompactRunTimer(); return; }
+    if (run.stage !== 'requested' && run.stage !== 'working') { _stopCompactRunTimer(); return; }
+    if (!run.el || !run.el.isConnected) _compactRunMount();
+    const elapsed = Date.now() - run.startedAt;
+    if (elapsed >= _COMPACT_STALL_MS) run.slow = true;
+    _compactRunPaint();
+    // Active poll: pull the transcript every ~4s so the boundary that ends
+    // this run is caught promptly instead of waiting on the slow list poll.
     const ticks = Math.round(elapsed / 1000);
-    if (ticks > 0 && ticks % 4 === 0 && currentSession && currentSession.id === sid
+    if (ticks > 0 && ticks % 4 === 0 && currentSession && currentSession.id === run.sid
         && typeof fetchConversationEvents === 'function') {
       try { fetchConversationEvents(typeof activePaneId === 'function' ? activePaneId() : undefined); } catch (e) {}
     }
   }
-  function showCompactInProgressBanner(sid) {
-    const $view = typeof getConvView === 'function' ? getConvView() : document.getElementById('conversationsView');
-    if (!$view) return;
-    let banner = $view.querySelector('.compact-in-progress-banner');
-    if (banner) return;
-    banner = document.createElement('div');
-    banner.className = 'compact-in-progress-banner';
-    if (sid) banner.dataset.sid = sid;
-    banner.innerHTML = '<span class="compact-banner-spinner" aria-hidden="true"></span>'
-      + '<span class="compact-banner-text">'
-      +   '<strong>Compacting conversation context…</strong>'
-      +   ' Claude is summarizing the prior turns. This usually takes 1-3 minutes.'
-      +   ' <span class="compact-banner-heartbeat">CCC is polling for the new boundary'
-      +     ' · <span class="compact-banner-elapsed">0:00</span> elapsed</span>'
-      +   ' <span class="compact-banner-slow-note">Longer than usual - still polling. If the engine'
-      +     ' went idle, re-running <code>/compact</code> is safe.</span>'
-      +   ' <em>The on-disk transcript will be rewritten - a snapshot of the pre-compact JSONL was saved to'
-      +   ' <code>~/.claude/command-center/compact-backups/</code>.</em>'
-      + '</span>';
-    $view.appendChild(banner);
-    if (typeof scrollConversationToEnd === 'function') {
-      scrollConversationToEnd($view);
-    }
-    _stopCompactBannerTimer();
-    _compactBannerStart = Date.now();
-    _compactBannerTimer = setInterval(() => _tickCompactBanner(sid), 1000);
+
+  // Called synchronously on submit — BEFORE the fetch — so the card is on
+  // screen in the same frame as the keystroke.
+  function beginCompactRun(sid, source) {
+    if (!sid) return null;
+    const engineLabel = _compactEngineLabel(source || (currentSession && currentSession.source));
+    if (_compactRunActive() && _compactRun.sid === sid) return _compactRun;
+    if (_compactRun && _compactRun.el && _compactRun.el.parentNode) _compactRun.el.remove();
+    _compactRun = {
+      sid,
+      engineLabel,
+      stage: 'requested',
+      startedAt: Date.now(),
+      endedAt: 0,
+      acked: false,
+      slow: false,
+      anchored: false,
+      before: _compactContextNow(sid),
+      after: null,
+      summaryHtml: '',
+      error: '',
+      el: null,
+    };
+    _compactRunMount();
+    _compactRunPaint();
+    if (typeof scrollConversationToEnd === 'function') scrollConversationToEnd(_compactRunView());
+    _stopCompactRunTimer();
+    _compactRunTimer = setInterval(_tickCompactRun, 1000);
+    return _compactRun;
   }
-  function clearCompactInProgressBanner(view) {
-    _stopCompactBannerTimer();
+
+  // The engine acknowledged the request (it is now actually summarizing).
+  function markCompactRunWorking(sid) {
+    const run = _compactRunFor(sid) || beginCompactRun(sid);
+    if (!run) return;
+    run.acked = true;
+    if (run.stage === 'requested') run.stage = 'working';
+    _compactRunMount();
+    _compactRunPaint();
+  }
+
+  // Terminal success. `after` fills in as the post-compact usage rollup lands,
+  // so the headline number is polled a few times rather than guessed once.
+  function completeCompactRun(sid) {
+    const run = _compactRunFor(sid) || _compactRun;
+    if (!run) return;
+    if (run.stage === 'done' || run.stage === 'failed') return;
+    run.stage = 'done';
+    run.acked = true;
+    run.slow = false;
+    run.endedAt = Date.now();
+    _stopCompactRunTimer();
+    _compactRunMount();
+    _compactRunPaint();
+    _compactRunPollAfter(run);
+  }
+
+  function _compactRunPollAfter(run) {
+    if (!run || !run.sid) return;
+    [800, 2500, 6000, 12000, 25000, 45000].forEach((delay) => {
+      setTimeout(async () => {
+        if (_compactRun !== run) return;
+        if (!(currentSession && currentSession.id === run.sid)) return;
+        try {
+          if (typeof fetchSessionUsage === 'function') await fetchSessionUsage(run.sid);
+        } catch (_) {}
+        const now = _compactContextNow(run.sid);
+        // Only accept a number that is actually smaller than the pre-compact
+        // size — a stale rollup would otherwise print "0 freed" on a real win.
+        if (now && now.tokens && (!run.before || now.tokens < run.before.tokens)) {
+          run.after = now;
+          _compactRunPaint();
+        }
+      }, delay);
+    });
+  }
+
+  function failCompactRun(sid, reason) {
+    const run = _compactRunFor(sid) || _compactRun;
+    if (!run) return;
+    run.stage = 'failed';
+    run.error = String(reason || '');
+    run.endedAt = Date.now();
+    _stopCompactRunTimer();
+    _compactRunMount();
+    _compactRunPaint();
+  }
+
+  // Drop the card with no verdict — used when the pane switches away, not as
+  // a completion path.
+  function discardCompactRun(view) {
+    _stopCompactRunTimer();
+    if (_compactRun && _compactRun.el && _compactRun.el.parentNode) _compactRun.el.remove();
+    _compactRun = null;
     const views = view ? [view] : (typeof conversationScrollViews === 'function'
       ? conversationScrollViews()
       : [document.getElementById('conversationsView')].filter(Boolean));
     for (const v of views) {
       if (!v) continue;
-      v.querySelectorAll('.compact-in-progress-banner').forEach(el => el.remove());
+      v.querySelectorAll('.compact-run-card, .compact-in-progress-banner').forEach(el => el.remove());
     }
   }
+
+  // Back-compat shims for the older banner API. Every call site that meant
+  // "the compaction finished" now calls completeCompactRun explicitly; these
+  // remain so any path not converted still behaves sanely.
+  function showCompactInProgressBanner(sid) { markCompactRunWorking(sid); }
+  function clearCompactInProgressBanner(view) { discardCompactRun(view); }
+
+  // Retry buttons inside the card re-run /compact for its session.
+  document.addEventListener('click', (ev) => {
+    const btn = ev.target && ev.target.closest && ev.target.closest('.compact-run-retry');
+    if (!btn) return;
+    ev.preventDefault();
+    if (typeof compactCurrentSession === 'function') compactCurrentSession();
+  });
 
   // CCC-863: unattended usage/rate-limit auto-resume countdown. When a
   // session's row carries `usage_limit_resume_at` (set server-side by the
@@ -27233,16 +27536,15 @@
 
   // Immediate "it started" feedback fired the MOMENT a /compact request goes
   // out — not after the await resolves. The Claude hidden-pty path blocks
-  // server-side for the FULL compaction (1-3 min), so deferring the progress
-  // banner until the response came back left a two-minute dead zone: a 5s
-  // toast faded and nothing else signalled that work was ongoing. The banner
-  // carries a live elapsed timer and tears itself down the instant the compact
-  // boundary lands (its own 4s transcript poll), so showing it up front makes
-  // the timer span the real wait. Background sessions (not the foreground
-  // conv view) get a toast instead, since the banner is scoped to that view.
+  // server-side for the FULL compaction (1-3 min), so deferring the card until
+  // the response came back left a two-minute dead zone where the only thing on
+  // screen was a generic "🧠 Thinking…" pill, indistinguishable from a normal
+  // turn. The card carries a live elapsed clock and ends on the real numbers,
+  // so mounting it up front makes the clock span the whole wait. Background
+  // sessions (not the foreground conv view) get a toast instead, since the
+  // card is scoped to that view.
   function beginCompactProgress(sid, source) {
-    if (source === 'codex') { showOpToast('Compacting conversation…', 'info'); return; }
-    if (currentSession && currentSession.id === sid) showCompactInProgressBanner(sid);
+    if (currentSession && currentSession.id === sid) beginCompactRun(sid, source);
     else showOpToast('Compacting conversation… (usually 1-3 min)', 'info');
   }
 
@@ -27253,8 +27555,11 @@
   // (CCC-786: users saw "/compact failed: timed out" when it usually landed
   // moments later). Keep the progress banner up and keep polling.
   function handleCompactTimeout(sid) {
-    showOpToast('Compaction is taking longer than usual - still watching for it to land.', 'info');
-    showCompactInProgressBanner(sid);
+    // Not a failure: keep the card in its working state (it already says
+    // "still watching") and mark it slow so the reassurance copy + retry
+    // affordance appear. No toast — the card is the single source of truth.
+    markCompactRunWorking(sid);
+    if (_compactRun && _compactRun.sid === sid) { _compactRun.slow = true; _compactRunPaint(); }
     scheduleCompactUsageRefresh(sid);
   }
 
@@ -27290,9 +27595,9 @@
         if (source === 'codex' || (data && data.via === 'live-spawn-stdin')) {
           // These paths already FINISHED compacting server-side (Codex via RPC;
           // the live spawn ran /compact itself and we watched compact_result).
-          // There's no boundary still to poll for, so tear the banner down and
-          // refresh the list rather than leaving a stuck "Compacting…" spinner.
-          clearCompactInProgressBanner();
+          // There's no boundary still to poll for, so land the card on its
+          // result rather than leaving a stuck "Compacting…" spinner.
+          completeCompactRun(sid);
           // Codex compact has completed; any optimistic Thinking pill is stale.
           // (The live-spawn-stdin path is likewise done — same teardown.)
           clearOptimisticAgentIndicator(getConvView());
@@ -27301,24 +27606,22 @@
           setTimeout(refreshConversationList, 1500);
           setTimeout(refreshConversationList, 3500);
         } else {
-          showCompactInProgressBanner(sid);
+          markCompactRunWorking(sid);
           scheduleCompactUsageRefresh(sid);
         }
       } else if (data && data.code === 'compact_needs_manual') {
-        clearCompactInProgressBanner();
+        failCompactRun(sid, 'This engine needs /compact run from its own terminal.');
         offerManualCompact(sid);
       } else if (data && data.code === 'compact_timeout') {
         handleCompactTimeout(sid);
       } else {
-        clearCompactInProgressBanner();
         // Surface the engine's real compact_error when it told us why it failed
         // (e.g. "Not enough messages to compact.") instead of a generic message.
         const reason = (data && (data.compact_error || formatInjectFailure(data, 0) || data.error)) || 'unknown';
-        showOpToast('/compact failed: ' + reason, 'error');
+        failCompactRun(sid, reason);
       }
     } catch (err) {
-      clearCompactInProgressBanner();
-      showOpToast('/compact failed: ' + ((err && err.message) || 'network error'), 'error');
+      failCompactRun(sid, (err && err.message) || 'network error');
     } finally {
       _compactInFlight = false;
       if (typeof updateInputBar === 'function') updateInputBar();
@@ -33613,26 +33916,24 @@
             touchSessionOptimistically(sid);
             if (source === 'codex' || (data && data.via === 'live-spawn-stdin')) {
               // Already finished compacting server-side — no boundary left to
-              // poll for; clear the banner instead of leaving it spinning.
-              clearCompactInProgressBanner();
+              // poll for; land the card on its result instead of spinning.
+              completeCompactRun(sid);
               setTimeout(refreshConversationList, 1500);
               setTimeout(refreshConversationList, 3500);
             } else {
-              showCompactInProgressBanner(sid);
+              markCompactRunWorking(sid);
               scheduleCompactUsageRefresh(sid);
             }
           } else if (data && data.code === 'compact_needs_manual') {
-            clearCompactInProgressBanner();
+            failCompactRun(sid, 'This engine needs /compact run from its own terminal.');
             offerManualCompact(sid);
           } else if (data && data.code === 'compact_timeout') {
             handleCompactTimeout(sid);
           } else {
-            clearCompactInProgressBanner();
-            showOpToast('/compact failed: ' + ((data && (data.compact_error || data.error)) || 'unknown'), 'error');
+            failCompactRun(sid, (data && (data.compact_error || data.error)) || 'unknown');
           }
         } catch (err) {
-          clearCompactInProgressBanner();
-          showOpToast('/compact failed: ' + ((err && err.message) || 'network'), 'error');
+          failCompactRun(sid, (err && err.message) || 'network');
         }
       };
       badge.addEventListener('click', runCompact);
@@ -37107,6 +37408,10 @@
     try { _closeWtLogPanel(); } catch (_) {}
     const previousConvId = pane.conversationId;
     if (previousConvId && previousConvId !== id) {
+      // The /compact lifecycle card is scoped to one conversation's view.
+      // Leaving mid-run drops it; the compaction itself keeps running
+      // server-side and the durable summary still lands in the transcript.
+      if (_compactRun && !_compactRunActive()) discardCompactRun();
       syncPendingSendsMapForConv(pane, previousConvId);
       // CCC-131: stash the outgoing transcript's scroll before the view is
       // wiped, so returning to this conversation restores where we left off.
@@ -50045,8 +50350,16 @@
         const compactCardHtml = renderCompactResumeCard(cleanedText);
         if (compactCardHtml) {
           div.classList.add('compact-resume-event');
-          if (typeof clearCompactInProgressBanner === 'function') {
-            clearCompactInProgressBanner($view);
+          // The boundary just landed: this IS the compaction's result. Absorb
+          // the summary into the lifecycle card (one element, no sibling to
+          // order wrongly) and land the card on its before/after numbers.
+          if (typeof completeCompactRun === 'function' && _compactRun
+              && _compactRun.sid === (currentSession && currentSession.id)
+              && _compactRun.stage !== 'failed') {
+            _compactRun.summaryHtml = compactCardHtml;
+            div.classList.add('compact-absorbed-by-run');
+            completeCompactRun(_compactRun.sid);
+            _compactRunAnchorTo(div);
           }
         }
         const userSteerHtml = userMessageSteerHtml(cleanedText, notification, compactCardHtml);
@@ -50750,6 +51063,17 @@
       if (currentSession.id) clearSessionSending(currentSession.id);
       const sid = compactBoundary.session || (currentSession && currentSession.id) || '';
       if (sid && currentSession && currentSession.id === sid) fetchSessionUsage(sid);
+      // Authoritative "it happened" signal — it can land before the resume
+      // summary does, so the card lands on its result here too.
+      if (typeof completeCompactRun === 'function') completeCompactRun(sid);
+    }
+    // Keep the lifecycle card in the DOM across re-renders, anchored to the
+    // summary it absorbed when there is one (chronological slot) and to the
+    // tail while the run is still in flight.
+    if (_compactRun && currentSession && _compactRun.sid === currentSession.id) {
+      const _absorbed = $view.querySelector('.compact-resume-event.compact-absorbed-by-run');
+      if (_absorbed) _compactRunAnchorTo(_absorbed);
+      else if (!_compactRun.anchored) _compactRunMount($view);
     }
     // Same story for the spawn-log streaming bubble — keep it pinned to
     // the tail so it doesn't end up sandwiched between older JSONL events

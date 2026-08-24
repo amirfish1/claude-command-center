@@ -8922,7 +8922,170 @@
     margin: 10px 0 4px;
   }
 
-  /* Compact-in-progress banner shown while /compact is running. */
+  /* ── /compact lifecycle card ──────────────────────────────────────
+     One card owns the whole compaction: mounted on the keystroke, ticks a
+     live clock while the engine summarizes, and lands on the before/after
+     numbers with the resume summary nested inside it. */
+  .compact-run-card {
+    margin: 12px 0;
+    padding: 12px 14px 13px;
+    border-radius: 10px;
+    border: 1px solid color-mix(in srgb, var(--accent) 34%, var(--border) 66%);
+    background:
+      linear-gradient(180deg,
+        color-mix(in srgb, var(--accent) 10%, var(--surface) 90%),
+        color-mix(in srgb, var(--accent) 4%, var(--surface) 96%));
+    font-size: 13px; line-height: 1.5; color: var(--text);
+    animation: ccc-compact-card-in 220ms ease-out;
+  }
+  @keyframes ccc-compact-card-in {
+    from { opacity: 0; transform: translateY(4px); }
+    to   { opacity: 1; transform: none; }
+  }
+  /* The absorbed resume summary renders INSIDE the card; its standalone
+     event row stays in the DOM (jsonl-line dedupe anchors on it) but hidden,
+     so there is exactly one visible artefact per compaction. */
+  .event.compact-resume-event.compact-absorbed-by-run { display: none; }
+
+  .compact-run-head {
+    display: flex; align-items: center; gap: 9px;
+    font-size: 12px; font-weight: 700;
+    text-transform: uppercase; letter-spacing: 0.05em;
+    color: var(--accent);
+  }
+  .compact-run-title { flex: 1; }
+  .compact-run-clock {
+    font-variant-numeric: tabular-nums;
+    font-weight: 600; letter-spacing: 0;
+    color: color-mix(in srgb, var(--text) 60%, transparent);
+  }
+  .compact-run-glyph { display: inline-flex; width: 15px; justify-content: center; }
+  .compact-run-spinner {
+    width: 13px; height: 13px; border-radius: 50%;
+    border: 2px solid color-mix(in srgb, var(--accent) 35%, transparent);
+    border-top-color: var(--accent);
+    animation: ccc-compact-spin 0.9s linear infinite;
+  }
+  @keyframes ccc-compact-spin { to { transform: rotate(360deg); } }
+
+  /* Named stages, so "what is it doing right now" is answerable at a glance. */
+  .compact-run-steps {
+    display: flex; flex-wrap: wrap; align-items: center; gap: 6px 14px;
+    margin: 9px 0 2px;
+    font-size: 12px;
+  }
+  .compact-run-step {
+    display: inline-flex; align-items: center; gap: 5px;
+    color: color-mix(in srgb, var(--text) 42%, transparent);
+    transition: color 180ms ease;
+  }
+  .compact-run-step-mark { display: inline-flex; width: 11px; justify-content: center; }
+  .compact-run-step.is-done { color: color-mix(in srgb, var(--text) 62%, transparent); }
+  .compact-run-step.is-done .compact-run-step-mark { color: var(--green, #4ade80); }
+  .compact-run-step.is-active { color: var(--text); font-weight: 600; }
+  .compact-run-step-dot {
+    width: 7px; height: 7px; border-radius: 50%;
+    background: var(--accent);
+    animation: ccc-compact-pulse 1.25s ease-in-out infinite;
+  }
+  @keyframes ccc-compact-pulse {
+    0%, 100% { opacity: 1;   transform: scale(1); }
+    50%      { opacity: 0.35; transform: scale(0.7); }
+  }
+
+  /* Estimated progress. Eases toward but never reaches 100% while working —
+     it paces the wait, it does not claim to know the finish time. */
+  .compact-run-bar {
+    position: relative; overflow: hidden;
+    height: 4px; margin: 10px 0 2px;
+    border-radius: 999px;
+    background: color-mix(in srgb, var(--accent) 16%, transparent);
+  }
+  .compact-run-bar-fill {
+    display: block; height: 100%;
+    border-radius: 999px;
+    background: linear-gradient(90deg,
+      color-mix(in srgb, var(--accent) 55%, transparent), var(--accent));
+    transition: width 900ms cubic-bezier(0.22, 1, 0.36, 1);
+  }
+  .compact-run-bar::after {
+    content: ''; position: absolute; inset: 0;
+    background: linear-gradient(90deg, transparent,
+      color-mix(in srgb, var(--accent) 45%, transparent), transparent);
+    transform: translateX(-100%);
+    animation: ccc-compact-shimmer 1.9s ease-in-out infinite;
+  }
+  @keyframes ccc-compact-shimmer { to { transform: translateX(100%); } }
+
+  /* The payoff line: what the context was, what it is now, what that bought. */
+  .compact-run-result {
+    display: flex; flex-wrap: wrap; align-items: baseline; gap: 8px;
+    margin: 10px 0 2px;
+    font-size: 14px;
+    animation: ccc-compact-result-in 320ms ease-out;
+  }
+  @keyframes ccc-compact-result-in {
+    from { opacity: 0; transform: translateY(-3px); }
+    to   { opacity: 1; transform: none; }
+  }
+  .compact-run-result b { font-variant-numeric: tabular-nums; color: var(--text); }
+  .compact-run-arrow { color: var(--accent); }
+  .compact-run-freed { color: var(--green, #4ade80); font-weight: 600; }
+  .compact-run-pct { font-weight: 500; opacity: 0.85; }
+  .compact-run-took,
+  .compact-run-sep { color: color-mix(in srgb, var(--text) 48%, transparent); font-size: 13px; }
+
+  .compact-run-note { margin-top: 8px; }
+  .compact-run-note b { font-variant-numeric: tabular-nums; }
+  .compact-run-quiet,
+  .compact-run-heartbeat,
+  .compact-run-backup {
+    color: color-mix(in srgb, var(--text) 58%, transparent);
+  }
+  .compact-run-heartbeat, .compact-run-backup { margin-top: 6px; font-size: 12px; }
+  .compact-run-elapsed { font-variant-numeric: tabular-nums; }
+  .compact-run-slownote {
+    margin-top: 8px; padding: 7px 9px;
+    border-radius: 7px;
+    background: color-mix(in srgb, var(--accent) 12%, transparent);
+    font-size: 12px;
+  }
+  .compact-run-retry {
+    display: inline-block; margin-left: 8px;
+    padding: 3px 9px;
+    border-radius: 6px;
+    border: 1px solid color-mix(in srgb, var(--accent) 45%, transparent);
+    background: transparent; color: var(--accent);
+    font-size: 12px; font-weight: 600; cursor: pointer;
+  }
+  .compact-run-retry:hover { background: color-mix(in srgb, var(--accent) 14%, transparent); }
+
+  .compact-run-card[data-stage="done"] {
+    border-color: color-mix(in srgb, var(--green, #4ade80) 32%, var(--border) 68%);
+  }
+  .compact-run-card[data-stage="done"] .compact-run-head,
+  .compact-run-card[data-stage="done"] .compact-run-glyph { color: var(--green, #4ade80); }
+  .compact-run-card[data-stage="failed"] {
+    border-color: color-mix(in srgb, var(--red, #f87171) 40%, var(--border) 60%);
+    background: color-mix(in srgb, var(--red, #f87171) 6%, var(--surface) 94%);
+  }
+  .compact-run-card[data-stage="failed"] .compact-run-head,
+  .compact-run-card[data-stage="failed"] .compact-run-glyph { color: var(--red, #f87171); }
+  .compact-run-card.is-slow[data-stage="working"] {
+    border-color: color-mix(in srgb, var(--amber, #fbbf24) 40%, var(--border) 60%);
+  }
+  .compact-run-summary { margin-top: 10px; }
+  .compact-run-summary .compact-resume-card { margin: 0; }
+
+  @media (prefers-reduced-motion: reduce) {
+    .compact-run-card,
+    .compact-run-result { animation: none; }
+    .compact-run-bar::after,
+    .compact-run-step-dot { animation: none; }
+    .compact-run-bar-fill { transition: none; }
+  }
+
+  /* Legacy compact-in-progress banner (kept for any path still using it). */
   .compact-in-progress-banner {
     display: flex; align-items: center; gap: 10px;
     margin: 10px 0;
