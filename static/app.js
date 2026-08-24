@@ -3530,7 +3530,7 @@
     try { return (typeof activePaneId === 'function' && activePaneId()) || 'p1'; } catch (_) { return 'p1'; }
   }
   function f2PaneRoot(paneId) {
-    try { return document.querySelector('.conv-pane[data-pane-id="' + f2PaneKey(paneId) + '"]'); }
+    try { return convPaneElById(f2PaneKey(paneId)); }
     catch (_) { return null; }
   }
   function f2RailEl(paneId) {
@@ -5423,7 +5423,7 @@
   } catch (_) {}
 
   function _relayedQuestionInlineEl() {
-    return document.querySelector('[data-role="ccc-inline-question"]');
+    return (document.getElementById('convSplit') || document).querySelector('[data-role="ccc-inline-question"]');
   }
 
   // Back-compat alias — older call sites may still reference the modal name.
@@ -8349,7 +8349,7 @@
   }
 
   function composerInputForPane(paneId) {
-    const pane = document.querySelector(`.conv-pane[data-pane-id="${paneId || activePaneId()}"]`);
+    const pane = convPaneElById(paneId || activePaneId());
     if (!pane) return paneId === 'p1' ? $convInput : null;
     return pane.querySelector('.conv-input-bar textarea, .conv-input-bar input[type="text"]');
   }
@@ -10196,9 +10196,11 @@
           });
           showOpToast('Accepted by WatchTower' + (data.transport ? ' - ' + data.transport + ' transport.' : '.'));
         } else if (compactCommand) {
-          if (currentSession.source === 'codex' || (data && data.via === 'live-spawn-stdin')) {
+          if ((currentSession.source === 'codex' || (data && data.via === 'live-spawn-stdin'))
+              && compactResponseIsComplete(data)) {
             // Finished compacting server-side — nothing left to poll for, so
             // the card goes straight to its result instead of spinning.
+            adoptCompactRunResult(sid, data);
             completeCompactRun(sid);
             clearOptimisticAgentIndicator(getConvViewForPane(paneId || activePaneId()) || getConvView());
             clearSessionSending(sid);
@@ -12536,6 +12538,27 @@
     _compactRunPaint();
   }
 
+  // A bare ok:true is NOT proof the compaction finished. The Codex app-server
+  // acks `thread/compact/start` in under a second and then works for one to
+  // three minutes, so the card used to land on "context compacted / took 0:00"
+  // while Codex was still compacting. Only an explicit compacted status counts.
+  function compactResponseIsComplete(data) {
+    if (!data) return false;
+    return data.status === 'compacted' || data.compact_result === 'success';
+  }
+  // The server measures the rebuilt context off the rollout, so the card can
+  // print "282k -> 12k" straight away instead of sitting on "reading the new
+  // size..." until the next real turn writes a token_count.
+  function adoptCompactRunResult(sid, data) {
+    const run = sid ? _compactRunFor(sid) : _compactRun;
+    if (!run || !data) return;
+    const pre = Number(data.pre_tokens || 0);
+    const post = Number(data.post_tokens || 0);
+    const limit = (run.before && run.before.limit) || 0;
+    if (pre > 0 && !(run.before && run.before.tokens)) run.before = { tokens: pre, limit };
+    if (post > 0) run.after = { tokens: post, limit: (run.before && run.before.limit) || limit };
+  }
+
   // Terminal success. `after` fills in as the post-compact usage rollup lands,
   // so the headline number is polled a few times rather than guessed once.
   function completeCompactRun(sid) {
@@ -14215,7 +14238,7 @@
     $mobileOriginalAsk.title = cleaned ? 'Show the full original ask' : '';
   }
   function syncPaneLastUserMessage(paneId, text) {
-    const pane = document.querySelector(`.conv-pane[data-pane-id="${paneId || activePaneId()}"]`);
+    const pane = convPaneElById(paneId || activePaneId());
     const messageEl = pane && pane.querySelector('[data-role="pane-last-user-message"]');
     if (!pane || !messageEl) return;
     const cleaned = String(text || '').replace(/\s+/g, ' ').trim();
@@ -14919,8 +14942,9 @@
         stopSpeechRecognition();
       }
     }
-    document.querySelectorAll('.conv-pane').forEach(el => {
-      el.classList.toggle('is-active', el.getAttribute('data-pane-id') === activePid);
+    _convPaneHost().querySelectorAll('.conv-pane').forEach(el => {
+      const on = el.getAttribute('data-pane-id') === activePid;
+      if (el.classList.contains('is-active') !== on) el.classList.toggle('is-active', on);
     });
     const convId = arguments.length > 0 ? activeConvId : currentConversation;
     if ($convList) {
@@ -16693,11 +16717,16 @@
     // the stuck flag, list never filters. If the boolean says we're
     // dragging but no DOM element actually carries a .dragging class,
     // clear it.
-    const domHasDragging = !!document.querySelector(
+    // Only consult the DOM while the flag is set: this runs from hot render
+    // paths, and the document-wide selector scan cost ~9ms per session open
+    // with a few hundred sidebar rows. When the flag is clear the query
+    // could only ever return false for the self-heal anyway.
+    let domHasDragging = false;
+    if (_sidebarDragInProgress) {
+      domHasDragging = !!document.querySelector(
       '.flow-node.dragging,.kanban-card.dragging,.kanban-column-header.dragging-header,.conv-item.dragging,.conv-draft-row.dragging,.conv-folder-group-header.dragging,.conv-objects-splitter.is-dragging,.flow-board.is-panning,.flow-board.is-zooming'
-    );
-    if (_sidebarDragInProgress && !domHasDragging) {
-      _sidebarDragInProgress = false;
+      );
+      if (!domHasDragging) _sidebarDragInProgress = false;
     }
     return _sidebarDragInProgress || domHasDragging;
   }
@@ -27643,9 +27672,12 @@
   // "ago" stays live on every 5s poll without a full breadcrumb rebuild. No-op
   // when neither slot is present (non-Claude session, or breadcrumb hidden).
   function updateConvProcessIndicator() {
+    // Both slots live under #convSplit (pane header / status rail); scoping
+    // the attribute selectors there skips the sidebar's 10k+ nodes.
+    const _procHost = document.getElementById('convSplit') || document;
     const targets = [
-      document.querySelector('[data-role="pane-proc"]'),
-      document.querySelector('[data-role="rail-proc"]'),
+      _procHost.querySelector('[data-role="pane-proc"]'),
+      _procHost.querySelector('[data-role="rail-proc"]'),
     ].filter(Boolean);
     if (!targets.length) return;
     const setAll = (html) => { targets.forEach((t) => { t.innerHTML = html; }); };
@@ -28069,11 +28101,13 @@
       if (data && data.ok) {
         if (_compactToastNeeded(sid)) showOpToast(compactRequestSuccessMessage(data, source), 'success');
         touchSessionOptimistically(sid);
-        if (source === 'codex' || (data && data.via === 'live-spawn-stdin')) {
-          // These paths already FINISHED compacting server-side (Codex via RPC;
-          // the live spawn ran /compact itself and we watched compact_result).
-          // There's no boundary still to poll for, so land the card on its
-          // result rather than leaving a stuck "Compacting…" spinner.
+        if ((source === 'codex' || (data && data.via === 'live-spawn-stdin'))
+            && compactResponseIsComplete(data)) {
+          // These paths already FINISHED compacting server-side (Codex waits
+          // out the compaction turn; the live spawn ran /compact itself and we
+          // watched compact_result). There's no boundary still to poll for, so
+          // land the card on its result rather than leaving a stuck spinner.
+          adoptCompactRunResult(sid, data);
           completeCompactRun(sid);
           // Codex compact has completed; any optimistic Thinking pill is stale.
           // (The live-spawn-stdin path is likewise done — same teardown.)
@@ -34443,9 +34477,11 @@
           if (data && data.ok) {
             if (_compactToastNeeded(sid)) showOpToast(compactRequestSuccessMessage(data, source), 'success');
             touchSessionOptimistically(sid);
-            if (source === 'codex' || (data && data.via === 'live-spawn-stdin')) {
+            if ((source === 'codex' || (data && data.via === 'live-spawn-stdin'))
+                && compactResponseIsComplete(data)) {
               // Already finished compacting server-side — no boundary left to
               // poll for; land the card on its result instead of spinning.
+              adoptCompactRunResult(sid, data);
               completeCompactRun(sid);
               setTimeout(refreshConversationList, 1500);
               setTimeout(refreshConversationList, 3500);
@@ -36138,15 +36174,25 @@
   // re-parented into `.conv-pane[data-pane-id="p1"]` by Task 2). For split
   // mode each pane has its own `.conversations-view` inside it; we look
   // it up via the active pane's data-pane-id attribute.
+  // Pane lookups scope to #convSplit: `.conv-pane` panes are its direct
+  // children, so the selector matches before descending into anything.
+  // A document-wide querySelector walks the whole sidebar (10k+ nodes)
+  // first; these helpers run dozens of times per session open.
+  function _convPaneHost() {
+    return document.getElementById('convSplit') || document;
+  }
+  function convPaneElById(pid) {
+    return _convPaneHost().querySelector(`.conv-pane[data-pane-id="${pid}"]`);
+  }
   function getConvViewForPane(pid) {
-    const pane = document.querySelector(`.conv-pane[data-pane-id="${pid}"]`);
+    const pane = convPaneElById(pid);
     return pane ? pane.querySelector('.conversations-view') : null;
   }
   function getConvView() {
     return getConvViewForPane(activePaneId()) || $conversationsView;
   }
   function getConvInputBarForPane(pid) {
-    const pane = document.querySelector(`.conv-pane[data-pane-id="${pid}"]`);
+    const pane = convPaneElById(pid);
     return pane ? pane.querySelector('.conv-input-bar') : null;
   }
 
@@ -37998,6 +38044,16 @@
     paneId = paneId || activePaneId();
     const pane = paneByPaneId(paneId);
     if (!pane) return;
+    // Kick the tail fetch before the synchronous chrome work below (35-60ms
+    // of DOM writes and forced reads): fetchConversationEvents consumes it
+    // via _takePrefetchedConversationTail, so the server round-trip overlaps
+    // the prep instead of starting after it. Hermes sessions skip the
+    // prefetch path in fetchConversationEvents, so don't warm those.
+    if (id && pane.conversationId !== id && typeof _prefetchConversationTail === 'function') {
+      try {
+        if ((sessionSourceByConv[id] || '') !== 'hermes') _prefetchConversationTail(id);
+      } catch (_) {}
+    }
     const staleQueuedTray = getConvInputBarForPane(paneId)?.querySelector('.queued-steer-tray');
     if (staleQueuedTray && staleQueuedTray.dataset.conversationId !== String(id || '')) {
       staleQueuedTray.remove();
@@ -44049,7 +44105,7 @@
       // is-webui-session wrong at select time — correct it here, before the
       // first render picks a renderer.
       if (data && typeof data.engine === 'string' && data.engine) {
-        const _enginePaneEl = document.querySelector('.conv-pane[data-pane-id="' + fetchPaneId + '"]');
+        const _enginePaneEl = convPaneElById(fetchPaneId);
         if (_enginePaneEl) {
           _enginePaneEl.classList.toggle('is-webui-session', data.engine === 'kimi' || data.engine === 'codex');
         }
@@ -50767,8 +50823,13 @@
             compactText += ': ' + _formatTokens(preTokens) + ' -> ' + _formatTokens(postTokens);
           }
           compactText += ' (' + triggerLabel + (duration ? ', ' + duration : '') + ')';
+          // Codex emits this row too now, so the copy names whichever engine
+          // actually wrote it instead of always saying Claude.
+          const compactEngine = _compactEngineLabel(
+            ev.engine || (currentSession && currentSession.source) || 'claude');
           const compactTip = trigger === 'auto'
-            ? 'The conversation neared its context-window limit, so Claude automatically summarized the older history into a short recap and continued from there. Nothing is lost from the transcript on disk - only the model’s working memory was condensed.'
+            ? 'The conversation neared its context-window limit, so ' + compactEngine
+              + ' automatically summarized the older history into a short recap and continued from there. Nothing is lost from the transcript on disk - only the model’s working memory was condensed.'
             : 'The conversation history was summarized into a short recap to free up context-window space (/compact). The full transcript on disk is untouched - only the model’s working memory was condensed.';
           div.classList.add('system-compact', 'compact-boundary-row');
           // The engine's OWN measurements. The lifecycle card prefers these
@@ -65698,8 +65759,9 @@
 
   function conversationPaneForId(paneId) {
     const pid = paneId || activePaneId();
-    return Array.from(document.querySelectorAll('.conv-pane'))
-      .find(el => el.getAttribute('data-pane-id') === pid) || null;
+    return convPaneElById(pid)
+      || Array.from(document.querySelectorAll('.conv-pane'))
+        .find(el => el.getAttribute('data-pane-id') === pid) || null;
   }
 
   function conversationBgKeysForPane(paneId) {
