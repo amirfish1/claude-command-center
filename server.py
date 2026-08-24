@@ -65699,6 +65699,95 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                 self.send_json({"error": f"unknown goal: {slug}"}, 404)
             else:
                 self.send_json(detail)
+        elif path == "/api/media":
+            # Stream a repo-sandboxed video file so mobile clients (and anyone
+            # on a Tailnet/VPN) can click an MP4 link and have the browser
+            # play it instead of trying to open it on the remote macOS host.
+            qs = urllib.parse.parse_qs(parsed.query)
+            target = (qs.get("path") or [""])[0].strip()
+            if not target:
+                self.send_json({"ok": False, "error": "missing path"}, 400)
+                return
+            try:
+                ctx = require_repo_context(query=qs, allow_session=True)
+            except RepoContextError as e:
+                self.send_json(e.as_payload(), e.status)
+                return
+            resolved = _resolve_open_target(
+                target,
+                session_id=str((qs.get("session_id") or [""])[0] or "").strip(),
+                cwd=str((qs.get("cwd") or [""])[0] or "").strip(),
+                repo_path=ctx["repo_path"],
+            )
+            if not resolved.get("ok"):
+                status = int(resolved.get("status", 404))
+                self.send_json({"ok": False, "error": resolved.get("error", "not found")}, status)
+                return
+            file_path = Path(resolved["path"])
+            if _categorize_file_target(str(file_path)) != "videos" or not file_path.is_file():
+                self.send_json({"ok": False, "error": "not a video"}, 404)
+                return
+            try:
+                st = file_path.stat()
+                size = st.st_size
+            except OSError:
+                self.send_json({"ok": False, "error": "stat failed"}, 500)
+                return
+            ext = file_path.suffix.lower()
+            ct_map = {
+                ".mp4": "video/mp4",
+                ".mov": "video/quicktime",
+                ".webm": "video/webm",
+                ".avi": "video/x-msvideo",
+                ".mkv": "video/x-matroska",
+                ".m4v": "video/mp4",
+            }
+            content_type = ct_map.get(ext, "application/octet-stream")
+            start, end = 0, max(0, size - 1)
+            status = 200
+            range_header = self.headers.get("Range")
+            if range_header and range_header.startswith("bytes="):
+                spec = range_header[len("bytes="):].split(",")[0].strip()
+                if "-" in spec:
+                    parts = spec.split("-")
+                    try:
+                        parsed_start = int(parts[0]) if parts[0] else 0
+                        parsed_end = int(parts[1]) if parts[1] else size - 1
+                    except ValueError:
+                        parsed_start, parsed_end = 0, size - 1
+                    else:
+                        if 0 <= parsed_start <= parsed_end < size:
+                            start, end = parsed_start, parsed_end
+                            status = 206
+                        else:
+                            self.send_response(416)
+                            self.send_header("Content-Range", f"bytes */{size}")
+                            self.end_headers()
+                            return
+            self.send_response(status)
+            self.send_header("Content-Type", content_type)
+            self.send_header("Content-Length", str(end - start + 1))
+            self.send_header("Accept-Ranges", "bytes")
+            self.send_header("Content-Disposition", "inline")
+            self.send_header("Cache-Control", "private, max-age=3600")
+            if status == 206:
+                self.send_header("Content-Range", f"bytes {start}-{end}/{size}")
+            self.end_headers()
+            if self.command == "HEAD":
+                return
+            try:
+                with open(file_path, "rb") as fh:
+                    fh.seek(start)
+                    remaining = end - start + 1
+                    chunk_size = 256 * 1024
+                    while remaining > 0:
+                        chunk = fh.read(min(chunk_size, remaining))
+                        if not chunk:
+                            break
+                        self.wfile.write(chunk)
+                        remaining -= len(chunk)
+            except OSError:
+                pass
         else:
             self.send_json({"error": "Not found"}, 404)
 
@@ -68476,95 +68565,6 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                         self.send_json({"ok": True, "content": content})
                     except Exception as e:
                         self.send_json({"ok": False, "error": str(e)}, 500)
-        elif path == "/api/media":
-            # Stream a repo-sandboxed video file so mobile clients (and anyone
-            # on a Tailnet/VPN) can click an MP4 link and have the browser
-            # play it instead of trying to open it on the remote macOS host.
-            qs = urllib.parse.parse_qs(parsed.query)
-            target = (qs.get("path") or [""])[0].strip()
-            if not target:
-                self.send_json({"ok": False, "error": "missing path"}, 400)
-                return
-            try:
-                ctx = require_repo_context(query=qs, allow_session=True)
-            except RepoContextError as e:
-                self.send_json(e.as_payload(), e.status)
-                return
-            resolved = _resolve_open_target(
-                target,
-                session_id=str((qs.get("session_id") or [""])[0] or "").strip(),
-                cwd=str((qs.get("cwd") or [""])[0] or "").strip(),
-                repo_path=ctx["repo_path"],
-            )
-            if not resolved.get("ok"):
-                status = int(resolved.get("status", 404))
-                self.send_json({"ok": False, "error": resolved.get("error", "not found")}, status)
-                return
-            file_path = Path(resolved["path"])
-            if _categorize_file_target(str(file_path)) != "videos" or not file_path.is_file():
-                self.send_json({"ok": False, "error": "not a video"}, 404)
-                return
-            try:
-                st = file_path.stat()
-                size = st.st_size
-            except OSError:
-                self.send_json({"ok": False, "error": "stat failed"}, 500)
-                return
-            ext = file_path.suffix.lower()
-            ct_map = {
-                ".mp4": "video/mp4",
-                ".mov": "video/quicktime",
-                ".webm": "video/webm",
-                ".avi": "video/x-msvideo",
-                ".mkv": "video/x-matroska",
-                ".m4v": "video/mp4",
-            }
-            content_type = ct_map.get(ext, "application/octet-stream")
-            start, end = 0, max(0, size - 1)
-            status = 200
-            range_header = self.headers.get("Range")
-            if range_header and range_header.startswith("bytes="):
-                spec = range_header[len("bytes="):].split(",")[0].strip()
-                if "-" in spec:
-                    parts = spec.split("-")
-                    try:
-                        parsed_start = int(parts[0]) if parts[0] else 0
-                        parsed_end = int(parts[1]) if parts[1] else size - 1
-                    except ValueError:
-                        parsed_start, parsed_end = 0, size - 1
-                    else:
-                        if 0 <= parsed_start <= parsed_end < size:
-                            start, end = parsed_start, parsed_end
-                            status = 206
-                        else:
-                            self.send_response(416)
-                            self.send_header("Content-Range", f"bytes */{size}")
-                            self.end_headers()
-                            return
-            self.send_response(status)
-            self.send_header("Content-Type", content_type)
-            self.send_header("Content-Length", str(end - start + 1))
-            self.send_header("Accept-Ranges", "bytes")
-            self.send_header("Content-Disposition", "inline")
-            self.send_header("Cache-Control", "private, max-age=3600")
-            if status == 206:
-                self.send_header("Content-Range", f"bytes {start}-{end}/{size}")
-            self.end_headers()
-            if self.command == "HEAD":
-                return
-            try:
-                with open(file_path, "rb") as fh:
-                    fh.seek(start)
-                    remaining = end - start + 1
-                    chunk_size = 256 * 1024
-                    while remaining > 0:
-                        chunk = fh.read(min(chunk_size, remaining))
-                        if not chunk:
-                            break
-                        self.wfile.write(chunk)
-                        remaining -= len(chunk)
-            except OSError:
-                pass
         elif path == "/api/reveal-file":
             # macOS `open` will execute apps and scripts, so this endpoint
             # still enforces the FILE_EXT_TO_CATEGORY allowlist (which
