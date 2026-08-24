@@ -55,7 +55,9 @@ class TestConversationHistoryPagingStatic(unittest.TestCase):
             app_js.index("function _convPrefetchCancel(id)", app_js.index("function _prefetchConversationTail(id)"))
         ]
 
-        self.assertIn("?tail=' + CONV_TAIL_LINES", prefetch_js)
+        # Fresh opens (and their hover prefetch) use the small first window;
+        # the rest of CONV_TAIL_LINES is backfilled after the first paint.
+        self.assertIn("?tail=' + convFirstOpenLines()", prefetch_js)
         self.assertNotIn("?after=0", prefetch_js)
         self.assertIn("CONV_TAIL_PREFETCH_MAX", prefetch_js)
         self.assertIn("CONV_TAIL_PREFETCH_TTL_MS", prefetch_js)
@@ -84,7 +86,8 @@ class TestConversationHistoryPagingStatic(unittest.TestCase):
         self.assertIn("pane.loadBeforeLine =", load_js)
         self.assertNotIn("pane.wantFull = true; pane.lastLine = 0;", load_js)
         self.assertIn("?before=' + encodeURIComponent(_loadBefore)", fetch_js)
-        self.assertIn("const _loadingEarlier = !!_loadBefore;", fetch_js)
+        self.assertIn("const _loadingEarlier = !!_loadBefore || !!_hopSid;", fetch_js)
+        self.assertIn("_scheduleConvOpenBackfill(id, fetchPaneId, convTailLines() - convFirstOpenLines());", fetch_js)
         self.assertIn("_prependConversationEvents(data.events, fetchPaneId);", fetch_js)
         self.assertIn("pane.firstLine = data.first_line || pane.firstLine || 0;", fetch_js)
 

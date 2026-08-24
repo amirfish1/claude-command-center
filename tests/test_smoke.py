@@ -5349,14 +5349,17 @@ class TestServerImports(unittest.TestCase):
         # CCC-831: a narrow popout window can force the rail back open even
         # under the mobile breakpoint, so every mobile-collapse selector now
         # carries a :not(.popout-rail-forced) escape hatch.
-        self.assertIn("body.status-pos-right:not(.popout-rail-forced) .conv-pane:has(> .status-rail)", mobile_rail_css)
+        # The rail anchor is the JS-maintained .has-status-rail flag class,
+        # not :has(> .status-rail): a :has() anchor on every pane made each
+        # forced layout read re-style the whole sidebar (session open perf).
+        self.assertIn("body.status-pos-right:not(.popout-rail-forced) .conv-pane.has-status-rail", mobile_rail_css)
         self.assertIn(
-            "body.status-pos-right.status-rail-collapsed:not(.popout-rail-forced) .conv-pane:has(> .status-rail)",
+            "body.status-pos-right.status-rail-collapsed:not(.popout-rail-forced) .conv-pane.has-status-rail",
             mobile_rail_css,
         )
         self.assertIn("grid-template-columns: minmax(0, 1fr);", mobile_rail_css)
         self.assertIn(
-            "body.status-pos-right:not(.popout-rail-forced) .conv-pane:has(> .status-rail) > .status-rail",
+            "body.status-pos-right:not(.popout-rail-forced) .conv-pane.has-status-rail > .status-rail",
             mobile_rail_css,
         )
         self.assertIn("display: none;", mobile_rail_css)
