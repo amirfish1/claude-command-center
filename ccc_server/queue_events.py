@@ -1497,6 +1497,7 @@ def _extract_codex_usage(session_id):
     if not path:
         return empty
     latest = {}
+    latest_window = 0
     totals = {}
     peak = 0
     context_limit = 0
@@ -1531,23 +1532,35 @@ def _extract_codex_usage(session_id):
                 total_usage = info.get("total_token_usage") or usage
                 if not isinstance(usage, dict):
                     continue
-                if isinstance(total_usage, dict):
-                    totals = total_usage
-                latest = usage
                 # Codex/OpenAI usage reports cached input as a subset of
                 # input_tokens. Adding it again turns cumulative session usage
                 # into impossible context-window numbers.
-                window = _core._codex_int(usage.get("input_tokens"))
-                peak = max(peak, window)
+                raw_window = _core._codex_int(usage.get("input_tokens"))
+                turn_total = _core._codex_int(usage.get("total_tokens"))
                 turn_cached = _core._codex_int(usage.get("cached_input_tokens"))
                 turn_out = (
                     _core._codex_int(usage.get("output_tokens"))
                     + _core._codex_int(usage.get("reasoning_output_tokens"))
                 )
-                if window or turn_out:
+                if not (raw_window or turn_cached or turn_out or turn_total):
+                    # A token_count with every field zeroed carries no size at
+                    # all. Keep whatever the previous one said.
+                    continue
+                # Post-compaction marker: Codex writes a token_count whose
+                # last_token_usage has every PER-TURN field zeroed and reports
+                # the size of the freshly rebuilt context in total_tokens only.
+                # Reading input_tokens straight off it made the context pill
+                # claim "ctx 0" until the next real turn.
+                window = raw_window or turn_total
+                if isinstance(total_usage, dict):
+                    totals = total_usage
+                latest = usage
+                latest_window = window
+                peak = max(peak, window)
+                if raw_window or turn_out:
                     turn_series.append({
                         "ts": ev.get("timestamp") or "",
-                        "tokens_in": window,
+                        "tokens_in": raw_window,
                         "tokens_cached": turn_cached,
                         "tokens_out": turn_out,
                     })
@@ -1555,7 +1568,7 @@ def _extract_codex_usage(session_id):
         return empty
     if not latest:
         return {**empty, "override": _core._get_session_override(session_id)}
-    latest_input = _core._codex_int(latest.get("input_tokens"))
+    latest_input = latest_window
     total_input = _core._codex_int(totals.get("input_tokens"))
     cache_read = _core._codex_int(totals.get("cached_input_tokens"))
     total_output = _core._codex_int(totals.get("output_tokens"))

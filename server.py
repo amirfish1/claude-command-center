@@ -27983,7 +27983,7 @@ CODEX_GOALS_DB_CANDIDATES = (
 )
 CODEX_SESSIONS_ROOT = Path.home() / ".codex" / "sessions"
 KIMI_SESSIONS_ROOT = Path.home() / ".kimi-code" / "sessions"
-_CODEX_META_VERSION = 5
+_CODEX_META_VERSION = 6
 CODEX_APP_SERVER_STATE_FILE = COMMAND_CENTER_STATE_DIR / "codex-app-server-state.json"
 CODEX_TELEMETRY_FILE = COMMAND_CENTER_STATE_DIR / "codex-telemetry.jsonl"
 _CODEX_APP_SERVER_STATE_SCHEMA = 1
@@ -36799,6 +36799,15 @@ def _extract_codex_tail_meta(path):
                 usage = _codex_token_usage_from_event(ev)
                 if usage:
                     inp = _codex_int(usage.get("input_tokens"))
+                    if not inp:
+                        # Post-compaction marker: Codex writes a token_count
+                        # whose last_token_usage has every PER-TURN field
+                        # zeroed and reports the size of the freshly rebuilt
+                        # context in total_tokens only. Skipping it left the
+                        # context pill on the stale pre-compact number, while
+                        # `_extract_codex_usage` read the zero and showed 0.
+                        # Both extractors now agree on total_tokens here.
+                        inp = _codex_int(usage.get("total_tokens"))
                     if inp:
                         meta["latest_input_tokens"] = inp
                     payload = ev.get("payload") if isinstance(ev.get("payload"), dict) else {}
