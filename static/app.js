@@ -58240,6 +58240,13 @@
     // Grow the textarea to fit content (capped by CSS max-height, which kicks
     // in scrolling). Runs on every input; cheap enough.
     function cpInputAutoResize() {
+      // Empty box: let CSS size the single row. Skipping the scrollHeight
+      // read avoids a forced style+layout of the whole dirty document on
+      // every session open (restoreInputDraft fires 'input' mid-select).
+      if (!$cpInput.value) {
+        if ($cpInput.style.height) $cpInput.style.height = '';
+        return;
+      }
       $cpInput.style.height = '0px';
       $cpInput.style.height = Math.min($cpInput.scrollHeight, 160) + 'px';
     }
