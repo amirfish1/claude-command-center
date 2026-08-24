@@ -9882,6 +9882,7 @@
         if (jr.ok && jd.ok) {
           showOpToast('Session joined the group chat', 'success');
           $input.value = '';
+          _autosizeTextareaLike($input, $input.closest('.conv-input-bar'));
           clearInputDraftForConversation(draftConversation);
         } else {
           showOpToast('Join failed: ' + ((jd && jd.error) || ('HTTP ' + jr.status)), 'error');
@@ -9942,6 +9943,7 @@
     if (compactRunStarted && sid) markSessionSending(sid);
     updateInputBar();
     $input.value = '';
+    _autosizeTextareaLike($input, $input.closest('.conv-input-bar'));
     clearInputDraftForConversation(draftConversation);
     // A dormant send receives its outcome from the server. Codex additionally
     // starts compact checkmark progress, while queued and error states remain
@@ -11743,9 +11745,13 @@
   // Always use the JS autosizer. WebKit/WKWebView can report support for
   // native textarea auto-sizing but paint its native internal layer over the
   // placeholder, so a single rAF-scheduled height update is the steadier path.
-  let _autosizeRaf = 0;
-  function _autosizeConvInput() {
-    if (!$convInput || $convInput.tagName !== 'TEXTAREA') return;
+  // Generic version used by any composer textarea, including the cloned
+  // second-pane composer (buildPaneElement strips ids, so it can't reuse
+  // $convInput/$convInputBar — it has to pass its own element + bar).
+  // rAF state lives on the element itself so concurrent panes coalesce
+  // independently instead of sharing one flag.
+  function _autosizeTextareaLike(el, barEl) {
+    if (!el || el.tagName !== 'TEXTAREA') return;
     // Deferred to the next animation frame. The 'auto' write + scrollHeight
     // read is a forced synchronous reflow; doing it inline on every keystroke
     // re-lays-out the whole (large) page mid-keystroke — cheap in Blink, but
@@ -11753,16 +11759,19 @@
     // it in rAF takes it off the keystroke's critical path (char paints first,
     // textarea resizes a frame later — imperceptible) and coalesces bursts to
     // one reflow per frame.
-    if (_autosizeRaf) return;
-    _autosizeRaf = requestAnimationFrame(() => {
-      _autosizeRaf = 0;
-      $convInput.style.height = 'auto';
-      const mode = ($convInputBar && $convInputBar.dataset.composerMode) || 'regular';
+    if (el._autosizeRaf) return;
+    el._autosizeRaf = requestAnimationFrame(() => {
+      el._autosizeRaf = 0;
+      el.style.height = 'auto';
+      const mode = (barEl && barEl.dataset.composerMode) || 'regular';
       const max = mode === 'expand' ? Math.round(window.innerHeight * 0.7)
         : mode === 'minimize' ? 24  // matches the CSS max-height: 24px !important floor
         : 240;  // ~10 rows at our current font/line-height
-      $convInput.style.height = Math.min($convInput.scrollHeight, max) + 'px';
+      el.style.height = Math.min(el.scrollHeight, max) + 'px';
     });
+  }
+  function _autosizeConvInput() {
+    _autosizeTextareaLike($convInput, $convInputBar);
   }
   if (!window.__cccComposerDeferFlushBound) {
     window.__cccComposerDeferFlushBound = true;
