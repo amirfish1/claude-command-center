@@ -61,7 +61,7 @@ class TestWebuiPaneRegressionGuards(unittest.TestCase):
 
         self.assertIn('data-role="pane-more"', pane_header)
         self.assertIn('data-role="pane-more-menu"', pane_header)
-        self.assertIn('data-role="pane-annotate" aria-label="Annotate visible page"', pane_header)
+        self.assertIn('data-role="pane-annotate" data-debug-hide aria-label="Annotate visible page"', pane_header)
         self.assertNotIn('&#9998; Annotate</button>', pane_header)
         self.assertIn("btn.closest('.conv-pane-more[open]')", app_js)
         self.assertIn("menu.removeAttribute('open')", app_js)
@@ -267,7 +267,7 @@ class TestServerImports(unittest.TestCase):
             2,
             "Every archive-row shaping branch must preserve thread provenance.",
         )
-        self.assertIn("const sessionProvenanceChipHtml = _sessionProvenanceChipHtml(c);", app_js)
+        self.assertIn(": _sessionProvenanceChipHtml(c);", app_js)
         self.assertIn("+ sessionProvenanceChipHtml", app_js)
         self.assertIn(".conv-session-origin-chip {", app_css)
 
@@ -1173,7 +1173,7 @@ class TestServerImports(unittest.TestCase):
         self.assertIn("const repoPath = nodeId.indexOf('repo:') === 0 ? nodeId.slice(5) : '';", app_js)
         self.assertIn("_folderGroupHeaderHtml('inprogress', title, _count, hue, '', nodeId, attrs, repoPath, archiveObjectId, inlineMetaHtml, ordinal)", app_js)
         self.assertIn("const archivedRepoPath = root.folder_path || '';", app_js)
-        self.assertIn("_folderGroupHeaderHtml('archived', folder, count, hue, orphan, collapseKey, '', archivedRepoPath)", app_js)
+        self.assertIn("_folderGroupHeaderHtml('archived', folder, countWithLiveBadge, hue, orphan, collapseKey, '', archivedRepoPath)", app_js)
         self.assertIn("if (!_isShipRepoPath(repo)) return;", app_js)
         self.assertIn("/api/repo/ship/continue", app_js)
         self.assertIn("ship-waiting-summary", app_js)
@@ -1613,24 +1613,35 @@ class TestServerImports(unittest.TestCase):
         self.assertNotIn("await promptModal", handler)
 
     def test_sidebar_tabs_start_with_active_and_all(self):
-        """The high-traffic Active and All tabs should be first."""
+        """The high-traffic Active tab is always first. In the default
+        (non-separate-tabs) layout, Coding/Workers follow it directly, with
+        the leftover Other (née All) tab last. In the legacy separate-tabs
+        layout, Issues/Queues follow Active, with Other last."""
         app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
-        tab_block = app_js[app_js.index("const _tabDefs = ["):app_js.index("const _tabBarHtml", app_js.index("const _tabDefs = ["))]
+        tab_block = app_js[app_js.index("const _tabDefs = "):app_js.index("const _tabBarHtml", app_js.index("const _tabDefs = "))]
 
+        self.assertIn("const _otherTabDef = ['archived', 'Other', _otherTabCount];", app_js)
         active_pos = tab_block.index("['inprogress', 'Active'")
-        self.assertIn("['archived', 'All'", tab_block)
-        all_pos = tab_block.index("['archived', 'All'")
+
         issues_pos = tab_block.index("['issues', 'Issues'")
         queues_pos = tab_block.index("['queues', 'Queues'")
-        self.assertLess(active_pos, all_pos)
-        self.assertLess(all_pos, issues_pos)
+        self.assertLess(active_pos, issues_pos)
         self.assertLess(issues_pos, queues_pos)
+
+        coding_pos = tab_block.index("['coding', 'Coding'")
+        workers_pos = tab_block.index("['workers', 'Workers'")
+        self.assertLess(active_pos, coding_pos)
+        self.assertLess(coding_pos, workers_pos)
+
+        # The Other tab (leftover Hermes messages + group chats) is appended
+        # last in both layouts, only when there's something to show in it.
+        self.assertIn("...(_otherTabCount > 0 ? [_otherTabDef] : []),", tab_block)
 
     def test_sidebar_all_tab_contains_active_and_archived_sessions(self):
         """The All tab should replay every session, not only archived rows."""
         app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
 
-        self.assertIn("const _allTabConvs = ", app_js)
+        self.assertIn("let _allTabConvs = ", app_js)
         # All shows active and archived rows in its main flow. Only rows with
         # the explicit trashed state belong in the bottom Trash bucket; pin and
         # lane placement never change lifecycle membership.
@@ -1640,7 +1651,7 @@ class TestServerImports(unittest.TestCase):
         self.assertIn("_openAskConvs,", all_block)
         self.assertIn("_readyToMergeConvs,", all_block)
         self.assertIn("_mainArchivedConvs,", all_block)
-        self.assertIn("const _allTabConvs = _allTabUnfilteredConvs.filter(", all_block)
+        self.assertIn("let _allTabConvs = _allTabUnfilteredConvs.filter(", all_block)
         self.assertIn("const _trashConvs = _archivedConvs.filter(c => !!c.trashed);", app_js)
         self.assertIn("const _mainArchivedConvs = _archivedConvs.filter(c => !c.trashed);", app_js)
         self.assertIn("const _arcHasFolderChips = _allTabMainConvs.concat(_allTabTrashConvs).some(c => c.folder_label_chip);", app_js)
@@ -1654,7 +1665,11 @@ class TestServerImports(unittest.TestCase):
         self.assertNotIn("conv-archived-label", archived_markup)
         self.assertIn('data-role="archived-tools"', archived_markup)
         self.assertIn('<div class="conv-archived-list">', archived_markup)
-        self.assertIn("_sidebarTab === 'archived' ? (_forceOpen(_archivedHtml, 'conv-archived-section') || _tabEmpty('sessions'))", app_js)
+        self.assertIn(
+            "(_sidebarTab === 'archived' || _sidebarTab === 'coding' || _sidebarTab === 'workers') "
+            "? (_forceOpen(_archivedHtml, 'conv-archived-section') || _tabEmpty('sessions'))",
+            app_js,
+        )
 
     def test_archived_sessions_have_visible_restore_action(self):
         """Archived session rows should have an explicit restore path back to Active."""
@@ -1692,11 +1707,12 @@ class TestServerImports(unittest.TestCase):
         self.assertNotIn("const currentlyArchived =", app_js)
 
     def test_sidebar_all_tab_splits_hermes_workers_from_messages(self):
-        """When Hermes rows exist, All should expose Coding, Workers, and
-        Messages, and Group chats lanes so plain WhatsApp/router conversations
-        and cross-repo chats do not bury agentic Hermes work."""
+        """Coding and Workers now live as their own top-level sidebar tabs
+        (CCC-778/CCC-851), each pre-filtered from the shared All/Other lane
+        classifier, so plain WhatsApp/router conversations and cross-repo
+        chats do not bury agentic Hermes work under one combined tab. The
+        leftover Other tab keeps Hermes messages + group chats together."""
         app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
-        app_css = pathlib.Path(PROJECT_ROOT, "static", "app.css").read_text(encoding="utf-8")
 
         self.assertIn("const _isHermesWorkerRow = (c) => _isHermesAllRow(c)", app_js)
         self.assertIn("Number(c.hermes_tool_calls || 0) > 0 || !!String(c.hermes_profile || '').trim()", app_js)
@@ -1707,26 +1723,22 @@ class TestServerImports(unittest.TestCase):
         self.assertIn("const _allTabLaneFor = (c, seen = new Set()) =>", app_js)
         self.assertIn("const _allTabCodingConvs = _allTabConvs.filter(c => _allTabLaneFor(c) === 'coding');", app_js)
         self.assertIn("const _allTabWorkerConvs = _allTabConvs.filter(c => _allTabLaneFor(c) === 'workers');", app_js)
-        self.assertIn("const _allTabGroupChatView = _savedAllTabView === 'group-chats' ? 'group-chats' : _savedAllTabView;", app_js)
-        self.assertIn('data-all-hermes-tab="group-chats"', app_js)
-        self.assertIn("'Group chats<span class=\"conv-tab-count\">'", app_js)
+        self.assertIn("const _allTabHermesMessageConvs = _allTabConvs.filter(c => _allTabLaneFor(c) === 'messages');", app_js)
+        # CCC-778: the top-level Coding/Workers tabs are the All/Other lane
+        # pre-filtered by sidebar tab; CCC-851: Other always shows the
+        # leftover lanes (messages + group chats) together, no nested
+        # sub-tab switcher needed anymore.
+        self.assertIn(
+            "const _topLevelLaneOverride = _sidebarTab === 'coding' ? 'coding' : _sidebarTab === 'workers' ? 'workers' : null;",
+            app_js,
+        )
+        self.assertIn("const _allTabView = _topLevelLaneOverride || 'other';", app_js)
         self.assertIn("const _allTabGroupChatCount = _allTabGroupChatItems.length + _archivedGroupChatsForRender.length;", app_js)
-        self.assertIn("const _trashHtmlForAllTabView = _allTabView === 'group-chats' ? '' : _trashHtml;", app_js)
-        self.assertIn("const _savedAllTabView = (() => {", app_js)
-        self.assertIn("const _allTabUnfilteredLanes = new Set(", app_js)
-        self.assertIn("|| _allTabUnfilteredLanes.has('workers')", app_js)
-        self.assertIn("|| _allTabUnfilteredLanes.has('messages')", app_js)
-        self.assertIn("const _allTabHasHermesSplit = (", app_js)
-        self.assertIn("|| _savedAllTabView !== 'coding'\n    );", app_js)
-        self.assertIn("data-role=\"all-hermes-tabs\"", app_js)
-        self.assertIn("data-all-hermes-tab=\"coding\"", app_js)
-        self.assertIn("data-all-hermes-tab=\"workers\"", app_js)
-        self.assertIn("data-all-hermes-tab=\"messages\"", app_js)
-        self.assertIn("data-all-hermes-tab=\"group-chats\"", app_js)
-        self.assertIn("localStorage.setItem('ccc-all-hermes-tab', value)", app_js)
-        self.assertIn("/all-lane", app_js)
-        self.assertIn(".conv-all-hermes-tabs", app_css)
-        self.assertIn(".conv-all-hermes-tab.is-drop-target", app_css)
+        self.assertIn("const _otherTabCount = _allTabGroupChatCount + _allTabHermesMessageConvs.length;", app_js)
+        self.assertIn("const _otherTabDef = ['archived', 'Other', _otherTabCount];", app_js)
+        self.assertIn("['coding', 'Coding', _allTabCodingConvs.length]", app_js)
+        self.assertIn("['workers', 'Workers', _allTabWorkerConvs.length]", app_js)
+        self.assertIn("/api/conversations/all-lane", app_js)
 
     def test_all_view_nests_subagents_and_inherits_parent_lane(self):
         app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
@@ -2506,11 +2518,19 @@ class TestServerImports(unittest.TestCase):
         self.assertIn("const _currentSessions = _ipSearchActive\n        ? _currentSessionLineage.rows\n        : _currentSessionLineage.rows", app_js)
 
     def test_current_sessions_respect_inprogress_window_filter(self):
-        """Current sessions should use the same 1d/7d/All window as by-objects."""
+        """Current sessions should use the same 8h/1d/7d/All window as by-objects."""
         app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
 
-        self.assertIn("const _currentSessionsWindowS = _ipWindowDays ? (_ipWindowDays * 24 * 3600) : null;", app_js)
-        self.assertIn("const _currentSessionsWindowLabel = _ipWindow === 'all' ? 'all' : (_ipWindow === '7d' ? 'last 7d' : 'last 1d');", app_js)
+        self.assertIn(
+            "const _currentSessionsWindowS = _ipWindow === '7d' ? 7 * 24 * 3600\n"
+            "        : (_ipWindow === '1d' ? 24 * 3600 : (_ipWindow === '8h' ? 8 * 3600 : null));",
+            app_js,
+        )
+        self.assertIn(
+            "const _currentSessionsWindowLabel = _ipWindow === 'all' ? 'all'\n"
+            "        : (_ipWindow === '7d' ? 'last 7d' : (_ipWindow === '1d' ? 'last 1d' : 'last 8h'));",
+            app_js,
+        )
         self.assertIn("if (!_currentSessionsWindowS) return true;", app_js)
         self.assertIn("return _sessionTs(c) >= _nowS - _currentSessionsWindowS;", app_js)
         self.assertIn("'<span class=\"conv-objects-section-sub\">' + _currentSessionsWindowLabel + '</span>'", app_js)
@@ -2768,7 +2788,7 @@ class TestServerImports(unittest.TestCase):
         session_css = app_css[app_css.index(".conv-project-tree .conv-item {"):app_css.index(".conv-project-tree .conv-item .conv-title-row", app_css.index(".conv-project-tree .conv-item {"))]
         grouped_session_css = app_css[
             app_css.index(".conv-folder-group[data-object-drop-zone] > .conv-item.is-grouped-row {"):
-            app_css.index(".conv-folder-group:not(.collapsed) .conv-item.is-grouped-row::before", app_css.index(".conv-folder-group[data-object-drop-zone] > .conv-item.is-grouped-row {"))
+            app_css.index(".conv-folder-group .conv-item.is-grouped-row .conv-meta-inline {", app_css.index(".conv-folder-group[data-object-drop-zone] > .conv-item.is-grouped-row {"))
         ]
         draft_css = app_css[app_css.index(".conv-project-tree .conv-draft-row {"):app_css.index(".conv-item .conv-ux-fix-progress", app_css.index(".conv-project-tree .conv-draft-row {"))]
         self.assertIn("padding: 0 8px;", header_css)
@@ -4262,7 +4282,7 @@ class TestServerImports(unittest.TestCase):
 
         self.assertIn("async function _fetchUxqItems(allowStale)", items_fetch)
         self.assertIn("allowStale && _uxqItemsCache.ts", items_fetch)
-        self.assertIn("async function _fetchUxqHealth(allowStale)", health_fetch)
+        self.assertIn("async function _fetchUxqHealth(allowStale, force)", health_fetch)
         self.assertIn("allowStale && _uxqHealthCache.ts", health_fetch)
         self.assertIn("$scope.addEventListener('change', async () =>", scope_handler)
         self.assertIn("$sel.disabled = !!isLoading;", loading_helper)
@@ -5107,16 +5127,18 @@ class TestServerImports(unittest.TestCase):
         app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
         self.assertIn("const CODEX_SLASH_FALLBACK_COMMANDS = [", app_js)
         self.assertIn("{ name: '/compact', description: 'Summarize the visible conversation to free tokens' }", app_js)
-        self.assertIn("return source === 'codex' ? CODEX_SLASH_FALLBACK_COMMANDS : SLASH_FALLBACK_COMMANDS;", app_js)
+        self.assertIn("if (source === 'codex') return CODEX_SLASH_FALLBACK_COMMANDS;", app_js)
         self.assertIn("compactCommand && isCompactionCapableSource(currentSession.source)", app_js)
         self.assertNotIn("Codex sessions do not use Claude slash commands", app_js)
         self.assertIn("const failurePrefix = compactCommand ? '/compact failed'", app_js)
 
     def test_kimi_sessions_do_not_offer_unsupported_slash_commands(self):
-        """Kimi ACP has no slash-command protocol, so its composer must not
-        offer Claude's fallback commands as though they were executable."""
+        """Kimi/Grok now expose their own ACP-reported slash-command catalog
+        (fetched per-session), so the composer must not fall back to Claude's
+        command list for them -- that would show commands like /context that
+        don't exist for those engines."""
         app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
-        self.assertIn("if (source === 'kimi') return 'Slash commands are not wired for Kimi sessions';", app_js)
+        self.assertIn("if (source === 'kimi' || source === 'grok') return [];", app_js)
         self.assertIn("(engine === 'claude' || engine === 'codex')", app_js)
 
     def test_slash_command_picker_selects_on_press(self):
@@ -5315,15 +5337,28 @@ class TestServerImports(unittest.TestCase):
         self.assertNotIn('id="statusPosToggle"', index_html)
         self.assertNotIn("#statusPosToggle", app_css)
         self.assertIn(
-            "const inRail = document.body.classList.contains('status-pos-right') && !isMobile();",
+            "const inRail = document.body.classList.contains('status-pos-right')\n"
+            "      && (!isMobile() || document.body.classList.contains('popout-rail-forced'));",
             app_js,
         )
-        self.assertIn("_applyStatusRailLayout();", app_js[app_js.index("function handleMobileBreakpointChange()"):app_js.index("const $cpMobileBackBtn")])
+        self.assertIn(
+            "if (typeof _applyStatusRailLayout === 'function') _applyStatusRailLayout();",
+            app_js[app_js.index("function handleMobileBreakpointChange()"):app_js.index("const $cpMobileBackBtn")],
+        )
         mobile_rail_css = app_css[app_css.rindex("/* The desktop status rail becomes the top status layout on mobile."):]
-        self.assertIn("body.status-pos-right .conv-pane:has(> .status-rail)", mobile_rail_css)
-        self.assertIn("body.status-pos-right.status-rail-collapsed .conv-pane:has(> .status-rail)", mobile_rail_css)
+        # CCC-831: a narrow popout window can force the rail back open even
+        # under the mobile breakpoint, so every mobile-collapse selector now
+        # carries a :not(.popout-rail-forced) escape hatch.
+        self.assertIn("body.status-pos-right:not(.popout-rail-forced) .conv-pane:has(> .status-rail)", mobile_rail_css)
+        self.assertIn(
+            "body.status-pos-right.status-rail-collapsed:not(.popout-rail-forced) .conv-pane:has(> .status-rail)",
+            mobile_rail_css,
+        )
         self.assertIn("grid-template-columns: minmax(0, 1fr);", mobile_rail_css)
-        self.assertIn("body.status-pos-right .conv-pane:has(> .status-rail) > .status-rail", mobile_rail_css)
+        self.assertIn(
+            "body.status-pos-right:not(.popout-rail-forced) .conv-pane:has(> .status-rail) > .status-rail",
+            mobile_rail_css,
+        )
         self.assertIn("display: none;", mobile_rail_css)
 
     def test_queue_rows_open_item_detail_modal(self):
@@ -5829,7 +5864,13 @@ class TestServerImports(unittest.TestCase):
         self.assertIn("nodes.forEach(node => { if (node !== keep) node.remove(); });", app_js)
         self.assertIn("let _doneInline = getSingleLiveToolInline($view);", app_js)
         self.assertIn("let inline = getSingleLiveToolInline($view);", app_js)
-        self.assertIn("inline !== $view.lastElementChild", app_js)
+        # The bare "reanchor to last child" check was replaced by a smarter
+        # helper that only moves the inline indicator when genuinely new
+        # committed content landed after it (not just another transient
+        # stream/live node) -- see _reanchorToTailUnlessOnlyTransientBetween.
+        self.assertIn("function _reanchorToTailUnlessOnlyTransientBetween($view, el) {", app_js)
+        self.assertIn("if (!el || el.parentNode !== $view || el === $view.lastElementChild) return;", app_js)
+        self.assertIn("_reanchorToTailUnlessOnlyTransientBetween($view, inline);", app_js)
 
     def test_codex_wake_status_does_not_stack_with_generating(self):
         """Codex wake rows own their progress UI and should not stack with Generating."""
@@ -6244,7 +6285,7 @@ class TestServerImports(unittest.TestCase):
 
         self.assertIn("function userMessageSteerHtml(text, notification, compactCardHtml)", app_js)
         self.assertIn('data-steer-user-message', app_js)
-        self.assertIn("postInjectInput(sid, text, 'steer')", app_js)
+        self.assertIn("postInjectInput(sid, text, 'steer'", app_js)
         inline_handler = app_js[
             app_js.index("const btn = ev.target.closest('[data-steer-user-message]')"):
             app_js.index("function setCurrentSession", app_js.index("const btn = ev.target.closest('[data-steer-user-message]')"))
@@ -6727,9 +6768,22 @@ class TestPrStateResolution(unittest.TestCase):
             sys.modules.pop(mod, None)
         self.server = importlib.import_module("server")
         self.server._PR_STATE_CACHE.clear()
+        # Don't let this suite read or write the real on-disk gh-cache file
+        # (~/.claude/command-center/gh-cache/pr_states.json) — stale entries
+        # from a prior real run (or a leftover test fixture) leak in via the
+        # once-per-process hydrate guard and make lookups appear cached when
+        # they should hit the mocked subprocess.
+        self.server._GH_CACHE_HYDRATED.add("pr_states")
+        self._hydrate_patch = mock.patch.object(self.server, "_hydrate_gh_cache")
+        self._persist_patch = mock.patch.object(self.server, "_persist_gh_cache")
+        self._hydrate_patch.start()
+        self._persist_patch.start()
 
     def tearDown(self):
         self.server._PR_STATE_CACHE.clear()
+        self.server._GH_CACHE_HYDRATED.discard("pr_states")
+        self._hydrate_patch.stop()
+        self._persist_patch.stop()
 
     def test_pr_state_falls_back_to_gh_api(self):
         url = f"https://github.com/octo-org/demo-repo/pull/{25}"
@@ -6754,7 +6808,7 @@ class TestPrStateResolution(unittest.TestCase):
         self.assertEqual(len(calls), 2, "second lookup should hit cache")
         cached = self.server._PR_STATE_CACHE[url]
         self.assertEqual(cached["state"], "MERGED")
-        self.assertEqual(cached["ttl"], self.server._PR_STATE_TTL)
+        self.assertEqual(cached["ttl"], self.server._PR_STATE_MERGED_TTL)
 
     def test_pr_state_failures_use_short_ttl(self):
         url = f"https://github.com/octo-org/demo-repo/pull/{25}"
@@ -11227,6 +11281,7 @@ class TestRepoContextHelpers(unittest.TestCase):
                  mock.patch.object(server, "_mark_codex_thread_user_visible", return_value=True), \
                  mock.patch.object(server, "_register_codex_sidebar_project_for_spawn_entry"), \
                  mock.patch.object(server, "_record_spawn_to_registry") as registry, \
+                 mock.patch.object(server, "_wt_register_codex_agent"), \
                  mock.patch.object(server.subprocess, "Popen", side_effect=AssertionError("exec fallback should not run")), \
                  mock.patch.dict(os.environ, {"CCC_CODEX_WAKE_CONFIRM_TIMEOUT": "0.1",
                                               "CCC_CODEX_SPAWN_CONFIRM_TIMEOUT": "0.1"}):
@@ -14852,7 +14907,7 @@ class TestModelPicker(unittest.TestCase):
         css = pathlib.Path(PROJECT_ROOT, "static", "app.css").read_text()
         self.assertIn("/api/conversations/[^/]+/files", src)
         self.assertIn("class=\"conv-pin-btn", js)
-        self.assertIn("mergeBtn + startBtn + pinBtn + lifecycleButtons", js)
+        self.assertIn("mergeBtn + startBtn + pinBtn + moveLaneBtn + elevateObjectBtn + attachSubsessionBtn + lifecycleButtons", js)
         self.assertIn("Pinned to top", js)
         self.assertIn("_minPinnedRank", js)
         self.assertNotIn("conv-pinned-section", js)
@@ -14864,7 +14919,7 @@ class TestModelPicker(unittest.TestCase):
         self.assertIn("_restoreConversationListScrollTop($convList, pinScrollTop)", js)
         self.assertNotIn("scrollConversationRowIntoView(convId, data.pinned ? 'start' : 'nearest')", js)
         self.assertIn(".conv-item .conv-pin-btn", css)
-        self.assertIn(".conv-item.is-pinned:not(:hover):not(:focus-within) .conv-row-actions:not(:empty)", css)
+        self.assertIn(".conv-item.is-pinned:not(:hover):not(:focus-within):not(.is-actions-open) .conv-row-actions:not(:empty)", css)
         self.assertIn(".conv-item.is-pinned:not(:hover):not(:focus-within) .conv-pin-btn.is-unpin", css)
         self.assertIn(".conv-item .conv-pin-btn.is-unpin:hover .conv-pin-glyph::before", css)
         self.assertIn(".conv-item .conv-pin-btn.is-unpin:hover .conv-pin-glyph::after", css)
@@ -14876,8 +14931,8 @@ class TestModelPicker(unittest.TestCase):
         import server
         src = pathlib.Path(server.__file__).read_text()
         # Routes registered
-        self.assertIn("/api/session/[a-zA-Z0-9-]+/model", src)
-        self.assertIn("/api/session/[a-zA-Z0-9-]+/model/clear", src)
+        self.assertIn("/api/session/[a-zA-Z0-9_-]+/model", src)
+        self.assertIn("/api/session/[a-zA-Z0-9_-]+/model/clear", src)
         # do_POST gates everything through _check_same_origin first
         post_idx = src.find("def do_POST")
         self.assertGreater(post_idx, 0)
@@ -15174,8 +15229,10 @@ class TestModelPicker(unittest.TestCase):
         # masquerading as current.
         self.assertIn("const liveReasoningEffort = String(u.reasoning_effort || '').trim();", js)
         self.assertIn("const currentReasoningEffort = liveReasoningEffort || ovrReasoningEffort;", js)
-        self.assertIn("const effortInner = showsEffort", js)
-        self.assertIn("wp-model-effort", js)
+        # CCC-823: the pill's visible label is just the model short name; effort
+        # surfaces via the tooltip instead of a dedicated label segment.
+        self.assertIn("const showsEffort = engineSupportsEffort(engine);", js)
+        self.assertIn("'\\nReasoning effort: engine default (CCC has not set one)'", js)
         # The picker opens on the INTENDED level, so a queued switch reads back
         # as the active row instead of inviting the user to pick it twice.
         self.assertIn("const pickerReasoningEffort = ovrReasoningEffort || liveReasoningEffort;", js)
@@ -15190,8 +15247,11 @@ class TestModelPicker(unittest.TestCase):
         server_py = pathlib.Path(PROJECT_ROOT, "server.py").read_text()
 
         self.assertIn("const showsEffort = engineSupportsEffort(engine);", js)
-        self.assertIn("escapeHtml(currentReasoningEffort || 'default')", js)
-        self.assertIn(".conv-input-context .wp-model-effort.is-default", css)
+        # CCC-823: effort no longer renders as its own pill segment; the
+        # tooltip always states a concrete effort or an explicit "engine
+        # default" fallback so a blank never reads as "no effort".
+        self.assertIn("'\\nReasoning effort: ' + currentReasoningEffort", js)
+        self.assertIn("'\\nReasoning effort: engine default (CCC has not set one)'", js)
         # extract_session_usage only sees the picker override, so a session
         # spawned with --effort and never re-picked would report blank.
         self.assertIn("usage[\"reasoning_effort\"] = _conv_row_reasoning_effort(", server_py)
@@ -15206,7 +15266,7 @@ class TestModelPicker(unittest.TestCase):
         self.assertIn('id="spawnDefaultsEffort"', html)
         self.assertIn("const $convInputEffortSelect", js)
         self.assertIn("reasoning_effort: spawnDefaultsState.reasoning_effort", js)
-        self.assertIn("spawnDefaultsDraft.reasoning_effort = $spawnDefaultsEffort.value", js)
+        self.assertIn("spawnDefaultsState.reasoning_effort = $spawnDefaultsEffort.value", js)
         self.assertIn("let spawnEffortChoiceDirty = false;", js)
         self.assertIn("spawnEffortChoiceDirty = true;", js)
         self.assertIn("spawnEffortChoiceDirty = false;\n    syncSpawnEngineDependentUi();", js)
