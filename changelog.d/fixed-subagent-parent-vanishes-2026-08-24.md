@@ -1,0 +1,1 @@
+A session that spawned a Codex subagent (e.g. a "code review" pass, a fleet-verify check) could vanish entirely from the sidebar, leaving the child row's "spawned by" chip pointing at nothing. Fixed a field mix-up that made any spawn edge look identical to a continuation, so the parent got folded away instead of leading the row with its children nested underneath.
