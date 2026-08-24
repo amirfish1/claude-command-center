@@ -48932,6 +48932,27 @@
     return '<div class="kimi-todo-list">' + rows.join('') + '</div>';
   }
 
+  // Terminal-style output peek shown under a collapsed tool row: the first
+  // few output lines plus a "(N more lines)" hint, so a Bash row reads like
+  // the Kimi TUI ("Ran a command / $ cmd / first lines / (N more lines)")
+  // without having to expand every row. Hidden by CSS once the row is open
+  // (the body then shows the full preview).
+  const _KIMI_TOOL_PEEK_LINES = 3;
+  const _KIMI_TOOL_PEEK_COLS = 160;
+  function _kimiToolPeekHtml(outputText) {
+    const text = String(outputText || '').replace(/\s+$/, '');
+    if (!text) return '';
+    const lines = text.split('\n');
+    const shown = lines.slice(0, _KIMI_TOOL_PEEK_LINES).map(function (l) {
+      l = l.replace(/\s+$/, '');
+      return l.length > _KIMI_TOOL_PEEK_COLS ? l.slice(0, _KIMI_TOOL_PEEK_COLS - 1) + '…' : l;
+    });
+    const more = lines.length - shown.length;
+    return '<div class="kimi-tool-peek">' + escapeHtml(shown.join('\n'))
+      + (more > 0 ? '<span class="kimi-tool-peek-more">(' + more + ' more line' + (more === 1 ? '' : 's') + ')</span>' : '')
+      + '</div>';
+  }
+
   // One kimi-web ToolRow: glyph + display name + muted arg summary + status
   // indicator, with an expandable sunken body (diff → input/command → output
   // preview). ACP permission buttons render inside the body and force it open.
@@ -48997,6 +49018,7 @@
       + '<span class="kimi-tool-rt">' + statusHtml + '</span>'
       + (expandable ? '<span class="kimi-tool-car">' + _KIMI_GLYPHS['chevron-right'] + '</span>' : '')
       + '</div>'
+      + (todoHtml ? '' : _kimiToolPeekHtml(outputText))
       + (expandable ? '<div class="kimi-tool-body"><div class="kimi-tool-body-pad">' + bodyParts.join('') + '</div></div>' : '')
       + '</div>';
   }
@@ -50530,6 +50552,13 @@
               out.className = 'kimi-tool-io is-output';
               out.textContent = text || 'No error details returned.';
               pad.appendChild(out);
+              // Late-landing output (codex call_id results, wire-tail
+              // tool_result folds) gets the same collapsed-row peek a
+              // server-rendered output_preview would have had.
+              if (!row.querySelector(':scope > .kimi-tool-peek')) {
+                const peekHtml = _kimiToolPeekHtml(text);
+                if (peekHtml) body.insertAdjacentHTML('beforebegin', peekHtml);
+              }
               if (_isErr) {
                 row.classList.add('err');
                 const st = row.querySelector('.kimi-tool-status');

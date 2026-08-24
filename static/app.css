@@ -1864,6 +1864,16 @@
     flex: none; color: var(--kw-faint); display: inline-flex; transition: transform 0.15s ease;
   }
   .conv-pane.is-webui-session .kimi-tool.open .kimi-tool-car { transform: rotate(90deg); }
+  .conv-pane.is-webui-session .kimi-tool-peek {
+    display: block; padding: 0 12px 7px 30px;
+    font-family: var(--font-mono, 'SF Mono', SFMono-Regular, Consolas, monospace);
+    font-size: 12px; line-height: 1.5; color: var(--kw-muted);
+    white-space: pre-wrap; word-break: break-word;
+  }
+  .conv-pane.is-webui-session .kimi-tool-peek-more {
+    display: block; color: var(--kw-faint); font-style: italic;
+  }
+  .conv-pane.is-webui-session .kimi-tool.open .kimi-tool-peek { display: none; }
   .conv-pane.is-webui-session .kimi-tool-body { display: none; }
   .conv-pane.is-webui-session .kimi-tool.open .kimi-tool-body { display: block; }
   .conv-pane.is-webui-session .kimi-tool-body-pad {

@@ -285,3 +285,28 @@ def test_session_load_replay_persists_tool_rows_in_order():
     read = events[5]["blocks"][0]
     assert read["name"] == "Read" and read["detail"] == "/tmp/notes.md"
     assert "tool_status" not in read  # never reached a terminal status
+
+
+# ── Frontend: collapsed tool rows carry a terminal-style output peek ─────────
+
+def test_kimi_tool_row_renders_inline_output_peek():
+    """A collapsed `.kimi-tool` row shows the first output lines + "(N more
+    lines)" like the Kimi TUI, and the peek hides once the row is opened."""
+    root = pathlib.Path(__file__).resolve().parent.parent
+    app_js = (root / "static" / "app.js").read_text()
+    app_css = (root / "static" / "app.css").read_text()
+
+    assert "function _kimiToolPeekHtml(outputText)" in app_js
+    assert "_KIMI_TOOL_PEEK_LINES = 3" in app_js
+    # Rendered between the head and the expandable body in _kimiToolRowHtml.
+    row_fn = app_js[app_js.index("function _kimiToolRowHtml(b)"):]
+    row_fn = row_fn[: row_fn.index("\n  }\n")]
+    assert "_kimiToolPeekHtml(outputText)" in row_fn
+    assert row_fn.index("_kimiToolPeekHtml(outputText)") < row_fn.index('<div class="kimi-tool-body">')
+    # Late tool_result folds (codex call_id / wire-tail) add the same peek.
+    fold = app_js[app_js.index("out.className = 'kimi-tool-io is-output';"):]
+    assert "body.insertAdjacentHTML('beforebegin', peekHtml)" in fold[:1200]
+    assert "kimi-tool-peek-more" in app_js
+
+    assert ".kimi-tool-peek {" in app_css
+    assert ".kimi-tool.open .kimi-tool-peek { display: none; }" in app_css
