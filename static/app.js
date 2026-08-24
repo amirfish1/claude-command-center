@@ -50221,6 +50221,11 @@
     // newly-streamed events don't yank them back down. 80px tolerance is
     // generous enough to absorb typical line-height jitter.
     const wasAtBottom = isConversationAtBottom($view);
+    // CCC-500 overflow toggles are decided in ONE read pass after the loop
+    // (see _overflowChecks flush below). Reading scrollHeight per tool
+    // result inside the loop forced a style recalc + layout per result:
+    // ~30 recalcs, ~700ms, on a 60-event open.
+    const _overflowChecks = [];
     // Visual "Clear" watermark (CCC-474): events at or below this jsonl line
     // were wiped from the screen for recording — keep them hidden if a poll
     // or load-earlier re-renders them. Purely cosmetic; see
@@ -51482,15 +51487,9 @@
             last.appendChild(out);
             // CCC-500: plain-text results are capped at max-height:200px with
             // only a scrollbar as a hint they're clipped — add an explicit
-            // toggle when the content actually overflows that box.
-            if (!codePreview && out.scrollHeight > out.clientHeight + 1) {
-              const expandBtn = document.createElement('button');
-              expandBtn.type = 'button';
-              expandBtn.className = 'tool-result-expand-toggle';
-              expandBtn.setAttribute('data-toggle-tool-result', '');
-              expandBtn.textContent = 'Show full result';
-              last.appendChild(expandBtn);
-            }
+            // toggle when the content actually overflows that box. Deferred
+            // to the batched read pass after the loop (no layout read here).
+            if (!codePreview) _overflowChecks.push(out);
             // CCC-501: refresh the group header even on failure/non-command
             // results so the collapsed row's result snippet reflects what
             // actually came back, not just successful shell commands.
@@ -51570,6 +51569,19 @@
         _currentToolCount = 0;
         $view.appendChild(div);
         if (ev.type === 'assistant' && !handedOffStreamingBubble) _convLiveRevealNewText(div, paneId, opts);
+      }
+    }
+    // Batched CCC-500 overflow check: one layout read for all results
+    // appended above, then the writes. Reads-then-writes = one recalc.
+    if (_overflowChecks.length) {
+      const _overflowing = _overflowChecks.filter(o => o.isConnected && o.scrollHeight > o.clientHeight + 1);
+      for (const o of _overflowing) {
+        const expandBtn = document.createElement('button');
+        expandBtn.type = 'button';
+        expandBtn.className = 'tool-result-expand-toggle';
+        expandBtn.setAttribute('data-toggle-tool-result', '');
+        expandBtn.textContent = 'Show full result';
+        o.insertAdjacentElement('afterend', expandBtn);
       }
     }
     // Defensive sweep: a tool group whose body has no events renders as a

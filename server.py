@@ -25649,10 +25649,24 @@ def _resolve_conversation_path(conversation_id, repo_path=None):
                 continue
         return PROJECTS_ROOT / "_missing" / agent_name
     name = conversation_id + ".jsonl"
+    # Perf: every conversation open used to walk ~170 project dirs (two
+    # stats each) before reaching the file. The (sid -> path) cache that
+    # _conv_parse_jsonl_mtime already maintains answers the same question
+    # in one stat; only a claude-transcript hit (same file name) counts,
+    # so a gemini/cursor path cached under the same id is never returned.
+    try:
+        with _CONV_PATH_CACHE_LOCK:
+            _cached = _CONV_PATH_CACHE.get(conversation_id)
+    except Exception:
+        _cached = None
+    if _cached and _cached.endswith(os.sep + name) and os.path.isfile(_cached):
+        return Path(_cached)
     if repo_path:
         for d in _conversation_dirs(repo_path):
             cand = d / name
             if cand.is_file():
+                with _CONV_PATH_CACHE_LOCK:
+                    _CONV_PATH_CACHE[conversation_id] = str(cand)
                 return cand
     if PROJECTS_ROOT.is_dir():
         try:
@@ -25661,6 +25675,8 @@ def _resolve_conversation_path(conversation_id, repo_path=None):
                     continue
                 cand = project_dir / name
                 if cand.is_file():
+                    with _CONV_PATH_CACHE_LOCK:
+                        _CONV_PATH_CACHE[conversation_id] = str(cand)
                     return cand
         except OSError:
             pass
@@ -25809,6 +25825,18 @@ def _conv_parse_jsonl_mtime(conversation_id, repo_path=None):
 _CONV_TAIL_DEFAULT = 150  # lines pulled for the initial tail window on open
 
 
+# Per-file memo of parsed events for the windowed (tail) open, keyed by
+# line number and validated by (len, hash) of the raw line. JSONL transcripts
+# are append-only, so when a live session gains a few lines the next open
+# re-parses only those lines instead of the whole 400-line window (which
+# was 100-600ms of CPU per click on tool-heavy transcripts). Claude parser
+# only: it is stateless per line; the codex parser threads running usage.
+_WINDOW_PARSE_MEMO = {}
+_WINDOW_PARSE_MEMO_LOCK = threading.Lock()
+_WINDOW_PARSE_MEMO_MAX_FILES = 24
+_WINDOW_PARSE_SKIP = object()
+
+
 def _parse_conversation_windowed(conversation_id, filepath, tail, before, parser=None):
     """Parse only a window of a conversation JSONL instead of the whole file.
 
@@ -25845,13 +25873,31 @@ def _parse_conversation_windowed(conversation_id, filepath, tail, before, parser
     events = []
     codex_token_usage = None
     codex_turn_meta = None
-    for ln, line in buf:
-        line = line.strip()
+    memo = None
+    new_memo = None
+    if not is_codex and before is None:
+        memo_key = str(filepath)
+        with _WINDOW_PARSE_MEMO_LOCK:
+            memo = _WINDOW_PARSE_MEMO.get(memo_key) or {}
+        new_memo = {}
+    for ln, raw_line in buf:
+        line = raw_line.strip()
         if not line:
             continue
+        sig = None
+        if memo is not None:
+            sig = (len(raw_line), hash(raw_line))
+            hit = memo.get(ln)
+            if hit is not None and hit[0] == sig:
+                new_memo[ln] = hit
+                if hit[1] is not _WINDOW_PARSE_SKIP:
+                    events.append(dict(hit[1]))
+                continue
         try:
             ev = json.loads(line)
         except json.JSONDecodeError:
+            if memo is not None:
+                new_memo[ln] = (sig, _WINDOW_PARSE_SKIP)
             continue
         if is_codex:
             turn_meta = _codex_turn_meta_from_event(ev)
@@ -25866,8 +25912,20 @@ def _parse_conversation_windowed(conversation_id, filepath, tail, before, parser
             parsed = parser(ev, ln, codex_token_usage, codex_turn_meta=codex_turn_meta)
         else:
             parsed = parser(ev, ln)
+            if memo is not None:
+                new_memo[ln] = (sig, dict(parsed) if parsed else _WINDOW_PARSE_SKIP)
         if parsed:
             events.append(parsed)
+
+    if new_memo is not None:
+        with _WINDOW_PARSE_MEMO_LOCK:
+            _WINDOW_PARSE_MEMO.pop(memo_key, None)
+            _WINDOW_PARSE_MEMO[memo_key] = new_memo
+            while len(_WINDOW_PARSE_MEMO) > _WINDOW_PARSE_MEMO_MAX_FILES:
+                try:
+                    _WINDOW_PARSE_MEMO.pop(next(iter(_WINDOW_PARSE_MEMO)))
+                except StopIteration:
+                    break
 
     if is_codex:
         events = _enrich_codex_no_agent_output_events(conversation_id, events)
@@ -26145,7 +26203,7 @@ def _conv_parse_cache_put(conversation_id, after_line, repo_path, result):
 # "gzip": bytes|None}. Bounded so memory doesn't blow up.
 _CONV_BYTES_CACHE = {}
 _CONV_BYTES_CACHE_LOCK = threading.Lock()
-_CONV_BYTES_CACHE_MAX = 48
+_CONV_BYTES_CACHE_MAX = 96
 
 
 def _session_has_pending_input(session_id):
@@ -26185,7 +26243,7 @@ def _session_has_dynamic_conversation_overlay(session_id):
     return False
 
 
-def _conv_response_bytes_get(conversation_id, after_line):
+def _conv_response_bytes_get(conversation_id, after_line, window=None):
     mtime = _conv_parse_jsonl_mtime(conversation_id)
     if mtime[0] <= 0:
         return None
@@ -26193,16 +26251,20 @@ def _conv_response_bytes_get(conversation_id, after_line):
     # before they changed would omit them until mtime changes.
     if _session_has_dynamic_conversation_overlay(conversation_id):
         return None
-    key = (conversation_id, int(after_line), mtime)
+    # `window` is (tail, before) for a windowed open (?tail=N / ?before=L),
+    # None for the full-history shape. Windowed opens are the click path
+    # (and the hover prefetch), so a hit here is what makes a click a
+    # hashmap lookup instead of a re-parse.
+    key = (conversation_id, int(after_line), mtime, window)
     with _CONV_BYTES_CACHE_LOCK:
         return _CONV_BYTES_CACHE.get(key)
 
 
-def _conv_response_bytes_put(conversation_id, after_line, raw, gz):
+def _conv_response_bytes_put(conversation_id, after_line, raw, gz, window=None):
     mtime = _conv_parse_jsonl_mtime(conversation_id)
     if mtime[0] <= 0:
         return
-    key = (conversation_id, int(after_line), mtime)
+    key = (conversation_id, int(after_line), mtime, window)
     with _CONV_BYTES_CACHE_LOCK:
         if len(_CONV_BYTES_CACHE) >= _CONV_BYTES_CACHE_MAX:
             try:
@@ -64734,7 +64796,8 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
             # path collapses to a hashmap lookup + socket write. Kimi convs
             # bypass: an attach can change the content at any time, with no
             # file mtime to invalidate on.
-            cached_bytes = None if (windowed or is_acp_conv) else _conv_response_bytes_get(conv_id, after_line)
+            _win_key = (tail, before) if windowed else None
+            cached_bytes = None if is_acp_conv else _conv_response_bytes_get(conv_id, after_line, window=_win_key)
             if cached_bytes is not None:
                 accept = self.headers.get("Accept-Encoding", "") or ""
                 want_gzip = "gzip" in accept.lower()
@@ -64778,8 +64841,8 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                     gz = gzip.compress(raw, compresslevel=5)
                 except Exception:
                     gz = None
-            if not windowed and not is_acp_conv:
-                _conv_response_bytes_put(conv_id, after_line, raw, gz)
+            if not is_acp_conv:
+                _conv_response_bytes_put(conv_id, after_line, raw, gz, window=_win_key)
             accept = self.headers.get("Accept-Encoding", "") or ""
             want_gzip = "gzip" in accept.lower()
             body = gz if (want_gzip and gz) else raw
