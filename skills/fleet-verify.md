@@ -53,8 +53,9 @@ curl -s -X POST "$CCC_URL/api/sessions/spawn" -H "Content-Type: application/json
 JSON
 ```
 
-- Omit `"model"` to use the server spawn default; if you pass `"model"`, pass
-  `"engine"` too (model ids are validated per engine).
+- Omit `"model"` and `"reasoning_effort"` to use the server spawn defaults; if
+  you pass either, pass `"engine"` too (both are validated per engine, and the
+  effort ladder differs by engine: see `ccc-orchestration` § 2).
 - CCC appends the return-address footer (`report_to`), so the verdict injects
   back to you when the lane finishes.
 

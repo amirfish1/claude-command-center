@@ -121,6 +121,53 @@ class TestFleetTwoNode(unittest.TestCase):
         self.assertEqual(a["default_branch"]["sha"], self.b_sha)
         self.assertNotEqual(a["worktrees"][0]["head_sha"], self.b_sha)
 
+    def test_05_fast_pass_skips_the_slow_dimensions_across_both_nodes(self):
+        """The Fleet page paints from a git-only pass first.
+
+        prs/deploy/sessions are the three dimensions that cost network
+        round-trips or a full transcript parse; dropping them is what turns a
+        multi-minute scan into a few seconds. The skip must reach peers too
+        (not just the local node), and a skipped dimension must be *marked*
+        skipped rather than reported as an empty result — otherwise the page
+        would render "0 open PRs" for a repo it never asked GitHub about.
+        """
+        inv = self.fleet.node_a.get(
+            "/api/fleet/inventory?fetch=0&prs=0&deploy=0&sessions=0")
+        self.assertTrue(inv["ok"])
+        checked = 0
+        for repo in inv["repos"]:
+            for node_id, entry in repo["nodes"].items():
+                if not entry.get("ok"):
+                    continue
+                checked += 1
+                # Git facts still present — this pass is what paints the matrix.
+                self.assertIn("worktrees", entry, node_id)
+                self.assertIn("default_branch", entry, node_id)
+                # Slow dimensions explicitly marked, not silently empty.
+                self.assertEqual(entry["prs"].get("skipped"), "excluded", node_id)
+                self.assertEqual(
+                    entry["deployment"].get("skipped"), "excluded", node_id)
+                self.assertTrue(entry.get("sessions_skipped"), node_id)
+                self.assertEqual(entry.get("sessions"), [], node_id)
+        self.assertGreaterEqual(checked, 2, "expected entries on both nodes")
+
+    def test_06_full_pass_still_returns_every_dimension(self):
+        """The fast pass must not leak into the default (enriching) pass.
+
+        Both shapes are cached per-peer, so a cache keyed only by node would
+        let a fast-pass response satisfy the full request forever.
+        """
+        inv = self.fleet.node_a.get("/api/fleet/inventory?fetch=0")
+        self.assertTrue(inv["ok"])
+        for repo in inv["repos"]:
+            for node_id, entry in repo["nodes"].items():
+                if not entry.get("ok"):
+                    continue
+                self.assertNotEqual(
+                    entry["prs"].get("skipped"), "excluded", node_id)
+                self.assertFalse(entry.get("sessions_skipped"), node_id)
+                self.assertIsInstance(entry.get("sessions"), list, node_id)
+
     def test_99_dead_peer_is_stale_not_silent(self):
         self._inventory()  # warm the peer cache
         self.fleet.node_b.stop()

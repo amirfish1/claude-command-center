@@ -155,6 +155,8 @@
   .pill.engine-codex .dot { background: var(--green); }
   .pill.engine-kilo { background: rgba(188, 140, 255, 0.12); color: var(--purple); border-color: rgba(188, 140, 255, 0.25); }
   .pill.engine-kilo .dot { background: var(--purple); }
+  .pill.engine-devin { background: rgba(139, 92, 246, 0.12); color: #a78bfa; border-color: rgba(139, 92, 246, 0.25); }
+  .pill.engine-devin .dot { background: #a78bfa; }
   .pill.engine-cursor { background: rgba(210, 153, 34, 0.12); color: var(--orange); border-color: rgba(210, 153, 34, 0.25); }
   .pill.engine-cursor .dot { background: var(--orange); }
   .pill.engine-antigravity { background: rgba(227, 179, 65, 0.12); color: var(--gold); border-color: rgba(227, 179, 65, 0.25); }
@@ -553,6 +555,7 @@
     claude:      { cls: 'engine-claude',      label: 'Claude', color: '#39d2c0' },
     codex:       { cls: 'engine-codex',       label: 'Codex',  color: '#3fb950' },
     kilo:        { cls: 'engine-kilo',        label: 'Kilo',   color: '#bc8cff' },
+    devin:       { cls: 'engine-devin',       label: 'Devin',  color: '#8b5cf6' },
     cursor:      { cls: 'engine-cursor',      label: 'Cursor', color: '#d29922' },
     antigravity: { cls: 'engine-antigravity', label: 'AG',     color: '#e3b341' },
     gemini:      { cls: 'engine-antigravity', label: 'Gemini', color: '#e3b341' },
@@ -566,6 +569,7 @@
     if (low === 'human') return 'human';
     if (low.indexOf('codex') >= 0 || low.indexOf('openai') >= 0) return 'codex';
     if (low.indexOf('kilo') >= 0) return 'kilo';
+    if (low.indexOf('devin') >= 0) return 'devin';
     if (low.indexOf('cursor') >= 0) return 'cursor';
     if (low.indexOf('antigravity') >= 0 || low.indexOf('gemini') >= 0 || low.indexOf('agy') >= 0) return 'antigravity';
     return 'claude';
@@ -573,6 +577,19 @@
 
   function engineInfo(name) {
     return ENGINE_COLORS[getEngine(name)] || ENGINE_COLORS.claude;
+  }
+
+  /* getEngine() only ever guesses, by substring-matching whatever nickname the
+     participant happens to carry. When the server tells us the real engine,
+     use it: an exact key first, then the substring guess for colour with the
+     real engine name as the label, so an unmapped engine is never mislabelled
+     "Claude". */
+  function engineInfoFor(engine, fallbackName) {
+    var key = String(engine || '').trim().toLowerCase();
+    if (!key) return engineInfo(fallbackName);
+    if (ENGINE_COLORS[key]) return ENGINE_COLORS[key];
+    var guess = ENGINE_COLORS[getEngine(key)] || ENGINE_COLORS.claude;
+    return { cls: guess.cls, label: key, color: guess.color };
   }
 
   /* ── DOM refs ── */
@@ -621,6 +638,14 @@
 	    return String(row.engine || row.source || '').trim() || 'claude';
 	  }
 
+	  /* Engine · model · effort, in one line, skipping whatever is unset.
+	     Rows that predate the reasoning_effort field just render shorter. */
+	  function routingSummary(engineLabel, model, effort) {
+	    return [engineLabel, String(model || '').trim(), String(effort || '').trim()]
+	      .filter(function(part) { return !!part; })
+	      .join(' · ');
+	  }
+
 	  function normalizeSessionRows(data) {
 	    var raw = [];
 	    if (Array.isArray(data)) raw = data;
@@ -637,6 +662,8 @@
 	        id: sid,
 	        title: sessionTitle(row),
 	        engine: sessionEngine(row),
+	        model: String(row.model || '').trim(),
+	        effort: String(row.reasoning_effort || '').trim(),
 	        repo: String(row.repo_name || row.folder_label || row.project || row.repo_path || row.cwd || '').trim(),
 	        raw: row
 	      });
@@ -676,7 +703,7 @@
 	    }
 	    sessionPickerSelected.innerHTML = rows.map(function(row) {
 	      var eng = engineInfo(row.engine || row.title);
-	      return '<span class="pill ' + eng.cls + '"><span class="dot"></span>' + escHtml(row.title || row.id.substring(0, 8)) + '</span>';
+	      return '<span class="pill ' + eng.cls + '" title="' + escAttr(routingSummary(eng.label, row.model, row.effort)) + '"><span class="dot"></span>' + escHtml(row.title || row.id.substring(0, 8)) + '</span>';
 	    }).join('');
 	  }
 
@@ -690,7 +717,7 @@
 	    }
 	    var rows = pickerSessions.filter(function(row) {
 	      if (!query) return true;
-	      return (row.title + ' ' + row.id + ' ' + row.engine + ' ' + row.repo).toLowerCase().indexOf(query) >= 0;
+	      return (row.title + ' ' + row.id + ' ' + row.engine + ' ' + row.model + ' ' + row.effort + ' ' + row.repo).toLowerCase().indexOf(query) >= 0;
 	    }).slice(0, 80);
 	    if (!rows.length) {
 	      sessionPickerList.innerHTML = '<div class="no-chats">No matching sessions</div>';
@@ -703,7 +730,7 @@
 	        '<input type="checkbox"' + (selected ? ' checked' : '') + ' aria-hidden="true">' +
 	        '<span class="session-picker-main">' +
 	          '<span class="session-picker-title">' + escHtml(row.title) + '</span>' +
-	          '<span class="session-picker-meta">' + escHtml(eng.label + ' · ' + row.id.substring(0, 8) + (row.repo ? ' · ' + row.repo : '')) + '</span>' +
+	          '<span class="session-picker-meta">' + escHtml(routingSummary(eng.label, row.model, row.effort) + ' · ' + row.id.substring(0, 8) + (row.repo ? ' · ' + row.repo : '')) + '</span>' +
 	        '</span>' +
 	      '</button>';
 	    }).join('');
@@ -859,13 +886,22 @@
     var participantMeta = data.participant_meta || {};
     var waiting = data.waiting || {};
 
+    // Engine · model · effort per participant, keyed both ways so the message
+    // headers below can resolve an author back to its routing without a
+    // second pass over participant_meta.
+    var routingByName = {};
+    var routingByHash = {};
+
     var participantBar = '';
     sessionIds.forEach(function(sid) {
       var displayName = nameMap[sid] || sid.substring(0, 8);
-      var eng = engineInfo(displayName);
       var pm = participantMeta[sid] || {};
+      var eng = engineInfoFor(pm.engine, displayName);
+      var summary = routingSummary(eng.label, pm.model, pm.reasoning_effort);
+      routingByName[displayName.toLowerCase()] = { eng: eng, summary: summary };
+      routingByHash[sid.substring(0, 8)] = { eng: eng, summary: summary };
       var isLive = pm.is_live ? ' is-live' : '';
-      participantBar += '<span class="pill ' + eng.cls + isLive + '"><span class="dot"></span>' + escHtml(displayName) + '</span>';
+      participantBar += '<span class="pill ' + eng.cls + isLive + '" title="' + escAttr(summary) + '"><span class="dot"></span>' + escHtml(displayName) + '</span>';
     });
     // ＋ participant chip (CCC-103): opens a search-and-add popover.
     participantBar += '<span class="pill add-part-pill" onclick="openAddParticipant()" title="Add a participant session">＋</span>';
@@ -892,16 +928,18 @@
     messages.forEach(function(msg) {
       var isHuman = msg.author.toLowerCase() === 'human';
       var isSystem = msg.isSystem;
-      var eng = isSystem ? null : engineInfo(msg.author);
+      var routing = isHuman ? null : (routingByHash[msg.hash] || routingByName[msg.author.toLowerCase()] || null);
+      var eng = isSystem ? null : (routing ? routing.eng : engineInfo(msg.author));
       var groupClass = isSystem ? 'system' : (isHuman ? 'human' : 'assistant');
 
       var headerHtml = '';
       if (!isSystem) {
         var dotColor = eng ? eng.color : '#8b949e';
         var authorLabel = msg.hash ? msg.hash + ': ' + msg.author : msg.author;
+        var authorTitle = routing ? routing.summary : '';
         headerHtml = '<div class="msg-header">' +
           '<span class="engine-dot" style="background:' + dotColor + '"></span>' +
-          '<span>' + escHtml(authorLabel) + '</span>' +
+          '<span' + (authorTitle ? ' title="' + escAttr(authorTitle) + '"' : '') + '>' + escHtml(authorLabel) + '</span>' +
           (msg.action ? '<span class="msg-action-badge">' + msg.action + '</span>' : '') +
         '</div>';
       }

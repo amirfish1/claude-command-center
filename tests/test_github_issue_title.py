@@ -43,3 +43,27 @@ def test_annotation_queue_uses_linked_github_issue_title():
 
     assert result["ok"]
     assert queued["title"] == "Actual issue title"
+
+
+def test_annotation_queue_uses_annotation_note_instead_of_generic_page_title():
+    queued = {}
+
+    class Queue:
+        def enqueue(self, **kwargs):
+            queued.update(kwargs)
+            return {"number": 1, "project": "CCC", "ref": "CCC-1"}
+
+    with mock.patch.object(server, "_q", Queue()), mock.patch.object(
+        server, "_WT_WORKERS_AVAILABLE", False
+    ):
+        result = server.enqueue_annotation_ux_fixes_queue(
+            "Fix the following UX issue based on this annotation",
+            meta={
+                "note": "Issues opened from annotation need meaningful names",
+                "title": "Command Center for Claude, Codex, Cursor, and Anti-Gravity",
+                "selector": ".conv-archived-list",
+            },
+        )
+
+    assert result["ok"]
+    assert queued["title"] == "Issues opened from annotation need meaningful names"

@@ -1,6 +1,6 @@
 [project]
 name = "claude-command-center"
-version = "5.10.0"
+version = "5.26.0"
 description = "A local command center for Claude Code that doesn't care how your agents were launched."
 readme = "README.md"
 requires-python = ">=3.9"
@@ -13,7 +13,7 @@ classifiers = [
     "Development Status :: 3 - Alpha",
     "Environment :: Web Environment",
     "Intended Audience :: Developers",
-    "License :: OSI Approved :: MIT License",
+    "License :: Other/Proprietary License",
     "Operating System :: MacOS :: MacOS X",
     "Programming Language :: Python :: 3",
     "Programming Language :: Python :: 3.10",

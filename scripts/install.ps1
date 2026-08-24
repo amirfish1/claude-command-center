@@ -14,6 +14,10 @@ $ErrorActionPreference = "Stop"
 
 $RepoUrl = "https://github.com/amirfish1/claude-command-center"
 $InstallDir = Join-Path $env:USERPROFILE ".ccc\claude-command-center"
+$WatchtowerRepoUrl = "https://github.com/amirfish1/watchtower"
+$WatchtowerInstallDir = Join-Path $env:USERPROFILE ".ccc\watchtower"
+$WatchtowerTarballUrl = "https://github.com/amirfish1/watchtower/archive/refs/heads/main.tar.gz"
+$WatchtowerPypiName = "watchtower-cli"
 $SourceFile = Join-Path $env:USERPROFILE ".claude\command-center\install-source"
 $ValidChannels = @("readme", "landing-hero", "hn", "ph", "devto", "yt", "gh-trending", "dmg", "unknown")
 
@@ -58,11 +62,81 @@ function Sync-Repo {
     if (Test-Path -LiteralPath (Join-Path $InstallDir ".git")) {
         Write-Output "install: updating existing checkout at $InstallDir"
         git -C $InstallDir pull --ff-only
+        if ($LASTEXITCODE -ne 0) {
+            # History no longer fast-forwards (e.g. an upstream rewrite) or the
+            # checkout is otherwise broken. Reclone fresh rather than leave the
+            # user stuck on a stale or broken checkout.
+            Write-Output "install: existing checkout at $InstallDir could not fast-forward; recloning fresh"
+            Remove-Item -LiteralPath $InstallDir -Recurse -Force
+            git clone $RepoUrl $InstallDir
+        }
     } else {
         Write-Output "install: cloning $RepoUrl to $InstallDir"
         New-Item -ItemType Directory -Force -Path (Split-Path -Parent $InstallDir) | Out-Null
         git clone $RepoUrl $InstallDir
     }
+}
+
+# WatchTower is CCC's queue engine. Without it the dashboard silently drops
+# worker dispatch, plan-to-fleet import, and delivery receipts, so install it
+# into the SAME interpreter that runs server.py (CCC needs `import watchtower`
+# in-process). Never fatal: CCC still boots on its built-in fallback engine.
+function Install-Watchtower {
+    param([string]$Python)
+
+    & $Python -c "import watchtower" 2>$null
+    if ($LASTEXITCODE -eq 0) {
+        Write-Output "install: WatchTower already installed - skipping."
+        return
+    }
+
+    & $Python -c "import sys; sys.exit(0 if sys.version_info >= (3, 11) else 1)" 2>$null
+    if ($LASTEXITCODE -ne 0) {
+        Write-Warning "python is below WatchTower's 3.11 minimum - skipping WatchTower. CCC will use its built-in queue engine (no worker dispatch, no plan import)."
+        return
+    }
+
+    $source = $null
+    if (Test-Path -LiteralPath (Join-Path $WatchtowerInstallDir ".git")) {
+        git -C $WatchtowerInstallDir pull --ff-only 2>$null | Out-Null
+        $source = $WatchtowerInstallDir
+    } elseif (-not (Test-Path -LiteralPath $WatchtowerInstallDir)) {
+        Write-Output "install: fetching WatchTower (CCC's queue engine) from $WatchtowerRepoUrl"
+        New-Item -ItemType Directory -Force -Path (Split-Path -Parent $WatchtowerInstallDir) | Out-Null
+        git clone --depth 1 $WatchtowerRepoUrl $WatchtowerInstallDir 2>$null | Out-Null
+        if ($LASTEXITCODE -eq 0) {
+            $source = $WatchtowerInstallDir
+        } else {
+            Remove-Item -Recurse -Force -LiteralPath $WatchtowerInstallDir -ErrorAction SilentlyContinue
+        }
+    }
+
+    if ($source) {
+        Write-Output "install: installing WatchTower from $source"
+        & $Python -m pip install --user --quiet -e $source 2>$null
+        if ($LASTEXITCODE -eq 0) {
+            Write-Output "install: WatchTower installed - watchtower.queue is now available."
+            return
+        }
+        Write-Output "install: editable install failed; falling back to a source tarball"
+    }
+
+    Write-Output "install: installing WatchTower from $WatchtowerTarballUrl"
+    & $Python -m pip install --user --quiet $WatchtowerTarballUrl 2>$null
+    if ($LASTEXITCODE -eq 0) {
+        Write-Output "install: WatchTower installed - watchtower.queue is now available."
+        return
+    }
+
+    # PyPI last: the published release lags the repo, so it is a floor.
+    Write-Output "install: installing WatchTower from PyPI ($WatchtowerPypiName)"
+    & $Python -m pip install --user --quiet $WatchtowerPypiName 2>$null
+    if ($LASTEXITCODE -eq 0) {
+        Write-Output "install: WatchTower installed - watchtower.queue is now available."
+        return
+    }
+
+    Write-Warning "could not install WatchTower. CCC falls back to its built-in queue engine - tickets can be filed but no worker is dispatched. Retry manually: $Python -m pip install --user $WatchtowerPypiName"
 }
 
 function Open-WhenReady {
@@ -90,7 +164,7 @@ function Open-WhenReady {
 }
 
 Require-Command -Name "git" -InstallHint "Install Git for Windows, then re-run this installer."
-$null = Resolve-Python
+$python = Resolve-Python
 Warn-IfNoClaudeCli
 
 $channel = Resolve-Channel -Raw $From
@@ -99,6 +173,7 @@ Set-Content -LiteralPath $SourceFile -Value $channel -Encoding UTF8
 Write-Output "install: attribution channel = $channel"
 
 Sync-Repo
+Install-Watchtower -Python $python
 
 $env:PORT = [string]$Port
 $dashboardUrl = "http://localhost:$Port"

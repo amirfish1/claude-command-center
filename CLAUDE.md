@@ -133,6 +133,28 @@ Read `SECURITY.md` before changing anything about network binding, origin checks
 - `hooks/` scripts run inside Claude Code's hook pipeline — they must exit fast and never prompt.
 - The Morning view (`morning.py`, `morning_store.py`, `static/morning/`) is a **gitignored opt-in plugin** for one user's workflow. Don't reference it in the README or treat it as part of the core.
 
+## Never block a turn on a polling loop
+
+Don't wait for something by holding a foreground Bash call open:
+
+```bash
+# WRONG — holds the turn open for hours
+while true; do wt ls -q QUEUE ...; sleep 120; done
+```
+
+A foreground tool child keeps the turn alive, and CCC treats a live turn as
+"input will land at the next boundary". A loop that polls for minutes or hours
+means that boundary never arrives, so every message queued to that session sits
+on "sending…" for as long as the loop runs. Three of these in one session held
+its queue for over four hours.
+
+Use `run_in_background: true`, or the `Monitor` tool, or just end the turn and
+check on the next one. If a loop genuinely must run in the foreground, bound it
+to minutes — never hours.
+
+(`_tool_child_blocks_inject` now force-delivers after 10 minutes, so this
+degrades instead of wedging. Don't rely on it: it's a backstop, not a licence.)
+
 ## Testing
 
 `tests/test_smoke.py` imports `server.py` and checks nothing explodes. CI is minimal by design. If you add a feature, a smoke-level assertion is nice-to-have but not required — the bar is "doesn't break the import."
@@ -172,6 +194,48 @@ latency). The committed `scripts/pre-push.sh` runs it before every push (shared
 gate via `.git/hooks/pre-push`). If it fails, restore the gate — don't relax the
 bound. Add a call-count test there for any new all-conversations/all-sessions path.
 
+## Restart matrix — report this on EVERY fix
+
+A committed fix is not a live fix. Python code is loaded once at process
+start, so a change sits inert until the process that runs it is restarted.
+**End every fix with these three lines**, so nobody has to guess whether what
+they just changed is actually running:
+
+```
+Dashboard server restart needed:  Y/N
+Worker restart needed:            Y/N
+WatchTower server restart needed: Y/N
+```
+
+How to decide — the three services and what each one loads:
+
+| Service | launchd label | Runs | Restart when you touched |
+|---|---|---|---|
+| **Dashboard** | `com.github.claude-command-center` | `server.py` + the HTTP API | `server.py` or any module it imports |
+| **Worker** | `com.github.claude-command-center.worker` | `ccc_worker.py`, owns engine execution + the shared Codex app-server | `ccc_worker.py`, `worker_engines.py`, `control_plane.py` — **and `server.py`**, see the gotcha below |
+| **WatchTower** | `ai.watchtower.watcher` | the `wt` queue daemon on `:8787` | WatchTower's own code (separate repo). CCC changes never need this — default **N** |
+
+**The gotcha that gets missed:** `worker_engines.py` does a lazy `import server`
+(`EngineHost._legacy()`), so the worker runs its **own copy** of `server.py`'s
+module-level state. A `server.py` fix that runs on an engine path is therefore
+**Y for both** the dashboard and the worker. Restarting only the dashboard
+leaves the old code live in the worker, which looks exactly like "the fix
+didn't work."
+
+**No restart needed (default N everywhere):** `static/*` (served from disk per
+request — a browser reload is enough), `docs/`, `changelog.d/`, `tests/`,
+markdown. Frontend-only fixes are `N/N/N`.
+
+```bash
+launchctl kickstart -k gui/$(id -u)/com.github.claude-command-center.worker
+launchctl kickstart -k gui/$(id -u)/com.github.claude-command-center
+```
+
+Restart the worker **first**: it is the one holding engine subprocesses, and
+the dashboard reconnects to it. Note that restarting the worker marks running
+queue items "needs reconciliation" (one click on Reconcile), so only do it when
+the change actually requires it.
+
 ## Finishing a change — does it need a deploy?
 
 Depends entirely on what you touched. Most changes ship the moment you `git push origin main`. Only `.app`-shell changes need a real release.
@@ -192,3 +256,46 @@ Depends entirely on what you touched. Most changes ship the moment you `git push
 - Everything else? → **`git push origin main`** and you're done.
 
 If you're unsure, default to pushing then checking the table — `git push` is reversible (`git revert`); a half-shipped release is harder to clean up.
+
+<!-- HUNCH:START — auto-generated, do not edit by hand -->
+## 🧠 Hunch (Engineering Memory)
+
+This repo has **Hunch** — a curated graph of *why* the code is the way it is (decisions, bug history, invariants). It currently holds **0 decisions, 0 bugs, 0 constraints, 12 components, 0 policies**.
+
+**Consult Hunch via the `hunch_*` MCP tools — pick by MOMENT, not from memory:**
+
+**Orient (session/task start):**
+- `hunch_context(target_or_task)` — the minimal relevant slice for what you're about to do; a task phrase falls back to the closest graph matches. **Call FIRST.**
+- `hunch_structure(target?)` — the indexed shape of the repo/dir/file/symbol — orient from the graph, not grep rounds.
+- `hunch_runbook(task)` — the proven steps for a recurring task, before re-deriving them.
+- `hunch_escalations()` — the decisions only the HUMAN can make (topic conflicts, candidate/proposed rules, repaired rules needing a re-prove). Normally empty; when it isn't, ASK the user inline — an entry is a question, never an approval.
+- `hunch now` (CLI) — recent decisions + the live roadmap; `hunch log` — the memory-move timeline (every capture/adopt/supersede/prune/repair, each revertable).
+
+**Before designing / choosing an approach:**
+- `hunch_why(target)` — why a file/symbol is shaped this way (decisions, bugs, constraints) — including what was already REJECTED.
+- `hunch_current_decision(topic)` — the one live answer for a topic (history + rejected included).
+- `hunch_bug_lineage(symptom_or_symbol)` — has this failed before? what was the root cause?
+- `hunch_compare(candidates)` — rank candidate branches/commits by fewest invariant hits.
+- `hunch_query(query)` — free-text search when nothing above fits.
+
+**Before editing:**
+- `hunch_check_constraints(scope)` and `hunch_get_dependents(symbol)` / `hunch_blast_radius(target)` — invariants in scope + who you'd break. (The pre-edit hook injects this per file automatically; call these for PLANNING breadth.)
+- `hunch_findings(scope?)` — known-but-unfixed gaps in the area (past audits, measurements, incidents) so you inherit them instead of re-discovering them.
+
+**Before committing / merging:**
+- `hunch_conformance()` — does the code still SATISFY recorded intent? Run before and after a refactor.
+- `hunch_policy_evaluate(policy_id?, active_only?)` / `hunch_policy_plan(policy_id)` / `hunch_policy_card(policy_id)` / `hunch_policy_proof(policy_id)` — evaluate canonical policy, inspect the planned corpus, review the evidence/uncertainty card, and inspect raw replay receipts; only an explicit human activation grants authority.
+- `hunch_pr_impact(base?)` / `hunch_merge_verdict(...)` — a change's memory surface; would it re-open a closed bug?
+
+**Build the Constitution review queue:**
+- `hunch constitution bootstrap --since 90d --max-candidates 3` (CLI) — normalize recent structured human evidence into at most three non-active policy candidates; add `--history` for exact, human-identifier-grounded fix/revert deltas or explicit dependency retirements. Coincidence/ambiguity stays uncompilable; neither path grants authority.
+- `hunch constitution ingest --since 90d [--instructions] [--from export.json]` (CLI) — normalize corrections/failures plus bounded committed instructions/ADRs and strict local review/conversation/PR exports into Git-native evidence; raw prose is hash-only, unsupported intent remains uncompilable, and no policy is minted.
+
+**After deciding / when corrected:**
+- `hunch_capture_decision(topic?)` → `hunch_record_decision(...)` — interview first, then write; status `proposed` = roadmap intent (shows in `hunch now`).
+- `hunch_record_correction(...)` — a human correction becomes an ENFORCED rule (Never Twice), not a one-session memory.
+- `hunch_record_finding(...)` — an OBSERVATION with no code change (an audit that found a gap, a measured number, an incident) becomes durable memory anchored to a date + evidence; `/audit` runs the ritual.
+- `hunch_timeline(target)` — decision history when investigating how something evolved.
+
+_Hunch updates itself from commits and test failures. Records carry provenance + confidence; treat low-confidence items as advisory._
+<!-- HUNCH:END -->

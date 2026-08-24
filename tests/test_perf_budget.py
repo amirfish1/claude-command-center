@@ -14,8 +14,10 @@ restore the gate. See CLAUDE.md "Performance gates".
 """
 import importlib
 import concurrent.futures
+import gzip
 import json
 import os
+import subprocess
 import sys
 import threading
 import time
@@ -79,6 +81,192 @@ def test_healthcheck_session_probe_stops_after_first_file(monkeypatch, tmp_path)
 
     assert server._has_claude_session_file(projects) is True
     assert seen == 1
+
+
+def test_archive_list_projection_keeps_renderer_and_lifecycle_contract():
+    """The slim sidebar response must retain every current row-critical field."""
+    now = 2_000_000.0
+    transcript = " ".join(
+        f"assistant-debug-{index:04d}-{(index * 2654435761) % (2 ** 32):08x}"
+        for index in range(600)
+    )
+    row = {
+        "id": "row-1",
+        "session_id": "session-1",
+        "source": "interactive",
+        "engine": "codex",
+        "source_platform": "cli",
+        "folder_label": "demo",
+        "folder_path": "/tmp/demo",
+        "slug": "demo",
+        "session_cwd": "/tmp/demo",
+        "session_cwd_exists": True,
+        "session_cwd_is_worktree": True,
+        "mtime": now - 10,
+        "modified": now - 10,
+        "last_interacted": now - 10,
+        "size": 123,
+        "first_message": "Keep lifecycle metadata",
+        "ai_title": "Lifecycle title",
+        "display_name": "Lifecycle title",
+        "name_overridden": True,
+        "spawn_pid": 4242,
+        "branch": "main",
+        "git_branch": "main",
+        "effective_branch": "feature/list",
+        "effective_kind": "worktree",
+        "worktree_label": "list",
+        "archived": True,
+        "trashed": True,
+        "pinned": True,
+        "pin_rank": 2,
+        "all_lane_override": "workers",
+        "state": "ended",
+        "ended_blocked": True,
+        "session_state": {"did": "preserved"},
+        "goal": "ship this",
+        "goal_status": "active",
+        "parent_session_id": "parent-1",
+        "hermes_lineage_session_ids": ["parent-1"],
+        "model": "gpt-5.5",
+        "is_live": True,
+        "sidecar_status": "working",
+        "pending_tool": "Bash",
+        "question_waiting": True,
+        "question_text": "Approve?",
+        "latest_input_tokens": 99,
+        "live_context_percent": 25,
+        "quality_score": 95,
+        "quality_summary": "healthy",
+        "codex_state": "working",
+        "codex_fresh": True,
+        "jsonl_path": "/private/transcript.jsonl",
+        "last_assistant_text": transcript,
+        "debug": {"transcript": transcript},
+    }
+
+    payload = server._archive_list_payload([row], window="1d", now=now)
+
+    projected = payload["conversations"]
+    assert projected == [
+        {key: row[key] for key in server._ARCHIVE_LIST_FIELDS if key in row}
+    ]
+    assert payload["window"] == "1d"
+    assert payload["count"] == 1
+    assert payload["total_count"] == 1
+    assert {"archived", "trashed", "pinned", "all_lane_override", "session_state", "goal", "codex_state", "spawn_pid"} <= set(projected[0])
+    assert "jsonl_path" not in projected[0]
+    assert "last_assistant_text" not in projected[0]
+    assert "debug" not in projected[0]
+    full = json.dumps({"conversations": [row]}).encode()
+    slim = json.dumps(payload).encode()
+    assert len(slim) < len(full) * 0.45
+    assert len(gzip.compress(slim)) < len(gzip.compress(full)) * 0.75
+
+
+def test_archive_list_window_filters_old_rows_but_keeps_pinned_and_hermes():
+    now = 2_000_000.0
+    rows = [
+        {"session_id": "recent", "engine": "claude", "mtime": now - 60},
+        {"session_id": "week-old", "engine": "claude", "mtime": now - 2 * 86400},
+        {"session_id": "old", "engine": "claude", "mtime": now - 8 * 86400},
+        {"session_id": "pinned-old", "engine": "claude", "pinned": True, "mtime": now - 8 * 86400},
+        {"session_id": "hermes-old", "engine": "hermes", "mtime": now - 8 * 86400},
+    ]
+
+    assert [row["session_id"] for row in server._archive_list_project_rows(rows, window="1d", now=now)] == ["recent", "pinned-old", "hermes-old"]
+    assert [row["session_id"] for row in server._archive_list_project_rows(rows, window="7d", now=now)] == ["recent", "week-old", "pinned-old", "hermes-old"]
+    assert [row["session_id"] for row in server._archive_list_project_rows(rows, window="all", now=now)] == ["recent", "week-old", "old", "pinned-old", "hermes-old"]
+
+
+def test_archive_list_rows_reuse_warm_archive_cache(monkeypatch):
+    calls = []
+
+    def cached(options):
+        calls.append(options)
+        return ([{"session_id": "warm", "mtime": 2_000_000}], True)
+
+    monkeypatch.setattr(server, "_archive_all_rows_cached", cached)
+
+    rows, from_cache = server._archive_list_rows_cached({"include_prs": False}, window="all")
+
+    assert [row["session_id"] for row in rows] == ["warm"]
+    assert from_cache is True
+    assert calls == [{"include_prs": False}]
+
+
+def test_archive_list_source_avoids_copying_full_snapshot(monkeypatch):
+    """A short sidebar window must not copy/refresh every historical row."""
+    expected = [{"session_id": "recent"}, {"session_id": "old"}]
+    calls = []
+
+    def serve(
+        key,
+        options,
+        *,
+        copy_rows=True,
+        force_refresh=False,
+    ):
+        calls.append((key, options, copy_rows, force_refresh))
+        return expected, True, 7
+
+    monkeypatch.setattr(server, "_archive_serve_rows_versioned", serve)
+    options = {"include_prs": False}
+
+    rows, from_cache = server._archive_list_source_rows_cached(options)
+
+    assert rows is expected
+    assert from_cache is True
+    fresh_rows, fresh_from_cache = server._archive_list_source_rows_cached(
+        options,
+        force_refresh=True,
+    )
+
+    assert fresh_rows is expected
+    assert fresh_from_cache is True
+    assert calls == [(
+        server._archive_response_cache_key(**options),
+        options,
+        False,
+        False,
+    ), (
+        server._archive_response_cache_key(**options),
+        options,
+        False,
+        True,
+    )]
+
+
+def test_archive_list_http_route_projects_cached_rows(monkeypatch):
+    monkeypatch.setattr(
+        server,
+        "_archive_list_source_rows_cached",
+        lambda _options, **_kwargs: ([{
+            "session_id": "trashed-row", "engine": "claude", "mtime": 2_000_000,
+            "archived": True, "trashed": True, "all_lane_override": "messages",
+            "last_assistant_text": "not returned",
+        }], True),
+    )
+    httpd = server.http.server.ThreadingHTTPServer(("127.0.0.1", 0), server.CommandCenterHandler)
+    thread = threading.Thread(target=httpd.serve_forever, daemon=True)
+    thread.start()
+    try:
+        with urllib.request.urlopen(
+            f"http://127.0.0.1:{httpd.server_address[1]}/api/conversations/list?window=all",
+            timeout=5,
+        ) as response:
+            body = json.loads(response.read().decode("utf-8"))
+    finally:
+        httpd.shutdown()
+        httpd.server_close()
+        thread.join(timeout=5)
+
+    assert body["window"] == "all"
+    assert body["cached"] is True
+    assert body["conversations"] == [{
+        "session_id": "trashed-row", "engine": "claude", "mtime": 2_000_000,
+        "archived": True, "trashed": True, "all_lane_override": "messages",
+    }]
 
 
 def test_productivity_refresh_reads_shared_sources_once(monkeypatch):
@@ -180,6 +368,14 @@ def big_projects(tmp_path, monkeypatch):
     monkeypatch.setattr(server, "HERMES_WHATSAPP_BRIDGE_LOG", hermes_home / "whatsapp" / "bridge.log")
     monkeypatch.setattr(server, "HERMES_CHUCK_PENDING_DIR", hermes_home / "whatsapp" / "chuck_realtor_pending")
     monkeypatch.setattr(server, "HERMES_PROFILES_DIR", hermes_home / "profiles")
+    # Devin CLI reads its sessions DB via CCC_DEVIN_DB (env override, checked
+    # fresh per call) rather than a server-module global, so it isn't covered
+    # by the monkeypatch.setattr overrides above. Without this, find_all_
+    # conversations hits the developer's REAL ~/.local/share/devin/cli/
+    # sessions.db (can be multi-GB with a large WAL) on every call, which is
+    # slow and makes this perf gate depend on the developer's box. Point it at
+    # a path with no file so _devin_cli_connect() short-circuits to None.
+    monkeypatch.setenv("CCC_DEVIN_DB", str(tmp_path / ".local" / "share" / "devin" / "cli" / "sessions.db"))
     return n, sids
 
 
@@ -200,6 +396,141 @@ def _count_calls(monkeypatch, attr, passthrough_return=None):
 # ── Liveness-gate invariants ────────────────────────────────────────────────
 # Old, untouched sessions must NOT get the per-row liveness probe (which scans
 # every Gemini/Codex file). These guard the cold-build and warm-serve gates.
+
+
+def test_process_comm_native_path_does_not_touch_filesystem(monkeypatch):
+    """Classifying every ps row must be string work, not thousands of lstats."""
+    native = Path.home() / ".local" / "share" / "claude" / "versions" / "2.1.144"
+    resolve_calls = []
+    real_resolve = Path.resolve
+
+    def counting_resolve(path, *args, **kwargs):
+        resolve_calls.append(path)
+        return real_resolve(path, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "resolve", counting_resolve)
+
+    assert server._process_comm_is_claude(str(native))
+    assert resolve_calls == [], "process-name classification performed filesystem resolution"
+
+
+def test_session_registry_reuses_shared_process_snapshot(monkeypatch, tmp_path):
+    """Registry validation and engine discovery share one cached ps snapshot."""
+    sid = "00000000-0000-4000-8000-000000000001"
+    (tmp_path / "123.json").write_text(
+        json.dumps({"pid": 123, "sessionId": sid}),
+        encoding="utf-8",
+    )
+    native = Path.home() / ".local" / "share" / "claude" / "versions" / "2.1.144"
+    subprocess_calls = []
+
+    monkeypatch.setattr(server, "SESSIONS_REGISTRY", tmp_path)
+    monkeypatch.setattr(
+        server,
+        "_scan_engine_processes",
+        lambda: [("123", "??", str(native), str(native))],
+    )
+
+    def fake_run(args, **kwargs):
+        subprocess_calls.append(args)
+        return subprocess.CompletedProcess(
+            args,
+            0,
+            stdout=f"123 {native}\n",
+            stderr="",
+        )
+
+    monkeypatch.setattr(server.subprocess, "run", fake_run)
+    server._load_session_registry.cache_clear()
+
+    assert sid in server._load_session_registry()
+    assert subprocess_calls == [], "registry forked a second ps instead of sharing the snapshot"
+
+
+def test_live_engine_ids_use_raw_process_snapshot_without_metadata_probes(monkeypatch):
+    """The idle liveness poll must not fork cwd/terminal probes per engine PID."""
+    sid = "00000000-0000-4000-8000-000000000002"
+    monkeypatch.setattr(server, "_spawned_sessions", [])
+    monkeypatch.setattr(
+        server,
+        "_scan_engine_processes",
+        lambda: [("123", "??", "/usr/local/bin/codex", f"codex resume {sid}")],
+    )
+    for name in (
+        "find_live_codex_processes",
+        "find_live_gemini_processes",
+        "find_live_cursor_processes",
+    ):
+        monkeypatch.setattr(
+            server,
+            name,
+            lambda name=name: pytest.fail(f"idle liveness called metadata scanner {name}"),
+        )
+    server._engine_live_sids_cache.update(ts=0.0, sids=frozenset())
+
+    assert server._live_engine_session_ids() == frozenset({sid})
+
+
+def test_codex_pool_probe_uses_raw_process_snapshot_without_metadata(monkeypatch):
+    """Checking for app-server must not resolve cwd or terminal ancestry."""
+    monkeypatch.setattr(
+        server,
+        "_scan_engine_processes",
+        lambda: [("123", "??", "/usr/local/bin/codex", "codex app-server")],
+    )
+    monkeypatch.setattr(
+        server,
+        "find_live_codex_processes",
+        lambda: pytest.fail("pool probe called the full Codex process scanner"),
+    )
+    server._codex_pool_alive_cache.update(ts=0.0, alive=False)
+
+    assert server._codex_pool_alive()
+
+
+def test_codex_desktop_probe_uses_raw_process_snapshot_without_metadata(monkeypatch):
+    """Desktop attachment discovery needs PID/command only, never terminal data."""
+    desktop_cmd = "/Applications/Codex.app/Contents/MacOS/codex app-server"
+    monkeypatch.setattr(
+        server,
+        "_raw_engine_process_commands",
+        lambda engine: iter([("123", desktop_cmd), ("124", "codex app-server")]),
+    )
+    monkeypatch.setattr(
+        server,
+        "find_live_codex_processes",
+        lambda: pytest.fail("desktop probe called the full Codex process scanner"),
+    )
+    monkeypatch.setattr(server, "_CODEX_APP_SERVER_PROC", None)
+
+    assert server._codex_desktop_app_server_procs() == [
+        {"pid": 123, "command": desktop_cmd},
+    ]
+
+
+def test_liveness_uses_memoized_engine_classifier(monkeypatch):
+    """One candidate gets one cached engine classification, not every probe."""
+    sid = "gemini-session"
+    probe_calls = []
+    monkeypatch.setattr(server, "_detect_session_engine", lambda value: "gemini")
+    for name in (
+        "_is_kimi_session",
+        "_is_codex_session",
+        "_is_cursor_session",
+        "_is_gemini_session",
+        "_is_antigravity_session",
+        "_is_kilo_session",
+        "_is_opencode_session",
+    ):
+        monkeypatch.setattr(
+            server,
+            name,
+            lambda value, name=name: probe_calls.append(name) or False,
+        )
+    monkeypatch.setattr(server, "_live_engine_session_ids", lambda: frozenset({sid}))
+
+    assert server._archive_session_is_live_uncached(sid)
+    assert probe_calls == [], "liveness bypassed the memoized engine classifier"
 
 def test_reattached_zombie_checks_share_one_process_state_scan(monkeypatch):
     """N reattached children require one bulk `ps`, never one fork per PID."""
@@ -318,6 +649,161 @@ def test_repo_sessions_gate_liveness_by_candidates(monkeypatch, tmp_path):
     ], "auto-verification must inspect only the original Claude conversation rows"
 
 
+# ── Workflow-run discovery (candidacy gate) ──────────────────────────────────
+# find_conversations attaches Workflow-tool runs from
+# <project>/<sid>/subagents/workflows/<run>/. The scan must stay gated: with
+# no session subdirs (the common case) it does ZERO filesystem work, and with
+# subdirs it touches journals only for sessions that actually own them.
+
+def _mk_workflow_repo(tmp_path, monkeypatch, n_plain=20):
+    """Synthetic repo + projects root. Returns (repo, project_dir, parent_sid)."""
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setattr(server, "resolve_repo_path", lambda path: str(repo))
+    root = tmp_path / ".claude" / "projects"
+    monkeypatch.setattr(server, "PROJECTS_ROOT", root)
+    project_dir = root / server._encode_project_slug(repo)
+    project_dir.mkdir(parents=True)
+    old_ts = time.time() - 30 * 86400
+    for _ in range(n_plain):
+        sid = str(uuid.uuid4())
+        _write_transcript(project_dir / f"{sid}.jsonl", sid, old_ts=old_ts)
+    parent_sid = str(uuid.uuid4())
+    _write_transcript(project_dir / f"{parent_sid}.jsonl", parent_sid, old_ts=old_ts)
+    return repo, project_dir, parent_sid
+
+
+def _mk_run_dir(project_dir, parent_sid, run_id, agents, now=None):
+    """One synthetic workflow run. ``agents``: {agent_id: status} where status
+    is 'done' (started+result), 'running' (started, fresh mtime), or
+    'interrupted' (started, stale mtime)."""
+    now = now if now is not None else time.time()
+    run_dir = project_dir / parent_sid / "subagents" / "workflows" / run_id
+    run_dir.mkdir(parents=True)
+    journal = []
+    for agent_id, status in agents.items():
+        journal.append({"type": "started", "key": "v2:" + agent_id, "agentId": agent_id})
+        if status == "done":
+            journal.append({"type": "result", "key": "v2:" + agent_id,
+                            "agentId": agent_id, "result": "ok"})
+        agent_file = run_dir / f"agent-{agent_id}.jsonl"
+        agent_file.write_text(json.dumps({
+            "type": "user", "message": {"role": "user", "content": f"task {agent_id}"},
+        }) + "\n")
+        mtime = now if status == "running" else now - 3600
+        os.utime(agent_file, (mtime, mtime))
+    (run_dir / "journal.jsonl").write_text("\n".join(json.dumps(e) for e in journal) + "\n")
+    return run_dir
+
+
+def test_workflow_scan_no_subdirs_does_no_journal_work(monkeypatch, tmp_path):
+    """N plain transcripts, zero session subdirs → zero journal probes."""
+    repo, _project_dir, _parent = _mk_workflow_repo(tmp_path, monkeypatch)
+    calls = _count_calls(monkeypatch, "_parse_workflow_journal", passthrough_return=None)
+    server.find_conversations(str(repo))
+    assert calls == [], (
+        f"_parse_workflow_journal called {len(calls)}x with no session subdirs — "
+        "the workflow discovery candidacy gate regressed"
+    )
+
+
+def test_workflow_scan_gated_to_subdir_owning_sessions(monkeypatch, tmp_path):
+    """Only the session owning a subagents/workflows dir gets its journal read,
+    and the row carries run + per-agent status."""
+    repo, project_dir, parent_sid = _mk_workflow_repo(tmp_path, monkeypatch)
+    _mk_run_dir(project_dir, parent_sid, "wf_test-001", {
+        "aaa111": "done",
+        "bbb222": "running",
+        "ccc333": "interrupted",
+    })
+    calls = _count_calls(monkeypatch, "_parse_workflow_journal")
+    rows = server.find_conversations(str(repo))
+    assert len(calls) == 1, (
+        f"_parse_workflow_journal called {len(calls)}x for one run dir — "
+        "must be one read per run, never per row"
+    )
+    row = next(r for r in rows if r["session_id"] == parent_sid)
+    assert len(row["workflows"]) == 1
+    run = row["workflows"][0]
+    assert run["run_id"] == "wf_test-001"
+    assert run["status"] == "running", "one running agent makes the run running"
+    by_id = {a["id"]: a for a in run["agents"]}
+    assert by_id["aaa111"]["status"] == "done"
+    assert by_id["bbb222"]["status"] == "running"
+    assert by_id["ccc333"]["status"] == "interrupted"
+    assert by_id["aaa111"]["conv_id"] == f"{parent_sid}:agent-aaa111"
+    assert by_id["aaa111"]["description"] == "task aaa111"
+    plain = next(r for r in rows if r["session_id"] != parent_sid)
+    assert plain["workflows"] == []
+
+
+def test_workflow_run_died_midflight_marks_interrupted(monkeypatch, tmp_path):
+    """Started lines with no results and stale transcripts = interrupted, not
+    running (the workflow runtime writes no tombstone)."""
+    repo, project_dir, parent_sid = _mk_workflow_repo(tmp_path, monkeypatch, n_plain=0)
+    _mk_run_dir(project_dir, parent_sid, "wf_dead-002", {
+        "ddd444": "interrupted",
+        "eee555": "interrupted",
+    })
+    rows = server.find_conversations(str(repo))
+    run = next(r for r in rows if r["session_id"] == parent_sid)["workflows"][0]
+    assert run["status"] == "interrupted"
+    assert {a["status"] for a in run["agents"]} == {"interrupted"}
+
+
+def test_archive_build_workflow_scan_gated(big_projects, monkeypatch):
+    """The archive build must not probe journals when no session owns a
+    subagents/workflows dir (the common case on a 200-transcript corpus)."""
+    server._ARCHIVE_WORKFLOW_SESSION_DIRS.clear()
+    calls = _count_calls(monkeypatch, "_parse_workflow_journal", passthrough_return=None)
+    server._build_archive_conversations()
+    assert calls == [], (
+        f"_parse_workflow_journal called {len(calls)}x in an archive build with "
+        "no workflow subdirs — the candidacy gate regressed"
+    )
+    assert server._ARCHIVE_WORKFLOW_SESSION_DIRS == {}
+
+
+def test_archive_rehydrate_recomputes_workflow_status(big_projects, monkeypatch, tmp_path):
+    """A workflow journal flips without any top-level transcript changing, so
+    the cached-serve path (rehydrate) must recompute runs for owner rows."""
+    n, sids = big_projects
+    parent_sid = sids[0]
+    project_dir = tmp_path / ".claude" / "projects" / "-tmp-perf-repo"
+    run_dir = project_dir / parent_sid / "subagents" / "workflows" / "wf_rehy-003"
+    run_dir.mkdir(parents=True)
+    agent_file = run_dir / "agent-abc123.jsonl"
+    agent_file.write_text(json.dumps(
+        {"type": "user", "message": {"role": "user", "content": "do things"}}) + "\n")
+    (run_dir / "journal.jsonl").write_text(
+        json.dumps({"type": "started", "key": "v2:x", "agentId": "abc123"}) + "\n")
+    fresh = time.time()
+    os.utime(agent_file, (fresh, fresh))
+
+    server._ARCHIVE_WORKFLOW_SESSION_DIRS.clear()
+    server._ARCHIVE_WORKFLOW_SESSION_DIRS[parent_sid] = project_dir / parent_sid
+    server._WORKFLOW_JOURNAL_CACHE.clear()
+    row = {"session_id": parent_sid, "engine": "claude", "mtime": time.time() - 30 * 86400}
+    journal_calls = _count_calls(monkeypatch, "_parse_workflow_journal")
+    out = server._rehydrate_archive_cached_rows([row])
+    assert len(journal_calls) == 1, (
+        f"rehydrate probed {len(journal_calls)} journals for one owner row — "
+        "must be one parse attempt per owner row per serve, never per all rows"
+    )
+    run = out[0]["workflows"][0]
+    assert run["status"] == "running"
+    # (mtime,size) cache: an unchanged journal re-parses nothing.
+    parsed1 = server._parse_workflow_journal(run_dir / "journal.jsonl")
+    parsed2 = server._parse_workflow_journal(run_dir / "journal.jsonl")
+    assert parsed1 is parsed2, "journal parse cache did not hit on unchanged file"
+    # A non-owner row costs nothing.
+    plain = {"session_id": sids[1], "engine": "claude", "mtime": time.time() - 30 * 86400}
+    out3 = server._rehydrate_archive_cached_rows([plain])
+    assert len(journal_calls) == 3  # 1 rehydrate + 2 direct probes above
+    assert "workflows" not in out3[0]
+
+
 def test_live_engine_scan_skips_claude_spawn_polling(monkeypatch):
     """The non-Claude live-id scan must not poll unrelated Claude workers."""
     claude_spawn = {"engine": "claude", "session_id": "claude-session"}
@@ -326,6 +812,9 @@ def test_live_engine_scan_skips_claude_spawn_polling(monkeypatch):
     monkeypatch.setattr(server, "find_live_codex_processes", lambda: [])
     monkeypatch.setattr(server, "find_live_gemini_processes", lambda: [])
     monkeypatch.setattr(server, "find_live_cursor_processes", lambda: [])
+    # _live_engine_session_ids scans ps via _raw_engine_process_commands, not
+    # the find_live_* helpers above; stub it or real local engine processes leak in.
+    monkeypatch.setattr(server, "_raw_engine_process_commands", lambda engine: [])
     monkeypatch.setattr(server, "_engine_live_sids_cache", {"ts": 0.0, "sids": frozenset()})
     polled = []
 
@@ -611,8 +1100,6 @@ def test_ux_fixes_health_no_all_sessions_or_subprocess(monkeypatch):
     resolved at most once per project-with-open-tickets, and the full archive
     build is never touched.
     """
-    uxq = importlib.import_module("ux_fixes_queue")
-
     def _item(number, project, status, claimed_by=None, seq=None):
         return {
             "number": number, "project": project, "seq": seq or number,
@@ -672,8 +1159,6 @@ def test_ux_fixes_health_resolves_label_claimed_fixer(monkeypatch):
     All three must resolve to a real UUID in fixer_session_id (the old code
     returned None and the queue looked unreachable / always stuck).
     """
-    uxq = importlib.import_module("ux_fixes_queue")
-
     sid_a = str(uuid.uuid4())
     sid_b = str(uuid.uuid4())
     sid_c = str(uuid.uuid4())
@@ -756,22 +1241,31 @@ def test_ux_fixes_claim_stores_real_session_id(monkeypatch, tmp_path):
     in the label) records the reachable id without touching claimed_by — so old
     label-only behavior is preserved and the new field is purely additive.
     """
-    uxq = importlib.import_module("ux_fixes_queue")
-    qf = tmp_path / "ux-fixes-queue.json"
-    monkeypatch.setattr(uxq, "QUEUE_FILE", qf)
-    monkeypatch.setattr(uxq, "_LOCK_FILE", qf.with_suffix(".lock"))
+    wq = importlib.import_module("watchtower.queue")
+    import watchtower.config as wt_config
+    import watchtower.workers as wt_workers
+    # queue._resolve_store_path() reads $WATCHTOWER_STORE fresh per call, but
+    # config.CONFIG_FILE / workers.WORKERS_FILE / workers.WORKER_IDS_FILE are
+    # bound once at import time -- enqueue()/claim_next() touch all three
+    # (queue-config auto-registration, the spawn-registry liveness check), so
+    # each must be isolated or this test would read/write the real production
+    # files under ~/.watchtower.
+    monkeypatch.setenv("WATCHTOWER_STORE", str(tmp_path / "queues.json"))
+    monkeypatch.setattr(wt_config, "CONFIG_FILE", tmp_path / "queue-config.json")
+    monkeypatch.setattr(wt_workers, "WORKERS_FILE", tmp_path / "workers.json")
+    monkeypatch.setattr(wt_workers, "WORKER_IDS_FILE", tmp_path / "worker-ids.json")
 
     real_sid = str(uuid.uuid4())
-    uxq.enqueue(project="ZZ", note="first")
-    uxq.enqueue(project="ZZ", note="second")
+    wq.enqueue(project="ZZ", note="first")
+    wq.enqueue(project="ZZ", note="second")
 
     # (a) explicit session_uuid alongside a human label.
-    claimed = uxq.claim_next("codex-ccc-drain", project="ZZ", session_uuid=real_sid)
+    claimed = wq.claim_next("codex-ccc-drain", project="ZZ", session_uuid=real_sid)
     assert claimed["claimed_by"] == "codex-ccc-drain", "label attribution lost"
     assert claimed["claimed_session_id"] == real_sid, "real session id not stored"
 
     # (b) label-only claim leaves the additive field empty (non-breaking).
-    claimed2 = uxq.claim_next("just-a-label", project="ZZ")
+    claimed2 = wq.claim_next("just-a-label", project="ZZ")
     assert claimed2["claimed_by"] == "just-a-label"
     assert claimed2.get("claimed_session_id") in (None, ""), (
         "a label-only claim must not fabricate a claimed_session_id"
@@ -917,6 +1411,16 @@ _ALL_OPTS = dict(include_prs=False, resolve_pr_states=False,
 _ALL_KEY = server._archive_response_cache_key(**_ALL_OPTS)
 
 
+def test_archive_build_variants_share_one_global_singleflight_lock():
+    """Different option keys must not parse the same corpus concurrently."""
+    assert server._archive_build_lock("default") is server._archive_build_lock("with-prs")
+
+
+def test_archive_serve_default_throttles_large_corpus_refreshes():
+    """Live activity has its own overlay; full history needs at most 1/5min."""
+    assert server._ARCHIVE_SERVE_TTL >= 300.0
+
+
 def test_archive_spawned_cold_cache_does_not_block_request(monkeypatch):
     """A slow first spawned-session refresh must not hang ?all=1."""
     release = threading.Event()
@@ -1014,6 +1518,120 @@ def test_archive_cache_clear_rejects_inflight_stale_write(isolated_archive_cache
     assert server._archive_serve_cache[_ALL_KEY]["rows"][0]["archived"] is True
 
 
+def test_archive_mutation_restamps_warm_snapshot_and_refreshes_async(
+    isolated_archive_cache, monkeypatch,
+):
+    """Archive/lane writes keep first paint current while refresh stays detached."""
+    old_generation = server._archive_serve_generation
+    cached_rows = [{
+        "session_id": "sid-a", "archived": False, "trashed": False,
+        "all_lane_override": "", "mtime": 1,
+    }]
+    assert server._archive_serve_cache_store(_ALL_KEY, cached_rows, old_generation)
+    monkeypatch.setattr(
+        server, "_load_conversation_lifecycle_sets", lambda: ({"sid-a"}, {"sid-a"}),
+    )
+    monkeypatch.setattr(server, "_load_session_lane_overrides", lambda: {"sid-a": "review"})
+
+    server._restamp_archive_serve_cache_after_mutation()
+
+    assert server._archive_serve_generation == old_generation + 1
+    with server._archive_serve_lock:
+        snapshot = server._archive_serve_cache[_ALL_KEY]
+        assert snapshot["rows"] == [{
+            "session_id": "sid-a", "archived": True, "trashed": True,
+            "all_lane_override": "review", "mtime": 1,
+        }]
+        assert snapshot["ts"] == 0.0
+    assert server._archive_serve_cache_store(
+        _ALL_KEY, [{"session_id": "sid-a", "archived": False}], old_generation,
+    ) is False
+
+    spawned = []
+
+    class FakeThread:
+        def __init__(self, *, target, args=(), daemon=None, **_kwargs):
+            self.target = target
+            self.args = args
+            self.daemon = daemon
+
+        def start(self):
+            spawned.append(self)
+
+    monkeypatch.setattr(server.threading, "Thread", FakeThread)
+    rows, from_cache, _ver = server._archive_serve_rows_versioned(_ALL_KEY, _ALL_OPTS)
+
+    assert rows[0]["archived"] is True
+    assert rows[0]["trashed"] is True
+    assert rows[0]["all_lane_override"] == "review"
+    assert from_cache is True
+    assert len(spawned) == 1
+    assert spawned[0].target is server._archive_serve_refresh
+
+
+def test_archive_mutation_restamps_are_serialized_by_publish_order(
+    isolated_archive_cache, monkeypatch,
+):
+    """A slower older mutation must not overwrite a newer restamped snapshot."""
+    generation = server._archive_serve_generation
+    assert server._archive_serve_cache_store(
+        _ALL_KEY,
+        [{"session_id": "sid-a", "archived": False, "trashed": False,
+          "all_lane_override": "", "mtime": 1}],
+        generation,
+    )
+    with server._archive_serve_lock:
+        initial_version = server._archive_serve_cache[_ALL_KEY]["ver"]
+
+    older_loaded = threading.Event()
+    newer_loaded = threading.Event()
+    release_older = threading.Event()
+
+    def lifecycle_state():
+        if threading.current_thread().name == "older-mutation":
+            older_loaded.set()
+            assert release_older.wait(timeout=2)
+            return {"sid-a"}, {"sid-a"}
+        newer_loaded.set()
+        return set(), set()
+
+    def lane_overrides():
+        return {"sid-a": "review"} if threading.current_thread().name == "older-mutation" else {"sid-a": "queued"}
+
+    monkeypatch.setattr(server, "_load_conversation_lifecycle_sets", lifecycle_state)
+    monkeypatch.setattr(server, "_load_session_lane_overrides", lane_overrides)
+    older = threading.Thread(
+        name="older-mutation", target=server._restamp_archive_serve_cache_after_mutation,
+    )
+    newer = threading.Thread(
+        name="newer-mutation", target=server._restamp_archive_serve_cache_after_mutation,
+    )
+    older.start()
+    assert older_loaded.wait(timeout=1)
+    newer.start()
+
+    # Before the fix, the newer mutation reads and publishes while the older
+    # mutation waits, then the older pre-lock sidecar snapshot overwrites it.
+    if newer_loaded.wait(timeout=1):
+        deadline = time.time() + 1
+        while time.time() < deadline:
+            with server._archive_serve_lock:
+                entry = server._archive_serve_cache[_ALL_KEY]
+                if entry["ver"] > initial_version:
+                    break
+            time.sleep(0.01)
+
+    release_older.set()
+    older.join(timeout=2)
+    newer.join(timeout=2)
+    assert not older.is_alive() and not newer.is_alive()
+    with server._archive_serve_lock:
+        row = server._archive_serve_cache[_ALL_KEY]["rows"][0]
+    assert row["archived"] is False
+    assert row["trashed"] is False
+    assert row["all_lane_override"] == "queued"
+
+
 def test_archive_build_cache_skips_rebuild_when_unchanged(big_projects, isolated_archive_cache, monkeypatch):
     """The signature-gated build cache must NOT re-scan all sessions when the
     transcript corpus is unchanged.
@@ -1037,6 +1655,50 @@ def test_archive_build_cache_skips_rebuild_when_unchanged(big_projects, isolated
         "the ?all=1 build cache regressed (every poll re-scans all sessions)"
     )
     assert len(rows2) == len(rows1), "rehydrate must return the same rows as the build"
+
+
+def test_archive_response_cache_restores_signature_stat_map(
+    isolated_archive_cache,
+):
+    """A detached worker/restart must retain enough state for delta refreshes."""
+    old_sig = "persisted-old-stat-map"
+    new_sig = "current-new-stat-map"
+    old_files = {"/repo/a.jsonl": (1, 10)}
+    old_extras = {"/engine/store": 4}
+    new_files = {
+        "/repo/a.jsonl": (2, 12),
+        "/repo/b.jsonl": (1, 8),
+    }
+
+    with server._archive_sig_lock:
+        server._ARCHIVE_STATMAP_BY_SIG[old_sig] = (old_files, old_extras)
+    try:
+        server._archive_response_cache_put(
+            _ALL_KEY,
+            [{"session_id": "cached"}],
+            signature=old_sig,
+        )
+        server._save_archive_response_cache(force=True)
+
+        server._ARCHIVE_RESPONSE_CACHE.clear()
+        server._ARCHIVE_RESPONSE_CACHE_LOADED = False
+        with server._archive_sig_lock:
+            server._ARCHIVE_STATMAP_BY_SIG.pop(old_sig, None)
+
+        server._load_archive_response_cache()
+
+        with server._archive_sig_lock:
+            restored = server._ARCHIVE_STATMAP_BY_SIG.get(old_sig)
+            server._ARCHIVE_STATMAP_BY_SIG[new_sig] = (new_files, old_extras)
+        assert restored == (old_files, old_extras)
+        changed, removed, engines = server._archive_signature_delta(old_sig, new_sig)
+        assert changed == ["/repo/a.jsonl", "/repo/b.jsonl"]
+        assert removed == []
+        assert engines == set()
+    finally:
+        with server._archive_sig_lock:
+            server._ARCHIVE_STATMAP_BY_SIG.pop(old_sig, None)
+            server._ARCHIVE_STATMAP_BY_SIG.pop(new_sig, None)
 
 
 def test_archive_build_cache_invalidates_on_change(big_projects, isolated_archive_cache, monkeypatch, tmp_path):
@@ -1111,36 +1773,254 @@ def test_archive_all_serve_cache_coalesces_concurrent_polls(big_projects, isolat
     )
 
 
-def test_archive_signature_delta_hermes_churn_is_engine_scoped_refresh():
-    """Hermes state.db mtime flips per internal event; that churn must NOT force
-    a full O(all-rows) rebuild — the delta converts it to an engine-scoped row
-    refresh (the measured 60-95s-per-poll burn while hermes ran)."""
+def test_archive_warm_force_refresh_never_computes_on_request_thread(
+    isolated_archive_cache, monkeypatch,
+):
+    """A warm freshness request must stale-serve and refresh off-thread.
+
+    Real archive rehydrates repeatedly exceeded the one-second prediction
+    budget (up to 32s), monopolizing the GIL and delaying unrelated session
+    opens. Structural "cheapness" must never put archive work back onto an
+    HTTP request thread once a serve snapshot exists.
+    """
+    cached_rows = [{"session_id": "cached", "mtime": 1}]
+    assert server._archive_serve_cache_store(
+        _ALL_KEY, cached_rows, server._archive_serve_generation,
+    )
+    with server._archive_serve_lock:
+        server._archive_serve_cache[_ALL_KEY]["ts"] = 0.0
+
+    spawned = []
+
+    class FakeThread:
+        def __init__(self, *, target, args=(), daemon=None, **_kwargs):
+            self.target = target
+            self.args = args
+            spawned.append(self)
+
+        def start(self):
+            pass
+
+    compute_calls = []
+
+    def compute(*args, **kwargs):
+        compute_calls.append((args, kwargs))
+        return [{"session_id": "fresh"}], True
+
+    monkeypatch.setattr(server.threading, "Thread", FakeThread)
+    monkeypatch.setattr(server, "_archive_compute_rows", compute)
+
+    rows, from_cache, _ver = server._archive_serve_rows_versioned(
+        _ALL_KEY,
+        _ALL_OPTS,
+        force_refresh=True,
+    )
+
+    assert rows == cached_rows
+    assert from_cache is True
+    assert compute_calls == [], "archive refresh ran synchronously on the request thread"
+    assert len(spawned) == 1, "warm freshness request did not schedule one refresh"
+    assert spawned[0].target is server._archive_serve_refresh
+
+
+def test_archive_background_refresh_uses_detached_process(
+    isolated_archive_cache, monkeypatch,
+):
+    """Archive parsing must not share the dashboard server's Python GIL."""
+    detached_calls = []
+
+    def detached(key, options, generation):
+        detached_calls.append((key, options, generation))
+        return [], True
+
+    monkeypatch.setattr(
+        server, "_archive_compute_rows_detached", detached, raising=False,
+    )
+    monkeypatch.setattr(
+        server,
+        "_archive_compute_rows",
+        lambda *_args, **_kwargs: pytest.fail(
+            "background archive refresh ran inside the dashboard process"
+        ),
+    )
+
+    generation = server._archive_serve_generation
+    server._archive_serve_refresh(_ALL_KEY, _ALL_OPTS, generation, time.time())
+
+    assert detached_calls == [(_ALL_KEY, _ALL_OPTS, generation)]
+
+
+def test_cold_persisted_snapshot_does_not_eagerly_rebuild(isolated_archive_cache, monkeypatch):
+    """Opening CCC trusts its persisted rows; explicit freshness can rebuild."""
+    entry = {
+        "cached_at": time.time(),
+        "conversations": [{"session_id": "persisted", "mtime": 1}],
+        "signature": "old-sig",
+    }
+    spawned = []
+
+    class FakeThread:
+        def __init__(self, *, target, args=(), daemon=None, **_kwargs):
+            self.target = target
+            self.args = args
+            spawned.append(self)
+
+        def start(self):
+            pass
+
+    monkeypatch.setattr(server, "_archive_response_cache_get", lambda _key: entry)
+    monkeypatch.setattr(server, "_rehydrate_archive_cached_rows", lambda rows: [dict(r) for r in rows])
+    monkeypatch.setattr(server.threading, "Thread", FakeThread)
+
+    rows, from_cache, _ver = server._archive_serve_rows_versioned(
+        _ALL_KEY,
+        _ALL_OPTS,
+        force_refresh=False,
+    )
+    assert rows[0]["session_id"] == "persisted"
+    assert from_cache is True
+    assert spawned == [], "cold startup rebuilt despite having a persisted snapshot"
+
+    server._archive_serve_cache.clear()
+    server._archive_serve_refreshing.clear()
+    server._archive_serve_rows_versioned(
+        _ALL_KEY,
+        _ALL_OPTS,
+        force_refresh=True,
+    )
+    assert len(spawned) == 1, "explicit freshness did not schedule a refresh"
+
+
+def test_cold_persisted_snapshot_does_not_rehydrate_on_request(
+    isolated_archive_cache, monkeypatch,
+):
+    """First paint after a restart must not process every archived row."""
+    entry = {
+        "cached_at": time.time(),
+        "conversations": [{"session_id": "persisted", "state": "ended"}],
+        "signature": "persisted-sig",
+    }
+    monkeypatch.setattr(server, "_archive_response_cache_get", lambda _key: entry)
+    monkeypatch.setattr(
+        server,
+        "_rehydrate_archive_cached_rows",
+        lambda _rows: pytest.fail("cold request synchronously rehydrated the archive"),
+    )
+    # The cold-serve path re-stamps archived/trashed from lifecycle sidecars
+    # (the trash-resurrect fix). Pin empty sets so the overlay is deterministic.
+    monkeypatch.setattr(server, "_load_conversation_lifecycle_sets", lambda: (set(), set()))
+
+    rows, from_cache, _ver = server._archive_serve_rows_versioned(
+        _ALL_KEY,
+        _ALL_OPTS,
+        force_refresh=False,
+    )
+
+    assert rows == [
+        {"session_id": "persisted", "state": "ended", "archived": False, "trashed": False}
+    ]
+    assert from_cache is True
+
+
+def test_cold_archive_variant_borrows_base_snapshot_and_refreshes_detached(
+    isolated_archive_cache, monkeypatch,
+):
+    """A missing enriched cache key must not full-build on an HTTP thread."""
+    variant_options = dict(_ALL_OPTS, include_prs=True)
+    variant_key = server._archive_response_cache_key(**variant_options)
+    base_entry = {
+        "cached_at": time.time(),
+        "conversations": [{"session_id": "base-snapshot"}],
+        "signature": "base-sig",
+    }
+    spawned = []
+
+    class FakeThread:
+        def __init__(self, *, target, args=(), daemon=None, **_kwargs):
+            self.target = target
+            self.args = args
+            spawned.append(self)
+
+        def start(self):
+            pass
+
+    monkeypatch.setattr(
+        server,
+        "_archive_response_cache_get",
+        lambda key: base_entry if key == _ALL_KEY else None,
+    )
+    monkeypatch.setattr(server.threading, "Thread", FakeThread)
+    monkeypatch.setattr(
+        server,
+        "_archive_compute_rows",
+        lambda *_args, **_kwargs: pytest.fail(
+            "missing archive variant full-built on the request thread"
+        ),
+    )
+    # The cold-serve path re-stamps archived/trashed from lifecycle sidecars
+    # (the trash-resurrect fix). Pin empty sets so the overlay is deterministic.
+    monkeypatch.setattr(server, "_load_conversation_lifecycle_sets", lambda: (set(), set()))
+
+    rows, from_cache, _ver = server._archive_serve_rows_versioned(
+        variant_key,
+        variant_options,
+    )
+
+    assert rows == [
+        {"session_id": "base-snapshot", "archived": False, "trashed": False}
+    ]
+    assert from_cache is True
+    assert len(spawned) == 1
+    assert spawned[0].target is server._archive_serve_refresh
+    assert spawned[0].args[:2] == (variant_key, variant_options)
+
+
+def test_archive_signature_delta_engine_churn_is_engine_scoped_refresh():
+    """Dir-granular engine churn must NOT force a full O(all-rows) rebuild.
+
+    Hermes state.db mtime flips per internal event (the measured 60-95s-per-poll
+    burn while hermes ran). Codex has the same shape: a newly spawned thread
+    only ever appears as a rollout day-dir mtime bump, and routing that to the
+    full-rebuild path meant a new session could not show up until a background
+    rebuild finished and a later poll picked it up (measured 49.6s from spawn to
+    the row existing in a built list). Both convert to an engine-scoped refresh.
+
+    An engine WITHOUT an isolated rebuild path must still force the full
+    rebuild — that is the part of this gate that must not erode.
+    """
     hermes_key = server._ARCHIVE_HERMES_EXTRA_KEY
     codex_key = str(Path.home() / ".codex" / "sessions")
+    other_key = str(Path.home() / ".cursor" / "projects")
     files = {"/p/a.jsonl": (1, 100)}
-    old_extras = {hermes_key: 100, codex_key: 200}
+    old_extras = {hermes_key: 100, codex_key: 200, other_key: 300}
     with server._archive_sig_lock:
         server._ARCHIVE_STATMAP_BY_SIG["sig_old"] = (dict(files), dict(old_extras))
         server._ARCHIVE_STATMAP_BY_SIG["sig_hermes"] = (
-            dict(files), {hermes_key: 300, codex_key: 200})
+            dict(files), {hermes_key: 300, codex_key: 200, other_key: 300})
         server._ARCHIVE_STATMAP_BY_SIG["sig_codex"] = (
-            dict(files), {hermes_key: 100, codex_key: 999})
+            dict(files), {hermes_key: 100, codex_key: 999, other_key: 300})
+        server._ARCHIVE_STATMAP_BY_SIG["sig_other"] = (
+            dict(files), {hermes_key: 100, codex_key: 200, other_key: 999})
         server._ARCHIVE_STATMAP_BY_SIG["sig_both"] = (
             {"/p/a.jsonl": (2, 100), "/p/b.jsonl": (1, 10)},
-            {hermes_key: 300, codex_key: 200})
+            {hermes_key: 300, codex_key: 200, other_key: 300})
     try:
         changed, removed, engines = server._archive_signature_delta("sig_old", "sig_hermes")
         assert changed == [] and removed == []
         assert engines == {"hermes"}
-        # A non-hermes engine-source change still forces the full rebuild.
-        assert server._archive_signature_delta("sig_old", "sig_codex") is None
+        # A new Codex thread is a day-dir bump, and rebuilds codex rows only.
+        changed, removed, engines = server._archive_signature_delta("sig_old", "sig_codex")
+        assert changed == [] and removed == []
+        assert engines == {"codex"}
+        # An engine source with no isolated path still forces the full rebuild.
+        assert server._archive_signature_delta("sig_old", "sig_other") is None
         # Claude transcript churn + hermes churn ride the same delta.
         changed, removed, engines = server._archive_signature_delta("sig_old", "sig_both")
         assert changed == ["/p/a.jsonl", "/p/b.jsonl"] and removed == []
         assert engines == {"hermes"}
     finally:
         with server._archive_sig_lock:
-            for k in ("sig_old", "sig_hermes", "sig_codex", "sig_both"):
+            for k in ("sig_old", "sig_hermes", "sig_codex", "sig_other", "sig_both"):
                 server._ARCHIVE_STATMAP_BY_SIG.pop(k, None)
 
 
@@ -1756,6 +2636,12 @@ def test_throughput_refresh_persists_completed_metadata(monkeypatch):
     monkeypatch.setattr(server, "_throughput_payload", fake_payload)
     monkeypatch.setattr(server, "_throughput_build_bootstrap", fake_build)
     monkeypatch.setattr(server, "_throughput_write_bootstrap", lambda *_: True)
+    # The refresh thread also calls _weekly_usage_block() for real. That is
+    # several seconds of filesystem work on a cold cache — longer than the
+    # wait below — and it has nothing to do with the metadata this test
+    # asserts. Left unpatched, the test passes or fails on whether some other
+    # process happened to warm the cache first.
+    monkeypatch.setattr(server, "_weekly_usage_block", lambda *a, **k: {})
     with server._THROUGHPUT_REFRESH_LOCK:
         server._THROUGHPUT_REFRESH_JOBS.clear()
         server._THROUGHPUT_REFRESH_LAST_SUCCESS.clear()
@@ -1949,6 +2835,17 @@ def test_wt_past_workers_uses_warning_free_utc_timestamp(monkeypatch, tmp_path):
     assert rows and rows[0]["ended_at_iso"].endswith("Z")
 
 
+def test_shorten_display_name_warning_free_on_python_314():
+    """A hot group-chat label path must not flood stderr with deprecations."""
+    with warnings.catch_warnings():
+        warnings.simplefilter("error", DeprecationWarning)
+        value = server._shorten_display_name(
+            "alpha beta gamma delta: trailing detail that is definitely long"
+        )
+
+    assert value == "alpha beta gamma delta"
+
+
 def test_pending_resume_retry_backoff_prevents_hot_loop():
     """A stuck durable resume item must not fork a retry every watcher tick."""
     sid = "019f1eb0-e057-7481-a9a2-2ea59a858a24"
@@ -2126,3 +3023,193 @@ def test_archive_signature_dedupes_symlinked_project_dirs(big_projects, tmp_path
     _sig, files, _extras = server._archive_corpus_signature_parts()
 
     assert len(files) == n
+
+
+# ── /api/system/services (SERVER STATUS chip + System status panel) ──────────
+# The chip polls this every 20s and the open panel every 5s. It aggregates four
+# services, so the temptation is to fan out to whatever helper is closest —
+# build_system_health() (a ps + lsof sweep), _ccc_last_updated_iso() (git log),
+# a per-pid `ps`. All of those turn a status readout into a fork per poll.
+
+def test_system_services_no_subprocess_on_warm_cache(monkeypatch):
+    """A second call inside the 3s TTL must not fork anything."""
+    server._system_services_cache = {"ts": 0.0, "payload": None}
+
+    # Keep the cold build itself deterministic and fork-free.
+    monkeypatch.setattr(server, "_control_plane_request", lambda *a, **k: {
+        "ok": True, "available": True, "active": 0, "queued": 0, "uncertain": 0,
+        "drain": {"enabled": False},
+        "worker": {"pid": 42, "started_at": 1.0, "server_version": server.__version__,
+                   "capabilities": ["engine-execution-v1"]},
+    })
+    monkeypatch.setattr(server, "_watchtower_service_status", lambda **k: {
+        "ok": True, "installed": False, "running": False, "pid": None,
+        "command_verified": False, "pid_reused": False, "api_ok": False,
+        "state": "stopped", "host": "127.0.0.1", "port": 8787,
+        "url": "http://127.0.0.1:8787", "started_at": None,
+        "started_at_approx": False, "uptime_s": None,
+    })
+    server.build_system_services(force=True)
+
+    import subprocess as _subprocess
+
+    def boom(*a, **k):  # pragma: no cover - only runs on regression
+        raise AssertionError(f"/api/system/services forked a subprocess: {a!r}")
+
+    monkeypatch.setattr(_subprocess, "run", boom)
+    monkeypatch.setattr(_subprocess, "Popen", boom)
+    monkeypatch.setattr(_subprocess, "check_output", boom)
+
+    health_calls = _count_calls(monkeypatch, "build_system_health", passthrough_return={})
+    sessions_calls = _count_calls(monkeypatch, "find_all_conversations", passthrough_return=[])
+
+    payload = server.build_system_services()
+
+    assert payload["ok"] is True
+    assert {row["id"] for row in payload["services"]} == {
+        "dashboard", "worker", "watchtower", "app_server"
+    }
+    assert health_calls == [], (
+        "build_system_services called build_system_health — that runs a ps+lsof "
+        "sweep and turns a 5s poll into a machine-wide scan"
+    )
+    assert sessions_calls == [], (
+        "build_system_services triggered the O(all sessions) conversation build"
+    )
+
+
+def test_system_services_does_not_call_ccc_last_updated_iso(monkeypatch):
+    """_ccc_last_updated_iso() shells out to `git log -1`. Never on a poll."""
+    server._system_services_cache = {"ts": 0.0, "payload": None}
+    monkeypatch.setattr(server, "_control_plane_request", lambda *a, **k: {
+        "ok": False, "available": False,
+    })
+    monkeypatch.setattr(server, "_watchtower_service_status", lambda **k: {
+        "ok": True, "installed": False, "running": False, "state": "stopped",
+        "port": 8787, "url": "http://127.0.0.1:8787", "started_at": None,
+        "started_at_approx": False, "uptime_s": None,
+    })
+
+    git_calls = _count_calls(monkeypatch, "_ccc_last_updated_iso", passthrough_return="")
+
+    server.build_system_services(force=True)
+
+    assert git_calls == [], (
+        "build_system_services called _ccc_last_updated_iso — one `git log` "
+        "fork per poll, 3x/min from the chip alone"
+    )
+
+
+def test_watchtower_process_argv_is_memoised_per_pid(monkeypatch):
+    """A WatchTower restart used to cost ~130 `ps -p` forks. Memoise by pid."""
+    server._watchtower_forget_process_argv()
+    calls = []
+
+    def fake_uncached(pid):
+        calls.append(pid)
+        return ["/usr/local/bin/wt", "start"]
+
+    monkeypatch.setattr(server, "_watchtower_process_argv_uncached", fake_uncached)
+
+    for _ in range(50):
+        assert server._watchtower_process_argv(4242) == ["/usr/local/bin/wt", "start"]
+
+    assert calls == [4242], (
+        f"_watchtower_process_argv probed {len(calls)}x for one live pid — "
+        "the per-pid memo is gone and every status poll forks `ps` again"
+    )
+
+    # A different pid is a different process: it must be probed, and the stale
+    # entry must not survive (pid reuse is the only way this cache can lie).
+    server._watchtower_process_argv(4343)
+    assert calls == [4242, 4343]
+    assert 4242 not in server._WT_ARGV_CACHE
+
+    server._watchtower_forget_process_argv()
+
+
+def test_watchtower_api_probe_is_cached_and_never_blocks_twice(monkeypatch):
+    """A degraded WatchTower must not cost 0.8s of an HTTP thread per poll.
+
+    `_watchtower_api_probe` is a urlopen with a bounded timeout. When the
+    daemon is up but its API is not answering, that timeout is paid in full — and the
+    System status panel polls on a 5s cadence against a 3s payload TTL, so
+    nearly every poll paid it, in exactly the degraded state the panel exists
+    to report. It also stretched the window where a settled restart still
+    looked unsettled. Cache the verdict; refresh it off the request thread.
+    """
+    server._watchtower_forget_api_probe()
+    calls = []
+
+    def fake_probe(base_url):
+        calls.append(base_url)
+        return False  # the degraded shape: daemon alive, API silent
+
+    monkeypatch.setattr(server, "_watchtower_api_probe", fake_probe)
+    # Keep the background refresh out of the assertion: this test is about the
+    # request thread, and a real thread makes the count racy.
+    monkeypatch.setattr(server.threading, "Thread", _NoopThread)
+
+    url = "http://127.0.0.1:8787"
+    for _ in range(40):
+        assert server._watchtower_api_up(url) is False
+
+    assert calls == [url], (
+        f"_watchtower_api_up probed {len(calls)}x for 40 polls — the TTL cache "
+        "is gone and every System status poll blocks an HTTP handler thread "
+        "for up to 0.8s"
+    )
+
+    # The verdict must carry its own age so callers can be honest about it.
+    age = server._watchtower_api_probe_age(url)
+    assert age is not None and age >= 0
+
+    # A restart invalidates it: the new daemon is a different process, so a
+    # cached verdict about the old one is worse than no verdict.
+    server._watchtower_forget_api_probe()
+    assert server._watchtower_api_probe_age(url) is None
+    assert server._watchtower_api_up(url) is False
+    assert calls == [url, url]
+
+    server._watchtower_forget_api_probe()
+
+
+class _NoopThread:
+    """threading.Thread stand-in that never actually runs the target."""
+
+    def __init__(self, *args, **kwargs):
+        self._name = kwargs.get("name", "noop")
+
+    def start(self):
+        return None
+
+    def join(self, timeout=None):
+        return None
+
+
+def test_system_services_does_not_probe_watchtower_api_synchronously(monkeypatch):
+    """Warm-cache /api/system/services must not touch the network at all."""
+    server._system_services_cache = {"ts": 0.0, "payload": None}
+    server._watchtower_forget_api_probe()
+    monkeypatch.setattr(server, "_control_plane_request", lambda *a, **k: {
+        "ok": True, "available": True, "active": 0, "queued": 0, "uncertain": 0,
+        "drain": {"enabled": False},
+        "worker": {"pid": 42, "started_at": 1.0, "server_version": server.__version__,
+                   "capabilities": ["engine-execution-v1"]},
+    })
+    probes = []
+    monkeypatch.setattr(server, "_watchtower_api_probe", lambda url: probes.append(url) or False)
+    monkeypatch.setattr(server.threading, "Thread", _NoopThread)
+
+    server.build_system_services(force=True)
+    cold = len(probes)
+    for _ in range(10):
+        server.build_system_services(force=True)
+
+    assert len(probes) == cold, (
+        f"the WatchTower API was probed {len(probes) - cold} extra times across "
+        "10 rebuilds — the probe cache is not covering the services payload"
+    )
+
+    server._watchtower_forget_api_probe()
+    server._system_services_cache = {"ts": 0.0, "payload": None}

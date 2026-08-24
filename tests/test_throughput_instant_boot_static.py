@@ -34,7 +34,7 @@ def test_complete_bootstrap_applies_context_before_one_dashboard_render():
     html = _html()
     apply = _function(html, "applyThroughputBootstrap", "showFirstSnapshotShell")
 
-    weekly = apply.index("weeklyData = model.weekly")
+    weekly = apply.index("weeklyData = stabilizeWeeklyQuota(model.weekly)")
     resets = apply.index("resetEvents = model.reset_events")
     render = apply.index("renderDashboard(")
 

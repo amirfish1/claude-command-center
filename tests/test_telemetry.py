@@ -199,9 +199,10 @@ class TestPayloadShape(TelemetryTestBase):
             mock.patch.object(self.server, "_resolve_cursor_bin", return_value={"available": False}),
             mock.patch.object(self.server, "_resolve_antigravity_bin", return_value={"available": True}),
             mock.patch.object(self.server, "_resolve_kilo_bin", return_value={"available": False}),
+            mock.patch.object(self.server, "_resolve_opencode_bin", return_value={"available": False}),
         ):
             payload = self.server._build_telemetry_payload()
-        # claude,gemini,antigravity — order preserved, codex/kilo disabled in mock.
+        # claude,gemini,antigravity — order preserved, the rest disabled in mock.
         self.assertEqual(payload["engines"], "claude,gemini,antigravity")
 
     def test_payload_last_active_date_is_iso_date_only(self):
@@ -292,3 +293,92 @@ class TestEndpointResolution(TelemetryTestBase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestAnonymousOpenBeacon(TelemetryTestBase):
+    """The beacon carries no identity, so its only gate is the kill switch
+    plus a once-per-UTC-day limit. Both are asserted here."""
+
+    def test_beacon_sends_once_then_skips_same_day(self):
+        with mock.patch.object(self.server, "_send_telemetry_open_beacon",
+                               return_value=True) as send:
+            self.assertEqual(self.server._maybe_send_telemetry_open_beacon(), "sent")
+            self.assertEqual(self.server._maybe_send_telemetry_open_beacon(), "already-today")
+        self.assertEqual(send.call_count, 1)
+
+    def test_beacon_refires_on_a_new_utc_day(self):
+        self.server._telemetry_write_last_open_date("2000-01-01")
+        with mock.patch.object(self.server, "_send_telemetry_open_beacon",
+                               return_value=True) as send:
+            self.assertEqual(self.server._maybe_send_telemetry_open_beacon(), "sent")
+        self.assertEqual(send.call_count, 1)
+
+    def test_failed_send_does_not_burn_the_day(self):
+        with mock.patch.object(self.server, "_send_telemetry_open_beacon",
+                               return_value=False):
+            self.assertEqual(self.server._maybe_send_telemetry_open_beacon(), "failed")
+        # Nothing recorded, so the next hourly pass retries.
+        self.assertEqual(self.server._telemetry_read_last_open_date(), "")
+
+    def test_kill_switch_blocks_the_beacon(self):
+        os.environ["CCC_TELEMETRY_DISABLED"] = "1"
+        with mock.patch.object(self.server, "_send_telemetry_open_beacon") as send:
+            self.assertEqual(self.server._maybe_send_telemetry_open_beacon(), "disabled-env")
+        send.assert_not_called()
+
+    def test_beacon_payload_carries_no_identity(self):
+        captured = {}
+
+        class _Resp:
+            status = 204
+            def __enter__(self): return self
+            def __exit__(self, *a): return False
+
+        def _fake_urlopen(req, timeout=None):
+            captured["url"] = req.full_url
+            captured["body"] = json.loads(req.data.decode("utf-8"))
+            return _Resp()
+
+        with mock.patch.object(self.server.urllib.request, "urlopen", _fake_urlopen):
+            self.assertTrue(self.server._send_telemetry_open_beacon())
+        self.assertTrue(captured["url"].endswith("/v1/open"))
+        self.assertEqual(sorted(captured["body"].keys()),
+                         ["platform", "schema_version", "version"])
+
+
+class TestMaintainerDevFlag(TelemetryTestBase):
+    """CCC_TELEMETRY_DEV_MODE marks a row as "not-a-real-user" on both
+    endpoints so the public page can show counts with and without it."""
+
+    def test_ping_payload_omits_dev_by_default(self):
+        self.server._telemetry_load_or_init_install_id()
+        self.assertNotIn("dev", self.server._build_telemetry_payload())
+
+    def test_ping_payload_carries_dev_when_env_set(self):
+        os.environ["CCC_TELEMETRY_DEV_MODE"] = "1"
+        try:
+            self.server._telemetry_load_or_init_install_id()
+            self.assertIs(self.server._build_telemetry_payload()["dev"], True)
+        finally:
+            os.environ.pop("CCC_TELEMETRY_DEV_MODE", None)
+
+    def test_dev_flag_never_carries_an_identifier(self):
+        os.environ["CCC_TELEMETRY_DEV_MODE"] = "1"
+        try:
+            captured = {}
+
+            class _Resp:
+                status = 204
+                def __enter__(self): return self
+                def __exit__(self, *a): return False
+
+            def _fake_urlopen(req, timeout=None):
+                captured["body"] = json.loads(req.data.decode("utf-8"))
+                return _Resp()
+
+            with mock.patch.object(self.server.urllib.request, "urlopen", _fake_urlopen):
+                self.server._send_telemetry_open_beacon()
+            self.assertEqual(sorted(captured["body"].keys()),
+                             ["dev", "platform", "schema_version", "version"])
+        finally:
+            os.environ.pop("CCC_TELEMETRY_DEV_MODE", None)

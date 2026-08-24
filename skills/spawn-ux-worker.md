@@ -46,6 +46,12 @@ Optional fields:
 - `"project"`: override the project code (default is derived from the repo
   basename, so you rarely need this).
 - `"model"`: model for the spawned session (omit to use CCC's spawn default).
+- `"reasoning_effort"`: reasoning effort for the spawned session, `low` through
+  `max` (omit to use CCC's spawn default). Alias: `"effort"`. Worth setting on a
+  long-running worker: dial it down to keep a big backlog cheap, or up for a
+  queue of hard tickets. The ladder is per engine (Codex has no `max`), and a
+  value the engine does not accept is dropped rather than rejected, so check the
+  spawned row under `GET /api/sessions/spawned` if it matters.
 - `"name"`: session name (default `UX worker · <PROJECT>`).
 - `"message"`: extra context appended to the worker's starting prompt (e.g.
   `"dev server runs on :3001"`, `"prioritise mobile tickets"`). It is added as

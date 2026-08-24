@@ -21,3 +21,33 @@ def _reset_ccc_ttl_caches():
     _reset()
     yield
     _reset()
+
+
+@pytest.fixture(autouse=True)
+def _restore_canonical_server_module():
+    """Undo per-test server re-imports at teardown.
+
+    Several tests pop "server" from sys.modules and re-import it to exercise
+    import-time behavior. Extracted ccc_server/* modules resolve server names
+    through sys.modules["server"] (the _core proxy), so leaving the fresh
+    instance registered makes later test files patch a module object the
+    proxy no longer looks at. Restore whatever was registered before the
+    test so patches through the canonical module stay visible.
+    """
+    orig = sys.modules.get("server")
+    yield
+    if orig is not None and sys.modules.get("server") is not orig:
+        sys.modules["server"] = orig
+
+
+@pytest.fixture(autouse=True, scope="module")
+def _restore_canonical_server_module_after_file():
+    """Class-scoped re-imports (setUpClass) outlive the per-test restore:
+    the function-scoped fixture sees the fresh instance as the status quo
+    and keeps it for the rest of the class — correct within the file, but
+    it must not leak into the next file. Snapshot per test file, restore
+    when the file is done."""
+    orig = sys.modules.get("server")
+    yield
+    if orig is not None and sys.modules.get("server") is not orig:
+        sys.modules["server"] = orig

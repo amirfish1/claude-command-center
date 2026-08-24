@@ -1,0 +1,19 @@
+Claude Command Center
+Copyright (c) 2026 Amir Fish. All rights reserved.
+
+This project is licensed under the Claude Command Center Software License
+(see LICENSE): source-available, free for non-commercial use, commercial
+use by permission.
+
+Versions released before 2026-07-28 were published under the MIT License
+(see LICENSE-MIT) and remain available under those terms.
+
+Portions of this software were contributed by third parties under the MIT
+License and remain under the MIT License. Notably:
+
+- Grok engine support and session-liveness fixes (in server.py,
+  tests/) — Copyright (c) 2026 jaylfc, MIT License
+- Kilo Code engine and ACP adapter (ccc_acp.py and related) —
+  Copyright (c) 2026 jaylfc, MIT License
+
+See git history for the full list of third-party contributions.

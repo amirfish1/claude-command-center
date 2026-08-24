@@ -12,6 +12,18 @@ def test_request_interruption_marker_is_not_rendered_as_user_text():
     assert server._parse_conversation_event(event, 7) is None
 
 
+def test_tool_use_interruption_marker_is_not_rendered_as_user_text():
+    event = {
+        "type": "user",
+        "message": {
+            "role": "user",
+            "content": "[Request interrupted by user for tool use]",
+        },
+    }
+
+    assert server._parse_conversation_event(event, 8) is None
+
+
 def test_user_text_that_mentions_interruption_is_still_rendered():
     event = {
         "type": "user",

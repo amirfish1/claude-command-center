@@ -10,6 +10,12 @@
 #   ./scripts/cut-release.sh X.Y.Z --notes-file path/to/notes.md
 #   ./scripts/cut-release.sh X.Y.Z --dry-run    # print steps, change nothing
 #   ./scripts/cut-release.sh X.Y.Z --skip-dmg   # source/brew only, no DMG
+#   ./scripts/cut-release.sh X.Y.Z --allow-dirty  # cut anyway with a dirty tree
+#   ./scripts/cut-release.sh X.Y.Z --release-site URL  # verify public release page
+#
+# A dirty working tree is refused by default: this script stages a fixed file
+# list, so uncommitted work in static/ (or anywhere outside that list) would be
+# left out and the release would ship a half-finished feature. See the preflight.
 #
 # Prereqs (see docs/RELEASING.md): Developer ID cert, notarytool profile
 # 'ccc-notary', Sparkle EdDSA key in login keychain, gh logged in, and the
@@ -24,23 +30,30 @@ NOTES_FILE=""
 DRY_RUN=0
 SKIP_DMG=0
 SKIP_BREW=0
+ALLOW_DIRTY=0
+RELEASE_SITE="${CCC_RELEASE_SITE:-https://ccc.amirfish.ai}"
 BREW_TAP="${CCC_BREW_TAP:-$HOME/Apps/homebrew-ccc}"
+BREW_FORMULA_UPDATED=0
+BREW_FORMULA_SHA=""
 
-for arg in "$@"; do
-  case "$arg" in
-    --dry-run) DRY_RUN=1 ;;
-    --skip-dmg) SKIP_DMG=1 ;;
-    --skip-brew) SKIP_BREW=1 ;;
-    --notes-file=*) NOTES_FILE="${arg#*=}" ;;
-    --notes-file) shift; NOTES_FILE="${1:-}" ;;
-    -*) echo "cut-release: unknown flag $arg" >&2; exit 2 ;;
-    *) [ -z "$VERSION" ] && VERSION="$arg" ;;
+while [ "$#" -gt 0 ]; do
+  case "$1" in
+    --dry-run) DRY_RUN=1; shift ;;
+    --skip-dmg) SKIP_DMG=1; shift ;;
+    --skip-brew) SKIP_BREW=1; shift ;;
+    --allow-dirty) ALLOW_DIRTY=1; shift ;;
+    --release-site=*) RELEASE_SITE="${1#*=}"; shift ;;
+    --release-site) RELEASE_SITE="${2:-}"; shift 2 ;;
+    --notes-file=*) NOTES_FILE="${1#*=}"; shift ;;
+    --notes-file) NOTES_FILE="${2:-}"; shift 2 ;;
+    -*) echo "cut-release: unknown flag $1" >&2; exit 2 ;;
+    *) [ -z "$VERSION" ] && VERSION="$1"; shift ;;
   esac
 done
 
 if ! printf '%s' "$VERSION" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+$'; then
   echo "cut-release: version must be X.Y.Z, got '${VERSION:-<none>}'" >&2
-  echo "usage: ./scripts/cut-release.sh X.Y.Z [--skip-dmg] [--skip-brew] [--dry-run] [--notes-file F]" >&2
+  echo "usage: ./scripts/cut-release.sh X.Y.Z [--skip-dmg] [--skip-brew] [--allow-dirty] [--dry-run] [--release-site URL] [--notes-file F]" >&2
   exit 2
 fi
 
@@ -54,9 +67,56 @@ step "Cutting v${VERSION}  (prev tag: ${PREV_TAG:-none})  dry-run=${DRY_RUN}"
 
 # ── Preflight ───────────────────────────────────────────────────────────────
 step "Preflight checks"
-[ -z "$(git status --porcelain --untracked-files=no | grep -vE 'README.md|docs/images')" ] \
-  || warn "working tree has tracked changes beyond README/demo — they may ride along"
+# A dirty tree is a HARD STOP, not a warning.
+#
+# Step 4 stages a fixed list (CHANGELOG.md pyproject.toml server.py
+# changelog.d) because that is where the version bump lives. Two ways that
+# silently corrupts a release when other files are modified:
+#
+#   1. Uncommitted server.py work rides along into the release commit and
+#      gets tagged, notarized and published under someone else's name.
+#   2. Worse, a feature whose backend is in server.py and whose UI is in
+#      static/ ships BACKEND ONLY, because static/ is never staged. The
+#      release then advertises a feature it does not contain.
+#
+# Both happened on v5.17.0 (2026-07-28): the server-status endpoint shipped
+# without the chip that renders it, and 5.17.1 had to follow immediately.
+# The old behaviour here was warn-and-continue, which is how it got missed.
+DIRTY="$(git status --porcelain --untracked-files=all | grep -vE 'README.md|docs/images' || true)"
+if [ -n "$DIRTY" ]; then
+  if [ "$ALLOW_DIRTY" = 1 ]; then
+    warn "working tree is dirty and --allow-dirty was passed; these files ride along:"
+    echo "$DIRTY" | sed 's/^/     /'
+    warn "anything outside CHANGELOG.md/pyproject.toml/server.py/changelog.d will NOT be staged"
+  else
+    echo "${RED}working tree has uncommitted or untracked changes; refusing to cut a release${NC}" >&2
+    echo "$DIRTY" | sed 's/^/     /' >&2
+    echo "" >&2
+    echo "Commit them first. Only CHANGELOG.md, pyproject.toml, server.py and" >&2
+    echo "changelog.d/ get staged by this script, so a change in static/ (or" >&2
+    echo "anywhere else) would be left out and the release would ship a" >&2
+    echo "half-finished feature. Re-run with --allow-dirty to override." >&2
+    exit 1
+  fi
+fi
 git rev-parse "v${VERSION}" >/dev/null 2>&1 && { echo "${RED}tag v${VERSION} already exists${NC}" >&2; exit 1; } || true
+# Sync with origin BEFORE bumping anything. Step 4 pushes main, and a rejected
+# push there leaves the release commit + tag local-only with no resume path
+# (bit v5.26.0: a bot "update star history" commit landed on origin mid-day).
+# Fast-forward if we're simply behind; refuse if histories diverged.
+step "     syncing with origin/main"
+git fetch --quiet origin main || { echo "${RED}git fetch origin main failed${NC}" >&2; exit 1; }
+BEHIND=$(git rev-list --count HEAD..origin/main)
+if [ "$BEHIND" != 0 ]; then
+  if [ "$DRY_RUN" = 1 ]; then
+    warn "local main is ${BEHIND} commit(s) behind origin/main; the real run will git pull --ff-only first"
+  elif ! git pull --ff-only --quiet origin main; then
+    echo "${RED}local main is behind origin/main and cannot fast-forward; rebase first${NC}" >&2
+    exit 1
+  else
+    echo "   fast-forwarded ${BEHIND} commit(s) from origin/main"
+  fi
+fi
 command -v gh >/dev/null || { echo "${RED}gh not found${NC}" >&2; exit 1; }
 gh auth status >/dev/null 2>&1 || { echo "${RED}gh not authenticated${NC}" >&2; exit 1; }
 if [ "$SKIP_DMG" = 0 ] && [ "$DRY_RUN" = 0 ]; then
@@ -148,6 +208,10 @@ if [ "$SKIP_DMG" = 0 ]; then
   run "cp ccc-v${VERSION}.dmg ccc.dmg && gh release upload v${VERSION} ccc.dmg --clobber && rm -f ccc.dmg"
   run "git commit --only docs/appcast.xml -m 'chore(release): publish v${VERSION} appcast'"
   run "git push origin main"
+  if [ "$DRY_RUN" = 0 ]; then
+    step "     Verify release site: ${RELEASE_SITE}"
+    curl --fail --silent --show-error --max-time 20 "$RELEASE_SITE" > /dev/null
+  fi
 else
   warn "6-7/9  --skip-dmg: no DMG, no appcast (DMG users will NOT get this update)"
 fi
@@ -160,6 +224,8 @@ if [ "$SKIP_BREW" = 0 ]; then
   else
     TARBALL="https://github.com/amirfish1/claude-command-center/archive/refs/tags/v${VERSION}.tar.gz"
     if [ "$DRY_RUN" = 0 ]; then
+      step "     syncing Homebrew tap"
+      git -C "${BREW_TAP}" pull --rebase origin main
       step "     computing sha256 of release tarball (waiting for GitHub to publish it)"
       SHA=""
       for i in 1 2 3 4 5 6; do
@@ -171,7 +237,12 @@ if [ "$SKIP_BREW" = 0 ]; then
       sed -i '' -E "s#archive/refs/tags/v[0-9.]+\.tar\.gz#archive/refs/tags/v${VERSION}.tar.gz#" "${BREW_TAP}/Formula/ccc.rb"
       sed -i '' -E "s/^([[:space:]]*sha256 \")[a-f0-9]{64}(\")/\1${SHA}\2/" "${BREW_TAP}/Formula/ccc.rb"
       grep -q "$SHA" "${BREW_TAP}/Formula/ccc.rb" || { echo "${RED}brew sha256 update failed${NC}" >&2; exit 1; }
-      ( cd "$BREW_TAP" && git add Formula/ccc.rb && git commit -q -m "ccc ${VERSION}" && git push origin HEAD )
+      if ! ( cd "$BREW_TAP" && git add Formula/ccc.rb && git commit -q -m "ccc ${VERSION}" && git push origin HEAD ); then
+        echo "${RED}failed to publish Homebrew formula; release is incomplete${NC}" >&2
+        exit 1
+      fi
+      BREW_FORMULA_UPDATED=1
+      BREW_FORMULA_SHA="$SHA"
       echo "   brew formula → ${VERSION} (sha ${SHA:0:12}…) pushed"
     else
       echo "   ${YEL}[dry-run]${NC} would bump ${BREW_TAP}/Formula/ccc.rb to v${VERSION} + push"
@@ -189,5 +260,13 @@ if [ "$DRY_RUN" = 0 ]; then
   echo "   appcast:  $(grep -o 'sparkle:version>[0-9.]*' docs/appcast.xml | head -1)"
   echo "   /api/version: $(curl -fsS http://127.0.0.1:8090/api/version 2>/dev/null || echo '(server not running)')"
   echo "   CI:       run 'gh run list --limit 2' to confirm green"
+  if [ "$BREW_FORMULA_UPDATED" = 1 ]; then
+    git -C "${BREW_TAP}" fetch origin main
+    PUBLISHED_FORMULA="$(git -C "${BREW_TAP}" show FETCH_HEAD:Formula/ccc.rb)"
+    printf '%s\n' "$PUBLISHED_FORMULA" | grep -Fq "v${VERSION}.tar.gz" \
+      && printf '%s\n' "$PUBLISHED_FORMULA" | grep -Fq "$BREW_FORMULA_SHA" \
+      || { echo "${RED}published Homebrew formula does not match v${VERSION}${NC}" >&2; exit 1; }
+    echo "   brew formula: v${VERSION} published"
+  fi
 fi
 step "Done — v${VERSION} shipped. 🚀"

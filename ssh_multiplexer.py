@@ -8,7 +8,6 @@ Ported from Hermes bridge pattern and adapted for general CCC engine use.
 from __future__ import annotations
 
 import json
-import mimetypes
 import os
 import re
 import shlex

@@ -9,6 +9,13 @@
 // First launch (no ~/.ccc/claude-command-center on disk) runs the bundled
 // install.sh as an owned child process. The app observes installation and
 // server startup directly, with no Terminal automation or extra permission.
+//
+// CCC_URL is configurable (FEAT-NEXT-10): set the CCC_REMOTE_URL env var, or
+// use the App menu's "Set Remote Server…" item, to point this shell at a CCC
+// already running elsewhere (e.g. a tailnet host). When the resolved target
+// is not localhost, the app never installs or spawns a local server — it's a
+// thin client against the remote instance. Default (nothing set) is unchanged:
+// http://localhost:8090, with the usual local install/spawn.
 
 import Cocoa
 import WebKit
@@ -27,7 +34,31 @@ let CCC_LOG_PATH = "\(CCC_LOG_DIR)/app-server.log"
 // if the user has wired one (see ccc-voice), they drop an executable .command here and
 // the menu item appears. Graceful absence, like the Morning view plugin.
 let CCC_CAR_MODE_CMD = NSString(string: "~/.ccc/car-mode.command").expandingTildeInPath
-let CCC_URL = URL(string: "http://localhost:\(CCC_PORT)")!
+// FEAT-NEXT-10: let the native shell target a CCC already running elsewhere
+// (e.g. on a tailnet host) instead of always spawning one locally. Priority:
+// CCC_REMOTE_URL env var (automation/tests) > the "Set Remote Server…" menu
+// item's UserDefaults value > the local default. Both overrides are unset
+// out of the box, so an existing user sees no behavior change.
+let CCC_REMOTE_URL_DEFAULTS_KEY = "CCCRemoteServerURL"
+
+func resolveCCCTargetURL() -> URL {
+    if let envValue = CCC_ENV["CCC_REMOTE_URL"], !envValue.isEmpty, let url = URL(string: envValue) {
+        return url
+    }
+    if let stored = UserDefaults.standard.string(forKey: CCC_REMOTE_URL_DEFAULTS_KEY),
+       !stored.isEmpty, let url = URL(string: stored) {
+        return url
+    }
+    return URL(string: "http://localhost:\(CCC_PORT)")!
+}
+
+let CCC_URL = resolveCCCTargetURL()
+// True when CCC_URL points somewhere other than this Mac — thin-client mode:
+// bootstrap() must never install/spawn a local server in that case.
+let CCC_TARGET_IS_REMOTE: Bool = {
+    let host = (CCC_URL.host ?? "").lowercased()
+    return !host.isEmpty && host != "localhost" && host != "127.0.0.1" && host != "0.0.0.0"
+}()
 let CCC_BUNDLE_VERSION = (Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String) ?? "dev"
 let CCC_MAIN_MIN_WIDTH: CGFloat = 420
 let CCC_MAIN_MIN_HEIGHT: CGFloat = 600
@@ -134,15 +165,26 @@ func isLocalDashboardURL(_ url: URL) -> Bool {
     if scheme == "about" || scheme == "data" || scheme == "blob" { return true }
     if scheme != "http" && scheme != "https" { return false }
     let host = (url.host ?? "").lowercased()
-    let isLocalHost = host == "localhost" || host == "127.0.0.1" || host == "0.0.0.0"
-    if !isLocalHost { return false }
+    // Historically this only ever matched localhost aliases, because the
+    // dashboard only ever ran on this Mac. Now CCC_URL may point at a remote
+    // host (FEAT-NEXT-10) — match against whatever CCC_URL's host actually
+    // is, falling back to the localhost-alias set when it is local.
+    let targetHost = (CCC_URL.host ?? "").lowercased()
+    let hostMatches: Bool
+    if CCC_TARGET_IS_REMOTE {
+        hostMatches = host == targetHost
+    } else {
+        hostMatches = host == "localhost" || host == "127.0.0.1" || host == "0.0.0.0"
+    }
+    if !hostMatches { return false }
     // Only OUR dashboard port is the in-app dashboard. Other localhost ports
     // (e.g. the Next.js dev server the "localhost" pill links to) are external
     // sites — they must open in the browser, not spawn a duplicate in-app
     // window (CCC-39). Default ports (no explicit :port) are never the CCC
-    // dashboard, which always runs on CCC_PORT.
+    // dashboard, which always runs on CCC_PORT (or CCC_URL's port, remotely).
     let port = url.port ?? (scheme == "https" ? 443 : 80)
-    return port == CCC_PORT
+    let targetPort = CCC_URL.port ?? (CCC_URL.scheme == "https" ? 443 : 80)
+    return port == targetPort
 }
 
 func isConversationPopoutURL(_ url: URL) -> Bool {
@@ -338,6 +380,14 @@ final class CCCWebWindow: NSObject, WKNavigationDelegate, WKUIDelegate, NSWindow
             decisionHandler(.allow)
             return
         }
+        // Sub-frame loads are page content, not the user leaving the app. An
+        // Applications-rail app that frames an external dashboard
+        // (/app/<id>) would otherwise be cancelled here and thrown into the
+        // browser, which is exactly what the rail exists to avoid.
+        if !(navigationAction.targetFrame?.isMainFrame ?? true) {
+            decisionHandler(.allow)
+            return
+        }
         if isLocalDashboardURL(url) {
             decisionHandler(.allow)
         } else {
@@ -437,6 +487,20 @@ final class CCCWebWindow: NSObject, WKNavigationDelegate, WKUIDelegate, NSWindow
 
 // MARK: - App Delegate
 
+// Sparkle's installer progress agent asks the host to terminate via
+// NSRunningApplication.terminate so it can swap in the downloaded bundle —
+// but on this app that request never lands (verified on macOS 26, Sparkle
+// 2.9.2: the agent sits waiting, the host sits healthy-idle, and the
+// "Updating…" status window hangs forever; an Apple-Event quit, a menu
+// Quit, or a manual SIGTERM all unstick it instantly). Quitting ourselves
+// when the driver reports the install is starting puts the termination
+// exactly where the flow expects it; the agent then installs + relaunches.
+final class CCCUpdaterDelegate: NSObject, SPUUpdaterDelegate {
+    func updater(_ updater: SPUUpdater, willInstallUpdate item: SUAppcastItem) {
+        NSApp.terminate(nil)
+    }
+}
+
 final class AppDelegate: NSObject, NSApplicationDelegate {
     var mainWebWindow: CCCWebWindow!
     var window: NSWindow! { mainWebWindow.window }
@@ -464,7 +528,22 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     // check (interval and "automatically check" flag are controlled by the
     // user via the standard Sparkle update prompt the first time it runs).
     var updaterController: SPUStandardUpdaterController!
+    let updaterDelegate = CCCUpdaterDelegate()
     var updaterStarted = false
+    // Menu-bar "is CCC actually running" indicator (see the WhatsApp thread this
+    // came from: the server can keep serving in the background — launchd, or
+    // this app just sitting with its window closed per
+    // applicationShouldTerminateAfterLastWindowClosed — with zero visible sign
+    // of it). A colored dot in the system menu bar is the one thing that's
+    // visible with the app window closed and even after Cmd+Q, as long as the
+    // server itself (launchd-managed) is still bound to CCC_PORT.
+    var statusItem: NSStatusItem!
+    var statusPollTimer: Timer?
+    var statusPulseTimer: Timer?
+    var statusServerRunning = false
+    var statusBusyCount = 0
+    var statusPulseOn = false
+    var statusLiveWorkers: [[String: Any]] = []
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         installTerminationSignalHandlers()
@@ -474,10 +553,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             // session and can accidentally select Retry or Quit. Defer until
             // the live dashboard has finished loading.
             startingUpdater: false,
-            updaterDelegate: nil,
+            updaterDelegate: updaterDelegate,
             userDriverDelegate: nil
         )
         buildMenuBar()
+        buildStatusItem()
         buildWindow()
         bootstrap()
     }
@@ -526,6 +606,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     func applicationWillTerminate(_ notification: Notification) {
         watchdogTimer?.invalidate()
         pollTimer?.invalidate()
+        statusPollTimer?.invalidate()
+        statusPulseTimer?.invalidate()
         // Only kill the server if we started it. If it was already up
         // (launchd service, foreground ./run.sh elsewhere), leave it alone.
         stopOwnedProcess()
@@ -575,6 +657,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         )
         updatesItem.target = updaterController
         appMenu.addItem(updatesItem)
+        // FEAT-NEXT-10: point this app at a CCC already running elsewhere
+        // (e.g. a tailnet host) instead of always spawning one locally.
+        appMenu.addItem(withTitle: "Set Remote Server…",
+                        action: #selector(setRemoteServer),
+                        keyEquivalent: "")
         appMenu.addItem(NSMenuItem.separator())
         // Car Mode (Voice) — only when a local launcher is wired (see ccc-voice).
         if carModeCommandExists() {
@@ -704,6 +791,209 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         NSApp.windowsMenu = windowMenu
     }
 
+    // MARK: Status item (menu bar running indicator)
+    //
+    // Base glyph is the app icon itself (recognizable at a glance); a small
+    // badge in the corner carries state: gray = server not running, green =
+    // running and idle, blue/yellow alternating = a worker is actually
+    // executing right now (from /api/system/services' busy_count).
+    //
+    // NSStatusBarButton ignores contentTintColor on a template image (renders
+    // monochrome regardless — a known quirk), so every state is composited
+    // as real color, never a tinted template.
+
+    func statusIconImage() -> NSImage {
+        let size = NSSize(width: 20, height: 20)
+        let image = NSImage(size: size)
+        image.lockFocus()
+        let iconRect = NSRect(x: 1, y: 3, width: 16, height: 16)
+        NSApp.applicationIconImage?.draw(
+            in: iconRect, from: .zero, operation: .sourceOver,
+            fraction: statusServerRunning ? 1.0 : 0.35
+        )
+        let badgeColor: NSColor
+        if !statusServerRunning {
+            badgeColor = .systemGray
+        } else if statusBusyCount > 0 {
+            badgeColor = statusPulseOn ? .systemBlue : .systemYellow
+        } else {
+            badgeColor = .systemGreen
+        }
+        let d: CGFloat = 8
+        let badgeRect = NSRect(x: size.width - d - 1, y: 0, width: d, height: d)
+        NSColor.white.setFill()
+        NSBezierPath(ovalIn: badgeRect.insetBy(dx: -1, dy: -1)).fill()
+        badgeColor.setFill()
+        NSBezierPath(ovalIn: badgeRect).fill()
+        image.unlockFocus()
+        image.isTemplate = false
+        return image
+    }
+
+    func buildStatusItem() {
+        statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
+        pollStatusItemState()
+        statusPollTimer = Timer.scheduledTimer(withTimeInterval: 5.0, repeats: true) { [weak self] _ in
+            self?.pollStatusItemState()
+        }
+        // Separate, faster timer just to alternate the busy badge's color —
+        // decoupled from the network poll above so the pulse stays smooth
+        // regardless of request latency.
+        statusPulseTimer = Timer.scheduledTimer(withTimeInterval: 0.6, repeats: true) { [weak self] _ in
+            guard let self = self, self.statusBusyCount > 0 else { return }
+            self.statusPulseOn.toggle()
+            self.redrawStatusIcon()
+        }
+    }
+
+    func redrawStatusIcon() {
+        statusItem?.button?.image = statusIconImage()
+        statusItem?.button?.toolTip = !statusServerRunning
+            ? "CCC server is not running"
+            : statusBusyCount > 0
+                ? "CCC server running — \(statusBusyCount) worker\(statusBusyCount == 1 ? "" : "s") executing"
+                : "CCC server is running on port \(CCC_PORT)"
+    }
+
+    func pollStatusItemState() {
+        let running = portIsBound(CCC_PORT)
+        statusServerRunning = running
+        if !running {
+            statusBusyCount = 0
+            redrawStatusIcon()
+            rebuildStatusMenu()
+            return
+        }
+        fetchSystemServicesState { [weak self] count, workers in
+            guard let self = self else { return }
+            self.statusBusyCount = count
+            self.statusLiveWorkers = workers
+            self.redrawStatusIcon()
+            self.rebuildStatusMenu()
+        }
+        // Draw immediately with whatever we already know; the busy count
+        // above lands a moment later and redraws again.
+        redrawStatusIcon()
+        rebuildStatusMenu()
+    }
+
+    // Counts actually-executing work from /api/system/services — deliberately
+    // NOT the generic busy_count field, which for watchtower means
+    // workers_live (alive, including idle-and-warm workers with nothing
+    // claimed — that field exists for the restart-safety chip, not this).
+    // dashboard.busy_count is genuine in-flight executions; worker.active
+    // (not active+queued — queued hasn't started yet) is genuinely running;
+    // watchtower.claimed_worker_count is live workers matched to an
+    // in-progress claimed ticket. Also returns watchtower's per-worker
+    // breakdown (live_workers) so the menu can list each one by name with
+    // its actual ticket, instead of asking for trust in a single number.
+    func fetchSystemServicesState(completion: @escaping (Int, [[String: Any]]) -> Void) {
+        guard let url = URL(string: "http://127.0.0.1:\(CCC_PORT)/api/system/services") else {
+            completion(0, [])
+            return
+        }
+        var req = URLRequest(url: url)
+        req.timeoutInterval = 4
+        URLSession.shared.dataTask(with: req) { data, _, _ in
+            guard let data = data,
+                  let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+                  let services = json["services"] as? [[String: Any]] else {
+                DispatchQueue.main.async { completion(0, []) }
+                return
+            }
+            // The badge/pulse must match exactly what the menu lists below it
+            // — no counting activity the user can't see and verify. Only
+            // watchtower's claimed workers are listed, so only those drive
+            // the busy state; dashboard/worker activity isn't shown here and
+            // was making the badge pulse while every listed worker read
+            // "idle" (the whole complaint that led to this rewrite).
+            var liveWorkers: [[String: Any]] = []
+            for svc in services where svc["id"] as? String == "watchtower" {
+                liveWorkers = (svc["live_workers"] as? [[String: Any]]) ?? []
+            }
+            let total = liveWorkers.filter { ($0["ticket_ref"] as? String)?.isEmpty == false }.count
+            DispatchQueue.main.async { completion(total, liveWorkers) }
+        }.resume()
+    }
+
+    func rebuildStatusMenu() {
+        let menu = NSMenu()
+        let title: String
+        if !statusServerRunning {
+            title = "Server: Not running"
+        } else if statusBusyCount > 0 {
+            title = "Server: Running — \(statusBusyCount) worker\(statusBusyCount == 1 ? "" : "s") executing"
+        } else {
+            title = "Server: Running, idle (port \(CCC_PORT))"
+        }
+        let statusLabel = NSMenuItem(title: title, action: nil, keyEquivalent: "")
+        statusLabel.isEnabled = false
+        menu.addItem(statusLabel)
+
+        if statusServerRunning && !statusLiveWorkers.isEmpty {
+            menu.addItem(NSMenuItem.separator())
+            let header = NSMenuItem(title: "WatchTower workers", action: nil, keyEquivalent: "")
+            header.isEnabled = false
+            menu.addItem(header)
+            for worker in statusLiveWorkers {
+                menu.addItem(statusWorkerMenuItem(worker))
+            }
+        }
+
+        menu.addItem(NSMenuItem.separator())
+        menu.addItem(withTitle: "Open Dashboard",
+                     action: #selector(showMainWindowFromStatusItem),
+                     keyEquivalent: "")
+        menu.addItem(NSMenuItem.separator())
+        menu.addItem(withTitle: "Quit Command Center",
+                     action: #selector(NSApplication.terminate(_:)),
+                     keyEquivalent: "")
+        statusItem?.menu = menu
+    }
+
+    // One line per live WatchTower worker: which queue it belongs to, and
+    // the exact ticket it's claiming right now — or "idle" if it's alive but
+    // has nothing claimed (the case that made the old single-number pulse
+    // unconvincing: a worker idle 23m still counted as "busy").
+    func statusWorkerMenuItem(_ worker: [String: Any]) -> NSMenuItem {
+        let queue = (worker["queue"] as? String)?.isEmpty == false ? (worker["queue"] as! String) : "?"
+        let ref = worker["ticket_ref"] as? String
+        let rawTitle = worker["ticket_title"] as? String
+        let idleSeconds = worker["idle_seconds"] as? Int
+
+        let dotColor: NSColor
+        let line: String
+        if let ref = ref, !ref.isEmpty {
+            let full = rawTitle ?? ""
+            let short = full.count > 56 ? String(full.prefix(56)) + "…" : full
+            line = "\(queue) · \(ref)" + (short.isEmpty ? "" : ": \(short)")
+            dotColor = .systemBlue
+        } else {
+            let idleText = idleSeconds.map { " (idle \(max(0, $0) / 60)m)" } ?? ""
+            line = "\(queue) · idle\(idleText)"
+            dotColor = .systemGray
+        }
+
+        let attributed = NSMutableAttributedString(
+            string: "●  ", attributes: [.foregroundColor: dotColor]
+        )
+        attributed.append(NSAttributedString(
+            string: line, attributes: [.foregroundColor: NSColor.labelColor]
+        ))
+        let item = NSMenuItem(title: "", action: nil, keyEquivalent: "")
+        item.attributedTitle = attributed
+        item.isEnabled = false
+        if let ref = ref, let full = rawTitle, !full.isEmpty {
+            item.toolTip = "\(ref): \(full)"
+        }
+        return item
+    }
+
+    @objc func showMainWindowFromStatusItem() {
+        mainWebWindow?.window.makeKeyAndOrderFront(nil)
+        NSApp.activate(ignoringOtherApps: true)
+    }
+
     @objc func showAbout() {
         let alert = NSAlert()
         alert.messageText = "Command Center for Claude, Codex, Antigravity"
@@ -716,6 +1006,54 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         """
         alert.alertStyle = .informational
         alert.runModal()
+    }
+
+    // FEAT-NEXT-10: let the user point this native shell at a CCC already
+    // running elsewhere (e.g. reachable via Tailscale) instead of always
+    // spawning a local server. Stored in UserDefaults; CCC_URL is a `let`
+    // resolved once at process start, so the new target only takes effect
+    // after a restart — same tradeoff as the existing CCC_PORT/CCC_INSTALL_DIR
+    // env-var overrides, which also require relaunch.
+    @objc func setRemoteServer() {
+        let alert = NSAlert()
+        alert.messageText = "Remote CCC Server"
+        alert.informativeText =
+            "Point this app at a CCC instance already running elsewhere "
+            + "(e.g. http://100.x.x.x:8090 over Tailscale). Leave blank to use "
+            + "the local server on this Mac (default)."
+        alert.alertStyle = .informational
+        alert.addButton(withTitle: "Save")
+        alert.addButton(withTitle: "Cancel")
+        let input = NSTextField(frame: NSRect(x: 0, y: 0, width: 320, height: 24))
+        input.stringValue = UserDefaults.standard.string(forKey: CCC_REMOTE_URL_DEFAULTS_KEY) ?? ""
+        input.placeholderString = "http://localhost:\(CCC_PORT)"
+        alert.accessoryView = input
+        alert.window.initialFirstResponder = input
+        guard alert.runModal() == .alertFirstButtonReturn else { return }
+
+        let trimmed = input.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
+        if trimmed.isEmpty {
+            UserDefaults.standard.removeObject(forKey: CCC_REMOTE_URL_DEFAULTS_KEY)
+        } else if let url = URL(string: trimmed), url.scheme != nil, url.host != nil {
+            UserDefaults.standard.set(trimmed, forKey: CCC_REMOTE_URL_DEFAULTS_KEY)
+        } else {
+            let bad = NSAlert()
+            bad.messageText = "Invalid URL"
+            bad.informativeText = "\"\(trimmed)\" doesn't look like a valid URL (e.g. http://100.x.x.x:8090)."
+            bad.alertStyle = .warning
+            bad.runModal()
+            return
+        }
+
+        let restart = NSAlert()
+        restart.messageText = "Restart required"
+        restart.informativeText = "Quit and reopen Command Center for the new server target to take effect."
+        restart.alertStyle = .informational
+        restart.addButton(withTitle: "Quit Now")
+        restart.addButton(withTitle: "Later")
+        if restart.runModal() == .alertFirstButtonReturn {
+            NSApp.terminate(nil)
+        }
     }
 
     // Launch the local Car Mode voice helper. `open` runs the .command in Terminal,
@@ -864,6 +1202,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     // MARK: Bootstrap
 
     func bootstrap() {
+        if CCC_TARGET_IS_REMOTE {
+            // Thin-client mode (FEAT-NEXT-10): CCC_URL points at a CCC
+            // already running elsewhere (e.g. over Tailscale). Never install
+            // or spawn a local server — just load the remote dashboard.
+            loadDashboard()
+            return
+        }
+
         if !FileManager.default.fileExists(atPath: CCC_INSTALL_DIR) {
             // First-time install. Run the bundled installer as our child so
             // progress, failures, and the resulting server stay observable.
@@ -913,7 +1259,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             return
         }
 
-        pollUntilReady(process: proc, operation: "installation")
+        // Cloning a multi-hundred-MB history over a slow link can legitimately
+        // take minutes; the 60s default is tuned for local server startup, not
+        // a network transfer. A too-short timeout here SIGTERMs the clone
+        // mid-transfer, which git reports as a confusing "unexpected
+        // disconnect" rather than "we killed it."
+        pollUntilReady(process: proc, operation: "installation", timeout: 600)
     }
 
     func spawnServer() {
@@ -963,9 +1314,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         pollUntilReady(process: proc, operation: "server startup")
     }
 
-    func pollUntilReady(process: Process?, operation: String) {
+    func pollUntilReady(process: Process?, operation: String, timeout: TimeInterval = 60) {
         let start = Date()
-        let timeout: TimeInterval = 60
         pollTimer = Timer.scheduledTimer(withTimeInterval: 0.5, repeats: true) { [weak self] timer in
             guard let self = self else { timer.invalidate(); return }
             if portIsBound(CCC_PORT) {
@@ -1050,6 +1400,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             guard stuck >= self.watchdogGrace else { return }
 
             // Stage 2: reload didn't clear it → the server is wedged. Restart it.
+            // There is no local server to restart in thin-client mode — stop
+            // escalating past the reload and surface a network-facing message.
+            if self.watchdogReloaded && !self.watchdogRestarted && CCC_TARGET_IS_REMOTE {
+                self.stopWatchdog()
+                self.loadingLabel.isHidden = false
+                self.loadingLabel.stringValue =
+                    "Can't reach \(CCC_URL.absoluteString) — check your network/Tailscale connection."
+                return
+            }
             if self.watchdogReloaded && !self.watchdogRestarted {
                 guard self.watchdogRestartCount < 2 else {
                     self.stopWatchdog()

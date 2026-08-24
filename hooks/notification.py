@@ -61,6 +61,7 @@ def main():
             title="Claude needs your approval",
             message=message or "Permission requested",
             subtitle=session_id[:8],
+            session_id=session_id,
         )
 
     except Exception:

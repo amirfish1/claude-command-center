@@ -1,0 +1,207 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>CCC vs Multica — same wave, different bets</title>
+<meta name="description" content="An honest feature comparison of Claude Command Center (CCC) and Multica — two open-source ways to run fleets of coding agents.">
+<meta property="og:title" content="CCC vs Multica — same wave, different bets">
+<meta property="og:description" content="Two open-source ways to run fleets of coding agents. Local-first attach vs managed-agent platform — an honest comparison.">
+<meta property="og:type" content="website">
+<meta property="og:url" content="https://ccc.amirfish.ai/compare-ccc-vs-multica.html">
+<meta property="og:image" content="https://ccc.amirfish.ai/images/compare-ccc-vs-multica.png">
+<meta name="twitter:card" content="summary_large_image">
+<style>
+  :root {
+    --bg: #0a0c0f;
+    --panel: #10141a;
+    --line: #232a33;
+    --text: #e6ebf2;
+    --dim: #9aa3ad;
+    --accent: #ffb930;
+    --ccc: #8fb3ff;
+    --multica: #bd9bff;
+    --good: #7ee2a0;
+    --bad: #ff7a66;
+    --win-bg: rgba(126, 226, 160, 0.07);
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    background: var(--bg);
+    color: var(--text);
+    font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    line-height: 1.45;
+    padding: 40px 20px 56px;
+  }
+  .wrap { max-width: 880px; margin: 0 auto; }
+  header { margin-bottom: 28px; }
+  h1 { font-size: 30px; letter-spacing: -0.02em; margin-bottom: 8px; }
+  h1 .amp { color: var(--dim); font-weight: 400; }
+  .sub { color: var(--dim); font-size: 15px; max-width: 640px; }
+  .sub b { color: var(--text); font-weight: 600; }
+  .legend { margin-top: 14px; font-size: 12.5px; color: var(--dim); }
+  .legend .swatch {
+    display: inline-block; width: 10px; height: 10px; border-radius: 3px;
+    background: var(--win-bg); border: 1px solid rgba(126, 226, 160, 0.35);
+    margin: 0 6px 0 14px; vertical-align: -1px;
+  }
+  table { width: 100%; border-collapse: collapse; margin: 20px 0 8px; font-size: 14px; }
+  th, td { text-align: left; vertical-align: top; padding: 10px 12px; border-bottom: 1px solid var(--line); }
+  thead th { font-size: 15px; padding-bottom: 12px; border-bottom: 2px solid var(--line); }
+  thead th.dim { color: var(--dim); font-weight: 500; width: 24%; }
+  th.ccc { color: var(--ccc); }
+  th.multica { color: var(--multica); }
+  td.k { color: var(--dim); font-weight: 600; }
+  td.win { background: var(--win-bg); box-shadow: inset 2px 0 0 rgba(126, 226, 160, 0.45); }
+  .icon { font-weight: 700; margin-right: 6px; }
+  .yes { color: var(--good); }
+  .no { color: var(--bad); }
+  .part { color: var(--accent); }
+  .big { font-size: 17px; font-weight: 700; }
+  .detail { display: block; color: var(--dim); font-size: 12.5px; margin-top: 3px; }
+  .verdicts { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; margin-top: 28px; }
+  .card {
+    background: var(--panel);
+    border: 1px solid var(--line);
+    border-radius: 12px;
+    padding: 18px 20px;
+  }
+  .card h2 { font-size: 16px; margin-bottom: 8px; }
+  .card.ccc h2 { color: var(--ccc); }
+  .card.multica h2 { color: var(--multica); }
+  .card ul { padding-left: 18px; color: var(--dim); font-size: 14px; }
+  .card li { margin-bottom: 6px; }
+  .card li b { color: var(--text); }
+  footer { margin-top: 28px; color: var(--dim); font-size: 12.5px; line-height: 1.6; }
+  footer a { color: var(--ccc); text-decoration: none; }
+  footer a:hover { text-decoration: underline; }
+  @media (max-width: 640px) {
+    body { padding: 24px 12px 40px; }
+    h1 { font-size: 23px; }
+    table { font-size: 12.5px; }
+    th, td { padding: 8px 7px; }
+    .big { font-size: 15px; }
+    .verdicts { grid-template-columns: 1fr; }
+  }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <h1>CCC <span class="amp">vs</span> Multica</h1>
+    <p class="sub">Two open-source answers to the same problem — <b>you have more coding agents than you can watch</b>.
+    Multica bets on a managed-agent platform where agents are teammates.
+    <b>CCC</b> bets on a local-first command center that attaches to the sessions you already run. Compared August 2026, from both projects' READMEs.</p>
+    <p class="legend"><span class="swatch"></span>green cell = clear edge on that row</p>
+  </header>
+
+  <table>
+    <thead>
+      <tr>
+        <th class="dim"></th>
+        <th class="ccc">CCC (Claude Command Center)</th>
+        <th class="multica">Multica</th>
+      </tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td class="k">Model</td>
+        <td><b>Local command center</b><span class="detail">Attaches to agent sessions on your machine; the engines' on-disk state is the source of truth.</span></td>
+        <td><b>Managed agents platform</b><span class="detail">Agents are teammates you assign issues to on a shared board.</span></td>
+      </tr>
+      <tr>
+        <td class="k">Sees sessions you launched by hand</td>
+        <td class="win"><span class="icon yes">✓</span><b>Yes</b><span class="detail">Terminal, headless, or dashboard-spawned — if it's running on your machine, it's on the board.</span></td>
+        <td><span class="icon no">✕</span><b>No</b><span class="detail">Tracks only work dispatched through its own board and daemon.</span></td>
+      </tr>
+      <tr>
+        <td class="k">Account / login</td>
+        <td class="win"><span class="icon yes">✓</span><b>None</b><span class="detail">No account, no cloud, no telemetry by default.</span></td>
+        <td><span class="icon no">✕</span><b>Required</b><span class="detail">Multica Cloud login, or self-host the full stack.</span></td>
+      </tr>
+      <tr>
+        <td class="k">Install footprint</td>
+        <td class="win"><span class="icon yes">✓</span><b>Zero deps</b><span class="detail">One curl line, brew, or DMG. Python stdlib only, no build step.</span></td>
+        <td><span class="icon part">~</span><b>Daemon + stack</b><span class="detail">CLI + background daemon. Self-hosting needs Docker: Go, Next.js, Postgres + pgvector.</span></td>
+      </tr>
+      <tr>
+        <td class="k">Agent CLIs</td>
+        <td><span class="big">8 + 3</span><span class="detail">Spawn + steer: Claude Code, Codex, Gemini, Cursor, Antigravity, Kilo Code, Kimi Code, Hermes. Read-only ingestion: Copilot, Grok, Copilot Chat.</span></td>
+        <td class="win"><span class="big">14</span><span class="detail">Adds CodeBuddy, Copilot CLI, OpenCode, OpenClaw, Pi, Kiro, Qoder, Trae.</span></td>
+      </tr>
+      <tr>
+        <td class="k">Session-to-session coordination</td>
+        <td><span class="icon yes">✓</span><b>Group chats + sibling-ask</b><span class="detail">Sessions exchange context directly instead of you relaying between terminals.</span></td>
+        <td><span class="icon yes">✓</span><b>Squads</b><span class="detail">A leader agent routes assigned work to members; agents comment and report blockers.</span></td>
+      </tr>
+      <tr>
+        <td class="k">Cost / token visibility</td>
+        <td class="win"><span class="icon yes">✓</span><b>Built in</b><span class="detail">Pace vs plan limits, per-session spend attribution, cheaper-route suggestions for stale sessions.</span></td>
+        <td><span class="icon no">✕</span><b>Not advertised</b><span class="detail">No cost tracking mentioned in the README.</span></td>
+      </tr>
+      <tr>
+        <td class="k">Recurring / queued work</td>
+        <td><span class="icon yes">✓</span><b>Triggers + queues</b><span class="detail">Periodic triggers + WatchTower queues whose workers compound shared learnings.</span></td>
+        <td><span class="icon yes">✓</span><b>Autopilots</b><span class="detail">Cron, webhooks, manual runs.</span></td>
+      </tr>
+      <tr>
+        <td class="k">Multi-user teams</td>
+        <td><span class="icon no">✕</span><b>No</b><span class="detail">Single-operator tool by design; multi-user is explicitly out of scope.</span></td>
+        <td class="win"><span class="icon yes">✓</span><b>Yes</b><span class="detail">Workspaces, human + agent teams, assignment and routing.</span></td>
+      </tr>
+      <tr>
+        <td class="k">Data / privacy</td>
+        <td class="win"><span class="icon yes">✓</span><b>100% local</b><span class="detail">Loopback bind by default; works fully offline. Opt-in phone/LAN access over your trusted network.</span></td>
+        <td><span class="icon part">~</span><b>Cloud default</b><span class="detail">Cloud control plane; self-hosting supported for full control.</span></td>
+      </tr>
+      <tr>
+        <td class="k">Mobile</td>
+        <td><span class="icon part">~</span><b>Phone browser</b><span class="detail">Over your trusted network (e.g. Tailscale).</span></td>
+        <td class="win"><span class="icon yes">✓</span><b>iOS app</b><span class="detail">Dedicated mobile client in the repo.</span></td>
+      </tr>
+      <tr>
+        <td class="k">License</td>
+        <td><span class="icon part">~</span><b>Source-available</b><span class="detail">Free for non-commercial use.</span></td>
+        <td><span class="icon part">~</span><b>Apache 2.0 + conditions</b><span class="detail">Commercial license for hosted resale; branding retention.</span></td>
+      </tr>
+      <tr>
+        <td class="k">Age / stars (Aug 2026)</td>
+        <td><span class="big">112</span><span class="detail">~3.5 months old</span></td>
+        <td class="win"><span class="big">43.1k</span><span class="detail">~6.5 months old</span></td>
+      </tr>
+    </tbody>
+  </table>
+
+  <div class="verdicts">
+    <div class="card ccc">
+      <h2>Pick CCC if…</h2>
+      <ul>
+        <li>You already run agents in terminals and want a dashboard that <b>sees them without changing how you work</b>.</li>
+        <li>You want <b>zero accounts, zero cloud, zero deps</b> — one curl line and it's local forever.</li>
+        <li>You care about <b>token spend</b>: which session burned what, and which could run cheaper.</li>
+        <li>You're a solo operator running <b>parallel workstreams</b> across several agent CLIs.</li>
+      </ul>
+    </div>
+    <div class="card multica">
+      <h2>Pick Multica if…</h2>
+      <ul>
+        <li>You're a <b>team</b> — multiple humans plus agents sharing one board with assignment and routing.</li>
+        <li>You want agents that <b>pick up issues autonomously</b> and report blockers like colleagues.</li>
+        <li>You need the <b>widest CLI coverage</b> (14 engines) or a dedicated mobile app.</li>
+        <li>You're comfortable with a cloud control plane (or running Docker + Postgres to self-host).</li>
+      </ul>
+    </div>
+  </div>
+
+  <footer>
+    <p>Honest fine print: CCC is the smaller, younger project — the star gap is real, and Multica's team features are genuine.
+    The bets differ: <b>platform vs lens</b>. CCC never asks you to change how you launch agents; Multica gives you a whole new way to assign work.
+    Sources: both projects' READMEs, August 1, 2026.</p>
+    <p style="margin-top:10px">
+      <a href="https://github.com/amirfish1/claude-command-center">github.com/amirfish1/claude-command-center</a> ·
+      <a href="https://github.com/multica-ai/multica">github.com/multica-ai/multica</a>
+    </p>
+  </footer>
+</div>
+</body>
+</html>

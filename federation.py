@@ -439,16 +439,25 @@ class PeerError(Exception):
 # {"method","path","headers",{...},"body":...,"port":int|null}
 # and prints {"status":int,"body":<parsed-or-raw>} on stdout.
 _REMOTE_HTTP_CLIENT = r"""
-import json, os, sys, urllib.request, urllib.error
+import json, os, re, sys, urllib.request, urllib.error
 env = json.load(sys.stdin)
 port = env.get("port")
 if not port:
+    pf = os.path.expanduser("~/.claude/command-center/port.txt")
     try:
-        pf = os.path.expanduser("~/.claude/command-center/port.txt")
-        port = int(open(pf).read().strip().splitlines()[0])
+        raw = open(pf).read().strip().splitlines()[0].strip()
     except Exception:
-        print(json.dumps({"status": 0, "error": "no port.txt on peer"}))
+        print(json.dumps({"status": 0, "error":
+                          "no port.txt at %s (is CCC running as this user?)" % pf}))
         sys.exit(0)
+    # write_port_file() publishes a full URL ("http://127.0.0.1:8090"), but
+    # older builds wrote a bare port. Accept both rather than assuming.
+    m = re.search(r"(\d+)\s*$", raw)
+    if not m:
+        print(json.dumps({"status": 0, "error":
+                          "unparseable port.txt on peer: %r" % raw[:80]}))
+        sys.exit(0)
+    port = int(m.group(1))
 url = "http://127.0.0.1:%d%s" % (port, env["path"])
 data = None
 if env.get("body") is not None:
@@ -614,13 +623,6 @@ class PeerClient:
             return json.loads((proc.stdout or "").strip().splitlines()[-1])
         except (ValueError, IndexError):
             return {"status": 0, "error": "peer returned unparseable transport payload"}
-
-
-def peer_client(peer_node_id: str) -> PeerClient:
-    peer = get_peer(peer_node_id)
-    if not peer:
-        raise PeerError("unpaired_peer", f"no paired peer {peer_node_id}")
-    return PeerClient(peer)
 
 
 # ---------------------------------------------------------------------------

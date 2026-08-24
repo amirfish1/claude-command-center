@@ -46,9 +46,7 @@ CLAUDE.local.md
 .claude/pasted-images/
 .claude/annotations/
 .claude/snapshots/
-snapshot.png
-snapshot2.png
-snapshot3.png
+snapshot*.png
 throughput_*.png
 # Root-level WatchTower/worktree captures and temporary helpers are local-only.
 .wt-*
@@ -140,5 +138,28 @@ throughput_*.png
 # COO board personal sidecar (curated session list/analysis) — local only
 /static/coo-notes.json
 
+# Session scratch artifacts (ad-hoc verification output, not project files)
+/f2_snapshot_tmp.js
+/out/
+/worktrees/
+/queue-status-verified.png
+/unresolved-amber.png
+/docs/product-story/pain-feature-proof copy.md
+
 # Product-story proof videos ship with the GitHub Pages site (exception to *.mp4)
 !docs/product-story/assets/video/*.mp4
+static/reddit/
+
+# Hunch local index cache (was accidentally committed once at 47MB — never again)
+.hunch/
+# >>> hunch (derived runtime index — regenerable from .hunch/*.json) >>>
+.hunch/*.sqlite
+.hunch/*.sqlite-shm
+.hunch/*.sqlite-wal
+.hunch/*.sqlite-journal
+.hunch/**/*.tmp*
+.hunch-cache/
+.hunch/local.json
+.hunch/events.log
+.hunch-private/
+# <<< hunch <<<

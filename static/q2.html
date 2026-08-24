@@ -1,0 +1,97 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="dark">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Queues</title>
+  <link rel="stylesheet" href="/static/q2.css">
+</head>
+<body>
+  <header class="q2-topbar">
+    <!-- Same toggle, same corner, same markup as the dashboard's. -->
+    <!-- Surface switching lives in the Applications rail (static/app-rail.js),
+         not a chip toggle. -->
+    <script src="/static/app-rail.js" defer></script>
+    <span class="q2-brand-sub">q2</span>
+    <span class="q2-spacer"></span>
+    <span class="q2-note" id="q2Note" role="status" hidden></span>
+    <span class="q2-stale" id="q2Stale" hidden>offline &mdash; retrying</span>
+    <button type="button" class="q2-btn" id="q2AnnotateBtn" title="Annotate an element and file it to the CCC queue">&#9873; Annotate</button>
+    <button type="button" class="q2-btn" id="q2ThemeBtn" title="Toggle light / dark">Light</button>
+  </header>
+
+  <main class="q2-shell" data-mobile-panel="queues">
+    <!-- Column 1: queues (master) -->
+    <section class="q2-col q2-col-queues" aria-label="Queues">
+      <div class="q2-col-head">
+        <span class="q2-col-title">Queues</span>
+        <span class="q2-col-count" id="q2QueueCount"></span>
+        <span class="q2-spacer"></span>
+        <button type="button" class="q2-icon-btn" id="q2NewQueueBtn" title="Create a queue" aria-label="Create a queue" data-q2-icon="plus"></button>
+      </div>
+      <div class="q2-list" id="q2Queues"></div>
+    </section>
+
+    <div class="q2-resizer" data-q2-resize="queues" role="separator" aria-orientation="vertical"
+         tabindex="0" aria-label="Resize the queues column. Drag, or use arrow keys. Double-click to reset."
+         title="Drag to resize &middot; double-click to reset"></div>
+
+    <!-- Column 2: tickets of the selected queue (detail of col 1) -->
+    <section class="q2-col q2-col-tickets" aria-label="Tickets">
+      <div class="q2-col-head">
+        <button type="button" class="q2-mobile-back" data-q2-mobile-back="queues" aria-label="Back to queues">&#8592; Queues</button>
+        <span class="q2-col-title" id="q2TicketsTitle">Tickets</span>
+        <span class="q2-col-count" id="q2TicketCount"></span>
+        <span class="q2-spacer"></span>
+        <button type="button" class="q2-icon-btn" id="q2NewTicketBtn" title="Add a ticket to this queue" aria-label="Add a ticket" data-q2-icon="plus"></button>
+        <button type="button" class="q2-icon-btn" id="q2QueueSettingsBtn" title="Edit this queue's configuration" aria-label="Queue settings" data-q2-icon="gear"></button>
+        <button type="button" class="q2-btn q2-btn-ghost" id="q2EditPromptBtn" title="Open this queue's learnings doc on the right">Edit Prompt</button>
+        <button type="button" class="q2-btn q2-btn-ghost" id="q2ClosedBtn" aria-pressed="false">Show closed</button>
+      </div>
+      <!-- Flow diagram for this queue: backlog -> watcher -> worker -> done. -->
+      <section class="q2-diagram" id="q2Diagram" aria-label="Queue flow"></section>
+      <!-- Queue attendant for this queue: manually triggered, cleans the
+           queue (closes verified-resolved bugs, answers what it can, asks
+           at most one question at a time) rather than just summarizing it.
+           See docs/superpowers/specs/2026-08-13-q2-queue-attendant-design.md.
+           Hidden in all-queues view or with no queue selected. -->
+      <section class="q2-brief" id="q2Brief" aria-label="Queue attendant" hidden></section>
+      <div class="q2-resizer q2-resizer-h" data-q2-resize-v="brief" role="separator" aria-orientation="horizontal"
+           tabindex="0" aria-label="Resize the queue attendant band. Drag, or use arrow keys. Double-click to reset."
+           title="Drag to resize &middot; double-click to reset" hidden></div>
+      <div class="q2-resizer q2-resizer-h" data-q2-resize-v="logbar" role="separator" aria-orientation="horizontal"
+           tabindex="0" aria-label="Resize the activity log. Drag, or use arrow keys. Double-click to reset."
+           title="Drag to resize &middot; double-click to reset"></div>
+      <!-- Reconciler log for this queue: chronological, pinned to the newest
+           line unless the user scrolls up to read history. -->
+      <section class="q2-logbar" id="q2LogBar" aria-label="Reconciler activity log"></section>
+    </section>
+
+    <div class="q2-resizer" data-q2-resize="tickets" role="separator" aria-orientation="vertical"
+         tabindex="0" aria-label="Resize the tickets column. Drag, or use arrow keys. Double-click to reset."
+         title="Drag to resize &middot; double-click to reset"></div>
+
+    <!-- Column 3 (RHS): the ticket list + search, moved here from column 2
+         (CCC-904) so column 2 has room for the attendant/activity log without
+         fighting the list for vertical space. A ticket opens as a popup (see
+         openDetailModal() in q2.js) instead of an inline third-column pane --
+         there is no third-column detail view left to render into. -->
+    <section class="q2-col q2-col-detail" aria-label="Tickets">
+      <div class="q2-col-sub">
+        <input type="search" class="q2-search" id="q2Search" placeholder="Search tickets&hellip;" aria-label="Search tickets">
+      </div>
+      <div class="q2-list" id="q2Tickets"></div>
+    </section>
+  </main>
+
+  <!-- Modal host: ticket composer and queue configuration both render here. -->
+  <div class="q2-modal-host" id="q2Modal" hidden></div>
+
+  <script src="/static/q2-worker-idle.js"></script>
+  <script src="/static/q2.js"></script>
+  <script src="/static/q2-annotation.js"></script>
+  <script>
+    window.Q2Annotation.attach(document.getElementById('q2AnnotateBtn'), {});
+  </script>
+</body>
+</html>

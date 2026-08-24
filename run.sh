@@ -1,4 +1,6 @@
 #!/usr/bin/env bash
+# Copyright (c) 2026 Amir Fish. All rights reserved.
+# SPDX-License-Identifier: LicenseRef-CCC-Software-License
 # Claude Command Center launcher.
 #
 # Usage:
@@ -30,10 +32,14 @@ fi
 
 PLIST_LABEL="com.github.claude-command-center"
 PLIST_PATH="$HOME/Library/LaunchAgents/${PLIST_LABEL}.plist"
+WORKER_PLIST_LABEL="com.github.claude-command-center.worker"
+WORKER_PLIST_PATH="$HOME/Library/LaunchAgents/${WORKER_PLIST_LABEL}.plist"
 SERVICE_LOG_DIR="$HOME/.claude/command-center/logs"
 # Linux (systemd user service) equivalents of the launchd agent above.
 SYSTEMD_UNIT_NAME="ccc.service"
 SYSTEMD_UNIT_PATH="${XDG_CONFIG_HOME:-$HOME/.config}/systemd/user/${SYSTEMD_UNIT_NAME}"
+WORKER_SYSTEMD_UNIT_NAME="ccc-worker.service"
+WORKER_SYSTEMD_UNIT_PATH="${XDG_CONFIG_HOME:-$HOME/.config}/systemd/user/${WORKER_SYSTEMD_UNIT_NAME}"
 
 is_port_bound() {
   (echo > "/dev/tcp/127.0.0.1/$1") >/dev/null 2>&1
@@ -45,6 +51,10 @@ service_domain() {
 
 service_target() {
   echo "$(service_domain)/$PLIST_LABEL"
+}
+
+worker_service_target() {
+  echo "$(service_domain)/$WORKER_PLIST_LABEL"
 }
 
 xml_escape() {
@@ -102,6 +112,29 @@ load_service() {
   fi
 }
 
+load_worker_service() {
+  # Never restart a healthy worker merely because the dashboard plist changed:
+  # it owns durable agent execution across dashboard upgrades.
+  if launchctl print "$(worker_service_target)" >/dev/null 2>&1; then
+    return
+  fi
+  if launchctl_supports_bootstrap; then
+    launchctl bootstrap "$(service_domain)" "$WORKER_PLIST_PATH"
+    launchctl enable "$(worker_service_target)" >/dev/null 2>&1 || true
+  else
+    launchctl load "$WORKER_PLIST_PATH"
+  fi
+}
+
+unload_worker_service() {
+  if launchctl_supports_bootstrap; then
+    launchctl bootout "$(worker_service_target)" >/dev/null 2>&1 \
+      || launchctl bootout "$(service_domain)" "$WORKER_PLIST_PATH" >/dev/null 2>&1 \
+      || true
+  fi
+  launchctl unload "$WORKER_PLIST_PATH" >/dev/null 2>&1 || true
+}
+
 write_plist() {
   local target_port="$1"
   mkdir -p "$(dirname "$PLIST_PATH")" "$SERVICE_LOG_DIR"
@@ -157,6 +190,40 @@ EOF
   if command -v plutil >/dev/null 2>&1; then
     plutil -lint "$PLIST_PATH" >/dev/null
   fi
+
+  local python_bin
+  python_bin="$(command -v python3)"
+  cat > "$WORKER_PLIST_PATH" <<EOF
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>$WORKER_PLIST_LABEL</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>$python_bin</string>
+    <string>$HERE/ccc_worker.py</string>
+  </array>
+  <key>WorkingDirectory</key>
+  <string>$HERE</string>
+  <key>RunAtLoad</key>
+  <true/>
+  <key>KeepAlive</key>
+  <true/>
+  <key>StandardOutPath</key>
+  <string>$SERVICE_LOG_DIR/worker.out.log</string>
+  <key>StandardErrorPath</key>
+  <string>$SERVICE_LOG_DIR/worker.err.log</string>
+  <key>EnvironmentVariables</key>
+  <dict>
+$env_block  </dict>
+</dict>
+</plist>
+EOF
+  if command -v plutil >/dev/null 2>&1; then
+    plutil -lint "$WORKER_PLIST_PATH" >/dev/null
+  fi
 }
 
 # ── Linux: systemd user service ─────────────────────────────────────────────
@@ -186,14 +253,32 @@ write_systemd_unit() {
   cat > "$SYSTEMD_UNIT_PATH" <<EOF
 [Unit]
 Description=Claude Command Center
-After=network-online.target
-Wants=network-online.target
+After=network-online.target $WORKER_SYSTEMD_UNIT_NAME
+Wants=network-online.target $WORKER_SYSTEMD_UNIT_NAME
 
 [Service]
 Type=simple
 WorkingDirectory=$HERE
 ExecStart=$HERE/run.sh
 Restart=on-failure
+RestartSec=2
+LimitNOFILE=2048
+${env_lines}
+[Install]
+WantedBy=default.target
+EOF
+
+  cat > "$WORKER_SYSTEMD_UNIT_PATH" <<EOF
+[Unit]
+Description=Claude Command Center persistent execution worker
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=$HERE
+ExecStart=/usr/bin/env python3 $HERE/ccc_worker.py
+Restart=always
 RestartSec=2
 LimitNOFILE=2048
 ${env_lines}
@@ -228,10 +313,12 @@ EOF
 
   echo "→ Installing CCC as a systemd user service"
   echo "  unit  : $SYSTEMD_UNIT_PATH"
+  echo "  worker: $WORKER_SYSTEMD_UNIT_PATH"
   echo "  port  : $target_port"
 
   write_systemd_unit "$target_port"
   systemctl --user daemon-reload
+  systemctl --user enable --now "$WORKER_SYSTEMD_UNIT_NAME"
   systemctl --user enable --now "$SYSTEMD_UNIT_NAME"
 
   for _ in 1 2 3 4 5; do
@@ -259,13 +346,14 @@ uninstall_service_linux() {
     echo "systemctl not found; nothing to uninstall."
     exit 0
   fi
-  if [ ! -f "$SYSTEMD_UNIT_PATH" ]; then
-    echo "Service is not installed (no unit at $SYSTEMD_UNIT_PATH)."
+  if [ ! -f "$SYSTEMD_UNIT_PATH" ] && [ ! -f "$WORKER_SYSTEMD_UNIT_PATH" ]; then
+    echo "Service is not installed."
     exit 0
   fi
   echo "→ Removing CCC systemd user service"
   systemctl --user disable --now "$SYSTEMD_UNIT_NAME" >/dev/null 2>&1 || true
-  rm -f "$SYSTEMD_UNIT_PATH"
+  systemctl --user disable --now "$WORKER_SYSTEMD_UNIT_NAME" >/dev/null 2>&1 || true
+  rm -f "$SYSTEMD_UNIT_PATH" "$WORKER_SYSTEMD_UNIT_PATH"
   systemctl --user daemon-reload >/dev/null 2>&1 || true
   echo "✓ Service removed."
 }
@@ -273,6 +361,7 @@ uninstall_service_linux() {
 service_status_linux() {
   echo "CCC systemd user service"
   echo "  unit  : $SYSTEMD_UNIT_PATH"
+  echo "  worker: $WORKER_SYSTEMD_UNIT_PATH"
   if [ -f "$SYSTEMD_UNIT_PATH" ]; then
     echo "  state : installed"
   else
@@ -282,6 +371,11 @@ service_status_linux() {
     echo "  active: yes"
   else
     echo "  active: no"
+  fi
+  if systemd_available && systemctl --user is-active "$WORKER_SYSTEMD_UNIT_NAME" >/dev/null 2>&1; then
+    echo "  worker active: yes"
+  else
+    echo "  worker active: no"
   fi
 }
 
@@ -311,11 +405,13 @@ EOF
 
   echo "→ Installing CCC as a launchd agent"
   echo "  plist : $PLIST_PATH"
+  echo "  worker: $WORKER_PLIST_PATH"
   echo "  target: $(service_target)"
   echo "  port  : $target_port"
   echo "  logs  : $SERVICE_LOG_DIR/service.{out,err}.log"
 
   write_plist "$target_port"
+  load_worker_service
   load_service
 
   for _ in 1 2 3 4 5; do
@@ -337,16 +433,17 @@ uninstall_service() {
     uninstall_service_linux
     return
   fi
-  if [ ! -f "$PLIST_PATH" ]; then
-    echo "Service is not installed (no plist at $PLIST_PATH)."
+  if [ ! -f "$PLIST_PATH" ] && [ ! -f "$WORKER_PLIST_PATH" ]; then
+    echo "Service is not installed."
     exit 0
   fi
   echo "→ Removing CCC launchd agent"
   unload_service
+  unload_worker_service
   if launchctl_supports_bootstrap; then
     launchctl disable "$(service_target)" >/dev/null 2>&1 || true
   fi
-  rm -f "$PLIST_PATH"
+  rm -f "$PLIST_PATH" "$WORKER_PLIST_PATH"
   echo "✓ Service removed."
 }
 
@@ -358,6 +455,7 @@ service_status() {
 
   echo "CCC launchd agent"
   echo "  path  : $PLIST_PATH"
+  echo "  worker: $WORKER_PLIST_PATH"
   echo "  target: $(service_target)"
   if [ -f "$PLIST_PATH" ]; then
     echo "  state : installed"
@@ -369,6 +467,11 @@ service_status() {
     echo "  loaded: yes"
   else
     echo "  loaded: no"
+  fi
+  if launchctl print "$(worker_service_target)" >/dev/null 2>&1; then
+    echo "  worker loaded: yes"
+  else
+    echo "  worker loaded: no"
   fi
 }
 
@@ -430,5 +533,194 @@ if ! "$PYTHON" -c 'import sys; sys.exit(0 if sys.version_info >= (3, 9) else 1)'
   echo "Error: CCC requires Python 3.9+. Set CCC_PYTHON to a compatible interpreter." >&2
   exit 1
 fi
+
+# ---------------------------------------------------------------------------
+# WatchTower bootstrap
+# ---------------------------------------------------------------------------
+# WatchTower is CCC's queue engine — without it the dashboard silently loses
+# worker dispatch (filed tickets never spawn anything), plan-to-fleet import,
+# WT-tracked drain, and delivery receipts. The installers install it, but they
+# are not the only way in: Homebrew, the DMG, Docker, and a plain `git clone`
+# all reach the product through THIS script. Bootstrapping here is what makes
+# "installed by default" true for every path rather than just one of them.
+#
+# The chain itself lives in scripts/install-watchtower.sh, shared with
+# scripts/install.sh so there is exactly one definition of it. This wrapper's
+# only job is to keep the happy path free: an import check plus a stat, no
+# fork of the installer and no network on a launch where nothing is due.
+ensure_watchtower() {
+  case "${CCC_SKIP_WATCHTOWER:-0}" in
+    1|true|True|yes|Yes) return 0 ;;
+  esac
+  local script="$HERE/scripts/install-watchtower.sh"
+  if [ ! -f "$script" ]; then
+    return 0
+  fi
+  local ccc_version
+  ccc_version="$(grep -m1 '^__version__ = ' "$HERE/server.py" 2>/dev/null | sed -E 's/^__version__ = "(.*)"$/\1/')"
+  # Fast path: already importable, already checked today, AND CCC has not
+  # been upgraded since the last check. That third condition is what makes a
+  # fresh `brew upgrade`/Sparkle/`git pull` install pick up WatchTower right
+  # away instead of waiting out the rest of today's rate-limit window — see
+  # wt_ccc_version_changed in install-watchtower.sh, which owns this marker.
+  if "$PYTHON" -c 'import watchtower' >/dev/null 2>&1; then
+    local marker="$HOME/.claude/command-center/watchtower-last-check"
+    local version_marker="$HOME/.claude/command-center/watchtower-last-ccc-version"
+    if [ -f "$marker" ] && [ -n "$(find "$marker" -mtime -1 2>/dev/null)" ] \
+      && { [ -z "$ccc_version" ] || [ "$(cat "$version_marker" 2>/dev/null || true)" = "$ccc_version" ]; }; then
+      return 0
+    fi
+  fi
+  CCC_PYTHON="$PYTHON" CCC_WATCHTOWER_LOG_PREFIX="  watchtower: " CCC_VERSION="$ccc_version" \
+    bash "$script" || true
+}
+ensure_watchtower
+
+# Foreground installs do not have launchd/systemd to start the independent
+# execution worker. Ensure one is healthy before replacing this shell with the
+# restartable dashboard. `nohup` + a separate session keeps it alive across the
+# dashboard's in-place exec restart (and across a closed terminal).
+case "${CCC_CONTROL_PLANE_ENGINES:-1}" in
+  0|false|False|no|No) ;;
+  *)
+    worker_health="$("$PYTHON" "$HERE/ccc_worker.py" --health 2>/dev/null || true)"
+    read -r existing_worker_pid existing_worker_idle worker_compatible <<EOF
+$(printf '%s' "$worker_health" | "$PYTHON" -c '
+import json, sys
+try:
+    data = json.load(sys.stdin)
+except Exception:
+    data = {}
+worker = data.get("worker") if isinstance(data.get("worker"), dict) else {}
+capabilities = worker.get("capabilities") or []
+idle = not any(int(data.get(key) or 0) for key in (
+    "active", "queued", "uncertain",
+))
+print(
+    int(worker.get("pid") or 0),
+    int(bool(data.get("ok")) and idle),
+    int("engine-execution-v1" in capabilities),
+)
+')
+EOF
+    if [ "${worker_compatible:-0}" != "1" ] \
+      && [ "${existing_worker_idle:-0}" = "1" ] \
+      && [ "${existing_worker_pid:-0}" -gt 1 ] 2>/dev/null; then
+      # A pre-engine-control worker owns no live work. Retire that exact PID;
+      # launchd/systemd may replace it, otherwise the detached start below
+      # does. Never roll an older worker with unresolved work.
+      kill "$existing_worker_pid" >/dev/null 2>&1 || true
+      for _ in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20; do
+        sleep 0.1
+        worker_health="$("$PYTHON" "$HERE/ccc_worker.py" --health 2>/dev/null || true)"
+        if printf '%s' "$worker_health" | "$PYTHON" -c '
+import json, sys
+try:
+    data = json.load(sys.stdin)
+except Exception:
+    raise SystemExit(1)
+caps = (data.get("worker") or {}).get("capabilities") or []
+raise SystemExit(0 if "engine-execution-v1" in caps else 1)
+'; then
+          worker_compatible=1
+          break
+        fi
+      done
+    fi
+    if [ "${worker_compatible:-0}" != "1" ] \
+      && "$PYTHON" "$HERE/ccc_worker.py" --health >/dev/null 2>&1; then
+      echo "⚠ Older persistent worker still has unresolved work; using compatibility execution." >&2
+    elif [ "${worker_compatible:-0}" != "1" ]; then
+      nohup "$PYTHON" "$HERE/ccc_worker.py" \
+        >>"$SERVICE_LOG_DIR/worker.out.log" \
+        2>>"$SERVICE_LOG_DIR/worker.err.log" </dev/null &
+      worker_pid=$!
+      for _ in 1 2 3 4 5 6 7 8 9 10; do
+        if "$PYTHON" "$HERE/ccc_worker.py" --health >/dev/null 2>&1; then
+          echo "  worker   : persistent (pid $worker_pid)"
+          break
+        fi
+        sleep 0.1
+      done
+      if ! "$PYTHON" "$HERE/ccc_worker.py" --health >/dev/null 2>&1; then
+        echo "⚠ Persistent worker did not become ready; dashboard uses legacy execution." >&2
+      fi
+    fi
+    # A long-running worker keeps executing the server.py it imported at first
+    # engine RPC -- upgrades change the code on disk UNDER it, and the policy
+    # above (never restart a healthy worker) means the new code would never
+    # take effect. Its health reports the loaded module's version; if that
+    # lags the repo, kickstart exactly once per upgrade. Queued work becomes
+    # 'uncertain' and is reclaimed via Settings -> Maintenance -> Reconcile.
+    # A worker that never imported server (server_version null) needs nothing:
+    # its first RPC loads the new code from disk.
+    if [ "${worker_compatible:-0}" = "1" ]; then
+      read -r worker_server_version worker_content_hash repo_version repo_content_hash <<EOF
+$(printf '%s' "$worker_health" | "$PYTHON" -c '
+import json, sys
+try:
+    data = json.load(sys.stdin)
+except Exception:
+    data = {}
+worker = data.get("worker") if isinstance(data.get("worker"), dict) else {}
+# Key ABSENT means a pre-version-reporting worker -- definitionally stale.
+# Key present but null means a current worker that never imported server.
+sv = "absent" if "server_version" not in worker else (worker.get("server_version") or "")
+sh = worker.get("server_content_hash") or ""
+print(sv, sh, end=" ")
+' 2>/dev/null; "$PYTHON" -c '
+import hashlib, pathlib, re, sys
+try:
+    p = pathlib.Path(sys.argv[1]).resolve()
+    text = p.read_text(encoding="utf-8")
+    m = re.search(r"^__version__\s*=\s*\"([^\"]+)\"", text, re.M)
+    version = m.group(1) if m else ""
+    h = hashlib.sha256(text.encode("utf-8")).hexdigest()[:16]
+    print(version + " " + h, end="")
+except Exception:
+    print(" ", end="")
+' "$HERE/server.py")
+EOF
+      worker_stale_version=0
+      worker_stale_hash=0
+      if [ -n "$repo_version" ] && { [ "$worker_server_version" = "absent" ] \
+        || { [ -n "$worker_server_version" ] && [ "$worker_server_version" != "$repo_version" ]; }; }; then
+        worker_stale_version=1
+      fi
+      if [ -n "$repo_content_hash" ] && [ -n "$worker_content_hash" ] \
+        && [ "$worker_content_hash" != "$repo_content_hash" ]; then
+        worker_stale_hash=1
+      fi
+      if [ "$worker_stale_version" = "1" ] || [ "$worker_stale_hash" = "1" ]; then
+        if [ "$worker_stale_version" = "1" ]; then
+          echo "→ Worker runs server.py ${worker_server_version:-never-imported} but the repo is v$repo_version — restarting worker"
+        else
+          echo "→ Worker runs an older copy of server.py — restarting worker"
+        fi
+        echo "  Queued work will show as 'needs reconciliation' in Settings → Maintenance."
+        if ! launchctl kickstart -k "$(worker_service_target)" >/dev/null 2>&1; then
+          # No launchd worker service on this install path (brew service or
+          # DMG app spawn): kill the stale worker AND immediately replace it,
+          # or the dashboard runs workerless (legacy execution) until the
+          # next launch.
+          kill "$existing_worker_pid" >/dev/null 2>&1 || true
+          sleep 0.5
+          if ! "$PYTHON" "$HERE/ccc_worker.py" --health >/dev/null 2>&1; then
+            nohup "$PYTHON" "$HERE/ccc_worker.py" \
+              >>"$SERVICE_LOG_DIR/worker.out.log" \
+              2>>"$SERVICE_LOG_DIR/worker.err.log" </dev/null &
+            for _ in 1 2 3 4 5 6 7 8 9 10; do
+              if "$PYTHON" "$HERE/ccc_worker.py" --health >/dev/null 2>&1; then
+                echo "  worker   : restarted on v$repo_version"
+                break
+              fi
+              sleep 0.2
+            done
+          fi
+        fi
+      fi
+    fi
+    ;;
+esac
 
 exec "$PYTHON" "$HERE/server.py"

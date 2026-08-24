@@ -30,7 +30,7 @@ def test_aggregate_chart_keeps_local_bars_when_weekly_quota_context_is_unavailab
     assert 'id="previous-week-legend"' not in throughput_html
     assert "prevPeriodRows" not in throughput_html
     assert "cumPrvVals" not in throughput_html
-    assert "const PREVIOUS_CYCLE_DAYS = 2" in throughput_html
+    assert "const CHART_HISTORY_DAYS = 7" in throughput_html
     assert "projectedLabelAnchor" in throughput_html
 
 
@@ -51,19 +51,41 @@ def test_token_axis_labels_do_not_mix_interval_tokens_with_cumulative_percent():
     assert "formatTokenAxisLabel(val, null)" in throughput_html
 
 
-def test_chart_keeps_two_prior_days_and_compresses_forecast_to_100():
+def test_chart_shows_week_of_history_and_short_capped_forecast():
     throughput_html = pathlib.Path(PROJECT_ROOT, "static", "throughput.html").read_text(encoding="utf-8")
 
-    assert "const PREVIOUS_CYCLE_DAYS = 2" in throughput_html
+    assert "const CHART_HISTORY_DAYS = 7" in throughput_html
+    assert "const CHART_FUTURE_DAYS = 2" in throughput_html
+    assert "nowTs - CHART_HISTORY_DAYS * 86400000" in throughput_html
+    assert "nowTs + CHART_FUTURE_DAYS * 86400000" in throughput_html
     assert "function forecastCrossingAt100" in throughput_html
     assert "const FORECAST_WIDTH_RATIO = 0.45" in throughput_html
     assert "forecast · compressed" in throughput_html
     assert "_prePeriod" in throughput_html
-    assert "elapsedThreeHourSlots" in throughput_html
+    assert "elapsedSlots" in throughput_html
     assert "projectedElapsedMs" in throughput_html
     assert "dt.getHours() < 6 && !isProj" in throughput_html
     assert "projectedCrossingLabel" in throughput_html
     assert "expected 100%" in throughput_html
+
+
+def test_chart_draws_a_zero_based_pre_reset_quota_trace():
+    throughput_html = pathlib.Path(PROJECT_ROOT, "static", "throughput.html").read_text(encoding="utf-8")
+
+    assert "function buildPreviousQuotaSeries(" in throughput_html
+    assert "row._prePeriod" in throughput_html
+    assert "lastPreResetIndex" in throughput_html
+    assert "startAtZero: true" in throughput_html
+    assert "drawQuotaSeries(svg, previousSeries" in throughput_html
+    assert "Previous cycle" in throughput_html
+
+
+def test_codex_quota_series_uses_local_summary_hour_boundaries():
+    throughput_html = pathlib.Path(PROJECT_ROOT, "static", "throughput.html").read_text(encoding="utf-8")
+
+    assert "function throughputSummaryRowTimeMs(row)" in throughput_html
+    assert "at: throughputSummaryRowTimeMs(row)" in throughput_html
+    assert "const summaryHour = String(row.hour).trim()" in throughput_html
 
 
 def test_combined_chart_draws_separate_normalized_quota_series():
@@ -72,5 +94,27 @@ def test_combined_chart_draws_separate_normalized_quota_series():
     assert "function drawQuotaSeries" in throughput_html
     assert "claudeSeries" in throughput_html
     assert "codexSeries" in throughput_html
+    assert "kimiSeries" in throughput_html
     assert "weeklyData.display_pct / claudeCurrentTokens" in throughput_html
     assert "weeklyData.codex.weekly_pct / codexCurrentTokens" in throughput_html
+    assert "drawQuotaSeries(svg, kimiSeries, xScale, yPct, '#c084fc', 'Kimi', -13);" in throughput_html
+
+
+def test_zoomed_chart_switches_to_one_hour_columns():
+    throughput_html = pathlib.Path(PROJECT_ROOT, "static", "throughput.html").read_text(encoding="utf-8")
+
+    assert "function buildHourlyZoomRows(" in throughput_html
+    assert "const zoomHourly = sixhourly && chartZoomLastHours && zoomState.zoomable" in throughput_html
+    assert "const chartSlotMs = zoomHourly ? 3600000 : 3 * 3600000" in throughput_html
+    assert "Hourly Cache-Adjusted Burn (last 48h)" in throughput_html
+    assert "Cache-adj tokens / hour" in throughput_html
+
+
+def test_provider_quota_context_survives_a_stale_snapshot_refresh():
+    throughput_html = pathlib.Path(PROJECT_ROOT, "static", "throughput.html").read_text(encoding="utf-8")
+
+    assert "function stabilizeWeeklyQuota(" in throughput_html
+    assert "function isUsableWeeklyQuota(" in throughput_html
+    assert "ccc-throughput-last-quota" in throughput_html
+    assert "weeklyData = stabilizeWeeklyQuota(model.weekly)" in throughput_html
+    assert "weeklyData = stabilizeWeeklyQuota(d && typeof d === 'object' ? d : {})" in throughput_html

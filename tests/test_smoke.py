@@ -31,7 +31,246 @@ PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, PROJECT_ROOT)
 
 
+class TestWebuiPaneRegressionGuards(unittest.TestCase):
+    """Regression guards for the kimi/codex webui-pane bug fixes."""
+
+    def test_monthly_claude_plan_setting_is_available(self):
+        """The subscription estimate has a discoverable settings control."""
+        index_html = pathlib.Path(PROJECT_ROOT, "static", "index.html").read_text(encoding="utf-8")
+        app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
+
+        self.assertIn('id="settingsMonthlyClaudePlanInput"', index_html)
+        self.assertIn("ccc-monthly-claude-plan-usd", app_js)
+        self.assertIn("subscription cost this week", app_js)
+
+    def test_turn_completion_glows_the_matching_conversation_row(self):
+        """A completion cue must identify the same sidebar row as its sound."""
+        app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
+        app_css = pathlib.Path(PROJECT_ROOT, "static", "app.css").read_text(encoding="utf-8")
+
+        self.assertIn("function _cccGlowCompletedConversation(sessionId)", app_js)
+        self.assertIn("_cccGlowCompletedConversation(_fetchedFor)", app_js)
+        self.assertIn("conv-item-completion-glow", app_css)
+        self.assertIn("animation: conv-completion-glow", app_css)
+
+    def test_pane_header_secondary_actions_use_overflow_menu(self):
+        """Split-pane chrome stays compact without losing recording controls."""
+        index_html = pathlib.Path(PROJECT_ROOT, "static", "index.html").read_text(encoding="utf-8")
+        app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
+        pane_header = index_html[index_html.index('data-role="pane-actions"'):index_html.index('data-role="pane-close"')]
+
+        self.assertIn('data-role="pane-more"', pane_header)
+        self.assertIn('data-role="pane-more-menu"', pane_header)
+        self.assertIn('data-role="pane-annotate" aria-label="Annotate visible page"', pane_header)
+        self.assertNotIn('&#9998; Annotate</button>', pane_header)
+        self.assertIn("btn.closest('.conv-pane-more[open]')", app_js)
+        self.assertIn("menu.removeAttribute('open')", app_js)
+
+    def test_codex_busy_turn_error_is_queued_not_exec_fallback(self):
+        """"Cannot launch a new turn while another turn is active" must take
+        the durable-queue fallback — the exec fallback spawned a second writer
+        per queue-pump retry, littering the transcript with duplicate user
+        bubbles and identical error banners."""
+        server = importlib.import_module("server")
+        busy = {"error": {"message": "Invalid request: Cannot launch a new turn while another turn (ID 7) is active"}}
+        self.assertTrue(server._codex_error_is_not_steerable(busy))
+        self.assertTrue(server._codex_error_is_not_steerable({"error": {"message": "activeTurnNotSteerable"}}))
+        # Unrelated failures still take the exec fallback.
+        self.assertFalse(server._codex_error_is_not_steerable({"error": {"message": "connection refused"}}))
+
+    def test_wire_fold_assistant_dedupe_is_containment_not_equality(self):
+        """The finalized ACP turn text can be a truncated tail or multi-step
+        concatenation of a wire part; exact-match dedupe let the same reply
+        render twice (partial + full). Long blocks dedupe by containment."""
+        import inspect as _inspect
+        server = importlib.import_module("server")
+        src = _inspect.getsource(server._acp_wire_fold)
+        self.assertIn("len(norm) >= 80", src)
+        self.assertIn("len(prev) >= 80", src)
+
+    def test_wire_fold_marks_unanswered_tool_calls_running(self):
+        """A wire-folded tool.call with no result in the batch is in flight,
+        not done — it must be emitted with tool_status running so the pane
+        shows the pulsing dot instead of a false checkmark."""
+        import inspect as _inspect
+        server = importlib.import_module("server")
+        src = _inspect.getsource(server._acp_wire_fold)
+        self.assertIn('block["tool_status"] = "running"', src)
+
+    def test_kimi_status_includes_wire_activity_busy_signal(self):
+        """TUI-originated kimi turns never flip the ACP snapshot to active;
+        session_live_status must fall back to wire.jsonl mtime freshness."""
+        import inspect as _inspect
+        server = importlib.import_module("server")
+        src = _inspect.getsource(server.session_live_status)
+        self.assertIn("_acp_wire_path", src)
+
+
+class TestKimiStuckDetection(unittest.TestCase):
+    """Kimi stuck-mid-turn classification: wire-tail turn shape plus the
+    stale threshold must produce the same stale_tool_call contract codex
+    rows carry."""
+
+    def _wire_dir(self, events):
+        d = tempfile.mkdtemp(prefix="ccc-kimi-wire-")
+        self.addCleanup(shutil.rmtree, d, True)
+        wire = pathlib.Path(d) / "agents" / "main"
+        wire.mkdir(parents=True)
+        with (wire / "wire.jsonl").open("w") as f:
+            for ev in events:
+                f.write(json.dumps(ev) + "\n")
+        return d, wire / "wire.jsonl"
+
+    def _loop(self, ltype, **kw):
+        ev = {"type": ltype}
+        ev.update(kw)
+        return {"type": "context.append_loop_event", "event": ev}
+
+    def test_completed_turn_reads_result_not_stuck(self):
+        server = importlib.import_module("server")
+        d, wire = self._wire_dir([
+            {"type": "turn.prompt", "input": [{"type": "text", "text": "hi"}]},
+            self._loop("step.begin"),
+            self._loop("content.part", part={"type": "text", "text": "done"}),
+            self._loop("step.end", finishReason="end_turn"),
+            {"type": "usage.record", "usage": {}},
+        ])
+        old = time.time() - 3600
+        os.utime(wire, (old, old))
+        meta = server._kimi_wire_tail_meta(d)
+        self.assertEqual(meta["last_event_type"], "result")
+        self.assertIsNone(meta["pending_tool"])
+        self.assertFalse(meta["mid_turn"])
+        fields = server._kimi_stale_tool_fields(meta, threshold_s=900)
+        self.assertFalse(fields["stale_tool_call"])
+
+    def test_dangling_tool_call_is_mid_turn(self):
+        server = importlib.import_module("server")
+        d, wire = self._wire_dir([
+            {"type": "turn.prompt", "input": [{"type": "text", "text": "run"}]},
+            self._loop("step.begin"),
+            self._loop("tool.call", toolCallId="t1", name="Bash"),
+        ])
+        meta = server._kimi_wire_tail_meta(d)
+        self.assertEqual(meta["pending_tool"], "Bash")
+        self.assertTrue(meta["mid_turn"])
+        self.assertEqual(meta["last_event_type"], "assistant")
+
+    def test_step_end_tool_use_is_still_mid_turn(self):
+        """step.end with finishReason tool_use only closes a STEP — the agent
+        loop continues, so the session must not read as done."""
+        server = importlib.import_module("server")
+        d, _ = self._wire_dir([
+            {"type": "turn.prompt", "input": [{"type": "text", "text": "go"}]},
+            self._loop("tool.call", toolCallId="t1", name="Read"),
+            self._loop("tool.result", toolCallId="t1", result={"output": "ok"}),
+            self._loop("step.end", finishReason="tool_use"),
+        ])
+        meta = server._kimi_wire_tail_meta(d)
+        self.assertTrue(meta["mid_turn"])
+        self.assertNotEqual(meta["last_event_type"], "result")
+
+    def test_turn_cancel_reads_result(self):
+        server = importlib.import_module("server")
+        d, _ = self._wire_dir([
+            {"type": "turn.prompt", "input": [{"type": "text", "text": "go"}]},
+            self._loop("step.begin"),
+            {"type": "turn.cancel"},
+        ])
+        meta = server._kimi_wire_tail_meta(d)
+        self.assertEqual(meta["last_event_type"], "result")
+        self.assertFalse(meta["mid_turn"])
+
+    def test_stale_mid_turn_flags_stuck_with_tool_name(self):
+        """Mid-turn + wire silent past the threshold => stale_tool_call, the
+        flag the row Stuck pill and pane stuck card bind to."""
+        server = importlib.import_module("server")
+        d, wire = self._wire_dir([
+            {"type": "turn.prompt", "input": [{"type": "text", "text": "go"}]},
+            self._loop("step.begin"),
+            self._loop("tool.call", toolCallId="t1", name="Edit"),
+        ])
+        old = time.time() - 1200
+        os.utime(wire, (old, old))
+        meta = server._kimi_wire_tail_meta(d)
+        fields = server._kimi_stale_tool_fields(meta, threshold_s=900)
+        self.assertTrue(fields["stale_tool_call"])
+        self.assertGreaterEqual(fields["stale_tool_age_s"], 1200)
+
+    def test_fresh_mid_turn_is_not_stuck(self):
+        """Mid-turn but the wire was just written — a live turn, not stuck."""
+        server = importlib.import_module("server")
+        d, _ = self._wire_dir([
+            {"type": "turn.prompt", "input": [{"type": "text", "text": "go"}]},
+            self._loop("step.begin"),
+            self._loop("tool.call", toolCallId="t1", name="Edit"),
+        ])
+        meta = server._kimi_wire_tail_meta(d)
+        fields = server._kimi_stale_tool_fields(meta, threshold_s=900)
+        self.assertFalse(fields["stale_tool_call"])
+        self.assertGreater(fields["stale_tool_age_s"], -1)
+
+    def test_acp_active_turn_with_silent_wire_is_stuck(self):
+        """CCC-driven turn: ACP snapshot active, wire silent past threshold —
+        the harness wedged mid-turn."""
+        server = importlib.import_module("server")
+        d, wire = self._wire_dir([
+            {"type": "turn.prompt", "input": [{"type": "text", "text": "go"}]},
+            self._loop("step.begin"),
+            self._loop("content.part", part={"type": "text", "text": "working"}),
+            self._loop("step.end", finishReason="end_turn"),
+        ])
+        old = time.time() - 2000
+        os.utime(wire, (old, old))
+        meta = server._kimi_wire_tail_meta(d)
+        self.assertFalse(meta["mid_turn"])  # wire tail alone reads finished
+        fields = server._kimi_stale_tool_fields(meta, acp_active=True, threshold_s=900)
+        self.assertTrue(fields["stale_tool_call"])
+
+    def test_row_builder_stamps_kimi_stale_fields(self):
+        """find_kimi_conversations must stamp the stale contract on rows so
+        the sidebar Stuck pill lights up with no client changes."""
+        import inspect as _inspect
+        server = importlib.import_module("server")
+        src = _inspect.getsource(server.find_kimi_conversations)
+        self.assertIn("_kimi_wire_tail_meta", src)
+        self.assertIn("_kimi_stale_tool_fields", src)
+
+    def test_session_status_emits_kimi_stale_fields(self):
+        """session_live_status must emit stale fields for kimi so the pane's
+        stuck card and the sidebar-row mirror pick them up."""
+        import inspect as _inspect
+        server = importlib.import_module("server")
+        src = _inspect.getsource(server.session_live_status)
+        self.assertIn("_kimi_stale_tool_fields", src)
+
+
 class TestServerImports(unittest.TestCase):
+    def test_codex_sidebar_rows_expose_thread_source_for_provenance(self):
+        import inspect as _inspect
+        server = importlib.import_module("server")
+
+        src = _inspect.getsource(server.find_codex_conversations)
+        self.assertIn('"thread_source": row.get("thread_source") or ""', src)
+        self.assertIn("thread_source", server._ARCHIVE_LIST_FIELDS)
+        self.assertGreaterEqual(server._ARCHIVE_RESPONSE_CACHE_SCHEMA_VERSION, 6)
+
+    def test_sidebar_rows_render_session_provenance(self):
+        app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
+        app_css = pathlib.Path(PROJECT_ROOT, "static", "app.css").read_text(encoding="utf-8")
+
+        self.assertIn("const _sessionProvenanceChipHtml = (c) => {", app_js)
+        self.assertIn("Spawned by ", app_js)
+        self.assertIn("Started by CCC; no parent session recorded", app_js)
+        self.assertGreaterEqual(
+            app_js.count("thread_source: c.thread_source || ''"),
+            2,
+            "Every archive-row shaping branch must preserve thread provenance.",
+        )
+        self.assertIn("const sessionProvenanceChipHtml = _sessionProvenanceChipHtml(c);", app_js)
+        self.assertIn("+ sessionProvenanceChipHtml", app_js)
+        self.assertIn(".conv-session-origin-chip {", app_css)
+
     def test_codex_agent_task_labels_humanize_cleartext_paths(self):
         server = importlib.import_module("server")
         self.assertEqual(
@@ -84,6 +323,140 @@ class TestServerImports(unittest.TestCase):
         self.assertIsInstance(server.__version__, str)
         self.assertRegex(server.__version__, r"^\d+\.\d+\.\d+")
 
+    def test_opencode_engine_surfaces_exist(self):
+        """OpenCode engine must be wired for resolve, spawn, resume, is_,
+        discovery and parse. Uses mocks so it works even without the opencode
+        binary."""
+        for mod in ("server", "morning", "morning_store"):
+            sys.modules.pop(mod, None)
+        server = importlib.import_module("server")
+        self.assertTrue(hasattr(server, "_resolve_opencode_bin"))
+        self.assertTrue(hasattr(server, "spawn_session_opencode"))
+        self.assertTrue(hasattr(server, "_is_opencode_session"))
+        self.assertTrue(hasattr(server, "find_opencode_conversations"))
+        self.assertTrue(hasattr(server, "_parse_opencode_conversation"))
+        self.assertTrue(hasattr(server, "resume_session_opencode"))
+
+        # resolve shape (no real opencode needed)
+        with mock.patch.object(server.shutil, "which", return_value=None):
+            with mock.patch.object(server.Path, "home", return_value=server.Path("/tmp/fakehome")):
+                info = server._resolve_opencode_bin()
+                self.assertIsInstance(info, dict)
+                self.assertIn("available", info)
+                self.assertIsInstance(info["available"], bool)
+                self.assertFalse(info["available"])  # no binary in the fake env
+
+        # is_opencode on a spawned entry
+        server._spawned_sessions[:] = []  # reset for test
+        server._spawned_sessions.append({"engine": "opencode", "session_id": "test-osid-123", "name": "osid"})
+        self.assertTrue(server._is_opencode_session("test-osid-123"))
+        self.assertFalse(server._is_opencode_session("not-an-opencode-id"))
+        server._spawned_sessions[:] = []
+
+        # route wiring (mirrors the kimi/kilo route assertions)
+        server_py = pathlib.Path(PROJECT_ROOT, "server.py").read_text(encoding="utf-8")
+        self.assertIn('"/api/sessions/spawn-opencode"', server_py)
+        self.assertIn('"/api/sessions/spawn-opencode/availability"', server_py)
+        self.assertIn("if _is_opencode_session(session_id):", server_py)
+
+        # follow-up steering lives in the adapter (mirrors the hermes resume)
+        opencode_py = pathlib.Path(PROJECT_ROOT, "ccc_server", "opencode.py").read_text(encoding="utf-8")
+        self.assertIn("opencode-resume", opencode_py)
+
+    def test_devin_engine_surfaces_exist(self):
+        """Devin engine must be wired for cloud (read-only) and local CLI
+        (spawnable) surfaces. Works without an API key, network, or the
+        devin binary."""
+        for mod in ("server", "morning", "morning_store"):
+            sys.modules.pop(mod, None)
+        server = importlib.import_module("server")
+        # Cloud adapter (existing)
+        self.assertTrue(hasattr(server, "_is_devin_session"))
+        self.assertTrue(hasattr(server, "find_devin_conversations"))
+        self.assertTrue(hasattr(server, "_parse_devin_conversation"))
+        self.assertTrue(hasattr(server, "_devin_available"))
+        # Local CLI adapter (new)
+        self.assertTrue(hasattr(server, "_is_devin_cli_session"))
+        self.assertTrue(hasattr(server, "find_devin_cli_conversations"))
+        self.assertTrue(hasattr(server, "_parse_devin_cli_conversation"))
+        self.assertTrue(hasattr(server, "_resolve_devin_bin"))
+        self.assertTrue(hasattr(server, "spawn_session_devin"))
+        self.assertTrue(hasattr(server, "resume_session_devin"))
+
+        # is_devin (cloud) is a pure prefix probe (never touches the network)
+        self.assertTrue(server._is_devin_session("devin-abc123"))
+        self.assertFalse(server._is_devin_session("abc123"))
+        # is_devin_cli is a pure prefix probe (never touches the DB)
+        self.assertTrue(server._is_devin_cli_session("devincli-real-ninja"))
+        self.assertFalse(server._is_devin_cli_session("devin-abc123"))
+        self.assertFalse(server._is_devin_cli_session("abc123"))
+
+        # no API key → empty cloud results, no exception, no network
+        with mock.patch.dict(os.environ, {"DEVIN_API_KEY": "", "CCC_DEVIN_API_KEY": ""}):
+            self.assertEqual(server.find_devin_conversations(), [])
+            self.assertEqual(
+                server._parse_devin_conversation("devin-abc123"),
+                {"events": [], "last_line": 0},
+            )
+            self.assertEqual(server._devin_available(), (False, ""))
+
+        # devin is now a spawnable engine
+        self.assertIn("devin", server._ORCHESTRATION_SPAWN_ENGINES)
+        self.assertEqual(server._normalize_orchestration_spawn_engine("devin"), "devin")
+        self.assertEqual(server._normalize_orchestration_spawn_engine("devin-cli"), "devin")
+
+        # route/dispatch wiring
+        server_py = pathlib.Path(PROJECT_ROOT, "server.py").read_text(encoding="utf-8")
+        self.assertIn('_adopt_ccc_module("devin")', server_py)
+        self.assertIn("if _is_devin_session(session_id):", server_py)
+        self.assertIn("if _is_devin_cli_session(session_id):", server_py)
+        self.assertIn("find_devin_conversations(", server_py)
+        self.assertIn("find_devin_cli_conversations(", server_py)
+        self.assertIn("result = _parse_devin_conversation(conversation_id", server_py)
+        self.assertIn("_parse_devin_cli_conversation(conversation_id", server_py)
+        self.assertIn("def spawn_session_devin(", server_py)
+        self.assertIn("def resume_session_devin(", server_py)
+        self.assertIn('"/api/sessions/spawn-devin/availability"', server_py)
+
+        app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
+        self.assertIn("function isSpawnLogPlaceholderSource(", app_js)
+        self.assertIn("source === 'devin'", app_js)
+        self.assertIn("source === 'devin-cli'", app_js)
+
+        # adapter markers: v1 API base, bearer env key, cache file, CLI DB
+        devin_py = pathlib.Path(PROJECT_ROOT, "ccc_server", "devin.py").read_text(encoding="utf-8")
+        self.assertIn("https://api.devin.ai/v1", devin_py)
+        self.assertIn("DEVIN_API_KEY", devin_py)
+        self.assertIn("devin_sessions_cache.json", devin_py)
+        self.assertIn("def find_devin_conversations(", devin_py)
+        self.assertIn("def _parse_devin_conversation(", devin_py)
+        # Local CLI adapter markers
+        self.assertIn("def _resolve_devin_bin(", devin_py)
+        self.assertIn("def find_devin_cli_conversations(", devin_py)
+        self.assertIn("def _parse_devin_cli_conversation(", devin_py)
+        self.assertIn("DEVIN_CLI_SESSION_PREFIX", devin_py)
+        self.assertIn("sessions.db", devin_py)
+
+    def test_repo_kind_classifier(self):
+        """Production vs dev/test classification respects explicit overrides
+        and common path-name heuristics."""
+        server = importlib.import_module("server")
+        with tempfile.TemporaryDirectory() as td:
+            prod = pathlib.Path(td, "my-app")
+            prod.mkdir()
+            self.assertEqual(server._repo_kind_for_path(str(prod)), "production")
+
+            test_repo = pathlib.Path(td, "my-app-test")
+            test_repo.mkdir()
+            self.assertEqual(server._repo_kind_for_path(str(test_repo)), "dev_test")
+
+            sandbox = pathlib.Path(td, "sandbox")
+            sandbox.mkdir()
+            override = sandbox / ".ccc" / "project-type"
+            override.parent.mkdir(parents=True)
+            override.write_text("production\n")
+            self.assertEqual(server._repo_kind_for_path(str(sandbox)), "production")
+
     def test_import_doc_parser_and_path_clamp(self):
         """Plan-to-fleet (W51): the `wt import` stdout parser and the doc-path
         clamp behave, and neither hard-depends on Watchtower being installed."""
@@ -99,6 +472,26 @@ class TestServerImports(unittest.TestCase):
         self.assertEqual(tickets[0]["title"], "Add a queue import")
         self.assertEqual(tickets[0]["source_ref"], "L12-L24")
         self.assertEqual(tickets[1]["status"], "exists")
+        # W43 actually emits the anchor and the dependency edge as indented
+        # continuation lines, not inline parens. Both shapes must parse.
+        real, real_counts = server._parse_wt_import_output(
+            "WOULD FILE: [feature] Audit existing content tooling\n"
+            "  source: /tmp/plan.md#L8-L12\n"
+            "  depends_on: none\n"
+            "  Imported from: /tmp/plan.md#L8-L12\n"
+            "  \n"
+            "  Before writing any new code, audit each tool.\n"
+            "WOULD FILE: [feature] Build the CLI\n"
+            "  source: /tmp/plan.md#L14-L29\n"
+            "  depends_on: Audit existing content tooling\n"
+            "IMPORT dry-run: candidates=2 new=2 existing=0; pass --apply to file\n"
+        )
+        self.assertEqual(real_counts, {"candidates": 2, "new": 2, "existing": 0})
+        self.assertEqual(real[0]["title"], "Audit existing content tooling")
+        self.assertEqual(real[0]["source_ref"], "/tmp/plan.md#L8-L12")
+        self.assertNotIn("depends_on", real[0])  # "none" is dropped
+        self.assertEqual(real[1]["source_ref"], "/tmp/plan.md#L14-L29")
+        self.assertEqual(real[1]["depends_on"], "Audit existing content tooling")
         # apply-mode FILED lines carry the assigned ref.
         filed, _ = server._parse_wt_import_output("FILED: WT-42  Ship the thing\n")
         self.assertEqual(filed[0]["ref"], "WT-42")
@@ -133,6 +526,7 @@ class TestServerImports(unittest.TestCase):
             server._session_cwd_cache.pop(agent_sid, None)
             try:
                 with mock.patch.object(server, "session_live_status", return_value={"live": False}), \
+                     mock.patch.object(server, "_control_plane_engine_call", return_value=None), \
                      mock.patch.object(server, "resume_session_headless", return_value={"ok": True}) as resume:
                     result = server._inject_text_into_session(agent_sid, "follow up")
                 self.assertTrue(result["ok"])
@@ -235,7 +629,7 @@ class TestServerImports(unittest.TestCase):
             "queue": "THROUGHPUT",
             "session_id": sid,
             "alive": True,
-        }]), mock.patch.object(server._q, "list_items", return_value=items):
+        }]), mock.patch.object(server, "_wt_list_items_display_cached", return_value=items):
             server._apply_watchtower_worker_display_names(rows)
 
         self.assertEqual(
@@ -264,7 +658,7 @@ class TestServerImports(unittest.TestCase):
             "queue": "CCC",
             "session_id": sid,
             "alive": True,
-        }]), mock.patch.object(server._q, "list_items", return_value=[]):
+        }]), mock.patch.object(server, "_wt_list_items_display_cached", return_value=[]):
             server._apply_watchtower_worker_display_names(rows)
 
         self.assertEqual(rows[0]["display_name"], "CCC worker")
@@ -293,7 +687,7 @@ class TestServerImports(unittest.TestCase):
         }]
 
         with mock.patch.object(server, "_wt_read_workers", return_value=[]), \
-                mock.patch.object(server._q, "list_items", return_value=items):
+                mock.patch.object(server, "_wt_list_items_display_cached", return_value=items):
             server._apply_watchtower_worker_display_names(rows)
 
         self.assertEqual(
@@ -315,6 +709,110 @@ class TestServerImports(unittest.TestCase):
             server_py[fn_start:fn_end],
             "find_all_conversations must apply the WT display-name overlay before returning",
         )
+
+    def test_parallel_tail_meta_prewarm_matches_serial_and_can_be_disabled(self):
+        """The cold-scan process pool must produce byte-identical meta.
+
+        A cold archive scan (first run, or any _CONV_META_SCHEMA_VERSION bump
+        that drops the disk cache) re-parses every transcript. The pool is
+        only safe if a pooled parse is indistinguishable from a serial one,
+        and only acceptable if it can be turned off in one env var.
+        """
+        for mod in ("server", "morning", "morning_store"):
+            sys.modules.pop(mod, None)
+        server = importlib.import_module("server")
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = pathlib.Path(tmp)
+            paths = []
+            for i in range(4):
+                p = root / f"sess{i}.jsonl"
+                p.write_text(
+                    '{"type":"user","timestamp":"2026-01-0%dT00:00:00Z",'
+                    '"message":{"role":"user","content":"hi %d"}}\n' % (i + 1, i)
+                    + '{"type":"custom-title","customTitle":"title-%d"}\n' % i
+                )
+                paths.append(p)
+
+            serial = {}
+            for p in paths:
+                serial[str(p)] = server._extract_tail_meta(p)
+                server._conv_meta_cache.pop(str(p), None)
+
+            # Below _TAIL_META_PREWARM_MIN the pool is deliberately skipped —
+            # spinning up workers for a handful of files is a loss.
+            self.assertEqual(
+                server._prewarm_conv_meta_parallel(paths), 0,
+                "tiny batches must not pay for a process pool",
+            )
+
+            old_min = server._TAIL_META_PREWARM_MIN
+            server._TAIL_META_PREWARM_MIN = 1
+            old_env = os.environ.get("CCC_ARCHIVE_PARALLEL")
+            try:
+                filled = server._prewarm_conv_meta_parallel(paths)
+                self.assertEqual(filled, len(paths))
+                for p in paths:
+                    self.assertEqual(
+                        server._conv_meta_cache.get(str(p)), serial[str(p)],
+                        f"pooled meta differs from serial for {p.name}",
+                    )
+                # Kill switch: one env var puts the cold scan back on the
+                # serial path without a code change.
+                os.environ["CCC_ARCHIVE_PARALLEL"] = "0"
+                self.assertEqual(server._tail_meta_prewarm_workers(), 0)
+                self.assertEqual(server._prewarm_conv_meta_parallel(paths), 0)
+            finally:
+                server._TAIL_META_PREWARM_MIN = old_min
+                if old_env is None:
+                    os.environ.pop("CCC_ARCHIVE_PARALLEL", None)
+                else:
+                    os.environ["CCC_ARCHIVE_PARALLEL"] = old_env
+                for p in paths:
+                    server._conv_meta_cache.pop(str(p), None)
+
+    def test_wt_display_items_cache_avoids_repeat_queue_fetches(self):
+        """The display overlay's ticket source must not hit `gh` per rebuild.
+
+        `_q.list_items()` can be GitHub-backed (four `gh` subprocess calls,
+        ~5s cold). The archive refresh runs in a short-lived subprocess, so
+        WatchTower's own 2s in-memory cache is always cold there and every
+        rebuild paid the full network cost. Assert the memo + disk snapshot
+        collapse repeat reads to a single fetch.
+        """
+        for mod in ("server", "morning", "morning_store"):
+            sys.modules.pop(mod, None)
+        server = importlib.import_module("server")
+        items = [{"project": "OPS", "ref": "OPS-1", "status": "in_progress"}]
+        calls = []
+
+        def fake_list_items(*a, **k):
+            calls.append(1)
+            return items
+
+        with tempfile.TemporaryDirectory() as tmp:
+            old_file = server._WT_ITEMS_SNAPSHOT_FILE
+            old_memo = dict(server._wt_items_memo)
+            server._WT_ITEMS_SNAPSHOT_FILE = pathlib.Path(tmp) / "wt_items.json"
+            server._wt_items_memo["at"] = 0.0
+            server._wt_items_memo["items"] = None
+            try:
+                with mock.patch.object(server._q, "list_items", fake_list_items):
+                    first = server._wt_list_items_display_cached()
+                    second = server._wt_list_items_display_cached()
+                    # Drop the process memo: the on-disk snapshot alone must
+                    # be enough, since the refresh worker is a fresh process.
+                    server._wt_items_memo["at"] = 0.0
+                    server._wt_items_memo["items"] = None
+                    third = server._wt_list_items_display_cached()
+                self.assertEqual(first, items)
+                self.assertEqual(second, items)
+                self.assertEqual(third, items)
+                self.assertEqual(len(calls), 1, "one real fetch, then cache")
+                self.assertTrue(server._WT_ITEMS_SNAPSHOT_FILE.is_file())
+            finally:
+                server._WT_ITEMS_SNAPSHOT_FILE = old_file
+                server._wt_items_memo.update(old_memo)
 
     def test_usage_pace_uses_ccc_calibration_and_week_override(self):
         """CCC owns weekly calibration/pace state without relying on legacy
@@ -525,6 +1023,69 @@ class TestServerImports(unittest.TestCase):
                 server._USAGE_SNAPSHOTS_FILE = old_snapshot_file
                 server._codex_usage_file_cache.clear()
 
+    def test_kimi_usage_persists_snapshot_and_surfaces_in_usage_current(self):
+        """Kimi /usages data is stored additively in native usage snapshots
+        and surfaces in /api/usage/current next to the Codex block."""
+        for mod in ("server", "morning", "morning_store"):
+            sys.modules.pop(mod, None)
+        server = importlib.import_module("server")
+
+        with tempfile.TemporaryDirectory() as tmp:
+            old_snapshot_file = server._USAGE_SNAPSHOTS_FILE
+            try:
+                server._USAGE_SNAPSHOTS_FILE = pathlib.Path(tmp) / "usage-snapshots.jsonl"
+                kimi = server._kimi_usage_from_response({
+                    "user": {"membership": {"level": "LEVEL_ADVANCED"}},
+                    "usage": {
+                        "limit": "100",
+                        "used": "15",
+                        "remaining": "85",
+                        "resetTime": "2026-07-28T13:52:21.141644Z",
+                    },
+                    "limits": [{
+                        "window": {"duration": 300, "timeUnit": "TIME_UNIT_MINUTE"},
+                        "detail": {
+                            "limit": "100",
+                            "remaining": "60",
+                            "resetTime": "2026-07-21T05:20:00Z",
+                        },
+                    }],
+                }, now_epoch=1_783_011_600)
+                self.assertEqual(kimi["plan_type"], "Advanced")
+                self.assertEqual(kimi["weekly"]["pct"], 15.0)
+                self.assertEqual(kimi["weekly"]["window_minutes"], 10080)
+                self.assertEqual(kimi["session"]["pct"], 40.0)
+                self.assertEqual(kimi["session"]["window_minutes"], 300)
+
+                snap = server._native_usage_snapshot_from_plan_usage(
+                    {"ok": True, "usage": {"five_hour": {}, "seven_day": {}, "seven_day_sonnet": {}}},
+                    kimi=kimi,
+                    now_epoch=1_783_011_600,
+                )
+                self.assertEqual(snap["kimi"]["weekly"]["pct"], 15.0)
+                self.assertTrue(server._append_native_usage_snapshot(snap, now_epoch=1_783_011_600))
+                current = server.usage_current_payload(now_epoch=1_783_011_600)
+                self.assertTrue(current["ok"])
+                self.assertEqual(current["kimi"]["weekly"]["pct"], 15.0)
+                self.assertEqual(current["kimi"]["session"]["pct"], 40.0)
+                self.assertEqual(current["kimi"]["plan_type"], "Advanced")
+                pace = server.kimi_usage_pace_payload(kimi=kimi, now_epoch=1_783_011_600)
+                self.assertTrue(pace["ok"])
+                self.assertEqual(pace["weekly_pct"], 15.0)
+                prev = {"ts": "2026-07-02T15:55:00Z", "kimi": {
+                    "session": {"pct": 30.0, "resets_at": "2026-07-02T20:00:00Z"},
+                    "weekly": {"pct": 40.0, "resets_at": "2026-07-09T07:00:00Z"},
+                }}
+                curr = {"ts": "2026-07-02T16:00:00Z", "kimi": {
+                    "session": {"pct": 2.0, "resets_at": "2026-07-02T20:00:00Z"},
+                    "weekly": {"pct": 39.0, "resets_at": "2026-07-10T07:00:00Z"},
+                }}
+                events = server._detect_usage_reset_events(prev, curr, now_epoch=1_783_008_000)
+                self.assertIn(("kimi_five_hour", "unscheduled"), {(e["window"], e["kind"]) for e in events})
+                self.assertIn(("kimi_weekly", "scheduled"), {(e["window"], e["kind"]) for e in events})
+            finally:
+                server._USAGE_SNAPSHOTS_FILE = old_snapshot_file
+
     def test_codex_usage_pace_rejects_stale_persisted_snapshot(self):
         """The weekly meter must not present an old Codex rollout as current."""
         for mod in ("server", "morning", "morning_store"):
@@ -687,6 +1248,15 @@ class TestServerImports(unittest.TestCase):
         self.assertIn("const chipCached = Number(ev.tokens_cached || (ev.token_usage && (ev.token_usage.cache_read_input_tokens || ev.token_usage.cached_input_tokens)) || 0);", app_js)
         self.assertIn("_formatAntigravityTokenChips(ev.tokens_in, ev.tokens_out, ev.tokens_thinking, chipCached)", app_js)
         self.assertIn("Cached input:    ' + chipCached.toLocaleString() + ' tokens", app_js)
+
+    def test_antigravity_turn_token_chips_call_out_uncached_input(self):
+        """A partial cache read must visibly say how much input missed cache."""
+        app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
+        app_css = pathlib.Path(PROJECT_ROOT, "static", "app.css").read_text(encoding="utf-8")
+        self.assertIn("function _cacheMissCallout(tIn, tCached)", app_js)
+        self.assertIn("CACHE MISS", app_js)
+        self.assertIn("event-token-chips cache-miss", app_js)
+        self.assertIn(".event-token-chips.cache-miss", app_css)
 
     def test_system_health_gui_app_contract(self):
         """GUI app-server engines are visible but never reapable. Their only
@@ -914,6 +1484,16 @@ class TestServerImports(unittest.TestCase):
         self.assertIn('<span aria-hidden="true">&#9654;</span>', panel_html)
         self.assertNotIn('>Live</button>', panel_html)
 
+    def test_car_mode_is_available_from_settings_not_the_session_toolbar(self):
+        """Car Mode belongs in Settings rather than the everyday session controls."""
+        index_html = pathlib.Path(PROJECT_ROOT, "static", "index.html").read_text(encoding="utf-8")
+        app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
+
+        self.assertNotIn('id="sidebarCarModeBtn"', index_html)
+        self.assertIn('id="carModeMenuBtn"', index_html)
+        self.assertNotIn('sidebarCarModeBtn', app_js)
+        self.assertIn('carModeMenuBtn', app_js)
+
     def test_new_session_folder_shortcuts_are_labeled(self):
         """The folder dropdown and recent chips both set the same spawn CWD.
 
@@ -926,13 +1506,15 @@ class TestServerImports(unittest.TestCase):
 
         self.assertIn('placeholder="Pick or type a folder path"', index_html)
         self.assertIn('aria-label="Recent folder shortcuts"', index_html)
-        self.assertIn("spawn-cwd-chip-label", app_js)
-        self.assertIn("Recent folders", app_js)
+        self.assertIn("spawn-cwd-chip-group-label", app_js)
+        self.assertIn("Production", app_js)
+        self.assertIn("Dev & test", app_js)
         self.assertIn("id=\"nsRepoSuggestions\"", app_js)
         self.assertIn("function renderNewSessionRepoSuggestions", app_js)
         self.assertIn("for (const opt of (spawnCwdOptions || []))", app_js)
         self.assertIn("Show all folder suggestions", index_html)
         self.assertIn(".spawn-cwd-chip-label", app_css)
+        self.assertIn(".spawn-cwd-chip-group-label", app_css)
         self.assertIn(".ns-repo-suggestions", app_css)
 
     def test_new_session_stage_demotes_center_card_and_expands_composer(self):
@@ -1052,12 +1634,16 @@ class TestServerImports(unittest.TestCase):
         # All shows active and archived rows in its main flow. Only rows with
         # the explicit trashed state belong in the bottom Trash bucket; pin and
         # lane placement never change lifecycle membership.
-        all_start = app_js.index("const _allTabConvs = ")
+        all_start = app_js.index("const _allTabUnfilteredConvs = ")
         all_block = app_js[all_start:app_js.index("const _arcHasFolderChips", all_start)]
-        self.assertIn("_sessionConvs.concat(_openAskConvs, _readyToMergeConvs, _mainArchivedConvs)", all_block)
+        self.assertIn("const _allTabUnfilteredConvs = _sessionConvs.concat(", all_block)
+        self.assertIn("_openAskConvs,", all_block)
+        self.assertIn("_readyToMergeConvs,", all_block)
+        self.assertIn("_mainArchivedConvs,", all_block)
+        self.assertIn("const _allTabConvs = _allTabUnfilteredConvs.filter(", all_block)
         self.assertIn("const _trashConvs = _archivedConvs.filter(c => !!c.trashed);", app_js)
         self.assertIn("const _mainArchivedConvs = _archivedConvs.filter(c => !c.trashed);", app_js)
-        self.assertIn("const _arcHasFolderChips = _allTabMainConvs.concat(_trashConvs).some(c => c.folder_label_chip);", app_js)
+        self.assertIn("const _arcHasFolderChips = _allTabMainConvs.concat(_allTabTrashConvs).some(c => c.folder_label_chip);", app_js)
         self.assertIn("const _allTabClusters = _allTabRowsToClusters(_allTabTreeRows);", app_js)
         self.assertIn("for (const cluster of _allTabClusters)", app_js)
         self.assertIn('data-role="trash-section"', app_js)
@@ -1107,8 +1693,8 @@ class TestServerImports(unittest.TestCase):
 
     def test_sidebar_all_tab_splits_hermes_workers_from_messages(self):
         """When Hermes rows exist, All should expose Coding, Workers, and
-        Messages lanes so plain WhatsApp/router conversations do not bury
-        agentic Hermes work."""
+        Messages, and Group chats lanes so plain WhatsApp/router conversations
+        and cross-repo chats do not bury agentic Hermes work."""
         app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
         app_css = pathlib.Path(PROJECT_ROOT, "static", "app.css").read_text(encoding="utf-8")
 
@@ -1121,14 +1707,22 @@ class TestServerImports(unittest.TestCase):
         self.assertIn("const _allTabLaneFor = (c, seen = new Set()) =>", app_js)
         self.assertIn("const _allTabCodingConvs = _allTabConvs.filter(c => _allTabLaneFor(c) === 'coding');", app_js)
         self.assertIn("const _allTabWorkerConvs = _allTabConvs.filter(c => _allTabLaneFor(c) === 'workers');", app_js)
+        self.assertIn("const _allTabGroupChatView = _savedAllTabView === 'group-chats' ? 'group-chats' : _savedAllTabView;", app_js)
+        self.assertIn('data-all-hermes-tab="group-chats"', app_js)
+        self.assertIn("'Group chats<span class=\"conv-tab-count\">'", app_js)
+        self.assertIn("const _allTabGroupChatCount = _allTabGroupChatItems.length + _archivedGroupChatsForRender.length;", app_js)
+        self.assertIn("const _trashHtmlForAllTabView = _allTabView === 'group-chats' ? '' : _trashHtml;", app_js)
         self.assertIn("const _savedAllTabView = (() => {", app_js)
-        self.assertIn("|| _allTabWorkerConvs.length > 0", app_js)
-        self.assertIn("|| _allTabHermesMessageConvs.length > 0", app_js)
-        self.assertIn("|| _savedAllTabView !== 'coding';", app_js)
+        self.assertIn("const _allTabUnfilteredLanes = new Set(", app_js)
+        self.assertIn("|| _allTabUnfilteredLanes.has('workers')", app_js)
+        self.assertIn("|| _allTabUnfilteredLanes.has('messages')", app_js)
+        self.assertIn("const _allTabHasHermesSplit = (", app_js)
+        self.assertIn("|| _savedAllTabView !== 'coding'\n    );", app_js)
         self.assertIn("data-role=\"all-hermes-tabs\"", app_js)
         self.assertIn("data-all-hermes-tab=\"coding\"", app_js)
         self.assertIn("data-all-hermes-tab=\"workers\"", app_js)
         self.assertIn("data-all-hermes-tab=\"messages\"", app_js)
+        self.assertIn("data-all-hermes-tab=\"group-chats\"", app_js)
         self.assertIn("localStorage.setItem('ccc-all-hermes-tab', value)", app_js)
         self.assertIn("/all-lane", app_js)
         self.assertIn(".conv-all-hermes-tabs", app_css)
@@ -1217,12 +1811,14 @@ class TestServerImports(unittest.TestCase):
 
         self.assertIn("const OPEN_ASK_RECENT_S = 48 * 3600;", app_js)
         self.assertIn("function isRecentOpenAskRow(c, nowSec = Math.floor(Date.now() / 1000)) {", app_js)
-        self.assertIn("archiveRows.filter(c => _archiveWindowAllowsRow(c, _arcWindowCutoff) || isRecentOpenAskRow(c))", app_js)
+        self.assertIn("|| isRecentOpenAskRow(c) || _rowHasApprovalAsk(c))", app_js)
         self.assertIn("const _isRecentOpenAsk = (c) =>", action_partition)
+        self.assertIn("const _isApprovalAsk = (c) =>", action_partition)
         self.assertIn("const _openAskHasStableParent = (c, seen = new Set()) => {", action_partition)
         self.assertIn("const parent = _actionSessionById.get(parentId);", action_partition)
         self.assertIn("if (!_isRecentOpenAsk(parent)) return true;", action_partition)
-        self.assertIn("if (_isRecentOpenAsk(_c) && !_openAskHasStableParent(_c)) {", action_partition)
+        self.assertIn("if (_isApprovalAsk(_c)", action_partition)
+        self.assertIn("|| (_isRecentOpenAsk(_c) && !_openAskHasStableParent(_c))) {", action_partition)
         self.assertIn("state: c.state || '',", app_js)
         self.assertIn("ended_blocked: !!c.ended_blocked,", app_js)
 
@@ -2027,6 +2623,14 @@ class TestServerImports(unittest.TestCase):
         self.assertNotIn(".conv-current-sessions-scroll:not(.is-search-results) .conv-item[data-hb]", current_css)
         self.assertNotIn(".conv-current-sessions-scroll:not(.is-search-results) .conv-item:hover:not(.active) > .conv-outcome", current_css)
         self.assertNotIn(".conv-current-sessions-scroll:not(.is-search-results) .conv-item:focus-within:not(.active) > .conv-outcome", current_css)
+
+    def test_current_sessions_gap_divider_is_visually_distinct(self):
+        """A long inactivity gap should read as a new keyboard work session."""
+        app_css = pathlib.Path(PROJECT_ROOT, "static", "app.css").read_text(encoding="utf-8")
+
+        current_css = app_css[app_css.index(".conv-current-sessions-scroll {"):app_css.index("/* ===========================================================", app_css.index(".conv-current-sessions-scroll {"))]
+        self.assertIn(".conv-current-sessions-scroll .conv-gap-separator {", current_css)
+        self.assertIn("border-top: 1px solid color-mix(in srgb, var(--border) 78%, var(--text-muted));", current_css)
         self.assertNotIn(".conv-current-sessions-scroll:not(.is-search-results) .conv-item:hover > :not(.conv-title-row),\n  .conv-current-sessions-scroll:not(.is-search-results) .conv-item:focus-within > :not(.conv-title-row),\n  .conv-current-sessions-scroll:not(.is-search-results) .conv-item.active > :not(.conv-title-row) { display: none; }", current_css)
 
     def test_by_objects_current_sessions_nest_parented_sessions(self):
@@ -2310,7 +2914,7 @@ class TestServerImports(unittest.TestCase):
         self.assertIn("const rowSizeHtml = '';", app_js)
         self.assertNotIn("+ '<span>' + formatSize(c.size) + '</span>'", app_js)
         self.assertIn("const _hmObjectChip = opts.elevateToObject ? '' : objectChipHtml;", app_js)
-        self.assertIn("const _hasMetaContent = !opts.evergreenAgent && (_hmObjectChip || _hmFolderChip || sessionIdChipHtml || goalMetaHtml || pinnedHtml || rowSizeHtml || branchSlotHtml || _hasBrief);", app_js)
+        self.assertIn("const _hasMetaContent = !opts.evergreenAgent && (_hmObjectChip || _hmFolderChip || sessionProvenanceChipHtml || sessionIdChipHtml || goalMetaHtml || pinnedHtml || rowSizeHtml || branchSlotHtml || _hasBrief);", app_js)
         self.assertIn("const hoverMetaRowHtml = _hasMetaContent", app_js)
         self.assertIn("'<div class=\"conv-hover-meta-row\">'", app_js)
         self.assertIn("+ _briefChevronHtml", app_js)
@@ -2360,7 +2964,7 @@ class TestServerImports(unittest.TestCase):
         self.assertIn("data-copy-row-session-id", app_js)
         self.assertIn("data-session-id-short", app_js)
         self.assertIn("const sessionIdChipHtml = sidebarSessionIdChipHtml(c);", app_js)
-        self.assertIn("_hmObjectChip || _hmFolderChip || sessionIdChipHtml", app_js)
+        self.assertIn("_hmObjectChip || _hmFolderChip || sessionProvenanceChipHtml || sessionIdChipHtml", app_js)
         self.assertIn("+ sessionIdChipHtml", app_js)
         self.assertIn("function handleSidebarSessionIdCopyClick(ev)", app_js)
         self.assertIn("document.addEventListener('click', handleSidebarSessionIdCopyClick, true);", app_js)
@@ -2376,7 +2980,7 @@ class TestServerImports(unittest.TestCase):
         self.assertIn("function flowObjectForConversation(c)", app_js)
         self.assertIn("function flowObjectChipHtml(c)", app_js)
         self.assertIn("const objectChipHtml = flowObjectChipHtml(c);", app_js)
-        self.assertIn("_hmObjectChip || _hmFolderChip || sessionIdChipHtml", app_js)
+        self.assertIn("_hmObjectChip || _hmFolderChip || sessionProvenanceChipHtml || sessionIdChipHtml", app_js)
         self.assertIn("+ _hmObjectChip\n          + _hmFolderChip", app_js)
         self.assertIn("Object &middot; ", app_js)
         self.assertIn(".conv-item .conv-hover-meta-row .conv-object-chip", app_css)
@@ -2451,7 +3055,8 @@ class TestServerImports(unittest.TestCase):
         """The COO activity badge should explain what creates the status."""
         app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
 
-        self.assertIn("const _displayLabel = 'COO · ' + _label;", app_js)
+        self.assertIn("escapeHtml('COO · ' + _cs)", app_js)
+        self.assertIn("<span class=\"coo-status-age\">", app_js)
         self.assertIn("COO status from Command Center's COO tracker", app_js)
         self.assertIn("aria-label=\"' + escapeAttr(_cooStatusTip) + '\"", app_js)
 
@@ -2627,6 +3232,92 @@ class TestServerImports(unittest.TestCase):
             finally:
                 server.SPAWN_DEFAULTS_FILE = old_file
 
+    def test_spawn_defaults_worker_model_round_trips_independently(self):
+        """Workers need their own model fallback, distinct from New session."""
+        for mod in ("server", "morning", "morning_store"):
+            sys.modules.pop(mod, None)
+        server = importlib.import_module("server")
+
+        with tempfile.TemporaryDirectory() as td:
+            old_file = server.SPAWN_DEFAULTS_FILE
+            server.SPAWN_DEFAULTS_FILE = pathlib.Path(td) / "spawn-defaults.json"
+            try:
+                defaults = server._load_spawn_defaults()
+                self.assertEqual(defaults["worker_model"], "")
+
+                saved = server._save_spawn_defaults({
+                    "worker_engine": "claude",
+                    "worker_model": "sonnet-4-8",
+                    "models": {"claude": "opus-5"},
+                })
+                self.assertTrue(saved["ok"])
+                self.assertEqual(saved["worker_model"], "sonnet-4-8")
+                self.assertEqual(saved["models"]["claude"], "opus-5")
+
+                defaults = server._load_spawn_defaults()
+                self.assertEqual(defaults["worker_model"], "sonnet-4-8")
+
+                # An ordinary New-session save must retain the worker choice.
+                saved = server._save_spawn_defaults({"engine": "codex"})
+                self.assertTrue(saved["ok"])
+                self.assertEqual(saved["worker_model"], "sonnet-4-8")
+            finally:
+                server.SPAWN_DEFAULTS_FILE = old_file
+
+    def test_spawn_defaults_worker_model_reuses_the_model_picker(self):
+        html = pathlib.Path(PROJECT_ROOT, "static", "index.html").read_text()
+        js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text()
+
+        self.assertIn('id="spawnDefaultsWorkerModel"', html)
+        self.assertIn('id="spawnDefaultsWorkerOtherModel"', html)
+        self.assertIn("function renderSpawnDefaultsWorkerModelInline()", js)
+        self.assertIn("modelOptionsForSpawnEngine(engine, currentModel, true)", js)
+        self.assertIn("worker_model: workerModel", js)
+
+    def test_spawn_defaults_worker_effort_is_independent_and_validated(self):
+        """WatchTower workers retain their own global effort default.
+
+        The ladder is the worker engine's own: Codex tops out at xhigh, Claude
+        goes to max, and a blank worker engine (WatchTower decides at dispatch)
+        is validated against the widest ladder rather than erased."""
+        for mod in ("server", "morning", "morning_store"):
+            sys.modules.pop(mod, None)
+        server = importlib.import_module("server")
+
+        with tempfile.TemporaryDirectory() as td:
+            old_file = server.SPAWN_DEFAULTS_FILE
+            server.SPAWN_DEFAULTS_FILE = pathlib.Path(td) / "spawn-defaults.json"
+            try:
+                defaults = server._load_spawn_defaults()
+                self.assertEqual(defaults["worker_reasoning_effort"], "")
+
+                saved = server._save_spawn_defaults({
+                    "reasoning_effort": "medium",
+                    "worker_reasoning_effort": "low",
+                })
+                self.assertTrue(saved["ok"])
+                self.assertEqual(saved["reasoning_effort"], "medium")
+                self.assertEqual(saved["worker_reasoning_effort"], "low")
+
+                saved = server._save_spawn_defaults({"engine": "claude"})
+                self.assertTrue(saved["ok"])
+                self.assertEqual(saved["worker_reasoning_effort"], "low")
+
+                saved = server._save_spawn_defaults({"worker_reasoning_effort": "max"})
+                self.assertTrue(saved["ok"])
+                self.assertEqual(saved["worker_reasoning_effort"], "max")
+
+                saved = server._save_spawn_defaults({"worker_engine": "codex"})
+                self.assertTrue(saved["ok"])
+                rejected = server._save_spawn_defaults({"worker_reasoning_effort": "max"})
+                self.assertFalse(rejected["ok"])
+                self.assertIn("codex", rejected["error"])
+
+                rejected = server._save_spawn_defaults({"worker_reasoning_effort": "turbo"})
+                self.assertFalse(rejected["ok"])
+            finally:
+                server.SPAWN_DEFAULTS_FILE = old_file
+
     def test_codex_spawn_default_prefers_best_model(self):
         for mod in ("server", "morning", "morning_store"):
             sys.modules.pop(mod, None)
@@ -2720,6 +3411,230 @@ class TestServerImports(unittest.TestCase):
         mini = next(m for m in payload["catalog"]["codex"]["models"] if m["id"] == "gpt-5.4-mini")
         self.assertIn("codex-cache", mini["sources"])
         self.assertEqual(mini["reasoning_efforts"], ["low"])
+
+    def test_anthropic_model_overview_parser_returns_exact_versioned_models(self):
+        for mod in ("server", "morning", "morning_store"):
+            sys.modules.pop(mod, None)
+        server = importlib.import_module("server")
+
+        overview = """
+### Latest models comparison
+
+| Feature | Claude Fable 5 | Claude Opus 5 | Claude Sonnet 5 | Claude Haiku 4.5 |
+|:--|:--|:--|:--|:--|
+| **Claude API alias** | `claude-fable-5` | `claude-opus-5` | `claude-sonnet-5` | `claude-haiku-4-5` |
+| **Context window** | 1M tokens | 1M tokens | 1M tokens | 200k tokens |
+
+### Previous models
+"""
+        records = server._parse_anthropic_model_overview(overview)
+
+        self.assertEqual(
+            [row["id"] for row in records],
+            ["fable-5", "opus-5", "sonnet-5", "haiku-4-5"],
+        )
+        self.assertEqual([row["oneM"] for row in records], [True, True, True, False])
+        self.assertTrue(all(row["source"] == "anthropic-models-overview" for row in records))
+
+    def test_claude_model_catalog_refresh_persists_authoritative_cache(self):
+        for mod in ("server", "morning", "morning_store"):
+            sys.modules.pop(mod, None)
+        server = importlib.import_module("server")
+
+        overview = b"""
+### Latest models comparison
+| Feature | Claude Opus 5 |
+|:--|:--|
+| **Claude API alias** | `claude-opus-5` |
+| **Context window** | 1M tokens |
+"""
+        response = mock.MagicMock()
+        response.__enter__.return_value = response
+        response.read.return_value = overview
+        with tempfile.TemporaryDirectory() as td:
+            old_file = server._CLAUDE_MODEL_CATALOG_FILE
+            server._CLAUDE_MODEL_CATALOG_FILE = pathlib.Path(td) / "claude-models.json"
+            try:
+                with mock.patch.object(server.urllib.request, "urlopen", return_value=response) as urlopen:
+                    refreshed = server._refresh_claude_model_catalog()
+                cached = server._load_claude_model_catalog_records()
+            finally:
+                server._CLAUDE_MODEL_CATALOG_FILE = old_file
+
+        self.assertTrue(refreshed["ok"])
+        self.assertEqual(cached[0]["id"], "opus-5")
+        self.assertEqual(cached[0]["source"], "anthropic-models-overview")
+        request = urlopen.call_args.args[0]
+        self.assertEqual(request.full_url, server._CLAUDE_MODELS_OVERVIEW_URL)
+
+    def test_claude_catalog_merges_remote_exact_models_without_cli_probe(self):
+        for mod in ("server", "morning", "morning_store"):
+            sys.modules.pop(mod, None)
+        server = importlib.import_module("server")
+
+        old_cache = dict(server._MODEL_CATALOG_CACHE)
+        try:
+            with mock.patch.object(server, "_load_claude_model_catalog_records", return_value=[
+                {
+                    "id": "opus-5",
+                    "label": "opus-5",
+                    "oneM": True,
+                    "source": "anthropic-models-overview",
+                },
+            ]), mock.patch.object(
+                server, "_harness_model_list_result", return_value={"available": False, "records": []}
+            ) as harness, mock.patch.object(
+                server, "_codex_models_cache_records", return_value=[]
+            ), mock.patch.object(
+                server, "_codex_configured_model", return_value=""
+            ), mock.patch.object(
+                server, "_antigravity_cli_configured_model", return_value=""
+            ):
+                payload = server._build_engine_model_catalog(force_refresh=True)
+        finally:
+            server._MODEL_CATALOG_CACHE.clear()
+            server._MODEL_CATALOG_CACHE.update(old_cache)
+
+        opus = next(row for row in payload["catalog"]["claude"]["models"] if row["id"] == "opus-5")
+        self.assertTrue(opus["oneM"])
+        self.assertIn("anthropic-models-overview", opus["sources"])
+        self.assertNotIn(mock.call("claude"), harness.call_args_list)
+
+    def test_claude_catalog_hides_rolling_aliases_and_deduplicates_exact_ids(self):
+        for mod in ("server", "morning", "morning_store"):
+            sys.modules.pop(mod, None)
+        server = importlib.import_module("server")
+
+        old_cache = dict(server._MODEL_CATALOG_CACHE)
+        observed = [
+            {"engine": "claude", "id": "opus", "label": "opus", "source": "session-override"},
+            {
+                "engine": "claude",
+                "id": "claude-opus-5",
+                "label": "claude-opus-5",
+                "source": "session-override",
+            },
+        ]
+        try:
+            with mock.patch.object(server, "_load_claude_model_catalog_records", return_value=[]), \
+                 mock.patch.object(server, "_observed_model_records", return_value=observed), \
+                 mock.patch.object(server, "_harness_model_list_result", return_value={"available": False, "records": []}), \
+                 mock.patch.object(server, "_codex_models_cache_records", return_value=[]), \
+                 mock.patch.object(server, "_codex_configured_model", return_value=""), \
+                 mock.patch.object(server, "_antigravity_cli_configured_model", return_value=""):
+                payload = server._build_engine_model_catalog(force_refresh=True)
+        finally:
+            server._MODEL_CATALOG_CACHE.clear()
+            server._MODEL_CATALOG_CACHE.update(old_cache)
+
+        ids = payload["engines"]["claude"]
+        self.assertNotIn("opus", ids)
+        self.assertNotIn("claude-opus-5", ids)
+        self.assertEqual(ids.count("opus-5"), 1)
+        opus = next(row for row in payload["catalog"]["claude"]["models"] if row["id"] == "opus-5")
+        self.assertIn("session-override", opus["sources"])
+
+    def test_engine_update_pass_runs_confirmed_noninteractive_command(self):
+        for mod in ("server", "morning", "morning_store"):
+            sys.modules.pop(mod, None)
+        server = importlib.import_module("server")
+
+        spec = {
+            "id": "claude",
+            "label": "Claude Code",
+            "resolver": lambda: {
+                "available": True,
+                "bin": "/tmp/test-claude",
+                "source": "candidate",
+            },
+            "args": ("update",),
+            "install": "curl -fsSL https://claude.ai/install.sh | bash",
+        }
+        completed = subprocess.CompletedProcess(
+            ["/tmp/test-claude", "update"], 0, stdout="Already up to date\n", stderr=""
+        )
+        with tempfile.TemporaryDirectory() as td:
+            old_state = server._ENGINE_UPDATE_STATE_FILE
+            old_lock = server._ENGINE_UPDATE_LOCK_FILE
+            server._ENGINE_UPDATE_STATE_FILE = pathlib.Path(td) / "engine-updates.json"
+            server._ENGINE_UPDATE_LOCK_FILE = pathlib.Path(td) / "engine-updates.lock"
+            try:
+                with mock.patch.object(server, "_engine_update_specs", return_value=[spec]), \
+                     mock.patch.object(server, "_engine_cli_version", side_effect=["2.1.218", "2.1.219"]), \
+                     mock.patch.object(server.subprocess, "run", return_value=completed) as run:
+                    status = server._run_engine_updates_once()
+            finally:
+                server._ENGINE_UPDATE_STATE_FILE = old_state
+                server._ENGINE_UPDATE_LOCK_FILE = old_lock
+
+        run.assert_called_once()
+        self.assertEqual(run.call_args.args[0], ["/tmp/test-claude", "update"])
+        self.assertIs(run.call_args.kwargs["stdin"], subprocess.DEVNULL)
+        self.assertEqual(status["engines"]["claude"]["status"], "updated")
+        self.assertEqual(status["engines"]["claude"]["version_before"], "2.1.218")
+        self.assertEqual(status["engines"]["claude"]["version_after"], "2.1.219")
+
+    def test_engine_update_pass_skips_bundle_managed_and_missing_clis(self):
+        for mod in ("server", "morning", "morning_store"):
+            sys.modules.pop(mod, None)
+        server = importlib.import_module("server")
+
+        specs = [
+            {
+                "id": "cursor",
+                "label": "Cursor Agent",
+                "resolver": lambda: {
+                    "available": True,
+                    "bin": "/Applications/Cursor.app/cursor-agent",
+                    "source": "bundle",
+                },
+                "args": ("update",),
+                "install": "Install Cursor Agent",
+            },
+            {
+                "id": "hermes",
+                "label": "Hermes",
+                "resolver": lambda: {"available": False, "bin": None, "reason": "not installed"},
+                "args": ("update", "--yes"),
+                "install": "Install Hermes",
+            },
+        ]
+        with tempfile.TemporaryDirectory() as td:
+            old_state = server._ENGINE_UPDATE_STATE_FILE
+            old_lock = server._ENGINE_UPDATE_LOCK_FILE
+            server._ENGINE_UPDATE_STATE_FILE = pathlib.Path(td) / "engine-updates.json"
+            server._ENGINE_UPDATE_LOCK_FILE = pathlib.Path(td) / "engine-updates.lock"
+            try:
+                with mock.patch.object(server, "_engine_update_specs", return_value=specs), \
+                     mock.patch.object(server.subprocess, "run") as run:
+                    status = server._run_engine_updates_once()
+            finally:
+                server._ENGINE_UPDATE_STATE_FILE = old_state
+                server._ENGINE_UPDATE_LOCK_FILE = old_lock
+
+        run.assert_not_called()
+        self.assertEqual(status["engines"]["cursor"]["status"], "managed")
+        self.assertEqual(status["engines"]["hermes"]["status"], "missing")
+        self.assertIn("Install Hermes", status["engines"]["hermes"]["install"])
+
+    def test_engine_maintenance_refreshes_models_before_slow_cli_updates(self):
+        for mod in ("server", "morning", "morning_store"):
+            sys.modules.pop(mod, None)
+        server = importlib.import_module("server")
+
+        order = []
+        with mock.patch.object(
+            server,
+            "_refresh_claude_model_catalog",
+            side_effect=lambda: order.append("catalog") or {"ok": True},
+        ), mock.patch.object(
+            server,
+            "_run_engine_updates_once",
+            side_effect=lambda: order.append("updates") or {"ok": True},
+        ):
+            server._engine_maintenance_once()
+
+        self.assertEqual(order, ["catalog", "updates"])
 
     def test_observed_model_records_keep_each_cached_transcript_engine(self):
         """Transcript-derived models must not leak into Claude's picker."""
@@ -2827,6 +3742,9 @@ class TestServerImports(unittest.TestCase):
         app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text()
 
         self.assertIn("fetch('/api/engines/models'", app_js)
+        self.assertIn("{ id: 'opus-5'", app_js)
+        self.assertIn("_gated('modelCatalog', loadEngineModelCatalog)", app_js)
+        self.assertIn("setInterval(refreshEngineModelCatalog", app_js)
         self.assertIn("function _modelAllowedForEngine", app_js)
         self.assertIn("gpt-5.6-sol", app_js)
         self.assertIn("gpt-5.6-terra", app_js)
@@ -2835,6 +3753,18 @@ class TestServerImports(unittest.TestCase):
         self.assertIn("_modelUnavailableReason", app_js)
         self.assertIn("if (_engineSupportsCustomModel(engine))", app_js)
         self.assertIn("ENGINE_SUPPORTS_CUSTOM_MODEL[engine] = info.supports_custom", app_js)
+
+    def test_engine_settings_exposes_automatic_updates(self):
+        app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text()
+        index_html = pathlib.Path(PROJECT_ROOT, "static", "index.html").read_text()
+        server_py = pathlib.Path(PROJECT_ROOT, "server.py").read_text()
+
+        self.assertIn("Automatic CLI updates", index_html)
+        self.assertIn("engineUpdateNowBtn", index_html)
+        self.assertIn("fetch('/api/engines/update-status'", app_js)
+        self.assertIn("fetch('/api/engines/update-now'", app_js)
+        self.assertIn('path == "/api/engines/update-status"', server_py)
+        self.assertIn('path == "/api/engines/update-now"', server_py)
 
     def test_morning_disabled_when_plugin_absent(self):
         """If morning.py isn't importable, MORNING_ENABLED must be False
@@ -2970,17 +3900,40 @@ class TestServerImports(unittest.TestCase):
                 server.ANNOTATIONS_FILE = old_file
                 server.ANNOTATION_SCREENSHOT_DIR = old_dir
 
-    def test_breadcrumb_has_popout_button_wired_to_existing_helper(self):
-        """The conversation breadcrumb gains a pop-out button that reuses the
-        existing drag-to-out-of-window helper. The button is delegated so it
-        survives every updatePaneHeader innerHTML rewrite, and it is hidden
-        when the page is itself the popout (CONV_POPOUT_MODE)."""
+    def test_pane_sticky_topbar_owns_popout_button(self):
+        """The conversation pane's own sticky top bar owns the pop-out action.
+        It must NOT live in the status rail (collapses) nor the conversation
+        toolbar/breadcrumb (hidden in right-rail mode) — both homes were tried
+        and re-filed as "pop-out button disappeared". It reuses the delegated
+        helper and is skipped inside a popout window."""
         app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
         app_css = pathlib.Path(PROJECT_ROOT, "static", "app.css").read_text(encoding="utf-8")
         self.assertIn('data-role="ccc-breadcrumb-popout"', app_js)
+        self.assertIn('class="conv-sticky-header__popout"', app_js)
         self.assertIn("CONV_POPOUT_MODE ? ''", app_js)
         self.assertIn("openConversationPopout(convId, null, null)", app_js)
-        self.assertIn(".ccc-breadcrumb-popout", app_css)
+        # The old homes must stay retired.
+        self.assertNotIn("topbarEl.insertAdjacentHTML('beforeend', popoutBtn);", app_js)
+        self.assertNotIn('class="status-rail-annotate status-rail-popout"', app_js)
+        self.assertIn(".conv-sticky-header .conv-sticky-header__popout", app_css)
+        # Right-rail mode keeps the pane's sticky bar visible (only a
+        # genuinely empty bar collapses) so Pop out survives a closed rail.
+        self.assertIn(
+            "body.status-pos-right .conv-sticky-header.is-earlier-empty,", app_css)
+        self.assertNotIn(
+            "body.status-pos-right .conv-sticky-header,\nbody.status-pos-right #convToolbar", app_css)
+
+    def test_collapsed_conversation_popout_has_labeled_side_panel_restore(self):
+        """A popout must not strand its right rail behind an icon-only edge
+        affordance: its labeled control delegates to the existing restorer."""
+        app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
+        app_css = pathlib.Path(PROJECT_ROOT, "static", "app.css").read_text(encoding="utf-8")
+        index_html = pathlib.Path(PROJECT_ROOT, "static", "index.html").read_text(encoding="utf-8")
+        self.assertIn('id="popoutSidePanelBtn"', index_html)
+        self.assertIn('Show side panel', index_html)
+        self.assertIn('body.conversation-popout.status-rail-collapsed #popoutSidePanelBtn', app_css)
+        self.assertIn("const $popoutSidePanel = document.getElementById('popoutSidePanelBtn');", app_js)
+        self.assertIn('$statusRailRestore.click();', app_js)
 
     def test_global_breadcrumb_streaming_status_stays_compact(self):
         app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
@@ -3266,17 +4219,25 @@ class TestServerImports(unittest.TestCase):
         self.assertIn("return '__queue_global__';", key_body)
 
     def test_explicit_queue_scope_survives_automatic_conversation_restore(self):
-        """A Queue scope picked by the user must not follow a restored session ID."""
+        """A Queue scope picked by the user must not follow a restored session ID,
+        and must not leak into an unrelated session for a different repo (CCC-788)."""
         app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
+        key_start = app_js.index("function _uxqSelectedScopeKey()")
+        key_body = app_js[key_start:app_js.index("function _uxqLoadScopeMap", key_start)]
         get_start = app_js.index("function _uxqGetScopeOverride()")
         get_body = app_js[get_start:app_js.index("function _uxqSetScopeOverride", get_start)]
         set_body = app_js[app_js.index("function _uxqSetScopeOverride"):app_js.index("// Status filter", app_js.index("function _uxqSetScopeOverride"))]
 
         self.assertIn("const _UXQ_SELECTED_SCOPE_LS = 'ccc-uxq-selected-scope';", app_js)
-        self.assertIn("const selected = _uxqProjectKey(localStorage.getItem(_UXQ_SELECTED_SCOPE_LS) || '');", get_body)
+        # Pinned per repo (stable across a session-id restore), not globally
+        # (which would leak one session's pin into every other session).
+        self.assertIn("const repo = (typeof activeConvRepoPath === 'function') ? activeConvRepoPath() : '';", key_body)
+        self.assertIn("if (repo) return repo;", key_body)
+        self.assertIn("return _uxqScopeKey();", key_body)
+        self.assertIn("const selected = _uxqProjectKey(_uxqLoadSelectedScopeMap()[_uxqSelectedScopeKey()] || '');", get_body)
         self.assertIn("return selected || sessionScope;", get_body)
-        self.assertIn("localStorage.setItem(_UXQ_SELECTED_SCOPE_LS, v);", set_body)
-        self.assertIn("localStorage.removeItem(_UXQ_SELECTED_SCOPE_LS);", set_body)
+        self.assertIn("const sk = _uxqSelectedScopeKey();", set_body)
+        self.assertIn("if (!v || v === 'AUTO') delete selectedMap[sk]; else selectedMap[sk] = v;", set_body)
 
     def test_queue_scope_switch_repaints_from_completed_caches(self):
         """Scope changes keep responsive caches, with feedback until rows repaint."""
@@ -3617,6 +4578,38 @@ class TestServerImports(unittest.TestCase):
         self.assertNotIn(".conv-tab-strip.has-mobile-back", app_css)
         self.assertIn("#convToolbar .font-size-controls { display: none !important; }", app_css)
         self.assertIn("order: -100;", app_css)
+
+    def test_mobile_conversation_follows_visual_viewport(self):
+        """The fixed conversation pane must remain inside the viewport after
+        iOS pans and shrinks it for the software keyboard, and its composer
+        must not trigger iOS focus zoom even when pointer detection is wrong."""
+        app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
+        app_css = pathlib.Path(PROJECT_ROOT, "static", "app.css").read_text(encoding="utf-8")
+
+        self.assertIn(
+            "setProperty('--app-vv-top', vv.offsetTop + 'px')",
+            app_js,
+        )
+        self.assertIn("top: var(--app-vv-top, 0px); right: 0; bottom: auto; left: 0;", app_css)
+        self.assertIn("height: var(--app-vh, 100vh);", app_css)
+        self.assertIn("@media (pointer: coarse), (max-width: 1200px)", app_css)
+        self.assertIn(
+            "#convInput,\n  #cpInput {\n    font-size: 16px !important;",
+            app_css,
+        )
+
+    def test_mobile_original_ask_uses_toolbar_disclosure(self):
+        """Phones show one compact original-ask row in the stable toolbar
+        instead of the transcript's large sticky card."""
+        index_html = pathlib.Path(PROJECT_ROOT, "static", "index.html").read_text(encoding="utf-8")
+        app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
+        app_css = pathlib.Path(PROJECT_ROOT, "static", "app.css").read_text(encoding="utf-8")
+
+        self.assertIn('id="mobileOriginalAsk"', index_html)
+        self.assertIn("syncMobileOriginalAsk(mobileOriginalAskText)", app_js)
+        self.assertIn("body .conversations-view .conv-sticky-header {\n    display: none !important;", app_css)
+        self.assertIn("#mobileOriginalAsk:not([hidden])", app_css)
+        self.assertIn("#mobileOriginalAsk.is-expanded .mobile-original-ask__text", app_css)
 
     def test_mobile_reload_fab_is_not_rendered(self):
         """Mobile should not render the old floating page-reload button."""
@@ -4043,7 +5036,7 @@ class TestServerImports(unittest.TestCase):
         app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
         self.assertIn("renderSidebar(filterConversations($convSearch.value), { force: true });", app_js)
         self.assertIn("function renderSidebar(convs, opts)", app_js)
-        self.assertIn("if (!(opts && opts.force) && shouldPauseSidebarRender()) { _sidebarRenderPendingWhilePaused = true; return; }", app_js)
+        self.assertIn("if (!(opts && opts.force) && !pendingSpawns.size && shouldPauseSidebarRender()) { _sidebarRenderPendingWhilePaused = true; return; }", app_js)
 
     def test_composer_uses_js_autosize_not_native_field_sizing(self):
         """The composer must avoid native field-sizing in WKWebView.
@@ -4109,14 +5102,14 @@ class TestServerImports(unittest.TestCase):
 
         textarea_css = app_css[
             app_css.index(".conv-input-bar textarea {\n    /* Single-row by default;"):
-            app_css.index("/* Native-app typing on touch devices.", app_css.index(".conv-input-bar textarea {\n    /* Single-row by default;"))
+            app_css.index("/* Native-app typing on mobile.", app_css.index(".conv-input-bar textarea {\n    /* Single-row by default;"))
         ]
         self.assertIn("overflow-x: hidden;", textarea_css)
         self.assertIn("scrollbar-width: none;", textarea_css)
         self.assertIn(".conv-input-bar textarea::-webkit-scrollbar", app_css)
         self.assertIn("display: none;", app_css[
             app_css.index(".conv-input-bar textarea::-webkit-scrollbar"):
-            app_css.index("/* Native-app typing on touch devices.", app_css.index(".conv-input-bar textarea::-webkit-scrollbar"))
+            app_css.index("/* Native-app typing on mobile.", app_css.index(".conv-input-bar textarea::-webkit-scrollbar"))
         ])
 
     def test_empty_composer_arrow_up_recalls_last_command(self):
@@ -4186,6 +5179,13 @@ class TestServerImports(unittest.TestCase):
         self.assertNotIn("Codex sessions do not use Claude slash commands", app_js)
         self.assertIn("const failurePrefix = compactCommand ? '/compact failed'", app_js)
 
+    def test_kimi_sessions_do_not_offer_unsupported_slash_commands(self):
+        """Kimi ACP has no slash-command protocol, so its composer must not
+        offer Claude's fallback commands as though they were executable."""
+        app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
+        self.assertIn("if (source === 'kimi') return 'Slash commands are not wired for Kimi sessions';", app_js)
+        self.assertIn("(engine === 'claude' || engine === 'codex')", app_js)
+
     def test_slash_command_picker_selects_on_press(self):
         """Mouse/touch selection must commit on press, before focus refreshes
         or document-level click handlers can interfere with the popup."""
@@ -4224,7 +5224,7 @@ class TestServerImports(unittest.TestCase):
         self.assertIn("$convList.addEventListener('scroll', noteConversationListScrollActivity, { passive: true, capture: true });", app_js)
         self.assertIn("$convList.addEventListener('touchmove', noteConversationListScrollActivity, { passive: true, capture: true });", app_js)
         self.assertIn("if (isConversationListScrollActive()) return true;", app_js)
-        self.assertIn("if (!(opts && opts.force) && shouldPauseSidebarRender()) { _sidebarRenderPendingWhilePaused = true; return; }", app_js)
+        self.assertIn("if (!(opts && opts.force) && !pendingSpawns.size && shouldPauseSidebarRender()) { _sidebarRenderPendingWhilePaused = true; return; }", app_js)
         self.assertIn("const _skipFlipForTouchScroll = shouldUseTouchRowMode();", app_js)
         self.assertIn("&& !_skipFlipForTouchScroll", app_js)
         self.assertNotIn("el.classList.add('mobile-active-tap')", app_js)
@@ -4270,10 +5270,16 @@ class TestServerImports(unittest.TestCase):
         the rendered event IS that message, the full event text wins (CCC-456)."""
         app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
         self.assertIn("function originalAskTextForEvent(ev, paneId)", app_js)
-        self.assertIn("const canonical = (conv && conv.first_message) || '';", app_js)
+        self.assertIn(
+            "const canonical = (conv && (conv.original_ask || conv.first_message)) || '';",
+            app_js,
+        )
         self.assertIn("if (canonPrefix && norm(evText).startsWith(canonPrefix)) return evText;", app_js)
         self.assertIn("return canonical || evText;", app_js)
-        self.assertIn("const cleaned = cleanIssuePrompt(originalAskTextForEvent(ev, paneId));", app_js)
+        self.assertIn(
+            "const mobileOriginalAskText = cleanIssuePrompt(originalAskTextForEvent(ev, paneId));",
+            app_js,
+        )
 
     def test_right_rail_uses_metadata_files_and_queue_tabs(self):
         """The right rail keeps activity in Metadata, with Files and Queue as
@@ -4303,7 +5309,10 @@ class TestServerImports(unittest.TestCase):
         self.assertNotIn('id="filesViewToggle"', index_html)
         self.assertIn("function setStatusRailTab(tab)", app_js)
         self.assertIn("rail.querySelector('#statusRailMetadataPane')", app_js)
-        self.assertIn("rail.querySelector('#statusRailFilesPane')", app_js)
+        # No files-pane handle: panes are shown/hidden by the generic
+        # `[data-rail-pane]` loop, so only the panes with extra per-tab work
+        # (metadata, queue) get a named reference. The pane's existence is
+        # asserted against index.html above.
         self.assertIn("rail.querySelector('#statusRailQueuePane')", app_js)
         self.assertNotIn("rail.querySelector('#statusRailActivityPane')", app_js)
         self.assertIn("const next = (tab === 'files' || tab === 'queue') ? tab : 'metadata';", app_js)
@@ -4334,6 +5343,12 @@ class TestServerImports(unittest.TestCase):
         self.assertNotIn("overflow-y: visible;", activity_css)
         self.assertNotIn("flex: 0 0 auto;", activity_css)
 
+    def test_queue_first_board_is_removed(self):
+        """The retired Queue-first board must not remain reachable in the app."""
+        app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
+        self.assertNotIn("Q-FIRST (W88)", app_js)
+        self.assertNotIn("ccc_mode=queues", app_js)
+
     def test_right_rail_hides_conversation_top_chrome(self):
         """Right-rail mode should not leave old top chrome above the
         conversation pane."""
@@ -4353,7 +5368,7 @@ class TestServerImports(unittest.TestCase):
             app_css.index("PWA install banner", right_rail_start)
         ]
         self.assertIn(
-            "body.status-pos-right .conv-sticky-header,\nbody.status-pos-right #convToolbar {\n  display: none !important;\n}",
+            "body.status-pos-right .conv-sticky-header.is-earlier-empty,\nbody.status-pos-right #convToolbar {\n  display: none !important;\n}",
             right_rail_css,
         )
 
@@ -4446,15 +5461,57 @@ class TestServerImports(unittest.TestCase):
         self.assertIn("Auto-drain update failed", toggle_js)
         self.assertIn("btn.classList.add('is-pending');", toggle_js)
         self.assertIn("btn.setAttribute('aria-busy', 'true');", toggle_js)
+        self.assertIn("btn.disabled = true;", toggle_js)
+        self.assertIn("btn.setAttribute('aria-pressed', newVal ? 'true' : 'false');", toggle_js)
         self.assertIn("btn.classList.toggle('is-on', newVal);", toggle_js)
         self.assertIn("drainVal.textContent = newVal ? 'on' : 'off';", toggle_js)
         self.assertIn("btn.classList.remove('is-pending');", toggle_js)
         self.assertIn("btn.removeAttribute('aria-busy');", toggle_js)
+        self.assertIn("btn.disabled = false;", toggle_js)
+        self.assertIn("const _UXQ_DRAIN_MIN_PENDING_MS = 400;", app_js)
+        self.assertIn("const pendingStartedAt = Date.now();", toggle_js)
+        self.assertIn("await new Promise(resolve => setTimeout(resolve, remainingPendingMs));", toggle_js)
+        self.assertLess(
+            toggle_js.index("await new Promise(resolve => setTimeout(resolve, remainingPendingMs));"),
+            toggle_js.index("_uxqPendingDrainStates.delete(drainKey)"),
+        )
         self.assertIn(".fq-health-drain-toggle.is-pending::after", app_css)
         self.assertLess(
             toggle_js.index("const queueHealth ="),
             toggle_js.index("await fetch('/api/queue/drain'"),
         )
+
+    def test_queue_drain_toggle_keeps_optimistic_state_through_refresh(self):
+        """A stale health repaint must not erase a confirmed drain transition."""
+        app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
+        # The pendingDrain/optimistic-state logic lives in _uxqQueueControlsHtml,
+        # shared between the full health-strip row and the compact single-queue
+        # status strip (CCC-789 follow-up) so both surfaces agree on in-flight state.
+        strip_js = app_js[
+            app_js.index("function _uxqQueueControlsHtml"):
+            app_js.index("async function _uxqRefreshQueueStrips", app_js.index("function _uxqQueueControlsHtml"))
+        ]
+        toggle_js = app_js[
+            app_js.index("const toggleDrain = async (ev) =>"):
+            app_js.index("const cycleClaimTypes = async (ev) =>")
+        ]
+
+        self.assertIn("const _uxqPendingDrainStates = new Map();", app_js)
+        self.assertIn("const pendingDrain = _uxqPendingDrainStates.get", strip_js)
+        self.assertIn("pendingDrain ? pendingDrain.on : autoDrain", strip_js)
+        self.assertIn("const isDrainPending = !!(pendingDrain && pendingDrain.pending);", strip_js)
+        self.assertIn(
+            "const drainStateConfirmed = pendingDrain && !pendingDrain.pending && autoDrain === pendingDrain.on;",
+            strip_js,
+        )
+        self.assertIn("if (drainStateConfirmed) _uxqPendingDrainStates.delete(drainKey);", strip_js)
+        self.assertIn("_uxqPendingDrainStates.set", toggle_js)
+        self.assertIn("_uxqPendingDrainStates.delete", toggle_js)
+        self.assertIn("const healthInFlightAtClick = _uxqHealthPromise;", toggle_js)
+        self.assertIn("let drainSucceeded = false;", toggle_js)
+        self.assertIn("drainSucceeded = true;", toggle_js)
+        self.assertIn("pendingDrainState.pending = false;", toggle_js)
+        self.assertIn("void refreshDrainHealth();", toggle_js)
 
     def test_queue_detail_uses_watchtower_timeline_contract(self):
         """Ticket detail should come from WT timeline, not CCC's old private
@@ -4578,7 +5635,7 @@ class TestServerImports(unittest.TestCase):
         """A submitted add stays visible as a spinner row until the canonical item arrives."""
         app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
         add_start = app_js.index("async function _addQueueTicket()")
-        add_body = app_js[add_start:app_js.index("// ── Q-FIRST", add_start)]
+        add_body = app_js[add_start:]
 
         self.assertIn("const _uxqPendingQueueAdds = new Map();", app_js)
         self.assertIn("fq-pending-add", app_js)
@@ -4586,6 +5643,25 @@ class TestServerImports(unittest.TestCase):
         self.assertIn("_renderQueuePanel({ allowStale: true });", add_body)
         self.assertIn("_uxqPendingQueueAdds.delete(pendingId);", add_body)
         self.assertIn("await _renderQueuePanel();", add_body)
+
+    def test_queue_add_clears_obscuring_state_and_reveals_the_new_ticket(self):
+        """A successful Add must leave its canonical row visible in its own queue."""
+        app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
+        self.assertIn("function _uxqPrepareNewTicketView(item, fallbackProject)", app_js)
+        helper_start = app_js.index("function _uxqPrepareNewTicketView(item, fallbackProject)")
+        helper_end = app_js.index("async function _addQueueTicket()", helper_start)
+        helper = app_js[helper_start:helper_end]
+        add_start = helper_end
+        add_body = app_js[add_start:]
+
+        self.assertIn("_uxqSetScopeOverride(project);", helper)
+        self.assertIn("_uxqSetFilter('open');", helper)
+        self.assertIn("_uxqSetTypeFilter('all');", helper)
+        self.assertIn("$qSearch.value = '';", helper)
+        self.assertIn("_uxqResetHistoryPage();", helper)
+        self.assertIn("row.scrollIntoView({ block: 'center' });", helper)
+        self.assertIn("_uxqPrepareNewTicketView(data.item, targetProj);", add_body)
+        self.assertIn("_uxqRevealNewTicket(ref);", add_body)
 
     def test_queue_manager_can_create_and_revise_full_watchtower_config(self):
         index_html = pathlib.Path(PROJECT_ROOT, "static", "index.html").read_text(encoding="utf-8")
@@ -4615,7 +5691,7 @@ class TestServerImports(unittest.TestCase):
         self.assertIn("_moveToHome('annotationNotesBtn', $settingsSlot);", app_js)
         self.assertIn("_moveToHome('cooPopButton',      $settingsSlot);", app_js)
         self.assertIn("cooMoveObserver.observe(document.body, { childList: true, subtree: true });", app_js)
-        self.assertIn("_captureRailEl(document.getElementById('cccBreadcrumb'));", app_js)
+        self.assertNotIn("_captureRailEl(document.getElementById('cccBreadcrumb'));", app_js)
         self.assertIn("_captureRailEl(document.getElementById('convStatus'));", app_js)
         self.assertIn("_captureRailEl(document.getElementById('topbarTtsControl'));", app_js)
         self.assertIn("_captureRailEl(document.getElementById('annotationStartBtn'));", app_js)
@@ -4657,6 +5733,19 @@ class TestServerImports(unittest.TestCase):
         self.assertIn("_setStatusRailWidth(fileViewerPreviousRailWidth * FILE_VIEWER_RAIL_EXPAND_FACTOR, false);", app_js)
         self.assertIn("_setStatusRailWidth(previousWidth, false);", app_js)
         self.assertIn("if (previousStoredWidth == null) localStorage.removeItem('ccc-status-rail-width');", app_js)
+
+    def test_status_rail_resizer_supports_tablet_pointer_drag(self):
+        """The right-rail divider must resize under touch/pen as well as mouse."""
+        app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
+        app_css = pathlib.Path(PROJECT_ROOT, "static", "app.css").read_text(encoding="utf-8")
+
+        self.assertIn("$statusRailResizer.addEventListener('pointerdown'", app_js)
+        self.assertIn("$statusRailResizer.setPointerCapture(e.pointerId)", app_js)
+        self.assertIn("$statusRailResizer.addEventListener('pointermove'", app_js)
+        self.assertIn("$statusRailResizer.addEventListener('pointercancel', _railEnd)", app_js)
+        resizer_css = app_css[app_css.index(".status-rail-resizer {"):]
+        resizer_css = resizer_css[:resizer_css.index("}")]
+        self.assertIn("touch-action: none;", resizer_css)
 
     def test_done_result_can_copy_agent_answer(self):
         """Successful Done rows expose a small copy affordance for the last
@@ -4726,7 +5815,7 @@ class TestServerImports(unittest.TestCase):
         self.assertIn("function _convShouldLiveRevealStickToBottom(view)", app_js)
         self.assertIn("conversationDistanceFromBottom(view) <= CONV_LIVE_REVEAL_BOTTOM_EPSILON", app_js)
         self.assertIn("const shouldStick = _convShouldLiveRevealStickToBottom($view);", app_js)
-        self.assertIn("if (ev.type === 'assistant') _convLiveRevealNewText(div, paneId, opts);", app_js)
+        self.assertIn("if (ev.type === 'assistant' && !handedOffStreamingBubble) _convLiveRevealNewText(div, paneId, opts);", app_js)
         self.assertIn("function _replayRevealRun(runEl)", app_js)
         self.assertIn("data-replay-shell-first-run-id", app_js)
         self.assertIn("const shellSelector = 'p, li, ul, ol, blockquote, table, thead, tbody, tr, th, td, h1, h2, h3, h4, h5, h6';", app_js)
@@ -4840,7 +5929,10 @@ class TestServerImports(unittest.TestCase):
         app_css = pathlib.Path(PROJECT_ROOT, "static", "app.css").read_text(encoding="utf-8")
 
         self.assertIn("function _wakeStageQuietLabel", app_js)
-        self.assertIn("return 'Thinking… ' + model + effort;", app_js)
+        self.assertIn(
+            "return 'Thinking… ' + formatModelEffort(data.model, rowReasoningEffort(data), { fallback: 'model' });",
+            app_js,
+        )
         self.assertIn("const WAKE_STAGE_DETAIL_DELAY_MS = 1000;", app_js)
         self.assertIn("el.classList.toggle('is-detailed', showDetails);", app_js)
         self.assertIn(".wake-breakdown .wb-stage.is-done .wb-label { display: none; }", app_css)
@@ -5098,7 +6190,7 @@ class TestServerImports(unittest.TestCase):
         self.assertIn("sendToTerminal('p1', 'steer')", app_js)
         self.assertIn("mode: injectMode", app_js)
         self.assertIn("function codexTurnSteerable()", app_js)
-        self.assertIn("&& (isKimi || codexTurnSteerable());", app_js)
+        self.assertIn("(isCodex && codexTurnSteerable()) || isKimi || claudeSteerable", app_js)
         self.assertIn("function codexSteerUnavailable(data)", app_js)
         self.assertNotIn("if (injectMode === 'send' && currentSession.source === 'codex' && codexTurnSteerable())", app_js)
         send_handler = app_js[
@@ -5106,6 +6198,97 @@ class TestServerImports(unittest.TestCase):
             app_js.index("function insertPendingSpawnCard")
         ]
         self.assertNotIn("postInjectInput(sid, text, 'send', { announcedFrom })", send_handler)
+
+    def test_claude_explicit_queue_is_distinct_from_ordinary_send(self):
+        app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(
+            encoding="utf-8"
+        )
+        send_handler = app_js[
+            app_js.index("async function sendToTerminal"):
+            app_js.index("function insertPendingSpawnCard")
+        ]
+
+        self.assertIn("sendToTerminal('p1', 'send_queue')", app_js)
+        self.assertIn(
+            "mode: injectMode === 'send_queue' ? 'send' : injectMode",
+            send_handler,
+        )
+        self.assertIn(
+            "if (injectMode === 'send_queue') payload.force_queue = true;",
+            send_handler,
+        )
+
+    def test_claude_headless_steer_uses_interrupt_control_request(self):
+        """Steering a wedged Claude headless writes an `interrupt` control
+        request to its FIFO, so a turn stuck on a long tool child reaches a
+        boundary where queued input can land."""
+        server_py = pathlib.Path(PROJECT_ROOT, "server.py").read_text(encoding="utf-8")
+        app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
+        self.assertIn("def _write_stream_json_interrupt(", server_py)
+        self.assertIn('"type": "control_request"', server_py)
+        self.assertIn('"subtype": "interrupt"', server_py)
+        self.assertIn('"via": "claude-interrupt-steer"', server_py)
+        # The interrupt must be written BEFORE the follow-up text, or Claude
+        # reads the text into the turn the interrupt is about to abort.
+        interrupt_at = server_py.index('"via": "claude-interrupt-steer"')
+        branch = server_py[interrupt_at - 1200:interrupt_at]
+        self.assertLess(
+            branch.index("_write_stream_json_interrupt(spawn)"),
+            branch.index("_write_stream_json_user_message(spawn, text)"),
+        )
+        # Frontend no longer hard-blocks steer for non-Codex/Kimi sources.
+        self.assertNotIn("Steer is only available for Codex and Kimi sessions.", app_js)
+        self.assertIn("claudeSteerable", app_js)
+
+    def test_tool_child_stops_blocking_queued_input_after_cap(self):
+        """A tool child that outlives its turn must not hold queued input
+        forever — an agent-spawned poll loop once held one session's queue for
+        over four hours."""
+        server = importlib.import_module("server")
+        spawn = {"pid": 4242, "engine": "claude"}
+        original = server._spawn_entry_active_tool_child
+        try:
+            server._spawn_entry_active_tool_child = lambda entry: None
+            self.assertFalse(server._tool_child_blocks_inject(spawn))
+
+            now = 1_000_000.0
+            # Young child: still mid-turn, keep holding.
+            server._spawn_entry_active_tool_child = lambda entry: {
+                "pid": 99, "command": "npm run build", "started_at": now - 30,
+            }
+            self.assertTrue(server._tool_child_blocks_inject(spawn, now=now))
+
+            # Past the cap: deliver rather than hold user text hostage.
+            server._spawn_entry_active_tool_child = lambda entry: {
+                "pid": 99,
+                "command": "while true; do wt ls -q Q; sleep 120; done",
+                "started_at": now - (server._INJECT_TOOL_CHILD_MAX_HOLD_S + 1),
+            }
+            self.assertFalse(server._tool_child_blocks_inject(spawn, now=now))
+
+            # Unknown start time is not evidence of staleness — keep holding.
+            server._spawn_entry_active_tool_child = lambda entry: {
+                "pid": 99, "command": "x", "started_at": None,
+            }
+            self.assertTrue(server._tool_child_blocks_inject(spawn, now=now))
+        finally:
+            server._spawn_entry_active_tool_child = original
+
+    def test_steered_compact_interrupts_before_compacting(self):
+        """`mode` must be parsed before the /compact early return, or a steered
+        /compact drops the steer and queues behind the turn it should abort."""
+        server_py = pathlib.Path(PROJECT_ROOT, "server.py").read_text(encoding="utf-8")
+        fn = server_py[server_py.index("def _inject_text_into_session("):]
+        fn = fn[:fn.index("\ndef ", 10)]
+        self.assertLess(
+            fn.index('mode = mode_value if mode_value in ("answer", "steer", "send_queue")'),
+            fn.index("if compact_command and not is_codex:"),
+        )
+        compact_branch = fn[fn.index("if compact_command and not is_codex:"):]
+        compact_branch = compact_branch[:compact_branch.index("compact_session_context(")]
+        self.assertIn("_write_stream_json_interrupt(spawn)", compact_branch)
+        # The drain loop must use the age-capped gate, not the raw one.
+        self.assertIn("_tool_child_blocks_inject(spawn)", server_py)
 
     def test_announced_sender_is_api_only(self):
         """Injected sender attribution remains available to API callers
@@ -5699,16 +6882,6 @@ class TestRunScript(unittest.TestCase):
         self.assertIn("run.ps1", text)
 
 
-class TestQFirstBootRestore(unittest.TestCase):
-    def test_qfirst_url_mode_survives_boot_restore(self):
-        """?ccc_mode=queues must win over the boot conversation restore — the
-        board vanished ~1s after load because restoreLastConversation opened a
-        conversation, which always closes the board."""
-        app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
-        self.assertIn("QFIRST_URL_MODE && _qfBootRestore", app_js)
-        self.assertIn("_qfBootRestore = true;", app_js)
-
-
 class TestPlatformDocs(unittest.TestCase):
     def test_readme_documents_native_windows_and_wsl2_routes(self):
         readme = pathlib.Path(PROJECT_ROOT, "README.md").read_text(encoding="utf-8")
@@ -5762,7 +6935,10 @@ class TestLinuxCapabilities(unittest.TestCase):
 
     def test_capabilities_hide_native_desktop_features_on_linux(self):
         server = self._server()
-        with mock.patch.object(server.platform, "system", return_value="Linux"):
+        # Patch the picker detection so the result doesn't depend on whether
+        # the test host happens to have zenity/kdialog and a display.
+        with mock.patch.object(server.platform, "system", return_value="Linux"), \
+             mock.patch.object(server, "_linux_folder_picker_cmd", return_value=None):
             caps = server._platform_capabilities()
         self.assertEqual(caps["platform"], "linux")
         self.assertTrue(caps["annotate"], "page annotations should be cross-platform")
@@ -5770,6 +6946,16 @@ class TestLinuxCapabilities(unittest.TestCase):
                     "folderPicker", "desktopDeepLinks", "revealFile",
                     "openBrowser", "notifications"):
             self.assertFalse(caps[key], f"{key} should be False on Linux")
+
+    def test_capabilities_folder_picker_on_linux_with_zenity(self):
+        """On a Linux desktop with zenity/kdialog/yad present the folder
+        picker flag flips to True so the UI can offer Browse."""
+        server = self._server()
+        with mock.patch.object(server.platform, "system", return_value="Linux"), \
+             mock.patch.object(server, "_linux_folder_picker_cmd",
+                               return_value=["zenity", "--file-selection"]):
+            caps = server._platform_capabilities()
+        self.assertTrue(caps["folderPicker"])
 
     def test_app_config_exposes_capabilities(self):
         server = self._server()
@@ -5784,8 +6970,13 @@ class TestLinuxCapabilities(unittest.TestCase):
         """Each gated entry point returns a structured no-op on non-Darwin
         instead of raising or shelling out to a missing macOS tool."""
         server = self._server()
+        # _linux_folder_picker_cmd is patched to None so the folder picker
+        # takes its graceful "no tool installed" path even on a test host
+        # that has zenity and a display — otherwise this test would pop a
+        # real dialog and block for 10 minutes.
         with mock.patch.object(server.platform, "system", return_value="Linux"), \
-             mock.patch.object(server.sys, "platform", "linux"):
+             mock.patch.object(server.sys, "platform", "linux"), \
+             mock.patch.object(server, "_linux_folder_picker_cmd", return_value=None):
             for result in (
                 server._native_pick_folder(),
                 server._capture_screenshot_native(),
@@ -5796,6 +6987,47 @@ class TestLinuxCapabilities(unittest.TestCase):
                 self.assertIsInstance(result, dict)
                 self.assertFalse(result.get("ok", False))
                 self.assertIn("error", result)
+
+    def test_linux_pick_folder_uses_zenity(self):
+        """With a picker tool available, a zero exit yields the picked path
+        and a non-zero exit (Cancel) yields the cancelled marker."""
+        server = self._server()
+        zenity = ["zenity", "--file-selection", "--directory", "--title={prompt}"]
+        with mock.patch.object(server.platform, "system", return_value="Linux"), \
+             mock.patch.object(server, "_linux_folder_picker_cmd", return_value=zenity):
+            with mock.patch.object(server.subprocess, "run") as run:
+                run.return_value = subprocess.CompletedProcess(zenity, 0, stdout="/tmp/repo\n", stderr="")
+                self.assertEqual(server._native_pick_folder(), {"ok": True, "path": "/tmp/repo"})
+                # {prompt} substitution reached argv
+                self.assertIn("--title=Pick a repo folder for Command Center",
+                              run.call_args[0][0])
+                run.return_value = subprocess.CompletedProcess(zenity, 1, stdout="", stderr="")
+                self.assertEqual(server._native_pick_folder(), {"ok": False, "cancelled": True})
+
+    def test_list_dirs_for_picker(self):
+        """The in-browser picker fallback lists visible subdirectories with a
+        parent link, skips dotdirs, and errors cleanly on non-directories."""
+        server = self._server()
+        with tempfile.TemporaryDirectory() as tmp:
+            base = pathlib.Path(tmp)
+            (base / "alpha").mkdir()
+            (base / "Beta").mkdir()
+            (base / ".hidden").mkdir()
+            (base / "a-file.txt").write_text("x")
+            result = server._list_dirs_for_picker(str(base))
+            self.assertTrue(result["ok"])
+            self.assertEqual(result["path"], str(base.resolve()))
+            self.assertEqual(result["parent"], str(base.resolve().parent))
+            self.assertEqual([d["name"] for d in result["dirs"]], ["alpha", "Beta"])
+            root = server._list_dirs_for_picker("/")
+            self.assertTrue(root["ok"])
+            self.assertIsNone(root["parent"])
+            bad = server._list_dirs_for_picker(str(base / "a-file.txt"))
+            self.assertFalse(bad["ok"])
+            self.assertIn("error", bad)
+            missing = server._list_dirs_for_picker(str(base / "nope"))
+            self.assertFalse(missing["ok"])
+            self.assertIn("error", missing)
 
     def test_sys_memory_and_cpu_work_on_linux(self):
         """The system-monitor stats must not go blank on Linux: memory comes
@@ -5825,14 +7057,13 @@ class TestRepoContextHelpers(unittest.TestCase):
         "WATCHTOWER_WORKER_SESSIONS_FILE": "worker-sessions.json",
     }
     _WATCHTOWER_MODULES = (
-        "server", "morning", "morning_store", "ux_fixes_queue",
+        "server", "morning", "morning_store",
         "watchtower.queue", "watchtower.workers", "watchtower.config",
     )
 
     def setUp(self):
         self.tmp_home = tempfile.mkdtemp(prefix="ccc-repo-context-home-")
         self._prev_home = os.environ.get("HOME")
-        self._prev_ux_fixes_queue_file = os.environ.get("UX_FIXES_QUEUE_FILE")
         self._prev_watchtower_env = {
             var: os.environ.get(var) for var in self._WATCHTOWER_ENV_FILES
         }
@@ -5840,11 +7071,7 @@ class TestRepoContextHelpers(unittest.TestCase):
             "WATCHTOWER_STOP_SIGNALS_DIR"
         )
         os.environ["HOME"] = str(pathlib.Path(self.tmp_home).resolve())
-        self.ux_fixes_queue_file = pathlib.Path(
-            self.tmp_home, ".claude", "command-center", "ux-fixes-queue.json"
-        ).resolve()
-        os.environ["UX_FIXES_QUEUE_FILE"] = str(self.ux_fixes_queue_file)
-        # server._q prefers watchtower.queue when installed. Without pointing
+        # server._q is watchtower.queue (a hard dependency). Without pointing
         # ALL of its store/config/workers files at this test's tmp_home,
         # enqueue_annotation_ux_fixes_queue() writes real tickets into the live
         # production queue AND dispatch_after_enqueue() nudges real live
@@ -5868,10 +7095,6 @@ class TestRepoContextHelpers(unittest.TestCase):
             os.environ.pop("HOME", None)
         else:
             os.environ["HOME"] = self._prev_home
-        if self._prev_ux_fixes_queue_file is None:
-            os.environ.pop("UX_FIXES_QUEUE_FILE", None)
-        else:
-            os.environ["UX_FIXES_QUEUE_FILE"] = self._prev_ux_fixes_queue_file
         for var, prev in self._prev_watchtower_env.items():
             if prev is None:
                 os.environ.pop(var, None)
@@ -6131,35 +7354,61 @@ class TestRepoContextHelpers(unittest.TestCase):
             thread.join(timeout=5)
 
     def test_ux_fixes_queue_file_is_isolated_to_test_home(self):
-        self.assertEqual(
-            self.server.ux_fixes_queue.QUEUE_FILE,
-            self.ux_fixes_queue_file,
-        )
-        # server._q prefers watchtower.queue when it's installed, and that
-        # engine's store path comes from $WATCHTOWER_STORE, not QUEUE_FILE —
-        # assert against whichever store the active engine actually resolves,
-        # so this test can't silently write into the real production queue.
-        store_path = pathlib.Path(
-            self.server._q.store_path()
-            if hasattr(self.server._q, "store_path")
-            else self.ux_fixes_queue_file
+        """watchtower.queue (server._q) must resolve its store under this
+        test's isolated $WATCHTOWER_STORE, never the real production queue —
+        and enqueuing a ticket must actually persist there."""
+        # HOME (and everything derived from it) was set from the *resolved*
+        # tmp_home path (setUp: os.environ["HOME"] = ...resolve()), so the
+        # prefix check must compare against the same resolved form -- on
+        # macOS /var is a symlink into /private/var, and a raw str prefix
+        # check against self.tmp_home would spuriously fail otherwise.
+        tmp_home_resolved = str(pathlib.Path(self.tmp_home).resolve())
+        resolved = pathlib.Path(self.server._q._resolve_store_path())
+        self.assertTrue(
+            str(resolved).startswith(tmp_home_resolved),
+            f"store resolved outside the test's isolated home: {resolved}",
         )
         result = self.server.enqueue_annotation_ux_fixes_queue(
             "Annotation: isolated", meta={"selector": "#demo-anchor"}
         )
         self.assertTrue(result["ok"])
+        # store_path() prefers the SQLite .db once it exists, which only
+        # happens after the first write above — check it after enqueueing.
+        store_path = pathlib.Path(self.server._q.store_path())
+        self.assertTrue(
+            str(store_path).startswith(tmp_home_resolved),
+            f"store resolved outside the test's isolated home: {store_path}",
+        )
         self.assertTrue(store_path.exists())
 
-    def test_bym_production_repo_routes_to_bymprod_queue(self):
+    def test_repo_basename_and_source_route_via_watchtower_project_for(self):
+        """server._q._project_for() (watchtower.queue) decides a project by
+        explicit project > configured repo_path match > repo basename > source.
+
+        NOTE (found while removing the ux_fixes_queue fallback, see WT-92):
+        this test used to be named test_bym_production_repo_routes_to_bymprod_queue
+        and asserted "BYMPROD" for both cases below -- but it called
+        ux_fixes_queue._project_for() directly, which had a hardcoded alias
+        table ({"bookyourmat": "BYMPROD", "bym+finie": "BYMPROD", ...}, source
+        "bym" -> "BYMPROD") that watchtower.queue._project_for() does not
+        replicate; watchtower only does basename/source normalization plus a
+        configured-repo_path lookup (config.all_queues()). Since server._q has
+        been watchtower.queue in production for a while (WT-32 Phase 2), this
+        aliasing gap is a real, already-live divergence this CCC-side change
+        did not introduce and can't fix (the alias table would need to move
+        into watchtower.queue itself, a separate repo) -- asserting actual
+        behavior here rather than a value that no longer holds, so this
+        doesn't silently mask the gap.
+        """
         self.assertEqual(
-            self.server.ux_fixes_queue._project_for(
+            self.server._q._project_for(
                 repo_path="/tmp/BYM+Finie/apps/bookyourmat"
             ),
-            "BYMPROD",
+            "BOOKYOURMAT",
         )
         self.assertEqual(
-            self.server.ux_fixes_queue._project_for(source="bym"),
-            "BYMPROD",
+            self.server._q._project_for(source="bym"),
+            "BYM",
         )
 
     def test_repo_path_with_plus_resolves_when_query_decoded_to_space(self):
@@ -6254,7 +7503,7 @@ class TestRepoContextHelpers(unittest.TestCase):
             "kind": "bg",
         }))
         native_bin = pathlib.Path(
-            self.tmp_home,
+            os.environ["HOME"],
             ".local",
             "share",
             "claude",
@@ -6262,17 +7511,16 @@ class TestRepoContextHelpers(unittest.TestCase):
             "2.1.144",
         )
 
-        def fake_run(args, **kwargs):
-            if args == ["ps", "-A", "-o", "pid=,comm="]:
-                return subprocess.CompletedProcess(
-                    args,
-                    0,
-                    stdout=f"123 {native_bin}\n456 /usr/bin/python3\n",
-                    stderr="",
-                )
-            raise AssertionError(f"unexpected command: {args}")
-
-        with mock.patch.object(self.server.subprocess, "run", side_effect=fake_run):
+        process_rows = [
+            ("123", "??", str(native_bin), str(native_bin)),
+            ("456", "??", "/usr/bin/python3", "/usr/bin/python3"),
+        ]
+        self.server._load_session_registry.cache_clear()
+        with mock.patch.object(
+            self.server,
+            "_scan_engine_processes",
+            return_value=process_rows,
+        ):
             registry = self.server._load_session_registry()
 
         self.assertIn(sid, registry)
@@ -6439,6 +7687,10 @@ class TestRepoContextHelpers(unittest.TestCase):
 
             self.assertTrue(result["ok"])
             self.assertTrue(result["queued"])
+            self.assertEqual(
+                result["queued_reason"],
+                "the current turn is still running; your message will send next",
+            )
             self.assertEqual(result["status"], "busy")
             self.assertEqual(result["via"], "terminal-queued")
             write.assert_not_called()
@@ -6713,7 +7965,7 @@ class TestRepoContextHelpers(unittest.TestCase):
                  },
              ), \
              mock.patch.object(self.server, "_find_live_spawn_entry_for_session", return_value=spawn), \
-             mock.patch.object(self.server, "_spawn_entry_active_tool_child", return_value=True), \
+             mock.patch.object(self.server, "_tool_child_blocks_inject", return_value=True), \
              mock.patch.object(self.server, "_backup_jsonl_before_compact") as backup, \
              mock.patch.object(self.server, "_queue_terminal_input", return_value={"ok": True, "queued": True}) as queue, \
              mock.patch.object(self.server, "launch_terminal_for_session") as launch, \
@@ -6908,7 +8160,9 @@ class TestRepoContextHelpers(unittest.TestCase):
         self.assertTrue(result["ok"])
         self.assertEqual(result["action"], "injected")
         self.assertEqual(result["session_id"], sid)
-        inject.assert_called_once_with(sid, "Annotation: bad pill")
+        inject.assert_called_once_with(
+            sid, "Annotation: bad pill", mode="steer", source="annotate-queue"
+        )
         spawn.assert_not_called()
 
     def test_inject_input_wraps_announced_from(self):
@@ -6944,13 +8198,24 @@ class TestRepoContextHelpers(unittest.TestCase):
                 sid,
                 "Announced from: Gerry\n\nSTATUS: done",
                 mode="send",
+                source="api",
                 wt_origin=False,
                 skip_wt=False,
+                force_terminal=False,
+                force_headless=False,
+                force_queue=False,
             )
         finally:
             httpd.shutdown()
             httpd.server_close()
             thread.join(timeout=5)
+
+    def test_inject_input_accepts_slash_prefixed_worker_identity(self):
+        """Codex worker ids such as /root can report completion to a parent."""
+        self.assertEqual(
+            self.server._normalize_announced_from({"announced_from": "/root"}),
+            ("/root", None),
+        )
 
     def test_inject_input_accepts_answer_mode(self):
         sid = "00000000-0000-4000-8000-000000000022"
@@ -6985,8 +8250,12 @@ class TestRepoContextHelpers(unittest.TestCase):
                 sid,
                 "Use the selected scope",
                 mode="answer",
+                source="api",
                 wt_origin=False,
                 skip_wt=False,
+                force_terminal=False,
+                force_headless=False,
+                force_queue=False,
             )
         finally:
             httpd.shutdown()
@@ -7028,8 +8297,12 @@ class TestRepoContextHelpers(unittest.TestCase):
                 sid,
                 "delivered by wt delegate",
                 mode="send",
+                source="api",
                 wt_origin=True,
                 skip_wt=False,
+                force_terminal=False,
+                force_headless=False,
+                force_queue=False,
             )
         finally:
             httpd.shutdown()
@@ -8801,7 +10074,24 @@ class TestRepoContextHelpers(unittest.TestCase):
             self.assertTrue(body["ok"])
             self.assertEqual(body["count"], 1)
             self.assertEqual(body["sessions"][0]["engine"], "codex")
+            self.assertEqual(body["conversations"], body["sessions"])
             self.assertEqual(body["spawned"][0]["spawn_id"], "123")
+
+            with urllib.request.urlopen(
+                base + "/api/sessions?all=1&engine=codex&compact=1",
+                timeout=5,
+            ) as res:
+                compact_sessions = json.loads(res.read().decode("utf-8"))
+            self.assertEqual(compact_sessions["sessions"], body["sessions"])
+            self.assertNotIn("conversations", compact_sessions)
+
+            with urllib.request.urlopen(
+                base + "/api/conversations?all=1&engine=codex&compact=1",
+                timeout=5,
+            ) as res:
+                compact_conversations = json.loads(res.read().decode("utf-8"))
+            self.assertEqual(compact_conversations["conversations"], body["sessions"])
+            self.assertNotIn("sessions", compact_conversations)
         finally:
             httpd.shutdown()
             httpd.server_close()
@@ -9059,7 +10349,11 @@ class TestRepoContextHelpers(unittest.TestCase):
         server = importlib.import_module("server")
         import inspect
         sig = inspect.signature(server.spawn_session)
-        self.assertEqual(list(sig.parameters), ["prompt", "name", "cwd", "repo_path", "worktree", "model", "parent_session_id"])
+        self.assertEqual(list(sig.parameters), [
+            "prompt", "name", "cwd", "repo_path", "worktree", "model",
+            "parent_session_id", "timeline_t0_epoch_ms", "prewarm_id",
+            "auto_compact_k", "reasoning_effort",
+        ])
         self.assertTrue(hasattr(server, "spawn_session_codex"))
         sig = inspect.signature(server.spawn_session_codex)
         self.assertEqual(list(sig.parameters), ["prompt", "name", "cwd", "repo_path", "worktree", "model", "reasoning_effort", "parent_session_id"])
@@ -10001,13 +11295,19 @@ class TestRepoContextHelpers(unittest.TestCase):
                  mock.patch.object(server, "_register_codex_sidebar_project_for_spawn_entry"), \
                  mock.patch.object(server, "_record_spawn_to_registry") as registry, \
                  mock.patch.object(server.subprocess, "Popen", side_effect=AssertionError("exec fallback should not run")), \
-                 mock.patch.dict(os.environ, {"CCC_CODEX_WAKE_CONFIRM_TIMEOUT": "0.1"}):
+                 mock.patch.dict(os.environ, {"CCC_CODEX_WAKE_CONFIRM_TIMEOUT": "0.1",
+                                              "CCC_CODEX_SPAWN_CONFIRM_TIMEOUT": "0.1"}):
                 result = server.spawn_session_codex(
                     "say ok",
                     name="app spawn",
                     repo_path=str(self.repo),
                 )
                 rows = server.list_spawned_sessions()
+                # Naming and the durability check moved off the spawn critical
+                # path; join the finalizer so its calls are observable here.
+                finalizer = server._CODEX_LAST_SPAWN_FINALIZER
+                if finalizer:
+                    finalizer.join(10)
         finally:
             for entry in server._spawned_sessions:
                 fh = entry.get("log_fh")
@@ -10020,12 +11320,16 @@ class TestRepoContextHelpers(unittest.TestCase):
         self.assertEqual(result["via"], "codex-app-spawn")
         self.assertEqual(result["session_id"], sid)
         self.assertFalse(result["session_id_pending"])
-        self.assertTrue(result["confirmed"])
-        self.assertEqual(result["confirmation_source"], "app-server-notification")
+        # The turn is accepted and running; the durability check reports
+        # asynchronously, so the response carries "pending", never a false
+        # negative that would read as failure.
+        self.assertIsNone(result["confirmed"])
+        self.assertEqual(result["confirmation_source"], "pending")
         self.assertEqual(result["app_server_transport"], "managed")
         self.assertTrue(str(result["spawn_id"]).startswith("codex-app-"))
         self.assertEqual(result["pid"], result["spawn_id"])
-        self.assertEqual([method for method, _ in calls], ["thread/start", "thread/name/set", "turn/start"])
+        # turn/start is no longer stuck behind the ~1.7s rename.
+        self.assertEqual([method for method, _ in calls], ["thread/start", "turn/start", "thread/name/set"])
 
         start_params = calls[0][1]
         self.assertEqual(start_params["cwd"], str(self.repo))
@@ -10035,15 +11339,16 @@ class TestRepoContextHelpers(unittest.TestCase):
         self.assertEqual(start_params["model"], "gpt-5.5")
         self.assertEqual(start_params["config"]["model_context_window"], 1000000)
 
-        name_params = calls[1][1]
-        self.assertEqual(name_params, {"threadId": sid, "name": "app-spawn"})
-
-        turn_params = calls[2][1]
+        # turn/start now runs second (was third, behind the rename).
+        turn_params = calls[1][1]
         self.assertEqual(turn_params["threadId"], sid)
         self.assertEqual(turn_params["cwd"], str(self.repo))
         self.assertEqual(turn_params["input"], [{"type": "text", "text": "say ok"}])
         self.assertEqual(turn_params["approvalPolicy"], "never")
         self.assertEqual(turn_params["sandboxPolicy"], {"type": "dangerFullAccess"})
+
+        name_params = calls[2][1]
+        self.assertEqual(name_params, {"threadId": sid, "name": "app-spawn"})
         registry.assert_not_called()
         self.assertEqual(rows[0]["spawn_id"], result["spawn_id"])
         self.assertEqual(rows[0]["pid"], result["pid"])
@@ -10062,6 +11367,183 @@ class TestRepoContextHelpers(unittest.TestCase):
         self.assertEqual(reg_thread["model"], "gpt-5.5")
         self.assertEqual(reg_thread["title"], "app-spawn")
         self.assertEqual(reg_thread["ccc"]["spawn_id"], result["spawn_id"])
+
+    def test_spawn_codex_reattaches_when_first_turn_cannot_find_new_thread(self):
+        """A missing new thread recycles the child when resume cannot recover."""
+        server = self.server
+        stale_sid = "019e2bbb-d5e0-7df2-a1f7-26fbcf363485"
+        fresh_sid = "019e2bbb-d5e0-7df2-a1f7-26fbcf363486"
+        calls = []
+        thread_starts = 0
+
+        def fake_request(method, params=None, timeout=20):
+            nonlocal thread_starts
+            calls.append((method, params or {}))
+            if method == "thread/start":
+                thread_starts += 1
+                sid = stale_sid if thread_starts == 1 else fresh_sid
+                return {"result": {"thread": {"id": sid, "status": {"type": "idle"}}}}
+            if method == "thread/name/set":
+                return {"result": {}}
+            if method == "turn/start":
+                if params["threadId"] == stale_sid:
+                    return {"error": {"message": f"thread not found: {stale_sid}"}}
+                return {"result": {"turn": {"id": "turn-1"}}}
+            if method == "thread/resume":
+                return {"error": {"message": f"thread not found: {stale_sid}"}}
+            raise AssertionError(f"unexpected method: {method}")
+
+        original_spawns = list(server._spawned_sessions)
+        server._spawned_sessions.clear()
+        try:
+            with mock.patch.object(server, "_codex_app_server_request", side_effect=fake_request), \
+                 mock.patch.object(server, "_codex_rollout_stat", return_value=None), \
+                 mock.patch.object(server, "_codex_app_server_transport_kind", return_value="stdio"), \
+                 mock.patch.object(server, "_mark_codex_thread_user_visible", return_value=True), \
+                 mock.patch.object(server, "_register_codex_sidebar_project_for_spawn_entry"), \
+                 mock.patch.object(server, "_codex_app_server_shutdown", return_value=True) as recycle, \
+                 mock.patch.dict(os.environ, {"CCC_CODEX_WAKE_CONFIRM_TIMEOUT": "0",
+                                              "CCC_CODEX_SPAWN_CONFIRM_TIMEOUT": "0"}):
+                result = server.spawn_session_codex(
+                    "say ok", name="reattach app spawn", repo_path=str(self.repo),
+                )
+                finalizer = server._CODEX_LAST_SPAWN_FINALIZER
+                if finalizer:
+                    finalizer.join(10)
+        finally:
+            server._spawned_sessions.clear()
+            server._spawned_sessions.extend(original_spawns)
+
+        self.assertTrue(result["ok"])
+        self.assertEqual(result["session_id"], fresh_sid)
+        self.assertTrue(result["thread_recreated"])
+        recycle.assert_called_once()
+        # Recovery retries thread/start + turn/start only. The rename runs once
+        # at the end against whichever thread actually took the turn, instead of
+        # once per attempt ahead of it.
+        self.assertEqual(
+            [method for method, _ in calls],
+            [
+                "thread/start",
+                "turn/start",
+                "thread/resume",
+                "thread/start",
+                "turn/start",
+                "thread/name/set",
+            ],
+        )
+        self.assertEqual(calls[-1][1]["threadId"], fresh_sid)
+
+    def test_spawn_codex_falls_back_to_exec_when_threads_stay_lost(self):
+        """If even a recreated thread turns up 'thread not found', the spawn
+        must fall back to the legacy exec path instead of failing — the error
+        is definitive proof no turn was accepted, so a second session cannot
+        duplicate the task."""
+        server = self.server
+        stale_sid = "019e2bbb-d5e0-7df2-a1f7-26fbcf363485"
+        fresh_sid = "019e2bbb-d5e0-7df2-a1f7-26fbcf363486"
+        thread_starts = 0
+
+        def fake_request(method, params=None, timeout=20):
+            nonlocal thread_starts
+            if method == "thread/start":
+                thread_starts += 1
+                sid = stale_sid if thread_starts == 1 else fresh_sid
+                return {"result": {"thread": {"id": sid, "status": {"type": "idle"}}}}
+            if method == "thread/name/set":
+                return {"result": {}}
+            if method == "turn/start":
+                return {"error": {"message": f"thread not found: {params['threadId']}"}}
+            if method == "thread/resume":
+                return {"error": {"message": f"thread not found: {params['threadId']}"}}
+            raise AssertionError(f"unexpected method: {method}")
+
+        proc = mock.Mock(pid=4245)
+        original_spawns = list(server._spawned_sessions)
+        server._spawned_sessions.clear()
+        try:
+            with mock.patch.object(server, "_codex_app_server_request", side_effect=fake_request), \
+                 mock.patch.object(server, "_codex_rollout_stat", return_value=None), \
+                 mock.patch.object(server, "_codex_app_server_transport_kind", return_value="stdio"), \
+                 mock.patch.object(server, "_codex_app_server_shutdown", return_value=True) as recycle, \
+                 mock.patch.object(
+                     server,
+                     "_resolve_codex_bin",
+                     return_value={"available": True, "bin": "/usr/bin/codex-test"},
+                 ), mock.patch.object(server.subprocess, "Popen", return_value=proc) as popen, \
+                 mock.patch.object(server, "_record_spawn_to_registry"):
+                result = server.spawn_session_codex(
+                    "say ok", name="lost thread spawn", repo_path=str(self.repo),
+                )
+        finally:
+            for entry in server._spawned_sessions:
+                fh = entry.get("log_fh")
+                if fh:
+                    fh.close()
+            server._spawned_sessions.clear()
+            server._spawned_sessions.extend(original_spawns)
+
+        self.assertTrue(result["ok"])
+        self.assertNotEqual(result.get("via"), "codex-app-spawn")
+        recycle.assert_called_once()
+        popen.assert_called_once()
+        cmd = popen.call_args.args[0]
+        self.assertIn("exec", cmd)
+        self.assertEqual(cmd[-1], "say ok")
+
+    def _run_thread_resume_requests(self, server, sid, count, rollout_exists):
+        server._CODEX_APP_SERVER_FALSE_MISSES = 0
+        error = {"error": {"message": f"thread not found: {sid}"}}
+        try:
+            with mock.patch.object(server, "_control_plane_engine_call", return_value=None), \
+                 mock.patch.object(server, "_ensure_codex_app_server", return_value=object()), \
+                 mock.patch.object(server, "_codex_app_server_request_to_transport", return_value=error), \
+                 mock.patch.object(server, "_codex_rollout_exists_on_disk", return_value=rollout_exists), \
+                 mock.patch.object(server, "_codex_app_server_shutdown") as recycle:
+                for _ in range(count):
+                    server._codex_app_server_request("thread/resume", {"threadId": sid})
+                return recycle
+        finally:
+            server._CODEX_APP_SERVER_FALSE_MISSES = 0
+
+    def test_codex_app_server_recycles_after_verified_false_misses(self):
+        """A wedged child that keeps failing thread/resume with 'thread not
+        found' for threads whose rollouts exist on disk must be recycled —
+        the thread/list liveness probe alone cannot detect this wedge."""
+        server = self.server
+        sid = "019e2bbb-d5e0-7df2-a1f7-26fbcf363485"
+        recycle = self._run_thread_resume_requests(server, sid, 3, rollout_exists=True)
+        recycle.assert_called_once()
+
+    def test_codex_app_server_keeps_child_on_genuine_miss(self):
+        """'thread not found' for a thread with no rollout on disk is a
+        genuine miss (deleted/archived thread), not a wedge signal."""
+        server = self.server
+        sid = "019e2bbb-d5e0-7df2-a1f7-26fbcf363485"
+        recycle = self._run_thread_resume_requests(server, sid, 5, rollout_exists=False)
+        recycle.assert_not_called()
+
+    def test_codex_app_server_false_miss_counter_resets_on_success(self):
+        server = self.server
+        sid = "019e2bbb-d5e0-7df2-a1f7-26fbcf363485"
+        error = {"error": {"message": f"thread not found: {sid}"}}
+        ok = {"result": {"thread": {"id": sid, "status": {"type": "idle"}}}}
+        server._CODEX_APP_SERVER_FALSE_MISSES = 0
+        try:
+            with mock.patch.object(server, "_ensure_codex_app_server", return_value=object()), \
+                 mock.patch.object(server, "_codex_rollout_exists_on_disk", return_value=True), \
+                 mock.patch.object(server, "_codex_app_server_shutdown") as recycle:
+                with mock.patch.object(server, "_codex_app_server_request_to_transport", return_value=error):
+                    server._codex_app_server_request("thread/resume", {"threadId": sid})
+                    server._codex_app_server_request("thread/resume", {"threadId": sid})
+                with mock.patch.object(server, "_codex_app_server_request_to_transport", return_value=ok):
+                    server._codex_app_server_request("thread/resume", {"threadId": sid})
+                with mock.patch.object(server, "_codex_app_server_request_to_transport", return_value=error):
+                    server._codex_app_server_request("thread/resume", {"threadId": sid})
+                    server._codex_app_server_request("thread/resume", {"threadId": sid})
+                recycle.assert_not_called()
+        finally:
+            server._CODEX_APP_SERVER_FALSE_MISSES = 0
 
     def test_spawn_codex_defaults_to_best_model_and_max_context_arg(self):
         """Default Codex spawns should prefer 5.5 while requesting max context."""
@@ -10541,7 +12023,8 @@ class TestRepoContextHelpers(unittest.TestCase):
                 return_value={"available": True, "bin": "/usr/bin/codex-test"},
             ), mock.patch.object(server, "_codex_thread_row", return_value={"cwd": str(self.repo)}), \
                  mock.patch.object(server, "_git_toplevel_for_existing_dir", return_value=str(self.repo)), \
-                 mock.patch.object(server, "_codex_app_server_request", side_effect=fake_request):
+                 mock.patch.object(server, "_codex_app_server_request", side_effect=fake_request), \
+                 mock.patch.object(server, "_schedule_codex_queue_pump"):
                 result = server.resume_session_codex(sid, "keep this")
 
             self.assertTrue(result["ok"])
@@ -11052,6 +12535,11 @@ class TestRepoContextHelpers(unittest.TestCase):
             server._CODEX_APP_SERVER_EVENT_SEQ = 0
             server._CODEX_APP_SERVER_TRANSPORT = fake
             server._CODEX_APP_SERVER_INITIALIZED = True
+            # FakeTransport doesn't implement close() or answer the
+            # liveness probe's "thread/list" round trip; seed the probe
+            # throttle so _ensure_codex_app_server treats it as recently
+            # verified instead of trying to probe/replace it.
+            server._CODEX_APP_SERVER_LAST_LIVE_CHECK = time.time()
         try:
             server._codex_app_server_handle_message({
                 "jsonrpc": "2.0",
@@ -11649,6 +13137,7 @@ class TestRepoContextHelpers(unittest.TestCase):
             try:
                 with mock.patch.object(server, "_codex_managed_app_server_socket_path", return_value=sock), \
                      mock.patch.object(server, "_connect_codex_managed_app_server", side_effect=OSError("nope")), \
+                     mock.patch.object(server, "_codex_app_server_reap_stray_children"), \
                      mock.patch.object(server, "_resolve_codex_bin", return_value={"available": True, "bin": "/usr/bin/codex-test"}), \
                      mock.patch.object(server.subprocess, "Popen", return_value=proc), \
                      mock.patch.object(server, "_codex_app_server_request_to_transport", return_value={"result": {}}), \
@@ -11659,6 +13148,47 @@ class TestRepoContextHelpers(unittest.TestCase):
 
         self.assertIsNotNone(result)
         self.assertEqual(result.kind, "stdio")
+
+    def test_codex_transport_close_reaps_a_stubborn_app_server(self):
+        """close() must not stop at terminate() -- it has to wait and escalate.
+
+        The stdio reader thread sits in `for line in proc.stdout`, which ends
+        only at EOF, and EOF only arrives once the process is actually gone. A
+        SIGTERM the app-server is slow to honour therefore strands that reader
+        forever, and the spawn path has already dropped the handle to it: one
+        leaked `codex-app-server-reader-*` thread per reconnect. Observed at 170
+        threads / 45% CPU in a ccc_worker after a day of reconnects.
+        """
+        server = self.server
+        proc = mock.Mock()
+        proc.poll.return_value = None
+        # Ignores SIGTERM, dies on SIGKILL.
+        proc.wait.side_effect = [
+            server.subprocess.TimeoutExpired(cmd="codex", timeout=5),
+            0,
+        ]
+        transport = server._CodexAppServerTransport("stdio", proc=proc)
+
+        transport.close()
+
+        proc.terminate.assert_called_once()
+        proc.kill.assert_called_once()
+        # Reaped, so it cannot linger as a zombie either.
+        self.assertEqual(proc.wait.call_count, 2)
+
+    def test_codex_transport_close_does_not_kill_a_cooperative_app_server(self):
+        """A process that honours SIGTERM is waited for, never SIGKILLed."""
+        server = self.server
+        proc = mock.Mock()
+        proc.poll.return_value = None
+        proc.wait.return_value = 0
+        transport = server._CodexAppServerTransport("stdio", proc=proc)
+
+        transport.close()
+
+        proc.terminate.assert_called_once()
+        proc.kill.assert_not_called()
+        proc.wait.assert_called_once()
 
     def test_codex_app_server_transport_kind_labels_managed_and_stdio(self):
         server = self.server
@@ -11684,6 +13214,75 @@ class TestRepoContextHelpers(unittest.TestCase):
             finally:
                 server._CODEX_APP_SERVER_TRANSPORT = old_transport
                 server._CODEX_APP_SERVER_INITIALIZED = old_initialized
+
+    def test_codex_shared_state_holders_exclude_own_process_group(self):
+        server = self.server
+        codex_home = pathlib.Path.home() / ".codex"
+        codex_home.mkdir(parents=True, exist_ok=True)
+        state_db = codex_home / "state_5.sqlite"
+        logs_db = codex_home / "logs_2.sqlite"
+        state_db.write_text("")
+        logs_db.write_text("")
+        fake_lsof = (
+            f"p100\n"
+            f"ccodex\n"
+            f"f3\n"
+            f"n{state_db}\n"
+            f"p200\n"
+            f"ccodex\n"
+            f"f4\n"
+            f"n{state_db}\n"
+            f"p300\n"
+            f"ccodex\n"
+            f"f5\n"
+            f"n{logs_db}\n"
+        )
+        own_proc = mock.Mock()
+        own_proc.pid = 100
+        server._CODEX_APP_SERVER_PROC = own_proc
+        try:
+            with mock.patch.object(server.subprocess, "run", return_value=mock.Mock(stdout=fake_lsof)) as run, \
+                 mock.patch("os.getpgid", side_effect=lambda pid: {100: 100, 200: 200, 300: 200}.get(pid, pid)) as getpgid:
+                holders = server._codex_shared_state_db_holders()
+                self.assertTrue(getpgid.called)
+                run.assert_called_once()
+        finally:
+            server._CODEX_APP_SERVER_PROC = None
+        pids = {h["pid"] for h in holders}
+        self.assertNotIn(100, pids)
+        self.assertIn(200, pids)
+        self.assertIn(300, pids)
+
+    def test_codex_shared_state_conflict_message_includes_pids_and_commands(self):
+        server = self.server
+        fake_holders = [
+            {"pid": 200, "command": "codex", "file": "/home/user/.codex/state_5.sqlite"},
+            {"pid": 300, "command": "codex", "file": "/home/user/.codex/logs_2.sqlite"},
+        ]
+        with mock.patch.object(server, "_codex_shared_state_db_holders", return_value=fake_holders):
+            conflict = server._codex_shared_state_conflict()
+        self.assertIsNotNone(conflict)
+        self.assertIn("pids=200,300", conflict["summary"])
+        self.assertIn("Quit the other Codex process", conflict["message"])
+
+    def test_codex_ensure_app_server_blocks_stdio_when_foreign_writer_holds_state(self):
+        server = self.server
+        conflict = {
+            "summary": "pids=200 commands=codex",
+            "message": "Another Codex process is already using the shared state database",
+        }
+        with tempfile.TemporaryDirectory() as td:
+            sock = pathlib.Path(td) / "app-server.sock"
+            sock.write_text("")
+            server._codex_app_server_shutdown()
+            try:
+                with mock.patch.object(server, "_codex_managed_app_server_socket_path", return_value=sock), \
+                     mock.patch.object(server, "_connect_codex_managed_app_server", side_effect=OSError("nope")), \
+                     mock.patch.object(server, "_codex_shared_state_conflict", return_value=conflict):
+                    result = server._ensure_codex_app_server()
+            finally:
+                server._codex_app_server_shutdown()
+        self.assertIsNone(result)
 
     def test_codex_managed_app_server_ui_label_is_present(self):
         app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
@@ -11839,8 +13438,11 @@ class TestRepoContextHelpers(unittest.TestCase):
         self.assertEqual(result["engine"], "antigravity")
         self.assertEqual(result["repo_path"], str(self.repo))
         self.assertEqual(result["cwd"], str(self.repo))
-        self.assertRegex(result["session_id"], r"^[0-9a-f-]{36}$")
-        self.assertFalse(result["session_id_pending"])
+        # A new AGY print run cannot be assigned an arbitrary ID: AGY only
+        # accepts --conversation for a session it already owns. The real ID
+        # arrives asynchronously once the CLI persists it.
+        self.assertIsNone(result["session_id"])
+        self.assertTrue(result["session_id_pending"])
         settings = json.loads(settings_path.read_text())
         self.assertEqual(settings["model"], "Gemini 3.5 Flash (High)")
         self.assertEqual(settings["colorScheme"], "dark")
@@ -12006,6 +13608,27 @@ class TestRepoContextHelpers(unittest.TestCase):
 
         self.assertTrue(result["ok"])
         ask_engine.assert_called_once_with(sid, "probe", 1000, "hermes")
+        headless.assert_not_called()
+
+    def test_ask_session_resolves_fresh_antigravity_session_prefix(self):
+        """A copied eight-character spawn ID must not fall back to Claude."""
+        server = self.server
+        full_sid = "193ce224-1111-4222-8333-444444444444"
+        original_spawns = list(server._spawned_sessions)
+        server._spawned_sessions[:] = [{
+            "engine": "antigravity",
+            "session_id": full_sid,
+        }]
+        try:
+            with mock.patch.object(server, "ask_engine_session_and_wait", return_value={"ok": True}) as ask_engine, \
+                 mock.patch.object(server, "resume_session_headless", return_value={"ok": False, "error": "wrong route"}) as headless:
+                result = server.ask_session_and_wait(full_sid[:8], "probe", timeout_ms=1000)
+        finally:
+            server._spawned_sessions.clear()
+            server._spawned_sessions.extend(original_spawns)
+
+        self.assertTrue(result["ok"])
+        ask_engine.assert_called_once_with(full_sid, "probe", 1000, "antigravity")
         headless.assert_not_called()
 
     def test_open_target_allows_executable_session_cwd_files(self):
@@ -12898,6 +14521,15 @@ class TestRepoContextHelpers(unittest.TestCase):
         self.assertIn(".conversations-view .gc-message-body.assistant-text", css)
         self.assertIn(".gc-reader-input-row .tts-btn", css)
 
+    def test_group_chat_reader_labels_messages_and_last_pings(self):
+        """Group-chat messages and participant cards expose stable L-number links."""
+        js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text()
+        css = pathlib.Path(PROJECT_ROOT, "static", "app.css").read_text()
+        self.assertIn('class="gc-message-number"', js)
+        self.assertIn("lastPinged[short]", js)
+        self.assertIn("Last pinged", js)
+        self.assertIn(".gc-message-number", css)
+
     # ── Codex desktop↔CCC single-writer coordination ────────────────────────
     def test_parse_lsof_open_rollouts_maps_pids_and_filters(self):
         """`lsof -Fpn` field output → {rollout path: pid}. Only paths under
@@ -13237,15 +14869,17 @@ class TestModelPicker(unittest.TestCase):
             finally:
                 server.SESSION_OVERRIDES_FILE = orig
 
-    def test_sonnet_is_not_marked_as_one_m_context_in_model_picker(self):
-        """Sonnet is a 200k-context model; only Opus variants get the 1M badge."""
+    def test_latest_claude_models_are_marked_as_one_m_context_in_model_picker(self):
+        """Anthropic's latest Fable, Opus, and Sonnet models support 1M."""
         js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text()
 
         self.assertIn("function claudeModelSupportsOneM(model)", js)
         self.assertIn("return n === 'opus-4-8' || n === 'opus-4-7';", js)
         self.assertIn("const modelSupportsOneM = engine === 'claude' && claudeModelSupportsOneM(displayModel);", js)
         self.assertIn("const isOneM = modelSupportsOneM && (", js)
-        self.assertIn("{ id: 'sonnet-5',  label: 'sonnet-5',  oneM: false }", js)
+        self.assertIn("{ id: 'fable-5',   label: 'fable-5',   oneM: true }", js)
+        self.assertIn("{ id: 'opus-5',    label: 'opus-5',    oneM: true }", js)
+        self.assertIn("{ id: 'sonnet-5',  label: 'sonnet-5',  oneM: true }", js)
         self.assertNotIn("{ id: 'sonnet-4-6'", js)  # removed in CCC-484
 
     def test_pinned_conversations_roundtrip_and_sort_first(self):
@@ -13315,6 +14949,23 @@ class TestModelPicker(unittest.TestCase):
         post_idx = src.find("def do_POST")
         self.assertGreater(post_idx, 0)
         self.assertIn("_check_same_origin", src[post_idx:post_idx + 200])
+
+    def test_kimi_model_switch_applies_live_through_acp(self):
+        """Kimi exposes model selection as a live ACP config option."""
+        for mod in ("server",):
+            sys.modules.pop(mod, None)
+        import server
+        with mock.patch.object(server, "_detect_session_engine", return_value="kimi"), \
+             mock.patch.object(server, "_set_session_override"), \
+             mock.patch.object(server, "_acp_set_config", return_value={"ok": True}) as set_config:
+            result = server._set_session_model("session-kimi-switch", "kimi-code/k3", False)
+
+        self.assertTrue(result["ok"])
+        self.assertEqual(result["applied"], "live")
+        self.assertEqual(result["via"], "kimi-acp-config")
+        set_config.assert_called_once_with(
+            "kimi", "session-kimi-switch", "model", "kimi-code/k3"
+        )
 
     def test_extract_session_slash_commands_from_init_event(self):
         for mod in ("server",):
@@ -13585,12 +15236,32 @@ class TestModelPicker(unittest.TestCase):
 
     def test_codex_model_picker_marks_current_reasoning_effort(self):
         js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text()
-        self.assertIn("const currentReasoningEffort = (ovr && ovr.reasoning_effort) || u.reasoning_effort || '';", js)
-        self.assertIn("const effortInner = currentReasoningEffort", js)
+        # Live-first: the pill states the effort the session is RUNNING, and a
+        # queued effort-only switch renders as its own "→" chip rather than
+        # masquerading as current.
+        self.assertIn("const liveReasoningEffort = String(u.reasoning_effort || '').trim();", js)
+        self.assertIn("const currentReasoningEffort = liveReasoningEffort || ovrReasoningEffort;", js)
+        self.assertIn("const effortInner = showsEffort", js)
         self.assertIn("wp-model-effort", js)
-        self.assertIn('data-reasoning="\' + escapeHtml(currentReasoningEffort) + \'"', js)
-        self.assertIn("const currentReasoning = btn.dataset.reasoning || '';", js)
+        # The picker opens on the INTENDED level, so a queued switch reads back
+        # as the active row instead of inviting the user to pick it twice.
+        self.assertIn("const pickerReasoningEffort = ovrReasoningEffort || liveReasoningEffort;", js)
+        self.assertIn('data-reasoning="\' + escapeHtml(pickerReasoningEffort) + \'"', js)
         self.assertIn("const isActive = lvl.id === currentReasoning;", js)
+
+    def test_model_pill_always_states_effort_on_effort_capable_engines(self):
+        """Engine + model + effort is one triple; a blank effort segment reads
+        as "no effort" when the session is really on the engine default."""
+        js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text()
+        css = pathlib.Path(PROJECT_ROOT, "static", "app.css").read_text()
+        server_py = pathlib.Path(PROJECT_ROOT, "server.py").read_text()
+
+        self.assertIn("const showsEffort = engineSupportsEffort(engine);", js)
+        self.assertIn("escapeHtml(currentReasoningEffort || 'default')", js)
+        self.assertIn(".conv-input-context .wp-model-effort.is-default", css)
+        # extract_session_usage only sees the picker override, so a session
+        # spawned with --effort and never re-picked would report blank.
+        self.assertIn("usage[\"reasoning_effort\"] = _conv_row_reasoning_effort(", server_py)
 
     def test_new_codex_session_composer_sends_selected_reasoning_effort(self):
         """New Codex sessions need an effort picker alongside their model picker."""
@@ -13604,11 +15275,16 @@ class TestModelPicker(unittest.TestCase):
         self.assertIn("reasoning_effort: spawnDefaultsState.reasoning_effort", js)
         self.assertIn("spawnDefaultsDraft.reasoning_effort = $spawnDefaultsEffort.value", js)
         self.assertIn("let spawnEffortChoiceDirty = false;", js)
-        self.assertIn("if (!spawnEffortChoiceDirty && $convInputEffortSelect)", js)
         self.assertIn("spawnEffortChoiceDirty = true;", js)
         self.assertIn("spawnEffortChoiceDirty = false;\n    syncSpawnEngineDependentUi();", js)
-        self.assertIn("($convInputEffortSelect.value || spawnEffortChoiceDirty)", js)
-        self.assertIn("spawnBody.reasoning_effort = $convInputEffortSelect.value", js)
+        # The effort now flows through buildSpawnBody, which owns the whole
+        # engine/model/effort triple for every spawn surface. effortExplicit
+        # keeps a deliberate "engine default" choice distinguishable from an
+        # untouched select, so it can still be sent as a blank.
+        self.assertIn("const held = (spawnEffortChoiceDirty && $convInputEffortSelect)", js)
+        self.assertIn("if (engineSupportsEffort(engine) && (effort || o.effortExplicit)) {", js)
+        self.assertIn("body.reasoning_effort = effort;", js)
+        self.assertIn("effortExplicit: spawnEffortChoiceDirty", js)
         self.assertIn("def spawn_session_codex(prompt, name=None, cwd=None, repo_path=None, worktree=False, model=None, reasoning_effort=\"\", parent_session_id=None):", server_py)
         self.assertIn('cmd.extend(["-c", f"model_reasoning_effort={reasoning_effort}"])', server_py)
 
@@ -14347,10 +16023,32 @@ class TestCodexCompactionRecovery(unittest.TestCase):
         for mod in ("server", "morning", "morning_store"):
             sys.modules.pop(mod, None)
         self.server = importlib.import_module("server")
+        self.control_plane_patch = mock.patch.object(
+            self.server,
+            "_control_plane_engine_call",
+            return_value=None,
+        )
+        self.control_plane_patch.start()
+        self.addCleanup(self.control_plane_patch.stop)
         self.tmp_dir = tempfile.mkdtemp(prefix="ccc-codex-recovery-")
         self.server.CODEX_APP_SERVER_STATE_FILE = (
             pathlib.Path(self.tmp_dir) / "codex-app-server-state.json"
         )
+        # Keep interrupt-ask state out of the real dashboard file, and
+        # auto-approve asks so the pre-gate recovery flow (interrupt on the
+        # tick that sees a stalled active turn) still drives these tests.
+        # The approval gate itself is covered by
+        # test_recovery_waits_for_interrupt_approval / _dismissed_suppresses.
+        self.server._INTERRUPT_ASKS_FILE = (
+            pathlib.Path(self.tmp_dir) / "interrupt-asks.json"
+        )
+        self.interrupt_ask_patch = mock.patch.object(
+            self.server,
+            "_file_interrupt_ask",
+            return_value={"id": "test-ask", "status": "approved"},
+        )
+        self.interrupt_ask_patch.start()
+        self.addCleanup(self.interrupt_ask_patch.stop)
         with self.server._CODEX_APP_SERVER_LOCK:
             self.server._CODEX_APP_SERVER_THREAD_STATE.clear()
             self.server._CODEX_APP_SERVER_TURN_THREAD.clear()
@@ -14536,6 +16234,52 @@ class TestCodexCompactionRecovery(unittest.TestCase):
         recovery = server._codex_app_server_thread_state(sid)["compaction_recovery"]
         self.assertEqual(recovery["status"], "interrupting")
         self.assertEqual(recovery["attempts"], 0)
+
+    def test_recovery_waits_for_interrupt_approval(self):
+        # CCC never interrupts a live turn on its own: with the ask still
+        # pending, the episode holds (no interrupt RPC) and re-checks later.
+        sid = self._armed_state(status="active")
+        server = self.server
+        with server._CODEX_APP_SERVER_LOCK:
+            server._CODEX_APP_SERVER_THREAD_STATE[sid]["active_turn_id"] = "turn-compact"
+        with mock.patch.object(
+            server,
+            "_file_interrupt_ask",
+            return_value={"id": "ask-1", "status": "pending"},
+        ), mock.patch.object(
+            server, "_codex_interrupt_via_app_server"
+        ) as interrupt, mock.patch.object(server, "resume_session_codex") as resume:
+            result = server._run_codex_compaction_recovery_once(sid, now=120.0)
+
+        self.assertEqual(result["waiting"], "interrupt-approval")
+        interrupt.assert_not_called()
+        resume.assert_not_called()
+        recovery = server._codex_app_server_thread_state(sid)["compaction_recovery"]
+        self.assertEqual(
+            recovery["reason"],
+            "Waiting for approval to interrupt the stalled turn",
+        )
+        self.assertEqual(recovery["next_attempt_at"], 150.0)
+
+    def test_recovery_dismissed_interrupt_ask_suppresses_episode(self):
+        sid = self._armed_state(status="active")
+        server = self.server
+        with server._CODEX_APP_SERVER_LOCK:
+            server._CODEX_APP_SERVER_THREAD_STATE[sid]["active_turn_id"] = "turn-compact"
+        with mock.patch.object(
+            server,
+            "_file_interrupt_ask",
+            return_value={"id": "ask-1", "status": "dismissed"},
+        ), mock.patch.object(
+            server, "_codex_interrupt_via_app_server"
+        ) as interrupt, mock.patch.object(server, "resume_session_codex") as resume:
+            result = server._run_codex_compaction_recovery_once(sid, now=120.0)
+
+        self.assertEqual(result["suppressed"], "interrupt-declined")
+        interrupt.assert_not_called()
+        resume.assert_not_called()
+        recovery = server._codex_app_server_thread_state(sid)["compaction_recovery"]
+        self.assertEqual(recovery["status"], "suppressed")
 
     def test_codex_recovery_marks_interrupt_before_rpc_and_ignores_partial_output(self):
         sid = self._armed_state(status="active")
@@ -14955,6 +16699,19 @@ class TestPendingInputs(unittest.TestCase):
             self.server._queue_codex_resume("sid-a", "first")
 
         schedule.assert_called_once_with("sid-a")
+
+    def test_queue_codex_resume_dedupes_identical_text(self):
+        """A slow-to-confirm delivery must not accumulate duplicate copies of the
+        same verifier report (or any other injected text) for one session."""
+        sid = "sid-dedupe"
+        self.server._queue_codex_resume(sid, "verifier report")
+        self.server._queue_codex_resume(sid, "verifier report")
+        self.server._queue_codex_resume(sid, "different message")
+        with self.server._pending_resume_lock:
+            self.assertEqual(
+                self.server._pending_resume_queue.get(sid),
+                ["verifier report", "different message"],
+            )
 
     def test_codex_queue_pump_delivers_and_removes_only_fifo_head(self):
         sid = "sid-fifo"
@@ -15778,6 +17535,25 @@ class TestCodexEsc(unittest.TestCase):
             self.assertFalse(res["ok"])
             self.assertEqual(res["error"], "Codex session is not live — nothing to interrupt")
 
+    def test_interrupt_live_headless_claude_session_sends_sigint(self):
+        with mock.patch.object(self.server, "_is_codex_session", return_value=False), \
+             mock.patch.object(self.server, "_is_kimi_session", return_value=False), \
+             mock.patch.object(self.server, "find_session_cwd", return_value="/tmp"), \
+             mock.patch.object(self.server, "session_live_status", return_value={
+                 "live": True,
+                 "pid": 12345,
+                 "tty": None,
+                 "terminal_app": None,
+             }), \
+             mock.patch.object(self.server.os, "kill") as mock_kill:
+
+            res = self.server._interrupt_session("live-headless-claude-session")
+
+        self.assertTrue(res["ok"])
+        self.assertEqual(res["via"], "headless-sigint")
+        self.assertEqual(res["pid"], 12345)
+        mock_kill.assert_called_once_with(12345, self.server.signal.SIGINT)
+
     def test_no_active_turn_interrupt_clears_phantom_writer_and_pumps_queue(self):
         sid = "phantom-interrupt-session"
         with self.server._CODEX_APP_SERVER_LOCK:
@@ -16036,7 +17812,10 @@ class TestQuestionRelay(unittest.TestCase):
                 for h in entry.get("hooks", [])
                 if "command-center/hooks/" in h.get("command", "")
             ]
-            self.assertEqual(len(commands), 4)
+            # 4 pre-seeded (PreToolUse/PostToolUse/Notification/Stop, migrated
+            # to an absolute interpreter) + 2 freshly installed (PreCompact/
+            # PostCompact, absent from the fixture above).
+            self.assertEqual(len(commands), 6)
             expected_python = "/usr/bin/python3" if self.server.sys.platform == "darwin" else "/opt/ccc-test/python3"
             for command in commands:
                 self.assertTrue(command.startswith(expected_python + " "), command)
@@ -16451,21 +18230,32 @@ class TestWTQueueIntegration(unittest.TestCase):
             self.skipTest("watchtower not installed — Phase 0 not yet applied")
 
     def test_wt_queue_shim_resolves(self):
-        """The _queue_answer shim in server.py must be callable regardless of
-        whether WT is installed (it falls back to ux_fixes_queue.answer)."""
+        """The _queue_answer shim in server.py must be callable -- it is
+        bound straight to watchtower.queue.answer (hard dependency, no
+        fallback)."""
         import server
         self.assertTrue(
             callable(getattr(server, "_queue_answer", None)),
             "server._queue_answer must be callable after WT-26 Phase 1 shim",
         )
 
-    def test_wt_availability_flag_is_bool(self):
-        """_WT_QUEUE_AVAILABLE must be a bool so callers can branch on it."""
+    def test_queue_engine_is_watchtower_hard_dependency(self):
+        """watchtower.queue is a hard dependency (no availability flag, no
+        fallback module): server._q must be bound to watchtower.queue.
+
+        Compares __name__ rather than `is`-identity against a freshly
+        `import`ed watchtower.queue: several test classes in this suite pop
+        "server" / "watchtower.queue" from sys.modules in setUp/tearDown for
+        their own isolation, so which particular module-object generation is
+        cached can legitimately differ by the time this test runs as part of
+        the full suite -- __name__ is what actually matters here.
+        """
         import server
-        self.assertIsInstance(
-            getattr(server, "_WT_QUEUE_AVAILABLE", None),
-            bool,
-            "server._WT_QUEUE_AVAILABLE must be a bool",
+        self.assertEqual(getattr(server._q, "__name__", None), "watchtower.queue")
+        self.assertFalse(
+            hasattr(server, "_WT_QUEUE_AVAILABLE"),
+            "the old availability flag should be gone -- watchtower.queue "
+            "has no fallback left to gate",
         )
 
 
@@ -16653,6 +18443,470 @@ class TestWTMessagingBackendStage2(unittest.TestCase):
             result = self.server._try_wt_ask_for_headless_delivery("sid-123", "hi", 5000)
             self.assertIsNone(result)
             run.assert_not_called()
+
+
+class TestWtWorkerFifoFastPath(unittest.TestCase):
+    """P0a: a live WatchTower-tracked worker's FIFO is a known,
+    in-process-reachable channel even though CCC never spawned it itself.
+    Before this, such a worker was indistinguishable from a genuinely foreign
+    live writer -- queued forever with no escalation (the WT-129/WT-131
+    incident: CCC reported "busy" for a session that was actually idle).
+
+    Unlike CCC_MESSAGING_BACKEND=wt (TestWTMessagingBackendStage2 above),
+    this path is flag-independent and subprocess-free by design: it reads
+    workers.json in-process (same helper _wt_read_workers() already used
+    elsewhere for the is_watchtower_worker display flag) and writes the FIFO
+    directly, on the reasoning that fifo-only + WT-tracked-only is a
+    narrower, already-proven-safe risk class than the general messaging
+    backend (receipts breakdown: 0 fifo losses ever, vs. real losses on the
+    resume/delegate transports that flag also gates)."""
+
+    def setUp(self):
+        import server
+        self.server = server
+
+    def _workers_file(self, td, rows):
+        path = pathlib.Path(td) / "workers.json"
+        path.write_text(json.dumps({"workers": rows}))
+        return path
+
+    def _live_row(self, **over):
+        row = {
+            "worker_id": "wt-abc123",
+            "pid": os.getpid(),  # our own test process: always a live pid
+            "queue": "WT",
+            "engine": "claude",
+            "session_id": "sid-live-1",
+            "fifo": "",
+        }
+        row.update(over)
+        return row
+
+    # ---- resolver -----------------------------------------------------
+
+    def test_resolver_matches_live_worker_by_session_id(self):
+        with tempfile.TemporaryDirectory() as td:
+            fifo = pathlib.Path(td) / "wt.fifo"
+            os.mkfifo(fifo, 0o600)
+            wpath = self._workers_file(td, [self._live_row(fifo=str(fifo))])
+            with mock.patch.object(self.server, "_wt_workers_path", return_value=wpath):
+                entry = self.server._wt_worker_fifo_entry_for_session("sid-live-1")
+        self.assertIsNotNone(entry)
+        self.assertEqual(entry["fifo"], str(fifo))
+
+    def test_resolver_returns_none_for_unknown_session_id(self):
+        with tempfile.TemporaryDirectory() as td:
+            fifo = pathlib.Path(td) / "wt.fifo"
+            os.mkfifo(fifo, 0o600)
+            wpath = self._workers_file(td, [self._live_row(fifo=str(fifo))])
+            with mock.patch.object(self.server, "_wt_workers_path", return_value=wpath):
+                entry = self.server._wt_worker_fifo_entry_for_session("sid-someone-else")
+        self.assertIsNone(entry)
+
+    def test_resolver_returns_none_for_non_claude_engine(self):
+        """This fast path is only defined for the stream-json wire format;
+        a codex/kimi WT worker must fall through to their own delivery."""
+        with tempfile.TemporaryDirectory() as td:
+            fifo = pathlib.Path(td) / "wt.fifo"
+            os.mkfifo(fifo, 0o600)
+            wpath = self._workers_file(
+                td, [self._live_row(fifo=str(fifo), engine="codex")]
+            )
+            with mock.patch.object(self.server, "_wt_workers_path", return_value=wpath):
+                entry = self.server._wt_worker_fifo_entry_for_session("sid-live-1")
+        self.assertIsNone(entry)
+
+    def test_resolver_returns_none_when_fifo_field_empty(self):
+        with tempfile.TemporaryDirectory() as td:
+            wpath = self._workers_file(td, [self._live_row(fifo="")])
+            with mock.patch.object(self.server, "_wt_workers_path", return_value=wpath):
+                entry = self.server._wt_worker_fifo_entry_for_session("sid-live-1")
+        self.assertIsNone(entry)
+
+    def test_resolver_returns_none_when_path_is_not_actually_a_fifo(self):
+        """A stale/repurposed path (e.g. workers.json lagging reality) must
+        not be treated as a live channel just because a file exists there."""
+        with tempfile.TemporaryDirectory() as td:
+            not_a_fifo = pathlib.Path(td) / "not-a-fifo.txt"
+            not_a_fifo.write_text("hi")
+            wpath = self._workers_file(td, [self._live_row(fifo=str(not_a_fifo))])
+            with mock.patch.object(self.server, "_wt_workers_path", return_value=wpath):
+                entry = self.server._wt_worker_fifo_entry_for_session("sid-live-1")
+        self.assertIsNone(entry)
+
+    def test_resolver_returns_none_for_dead_pid(self):
+        """_wt_read_workers() itself drops dead pids (os.kill liveness) --
+        confirm the resolver inherits that, not just liveness at read time."""
+        dead = subprocess.Popen(["true"])
+        dead.wait()
+        with tempfile.TemporaryDirectory() as td:
+            fifo = pathlib.Path(td) / "wt.fifo"
+            os.mkfifo(fifo, 0o600)
+            wpath = self._workers_file(
+                td, [self._live_row(fifo=str(fifo), pid=dead.pid)]
+            )
+            with mock.patch.object(self.server, "_wt_workers_path", return_value=wpath):
+                entry = self.server._wt_worker_fifo_entry_for_session("sid-live-1")
+        self.assertIsNone(entry)
+
+    # ---- transient writer -----------------------------------------------
+
+    def test_write_fifo_line_once_delivers_correct_stream_json(self):
+        with tempfile.TemporaryDirectory() as td:
+            fifo = pathlib.Path(td) / "wt.fifo"
+            os.mkfifo(fifo, 0o600)
+            reader_fd = os.open(str(fifo), os.O_RDONLY | os.O_NONBLOCK)
+            try:
+                ok = self.server._write_fifo_line_once(str(fifo), "hello worker")
+                self.assertTrue(ok)
+                raw = os.read(reader_fd, 65536).decode("utf-8")
+            finally:
+                os.close(reader_fd)
+        payload = json.loads(raw)
+        self.assertEqual(payload["type"], "user")
+        self.assertEqual(payload["message"]["role"], "user")
+        self.assertEqual(payload["message"]["content"][0]["text"], "hello worker")
+
+    def test_write_fifo_line_once_strips_lone_surrogates(self):
+        with tempfile.TemporaryDirectory() as td:
+            fifo = pathlib.Path(td) / "wt.fifo"
+            os.mkfifo(fifo, 0o600)
+            reader_fd = os.open(str(fifo), os.O_RDONLY | os.O_NONBLOCK)
+            try:
+                ok = self.server._write_fifo_line_once(
+                    str(fifo), "queued " + chr(0xD83D) + " message"
+                )
+                self.assertTrue(ok)
+                raw = os.read(reader_fd, 65536).decode("utf-8")
+            finally:
+                os.close(reader_fd)
+        self.assertNotIn(chr(0xD83D), raw)
+        json.loads(raw)  # must still be valid, parseable JSON
+
+    def test_write_fifo_line_once_returns_false_without_blocking_when_no_reader(self):
+        with tempfile.TemporaryDirectory() as td:
+            fifo = pathlib.Path(td) / "wt.fifo"
+            os.mkfifo(fifo, 0o600)
+            start = time.monotonic()
+            ok = self.server._write_fifo_line_once(str(fifo), "hello")
+            elapsed = time.monotonic() - start
+        self.assertFalse(ok)
+        self.assertLess(elapsed, 0.5)
+
+    def test_write_fifo_line_once_leaves_open_fd_count_flat(self):
+        """The fd-leak bug this replaces: _write_via_spawn_fd caches the
+        opened fd on its `target` dict for reuse, which is correct for a
+        long-lived CCC spawn entry but leaks one descriptor per call against
+        a throwaway dict. _write_fifo_line_once must always close its fd."""
+        with tempfile.TemporaryDirectory() as td:
+            fifo = pathlib.Path(td) / "wt.fifo"
+            os.mkfifo(fifo, 0o600)
+            reader_fd = os.open(str(fifo), os.O_RDONLY | os.O_NONBLOCK)
+            try:
+                before = len(os.listdir("/dev/fd"))
+                for _ in range(5):
+                    self.assertTrue(
+                        self.server._write_fifo_line_once(str(fifo), "hello")
+                    )
+                    try:
+                        os.read(reader_fd, 65536)  # drain so the pipe never fills
+                    except BlockingIOError:
+                        pass
+                after = len(os.listdir("/dev/fd"))
+            finally:
+                os.close(reader_fd)
+        self.assertEqual(after, before)
+
+    # ---- wired into _inject_text_into_session's fork-guard branch -----
+
+    def _live_no_tty_status(self, pid=4268):
+        return {"live": True, "tty": None, "status": None, "pid": pid, "kind": None}
+
+    def test_inject_delivers_via_wt_worker_fifo_before_fork_guard(self):
+        """The resolver hits -> deliver directly, never reaching the fork
+        guard's queue-and-wait fallback and never touching resume."""
+        with mock.patch.dict(os.environ, {"CCC_WORKER_PROCESS": "1"}), \
+             mock.patch.object(self.server, "find_session_cwd", return_value="/fake/cwd"), \
+             mock.patch.object(self.server, "session_live_status", return_value=self._live_no_tty_status()), \
+             mock.patch.object(self.server, "_is_codex_session", return_value=False), \
+             mock.patch.object(self.server, "_is_cursor_session", return_value=False), \
+             mock.patch.object(self.server, "_is_hermes_session", return_value=False), \
+             mock.patch.object(self.server, "_is_kimi_session", return_value=False), \
+             mock.patch.object(self.server, "_is_gemini_session", return_value=False), \
+             mock.patch.object(self.server, "_is_antigravity_session", return_value=False), \
+             mock.patch.object(self.server, "_find_live_spawn_entry_for_session", return_value=None), \
+             mock.patch.object(self.server, "_ask_question_blocking_inject", return_value=False), \
+             mock.patch.object(self.server, "_notification_blocks_inject", return_value=False), \
+             mock.patch.object(
+                 self.server, "_wt_worker_fifo_entry_for_session",
+                 return_value={"fifo": "/fake/wt.fifo", "pid": 4268},
+             ), \
+             mock.patch.object(self.server, "_write_fifo_line_once", return_value=True) as write, \
+             mock.patch.object(self.server, "_queue_terminal_input") as queued, \
+             mock.patch.object(self.server, "resume_session_headless") as resume:
+            result = self.server._inject_text_into_session("sid-live-1", "follow up")
+        self.assertTrue(result["ok"])
+        self.assertEqual(result["via"], "wt-worker-fifo")
+        self.assertEqual(result["pid"], 4268)
+        write.assert_called_once_with("/fake/wt.fifo", "follow up")
+        queued.assert_not_called()
+        resume.assert_not_called()
+
+    def test_inject_falls_back_to_hold_when_resolver_finds_nothing(self):
+        """No WT worker known for this session -> unchanged existing
+        behaviour, the fork guard's queue-and-wait, never a parallel resume."""
+        with mock.patch.dict(os.environ, {"CCC_WORKER_PROCESS": "1"}), \
+             mock.patch.object(self.server, "find_session_cwd", return_value="/fake/cwd"), \
+             mock.patch.object(self.server, "session_live_status", return_value=self._live_no_tty_status()), \
+             mock.patch.object(self.server, "_is_codex_session", return_value=False), \
+             mock.patch.object(self.server, "_is_cursor_session", return_value=False), \
+             mock.patch.object(self.server, "_is_hermes_session", return_value=False), \
+             mock.patch.object(self.server, "_is_kimi_session", return_value=False), \
+             mock.patch.object(self.server, "_is_gemini_session", return_value=False), \
+             mock.patch.object(self.server, "_is_antigravity_session", return_value=False), \
+             mock.patch.object(self.server, "_find_live_spawn_entry_for_session", return_value=None), \
+             mock.patch.object(self.server, "_ask_question_blocking_inject", return_value=False), \
+             mock.patch.object(self.server, "_notification_blocks_inject", return_value=False), \
+             mock.patch.object(self.server, "_wt_worker_fifo_entry_for_session", return_value=None), \
+             mock.patch.object(self.server, "resume_session_headless") as resume:
+            result = self.server._inject_text_into_session("sid-unknown", "follow up")
+        self.assertTrue(result.get("foreign_live_writer"))
+        resume.assert_not_called()
+
+    def test_inject_falls_back_to_hold_when_fifo_write_fails(self):
+        """Resolver hits but the write fails (ENXIO -- worker not actually
+        listening right now): existing hold behaviour, never a resume."""
+        with mock.patch.dict(os.environ, {"CCC_WORKER_PROCESS": "1"}), \
+             mock.patch.object(self.server, "find_session_cwd", return_value="/fake/cwd"), \
+             mock.patch.object(self.server, "session_live_status", return_value=self._live_no_tty_status()), \
+             mock.patch.object(self.server, "_is_codex_session", return_value=False), \
+             mock.patch.object(self.server, "_is_cursor_session", return_value=False), \
+             mock.patch.object(self.server, "_is_hermes_session", return_value=False), \
+             mock.patch.object(self.server, "_is_kimi_session", return_value=False), \
+             mock.patch.object(self.server, "_is_gemini_session", return_value=False), \
+             mock.patch.object(self.server, "_is_antigravity_session", return_value=False), \
+             mock.patch.object(self.server, "_find_live_spawn_entry_for_session", return_value=None), \
+             mock.patch.object(self.server, "_ask_question_blocking_inject", return_value=False), \
+             mock.patch.object(self.server, "_notification_blocks_inject", return_value=False), \
+             mock.patch.object(
+                 self.server, "_wt_worker_fifo_entry_for_session",
+                 return_value={"fifo": "/fake/wt.fifo", "pid": 4268},
+             ), \
+             mock.patch.object(self.server, "_write_fifo_line_once", return_value=False), \
+             mock.patch.object(self.server, "resume_session_headless") as resume:
+            result = self.server._inject_text_into_session("sid-live-1", "follow up")
+        self.assertTrue(result.get("foreign_live_writer"))
+        resume.assert_not_called()
+
+    # ---- wired into the terminal-queue watcher's hold gate ------------
+
+    def test_watcher_hold_gate_consults_wt_worker_resolver(self):
+        """Source pin (same convention as
+        TestTerminalQueueDrainSafety.test_drain_loop_requeues_on_failed_delivery):
+        the watcher's foreign-live-writer `continue` must not fire when the
+        WT-worker resolver already found a channel, else fixing only the
+        inject-side fork guard leaves the watcher holding forever -- it never
+        even calls _inject_text_into_session for a held sid."""
+        server_py = pathlib.Path(PROJECT_ROOT, "server.py").read_text(encoding="utf-8")
+        self.assertIn(
+            "wt_worker_reachable = (\n"
+            "                            spawn is None\n"
+            "                            and _wt_worker_fifo_entry_for_session(sid) is not None\n"
+            "                        )",
+            server_py,
+        )
+        self.assertIn("and not wt_worker_reachable", server_py)
+
+    def test_watcher_escalates_and_clears_via_incident_helpers(self):
+        """Source pin: the watcher's hold branch must call
+        _note_foreign_writer_hold (the 2-tick gate) before continuing, and
+        _clear_foreign_writer_hold once it's past that branch -- otherwise
+        P0b's escalation state never gets set or reset by the loop that owns
+        the only timing information (consecutive 5s ticks) it needs."""
+        server_py = pathlib.Path(PROJECT_ROOT, "server.py").read_text(encoding="utf-8")
+        self.assertIn("if _note_foreign_writer_hold(sid, status.get(\"pid\")):", server_py)
+        self.assertIn('"inject", "INJECT_STALLED",', server_py)
+        self.assertIn("_clear_foreign_writer_hold(sid)", server_py)
+
+
+class TestForeignWriterHoldEscalation(unittest.TestCase):
+    """P0b: escalate a foreign-live-writer hold to a loud, logged incident on
+    the SECOND consecutive watcher observation (~5-10s after first queued,
+    tick-phase dependent) -- never the first, which could just be a
+    workers.json registration race. Scoped to (sid, pid) so a replaced
+    process starts its own fresh window."""
+
+    SID = "sid-hold-escalation-test"
+    PID = 424242
+
+    def setUp(self):
+        import server
+        self.server = server
+        self._cleanup()
+        self.addCleanup(self._cleanup)
+
+    def _cleanup(self):
+        with self.server._foreign_writer_hold_lock:
+            for key in [
+                k for k in self.server._foreign_writer_hold_incidents if k[0] == self.SID
+            ]:
+                self.server._foreign_writer_hold_incidents.pop(key, None)
+
+    def test_first_observation_does_not_escalate(self):
+        self.assertFalse(self.server._note_foreign_writer_hold(self.SID, self.PID))
+
+    def test_second_observation_escalates_exactly_once(self):
+        self.assertFalse(self.server._note_foreign_writer_hold(self.SID, self.PID))
+        self.assertTrue(self.server._note_foreign_writer_hold(self.SID, self.PID))
+        # A third, fourth, ... observation must not re-escalate (emit once
+        # per incident, not every tick).
+        self.assertFalse(self.server._note_foreign_writer_hold(self.SID, self.PID))
+        self.assertFalse(self.server._note_foreign_writer_hold(self.SID, self.PID))
+
+    def test_different_pid_starts_a_fresh_incident(self):
+        """The process behind `sid` was replaced -- the old escalated state
+        must not leak onto the new pid's own 2-tick window."""
+        self.assertFalse(self.server._note_foreign_writer_hold(self.SID, self.PID))
+        self.assertTrue(self.server._note_foreign_writer_hold(self.SID, self.PID))
+        # New pid for the same sid: fresh incident, first observation again.
+        self.assertFalse(self.server._note_foreign_writer_hold(self.SID, self.PID + 1))
+        self.assertTrue(self.server._note_foreign_writer_hold(self.SID, self.PID + 1))
+
+    def test_clear_resets_the_incident(self):
+        self.assertFalse(self.server._note_foreign_writer_hold(self.SID, self.PID))
+        self.assertTrue(self.server._note_foreign_writer_hold(self.SID, self.PID))
+        self.server._clear_foreign_writer_hold(self.SID)
+        # Cleared -> the next observation is a fresh incident's first, not
+        # an escalation.
+        self.assertFalse(self.server._note_foreign_writer_hold(self.SID, self.PID))
+
+    def test_foreign_writer_hold_for_sid_none_until_escalated(self):
+        """CCC-796: /api/session-status and the queued-send reason both key
+        off this lookup -- it must stay None on the un-escalated first tick,
+        the same 2-tick debounce _note_foreign_writer_hold itself uses."""
+        self.assertIsNone(self.server._foreign_writer_hold_for_sid(self.SID))
+        self.server._note_foreign_writer_hold(self.SID, self.PID)
+        self.assertIsNone(self.server._foreign_writer_hold_for_sid(self.SID))
+        self.server._note_foreign_writer_hold(self.SID, self.PID)
+        hold = self.server._foreign_writer_hold_for_sid(self.SID)
+        self.assertIsNotNone(hold)
+        self.assertEqual(hold["pid"], self.PID)
+
+    def test_foreign_writer_hold_for_sid_ignores_other_sessions(self):
+        self.server._note_foreign_writer_hold(self.SID, self.PID)
+        self.server._note_foreign_writer_hold(self.SID, self.PID)
+        self.assertIsNone(self.server._foreign_writer_hold_for_sid("some-other-sid"))
+
+
+class TestInjectionHealthBanner(unittest.TestCase):
+    """P0c: the global delivery-health banner's feed. Two sources, both
+    in-process reads (no `wt` subprocess anywhere in this path): active P0b
+    foreign-writer holds, and receipts.json rows newly transitioned to
+    lost. Historical losses must baseline ONCE EVER (not per test/restart)
+    so they don't immediately paint the banner red -- but must never
+    re-baseline, or a loss during a real outage would silently vanish."""
+
+    def setUp(self):
+        import server
+        self.server = server
+        self._td = tempfile.TemporaryDirectory()
+        self.addCleanup(self._td.cleanup)
+        self._state_path = pathlib.Path(self._td.name) / "injection-health.json"
+        self._receipts_path = pathlib.Path(self._td.name) / "receipts.json"
+        self._state_patch = mock.patch.object(
+            self.server, "_injection_health_state_path", return_value=self._state_path,
+        )
+        self._receipts_patch = mock.patch.object(
+            self.server, "_wt_receipts_path", return_value=self._receipts_path,
+        )
+        self._state_patch.start()
+        self._receipts_patch.start()
+        self.addCleanup(self._state_patch.stop)
+        self.addCleanup(self._receipts_patch.stop)
+        # Isolate from any real P0b state a concurrently-running dev server
+        # (or an earlier test) may have left behind.
+        with self.server._foreign_writer_hold_lock:
+            self.server._foreign_writer_hold_incidents.clear()
+
+    def _write_receipts(self, rows):
+        self._receipts_path.write_text(json.dumps({"receipts": rows}))
+
+    def _lost_row(self, rid, **over):
+        row = {
+            "id": rid, "sid": "sid-x", "transport": "resume",
+            "sent_at": 1700000000.0, "at_send": {"path": "/tmp/t.jsonl"},
+            "status": "lost",
+        }
+        row.update(over)
+        return row
+
+    def test_missing_receipts_file_is_not_an_error(self):
+        health = self.server._build_injection_health()
+        self.assertEqual(health["new_lost_receipts"], [])
+        self.assertFalse(health["any_active"])
+
+    def test_first_read_baselines_historical_losses_silently(self):
+        self._write_receipts([self._lost_row("rcpt-1"), self._lost_row("rcpt-2")])
+        health = self.server._build_injection_health()
+        self.assertEqual(health["new_lost_receipts"], [])
+        self.assertFalse(health["any_active"])
+        # Baseline persisted -- a second read of the SAME data must also
+        # stay quiet, not just the first.
+        health2 = self.server._build_injection_health()
+        self.assertEqual(health2["new_lost_receipts"], [])
+
+    def test_never_rebaselines_a_loss_that_appears_after_first_read(self):
+        """The core guarantee: a loss during a real outage must surface, not
+        be swallowed by baselining again on the next call/restart."""
+        self._write_receipts([self._lost_row("rcpt-1")])
+        self.server._build_injection_health()  # baselines rcpt-1
+        self._write_receipts([self._lost_row("rcpt-1"), self._lost_row("rcpt-2")])
+        health = self.server._build_injection_health()
+        ids = [r["id"] for r in health["new_lost_receipts"]]
+        self.assertEqual(ids, ["rcpt-2"])
+        self.assertTrue(health["any_active"])
+
+    def test_proof_availability_reflects_blank_at_send_path(self):
+        self.server._build_injection_health()  # baseline (empty)
+        self._write_receipts([self._lost_row("rcpt-1", at_send={"path": ""})])
+        health = self.server._build_injection_health()
+        self.assertFalse(health["new_lost_receipts"][0]["proof_available"])
+
+    def test_ack_single_receipt_dismisses_it_durably(self):
+        self._write_receipts([self._lost_row("rcpt-1")])
+        self.server._build_injection_health()  # baseline (empty, since this is first read... )
+        self._write_receipts([self._lost_row("rcpt-1"), self._lost_row("rcpt-2")])
+        self.server._build_injection_health()
+        health = self.server._ack_injection_health(receipt_id="rcpt-2")
+        self.assertEqual(health["new_lost_receipts"], [])
+        # Durable: a fresh read (simulating a reload) stays acked.
+        health2 = self.server._build_injection_health()
+        self.assertEqual(health2["new_lost_receipts"], [])
+
+    def test_ack_all_dismisses_every_currently_lost_receipt(self):
+        self._write_receipts([
+            self._lost_row("rcpt-1"), self._lost_row("rcpt-2"), self._lost_row("rcpt-3"),
+        ])
+        health = self.server._ack_injection_health(ack_all=True)
+        self.assertEqual(health["new_lost_receipts"], [])
+
+    def test_active_holds_reflect_escalated_p0b_incidents(self):
+        self.assertFalse(self.server._note_foreign_writer_hold("sid-h", 999))
+        self.assertTrue(self.server._note_foreign_writer_hold("sid-h", 999))
+        health = self.server._build_injection_health()
+        self.assertEqual(len(health["active_holds"]), 1)
+        self.assertEqual(health["active_holds"][0]["sid"], "sid-h")
+        self.assertEqual(health["active_holds"][0]["pid"], 999)
+        self.assertTrue(health["any_active"])
+        self.server._clear_foreign_writer_hold("sid-h")
+        health2 = self.server._build_injection_health()
+        self.assertEqual(health2["active_holds"], [])
+
+    def test_endpoints_registered(self):
+        """Source pin: both routes exist in the actual dispatch chains."""
+        server_py = pathlib.Path(PROJECT_ROOT, "server.py").read_text(encoding="utf-8")
+        self.assertIn('path == "/api/injection-health":', server_py)
+        self.assertIn('path == "/api/injection-health/ack":', server_py)
 
 
 class TestTerminalQueueDrainSafety(unittest.TestCase):
@@ -16849,13 +19103,221 @@ class TestAcpKimiEngine(unittest.TestCase):
         )
         self.assertFalse(self.server._is_kimi_session(""))
 
+    def test_acp_cancel_attaches_session_before_sending(self):
+        """CCC-833: Esc on a kimi session must not report ok:true while
+        silently no-oping. session/cancel targets a sessionId inside the
+        live ACP connection — if the sid was never loaded onto it (fresh
+        reconnect after a restart, or a session driven outside CCC), the
+        harness process has no such session and the notification is a
+        no-op even though the write itself succeeds."""
+        server = self.server
+        with mock.patch.object(server, "_control_plane_engine_call", return_value=None), \
+             mock.patch.object(server, "_acp_ensure_session_loaded",
+                                return_value={"ok": False, "error": "not attached"}) as attach, \
+             mock.patch.object(server, "_acp_send") as send:
+            result = server._acp_cancel("kimi", "session-not-loaded")
+        attach.assert_called_once_with("kimi", "session-not-loaded")
+        send.assert_not_called()
+        self.assertFalse(result["ok"])
+
+        with mock.patch.object(server, "_control_plane_engine_call", return_value=None), \
+             mock.patch.object(server, "_acp_ensure_session_loaded", return_value=None), \
+             mock.patch.object(server, "_acp_send", return_value=True) as send:
+            result = server._acp_cancel("kimi", "session-loaded")
+        send.assert_called_once()
+        self.assertEqual(send.call_args[0][1]["params"]["sessionId"], "session-loaded")
+        self.assertTrue(result["ok"])
+
+    def test_interrupt_session_marks_kimi_recently_interrupted(self):
+        """CCC-848: a successful kimi Esc must flip recently_interrupted so
+        the "Interrupted" badge appears — kimi's wire log never produces a
+        request_interrupted event the transcript-scan path can pick up, so
+        without this the badge stayed permanently off and Esc looked broken
+        even though the cancel notification landed."""
+        server = self.server
+        sid = "session-kimi-esc-badge"
+        server._RECENT_INTERRUPT_BY_SID.pop(sid, None)
+        with mock.patch.object(server, "find_session_cwd", return_value=""), \
+             mock.patch.object(server, "session_live_status", return_value={}), \
+             mock.patch.object(server, "_is_codex_session", return_value=False), \
+             mock.patch.object(server, "_is_kimi_session", return_value=True), \
+             mock.patch.object(server, "_acp_cancel", return_value={"ok": True, "via": "acp-cancel"}):
+            result = server._interrupt_session(sid)
+        self.assertTrue(result["ok"])
+        self.assertTrue(server._session_recently_interrupted(sid))
+
+        sid_failed = "session-kimi-esc-badge-failed"
+        server._RECENT_INTERRUPT_BY_SID.pop(sid_failed, None)
+        with mock.patch.object(server, "find_session_cwd", return_value=""), \
+             mock.patch.object(server, "session_live_status", return_value={}), \
+             mock.patch.object(server, "_is_codex_session", return_value=False), \
+             mock.patch.object(server, "_is_kimi_session", return_value=True), \
+             mock.patch.object(server, "_acp_cancel", return_value={"ok": False, "error": "no-op"}):
+            result = server._interrupt_session(sid_failed)
+        self.assertFalse(result["ok"])
+        self.assertFalse(server._session_recently_interrupted(sid_failed))
+
     def test_engine_registration_pins(self):
         server_py = pathlib.Path(PROJECT_ROOT, "server.py").read_text(encoding="utf-8")
         self.assertIn('"/api/sessions/spawn-kimi"', server_py)
+        self.assertIn('"/api/sessions/spawn-grok"', server_py)
+        self.assertIn("def spawn_session_grok(", server_py)
         self.assertIn('"/api/acp/approval"', server_py)
-        self.assertIn('if _is_kimi_session(session_id):\n        return _acp_prompt', server_py)
+        self.assertIn('if _is_kimi_session(session_id):', server_py)
+        self.assertIn('result = _acp_prompt(', server_py)
+        self.assertIn('result.get("code") == "busy"', server_py)
+        self.assertIn('return _queue_terminal_input(session_id, text, {"status": "running"})', server_py)
         app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
         self.assertIn("if (engine === 'kimi') return '/api/sessions/spawn-kimi';", app_js)
+
+    def test_kimi_original_ask_uses_first_wire_prompt(self):
+        server = self.server
+        sid = "session_original_ask"
+        with tempfile.TemporaryDirectory() as tmp:
+            session_dir = pathlib.Path(tmp, sid)
+            wire_dir = session_dir / "agents" / "main"
+            wire_dir.mkdir(parents=True)
+            (session_dir / "state.json").write_text(json.dumps({
+                "title": "Session title",
+                "lastPrompt": "Continue",
+                "workDir": tmp,
+                "createdAt": "2026-07-23T00:00:00Z",
+            }))
+            (wire_dir / "wire.jsonl").write_text(json.dumps({
+                "type": "turn.prompt",
+                "input": [{"type": "text", "text": "The actual original request"}],
+            }) + "\n")
+            with mock.patch.object(server, "_ACP_SESSION_STATE", {"kimi": {}}), \
+                 mock.patch.object(server, "_ACP_STATE_LOADED", {"kimi"}), \
+                 mock.patch.object(server, "_kimi_session_index", return_value={
+                     sid: {"session_dir": str(session_dir), "work_dir": tmp},
+                 }), \
+                 mock.patch.object(server, "_load_repo_pins", return_value={}), \
+                 mock.patch.object(server, "_load_session_name_overrides", return_value={}), \
+                 mock.patch.object(
+                     server, "_load_conversation_lifecycle_sets",
+                     return_value=(set(), set()),
+                 ), \
+                 mock.patch.object(server, "_load_verified_conversations", return_value=[]):
+                rows = server.find_kimi_conversations(
+                    repo_only=False, include_old=True,
+                )
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0]["first_message"], "The actual original request")
+        self.assertEqual(rows[0]["original_ask"], "The actual original request")
+        self.assertEqual(rows[0]["last_prompt"], "Continue")
+
+    def test_kimi_conversation_recency_uses_wire_activity(self):
+        """A completed Kimi turn updates wire.jsonl, not necessarily state.json."""
+        server = self.server
+        sid = "session_recent_wire"
+        with tempfile.TemporaryDirectory() as tmp:
+            session_dir = pathlib.Path(tmp, sid)
+            wire_dir = session_dir / "agents" / "main"
+            wire_dir.mkdir(parents=True)
+            state = session_dir / "state.json"
+            state.write_text(json.dumps({
+                "title": "Session title",
+                "workDir": tmp,
+                "createdAt": "2023-11-14T22:13:20Z",
+            }))
+            wire = wire_dir / "wire.jsonl"
+            wire.write_text(json.dumps({"type": "turn.prompt", "input": []}) + "\n")
+            old = 1_700_000_000
+            recent = old + 7_200
+            os.utime(state, (old, old))
+            os.utime(wire, (recent, recent))
+            with mock.patch.object(server, "_ACP_SESSION_STATE", {"kimi": {}}), \
+                 mock.patch.object(server, "_ACP_STATE_LOADED", {"kimi"}), \
+                 mock.patch.object(server, "_kimi_session_index", return_value={
+                     sid: {"session_dir": str(session_dir), "work_dir": tmp},
+                 }), \
+                 mock.patch.object(server, "_load_repo_pins", return_value={}), \
+                 mock.patch.object(server, "_load_session_name_overrides", return_value={}), \
+                 mock.patch.object(server, "_load_conversation_lifecycle_sets", return_value=(set(), set())), \
+                 mock.patch.object(server, "_load_verified_conversations", return_value=[]):
+                rows = server.find_kimi_conversations(repo_only=False, include_old=True)
+        self.assertEqual(rows[0]["modified"], recent)
+
+    def test_kimi_wire_state_prevents_early_prompt(self):
+        server = self.server
+        sid = "session_external_turn"
+        with tempfile.TemporaryDirectory() as tmp:
+            wire = pathlib.Path(tmp, "wire.jsonl")
+
+            def write_boundary(kind, finish_reason=None):
+                event = {"type": kind}
+                if finish_reason:
+                    event["finishReason"] = finish_reason
+                wire.write_text(json.dumps({
+                    "type": "context.append_loop_event",
+                    "event": event,
+                }) + "\n")
+
+            with mock.patch.object(server, "_acp_wire_path", return_value=wire):
+                write_boundary("step.begin")
+                self.assertTrue(server._kimi_wire_turn_active(sid))
+                write_boundary("step.end", "tool_use")
+                self.assertTrue(server._kimi_wire_turn_active(sid))
+                write_boundary("step.end", "end_turn")
+                self.assertFalse(server._kimi_wire_turn_active(sid))
+
+                # A wire that ends in step.begin but has gone quiet for longer
+                # than the stale window means the kimi process died mid-turn
+                # (crash / worker restart); it must not wedge the queue forever.
+                write_boundary("step.begin")
+                self.assertTrue(server._kimi_wire_turn_active(sid))
+                stale = time.time() - 700
+                os.utime(wire, (stale, stale))
+                self.assertFalse(server._kimi_wire_turn_active(sid))
+
+                write_boundary("step.begin")
+                # Keep this unit test local: its synthetic session ID must not
+                # be sent to the persistent worker's real Kimi harness.
+                with mock.patch.object(server, "_control_plane_engine_call", return_value=None), \
+                     mock.patch.object(server, "_ACP_SESSION_STATE", {"kimi": {}}), \
+                     mock.patch.object(server, "_kimi_wire_turn_active", return_value=True), \
+                     mock.patch.object(server, "_acp_ensure_session_loaded") as attach:
+                    result = server._acp_prompt("kimi", sid, "too early")
+                self.assertEqual(result.get("code"), "busy")
+                attach.assert_not_called()
+
+    def test_kimi_remote_busy_error_requeues_without_red_result(self):
+        server = self.server
+        sid = "session_remote_busy"
+        with tempfile.TemporaryDirectory() as tmp, \
+             mock.patch.object(server, "_ACP_TRANSCRIPT_DIR", pathlib.Path(tmp)), \
+             mock.patch.object(server, "_ACP_SESSION_STATE", {"kimi": {}}), \
+             mock.patch.dict(server.os.environ, {"CCC_WORKER_PROCESS": "0"}), \
+             mock.patch.object(server, "_queue_terminal_input") as queue:
+            with server._ACP_LOCK:
+                state = server._acp_session("kimi", sid, create=True)
+                state["status"] = "active"
+                state["active_turn"] = {
+                    "req_id": 7,
+                    "msg_id": "m7",
+                    "text": "",
+                    "thought": "",
+                    "tools": {},
+                    "prompt": "Continue",
+                    "from_queue": False,
+                }
+            server._acp_finalize_turn("kimi", sid, {
+                "error": {
+                    "message": (
+                        "Invalid request: Cannot launch a new turn while "
+                        "another turn (ID 7) is active"
+                    ),
+                },
+            }, {"req_id": 7, "is_active": True})
+            with server._ACP_LOCK:
+                events = list(server._acp_session("kimi", sid)["events"])
+            queue.assert_called_once_with(sid, "Continue", {"status": "running"})
+            self.assertFalse(any(
+                event.get("type") == "result"
+                and event.get("subtype") == "error"
+                for event in events
+            ))
 
     def test_acp_wire_fold_dedupes_and_folds_new_turns(self):
         """TUI-originated wire.jsonl records fold into the conv stream, but a
@@ -16960,6 +19422,104 @@ class TestAcpKimiEngine(unittest.TestCase):
                        if any(b.get("kind") == "plan" for b in e.get("blocks", []))]
         self.assertEqual(len(plan_events), 2)
 
+    def test_acp_tool_detail_diff_and_wire_result(self):
+        """Kimi tool rows carry real detail (rawInput on the CREATE for
+        non-streamed calls), a full-input disclosure, diff blocks, and wire
+        tool.result output — plus replay control-text filtering."""
+        server = self.server
+        harness = self.FAKE_HARNESS
+        sid = "session_tooldetailtest"
+        with server._ACP_LOCK:
+            st = server._acp_session(harness, sid, create=True, cwd="/tmp")
+            st["active_turn"] = {"msg_id": "m1", "text": "", "thought": ""}
+        # rawInput on the CREATE (non-streamed call) must seed the detail —
+        # previously it was ignored and the row froze at kind-only ("execute").
+        server._acp_handle_session_update(harness, sid, {
+            "sessionUpdate": "tool_call", "toolCallId": "1:t1",
+            "title": "Bash", "kind": "execute", "status": "in_progress",
+            "rawInput": {"command": "ls -la"}})
+        # Terminal update for a second call: kimi arg keys (path) + diff block.
+        server._acp_handle_session_update(harness, sid, {
+            "sessionUpdate": "tool_call_update", "toolCallId": "1:t2",
+            "title": "Edit", "status": "completed",
+            "rawInput": {"path": "/tmp/a.py", "oldText": "x", "newText": "y"},
+            "content": [
+                {"type": "diff", "path": "/tmp/a.py",
+                 "oldText": "old-full", "newText": "new-full"},
+                {"type": "content", "content": {"type": "text", "text": "done"}}]})
+        with server._ACP_LOCK:
+            st = server._acp_session(harness, sid) or {}
+            events = list(st.get("events") or [])
+            t1 = (st.get("active_turn") or {}).get("tools", {}).get("1:t1") or {}
+        self.assertEqual(t1.get("detail"), "ls -la")
+        self.assertIn("ls -la", t1.get("input") or "")
+        tool_blocks = [b for e in events for b in e.get("blocks", [])
+                       if b.get("kind") == "tool_use"]
+        self.assertEqual(len(tool_blocks), 1)
+        block = tool_blocks[0]
+        self.assertEqual(block["detail"], "/tmp/a.py")
+        self.assertEqual(block["tool_status"], "completed")
+        self.assertEqual(block["output_preview"], "done")
+        self.assertTrue(block["has_input"])
+        self.assertIn("/tmp/a.py", block["input"])
+        self.assertEqual(block["diff"], {
+            "path": "/tmp/a.py", "oldText": "old-full", "newText": "new-full"})
+        # Replay control text is filtered like the Claude transcript path.
+        fake_state = {"sid": sid, "next_line": 1}
+        self.assertIsNone(server._acp_message_event(
+            fake_state, "user",
+            '<kimi-skill-loaded name="x">BODY\nARGUMENTS: y</kimi-skill-loaded>'))
+        self.assertIsNone(server._acp_message_event(
+            fake_state, "assistant", "<system-reminder>note</system-reminder>"))
+        self.assertIsNone(server._acp_message_event(fake_state, "user", "  "))
+        ev = server._acp_message_event(fake_state, "user", "hello")
+        self.assertEqual(ev, {"type": "user_text", "text": "hello"})
+        # Control XML embedded after real prose (Kimi ACP appends injected
+        # reminders to the user turn) is stripped, not leaked into the event.
+        ev = server._acp_message_event(
+            fake_state, "user",
+            "real question?<system-reminder>\nAuto permission mode…\n</system-reminder>")
+        self.assertEqual(ev, {"type": "user_text", "text": "real question?"})
+        self.assertIsNone(server._acp_message_event(
+            fake_state, "user",
+            '<kimi-skill-loaded name="x">BODY</kimi-skill-loaded>'
+            "<system-reminder>note</system-reminder>"))
+        # Wire tool.result attaches to its call; orphans emit tool_result rows.
+        sid2 = "session_wireresulttest"
+        with server._ACP_LOCK:
+            st = server._acp_session(harness, sid2, create=True, cwd="/tmp")
+            st["wire_watch"] = True
+        batch = [
+            {"type": "context.append_loop_event", "event": {
+                "type": "tool.call", "toolCallId": "w1", "name": "Bash",
+                "args": {"command": "make test"}}},
+            {"type": "context.append_loop_event", "event": {
+                "type": "tool.result", "toolCallId": "w1",
+                "result": {"output": "all ok", "isError": False}}},
+            {"type": "context.append_loop_event", "event": {
+                "type": "tool.result", "toolCallId": "w-orphan",
+                "result": {"output": "boom", "isError": True}}},
+        ]
+        server._acp_wire_fold(harness, sid2, batch)
+        with server._ACP_LOCK:
+            events = list((server._acp_session(harness, sid2) or {}).get("events") or [])
+        block = [b for e in events for b in e.get("blocks", [])
+                 if b.get("kind") == "tool_use"][0]
+        self.assertEqual(block["detail"], "make test")
+        self.assertEqual(block["output_preview"], "all ok")
+        self.assertEqual(block["tool_status"], "completed")
+        orphans = [e for e in events if e.get("type") == "tool_result"]
+        self.assertEqual(len(orphans), 1)
+        self.assertEqual(orphans[0]["tool_use_id"], "w-orphan")
+        self.assertEqual(orphans[0]["text"], "boom")
+        self.assertTrue(orphans[0]["is_error"])
+        # Re-folding the same batch must not duplicate the orphan row.
+        server._acp_wire_fold(harness, sid2, batch)
+        with server._ACP_LOCK:
+            events = list((server._acp_session(harness, sid2) or {}).get("events") or [])
+        self.assertEqual(
+            len([e for e in events if e.get("type") == "tool_result"]), 1)
+
     def test_kimi_setup_status_and_verify(self):
         """'Add Kimi engine' guided flow: setup-status reports install state +
         version; verify proves it with one ACP session/new (WEBINAR-DEMO-23)."""
@@ -16977,17 +19537,21 @@ class TestAcpKimiEngine(unittest.TestCase):
             self.assertIn("membership", status["docs"])
             self.assertIn("third_party_setup", status["docs"])
 
-            with mock.patch.object(
-                server, "_acp_session_new",
-                return_value={"ok": True, "session_id": "session_test-1", "via": "acp"},
-            ) as spawned:
+            # Keep this unit test in-process: the worker route invokes the
+            # real Kimi ACP harness and would leave a blank smoke-test session.
+            with mock.patch.object(server, "_control_plane_engine_call", return_value=None), \
+                 mock.patch.object(
+                     server, "_acp_session_new",
+                     return_value={"ok": True, "session_id": "session_test-1", "via": "acp"},
+                 ) as spawned:
                 out = server._kimi_setup_verify()
             self.assertTrue(out["ok"])
             self.assertTrue(out["verified"])
             self.assertEqual(out["version"], "9.9.9")
             spawned.assert_called_once()
 
-        with mock.patch.object(server, "_acp_resolve_bin", return_value=missing):
+        with mock.patch.object(server, "_control_plane_engine_call", return_value=None), \
+             mock.patch.object(server, "_acp_resolve_bin", return_value=missing):
             out = server._kimi_setup_verify()
             self.assertFalse(out["ok"])
             self.assertIn("not found", out["error"])
@@ -17137,5 +19701,357 @@ def test_skills_ecosystem_route_and_inventory():
     assert _server._build_skills_ecosystem() is data
 
 
+
+class TestClaudeSubagentResumeRouting(unittest.TestCase):
+    def test_headless_resume_routes_claude_subagent_reference_to_parent_session(self):
+        """Automatic resume must never target a non-resumable Task child."""
+        for mod in ("server", "morning", "morning_store"):
+            sys.modules.pop(mod, None)
+        server = importlib.import_module("server")
+        parent_sid = "11111111-2222-3333-4444-555555555555"
+        agent_sid = "agent-a473bdecd59d4f637"
+
+        with tempfile.TemporaryDirectory() as tmp:
+            projects_root = pathlib.Path(tmp) / "projects"
+            child_path = projects_root / "-example-project" / parent_sid / "subagents" / f"{agent_sid}.jsonl"
+            child_path.parent.mkdir(parents=True)
+            child_path.write_text(json.dumps({"cwd": tmp}) + "\n", encoding="utf-8")
+            original_root = server.PROJECTS_ROOT
+            server.PROJECTS_ROOT = projects_root
+            server._session_cwd_cache.pop(agent_sid, None)
+            try:
+                with mock.patch.object(server, "_resolve_claude_bin", return_value={"available": False, "reason": "test"}), \
+                     mock.patch.object(server, "repo_from_session") as repo_from_session:
+                    result = server.resume_session_headless(agent_sid, "follow up")
+                self.assertFalse(result["ok"])
+                repo_from_session.assert_called_once_with(parent_sid)
+            finally:
+                server._session_cwd_cache.pop(agent_sid, None)
+                server.PROJECTS_ROOT = original_root
+
+class TestAutoHandoverOneShot(unittest.TestCase):
+    def test_watchdog_is_a_noop_and_never_fires(self):
+        """Regression for CCC-909: toggling "Auto handover: ON" injects
+        `token-sitter auto-snapshot on` into the session (app.js
+        toggleAutoHandoverForPane), which already arms token-sitter's own
+        idle checkpoint. The server-side watchdog firing its own
+        "[CCC auto-handover]" prompt on top of that was a second, redundant
+        checkpoint for the same idle window -- both fired within minutes of
+        each other. The watchdog must stay a no-op even once the enabled
+        flag is set and the transcript looks idle."""
+        for mod in ("server", "morning", "morning_store"):
+            sys.modules.pop(mod, None)
+        server = importlib.import_module("server")
+
+        with tempfile.TemporaryDirectory() as tmp:
+            old_file = server.AUTO_HANDOVER_FILE
+            old_checked_ts = server._auto_handover_last_checked_at["ts"]
+            try:
+                server.AUTO_HANDOVER_FILE = pathlib.Path(tmp) / "auto-handover.json"
+                server._auto_handover_last_checked_at["ts"] = 0.0
+                sid = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"
+                server._set_auto_handover(sid, True)
+
+                transcript = pathlib.Path(tmp) / "transcript.jsonl"
+                transcript.write_text("{}\n", encoding="utf-8")
+
+                with mock.patch.object(server, "_detect_session_engine", return_value="claude"), \
+                     mock.patch.object(server, "_resolve_conversation_path", return_value=str(transcript)), \
+                     mock.patch.object(server, "_control_plane_engine_call", return_value={"ok": True}) as fire_call:
+                    t0 = os.path.getmtime(transcript)
+                    server._run_auto_handover_watchdog_once(now=t0 + 56 * 60)
+                    self.assertEqual(fire_call.call_count, 0)
+                    self.assertTrue(server._load_auto_handover_flags()[sid]["enabled"])
+            finally:
+                server.AUTO_HANDOVER_FILE = old_file
+                server._auto_handover_last_checked_at["ts"] = old_checked_ts
+
+
+class TestSessionRegistryTruncatedComm(unittest.TestCase):
+    """Regression for 2026-08-06: every CCC-spawned session read "not live".
+
+    `ps -o comm=` truncates to the column width (16 chars on macOS), so a
+    headless spawned by absolute path reports comm as `/Users/<me>/` and
+    failed the basename check in `_load_session_registry`. Only sessions
+    started as bare `claude` from PATH survived, so `session_live_status`
+    returned live=False for processes that were answering fine -- no working
+    indicator, and Esc answered "session is not live". argv[0] is never
+    truncated; the registry must fall back to it.
+    """
+
+    def _registry_for(self, ps_rows, sessions_dir):
+        for mod in ("server", "morning", "morning_store"):
+            sys.modules.pop(mod, None)
+        server = importlib.import_module("server")
+        with mock.patch.object(server, "SESSIONS_REGISTRY", sessions_dir), \
+             mock.patch.object(server, "_scan_engine_processes", return_value=ps_rows):
+            return server._load_session_registry()
+
+    def test_truncated_comm_still_resolves_via_argv0(self):
+        sid = "11111111-2222-3333-4444-555555555555"
+        with tempfile.TemporaryDirectory() as tmp:
+            sessions_dir = pathlib.Path(tmp)
+            (sessions_dir / "4242.json").write_text(json.dumps({
+                "pid": 4242, "sessionId": sid, "cwd": tmp,
+            }), encoding="utf-8")
+
+            truncated = [(
+                "4242", "??", "/Users/someone/",
+                "/Users/someone/.local/bin/claude -p --verbose --resume " + sid,
+            )]
+            self.assertIn(
+                sid, self._registry_for(truncated, sessions_dir),
+                "truncated comm must fall back to argv[0]",
+            )
+
+            # A non-claude pid that merely reuses the number stays rejected --
+            # that guard (CCC-45 pid recycling) is the reason for the scan.
+            foreign = [("4242", "??", "/usr/bin/", "/usr/bin/some-other-daemon")]
+            self.assertNotIn(sid, self._registry_for(foreign, sessions_dir))
+
+
 if __name__ == "__main__":
     unittest.main()
+
+
+def test_apps_rail_route_and_manifest_parsing():
+    """The Applications rail's manifest endpoint.
+
+    /api/apps is the rail's only data source, so a missing or malformed
+    custom-links.json must still yield the built-ins, and hostile entries must
+    be dropped rather than reaching an href.
+    """
+    server_py = pathlib.Path(PROJECT_ROOT, "server.py").read_text(encoding="utf-8")
+    assert 'elif path == "/api/apps":' in server_py
+    import server as _server
+
+    # Absent config file: three-tuple, all empty. The rail falls back to the
+    # built-ins it hardcodes, so core never depends on the user's file.
+    with mock.patch.object(_server, "COMMAND_CENTER_STATE_DIR",
+                           pathlib.Path(tempfile.mkdtemp())):
+        assert _server._custom_links_config() == ([], {}, [])
+
+    with tempfile.TemporaryDirectory() as tmp:
+        cfg = pathlib.Path(tmp, "custom-links.json")
+        cfg.write_text(json.dumps({
+            "proxies": {"reddit": 9137},
+            "apps": [
+                {"id": "reddit", "label": "Reddit", "icon": "R",
+                 "url": "/view/reddit"},
+                {"id": "hub", "label": "Hub", "url": "https://example.com"},
+                # Dropped: javascript: would execute from the rendered href.
+                {"id": "evil", "label": "Evil", "url": "javascript:alert(1)"},
+                # Dropped: protocol-relative, ambiguous scheme.
+                {"id": "rel", "label": "Rel", "url": "//example.com"},
+                # Dropped: duplicate id.
+                {"id": "reddit", "label": "Dupe", "url": "/view/other"},
+                # Dropped: id outside [a-z0-9_-].
+                {"id": "Bad Id", "label": "Bad", "url": "/view/bad"},
+                # Dropped: no label.
+                {"id": "nolabel", "url": "/view/nolabel"},
+            ],
+        }))
+        with mock.patch.object(_server, "COMMAND_CENTER_STATE_DIR",
+                               pathlib.Path(tmp)):
+            links, proxies, apps = _server._custom_links_config()
+        assert proxies == {"reddit": 9137}
+        assert [a["id"] for a in apps] == ["reddit", "hub"]
+        assert all(a["builtin"] is False for a in apps)
+        # Absent icon falls back to a bullet rather than rendering empty.
+        assert apps[1]["icon"] == "•"
+
+    # Malformed JSON must not raise — the rail would lose its nav.
+    with tempfile.TemporaryDirectory() as tmp:
+        pathlib.Path(tmp, "custom-links.json").write_text("{not json")
+        with mock.patch.object(_server, "COMMAND_CENTER_STATE_DIR",
+                               pathlib.Path(tmp)):
+            assert _server._custom_links_config() == ([], {}, [])
+
+
+def test_apps_rail_static_is_wired_into_pages():
+    """Every CCC surface loads the shared rail, and the old chip toggle that
+    it replaces is gone from both core pages."""
+    static = pathlib.Path(PROJECT_ROOT, "static")
+    rail = (static / "app-rail.js").read_text(encoding="utf-8")
+    assert "ccc-side-nav" in rail
+    # Shares the Morning side-nav's style id so the two never double-render.
+    assert 'STYLE_ID = "ccc-side-nav-style"' in rail
+    for page in ("index.html", "q2.html"):
+        html = (static / page).read_text(encoding="utf-8")
+        assert '/static/app-rail.js' in html, page
+        assert 'class="q2-toggle"' not in html, page
+
+
+def test_applications_settings_routes_and_mutations():
+    """Adding, arranging, and removing apps from the Applications page.
+
+    These are the only write paths into the rail, so a regression here means
+    a user's apps silently stop appearing or cannot be removed.
+    """
+    server_py = pathlib.Path(PROJECT_ROOT, "server.py").read_text(encoding="utf-8")
+    assert 'elif path == "/applications":' in server_py
+    assert '"/api/apps/add", "/api/apps/remove", "/api/apps/arrange"' in server_py
+    import server as _server
+
+    with tempfile.TemporaryDirectory() as tmp:
+        state = pathlib.Path(tmp)
+        with mock.patch.object(_server, "COMMAND_CENTER_STATE_DIR", state), \
+             mock.patch.object(_server, "USER_APPS_DIR", state / "apps"):
+            # A URL app is a manifest entry with no files on disk.
+            added = _server._apps_add({"label": "Hub", "icon": "H",
+                                       "kind": "url",
+                                       "url": "https://example.com"})
+            assert added == {"ok": True, "id": "hub"}
+            assert not (state / "apps" / "hub").exists()
+
+            # A blank app gets a folder it can be built into.
+            blank = _server._apps_add({"label": "Scratch", "kind": "blank"})
+            assert blank["ok"] and blank["id"] == "scratch"
+            assert (state / "apps" / "scratch" / "index.html").is_file()
+
+            # A port app also registers the proxy the iframe depends on.
+            port_app = _server._apps_add({"label": "Local", "kind": "port",
+                                          "port": "8770"})
+            assert port_app["ok"]
+            assert _server._custom_links_config()[1]["local"] == 8770
+
+            # Newly added apps land at the end of the rail, not mid-list.
+            ids = [a["id"] for a in _server._resolve_apps()]
+            assert ids[-3:] == ["hub", "scratch", "local"]
+
+            # Rejections: no name, a bad address, a non-numeric port.
+            assert _server._apps_add({"label": "", "kind": "url"})["ok"] is False
+            assert _server._apps_add({"label": "X", "kind": "url",
+                                      "url": "javascript:alert(1)"})["ok"] is False
+            assert _server._apps_add({"label": "Y", "kind": "port",
+                                      "port": "nope"})["ok"] is False
+
+            # Disabling hides an app from the rail but keeps it on the
+            # settings page so it can be switched back on.
+            _server._apps_arrange({"order": ["hub", "sessions", "queues"],
+                                   "disabled": ["hub"]})
+            assert "hub" not in [a["id"] for a in _server._resolve_apps()]
+            assert "hub" in [a["id"] for a
+                             in _server._resolve_apps(include_disabled=True)]
+
+            # Core navigation cannot be switched off — the rail would strand you.
+            _server._apps_arrange({"disabled": ["sessions"]})
+            assert "sessions" in [a["id"] for a in _server._resolve_apps()]
+
+            # Removing preserves the folder: an app may hold the only copy of
+            # something the user wrote.
+            assert _server._apps_remove("scratch")["ok"] is True
+            assert not (state / "apps" / "scratch").exists()
+            assert (state / "apps" / ".removed" / "scratch" / "index.html").is_file()
+            assert "scratch" not in [a["id"] for a
+                                     in _server._resolve_apps(include_disabled=True)]
+
+            assert _server._apps_remove("sessions")["ok"] is False
+            assert _server._apps_remove("../etc")["ok"] is False
+
+
+def test_apps_open_inside_the_ccc_window():
+    """Every app opens in-window; absolute URLs go through /app/<id>.
+
+    A rail entry with target=_blank throws the user into a browser tab, which
+    defeats the point of having the app in CCC at all.
+    """
+    server_py = pathlib.Path(PROJECT_ROOT, "server.py").read_text(encoding="utf-8")
+    assert 'elif re.match(r"^/app/[a-z0-9_-]+$", path):' in server_py
+    import server as _server
+
+    with tempfile.TemporaryDirectory() as tmp:
+        state = pathlib.Path(tmp)
+        with mock.patch.object(_server, "COMMAND_CENTER_STATE_DIR", state), \
+             mock.patch.object(_server, "USER_APPS_DIR", state / "apps"):
+            _server._apps_add({"label": "Hub", "kind": "url",
+                               "url": "https://example.com/x"})
+            by_id = {a["id"]: a for a in _server._resolve_apps()}
+            # Same-origin apps navigate straight to their path...
+            assert by_id["sessions"]["nav"] == "/"
+            # ...absolute URLs are wrapped so they render inside CCC.
+            assert by_id["hub"]["nav"] == "/app/hub"
+            page = _server._render_app_frame(by_id["hub"])
+            assert 'src="https://example.com/x"' in page
+            # Always leave a way out for a site that refuses to be framed.
+            assert "Open in browser" in page
+
+    rail = pathlib.Path(PROJECT_ROOT, "static", "app-rail.js").read_text(encoding="utf-8")
+    assert 'a.target = "_blank"' not in rail
+    # The + opens a popup rather than navigating away from the current page.
+    assert "ccc-apps-scrim" in rail
+    # A framed page must not draw a second rail inside the first.
+    assert "window.self !== window.top" in rail
+    # Rail width is a user preference, persisted across reloads.
+    assert "ccc-rail-resizer" in rail
+    assert "ccc-rail-width" in rail
+
+    # The Mac app cancels navigation off the dashboard port and hands the URL
+    # to the browser. Without the sub-frame exemption an /app/<id> wrapper
+    # framing an external dashboard gets thrown out of the app entirely.
+    swift = pathlib.Path(PROJECT_ROOT, "scripts", "macapp", "main.swift").read_text(encoding="utf-8")
+    assert "navigationAction.targetFrame?.isMainFrame ?? true" in swift
+
+
+def test_framed_app_warns_when_the_page_needs_a_login():
+    """A login-walled page cannot be signed in inside a frame.
+
+    Session cookies are near-always SameSite=Lax, which browsers withhold from
+    a cross-site frame, so the page renders logged out however the user is
+    authenticated in their own tab. Saying so beats a dead login form.
+    """
+    import server as _server
+
+    _server._LOGIN_PROBE_CACHE.clear()
+    # Seed the cache directly: the probe itself makes a network call, and the
+    # smoke suite must not depend on a remote host being reachable.
+    _server._LOGIN_PROBE_CACHE["https://example.com/admin"] = (time.time(), True)
+    _server._LOGIN_PROBE_CACHE["https://example.com/public"] = (time.time(), False)
+
+    # Match the rendered banner, not the stylesheet: `.needs-login` CSS ships
+    # on every wrapper page whether or not the warning is shown.
+    banner = '<div class="needs-login">'
+    walled = _server._render_app_frame(
+        {"label": "Admin", "url": "https://example.com/admin"})
+    assert banner in walled
+    assert "SameSite=Lax" in walled
+
+    public = _server._render_app_frame(
+        {"label": "Public", "url": "https://example.com/public"})
+    assert banner not in public
+    # The way out is always present, warning or not.
+    assert "Open in browser" in public
+
+    # A probe failure must not produce a false warning.
+    _server._LOGIN_PROBE_CACHE.clear()
+    assert _server._requires_login("http://127.0.0.1:1/nothing-here") is False
+
+    # The add-form says the same thing before you create such an app.
+    page = pathlib.Path(PROJECT_ROOT, "static", "applications.html").read_text(encoding="utf-8")
+    assert "cannot travel into an" in page
+
+
+def test_continued_from_session_id_marker_parsing():
+    """Continuation lineage comes from the "Origin session id:" marker only.
+
+    The marker is what separates an F2/auto-resume continuation from an
+    ordinary subagent spawn (which carries the return-address footer but
+    never the origin marker) — the merged conversation view and the
+    single-row folding both key off it.
+    """
+    import server as _server
+
+    prompt = (
+        "You are continuing a task from an earlier Claude session, which ran long.\n"
+        "\n"
+        "Origin session id: 698c6d33-1234-4abc-8def-0123456789ab\n"
+        "Its transcript is a JSONL under ~/.claude/projects/.\n"
+    )
+    assert (
+        _server._continued_from_session_id_from_text(prompt)
+        == "698c6d33-1234-4abc-8def-0123456789ab"
+    )
+    # No marker, no continuation.
+    assert _server._continued_from_session_id_from_text("just a task") == ""
+    assert _server._continued_from_session_id_from_text(None) == ""
+    assert _server._continued_from_session_id_from_text("") == ""

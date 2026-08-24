@@ -1,4 +1,6 @@
 #!/usr/bin/env bash
+# Copyright (c) 2026 Amir Fish. All rights reserved.
+# SPDX-License-Identifier: LicenseRef-CCC-Software-License
 # Claude Command Center one-command installer.
 #
 # Usage:
@@ -140,7 +142,14 @@ require_git() {
 sync_repo() {
   if [ -d "$INSTALL_DIR/.git" ]; then
     printf 'install: updating existing checkout at %s\n' "$INSTALL_DIR"
-    git -C "$INSTALL_DIR" pull --ff-only
+    if git -C "$INSTALL_DIR" pull --ff-only; then
+      return
+    fi
+    # History no longer fast-forwards (e.g. an upstream rewrite) or the
+    # checkout is otherwise broken. Don't leave the user stuck on a crashed
+    # installer — reclone fresh and replace it.
+    err "existing checkout at ${INSTALL_DIR} could not fast-forward; recloning fresh"
+    clone_into_install_dir replace
     return
   fi
 
@@ -149,13 +158,23 @@ sync_repo() {
     return 1
   fi
 
-  local parent staging
+  clone_into_install_dir fresh
+}
+
+# Clone into a staging dir next to INSTALL_DIR, then atomically publish it.
+#   mode=fresh:   INSTALL_DIR must not exist yet. If a concurrent installer
+#                 published it while we were cloning, leave that untouched
+#                 rather than overwrite it.
+#   mode=replace: INSTALL_DIR is expected to already exist (a broken or
+#                 diverged checkout) and gets replaced.
+clone_into_install_dir() {
+  local mode="$1" parent staging
   parent="$(dirname "$INSTALL_DIR")"
   staging="${INSTALL_DIR}.installing.$$"
   mkdir -p "$parent"
   INSTALL_STAGING="$staging"
 
-  printf 'install: cloning %s to %s\n' "$REPO_URL" "$INSTALL_DIR"
+  printf 'install: cloning %s to %s\n' "$REPO_URL" "$staging"
   if ! git clone "$REPO_URL" "$staging"; then
     cleanup_install_staging
     INSTALL_STAGING=""
@@ -163,14 +182,17 @@ sync_repo() {
     return 1
   fi
 
-  # A concurrent installer may have published while this clone was running.
-  # Never turn its checkout into a parent directory or overwrite it.
-  if [ -e "$INSTALL_DIR" ]; then
+  if [ "$mode" = "fresh" ] && [ -e "$INSTALL_DIR" ]; then
     cleanup_install_staging
     INSTALL_STAGING=""
     err "another installer published ${INSTALL_DIR}; leaving it untouched"
     return 1
   fi
+
+  if [ "$mode" = "replace" ]; then
+    rm -rf "$INSTALL_DIR"
+  fi
+
   if ! mv "$staging" "$INSTALL_DIR"; then
     cleanup_install_staging
     INSTALL_STAGING=""
@@ -254,33 +276,39 @@ launch_server() {
 # ---------------------------------------------------------------------------
 # WT-26: install WatchTower alongside CCC so watchtower.queue is importable
 # ---------------------------------------------------------------------------
+# The chain (dev checkout -> managed clone -> tarball -> PyPI last) lives in
+# scripts/install-watchtower.sh, which run.sh calls too — one definition, so a
+# curl install and a Homebrew install cannot drift apart.
+#
+# Resolved at call time, not at load time: this script is routinely run as
+# `curl ... | bash` with no checkout on disk at all, and only after sync_repo
+# has run does $INSTALL_DIR/scripts/ exist.
 install_watchtower() {
-  # Probe for a local WatchTower checkout. Precedence:
-  #   1. $WATCHTOWER_DIR env var (explicit override for CI / non-standard paths)
-  #   2. ~/Apps/watchtower  (default dev location)
-  #   3. ~/dev/watchtower   (alternate dev location)
-  # If none found, warn and continue — CCC still works via its own ux_fixes_queue.
-  local wt_dir=""
-  if [ -n "${WATCHTOWER_DIR:-}" ] && [ -d "$WATCHTOWER_DIR" ]; then
-    wt_dir="$WATCHTOWER_DIR"
-  elif [ -d "$HOME/Apps/watchtower" ]; then
-    wt_dir="$HOME/Apps/watchtower"
-  elif [ -d "$HOME/dev/watchtower" ]; then
-    wt_dir="$HOME/dev/watchtower"
-  fi
-
-  if [ -z "$wt_dir" ]; then
-    printf 'install: WatchTower not found (checked ~/Apps/watchtower, ~/dev/watchtower, WATCHTOWER_DIR env var)\n'
-    printf 'install: CCC will use its built-in queue engine. Set WATCHTOWER_DIR or clone WT to enable delegation.\n'
+  local here script=""
+  here="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" 2>/dev/null && pwd || true)"
+  local candidate
+  for candidate in "$here/install-watchtower.sh" \
+                   "$INSTALL_DIR/scripts/install-watchtower.sh"; do
+    if [ -f "$candidate" ]; then
+      script="$candidate"
+      break
+    fi
+  done
+  if [ -z "$script" ]; then
+    printf 'install: WARNING: scripts/install-watchtower.sh not found — skipping WatchTower.\n'
+    printf 'install:   CCC will use its built-in queue engine (no worker dispatch).\n'
     return 0
   fi
-
-  printf 'install: installing WatchTower from %s\n' "$wt_dir"
-  if "$PYTHON3" -m pip install -e "$wt_dir" --quiet; then
-    printf 'install: WatchTower installed — watchtower.queue is now available.\n'
-  else
-    printf 'install: WARNING: pip install of WatchTower failed. CCC will fall back to its built-in queue engine.\n'
-  fi
+  # CCC_WATCHTOWER_FORCE: an explicit install is a user asking for this now,
+  # so it must not be silently skipped by the once-a-day rate limits.
+  # CCC_VERSION: records what we just installed, so the very next routine
+  # `run.sh` launch (no force) does not redundantly re-force on the same
+  # version — see wt_ccc_version_changed in install-watchtower.sh.
+  CCC_PYTHON="$PYTHON3" \
+  CCC_WATCHTOWER_LOG_PREFIX="install: " \
+  CCC_WATCHTOWER_FORCE=1 \
+  CCC_VERSION="$(grep -m1 '^__version__ = ' "$INSTALL_DIR/server.py" 2>/dev/null | sed -E 's/^__version__ = "(.*)"$/\1/')" \
+    bash "$script" || true
 }
 
 # ---------------------------------------------------------------------------

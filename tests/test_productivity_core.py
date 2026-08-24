@@ -250,6 +250,7 @@ def test_trend_compares_newest_and_oldest_halves():
         presence=[],
         start_date=start,
         end_date=start + timedelta(weeks=8) - timedelta(days=1),
+        tzinfo=UTC,
     )
     assert payload["trends"]["delivery_direction"] == "up"
     assert payload["trends"]["delivery_change_pct"] == 200.0

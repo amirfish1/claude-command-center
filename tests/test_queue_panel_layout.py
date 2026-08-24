@@ -1,13 +1,139 @@
+import importlib
 import json
 import pathlib
 import subprocess
+import tempfile
 import unittest
+from unittest import mock
 
 
 PROJECT_ROOT = pathlib.Path(__file__).resolve().parents[1]
 
 
 class TestQueuePanelLayout(unittest.TestCase):
+    def test_standalone_queue_uses_single_panel_master_detail_on_phone(self):
+        """A phone swaps one active Q2 pane at a time instead of panning columns."""
+        q2_js = (PROJECT_ROOT / "static" / "q2.js").read_text(encoding="utf-8")
+        q2_css = (PROJECT_ROOT / "static" / "q2.css").read_text(encoding="utf-8")
+        q2_html = (PROJECT_ROOT / "static" / "q2.html").read_text(encoding="utf-8")
+
+        self.assertIn("function showMobileColumn(column)", q2_js)
+        self.assertIn("showMobileColumn('tickets');", q2_js)
+        self.assertIn("showMobileColumn('detail');", q2_js)
+        self.assertIn("data-mobile-panel", q2_js)
+        self.assertIn("@media (max-width: 700px)", q2_css)
+        self.assertIn('data-mobile-panel="queues"', q2_css)
+        self.assertIn('data-mobile-panel="tickets"', q2_css)
+        self.assertIn('data-mobile-panel="detail"', q2_css)
+        self.assertNotIn("scroll-snap-type: x mandatory;", q2_css)
+        self.assertIn('class="q2-shell" data-mobile-panel="queues"', q2_html)
+
+    def test_phone_queue_navigation_has_explicit_back_controls(self):
+        """Swiping advances the master/detail panes, but phone users can also
+        return from tickets to queues and from a ticket to its list."""
+        q2_html = (PROJECT_ROOT / "static" / "q2.html").read_text(encoding="utf-8")
+        q2_js = (PROJECT_ROOT / "static" / "q2.js").read_text(encoding="utf-8")
+        q2_css = (PROJECT_ROOT / "static" / "q2.css").read_text(encoding="utf-8")
+
+        self.assertIn('data-q2-mobile-back="queues"', q2_html)
+        self.assertIn('data-q2-mobile-back="tickets"', q2_html)
+        self.assertIn("showMobileColumn(back.getAttribute('data-q2-mobile-back'));", q2_js)
+        self.assertIn(".q2-mobile-back", q2_css)
+
+    def test_standalone_queue_keeps_recent_closed_tickets_visible(self):
+        """Recent closes stay in context without expanding full history."""
+        q2_js = (PROJECT_ROOT / "static" / "q2.js").read_text(encoding="utf-8")
+
+        self.assertIn("var RECENT_CLOSED_WINDOW_MS = 12 * 60 * 60 * 1000;", q2_js)
+        self.assertIn("var recentClosed = closed.filter(isRecentClosed);", q2_js)
+        self.assertIn("Recent closed", q2_js)
+
+    def test_standalone_queue_glows_a_newly_filed_ticket(self):
+        """The new ticket remains easy to locate after the queue refreshes."""
+        q2_js = (PROJECT_ROOT / "static" / "q2.js").read_text(encoding="utf-8")
+        q2_css = (PROJECT_ROOT / "static" / "q2.css").read_text(encoding="utf-8")
+
+        self.assertIn("var NEW_TICKET_GLOW_MS = 4500;", q2_js)
+        self.assertIn("function markNewTicket(ref)", q2_js)
+        self.assertIn("markNewTicket(ref);", q2_js)
+        self.assertIn("q2-new-ticket", q2_js)
+        self.assertIn(".q2-trow.q2-new-ticket", q2_css)
+        self.assertIn("@keyframes q2-new-ticket-glow", q2_css)
+
+    def test_ticket_status_dot_has_a_matching_text_label(self):
+        """Queue status colour is accompanied by its readable meaning."""
+        q2_js = (PROJECT_ROOT / "static" / "q2.js").read_text(encoding="utf-8")
+        q2_css = (PROJECT_ROOT / "static" / "q2.css").read_text(encoding="utf-8")
+
+        self.assertIn('class="q2-tstatus"', q2_js)
+        self.assertIn(".q2-tstatus", q2_css)
+
+    def test_all_queue_view_is_a_read_first_global_inbox(self):
+        """ALL combines live work without pretending to be a real queue."""
+        q2_js = (PROJECT_ROOT / "static" / "q2.js").read_text(encoding="utf-8")
+        q2_css = (PROJECT_ROOT / "static" / "q2.css").read_text(encoding="utf-8")
+
+        self.assertIn("viewAll: false", q2_js)
+        self.assertIn("function selectAllQueues()", q2_js)
+        self.assertIn("All queues", q2_js)
+        self.assertIn("function renderLiveWorkersStrip(host)", q2_js)
+        self.assertIn("statusOf(it) !== 'closed'", q2_js)
+        self.assertIn("q2-tqueue", q2_js)
+        self.assertIn("Select a ticket to triage it across queues.", q2_js)
+        self.assertIn(".q2-tqueue", q2_css)
+
+    def test_all_queue_ticket_list_is_newest_first(self):
+        """ALL orders its non-closed tickets by reverse chronological touch."""
+        q2_js = (PROJECT_ROOT / "static" / "q2.js").read_text(encoding="utf-8")
+
+        self.assertIn(
+            "openish.sort(function (a, b) { return touchedAt(b) - touchedAt(a); });",
+            q2_js,
+        )
+
+    def test_selected_queue_shows_its_learnings_when_no_ticket_is_selected(self):
+        """The detail pane makes queue guidance available before ticket work."""
+        q2_js = (PROJECT_ROOT / "static" / "q2.js").read_text(encoding="utf-8")
+
+        self.assertIn("function queueLearningsPath(queue)", q2_js)
+        self.assertIn("/api/queue/learnings?queue=", q2_js)
+        self.assertIn("data-q2-learnings-open", q2_js)
+        self.assertIn("Queue learnings", q2_js)
+
+    def test_queue_learnings_path_is_confined_to_watchtower_learnings(self):
+        """A queue name cannot turn the learnings viewer into a path reader."""
+        server = importlib.import_module("server")
+        with tempfile.TemporaryDirectory() as temp_dir:
+            with mock.patch.object(server, "_WT_HOME", pathlib.Path(temp_dir)):
+                self.assertEqual(
+                    server._wt_queue_learnings_path("CCC"),
+                    pathlib.Path(temp_dir, "learnings", "CCC.md"),
+                )
+                self.assertIsNone(server._wt_queue_learnings_path("../../private"))
+
+    def test_past_codex_worker_chip_gets_its_session_id(self):
+        """Codex exec logs use a plain session header, not stream-json."""
+        server = importlib.import_module("server")
+        with tempfile.TemporaryDirectory() as temp_dir:
+            logs_dir = pathlib.Path(temp_dir, "logs")
+            logs_dir.mkdir()
+            pathlib.Path(logs_dir, "ccc-deadbeef.log").write_text(
+                "OpenAI Codex v1.0.0\n"
+                "provider: openai\n"
+                "session id: 019f9fc4-c7dc-7133-a73e-d7d6df2bec22\n",
+                encoding="utf-8",
+            )
+            with (
+                mock.patch.object(server, "_WT_HOME", pathlib.Path(temp_dir)),
+                mock.patch.object(server, "_wt_read_workers", return_value=[]),
+            ):
+                rows = server._wt_past_workers(hours=1)
+
+            self.assertEqual(
+                rows[0]["session_id"],
+                "019f9fc4-c7dc-7133-a73e-d7d6df2bec22",
+            )
+
     def test_main_sidebar_replaces_merge_with_shared_queues_tab(self):
         app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
 
@@ -131,8 +257,11 @@ class TestQueuePanelLayout(unittest.TestCase):
         self.assertIn("const _typeShort = { 'feature': 'FR', 'bug': 'BUG' };", queue_js)
         self.assertIn("typeLabel + '/' + it.priority", queue_js)
         self.assertIn("timeAgo(ageMs).replace(/\\s+ago$/, '')", queue_js)
-        self.assertIn('class="fq-status fq-status-action fq-run"', queue_js)
-        self.assertIn('class="fq-status fq-status-action fq-run-once"', queue_js)
+        # One play control on the status dot, not two: the fq-run/fq-run-once
+        # pair collapsed into a single "run this ticket" button (see
+        # tests/test_queue_run_button.py for the behaviour it now carries).
+        self.assertIn('class="fq-status fq-status-action fq-run', queue_js)
+        self.assertNotIn("fq-run-once", queue_js)
         self.assertIn(".fq-status-action:hover", app_css)
 
     def test_queue_panel_empty_state_explains_project_scope(self):
@@ -175,6 +304,20 @@ class TestQueuePanelLayout(unittest.TestCase):
         self.assertIn("const rawStatus = it.status || 'open';", queue_js)
         self.assertNotIn("const status = it.status || 'open';", queue_js)
 
+    def test_closed_unresolved_rows_use_an_amber_attention_state(self):
+        """Unresolved follow-up is attention-worthy without implying a hard block."""
+        app_css = pathlib.Path(PROJECT_ROOT, "static", "app.css").read_text(encoding="utf-8")
+        unresolved_css = app_css[
+            app_css.index(".fq-row.is-closed.has-unresolved .fq-status {"):
+            app_css.index("/* Triage chips", app_css.index(".fq-row.is-closed.has-unresolved .fq-status {"))
+        ]
+
+        self.assertIn("background: var(--orange, #d29922);", unresolved_css)
+        self.assertIn("color: var(--orange, #d29922);", unresolved_css)
+        self.assertNotIn("var(--red, #f85149)", unresolved_css)
+        self.assertNotIn("#ff7b72", unresolved_css)
+        self.assertNotIn("rgba(248,81,73", unresolved_css)
+
     def test_live_queue_refreshes_when_mounted_in_sidebar_tab(self):
         """A worker claim refreshes sidebar rows and ends the Play spinner."""
         app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
@@ -199,16 +342,20 @@ class TestQueuePanelLayout(unittest.TestCase):
         ]
         self.assertIn("_queuePanelIsVisible()", stream_block)
 
-        self.assertIn("const _uxqPendingRunRefs = new Set();", app_js)
-        self.assertIn("if (_uxqPendingRunRefs.has(ref) && status !== 'open') _uxqPendingRunRefs.delete(ref);", app_js)
+        # The Play control's busy state now lasts exactly as long as its POST
+        # (see tests/test_queue_run_button.py). The old pending-run set cleared
+        # only when a ticket left `open`, so with drain off the spinner latched
+        # forever and hid the button; the spinner itself stays, for the
+        # optimistic "adding ticket" row.
+        self.assertIn("const _uxqRunBusyRefs = new Set();", app_js)
+        self.assertIn("_uxqRunBusyRefs.add(ref);", app_js)
+        self.assertIn("_uxqRunBusyRefs.delete(ref);", app_js)
         self.assertIn("fq-status-pending", app_js)
-        self.assertIn("_uxqPendingRunRefs.add(ref);", app_js)
-        self.assertIn("_uxqPendingRunRefs.delete(ref);", app_js)
         self.assertIn(".fq-status.fq-status-pending", app_css)
         self.assertIn("@keyframes fq-status-pending-spin", app_css)
 
-    def test_play_handlers_set_pending_state_after_they_read_the_ticket_ref(self):
-        """The spinner must be initiated inside, not before, its click handlers."""
+    def test_play_handler_sets_busy_state_after_it_reads_the_ticket_ref(self):
+        """The busy marker must be set inside, not before, the click handler."""
         app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
         queue_clicks = app_js[
             app_js.index("const $queueList = document.getElementById('sidebarQueueList')"):
@@ -217,14 +364,12 @@ class TestQueuePanelLayout(unittest.TestCase):
 
         self.assertIn(
             "const ref = runBtn.getAttribute('data-ref');\n"
-            "          _uxqPendingRunRefs.add(ref);\n"
-            "          runBtn.disabled = true;",
+            "          if (_uxqRunBusyRefs.has(ref)) return;\n",
             queue_clicks,
         )
         self.assertIn(
-            "const ref = runOnceBtn.getAttribute('data-ref');\n"
-            "          _uxqPendingRunRefs.add(ref);\n"
-            "          runOnceBtn.disabled = true;",
+            "          _uxqRunBusyRefs.add(ref);\n"
+            "          runBtn.disabled = true;",
             queue_clicks,
         )
 
@@ -257,17 +402,19 @@ vm.createContext(context);
 vm.runInContext(%s, context);
 const items = [
   { id: 'open-bug', status: 'open', type: 'bug' },
-  { id: 'closed-bug', status: 'closed', type: 'bug' },
+  { id: 'closed-recent-bug', status: 'closed', type: 'bug', closed_at: new Date(Date.now() - 2 * 60 * 60 * 1000).toISOString() },
+  { id: 'closed-old-bug', status: 'closed', type: 'bug', closed_at: new Date(Date.now() - 13 * 60 * 60 * 1000).toISOString() },
   { id: 'open-feature', status: 'open', type: 'feature' },
-  { id: 'closed-feature', status: 'closed', type: 'feature' },
+  { id: 'closed-recent-feature', status: 'closed', type: 'feature', closed_at: new Date(Date.now() - 2 * 60 * 60 * 1000).toISOString() },
+  { id: 'closed-old-feature', status: 'closed', type: 'feature', closed_at: new Date(Date.now() - 13 * 60 * 60 * 1000).toISOString() },
 ];
 const cases = {
-  'all/all': ['open-bug', 'closed-bug', 'open-feature', 'closed-feature'],
-  'all/bug': ['open-bug', 'closed-bug'],
-  'all/feature': ['open-feature', 'closed-feature'],
-  'open/all': ['open-bug', 'open-feature'],
-  'open/bug': ['open-bug'],
-  'open/feature': ['open-feature'],
+  'all/all': ['open-bug', 'closed-recent-bug', 'closed-old-bug', 'open-feature', 'closed-recent-feature', 'closed-old-feature'],
+  'all/bug': ['open-bug', 'closed-recent-bug', 'closed-old-bug'],
+  'all/feature': ['open-feature', 'closed-recent-feature', 'closed-old-feature'],
+  'open/all': ['open-bug', 'closed-recent-bug', 'open-feature', 'closed-recent-feature'],
+  'open/bug': ['open-bug', 'closed-recent-bug'],
+  'open/feature': ['open-feature', 'closed-recent-feature'],
 };
 for (const [key, expected] of Object.entries(cases)) {
   const [status, type] = key.split('/');

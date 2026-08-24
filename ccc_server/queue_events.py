@@ -17,7 +17,6 @@ import os
 import subprocess
 import threading
 import time
-import ux_fixes_queue  # kept as fallback when watchtower is not installed
 
 from ccc_server import core as _core
 from ccc_server.github_issues import github_rate_limited
@@ -43,17 +42,10 @@ _queue_replay_cache_lock = threading.Lock()
 def _queue_store_path_for_cache():
     """Resolve the durable queue-store file so we can cache by (mtime, size).
 
-    The active engine (`_q`) owns disk layout: WatchTower exposes
-    `_resolve_store_path()`; the stdlib fallback uses `ux_fixes_queue.QUEUE_FILE`
-    (the same file). Returns a Path or None."""
-    resolve = getattr(_core._q, "_resolve_store_path", None)
-    if callable(resolve):
-        try:
-            return Path(resolve())
-        except Exception:
-            pass
+    `_core._q` is watchtower.queue (a hard dependency, no fallback), which
+    always exposes `_resolve_store_path()`. Returns a Path or None."""
     try:
-        return Path(ux_fixes_queue.QUEUE_FILE)
+        return Path(_core._q._resolve_store_path())
     except Exception:
         return None
 
@@ -146,6 +138,184 @@ def _queue_replay_events():
             _queue_replay_cache[key] = result
     return result
 
+
+# ---------------------------------------------------------------------------
+# All-queues history graph (CCC-903): open / needs_input / closed counts over
+# time, for the "Queues" dashboard's all-queues header.
+#
+# Two-part construction, because only half the series has a real event log:
+#   - open/closed are event-sourced (a ticket's created_at/closed_at ARE the
+#     event), so history before this feature existed can be reconstructed
+#     exactly by folding those timestamps — same technique as
+#     _queue_replay_events_uncached above, just summed globally instead of
+#     per-queue.
+#   - needs_input is a live boolean flag with no timestamped transition, so
+#     there is nothing to replay for the past. Real snapshots start
+#     accumulating in a durable JSONL log from whenever this code first runs;
+#     backfilled points before that carry needs_input=None + backfilled=True
+#     so the frontend can visibly stop that series instead of drawing a false
+#     flat line.
+# ---------------------------------------------------------------------------
+_QUEUE_HISTORY_SNAPSHOT_MIN_GAP_S = 15 * 60  # throttle: >=1 written row / 15min
+_QUEUE_HISTORY_CACHE_TTL_S = 60.0
+_queue_history_cache = {"ts": 0.0, "key": None, "result": None}
+_queue_history_cache_lock = threading.Lock()
+
+
+def _queue_history_path():
+    return _core.COMMAND_CENTER_STATE_DIR / "queue-history.jsonl"
+
+
+def _current_queue_counts(items):
+    return {
+        "open": sum(1 for it in items if it.get("status") not in ("closed", "in_progress")),
+        "in_progress": sum(1 for it in items if it.get("status") == "in_progress"),
+        "closed": sum(1 for it in items if it.get("status") == "closed"),
+        "needs_input": sum(
+            1 for it in items
+            if it.get("status") == "blocked" or bool(it.get("needs_input"))
+        ),
+    }
+
+
+def _record_queue_snapshot_if_due(items):
+    """Append one row to the durable history log, throttled so a dashboard
+    polling every few seconds doesn't spam the file — this IS the "updates
+    every 15 minutes" cadence, driven by normal traffic rather than a new
+    background timer/cron (no extra process to keep alive or restart)."""
+    path = _queue_history_path()
+    now = time.time()
+    try:
+        if path.exists():
+            with open(path, "rb") as f:
+                try:
+                    f.seek(-2000, os.SEEK_END)
+                except OSError:
+                    f.seek(0)
+                tail = f.read().decode("utf-8", "ignore").strip().splitlines()
+            if tail:
+                try:
+                    last = json.loads(tail[-1])
+                    if now - float(last.get("ts", 0)) < _QUEUE_HISTORY_SNAPSHOT_MIN_GAP_S:
+                        return
+                except Exception:
+                    pass
+    except Exception:
+        pass
+    counts = _current_queue_counts(items)
+    row = {
+        "ts": now,
+        "open": counts["open"] + counts["in_progress"],
+        "needs_input": counts["needs_input"],
+        "closed": counts["closed"],
+    }
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with open(path, "a") as f:
+            f.write(json.dumps(row) + "\n")
+    except Exception:
+        pass
+
+
+def _read_queue_history_rows():
+    rows = []
+    try:
+        with open(_queue_history_path()) as f:
+            for line in f:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    rows.append(json.loads(line))
+                except Exception:
+                    continue
+    except FileNotFoundError:
+        pass
+    return rows
+
+
+def _backfill_queue_history(days, bucket_hours, items, before_ts):
+    """Reconstruct open/closed bucket counts before `before_ts` (the earliest
+    real snapshot, or now if there are none yet) by folding each item's
+    created_at (+1 open) / closed_at (-1 open, +1 closed) in time order."""
+    events = []
+    for it in items:
+        if not isinstance(it, dict):
+            continue
+        created = _core._uxq_parse_ts(it.get("created_at"))
+        closed = _core._uxq_parse_ts(it.get("closed_at"))
+        if created:
+            events.append((created, 1))
+        if closed:
+            events.append((closed, -1))
+    events.sort(key=lambda e: e[0])
+
+    bucket_s = max(1, bucket_hours) * 3600
+    start = before_ts - days * 86400
+    idx = 0
+    running_open = 0
+    running_closed = 0
+    while idx < len(events) and events[idx][0] < start:
+        if events[idx][1] == 1:
+            running_open += 1
+        else:
+            running_open = max(0, running_open - 1)
+            running_closed += 1
+        idx += 1
+    points = []
+    t = start
+    while t < before_ts:
+        boundary = min(t + bucket_s, before_ts)
+        while idx < len(events) and events[idx][0] < boundary:
+            if events[idx][1] == 1:
+                running_open += 1
+            else:
+                running_open = max(0, running_open - 1)
+                running_closed += 1
+            idx += 1
+        points.append({
+            "ts": boundary, "open": running_open, "closed": running_closed,
+            "needs_input": None, "backfilled": True,
+        })
+        t += bucket_s
+    return points
+
+
+def compute_queue_history(days=7, bucket_hours=1):
+    """All-queues open/needs_input/closed series for the dashboard history
+    graph. Cached briefly (repeated polls from an open dashboard tab must not
+    re-read the item store and re-fold events on every call)."""
+    days = max(1, min(int(days or 7), 30))
+    bucket_hours = max(1, min(int(bucket_hours or 1), 24))
+    now = time.time()
+    key = (days, bucket_hours)
+    with _queue_history_cache_lock:
+        c = _queue_history_cache
+        if c["result"] is not None and c["key"] == key and now - c["ts"] < _QUEUE_HISTORY_CACHE_TTL_S:
+            return c["result"]
+
+    try:
+        items = _core._q.list_items() or []
+    except Exception:
+        items = []
+    _record_queue_snapshot_if_due(items)
+
+    real_rows = _read_queue_history_rows()
+    cutoff = now - days * 86400
+    real_rows = [r for r in real_rows if float(r.get("ts", 0)) >= cutoff]
+    real_rows.sort(key=lambda r: r.get("ts", 0))
+    before_ts = real_rows[0]["ts"] if real_rows else now
+    backfilled = _backfill_queue_history(days, bucket_hours, items, before_ts)
+
+    result = {
+        "points": backfilled + real_rows,
+        "days": days,
+        "bucket_hours": bucket_hours,
+        "generated_at": now,
+    }
+    with _queue_history_cache_lock:
+        _queue_history_cache.update({"ts": now, "key": key, "result": result})
+    return result
 
 
 # Minutes a fixer can make no closing progress before its project's queue is
@@ -810,6 +980,20 @@ def _queue_codex_resume(session_id, text, pid=None, reason=None, *, only_if_pend
     with _core._pending_resume_lock:
         if only_if_pending and not _core._pending_resume_queue.get(session_id):
             return None
+        # The unattended auto-resume marker ("continue") is opt-in per
+        # session (CCC-863 zombie-process incident: opt-out by default let a
+        # leaked stale process burn a weekly quota unattended). Real user
+        # text is never gated here.
+        if (
+            _core._is_unattended_auto_continue(text)
+            and not _core._is_auto_resume_opted_in(session_id)
+        ):
+            return {
+                "ok": False,
+                "queued": False,
+                "error": "auto-resume not opted in for this session",
+                "auto_resume_opt_in_required": True,
+            }
         queue = _core._pending_resume_queue.setdefault(session_id, [])
         # Deduplicate identical text so a slow-to-confirm delivery (e.g. a
         # verifier report landing on a finished Codex thread) cannot pile up

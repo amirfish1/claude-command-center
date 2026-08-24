@@ -67,27 +67,27 @@ class TestCodexPoolAlive(unittest.TestCase):
     def test_pool_alive_true_when_app_server_running(self):
         srv = self.server
         srv._codex_pool_alive_cache["ts"] = 0.0
-        orig = srv.find_live_codex_processes
-        srv.find_live_codex_processes = lambda: [
-            {"pid": 1, "command": "/opt/homebrew/bin/codex app-server --listen stdio://"}
+        orig = srv._raw_engine_process_commands
+        srv._raw_engine_process_commands = lambda _engine: [
+            ("1", "/opt/homebrew/bin/codex app-server --listen stdio://")
         ]
         try:
             self.assertTrue(srv._codex_pool_alive(now=1000.0))
         finally:
-            srv.find_live_codex_processes = orig
+            srv._raw_engine_process_commands = orig
             srv._codex_pool_alive_cache["ts"] = 0.0
 
     def test_pool_alive_false_when_no_app_server(self):
         srv = self.server
         srv._codex_pool_alive_cache["ts"] = 0.0
-        orig = srv.find_live_codex_processes
-        srv.find_live_codex_processes = lambda: [
-            {"pid": 1, "command": "codex --resume abc123"}
+        orig = srv._raw_engine_process_commands
+        srv._raw_engine_process_commands = lambda _engine: [
+            ("1", "codex --resume abc123")
         ]
         try:
             self.assertFalse(srv._codex_pool_alive(now=1000.0))
         finally:
-            srv.find_live_codex_processes = orig
+            srv._raw_engine_process_commands = orig
             srv._codex_pool_alive_cache["ts"] = 0.0
 
 

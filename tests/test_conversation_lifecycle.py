@@ -401,7 +401,7 @@ def test_single_unarchive_clears_trash_before_archive_write(tmp_path, monkeypatc
     assert server._load_trashed_conversations() == []
 
 
-def test_single_archive_invalidates_served_session_rows(tmp_path, monkeypatch):
+def test_single_archive_restamps_served_session_rows(tmp_path, monkeypatch):
     monkeypatch.setattr(server, "ARCHIVED_CONVERSATIONS_FILE", tmp_path / "archived.json")
     monkeypatch.setattr(server, "TRASHED_CONVERSATIONS_FILE", tmp_path / "trashed.json")
     monkeypatch.setattr(server, "SIDECAR_STATE_DIR", tmp_path)
@@ -409,8 +409,10 @@ def test_single_archive_invalidates_served_session_rows(tmp_path, monkeypatch):
     monkeypatch.setattr(server, "_save_archive_grace", lambda: None)
     monkeypatch.setattr(server, "_kill_session_by_id", lambda sid: {"ok": True})
     monkeypatch.setattr(server, "_log_archive_event", lambda *args: None)
-    invalidations = []
-    monkeypatch.setattr(server, "_clear_archive_serve_cache", lambda: invalidations.append(True))
+    restamps = []
+    monkeypatch.setattr(
+        server, "_restamp_archive_serve_cache_after_mutation", lambda: restamps.append(True),
+    )
 
     status, body = _post_json(
         "/api/conversations/sid-a/archive",
@@ -419,7 +421,7 @@ def test_single_archive_invalidates_served_session_rows(tmp_path, monkeypatch):
 
     assert status == 200
     assert body["archived"] is True
-    assert invalidations == [True]
+    assert restamps == [True]
 
 
 def test_bulk_unarchive_clears_trash_before_archive_write(tmp_path, monkeypatch):
@@ -442,15 +444,17 @@ def test_bulk_unarchive_clears_trash_before_archive_write(tmp_path, monkeypatch)
     assert server._load_trashed_conversations() == []
 
 
-def test_bulk_archive_invalidates_served_session_rows(tmp_path, monkeypatch):
+def test_bulk_archive_restamps_served_session_rows(tmp_path, monkeypatch):
     monkeypatch.setattr(server, "ARCHIVED_CONVERSATIONS_FILE", tmp_path / "archived.json")
     monkeypatch.setattr(server, "TRASHED_CONVERSATIONS_FILE", tmp_path / "trashed.json")
     monkeypatch.setattr(server, "SIDECAR_STATE_DIR", tmp_path)
     monkeypatch.setattr(server, "_archive_grace", {})
     monkeypatch.setattr(server, "_save_archive_grace", lambda: None)
     monkeypatch.setattr(server, "_log_archive_event", lambda *args: None)
-    invalidations = []
-    monkeypatch.setattr(server, "_clear_archive_serve_cache", lambda: invalidations.append(True))
+    restamps = []
+    monkeypatch.setattr(
+        server, "_restamp_archive_serve_cache_after_mutation", lambda: restamps.append(True),
+    )
 
     status, body = _post_json(
         "/api/conversations/archive-bulk",
@@ -459,7 +463,7 @@ def test_bulk_archive_invalidates_served_session_rows(tmp_path, monkeypatch):
 
     assert status == 200
     assert body["changed"] == ["sid-a", "sid-b"]
-    assert invalidations == [True]
+    assert restamps == [True]
 
 
 def test_group_chat_trash_archives_first(tmp_path, monkeypatch):
@@ -507,3 +511,24 @@ def test_post_router_exposes_trash_endpoints():
     assert '"trashed": bool(meta.get("trashed"))' in inspect.getsource(
         server._list_group_chats
     )
+
+
+def test_every_engine_finder_stamps_lifecycle_state():
+    # A finder that omits archived/trashed serves rows with those fields
+    # missing, so the UI treats a trashed session as active and it pops
+    # back out of the Trash section on the next poll (kimi regression).
+    finders = [
+        server.find_conversations,
+        server.find_codex_conversations,
+        server.find_kimi_conversations,
+        server.find_gemini_conversations,
+        server.find_cursor_conversations,
+        server.find_antigravity_conversations,
+        server.find_hermes_conversations,
+        server.find_kilo_conversations,
+    ]
+    for finder in finders:
+        source = inspect.getsource(finder)
+        assert "_load_conversation_lifecycle_sets" in source, finder.__name__
+        assert '"archived"' in source, finder.__name__
+        assert '"trashed"' in source, finder.__name__

@@ -47,6 +47,17 @@ For non-sensitive issues, open a GitHub issue. For anything that could enable ar
 
 We'll respond within a week. If the report is valid we'll cut a fix release before disclosing.
 
+## Private queue diagnostics
+
+Q2 can prepare a sanitized WatchTower queue/worker snapshot for explicit private
+support. Diagnostic mode sends only the editable text visible in the existing
+Report a bug window; it does not append browser, session, identity, screenshot,
+file, prompt, ticket-text, path, or raw-log data. The dedicated intake service is
+separate from telemetry, has no list/read endpoint, and stores only a seven-day
+request-ID deduplication result—not report bodies. See
+[`docs/private-diagnostics.md`](docs/private-diagnostics.md) for the complete
+allowlist and delivery contract.
+
 ## For contributors
 
 If you're adding a new endpoint:
