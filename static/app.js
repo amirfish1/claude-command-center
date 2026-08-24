@@ -27836,7 +27836,7 @@
       const data = await postRunCompactForSession(
         sid, source, liveStatus && liveStatus.terminalApp);
       if (data && data.ok) {
-        showOpToast(compactRequestSuccessMessage(data, source), 'success');
+        if (_compactToastNeeded(sid)) showOpToast(compactRequestSuccessMessage(data, source), 'success');
         touchSessionOptimistically(sid);
         if (source === 'codex' || (data && data.via === 'live-spawn-stdin')) {
           // These paths already FINISHED compacting server-side (Codex via RPC;
@@ -27901,6 +27901,13 @@
     }
   }
 
+  // The lifecycle card already says this, in place, with numbers. A corner
+  // toast beside it is the disconnected duplicate feedback the card replaced.
+  // Still worth showing when you compacted a session you are NOT looking at,
+  // where the toast is the only signal you get.
+  function _compactToastNeeded(sid) {
+    return !(sid && currentSession && currentSession.id === sid);
+  }
   function compactRequestSuccessMessage(data, source) {
     if (data && data.via === 'codex-compact') return 'Codex conversation compacted.';
     if (data && data.queued) return 'Queued /compact until the terminal session is idle.';
@@ -34158,7 +34165,7 @@
         try {
           const data = await postRunCompactForSession(sid, source);
           if (data && data.ok) {
-            showOpToast(compactRequestSuccessMessage(data, source), 'success');
+            if (_compactToastNeeded(sid)) showOpToast(compactRequestSuccessMessage(data, source), 'success');
             touchSessionOptimistically(sid);
             if (source === 'codex' || (data && data.via === 'live-spawn-stdin')) {
               // Already finished compacting server-side — no boundary left to
