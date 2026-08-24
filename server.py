@@ -40751,6 +40751,8 @@ _pending_terminal_input_lock = threading.Lock()
 _pending_terminal_handoff_ids: dict = {}  # watcher-local handoff_id → path
 _pending_inputs_lock = threading.Lock()
 _pending_input_handoff_ingest_lock = threading.Lock()
+_auto_resume_barrier_thread_lock = threading.RLock()
+_auto_resume_barrier_local = threading.local()
 _pending_inputs_watcher_lock_file = None
 _pending_inputs_watcher_retry_started = False
 _codex_queue_pump_locks = {}
@@ -40762,6 +40764,52 @@ _codex_queue_pump_locks_guard = threading.Lock()
 # resume/terminal queues in PENDING_INPUTS_FILE so it survives a restart.
 _auto_resume_opt_in: dict = {}   # session_id → True
 _auto_resume_opt_in_lock = threading.Lock()
+
+
+def _auto_resume_barrier_path():
+    return PENDING_INPUTS_FILE.with_suffix(".auto-resume.lock")
+
+
+@contextlib.contextmanager
+def _auto_resume_exclusive_lock():
+    """Cross-process barrier for auto-resume queueing, delivery, and cancel.
+
+    A successful cancellation cannot overlap an unattended ``continue``
+    write or delivery. Real user text never takes this lock.
+    """
+    with _auto_resume_barrier_thread_lock:
+        depth = int(getattr(_auto_resume_barrier_local, "depth", 0) or 0)
+        if depth:
+            _auto_resume_barrier_local.depth = depth + 1
+            try:
+                yield
+            finally:
+                _auto_resume_barrier_local.depth = depth
+            return
+        lock_path = _auto_resume_barrier_path()
+        lock_path.parent.mkdir(parents=True, exist_ok=True)
+        with open(lock_path, "a+") as lock_fh:
+            fcntl.flock(lock_fh.fileno(), fcntl.LOCK_EX)
+            _auto_resume_barrier_local.depth = 1
+            try:
+                yield
+            finally:
+                _auto_resume_barrier_local.depth = 0
+                fcntl.flock(lock_fh.fileno(), fcntl.LOCK_UN)
+
+
+def _deliver_with_auto_resume_barrier(session_id, text, deliver):
+    """Run an unattended delivery only while its durable permission is live."""
+    if not _is_unattended_auto_continue(text):
+        return deliver()
+    try:
+        with _auto_resume_exclusive_lock():
+            if not _is_auto_resume_opted_in(session_id):
+                return {"ok": True, "delivered": False, "disabled": True}
+            return deliver()
+    except OSError:
+        # Fail closed. A missing safety lock must never turn into a send.
+        return {"ok": True, "delivered": False, "disabled": True}
 
 
 def _acquire_pending_inputs_watcher_lock(lock_path):
@@ -40832,9 +40880,11 @@ def _load_pending_inputs():
     with _auto_resume_opt_in_lock:
         flags = data.get("auto_resume_opt_in")
         if isinstance(flags, dict):
-            _auto_resume_opt_in.update(
-                {str(sid): True for sid, v in flags.items() if v}
-            )
+            _auto_resume_opt_in.update({
+                str(sid): True
+                for sid, v in flags.items()
+                if v and not _is_session_auto_resume_disabled(sid)
+            })
     if stripped:
         _save_pending_inputs()
 def _save_pending_inputs():
@@ -40881,6 +40931,8 @@ def _is_auto_resume_opted_in(session_id):
     running pre-fix code burned a weekly quota unattended)."""
     if not session_id:
         return False
+    if _is_session_auto_resume_disabled(session_id):
+        return False
     with _auto_resume_opt_in_lock:
         return bool(_auto_resume_opt_in.get(str(session_id)))
 
@@ -40924,6 +40976,23 @@ class _PendingInputHandoff(str):
 
 
 def _write_pending_input_handoff(session_id, text, *, front=False):
+    """Write a worker handoff, gating unattended auto-resume at the barrier."""
+    if _is_unattended_auto_continue(text):
+        try:
+            with _auto_resume_exclusive_lock():
+                if not _is_auto_resume_opted_in(session_id):
+                    return None
+                return _write_pending_input_handoff_unlocked(
+                    session_id, text, front=front,
+                )
+        except OSError:
+            return None
+    return _write_pending_input_handoff_unlocked(
+        session_id, text, front=front,
+    )
+
+
+def _write_pending_input_handoff_unlocked(session_id, text, *, front=False):
     """Atomically hand one terminal retry from an engine worker to the watcher.
 
     Persistent engine workers do not own the dashboard's in-memory pending
@@ -40995,6 +41064,15 @@ def _read_pending_input_handoff(path):
 
 
 def _ingest_pending_input_handoffs():
+    """Ingest handoffs behind the same barrier used by cancellation."""
+    try:
+        with _auto_resume_exclusive_lock():
+            return _ingest_pending_input_handoffs_unlocked()
+    except OSError:
+        return 0
+
+
+def _ingest_pending_input_handoffs_unlocked():
     """Expose authoritative worker retry files in the watcher-owned queue."""
     with _pending_input_handoff_ingest_lock:
         try:
@@ -41016,6 +41094,16 @@ def _ingest_pending_input_handoffs():
                     f"  [pending-inputs] invalid worker handoff: {path.name}",
                     flush=True,
                 )
+                continue
+            if (
+                _is_unattended_auto_continue(event["text"])
+                and not _is_auto_resume_opted_in(event["session_id"])
+            ):
+                try:
+                    path.unlink(missing_ok=True)
+                except OSError:
+                    pass
+                _pending_terminal_handoff_ids.pop(event["id"], None)
                 continue
             events.append(event)
         if not events:
@@ -41419,6 +41507,28 @@ def _parse_ps_etime(text):
 
 
 def _queue_terminal_input(session_id, text, status=None):
+    """Queue terminal input, gating the unattended marker at the barrier."""
+    if _is_unattended_auto_continue(text):
+        try:
+            with _auto_resume_exclusive_lock():
+                if not _is_auto_resume_opted_in(session_id):
+                    return {
+                        "ok": False,
+                        "queued": False,
+                        "error": "auto-resume not opted in for this session",
+                        "auto_resume_opt_in_required": True,
+                    }
+                return _queue_terminal_input_unlocked(session_id, text, status)
+        except OSError:
+            return {
+                "ok": False,
+                "queued": False,
+                "error": "auto-resume safety barrier unavailable",
+            }
+    return _queue_terminal_input_unlocked(session_id, text, status)
+
+
+def _queue_terminal_input_unlocked(session_id, text, status=None):
     """Queue input until a live Claude session reports it is idle again."""
     with _pending_terminal_input_lock:
         queue = _pending_terminal_input_queue.setdefault(session_id, [])
@@ -41800,7 +41910,26 @@ def _pump_codex_resume_queue(session_id):
         if text is None:
             return {"ok": True, "empty": True}
 
-        result = resume_session_codex(session_id, text, _from_queue=True)
+        if _is_unattended_auto_continue(text):
+            try:
+                with _auto_resume_exclusive_lock():
+                    if not _is_auto_resume_opted_in(session_id):
+                        with _pending_resume_lock:
+                            queue = _pending_resume_queue.get(session_id) or []
+                            if queue and queue[0] == text:
+                                queue.pop(0)
+                                if not queue:
+                                    _pending_resume_queue.pop(session_id, None)
+                        _save_pending_inputs()
+                        return {"ok": True, "delivered": False, "disabled": True}
+                    result = resume_session_codex(
+                        session_id, text, _from_queue=True,
+                    )
+            except OSError:
+                _mark_pending_resume_retry(session_id)
+                return {"ok": False, "delivered": False, "waiting": "barrier"}
+        else:
+            result = resume_session_codex(session_id, text, _from_queue=True)
         # An accepted turn already started. Holding the same text because
         # app-server events were not observed re-sends it after the turn
         # ends. Treat accepted as delivered; retry only when not accepted.
@@ -42507,9 +42636,24 @@ def _mark_terminal_queue_retry(sid, now=None, delay=None):
 def _requeue_terminal_input_front(sid, text):
     """Put a popped-but-undelivered entry back where it came from (front,
     preserving order relative to anything queued behind it)."""
+    if _is_unattended_auto_continue(text):
+        try:
+            with _auto_resume_exclusive_lock():
+                if not _is_auto_resume_opted_in(sid):
+                    _complete_pending_input_handoff(text)
+                    return False
+                return _requeue_terminal_input_front_unlocked(sid, text)
+        except OSError:
+            _complete_pending_input_handoff(text)
+            return False
+    return _requeue_terminal_input_front_unlocked(sid, text)
+
+
+def _requeue_terminal_input_front_unlocked(sid, text):
     with _pending_terminal_input_lock:
         _pending_terminal_input_queue.setdefault(sid, []).insert(0, text)
     _save_pending_inputs()
+    return True
 
 
 def _verify_terminal_drain_receipts(now=None):
@@ -42831,20 +42975,26 @@ def _start_resume_queue_watcher() -> None:
                     continue
                 result = None
                 try:
-                    if _is_codex_session(sid):
-                        result = resume_session_codex(sid, text)
-                    elif _is_gemini_session(sid):
-                        result = resume_session_gemini(sid, text)
-                    elif _is_cursor_session(sid):
-                        result = resume_session_cursor(sid, text)
-                    elif _is_antigravity_session(sid):
-                        result = resume_session_antigravity(sid, text)
-                    elif _is_hermes_session(sid):
-                        result = resume_session_hermes(sid, text)
-                    elif _is_opencode_session(sid):
-                        result = resume_session_opencode(sid, text)
-                    elif _is_devin_cli_session(sid):
-                        result = resume_session_devin(sid, text)
+                    def _deliver_resume_queue_text():
+                        if _is_codex_session(sid):
+                            return resume_session_codex(sid, text)
+                        if _is_gemini_session(sid):
+                            return resume_session_gemini(sid, text)
+                        if _is_cursor_session(sid):
+                            return resume_session_cursor(sid, text)
+                        if _is_antigravity_session(sid):
+                            return resume_session_antigravity(sid, text)
+                        if _is_hermes_session(sid):
+                            return resume_session_hermes(sid, text)
+                        if _is_opencode_session(sid):
+                            return resume_session_opencode(sid, text)
+                        if _is_devin_cli_session(sid):
+                            return resume_session_devin(sid, text)
+                        return {"ok": False}
+
+                    result = _deliver_with_auto_resume_barrier(
+                        sid, text, _deliver_resume_queue_text,
+                    )
                 except Exception:
                     result = {"ok": False}
                 if result and result.get("blocked"):
@@ -42987,10 +43137,14 @@ def _start_resume_queue_watcher() -> None:
                     # transcript confirms it landed.
                     result = None
                     try:
-                        result = _inject_text_into_session(
-                            sid, text, _from_terminal_queue=True,
-                            skip_wt=(sid in _terminal_drain_skip_wt),
-                            source="terminal-queue-watcher",
+                        result = _deliver_with_auto_resume_barrier(
+                            sid,
+                            text,
+                            lambda: _inject_text_into_session(
+                                sid, text, _from_terminal_queue=True,
+                                skip_wt=(sid in _terminal_drain_skip_wt),
+                                source="terminal-queue-watcher",
+                            ),
                         )
                     except Exception:
                         result = None
@@ -50525,6 +50679,33 @@ def _load_usage_limit_resumes():
     return data
 
 
+def _is_session_auto_resume_disabled(session_id):
+    """Read the durable per-session kill switch without trusting a cache.
+
+    This check is only used for the exact unattended ``continue`` marker, so
+    the extra tiny JSON read is preferable to letting a sibling process's
+    stale in-memory opt-in resurrect a cancelled session.
+    """
+    sid = str(session_id or "").strip()
+    if sid.startswith("session_"):
+        sid = sid[len("session_"):]
+    if not sid:
+        return True
+    if not USAGE_LIMIT_RESUME_FILE.exists():
+        return False
+    try:
+        data = json.loads(USAGE_LIMIT_RESUME_FILE.read_text())
+    except (OSError, json.JSONDecodeError):
+        return True
+    if not isinstance(data, dict):
+        return True
+    entry = data.get(sid)
+    return bool(
+        isinstance(entry, dict)
+        and (entry.get("auto_resume_disabled") or entry.get("dismissed"))
+    )
+
+
 def _usage_limit_resume_lock_path():
     return USAGE_LIMIT_RESUME_FILE.with_suffix(".lock")
 
@@ -50564,6 +50745,13 @@ def _save_usage_limit_resume_entry(session_id, entry):
         return
 
     def _mutate(existing):
+        current = existing.get(str(session_id))
+        if isinstance(current, dict) and (
+            current.get("auto_resume_disabled") or current.get("dismissed")
+        ):
+            # A detector may have computed `entry` from a snapshot taken
+            # before the user's X. Permanent disable wins atomically.
+            return existing, None
         existing[str(session_id)] = entry
         return existing, None
 
@@ -50619,11 +50807,101 @@ def _dismiss_usage_limit_resume(session_id):
         if entry is None:
             entry = {}
         entry["dismissed"] = True
+        entry["auto_resume_disabled"] = True
         entry["dismissed_at"] = time.time()
         existing[str(session_id)] = entry
         return existing, None
 
     _usage_limit_resume_rewrite(_mutate)
+
+
+def _purge_pending_auto_resume_handoffs(session_id):
+    """Remove not-yet-ingested bare-continue handoffs for one session."""
+    removed = 0
+    with _pending_input_handoff_ingest_lock:
+        try:
+            paths = list(PENDING_INPUT_HANDOFF_DIR.glob("*.json"))
+        except OSError:
+            return removed
+        for path in paths:
+            event = _read_pending_input_handoff(path)
+            if not event or event["session_id"] != session_id:
+                continue
+            if not _is_unattended_auto_continue(event["text"]):
+                continue
+            path.unlink(missing_ok=True)
+            _pending_terminal_handoff_ids.pop(event["id"], None)
+            removed += 1
+    return removed
+
+
+def _disable_session_auto_resume(session_id):
+    """Permanently disable unattended auto-resume for one session.
+
+    Clearing the durable opt-in prevents future bare ``continue`` pokes;
+    purging any already-queued copies closes the race where one was accepted
+    before the user clicked X.  The usage-limit dismissal keeps the watcher
+    from rebuilding a countdown for the same (or a later) stop in this
+    session.
+    """
+    sid = str(session_id or "").strip()
+    if not sid:
+        return {"ok": False, "error": "missing session_id"}
+
+    try:
+        with _auto_resume_exclusive_lock():
+            # Persist the negative marker first. Every queue/write/delivery
+            # path rechecks it while holding this same barrier.
+            _dismiss_usage_limit_resume(sid)
+            removed = _purge_pending_auto_resume_handoffs(sid)
+            with _auto_resume_opt_in_lock:
+                _auto_resume_opt_in.pop(sid, None)
+
+            handoff_cleanup_failed = False
+            for queue, lock in (
+                (_pending_resume_queue, _pending_resume_lock),
+                (_pending_terminal_input_queue, _pending_terminal_input_lock),
+            ):
+                with lock:
+                    items = queue.get(sid) or []
+                    kept = []
+                    for item in items:
+                        if not _is_unattended_auto_continue(item):
+                            kept.append(item)
+                            continue
+                        if (
+                            isinstance(item, _PendingInputHandoff)
+                            and not _complete_pending_input_handoff(item)
+                        ):
+                            kept.append(item)
+                            handoff_cleanup_failed = True
+                            continue
+                        removed += 1
+                    if kept:
+                        queue[sid] = kept
+                    else:
+                        queue.pop(sid, None)
+
+            if not _save_pending_inputs():
+                return {
+                    "ok": False,
+                    "error": "failed to persist auto-resume disable",
+                }
+            if handoff_cleanup_failed:
+                return {
+                    "ok": False,
+                    "error": "failed to remove queued auto-resume handoff",
+                }
+    except OSError:
+        return {
+            "ok": False,
+            "error": "failed to persist permanent auto-resume disable",
+        }
+    return {
+        "ok": True,
+        "session_id": sid,
+        "cancelled_queued": removed,
+    }
 
 
 def usage_limit_resume_at_for_session(session_id):
@@ -71137,8 +71415,15 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                 # usage_limit_resume_at_for_session); kimi rows carry CCC's
                 # "session_" display prefix, so strip it the same way.
                 key = sid[len("session_"):] if sid.startswith("session_") else sid
-                _dismiss_usage_limit_resume(key)
-                self.send_json({"ok": True, "session_id": sid})
+                result = _disable_session_auto_resume(key)
+                if not result.get("ok"):
+                    self.send_json(result, 500)
+                else:
+                    self.send_json({
+                        "ok": True,
+                        "session_id": sid,
+                        "cancelled_queued": result.get("cancelled_queued", 0),
+                    })
         elif path == "/api/inject-input":
             length = int(self.headers.get("Content-Length", "0"))
             body = self.rfile.read(length) if length > 0 else b""

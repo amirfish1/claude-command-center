@@ -87,6 +87,19 @@ class QueueCodexResumeOptInTests(unittest.TestCase):
         reloaded._load_pending_inputs()
         self.assertTrue(reloaded._is_auto_resume_opted_in(sid))
 
+    def test_stale_loader_snapshot_does_not_erase_new_in_memory_opt_in(self):
+        """A watcher read begun before spawn cannot erase the new permission."""
+        sid = "new-opt-in-after-stale-read"
+        self.server.PENDING_INPUTS_FILE.write_text(
+            '{"resume_queue": {}, "terminal_queue": {}, "auto_resume_opt_in": {}}'
+        )
+        with self.server._auto_resume_opt_in_lock:
+            self.server._auto_resume_opt_in[sid] = True
+
+        self.server._load_pending_inputs()
+
+        self.assertTrue(self.server._is_auto_resume_opted_in(sid))
+
 
 class SpawnAutoResumeOptInWiringTests(unittest.TestCase):
     def setUp(self):

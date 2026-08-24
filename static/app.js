@@ -12820,6 +12820,62 @@
     }
     return null;
   }
+  const _usageLimitSuppressedSids = new Set();
+  const _usageLimitCancelErrors = new Set();
+  function _usageLimitRowsForSession(sid) {
+    const rows = [];
+    const addMatches = (source) => {
+      if (!Array.isArray(source)) return;
+      source.forEach((row) => {
+        if (!row || (row.session_id !== sid && row.id !== sid)) return;
+        if (!rows.includes(row)) rows.push(row);
+      });
+    };
+    if (typeof conversationsData !== 'undefined') addMatches(conversationsData);
+    if (typeof archiveData !== 'undefined') addMatches(archiveData);
+    return rows;
+  }
+  function _usageLimitSuppressSession(sid) {
+    if (!sid) return;
+    _usageLimitSuppressedSids.add(sid);
+    _usageLimitCancelErrors.delete(sid);
+    _usageLimitRowsForSession(sid).forEach((row) => {
+      delete row.usage_limit_resume_at;
+    });
+    document.querySelectorAll('.usage-limit-resume-banner').forEach((banner) => {
+      if (banner.dataset.sid === sid) banner.remove();
+    });
+  }
+  function _usageLimitRollbackSuppression(sid, resumeAt) {
+    if (!sid) return;
+    _usageLimitSuppressedSids.delete(sid);
+    _usageLimitCancelErrors.add(sid);
+    if (Number.isFinite(resumeAt)) {
+      _usageLimitRowsForSession(sid).forEach((row) => {
+        row.usage_limit_resume_at = resumeAt;
+      });
+    }
+    syncUsageLimitCountdowns();
+  }
+  async function _cancelUsageLimitAutoResume(sid, resumeAt) {
+    _usageLimitSuppressSession(sid);
+    try {
+      const response = await fetch('/api/usage-limit/cancel', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ session_id: sid }),
+      });
+      let payload = null;
+      try { payload = await response.json(); } catch (_) { /* handled below */ }
+      if (!response.ok || !payload || !payload.ok) {
+        throw new Error((payload && payload.error) || ('HTTP ' + response.status));
+      }
+      return true;
+    } catch (_) {
+      _usageLimitRollbackSuppression(sid, resumeAt);
+      return false;
+    }
+  }
   function syncUsageLimitCountdowns() {
     try {
       document.querySelectorAll('.conv-pane[data-pane-id]').forEach((pane) => {
@@ -12832,10 +12888,14 @@
         if (!sid && currentSession) sid = currentSession.id;
         const inputBar = pane.querySelector('.conv-input-bar');
         if (!inputBar) return;
+        let banner = inputBar.querySelector('.usage-limit-resume-banner');
+        if (!sid || _usageLimitSuppressedSids.has(sid)) {
+          if (banner) banner.remove();
+          return;
+        }
         const row = _usageLimitRowForSession(sid);
         const resumeAt = row && typeof row.usage_limit_resume_at === 'number'
           ? row.usage_limit_resume_at : null;
-        let banner = inputBar.querySelector('.usage-limit-resume-banner');
         // Defensive staleness cutoff (independent of the server's own):
         // never let a countdown sit frozen past zero forever client-side.
         const stale = resumeAt && (resumeAt * 1000 <= Date.now() - 5 * 60 * 1000);
@@ -12847,10 +12907,16 @@
           banner = document.createElement('div');
           banner.className = 'usage-limit-resume-banner';
           banner.setAttribute('role', 'status');
-          banner.innerHTML = '<span class="usage-limit-resume-text"></span>'
-            + '<button type="button" class="usage-limit-resume-cancel" title="Cancel auto-resume" aria-label="Cancel auto-resume">&times;</button>';
           inputBar.prepend(banner);
         }
+        const cancelError = _usageLimitCancelErrors.has(sid);
+        banner.classList.toggle('is-cancel-error', cancelError);
+        banner.dataset.cancelError = cancelError ? '1' : '0';
+        banner.innerHTML = cancelError
+          ? '<span class="usage-limit-resume-text">AUTO-RESUME STILL ENABLED</span>'
+            + '<button type="button" class="usage-limit-resume-cancel" title="Retry disabling auto-resume" aria-label="Retry disabling auto-resume">Retry</button>'
+          : '<span class="usage-limit-resume-text"></span>'
+            + '<button type="button" class="usage-limit-resume-cancel" title="Permanently disable auto-resume" aria-label="Permanently disable auto-resume">&times;</button>';
         banner.dataset.resumeAt = String(resumeAt);
         banner.dataset.sid = sid;
       });
@@ -12858,6 +12924,7 @@
   }
   function _tickUsageLimitCountdowns() {
     document.querySelectorAll('.usage-limit-resume-banner').forEach((banner) => {
+      if (banner.dataset.cancelError === '1') return;
       const resumeAt = parseFloat(banner.dataset.resumeAt || '0');
       if (!resumeAt) { banner.remove(); return; }
       const remaining = resumeAt - Date.now() / 1000;
@@ -12869,19 +12936,18 @@
       else banner.textContent = text;
     });
   }
-  document.addEventListener('click', (ev) => {
+  document.addEventListener('click', async (ev) => {
     const btn = ev.target && ev.target.closest && ev.target.closest('.usage-limit-resume-cancel');
     if (!btn) return;
     ev.preventDefault();
     const banner = btn.closest('.usage-limit-resume-banner');
     const sid = banner && banner.dataset.sid;
     if (!sid) return;
-    banner.remove();
-    fetch('/api/usage-limit/cancel', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ session_id: sid }),
-    }).catch(() => {});
+    const resumeAt = parseFloat(banner.dataset.resumeAt || '0');
+    await _cancelUsageLimitAutoResume(
+      sid,
+      Number.isFinite(resumeAt) ? resumeAt : null,
+    );
   });
   setInterval(syncUsageLimitCountdowns, 5000);
   setInterval(_tickUsageLimitCountdowns, 1000);
