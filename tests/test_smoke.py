@@ -19700,6 +19700,52 @@ class TestAutoHandoverOneShot(unittest.TestCase):
                 server._auto_handover_last_checked_at["ts"] = old_checked_ts
 
 
+class TestAutoHandoverMode(unittest.TestCase):
+    """Auto-handover's status-bar toggle now cycles compact/mdfile/both/off
+    (not just on/off) -- the stored flag and the injected instruction both
+    need to carry which mode was picked."""
+
+    def _fresh_server(self, tmp):
+        for mod in ("server", "morning", "morning_store"):
+            sys.modules.pop(mod, None)
+        server = importlib.import_module("server")
+        server.AUTO_HANDOVER_FILE = pathlib.Path(tmp) / "auto-handover.json"
+        return server
+
+    def test_set_auto_handover_defaults_to_mdfile(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            server = self._fresh_server(tmp)
+            sid = "s1"
+            r = server._set_auto_handover(sid, True)
+            self.assertTrue(r["ok"])
+            self.assertEqual(r["mode"], "mdfile")
+            self.assertEqual(server._auto_handover_mode(sid), "mdfile")
+
+    def test_set_auto_handover_stores_compact_and_both(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            server = self._fresh_server(tmp)
+            sid = "s1"
+            for mode in ("compact", "both"):
+                r = server._set_auto_handover(sid, True, mode)
+                self.assertTrue(r["ok"], r)
+                self.assertEqual(server._auto_handover_mode(sid), mode)
+
+    def test_set_auto_handover_rejects_unknown_mode(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            server = self._fresh_server(tmp)
+            r = server._set_auto_handover("s1", True, "bogus")
+            self.assertFalse(r["ok"])
+
+    def test_auto_handover_mode_defaults_when_unset_or_disabled(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            server = self._fresh_server(tmp)
+            self.assertEqual(server._auto_handover_mode("never-armed"), "mdfile")
+            sid = "s1"
+            server._set_auto_handover(sid, True, "compact")
+            server._set_auto_handover(sid, False)
+            self.assertEqual(server._auto_handover_mode(sid), "mdfile")
+
+
 class TestSessionRegistryTruncatedComm(unittest.TestCase):
     """Regression for 2026-08-06: every CCC-spawned session read "not live".
 

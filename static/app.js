@@ -8162,6 +8162,14 @@
   // itself lives server-side (auto-handover.json, read back via each pane's
   // usage fetch), not in this flag.
   let _autoHandoverToggleInFlight = false;
+  // The status-bar pill cycles compact -> mdfile -> both -> off on each
+  // click. The label updates instantly (optimistic local state) but the
+  // actual POST + chat injection is debounced so clicking through several
+  // states fast fires one commit, not one per click.
+  const AUTO_HANDOVER_MODE_CYCLE = ['compact', 'mdfile', 'both', 'off'];
+  const AUTO_HANDOVER_MODE_LABELS = { compact: 'compact', mdfile: 'md', both: 'both', off: 'OFF' };
+  const _AUTO_HANDOVER_CYCLE_DEBOUNCE_MS = 450;
+  const _autoHandoverCycleTimers = {};
   const INPUT_DRAFTS_KEY = 'ccc-input-drafts-v1';
   const INPUT_DRAFTS_MAX = 200;
   const INPUT_DRAFT_MAX_CHARS = 50000;
@@ -27897,22 +27905,39 @@
     }
   }
 
-  async function toggleAutoHandoverForPane(paneId, sid) {
-    if (_autoHandoverToggleInFlight || !sid) return;
+  function _autoHandoverCurrentState(paneId) {
     const u = _usageDataByPane[paneId] || {};
-    const next = !u.auto_handover_enabled;
+    if (!u.auto_handover_enabled) return 'off';
+    const mode = u.auto_handover_mode;
+    return AUTO_HANDOVER_MODE_CYCLE.includes(mode) ? mode : 'mdfile';
+  }
+
+  // Actually commits a mode: POSTs the flag and injects the natural-language
+  // instruction that makes the live session invoke the token-sitter skill
+  // itself (same mechanism the old on/off toggle used). Called only after
+  // the debounce settles, never per-click.
+  async function commitAutoHandoverMode(paneId, sid, state) {
+    if (!sid) return;
+    const enabled = state !== 'off';
+    const mode = enabled ? state : 'mdfile';
     _autoHandoverToggleInFlight = true;
     try {
       const res = await fetch('/api/session/' + encodeURIComponent(sid) + '/auto-handover', {
         method: 'POST',
         headers: {'Content-Type': 'application/json'},
-        body: JSON.stringify({ enabled: next }),
+        body: JSON.stringify({ enabled, mode }),
       });
       const data = await res.json().catch(() => ({}));
       if (res.ok && data.ok) {
-        if (_usageDataByPane[paneId]) _usageDataByPane[paneId].auto_handover_enabled = !!data.enabled;
-        showOpToast(data.enabled ? 'token-sitter on for this session' : 'token-sitter off', 'success');
-        postInjectInput(sid, 'token-sitter auto-snapshot ' + (data.enabled ? 'on' : 'off'), 'send').catch(() => {});
+        if (_usageDataByPane[paneId]) {
+          _usageDataByPane[paneId].auto_handover_enabled = !!data.enabled;
+          _usageDataByPane[paneId].auto_handover_mode = data.mode || 'mdfile';
+        }
+        showOpToast('token-sitter: ' + AUTO_HANDOVER_MODE_LABELS[state], 'success');
+        const injectText = enabled
+          ? 'token-sitter auto-snapshot on, mode ' + mode
+          : 'token-sitter auto-snapshot off';
+        postInjectInput(sid, injectText, 'send').catch(() => {});
       } else {
         showOpToast('Could not update token-sitter: ' + (data.error || ('HTTP ' + res.status)), 'error');
       }
@@ -27922,6 +27947,27 @@
       _autoHandoverToggleInFlight = false;
       renderSessionUsageIntoStrip(paneId);
     }
+  }
+
+  // Click handler for the status-bar pill: advances the cycle instantly
+  // (so the label always reflects what you just clicked, even mid-flurry)
+  // and debounces the real commit behind it.
+  function cycleAutoHandoverModeForPane(paneId, sid) {
+    if (!sid) return;
+    const current = _autoHandoverCurrentState(paneId);
+    const idx = AUTO_HANDOVER_MODE_CYCLE.indexOf(current);
+    const next = AUTO_HANDOVER_MODE_CYCLE[(idx + 1) % AUTO_HANDOVER_MODE_CYCLE.length];
+    if (!_usageDataByPane[paneId]) _usageDataByPane[paneId] = {};
+    _usageDataByPane[paneId].auto_handover_enabled = next !== 'off';
+    if (next !== 'off') _usageDataByPane[paneId].auto_handover_mode = next;
+    _usageDataByPane[paneId]._auto_handover_pending = true;
+    renderSessionUsageIntoStrip(paneId);
+    if (_autoHandoverCycleTimers[paneId]) clearTimeout(_autoHandoverCycleTimers[paneId]);
+    _autoHandoverCycleTimers[paneId] = setTimeout(() => {
+      delete _autoHandoverCycleTimers[paneId];
+      if (_usageDataByPane[paneId]) _usageDataByPane[paneId]._auto_handover_pending = false;
+      commitAutoHandoverMode(paneId, sid, next);
+    }, _AUTO_HANDOVER_CYCLE_DEBOUNCE_MS);
   }
 
   // The lifecycle card already says this, in place, with numbers. A corner
@@ -45647,13 +45693,20 @@
     let handoverPill = '';
     if (TOKEN_SITTER_SYNCED_ENGINES.includes(engine) && ff('auto_handover_pill')) {
       const handoverOn = !!u.auto_handover_enabled;
-      const handoverTip = handoverOn
-      ? 'token-sitter is ON. When this session goes idle 55 min, CCC asks it to file a WatchTower checkpoint. Click to turn off.'
-      : 'token-sitter is OFF. Click to turn on. When this session goes idle 55 min, CCC will ask it to file a WatchTower checkpoint.';
-      handoverPill = ' <button type="button" class="wp-handover-toggle' + (handoverOn ? ' is-on' : ' is-off') + '"'
-        + ' data-auto-handover-toggle aria-pressed="' + (handoverOn ? 'true' : 'false') + '"'
+      const handoverMode = handoverOn && AUTO_HANDOVER_MODE_CYCLE.includes(u.auto_handover_mode)
+        ? u.auto_handover_mode : (handoverOn ? 'mdfile' : 'off');
+      const handoverLabel = AUTO_HANDOVER_MODE_LABELS[handoverMode];
+      const handoverTip = 'token-sitter: ' + handoverLabel + '. Click to cycle '
+        + '(compact -> md -> both -> off). When this session goes idle 55 min: '
+        + '"compact" runs /compact in place, "md" writes a durable WatchTower '
+        + 'snapshot, "both" does compact then also writes the snapshot.';
+      handoverPill = ' <button type="button" class="wp-handover-toggle'
+        + (handoverOn ? ' is-on' : ' is-off')
+        + (u._auto_handover_pending ? ' is-pending' : '') + '"'
+        + ' data-auto-handover-toggle data-mode="' + escapeHtml(handoverMode) + '"'
+        + ' aria-pressed="' + (handoverOn ? 'true' : 'false') + '"'
         + ' title="' + escapeHtml(handoverTip) + '">'
-        + '<span class="wp-handover-dot"></span>token-sitter: ' + (handoverOn ? 'ON' : 'OFF')
+        + '<span class="wp-handover-dot"></span>token-sitter: ' + escapeHtml(handoverLabel)
         + '</button>';
     }
     // Model pill renders LAST in the wp-usage cluster — rightmost slot,
@@ -45671,7 +45724,7 @@
       handoverBtn.addEventListener('click', (e) => {
         e.preventDefault();
         e.stopPropagation();
-        toggleAutoHandoverForPane(paneId, _usageSessionIdByPane[paneId]);
+        cycleAutoHandoverModeForPane(paneId, _usageSessionIdByPane[paneId]);
       });
     }
     const pill = uSlot.querySelector('.wp-usage-clickable');
@@ -45727,7 +45780,7 @@
         const pm = paneUSlot.querySelector('[data-model-picker]');
         if (pm) pm.addEventListener('click', (e) => { e.preventDefault(); e.stopPropagation(); openModelPicker(pm); });
         const ph = paneUSlot.querySelector('[data-auto-handover-toggle]');
-        if (ph) ph.addEventListener('click', (e) => { e.preventDefault(); e.stopPropagation(); toggleAutoHandoverForPane(pane.id, _usageSessionIdByPane[pane.id]); });
+        if (ph) ph.addEventListener('click', (e) => { e.preventDefault(); e.stopPropagation(); cycleAutoHandoverModeForPane(pane.id, _usageSessionIdByPane[pane.id]); });
       });
     }
     // Keep the per-session advisor nudge in sync with whatever session is open.

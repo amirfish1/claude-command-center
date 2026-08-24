@@ -3740,6 +3740,9 @@
   }
   .conv-input-context .wp-handover-toggle.is-on .wp-handover-dot { background: #ffa640; }
   .conv-input-context .wp-handover-toggle.is-on:hover { background: rgba(255,166,64,0.24); }
+  /* Click registered, commit debounced -- dim so rapid re-clicks don't read
+     as N separate confirmed changes before the settle timer fires. */
+  .conv-input-context .wp-handover-toggle.is-pending { opacity: 0.55; }
   .conv-input-context .wp-model-effort {
     margin-left: 4px;
     color: var(--text-muted);
