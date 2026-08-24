@@ -3331,9 +3331,24 @@
     }
     list.forEach(note);
     const windowIds = new Set(list.map(_continuationRowId));
+    // CCC-945: a row can simultaneously be the OLD side of an unrelated
+    // continuation elsewhere in the window (fold it away, the successor
+    // leads) AND the orchestration parent of a genuinely spawned child
+    // (keep it visible as that child's tree root) -- e.g. a long-lived
+    // session that both got F2-continued once AND later spawned a Codex
+    // review subagent. Folding only looks at the continuation edge, so it
+    // silently orphans the spawned child by erasing its only parent row.
+    // Never fold a row that another row in this same window still points
+    // to via a real spawn edge (raw parent_session_id, not a continuation).
+    const neededAsSpawnParent = new Set();
+    list.forEach(r => {
+      const pid = String((r && r.parent_session_id) || '').trim();
+      if (pid) neededAsSpawnParent.add(pid);
+    });
     return list.filter(c => {
       const id = _continuationRowId(c);
       if (!id || !continuationParentId(c) && !forward.has(id)) return true;
+      if (neededAsSpawnParent.has(id)) return true;
       let head = id;
       const seen = new Set([id]);
       for (;;) {
@@ -13741,6 +13756,10 @@
     const clean = String(p || '').split(/[?#]/)[0].replace(/:\d+(?::\d+)?$/, '');
     return /\.(?:md|mdx)$/i.test(clean);
   }
+  function _isVideoPath(p) {
+    const clean = String(p || '').split(/[?#]/)[0].replace(/:\d+(?::\d+)?$/, '');
+    return /\.(?:mp4|mov|webm|avi|mkv|m4v)$/i.test(clean);
+  }
   function _pathLinkSessionContext(el) {
     try {
       const paneEl = el && el.closest ? el.closest('.conv-pane[data-pane-id]') : null;
@@ -13768,6 +13787,26 @@
       // context is honoured every time.
       const tmp = document.createElement('a');
       tmp.href = target;
+      tmp.target = '_blank';
+      tmp.rel = 'noopener noreferrer';
+      tmp.style.display = 'none';
+      document.body.appendChild(tmp);
+      tmp.click();
+      document.body.removeChild(tmp);
+      return;
+    }
+    if (_isVideoPath(p)) {
+      // Video links on mobile/Tailnet should stream from the CCC server so
+      // the phone's browser can play them. /api/open would try to open the
+      // file locally on the host Mac, which does nothing useful on a phone.
+      const ctx = _pathLinkSessionContext(a);
+      const url = new URL('/api/media', window.location.origin);
+      url.searchParams.set('path', p);
+      if (ctx && ctx.id) url.searchParams.set('session_id', ctx.id);
+      if (ctx && ctx.cwd) url.searchParams.set('cwd', ctx.cwd);
+      if (ctx && (ctx.repoPath || ctx.repo_path)) url.searchParams.set('repo_path', ctx.repoPath || ctx.repo_path);
+      const tmp = document.createElement('a');
+      tmp.href = url.href;
       tmp.target = '_blank';
       tmp.rel = 'noopener noreferrer';
       tmp.style.display = 'none';
@@ -14390,6 +14429,83 @@
     document.addEventListener('DOMContentLoaded', wireAllConvSwipe);
     // Panes can be created after boot; re-scan occasionally (idempotent).
     setInterval(wireAllConvSwipe, 3000);
+  }
+
+  // Mobile swipe-right on conversation-list rows: in the Coding tab it triggers
+  // the row's Trash action; in the Active tab it triggers the Archive action.
+  // Wired once per #convList render because the list's innerHTML is replaced,
+  // but the container itself persists.
+  function _currentSidebarTabForSwipe() {
+    try {
+      const t = localStorage.getItem('ccc-sidebar-tab');
+      return (t === 'issues' || t === 'queues' || t === 'inprogress' || t === 'archived' || t === 'coding' || t === 'workers') ? t : 'inprogress';
+    } catch (_) { return 'inprogress'; }
+  }
+  function _swipeActionButtonForRow(row) {
+    const tab = _currentSidebarTabForSwipe();
+    if (tab === 'coding' || tab === 'workers') {
+      // Workers-tab rows intentionally have no trash affordance (worker sessions
+      // are queue-owned), so a swipe there only does something on rows that
+      // actually expose a trash button — e.g. the Trash subsection of Coding.
+      return row.querySelector('.conv-trash-btn');
+    }
+    if (tab === 'inprogress') {
+      return row.querySelector('.conv-archive-btn') || row.querySelector('.conv-trash-btn');
+    }
+    return null;
+  }
+  function wireConvListRowSwipe($list) {
+    if (!$list || $list.dataset.convSwipeWired === '1' || !isTouchPrimary()) return;
+    $list.dataset.convSwipeWired = '1';
+    const THRESH = 80;
+    const RATIO = 1.5;
+    let sx = 0, sy = 0, active = false, committed = false, decided = false, currentRow = null;
+    $list.addEventListener('touchstart', (e) => {
+      active = false; committed = false; decided = false; currentRow = null;
+      if (e.touches.length !== 1) return;
+      const t = e.target;
+      // Let buttons, inputs, links, and scrollable children handle their own gestures.
+      if (t.closest('button, input, textarea, select, a, [contenteditable]')) return;
+      const row = t.closest('.conv-item');
+      if (!row) return;
+      const btn = _swipeActionButtonForRow(row);
+      if (!btn || btn.disabled) return;
+      sx = e.touches[0].clientX; sy = e.touches[0].clientY;
+      active = true; currentRow = row;
+    }, { passive: true });
+    $list.addEventListener('touchmove', (e) => {
+      if (!active || e.touches.length !== 1) return;
+      const dx = e.touches[0].clientX - sx;
+      const dy = e.touches[0].clientY - sy;
+      if (!decided) {
+        if (Math.abs(dx) < 12 && Math.abs(dy) < 12) return;
+        decided = true;
+        committed = dx > 0 && Math.abs(dx) > Math.abs(dy) * RATIO;
+        if (!committed) { active = false; currentRow = null; return; }
+      }
+      if (committed && e.cancelable) e.preventDefault();
+    }, { passive: false });
+    const end = (e) => {
+      if (!active || !committed || !currentRow) return;
+      const t = (e.changedTouches && e.changedTouches[0]) || null;
+      if (!t) { active = false; committed = false; decided = false; currentRow = null; return; }
+      const dx = t.clientX - sx;
+      const dy = t.clientY - sy;
+      if (dx >= THRESH && Math.abs(dx) > Math.abs(dy) * RATIO) {
+        if (e.cancelable) e.preventDefault();
+        const btn = _swipeActionButtonForRow(currentRow);
+        if (btn && !btn.disabled) {
+          btn.classList.add('is-swiped');
+          setTimeout(() => { if (btn) btn.classList.remove('is-swiped'); }, 300);
+          btn.click();
+        }
+      }
+      active = false; committed = false; decided = false; currentRow = null;
+    };
+    $list.addEventListener('touchend', end, { passive: false });
+    $list.addEventListener('touchcancel', () => {
+      active = false; committed = false; decided = false; currentRow = null;
+    }, { passive: true });
   }
 
   // WhatsApp-style drag-to-dismiss the on-screen keyboard. Deliberately NOT
@@ -34786,6 +34902,7 @@
         }
       });
     });
+    wireConvListRowSwipe($convList);
   }
 
   // ── Drag-to-pop-out + drag-to-reorder ──
@@ -56331,7 +56448,15 @@
         goal_status: c.goal_status || '',
         parent_session_id: c.parent_session_id || '',
         hermes_parent_session_id: c.hermes_parent_session_id || c.parent_session_id || '',
-        hermes_continued_from: c.hermes_continued_from || c.parent_session_id || '',
+        // CCC-945: do NOT fall back to parent_session_id here. That field is
+        // an orchestration spawn edge (e.g. Codex's thread_spawn_edges) --
+        // "temporary child hanging off a parent that still leads" -- while
+        // hermes_continued_from feeds continuationParentId(), which means
+        // "this session supersedes an old one that should stop leading."
+        // Aliasing the two made every spawned child look like a
+        // continuation of its parent, so the fold/tree logic buried the
+        // parent instead of keeping it as the visible root.
+        hermes_continued_from: c.hermes_continued_from || '',
         hermes_child_session_ids: Array.isArray(c.hermes_child_session_ids) ? c.hermes_child_session_ids : [],
         hermes_lineage_session_ids: Array.isArray(c.hermes_lineage_session_ids) ? c.hermes_lineage_session_ids : [],
         hermes_lineage_count: c.hermes_lineage_count || 0,
