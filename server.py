@@ -55988,8 +55988,16 @@ def _inject_text_into_session(
                 steer_result["queued_preserved"] = True
                 return steer_result
             if idempotency_key:
+                # Same trap as the ACP steer retry below: the steer attempt
+                # already spent `idempotency_key` and the worker's WorkLedger
+                # recorded it as failed (codex_no_active_turn /
+                # codex_steer_unavailable). Reusing the key here made
+                # submit() dedupe this fallback turn/start back to that
+                # failed row, so steering an idle Codex thread surfaced "No
+                # running Codex turn to steer" instead of just sending.
                 steer_result = resume_session_codex(
-                    session_id, text, idempotency_key=idempotency_key,
+                    session_id, text,
+                    idempotency_key=f"{idempotency_key}:steer-fallback",
                 )
             else:
                 steer_result = resume_session_codex(session_id, text)

@@ -9,6 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 - Steer on Kimi/Grok (ACP) sessions now actually delivers instead of falling through to the durable queue. The interrupt was already working — Steer cancelled the active turn, then resent the message reusing the *same* idempotency key as the pre-cancel attempt. That attempt is recorded in the worker's WorkLedger as `failed` ("turn already in progress"), so `submit()` deduped the resend straight back to the failed row and no prompt was ever sent; the message sat in the queue until the interrupted turn ended on its own. The post-cancel resend now derives its own key.
+- Steer on an **idle Codex thread** now falls back to a plain send instead of reporting "No running Codex turn to steer". Same root cause: the failed steer attempt burned the caller's idempotency key, so the fallback `turn/start` was deduped back to that failure.
 
 ### Changed
 - `watchtower.queue` is now a hard, unconditional dependency of CCC's queue system (ticket lifecycle: claim/close/edit/answer/comment/reopen). Removed the standalone `ux_fixes_queue.py` stdlib fallback that let CCC's queue features work without WatchTower installed — it had gone stale since WatchTower's own storage migrated from JSON to SQLite and was never updated, a latent risk of silent data divergence if watchtower ever became unimportable. If `watchtower.queue` can't be imported, CCC now fails loudly at startup with a clear error instead of silently falling back to a frozen JSON store.
