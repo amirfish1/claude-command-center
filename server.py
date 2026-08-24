@@ -25928,6 +25928,7 @@ def _parse_conversation_windowed(conversation_id, filepath, tail, before, parser
                     break
 
     if is_codex:
+        events = _merge_codex_compact_boundary_events(events)
         events = _enrich_codex_no_agent_output_events(conversation_id, events)
 
     first_line = events[0]["line"] if events else (buf[0][0] if buf else total)
@@ -26167,6 +26168,7 @@ def parse_conversation(conversation_id, after_line=0, repo_path=None, use_cache=
                 events[idx]["ts"] = _cursor_ts_iso(cursor_ts_start + span * frac)
 
     if is_codex:
+        events = _merge_codex_compact_boundary_events(events)
         events = _enrich_codex_no_agent_output_events(conversation_id, events)
 
     result = {"events": events, "last_line": line_num}
@@ -40718,6 +40720,21 @@ def _attach_codex_token_usage(events, usage):
     """
     if not isinstance(usage, dict):
         return False
+    # A compaction turn's token_count is the ONLY report of the rebuilt context
+    # size, and it lands right after the `compacted` record. Hand it to the
+    # boundary row rather than to an assistant message from the turn before.
+    tail = events[-1] if events else None
+    if (
+        isinstance(tail, dict)
+        and tail.get("type") == "system"
+        and tail.get("subtype") == "compact_boundary"
+    ):
+        compact = tail.get("compact")
+        if isinstance(compact, dict) and not compact.get("post_tokens"):
+            post = _codex_compact_post_tokens_from_usage(usage)
+            if post:
+                compact["post_tokens"] = post
+                return True
     for event in reversed(events):
         if event.get("type") != "assistant":
             continue
@@ -40847,11 +40864,98 @@ def _codex_usage_delta_from_event(ev, previous_totals=None):
     }, next_totals
 
 
+def _codex_compact_post_tokens_from_usage(usage):
+    """Rebuilt-context size off a post-compaction `token_count`, else 0.
+
+    Codex zeroes every per-turn field on the compaction turn and reports the
+    new context size in `total_tokens` only, so a reading with input_tokens
+    set is a NORMAL turn (a pre-compact size), not a post-compact one.
+    """
+    if not isinstance(usage, dict):
+        return 0
+    if _codex_int(usage.get("input_tokens")):
+        return 0
+    return _codex_int(usage.get("total_tokens"))
+
+
+def _is_compact_boundary_event(event):
+    return (
+        isinstance(event, dict)
+        and event.get("type") == "system"
+        and event.get("subtype") == "compact_boundary"
+    )
+
+
+def _merge_codex_compact_boundary_events(events):
+    """Collapse the pair of rows one Codex compaction produces into one.
+
+    Codex records a compaction as a top-level `compacted` record (carrying the
+    replacement history) AND an `event_msg`/`context_compacted` marker, with
+    the token_count that reports the rebuilt size in between. The parser emits
+    a boundary for each - the first knows the pre-compact size, the second the
+    post-compact one - so merge adjacent boundaries into a single row. Both
+    records are emitted because they are not perfectly paired in practice: a
+    handful of rollouts carry the top-level record with no marker after it.
+
+    Then adopt the compaction turn's own duration off the `result` row that
+    follows, which is Codex's own task_started-to-task_complete measurement.
+    """
+    merged = []
+    for event in events:
+        if _is_compact_boundary_event(event) and merged and _is_compact_boundary_event(merged[-1]):
+            prev = merged[-1].get("compact")
+            cur = event.get("compact")
+            if isinstance(prev, dict) and isinstance(cur, dict):
+                for key in ("pre_tokens", "post_tokens", "duration_ms"):
+                    prev[key] = max(_codex_int(prev.get(key)), _codex_int(cur.get(key)))
+                if not prev.get("trigger"):
+                    prev["trigger"] = cur.get("trigger") or ""
+            continue
+        merged.append(event)
+    for idx, event in enumerate(merged):
+        if not _is_compact_boundary_event(event):
+            continue
+        compact = event.get("compact")
+        if not isinstance(compact, dict) or compact.get("duration_ms"):
+            continue
+        following = merged[idx + 1] if idx + 1 < len(merged) else None
+        if isinstance(following, dict) and following.get("type") == "result":
+            compact["duration_ms"] = _codex_int(following.get("duration_ms"))
+    return merged
+
+
 def _parse_codex_event(ev, line_num, token_usage=None, codex_turn_meta=None):
     ev_type = ev.get("type", "")
     payload = ev.get("payload") if isinstance(ev.get("payload"), dict) else {}
     ptype = payload.get("type", "")
     ts = _codex_event_timestamp(ev)
+    if ev_type == "compacted" or (
+        ev_type == "event_msg" and ptype in ("compacted", "context_compacted")
+    ):
+        # Neither of Codex's two compaction records ever became a transcript
+        # row, so a Codex compaction left no record card at all while the
+        # Claude path has shown one for ages. Emit the same `compact_boundary`
+        # shape (`compact: {pre_tokens, post_tokens, duration_ms, trigger}`)
+        # the renderer already reads. `token_usage` is the most recent
+        # token_count: the pre-compact one at the `compacted` record, the
+        # post-compact one at the `context_compacted` marker that follows it.
+        # `_merge_codex_compact_boundary_events` folds the pair together.
+        return {
+            "line": line_num,
+            "ts": ts,
+            "type": "system",
+            "subtype": "compact_boundary",
+            "engine": "codex",
+            "compact": {
+                "trigger": "manual",
+                "pre_tokens": (
+                    _codex_int(token_usage.get("input_tokens"))
+                    if isinstance(token_usage, dict) else 0
+                ),
+                "post_tokens": _codex_compact_post_tokens_from_usage(token_usage),
+                "duration_ms": 0,
+            },
+        }
     if ev_type == "event_msg":
         if ptype == "user_message":
             text = _strip_ccc_session_state_instruction(payload.get("message") or "")
@@ -72963,6 +73067,8 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                 except FileNotFoundError:
                     break
 
+                if events and is_codex:
+                    events = _merge_codex_compact_boundary_events(events)
                 if events:
                     payload = {"events": events, "last_line": line_num}
                     self.wfile.write(f"data: {json.dumps(payload)}\n\n".encode())
