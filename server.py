@@ -26243,19 +26243,51 @@ def _session_has_dynamic_conversation_overlay(session_id):
     return False
 
 
+def _conv_overlay_fingerprint(session_id):
+    """Fingerprint of everything outside the JSONL that shapes a
+    /api/conversations response: queued (unsent) inputs and the Codex
+    app-server thread state. Part of the bytes-cache key, so an overlay
+    change simply misses instead of serving a stale pre-baked body.
+
+    Used to be a bypass (`_session_has_dynamic_conversation_overlay`), which
+    meant every Codex session that had ever run an app-server turn re-parsed
+    its whole tail window on every open (~100-330ms), since that state never
+    empties. Returns None when the state cannot be fingerprinted (bypass).
+    """
+    if not session_id:
+        return ()
+    try:
+        with _pending_resume_lock:
+            rq = list(_pending_resume_queue.get(session_id) or ())
+        with _pending_terminal_input_lock:
+            tq = list(_pending_terminal_input_queue.get(session_id) or ())
+        try:
+            state = _codex_app_server_thread_state(session_id)
+        except Exception:
+            state = None
+        if state is None:
+            return None
+        if not rq and not tq and not state:
+            return ()
+        return json.dumps([rq, tq, state], sort_keys=True, default=str)
+    except Exception:
+        return None
+
+
 def _conv_response_bytes_get(conversation_id, after_line, window=None):
     mtime = _conv_parse_jsonl_mtime(conversation_id)
     if mtime[0] <= 0:
         return None
-    # Dynamic overlays are not in the JSONL yet; a pre-baked response from
-    # before they changed would omit them until mtime changes.
-    if _session_has_dynamic_conversation_overlay(conversation_id):
+    # Dynamic overlays are not in the JSONL yet; they join the key via the
+    # fingerprint so a change misses instead of serving a stale body.
+    fp = _conv_overlay_fingerprint(conversation_id)
+    if fp is None:
         return None
     # `window` is (tail, before) for a windowed open (?tail=N / ?before=L),
     # None for the full-history shape. Windowed opens are the click path
     # (and the hover prefetch), so a hit here is what makes a click a
     # hashmap lookup instead of a re-parse.
-    key = (conversation_id, int(after_line), mtime, window)
+    key = (conversation_id, int(after_line), mtime, window, fp)
     with _CONV_BYTES_CACHE_LOCK:
         return _CONV_BYTES_CACHE.get(key)
 
@@ -26264,7 +26296,10 @@ def _conv_response_bytes_put(conversation_id, after_line, raw, gz, window=None):
     mtime = _conv_parse_jsonl_mtime(conversation_id)
     if mtime[0] <= 0:
         return
-    key = (conversation_id, int(after_line), mtime, window)
+    fp = _conv_overlay_fingerprint(conversation_id)
+    if fp is None:
+        return
+    key = (conversation_id, int(after_line), mtime, window, fp)
     with _CONV_BYTES_CACHE_LOCK:
         if len(_CONV_BYTES_CACHE) >= _CONV_BYTES_CACHE_MAX:
             try:
