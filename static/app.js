@@ -5772,11 +5772,36 @@
       });
   }
 
+  // Select-time fetches that first paint doesn't need are parked here until
+  // the conversation tail response has landed and painted (or 600ms passes).
+  // They used to fire in the same tick as the tail request and shared the
+  // server's GIL with it: the tail took 20-200ms in-browser against 3-10ms
+  // when it ran alone.
+  let _afterConvTailQueue = [];
+  let _afterConvTailTimer = 0;
+  function _afterConvTail(fn) {
+    _afterConvTailQueue.push(fn);
+    if (!_afterConvTailTimer) _afterConvTailTimer = setTimeout(_flushAfterConvTail, 600);
+  }
+  function _flushAfterConvTail() {
+    if (_afterConvTailTimer) { clearTimeout(_afterConvTailTimer); _afterConvTailTimer = 0; }
+    if (!_afterConvTailQueue.length) return;
+    const q = _afterConvTailQueue;
+    _afterConvTailQueue = [];
+    for (const fn of q) { try { fn(); } catch (_) {} }
+  }
+  function _flushAfterConvTailAfterPaint() {
+    if (!_afterConvTailQueue.length) return;
+    requestAnimationFrame(() => setTimeout(_flushAfterConvTail, 0));
+  }
+
   function startLiveStatusPolling() {
     if (liveStatusTimer) clearInterval(liveStatusTimer);
     if (liveStatusRenderTicker) clearInterval(liveStatusRenderTicker);
-    refreshLiveStatus();
-    refreshLiveSessionsActivity();
+    _afterConvTail(() => {
+      refreshLiveStatus();
+      refreshLiveSessionsActivity();
+    });
     liveStatusTimer = setInterval(_gated('liveStatus', () => {
       refreshLiveStatus();
       refreshLiveSessionsActivity();
@@ -38186,7 +38211,9 @@
     updatePaneHeader(paneId, selectedRow || Object.assign({ id, source }, selectedConv || {}));
     // Federation handoff ownership — one-shot fetch (no polling); paints a
     // "Moved to <node>" chip in the breadcrumb if owned elsewhere now.
-    try { if (id && id !== '__new__' && typeof window._cccFetchHandoffStatus === 'function') window._cccFetchHandoffStatus(id); } catch (_) {}
+    if (id && id !== '__new__' && typeof window._cccFetchHandoffStatus === 'function') {
+      _afterConvTail(() => { try { window._cccFetchHandoffStatus(id); } catch (_) {} });
+    }
     if (selectedRow && selectedRow.source === 'backlog' && selectedRow.issue_number) {
       await renderIssueInConvPane(selectedRow.issue_number, rowRepoPath(selectedRow), selectedRow.id);
       return;
