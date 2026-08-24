@@ -34033,6 +34033,113 @@ def _backup_codex_rollout_before_compact(session_id):
         return None
 
 
+# A compaction of a big Codex context is a full model turn: the app-server
+# ACKs `thread/compact/start` in well under a second and then works for one to
+# three minutes. 180s matches the Claude live-spawn deadline.
+_CODEX_COMPACT_WAIT_TIMEOUT_S = 180.0
+_CODEX_COMPACT_POLL_S = 0.4
+# Once the compaction marker lands, wait a moment longer for the token_count
+# that reports the rebuilt context size so the UI can print the real number
+# instead of "reading the new size...".
+_CODEX_COMPACT_POST_GRACE_S = 6.0
+_CODEX_COMPACT_MARKER = b'"context_compacted"'
+
+
+def _codex_compaction_wait_timeout():
+    try:
+        value = float(os.environ.get("CCC_CODEX_COMPACT_WAIT_S") or 0)
+    except (TypeError, ValueError):
+        value = 0.0
+    return value if value > 0 else _CODEX_COMPACT_WAIT_TIMEOUT_S
+
+
+def _codex_compaction_post_tokens(payload):
+    """Rebuilt-context size off one post-compaction `token_count` payload."""
+    info = payload.get("info") if isinstance(payload.get("info"), dict) else {}
+    usage = info.get("last_token_usage")
+    if not isinstance(usage, dict) or not usage:
+        usage = info.get("total_token_usage")
+    if not isinstance(usage, dict):
+        return 0
+    # Codex zeroes the per-turn fields on the compaction turn and reports the
+    # new context size in total_tokens (see `_extract_codex_usage`).
+    return _codex_int(usage.get("input_tokens")) or _codex_int(usage.get("total_tokens"))
+
+
+def _codex_scan_compaction_tail(path, offset, seen_marker=False):
+    """Scan rollout bytes appended since `offset` for a finished compaction.
+
+    Rollout JSONL is append-only, so reading only the NEW bytes is exact and
+    cheap even on a multi-MB thread - no whole-file parse, no subprocess. A
+    compaction writes a top-level `compacted` record, then a `token_count`
+    carrying the rebuilt size, then an `event_msg`/`context_compacted`.
+
+    Returns ``(seen_marker, post_tokens, next_offset)``. `post_tokens` is 0
+    until the token_count at or after the marker has been read.
+    """
+    post_tokens = 0
+    try:
+        size = os.path.getsize(path)
+    except OSError:
+        return seen_marker, 0, offset
+    if size < offset:
+        # Rewritten or rotated under us; restart from the top of the new file.
+        offset = 0
+    if size <= offset:
+        return seen_marker, 0, offset
+    try:
+        with open(path, "rb") as fh:
+            fh.seek(offset)
+            chunk = fh.read(size - offset)
+    except OSError:
+        return seen_marker, 0, offset
+    consumed = 0
+    for raw in chunk.splitlines(keepends=True):
+        if not raw.endswith(b"\n"):
+            # Partial trailing line - the writer is mid-append. Leave the
+            # offset before it so the next poll re-reads it whole.
+            break
+        consumed += len(raw)
+        if b"compacted" not in raw and b"token_count" not in raw:
+            continue
+        try:
+            ev = json.loads(raw.decode("utf-8", "replace"))
+        except (json.JSONDecodeError, ValueError):
+            continue
+        if not isinstance(ev, dict):
+            continue
+        payload = ev.get("payload") if isinstance(ev.get("payload"), dict) else {}
+        ptype = str(payload.get("type") or "")
+        if ev.get("type") == "compacted" or ptype in ("compacted", "context_compacted"):
+            seen_marker = True
+            continue
+        if seen_marker and not post_tokens and ptype == "token_count":
+            post_tokens = _codex_compaction_post_tokens(payload)
+    return seen_marker, post_tokens, offset + consumed
+
+
+def _codex_compaction_finished_in_state(session_id, since):
+    """True once the app-server reported the compaction ITEM completed.
+
+    `_codex_compaction_recovery_note_notification_unlocked` arms
+    `compaction_recovery` on `item/started` for a `contextCompaction` item and
+    drops `compaction_in_flight` on `item/completed`. A latch armed at or after
+    `since` with the flag down is the app-server's own "the compaction turn is
+    over" signal; the rollout marker is the independent one.
+    """
+    state = _codex_app_server_thread_state(session_id) or {}
+    recovery = state.get("compaction_recovery")
+    if not isinstance(recovery, dict):
+        return False
+    try:
+        armed_at = float(recovery.get("compacted_at") or 0.0)
+    except (TypeError, ValueError):
+        return False
+    if armed_at < float(since):
+        return False
+    return not recovery.get("compaction_in_flight")
+
+
 def _codex_compact_via_app_server(session_id, cwd=None, model=None):
     """Compact a Codex thread via the app-server `thread/compact/start` RPC.
 
@@ -34042,6 +34149,16 @@ def _codex_compact_via_app_server(session_id, cwd=None, model=None):
     rollout. Returns a result dict mirroring the other Codex app-server helpers
     (`{ok, via, ...}` / `{ok: False, error, ...}`). Handles "app-server
     unavailable" gracefully.
+
+    `thread/compact/start` is ACCEPTED in under a second and the compaction
+    turn then runs for one to three minutes. Returning on the ACK made the UI
+    card flip to "CONTEXT COMPACTED / took 0:00" while Codex was still working,
+    and the composer immediately queued the next message behind the very turn
+    the card said had finished. So this now WAITS for the compaction to land,
+    mirroring `_compact_via_live_spawn_stdin`: `{status: "compacted",
+    compact_result: "success"}` on success, `code: "compact_timeout"` on the
+    deadline (which the frontend keeps in its working state rather than
+    reporting a failure).
     """
     sid = (session_id or "").strip()
     if not sid:
@@ -34075,14 +34192,85 @@ def _codex_compact_via_app_server(session_id, cwd=None, model=None):
             "code": "codex_compact_unavailable",
             "error": resumed.get("error") or "Codex app-server unavailable",
         }
+    # Watermark the rollout BEFORE the RPC so a compaction from an earlier turn
+    # can never be mistaken for this one.
+    try:
+        rollout_path = _resolve_codex_rollout_path(sid)
+    except Exception:
+        rollout_path = None
+    scan_offset = 0
+    marker_baseline = 0
+    pre_tokens = 0
+    if rollout_path:
+        try:
+            scan_offset = os.path.getsize(rollout_path)
+        except OSError:
+            scan_offset = 0
+        marker_baseline = _tail_count(rollout_path, _CODEX_COMPACT_MARKER)
+        try:
+            meta = _extract_codex_tail_meta(Path(rollout_path)) or {}
+            pre_tokens = _codex_int(meta.get("latest_input_tokens"))
+        except Exception:
+            pre_tokens = 0
+    armed_since = time.time() - 2.0  # clock slop against the app-server latch
+
     compacted = _codex_app_server_request(
         "thread/compact/start", {"threadId": sid}, timeout=60
     )
     if _codex_response_succeeded(compacted):
+        started = time.time()
+        deadline = started + _codex_compaction_wait_timeout()
+        seen_marker = False
+        state_done = False
+        post_tokens = 0
+        post_grace_until = 0.0
+        while True:
+            now = time.time()
+            if now >= deadline:
+                break
+            if rollout_path:
+                seen_marker, found_post, scan_offset = _codex_scan_compaction_tail(
+                    rollout_path, scan_offset, seen_marker
+                )
+                if found_post:
+                    post_tokens = found_post
+                if not seen_marker and _tail_count(
+                    rollout_path, _CODEX_COMPACT_MARKER
+                ) > marker_baseline:
+                    seen_marker = True
+            if not state_done and _codex_compaction_finished_in_state(sid, armed_since):
+                state_done = True
+            if seen_marker or state_done:
+                if post_tokens or not rollout_path:
+                    break
+                # The marker is down but the size rollup may be one line
+                # behind it. Give it a moment rather than reporting 0.
+                if not post_grace_until:
+                    post_grace_until = now + _CODEX_COMPACT_POST_GRACE_S
+                elif now >= post_grace_until:
+                    break
+            time.sleep(_CODEX_COMPACT_POLL_S)
+        duration_ms = int(max(0.0, time.time() - started) * 1000)
+        if seen_marker or state_done:
+            return {
+                "ok": True,
+                "via": "codex-compact",
+                "status": "compacted",
+                "compact_result": "success",
+                "session_id": sid,
+                "pre_tokens": pre_tokens,
+                "post_tokens": post_tokens,
+                "duration_ms": duration_ms,
+            }
         return {
-            "ok": True,
+            "ok": False,
             "via": "codex-compact",
+            "code": "compact_timeout",
+            "status": "compacting",
             "session_id": sid,
+            "pre_tokens": pre_tokens,
+            "duration_ms": duration_ms,
+            "error": "Codex is still compacting; CCC will keep watching.",
         }
     if compacted.get("ok") is False and "result" not in compacted:
         return {
