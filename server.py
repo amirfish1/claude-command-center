@@ -37410,6 +37410,17 @@ _KIMI_WIRE_BUSY_SUPPRESS_UNTIL = {}
 _ACP_TERMINALS = {}        # terminalId -> {"proc","buf","limit","truncated","exit","signal","exited","harness","sid","exit_event"}
 _ACP_TERMINALS_LOCK = threading.Lock()
 _ACP_TERMINAL_DEFAULT_LIMIT = 1024 * 1024  # retained-output cap when the agent passes no outputByteLimit
+# Output of RELEASED terminals, kept briefly. Kimi's terminal-backed tool
+# calls (Bash) report completion as a `tool_call_update` whose content is only
+# `{type:'terminal', terminalId}` — never the text (kimi assumes the client
+# already rendered the bytes in a terminal pane) — and that update lands
+# AFTER the agent has already `terminal/release`d the terminal. Snapshotting
+# the buffer at release is what lets the finalized tool row carry the
+# command's output at all.
+_ACP_TERMINAL_OUTPUT_CACHE = collections.OrderedDict()  # terminalId -> output snapshot dict
+_ACP_TERMINAL_OUTPUT_CACHE_MAX = 256
+# Per-tool output kept on the persisted row (and the live tool_result delta).
+_ACP_TOOL_OUTPUT_PREVIEW_MAX = 1200
 
 
 def _acp_harness_enabled(harness):
@@ -38093,7 +38104,9 @@ def _acp_handle_terminal_request(harness, req_id, method, params):
             except OSError:
                 pass
         if method == "terminal/release":
+            snapshot = _acp_terminal_output_result(entry)
             with _ACP_TERMINALS_LOCK:
+                _acp_terminal_cache_output_unlocked(tid, snapshot)
                 _ACP_TERMINALS.pop(tid, None)
         _acp_respond(harness, req_id, {})
         return
@@ -38104,6 +38117,52 @@ def _acp_append_turn_text(turn, field, chunk):
     # Finalized ACP events are the replay source for a conversation. Trimming
     # the accumulated stream here silently removed the opening of long replies.
     turn[field] = (turn.get(field) or "") + chunk
+    if field == "text":
+        # `text` is flushed to its own row before every tool call (stream
+        # order); the whole-turn concatenation stays available for the
+        # synchronous-ask answer (see _acp_finalize_turn).
+        turn["text_all"] = (turn.get("text_all") or "") + chunk
+
+
+def _acp_flush_turn_text_unlocked(harness, sid, turn, usage=None):
+    """Persist the turn's accumulated thought/text as ONE assistant row and
+    reset the accumulators.
+
+    Called before a tool row can be emitted and at turn end, so the finalized
+    transcript keeps the model's real order — think → say → run → think → …
+    — instead of every tool row first and one mashed-together text block at
+    the end (which the client then rendered as "26 tool calls" over a wall of
+    sentences with no spaces between them)."""
+    blocks = []
+    if turn.get("thought"):
+        blocks.append({"kind": "thinking", "text": turn["thought"]})
+    if turn.get("text"):
+        blocks.append({"kind": "text", "text": turn["text"]})
+    turn["thought"] = ""
+    turn["text"] = ""
+    if not blocks:
+        return None
+    event = {"type": "assistant", "message_id": turn["msg_id"], "blocks": blocks}
+    if usage:
+        _apply_kimi_turn_usage(event, usage)
+    return _acp_emit_event_unlocked(harness, sid, event)
+
+
+def _acp_replay_flush_unlocked(harness, sid, state, replay):
+    """Flush the session/load replay's pending text bucket (and any tool rows
+    still waiting for a terminal status) in arrival order."""
+    if replay.get("kind") and replay.get("text"):
+        ev = _acp_message_event(state, replay["kind"], replay["text"])
+        if ev is not None:
+            _acp_emit_event_unlocked(harness, sid, ev)
+    replay["text"] = ""
+    replay["kind"] = None
+    for tid, tool in list((replay.get("tools") or {}).items()):
+        if not tool.get("emitted"):
+            tool["emitted"] = True
+            _acp_emit_event_unlocked(harness, sid, _acp_tool_event(
+                {"msg_id": f"acp-replay-{sid}-{state['next_line']}"}, tid, tool))
+    replay["tools"] = {}
 
 
 def _acp_handle_session_update(harness, sid, update):
@@ -38171,17 +38230,32 @@ def _acp_handle_session_update(harness, sid, update):
             if isinstance(raw_input, dict) and raw_input:
                 detail = _tool_use_detail(title, raw_input, max_len=160) or detail
             diff = _acp_tool_content_diff(update)
+            entry = {
+                "title": title, "status": update.get("status") or "running",
+                "detail": detail, "emitted": False,
+                "acp_kind": update.get("kind") or "",
+            }
+            if isinstance(raw_input, dict) and raw_input:
+                entry["input"] = _tool_input_payload(raw_input)
+            if diff:
+                entry["diff"] = diff
+            if replay is not None:
+                # session/load history: the text bucket flushes so the row
+                # lands where the tool ran; the row itself waits for its
+                # terminal status (same as a live turn) or the load's flush.
+                if replay.get("text"):
+                    ev = _acp_message_event(state, replay["kind"], replay["text"])
+                    if ev is not None:
+                        _acp_emit_event_unlocked(harness, sid, ev)
+                    replay["text"] = ""
+                    replay["kind"] = None
+                replay.setdefault("tools", {})[tool_id] = entry
+                return
             turn = state.get("active_turn")
             if turn is not None:
-                entry = {
-                    "title": title, "status": update.get("status") or "running",
-                    "detail": detail, "emitted": False,
-                    "acp_kind": update.get("kind") or "",
-                }
-                if isinstance(raw_input, dict) and raw_input:
-                    entry["input"] = _tool_input_payload(raw_input)
-                if diff:
-                    entry["diff"] = diff
+                # Text/thought streamed BEFORE this call belongs above its
+                # row — persist it now so the transcript keeps stream order.
+                _acp_flush_turn_text_unlocked(harness, sid, turn)
                 turn.setdefault("tools", {})[tool_id] = entry
             # Live bubble shows the call immediately; the finalized conv row
             # is deferred until rawInput arrives (rich detail) — see update.
@@ -38198,6 +38272,16 @@ def _acp_handle_session_update(harness, sid, update):
         if kind == "tool_call_update":
             tool_id = str(update.get("toolCallId") or "")
             turn = state.get("active_turn")
+            if replay is not None:
+                tool = (replay.get("tools") or {}).get(tool_id)
+                if tool is None:
+                    return
+                _acp_apply_tool_update(tool, update)
+                if not tool.get("emitted") and update.get("status") in ("completed", "failed"):
+                    tool["emitted"] = True
+                    _acp_emit_event_unlocked(harness, sid, _acp_tool_event(
+                        {"msg_id": f"acp-replay-{sid}-{state['next_line']}"}, tool_id, tool))
+                return
             if turn is None:
                 return
             tool = (turn.get("tools") or {}).get(tool_id)
@@ -38206,24 +38290,8 @@ def _acp_handle_session_update(harness, sid, update):
                     "title": "tool", "status": "running", "detail": "",
                     "emitted": False,
                 }
-            if update.get("title"):
-                # The started-upgrade replaces the lazy create's name-only
-                # title with the canonical one (description ?? name).
-                tool["title"] = update["title"]
-            if update.get("kind"):
-                tool["acp_kind"] = update["kind"]
-            if update.get("status"):
-                tool["status"] = update["status"]
-            raw_input = update.get("rawInput")
-            if isinstance(raw_input, dict) and raw_input:
-                tool["detail"] = _tool_use_detail(tool.get("title") or "", raw_input, max_len=160)
-                tool["input"] = _tool_input_payload(raw_input)
-            diff = _acp_tool_content_diff(update)
-            if diff:
-                tool["diff"] = diff
-            output_text = _acp_tool_content_text(update)
-            if update.get("status") == "completed" and output_text:
-                tool["output"] = output_text[:400]
+            output_text = _acp_apply_tool_update(tool, update)
+            if update.get("status") in ("completed", "failed") and output_text:
                 _acp_emit_delta_unlocked(harness, sid, {
                     "type": "assistant_block",
                     "message_id": turn.get("msg_id") or f"acp-{harness}-tool",
@@ -38271,6 +38339,8 @@ def _acp_handle_session_update(harness, sid, update):
                 return
             state["plan"] = norm
             turn = state.get("active_turn")
+            if turn is not None:
+                _acp_flush_turn_text_unlocked(harness, sid, turn)
             msg_id = (turn or {}).get("msg_id") or f"acp-{harness}-plan"
             _acp_emit_delta_unlocked(harness, sid, {
                 "type": "assistant_block",
@@ -38295,17 +38365,99 @@ def _acp_handle_session_update(harness, sid, update):
         # plan and unknown update kinds: recorded nowhere, never fatal.
 
 
+def _acp_apply_tool_update(tool, update):
+    """Fold one tool_call_update into a tracked tool entry (live turn or
+    session/load replay). Returns the output text captured on a terminal
+    status, else ""."""
+    if update.get("title"):
+        # The started-upgrade replaces the lazy create's name-only
+        # title with the canonical one (description ?? name).
+        tool["title"] = update["title"]
+    if update.get("kind"):
+        tool["acp_kind"] = update["kind"]
+    if update.get("status"):
+        tool["status"] = update["status"]
+    raw_input = update.get("rawInput")
+    if isinstance(raw_input, dict) and raw_input:
+        tool["detail"] = _tool_use_detail(tool.get("title") or "", raw_input, max_len=160)
+        tool["input"] = _tool_input_payload(raw_input)
+    diff = _acp_tool_content_diff(update)
+    if diff:
+        tool["diff"] = diff
+    if update.get("status") not in ("completed", "failed"):
+        return ""
+    output_text = _acp_tool_content_text(update)
+    if output_text:
+        tool["output"] = output_text[:_ACP_TOOL_OUTPUT_PREVIEW_MAX]
+    return output_text
+
+
+def _acp_raw_output_text(raw):
+    """Best-effort text from a tool_call_update's rawOutput (kimi passes the
+    SDK's raw output through: a string for shell-ish tools, a content-part
+    list for media/MCP tools, occasionally a dict)."""
+    if isinstance(raw, str):
+        return raw.strip()
+    if isinstance(raw, list):
+        return "\n".join(
+            str(p.get("text") or "") for p in raw
+            if isinstance(p, dict) and p.get("type") == "text"
+        ).strip()
+    if isinstance(raw, dict):
+        for key in ("output", "text", "stdout"):
+            if isinstance(raw.get(key), str):
+                return raw[key].strip()
+    return ""
+
+
+def _acp_terminal_output_snapshot(tid):
+    """Output of a live OR recently released ACP terminal, or None."""
+    if not tid:
+        return None
+    with _ACP_TERMINALS_LOCK:
+        entry = _ACP_TERMINALS.get(tid)
+        cached = _ACP_TERMINAL_OUTPUT_CACHE.get(tid)
+    if entry is not None:
+        return _acp_terminal_output_result(entry)
+    return cached
+
+
+def _acp_terminal_cache_output_unlocked(tid, snapshot):
+    """Remember a released terminal's output (bounded, oldest evicted)."""
+    _ACP_TERMINAL_OUTPUT_CACHE[tid] = snapshot
+    _ACP_TERMINAL_OUTPUT_CACHE.move_to_end(tid)
+    while len(_ACP_TERMINAL_OUTPUT_CACHE) > _ACP_TERMINAL_OUTPUT_CACHE_MAX:
+        _ACP_TERMINAL_OUTPUT_CACHE.popitem(last=False)
+
+
 def _acp_tool_content_text(update):
-    """Join an update's content-block text; fall back to rawOutput."""
+    """Join an update's content-block text; fall back to rawOutput, then to
+    the output of a terminal the update points at (kimi's Bash rows carry
+    ONLY `{type:'terminal', terminalId}` — see _ACP_TERMINAL_OUTPUT_CACHE)."""
     parts = []
+    terminal_ids = []
     for c in update.get("content") or []:
-        if isinstance(c, dict):
-            inner = c.get("content")
-            if isinstance(inner, dict) and isinstance(inner.get("text"), str):
-                parts.append(inner["text"])
+        if not isinstance(c, dict):
+            continue
+        inner = c.get("content")
+        if isinstance(inner, dict) and isinstance(inner.get("text"), str):
+            parts.append(inner["text"])
+        elif c.get("type") == "terminal" and c.get("terminalId"):
+            terminal_ids.append(str(c["terminalId"]))
     text = "".join(parts).strip()
-    if not text and isinstance(update.get("rawOutput"), str):
-        text = update["rawOutput"].strip()
+    if not text:
+        text = _acp_raw_output_text(update.get("rawOutput"))
+    if not text:
+        for tid in terminal_ids:
+            snap = _acp_terminal_output_snapshot(tid)
+            out = str((snap or {}).get("output") or "").strip()
+            if out:
+                text = out
+                break
+            exit_status = (snap or {}).get("exitStatus") or {}
+            if exit_status and exit_status.get("exitCode") not in (None, 0):
+                text = f"(no output, exit code {exit_status.get('exitCode')})"
+                break
     return text
 
 
@@ -38579,25 +38731,19 @@ def _acp_finalize_turn(harness, sid, response, pending_entry):
                 if not tool.get("emitted"):
                     tool["emitted"] = True
                     _acp_emit_event_unlocked(harness, sid, _acp_tool_event(turn, tid, tool))
-            blocks = []
-            if turn.get("thought"):
-                blocks.append({"kind": "thinking", "text": turn["thought"]})
-            if turn.get("text"):
-                blocks.append({"kind": "text", "text": turn["text"]})
-            if blocks:
-                assistant_event = {
-                    "type": "assistant", "message_id": turn["msg_id"], "blocks": blocks,
-                }
-                _apply_kimi_turn_usage(assistant_event, turn_usage)
-                _acp_emit_event_unlocked(harness, sid, assistant_event)
-            elif turn_usage:
+            # Trailing thought/text (everything after the last tool call —
+            # usually the answer). Earlier chunks were flushed in stream
+            # order as their tool calls arrived.
+            final_text = turn.get("text") or ""
+            flushed = _acp_flush_turn_text_unlocked(harness, sid, turn, usage=turn_usage)
+            if flushed is None and turn_usage:
                 for event in reversed(list(state.get("events") or [])):
                     if event.get("type") == "assistant":
                         _apply_kimi_turn_usage(event, turn_usage)
                         break
             # Synchronous-ask handoff: _acp_ask_and_wait reads this after the
             # pending event fires (set post-fold in _acp_handle_message).
-            pending_entry["final_text"] = turn.get("text") or ""
+            pending_entry["final_text"] = turn.get("text_all") or final_text
             state["active_turn"] = None
             state["status"] = "idle"
             state["stop_reason"] = stop_reason or ("error" if error else None)
@@ -39101,10 +39247,8 @@ def _acp_load(harness, sid, cwd):
     with _ACP_LOCK:
         state = _acp_session(harness, sid, create=True, cwd=cwd)
         replay = state.get("replay")
-        if replay and replay.get("text"):
-            ev = _acp_message_event(state, replay["kind"], replay["text"])
-            if ev is not None:
-                _acp_emit_event_unlocked(harness, sid, ev)
+        if replay:
+            _acp_replay_flush_unlocked(harness, sid, state, replay)
         state["replay"] = None
         if resp.get("ok"):
             state["attached"] = True
