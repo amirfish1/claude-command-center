@@ -2850,6 +2850,7 @@
   // *data*; this ticker keeps the "running 3s / 4s / 5s" age label
   // changing every second so the user sees motion.
   let liveStatusRenderTicker = null;
+  let _msgTsTick = 0;
   // Freshest live-work fields per session_id. Survives renderArchiveList
   // rebuilds from cached /api/conversations/all data (and 304 reuse) so WIP
   // chips and bash-command pills keep updating between archive scans.
@@ -5797,6 +5798,12 @@
       // without this re-render the label froze at "just now" even after
       // minutes, hiding that the status is stale.
       updateConvProcessIndicator();
+      // Same staleness bug for tool/message timestamps (CCC-944): they're
+      // baked into innerHTML once and never revisited, so a long-running
+      // live session reads "just now" on every turn forever. Minute-level
+      // granularity is enough here, so only do the full-DOM sweep every 15s.
+      _msgTsTick = (_msgTsTick + 1) % 15;
+      if (_msgTsTick === 0) refreshMsgTimestamps();
     }), 1000);
   }
 
@@ -12090,7 +12097,25 @@
       }
     }
     const iso = d.toLocaleString();
-    return '<span class="msg-ts" title="' + escapeHtml(iso) + '">' + escapeHtml(label) + '</span>';
+    // data-ts carries the raw timestamp so refreshMsgTimestamps() can
+    // recompute the label later — these spans are baked into innerHTML once
+    // at render time and otherwise freeze at whatever tier they started in
+    // (e.g. "just now" forever) as real time moves on.
+    return '<span class="msg-ts" data-ts="' + escapeAttr(ts) + '" title="' + escapeHtml(iso) + '">' + escapeHtml(label) + '</span>';
+  }
+
+  // Re-derive every .msg-ts label from its data-ts so tool/message
+  // timestamps age normally (just now -> N minutes ago -> HH:MM) instead of
+  // being stuck at whatever tier applied when the HTML was first built.
+  function refreshMsgTimestamps() {
+    document.querySelectorAll('.msg-ts[data-ts]').forEach(el => {
+      const wrapped = tsSpan(el.getAttribute('data-ts'));
+      if (!wrapped) return;
+      const tmp = document.createElement('div');
+      tmp.innerHTML = wrapped;
+      const fresh = tmp.firstChild;
+      if (fresh && fresh.textContent !== el.textContent) el.textContent = fresh.textContent;
+    });
   }
 
   // Minimal markdown renderer for assistant text — tables, inline code, bold, headers
