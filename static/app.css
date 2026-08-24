@@ -9074,6 +9074,11 @@
   .compact-run-card.is-slow[data-stage="working"] {
     border-color: color-mix(in srgb, var(--amber, #fbbf24) 40%, var(--border) 60%);
   }
+  /* Rows folded into a record card stay in the DOM (jsonl-line dedupe and
+     scroll anchoring both key off them) but stop rendering as siblings. */
+  .event.compact-record-hidden { display: none; }
+  .compact-run-card.is-record { animation: none; }
+
   .compact-run-summary { margin-top: 10px; }
   .compact-run-summary .compact-resume-card { margin: 0; }
 

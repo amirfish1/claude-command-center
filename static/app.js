@@ -12213,17 +12213,23 @@
     }
     return 'Claude';
   }
-  // Context size for the before/after headline. Same numbers the composer's
-  // context pill shows (`live_context_tokens` / `live_context_limit`), so the
-  // card can never disagree with the pill sitting right above it.
+  // Context size for the before/after headline. Mirrors the composer context
+  // pill's own `displayTokens` rule exactly — transcript-derived tokens first
+  // ("calc"), falling back to the engine's live /ctx report — so the card can
+  // never disagree with the pill sitting a few pixels above it. Reading
+  // `live_context_tokens` alone would print nothing on most sessions: it is 0
+  // until the engine emits a live context sample.
   function _compactContextNow(sid) {
     try {
       const pid = typeof paneIdForSessionId === 'function' ? paneIdForSessionId(sid) : null;
       const u = (pid && _usageDataByPane[pid]) || null;
       if (!u) return null;
-      const tokens = Number(u.live_context_tokens || 0);
-      const limit = Number(u.live_context_limit || 0);
+      const liveTokens = Number(u.live_context_tokens || 0);
+      const liveLimit = Number(u.live_context_limit || 0);
+      const hasLive = (u.engine || 'claude') === 'claude' && liveTokens > 0;
+      const tokens = Number(u.latest_input_tokens || 0) || (hasLive ? liveTokens : 0);
       if (!tokens) return null;
+      const limit = (hasLive ? liveLimit : 0) || Number(u.context_limit || 0) || 200000;
       return { tokens, limit };
     } catch (_) { return null; }
   }
@@ -12438,6 +12444,18 @@
     if (typeof scrollConversationToEnd === 'function') scrollConversationToEnd(_compactRunView());
     _stopCompactRunTimer();
     _compactRunTimer = setInterval(_tickCompactRun, 1000);
+    // The Claude headless path blocks server-side for the WHOLE compaction, so
+    // no mid-flight acknowledgement ever arrives — without this the card sat on
+    // "Starting compaction…" for the entire run and the named stages were dead
+    // decoration. Once the request is provably dispatched, "writing the
+    // summary" is the honest description.
+    const _run = _compactRun;
+    setTimeout(() => {
+      if (_compactRun === _run && _run.stage === 'requested') {
+        _run.stage = 'working';
+        _compactRunPaint();
+      }
+    }, 1200);
     return _compactRun;
   }
 
@@ -12467,23 +12485,169 @@
     _compactRunPollAfter(run);
   }
 
+  // Reads /api/session/<id>/usage DIRECTLY rather than going through
+  // fetchSessionUsage: that helper defers whenever the composer has focus,
+  // which it always does immediately after Enter — so routing the result poll
+  // through it left the card stuck on "reading the new size…" forever. This
+  // only reads; the pane's own usage refresh still owns the pill.
+  function _compactUsageShape(u) {
+    if (!u) return null;
+    const liveTokens = Number(u.live_context_tokens || 0);
+    const liveLimit = Number(u.live_context_limit || 0);
+    const hasLive = (u.engine || 'claude') === 'claude' && liveTokens > 0;
+    const tokens = Number(u.latest_input_tokens || 0) || (hasLive ? liveTokens : 0);
+    if (!tokens) return null;
+    return { tokens, limit: (hasLive ? liveLimit : 0) || Number(u.context_limit || 0) || 200000 };
+  }
   function _compactRunPollAfter(run) {
     if (!run || !run.sid) return;
-    [800, 2500, 6000, 12000, 25000, 45000].forEach((delay) => {
+    [800, 2500, 6000, 12000, 25000, 45000, 75000].forEach((delay) => {
       setTimeout(async () => {
-        if (_compactRun !== run) return;
-        if (!(currentSession && currentSession.id === run.sid)) return;
+        if (_compactRun !== run || run.after) return;
         try {
-          if (typeof fetchSessionUsage === 'function') await fetchSessionUsage(run.sid);
+          const res = await fetch('/api/session/' + encodeURIComponent(run.sid)
+            + '/usage?_t=' + Date.now(), { cache: 'no-store' });
+          const now = _compactUsageShape(await res.json());
+          // Only accept a number that is actually SMALLER than the pre-compact
+          // size. The post-compact usage rollup lands sporadically in the
+          // JSONL, so an early poll can still return the pre-compact figure —
+          // printing that would claim "0 freed" on a real win.
+          if (now && now.tokens && (!run.before || now.tokens < run.before.tokens)) {
+            run.after = now;
+            _compactRunPaint();
+          }
         } catch (_) {}
-        const now = _compactContextNow(run.sid);
-        // Only accept a number that is actually smaller than the pre-compact
-        // size — a stale rollup would otherwise print "0 freed" on a real win.
-        if (now && now.tokens && (!run.before || now.tokens < run.before.tokens)) {
-          run.after = now;
-          _compactRunPaint();
-        }
       }, delay);
+    });
+  }
+
+  // Adopt the engine's own pre/post/duration off the boundary row when it is
+  // on screen. Those are measured server-side; the card's own before/after is
+  // a client-side estimate that also charges the HTTP round trip to the clock.
+  function _compactRunAdoptBoundary($view) {
+    const run = _compactRun;
+    if (!run) return;
+    const view = $view || _compactRunView();
+    if (!view) return;
+    // Hide the plumbing rows this card already speaks for — the boundary
+    // line ("Compacted context: 87k -> 10k") and the `/compact` command
+    // marker Claude Code writes AFTER the summary. Left visible they are the
+    // duplicated, out-of-order rows the card exists to replace.
+    const absorbed = view.querySelector('.compact-resume-event.compact-absorbed-by-run');
+    if (absorbed) {
+      for (const dir of ['previousElementSibling', 'nextElementSibling']) {
+        let n = absorbed[dir];
+        for (let i = 0; n && i < _COMPACT_FOLD_RADIUS; i++, n = n[dir]) {
+          if (!_compactRowIsFoldable(n)) break;
+          n.classList.add('compact-record-hidden');
+        }
+      }
+    }
+    if (run.adoptedBoundary) return;
+    const rows = view.querySelectorAll('.compact-boundary-row');
+    const row = rows.length ? rows[rows.length - 1] : null;
+    if (!row) return;
+    const pre = Number(row.dataset.compactPre || 0);
+    const post = Number(row.dataset.compactPost || 0);
+    const ms = Number(row.dataset.compactDuration || 0);
+    if (!pre && !post) return;
+    run.adoptedBoundary = true;
+    row.classList.add('compact-record-hidden');
+    if (pre) run.before = { tokens: pre, limit: (run.before && run.before.limit) || 200000 };
+    if (post) run.after = { tokens: post, limit: (run.before && run.before.limit) || 200000 };
+    if (ms > 0) run.startedAt = run.endedAt - ms;
+    _compactRunPaint();
+  }
+
+  // A reopened session has no live run — only the durable rows. Claude Code
+  // writes them in an order that reads backwards (the resume summary lands
+  // before the `/compact` command that caused it, and CCC renders the
+  // boundary row after both), which is exactly the "different messages,
+  // not in order" complaint. Fold the whole group into one record card
+  // anchored at the summary, so a transcript read later tells the same
+  // story the live card told.
+  //
+  // Anchored on the SUMMARY, not the boundary: the boundary's rendered
+  // position relative to the summary is not stable, so a forward-only walk
+  // from it folded nothing on a reopened session.
+  const _COMPACT_FOLD_RADIUS = 6;
+  function _compactRowIsFoldable(el) {
+    if (!el || !el.classList) return null;
+    if (el.classList.contains('compact-boundary-row')) return 'boundary';
+    if (el.classList.contains('compact-resume-event')) return null;
+    if (el.classList.contains('user_text')) {
+      const um = el.querySelector('.user-msg');
+      const t = ((um && (um.getAttribute('data-raw-text') || um.textContent)) || '').trim();
+      // The `/compact` command marker and the empty local-command-stdout row
+      // beside it — plumbing the card already represents.
+      if (!t || /^\/compact\b/i.test(t)) return 'marker';
+    }
+    return null;
+  }
+  function _foldCompactRecords($view) {
+    if (!$view) return;
+    $view.querySelectorAll('.compact-resume-event').forEach((summary) => {
+      if (summary.classList.contains('compact-absorbed-by-run')) return;
+      if (summary.classList.contains('compact-record-hidden')) return;
+      if (summary.dataset.compactFolded === '1') return;
+      const eaten = [];
+      let boundary = null;
+      for (const dir of ['previousElementSibling', 'nextElementSibling']) {
+        let n = summary[dir];
+        for (let i = 0; n && i < _COMPACT_FOLD_RADIUS; i++, n = n[dir]) {
+          const kind = _compactRowIsFoldable(n);
+          if (!kind) break;
+          if (kind === 'boundary') boundary = n;
+          eaten.push(n);
+        }
+      }
+      summary.dataset.compactFolded = '1';
+      const pre = boundary ? Number(boundary.dataset.compactPre || 0) : 0;
+      const post = boundary ? Number(boundary.dataset.compactPost || 0) : 0;
+      const ms = boundary ? Number(boundary.dataset.compactDuration || 0) : 0;
+      const trigger = (boundary && boundary.dataset.compactTrigger) || 'manual';
+      const card = document.createElement('div');
+      card.className = 'compact-run-card is-record';
+      card.dataset.stage = 'done';
+      const bits = [];
+      if (pre && post) {
+        const freed = Math.max(0, pre - post);
+        const pct = pre ? Math.round((freed / pre) * 100) : 0;
+        bits.push('<span class="compact-run-delta"><b>' + escapeHtml(_compactTokenLabel(pre)) + '</b>'
+          + ' <span class="compact-run-arrow">→</span> <b>' + escapeHtml(_compactTokenLabel(post))
+          + '</b> tokens</span>');
+        if (freed) {
+          bits.push('<span class="compact-run-freed">' + escapeHtml(_compactTokenLabel(freed))
+            + ' freed <span class="compact-run-pct">(−' + pct + '%)</span></span>');
+        }
+      }
+      if (ms > 0) bits.push('<span class="compact-run-took">took ' + escapeHtml(_compactElapsedLabel(ms)) + '</span>');
+      const summaryInner = summary.querySelector('.compact-resume-card');
+      card.innerHTML =
+        '<div class="compact-run-head">'
+        +   '<span class="compact-run-glyph">✓</span>'
+        +   '<span class="compact-run-title">Context compacted'
+        +     (trigger === 'auto' ? ' automatically' : '') + '</span>'
+        + '</div>'
+        + (bits.length ? '<div class="compact-run-result">' + bits.join('<span class="compact-run-sep">·</span>') + '</div>' : '')
+        + '<div class="compact-run-note">'
+        +   (trigger === 'auto'
+              ? 'The conversation neared its context limit, so the earlier turns were replaced with a summary.'
+              : 'The earlier turns were replaced with a summary.')
+        +   ' Everything below this point is the conversation that was kept.'
+        +   ' <span class="compact-run-quiet">The full transcript on disk is untouched.</span>'
+        + '</div>'
+        + '<div class="compact-run-summary"></div>';
+      if (summaryInner) card.querySelector('.compact-run-summary').appendChild(summaryInner);
+      // Anchor at the EARLIEST folded row so the card sits where the
+      // compaction actually happened, not wherever the summary landed.
+      let anchor = summary;
+      for (const el of eaten) {
+        if (el.compareDocumentPosition(anchor) & Node.DOCUMENT_POSITION_FOLLOWING) anchor = el;
+      }
+      anchor.parentNode.insertBefore(card, anchor);
+      summary.classList.add('compact-record-hidden');
+      eaten.forEach((el) => el.classList.add('compact-record-hidden'));
     });
   }
 
@@ -50172,7 +50336,14 @@
           const compactTip = trigger === 'auto'
             ? 'The conversation neared its context-window limit, so Claude automatically summarized the older history into a short recap and continued from there. Nothing is lost from the transcript on disk - only the model’s working memory was condensed.'
             : 'The conversation history was summarized into a short recap to free up context-window space (/compact). The full transcript on disk is untouched - only the model’s working memory was condensed.';
-          div.classList.add('system-compact');
+          div.classList.add('system-compact', 'compact-boundary-row');
+          // The engine's OWN measurements. The lifecycle card prefers these
+          // over its client-side before/after estimate, and the fold pass
+          // below rebuilds a record card from them on a reopened session.
+          div.dataset.compactPre = String(preTokens || 0);
+          div.dataset.compactPost = String(postTokens || 0);
+          div.dataset.compactDuration = String(compact.duration_ms || 0);
+          div.dataset.compactTrigger = trigger;
           div.innerHTML = '<span class="label">System</span>'
             + '<span class="line-num">L' + ev.line + '</span>'
             + tsSpan(ev.ts)
@@ -51099,7 +51270,10 @@
       const _absorbed = $view.querySelector('.compact-resume-event.compact-absorbed-by-run');
       if (_absorbed) _compactRunAnchorTo(_absorbed);
       else if (!_compactRun.anchored) _compactRunMount($view);
+      _compactRunAdoptBoundary($view);
     }
+    // Every compaction already on disk gets the same one-card treatment.
+    try { _foldCompactRecords($view); } catch (_) {}
     // Same story for the spawn-log streaming bubble — keep it pinned to
     // the tail so it doesn't end up sandwiched between older JSONL events
     // and newer ones.
