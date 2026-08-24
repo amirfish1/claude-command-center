@@ -935,6 +935,15 @@ body.ccc-mobile-redesign.ccc-simple-mode.ccc-simple-conv-open #convToolbar {
   padding: 6px 10px;
   flex-wrap: wrap;
 }
+/* .toolbar's base rule (app.css) sets overflow:hidden to clip long chip
+   rows — but the Actions dropdown is position:absolute and pops out BELOW
+   the toolbar's own box, so that same overflow:hidden clipped the open
+   menu to fully invisible (found while shooting docs screenshots — the
+   dropdown never rendered even though its own computed rect was fine).
+   Only lift the clip while the menu is actually open. */
+body.ccc-mobile-redesign.ccc-simple-mode.ccc-simple-conv-open #convToolbar:has(.mobile-actions-menu:not([hidden])) {
+  overflow: visible;
+}
 /* Back + icon + title claim the first row; everything else (tech toggle,
    Stop, font controls) wraps to a second row rather than overflowing off
    the right edge of a narrow phone — confirmed cut off at 390px wide
