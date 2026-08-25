@@ -43,6 +43,15 @@ function buildContext(initialStorage = {}) {
     _continuationRowId(row) {
       return String((row && (row.session_id || row.id)) || '').trim();
     },
+    appearanceRefreshes: 0,
+    spawnRefreshes: 0,
+    sidebarRenders: 0,
+  };
+  ctx.refreshAppearanceChecks = () => { ctx.appearanceRefreshes += 1; };
+  ctx.refreshSpawnEngineValue = () => { ctx.spawnRefreshes += 1; };
+  ctx.renderSidebar = (renderedRows) => {
+    assert.equal(renderedRows, rows);
+    ctx.sidebarRenders += 1;
   };
   vm.createContext(ctx);
   const storageKeyDecl = app.match(
@@ -52,8 +61,13 @@ function buildContext(initialStorage = {}) {
   vm.runInContext(
     storageKeyDecl[0]
       + extractFunction('getContinuationFoldingPref')
+      + extractFunction('setContinuationFoldingPref')
+      + extractFunction('settingsResetSessions')
       + extractFunction('_foldContinuationAncestorRows')
-      + '; this.getPref = getContinuationFoldingPref; this.fold = _foldContinuationAncestorRows;',
+      + '; this.getPref = getContinuationFoldingPref;'
+      + ' this.setPref = setContinuationFoldingPref;'
+      + ' this.resetSessions = settingsResetSessions;'
+      + ' this.fold = _foldContinuationAncestorRows;',
     ctx,
   );
   return { ctx, rows, store };
@@ -80,9 +94,41 @@ test('Sessions & Spawning exposes the browser-local folding switch', () => {
   assert.match(html, /Active, Coding, Workers, and Archived/);
 });
 
-test('the Settings toggle persists, rerenders immediately, and resets to off', () => {
-  assert.match(app, /const CONTINUATION_FOLDING_STORAGE_KEY = 'ccc-fold-continuation-chains';/);
-  assert.match(app, /localStorage\.removeItem\(CONTINUATION_FOLDING_STORAGE_KEY\)/);
+test('applying the preference persists both states and rerenders immediately', () => {
+  const { ctx, store } = buildContext();
+
+  ctx.setPref(true);
+  assert.equal(store.get('ccc-fold-continuation-chains'), 'on');
+  assert.equal(ctx.getPref(), true);
+  assert.equal(ctx.appearanceRefreshes, 1);
+  assert.equal(ctx.sidebarRenders, 1);
+
+  ctx.setPref(false);
+  assert.equal(store.has('ccc-fold-continuation-chains'), false);
+  assert.equal(ctx.getPref(), false);
+  assert.equal(ctx.appearanceRefreshes, 2);
+  assert.equal(ctx.sidebarRenders, 2);
+});
+
+test('Reset Sessions removes the opt-in and repaints through the same helper', () => {
+  const { ctx, store } = buildContext({
+    'ccc-fold-continuation-chains': 'on',
+    'ccc.spawnEngine': 'codex',
+    'ccc-spawn-cwd': '/tmp/repo',
+  });
+
+  ctx.resetSessions();
+
+  assert.equal(store.has('ccc-fold-continuation-chains'), false);
+  assert.equal(store.has('ccc.spawnEngine'), false);
+  assert.equal(store.has('ccc-spawn-cwd'), false);
+  assert.equal(ctx.getPref(), false);
+  assert.equal(ctx.spawnRefreshes, 1);
+  assert.equal(ctx.appearanceRefreshes, 1);
+  assert.equal(ctx.sidebarRenders, 1);
+});
+
+test('the delegated Settings click routes through the behavior helper', () => {
   assert.match(app, /e\.target\.closest\('\[data-continuation-folding-toggle\]'\)/);
-  assert.match(app, /renderSidebar\(conversationsData\)/);
+  assert.match(app, /setContinuationFoldingPref\(!getContinuationFoldingPref\(\)\)/);
 });

@@ -3281,6 +3281,14 @@
     try { return localStorage.getItem(CONTINUATION_FOLDING_STORAGE_KEY) === 'on'; }
     catch (_) { return false; }
   }
+  function setContinuationFoldingPref(on) {
+    try {
+      if (on) localStorage.setItem(CONTINUATION_FOLDING_STORAGE_KEY, 'on');
+      else localStorage.removeItem(CONTINUATION_FOLDING_STORAGE_KEY);
+    } catch (_) {}
+    refreshAppearanceChecks();
+    if (typeof conversationsData !== 'undefined') renderSidebar(conversationsData);
+  }
   function continuationParentId(c) {
     if (!c) return '';
     const serverField = String(c.continued_from_session_id || '').trim();
@@ -66591,11 +66599,9 @@
     try {
       localStorage.removeItem('ccc.spawnEngine');
       localStorage.removeItem('ccc-spawn-cwd');
-      localStorage.removeItem(CONTINUATION_FOLDING_STORAGE_KEY);
     } catch (_) {}
     refreshSpawnEngineValue();
-    refreshAppearanceChecks();
-    if (typeof conversationsData !== 'undefined') renderSidebar(conversationsData);
+    setContinuationFoldingPref(false);
   }
 
   // ── Preview feature flags ───────────────────────────────────────────
@@ -66820,14 +66826,8 @@
       }
       const continuationFoldingToggle = e.target.closest('[data-continuation-folding-toggle]');
       if (continuationFoldingToggle) {
-        const next = !getContinuationFoldingPref();
-        try {
-          if (next) localStorage.setItem(CONTINUATION_FOLDING_STORAGE_KEY, 'on');
-          else localStorage.removeItem(CONTINUATION_FOLDING_STORAGE_KEY);
-        } catch (_) {}
-        refreshAppearanceChecks();
+        setContinuationFoldingPref(!getContinuationFoldingPref());
         showSettingsSavedPulse(continuationFoldingToggle.closest('.settings-row'));
-        if (typeof conversationsData !== 'undefined') renderSidebar(conversationsData);
         return;
       }
       const ffToggle = e.target.closest('[data-ff-toggle]');
