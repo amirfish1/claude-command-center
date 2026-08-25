@@ -1,1 +1,0 @@
-- Status rail: column graph of cache-adjusted tokens per turn (last 30 billed turns, newest right) under the conversation token headline; each bar matches that turn's "Cached-adjusted tokens this turn" chip and updates live as turns land.

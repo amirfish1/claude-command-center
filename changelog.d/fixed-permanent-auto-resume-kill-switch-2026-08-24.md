@@ -1,1 +1,0 @@
-- The usage-limit countdown's X now permanently disables unattended auto-resume for that session, removes queued automatic `continue` messages, and cannot be redrawn from stale browser data; persistence failures show a Retry state instead of silently appearing to succeed.

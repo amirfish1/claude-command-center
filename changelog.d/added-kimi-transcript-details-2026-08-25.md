@@ -1,1 +1,0 @@
-Kimi conversations now preserve stream order and Bash output, show a short output peek under collapsed tool rows, keep thinking blocks expanded, and render todo calls as checklists instead of raw JSON.

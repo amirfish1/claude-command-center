@@ -1,1 +1,0 @@
-- Status rail per-turn token graph now also renders for Kimi, Codex, Gemini, Antigravity, and Devin sessions (previously Claude-only).

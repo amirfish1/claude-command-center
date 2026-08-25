@@ -20,6 +20,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Changed
 - `watchtower.queue` is now a hard, unconditional dependency of CCC's queue system (ticket lifecycle: claim/close/edit/answer/comment/reopen). Removed the standalone `ux_fixes_queue.py` stdlib fallback that let CCC's queue features work without WatchTower installed — it had gone stale since WatchTower's own storage migrated from JSON to SQLite and was never updated, a latent risk of silent data divergence if watchtower ever became unimportable. If `watchtower.queue` can't be imported, CCC now fails loudly at startup with a clear error instead of silently falling back to a frozen JSON store.
 
+## [5.27.0] - 2026-08-25
+
+### Added
+- Kimi conversations now preserve stream order and Bash output, show a short output peek under collapsed tool rows, keep thinking blocks expanded, and render todo calls as checklists instead of raw JSON.
+- Mobile swipe-right on conversation-list rows now triggers the primary row action: Trash in the Coding tab (and Coding's Trash section), Archive in the Active tab.
+- Settings → Sessions & Spawning now lets you opt into hiding earlier sessions in a continuation chain across Active, Coding, Workers, and Archived. The setting is off by default, so every session remains visible unless you choose the compact newest-row view.
+- Status rail: column graph of cache-adjusted tokens per turn (last 30 billed turns, newest right) under the conversation token headline; each bar matches that turn's "Cached-adjusted tokens this turn" chip and updates live as turns land.
+- Status rail per-turn token graph now also renders for Kimi, Codex, Gemini, Antigravity, and Devin sessions (previously Claude-only).
+
+### Changed
+- Codex sessions are now treated as cold only after 45 minutes of inactivity, reducing unnecessary cold-session handling for threads that are still recent.
+- The everyday dashboard is quieter by default. CCC now opens on Coding, moves diagnostic controls such as Send queue, throughput, replay, frame health, Vercel deploy state, poller activity, and Close & announce behind Debug or preview settings, renames Launch to Launch terminal, and removes duplicate context, app-server, repo, object, deployment, and process-state controls. Compact spacing keeps footer pills, queue headers, session IDs, and context badges readable at normal sidebar widths.
+- Opening a session paints its tail in well under 100ms: the first request fetches only the last 120 transcript lines, the rest of the usual window is filled in above it right after the first paint, and the select-time status fetches wait until the tail is on screen. Sidebar `:has()` selectors that made every layout read re-style the whole conversation list were replaced with JS-maintained flag classes.
+- The token-sitter handover control now works for every engine that receives the synced skill and cycles through four modes from the session rail. Rapid clicks that settle back on the original state no longer create no-op commits.
+
+### Fixed
+- Codex `/compact` now reports the truth. The card used to flip to "context compacted, took 0:00" the moment the app-server accepted the request, while Codex kept compacting for another minute or two and the composer queued your next message behind that same turn. CCC now waits for the compaction to actually land, shows the real before/after sizes ("282k -> 12k") instead of "reading the new size...", stops showing "ctx 0" in the context pill afterwards, and renders a compaction record in the transcript the way Claude sessions already did.
+- Codex silent-turn recovery no longer re-arms on every status tick after the user declines it, and steering a message that is already queued no longer delivers a second copy.
+- Clicking Send, Send queue, or Steer with an empty composer now focuses the input instead of appearing to do nothing.
+- Fixed mobile composer button cluster escaping the input card on narrow viewports by capping spawn-select widths and strengthening the selector strip's flex shrink behavior.
+- Clicking a video file link in a conversation now streams it from the CCC server so mobile/Tailnet browsers can play the MP4 instead of trying to open it on the host Mac.
+- The usage-limit countdown's X now permanently disables unattended auto-resume for that session, removes queued automatic `continue` messages, and cannot be redrawn from stale browser data; persistence failures show a Retry state instead of silently appearing to succeed.
+- Fixed the composer textarea in the right-hand split pane not growing to fit multi-line/pasted text — it now autosizes the same as the primary pane's composer.
+- Session chrome now handles several edge cases cleanly: slash-command sessions show the command text instead of `[EMPTY]`, AI-generated titles no longer carry a sparkle prefix, current Claude 1M-context models are recognized correctly, long model names have a full-name tooltip, and pasted clipboard images are detected from their file signature when the browser reports the wrong content type.
+- A session that spawned a Codex subagent (e.g. a "code review" pass, a fleet-verify check) could vanish entirely from the sidebar, leaving the child row's "spawned by" chip pointing at nothing. Fixed a field mix-up that made any spawn edge look identical to a continuation, so the parent got folded away instead of leading the row with its children nested underneath.
+
 ## [5.26.0] - 2026-08-23
 
 ### Added
@@ -2730,7 +2756,8 @@ Initial public release.
 - `/api/repo/switch` validates targets against the picker allow-list.
 - See [`SECURITY.md`](SECURITY.md) for the full threat model.
 
-[Unreleased]: https://github.com/amirfish1/claude-command-center/compare/v5.26.0...HEAD
+[Unreleased]: https://github.com/amirfish1/claude-command-center/compare/v5.27.0...HEAD
+[5.27.0]: https://github.com/amirfish1/claude-command-center/releases/tag/v5.27.0
 [5.26.0]: https://github.com/amirfish1/claude-command-center/releases/tag/v5.26.0
 [5.25.2]: https://github.com/amirfish1/claude-command-center/releases/tag/v5.25.2
 [5.25.1]: https://github.com/amirfish1/claude-command-center/releases/tag/v5.25.1
