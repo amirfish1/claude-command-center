@@ -9873,7 +9873,13 @@
       }
       return;
     }
-    if (!text) return;
+    if (!text) {
+      // CCC-946: clicking Send/Send-queue/Steer with an empty composer used
+      // to no-op with zero feedback, reading as "this button doesn't do
+      // anything". Focus the input so it's obvious what's missing.
+      if ($input) $input.focus();
+      return;
+    }
     rememberComposerCommand(text);
     // CCC-762: typing `/goal clear` directly (rather than clicking the goal
     // strip's Clear button) skipped applyOptimisticConversationGoalAction
