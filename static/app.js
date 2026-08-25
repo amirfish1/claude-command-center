@@ -1174,7 +1174,7 @@
         // Outer wrap holds the condensed health metrics + the collapsible
         // trigger strip. The trigger chips now live behind a toggle so the
         // footer leads with CCC's own health (CPU / build latency / errors).
-        '#pollerWrap{display:flex;flex-wrap:wrap;gap:4px 8px;align-items:center;flex:1 1 auto;min-width:0;padding:0 6px;}' +
+        '#pollerWrap{display:flex;flex-wrap:wrap;gap:4px 6px;align-items:center;flex:1 1 auto;min-width:0;padding:0 6px;}' +
         '#cccHealth{display:flex;gap:7px;align-items:center;flex:0 0 auto;' +
         'font:600 10px/1 ui-monospace,SFMono-Regular,Menlo,monospace;}' +
         '.ccchealth-metric{display:inline-flex;align-items:center;gap:3px;white-space:nowrap;' +
@@ -1337,8 +1337,8 @@
     const productivityPill = document.createElement('div');
     productivityPill.id = 'cccProductivityPill';
     productivityPill.title = 'Productivity Dashboard - delivered features and fixes, projects, time, and agent leverage. Click to open.';
-    productivityPill.style.cssText = 'display:flex;align-items:center;gap:5px;flex:0 0 auto;cursor:pointer;' +
-      'font:600 11px/1 ui-monospace,Menlo,monospace;padding:3px 8px;border-radius:6px;' +
+    productivityPill.style.cssText = 'display:flex;align-items:center;gap:3px;flex:0 0 auto;cursor:pointer;' +
+      'font:600 10px/1 ui-monospace,Menlo,monospace;padding:2px 5px;border-radius:6px;' +
       'border:1px solid var(--border-color,#30363d);opacity:.8;';
     productivityPill.innerHTML = '<span style="opacity:.7;">&#10003;</span><span>productivity</span>';
     productivityPill.addEventListener('click', function () { window.open('/productivity.html', '_blank'); });
@@ -1349,8 +1349,8 @@
     const systemPill = document.createElement('div');
     systemPill.id = 'cccSystemPill';
     systemPill.title = 'System Status - dev servers, memory, CPU, and running processes. Click to open.';
-    systemPill.style.cssText = 'display:flex;align-items:center;gap:5px;flex:0 0 auto;cursor:pointer;' +
-      'font:600 11px/1 ui-monospace,Menlo,monospace;padding:3px 8px;border-radius:6px;' +
+    systemPill.style.cssText = 'display:flex;align-items:center;gap:3px;flex:0 0 auto;cursor:pointer;' +
+      'font:600 10px/1 ui-monospace,Menlo,monospace;padding:2px 5px;border-radius:6px;' +
       'border:1px solid var(--border-color,#30363d);opacity:.8;';
     systemPill.innerHTML = '<span style="opacity:.7;">&#128187;</span><span>system</span>';
     systemPill.addEventListener('click', _openSystemHealth);
@@ -1362,8 +1362,8 @@
     const tputPill = document.createElement('div');
     tputPill.id = 'cccThroughputPill';
     tputPill.title = 'Throughput Dashboard - daily token usage, output speed, and session rankings. Click to open.';
-    tputPill.style.cssText = 'display:flex;align-items:center;gap:5px;flex:0 0 auto;cursor:pointer;' +
-      'font:600 11px/1 ui-monospace,Menlo,monospace;padding:3px 8px;border-radius:6px;' +
+    tputPill.style.cssText = 'display:flex;align-items:center;gap:3px;flex:0 0 auto;cursor:pointer;' +
+      'font:600 10px/1 ui-monospace,Menlo,monospace;padding:2px 5px;border-radius:6px;' +
       'border:1px solid var(--border-color,#30363d);opacity:.8;';
     tputPill.innerHTML = '<span style="opacity:.7;">&#128202;</span>' +
       '<span class="ccc-tput-val">throughput</span>';
