@@ -17030,6 +17030,12 @@ body.status-pos-right.status-rail-collapsed .conv-pane.has-status-rail > .conv-i
 .rail-actions #convStatus {
   color: var(--text-muted);
 }
+/* CCC-965: #convStatus is usually empty (see the JS comment at its capture
+   site) but still inherited the generic `.rail-actions > *` border/padding
+   chrome, rendering as a redundant full-width empty divider bar. */
+.rail-actions #convStatus:empty {
+  display: none;
+}
 /* The deploy pill is an <a>; keep the deploy-dot color cue. */
 .rail-actions #deployPill .deploy-dot {
   width: 8px; height: 8px; border-radius: 50%;
