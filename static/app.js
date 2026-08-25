@@ -68581,7 +68581,6 @@
       'html:not(.ccc-debug-mode) .status-rail-conn-proc{display:none!important;}' +
       'html:not(.ccc-debug-mode) #frameHealth{display:none!important;}' +
       'html:not(.ccc-debug-mode) #convOverflowBtn{display:none!important;}' +
-      'html:not(.ccc-debug-mode) #deployPill{display:none!important;}' +
       /* Phones: the lane/pace text overflows the strip ("…vs yd yd" clipped
          against the yd-report link). Hide the redundant link (the whole
          strip already opens the dashboard on tap) and let the rest
