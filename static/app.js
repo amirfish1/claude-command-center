@@ -64377,51 +64377,6 @@
     return out.slice(0, SPAWN_CWD_CHIP_LIMIT);
   }
 
-  function renderNewSessionRepoSuggestions(root) {
-    const wrap = (root || document).querySelector('#nsRepoSuggestions');
-    if (!wrap) return;
-    const current = getSpawnCwd();
-    const chips = spawnCwdQuickChipOptions(current);
-    wrap.innerHTML = '';
-    if (!chips.length) {
-      wrap.hidden = true;
-      return;
-    }
-    wrap.hidden = false;
-
-    // Group signal-ranked chips by kind so production and dev/test are
-    // visually separated on the new-session stage.
-    const byKind = {};
-    for (const c of chips) {
-      const k = c.kind || 'production';
-      byKind[k] = byKind[k] || [];
-      byKind[k].push(c);
-    }
-
-    for (const k of ['production', 'dev_test']) {
-      const group = byKind[k];
-      if (!group || !group.length) continue;
-      const label = document.createElement('div');
-      label.className = 'ns-choice-title';
-      label.textContent = k === 'dev_test' ? 'Development & test' : 'Production';
-      wrap.appendChild(label);
-      const row = document.createElement('div');
-      row.className = 'ns-repo-chips';
-      wrap.appendChild(row);
-      for (const opt of group) {
-        const active = normalizeSpawnCwdPath(opt.value) === normalizeSpawnCwdPath(current);
-        const btn = document.createElement('button');
-        btn.type = 'button';
-        btn.className = 'ns-repo-chip' + (active ? ' is-current' : '');
-        btn.textContent = opt.label;
-        btn.title = 'Start the new session in ' + opt.value;
-        btn.setAttribute('data-ns-repo', opt.value);
-        btn.setAttribute('aria-pressed', active ? 'true' : 'false');
-        row.appendChild(btn);
-      }
-    }
-  }
-
   function renderSpawnCwdQuickChips() {
     const wrap = document.getElementById('spawnCwdQuickChips');
     if (!wrap) return;
@@ -64429,10 +64384,7 @@
     const chips = spawnCwdQuickChipOptions(current);
     wrap.innerHTML = '';
     wrap.style.display = chips.length ? '' : 'none';
-    if (!chips.length) {
-      renderNewSessionRepoSuggestions();
-      return;
-    }
+    if (!chips.length) return;
 
     let lastKind = null;
     for (const opt of chips) {
@@ -64458,7 +64410,6 @@
       });
       wrap.appendChild(btn);
     }
-    renderNewSessionRepoSuggestions();
   }
 
   function refreshNewSessionCwdUi(paneId) {
@@ -64562,16 +64513,6 @@
     // keystroke/focus, making the name field read as "not editable" (CCC-144).
     if (opts.focus !== false) input.focus();
   }
-
-  document.addEventListener('click', (ev) => {
-    const btn = ev.target && ev.target.closest && ev.target.closest('#nsRepoSuggestions [data-ns-repo]');
-    if (!btn) return;
-    ev.preventDefault();
-    setSpawnCwdInputValue(btn.getAttribute('data-ns-repo') || '');
-    renderNewSessionRepoSuggestions();
-    const input = composerInputForPane(activePaneId()) || $convInput;
-    if (input) input.focus();
-  });
 
   // ── In-browser folder picker ──
   // Fallback for hosts with no native GUI chooser (headless Linux: no
@@ -65310,7 +65251,6 @@
         + '<div class="empty-state ns-hero ns-hero-quiet" style="height:auto;flex-direction:column;gap:10px;text-align:center;">'
         + '<div class="ns-stage-title">New session</div>'
         + '<div class="ns-stage-subtitle">Choose the object and folder below, then type the first message.</div>'
-        + '<div class="ns-repo-suggestions" id="nsRepoSuggestions" hidden></div>'
         + '<details class="ns-new-project-details" id="nsNewProjectDetails">'
         +   '<summary>Create a fresh folder</summary>'
         +   '<div class="ns-choice-card ns-choice-card-compact" id="nsCardNewProject">'
@@ -65330,7 +65270,6 @@
         + '</details>'
         + '</div></div>';
       _wireNewSessionChooser($view, paneId);
-      renderNewSessionRepoSuggestions($view);
       _renderNsExtensions($view, paneId);
     }
     if (typeof syncSpawnEngineDependentUi === 'function') syncSpawnEngineDependentUi();
