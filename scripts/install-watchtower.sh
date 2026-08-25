@@ -182,14 +182,28 @@ wt_write_version_marker() {
 # helper) — good enough to unblock run.sh.
 wt_bounded() {
   local secs="$1"; shift
-  "$@" >/dev/null 2>&1 &
-  local pid=$!
-  ( sleep "$secs"; kill -9 "$pid" 2>/dev/null ) &
-  local watcher=$!
-  local rc=0
-  wait "$pid" 2>/dev/null || rc=$?
-  kill "$watcher" 2>/dev/null
-  wait "$watcher" 2>/dev/null
+  local done_file pid deadline rc
+  done_file="$(mktemp "${TMPDIR:-/tmp}/ccc-watchtower-command.XXXXXX")" || return 1
+  (
+    local child_rc=0
+    "$@" >/dev/null 2>&1 || child_rc=$?
+    printf '%s\n' "$child_rc" > "$done_file"
+  ) &
+  pid=$!
+  deadline=$((SECONDS + secs))
+  while [ ! -s "$done_file" ]; do
+    if [ "$SECONDS" -ge "$deadline" ]; then
+      command -v pkill >/dev/null 2>&1 && pkill -TERM -P "$pid" 2>/dev/null || true
+      kill -9 "$pid" 2>/dev/null || true
+      wait "$pid" 2>/dev/null || true
+      rm -f "$done_file"
+      return 124
+    fi
+    sleep 0.1
+  done
+  rc="$(cat "$done_file" 2>/dev/null || echo 1)"
+  wait "$pid" 2>/dev/null || true
+  rm -f "$done_file"
   return "$rc"
 }
 
