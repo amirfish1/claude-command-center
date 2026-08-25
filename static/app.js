@@ -18633,9 +18633,9 @@
     if (!sid || (c && (c.source === 'backlog' || c.source === 'github_pr' || c.source === 'pkood'))) return '';
     const obj = flowObjectForConversation(c);
     if (!obj) {
-      // CCC-467: dropped the per-row "+" add-to-object chip. Assigning an
-      // object now happens from the RHS status rail after selecting a
-      // session (see #statusRailAddObjectBtn), so unassigned rows stay clean.
+      // CCC-467/CCC-967: dropped the per-row "+" add-to-object chip (and
+      // later the RHS rail's "+ Object" button too) — unassigned rows stay
+      // clean with no add-to-object affordance here.
       return '';
     }
     const title = String(obj.title || '').trim() || 'Object';
@@ -36425,8 +36425,6 @@
         _statusRailActiveRow = row || null;
         const railRenameBtn = document.getElementById('statusRailTitleRenameBtn');
         if (railRenameBtn) railRenameBtn.style.display = (_statusRailActiveRow && _statusRailActiveRow.id) ? '' : 'none';
-        const railAddObjectBtn = document.getElementById('statusRailAddObjectBtn');
-        if (railAddObjectBtn) railAddObjectBtn.style.display = (_statusRailActiveRow && (_statusRailActiveRow.session_id || _statusRailActiveRow.id)) ? '' : 'none';
         const railActivityLogBtn = document.getElementById('statusRailActivityLogBtn');
         if (railActivityLogBtn) {
           const sid = _statusRailActiveRow && (_statusRailActiveRow.session_id || _statusRailActiveRow.id) || '';
@@ -36447,8 +36445,6 @@
         if (railRenameBtn) railRenameBtn.style.display = 'none';
         const railActivityLogBtn = document.getElementById('statusRailActivityLogBtn');
         if (railActivityLogBtn) { railActivityLogBtn.style.display = 'none'; railActivityLogBtn.onclick = null; }
-        const railAddObjectBtn = document.getElementById('statusRailAddObjectBtn');
-        if (railAddObjectBtn) railAddObjectBtn.style.display = 'none';
       }
     }
     // Conversation size badge — surfaces how big the JSONL is so the
@@ -62191,17 +62187,6 @@
   if ($statusRailTitleRenameBtn) $statusRailTitleRenameBtn.addEventListener('click', (ev) => {
     ev.stopPropagation();
     startStatusRailTitleRename();
-  });
-  // CCC-467: "+ Object" in the RHS opens the same object-assign picker the
-  // per-row "+" chip used to, but for the currently selected session.
-  const $statusRailAddObjectBtn = document.getElementById('statusRailAddObjectBtn');
-  if ($statusRailAddObjectBtn) $statusRailAddObjectBtn.addEventListener('click', (ev) => {
-    ev.stopPropagation();
-    const row = _statusRailActiveRow;
-    const sid = row && (row.session_id || row.id);
-    if (!sid) return;
-    const title = (typeof flowRowTitle === 'function' ? flowRowTitle(row) : '') || row.display_name || '';
-    _flowOpenObjectAssignPicker(sid, title);
   });
   if ($annotationStartBtn) $annotationStartBtn.addEventListener('click', annStart);
   if ($annotationScreenBtn) $annotationScreenBtn.addEventListener('click', annCaptureScreen);

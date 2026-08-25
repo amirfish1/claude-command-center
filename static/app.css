@@ -16490,29 +16490,6 @@ body.status-pos-right .conv-pane.has-status-rail > .status-rail {
   width: 12px;
   height: 12px;
 }
-/* CCC-467: "+ Object" affordance in the rail head — assign the selected
-   session to an object, replacing the per-row "+" chip. */
-.status-rail-add-object-btn {
-  flex: 0 0 auto;
-  display: inline-flex;
-  align-items: center;
-  height: 18px;
-  padding: 0 7px;
-  font-size: 11px;
-  font-weight: 600;
-  color: var(--purple, #bc8cff);
-  background: rgba(188,140,255,0.10);
-  border: 1px solid rgba(188,140,255,0.32);
-  border-radius: 4px;
-  cursor: pointer;
-  white-space: nowrap;
-}
-.status-rail-add-object-btn:hover,
-.status-rail-add-object-btn:focus-visible {
-  background: rgba(188,140,255,0.18);
-  color: var(--text);
-  outline: none;
-}
 .status-rail-activity-log-btn {
   flex: 0 0 auto;
   display: inline-flex;
