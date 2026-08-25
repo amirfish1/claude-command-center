@@ -24334,7 +24334,8 @@
       const $view = getConvViewForPane(_convReplayPaneId || activePaneId()) || $conversationsView;
       const isActivePane = (_convReplayPaneId || activePaneId()) === activePaneId();
       const hasEvents = $view && $view.querySelector('.event:not(.conv-sticky-header)');
-      btn.style.display = (isActivePane && hasEvents) ? 'inline-flex' : 'none';
+      const debugOn = typeof debugModeEnabled === 'function' && debugModeEnabled();
+      btn.style.display = (debugOn && isActivePane && hasEvents) ? 'inline-flex' : 'none';
     }
     (_convReplayPaneIds.length ? _convReplayPaneIds : [_convReplayPaneId || activePaneId()]).forEach(pid => _scrollConvReplayToBottom(pid));
     _convReplayPaneId = null;
@@ -51977,8 +51978,9 @@
     // the OTHER split pane can't toggle it based on the wrong pane's content.
     try {
       if ($convReplayBtn && !_convReplayActive && paneId === activePaneId()) {
+        const debugOn = typeof debugModeEnabled === 'function' && debugModeEnabled();
         const hasMeaningful = !!$view.querySelector('.event.user_text:not(.is-pinned-in-sticky), .event.assistant .assistant-text');
-        $convReplayBtn.style.display = hasMeaningful ? 'inline-flex' : 'none';
+        $convReplayBtn.style.display = (debugOn && hasMeaningful) ? 'inline-flex' : 'none';
       }
       // A replay in progress on THIS pane (or its synced partner pane) may
       // just have received new live-streamed content (SSE/poll) — sweep it
@@ -68588,6 +68590,7 @@
       'body.flow-popout #cccThroughputStrip{display:none;}' +
       'html:not(.ccc-debug-mode) #cccThroughputStrip{display:none;}' +
       'html:not(.ccc-debug-mode) #announceBtnConv{display:none!important;}' +
+      'html:not(.ccc-debug-mode) #convOverflowBtn{display:none!important;}' +
       /* Phones: the lane/pace text overflows the strip ("…vs yd yd" clipped
          against the yd-report link). Hide the redundant link (the whole
          strip already opens the dashboard on tap) and let the rest
