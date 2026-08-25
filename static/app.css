@@ -13769,7 +13769,8 @@
     height: auto !important;
     max-height: none;
     min-height: 0;
-    padding: 8px 12px 10px;
+    /* CCC-976: a touch more breathing room above the Queue tab's header row. */
+    padding: 14px 12px 10px;
     border-top: none;
     background: transparent;
   }

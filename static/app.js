@@ -40601,9 +40601,9 @@
       + ' data-log-queue="' + escapeAttr(key) + '"'
       + ' title="View this queue\'s activity log">Log</button>';
     const watchHtml = controls.configBtn
-      + '<span class="fq-status-proj">' + escapeHtml(key) + '</span>'
-      + (row ? ('<span class="fq-status-sep">·</span>'
-          + '<span class="fq-status-depth" title="' + escapeAttr(depth + ' open') + '">' + depth + '</span>'
+      // CCC-976: the queue name is already shown in the picker above this
+      // strip — dropped the redundant fq-status-proj label from this row.
+      + (row ? ('<span class="fq-status-depth" title="' + escapeAttr(depth + ' open') + '">' + depth + '</span>'
           + '<span class="fq-status-sep">·</span>'
           + '<span class="fq-status-age" title="' + escapeAttr('oldest ' + age) + '">' + escapeHtml(age) + '</span>') : '')
       + (workers.length ? '<span class="fq-status-live">LIVE</span>' : '')
