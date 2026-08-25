@@ -16533,6 +16533,11 @@ _PREVIEW_FLAGS = {
         "label": "Auto handover toggle",
         "desc": "Show the Auto handover ON/OFF pill in the status bar of Claude sessions.",
     },
+    "bottom_bar_cost": {
+        "default": False,
+        "label": "$ cost in bottom bar",
+        "desc": "Show the API list-price cost pill next to token usage in the input bar.",
+    },
     # "flow_v2": {
     #     "default": False,
     #     "label": "Flow v2 canvas",

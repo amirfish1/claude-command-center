@@ -46047,7 +46047,7 @@
     const cost = Number(u.cost_usd) || 0;
     const breakdown = u.cost_breakdown_usd || {};
     let costPill = '';
-    if (cost > 0) {
+    if (cost > 0 && ff('bottom_bar_cost')) {
       const fmt = (n) => n >= 1 ? '$' + n.toFixed(2) : '$' + n.toFixed(4);
       const costTip = 'API list-price equivalent for ' + (u.model || 'unknown model') + '\n'
         + '  Input:        ' + fmt(breakdown.input || 0) + '  (' + (u.total_input_tokens || 0).toLocaleString() + ' tok)\n'
