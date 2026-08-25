@@ -28,6 +28,7 @@
 #   WATCHTOWER_DIR                  explicit local dev checkout
 #   WATCHTOWER_INSTALL_DIR          CCC-managed clone (default ~/.ccc/watchtower)
 #   WATCHTOWER_REPO_URL             clone source
+#   WATCHTOWER_REF                  optional immutable commit/tag to check out
 #   WATCHTOWER_TARBALL_URL          git-less fallback source
 #   CCC_WATCHTOWER_FORCE=1          ignore the once-a-day rate limits
 #   CCC_VERSION                     caller's own __version__; a change from the
@@ -39,6 +40,7 @@
 #   CCC_SKIP_WATCHTOWER_DAEMON=1    install, but do not run `wt start`
 
 WATCHTOWER_REPO_URL="${WATCHTOWER_REPO_URL:-https://github.com/amirfish1/watchtower}"
+WATCHTOWER_REF="${WATCHTOWER_REF:-}"
 WATCHTOWER_INSTALL_DIR="${WATCHTOWER_INSTALL_DIR:-$HOME/.ccc/watchtower}"
 WATCHTOWER_TARBALL_URL="${WATCHTOWER_TARBALL_URL:-https://github.com/amirfish1/watchtower/archive/refs/heads/main.tar.gz}"
 WATCHTOWER_PYPI_NAME="watchtower-cli"
@@ -222,6 +224,10 @@ print(sysconfig.get_path("purelib") if sys.prefix != sys.base_prefix else site.g
 wt_clone_managed() {
   WT_CLONE_DIR=""
   if [ -d "$WATCHTOWER_INSTALL_DIR/.git" ]; then
+    if [ -n "$WATCHTOWER_REF" ] \
+      && ! wt_bounded 20 git -C "$WATCHTOWER_INSTALL_DIR" checkout --detach "$WATCHTOWER_REF"; then
+      return 1
+    fi
     WT_CLONE_DIR="$WATCHTOWER_INSTALL_DIR"
     return 0
   fi
@@ -234,7 +240,13 @@ wt_clone_managed() {
   fi
   wt_say "fetching WatchTower (CCC's queue engine) from $WATCHTOWER_REPO_URL"
   mkdir -p "$(dirname "$WATCHTOWER_INSTALL_DIR")" 2>/dev/null || return 1
-  if wt_bounded 20 git clone --depth 1 "$WATCHTOWER_REPO_URL" "$WATCHTOWER_INSTALL_DIR"; then
+  if [ -n "$WATCHTOWER_REF" ]; then
+    if wt_bounded 20 git clone "$WATCHTOWER_REPO_URL" "$WATCHTOWER_INSTALL_DIR" \
+      && wt_bounded 20 git -C "$WATCHTOWER_INSTALL_DIR" checkout --detach "$WATCHTOWER_REF"; then
+      WT_CLONE_DIR="$WATCHTOWER_INSTALL_DIR"
+      return 0
+    fi
+  elif wt_bounded 20 git clone --depth 1 "$WATCHTOWER_REPO_URL" "$WATCHTOWER_INSTALL_DIR"; then
     WT_CLONE_DIR="$WATCHTOWER_INSTALL_DIR"
     return 0
   fi
@@ -251,6 +263,10 @@ wt_refresh_managed_clone() {
     return 0
   fi
   if ! command -v git >/dev/null 2>&1; then
+    return 0
+  fi
+  if [ -n "$WATCHTOWER_REF" ]; then
+    wt_bounded 20 git -C "$WATCHTOWER_INSTALL_DIR" checkout --detach "$WATCHTOWER_REF" || true
     return 0
   fi
   if wt_bounded 20 git -C "$WATCHTOWER_INSTALL_DIR" pull --ff-only; then

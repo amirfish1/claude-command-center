@@ -27,6 +27,7 @@ RUN_SCRIPT = PROJECT_ROOT / "run.sh"
 INSTALL_SCRIPT = PROJECT_ROOT / "scripts" / "install.sh"
 README = PROJECT_ROOT / "README.md"
 CI_WORKFLOW = PROJECT_ROOT / ".github" / "workflows" / "ci.yml"
+CI_WATCHTOWER_REF = "221260bbc5d31ae57eeacde542154c1c9ad5f3c6"
 
 
 FAKE_PYTHON = r"""#!/usr/bin/env bash
@@ -362,6 +363,17 @@ class TestInstallChain(WatchtowerInstallHarness):
         self.assertIn("--depth 1", clones[0])
         self.assertIn(f"-e {self.home / '.ccc' / 'watchtower'}", self.pip_targets()[0])
 
+    def test_explicit_ref_is_checked_out_immutably(self):
+        self.run_script(env_extra={"WATCHTOWER_REF": CI_WATCHTOWER_REF})
+
+        calls = self.calls()
+        clone = next(call for call in calls if " clone " in f" {call} ")
+        self.assertNotIn("--depth 1", clone)
+        self.assertTrue(any(
+            "checkout --detach" in call and CI_WATCHTOWER_REF in call
+            for call in calls
+        ), calls)
+
     def test_source_tree_is_activated_when_pip_is_unavailable(self):
         """Minimal Python installs may have no pip, but WatchTower has no
         runtime dependencies. A .pth activation must make the cloned source
@@ -511,14 +523,28 @@ class TestWiring(unittest.TestCase):
     def test_ci_bootstraps_watchtower_before_importing_server(self):
         body = CI_WORKFLOW.read_text()
         command = (
+            f"WATCHTOWER_REF={CI_WATCHTOWER_REF} "
             "CCC_PYTHON=python CCC_SKIP_WATCHTOWER_DAEMON=1 "
             "CCC_WATCHTOWER_FORCE=1 bash scripts/install-watchtower.sh"
         )
-        self.assertEqual(
-            body.count(command),
-            3,
-            "unittest, smoke, and python39-smoke must bootstrap the same queue dependency as run.sh",
-        )
+        targets = {
+            "unittest": ("python -m pytest -q --tb=no tests/", "smoke"),
+            "smoke": ("python server.py > /tmp/server.log", "python39-smoke"),
+            "python39-smoke": (
+                "python -c 'import server; print(server.__version__)'",
+                "telemetry-worker",
+            ),
+        }
+        for job, (target, next_job) in targets.items():
+            start = body.index(f"  {job}:")
+            end = body.index(f"\n  {next_job}:", start)
+            block = body[start:end]
+            self.assertIn(command, block, f"{job} must pin and bootstrap WatchTower")
+            self.assertLess(
+                block.index(command),
+                block.index(target),
+                f"{job} must bootstrap before importing or starting server.py",
+            )
 
     def test_readme_no_longer_claims_installed_by_default(self):
         self.assertNotIn("installed by default as CCC's queue engine", README.read_text())
