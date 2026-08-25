@@ -2733,6 +2733,75 @@ _DATA_URL_IMAGE_RE = re.compile(
     r"data:image/[\w.+-]+;base64,[A-Za-z0-9+/=]+",
     re.IGNORECASE,
 )
+_HEIC_BRANDS = (b"heic", b"heix", b"heim", b"heis", b"hevc", b"hevx", b"hevm", b"hevs", b"mif1", b"msf1")
+
+
+def _sniff_image_format(raw: bytes) -> str | None:
+    """Real format from magic bytes — the browser's declared Content-Type
+    can't be trusted (see _normalize_pasted_image)."""
+    if raw.startswith(b"\x89PNG\r\n\x1a\n"):
+        return "png"
+    if raw.startswith(b"\xff\xd8\xff"):
+        return "jpg"
+    if raw.startswith((b"GIF87a", b"GIF89a")):
+        return "gif"
+    if raw[:4] == b"RIFF" and raw[8:12] == b"WEBP":
+        return "webp"
+    if raw[4:8] == b"ftyp" and raw[8:12] in _HEIC_BRANDS:
+        return "heic"
+    return None
+
+
+def _sips_convert_to_png(raw: bytes) -> bytes | None:
+    """Transcode via macOS `sips` (no extra deps). Returns None on any
+    failure so the caller can fall back to an honest extension."""
+    src_path = dst_path = None
+    try:
+        with tempfile.NamedTemporaryFile(suffix=".heic", delete=False) as src:
+            src.write(raw)
+            src_path = src.name
+        dst_path = src_path + ".png"
+        subprocess.run(
+            ["sips", "-s", "format", "png", src_path, "--out", dst_path],
+            check=True, capture_output=True, timeout=15,
+        )
+        with open(dst_path, "rb") as f:
+            return f.read()
+    except Exception:
+        return None
+    finally:
+        for p in (src_path, dst_path):
+            if p:
+                try:
+                    os.unlink(p)
+                except OSError:
+                    pass
+
+
+def _normalize_pasted_image(raw: bytes, ctype: str) -> tuple[bytes, str]:
+    """Pick the extension for a pasted clipboard image from its actual bytes,
+    not the browser's claimed Content-Type. On macOS, pasting an image whose
+    clipboard source is HEIC (Preview/Photos) can arrive as a blob the
+    browser labels image/png while the bytes are still raw HEIC — the file
+    then got saved as paste-*.png, and downstream viewers (e.g. Codex's
+    image viewer) that trust the extension fail to decode it (OPS-759).
+    HEIC is transcoded to a real PNG via `sips` so the saved extension is
+    never a lie; any other sniffed format also overrides a mismatched
+    Content-Type, and unsniffable bytes fall back to the declared type.
+    """
+    sniffed = _sniff_image_format(raw)
+    if sniffed == "heic":
+        converted = _sips_convert_to_png(raw)
+        if converted is not None:
+            return converted, "png"
+        return raw, "heic"
+    if sniffed:
+        return raw, sniffed
+    ext_map = {
+        "image/png": "png", "image/jpeg": "jpg", "image/jpg": "jpg",
+        "image/gif": "gif", "image/webp": "webp", "image/svg+xml": "svg",
+    }
+    return raw, ext_map.get(ctype.split(";")[0].strip().lower(), "png")
 
 
 def _queue_ref_is_github_backed(ref):
@@ -69166,12 +69235,7 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                 self.send_json({"ok": False, "error": "bad length"}, 400)
             else:
                 raw = self.rfile.read(length)
-                # Determine extension from content type
-                ext_map = {
-                    "image/png": "png", "image/jpeg": "jpg", "image/jpg": "jpg",
-                    "image/gif": "gif", "image/webp": "webp", "image/svg+xml": "svg",
-                }
-                ext = ext_map.get(ctype.split(";")[0].strip().lower(), "png")
+                raw, ext = _normalize_pasted_image(raw, ctype)
                 img_dir = str(COMMAND_CENTER_PASTED_IMAGES_DIR)
                 os.makedirs(img_dir, exist_ok=True)
                 fname = f"paste-{int(time.time()*1000)}.{ext}"
