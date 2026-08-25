@@ -1,0 +1,1 @@
+Clean installs now start successfully on minimal Python systems that do not bundle `pip`: after cloning the stdlib-only WatchTower queue engine, CCC activates that source directly for its runtime interpreter instead of crashing on `import watchtower.queue`.

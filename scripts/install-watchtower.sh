@@ -195,6 +195,25 @@ wt_pip_install() {
   wt_bounded 20 "$WT_PYTHON" -m pip install --user --break-system-packages --quiet "$@"
 }
 
+# WatchTower is stdlib-only at runtime. Minimal Linux Python images often ship
+# without pip, so an editable install can fail even though the cloned source is
+# already sufficient. Activate that source for the exact interpreter CCC uses
+# by dropping one path entry into its writable site directory. A fresh Python
+# process reads the .pth file during startup; wt_importable verifies the result.
+wt_activate_source_tree() {
+  local source_dir="$1" site_dir pth_file
+  [ -f "$source_dir/watchtower/__init__.py" ] || return 1
+  site_dir="$("$WT_PYTHON" -c '
+import site, sys, sysconfig
+print(sysconfig.get_path("purelib") if sys.prefix != sys.base_prefix else site.getusersitepackages())
+' 2>/dev/null || true)"
+  [ -n "$site_dir" ] || return 1
+  mkdir -p "$site_dir" 2>/dev/null || return 1
+  pth_file="$site_dir/ccc-watchtower.pth"
+  printf '%s\n' "$source_dir" > "$pth_file" 2>/dev/null || return 1
+  wt_importable
+}
+
 # Clone the public repo into the CCC-managed directory. Sets WT_CLONE_DIR.
 wt_clone_managed() {
   WT_CLONE_DIR=""
@@ -393,6 +412,10 @@ ccc_install_watchtower() {
   if [ -n "$source_dir" ]; then
     wt_say "installing WatchTower from $source_dir"
     if wt_pip_install -e "$source_dir" && wt_finish "$source_dir"; then
+      return 0
+    fi
+    wt_say "editable install from $source_dir failed; activating the stdlib-only source directly"
+    if wt_activate_source_tree "$source_dir" && wt_finish "$source_dir (source path)"; then
       return 0
     fi
     wt_say "editable install from $source_dir failed; falling back to a source tarball"

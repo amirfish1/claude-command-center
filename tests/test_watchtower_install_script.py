@@ -42,18 +42,22 @@ if [ "$1" = "-c" ]; then
       exit 0
       ;;
     *"import watchtower"*)
-      if [ -f "$WT_FAKE_INSTALLED" ]; then exit 0; fi
+      if [ -f "$WT_FAKE_INSTALLED" ] || [ -f "$WT_FAKE_SITE_PACKAGES/ccc-watchtower.pth" ]; then exit 0; fi
       exit 1
       ;;
     *"version_info"*)
       exit "${WT_FAKE_VERSION_RC:-0}"
       ;;
-    *"sys.prefix"*)
-      printf '%s\n' "${WT_FAKE_IN_VENV:-0}"
-      exit 0
-      ;;
     *"platform.python_version"*)
       printf '%s\n' "${WT_FAKE_VERSION:-3.9.6}"
+      exit 0
+      ;;
+    *"getusersitepackages"*)
+      printf '%s\n' "$WT_FAKE_SITE_PACKAGES"
+      exit 0
+      ;;
+    *"sys.prefix"*)
+      printf '%s\n' "${WT_FAKE_IN_VENV:-0}"
       exit 0
       ;;
     *"sysconfig"*)
@@ -97,7 +101,9 @@ case "$*" in
     if [ "${WT_FAKE_GIT_CLONE_RC:-0}" != "0" ]; then exit 1; fi
     dest="${!#}"
     mkdir -p "$dest/.git"
+    mkdir -p "$dest/watchtower"
     : > "$dest/pyproject.toml"
+    : > "$dest/watchtower/__init__.py"
     exit 0
     ;;
 esac
@@ -122,6 +128,7 @@ class WatchtowerInstallHarness(unittest.TestCase):
         self.bin.mkdir()
         self.log = self.root / "calls.log"
         self.installed_marker = self.root / "installed"
+        self.site_packages = self.root / "site-packages"
         for name, body in (
             ("python3", FAKE_PYTHON),
             ("git", FAKE_GIT),
@@ -136,6 +143,8 @@ class WatchtowerInstallHarness(unittest.TestCase):
         path = Path(path)
         path.mkdir(parents=True, exist_ok=True)
         (path / "pyproject.toml").write_text("[project]\nname = 'watchtower'\n")
+        (path / "watchtower").mkdir(exist_ok=True)
+        (path / "watchtower" / "__init__.py").write_text("")
         if git:
             (path / ".git").mkdir(exist_ok=True)
         return path
@@ -151,6 +160,7 @@ class WatchtowerInstallHarness(unittest.TestCase):
             "HOME": str(self.home),
             "WT_FAKE_LOG": str(self.log),
             "WT_FAKE_INSTALLED": str(self.installed_marker),
+            "WT_FAKE_SITE_PACKAGES": str(self.site_packages),
             "WT_FAKE_ROOT": installed_root or "",
             "CCC_PYTHON": "python3",
         }
@@ -334,6 +344,27 @@ class TestInstallChain(WatchtowerInstallHarness):
         self.assertEqual(len(clones), 1, clones)
         self.assertIn("--depth 1", clones[0])
         self.assertIn(f"-e {self.home / '.ccc' / 'watchtower'}", self.pip_targets()[0])
+
+    def test_source_tree_is_activated_when_pip_is_unavailable(self):
+        """Minimal Python installs may have no pip, but WatchTower has no
+        runtime dependencies. A .pth activation must make the cloned source
+        importable before CCC starts."""
+        dev = self.make_checkout(self.root / "dev-watchtower")
+
+        result = self.run_script(env_extra={
+            "WATCHTOWER_DIR": str(dev),
+            "WT_FAKE_PIP_FAIL": "dev-watchtower",
+        })
+
+        pth = self.site_packages / "ccc-watchtower.pth"
+        self.assertTrue(
+            pth.is_file(),
+            "source fallback must create a .pth file\n"
+            f"stdout={result.stdout}\ncalls={self.calls()}",
+        )
+        self.assertEqual(pth.read_text().strip(), str(dev))
+        self.assertIn("watchtower.queue is now available", result.stdout)
+        self.assertFalse(any("main.tar.gz" in p for p in self.pip_targets()))
 
     def test_pypi_is_the_last_resort_after_clone_and_tarball(self):
         result = self.run_script(
