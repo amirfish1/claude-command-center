@@ -3276,6 +3276,11 @@
   const _continuationFoldedCounts = new Map();
   // headSid -> ancestor session ids (oldest first at render time).
   const _continuationFoldedAncestors = new Map();
+  const CONTINUATION_FOLDING_STORAGE_KEY = 'ccc-fold-continuation-chains';
+  function getContinuationFoldingPref() {
+    try { return localStorage.getItem(CONTINUATION_FOLDING_STORAGE_KEY) === 'on'; }
+    catch (_) { return false; }
+  }
   function continuationParentId(c) {
     if (!c) return '';
     const serverField = String(c.continued_from_session_id || '').trim();
@@ -3312,6 +3317,7 @@
   // reachable via that chip / scrolling up in the merged view.
   function _foldContinuationAncestorRows(rows, opts) {
     const list = Array.isArray(rows) ? rows : [];
+    if (!getContinuationFoldingPref()) return list.slice();
     const recordCounts = !opts || opts.recordCounts !== false;
     const forward = new Map();
     const note = (r) => {
@@ -66139,6 +66145,12 @@
       $queueRhsListToggle.classList.toggle('is-on', on);
       $queueRhsListToggle.setAttribute('aria-checked', String(on));
     }
+    const $continuationFoldingToggle = document.getElementById('settingsContinuationFoldingToggle');
+    if ($continuationFoldingToggle) {
+      const on = getContinuationFoldingPref();
+      $continuationFoldingToggle.classList.toggle('is-on', on);
+      $continuationFoldingToggle.setAttribute('aria-checked', String(on));
+    }
   }
   // Live-update when the user has 'system' selected and OS theme flips.
   _systemThemeMQ.addEventListener && _systemThemeMQ.addEventListener('change', () => {
@@ -66579,8 +66591,11 @@
     try {
       localStorage.removeItem('ccc.spawnEngine');
       localStorage.removeItem('ccc-spawn-cwd');
+      localStorage.removeItem(CONTINUATION_FOLDING_STORAGE_KEY);
     } catch (_) {}
     refreshSpawnEngineValue();
+    refreshAppearanceChecks();
+    if (typeof conversationsData !== 'undefined') renderSidebar(conversationsData);
   }
 
   // ── Preview feature flags ───────────────────────────────────────────
@@ -66801,6 +66816,18 @@
         applyDebugMode(next);
         refreshAppearanceChecks();
         showSettingsSavedPulse(debugModeToggle.closest('.settings-row'));
+        return;
+      }
+      const continuationFoldingToggle = e.target.closest('[data-continuation-folding-toggle]');
+      if (continuationFoldingToggle) {
+        const next = !getContinuationFoldingPref();
+        try {
+          if (next) localStorage.setItem(CONTINUATION_FOLDING_STORAGE_KEY, 'on');
+          else localStorage.removeItem(CONTINUATION_FOLDING_STORAGE_KEY);
+        } catch (_) {}
+        refreshAppearanceChecks();
+        showSettingsSavedPulse(continuationFoldingToggle.closest('.settings-row'));
+        if (typeof conversationsData !== 'undefined') renderSidebar(conversationsData);
         return;
       }
       const ffToggle = e.target.closest('[data-ff-toggle]');

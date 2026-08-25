@@ -1,0 +1,1 @@
+Settings → Sessions & Spawning now lets you opt into hiding earlier sessions in a continuation chain across Active, Coding, Workers, and Archived. The setting is off by default, so every session remains visible unless you choose the compact newest-row view.
