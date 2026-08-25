@@ -14570,8 +14570,8 @@
   function _currentSidebarTabForSwipe() {
     try {
       const t = localStorage.getItem('ccc-sidebar-tab');
-      return (t === 'issues' || t === 'queues' || t === 'inprogress' || t === 'archived' || t === 'coding' || t === 'workers') ? t : 'inprogress';
-    } catch (_) { return 'inprogress'; }
+      return (t === 'issues' || t === 'queues' || t === 'inprogress' || t === 'archived' || t === 'coding' || t === 'workers') ? t : 'coding';
+    } catch (_) { return 'coding'; }
   }
   function _swipeActionButtonForRow(row) {
     const tab = _currentSidebarTabForSwipe();
@@ -28599,8 +28599,8 @@
     const _sidebarTab = (() => {
       try {
         const t = localStorage.getItem('ccc-sidebar-tab');
-        return (t === 'issues' || t === 'queues' || t === 'inprogress' || t === 'archived' || t === 'coding' || t === 'workers') ? t : 'inprogress';
-      } catch (_) { return 'inprogress'; }
+        return (t === 'issues' || t === 'queues' || t === 'inprogress' || t === 'archived' || t === 'coding' || t === 'workers') ? t : 'coding';
+      } catch (_) { return 'coding'; }
     })();
     const _activeDraftInputBefore = document.activeElement;
     const _focusDraftIdBefore = (_activeDraftInputBefore && _activeDraftInputBefore.classList.contains('conv-draft-input'))
