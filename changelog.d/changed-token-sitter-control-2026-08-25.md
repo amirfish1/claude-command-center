@@ -1,0 +1,1 @@
+The token-sitter handover control now works for every engine that receives the synced skill and cycles through four modes from the session rail. Rapid clicks that settle back on the original state no longer create no-op commits.
