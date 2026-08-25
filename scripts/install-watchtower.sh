@@ -12,7 +12,8 @@
 # WatchTower is CCC's queue engine, not an optional extra: without it the
 # dashboard silently loses worker dispatch (filed tickets never spawn
 # anything), plan-to-fleet import, WT-tracked drain and delivery receipts.
-# Nothing here is ever fatal — CCC still boots on its built-in fallback.
+# Default installs remain best-effort. A caller that supplies WATCHTOWER_REF
+# explicitly requests a reproducible dependency and fails closed on mismatch.
 #
 # Usage:
 #   ./scripts/install-watchtower.sh        # run the chain
@@ -28,7 +29,7 @@
 #   WATCHTOWER_DIR                  explicit local dev checkout
 #   WATCHTOWER_INSTALL_DIR          CCC-managed clone (default ~/.ccc/watchtower)
 #   WATCHTOWER_REPO_URL             clone source
-#   WATCHTOWER_REF                  optional immutable commit/tag to check out
+#   WATCHTOWER_REF                  optional full 40-char commit SHA to check out
 #   WATCHTOWER_TARBALL_URL          git-less fallback source
 #   CCC_WATCHTOWER_FORCE=1          ignore the once-a-day rate limits
 #   CCC_VERSION                     caller's own __version__; a change from the
