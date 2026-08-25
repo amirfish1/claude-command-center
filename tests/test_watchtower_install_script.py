@@ -100,6 +100,10 @@ FAKE_GIT = r"""#!/usr/bin/env bash
 log() { printf '%s\n' "$*" >> "$WT_FAKE_LOG"; }
 log "git $*"
 case "$*" in
+  *"rev-parse HEAD"*)
+    printf '%s\n' "${WT_FAKE_GIT_HEAD:-${WATCHTOWER_REF:-}}"
+    exit 0
+    ;;
   *"rev-list"*)
     printf '%s\n' "${WT_FAKE_BEHIND:-0}"
     exit 0
@@ -166,7 +170,7 @@ class WatchtowerInstallHarness(unittest.TestCase):
         self.installed_marker.write_text("")
         return str(root)
 
-    def run_script(self, env_extra=None, installed_root=None):
+    def run_script(self, env_extra=None, installed_root=None, expected_returncode=0):
         env = {
             "PATH": f"{self.bin}:{os.environ.get('PATH', '')}",
             "HOME": str(self.home),
@@ -186,8 +190,8 @@ class WatchtowerInstallHarness(unittest.TestCase):
         )
         self.assertEqual(
             result.returncode,
-            0,
-            "the installer must never be fatal — CCC has to start regardless\n"
+            expected_returncode,
+            "unexpected installer exit status\n"
             f"STDOUT:\n{result.stdout}\nSTDERR:\n{result.stderr}",
         )
         return result
@@ -237,6 +241,21 @@ class TestStatics(unittest.TestCase):
 
 
 class TestAlreadyInstalled(WatchtowerInstallHarness):
+    def test_pinned_mode_rejects_importable_package_at_wrong_commit(self):
+        managed = self.make_checkout(self.home / ".ccc" / "watchtower")
+
+        result = self.run_script(
+            installed_root=self.set_installed(managed),
+            env_extra={
+                "WATCHTOWER_REF": CI_WATCHTOWER_REF,
+                "WT_FAKE_GIT_HEAD": "0" * 40,
+            },
+            expected_returncode=1,
+        )
+
+        self.assertIn("does not match pinned commit", result.stdout)
+        self.assertEqual(self.pip_targets(), [])
+
     def test_partial_package_without_queue_is_not_treated_as_installed(self):
         result = self.run_script(env_extra={"WT_FAKE_PARTIAL_PACKAGE": "1"})
 
@@ -373,6 +392,19 @@ class TestInstallChain(WatchtowerInstallHarness):
             "checkout --detach" in call and CI_WATCHTOWER_REF in call
             for call in calls
         ), calls)
+
+    def test_pinned_clone_failure_never_uses_mutable_fallbacks(self):
+        result = self.run_script(
+            env_extra={
+                "WATCHTOWER_REF": CI_WATCHTOWER_REF,
+                "WT_FAKE_GIT_CLONE_RC": "1",
+            },
+            expected_returncode=1,
+        )
+
+        self.assertIn("could not install pinned WatchTower commit", result.stdout)
+        self.assertFalse(any("main.tar.gz" in p for p in self.pip_targets()))
+        self.assertFalse(any("watchtower-cli" in p for p in self.pip_targets()))
 
     def test_source_tree_is_activated_when_pip_is_unavailable(self):
         """Minimal Python installs may have no pip, but WatchTower has no

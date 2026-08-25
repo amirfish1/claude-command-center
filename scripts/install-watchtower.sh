@@ -64,6 +64,17 @@ wt_importable() {
   "$WT_PYTHON" -c 'import watchtower.queue' >/dev/null 2>&1
 }
 
+wt_ref_valid() {
+  [[ "$WATCHTOWER_REF" =~ ^[0-9a-fA-F]{40}$ ]]
+}
+
+wt_checkout_matches_ref() {
+  local root="$1" head
+  [ -d "$root/.git" ] || return 1
+  head="$(git -C "$root" rev-parse HEAD 2>/dev/null || true)"
+  [ -n "$head" ] && [ "$(printf '%s' "$head" | tr 'A-F' 'a-f')" = "$(printf '%s' "$WATCHTOWER_REF" | tr 'A-F' 'a-f')" ]
+}
+
 # WatchTower's current source is stdlib-only and remains compatible with CCC's
 # Python 3.9 floor. Its package metadata can be stricter, which is why the
 # source-tree activation fallback exists below when pip declines the install.
@@ -228,6 +239,9 @@ wt_clone_managed() {
       && ! wt_bounded 20 git -C "$WATCHTOWER_INSTALL_DIR" checkout --detach "$WATCHTOWER_REF"; then
       return 1
     fi
+    if [ -n "$WATCHTOWER_REF" ] && ! wt_checkout_matches_ref "$WATCHTOWER_INSTALL_DIR"; then
+      return 1
+    fi
     WT_CLONE_DIR="$WATCHTOWER_INSTALL_DIR"
     return 0
   fi
@@ -242,7 +256,8 @@ wt_clone_managed() {
   mkdir -p "$(dirname "$WATCHTOWER_INSTALL_DIR")" 2>/dev/null || return 1
   if [ -n "$WATCHTOWER_REF" ]; then
     if wt_bounded 20 git clone "$WATCHTOWER_REPO_URL" "$WATCHTOWER_INSTALL_DIR" \
-      && wt_bounded 20 git -C "$WATCHTOWER_INSTALL_DIR" checkout --detach "$WATCHTOWER_REF"; then
+      && wt_bounded 20 git -C "$WATCHTOWER_INSTALL_DIR" checkout --detach "$WATCHTOWER_REF" \
+      && wt_checkout_matches_ref "$WATCHTOWER_INSTALL_DIR"; then
       WT_CLONE_DIR="$WATCHTOWER_INSTALL_DIR"
       return 0
     fi
@@ -370,18 +385,32 @@ ccc_install_watchtower() {
     1|true|True|yes|Yes) return 0 ;;
   esac
 
+  if [ -n "$WATCHTOWER_REF" ] && ! wt_ref_valid; then
+    wt_say "ERROR: WATCHTOWER_REF must be a full 40-character commit SHA."
+    return 1
+  fi
+
   # 1. Already importable — the overwhelmingly common case, and the reason
   #    this is cheap enough to run on every launch. Maintenance (refresh +
   #    daemon) is rate-limited to once a day: CCC restarts often, and a git
   #    pull per restart is a network call per restart.
   if wt_importable; then
+    local root
+    root="$(wt_install_root || true)"
+    if [ -n "$WATCHTOWER_REF" ]; then
+      if ! wt_checkout_matches_ref "$root"; then
+        wt_say "ERROR: importable WatchTower at $root does not match pinned commit $WATCHTOWER_REF."
+        return 1
+      fi
+      wt_ensure_daemon
+      wt_ensure_skills
+      return 0
+    fi
     if wt_marker_fresh "$WT_CHECK_MARKER" && ! wt_ccc_version_changed; then
       return 0
     fi
     wt_touch_marker "$WT_CHECK_MARKER"
     wt_write_version_marker
-    local root
-    root="$(wt_install_root || true)"
     if wt_is_dev_checkout "$root"; then
       wt_note_dev_checkout_behind "$root"
     else
@@ -421,13 +450,20 @@ ccc_install_watchtower() {
   # 3. A local dev checkout wins: developers keep working against their own
   #    tree, and an editable install means their edits are what CCC runs.
   local source_dir
-  source_dir="$(wt_first_dev_checkout || true)"
+  source_dir=""
+  if [ -z "$WATCHTOWER_REF" ]; then
+    source_dir="$(wt_first_dev_checkout || true)"
+  fi
   if [ -z "$source_dir" ]; then
     # 4. Otherwise a shallow clone we own, also installed editable so that a
     #    later `git pull --ff-only` is the whole upgrade.
     if wt_clone_managed; then
       source_dir="$WT_CLONE_DIR"
     fi
+  fi
+  if [ -n "$WATCHTOWER_REF" ] && [ -z "$source_dir" ]; then
+    wt_say "ERROR: could not install pinned WatchTower commit $WATCHTOWER_REF."
+    return 1
   fi
   if [ -n "$source_dir" ]; then
     wt_say "installing WatchTower from $source_dir"
@@ -437,6 +473,10 @@ ccc_install_watchtower() {
     wt_say "editable install from $source_dir failed; activating the stdlib-only source directly"
     if wt_activate_source_tree "$source_dir" && wt_finish "$source_dir (source path)"; then
       return 0
+    fi
+    if [ -n "$WATCHTOWER_REF" ]; then
+      wt_say "ERROR: could not activate pinned WatchTower commit $WATCHTOWER_REF."
+      return 1
     fi
     wt_say "editable install from $source_dir failed; falling back to a source tarball"
   fi
