@@ -17030,6 +17030,18 @@ body.status-pos-right.status-rail-collapsed .conv-pane.has-status-rail > .conv-i
   cursor: pointer;
 }
 .rail-actions .font-size-controls { display: flex; }
+/* CCC-970: the "Session <id> 📋" pill's full label made it too wide to
+   share a row with the launch/status/localhost buttons above it, so it
+   always wrapped onto its own line alone. Drop the "SESSION" text and
+   tighten the padding/gap here only — the pane titlebar copy of this same
+   markup (setCopyableSessionId) keeps its label. */
+.rail-actions #convSessionId {
+  padding: 4px 6px;
+  gap: 4px;
+}
+.rail-actions #convSessionId .sid-label {
+  display: none;
+}
 
 /* Top-left alerts strip — sits in the sidebar header next to the title.
    Hosts always-visible app-level signals (Update pill primarily).
