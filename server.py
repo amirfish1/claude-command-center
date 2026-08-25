@@ -16003,6 +16003,17 @@ def _emit_interrupt_event(sid, uuid_str, *, source, agent_name="", event_ts=None
         return
     if not sid or not uuid_str:
         return
+    # Internal prewarm reservations get SIGTERM'd on expiry/eviction while a
+    # turn is technically in flight (they're idle, but Claude still writes
+    # "[Request interrupted by user]" to their own transcript). That is
+    # routine prewarm-pool churn, not a user-facing stuck session — surfacing
+    # it as a "Request interrupt … session is now stuck" toast just confuses
+    # whoever's looking at the dashboard when a background repo warm-up
+    # cycles. The placeholder name is always "prewarm-<cwd-basename>" (see
+    # static/app.js's prewarm request) or agent_name "ccc-prewarm" pre-claim.
+    _name_check = str(agent_name or "").strip().lower()
+    if _name_check == "ccc-prewarm" or _name_check.startswith("prewarm-"):
+        return
     dedup_key = f"{sid}:{uuid_str}"
     with _SEEN_INTERRUPTS_LOCK:
         if dedup_key in _SEEN_INTERRUPTS:
@@ -71409,9 +71420,24 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                                                         sse_event_ts = sse_dt.timestamp()
                                                     except (ValueError, ImportError):
                                                         pass
+                                                # Look up the spawn registry entry for its name so
+                                                # _emit_interrupt_event can filter out prewarm
+                                                # placeholders ("prewarm-<cwd-basename>") the same
+                                                # way the transcript-scan path does — this is the SSE
+                                                # sibling of that detection and hits the same
+                                                # "prewarm expiry looks like a stuck user session"
+                                                # false alarm otherwise.
+                                                _sse_registry_entry = _spawn_registry_entries_by_session(
+                                                    engine="claude"
+                                                ).get(str(session_id or "")) or {}
                                                 _emit_interrupt_event(
                                                     session_id, ev_uuid,
                                                     source="sse-stream",
+                                                    agent_name=str(
+                                                        _sse_registry_entry.get("agent_name")
+                                                        or _sse_registry_entry.get("name")
+                                                        or ""
+                                                    ),
                                                     event_ts=sse_event_ts,
                                                 )
                                             timeline_dirty = _spawn_timeline_mark(
