@@ -9160,7 +9160,13 @@ def _extract_user_prompt_text(ev):
     msg = _safe_parse_message(ev.get("message", {}))
     text = _extract_text_from_content(msg.get("content", ""))
     if _is_transcript_control_text(text):
-        return ""
+        # A slash command like "/goal ..." is still control-prefixed
+        # bookkeeping (<command-name>...), but it carries a real,
+        # human-typed ask in <command-args>. Surface that instead of
+        # blanking first_message — otherwise a session whose only prompt
+        # was a slash command reads as [EMPTY] forever even with a full
+        # transcript (CCC-979).
+        return _extract_command_invocation_text(text)
     text = _strip_host_system_instruction(text)
     return _strip_ccc_session_state_instruction(text).strip()
 
