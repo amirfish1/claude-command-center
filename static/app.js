@@ -17716,27 +17716,14 @@
   }
 
   function renderNewSessionObjectContext() {
+    // CCC-950: the OBJECT picker in the new-session composer is hidden —
+    // this stays a no-op rather than a full removal, since
+    // getNewSessionSelectedObject()/ensureNewSessionDefaultObject() etc. are
+    // still used by the post-spawn assignment path.
     const wrap = document.getElementById('newSessionObjectContext');
     if (!wrap) return;
-    if (currentConversation !== '__new__') {
-      wrap.innerHTML = '';
-      wrap.style.display = 'none';
-      return;
-    }
-    wrap.style.display = '';
-    ensureNewSessionDefaultObject();
-    if (!wrap.querySelector('#newSessionObjectPicker')) {
-      wrap.innerHTML = '<span class="nso-label">Object</span>'
-        + '<span class="nso-combo" data-role="new-session-object-combo">'
-        + '<input type="text" id="newSessionObjectPicker" class="nso-picker"'
-        + ' autocomplete="off" spellcheck="false" aria-label="Object for new session">'
-        + '<button type="button" id="newSessionObjectMenuBtn" class="nso-menu-btn"'
-        + ' title="Choose object" aria-label="Choose object" aria-haspopup="listbox" aria-expanded="false">&#9662;</button>'
-        + '<div id="newSessionObjectMenu" class="nso-menu" role="listbox"></div>'
-        + '</span>';
-      wireNewSessionObjectPicker();
-    }
-    updateNewSessionObjectPickerValue();
+    wrap.innerHTML = '';
+    wrap.style.display = 'none';
   }
 
   function loadPendingNewSessionObjectAssignments() {
