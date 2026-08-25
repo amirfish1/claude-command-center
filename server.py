@@ -5663,8 +5663,32 @@ def _compute_repo_usage_signals(repo_paths):
             "score": 0.0,
         }
 
-    if not repo_paths or not PROJECTS_ROOT.is_dir():
+    def _finalize():
+        # Session sets are an internal counting aid only. Every return path,
+        # including a brand-new machine with no projects directory, must expose
+        # the documented JSON-safe integer shape.
+        for path in repo_paths:
+            repo = signals[path]
+            for window in ("d7", "d30", "all"):
+                repo["signals"][window]["sessions"] = len(
+                    repo["signals"][window]["sessions"]
+                )
+            s = repo["signals"]
+            repo["score"] = (
+                s["d7"]["sessions"] * 8.0
+                + s["d7"]["turns"] * 2.0
+                + s["d7"]["tokens"] * 0.002
+                + s["d30"]["sessions"] * 4.0
+                + s["d30"]["turns"] * 1.0
+                + s["d30"]["tokens"] * 0.001
+            )
+        _REPO_SIGNALS_CACHE["paths"] = key
+        _REPO_SIGNALS_CACHE["data"] = signals
+        _REPO_SIGNALS_CACHE["ts"] = now
         return signals
+
+    if not repo_paths or not PROJECTS_ROOT.is_dir():
+        return _finalize()
 
     # Map project dirs back to repo paths.
     dir_to_repo = {}
@@ -5726,25 +5750,7 @@ def _compute_repo_usage_signals(repo_paths):
                             if session_id:
                                 repo["signals"]["d7"]["sessions"].add(session_id)
 
-    # Convert session sets to counts and compute composite score.
-    for p in repo_paths:
-        repo = signals[p]
-        for window in ("d7", "d30", "all"):
-            repo["signals"][window]["sessions"] = len(repo["signals"][window]["sessions"])
-        s = repo["signals"]
-        repo["score"] = (
-            s["d7"]["sessions"] * 8.0
-            + s["d7"]["turns"] * 2.0
-            + s["d7"]["tokens"] * 0.002
-            + s["d30"]["sessions"] * 4.0
-            + s["d30"]["turns"] * 1.0
-            + s["d30"]["tokens"] * 0.001
-        )
-
-    _REPO_SIGNALS_CACHE["paths"] = key
-    _REPO_SIGNALS_CACHE["data"] = signals
-    _REPO_SIGNALS_CACHE["ts"] = now
-    return signals
+    return _finalize()
 
 
 def _git_toplevel_for_existing_dir(path):
