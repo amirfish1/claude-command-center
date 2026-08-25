@@ -46112,9 +46112,13 @@
     }
     // Model pill renders LAST in the wp-usage cluster — rightmost slot,
     // matching the Claude Desktop convention users expect.
+    // "calc" is internal jargon (this session's own estimate, as opposed to
+    // an /ctx probe) — meaningful in the tooltip/sidebar title, not worth a
+    // word in the compact pill itself (CCC-969).
+    const sourceLabelPill = sourceLabel === 'calc' ? '' : sourceLabel + ' ';
     uSlot.innerHTML = qualityPill + '<span class="' + cls + '" title="' + escapeHtml(title) + '">'
       + _contextRingSvg(calcPct)
-      + sourceLabel + ' ' + _formatTokens(displayTokens) + ' / ' + _formatTokens(limit)
+      + sourceLabelPill + _formatTokens(displayTokens) + ' / ' + _formatTokens(limit)
       + ' <span class="wp-usage-pct">(' + calcPct + '%)</span>'
       + slashContextText
       + '</span>' + peakNote + costPill + antigravityTotalsPill + modelPill + handoverPill;
@@ -68577,6 +68581,7 @@
       'html:not(.ccc-debug-mode) .status-rail-conn-proc{display:none!important;}' +
       'html:not(.ccc-debug-mode) #frameHealth{display:none!important;}' +
       'html:not(.ccc-debug-mode) #convOverflowBtn{display:none!important;}' +
+      'html:not(.ccc-debug-mode) #deployPill{display:none!important;}' +
       /* Phones: the lane/pace text overflows the strip ("…vs yd yd" clipped
          against the yd-report link). Hide the redundant link (the whole
          strip already opens the dashboard on tap) and let the rest
