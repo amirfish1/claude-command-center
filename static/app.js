@@ -57490,6 +57490,11 @@
         } else if (fallbackOpt) {
           $convInputModelSelect.value = fallbackOpt.id;
         }
+        // The select is width-capped on narrow viewports (app.css ~8403) so
+        // long model names clip; a title tooltip surfaces the full name on
+        // hover instead of leaving it unreadable (CCC-977).
+        const _selOpt = $convInputModelSelect.options[$convInputModelSelect.selectedIndex];
+        $convInputModelSelect.title = _selOpt ? (_selOpt.textContent || '') : '';
       }
     }
     // Show a pre-spawn context-window badge in the [data-usage] slot so the
@@ -57558,6 +57563,8 @@
         return;
       }
       setSpawnDefaultModel(engine, $convInputModelSelect.value);
+      const _selOpt = $convInputModelSelect.options[$convInputModelSelect.selectedIndex];
+      $convInputModelSelect.title = _selOpt ? (_selOpt.textContent || '') : '';
       if (currentConversation === '__new__') scheduleClaudePrewarm();
     });
   }
