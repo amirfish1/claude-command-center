@@ -20,6 +20,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Changed
 - `watchtower.queue` is now a hard, unconditional dependency of CCC's queue system (ticket lifecycle: claim/close/edit/answer/comment/reopen). Removed the standalone `ux_fixes_queue.py` stdlib fallback that let CCC's queue features work without WatchTower installed — it had gone stale since WatchTower's own storage migrated from JSON to SQLite and was never updated, a latent risk of silent data divergence if watchtower ever became unimportable. If `watchtower.queue` can't be imported, CCC now fails loudly at startup with a clear error instead of silently falling back to a frozen JSON store.
 
+## [5.27.2] - 2026-08-25
+
+### Fixed
+- Source checkouts and the Python 3.9 launch path now bootstrap `watchtower.queue` before importing the server, matching `run.sh`; CCC no longer crashes when started from a clean checkout whose interpreter has not installed the queue module yet.
+
 ## [5.27.1] - 2026-08-25
 
 ### Fixed
@@ -2761,7 +2766,8 @@ Initial public release.
 - `/api/repo/switch` validates targets against the picker allow-list.
 - See [`SECURITY.md`](SECURITY.md) for the full threat model.
 
-[Unreleased]: https://github.com/amirfish1/claude-command-center/compare/v5.27.1...HEAD
+[Unreleased]: https://github.com/amirfish1/claude-command-center/compare/v5.27.2...HEAD
+[5.27.2]: https://github.com/amirfish1/claude-command-center/releases/tag/v5.27.2
 [5.27.1]: https://github.com/amirfish1/claude-command-center/releases/tag/v5.27.1
 [5.27.0]: https://github.com/amirfish1/claude-command-center/releases/tag/v5.27.0
 [5.26.0]: https://github.com/amirfish1/claude-command-center/releases/tag/v5.26.0

@@ -1,1 +1,0 @@
-Source checkouts and the Python 3.9 launch path now bootstrap `watchtower.queue` before importing the server, matching `run.sh`; CCC no longer crashes when started from a clean checkout whose interpreter has not installed the queue module yet.
