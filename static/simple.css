@@ -1063,6 +1063,16 @@ body.ccc-mobile-redesign.ccc-simple-mode.ccc-simple-conv-open .conversations-vie
   background: var(--surface);
   border: 1px solid var(--border);
 }
+/* Give the "sending…" cancel a real thumb target instead of the desktop
+   22px circle, and keep it clear of the bubble's rounded corner padding. */
+body.ccc-mobile-redesign.ccc-simple-mode.ccc-simple-conv-open .conversations-view .event.user_text.pending .pending-send-cancel {
+  top: 6px;
+  right: 6px;
+  width: 30px;
+  height: 30px;
+  min-width: 30px;
+  font-size: 15px;
+}
 body.ccc-mobile-redesign.ccc-simple-mode.ccc-simple-conv-open .conversations-view .event .label {
   font-size: 12px;
   letter-spacing: 0;

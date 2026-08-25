@@ -9249,6 +9249,7 @@
       const pendingSteerHtml = userMessageSteerHtml(text, null, null);
       pendingDiv.className = 'event user_text pending' + (pendingSteerHtml ? ' has-user-steer' : '');
       pendingDiv.innerHTML = '<span class="label">User</span>'
+        + '<button type="button" class="pending-send-cancel" title="Cancel - discard this message">✕</button>'
         + '<div class="user-msg" dir="auto" data-raw-text="' + escapeAttr(text) + '">' + escapeHtml(text) + '</div>'
         + pendingSteerHtml;
       $view.appendChild(pendingDiv);
@@ -9260,6 +9261,19 @@
       pending.list = _pendingSends;
       pending.entry = entry;
       pending.list.push(entry);
+      // Let the user dismiss a still-"sending…" echo immediately rather than
+      // wait out the not-acknowledged timeout — a message stuck mid-send
+      // (session unreachable, engine crashed) previously had no way to be
+      // cleared until _PENDING_SEND_ECHO_MAX_MS elapsed.
+      const cancelBtn = pendingDiv.querySelector('.pending-send-cancel');
+      if (cancelBtn) {
+        cancelBtn.addEventListener('click', (ev) => {
+          ev.preventDefault();
+          ev.stopPropagation();
+          removePendingSendEcho(pending);
+          clearOptimisticAgentIndicator($view);
+        });
+      }
       entry.timer = setTimeout(() => {
         if (pending.list && pending.entry && pending.list.includes(pending.entry)) {
           // Don't silently remove — the user's typed text would
@@ -13576,7 +13590,13 @@
     // show the pane overlay; when transitioning to wide, hide it
     // (wide screens show both pane + sidebar side-by-side).
     const hasConversation = !!currentConversation;
-    if (isMobile() && hasConversation) {
+    // Same Simple-Home guard as selectConversation()'s mobileShowForCurrentMode()
+    // call: don't slide `.main` over a Simple Home the user is deliberately
+    // still on (e.g. rotating the phone while sitting on Home with a stale
+    // currentConversation from the last-opened task).
+    const _simpleHomeStillShowing = typeof isSimpleMode === 'function' && isSimpleMode()
+      && typeof _simpleHomeShowing !== 'undefined' && _simpleHomeShowing;
+    if (isMobile() && hasConversation && !_simpleHomeStillShowing) {
       mobileShowMain(true);
     } else if (!isMobile()) {
       mobileShowMain(false);
@@ -14119,12 +14139,12 @@
     else if (name === 'settings') _simpleSyncSettingsScreen();
   }
   // Called from selectConversation(). Boot/refresh auto-restore
-  // (_qfBootRestore) must NOT yank the user off the home screen; a deliberate
-  // open (list row, simple card, search result) does.
+  // (_qfBootRestoreDepth > 0) must NOT yank the user off the home screen; a
+  // deliberate open (list row, simple card, search result) does.
   function _simpleOnConversationOpen(id) {
     try {
       if (!isSimpleMode()) return;
-      if (typeof _qfBootRestore !== 'undefined' && !_qfBootRestore) {
+      if (typeof _qfBootRestoreDepth === 'undefined' || _qfBootRestoreDepth <= 0) {
         _simpleScreen = null;
         _simpleHideHome();
       }
@@ -15556,6 +15576,11 @@
     }
     return false;
   }
+  // Width of the left-edge strip reserved for the "swipe right to go back"
+  // gesture (wireEdgeSwipeBack below) — mirrors iOS's own edge-swipe-back
+  // zone so it feels native and doesn't fight wireConvSwipeRotate's
+  // full-area recency swipe.
+  const EDGE_SWIPE_BACK_ZONE_PX = 24;
   // Wire the gesture onto one `.conversations-view` element. Idempotent per
   // element (guarded by a dataset flag). The element persists across conv
   // switches (only its innerHTML is replaced), so one wiring lasts.
@@ -15580,6 +15605,11 @@
       const sel = window.getSelection && window.getSelection();
       if (sel && !sel.isCollapsed && String(sel).length) return;
       if (swipeStartBlocked(e.target)) return;
+      // A touch starting in the left edge strip is reserved for
+      // wireEdgeSwipeBack's "go back" gesture — don't also arm the
+      // recency-rotate gesture for it, or the two would fight over the same
+      // rightward drag.
+      if (e.touches[0].clientX <= EDGE_SWIPE_BACK_ZONE_PX) return;
       sx = e.touches[0].clientX; sy = e.touches[0].clientY;
       active = true;
     }, { passive: true });
@@ -15652,11 +15682,66 @@
       }
     }, { passive: true });
   }
+  // ---------------------------------------------------------------------------
+  // Edge-swipe-back: dragging right from the left screen edge closes the open
+  // conversation, the same native gesture iOS/Android users expect and reach
+  // for the moment a chat traps them (mobile back button unreachable/invisible,
+  // no other way out — the exact complaint this closes). Deliberately a
+  // SEPARATE gesture from wireConvSwipeRotate above rather than a shared one:
+  // that gesture's rightward swipe already means "previous recent
+  // conversation", and overloading it would make "go back" and "switch chats"
+  // the same drag with no way to pick. wireConvSwipeRotate's own touchstart
+  // ignores touches starting in EDGE_SWIPE_BACK_ZONE_PX so the two never race
+  // for the same touch.
+  function _edgeSwipeBackTarget() {
+    if (isSimpleMode() && document.body.classList.contains('ccc-simple-conv-open')) {
+      return _simpleShowHome;
+    }
+    if (document.body.classList.contains('mobile-conv-open')) {
+      return () => mobileShowConv(false);
+    }
+    if (document.body.classList.contains('mobile-show-main')) {
+      return () => mobileShowMain(false);
+    }
+    return null;
+  }
+  function wireEdgeSwipeBack(viewEl) {
+    if (!viewEl || !isTouchPrimary() || viewEl.dataset.edgeSwipeBackWired === '1') return;
+    viewEl.dataset.edgeSwipeBackWired = '1';
+    const THRESH = 60;
+    const RATIO = 1.5;
+    let sx = 0, sy = 0, active = false;
+    viewEl.addEventListener('touchstart', (e) => {
+      active = false;
+      if (e.touches.length !== 1) return;
+      if (e.touches[0].clientX > EDGE_SWIPE_BACK_ZONE_PX) return;
+      if (!_edgeSwipeBackTarget()) return;
+      sx = e.touches[0].clientX; sy = e.touches[0].clientY;
+      active = true;
+    }, { passive: true });
+    const end = (e) => {
+      if (!active) return;
+      active = false;
+      const t = (e.changedTouches && e.changedTouches[0]) || null;
+      if (!t) return;
+      const dx = t.clientX - sx;
+      const dy = t.clientY - sy;
+      if (dx >= THRESH && dx > Math.abs(dy) * RATIO) {
+        const goBack = _edgeSwipeBackTarget();
+        if (goBack) goBack();
+      }
+    };
+    viewEl.addEventListener('touchend', end, { passive: true });
+    viewEl.addEventListener('touchcancel', () => { active = false; }, { passive: true });
+  }
   // Wire any conversations-view present now, and any added later (split panes,
   // popout). One delegated pass on a short interval is cheap and idempotent.
   function wireAllConvSwipe() {
     if (!isTouchPrimary()) return;
-    document.querySelectorAll('.conversations-view').forEach(wireConvSwipeRotate);
+    document.querySelectorAll('.conversations-view').forEach(viewEl => {
+      wireConvSwipeRotate(viewEl);
+      wireEdgeSwipeBack(viewEl);
+    });
   }
   wireAllConvSwipe();
   if (isTouchPrimary()) {
@@ -15948,10 +16033,22 @@
       && rows.some(c => c && (c.id === id || c.session_id === id));
   }
 
+  // Depth counter, not a boolean: restoreLastViewOrConversation() has two
+  // trigger sites (initial sessions load, then again once the archive list
+  // finishes loading) that can both be mid-flight at once. A plain boolean
+  // races — whichever call's `finally` runs first resets it to false while
+  // the OTHER call is still awaiting inside selectConversation, so that
+  // still-in-flight call sees "not a boot restore" and treats itself as a
+  // deliberate open. On mobile that meant mobileShowForCurrentMode() slid
+  // `.main` into view over a Simple Home that intentionally stayed open,
+  // landing on the "chat opened itself and I'm stuck" bug this guards
+  // against. A counter is correct under overlap; only 0 means "no restore
+  // in flight anywhere."
+  let _qfBootRestoreDepth = 0;
   async function restoreLastConversation() {
     if (CONV_POPOUT_MODE) return;
     if (!conversationsLoaded) return;
-    _qfBootRestore = true;
+    _qfBootRestoreDepth++;
     try {
       let anyRestored = false;
       const savedActiveIndex = splitState.activeIndex;
@@ -15978,7 +16075,7 @@
         }
       }
     } finally {
-      _qfBootRestore = false;
+      _qfBootRestoreDepth--;
     }
   }
   function activePaneId() { return splitState.panes[splitState.activeIndex].id; }
@@ -39184,9 +39281,20 @@
     if (_flowInspectorState) {
       try { stopFlowNodeInspector(); } catch (_) {}
     }
-    mobileShowForCurrentMode();
     // Simple Home: a deliberate conversation open leaves the home screen (and
-    // refreshes the plain-language usage line); boot auto-restore does not.
+    // refreshes the plain-language usage line); boot auto-restore does not
+    // (see _simpleOnConversationOpen's _qfBootRestoreDepth guard).
+    // mobileShowForCurrentMode() must honor that same guard — otherwise
+    // boot-restore on a phone slides `.main` into view (mobile-show-main)
+    // while Simple Home's own ccc-simple-conv-open class stays off (home is
+    // still "showing" by design), so the pane that lands on screen isn't in
+    // either finished state: not styled as a simple conversation, not hidden
+    // as home. The user sees a blank, wrongly-sized `.main` they can't do
+    // anything with, with no way back short of the (also-invisible-in-that-
+    // state) back button — the mobile "chat opens itself and I'm stuck" bug.
+    const _isBootRestoreInSimpleMode = isSimpleMode()
+      && typeof _qfBootRestoreDepth !== 'undefined' && _qfBootRestoreDepth > 0;
+    if (!_isBootRestoreInSimpleMode) mobileShowForCurrentMode();
     try { if (typeof _simpleOnConversationOpen === 'function') _simpleOnConversationOpen(id); } catch (_) {}
     currentConversation = id;
     // The terminal panel (index.html) keys its cwd off the open
