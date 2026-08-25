@@ -5356,14 +5356,27 @@
   /* CCC-449: with several buttons the hover action bar extends left past the
      36px row-end slot and lands on the context-% badge, which punches through
      the bar (z-index 6, CCC-295) — archive icon and % chip rendered on top of
-     each other. On hover the main-row badge now fades out like the time chip;
-     a duplicate % badge rendered as the first item inside the action bar keeps
-     click-to-/compact reachable while hovered (that copy is nested inside
-     .conv-row-actions, so the direct-child selectors below don't touch it). */
-  .conv-item:hover .conv-main-row:has(.conv-row-actions:not(:empty)) > .conv-pct-badge,
-  .conv-item:hover .conv-main-row:has(.conv-row-actions:not(:empty)) > .conv-qc-badge,
-  .conv-item:hover .conv-main-row:has(.conv-row-actions:not(:empty)) > .conv-evergreen-inline-badges .conv-pct-badge,
-  .conv-item:hover .conv-main-row:has(.conv-row-actions:not(:empty)) > .conv-evergreen-inline-badges .conv-qc-badge {
+     each other. The main-row badge now fades out like the time chip whenever
+     the action bar is actually visible; a duplicate % badge rendered as the
+     first item inside the action bar keeps click-to-/compact reachable while
+     it's showing (that copy is nested inside .conv-row-actions, so the
+     direct-child selectors below don't touch it).
+     CCC-961: the bar is only visible via `.is-actions-open` (kebab click) or,
+     for pinned rows, on hover/focus (CCC-...pinned rule above) — NOT on plain
+     `:hover` for a regular row. The old `:hover` selector faded the main
+     badge before anything replaced it, so on a bare hover the absolutely-
+     positioned .conv-hover-meta-row (UID chip, right-aligned) showed through
+     in the gap where the % used to be. Scope the fade to when the bar is
+     actually shown, so the badge (z-index 6) keeps winning over the meta-row
+     overlay (z-index 2) during plain hover. */
+  .conv-item.is-actions-open .conv-main-row:has(.conv-row-actions:not(:empty)) > .conv-pct-badge,
+  .conv-item.is-actions-open .conv-main-row:has(.conv-row-actions:not(:empty)) > .conv-qc-badge,
+  .conv-item.is-actions-open .conv-main-row:has(.conv-row-actions:not(:empty)) > .conv-evergreen-inline-badges .conv-pct-badge,
+  .conv-item.is-actions-open .conv-main-row:has(.conv-row-actions:not(:empty)) > .conv-evergreen-inline-badges .conv-qc-badge,
+  .conv-item.is-pinned:hover .conv-main-row:has(.conv-row-actions:not(:empty)) > .conv-pct-badge,
+  .conv-item.is-pinned:hover .conv-main-row:has(.conv-row-actions:not(:empty)) > .conv-qc-badge,
+  .conv-item.is-pinned:hover .conv-main-row:has(.conv-row-actions:not(:empty)) > .conv-evergreen-inline-badges .conv-pct-badge,
+  .conv-item.is-pinned:hover .conv-main-row:has(.conv-row-actions:not(:empty)) > .conv-evergreen-inline-badges .conv-qc-badge {
     opacity: 0;
     pointer-events: none;
   }
@@ -6555,8 +6568,11 @@
   .conv-item:hover:not(.active) .conv-hover-meta-row {
     display: flex;
     position: absolute;
-    /* clears the time column so "2d" stays readable */
-    right: calc(12px + var(--conv-time-col));
+    /* Clears the time column so "2d" stays readable, PLUS ~36px for the
+       context-% badge (CCC-961): the badge sits just left of the time
+       column and this overlay used to land right on top of it, hiding the
+       % behind the session-id chip on hover. */
+    right: calc(12px + var(--conv-time-col) + 36px);
     top: 50%;
     transform: translateY(-50%);
     margin: 0;
