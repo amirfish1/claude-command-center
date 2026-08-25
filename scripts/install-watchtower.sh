@@ -59,7 +59,7 @@ wt_say() {
 # --- probes -----------------------------------------------------------------
 
 wt_importable() {
-  "$WT_PYTHON" -c 'import watchtower' >/dev/null 2>&1
+  "$WT_PYTHON" -c 'import watchtower.queue' >/dev/null 2>&1
 }
 
 # WatchTower requires 3.11+; CCC itself only requires 3.9. On an older
@@ -202,6 +202,10 @@ wt_pip_install() {
 # process reads the .pth file during startup; wt_importable verifies the result.
 wt_activate_source_tree() {
   local source_dir="$1" site_dir pth_file
+  source_dir="$(cd "$source_dir" 2>/dev/null && pwd -P)" || return 1
+  case "$source_dir" in
+    *$'\n'*|*$'\r'*) return 1 ;;
+  esac
   [ -f "$source_dir/watchtower/__init__.py" ] || return 1
   site_dir="$("$WT_PYTHON" -c '
 import site, sys, sysconfig

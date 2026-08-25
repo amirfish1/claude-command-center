@@ -41,8 +41,16 @@ if [ "$1" = "-c" ]; then
       printf '%s\n' "${WT_FAKE_ROOT:-}"
       exit 0
       ;;
+    *"import watchtower.queue"*)
+      if [ -f "$WT_FAKE_INSTALLED" ]; then exit 0; fi
+      if [ -f "$WT_FAKE_SITE_PACKAGES/ccc-watchtower.pth" ]; then
+        source_dir="$(head -n 1 "$WT_FAKE_SITE_PACKAGES/ccc-watchtower.pth")"
+        if [ -f "$source_dir/watchtower/queue.py" ]; then exit 0; fi
+      fi
+      exit 1
+      ;;
     *"import watchtower"*)
-      if [ -f "$WT_FAKE_INSTALLED" ] || [ -f "$WT_FAKE_SITE_PACKAGES/ccc-watchtower.pth" ]; then exit 0; fi
+      if [ -f "$WT_FAKE_INSTALLED" ] || [ "${WT_FAKE_PARTIAL_PACKAGE:-0}" = "1" ]; then exit 0; fi
       exit 1
       ;;
     *"version_info"*)
@@ -104,6 +112,7 @@ case "$*" in
     mkdir -p "$dest/watchtower"
     : > "$dest/pyproject.toml"
     : > "$dest/watchtower/__init__.py"
+    : > "$dest/watchtower/queue.py"
     exit 0
     ;;
 esac
@@ -145,6 +154,7 @@ class WatchtowerInstallHarness(unittest.TestCase):
         (path / "pyproject.toml").write_text("[project]\nname = 'watchtower'\n")
         (path / "watchtower").mkdir(exist_ok=True)
         (path / "watchtower" / "__init__.py").write_text("")
+        (path / "watchtower" / "queue.py").write_text("")
         if git:
             (path / ".git").mkdir(exist_ok=True)
         return path
@@ -225,6 +235,12 @@ class TestStatics(unittest.TestCase):
 
 
 class TestAlreadyInstalled(WatchtowerInstallHarness):
+    def test_partial_package_without_queue_is_not_treated_as_installed(self):
+        result = self.run_script(env_extra={"WT_FAKE_PARTIAL_PACKAGE": "1"})
+
+        self.assertTrue(any("clone" in call for call in self.calls()))
+        self.assertIn("watchtower.queue is now available", result.stdout)
+
     def test_dev_checkout_is_never_pulled(self):
         """A dev checkout is a working tree: report, don't touch."""
         dev = self.make_checkout(self.root / "dev-watchtower")
@@ -362,7 +378,22 @@ class TestInstallChain(WatchtowerInstallHarness):
             "source fallback must create a .pth file\n"
             f"stdout={result.stdout}\ncalls={self.calls()}",
         )
-        self.assertEqual(pth.read_text().strip(), str(dev))
+        self.assertEqual(pth.read_text().strip(), str(dev.resolve()))
+        self.assertIn("watchtower.queue is now available", result.stdout)
+        self.assertFalse(any("main.tar.gz" in p for p in self.pip_targets()))
+
+    def test_managed_clone_is_activated_when_pip_is_unavailable(self):
+        managed = self.home / ".ccc" / "watchtower"
+
+        result = self.run_script(env_extra={
+            "WT_FAKE_PIP_FAIL": str(managed),
+        })
+
+        clones = [call for call in self.calls() if "clone" in call]
+        self.assertEqual(len(clones), 1, clones)
+        pth = self.site_packages / "ccc-watchtower.pth"
+        self.assertTrue(pth.is_file())
+        self.assertEqual(pth.read_text().strip(), str(managed.resolve()))
         self.assertIn("watchtower.queue is now available", result.stdout)
         self.assertFalse(any("main.tar.gz" in p for p in self.pip_targets()))
 
@@ -460,7 +491,7 @@ class TestWiring(unittest.TestCase):
         body = RUN_SCRIPT.read_text()
         self.assertIn('bash "$script"', body)
         self.assertIn("scripts/install-watchtower.sh", body)
-        self.assertIn("import watchtower", body)
+        self.assertIn("import watchtower.queue", body)
         self.assertNotIn(
             "pip install",
             body,
