@@ -2936,7 +2936,7 @@
   // measurement behind it. Absent evidence we stay silent rather than warn —
   // an unfounded warning trains the user to dismiss the founded ones.
   const F2_STALE_MINUTES = 60;         // claude: the cliff
-  const F2_STALE_MINUTES_CODEX = 25;   // codex: where graded loss is material
+  const F2_STALE_MINUTES_CODEX = 45;   // codex: where graded loss is material
   const F2_STALE_MINUTES_KIMI = 35;    // kimi: measured rise in cache-miss risk
   const F2_ENGINE_CACHE = {
     claude: {
