@@ -31950,7 +31950,13 @@
     const _tabBody = _sidebarTab === 'issues' ? (_forceOpen(_ghIssuesHtml, 'conv-ghissues-section') || _tabEmpty('open issues'))
       : _sidebarTab === 'queues' ? '<div class="shared-queue-host shared-queue-host-sidebar" id="sidebarQueueHost"></div>'
       : (_sidebarTab === 'archived' || _sidebarTab === 'coding' || _sidebarTab === 'workers') ? (_forceOpen(_archivedHtml, 'conv-archived-section') || _tabEmpty('sessions'))
-      : (_forceOpen(_inProgressHtml, 'conv-inprogress-section') || _tabEmpty('in-progress sessions'));
+      // _readyToMergeHtml is built at its declaration below the In-progress
+      // assembly, so it has to be concatenated here rather than inside
+      // _inProgressHtml. The CSS already expects it as a #convList child
+      // (see the `> .conv-readytomerge-section:first-child` rule), and the
+      // `||` fallback keeps the empty-state text when BOTH are empty while
+      // still showing ready-to-merge rows when only In-progress is empty.
+      : ((_readyToMergeHtml + _forceOpen(_inProgressHtml, 'conv-inprogress-section')) || _tabEmpty('in-progress sessions'));
     const _convListHtml = _tabBarHtml + _idSearchRowsHtml + _repoSearchRowsHtml + _tabBody;
     const _objectsSplitActive = _sidebarTab === 'inprogress' && _shouldGroupByObjects;
     $convList.classList.toggle('objects-scroll-split', _objectsSplitActive);
