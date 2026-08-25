@@ -48135,20 +48135,25 @@
         return msg && _normSend(msg.getAttribute('data-raw-text') || msg.textContent);
       })
       .filter(Boolean));
-    // Self-heal: if the latest durable user message matches a queued tray entry,
-    // the queued copy has already drained. Drop the stale tray card so the real
-    // message stays visible instead of hiding it behind the duplicate CSS class.
+    // Self-heal: if ANY durable user message matches a queued tray entry, the
+    // queued copy has already drained. Drop the stale tray card so the real
+    // message stays visible instead of hiding it behind the duplicate CSS
+    // class. Checking only the newest durable row (as this used to) missed a
+    // queued item that drained and was then followed by more traffic (e.g. a
+    // cross-session `announced_from` message landing mid-conversation) — the
+    // tray card was left orphaned forever since the last row no longer
+    // matched it (CCC-981).
     const durableUserRows = Array.from($view.querySelectorAll(
       '.event.user_text:not(.pending):not(.send-queued):not(.send-delivered):not(.not-acknowledged)'));
-    const lastDurableUserRow = durableUserRows[durableUserRows.length - 1] || null;
-    const lastDurableUserMsg = lastDurableUserRow && lastDurableUserRow.querySelector('.user-msg');
-    const lastDurableText = lastDurableUserMsg
-      && _normSend(lastDurableUserMsg.getAttribute('data-raw-text') || lastDurableUserMsg.textContent);
-    if (lastDurableText && queuedTexts.has(lastDurableText)) {
+    const durableUserTexts = new Set(durableUserRows.map(row => {
+      const msg = row.querySelector('.user-msg');
+      return msg && _normSend(msg.getAttribute('data-raw-text') || msg.textContent);
+    }).filter(Boolean));
+    if (durableUserTexts.size) {
       tray.querySelectorAll('.event.user_text').forEach(el => {
         const msg = el.querySelector('.user-msg');
         const text = msg && _normSend(msg.getAttribute('data-raw-text') || msg.textContent);
-        if (text !== lastDurableText) return;
+        if (!text || !durableUserTexts.has(text)) return;
         if (el._pendingRef) removePendingSendEcho(el._pendingRef);
         else if (el.parentNode) el.parentNode.removeChild(el);
       });
