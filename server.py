@@ -43132,6 +43132,37 @@ def _mark_terminal_queue_retry(sid, now=None, delay=None):
     _pending_terminal_retry_after[sid] = now + max(0.0, delay)
 
 
+# CCC-984: several terminal-queue gates above (ask-question, active-acp,
+# tty-busy, headless-turn-wait, bg-not-ready) `continue` with NO log line —
+# a stuck item is invisible until it eventually resolves or falls into one
+# of the few paths that DO log (INJECT_STALLED, "dropping ... dead
+# session"). A session whose busy/ready check stays wrong indefinitely (the
+# actual failure mode is elsewhere) then looks like total silence: no
+# error, no retry evidence, nothing to grep — exactly what made CCC-984
+# ("messages are not sent into the conversation") impossible to diagnose
+# from logs alone. Throttle to once per sid+reason per 60s so a stuck item
+# leaves a paper trail without adding log volume to the normal 5s poll.
+_terminal_queue_hold_log_at = {}
+_TERMINAL_QUEUE_HOLD_LOG_INTERVAL_S = 60.0
+
+
+def _log_terminal_queue_hold(sid, reason):
+    now = time.time()
+    key = (sid, reason)
+    last = _terminal_queue_hold_log_at.get(key, 0.0)
+    if now - last < _TERMINAL_QUEUE_HOLD_LOG_INTERVAL_S:
+        return
+    _terminal_queue_hold_log_at[key] = now
+    try:
+        _log_activity(
+            "inject", "QUEUE_HELD",
+            f"session={sid} reason={reason} — queued terminal input held, "
+            "will keep retrying every 5s",
+        )
+    except Exception:
+        pass
+
+
 def _requeue_terminal_input_front(sid, text):
     """Put a popped-but-undelivered entry back where it came from (front,
     preserving order relative to anything queued behind it)."""
@@ -43567,24 +43598,31 @@ def _start_resume_queue_watcher() -> None:
                     # transcript scan here would deadlock forever.
                     status = session_live_status(sid, find_session_cwd(sid))
                     if _ask_question_blocking_inject(sid, status):
+                        _log_terminal_queue_hold(sid, "ask_question_blocking")
                         continue
                     if _terminal_queue_waits_for_active_acp(status):
+                        _log_terminal_queue_hold(sid, "active_acp")
                         continue
                     if status.get("live") and status.get("tty") and _session_status_is_busy(status):
+                        _log_terminal_queue_hold(sid, "tty_busy")
                         continue
                     if _terminal_queue_waits_for_headless_turn(sid, status):
+                        _log_terminal_queue_hold(sid, "headless_turn")
                         continue
                     if status.get("live") and status.get("kind") == "bg":
                         if not _bg_agent_ready_for_input(sid, status):
+                            _log_terminal_queue_hold(sid, "bg_not_ready")
                             continue
                         # Channel recently proven broken (pty inject wrote ok
                         # but nothing landed) — hold instead of churning the
                         # queue through it every tick.
                         if time.time() - _bg_pty_inject_failures.get(sid, 0) < 600:
+                            _log_terminal_queue_hold(sid, "bg_pty_recent_failure")
                             continue
                     if status.get("live") and not status.get("tty"):
                         spawn = _find_live_spawn_entry_for_session(sid)
                         if spawn is not None and _tool_child_blocks_inject(spawn):
+                            _log_terminal_queue_hold(sid, "tool_child_blocks_inject")
                             continue
                         # A live WatchTower-tracked worker's FIFO is a known,
                         # in-process-reachable channel even though CCC never
