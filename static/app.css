@@ -17009,6 +17009,10 @@ body.status-pos-right.status-rail-collapsed .conv-pane.has-status-rail > .conv-i
 .rail-actions .launch-split { display: flex; gap: 0; padding: 0; border: none; }
 .rail-actions .launch-split .launch-btn { border-top-right-radius: 0; border-bottom-right-radius: 0; flex: 1 1 auto; }
 .rail-actions .launch-split .launch-choice-btn { border-top-left-radius: 0; border-bottom-left-radius: 0; margin-left: -1px; padding: 6px 8px; flex: 0 0 auto; width: auto; }
+/* Same joined-pair treatment for the localhost pill + its caret — the wrap
+   span otherwise inherited the generic `.rail-actions > *` chrome, drawing a
+   redundant border/padding box around the already-bordered pill (CCC-966). */
+.rail-actions .localhost-wrap { padding: 0; border: none; }
 .rail-actions #cccBreadcrumb,
 .rail-actions #convStatus {
   flex: 1 1 100%;
