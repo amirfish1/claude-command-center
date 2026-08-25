@@ -16566,11 +16566,19 @@ body.status-pos-right .conv-pane.has-status-rail > .status-rail {
   color: var(--text);
   font-variant-numeric: tabular-nums;
 }
+/* Hidden by default — the same "cache-adjusted tokens … API list-price
+   equivalent" text is already on #statusRailTokens's native title tooltip,
+   so it only needs to show up on hover (CCC-964) rather than sit visible
+   under the headline number all the time. */
 .status-rail-tokens .rail-tokens-label {
+  display: none;
   margin-top: 2px;
   color: var(--text-muted);
   font-size: 11px;
   line-height: 1.3;
+}
+.status-rail-tokens:hover .rail-tokens-label {
+  display: block;
 }
 /* Per-turn cache-adjusted token columns (last 30 billed turns), newest on
    the right. Built by _railTurnGraphHtml(); bars are flex children with a
