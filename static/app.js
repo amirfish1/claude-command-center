@@ -29117,10 +29117,10 @@
       if (_continuationParentId) {
         title = title.replace(/^Continue\s+/, '').replace(/^⤴︎\s*/, '');
       }
-      // ✨ = AI-generated (Claude/Codex/Antigravity). User renames get NO
-      // glyph; the .user-renamed CSS class gives them a quiet dotted underline
+      // AI-generated titles (Claude/Codex/Antigravity) show with no glyph now
+      // (the ✨ prefix was removed, CCC-962). User renames also get NO glyph;
+      // the .user-renamed CSS class gives them a quiet dotted underline
       // instead so the row doesn't shout.
-      if (titleSource === 'ai' && !quietTitleChrome) title = '✨ ' + title;
       // 🪄 = CCC's own auto-titler (haiku, fired from the Stop hook) filled a
       // row that would otherwise show a raw first sentence. Deliberately a
       // different glyph from ✨, which means "the engine titled itself".
