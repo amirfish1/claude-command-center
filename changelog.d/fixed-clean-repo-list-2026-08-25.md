@@ -1,1 +1,0 @@
-`/api/repo/list` now returns valid JSON on a brand-new machine with no agent projects directory; zero-session usage signals are finalized as integer counts instead of leaking internal Python sets into the response.
