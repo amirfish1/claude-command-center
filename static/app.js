@@ -1187,6 +1187,7 @@
         'font:600 10px/1 ui-monospace,SFMono-Regular,Menlo,monospace;color:var(--text-secondary,#9aa);' +
         'padding:2px 6px;border-radius:5px;border:1px solid transparent;white-space:nowrap;}' +
         '#pollerToggle:hover{background:var(--hover-bg,rgba(127,127,127,.14));}' +
+        'html:not(.ccc-debug-mode) #pollerToggle,html:not(.ccc-debug-mode) #pollerStrip{display:none !important;}' +
         '#pollerStrip{display:flex;gap:5px;align-items:center;flex:1 1 auto;min-width:0;' +
         'overflow-x:auto;overflow-y:hidden;scrollbar-width:none;padding:0;}' +
         '#pollerStrip[hidden]{display:none;}' +
