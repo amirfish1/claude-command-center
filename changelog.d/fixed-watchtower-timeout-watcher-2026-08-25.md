@@ -1,1 +1,0 @@
-WatchTower bootstrap commands that fail quickly no longer wait out the full network timeout or leave orphaned sleep processes behind, so dependency checks and CI finish promptly while real network calls remain bounded.

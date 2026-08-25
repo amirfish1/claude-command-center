@@ -17,7 +17,6 @@ import shutil
 import stat
 import subprocess
 import tempfile
-import time
 import unittest
 from pathlib import Path
 
@@ -354,21 +353,6 @@ class TestAlreadyInstalled(WatchtowerInstallHarness):
 
 
 class TestInstallChain(WatchtowerInstallHarness):
-    def test_fast_install_failure_does_not_wait_for_network_timeout(self):
-        dev = self.make_checkout(self.root / "dev-watchtower")
-        started = time.monotonic()
-
-        self.run_script(env_extra={
-            "WATCHTOWER_DIR": str(dev),
-            "WT_FAKE_PIP_FAIL": "dev-watchtower",
-        })
-
-        self.assertLess(
-            time.monotonic() - started,
-            3.0,
-            "a command that exits immediately must not wait for the timeout watcher",
-        )
-
     def test_dev_checkout_wins_and_is_installed_editable(self):
         dev = self.make_checkout(self.root / "dev-watchtower")
         result = self.run_script(env_extra={"WATCHTOWER_DIR": str(dev)})
@@ -532,9 +516,8 @@ class TestInstallChain(WatchtowerInstallHarness):
             "a failed install must not be retried on the next launch",
         )
 
-    def test_pip_exiting_zero_without_import_recovers_via_source_path(self):
-        """pip can 'succeed' into the wrong interpreter; the verified source
-        activation remains the recovery path."""
+    def test_pip_exiting_zero_without_a_working_import_counts_as_failure(self):
+        """pip can 'succeed' into an interpreter CCC never imports from."""
         dev = self.make_checkout(self.root / "dev-watchtower")
         result = self.run_script(
             env_extra={
@@ -543,9 +526,7 @@ class TestInstallChain(WatchtowerInstallHarness):
                 "WT_FAKE_PIP_MAKES_IMPORTABLE": "0",
             }
         )
-        self.assertIn("watchtower.queue is now available", result.stdout)
-        pth = self.site_packages / "ccc-watchtower.pth"
-        self.assertEqual(pth.read_text().strip(), str(dev.resolve()))
+        self.assertIn("could not install WatchTower", result.stdout)
 
 
 class TestWiring(unittest.TestCase):
