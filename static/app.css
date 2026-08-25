@@ -13324,7 +13324,7 @@
   .conv-archived-tools {
     display: inline-flex;
     align-items: center;
-    gap: 6px;
+    gap: 10px;
     margin-left: auto;
   }
   .conv-inprogress-tools .conv-grouping-toggle,
