@@ -16528,12 +16528,6 @@ body.status-pos-right .conv-pane.has-status-rail > .status-rail {
   padding: 1px 4px;
   outline: none;
 }
-.status-rail-context {
-  margin-top: 2px;
-  color: var(--text-muted);
-  font-size: 11px;
-  line-height: 1.3;
-}
 /* Transcript size (CCC-475) — session metadata, moved here from the pane
    titlebar. Filled by updatePaneHeader for the active pane. */
 .status-rail-size {
