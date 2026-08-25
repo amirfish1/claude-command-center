@@ -38,6 +38,7 @@
 #                                    wait out the rest of today's window
 #   CCC_WATCHTOWER_LOG_PREFIX       line prefix ("install: " for install.sh)
 #   CCC_WATCHTOWER_STATE_DIR        where the marker files live
+#   CCC_WATCHTOWER_COMMAND_TIMEOUT  network command timeout in seconds (default 20)
 #   CCC_SKIP_WATCHTOWER_DAEMON=1    install, but do not run `wt start`
 
 WATCHTOWER_REPO_URL="${WATCHTOWER_REPO_URL:-https://github.com/amirfish1/watchtower}"
@@ -46,6 +47,7 @@ WATCHTOWER_INSTALL_DIR="${WATCHTOWER_INSTALL_DIR:-$HOME/.ccc/watchtower}"
 WATCHTOWER_TARBALL_URL="${WATCHTOWER_TARBALL_URL:-https://github.com/amirfish1/watchtower/archive/refs/heads/main.tar.gz}"
 WATCHTOWER_PYPI_NAME="watchtower-cli"
 WT_PYTHON="${CCC_PYTHON:-python3}"
+WT_COMMAND_TIMEOUT="${CCC_WATCHTOWER_COMMAND_TIMEOUT:-20}"
 WT_STATE_DIR="${CCC_WATCHTOWER_STATE_DIR:-$HOME/.claude/command-center}"
 # Touched after a successful check/refresh; read by run.sh to decide whether
 # this script is worth forking at all on a given launch.
@@ -198,15 +200,15 @@ wt_pip_install() {
   in_venv="$("$WT_PYTHON" -c 'import sys; print(1 if sys.prefix != sys.base_prefix else 0)' 2>/dev/null || echo 0)"
 
   if [ "$in_venv" = "1" ]; then
-    wt_bounded 20 "$WT_PYTHON" -m pip install --quiet "$@"
+    wt_bounded "$WT_COMMAND_TIMEOUT" "$WT_PYTHON" -m pip install --quiet "$@"
     return $?
   fi
 
-  if wt_bounded 20 "$WT_PYTHON" -m pip install --user --quiet "$@"; then
+  if wt_bounded "$WT_COMMAND_TIMEOUT" "$WT_PYTHON" -m pip install --user --quiet "$@"; then
     return 0
   fi
   # PEP 668. Scoped to --user, so this never writes into the system prefix.
-  wt_bounded 20 "$WT_PYTHON" -m pip install --user --break-system-packages --quiet "$@"
+  wt_bounded "$WT_COMMAND_TIMEOUT" "$WT_PYTHON" -m pip install --user --break-system-packages --quiet "$@"
 }
 
 # WatchTower is stdlib-only at runtime. Minimal Linux Python images often ship
@@ -237,7 +239,7 @@ wt_clone_managed() {
   WT_CLONE_DIR=""
   if [ -d "$WATCHTOWER_INSTALL_DIR/.git" ]; then
     if [ -n "$WATCHTOWER_REF" ] \
-      && ! wt_bounded 20 git -C "$WATCHTOWER_INSTALL_DIR" checkout --detach "$WATCHTOWER_REF"; then
+      && ! wt_bounded "$WT_COMMAND_TIMEOUT" git -C "$WATCHTOWER_INSTALL_DIR" checkout --detach "$WATCHTOWER_REF"; then
       return 1
     fi
     if [ -n "$WATCHTOWER_REF" ] && ! wt_checkout_matches_ref "$WATCHTOWER_INSTALL_DIR"; then
@@ -256,13 +258,13 @@ wt_clone_managed() {
   wt_say "fetching WatchTower (CCC's queue engine) from $WATCHTOWER_REPO_URL"
   mkdir -p "$(dirname "$WATCHTOWER_INSTALL_DIR")" 2>/dev/null || return 1
   if [ -n "$WATCHTOWER_REF" ]; then
-    if wt_bounded 20 git clone "$WATCHTOWER_REPO_URL" "$WATCHTOWER_INSTALL_DIR" \
-      && wt_bounded 20 git -C "$WATCHTOWER_INSTALL_DIR" checkout --detach "$WATCHTOWER_REF" \
+    if wt_bounded "$WT_COMMAND_TIMEOUT" git clone "$WATCHTOWER_REPO_URL" "$WATCHTOWER_INSTALL_DIR" \
+      && wt_bounded "$WT_COMMAND_TIMEOUT" git -C "$WATCHTOWER_INSTALL_DIR" checkout --detach "$WATCHTOWER_REF" \
       && wt_checkout_matches_ref "$WATCHTOWER_INSTALL_DIR"; then
       WT_CLONE_DIR="$WATCHTOWER_INSTALL_DIR"
       return 0
     fi
-  elif wt_bounded 20 git clone --depth 1 "$WATCHTOWER_REPO_URL" "$WATCHTOWER_INSTALL_DIR"; then
+  elif wt_bounded "$WT_COMMAND_TIMEOUT" git clone --depth 1 "$WATCHTOWER_REPO_URL" "$WATCHTOWER_INSTALL_DIR"; then
     WT_CLONE_DIR="$WATCHTOWER_INSTALL_DIR"
     return 0
   fi
@@ -282,10 +284,10 @@ wt_refresh_managed_clone() {
     return 0
   fi
   if [ -n "$WATCHTOWER_REF" ]; then
-    wt_bounded 20 git -C "$WATCHTOWER_INSTALL_DIR" checkout --detach "$WATCHTOWER_REF" || true
+    wt_bounded "$WT_COMMAND_TIMEOUT" git -C "$WATCHTOWER_INSTALL_DIR" checkout --detach "$WATCHTOWER_REF" || true
     return 0
   fi
-  if wt_bounded 20 git -C "$WATCHTOWER_INSTALL_DIR" pull --ff-only; then
+  if wt_bounded "$WT_COMMAND_TIMEOUT" git -C "$WATCHTOWER_INSTALL_DIR" pull --ff-only; then
     wt_say "updated $WATCHTOWER_INSTALL_DIR"
   fi
   return 0

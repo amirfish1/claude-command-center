@@ -179,6 +179,7 @@ class WatchtowerInstallHarness(unittest.TestCase):
             "WT_FAKE_SITE_PACKAGES": str(self.site_packages),
             "WT_FAKE_ROOT": installed_root or "",
             "CCC_PYTHON": "python3",
+            "CCC_WATCHTOWER_COMMAND_TIMEOUT": "1",
         }
         if env_extra:
             env.update({k: str(v) for k, v in env_extra.items()})
@@ -206,6 +207,11 @@ class WatchtowerInstallHarness(unittest.TestCase):
 
 
 class TestStatics(unittest.TestCase):
+    def test_network_timeout_is_configurable_for_isolated_tests(self):
+        body = WT_SCRIPT.read_text()
+        self.assertIn("CCC_WATCHTOWER_COMMAND_TIMEOUT", body)
+        self.assertIn('WT_COMMAND_TIMEOUT="${CCC_WATCHTOWER_COMMAND_TIMEOUT:-20}"', body)
+
     def test_script_exists_and_is_executable(self):
         self.assertTrue(WT_SCRIPT.is_file(), "scripts/install-watchtower.sh must exist")
         self.assertTrue(
@@ -516,8 +522,9 @@ class TestInstallChain(WatchtowerInstallHarness):
             "a failed install must not be retried on the next launch",
         )
 
-    def test_pip_exiting_zero_without_a_working_import_counts_as_failure(self):
-        """pip can 'succeed' into an interpreter CCC never imports from."""
+    def test_pip_exiting_zero_without_import_recovers_via_source_path(self):
+        """pip can 'succeed' into the wrong interpreter; the verified source
+        activation remains the recovery path."""
         dev = self.make_checkout(self.root / "dev-watchtower")
         result = self.run_script(
             env_extra={
@@ -526,7 +533,9 @@ class TestInstallChain(WatchtowerInstallHarness):
                 "WT_FAKE_PIP_MAKES_IMPORTABLE": "0",
             }
         )
-        self.assertIn("could not install WatchTower", result.stdout)
+        self.assertIn("watchtower.queue is now available", result.stdout)
+        pth = self.site_packages / "ccc-watchtower.pth"
+        self.assertEqual(pth.read_text().strip(), str(dev.resolve()))
 
 
 class TestWiring(unittest.TestCase):
