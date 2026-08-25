@@ -17671,18 +17671,6 @@ body.status-pos-right.status-rail-collapsed .conv-pane.has-status-rail > .conv-i
 .sh-more-led.is-green  { background: #4ade80; }
 .sh-more-led.is-yellow { background: #e0b341; }
 .sh-more-led.is-red    { background: #e5534b; }
-/* Same signal on the collapsed "..." button, so a degraded service is still
-   visible without opening the menu -- the one job the header chip had. */
-.sh-more-btn.has-alert::after {
-  content: "";
-  position: absolute;
-  top: 3px; right: 3px;
-  width: 6px; height: 6px;
-  border-radius: 50%;
-  background: #e0b341;
-  box-shadow: 0 0 0 2px var(--bg, #14161a);
-}
-.sh-more-btn.has-alert.is-red::after { background: #e5534b; }
 .sh-more-divider {
   height: 1px;
   margin: 5px 0;
