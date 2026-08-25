@@ -527,6 +527,7 @@ class TestServerImports(unittest.TestCase):
             try:
                 with mock.patch.object(server, "session_live_status", return_value={"live": False}), \
                      mock.patch.object(server, "_control_plane_engine_call", return_value=None), \
+                     mock.patch.object(server, "_inject_budget_check", return_value=None), \
                      mock.patch.object(server, "resume_session_headless", return_value={"ok": True}) as resume:
                     result = server._inject_text_into_session(agent_sid, "follow up")
                 self.assertTrue(result["ok"])
@@ -18503,6 +18504,13 @@ class TestWtWorkerFifoFastPath(unittest.TestCase):
     def setUp(self):
         import server
         self.server = server
+        self._budget_patch = mock.patch.object(
+            self.server, "_inject_budget_check", return_value=None,
+        )
+        self._budget_patch.start()
+
+    def tearDown(self):
+        self._budget_patch.stop()
 
     def _workers_file(self, td, rows):
         path = pathlib.Path(td) / "workers.json"
@@ -18684,7 +18692,7 @@ class TestWtWorkerFifoFastPath(unittest.TestCase):
              mock.patch.object(self.server, "_queue_terminal_input") as queued, \
              mock.patch.object(self.server, "resume_session_headless") as resume:
             result = self.server._inject_text_into_session("sid-live-1", "follow up")
-        self.assertTrue(result["ok"])
+        self.assertTrue(result["ok"], result)
         self.assertEqual(result["via"], "wt-worker-fifo")
         self.assertEqual(result["pid"], 4268)
         write.assert_called_once_with("/fake/wt.fifo", "follow up")
@@ -18709,7 +18717,7 @@ class TestWtWorkerFifoFastPath(unittest.TestCase):
              mock.patch.object(self.server, "_wt_worker_fifo_entry_for_session", return_value=None), \
              mock.patch.object(self.server, "resume_session_headless") as resume:
             result = self.server._inject_text_into_session("sid-unknown", "follow up")
-        self.assertTrue(result.get("foreign_live_writer"))
+        self.assertTrue(result.get("foreign_live_writer"), result)
         resume.assert_not_called()
 
     def test_inject_falls_back_to_hold_when_fifo_write_fails(self):
@@ -18734,7 +18742,7 @@ class TestWtWorkerFifoFastPath(unittest.TestCase):
              mock.patch.object(self.server, "_write_fifo_line_once", return_value=False), \
              mock.patch.object(self.server, "resume_session_headless") as resume:
             result = self.server._inject_text_into_session("sid-live-1", "follow up")
-        self.assertTrue(result.get("foreign_live_writer"))
+        self.assertTrue(result.get("foreign_live_writer"), result)
         resume.assert_not_called()
 
     # ---- wired into the terminal-queue watcher's hold gate ------------
