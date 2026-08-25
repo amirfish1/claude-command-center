@@ -66095,7 +66095,10 @@
   function applyDebugMode(on) {
     const enabled = !!on;
     document.documentElement.classList.toggle('ccc-debug-mode', enabled);
-    if (enabled) return;
+    if (enabled) {
+      if (typeof window.__cccRefreshThroughputStrip === 'function') window.__cccRefreshThroughputStrip();
+      return;
+    }
     if (typeof _dismissActivityLog === 'function') _dismissActivityLog();
     if (typeof closeActivityLogModal === 'function') closeActivityLogModal();
     const stats = document.getElementById('statsModal');
@@ -68657,6 +68660,7 @@
       '#cccThroughputStrip .ts-yd{margin-left:auto;color:#58a6ff;opacity:.75;text-decoration:none;white-space:nowrap;}' +
       '#cccThroughputStrip .ts-yd:hover{opacity:1;text-decoration:underline;}' +
       'body.flow-popout #cccThroughputStrip{display:none;}' +
+      'html:not(.ccc-debug-mode) #cccThroughputStrip{display:none;}' +
       /* Phones: the lane/pace text overflows the strip ("…vs yd yd" clipped
          against the yd-report link). Hide the redundant link (the whole
          strip already opens the dashboard on tap) and let the rest
@@ -68752,6 +68756,7 @@
   var busy = false;
   function refresh() {
     if (document.hidden || busy || !mount()) return;
+    if (typeof debugModeEnabled === 'function' && !debugModeEnabled()) return;
     busy = true;
     (window.__cccBackgroundApiFetch || window.fetch.bind(window))(
       '/api/throughput/daily?date=today', { cache: 'no-store' }
@@ -68763,6 +68768,7 @@
   }
 
   function boot() {
+    window.__cccRefreshThroughputStrip = refresh;
     // The conv list panel exists in static markup, so mount is immediate;
     // the retry covers popout/embedded pages where it never appears.
     if (!mount()) { setTimeout(mount, 3000); }
