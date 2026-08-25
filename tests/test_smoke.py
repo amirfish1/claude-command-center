@@ -1509,13 +1509,13 @@ class TestServerImports(unittest.TestCase):
         self.assertIn("spawn-cwd-chip-group-label", app_js)
         self.assertIn("Production", app_js)
         self.assertIn("Dev & test", app_js)
-        self.assertIn("id=\"nsRepoSuggestions\"", app_js)
-        self.assertIn("function renderNewSessionRepoSuggestions", app_js)
+        self.assertIn('id="spawnCwdQuickChips"', index_html)
+        self.assertIn("function renderSpawnCwdQuickChips()", app_js)
         self.assertIn("for (const opt of (spawnCwdOptions || []))", app_js)
         self.assertIn("Show all folder suggestions", index_html)
         self.assertIn(".spawn-cwd-chip-label", app_css)
         self.assertIn(".spawn-cwd-chip-group-label", app_css)
-        self.assertIn(".ns-repo-suggestions", app_css)
+        self.assertNotIn("id=\"nsRepoSuggestions\"", app_js)
 
     def test_new_session_stage_demotes_center_card_and_expands_composer(self):
         """New-session mode should make the bottom composer primary and keep
@@ -1559,8 +1559,9 @@ class TestServerImports(unittest.TestCase):
         self.assertIn("if (!row || row.pending_spawn) continue;", reconcile_block)
         self.assertIn("if (!sid || /^spawning-/.test(String(sid))) continue;", reconcile_block)
 
-    def test_new_session_object_picker_is_inline_and_folder_scoped(self):
-        """New-session object choice should be selectable inline and remembered per folder."""
+    def test_new_session_object_picker_is_hidden_but_assignment_state_remains(self):
+        """The duplicate inline OBJECT picker is hidden, while the existing
+        post-spawn assignment plumbing remains available to other flows."""
         app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
         app_css = pathlib.Path(PROJECT_ROOT, "static", "app.css").read_text(encoding="utf-8")
 
@@ -1572,9 +1573,12 @@ class TestServerImports(unittest.TestCase):
         self.assertIn("function renderNewSessionObjectMenu(query)", app_js)
         self.assertIn("function wireNewSessionObjectPicker()", app_js)
         self.assertIn("function focusNewSessionComposer()", app_js)
-        self.assertIn('id="newSessionObjectPicker"', app_js)
-        self.assertIn('data-role="new-session-object-create"', app_js)
-        self.assertIn("focusNewSessionComposer();", app_js)
+        render_start = app_js.index("function renderNewSessionObjectContext()")
+        render_end = app_js.index("function loadPendingNewSessionObjectAssignments()", render_start)
+        render_block = app_js[render_start:render_end]
+        self.assertNotIn('id="newSessionObjectPicker"', render_block)
+        self.assertIn("wrap.innerHTML = '';", render_block)
+        self.assertIn("wrap.style.display = 'none';", render_block)
         self.assertIn("assignSpawnedSessionToDefaultObject(data);", app_js)
         self.assertIn("const obj = getNewSessionSelectedObject();", app_js)
         self.assertIn(".nso-combo", app_css)
@@ -2665,8 +2669,12 @@ class TestServerImports(unittest.TestCase):
         self.assertIn("childrenByParent.get(pid) || childrenByParent.set(pid, []).get(pid)", app_js)
         self.assertIn("const _currentSessionRows = _ipSearchActive", app_js)
         self.assertIn("const _curShown = _currentSessionRows;", app_js)
-        self.assertIn("html: _renderSubagentCluster(cl, { lifecycleContext: 'active', suppressFolderChip: false, quietTitleChrome: true }),", app_js)
-        self.assertIn("? _currentSessionsByObjectGroupsHtml(_curShown)", app_js)
+        grouped_start = app_js.index("function _currentSessionsByObjectGroupsHtml(items)")
+        grouped_end = app_js.index("// Whole-section accordion collapse", grouped_start)
+        grouped_block = app_js[grouped_start:grouped_end]
+        self.assertGreaterEqual(grouped_block.count("quietTitleChrome: true"), 3)
+        self.assertIn("_renderSubagentCluster(cluster, {", grouped_block)
+        self.assertIn("? _currentSessionsByObjectGroupsHtml(_curShown) + _gcTrailingHtml", app_js)
         self.assertIn(": _currentSessionsFlatRowsWithSeparators(_curShown, _gcItems);", app_js)
         self.assertIn("const currentChildRowClass = currentChildDepth > 0 ? ' is-current-child-row' : '';", app_js)
         self.assertIn("const currentChildStyle = currentChildDepth > 0", app_js)
@@ -3006,21 +3014,18 @@ class TestServerImports(unittest.TestCase):
         self.assertIn(".conv-current-sessions-scroll:not(.is-search-results) .conv-item .conv-hover-meta-row .conv-object-chip,", app_css)
         self.assertIn(".conv-item.active .conv-hover-meta-row .conv-object-chip,", app_css)
 
-    def test_sidebar_add_to_object_lives_in_rail_not_per_row_chip(self):
-        """CCC-467: the per-row "+" add-to-object chip is gone; assigning an
-        object now happens from the RHS status rail for the selected session,
-        via #statusRailAddObjectBtn. The underlying picker + assignment logic
-        is unchanged."""
+    def test_sidebar_add_to_object_is_not_in_rows_or_status_rail(self):
+        """The duplicate per-row and RHS-rail object controls are both gone;
+        object assignment remains available through the Flow workspace."""
         app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
         index_html = pathlib.Path(PROJECT_ROOT, "static", "index.html").read_text(encoding="utf-8")
 
         # Per-row empty "+" chip is dropped.
         self.assertNotIn('class="conv-object-chip is-empty"', app_js)
-        # Assign affordance moved to the rail head, wired to the same picker.
-        self.assertIn('id="statusRailAddObjectBtn"', index_html)
-        self.assertIn("const $statusRailAddObjectBtn = document.getElementById('statusRailAddObjectBtn');", app_js)
-        self.assertIn("_flowOpenObjectAssignPicker(sid, title);", app_js)
-        # Picker + assignment logic still present.
+        # The later rail cleanup removed that duplicate affordance too.
+        self.assertNotIn('id="statusRailAddObjectBtn"', index_html)
+        self.assertNotIn("const $statusRailAddObjectBtn", app_js)
+        # Flow's assignment picker + persistence logic still exist.
         self.assertIn("function _flowOpenObjectAssignPicker(sessionId, sessionTitle)", app_js)
         self.assertIn("flowNodeParents[flowNodeKey('session', sessionId)] = flowNodeKey('object', objectId);", app_js)
 
@@ -3043,7 +3048,7 @@ class TestServerImports(unittest.TestCase):
         app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
 
         self.assertIn("const quietTitleChrome = !!opts.quietTitleChrome;", app_js)
-        self.assertIn("if (titleSource === 'ai' && !quietTitleChrome) title = '✨ ' + title;", app_js)
+        self.assertNotIn("titleSource === 'ai' && !quietTitleChrome", app_js)
         self.assertIn("if (c.name_overridden && !quietTitleChrome) titleClass = 'user-renamed';", app_js)
         self.assertIn("html: _renderSubagentCluster(cl, { lifecycleContext: 'active', suppressFolderChip: false, quietTitleChrome: true }),", app_js)
         self.assertIn("? _currentSessionsByObjectGroupsHtml(_curShown)", app_js)
@@ -5003,8 +5008,10 @@ class TestServerImports(unittest.TestCase):
         self.assertNotIn("field-sizing: content", app_css)
         self.assertNotIn("_hasFieldSizing", app_js)
         self.assertIn("function _autosizeConvInput()", app_js)
-        self.assertIn("$convInput.style.height = 'auto';", app_js)
-        self.assertIn("$convInput.style.height = Math.min($convInput.scrollHeight, max) + 'px';", app_js)
+        self.assertIn("function _autosizeTextareaLike(el, barEl)", app_js)
+        self.assertIn("el.style.height = 'auto';", app_js)
+        self.assertIn("el.style.height = Math.min(el.scrollHeight, max) + 'px';", app_js)
+        self.assertIn("_autosizeTextareaLike($convInput, $convInputBar);", app_js)
         input_css = app_css[
             app_css.index(".conv-input-bar input,"):
             app_css.index("/* Keep composer sizing in JS.", app_css.index(".conv-input-bar input,"))
@@ -15295,7 +15302,7 @@ class TestModelPicker(unittest.TestCase):
         ]
         self.assertIn("const label = (grade ? grade + ' ' : '') + rounded;", footer_quality)
         self.assertNotIn("const label = 'Q ' +", footer_quality)
-        self.assertLess(js.index("qualityPill + '<span class=\"' + cls"), js.index("+ sourceLabel + ' ' + _formatTokens(displayTokens)"))
+        self.assertLess(js.index("qualityPill + '<span class=\"' + cls"), js.index("+ sourceLabelPill + _formatTokens(displayTokens)"))
         self.assertIn(".conv-input-context .wp-quality-pill", css)
 
     def test_server_starts_token_optimizer_index_refresher_in_background(self):
