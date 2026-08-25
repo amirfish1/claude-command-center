@@ -8843,11 +8843,14 @@
         const canCompact = hasSession && !isNewSession && !isBacklogIssue && !isPkood
           && isCompactionCapableSource(currentSession.source);
         const pendingCompactEcho = hasPendingSendEchoBeforeCompact();
+        const compactAlreadyRunning = !!(currentSession && _compactRunFor(currentSession.id));
         activeCompactBtn.classList.toggle('visible', canCompact);
-        if (!_compactInFlight) activeCompactBtn.disabled = !canCompact || pendingCompactEcho;
-        activeCompactBtn.title = pendingCompactEcho
-          ? 'Wait for the pending message to land in the transcript before compacting.'
-          : 'Compact conversation context';
+        if (!_compactInFlight) activeCompactBtn.disabled = !canCompact || pendingCompactEcho || compactAlreadyRunning;
+        activeCompactBtn.title = compactAlreadyRunning
+          ? 'Already compacting this session.'
+          : (pendingCompactEcho
+              ? 'Wait for the pending message to land in the transcript before compacting.'
+              : 'Compact conversation context');
       }
       // Codex app-server indicator — CCC-968: this duplicated the same state
       // already shown by the top breadcrumb's connection-type chip
@@ -9958,6 +9961,14 @@
     if (/^\//.test(text)) announcedFrom = '';
     if (compactCommand && hasPendingSendEchoBeforeCompact(getConvViewForPane(paneId || activePaneId()))) {
       showOpToast('Wait for the pending message to land in the transcript before compacting.', 'error');
+      return;
+    }
+    if (compactCommand && _compactRunFor(sid)) {
+      // A compact already in flight for this session — sending another
+      // /compact here doesn't start a fresh one, it gets queued server-side
+      // and fires the moment the first compact finishes (CCC-982: read as
+      // "will this drive ANOTHER compact right after?"). Block it instead.
+      showOpToast('Already compacting this session — wait for it to finish.', 'error');
       return;
     }
     // The F2 cold gate is purely informational — the verdict line states the
