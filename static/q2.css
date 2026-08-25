@@ -607,9 +607,8 @@ body.q2-resizing-v .q2-col { pointer-events: none; }
 }
 
 /* ── queue attendant (manual, above the ticket list) ──────────────────────
-   Sits between the diagram and the ticket list. Was the status-brief band
-   (docs/superpowers/specs/2026-08-12-q2-status-brief-design.md); now the
-   queue attendant (2026-08-13-q2-queue-attendant-design.md) -- same shell,
+   Sits between the diagram and the ticket list. It replaced the status-brief
+   band while keeping the same shell,
    tint, resizer and collapse toggle (class names below still say "brief"),
    new content. Height-capped at 40% of the column with its own scroll -- a
    long question or report must not push the ticket list off screen. */

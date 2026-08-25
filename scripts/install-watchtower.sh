@@ -62,11 +62,11 @@ wt_importable() {
   "$WT_PYTHON" -c 'import watchtower.queue' >/dev/null 2>&1
 }
 
-# WatchTower requires 3.11+; CCC itself only requires 3.9. On an older
-# interpreter say so once and stay on the fallback engine, rather than letting
-# pip emit a wall of resolution errors on every launch.
+# WatchTower's current source is stdlib-only and remains compatible with CCC's
+# Python 3.9 floor. Its package metadata can be stricter, which is why the
+# source-tree activation fallback exists below when pip declines the install.
 wt_python_ok() {
-  "$WT_PYTHON" -c 'import sys; sys.exit(0 if sys.version_info >= (3, 11) else 1)' >/dev/null 2>&1
+  "$WT_PYTHON" -c 'import sys; sys.exit(0 if sys.version_info >= (3, 9) else 1)' >/dev/null 2>&1
 }
 
 # Root directory the importable `watchtower` package lives under — a checkout
@@ -387,8 +387,8 @@ ccc_install_watchtower() {
     if ! wt_marker_fresh "$WT_FAIL_MARKER"; then
       local got
       got="$("$WT_PYTHON" -c 'import platform; print(platform.python_version())' 2>/dev/null || echo unknown)"
-      wt_say "python $got is below WatchTower's 3.11 minimum — skipping WatchTower."
-      wt_say "CCC will use its built-in queue engine (no worker dispatch, no plan import)."
+      wt_say "python $got is below CCC and WatchTower's 3.9 minimum — skipping WatchTower."
+      wt_say "Upgrade Python to 3.9 or newer before starting CCC."
       wt_touch_marker "$WT_FAIL_MARKER"
     fi
     return 0

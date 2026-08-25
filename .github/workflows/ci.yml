@@ -60,6 +60,7 @@ jobs:
       - name: Install pytest and run tests
         run: |
           python -m pip install pytest
+          CCC_PYTHON=python CCC_SKIP_WATCHTOWER_DAEMON=1 CCC_WATCHTOWER_FORCE=1 bash scripts/install-watchtower.sh
           python -m pytest -q --tb=no tests/
 
   # Cheap smoke test: boot the server on a free port, hit a few read-only
@@ -74,6 +75,7 @@ jobs:
           python-version: "3.12"
       - name: Boot server and probe endpoints
         run: |
+          CCC_PYTHON=python CCC_SKIP_WATCHTOWER_DAEMON=1 CCC_WATCHTOWER_FORCE=1 bash scripts/install-watchtower.sh
           PORT=18090 CCC_BIND_HOST=127.0.0.1 python3 server.py > /tmp/server.log 2>&1 &
           SERVER_PID=$!
           sleep 3
@@ -107,6 +109,7 @@ jobs:
           python-version: "3.9"
       - name: Import and boot with Python 3.9
         run: |
+          CCC_PYTHON=python CCC_SKIP_WATCHTOWER_DAEMON=1 CCC_WATCHTOWER_FORCE=1 bash scripts/install-watchtower.sh
           python -c 'import server; print(server.__version__)'
           PORT=18091 CCC_BIND_HOST=127.0.0.1 python server.py >/tmp/ccc-python39.log 2>&1 &
           SERVER_PID=$!

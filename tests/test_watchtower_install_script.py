@@ -26,6 +26,7 @@ WT_SCRIPT = PROJECT_ROOT / "scripts" / "install-watchtower.sh"
 RUN_SCRIPT = PROJECT_ROOT / "run.sh"
 INSTALL_SCRIPT = PROJECT_ROOT / "scripts" / "install.sh"
 README = PROJECT_ROOT / "README.md"
+CI_WORKFLOW = PROJECT_ROOT / ".github" / "workflows" / "ci.yml"
 
 
 FAKE_PYTHON = r"""#!/usr/bin/env bash
@@ -416,29 +417,29 @@ class TestInstallChain(WatchtowerInstallHarness):
         self.assertGreater(first_pypi, last_tarball, pips)
         self.assertIn("last resort", result.stdout)
 
-    def test_python_below_311_skips_with_a_reason_and_no_pip(self):
+    def test_python_below_39_skips_with_a_reason_and_no_pip(self):
         result = self.run_script(
-            env_extra={"WT_FAKE_VERSION_RC": "1", "WT_FAKE_VERSION": "3.9.6"}
+            env_extra={"WT_FAKE_VERSION_RC": "1", "WT_FAKE_VERSION": "3.8.20"}
         )
-        self.assertIn("3.9.6", result.stdout)
-        self.assertIn("3.11 minimum", result.stdout)
+        self.assertIn("3.8.20", result.stdout)
+        self.assertIn("3.9 minimum", result.stdout)
         self.assertEqual(self.pip_targets(), [])
 
-    def test_python_below_311_says_it_once_a_day_not_once_a_launch(self):
-        """The 3.11 notice is unactionable and CCC restarts often.
+    def test_python_below_39_says_it_once_a_day_not_once_a_launch(self):
+        """The 3.9 notice is unactionable and CCC restarts often.
 
         run.sh calls this script on every launch and the import probe can never
         succeed on an old interpreter, so without a back-off the same two lines
         print on every single start until the user upgrades Python — which is
         how a real notice becomes noise people stop reading.
         """
-        env = {"WT_FAKE_VERSION_RC": "1", "WT_FAKE_VERSION": "3.10.14"}
+        env = {"WT_FAKE_VERSION_RC": "1", "WT_FAKE_VERSION": "3.8.20"}
         first = self.run_script(env_extra=env)
-        self.assertIn("3.11 minimum", first.stdout)
+        self.assertIn("3.9 minimum", first.stdout)
 
         second = self.run_script(env_extra=env)
         self.assertNotIn(
-            "3.11 minimum",
+            "3.9 minimum",
             second.stdout,
             "the Python-floor notice must back off like every other dead end",
         )
@@ -447,7 +448,7 @@ class TestInstallChain(WatchtowerInstallHarness):
         # An explicit install (or the in-app updater) is the user asking right
         # now, so it must still get the reason instead of a silent no-op.
         forced = self.run_script(env_extra=dict(env, CCC_WATCHTOWER_FORCE="1"))
-        self.assertIn("3.11 minimum", forced.stdout)
+        self.assertIn("3.9 minimum", forced.stdout)
 
     def test_total_failure_warns_loudly_and_backs_off_for_a_day(self):
         env = {
@@ -505,6 +506,18 @@ class TestWiring(unittest.TestCase):
             "pip install",
             body,
             "scripts/install.sh must not carry its own copy of the install chain",
+        )
+
+    def test_ci_bootstraps_watchtower_before_importing_server(self):
+        body = CI_WORKFLOW.read_text()
+        command = (
+            "CCC_PYTHON=python CCC_SKIP_WATCHTOWER_DAEMON=1 "
+            "CCC_WATCHTOWER_FORCE=1 bash scripts/install-watchtower.sh"
+        )
+        self.assertEqual(
+            body.count(command),
+            3,
+            "unittest, smoke, and python39-smoke must bootstrap the same queue dependency as run.sh",
         )
 
     def test_readme_no_longer_claims_installed_by_default(self):
