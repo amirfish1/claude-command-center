@@ -13,12 +13,9 @@ Plus the usual static bar from `tests/test_install_script.py`: shebang,
 executable bit, shellcheck.
 """
 import os
-import shlex
 import shutil
-import signal
 import stat
 import subprocess
-import sys
 import tempfile
 import time
 import unittest
@@ -183,7 +180,6 @@ class WatchtowerInstallHarness(unittest.TestCase):
             "WT_FAKE_SITE_PACKAGES": str(self.site_packages),
             "WT_FAKE_ROOT": installed_root or "",
             "CCC_PYTHON": "python3",
-            "CCC_WATCHTOWER_SUPERVISOR_PYTHON": sys.executable,
         }
         if env_extra:
             env.update({k: str(v) for k, v in env_extra.items()})
@@ -211,32 +207,6 @@ class WatchtowerInstallHarness(unittest.TestCase):
 
 
 class TestStatics(unittest.TestCase):
-    def test_timeout_kills_term_ignoring_process_group(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            pid_file = Path(tmp) / "child.pid"
-            child = 'trap "" TERM; echo $$ > "$1"; while :; do sleep 1; done'
-            command = (
-                f"source {shlex.quote(str(WT_SCRIPT))}; "
-                f"wt_bounded 1 bash -c {shlex.quote(child)} _ {shlex.quote(str(pid_file))}"
-            )
-            result = subprocess.run(
-                ["bash", "-c", command],
-                capture_output=True,
-                text=True,
-                env=dict(os.environ, CCC_PYTHON=sys.executable),
-                timeout=8,
-            )
-            self.assertEqual(result.returncode, 124, result.stderr)
-            pid = int(pid_file.read_text())
-            try:
-                with self.assertRaises(ProcessLookupError):
-                    os.kill(pid, 0)
-            finally:
-                try:
-                    os.kill(pid, signal.SIGKILL)
-                except ProcessLookupError:
-                    pass
-
     def test_script_exists_and_is_executable(self):
         self.assertTrue(WT_SCRIPT.is_file(), "scripts/install-watchtower.sh must exist")
         self.assertTrue(

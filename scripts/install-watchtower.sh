@@ -46,7 +46,6 @@ WATCHTOWER_INSTALL_DIR="${WATCHTOWER_INSTALL_DIR:-$HOME/.ccc/watchtower}"
 WATCHTOWER_TARBALL_URL="${WATCHTOWER_TARBALL_URL:-https://github.com/amirfish1/watchtower/archive/refs/heads/main.tar.gz}"
 WATCHTOWER_PYPI_NAME="watchtower-cli"
 WT_PYTHON="${CCC_PYTHON:-python3}"
-WT_SUPERVISOR_PYTHON="${CCC_WATCHTOWER_SUPERVISOR_PYTHON:-$WT_PYTHON}"
 WT_STATE_DIR="${CCC_WATCHTOWER_STATE_DIR:-$HOME/.claude/command-center}"
 # Touched after a successful check/refresh; read by run.sh to decide whether
 # this script is worth forking at all on a given launch.
@@ -183,43 +182,29 @@ wt_write_version_marker() {
 # helper) — good enough to unblock run.sh.
 wt_bounded() {
   local secs="$1"; shift
-  "$WT_SUPERVISOR_PYTHON" - "$secs" "$@" <<'PY'
-import os
-import signal
-import subprocess
-import sys
-
-timeout = float(sys.argv[1])
-command = sys.argv[2:]
-try:
-    process = subprocess.Popen(
-        command,
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.DEVNULL,
-        start_new_session=True,
-    )
-except OSError:
-    raise SystemExit(127)
-
-try:
-    returncode = process.wait(timeout=timeout)
-except subprocess.TimeoutExpired:
-    try:
-        os.killpg(process.pid, signal.SIGTERM)
-    except ProcessLookupError:
-        pass
-    try:
-        process.wait(timeout=0.5)
-    except subprocess.TimeoutExpired:
-        try:
-            os.killpg(process.pid, signal.SIGKILL)
-        except ProcessLookupError:
-            pass
-        process.wait()
-    raise SystemExit(124)
-
-raise SystemExit(returncode if returncode >= 0 else 128 - returncode)
-PY
+  local done_file pid deadline rc
+  done_file="$(mktemp "${TMPDIR:-/tmp}/ccc-watchtower-command.XXXXXX")" || return 1
+  (
+    local child_rc=0
+    "$@" >/dev/null 2>&1 || child_rc=$?
+    printf '%s\n' "$child_rc" > "$done_file"
+  ) &
+  pid=$!
+  deadline=$((SECONDS + secs))
+  while [ ! -s "$done_file" ]; do
+    if [ "$SECONDS" -ge "$deadline" ]; then
+      command -v pkill >/dev/null 2>&1 && pkill -TERM -P "$pid" 2>/dev/null || true
+      kill -9 "$pid" 2>/dev/null || true
+      wait "$pid" 2>/dev/null || true
+      rm -f "$done_file"
+      return 124
+    fi
+    sleep 0.1
+  done
+  rc="$(cat "$done_file" 2>/dev/null || echo 1)"
+  wait "$pid" 2>/dev/null || true
+  rm -f "$done_file"
+  return "$rc"
 }
 
 wt_pip_install() {
