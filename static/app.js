@@ -8835,13 +8835,11 @@
           ? 'Wait for the pending message to land in the transcript before compacting.'
           : 'Compact conversation context';
       }
-      // Codex app-server indicator — show only for live Codex sessions; reflect
-      // whether CCC is currently driving Codex via its own app-server (RPC,
-      // can append to a loaded thread + run thread/compact) vs no live
-      // app-server ("exec" fallback would be used). Driven off the 5s
-      // /api/session-status poll's codex_app_server flag.
+      // Codex app-server indicator — CCC-968: this duplicated the same state
+      // already shown by the top breadcrumb's connection-type chip
+      // (.status-rail-conn-proc), so it's removed rather than shown.
       if (activeCodexAppSrv) {
-        const showAppSrv = isCodex && hasSession && !isNewSession && !isBacklogIssue;
+        const showAppSrv = false;
         activeCodexAppSrv.classList.toggle('visible', showAppSrv);
         if (!showAppSrv) activeCodexAppSrv.classList.remove('live');
         if (showAppSrv) {
