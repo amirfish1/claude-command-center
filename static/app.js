@@ -5009,7 +5009,7 @@
               : (isAntigravity ? 'Open AGY in Terminal; use /resume inside the TUI'
                 : (isDevinCli ? 'Open a Terminal window and run devin --resume'
                   : 'Open a Terminal window and run claude --resume'))));
-        btn.querySelector('.jump-label').textContent = 'Launch';
+        btn.querySelector('.jump-label').textContent = 'Launch terminal';
         renderLaunchChoiceMenu($launchChoiceMenuConv);
       } else {
         btn.style.display = 'none';
