@@ -43155,7 +43155,7 @@ def _log_terminal_queue_hold(sid, reason):
     _terminal_queue_hold_log_at[key] = now
     try:
         _log_activity(
-            "inject", "QUEUE_HELD",
+            "inject", "Q_HELD",
             f"session={sid} reason={reason} — queued terminal input held, "
             "will keep retrying every 5s",
         )
