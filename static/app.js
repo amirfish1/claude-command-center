@@ -68587,6 +68587,7 @@
       '#cccThroughputStrip .ts-yd:hover{opacity:1;text-decoration:underline;}' +
       'body.flow-popout #cccThroughputStrip{display:none;}' +
       'html:not(.ccc-debug-mode) #cccThroughputStrip{display:none;}' +
+      'html:not(.ccc-debug-mode) #announceBtnConv{display:none!important;}' +
       /* Phones: the lane/pace text overflows the strip ("…vs yd yd" clipped
          against the yd-report link). Hide the redundant link (the whole
          strip already opens the dashboard on tap) and let the rest
