@@ -4331,7 +4331,7 @@ def _short_model_alias(model):
 
 def _claude_model_supports_1m(model):
     alias = _short_model_alias(model).lower()
-    return alias in ("opus-4-8", "opus-4-7")
+    return alias in ("fable-5", "opus-5", "sonnet-5", "opus-4-8", "opus-4-7")
 
 
 def _model_context_1m_allowed(model, context_1m, engine="claude"):
