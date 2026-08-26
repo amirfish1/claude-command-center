@@ -161,6 +161,12 @@ degrades instead of wedging. Don't rely on it: it's a backstop, not a licence.)
 
 Don't mock external systems (`gh`, `claude`, `pkood`) in the smoke test. The smoke test is about import-time correctness, not behavior.
 
+Running the suite locally with stdlib `python3 -m unittest discover` (Python 3.12+) floods the output with thousands of `ResourceWarning: unclosed database` lines — the test suite reloads `server.py`/`ccc_server` modules many times per run, and each reload drops the previous module's cached sqlite3 connections without closing them. `unittest.main()`'s `TestProgram` defaults to `warnings='default'` whenever `sys.warnoptions` is empty, and that `simplefilter('default')` call wipes any `warnings.filterwarnings()` set inside the test package before the run starts — so filtering from Python code doesn't stick. Set `sys.warnoptions` yourself via the environment instead, which suppresses the flood without hiding real assertion failures:
+
+```bash
+PYTHONWARNINGS="ignore::ResourceWarning" python3 -m unittest discover
+```
+
 ### Browser / UI verification
 
 To verify UI changes visually, this repo uses **puppeteer** (dependency `puppeteer`), via `snapshot.js` — `node snapshot.js` launches headless Chrome, loads `http://127.0.0.1:8090`, and writes `snapshot.png`. Puppeteer's browser lives in `~/.cache/puppeteer` (separate from any Playwright cache). The `chrome-devtools` MCP also works (drives real Chrome) for interactive checks.

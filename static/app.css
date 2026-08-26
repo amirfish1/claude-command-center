@@ -1876,6 +1876,16 @@
     flex: none; color: var(--kw-faint); display: inline-flex; transition: transform 0.15s ease;
   }
   .conv-pane.is-webui-session .kimi-tool.open .kimi-tool-car { transform: rotate(90deg); }
+  .conv-pane.is-webui-session .kimi-tool-peek {
+    display: block; padding: 0 12px 7px 30px;
+    font-family: var(--font-mono, 'SF Mono', SFMono-Regular, Consolas, monospace);
+    font-size: 12px; line-height: 1.5; color: var(--kw-muted);
+    white-space: pre-wrap; word-break: break-word;
+  }
+  .conv-pane.is-webui-session .kimi-tool-peek-more {
+    display: block; color: var(--kw-faint); font-style: italic;
+  }
+  .conv-pane.is-webui-session .kimi-tool.open .kimi-tool-peek { display: none; }
   .conv-pane.is-webui-session .kimi-tool-body { display: none; }
   .conv-pane.is-webui-session .kimi-tool.open .kimi-tool-body { display: block; }
   .conv-pane.is-webui-session .kimi-tool-body-pad {
@@ -1907,6 +1917,18 @@
     background: var(--kw-danger-soft); box-shadow: inset 2px 0 0 var(--kw-danger);
   }
   .conv-pane.is-webui-session .kimi-diff-row.del .kimi-diff-sign { color: var(--kw-danger); }
+
+  /* ── Todo/plan checklist (CCC-940): readable rows instead of raw JSON args ── */
+  .conv-pane.is-webui-session .kimi-todo-list { display: flex; flex-direction: column; gap: 4px; margin: 0 0 4px; }
+  .conv-pane.is-webui-session .kimi-todo-row {
+    display: flex; align-items: flex-start; gap: 8px;
+    font-family: var(--font-sans, inherit); font-size: 13px; line-height: 1.5; color: var(--kw-text);
+  }
+  .conv-pane.is-webui-session .kimi-todo-mark {
+    flex: none; width: 14px; height: 14px; margin-top: 2px; color: var(--kw-success);
+  }
+  .conv-pane.is-webui-session .kimi-todo-row.done .kimi-todo-title { color: var(--kw-muted); text-decoration: line-through; }
+  .conv-pane.is-webui-session .kimi-todo-row.active .kimi-todo-title { font-weight: 600; }
 
   /* ── Thinking (kimi-web ThinkingBlock.vue): no label header; teaser = last
      paragraph (faint), click toggles the full text inline. ── */
@@ -2907,16 +2929,13 @@
     box-shadow: 0 0 6px rgba(254, 202, 202, 0.9);
   }
   /* Hide the pill whenever a text input is focused — that's exactly
-     when setInterval callbacks are muted in app.js. Uses :has() so no
-     JS state needs to track focus changes. */
-  body:has(textarea:focus) .live-refresh-cluster,
-  body:has(input[type="text"]:focus) .live-refresh-cluster,
-  body:has(input[type="search"]:focus) .live-refresh-cluster,
-  body:has(input[type="email"]:focus) .live-refresh-cluster,
-  body:has(input[type="url"]:focus) .live-refresh-cluster,
-  body:has(input[type="tel"]:focus) .live-refresh-cluster,
-  body:has(input[type="password"]:focus) .live-refresh-cluster,
-  body:has(input:not([type]):focus) .live-refresh-cluster {
+     when setInterval callbacks are muted in app.js. body.has-text-focus
+     is kept in sync by focusin/focusout in app.js. (This used to be
+     body:has(textarea:focus); Blink folds every :has() rule into one
+     shared invalidation set and re-fires it on the anchor for any DOM
+     mutation under it, so a body-anchored :has() re-styled ~500 sidebar
+     badges on every forced layout read during a session open.) */
+  body.has-text-focus .live-refresh-cluster {
     opacity: 0;
     transform: translateY(4px);
     pointer-events: none;
@@ -3730,6 +3749,9 @@
   }
   .conv-input-context .wp-handover-toggle.is-on .wp-handover-dot { background: #ffa640; }
   .conv-input-context .wp-handover-toggle.is-on:hover { background: rgba(255,166,64,0.24); }
+  /* Click registered, commit debounced -- dim so rapid re-clicks don't read
+     as N separate confirmed changes before the settle timer fires. */
+  .conv-input-context .wp-handover-toggle.is-pending { opacity: 0.55; }
   .conv-input-context .wp-model-effort {
     margin-left: 4px;
     color: var(--text-muted);
@@ -5346,14 +5368,27 @@
   /* CCC-449: with several buttons the hover action bar extends left past the
      36px row-end slot and lands on the context-% badge, which punches through
      the bar (z-index 6, CCC-295) — archive icon and % chip rendered on top of
-     each other. On hover the main-row badge now fades out like the time chip;
-     a duplicate % badge rendered as the first item inside the action bar keeps
-     click-to-/compact reachable while hovered (that copy is nested inside
-     .conv-row-actions, so the direct-child selectors below don't touch it). */
-  .conv-item:hover .conv-main-row:has(.conv-row-actions:not(:empty)) > .conv-pct-badge,
-  .conv-item:hover .conv-main-row:has(.conv-row-actions:not(:empty)) > .conv-qc-badge,
-  .conv-item:hover .conv-main-row:has(.conv-row-actions:not(:empty)) > .conv-evergreen-inline-badges .conv-pct-badge,
-  .conv-item:hover .conv-main-row:has(.conv-row-actions:not(:empty)) > .conv-evergreen-inline-badges .conv-qc-badge {
+     each other. The main-row badge now fades out like the time chip whenever
+     the action bar is actually visible; a duplicate % badge rendered as the
+     first item inside the action bar keeps click-to-/compact reachable while
+     it's showing (that copy is nested inside .conv-row-actions, so the
+     direct-child selectors below don't touch it).
+     CCC-961: the bar is only visible via `.is-actions-open` (kebab click) or,
+     for pinned rows, on hover/focus (CCC-...pinned rule above) — NOT on plain
+     `:hover` for a regular row. The old `:hover` selector faded the main
+     badge before anything replaced it, so on a bare hover the absolutely-
+     positioned .conv-hover-meta-row (UID chip, right-aligned) showed through
+     in the gap where the % used to be. Scope the fade to when the bar is
+     actually shown, so the badge (z-index 6) keeps winning over the meta-row
+     overlay (z-index 2) during plain hover. */
+  .conv-item.is-actions-open .conv-main-row:has(.conv-row-actions:not(:empty)) > .conv-pct-badge,
+  .conv-item.is-actions-open .conv-main-row:has(.conv-row-actions:not(:empty)) > .conv-qc-badge,
+  .conv-item.is-actions-open .conv-main-row:has(.conv-row-actions:not(:empty)) > .conv-evergreen-inline-badges .conv-pct-badge,
+  .conv-item.is-actions-open .conv-main-row:has(.conv-row-actions:not(:empty)) > .conv-evergreen-inline-badges .conv-qc-badge,
+  .conv-item.is-pinned:hover .conv-main-row:has(.conv-row-actions:not(:empty)) > .conv-pct-badge,
+  .conv-item.is-pinned:hover .conv-main-row:has(.conv-row-actions:not(:empty)) > .conv-qc-badge,
+  .conv-item.is-pinned:hover .conv-main-row:has(.conv-row-actions:not(:empty)) > .conv-evergreen-inline-badges .conv-pct-badge,
+  .conv-item.is-pinned:hover .conv-main-row:has(.conv-row-actions:not(:empty)) > .conv-evergreen-inline-badges .conv-qc-badge {
     opacity: 0;
     pointer-events: none;
   }
@@ -6545,8 +6580,11 @@
   .conv-item:hover:not(.active) .conv-hover-meta-row {
     display: flex;
     position: absolute;
-    /* clears the time column so "2d" stays readable */
-    right: calc(12px + var(--conv-time-col));
+    /* Clears the time column so "2d" stays readable, PLUS ~36px for the
+       context-% badge (CCC-961): the badge sits just left of the time
+       column and this overlay used to land right on top of it, hiding the
+       % behind the session-id chip on hover. */
+    right: calc(12px + var(--conv-time-col) + 36px);
     top: 50%;
     transform: translateY(-50%);
     margin: 0;
@@ -8345,8 +8383,12 @@
        viewport together, especially with a model like "K2.7 Coding". Keep them
        on one horizontal row and scroll internally so the send/mic/tts button
        cluster on the right never gets pushed off-screen. */
+    .conv-input-row-bottom {
+      min-width: 0;
+      overflow: hidden;
+    }
     .conv-input-selectors {
-      flex: 1 1 auto;
+      flex: 1 1 0%;
       min-width: 0;
       flex-wrap: nowrap;
       overflow-x: auto;
@@ -8360,6 +8402,22 @@
     }
     .conv-input-buttons {
       flex-shrink: 0;
+      min-width: 0;
+      margin-left: 0;
+    }
+    /* Cap the width of spawn selects on narrow phones so the button cluster
+       on the right never gets pushed off-screen. Native selects size to their
+       widest option, which for models like "K2.7 Coding Highspeed" is far
+       wider than the selected label that fits on a phone. */
+    .conv-input-bar select.engine-select {
+      max-width: 72px;
+    }
+    .conv-input-bar select.model-select {
+      max-width: 112px;
+    }
+    .conv-input-bar select.effort-select,
+    .conv-input-bar select#convInputIssueAction {
+      max-width: 96px;
     }
     /* iOS Safari auto-zooms focused inputs below 16px. The inline style on the
        spawn selects sets 12px for desktop density; force 16px on mobile so the
@@ -8912,7 +8970,175 @@
     margin: 10px 0 4px;
   }
 
-  /* Compact-in-progress banner shown while /compact is running. */
+  /* ── /compact lifecycle card ──────────────────────────────────────
+     One card owns the whole compaction: mounted on the keystroke, ticks a
+     live clock while the engine summarizes, and lands on the before/after
+     numbers with the resume summary nested inside it. */
+  .compact-run-card {
+    margin: 12px 0;
+    padding: 12px 14px 13px;
+    border-radius: 10px;
+    border: 1px solid color-mix(in srgb, var(--accent) 34%, var(--border) 66%);
+    background:
+      linear-gradient(180deg,
+        color-mix(in srgb, var(--accent) 10%, var(--surface) 90%),
+        color-mix(in srgb, var(--accent) 4%, var(--surface) 96%));
+    font-size: 13px; line-height: 1.5; color: var(--text);
+    animation: ccc-compact-card-in 220ms ease-out;
+  }
+  @keyframes ccc-compact-card-in {
+    from { opacity: 0; transform: translateY(4px); }
+    to   { opacity: 1; transform: none; }
+  }
+  /* The absorbed resume summary renders INSIDE the card; its standalone
+     event row stays in the DOM (jsonl-line dedupe anchors on it) but hidden,
+     so there is exactly one visible artefact per compaction. */
+  .event.compact-resume-event.compact-absorbed-by-run { display: none; }
+
+  .compact-run-head {
+    display: flex; align-items: center; gap: 9px;
+    font-size: 12px; font-weight: 700;
+    text-transform: uppercase; letter-spacing: 0.05em;
+    color: var(--accent);
+  }
+  .compact-run-title { flex: 1; }
+  .compact-run-clock {
+    font-variant-numeric: tabular-nums;
+    font-weight: 600; letter-spacing: 0;
+    color: color-mix(in srgb, var(--text) 60%, transparent);
+  }
+  .compact-run-glyph { display: inline-flex; width: 15px; justify-content: center; }
+  .compact-run-spinner {
+    width: 13px; height: 13px; border-radius: 50%;
+    border: 2px solid color-mix(in srgb, var(--accent) 35%, transparent);
+    border-top-color: var(--accent);
+    animation: ccc-compact-spin 0.9s linear infinite;
+  }
+  @keyframes ccc-compact-spin { to { transform: rotate(360deg); } }
+
+  /* Named stages, so "what is it doing right now" is answerable at a glance. */
+  .compact-run-steps {
+    display: flex; flex-wrap: wrap; align-items: center; gap: 6px 14px;
+    margin: 9px 0 2px;
+    font-size: 12px;
+  }
+  .compact-run-step {
+    display: inline-flex; align-items: center; gap: 5px;
+    color: color-mix(in srgb, var(--text) 42%, transparent);
+    transition: color 180ms ease;
+  }
+  .compact-run-step-mark { display: inline-flex; width: 11px; justify-content: center; }
+  .compact-run-step.is-done { color: color-mix(in srgb, var(--text) 62%, transparent); }
+  .compact-run-step.is-done .compact-run-step-mark { color: var(--green, #4ade80); }
+  .compact-run-step.is-active { color: var(--text); font-weight: 600; }
+  .compact-run-step-dot {
+    width: 7px; height: 7px; border-radius: 50%;
+    background: var(--accent);
+    animation: ccc-compact-pulse 1.25s ease-in-out infinite;
+  }
+  @keyframes ccc-compact-pulse {
+    0%, 100% { opacity: 1;   transform: scale(1); }
+    50%      { opacity: 0.35; transform: scale(0.7); }
+  }
+
+  /* Estimated progress. Eases toward but never reaches 100% while working —
+     it paces the wait, it does not claim to know the finish time. */
+  .compact-run-bar {
+    position: relative; overflow: hidden;
+    height: 4px; margin: 10px 0 2px;
+    border-radius: 999px;
+    background: color-mix(in srgb, var(--accent) 16%, transparent);
+  }
+  .compact-run-bar-fill {
+    display: block; height: 100%;
+    border-radius: 999px;
+    background: linear-gradient(90deg,
+      color-mix(in srgb, var(--accent) 55%, transparent), var(--accent));
+    transition: width 900ms cubic-bezier(0.22, 1, 0.36, 1);
+  }
+  .compact-run-bar::after {
+    content: ''; position: absolute; inset: 0;
+    background: linear-gradient(90deg, transparent,
+      color-mix(in srgb, var(--accent) 45%, transparent), transparent);
+    transform: translateX(-100%);
+    animation: ccc-compact-shimmer 1.9s ease-in-out infinite;
+  }
+  @keyframes ccc-compact-shimmer { to { transform: translateX(100%); } }
+
+  /* The payoff line: what the context was, what it is now, what that bought. */
+  .compact-run-result {
+    display: flex; flex-wrap: wrap; align-items: baseline; gap: 8px;
+    margin: 10px 0 2px;
+    font-size: 14px;
+    animation: ccc-compact-result-in 320ms ease-out;
+  }
+  @keyframes ccc-compact-result-in {
+    from { opacity: 0; transform: translateY(-3px); }
+    to   { opacity: 1; transform: none; }
+  }
+  .compact-run-result b { font-variant-numeric: tabular-nums; color: var(--text); }
+  .compact-run-arrow { color: var(--accent); }
+  .compact-run-freed { color: var(--green, #4ade80); font-weight: 600; }
+  .compact-run-pct { font-weight: 500; opacity: 0.85; }
+  .compact-run-took,
+  .compact-run-sep { color: color-mix(in srgb, var(--text) 48%, transparent); font-size: 13px; }
+
+  .compact-run-note { margin-top: 8px; }
+  .compact-run-note b { font-variant-numeric: tabular-nums; }
+  .compact-run-quiet,
+  .compact-run-heartbeat,
+  .compact-run-backup {
+    color: color-mix(in srgb, var(--text) 58%, transparent);
+  }
+  .compact-run-heartbeat, .compact-run-backup { margin-top: 6px; font-size: 12px; }
+  .compact-run-elapsed { font-variant-numeric: tabular-nums; }
+  .compact-run-slownote {
+    margin-top: 8px; padding: 7px 9px;
+    border-radius: 7px;
+    background: color-mix(in srgb, var(--accent) 12%, transparent);
+    font-size: 12px;
+  }
+  .compact-run-retry {
+    display: inline-block; margin-left: 8px;
+    padding: 3px 9px;
+    border-radius: 6px;
+    border: 1px solid color-mix(in srgb, var(--accent) 45%, transparent);
+    background: transparent; color: var(--accent);
+    font-size: 12px; font-weight: 600; cursor: pointer;
+  }
+  .compact-run-retry:hover { background: color-mix(in srgb, var(--accent) 14%, transparent); }
+
+  .compact-run-card[data-stage="done"] {
+    border-color: color-mix(in srgb, var(--green, #4ade80) 32%, var(--border) 68%);
+  }
+  .compact-run-card[data-stage="done"] .compact-run-head,
+  .compact-run-card[data-stage="done"] .compact-run-glyph { color: var(--green, #4ade80); }
+  .compact-run-card[data-stage="failed"] {
+    border-color: color-mix(in srgb, var(--red, #f87171) 40%, var(--border) 60%);
+    background: color-mix(in srgb, var(--red, #f87171) 6%, var(--surface) 94%);
+  }
+  .compact-run-card[data-stage="failed"] .compact-run-head,
+  .compact-run-card[data-stage="failed"] .compact-run-glyph { color: var(--red, #f87171); }
+  .compact-run-card.is-slow[data-stage="working"] {
+    border-color: color-mix(in srgb, var(--amber, #fbbf24) 40%, var(--border) 60%);
+  }
+  /* Rows folded into a record card stay in the DOM (jsonl-line dedupe and
+     scroll anchoring both key off them) but stop rendering as siblings. */
+  .event.compact-record-hidden { display: none; }
+  .compact-run-card.is-record { animation: none; }
+
+  .compact-run-summary { margin-top: 10px; }
+  .compact-run-summary .compact-resume-card { margin: 0; }
+
+  @media (prefers-reduced-motion: reduce) {
+    .compact-run-card,
+    .compact-run-result { animation: none; }
+    .compact-run-bar::after,
+    .compact-run-step-dot { animation: none; }
+    .compact-run-bar-fill { transition: none; }
+  }
+
+  /* Legacy compact-in-progress banner (kept for any path still using it). */
   .compact-in-progress-banner {
     display: flex; align-items: center; gap: 10px;
     margin: 10px 0;
@@ -8960,6 +9186,11 @@
     justify-content: space-between;
     gap: 8px;
   }
+  .usage-limit-resume-banner.is-cancel-error {
+    border-style: solid;
+    border-color: color-mix(in srgb, var(--danger, #f85149) 65%, var(--border) 35%);
+    background: color-mix(in srgb, var(--danger, #f85149) 10%, var(--surface) 90%);
+  }
 
   .usage-limit-resume-cancel {
     flex: 0 0 auto;
@@ -8972,6 +9203,11 @@
     padding: 2px 4px;
     border-radius: 4px;
     opacity: 0.7;
+    white-space: nowrap;
+  }
+  .usage-limit-resume-banner.is-cancel-error .usage-limit-resume-cancel {
+    font-size: 11px;
+    font-weight: 700;
   }
   .usage-limit-resume-cancel:hover {
     opacity: 1;
@@ -13100,7 +13336,7 @@
   .conv-archived-tools {
     display: inline-flex;
     align-items: center;
-    gap: 6px;
+    gap: 10px;
     margin-left: auto;
   }
   .conv-inprogress-tools .conv-grouping-toggle,
@@ -13545,7 +13781,8 @@
     height: auto !important;
     max-height: none;
     min-height: 0;
-    padding: 8px 12px 10px;
+    /* CCC-976: a touch more breathing room above the Queue tab's header row. */
+    padding: 14px 12px 10px;
     border-top: none;
     background: transparent;
   }
@@ -16140,7 +16377,7 @@
    Status row order in right-rail mode: header → conversation → INPUT BAR
    → status row → keyboard hint. Input reads as the primary action; the
    status (worktree / context / cost / model) is reference info underneath. */
-body.status-pos-right .conv-pane:has(> .status-rail) {
+body.status-pos-right .conv-pane.has-status-rail {
   display: grid;
   grid-template-columns: minmax(0, 1fr) var(--status-rail-width, 260px);
   grid-template-rows: auto 1fr auto auto auto auto;
@@ -16153,7 +16390,7 @@ body.status-pos-right .conv-pane:has(> .status-rail) {
     "hint    rail";
   min-height: 0;
 }
-body.status-pos-right .conv-pane:has(> .status-rail):has(> .conv-input-context.is-new-session) {
+body.status-pos-right .conv-pane.has-status-rail.has-new-session-context {
   grid-template-areas:
     "header  rail"
     "conv    rail"
@@ -16162,13 +16399,13 @@ body.status-pos-right .conv-pane:has(> .status-rail):has(> .conv-input-context.i
     "input   rail"
     "hint    rail";
 }
-body.status-pos-right .conv-pane:has(> .status-rail) > .conv-pane-header   { grid-area: header;  min-width: 0; }
-body.status-pos-right .conv-pane:has(> .status-rail) > .conversations-view { grid-area: conv;    min-width: 0; min-height: 0; }
-body.status-pos-right .conv-pane:has(> .status-rail) > .conv-goal-strip    { grid-area: goal;    min-width: 0; }
-body.status-pos-right .conv-pane:has(> .status-rail) > .conv-input-bar     { grid-area: input;   min-width: 0; }
-body.status-pos-right .conv-pane:has(> .status-rail) > .conv-input-hint    { grid-area: hint;    min-width: 0; }
-body.status-pos-right .conv-pane:has(> .status-rail) > .conv-input-context { grid-area: context; min-width: 0; }
-body.status-pos-right .conv-pane:has(> .status-rail) > .status-rail {
+body.status-pos-right .conv-pane.has-status-rail > .conv-pane-header   { grid-area: header;  min-width: 0; }
+body.status-pos-right .conv-pane.has-status-rail > .conversations-view { grid-area: conv;    min-width: 0; min-height: 0; }
+body.status-pos-right .conv-pane.has-status-rail > .conv-goal-strip    { grid-area: goal;    min-width: 0; }
+body.status-pos-right .conv-pane.has-status-rail > .conv-input-bar     { grid-area: input;   min-width: 0; }
+body.status-pos-right .conv-pane.has-status-rail > .conv-input-hint    { grid-area: hint;    min-width: 0; }
+body.status-pos-right .conv-pane.has-status-rail > .conv-input-context { grid-area: context; min-width: 0; }
+body.status-pos-right .conv-pane.has-status-rail > .status-rail {
   grid-area: rail;
   display: flex; flex-direction: column;
   position: relative;
@@ -16272,29 +16509,6 @@ body.status-pos-right .conv-pane:has(> .status-rail) > .status-rail {
   width: 12px;
   height: 12px;
 }
-/* CCC-467: "+ Object" affordance in the rail head — assign the selected
-   session to an object, replacing the per-row "+" chip. */
-.status-rail-add-object-btn {
-  flex: 0 0 auto;
-  display: inline-flex;
-  align-items: center;
-  height: 18px;
-  padding: 0 7px;
-  font-size: 11px;
-  font-weight: 600;
-  color: var(--purple, #bc8cff);
-  background: rgba(188,140,255,0.10);
-  border: 1px solid rgba(188,140,255,0.32);
-  border-radius: 4px;
-  cursor: pointer;
-  white-space: nowrap;
-}
-.status-rail-add-object-btn:hover,
-.status-rail-add-object-btn:focus-visible {
-  background: rgba(188,140,255,0.18);
-  color: var(--text);
-  outline: none;
-}
 .status-rail-activity-log-btn {
   flex: 0 0 auto;
   display: inline-flex;
@@ -16326,12 +16540,6 @@ body.status-pos-right .conv-pane:has(> .status-rail) > .status-rail {
   padding: 1px 4px;
   outline: none;
 }
-.status-rail-context {
-  margin-top: 2px;
-  color: var(--text-muted);
-  font-size: 11px;
-  line-height: 1.3;
-}
 /* Transcript size (CCC-475) — session metadata, moved here from the pane
    titlebar. Filled by updatePaneHeader for the active pane. */
 .status-rail-size {
@@ -16354,11 +16562,52 @@ body.status-pos-right .conv-pane:has(> .status-rail) > .status-rail {
   color: var(--text);
   font-variant-numeric: tabular-nums;
 }
+/* Hidden by default — the same "cache-adjusted tokens … API list-price
+   equivalent" text is already on #statusRailTokens's native title tooltip,
+   so it only needs to show up on hover (CCC-964) rather than sit visible
+   under the headline number all the time. */
 .status-rail-tokens .rail-tokens-label {
+  display: none;
   margin-top: 2px;
   color: var(--text-muted);
   font-size: 11px;
   line-height: 1.3;
+}
+.status-rail-tokens:hover .rail-tokens-label {
+  display: block;
+}
+/* Per-turn cache-adjusted token columns (last 30 billed turns), newest on
+   the right. Built by _railTurnGraphHtml(); bars are flex children with a
+   percent height, so the strip scales to the visible max with no axis. */
+.status-rail-tokens .rail-turn-graph {
+  display: flex;
+  align-items: flex-end;
+  gap: 2px;
+  height: 40px;
+  margin-top: 8px;
+  padding-bottom: 1px;
+  border-bottom: 1px solid var(--border);
+}
+.status-rail-tokens .rail-turn-bar {
+  flex: 1 1 0;
+  min-width: 3px;
+  max-width: 10px;
+  border-radius: 2px 2px 0 0;
+  background: color-mix(in srgb, var(--accent, #6ea8fe) 55%, var(--surface));
+  transition: height 180ms ease-out;
+}
+.status-rail-tokens .rail-turn-bar:hover {
+  background: var(--accent, #6ea8fe);
+}
+.status-rail-tokens .rail-turn-bar.is-latest {
+  background: var(--accent, #6ea8fe);
+}
+.status-rail-tokens .rail-turn-graph-caption {
+  margin-top: 2px;
+  color: var(--text-muted);
+  font-size: 10px;
+  line-height: 1.3;
+  font-variant-numeric: tabular-nums;
 }
 .status-rail-tokens .rail-tokens-cache {
   margin-top: 2px;
@@ -16669,7 +16918,7 @@ body.status-rail-resizing * {
   color: var(--accent);
   background: var(--surface-2);
 }
-body.status-pos-right.status-rail-collapsed .conv-pane:has(> .status-rail) {
+body.status-pos-right.status-rail-collapsed .conv-pane.has-status-rail {
   grid-template-columns: minmax(0, 1fr);
   grid-template-areas:
     "header"
@@ -16679,7 +16928,7 @@ body.status-pos-right.status-rail-collapsed .conv-pane:has(> .status-rail) {
     "hint"
     "context";
 }
-body.status-pos-right.status-rail-collapsed .conv-pane:has(> .status-rail):has(> .conv-input-context.is-new-session) {
+body.status-pos-right.status-rail-collapsed .conv-pane.has-status-rail.has-new-session-context {
   grid-template-areas:
     "header"
     "conv"
@@ -16688,10 +16937,10 @@ body.status-pos-right.status-rail-collapsed .conv-pane:has(> .status-rail):has(>
     "input"
     "hint";
 }
-body.status-pos-right.status-rail-collapsed .conv-pane:has(> .status-rail) > .status-rail {
+body.status-pos-right.status-rail-collapsed .conv-pane.has-status-rail > .status-rail {
   display: none;
 }
-body.status-pos-right.status-rail-collapsed .conv-pane:has(> .status-rail) > .status-rail-restore {
+body.status-pos-right.status-rail-collapsed .conv-pane.has-status-rail > .status-rail-restore {
   display: inline-flex;
 }
 /* When the rail-restore chevron is visible it sits absolutely positioned
@@ -16700,7 +16949,7 @@ body.status-pos-right.status-rail-collapsed .conv-pane:has(> .status-rail) > .st
    model pill — which made the model name "superseded by other stuff"
    per a user annotation. Reserve enough room (chevron width + breathing
    room) so the model pill stays clickable. */
-body.status-pos-right.status-rail-collapsed .conv-pane:has(> .status-rail) > .conv-input-context {
+body.status-pos-right.status-rail-collapsed .conv-pane.has-status-rail > .conv-input-context {
   padding-right: 40px;
 }
 
@@ -16756,6 +17005,10 @@ body.status-pos-right.status-rail-collapsed .conv-pane:has(> .status-rail) > .co
 .rail-actions .launch-split { display: flex; gap: 0; padding: 0; border: none; }
 .rail-actions .launch-split .launch-btn { border-top-right-radius: 0; border-bottom-right-radius: 0; flex: 1 1 auto; }
 .rail-actions .launch-split .launch-choice-btn { border-top-left-radius: 0; border-bottom-left-radius: 0; margin-left: -1px; padding: 6px 8px; flex: 0 0 auto; width: auto; }
+/* Same joined-pair treatment for the localhost pill + its caret — the wrap
+   span otherwise inherited the generic `.rail-actions > *` chrome, drawing a
+   redundant border/padding box around the already-bordered pill (CCC-966). */
+.rail-actions .localhost-wrap { padding: 0; border: none; }
 .rail-actions #cccBreadcrumb,
 .rail-actions #convStatus {
   flex: 1 1 100%;
@@ -16772,6 +17025,12 @@ body.status-pos-right.status-rail-collapsed .conv-pane:has(> .status-rail) > .co
 }
 .rail-actions #convStatus {
   color: var(--text-muted);
+}
+/* CCC-965: #convStatus is usually empty (see the JS comment at its capture
+   site) but still inherited the generic `.rail-actions > *` border/padding
+   chrome, rendering as a redundant full-width empty divider bar. */
+.rail-actions #convStatus:empty {
+  display: none;
 }
 /* The deploy pill is an <a>; keep the deploy-dot color cue. */
 .rail-actions #deployPill .deploy-dot {
@@ -16790,6 +17049,18 @@ body.status-pos-right.status-rail-collapsed .conv-pane:has(> .status-rail) > .co
   cursor: pointer;
 }
 .rail-actions .font-size-controls { display: flex; }
+/* CCC-970: the "Session <id> 📋" pill's full label made it too wide to
+   share a row with the launch/status/localhost buttons above it, so it
+   always wrapped onto its own line alone. Drop the "SESSION" text and
+   tighten the padding/gap here only — the pane titlebar copy of this same
+   markup (setCopyableSessionId) keeps its label. */
+.rail-actions #convSessionId {
+  padding: 4px 6px;
+  gap: 4px;
+}
+.rail-actions #convSessionId .sid-label {
+  display: none;
+}
 
 /* Top-left alerts strip — sits in the sidebar header next to the title.
    Hosts always-visible app-level signals (Update pill primarily).
@@ -17431,18 +17702,6 @@ body.status-pos-right.status-rail-collapsed .conv-pane:has(> .status-rail) > .co
 .sh-more-led.is-green  { background: #4ade80; }
 .sh-more-led.is-yellow { background: #e0b341; }
 .sh-more-led.is-red    { background: #e5534b; }
-/* Same signal on the collapsed "..." button, so a degraded service is still
-   visible without opening the menu -- the one job the header chip had. */
-.sh-more-btn.has-alert::after {
-  content: "";
-  position: absolute;
-  top: 3px; right: 3px;
-  width: 6px; height: 6px;
-  border-radius: 50%;
-  background: #e0b341;
-  box-shadow: 0 0 0 2px var(--bg, #14161a);
-}
-.sh-more-btn.has-alert.is-red::after { background: #e5534b; }
 .sh-more-divider {
   height: 1px;
   margin: 5px 0;
@@ -19238,7 +19497,7 @@ body.status-pos-right #convToolbar {
    plus the bottom of .gc-orchestrator-panel. The dismissal-persist key in
    index.html now keeps it down for ~5 years once closed, so the auto-hide
    here just covers the "not yet dismissed" case. */
-body:has(.gc-reader) .pwa-install-banner {
+body.has-gc-reader .pwa-install-banner {
   display: none !important;
 }
 
@@ -23371,7 +23630,7 @@ body:has(.gc-reader) .pwa-install-banner {
 /* The optional right-side status rail turns each pane into a grid. Reserve
    an explicit row for the per-pane selector so it does not fall
    into implicit-grid placement or displaces the composer. */
-body.status-pos-right .conv-pane:has(> .status-rail) {
+body.status-pos-right .conv-pane.has-status-rail {
   grid-template-rows: auto auto 1fr auto auto auto auto;
   grid-template-areas:
     "header rail"
@@ -23382,7 +23641,7 @@ body.status-pos-right .conv-pane:has(> .status-rail) {
     "context rail"
     "hint rail";
 }
-body.status-pos-right .conv-pane:has(> .status-rail):has(> .conv-input-context.is-new-session) {
+body.status-pos-right .conv-pane.has-status-rail.has-new-session-context {
   grid-template-areas:
     "header rail"
     "present-toolbar rail"
@@ -23392,8 +23651,8 @@ body.status-pos-right .conv-pane:has(> .status-rail):has(> .conv-input-context.i
     "input rail"
     "hint rail";
 }
-body.status-pos-right .conv-pane:has(> .status-rail) > .conv-presentation-toolbar { grid-area: present-toolbar; min-width: 0; }
-body.status-pos-right.status-rail-collapsed .conv-pane:has(> .status-rail) {
+body.status-pos-right .conv-pane.has-status-rail > .conv-presentation-toolbar { grid-area: present-toolbar; min-width: 0; }
+body.status-pos-right.status-rail-collapsed .conv-pane.has-status-rail {
   grid-template-areas:
     "header"
     "present-toolbar"
@@ -23403,7 +23662,7 @@ body.status-pos-right.status-rail-collapsed .conv-pane:has(> .status-rail) {
     "hint"
     "context";
 }
-body.status-pos-right.status-rail-collapsed .conv-pane:has(> .status-rail):has(> .conv-input-context.is-new-session) {
+body.status-pos-right.status-rail-collapsed .conv-pane.has-status-rail.has-new-session-context {
   grid-template-areas:
     "header"
     "present-toolbar"
@@ -24162,8 +24421,8 @@ a.settings-row:focus-visible .settings-launcher-btn { text-decoration: underline
    content is re-parented by _applyStatusRailLayout when the breakpoint
    changes, so the rail never consumes phone-width conversation space. */
 @media (max-width: 1200px) {
-  body.status-pos-right:not(.popout-rail-forced) .conv-pane:has(> .status-rail),
-  body.status-pos-right.status-rail-collapsed:not(.popout-rail-forced) .conv-pane:has(> .status-rail) {
+  body.status-pos-right:not(.popout-rail-forced) .conv-pane.has-status-rail,
+  body.status-pos-right.status-rail-collapsed:not(.popout-rail-forced) .conv-pane.has-status-rail {
     grid-template-columns: minmax(0, 1fr);
     grid-template-areas:
       "header"
@@ -24174,12 +24433,12 @@ a.settings-row:focus-visible .settings-launcher-btn { text-decoration: underline
       "input"
       "hint";
   }
-  body.status-pos-right:not(.popout-rail-forced) .conv-pane:has(> .status-rail) > .status-rail,
-  body.status-pos-right.status-rail-collapsed:not(.popout-rail-forced) .conv-pane:has(> .status-rail) > .status-rail {
+  body.status-pos-right:not(.popout-rail-forced) .conv-pane.has-status-rail > .status-rail,
+  body.status-pos-right.status-rail-collapsed:not(.popout-rail-forced) .conv-pane.has-status-rail > .status-rail {
     display: none;
   }
-  body.status-pos-right:not(.popout-rail-forced) .conv-pane:has(> .status-rail) > .status-rail-restore,
-  body.status-pos-right.status-rail-collapsed:not(.popout-rail-forced) .conv-pane:has(> .status-rail) > .status-rail-restore {
+  body.status-pos-right:not(.popout-rail-forced) .conv-pane.has-status-rail > .status-rail-restore,
+  body.status-pos-right.status-rail-collapsed:not(.popout-rail-forced) .conv-pane.has-status-rail > .status-rail-restore {
     display: none;
   }
   body.status-pos-right .conv-sticky-header {
@@ -24214,7 +24473,7 @@ a.settings-row:focus-visible .settings-launcher-btn { text-decoration: underline
     cursor: pointer;
     font: 600 12px/1 inherit;
   }
-  body.conversation-popout.popout-rail-forced .conv-pane:has(> .status-rail) {
+  body.conversation-popout.popout-rail-forced .conv-pane.has-status-rail {
     grid-template-columns: minmax(0, 1fr) var(--status-rail-width, 260px);
     grid-template-areas:
       "header  rail"
@@ -24224,7 +24483,7 @@ a.settings-row:focus-visible .settings-launcher-btn { text-decoration: underline
       "context rail"
       "hint    rail";
   }
-  body.conversation-popout.popout-rail-forced .conv-pane:has(> .status-rail) > .status-rail {
+  body.conversation-popout.popout-rail-forced .conv-pane.has-status-rail > .status-rail {
     display: flex;
   }
 }
@@ -24775,6 +25034,7 @@ html:not(.ccc-debug-mode) #cccHealth,
 html:not(.ccc-debug-mode) #cccAdvisorPill,
 html:not(.ccc-debug-mode) #cccFleetPill,
 html:not(.ccc-debug-mode) #cccHeroPulsePill,
+html:not(.ccc-debug-mode) #deployPill,
 html:not(.ccc-debug-mode) #customNavLinks .q2-toggle-opt[href="/view/reddit"],
 html:not(.ccc-debug-mode) [data-role="conv-rowstyle-palette"],
 html:not(.ccc-debug-mode) [data-role="conv-bg-palette"],

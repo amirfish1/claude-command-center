@@ -210,7 +210,7 @@ def _acp_wire_fold(harness, sid, events):
                     bid = str(b.get("id") or "")
                     if bid == rid or bid.rsplit(":", 1)[-1] == rid:
                         if out_text:
-                            b["output_preview"] = out_text[:400]
+                            b["output_preview"] = out_text[:_core._ACP_TOOL_OUTPUT_PREVIEW_MAX]
                         b["tool_status"] = "failed" if is_error else "completed"
                         return True
             return False
@@ -294,7 +294,7 @@ def _acp_wire_fold(harness, sid, events):
                     if res is not None:
                         out_text, is_error = res
                         if out_text:
-                            block["output_preview"] = out_text[:400]
+                            block["output_preview"] = out_text[:_core._ACP_TOOL_OUTPUT_PREVIEW_MAX]
                         block["tool_status"] = "failed" if is_error else "completed"
                     else:
                         # No result yet — the tool is genuinely in flight
@@ -335,7 +335,7 @@ def _acp_wire_fold(harness, sid, events):
             out_text, is_error = res
             _core._acp_emit_event_unlocked(harness, sid, {
                 "type": "tool_result",
-                "text": out_text[:400],
+                "text": out_text[:_core._ACP_TOOL_OUTPUT_PREVIEW_MAX],
                 "tool_use_id": rid,
                 "is_error": is_error,
                 "via": "wire-tail",

@@ -16,7 +16,7 @@ Usage:
 
 from __future__ import annotations
 
-__version__ = "5.26.0"
+__version__ = "5.27.3"
 
 import ast
 import base64
@@ -2733,6 +2733,75 @@ _DATA_URL_IMAGE_RE = re.compile(
     r"data:image/[\w.+-]+;base64,[A-Za-z0-9+/=]+",
     re.IGNORECASE,
 )
+_HEIC_BRANDS = (b"heic", b"heix", b"heim", b"heis", b"hevc", b"hevx", b"hevm", b"hevs", b"mif1", b"msf1")
+
+
+def _sniff_image_format(raw: bytes) -> str | None:
+    """Real format from magic bytes — the browser's declared Content-Type
+    can't be trusted (see _normalize_pasted_image)."""
+    if raw.startswith(b"\x89PNG\r\n\x1a\n"):
+        return "png"
+    if raw.startswith(b"\xff\xd8\xff"):
+        return "jpg"
+    if raw.startswith((b"GIF87a", b"GIF89a")):
+        return "gif"
+    if raw[:4] == b"RIFF" and raw[8:12] == b"WEBP":
+        return "webp"
+    if raw[4:8] == b"ftyp" and raw[8:12] in _HEIC_BRANDS:
+        return "heic"
+    return None
+
+
+def _sips_convert_to_png(raw: bytes) -> bytes | None:
+    """Transcode via macOS `sips` (no extra deps). Returns None on any
+    failure so the caller can fall back to an honest extension."""
+    src_path = dst_path = None
+    try:
+        with tempfile.NamedTemporaryFile(suffix=".heic", delete=False) as src:
+            src.write(raw)
+            src_path = src.name
+        dst_path = src_path + ".png"
+        subprocess.run(
+            ["sips", "-s", "format", "png", src_path, "--out", dst_path],
+            check=True, capture_output=True, timeout=15,
+        )
+        with open(dst_path, "rb") as f:
+            return f.read()
+    except Exception:
+        return None
+    finally:
+        for p in (src_path, dst_path):
+            if p:
+                try:
+                    os.unlink(p)
+                except OSError:
+                    pass
+
+
+def _normalize_pasted_image(raw: bytes, ctype: str) -> tuple[bytes, str]:
+    """Pick the extension for a pasted clipboard image from its actual bytes,
+    not the browser's claimed Content-Type. On macOS, pasting an image whose
+    clipboard source is HEIC (Preview/Photos) can arrive as a blob the
+    browser labels image/png while the bytes are still raw HEIC — the file
+    then got saved as paste-*.png, and downstream viewers (e.g. Codex's
+    image viewer) that trust the extension fail to decode it (OPS-759).
+    HEIC is transcoded to a real PNG via `sips` so the saved extension is
+    never a lie; any other sniffed format also overrides a mismatched
+    Content-Type, and unsniffable bytes fall back to the declared type.
+    """
+    sniffed = _sniff_image_format(raw)
+    if sniffed == "heic":
+        converted = _sips_convert_to_png(raw)
+        if converted is not None:
+            return converted, "png"
+        return raw, "heic"
+    if sniffed:
+        return raw, sniffed
+    ext_map = {
+        "image/png": "png", "image/jpeg": "jpg", "image/jpg": "jpg",
+        "image/gif": "gif", "image/webp": "webp", "image/svg+xml": "svg",
+    }
+    return raw, ext_map.get(ctype.split(";")[0].strip().lower(), "png")
 
 
 def _queue_ref_is_github_backed(ref):
@@ -4022,14 +4091,28 @@ def _save_auto_handover_flags(flags):
     tmp.replace(AUTO_HANDOVER_FILE)
 
 
-def _set_auto_handover(session_id, enabled):
+_AUTO_HANDOVER_MODES = ("mdfile", "compact", "both")
+
+
+def _auto_handover_mode(session_id):
+    """The armed mode for a session, or the 'mdfile' default for legacy
+    flags saved before mode existed."""
+    entry = _load_auto_handover_flags().get(session_id or "")
+    mode = isinstance(entry, dict) and entry.get("mode")
+    return mode if mode in _AUTO_HANDOVER_MODES else "mdfile"
+
+
+def _set_auto_handover(session_id, enabled, mode="mdfile"):
     sid = (session_id or "").strip()
     if not sid:
         return {"ok": False, "error": "missing session_id"}
+    if mode not in _AUTO_HANDOVER_MODES:
+        return {"ok": False, "error": f"mode must be one of {', '.join(_AUTO_HANDOVER_MODES)}"}
     flags = _load_auto_handover_flags()
     if enabled:
         flags[sid] = {
             "enabled": True,
+            "mode": mode,
             "set_at": datetime.now().isoformat(),
             "last_fired_mtime": None,
             "last_fired_at": None,
@@ -4037,7 +4120,7 @@ def _set_auto_handover(session_id, enabled):
     else:
         flags.pop(sid, None)
     _save_auto_handover_flags(flags)
-    return {"ok": True, "session_id": sid, "enabled": bool(enabled)}
+    return {"ok": True, "session_id": sid, "enabled": bool(enabled), "mode": mode}
 
 
 def _mark_auto_handover_fired(session_id, transcript_mtime):
@@ -4248,7 +4331,7 @@ def _short_model_alias(model):
 
 def _claude_model_supports_1m(model):
     alias = _short_model_alias(model).lower()
-    return alias in ("opus-4-8", "opus-4-7")
+    return alias in ("fable-5", "opus-5", "sonnet-5", "opus-4-8", "opus-4-7")
 
 
 def _model_context_1m_allowed(model, context_1m, engine="claude"):
@@ -5580,8 +5663,32 @@ def _compute_repo_usage_signals(repo_paths):
             "score": 0.0,
         }
 
-    if not repo_paths or not PROJECTS_ROOT.is_dir():
+    def _finalize():
+        # Session sets are an internal counting aid only. Every return path,
+        # including a brand-new machine with no projects directory, must expose
+        # the documented JSON-safe integer shape.
+        for path in repo_paths:
+            repo = signals[path]
+            for window in ("d7", "d30", "all"):
+                repo["signals"][window]["sessions"] = len(
+                    repo["signals"][window]["sessions"]
+                )
+            s = repo["signals"]
+            repo["score"] = (
+                s["d7"]["sessions"] * 8.0
+                + s["d7"]["turns"] * 2.0
+                + s["d7"]["tokens"] * 0.002
+                + s["d30"]["sessions"] * 4.0
+                + s["d30"]["turns"] * 1.0
+                + s["d30"]["tokens"] * 0.001
+            )
+        _REPO_SIGNALS_CACHE["paths"] = key
+        _REPO_SIGNALS_CACHE["data"] = signals
+        _REPO_SIGNALS_CACHE["ts"] = now
         return signals
+
+    if not repo_paths or not PROJECTS_ROOT.is_dir():
+        return _finalize()
 
     # Map project dirs back to repo paths.
     dir_to_repo = {}
@@ -5643,25 +5750,7 @@ def _compute_repo_usage_signals(repo_paths):
                             if session_id:
                                 repo["signals"]["d7"]["sessions"].add(session_id)
 
-    # Convert session sets to counts and compute composite score.
-    for p in repo_paths:
-        repo = signals[p]
-        for window in ("d7", "d30", "all"):
-            repo["signals"][window]["sessions"] = len(repo["signals"][window]["sessions"])
-        s = repo["signals"]
-        repo["score"] = (
-            s["d7"]["sessions"] * 8.0
-            + s["d7"]["turns"] * 2.0
-            + s["d7"]["tokens"] * 0.002
-            + s["d30"]["sessions"] * 4.0
-            + s["d30"]["turns"] * 1.0
-            + s["d30"]["tokens"] * 0.001
-        )
-
-    _REPO_SIGNALS_CACHE["paths"] = key
-    _REPO_SIGNALS_CACHE["data"] = signals
-    _REPO_SIGNALS_CACHE["ts"] = now
-    return signals
+    return _finalize()
 
 
 def _git_toplevel_for_existing_dir(path):
@@ -9077,7 +9166,13 @@ def _extract_user_prompt_text(ev):
     msg = _safe_parse_message(ev.get("message", {}))
     text = _extract_text_from_content(msg.get("content", ""))
     if _is_transcript_control_text(text):
-        return ""
+        # A slash command like "/goal ..." is still control-prefixed
+        # bookkeeping (<command-name>...), but it carries a real,
+        # human-typed ask in <command-args>. Surface that instead of
+        # blanking first_message — otherwise a session whose only prompt
+        # was a slash command reads as [EMPTY] forever even with a full
+        # transcript (CCC-979).
+        return _extract_command_invocation_text(text)
     text = _strip_host_system_instruction(text)
     return _strip_ccc_session_state_instruction(text).strip()
 
@@ -9906,8 +10001,13 @@ def find_all_conversations(
             row_mtime = tail_meta.get("last_meaningful_ts") or stat.st_mtime
             model = tail_meta.get("model") or ""
             latest_tok = tail_meta.get("latest_input_tokens") or 0
+            peak_tok = tail_meta.get("peak_input_tokens") or 0
             _ov_1m = (session_overrides.get(session_id) or {}).get("context_1m")
-            if _ov_1m or "[1m]" in model.lower() or latest_tok > 200_000:
+            # Peak, not latest: a turn that once exceeded 200k proves the
+            # session is running the 1M variant even if a later turn (e.g.
+            # after /compact) reports fewer tokens — the variant doesn't
+            # revert mid-session, so the limit shouldn't either (CCC-943).
+            if _ov_1m or "[1m]" in model.lower() or max(latest_tok, peak_tok) > 200_000:
                 ctx_limit = 1_000_000
             else:
                 ctx_limit = 200_000
@@ -16525,6 +16625,11 @@ _PREVIEW_FLAGS = {
         "label": "Auto handover toggle",
         "desc": "Show the Auto handover ON/OFF pill in the status bar of Claude sessions.",
     },
+    "bottom_bar_cost": {
+        "default": False,
+        "label": "$ cost in bottom bar",
+        "desc": "Show the API list-price cost pill next to token usage in the input bar.",
+    },
     # "flow_v2": {
     #     "default": False,
     #     "label": "Flow v2 canvas",
@@ -17121,6 +17226,7 @@ def _extract_tail_meta(path):
         "last_assistant_text": None,  # last text block from an assistant message (the "outcome")
         "model": None,
         "latest_input_tokens": 0,
+        "peak_input_tokens": 0,
         "lifetime_tokens": 0,
         "total_input_tokens": 0,
         "total_cache_creation_tokens": 0,
@@ -17327,6 +17433,9 @@ def _extract_tail_meta(path):
                         tcr = u.get("cache_read_input_tokens") or 0
                         if ti or tcw or tcr:
                             meta["latest_input_tokens"] = ti + tcw + tcr
+                            meta["peak_input_tokens"] = max(
+                                meta["peak_input_tokens"], meta["latest_input_tokens"],
+                            )
                         mid = msg.get("id") if isinstance(msg.get("id"), str) else ""
                         if not mid or mid not in _usage_message_ids:
                             meta["lifetime_tokens"] += (
@@ -24483,8 +24592,12 @@ def find_conversations(repo_path, progress=None, include_old=True, live_sids=Non
 
         model = tail_meta.get("model") or ""
         latest_tok = tail_meta.get("latest_input_tokens") or 0
+        peak_tok = tail_meta.get("peak_input_tokens") or 0
         _ov_1m = (session_overrides.get(sid) or {}).get("context_1m")
-        if _ov_1m or "[1m]" in model.lower() or latest_tok > 200_000:
+        # Peak, not latest — see the matching comment in the archive-row
+        # builder above (CCC-943): a turn that once exceeded 200k proves 1M,
+        # even if a later (e.g. post-/compact) turn reports fewer tokens.
+        if _ov_1m or "[1m]" in model.lower() or max(latest_tok, peak_tok) > 200_000:
             limit = 1_000_000
         else:
             limit = 200_000
@@ -25633,10 +25746,24 @@ def _resolve_conversation_path(conversation_id, repo_path=None):
                 continue
         return PROJECTS_ROOT / "_missing" / agent_name
     name = conversation_id + ".jsonl"
+    # Perf: every conversation open used to walk ~170 project dirs (two
+    # stats each) before reaching the file. The (sid -> path) cache that
+    # _conv_parse_jsonl_mtime already maintains answers the same question
+    # in one stat; only a claude-transcript hit (same file name) counts,
+    # so a gemini/cursor path cached under the same id is never returned.
+    try:
+        with _CONV_PATH_CACHE_LOCK:
+            _cached = _CONV_PATH_CACHE.get(conversation_id)
+    except Exception:
+        _cached = None
+    if _cached and _cached.endswith(os.sep + name) and os.path.isfile(_cached):
+        return Path(_cached)
     if repo_path:
         for d in _conversation_dirs(repo_path):
             cand = d / name
             if cand.is_file():
+                with _CONV_PATH_CACHE_LOCK:
+                    _CONV_PATH_CACHE[conversation_id] = str(cand)
                 return cand
     if PROJECTS_ROOT.is_dir():
         try:
@@ -25645,6 +25772,8 @@ def _resolve_conversation_path(conversation_id, repo_path=None):
                     continue
                 cand = project_dir / name
                 if cand.is_file():
+                    with _CONV_PATH_CACHE_LOCK:
+                        _CONV_PATH_CACHE[conversation_id] = str(cand)
                     return cand
         except OSError:
             pass
@@ -25793,6 +25922,18 @@ def _conv_parse_jsonl_mtime(conversation_id, repo_path=None):
 _CONV_TAIL_DEFAULT = 150  # lines pulled for the initial tail window on open
 
 
+# Per-file memo of parsed events for the windowed (tail) open, keyed by
+# line number and validated by (len, hash) of the raw line. JSONL transcripts
+# are append-only, so when a live session gains a few lines the next open
+# re-parses only those lines instead of the whole 400-line window (which
+# was 100-600ms of CPU per click on tool-heavy transcripts). Claude parser
+# only: it is stateless per line; the codex parser threads running usage.
+_WINDOW_PARSE_MEMO = {}
+_WINDOW_PARSE_MEMO_LOCK = threading.Lock()
+_WINDOW_PARSE_MEMO_MAX_FILES = 24
+_WINDOW_PARSE_SKIP = object()
+
+
 def _parse_conversation_windowed(conversation_id, filepath, tail, before, parser=None):
     """Parse only a window of a conversation JSONL instead of the whole file.
 
@@ -25829,13 +25970,31 @@ def _parse_conversation_windowed(conversation_id, filepath, tail, before, parser
     events = []
     codex_token_usage = None
     codex_turn_meta = None
-    for ln, line in buf:
-        line = line.strip()
+    memo = None
+    new_memo = None
+    if not is_codex and before is None:
+        memo_key = str(filepath)
+        with _WINDOW_PARSE_MEMO_LOCK:
+            memo = _WINDOW_PARSE_MEMO.get(memo_key) or {}
+        new_memo = {}
+    for ln, raw_line in buf:
+        line = raw_line.strip()
         if not line:
             continue
+        sig = None
+        if memo is not None:
+            sig = (len(raw_line), hash(raw_line))
+            hit = memo.get(ln)
+            if hit is not None and hit[0] == sig:
+                new_memo[ln] = hit
+                if hit[1] is not _WINDOW_PARSE_SKIP:
+                    events.append(dict(hit[1]))
+                continue
         try:
             ev = json.loads(line)
         except json.JSONDecodeError:
+            if memo is not None:
+                new_memo[ln] = (sig, _WINDOW_PARSE_SKIP)
             continue
         if is_codex:
             turn_meta = _codex_turn_meta_from_event(ev)
@@ -25850,10 +26009,23 @@ def _parse_conversation_windowed(conversation_id, filepath, tail, before, parser
             parsed = parser(ev, ln, codex_token_usage, codex_turn_meta=codex_turn_meta)
         else:
             parsed = parser(ev, ln)
+            if memo is not None:
+                new_memo[ln] = (sig, dict(parsed) if parsed else _WINDOW_PARSE_SKIP)
         if parsed:
             events.append(parsed)
 
+    if new_memo is not None:
+        with _WINDOW_PARSE_MEMO_LOCK:
+            _WINDOW_PARSE_MEMO.pop(memo_key, None)
+            _WINDOW_PARSE_MEMO[memo_key] = new_memo
+            while len(_WINDOW_PARSE_MEMO) > _WINDOW_PARSE_MEMO_MAX_FILES:
+                try:
+                    _WINDOW_PARSE_MEMO.pop(next(iter(_WINDOW_PARSE_MEMO)))
+                except StopIteration:
+                    break
+
     if is_codex:
+        events = _merge_codex_compact_boundary_events(events)
         events = _enrich_codex_no_agent_output_events(conversation_id, events)
 
     first_line = events[0]["line"] if events else (buf[0][0] if buf else total)
@@ -26093,6 +26265,7 @@ def parse_conversation(conversation_id, after_line=0, repo_path=None, use_cache=
                 events[idx]["ts"] = _cursor_ts_iso(cursor_ts_start + span * frac)
 
     if is_codex:
+        events = _merge_codex_compact_boundary_events(events)
         events = _enrich_codex_no_agent_output_events(conversation_id, events)
 
     result = {"events": events, "last_line": line_num}
@@ -26129,7 +26302,7 @@ def _conv_parse_cache_put(conversation_id, after_line, repo_path, result):
 # "gzip": bytes|None}. Bounded so memory doesn't blow up.
 _CONV_BYTES_CACHE = {}
 _CONV_BYTES_CACHE_LOCK = threading.Lock()
-_CONV_BYTES_CACHE_MAX = 48
+_CONV_BYTES_CACHE_MAX = 96
 
 
 def _session_has_pending_input(session_id):
@@ -26169,24 +26342,63 @@ def _session_has_dynamic_conversation_overlay(session_id):
     return False
 
 
-def _conv_response_bytes_get(conversation_id, after_line):
+def _conv_overlay_fingerprint(session_id):
+    """Fingerprint of everything outside the JSONL that shapes a
+    /api/conversations response: queued (unsent) inputs and the Codex
+    app-server thread state. Part of the bytes-cache key, so an overlay
+    change simply misses instead of serving a stale pre-baked body.
+
+    Used to be a bypass (`_session_has_dynamic_conversation_overlay`), which
+    meant every Codex session that had ever run an app-server turn re-parsed
+    its whole tail window on every open (~100-330ms), since that state never
+    empties. Returns None when the state cannot be fingerprinted (bypass).
+    """
+    if not session_id:
+        return ()
+    try:
+        with _pending_resume_lock:
+            rq = list(_pending_resume_queue.get(session_id) or ())
+        with _pending_terminal_input_lock:
+            tq = list(_pending_terminal_input_queue.get(session_id) or ())
+        try:
+            state = _codex_app_server_thread_state(session_id)
+        except Exception:
+            state = None
+        if state is None:
+            return None
+        if not rq and not tq and not state:
+            return ()
+        return json.dumps([rq, tq, state], sort_keys=True, default=str)
+    except Exception:
+        return None
+
+
+def _conv_response_bytes_get(conversation_id, after_line, window=None):
     mtime = _conv_parse_jsonl_mtime(conversation_id)
     if mtime[0] <= 0:
         return None
-    # Dynamic overlays are not in the JSONL yet; a pre-baked response from
-    # before they changed would omit them until mtime changes.
-    if _session_has_dynamic_conversation_overlay(conversation_id):
+    # Dynamic overlays are not in the JSONL yet; they join the key via the
+    # fingerprint so a change misses instead of serving a stale body.
+    fp = _conv_overlay_fingerprint(conversation_id)
+    if fp is None:
         return None
-    key = (conversation_id, int(after_line), mtime)
+    # `window` is (tail, before) for a windowed open (?tail=N / ?before=L),
+    # None for the full-history shape. Windowed opens are the click path
+    # (and the hover prefetch), so a hit here is what makes a click a
+    # hashmap lookup instead of a re-parse.
+    key = (conversation_id, int(after_line), mtime, window, fp)
     with _CONV_BYTES_CACHE_LOCK:
         return _CONV_BYTES_CACHE.get(key)
 
 
-def _conv_response_bytes_put(conversation_id, after_line, raw, gz):
+def _conv_response_bytes_put(conversation_id, after_line, raw, gz, window=None):
     mtime = _conv_parse_jsonl_mtime(conversation_id)
     if mtime[0] <= 0:
         return
-    key = (conversation_id, int(after_line), mtime)
+    fp = _conv_overlay_fingerprint(conversation_id)
+    if fp is None:
+        return
+    key = (conversation_id, int(after_line), mtime, window, fp)
     with _CONV_BYTES_CACHE_LOCK:
         if len(_CONV_BYTES_CACHE) >= _CONV_BYTES_CACHE_MAX:
             try:
@@ -27870,7 +28082,7 @@ CODEX_GOALS_DB_CANDIDATES = (
 )
 CODEX_SESSIONS_ROOT = Path.home() / ".codex" / "sessions"
 KIMI_SESSIONS_ROOT = Path.home() / ".kimi-code" / "sessions"
-_CODEX_META_VERSION = 5
+_CODEX_META_VERSION = 6
 CODEX_APP_SERVER_STATE_FILE = COMMAND_CENTER_STATE_DIR / "codex-app-server-state.json"
 CODEX_TELEMETRY_FILE = COMMAND_CENTER_STATE_DIR / "codex-telemetry.jsonl"
 _CODEX_APP_SERVER_STATE_SCHEMA = 1
@@ -33920,6 +34132,113 @@ def _backup_codex_rollout_before_compact(session_id):
         return None
 
 
+# A compaction of a big Codex context is a full model turn: the app-server
+# ACKs `thread/compact/start` in well under a second and then works for one to
+# three minutes. 180s matches the Claude live-spawn deadline.
+_CODEX_COMPACT_WAIT_TIMEOUT_S = 180.0
+_CODEX_COMPACT_POLL_S = 0.4
+# Once the compaction marker lands, wait a moment longer for the token_count
+# that reports the rebuilt context size so the UI can print the real number
+# instead of "reading the new size...".
+_CODEX_COMPACT_POST_GRACE_S = 6.0
+_CODEX_COMPACT_MARKER = b'"context_compacted"'
+
+
+def _codex_compaction_wait_timeout():
+    try:
+        value = float(os.environ.get("CCC_CODEX_COMPACT_WAIT_S") or 0)
+    except (TypeError, ValueError):
+        value = 0.0
+    return value if value > 0 else _CODEX_COMPACT_WAIT_TIMEOUT_S
+
+
+def _codex_compaction_post_tokens(payload):
+    """Rebuilt-context size off one post-compaction `token_count` payload."""
+    info = payload.get("info") if isinstance(payload.get("info"), dict) else {}
+    usage = info.get("last_token_usage")
+    if not isinstance(usage, dict) or not usage:
+        usage = info.get("total_token_usage")
+    if not isinstance(usage, dict):
+        return 0
+    # Codex zeroes the per-turn fields on the compaction turn and reports the
+    # new context size in total_tokens (see `_extract_codex_usage`).
+    return _codex_int(usage.get("input_tokens")) or _codex_int(usage.get("total_tokens"))
+
+
+def _codex_scan_compaction_tail(path, offset, seen_marker=False):
+    """Scan rollout bytes appended since `offset` for a finished compaction.
+
+    Rollout JSONL is append-only, so reading only the NEW bytes is exact and
+    cheap even on a multi-MB thread - no whole-file parse, no subprocess. A
+    compaction writes a top-level `compacted` record, then a `token_count`
+    carrying the rebuilt size, then an `event_msg`/`context_compacted`.
+
+    Returns ``(seen_marker, post_tokens, next_offset)``. `post_tokens` is 0
+    until the token_count at or after the marker has been read.
+    """
+    post_tokens = 0
+    try:
+        size = os.path.getsize(path)
+    except OSError:
+        return seen_marker, 0, offset
+    if size < offset:
+        # Rewritten or rotated under us; restart from the top of the new file.
+        offset = 0
+    if size <= offset:
+        return seen_marker, 0, offset
+    try:
+        with open(path, "rb") as fh:
+            fh.seek(offset)
+            chunk = fh.read(size - offset)
+    except OSError:
+        return seen_marker, 0, offset
+    consumed = 0
+    for raw in chunk.splitlines(keepends=True):
+        if not raw.endswith(b"\n"):
+            # Partial trailing line - the writer is mid-append. Leave the
+            # offset before it so the next poll re-reads it whole.
+            break
+        consumed += len(raw)
+        if b"compacted" not in raw and b"token_count" not in raw:
+            continue
+        try:
+            ev = json.loads(raw.decode("utf-8", "replace"))
+        except (json.JSONDecodeError, ValueError):
+            continue
+        if not isinstance(ev, dict):
+            continue
+        payload = ev.get("payload") if isinstance(ev.get("payload"), dict) else {}
+        ptype = str(payload.get("type") or "")
+        if ev.get("type") == "compacted" or ptype in ("compacted", "context_compacted"):
+            seen_marker = True
+            continue
+        if seen_marker and not post_tokens and ptype == "token_count":
+            post_tokens = _codex_compaction_post_tokens(payload)
+    return seen_marker, post_tokens, offset + consumed
+
+
+def _codex_compaction_finished_in_state(session_id, since):
+    """True once the app-server reported the compaction ITEM completed.
+
+    `_codex_compaction_recovery_note_notification_unlocked` arms
+    `compaction_recovery` on `item/started` for a `contextCompaction` item and
+    drops `compaction_in_flight` on `item/completed`. A latch armed at or after
+    `since` with the flag down is the app-server's own "the compaction turn is
+    over" signal; the rollout marker is the independent one.
+    """
+    state = _codex_app_server_thread_state(session_id) or {}
+    recovery = state.get("compaction_recovery")
+    if not isinstance(recovery, dict):
+        return False
+    try:
+        armed_at = float(recovery.get("compacted_at") or 0.0)
+    except (TypeError, ValueError):
+        return False
+    if armed_at < float(since):
+        return False
+    return not recovery.get("compaction_in_flight")
+
+
 def _codex_compact_via_app_server(session_id, cwd=None, model=None):
     """Compact a Codex thread via the app-server `thread/compact/start` RPC.
 
@@ -33929,6 +34248,16 @@ def _codex_compact_via_app_server(session_id, cwd=None, model=None):
     rollout. Returns a result dict mirroring the other Codex app-server helpers
     (`{ok, via, ...}` / `{ok: False, error, ...}`). Handles "app-server
     unavailable" gracefully.
+
+    `thread/compact/start` is ACCEPTED in under a second and the compaction
+    turn then runs for one to three minutes. Returning on the ACK made the UI
+    card flip to "CONTEXT COMPACTED / took 0:00" while Codex was still working,
+    and the composer immediately queued the next message behind the very turn
+    the card said had finished. So this now WAITS for the compaction to land,
+    mirroring `_compact_via_live_spawn_stdin`: `{status: "compacted",
+    compact_result: "success"}` on success, `code: "compact_timeout"` on the
+    deadline (which the frontend keeps in its working state rather than
+    reporting a failure).
     """
     sid = (session_id or "").strip()
     if not sid:
@@ -33962,14 +34291,85 @@ def _codex_compact_via_app_server(session_id, cwd=None, model=None):
             "code": "codex_compact_unavailable",
             "error": resumed.get("error") or "Codex app-server unavailable",
         }
+    # Watermark the rollout BEFORE the RPC so a compaction from an earlier turn
+    # can never be mistaken for this one.
+    try:
+        rollout_path = _resolve_codex_rollout_path(sid)
+    except Exception:
+        rollout_path = None
+    scan_offset = 0
+    marker_baseline = 0
+    pre_tokens = 0
+    if rollout_path:
+        try:
+            scan_offset = os.path.getsize(rollout_path)
+        except OSError:
+            scan_offset = 0
+        marker_baseline = _tail_count(rollout_path, _CODEX_COMPACT_MARKER)
+        try:
+            meta = _extract_codex_tail_meta(Path(rollout_path)) or {}
+            pre_tokens = _codex_int(meta.get("latest_input_tokens"))
+        except Exception:
+            pre_tokens = 0
+    armed_since = time.time() - 2.0  # clock slop against the app-server latch
+
     compacted = _codex_app_server_request(
         "thread/compact/start", {"threadId": sid}, timeout=60
     )
     if _codex_response_succeeded(compacted):
+        started = time.time()
+        deadline = started + _codex_compaction_wait_timeout()
+        seen_marker = False
+        state_done = False
+        post_tokens = 0
+        post_grace_until = 0.0
+        while True:
+            now = time.time()
+            if now >= deadline:
+                break
+            if rollout_path:
+                seen_marker, found_post, scan_offset = _codex_scan_compaction_tail(
+                    rollout_path, scan_offset, seen_marker
+                )
+                if found_post:
+                    post_tokens = found_post
+                if not seen_marker and _tail_count(
+                    rollout_path, _CODEX_COMPACT_MARKER
+                ) > marker_baseline:
+                    seen_marker = True
+            if not state_done and _codex_compaction_finished_in_state(sid, armed_since):
+                state_done = True
+            if seen_marker or state_done:
+                if post_tokens or not rollout_path:
+                    break
+                # The marker is down but the size rollup may be one line
+                # behind it. Give it a moment rather than reporting 0.
+                if not post_grace_until:
+                    post_grace_until = now + _CODEX_COMPACT_POST_GRACE_S
+                elif now >= post_grace_until:
+                    break
+            time.sleep(_CODEX_COMPACT_POLL_S)
+        duration_ms = int(max(0.0, time.time() - started) * 1000)
+        if seen_marker or state_done:
+            return {
+                "ok": True,
+                "via": "codex-compact",
+                "status": "compacted",
+                "compact_result": "success",
+                "session_id": sid,
+                "pre_tokens": pre_tokens,
+                "post_tokens": post_tokens,
+                "duration_ms": duration_ms,
+            }
         return {
-            "ok": True,
+            "ok": False,
             "via": "codex-compact",
+            "code": "compact_timeout",
+            "status": "compacting",
             "session_id": sid,
+            "pre_tokens": pre_tokens,
+            "duration_ms": duration_ms,
+            "error": "Codex is still compacting; CCC will keep watching.",
         }
     if compacted.get("ok") is False and "result" not in compacted:
         return {
@@ -36686,6 +37086,15 @@ def _extract_codex_tail_meta(path):
                 usage = _codex_token_usage_from_event(ev)
                 if usage:
                     inp = _codex_int(usage.get("input_tokens"))
+                    if not inp:
+                        # Post-compaction marker: Codex writes a token_count
+                        # whose last_token_usage has every PER-TURN field
+                        # zeroed and reports the size of the freshly rebuilt
+                        # context in total_tokens only. Skipping it left the
+                        # context pill on the stale pre-compact number, while
+                        # `_extract_codex_usage` read the zero and showed 0.
+                        # Both extractors now agree on total_tokens here.
+                        inp = _codex_int(usage.get("total_tokens"))
                     if inp:
                         meta["latest_input_tokens"] = inp
                     payload = ev.get("payload") if isinstance(ev.get("payload"), dict) else {}
@@ -37421,6 +37830,17 @@ _KIMI_WIRE_BUSY_SUPPRESS_UNTIL = {}
 _ACP_TERMINALS = {}        # terminalId -> {"proc","buf","limit","truncated","exit","signal","exited","harness","sid","exit_event"}
 _ACP_TERMINALS_LOCK = threading.Lock()
 _ACP_TERMINAL_DEFAULT_LIMIT = 1024 * 1024  # retained-output cap when the agent passes no outputByteLimit
+# Output of RELEASED terminals, kept briefly. Kimi's terminal-backed tool
+# calls (Bash) report completion as a `tool_call_update` whose content is only
+# `{type:'terminal', terminalId}` — never the text (kimi assumes the client
+# already rendered the bytes in a terminal pane) — and that update lands
+# AFTER the agent has already `terminal/release`d the terminal. Snapshotting
+# the buffer at release is what lets the finalized tool row carry the
+# command's output at all.
+_ACP_TERMINAL_OUTPUT_CACHE = collections.OrderedDict()  # terminalId -> output snapshot dict
+_ACP_TERMINAL_OUTPUT_CACHE_MAX = 256
+# Per-tool output kept on the persisted row (and the live tool_result delta).
+_ACP_TOOL_OUTPUT_PREVIEW_MAX = 1200
 
 
 def _acp_harness_enabled(harness):
@@ -38104,7 +38524,9 @@ def _acp_handle_terminal_request(harness, req_id, method, params):
             except OSError:
                 pass
         if method == "terminal/release":
+            snapshot = _acp_terminal_output_result(entry)
             with _ACP_TERMINALS_LOCK:
+                _acp_terminal_cache_output_unlocked(tid, snapshot)
                 _ACP_TERMINALS.pop(tid, None)
         _acp_respond(harness, req_id, {})
         return
@@ -38115,6 +38537,52 @@ def _acp_append_turn_text(turn, field, chunk):
     # Finalized ACP events are the replay source for a conversation. Trimming
     # the accumulated stream here silently removed the opening of long replies.
     turn[field] = (turn.get(field) or "") + chunk
+    if field == "text":
+        # `text` is flushed to its own row before every tool call (stream
+        # order); the whole-turn concatenation stays available for the
+        # synchronous-ask answer (see _acp_finalize_turn).
+        turn["text_all"] = (turn.get("text_all") or "") + chunk
+
+
+def _acp_flush_turn_text_unlocked(harness, sid, turn, usage=None):
+    """Persist the turn's accumulated thought/text as ONE assistant row and
+    reset the accumulators.
+
+    Called before a tool row can be emitted and at turn end, so the finalized
+    transcript keeps the model's real order — think → say → run → think → …
+    — instead of every tool row first and one mashed-together text block at
+    the end (which the client then rendered as "26 tool calls" over a wall of
+    sentences with no spaces between them)."""
+    blocks = []
+    if turn.get("thought"):
+        blocks.append({"kind": "thinking", "text": turn["thought"]})
+    if turn.get("text"):
+        blocks.append({"kind": "text", "text": turn["text"]})
+    turn["thought"] = ""
+    turn["text"] = ""
+    if not blocks:
+        return None
+    event = {"type": "assistant", "message_id": turn["msg_id"], "blocks": blocks}
+    if usage:
+        _apply_kimi_turn_usage(event, usage)
+    return _acp_emit_event_unlocked(harness, sid, event)
+
+
+def _acp_replay_flush_unlocked(harness, sid, state, replay):
+    """Flush the session/load replay's pending text bucket (and any tool rows
+    still waiting for a terminal status) in arrival order."""
+    if replay.get("kind") and replay.get("text"):
+        ev = _acp_message_event(state, replay["kind"], replay["text"])
+        if ev is not None:
+            _acp_emit_event_unlocked(harness, sid, ev)
+    replay["text"] = ""
+    replay["kind"] = None
+    for tid, tool in list((replay.get("tools") or {}).items()):
+        if not tool.get("emitted"):
+            tool["emitted"] = True
+            _acp_emit_event_unlocked(harness, sid, _acp_tool_event(
+                {"msg_id": f"acp-replay-{sid}-{state['next_line']}"}, tid, tool))
+    replay["tools"] = {}
 
 
 def _acp_handle_session_update(harness, sid, update):
@@ -38125,7 +38593,12 @@ def _acp_handle_session_update(harness, sid, update):
         chunk = _strip_lone_surrogates(chunk)
     with _ACP_LOCK:
         state = _acp_session(harness, sid, create=True)
-        state["updated_at"] = time.time()
+        # CCC-941: only content-bearing updates count as "activity" — bumping
+        # this on every kind (incl. available_commands_update/
+        # config_option_update, which the harness can resend on reconnect
+        # with no real turn happening) made old idle sessions show "1h ago".
+        if kind not in ("available_commands_update", "config_option_update"):
+            state["updated_at"] = time.time()
 
         # session/load history replay: accumulate per speaker/kind and finalize
         # on switches; the load response flushes the tail (see _acp_load).
@@ -38177,17 +38650,32 @@ def _acp_handle_session_update(harness, sid, update):
             if isinstance(raw_input, dict) and raw_input:
                 detail = _tool_use_detail(title, raw_input, max_len=160) or detail
             diff = _acp_tool_content_diff(update)
+            entry = {
+                "title": title, "status": update.get("status") or "running",
+                "detail": detail, "emitted": False,
+                "acp_kind": update.get("kind") or "",
+            }
+            if isinstance(raw_input, dict) and raw_input:
+                entry["input"] = _tool_input_payload(raw_input)
+            if diff:
+                entry["diff"] = diff
+            if replay is not None:
+                # session/load history: the text bucket flushes so the row
+                # lands where the tool ran; the row itself waits for its
+                # terminal status (same as a live turn) or the load's flush.
+                if replay.get("text"):
+                    ev = _acp_message_event(state, replay["kind"], replay["text"])
+                    if ev is not None:
+                        _acp_emit_event_unlocked(harness, sid, ev)
+                    replay["text"] = ""
+                    replay["kind"] = None
+                replay.setdefault("tools", {})[tool_id] = entry
+                return
             turn = state.get("active_turn")
             if turn is not None:
-                entry = {
-                    "title": title, "status": update.get("status") or "running",
-                    "detail": detail, "emitted": False,
-                    "acp_kind": update.get("kind") or "",
-                }
-                if isinstance(raw_input, dict) and raw_input:
-                    entry["input"] = _tool_input_payload(raw_input)
-                if diff:
-                    entry["diff"] = diff
+                # Text/thought streamed BEFORE this call belongs above its
+                # row — persist it now so the transcript keeps stream order.
+                _acp_flush_turn_text_unlocked(harness, sid, turn)
                 turn.setdefault("tools", {})[tool_id] = entry
             # Live bubble shows the call immediately; the finalized conv row
             # is deferred until rawInput arrives (rich detail) — see update.
@@ -38204,6 +38692,16 @@ def _acp_handle_session_update(harness, sid, update):
         if kind == "tool_call_update":
             tool_id = str(update.get("toolCallId") or "")
             turn = state.get("active_turn")
+            if replay is not None:
+                tool = (replay.get("tools") or {}).get(tool_id)
+                if tool is None:
+                    return
+                _acp_apply_tool_update(tool, update)
+                if not tool.get("emitted") and update.get("status") in ("completed", "failed"):
+                    tool["emitted"] = True
+                    _acp_emit_event_unlocked(harness, sid, _acp_tool_event(
+                        {"msg_id": f"acp-replay-{sid}-{state['next_line']}"}, tool_id, tool))
+                return
             if turn is None:
                 return
             tool = (turn.get("tools") or {}).get(tool_id)
@@ -38212,24 +38710,8 @@ def _acp_handle_session_update(harness, sid, update):
                     "title": "tool", "status": "running", "detail": "",
                     "emitted": False,
                 }
-            if update.get("title"):
-                # The started-upgrade replaces the lazy create's name-only
-                # title with the canonical one (description ?? name).
-                tool["title"] = update["title"]
-            if update.get("kind"):
-                tool["acp_kind"] = update["kind"]
-            if update.get("status"):
-                tool["status"] = update["status"]
-            raw_input = update.get("rawInput")
-            if isinstance(raw_input, dict) and raw_input:
-                tool["detail"] = _tool_use_detail(tool.get("title") or "", raw_input, max_len=160)
-                tool["input"] = _tool_input_payload(raw_input)
-            diff = _acp_tool_content_diff(update)
-            if diff:
-                tool["diff"] = diff
-            output_text = _acp_tool_content_text(update)
-            if update.get("status") == "completed" and output_text:
-                tool["output"] = output_text[:400]
+            output_text = _acp_apply_tool_update(tool, update)
+            if update.get("status") in ("completed", "failed") and output_text:
                 _acp_emit_delta_unlocked(harness, sid, {
                     "type": "assistant_block",
                     "message_id": turn.get("msg_id") or f"acp-{harness}-tool",
@@ -38277,6 +38759,8 @@ def _acp_handle_session_update(harness, sid, update):
                 return
             state["plan"] = norm
             turn = state.get("active_turn")
+            if turn is not None:
+                _acp_flush_turn_text_unlocked(harness, sid, turn)
             msg_id = (turn or {}).get("msg_id") or f"acp-{harness}-plan"
             _acp_emit_delta_unlocked(harness, sid, {
                 "type": "assistant_block",
@@ -38301,17 +38785,99 @@ def _acp_handle_session_update(harness, sid, update):
         # plan and unknown update kinds: recorded nowhere, never fatal.
 
 
+def _acp_apply_tool_update(tool, update):
+    """Fold one tool_call_update into a tracked tool entry (live turn or
+    session/load replay). Returns the output text captured on a terminal
+    status, else ""."""
+    if update.get("title"):
+        # The started-upgrade replaces the lazy create's name-only
+        # title with the canonical one (description ?? name).
+        tool["title"] = update["title"]
+    if update.get("kind"):
+        tool["acp_kind"] = update["kind"]
+    if update.get("status"):
+        tool["status"] = update["status"]
+    raw_input = update.get("rawInput")
+    if isinstance(raw_input, dict) and raw_input:
+        tool["detail"] = _tool_use_detail(tool.get("title") or "", raw_input, max_len=160)
+        tool["input"] = _tool_input_payload(raw_input)
+    diff = _acp_tool_content_diff(update)
+    if diff:
+        tool["diff"] = diff
+    if update.get("status") not in ("completed", "failed"):
+        return ""
+    output_text = _acp_tool_content_text(update)
+    if output_text:
+        tool["output"] = output_text[:_ACP_TOOL_OUTPUT_PREVIEW_MAX]
+    return output_text
+
+
+def _acp_raw_output_text(raw):
+    """Best-effort text from a tool_call_update's rawOutput (kimi passes the
+    SDK's raw output through: a string for shell-ish tools, a content-part
+    list for media/MCP tools, occasionally a dict)."""
+    if isinstance(raw, str):
+        return raw.strip()
+    if isinstance(raw, list):
+        return "\n".join(
+            str(p.get("text") or "") for p in raw
+            if isinstance(p, dict) and p.get("type") == "text"
+        ).strip()
+    if isinstance(raw, dict):
+        for key in ("output", "text", "stdout"):
+            if isinstance(raw.get(key), str):
+                return raw[key].strip()
+    return ""
+
+
+def _acp_terminal_output_snapshot(tid):
+    """Output of a live OR recently released ACP terminal, or None."""
+    if not tid:
+        return None
+    with _ACP_TERMINALS_LOCK:
+        entry = _ACP_TERMINALS.get(tid)
+        cached = _ACP_TERMINAL_OUTPUT_CACHE.get(tid)
+    if entry is not None:
+        return _acp_terminal_output_result(entry)
+    return cached
+
+
+def _acp_terminal_cache_output_unlocked(tid, snapshot):
+    """Remember a released terminal's output (bounded, oldest evicted)."""
+    _ACP_TERMINAL_OUTPUT_CACHE[tid] = snapshot
+    _ACP_TERMINAL_OUTPUT_CACHE.move_to_end(tid)
+    while len(_ACP_TERMINAL_OUTPUT_CACHE) > _ACP_TERMINAL_OUTPUT_CACHE_MAX:
+        _ACP_TERMINAL_OUTPUT_CACHE.popitem(last=False)
+
+
 def _acp_tool_content_text(update):
-    """Join an update's content-block text; fall back to rawOutput."""
+    """Join an update's content-block text; fall back to rawOutput, then to
+    the output of a terminal the update points at (kimi's Bash rows carry
+    ONLY `{type:'terminal', terminalId}` — see _ACP_TERMINAL_OUTPUT_CACHE)."""
     parts = []
+    terminal_ids = []
     for c in update.get("content") or []:
-        if isinstance(c, dict):
-            inner = c.get("content")
-            if isinstance(inner, dict) and isinstance(inner.get("text"), str):
-                parts.append(inner["text"])
+        if not isinstance(c, dict):
+            continue
+        inner = c.get("content")
+        if isinstance(inner, dict) and isinstance(inner.get("text"), str):
+            parts.append(inner["text"])
+        elif c.get("type") == "terminal" and c.get("terminalId"):
+            terminal_ids.append(str(c["terminalId"]))
     text = "".join(parts).strip()
-    if not text and isinstance(update.get("rawOutput"), str):
-        text = update["rawOutput"].strip()
+    if not text:
+        text = _acp_raw_output_text(update.get("rawOutput"))
+    if not text:
+        for tid in terminal_ids:
+            snap = _acp_terminal_output_snapshot(tid)
+            out = str((snap or {}).get("output") or "").strip()
+            if out:
+                text = out
+                break
+            exit_status = (snap or {}).get("exitStatus") or {}
+            if exit_status and exit_status.get("exitCode") not in (None, 0):
+                text = f"(no output, exit code {exit_status.get('exitCode')})"
+                break
     return text
 
 
@@ -38585,25 +39151,19 @@ def _acp_finalize_turn(harness, sid, response, pending_entry):
                 if not tool.get("emitted"):
                     tool["emitted"] = True
                     _acp_emit_event_unlocked(harness, sid, _acp_tool_event(turn, tid, tool))
-            blocks = []
-            if turn.get("thought"):
-                blocks.append({"kind": "thinking", "text": turn["thought"]})
-            if turn.get("text"):
-                blocks.append({"kind": "text", "text": turn["text"]})
-            if blocks:
-                assistant_event = {
-                    "type": "assistant", "message_id": turn["msg_id"], "blocks": blocks,
-                }
-                _apply_kimi_turn_usage(assistant_event, turn_usage)
-                _acp_emit_event_unlocked(harness, sid, assistant_event)
-            elif turn_usage:
+            # Trailing thought/text (everything after the last tool call —
+            # usually the answer). Earlier chunks were flushed in stream
+            # order as their tool calls arrived.
+            final_text = turn.get("text") or ""
+            flushed = _acp_flush_turn_text_unlocked(harness, sid, turn, usage=turn_usage)
+            if flushed is None and turn_usage:
                 for event in reversed(list(state.get("events") or [])):
                     if event.get("type") == "assistant":
                         _apply_kimi_turn_usage(event, turn_usage)
                         break
             # Synchronous-ask handoff: _acp_ask_and_wait reads this after the
             # pending event fires (set post-fold in _acp_handle_message).
-            pending_entry["final_text"] = turn.get("text") or ""
+            pending_entry["final_text"] = turn.get("text_all") or final_text
             state["active_turn"] = None
             state["status"] = "idle"
             state["stop_reason"] = stop_reason or ("error" if error else None)
@@ -39107,10 +39667,8 @@ def _acp_load(harness, sid, cwd):
     with _ACP_LOCK:
         state = _acp_session(harness, sid, create=True, cwd=cwd)
         replay = state.get("replay")
-        if replay and replay.get("text"):
-            ev = _acp_message_event(state, replay["kind"], replay["text"])
-            if ev is not None:
-                _acp_emit_event_unlocked(harness, sid, ev)
+        if replay:
+            _acp_replay_flush_unlocked(harness, sid, state, replay)
         state["replay"] = None
         if resp.get("ok"):
             state["attached"] = True
@@ -40259,6 +40817,21 @@ def _attach_codex_token_usage(events, usage):
     """
     if not isinstance(usage, dict):
         return False
+    # A compaction turn's token_count is the ONLY report of the rebuilt context
+    # size, and it lands right after the `compacted` record. Hand it to the
+    # boundary row rather than to an assistant message from the turn before.
+    tail = events[-1] if events else None
+    if (
+        isinstance(tail, dict)
+        and tail.get("type") == "system"
+        and tail.get("subtype") == "compact_boundary"
+    ):
+        compact = tail.get("compact")
+        if isinstance(compact, dict) and not compact.get("post_tokens"):
+            post = _codex_compact_post_tokens_from_usage(usage)
+            if post:
+                compact["post_tokens"] = post
+                return True
     for event in reversed(events):
         if event.get("type") != "assistant":
             continue
@@ -40388,11 +40961,98 @@ def _codex_usage_delta_from_event(ev, previous_totals=None):
     }, next_totals
 
 
+def _codex_compact_post_tokens_from_usage(usage):
+    """Rebuilt-context size off a post-compaction `token_count`, else 0.
+
+    Codex zeroes every per-turn field on the compaction turn and reports the
+    new context size in `total_tokens` only, so a reading with input_tokens
+    set is a NORMAL turn (a pre-compact size), not a post-compact one.
+    """
+    if not isinstance(usage, dict):
+        return 0
+    if _codex_int(usage.get("input_tokens")):
+        return 0
+    return _codex_int(usage.get("total_tokens"))
+
+
+def _is_compact_boundary_event(event):
+    return (
+        isinstance(event, dict)
+        and event.get("type") == "system"
+        and event.get("subtype") == "compact_boundary"
+    )
+
+
+def _merge_codex_compact_boundary_events(events):
+    """Collapse the pair of rows one Codex compaction produces into one.
+
+    Codex records a compaction as a top-level `compacted` record (carrying the
+    replacement history) AND an `event_msg`/`context_compacted` marker, with
+    the token_count that reports the rebuilt size in between. The parser emits
+    a boundary for each - the first knows the pre-compact size, the second the
+    post-compact one - so merge adjacent boundaries into a single row. Both
+    records are emitted because they are not perfectly paired in practice: a
+    handful of rollouts carry the top-level record with no marker after it.
+
+    Then adopt the compaction turn's own duration off the `result` row that
+    follows, which is Codex's own task_started-to-task_complete measurement.
+    """
+    merged = []
+    for event in events:
+        if _is_compact_boundary_event(event) and merged and _is_compact_boundary_event(merged[-1]):
+            prev = merged[-1].get("compact")
+            cur = event.get("compact")
+            if isinstance(prev, dict) and isinstance(cur, dict):
+                for key in ("pre_tokens", "post_tokens", "duration_ms"):
+                    prev[key] = max(_codex_int(prev.get(key)), _codex_int(cur.get(key)))
+                if not prev.get("trigger"):
+                    prev["trigger"] = cur.get("trigger") or ""
+            continue
+        merged.append(event)
+    for idx, event in enumerate(merged):
+        if not _is_compact_boundary_event(event):
+            continue
+        compact = event.get("compact")
+        if not isinstance(compact, dict) or compact.get("duration_ms"):
+            continue
+        following = merged[idx + 1] if idx + 1 < len(merged) else None
+        if isinstance(following, dict) and following.get("type") == "result":
+            compact["duration_ms"] = _codex_int(following.get("duration_ms"))
+    return merged
+
+
 def _parse_codex_event(ev, line_num, token_usage=None, codex_turn_meta=None):
     ev_type = ev.get("type", "")
     payload = ev.get("payload") if isinstance(ev.get("payload"), dict) else {}
     ptype = payload.get("type", "")
     ts = _codex_event_timestamp(ev)
+    if ev_type == "compacted" or (
+        ev_type == "event_msg" and ptype in ("compacted", "context_compacted")
+    ):
+        # Neither of Codex's two compaction records ever became a transcript
+        # row, so a Codex compaction left no record card at all while the
+        # Claude path has shown one for ages. Emit the same `compact_boundary`
+        # shape (`compact: {pre_tokens, post_tokens, duration_ms, trigger}`)
+        # the renderer already reads. `token_usage` is the most recent
+        # token_count: the pre-compact one at the `compacted` record, the
+        # post-compact one at the `context_compacted` marker that follows it.
+        # `_merge_codex_compact_boundary_events` folds the pair together.
+        return {
+            "line": line_num,
+            "ts": ts,
+            "type": "system",
+            "subtype": "compact_boundary",
+            "engine": "codex",
+            "compact": {
+                "trigger": "manual",
+                "pre_tokens": (
+                    _codex_int(token_usage.get("input_tokens"))
+                    if isinstance(token_usage, dict) else 0
+                ),
+                "post_tokens": _codex_compact_post_tokens_from_usage(token_usage),
+                "duration_ms": 0,
+            },
+        }
     if ev_type == "event_msg":
         if ptype == "user_message":
             text = _strip_ccc_session_state_instruction(payload.get("message") or "")
@@ -40586,6 +41246,8 @@ _pending_terminal_input_lock = threading.Lock()
 _pending_terminal_handoff_ids: dict = {}  # watcher-local handoff_id → path
 _pending_inputs_lock = threading.Lock()
 _pending_input_handoff_ingest_lock = threading.Lock()
+_auto_resume_barrier_thread_lock = threading.RLock()
+_auto_resume_barrier_local = threading.local()
 _pending_inputs_watcher_lock_file = None
 _pending_inputs_watcher_retry_started = False
 _codex_queue_pump_locks = {}
@@ -40597,6 +41259,52 @@ _codex_queue_pump_locks_guard = threading.Lock()
 # resume/terminal queues in PENDING_INPUTS_FILE so it survives a restart.
 _auto_resume_opt_in: dict = {}   # session_id → True
 _auto_resume_opt_in_lock = threading.Lock()
+
+
+def _auto_resume_barrier_path():
+    return PENDING_INPUTS_FILE.with_suffix(".auto-resume.lock")
+
+
+@contextlib.contextmanager
+def _auto_resume_exclusive_lock():
+    """Cross-process barrier for auto-resume queueing, delivery, and cancel.
+
+    A successful cancellation cannot overlap an unattended ``continue``
+    write or delivery. Real user text never takes this lock.
+    """
+    with _auto_resume_barrier_thread_lock:
+        depth = int(getattr(_auto_resume_barrier_local, "depth", 0) or 0)
+        if depth:
+            _auto_resume_barrier_local.depth = depth + 1
+            try:
+                yield
+            finally:
+                _auto_resume_barrier_local.depth = depth
+            return
+        lock_path = _auto_resume_barrier_path()
+        lock_path.parent.mkdir(parents=True, exist_ok=True)
+        with open(lock_path, "a+") as lock_fh:
+            fcntl.flock(lock_fh.fileno(), fcntl.LOCK_EX)
+            _auto_resume_barrier_local.depth = 1
+            try:
+                yield
+            finally:
+                _auto_resume_barrier_local.depth = 0
+                fcntl.flock(lock_fh.fileno(), fcntl.LOCK_UN)
+
+
+def _deliver_with_auto_resume_barrier(session_id, text, deliver):
+    """Run an unattended delivery only while its durable permission is live."""
+    if not _is_unattended_auto_continue(text):
+        return deliver()
+    try:
+        with _auto_resume_exclusive_lock():
+            if not _is_auto_resume_opted_in(session_id):
+                return {"ok": True, "delivered": False, "disabled": True}
+            return deliver()
+    except OSError:
+        # Fail closed. A missing safety lock must never turn into a send.
+        return {"ok": True, "delivered": False, "disabled": True}
 
 
 def _acquire_pending_inputs_watcher_lock(lock_path):
@@ -40667,9 +41375,11 @@ def _load_pending_inputs():
     with _auto_resume_opt_in_lock:
         flags = data.get("auto_resume_opt_in")
         if isinstance(flags, dict):
-            _auto_resume_opt_in.update(
-                {str(sid): True for sid, v in flags.items() if v}
-            )
+            _auto_resume_opt_in.update({
+                str(sid): True
+                for sid, v in flags.items()
+                if v and not _is_session_auto_resume_disabled(sid)
+            })
     if stripped:
         _save_pending_inputs()
 def _save_pending_inputs():
@@ -40716,6 +41426,8 @@ def _is_auto_resume_opted_in(session_id):
     running pre-fix code burned a weekly quota unattended)."""
     if not session_id:
         return False
+    if _is_session_auto_resume_disabled(session_id):
+        return False
     with _auto_resume_opt_in_lock:
         return bool(_auto_resume_opt_in.get(str(session_id)))
 
@@ -40759,6 +41471,23 @@ class _PendingInputHandoff(str):
 
 
 def _write_pending_input_handoff(session_id, text, *, front=False):
+    """Write a worker handoff, gating unattended auto-resume at the barrier."""
+    if _is_unattended_auto_continue(text):
+        try:
+            with _auto_resume_exclusive_lock():
+                if not _is_auto_resume_opted_in(session_id):
+                    return None
+                return _write_pending_input_handoff_unlocked(
+                    session_id, text, front=front,
+                )
+        except OSError:
+            return None
+    return _write_pending_input_handoff_unlocked(
+        session_id, text, front=front,
+    )
+
+
+def _write_pending_input_handoff_unlocked(session_id, text, *, front=False):
     """Atomically hand one terminal retry from an engine worker to the watcher.
 
     Persistent engine workers do not own the dashboard's in-memory pending
@@ -40830,6 +41559,15 @@ def _read_pending_input_handoff(path):
 
 
 def _ingest_pending_input_handoffs():
+    """Ingest handoffs behind the same barrier used by cancellation."""
+    try:
+        with _auto_resume_exclusive_lock():
+            return _ingest_pending_input_handoffs_unlocked()
+    except OSError:
+        return 0
+
+
+def _ingest_pending_input_handoffs_unlocked():
     """Expose authoritative worker retry files in the watcher-owned queue."""
     with _pending_input_handoff_ingest_lock:
         try:
@@ -40851,6 +41589,16 @@ def _ingest_pending_input_handoffs():
                     f"  [pending-inputs] invalid worker handoff: {path.name}",
                     flush=True,
                 )
+                continue
+            if (
+                _is_unattended_auto_continue(event["text"])
+                and not _is_auto_resume_opted_in(event["session_id"])
+            ):
+                try:
+                    path.unlink(missing_ok=True)
+                except OSError:
+                    pass
+                _pending_terminal_handoff_ids.pop(event["id"], None)
                 continue
             events.append(event)
         if not events:
@@ -41254,6 +42002,28 @@ def _parse_ps_etime(text):
 
 
 def _queue_terminal_input(session_id, text, status=None):
+    """Queue terminal input, gating the unattended marker at the barrier."""
+    if _is_unattended_auto_continue(text):
+        try:
+            with _auto_resume_exclusive_lock():
+                if not _is_auto_resume_opted_in(session_id):
+                    return {
+                        "ok": False,
+                        "queued": False,
+                        "error": "auto-resume not opted in for this session",
+                        "auto_resume_opt_in_required": True,
+                    }
+                return _queue_terminal_input_unlocked(session_id, text, status)
+        except OSError:
+            return {
+                "ok": False,
+                "queued": False,
+                "error": "auto-resume safety barrier unavailable",
+            }
+    return _queue_terminal_input_unlocked(session_id, text, status)
+
+
+def _queue_terminal_input_unlocked(session_id, text, status=None):
     """Queue input until a live Claude session reports it is idle again."""
     with _pending_terminal_input_lock:
         queue = _pending_terminal_input_queue.setdefault(session_id, [])
@@ -41635,7 +42405,26 @@ def _pump_codex_resume_queue(session_id):
         if text is None:
             return {"ok": True, "empty": True}
 
-        result = resume_session_codex(session_id, text, _from_queue=True)
+        if _is_unattended_auto_continue(text):
+            try:
+                with _auto_resume_exclusive_lock():
+                    if not _is_auto_resume_opted_in(session_id):
+                        with _pending_resume_lock:
+                            queue = _pending_resume_queue.get(session_id) or []
+                            if queue and queue[0] == text:
+                                queue.pop(0)
+                                if not queue:
+                                    _pending_resume_queue.pop(session_id, None)
+                        _save_pending_inputs()
+                        return {"ok": True, "delivered": False, "disabled": True}
+                    result = resume_session_codex(
+                        session_id, text, _from_queue=True,
+                    )
+            except OSError:
+                _mark_pending_resume_retry(session_id)
+                return {"ok": False, "delivered": False, "waiting": "barrier"}
+        else:
+            result = resume_session_codex(session_id, text, _from_queue=True)
         # An accepted turn already started. Holding the same text because
         # app-server events were not observed re-sends it after the turn
         # ends. Treat accepted as delivered; retry only when not accepted.
@@ -42062,8 +42851,23 @@ def _codex_recovery_watchdog_session_ids(goals, now):
                 isinstance(recovery, dict)
                 and _codex_recovery_is_silent_turn(recovery)
                 and str(recovery.get("source_turn_id") or "") == source_turn_id
-                and not has_user_input
+                and (
+                    not has_user_input
+                    or (
+                        recovery.get("suppressed_reason") == "interrupt-declined"
+                        and now - float(recovery.get("suppressed_at") or 0.0)
+                        < _INTERRUPT_ASK_DISMISS_SNOOZE_S
+                    )
+                )
             ):
+                # A queued user message normally justifies re-arming recovery
+                # for the same stalled turn (new intent worth retrying for).
+                # But when the last attempt was declined, `_file_interrupt_ask`
+                # will just hand back the same dismissed entry for
+                # _INTERRUPT_ASK_DISMISS_SNOOZE_S — re-arming on every 5s
+                # watchdog tick during that window only spams
+                # turn_recovery_armed/interrupt-declined events with no
+                # chance of a different outcome (OPS-749).
                 continue
 
             episode_id = f"silent-turn-{source_turn_id}"
@@ -42342,9 +43146,24 @@ def _mark_terminal_queue_retry(sid, now=None, delay=None):
 def _requeue_terminal_input_front(sid, text):
     """Put a popped-but-undelivered entry back where it came from (front,
     preserving order relative to anything queued behind it)."""
+    if _is_unattended_auto_continue(text):
+        try:
+            with _auto_resume_exclusive_lock():
+                if not _is_auto_resume_opted_in(sid):
+                    _complete_pending_input_handoff(text)
+                    return False
+                return _requeue_terminal_input_front_unlocked(sid, text)
+        except OSError:
+            _complete_pending_input_handoff(text)
+            return False
+    return _requeue_terminal_input_front_unlocked(sid, text)
+
+
+def _requeue_terminal_input_front_unlocked(sid, text):
     with _pending_terminal_input_lock:
         _pending_terminal_input_queue.setdefault(sid, []).insert(0, text)
     _save_pending_inputs()
+    return True
 
 
 def _verify_terminal_drain_receipts(now=None):
@@ -42666,20 +43485,26 @@ def _start_resume_queue_watcher() -> None:
                     continue
                 result = None
                 try:
-                    if _is_codex_session(sid):
-                        result = resume_session_codex(sid, text)
-                    elif _is_gemini_session(sid):
-                        result = resume_session_gemini(sid, text)
-                    elif _is_cursor_session(sid):
-                        result = resume_session_cursor(sid, text)
-                    elif _is_antigravity_session(sid):
-                        result = resume_session_antigravity(sid, text)
-                    elif _is_hermes_session(sid):
-                        result = resume_session_hermes(sid, text)
-                    elif _is_opencode_session(sid):
-                        result = resume_session_opencode(sid, text)
-                    elif _is_devin_cli_session(sid):
-                        result = resume_session_devin(sid, text)
+                    def _deliver_resume_queue_text():
+                        if _is_codex_session(sid):
+                            return resume_session_codex(sid, text)
+                        if _is_gemini_session(sid):
+                            return resume_session_gemini(sid, text)
+                        if _is_cursor_session(sid):
+                            return resume_session_cursor(sid, text)
+                        if _is_antigravity_session(sid):
+                            return resume_session_antigravity(sid, text)
+                        if _is_hermes_session(sid):
+                            return resume_session_hermes(sid, text)
+                        if _is_opencode_session(sid):
+                            return resume_session_opencode(sid, text)
+                        if _is_devin_cli_session(sid):
+                            return resume_session_devin(sid, text)
+                        return {"ok": False}
+
+                    result = _deliver_with_auto_resume_barrier(
+                        sid, text, _deliver_resume_queue_text,
+                    )
                 except Exception:
                     result = {"ok": False}
                 if result and result.get("blocked"):
@@ -42822,10 +43647,14 @@ def _start_resume_queue_watcher() -> None:
                     # transcript confirms it landed.
                     result = None
                     try:
-                        result = _inject_text_into_session(
-                            sid, text, _from_terminal_queue=True,
-                            skip_wt=(sid in _terminal_drain_skip_wt),
-                            source="terminal-queue-watcher",
+                        result = _deliver_with_auto_resume_barrier(
+                            sid,
+                            text,
+                            lambda: _inject_text_into_session(
+                                sid, text, _from_terminal_queue=True,
+                                skip_wt=(sid in _terminal_drain_skip_wt),
+                                source="terminal-queue-watcher",
+                            ),
                         )
                     except Exception:
                         result = None
@@ -45418,6 +46247,10 @@ def _extract_antigravity_usage(session_id):
     total_cached_create = 0
     total_out = 0
     total_thinking = 0
+    # Per-turn tail for the status-rail column graph — one entry per
+    # trajectory step that carried usage, same raw-count shape Claude's
+    # turn_series uses. Steps don't carry a timestamp, so ts stays "".
+    turn_series = collections.deque(maxlen=USAGE_TURN_SERIES_MAX)
 
     steps = _antigravity_trajectory_steps(session_id)
     for step in steps:
@@ -45451,6 +46284,15 @@ def _extract_antigravity_usage(session_id):
         total_out += out_tokens
         total_thinking += thinking_tokens
 
+        turn_out = out_tokens + thinking_tokens
+        if window or turn_out:
+            turn_series.append({
+                "ts": "",
+                "tokens_in": window,
+                "tokens_cached": cr_tokens,
+                "tokens_out": turn_out,
+            })
+
     return {
         **empty,
         "latest_input_tokens": latest,
@@ -45463,6 +46305,7 @@ def _extract_antigravity_usage(session_id):
         "model": model,
         "engine": "antigravity",
         "override": _get_session_override(session_id),
+        "turn_series": list(turn_series),
     }
 
 
@@ -50346,6 +51189,33 @@ def _load_usage_limit_resumes():
     return data
 
 
+def _is_session_auto_resume_disabled(session_id):
+    """Read the durable per-session kill switch without trusting a cache.
+
+    This check is only used for the exact unattended ``continue`` marker, so
+    the extra tiny JSON read is preferable to letting a sibling process's
+    stale in-memory opt-in resurrect a cancelled session.
+    """
+    sid = str(session_id or "").strip()
+    if sid.startswith("session_"):
+        sid = sid[len("session_"):]
+    if not sid:
+        return True
+    if not USAGE_LIMIT_RESUME_FILE.exists():
+        return False
+    try:
+        data = json.loads(USAGE_LIMIT_RESUME_FILE.read_text())
+    except (OSError, json.JSONDecodeError):
+        return True
+    if not isinstance(data, dict):
+        return True
+    entry = data.get(sid)
+    return bool(
+        isinstance(entry, dict)
+        and (entry.get("auto_resume_disabled") or entry.get("dismissed"))
+    )
+
+
 def _usage_limit_resume_lock_path():
     return USAGE_LIMIT_RESUME_FILE.with_suffix(".lock")
 
@@ -50385,6 +51255,13 @@ def _save_usage_limit_resume_entry(session_id, entry):
         return
 
     def _mutate(existing):
+        current = existing.get(str(session_id))
+        if isinstance(current, dict) and (
+            current.get("auto_resume_disabled") or current.get("dismissed")
+        ):
+            # A detector may have computed `entry` from a snapshot taken
+            # before the user's X. Permanent disable wins atomically.
+            return existing, None
         existing[str(session_id)] = entry
         return existing, None
 
@@ -50440,11 +51317,101 @@ def _dismiss_usage_limit_resume(session_id):
         if entry is None:
             entry = {}
         entry["dismissed"] = True
+        entry["auto_resume_disabled"] = True
         entry["dismissed_at"] = time.time()
         existing[str(session_id)] = entry
         return existing, None
 
     _usage_limit_resume_rewrite(_mutate)
+
+
+def _purge_pending_auto_resume_handoffs(session_id):
+    """Remove not-yet-ingested bare-continue handoffs for one session."""
+    removed = 0
+    with _pending_input_handoff_ingest_lock:
+        try:
+            paths = list(PENDING_INPUT_HANDOFF_DIR.glob("*.json"))
+        except OSError:
+            return removed
+        for path in paths:
+            event = _read_pending_input_handoff(path)
+            if not event or event["session_id"] != session_id:
+                continue
+            if not _is_unattended_auto_continue(event["text"]):
+                continue
+            path.unlink(missing_ok=True)
+            _pending_terminal_handoff_ids.pop(event["id"], None)
+            removed += 1
+    return removed
+
+
+def _disable_session_auto_resume(session_id):
+    """Permanently disable unattended auto-resume for one session.
+
+    Clearing the durable opt-in prevents future bare ``continue`` pokes;
+    purging any already-queued copies closes the race where one was accepted
+    before the user clicked X.  The usage-limit dismissal keeps the watcher
+    from rebuilding a countdown for the same (or a later) stop in this
+    session.
+    """
+    sid = str(session_id or "").strip()
+    if not sid:
+        return {"ok": False, "error": "missing session_id"}
+
+    try:
+        with _auto_resume_exclusive_lock():
+            # Persist the negative marker first. Every queue/write/delivery
+            # path rechecks it while holding this same barrier.
+            _dismiss_usage_limit_resume(sid)
+            removed = _purge_pending_auto_resume_handoffs(sid)
+            with _auto_resume_opt_in_lock:
+                _auto_resume_opt_in.pop(sid, None)
+
+            handoff_cleanup_failed = False
+            for queue, lock in (
+                (_pending_resume_queue, _pending_resume_lock),
+                (_pending_terminal_input_queue, _pending_terminal_input_lock),
+            ):
+                with lock:
+                    items = queue.get(sid) or []
+                    kept = []
+                    for item in items:
+                        if not _is_unattended_auto_continue(item):
+                            kept.append(item)
+                            continue
+                        if (
+                            isinstance(item, _PendingInputHandoff)
+                            and not _complete_pending_input_handoff(item)
+                        ):
+                            kept.append(item)
+                            handoff_cleanup_failed = True
+                            continue
+                        removed += 1
+                    if kept:
+                        queue[sid] = kept
+                    else:
+                        queue.pop(sid, None)
+
+            if not _save_pending_inputs():
+                return {
+                    "ok": False,
+                    "error": "failed to persist auto-resume disable",
+                }
+            if handoff_cleanup_failed:
+                return {
+                    "ok": False,
+                    "error": "failed to remove queued auto-resume handoff",
+                }
+    except OSError:
+        return {
+            "ok": False,
+            "error": "failed to persist permanent auto-resume disable",
+        }
+    return {
+        "ok": True,
+        "session_id": sid,
+        "cancelled_queued": removed,
+    }
 
 
 def usage_limit_resume_at_for_session(session_id):
@@ -55823,8 +56790,16 @@ def _inject_text_into_session(
                 steer_result["queued_preserved"] = True
                 return steer_result
             if idempotency_key:
+                # Same trap as the ACP steer retry below: the steer attempt
+                # already spent `idempotency_key` and the worker's WorkLedger
+                # recorded it as failed (codex_no_active_turn /
+                # codex_steer_unavailable). Reusing the key here made
+                # submit() dedupe this fallback turn/start back to that
+                # failed row, so steering an idle Codex thread surfaced "No
+                # running Codex turn to steer" instead of just sending.
                 steer_result = resume_session_codex(
-                    session_id, text, idempotency_key=idempotency_key,
+                    session_id, text,
+                    idempotency_key=f"{idempotency_key}:steer-fallback",
                 )
             else:
                 steer_result = resume_session_codex(session_id, text)
@@ -56047,7 +57022,24 @@ def _inject_text_into_session(
                         if snap.get("status") != "active":
                             break
                         time.sleep(0.15)
-                    retry = _acp_prompt(acp_harness, session_id, text, **prompt_kwargs)
+                    # The resend MUST carry its own idempotency key. The
+                    # pre-cancel attempt already consumed `idempotency_key`
+                    # and is sitting in the worker's ledger as `failed`
+                    # ("turn already in progress"); reusing the same key made
+                    # WorkLedger.submit dedupe the retry straight back to that
+                    # failed row, so the post-cancel prompt was never sent and
+                    # every steer fell through to the durable queue — the
+                    # cancel landed, the message did not (CCC-922 follow-up).
+                    # Deriving the key keeps replay-safety: the same inject
+                    # request always derives the same retry key.
+                    retry_kwargs = dict(prompt_kwargs)
+                    if idempotency_key:
+                        retry_kwargs["idempotency_key"] = (
+                            f"{idempotency_key}:steer-retry"
+                        )
+                    retry = _acp_prompt(
+                        acp_harness, session_id, text, **retry_kwargs
+                    )
                     if retry.get("code") != "busy":
                         return retry
                     result = retry
@@ -63724,6 +64716,7 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                 # correct in split view -- session-status only tracks whichever
                 # pane is currently "active".
                 usage["auto_handover_enabled"] = sid in _load_auto_handover_flags()
+                usage["auto_handover_mode"] = _auto_handover_mode(sid)
                 # extract_session_usage only sees the picker override, so a
                 # session spawned with `--effort` and never re-picked reports
                 # blank and the composer's model pill drops the effort segment
@@ -63861,6 +64854,7 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
             status["cwd"] = cwd
             status["cwd_exists"] = bool(cwd and Path(cwd).is_dir())
             status["auto_handover_enabled"] = bool(sid) and sid in _load_auto_handover_flags()
+            status["auto_handover_mode"] = _auto_handover_mode(sid) if sid else "mdfile"
             # Live "what's running right now" — prefer the PreToolUse
             # in-flight marker (currently running) over the PostToolUse
             # sidecar (most-recently completed). The detail pane uses these
@@ -64254,7 +65248,8 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
             # path collapses to a hashmap lookup + socket write. Kimi convs
             # bypass: an attach can change the content at any time, with no
             # file mtime to invalidate on.
-            cached_bytes = None if (windowed or is_acp_conv) else _conv_response_bytes_get(conv_id, after_line)
+            _win_key = (tail, before) if windowed else None
+            cached_bytes = None if is_acp_conv else _conv_response_bytes_get(conv_id, after_line, window=_win_key)
             if cached_bytes is not None:
                 accept = self.headers.get("Accept-Encoding", "") or ""
                 want_gzip = "gzip" in accept.lower()
@@ -64298,8 +65293,8 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                     gz = gzip.compress(raw, compresslevel=5)
                 except Exception:
                     gz = None
-            if not windowed and not is_acp_conv:
-                _conv_response_bytes_put(conv_id, after_line, raw, gz)
+            if not is_acp_conv:
+                _conv_response_bytes_put(conv_id, after_line, raw, gz, window=_win_key)
             accept = self.headers.get("Accept-Encoding", "") or ""
             want_gzip = "gzip" in accept.lower()
             body = gz if (want_gzip and gz) else raw
@@ -65497,6 +66492,95 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                 self.send_json({"error": f"unknown goal: {slug}"}, 404)
             else:
                 self.send_json(detail)
+        elif path == "/api/media":
+            # Stream a repo-sandboxed video file so mobile clients (and anyone
+            # on a Tailnet/VPN) can click an MP4 link and have the browser
+            # play it instead of trying to open it on the remote macOS host.
+            qs = urllib.parse.parse_qs(parsed.query)
+            target = (qs.get("path") or [""])[0].strip()
+            if not target:
+                self.send_json({"ok": False, "error": "missing path"}, 400)
+                return
+            try:
+                ctx = require_repo_context(query=qs, allow_session=True)
+            except RepoContextError as e:
+                self.send_json(e.as_payload(), e.status)
+                return
+            resolved = _resolve_open_target(
+                target,
+                session_id=str((qs.get("session_id") or [""])[0] or "").strip(),
+                cwd=str((qs.get("cwd") or [""])[0] or "").strip(),
+                repo_path=ctx["repo_path"],
+            )
+            if not resolved.get("ok"):
+                status = int(resolved.get("status", 404))
+                self.send_json({"ok": False, "error": resolved.get("error", "not found")}, status)
+                return
+            file_path = Path(resolved["path"])
+            if _categorize_file_target(str(file_path)) != "videos" or not file_path.is_file():
+                self.send_json({"ok": False, "error": "not a video"}, 404)
+                return
+            try:
+                st = file_path.stat()
+                size = st.st_size
+            except OSError:
+                self.send_json({"ok": False, "error": "stat failed"}, 500)
+                return
+            ext = file_path.suffix.lower()
+            ct_map = {
+                ".mp4": "video/mp4",
+                ".mov": "video/quicktime",
+                ".webm": "video/webm",
+                ".avi": "video/x-msvideo",
+                ".mkv": "video/x-matroska",
+                ".m4v": "video/mp4",
+            }
+            content_type = ct_map.get(ext, "application/octet-stream")
+            start, end = 0, max(0, size - 1)
+            status = 200
+            range_header = self.headers.get("Range")
+            if range_header and range_header.startswith("bytes="):
+                spec = range_header[len("bytes="):].split(",")[0].strip()
+                if "-" in spec:
+                    parts = spec.split("-")
+                    try:
+                        parsed_start = int(parts[0]) if parts[0] else 0
+                        parsed_end = int(parts[1]) if parts[1] else size - 1
+                    except ValueError:
+                        parsed_start, parsed_end = 0, size - 1
+                    else:
+                        if 0 <= parsed_start <= parsed_end < size:
+                            start, end = parsed_start, parsed_end
+                            status = 206
+                        else:
+                            self.send_response(416)
+                            self.send_header("Content-Range", f"bytes */{size}")
+                            self.end_headers()
+                            return
+            self.send_response(status)
+            self.send_header("Content-Type", content_type)
+            self.send_header("Content-Length", str(end - start + 1))
+            self.send_header("Accept-Ranges", "bytes")
+            self.send_header("Content-Disposition", "inline")
+            self.send_header("Cache-Control", "private, max-age=3600")
+            if status == 206:
+                self.send_header("Content-Range", f"bytes {start}-{end}/{size}")
+            self.end_headers()
+            if self.command == "HEAD":
+                return
+            try:
+                with open(file_path, "rb") as fh:
+                    fh.seek(start)
+                    remaining = end - start + 1
+                    chunk_size = 256 * 1024
+                    while remaining > 0:
+                        chunk = fh.read(min(chunk_size, remaining))
+                        if not chunk:
+                            break
+                        self.wfile.write(chunk)
+                        remaining -= len(chunk)
+            except OSError:
+                pass
         else:
             self.send_json({"error": "Not found"}, 404)
 
@@ -68178,12 +69262,7 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                 self.send_json({"ok": False, "error": "bad length"}, 400)
             else:
                 raw = self.rfile.read(length)
-                # Determine extension from content type
-                ext_map = {
-                    "image/png": "png", "image/jpeg": "jpg", "image/jpg": "jpg",
-                    "image/gif": "gif", "image/webp": "webp", "image/svg+xml": "svg",
-                }
-                ext = ext_map.get(ctype.split(";")[0].strip().lower(), "png")
+                raw, ext = _normalize_pasted_image(raw, ctype)
                 img_dir = str(COMMAND_CENTER_PASTED_IMAGES_DIR)
                 os.makedirs(img_dir, exist_ok=True)
                 fname = f"paste-{int(time.time()*1000)}.{ext}"
@@ -70846,8 +71925,15 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                 # usage_limit_resume_at_for_session); kimi rows carry CCC's
                 # "session_" display prefix, so strip it the same way.
                 key = sid[len("session_"):] if sid.startswith("session_") else sid
-                _dismiss_usage_limit_resume(key)
-                self.send_json({"ok": True, "session_id": sid})
+                result = _disable_session_auto_resume(key)
+                if not result.get("ok"):
+                    self.send_json(result, 500)
+                else:
+                    self.send_json({
+                        "ok": True,
+                        "session_id": sid,
+                        "cancelled_queued": result.get("cancelled_queued", 0),
+                    })
         elif path == "/api/inject-input":
             length = int(self.headers.get("Content-Length", "0"))
             body = self.rfile.read(length) if length > 0 else b""
@@ -70923,7 +72009,14 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                     # Turn it into a readable error instead.
                     result = {"ok": False, "error": str(e) or "internal error"}
                 if replace_queued:
-                    result = _finalize_queued_steer_result(sid, queued_text, result)
+                    # Match against the text actually delivered/enqueued by
+                    # _inject_text_into_session (`text`, post-wrap), not the
+                    # raw pre-wrap `queued_text` — when announced_from is set,
+                    # the durable queue holds the wrapped string, so matching
+                    # on the unwrapped one never finds it. The stale queued
+                    # copy then survives a successful steer and the queue
+                    # pump resends it later, delivering the message twice.
+                    result = _finalize_queued_steer_result(sid, text, result)
                 self.send_json(result)
         elif path == "/api/session/compact":
             length = int(self.headers.get("Content-Length", "0"))
@@ -71043,7 +72136,8 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
             except json.JSONDecodeError:
                 payload = {}
             _record_interaction(sid)
-            self.send_json(_set_auto_handover(sid, bool(payload.get("enabled"))))
+            mode = str(payload.get("mode") or "mdfile")
+            self.send_json(_set_auto_handover(sid, bool(payload.get("enabled")), mode))
         elif path == "/api/interrupt-asks/resolve":
             # Approve or dismiss a CCC-initiated interrupt ask (the "CCC
             # wants to interrupt this session" banner).
@@ -72106,6 +73200,8 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                 except FileNotFoundError:
                     break
 
+                if events and is_codex:
+                    events = _merge_codex_compact_boundary_events(events)
                 if events:
                     payload = {"events": events, "last_line": line_num}
                     self.wfile.write(f"data: {json.dumps(payload)}\n\n".encode())

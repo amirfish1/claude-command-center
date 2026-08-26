@@ -563,7 +563,7 @@ ensure_watchtower() {
   # fresh `brew upgrade`/Sparkle/`git pull` install pick up WatchTower right
   # away instead of waiting out the rest of today's rate-limit window — see
   # wt_ccc_version_changed in install-watchtower.sh, which owns this marker.
-  if "$PYTHON" -c 'import watchtower' >/dev/null 2>&1; then
+  if "$PYTHON" -c 'import watchtower.queue' >/dev/null 2>&1; then
     local marker="$HOME/.claude/command-center/watchtower-last-check"
     local version_marker="$HOME/.claude/command-center/watchtower-last-ccc-version"
     if [ -f "$marker" ] && [ -n "$(find "$marker" -mtime -1 2>/dev/null)" ] \

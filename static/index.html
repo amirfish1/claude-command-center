@@ -971,7 +971,7 @@
       <span class="launch-split" id="launchWrapConv" style="display:none;">
         <button class="launch-btn" id="launchBtnConv" title="Open a new terminal and resume this session">
           <span class="jump-icon">&#43;</span>
-          <span class="jump-label">Launch</span>
+          <span class="jump-label">Launch terminal</span>
         </button>
         <button class="launch-choice-btn" id="launchChoiceBtnConv" type="button" title="Choose launch target" aria-label="Choose launch target" aria-haspopup="menu" aria-expanded="false">&#9662;</button>
         <span class="launch-choice-menu" id="launchChoiceMenuConv" role="menu" aria-hidden="true"></span>
@@ -1270,9 +1270,6 @@
                     <button type="button" id="statusRailTitleRenameBtn" class="status-rail-title-rename-btn" title="Rename session" aria-label="Rename session" style="display:none;">
                       <svg class="status-rail-title-rename-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20h9"></path><path d="M16.5 3.5a2.12 2.12 0 0 1 3 3L7 19l-4 1 1-4Z"></path></svg>
                     </button>
-                    <!-- CCC-467: assign-to-object moved off the per-row "+" chip
-                         to here — the RHS, for the selected session. -->
-                    <button type="button" id="statusRailAddObjectBtn" class="status-rail-add-object-btn" title="Add to object" aria-label="Add session to object" style="display:none;">+&#8202;Object</button>
                     <!-- Activity log: opens the unified spawn/inject/kill/app-server
                          log for the selected session. Lives here (not the sticky
                          header) because updatePaneHeader sets this on every
@@ -1286,7 +1283,6 @@
                        context is hard-capped at 60 chars); show whatever got
                        cut off here, unbold, instead of losing it. -->
                   <div class="status-rail-title-rest" id="statusRailTitleRest" hidden></div>
-                  <div class="status-rail-context">Context: Active</div>
                   <!-- Transcript size (CCC-475) — moved out of the pane
                        titlebar; filled by updatePaneHeader for the active pane. -->
                   <div class="status-rail-size" id="statusRailSize" hidden></div>
@@ -2465,6 +2461,18 @@
               <div class="settings-row-control">
                 <span class="settings-currency-prefix" aria-hidden="true">$</span>
                 <input type="number" id="settingsMonthlyClaudePlanInput" class="settings-number-input" min="0" step="0.01" inputmode="decimal" placeholder="200" aria-label="Monthly Claude plan in US dollars">
+              </div>
+            </div>
+
+            <div class="settings-row" data-keywords="continued continuation parent session hide fold active coding workers archived">
+              <div class="settings-row-main">
+                <div class="settings-row-label">Hide earlier continued sessions</div>
+                <div class="settings-row-desc">Show only the newest row in each continuation chain across Active, Coding, Workers, and Archived.</div>
+              </div>
+              <div class="settings-row-control">
+                <button type="button" class="settings-toggle" id="settingsContinuationFoldingToggle" data-continuation-folding-toggle role="switch" aria-checked="false" aria-label="Hide earlier continued sessions">
+                  <span class="settings-toggle-track"><span class="settings-toggle-thumb"></span></span>
+                </button>
               </div>
             </div>
 

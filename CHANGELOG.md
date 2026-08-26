@@ -8,7 +8,58 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Changed
+- `/compact` now runs as one explainable, self-narrating card instead of a generic "Thinking" pill and a scatter of out-of-order rows. Typing `/compact` mounts the card immediately (sub-second, before any engine round trip), names the three stages as they pass — handing the transcript over → writing the summary → rebuilding the context window — shows how much context is being compacted, an estimated progress bar that never claims to be finished, a live elapsed clock, and where the pre-compact transcript backup lives. On completion it lands on the payoff: `112k → 16k tokens · 96k freed (−86%) · took 0:31`, using the engine's own measured before/after off the `compact_boundary` rather than a client estimate. Claude Code writes the compaction's rows to the transcript out of order (boundary, then summary, then the `/compact` command marker), which is why the resume summary kept appearing *above* the command that caused it; the card now absorbs all of those into itself — the summary renders inside it, collapsed, and the duplicate plumbing rows are hidden. Sessions compacted earlier get the same single card on reload, so history reads the same way live compactions do. A failed or stalled compaction says so plainly and offers a retry instead of silently reverting to a spinner. The context pill in the status bar now refreshes as soon as the compaction lands, so it can't sit on the pre-compact number while the card reports the new one, and the corner success toast is suppressed when the card is already on screen saying the same thing.
+
+### Fixed
+- A `/compact` that takes too long is no longer reported as a failure. Verified on a real session: the engine returned "timed out" while the `compact_boundary` and summary landed on disk seconds later, so CCC showed "Compaction didn't run" beside a second card describing the successful compaction. Timeout-shaped errors now keep the card watching (matching how `code: 'compact_timeout'` was already handled), and if a summary turns up after a run was called failed, the card corrects itself. Long Opus/Fable compactions routinely exceed the wait window, so this was the common case, not the edge case.
+
+### Fixed
+- Steer on Kimi/Grok (ACP) sessions now actually delivers instead of falling through to the durable queue. The interrupt was already working — Steer cancelled the active turn, then resent the message reusing the *same* idempotency key as the pre-cancel attempt. That attempt is recorded in the worker's WorkLedger as `failed` ("turn already in progress"), so `submit()` deduped the resend straight back to the failed row and no prompt was ever sent; the message sat in the queue until the interrupted turn ended on its own. The post-cancel resend now derives its own key.
+- Steer on an **idle Codex thread** now falls back to a plain send instead of reporting "No running Codex turn to steer". Same root cause: the failed steer attempt burned the caller's idempotency key, so the fallback `turn/start` was deduped back to that failure.
+
+### Changed
 - `watchtower.queue` is now a hard, unconditional dependency of CCC's queue system (ticket lifecycle: claim/close/edit/answer/comment/reopen). Removed the standalone `ux_fixes_queue.py` stdlib fallback that let CCC's queue features work without WatchTower installed — it had gone stale since WatchTower's own storage migrated from JSON to SQLite and was never updated, a latent risk of silent data divergence if watchtower ever became unimportable. If `watchtower.queue` can't be imported, CCC now fails loudly at startup with a clear error instead of silently falling back to a frozen JSON store.
+
+## [5.27.3] - 2026-08-25
+
+### Fixed
+- `/api/repo/list` now returns valid JSON on a brand-new machine with no agent projects directory; zero-session usage signals are finalized as integer counts instead of leaking internal Python sets into the response.
+
+## [5.27.2] - 2026-08-25
+
+### Fixed
+- Source checkouts and the Python 3.9 launch path now bootstrap `watchtower.queue` before importing the server, matching `run.sh`; CCC no longer crashes when started from a clean checkout whose interpreter has not installed the queue module yet.
+
+## [5.27.1] - 2026-08-25
+
+### Fixed
+- Clean installs now start successfully on minimal Python systems that do not bundle `pip`: after cloning the stdlib-only WatchTower queue engine, CCC activates that source directly for its runtime interpreter instead of crashing on `import watchtower.queue`.
+
+## [5.27.0] - 2026-08-25
+
+### Added
+- Kimi conversations now preserve stream order and Bash output, show a short output peek under collapsed tool rows, keep thinking blocks expanded, and render todo calls as checklists instead of raw JSON.
+- Mobile swipe-right on conversation-list rows now triggers the primary row action: Trash in the Coding tab (and Coding's Trash section), Archive in the Active tab.
+- Settings → Sessions & Spawning now lets you opt into hiding earlier sessions in a continuation chain across Active, Coding, Workers, and Archived. The setting is off by default, so every session remains visible unless you choose the compact newest-row view.
+- Status rail: column graph of cache-adjusted tokens per turn (last 30 billed turns, newest right) under the conversation token headline; each bar matches that turn's "Cached-adjusted tokens this turn" chip and updates live as turns land.
+- Status rail per-turn token graph now also renders for Kimi, Codex, Gemini, Antigravity, and Devin sessions (previously Claude-only).
+
+### Changed
+- Codex sessions are now treated as cold only after 45 minutes of inactivity, reducing unnecessary cold-session handling for threads that are still recent.
+- The everyday dashboard is quieter by default. CCC now opens on Coding, moves diagnostic controls such as Send queue, throughput, replay, frame health, Vercel deploy state, poller activity, and Close & announce behind Debug or preview settings, renames Launch to Launch terminal, and removes duplicate context, app-server, repo, object, deployment, and process-state controls. Compact spacing keeps footer pills, queue headers, session IDs, and context badges readable at normal sidebar widths.
+- Opening a session paints its tail in well under 100ms: the first request fetches only the last 120 transcript lines, the rest of the usual window is filled in above it right after the first paint, and the select-time status fetches wait until the tail is on screen. Sidebar `:has()` selectors that made every layout read re-style the whole conversation list were replaced with JS-maintained flag classes.
+- The token-sitter handover control now works for every engine that receives the synced skill and cycles through four modes from the session rail. Rapid clicks that settle back on the original state no longer create no-op commits.
+
+### Fixed
+- Codex `/compact` now reports the truth. The card used to flip to "context compacted, took 0:00" the moment the app-server accepted the request, while Codex kept compacting for another minute or two and the composer queued your next message behind that same turn. CCC now waits for the compaction to actually land, shows the real before/after sizes ("282k -> 12k") instead of "reading the new size...", stops showing "ctx 0" in the context pill afterwards, and renders a compaction record in the transcript the way Claude sessions already did.
+- Codex silent-turn recovery no longer re-arms on every status tick after the user declines it, and steering a message that is already queued no longer delivers a second copy.
+- Clicking Send, Send queue, or Steer with an empty composer now focuses the input instead of appearing to do nothing.
+- Fixed mobile composer button cluster escaping the input card on narrow viewports by capping spawn-select widths and strengthening the selector strip's flex shrink behavior.
+- Clicking a video file link in a conversation now streams it from the CCC server so mobile/Tailnet browsers can play the MP4 instead of trying to open it on the host Mac.
+- The usage-limit countdown's X now permanently disables unattended auto-resume for that session, removes queued automatic `continue` messages, and cannot be redrawn from stale browser data; persistence failures show a Retry state instead of silently appearing to succeed.
+- Fixed the composer textarea in the right-hand split pane not growing to fit multi-line/pasted text — it now autosizes the same as the primary pane's composer.
+- Session chrome now handles several edge cases cleanly: slash-command sessions show the command text instead of `[EMPTY]`, AI-generated titles no longer carry a sparkle prefix, current Claude 1M-context models are recognized correctly, long model names have a full-name tooltip, and pasted clipboard images are detected from their file signature when the browser reports the wrong content type.
+- A session that spawned a Codex subagent (e.g. a "code review" pass, a fleet-verify check) could vanish entirely from the sidebar, leaving the child row's "spawned by" chip pointing at nothing. Fixed a field mix-up that made any spawn edge look identical to a continuation, so the parent got folded away instead of leading the row with its children nested underneath.
 
 ## [5.26.0] - 2026-08-23
 
@@ -2720,7 +2771,11 @@ Initial public release.
 - `/api/repo/switch` validates targets against the picker allow-list.
 - See [`SECURITY.md`](SECURITY.md) for the full threat model.
 
-[Unreleased]: https://github.com/amirfish1/claude-command-center/compare/v5.26.0...HEAD
+[Unreleased]: https://github.com/amirfish1/claude-command-center/compare/v5.27.3...HEAD
+[5.27.3]: https://github.com/amirfish1/claude-command-center/releases/tag/v5.27.3
+[5.27.2]: https://github.com/amirfish1/claude-command-center/releases/tag/v5.27.2
+[5.27.1]: https://github.com/amirfish1/claude-command-center/releases/tag/v5.27.1
+[5.27.0]: https://github.com/amirfish1/claude-command-center/releases/tag/v5.27.0
 [5.26.0]: https://github.com/amirfish1/claude-command-center/releases/tag/v5.26.0
 [5.25.2]: https://github.com/amirfish1/claude-command-center/releases/tag/v5.25.2
 [5.25.1]: https://github.com/amirfish1/claude-command-center/releases/tag/v5.25.1

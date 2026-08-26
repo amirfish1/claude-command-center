@@ -23,6 +23,7 @@ reached via ``_core`` at call time."""
 from __future__ import annotations
 
 from datetime import datetime, timezone
+import collections
 import json
 import os
 import re
@@ -1978,6 +1979,10 @@ def _extract_devin_cli_usage(session_id):
     total_cache_read = 0
     total_cache_creation = 0
     model = ""
+    # Per-turn tail for the status-rail column graph — one entry per
+    # assistant message with metrics, same raw-count shape Claude's
+    # turn_series uses.
+    turn_series = collections.deque(maxlen=_core.USAGE_TURN_SERIES_MAX)
     try:
         for row in con.execute(
             "SELECT chat_message FROM message_nodes "
@@ -2015,6 +2020,18 @@ def _extract_devin_cli_usage(session_id):
             gm = meta.get("generation_model")
             if gm:
                 model = gm
+            if window or out_tok:
+                turn_epoch = _devin_epoch(meta.get("created_at"))
+                turn_ts = (
+                    time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(turn_epoch))
+                    if turn_epoch else ""
+                )
+                turn_series.append({
+                    "ts": turn_ts,
+                    "tokens_in": window,
+                    "tokens_cached": cache_read,
+                    "tokens_out": out_tok,
+                })
     except sqlite3.Error:
         pass
     finally:
@@ -2029,6 +2046,7 @@ def _extract_devin_cli_usage(session_id):
         "total_cache_creation_tokens": total_cache_creation,
         "model": model,
         "override": _core._get_session_override(session_id),
+        "turn_series": list(turn_series),
     }
 
 

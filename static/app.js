@@ -1174,7 +1174,7 @@
         // Outer wrap holds the condensed health metrics + the collapsible
         // trigger strip. The trigger chips now live behind a toggle so the
         // footer leads with CCC's own health (CPU / build latency / errors).
-        '#pollerWrap{display:flex;flex-wrap:wrap;gap:4px 8px;align-items:center;flex:1 1 auto;min-width:0;padding:0 6px;}' +
+        '#pollerWrap{display:flex;flex-wrap:wrap;gap:4px 6px;align-items:center;flex:1 1 auto;min-width:0;padding:0 6px;}' +
         '#cccHealth{display:flex;gap:7px;align-items:center;flex:0 0 auto;' +
         'font:600 10px/1 ui-monospace,SFMono-Regular,Menlo,monospace;}' +
         '.ccchealth-metric{display:inline-flex;align-items:center;gap:3px;white-space:nowrap;' +
@@ -1187,6 +1187,7 @@
         'font:600 10px/1 ui-monospace,SFMono-Regular,Menlo,monospace;color:var(--text-secondary,#9aa);' +
         'padding:2px 6px;border-radius:5px;border:1px solid transparent;white-space:nowrap;}' +
         '#pollerToggle:hover{background:var(--hover-bg,rgba(127,127,127,.14));}' +
+        'html:not(.ccc-debug-mode) #pollerToggle,html:not(.ccc-debug-mode) #pollerStrip{display:none !important;}' +
         '#pollerStrip{display:flex;gap:5px;align-items:center;flex:1 1 auto;min-width:0;' +
         'overflow-x:auto;overflow-y:hidden;scrollbar-width:none;padding:0;}' +
         '#pollerStrip[hidden]{display:none;}' +
@@ -1336,8 +1337,8 @@
     const productivityPill = document.createElement('div');
     productivityPill.id = 'cccProductivityPill';
     productivityPill.title = 'Productivity Dashboard - delivered features and fixes, projects, time, and agent leverage. Click to open.';
-    productivityPill.style.cssText = 'display:flex;align-items:center;gap:5px;flex:0 0 auto;cursor:pointer;' +
-      'font:600 11px/1 ui-monospace,Menlo,monospace;padding:3px 8px;border-radius:6px;' +
+    productivityPill.style.cssText = 'display:flex;align-items:center;gap:3px;flex:0 0 auto;cursor:pointer;' +
+      'font:600 10px/1 ui-monospace,Menlo,monospace;padding:2px 5px;border-radius:6px;' +
       'border:1px solid var(--border-color,#30363d);opacity:.8;';
     productivityPill.innerHTML = '<span style="opacity:.7;">&#10003;</span><span>productivity</span>';
     productivityPill.addEventListener('click', function () { window.open('/productivity.html', '_blank'); });
@@ -1348,8 +1349,8 @@
     const systemPill = document.createElement('div');
     systemPill.id = 'cccSystemPill';
     systemPill.title = 'System Status - dev servers, memory, CPU, and running processes. Click to open.';
-    systemPill.style.cssText = 'display:flex;align-items:center;gap:5px;flex:0 0 auto;cursor:pointer;' +
-      'font:600 11px/1 ui-monospace,Menlo,monospace;padding:3px 8px;border-radius:6px;' +
+    systemPill.style.cssText = 'display:flex;align-items:center;gap:3px;flex:0 0 auto;cursor:pointer;' +
+      'font:600 10px/1 ui-monospace,Menlo,monospace;padding:2px 5px;border-radius:6px;' +
       'border:1px solid var(--border-color,#30363d);opacity:.8;';
     systemPill.innerHTML = '<span style="opacity:.7;">&#128187;</span><span>system</span>';
     systemPill.addEventListener('click', _openSystemHealth);
@@ -1361,8 +1362,8 @@
     const tputPill = document.createElement('div');
     tputPill.id = 'cccThroughputPill';
     tputPill.title = 'Throughput Dashboard - daily token usage, output speed, and session rankings. Click to open.';
-    tputPill.style.cssText = 'display:flex;align-items:center;gap:5px;flex:0 0 auto;cursor:pointer;' +
-      'font:600 11px/1 ui-monospace,Menlo,monospace;padding:3px 8px;border-radius:6px;' +
+    tputPill.style.cssText = 'display:flex;align-items:center;gap:3px;flex:0 0 auto;cursor:pointer;' +
+      'font:600 10px/1 ui-monospace,Menlo,monospace;padding:2px 5px;border-radius:6px;' +
       'border:1px solid var(--border-color,#30363d);opacity:.8;';
     tputPill.innerHTML = '<span style="opacity:.7;">&#128202;</span>' +
       '<span class="ccc-tput-val">throughput</span>';
@@ -2850,6 +2851,7 @@
   // *data*; this ticker keeps the "running 3s / 4s / 5s" age label
   // changing every second so the user sees motion.
   let liveStatusRenderTicker = null;
+  let _msgTsTick = 0;
   // Freshest live-work fields per session_id. Survives renderArchiveList
   // rebuilds from cached /api/conversations/all data (and 304 reuse) so WIP
   // chips and bash-command pills keep updating between archive scans.
@@ -2934,7 +2936,7 @@
   // measurement behind it. Absent evidence we stay silent rather than warn —
   // an unfounded warning trains the user to dismiss the founded ones.
   const F2_STALE_MINUTES = 60;         // claude: the cliff
-  const F2_STALE_MINUTES_CODEX = 25;   // codex: where graded loss is material
+  const F2_STALE_MINUTES_CODEX = 45;   // codex: where graded loss is material
   const F2_STALE_MINUTES_KIMI = 35;    // kimi: measured rise in cache-miss risk
   const F2_ENGINE_CACHE = {
     claude: {
@@ -3274,6 +3276,19 @@
   const _continuationFoldedCounts = new Map();
   // headSid -> ancestor session ids (oldest first at render time).
   const _continuationFoldedAncestors = new Map();
+  const CONTINUATION_FOLDING_STORAGE_KEY = 'ccc-fold-continuation-chains';
+  function getContinuationFoldingPref() {
+    try { return localStorage.getItem(CONTINUATION_FOLDING_STORAGE_KEY) === 'on'; }
+    catch (_) { return false; }
+  }
+  function setContinuationFoldingPref(on) {
+    try {
+      if (on) localStorage.setItem(CONTINUATION_FOLDING_STORAGE_KEY, 'on');
+      else localStorage.removeItem(CONTINUATION_FOLDING_STORAGE_KEY);
+    } catch (_) {}
+    refreshAppearanceChecks();
+    if (typeof conversationsData !== 'undefined') renderSidebar(conversationsData);
+  }
   function continuationParentId(c) {
     if (!c) return '';
     const serverField = String(c.continued_from_session_id || '').trim();
@@ -3310,6 +3325,7 @@
   // reachable via that chip / scrolling up in the merged view.
   function _foldContinuationAncestorRows(rows, opts) {
     const list = Array.isArray(rows) ? rows : [];
+    if (!getContinuationFoldingPref()) return list.slice();
     const recordCounts = !opts || opts.recordCounts !== false;
     const forward = new Map();
     const note = (r) => {
@@ -3330,9 +3346,24 @@
     }
     list.forEach(note);
     const windowIds = new Set(list.map(_continuationRowId));
+    // CCC-945: a row can simultaneously be the OLD side of an unrelated
+    // continuation elsewhere in the window (fold it away, the successor
+    // leads) AND the orchestration parent of a genuinely spawned child
+    // (keep it visible as that child's tree root) -- e.g. a long-lived
+    // session that both got F2-continued once AND later spawned a Codex
+    // review subagent. Folding only looks at the continuation edge, so it
+    // silently orphans the spawned child by erasing its only parent row.
+    // Never fold a row that another row in this same window still points
+    // to via a real spawn edge (raw parent_session_id, not a continuation).
+    const neededAsSpawnParent = new Set();
+    list.forEach(r => {
+      const pid = String((r && r.parent_session_id) || '').trim();
+      if (pid) neededAsSpawnParent.add(pid);
+    });
     return list.filter(c => {
       const id = _continuationRowId(c);
       if (!id || !continuationParentId(c) && !forward.has(id)) return true;
+      if (neededAsSpawnParent.has(id)) return true;
       let head = id;
       const seen = new Set([id]);
       for (;;) {
@@ -3514,7 +3545,7 @@
     try { return (typeof activePaneId === 'function' && activePaneId()) || 'p1'; } catch (_) { return 'p1'; }
   }
   function f2PaneRoot(paneId) {
-    try { return document.querySelector('.conv-pane[data-pane-id="' + f2PaneKey(paneId) + '"]'); }
+    try { return convPaneElById(f2PaneKey(paneId)); }
     catch (_) { return null; }
   }
   function f2RailEl(paneId) {
@@ -4993,7 +5024,7 @@
               : (isAntigravity ? 'Open AGY in Terminal; use /resume inside the TUI'
                 : (isDevinCli ? 'Open a Terminal window and run devin --resume'
                   : 'Open a Terminal window and run claude --resume'))));
-        btn.querySelector('.jump-label').textContent = 'Launch';
+        btn.querySelector('.jump-label').textContent = 'Launch terminal';
         renderLaunchChoiceMenu($launchChoiceMenuConv);
       } else {
         btn.style.display = 'none';
@@ -5407,7 +5438,7 @@
   } catch (_) {}
 
   function _relayedQuestionInlineEl() {
-    return document.querySelector('[data-role="ccc-inline-question"]');
+    return (document.getElementById('convSplit') || document).querySelector('[data-role="ccc-inline-question"]');
   }
 
   // Back-compat alias — older call sites may still reference the modal name.
@@ -5756,11 +5787,36 @@
       });
   }
 
+  // Select-time fetches that first paint doesn't need are parked here until
+  // the conversation tail response has landed and painted (or 600ms passes).
+  // They used to fire in the same tick as the tail request and shared the
+  // server's GIL with it: the tail took 20-200ms in-browser against 3-10ms
+  // when it ran alone.
+  let _afterConvTailQueue = [];
+  let _afterConvTailTimer = 0;
+  function _afterConvTail(fn) {
+    _afterConvTailQueue.push(fn);
+    if (!_afterConvTailTimer) _afterConvTailTimer = setTimeout(_flushAfterConvTail, 600);
+  }
+  function _flushAfterConvTail() {
+    if (_afterConvTailTimer) { clearTimeout(_afterConvTailTimer); _afterConvTailTimer = 0; }
+    if (!_afterConvTailQueue.length) return;
+    const q = _afterConvTailQueue;
+    _afterConvTailQueue = [];
+    for (const fn of q) { try { fn(); } catch (_) {} }
+  }
+  function _flushAfterConvTailAfterPaint() {
+    if (!_afterConvTailQueue.length) return;
+    requestAnimationFrame(() => setTimeout(_flushAfterConvTail, 0));
+  }
+
   function startLiveStatusPolling() {
     if (liveStatusTimer) clearInterval(liveStatusTimer);
     if (liveStatusRenderTicker) clearInterval(liveStatusRenderTicker);
-    refreshLiveStatus();
-    refreshLiveSessionsActivity();
+    _afterConvTail(() => {
+      refreshLiveStatus();
+      refreshLiveSessionsActivity();
+    });
     liveStatusTimer = setInterval(_gated('liveStatus', () => {
       refreshLiveStatus();
       refreshLiveSessionsActivity();
@@ -5797,6 +5853,12 @@
       // without this re-render the label froze at "just now" even after
       // minutes, hiding that the status is stale.
       updateConvProcessIndicator();
+      // Same staleness bug for tool/message timestamps (CCC-944): they're
+      // baked into innerHTML once and never revisited, so a long-running
+      // live session reads "just now" on every turn forever. Minute-level
+      // granularity is enough here, so only do the full-DOM sweep every 15s.
+      _msgTsTick = (_msgTsTick + 1) % 15;
+      if (_msgTsTick === 0) refreshMsgTimestamps();
     }), 1000);
   }
 
@@ -6148,6 +6210,10 @@
   }
   function showOptimisticAgentIndicator($view) {
     if (!$view) return;
+    // A live /compact owns the progress surface. Letting the generic
+    // "Sending…/🧠 Thinking…" pill through here is what made compaction
+    // indistinguishable from an ordinary turn.
+    if (typeof _compactRunActive === 'function' && _compactRunActive() && _compactRunIsForeground()) return;
     let el = $view.querySelector('.conv-live-tool-inline.optimistic');
     const fresh = !el;
     if (!el) {
@@ -7960,7 +8026,10 @@
     // class is set in enterNewSessionMode(); this is the symmetric clear.
     if (sid || currentConversation !== '__new__') {
       const _cic = document.getElementById('convInputContext');
-      if (_cic) _cic.classList.remove('is-new-session');
+      if (_cic) {
+        _cic.classList.remove('is-new-session');
+        if (typeof syncPaneHasFlags === 'function') syncPaneHasFlags(_cic.closest('.conv-pane'));
+      }
       // Return the CWD picker row + quick chips home if the new-session
       // chooser borrowed them (see _adoptCwdControlsIntoChooser, CCC-86).
       try { _restoreCwdControlsToInputBar(); } catch (_) {}
@@ -8182,6 +8251,19 @@
   // itself lives server-side (auto-handover.json, read back via each pane's
   // usage fetch), not in this flag.
   let _autoHandoverToggleInFlight = false;
+  // The status-bar pill cycles compact -> mdfile -> both -> off on each
+  // click. The label updates instantly (optimistic local state) but the
+  // actual POST + chat injection is debounced so clicking through several
+  // states fast fires one commit, not one per click.
+  const AUTO_HANDOVER_MODE_CYCLE = ['compact', 'mdfile', 'both', 'off'];
+  const AUTO_HANDOVER_MODE_LABELS = { compact: 'compact', mdfile: 'md', both: 'both', off: 'OFF' };
+  const _AUTO_HANDOVER_CYCLE_DEBOUNCE_MS = 450;
+  const _autoHandoverCycleTimers = {};
+  // Last state actually confirmed by the server (initial usage fetch, or a
+  // prior successful commit) -- distinct from _usageDataByPane's optimistic
+  // per-click value, so a click-flurry that lands back where it started can
+  // be detected and skipped rather than re-committing a no-op.
+  const _autoHandoverConfirmedState = {};
   const INPUT_DRAFTS_KEY = 'ccc-input-drafts-v1';
   const INPUT_DRAFTS_MAX = 200;
   const INPUT_DRAFT_MAX_CHARS = 50000;
@@ -8338,7 +8420,7 @@
   }
 
   function composerInputForPane(paneId) {
-    const pane = document.querySelector(`.conv-pane[data-pane-id="${paneId || activePaneId()}"]`);
+    const pane = convPaneElById(paneId || activePaneId());
     if (!pane) return paneId === 'p1' ? $convInput : null;
     return pane.querySelector('.conv-input-bar textarea, .conv-input-bar input[type="text"]');
   }
@@ -8798,13 +8880,11 @@
           ? 'Wait for the pending message to land in the transcript before compacting.'
           : 'Compact conversation context';
       }
-      // Codex app-server indicator — show only for live Codex sessions; reflect
-      // whether CCC is currently driving Codex via its own app-server (RPC,
-      // can append to a loaded thread + run thread/compact) vs no live
-      // app-server ("exec" fallback would be used). Driven off the 5s
-      // /api/session-status poll's codex_app_server flag.
+      // Codex app-server indicator — CCC-968: this duplicated the same state
+      // already shown by the top breadcrumb's connection-type chip
+      // (.status-rail-conn-proc), so it's removed rather than shown.
       if (activeCodexAppSrv) {
-        const showAppSrv = isCodex && hasSession && !isNewSession && !isBacklogIssue;
+        const showAppSrv = false;
         activeCodexAppSrv.classList.toggle('visible', showAppSrv);
         if (!showAppSrv) activeCodexAppSrv.classList.remove('live');
         if (showAppSrv) {
@@ -9851,7 +9931,13 @@
       }
       return;
     }
-    if (!text) return;
+    if (!text) {
+      // CCC-946: clicking Send/Send-queue/Steer with an empty composer used
+      // to no-op with zero feedback, reading as "this button doesn't do
+      // anything". Focus the input so it's obvious what's missing.
+      if ($input) $input.focus();
+      return;
+    }
     rememberComposerCommand(text);
     // CCC-762: typing `/goal clear` directly (rather than clicking the goal
     // strip's Clear button) skipped applyOptimisticConversationGoalAction
@@ -9885,6 +9971,7 @@
         if (jr.ok && jd.ok) {
           showOpToast('Session joined the group chat', 'success');
           $input.value = '';
+          _autosizeTextareaLike($input, $input.closest('.conv-input-bar'));
           clearInputDraftForConversation(draftConversation);
         } else {
           showOpToast('Join failed: ' + ((jd && jd.error) || ('HTTP ' + jr.status)), 'error');
@@ -9931,9 +10018,21 @@
     // TTS, the inject-input fetch) happens after — previously an in-flight TTS
     // teardown was awaited before this line, so sends during playback felt laggy
     // ("sometimes ok" = only when TTS was off).
-    const pendingSend = appendPendingSendEcho(announcedInjectionPreview(text, announcedFrom), sid, paneId || activePaneId());
+    // `/compact` gets the lifecycle card instead of a normal send echo. The
+    // echo was actively harmful here: `/compact` is consumed by the engine and
+    // never lands in the JSONL as durable user text, so it never deduped, and
+    // the "keep unacknowledged echoes pinned above the composer" pass
+    // re-anchored it to the tail on every render — which is why the resume
+    // summary appeared ABOVE the command that produced it.
+    const compactRunStarted = compactCommand && isCompactionCapableSource(currentSession.source);
+    if (compactRunStarted) beginCompactRun(sid, currentSession.source);
+    const pendingSend = compactRunStarted
+      ? null
+      : appendPendingSendEcho(announcedInjectionPreview(text, announcedFrom), sid, paneId || activePaneId());
+    if (compactRunStarted && sid) markSessionSending(sid);
     updateInputBar();
     $input.value = '';
+    _autosizeTextareaLike($input, $input.closest('.conv-input-bar'));
     clearInputDraftForConversation(draftConversation);
     // A dormant send receives its outcome from the server. Codex additionally
     // starts compact checkmark progress, while queued and error states remain
@@ -10186,14 +10285,18 @@
           });
           showOpToast('Accepted by WatchTower' + (data.transport ? ' - ' + data.transport + ' transport.' : '.'));
         } else if (compactCommand) {
-          showOpToast(compactRequestSuccessMessage(data, currentSession.source));
-          if (currentSession.source === 'codex' || (data && data.via === 'live-spawn-stdin')) {
-            // Finished compacting server-side — nothing left to poll for.
-            clearCompactInProgressBanner();
+          if ((currentSession.source === 'codex' || (data && data.via === 'live-spawn-stdin'))
+              && compactResponseIsComplete(data)) {
+            // Finished compacting server-side — nothing left to poll for, so
+            // the card goes straight to its result instead of spinning.
+            adoptCompactRunResult(sid, data);
+            completeCompactRun(sid);
+            clearOptimisticAgentIndicator(getConvViewForPane(paneId || activePaneId()) || getConvView());
+            clearSessionSending(sid);
             setTimeout(refreshConversationList, 1500);
             setTimeout(refreshConversationList, 3500);
           } else {
-            showCompactInProgressBanner(sid);
+            markCompactRunWorking(sid);
             scheduleCompactUsageRefresh(sid);
           }
         } else if (data.via === 'live-spawn-clear') {
@@ -10211,6 +10314,20 @@
         }
       } else if (compactCommand && data && data.code === 'compact_timeout') {
         handleCompactTimeout(sid);
+      } else if (compactCommand) {
+        // A real refusal from the engine (e.g. "Not enough messages to
+        // compact."). Say so on the card, not only in a toast that fades.
+        const _reason = (data && (data.compact_error || data.error))
+          || formatInjectFailure(data, res.status) || 'unknown error';
+        if (_isCompactTimeoutReason(_reason)) {
+          // Not a refusal — nobody knows yet. Keep watching.
+          handleCompactTimeout(sid);
+        } else {
+          removePendingSendEcho(pendingSend);
+          restoreInputAfterSendFailure($input, text);
+          flashRed();
+          failCompactRun(sid, _reason);
+        }
       } else {
         const reason = formatInjectFailure(data, res.status);
         if (isCursorUsageLimitFailure(data, reason)) {
@@ -10237,8 +10354,17 @@
       removePendingSendEcho(pendingSend);
       restoreInputAfterSendFailure($input, text);
       flashRed();
-      const failurePrefix = compactCommand ? '/compact failed' : ((injectMode === 'steer' ? 'Steer' : (injectMode === 'answer' ? 'Answer' : 'Send')) + ' failed');
-      showOpToast(failurePrefix + ': ' + (err.message || 'network error'), 'error');
+      if (compactRunStarted) {
+        if (_isCompactTimeoutReason((err && (err.name + ' ' + err.message)) || '')) {
+          // The request gave up; the engine may well still be compacting.
+          handleCompactTimeout(sid);
+        } else {
+          failCompactRun(sid, (err && err.message) || 'network error');
+        }
+      } else {
+        const failurePrefix = (injectMode === 'steer' ? 'Steer' : (injectMode === 'answer' ? 'Answer' : 'Send')) + ' failed';
+        showOpToast(failurePrefix + ': ' + (err.message || 'network error'), 'error');
+      }
     }
     if ($actionBtn) $actionBtn.disabled = false;
     $input.focus();
@@ -11714,9 +11840,13 @@
   // Always use the JS autosizer. WebKit/WKWebView can report support for
   // native textarea auto-sizing but paint its native internal layer over the
   // placeholder, so a single rAF-scheduled height update is the steadier path.
-  let _autosizeRaf = 0;
-  function _autosizeConvInput() {
-    if (!$convInput || $convInput.tagName !== 'TEXTAREA') return;
+  // Generic version used by any composer textarea, including the cloned
+  // second-pane composer (buildPaneElement strips ids, so it can't reuse
+  // $convInput/$convInputBar — it has to pass its own element + bar).
+  // rAF state lives on the element itself so concurrent panes coalesce
+  // independently instead of sharing one flag.
+  function _autosizeTextareaLike(el, barEl) {
+    if (!el || el.tagName !== 'TEXTAREA') return;
     // Deferred to the next animation frame. The 'auto' write + scrollHeight
     // read is a forced synchronous reflow; doing it inline on every keystroke
     // re-lays-out the whole (large) page mid-keystroke — cheap in Blink, but
@@ -11724,16 +11854,19 @@
     // it in rAF takes it off the keystroke's critical path (char paints first,
     // textarea resizes a frame later — imperceptible) and coalesces bursts to
     // one reflow per frame.
-    if (_autosizeRaf) return;
-    _autosizeRaf = requestAnimationFrame(() => {
-      _autosizeRaf = 0;
-      $convInput.style.height = 'auto';
-      const mode = ($convInputBar && $convInputBar.dataset.composerMode) || 'regular';
+    if (el._autosizeRaf) return;
+    el._autosizeRaf = requestAnimationFrame(() => {
+      el._autosizeRaf = 0;
+      el.style.height = 'auto';
+      const mode = (barEl && barEl.dataset.composerMode) || 'regular';
       const max = mode === 'expand' ? Math.round(window.innerHeight * 0.7)
         : mode === 'minimize' ? 24  // matches the CSS max-height: 24px !important floor
         : 240;  // ~10 rows at our current font/line-height
-      $convInput.style.height = Math.min($convInput.scrollHeight, max) + 'px';
+      el.style.height = Math.min(el.scrollHeight, max) + 'px';
     });
+  }
+  function _autosizeConvInput() {
+    _autosizeTextareaLike($convInput, $convInputBar);
   }
   if (!window.__cccComposerDeferFlushBound) {
     window.__cccComposerDeferFlushBound = true;
@@ -12110,7 +12243,25 @@
       }
     }
     const iso = d.toLocaleString();
-    return '<span class="msg-ts" title="' + escapeHtml(iso) + '">' + escapeHtml(label) + '</span>';
+    // data-ts carries the raw timestamp so refreshMsgTimestamps() can
+    // recompute the label later — these spans are baked into innerHTML once
+    // at render time and otherwise freeze at whatever tier they started in
+    // (e.g. "just now" forever) as real time moves on.
+    return '<span class="msg-ts" data-ts="' + escapeAttr(ts) + '" title="' + escapeHtml(iso) + '">' + escapeHtml(label) + '</span>';
+  }
+
+  // Re-derive every .msg-ts label from its data-ts so tool/message
+  // timestamps age normally (just now -> N minutes ago -> HH:MM) instead of
+  // being stuck at whatever tier applied when the HTML was first built.
+  function refreshMsgTimestamps() {
+    document.querySelectorAll('.msg-ts[data-ts]').forEach(el => {
+      const wrapped = tsSpan(el.getAttribute('data-ts'));
+      if (!wrapped) return;
+      const tmp = document.createElement('div');
+      tmp.innerHTML = wrapped;
+      const fresh = tmp.firstChild;
+      if (fresh && fresh.textContent !== el.textContent) el.textContent = fresh.textContent;
+    });
   }
 
   // Minimal markdown renderer for assistant text — tables, inline code, bold, headers
@@ -12168,85 +12319,607 @@
     return { intro, body };
   }
 
-  // Persistent in-progress banner shown while /compact is running.
-  // Claude takes 1-3 minutes to write the compact boundary; users
-  // previously had no visible signal that anything was happening (just
-  // a toast that disappeared after 3 seconds). The banner mounts into
-  // the active pane's conv view and clears when the compact-resume
-  // user_text event lands (see renderConversationEvents below).
-  // Heartbeat for the compact banner. A static "compacting…" banner can't
-  // tell a live compact from a dead one (CCC-26: "actively poll … to really
-  // know there's work in progress"). The timer ticks elapsed once a second
-  // (visible proof the UI is alive) and, every few ticks, refetches the
-  // transcript so the resume boundary is picked up promptly instead of
-  // waiting on the slow background poll. After the usual window it flips to
-  // a calm "longer than usual" hint rather than spinning forever silently.
-  let _compactBannerTimer = null;
-  let _compactBannerStart = 0;
-  const _COMPACT_STALL_MS = 4 * 60 * 1000; // past the typical 1-3 min window
-  function _stopCompactBannerTimer() {
-    if (_compactBannerTimer) { clearInterval(_compactBannerTimer); _compactBannerTimer = null; }
-    _compactBannerStart = 0;
+  // ── /compact lifecycle card (CCC) ─────────────────────────────────────
+  // One card owns the ENTIRE compaction, from the keystroke to the receipt.
+  //
+  // Before this, /compact was three disconnected artefacts in three places:
+  // a generic "Sending…/🧠 Thinking…" pill (indistinguishable from a normal
+  // turn, so you could not tell compaction had even started), a resume
+  // summary that rendered ABOVE the stuck `/compact` echo (the echo never
+  // dedupes — `/compact` is consumed by the engine and never lands in the
+  // JSONL as durable user text, so it got re-anchored to the tail forever),
+  // and a 3-second toast carrying the only "it worked" signal. On an Opus or
+  // Fable session, where compaction runs for minutes, that reads as a hang.
+  //
+  // The card is mounted SYNCHRONOUSLY on submit (before any fetch), names the
+  // stage it is in, ticks a live clock, and ends on a number: what the context
+  // was, what it is now, and how much was freed. When the resume summary
+  // arrives it is absorbed INTO the card rather than rendered as a sibling, so
+  // there is exactly one element and no ordering to get wrong.
+  const _COMPACT_STALL_MS = 4 * 60 * 1000;   // past the typical 1-3 min window
+  const _COMPACT_TYPICAL_MS = 90 * 1000;     // used only to pace the progress bar
+  // Stage copy. Honest about what is happening, in the user's terms.
+  const _COMPACT_STEPS = [
+    { key: 'ask',   label: 'Handing the transcript over' },
+    { key: 'write', label: 'Writing the summary' },
+    { key: 'swap',  label: 'Rebuilding the context window' },
+  ];
+  let _compactRun = null;
+  let _compactRunTimer = null;
+
+  function _compactRunActive() {
+    return !!(_compactRun && (_compactRun.stage === 'requested' || _compactRun.stage === 'working'));
+  }
+  // The card is scoped to ONE conversation view. Anything that suppresses or
+  // mounts UI must check the run belongs to the session on screen — otherwise
+  // a compact left running on session A silences session B's Thinking pill and
+  // drops A's card into B's transcript.
+  function _compactRunIsForeground() {
+    return !!(_compactRun && currentSession && _compactRun.sid === currentSession.id);
+  }
+  function _compactRunFor(sid) {
+    return _compactRun && sid && _compactRun.sid === sid ? _compactRun : null;
+  }
+  function _compactEngineLabel(source) {
+    if (typeof SESSION_ENGINE_LABELS !== 'undefined' && SESSION_ENGINE_LABELS[source]) {
+      return SESSION_ENGINE_LABELS[source];
+    }
+    return 'Claude';
+  }
+  // Context size for the before/after headline. Mirrors the composer context
+  // pill's own `displayTokens` rule exactly — transcript-derived tokens first
+  // ("calc"), falling back to the engine's live /ctx report — so the card can
+  // never disagree with the pill sitting a few pixels above it. Reading
+  // `live_context_tokens` alone would print nothing on most sessions: it is 0
+  // until the engine emits a live context sample.
+  function _compactContextNow(sid) {
+    try {
+      const pid = typeof paneIdForSessionId === 'function' ? paneIdForSessionId(sid) : null;
+      const u = (pid && _usageDataByPane[pid]) || null;
+      if (!u) return null;
+      const liveTokens = Number(u.live_context_tokens || 0);
+      const liveLimit = Number(u.live_context_limit || 0);
+      const hasLive = (u.engine || 'claude') === 'claude' && liveTokens > 0;
+      const tokens = Number(u.latest_input_tokens || 0) || (hasLive ? liveTokens : 0);
+      if (!tokens) return null;
+      const limit = (hasLive ? liveLimit : 0) || Number(u.context_limit || 0) || 200000;
+      return { tokens, limit };
+    } catch (_) { return null; }
+  }
+  function _compactTokenLabel(n) {
+    if (typeof _formatTokens === 'function') return _formatTokens(n);
+    return String(n || 0);
   }
   function _compactElapsedLabel(ms) {
     const s = Math.max(0, Math.round(ms / 1000));
     const m = Math.floor(s / 60);
     return m + ':' + String(s % 60).padStart(2, '0');
   }
-  function _tickCompactBanner(sid) {
-    const $view = typeof getConvView === 'function' ? getConvView() : document.getElementById('conversationsView');
-    const banner = $view && $view.querySelector('.compact-in-progress-banner');
-    if (!banner) { _stopCompactBannerTimer(); return; }
-    const elapsed = Date.now() - _compactBannerStart;
-    const elEl = banner.querySelector('.compact-banner-elapsed');
-    if (elEl) elEl.textContent = _compactElapsedLabel(elapsed);
-    if (elapsed >= _COMPACT_STALL_MS) banner.classList.add('is-slow');
-    // Active poll: every ~4s pull the transcript so the boundary (which
-    // tears this banner down) is caught quickly — only while this session
-    // is still the foreground one.
+  function _compactStepIndexFor(run) {
+    if (!run) return 0;
+    if (run.stage === 'requested') return 0;
+    if (run.stage === 'done') return _COMPACT_STEPS.length;
+    // "swap" only becomes truthful once the engine has answered; until then
+    // the honest position is "writing the summary".
+    return run.acked ? 2 : 1;
+  }
+
+  function _compactRunStepsHtml(run) {
+    const at = _compactStepIndexFor(run);
+    return '<div class="compact-run-steps">' + _COMPACT_STEPS.map((s, i) => {
+      const cls = i < at ? 'is-done' : (i === at ? 'is-active' : 'is-todo');
+      const glyph = i < at ? '✓' : (i === at ? '<span class="compact-run-step-dot"></span>' : '·');
+      return '<span class="compact-run-step ' + cls + '">'
+        + '<span class="compact-run-step-mark">' + glyph + '</span>'
+        + escapeHtml(s.label) + '</span>';
+    }).join('') + '</div>';
+  }
+
+  function _compactRunResultHtml(run) {
+    const before = run.before && run.before.tokens ? run.before.tokens : 0;
+    const after = run.after && run.after.tokens ? run.after.tokens : 0;
+    const took = run.endedAt && run.startedAt ? _compactElapsedLabel(run.endedAt - run.startedAt) : '';
+    const bits = [];
+    if (before && after && after < before) {
+      const freed = before - after;
+      const pct = Math.round((freed / before) * 100);
+      bits.push('<span class="compact-run-delta">'
+        + '<b>' + escapeHtml(_compactTokenLabel(before)) + '</b>'
+        + ' <span class="compact-run-arrow">→</span> '
+        + '<b>' + escapeHtml(_compactTokenLabel(after)) + '</b> tokens</span>');
+      bits.push('<span class="compact-run-freed">' + escapeHtml(_compactTokenLabel(freed))
+        + ' freed <span class="compact-run-pct">(−' + pct + '%)</span></span>');
+    } else if (before && !after) {
+      // The post-compact usage rollup lands sporadically in the JSONL; say we
+      // are still reading it rather than printing a wrong or missing number.
+      bits.push('<span class="compact-run-delta">was <b>'
+        + escapeHtml(_compactTokenLabel(before)) + '</b> · reading the new size…</span>');
+    }
+    if (took) bits.push('<span class="compact-run-took">took ' + escapeHtml(took) + '</span>');
+    if (!bits.length) return '';
+    return '<div class="compact-run-result">' + bits.join('<span class="compact-run-sep">·</span>') + '</div>';
+  }
+
+  function _compactRunPaint() {
+    const run = _compactRun;
+    if (!run || !run.el) return;
+    const el = run.el;
+    el.dataset.stage = run.stage;
+    el.classList.toggle('is-slow', !!run.slow);
+    const engine = escapeHtml(run.engineLabel || 'Claude');
+    const elapsed = _compactElapsedLabel((run.endedAt || Date.now()) - run.startedAt);
+    const before = run.before && run.before.tokens ? run.before.tokens : 0;
+
+    let glyph, title, note, extra = '';
+    if (run.stage === 'failed') {
+      glyph = '⚠';
+      title = 'Compaction didn’t run';
+      note = escapeHtml(run.error || 'The engine did not confirm the compaction.')
+        + ' <span class="compact-run-quiet">Nothing was changed — your conversation is intact.</span>';
+      extra = '<button type="button" class="compact-run-retry">Try /compact again</button>';
+    } else if (run.stage === 'done') {
+      glyph = '✓';
+      title = 'Context compacted';
+      note = engine + ' replaced the earlier turns with a summary. Everything below this'
+        + ' point is the conversation it kept.';
+    } else if (run.stage === 'requested') {
+      glyph = '<span class="compact-run-spinner"></span>';
+      title = 'Starting compaction…';
+      note = 'Asking ' + engine + ' to summarize this conversation so the context window has room again.';
+    } else {
+      glyph = '<span class="compact-run-spinner"></span>';
+      title = 'Compacting context';
+      note = engine + ' is reading the whole transcript and writing a summary of it.'
+        + (before ? ' Compacting <b>' + escapeHtml(_compactTokenLabel(before)) + '</b> of context.' : '')
+        + ' On a long session this usually takes 1–3 minutes.';
+    }
+
+    // Progress bar: honest about being an estimate. It eases toward — but
+    // never reaches — 100% while working, and only fills on the real result.
+    let bar = '';
+    if (run.stage === 'requested' || run.stage === 'working') {
+      const frac = 1 - Math.exp(-((Date.now() - run.startedAt) / _COMPACT_TYPICAL_MS));
+      const pct = Math.min(92, Math.max(4, Math.round(frac * 92)));
+      bar = '<div class="compact-run-bar" role="progressbar" aria-valuemin="0" aria-valuemax="100"'
+        + ' aria-valuenow="' + pct + '" aria-label="Compaction progress (estimated)">'
+        + '<span class="compact-run-bar-fill" style="width:' + pct + '%"></span></div>';
+    }
+
+    const heartbeat = (run.stage === 'requested' || run.stage === 'working')
+      ? '<div class="compact-run-heartbeat">CCC is watching for the new boundary'
+        + ' · <span class="compact-run-elapsed">' + escapeHtml(elapsed) + '</span> elapsed</div>'
+      : '';
+    const slowNote = run.slow
+      ? '<div class="compact-run-slownote">Longer than usual — still watching. If the engine'
+        + ' went idle, re-running <code>/compact</code> is safe.'
+        + '<button type="button" class="compact-run-retry">Run /compact again</button></div>'
+      : '';
+    const backup = (run.stage === 'requested' || run.stage === 'working')
+      ? '<div class="compact-run-backup">A snapshot of the pre-compact transcript is saved to'
+        + ' <code>~/.claude/command-center/compact-backups/</code>.</div>'
+      : '';
+    const result = run.stage === 'done' ? _compactRunResultHtml(run) : '';
+    // Carried across as a NODE, not re-parsed HTML: re-serialising would reset
+    // the summary's expand/collapse state on every repaint (the result poll
+    // repaints for up to 75s after the card is done).
+    const liveSummaryNode = el.querySelector('.compact-run-summary .compact-resume-card');
+    const summary = (run.summaryHtml || liveSummaryNode)
+      ? '<div class="compact-run-summary">' + (liveSummaryNode ? '' : run.summaryHtml) + '</div>'
+      : '';
+
+    el.innerHTML =
+      '<div class="compact-run-head">'
+      +   '<span class="compact-run-glyph">' + glyph + '</span>'
+      +   '<span class="compact-run-title">' + title + '</span>'
+      +   '<span class="compact-run-clock">' + escapeHtml(elapsed) + '</span>'
+      + '</div>'
+      + (run.stage === 'failed' ? '' : _compactRunStepsHtml(run))
+      + bar
+      + result
+      + '<div class="compact-run-note">' + note + '</div>'
+      + heartbeat
+      + slowNote
+      + backup
+      + extra
+      + summary;
+    if (liveSummaryNode) {
+      const slot = el.querySelector('.compact-run-summary');
+      if (slot) slot.appendChild(liveSummaryNode);
+    }
+  }
+
+  function _compactRunView() {
+    if (typeof getConvView === 'function') return getConvView();
+    return document.getElementById('conversationsView');
+  }
+  // Keep the card in the DOM across the incremental re-renders that append
+  // new events. Mounts at the tail while the run is live; once the resume
+  // summary has been absorbed the render pass re-anchors it in the summary's
+  // chronological slot instead (see _compactRunAnchorTo).
+  function _compactRunMount($view) {
+    const run = _compactRun;
+    if (!run) return;
+    if (!_compactRunIsForeground()) return;
+    const view = $view || _compactRunView();
+    if (!view) return;
+    if (!run.el) {
+      run.el = document.createElement('div');
+      run.el.className = 'compact-run-card';
+      if (run.sid) run.el.dataset.sid = run.sid;
+    }
+    if (run.el.parentNode !== view && !run.anchored) view.appendChild(run.el);
+    else if (!run.anchored && run.el !== view.lastElementChild) view.appendChild(run.el);
+  }
+  function _compactRunAnchorTo(node) {
+    const run = _compactRun;
+    if (!run || !run.el || !node || !node.parentNode) return;
+    run.anchored = true;
+    if (run.el.nextSibling !== node || run.el.parentNode !== node.parentNode) {
+      node.parentNode.insertBefore(run.el, node);
+    }
+  }
+
+  function _stopCompactRunTimer() {
+    if (_compactRunTimer) { clearInterval(_compactRunTimer); _compactRunTimer = null; }
+  }
+  function _tickCompactRun() {
+    const run = _compactRun;
+    if (!run) { _stopCompactRunTimer(); return; }
+    if (run.stage !== 'requested' && run.stage !== 'working') { _stopCompactRunTimer(); return; }
+    if (!run.el || !run.el.isConnected) _compactRunMount();
+    const elapsed = Date.now() - run.startedAt;
+    if (elapsed >= _COMPACT_STALL_MS) run.slow = true;
+    _compactRunPaint();
+    // Active poll: pull the transcript every ~4s so the boundary that ends
+    // this run is caught promptly instead of waiting on the slow list poll.
     const ticks = Math.round(elapsed / 1000);
-    if (ticks > 0 && ticks % 4 === 0 && currentSession && currentSession.id === sid
+    if (ticks > 0 && ticks % 4 === 0 && currentSession && currentSession.id === run.sid
         && typeof fetchConversationEvents === 'function') {
       try { fetchConversationEvents(typeof activePaneId === 'function' ? activePaneId() : undefined); } catch (e) {}
     }
   }
-  function showCompactInProgressBanner(sid) {
-    const $view = typeof getConvView === 'function' ? getConvView() : document.getElementById('conversationsView');
-    if (!$view) return;
-    let banner = $view.querySelector('.compact-in-progress-banner');
-    if (banner) return;
-    banner = document.createElement('div');
-    banner.className = 'compact-in-progress-banner';
-    if (sid) banner.dataset.sid = sid;
-    banner.innerHTML = '<span class="compact-banner-spinner" aria-hidden="true"></span>'
-      + '<span class="compact-banner-text">'
-      +   '<strong>Compacting conversation context…</strong>'
-      +   ' Claude is summarizing the prior turns. This usually takes 1-3 minutes.'
-      +   ' <span class="compact-banner-heartbeat">CCC is polling for the new boundary'
-      +     ' · <span class="compact-banner-elapsed">0:00</span> elapsed</span>'
-      +   ' <span class="compact-banner-slow-note">Longer than usual - still polling. If the engine'
-      +     ' went idle, re-running <code>/compact</code> is safe.</span>'
-      +   ' <em>The on-disk transcript will be rewritten - a snapshot of the pre-compact JSONL was saved to'
-      +   ' <code>~/.claude/command-center/compact-backups/</code>.</em>'
-      + '</span>';
-    $view.appendChild(banner);
-    if (typeof scrollConversationToEnd === 'function') {
-      scrollConversationToEnd($view);
-    }
-    _stopCompactBannerTimer();
-    _compactBannerStart = Date.now();
-    _compactBannerTimer = setInterval(() => _tickCompactBanner(sid), 1000);
+
+  // Called synchronously on submit — BEFORE the fetch — so the card is on
+  // screen in the same frame as the keystroke.
+  function beginCompactRun(sid, source) {
+    if (!sid) return null;
+    const engineLabel = _compactEngineLabel(source || (currentSession && currentSession.source));
+    if (_compactRunActive() && _compactRun.sid === sid) return _compactRun;
+    if (_compactRun && _compactRun.el && _compactRun.el.parentNode) _compactRun.el.remove();
+    _compactRun = {
+      sid,
+      engineLabel,
+      stage: 'requested',
+      startedAt: Date.now(),
+      endedAt: 0,
+      acked: false,
+      slow: false,
+      anchored: false,
+      before: _compactContextNow(sid),
+      after: null,
+      summaryHtml: '',
+      error: '',
+      el: null,
+    };
+    _compactRunMount();
+    _compactRunPaint();
+    if (typeof scrollConversationToEnd === 'function') scrollConversationToEnd(_compactRunView());
+    _stopCompactRunTimer();
+    _compactRunTimer = setInterval(_tickCompactRun, 1000);
+    // The Claude headless path blocks server-side for the WHOLE compaction, so
+    // no mid-flight acknowledgement ever arrives — without this the card sat on
+    // "Starting compaction…" for the entire run and the named stages were dead
+    // decoration. Once the request is provably dispatched, "writing the
+    // summary" is the honest description.
+    const _run = _compactRun;
+    setTimeout(() => {
+      if (_compactRun === _run && _run.stage === 'requested') {
+        _run.stage = 'working';
+        _compactRunPaint();
+      }
+    }, 1200);
+    return _compactRun;
   }
-  function clearCompactInProgressBanner(view) {
-    _stopCompactBannerTimer();
+
+  // The engine acknowledged the request (it is now actually summarizing).
+  function markCompactRunWorking(sid) {
+    const run = _compactRunFor(sid) || beginCompactRun(sid);
+    if (!run) return;
+    run.acked = true;
+    if (run.stage === 'requested') run.stage = 'working';
+    _compactRunMount();
+    _compactRunPaint();
+  }
+
+  // A bare ok:true is NOT proof the compaction finished. The Codex app-server
+  // acks `thread/compact/start` in under a second and then works for one to
+  // three minutes, so the card used to land on "context compacted / took 0:00"
+  // while Codex was still compacting. Only an explicit compacted status counts.
+  function compactResponseIsComplete(data) {
+    if (!data) return false;
+    return data.status === 'compacted' || data.compact_result === 'success';
+  }
+  // The server measures the rebuilt context off the rollout, so the card can
+  // print "282k -> 12k" straight away instead of sitting on "reading the new
+  // size..." until the next real turn writes a token_count.
+  function adoptCompactRunResult(sid, data) {
+    const run = sid ? _compactRunFor(sid) : _compactRun;
+    if (!run || !data) return;
+    const pre = Number(data.pre_tokens || 0);
+    const post = Number(data.post_tokens || 0);
+    const limit = (run.before && run.before.limit) || 0;
+    if (pre > 0 && !(run.before && run.before.tokens)) run.before = { tokens: pre, limit };
+    if (post > 0) run.after = { tokens: post, limit: (run.before && run.before.limit) || limit };
+  }
+
+  // Terminal success. `after` fills in as the post-compact usage rollup lands,
+  // so the headline number is polled a few times rather than guessed once.
+  function completeCompactRun(sid) {
+    const run = sid ? _compactRunFor(sid) : _compactRun;
+    if (!run) return;
+    if (run.stage === 'done' || run.stage === 'failed') return;
+    run.stage = 'done';
+    run.acked = true;
+    run.slow = false;
+    run.endedAt = Date.now();
+    _stopCompactRunTimer();
+    _compactRunMount();
+    _compactRunPaint();
+    _compactRunPollAfter(run);
+    _compactRefreshContextPill(run.sid);
+  }
+
+  // Reads /api/session/<id>/usage DIRECTLY rather than going through
+  // fetchSessionUsage: that helper defers whenever the composer has focus,
+  // which it always does immediately after Enter — so routing the result poll
+  // through it left the card stuck on "reading the new size…" forever. This
+  // only reads; the pane's own usage refresh still owns the pill.
+  function _compactUsageShape(u) {
+    if (!u) return null;
+    const liveTokens = Number(u.live_context_tokens || 0);
+    const liveLimit = Number(u.live_context_limit || 0);
+    const hasLive = (u.engine || 'claude') === 'claude' && liveTokens > 0;
+    const tokens = Number(u.latest_input_tokens || 0) || (hasLive ? liveTokens : 0);
+    if (!tokens) return null;
+    return { tokens, limit: (hasLive ? liveLimit : 0) || Number(u.context_limit || 0) || 200000 };
+  }
+  function _compactRunPollAfter(run) {
+    if (!run || !run.sid) return;
+    [800, 2500, 6000, 12000, 25000, 45000, 75000].forEach((delay) => {
+      setTimeout(async () => {
+        if (_compactRun !== run || run.after) return;
+        try {
+          const res = await fetch('/api/session/' + encodeURIComponent(run.sid)
+            + '/usage?_t=' + Date.now(), { cache: 'no-store' });
+          const now = _compactUsageShape(await res.json());
+          // Only accept a number that is actually SMALLER than the pre-compact
+          // size. The post-compact usage rollup lands sporadically in the
+          // JSONL, so an early poll can still return the pre-compact figure —
+          // printing that would claim "0 freed" on a real win.
+          if (now && now.tokens && (!run.before || now.tokens < run.before.tokens)) {
+            run.after = now;
+            _compactRunPaint();
+          }
+        } catch (_) {}
+      }, delay);
+    });
+  }
+
+  // The context pill is the number the user compacted FOR — leaving it at the
+  // pre-compact figure puts two contradictory sizes on screen at once. Force
+  // it past the composer-focus deferral (the composer always has focus right
+  // after Enter) and retry, since the usage rollup lands in the JSONL a little
+  // after the boundary does.
+  function _compactRefreshContextPill(sid) {
+    if (!sid || typeof fetchSessionUsage !== 'function') return;
+    [400, 2000, 6000, 15000, 40000].forEach((delay) => {
+      setTimeout(() => {
+        if (!currentSession || currentSession.id !== sid) return;
+        try { fetchSessionUsage(sid, undefined, true); } catch (_) {}
+      }, delay);
+    });
+  }
+  // This run's summary may be (re)built by any render pass, including ones
+  // that happen after the run already reached `done`. Claim the newest
+  // unclaimed summary row here rather than only at row-build time — a missed
+  // claim leaves a stray sibling that _foldCompactRecords turns into a second
+  // card for the same compaction.
+  function _compactRunClaimSummary($view) {
+    const run = _compactRun;
+    if (!run) return;
+    const view = $view || _compactRunView();
+    if (!view) return;
+    if (view.querySelector('.compact-resume-event.compact-absorbed-by-run')) return;
+    const rows = view.querySelectorAll('.compact-resume-event');
+    const row = rows.length ? rows[rows.length - 1] : null;
+    // A summary already folded into a historical record card belongs to an
+    // EARLIER compaction, not this run.
+    if (!row || row.dataset.compactFolded === '1' || row.classList.contains('compact-record-hidden')) return;
+    const inner = row.querySelector('.compact-resume-card');
+    if (!inner) return;
+    run.summaryHtml = inner.outerHTML;
+    row.classList.add('compact-absorbed-by-run');
+    if (run.stage === 'failed') {
+      // We were wrong: the summary is proof it ran. Re-open the run so
+      // completeCompactRun can land it on a real result.
+      run.stage = 'working';
+      run.error = '';
+    }
+    completeCompactRun(run.sid);
+    _compactRunAnchorTo(row);
+  }
+  // Adopt the engine's own pre/post/duration off the boundary row when it is
+  // on screen. Those are measured server-side; the card's own before/after is
+  // a client-side estimate that also charges the HTTP round trip to the clock.
+  function _compactRunAdoptBoundary($view) {
+    const run = _compactRun;
+    if (!run) return;
+    const view = $view || _compactRunView();
+    if (!view) return;
+    // Hide the plumbing rows this card already speaks for — the boundary
+    // line ("Compacted context: 87k -> 10k") and the `/compact` command
+    // marker Claude Code writes AFTER the summary. Left visible they are the
+    // duplicated, out-of-order rows the card exists to replace.
+    const absorbed = view.querySelector('.compact-resume-event.compact-absorbed-by-run');
+    if (absorbed) {
+      for (const dir of ['previousElementSibling', 'nextElementSibling']) {
+        let n = absorbed[dir];
+        for (let i = 0; n && i < _COMPACT_FOLD_RADIUS; i++, n = n[dir]) {
+          if (!_compactRowIsFoldable(n)) break;
+          n.classList.add('compact-record-hidden');
+        }
+      }
+    }
+    if (run.adoptedBoundary) return;
+    const rows = view.querySelectorAll('.compact-boundary-row');
+    const row = rows.length ? rows[rows.length - 1] : null;
+    if (!row) return;
+    const pre = Number(row.dataset.compactPre || 0);
+    const post = Number(row.dataset.compactPost || 0);
+    const ms = Number(row.dataset.compactDuration || 0);
+    if (!pre && !post) return;
+    run.adoptedBoundary = true;
+    row.classList.add('compact-record-hidden');
+    if (pre) run.before = { tokens: pre, limit: (run.before && run.before.limit) || 200000 };
+    if (post) run.after = { tokens: post, limit: (run.before && run.before.limit) || 200000 };
+    if (ms > 0) run.startedAt = run.endedAt - ms;
+    _compactRunPaint();
+  }
+
+  // A reopened session has no live run — only the durable rows. Claude Code
+  // writes them in an order that reads backwards (the resume summary lands
+  // before the `/compact` command that caused it, and CCC renders the
+  // boundary row after both), which is exactly the "different messages,
+  // not in order" complaint. Fold the whole group into one record card
+  // anchored at the summary, so a transcript read later tells the same
+  // story the live card told.
+  //
+  // Anchored on the SUMMARY, not the boundary: the boundary's rendered
+  // position relative to the summary is not stable, so a forward-only walk
+  // from it folded nothing on a reopened session.
+  const _COMPACT_FOLD_RADIUS = 6;
+  function _compactRowIsFoldable(el) {
+    if (!el || !el.classList) return null;
+    if (el.classList.contains('compact-boundary-row')) return 'boundary';
+    if (el.classList.contains('compact-resume-event')) return null;
+    if (el.classList.contains('user_text')) {
+      const um = el.querySelector('.user-msg');
+      const t = ((um && (um.getAttribute('data-raw-text') || um.textContent)) || '').trim();
+      // The `/compact` command marker and the empty local-command-stdout row
+      // beside it — plumbing the card already represents.
+      if (!t || /^\/compact\b/i.test(t)) return 'marker';
+    }
+    return null;
+  }
+  function _foldCompactRecords($view) {
+    if (!$view) return;
+    $view.querySelectorAll('.compact-resume-event').forEach((summary) => {
+      if (summary.classList.contains('compact-absorbed-by-run')) return;
+      if (summary.classList.contains('compact-record-hidden')) return;
+      if (summary.dataset.compactFolded === '1') return;
+      const eaten = [];
+      let boundary = null;
+      for (const dir of ['previousElementSibling', 'nextElementSibling']) {
+        let n = summary[dir];
+        for (let i = 0; n && i < _COMPACT_FOLD_RADIUS; i++, n = n[dir]) {
+          const kind = _compactRowIsFoldable(n);
+          if (!kind) break;
+          if (kind === 'boundary') boundary = n;
+          eaten.push(n);
+        }
+      }
+      summary.dataset.compactFolded = '1';
+      const pre = boundary ? Number(boundary.dataset.compactPre || 0) : 0;
+      const post = boundary ? Number(boundary.dataset.compactPost || 0) : 0;
+      const ms = boundary ? Number(boundary.dataset.compactDuration || 0) : 0;
+      const trigger = (boundary && boundary.dataset.compactTrigger) || 'manual';
+      const card = document.createElement('div');
+      card.className = 'compact-run-card is-record';
+      card.dataset.stage = 'done';
+      const bits = [];
+      if (pre && post) {
+        const freed = Math.max(0, pre - post);
+        const pct = pre ? Math.round((freed / pre) * 100) : 0;
+        bits.push('<span class="compact-run-delta"><b>' + escapeHtml(_compactTokenLabel(pre)) + '</b>'
+          + ' <span class="compact-run-arrow">→</span> <b>' + escapeHtml(_compactTokenLabel(post))
+          + '</b> tokens</span>');
+        if (freed) {
+          bits.push('<span class="compact-run-freed">' + escapeHtml(_compactTokenLabel(freed))
+            + ' freed <span class="compact-run-pct">(−' + pct + '%)</span></span>');
+        }
+      }
+      if (ms > 0) bits.push('<span class="compact-run-took">took ' + escapeHtml(_compactElapsedLabel(ms)) + '</span>');
+      const summaryInner = summary.querySelector('.compact-resume-card');
+      card.innerHTML =
+        '<div class="compact-run-head">'
+        +   '<span class="compact-run-glyph">✓</span>'
+        +   '<span class="compact-run-title">Context compacted'
+        +     (trigger === 'auto' ? ' automatically' : '') + '</span>'
+        + '</div>'
+        + (bits.length ? '<div class="compact-run-result">' + bits.join('<span class="compact-run-sep">·</span>') + '</div>' : '')
+        + '<div class="compact-run-note">'
+        +   (trigger === 'auto'
+              ? 'The conversation neared its context limit, so the earlier turns were replaced with a summary.'
+              : 'The earlier turns were replaced with a summary.')
+        +   ' Everything below this point is the conversation that was kept.'
+        +   ' <span class="compact-run-quiet">The full transcript on disk is untouched.</span>'
+        + '</div>'
+        + '<div class="compact-run-summary"></div>';
+      if (summaryInner) card.querySelector('.compact-run-summary').appendChild(summaryInner);
+      // Anchor at the EARLIEST folded row so the card sits where the
+      // compaction actually happened, not wherever the summary landed.
+      let anchor = summary;
+      for (const el of eaten) {
+        if (el.compareDocumentPosition(anchor) & Node.DOCUMENT_POSITION_FOLLOWING) anchor = el;
+      }
+      anchor.parentNode.insertBefore(card, anchor);
+      summary.classList.add('compact-record-hidden');
+      eaten.forEach((el) => el.classList.add('compact-record-hidden'));
+    });
+  }
+
+  function failCompactRun(sid, reason) {
+    const run = sid ? _compactRunFor(sid) : _compactRun;
+    if (!run) return;
+    run.stage = 'failed';
+    run.error = String(reason || '');
+    run.endedAt = Date.now();
+    _stopCompactRunTimer();
+    _compactRunMount();
+    _compactRunPaint();
+  }
+
+  // Drop the card with no verdict — used when the pane switches away, not as
+  // a completion path.
+  function discardCompactRun(view) {
+    _stopCompactRunTimer();
+    if (_compactRun && _compactRun.el && _compactRun.el.parentNode) _compactRun.el.remove();
+    _compactRun = null;
     const views = view ? [view] : (typeof conversationScrollViews === 'function'
       ? conversationScrollViews()
       : [document.getElementById('conversationsView')].filter(Boolean));
     for (const v of views) {
       if (!v) continue;
-      v.querySelectorAll('.compact-in-progress-banner').forEach(el => el.remove());
+      v.querySelectorAll('.compact-run-card:not(.is-record), .compact-in-progress-banner').forEach(el => el.remove());
     }
   }
+
+  // Back-compat shims for the older banner API. Every call site that meant
+  // "the compaction finished" now calls completeCompactRun explicitly; these
+  // remain so any path not converted still behaves sanely.
+  function showCompactInProgressBanner(sid) { markCompactRunWorking(sid); }
+  function clearCompactInProgressBanner(view) { discardCompactRun(view); }
+
+  // Retry buttons inside the card re-run /compact for its session.
+  document.addEventListener('click', (ev) => {
+    const btn = ev.target && ev.target.closest && ev.target.closest('.compact-run-retry');
+    if (!btn) return;
+    ev.preventDefault();
+    const card = btn.closest('.compact-run-card');
+    const sid = card && card.dataset.sid;
+    if (sid && !(currentSession && currentSession.id === sid)) return;
+    if (typeof compactCurrentSession === 'function') compactCurrentSession();
+  });
 
   // CCC-863: unattended usage/rate-limit auto-resume countdown. When a
   // session's row carries `usage_limit_resume_at` (set server-side by the
@@ -12275,6 +12948,62 @@
     }
     return null;
   }
+  const _usageLimitSuppressedSids = new Set();
+  const _usageLimitCancelErrors = new Set();
+  function _usageLimitRowsForSession(sid) {
+    const rows = [];
+    const addMatches = (source) => {
+      if (!Array.isArray(source)) return;
+      source.forEach((row) => {
+        if (!row || (row.session_id !== sid && row.id !== sid)) return;
+        if (!rows.includes(row)) rows.push(row);
+      });
+    };
+    if (typeof conversationsData !== 'undefined') addMatches(conversationsData);
+    if (typeof archiveData !== 'undefined') addMatches(archiveData);
+    return rows;
+  }
+  function _usageLimitSuppressSession(sid) {
+    if (!sid) return;
+    _usageLimitSuppressedSids.add(sid);
+    _usageLimitCancelErrors.delete(sid);
+    _usageLimitRowsForSession(sid).forEach((row) => {
+      delete row.usage_limit_resume_at;
+    });
+    document.querySelectorAll('.usage-limit-resume-banner').forEach((banner) => {
+      if (banner.dataset.sid === sid) banner.remove();
+    });
+  }
+  function _usageLimitRollbackSuppression(sid, resumeAt) {
+    if (!sid) return;
+    _usageLimitSuppressedSids.delete(sid);
+    _usageLimitCancelErrors.add(sid);
+    if (Number.isFinite(resumeAt)) {
+      _usageLimitRowsForSession(sid).forEach((row) => {
+        row.usage_limit_resume_at = resumeAt;
+      });
+    }
+    syncUsageLimitCountdowns();
+  }
+  async function _cancelUsageLimitAutoResume(sid, resumeAt) {
+    _usageLimitSuppressSession(sid);
+    try {
+      const response = await fetch('/api/usage-limit/cancel', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ session_id: sid }),
+      });
+      let payload = null;
+      try { payload = await response.json(); } catch (_) { /* handled below */ }
+      if (!response.ok || !payload || !payload.ok) {
+        throw new Error((payload && payload.error) || ('HTTP ' + response.status));
+      }
+      return true;
+    } catch (_) {
+      _usageLimitRollbackSuppression(sid, resumeAt);
+      return false;
+    }
+  }
   function syncUsageLimitCountdowns() {
     try {
       document.querySelectorAll('.conv-pane[data-pane-id]').forEach((pane) => {
@@ -12287,10 +13016,14 @@
         if (!sid && currentSession) sid = currentSession.id;
         const inputBar = pane.querySelector('.conv-input-bar');
         if (!inputBar) return;
+        let banner = inputBar.querySelector('.usage-limit-resume-banner');
+        if (!sid || _usageLimitSuppressedSids.has(sid)) {
+          if (banner) banner.remove();
+          return;
+        }
         const row = _usageLimitRowForSession(sid);
         const resumeAt = row && typeof row.usage_limit_resume_at === 'number'
           ? row.usage_limit_resume_at : null;
-        let banner = inputBar.querySelector('.usage-limit-resume-banner');
         // Defensive staleness cutoff (independent of the server's own):
         // never let a countdown sit frozen past zero forever client-side.
         const stale = resumeAt && (resumeAt * 1000 <= Date.now() - 5 * 60 * 1000);
@@ -12302,10 +13035,16 @@
           banner = document.createElement('div');
           banner.className = 'usage-limit-resume-banner';
           banner.setAttribute('role', 'status');
-          banner.innerHTML = '<span class="usage-limit-resume-text"></span>'
-            + '<button type="button" class="usage-limit-resume-cancel" title="Cancel auto-resume" aria-label="Cancel auto-resume">&times;</button>';
           inputBar.prepend(banner);
         }
+        const cancelError = _usageLimitCancelErrors.has(sid);
+        banner.classList.toggle('is-cancel-error', cancelError);
+        banner.dataset.cancelError = cancelError ? '1' : '0';
+        banner.innerHTML = cancelError
+          ? '<span class="usage-limit-resume-text">AUTO-RESUME STILL ENABLED</span>'
+            + '<button type="button" class="usage-limit-resume-cancel" title="Retry disabling auto-resume" aria-label="Retry disabling auto-resume">Retry</button>'
+          : '<span class="usage-limit-resume-text"></span>'
+            + '<button type="button" class="usage-limit-resume-cancel" title="Permanently disable auto-resume" aria-label="Permanently disable auto-resume">&times;</button>';
         banner.dataset.resumeAt = String(resumeAt);
         banner.dataset.sid = sid;
       });
@@ -12313,6 +13052,7 @@
   }
   function _tickUsageLimitCountdowns() {
     document.querySelectorAll('.usage-limit-resume-banner').forEach((banner) => {
+      if (banner.dataset.cancelError === '1') return;
       const resumeAt = parseFloat(banner.dataset.resumeAt || '0');
       if (!resumeAt) { banner.remove(); return; }
       const remaining = resumeAt - Date.now() / 1000;
@@ -12324,19 +13064,18 @@
       else banner.textContent = text;
     });
   }
-  document.addEventListener('click', (ev) => {
+  document.addEventListener('click', async (ev) => {
     const btn = ev.target && ev.target.closest && ev.target.closest('.usage-limit-resume-cancel');
     if (!btn) return;
     ev.preventDefault();
     const banner = btn.closest('.usage-limit-resume-banner');
     const sid = banner && banner.dataset.sid;
     if (!sid) return;
-    banner.remove();
-    fetch('/api/usage-limit/cancel', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ session_id: sid }),
-    }).catch(() => {});
+    const resumeAt = parseFloat(banner.dataset.resumeAt || '0');
+    await _cancelUsageLimitAutoResume(
+      sid,
+      Number.isFinite(resumeAt) ? resumeAt : null,
+    );
   });
   setInterval(syncUsageLimitCountdowns, 5000);
   setInterval(_tickUsageLimitCountdowns, 1000);
@@ -13211,6 +13950,10 @@
     const clean = String(p || '').split(/[?#]/)[0].replace(/:\d+(?::\d+)?$/, '');
     return /\.(?:md|mdx)$/i.test(clean);
   }
+  function _isVideoPath(p) {
+    const clean = String(p || '').split(/[?#]/)[0].replace(/:\d+(?::\d+)?$/, '');
+    return /\.(?:mp4|mov|webm|avi|mkv|m4v)$/i.test(clean);
+  }
   function _pathLinkSessionContext(el) {
     try {
       const paneEl = el && el.closest ? el.closest('.conv-pane[data-pane-id]') : null;
@@ -13238,6 +13981,26 @@
       // context is honoured every time.
       const tmp = document.createElement('a');
       tmp.href = target;
+      tmp.target = '_blank';
+      tmp.rel = 'noopener noreferrer';
+      tmp.style.display = 'none';
+      document.body.appendChild(tmp);
+      tmp.click();
+      document.body.removeChild(tmp);
+      return;
+    }
+    if (_isVideoPath(p)) {
+      // Video links on mobile/Tailnet should stream from the CCC server so
+      // the phone's browser can play them. /api/open would try to open the
+      // file locally on the host Mac, which does nothing useful on a phone.
+      const ctx = _pathLinkSessionContext(a);
+      const url = new URL('/api/media', window.location.origin);
+      url.searchParams.set('path', p);
+      if (ctx && ctx.id) url.searchParams.set('session_id', ctx.id);
+      if (ctx && ctx.cwd) url.searchParams.set('cwd', ctx.cwd);
+      if (ctx && (ctx.repoPath || ctx.repo_path)) url.searchParams.set('repo_path', ctx.repoPath || ctx.repo_path);
+      const tmp = document.createElement('a');
+      tmp.href = url.href;
       tmp.target = '_blank';
       tmp.rel = 'noopener noreferrer';
       tmp.style.display = 'none';
@@ -13568,7 +14331,7 @@
     $mobileOriginalAsk.title = cleaned ? 'Show the full original ask' : '';
   }
   function syncPaneLastUserMessage(paneId, text) {
-    const pane = document.querySelector(`.conv-pane[data-pane-id="${paneId || activePaneId()}"]`);
+    const pane = convPaneElById(paneId || activePaneId());
     const messageEl = pane && pane.querySelector('[data-role="pane-last-user-message"]');
     if (!pane || !messageEl) return;
     const cleaned = String(text || '').replace(/\s+/g, ' ').trim();
@@ -15750,6 +16513,83 @@
     setInterval(wireAllConvSwipe, 3000);
   }
 
+  // Mobile swipe-right on conversation-list rows: in the Coding tab it triggers
+  // the row's Trash action; in the Active tab it triggers the Archive action.
+  // Wired once per #convList render because the list's innerHTML is replaced,
+  // but the container itself persists.
+  function _currentSidebarTabForSwipe() {
+    try {
+      const t = localStorage.getItem('ccc-sidebar-tab');
+      return (t === 'issues' || t === 'queues' || t === 'inprogress' || t === 'archived' || t === 'coding' || t === 'workers') ? t : 'coding';
+    } catch (_) { return 'coding'; }
+  }
+  function _swipeActionButtonForRow(row) {
+    const tab = _currentSidebarTabForSwipe();
+    if (tab === 'coding' || tab === 'workers') {
+      // Workers-tab rows intentionally have no trash affordance (worker sessions
+      // are queue-owned), so a swipe there only does something on rows that
+      // actually expose a trash button — e.g. the Trash subsection of Coding.
+      return row.querySelector('.conv-trash-btn');
+    }
+    if (tab === 'inprogress') {
+      return row.querySelector('.conv-archive-btn') || row.querySelector('.conv-trash-btn');
+    }
+    return null;
+  }
+  function wireConvListRowSwipe($list) {
+    if (!$list || $list.dataset.convSwipeWired === '1' || !isTouchPrimary()) return;
+    $list.dataset.convSwipeWired = '1';
+    const THRESH = 80;
+    const RATIO = 1.5;
+    let sx = 0, sy = 0, active = false, committed = false, decided = false, currentRow = null;
+    $list.addEventListener('touchstart', (e) => {
+      active = false; committed = false; decided = false; currentRow = null;
+      if (e.touches.length !== 1) return;
+      const t = e.target;
+      // Let buttons, inputs, links, and scrollable children handle their own gestures.
+      if (t.closest('button, input, textarea, select, a, [contenteditable]')) return;
+      const row = t.closest('.conv-item');
+      if (!row) return;
+      const btn = _swipeActionButtonForRow(row);
+      if (!btn || btn.disabled) return;
+      sx = e.touches[0].clientX; sy = e.touches[0].clientY;
+      active = true; currentRow = row;
+    }, { passive: true });
+    $list.addEventListener('touchmove', (e) => {
+      if (!active || e.touches.length !== 1) return;
+      const dx = e.touches[0].clientX - sx;
+      const dy = e.touches[0].clientY - sy;
+      if (!decided) {
+        if (Math.abs(dx) < 12 && Math.abs(dy) < 12) return;
+        decided = true;
+        committed = dx > 0 && Math.abs(dx) > Math.abs(dy) * RATIO;
+        if (!committed) { active = false; currentRow = null; return; }
+      }
+      if (committed && e.cancelable) e.preventDefault();
+    }, { passive: false });
+    const end = (e) => {
+      if (!active || !committed || !currentRow) return;
+      const t = (e.changedTouches && e.changedTouches[0]) || null;
+      if (!t) { active = false; committed = false; decided = false; currentRow = null; return; }
+      const dx = t.clientX - sx;
+      const dy = t.clientY - sy;
+      if (dx >= THRESH && Math.abs(dx) > Math.abs(dy) * RATIO) {
+        if (e.cancelable) e.preventDefault();
+        const btn = _swipeActionButtonForRow(currentRow);
+        if (btn && !btn.disabled) {
+          btn.classList.add('is-swiped');
+          setTimeout(() => { if (btn) btn.classList.remove('is-swiped'); }, 300);
+          btn.click();
+        }
+      }
+      active = false; committed = false; decided = false; currentRow = null;
+    };
+    $list.addEventListener('touchend', end, { passive: false });
+    $list.addEventListener('touchcancel', () => {
+      active = false; committed = false; decided = false; currentRow = null;
+    }, { passive: true });
+  }
+
   // WhatsApp-style drag-to-dismiss the on-screen keyboard. Deliberately NOT
   // tied to the swipe-rotate gesture above: that one bails (swipeStartBlocked)
   // the moment a drag begins on a link, code block, copy button, or ask-user
@@ -16095,8 +16935,9 @@
         stopSpeechRecognition();
       }
     }
-    document.querySelectorAll('.conv-pane').forEach(el => {
-      el.classList.toggle('is-active', el.getAttribute('data-pane-id') === activePid);
+    _convPaneHost().querySelectorAll('.conv-pane').forEach(el => {
+      const on = el.getAttribute('data-pane-id') === activePid;
+      if (el.classList.contains('is-active') !== on) el.classList.toggle('is-active', on);
     });
     const convId = arguments.length > 0 ? activeConvId : currentConversation;
     if ($convList) {
@@ -17869,11 +18710,16 @@
     // the stuck flag, list never filters. If the boolean says we're
     // dragging but no DOM element actually carries a .dragging class,
     // clear it.
-    const domHasDragging = !!document.querySelector(
+    // Only consult the DOM while the flag is set: this runs from hot render
+    // paths, and the document-wide selector scan cost ~9ms per session open
+    // with a few hundred sidebar rows. When the flag is clear the query
+    // could only ever return false for the self-heal anyway.
+    let domHasDragging = false;
+    if (_sidebarDragInProgress) {
+      domHasDragging = !!document.querySelector(
       '.flow-node.dragging,.kanban-card.dragging,.kanban-column-header.dragging-header,.conv-item.dragging,.conv-draft-row.dragging,.conv-folder-group-header.dragging,.conv-objects-splitter.is-dragging,.flow-board.is-panning,.flow-board.is-zooming'
-    );
-    if (_sidebarDragInProgress && !domHasDragging) {
-      _sidebarDragInProgress = false;
+      );
+      if (!domHasDragging) _sidebarDragInProgress = false;
     }
     return _sidebarDragInProgress || domHasDragging;
   }
@@ -18832,27 +19678,14 @@
   }
 
   function renderNewSessionObjectContext() {
+    // CCC-950: the OBJECT picker in the new-session composer is hidden —
+    // this stays a no-op rather than a full removal, since
+    // getNewSessionSelectedObject()/ensureNewSessionDefaultObject() etc. are
+    // still used by the post-spawn assignment path.
     const wrap = document.getElementById('newSessionObjectContext');
     if (!wrap) return;
-    if (currentConversation !== '__new__') {
-      wrap.innerHTML = '';
-      wrap.style.display = 'none';
-      return;
-    }
-    wrap.style.display = '';
-    ensureNewSessionDefaultObject();
-    if (!wrap.querySelector('#newSessionObjectPicker')) {
-      wrap.innerHTML = '<span class="nso-label">Object</span>'
-        + '<span class="nso-combo" data-role="new-session-object-combo">'
-        + '<input type="text" id="newSessionObjectPicker" class="nso-picker"'
-        + ' autocomplete="off" spellcheck="false" aria-label="Object for new session">'
-        + '<button type="button" id="newSessionObjectMenuBtn" class="nso-menu-btn"'
-        + ' title="Choose object" aria-label="Choose object" aria-haspopup="listbox" aria-expanded="false">&#9662;</button>'
-        + '<div id="newSessionObjectMenu" class="nso-menu" role="listbox"></div>'
-        + '</span>';
-      wireNewSessionObjectPicker();
-    }
-    updateNewSessionObjectPickerValue();
+    wrap.innerHTML = '';
+    wrap.style.display = 'none';
   }
 
   function loadPendingNewSessionObjectAssignments() {
@@ -19761,9 +20594,9 @@
     if (!sid || (c && (c.source === 'backlog' || c.source === 'github_pr' || c.source === 'pkood'))) return '';
     const obj = flowObjectForConversation(c);
     if (!obj) {
-      // CCC-467: dropped the per-row "+" add-to-object chip. Assigning an
-      // object now happens from the RHS status rail after selecting a
-      // session (see #statusRailAddObjectBtn), so unassigned rows stay clean.
+      // CCC-467/CCC-967: dropped the per-row "+" add-to-object chip (and
+      // later the RHS rail's "+ Object" button too) — unassigned rows stay
+      // clean with no add-to-object affordance here.
       return '';
     }
     const title = String(obj.title || '').trim() || 'Object';
@@ -25463,7 +26296,8 @@
       const $view = getConvViewForPane(_convReplayPaneId || activePaneId()) || $conversationsView;
       const isActivePane = (_convReplayPaneId || activePaneId()) === activePaneId();
       const hasEvents = $view && $view.querySelector('.event:not(.conv-sticky-header)');
-      btn.style.display = (isActivePane && hasEvents) ? 'inline-flex' : 'none';
+      const debugOn = typeof debugModeEnabled === 'function' && debugModeEnabled();
+      btn.style.display = (debugOn && isActivePane && hasEvents) ? 'inline-flex' : 'none';
     }
     (_convReplayPaneIds.length ? _convReplayPaneIds : [_convReplayPaneId || activePaneId()]).forEach(pid => _scrollConvReplayToBottom(pid));
     _convReplayPaneId = null;
@@ -26225,6 +27059,7 @@
           + '</div>'
         : '')
       + '</div>';
+    if (typeof syncBodyGcReaderFlag === 'function') syncBodyGcReaderFlag();
 
     const inputBar = document.getElementById('convInputBar');
     const inputCtx = document.getElementById('convInputContext');
@@ -28944,9 +29779,12 @@
   // "ago" stays live on every 5s poll without a full breadcrumb rebuild. No-op
   // when neither slot is present (non-Claude session, or breadcrumb hidden).
   function updateConvProcessIndicator() {
+    // Both slots live under #convSplit (pane header / status rail); scoping
+    // the attribute selectors there skips the sidebar's 10k+ nodes.
+    const _procHost = document.getElementById('convSplit') || document;
     const targets = [
-      document.querySelector('[data-role="pane-proc"]'),
-      document.querySelector('[data-role="rail-proc"]'),
+      _procHost.querySelector('[data-role="pane-proc"]'),
+      _procHost.querySelector('[data-role="rail-proc"]'),
     ].filter(Boolean);
     if (!targets.length) return;
     const setAll = (html) => { targets.forEach((t) => { t.innerHTML = html; }); };
@@ -29308,19 +30146,24 @@
 
   // Immediate "it started" feedback fired the MOMENT a /compact request goes
   // out — not after the await resolves. The Claude hidden-pty path blocks
-  // server-side for the FULL compaction (1-3 min), so deferring the progress
-  // banner until the response came back left a two-minute dead zone: a 5s
-  // toast faded and nothing else signalled that work was ongoing. The banner
-  // carries a live elapsed timer and tears itself down the instant the compact
-  // boundary lands (its own 4s transcript poll), so showing it up front makes
-  // the timer span the real wait. Background sessions (not the foreground
-  // conv view) get a toast instead, since the banner is scoped to that view.
+  // server-side for the FULL compaction (1-3 min), so deferring the card until
+  // the response came back left a two-minute dead zone where the only thing on
+  // screen was a generic "🧠 Thinking…" pill, indistinguishable from a normal
+  // turn. The card carries a live elapsed clock and ends on the real numbers,
+  // so mounting it up front makes the clock span the whole wait. Background
+  // sessions (not the foreground conv view) get a toast instead, since the
+  // card is scoped to that view.
   function beginCompactProgress(sid, source) {
-    if (source === 'codex') { showOpToast('Compacting conversation…', 'info'); return; }
-    if (currentSession && currentSession.id === sid) showCompactInProgressBanner(sid);
+    if (currentSession && currentSession.id === sid) beginCompactRun(sid, source);
     else showOpToast('Compacting conversation… (usually 1-3 min)', 'info');
   }
 
+  // "It took too long" is not "it failed" — the compaction very often lands
+  // moments later (CCC-786, and re-observed on the lifecycle card: a run whose
+  // boundary + summary are on disk was reported as "Compaction didn't run").
+  function _isCompactTimeoutReason(reason) {
+    return /abort|timed out|timeout|network|failed to fetch|load failed/i.test(String(reason || ''));
+  }
   // code: 'compact_timeout' means CCC's own poll gave up waiting for the
   // compact boundary — NOT that compaction failed. The server only returns
   // this when the live session is still up and may still be running
@@ -29328,8 +30171,11 @@
   // (CCC-786: users saw "/compact failed: timed out" when it usually landed
   // moments later). Keep the progress banner up and keep polling.
   function handleCompactTimeout(sid) {
-    showOpToast('Compaction is taking longer than usual - still watching for it to land.', 'info');
-    showCompactInProgressBanner(sid);
+    // Not a failure: keep the card in its working state (it already says
+    // "still watching") and mark it slow so the reassurance copy + retry
+    // affordance appear. No toast — the card is the single source of truth.
+    markCompactRunWorking(sid);
+    if (_compactRun && _compactRun.sid === sid) { _compactRun.slow = true; _compactRunPaint(); }
     scheduleCompactUsageRefresh(sid);
   }
 
@@ -29360,14 +30206,16 @@
       const data = await postRunCompactForSession(
         sid, source, liveStatus && liveStatus.terminalApp);
       if (data && data.ok) {
-        showOpToast(compactRequestSuccessMessage(data, source), 'success');
+        if (_compactToastNeeded(sid)) showOpToast(compactRequestSuccessMessage(data, source), 'success');
         touchSessionOptimistically(sid);
-        if (source === 'codex' || (data && data.via === 'live-spawn-stdin')) {
-          // These paths already FINISHED compacting server-side (Codex via RPC;
-          // the live spawn ran /compact itself and we watched compact_result).
-          // There's no boundary still to poll for, so tear the banner down and
-          // refresh the list rather than leaving a stuck "Compacting…" spinner.
-          clearCompactInProgressBanner();
+        if ((source === 'codex' || (data && data.via === 'live-spawn-stdin'))
+            && compactResponseIsComplete(data)) {
+          // These paths already FINISHED compacting server-side (Codex waits
+          // out the compaction turn; the live spawn ran /compact itself and we
+          // watched compact_result). There's no boundary still to poll for, so
+          // land the card on its result rather than leaving a stuck spinner.
+          adoptCompactRunResult(sid, data);
+          completeCompactRun(sid);
           // Codex compact has completed; any optimistic Thinking pill is stale.
           // (The live-spawn-stdin path is likewise done — same teardown.)
           clearOptimisticAgentIndicator(getConvView());
@@ -29376,46 +30224,62 @@
           setTimeout(refreshConversationList, 1500);
           setTimeout(refreshConversationList, 3500);
         } else {
-          showCompactInProgressBanner(sid);
+          markCompactRunWorking(sid);
           scheduleCompactUsageRefresh(sid);
         }
       } else if (data && data.code === 'compact_needs_manual') {
-        clearCompactInProgressBanner();
+        failCompactRun(sid, 'This engine needs /compact run from its own terminal.');
         offerManualCompact(sid);
       } else if (data && data.code === 'compact_timeout') {
         handleCompactTimeout(sid);
       } else {
-        clearCompactInProgressBanner();
         // Surface the engine's real compact_error when it told us why it failed
         // (e.g. "Not enough messages to compact.") instead of a generic message.
         const reason = (data && (data.compact_error || formatInjectFailure(data, 0) || data.error)) || 'unknown';
-        showOpToast('/compact failed: ' + reason, 'error');
+        failCompactRun(sid, reason);
       }
     } catch (err) {
-      clearCompactInProgressBanner();
-      showOpToast('/compact failed: ' + ((err && err.message) || 'network error'), 'error');
+      failCompactRun(sid, (err && err.message) || 'network error');
     } finally {
       _compactInFlight = false;
       if (typeof updateInputBar === 'function') updateInputBar();
     }
   }
 
-  async function toggleAutoHandoverForPane(paneId, sid) {
-    if (_autoHandoverToggleInFlight || !sid) return;
+  function _autoHandoverCurrentState(paneId) {
     const u = _usageDataByPane[paneId] || {};
-    const next = !u.auto_handover_enabled;
+    if (!u.auto_handover_enabled) return 'off';
+    const mode = u.auto_handover_mode;
+    return AUTO_HANDOVER_MODE_CYCLE.includes(mode) ? mode : 'mdfile';
+  }
+
+  // Actually commits a mode: POSTs the flag and injects the natural-language
+  // instruction that makes the live session invoke the token-sitter skill
+  // itself (same mechanism the old on/off toggle used). Called only after
+  // the debounce settles, never per-click.
+  async function commitAutoHandoverMode(paneId, sid, state) {
+    if (!sid) return;
+    const enabled = state !== 'off';
+    const mode = enabled ? state : 'mdfile';
     _autoHandoverToggleInFlight = true;
     try {
       const res = await fetch('/api/session/' + encodeURIComponent(sid) + '/auto-handover', {
         method: 'POST',
         headers: {'Content-Type': 'application/json'},
-        body: JSON.stringify({ enabled: next }),
+        body: JSON.stringify({ enabled, mode }),
       });
       const data = await res.json().catch(() => ({}));
       if (res.ok && data.ok) {
-        if (_usageDataByPane[paneId]) _usageDataByPane[paneId].auto_handover_enabled = !!data.enabled;
-        showOpToast(data.enabled ? 'token-sitter on for this session' : 'token-sitter off', 'success');
-        postInjectInput(sid, 'token-sitter auto-snapshot ' + (data.enabled ? 'on' : 'off'), 'send').catch(() => {});
+        if (_usageDataByPane[paneId]) {
+          _usageDataByPane[paneId].auto_handover_enabled = !!data.enabled;
+          _usageDataByPane[paneId].auto_handover_mode = data.mode || 'mdfile';
+        }
+        _autoHandoverConfirmedState[paneId] = data.enabled ? (data.mode || 'mdfile') : 'off';
+        showOpToast('token-sitter: ' + AUTO_HANDOVER_MODE_LABELS[state], 'success');
+        const injectText = enabled
+          ? 'token-sitter auto-snapshot on, mode ' + mode
+          : 'token-sitter auto-snapshot off';
+        postInjectInput(sid, injectText, 'send').catch(() => {});
       } else {
         showOpToast('Could not update token-sitter: ' + (data.error || ('HTTP ' + res.status)), 'error');
       }
@@ -29427,6 +30291,40 @@
     }
   }
 
+  // Click handler for the status-bar pill: advances the cycle instantly
+  // (so the label always reflects what you just clicked, even mid-flurry)
+  // and debounces the real commit behind it.
+  function cycleAutoHandoverModeForPane(paneId, sid) {
+    if (!sid) return;
+    const current = _autoHandoverCurrentState(paneId);
+    const idx = AUTO_HANDOVER_MODE_CYCLE.indexOf(current);
+    const next = AUTO_HANDOVER_MODE_CYCLE[(idx + 1) % AUTO_HANDOVER_MODE_CYCLE.length];
+    if (!_usageDataByPane[paneId]) _usageDataByPane[paneId] = {};
+    _usageDataByPane[paneId].auto_handover_enabled = next !== 'off';
+    if (next !== 'off') _usageDataByPane[paneId].auto_handover_mode = next;
+    _usageDataByPane[paneId]._auto_handover_pending = true;
+    renderSessionUsageIntoStrip(paneId);
+    if (_autoHandoverCycleTimers[paneId]) clearTimeout(_autoHandoverCycleTimers[paneId]);
+    _autoHandoverCycleTimers[paneId] = setTimeout(() => {
+      delete _autoHandoverCycleTimers[paneId];
+      if (_usageDataByPane[paneId]) _usageDataByPane[paneId]._auto_handover_pending = false;
+      // A click-flurry that lands back on the state the server already has
+      // is a no-op: no POST, no chat injection, just clear the pending dot.
+      if (_autoHandoverConfirmedState[paneId] === next) {
+        renderSessionUsageIntoStrip(paneId);
+        return;
+      }
+      commitAutoHandoverMode(paneId, sid, next);
+    }, _AUTO_HANDOVER_CYCLE_DEBOUNCE_MS);
+  }
+
+  // The lifecycle card already says this, in place, with numbers. A corner
+  // toast beside it is the disconnected duplicate feedback the card replaced.
+  // Still worth showing when you compacted a session you are NOT looking at,
+  // where the toast is the only signal you get.
+  function _compactToastNeeded(sid) {
+    return !(sid && currentSession && currentSession.id === sid);
+  }
   function compactRequestSuccessMessage(data, source) {
     if (data && data.via === 'codex-compact') return 'Codex conversation compacted.';
     if (data && data.queued) return 'Queued /compact until the terminal session is idle.';
@@ -29777,8 +30675,8 @@
     const _sidebarTab = (() => {
       try {
         const t = localStorage.getItem('ccc-sidebar-tab');
-        return (t === 'issues' || t === 'queues' || t === 'inprogress' || t === 'archived' || t === 'coding' || t === 'workers') ? t : 'inprogress';
-      } catch (_) { return 'inprogress'; }
+        return (t === 'issues' || t === 'queues' || t === 'inprogress' || t === 'archived' || t === 'coding' || t === 'workers') ? t : 'coding';
+      } catch (_) { return 'coding'; }
     })();
     const _activeDraftInputBefore = document.activeElement;
     const _focusDraftIdBefore = (_activeDraftInputBefore && _activeDraftInputBefore.classList.contains('conv-draft-input'))
@@ -30306,10 +31204,10 @@
       if (_continuationParentId) {
         title = title.replace(/^Continue\s+/, '').replace(/^⤴︎\s*/, '');
       }
-      // ✨ = AI-generated (Claude/Codex/Antigravity). User renames get NO
-      // glyph; the .user-renamed CSS class gives them a quiet dotted underline
+      // AI-generated titles (Claude/Codex/Antigravity) show with no glyph now
+      // (the ✨ prefix was removed, CCC-962). User renames also get NO glyph;
+      // the .user-renamed CSS class gives them a quiet dotted underline
       // instead so the row doesn't shout.
-      if (titleSource === 'ai' && !quietTitleChrome) title = '✨ ' + title;
       // 🪄 = CCC's own auto-titler (haiku, fired from the Stop hook) filled a
       // row that would otherwise show a raw first sentence. Deliberately a
       // different glyph from ✨, which means "the engine titled itself".
@@ -35718,30 +36616,30 @@
         try {
           const data = await postRunCompactForSession(sid, source);
           if (data && data.ok) {
-            showOpToast(compactRequestSuccessMessage(data, source), 'success');
+            if (_compactToastNeeded(sid)) showOpToast(compactRequestSuccessMessage(data, source), 'success');
             touchSessionOptimistically(sid);
-            if (source === 'codex' || (data && data.via === 'live-spawn-stdin')) {
+            if ((source === 'codex' || (data && data.via === 'live-spawn-stdin'))
+                && compactResponseIsComplete(data)) {
               // Already finished compacting server-side — no boundary left to
-              // poll for; clear the banner instead of leaving it spinning.
-              clearCompactInProgressBanner();
+              // poll for; land the card on its result instead of spinning.
+              adoptCompactRunResult(sid, data);
+              completeCompactRun(sid);
               setTimeout(refreshConversationList, 1500);
               setTimeout(refreshConversationList, 3500);
             } else {
-              showCompactInProgressBanner(sid);
+              markCompactRunWorking(sid);
               scheduleCompactUsageRefresh(sid);
             }
           } else if (data && data.code === 'compact_needs_manual') {
-            clearCompactInProgressBanner();
+            failCompactRun(sid, 'This engine needs /compact run from its own terminal.');
             offerManualCompact(sid);
           } else if (data && data.code === 'compact_timeout') {
             handleCompactTimeout(sid);
           } else {
-            clearCompactInProgressBanner();
-            showOpToast('/compact failed: ' + ((data && (data.compact_error || data.error)) || 'unknown'), 'error');
+            failCompactRun(sid, (data && (data.compact_error || data.error)) || 'unknown');
           }
         } catch (err) {
-          clearCompactInProgressBanner();
-          showOpToast('/compact failed: ' + ((err && err.message) || 'network'), 'error');
+          failCompactRun(sid, (err && err.message) || 'network');
         }
       };
       badge.addEventListener('click', runCompact);
@@ -36260,6 +37158,7 @@
         }
       });
     });
+    wireConvListRowSwipe($convList);
   }
 
   // ── Drag-to-pop-out + drag-to-reorder ──
@@ -37416,15 +38315,25 @@
   // re-parented into `.conv-pane[data-pane-id="p1"]` by Task 2). For split
   // mode each pane has its own `.conversations-view` inside it; we look
   // it up via the active pane's data-pane-id attribute.
+  // Pane lookups scope to #convSplit: `.conv-pane` panes are its direct
+  // children, so the selector matches before descending into anything.
+  // A document-wide querySelector walks the whole sidebar (10k+ nodes)
+  // first; these helpers run dozens of times per session open.
+  function _convPaneHost() {
+    return document.getElementById('convSplit') || document;
+  }
+  function convPaneElById(pid) {
+    return _convPaneHost().querySelector(`.conv-pane[data-pane-id="${pid}"]`);
+  }
   function getConvViewForPane(pid) {
-    const pane = document.querySelector(`.conv-pane[data-pane-id="${pid}"]`);
+    const pane = convPaneElById(pid);
     return pane ? pane.querySelector('.conversations-view') : null;
   }
   function getConvView() {
     return getConvViewForPane(activePaneId()) || $conversationsView;
   }
   function getConvInputBarForPane(pid) {
-    const pane = document.querySelector(`.conv-pane[data-pane-id="${pid}"]`);
+    const pane = convPaneElById(pid);
     return pane ? pane.querySelector('.conv-input-bar') : null;
   }
 
@@ -37637,8 +38546,6 @@
         _statusRailActiveRow = row || null;
         const railRenameBtn = document.getElementById('statusRailTitleRenameBtn');
         if (railRenameBtn) railRenameBtn.style.display = (_statusRailActiveRow && _statusRailActiveRow.id) ? '' : 'none';
-        const railAddObjectBtn = document.getElementById('statusRailAddObjectBtn');
-        if (railAddObjectBtn) railAddObjectBtn.style.display = (_statusRailActiveRow && (_statusRailActiveRow.session_id || _statusRailActiveRow.id)) ? '' : 'none';
         const railActivityLogBtn = document.getElementById('statusRailActivityLogBtn');
         if (railActivityLogBtn) {
           const sid = _statusRailActiveRow && (_statusRailActiveRow.session_id || _statusRailActiveRow.id) || '';
@@ -37659,8 +38566,6 @@
         if (railRenameBtn) railRenameBtn.style.display = 'none';
         const railActivityLogBtn = document.getElementById('statusRailActivityLogBtn');
         if (railActivityLogBtn) { railActivityLogBtn.style.display = 'none'; railActivityLogBtn.onclick = null; }
-        const railAddObjectBtn = document.getElementById('statusRailAddObjectBtn');
-        if (railAddObjectBtn) railAddObjectBtn.style.display = 'none';
       }
     }
     // Conversation size badge — surfaces how big the JSONL is so the
@@ -38318,6 +39223,72 @@
   }
   ensureAllConversationEndAffordances();
 
+  // Flag classes that stand in for `body:has(...)` / `.conv-pane:has(...)`
+  // selectors. Blink folds every `:has()` rule into one shared invalidation
+  // set and re-schedules it on the anchor whenever anything under the anchor
+  // mutates; with body / .conv-pane as anchors, every DOM write during a
+  // session open re-styled ~500 sidebar badges at each forced layout read
+  // (measured 20-390ms per recalc). The CSS now keys off these classes:
+  //   .conv-pane.has-status-rail           (child .status-rail present)
+  //   .conv-pane.has-new-session-context   (child .conv-input-context.is-new-session)
+  //   body.has-text-focus                  (a text input / textarea is focused)
+  //   body.has-gc-reader                   (#gcReader mounted in #conversationsView)
+  function syncPaneHasFlags(pane) {
+    if (!pane || !pane.classList) return;
+    let rail = false, newCtx = false, ctxEl = null;
+    for (const ch of pane.children) {
+      if (ch.classList.contains('status-rail')) rail = true;
+      else if (ch.classList.contains('conv-input-context')) {
+        ctxEl = ch;
+        if (ch.classList.contains('is-new-session')) newCtx = true;
+      }
+    }
+    if (pane.classList.contains('has-status-rail') !== rail) pane.classList.toggle('has-status-rail', rail);
+    if (pane.classList.contains('has-new-session-context') !== newCtx) pane.classList.toggle('has-new-session-context', newCtx);
+    if (typeof MutationObserver !== 'function') return;
+    // Backstops for code paths that move the rail / toggle is-new-session
+    // without calling us: direct-children only, so they stay cheap.
+    if (!pane._hasFlagObserver) {
+      pane._hasFlagObserver = new MutationObserver(() => syncPaneHasFlags(pane));
+      pane._hasFlagObserver.observe(pane, { childList: true });
+    }
+    if (ctxEl && !ctxEl._hasFlagObserver) {
+      ctxEl._hasFlagObserver = new MutationObserver(() => syncPaneHasFlags(pane));
+      ctxEl._hasFlagObserver.observe(ctxEl, { attributes: true, attributeFilter: ['class'] });
+    }
+  }
+  function syncAllPaneHasFlags() {
+    document.querySelectorAll('.conv-pane').forEach(syncPaneHasFlags);
+  }
+  const _TEXT_FOCUS_SEL = 'textarea, input[type="text"], input[type="search"], input[type="email"], input[type="url"], input[type="tel"], input[type="password"], input:not([type])';
+  function syncBodyTextFocusFlag() {
+    const el = document.activeElement;
+    const on = !!(el && el !== document.body && typeof el.matches === 'function' && el.matches(_TEXT_FOCUS_SEL));
+    if (document.body.classList.contains('has-text-focus') !== on) document.body.classList.toggle('has-text-focus', on);
+  }
+  function syncBodyGcReaderFlag() {
+    const view = document.getElementById('conversationsView');
+    const gc = document.getElementById('gcReader');
+    const on = !!(view && gc && gc.parentElement === view);
+    if (document.body.classList.contains('has-gc-reader') !== on) document.body.classList.toggle('has-gc-reader', on);
+  }
+  (function _initHasFlagSync() {
+    const init = () => {
+      syncAllPaneHasFlags();
+      syncBodyTextFocusFlag();
+      syncBodyGcReaderFlag();
+      const view = document.getElementById('conversationsView');
+      if (view && typeof MutationObserver === 'function' && !view._gcFlagObserver) {
+        view._gcFlagObserver = new MutationObserver(syncBodyGcReaderFlag);
+        view._gcFlagObserver.observe(view, { childList: true });
+      }
+    };
+    document.addEventListener('focusin', syncBodyTextFocusFlag, true);
+    document.addEventListener('focusout', () => setTimeout(syncBodyTextFocusFlag, 0), true);
+    if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', init);
+    else init();
+  })();
+
   function mountStatusRailForPaneId(paneId) {
     const pane = document.querySelector(`.conv-pane[data-pane-id="${paneId || 'p1'}"]`);
     if (!pane) return;
@@ -38325,6 +39296,7 @@
     const restore = document.getElementById('statusRailRestoreBtn');
     if (rail && rail.parentElement !== pane) pane.appendChild(rail);
     if (restore && restore.parentElement !== pane) pane.appendChild(restore);
+    syncAllPaneHasFlags();
   }
 
   function mountStatusRailForActivePane() {
@@ -38334,6 +39306,7 @@
   function removeSplitPaneSingletonChrome(paneEl) {
     if (!paneEl) return;
     paneEl.querySelectorAll('.status-rail, .status-rail-restore').forEach(el => el.remove());
+    syncPaneHasFlags(paneEl);
   }
 
   // Build a fresh `.conv-pane` element for paneId, cloning the chrome of
@@ -38453,6 +39426,7 @@
         const pane = paneByPaneId(paneId);
         rememberInputDraft(input, pane && pane.conversationId);
         refreshSlashCommandMenu(input);
+        _autosizeTextareaLike(input, input.closest('.conv-input-bar'));
       });
       input.addEventListener('focus', () => refreshSlashCommandMenu(input));
       input.addEventListener('click', () => refreshSlashCommandMenu(input));
@@ -39229,6 +40203,16 @@
     paneId = paneId || activePaneId();
     const pane = paneByPaneId(paneId);
     if (!pane) return;
+    // Kick the tail fetch before the synchronous chrome work below (35-60ms
+    // of DOM writes and forced reads): fetchConversationEvents consumes it
+    // via _takePrefetchedConversationTail, so the server round-trip overlaps
+    // the prep instead of starting after it. Hermes sessions skip the
+    // prefetch path in fetchConversationEvents, so don't warm those.
+    if (id && pane.conversationId !== id && typeof _prefetchConversationTail === 'function') {
+      try {
+        if ((sessionSourceByConv[id] || '') !== 'hermes') _prefetchConversationTail(id);
+      } catch (_) {}
+    }
     const staleQueuedTray = getConvInputBarForPane(paneId)?.querySelector('.queued-steer-tray');
     if (staleQueuedTray && staleQueuedTray.dataset.conversationId !== String(id || '')) {
       staleQueuedTray.remove();
@@ -39238,6 +40222,10 @@
     try { _closeWtLogPanel(); } catch (_) {}
     const previousConvId = pane.conversationId;
     if (previousConvId && previousConvId !== id) {
+      // The /compact lifecycle card is scoped to one conversation's view.
+      // Leaving mid-run drops it; the compaction itself keeps running
+      // server-side and the durable summary still lands in the transcript.
+      if (_compactRun && !_compactRunActive()) discardCompactRun();
       syncPendingSendsMapForConv(pane, previousConvId);
       // CCC-131: stash the outgoing transcript's scroll before the view is
       // wiped, so returning to this conversation restores where we left off.
@@ -39371,7 +40359,9 @@
     updatePaneHeader(paneId, selectedRow || Object.assign({ id, source }, selectedConv || {}));
     // Federation handoff ownership — one-shot fetch (no polling); paints a
     // "Moved to <node>" chip in the breadcrumb if owned elsewhere now.
-    try { if (id && id !== '__new__' && typeof window._cccFetchHandoffStatus === 'function') window._cccFetchHandoffStatus(id); } catch (_) {}
+    if (id && id !== '__new__' && typeof window._cccFetchHandoffStatus === 'function') {
+      _afterConvTail(() => { try { window._cccFetchHandoffStatus(id); } catch (_) {} });
+    }
     if (selectedRow && selectedRow.source === 'backlog' && selectedRow.issue_number) {
       await renderIssueInConvPane(selectedRow.issue_number, rowRepoPath(selectedRow), selectedRow.id);
       return;
@@ -41770,9 +42760,9 @@
       + ' data-log-queue="' + escapeAttr(key) + '"'
       + ' title="View this queue\'s activity log">Log</button>';
     const watchHtml = controls.configBtn
-      + '<span class="fq-status-proj">' + escapeHtml(key) + '</span>'
-      + (row ? ('<span class="fq-status-sep">·</span>'
-          + '<span class="fq-status-depth" title="' + escapeAttr(depth + ' open') + '">' + depth + '</span>'
+      // CCC-976: the queue name is already shown in the picker above this
+      // strip — dropped the redundant fq-status-proj label from this row.
+      + (row ? ('<span class="fq-status-depth" title="' + escapeAttr(depth + ' open') + '">' + depth + '</span>'
           + '<span class="fq-status-sep">·</span>'
           + '<span class="fq-status-age" title="' + escapeAttr('oldest ' + age) + '">' + escapeHtml(age) + '</span>') : '')
       + (workers.length ? '<span class="fq-status-live">LIVE</span>' : '')
@@ -44712,7 +45702,7 @@
     if (id.startsWith('pkood-') || id.startsWith('issue-')) return null;
     const existing = _convTailPrefetches.get(id);
     if (existing) return existing;
-    const pending = fetch('/api/conversations/' + encodeURIComponent(id) + '?tail=' + convTailLines(), {
+    const pending = fetch('/api/conversations/' + encodeURIComponent(id) + '?tail=' + convFirstOpenLines(), {
       cache: 'no-store',
     }).then(r => r.ok ? r.json() : null).catch(() => null);
     _convTailPrefetches.set(id, pending);
@@ -44762,6 +45752,10 @@
   // window at a time. Live `after=` polling is unaffected (tail returns the real
   // last_line, so streamed events keep appending from there).
   const CONV_TAIL_LINES = 400;
+  // First window of a fresh open. Deliberately small so the tail paints
+  // fast (~40 events instead of ~120); the rest of CONV_TAIL_LINES is
+  // backfilled above it one frame after paint (_scheduleConvOpenBackfill).
+  const CONV_TAIL_FIRST_LINES = 120;
   // Phones parse and paint the same transcript on a CPU roughly 4-6x slower
   // than a laptop's. Measured at 4x CPU throttle on a 390px viewport, opening a
   // conversation spent ~2.5s inside renderConversationEvents with the main
@@ -44770,6 +45764,9 @@
   // already pages older history in on demand, so a narrower first window is
   // lossless: it costs one tap for anyone who wants to read further back.
   const CONV_TAIL_LINES_MOBILE = 120;
+  function convFirstOpenLines() {
+    return Math.min(CONV_TAIL_FIRST_LINES, convTailLines());
+  }
   function convTailLines() {
     return (typeof isMobile === 'function' && isMobile())
       ? CONV_TAIL_LINES_MOBILE : CONV_TAIL_LINES;
@@ -45011,6 +46008,28 @@
     $view.insertBefore(banner, $view.firstChild);
   }
 
+  // Second stage of a fresh open: prepend the rest of the usual tail window
+  // above the small first window. Runs one frame after the first paint, so
+  // the reader sees the tail immediately; _prependConversationEvents keeps
+  // the scroll position where it was. Skipped if the pane moved on, or a
+  // Load-earlier is already queued (its render dedups by JSONL line anyway).
+  function _scheduleConvOpenBackfill(id, paneId, lines) {
+    if (!(lines > 0)) return;
+    requestAnimationFrame(() => setTimeout(() => {
+      const pane = paneByPaneId(paneId);
+      if (!pane || pane.conversationId !== id) return;
+      if (pane.loadBeforeLine || pane.loadAncestorHop || pane.wantFull) return;
+      const beforeLine = Number(pane.firstLine || 0);
+      if (!(beforeLine > 1)) return;
+      pane.loadBeforeLine = beforeLine;
+      pane.loadBeforeTail = lines;
+      try {
+        const r = fetchConversationEvents(paneId);
+        if (r && typeof r.catch === 'function') r.catch(() => {});
+      } catch (_) {}
+    }, 0));
+  }
+
   function _prependConversationEvents(events, paneId) {
     const $view = getConvViewForPane(paneId) || $conversationsView;
     if (!$view) return false;
@@ -45249,9 +46268,11 @@
       const _pane0 = paneByPaneId(fetchPaneId);
       const _wantFull = !!(_pane0 && _pane0.wantFull);
       const _loadBefore = _pane0 ? Number(_pane0.loadBeforeLine || 0) : 0;
+      const _loadBeforeTail = _pane0 ? Number(_pane0.loadBeforeTail || 0) : 0;
       const _hop = !!(_pane0 && _pane0.loadAncestorHop);
       if (_pane0) _pane0.wantFull = false;   // one-shot: consumed on this fetch
       if (_pane0) _pane0.loadBeforeLine = 0; // one-shot: consumed on this fetch
+      if (_pane0) _pane0.loadBeforeTail = 0; // one-shot: consumed on this fetch
       if (_pane0) _pane0.loadAncestorHop = 0; // one-shot: consumed on this fetch
       const _freshOpen = convLastLine === 0;
       if (_freshOpen && _pane0) _pane0.contSegments = null; // re-init chain on reopen
@@ -45264,9 +46285,9 @@
       const _url = _hopSid
         ? '/api/conversations/' + encodeURIComponent(_fetchSid) + '?tail=' + convTailLines()
         : _loadBefore
-        ? '/api/conversations/' + encodeURIComponent(_fetchSid) + '?before=' + encodeURIComponent(_loadBefore) + '&tail=' + convTailLines()
+        ? '/api/conversations/' + encodeURIComponent(_fetchSid) + '?before=' + encodeURIComponent(_loadBefore) + '&tail=' + (_loadBeforeTail || convTailLines())
         : (_freshOpen && !_wantFull)
-        ? '/api/conversations/' + id + '?tail=' + convTailLines()
+        ? '/api/conversations/' + id + '?tail=' + convFirstOpenLines()
         : '/api/conversations/' + id + '?after=' + convLastLine;
       let data = null;
       if (_freshOpen && !_wantFull && !_loadingEarlier) {
@@ -45280,6 +46301,9 @@
         const res = await fetch(_url);
         data = await res.json();
       }
+      // Tail is in hand: release the parked select-time fetches once this
+      // render has painted (see _afterConvTail).
+      if (typeof _flushAfterConvTailAfterPaint === 'function') _flushAfterConvTailAfterPaint();
       // Guard: if the pane's conv id shifted (e.g. user navigated away
       // while the fetch was in-flight), discard the stale response.
       const currentPane = paneByPaneId(fetchPaneId);
@@ -45290,7 +46314,7 @@
       // is-webui-session wrong at select time — correct it here, before the
       // first render picks a renderer.
       if (data && typeof data.engine === 'string' && data.engine) {
-        const _enginePaneEl = document.querySelector('.conv-pane[data-pane-id="' + fetchPaneId + '"]');
+        const _enginePaneEl = convPaneElById(fetchPaneId);
         if (_enginePaneEl) {
           _enginePaneEl.classList.toggle('is-webui-session', data.engine === 'kimi' || data.engine === 'codex');
         }
@@ -45368,6 +46392,12 @@
           _insertLoadEarlierBanner($view, id, fetchPaneId);
         } else if (_loadingEarlier && data && (data.truncated_before || _contMore)) {
           _insertLoadEarlierBanner($view, id, fetchPaneId);
+        }
+        // Two-stage open: the first window was CONV_TAIL_FIRST_LINES; fill
+        // the rest of the usual window in above it once this paint is out.
+        if (_freshOpen && !_wantFull && data && data.truncated_before
+            && convFirstOpenLines() < convTailLines()) {
+          _scheduleConvOpenBackfill(id, fetchPaneId, convTailLines() - convFirstOpenLines());
         }
         restorePendingSendEchoes(id, fetchPaneId);
         // Codex writes its rollout lazily: measured, the user's own message
@@ -46448,8 +47478,8 @@
     }
   }
 
-  async function fetchSessionUsage(sid, paneId) {
-    if (sid && _isComposerFocused()) {
+  async function fetchSessionUsage(sid, paneId, force) {
+    if (sid && !force && _isComposerFocused()) {
       _deferredUsageSid = sid;
       _deferredUsagePaneId = paneId || '';
       return;
@@ -46458,7 +47488,7 @@
     const currentSid = _usageSessionIdByPane[pid] || null;
     const inFlight = _usageRequestByPane[pid] || null;
     const lastFetch = _usageLastFetchByPane[pid] || null;
-    const recentlyFetchedSid = lastFetch && (Date.now() - lastFetch.at < SESSION_USAGE_REFRESH_MIN_MS)
+    const recentlyFetchedSid = (!force && lastFetch && (Date.now() - lastFetch.at < SESSION_USAGE_REFRESH_MIN_MS))
       ? lastFetch.sid : '';
     const paneVisible = sid ? _sessionUsagePaneIsVisible(pid, sid) : false;
     const decision = sessionUsageRefreshDecision(
@@ -46499,6 +47529,18 @@
         if (_usageRequestGenerationByPane[pid] !== generation) return;
         if (_usageSessionIdByPane[pid] !== sid) return;
         if (!_sessionUsagePaneIsVisible(pid, sid)) return;
+        _autoHandoverConfirmedState[pid] = data && data.auto_handover_enabled
+          ? (AUTO_HANDOVER_MODE_CYCLE.includes(data.auto_handover_mode) ? data.auto_handover_mode : 'mdfile')
+          : 'off';
+        if (_autoHandoverCycleTimers[pid]) {
+          // A click-cycle debounce is still pending for this pane -- keep its
+          // optimistic pill fields instead of overwriting them with this
+          // pre-commit poll snapshot, which would flash the wrong label.
+          const prev = _usageDataByPane[pid] || {};
+          data.auto_handover_enabled = prev.auto_handover_enabled;
+          data.auto_handover_mode = prev.auto_handover_mode;
+          data._auto_handover_pending = prev._auto_handover_pending;
+        }
         _usageDataByPane[pid] = data;
         renderSessionUsageIntoStrip(pid);
         _renderRailTokens(pid);
@@ -46637,6 +47679,44 @@
   }
   // RAIL_SESSION_COST_PRESENTATION_END
 
+  // Per-turn column graph under the rail headline: one bar per billed
+  // assistant message, newest on the right, last RAIL_TURN_GRAPH_MAX turns.
+  // Bar height = cache-adjusted tokens via the same _cacheAdjustedTurnTokens
+  // the per-turn chip uses, so a bar equals the "Cached-adjusted tokens this
+  // turn" number on that turn. Scaled to the visible max; caption names it so
+  // the y-axis is readable without an axis.
+  const RAIL_TURN_GRAPH_MAX = 30;
+  function _railTurnGraphHtml(series) {
+    if (!Array.isArray(series) || !series.length) return '';
+    const rows = series.slice(-RAIL_TURN_GRAPH_MAX).map(t => ({
+      ts: t.ts || '',
+      v: _cacheAdjustedTurnTokens(t.tokens_in, t.tokens_out, t.tokens_cached),
+      tin: Number(t.tokens_in) || 0,
+      tcached: Number(t.tokens_cached) || 0,
+      tout: Number(t.tokens_out) || 0,
+    })).filter(r => r.v > 0);
+    if (rows.length < 2) return '';
+    const max = Math.max.apply(null, rows.map(r => r.v));
+    if (!max) return '';
+    let bars = '';
+    rows.forEach((r, i) => {
+      const pct = Math.max(4, Math.round((r.v / max) * 100));
+      let when = '';
+      if (r.ts) {
+        const d = new Date(r.ts);
+        if (!isNaN(d)) when = ' · ' + d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+      }
+      const title = r.v.toLocaleString() + ' cache-adjusted tokens' + when
+        + '\n' + _cacheAdjustedTurnTitle(r.tin, r.tout, r.tcached);
+      bars += '<span class="rail-turn-bar' + (i === rows.length - 1 ? ' is-latest' : '')
+        + '" style="height:' + pct + '%" title="' + escapeAttr(title) + '"></span>';
+    });
+    return '<div class="rail-turn-graph" role="img" aria-label="Cache-adjusted tokens per turn, last '
+      + rows.length + ' turns">' + bars + '</div>'
+      + '<div class="rail-turn-graph-caption">last ' + rows.length + ' turns &middot; max '
+      + _formatTokens(max) + '</div>';
+  }
+
   // Big accumulated-token headline in the status rail head. When the server
   // provides a cache-adjusted total, the headline shows that number instead of
   // raw window size; the raw in / cached / out breakdown still appears below.
@@ -46680,6 +47760,7 @@
       + '<div class="rail-tokens-label">' + headlineLabel
       + (presentation ? ' &middot; ' + costText.label : '')
       + '</div>'
+      + _railTurnGraphHtml(u && u.turn_series)
       + '<div class="rail-tokens-cache">in ' + _formatTokens(inFresh)
       + ' &middot; in cached ' + _formatTokens(inCached)
       + ' &middot; out ' + _formatTokens(outTok)
@@ -47121,7 +48202,7 @@
     const cost = Number(u.cost_usd) || 0;
     const breakdown = u.cost_breakdown_usd || {};
     let costPill = '';
-    if (cost > 0) {
+    if (cost > 0 && ff('bottom_bar_cost')) {
       const fmt = (n) => n >= 1 ? '$' + n.toFixed(2) : '$' + n.toFixed(4);
       const costTip = 'API list-price equivalent for ' + (u.model || 'unknown model') + '\n'
         + '  Input:        ' + fmt(breakdown.input || 0) + '  (' + (u.total_input_tokens || 0).toLocaleString() + ' tok)\n'
@@ -47159,28 +48240,44 @@
     // Auto handover toggle — status-bar pill, not an input-bar icon (user
     // request): needs to clearly read on/off at a glance, so it's a labeled
     // pill with explicit ON/OFF text rather than an icon whose state only
-    // shows via a subtle color change. Claude sessions only, matching the
-    // server-side watchdog's own claude-only scope. Gated behind the
-    // "auto_handover_pill" preview flag (default off, Settings > Experimental)
-    // — the watchdog feature itself was cluttering every session's status bar
-    // even for users who never touch it (CCC-817).
+    // shows via a subtle color change. Scoped to engines whose harness home
+    // directory actually receives the token-sitter skill via
+    // watchtower/skills_sync.py ENGINE_HOMES (CCC-939 — this used to be
+    // claude-only, matching a server-side watchdog that has since been
+    // replaced by the skill-based injected toggle, which works on any synced
+    // engine). Gated behind the "auto_handover_pill" preview flag (default
+    // off, Settings > Experimental) — the watchdog feature itself was
+    // cluttering every session's status bar even for users who never touch
+    // it (CCC-817).
+    const TOKEN_SITTER_SYNCED_ENGINES = ['claude', 'codex', 'kimi', 'grok', 'devin', 'gemini', 'antigravity'];
     let handoverPill = '';
-    if (engine === 'claude' && ff('auto_handover_pill')) {
+    if (TOKEN_SITTER_SYNCED_ENGINES.includes(engine) && ff('auto_handover_pill')) {
       const handoverOn = !!u.auto_handover_enabled;
-      const handoverTip = handoverOn
-      ? 'token-sitter is ON. When this session goes idle 55 min, CCC asks it to file a WatchTower checkpoint. Click to turn off.'
-      : 'token-sitter is OFF. Click to turn on. When this session goes idle 55 min, CCC will ask it to file a WatchTower checkpoint.';
-      handoverPill = ' <button type="button" class="wp-handover-toggle' + (handoverOn ? ' is-on' : ' is-off') + '"'
-        + ' data-auto-handover-toggle aria-pressed="' + (handoverOn ? 'true' : 'false') + '"'
+      const handoverMode = handoverOn && AUTO_HANDOVER_MODE_CYCLE.includes(u.auto_handover_mode)
+        ? u.auto_handover_mode : (handoverOn ? 'mdfile' : 'off');
+      const handoverLabel = AUTO_HANDOVER_MODE_LABELS[handoverMode];
+      const handoverTip = 'token-sitter: ' + handoverLabel + '. Click to cycle '
+        + '(compact -> md -> both -> off). When this session goes idle 55 min: '
+        + '"compact" runs /compact in place, "md" writes a durable WatchTower '
+        + 'snapshot, "both" does compact then also writes the snapshot.';
+      handoverPill = ' <button type="button" class="wp-handover-toggle'
+        + (handoverOn ? ' is-on' : ' is-off')
+        + (u._auto_handover_pending ? ' is-pending' : '') + '"'
+        + ' data-auto-handover-toggle data-mode="' + escapeHtml(handoverMode) + '"'
+        + ' aria-pressed="' + (handoverOn ? 'true' : 'false') + '"'
         + ' title="' + escapeHtml(handoverTip) + '">'
-        + '<span class="wp-handover-dot"></span>token-sitter: ' + (handoverOn ? 'ON' : 'OFF')
+        + '<span class="wp-handover-dot"></span>token-sitter: ' + escapeHtml(handoverLabel)
         + '</button>';
     }
     // Model pill renders LAST in the wp-usage cluster — rightmost slot,
     // matching the Claude Desktop convention users expect.
+    // "calc" is internal jargon (this session's own estimate, as opposed to
+    // an /ctx probe) — meaningful in the tooltip/sidebar title, not worth a
+    // word in the compact pill itself (CCC-969).
+    const sourceLabelPill = sourceLabel === 'calc' ? '' : sourceLabel + ' ';
     uSlot.innerHTML = qualityPill + '<span class="' + cls + '" title="' + escapeHtml(title) + '">'
       + _contextRingSvg(calcPct)
-      + sourceLabel + ' ' + _formatTokens(displayTokens) + ' / ' + _formatTokens(limit)
+      + sourceLabelPill + _formatTokens(displayTokens) + ' / ' + _formatTokens(limit)
       + ' <span class="wp-usage-pct">(' + calcPct + '%)</span>'
       + slashContextText
       + '</span>' + peakNote + costPill + antigravityTotalsPill + modelPill + handoverPill;
@@ -47191,7 +48288,7 @@
       handoverBtn.addEventListener('click', (e) => {
         e.preventDefault();
         e.stopPropagation();
-        toggleAutoHandoverForPane(paneId, _usageSessionIdByPane[paneId]);
+        cycleAutoHandoverModeForPane(paneId, _usageSessionIdByPane[paneId]);
       });
     }
     const pill = uSlot.querySelector('.wp-usage-clickable');
@@ -47247,7 +48344,7 @@
         const pm = paneUSlot.querySelector('[data-model-picker]');
         if (pm) pm.addEventListener('click', (e) => { e.preventDefault(); e.stopPropagation(); openModelPicker(pm); });
         const ph = paneUSlot.querySelector('[data-auto-handover-toggle]');
-        if (ph) ph.addEventListener('click', (e) => { e.preventDefault(); e.stopPropagation(); toggleAutoHandoverForPane(pane.id, _usageSessionIdByPane[pane.id]); });
+        if (ph) ph.addEventListener('click', (e) => { e.preventDefault(); e.stopPropagation(); cycleAutoHandoverModeForPane(pane.id, _usageSessionIdByPane[pane.id]); });
       });
     }
     // Keep the per-session advisor nudge in sync with whatever session is open.
@@ -48337,8 +49434,9 @@
     return { display: full, full, className: '' };
   }
 
-  // CCC-454: Verbose transcript mode. When on, tool-call groups, command/edit
-  // disclosures, and thinking bodies render expanded instead of collapsed.
+  // CCC-454: Verbose transcript mode. When on, tool-call groups and
+  // command/edit disclosures render expanded instead of collapsed (thinking
+  // bodies render expanded always, regardless of this toggle — CCC-942).
   // Persisted so it survives reloads; the topbar toggle (left of Annotate)
   // flips it and re-applies to already-rendered conversation DOM.
   function convVerboseOn() {
@@ -48352,7 +49450,8 @@
       g.classList.toggle('collapsed', !on);
     });
     document.querySelectorAll('details.tool-command-disclosure').forEach(d => { d.open = on; });
-    document.querySelectorAll('.thinking-block .t-body').forEach(b => { b.style.display = on ? 'block' : 'none'; });
+    // CCC-942: thinking stays expanded regardless of Verbose — only tool
+    // output/groups are gated by this toggle.
   }
 
   function renderToolCommandDisclosure(block, detail) {
@@ -49181,20 +50280,25 @@
         return msg && _normSend(msg.getAttribute('data-raw-text') || msg.textContent);
       })
       .filter(Boolean));
-    // Self-heal: if the latest durable user message matches a queued tray entry,
-    // the queued copy has already drained. Drop the stale tray card so the real
-    // message stays visible instead of hiding it behind the duplicate CSS class.
+    // Self-heal: if ANY durable user message matches a queued tray entry, the
+    // queued copy has already drained. Drop the stale tray card so the real
+    // message stays visible instead of hiding it behind the duplicate CSS
+    // class. Checking only the newest durable row (as this used to) missed a
+    // queued item that drained and was then followed by more traffic (e.g. a
+    // cross-session `announced_from` message landing mid-conversation) — the
+    // tray card was left orphaned forever since the last row no longer
+    // matched it (CCC-981).
     const durableUserRows = Array.from($view.querySelectorAll(
       '.event.user_text:not(.pending):not(.send-queued):not(.send-delivered):not(.not-acknowledged)'));
-    const lastDurableUserRow = durableUserRows[durableUserRows.length - 1] || null;
-    const lastDurableUserMsg = lastDurableUserRow && lastDurableUserRow.querySelector('.user-msg');
-    const lastDurableText = lastDurableUserMsg
-      && _normSend(lastDurableUserMsg.getAttribute('data-raw-text') || lastDurableUserMsg.textContent);
-    if (lastDurableText && queuedTexts.has(lastDurableText)) {
+    const durableUserTexts = new Set(durableUserRows.map(row => {
+      const msg = row.querySelector('.user-msg');
+      return msg && _normSend(msg.getAttribute('data-raw-text') || msg.textContent);
+    }).filter(Boolean));
+    if (durableUserTexts.size) {
       tray.querySelectorAll('.event.user_text').forEach(el => {
         const msg = el.querySelector('.user-msg');
         const text = msg && _normSend(msg.getAttribute('data-raw-text') || msg.textContent);
-        if (text !== lastDurableText) return;
+        if (!text || !durableUserTexts.has(text)) return;
         if (el._pendingRef) removePendingSendEcho(el._pendingRef);
         else if (el.parentNode) el.parentNode.removeChild(el);
       });
@@ -51029,6 +52133,60 @@
       + rows.join('') + '</div>';
   }
 
+  // Checklist rendering for todo/plan tool calls (CCC-940) — the raw JSON
+  // args ({"todos":[{"status":"done","title":"..."}]}) is noise once you
+  // already have the glyph + name; show the list itself instead. Returns ''
+  // if the input doesn't parse into a todo-shaped array so the caller falls
+  // back to the raw JSON body.
+  function _kimiTodoChecklistHtml(input) {
+    let d = input;
+    if (typeof d === 'string') {
+      const s = d.trim();
+      if (!s.startsWith('{') && !s.startsWith('[')) return '';
+      try { d = JSON.parse(s); } catch (_) { return ''; }
+    }
+    const items = Array.isArray(d) ? d
+      : (d && typeof d === 'object') ? (d.todos || d.items || d.plan) : null;
+    if (!Array.isArray(items) || !items.length) return '';
+    const rows = items.map(function (it) {
+      if (typeof it === 'string') it = { title: it };
+      if (!it || typeof it !== 'object') return '';
+      const title = String(it.title || it.content || it.text || it.step || '').trim();
+      if (!title) return '';
+      const status = String(it.status || '').toLowerCase();
+      const cls = status === 'done' || status === 'completed' ? 'done'
+        : status === 'in_progress' || status === 'active' ? 'active' : '';
+      const mark = cls === 'done' ? _KIMI_GLYPHS['check'] : '';
+      return '<div class="kimi-todo-row' + (cls ? ' ' + cls : '') + '">'
+        + '<span class="kimi-todo-mark">' + mark + '</span>'
+        + '<span class="kimi-todo-title">' + escapeHtml(title) + '</span>'
+        + '</div>';
+    }).filter(Boolean);
+    if (!rows.length) return '';
+    return '<div class="kimi-todo-list">' + rows.join('') + '</div>';
+  }
+
+  // Terminal-style output peek shown under a collapsed tool row: the first
+  // few output lines plus a "(N more lines)" hint, so a Bash row reads like
+  // the Kimi TUI ("Ran a command / $ cmd / first lines / (N more lines)")
+  // without having to expand every row. Hidden by CSS once the row is open
+  // (the body then shows the full preview).
+  const _KIMI_TOOL_PEEK_LINES = 3;
+  const _KIMI_TOOL_PEEK_COLS = 160;
+  function _kimiToolPeekHtml(outputText) {
+    const text = String(outputText || '').replace(/\s+$/, '');
+    if (!text) return '';
+    const lines = text.split('\n');
+    const shown = lines.slice(0, _KIMI_TOOL_PEEK_LINES).map(function (l) {
+      l = l.replace(/\s+$/, '');
+      return l.length > _KIMI_TOOL_PEEK_COLS ? l.slice(0, _KIMI_TOOL_PEEK_COLS - 1) + '…' : l;
+    });
+    const more = lines.length - shown.length;
+    return '<div class="kimi-tool-peek">' + escapeHtml(shown.join('\n'))
+      + (more > 0 ? '<span class="kimi-tool-peek-more">(' + more + ' more line' + (more === 1 ? '' : 's') + ')</span>' : '')
+      + '</div>';
+  }
+
   // One kimi-web ToolRow: glyph + display name + muted arg summary + status
   // indicator, with an expandable sunken body (diff → input/command → output
   // preview). ACP permission buttons render inside the body and force it open.
@@ -51068,7 +52226,13 @@
     // beats the one-line activity label `detail` as the expandable body.
     if (typeof b.command === 'string' && b.command.trim()) inputText = b.command.trim();
     const outputText = String(b.output_preview || '').trim();
-    if (inputText && !diffHtml) bodyParts.push('<pre class="kimi-tool-io">' + escapeHtml(inputText) + '</pre>');
+    // Todo/plan tool calls: a checklist reads far better than the raw JSON
+    // args dump (CCC-940). Falls through to the raw <pre> if it can't parse.
+    const todoHtml = (_kimiNormToolName(b.name) === 'todo')
+      ? _kimiTodoChecklistHtml(b.input != null ? b.input : b.detail)
+      : '';
+    if (todoHtml) bodyParts.push(todoHtml);
+    else if (inputText && !diffHtml) bodyParts.push('<pre class="kimi-tool-io">' + escapeHtml(inputText) + '</pre>');
     if (outputText) bodyParts.push('<pre class="kimi-tool-io is-output">' + escapeHtml(outputText) + '</pre>');
     if (acpPermOpts) bodyParts.push(acpPermOpts);
     const expandable = bodyParts.length > 0;
@@ -51088,6 +52252,7 @@
       + '<span class="kimi-tool-rt">' + statusHtml + '</span>'
       + (expandable ? '<span class="kimi-tool-car">' + _KIMI_GLYPHS['chevron-right'] + '</span>' : '')
       + '</div>'
+      + (todoHtml ? '' : _kimiToolPeekHtml(outputText))
       + (expandable ? '<div class="kimi-tool-body"><div class="kimi-tool-body-pad">' + bodyParts.join('') + '</div></div>' : '')
       + '</div>';
   }
@@ -51449,6 +52614,11 @@
     // newly-streamed events don't yank them back down. 80px tolerance is
     // generous enough to absorb typical line-height jitter.
     const wasAtBottom = isConversationAtBottom($view);
+    // CCC-500 overflow toggles are decided in ONE read pass after the loop
+    // (see _overflowChecks flush below). Reading scrollHeight per tool
+    // result inside the loop forced a style recalc + layout per result:
+    // ~30 recalcs, ~700ms, on a 60-event open.
+    const _overflowChecks = [];
     // Visual "Clear" watermark (CCC-474): events at or below this jsonl line
     // were wiped from the screen for recording — keep them hidden if a poll
     // or load-earlier re-renders them. Purely cosmetic; see
@@ -51908,10 +53078,22 @@
             compactText += ': ' + _formatTokens(preTokens) + ' -> ' + _formatTokens(postTokens);
           }
           compactText += ' (' + triggerLabel + (duration ? ', ' + duration : '') + ')';
+          // Codex emits this row too now, so the copy names whichever engine
+          // actually wrote it instead of always saying Claude.
+          const compactEngine = _compactEngineLabel(
+            ev.engine || (currentSession && currentSession.source) || 'claude');
           const compactTip = trigger === 'auto'
-            ? 'The conversation neared its context-window limit, so Claude automatically summarized the older history into a short recap and continued from there. Nothing is lost from the transcript on disk - only the model’s working memory was condensed.'
+            ? 'The conversation neared its context-window limit, so ' + compactEngine
+              + ' automatically summarized the older history into a short recap and continued from there. Nothing is lost from the transcript on disk - only the model’s working memory was condensed.'
             : 'The conversation history was summarized into a short recap to free up context-window space (/compact). The full transcript on disk is untouched - only the model’s working memory was condensed.';
-          div.classList.add('system-compact');
+          div.classList.add('system-compact', 'compact-boundary-row');
+          // The engine's OWN measurements. The lifecycle card prefers these
+          // over its client-side before/after estimate, and the fold pass
+          // below rebuilds a record card from them on a reopened session.
+          div.dataset.compactPre = String(preTokens || 0);
+          div.dataset.compactPost = String(postTokens || 0);
+          div.dataset.compactDuration = String(compact.duration_ms || 0);
+          div.dataset.compactTrigger = trigger;
           div.innerHTML = '<span class="label">System</span>'
             + '<span class="line-num">L' + ev.line + '</span>'
             + tsSpan(ev.ts)
@@ -52114,8 +53296,16 @@
         const compactCardHtml = renderCompactResumeCard(cleanedText);
         if (compactCardHtml) {
           div.classList.add('compact-resume-event');
-          if (typeof clearCompactInProgressBanner === 'function') {
-            clearCompactInProgressBanner($view);
+          // The boundary just landed: this IS the compaction's result. Absorb
+          // the summary into the lifecycle card (one element, no sibling to
+          // order wrongly) and land the card on its before/after numbers.
+          if (typeof completeCompactRun === 'function' && _compactRun
+              && _compactRun.sid === (currentSession && currentSession.id)
+              && _compactRun.stage !== 'failed') {
+            _compactRun.summaryHtml = compactCardHtml;
+            div.classList.add('compact-absorbed-by-run');
+            completeCompactRun(_compactRun.sid);
+            _compactRunAnchorTo(div);
           }
         }
         const userSteerHtml = userMessageSteerHtml(cleanedText, notification, compactCardHtml);
@@ -52441,9 +53631,11 @@
               // summary — the "lots of wasted space" a whole run of these
               // produces back-to-back.
             } else {
-              // Text present: visible block with an expandable body (collapsed
-              // unless Verbose transcript mode is on — CCC-454).
-              blockParts.push('<div class="thinking-block"><span class="thinking-toggle" onclick="this.parentElement.querySelector(\'.t-body\').style.display=this.parentElement.querySelector(\'.t-body\').style.display===\'none\'?\'block\':\'none\'">💭 Thinking</span><div class="t-body" style="display:' + (convVerboseOn() ? 'block' : 'none') + '">' + escapeHtml(b.text) + '</div></div>');
+              // Text present: visible block with an expandable body. Shown
+              // expanded by default regardless of Verbose transcript mode
+              // (CCC-942) — Verbose still gates tool output, but thinking is
+              // useful even outside that mode and shouldn't require a click.
+              blockParts.push('<div class="thinking-block"><span class="thinking-toggle" onclick="this.parentElement.querySelector(\'.t-body\').style.display=this.parentElement.querySelector(\'.t-body\').style.display===\'none\'?\'block\':\'none\'">💭 Thinking</span><div class="t-body" style="display:block">' + escapeHtml(b.text) + '</div></div>');
               hasNonTool = true;
             }
           }
@@ -52622,6 +53814,13 @@
               out.className = 'kimi-tool-io is-output';
               out.textContent = text || 'No error details returned.';
               pad.appendChild(out);
+              // Late-landing output (codex call_id results, wire-tail
+              // tool_result folds) gets the same collapsed-row peek a
+              // server-rendered output_preview would have had.
+              if (!row.querySelector(':scope > .kimi-tool-peek')) {
+                const peekHtml = _kimiToolPeekHtml(text);
+                if (peekHtml) body.insertAdjacentHTML('beforebegin', peekHtml);
+              }
               if (_isErr) {
                 row.classList.add('err');
                 const st = row.querySelector('.kimi-tool-status');
@@ -52689,15 +53888,9 @@
             last.appendChild(out);
             // CCC-500: plain-text results are capped at max-height:200px with
             // only a scrollbar as a hint they're clipped — add an explicit
-            // toggle when the content actually overflows that box.
-            if (!codePreview && out.scrollHeight > out.clientHeight + 1) {
-              const expandBtn = document.createElement('button');
-              expandBtn.type = 'button';
-              expandBtn.className = 'tool-result-expand-toggle';
-              expandBtn.setAttribute('data-toggle-tool-result', '');
-              expandBtn.textContent = 'Show full result';
-              last.appendChild(expandBtn);
-            }
+            // toggle when the content actually overflows that box. Deferred
+            // to the batched read pass after the loop (no layout read here).
+            if (!codePreview) _overflowChecks.push(out);
             // CCC-501: refresh the group header even on failure/non-command
             // results so the collapsed row's result snippet reflects what
             // actually came back, not just successful shell commands.
@@ -52779,6 +53972,19 @@
         if (ev.type === 'assistant' && !handedOffStreamingBubble) _convLiveRevealNewText(div, paneId, opts);
       }
     }
+    // Batched CCC-500 overflow check: one layout read for all results
+    // appended above, then the writes. Reads-then-writes = one recalc.
+    if (_overflowChecks.length) {
+      const _overflowing = _overflowChecks.filter(o => o.isConnected && o.scrollHeight > o.clientHeight + 1);
+      for (const o of _overflowing) {
+        const expandBtn = document.createElement('button');
+        expandBtn.type = 'button';
+        expandBtn.className = 'tool-result-expand-toggle';
+        expandBtn.setAttribute('data-toggle-tool-result', '');
+        expandBtn.textContent = 'Show full result';
+        o.insertAdjacentElement('afterend', expandBtn);
+      }
+    }
     // Defensive sweep: a tool group whose body has no events renders as a
     // "Ran 1 command" header over an empty box (CCC-80 — seen after live-
     // stream races). It carries no information; drop it.
@@ -52813,7 +54019,22 @@
       if (currentSession.id) clearSessionSending(currentSession.id);
       const sid = compactBoundary.session || (currentSession && currentSession.id) || '';
       if (sid && currentSession && currentSession.id === sid) fetchSessionUsage(sid);
+      // Authoritative "it happened" signal — it can land before the resume
+      // summary does, so the card lands on its result here too.
+      if (typeof completeCompactRun === 'function') completeCompactRun(sid);
     }
+    // Keep the lifecycle card in the DOM across re-renders, anchored to the
+    // summary it absorbed when there is one (chronological slot) and to the
+    // tail while the run is still in flight.
+    if (_compactRun && currentSession && _compactRun.sid === currentSession.id) {
+      try { _compactRunClaimSummary($view); } catch (_) {}
+      const _absorbed = $view.querySelector('.compact-resume-event.compact-absorbed-by-run');
+      if (_absorbed) _compactRunAnchorTo(_absorbed);
+      else if (!_compactRun.anchored) _compactRunMount($view);
+      _compactRunAdoptBoundary($view);
+    }
+    // Every compaction already on disk gets the same one-card treatment.
+    try { _foldCompactRecords($view); } catch (_) {}
     // Same story for the spawn-log streaming bubble — keep it pinned to
     // the tail so it doesn't end up sandwiched between older JSONL events
     // and newer ones.
@@ -52954,8 +54175,9 @@
     // the OTHER split pane can't toggle it based on the wrong pane's content.
     try {
       if ($convReplayBtn && !_convReplayActive && paneId === activePaneId()) {
+        const debugOn = typeof debugModeEnabled === 'function' && debugModeEnabled();
         const hasMeaningful = !!$view.querySelector('.event.user_text:not(.is-pinned-in-sticky), .event.assistant .assistant-text');
-        $convReplayBtn.style.display = hasMeaningful ? 'inline-flex' : 'none';
+        $convReplayBtn.style.display = (debugOn && hasMeaningful) ? 'inline-flex' : 'none';
       }
       // A replay in progress on THIS pane (or its synced partner pane) may
       // just have received new live-streamed content (SSE/poll) — sweep it
@@ -57706,7 +58928,15 @@
         goal_status: c.goal_status || '',
         parent_session_id: c.parent_session_id || '',
         hermes_parent_session_id: c.hermes_parent_session_id || c.parent_session_id || '',
-        hermes_continued_from: c.hermes_continued_from || c.parent_session_id || '',
+        // CCC-945: do NOT fall back to parent_session_id here. That field is
+        // an orchestration spawn edge (e.g. Codex's thread_spawn_edges) --
+        // "temporary child hanging off a parent that still leads" -- while
+        // hermes_continued_from feeds continuationParentId(), which means
+        // "this session supersedes an old one that should stop leading."
+        // Aliasing the two made every spawned child look like a
+        // continuation of its parent, so the fold/tree logic buried the
+        // parent instead of keeping it as the visible root.
+        hermes_continued_from: c.hermes_continued_from || '',
         hermes_child_session_ids: Array.isArray(c.hermes_child_session_ids) ? c.hermes_child_session_ids : [],
         hermes_lineage_session_ids: Array.isArray(c.hermes_lineage_session_ids) ? c.hermes_lineage_session_ids : [],
         hermes_lineage_count: c.hermes_lineage_count || 0,
@@ -58458,6 +59688,11 @@
         } else if (fallbackOpt) {
           $convInputModelSelect.value = fallbackOpt.id;
         }
+        // The select is width-capped on narrow viewports (app.css ~8403) so
+        // long model names clip; a title tooltip surfaces the full name on
+        // hover instead of leaving it unreadable (CCC-977).
+        const _selOpt = $convInputModelSelect.options[$convInputModelSelect.selectedIndex];
+        $convInputModelSelect.title = _selOpt ? (_selOpt.textContent || '') : '';
       }
     }
     // Show a pre-spawn context-window badge in the [data-usage] slot so the
@@ -58526,6 +59761,8 @@
         return;
       }
       setSpawnDefaultModel(engine, $convInputModelSelect.value);
+      const _selOpt = $convInputModelSelect.options[$convInputModelSelect.selectedIndex];
+      $convInputModelSelect.title = _selOpt ? (_selOpt.textContent || '') : '';
       if (currentConversation === '__new__') scheduleClaudePrewarm();
     });
   }
@@ -59269,6 +60506,13 @@
     // Grow the textarea to fit content (capped by CSS max-height, which kicks
     // in scrolling). Runs on every input; cheap enough.
     function cpInputAutoResize() {
+      // Empty box: let CSS size the single row. Skipping the scrollHeight
+      // read avoids a forced style+layout of the whole dirty document on
+      // every session open (restoreInputDraft fires 'input' mid-select).
+      if (!$cpInput.value) {
+        if ($cpInput.style.height) $cpInput.style.height = '';
+        return;
+      }
       $cpInput.style.height = '0px';
       $cpInput.style.height = Math.min($cpInput.scrollHeight, 160) + 'px';
     }
@@ -63155,17 +64399,6 @@
     ev.stopPropagation();
     startStatusRailTitleRename();
   });
-  // CCC-467: "+ Object" in the RHS opens the same object-assign picker the
-  // per-row "+" chip used to, but for the currently selected session.
-  const $statusRailAddObjectBtn = document.getElementById('statusRailAddObjectBtn');
-  if ($statusRailAddObjectBtn) $statusRailAddObjectBtn.addEventListener('click', (ev) => {
-    ev.stopPropagation();
-    const row = _statusRailActiveRow;
-    const sid = row && (row.session_id || row.id);
-    if (!sid) return;
-    const title = (typeof flowRowTitle === 'function' ? flowRowTitle(row) : '') || row.display_name || '';
-    _flowOpenObjectAssignPicker(sid, title);
-  });
   if ($annotationStartBtn) $annotationStartBtn.addEventListener('click', annStart);
   if ($annotationScreenBtn) $annotationScreenBtn.addEventListener('click', annCaptureScreen);
   if ($annotationNotesBtn) $annotationNotesBtn.addEventListener('click', annOpenNotes);
@@ -65343,51 +66576,6 @@
     return out.slice(0, SPAWN_CWD_CHIP_LIMIT);
   }
 
-  function renderNewSessionRepoSuggestions(root) {
-    const wrap = (root || document).querySelector('#nsRepoSuggestions');
-    if (!wrap) return;
-    const current = getSpawnCwd();
-    const chips = spawnCwdQuickChipOptions(current);
-    wrap.innerHTML = '';
-    if (!chips.length) {
-      wrap.hidden = true;
-      return;
-    }
-    wrap.hidden = false;
-
-    // Group signal-ranked chips by kind so production and dev/test are
-    // visually separated on the new-session stage.
-    const byKind = {};
-    for (const c of chips) {
-      const k = c.kind || 'production';
-      byKind[k] = byKind[k] || [];
-      byKind[k].push(c);
-    }
-
-    for (const k of ['production', 'dev_test']) {
-      const group = byKind[k];
-      if (!group || !group.length) continue;
-      const label = document.createElement('div');
-      label.className = 'ns-choice-title';
-      label.textContent = k === 'dev_test' ? 'Development & test' : 'Production';
-      wrap.appendChild(label);
-      const row = document.createElement('div');
-      row.className = 'ns-repo-chips';
-      wrap.appendChild(row);
-      for (const opt of group) {
-        const active = normalizeSpawnCwdPath(opt.value) === normalizeSpawnCwdPath(current);
-        const btn = document.createElement('button');
-        btn.type = 'button';
-        btn.className = 'ns-repo-chip' + (active ? ' is-current' : '');
-        btn.textContent = opt.label;
-        btn.title = 'Start the new session in ' + opt.value;
-        btn.setAttribute('data-ns-repo', opt.value);
-        btn.setAttribute('aria-pressed', active ? 'true' : 'false');
-        row.appendChild(btn);
-      }
-    }
-  }
-
   function renderSpawnCwdQuickChips() {
     const wrap = document.getElementById('spawnCwdQuickChips');
     if (!wrap) return;
@@ -65395,10 +66583,7 @@
     const chips = spawnCwdQuickChipOptions(current);
     wrap.innerHTML = '';
     wrap.style.display = chips.length ? '' : 'none';
-    if (!chips.length) {
-      renderNewSessionRepoSuggestions();
-      return;
-    }
+    if (!chips.length) return;
 
     let lastKind = null;
     for (const opt of chips) {
@@ -65424,7 +66609,6 @@
       });
       wrap.appendChild(btn);
     }
-    renderNewSessionRepoSuggestions();
   }
 
   function refreshNewSessionCwdUi(paneId) {
@@ -65528,16 +66712,6 @@
     // keystroke/focus, making the name field read as "not editable" (CCC-144).
     if (opts.focus !== false) input.focus();
   }
-
-  document.addEventListener('click', (ev) => {
-    const btn = ev.target && ev.target.closest && ev.target.closest('#nsRepoSuggestions [data-ns-repo]');
-    if (!btn) return;
-    ev.preventDefault();
-    setSpawnCwdInputValue(btn.getAttribute('data-ns-repo') || '');
-    renderNewSessionRepoSuggestions();
-    const input = composerInputForPane(activePaneId()) || $convInput;
-    if (input) input.focus();
-  });
 
   // ── In-browser folder picker ──
   // Fallback for hosts with no native GUI chooser (headless Linux: no
@@ -66276,7 +67450,6 @@
         + '<div class="empty-state ns-hero ns-hero-quiet" style="height:auto;flex-direction:column;gap:10px;text-align:center;">'
         + '<div class="ns-stage-title">New session</div>'
         + '<div class="ns-stage-subtitle">Choose the object and folder below, then type the first message.</div>'
-        + '<div class="ns-repo-suggestions" id="nsRepoSuggestions" hidden></div>'
         + '<details class="ns-new-project-details" id="nsNewProjectDetails">'
         +   '<summary>Create a fresh folder</summary>'
         +   '<div class="ns-choice-card ns-choice-card-compact" id="nsCardNewProject">'
@@ -66296,7 +67469,6 @@
         + '</details>'
         + '</div></div>';
       _wireNewSessionChooser($view, paneId);
-      renderNewSessionRepoSuggestions($view);
       _renderNsExtensions($view, paneId);
     }
     if (typeof syncSpawnEngineDependentUi === 'function') syncSpawnEngineDependentUi();
@@ -66308,6 +67480,7 @@
     if (_cic) {
       _cic.classList.add('is-new-session');
       _cic.classList.add('visible');
+      if (typeof syncPaneHasFlags === 'function') syncPaneHasFlags(_cic.closest('.conv-pane'));
     }
     if (typeof mobileShowForCurrentMode === 'function') mobileShowForCurrentMode();
     requestClaudePrewarm();
@@ -66791,8 +67964,9 @@
 
   function conversationPaneForId(paneId) {
     const pid = paneId || activePaneId();
-    return Array.from(document.querySelectorAll('.conv-pane'))
-      .find(el => el.getAttribute('data-pane-id') === pid) || null;
+    return convPaneElById(pid)
+      || Array.from(document.querySelectorAll('.conv-pane'))
+        .find(el => el.getAttribute('data-pane-id') === pid) || null;
   }
 
   function conversationBgKeysForPane(paneId) {
@@ -67046,7 +68220,10 @@
   function applyDebugMode(on) {
     const enabled = !!on;
     document.documentElement.classList.toggle('ccc-debug-mode', enabled);
-    if (enabled) return;
+    if (enabled) {
+      if (typeof window.__cccRefreshThroughputStrip === 'function') window.__cccRefreshThroughputStrip();
+      return;
+    }
     if (typeof _dismissActivityLog === 'function') _dismissActivityLog();
     if (typeof closeActivityLogModal === 'function') closeActivityLogModal();
     const stats = document.getElementById('statsModal');
@@ -67163,6 +68340,12 @@
       const on = getQueueRhsListPref();
       $queueRhsListToggle.classList.toggle('is-on', on);
       $queueRhsListToggle.setAttribute('aria-checked', String(on));
+    }
+    const $continuationFoldingToggle = document.getElementById('settingsContinuationFoldingToggle');
+    if ($continuationFoldingToggle) {
+      const on = getContinuationFoldingPref();
+      $continuationFoldingToggle.classList.toggle('is-on', on);
+      $continuationFoldingToggle.setAttribute('aria-checked', String(on));
     }
     _syncUiModeBodyClass();
   }
@@ -67607,6 +68790,7 @@
       localStorage.removeItem('ccc-spawn-cwd');
     } catch (_) {}
     refreshSpawnEngineValue();
+    setContinuationFoldingPref(false);
   }
 
   // ── Preview feature flags ───────────────────────────────────────────
@@ -67834,6 +69018,12 @@
         setUiMode(isSimpleMode() ? 'advanced' : 'simple');
         refreshAppearanceChecks();
         showSettingsSavedPulse(uiModeToggle.closest('.settings-row'));
+        return;
+      }
+      const continuationFoldingToggle = e.target.closest('[data-continuation-folding-toggle]');
+      if (continuationFoldingToggle) {
+        setContinuationFoldingPref(!getContinuationFoldingPref());
+        showSettingsSavedPulse(continuationFoldingToggle.closest('.settings-row'));
         return;
       }
       const ffToggle = e.target.closest('[data-ff-toggle]');
@@ -69616,6 +70806,14 @@
       '#cccThroughputStrip .ts-yd{margin-left:auto;color:#58a6ff;opacity:.75;text-decoration:none;white-space:nowrap;}' +
       '#cccThroughputStrip .ts-yd:hover{opacity:1;text-decoration:underline;}' +
       'body.flow-popout #cccThroughputStrip{display:none;}' +
+      'html:not(.ccc-debug-mode) #cccThroughputStrip{display:none;}' +
+      'html:not(.ccc-debug-mode) #announceBtnConv{display:none!important;}' +
+      'html:not(.ccc-debug-mode) .status-rail-conn-proc{display:none!important;}' +
+      'html:not(.ccc-debug-mode) #frameHealth{display:none!important;}' +
+      'html:not(.ccc-debug-mode) #convOverflowBtn{display:none!important;}' +
+      'html:not(.ccc-debug-mode) #deployPill{display:none!important;}' +
+      'html:not(.ccc-debug-mode) .conv-pane-more{display:none!important;}' +
+      'html:not(.ccc-debug-mode) #convSendQueueBtn{display:none!important;}' +
       /* Phones: the lane/pace text overflows the strip ("…vs yd yd" clipped
          against the yd-report link). Hide the redundant link (the whole
          strip already opens the dashboard on tap) and let the rest
@@ -69711,6 +70909,7 @@
   var busy = false;
   function refresh() {
     if (document.hidden || busy || !mount()) return;
+    if (typeof debugModeEnabled === 'function' && !debugModeEnabled()) return;
     busy = true;
     (window.__cccBackgroundApiFetch || window.fetch.bind(window))(
       '/api/throughput/daily?date=today', { cache: 'no-store' }
@@ -69722,6 +70921,7 @@
   }
 
   function boot() {
+    window.__cccRefreshThroughputStrip = refresh;
     // The conv list panel exists in static markup, so mount is immediate;
     // the retry covers popout/embedded pages where it never appears.
     if (!mount()) { setTimeout(mount, 3000); }
