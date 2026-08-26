@@ -24569,51 +24569,8 @@ body.ccc-mobile-redesign .mobile-details-badges {
   gap: 4px;
 }
 
-/* ---- Topbar: mobile session-id chip + Copy button ---- */
+/* ---- Topbar: hide the raw session id in mobile chrome ---- */
 body.ccc-mobile-redesign #convSessionId { display: none !important; }
-body.ccc-mobile-redesign #convSessionIdMobileWrap {
-  display: flex !important;
-  align-items: center;
-  gap: 8px;
-  margin-left: 8px;
-}
-body.ccc-mobile-redesign #convSessionIdMobileWrap.is-empty { display: none !important; }
-body.ccc-mobile-redesign .mobile-id-chip {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  padding: 4px 9px;
-  background: var(--surface-2, var(--surface));
-  border: 1px solid var(--border);
-  border-radius: 7px;
-}
-body.ccc-mobile-redesign .mobile-id-label {
-  font-size: 10px;
-  color: var(--text-muted);
-  font-weight: 600;
-  text-transform: uppercase;
-  letter-spacing: 0.04em;
-}
-body.ccc-mobile-redesign .mobile-id-value {
-  font-family: 'SF Mono', SFMono-Regular, Consolas, monospace;
-  font-size: 12px;
-  color: var(--text);
-}
-body.ccc-mobile-redesign button.mobile-copy-btn {
-  font-family: inherit;
-  cursor: pointer;
-  border: 1px solid var(--border);
-  background: rgba(63,185,80,0.10);
-  color: var(--green);
-  border-radius: 7px;
-  font-size: 12px;
-  font-weight: 600;
-  padding: 5px 12px;
-  min-height: 30px;
-}
-body.ccc-mobile-redesign button.mobile-copy-btn[aria-pressed="true"] {
-  background: rgba(63,185,80,0.22);
-}
 
 /* ---- Presentation toolbar: mobile plain-language view buttons ---- */
 body.ccc-mobile-redesign .conv-presentation-segment { display: none !important; }

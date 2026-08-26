@@ -7584,37 +7584,6 @@
       delete el.dataset.copySessionId;
       el.title = '';
     }
-    // Mobile redesign: same sid, additionally mirrored into the labeled
-    // chip + full-width Copy button (index.html #convSessionIdMobileWrap).
-    // No-op when that element isn't in the page (popouts, etc).
-    _syncMobileSessionIdChip(value);
-  }
-
-  function _syncMobileSessionIdChip(sid) {
-    const wrap = document.getElementById('convSessionIdMobileWrap');
-    const valueEl = document.getElementById('convSessionIdMobileValue');
-    if (!wrap || !valueEl) return;
-    const value = sid || '';
-    wrap.dataset.sid = value;
-    valueEl.textContent = value ? shortSessionId(value) : '';
-    wrap.classList.toggle('is-empty', !value);
-  }
-
-  const $convSessionIdMobileCopyBtn = document.getElementById('convSessionIdMobileCopyBtn');
-  if ($convSessionIdMobileCopyBtn) {
-    $convSessionIdMobileCopyBtn.addEventListener('click', async () => {
-      const wrap = document.getElementById('convSessionIdMobileWrap');
-      const sid = wrap && wrap.dataset.sid || '';
-      if (!sid) return;
-      const ok = await copyTextValue(sid);
-      const btn = $convSessionIdMobileCopyBtn;
-      btn.textContent = ok ? 'Copied' : 'Copy failed';
-      btn.setAttribute('aria-pressed', ok ? 'true' : 'false');
-      setTimeout(() => {
-        btn.textContent = 'Copy';
-        btn.setAttribute('aria-pressed', 'false');
-      }, 1500);
-    });
   }
 
   function shortSessionId(sid) {
@@ -14760,12 +14729,11 @@
   }
   _wireSimpleActionsMenu();
 
-  // Simple mode never shows the raw session id inline (see the
-  // convSessionIdMobileWrap hide rule in simple.css) — this is the
+  // Simple mode never shows the raw session id inline — this is the
   // grandma-mode-friendly way to still hand a session id to another
-  // session/tool without exposing the id in the UI itself. Shared by the
-  // conversation-header icon (#convSimpleCopyRefBtn) and the icon on each
-  // task card in the list (_simpleTaskCardHtml's [data-simple-copy-ref]).
+  // session/tool without exposing the id in the UI itself. Used by the
+  // icon on each task card in the list (_simpleTaskCardHtml's
+  // [data-simple-copy-ref]).
   function _simpleCopySessionReference(sid) {
     if (!sid) {
       showOpToast('No task reference to copy yet', 'error');
@@ -14775,14 +14743,6 @@
       showOpToast(ok ? 'Copied task reference' : 'Copy failed - try again', ok ? 'ok' : 'error');
     });
   }
-  (function _wireSimpleCopyRefBtn() {
-    const btn = document.getElementById('convSimpleCopyRefBtn');
-    if (!btn) return;
-    btn.addEventListener('click', () => {
-      const sid = (typeof currentSession !== 'undefined' && currentSession) ? currentSession.id : '';
-      _simpleCopySessionReference(sid);
-    });
-  })();
   // Capture phase (like handleSidebarSessionIdCopyClick) so the click never
   // reaches the enclosing task card's own open-conversation handler.
   document.addEventListener('click', (ev) => {

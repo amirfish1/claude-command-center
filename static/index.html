@@ -1067,18 +1067,6 @@
         <button class="font-size-btn" id="fontPlus" title="Increase font size">A+</button>
       </div>
       <span style="font-size:11px;color:var(--text-muted);font-family:'SF Mono',SFMono-Regular,Consolas,monospace;opacity:0.6;cursor:pointer;user-select:all;margin-left:8px;" id="convSessionId" title="Click to copy session ID"></span>
-      <!-- Mobile redesign only (body.ccc-mobile-redesign): labeled chip +
-           full-width Copy button, replacing the 11px low-opacity #convSessionId
-           span above. Populated by setCopyableSessionId() alongside it —
-           same sid, no new data source. Hidden on desktop via inline style;
-           CSS flips visibility under the mobile-redesign body class. -->
-      <div class="mobile-id-chip-wrap" id="convSessionIdMobileWrap" style="display:none;">
-        <span class="mobile-id-chip">
-          <span class="mobile-id-label">Session</span>
-          <code class="mobile-id-value" id="convSessionIdMobileValue"></code>
-        </span>
-        <button type="button" class="mobile-copy-btn" id="convSessionIdMobileCopyBtn">Copy</button>
-      </div>
       <!-- Simple mode only (body.ccc-mobile-redesign.ccc-simple-mode): one
            contextual Actions menu. Items forward to EXISTING controls
            (status-rail rename/add-to-object, composer model picker) via
@@ -1086,18 +1074,6 @@
            _wireSimpleActionsMenu() in app.js. Technical details reveals the
            status rail's own Metadata tab (session id, branch, model,
            tokens) instead of duplicating that content here. -->
-      <!-- Standalone icon, not buried in the Actions menu — copies the
-           session id without ever displaying it (see copy-reference's old
-           menu-only home; users couldn't find it there). Same delegated
-           handler as the sidebar/list copy icons: data-simple-copy-ref-btn
-           reads the current session from currentSession.id at click time
-           (wired in _wireSimpleActionsMenu()). -->
-      <button type="button" class="mobile-actions-btn" id="convSimpleCopyRefBtn" title="Copy task reference" aria-label="Copy task reference">
-        <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-          <rect x="8" y="2" width="8" height="4" rx="1"></rect>
-          <path d="M8 4H6a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V6a2 2 0 0 0-2-2h-2"></path>
-        </svg>
-      </button>
       <div class="mobile-actions-wrap">
         <button type="button" class="mobile-actions-btn" id="convSimpleActionsBtn" aria-haspopup="menu" aria-expanded="false" aria-label="Actions"><span aria-hidden="true">&#9881;</span></button>
         <div class="mobile-actions-menu" id="convSimpleActionsMenu" role="menu" hidden>

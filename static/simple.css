@@ -37,10 +37,6 @@ body.ccc-mobile-redesign.ccc-simple-mode .mobile-nav-icon { font-size: 18px; lin
 body.ccc-mobile-redesign.ccc-simple-mode .mobile-nav-label { font-size: 10.5px; font-weight: 600; }
 
 /* ---- Simple mode: session Actions menu ---- */
-/* Session-id chip moves behind Actions -> Technical details in Simple
-   mode (it stays directly visible in mobile-redesign + Advanced, per the
-   earlier mobile pass). */
-body.ccc-mobile-redesign.ccc-simple-mode #convSessionIdMobileWrap { display: none !important; }
 body.ccc-mobile-redesign.ccc-simple-mode .mobile-actions-wrap { display: inline-flex; margin-left: 8px; }
 body.ccc-mobile-redesign.ccc-simple-mode button.mobile-actions-btn {
   display: inline-flex;
@@ -728,11 +724,11 @@ body.ccc-simple-mode .simple-card-badge-unseen {
   color: var(--warning, #d29922);
   background: color-mix(in srgb, var(--warning, #d29922) 18%, transparent);
 }
-/* Copy-reference icon on each task card — icon only, never the raw id
-   (see the conversation-header twin, #convSimpleCopyRefBtn). margin-left:
-   auto pushes it to the row's right edge whether or not a badge precedes
-   it — a badge's own auto margin already carries this button along, so
-   the rule is a no-op (not a conflict) when both are present. */
+/* Copy-reference icon on each task card — icon only, never the raw id.
+   margin-left: auto pushes it to the row's right edge whether or not a
+   badge precedes it — a badge's own auto margin already carries this
+   button along, so the rule is a no-op (not a conflict) when both are
+   present. */
 body.ccc-simple-mode .simple-card-copy-ref-btn {
   flex: 0 0 auto;
   margin-left: auto;
@@ -951,7 +947,7 @@ body.ccc-mobile-redesign.ccc-simple-mode.ccc-simple-conv-open #convToolbar:has(.
 body.ccc-mobile-redesign.ccc-simple-mode.ccc-simple-conv-open .simple-conv-title {
   flex-basis: 0;
 }
-body.ccc-mobile-redesign.ccc-simple-mode.ccc-simple-conv-open #convToolbar > :not(#simpleBackHomeBtn):not(#simpleConvEngineIcon):not(#simpleConvTitle):not(#simpleTechToggle):not(#simpleStopBtn):not(.simple-conv-font-controls):not(.mobile-actions-wrap):not(#convSimpleCopyRefBtn) {
+body.ccc-mobile-redesign.ccc-simple-mode.ccc-simple-conv-open #convToolbar > :not(#simpleBackHomeBtn):not(#simpleConvEngineIcon):not(#simpleConvTitle):not(#simpleTechToggle):not(#simpleStopBtn):not(.simple-conv-font-controls):not(.mobile-actions-wrap) {
   display: none !important;
 }
 body.ccc-mobile-redesign.ccc-simple-mode.ccc-simple-conv-open #mobileBackBtn {
