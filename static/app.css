@@ -24569,8 +24569,8 @@ body.ccc-mobile-redesign .mobile-details-badges {
   gap: 4px;
 }
 
-/* ---- Topbar: hide the raw session id in mobile chrome ---- */
-body.ccc-mobile-redesign #convSessionId { display: none !important; }
+/* ---- Topbar: Simple mode never shows the raw session id ---- */
+body.ccc-simple-mode #convSessionId { display: none !important; }
 
 /* ---- Presentation toolbar: mobile plain-language view buttons ---- */
 body.ccc-mobile-redesign .conv-presentation-segment { display: none !important; }
