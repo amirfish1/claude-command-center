@@ -634,6 +634,16 @@ body.ccc-simple-mode .simple-nya-card .simple-card-name {
   font-size: 16.5px;
   font-weight: 650;
   line-height: 1.35;
+  /* Long unbroken names (kebab-case branch/task slugs with no spaces) had no
+     overflow handling here and just got clipped mid-word by the card's own
+     bounds, with no ellipsis to show anything was cut. Clamp to 2 lines with
+     a proper ellipsis instead. */
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  word-break: break-word;
 }
 /* Engine icon sits inline before the task name (same icon set as the Simple
    conversation header — sessionEngineIconHtml). */

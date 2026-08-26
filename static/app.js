@@ -15123,7 +15123,7 @@
     needs_input: 'Waiting for your answer',
     question: 'Waiting for your answer',
     pending_tool: 'Needs your approval',
-    stale_tool_call: 'May be stuck',
+    stale_tool_call: 'Looks stuck',
     approval: 'Needs your approval',
   };
   function _simpleNyaKindLabel(kind) {
