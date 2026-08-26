@@ -15251,13 +15251,20 @@
     if (limit > 0 && tokens > 0) return (tokens / limit) * 100;
     return null;
   }
+  // Single source of truth for the memory-fullness tail phrase — used by both
+  // the home task cards (_simpleMemoryLine) and the in-conversation usage
+  // line (_simpleUpdateUsageLine) so the two can't drift into different
+  // wording for the same threshold.
+  function _simpleMemoryPhrase(p) {
+    if (p >= 90) return 'start a fresh task for better results';
+    if (p >= 70) return 'getting full';
+    return 'plenty of room left';
+  }
   function _simpleMemoryLine(row) {
     const pct = _simpleMemoryPercent(row);
     if (pct === null) return 'Memory: not reported yet';
     const p = Math.round(pct);
-    if (p >= 90) return 'Memory ' + p + '% full — almost full, a fresh task may work better';
-    if (p >= 70) return 'Memory ' + p + '% full — getting full';
-    return 'Memory ' + p + '% full — plenty of room left';
+    return 'Memory ' + p + '% full — ' + _simpleMemoryPhrase(p);
   }
   function _simpleBaseName(p) {
     const s = String(p || '');
@@ -15506,10 +15513,7 @@
       if (pct === null) text = 'Memory: not measured yet.';
       else {
         const p = Math.round(pct);
-        text = 'Memory: ' + p + '% full — '
-          + (p >= 90 ? 'almost full. A fresh task may work better.'
-            : p >= 70 ? 'getting full.'
-            : 'plenty of room left.');
+        text = 'Memory: ' + p + '% full — ' + _simpleMemoryPhrase(p) + '.';
       }
       if (cost !== null) text += ' About $' + cost.toFixed(2) + ' spent so far.';
       el.textContent = text;
