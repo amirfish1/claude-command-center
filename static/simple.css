@@ -1,9 +1,12 @@
 /* Simple-mode CSS — extracted from app.css to shrink its merge-conflict
    surface against main (see CLAUDE.md's git-conflict-reduction note).
    Every rule here is scoped to body.ccc-simple-mode or a #simple-prefixed /
-   .simple- prefixed selector; nothing here affects Advanced mode. Loaded
-   unconditionally from index.html (cheap: it's dead weight, not dead code,
-   when Simple mode is off — same reasoning as any other CSS file). */
+   .simple- prefixed selector; nothing here affects Advanced mode, with one
+   deliberate exception: the [data-simple-only] filter on the shared Actions
+   menu (below), which hides Simple-only rows when Advanced mode is showing
+   that same menu. Loaded unconditionally from index.html (cheap: it's dead
+   weight, not dead code, when Simple mode is off — same reasoning as any
+   other CSS file). */
 
 body.ccc-mobile-redesign.ccc-simple-mode .mobile-bottom-nav {
   position: fixed;
@@ -36,62 +39,14 @@ body.ccc-mobile-redesign.ccc-simple-mode .mobile-nav-btn.is-active {
 body.ccc-mobile-redesign.ccc-simple-mode .mobile-nav-icon { font-size: 18px; line-height: 1; }
 body.ccc-mobile-redesign.ccc-simple-mode .mobile-nav-label { font-size: 10.5px; font-weight: 600; }
 
-/* ---- Simple mode: session Actions menu ---- */
-body.ccc-mobile-redesign.ccc-simple-mode .mobile-actions-wrap { display: inline-flex; margin-left: 8px; }
-body.ccc-mobile-redesign.ccc-simple-mode button.mobile-actions-btn {
-  display: inline-flex;
-  align-items: center;
-  font-family: inherit;
-  cursor: pointer;
-  border: 1px solid var(--border);
-  background: var(--surface-2, var(--surface));
-  color: var(--text);
-  border-radius: 7px;
-  font-size: 12.5px;
-  font-weight: 600;
-  padding: 6px 14px;
-  min-height: 32px;
-}
-body.ccc-mobile-redesign.ccc-simple-mode button.mobile-actions-btn[aria-expanded="true"] {
-  background: rgba(63,185,80,0.12);
-  border-color: var(--green);
-  color: var(--green);
-}
-body.ccc-mobile-redesign.ccc-simple-mode .mobile-actions-menu {
-  position: absolute;
-  left: 0;
-  top: 100%;
-  margin-top: 4px;
-  z-index: 40;
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-  min-width: 220px;
-  max-width: calc(100vw - 16px);
-  padding: 8px;
-  background: var(--surface);
-  border: 1px solid var(--border);
-  border-radius: 10px;
-  box-shadow: 0 8px 24px rgba(0,0,0,0.35);
-}
-body.ccc-mobile-redesign.ccc-simple-mode .mobile-actions-menu[hidden] { display: none; }
-body.ccc-mobile-redesign.ccc-simple-mode button.mobile-actions-item {
-  display: block;
-  width: 100%;
-  text-align: left;
-  font-family: inherit;
-  cursor: pointer;
-  border: 1px solid transparent;
-  background: transparent;
-  color: var(--text);
-  border-radius: 7px;
-  font-size: 13px;
-  padding: 10px 12px;
-  min-height: 44px;
-}
-body.ccc-mobile-redesign.ccc-simple-mode button.mobile-actions-item:hover,
-body.ccc-mobile-redesign.ccc-simple-mode button.mobile-actions-item:focus-visible {
-  background: var(--surface-2, var(--surface));
+/* ---- Simple mode: session Actions menu ----
+   The menu chrome itself (button, dropdown, item styling) is shared with
+   Advanced mode now — see app.css's narrow-viewport block. This file only
+   hides the rows that have no meaning outside Simple mode (rename/move/
+   change-model/technical-details); Stop and the font-size rows stay visible
+   in every mode's copy of the SAME menu. */
+body:not(.ccc-simple-mode) .mobile-actions-item[data-simple-only] {
+  display: none;
 }
 
 /* ---- Simple mode: composer simplification ----
@@ -781,22 +736,9 @@ body.ccc-simple-mode .simple-see-all {
   cursor: pointer;
 }
 
-/* --- Conversation view additions (Simple mode) --- */
-.simple-back-home-btn { display: none; }
-body.ccc-simple-mode .simple-back-home-btn {
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
-  min-height: 44px;
-  padding: 6px 12px;
-  font-size: 15px;
-  font-weight: 600;
-  border: 1px solid var(--border);
-  border-radius: 9px;
-  background: var(--surface);
-  color: var(--text);
-  cursor: pointer;
-}
+/* --- Conversation view additions (Simple mode) ---
+   Back is the shared #mobileBackBtn (app.css) now — Simple mode doesn't
+   style its own copy, it just points the same arrow at _simpleShowHome(). */
 #simpleUsageLine { display: none; }
 body.ccc-simple-mode #simpleUsageLine.has-data {
   display: block;
@@ -910,21 +852,6 @@ body.ccc-simple-mode .simple-settings-desc {
 }
 
 /* --- Depth-2 conversation view: simple chat surface --- */
-/* Which engine is running this task, right before the plain title. */
-.simple-conv-engine-icon { display: none; }
-body.ccc-mobile-redesign.ccc-simple-mode.ccc-simple-conv-open .simple-conv-engine-icon {
-  display: inline-flex;
-  align-items: center;
-  flex: 0 0 auto;
-}
-body.ccc-mobile-redesign.ccc-simple-mode.ccc-simple-conv-open .simple-conv-engine-icon .conv-pane-cat-icon {
-  width: 22px;
-  height: 20px;
-}
-body.ccc-mobile-redesign.ccc-simple-mode.ccc-simple-conv-open .simple-conv-engine-icon svg {
-  width: 17px;
-  height: 17px;
-}
 /* The conversation title span only exists for this view. */
 .simple-conv-title { display: none; }
 body.ccc-mobile-redesign.ccc-simple-mode.ccc-simple-conv-open .simple-conv-title {
@@ -938,10 +865,10 @@ body.ccc-mobile-redesign.ccc-simple-mode.ccc-simple-conv-open .simple-conv-title
   overflow: hidden;
   text-overflow: ellipsis;
 }
-/* In the simple conversation view the toolbar is just: back home, the plain
-   title, and the simple Actions menu. Every advanced control (topbar buttons,
-   breadcrumb, session id, font steppers, more menu, overflow, replay/launch/
-   live badges) is hidden. */
+/* In the simple conversation view the toolbar is just: back, the plain
+   title, the technical-details toggle, and the shared Actions menu. Every
+   advanced control (topbar buttons, breadcrumb, session id, font steppers,
+   more menu, overflow, replay/launch/live badges) is hidden. */
 body.ccc-mobile-redesign.ccc-simple-mode.ccc-simple-conv-open #convToolbar {
   gap: 8px;
   row-gap: 6px;
@@ -957,17 +884,13 @@ body.ccc-mobile-redesign.ccc-simple-mode.ccc-simple-conv-open #convToolbar {
 body.ccc-mobile-redesign.ccc-simple-mode.ccc-simple-conv-open #convToolbar:has(.mobile-actions-menu:not([hidden])) {
   overflow: visible;
 }
-/* Back + icon + title claim the first row; everything else (tech toggle,
-   Stop, font controls) wraps to a second row rather than overflowing off
-   the right edge of a narrow phone — confirmed cut off at 390px wide
-   before this fix. */
+/* Back + title claim the first row; the tech toggle and Actions menu wrap
+   to a second row rather than overflowing off the right edge of a narrow
+   phone — confirmed cut off at 390px wide before this fix. */
 body.ccc-mobile-redesign.ccc-simple-mode.ccc-simple-conv-open .simple-conv-title {
   flex-basis: 0;
 }
-body.ccc-mobile-redesign.ccc-simple-mode.ccc-simple-conv-open #convToolbar > :not(#simpleBackHomeBtn):not(#simpleConvEngineIcon):not(#simpleConvTitle):not(#simpleTechToggle):not(#simpleStopBtn):not(.simple-conv-font-controls):not(.mobile-actions-wrap) {
-  display: none !important;
-}
-body.ccc-mobile-redesign.ccc-simple-mode.ccc-simple-conv-open #mobileBackBtn {
+body.ccc-mobile-redesign.ccc-simple-mode.ccc-simple-conv-open #convToolbar > :not(#mobileBackBtn):not(#simpleConvTitle):not(.simple-tech-toggle):not(.mobile-actions-wrap) {
   display: none !important;
 }
 /* Advanced pane chrome: pane header (proc pills, verbose/replay/annotate
@@ -1019,43 +942,8 @@ body.ccc-mobile-redesign.ccc-simple-mode.ccc-simple-conv-open.ccc-simple-tech-op
   color: var(--text);
   border-color: var(--accent, var(--border));
 }
-/* Stop: one plain, unmissable action to interrupt the open task. */
-.simple-stop-btn { display: none; }
-body.ccc-mobile-redesign.ccc-simple-mode.ccc-simple-conv-open .simple-stop-btn {
-  display: inline-flex;
-  align-items: center;
-  flex: 0 0 auto;
-  padding: 5px 14px;
-  border-radius: 999px;
-  border: 1px solid var(--danger, #d33);
-  background: var(--danger, #d33);
-  color: #fff;
-  font-size: 13px;
-  font-weight: 700;
-  cursor: pointer;
-}
-body.ccc-mobile-redesign.ccc-simple-mode.ccc-simple-conv-open .simple-stop-btn:disabled {
-  opacity: 0.55;
-  cursor: default;
-}
-/* Text-size control, right in the conversation instead of buried in Settings. */
-.simple-conv-font-controls { display: none; }
-body.ccc-mobile-redesign.ccc-simple-mode.ccc-simple-conv-open .simple-conv-font-controls {
-  display: inline-flex;
-  flex: 0 0 auto;
-  gap: 4px;
-}
-body.ccc-mobile-redesign.ccc-simple-mode.ccc-simple-conv-open .simple-conv-font-btn {
-  width: 32px;
-  height: 32px;
-  border-radius: 8px;
-  border: 1px solid var(--border);
-  background: transparent;
-  color: var(--text);
-  font-size: 13px;
-  font-weight: 700;
-  cursor: pointer;
-}
+/* Stop and text-size now live as rows in the shared Actions menu
+   (app.css) — no standalone buttons/styling here. */
 /* Plain chat bubbles: worker on the left, you on the right. */
 body.ccc-mobile-redesign.ccc-simple-mode.ccc-simple-conv-open .conversations-view .event.user_text,
 body.ccc-mobile-redesign.ccc-simple-mode.ccc-simple-conv-open .conversations-view .event.assistant {

@@ -916,16 +916,11 @@
       </div>
     </div>
     <div class="toolbar" id="convToolbar">
-      <button class="mobile-back-btn" id="mobileBackBtn" title="Back to sidebar">&#8592;<span class="mb-label"> Back</span></button>
-      <!-- Simple mode only (body.ccc-simple-mode): returns from an open
-           conversation to the Simple Home screen (#simpleHome). Wired by
-           _wireSimpleHome() in app.js; hidden outside Simple mode by CSS. -->
-      <button class="simple-back-home-btn" id="simpleBackHomeBtn" title="Back to Home">&#8592;<span class="mb-label"> Home</span></button>
-      <!-- Simple mode only (body.ccc-simple-conv-open): which engine (Claude/
-           Codex/Kimi/…) is running this task, same icon set as the advanced
-           sidebar (sessionEngineIconHtml). Set by _simpleUpdateConvTitle()
-           in app.js alongside the title. -->
-      <span class="simple-conv-engine-icon" id="simpleConvEngineIcon"></span>
+      <!-- Shared back control for every mode: narrow-viewport "back to
+           sidebar" in Advanced, "back to Home" in Simple mode. One element,
+           one listener (wired once in app.js) that branches on isSimpleMode()
+           to pick the destination — no duplicate per-mode button. -->
+      <button class="mobile-back-btn" id="mobileBackBtn" title="Back">&#8592;<span class="mb-label"> Back</span></button>
       <!-- Simple mode only (body.ccc-simple-conv-open): plain-language title
            for the open conversation, set by _simpleUpdateConvTitle() in
            app.js. In the Simple depth-2 view the rest of this toolbar is
@@ -940,21 +935,6 @@
               aria-pressed="false" title="Show or hide technical details for this task">
         <span id="simpleTechToggleLabel">Show technical details</span>
       </button>
-      <!-- Simple mode only: one plain Stop action for the open task. Forwards
-           to the existing #convEscBtn handler (sendEscToTerminal) — same
-           interrupt path the advanced UI uses, just relabeled and always
-           visible instead of buried in the hidden advanced toolbar. Wired by
-           _wireSimpleStopBtn() in app.js. -->
-      <button type="button" class="simple-stop-btn" id="simpleStopBtn" title="Stop this task">Stop</button>
-      <!-- Simple mode only: text-size control right in the conversation
-           (was buried 3 taps away in Settings). Forwards to the existing
-           global #fontMinus/#fontPlus buttons, same as Settings' A-/A+
-           chips already do. Wired by _wireSimpleConvFontControls() in
-           app.js. -->
-      <div class="simple-conv-font-controls">
-        <button type="button" class="simple-conv-font-btn" id="simpleConvFontMinus" title="Smaller text" aria-label="Smaller text">A-</button>
-        <button type="button" class="simple-conv-font-btn" id="simpleConvFontPlus" title="Bigger text" aria-label="Bigger text">A+</button>
-      </div>
       <button type="button" class="mobile-original-ask" id="mobileOriginalAsk"
               aria-expanded="false" title="Show the full original ask" hidden>
         <span class="mobile-original-ask__label">Original ask</span>
@@ -1067,20 +1047,26 @@
         <button class="font-size-btn" id="fontPlus" title="Increase font size">A+</button>
       </div>
       <span style="font-size:11px;color:var(--text-muted);font-family:'SF Mono',SFMono-Regular,Consolas,monospace;opacity:0.6;cursor:pointer;user-select:all;margin-left:8px;" id="convSessionId" title="Click to copy session ID"></span>
-      <!-- Simple mode only (body.ccc-mobile-redesign.ccc-simple-mode): one
-           contextual Actions menu. Items forward to EXISTING controls
-           (status-rail rename/add-to-object, composer model picker) via
-           .click() rather than duplicating their logic — see
-           _wireSimpleActionsMenu() in app.js. Technical details reveals the
-           status rail's own Metadata tab (session id, branch, model,
-           tokens) instead of duplicating that content here. -->
+      <!-- Narrow-viewport Actions menu, shared by every mode (no
+           isSimpleMode() gate on the wrap itself) — one overflow menu at the
+           right edge of the toolbar instead of a per-mode set of standalone
+           buttons. Items forward to EXISTING controls (status-rail
+           rename/add-to-object, composer model picker, the global
+           #fontMinus/#fontPlus, /api/inject-esc) via .click()/direct call
+           rather than duplicating their logic — see _wireSimpleActionsMenu()
+           in app.js. The rename/move/change-model/technical-details rows are
+           Simple-only actions (rendered conditionally by isSimpleMode() at
+           render time, not by a parallel copy of this menu). -->
       <div class="mobile-actions-wrap">
-        <button type="button" class="mobile-actions-btn" id="convSimpleActionsBtn" aria-haspopup="menu" aria-expanded="false" aria-label="Actions"><span aria-hidden="true">&#9881;</span></button>
+        <button type="button" class="mobile-actions-btn" id="convSimpleActionsBtn" aria-haspopup="menu" aria-expanded="false" aria-label="Task actions"><span aria-hidden="true">&#8942;</span></button>
         <div class="mobile-actions-menu" id="convSimpleActionsMenu" role="menu" hidden>
-          <button type="button" class="mobile-actions-item" data-simple-action="rename" role="menuitem"><span aria-hidden="true">&#9998;&nbsp;</span>Rename task</button>
-          <button type="button" class="mobile-actions-item" data-simple-action="move-to-project" role="menuitem"><span aria-hidden="true">&#128193;&nbsp;</span>Move to project</button>
-          <button type="button" class="mobile-actions-item" data-simple-action="change-model" role="menuitem"><span aria-hidden="true">&#129302;&nbsp;</span>Change assistant/model</button>
-          <button type="button" class="mobile-actions-item" data-simple-action="technical-details" role="menuitem"><span aria-hidden="true">&#8505;&nbsp;</span>Open technical details</button>
+          <button type="button" class="mobile-actions-item" data-simple-action="stop" role="menuitem"><span aria-hidden="true">&#9724;&nbsp;</span>Stop this task</button>
+          <button type="button" class="mobile-actions-item" data-simple-action="font-minus" role="menuitem"><span aria-hidden="true">A-&nbsp;</span>Smaller text</button>
+          <button type="button" class="mobile-actions-item" data-simple-action="font-plus" role="menuitem"><span aria-hidden="true">A+&nbsp;</span>Bigger text</button>
+          <button type="button" class="mobile-actions-item" data-simple-action="rename" role="menuitem" data-simple-only><span aria-hidden="true">&#9998;&nbsp;</span>Rename task</button>
+          <button type="button" class="mobile-actions-item" data-simple-action="move-to-project" role="menuitem" data-simple-only><span aria-hidden="true">&#128193;&nbsp;</span>Move to project</button>
+          <button type="button" class="mobile-actions-item" data-simple-action="change-model" role="menuitem" data-simple-only><span aria-hidden="true">&#129302;&nbsp;</span>Change assistant/model</button>
+          <button type="button" class="mobile-actions-item" data-simple-action="technical-details" role="menuitem" data-simple-only><span aria-hidden="true">&#8505;&nbsp;</span>Open technical details</button>
         </div>
       </div>
       <div class="conv-overflow-wrap">

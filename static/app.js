@@ -14287,7 +14287,14 @@
     else mobileShowMain(true);
   }
   const $mobileBackBtn = document.getElementById('mobileBackBtn');
-  if ($mobileBackBtn) $mobileBackBtn.addEventListener('click', () => mobileShowMain(false));
+  // One back button for every mode: Simple mode returns to its Home screen,
+  // everything else returns to the sidebar. Single element, single listener —
+  // the mode check picks a destination, it doesn't select between two
+  // buttons.
+  if ($mobileBackBtn) $mobileBackBtn.addEventListener('click', () => {
+    if (isSimpleMode() && typeof _simpleShowHome === 'function') _simpleShowHome();
+    else mobileShowMain(false);
+  });
   const $mobileOriginalAsk = document.getElementById('mobileOriginalAsk');
   const $mobileOriginalAskText = document.getElementById('mobileOriginalAskText');
   function syncMobileOriginalAsk(text) {
@@ -14713,7 +14720,15 @@
       menu.hidden = true;
       btn.setAttribute('aria-expanded', 'false');
       const action = item.getAttribute('data-simple-action');
-      if (action === 'rename') {
+      if (action === 'stop') {
+        _simpleStopTask();
+      } else if (action === 'font-minus') {
+        const btn = document.getElementById('fontMinus');
+        if (btn) btn.click();
+      } else if (action === 'font-plus') {
+        const btn = document.getElementById('fontPlus');
+        if (btn) btn.click();
+      } else if (action === 'rename') {
         _revealStatusRailThenClick('statusRailTitleRenameBtn');
       } else if (action === 'move-to-project') {
         _revealStatusRailThenClick('statusRailAddObjectBtn');
@@ -14774,7 +14789,7 @@
   // #simpleHome (which lives in the SIDEBAR — at the mobile breakpoint .main
   // is fixed off-canvas until body.mobile-show-main) and hides #convSplit
   // (CSS at the end of app.css); opening a conversation flips the class off,
-  // #simpleBackHomeBtn flips it back on. Showing home also clears
+  // #mobileBackBtn flips it back on. Showing home also clears
   // mobile-show-main so the off-canvas .main slides away.
   // `var` (not let) for state so the hoisted binding is safely `undefined`
   // when _syncMobileBottomNav/_syncUiModeBodyClass run earlier in boot.
@@ -14885,23 +14900,14 @@
   // Plain-language title for the depth-2 simple conversation header.
   function _simpleUpdateConvTitle(id) {
     const el = document.getElementById('simpleConvTitle');
-    const iconEl = document.getElementById('simpleConvEngineIcon');
     if (!el) return;
     let name = '';
-    let row = null;
     try {
-      row = (conversationsData || []).find(x => x.id === id)
+      const row = (conversationsData || []).find(x => x.id === id)
         || (Array.isArray(archiveData) ? archiveData.find(x => (x.id || x.session_id) === id) : null);
       name = String((row && (row.display_name || row.first_message || row.status_rail_title)) || '').trim();
     } catch (_) {}
     el.textContent = name.length > 60 ? name.slice(0, 60) + '…' : (name || 'This task');
-    // Which engine (Claude/Codex/Kimi/…) is running this task — same icon
-    // set as the advanced sidebar (sessionEngineIconHtml), just placed next
-    // to the plain title instead of a session row.
-    if (iconEl) {
-      try { iconEl.innerHTML = row ? sessionEngineIconHtml(row, { context: 'pane' }) : ''; }
-      catch (_) { iconEl.innerHTML = ''; }
-    }
   }
 
   // ── Technical strip: reveal tool-call logs / diffs / cost, per session ──
@@ -14934,19 +14940,14 @@
   }
   _wireSimpleTechToggle();
 
-  // ── Stop: one plain button, same interrupt path as the advanced Esc
-  // button (/api/inject-esc), just relabeled and always reachable instead of
-  // hidden inside the advanced toolbar. ──
+  // ── Stop: same interrupt path as the advanced Esc button (/api/inject-esc),
+  // reachable from the shared Actions menu instead of a standalone button. ──
   async function _simpleStopTask() {
-    const btn = document.getElementById('simpleStopBtn');
-    if (!btn || !currentSession.id) return;
+    if (!currentSession.id) return;
     if (currentSession.source === 'pkood') {
       _simpleToast("Can't stop this task from here yet.", true);
       return;
     }
-    btn.disabled = true;
-    const orig = btn.textContent;
-    btn.textContent = 'Stopping…';
     try {
       const res = await fetch('/api/inject-esc', {
         method: 'POST',
@@ -14955,34 +14956,12 @@
       });
       let data = {};
       try { data = await res.json(); } catch (_) {}
-      btn.textContent = (res.ok && data.ok) ? 'Stopped' : "Couldn't stop";
-      if (!(res.ok && data.ok)) {
-        _simpleToast('Could not stop that: ' + ((data && data.error) || ('HTTP ' + res.status)), true);
-      }
+      if (res.ok && data.ok) _simpleToast('Stopped.');
+      else _simpleToast('Could not stop that: ' + ((data && data.error) || ('HTTP ' + res.status)), true);
     } catch (e) {
-      btn.textContent = "Couldn't stop";
       _simpleToast('Could not stop that: ' + ((e && e.message) || 'network error'), true);
     }
-    setTimeout(() => { btn.textContent = orig; btn.disabled = false; }, 1200);
   }
-  function _wireSimpleStopBtn() {
-    const btn = document.getElementById('simpleStopBtn');
-    if (btn) btn.addEventListener('click', _simpleStopTask);
-  }
-  _wireSimpleStopBtn();
-
-  // Text size in the conversation: forwards to the existing global
-  // #fontMinus/#fontPlus buttons (same ones Settings' A-/A+ chips already
-  // forward to) so there's one font-size mechanism, not two.
-  function _wireSimpleConvFontControls() {
-    const minus = document.getElementById('simpleConvFontMinus');
-    const plus = document.getElementById('simpleConvFontPlus');
-    const realMinus = document.getElementById('fontMinus');
-    const realPlus = document.getElementById('fontPlus');
-    if (minus && realMinus) minus.addEventListener('click', () => realMinus.click());
-    if (plus && realPlus) plus.addEventListener('click', () => realPlus.click());
-  }
-  _wireSimpleConvFontControls();
 
   // ── composer: agent/model/effort chips ──
   const _SIMPLE_ENGINE_LABELS = {
@@ -15810,8 +15789,6 @@
       const text = (input.value || '').trim();
       if (card && text) _simpleSendAnswer(card, text);
     });
-    const backBtn = document.getElementById('simpleBackHomeBtn');
-    if (backBtn) backBtn.addEventListener('click', _simpleShowHome);
     // Speak instead of type — same STT engine as the advanced composer,
     // targeting #simpleComposerInput (see toggleSpeechRecognition/
     // micButtonPaneId 'simple-home' branches above).

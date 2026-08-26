@@ -14330,6 +14330,71 @@
     }
     .mobile-back-btn:active { opacity: 0.6; }
 
+    /* ── Narrow-viewport Actions menu (⋮), shared by every mode ──
+       Was ccc-simple-mode-gated (simple.css); relocated here since it now
+       backs the unified topbar in Advanced mode too — one menu, not a
+       per-mode copy. Simple-only rows are filtered by [data-simple-only]
+       in simple.css, not by a second copy of this block. */
+    /* #convToolbar-qualified so this beats the unconditional
+       .mobile-actions-wrap{display:none} base rule later in this file —
+       same specificity, later source order would otherwise win. */
+    #convToolbar .mobile-actions-wrap { display: inline-flex; margin-left: 8px; order: 100; }
+    button.mobile-actions-btn {
+      display: inline-flex;
+      align-items: center;
+      font-family: inherit;
+      cursor: pointer;
+      border: 1px solid var(--border);
+      background: var(--surface-2, var(--surface));
+      color: var(--text);
+      border-radius: 7px;
+      font-size: 12.5px;
+      font-weight: 600;
+      padding: 6px 14px;
+      min-height: 32px;
+    }
+    button.mobile-actions-btn[aria-expanded="true"] {
+      background: rgba(63,185,80,0.12);
+      border-color: var(--green);
+      color: var(--green);
+    }
+    .mobile-actions-menu {
+      position: absolute;
+      left: 0;
+      top: 100%;
+      margin-top: 4px;
+      z-index: 40;
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
+      min-width: 220px;
+      max-width: calc(100vw - 16px);
+      padding: 8px;
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      box-shadow: 0 8px 24px rgba(0,0,0,0.35);
+    }
+    .mobile-actions-menu[hidden] { display: none; }
+    button.mobile-actions-item {
+      display: block;
+      width: 100%;
+      text-align: left;
+      font-family: inherit;
+      cursor: pointer;
+      border: 1px solid transparent;
+      background: transparent;
+      color: var(--text);
+      border-radius: 7px;
+      font-size: 13px;
+      padding: 10px 12px;
+      min-height: 44px;
+    }
+    button.mobile-actions-item:hover,
+    button.mobile-actions-item:focus-visible {
+      background: var(--surface-2, var(--surface));
+    }
+
     /* The injection-health banner is `position: fixed; top: 0; z-index: 10000`.
        Desktop gets one line over a topbar with slack; a phone wraps the same
        copy to ~5 lines of red that lands squarely on #convToolbar, which is
