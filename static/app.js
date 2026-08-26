@@ -14752,8 +14752,7 @@
           || document.querySelector('[data-model-picker]');
         if (picker) picker.click();
       } else if (action === 'technical-details') {
-        const restore = document.getElementById('statusRailRestoreBtn');
-        if (restore && restore.offsetParent !== null) restore.click();
+        _simpleToggleTechStrip();
       }
     });
   }
@@ -14937,10 +14936,6 @@
     _simpleTechCurrentId = id;
     const revealed = !!id && _simpleTechRevealedSessions.has(id);
     document.body.classList.toggle('ccc-simple-tech-open', revealed);
-    const btn = document.getElementById('simpleTechToggle');
-    const label = document.getElementById('simpleTechToggleLabel');
-    if (btn) btn.setAttribute('aria-pressed', revealed ? 'true' : 'false');
-    if (label) label.textContent = revealed ? 'Hide technical details' : 'Show technical details';
   }
   function _simpleToggleTechStrip() {
     const id = _simpleTechCurrentId;
@@ -14949,11 +14944,6 @@
     else _simpleTechRevealedSessions.add(id);
     _simpleSyncTechStrip(id);
   }
-  function _wireSimpleTechToggle() {
-    const btn = document.getElementById('simpleTechToggle');
-    if (btn) btn.addEventListener('click', _simpleToggleTechStrip);
-  }
-  _wireSimpleTechToggle();
 
   // ── Stop: same interrupt path as the advanced Esc button (/api/inject-esc),
   // reachable from the shared Actions menu instead of a standalone button. ──

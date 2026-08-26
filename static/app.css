@@ -14371,7 +14371,7 @@
     }
     .mobile-actions-menu {
       position: absolute;
-      left: 0;
+      right: 0;
       top: 100%;
       margin-top: 4px;
       z-index: 40;

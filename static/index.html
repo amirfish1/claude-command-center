@@ -923,15 +923,6 @@
            app.js. In the Simple depth-2 view the rest of this toolbar is
            hidden by CSS, so this span + the back button ARE the header. -->
       <span class="simple-conv-title" id="simpleConvTitle"></span>
-      <!-- Simple mode only: reveals the "technical strip" (tool-call logs,
-           file diffs, per-turn cost) for THIS open conversation only. Stays
-           revealed while you're on this conversation and if you come back to
-           it later this browser session; resets on reload. Wired by
-           _wireSimpleTechToggle() / _simpleSyncTechStrip() in app.js. -->
-      <button type="button" class="simple-tech-toggle" id="simpleTechToggle"
-              aria-pressed="false" title="Show or hide technical details for this task">
-        <span id="simpleTechToggleLabel">Show technical details</span>
-      </button>
       <button type="button" class="mobile-original-ask" id="mobileOriginalAsk"
               aria-expanded="false" title="Show the full original ask" hidden>
         <span class="mobile-original-ask__label">Original ask</span>

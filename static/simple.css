@@ -894,13 +894,13 @@ body.ccc-mobile-redesign.ccc-simple-mode.ccc-simple-conv-open #convToolbar {
 body.ccc-mobile-redesign.ccc-simple-mode.ccc-simple-conv-open #convToolbar:has(.mobile-actions-menu:not([hidden])) {
   overflow: visible;
 }
-/* Back + title claim the first row; the tech toggle and Actions menu wrap
-   to a second row rather than overflowing off the right edge of a narrow
-   phone — confirmed cut off at 390px wide before this fix. */
+/* Back + title claim the first row; the Actions menu wraps to a second row
+   rather than overflowing off the right edge of a narrow phone — confirmed
+   cut off at 390px wide before this fix. */
 body.ccc-mobile-redesign.ccc-simple-mode.ccc-simple-conv-open .simple-conv-title {
   flex-basis: 0;
 }
-body.ccc-mobile-redesign.ccc-simple-mode.ccc-simple-conv-open #convToolbar > :not(#mobileBackBtn):not(#simpleConvTitle):not(.simple-tech-toggle):not(.mobile-actions-wrap) {
+body.ccc-mobile-redesign.ccc-simple-mode.ccc-simple-conv-open #convToolbar > :not(#mobileBackBtn):not(#simpleConvTitle):not(.mobile-actions-wrap) {
   display: none !important;
 }
 /* Advanced pane chrome: pane header (proc pills, verbose/replay/annotate
@@ -920,11 +920,12 @@ body.ccc-mobile-redesign.ccc-simple-mode.ccc-simple-conv-open [data-role="conv-f
 /* Transcript noise: tool-call groups (already collapsed summaries), system
    events, model/effort meta lines, per-turn cost. User + assistant bubbles
    stay. All of this is the "technical strip" content: hidden by default,
-   revealed only when the user taps #simpleTechToggle for THIS open
-   conversation (body.ccc-simple-tech-open, set/cleared per session id by
-   _simpleSyncTechStrip() in app.js — see _simpleOnConversationOpen). Token/
-   context usage and the agent/model name shown in #simpleConvTitle are NOT
-   technical and are never gated by this class. */
+   revealed only via the Actions menu's "Open technical details" row for
+   THIS open conversation (body.ccc-simple-tech-open, set/cleared per
+   session id by _simpleSyncTechStrip() in app.js — see
+   _simpleOnConversationOpen). Token/context usage and the agent/model name
+   shown in #simpleConvTitle are NOT technical and are never gated by this
+   class. */
 body.ccc-mobile-redesign.ccc-simple-mode.ccc-simple-conv-open:not(.ccc-simple-tech-open) .conversations-view .tool-call-group,
 body.ccc-mobile-redesign.ccc-simple-mode.ccc-simple-conv-open:not(.ccc-simple-tech-open) .conversations-view .event.system,
 body.ccc-mobile-redesign.ccc-simple-mode.ccc-simple-conv-open:not(.ccc-simple-tech-open) .conversations-view .event-model-meta,
@@ -932,28 +933,8 @@ body.ccc-mobile-redesign.ccc-simple-mode.ccc-simple-conv-open:not(.ccc-simple-te
 body.ccc-mobile-redesign.ccc-simple-mode.ccc-simple-conv-open:not(.ccc-simple-tech-open) .conversations-view .event.result .stats .simple-tech-cost {
   display: none !important;
 }
-/* Toggle button: lives in the depth-2 toolbar next to the plain title. */
-.simple-tech-toggle { display: none; }
-body.ccc-mobile-redesign.ccc-simple-mode.ccc-simple-conv-open .simple-tech-toggle {
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
-  flex: 0 0 auto;
-  padding: 5px 10px;
-  border-radius: 999px;
-  border: 1px solid var(--border);
-  background: var(--panel-2, transparent);
-  color: var(--text-muted);
-  font-size: 12px;
-  font-weight: 600;
-  cursor: pointer;
-}
-body.ccc-mobile-redesign.ccc-simple-mode.ccc-simple-conv-open.ccc-simple-tech-open .simple-tech-toggle {
-  color: var(--text);
-  border-color: var(--accent, var(--border));
-}
-/* Stop and text-size now live as rows in the shared Actions menu
-   (app.css) — no standalone buttons/styling here. */
+/* Stop, text-size, and technical-details now live as rows in the shared
+   Actions menu (app.css) — no standalone buttons/styling here. */
 /* Plain chat bubbles: worker on the left, you on the right. */
 body.ccc-mobile-redesign.ccc-simple-mode.ccc-simple-conv-open .conversations-view .event.user_text,
 body.ccc-mobile-redesign.ccc-simple-mode.ccc-simple-conv-open .conversations-view .event.assistant {
