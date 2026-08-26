@@ -42012,13 +42012,41 @@ def _queue_terminal_input(session_id, text, status=None):
     return _queue_terminal_input_unlocked(session_id, text, status)
 
 
+def _terminal_queue_dedupe_key(text):
+    """Collapse key for slash commands that must not stack in one session's
+    queue (/compact, /clear); None for ordinary text, which may repeat."""
+    if not isinstance(text, str):
+        return None
+    if _COMPACT_TRIGGER_RE.match(text):
+        return "/compact"
+    if _CLEAR_TRIGGER_RE.match(text):
+        return "/clear"
+    return None
+
+
 def _queue_terminal_input_unlocked(session_id, text, status=None):
     """Queue input until a live Claude session reports it is idle again."""
+    deduped = False
     with _pending_terminal_input_lock:
         queue = _pending_terminal_input_queue.setdefault(session_id, [])
-        queue.append(text)
+        # A second /compact (or /clear) queued while the first is still
+        # pending would land on the already-compacted session and be refused
+        # ("Not enough messages to compact."). One copy per session is the
+        # whole intent; collapse the duplicate instead of stacking it.
+        if _terminal_queue_dedupe_key(text) is not None and any(
+            _terminal_queue_dedupe_key(item) == _terminal_queue_dedupe_key(text)
+            for item in queue
+        ):
+            deduped = True
+        else:
+            queue.append(text)
         queued_count = len(queue)
-    _save_pending_inputs()
+    if deduped:
+        # A worker-handoff copy is str-compatible; release its inbox file
+        # now, since it will never be popped by the drain loop.
+        _complete_pending_input_handoff(text)
+    else:
+        _save_pending_inputs()
     payload = {
 
         "ok": True,
@@ -42027,6 +42055,9 @@ def _queue_terminal_input_unlocked(session_id, text, status=None):
         "session_id": session_id,
         "queued_count": queued_count,
     }
+    if deduped:
+        payload["deduped"] = True
+        payload["note"] = "Already queued for this session; not queued twice."
     if status:
         payload["pid"] = status.get("pid")
         payload["status"] = status.get("status")
@@ -43132,6 +43163,28 @@ def _mark_terminal_queue_retry(sid, now=None, delay=None):
     _pending_terminal_retry_after[sid] = now + max(0.0, delay)
 
 
+# Outcomes the SESSION ITSELF refused, as opposed to CCC failing to deliver.
+# `compact_failed` is Claude Code answering a delivered /compact with
+# `compact_result: "failed"` ("Not enough messages to compact." on a freshly
+# compacted session). Retrying cannot change any of these, so the watcher
+# must consume the entry instead of requeueing it at the front: observed
+# 2026-08-26 (twice), a queued /compact that landed right after a successful
+# compaction was re-sent every 60s until the dashboard restarted.
+_TERMINAL_QUEUE_TERMINAL_CODES = frozenset({
+    "compact_failed",
+    "compact_unsupported_engine",
+    "compact_needs_manual",
+    "clear_unsupported_engine",
+})
+
+
+def _terminal_queue_result_is_terminal(result):
+    """True when a drained entry's failure is final (drop it, don't retry)."""
+    if not isinstance(result, dict):
+        return False
+    return str(result.get("code") or "") in _TERMINAL_QUEUE_TERMINAL_CODES
+
+
 # CCC-984: several terminal-queue gates above (ask-question, active-acp,
 # tty-busy, headless-turn-wait, bg-not-ready) `continue` with NO log line —
 # a stuck item is invisible until it eventually resolves or falls into one
@@ -43720,6 +43773,24 @@ def _start_resume_queue_watcher() -> None:
                         # attempt is in the held bucket for the human.
                         _complete_pending_input_handoff(text)
                         _pending_terminal_retry_after.pop(sid, None)
+                    elif _terminal_queue_result_is_terminal(result):
+                        # The session REFUSED the command (e.g. /compact on a
+                        # just-compacted session: "Not enough messages to
+                        # compact."). It was delivered; the answer is final.
+                        # Requeueing would re-send it every backoff window
+                        # forever. Consume it, loudly.
+                        _complete_pending_input_handoff(text)
+                        _pending_terminal_retry_after.pop(sid, None)
+                        try:
+                            _log_activity(
+                                "inject", "Q_DROP",
+                                f"session={sid} code={result.get('code')} "
+                                f"text={str(text)[:40]!r} — session refused "
+                                f"the queued command, not retrying: "
+                                f"{result.get('error') or ''}",
+                            )
+                        except Exception:
+                            pass
                     elif not result.get("ok"):
                         _requeue_terminal_input_front(sid, text)
                         _mark_terminal_queue_retry(sid)
