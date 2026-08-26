@@ -14392,7 +14392,7 @@
       || _mobileRedesignMQ.matches;
   }
   function _syncMobileRedesignBodyClass() {
-    document.body.classList.toggle('ccc-mobile-redesign', isMobileRedesign());
+    document.body.classList.toggle('ccc-mobile-redesign', isMobileChromeActive());
     _syncMobileMoreMenu();
     if (typeof _syncMobileBottomNav === 'function') _syncMobileBottomNav();
   }
@@ -14418,7 +14418,7 @@
     const moreBtn = document.getElementById('cccTopbarMoreBtn');
     if (!menu || !topbar) return;
     const nodes = _mobileMoreMenuNodes();
-    if (isMobileRedesign()) {
+    if (isMobileChromeActive()) {
       // Snapshot each node's original next-sibling once, before any move,
       // so exiting mobile mode can restore exact original order.
       nodes.forEach(n => { if (!_mobileMoreMenuHome.has(n)) _mobileMoreMenuHome.set(n, n.nextSibling); });
@@ -14468,16 +14468,15 @@
   // gates mobile-vs-desktop CHROME). This gates plain-language labels and
   // progressive disclosure of technical info within whatever chrome is
   // already showing. Explicit user choice (localStorage 'ccc-ui-mode')
-  // always wins; unset defaults to 'simple' on a narrow/mobile viewport and
-  // 'advanced' otherwise, so an existing desktop user's first load after
-  // this ships looks exactly as it did before — nothing changes until they
-  // opt in from Settings.
+  // always wins; unset ALWAYS defaults to 'advanced', regardless of viewport
+  // width, so nothing about this redesign is ever active for anyone —
+  // mobile or desktop — until they explicitly opt in from Settings.
   function getUiMode() {
     try {
       const stored = localStorage.getItem('ccc-ui-mode');
       if (stored === 'simple' || stored === 'advanced') return stored;
     } catch (_) {}
-    return isMobileRedesign() ? 'simple' : 'advanced';
+    return 'advanced';
   }
   function setUiMode(mode) {
     const value = mode === 'simple' ? 'simple' : 'advanced';
@@ -14485,6 +14484,12 @@
     _syncUiModeBodyClass();
   }
   function isSimpleMode() { return getUiMode() === 'simple'; }
+  // The mobile CHROME (collapsed "More" menu, mobile id chip, mobile
+  // status-line row redesign, bottom nav) is gated on this, not on
+  // isMobileRedesign() alone — a narrow window by itself must never change
+  // the UI for a user who hasn't opted into Simple mode. See isSimpleMode's
+  // opt-in-only default above.
+  function isMobileChromeActive() { return isMobileRedesign() && isSimpleMode(); }
   function _syncUiModeBodyClass() {
     document.body.classList.toggle('ccc-simple-mode', isSimpleMode());
     const toggle = document.getElementById('settingsUiModeToggle');
@@ -14493,6 +14498,7 @@
       toggle.classList.toggle('is-on', on);
       toggle.setAttribute('aria-checked', String(on));
     }
+    if (typeof _syncMobileRedesignBodyClass === 'function') _syncMobileRedesignBodyClass();
     if (typeof _syncMobileBottomNav === 'function') _syncMobileBottomNav();
     if (typeof _syncMobileSimpleHeader === 'function') _syncMobileSimpleHeader();
     if (typeof _syncSimpleHomeVisibility === 'function') _syncSimpleHomeVisibility();
@@ -28734,7 +28740,7 @@
         // this whole badge-soup block (needs-approval/question/issue chip/
         // stage/no-edits/read-only) folds into a collapsed Details panel
         // instead, so desktop keeps every statement below unchanged.
-        if (isMobileRedesign()) {
+        if (isMobileChromeActive()) {
           html += mobileCardStatusLineHtml(deriveMobileCardStatus(c, trulyActive));
         } else {
         if (c.needs_approval) {
@@ -28768,7 +28774,7 @@
             + 'Last interacted ' + escapeHtml(relativeTime(c.last_interacted))
             + '</div>';
         }
-        if (!isMobileRedesign()) {
+        if (!isMobileChromeActive()) {
         html += '<div class="kanban-card-stage ' + stageCls + '">' + escapeHtml(stageLabel) + '</div>';
         if (noEditsAttr) {
           html += '<span class="kanban-card-stage no-edits" title="Agent has not edited any files in this session">no edits</span>';
@@ -28783,7 +28789,7 @@
         // column gap where the card showed nothing while Claude was busy.
         // Mobile: same signals already drove the status line above; the
         // Details panel below carries the raw tool/age text instead.
-        if (!isMobileRedesign() && c.stale_tool_call) {
+        if (!isMobileChromeActive() && c.stale_tool_call) {
           const staleTool = c.pending_tool || c.sidecar_tool || 'tool';
           const staleAge = c.pending_tool_ts ? relativeTime(c.pending_tool_ts) : (c.stale_tool_age_s ? Math.floor(c.stale_tool_age_s / 60) + 'm' : '');
           const staleDetail = c.pending_file || c.sidecar_file || '';
@@ -28813,7 +28819,7 @@
           html += '<div class="kanban-live-tool in-flight" title="Compacting the conversation to free up context">'
             + '<span class="kanban-live-name">▶ Compacting&hellip;</span>'
             + '</div>';
-        } else if (!isMobileRedesign() && c.is_live && c.sidecar_status === 'active' && c.sidecar_tool && c.sidecar_tool !== 'AskUserQuestion') {
+        } else if (!isMobileChromeActive() && c.is_live && c.sidecar_status === 'active' && c.sidecar_tool && c.sidecar_tool !== 'AskUserQuestion') {
           const sidecarAge = c.sidecar_ts ? Math.max(0, Math.floor(Date.now() / 1000 - c.sidecar_ts)) : 9999;
           if (sidecarAge < 300) {
             const rawDetail = c.sidecar_file || '';
@@ -28834,7 +28840,7 @@
           }
         }
 
-        if (isMobileRedesign()) {
+        if (isMobileChromeActive()) {
           // Collapsed Details toggle — everything the badges above carried
           // on desktop (engine, cost tier, linked issue, stage, edit
           // status, live tool) still exists, just demoted behind a tap.
@@ -32215,7 +32221,7 @@
       // completely untouched.
       let mobileStatusHtml = '';
       let mobileDetailsHtml = '';
-      if (isMobileRedesign()) {
+      if (isMobileChromeActive()) {
         const _mStatus = deriveMobileRowStatus(c, _isAgentRunning, _isWaitingForUser, _hasStaleToolCall, _knownActivityTool);
         mobileStatusHtml = mobileCardStatusLineHtml(_mStatus);
         const _detailInner = rowMetaHtml + hoverMetaRowHtml + cooStatusHtml + cooEscalatedHtml
