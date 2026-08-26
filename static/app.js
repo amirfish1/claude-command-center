@@ -15363,9 +15363,13 @@
       const results = await Promise.all([
         fetch('/api/attention', { cache: 'no-store' }).then(r => r.json()).catch(() => null),
         fetch('/api/sessions?all=1', { cache: 'no-store' }).then(r => r.json()).catch(() => null),
-        fetch('/api/conversations/all?stale_ok=1', { cache: 'no-store' }).then(r => r.json()).catch(() => null),
+        loadArchiveAll({ staleOk: true, window: 'all' }).catch(() => null),
       ]);
-      attention = results[0]; sessions = results[1]; archive = results[2];
+      attention = results[0]; sessions = results[1];
+      // loadArchiveAll resolves the conversations array directly (already
+      // ETag-cached/deduped against Advanced mode's same in-flight fetch),
+      // not a {conversations: [...]} envelope like the raw endpoint.
+      archive = Array.isArray(results[2]) ? { conversations: results[2] } : null;
     } catch (_) { return; }
 
     // Needs you: sessions waiting on the user. (R4's stuck-queue alerts are
@@ -15867,10 +15871,8 @@
       list.innerHTML = '<div class="simple-loading"><span class="simple-spinner" aria-hidden="true"></span>Loading your past tasks…</div>';
     }
     try {
-      const res = await fetch('/api/conversations/all?stale_ok=1', { cache: 'no-store' });
-      const data = await res.json().catch(() => null);
-      const rows = (data && Array.isArray(data.conversations)) ? data.conversations : [];
-      _simpleHistoryRows = rows
+      const rows = await loadArchiveAll({ staleOk: true, window: 'all' });
+      _simpleHistoryRows = (Array.isArray(rows) ? rows : [])
         .filter(r => r && (r.id || r.session_id))
         .sort((a, b) => (Number(b.mtime || b.modified) || 0) - (Number(a.mtime || a.modified) || 0));
     } catch (_) { /* keep the previous cache */ }
