@@ -181,6 +181,19 @@ _CONTROL_PLANE_ENGINE_CLIENT = ControlPlaneClient(timeout=45.0)
 _CONTROL_PLANE_REQUEST_CONTEXT = threading.local()
 _CONTROL_PLANE_START_LOCK = threading.Lock()
 
+# Per-session /compact dedupe: nothing upstream (client-side `_compactInFlight`
+# in app.js, or the control-plane idempotency_key) protects against two
+# independent HTTP requests for the SAME session_id racing each other — e.g. a
+# phone tab reloading mid-request and re-sending, or two open tabs/devices on
+# the same session both pressing Compact. Each request otherwise gets its own
+# idempotency_key (a fresh uuid4 when the client doesn't supply one — see
+# _take_control_plane_action_id) and is processed independently, so a single
+# accidental double-send can fire off several real /compact runs. Guard here
+# collapses concurrent/rapid duplicate requests for one session_id.
+_COMPACT_INFLIGHT_LOCK = threading.Lock()
+_COMPACT_INFLIGHT_SESSIONS = {}  # sid -> monotonic timestamp compact started
+_COMPACT_INFLIGHT_COOLDOWN_SECONDS = 20.0
+
 
 def _set_control_plane_action_id(value):
     _CONTROL_PLANE_REQUEST_CONTEXT.idempotency_key = str(value or "").strip()
@@ -55816,7 +55829,37 @@ def compact_session_context(session_id, *, terminal_app=None, _from_terminal_que
       - LIVE interactive terminal → keystroke /compact into the TUI.
       - LIVE background agent → pty-socket inject.
       - DORMANT (no live stdin) → hidden-pty `claude --resume` fallback.
+
+    Wrapped with a per-session_id in-flight guard: nothing upstream stops two
+    independent HTTP requests for the same session racing each other (a phone
+    tab reloading mid-request and re-sending, two tabs/devices both pressing
+    Compact), so a duplicate request arriving while one is already running
+    for this sid is rejected instead of kicking off a second real compact.
     """
+    sid = (session_id or "").strip()
+    if not sid:
+        return {"ok": False, "error": "missing session_id"}
+
+    now = time.monotonic()
+    with _COMPACT_INFLIGHT_LOCK:
+        started_at = _COMPACT_INFLIGHT_SESSIONS.get(sid)
+        if started_at is not None and now - started_at < _COMPACT_INFLIGHT_COOLDOWN_SECONDS:
+            return {
+                "ok": False,
+                "code": "compact_already_in_progress",
+                "error": "A /compact request for this session is already in progress.",
+            }
+        _COMPACT_INFLIGHT_SESSIONS[sid] = now
+    try:
+        return _compact_session_context_impl(
+            sid, terminal_app=terminal_app, _from_terminal_queue=_from_terminal_queue,
+        )
+    finally:
+        with _COMPACT_INFLIGHT_LOCK:
+            _COMPACT_INFLIGHT_SESSIONS.pop(sid, None)
+
+
+def _compact_session_context_impl(session_id, *, terminal_app=None, _from_terminal_queue=False):
     sid = (session_id or "").strip()
     if not sid:
         return {"ok": False, "error": "missing session_id"}
