@@ -14321,6 +14321,17 @@
       transform: translateX(0);
     }
 
+    /* Between the rail's own 700px cutoff (app-rail.js) and this 1200px
+       breakpoint, the app-rail is still visible and fixed at left:0 above
+       .main's z-index:800 — .main's left:0 above puts its content straight
+       under the rail. Below 700px the rail is gone and left:0 is correct
+       as-is. */
+    @media (min-width: 701px) {
+      body:not(.kanban-split) .main {
+        left: var(--ccc-rail-w, 76px);
+      }
+    }
+
     .mobile-back-btn {
       display: inline-flex !important;
       align-items: center; gap: 4px;
