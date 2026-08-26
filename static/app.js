@@ -14641,8 +14641,23 @@
     const newBtn = document.getElementById('mshNewBtn');
     if (newBtn) {
       newBtn.addEventListener('click', () => {
-        const real = document.getElementById('sidebarNewBtn');
-        if (real) real.click();
+        // Was proxying to #sidebarNewBtn.click() -> enterNewSessionMode(),
+        // Advanced mode's off-canvas .main flow. That slides .main into view
+        // but never clears ccc-simple-home-open, so Simple mode's CSS keeps
+        // #convInputBar/#convInput at 0x0 underneath it - the button looked
+        // dead. Simple mode's own "new task" surface is the Home composer;
+        // go there directly instead.
+        if (typeof _simpleShowHome === 'function') _simpleShowHome();
+        // The composer's home section starts collapsed by design (user
+        // feedback was it should start closed) - "+" means "start a task
+        // now", so force it open rather than land on a collapsed section.
+        if (typeof _simpleCollapsedSections !== 'undefined' && _simpleCollapsedSections.has('composer')) {
+          _simpleCollapsedSections.delete('composer');
+          if (typeof _simpleSaveCollapsedSections === 'function') _simpleSaveCollapsedSections();
+          if (typeof _simpleApplyCollapsedState === 'function') _simpleApplyCollapsedState();
+        }
+        const input = document.getElementById('simpleComposerInput');
+        if (input) { try { input.focus(); input.scrollIntoView({block: 'center'}); } catch (_) {} }
       });
     }
     const searchBtn = document.getElementById('mshSearchBtn');
