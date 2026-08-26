@@ -14287,13 +14287,23 @@
     else mobileShowMain(true);
   }
   const $mobileBackBtn = document.getElementById('mobileBackBtn');
-  // One back button for every mode: Simple mode returns to its Home screen,
-  // everything else returns to the sidebar. Single element, single listener —
-  // the mode check picks a destination, it doesn't select between two
-  // buttons.
+  // One back button for every mode: Simple mode returns to wherever the open
+  // conversation was launched from (a screen like History, or Home if it
+  // was opened directly from a Home card — see _simpleReturnScreen /
+  // _simpleOnConversationOpen), everything else returns to the sidebar.
+  // Single element, single listener.
   if ($mobileBackBtn) $mobileBackBtn.addEventListener('click', () => {
-    if (isSimpleMode() && typeof _simpleShowHome === 'function') _simpleShowHome();
-    else mobileShowMain(false);
+    if (isSimpleMode()) {
+      if (_simpleReturnScreen && typeof _simpleOpenScreen === 'function') {
+        const target = _simpleReturnScreen;
+        _simpleReturnScreen = null;
+        _simpleOpenScreen(target);
+      } else if (typeof _simpleShowHome === 'function') {
+        _simpleShowHome();
+      }
+    } else {
+      mobileShowMain(false);
+    }
   });
   const $mobileOriginalAsk = document.getElementById('mobileOriginalAsk');
   const $mobileOriginalAskText = document.getElementById('mobileOriginalAskText');
@@ -14815,6 +14825,10 @@
   // open, if any. 'history' | 'automations' | 'automation-detail' | 'settings'.
   // Exactly one of {home, a screen, a conversation} is visible at a time.
   var _simpleScreen = null;
+  // The screen (if any) a just-opened conversation was launched from, so the
+  // shared #mobileBackBtn can return there instead of always landing on
+  // Home — see _simpleOnConversationOpen() and its wiring below.
+  var _simpleReturnScreen = null;
   var _simpleAutomationQueue = '';   // queue name shown in automation-detail
   var _simpleAutomationRepoPath = '';   // repo_path for _simpleSpawnQueueHelper()
   // var (not const) for the lookup tables too: _syncUiModeBodyClass() can run
@@ -14903,6 +14917,7 @@
     try {
       if (!isSimpleMode()) return;
       if (typeof _qfBootRestoreDepth === 'undefined' || _qfBootRestoreDepth <= 0) {
+        _simpleReturnScreen = _simpleScreen;
         _simpleScreen = null;
         _simpleHideHome();
       }
