@@ -15241,12 +15241,19 @@
   }
 
   // ── Working / Finished cards ──
+  // Only trusts the live_context_* fields, which are captured from an actual
+  // `/context` read and carry the model's real reported limit. The sibling
+  // context_limit/latest_input_tokens fields are CCC's 200K-vs-1M GUESS
+  // (server.py CCC-943 heuristic — it can't prove a session is on the 1M
+  // variant until a turn has already exceeded 200K tokens), which produced a
+  // confidently-wrong "45% full" on a session that was really ~11% full.
+  // Simple mode states a percent only when it actually has one.
   function _simpleMemoryPercent(row) {
     if (!row) return null;
     const direct = Number(row.live_context_percent);
     if (direct > 0) return direct;
-    const limit = Number(row.live_context_limit || row.context_limit) || 0;
-    const tokens = Number(row.live_context_tokens || row.latest_input_tokens) || 0;
+    const limit = Number(row.live_context_limit) || 0;
+    const tokens = Number(row.live_context_tokens) || 0;
     if (limit > 0 && tokens > 0) return (tokens / limit) * 100;
     return null;
   }
@@ -15498,7 +15505,7 @@
     }
     const render = (pct, cost) => {
       let text;
-      if (pct === null) text = 'Memory: 0% full — no usage reported yet.';
+      if (pct === null) text = 'Memory: not measured yet.';
       else {
         const p = Math.round(pct);
         text = 'Memory: ' + p + '% full — '
@@ -15527,8 +15534,10 @@
       const res = await fetch('/api/session/' + encodeURIComponent(sid) + '/usage', { cache: 'no-store' });
       const d = await res.json().catch(() => null);
       if (d) {
-        const limit = Number(d.live_context_limit || d.context_limit) || 0;
-        const tokens = Number(d.live_context_tokens || d.latest_input_tokens) || 0;
+        // Live-only, same reasoning as _simpleMemoryPercent above: never fall
+        // back to the guessed context_limit/latest_input_tokens fields.
+        const limit = Number(d.live_context_limit) || 0;
+        const tokens = Number(d.live_context_tokens) || 0;
         if (Number(d.live_context_percent) > 0) pct = Number(d.live_context_percent);
         else if (limit > 0 && tokens > 0) pct = (tokens / limit) * 100;
         if (typeof d.cost_usd === 'number' && d.cost_usd > 0) cost = d.cost_usd;
