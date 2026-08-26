@@ -15405,7 +15405,7 @@
       const results = await Promise.all([
         fetch('/api/attention', { cache: 'no-store' }).then(r => r.json()).catch(() => null),
         fetch('/api/sessions?all=1', { cache: 'no-store' }).then(r => r.json()).catch(() => null),
-        fetch('/api/conversations/all', { cache: 'no-store' }).then(r => r.json()).catch(() => null),
+        fetch('/api/conversations/all?stale_ok=1', { cache: 'no-store' }).then(r => r.json()).catch(() => null),
       ]);
       attention = results[0]; sessions = results[1]; archive = results[2];
     } catch (_) { return; }
@@ -15900,7 +15900,7 @@
   }
   async function _simpleRenderHistory() {
     try {
-      const res = await fetch('/api/conversations/all', { cache: 'no-store' });
+      const res = await fetch('/api/conversations/all?stale_ok=1', { cache: 'no-store' });
       const data = await res.json().catch(() => null);
       const rows = (data && Array.isArray(data.conversations)) ? data.conversations : [];
       _simpleHistoryRows = rows
