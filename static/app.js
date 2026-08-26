@@ -15366,6 +15366,12 @@
   async function _simpleHomeRefresh() {
     const home = document.getElementById('simpleHome');
     if (!home || !isSimpleMode()) return;
+    // First load has nothing cached yet to show while these fetches are in
+    // flight — show a spinner instead of leaving the section blank.
+    const tasksEl0 = document.getElementById('simpleTasks');
+    if (tasksEl0 && !tasksEl0.innerHTML.trim()) {
+      tasksEl0.innerHTML = '<div class="simple-loading"><span class="simple-spinner" aria-hidden="true"></span>Loading your tasks…</div>';
+    }
     let attention = null, sessions = null, archive = null;
     try {
       const results = await Promise.all([
@@ -15865,6 +15871,15 @@
         + '</div>';
   }
   async function _simpleRenderHistory() {
+    // First open (no cached rows yet) has nothing to show while the fetch
+    // is in flight — show a spinner instead of a silent blank screen.
+    // Later opens already have _simpleHistoryRows from last time, so keep
+    // showing that immediately and just refresh it in the background.
+    const list = document.getElementById('simpleHistoryList');
+    const hasCache = Array.isArray(_simpleHistoryRows) && _simpleHistoryRows.length > 0;
+    if (!hasCache && list) {
+      list.innerHTML = '<div class="simple-loading"><span class="simple-spinner" aria-hidden="true"></span>Loading your past tasks…</div>';
+    }
     try {
       const res = await fetch('/api/conversations/all?stale_ok=1', { cache: 'no-store' });
       const data = await res.json().catch(() => null);

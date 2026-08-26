@@ -549,6 +549,23 @@ body.ccc-simple-mode .simple-empty {
   color: var(--text-muted);
   padding: 14px 4px;
 }
+body.ccc-simple-mode .simple-loading {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-size: 15px;
+  color: var(--text-muted);
+  padding: 14px 4px;
+}
+body.ccc-simple-mode .simple-spinner {
+  width: 16px;
+  height: 16px;
+  flex: 0 0 auto;
+  border-radius: 50%;
+  border: 2px solid var(--border);
+  border-top-color: var(--accent, var(--green));
+  animation: ccc-spin 0.8s linear infinite;
+}
 
 /* --- Needs-you cards --- */
 /* Swipe wrapper: "Not now" sits behind the card at a fixed width, revealed
