@@ -29867,10 +29867,11 @@
       idempotency_key: durableActionId('compact'),
     };
     if (terminalApp) payload.terminal_app = terminalApp;
-    // The server usually completes Claude compaction within its own three
-    // minute deadline. Do not leave the UI disabled forever if that request
-    // gets wedged before it can send a response.
-    const COMPACT_REQUEST_TIMEOUT_MS = 4 * 60 * 1000;
+    // The server waits up to 330s for the worker to finish a Claude
+    // compaction (180s in-stream, 300s hidden-pty fallback). Outlast that so
+    // a slow-but-successful compaction is not reported as timed out, but do
+    // not leave the UI disabled forever if the request gets wedged.
+    const COMPACT_REQUEST_TIMEOUT_MS = 6 * 60 * 1000;
     const controller = typeof AbortController === 'function' ? new AbortController() : null;
     const timer = controller
       ? setTimeout(() => controller.abort(), COMPACT_REQUEST_TIMEOUT_MS)
