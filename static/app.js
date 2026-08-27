@@ -55038,12 +55038,20 @@
     if (spawn) return spawn.running || spawn.status === 'running' ? 'working' : 'done';
     return 'idle';
   }
+  // Lane label: a user rename wins, then the spawn-time name (what the
+  // orchestrator called the lane), then the row's AI title, which for a
+  // one-line worker is often just its reply ("lane 2 done").
+  function orchLaneName(row, spawn, sid) {
+    const clean = (v) => String(v || '').replace(/[`*_]+/g, '').trim();
+    if (row && row.name_overridden && clean(row.display_name)) return clean(row.display_name);
+    return clean(spawn && spawn.name) || clean(row && row.display_name) || sid.slice(0, 8);
+  }
   function orchLane(row, spawn) {
     const sid = (row && row.session_id) || (spawn && spawn.session_id) || '';
     return {
       id: sid,
       convId: (row && row.id) || sid,
-      name: (row && row.display_name) || (spawn && spawn.name) || sid.slice(0, 8),
+      name: orchLaneName(row, spawn, sid),
       engine: (row && row.engine) || (spawn && spawn.engine) || 'claude',
       model: (row && row.model) || (spawn && spawn.model) || '',
       status: orchLaneStatus(row, spawn),
@@ -55056,13 +55064,15 @@
     const rows = conversationsData || [];
     const byId = new Map();
     rows.forEach(r => { if (r && r.session_id) byId.set(r.session_id, r); });
+    const spawnById = new Map();
+    (_orchSpawnedRegistry || []).forEach(sp => { if (sp && sp.session_id) spawnById.set(sp.session_id, sp); });
     const seen = new Set();
     const lanes = [];
     rows.forEach(r => {
       const pid = String((r && (r.parent_session_id || r.hermes_parent_session_id)) || '');
       if (pid !== sid || !r.session_id || seen.has(r.session_id)) return;
       seen.add(r.session_id);
-      lanes.push(orchLane(r, null));
+      lanes.push(orchLane(r, spawnById.get(r.session_id) || null));
     });
     (_orchSpawnedRegistry || []).forEach(sp => {
       if (String(sp.parent_session_id || '') !== sid || !sp.session_id || seen.has(sp.session_id)) return;
