@@ -6035,7 +6035,7 @@ class TestServerImports(unittest.TestCase):
             app_js.index("async function postCompactSession(sessionId, terminalApp)"):
             app_js.index("// Engines whose /compact", app_js.index("async function postCompactSession(sessionId, terminalApp)"))
         ]
-        self.assertIn("const COMPACT_REQUEST_TIMEOUT_MS = 4 * 60 * 1000;", compact_post)
+        self.assertIn("const COMPACT_REQUEST_TIMEOUT_MS = 6 * 60 * 1000;", compact_post)
         self.assertIn("const controller = typeof AbortController === 'function' ? new AbortController() : null;", compact_post)
         self.assertIn("setTimeout(() => controller.abort(), COMPACT_REQUEST_TIMEOUT_MS)", compact_post)
         self.assertIn("signal: controller ? controller.signal : undefined", compact_post)
