@@ -9301,6 +9301,7 @@
       const pendingSteerHtml = userMessageSteerHtml(text, null, null);
       pendingDiv.className = 'event user_text pending' + (pendingSteerHtml ? ' has-user-steer' : '');
       pendingDiv.innerHTML = '<span class="label">User</span>'
+        + '<button type="button" class="pending-send-cancel" title="Cancel - discard this message">✕</button>'
         + '<div class="user-msg" dir="auto" data-raw-text="' + escapeAttr(text) + '">' + escapeHtml(text) + '</div>'
         + pendingSteerHtml;
       $view.appendChild(pendingDiv);
@@ -9312,6 +9313,19 @@
       pending.list = _pendingSends;
       pending.entry = entry;
       pending.list.push(entry);
+      // Let the user dismiss a still-"sending…" echo immediately rather than
+      // wait out the not-acknowledged timeout — a message stuck mid-send
+      // (session unreachable, engine crashed) previously had no way to be
+      // cleared until _PENDING_SEND_ECHO_MAX_MS elapsed.
+      const cancelBtn = pendingDiv.querySelector('.pending-send-cancel');
+      if (cancelBtn) {
+        cancelBtn.addEventListener('click', (ev) => {
+          ev.preventDefault();
+          ev.stopPropagation();
+          removePendingSendEcho(pending);
+          clearOptimisticAgentIndicator($view);
+        });
+      }
       entry.timer = setTimeout(() => {
         if (pending.list && pending.entry && pending.list.includes(pending.entry)) {
           // Don't silently remove — the user's typed text would
@@ -10701,11 +10715,13 @@
   let _sttUpdatingText = false;
 
   function micButtons() {
-    return Array.from(document.querySelectorAll('.conv-input-bar .mic-btn, .gc-reader .mic-btn'));
+    return Array.from(document.querySelectorAll(
+      '.conv-input-bar .mic-btn, .gc-reader .mic-btn, .simple-composer-card .mic-btn'));
   }
 
   function micButtonPaneId(btn) {
     if (btn && btn.closest && btn.closest('.gc-reader')) return 'gc';
+    if (btn && btn.closest && btn.closest('.simple-composer-card')) return 'simple-home';
     const pane = btn && btn.closest && btn.closest('.conv-pane');
     return pane && pane.dataset ? pane.dataset.paneId : 'p1';
   }
@@ -10741,6 +10757,8 @@
     let textarea = null;
     if (paneId === 'gc') {
       textarea = document.getElementById('gcHumanInput');
+    } else if (paneId === 'simple-home') {
+      textarea = document.getElementById('simpleComposerInput');
     } else {
       textarea = composerInputForPane(paneId) || $convInput;
     }
@@ -14280,7 +14298,24 @@
     else mobileShowMain(true);
   }
   const $mobileBackBtn = document.getElementById('mobileBackBtn');
-  if ($mobileBackBtn) $mobileBackBtn.addEventListener('click', () => mobileShowMain(false));
+  // One back button for every mode: Simple mode returns to wherever the open
+  // conversation was launched from (a screen like History, or Home if it
+  // was opened directly from a Home card — see _simpleReturnScreen /
+  // _simpleOnConversationOpen), everything else returns to the sidebar.
+  // Single element, single listener.
+  if ($mobileBackBtn) $mobileBackBtn.addEventListener('click', () => {
+    if (isSimpleMode()) {
+      if (_simpleReturnScreen && typeof _simpleOpenScreen === 'function') {
+        const target = _simpleReturnScreen;
+        _simpleReturnScreen = null;
+        _simpleOpenScreen(target);
+      } else if (typeof _simpleShowHome === 'function') {
+        _simpleShowHome();
+      }
+    } else {
+      mobileShowMain(false);
+    }
+  });
   const $mobileOriginalAsk = document.getElementById('mobileOriginalAsk');
   const $mobileOriginalAskText = document.getElementById('mobileOriginalAskText');
   function syncMobileOriginalAsk(text) {
@@ -14315,7 +14350,13 @@
     // show the pane overlay; when transitioning to wide, hide it
     // (wide screens show both pane + sidebar side-by-side).
     const hasConversation = !!currentConversation;
-    if (isMobile() && hasConversation) {
+    // Same Simple-Home guard as selectConversation()'s mobileShowForCurrentMode()
+    // call: don't slide `.main` over a Simple Home the user is deliberately
+    // still on (e.g. rotating the phone while sitting on Home with a stale
+    // currentConversation from the last-opened task).
+    const _simpleHomeStillShowing = typeof isSimpleMode === 'function' && isSimpleMode()
+      && typeof _simpleHomeShowing !== 'undefined' && _simpleHomeShowing;
+    if (isMobile() && hasConversation && !_simpleHomeStillShowing) {
       mobileShowMain(true);
     } else if (!isMobile()) {
       mobileShowMain(false);
@@ -14328,6 +14369,1830 @@
   } catch (_) {}
   const $cpMobileBackBtn = document.getElementById('cpMobileBackBtn');
   if ($cpMobileBackBtn) $cpMobileBackBtn.addEventListener('click', () => mobileShowConv(false));
+
+  // ── Mobile REDESIGN gate ──
+  // Separate from isMobile()/_mobileMQ above, which only controls pane
+  // navigation (single-column + back button) at 1200px. This gate controls
+  // whether cards/topbar/session-id/view-mode actually render the
+  // simplified mobile UI (one status line, labeled copy chip, plain-language
+  // view buttons, collapsed "More" menu). Keep it aligned with _mobileMQ so
+  // tablets, narrow windows, and phone landscape get the same non-technical
+  // chrome as the single-column pane layout.
+  const _mobileRedesignMQ = window.matchMedia('(max-width: 1200px)');
+  const _mobileRedesignForcedByUrl = (function () {
+    try { return new URLSearchParams(window.location.search || '').get('mobile') === '1'; }
+    catch (_) { return false; }
+  })();
+  function isMobileRedesign() {
+    return window.CCC_FORCE_MOBILE_REDESIGN === true
+      || _mobileRedesignForcedByUrl
+      || _mobileRedesignMQ.matches;
+  }
+  function _syncMobileRedesignBodyClass() {
+    document.body.classList.toggle('ccc-mobile-redesign', isMobileChromeActive());
+    _syncMobileMoreMenu();
+    if (typeof _syncMobileBottomNav === 'function') _syncMobileBottomNav();
+  }
+
+  // ── Mobile "More" menu ──
+  // Reparents the ACTUAL topbar action nodes (not clones) into
+  // #cccTopbarMoreMenu when mobile mode is active, so their existing
+  // listeners/state carry over untouched; moves them back on exit.
+  const _mobileMoreMenuIds = [
+    'annotationStartBtn', 'annotationScreenBtn', 'annotationNotesBtn',
+    'kptWorktreesBtn', 'statsBtn', 'termToggleBtn', 'deployPill',
+  ];
+  const _mobileMoreMenuHome = new Map();
+  function _mobileMoreMenuNodes() {
+    const nodes = _mobileMoreMenuIds.map(id => document.getElementById(id)).filter(Boolean);
+    const localhostWrap = document.querySelector('.localhost-wrap');
+    if (localhostWrap) nodes.push(localhostWrap);
+    return nodes;
+  }
+  function _syncMobileMoreMenu() {
+    const menu = document.getElementById('cccTopbarMoreMenu');
+    const topbar = document.getElementById('cccTopbar');
+    const moreBtn = document.getElementById('cccTopbarMoreBtn');
+    if (!menu || !topbar) return;
+    const nodes = _mobileMoreMenuNodes();
+    if (isMobileChromeActive()) {
+      // Snapshot each node's original next-sibling once, before any move,
+      // so exiting mobile mode can restore exact original order.
+      nodes.forEach(n => { if (!_mobileMoreMenuHome.has(n)) _mobileMoreMenuHome.set(n, n.nextSibling); });
+      nodes.forEach(n => menu.appendChild(n));
+      if (moreBtn) moreBtn.style.display = '';
+    } else {
+      // Restore in reverse so each anchor is back in the topbar before
+      // the node before it needs to insertBefore against it.
+      nodes.slice().reverse().forEach(n => {
+        const nextSib = _mobileMoreMenuHome.get(n);
+        if (nextSib && nextSib.parentNode === topbar) topbar.insertBefore(n, nextSib);
+        else topbar.appendChild(n);
+      });
+      if (moreBtn) moreBtn.style.display = 'none';
+      menu.hidden = true;
+      if (moreBtn) moreBtn.setAttribute('aria-expanded', 'false');
+    }
+  }
+  const $cccTopbarMoreBtn = document.getElementById('cccTopbarMoreBtn');
+  const $cccTopbarMoreMenu = document.getElementById('cccTopbarMoreMenu');
+  if ($cccTopbarMoreBtn && $cccTopbarMoreMenu) {
+    $cccTopbarMoreBtn.addEventListener('click', (ev) => {
+      ev.stopPropagation();
+      const open = !$cccTopbarMoreMenu.hidden;
+      $cccTopbarMoreMenu.hidden = open;
+      $cccTopbarMoreBtn.setAttribute('aria-expanded', open ? 'false' : 'true');
+    });
+    document.addEventListener('click', (ev) => {
+      if ($cccTopbarMoreMenu.hidden) return;
+      if (ev.target.closest('#cccTopbarMoreMenu, #cccTopbarMoreBtn')) return;
+      $cccTopbarMoreMenu.hidden = true;
+      $cccTopbarMoreBtn.setAttribute('aria-expanded', 'false');
+    });
+  }
+
+  _syncMobileRedesignBodyClass();
+  try {
+    if (_mobileRedesignMQ.addEventListener) _mobileRedesignMQ.addEventListener('change', _syncMobileRedesignBodyClass);
+    else if (_mobileRedesignMQ.addListener) _mobileRedesignMQ.addListener(_syncMobileRedesignBodyClass);
+  } catch (_) {}
+  // Console convenience: `window.CCC_FORCE_MOBILE_REDESIGN = true; cccSyncMobileRedesign()`
+  // re-syncs immediately without needing a resize/reload.
+  window.cccSyncMobileRedesign = _syncMobileRedesignBodyClass;
+
+  // ── Simple / Advanced interface mode ──
+  // A presentation-level preference, separate from isMobileRedesign() (which
+  // gates mobile-vs-desktop CHROME). This gates plain-language labels and
+  // progressive disclosure of technical info within whatever chrome is
+  // already showing. Explicit user choice (localStorage 'ccc-ui-mode')
+  // always wins; unset ALWAYS defaults to 'advanced', regardless of viewport
+  // width, so nothing about this redesign is ever active for anyone —
+  // mobile or desktop — until they explicitly opt in from Settings.
+  function getUiMode() {
+    try {
+      const stored = localStorage.getItem('ccc-ui-mode');
+      if (stored === 'simple' || stored === 'advanced') return stored;
+    } catch (_) {}
+    return 'advanced';
+  }
+  function setUiMode(mode) {
+    const value = mode === 'simple' ? 'simple' : 'advanced';
+    try { localStorage.setItem('ccc-ui-mode', value); } catch (_) {}
+    _syncUiModeBodyClass();
+  }
+  function isSimpleMode() { return getUiMode() === 'simple'; }
+  // The mobile CHROME (collapsed "More" menu, mobile id chip, mobile
+  // status-line row redesign, bottom nav) is gated on this, not on
+  // isMobileRedesign() alone — a narrow window by itself must never change
+  // the UI for a user who hasn't opted into Simple mode. See isSimpleMode's
+  // opt-in-only default above.
+  function isMobileChromeActive() { return isMobileRedesign() && isSimpleMode(); }
+  function _syncUiModeBodyClass() {
+    document.body.classList.toggle('ccc-simple-mode', isSimpleMode());
+    const toggle = document.getElementById('settingsUiModeToggle');
+    if (toggle) {
+      const on = isSimpleMode();
+      toggle.classList.toggle('is-on', on);
+      toggle.setAttribute('aria-checked', String(on));
+    }
+    if (typeof _syncMobileRedesignBodyClass === 'function') _syncMobileRedesignBodyClass();
+    if (typeof _syncMobileBottomNav === 'function') _syncMobileBottomNav();
+    if (typeof _syncMobileSimpleHeader === 'function') _syncMobileSimpleHeader();
+    if (typeof _syncSimpleHomeVisibility === 'function') _syncSimpleHomeVisibility();
+  }
+  _syncUiModeBodyClass();
+  try {
+    if (_mobileRedesignMQ.addEventListener) _mobileRedesignMQ.addEventListener('change', _syncUiModeBodyClass);
+    else if (_mobileRedesignMQ.addListener) _mobileRedesignMQ.addListener(_syncUiModeBodyClass);
+  } catch (_) {}
+  window.cccSetUiMode = setUiMode;
+
+  // Centralized plain-language label map (Simple mode only). One lookup
+  // table instead of scattering ternaries through every render path —
+  // per-phrase, not per-render-path, so new callers just add a key here.
+  const SIMPLE_LABELS = {
+    'New session': 'Start a task',
+    'Active': 'In progress',
+    'All': 'History',
+    'Issues': 'Requests',
+    'Queues': 'Automations',
+    'Open Ask': 'Needs your reply',
+    'Offline': 'Not running',
+    'Idle': 'Waiting',
+    'Current Sessions': 'Work in progress',
+    'Project Tree': 'Projects',
+    'Triggered Workers': 'Automation activity',
+    // Kanban column labels not in the brief's table, extended in the same
+    // plain-language spirit.
+    'GH Issues': 'Requests',
+    'Icebox': 'Parked',
+    'Stuck': 'Needs attention',
+    'Resume': 'Continue',
+    'Spawn': 'Start',
+    'Ingest': 'Import',
+    'Headless': 'Background',
+    'DID': 'Completed',
+    'INSIGHT': 'Key finding',
+    'NEXT STEP USER': 'What I need from you',
+  };
+  // Case-insensitive index so callers passing 'Current sessions' match a
+  // 'Current Sessions' map key — section headers and tab labels don't share
+  // one casing convention across the codebase.
+  const _SIMPLE_LABELS_CI = {};
+  for (const _k in SIMPLE_LABELS) {
+    if (Object.prototype.hasOwnProperty.call(SIMPLE_LABELS, _k)) _SIMPLE_LABELS_CI[_k.toLowerCase()] = SIMPLE_LABELS[_k];
+  }
+  function simpleLabel(key) {
+    if (!isSimpleMode()) return key;
+    if (Object.prototype.hasOwnProperty.call(SIMPLE_LABELS, key)) return SIMPLE_LABELS[key];
+    const ci = _SIMPLE_LABELS_CI[String(key).toLowerCase()];
+    return ci !== undefined ? ci : key;
+  }
+
+  // ── Simple-mode mobile bottom nav ──
+  // Drives the EXISTING sidebar tab bar (data-conv-tab, localStorage
+  // 'ccc-sidebar-tab') and Settings modal — no new screens/state, no
+  // duplicated render logic. Only visible when both Simple mode and the
+  // mobile chrome gate are active.
+  function _mobileBottomNavShouldShow() {
+    return isSimpleMode() && isMobileRedesign();
+  }
+  function _syncMobileBottomNav() {
+    const nav = document.getElementById('mobileBottomNav');
+    if (!nav) return;
+    const show = _mobileBottomNavShouldShow();
+    nav.style.display = show ? '' : 'none';
+    document.body.classList.toggle('has-mobile-bottom-nav', show);
+    if (!show) return;
+    let tab = 'inprogress';
+    try { tab = localStorage.getItem('ccc-sidebar-tab') || 'inprogress'; } catch (_) {}
+    let activeNavKey = tab === 'archived' ? 'tasks' : tab === 'queues' ? 'automations' : 'home';
+    // Simple Home open → the Home nav item is the current surface regardless
+    // of which sidebar tab is selected underneath. A depth-3 simple screen
+    // (history/automations/settings) marks its own nav item instead.
+    if (isSimpleMode()) {
+      if (typeof _simpleScreen !== 'undefined' && _simpleScreen) {
+        activeNavKey = _simpleScreen === 'history' ? 'tasks'
+          : (_simpleScreen === 'automations' || _simpleScreen === 'automation-detail') ? 'automations'
+          : _simpleScreen === 'settings' ? 'more' : 'home';
+      } else if (typeof _simpleHomeShowing !== 'undefined' && _simpleHomeShowing
+        && document.getElementById('simpleHome')) activeNavKey = 'home';
+    }
+    nav.querySelectorAll('[data-mobile-nav]').forEach(btn => {
+      const active = btn.getAttribute('data-mobile-nav') === activeNavKey;
+      btn.classList.toggle('is-active', active);
+      if (active) btn.setAttribute('aria-current', 'page');
+      else btn.removeAttribute('aria-current');
+    });
+  }
+  function _wireMobileBottomNav() {
+    const nav = document.getElementById('mobileBottomNav');
+    if (!nav) return;
+    nav.addEventListener('click', (ev) => {
+      const btn = ev.target.closest('[data-mobile-nav]');
+      if (!btn) return;
+      const dest = btn.getAttribute('data-mobile-nav');
+      // Simple mode: every bottom-nav destination is a SIMPLE screen (the
+      // grandma test — nothing within 3 taps of home may be advanced UI).
+      // More → simple settings list; Tasks → simple history; Automations →
+      // simple queue list. None of them touch the advanced sidebar tabs.
+      if (isSimpleMode() && document.getElementById('simpleHome')) {
+        if (dest === 'home') { _simpleShowHome(); return; }
+        if (dest === 'tasks') { _simpleOpenScreen('history'); return; }
+        if (dest === 'automations') { _simpleOpenScreen('automations'); return; }
+        if (dest === 'more') { _simpleOpenScreen('settings'); return; }
+      }
+      if (dest === 'more') {
+        if (typeof openSettingsModal === 'function') openSettingsModal();
+        return;
+      }
+      const tabByDest = { home: 'inprogress', tasks: 'archived', automations: 'queues' };
+      const targetTab = tabByDest[dest];
+      if (!targetTab) return;
+      // (Simple mode returned early above — every nav destination there is a
+      // simple screen, not an advanced sidebar tab.)
+      // Reuse the existing tab bar's own click handler by clicking its
+      // matching button when present, instead of duplicating its
+      // re-render logic here.
+      const existingTabBtn = document.querySelector('[data-conv-tab="' + targetTab + '"]');
+      if (existingTabBtn) {
+        existingTabBtn.click();
+      } else {
+        try { localStorage.setItem('ccc-sidebar-tab', targetTab); } catch (_) {}
+        if (typeof renderArchiveList === 'function') {
+          renderArchiveList(document.getElementById('convSearch')?.value || '', { force: true });
+        }
+      }
+      _syncMobileBottomNav();
+    });
+  }
+  _wireMobileBottomNav();
+  _syncMobileBottomNav();
+
+  // ── Simple-mode slim header ──
+  // The search button relocates the REAL .search-wrap (containing the
+  // wired #convSearch input) into the header's slide-down bar, so its
+  // existing handlers keep working — same node, not a clone. Restored to
+  // its original slot when Simple mode is left. The "+" forwards to the
+  // existing new-session button. `var` (not let) so the hoisted binding is
+  // safely `undefined` if _syncMobileSimpleHeader runs during early boot,
+  // before this line — avoids a temporal-dead-zone ReferenceError.
+  var _mshSearchHome = null; // { parent, nextSibling } snapshot
+  function _mshCloseSearch() {
+    const searchBtn = document.getElementById('mshSearchBtn');
+    const searchBar = document.getElementById('mshSearchBar');
+    const wrap = document.querySelector('#mshSearchBar .search-wrap');
+    if (wrap && _mshSearchHome && _mshSearchHome.parent) {
+      if (_mshSearchHome.nextSibling && _mshSearchHome.nextSibling.parentNode === _mshSearchHome.parent) {
+        _mshSearchHome.parent.insertBefore(wrap, _mshSearchHome.nextSibling);
+      } else {
+        _mshSearchHome.parent.appendChild(wrap);
+      }
+    }
+    if (searchBar) searchBar.hidden = true;
+    if (searchBtn) searchBtn.setAttribute('aria-expanded', 'false');
+  }
+  function _syncMobileSimpleHeader() {
+    // When Simple mode is off, make sure the search input is back in its
+    // real home so Advanced-mode search still works.
+    const simpleOn = isSimpleMode() && isMobileRedesign();
+    if (!simpleOn) _mshCloseSearch();
+  }
+  function _wireMobileSimpleHeader() {
+    const newBtn = document.getElementById('mshNewBtn');
+    if (newBtn) {
+      newBtn.addEventListener('click', () => {
+        // Was proxying to #sidebarNewBtn.click() -> enterNewSessionMode(),
+        // Advanced mode's off-canvas .main flow. That slides .main into view
+        // but never clears ccc-simple-home-open, so Simple mode's CSS keeps
+        // #convInputBar/#convInput at 0x0 underneath it - the button looked
+        // dead. Simple mode's own "new task" surface is the Home composer;
+        // go there directly instead.
+        if (typeof _simpleShowHome === 'function') _simpleShowHome();
+        // The composer's home section starts collapsed by design (user
+        // feedback was it should start closed) - "+" means "start a task
+        // now", so force it open rather than land on a collapsed section.
+        if (typeof _simpleCollapsedSections !== 'undefined' && _simpleCollapsedSections.has('composer')) {
+          _simpleCollapsedSections.delete('composer');
+          if (typeof _simpleSaveCollapsedSections === 'function') _simpleSaveCollapsedSections();
+          if (typeof _simpleApplyCollapsedState === 'function') _simpleApplyCollapsedState();
+        }
+        const input = document.getElementById('simpleComposerInput');
+        if (input) { try { input.focus(); input.scrollIntoView({block: 'center'}); } catch (_) {} }
+      });
+    }
+    const searchBtn = document.getElementById('mshSearchBtn');
+    const searchBar = document.getElementById('mshSearchBar');
+    if (searchBtn && searchBar) {
+      searchBtn.addEventListener('click', () => {
+        // Simple mode: search lives on the simple history screen (plain
+        // cards, no advanced list chrome) instead of the slide-down bar.
+        if (isSimpleMode() && isMobileRedesign() && document.getElementById('simpleHistory')) {
+          _simpleOpenScreen('history');
+          const inp = document.getElementById('simpleHistorySearch');
+          if (inp) { try { inp.focus(); } catch (_) {} }
+          return;
+        }
+        if (!searchBar.hidden) {
+          _mshCloseSearch();
+          return;
+        }
+        const wrap = document.querySelector('.new-session-panel .search-wrap');
+        if (wrap) {
+          if (!_mshSearchHome) _mshSearchHome = { parent: wrap.parentNode, nextSibling: wrap.nextSibling };
+          searchBar.appendChild(wrap);
+        }
+        searchBar.hidden = false;
+        searchBtn.setAttribute('aria-expanded', 'true');
+        const input = document.getElementById('convSearch');
+        if (input) { try { input.focus(); } catch (_) {} }
+      });
+    }
+  }
+  _wireMobileSimpleHeader();
+
+  // ── Simple-mode session Actions menu ──
+  // Consolidates rename/move-to-project/change-model/technical-details into
+  // one button. Every item forwards to an EXISTING control via .click()
+  // instead of reimplementing it — same reparent/forward pattern as the
+  // topbar More menu above. Pause/stop/Continue/Archive for the currently
+  // OPEN session are intentionally left out of this menu for now: this
+  // codebase's existing single-session equivalents for those live on the
+  // list-row cards, not inside the open conversation pane, and forwarding
+  // to a list row that may not be the active session risked acting on the
+  // wrong conversation — left as a follow-up rather than wired unreliably.
+  function _revealStatusRailThenClick(targetId) {
+    const restore = document.getElementById('statusRailRestoreBtn');
+    const doClick = () => {
+      const target = document.getElementById(targetId);
+      if (target) target.click();
+    };
+    if (restore && restore.offsetParent !== null) {
+      restore.click();
+      setTimeout(doClick, 50);
+    } else {
+      doClick();
+    }
+  }
+  function _wireSimpleActionsMenu() {
+    const btn = document.getElementById('convSimpleActionsBtn');
+    const menu = document.getElementById('convSimpleActionsMenu');
+    if (!btn || !menu) return;
+    btn.addEventListener('click', (ev) => {
+      ev.stopPropagation();
+      const open = !menu.hidden;
+      menu.hidden = open;
+      btn.setAttribute('aria-expanded', open ? 'false' : 'true');
+    });
+    document.addEventListener('click', (ev) => {
+      if (menu.hidden) return;
+      if (ev.target.closest('#convSimpleActionsMenu, #convSimpleActionsBtn')) return;
+      menu.hidden = true;
+      btn.setAttribute('aria-expanded', 'false');
+    });
+    menu.addEventListener('click', (ev) => {
+      const item = ev.target.closest('[data-simple-action]');
+      if (!item) return;
+      menu.hidden = true;
+      btn.setAttribute('aria-expanded', 'false');
+      const action = item.getAttribute('data-simple-action');
+      if (action === 'stop') {
+        _simpleStopTask();
+      } else if (action === 'font-minus') {
+        const btn = document.getElementById('fontMinus');
+        if (btn) btn.click();
+      } else if (action === 'font-plus') {
+        const btn = document.getElementById('fontPlus');
+        if (btn) btn.click();
+      } else if (action === 'rename') {
+        _revealStatusRailThenClick('statusRailTitleRenameBtn');
+      } else if (action === 'move-to-project') {
+        _revealStatusRailThenClick('statusRailAddObjectBtn');
+      } else if (action === 'change-model') {
+        const picker = document.querySelector('.conv-pane.is-active [data-model-picker]')
+          || document.querySelector('[data-model-picker]');
+        if (picker) picker.click();
+      } else if (action === 'technical-details') {
+        _simpleToggleTechStrip();
+      }
+    });
+  }
+  _wireSimpleActionsMenu();
+
+  // Simple mode never shows the raw session id inline — this is the
+  // grandma-mode-friendly way to still hand a session id to another
+  // session/tool without exposing the id in the UI itself. Used by the
+  // icon on each task card in the list (_simpleTaskCardHtml's
+  // [data-simple-copy-ref]).
+  function _simpleCopySessionReference(sid) {
+    if (!sid) {
+      showOpToast('No task reference to copy yet', 'error');
+      return;
+    }
+    copyTextValue(sid).then((ok) => {
+      showOpToast(ok ? 'Copied task reference' : 'Copy failed - try again', ok ? 'ok' : 'error');
+    });
+  }
+  // Capture phase (like handleSidebarSessionIdCopyClick) so the click never
+  // reaches the enclosing task card's own open-conversation handler.
+  document.addEventListener('click', (ev) => {
+    const btn = ev.target.closest('[data-simple-copy-ref]');
+    if (!btn) return;
+    ev.preventDefault();
+    ev.stopPropagation();
+    _simpleCopySessionReference(btn.getAttribute('data-simple-copy-ref') || '');
+  }, true);
+  // _simpleTaskCardHtml's root is a div[role=button] (a real <button> can't
+  // nest the copy-reference <button> — see the comment there), so restore
+  // the Enter/Space activation a native button gives for free.
+  document.addEventListener('keydown', (ev) => {
+    if (ev.key !== 'Enter' && ev.key !== ' ') return;
+    const card = ev.target.closest && ev.target.closest('.simple-task-card[role="button"]');
+    if (!card || ev.target.closest('[data-simple-copy-ref]')) return;
+    ev.preventDefault();
+    card.click();
+  });
+
+  // ── Simple Home (Simple-UI redesign, iteration 1) ──
+  // The landing surface when Simple mode is on: a plain-language composer
+  // ("What would you like help with?"), workers waiting on the user, work in
+  // progress, and recently finished conversations — all rendered from the
+  // SAME /api/* endpoints the full UI uses (/api/spawn-defaults,
+  // /api/engines/models, /api/attention, /api/sessions, /api/conversations/all,
+  // /api/session/<sid>/usage). No parallel store, no jargon. Visibility is a
+  // body-class toggle: body.ccc-simple-mode.ccc-simple-home-open shows
+  // #simpleHome (which lives in the SIDEBAR — at the mobile breakpoint .main
+  // is fixed off-canvas until body.mobile-show-main) and hides #convSplit
+  // (CSS at the end of app.css); opening a conversation flips the class off,
+  // #mobileBackBtn flips it back on. Showing home also clears
+  // mobile-show-main so the off-canvas .main slides away.
+  // `var` (not let) for state so the hoisted binding is safely `undefined`
+  // when _syncMobileBottomNav/_syncUiModeBodyClass run earlier in boot.
+  var _simpleHomeShowing = true;   // Simple mode lands on home, not a conv
+  var _simpleHomeData = { defaults: null, catalog: null };
+  var _simpleComposer = { engine: '', effort: '', cwd: '' };
+  var _simpleHomeRefreshTimer = null;
+  // Depth-3 simple screens (iteration 2): which full-screen simple surface is
+  // open, if any. 'history' | 'automations' | 'automation-detail' | 'settings'.
+  // Exactly one of {home, a screen, a conversation} is visible at a time.
+  var _simpleScreen = null;
+  // The screen (if any) a just-opened conversation was launched from, so the
+  // shared #mobileBackBtn can return there instead of always landing on
+  // Home — see _simpleOnConversationOpen() and its wiring below.
+  var _simpleReturnScreen = null;
+  var _simpleAutomationQueue = '';   // queue name shown in automation-detail
+  var _simpleAutomationRepoPath = '';   // repo_path for _simpleSpawnQueueHelper()
+  // var (not const) for the lookup tables too: _syncUiModeBodyClass() can run
+  // _syncSimpleHomeVisibility() during early boot, before these lines execute.
+  var _SIMPLE_SCREENS = ['history', 'automations', 'automation-detail', 'settings'];
+  var _SIMPLE_SCREEN_IDS = {
+    'history': 'simpleHistory',
+    'automations': 'simpleAutomations',
+    'automation-detail': 'simpleAutomationDetail',
+    'settings': 'simpleSettings',
+  };
+
+  function _syncSimpleHomeVisibility() {
+    const home = document.getElementById('simpleHome');
+    if (!home) return;
+    const simpleOn = isSimpleMode();
+    const show = simpleOn && !!_simpleHomeShowing && !_simpleScreen;
+    document.body.classList.toggle('ccc-simple-home-open', show);
+    home.style.display = show ? '' : 'none';
+    // Depth-3 screens: one visible at a time, same sidebar layer as home.
+    const screenOpen = simpleOn && !!_simpleScreen;
+    document.body.classList.toggle('ccc-simple-screen-open', screenOpen);
+    // _SIMPLE_SCREENS may still be undefined on the early-boot call from
+    // _syncUiModeBodyClass (var hoists the binding, not the value).
+    (_SIMPLE_SCREENS || []).forEach(name => {
+      const el = document.getElementById(_SIMPLE_SCREEN_IDS[name]);
+      if (el) el.hidden = !(screenOpen && _simpleScreen === name);
+      document.body.classList.toggle('ccc-simple-screen-' + name, screenOpen && _simpleScreen === name);
+    });
+    // Depth-2: a conversation is open under simple chrome when neither home
+    // nor a depth-3 screen is showing. The CSS keyed on this class hides the
+    // advanced chrome (toolbar buttons, pane header, status rail, composer
+    // selectors) and re-styles the transcript as plain chat bubbles.
+    document.body.classList.toggle('ccc-simple-conv-open',
+      simpleOn && !_simpleHomeShowing && !_simpleScreen);
+    if (show || screenOpen) {
+      // Home and the depth-3 screens live in the sidebar layer; .main
+      // (off-canvas fixed at the mobile breakpoint) must not cover them.
+      document.body.classList.remove('mobile-show-main');
+    }
+    if (show) {
+      try { _simpleHomeRefresh(); } catch (_) {}
+      if (!_simpleHomeRefreshTimer) {
+        _simpleHomeRefreshTimer = setInterval(() => {
+          if (isSimpleMode() && _simpleHomeShowing
+              && document.body.classList.contains('ccc-simple-home-open')) {
+            try { _simpleHomeRefresh(); } catch (_) {}
+          }
+        }, 45000);
+      }
+    }
+    if (screenOpen) {
+      try { _simpleRefreshScreen(_simpleScreen); } catch (_) {}
+    }
+  }
+  function _simpleShowHome() {
+    _simpleHomeShowing = true;
+    _simpleScreen = null;
+    _syncSimpleHomeVisibility();
+    if (typeof _syncMobileBottomNav === 'function') _syncMobileBottomNav();
+  }
+  function _simpleHideHome() {
+    _simpleHomeShowing = false;
+    _syncSimpleHomeVisibility();
+  }
+  // Open a depth-3 simple screen (history / automations / automation-detail /
+  // settings). Replaces home; a later conversation open replaces it.
+  function _simpleOpenScreen(name) {
+    if (_SIMPLE_SCREENS.indexOf(name) === -1) return;
+    _simpleScreen = name;
+    _simpleHomeShowing = false;
+    _syncSimpleHomeVisibility();
+    if (typeof _syncMobileBottomNav === 'function') _syncMobileBottomNav();
+  }
+  // Data load for the screen that just became visible.
+  function _simpleRefreshScreen(name) {
+    if (name === 'history') _simpleRenderHistory();
+    else if (name === 'automations') _simpleRenderAutomations();
+    else if (name === 'automation-detail') _simpleRenderAutomationDetail();
+    else if (name === 'settings') _simpleSyncSettingsScreen();
+  }
+  // Called from selectConversation(). Boot/refresh auto-restore
+  // (_qfBootRestoreDepth > 0) must NOT yank the user off the home screen; a
+  // deliberate open (list row, simple card, search result) does.
+  function _simpleOnConversationOpen(id) {
+    try {
+      if (!isSimpleMode()) return;
+      if (typeof _qfBootRestoreDepth === 'undefined' || _qfBootRestoreDepth <= 0) {
+        _simpleReturnScreen = _simpleScreen;
+        _simpleScreen = null;
+        _simpleHideHome();
+      }
+      _simpleUpdateUsageLine(id);
+      _simpleUpdateConvTitle(id);
+      _simpleSyncTechStrip(id);
+    } catch (_) {}
+  }
+  // Plain-language title for the depth-2 simple conversation header.
+  function _simpleUpdateConvTitle(id) {
+    const el = document.getElementById('simpleConvTitle');
+    if (!el) return;
+    let name = '';
+    try {
+      const row = (conversationsData || []).find(x => x.id === id)
+        || (Array.isArray(archiveData) ? archiveData.find(x => (x.id || x.session_id) === id) : null);
+      name = String((row && (row.display_name || row.first_message || row.status_rail_title)) || '').trim();
+    } catch (_) {}
+    el.textContent = name.length > 60 ? name.slice(0, 60) + '…' : (name || 'This task');
+  }
+
+  // ── Technical strip: reveal tool-call logs / diffs / cost, per session ──
+  // Hidden by default (see app.css .ccc-simple-conv-open:not(.ccc-simple-tech-open)).
+  // "Revealed" is remembered per conversation id for this browser session only
+  // (in-memory Set, not persisted) — comes back if you leave and reopen the
+  // same task, resets on reload. Token/context usage and the agent/model name
+  // are never gated here; they're not technical.
+  var _simpleTechRevealedSessions = new Set();
+  var _simpleTechCurrentId = null;
+  function _simpleSyncTechStrip(id) {
+    _simpleTechCurrentId = id;
+    const revealed = !!id && _simpleTechRevealedSessions.has(id);
+    document.body.classList.toggle('ccc-simple-tech-open', revealed);
+  }
+  function _simpleToggleTechStrip() {
+    const id = _simpleTechCurrentId;
+    if (!id) return;
+    if (_simpleTechRevealedSessions.has(id)) _simpleTechRevealedSessions.delete(id);
+    else _simpleTechRevealedSessions.add(id);
+    _simpleSyncTechStrip(id);
+  }
+
+  // ── Stop: same interrupt path as the advanced Esc button (/api/inject-esc),
+  // reachable from the shared Actions menu instead of a standalone button. ──
+  async function _simpleStopTask() {
+    if (!currentSession.id) return;
+    if (currentSession.source === 'pkood') {
+      _simpleToast("Can't stop this task from here yet.", true);
+      return;
+    }
+    try {
+      const res = await fetch('/api/inject-esc', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ session_id: currentSession.id }),
+      });
+      let data = {};
+      try { data = await res.json(); } catch (_) {}
+      if (res.ok && data.ok) _simpleToast('Stopped.');
+      else _simpleToast('Could not stop that: ' + ((data && data.error) || ('HTTP ' + res.status)), true);
+    } catch (e) {
+      _simpleToast('Could not stop that: ' + ((e && e.message) || 'network error'), true);
+    }
+  }
+
+  // ── composer: agent/model/effort chips ──
+  const _SIMPLE_ENGINE_LABELS = {
+    claude: 'Claude', codex: 'Codex', kimi: 'Kimi', gemini: 'Gemini',
+    cursor: 'Cursor', antigravity: 'Antigravity', kilo: 'Kilo',
+    hermes: 'Hermes', opencode: 'OpenCode', devin: 'Devin', grok: 'Grok',
+  };
+  const _SIMPLE_EFFORT_LABELS = {
+    low: 'Light thinking', medium: 'Normal thinking', high: 'Deep thinking',
+    xhigh: 'Extra deep thinking', max: 'Maximum thinking',
+  };
+  // "sonnet-5" → "Sonnet 5"; "kimi-code/k3" → "K3" via the catalog label.
+  // Plain words on the chip, never a raw model id with slashes.
+  function _simplePrettifyModel(engine, modelId) {
+    const raw = String(modelId || '').trim();
+    if (!raw) return 'Auto';
+    let label = raw;
+    try {
+      const opt = (MODEL_OPTIONS_BY_ENGINE[engine] || [])
+        .find(o => _normalizeModelId(o.id) === _normalizeModelId(raw));
+      if (opt && opt.label) label = String(opt.label);
+    } catch (_) {}
+    label = label.replace(/^[a-z0-9-]+\//i, '');           // strip "vendor/"
+    label = label.replace(/\s*\((default|free[^)]*)\)\s*/gi, '').trim();
+    if (/^[0-9.]+$/.test(label)) return label;             // "5.5" stays "5.5"
+    return label.split(/[-_]/).map(w => w ? w[0].toUpperCase() + w.slice(1) : w).join(' ');
+  }
+  function _simpleModelForEngine(engine) {
+    const d = _simpleHomeData.defaults || {};
+    const models = d.models && typeof d.models === 'object' ? d.models : {};
+    return String(models[engine] || '').trim();
+  }
+  function _simpleEffortsForEngine(engine) {
+    const d = _simpleHomeData.defaults || {};
+    const byEngine = d.efforts_by_engine && typeof d.efforts_by_engine === 'object' ? d.efforts_by_engine : {};
+    const list = byEngine[engine];
+    return Array.isArray(list) ? list.filter(x => typeof x === 'string' && x) : [];
+  }
+  function _simpleRenderAgentChips() {
+    const row = document.getElementById('simpleAgentRow');
+    if (!row) return;
+    const d = _simpleHomeData.defaults || {};
+    const engines = Array.isArray(d.supported_engines) && d.supported_engines.length
+      ? d.supported_engines : ['claude'];
+    if (!_simpleComposer.engine || engines.indexOf(_simpleComposer.engine) === -1) {
+      _simpleComposer.engine = engines.indexOf(d.engine) !== -1 ? d.engine : engines[0];
+    }
+    row.innerHTML = engines.map(engine => {
+      const name = _SIMPLE_ENGINE_LABELS[engine]
+        || engine.charAt(0).toUpperCase() + engine.slice(1);
+      const model = _simplePrettifyModel(engine, _simpleModelForEngine(engine));
+      const sel = engine === _simpleComposer.engine;
+      return '<button type="button" class="simple-chip' + (sel ? ' is-selected' : '') + '"'
+        + ' data-simple-agent="' + escapeAttr(engine) + '"'
+        + ' aria-pressed="' + (sel ? 'true' : 'false') + '">'
+        + '<span class="simple-chip-name">' + escapeHtml(name) + '</span>'
+        + '<span class="simple-chip-sub">' + escapeHtml(model) + '</span>'
+        + '</button>';
+    }).join('');
+    _simpleRenderEffortChips();
+  }
+  function _simpleRenderEffortChips() {
+    const row = document.getElementById('simpleEffortRow');
+    const label = document.getElementById('simpleEffortLabel');
+    if (!row) return;
+    const efforts = _simpleEffortsForEngine(_simpleComposer.engine);
+    if (!efforts.length) {
+      row.innerHTML = '';
+      row.style.display = 'none';
+      if (label) label.style.display = 'none';
+      _simpleComposer.effort = '';
+      return;
+    }
+    row.style.display = '';
+    if (label) label.style.display = '';
+    const d = _simpleHomeData.defaults || {};
+    const preferred = efforts.indexOf(d.reasoning_effort) !== -1 ? d.reasoning_effort
+      : efforts.indexOf('medium') !== -1 ? 'medium'
+      : efforts[Math.floor((efforts.length - 1) / 2)];
+    if (!_simpleComposer.effort || efforts.indexOf(_simpleComposer.effort) === -1) {
+      _simpleComposer.effort = preferred;
+    }
+    row.innerHTML = efforts.map(level => {
+      const sel = level === _simpleComposer.effort;
+      return '<button type="button" class="simple-chip' + (sel ? ' is-selected' : '') + '"'
+        + ' data-simple-effort="' + escapeAttr(level) + '"'
+        + ' aria-pressed="' + (sel ? 'true' : 'false') + '">'
+        + '<span class="simple-chip-name">' + escapeHtml(_SIMPLE_EFFORT_LABELS[level] || level) + '</span>'
+        + '</button>';
+    }).join('');
+  }
+  function _simpleToast(text, isError) {
+    const toast = document.querySelector('#simpleHome [data-simple-toast]');
+    if (!toast) return;
+    toast.textContent = text || '';
+    toast.hidden = !text;
+    toast.classList.toggle('is-error', !!isError);
+  }
+  async function _simpleStartTask() {
+    const input = document.getElementById('simpleComposerInput');
+    const btn = document.getElementById('simpleStartBtn');
+    const prompt = (input && input.value || '').trim();
+    if (!prompt) {
+      _simpleToast('Tell me what you need first — one sentence is plenty.', true);
+      if (input) input.focus();
+      return;
+    }
+    const engine = _simpleComposer.engine || 'claude';
+    // Mirror the existing new-session flow: engine + model + effort, with the
+    // server falling back to the persisted spawn defaults for anything
+    // omitted (server.py _spawn_request_engine_and_model).
+    const body = { prompt: prompt, engine: engine };
+    const model = _simpleModelForEngine(engine);
+    if (model) body.model = model;
+    if (_simpleComposer.effort && _simpleEffortsForEngine(engine).length) {
+      body.reasoning_effort = _simpleComposer.effort;
+    }
+    if (_simpleComposer.cwd) { body.cwd = _simpleComposer.cwd; body.repo_path = _simpleComposer.cwd; }
+    if (btn) { btn.disabled = true; btn.textContent = 'Starting…'; }
+    try {
+      const res = await fetch('/api/sessions/spawn', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (res.ok && data && data.ok !== false) {
+        if (input) input.value = '';
+        const name = _SIMPLE_ENGINE_LABELS[engine] || engine;
+        _simpleToast('Started — ' + name + ' is on it. It will show up under "Working on it" below.');
+        setTimeout(() => { try { _simpleHomeRefresh(); } catch (_) {} }, 1500);
+        setTimeout(() => { try { _simpleHomeRefresh(); } catch (_) {} }, 5000);
+      } else {
+        _simpleToast('Could not start that: ' + ((data && data.error) || ('HTTP ' + res.status)), true);
+      }
+    } catch (e) {
+      _simpleToast('Could not start that: ' + ((e && e.message) || 'network error'), true);
+    } finally {
+      if (btn) { btn.disabled = false; btn.textContent = 'Start'; }
+    }
+  }
+
+  // ── Needs you: workers waiting on the user ──
+  const _SIMPLE_NYA_KINDS = {
+    needs_input: 'Waiting for your answer',
+    question: 'Waiting for your answer',
+    pending_tool: 'Needs your approval',
+    stale_tool_call: 'Looks stuck',
+    approval: 'Needs your approval',
+  };
+  function _simpleNyaKindLabel(kind) {
+    return _SIMPLE_NYA_KINDS[kind] || 'Waiting for you';
+  }
+  function _simpleNyaCardHtml(item) {
+    const sid = String(item.session_id || '');
+    const mtime = String(item.mtime || '');
+    const title = _simpleNyaKindLabel(String(item.kind || ''));
+    const task = String(item.name || '').trim();
+    const need = String(item.question_text || item.next_step || item.where || '').trim();
+    const options = Array.isArray(item.question_options) ? item.question_options : [];
+    // Swipe wrapper: a "Not now" action sits behind the card, revealed by
+    // dragging the card left (see _wireSimpleNyaSwipe). Dismissing is
+    // self-healing, not permanent — see _simpleDismissNya.
+    let html = '<div class="simple-nya-swipe" data-simple-nya-swipe>'
+      + '<button type="button" class="simple-nya-dismiss-btn" data-dismiss-nya="' + escapeAttr(sid) + '" data-dismiss-mtime="' + escapeAttr(mtime) + '">Not now</button>'
+      + '<div class="simple-card simple-nya-card" data-session-id="' + escapeAttr(sid) + '" data-mtime="' + escapeAttr(mtime) + '">'
+      + '<div class="simple-nya-title">' + escapeHtml(title) + '</div>'
+      + (task ? '<div class="simple-card-name">' + escapeHtml(task.length > 110 ? task.slice(0, 110) + '…' : task) + '</div>' : '')
+      + (need ? '<div class="simple-nya-need">' + escapeHtml(need) + '</div>' : '');
+    if (options.length) {
+      html += '<div class="simple-nya-options">' + options.map((opt, i) => {
+        const text = typeof opt === 'string' ? opt : String((opt && (opt.label || opt.text || opt.title)) || 'Option ' + (i + 1));
+        return '<button type="button" class="simple-chip simple-nya-option" data-answer-option="' + i + '">'
+          + escapeHtml(text) + '</button>';
+      }).join('') + '</div>';
+    }
+    html += '<div class="simple-nya-answer-row">'
+      + '<input type="text" class="simple-nya-answer-input" placeholder="Type your answer…" aria-label="Your answer">'
+      + '<button type="button" class="simple-nya-send" data-answer-send>Send</button>'
+      + '</div></div></div>';
+    return html;
+  }
+  // ── Needs-you dismissal: "Not now", self-healing ──
+  // Remembered as {sessionId: mtime} in localStorage. A dismissed item stays
+  // hidden only as long as its mtime doesn't change — new activity on that
+  // session (the stuck call finishes, fails, whatever) invalidates the
+  // dismissal so a genuinely new problem can't go permanently silent because
+  // of an unrelated earlier one.
+  var _SIMPLE_NYA_DISMISSED_KEY = 'ccc-simple-nya-dismissed';
+  function _simpleLoadNyaDismissed() {
+    try {
+      const obj = JSON.parse(localStorage.getItem(_SIMPLE_NYA_DISMISSED_KEY) || '{}');
+      return (obj && typeof obj === 'object') ? obj : {};
+    } catch (_) { return {}; }
+  }
+  function _simpleSaveNyaDismissed(map) {
+    try { localStorage.setItem(_SIMPLE_NYA_DISMISSED_KEY, JSON.stringify(map)); } catch (_) {}
+  }
+  function _simpleIsNyaDismissed(item) {
+    const map = _simpleLoadNyaDismissed();
+    const sid = String(item.session_id || '');
+    if (!sid || !(sid in map)) return false;
+    return String(map[sid]) === String(item.mtime || '');
+  }
+  function _simpleDismissNya(sid, mtime) {
+    if (!sid) return;
+    const map = _simpleLoadNyaDismissed();
+    map[sid] = mtime;
+    _simpleSaveNyaDismissed(map);
+  }
+  async function _simpleSendAnswer(card, text) {
+    const sid = card.getAttribute('data-session-id') || '';
+    if (!sid || !text) return;
+    try {
+      const res = await fetch('/api/inject-input', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ session_id: sid, text: text, mode: 'answer' }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (res.ok && data && data.ok !== false) _simpleMarkCardAnswered(card);
+      else _simpleCardError(card, (data && data.error) || ('HTTP ' + res.status));
+    } catch (e) {
+      _simpleCardError(card, (e && e.message) || 'network error');
+    }
+  }
+  async function _simpleSendAnswerOption(card, index, label) {
+    const sid = card.getAttribute('data-session-id') || '';
+    if (!sid) return;
+    try {
+      const res = await fetch('/api/answer-question', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ session_id: sid, answers: [{ index: index, text: label || '' }] }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (res.ok && data && data.ok !== false) _simpleMarkCardAnswered(card);
+      else _simpleCardError(card, (data && data.error) || ('HTTP ' + res.status));
+    } catch (e) {
+      _simpleCardError(card, (e && e.message) || 'network error');
+    }
+  }
+  function _simpleMarkCardAnswered(card) {
+    card.classList.add('is-answered');
+    const note = document.createElement('div');
+    note.className = 'simple-nya-done';
+    note.textContent = 'Answer sent ✓';
+    card.appendChild(note);
+    setTimeout(() => { card.remove(); }, 1800);
+  }
+  function _simpleCardError(card, msg) {
+    let err = card.querySelector('.simple-nya-error');
+    if (!err) {
+      err = document.createElement('div');
+      err.className = 'simple-nya-error';
+      card.appendChild(err);
+    }
+    err.textContent = 'Could not send: ' + msg;
+  }
+
+  // ── Working / Finished cards ──
+  // Only trusts the live_context_* fields, which are captured from an actual
+  // `/context` read and carry the model's real reported limit. The sibling
+  // context_limit/latest_input_tokens fields are CCC's 200K-vs-1M GUESS
+  // (server.py CCC-943 heuristic — it can't prove a session is on the 1M
+  // variant until a turn has already exceeded 200K tokens), which produced a
+  // confidently-wrong "45% full" on a session that was really ~11% full.
+  // Simple mode states a percent only when it actually has one.
+  function _simpleMemoryPercent(row) {
+    if (!row) return null;
+    const direct = Number(row.live_context_percent);
+    if (direct > 0) return direct;
+    const limit = Number(row.live_context_limit) || 0;
+    const tokens = Number(row.live_context_tokens) || 0;
+    if (limit > 0 && tokens > 0) return (tokens / limit) * 100;
+    return null;
+  }
+  // Single source of truth for the memory-fullness tail phrase — used by both
+  // the home task cards (_simpleMemoryLine) and the in-conversation usage
+  // line (_simpleUpdateUsageLine) so the two can't drift into different
+  // wording for the same threshold.
+  function _simpleMemoryPhrase(p) {
+    if (p >= 90) return 'start a fresh task for better results';
+    if (p >= 70) return 'getting full';
+    return 'plenty of room left';
+  }
+  function _simpleMemoryLine(row) {
+    const pct = _simpleMemoryPercent(row);
+    if (pct === null) return 'Memory: not reported yet';
+    const p = Math.round(pct);
+    return 'Memory ' + p + '% full — ' + _simpleMemoryPhrase(p);
+  }
+  function _simpleBaseName(p) {
+    const s = String(p || '');
+    const i = s.replace(/\\/g, '/').lastIndexOf('/');
+    return i === -1 ? s : s.slice(i + 1);
+  }
+  function _simpleWorkingStatusLine(row) {
+    if (row.question_waiting) return 'Waiting for you';
+    const live = !!(row.is_live || row.sidecar_in_flight
+      || ['running', 'working', 'active'].indexOf(String(row.status || row.session_state || '')) !== -1);
+    let line = live ? 'Working' : 'Recently active';
+    const file = row.pending_file || row.sidecar_file || '';
+    if (live && file) line += ' — editing ' + _simpleBaseName(file);
+    const folder = row.folder_label || _simpleBaseName(row.folder_path || '');
+    if (folder) line += ' · ' + folder;
+    return line;
+  }
+  // ── "Seen" tracking: which finished tasks has the user actually opened ──
+  // {sessionId: mtime} in localStorage — the same self-healing shape as the
+  // needs-you dismissal. A finished row is "unseen" if it either has no
+  // recorded seen-mtime, or its mtime has moved past what was last seen (new
+  // activity since the user last looked): both cases genuinely deserve the
+  // highlight.
+  var _SIMPLE_SEEN_KEY = 'ccc-simple-seen-mtimes';
+  function _simpleLoadSeenMtimes() {
+    try {
+      const obj = JSON.parse(localStorage.getItem(_SIMPLE_SEEN_KEY) || '{}');
+      return (obj && typeof obj === 'object') ? obj : {};
+    } catch (_) { return {}; }
+  }
+  function _simpleIsUnseenFinished(row) {
+    const sid = String(row.id || row.session_id || '');
+    if (!sid) return false;
+    const mtime = String(row.mtime || row.modified || '');
+    const seenMtime = _simpleLoadSeenMtimes()[sid];
+    return seenMtime == null || String(seenMtime) !== mtime;
+  }
+  function _simpleMarkTaskSeen(sid, mtime) {
+    if (!sid) return;
+    const map = _simpleLoadSeenMtimes();
+    map[sid] = mtime;
+    try { localStorage.setItem(_SIMPLE_SEEN_KEY, JSON.stringify(map)); } catch (_) {}
+  }
+
+  function _simpleTaskCardHtml(row, statusLine, isRunning) {
+    const sid = String(row.id || row.session_id || '');
+    const mtime = String(row.mtime || row.modified || '');
+    const name = String(row.display_name || row.first_message || row.status_rail_title || 'Untitled task').trim();
+    // isRunning is caller-supplied where the caller already knows for sure
+    // (the Working/Finished sections are built from a definitive is-working
+    // filter) — falling back to _simpleIsWorkingRow()'s "touched in the last
+    // 6 hours" heuristic only where no authoritative flag exists (History).
+    // Recomputing the heuristic unconditionally here previously put the
+    // "running" color on cards already filed under Finished, just because
+    // the user had recently opened them.
+    const working = (isRunning !== undefined) ? isRunning : _simpleIsWorkingRow(row);
+    // "Running" and "unseen finished" are mutually exclusive, plain-color
+    // signals: blue means it's actively working right now, amber means it
+    // finished and you haven't looked yet. A seen/finished card gets neither.
+    const unseen = !working && _simpleIsUnseenFinished(row);
+    const stateClass = working ? ' is-running' : (unseen ? ' is-unseen-finished' : '');
+    // The color bar alone tested as unclear ("one is blue, another has a
+    // yellow tint" — not obvious what either meant); a plain-word badge
+    // next to the name carries the same signal without relying on color.
+    const badge = working
+      ? '<span class="simple-card-badge simple-card-badge-running">Working…</span>'
+      : (unseen ? '<span class="simple-card-badge simple-card-badge-unseen">New</span>' : '');
+    // The copy-reference icon is a real <button>, which means the card's
+    // own root element CANNOT be a <button> too — nested interactive
+    // content is invalid HTML and the parser silently auto-closes the
+    // outer <button> the moment it hits the inner one, detaching everything
+    // after it from the card (this broke the icon's rendering entirely on
+    // first attempt). Root is a div[role=button] instead, matching the
+    // existing simple-nya-card pattern; click-to-open is delegated (doesn't
+    // care about tag), and a keydown listener below restores Enter/Space
+    // activation that a real <button> would have given for free.
+    const copyRefBtn = sid
+      ? '<button type="button" class="simple-card-copy-ref-btn" data-simple-copy-ref="' + escapeAttr(sid) + '"'
+        + ' title="Copy task reference" aria-label="Copy task reference">'
+        + '<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">'
+        + '<rect x="8" y="2" width="8" height="4" rx="1"></rect>'
+        + '<path d="M8 4H6a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V6a2 2 0 0 0-2-2h-2"></path>'
+        + '</svg></button>'
+      : '';
+    return '<div role="button" tabindex="0" class="simple-card simple-task-card' + stateClass + '"'
+      + ' data-session-id="' + escapeAttr(sid) + '" data-mtime="' + escapeAttr(mtime) + '">'
+      + '<span class="simple-card-title-row">' + sessionEngineIconHtml(row, { context: 'pane' })
+      + '<span class="simple-card-name">' + escapeHtml(name.length > 90 ? name.slice(0, 90) + '…' : name) + '</span>'
+      + badge + copyRefBtn + '</span>'
+      + '<span class="simple-status-line">' + escapeHtml(statusLine) + '</span>'
+      + '<span class="simple-memory-line">' + escapeHtml(_simpleMemoryLine(row)) + '</span>'
+      + '</div>';
+  }
+  function _simpleIsWorkingRow(row) {
+    if (!row || row.archived || row.trashed) return false;
+    if (row.id && String(row.id).indexOf('spawning-') === 0) return false;
+    if (row.is_live || row.question_waiting || row.sidecar_in_flight) return true;
+    const st = String(row.status || row.session_state || '');
+    if (['running', 'working', 'active', 'idle'].indexOf(st) !== -1 && row.is_live) return true;
+    // Nothing reports live? Fall back to "touched in the last 6 hours" so the
+    // section still answers "what is happening now" for recent work.
+    const mtime = Number(row.mtime || row.modified) || 0;
+    return mtime > 0 && (Date.now() / 1000 - mtime) < 6 * 3600;
+  }
+
+  // ── data loading + section rendering ──
+  async function _simpleHomeRefresh() {
+    const home = document.getElementById('simpleHome');
+    if (!home || !isSimpleMode()) return;
+    // First load has nothing cached yet to show while these fetches are in
+    // flight — show a spinner instead of leaving the section blank.
+    const tasksEl0 = document.getElementById('simpleTasks');
+    if (tasksEl0 && !tasksEl0.innerHTML.trim()) {
+      tasksEl0.innerHTML = '<div class="simple-loading"><span class="simple-spinner" aria-hidden="true"></span>Loading your tasks…</div>';
+    }
+    let attention = null, sessions = null, archive = null;
+    try {
+      const results = await Promise.all([
+        fetch('/api/attention', { cache: 'no-store' }).then(r => r.json()).catch(() => null),
+        fetch('/api/sessions?all=1', { cache: 'no-store' }).then(r => r.json()).catch(() => null),
+        loadArchiveAll({ staleOk: true, window: 'all' }).catch(() => null),
+      ]);
+      attention = results[0]; sessions = results[1];
+      // loadArchiveAll resolves the conversations array directly (already
+      // ETag-cached/deduped against Advanced mode's same in-flight fetch),
+      // not a {conversations: [...]} envelope like the raw endpoint.
+      archive = Array.isArray(results[2]) ? { conversations: results[2] } : null;
+    } catch (_) { return; }
+
+    // Needs you: sessions waiting on the user. (R4's stuck-queue alerts are
+    // fetched separately below, not awaited here — /api/queue/status was
+    // briefly bundled into this same Promise.all, which meant a slow queue
+    // response delayed EVERY section, not just the alert; a real-device
+    // repro showed the whole home screen going blank while it hung. Keep
+    // this render on the fast/reliable path and let alerts arrive later.)
+    const nyaEl = document.getElementById('simpleNeedsYou');
+    if (nyaEl) {
+      const items = (attention && Array.isArray(attention.items) ? attention.items : [])
+        .filter(it => it && it.session_id
+          && Object.prototype.hasOwnProperty.call(_SIMPLE_NYA_KINDS, String(it.kind || ''))
+          && !_simpleIsNyaDismissed(it));
+      nyaEl.innerHTML = items.length
+        ? items.slice(0, 5).map(_simpleNyaCardHtml).join('')
+        : '<div class="simple-empty">Nothing needs you right now.</div>';
+    }
+    _simpleRefreshQueueAlerts();
+
+    // Your conversations: working + finished merged into one list ordered
+    // strictly by last activity (was two separate sections; split them out
+    // and users lost the ability to answer "what happened most recently").
+    // Each card's own color/badge (_simpleTaskCardHtml) still says whether
+    // it's running or finished-and-unseen.
+    const tasksEl = document.getElementById('simpleTasks');
+    const sessionRows = (sessions && Array.isArray(sessions.sessions)) ? sessions.sessions : [];
+    const workingRows = sessionRows.filter(_simpleIsWorkingRow);
+    const workingIds = {};
+    workingRows.forEach(r => { workingIds[String(r.id || r.session_id || '')] = true; });
+    const convRows = (archive && Array.isArray(archive.conversations)) ? archive.conversations : [];
+    const finishedRows = convRows.filter(r => r && !workingIds[String(r.id || r.session_id || '')]);
+    const merged = workingRows.concat(finishedRows)
+      .sort((a, b) => (Number(b.mtime || b.modified) || 0) - (Number(a.mtime || a.modified) || 0))
+      .slice(0, 10);
+    if (tasksEl) {
+      tasksEl.innerHTML = merged.length
+        ? merged.map(r => {
+            const working = !!workingIds[String(r.id || r.session_id || '')];
+            return _simpleTaskCardHtml(r, working ? _simpleWorkingStatusLine(r) : 'Past task', working);
+          }).join('')
+        : '<div class="simple-empty">Your conversations will show up here.</div>';
+    }
+  }
+  // R4: stuck helper-queue alerts, fetched independently of the main home
+  // refresh and never awaited by it (see the comment above _simpleHomeRefresh)
+  // so a slow /api/queue/status can't blank the rest of the screen. Prepends
+  // alert cards ahead of whatever session-based needs-you cards are already
+  // rendered; safe to call repeatedly (drops its own previous cards first).
+  async function _simpleRefreshQueueAlerts() {
+    const nyaEl = document.getElementById('simpleNeedsYou');
+    if (!nyaEl || !isSimpleMode()) return;
+    let queueStatus = null;
+    try {
+      const res = await fetch('/api/queue/status', { cache: 'no-store' });
+      queueStatus = await res.json().catch(() => null);
+    } catch (_) { return; }
+    if (!isSimpleMode()) return;   // mode may have changed while this was in flight
+    nyaEl.querySelectorAll('.simple-queue-alert-card').forEach(el => el.remove());
+    const stuckQueues = (queueStatus && Array.isArray(queueStatus.queues) ? queueStatus.queues : [])
+      .filter(q => q && q.stuck);
+    if (!stuckQueues.length) return;
+    const emptyState = nyaEl.querySelector('.simple-empty');
+    if (emptyState) emptyState.remove();
+    nyaEl.insertAdjacentHTML('afterbegin', stuckQueues.map(_simpleQueueAlertCardHtml).join(''));
+  }
+  async function _simpleLoadComposerData() {
+    try {
+      const res = await fetch('/api/spawn-defaults', { cache: 'no-store' });
+      const d = await res.json().catch(() => null);
+      if (d && d.ok !== false) _simpleHomeData.defaults = d;
+    } catch (_) {}
+    _simpleRenderAgentChips();
+    _simplePopulateFolderPicker();
+  }
+
+  // Which project/folder a new Simple-mode task spawns into. Previously
+  // absent entirely — every Simple-mode task silently spawned wherever the
+  // server's spawn-defaults cwd happened to be, with no way to change it.
+  // Reuses the same /api/repo/list the Advanced composer's cwd picker uses
+  // (loadRepoList() in the known-repos section), just rendered as a plain
+  // <select> instead of the Advanced combobox — Simple mode doesn't need
+  // autocomplete over an arbitrary path, just "pick one of my repos".
+  async function _simplePopulateFolderPicker() {
+    const sel = document.getElementById('simpleFolderSelect');
+    if (!sel) return;
+    if (!repoListState || !Array.isArray(repoListState.repos) || !repoListState.repos.length) {
+      try { await loadRepoList(); } catch (_) {}
+    }
+    const repos = (repoListState && Array.isArray(repoListState.repos)) ? repoListState.repos : [];
+    if (!repos.length) {
+      sel.innerHTML = '<option value="">(current project)</option>';
+      sel.disabled = true;
+      return;
+    }
+    sel.disabled = false;
+    const current = (repoListState && repoListState.current) || '';
+    if (!_simpleComposer.cwd || !repos.some(r => r.path === _simpleComposer.cwd)) {
+      _simpleComposer.cwd = repos.some(r => r.path === current) ? current : repos[0].path;
+    }
+    sel.innerHTML = repos.map(repo => {
+      const label = repo.label || _pathLeaf(repo.path) || repo.path;
+      const selAttr = repo.path === _simpleComposer.cwd ? ' selected' : '';
+      return '<option value="' + escapeAttr(repo.path) + '"' + selAttr + '>' + escapeHtml(label) + '</option>';
+    }).join('');
+  }
+
+  // ── conversation view: usage line + back-home ──
+  async function _simpleUpdateUsageLine(sid) {
+    const el = document.getElementById('simpleUsageLine');
+    if (!el) return;
+    if (!isSimpleMode() || !sid || sid === '__new__' || String(sid).indexOf('spawning-') === 0) {
+      el.classList.remove('has-data');
+      el.textContent = '';
+      return;
+    }
+    const render = (pct, cost) => {
+      let text;
+      if (pct === null) text = 'Memory: not measured yet.';
+      else {
+        const p = Math.round(pct);
+        text = 'Memory: ' + p + '% full — ' + _simpleMemoryPhrase(p) + '.';
+      }
+      if (cost !== null) text += ' About $' + cost.toFixed(2) + ' spent so far.';
+      el.textContent = text;
+      el.classList.add('has-data');
+    };
+    // Render the best-known value immediately — the /usage fetch can be slow,
+    // and the line must not stay invisible (it only displays with .has-data).
+    // Fall back to the list row the sidebar already computed for this conv.
+    let fallbackPct = null;
+    try {
+      const row = (conversationsData || []).find(x => x.id === sid)
+        || (Array.isArray(archiveData) ? archiveData.find(x => (x.id || x.session_id) === sid) : null);
+      fallbackPct = _simpleMemoryPercent(row);
+    } catch (_) {}
+    render(fallbackPct, null);
+    // Then refine from the live usage endpoint.
+    let pct = null;
+    let cost = null;
+    try {
+      const res = await fetch('/api/session/' + encodeURIComponent(sid) + '/usage', { cache: 'no-store' });
+      const d = await res.json().catch(() => null);
+      if (d) {
+        // Live-only, same reasoning as _simpleMemoryPercent above: never fall
+        // back to the guessed context_limit/latest_input_tokens fields.
+        const limit = Number(d.live_context_limit) || 0;
+        const tokens = Number(d.live_context_tokens) || 0;
+        if (Number(d.live_context_percent) > 0) pct = Number(d.live_context_percent);
+        else if (limit > 0 && tokens > 0) pct = (tokens / limit) * 100;
+        if (typeof d.cost_usd === 'number' && d.cost_usd > 0) cost = d.cost_usd;
+      }
+    } catch (_) {}
+    if (pct === null && cost === null) return; // keep the fallback render
+    render(pct === null ? fallbackPct : pct, cost);
+  }
+
+  // ── Home sections: user-orderable + collapsible ──
+  // (Needs you / Working on it / Finished). Order and collapsed state persist
+  // in localStorage as a real preference — not per-session like the
+  // technical strip. The composer is a section like any other now — user
+  // feedback was that it should start collapsed and be reorderable too.
+  var _SIMPLE_SECTION_ORDER_KEY = 'ccc-simple-section-order';
+  var _SIMPLE_SECTION_COLLAPSED_KEY = 'ccc-simple-section-collapsed';
+  var _SIMPLE_DEFAULT_SECTION_ORDER = ['composer', 'needs-you', 'tasks'];
+  var _simpleCollapsedSections = _simpleLoadCollapsedSections();
+
+  function _simpleLoadCollapsedSections() {
+    try {
+      const raw = localStorage.getItem(_SIMPLE_SECTION_COLLAPSED_KEY);
+      if (raw == null) return new Set(['composer']);   // first-ever load: composer starts collapsed
+      const arr = JSON.parse(raw);
+      return new Set(Array.isArray(arr) ? arr : []);
+    } catch (_) { return new Set(['composer']); }
+  }
+  function _simpleSaveCollapsedSections() {
+    try { localStorage.setItem(_SIMPLE_SECTION_COLLAPSED_KEY, JSON.stringify(Array.from(_simpleCollapsedSections))); } catch (_) {}
+  }
+  function _simpleApplyCollapsedState() {
+    document.querySelectorAll('#simpleHome [data-simple-section]').forEach((el) => {
+      const id = el.getAttribute('data-simple-section');
+      const collapsed = _simpleCollapsedSections.has(id);
+      el.classList.toggle('simple-section-collapsed', collapsed);
+      const toggle = el.querySelector('.simple-section-toggle');
+      if (toggle) toggle.setAttribute('aria-expanded', collapsed ? 'false' : 'true');
+    });
+  }
+  function _simpleToggleSectionCollapse(id) {
+    if (_simpleCollapsedSections.has(id)) _simpleCollapsedSections.delete(id);
+    else _simpleCollapsedSections.add(id);
+    _simpleSaveCollapsedSections();
+    _simpleApplyCollapsedState();
+  }
+  function _simpleLoadSectionOrder() {
+    let saved = [];
+    try { saved = JSON.parse(localStorage.getItem(_SIMPLE_SECTION_ORDER_KEY) || '[]'); } catch (_) {}
+    const order = (Array.isArray(saved) ? saved : []).filter((id) => _SIMPLE_DEFAULT_SECTION_ORDER.indexOf(id) !== -1);
+    _SIMPLE_DEFAULT_SECTION_ORDER.forEach((id) => { if (order.indexOf(id) === -1) order.push(id); });
+    return order;
+  }
+  function _simpleApplySectionOrder() {
+    const home = document.getElementById('simpleHome');
+    if (!home) return;
+    _simpleLoadSectionOrder().forEach((id) => {
+      const el = home.querySelector('[data-simple-section="' + id + '"]');
+      if (el) home.appendChild(el);   // appendChild on an existing child moves it
+    });
+  }
+  function _simpleSaveSectionOrderFromDom() {
+    const order = Array.from(document.querySelectorAll('#simpleHome [data-simple-section]'))
+      .map((el) => el.getAttribute('data-simple-section'));
+    try { localStorage.setItem(_SIMPLE_SECTION_ORDER_KEY, JSON.stringify(order)); } catch (_) {}
+  }
+  // Drag-to-reorder via Pointer Events (not HTML5 dragstart/drop — that API
+  // doesn't fire reliably on touch browsers, and this is a mobile-first
+  // surface). Dragging the handle moves the whole section; siblings swap in
+  // live as the dragged section's center crosses their midpoint.
+  function _wireSimpleSectionDrag() {
+    const home = document.getElementById('simpleHome');
+    if (!home) return;
+    let dragEl = null, startClientY = 0, startTop = 0, pointerId = null;
+    home.addEventListener('pointerdown', (ev) => {
+      const handle = ev.target.closest('.simple-section-drag');
+      if (!handle) return;
+      dragEl = handle.closest('[data-simple-section]');
+      if (!dragEl) return;
+      ev.preventDefault();
+      pointerId = ev.pointerId;
+      startClientY = ev.clientY;
+      startTop = dragEl.getBoundingClientRect().top;
+      dragEl.classList.add('simple-section-dragging');
+      try { handle.setPointerCapture(pointerId); } catch (_) {}
+    });
+    home.addEventListener('pointermove', (ev) => {
+      if (!dragEl || ev.pointerId !== pointerId) return;
+      const dy = ev.clientY - startClientY;
+      dragEl.style.transform = 'translateY(' + dy + 'px)';
+      const draggedMid = startTop + dy + dragEl.offsetHeight / 2;
+      const siblings = Array.from(home.querySelectorAll('[data-simple-section]')).filter((el) => el !== dragEl);
+      for (const sib of siblings) {
+        const rect = sib.getBoundingClientRect();
+        const sibMid = rect.top + rect.height / 2;
+        const draggedIsBefore = !!(dragEl.compareDocumentPosition(sib) & Node.DOCUMENT_POSITION_FOLLOWING);
+        if (draggedIsBefore && draggedMid > sibMid) {
+          home.insertBefore(dragEl, sib.nextSibling);
+          startTop = dragEl.getBoundingClientRect().top - dy;
+          break;
+        } else if (!draggedIsBefore && draggedMid < sibMid) {
+          home.insertBefore(dragEl, sib);
+          startTop = dragEl.getBoundingClientRect().top - dy;
+          break;
+        }
+      }
+    });
+    function endDrag(ev) {
+      if (!dragEl || (pointerId != null && ev.pointerId !== pointerId)) return;
+      dragEl.classList.remove('simple-section-dragging');
+      dragEl.style.transform = '';
+      _simpleSaveSectionOrderFromDom();
+      dragEl = null;
+      pointerId = null;
+    }
+    home.addEventListener('pointerup', endDrag);
+    home.addEventListener('pointercancel', endDrag);
+  }
+
+  // Swipe left on a needs-you card to reveal "Not now" (dismiss). Pointer
+  // Events, not HTML5 drag — same reasoning as _wireSimpleSectionDrag(): this
+  // is a touch-first surface. touch-action:pan-y on the card (see app.css)
+  // lets vertical list scrolling stay native while horizontal drags are
+  // tracked here. Only one card stays open at a time.
+  var _SIMPLE_NYA_REVEAL_PX = 76;
+  var _simpleNyaOpenCard = null;
+  function _simpleCloseNyaCard(card) {
+    if (!card) return;
+    card.style.transform = '';
+    card.classList.remove('is-swipe-open');
+    if (_simpleNyaOpenCard === card) _simpleNyaOpenCard = null;
+  }
+  function _wireSimpleNyaSwipe() {
+    const home = document.getElementById('simpleHome');
+    if (!home) return;
+    let card = null, startX = 0, startY = 0, dragging = false, moved = false, pointerId = null;
+    home.addEventListener('pointerdown', (ev) => {
+      const target = ev.target.closest('input, textarea, button, .simple-nya-option');
+      if (target) return;   // let taps on interactive controls behave normally
+      const found = ev.target.closest('.simple-nya-swipe .simple-nya-card');
+      if (!found) return;
+      card = found;
+      startX = ev.clientX; startY = ev.clientY;
+      dragging = false; moved = false;
+      pointerId = ev.pointerId;
+    });
+    home.addEventListener('pointermove', (ev) => {
+      if (!card || ev.pointerId !== pointerId) return;
+      const dx = ev.clientX - startX, dy = ev.clientY - startY;
+      if (!dragging) {
+        if (Math.abs(dx) < 8 && Math.abs(dy) < 8) return;
+        if (Math.abs(dy) > Math.abs(dx)) { card = null; return; }   // vertical: let it scroll
+        dragging = true;
+        if (_simpleNyaOpenCard && _simpleNyaOpenCard !== card) _simpleCloseNyaCard(_simpleNyaOpenCard);
+        try { card.setPointerCapture(pointerId); } catch (_) {}
+      }
+      moved = true;
+      const base = card.classList.contains('is-swipe-open') ? -_SIMPLE_NYA_REVEAL_PX : 0;
+      const next = Math.max(-_SIMPLE_NYA_REVEAL_PX, Math.min(0, base + dx));
+      card.style.transform = 'translateX(' + next + 'px)';
+    });
+    function endDrag(ev) {
+      if (!card || (pointerId != null && ev.pointerId !== pointerId)) { card = null; return; }
+      if (dragging && moved) {
+        const current = parseFloat((card.style.transform.match(/-?\d+(\.\d+)?/) || ['0'])[0]) || 0;
+        if (current <= -_SIMPLE_NYA_REVEAL_PX / 2) {
+          card.style.transform = 'translateX(-' + _SIMPLE_NYA_REVEAL_PX + 'px)';
+          card.classList.add('is-swipe-open');
+          _simpleNyaOpenCard = card;
+        } else {
+          _simpleCloseNyaCard(card);
+        }
+      } else if (card.classList.contains('is-swipe-open')) {
+        // Plain tap on an already-open card closes it instead of doing
+        // nothing (there's no other click behavior on the card itself).
+        _simpleCloseNyaCard(card);
+      }
+      card = null; dragging = false; moved = false; pointerId = null;
+    }
+    home.addEventListener('pointerup', endDrag);
+    home.addEventListener('pointercancel', endDrag);
+  }
+
+  function _wireSimpleHome() {
+    const home = document.getElementById('simpleHome');
+    if (!home) return;
+    _simpleApplySectionOrder();
+    _simpleApplyCollapsedState();
+    _wireSimpleSectionDrag();
+    _wireSimpleNyaSwipe();
+    const folderSelect = document.getElementById('simpleFolderSelect');
+    if (folderSelect) {
+      folderSelect.addEventListener('change', () => {
+        _simpleComposer.cwd = folderSelect.value || '';
+      });
+    }
+    // Chip + card clicks are delegated because rows re-render on refresh.
+    home.addEventListener('click', (ev) => {
+      const dismissBtn = ev.target.closest('[data-dismiss-nya]');
+      if (dismissBtn) {
+        const sid = dismissBtn.getAttribute('data-dismiss-nya') || '';
+        const mtime = dismissBtn.getAttribute('data-dismiss-mtime') || '';
+        _simpleDismissNya(sid, mtime);
+        const wrap = dismissBtn.closest('.simple-nya-swipe');
+        if (wrap) wrap.remove();
+        const nyaListEl = document.getElementById('simpleNeedsYou');
+        if (nyaListEl && !nyaListEl.children.length) {
+          nyaListEl.innerHTML = '<div class="simple-empty">Nothing needs you right now.</div>';
+        }
+        return;
+      }
+      const sectionToggle = ev.target.closest('.simple-section-toggle');
+      if (sectionToggle) {
+        const section = sectionToggle.closest('[data-simple-section]');
+        if (section) _simpleToggleSectionCollapse(section.getAttribute('data-simple-section'));
+        return;
+      }
+      const agentChip = ev.target.closest('[data-simple-agent]');
+      if (agentChip) {
+        _simpleComposer.engine = agentChip.getAttribute('data-simple-agent') || _simpleComposer.engine;
+        _simpleComposer.effort = '';   // re-pick the recommended level for the new engine
+        _simpleRenderAgentChips();
+        return;
+      }
+      const effortChip = ev.target.closest('[data-simple-effort]');
+      if (effortChip) {
+        _simpleComposer.effort = effortChip.getAttribute('data-simple-effort') || '';
+        _simpleRenderEffortChips();
+        return;
+      }
+      if (ev.target.closest('#simpleStartBtn')) { _simpleStartTask(); return; }
+      const sendBtn = ev.target.closest('[data-answer-send]');
+      if (sendBtn) {
+        const card = sendBtn.closest('.simple-nya-card');
+        const input = card && card.querySelector('.simple-nya-answer-input');
+        const text = (input && input.value || '').trim();
+        if (!text) { if (input) input.focus(); return; }
+        _simpleSendAnswer(card, text);
+        return;
+      }
+      const optBtn = ev.target.closest('[data-answer-option]');
+      if (optBtn) {
+        const card = optBtn.closest('.simple-nya-card');
+        _simpleSendAnswerOption(card, parseInt(optBtn.getAttribute('data-answer-option') || '0', 10), optBtn.textContent.trim());
+        return;
+      }
+      if (ev.target.closest('#simpleSeeAllFinished')) {
+        _simpleOpenScreen('history');
+        return;
+      }
+      const queueAlert = ev.target.closest('[data-simple-queue-alert]');
+      if (queueAlert) {
+        _simpleAutomationQueue = queueAlert.getAttribute('data-simple-queue-alert') || '';
+        _simpleOpenScreen('automation-detail');
+        return;
+      }
+      const taskCard = ev.target.closest('.simple-task-card');
+      if (taskCard) {
+        const sid = taskCard.getAttribute('data-session-id') || '';
+        _simpleMarkTaskSeen(sid, taskCard.getAttribute('data-mtime') || '');
+        if (sid && typeof selectConversation === 'function') selectConversation(sid);
+        return;
+      }
+    });
+    // Enter in a needs-you answer box sends, same as the Send button.
+    home.addEventListener('keydown', (ev) => {
+      if (ev.key !== 'Enter') return;
+      const input = ev.target.closest('.simple-nya-answer-input');
+      if (!input) return;
+      const card = input.closest('.simple-nya-card');
+      const text = (input.value || '').trim();
+      if (card && text) _simpleSendAnswer(card, text);
+    });
+    // Speak instead of type — same STT engine as the advanced composer,
+    // targeting #simpleComposerInput (see toggleSpeechRecognition/
+    // micButtonPaneId 'simple-home' branches above).
+    const micBtn = document.getElementById('simpleMicBtn');
+    if (micBtn) {
+      micBtn.addEventListener('mousedown', (ev) => ev.preventDefault());
+      micBtn.addEventListener('click', () => toggleSpeechRecognition('simple-home'));
+    }
+    // Landing surface: home on load in Simple mode. Deferred one tick so the
+    // module-scope lets this section references at runtime (spawn defaults,
+    // model catalog) finish initializing first.
+    _syncSimpleHomeVisibility();
+    setTimeout(() => {
+      _simpleLoadComposerData();
+      _simpleHomeRefresh();
+    }, 0);
+  }
+  _wireSimpleHome();
+
+  // ── Simple depth-3 screens (Simple-UI redesign, iteration 2) ──
+  // Full-screen plain-language surfaces one tap from home / the bottom nav:
+  // History (all past tasks + search), Automations (queue list → detail),
+  // Settings (theme, text size, what's new, switch to Advanced). Same data
+  // endpoints the advanced UI uses; actions FORWARD to existing controls via
+  // .click() or the same /api/* calls — no parallel logic. Rendering reuses
+  // the home screen's card helpers (_simpleTaskCardHtml, _simpleMemoryLine).
+  function _simplePlainAge(seconds) {
+    const s = Number(seconds);
+    if (!(s >= 0)) return 'not yet';
+    if (s < 90) return 'just now';
+    const m = Math.round(s / 60);
+    if (m < 60) return m + (m === 1 ? ' minute ago' : ' minutes ago');
+    const h = Math.round(m / 60);
+    if (h < 48) return h + (h === 1 ? ' hour ago' : ' hours ago');
+    const d = Math.round(h / 24);
+    if (d < 30) return d + (d === 1 ? ' day ago' : ' days ago');
+    const w = Math.round(d / 7);
+    if (w < 9) return w + (w === 1 ? ' week ago' : ' weeks ago');
+    const mo = Math.round(d / 30);
+    return mo + (mo === 1 ? ' month ago' : ' months ago');
+  }
+
+  // ── History (also the simple Search surface — one search box on top) ──
+  // Rows are fetched once per screen open and filtered client-side while
+  // typing: a fetch per keystroke would flood the local server, and stale
+  // responses could land after a newer keystroke and resurrect old results.
+  var _simpleHistoryRows = null;
+  function _simpleHistoryApply() {
+    const list = document.getElementById('simpleHistoryList');
+    if (!list) return;
+    const query = String((document.getElementById('simpleHistorySearch') || {}).value || '')
+      .trim().toLowerCase();
+    let rows = (_simpleHistoryRows || []);
+    if (query) {
+      rows = rows.filter(r => {
+        const hay = [r.display_name, r.first_message, r.status_rail_title, r.folder_label, r.folder_path]
+          .map(x => String(x || '').toLowerCase()).join(' ');
+        return hay.indexOf(query) !== -1;
+      });
+    }
+    const limited = rows.slice(0, 60);
+    list.innerHTML = limited.length
+      ? limited.map(r => _simpleTaskCardHtml(r, _simpleHistoryStatusLine(r))).join('')
+      : '<div class="simple-empty">'
+        + (query ? 'Nothing matches that search.' : 'Past tasks will show up here once you start some.')
+        + '</div>';
+  }
+  async function _simpleRenderHistory() {
+    // First open (no cached rows yet) has nothing to show while the fetch
+    // is in flight — show a spinner instead of a silent blank screen.
+    // Later opens already have _simpleHistoryRows from last time, so keep
+    // showing that immediately and just refresh it in the background.
+    const list = document.getElementById('simpleHistoryList');
+    const hasCache = Array.isArray(_simpleHistoryRows) && _simpleHistoryRows.length > 0;
+    if (!hasCache && list) {
+      list.innerHTML = '<div class="simple-loading"><span class="simple-spinner" aria-hidden="true"></span>Loading your past tasks…</div>';
+    }
+    try {
+      const rows = await loadArchiveAll({ staleOk: true, window: 'all' });
+      _simpleHistoryRows = (Array.isArray(rows) ? rows : [])
+        .filter(r => r && (r.id || r.session_id))
+        .sort((a, b) => (Number(b.mtime || b.modified) || 0) - (Number(a.mtime || a.modified) || 0));
+    } catch (_) { /* keep the previous cache */ }
+    _simpleHistoryApply();
+  }
+  function _simpleHistoryStatusLine(row) {
+    const age = Number(row.mtime || row.modified) || 0;
+    return age > 0 ? 'Last worked on ' + _simplePlainAge(Date.now() / 1000 - age) : 'Past task';
+  }
+
+  // ── Automations: plain-language queue list + detail ──
+  function _simpleAutomationStatusLine(q) {
+    const depth = Number(q.depth) || 0;
+    const workers = Number(q.workers) || 0;
+    if (q.stuck) return 'Needs attention — something looks stuck';
+    if (workers > 0) return 'Working on it now (' + workers + (workers === 1 ? ' helper' : ' helpers') + ')';
+    if (depth > 0 && q.auto_drain) return depth + ' waiting — a helper will pick them up';
+    if (depth > 0) return depth + (depth === 1 ? ' job waiting' : ' jobs waiting') + ' — nobody on it yet';
+    return 'Nothing waiting';
+  }
+  // ISO timestamp (queue items use "2026-07-24T20:04:32Z") → plain age via
+  // the same wording as everywhere else in Simple mode.
+  function _simplePlainAgeIso(iso) {
+    const ms = Date.parse(String(iso || ''));
+    if (!(ms > 0)) return '';
+    return _simplePlainAge((Date.now() - ms) / 1000);
+  }
+  // One queue ticket, plain-language: what it is, how long it's been
+  // waiting/done, and who (if anyone) is on it. Clickable straight into the
+  // attached conversation when one exists — same "tap a card to open it"
+  // pattern as every other list in Simple mode.
+  function _simpleQueueItemCardHtml(it, isOpen) {
+    const text = String(it.note || it.text || it.title || it.ref || 'Untitled job');
+    const short = text.length > 110 ? text.slice(0, 110) + '…' : text;
+    const sid = String(it.claimed_session_id || '').trim();
+    let statusLine;
+    if (isOpen) {
+      statusLine = it.claimed_by
+        ? 'Someone is already on it' + (it.claimed_at ? ' — since ' + _simplePlainAgeIso(it.claimed_at) : '')
+        : 'Waiting' + (it.created_at ? ' since ' + _simplePlainAgeIso(it.created_at) : '');
+    } else {
+      statusLine = 'Finished' + (it.closed_at ? ' ' + _simplePlainAgeIso(it.closed_at) : '');
+    }
+    const tag = sid ? 'button' : 'div';
+    return '<' + tag + (sid ? ' type="button"' : '') + ' class="simple-card simple-task-card simple-queue-item"'
+      + (sid ? ' data-session-id="' + escapeAttr(sid) + '"' : '')
+      + '>'
+      + '<span class="simple-card-name">' + escapeHtml(short) + '</span>'
+      + '<span class="simple-status-line">' + escapeHtml(statusLine) + '</span>'
+      + '</' + tag + '>';
+  }
+  // R4: a stuck helper queue surfaced on Home's "Needs you" — same card look
+  // as a session waiting on the user, but taps through to the Helpers detail
+  // screen instead of a conversation (data-simple-queue-alert, not
+  // data-session-id; see the home click delegate in _wireSimpleHome).
+  function _simpleQueueAlertCardHtml(q) {
+    const name = String(q.queue || 'Helper queue');
+    return '<div class="simple-card simple-nya-card simple-queue-alert-card" data-simple-queue-alert="' + escapeAttr(name) + '">'
+      + '<div class="simple-nya-title">Needs attention</div>'
+      + '<div class="simple-card-name">' + escapeHtml(name.charAt(0) + name.slice(1).toLowerCase()) + '</div>'
+      + '<div class="simple-nya-need">Jobs are waiting but nobody’s on them — tap to see what’s stuck.</div>'
+      + '</div>';
+  }
+  function _simpleAutomationCardHtml(q) {
+    const name = String(q.queue || 'Helper queue');
+    return '<button type="button" class="simple-card simple-task-card simple-automation-card"'
+      + ' data-simple-queue="' + escapeAttr(name) + '">'
+      + '<span class="simple-card-name">' + escapeHtml(name.charAt(0) + name.slice(1).toLowerCase()) + '</span>'
+      + '<span class="simple-status-line">' + escapeHtml(_simpleAutomationStatusLine(q)) + '</span>'
+      + '<span class="simple-memory-line">'
+      + escapeHtml(q.last_activity_seconds != null
+        ? 'Last activity ' + _simplePlainAge(q.last_activity_seconds)
+        : 'No activity yet')
+      + '</span></button>';
+  }
+  async function _simpleRenderAutomations() {
+    const list = document.getElementById('simpleAutomationsList');
+    if (!list) return;
+    let queues = [];
+    try {
+      const res = await fetch('/api/queue/status', { cache: 'no-store' });
+      const data = await res.json().catch(() => ({}));
+      queues = Array.isArray(data && data.queues) ? data.queues : [];
+    } catch (_) { /* keep empty */ }
+    list.innerHTML = queues.length
+      ? queues.map(_simpleAutomationCardHtml).join('')
+      : '<div class="simple-empty">No automations set up yet.</div>';
+  }
+  async function _simpleRenderAutomationDetail() {
+    const nameEl = document.getElementById('simpleAutomationDetailName');
+    const body = document.getElementById('simpleAutomationDetailBody');
+    if (!nameEl || !body) return;
+    const queue = _simpleAutomationQueue;
+    nameEl.textContent = queue ? (queue.charAt(0) + queue.slice(1).toLowerCase()) : 'Helper queue';
+    let q = null, items = [];
+    try {
+      const res = await fetch('/api/queue/status', { cache: 'no-store' });
+      const data = await res.json().catch(() => ({}));
+      const queues = Array.isArray(data && data.queues) ? data.queues : [];
+      q = queues.find(x => String(x.queue || '').toUpperCase() === String(queue).toUpperCase()) || null;
+    } catch (_) {}
+    try {
+      const res = await fetch('/api/queue/list', { cache: 'no-store' });
+      const data = await res.json().catch(() => ({}));
+      items = (Array.isArray(data && data.items) ? data.items : [])
+        .filter(it => String(it.project || '').toUpperCase() === String(queue).toUpperCase());
+    } catch (_) {}
+    const open = items.filter(it => String(it.status || '') === 'open')
+      .sort((a, b) => (Date.parse(a.created_at || '') || 0) - (Date.parse(b.created_at || '') || 0));
+    const done = items.filter(it => String(it.status || '') === 'closed')
+      .sort((a, b) => (Date.parse(b.closed_at || '') || 0) - (Date.parse(a.closed_at || '') || 0));
+    // Remembered for _simpleSpawnQueueHelper() (R3) — the spawn-worker
+    // endpoint is queue-scoped (it can't target one specific ticket), so
+    // this is one "get help now" action for the whole list, distinct from
+    // the recurring auto-drain toggle above it.
+    _simpleAutomationRepoPath = (q && q.repo_path) || '';
+    let html = '<div class="simple-card">'
+      + '<div class="simple-settings-label">How it is doing</div>'
+      + '<div class="simple-settings-desc">' + escapeHtml(q ? _simpleAutomationStatusLine(q) : 'Status unknown') + '</div>'
+      + '<div class="simple-memory-line">'
+      + escapeHtml(q && q.last_activity_seconds != null
+        ? 'Last activity ' + _simplePlainAge(q.last_activity_seconds)
+        : 'No activity yet')
+      + '</div>'
+      + '<div class="simple-memory-line">' + escapeHtml(
+        open.length + (open.length === 1 ? ' job waiting' : ' jobs waiting')
+        + ' · ' + done.length + ' finished') + '</div>'
+      + '</div>'
+      + '<button type="button" class="simple-start-btn" id="simpleAutomationDrainBtn">'
+      + escapeHtml(q && q.auto_drain ? 'Stop working on these automatically' : 'Work on these automatically')
+      + '</button>';
+    if (open.length && _simpleAutomationRepoPath) {
+      html += '<button type="button" class="simple-chip simple-automation-help-btn" id="simpleAutomationHelpBtn">'
+        + 'Get extra help on this right now</button>';
+    }
+    if (open.length) {
+      html += '<h3 class="simple-h3">Waiting jobs</h3><div class="simple-card-list">'
+        + open.slice(0, 20).map(it => _simpleQueueItemCardHtml(it, true)).join('') + '</div>';
+    }
+    if (done.length) {
+      html += '<h3 class="simple-h3">Recently finished</h3><div class="simple-card-list">'
+        + done.slice(0, 10).map(it => _simpleQueueItemCardHtml(it, false)).join('') + '</div>';
+    }
+    body.innerHTML = html;
+  }
+  async function _simpleToggleAutomationDrain() {
+    const queue = _simpleAutomationQueue;
+    if (!queue) return;
+    let q = null;
+    try {
+      const res = await fetch('/api/queue/status', { cache: 'no-store' });
+      const data = await res.json().catch(() => ({}));
+      q = (Array.isArray(data && data.queues) ? data.queues : [])
+        .find(x => String(x.queue || '').toUpperCase() === String(queue).toUpperCase()) || null;
+    } catch (_) {}
+    const newVal = !(q && q.auto_drain);
+    const btn = document.getElementById('simpleAutomationDrainBtn');
+    if (btn) btn.disabled = true;
+    try {
+      const res = await fetch('/api/queue/drain', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ queue: queue, auto_drain: newVal }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok || !data.ok) throw new Error((data && data.error) || ('HTTP ' + res.status));
+    } catch (e) {
+      if (typeof showOpToast === 'function') {
+        showOpToast('Could not change that: ' + ((e && e.message) || 'unknown'), 'error');
+      }
+    } finally {
+      _simpleRenderAutomationDetail();
+    }
+  }
+  // R3: a one-time "get help now" for this whole list — one worker, right
+  // away — distinct from the auto-drain toggle (which is recurring/hands-
+  // off). Same endpoint the advanced queue strip's spawn button uses.
+  async function _simpleSpawnQueueHelper() {
+    const queue = _simpleAutomationQueue;
+    const repoPath = _simpleAutomationRepoPath;
+    if (!queue || !repoPath) return;
+    const btn = document.getElementById('simpleAutomationHelpBtn');
+    if (btn) { btn.disabled = true; btn.textContent = 'Asking for help…'; }
+    try {
+      const res = await fetch('/api/queue/spawn-worker', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ repo_path: repoPath, project: queue }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok || !data.ok) throw new Error((data && data.error) || ('HTTP ' + res.status));
+      _simpleToast('On it — an extra helper just started on ' + queue.charAt(0) + queue.slice(1).toLowerCase() + '.');
+    } catch (e) {
+      if (typeof showOpToast === 'function') {
+        showOpToast('Could not get help: ' + ((e && e.message) || 'unknown'), 'error');
+      }
+    } finally {
+      _simpleRenderAutomationDetail();
+    }
+  }
+
+  // ── Settings: forward to the existing advanced controls via .click() ──
+  function _simpleSyncSettingsScreen() {
+    let theme = 'dark';
+    try { theme = localStorage.getItem('ccc-theme') || 'dark'; } catch (_) {}
+    document.querySelectorAll('#simpleThemeRow [data-simple-theme]').forEach(btn => {
+      const sel = btn.getAttribute('data-simple-theme') === theme;
+      btn.classList.toggle('is-selected', sel);
+      btn.setAttribute('aria-pressed', sel ? 'true' : 'false');
+    });
+  }
+  function _wireSimpleScreens() {
+    // Back buttons on every depth-3 screen (data-simple-back-to overrides the
+    // destination, e.g. automation-detail → automations).
+    document.querySelectorAll('.simple-screen [data-simple-back]').forEach(btn => {
+      btn.addEventListener('click', () => {
+        const to = btn.getAttribute('data-simple-back-to');
+        if (to) _simpleOpenScreen(to);
+        else _simpleShowHome();
+      });
+    });
+    // History / search: live-filter on typing (client-side, from the cached
+    // rows), tap a card to open it.
+    const histSearch = document.getElementById('simpleHistorySearch');
+    if (histSearch) histSearch.addEventListener('input', () => { _simpleHistoryApply(); });
+    const histList = document.getElementById('simpleHistoryList');
+    if (histList) {
+      histList.addEventListener('click', (ev) => {
+        const card = ev.target.closest('.simple-task-card');
+        const sid = card && card.getAttribute('data-session-id');
+        if (card) _simpleMarkTaskSeen(sid, card.getAttribute('data-mtime') || '');
+        if (sid && typeof selectConversation === 'function') selectConversation(sid);
+      });
+    }
+    // Automations: tap a card → detail; detail's primary button toggles
+    // auto-drain through the same endpoint the advanced queue strip uses.
+    const autoList = document.getElementById('simpleAutomationsList');
+    if (autoList) {
+      autoList.addEventListener('click', (ev) => {
+        const card = ev.target.closest('[data-simple-queue]');
+        if (!card) return;
+        _simpleAutomationQueue = card.getAttribute('data-simple-queue') || '';
+        _simpleOpenScreen('automation-detail');
+      });
+    }
+    const autoDetail = document.getElementById('simpleAutomationDetailBody');
+    if (autoDetail) {
+      autoDetail.addEventListener('click', (ev) => {
+        if (ev.target.closest('#simpleAutomationDrainBtn')) { _simpleToggleAutomationDrain(); return; }
+        if (ev.target.closest('#simpleAutomationHelpBtn')) { _simpleSpawnQueueHelper(); return; }
+        // A queue item with a session attached (someone's already working it)
+        // opens straight into that conversation, same as any other task card.
+        const item = ev.target.closest('.simple-queue-item[data-session-id]');
+        if (item) {
+          const sid = item.getAttribute('data-session-id');
+          if (sid && typeof selectConversation === 'function') selectConversation(sid);
+        }
+      });
+    }
+    // Settings: theme chips forward to the settings modal's segmented
+    // control; text size forwards to the global A-/A+ steppers; what's new
+    // forwards to the sidebar link; Advanced flips the UI mode.
+    const themeRow = document.getElementById('simpleThemeRow');
+    if (themeRow) {
+      themeRow.addEventListener('click', (ev) => {
+        const chip = ev.target.closest('[data-simple-theme]');
+        if (!chip) return;
+        const real = document.querySelector('.settings-segmented[data-segmented-group="theme"] [data-theme="'
+          + chip.getAttribute('data-simple-theme') + '"]');
+        if (real) real.click();
+        _simpleSyncSettingsScreen();
+      });
+    }
+    const fwd = (id, targetId) => {
+      const el = document.getElementById(id);
+      if (el) el.addEventListener('click', () => {
+        const target = document.getElementById(targetId);
+        if (target) target.click();
+      });
+    };
+    fwd('simpleFontMinus', 'fontMinus');
+    fwd('simpleFontPlus', 'fontPlus');
+    fwd('simpleWhatsNewBtn', 'cccWhatsNewLink');
+    const advBtn = document.getElementById('simpleAdvancedBtn');
+    if (advBtn) advBtn.addEventListener('click', () => setUiMode('advanced'));
+  }
+  _wireSimpleScreens();
 
   // ---------------------------------------------------------------------------
   // Mobile swipe-to-rotate among recently-opened conversations.
@@ -14478,6 +16343,11 @@
     }
     return false;
   }
+  // Width of the left-edge strip reserved for the "swipe right to go back"
+  // gesture (wireEdgeSwipeBack below) — mirrors iOS's own edge-swipe-back
+  // zone so it feels native and doesn't fight wireConvSwipeRotate's
+  // full-area recency swipe.
+  const EDGE_SWIPE_BACK_ZONE_PX = 24;
   // Wire the gesture onto one `.conversations-view` element. Idempotent per
   // element (guarded by a dataset flag). The element persists across conv
   // switches (only its innerHTML is replaced), so one wiring lasts.
@@ -14502,6 +16372,11 @@
       const sel = window.getSelection && window.getSelection();
       if (sel && !sel.isCollapsed && String(sel).length) return;
       if (swipeStartBlocked(e.target)) return;
+      // A touch starting in the left edge strip is reserved for
+      // wireEdgeSwipeBack's "go back" gesture — don't also arm the
+      // recency-rotate gesture for it, or the two would fight over the same
+      // rightward drag.
+      if (e.touches[0].clientX <= EDGE_SWIPE_BACK_ZONE_PX) return;
       sx = e.touches[0].clientX; sy = e.touches[0].clientY;
       active = true;
     }, { passive: true });
@@ -14574,11 +16449,66 @@
       }
     }, { passive: true });
   }
+  // ---------------------------------------------------------------------------
+  // Edge-swipe-back: dragging right from the left screen edge closes the open
+  // conversation, the same native gesture iOS/Android users expect and reach
+  // for the moment a chat traps them (mobile back button unreachable/invisible,
+  // no other way out — the exact complaint this closes). Deliberately a
+  // SEPARATE gesture from wireConvSwipeRotate above rather than a shared one:
+  // that gesture's rightward swipe already means "previous recent
+  // conversation", and overloading it would make "go back" and "switch chats"
+  // the same drag with no way to pick. wireConvSwipeRotate's own touchstart
+  // ignores touches starting in EDGE_SWIPE_BACK_ZONE_PX so the two never race
+  // for the same touch.
+  function _edgeSwipeBackTarget() {
+    if (isSimpleMode() && document.body.classList.contains('ccc-simple-conv-open')) {
+      return _simpleShowHome;
+    }
+    if (document.body.classList.contains('mobile-conv-open')) {
+      return () => mobileShowConv(false);
+    }
+    if (document.body.classList.contains('mobile-show-main')) {
+      return () => mobileShowMain(false);
+    }
+    return null;
+  }
+  function wireEdgeSwipeBack(viewEl) {
+    if (!viewEl || !isTouchPrimary() || viewEl.dataset.edgeSwipeBackWired === '1') return;
+    viewEl.dataset.edgeSwipeBackWired = '1';
+    const THRESH = 60;
+    const RATIO = 1.5;
+    let sx = 0, sy = 0, active = false;
+    viewEl.addEventListener('touchstart', (e) => {
+      active = false;
+      if (e.touches.length !== 1) return;
+      if (e.touches[0].clientX > EDGE_SWIPE_BACK_ZONE_PX) return;
+      if (!_edgeSwipeBackTarget()) return;
+      sx = e.touches[0].clientX; sy = e.touches[0].clientY;
+      active = true;
+    }, { passive: true });
+    const end = (e) => {
+      if (!active) return;
+      active = false;
+      const t = (e.changedTouches && e.changedTouches[0]) || null;
+      if (!t) return;
+      const dx = t.clientX - sx;
+      const dy = t.clientY - sy;
+      if (dx >= THRESH && dx > Math.abs(dy) * RATIO) {
+        const goBack = _edgeSwipeBackTarget();
+        if (goBack) goBack();
+      }
+    };
+    viewEl.addEventListener('touchend', end, { passive: true });
+    viewEl.addEventListener('touchcancel', () => { active = false; }, { passive: true });
+  }
   // Wire any conversations-view present now, and any added later (split panes,
   // popout). One delegated pass on a short interval is cheap and idempotent.
   function wireAllConvSwipe() {
     if (!isTouchPrimary()) return;
-    document.querySelectorAll('.conversations-view').forEach(wireConvSwipeRotate);
+    document.querySelectorAll('.conversations-view').forEach(viewEl => {
+      wireConvSwipeRotate(viewEl);
+      wireEdgeSwipeBack(viewEl);
+    });
   }
   wireAllConvSwipe();
   if (isTouchPrimary()) {
@@ -14947,10 +16877,22 @@
       && rows.some(c => c && (c.id === id || c.session_id === id));
   }
 
+  // Depth counter, not a boolean: restoreLastViewOrConversation() has two
+  // trigger sites (initial sessions load, then again once the archive list
+  // finishes loading) that can both be mid-flight at once. A plain boolean
+  // races — whichever call's `finally` runs first resets it to false while
+  // the OTHER call is still awaiting inside selectConversation, so that
+  // still-in-flight call sees "not a boot restore" and treats itself as a
+  // deliberate open. On mobile that meant mobileShowForCurrentMode() slid
+  // `.main` into view over a Simple Home that intentionally stayed open,
+  // landing on the "chat opened itself and I'm stuck" bug this guards
+  // against. A counter is correct under overlap; only 0 means "no restore
+  // in flight anywhere."
+  let _qfBootRestoreDepth = 0;
   async function restoreLastConversation() {
     if (CONV_POPOUT_MODE) return;
     if (!conversationsLoaded) return;
-    _qfBootRestore = true;
+    _qfBootRestoreDepth++;
     try {
       let anyRestored = false;
       const savedActiveIndex = splitState.activeIndex;
@@ -14977,7 +16919,7 @@
         }
       }
     } finally {
-      _qfBootRestore = false;
+      _qfBootRestoreDepth--;
     }
   }
   function activePaneId() { return splitState.panes[splitState.activeIndex].id; }
@@ -26333,6 +28275,93 @@
     return !c.has_edit;
   }
 
+  // ── Mobile redesign: single dominant status per card ──
+  // Reduces the ~7 same-weight badges (issue chip, needs-approval, question,
+  // stale-tool, stage chip, no-edits/read-only) desktop shows directly on
+  // the card face into one Working/Idle/Stuck/Offline line. Reads the exact
+  // same fields desktop already computes (is_live, sidecar_status,
+  // stale_tool_call, needs_approval, question_waiting) — no new data source.
+  function deriveMobileCardStatus(c, trulyActiveCls) {
+    if (!c.is_live) {
+      return { state: 'offline', word: 'Offline', detail: '' };
+    }
+    if (c.stale_tool_call) {
+      const staleTool = c.pending_tool || c.sidecar_tool || 'tool';
+      const staleAge = c.pending_tool_ts ? relativeTime(c.pending_tool_ts)
+        : (c.stale_tool_age_s ? Math.floor(c.stale_tool_age_s / 60) + 'm' : '');
+      return { state: 'stuck', word: 'Stuck', detail: liveActivityToolLabel(staleTool) + (staleAge ? ' for ' + staleAge : '') };
+    }
+    if (c.needs_approval) {
+      const msg = c.needs_approval_message || '';
+      return { state: 'idle', word: 'Idle', detail: 'needs approval' + (msg ? ' — ' + (msg.length <= 60 ? msg : msg.slice(0, 57) + '...') : '') };
+    }
+    if (c.question_waiting || (c.sidecar_in_flight && c.sidecar_tool === 'AskUserQuestion')) {
+      const msg = c.sidecar_file || c.question_text || '';
+      return { state: 'idle', word: 'Idle', detail: 'has a question' + (msg ? ' — ' + (msg.length <= 60 ? msg : msg.slice(0, 57) + '...') : '') };
+    }
+    if (trulyActiveCls) {
+      const sidecarAge = c.sidecar_ts ? Math.max(0, Math.floor(Date.now() / 1000 - c.sidecar_ts)) : 9999;
+      let detail = '';
+      if (c.sidecar_tool && c.sidecar_tool !== 'AskUserQuestion' && sidecarAge < 300) {
+        const shortFile = shortenLiveActivityDetail(c.sidecar_file || '', c.sidecar_tool, isCommandActivityTool(c.sidecar_tool) ? 40 : 24);
+        detail = liveActivityToolLabel(c.sidecar_tool) + (shortFile ? ' ' + shortFile : '');
+      }
+      return { state: 'working', word: 'Working', detail: detail };
+    }
+    return { state: 'idle', word: 'Idle', detail: 'no live process' };
+  }
+
+  function mobileCardStatusLineHtml(status) {
+    // Feeds both the kanban card and the main session list — one change
+    // here covers both render paths. simpleLabel() is a no-op in Advanced
+    // mode, so this line has zero effect unless Simple mode is on.
+    const word = simpleLabel(status.word);
+    return '<div class="mobile-status-line is-' + status.state + '">'
+      + '<span class="mobile-status-dot" aria-hidden="true"></span>'
+      + '<span class="mobile-status-word">' + escapeHtml(word) + '</span>'
+      + (status.detail ? '<span class="mobile-status-detail">— ' + escapeHtml(status.detail) + '</span>' : '')
+      + '</div>';
+  }
+
+  // Row-list equivalent of deriveMobileCardStatus, for the main session
+  // list (renderConversationList's _renderRow). That closure already
+  // computes a more careful "is this actually running" signal per-engine
+  // (_isAgentRunning/_isWaitingForUser/_hasStaleToolCall) than the kanban
+  // board does — reuse those exact locals instead of re-deriving.
+  function deriveMobileRowStatus(c, isAgentRunning, isWaitingForUser, hasStaleToolCall, knownTool) {
+    if (!c.is_live) {
+      return { state: 'offline', word: 'Offline', detail: '' };
+    }
+    if (hasStaleToolCall) {
+      const staleAge = c.pending_tool_ts ? relativeTime(c.pending_tool_ts)
+        : (c.stale_tool_age_s ? Math.floor(c.stale_tool_age_s / 60) + 'm' : '');
+      return { state: 'stuck', word: 'Stuck', detail: liveActivityToolLabel(knownTool || 'tool') + (staleAge ? ' for ' + staleAge : '') };
+    }
+    if (isWaitingForUser) {
+      const msg = c.question_text || c.needs_approval_message || c.sidecar_file || '';
+      const label = (c.question_waiting || (c.sidecar_in_flight && c.sidecar_tool === 'AskUserQuestion')) ? 'has a question' : 'needs approval';
+      return { state: 'idle', word: 'Idle', detail: label + (msg ? ' — ' + (msg.length <= 60 ? msg : msg.slice(0, 57) + '...') : '') };
+    }
+    if (isAgentRunning) {
+      const detail = knownTool ? liveActivityToolLabel(knownTool) : '';
+      return { state: 'working', word: 'Working', detail: detail };
+    }
+    return { state: 'idle', word: 'Idle', detail: '' };
+  }
+
+  // Delegated once at parse time (not per-render) since clicks bubble from
+  // any card's Details button, present or future.
+  document.addEventListener('click', (ev) => {
+    const btn = ev.target.closest('.mobile-details-toggle');
+    if (!btn) return;
+    ev.preventDefault();
+    ev.stopPropagation();
+    const panel = btn.nextElementSibling;
+    const open = btn.getAttribute('aria-pressed') === 'true';
+    btn.setAttribute('aria-pressed', open ? 'false' : 'true');
+    if (panel && panel.classList.contains('mobile-details-panel')) panel.hidden = open;
+  });
+
   function renderKanbanBoard(convs, targetEl, isSplit) {
     convs = filterGhIssues(convs);
     if (!targetEl) targetEl = $kanbanBoard;
@@ -26397,11 +28426,12 @@
       const visibleItems = (!showAll && items.length > maxVisible) ? items.slice(0, maxVisible) : items;
       const hasMore = !showAll && items.length > maxVisible;
 
+      const colLabel = simpleLabel(col.label);
       html += '<div class="kanban-column ' + col.key + (isCollapsed ? ' collapsed' : '') + '" data-col="' + col.key + '">';
-      const colTitle = col.hint ? (col.label + ' - ' + col.hint) : col.label;
+      const colTitle = col.hint ? (colLabel + ' - ' + col.hint) : colLabel;
       html += '<div class="kanban-column-header' + (isCollapsed ? ' collapsed' : '') + '" data-col="' + col.key + '" draggable="true" title="' + escapeHtml(colTitle) + '">';
       html += '<span class="arrow">' + (isCollapsed ? '&#9656;' : '&#9662;') + '</span>';
-      html += '<span>' + escapeHtml(col.label) + '</span>';
+      html += '<span>' + escapeHtml(colLabel) + '</span>';
       html += '<span class="count">' + items.length + '</span>';
       html += '</div>';
       html += '<div class="kanban-cards">';
@@ -26704,6 +28734,13 @@
         // Notification hook badge — Claude Code is asking for permission
         // (or otherwise needs the user). Sits above the title so it's the
         // first thing the eye lands on when scanning the Waiting column.
+        // Mobile redesign: replaced by one dominant status line below —
+        // this whole badge-soup block (needs-approval/question/issue chip/
+        // stage/no-edits/read-only) folds into a collapsed Details panel
+        // instead, so desktop keeps every statement below unchanged.
+        if (isMobileChromeActive()) {
+          html += mobileCardStatusLineHtml(deriveMobileCardStatus(c, trulyActive));
+        } else {
         if (c.needs_approval) {
           const msg = c.needs_approval_message || '';
           const shortMsg = msg && msg.length <= 80 ? msg : '';
@@ -26724,6 +28761,7 @@
         if (issueBadge) {
           html += '<div class="kanban-card-badges">' + issueBadge + '</div>';
         }
+        }
         html += '<div class="kanban-card-title' + titleClass + '" data-action="edit-title" title="Click to open; click again to rename">' + titleHtml + '</div>';
         if (descHtml) {
           html += '<div class="kanban-card-desc">' + descHtml + '</div>';
@@ -26734,18 +28772,22 @@
             + 'Last interacted ' + escapeHtml(relativeTime(c.last_interacted))
             + '</div>';
         }
+        if (!isMobileChromeActive()) {
         html += '<div class="kanban-card-stage ' + stageCls + '">' + escapeHtml(stageLabel) + '</div>';
         if (noEditsAttr) {
           html += '<span class="kanban-card-stage no-edits" title="Agent has not edited any files in this session">no edits</span>';
         } else if (readOnlyAttr) {
           html += '<span class="kanban-card-stage read-only" title="Agent completed read-only work without file edits">read-only</span>';
         }
+        }
 
         // ── Task 8: Approve/Deny for waiting cards with pending_tool ──
         // Live "what's running right now" \u2014 render whenever sidecar shows
         // active work and the data is fresh (<5 min). Closes the Working
         // column gap where the card showed nothing while Claude was busy.
-        if (c.stale_tool_call) {
+        // Mobile: same signals already drove the status line above; the
+        // Details panel below carries the raw tool/age text instead.
+        if (!isMobileChromeActive() && c.stale_tool_call) {
           const staleTool = c.pending_tool || c.sidecar_tool || 'tool';
           const staleAge = c.pending_tool_ts ? relativeTime(c.pending_tool_ts) : (c.stale_tool_age_s ? Math.floor(c.stale_tool_age_s / 60) + 'm' : '');
           const staleDetail = c.pending_file || c.sidecar_file || '';
@@ -26775,7 +28817,7 @@
           html += '<div class="kanban-live-tool in-flight" title="Compacting the conversation to free up context">'
             + '<span class="kanban-live-name">▶ Compacting&hellip;</span>'
             + '</div>';
-        } else if (c.is_live && c.sidecar_status === 'active' && c.sidecar_tool && c.sidecar_tool !== 'AskUserQuestion') {
+        } else if (!isMobileChromeActive() && c.is_live && c.sidecar_status === 'active' && c.sidecar_tool && c.sidecar_tool !== 'AskUserQuestion') {
           const sidecarAge = c.sidecar_ts ? Math.max(0, Math.floor(Date.now() / 1000 - c.sidecar_ts)) : 9999;
           if (sidecarAge < 300) {
             const rawDetail = c.sidecar_file || '';
@@ -26794,6 +28836,32 @@
               + '<span class="kanban-live-age">' + ageLbl + '</span>'
               + '</div>';
           }
+        }
+
+        if (isMobileChromeActive()) {
+          // Collapsed Details toggle — everything the badges above carried
+          // on desktop (engine, cost tier, linked issue, stage, edit
+          // status, live tool) still exists, just demoted behind a tap.
+          const pres = sessionIconPresentation(c, false);
+          const detailBits = [pres.engineLabel + (pres.tierLabel ? ' \u00b7 ' + pres.tierLabel + ' cost' : '')];
+          if (linkedIssue) detailBits.push('GH #' + linkedIssue);
+          detailBits.push(stageLabel);
+          if (noEditsAttr) detailBits.push('no edits');
+          else if (readOnlyAttr) detailBits.push('read-only');
+          if (c.stale_tool_call) {
+            detailBits.push('stuck on ' + liveActivityToolLabel(c.pending_tool || c.sidecar_tool || 'tool'));
+          } else if (c.is_live && c.sidecar_status === 'active' && c.sidecar_tool && c.sidecar_tool !== 'AskUserQuestion') {
+            const _sidecarAge = c.sidecar_ts ? Math.max(0, Math.floor(Date.now() / 1000 - c.sidecar_ts)) : 9999;
+            if (_sidecarAge < 300) {
+              const _dur = _sidecarAge < 2 ? '<1s' : _sidecarAge < 60 ? _sidecarAge + 's' : Math.floor(_sidecarAge / 60) + 'm';
+              detailBits.push((c.sidecar_in_flight ? 'running ' : '') + liveActivityToolLabel(c.sidecar_tool) + ' ' + _dur);
+            }
+          }
+          html += '<button type="button" class="mobile-details-toggle" aria-pressed="false" aria-label="Details"><span aria-hidden="true">&#8942;</span><span class="mobile-sr-only">Details</span></button>'
+            + '<div class="mobile-details-panel" hidden>'
+            + escapeHtml(detailBits.filter(Boolean).join(' \u00b7 '))
+            + (issueBadge ? '<div class="mobile-details-badges">' + issueBadge + '</div>' : '')
+            + '</div>';
         }
 
         if (colKey === 'waiting' && c.pending_tool && !c.sidecar_status) {
@@ -29869,6 +31937,13 @@
         // tabindex -1 so rows don't grow a duplicate tab stop.
         pctBadgeRowActionHtml = _pctBadge(-1);
       }
+      // Context-fill level as a card class, reusing the pct badge's exact
+      // thresholds (>60 / >30). In Simple mode the numeric badge is hidden,
+      // so this drives a color spine on the card instead — the same
+      // low/mid/high signal, without a percentage to read.
+      const _ctxLevelClass = ctxPct
+        ? (ctxPct.pct > 60 ? ' ctx-high' : (ctxPct.pct > 30 ? ' ctx-mid' : ' ctx-low'))
+        : '';
       const qcBadgeHtml = pctBadgeHtml ? _convRowQualityBadge(c) : '';
       // Context-utilized % is rendered in the always-visible main row, just left
       // of the elapsed-time slot (see pctBadgeHtml placement below) — it's too
@@ -30135,8 +32210,31 @@
         + '</div>'
         : '';
 
-      return '<div class="conv-item' + active + cooTrackedRowClass + needsYouRowClass + groupedRowClass + evergreenRowClass + evergreenSingleLineClass + currentChildRowClass + subagentCompactClass + subagentBridgeClass + (isCodexRow ? ' is-codex' : '') + (isGeminiRow ? ' is-gemini' : '') + (isCursorRow ? ' is-cursor' : '') + (isAntigravityRow ? ' is-antigravity' : '') + (isHermesRow ? ' is-hermes' : '') + (c.pinned && lifecycleContext !== 'trash' ? ' is-pinned' : '') + (c.archived ? ' is-archived-row' : '') + (c.pinned_repo ? ' is-repo-pinned' : '') + (c._historyMatch ? ' is-history-match' : '') + (_historyIsSemantic ? ' is-semantic-match' : '') + (_historyIsRecall ? ' is-recall-match' : '') + ((c.backlog_type === 'github' || isGithubPrRow) ? ' is-github-issue' : '') + (_briefOpen ? ' is-brief-open' : '') + '"' + currentChildStyle + ' draggable="' + rowDraggableAttr() + '" data-id="' + c.id + '" data-session-id="' + escapeHtml(c.session_id || c.id) + '" data-repo-path="' + rowRepoAttr + '">'
+      // Mobile redesign: one status line replaces the badge cluster below
+      // (context %, quality, COO status, history match, goal chip, git-state
+      // signals) — all of it still exists in a collapsed Details panel.
+      // CSS hides the originals under body.ccc-mobile-redesign; this reuses
+      // the exact same already-built HTML fragments rather than re-deriving
+      // or deleting them, so desktop's rendering of those fragments is
+      // completely untouched.
+      let mobileStatusHtml = '';
+      let mobileDetailsHtml = '';
+      if (isMobileChromeActive()) {
+        const _mStatus = deriveMobileRowStatus(c, _isAgentRunning, _isWaitingForUser, _hasStaleToolCall, _knownActivityTool);
+        mobileStatusHtml = mobileCardStatusLineHtml(_mStatus);
+        const _detailInner = rowMetaHtml + hoverMetaRowHtml + cooStatusHtml + cooEscalatedHtml
+          + historyBadgeHtml + repoBadgeHtml + pctBadgeHtml + qcBadgeHtml
+          + (opts.evergreenAgent ? '' : evergreenGoalHtml)
+          + (goalIconOnly ? goalIconHtml : '');
+        if (_detailInner) {
+          mobileDetailsHtml = '<button type="button" class="mobile-details-toggle" aria-pressed="false" aria-label="Details"><span aria-hidden="true">&#8942;</span><span class="mobile-sr-only">Details</span></button>'
+            + '<div class="mobile-details-panel" hidden>' + _detailInner + '</div>';
+        }
+      }
+
+      return '<div class="conv-item' + active + _ctxLevelClass + cooTrackedRowClass + needsYouRowClass + groupedRowClass + evergreenRowClass + evergreenSingleLineClass + currentChildRowClass + subagentCompactClass + subagentBridgeClass + (isCodexRow ? ' is-codex' : '') + (isGeminiRow ? ' is-gemini' : '') + (isCursorRow ? ' is-cursor' : '') + (isAntigravityRow ? ' is-antigravity' : '') + (isHermesRow ? ' is-hermes' : '') + (c.pinned && lifecycleContext !== 'trash' ? ' is-pinned' : '') + (c.archived ? ' is-archived-row' : '') + (c.pinned_repo ? ' is-repo-pinned' : '') + (c._historyMatch ? ' is-history-match' : '') + (_historyIsSemantic ? ' is-semantic-match' : '') + (_historyIsRecall ? ' is-recall-match' : '') + ((c.backlog_type === 'github' || isGithubPrRow) ? ' is-github-issue' : '') + (_briefOpen ? ' is-brief-open' : '') + '"' + currentChildStyle + ' draggable="' + rowDraggableAttr() + '" data-id="' + c.id + '" data-session-id="' + escapeHtml(c.session_id || c.id) + '" data-repo-path="' + rowRepoAttr + '">'
         + '<span class="drag-handle" data-role="drag">&#10495;</span>'
+        + mobileStatusHtml
         + '<div class="conv-title-row">'
             + '<div class="conv-main-row">'
             + sessionIconHtml
@@ -30179,6 +32277,7 @@
           + '</div>'
           + evergreenMetaRowHtml
         + '</div>'
+        + mobileDetailsHtml
         // Hover-revealed extras wrapped in one container so the current-sessions
         // panel can float the whole stack out of flow on hover (no row reflow,
         // no skipped rows). display:contents by default → transparent in every
@@ -31731,7 +33830,7 @@
       let _currentSessionsHeaderHtml = '';
       let _currentSessionsHtml = '';
       if (_currentSessions.length || (_gcItems && _gcItems.length)) {
-        const _currentSessionsLabel = _ipSearchActive ? 'Search results' : 'Current sessions';
+        const _currentSessionsLabel = _ipSearchActive ? 'Search results' : simpleLabel('Current sessions');
         const _currentSessionsSub = _ipSearchActive ? '' : '<span class="conv-objects-section-sub">' + _currentSessionsWindowLabel + '</span>';
         // Same first-gap-only separator as the flat/All-repos views (CCC-443)
         // — Current sessions is sorted newest-first same as those, so a real
@@ -31838,7 +33937,7 @@
           + '" data-role="project-tree-header" role="button" tabindex="0"'
           + ' title="Collapse / expand Project tree">'
           + '<span class="conv-section-collapse-chevron" data-role="project-tree-collapse" aria-hidden="true">' + _projectTreeChevron + '</span>'
-          + 'Project tree'
+          + escapeHtml(simpleLabel('Project tree'))
           + _addObjectBtnHtml
           + '</div>'
         : '';
@@ -31854,7 +33953,7 @@
           + '" data-role="evergreen-agents-header" role="button" tabindex="0"'
           + ' title="Collapse / expand Triggered Workers">'
           + '<span class="conv-section-collapse-chevron" data-role="evergreen-agents-collapse" aria-hidden="true">' + _evergreenChevron + '</span>'
-          + 'Triggered Workers'
+          + escapeHtml(simpleLabel('Triggered Workers'))
           + '<span class="evergreen-log-btn" data-role="evergreen-log-btn" role="button" tabindex="0" title="Open Watchtower activity log">See log</span>'
           + '</div>'
         : '';
@@ -32112,6 +34211,8 @@
     // Rows reuse _renderRow so live pills / branch badges / titles match the
     // rest of the list; folder chips follow the same suppress rule as the
     // other flat sections.
+    // CCC-182: "Needs you" section removed — waiting sessions now show a
+    // blinking in-row marker and stay in their project group (no jumping).
     // Cross-repo source (CCC-159): once /api/issues/all has resolved,
     // crossRepoIssuesData holds OPEN+CLOSED issues from EVERY tracked repo.
     // MERGE the OTHER repos' OPEN issues into the section — do NOT replace
@@ -32838,7 +34939,7 @@
     const _tabBarHtml = '<div class="conv-tab-bar" data-role="conv-tab-bar">'
       + _tabDefs.map(([k, label, n]) =>
         '<button type="button" class="conv-tab' + (k === _sidebarTab ? ' is-active' : '') + '" data-conv-tab="' + k + '">'
-        + escapeHtml(label)
+        + escapeHtml(simpleLabel(label))
         + (n ? '<span class="conv-tab-count">' + n + '</span>' : '')
         + '</button>').join('')
       + '</div>';
@@ -33895,6 +35996,7 @@
         try { localStorage.setItem('ccc-sidebar-tab', nextTab); } catch (_) {}
         _setSharedQueuePanelHost(nextTab === 'queues' ? 'sidebar' : 'rail');
         renderArchiveList(document.getElementById('convSearch')?.value || '', { force: true });
+        if (typeof _syncMobileBottomNav === 'function') _syncMobileBottomNav();
       });
     }
     // By-objects drag-to-reparent (CCC-88): drop a session row on an object
@@ -37728,9 +39830,24 @@
   if (window.visualViewport && window.matchMedia('(pointer: coarse)').matches) {
     const vv = window.visualViewport;
     let _vvRaf = 0;
+    // iOS Safari can report a bogus/stale visualViewport.height on the very
+    // first read (e.g. mid-way through the address-bar collapse animation on
+    // cold load) — small enough to make `body { height: var(--app-vh) }`
+    // collapse toward zero. Since `body` also has `overflow: hidden`, that
+    // reads as a blank page: everything in the flex flow gets clipped, while
+    // `position: fixed` chrome (the bottom nav) is unaffected by body's
+    // height and keeps rendering — matching reports of "blank page, but the
+    // bottom icons are visible." Pinch-zooming "fixes" it only because it
+    // forces Safari to fire a fresh visualViewport resize/scroll event that
+    // recomputes a sane value; that shouldn't be the only way to recover.
+    // Guard: never lock in a value implausibly smaller than the layout
+    // viewport, and re-sync on load/pageshow/orientationchange so a bad
+    // initial reading self-heals without user interaction.
     const syncVisualViewport = () => {
       _vvRaf = 0;
-      document.documentElement.style.setProperty('--app-vh', vv.height + 'px');
+      const h = vv.height;
+      if (!h || h < window.innerHeight * 0.5) return;
+      document.documentElement.style.setProperty('--app-vh', h + 'px');
       document.documentElement.style.setProperty('--app-vv-top', vv.offsetTop + 'px');
     };
     const queueVisualViewportSync = () => {
@@ -37739,7 +39856,14 @@
     };
     vv.addEventListener('resize', queueVisualViewportSync);
     vv.addEventListener('scroll', queueVisualViewportSync);
+    window.addEventListener('pageshow', queueVisualViewportSync);
+    window.addEventListener('orientationchange', queueVisualViewportSync);
     syncVisualViewport();
+    // Belt-and-suspenders: a delayed re-sync catches the case where the very
+    // first reading passed the sanity check but was still stale (address bar
+    // still animating) — no visible effect if the first sync was already
+    // correct, since setting the same value again is a no-op paint-wise.
+    setTimeout(queueVisualViewportSync, 400);
   }
 
   const STICKY_HEADER_HEIGHT_KEY = 'ccc-sticky-header-height';
@@ -38149,7 +40273,21 @@
     if (_flowInspectorState) {
       try { stopFlowNodeInspector(); } catch (_) {}
     }
-    mobileShowForCurrentMode();
+    // Simple Home: a deliberate conversation open leaves the home screen (and
+    // refreshes the plain-language usage line); boot auto-restore does not
+    // (see _simpleOnConversationOpen's _qfBootRestoreDepth guard).
+    // mobileShowForCurrentMode() must honor that same guard — otherwise
+    // boot-restore on a phone slides `.main` into view (mobile-show-main)
+    // while Simple Home's own ccc-simple-conv-open class stays off (home is
+    // still "showing" by design), so the pane that lands on screen isn't in
+    // either finished state: not styled as a simple conversation, not hidden
+    // as home. The user sees a blank, wrongly-sized `.main` they can't do
+    // anything with, with no way back short of the (also-invisible-in-that-
+    // state) back button — the mobile "chat opens itself and I'm stuck" bug.
+    const _isBootRestoreInSimpleMode = isSimpleMode()
+      && typeof _qfBootRestoreDepth !== 'undefined' && _qfBootRestoreDepth > 0;
+    if (!_isBootRestoreInSimpleMode) mobileShowForCurrentMode();
+    try { if (typeof _simpleOnConversationOpen === 'function') _simpleOnConversationOpen(id); } catch (_) {}
     currentConversation = id;
     // The terminal panel (index.html) keys its cwd off the open
     // conversation's repo — tell it the repo may have changed.
@@ -48998,6 +51136,13 @@
     if (cost) cost.textContent = mode === '3' ? 'agent-authored deck' : '0 extra tokens';
     const progress = toolbar.querySelector('[data-role="presentation-progress"]');
     if (progress) progress.hidden = mode === 'off' || !hasAnswers;
+    // Mobile: reflect the active mode in the collapsed toggle's label so
+    // it's readable without opening the picker.
+    const mobileToggle = toolbar.querySelector('[data-role="mobile-view-toggle"]');
+    if (mobileToggle) {
+      const label = mode === '2' ? 'Slides' : (mode === '3' ? 'Slides, agent-designed' : 'Chat');
+      mobileToggle.textContent = 'View: ' + label;
+    }
   }
 
   function ensurePresentationStage(view) {
@@ -49654,6 +51799,18 @@
   }
 
   document.addEventListener('click', (ev) => {
+    const mobileToggle = ev.target && ev.target.closest
+      && ev.target.closest('[data-role="mobile-view-toggle"]');
+    if (mobileToggle) {
+      ev.preventDefault();
+      ev.stopPropagation();
+      const list = mobileToggle.nextElementSibling;
+      const open = list && list.classList.contains('is-open');
+      if (list) list.classList.toggle('is-open', !open);
+      mobileToggle.setAttribute('aria-pressed', open ? 'false' : 'true');
+      mobileToggle.setAttribute('aria-expanded', open ? 'false' : 'true');
+      return;
+    }
     const modeButton = ev.target && ev.target.closest
       && ev.target.closest('.conv-presentation-mode[data-presentation-mode]');
     if (modeButton) {
@@ -49663,6 +51820,18 @@
       const paneId = pane ? pane.dataset.paneId : activePaneId();
       if (paneId !== activePaneId()) setActivePaneById(paneId);
       setPresentationMode(paneId, modeButton.dataset.presentationMode);
+      // Mobile: collapse the picker back down after a choice, same as the
+      // toggle's own open/close — the toolbar shouldn't stay open once a
+      // decision is made.
+      if (modeButton.classList.contains('mobile-view-btn')) {
+        const list = modeButton.closest('.conv-presentation-mobile-list');
+        const toggle = list && list.previousElementSibling;
+        if (list) list.classList.remove('is-open');
+        if (toggle && toggle.matches('[data-role="mobile-view-toggle"]')) {
+          toggle.setAttribute('aria-pressed', 'false');
+          toggle.setAttribute('aria-expanded', 'false');
+        }
+      }
       return;
     }
     const navButton = ev.target && ev.target.closest && ev.target.closest('[data-presentation-nav]');
@@ -51558,7 +53727,10 @@
             + ' · out ' + escapeHtml(_formatTokens(output) + reasoningText) + '</span>';
         } else if (ev.cost_usd != null && ev.cost_usd !== '') {
           const cost = typeof ev.cost_usd === 'number' ? '$' + ev.cost_usd.toFixed(4) : ev.cost_usd;
-          statsHtml += '<span>Cost: ' + escapeHtml(String(cost)) + '</span>';
+          // simple-tech-cost: gated behind the Simple-mode technical strip
+          // (see app.css .ccc-simple-tech-open) — cost is "technical", not
+          // shown by default in Simple mode.
+          statsHtml += '<span class="simple-tech-cost">Cost: ' + escapeHtml(String(cost)) + '</span>';
         }
         if (dur !== undefined && dur !== null && dur !== '') {
           statsHtml += '<span>Duration: ' + escapeHtml(String(dur)) + '</span>';
@@ -60324,7 +62496,11 @@
         whatsNewVersion = String(d.version);
         const lastSeen = localStorage.getItem('ccc-last-seen-version');
         const dismissedVer = localStorage.getItem('ccc-whats-new-dismissed-version');
-        if (lastSeen !== whatsNewVersion && dismissedVer !== whatsNewVersion && !CONV_POPOUT_MODE) {
+        if (typeof isSimpleMode === 'function' && isSimpleMode()) {
+          // Simple mode: the changelog modal is jargon-heavy and covers the
+          // home screen. Mark the version seen silently instead of popping it.
+          try { localStorage.setItem('ccc-last-seen-version', whatsNewVersion); } catch (_) {}
+        } else if (lastSeen !== whatsNewVersion && dismissedVer !== whatsNewVersion && !CONV_POPOUT_MODE) {
           whatsNewShowNotice();
         }
       }
@@ -66175,6 +68351,7 @@
       $continuationFoldingToggle.classList.toggle('is-on', on);
       $continuationFoldingToggle.setAttribute('aria-checked', String(on));
     }
+    _syncUiModeBodyClass();
   }
   // Live-update when the user has 'system' selected and OS theme flips.
   _systemThemeMQ.addEventListener && _systemThemeMQ.addEventListener('change', () => {
@@ -66838,6 +69015,13 @@
         applyDebugMode(next);
         refreshAppearanceChecks();
         showSettingsSavedPulse(debugModeToggle.closest('.settings-row'));
+        return;
+      }
+      const uiModeToggle = e.target.closest('[data-ui-mode-toggle]');
+      if (uiModeToggle) {
+        setUiMode(isSimpleMode() ? 'advanced' : 'simple');
+        refreshAppearanceChecks();
+        showSettingsSavedPulse(uiModeToggle.closest('.settings-row'));
         return;
       }
       const continuationFoldingToggle = e.target.closest('[data-continuation-folding-toggle]');

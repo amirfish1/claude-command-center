@@ -1,0 +1,1 @@
+Simple mode's "Needs you" cards can now be swiped left to reveal "Not now" — dismisses a stuck/unclear alert you've already looked at without treating it as needing your attention anymore. The dismissal is self-healing: if that session has new activity later, it can resurface.

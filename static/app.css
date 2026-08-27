@@ -880,12 +880,24 @@
   }
 
   .event.user_text.pending {
-    font-style: italic; opacity: 0.62;
+    font-style: italic; opacity: 0.62; position: relative;
   }
   .event.user_text.pending .label::after {
     content: ' · sending…'; font-style: normal; font-weight: 400;
     color: var(--text-muted); text-transform: none; letter-spacing: 0;
     font-size: 10px; margin-left: 4px;
+  }
+  .event.user_text.pending .pending-send-cancel {
+    position: absolute; top: 4px; right: 4px;
+    width: 22px; height: 22px; min-width: 22px;
+    display: flex; align-items: center; justify-content: center;
+    border: none; border-radius: 50%;
+    background: rgba(148, 158, 168, 0.16); color: var(--text-muted);
+    font-size: 12px; line-height: 1; cursor: pointer; opacity: 0.75;
+  }
+  .event.user_text.pending .pending-send-cancel:hover,
+  .event.user_text.pending .pending-send-cancel:active {
+    opacity: 1; background: rgba(210, 90, 90, 0.22); color: var(--red, #d25a5a);
   }
   /* Pending echo that timed out — agent never acknowledged it.
      Surface a "not acknowledged + re-send" notice instead of silently
@@ -14299,6 +14311,12 @@
       z-index: 800; background: var(--bg);
       transform: translateX(100%); transition: transform 0.2s ease-out;
     }
+    /* While off-canvas (incl. mid slide-out animation) .main must not eat
+       taps destined for what is underneath — e.g. the simple-mode bottom
+       nav during the 0.2s transform transition after returning home. */
+    body:not(.kanban-split):not(.mobile-show-main) .main {
+      pointer-events: none;
+    }
     body:not(.kanban-split).mobile-show-main .main {
       transform: translateX(0);
     }
@@ -14322,6 +14340,71 @@
       font-family: inherit;
     }
     .mobile-back-btn:active { opacity: 0.6; }
+
+    /* ── Narrow-viewport Actions menu (⋮), shared by every mode ──
+       Was ccc-simple-mode-gated (simple.css); relocated here since it now
+       backs the unified topbar in Advanced mode too — one menu, not a
+       per-mode copy. Simple-only rows are filtered by [data-simple-only]
+       in simple.css, not by a second copy of this block. */
+    /* #convToolbar-qualified so this beats the unconditional
+       .mobile-actions-wrap{display:none} base rule later in this file —
+       same specificity, later source order would otherwise win. */
+    #convToolbar .mobile-actions-wrap { display: inline-flex; margin-left: 8px; order: 100; }
+    button.mobile-actions-btn {
+      display: inline-flex;
+      align-items: center;
+      font-family: inherit;
+      cursor: pointer;
+      border: 1px solid var(--border);
+      background: var(--surface-2, var(--surface));
+      color: var(--text);
+      border-radius: 7px;
+      font-size: 12.5px;
+      font-weight: 600;
+      padding: 6px 14px;
+      min-height: 32px;
+    }
+    button.mobile-actions-btn[aria-expanded="true"] {
+      background: rgba(63,185,80,0.12);
+      border-color: var(--green);
+      color: var(--green);
+    }
+    .mobile-actions-menu {
+      position: absolute;
+      right: 0;
+      top: 100%;
+      margin-top: 4px;
+      z-index: 40;
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
+      min-width: 220px;
+      max-width: calc(100vw - 16px);
+      padding: 8px;
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      box-shadow: 0 8px 24px rgba(0,0,0,0.35);
+    }
+    .mobile-actions-menu[hidden] { display: none; }
+    button.mobile-actions-item {
+      display: block;
+      width: 100%;
+      text-align: left;
+      font-family: inherit;
+      cursor: pointer;
+      border: 1px solid transparent;
+      background: transparent;
+      color: var(--text);
+      border-radius: 7px;
+      font-size: 13px;
+      padding: 10px 12px;
+      min-height: 44px;
+    }
+    button.mobile-actions-item:hover,
+    button.mobile-actions-item:focus-visible {
+      background: var(--surface-2, var(--surface));
+    }
 
     /* The injection-health banner is `position: fixed; top: 0; z-index: 10000`.
        Desktop gets one line over a topbar with slack; a phone wraps the same
@@ -24481,6 +24564,285 @@ a.settings-row:focus-visible .settings-launcher-btn { text-decoration: underline
   }
 }
 
+/* =========================================================================
+   MOBILE REDESIGN (body.ccc-mobile-redesign)
+   Gated by isMobileRedesign() in app.js — matchMedia(max-width:1200px),
+   ?mobile=1, or window.CCC_FORCE_MOBILE_REDESIGN. Aligned with the
+   existing isMobile()/_mobileMQ pane-navigation breakpoint;
+   these rules only ever apply under the .ccc-mobile-redesign body class,
+   so desktop and the 768-1200px pane-nav range are unaffected.
+   ========================================================================= */
+
+/* ---- Kanban card: one dominant status line + collapsed Details ---- */
+body.ccc-mobile-redesign .mobile-status-line {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  margin-bottom: 8px;
+}
+body.ccc-mobile-redesign .mobile-status-dot {
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  background: var(--text-muted);
+  flex-shrink: 0;
+}
+body.ccc-mobile-redesign .mobile-status-line.is-working .mobile-status-dot {
+  background: var(--green);
+  animation: mobileStatusPulse 1.8s ease-in-out infinite;
+}
+body.ccc-mobile-redesign .mobile-status-line.is-stuck .mobile-status-dot { background: #d29922; }
+body.ccc-mobile-redesign .mobile-status-line.is-offline .mobile-status-dot { background: var(--text-muted); opacity: 0.6; }
+@keyframes mobileStatusPulse {
+  0%, 100% { box-shadow: 0 0 0 0 rgba(63,185,80,0.25); }
+  50% { box-shadow: 0 0 0 5px rgba(63,185,80,0.12); }
+}
+body.ccc-mobile-redesign .mobile-status-word {
+  font-size: 14px;
+  font-weight: 650;
+  color: var(--text);
+}
+body.ccc-mobile-redesign .mobile-status-line.is-working .mobile-status-word { color: var(--green); }
+body.ccc-mobile-redesign .mobile-status-line.is-stuck .mobile-status-word { color: #d29922; }
+body.ccc-mobile-redesign .mobile-status-line.is-offline .mobile-status-word { color: var(--text-muted); }
+body.ccc-mobile-redesign .mobile-status-detail {
+  font-size: 12px;
+  color: var(--text-muted);
+}
+body.ccc-mobile-redesign button.mobile-details-toggle {
+  display: inline-flex;
+  align-items: center;
+  font-family: inherit;
+  cursor: pointer;
+  border: 1px solid var(--border);
+  background: var(--surface-2, var(--surface));
+  color: var(--text-muted);
+  border-radius: 7px;
+  font-size: 12px;
+  padding: 6px 12px;
+  margin-top: 8px;
+  min-height: 32px;
+}
+body.ccc-mobile-redesign button.mobile-details-toggle[aria-pressed="true"] {
+  background: rgba(63,185,80,0.12);
+  border-color: var(--green);
+  color: var(--green);
+  font-weight: 600;
+}
+body.ccc-mobile-redesign .mobile-details-panel {
+  margin-top: 8px;
+  padding-top: 8px;
+  border-top: 1px solid var(--border);
+  font-family: 'SF Mono', SFMono-Regular, Consolas, monospace;
+  font-size: 11px;
+  color: var(--text-muted);
+  line-height: 1.7;
+}
+body.ccc-mobile-redesign .mobile-details-badges {
+  margin-top: 6px;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+
+/* ---- Topbar: Simple mode never shows the raw session id ---- */
+body.ccc-simple-mode #convSessionId { display: none !important; }
+
+/* ---- Presentation toolbar: mobile plain-language view buttons ---- */
+body.ccc-mobile-redesign .conv-presentation-segment { display: none !important; }
+body.ccc-mobile-redesign .conv-presentation-toolbar-label { display: none !important; }
+.mobile-view-toggle { display: none; }
+body.ccc-mobile-redesign button.mobile-view-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-family: inherit;
+  cursor: pointer;
+  border: 1px solid var(--border);
+  background: var(--surface-2, var(--surface));
+  color: var(--text-muted);
+  border-radius: 7px;
+  font-size: 12px;
+  font-weight: 600;
+  padding: 6px 12px;
+  min-height: 32px;
+}
+body.ccc-mobile-redesign button.mobile-view-toggle[aria-pressed="true"] {
+  background: rgba(63,185,80,0.10);
+  border-color: var(--green);
+  color: var(--green);
+}
+/* Collapsed by default — the picker previously stayed permanently open,
+   eating the top of the conversation screen on every session. */
+.conv-presentation-mobile-list { display: none; }
+body.ccc-mobile-redesign .conv-presentation-mobile-list {
+  display: none;
+  flex-direction: column;
+  gap: 6px;
+  width: 100%;
+  margin-top: 8px;
+}
+body.ccc-mobile-redesign .conv-presentation-mobile-list.is-open { display: flex; }
+body.ccc-mobile-redesign button.mobile-view-btn {
+  display: block;
+  width: 100%;
+  text-align: left;
+  font-family: inherit;
+  cursor: pointer;
+  border: 1px solid var(--border);
+  background: var(--surface-2, var(--surface));
+  color: var(--text-muted);
+  border-radius: 8px;
+  padding: 10px 12px;
+  min-height: 44px;
+}
+body.ccc-mobile-redesign button.mobile-view-btn[aria-pressed="true"] {
+  background: rgba(63,185,80,0.10);
+  border-color: var(--green);
+}
+body.ccc-mobile-redesign .mobile-view-name {
+  display: block;
+  font-size: 13px;
+  font-weight: 650;
+  color: var(--text);
+  margin-bottom: 2px;
+}
+body.ccc-mobile-redesign button.mobile-view-btn[aria-pressed="true"] .mobile-view-name { color: var(--green); }
+body.ccc-mobile-redesign .mobile-view-desc {
+  display: block;
+  font-size: 11.5px;
+  color: var(--text-muted);
+  font-weight: 400;
+  line-height: 1.5;
+}
+
+/* ---- Topbar: mobile "More" menu (collapses secondary actions) ---- */
+body.ccc-mobile-redesign .mobile-more-wrap { position: relative; display: inline-flex; }
+body.ccc-mobile-redesign button.mobile-more-btn {
+  display: inline-flex !important;
+  align-items: center;
+  font-family: inherit;
+  cursor: pointer;
+  border: 1px solid var(--border);
+  background: var(--surface-2, var(--surface));
+  color: var(--text);
+  border-radius: 7px;
+  font-size: 12.5px;
+  font-weight: 600;
+  padding: 6px 14px;
+  min-height: 32px;
+  margin-left: 8px;
+}
+body.ccc-mobile-redesign button.mobile-more-btn[aria-expanded="true"] {
+  background: rgba(63,185,80,0.12);
+  border-color: var(--green);
+  color: var(--green);
+}
+body.ccc-mobile-redesign .mobile-more-menu {
+  position: absolute;
+  right: 8px;
+  top: 100%;
+  margin-top: 4px;
+  z-index: 40;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 220px;
+  max-width: calc(100vw - 16px);
+  padding: 8px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  box-shadow: 0 8px 24px rgba(0,0,0,0.35);
+}
+body.ccc-mobile-redesign .mobile-more-menu[hidden] { display: none; }
+/* Reparented topbar buttons read as a stacked full-width action list
+   inside the menu, instead of the inline pill row they render as in
+   #cccTopbar on desktop. */
+body.ccc-mobile-redesign .mobile-more-menu > * {
+  width: 100%;
+  min-height: 40px;
+  justify-content: flex-start;
+}
+
+/* ---- Main session list (renderConversationList _renderRow): mobile
+   status line + Details, same pattern as the kanban card. The desktop
+   fragments (rowMetaHtml/hoverMetaRowHtml/etc.) are still built and
+   inserted in JS unchanged — these rules just hide the originals and let
+   the new mobile-status-line / mobile-details-panel (which contain the
+   SAME html, copied not recomputed) stand in for them. ---- */
+body.ccc-mobile-redesign .conv-item > .mobile-status-line {
+  margin: 4px 8px 6px;
+}
+body.ccc-mobile-redesign .conv-item .conv-row-meta,
+body.ccc-mobile-redesign .conv-item .conv-hover-meta-row,
+body.ccc-mobile-redesign .conv-item .coo-status,
+body.ccc-mobile-redesign .conv-item .coo-escalated,
+body.ccc-mobile-redesign .conv-item .conv-history-badge,
+body.ccc-mobile-redesign .conv-item .conv-pct-badge,
+body.ccc-mobile-redesign .conv-item .conv-qc-badge,
+body.ccc-mobile-redesign .conv-item .conv-goal,
+body.ccc-mobile-redesign .conv-item .conv-goal-icon-only {
+  display: none !important;
+}
+body.ccc-mobile-redesign .conv-item .mobile-details-toggle {
+  margin: 2px 8px 6px;
+}
+body.ccc-mobile-redesign .conv-item .mobile-details-panel {
+  margin: 0 8px 8px;
+}
+/* Inside the Details panel, the same chip/badge fragments should read as
+   plain stacked text/chips again (not hidden by the blanket rule above,
+   which only targets the always-visible main-row copies). */
+body.ccc-mobile-redesign .conv-item .mobile-details-panel .conv-row-meta,
+body.ccc-mobile-redesign .conv-item .mobile-details-panel .conv-hover-meta-row,
+body.ccc-mobile-redesign .conv-item .mobile-details-panel .coo-status,
+body.ccc-mobile-redesign .conv-item .mobile-details-panel .coo-escalated,
+body.ccc-mobile-redesign .conv-item .mobile-details-panel .conv-history-badge,
+body.ccc-mobile-redesign .conv-item .mobile-details-panel .conv-pct-badge,
+body.ccc-mobile-redesign .conv-item .mobile-details-panel .conv-qc-badge,
+body.ccc-mobile-redesign .conv-item .mobile-details-panel .conv-goal,
+body.ccc-mobile-redesign .conv-item .mobile-details-panel .conv-goal-icon-only {
+  display: inline-flex !important;
+  margin: 2px 4px 2px 0;
+}
+
+/* ---- Simple-mode mobile bottom nav ---- */
+.mobile-bottom-nav { display: none; }
+/* Reserve room at the bottom of the page so the fixed nav never overlaps
+   the last card in the list. */
+body.has-mobile-bottom-nav #convList {
+  padding-bottom: calc(64px + env(safe-area-inset-bottom, 0px));
+}
+.mobile-actions-wrap { position: relative; display: none; }
+
+/* ---- Icon-first Simple mode: chrome communicates via icon+color+shape+
+   motion, not English words. Task content (titles, agent replies) is
+   untouched — this only affects UI chrome (nav, status, toggles). Text
+   stays present for screen readers via .mobile-sr-only (visually hidden,
+   not display:none, so assistive tech and text-to-speech still get it). */
+.mobile-sr-only {
+  position: absolute;
+  width: 1px; height: 1px;
+  padding: 0; margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+/* =========================================================================
+   ICON-FIRST SIMPLE MODE — FEED LAYOUT (Instagram-style)
+   Only under body.ccc-mobile-redesign.ccc-simple-mode. Structural: replaces
+   the two stacked dashboard headers with one slim bar, collapses the
+   competing tab/filter/metrics/footer strips so the session list reads as a
+   clean feed with the bottom nav as the sole navigation. Desktop + Advanced
+   untouched (guarded by the compound body class).
+   ========================================================================= */
+
+/* --- Slim header (shown only in simple mode) --- */
+.mobile-simple-header { display: none; }
+.send-btn .send-btn-label { display: none; }
 /* iOS focus-zoom guard. Keep this after conversation-theme rules: themes may
    use !important typography (for example Stitch's 14px monospace composer),
    but a focused mobile control must compute to at least 16px or WebKit zooms

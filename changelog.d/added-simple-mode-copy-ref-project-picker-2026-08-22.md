@@ -1,0 +1,1 @@
+Added a "Copy task reference" action and a project/folder picker to Simple mode — session ids can now be copied for cross-referencing between sessions, and new tasks let you choose which project they spawn into instead of always using the last-used repo.
