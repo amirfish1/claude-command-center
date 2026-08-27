@@ -649,6 +649,196 @@ class DevinListPerfTests(unittest.TestCase):
         self.assertTrue(all(r["source"] == "devin-cli" for r in rows))
         rows = server._archive_overlay_devin_cli_sessions([{"id": "devincli-alpha-one"}])
         self.assertEqual([r["id"] for r in rows], ["devincli-beta-two"])
+class DevinSpawnIdentityTests(unittest.TestCase):
+    """Two Devin spawns with the same prompt must resolve to two sessions.
+
+    The prompt-match fallback used to scan newest-first inside a symmetric
+    900s window, so a second spawn with an identical prompt in the same cwd
+    resolved to the FIRST spawn's session. The match must only consider rows
+    created at or after the spawn stamp, prefer the one created soonest
+    after it, and skip ids already claimed by another spawn entry.
+    """
+
+    CWD = "/tmp/ccc-devin-identity"
+    PROMPT = "Reply with exactly: ccc-e2e-probe. Nothing else."
+
+    def _setup(self, sessions):
+        """Build a throwaway Devin CLI DB with ``sessions`` = [(id, created)].
+
+        Every session shares ``CWD`` and ``PROMPT``. Isolates the resolver
+        from this machine's real spawn registry and lock directory.
+        """
+        server = importlib.import_module("server")
+        db_fd, db_path = tempfile.mkstemp(suffix=".db")
+        os.close(db_fd)
+        self.addCleanup(lambda: os.unlink(db_path) if os.path.exists(db_path) else None)
+        con = sqlite3.connect(db_path)
+        con.executescript(
+            """
+            CREATE TABLE sessions (
+                id TEXT PRIMARY KEY,
+                working_directory TEXT,
+                created_at INTEGER,
+                last_activity_at INTEGER
+            );
+            CREATE TABLE prompt_history (
+                session_id TEXT,
+                content TEXT,
+                timestamp INTEGER,
+                is_shell INTEGER
+            );
+            """
+        )
+        for raw_id, created in sessions:
+            con.execute(
+                "INSERT INTO sessions (id, working_directory, created_at, last_activity_at) "
+                "VALUES (?, ?, ?, ?)",
+                (raw_id, self.CWD, int(created), int(created)),
+            )
+            con.execute(
+                "INSERT INTO prompt_history (session_id, content, timestamp, is_shell) "
+                "VALUES (?, ?, ?, ?)",
+                (raw_id, self.PROMPT, int(created), 0),
+            )
+        con.commit()
+        con.close()
+
+        prev_db = os.environ.get("CCC_DEVIN_DB")
+        os.environ["CCC_DEVIN_DB"] = db_path
+        self.addCleanup(
+            lambda: (
+                os.environ.__setitem__("CCC_DEVIN_DB", prev_db)
+                if prev_db is not None
+                else os.environ.pop("CCC_DEVIN_DB", None)
+            )
+        )
+        for patch in (
+            mock.patch.object(server, "_load_spawn_registry", return_value=[]),
+            mock.patch.object(server, "_devin_cli_raw_id_for_pid", return_value=None),
+            mock.patch.object(server, "_update_spawn_session_id_in_registry"),
+        ):
+            patch.start()
+            self.addCleanup(patch.stop)
+        return server
+
+    def _entry(self, spawn_ts, pid):
+        return {
+            "engine": "devin",
+            "pid": pid,
+            "cwd": self.CWD,
+            "repo_path": self.CWD,
+            "command_summary": self.PROMPT,
+            "spawned_at": datetime.fromtimestamp(spawn_ts).strftime("%Y%m%dT%H%M%S"),
+        }
+
+    def test_identical_prompts_resolve_to_distinct_sessions(self):
+        base = 1700000000
+        server = self._setup([("early-otter", base + 1), ("later-otter", base + 6)])
+        first = self._entry(base, pid=1001)
+        second = self._entry(base + 5, pid=1002)
+        with mock.patch.object(server, "_spawned_sessions", [first, second]):
+            # The later spawn cannot own the session created before it,
+            # whichever entry happens to be resolved first.
+            self.assertEqual(
+                server._devin_cli_session_id_for_spawn_entry(second),
+                "devincli-later-otter",
+            )
+            self.assertEqual(
+                server._devin_cli_session_id_for_spawn_entry(first),
+                "devincli-early-otter",
+            )
+            # And once claims are recorded via the shared resolver, the
+            # pairing is stable on re-resolution.
+            self.assertEqual(server._spawn_session_id_from_entry(first), "devincli-early-otter")
+            self.assertEqual(server._spawn_session_id_from_entry(second), "devincli-later-otter")
+            self.assertEqual(first["session_id"], "devincli-early-otter")
+            self.assertEqual(second["session_id"], "devincli-later-otter")
+
+    def test_same_second_spawns_skip_claimed_session(self):
+        """Two spawns in the same second: the second must not reuse the id
+        the first already claimed, even though both rows post-date both."""
+        base = 1700000000
+        server = self._setup([("first-fox", base + 1), ("second-fox", base + 2)])
+        first = self._entry(base, pid=2001)
+        second = self._entry(base, pid=2002)
+        with mock.patch.object(server, "_spawned_sessions", [first, second]):
+            self.assertEqual(server._spawn_session_id_from_entry(first), "devincli-first-fox")
+            self.assertEqual(server._spawn_session_id_from_entry(second), "devincli-second-fox")
+
+    def test_session_created_before_spawn_is_never_matched(self):
+        base = 1700000000
+        server = self._setup([("stale-heron", base - 30)])
+        entry = self._entry(base, pid=3001)
+        with mock.patch.object(server, "_spawned_sessions", [entry]):
+            self.assertIsNone(server._devin_cli_session_id_for_spawn_entry(entry))
+
+    def test_session_created_in_spawn_second_still_matches(self):
+        """The spawn stamp is floored to the second; a row created in that
+        same second (created_at == spawn_ts) is a legitimate match."""
+        base = 1700000000
+        server = self._setup([("prompt-kestrel", base)])
+        entry = self._entry(base, pid=4001)
+        with mock.patch.object(server, "_spawned_sessions", [entry]):
+            self.assertEqual(
+                server._devin_cli_session_id_for_spawn_entry(entry),
+                "devincli-prompt-kestrel",
+            )
+
+    class _FakeClock:
+        """Deterministic stand-in for ``server.time``: ``sleep`` advances a
+        virtual monotonic clock instead of blocking, so the cadence test does
+        not depend on scheduler jitter (a loaded box turns ``sleep(0.1)`` into
+        0.17s and makes any real-time assertion flaky)."""
+
+        def __init__(self):
+            self.now = 100.0
+            self.sleeps = []
+
+        def monotonic(self):
+            return self.now
+
+        def sleep(self, seconds):
+            self.sleeps.append(round(seconds, 6))
+            self.now += seconds
+
+        def __getattr__(self, name):
+            return getattr(time, name)
+
+    def test_wait_for_spawn_session_id_polls_on_tenth_second_tick(self):
+        server = importlib.import_module("server")
+        clock = self._FakeClock()
+        probes = []
+
+        def fake_resolve(entry):
+            probes.append(round(clock.now - 100.0, 6))
+            return None
+
+        with mock.patch.object(server, "time", clock), \
+             mock.patch.object(server, "_spawn_session_id_from_entry", side_effect=fake_resolve):
+            self.assertIsNone(server._wait_for_spawn_session_id({"engine": "devin"}, timeout_s=0.45))
+        # 0.1s cadence inside a 0.45s budget: probes at 0, .1, .2, .3, .4 and
+        # a final one exactly at the deadline, never past it.
+        self.assertEqual(probes, [0.0, 0.1, 0.2, 0.3, 0.4, 0.45])
+        self.assertEqual(clock.sleeps, [0.1, 0.1, 0.1, 0.1, 0.05])
+
+    def test_wait_for_spawn_session_id_tick_absorbs_resolver_cost(self):
+        """A slow resolver (Devin: lock scan + ps fork + DB scan, ~30ms) must
+        not stretch the cadence; the sleep shrinks so probes stay 0.1s apart."""
+        server = importlib.import_module("server")
+        clock = self._FakeClock()
+        probes = []
+
+        def slow_resolve(entry):
+            probes.append(round(clock.now - 100.0, 6))
+            clock.now += 0.03
+            return "devincli-found" if len(probes) == 3 else None
+
+        with mock.patch.object(server, "time", clock), \
+             mock.patch.object(server, "_spawn_session_id_from_entry", side_effect=slow_resolve):
+            sid = server._wait_for_spawn_session_id({"engine": "devin"}, timeout_s=0.75)
+        self.assertEqual(sid, "devincli-found")
+        self.assertEqual(probes, [0.0, 0.1, 0.2])
+        self.assertEqual(clock.sleeps, [0.07, 0.07])
 
 
 if __name__ == "__main__":

@@ -47078,6 +47078,36 @@ def _devin_cli_session_cwd(raw_id):
     return None
 
 
+def _devin_cli_claimed_session_ids(entry):
+    """Devin CLI session ids already resolved for spawn entries other than
+    ``entry`` (in-memory list plus the on-disk registry, so a restarted
+    dashboard still honours claims made before it came up).
+
+    A session id handed to one spawn must never be handed to a second one;
+    the prompt-match fallback cannot tell two identical spawns apart on its
+    own.
+    """
+    claimed = set()
+    entry_pid = entry.get("pid") if isinstance(entry, dict) else None
+    sources = list(_spawned_sessions)
+    try:
+        sources.extend(_load_spawn_registry())
+    except Exception:
+        pass
+    for s in sources:
+        if s is entry or not isinstance(s, dict):
+            continue
+        if str(s.get("engine") or "").lower() != "devin":
+            continue
+        if entry_pid is not None and s.get("pid") == entry_pid:
+            continue
+        for key in ("session_id", "resumed_sid"):
+            sid = str(s.get(key) or "").strip()
+            if sid:
+                claimed.add(sid)
+    return claimed
+
+
 def _devin_cli_session_id_for_spawn_entry(entry):
     """Best-effort Devin CLI session id for a live CCC spawn entry.
 
@@ -47087,6 +47117,13 @@ def _devin_cli_session_id_for_spawn_entry(entry):
       2. The CLI SQLite DB, matching working directory + first prompt +
          start time. First prompt comes from prompt_history, then
          message_nodes (one-shot ``devin -p`` often skips prompt_history).
+
+    The DB match only considers sessions created at or after the spawn
+    stamp (a spawn cannot have produced a row that predates it) and takes
+    the one created soonest after it. Two spawns with an identical prompt
+    in the same cwd used to both resolve to the older session because the
+    scan ran newest-first inside a symmetric 900s window. Sessions already
+    resolved for another spawn entry are skipped for the same reason.
     """
     if not isinstance(entry, dict):
         return None
@@ -47113,6 +47150,7 @@ def _devin_cli_session_id_for_spawn_entry(entry):
         cwd_norm = os.path.realpath(cwd)
     except OSError:
         cwd_norm = os.path.normpath(cwd)
+    claimed = _devin_cli_claimed_session_ids(entry)
     con = _devin_cli_connect()
     if con is None:
         return None
@@ -47123,17 +47161,27 @@ def _devin_cli_session_id_for_spawn_entry(entry):
         candidates = list(con.execute(
             "SELECT id, working_directory, created_at FROM sessions"
         ))
+        # With a known spawn time, walk oldest-first so the first match is
+        # the session created soonest after the spawn. Without one, fall
+        # back to newest-first (the only ordering that makes sense blind).
         candidates.sort(
             key=lambda r: _devin_epoch(r["created_at"]),
-            reverse=True,
+            reverse=not spawn_ts,
         )
         for row in candidates:
             raw_id = str(row["id"] or "").strip()
             if not raw_id:
                 continue
-            created = _devin_epoch(row["created_at"])
-            if spawn_ts and created and abs(created - spawn_ts) > 900:
+            if DEVIN_CLI_SESSION_PREFIX + raw_id in claimed:
                 continue
+            created = _devin_epoch(row["created_at"])
+            if spawn_ts:
+                # The spawn stamp is floored to the second and taken before
+                # Popen, so a genuine child row is never older than it.
+                if not created or created < spawn_ts:
+                    continue
+                if created - spawn_ts > 900:
+                    break
             row_cwd = str(row["working_directory"] or "").strip()
             try:
                 row_cwd_norm = os.path.realpath(row_cwd) if row_cwd else ""
@@ -48034,11 +48082,30 @@ def _spawn_session_id_from_entry(entry):
     return sid
 
 
+_SPAWN_SESSION_ID_POLL_S = 0.1
+
+
 def _wait_for_spawn_session_id(entry, timeout_s=0.75):
+    """Poll for the native session id on a fixed ~0.1s wall-clock tick.
+
+    The tick counts the resolver's own cost (for Devin that is a lock-dir
+    scan, a ``ps`` fork and a DB scan, ~30ms) so the cadence stays even and
+    the last probe lands at the deadline instead of overshooting it. The
+    overall ``timeout_s`` budget is unchanged.
+    """
     deadline = time.monotonic() + max(0.0, float(timeout_s or 0))
+    tick_started = time.monotonic()
     sid = _spawn_session_id_from_entry(entry)
-    while not sid and time.monotonic() < deadline:
-        time.sleep(0.05)
+    while not sid:
+        now = time.monotonic()
+        remaining = deadline - now
+        if remaining <= 0:
+            break
+        pause = _SPAWN_SESSION_ID_POLL_S - (now - tick_started)
+        pause = min(max(pause, 0.0), remaining)
+        if pause > 0:
+            time.sleep(pause)
+        tick_started = time.monotonic()
         sid = _spawn_session_id_from_entry(entry)
     return sid
 
