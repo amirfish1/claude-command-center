@@ -25262,19 +25262,20 @@ html:not(.ccc-debug-mode) #statsModal {
 .orch-playbooks {
   display: flex;
   flex-direction: column;
-  gap: 8px;
+  gap: 6px;
+  flex: 0 0 auto;
 }
 .orch-playbooks.is-disabled .orch-playbook { opacity: 0.45; pointer-events: none; }
 .orch-playbook {
   --pb: var(--accent);
   position: relative;
   display: grid;
-  grid-template-columns: 30px minmax(0, 1fr) 18px;
+  grid-template-columns: 26px minmax(0, 1fr) 14px;
   align-items: center;
   gap: 10px;
   width: 100%;
-  min-height: 60px;
-  padding: 10px 12px;
+  min-height: 46px;
+  padding: 7px 10px;
   border: 1px solid color-mix(in srgb, var(--pb) 35%, var(--border));
   border-radius: 10px;
   background:
@@ -25303,8 +25304,8 @@ html:not(.ccc-debug-mode) #statsModal {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 30px;
-  height: 30px;
+  width: 26px;
+  height: 26px;
   border-radius: 999px;
   background: color-mix(in srgb, var(--pb) 22%, transparent);
   color: var(--pb);
@@ -25313,11 +25314,11 @@ html:not(.ccc-debug-mode) #statsModal {
   font-variant-numeric: tabular-nums;
 }
 .orch-playbook-body { display: flex; flex-direction: column; min-width: 0; gap: 1px; }
-.orch-playbook-title { font-size: 14px; font-weight: 700; letter-spacing: -0.01em; }
-.orch-playbook-sub { font-size: 11px; line-height: 1.35; color: var(--text-muted); }
+.orch-playbook-title { font-size: 13px; font-weight: 700; letter-spacing: -0.01em; }
+.orch-playbook-sub { font-size: 10.5px; line-height: 1.3; color: var(--text-muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .orch-playbook-meta {
-  margin-top: 2px;
-  font-size: 10.5px;
+  margin-top: 1px;
+  font-size: 10px;
   font-weight: 600;
   color: var(--pb);
   white-space: nowrap;
@@ -25345,8 +25346,8 @@ html:not(.ccc-debug-mode) #statsModal {
   flex-wrap: wrap;
   align-items: center;
   gap: 5px;
-  margin: -2px 0 2px 12px;
-  padding: 6px 8px 6px 10px;
+  margin: -2px 0 2px 10px;
+  padding: 4px 6px 4px 8px;
   border-left: 2px solid color-mix(in srgb, #a371f7 45%, transparent);
 }
 .orch-tier-label {
@@ -25361,14 +25362,14 @@ html:not(.ccc-debug-mode) #statsModal {
   display: inline-flex;
   align-items: center;
   gap: 5px;
-  height: 24px;
-  padding: 0 8px 0 4px;
+  height: 21px;
+  padding: 0 7px 0 3px;
   border: 1px solid var(--border);
   border-radius: 999px;
   background: var(--surface);
   color: var(--text-muted);
   font: inherit;
-  font-size: 11px;
+  font-size: 10.5px;
   font-weight: 600;
   cursor: pointer;
   transition: border-color 120ms ease, color 120ms ease, background 120ms ease;
@@ -25402,18 +25403,23 @@ html:not(.ccc-debug-mode) #statsModal {
 .orch-glyph-cursor { background: #111; border: 1px solid #555; }
 
 /* Lane map */
-.orch-map-wrap { display: flex; flex-direction: column; gap: 6px; }
-.orch-map-head { display: flex; align-items: baseline; gap: 8px; }
+.orch-map-wrap { display: flex; flex-direction: column; gap: 6px; flex: 1 0 auto; }
+.orch-map-head { display: grid; grid-template-columns: minmax(0, 1fr) auto; grid-template-rows: auto auto; column-gap: 8px; row-gap: 2px; align-items: center; min-width: 0; }
+.orch-map-head .orch-map-preview { grid-column: 2; grid-row: 1 / span 2; }
+.orch-map-head .orch-map-count { grid-column: 1; grid-row: 2; }
 .orch-map-title {
+  flex: 0 0 auto;
+  white-space: nowrap;
   font-size: 10px;
   font-weight: 700;
   letter-spacing: 0.06em;
   text-transform: uppercase;
   color: var(--text-muted);
 }
-.orch-map-count { flex: 1 1 auto; font-size: 11px; color: var(--text-muted); font-variant-numeric: tabular-nums; }
+.orch-map-count { min-width: 0; font-size: 10.5px; color: var(--text-muted); font-variant-numeric: tabular-nums; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .orch-map-count.is-preview { color: #d29922; }
 .orch-map-preview {
+  flex: 0 0 auto;
   border: 1px solid var(--border);
   border-radius: 6px;
   background: transparent;
@@ -25434,7 +25440,8 @@ html:not(.ccc-debug-mode) #statsModal {
     radial-gradient(circle at 1px 1px, color-mix(in srgb, var(--text-muted) 18%, transparent) 1px, transparent 1.5px) 0 0 / 14px 14px,
     var(--bg);
   padding: 14px 10px 12px;
-  min-height: 150px;
+  min-height: 200px;
+  flex: 1 0 auto;
   overflow: hidden;
 }
 .orch-map-edges { position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none; }
@@ -25455,6 +25462,18 @@ html:not(.ccc-debug-mode) #statsModal {
   min-height: 44px;
   z-index: 1;
 }
+/* Narrow rail: one lane per row, hung off a spine on the left. */
+.orch-map.is-narrow .orch-map-root { justify-content: flex-start; }
+.orch-map.is-narrow .orch-map-lanes {
+  flex-direction: column;
+  align-items: stretch;
+  justify-content: flex-start;
+  margin: 18px 0 0 40px;
+  gap: 8px;
+}
+.orch-map.is-narrow .orch-map-lanes .orch-node-lane { display: grid; width: 100%; }
+.orch-map.is-narrow .orch-node-name { max-width: none; }
+.orch-map.is-narrow .orch-map-lanes.is-empty { margin-left: 0; }
 .orch-map-lanes.is-empty::before {
   content: attr(data-empty-text);
   display: block;
@@ -25548,10 +25567,10 @@ button.orch-node:hover { border-color: color-mix(in srgb, var(--accent) 60%, var
 .orch-node.is-done .orch-node-status { color: #3fb950; }
 .orch-node.is-done .orch-node-dot { background: none; width: auto; height: auto; }
 .orch-node.is-done .orch-node-dot::before { content: '\2713'; font-size: 10px; }
-.orch-node.is-compact { grid-template-rows: auto; padding: 4px 8px; border-radius: 999px; }
-.orch-node.is-compact .orch-node-glyph { grid-row: 1; width: 16px; height: 16px; font-size: 9px; border-radius: 4px; }
-.orch-node.is-compact .orch-node-name { font-size: 11px; max-width: 110px; }
-.orch-node.is-compact .orch-node-status { grid-column: auto; margin: 0 0 0 4px; }
+.orch-node.is-compact { display: inline-flex; align-items: center; gap: 6px; padding: 4px 9px 4px 5px; border-radius: 999px; }
+.orch-node.is-compact .orch-node-glyph { width: 16px; height: 16px; font-size: 9px; border-radius: 4px; }
+.orch-node.is-compact .orch-node-name { font-size: 11px; max-width: 120px; }
+.orch-node.is-compact .orch-node-status { margin: 0; }
 .orch-node.is-born { animation: orch-born-glow 900ms ease-out; }
 @keyframes orch-born-glow {
   0% { box-shadow: 0 0 0 0 color-mix(in srgb, #a371f7 60%, transparent); }

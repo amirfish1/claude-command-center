@@ -15528,7 +15528,8 @@
   async function _simpleUpdateUsageLine(sid) {
     const el = document.getElementById('simpleUsageLine');
     if (!el) return;
-    if (!isSimpleMode() || !sid || sid === '__new__' || String(sid).indexOf('spawning-') === 0) {
+    if (!isSimpleMode() || !sid || sid === '__new__' || String(sid).indexOf('spawning-') === 0
+        || !_simpleMemoryBannerEnabled()) {
       el.classList.remove('has-data');
       el.textContent = '';
       return;
@@ -16116,12 +16117,25 @@
     }
   }
 
+  // Whether to show the "Memory: X% full" line at the top of an open task.
+  // No desktop equivalent exists to forward to (that banner is Simple-mode-
+  // only code), so this is its own localStorage flag, default on.
+  function _simpleMemoryBannerEnabled() {
+    try { return localStorage.getItem('ccc-simple-memory-banner') !== 'off'; } catch (_) { return true; }
+  }
+
   // ── Settings: forward to the existing advanced controls via .click() ──
   function _simpleSyncSettingsScreen() {
     let theme = 'dark';
     try { theme = localStorage.getItem('ccc-theme') || 'dark'; } catch (_) {}
     document.querySelectorAll('#simpleThemeRow [data-simple-theme]').forEach(btn => {
       const sel = btn.getAttribute('data-simple-theme') === theme;
+      btn.classList.toggle('is-selected', sel);
+      btn.setAttribute('aria-pressed', sel ? 'true' : 'false');
+    });
+    const bannerOn = _simpleMemoryBannerEnabled();
+    document.querySelectorAll('#simpleMemoryBannerRow [data-simple-memory-banner]').forEach(btn => {
+      const sel = (btn.getAttribute('data-simple-memory-banner') === 'on') === bannerOn;
       btn.classList.toggle('is-selected', sel);
       btn.setAttribute('aria-pressed', sel ? 'true' : 'false');
     });
@@ -16185,6 +16199,16 @@
         const real = document.querySelector('.settings-segmented[data-segmented-group="theme"] [data-theme="'
           + chip.getAttribute('data-simple-theme') + '"]');
         if (real) real.click();
+        _simpleSyncSettingsScreen();
+      });
+    }
+    const bannerRow = document.getElementById('simpleMemoryBannerRow');
+    if (bannerRow) {
+      bannerRow.addEventListener('click', (ev) => {
+        const chip = ev.target.closest('[data-simple-memory-banner]');
+        if (!chip) return;
+        const on = chip.getAttribute('data-simple-memory-banner') === 'on';
+        try { localStorage.setItem('ccc-simple-memory-banner', on ? 'on' : 'off'); } catch (_) {}
         _simpleSyncSettingsScreen();
       });
     }
@@ -54827,11 +54851,11 @@
     { id: 'kimi-k3',       engine: 'kimi',        model: 'kimi-code/k3',          label: 'Kimi K3',        vendor: 'Kimi',        family: 'moonshot' },
   ];
   const ORCH_PLAYBOOKS = [
-    { id: 'plan',     n: '1', title: 'Plan',     sub: 'Think before code. Steps sized for one lane each.' },
-    { id: 'delegate', n: '2', title: 'Delegate', sub: 'Fan the plan out to CCC lanes.', tier: true },
-    { id: 'verify',   n: '3', title: 'Verify',   sub: 'Independent tester lane, other model family.' },
-    { id: 'critique', n: '4', title: 'Critique', sub: 'Two cross-family reviewers. Blunt. Five bullets.' },
-    { id: 'land',     n: '5', title: 'Land',     sub: 'Collect reports, commit, summarize. No push.' },
+    { id: 'plan',     n: '1', title: 'Plan',     sub: 'Think before code.' },
+    { id: 'delegate', n: '2', title: 'Delegate', sub: 'Fan out to CCC lanes.', tier: true },
+    { id: 'verify',   n: '3', title: 'Verify',   sub: 'Fresh-eyes tester lane.' },
+    { id: 'critique', n: '4', title: 'Critique', sub: 'Two blunt reviewers.' },
+    { id: 'land',     n: '5', title: 'Land',     sub: 'Commit + summary. No push.' },
   ];
   const ORCH_ENGINE_GLYPH = {
     claude: 'C', codex: 'X', antigravity: 'A', gemini: 'A', grok: 'G', devin: 'D',
@@ -55120,7 +55144,6 @@
           + (waiting ? ' · ' + waiting + ' waiting' : '')
           + (landed.length ? ' · ' + landed.length + ' landed' : '');
       countEl.classList.toggle('is-preview', !!_orchSim);
-      if (_orchSim) countEl.textContent = 'Preview · ' + countEl.textContent;
     }
 
     // FLIP: remember where every existing node is before we touch the DOM.
@@ -55193,7 +55216,12 @@
         el.classList.add('is-born');
       }
     });
+    const bornNow = lanes.some(l => !before.has(l.id)) && !firstPaintForSession;
     _orchLastKeys = new Set(lanes.map(l => l.id));
+    if (bornNow) {
+      const wrap = document.getElementById('orchMapWrap');
+      if (wrap && wrap.scrollIntoView) wrap.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+    }
     requestAnimationFrame(() => {
       pane.querySelectorAll('.orch-node[data-lane-id]').forEach(el => {
         el.style.transition = '';
@@ -55211,22 +55239,39 @@
     const rootNode = map && map.querySelector('.orch-node-root');
     if (!map || !svg) return;
     const mapRect = map.getBoundingClientRect();
+    const narrow = map.clientWidth < 360;
+    map.classList.toggle('is-narrow', narrow);
     svg.setAttribute('width', map.clientWidth);
     svg.setAttribute('height', map.scrollHeight);
     svg.setAttribute('viewBox', '0 0 ' + map.clientWidth + ' ' + map.scrollHeight);
     if (!rootNode) { svg.innerHTML = ''; return; }
     const r = rootNode.getBoundingClientRect();
-    const x0 = r.left + r.width / 2 - mapRect.left;
+    // Wide rail: fan out from the root's bottom centre. Narrow rail (the
+    // common case): org-chart elbows off a spine that drops from the
+    // root's left side, so every lane visibly hangs off the orchestrator
+    // even when they stack in one column.
+    const x0 = narrow ? (r.left + 22 - mapRect.left) : (r.left + r.width / 2 - mapRect.left);
     const y0 = r.bottom - mapRect.top + map.scrollTop;
     const parts = [];
     map.querySelectorAll('#orchMapLanes .orch-node-lane').forEach(el => {
       const n = el.getBoundingClientRect();
-      const x1 = n.left + n.width / 2 - mapRect.left;
-      const y1 = n.top - mapRect.top + map.scrollTop;
       const status = (el.className.match(/\bis-(working|waiting|idle|done)\b/) || [])[1] || 'idle';
-      const my = (y0 + y1) / 2;
-      const d = 'M' + x0.toFixed(1) + ',' + y0.toFixed(1)
-        + ' C' + x0.toFixed(1) + ',' + my.toFixed(1) + ' ' + x1.toFixed(1) + ',' + my.toFixed(1) + ' ' + x1.toFixed(1) + ',' + y1.toFixed(1);
+      let d;
+      if (narrow) {
+        const x1 = n.left - mapRect.left;
+        const y1 = n.top + n.height / 2 - mapRect.top + map.scrollTop;
+        const rad = 8;
+        d = 'M' + x0.toFixed(1) + ',' + y0.toFixed(1)
+          + ' L' + x0.toFixed(1) + ',' + (y1 - rad).toFixed(1)
+          + ' Q' + x0.toFixed(1) + ',' + y1.toFixed(1) + ' ' + (x0 + rad).toFixed(1) + ',' + y1.toFixed(1)
+          + ' L' + x1.toFixed(1) + ',' + y1.toFixed(1);
+      } else {
+        const x1 = n.left + n.width / 2 - mapRect.left;
+        const y1 = n.top - mapRect.top + map.scrollTop;
+        const my = (y0 + y1) / 2;
+        d = 'M' + x0.toFixed(1) + ',' + y0.toFixed(1)
+          + ' C' + x0.toFixed(1) + ',' + my.toFixed(1) + ' ' + x1.toFixed(1) + ',' + my.toFixed(1) + ' ' + x1.toFixed(1) + ',' + y1.toFixed(1);
+      }
       parts.push('<path class="orch-edge orch-edge-' + status + '" d="' + d + '"></path>');
       if (status === 'working') parts.push('<path class="orch-edge orch-edge-flow" d="' + d + '"></path>');
     });
@@ -55269,6 +55314,8 @@
     ];
     const btn = document.getElementById('orchMapPreview');
     if (btn) { btn.textContent = 'Stop'; btn.classList.add('is-playing'); }
+    const wrap = document.getElementById('orchMapWrap');
+    if (wrap && wrap.scrollIntoView) wrap.scrollIntoView({ block: 'end', behavior: 'smooth' });
     _orchLastKeys = new Set(['seeded']);   // so the very first sim lane is "born", not a first paint
     script.forEach(([t, fn]) => {
       _orchSimTimers.push(setTimeout(() => { if (!_orchSim && t !== 14000) return; fn(); if (_orchSim) updateOrchestrationPane(currentConversation); }, t));
