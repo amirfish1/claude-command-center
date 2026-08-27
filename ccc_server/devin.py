@@ -1720,11 +1720,20 @@ def _devin_model_catalog_records(allowed_families=None):
                 continue
             if re.search(r"-(fast|priority)$", model_uid, re.I):
                 continue
+            cost_tier = str(variant.get("cost_tier") or "").strip()
+            is_free = cost_tier.lower() == "free"
             records.append({
                 "id": model_uid,
                 "label": str(variant.get("label") or model_uid),
                 "source": "devin-cli",
                 "oneM": (variant.get("max_context_tokens") or 0) >= 1_000_000,
+                "max_context_tokens": variant.get("max_context_tokens"),
+                "max_output_tokens": variant.get("max_output_tokens"),
+                "cost_tier": cost_tier,
+                "cost_summary": variant.get("cost_summary"),
+                "entitlement": "free" if is_free else None,
+                "entitlement_summary": "Free for this Devin account" if is_free else None,
+                "entitlement_source": "devin-cli" if is_free else None,
             })
     return records
 

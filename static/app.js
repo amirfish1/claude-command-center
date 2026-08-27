@@ -48816,6 +48816,12 @@
       if (row.available !== undefined) next.available = !!row.available;
       if (row.availability_reason) next.availability_reason = String(row.availability_reason);
       if (row.sources) next.sources = row.sources;
+      ['max_context_tokens', 'max_output_tokens'].forEach(key => {
+        if (row[key] != null) next[key] = Number(row[key]);
+      });
+      ['cost_tier', 'cost_summary', 'entitlement', 'entitlement_summary', 'entitlement_source'].forEach(key => {
+        if (row[key]) next[key] = String(row[key]);
+      });
       byNorm.set(norm, next);
       if (!merged.some(o => _normalizeModelId(o.id) === norm)) merged.push(next);
     });
@@ -49187,9 +49193,22 @@
         const oneMOn = isActive && currentIs1M;
         const unavailable = opt.available === false;
         const unavailableReason = opt.availability_reason || opt.reason || '';
+        const limits = [];
+        if (opt.max_context_tokens) limits.push(_compactTokenLabel(opt.max_context_tokens) + ' context');
+        if (opt.max_output_tokens) limits.push(_compactTokenLabel(opt.max_output_tokens) + ' output');
+        const price = String(opt.cost_summary || '').trim();
+        const entitlement = String(opt.entitlement || '').toLowerCase();
+        const entitlementSummary = String(opt.entitlement_summary || '').trim();
+        const title = unavailable ? (unavailableReason || 'Model unavailable')
+          : [entitlementSummary, price && ('Underlying token rate: ' + price), limits.join(' · ')].filter(Boolean).join('\n');
         html += '<button type="button" class="mp-row' + (isActive ? ' active' : '') + (unavailable ? ' disabled' : '') + '" data-model="' + escapeHtml(opt.id) + '"'
-          + (unavailable ? ' disabled title="' + escapeHtml(unavailableReason || 'Model unavailable') + '"' : '') + '>'
-          + escapeHtml(opt.label || opt.id);
+          + (unavailable ? ' disabled' : '') + (title ? ' title="' + escapeHtml(title) + '"' : '') + '>'
+          + '<span class="mp-model-copy"><span class="mp-model-name">' + escapeHtml(opt.label || opt.id) + '</span>'
+          + ((price || limits.length) ? '<span class="mp-model-meta">' + escapeHtml([price, limits.join(' · ')].filter(Boolean).join(' · ')) + '</span>' : '')
+          + '</span>';
+        if (entitlement === 'free') {
+          html += '<span class="mp-entitlement free">FREE</span>';
+        }
         if (oneM) {
           html += '<span class="mp-1m-toggle' + (oneMOn ? ' on' : '') + '" data-1m-toggle title="1M context (anthropic-beta: context-1m)">1M</span>';
         }

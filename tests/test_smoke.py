@@ -3764,6 +3764,37 @@ class TestServerImports(unittest.TestCase):
         self.assertEqual(model, "gpt-5.6-preview")
         self.assertIn("unsupported codex model", error)
 
+    def test_devin_model_catalog_preserves_cost_limits_and_plan_benefits(self):
+        for mod in ("server", "morning", "morning_store"):
+            sys.modules.pop(mod, None)
+        server = importlib.import_module("server")
+        models = {
+            "families": [{
+                "family_uid": "glm-5.2",
+                "variants": [{
+                    "model_uid": "glm-5-2-max",
+                    "label": "GLM-5.2 Max",
+                    "max_context_tokens": 1_000_000,
+                    "max_output_tokens": 128_000,
+                    "cost_tier": "Free",
+                    "cost_summary": None,
+                }],
+            }],
+        }
+
+        devin_module = importlib.import_module("ccc_server.devin")
+        with mock.patch.object(devin_module, "_devin_model_list_json", return_value=models):
+            rows = server._devin_model_catalog_records(["glm-5.2"])
+
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0]["max_context_tokens"], 1_000_000)
+        self.assertEqual(rows[0]["max_output_tokens"], 128_000)
+        self.assertEqual(rows[0]["cost_tier"], "Free")
+        self.assertIsNone(rows[0]["cost_summary"])
+        self.assertEqual(rows[0]["entitlement"], "free")
+        self.assertEqual(rows[0]["entitlement_summary"], "Free for this Devin account")
+        self.assertEqual(rows[0]["entitlement_source"], "devin-cli")
+
     def test_static_model_picker_uses_server_catalog_and_codex_allowlist(self):
         app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text()
 
@@ -3779,6 +3810,9 @@ class TestServerImports(unittest.TestCase):
         self.assertIn("_modelUnavailableReason", app_js)
         self.assertIn("if (_engineSupportsCustomModel(engine))", app_js)
         self.assertIn("ENGINE_SUPPORTS_CUSTOM_MODEL[engine] = info.supports_custom", app_js)
+        self.assertIn("opt.max_context_tokens", app_js)
+        self.assertIn("opt.cost_summary", app_js)
+        self.assertIn("mp-entitlement free", app_js)
 
     def test_engine_settings_exposes_automatic_updates(self):
         app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text()

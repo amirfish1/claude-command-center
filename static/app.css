@@ -3812,6 +3812,21 @@
   .model-picker-pop .mp-row.active {
     color: var(--accent); background: rgba(88,166,255,0.10); font-weight: 600;
   }
+  .model-picker-pop .mp-model-copy {
+    display: flex; flex: 1; min-width: 0; flex-direction: column; gap: 2px;
+  }
+  .model-picker-pop .mp-model-name,
+  .model-picker-pop .mp-model-meta { overflow: hidden; text-overflow: ellipsis; }
+  .model-picker-pop .mp-model-meta {
+    color: var(--text-muted); font-size: 9px; font-weight: 400; white-space: nowrap;
+  }
+  .model-picker-pop .mp-entitlement {
+    margin-left: auto; padding: 1px 5px; border-radius: 3px;
+    font-size: 9px; font-weight: 700; letter-spacing: 0.04em;
+  }
+  .model-picker-pop .mp-entitlement.free {
+    background: rgba(46,160,67,0.16); color: var(--success, #3fb950);
+  }
   .model-picker-pop .mp-1m-toggle {
     margin-left: auto; font-size: 10px;
     padding: 1px 6px; border-radius: 3px;

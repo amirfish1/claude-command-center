@@ -7068,6 +7068,13 @@ def _build_engine_model_catalog(force_refresh=False):
                 label=row.get("label"),
                 source=row.get("source") or "devin-cli",
                 oneM=row.get("oneM"),
+                max_context_tokens=row.get("max_context_tokens"),
+                max_output_tokens=row.get("max_output_tokens"),
+                cost_tier=row.get("cost_tier"),
+                cost_summary=row.get("cost_summary"),
+                entitlement=row.get("entitlement"),
+                entitlement_summary=row.get("entitlement_summary"),
+                entitlement_source=row.get("entitlement_source"),
             )
     except Exception:
         pass
