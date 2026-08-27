@@ -55566,9 +55566,70 @@
       if (orchPaneVisible()) updateOrchestrationPane(currentConversation);
     } catch (_) {}
   }
+  // Flatten the family tree (from /api/sessions/family) into a list of
+  // lanes with depth info. Each lane gets a `depth` field (0 for direct
+  // children of the root, 1 for grandchildren, etc.) and a `isTaskSubagent`
+  // flag for Claude Task-tool subagents (agent-* transcripts, not resumable).
+  function orchFlattenTree(tree, rootSid) {
+    if (!tree || typeof tree !== 'object') return [];
+    const rows = conversationsData || [];
+    const byId = new Map();
+    rows.forEach(r => { if (r && r.session_id) byId.set(r.session_id, r); });
+    const spawnById = new Map();
+    (_orchSpawnedRegistry || []).forEach(sp => { if (sp && sp.session_id) spawnById.set(sp.session_id, sp); });
+    const out = [];
+    const seen = new Set();
+    function walk(node, depth) {
+      if (!node || !node.session_id) return;
+      const sid = node.session_id;
+      if (sid === rootSid || seen.has(sid)) return;
+      seen.add(sid);
+      const row = byId.get(sid);
+      const spawn = spawnById.get(sid);
+      const meta = orchLaneMetaGet(sid);
+      const isTaskSubagent = !node.resumable && node.source === 'claude-task-tool';
+      // For task-tool subagents, there's no row or spawn entry — build a
+      // minimal lane from the tree node itself.
+      if (isTaskSubagent) {
+        out.push({
+          id: sid,
+          convId: sid,
+          name: sid.slice(0, 16),
+          engine: 'claude',
+          model: '',
+          status: 'done',
+          mtime: 0,
+          born: 0,
+          landedAt: 0,
+          depth,
+          isTaskSubagent: true,
+          source: node.source || '',
+        });
+      } else {
+        const lane = orchLane(row, spawn || { session_id: sid, name: node.name, model: node.model, engine: node.engine, spawned_at: null });
+        lane.depth = depth;
+        lane.isTaskSubagent = false;
+        lane.source = node.source || '';
+        out.push(lane);
+      }
+      (node.children || []).forEach(c => walk(c, depth + 1));
+    }
+    (tree.children || []).forEach(c => walk(c, 0));
+    // Newest first within each depth level.
+    out.sort((a, b) => (a.depth - b.depth) || (b.mtime - a.mtime));
+    return out;
+  }
   function orchCollectLanes(sid) {
     if (_orchSim) return _orchSim.lanes.slice();
     if (!sid) return [];
+    // Primary path: use the family tree from the unified SessionGraph if
+    // it's available for this root. This gives us multi-depth descendants
+    // and Claude Task-tool subagents that the flat lookup can't see.
+    if (_orchFamilyTree && _orchFamilyTreeSid === sid) {
+      const treeLanes = orchFlattenTree(_orchFamilyTree, sid);
+      if (treeLanes.length) return treeLanes;
+    }
+    // Fallback: original flat collection (direct children only).
     const rows = conversationsData || [];
     const byId = new Map();
     rows.forEach(r => { if (r && r.session_id) byId.set(r.session_id, r); });
@@ -55607,15 +55668,18 @@
   // in so an old fan-out still replays.
   let _orchChildrenSid = '';
   let _orchChildren = [];
+  let _orchFamilyTreeSid = '';
+  let _orchFamilyTree = null;
   async function orchRefreshRegistry(force, rootSid) {
     if (_orchRegistryInFlight) return;
     const sidChanged = rootSid && rootSid !== _orchChildrenSid;
     if (!force && !sidChanged && Date.now() - _orchRegistryFetchedAt < 5000) return;
     _orchRegistryInFlight = true;
     try {
-      const [r1, r2] = await Promise.all([
+      const [r1, r2, r3] = await Promise.all([
         fetch('/api/sessions/spawned'),
         rootSid ? fetch('/api/sessions/children?parent=' + encodeURIComponent(rootSid)) : Promise.resolve(null),
+        rootSid ? fetch('/api/sessions/family?sid=' + encodeURIComponent(rootSid)) : Promise.resolve(null),
       ]);
       const live = r1 && r1.ok ? await r1.json() : [];
       let kids = [];
@@ -55626,6 +55690,19 @@
         _orchChildren = kids;
       } else if (rootSid === _orchChildrenSid) {
         kids = _orchChildren;
+      }
+      // Family tree from the unified SessionGraph — full multi-depth tree
+      // including Claude Task-tool subagents and Codex native subagents.
+      if (r3 && r3.ok) {
+        const d = await r3.json();
+        if (d && d.ok && d.tree) {
+          _orchFamilyTreeSid = rootSid;
+          _orchFamilyTree = d.tree;
+        }
+      } else if (rootSid === _orchFamilyTreeSid) {
+        // keep cached tree
+      } else {
+        _orchFamilyTree = null;
       }
       const seen = new Set();
       const merged = [];
@@ -55706,11 +55783,16 @@
   function orchNodeHtml(lane, compact) {
     const glyph = ORCH_ENGINE_GLYPH[lane.engine] || '?';
     const statusWord = { working: 'working', waiting: 'needs you', idle: 'idle', done: 'landed' }[lane.status] || lane.status;
-    return '<span class="orch-node-glyph orch-glyph orch-glyph-' + escapeAttr(lane.engine) + '">' + glyph + '</span>'
+    const depth = lane.depth || 0;
+    const indent = depth > 0 ? '<span class="orch-node-indent" style="margin-left:' + (depth * 14) + 'px"></span>' : '';
+    const taskBadge = lane.isTaskSubagent ? '<span class="orch-node-task-badge" title="Claude Task-tool subagent (read-only transcript)">transcript</span>' : '';
+    return indent
+      + '<span class="orch-node-glyph orch-glyph orch-glyph-' + escapeAttr(lane.engine) + '">' + glyph + '</span>'
       + '<span class="orch-node-body">'
       + '<span class="orch-node-name">' + escapeHtml(lane.name) + '</span>'
       + (compact ? '' : '<span class="orch-node-model">' + escapeHtml(lane.model || lane.engine) + '</span>')
       + '</span>'
+      + taskBadge
       + '<span class="orch-node-status"><span class="orch-node-dot"></span>' + escapeHtml(statusWord) + '</span>';
   }
   function updateOrchestrationPane(convId) {
@@ -55792,8 +55874,9 @@
         }
         el.classList.toggle('is-compact', !!compact);
         el.classList.toggle('is-here', !!lane.id && lane.id === hereSid);
+        el.classList.toggle('is-task-subagent', !!lane.isTaskSubagent);
         el.className = el.className.replace(/\bis-(working|waiting|idle|done)\b/g, '').trim() + ' is-' + lane.status;
-        el.title = lane.name + ' · ' + (lane.model || lane.engine) + ' · ' + lane.status + ' · click to open';
+        el.title = lane.name + ' · ' + (lane.model || lane.engine) + ' · ' + lane.status + (lane.isTaskSubagent ? ' · transcript only' : ' · click to open');
         const html = orchNodeHtml(lane, compact);
         if (el.innerHTML !== html) el.innerHTML = html;
         if (el.parentNode !== host) host.appendChild(el);

@@ -16793,6 +16793,11 @@ CODEX_THREAD_REGISTRY_FILE = (
     if _CODEX_THREAD_REGISTRY_ENV else
     COMMAND_CENTER_STATE_DIR / "codex-thread-registry.json"
 )
+# Unified parent-child session graph. Combines all four edge sources
+# (Codex spawn edges, durable parent links, spawn registry, thread registry)
+# plus Claude Task-tool subagent transcripts into one adjacency list so
+# family-tree queries are O(1) instead of re-scanning four stores per call.
+SESSION_GRAPH_FILE = COMMAND_CENTER_STATE_DIR / "session-graph.json"
 
 # Per-session model + context override. Set by the click-to-switch picker
 # in the session card (see /api/session/<sid>/model). Schema:
@@ -18067,16 +18072,18 @@ def _set_conversations_archived(session_ids, want_archived):
 def _find_descendant_sessions(sid, max_depth=6):
     """Return all known child/descendant session_ids of ``sid``.
 
-    Merges four parent-child sources so a trash cascade reaches every
-    lane an orchestrator spawned, regardless of engine or registry pruning:
-      1. Codex spawn edges (``thread_spawn_edges`` in ~/.codex/state_*.sqlite)
-      2. Durable CCC-spawn parent links (``codex-parent-links.json``)
-      3. The on-disk spawn registry (``spawned-pids.json``)
-      4. The Codex thread registry (``codex-thread-registry.json``)
+    Uses the unified SessionGraph as the primary path (O(1) per edge),
+    falling back to the original four-source merge if the graph is empty
+    (e.g. before startup build has run, or in a test context).
     """
     if not sid:
         return []
-    # Build child -> parent maps from all sources, then walk down.
+    # Primary path: SessionGraph (built at startup, incrementally updated).
+    graph_descendants = _session_graph.descendants(sid, max_depth=max_depth)
+    if graph_descendants:
+        return graph_descendants
+    # Fallback: original four-source merge (used before the graph is built
+    # or if it somehow has no edges for this session).
     parent_by_child = {}
     try:
         parent_by_child.update(_codex_spawn_parent_by_child())
@@ -18120,6 +18127,414 @@ def _find_descendant_sessions(sid, max_depth=6):
             break
         frontier = next_frontier
     return descendants
+
+
+# ---------------------------------------------------------------------------
+# SessionGraph — unified parent-child adjacency list
+# ---------------------------------------------------------------------------
+# Combines all edge sources into one in-memory graph persisted to disk:
+#   1. Codex thread_spawn_edges (sqlite)         — source: "codex-native"
+#   2. Durable codex-parent-links.json           — source: "codex-parent-link"
+#   3. Spawn registry (spawned-pids.json)        — source: "ccc-spawn"
+#   4. Codex thread registry (codex-thread-registry.json) — source: "codex-thread-registry"
+#   5. Claude Task-tool agent-*.jsonl transcripts — source: "claude-task-tool"
+#
+# Edges are added eagerly at startup (sources 1-4) and lazily on first
+# family_tree() query for source 5 (filesystem glob, cached). New CCC
+# spawns add their edge immediately via add_edge() called from
+# _record_spawn_to_registry.
+#
+# The graph is engine-agnostic: it stores parent_sid -> child_sid with
+# per-edge metadata ({source, engine, resumable}). The family_tree()
+# method returns a nested dict ready for the API / UI.
+
+class _SessionGraph:
+    """Thread-safe parent-child adjacency list with disk persistence."""
+
+    def __init__(self, path):
+        self._path = Path(path)
+        self._lock = threading.RLock()
+        # child_sid -> parent_sid
+        self._parent_of = {}
+        # parent_sid -> {child_sid: edge_meta}
+        self._children_of = {}
+        # child_sid -> edge_meta (same objects as in _children_of values)
+        self._edge_meta = {}
+        # parent_sid -> set of child_sids already enriched for Claude Task
+        # tool subagents (so lazy enrichment runs once per parent).
+        self._claude_task_enriched = set()
+        self._dirty = False
+
+    # -- persistence ---------------------------------------------------------
+
+    def load(self):
+        """Load the graph from disk if it exists and is valid."""
+        with self._lock:
+            if not self._path.exists():
+                return
+            try:
+                data = json.loads(self._path.read_text())
+            except (OSError, json.JSONDecodeError):
+                return
+            if not isinstance(data, dict):
+                return
+            edges = data.get("edges")
+            if not isinstance(edges, list):
+                return
+            self._parent_of = {}
+            self._children_of = {}
+            self._edge_meta = {}
+            for e in edges:
+                if not isinstance(e, dict):
+                    continue
+                parent = str(e.get("parent") or "").strip()
+                child = str(e.get("child") or "").strip()
+                if not parent or not child or parent == child:
+                    continue
+                meta = {
+                    "source": str(e.get("source") or "unknown"),
+                    "engine": str(e.get("engine") or ""),
+                    "resumable": e.get("resumable", True),
+                }
+                self._parent_of[child] = parent
+                self._children_of.setdefault(parent, {})[child] = meta
+                self._edge_meta[child] = meta
+            # Persisted enrichment markers so we don't re-glob on restart.
+            enriched = data.get("claude_task_enriched")
+            if isinstance(enriched, list):
+                self._claude_task_enriched = set(enriched)
+            self._dirty = False
+
+    def save(self):
+        """Persist the graph to disk if there are unsaved changes."""
+        with self._lock:
+            if not self._dirty:
+                return
+            edges = []
+            for child, parent in self._parent_of.items():
+                meta = self._edge_meta.get(child, {})
+                edges.append({
+                    "parent": parent,
+                    "child": child,
+                    "source": meta.get("source", "unknown"),
+                    "engine": meta.get("engine", ""),
+                    "resumable": meta.get("resumable", True),
+                })
+            data = {
+                "edges": edges,
+                "claude_task_enriched": sorted(self._claude_task_enriched),
+            }
+            try:
+                tmp = self._path.with_suffix(".tmp")
+                tmp.write_text(json.dumps(data))
+                os.replace(tmp, self._path)
+                self._dirty = False
+            except OSError:
+                pass
+
+    # -- mutation ------------------------------------------------------------
+
+    def add_edge(self, parent, child, source="ccc-spawn", engine="", resumable=True):
+        """Add or update a parent->child edge. Idempotent; first edge wins
+        for the parent pointer, but metadata is always refreshed."""
+        parent = str(parent or "").strip()
+        child = str(child or "").strip()
+        if not parent or not child or parent == child:
+            return
+        with self._lock:
+            meta = {"source": source, "engine": str(engine or ""), "resumable": resumable}
+            # If the child already has a different parent, keep the first
+            # (matches _find_descendant_sessions' setdefault semantics).
+            existing_parent = self._parent_of.get(child)
+            if existing_parent and existing_parent != parent:
+                # Don't overwrite, but update metadata on the existing edge.
+                self._edge_meta[child] = meta
+                self._children_of.setdefault(existing_parent, {})[child] = meta
+                self._dirty = True
+                return
+            self._parent_of[child] = parent
+            self._children_of.setdefault(parent, {})[child] = meta
+            self._edge_meta[child] = meta
+            self._dirty = True
+
+    def remove_edge(self, parent, child):
+        """Remove a single edge."""
+        with self._lock:
+            if child in self._parent_of and self._parent_of[child] == parent:
+                del self._parent_of[child]
+                self._dirty = True
+            if parent in self._children_of:
+                if child in self._children_of[parent]:
+                    del self._children_of[parent][child]
+                    self._dirty = True
+                if not self._children_of[parent]:
+                    del self._children_of[parent]
+            if child in self._edge_meta:
+                del self._edge_meta[child]
+                self._dirty = True
+
+    # -- queries -------------------------------------------------------------
+
+    def parent_of(self, child):
+        """Return the parent session_id for ``child``, or None."""
+        with self._lock:
+            return self._parent_of.get(str(child or "").strip())
+
+    def children_of(self, parent):
+        """Return a list of child session_ids for ``parent``."""
+        with self._lock:
+            kids = self._children_of.get(str(parent or "").strip())
+            return list(kids.keys()) if kids else []
+
+    def edge_meta(self, child):
+        """Return the edge metadata for ``child``, or {}."""
+        with self._lock:
+            return dict(self._edge_meta.get(str(child or "").strip(), {}))
+
+    def descendants(self, sid, max_depth=10):
+        """Return all descendant session_ids of ``sid`` (BFS, no cycles)."""
+        sid = str(sid or "").strip()
+        if not sid:
+            return []
+        with self._lock:
+            seen = {sid}
+            result = []
+            frontier = [sid]
+            for _ in range(max_depth):
+                next_frontier = []
+                for node in frontier:
+                    kids = self._children_of.get(node)
+                    if not kids:
+                        continue
+                    for child in kids:
+                        if child not in seen:
+                            seen.add(child)
+                            result.append(child)
+                            next_frontier.append(child)
+                if not next_frontier:
+                    break
+                frontier = next_frontier
+            return result
+
+    def ancestors(self, sid, max_depth=10):
+        """Return ancestor session_ids from immediate parent up to root."""
+        sid = str(sid or "").strip()
+        if not sid:
+            return []
+        with self._lock:
+            result = []
+            seen = {sid}
+            cur = sid
+            for _ in range(max_depth):
+                parent = self._parent_of.get(cur)
+                if not parent or parent in seen:
+                    break
+                seen.add(parent)
+                result.append(parent)
+                cur = parent
+            return result
+
+    def root_of(self, sid):
+        """Return the topmost ancestor of ``sid`` (or ``sid`` itself if it
+        has no parent)."""
+        ancestors = self.ancestors(sid)
+        return ancestors[-1] if ancestors else sid
+
+    def family_tree(self, sid, max_depth=10):
+        """Return a nested dict representing the full family tree rooted at
+        the topmost ancestor of ``sid``.
+
+        Each node is:
+          {"session_id": ..., "children": [...], "source": ..., "engine": ...,
+           "resumable": ...}
+
+        The root is the topmost ancestor (the orchestrator). ``sid`` itself
+        and all its siblings/cousins under the root are included.
+        """
+        sid = str(sid or "").strip()
+        if not sid:
+            return None
+        root = self.root_of(sid)
+
+        def build(node, depth):
+            with self._lock:
+                meta = self._edge_meta.get(node, {})
+                kids = self._children_of.get(node, {})
+            children = []
+            if depth < max_depth:
+                for child in kids:
+                    children.append(build(child, depth + 1))
+            return {
+                "session_id": node,
+                "source": meta.get("source", "root"),
+                "engine": meta.get("engine", ""),
+                "resumable": meta.get("resumable", True),
+                "children": children,
+            }
+
+        return build(root, 0)
+
+    def all_edges(self):
+        """Return a list of (parent, child, meta) tuples for debugging."""
+        with self._lock:
+            return [
+                (parent, child, dict(meta))
+                for child, parent in self._parent_of.items()
+                for child_id, meta in [(child, self._edge_meta.get(child, {}))]
+            ]
+
+    def stats(self):
+        """Return basic graph statistics."""
+        with self._lock:
+            return {
+                "edges": len(self._parent_of),
+                "parents": len(self._children_of),
+                "claude_task_enriched": len(self._claude_task_enriched),
+            }
+
+
+# Module-level singleton — created at import time, populated at startup.
+_session_graph = _SessionGraph(SESSION_GRAPH_FILE)
+
+
+def _session_graph_add_edge(parent, child, source="ccc-spawn", engine="", resumable=True):
+    """Thin wrapper so callers don't touch the singleton directly."""
+    _session_graph.add_edge(parent, child, source=source, engine=engine, resumable=resumable)
+    _session_graph.save()
+
+
+def _session_graph_build_from_all_sources():
+    """Eagerly populate the graph from all four persistent edge sources.
+
+    Called once at startup. Existing graph edges are preserved (first-edge-
+    wins), so a restart doesn't lose edges that a source may have pruned.
+    """
+    # 1. Codex thread_spawn_edges (sqlite)
+    try:
+        for child, parent in _codex_spawn_parent_by_child().items():
+            _session_graph.add_edge(parent, child, source="codex-native", engine="codex")
+    except Exception:
+        pass
+
+    # 2. Durable codex-parent-links.json
+    try:
+        for child, parent in _load_codex_parent_links().items():
+            _session_graph.add_edge(parent, child, source="codex-parent-link", engine="codex")
+    except Exception:
+        pass
+
+    # 3. Spawn registry (spawned-pids.json) — all engines
+    try:
+        for entry in _load_spawn_registry():
+            if not isinstance(entry, dict):
+                continue
+            child = str(entry.get("session_id") or "").strip()
+            parent = str(entry.get("parent_session_id") or "").strip()
+            engine = str(entry.get("engine") or "claude").strip()
+            if child and parent and child != parent:
+                _session_graph.add_edge(
+                    parent, child, source="ccc-spawn", engine=engine, resumable=True,
+                )
+    except Exception:
+        pass
+
+    # 4. Codex thread registry
+    try:
+        for child_id, entry in _codex_thread_registry_entries().items():
+            if not isinstance(entry, dict):
+                continue
+            parent = str(entry.get("parent_session_id") or "").strip()
+            if child_id and parent and child_id != parent:
+                _session_graph.add_edge(
+                    parent, child_id, source="codex-thread-registry", engine="codex",
+                )
+    except Exception:
+        pass
+
+    _session_graph.save()
+
+
+def _session_graph_enrich_claude_task_subagents(parent_sid):
+    """Glob ``<project>/<parent_sid>/subagents/agent-*.jsonl`` and add each
+    agent transcript as a child of ``parent_sid``.
+
+    Called lazily by family_tree() when a Claude parent has no children in
+    the graph yet. Cached via _claude_task_enriched so the glob runs at most
+    once per parent per process lifetime. The enrichment marker is persisted
+    so a restart doesn't re-glob.
+    """
+    parent_sid = str(parent_sid or "").strip()
+    if not parent_sid or not PROJECTS_ROOT.is_dir():
+        return
+    with _session_graph._lock:
+        if parent_sid in _session_graph._claude_task_enriched:
+            return
+    # Glob all project dirs for <parent>/subagents/agent-*.jsonl
+    try:
+        for agent_file in PROJECTS_ROOT.glob(f"*/{parent_sid}/subagents/agent-*.jsonl"):
+            if not agent_file.is_file():
+                continue
+            agent_id = agent_file.stem  # e.g. "agent-a7d894abf5832d"
+            if not agent_id.startswith("agent-"):
+                continue
+            _session_graph.add_edge(
+                parent_sid, agent_id,
+                source="claude-task-tool", engine="claude", resumable=False,
+            )
+    except OSError:
+        pass
+    with _session_graph._lock:
+        _session_graph._claude_task_enriched.add(parent_sid)
+        _session_graph._dirty = True
+    _session_graph.save()
+
+
+def _session_graph_family_tree(sid):
+    """Return the family tree for ``sid``, with Claude Task-tool enrichment.
+
+    This is the main entry point for the /api/sessions/family endpoint.
+    """
+    sid = str(sid or "").strip()
+    if not sid:
+        return None
+    # Lazy enrichment: if this is a Claude session with no children in the
+    # graph, check the filesystem for Task-tool subagent transcripts.
+    if not _session_graph.children_of(sid):
+        _session_graph_enrich_claude_task_subagents(sid)
+    # Also enrich ancestors that have no children (they might be the
+    # orchestrator that spawned Task-tool subagents).
+    for ancestor in _session_graph.ancestors(sid):
+        if not _session_graph.children_of(ancestor):
+            _session_graph_enrich_claude_task_subagents(ancestor)
+    return _session_graph.family_tree(sid)
+
+
+# Background refresh: Codex thread_spawn_edges can grow while CCC runs
+# (Codex spawns its own subagents independently). This thread checks the
+# state DBs every 30s and merges any new edges into the graph.
+_session_graph_codex_refresh_interval = 30.0
+_session_graph_codex_refresh_stop = threading.Event()
+
+def _session_graph_codex_refresh_loop():
+    while not _session_graph_codex_refresh_stop.is_set():
+        try:
+            for child, parent in _codex_spawn_parent_by_child().items():
+                _session_graph.add_edge(
+                    parent, child, source="codex-native", engine="codex",
+                )
+            _session_graph.save()
+        except Exception:
+            pass
+        _session_graph_codex_refresh_stop.wait(_session_graph_codex_refresh_interval)
+
+
+def _start_session_graph_codex_refresh():
+    t = threading.Thread(
+        target=_session_graph_codex_refresh_loop,
+        daemon=True,
+        name="session-graph-codex-refresh",
+    )
+    t.start()
 
 
 def _set_conversation_trashed(sid, trashed):
@@ -51569,6 +51984,11 @@ def _persist_codex_parent_link(thread_id, parent_session_id):
             _codex_parent_links_cache["data"] = existing
         except OSError:
             pass
+    # Feed the unified session graph.
+    _session_graph_add_edge(
+        parent_session_id, thread_id,
+        source="codex-parent-link", engine="codex", resumable=True,
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -52622,6 +53042,14 @@ def _record_spawn_to_registry(
         return True
 
     _mutate_spawn_registry(_append_record)
+    # Feed the unified session graph so family-tree queries see this edge
+    # immediately. session_id may be None for fresh spawns (filled in lazily
+    # by _update_spawn_session_id_in_registry, which also feeds the graph).
+    if parent_session_id and session_id:
+        _session_graph_add_edge(
+            parent_session_id, session_id,
+            source="ccc-spawn", engine=engine, resumable=True,
+        )
 
 
 def _reap_orphaned_claude_prewarms():
@@ -52686,6 +53114,23 @@ def _update_spawn_session_id_in_registry(pid, session_id):
         _mutate_spawn_registry(_update)
     except Exception as e:
         print(f"  [spawn-registry] could not update session_id for pid {pid} ({e})")
+    # Feed the unified session graph: the session_id was unknown at spawn
+    # time, so the edge wasn't added in _record_spawn_to_registry. Look up
+    # the parent_session_id from the registry entry we just updated.
+    try:
+        for entry in _load_spawn_registry():
+            if str(entry.get("pid") or "") != str(pid):
+                continue
+            parent = str(entry.get("parent_session_id") or "").strip()
+            engine = str(entry.get("engine") or "claude").strip()
+            if parent and parent != session_id:
+                _session_graph_add_edge(
+                    parent, session_id,
+                    source="ccc-spawn", engine=engine, resumable=True,
+                )
+            break
+    except Exception:
+        pass
 
 
 def _update_spawn_input_state_in_registry(
@@ -64794,6 +65239,62 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                     if str(entry.get("parent_session_id") or "").strip().startswith(parent)
                 ]
                 self.send_json({"ok": True, "parent": parent, "count": len(children), "children": children})
+        elif path == "/api/sessions/family":
+            # Full family tree from the unified SessionGraph. Returns a nested
+            # dict rooted at the topmost ancestor (orchestrator), with all
+            # descendants at every depth. Includes Claude Task-tool subagents
+            # (lazily enriched) and Codex native subagents (background refresh).
+            # Much cheaper than /api/sessions/children for deep trees — one
+            # graph lookup, no registry scan, no liveness probes.
+            qs = urllib.parse.parse_qs(parsed.query)
+            sid = (qs.get("sid", [""])[0] or "").strip()
+            if len(sid) < 8:
+                self.send_json(
+                    {"ok": False, "error": "sid query param required (at least 8 chars of a session id)"},
+                    400,
+                )
+            else:
+                tree = _session_graph_family_tree(sid)
+                if tree is None:
+                    self.send_json({"ok": False, "error": "no family found"}, 404)
+                else:
+                    # Join spawn-registry metadata (name, model, engine,
+                    # spawned_at, cwd, command_summary) onto each node so the
+                    # frontend has something to display without a second
+                    # round-trip per lane.
+                    reg_by_sid = {}
+                    for entry in _load_spawn_registry():
+                        if not isinstance(entry, dict):
+                            continue
+                        esid = str(entry.get("session_id") or "").strip()
+                        if esid:
+                            reg_by_sid[esid] = entry
+                    def _annotate(node):
+                        if not isinstance(node, dict):
+                            return node
+                        nsid = node.get("session_id", "")
+                        reg = reg_by_sid.get(nsid)
+                        if reg:
+                            for field in ("name", "model", "engine", "spawned_at", "cwd", "command_summary"):
+                                val = reg.get(field)
+                                if val is not None and field not in node:
+                                    node[field] = val
+                        node["children"] = [_annotate(c) for c in node.get("children", [])]
+                        return node
+                    tree = _annotate(tree)
+                    # Count total nodes in the tree.
+                    def _count(node):
+                        if not isinstance(node, dict):
+                            return 0
+                        return 1 + sum(_count(c) for c in node.get("children", []))
+                    total = _count(tree)
+                    self.send_json({
+                        "ok": True,
+                        "sid": sid,
+                        "root": tree.get("session_id"),
+                        "total_nodes": total,
+                        "tree": tree,
+                    })
         elif re.match(r"^/api/sessions/spawned/\d+/log$", path):
             try:
                 pid = int(path.split("/")[-2])
@@ -79078,6 +79579,17 @@ def main():
     # Keep spawn stats across a dashboard restart -- otherwise restarting
     # mid-investigation throws away the evidence you restarted to look at.
     _spawn_timeline_load()
+    # Build the unified session graph from all edge sources. Lightweight
+    # (reads 4 files + 1 sqlite query) and makes family-tree queries O(1)
+    # for the rest of this process's lifetime.
+    try:
+        _session_graph.load()
+        _session_graph_build_from_all_sources()
+        stats = _session_graph.stats()
+        print(f"  [session-graph] loaded {stats['edges']} edges across {stats['parents']} parents")
+    except Exception as e:
+        print(f"  [session-graph] build failed: {e}")
+    _start_session_graph_codex_refresh()
     # Diagnostic: mark every server start in the resume ledger so a burst of
     # cold_resume events right after this line implicates restart-EOF as the
     # cause of warm processes dying.

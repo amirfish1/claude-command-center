@@ -25666,6 +25666,19 @@ button.orch-node:hover { border-color: color-mix(in srgb, var(--accent) 60%, var
 @media (prefers-reduced-motion: reduce) {
   .orch-node, .orch-edge-flow, .orch-node-root.is-fanning, .orch-node-dot { animation: none !important; transition: none !important; }
 }
+/* Task-tool subagent lanes: read-only transcripts, not resumable sessions.
+   Greyed out with a small "transcript" badge to distinguish them from
+   live CCC-spawned lanes. */
+.orch-node.is-task-subagent { opacity: 0.5; border-style: dashed; }
+.orch-node-task-badge {
+  font-size: 8px; font-weight: 600; letter-spacing: 0.04em;
+  text-transform: uppercase; color: var(--text-muted);
+  background: color-mix(in srgb, var(--text-muted) 12%, transparent);
+  padding: 1px 5px; border-radius: 4px; white-space: nowrap;
+}
+.orch-node.is-compact .orch-node-task-badge { display: none; }
+/* Depth indentation for nested lanes (sub-lanes of lanes). */
+.orch-node-indent { display: inline-block; flex-shrink: 0; }
 
 /* Files panel docked at the bottom of the Metadata pane. */
 body.status-pos-right .status-rail-pane[data-rail-pane="metadata"] > .files-panel {
