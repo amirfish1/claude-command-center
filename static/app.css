@@ -25336,6 +25336,34 @@ html:not(.ccc-debug-mode) #statsModal {
 .orch-playbook-critique { --pb: #d29922; }
 .orch-playbook-status   { --pb: #8b949e; }
 .orch-playbook-queue    { --pb: #39c5cf; }
+.orch-playbook-spawn    { --pb: #58a6ff; }
+/* Draft playbooks write into the composer instead of sending: pencil, no push. */
+.orch-playbook.is-draft .orch-playbook-arrow { font-size: 15px; }
+.orch-playbook.is-draft:hover .orch-playbook-arrow { transform: none; }
+/* "More" disclosure: the optional playbooks fold away so the pane stays clean. */
+.orch-more-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  align-self: flex-start;
+  margin: -6px 0 -4px 2px;
+  padding: 4px 8px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text-muted);
+  font: inherit;
+  font-size: 11px;
+  font-weight: 600;
+  cursor: pointer;
+}
+.orch-more-toggle:hover { color: var(--text); background: color-mix(in srgb, var(--text-muted) 10%, transparent); }
+.orch-more-toggle:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+.orch-more-caret { font-size: 11px; line-height: 1; opacity: 0.8; }
+.orch-more-hint { font-weight: 500; opacity: 0.65; }
+.orch-more-toggle[aria-expanded="true"] .orch-more-hint { display: none; }
+.orch-more { display: flex; flex-direction: column; gap: 16px; }
+.orch-more[hidden] { display: none; }
 .orch-playbook.is-action .orch-playbook-arrow { font-size: 15px; }
 .orch-playbook.is-optional { border-style: dashed; background: var(--surface); min-height: 44px; }
 .orch-playbook.is-optional .orch-playbook-title { font-weight: 600; }
@@ -25372,7 +25400,7 @@ html:not(.ccc-debug-mode) #statsModal {
   0% { opacity: 0.9; transform: scale(0.96); }
   100% { opacity: 0; transform: scale(1.04); }
 }
-/* Executor tier: the second-level pick under Delegate. */
+/* Model tier: the second-level pick under Spawn a sub-agent. */
 .orch-tier {
   display: flex;
   flex-wrap: wrap;

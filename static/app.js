@@ -54970,12 +54970,29 @@
   // says "CCC orchestration" -- the phrase the session's skill keys on;
   // the how (spawn API, report_to, lane briefs) lives in that skill, not
   // in the prompt.
+  // Delegate, Spawn and Critique stay on screen; Verify, Check status and
+  // the queue action fold under "More" so the pane stays clean.
+  //
+  // Spawn is the one two-step playbook: pick the model in the tier under
+  // it, then tap the card. It never sends -- it drafts
+  // "Spawn a new <model> sub-agent with CCC to do [describe the task]"
+  // into the composer with the bracket selected, so the user replaces the
+  // placeholder and submits from the composer.
   const ORCH_PLAYBOOKS = [
-    { id: 'delegate', title: 'Delegate',     sub: 'Execution runs on cheaper lanes, not here.', tier: true },
-    { id: 'verify',   title: 'Verify',       sub: 'A different model family checks the work.' },
-    { id: 'critique', title: 'Critique',     sub: 'Two outside reviewers, blunt.' },
-    { id: 'status',   title: 'Check status', sub: 'Optional. Where does each lane stand?', optional: true },
+    { id: 'delegate', title: 'Delegate',          sub: 'Execution runs on cheaper lanes, not here.' },
+    { id: 'spawn',    title: 'Spawn a sub-agent', sub: 'Pick a model, tap, edit the task in the composer, send.', tier: true, draft: true },
+    { id: 'critique', title: 'Critique',          sub: 'Two outside reviewers, blunt.' },
+    { id: 'verify',   title: 'Verify',            sub: 'A different model family checks the work.', more: true },
+    { id: 'status',   title: 'Check status',      sub: 'Optional. Where does each lane stand?', optional: true, more: true },
   ];
+  const ORCH_SPAWN_PLACEHOLDER = '[describe the task]';
+  function orchMoreOpen() {
+    try { return localStorage.getItem('ccc-orch-more') === '1'; } catch (_) { return false; }
+  }
+  function orchSetMoreOpen(open) {
+    try { localStorage.setItem('ccc-orch-more', open ? '1' : '0'); } catch (_) {}
+    renderOrchPlaybooks();
+  }
   const ORCH_ENGINE_GLYPH = {
     claude: 'C', codex: 'X', antigravity: 'A', gemini: 'A', grok: 'G', devin: 'D',
     kimi: 'K', cursor: 'U', hermes: 'H', kilo: 'L', opencode: 'O', copilot: 'P',
@@ -54995,8 +55012,29 @@
     return ORCH_EXECUTORS.find(e => e.id === id) || ORCH_EXECUTORS[0];
   }
   function orchSetExecutor(id) {
+    // If the composer still holds the previous model's spawn draft (task
+    // placeholder untouched), swap the model in place so "pick, then send"
+    // reads the chip that is lit, not the one it was drafted with.
+    const before = orchPrompt('spawn');
     try { localStorage.setItem('ccc-orch-executor', id); } catch (_) {}
+    const input = orchComposerInput();
+    if (input && before && input.value === before) {
+      input.value = orchPrompt('spawn');
+      input.dispatchEvent(new Event('input', { bubbles: true }));
+      orchSelectSpawnPlaceholder(input);
+    }
     renderOrchPlaybooks();
+  }
+  function orchComposerInput() {
+    const paneId = activePaneId();
+    const paneEl = document.querySelector('.conv-pane[data-pane-id="' + paneId + '"]');
+    return paneEl && paneEl.querySelector('.conv-input-bar textarea, .conv-input-bar input[type="text"]');
+  }
+  function orchSelectSpawnPlaceholder(input) {
+    const at = input.value.indexOf(ORCH_SPAWN_PLACEHOLDER);
+    input.focus();
+    if (at < 0 || typeof input.setSelectionRange !== 'function') return;
+    try { input.setSelectionRange(at, at + ORCH_SPAWN_PLACEHOLDER.length); } catch (_) {}
   }
   // The tester is always a different model family than the executor, so a
   // lane never grades its own homework.
@@ -55072,6 +55110,8 @@
           + critics.map(orchExecLabel).join(' and ') + '.';
       case 'status':
         return 'Use CCC orchestration to check the status of the agents you spawned and tell me where each one stands.';
+      case 'spawn':
+        return 'Spawn a new ' + orchExecLabel(ex) + ' sub-agent with CCC to do ' + ORCH_SPAWN_PLACEHOLDER + '.';
     }
     return '';
   }
@@ -55085,12 +55125,16 @@
     const text = orchPrompt(playbookId);
     if (!text) return;
     const paneId = activePaneId();
-    const paneEl = document.querySelector('.conv-pane[data-pane-id="' + paneId + '"]');
-    const input = paneEl && paneEl.querySelector('.conv-input-bar textarea, .conv-input-bar input[type="text"]');
+    const input = orchComposerInput();
     if (!input) { showOpToast('This session has no composer to inject into.', 'error'); return; }
     input.value = text;
     input.dispatchEvent(new Event('input', { bubbles: true }));
     orchFlashPlaybook(playbookId);
+    const pbDef = ORCH_PLAYBOOKS.find(p => p.id === playbookId);
+    // Draft playbooks (Spawn) never send: the placeholder is selected so
+    // the next keystroke replaces it, and the composer's own send is the
+    // second step.
+    if (pbDef && pbDef.draft) { orchSelectSpawnPlaceholder(input); return; }
     if (sendNow === false) { input.focus(); return; }
     try {
       await sendToTerminal(paneId, 'send');
@@ -55115,15 +55159,20 @@
     const ex = orchExecutor();
     const tester = orchTester(ex);
     const critics = orchCritics(ex);
-    host.innerHTML = ORCH_PLAYBOOKS.map(pb => {
+    const moreOpen = orchMoreOpen();
+    const card = (pb) => {
       let sub = pb.sub;
       let meta = '';
       if (pb.id === 'delegate') meta = 'Executor: ' + orchExecLabel(ex);
+      if (pb.id === 'spawn') meta = 'Model: ' + orchExecLabel(ex);
       if (pb.id === 'verify') meta = 'Tester: ' + orchExecLabel(tester);
       if (pb.id === 'critique') meta = 'Reviewers: ' + critics.map(c => c.label).join(' + ');
-      let html = '<button type="button" class="orch-playbook orch-playbook-' + pb.id + (pb.optional ? ' is-optional' : '') + '" data-orch-playbook="' + pb.id + '"'
-        + ' title="Inject the ' + pb.title + ' playbook into this session. Shift-click to paste without sending.">'
-        + '<span class="orch-playbook-arrow" aria-hidden="true">&#8592;</span>'
+      const title = pb.draft
+        ? 'Draft a spawn brief into this session\'s composer. Replace the bracket, then send.'
+        : 'Inject the ' + pb.title + ' playbook into this session. Shift-click to paste without sending.';
+      let html = '<button type="button" class="orch-playbook orch-playbook-' + pb.id + (pb.optional ? ' is-optional' : '') + (pb.draft ? ' is-draft' : '') + '" data-orch-playbook="' + pb.id + '"'
+        + ' title="' + escapeAttr(title) + '">'
+        + '<span class="orch-playbook-arrow" aria-hidden="true">' + (pb.draft ? '&#9998;' : '&#8592;') + '</span>'
         + '<span class="orch-playbook-body">'
         + '<span class="orch-playbook-title">' + escapeHtml(pb.title) + '</span>'
         + '<span class="orch-playbook-sub">' + escapeHtml(sub) + '</span>'
@@ -55131,8 +55180,8 @@
         + '</span>'
         + '</button>';
       if (pb.tier) {
-        html += '<div class="orch-tier" role="radiogroup" aria-label="Executor model">'
-          + '<span class="orch-tier-label">Executor</span>'
+        html += '<div class="orch-tier" role="radiogroup" aria-label="Sub-agent model">'
+          + '<span class="orch-tier-label">Model</span>'
           + ORCH_EXECUTORS.map(e =>
             '<button type="button" class="orch-tier-chip' + (e.id === ex.id ? ' is-selected' : '') + '" role="radio" aria-checked="'
             + (e.id === ex.id ? 'true' : 'false') + '" data-orch-executor="' + e.id + '" title="' + escapeAttr(e.vendor + ' · ' + e.model) + '">'
@@ -55141,14 +55190,22 @@
           + '</div>';
       }
       return html;
-    }).join('')
-    + '<button type="button" class="orch-playbook orch-playbook-queue is-optional is-action" data-orch-action="queue"'
-    + ' title="Create (or reuse) this session\'s WatchTower queue with auto-drain on, then open the Queue tab to drop tasks.">'
-    + '<span class="orch-playbook-arrow" aria-hidden="true">&#8599;</span>'
-    + '<span class="orch-playbook-body">'
-    + '<span class="orch-playbook-title">Drop tasks in auto-drain queue</span>'
-    + '<span class="orch-playbook-sub">This session\'s queue, auto-drain on. Opens Queue.</span>'
-    + '</span></button>';
+    };
+    const primary = ORCH_PLAYBOOKS.filter(pb => !pb.more).map(card).join('');
+    const more = ORCH_PLAYBOOKS.filter(pb => pb.more).map(card).join('')
+      + '<button type="button" class="orch-playbook orch-playbook-queue is-optional is-action" data-orch-action="queue"'
+      + ' title="Create (or reuse) this session\'s WatchTower queue with auto-drain on, then open the Queue tab to drop tasks.">'
+      + '<span class="orch-playbook-arrow" aria-hidden="true">&#8599;</span>'
+      + '<span class="orch-playbook-body">'
+      + '<span class="orch-playbook-title">Drop tasks in auto-drain queue</span>'
+      + '<span class="orch-playbook-sub">This session\'s queue, auto-drain on. Opens Queue.</span>'
+      + '</span></button>';
+    host.innerHTML = primary
+      + '<button type="button" class="orch-more-toggle" data-orch-more="1" aria-expanded="' + (moreOpen ? 'true' : 'false') + '" aria-controls="orchMore">'
+      + '<span class="orch-more-caret" aria-hidden="true">' + (moreOpen ? '&#9662;' : '&#9656;') + '</span>'
+      + (moreOpen ? 'Less' : 'More') + '<span class="orch-more-hint">Verify · Check status · Queue</span>'
+      + '</button>'
+      + '<div class="orch-more" id="orchMore"' + (moreOpen ? '' : ' hidden') + '>' + more + '</div>';
   }
 
   // Not a prompt: a CCC operation. Reuses the one-queue-per-session path
@@ -55803,6 +55860,7 @@
     pane.addEventListener('click', (ev) => {
       const chip = ev.target.closest('[data-orch-executor]');
       if (chip) { orchSetExecutor(chip.getAttribute('data-orch-executor')); return; }
+      if (ev.target.closest('[data-orch-more]')) { orchSetMoreOpen(!orchMoreOpen()); return; }
       const pb = ev.target.closest('[data-orch-playbook]');
       if (pb) { orchInject(pb.getAttribute('data-orch-playbook'), !ev.shiftKey); return; }
       if (ev.target.closest('[data-orch-action="queue"]')) { orchQueueAction(); return; }
