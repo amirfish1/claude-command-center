@@ -55144,6 +55144,10 @@
   // from the map shows the same picture with a different node lit up.
   // Walk parent_session_id up to the top (rows first, registry as a
   // fallback for lanes whose transcript has not shown up yet).
+  // Stop at the highest VISIBLE ancestor: a parent that's in neither
+  // conversationsData nor the spawn registry is in a different repo (or
+  // has been pruned), so rooting there draws an invisible root node and
+  // hides its grandchildren — the lanes the user clicked on.
   function orchResolveRoot(row, sid) {
     const rows = conversationsData || [];
     const bySid = new Map();
@@ -55156,6 +55160,9 @@
       const sp = spawnBySid.get(curSid);
       const pid = String((curRow && (curRow.parent_session_id || curRow.hermes_parent_session_id)) || (sp && sp.parent_session_id) || '');
       if (!pid || pid === curSid) break;
+      // Don't walk past a parent we can't see — root at the highest
+      // visible ancestor instead of an invisible grandparent.
+      if (!bySid.has(pid) && !spawnBySid.has(pid)) break;
       curSid = pid;
       curRow = bySid.get(pid) || null;
     }
