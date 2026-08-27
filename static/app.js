@@ -25921,6 +25921,7 @@
                                   // instead of appearing unhidden ahead of the reveal cursor.
   let _convReplayTimeout = null;
   let _onConvReplayKeyRef = null;
+  let _onConvReplayInputRef = null;
   // In-flight word-by-word reveal of the CURRENT meaningful item's text, so
   // Pause/Play can freeze and resume mid-message instead of only between
   // messages. Null when no item is mid-reveal (between messages, or the
@@ -26203,6 +26204,20 @@
     };
     document.addEventListener('keydown', _onConvReplayKeyRef, true);
 
+    // The replay's own "human is typing" illusion sets .value directly,
+    // which never fires a native 'input' event — so any 'input' event that
+    // reaches a real composer during replay is genuine user typing. Treat it
+    // as "I want to take over" and stop the replay rather than fighting the
+    // user for control of the box.
+    _onConvReplayInputRef = (e) => {
+      if (!_convReplayActive) return;
+      const t = e.target;
+      if (!t || !t.closest) return;
+      if (t.classList && t.classList.contains('conv-replay-jump-input')) return;
+      if (t.closest('.conv-input-bar')) exitConvReplayMode();
+    };
+    document.addEventListener('input', _onConvReplayInputRef, true);
+
     playNextConvReplayStep();
   }
 
@@ -26275,6 +26290,7 @@
     const _jumpDraft = controls.querySelector('.conv-replay-jump-input');
     const _jumpDraftVal = _jumpDraft ? _jumpDraft.value : '';
     controls.innerHTML = `
+      <button type="button" id="convReplayStepBackBtn" class="gc-replay-btn gc-replay-stepback-btn" title="Step Back" ${_convReplayMsgIndex <= 0 ? 'disabled' : ''}>&lt;</button>
       <button type="button" id="convReplayPlayPauseBtn" class="gc-replay-btn" title="Play / Pause (Space steps one message)">
         ${_convReplayPaused ? '&#9654; Play' : '&#9646;&#9646; Pause'}
       </button>
@@ -26291,6 +26307,11 @@
       <span class="conv-replay-hint">${_convReplayPaneIds.length > 1 ? 'Syncing both sessions &middot; ' : ''}Space: step forward</span>
       <button type="button" id="convReplaySkipBtn" class="gc-replay-btn gc-replay-skip-btn" title="Show all remaining messages">${done ? 'Done &#10003;' : 'Skip to end'}</button>
     `;
+
+    const stepBackBtn = controls.querySelector('#convReplayStepBackBtn');
+    stepBackBtn.addEventListener('click', () => {
+      stepConvReplayBack();
+    });
 
     const ppBtn = controls.querySelector('#convReplayPlayPauseBtn');
     ppBtn.addEventListener('click', () => {
@@ -26323,6 +26344,36 @@
 
     const skipBtn = controls.querySelector('#convReplaySkipBtn');
     skipBtn.addEventListener('click', () => exitConvReplayMode());
+  }
+
+  // Rewinds to the previous meaningful message and re-hides everything from
+  // there forward, so the next Play re-types it from scratch. A run of
+  // non-meaningful events (the same ones playNextConvReplayStep skips over
+  // silently) doesn't count as its own step, matching forward playback.
+  function stepConvReplayBack() {
+    if (!_convReplayActive || _convReplayMsgIndex <= 0) return;
+
+    if (_convReplayTimeout) {
+      clearTimeout(_convReplayTimeout);
+      _convReplayTimeout = null;
+    }
+    _convReplayPaused = true;
+    if (_convReplayWordItem) {
+      _convReplayRevealAllWordsInstantly(_convReplayWordContainer);
+      _convReplayClearWordReveal();
+    }
+    _convReplayResetHumanTyping();
+
+    let idx = _convReplayMsgIndex - 1;
+    while (idx > 0 && !_convReplayEvents[idx].meaningful) idx--;
+
+    for (let i = idx; i < _convReplayMsgIndex; i++) {
+      _convReplayEvents[i].el.classList.add('conv-replay-hidden');
+    }
+    _convReplayMsgIndex = idx;
+    if (typeof _orchReplayStep === 'function') _orchReplayStep(null);
+
+    renderConvReplayControls();
   }
 
   // Jumps the replay cursor to the turn at `rawLine` (accepts "172" or
@@ -26359,6 +26410,10 @@
     if (_onConvReplayKeyRef) {
       document.removeEventListener('keydown', _onConvReplayKeyRef, true);
       _onConvReplayKeyRef = null;
+    }
+    if (_onConvReplayInputRef) {
+      document.removeEventListener('input', _onConvReplayInputRef, true);
+      _onConvReplayInputRef = null;
     }
     // Force every word span visible too — a message can be sitting mid
     // type-in when Escape/Skip-to-end fires; "show everything" must mean
