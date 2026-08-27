@@ -341,5 +341,195 @@ class DevinQueueTests(unittest.TestCase):
         )
 
 
+class DevinListPerfTests(unittest.TestCase):
+    """The Devin CLI session list must not rescan every session's history.
+
+    sessions.db stores full turn content inline (observed: 3.7 GB across
+    ~33k message_nodes rows). Whole-table json_extract scans made every list
+    rebuild take 40-87 s, and the rebuild fires on every DB write, so a new
+    session could not appear in the sidebar for a minute. Per-session fields
+    are memoized by (last_activity_at, max row_id, row count); only changed
+    sessions are re-queried, with bounded head/tail walks.
+    """
+
+    SCHEMA = """
+        CREATE TABLE sessions (
+            id TEXT PRIMARY KEY,
+            working_directory TEXT,
+            backend_type TEXT,
+            model TEXT,
+            agent_mode TEXT,
+            created_at REAL,
+            last_activity_at REAL,
+            title TEXT,
+            main_chain_id TEXT
+        );
+        CREATE TABLE prompt_history (
+            session_id TEXT,
+            content TEXT,
+            timestamp REAL,
+            is_shell INTEGER
+        );
+        CREATE TABLE message_nodes (
+            row_id INTEGER PRIMARY KEY AUTOINCREMENT,
+            session_id TEXT NOT NULL,
+            node_id INTEGER NOT NULL,
+            parent_node_id INTEGER,
+            chat_message TEXT NOT NULL,
+            created_at INTEGER NOT NULL,
+            UNIQUE(session_id, node_id)
+        );
+        CREATE TABLE tool_call_state (
+            session_id TEXT NOT NULL,
+            tool_call_id TEXT NOT NULL,
+            tool_call_json TEXT,
+            tool_call_update_json TEXT,
+            PRIMARY KEY (session_id, tool_call_id)
+        );
+    """
+
+    def _msg(self, role, content, **meta):
+        return json.dumps({"role": role, "content": content, "metadata": meta})
+
+    def _setup(self):
+        server = importlib.import_module("server")
+        import ccc_server.devin as devin_mod
+
+        tmpdir = tempfile.mkdtemp()
+        db_path = os.path.join(tmpdir, "sessions.db")
+        memo_path = os.path.join(tmpdir, "row_memo.json")
+        now = int(time.time() * 1000)
+        con = sqlite3.connect(db_path)
+        con.executescript(self.SCHEMA)
+        for sid in ("alpha-one", "beta-two"):
+            con.execute(
+                "INSERT INTO sessions VALUES (?, ?, '', '', '', ?, ?, NULL, NULL)",
+                (sid, "/tmp/ccc", now, now),
+            )
+        con.execute(
+            "INSERT INTO message_nodes (session_id, node_id, chat_message, created_at) "
+            "VALUES (?, ?, ?, ?)",
+            ("alpha-one", 1, self._msg("user", "fix payouts sort", is_user_input=True), now),
+        )
+        con.execute(
+            "INSERT INTO message_nodes (session_id, node_id, chat_message, created_at) "
+            "VALUES (?, ?, ?, ?)",
+            (
+                "alpha-one", 2,
+                self._msg(
+                    "assistant", "Done: ran git commit",
+                    generation_model="claude-opus-5",
+                    metrics={"input_tokens": 1000, "cache_read_tokens": 500},
+                ),
+                now,
+            ),
+        )
+        con.execute(
+            "INSERT INTO message_nodes (session_id, node_id, chat_message, created_at) "
+            "VALUES (?, ?, ?, ?)",
+            ("beta-two", 1, self._msg("user", "hello there", is_user_input=True), now),
+        )
+        con.execute(
+            "INSERT INTO message_nodes (session_id, node_id, chat_message, created_at) "
+            "VALUES (?, ?, ?, ?)",
+            ("beta-two", 2, self._msg("assistant", "hi", generation_model="m-b"), now),
+        )
+        con.execute(
+            "INSERT INTO tool_call_state VALUES (?, ?, ?, ?)",
+            (
+                "alpha-one", "tc1",
+                json.dumps({
+                    "_meta": {"cognition.ai/inferenceToolName": "run_subagent"},
+                    "rawInput": {"title": "scan repo", "profile": "explore"},
+                }),
+                json.dumps({"status": "completed"}),
+            ),
+        )
+        con.commit()
+        con.close()
+
+        prev_db = os.environ.get("CCC_DEVIN_DB")
+        os.environ["CCC_DEVIN_DB"] = db_path
+        self.addCleanup(
+            lambda: (
+                os.environ.__setitem__("CCC_DEVIN_DB", prev_db)
+                if prev_db is not None
+                else os.environ.pop("CCC_DEVIN_DB", None)
+            )
+        )
+        patches = [
+            mock.patch.object(devin_mod, "_DEVIN_CLI_LIST_CACHE", {"key": None, "rows": None}),
+            mock.patch.object(devin_mod, "_DEVIN_CLI_ROW_MEMO", {}),
+            mock.patch.object(devin_mod, "_DEVIN_CLI_ROW_MEMO_LOADED", False),
+            mock.patch.object(devin_mod, "_devin_cli_row_memo_path", lambda: devin_mod.Path(memo_path)),
+            mock.patch.object(server, "_spawned_sessions", []),
+        ]
+        for p in patches:
+            p.start()
+            self.addCleanup(p.stop)
+        return server, devin_mod, db_path, now
+
+    def _bump_mtime(self, db_path, secs):
+        st = os.stat(db_path)
+        os.utime(db_path, (st.st_atime + secs, st.st_mtime + secs))
+
+    def test_devin_list_memoizes_per_session_fields(self):
+        server, devin_mod, db_path, now = self._setup()
+        orig = devin_mod._devin_cli_row_fields_for_session
+        calls = []
+
+        def spy(con, raw_id, prev):
+            calls.append(raw_id)
+            return orig(con, raw_id, prev)
+
+        with mock.patch.object(devin_mod, "_devin_cli_row_fields_for_session", spy):
+            rows = {r["id"]: r for r in server.find_devin_cli_conversations("/tmp/ccc", include_old=True)}
+            self.assertEqual(sorted(calls), ["alpha-one", "beta-two"])
+            a = rows["devincli-alpha-one"]
+            b = rows["devincli-beta-two"]
+            self.assertEqual(a["first_message"], "fix payouts sort")
+            self.assertEqual(a["model"], "claude-opus-5")
+            self.assertEqual(a["last_assistant_text"], "Done: ran git commit")
+            self.assertEqual(a["latest_input_tokens"], 1500)
+            self.assertTrue(a["has_commit"])
+            self.assertFalse(a["has_push"])
+            self.assertEqual(a["subagent_count"], 1)
+            self.assertEqual(a["subagent_recent"][0]["status"], "done")
+            self.assertEqual(b["model"], "m-b")
+            self.assertFalse(b["has_commit"])
+            self.assertEqual(b["subagent_count"], 0)
+
+            # Append a turn to beta only. Only beta must be re-queried.
+            con = sqlite3.connect(db_path)
+            con.execute(
+                "INSERT INTO message_nodes (session_id, node_id, chat_message, created_at) "
+                "VALUES (?, ?, ?, ?)",
+                ("beta-two", 3, self._msg("assistant", "pushed via git push", generation_model="m-b2"), now + 1),
+            )
+            con.commit()
+            con.close()
+            self._bump_mtime(db_path, 10)
+            calls.clear()
+            rows = {r["id"]: r for r in server.find_devin_cli_conversations("/tmp/ccc", include_old=True)}
+            self.assertEqual(calls, ["beta-two"])
+            b = rows["devincli-beta-two"]
+            self.assertTrue(b["has_push"])
+            self.assertEqual(b["model"], "m-b2")
+            self.assertEqual(b["last_assistant_text"], "pushed via git push")
+            self.assertEqual(b["first_message"], "hello there")
+            self.assertTrue(rows["devincli-alpha-one"]["has_commit"])
+
+            # A restart (empty in-memory memo) reloads the persisted memo and
+            # re-queries nothing when the DB is unchanged.
+            devin_mod._DEVIN_CLI_ROW_MEMO.clear()
+            devin_mod._DEVIN_CLI_ROW_MEMO_LOADED = False
+            devin_mod._DEVIN_CLI_LIST_CACHE["key"] = None
+            calls.clear()
+            rows = {r["id"]: r for r in server.find_devin_cli_conversations("/tmp/ccc", include_old=True)}
+            self.assertEqual(calls, [])
+            self.assertTrue(rows["devincli-beta-two"]["has_push"])
+            self.assertEqual(rows["devincli-alpha-one"]["model"], "claude-opus-5")
+
+
 if __name__ == "__main__":
     unittest.main()

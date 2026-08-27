@@ -86,6 +86,24 @@ _DEVIN_CLI_PARSE_CACHE_MAX = 64
 # the lifecycle side-car files change.
 _DEVIN_CLI_LIST_CACHE = {"key": None, "rows": None}
 _DEVIN_CLI_LIST_CACHE_LOCK = threading.Lock()
+# Serialises list rebuilds so N concurrent sidebar polls after one DB write
+# do one rebuild, not N.
+_DEVIN_CLI_LIST_REBUILD_LOCK = threading.Lock()
+# Per-session derived fields (first message, latest model/text/tokens, ship
+# flags, subagent meta) memoized by a per-session version tuple. sessions.db
+# stores full turn content inline (observed: 3.7 GB across ~33k rows), so
+# any whole-table json_extract scan costs tens of seconds — and the list
+# cache key changes on every DB write. Only sessions whose version changed
+# are re-queried, and those with bounded head/tail walks. Persisted to disk
+# so a restart re-queries nothing when the DB is unchanged.
+_DEVIN_CLI_ROW_MEMO = {}
+_DEVIN_CLI_ROW_MEMO_LOCK = threading.Lock()
+_DEVIN_CLI_ROW_MEMO_LOADED = False
+_DEVIN_CLI_ROW_MEMO_VERSION = 1
+# Latest-assistant tail walk cap: a session's tail is normally a handful of
+# tool rows then an assistant row; the cap only bounds a pathological run
+# of tool-only rows.
+_DEVIN_CLI_TAIL_WALK_MAX_ROWS = 400
 
 def _devin_api_key():
     """Personal Devin API key from the environment, or None when unset."""
@@ -888,9 +906,10 @@ def _devin_cli_cache_key():
     """
     mtime_ns = 0
     size = 0
-    for p in (DEVIN_CLI_SESSIONS_DB,
-              Path(str(DEVIN_CLI_SESSIONS_DB) + "-wal"),
-              Path(str(DEVIN_CLI_SESSIONS_DB) + "-shm")):
+    db_path = _devin_cli_db_path()
+    for p in (db_path,
+              Path(str(db_path) + "-wal"),
+              Path(str(db_path) + "-shm")):
         try:
             st = p.stat()
         except OSError:
@@ -1031,49 +1050,6 @@ def _devin_cli_first_messages_from_nodes(con, raw_ids):
     return first_messages
 
 
-def _devin_cli_latest_models_for_raw_ids(con, raw_ids):
-    """Best-effort {raw_id: generation_model} from the latest assistant turn.
-
-    Some Devin frontends (e.g. the Windsurf/Cursor integration) do not write
-    the model into the ``sessions`` row, so CCC's row model stays empty. The
-    latest assistant ``message_nodes`` row carries ``metadata.generation_model``,
-    which is good enough for the model pill and usage estimates."""
-    if not raw_ids or con is None:
-        return {}
-    placeholders = ",".join("?" * len(raw_ids))
-    latest_models = {}
-    qstart = time.perf_counter()
-    try:
-        query = (
-            "WITH latest AS ("
-            "  SELECT session_id, chat_message, "
-            "         ROW_NUMBER() OVER (PARTITION BY session_id ORDER BY row_id DESC) AS rn "
-            "  FROM message_nodes "
-            "  WHERE session_id IN ({}) "
-            "    AND json_extract(chat_message, '$.role') = 'assistant' "
-            ") "
-            "SELECT session_id, chat_message FROM latest WHERE rn = 1"
-        ).format(placeholders)
-        for row in con.execute(query, raw_ids):
-            try:
-                msg = json.loads(row["chat_message"])
-            except (ValueError, TypeError):
-                continue
-            if not isinstance(msg, dict):
-                continue
-            gm = (msg.get("metadata") or {}).get("generation_model")
-            if gm:
-                latest_models[str(row["session_id"] or "").strip()] = str(gm)
-    except sqlite3.Error:
-        pass
-    _devin_cli_profile_log(
-        "latest_models_for_raw_ids",
-        time.perf_counter() - qstart,
-        f"raw_ids={len(raw_ids)} found={len(latest_models)}",
-    )
-    return latest_models
-
-
 def _devin_cli_subagent_meta_for_raw_ids(con, raw_ids):
     """Subagent counts + recent list from the ``tool_call_state`` table.
 
@@ -1140,85 +1116,236 @@ def _devin_cli_subagent_meta_for_raw_ids(con, raw_ids):
     return out
 
 
-def _devin_cli_last_assistant_text_for_raw_ids(con, raw_ids):
-    """{raw_id: latest assistant message text} for the session list.
+def _devin_cli_row_memo_path():
+    return _core.COMMAND_CENTER_STATE_DIR / "devin_cli_row_memo.json"
 
-    Uses a window-function query so the DB does the work instead of parsing
-    every row in Python. Returns at most one text per session.
-    """
+
+def _devin_cli_row_memo_load_locked():
+    """Load the persisted per-session memo once per process (lock held)."""
+    global _DEVIN_CLI_ROW_MEMO_LOADED
+    if _DEVIN_CLI_ROW_MEMO_LOADED:
+        return
+    _DEVIN_CLI_ROW_MEMO_LOADED = True
+    try:
+        with _devin_cli_row_memo_path().open("r", encoding="utf-8") as f:
+            payload = json.load(f)
+    except (OSError, ValueError):
+        return
+    if not isinstance(payload, dict) or payload.get("v") != _DEVIN_CLI_ROW_MEMO_VERSION:
+        return
+    rows = payload.get("rows")
+    if isinstance(rows, dict):
+        for raw_id, entry in rows.items():
+            if isinstance(entry, dict) and isinstance(entry.get("ver"), list):
+                _DEVIN_CLI_ROW_MEMO[str(raw_id)] = entry
+
+
+def _devin_cli_row_memo_save_locked():
+    """Best-effort atomic write of the memo (lock held). Never raises."""
+    try:
+        path = _devin_cli_row_memo_path()
+        path.parent.mkdir(parents=True, exist_ok=True)
+        tmp = path.with_suffix(path.suffix + ".tmp")
+        with tmp.open("w", encoding="utf-8") as f:
+            json.dump({"v": _DEVIN_CLI_ROW_MEMO_VERSION, "rows": _DEVIN_CLI_ROW_MEMO}, f)
+        os.replace(tmp, path)
+    except Exception:
+        pass
+
+
+def _devin_cli_session_versions(con, raw_ids):
+    """{raw_id: [max_row_id, row_count]} from message_nodes.
+
+    A covering-index GROUP BY (idx_message_nodes_session carries the rowid),
+    so it never reads the chat_message blobs — ~50 ms across a 3.7 GB DB."""
     if not raw_ids or con is None:
         return {}
-    placeholders = ",".join("?" * len(raw_ids))
     out = {}
-    qstart = time.perf_counter()
+    placeholders = ",".join("?" * len(raw_ids))
     try:
-        # SQLite 3.25+ supports window functions.
-        query = (
-            "WITH ranked AS ("
-            "  SELECT session_id, chat_message,"
-            "    ROW_NUMBER() OVER (PARTITION BY session_id ORDER BY node_id DESC) AS rn"
-            "  FROM message_nodes"
-            "  WHERE session_id IN ({})"
-            "    AND json_extract(chat_message, '$.role') = 'assistant'"
-            ")"
-            "SELECT session_id, chat_message FROM ranked WHERE rn = 1"
-        ).format(placeholders)
-        for row in con.execute(query, raw_ids):
-            sid = str(row["session_id"] or "").strip()
-            try:
-                msg = json.loads(row["chat_message"] or "{}")
-            except (ValueError, TypeError):
-                continue
-            if not isinstance(msg, dict):
-                continue
-            text = str(msg.get("content") or "").strip()
-            if text:
-                out[sid] = text
+        for row in con.execute(
+            "SELECT session_id, MAX(row_id), COUNT(*) FROM message_nodes "
+            "WHERE session_id IN ({}) GROUP BY session_id".format(placeholders),
+            raw_ids,
+        ):
+            out[str(row[0] or "").strip()] = [int(row[1] or 0), int(row[2] or 0)]
     except sqlite3.Error:
         pass
+    return out
+
+
+def _devin_cli_row_fields_for_session(con, raw_id, prev):
+    """Recompute the derived list fields for ONE changed session.
+
+    Every query here is scoped to ``session_id = ?`` and bounded:
+      - first message: prompt_history, else a head walk over rows not yet
+        scanned (``row_id > first_scanned_row_id``) — immutable once found.
+      - latest model / text / context tokens: one lazy tail walk
+        (``ORDER BY row_id DESC``), stops at the first assistant row.
+      - ship flags: incremental LIKE scan over ``row_id > ship_row_id``,
+        OR-ed into the previous flags.
+      - subagent meta: the per-session tool_call_state query.
+    ``prev`` is the previous memo entry (or {}); the result is the new one
+    minus ``ver``, which the caller stamps."""
+    prev = prev if isinstance(prev, dict) else {}
+    out = {
+        "first_message": str(prev.get("first_message") or ""),
+        "first_scanned_row_id": int(prev.get("first_scanned_row_id") or 0),
+        "model": "",
+        "last_assistant_text": "",
+        "latest_input_tokens": 0,
+        "ship": dict(prev.get("ship") or {}),
+        "ship_row_id": int(prev.get("ship_row_id") or 0),
+        "subagent": None,
+    }
+    qstart = time.perf_counter()
+
+    # --- first message (immutable once found) ---
+    if not out["first_message"]:
+        hist = _devin_cli_first_prompts_from_history(con, [raw_id])
+        text = str(hist.get(raw_id) or "").strip()
+        if text:
+            out["first_message"] = text
+    if not out["first_message"]:
+        try:
+            cur = con.execute(
+                "SELECT row_id, chat_message FROM message_nodes "
+                "WHERE session_id = ? AND row_id > ? ORDER BY row_id ASC",
+                (raw_id, out["first_scanned_row_id"]),
+            )
+            for row in cur:
+                out["first_scanned_row_id"] = max(out["first_scanned_row_id"], int(row[0] or 0))
+                try:
+                    msg = json.loads(row[1])
+                except (ValueError, TypeError):
+                    continue
+                if not isinstance(msg, dict):
+                    continue
+                if str(msg.get("role") or "").strip().lower() != "user":
+                    continue
+                if not (msg.get("metadata") or {}).get("is_user_input"):
+                    continue
+                text = str(msg.get("content") or "").strip()
+                if text:
+                    out["first_message"] = text
+                    break
+        except sqlite3.Error:
+            pass
+
+    # --- latest assistant row: model, text, context window ---
+    max_row_id = 0
+    try:
+        cur = con.execute(
+            "SELECT row_id, chat_message FROM message_nodes WHERE session_id = ? "
+            "ORDER BY row_id DESC LIMIT ?",
+            (raw_id, _DEVIN_CLI_TAIL_WALK_MAX_ROWS),
+        )
+        for row in cur:
+            max_row_id = max(max_row_id, int(row[0] or 0))
+            try:
+                msg = json.loads(row[1])
+            except (ValueError, TypeError):
+                continue
+            if not isinstance(msg, dict) or str(msg.get("role") or "").lower() != "assistant":
+                continue
+            meta = msg.get("metadata") or {}
+            if not isinstance(meta, dict):
+                meta = {}
+            gm = meta.get("generation_model")
+            if gm:
+                out["model"] = str(gm)
+            out["last_assistant_text"] = str(msg.get("content") or "").strip()[:2000]
+            metrics = meta.get("metrics") or {}
+            if isinstance(metrics, dict):
+                try:
+                    window = (
+                        int(metrics.get("input_tokens") or 0)
+                        + int(metrics.get("cache_read_tokens") or 0)
+                        + int(metrics.get("cache_creation_tokens") or 0)
+                    )
+                except (TypeError, ValueError):
+                    window = 0
+                if window:
+                    out["latest_input_tokens"] = window
+            break
+    except sqlite3.Error:
+        pass
+
+    # --- ship flags, incremental over rows not yet scanned ---
+    try:
+        row = con.execute(
+            "SELECT MAX(row_id),"
+            "  MAX(CASE WHEN chat_message LIKE '%git%commit%' THEN 1 ELSE 0 END),"
+            "  MAX(CASE WHEN chat_message LIKE '%git%push%' THEN 1 ELSE 0 END),"
+            "  MAX(CASE WHEN chat_message LIKE '%gh%pr%create%' THEN 1 ELSE 0 END)"
+            " FROM message_nodes"
+            " WHERE session_id = ? AND row_id > ?"
+            "   AND (json_extract(chat_message, '$.role') = 'assistant' OR"
+            "        json_extract(chat_message, '$.role') = 'tool')",
+            (raw_id, out["ship_row_id"]),
+        ).fetchone()
+        if row is not None:
+            ship = out["ship"]
+            ship["has_commit"] = bool(ship.get("has_commit")) or bool(row[1])
+            ship["has_push"] = bool(ship.get("has_push")) or bool(row[2])
+            ship["has_pr"] = bool(ship.get("has_pr")) or bool(row[3])
+            out["ship_row_id"] = max(out["ship_row_id"], int(row[0] or 0), max_row_id)
+    except sqlite3.Error:
+        pass
+
+    # --- subagents ---
+    out["subagent"] = _devin_cli_subagent_meta_for_raw_ids(con, [raw_id]).get(raw_id)
+
     _devin_cli_profile_log(
-        "last_assistant_text_for_raw_ids",
+        "row_fields_for_session",
         time.perf_counter() - qstart,
-        f"raw_ids={len(raw_ids)} found={len(out)}",
+        f"sid={raw_id}",
     )
     return out
 
 
-def _devin_cli_ship_flags_for_raw_ids(con, raw_ids):
-    """{raw_id: {'has_commit': bool, 'has_push': bool, 'has_pr': bool}}.
+def _devin_cli_row_fields_memoized(con, rows):
+    """{raw_id: fields} for every row, re-querying only changed sessions.
 
-    A cheap, single-pass LIKE scan of all messages in the session set.
-    """
-    if not raw_ids or con is None:
+    Version = [sessions.last_activity_at, max(message_nodes.row_id), count].
+    last_activity_at alone is not enough (observed: 1 of 42 sessions had
+    message rows newer than it), hence the message_nodes pair."""
+    if not rows:
         return {}
-    placeholders = ",".join("?" * len(raw_ids))
+    raw_ids = [r["_raw_id"] for r in rows]
+    versions = _devin_cli_session_versions(con, raw_ids)
     out = {}
-    qstart = time.perf_counter()
-    try:
-        query = (
-            "SELECT session_id,"
-            "  MAX(CASE WHEN chat_message LIKE '%git%commit%' THEN 1 ELSE 0 END) AS has_commit,"
-            "  MAX(CASE WHEN chat_message LIKE '%git%push%' THEN 1 ELSE 0 END) AS has_push,"
-            "  MAX(CASE WHEN chat_message LIKE '%gh%pr%create%' THEN 1 ELSE 0 END) AS has_pr"
-            " FROM message_nodes"
-            " WHERE session_id IN ({})"
-            "   AND (json_extract(chat_message, '$.role') = 'assistant' OR"
-            "        json_extract(chat_message, '$.role') = 'tool')"
-            " GROUP BY session_id"
-        ).format(placeholders)
-        for row in con.execute(query, raw_ids):
-            sid = str(row["session_id"] or "").strip()
-            out[sid] = {
-                "has_commit": bool(row["has_commit"]),
-                "has_push": bool(row["has_push"]),
-                "has_pr": bool(row["has_pr"]),
-            }
-    except sqlite3.Error:
-        pass
+    hits = 0
+    misses = 0
+    dirty = False
+    with _DEVIN_CLI_ROW_MEMO_LOCK:
+        _devin_cli_row_memo_load_locked()
+        for r in rows:
+            raw_id = r["_raw_id"]
+            mv = versions.get(raw_id) or [0, 0]
+            ver = [r.get("_last_activity_raw"), mv[0], mv[1]]
+            prev = _DEVIN_CLI_ROW_MEMO.get(raw_id)
+            if isinstance(prev, dict) and prev.get("ver") == ver:
+                out[raw_id] = prev
+                hits += 1
+                continue
+            misses += 1
+            fields = _devin_cli_row_fields_for_session(con, raw_id, prev)
+            fields["ver"] = ver
+            _DEVIN_CLI_ROW_MEMO[raw_id] = fields
+            out[raw_id] = fields
+            dirty = True
+        # Drop sessions that no longer exist so the file doesn't grow forever.
+        live = set(raw_ids)
+        stale = [k for k in _DEVIN_CLI_ROW_MEMO if k not in live]
+        if stale and len(_DEVIN_CLI_ROW_MEMO) > 4 * max(1, len(live)):
+            for k in stale:
+                _DEVIN_CLI_ROW_MEMO.pop(k, None)
+            dirty = True
+        if dirty:
+            _devin_cli_row_memo_save_locked()
     _devin_cli_profile_log(
-        "ship_flags_for_raw_ids",
-        time.perf_counter() - qstart,
-        f"raw_ids={len(raw_ids)} found={len(out)}",
+        "row_fields_memoized", 0.0, f"hits={hits} misses={misses}",
     )
     return out
 
@@ -1390,6 +1517,29 @@ def find_devin_cli_conversations(
 ):
     """Discover local Devin CLI sessions from the SQLite DB.
 
+    Serialised: after one DB write, every concurrent sidebar poll would
+    otherwise rebuild in parallel; under the lock the first rebuilds and the
+    rest hit the refreshed cache. See ``_find_devin_cli_conversations_locked``.
+    """
+    with _DEVIN_CLI_LIST_REBUILD_LOCK:
+        return _find_devin_cli_conversations_locked(
+            repo_path=repo_path,
+            include_old=include_old,
+            repo_only=repo_only,
+            progress=progress,
+            limit=limit,
+        )
+
+
+def _find_devin_cli_conversations_locked(
+    repo_path=None,
+    include_old=False,
+    repo_only=False,
+    progress=None,
+    limit=None,
+):
+    """Discover local Devin CLI sessions from the SQLite DB.
+
     Sessions are repo-scoped (each has a working_directory). When repo_path is
     given, only sessions in that repo (or a subdirectory of it) are returned.
     No DB (or any API failure) → [].
@@ -1535,6 +1685,7 @@ def find_devin_cli_conversations(
             rows.append({
                 "_raw_id": raw_id,
                 "_title": title,
+                "_last_activity_raw": row["last_activity_at"],
                 "id": sid,
                 "session_id": sid,
                 "source": "devin-cli",
@@ -1605,31 +1756,19 @@ def find_devin_cli_conversations(
             f"scanned={total_sessions_scanned} kept={len(rows)}",
         )
 
-        # Batch the first-message lookup instead of issuing one query per
-        # session. The helper uses SQLite's bare-column-in-aggregate behavior
-        # to return the content from the row that achieved MIN(timestamp).
         fmstart = time.perf_counter()
         if rows:
-            raw_ids = [r["_raw_id"] for r in rows]
-            first_prompts = _devin_cli_first_prompts_from_history(con, raw_ids)
-            missing_ids = [rid for rid in raw_ids if rid not in first_prompts]
-            first_messages = _devin_cli_first_messages_from_nodes(con, missing_ids)
-            latest_models = _devin_cli_latest_models_for_raw_ids(con, raw_ids)
-            context_usage = _devin_cli_context_usage_for_raw_ids(con, raw_ids)
-            subagent_meta = _devin_cli_subagent_meta_for_raw_ids(con, raw_ids)
-            last_assistant_texts = _devin_cli_last_assistant_text_for_raw_ids(con, raw_ids)
-            ship_flags = _devin_cli_ship_flags_for_raw_ids(con, raw_ids)
+            fields_by_id = _devin_cli_row_fields_memoized(con, rows)
             for r in rows:
                 raw_id = r.pop("_raw_id", "")
                 title = r.pop("_title", "")
+                r.pop("_last_activity_raw", None)
                 sid = r["session_id"]
-                if raw_id in context_usage:
-                    r["latest_input_tokens"] = context_usage[raw_id]
-                first_message = (
-                    first_prompts.get(raw_id, "") or first_messages.get(raw_id, "")
-                )
+                fields = fields_by_id.get(raw_id) or {}
+                if fields.get("latest_input_tokens"):
+                    r["latest_input_tokens"] = int(fields["latest_input_tokens"])
                 first_message = _core._strip_ccc_session_state_instruction(
-                    first_message
+                    str(fields.get("first_message") or "")
                 ).strip()
                 display_name = (
                     name_overrides.get(sid)
@@ -1642,10 +1781,10 @@ def find_devin_cli_conversations(
                 r["last_prompt"] = first_message[:200]
                 r["last_assistant_text"] = (
                     _core._strip_ccc_session_state_instruction(
-                        last_assistant_texts.get(raw_id, "")
+                        str(fields.get("last_assistant_text") or "")
                     ).strip()[:2000]
                 )
-                flags = ship_flags.get(raw_id, {})
+                flags = fields.get("ship") or {}
                 r["has_commit"] = bool(flags.get("has_commit"))
                 r["has_push"] = bool(flags.get("has_push"))
                 r["has_pr"] = bool(flags.get("has_pr"))
@@ -1656,17 +1795,16 @@ def find_devin_cli_conversations(
                 if r["has_pr"]:
                     r["tail_pr_number"] = 1
                 if not r.get("model"):
-                    r["model"] = latest_models.get(raw_id, "")
-                sm = subagent_meta.get(raw_id)
+                    r["model"] = str(fields.get("model") or "")
+                sm = fields.get("subagent")
                 if sm:
                     r["subagent_count"] = sm["subagent_count"]
                     r["subagent_in_flight_count"] = sm["subagent_in_flight_count"]
                     r["subagent_recent"] = sm["subagent_recent"]
         _devin_cli_profile_log(
-            "find_devin_cli_first_messages",
+            "find_devin_cli_row_fields",
             time.perf_counter() - fmstart,
-            f"prompts={len(first_prompts)} fallback={len(first_messages)} "
-            f"missing={len(missing_ids)}",
+            f"rows={len(rows)}",
         )
     except sqlite3.Error:
         pass
@@ -1886,66 +2024,6 @@ DEVIN_CLI_CONTEXT_LIMIT = 200_000
 # rows interleave, so 1 is not always enough (a dangling tool call or a
 # not-yet-answered user turn can be the literal last row); 8 comfortably
 # covers a normal turn's node count without pulling meaningful data volume.
-_DEVIN_CLI_CONTEXT_TAIL_ROWS = 8
-
-
-def _devin_cli_context_usage_for_raw_ids(con, raw_ids):
-    """{raw_id: latest_input_tokens} for the archive/list build — ALL rows,
-    not just the live session.
-
-    `_extract_devin_cli_usage`'s single-session query (SELECT ... WHERE
-    session_id = ? ORDER BY node_id, scanning every row) is fine for the one
-    open session a user is looking at, but Devin CLI's sessions.db stores
-    full turn content inline (observed: multi-GB across a few thousand rows)
-    — a batched version of that same full-history query across every
-    archived session turned a ~40s cold archive build into one that never
-    finished (it re-parses gigabytes of chat JSON per poll).
-
-    This instead asks SQLite for only the last `_DEVIN_CLI_CONTEXT_TAIL_ROWS`
-    node_ids per session (`ORDER BY node_id DESC LIMIT N`, one query per raw
-    id, cheap: node_id is the natural insertion order and this never touches
-    the bulk of the table). Only those handful of rows' chat_message blobs
-    are read and parsed — micro-benchmarked at <50ms across the full local
-    DB, vs. minutes for the whole-table window-function approach."""
-    if not raw_ids or con is None:
-        return {}
-    out = {}
-    qstart = time.perf_counter()
-    for raw_id in raw_ids:
-        try:
-            cur = con.execute(
-                "SELECT chat_message FROM message_nodes WHERE session_id = ? "
-                "ORDER BY node_id DESC LIMIT ?",
-                (raw_id, _DEVIN_CLI_CONTEXT_TAIL_ROWS),
-            )
-            for row in cur:
-                try:
-                    msg = json.loads(row["chat_message"])
-                except (ValueError, TypeError):
-                    continue
-                if not isinstance(msg, dict) or str(msg.get("role") or "").lower() != "assistant":
-                    continue
-                metrics = (msg.get("metadata") or {}).get("metrics") or {}
-                if not isinstance(metrics, dict):
-                    continue
-                window = (
-                    int(metrics.get("input_tokens") or 0)
-                    + int(metrics.get("cache_read_tokens") or 0)
-                    + int(metrics.get("cache_creation_tokens") or 0)
-                )
-                if window:
-                    out[raw_id] = window
-                break
-        except sqlite3.Error:
-            continue
-    _devin_cli_profile_log(
-        "context_usage_for_raw_ids",
-        time.perf_counter() - qstart,
-        f"raw_ids={len(raw_ids)} found={len(out)}",
-    )
-    return out
-
-
 def _extract_devin_cli_usage(session_id):
     """Token usage for a Devin CLI session, read from the SQLite DB.
 
