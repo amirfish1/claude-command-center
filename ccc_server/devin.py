@@ -1117,6 +1117,16 @@ def _devin_cli_subagent_meta_for_raw_ids(con, raw_ids):
 
 
 def _devin_cli_row_memo_path():
+    """Memo file for the per-session list fields.
+
+    Lives in the CCC state dir for the real DB. When ``CCC_DEVIN_DB`` points
+    at another DB (test fixtures), the memo sits beside that DB instead: the
+    entries describe one specific DB, and a fixture run must never clobber
+    the real memo (observed: two 1-row test fixtures overwrote the 45-row
+    production memo, and the next dashboard build went fully cold)."""
+    if os.environ.get("CCC_DEVIN_DB"):
+        db = _devin_cli_db_path()
+        return Path(str(db) + ".ccc-row-memo.json")
     return _core.COMMAND_CENTER_STATE_DIR / "devin_cli_row_memo.json"
 
 
