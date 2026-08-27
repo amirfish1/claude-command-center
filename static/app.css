@@ -14350,6 +14350,15 @@
        .mobile-actions-wrap{display:none} base rule later in this file —
        same specificity, later source order would otherwise win. */
     #convToolbar .mobile-actions-wrap { display: inline-flex; margin-left: 8px; order: 100; }
+    /* .toolbar (base rule) never sets position, so #convToolbar has no
+       stacking context of its own — the dropdown's z-index:40 only ranks
+       against whatever ancestor context it inherits, not guaranteed to beat
+       the conversation pane painted after it. Worked in desktop Chrome
+       testing but reported opening BEHIND the transcript on real iOS
+       Safari (mobile compositing/stacking quirk on the scroll container).
+       Give the toolbar its own raised stacking context so the dropdown is
+       unconditionally on top regardless of what's happening below it. */
+    #convToolbar { position: relative; z-index: 30; }
     button.mobile-actions-btn {
       display: inline-flex;
       align-items: center;
