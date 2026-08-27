@@ -55104,15 +55104,29 @@
   // running, and the row says idle, never ended) -- for the map that is
   // landed: its report has already gone back to the orchestrator. A
   // follow-up inject flips it back to working and the node glides back up.
-  function orchLaneStatus(row, spawn) {
+  // A lane is Landed only on evidence: its process is gone (registry says
+  // so), or its row has ended a turn. Absence of evidence is not landing.
+  // /api/sessions/children entries carry no running flag at all, and a
+  // fresh row can read idle for a beat before the hooks mark it working;
+  // both used to retire a lane seconds after it was spawned.
+  const ORCH_BOOT_GRACE_S = 45;
+  function orchSpawnExited(spawn) {
+    if (!spawn) return false;
+    if (spawn.running === false) return true;
+    if (spawn.exit_code !== undefined && spawn.exit_code !== null) return true;
+    return /^(exited|done|finished|stopped|killed|failed)$/i.test(String(spawn.status || ''));
+  }
+  function orchLaneStatus(row, spawn, born) {
     if (row) {
       if (row.question_waiting || row.needs_approval) return 'waiting';
       if (row.state === 'working' || row.sidecar_in_flight) return 'working';
+      const age = born ? Date.now() / 1000 - born : Infinity;
+      if (age < ORCH_BOOT_GRACE_S && !orchSpawnExited(spawn)) return 'working';   // booting: hooks not yet reporting
       return 'done';
     }
     // Registry-only (row not in the list yet): a just-born lane is working
     // until its transcript shows up and the row takes over.
-    if (spawn) return spawn.running || spawn.status === 'running' ? 'working' : 'done';
+    if (spawn) return orchSpawnExited(spawn) ? 'done' : 'working';
     return 'idle';
   }
   // Lane label: a user rename wins, then the spawn-time name (what the
@@ -55125,13 +55139,14 @@
   }
   function orchLane(row, spawn) {
     const sid = (row && row.session_id) || (spawn && spawn.session_id) || '';
+    const born = orchParseSpawnedAt(spawn && spawn.spawned_at) || orchParseSpawnedAt(row && row.timestamp) || orchLaneMetaGet(sid).born || 0;
     return {
       id: sid,
       convId: (row && row.id) || sid,
       name: orchLaneName(row, spawn, sid),
       engine: (row && row.engine) || (spawn && spawn.engine) || 'claude',
       model: (row && row.model) || (spawn && spawn.model) || '',
-      status: orchLaneStatus(row, spawn),
+      status: orchLaneStatus(row, spawn, born),
       // List rows carry `modified` (epoch seconds); detail rows `mtime`.
       mtime: Number((row && (row.modified || row.mtime)) || 0),
       // Replay timeline (epoch seconds): when the lane was spawned and
@@ -55139,7 +55154,7 @@
       // registry is pruned once a lane's process exits, so a lane meta
       // cache (written whenever the registry did know the lane) keeps
       // spawned_at for later replays.
-      born: orchParseSpawnedAt(spawn && spawn.spawned_at) || orchParseSpawnedAt(row && row.timestamp) || orchLaneMetaGet(sid).born || 0,
+      born,
       landedAt: Number((row && (row.modified || row.mtime)) || 0),
     };
   }
@@ -55724,7 +55739,11 @@
     const clock = orchReplayClock();
     const lanes = orchCollectLanes(sid);
     const rows = (conversationsData || []).filter(r => r && r.session_id && lanes.some(l => l.id === r.session_id));
-    lanes.forEach(l => { l.spawnTs = l.born || orchSpawnTimeFor(l.id); });
+    lanes.forEach(l => {
+      l.spawnTs = l.born || orchSpawnTimeFor(l.id);
+      const r = (conversationsData || []).find(x => x && x.session_id === l.id);
+      l.rowState = r ? { state: r.state, sidecar: r.sidecar_in_flight, q: r.question_waiting, appr: r.needs_approval, modified: r.modified, engine: r.engine } : null;
+    });
     return { sid, clock, lanes, at: clock !== null ? orchLanesAt(lanes, clock) : null, registry: _orchSpawnedRegistry.length,
       rowKeys: rows.length ? Object.keys(rows[0]).filter(k => /time|ts$|modified|created|start/i.test(k)) : [], rowSample: rows[0] ? { mtime: rows[0].mtime, modified: rows[0].modified, timestamp: rows[0].timestamp } : null };
   };
