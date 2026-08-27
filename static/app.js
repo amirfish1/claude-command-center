@@ -43959,13 +43959,14 @@
       const model = fields.model.value === '__custom__' ? fields.customModel.value : fields.model.value;
       const payload = { queue: fields.queue.value, workers: fields.workers.value, backend: fields.backend.value, engine: fields.engine.value, repo_path: fields.path.value, model, effort: fields.effort.value, auto_drain: fields.drain.checked, claim_types, github_repo: fields.repo.value, github_assignee: fields.assignee.value };
       save.disabled = true;
+      save.classList.add('is-saving');
       try {
         const res = await fetch('/api/queue/config', { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(payload) });
         const data = await res.json().catch(() => ({}));
         if (!res.ok || !data.ok) throw new Error(data.error || res.status);
         showOpToast('Saved ' + data.queue + ' queue configuration', 'success');
         _uxqHealthCache.ts = 0; _uxqItemsCache.ts = 0; close(); _renderQueuePanel();
-      } catch (e) { showOpToast('Could not save queue: ' + e.message, 'error'); save.disabled = false; }
+      } catch (e) { showOpToast('Could not save queue: ' + e.message, 'error'); save.disabled = false; save.classList.remove('is-saving'); }
     });
     requestAnimationFrame(() => fields.queue.focus());
   }
