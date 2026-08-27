@@ -1273,7 +1273,11 @@ def _wt_queue_brief_generate(queue):
         # timeout, non-zero exit) are environmental and retry wouldn't help.
         for attempt in (1, 2):
             proc = subprocess.run(
-                [claude_bin["bin"], "-p", "--model", _QUEUE_BRIEF_MODEL, prompt],
+                [
+                    claude_bin["bin"], "-p", "--model", _QUEUE_BRIEF_MODEL,
+                    "--strict-mcp-config", "--mcp-config", "{}",  # skip user MCP servers -- pure text-in/text-out
+                    prompt,
+                ],
                 capture_output=True, text=True, timeout=180,
                 cwd=str(_SCRATCH_DIR),  # keep throwaway JSONLs out of repo scans
             )
@@ -18921,7 +18925,11 @@ def _summarize_title_text(first_msg, validate=False):
         return result
     try:
         proc = subprocess.run(
-            [claude_bin["bin"], "-p", "--model", "claude-haiku-4-5-20251001", instruction],
+            [
+                claude_bin["bin"], "-p", "--model", "claude-haiku-4-5-20251001",
+                "--strict-mcp-config", "--mcp-config", "{}",  # skip user MCP servers -- pure text-in/text-out
+                instruction,
+            ],
             capture_output=True,
             text=True,
             timeout=45,
