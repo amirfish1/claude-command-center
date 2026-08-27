@@ -46966,15 +46966,9 @@ def resume_session_devin(session_id, text):
                     # plus tool calls can run for minutes). Say so: the
                     # UI otherwise shows a bare "sending" for that whole time.
                     running_s = None
-                    try:
-                        started = str(s.get("spawned_at") or "")
-                        if started:
-                            running_s = int(
-                                time.time()
-                                - time.mktime(time.strptime(started, "%Y%m%dT%H%M%S"))
-                            )
-                    except (ValueError, OverflowError):
-                        running_s = None
+                    started_epoch = _spawn_registry_entry_epoch(s)
+                    if started_epoch > 0:
+                        running_s = max(0, int(time.time() - started_epoch))
                     reason = (
                         "Devin is still working on the previous turn"
                         + (f" ({running_s}s so far)" if running_s is not None else "")
