@@ -10950,10 +10950,18 @@ def _archive_corpus_signature_parts():
         _copilot_home() / "session-state",
         _grok_home() / "sessions",
         _grok_home() / "grok.db",
-        # Devin has no local store; its on-disk API cache file only rewrites
-        # when the session list actually changes, so its mtime is exactly the
-        # add/remove signal the archive needs.
+        # Devin cloud has no local store; its on-disk API cache file only
+        # rewrites when the session list actually changes, so its mtime is
+        # exactly the add/remove signal the archive needs.
         _devin_sessions_cache_path(),
+        # Devin CLI: NOT sessions.db / its WAL (both flip on every streamed
+        # token, which would force a full archive rebuild per poll while a
+        # session runs). The CLI creates one lock file per session at start
+        # and removes it at exit, so the lock dir's mtime is the add/remove
+        # signal. Without this a freshly spawned Devin CLI session only
+        # landed in the sidebar when some OTHER engine's corpus happened to
+        # change.
+        DEVIN_CLI_LOCKS_DIR,
     ]:
         try:
             mt = os.stat(extra).st_mtime_ns
@@ -35332,6 +35340,20 @@ def _session_landed(session_id):
                 return {"ok": True, "landed": True, "known": True, "engine": harness}
     except OSError:
         pass
+    # Devin CLI: the CLI drops a lock file at session start and inserts the
+    # sessions row at about the same time. Lock check is a stat(); the id-set
+    # fallback is a cached 40-row query. Without this branch the post-spawn
+    # chase never saw a Devin session "land", so it never forced the archive
+    # refresh and the placeholder sat on "Thinking..." until the 5-minute
+    # stale serve window rolled over.
+    if _is_devin_cli_session(sid):
+        raw_id = _devin_cli_raw_id(sid)
+        try:
+            if _devin_cli_lock_pid(raw_id) or raw_id in _devin_cli_session_ids():
+                return {"ok": True, "landed": True, "known": True, "engine": "devin"}
+        except Exception:
+            pass
+        return {"ok": True, "landed": False, "known": True, "engine": "devin"}
     # known=False means "this probe cannot answer for this id" (an engine that
     # stores sessions somewhere neither branch reads). The client keeps its
     # periodic full refresh in that case rather than trusting a false negative.
