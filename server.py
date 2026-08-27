@@ -56412,8 +56412,8 @@ def _compact_session_context_impl(session_id, *, terminal_app=None, _from_termin
 
     backup_path = _backup_jsonl_before_compact(sid)
     # Standard wake path first: resume headlessly the same way any other send
-    # would, sending /compact as the first stream-json message (CCC-XXX — one
-    # wake path instead of hidden-pty TUI driving a second, fragile one).
+    # would, sending /compact as the first stream-json message: one wake path
+    # instead of a second, fragile one that drives the TUI through a hidden pty.
     resumed = _compact_via_resume_spawn(sid, cwd)
     if resumed.get("ok"):
         return _compact_result(resumed, backup_path)
