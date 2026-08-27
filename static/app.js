@@ -31144,6 +31144,18 @@
     const _sessionProvenanceParentId = (row) => String(
       (row && (row.parent_session_id || row.hermes_parent_session_id || row.hermes_continued_from)) || ''
     ).trim();
+    // Reverse index of the chip above: how many rows point AT this session as
+    // their parent. Lets a root/orchestrator row carry its own "N lanes"
+    // badge instead of that story only being visible by opening each child
+    // and reading its "Spawned by" chip. Built from whatever rows are loaded
+    // in this render (active + archived), so an orchestrator with children
+    // outside the current archive window will undercount until that window
+    // is widened — same limitation the chip above already has.
+    const _sessionChildCountById = new Map();
+    _sessionProvenanceById.forEach((row) => {
+      const pid = _sessionProvenanceParentId(row);
+      if (pid) _sessionChildCountById.set(pid, (_sessionChildCountById.get(pid) || 0) + 1);
+    });
     const _sessionProvenanceChipHtml = (c) => {
       if (!c || c.source === 'backlog' || c.source === 'github_pr' || c.backlog_type === 'github') return '';
       const parentId = _sessionProvenanceParentId(c);
@@ -31962,6 +31974,16 @@
         ? '<span class="conv-wt-badge" title="Worktree: wt-' + escapeAttr(c.worktree_label) + '">wt-' + escapeHtml(c.worktree_label) + '</span>'
         : '';
 
+      // Orchestration badge — this row spawned other sessions (CCC
+      // orchestration lanes). Skipped when subagentClusterMeta is already
+      // set: that live cluster disclosure shows the same "N agents" count
+      // plus active/attention state, so both would be redundant.
+      const _orchChildCount = subagentClusterMeta ? 0 : (_sessionChildCountById.get(String(c.session_id || c.id || '')) || 0);
+      const orchChildBadgeHtml = _orchChildCount > 0
+        ? '<span class="conv-orch-badge" title="Spawned ' + _orchChildCount + ' child session' + (_orchChildCount === 1 ? '' : 's') + '">'
+          + _orchChildCount + (_orchChildCount === 1 ? ' lane' : ' lanes') + '</span>'
+        : '';
+
       // Pin indicator — shown when the row's repo bucket has been
       // overridden by the user. Click unpins via /api/repo/pin.
       const pinnedHtml = c.pinned_repo
@@ -32320,7 +32342,7 @@
         const _mStatus = deriveMobileRowStatus(c, _isAgentRunning, _isWaitingForUser, _hasStaleToolCall, _knownActivityTool);
         mobileStatusHtml = mobileCardStatusLineHtml(_mStatus);
         const _detailInner = rowMetaHtml + hoverMetaRowHtml + cooStatusHtml + cooEscalatedHtml
-          + historyBadgeHtml + repoBadgeHtml + pctBadgeHtml + qcBadgeHtml
+          + historyBadgeHtml + repoBadgeHtml + orchChildBadgeHtml + pctBadgeHtml + qcBadgeHtml
           + (opts.evergreenAgent ? '' : evergreenGoalHtml)
           + (goalIconOnly ? goalIconHtml : '');
         if (_detailInner) {
@@ -32342,6 +32364,7 @@
             + '<div class="conv-title ' + titleClass + '" data-role="title" aria-label="' + escapeAttr(title) + '">' + escapeHtml(title) + '</div>'
             + continuationChipsHtml
             + subagentClusterDisclosureHtml
+            + orchChildBadgeHtml
             + (goalIconOnly ? goalIconHtml : '')
             + (opts.evergreenAgent ? '' : evergreenGoalHtml)
             + (opts.evergreenAgent ? '' : uxFixesQueueProgressHtml)

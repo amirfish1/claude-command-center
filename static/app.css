@@ -5109,6 +5109,16 @@
     max-width: 120px; overflow: hidden; text-overflow: ellipsis;
     white-space: nowrap;
   }
+  /* Orchestration badge: this row spawned N child sessions (lanes). */
+  .conv-orch-badge {
+    display: inline-block; margin-left: 6px; padding: 1px 5px;
+    font-size: 9px; font-weight: 500; line-height: 1.4;
+    color: rgba(190, 140, 255, 0.95);
+    background: rgba(190, 140, 255, 0.12);
+    border: 1px solid rgba(190, 140, 255, 0.35);
+    border-radius: 3px; letter-spacing: 0.03em;
+    vertical-align: middle;
+  }
   .conv-qc-badge {
     display: inline-flex; align-items: center; flex: 0 0 auto;
     margin-right: 4px; padding: 1px 4px; line-height: 1.4;
