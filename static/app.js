@@ -55022,13 +55022,19 @@
   }
 
   // ── Lane map data ────────────────────────────────────────────────────
+  // A lane is "working" while it is inside a turn. A headless lane keeps
+  // its process alive after it answers (so the registry still says
+  // running, and the row says idle, never ended) -- for the map that is
+  // landed: its report has already gone back to the orchestrator. A
+  // follow-up inject flips it back to working and the node glides back up.
   function orchLaneStatus(row, spawn) {
     if (row) {
       if (row.question_waiting || row.needs_approval) return 'waiting';
       if (row.state === 'working' || row.sidecar_in_flight) return 'working';
-      if (row.state === 'ended') return 'done';
-      return 'idle';
+      return 'done';
     }
+    // Registry-only (row not in the list yet): a just-born lane is working
+    // until its transcript shows up and the row takes over.
     if (spawn) return spawn.running || spawn.status === 'running' ? 'working' : 'done';
     return 'idle';
   }
