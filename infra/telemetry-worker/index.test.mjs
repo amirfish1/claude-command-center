@@ -61,9 +61,11 @@ test("download click remains opaque when D1 fails", async () => {
 
 
 test("stats exposes aggregate clicks without event rows", async () => {
+  const queries = [];
   const env = {
     DB: {
       prepare(sql) {
+        queries.push(sql);
         return {
           first: async () => ({
             total_opens: 3,
@@ -93,6 +95,7 @@ test("stats exposes aggregate clicks without event rows", async () => {
     { day: "2026-07-15", download_clicks: 4 },
   ]);
   assert.equal(payload.downloads, undefined);
+  assert.equal(queries.filter(sql => /GROUP BY day ORDER BY day DESC LIMIT 90/.test(sql)).length, 3);
 });
 
 test("an unknown engine name never rejects the ping", async () => {
