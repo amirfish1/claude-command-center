@@ -48206,7 +48206,14 @@
         || displayModel.toLowerCase().includes('[1m]')
       );
       const shortModel = displayModel.replace(/^claude-/, '').replace(/\[1m\]/i, '').trim();
-      const modelTip = (isSyntheticModel
+      // Non-Claude engines route through their own vendor model ladders
+      // (e.g. Devin's "gpt-5-6-sol-low"), which reads as unrelated to the
+      // engine actually running the session. Name the engine in the
+      // tooltip so hovering explains the mismatch (CCC-987).
+      const engineTipPrefix = (!isSyntheticModel && engine !== 'claude')
+        ? spawnEngineLabel(engine) + ': '
+        : '';
+      const modelTip = engineTipPrefix + (isSyntheticModel
           ? engine + ' (model unknown - latest event was synthesized by the client; the next real turn will populate this)'
           : displayModel)
         + (isOneM ? '\n(1M context window - anthropic-beta: context-1m)' : '')
