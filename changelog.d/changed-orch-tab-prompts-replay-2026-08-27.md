@@ -1,1 +1,0 @@
-- Orchestration tab: playbook prompts tightened to 7 words max, lane map is shorter with wider row spacing, and the conversation Replay button now lives in the Lane map header next to Preview.
