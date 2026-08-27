@@ -1184,21 +1184,30 @@ def _devin_cli_row_memo_save_locked():
 
 
 def _devin_cli_session_versions(con, raw_ids):
-    """{raw_id: [max_row_id, row_count]} from message_nodes.
+    """{raw_id: [max_row_id, row_count, max_created_at]} from message_nodes.
 
     A covering-index GROUP BY (idx_message_nodes_session carries the rowid),
-    so it never reads the chat_message blobs — ~50 ms across a 3.7 GB DB."""
+    so it never reads the chat_message blobs — ~50 ms across a 3.7 GB DB.
+    ``max_created_at`` doubles as the row's freshness signal: sessions.
+    last_activity_at can lag the newest message row (observed: 1 of 42
+    sessions had message rows newer than it), so the caller takes
+    max(last_activity_at, max_created_at) instead of trusting the column
+    alone (CCC-992: a row read "3h" for a session active 46 min ago)."""
     if not raw_ids or con is None:
         return {}
     out = {}
     placeholders = ",".join("?" * len(raw_ids))
     try:
         for row in con.execute(
-            "SELECT session_id, MAX(row_id), COUNT(*) FROM message_nodes "
-            "WHERE session_id IN ({}) GROUP BY session_id".format(placeholders),
+            "SELECT session_id, MAX(row_id), COUNT(*), MAX(created_at) "
+            "FROM message_nodes WHERE session_id IN ({}) GROUP BY session_id".format(
+                placeholders
+            ),
             raw_ids,
         ):
-            out[str(row[0] or "").strip()] = [int(row[1] or 0), int(row[2] or 0)]
+            out[str(row[0] or "").strip()] = [
+                int(row[1] or 0), int(row[2] or 0), row[3],
+            ]
     except sqlite3.Error:
         pass
     return out
@@ -1446,6 +1455,12 @@ def _devin_cli_row_fields_memoized(con, rows):
             _devin_cli_row_memo_save_locked()
         if deferred:
             _devin_cli_row_memo_background_schedule(deferred)
+    # latest_msg_at isn't part of the cache fingerprint (`ver`), so stamp it
+    # fresh on every call regardless of hit/miss/deferred — cheap, already
+    # queried above for all raw_ids.
+    for raw_id, entry in out.items():
+        if isinstance(entry, dict):
+            entry["latest_msg_at"] = (versions.get(raw_id) or [0, 0, None])[2]
     _devin_cli_profile_log(
         "row_fields_memoized",
         time.perf_counter() - start,
@@ -1971,6 +1986,13 @@ def _find_devin_cli_conversations_locked(
                 r.pop("_last_activity_raw", None)
                 sid = r["session_id"]
                 fields = fields_by_id.get(raw_id) or {}
+                latest_msg_at = _devin_epoch(fields.get("latest_msg_at"))
+                if latest_msg_at > r["modified"]:
+                    r["modified"] = latest_msg_at
+                    r["mtime"] = latest_msg_at
+                    r["modified_human"] = time.strftime(
+                        "%Y-%m-%d %H:%M", time.localtime(latest_msg_at)
+                    )
                 if fields.get("latest_input_tokens"):
                     r["latest_input_tokens"] = int(fields["latest_input_tokens"])
                 first_message = _core._strip_ccc_session_state_instruction(
