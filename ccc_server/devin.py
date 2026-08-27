@@ -117,6 +117,13 @@ _DEVIN_CLI_ROW_MEMO_BG_LOCK = threading.Lock()
 # tool rows then an assistant row; the cap only bounds a pathological run
 # of tool-only rows.
 _DEVIN_CLI_TAIL_WALK_MAX_ROWS = 400
+# Real PR number from a `gh pr create` (or PR URL) mention — the LIKE-based
+# has_pr flag below is a cheap existence check that can false-positive on any
+# message merely containing the words "gh"/"pr"/"create"; only a number match
+# here is trusted enough to become tail_pr_number (CCC-991: a shared
+# placeholder number collided every "has_pr" session onto one dedup key,
+# silently dropping the rest from the sidebar).
+_DEVIN_CLI_PR_NUMBER_RE = re.compile(r"(?:/pull/|\bpr\s*#)(\d+)", re.IGNORECASE)
 
 def _devin_api_key():
     """Personal Devin API key from the environment, or None when unset."""
@@ -1295,6 +1302,7 @@ def _devin_cli_row_fields_for_session(con, raw_id, prev):
         pass
 
     # --- ship flags, incremental over rows not yet scanned ---
+    ship_scan_start = out["ship_row_id"]
     try:
         row = con.execute(
             "SELECT MAX(row_id),"
@@ -1315,6 +1323,26 @@ def _devin_cli_row_fields_for_session(con, raw_id, prev):
             out["ship_row_id"] = max(out["ship_row_id"], int(row[0] or 0), max_row_id)
     except sqlite3.Error:
         pass
+
+    # --- real PR number, same incremental range as the flags above ---
+    # has_pr above is a coarse existence check; only a number match here is
+    # trusted enough to become tail_pr_number (see _DEVIN_CLI_PR_NUMBER_RE).
+    if out["ship"].get("has_pr") and not out["ship"].get("pr_number"):
+        try:
+            for text_row in con.execute(
+                "SELECT chat_message FROM message_nodes"
+                " WHERE session_id = ? AND row_id > ? AND row_id <= ?"
+                "   AND (json_extract(chat_message, '$.role') = 'assistant' OR"
+                "        json_extract(chat_message, '$.role') = 'tool')"
+                "   AND chat_message LIKE '%gh%pr%create%'",
+                (raw_id, ship_scan_start, out["ship_row_id"]),
+            ):
+                m = _DEVIN_CLI_PR_NUMBER_RE.search(str(text_row[0] or ""))
+                if m:
+                    out["ship"]["pr_number"] = int(m.group(1))
+                    break
+        except sqlite3.Error:
+            pass
 
     # --- subagents ---
     out["subagent"] = _devin_cli_subagent_meta_for_raw_ids(con, [raw_id]).get(raw_id)
@@ -1970,8 +1998,9 @@ def _find_devin_cli_conversations_locked(
                     r["last_commit_pos"] = 1
                 if r["has_push"]:
                     r["last_push_pos"] = 1
-                if r["has_pr"]:
-                    r["tail_pr_number"] = 1
+                pr_number = flags.get("pr_number")
+                if pr_number:
+                    r["tail_pr_number"] = int(pr_number)
                 if not r.get("model"):
                     r["model"] = str(fields.get("model") or "")
                 sm = fields.get("subagent")
