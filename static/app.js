@@ -26300,6 +26300,9 @@
         <button type="button" class="gc-replay-speed-btn ${_convReplaySpeed === 1 ? 'is-active' : ''}" data-speed="1">1&#xd7;</button>
         <button type="button" class="gc-replay-speed-btn ${_convReplaySpeed === 2 ? 'is-active' : ''}" data-speed="2">2&#xd7;</button>
         <button type="button" class="gc-replay-speed-btn ${_convReplaySpeed === 4 ? 'is-active' : ''}" data-speed="4">4&#xd7;</button>
+        <button type="button" class="gc-replay-speed-btn ${_convReplaySpeed === 8 ? 'is-active' : ''}" data-speed="8">8&#xd7;</button>
+        <button type="button" class="gc-replay-speed-btn ${_convReplaySpeed === 16 ? 'is-active' : ''}" data-speed="16">16&#xd7;</button>
+        <button type="button" class="gc-replay-speed-btn ${_convReplaySpeed === 32 ? 'is-active' : ''}" data-speed="32">32&#xd7;</button>
       </div>
       <span class="conv-replay-jump">
         <input type="text" class="conv-replay-jump-input" placeholder="L#" inputmode="numeric" autocomplete="off"
