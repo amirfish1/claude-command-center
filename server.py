@@ -47450,6 +47450,54 @@ def spawn_session_devin(prompt, name=None, cwd=None, repo_path=None, worktree=Fa
     )
 
 
+# A one-shot `devin --resume -p` can fail at startup several seconds AFTER
+# spawn — e.g. the CLI's own sessions DB is held by another devin process
+# and its internal busy timeout expires ("Error: session/list failed:
+# database is locked", observed ~7s in). That is past any synchronous
+# early-failure poll, so the send path has already reported success and the
+# follow-up would be silently dropped (OPS-807). The watchdog below waits
+# out a short startup window; a fast non-zero exit with a leading CLI
+# `Error:` line means the turn never started, so the text is requeued for
+# the resume-queue drain to retry instead of being lost. A mid-turn crash
+# (transcript output before any error) never requeues — the prompt may have
+# been consumed and resending it would fork the session.
+_DEVIN_RESUME_WATCHDOG_WINDOW_S = 30.0
+
+
+def _start_devin_resume_watchdog(proc, session_id, text, log_path):
+    def _watch():
+        try:
+            exit_code = proc.wait(timeout=_DEVIN_RESUME_WATCHDOG_WINDOW_S)
+        except Exception:
+            return  # still running past the window: a real turn started
+        if not isinstance(exit_code, int) or exit_code == 0:
+            return
+        try:
+            tail = _antigravity_read_log_tail(log_path, max_bytes=4000)
+        except Exception:
+            tail = ""
+        first_line = next(
+            (ln.strip() for ln in str(tail).splitlines() if ln.strip()), ""
+        )
+        if not first_line.lower().startswith("error:"):
+            return
+        print(
+            f"[devin-resume] startup failure for {session_id} "
+            f"(exit {exit_code}): {first_line[:160]} — requeuing follow-up",
+            flush=True,
+        )
+        with _pending_resume_lock:
+            _pending_resume_queue.setdefault(session_id, []).insert(0, text)
+        _save_pending_inputs()
+        _mark_pending_resume_retry(session_id)
+
+    threading.Thread(
+        target=_watch,
+        daemon=True,
+        name=f"devin-resume-watchdog-{str(session_id)[-12:]}",
+    ).start()
+
+
 def resume_session_devin(session_id, text):
     """Resume a Devin CLI session with a one-shot headless prompt.
 
@@ -47535,6 +47583,11 @@ def resume_session_devin(session_id, text):
     except (FileNotFoundError, OSError) as e:
         log_fh.close()
         return {"ok": False, "error": str(e), "via": "devin-resume"}
+    failure = _spawn_early_failure_payload(
+        proc, log_path, log_fh, engine="devin", via="devin-resume",
+    )
+    if failure:
+        return failure
     entry = {
         "pid": proc.pid,
         "name": f"resume-devin-{raw_id[:12]}",
@@ -47565,6 +47618,7 @@ def resume_session_devin(session_id, text):
         repo_path=repo_for_logs,
         model=model,
     )
+    _start_devin_resume_watchdog(proc, session_id, text, log_path)
     return {"ok": True, "pid": proc.pid, "log": str(log_path), "resumed": True, "via": "devin-resume"}
 
 

@@ -41,6 +41,66 @@ class DevinQueueTests(unittest.TestCase):
         resume.assert_called_once_with(sid, "follow up")
         cp.assert_not_called()
 
+    def test_devin_resume_watchdog_requeues_startup_failure(self):
+        """A devin resume that dies at startup requeues the follow-up (OPS-807).
+
+        `devin --resume -p` can exit non-zero seconds after spawn (its own
+        sessions DB busy-timeout, e.g. "Error: session/list failed: database
+        is locked") — after the send path already reported success. The
+        watchdog must park the text back on the durable queue for retry
+        instead of silently dropping it.
+        """
+        import subprocess
+        server = importlib.import_module("server")
+        sid = "devincli-watchdog-test"
+        with tempfile.TemporaryDirectory() as tmp:
+            log_path = os.path.join(tmp, "resume.log")
+            with open(log_path, "w") as fh:
+                proc = subprocess.Popen(
+                    ["/bin/sh", "-c",
+                     "echo 'Error: session/list failed: database is locked'; exit 1"],
+                    stdout=fh, stderr=subprocess.STDOUT,
+                )
+            with mock.patch.object(server, "_pending_resume_queue", {}) as queue, \
+                 mock.patch.object(server, "_pending_resume_retry_after", {}), \
+                 mock.patch.object(server, "_save_pending_inputs"):
+                server._start_devin_resume_watchdog(proc, sid, "follow up", log_path)
+                deadline = time.time() + 5
+                while time.time() < deadline and not queue.get(sid):
+                    time.sleep(0.05)
+        self.assertEqual(queue.get(sid), ["follow up"])
+
+    def test_devin_resume_watchdog_ignores_success_and_running(self):
+        """No requeue when the resume succeeds fast or outlives the window."""
+        import subprocess
+        server = importlib.import_module("server")
+        sid = "devincli-watchdog-ok"
+        with tempfile.TemporaryDirectory() as tmp:
+            log_path = os.path.join(tmp, "resume.log")
+            with open(log_path, "w") as fh:
+                ok_proc = subprocess.Popen(
+                    ["/bin/sh", "-c", "exit 0"], stdout=fh, stderr=subprocess.STDOUT,
+                )
+            with mock.patch.object(server, "_pending_resume_queue", {}) as queue, \
+                 mock.patch.object(server, "_pending_resume_retry_after", {}), \
+                 mock.patch.object(server, "_save_pending_inputs"):
+                server._start_devin_resume_watchdog(ok_proc, sid, "follow up", log_path)
+                ok_proc.wait(timeout=10)
+                time.sleep(0.3)
+                self.assertFalse(queue.get(sid))
+                # A process still running past the window must not requeue.
+                with open(log_path, "w") as fh2:
+                    running = subprocess.Popen(
+                        ["/bin/sh", "-c", "sleep 2"], stdout=fh2, stderr=subprocess.STDOUT,
+                    )
+                with mock.patch.object(
+                    server, "_DEVIN_RESUME_WATCHDOG_WINDOW_S", 0.2
+                ):
+                    server._start_devin_resume_watchdog(running, sid, "late", log_path)
+                    time.sleep(0.6)
+                self.assertFalse(queue.get(sid))
+                running.wait(timeout=10)
+
     def test_devin_resume_queue_respects_running_spawn(self):
         """The resume-queue watcher must wait while a Devin resume is running."""
         server = importlib.import_module("server")

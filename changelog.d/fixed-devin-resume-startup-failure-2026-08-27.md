@@ -1,0 +1,1 @@
+Devin CLI follow-ups: a `devin --resume` that fails at startup seconds after spawn (e.g. "Error: session/list failed: database is locked" while another Devin process holds the sessions DB) no longer silently drops the message — the failure is detected by a short startup watchdog and the text is requeued for automatic retry.
