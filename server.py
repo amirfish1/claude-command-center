@@ -51369,6 +51369,42 @@ def _load_spawn_registry():
 
 _SPAWN_REGISTRY_THREAD_LOCK = threading.RLock()
 
+# Read-only, mtime-cached view of the shared on-disk registry for lookups
+# that must see spawns created by the OTHER process (worker vs dashboard).
+_DISK_SPAWN_CACHE = {"mtime": None, "entries": []}
+
+
+def _disk_spawn_entries_cached():
+    try:
+        mtime = SPAWNED_PIDS_FILE.stat().st_mtime
+    except OSError:
+        return []
+    if _DISK_SPAWN_CACHE["mtime"] != mtime:
+        _DISK_SPAWN_CACHE["entries"] = _load_spawn_registry()
+        _DISK_SPAWN_CACHE["mtime"] = mtime
+    return _DISK_SPAWN_CACHE["entries"]
+
+
+def _disk_spawn_entry_for_session(session_id):
+    """Live (pid alive) on-disk registry entry for `session_id`, or None.
+    Complements `_find_live_spawn_entry_for_session`, which only knows the
+    spawns THIS process created or reattached at boot."""
+    sid = (session_id or "").strip()
+    if not sid:
+        return None
+    for entry in _disk_spawn_entries_cached():
+        if not isinstance(entry, dict):
+            continue
+        if sid not in (entry.get("session_id"), entry.get("resumed_sid")):
+            continue
+        pid = entry.get("pid")
+        try:
+            if pid and _is_pid_alive(int(pid)):
+                return entry
+        except (TypeError, ValueError):
+            continue
+    return None
+
 
 def _spawn_registry_lock_path():
     return SPAWNED_PIDS_FILE.with_suffix(".lock")
@@ -55462,6 +55498,17 @@ def _tail_count(path, needle, n=262144):
         return 0
 
 
+_HIDDEN_PTY_COMPACT_TIMEOUT_S = 300.0
+
+
+def _pty_prompt_visible(tail_text):
+    """True when Claude Code's interactive input prompt is on screen — the
+    `❯` prompt glyph (or a bare `>` line on terminals without it). Only then
+    is the TUI in raw mode and ready for typed input."""
+    txt = tail_text or ""
+    return "❯" in txt[-400:] or bool(re.search(r"(^|\s)>\s*$", txt[-120:]))
+
+
 def _compact_via_hidden_pty(session_id, cwd):
     """Run Claude Code's `/compact` in an INVISIBLE pty — no Terminal window.
 
@@ -55547,7 +55594,15 @@ def _compact_via_hidden_pty(session_id, cwd):
 
     argv = [claude_bin["bin"], "--resume", sid, "--dangerously-skip-permissions"]
     run_cwd = cwd if (cwd and os.path.isdir(cwd)) else None
-    env = dict(_question_relay_env(), TERM="xterm-256color")
+    # A server started from inside a Claude Code session inherits
+    # CLAUDE_CODE_CHILD_SESSION, and the resumed TUI then runs with transcript
+    # saving OFF — the compact_boundary we wait for is never written. Strip
+    # the nesting markers and force persistence so the boundary lands on disk.
+    env = {
+        k: v for k, v in _question_relay_env().items()
+        if not (k.startswith("CLAUDE_CODE_") or k == "CLAUDECODE")
+    }
+    env.update(TERM="xterm-256color", CLAUDE_CODE_FORCE_SESSION_PERSISTENCE="1")
     try:
         proc = subprocess.Popen(
             argv,
@@ -55625,17 +55680,40 @@ def _compact_via_hidden_pty(session_id, cwd):
 
     result = {"ok": False, "via": "hidden-pty"}
     try:
-        # Let the TUI boot + render the resumed transcript: drain until output
-        # quiets for a full 0.7s poll, capped at 25s.
-        ready_deadline = time.time() + 25.0
+        # Let the TUI boot + render the resumed transcript. The old gate
+        # ("0.7s of silence, capped at 25s") fired during the startup pause
+        # BEFORE the TUI had switched the pty to raw mode, so "/compact\r"
+        # sat in the cooked-mode line buffer and was delivered to Ink as one
+        # chunk — a paste. The text landed in the prompt, the Enter was
+        # swallowed, and the driver then waited 180s for a boundary that
+        # never came (worker.err.log: "❯ /compact" still on screen). Ready
+        # now means: output was seen, the input prompt is on screen, and it
+        # has been quiet for a full second. Big transcripts render slowly,
+        # so the cap is 60s.
+        ready_deadline = time.time() + 60.0
+        seen_output = False
         while time.time() < ready_deadline:
             if proc.poll() is not None:
                 return _fail("claude exited before /compact could run")
-            if not _drain(0.7):
+            got = _drain(1.0)
+            seen_output = seen_output or got
+            if seen_output and not got and _pty_prompt_visible(_pty_tail()):
                 break
-        os.write(master_fd, b"/compact\r")
+        # Type the command, let the slash-command menu render, then submit.
+        # The menu's first Enter can be consumed as "accept completion"; if
+        # the prompt still shows the typed command a beat later, submit again.
+        os.write(master_fd, b"/compact")
+        _drain(0.6)
+        os.write(master_fd, b"\r")
+        _drain(2.0)
+        if (
+            _tail_count(jsonl, b'"compact_boundary"') <= n0
+            and re.search(r"❯\s*/compact\s*$", _pty_tail()[-80:])
+        ):
+            os.write(master_fd, b"\r")
         # Done when a NEW compact_boundary appears in the transcript tail.
-        compact_deadline = time.time() + 180.0
+        # Summarising a 1M-context session takes minutes, not seconds.
+        compact_deadline = time.time() + _HIDDEN_PTY_COMPACT_TIMEOUT_S
         while time.time() < compact_deadline:
             _drain(0.5)
             if _tail_count(jsonl, b'"compact_boundary"') > n0:
@@ -55650,7 +55728,7 @@ def _compact_via_hidden_pty(session_id, cwd):
                     _fail("claude exited before compaction completed")
                 break
         else:
-            _fail("compaction did not complete within 180s")
+            _fail(f"compaction did not complete within {int(_HIDDEN_PTY_COMPACT_TIMEOUT_S)}s")
     finally:
         try:
             os.write(master_fd, b"/exit\r")
@@ -65458,6 +65536,13 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
             if sid and not (is_codex_status or is_gemini_status or is_antigravity_status or is_hermes_status):
                 try:
                     _spawn = _find_live_spawn_entry_for_session(sid)
+                    if _spawn is None:
+                        # The worker owns engine execution, so a spawn it
+                        # created after this dashboard booted is not in our
+                        # in-memory list (the boot-time reattach is the only
+                        # sync). Without this the top bar said "idle" while a
+                        # CCC resume was busy running the user's turn.
+                        _spawn = _disk_spawn_entry_for_session(sid)
                     if _spawn and _spawn.get("engine") == "claude":
                         status["headless_present"] = True
                         try:

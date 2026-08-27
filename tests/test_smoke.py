@@ -5312,30 +5312,33 @@ class TestServerImports(unittest.TestCase):
         )
 
     def test_right_rail_uses_metadata_files_and_queue_tabs(self):
-        """The right rail keeps activity in Metadata, with Files and Queue as
-        their own utility panes."""
+        """The right rail leads with Orchestration, keeps activity (and the
+        Files panel, docked at the bottom) in Metadata, and Queue as its own
+        utility pane."""
         index_html = pathlib.Path(PROJECT_ROOT, "static", "index.html").read_text(encoding="utf-8")
         app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
         app_css = pathlib.Path(PROJECT_ROOT, "static", "app.css").read_text(encoding="utf-8")
         self.assertIn('<div class="status-rail-title" id="statusRailTitle">Session Utilities</div>', index_html)
+        self.assertIn('data-rail-tab="orchestration"', index_html)
         self.assertIn('data-rail-tab="metadata"', index_html)
-        self.assertIn('data-rail-tab="files"', index_html)
         self.assertIn('data-rail-tab="queue"', index_html)
+        self.assertNotIn('data-rail-tab="files"', index_html)
         self.assertNotIn('data-rail-tab="activity"', index_html)
         self.assertIn('id="statusRailTopbar"', index_html)
         self.assertIn('id="statusRailAnnotateBtn"', index_html)
         self.assertLess(index_html.index('id="statusRailAnnotateBtn"'), index_html.index('id="statusRailCloseBtn"'))
-        self.assertLess(index_html.index('data-rail-tab="metadata"'), index_html.index('data-rail-tab="files"'))
-        self.assertLess(index_html.index('data-rail-tab="files"'), index_html.index('data-rail-tab="queue"'))
+        self.assertLess(index_html.index('data-rail-tab="orchestration"'), index_html.index('data-rail-tab="metadata"'))
+        self.assertLess(index_html.index('data-rail-tab="metadata"'), index_html.index('data-rail-tab="queue"'))
+        self.assertIn('id="statusRailOrchestrationPane"', index_html)
         self.assertIn('id="statusRailMetadataPane"', index_html)
-        self.assertIn('id="statusRailFilesPane"', index_html)
         self.assertIn('id="statusRailQueuePane"', index_html)
         self.assertNotIn('id="statusRailActivityPane"', index_html)
-        metadata_block = index_html[index_html.index('id="statusRailMetadataPane"'):index_html.index('id="statusRailFilesPane"')]
-        files_block = index_html[index_html.index('id="statusRailFilesPane"'):index_html.index('id="statusRailQueuePane"')]
-        self.assertNotIn('id="filesPanel"', metadata_block)
+        self.assertNotIn('id="statusRailFilesPane"', index_html)
+        metadata_block = index_html[index_html.index('id="statusRailMetadataPane"'):index_html.index('id="statusRailQueuePane"')]
         self.assertIn('id="subagentsPanel"', metadata_block)
-        self.assertIn('id="filesPanel"', files_block)
+        # Files is docked at the bottom of Metadata, not a tab of its own.
+        self.assertIn('id="filesPanel"', metadata_block)
+        self.assertLess(metadata_block.index('id="subagentsPanel"'), metadata_block.index('id="filesPanel"'))
         self.assertNotIn('id="filesViewToggle"', index_html)
         self.assertIn("function setStatusRailTab(tab)", app_js)
         self.assertIn("rail.querySelector('#statusRailMetadataPane')", app_js)
@@ -5345,7 +5348,7 @@ class TestServerImports(unittest.TestCase):
         # asserted against index.html above.
         self.assertIn("rail.querySelector('#statusRailQueuePane')", app_js)
         self.assertNotIn("rail.querySelector('#statusRailActivityPane')", app_js)
-        self.assertIn("const next = (tab === 'files' || tab === 'queue') ? tab : 'metadata';", app_js)
+        self.assertIn("const next = (tab === 'queue' || tab === 'orchestration') ? tab : 'metadata';", app_js)
         self.assertIn("const $statusRailAnnotateBtn = document.getElementById('statusRailAnnotateBtn');", app_js)
         self.assertIn("$statusRailAnnotateBtn.addEventListener('click', annStart);", app_js)
         self.assertNotIn("getElementById('filesViewToggle')", app_js)
@@ -6047,7 +6050,7 @@ class TestServerImports(unittest.TestCase):
         self.assertIn("Wait for the pending message to land in the transcript before compacting.", app_js)
         self.assertIn("if (compactCommand && hasPendingSendEchoBeforeCompact(", app_js)
         self.assertIn("const pendingCompactEcho = hasPendingSendEchoBeforeCompact();", app_js)
-        self.assertIn("activeCompactBtn.title = pendingCompactEcho", app_js)
+        self.assertIn(": (pendingCompactEcho", app_js)
 
     def test_codex_spawn_log_hides_bare_error_marker(self):
         """A lone Codex CLI [error] marker should not open the log with a
