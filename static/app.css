@@ -887,6 +887,16 @@
     color: var(--text-muted); text-transform: none; letter-spacing: 0;
     font-size: 10px; margin-left: 4px;
   }
+  /* Durable server-queue rows: the message is stored and waits for the
+     engine's running turn to end. Not "sending", not lost. */
+  .event.user_text.pending.server-queued .label::after {
+    content: ' · queued';
+  }
+  .event.user_text.pending.server-queued[data-queued-reason] .user-msg::after {
+    content: attr(data-queued-reason);
+    display: block; margin-top: 4px; font-size: 11px; font-style: normal;
+    color: var(--text-muted);
+  }
   .event.user_text.pending .pending-send-cancel {
     position: absolute; top: 4px; right: 4px;
     width: 22px; height: 22px; min-width: 22px;

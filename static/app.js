@@ -52812,7 +52812,14 @@
       }
       const div = document.createElement('div');
       div.className = 'event ' + ev.type + (ev.pending ? ' pending' : '');
-      if (ev.pending) div.dataset.queuedSteerServer = 'true';
+      if (ev.pending) {
+        div.dataset.queuedSteerServer = 'true';
+        // A durable server-queue row is "queued", not "sending": the
+        // message is safe and will go out when the engine's running turn
+        // ends. Say so, with the engine's own reason when it gave one.
+        div.classList.add('server-queued');
+        if (ev.queued_reason) div.dataset.queuedReason = String(ev.queued_reason);
+      }
       if (ev.line != null) div.dataset.jsonlLine = String(ev.line);
       if (_videoClearLine && ev.line != null && Number(ev.line) <= _videoClearLine) {
         div.classList.add('ccc-video-cleared');

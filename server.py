@@ -41318,6 +41318,30 @@ def _parse_codex_event(ev, line_num, token_usage=None, codex_turn_meta=None):
 
 
 _pending_resume_queue: dict = {}   # session_id → [text, ...]
+# (session_id, text) -> {"queued_at": epoch, "reason": str}. Why a message is
+# waiting and since when, so the UI can say "queued behind the running turn"
+# instead of an ambiguous "sending". Entries are dropped when the queue for
+# that session drains; a missing entry just means "no extra detail".
+_pending_queued_meta: dict = {}
+_pending_queued_meta_lock = threading.Lock()
+
+
+def _note_pending_queued(session_id, text, reason=None):
+    """Record when and why ``text`` was queued for ``session_id``."""
+    if not session_id or not text:
+        return
+    with _pending_queued_meta_lock:
+        # Bound the table: forget entries for sessions with nothing queued.
+        if len(_pending_queued_meta) > 256:
+            with _pending_resume_lock:
+                live = set(_pending_resume_queue.keys())
+            for key in list(_pending_queued_meta.keys()):
+                if key[0] not in live:
+                    _pending_queued_meta.pop(key, None)
+        _pending_queued_meta[(session_id, text)] = {
+            "queued_at": time.time(),
+            "reason": str(reason) if reason else None,
+        }
 _pending_resume_lock = threading.Lock()
 _pending_resume_retry_after: dict = {}
 _PENDING_RESUME_RETRY_DELAY_S = 60.0
@@ -41761,31 +41785,40 @@ def _get_queued_events_for_session(session_id):
         resume_queue = list(_pending_resume_queue.get(session_id, []))
     with _pending_terminal_input_lock:
         term_queue = list(_pending_terminal_input_queue.get(session_id, []))
-    ts = time.time()
+    # Every other event carries an ISO timestamp. This used to emit epoch
+    # seconds, which the browser parsed as epoch milliseconds and rendered
+    # as "Jan 21 1970" on queued rows.
+    now = time.time()
+
+    def _queued_event(text):
+        visible_text = _strip_mode3_instruction(text)
+        if not visible_text:
+            return None
+        with _pending_queued_meta_lock:
+            meta = dict(_pending_queued_meta.get((session_id, text)) or {})
+        since = float(meta.get("queued_at") or now)
+        ev = {
+            "line": None,
+            "ts": datetime.fromtimestamp(since, timezone.utc).isoformat().replace("+00:00", "Z"),
+            "type": "user_text",
+            "text": visible_text,
+            "images": [],
+            "pending": True,
+            "queued_for_s": max(0, int(now - since)),
+        }
+        reason = meta.get("reason")
+        if reason:
+            ev["queued_reason"] = str(reason)
+        return ev
+
     for text in resume_queue:
-        visible_text = _strip_mode3_instruction(text)
-        if not visible_text:
-            continue
-        events.append({
-            "line": None,
-            "ts": ts,
-            "type": "user_text",
-            "text": visible_text,
-            "images": [],
-            "pending": True
-        })
+        ev = _queued_event(text)
+        if ev:
+            events.append(ev)
     for text in term_queue:
-        visible_text = _strip_mode3_instruction(text)
-        if not visible_text:
-            continue
-        events.append({
-            "line": None,
-            "ts": ts,
-            "type": "user_text",
-            "text": visible_text,
-            "images": [],
-            "pending": True
-        })
+        ev = _queued_event(text)
+        if ev:
+            events.append(ev)
     # Codex threads also surface durable desktop↔CCC coordination events
     # (external turn detected, input queued, CCC turn boundaries) so the
     # ownership story is part of the conversation, not just transient status.
@@ -46928,14 +46961,36 @@ def resume_session_devin(session_id, text):
         if s.get("engine") == "devin" and s.get("resumed_sid") == session_id:
             try:
                 if _poll_spawn_entry(s) is None:
+                    # A one-shot `devin --resume -p` owns the session lock
+                    # until its turn ends (a turn with context compaction
+                    # plus tool calls can run for minutes). Say so: the
+                    # UI otherwise shows a bare "sending" for that whole time.
+                    running_s = None
+                    try:
+                        started = str(s.get("spawned_at") or "")
+                        if started:
+                            running_s = int(
+                                time.time()
+                                - time.mktime(time.strptime(started, "%Y%m%dT%H%M%S"))
+                            )
+                    except (ValueError, OverflowError):
+                        running_s = None
+                    reason = (
+                        "Devin is still working on the previous turn"
+                        + (f" ({running_s}s so far)" if running_s is not None else "")
+                        + ". It sends automatically when that turn ends."
+                    )
                     with _pending_resume_lock:
                         _pending_resume_queue.setdefault(session_id, []).append(text)
+                    _note_pending_queued(session_id, text, reason)
                     _save_pending_inputs()
                     return {
                         "ok": True,
                         "queued": True,
                         "pid": s.get("pid"),
                         "via": "devin-resume-queued",
+                        "queued_reason": reason,
+                        "running_for_s": running_s,
                     }
             except Exception:
                 pass
