@@ -55029,11 +55029,16 @@
   // Delegate, Spawn and Critique stay on screen; Verify, Check status and
   // the queue action fold under "More" so the pane stays clean.
   //
-  // Spawn is the one two-step playbook: pick the model in the tier under
-  // it, then tap the card. It never sends -- it drafts
+  // Every card DRAFTS by default: a tap writes the brief into the active
+  // pane's composer and focuses it, so there is a correction window before
+  // the session fans out lanes. Shift-click is the deliberate "send now".
+  // One tap = one draft, on every card.
+  //
+  // Spawn is the one card that never sends, Shift or not: it is a two-step
+  // playbook. Pick the model in the tier under it, tap, and it drafts
   // "Spawn a new <model> sub-agent with CCC to do [describe the task]"
-  // into the composer with the bracket selected, so the user replaces the
-  // placeholder and submits from the composer.
+  // with the bracket selected, so the user replaces the placeholder and
+  // submits from the composer.
   const ORCH_PLAYBOOKS = [
     { id: 'delegate', title: 'Delegate',          sub: 'Execution runs on cheaper lanes, not here.' },
     { id: 'spawn',    title: 'Spawn a sub-agent', sub: 'Pick a model, tap, edit the task in the composer, send.', tier: true, draft: true },
@@ -55172,9 +55177,11 @@
     return '';
   }
 
-  // Paste into the active pane's composer and send — the same path a typed
-  // message takes (pending echo, queue-if-busy, terminal routing). Shift-click
-  // pastes without sending so the brief can be edited first.
+  // Draft into the active pane's composer. A plain tap never sends: the text
+  // lands in the composer and the composer is focused, so the brief can be
+  // read, edited, or abandoned before the session fans out. Shift-click sends
+  // immediately, taking the same path a typed message takes (pending echo,
+  // queue-if-busy, terminal routing). Spawn is draft-only and ignores Shift.
   async function orchInject(playbookId, sendNow) {
     const ctx = orchContext();
     if (!ctx.convId) { showOpToast('Select a session first.', 'error'); return; }
@@ -55185,13 +55192,13 @@
     if (!input) { showOpToast('This session has no composer to inject into.', 'error'); return; }
     input.value = text;
     input.dispatchEvent(new Event('input', { bubbles: true }));
-    orchFlashPlaybook(playbookId);
     const pbDef = ORCH_PLAYBOOKS.find(p => p.id === playbookId);
-    // Draft playbooks (Spawn) never send: the placeholder is selected so
-    // the next keystroke replaces it, and the composer's own send is the
-    // second step.
-    if (pbDef && pbDef.draft) { orchSelectSpawnPlaceholder(input); return; }
-    if (sendNow === false) { input.focus(); return; }
+    // Draft playbooks (Spawn) never send, not even on Shift-click: the
+    // placeholder is selected so the next keystroke replaces it, and the
+    // composer's own send is the second step.
+    if (pbDef && pbDef.draft) { orchGlowPlaybook(playbookId); orchSelectSpawnPlaceholder(input); return; }
+    if (!sendNow) { orchGlowPlaybook(playbookId); input.focus(); return; }
+    orchFlashPlaybook(playbookId);
     try {
       await sendToTerminal(paneId, 'send');
       const pb = ORCH_PLAYBOOKS.find(p => p.id === playbookId);
@@ -55201,12 +55208,29 @@
     }
   }
 
+  function orchPlaybookEl(playbookId) {
+    return document.querySelector('.orch-playbook[data-orch-playbook="' + playbookId + '"], .orch-playbook[data-orch-action="' + playbookId + '"]');
+  }
+
+  // The loud one: fill + arrow push. Reserved for a real send.
   function orchFlashPlaybook(playbookId) {
-    const btn = document.querySelector('.orch-playbook[data-orch-playbook="' + playbookId + '"], .orch-playbook[data-orch-action="' + playbookId + '"]');
+    const btn = orchPlaybookEl(playbookId);
     if (!btn) return;
     btn.classList.remove('is-fired');
     void btn.offsetWidth;   // restart the pulse animation
     btn.classList.add('is-fired');
+  }
+
+  // The quiet one: a short border glow that acknowledges the tap when the
+  // playbook only drafted into the composer. No fill, no scale — nothing
+  // that reads as "sent".
+  function orchGlowPlaybook(playbookId) {
+    const btn = orchPlaybookEl(playbookId);
+    if (!btn) return;
+    btn.classList.remove('is-drafted');
+    void btn.offsetWidth;
+    btn.classList.add('is-drafted');
+    setTimeout(() => btn.classList.remove('is-drafted'), 320);
   }
 
   function renderOrchPlaybooks() {
@@ -55223,9 +55247,7 @@
       if (pb.id === 'spawn') meta = 'Model: ' + orchExecLabel(ex);
       if (pb.id === 'verify') meta = 'Tester: ' + orchExecLabel(tester);
       if (pb.id === 'critique') meta = 'Reviewers: ' + critics.map(c => c.label).join(' + ');
-      const title = pb.draft
-        ? 'Draft a spawn brief into this session\'s composer. Replace the bracket, then send.'
-        : 'Inject the ' + pb.title + ' playbook into this session. Shift-click to paste without sending.';
+      const title = 'Click to draft into the composer. Shift-click to send now.';
       let html = '<button type="button" class="orch-playbook orch-playbook-' + pb.id + (pb.optional ? ' is-optional' : '') + (pb.draft ? ' is-draft' : '') + '" data-orch-playbook="' + pb.id + '"'
         + ' title="' + escapeAttr(title) + '">'
         + '<span class="orch-playbook-arrow" aria-hidden="true">' + (pb.draft ? '&#9998;' : '&#8592;') + '</span>'
@@ -55918,7 +55940,7 @@
       if (chip) { orchSetExecutor(chip.getAttribute('data-orch-executor')); return; }
       if (ev.target.closest('[data-orch-more]')) { orchSetMoreOpen(!orchMoreOpen()); return; }
       const pb = ev.target.closest('[data-orch-playbook]');
-      if (pb) { orchInject(pb.getAttribute('data-orch-playbook'), !ev.shiftKey); return; }
+      if (pb) { orchInject(pb.getAttribute('data-orch-playbook'), ev.shiftKey); return; }
       if (ev.target.closest('[data-orch-action="queue"]')) { orchQueueAction(); return; }
       if (ev.target.closest('#orchMapPreview')) { orchPlayPreview(); return; }
       // Video replay, joined with the orchestration replay (Preview) in the

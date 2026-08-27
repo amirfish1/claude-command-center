@@ -25400,6 +25400,13 @@ html:not(.ccc-debug-mode) #statsModal {
   0% { opacity: 0.9; transform: scale(0.96); }
   100% { opacity: 0; transform: scale(1.04); }
 }
+/* Drafted, not sent: a short border glow only. No fill, no scale — the loud
+   is-fired pulse stays reserved for a card that actually sent. */
+.orch-playbook.is-drafted { animation: orch-draft-glow 300ms ease-out; }
+@keyframes orch-draft-glow {
+  0%   { box-shadow: 0 0 0 2px color-mix(in srgb, var(--pb) 45%, transparent); }
+  100% { box-shadow: 0 0 0 2px transparent; }
+}
 /* Model tier: the second-level pick under Spawn a sub-agent. */
 .orch-tier {
   display: flex;
