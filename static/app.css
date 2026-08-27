@@ -22579,6 +22579,11 @@ body.has-gc-reader .pwa-install-banner {
   cursor: default;
   pointer-events: none;
 }
+.gc-replay-transport-group {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
 .gc-replay-stepback-btn {
   font-weight: 700;
   padding: 4px 12px;

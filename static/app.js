@@ -26290,10 +26290,12 @@
     const _jumpDraft = controls.querySelector('.conv-replay-jump-input');
     const _jumpDraftVal = _jumpDraft ? _jumpDraft.value : '';
     controls.innerHTML = `
-      <button type="button" id="convReplayStepBackBtn" class="gc-replay-btn gc-replay-stepback-btn" title="Step Back" ${_convReplayMsgIndex <= 0 ? 'disabled' : ''}>&lt;</button>
-      <button type="button" id="convReplayPlayPauseBtn" class="gc-replay-btn" title="Play / Pause (Space steps one message)">
-        ${_convReplayPaused ? '&#9654; Play' : '&#9646;&#9646; Pause'}
-      </button>
+      <span class="gc-replay-transport-group">
+        <button type="button" id="convReplayStepBackBtn" class="gc-replay-btn gc-replay-stepback-btn" title="Step Back" ${_convReplayMsgIndex <= 0 ? 'disabled' : ''}>&#9664;</button>
+        <button type="button" id="convReplayPlayPauseBtn" class="gc-replay-btn" title="Play / Pause (Space steps one message)">
+          ${_convReplayPaused ? '&#9654; Play' : '&#9646;&#9646; Pause'}
+        </button>
+      </span>
       <div class="gc-replay-speed-group">
         <button type="button" class="gc-replay-speed-btn ${_convReplaySpeed === 1 ? 'is-active' : ''}" data-speed="1">1&#xd7;</button>
         <button type="button" class="gc-replay-speed-btn ${_convReplaySpeed === 2 ? 'is-active' : ''}" data-speed="2">2&#xd7;</button>
@@ -26364,8 +26366,14 @@
     }
     _convReplayResetHumanTyping();
 
+    // idx starts on the last revealed (meaningful) item. Forward playback
+    // sweeps any non-meaningful items in as a PREFIX before the meaningful
+    // one that ends a step -- so walk back over that prefix by checking the
+    // item BEFORE idx, not idx itself, or this groups the wrong items (the
+    // trailing non-meaningful item of the previous step gets pulled into
+    // the current one instead).
     let idx = _convReplayMsgIndex - 1;
-    while (idx > 0 && !_convReplayEvents[idx].meaningful) idx--;
+    while (idx > 0 && !_convReplayEvents[idx - 1].meaningful) idx--;
 
     for (let i = idx; i < _convReplayMsgIndex; i++) {
       _convReplayEvents[i].el.classList.add('conv-replay-hidden');
