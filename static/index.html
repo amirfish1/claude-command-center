@@ -1206,11 +1206,40 @@
                  shell now — the title/context/tokens block that used to sit
                  above it moved down into the Metadata pane's content. -->
             <div class="status-rail-tabs" role="tablist" aria-label="Session utility panes">
-              <button class="status-rail-tab is-active" type="button" role="tab" aria-selected="true" aria-controls="statusRailMetadataPane" data-rail-tab="metadata">Metadata</button>
-              <button class="status-rail-tab" type="button" role="tab" aria-selected="false" aria-controls="statusRailFilesPane" data-rail-tab="files">Files</button>
+              <!-- Orchestration is the first (and default) utility tab: one-tap
+                   playbooks that inject an orchestration brief into the active
+                   session, plus a live lane map of the sessions it spawns.
+                   Files no longer has its own tab -- the files panel is docked
+                   at the bottom of the Metadata pane. -->
+              <button class="status-rail-tab is-active" type="button" role="tab" aria-selected="true" aria-controls="statusRailOrchestrationPane" data-rail-tab="orchestration">Orchestration</button>
+              <button class="status-rail-tab" type="button" role="tab" aria-selected="false" aria-controls="statusRailMetadataPane" data-rail-tab="metadata">Metadata</button>
               <button class="status-rail-tab" type="button" role="tab" aria-selected="false" aria-controls="statusRailQueuePane" data-rail-tab="queue">Queue</button>
             </div>
-            <div class="status-rail-pane is-active" id="statusRailMetadataPane" role="tabpanel" data-rail-pane="metadata">
+            <div class="status-rail-pane is-active" id="statusRailOrchestrationPane" role="tabpanel" data-rail-pane="orchestration">
+              <div class="orch-pane" id="orchPane">
+                <div class="orch-head">
+                  <div class="orch-head-title">Orchestration</div>
+                  <div class="orch-head-sub">One tap. The session becomes the orchestrator; CCC lanes do the work.</div>
+                </div>
+                <div class="orch-empty" id="orchEmpty" hidden>Select a session to orchestrate.</div>
+                <div class="orch-playbooks" id="orchPlaybooks" role="group" aria-label="Orchestration playbooks"></div>
+                <div class="orch-map-wrap" id="orchMapWrap">
+                  <div class="orch-map-head">
+                    <span class="orch-map-title">Lane map</span>
+                    <span class="orch-map-count" id="orchMapCount"></span>
+                    <button type="button" class="orch-map-preview" id="orchMapPreview" title="Play a simulated fan-out so you can see what the lane map does before spawning anything">Preview</button>
+                  </div>
+                  <div class="orch-map" id="orchMap">
+                    <svg class="orch-map-edges" id="orchMapEdges" aria-hidden="true"></svg>
+                    <div class="orch-map-root" id="orchMapRoot"></div>
+                    <div class="orch-map-lanes" id="orchMapLanes"></div>
+                    <div class="orch-map-done-label" id="orchMapDoneLabel" hidden>Landed</div>
+                    <div class="orch-map-done" id="orchMapDone"></div>
+                  </div>
+                </div>
+              </div>
+            </div>
+            <div class="status-rail-pane" id="statusRailMetadataPane" role="tabpanel" data-rail-pane="metadata">
               <div class="status-rail-head">
                 <div>
                   <!-- Shows the active session's name (set by updatePaneHeader);
@@ -1261,8 +1290,9 @@
                 </div>
                 <div class="subagents-list" id="subagentsList"></div>
               </div>
-            </div>
-            <div class="status-rail-pane" id="statusRailFilesPane" role="tabpanel" data-rail-pane="files">
+              <!-- Files panel docked at the bottom of Metadata (it used to be
+                   its own tab). Activity feed above it takes the slack;
+                   _applyStatusRailLayout keeps this element last. -->
               <div class="files-panel" id="filesPanel" style="display: none;">
                 <div class="files-resize-handle" id="filesResizeHandle" title="Drag up to resize · double-click to reset"></div>
                 <div class="files-header">

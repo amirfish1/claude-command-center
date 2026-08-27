@@ -16975,6 +16975,7 @@
       });
     }
     try { updateSubagentsPanel(convId); } catch (_) { /* defensive - panel is non-critical */ }
+    try { if (typeof updateOrchestrationPane === 'function') updateOrchestrationPane(convId); } catch (_) {}
   }
 
   // Populate the status-rail Subagents panel from the active conversation's
@@ -34996,6 +34997,7 @@
     // status reflect the latest /api/sessions data even when the conv-list
     // structure is otherwise unchanged (we short-circuit below in that case).
     try { updateSubagentsPanel(currentConversation); } catch (_) {}
+    try { if (typeof updateOrchestrationPane === 'function') updateOrchestrationPane(currentConversation); } catch (_) {}
     if (_convListRenderSig === _structSig && $convList.childElementCount > 0) {
       _patchVolatileTimes(_convListHtml);
       return;
@@ -54774,7 +54776,9 @@
     const rail = document.getElementById('statusRail');
     if (!rail) return;
     const queuePane = rail.querySelector('#statusRailQueuePane');
-    const next = (tab === 'files' || tab === 'queue') ? tab : 'metadata';
+    // 'files' is a legacy value (the Files tab folded into Metadata); the
+    // files panel now lives at the bottom of the Metadata pane.
+    const next = (tab === 'queue' || tab === 'orchestration') ? tab : 'metadata';
     rail.querySelectorAll('[data-rail-tab]').forEach(btn => {
       const active = btn.getAttribute('data-rail-tab') === next;
       btn.classList.toggle('is-active', active);
@@ -54794,7 +54798,514 @@
       if (sidebarTab === 'queues') _setSharedQueuePanelHost('sidebar');
     }
     try { localStorage.setItem('ccc-status-rail-tab', next); } catch (_) {}
+    if (next === 'orchestration' && typeof updateOrchestrationPane === 'function') {
+      // The pane was hidden until now — lay the lane map out for real.
+      requestAnimationFrame(() => updateOrchestrationPane(currentConversation));
+    }
   }
+
+  // ── Orchestration pane ─────────────────────────────────────────────────
+  // First tab of the status rail. Five one-tap "playbooks" that inject an
+  // orchestration brief into the active session's composer (exactly as if
+  // the user typed it), an "Executor" tier that picks which model the
+  // delegated lanes run on, and a live "Lane map": the active session as
+  // the orchestrator node with every child session CCC spawned for it
+  // hanging below, animated as they are born, work, and land.
+  //
+  // Nothing here talks to an engine directly. A playbook is just text;
+  // the session reads it and drives CCC's spawn/inject/ask API itself
+  // (the ccc-orchestration skill). The lane map only reads data the
+  // dashboard already polls (conversationsData rows carry
+  // parent_session_id) plus the cheap /api/sessions/spawned registry.
+  const ORCH_EXECUTORS = [
+    { id: 'sonnet-5',      engine: 'claude',      model: 'sonnet-5',              label: 'Sonnet 5',       vendor: 'Claude',      family: 'anthropic' },
+    { id: 'opus-5',        engine: 'claude',      model: 'opus-5',                label: 'Opus 5',         vendor: 'Claude',      family: 'anthropic' },
+    { id: 'gpt-5.6-terra', engine: 'codex',       model: 'gpt-5.6-terra',         label: '5.6 Terra',      vendor: 'Codex',       family: 'openai' },
+    { id: 'grok-4.6',      engine: 'grok',        model: 'grok-4.6',              label: 'Grok 4.6',       vendor: 'Grok',        family: 'xai' },
+    { id: 'devin',         engine: 'devin',       model: 'adaptive',              label: 'Devin',          vendor: 'Devin',       family: 'cognition' },
+    { id: 'gemini-3.5',    engine: 'antigravity', model: 'Gemini 3.5 Pro (High)', label: 'Gemini 3.5 Pro', vendor: 'Antigravity', family: 'google' },
+    { id: 'kimi-k3',       engine: 'kimi',        model: 'kimi-code/k3',          label: 'Kimi K3',        vendor: 'Kimi',        family: 'moonshot' },
+  ];
+  const ORCH_PLAYBOOKS = [
+    { id: 'plan',     n: '1', title: 'Plan',     sub: 'Think before code. Steps sized for one lane each.' },
+    { id: 'delegate', n: '2', title: 'Delegate', sub: 'Fan the plan out to CCC lanes.', tier: true },
+    { id: 'verify',   n: '3', title: 'Verify',   sub: 'Independent tester lane, other model family.' },
+    { id: 'critique', n: '4', title: 'Critique', sub: 'Two cross-family reviewers. Blunt. Five bullets.' },
+    { id: 'land',     n: '5', title: 'Land',     sub: 'Collect reports, commit, summarize. No push.' },
+  ];
+  const ORCH_ENGINE_GLYPH = {
+    claude: 'C', codex: 'X', antigravity: 'A', gemini: 'A', grok: 'G', devin: 'D',
+    kimi: 'K', cursor: 'U', hermes: 'H', kilo: 'L', opencode: 'O', copilot: 'P',
+  };
+  let _orchSpawnedRegistry = [];
+  let _orchRegistryFetchedAt = 0;
+  let _orchRegistryInFlight = false;
+  let _orchLastSid = '';
+  let _orchLastKeys = new Set();
+  let _orchSim = null;           // { lanes: [...] } while the Preview plays
+  let _orchSimTimers = [];
+  let _orchPollTimer = null;
+
+  function orchExecutor() {
+    let id = '';
+    try { id = localStorage.getItem('ccc-orch-executor') || ''; } catch (_) {}
+    return ORCH_EXECUTORS.find(e => e.id === id) || ORCH_EXECUTORS[0];
+  }
+  function orchSetExecutor(id) {
+    try { localStorage.setItem('ccc-orch-executor', id); } catch (_) {}
+    renderOrchPlaybooks();
+  }
+  // The tester is always a different model family than the executor, so a
+  // lane never grades its own homework.
+  function orchTester(executor) {
+    return executor.family === 'anthropic'
+      ? ORCH_EXECUTORS.find(e => e.id === 'gpt-5.6-terra')
+      : ORCH_EXECUTORS.find(e => e.id === 'sonnet-5');
+  }
+  function orchCritics(executor) {
+    const pool = ['gpt-5.6-terra', 'sonnet-5', 'gemini-3.5', 'grok-4.6']
+      .map(id => ORCH_EXECUTORS.find(e => e.id === id))
+      .filter(e => e && e.family !== executor.family);
+    return pool.slice(0, 2);
+  }
+  function orchExecLabel(e) { return e.label + ' (' + e.vendor + ')'; }
+
+  // Session context the prompts are addressed with — the real session id,
+  // repo, and CCC URL, so the brief is copy-paste runnable by the session.
+  function orchContext() {
+    const convId = currentConversation || '';
+    const row = convId ? (conversationsData || []).find(c => c && c.id === convId) : null;
+    const sid = (row && row.session_id) || sessionIdByConv[convId] || (currentSession && currentSession.id) || '';
+    const repo = (row && (row.session_cwd || row.folder_path)) || (currentSession && currentSession.cwd) || '';
+    return { convId, row, sid, repo, cccUrl: location.origin };
+  }
+
+  function orchSpawnLine(ctx, e, promptLabel) {
+    return '  POST ' + ctx.cccUrl + '/api/sessions/spawn\n'
+      + '  {"prompt": "<' + promptLabel + '>", "repo_path": "' + ctx.repo + '", "engine": "' + e.engine
+      + '", "model": "' + e.model + '", "report_to": "' + ctx.sid + '"}';
+  }
+
+  function orchPrompt(id, ctx) {
+    const ex = orchExecutor();
+    const tester = orchTester(ex);
+    const critics = orchCritics(ex);
+    const sandbox = '  (curl from a shell with the network sandbox disabled; loopback is blocked otherwise.)';
+    switch (id) {
+      case 'plan':
+        return '[CCC Orchestration · Plan]\n'
+          + 'Role: you are the ORCHESTRATOR for this session. Planning stays on your current model; execution is delegated to CCC lanes later.\n'
+          + '1. Restate the goal in at most 3 lines.\n'
+          + '2. Write the plan as numbered steps. Each step must be small enough for one worker session (about an hour), name the files it touches, and end with a done-check (a command to run or a visible result).\n'
+          + '3. Mark which steps can run in parallel and which must wait for another.\n'
+          + '4. Ask me at most 2 questions, and only if the answer changes the plan.\n'
+          + 'Do not write code yet. Do not spawn anything yet. When I send the Delegate playbook, you fan out.';
+      case 'delegate':
+        return '[CCC Orchestration · Delegate — executor: ' + orchExecLabel(ex) + ']\n'
+          + 'Fan the plan out. You coordinate; lanes implement. Do not implement steps yourself.\n'
+          + 'For every step that can run now, spawn one CCC lane (the ccc-orchestration skill documents this API):\n'
+          + orchSpawnLine(ctx, ex, 'lane brief') + '\n' + sandbox + '\n'
+          + 'Lane brief = the goal of the step, the files it touches, its done-check, and: "commit your own paths with git commit --only, never push, report back when done".\n'
+          + 'Rules: list this repo\'s sessions first and never spawn a duplicate lane for a step that already has one. Keep at most 4 lanes running. '
+          + 'Each lane reports back to you (session ' + ctx.sid + ') through /api/inject-input when it finishes; when a report lands, run the done-check yourself before marking the step done. '
+          + 'Post me a one-line status each time a lane starts or lands.';
+      case 'verify':
+        return '[CCC Orchestration · Verify — tester: ' + orchExecLabel(tester) + ']\n'
+          + 'Do not trust the executor\'s claim. Spawn ONE independent verification lane on a different model family:\n'
+          + orchSpawnLine(ctx, tester, 'verify brief') + '\n' + sandbox + '\n'
+          + 'Verify brief: "Fresh eyes. Run the test suite. Exercise the change in the real app (browser via snapshot.js or puppeteer if it is UI, curl if it is API). '
+          + 'Report PASS or FAIL with evidence: command output, a screenshot path, or reproduction steps. Do not fix anything."\n'
+          + 'When the report lands: PASS means the step is verified. FAIL means you re-open the step with the failing evidence attached and delegate the fix to the executor lane.';
+      case 'critique':
+        return '[CCC Orchestration · Critique — reviewers: ' + critics.map(orchExecLabel).join(' + ') + ']\n'
+          + 'Get two independent second opinions on the current plan (or the diff, if code exists). Spawn two lanes with report_to ' + ctx.sid + ', one per reviewer, same brief:\n'
+          + '  "Critique this independently. What breaks? What is missing? What would you cut? Be blunt. Five bullets max, most important first. Do not implement."\n'
+          + critics.map((c, i) => '  Reviewer ' + (i + 1) + ': engine ' + c.engine + ', model "' + c.model + '"').join('\n') + '\n'
+          + 'When both reports land, merge them into one ranked list, decide what you accept and reject (one line of reasoning each), apply the accepted changes to the plan, and tell me what changed.';
+      case 'land':
+        return '[CCC Orchestration · Land]\n'
+          + 'Close out. Confirm every lane reported back (list any that did not, and ask each of them once via /api/ask with a 60s timeout). Confirm tests pass. '
+          + 'Commit your own paths with git commit --only <paths>. Do not push.\n'
+          + 'Then give me a five-line summary: what shipped, what was verified and by which lane, what was cut, what is left, and the next thing I should do.';
+    }
+    return '';
+  }
+
+  // Paste into the active pane's composer and send — the same path a typed
+  // message takes (pending echo, queue-if-busy, terminal routing). Shift-click
+  // pastes without sending so the brief can be edited first.
+  async function orchInject(playbookId, sendNow) {
+    const ctx = orchContext();
+    if (!ctx.convId) { showOpToast('Select a session first.', 'error'); return; }
+    const text = orchPrompt(playbookId, ctx);
+    if (!text) return;
+    const paneId = activePaneId();
+    const paneEl = document.querySelector('.conv-pane[data-pane-id="' + paneId + '"]');
+    const input = paneEl && paneEl.querySelector('.conv-input-bar textarea, .conv-input-bar input[type="text"]');
+    if (!input) { showOpToast('This session has no composer to inject into.', 'error'); return; }
+    input.value = text;
+    input.dispatchEvent(new Event('input', { bubbles: true }));
+    const btn = document.querySelector('.orch-playbook[data-orch-playbook="' + playbookId + '"]');
+    if (btn) {
+      btn.classList.remove('is-fired');
+      void btn.offsetWidth;   // restart the pulse animation
+      btn.classList.add('is-fired');
+    }
+    if (sendNow === false) { input.focus(); return; }
+    try {
+      await sendToTerminal(paneId, 'send');
+      const pb = ORCH_PLAYBOOKS.find(p => p.id === playbookId);
+      showOpToast('Playbook injected: ' + (pb ? pb.title : playbookId), 'info');
+    } catch (e) {
+      showOpToast('Inject failed: ' + (e && e.message ? e.message : e), 'error');
+    }
+  }
+
+  function renderOrchPlaybooks() {
+    const host = document.getElementById('orchPlaybooks');
+    if (!host) return;
+    const ex = orchExecutor();
+    const tester = orchTester(ex);
+    const critics = orchCritics(ex);
+    host.innerHTML = ORCH_PLAYBOOKS.map(pb => {
+      let sub = pb.sub;
+      let meta = '';
+      if (pb.id === 'delegate') meta = 'Executor: ' + orchExecLabel(ex);
+      if (pb.id === 'verify') meta = 'Tester: ' + orchExecLabel(tester);
+      if (pb.id === 'critique') meta = 'Reviewers: ' + critics.map(c => c.label).join(' + ');
+      let html = '<button type="button" class="orch-playbook orch-playbook-' + pb.id + '" data-orch-playbook="' + pb.id + '"'
+        + ' title="Inject the ' + pb.title + ' playbook into this session. Shift-click to paste without sending.">'
+        + '<span class="orch-playbook-n">' + pb.n + '</span>'
+        + '<span class="orch-playbook-body">'
+        + '<span class="orch-playbook-title">' + escapeHtml(pb.title) + '</span>'
+        + '<span class="orch-playbook-sub">' + escapeHtml(sub) + '</span>'
+        + (meta ? '<span class="orch-playbook-meta">' + escapeHtml(meta) + '</span>' : '')
+        + '</span>'
+        + '<span class="orch-playbook-arrow" aria-hidden="true">&#8594;</span>'
+        + '</button>';
+      if (pb.tier) {
+        html += '<div class="orch-tier" role="radiogroup" aria-label="Executor model">'
+          + '<span class="orch-tier-label">Executor</span>'
+          + ORCH_EXECUTORS.map(e =>
+            '<button type="button" class="orch-tier-chip' + (e.id === ex.id ? ' is-selected' : '') + '" role="radio" aria-checked="'
+            + (e.id === ex.id ? 'true' : 'false') + '" data-orch-executor="' + e.id + '" title="' + escapeAttr(e.vendor + ' · ' + e.model) + '">'
+            + '<span class="orch-glyph orch-glyph-' + e.engine + '">' + (ORCH_ENGINE_GLYPH[e.engine] || '?') + '</span>'
+            + escapeHtml(e.label) + '</button>').join('')
+          + '</div>';
+      }
+      return html;
+    }).join('');
+  }
+
+  // ── Lane map data ────────────────────────────────────────────────────
+  function orchLaneStatus(row, spawn) {
+    if (row) {
+      if (row.question_waiting || row.needs_approval) return 'waiting';
+      if (row.state === 'working' || row.sidecar_in_flight) return 'working';
+      if (row.state === 'ended') return 'done';
+      return 'idle';
+    }
+    if (spawn) return spawn.running || spawn.status === 'running' ? 'working' : 'done';
+    return 'idle';
+  }
+  function orchLane(row, spawn) {
+    const sid = (row && row.session_id) || (spawn && spawn.session_id) || '';
+    return {
+      id: sid,
+      convId: (row && row.id) || sid,
+      name: (row && row.display_name) || (spawn && spawn.name) || sid.slice(0, 8),
+      engine: (row && row.engine) || (spawn && spawn.engine) || 'claude',
+      model: (row && row.model) || (spawn && spawn.model) || '',
+      status: orchLaneStatus(row, spawn),
+      mtime: Number((row && row.mtime) || 0),
+    };
+  }
+  function orchCollectLanes(sid) {
+    if (_orchSim) return _orchSim.lanes.slice();
+    if (!sid) return [];
+    const rows = conversationsData || [];
+    const byId = new Map();
+    rows.forEach(r => { if (r && r.session_id) byId.set(r.session_id, r); });
+    const seen = new Set();
+    const lanes = [];
+    rows.forEach(r => {
+      const pid = String((r && (r.parent_session_id || r.hermes_parent_session_id)) || '');
+      if (pid !== sid || !r.session_id || seen.has(r.session_id)) return;
+      seen.add(r.session_id);
+      lanes.push(orchLane(r, null));
+    });
+    (_orchSpawnedRegistry || []).forEach(sp => {
+      if (String(sp.parent_session_id || '') !== sid || !sp.session_id || seen.has(sp.session_id)) return;
+      seen.add(sp.session_id);
+      lanes.push(orchLane(byId.get(sp.session_id) || null, sp));
+    });
+    // Newest first inside each band so a fresh lane enters on the left.
+    lanes.sort((a, b) => b.mtime - a.mtime);
+    return lanes;
+  }
+  async function orchRefreshRegistry(force) {
+    if (_orchRegistryInFlight) return;
+    if (!force && Date.now() - _orchRegistryFetchedAt < 5000) return;
+    _orchRegistryInFlight = true;
+    try {
+      const r = await fetch('/api/sessions/spawned');
+      if (r.ok) {
+        const d = await r.json();
+        _orchSpawnedRegistry = Array.isArray(d) ? d : [];
+        _orchRegistryFetchedAt = Date.now();
+      }
+    } catch (_) {}
+    _orchRegistryInFlight = false;
+  }
+  function orchPaneVisible() {
+    const pane = document.getElementById('statusRailOrchestrationPane');
+    return !!(pane && !pane.hidden && pane.offsetParent !== null);
+  }
+
+  // ── Lane map render ──────────────────────────────────────────────────
+  function orchNodeHtml(lane, compact) {
+    const glyph = ORCH_ENGINE_GLYPH[lane.engine] || '?';
+    const statusWord = { working: 'working', waiting: 'needs you', idle: 'idle', done: 'landed' }[lane.status] || lane.status;
+    return '<span class="orch-node-glyph orch-glyph orch-glyph-' + escapeAttr(lane.engine) + '">' + glyph + '</span>'
+      + '<span class="orch-node-body">'
+      + '<span class="orch-node-name">' + escapeHtml(lane.name) + '</span>'
+      + (compact ? '' : '<span class="orch-node-model">' + escapeHtml(lane.model || lane.engine) + '</span>')
+      + '</span>'
+      + '<span class="orch-node-status"><span class="orch-node-dot"></span>' + escapeHtml(statusWord) + '</span>';
+  }
+  function updateOrchestrationPane(convId) {
+    const pane = document.getElementById('statusRailOrchestrationPane');
+    const rootEl = document.getElementById('orchMapRoot');
+    const lanesEl = document.getElementById('orchMapLanes');
+    const doneEl = document.getElementById('orchMapDone');
+    const doneLabel = document.getElementById('orchMapDoneLabel');
+    const countEl = document.getElementById('orchMapCount');
+    const emptyEl = document.getElementById('orchEmpty');
+    const playbooksEl = document.getElementById('orchPlaybooks');
+    if (!pane || !rootEl || !lanesEl || !doneEl) return;
+    if (!playbooksEl.childElementCount) renderOrchPlaybooks();
+    const ctx = orchContext();
+    const hasSession = !!ctx.convId;
+    if (emptyEl) emptyEl.hidden = hasSession;
+    playbooksEl.classList.toggle('is-disabled', !hasSession);
+    if (pane.hidden) return;   // nothing visible to measure — skip the work
+    if (hasSession) orchRefreshRegistry(false);
+
+    const sid = ctx.sid;
+    if (sid !== _orchLastSid) { _orchLastKeys = new Set(); _orchLastSid = sid; }
+    const lanes = orchCollectLanes(sid);
+    const active = lanes.filter(l => l.status !== 'done');
+    const landed = lanes.filter(l => l.status === 'done');
+    const working = active.filter(l => l.status === 'working').length;
+    const waiting = active.filter(l => l.status === 'waiting').length;
+
+    // Root (orchestrator) node.
+    const rootRow = ctx.row || (_orchSim ? _orchSim.root : null);
+    const rootName = _orchSim ? _orchSim.root.name : ((rootRow && rootRow.display_name) || 'This session');
+    const rootEngine = _orchSim ? _orchSim.root.engine : ((rootRow && rootRow.engine) || 'claude');
+    const rootModel = _orchSim ? _orchSim.root.model : ((rootRow && rootRow.model) || '');
+    rootEl.innerHTML = hasSession || _orchSim
+      ? '<div class="orch-node orch-node-root' + (working ? ' is-fanning' : '') + '">'
+        + '<span class="orch-node-glyph orch-glyph orch-glyph-' + escapeAttr(rootEngine) + '">' + (ORCH_ENGINE_GLYPH[rootEngine] || '?') + '</span>'
+        + '<span class="orch-node-body">'
+        + '<span class="orch-node-role">Orchestrator</span>'
+        + '<span class="orch-node-name">' + escapeHtml(rootName) + '</span>'
+        + '<span class="orch-node-model">' + escapeHtml(rootModel || rootEngine) + '</span>'
+        + '</span></div>'
+      : '';
+    if (countEl) {
+      countEl.textContent = !lanes.length ? ''
+        : lanes.length + (lanes.length === 1 ? ' lane' : ' lanes')
+          + (working ? ' · ' + working + ' working' : '')
+          + (waiting ? ' · ' + waiting + ' waiting' : '')
+          + (landed.length ? ' · ' + landed.length + ' landed' : '');
+      countEl.classList.toggle('is-preview', !!_orchSim);
+      if (_orchSim) countEl.textContent = 'Preview · ' + countEl.textContent;
+    }
+
+    // FLIP: remember where every existing node is before we touch the DOM.
+    const before = new Map();
+    pane.querySelectorAll('.orch-node[data-lane-id]').forEach(el => {
+      before.set(el.getAttribute('data-lane-id'), el.getBoundingClientRect());
+    });
+    const rootRectBefore = rootEl.getBoundingClientRect();
+
+    const paint = (host, list, compact) => {
+      const keep = new Set();
+      list.forEach(lane => {
+        keep.add(lane.id);
+        let el = pane.querySelector('.orch-node[data-lane-id="' + CSS.escape(lane.id) + '"]');
+        if (!el) {
+          el = document.createElement('button');
+          el.type = 'button';
+          el.className = 'orch-node orch-node-lane';
+          el.setAttribute('data-lane-id', lane.id);
+          el.setAttribute('data-conv-id', lane.convId);
+        }
+        el.classList.toggle('is-compact', !!compact);
+        el.className = el.className.replace(/\bis-(working|waiting|idle|done)\b/g, '').trim() + ' is-' + lane.status;
+        el.title = lane.name + ' · ' + (lane.model || lane.engine) + ' · ' + lane.status + ' · click to open';
+        const html = orchNodeHtml(lane, compact);
+        if (el.innerHTML !== html) el.innerHTML = html;
+        if (el.parentNode !== host) host.appendChild(el);
+      });
+      // Keep DOM order = list order so a new lane enters leftmost.
+      list.forEach(lane => {
+        const el = host.querySelector('.orch-node[data-lane-id="' + CSS.escape(lane.id) + '"]');
+        if (el) host.appendChild(el);
+      });
+      Array.from(host.children).forEach(el => {
+        const id = el.getAttribute('data-lane-id');
+        if (!keep.has(id) && !(el.parentNode !== host)) {
+          // Node left this band; if it is not in the other band either, drop it.
+          if (!lanes.some(l => l.id === id)) el.remove();
+        }
+      });
+    };
+    paint(lanesEl, active, false);
+    paint(doneEl, landed, true);
+    if (doneLabel) doneLabel.hidden = !landed.length;
+    lanesEl.classList.toggle('is-empty', !active.length);
+    lanesEl.setAttribute('data-empty-text', hasSession
+      ? (lanes.length ? 'All lanes landed.' : 'Lanes appear here when this session spawns them. Tap Delegate.')
+      : '');
+
+    // Animate: moved nodes glide (FLIP); brand-new nodes are born out of
+    // the orchestrator node.
+    const rootNode = rootEl.querySelector('.orch-node-root');
+    const rootRect = rootNode ? rootNode.getBoundingClientRect() : rootRectBefore;
+    const firstPaintForSession = _orchLastKeys.size === 0 && !_orchSim;
+    pane.querySelectorAll('.orch-node[data-lane-id]').forEach(el => {
+      const id = el.getAttribute('data-lane-id');
+      const after = el.getBoundingClientRect();
+      const prev = before.get(id);
+      el.style.transition = 'none';
+      if (prev) {
+        const dx = prev.left - after.left, dy = prev.top - after.top;
+        if (Math.abs(dx) > 0.5 || Math.abs(dy) > 0.5) {
+          el.style.transform = 'translate(' + dx + 'px,' + dy + 'px)';
+        }
+      } else if (!firstPaintForSession || _orchSim) {
+        const dx = (rootRect.left + rootRect.width / 2) - (after.left + after.width / 2);
+        const dy = (rootRect.top + rootRect.height / 2) - (after.top + after.height / 2);
+        el.style.transform = 'translate(' + dx + 'px,' + dy + 'px) scale(0.3)';
+        el.style.opacity = '0';
+        el.classList.add('is-born');
+      }
+    });
+    _orchLastKeys = new Set(lanes.map(l => l.id));
+    requestAnimationFrame(() => {
+      pane.querySelectorAll('.orch-node[data-lane-id]').forEach(el => {
+        el.style.transition = '';
+        el.style.transform = '';
+        el.style.opacity = '';
+      });
+      orchDrawEdges();
+      setTimeout(orchDrawEdges, 520);   // once the FLIP transition settles
+    });
+  }
+
+  function orchDrawEdges() {
+    const map = document.getElementById('orchMap');
+    const svg = document.getElementById('orchMapEdges');
+    const rootNode = map && map.querySelector('.orch-node-root');
+    if (!map || !svg) return;
+    const mapRect = map.getBoundingClientRect();
+    svg.setAttribute('width', map.clientWidth);
+    svg.setAttribute('height', map.scrollHeight);
+    svg.setAttribute('viewBox', '0 0 ' + map.clientWidth + ' ' + map.scrollHeight);
+    if (!rootNode) { svg.innerHTML = ''; return; }
+    const r = rootNode.getBoundingClientRect();
+    const x0 = r.left + r.width / 2 - mapRect.left;
+    const y0 = r.bottom - mapRect.top + map.scrollTop;
+    const parts = [];
+    map.querySelectorAll('#orchMapLanes .orch-node-lane').forEach(el => {
+      const n = el.getBoundingClientRect();
+      const x1 = n.left + n.width / 2 - mapRect.left;
+      const y1 = n.top - mapRect.top + map.scrollTop;
+      const status = (el.className.match(/\bis-(working|waiting|idle|done)\b/) || [])[1] || 'idle';
+      const my = (y0 + y1) / 2;
+      const d = 'M' + x0.toFixed(1) + ',' + y0.toFixed(1)
+        + ' C' + x0.toFixed(1) + ',' + my.toFixed(1) + ' ' + x1.toFixed(1) + ',' + my.toFixed(1) + ' ' + x1.toFixed(1) + ',' + y1.toFixed(1);
+      parts.push('<path class="orch-edge orch-edge-' + status + '" d="' + d + '"></path>');
+      if (status === 'working') parts.push('<path class="orch-edge orch-edge-flow" d="' + d + '"></path>');
+    });
+    svg.innerHTML = parts.join('');
+  }
+
+  // ── Preview: a scripted fan-out so the map can be shown without spending
+  //    a single token. Runs on fake lanes, then hands back to live data.
+  function orchStopPreview() {
+    _orchSimTimers.forEach(t => clearTimeout(t));
+    _orchSimTimers = [];
+    _orchSim = null;
+    const btn = document.getElementById('orchMapPreview');
+    if (btn) { btn.textContent = 'Preview'; btn.classList.remove('is-playing'); }
+    updateOrchestrationPane(currentConversation);
+  }
+  function orchPlayPreview() {
+    if (_orchSim) { orchStopPreview(); return; }
+    const ctx = orchContext();
+    const ex = orchExecutor();
+    const tester = orchTester(ex);
+    const rootName = (ctx.row && ctx.row.display_name) || 'This session';
+    _orchSim = {
+      root: { name: rootName, engine: (ctx.row && ctx.row.engine) || 'claude', model: (ctx.row && ctx.row.model) || 'fable-5' },
+      lanes: [],
+    };
+    const mk = (id, name, e, status) => ({ id: 'sim-' + id, convId: '', name, engine: e.engine, model: e.model, status, mtime: Date.now() / 1000 + id });
+    const script = [
+      [0,     () => { _orchSim.lanes.push(mk(1, 'Step 1 · rail tabs', ex, 'working')); }],
+      [900,   () => { _orchSim.lanes.push(mk(2, 'Step 2 · lane map', ex, 'working')); }],
+      [1800,  () => { _orchSim.lanes.push(mk(3, 'Step 3 · prompts', ex, 'working')); }],
+      [4200,  () => { _orchSim.lanes[2].status = 'waiting'; }],
+      [5400,  () => { _orchSim.lanes[0].status = 'done'; }],
+      [6300,  () => { _orchSim.lanes[2].status = 'working'; }],
+      [7400,  () => { _orchSim.lanes.push(mk(4, 'Verify · fresh eyes', tester, 'working')); }],
+      [8600,  () => { _orchSim.lanes[1].status = 'done'; }],
+      [9800,  () => { _orchSim.lanes[2].status = 'done'; }],
+      [11600, () => { _orchSim.lanes[3].status = 'done'; }],
+      [14000, () => { orchStopPreview(); }],
+    ];
+    const btn = document.getElementById('orchMapPreview');
+    if (btn) { btn.textContent = 'Stop'; btn.classList.add('is-playing'); }
+    _orchLastKeys = new Set(['seeded']);   // so the very first sim lane is "born", not a first paint
+    script.forEach(([t, fn]) => {
+      _orchSimTimers.push(setTimeout(() => { if (!_orchSim && t !== 14000) return; fn(); if (_orchSim) updateOrchestrationPane(currentConversation); }, t));
+    });
+    updateOrchestrationPane(currentConversation);
+  }
+
+  function orchStartPolling() {
+    if (_orchPollTimer) return;
+    _orchPollTimer = setInterval(() => {
+      if (!orchPaneVisible()) return;
+      if (document.hidden) return;
+      orchRefreshRegistry(false).then(() => updateOrchestrationPane(currentConversation));
+    }, 6000);
+  }
+
+  document.addEventListener('DOMContentLoaded', () => {
+    const pane = document.getElementById('statusRailOrchestrationPane');
+    if (!pane) return;
+    renderOrchPlaybooks();
+    pane.addEventListener('click', (ev) => {
+      const chip = ev.target.closest('[data-orch-executor]');
+      if (chip) { orchSetExecutor(chip.getAttribute('data-orch-executor')); return; }
+      const pb = ev.target.closest('[data-orch-playbook]');
+      if (pb) { orchInject(pb.getAttribute('data-orch-playbook'), !ev.shiftKey); return; }
+      if (ev.target.closest('#orchMapPreview')) { orchPlayPreview(); return; }
+      const node = ev.target.closest('.orch-node-lane[data-conv-id]');
+      if (node) {
+        const cid = node.getAttribute('data-conv-id');
+        if (cid && typeof selectConversation === 'function') selectConversation(cid);
+      }
+    });
+    window.addEventListener('resize', () => { if (orchPaneVisible()) orchDrawEdges(); });
+    orchStartPolling();
+  });
+  window.updateOrchestrationPane = updateOrchestrationPane;
+  window.orchPlayPreview = orchPlayPreview;
 
   function _applyStatusRailLayout() {
     const sticky = document.querySelector('.conv-sticky-header');
@@ -54832,7 +55343,11 @@
         }
       }
       if (liveAct) {
-        metadataPane.appendChild(liveAct);
+        // Files panel is docked at the bottom of Metadata; activity sits
+        // right above it.
+        const filesPanel = metadataPane.querySelector('#filesPanel');
+        if (filesPanel && filesPanel.parentNode === metadataPane) metadataPane.insertBefore(liveAct, filesPanel);
+        else metadataPane.appendChild(liveAct);
       }
     } else if (sticky) {
       const askCol = sticky.querySelector('.csh-col-ask');
@@ -54867,8 +55382,8 @@
       $rail.querySelectorAll('[data-rail-tab]').forEach(btn => {
         btn.addEventListener('click', () => setStatusRailTab(btn.getAttribute('data-rail-tab') || 'metadata'));
       });
-      let savedRailTab = 'metadata';
-      try { savedRailTab = localStorage.getItem('ccc-status-rail-tab') || 'metadata'; } catch (_) {}
+      let savedRailTab = 'orchestration';
+      try { savedRailTab = localStorage.getItem('ccc-status-rail-tab') || 'orchestration'; } catch (_) {}
       setStatusRailTab(savedRailTab);
     }
 
