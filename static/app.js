@@ -26375,11 +26375,21 @@
   // cleared); the caller should then reveal the bubble immediately, fully
   // formed. Returns false while still mid-type/mid-send-pause; this
   // function schedules its own continuation via playNextConvReplayStep.
+  // Injected turns (CCC playbooks, lane reports, skill/system briefs, big
+  // pastes) were never typed by a human, so replaying them keystroke by
+  // keystroke into the composer reads wrong and takes forever. The
+  // transcript does not record who typed a user turn, so go by shape.
+  function _convReplayLooksInjected(text) {
+    const t = String(text || '');
+    if (t.length > 240 || t.indexOf('\n') !== -1) return true;
+    return /^(announced from:|\[ccc |<ccc-|use ccc orchestration|when ready to execute|when execution lands|before landing,|\[?system\]?:|\[?hook)/i.test(t.trimStart());
+  }
   function _convReplayHumanStep(item) {
     const textEl = _convReplayTextContainer(item.el);
     const plainText = (textEl ? textEl.textContent : item.el.textContent || '').trim();
     const inputEl = composerInputForPane(item.paneId);
     if (!inputEl || !plainText) return true;  // nothing to animate - just show the bubble
+    if (_convReplayLooksInjected(plainText)) return true;  // system-shaped: bubble only, no typing
 
     if (_convReplayHumanSent) {
       _convReplayHumanSent = false;
