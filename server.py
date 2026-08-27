@@ -18064,11 +18064,79 @@ def _set_conversations_archived(session_ids, want_archived):
         return changed, unchanged, to_add, to_remove
 
 
+def _find_descendant_sessions(sid, max_depth=6):
+    """Return all known child/descendant session_ids of ``sid``.
+
+    Merges four parent-child sources so a trash cascade reaches every
+    lane an orchestrator spawned, regardless of engine or registry pruning:
+      1. Codex spawn edges (``thread_spawn_edges`` in ~/.codex/state_*.sqlite)
+      2. Durable CCC-spawn parent links (``codex-parent-links.json``)
+      3. The on-disk spawn registry (``spawned-pids.json``)
+      4. The Codex thread registry (``codex-thread-registry.json``)
+    """
+    if not sid:
+        return []
+    # Build child -> parent maps from all sources, then walk down.
+    parent_by_child = {}
+    try:
+        parent_by_child.update(_codex_spawn_parent_by_child())
+    except Exception:
+        pass
+    try:
+        parent_by_child.update(_load_codex_parent_links())
+    except Exception:
+        pass
+    try:
+        for entry in _load_spawn_registry():
+            if not isinstance(entry, dict):
+                continue
+            child = str(entry.get("session_id") or "").strip()
+            parent = str(entry.get("parent_session_id") or "").strip()
+            if child and parent and child != parent:
+                parent_by_child.setdefault(child, parent)
+    except Exception:
+        pass
+    try:
+        for child_id, entry in _codex_thread_registry_entries().items():
+            if not isinstance(entry, dict):
+                continue
+            parent = str(entry.get("parent_session_id") or "").strip()
+            if child_id and parent and child_id != parent:
+                parent_by_child.setdefault(child_id, parent)
+    except Exception:
+        pass
+    # Walk down from sid, collecting all descendants.
+    descendants = []
+    seen = {sid}
+    frontier = [sid]
+    for _ in range(max_depth):
+        next_frontier = []
+        for child, parent in parent_by_child.items():
+            if parent in seen and child not in seen:
+                seen.add(child)
+                descendants.append(child)
+                next_frontier.append(child)
+        if not next_frontier:
+            break
+        frontier = next_frontier
+    return descendants
+
+
 def _set_conversation_trashed(sid, trashed):
-    """Set Trash membership while preserving ``trashed => archived``."""
+    """Set Trash membership while preserving ``trashed => archived``.
+
+    When trashing, also trash all known descendant sessions (lanes the
+    orchestrator spawned) so they follow the parent into the Trash instead
+    of lingering as orphaned rows. Untrashing only restores the one
+    session — descendants stay trashed until individually restored.
+    """
     want_trashed = bool(trashed)
     kill_result = None
     should_kill = False
+    cascaded = []
+
+    # Find descendants outside the lock (reads spawn registry / codex DBs).
+    descendants = _find_descendant_sessions(sid) if want_trashed else []
 
     with _conversation_lifecycle_lock:
         archived_ids, trashed_ids = _load_conversation_lifecycle_state()
@@ -18081,10 +18149,13 @@ def _set_conversation_trashed(sid, trashed):
             # trashes with none, and the 30s sweep can auto-unarchive it out
             # of Trash the moment it looks live again.
             _archive_grace[sid] = time.time()
+            # Also grace the descendants so the sweep doesn't auto-unarchive
+            # them out of the cascade.
+            for dsid in descendants:
+                _archive_grace[dsid] = time.time()
             _save_archive_grace()
         if want_trashed and sid not in archived_ids:
             archived_ids.append(sid)
-            _save_archived_conversations(archived_ids)
             _log_archive_event("archive", sid, "trash")
             try:
                 (SIDECAR_STATE_DIR / f"{sid}_needs_approval.json").unlink()
@@ -18092,12 +18163,21 @@ def _set_conversation_trashed(sid, trashed):
                 pass
             should_kill = bool(sid and not sid.startswith(("backlog-", "pkood-")))
 
-        if want_trashed and sid not in trashed_ids:
-            trashed_ids.append(sid)
-            _save_trashed_conversations(trashed_ids)
-        elif not want_trashed and sid in trashed_ids:
-            trashed_ids.remove(sid)
-            _save_trashed_conversations(trashed_ids)
+        # Cascade: archive + trash every descendant that isn't already.
+        if want_trashed:
+            for dsid in descendants:
+                if not dsid or dsid.startswith(("backlog-", "pkood-")):
+                    continue
+                if dsid not in archived_ids:
+                    archived_ids.append(dsid)
+                    _log_archive_event("archive", dsid, "trash-cascade")
+                if dsid not in trashed_ids:
+                    trashed_ids.append(dsid)
+                    cascaded.append(dsid)
+
+        # Persist both lists once after all mutations.
+        _save_archived_conversations(archived_ids)
+        _save_trashed_conversations(trashed_ids)
 
         archived_now = sid in archived_ids
         trashed_now = sid in trashed_ids
@@ -18111,6 +18191,7 @@ def _set_conversation_trashed(sid, trashed):
         "archived": archived_now,
         "trashed": trashed_now,
         "killed": kill_result,
+        "cascaded": cascaded,
     }
 
 

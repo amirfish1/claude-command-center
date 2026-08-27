@@ -1,0 +1,1 @@
+- Trashing a session now cascades to all known descendant sessions (lanes the orchestrator spawned). Children follow the parent into the Trash instead of lingering as orphaned rows. Untrashing only restores the one session — descendants stay trashed until individually restored. The toast shows the total count, e.g. "Moved to Trash (13 sessions)".

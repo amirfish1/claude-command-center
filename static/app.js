@@ -37185,6 +37185,7 @@
             trashed: wantTrashed,
           });
           if (!data.ok) throw new Error(data.error || 'trash transition failed');
+          const cascaded = Array.isArray(data.cascaded) ? data.cascaded : [];
           const patchLifecycle = (rows) => {
             if (!Array.isArray(rows)) return;
             for (const row of rows) {
@@ -37193,17 +37194,25 @@
                 row.archived = !!data.archived;
                 row.trashed = !!data.trashed;
               }
+              // Cascade: trash descendants that followed the parent.
+              if (cascaded.length && cascaded.includes(row.session_id)) {
+                row.archived = true;
+                row.trashed = true;
+              }
             }
           };
           patchLifecycle(conversationsData);
           patchLifecycle(archiveData);
           patchLifecycle(currentRepoBacklogData);
           setOptimisticOverride(sessionId, { archived: !!data.archived, trashed: !!data.trashed });
+          cascaded.forEach(dsid => setOptimisticOverride(dsid, { archived: true, trashed: true }));
           renderSidebar(filterConversations($convSearch.value));
           if (data.trashed && nextSelectId) {
             selectConversation(nextSelectId);
           }
-          showOpToast(data.trashed ? 'Moved to Trash' : 'Untrashed to Archived');
+          showOpToast(data.trashed
+            ? (cascaded.length ? 'Moved to Trash (' + (cascaded.length + 1) + ' sessions)' : 'Moved to Trash')
+            : 'Untrashed to Archived');
         } catch (err) {
           btn.disabled = false;
           btn.classList.remove('is-pending');
