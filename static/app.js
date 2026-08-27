@@ -25222,6 +25222,7 @@
     if (!controls) return;
 
     controls.innerHTML = `
+      <button type="button" id="gcReplayStepBackBtn" class="gc-replay-btn gc-replay-stepback-btn" title="Step Back" ${_gcReplayMsgIndex <= 0 ? 'disabled' : ''}>&lt;</button>
       <button type="button" id="gcReplayPlayPauseBtn" class="gc-replay-btn" title="Play / Pause">
         ${_gcReplayPaused ? '▶ Play' : '⏸ Pause'}
       </button>
@@ -25232,6 +25233,11 @@
       </div>
       <button type="button" id="gcReplaySkipBtn" class="gc-replay-btn gc-replay-skip-btn" title="Skip to Live">Skip to Live</button>
     `;
+
+    const stepBackBtn = controls.querySelector('#gcReplayStepBackBtn');
+    stepBackBtn.addEventListener('click', () => {
+      stepReplayBack();
+    });
 
     const playPauseBtn = controls.querySelector('#gcReplayPlayPauseBtn');
     playPauseBtn.addEventListener('click', () => {
@@ -25259,6 +25265,43 @@
     skipBtn.addEventListener('click', () => {
       exitReplayMode();
     });
+  }
+
+  // Rewinds to the start of the previous message so it re-types from
+  // scratch on the next Play — pauses rather than resuming automatically,
+  // since a user stepping back almost always wants to re-read, not skip
+  // straight past it again.
+  function stepReplayBack() {
+    if (!_gcReplayActive || _gcReplayMsgIndex <= 0) return;
+
+    if (_gcReplayTimeout) {
+      clearTimeout(_gcReplayTimeout);
+      _gcReplayTimeout = null;
+    }
+    _gcReplayPaused = true;
+    _gcReplayClearHero();
+
+    const humanInput = document.getElementById('gcHumanInput');
+    if (humanInput && humanInput.classList.contains('gc-replay-typing')) {
+      humanInput.value = '';
+      humanInput.classList.remove('gc-replay-typing');
+    }
+    _gcReplayHumanTypeIndex = 0;
+    _gcReplayHumanSendPending = false;
+    _gcReplayHumanSent = false;
+
+    const targetIdx = Math.max(0, _gcReplayMsgIndex - 1);
+    const body = document.getElementById('gcReaderBody');
+    if (body) {
+      body.querySelectorAll('[data-replay-idx]').forEach((el) => {
+        if (Number(el.getAttribute('data-replay-idx')) >= targetIdx) el.remove();
+      });
+    }
+
+    _gcReplayMsgIndex = targetIdx;
+    _gcReplayWordIndex = 0;
+
+    renderReplayControls();
   }
 
   function exitReplayMode() {

@@ -22546,6 +22546,15 @@ body.has-gc-reader .pwa-install-banner {
   background: var(--border);
   border-color: var(--text-muted);
 }
+.gc-replay-btn:disabled {
+  opacity: 0.35;
+  cursor: default;
+  pointer-events: none;
+}
+.gc-replay-stepback-btn {
+  font-weight: 700;
+  padding: 4px 12px;
+}
 .gc-replay-skip-btn {
   color: var(--orange);
   border-color: rgba(240, 136, 62, 0.4);
