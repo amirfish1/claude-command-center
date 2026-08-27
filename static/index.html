@@ -64,6 +64,11 @@
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&family=Space+Grotesk:wght@600;700&display=swap">
 <title>Command Center for Claude, Codex, Cursor, and Anti-Gravity</title>
 <link rel="stylesheet" href="/static/app.css">
+<!-- Simple-mode CSS lives in its own file (extracted from app.css) so that
+     file's diff against upstream stays small — see simple.css's own header
+     comment. Loaded unconditionally; it's inert (never matches) outside
+     body.ccc-simple-mode. -->
+<link rel="stylesheet" href="/static/simple.css">
 <style>
   body.hide-gh-issues .is-github-issue {
     display: none !important;
@@ -136,6 +141,28 @@
 </script>
 </head>
 <body>
+  <!-- Simple-mode mobile bottom nav (body.ccc-mobile-redesign.ccc-simple-mode
+       only). Drives the EXISTING sidebar tab bar (data-conv-tab) and Settings
+       modal rather than introducing new screens/state — see app.js
+       _wireMobileBottomNav(). Hidden everywhere else via inline style. -->
+  <nav id="mobileBottomNav" class="mobile-bottom-nav" style="display:none;" aria-label="Main">
+    <button type="button" class="mobile-nav-btn" data-mobile-nav="home" aria-current="page" aria-label="Home">
+      <span class="mobile-nav-icon" aria-hidden="true">&#8962;</span>
+      <span class="mobile-nav-label mobile-sr-only">Home</span>
+    </button>
+    <button type="button" class="mobile-nav-btn" data-mobile-nav="tasks" aria-label="Tasks">
+      <span class="mobile-nav-icon" aria-hidden="true">&#128203;</span>
+      <span class="mobile-nav-label mobile-sr-only">Tasks</span>
+    </button>
+    <button type="button" class="mobile-nav-btn" data-mobile-nav="automations" aria-label="Helpers">
+      <span class="mobile-nav-icon" aria-hidden="true">&#9889;</span>
+      <span class="mobile-nav-label mobile-sr-only">Helpers</span>
+    </button>
+    <button type="button" class="mobile-nav-btn" data-mobile-nav="more" aria-label="More">
+      <span class="mobile-nav-icon" aria-hidden="true">&#8943;</span>
+      <span class="mobile-nav-label mobile-sr-only">More</span>
+    </button>
+  </nav>
   <!-- Floating Annotate button for popout contexts (CCC-166). The topbar
        Annotate button is hidden by the popout CSS, so this floating affordance
        surfaces the same flow in a conversation popout window. It reuses the
@@ -450,6 +477,212 @@
   <script src="/static/app-rail.js" defer></script>
 
   <div class="sidebar">
+    <!-- Simple-mode slim header (body.ccc-mobile-redesign.ccc-simple-mode
+         only). One clean bar — brand left, search + "+" right — replacing
+         the two stacked dashboard headers (brand/version/WatchTower/meta
+         row + New session/search/group/car row) that the CSS below hides
+         in Simple mode. Buttons forward to the EXISTING #convSearch and
+         #sidebarNewBtn via _wireMobileSimpleHeader(); no duplicated logic.
+         Hidden everywhere else via .mobile-simple-header base rule. -->
+    <header class="mobile-simple-header" id="mobileSimpleHeader">
+      <div class="msh-bar">
+        <span class="msh-brand">
+          <img class="msh-logo" src="/static/icon.svg" alt="" aria-hidden="true">
+          <span class="msh-wordmark">Command Center</span>
+        </span>
+        <div class="msh-actions">
+          <button type="button" class="msh-btn" id="mshSearchBtn" aria-label="Search" aria-expanded="false">
+            <svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="m21 21-4.3-4.3"/></svg>
+          </button>
+          <button type="button" class="msh-btn msh-btn-primary" id="mshNewBtn" aria-label="Start a task">
+            <svg viewBox="0 0 24 24" width="24" height="24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg>
+          </button>
+        </div>
+      </div>
+      <!-- Slide-down search bar (toggled by #mshSearchBtn). Hosts the REAL
+           #convSearch input relocated here in Simple mode, so its existing
+           wired handlers keep working. -->
+      <div class="msh-search-bar" id="mshSearchBar" hidden></div>
+    </header>
+    <!-- SIMPLE HOME (Iteration 1 of the Simple-UI redesign). The landing
+         surface when Simple mode is on (body.ccc-simple-mode +
+         body.ccc-simple-home-open, driven by _syncSimpleHomeVisibility() in
+         app.js). Plain-language, one decision per card: a composer that
+         starts a task, workers waiting on the user, work in progress, and
+         recently finished conversations. All data comes from the same
+         /api/* endpoints the full UI uses — no parallel store. Hidden
+         everywhere else via the #simpleHome base rule in app.css. Lives in
+         the SIDEBAR (not .main): at the mobile breakpoint .main is fixed
+         off-canvas until body.mobile-show-main, while the sidebar is the
+         always-visible layer that also hosts the slim header and bottom
+         nav. Home open therefore means "sidebar shows #simpleHome instead
+         of the list chrome"; opening a conversation slides .main in. -->
+    <div class="simple-home" id="simpleHome" aria-label="Home">
+      <!-- Home sections: user-orderable (drag handle) and collapsible (tap
+           the heading row) so a section can be shrunk down to just its
+           title, INCLUDING the composer itself (starts collapsed — see
+           _simpleLoadCollapsedSections()'s default-collapsed seed in
+           app.js). Order + collapsed state persist in localStorage — a real
+           preference, not per-session. Wired by _wireSimpleSectionDrag() /
+           _simpleToggleSectionCollapse() in app.js. -->
+      <section class="simple-section" data-simple-section="composer" aria-label="Start a new task">
+        <div class="simple-section-head">
+          <button type="button" class="simple-section-drag" aria-label="Drag to reorder this section" title="Drag to reorder">
+            <svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor" aria-hidden="true">
+              <circle cx="9" cy="6" r="1.6"></circle><circle cx="15" cy="6" r="1.6"></circle>
+              <circle cx="9" cy="12" r="1.6"></circle><circle cx="15" cy="12" r="1.6"></circle>
+              <circle cx="9" cy="18" r="1.6"></circle><circle cx="15" cy="18" r="1.6"></circle>
+            </svg>
+          </button>
+          <button type="button" class="simple-section-toggle" aria-expanded="true">
+            <h2 class="simple-h2">New conversation/task</h2>
+            <svg class="simple-section-chevron" viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 9l6 6 6-6"></path></svg>
+          </button>
+        </div>
+        <div class="simple-section-body">
+          <div class="simple-card simple-composer-card">
+            <textarea id="simpleComposerInput" class="simple-composer-input" rows="3"
+                      placeholder="What would you like help with?"
+                      aria-label="What would you like help with?"></textarea>
+            <div class="simple-chip-label" id="simpleAgentLabel">Who should do it?</div>
+            <div class="simple-chip-row" id="simpleAgentRow" role="group" aria-label="Choose a helper"></div>
+            <div class="simple-chip-label" id="simpleEffortLabel">How hard should it think?</div>
+            <div class="simple-chip-row" id="simpleEffortRow" role="group" aria-label="Choose thinking effort"></div>
+            <!-- Which project/folder the new task runs in. Populated from
+                 /api/repo/list by _simplePopulateFolderPicker() in app.js;
+                 defaults to the last-used repo so most starts need no
+                 attention, but it's always visible/changeable — silently
+                 defaulting to "whatever repo was last open" was the bug. -->
+            <div class="simple-chip-label" id="simpleFolderLabel">Which project?</div>
+            <select class="simple-folder-select" id="simpleFolderSelect" aria-label="Choose a project/folder">
+              <option value="">Loading projects…</option>
+            </select>
+            <!-- Speak instead of type: same Web Speech recognition as the
+                 advanced composer's #convMicBtn, targeting #simpleComposerInput.
+                 Wired via toggleSpeechRecognition('simple-home') in app.js. -->
+            <div class="simple-composer-actions">
+              <button type="button" class="mic-btn simple-mic-btn" id="simpleMicBtn"
+                      title="Record speech to input" aria-label="Record speech to input" aria-pressed="false">
+                <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                  <path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"></path>
+                  <path d="M19 10v2a7 7 0 0 1-14 0v-2"></path>
+                  <line x1="12" y1="19" x2="12" y2="23"></line>
+                  <line x1="8" y1="23" x2="16" y2="23"></line>
+                </svg>
+              </button>
+              <button type="button" class="simple-start-btn" id="simpleStartBtn">Start</button>
+            </div>
+            <div class="simple-toast" data-simple-toast role="status" aria-live="polite" hidden></div>
+          </div>
+        </div>
+      </section>
+      <section class="simple-section" data-simple-section="needs-you" aria-label="Needs you">
+        <div class="simple-section-head">
+          <button type="button" class="simple-section-drag" aria-label="Drag to reorder this section" title="Drag to reorder">
+            <svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor" aria-hidden="true">
+              <circle cx="9" cy="6" r="1.6"></circle><circle cx="15" cy="6" r="1.6"></circle>
+              <circle cx="9" cy="12" r="1.6"></circle><circle cx="15" cy="12" r="1.6"></circle>
+              <circle cx="9" cy="18" r="1.6"></circle><circle cx="15" cy="18" r="1.6"></circle>
+            </svg>
+          </button>
+          <button type="button" class="simple-section-toggle" aria-expanded="true">
+            <h2 class="simple-h2">Needs you</h2>
+            <svg class="simple-section-chevron" viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 9l6 6 6-6"></path></svg>
+          </button>
+        </div>
+        <div class="simple-section-body">
+          <div id="simpleNeedsYou" class="simple-card-list"></div>
+        </div>
+      </section>
+      <!-- Working + Finished merged into one last-activity-ordered list
+           (was two separate sections; users found the split hid ordering
+           and made "what happened most recently" hard to answer). Each
+           card's own color/badge (see _simpleTaskCardHtml) says whether
+           it's still running or finished-and-unseen. -->
+      <section class="simple-section" data-simple-section="tasks" aria-label="Your conversations">
+        <div class="simple-section-head">
+          <button type="button" class="simple-section-drag" aria-label="Drag to reorder this section" title="Drag to reorder">
+            <svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor" aria-hidden="true">
+              <circle cx="9" cy="6" r="1.6"></circle><circle cx="15" cy="6" r="1.6"></circle>
+              <circle cx="9" cy="12" r="1.6"></circle><circle cx="15" cy="12" r="1.6"></circle>
+              <circle cx="9" cy="18" r="1.6"></circle><circle cx="15" cy="18" r="1.6"></circle>
+            </svg>
+          </button>
+          <button type="button" class="simple-section-toggle" aria-expanded="true">
+            <h2 class="simple-h2">Your conversations</h2>
+            <svg class="simple-section-chevron" viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 9l6 6 6-6"></path></svg>
+          </button>
+        </div>
+        <div class="simple-section-body">
+          <div id="simpleTasks" class="simple-card-list"></div>
+          <button type="button" class="simple-see-all" id="simpleSeeAllFinished">See all past tasks &rarr;</button>
+        </div>
+      </section>
+    </div>
+    <!-- SIMPLE DEPTH-3 SCREENS (Simple-UI redesign, iteration 2). Full-screen
+         plain-language surfaces reachable in one tap from home / the bottom
+         nav — every screen within 3 taps of home must itself be simple, so
+         these replace the advanced sidebar lists, queue board, settings
+         modal, and search bar in Simple mode. Same sidebar layer as
+         #simpleHome (see its comment above); visibility is driven by
+         _simpleOpenScreen()/_syncSimpleHomeVisibility() in app.js via
+         body.ccc-simple-screen-open. All data comes from the same /api/*
+         endpoints the full UI uses; actions forward to existing controls
+         (theme segmented buttons, font steppers) via .click(). -->
+    <div class="simple-screen" id="simpleHistory" hidden aria-label="Past tasks">
+      <div class="simple-screen-head">
+        <h2 class="simple-h2">All past tasks</h2>
+      </div>
+      <input type="search" id="simpleHistorySearch" class="simple-search-input"
+             placeholder="Search past tasks&hellip;" aria-label="Search past tasks">
+      <div id="simpleHistoryList" class="simple-card-list"></div>
+    </div>
+    <div class="simple-screen" id="simpleAutomations" hidden aria-label="Helpers">
+      <div class="simple-screen-head">
+        <h2 class="simple-h2">Helpers</h2>
+      </div>
+      <div class="simple-screen-sub">Shared job lists that extra helpers can pick up work from. Tap one to see how it is doing.</div>
+      <div id="simpleAutomationsList" class="simple-card-list"></div>
+    </div>
+    <div class="simple-screen" id="simpleAutomationDetail" hidden aria-label="Helper details">
+      <div class="simple-screen-head">
+        <button type="button" class="simple-back-btn" data-simple-back data-simple-back-to="automations">&#8592; Back</button>
+        <h2 class="simple-h2" id="simpleAutomationDetailName">Helper queue</h2>
+      </div>
+      <div id="simpleAutomationDetailBody"></div>
+    </div>
+    <div class="simple-screen" id="simpleSettings" hidden aria-label="Settings">
+      <div class="simple-screen-head">
+        <h2 class="simple-h2">Settings</h2>
+      </div>
+      <div class="simple-settings-list">
+        <div class="simple-card simple-settings-row">
+          <div class="simple-settings-label">Colors</div>
+          <div class="simple-chip-row" id="simpleThemeRow" role="group" aria-label="Choose colors">
+            <button type="button" class="simple-chip" data-simple-theme="light"><span class="simple-chip-name">Light</span></button>
+            <button type="button" class="simple-chip" data-simple-theme="dark"><span class="simple-chip-name">Dark</span></button>
+            <button type="button" class="simple-chip" data-simple-theme="system"><span class="simple-chip-name">Match my device</span></button>
+          </div>
+        </div>
+        <div class="simple-card simple-settings-row">
+          <div class="simple-settings-label">Text size</div>
+          <div class="simple-chip-row" role="group" aria-label="Change text size">
+            <button type="button" class="simple-chip" id="simpleFontMinus"><span class="simple-chip-name">Smaller</span></button>
+            <button type="button" class="simple-chip" id="simpleFontPlus"><span class="simple-chip-name">Bigger</span></button>
+          </div>
+        </div>
+        <div class="simple-card simple-settings-row">
+          <div class="simple-settings-label">What&rsquo;s new</div>
+          <div class="simple-settings-desc">See what changed in the latest update.</div>
+          <button type="button" class="simple-chip" id="simpleWhatsNewBtn"><span class="simple-chip-name">Show me</span></button>
+        </div>
+        <div class="simple-card simple-settings-row">
+          <div class="simple-settings-label">Advanced view</div>
+          <div class="simple-settings-desc">The full technical dashboard, with every knob and dial.</div>
+          <button type="button" class="simple-chip" id="simpleAdvancedBtn"><span class="simple-chip-name">Switch to Advanced</span></button>
+        </div>
+      </div>
+    </div>
     <div class="sidebar-header">
       <div class="sidebar-header-brand">
       <div class="sh-title-row">
@@ -680,7 +913,16 @@
       </div>
     </div>
     <div class="toolbar" id="convToolbar">
-      <button class="mobile-back-btn" id="mobileBackBtn" title="Back to sidebar">&#8592;<span class="mb-label"> Back</span></button>
+      <!-- Shared back control for every mode: narrow-viewport "back to
+           sidebar" in Advanced, "back to Home" in Simple mode. One element,
+           one listener (wired once in app.js) that branches on isSimpleMode()
+           to pick the destination — no duplicate per-mode button. -->
+      <button class="mobile-back-btn" id="mobileBackBtn" title="Back">&#8592;<span class="mb-label"> Back</span></button>
+      <!-- Simple mode only (body.ccc-simple-conv-open): plain-language title
+           for the open conversation, set by _simpleUpdateConvTitle() in
+           app.js. In the Simple depth-2 view the rest of this toolbar is
+           hidden by CSS, so this span + the back button ARE the header. -->
+      <span class="simple-conv-title" id="simpleConvTitle"></span>
       <button type="button" class="mobile-original-ask" id="mobileOriginalAsk"
               aria-expanded="false" title="Show the full original ask" hidden>
         <span class="mobile-original-ask__label">Original ask</span>
@@ -778,11 +1020,43 @@
         </div>
         <div id="setupBanner" class="ccc-setup-banner"></div>
       </div>
+      <!-- Mobile redesign only (body.ccc-mobile-redesign): collapses the
+           Annotate/Screen/Notes/Worktrees/Stats/Terminal/deploy-pill row
+           above into one "More" button. app.js reparents those EXACT
+           button nodes into #cccTopbarMoreMenu when mobile mode is active
+           (not clones — same listeners/state), and moves them back on
+           exit. Hidden on desktop via inline style. -->
+      <div class="mobile-more-wrap">
+        <button type="button" id="cccTopbarMoreBtn" class="mobile-more-btn" style="display:none;" aria-haspopup="menu" aria-expanded="false">More</button>
+        <div id="cccTopbarMoreMenu" class="mobile-more-menu" role="menu" hidden></div>
+      </div>
       <div class="font-size-controls" data-debug-hide>
         <button class="font-size-btn" id="fontMinus" title="Decrease font size">A-</button>
         <button class="font-size-btn" id="fontPlus" title="Increase font size">A+</button>
       </div>
       <span style="font-size:11px;color:var(--text-muted);font-family:'SF Mono',SFMono-Regular,Consolas,monospace;opacity:0.6;cursor:pointer;user-select:all;margin-left:8px;" id="convSessionId" title="Click to copy session ID"></span>
+      <!-- Narrow-viewport Actions menu, shared by every mode (no
+           isSimpleMode() gate on the wrap itself) — one overflow menu at the
+           right edge of the toolbar instead of a per-mode set of standalone
+           buttons. Items forward to EXISTING controls (status-rail
+           rename/add-to-object, composer model picker, the global
+           #fontMinus/#fontPlus, /api/inject-esc) via .click()/direct call
+           rather than duplicating their logic — see _wireSimpleActionsMenu()
+           in app.js. The rename/move/change-model/technical-details rows are
+           Simple-only actions (rendered conditionally by isSimpleMode() at
+           render time, not by a parallel copy of this menu). -->
+      <div class="mobile-actions-wrap">
+        <button type="button" class="mobile-actions-btn" id="convSimpleActionsBtn" aria-haspopup="menu" aria-expanded="false" aria-label="Task actions"><span aria-hidden="true">&#8942;</span></button>
+        <div class="mobile-actions-menu" id="convSimpleActionsMenu" role="menu" hidden>
+          <button type="button" class="mobile-actions-item" data-simple-action="stop" role="menuitem"><span aria-hidden="true">&#9724;&nbsp;</span>Stop this task</button>
+          <button type="button" class="mobile-actions-item" data-simple-action="font-minus" role="menuitem"><span aria-hidden="true">A-&nbsp;</span>Smaller text</button>
+          <button type="button" class="mobile-actions-item" data-simple-action="font-plus" role="menuitem"><span aria-hidden="true">A+&nbsp;</span>Bigger text</button>
+          <button type="button" class="mobile-actions-item" data-simple-action="rename" role="menuitem" data-simple-only><span aria-hidden="true">&#9998;&nbsp;</span>Rename task</button>
+          <button type="button" class="mobile-actions-item" data-simple-action="move-to-project" role="menuitem" data-simple-only><span aria-hidden="true">&#128193;&nbsp;</span>Move to project</button>
+          <button type="button" class="mobile-actions-item" data-simple-action="change-model" role="menuitem" data-simple-only><span aria-hidden="true">&#129302;&nbsp;</span>Change assistant/model</button>
+          <button type="button" class="mobile-actions-item" data-simple-action="technical-details" role="menuitem" data-simple-only><span aria-hidden="true">&#8505;&nbsp;</span>Open technical details</button>
+        </div>
+      </div>
       <div class="conv-overflow-wrap">
         <button type="button" class="conv-overflow-btn" id="convOverflowBtn" title="More actions" aria-label="More actions" aria-haspopup="menu" aria-expanded="false">⋯</button>
         <div class="conv-overflow-menu" id="convOverflowMenu" role="menu" aria-hidden="true"></div>
@@ -837,6 +1111,30 @@
             <button type="button" class="conv-presentation-mode" data-presentation-mode="2" aria-pressed="false" title="Present assistant answers as semantic slides with complete live updates">Present</button>
             <button type="button" class="conv-presentation-mode" data-presentation-mode="3" aria-pressed="false" title="Ask the working agent to design a structured slide deck alongside each answer">Mode 3</button>
           </div>
+          <!-- Mobile redesign only (body.ccc-mobile-redesign): plain-language,
+               full-width buttons replacing the "Off / Present / Mode 3"
+               segment above. Reuses the SAME class + data-presentation-mode
+               values, so the existing delegated click handler and
+               syncPresentationToolbar() (both querySelectorAll-scoped, not
+               id-scoped) wire and sync these automatically — no JS changes
+               needed for the wiring itself. Collapsed by default behind
+               #convPresentationMobileToggle — the picker was eating the
+               top of the screen permanently on every conversation. -->
+          <button type="button" class="mobile-view-toggle" data-role="mobile-view-toggle" aria-pressed="false" aria-expanded="false">View: Chat</button>
+          <div class="conv-presentation-mobile-list" role="group" aria-label="Conversation presentation mode">
+            <button type="button" class="conv-presentation-mode mobile-view-btn" data-presentation-mode="off" aria-pressed="true">
+              <span class="mobile-view-name">Chat</span>
+              <span class="mobile-view-desc">The normal back-and-forth transcript.</span>
+            </button>
+            <button type="button" class="conv-presentation-mode mobile-view-btn" data-presentation-mode="2" aria-pressed="false">
+              <span class="mobile-view-name">Slides</span>
+              <span class="mobile-view-desc">Turns each answer into a slide instantly. No extra cost.</span>
+            </button>
+            <button type="button" class="conv-presentation-mode mobile-view-btn" data-presentation-mode="3" aria-pressed="false">
+              <span class="mobile-view-name">Slides, agent-designed</span>
+              <span class="mobile-view-desc">Asks the working agent to lay out a proper deck. Uses extra tokens.</span>
+            </button>
+          </div>
           <div class="conv-presentation-progress" data-role="presentation-progress" hidden>
             <span class="conv-presentation-answer-label"></span>
             <span class="conv-presentation-dots" aria-hidden="true"></span>
@@ -847,6 +1145,12 @@
         <div class="conversations-view" id="conversationsView">
           <div class="empty-state" style="height:auto;padding:40px;">Select a session from the sidebar</div>
         </div>
+        <!-- Simple mode only (body.ccc-simple-mode): plain-language
+             memory/usage line for the open conversation ("Memory: 71% full
+             — plenty of room left"). Populated by _simpleUpdateUsageLine()
+             in app.js from GET /api/session/<sid>/usage; empty + hidden
+             outside Simple mode. -->
+        <div class="simple-usage-line" id="simpleUsageLine" role="status" aria-live="polite"></div>
         <div class="conv-input-context" id="convInputContext" data-role="input-context">
           <span class="wp-row" data-workspace></span>
           <span id="newSessionObjectContext" class="new-session-object-context" aria-label="Object for new session"></span>
@@ -1165,6 +1469,10 @@
                   <circle cx="12" cy="12" r="9"></circle>
                   <path d="M12 7v5l3.5 2"></path>
                 </svg>
+                <!-- Simple mode only: a plain word on the send button (the
+                     bare arrow icon is not obvious to a non-programmer).
+                     Hidden outside body.ccc-simple-mode by CSS. -->
+                <span class="send-btn-label">Send</span>
               </button>
               <!-- Submit+ : appends a "reply phone-style, short & conversational"
                    instruction to the message, sends it, then auto-reads the
@@ -2016,6 +2324,18 @@
 
           <section class="settings-section" id="settingsSection-layout" data-section-id="layout" role="tabpanel" aria-labelledby="settingsRailTab-layout">
             <div class="settings-section-eyebrow">Layout &amp; View</div>
+
+            <div class="settings-row" data-keywords="simple advanced mode interface beginner plain language jargon technical">
+              <div class="settings-row-main">
+                <div class="settings-row-label">Simple mode</div>
+                <div class="settings-row-desc">Plain-language labels, one status per task, and technical details (sessions, branches, tokens, models) tucked behind an Actions menu. Advanced mode is today's full interface, unchanged.</div>
+              </div>
+              <div class="settings-row-control">
+                <button type="button" class="settings-toggle" id="settingsUiModeToggle" data-ui-mode-toggle role="switch" aria-checked="false" aria-label="Simple mode">
+                  <span class="settings-toggle-track"><span class="settings-toggle-thumb"></span></span>
+                </button>
+              </div>
+            </div>
 
             <div class="settings-row" data-keywords="github issues show hide gh view conversation list">
               <div class="settings-row-main">

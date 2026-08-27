@@ -1,0 +1,1 @@
+Fixed a leak in Simple mode's conversation view: a message sent while the agent was still busy showed raw "Cancel"/"Steer" buttons (advanced concepts); the queued message itself still shows, but those two buttons are now hidden like the rest of the advanced toolbar.

@@ -1,0 +1,1 @@
+Simple mode's Working-on-it/Finished/history cards now show the engine icon inline with the task name, plus a color bar: blue for a task still running, amber for a finished task you haven't opened yet. Opening a card marks it seen; a finished-but-unseen highlight clears the moment you tap it.

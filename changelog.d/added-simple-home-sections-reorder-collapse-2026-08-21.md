@@ -1,0 +1,1 @@
+Simple mode's home sections ("Needs you", "Working on it", "Finished") can now be dragged into whatever order suits you (drag the handle) and collapsed down to just their heading (tap the heading) so you can scan and decide what to focus on; both preferences persist across reloads.
