@@ -531,5 +531,27 @@ class DevinListPerfTests(unittest.TestCase):
             self.assertEqual(rows["devincli-alpha-one"]["model"], "claude-opus-5")
 
 
+    def test_devin_overlay_fills_snapshot_gap(self):
+        """A just-spawned Devin CLI row missing from the archive snapshot is
+        overlaid on the /list path; rows already present or old are not."""
+        server, devin_mod, db_path, now = self._setup()
+        con = sqlite3.connect(db_path)
+        # Devin stores session timestamps in epoch seconds; two hours old is
+        # well outside the overlay window and there is no lock file for it.
+        old_s = int(time.time()) - 2 * 3600
+        con.execute(
+            "INSERT INTO sessions VALUES (?, ?, '', '', '', ?, ?, NULL, NULL)",
+            ("gamma-old", "/tmp/ccc", old_s, old_s),
+        )
+        con.commit()
+        con.close()
+        rows = server._archive_overlay_devin_cli_sessions([])
+        ids = sorted(r["id"] for r in rows)
+        self.assertEqual(ids, ["devincli-alpha-one", "devincli-beta-two"])
+        self.assertTrue(all(r["source"] == "devin-cli" for r in rows))
+        rows = server._archive_overlay_devin_cli_sessions([{"id": "devincli-alpha-one"}])
+        self.assertEqual([r["id"] for r in rows], ["devincli-beta-two"])
+
+
 if __name__ == "__main__":
     unittest.main()

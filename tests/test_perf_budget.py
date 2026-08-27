@@ -211,6 +211,11 @@ def test_archive_list_source_avoids_copying_full_snapshot(monkeypatch):
         return expected, True, 7
 
     monkeypatch.setattr(server, "_archive_serve_rows_versioned", serve)
+    # The in-memory overlays (ACP, Devin CLI) legitimately append rows when
+    # this machine has live sessions; keep the copy assertion about the
+    # snapshot itself, not about the host's session state.
+    monkeypatch.setattr(server, "_archive_overlay_acp_sessions", lambda rows: [])
+    monkeypatch.setattr(server, "_archive_overlay_devin_cli_sessions", lambda rows, now=None: [])
     options = {"include_prs": False}
 
     rows, from_cache = server._archive_list_source_rows_cached(options)

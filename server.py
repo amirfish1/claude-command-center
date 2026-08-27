@@ -11332,7 +11332,52 @@ def _archive_list_source_rows_cached(cache_options, *, force_refresh=False):
     overlay = _archive_overlay_acp_sessions(rows)
     if overlay:
         rows = list(rows or []) + overlay
+    # Same gap for Devin CLI: the session row exists in sessions.db within a
+    # second of spawn, but the archive snapshot only picks it up after the
+    # next full background rebuild (~20s+ on a large corpus). The Devin CLI
+    # list is memoized per session, so asking it here costs a few stat()s on
+    # a cached poll and ~0.1s when the DB changed.
+    devin_overlay = _archive_overlay_devin_cli_sessions(rows)
+    if devin_overlay:
+        rows = list(rows or []) + devin_overlay
     return rows, from_cache
+
+
+# A Devin CLI row missing from the snapshot is overlaid only while it is
+# plausibly "just spawned": live, or modified within this window. Older rows
+# absent from the snapshot were dropped on purpose (per-folder limits).
+_ARCHIVE_DEVIN_OVERLAY_WINDOW_S = 15 * 60
+
+
+def _archive_overlay_devin_cli_sessions(rows, now=None):
+    """Archive-shaped Devin CLI rows that are live or recent but missing from
+    the cached snapshot. Rows come from the same producer that feeds the
+    archive build, so their shape is identical."""
+    try:
+        if not _devin_cli_db_path().is_file():
+            return []
+    except OSError:
+        return []
+    existing = set()
+    for r in (rows or []):
+        sid = r.get("session_id") or r.get("id")
+        if sid:
+            existing.add(str(sid))
+    try:
+        devin_rows = find_devin_cli_conversations(include_old=True, repo_only=False)
+    except Exception:
+        return []
+    now = time.time() if now is None else now
+    cutoff = now - _ARCHIVE_DEVIN_OVERLAY_WINDOW_S
+    out = []
+    for r in devin_rows:
+        sid = str(r.get("session_id") or r.get("id") or "")
+        if not sid or sid in existing:
+            continue
+        if not (r.get("is_live") or float(r.get("modified") or 0) >= cutoff):
+            continue
+        out.append(r)
+    return out
 
 
 def _archive_overlay_acp_sessions(rows):
