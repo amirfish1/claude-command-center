@@ -6,12 +6,14 @@
 //   1. Spawns a demo orchestrator session in this repo (Claude, small task).
 //   2. Opens the dashboard in headless Chrome, selects that session, and
 //      starts a screencast (webm, via puppeteer + ffmpeg).
-//   3. Taps Plan: the brief is injected and sent, the session starts planning.
-//   4. Switches the Executor tier, shift-clicks Delegate so the brief lands
-//      in the composer for a look without spawning anything.
-//   5. Spawns two cheap real lanes (Haiku, "say done") under the demo
+//   3. Switches the Executor tier, then taps Delegate: the one-line prompt
+//      is injected and sent, the session becomes the orchestrator.
+//   4. Spawns two cheap real lanes (Haiku, "say done") under the demo
 //      session so the lane map animates on live data: born, working, landed.
-//   6. Shows the Metadata tab with Files docked at the bottom, then ends.
+//   5. Opens a landed lane from the map: the map stays rooted at the
+//      orchestrator, the lane lights up as "here"; taps the root to go back.
+//   6. Shift-clicks Verify to show the prompt without sending, then shows
+//      the Metadata tab with Files docked at the bottom, and ends.
 //
 // Usage (from the repo root, CCC running on :8090 or per port.txt):
 //   node scripts/demo-orchestration.js
@@ -206,36 +208,28 @@ async function main() {
   await say('CCC Orchestration: one tap turns a session into an orchestrator.', 2200);
   await tap(rowSel);
   await sleep(2500);
-  await say('The right rail opens on Orchestration. Five playbooks, each is just a prompt.', 2600);
+  await say('The right rail opens on Orchestration. Three playbooks. Each one is a single sentence.', 2600);
   await tap('[data-rail-tab="orchestration"]');
   await sleep(900);
 
-  // 3. Plan (real).
-  await say('1 · Plan. The brief lands in the composer and is sent to the session.', 1200);
-  await tap('[data-orch-playbook="plan"]');
-  await sleep(1500);
-  await say('The session now writes a plan sized for one lane per step. No code, no spawns yet.', 7000);
-
-  // 4. Executor tier + Delegate paste.
-  await say('2 · Delegate has a second tier: the Executor. Pick who does the work.', 1500);
+  // 3. Executor tier, then Delegate for real.
+  await say('Delegate has a second tier: the Executor. Pick who does the work.', 1500);
   await tap('[data-orch-executor="gpt-5.6-terra"]');
   await sleep(1300);
   await tap('[data-orch-executor="grok-4.6"]');
   await sleep(1300);
   await tap('[data-orch-executor="sonnet-5"]');
   await sleep(900);
-  await say('Verify and Critique pick the other model family automatically. No lane grades its own homework.', 3200);
-  await say('Shift-click pastes the brief without sending, so you can read it first.', 1200);
-  await tap('[data-orch-playbook="delegate"]', { shift: true });
-  await sleep(4500);
-  await page.evaluate(() => {
-    const t = document.querySelector('.conv-pane .conv-input-bar textarea');
-    if (t) { t.value = ''; t.dispatchEvent(new Event('input', { bubbles: true })); }
-  });
+  await say('Verify and Critique pick the other model family automatically. No lane grades its own homework.', 3000);
+  await say('Delegate. One sentence goes into the session: "Use CCC orchestration to delegate execution to Sonnet 5."', 1400);
+  await tap('[data-orch-playbook="delegate"]');
+  await sleep(1500);
+  await say('The session now owns the plan and spawns CCC lanes for the work. It coordinates; lanes implement.', 5500);
 
-  // 5. Lanes on live data.
+  // 4. Lanes on live data.
   await say('Lane map: the orchestrator on top, every session it spawns hangs below.', 1500);
   await glide('#orchMapWrap', 600);
+  let laneConv = null;
   if (process.env.DEMO_NO_LANES === '1') {
     await tap('#orchMapPreview');
     await say('Lanes are born from the orchestrator, pulse while working, and drop to Landed when done.', 13000);
@@ -263,14 +257,37 @@ async function main() {
       await sleep(2000);
     }
     await say('Done lanes glide down to Landed. Their reports inject back into the orchestrator.', 4000);
+    laneConv = await page.evaluate(() => {
+      const el = document.querySelector('#orchMapDone .orch-node[data-conv-id]') || document.querySelector('#orchMapLanes .orch-node[data-conv-id]');
+      return el ? el.getAttribute('data-conv-id') : null;
+    });
   }
+
+  // 5. Open a lane from the map; the map stays rooted at the orchestrator.
+  if (laneConv) {
+    await say('Tap a lane to open it. The map stays the same, rooted at the orchestrator; the lane lights up as here.', 1500);
+    await tap('.orch-node[data-conv-id="' + laneConv + '"]');
+    await sleep(4000);
+    await say('Tap the orchestrator to go back.', 1000);
+    await tap('.orch-node-root[data-conv-id]');
+    await sleep(2500);
+  }
+
+  // Verify: paste without sending, for a look.
+  await say('Shift-click pastes the prompt without sending. Verify: "Use CCC orchestration to verify with 5.6 Terra."', 1200);
+  await tap('[data-orch-playbook="verify"]', { shift: true });
+  await sleep(3500);
+  await page.evaluate(() => {
+    const t = document.querySelector('.conv-pane .conv-input-bar textarea');
+    if (t) { t.value = ''; t.dispatchEvent(new Event('input', { bubbles: true })); }
+  });
 
   // 6. Metadata with Files docked.
   await say('Metadata keeps the session facts, with Files docked at the bottom.', 1200);
   await tap('[data-rail-tab="metadata"]');
   await sleep(3200);
   await tap('[data-rail-tab="orchestration"]');
-  await say('Plan. Delegate. Verify. Critique. Land. That is CCC Orchestration.', 3000);
+  await say('Delegate. Verify. Critique. That is CCC Orchestration.', 3000);
   await say('', 600);
   await recorder.stop();
   await browser.close();

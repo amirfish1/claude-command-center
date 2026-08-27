@@ -54850,12 +54850,14 @@
     { id: 'gemini-3.5',    engine: 'antigravity', model: 'Gemini 3.5 Pro (High)', label: 'Gemini 3.5 Pro', vendor: 'Antigravity', family: 'google' },
     { id: 'kimi-k3',       engine: 'kimi',        model: 'kimi-code/k3',          label: 'Kimi K3',        vendor: 'Kimi',        family: 'moonshot' },
   ];
+  // Three playbooks, three one-line prompts. Each names the models and
+  // says "CCC orchestration" -- the phrase the session's skill keys on;
+  // the how (spawn API, report_to, lane briefs) lives in that skill, not
+  // in the prompt.
   const ORCH_PLAYBOOKS = [
-    { id: 'plan',     n: '1', title: 'Plan',     sub: 'Think before code.' },
-    { id: 'delegate', n: '2', title: 'Delegate', sub: 'Fan out to CCC lanes.', tier: true },
-    { id: 'verify',   n: '3', title: 'Verify',   sub: 'Fresh-eyes tester lane.' },
-    { id: 'critique', n: '4', title: 'Critique', sub: 'Two blunt reviewers.' },
-    { id: 'land',     n: '5', title: 'Land',     sub: 'Commit + summary. No push.' },
+    { id: 'delegate', title: 'Delegate', sub: 'Execution runs on lanes, not here.', tier: true },
+    { id: 'verify',   title: 'Verify',   sub: 'A different model family checks the work.' },
+    { id: 'critique', title: 'Critique', sub: 'Two outside reviewers, blunt.' },
   ];
   const ORCH_ENGINE_GLYPH = {
     claude: 'C', codex: 'X', antigravity: 'A', gemini: 'A', grok: 'G', devin: 'D',
@@ -54901,56 +54903,39 @@
     const row = convId ? (conversationsData || []).find(c => c && c.id === convId) : null;
     const sid = (row && row.session_id) || sessionIdByConv[convId] || (currentSession && currentSession.id) || '';
     const repo = (row && (row.session_cwd || row.folder_path)) || (currentSession && currentSession.cwd) || '';
-    return { convId, row, sid, repo, cccUrl: location.origin };
+    const root = orchResolveRoot(row, sid);
+    return { convId, row, sid, repo, cccUrl: location.origin, rootRow: root.row, rootSid: root.sid };
+  }
+  // The map is always drawn from the orchestrator down, so opening a lane
+  // from the map shows the same picture with a different node lit up.
+  // Walk parent_session_id up to the top (rows first, registry as a
+  // fallback for lanes whose transcript has not shown up yet).
+  function orchResolveRoot(row, sid) {
+    const rows = conversationsData || [];
+    const bySid = new Map();
+    rows.forEach(r => { if (r && r.session_id) bySid.set(r.session_id, r); });
+    const spawnBySid = new Map();
+    (_orchSpawnedRegistry || []).forEach(sp => { if (sp && sp.session_id) spawnBySid.set(sp.session_id, sp); });
+    let curRow = row || bySid.get(sid) || null;
+    let curSid = sid;
+    for (let depth = 0; depth < 6; depth++) {
+      const sp = spawnBySid.get(curSid);
+      const pid = String((curRow && (curRow.parent_session_id || curRow.hermes_parent_session_id)) || (sp && sp.parent_session_id) || '');
+      if (!pid || pid === curSid) break;
+      curSid = pid;
+      curRow = bySid.get(pid) || null;
+    }
+    return { row: curRow, sid: curSid };
   }
 
-  function orchSpawnLine(ctx, e, promptLabel) {
-    return '  POST ' + ctx.cccUrl + '/api/sessions/spawn\n'
-      + '  {"prompt": "<' + promptLabel + '>", "repo_path": "' + ctx.repo + '", "engine": "' + e.engine
-      + '", "model": "' + e.model + '", "report_to": "' + ctx.sid + '"}';
-  }
-
-  function orchPrompt(id, ctx) {
+  function orchPrompt(id) {
     const ex = orchExecutor();
     const tester = orchTester(ex);
     const critics = orchCritics(ex);
-    const sandbox = '  (curl from a shell with the network sandbox disabled; loopback is blocked otherwise.)';
     switch (id) {
-      case 'plan':
-        return '[CCC Orchestration · Plan]\n'
-          + 'Role: you are the ORCHESTRATOR for this session. Planning stays on your current model; execution is delegated to CCC lanes later.\n'
-          + '1. Restate the goal in at most 3 lines.\n'
-          + '2. Write the plan as numbered steps. Each step must be small enough for one worker session (about an hour), name the files it touches, and end with a done-check (a command to run or a visible result).\n'
-          + '3. Mark which steps can run in parallel and which must wait for another.\n'
-          + '4. Ask me at most 2 questions, and only if the answer changes the plan.\n'
-          + 'Do not write code yet. Do not spawn anything yet. When I send the Delegate playbook, you fan out.';
-      case 'delegate':
-        return '[CCC Orchestration · Delegate — executor: ' + orchExecLabel(ex) + ']\n'
-          + 'Fan the plan out. You coordinate; lanes implement. Do not implement steps yourself.\n'
-          + 'For every step that can run now, spawn one CCC lane (the ccc-orchestration skill documents this API):\n'
-          + orchSpawnLine(ctx, ex, 'lane brief') + '\n' + sandbox + '\n'
-          + 'Lane brief = the goal of the step, the files it touches, its done-check, and: "commit your own paths with git commit --only, never push, report back when done".\n'
-          + 'Rules: list this repo\'s sessions first and never spawn a duplicate lane for a step that already has one. Keep at most 4 lanes running. '
-          + 'Each lane reports back to you (session ' + ctx.sid + ') through /api/inject-input when it finishes; when a report lands, run the done-check yourself before marking the step done. '
-          + 'Post me a one-line status each time a lane starts or lands.';
-      case 'verify':
-        return '[CCC Orchestration · Verify — tester: ' + orchExecLabel(tester) + ']\n'
-          + 'Do not trust the executor\'s claim. Spawn ONE independent verification lane on a different model family:\n'
-          + orchSpawnLine(ctx, tester, 'verify brief') + '\n' + sandbox + '\n'
-          + 'Verify brief: "Fresh eyes. Run the test suite. Exercise the change in the real app (browser via snapshot.js or puppeteer if it is UI, curl if it is API). '
-          + 'Report PASS or FAIL with evidence: command output, a screenshot path, or reproduction steps. Do not fix anything."\n'
-          + 'When the report lands: PASS means the step is verified. FAIL means you re-open the step with the failing evidence attached and delegate the fix to the executor lane.';
-      case 'critique':
-        return '[CCC Orchestration · Critique — reviewers: ' + critics.map(orchExecLabel).join(' + ') + ']\n'
-          + 'Get two independent second opinions on the current plan (or the diff, if code exists). Spawn two lanes with report_to ' + ctx.sid + ', one per reviewer, same brief:\n'
-          + '  "Critique this independently. What breaks? What is missing? What would you cut? Be blunt. Five bullets max, most important first. Do not implement."\n'
-          + critics.map((c, i) => '  Reviewer ' + (i + 1) + ': engine ' + c.engine + ', model "' + c.model + '"').join('\n') + '\n'
-          + 'When both reports land, merge them into one ranked list, decide what you accept and reject (one line of reasoning each), apply the accepted changes to the plan, and tell me what changed.';
-      case 'land':
-        return '[CCC Orchestration · Land]\n'
-          + 'Close out. Confirm every lane reported back (list any that did not, and ask each of them once via /api/ask with a 60s timeout). Confirm tests pass. '
-          + 'Commit your own paths with git commit --only <paths>. Do not push.\n'
-          + 'Then give me a five-line summary: what shipped, what was verified and by which lane, what was cut, what is left, and the next thing I should do.';
+      case 'delegate': return 'Use CCC orchestration to delegate execution to ' + orchExecLabel(ex) + '.';
+      case 'verify':   return 'Use CCC orchestration to verify with ' + orchExecLabel(tester) + '.';
+      case 'critique': return 'Use CCC orchestration to critique with ' + critics.map(orchExecLabel).join(' and ') + '.';
     }
     return '';
   }
@@ -54961,7 +54946,7 @@
   async function orchInject(playbookId, sendNow) {
     const ctx = orchContext();
     if (!ctx.convId) { showOpToast('Select a session first.', 'error'); return; }
-    const text = orchPrompt(playbookId, ctx);
+    const text = orchPrompt(playbookId);
     if (!text) return;
     const paneId = activePaneId();
     const paneEl = document.querySelector('.conv-pane[data-pane-id="' + paneId + '"]');
@@ -54999,13 +54984,12 @@
       if (pb.id === 'critique') meta = 'Reviewers: ' + critics.map(c => c.label).join(' + ');
       let html = '<button type="button" class="orch-playbook orch-playbook-' + pb.id + '" data-orch-playbook="' + pb.id + '"'
         + ' title="Inject the ' + pb.title + ' playbook into this session. Shift-click to paste without sending.">'
-        + '<span class="orch-playbook-n">' + pb.n + '</span>'
+        + '<span class="orch-playbook-arrow" aria-hidden="true">&#8592;</span>'
         + '<span class="orch-playbook-body">'
         + '<span class="orch-playbook-title">' + escapeHtml(pb.title) + '</span>'
         + '<span class="orch-playbook-sub">' + escapeHtml(sub) + '</span>'
         + (meta ? '<span class="orch-playbook-meta">' + escapeHtml(meta) + '</span>' : '')
         + '</span>'
-        + '<span class="orch-playbook-arrow" aria-hidden="true">&#8594;</span>'
         + '</button>';
       if (pb.tier) {
         html += '<div class="orch-tier" role="radiogroup" aria-label="Executor model">'
@@ -55131,7 +55115,9 @@
     if (pane.hidden) return;   // nothing visible to measure — skip the work
     if (hasSession) orchRefreshRegistry(false);
 
-    const sid = ctx.sid;
+    const sid = ctx.rootSid || ctx.sid;
+    const hereSid = ctx.sid;
+    const atRoot = !ctx.rootSid || ctx.rootSid === ctx.sid;
     if (sid !== _orchLastSid) { _orchLastKeys = new Set(); _orchLastSid = sid; }
     const lanes = orchCollectLanes(sid);
     const active = lanes.filter(l => l.status !== 'done');
@@ -55140,18 +55126,20 @@
     const waiting = active.filter(l => l.status === 'waiting').length;
 
     // Root (orchestrator) node.
-    const rootRow = ctx.row || (_orchSim ? _orchSim.root : null);
-    const rootName = _orchSim ? _orchSim.root.name : ((rootRow && rootRow.display_name) || 'This session');
+    const rootRow = ctx.rootRow || ctx.row || (_orchSim ? _orchSim.root : null);
+    const rootName = _orchSim ? _orchSim.root.name : ((rootRow && rootRow.display_name) || (atRoot ? 'This session' : sid.slice(0, 8)));
     const rootEngine = _orchSim ? _orchSim.root.engine : ((rootRow && rootRow.engine) || 'claude');
     const rootModel = _orchSim ? _orchSim.root.model : ((rootRow && rootRow.model) || '');
+    const rootConv = (rootRow && rootRow.id) || '';
     rootEl.innerHTML = hasSession || _orchSim
-      ? '<div class="orch-node orch-node-root' + (working ? ' is-fanning' : '') + '">'
+      ? '<button type="button" class="orch-node orch-node-root' + (working ? ' is-fanning' : '') + (atRoot ? ' is-here' : '') + '"'
+        + (rootConv && !atRoot ? ' data-conv-id="' + escapeAttr(rootConv) + '" title="Back to the orchestrator"' : '') + '>'
         + '<span class="orch-node-glyph orch-glyph orch-glyph-' + escapeAttr(rootEngine) + '">' + (ORCH_ENGINE_GLYPH[rootEngine] || '?') + '</span>'
         + '<span class="orch-node-body">'
         + '<span class="orch-node-role">Orchestrator</span>'
         + '<span class="orch-node-name">' + escapeHtml(rootName) + '</span>'
         + '<span class="orch-node-model">' + escapeHtml(rootModel || rootEngine) + '</span>'
-        + '</span></div>'
+        + '</span></button>'
       : '';
     if (countEl) {
       countEl.textContent = !lanes.length ? ''
@@ -55182,6 +55170,7 @@
           el.setAttribute('data-conv-id', lane.convId);
         }
         el.classList.toggle('is-compact', !!compact);
+        el.classList.toggle('is-here', !!lane.id && lane.id === hereSid);
         el.className = el.className.replace(/\bis-(working|waiting|idle|done)\b/g, '').trim() + ' is-' + lane.status;
         el.title = lane.name + ' · ' + (lane.model || lane.engine) + ' · ' + lane.status + ' · click to open';
         const html = orchNodeHtml(lane, compact);
@@ -55206,7 +55195,7 @@
     if (doneLabel) doneLabel.hidden = !landed.length;
     lanesEl.classList.toggle('is-empty', !active.length);
     lanesEl.setAttribute('data-empty-text', hasSession
-      ? (lanes.length ? 'All lanes landed.' : 'Lanes appear here when this session spawns them. Tap Delegate.')
+      ? (lanes.length ? 'All lanes landed.' : 'Lanes appear here when the orchestrator spawns them. Tap Delegate.')
       : '');
 
     // Animate: moved nodes glide (FLIP); brand-new nodes are born out of
@@ -55358,7 +55347,7 @@
       const pb = ev.target.closest('[data-orch-playbook]');
       if (pb) { orchInject(pb.getAttribute('data-orch-playbook'), !ev.shiftKey); return; }
       if (ev.target.closest('#orchMapPreview')) { orchPlayPreview(); return; }
-      const node = ev.target.closest('.orch-node-lane[data-conv-id]');
+      const node = ev.target.closest('.orch-node[data-conv-id]');
       if (node) {
         const cid = node.getAttribute('data-conv-id');
         if (cid && typeof selectConversation === 'function') selectConversation(cid);

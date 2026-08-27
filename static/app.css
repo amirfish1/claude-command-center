@@ -25262,7 +25262,8 @@ html:not(.ccc-debug-mode) #statsModal {
 .orch-playbooks {
   display: flex;
   flex-direction: column;
-  gap: 6px;
+  gap: 16px;
+  padding: 4px 0 6px;
   flex: 0 0 auto;
 }
 .orch-playbooks.is-disabled .orch-playbook { opacity: 0.45; pointer-events: none; }
@@ -25270,12 +25271,12 @@ html:not(.ccc-debug-mode) #statsModal {
   --pb: var(--accent);
   position: relative;
   display: grid;
-  grid-template-columns: 26px minmax(0, 1fr) 14px;
+  grid-template-columns: 18px minmax(0, 1fr);
   align-items: center;
   gap: 10px;
   width: 100%;
-  min-height: 46px;
-  padding: 7px 10px;
+  min-height: 54px;
+  padding: 9px 12px 9px 10px;
   border: 1px solid color-mix(in srgb, var(--pb) 35%, var(--border));
   border-radius: 10px;
   background:
@@ -25295,24 +25296,9 @@ html:not(.ccc-debug-mode) #statsModal {
 }
 .orch-playbook:active { transform: translateY(0) scale(0.99); }
 .orch-playbook:focus-visible { outline: 2px solid var(--pb); outline-offset: 2px; }
-.orch-playbook-plan     { --pb: #58a6ff; }
 .orch-playbook-delegate { --pb: #a371f7; }
 .orch-playbook-verify   { --pb: #3fb950; }
 .orch-playbook-critique { --pb: #d29922; }
-.orch-playbook-land     { --pb: #39c5cf; }
-.orch-playbook-n {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 26px;
-  height: 26px;
-  border-radius: 999px;
-  background: color-mix(in srgb, var(--pb) 22%, transparent);
-  color: var(--pb);
-  font-weight: 800;
-  font-size: 13px;
-  font-variant-numeric: tabular-nums;
-}
 .orch-playbook-body { display: flex; flex-direction: column; min-width: 0; gap: 1px; }
 .orch-playbook-title { font-size: 13px; font-weight: 700; letter-spacing: -0.01em; }
 .orch-playbook-sub { font-size: 10.5px; line-height: 1.3; color: var(--text-muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
@@ -25325,8 +25311,14 @@ html:not(.ccc-debug-mode) #statsModal {
   overflow: hidden;
   text-overflow: ellipsis;
 }
-.orch-playbook-arrow { color: var(--pb); font-size: 16px; opacity: 0.7; transition: transform 140ms ease, opacity 140ms ease; }
-.orch-playbook:hover .orch-playbook-arrow { transform: translateX(3px); opacity: 1; }
+.orch-playbook-arrow { color: var(--pb); font-size: 18px; line-height: 1; opacity: 0.75; transition: transform 140ms ease, opacity 140ms ease; }
+.orch-playbook:hover .orch-playbook-arrow { transform: translateX(-4px); opacity: 1; }
+.orch-playbook.is-fired .orch-playbook-arrow { animation: orch-arrow-push 600ms ease-out; }
+@keyframes orch-arrow-push {
+  0% { transform: translateX(0); }
+  40% { transform: translateX(-9px); opacity: 1; }
+  100% { transform: translateX(0); }
+}
 .orch-playbook.is-fired::after {
   content: '';
   position: absolute;
@@ -25440,7 +25432,7 @@ html:not(.ccc-debug-mode) #statsModal {
     radial-gradient(circle at 1px 1px, color-mix(in srgb, var(--text-muted) 18%, transparent) 1px, transparent 1.5px) 0 0 / 14px 14px,
     var(--bg);
   padding: 14px 10px 12px;
-  min-height: 200px;
+  min-height: 150px;
   flex: 1 0 auto;
   overflow: hidden;
 }
@@ -25527,6 +25519,11 @@ button.orch-node:hover { border-color: color-mix(in srgb, var(--accent) 60%, var
   box-shadow: 0 0 0 4px color-mix(in srgb, var(--accent) 10%, transparent);
 }
 .orch-node-root.is-fanning { animation: orch-root-pulse 1.8s ease-in-out infinite; }
+.orch-node-root { font: inherit; color: var(--text); text-align: left; cursor: default; }
+.orch-node-root[data-conv-id] { cursor: pointer; }
+.orch-node-root[data-conv-id]:hover { border-color: var(--accent); }
+.orch-node.is-here { box-shadow: 0 0 0 2px var(--bg), 0 0 0 4px color-mix(in srgb, var(--accent) 75%, transparent); }
+.orch-node.is-here .orch-node-name::after { content: ' · here'; font-weight: 500; color: var(--accent); }
 @keyframes orch-root-pulse {
   0%, 100% { box-shadow: 0 0 0 4px color-mix(in srgb, #a371f7 12%, transparent); }
   50% { box-shadow: 0 0 0 8px color-mix(in srgb, #a371f7 5%, transparent); }
