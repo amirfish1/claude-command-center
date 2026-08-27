@@ -26379,10 +26379,15 @@
   // pastes) were never typed by a human, so replaying them keystroke by
   // keystroke into the composer reads wrong and takes forever. The
   // transcript does not record who typed a user turn, so go by shape.
+  // Shape only: a recognisable machine preamble, or a wall of text no
+  // human types into a chat box. Long or multi-line prompts on their own
+  // are NOT a signal (people paste and write paragraphs); an earlier
+  // 240-char / any-newline rule silently turned every real prompt into a
+  // bubble and the typing animation looked gone.
   function _convReplayLooksInjected(text) {
-    const t = String(text || '');
-    if (t.length > 240 || t.indexOf('\n') !== -1) return true;
-    return /^(announced from:|\[ccc |<ccc-|use ccc orchestration|when ready to execute|when execution lands|before landing,|\[?system\]?:|\[?hook)/i.test(t.trimStart());
+    const t = String(text || '').trimStart();
+    if (t.length > 2500) return true;
+    return /^(announced from:|\[ccc |\[request interrupted|<ccc-|<system|<hook|use ccc orchestration|when ready to execute|when execution lands|before landing,|\[?system\]?:|\[?hook)/i.test(t);
   }
   function _convReplayHumanStep(item) {
     const textEl = _convReplayTextContainer(item.el);
