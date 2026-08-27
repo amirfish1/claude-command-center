@@ -4924,6 +4924,12 @@
   }
   .conv-item:hover { background: var(--surface-2); }
   .conv-item.active { background: var(--surface-2); border-left-color: var(--purple); }
+  /* Orchestration family of the selected session: root teal, lanes purple.
+     Uses the row's existing 3px border-left, so nothing moves. */
+  .conv-item.is-orch-root { border-left-color: #39c5cf; }
+  .conv-item.is-orch-lane { border-left-color: color-mix(in srgb, #a371f7 60%, transparent); }
+  .conv-item.is-orch-lane.active { border-left-color: var(--purple); }
+  .conv-orch-lanes-chip { font-size: 10px; font-weight: 600; color: #39c5cf; white-space: nowrap; }
   /* Completion cue. Pulses for as long as the class is on (JS removes it after
      ~6s) rather than running a single 1.8s fade — a one-shot animation restarts
      from zero on every sidebar re-render, which either swallowed the cue or
@@ -25300,6 +25306,8 @@ html:not(.ccc-debug-mode) #statsModal {
 .orch-playbook-verify   { --pb: #3fb950; }
 .orch-playbook-critique { --pb: #d29922; }
 .orch-playbook-status   { --pb: #8b949e; }
+.orch-playbook-queue    { --pb: #39c5cf; }
+.orch-playbook.is-action .orch-playbook-arrow { font-size: 15px; }
 .orch-playbook.is-optional { border-style: dashed; background: var(--surface); min-height: 44px; }
 .orch-playbook.is-optional .orch-playbook-title { font-weight: 600; }
 .orch-playbook-body { display: flex; flex-direction: column; min-width: 0; gap: 1px; }

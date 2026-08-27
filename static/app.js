@@ -55001,7 +55001,7 @@
   }
 
   function orchFlashPlaybook(playbookId) {
-    const btn = document.querySelector('.orch-playbook[data-orch-playbook="' + playbookId + '"]');
+    const btn = document.querySelector('.orch-playbook[data-orch-playbook="' + playbookId + '"], .orch-playbook[data-orch-action="' + playbookId + '"]');
     if (!btn) return;
     btn.classList.remove('is-fired');
     void btn.offsetWidth;   // restart the pulse animation
@@ -55040,7 +55040,57 @@
           + '</div>';
       }
       return html;
-    }).join('');
+    }).join('')
+    + '<button type="button" class="orch-playbook orch-playbook-queue is-optional is-action" data-orch-action="queue"'
+    + ' title="Create (or reuse) this session\'s WatchTower queue with auto-drain on, then open the Queue tab to drop tasks.">'
+    + '<span class="orch-playbook-arrow" aria-hidden="true">&#8599;</span>'
+    + '<span class="orch-playbook-body">'
+    + '<span class="orch-playbook-title">Drop tasks in auto-drain queue</span>'
+    + '<span class="orch-playbook-sub">This session\'s queue, auto-drain on. Opens Queue.</span>'
+    + '</span></button>';
+  }
+
+  // Not a prompt: a CCC operation. Reuses the one-queue-per-session path
+  // (create, or switch to the existing one), then turns auto-drain on. The
+  // server forces auto-drain off for brand-new queues (CCC-768: a human
+  // decides when draining starts); this tap is that decision, so the
+  // second call flips it. Config POST is a full replace, so re-send the
+  // queue's current fields with only auto_drain changed.
+  async function orchQueueAction() {
+    if (!currentConversation) { showOpToast('Select a session first.', 'error'); return; }
+    if (typeof _createQueueForSession !== 'function') { showOpToast('Queue tools are not available.', 'error'); return; }
+    orchFlashPlaybook('queue');
+    await _createQueueForSession();
+    const name = String((_uxqLoadSessionCreatedQueueMap() || {})[_uxqScopeKey()] || '');
+    if (!name) return;   // creation failed; its toast already said why
+    try {
+      const res = await fetch('/api/queue/config-options', { method: 'POST' });
+      const options = await res.json();
+      const q = ((options && options.queues) || []).find(x => String(x.queue).toUpperCase() === name.toUpperCase()) || {};
+      const conf = q.config || q;
+      if (conf.auto_drain === true) return;
+      const body = {
+        queue: name,
+        repo_path: conf.repo_path || (typeof requireConvRepo === 'function' ? requireConvRepo('Queue') : ''),
+        backend: conf.backend || 'file',
+        github_repo: conf.github_repo || '',
+        github_assignee: conf.github_assignee || '',
+        engine: conf.engine || 'claude',
+        model: conf.model || '',
+        effort: conf.effort || '',
+        desired_workers: Number(conf.desired_workers) || 1,
+        claim_types: Array.isArray(conf.claim_types) ? conf.claim_types : [],
+        auto_drain: true,
+      };
+      const r2 = await fetch('/api/queue/config', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+      const d2 = await r2.json().catch(() => ({}));
+      if (!r2.ok || !d2.ok) throw new Error((d2 && d2.error) || r2.status);
+      if (typeof _uxqHealthCache !== 'undefined') _uxqHealthCache.ts = 0;
+      if (typeof _renderQueuePanel === 'function') await _renderQueuePanel();
+      showOpToast('Queue ' + name + ': auto-drain on. Drop tasks in the Queue tab.', 'success');
+    } catch (e) {
+      showOpToast('Queue created, but auto-drain could not be enabled: ' + (e && e.message ? e.message : e), 'error');
+    }
   }
 
   // ── Lane map data ────────────────────────────────────────────────────
@@ -55077,12 +55127,58 @@
       engine: (row && row.engine) || (spawn && spawn.engine) || 'claude',
       model: (row && row.model) || (spawn && spawn.model) || '',
       status: orchLaneStatus(row, spawn),
-      mtime: Number((row && row.mtime) || 0),
+      // List rows carry `modified` (epoch seconds); detail rows `mtime`.
+      mtime: Number((row && (row.modified || row.mtime)) || 0),
       // Replay timeline (epoch seconds): when the lane was spawned and
-      // when its transcript last moved, i.e. when it landed.
-      born: orchParseSpawnedAt(spawn && spawn.spawned_at) || orchParseSpawnedAt(row && row.timestamp) || 0,
-      landedAt: Number((row && row.mtime) || 0),
+      // when its transcript last moved, i.e. when it landed. The spawn
+      // registry is pruned once a lane's process exits, so a lane meta
+      // cache (written whenever the registry did know the lane) keeps
+      // spawned_at for later replays.
+      born: orchParseSpawnedAt(spawn && spawn.spawned_at) || orchParseSpawnedAt(row && row.timestamp) || orchLaneMetaGet(sid).born || 0,
+      landedAt: Number((row && (row.modified || row.mtime)) || 0),
     };
+  }
+  // ── Lane meta cache ──────────────────────────────────────────────────
+  // /api/sessions/spawned forgets a lane once its process is gone, and
+  // the child's list row has no spawn time. Remember what the registry
+  // told us (spawned_at, name, model, engine, parent) in localStorage so
+  // Replay can still tell the fan-out in order weeks later. Bounded.
+  const ORCH_LANE_META_KEY = 'ccc-orch-lane-meta';
+  const ORCH_LANE_META_MAX = 400;
+  let _orchLaneMeta = null;
+  function orchLaneMetaAll() {
+    if (_orchLaneMeta) return _orchLaneMeta;
+    try { _orchLaneMeta = JSON.parse(localStorage.getItem(ORCH_LANE_META_KEY) || '{}') || {}; }
+    catch (_) { _orchLaneMeta = {}; }
+    return _orchLaneMeta;
+  }
+  function orchLaneMetaGet(sid) {
+    return (sid && orchLaneMetaAll()[sid]) || {};
+  }
+  function orchLaneMetaRemember(entries) {
+    let dirty = false;
+    const all = orchLaneMetaAll();
+    (entries || []).forEach(sp => {
+      if (!sp || !sp.session_id) return;
+      const born = orchParseSpawnedAt(sp.spawned_at);
+      if (!born) return;
+      const cur = all[sp.session_id];
+      if (cur && cur.born === born && cur.name === (sp.name || cur.name)) return;
+      all[sp.session_id] = {
+        born,
+        name: sp.name || (cur && cur.name) || '',
+        model: sp.model || (cur && cur.model) || '',
+        engine: sp.engine || (cur && cur.engine) || '',
+        parent: sp.parent_session_id || (cur && cur.parent) || '',
+      };
+      dirty = true;
+    });
+    if (!dirty) return;
+    const ids = Object.keys(all);
+    if (ids.length > ORCH_LANE_META_MAX) {
+      ids.sort((a, b) => (all[a].born || 0) - (all[b].born || 0)).slice(0, ids.length - ORCH_LANE_META_MAX).forEach(id => { delete all[id]; });
+    }
+    try { localStorage.setItem(ORCH_LANE_META_KEY, JSON.stringify(all)); } catch (_) {}
   }
   function orchParseSpawnedAt(v) {
     if (!v) return 0;
@@ -55105,20 +55201,80 @@
       return ts > 0 ? ts / 1000 : 0;
     } catch (_) { return null; }
   }
+  // A lane that was spawned and landed between two orchestrator messages
+  // would otherwise jump straight to Landed inside one replay step and
+  // nothing would visibly move. Stage it: first shown as working (born
+  // from the root), then landed on a follow-up paint a beat later.
+  let _orchReplaySeen = new Map();   // lane id -> wall-clock ms first shown in this replay
+  let _orchReplayStageTimer = null;
+  const ORCH_REPLAY_STAGE_MS = 1500;
+  function orchReportTimes() {
+    const out = [];
+    try {
+      (_convReplayEvents || []).forEach(it => {
+        if (!it || !it.el || !it.el.classList || !it.el.classList.contains('user_text')) return;
+        const m = /announced from:\s*([^\n]+)/i.exec(it.el.textContent || '');
+        if (m && it.ts > 0) out.push({ key: m[1].toLowerCase().replace(/[^a-z0-9]+/g, ''), ts: it.ts / 1000 });
+      });
+    } catch (_) {}
+    return out;
+  }
+  // Birth from the orchestrator's own transcript: the first bubble that
+  // mentions a lane's session id (the spawn response) is when it was
+  // born. Cached per replay event list; a seek rebuilds nothing.
+  let _orchSpawnIdx = { events: null, at: new Map() };
+  function orchSpawnTimeFor(sid) {
+    if (!sid) return 0;
+    const events = _convReplayEvents || [];
+    if (_orchSpawnIdx.events !== events) _orchSpawnIdx = { events, at: new Map() };
+    if (_orchSpawnIdx.at.has(sid)) return _orchSpawnIdx.at.get(sid);
+    let found = 0;
+    try {
+      const short = String(sid).replace(/^session_/, '').slice(0, 8);   // codex ids carry a prefix
+      for (let i = 0; i < events.length; i++) {
+        const it = events[i];
+        if (!it || !it.el || !(it.ts > 0)) continue;
+        const txt = it.el.textContent || '';
+        if (txt.indexOf(short) !== -1) { found = it.ts / 1000; break; }
+      }
+    } catch (_) {}
+    _orchSpawnIdx.at.set(sid, found);
+    return found;
+  }
   function orchLanesAt(lanes, clock) {
-    return lanes
+    const now = Date.now();
+    let pending = false;
+    const reports = orchReportTimes();
+    const landedFor = (l, born) => {
+      const key = String(l.name || '').toLowerCase().replace(/[^a-z0-9]+/g, '');
+      const hit = reports.find(r => r.key && key && r.ts >= (born || 0) && (key.indexOf(r.key) === 0 || r.key.indexOf(key) === 0));
+      return hit && (!l.landedAt || hit.ts < l.landedAt) ? hit.ts : l.landedAt;
+    };
+    const out = lanes
       .map(l => {
-        const born = l.born || l.landedAt;
+        const spawnTs = l.born || orchSpawnTimeFor(l.id);
+        const landedAt = landedFor(l, spawnTs);
+        const born = spawnTs || landedAt;
         if (!born || born > clock) return null;
-        return Object.assign({}, l, { status: l.landedAt && l.landedAt <= clock ? 'done' : 'working' });
+        let status = landedAt && landedAt <= clock ? 'done' : 'working';
+        const first = _orchReplaySeen.get(l.id);
+        if (first === undefined) _orchReplaySeen.set(l.id, now);
+        if (status === 'done' && now - (first === undefined ? now : first) < ORCH_REPLAY_STAGE_MS) { status = 'working'; pending = true; }
+        return Object.assign({}, l, { status });
       })
       .filter(Boolean);
+    if (pending) {
+      clearTimeout(_orchReplayStageTimer);
+      _orchReplayStageTimer = setTimeout(() => { _orchReplayStageTimer = null; updateOrchestrationPane(currentConversation); }, ORCH_REPLAY_STAGE_MS + 100);
+    }
+    return out;
   }
   // Called by the replay stepper (play, space-step, seek, exit). A
   // replayed "CCC orchestration ..." user turn lights the playbook it
   // came from, so the rail, the transcript and the map tell one story.
   function _orchReplayStep(item) {
     try {
+      if (!item) _orchReplaySeen = new Map();   // replay started, seeked, or ended: stage births again
       if (item && item.el && item.el.classList && item.el.classList.contains('user_text')) {
         const txt = String(item.el.textContent || '').toLowerCase();
         if (txt.indexOf('ccc orchestration') !== -1) {
@@ -55152,23 +55308,115 @@
       seen.add(sp.session_id);
       lanes.push(orchLane(byId.get(sp.session_id) || null, sp));
     });
+    const meta = orchLaneMetaAll();
+    Object.keys(meta).forEach(id => {
+      const m = meta[id];
+      if (!m || String(m.parent || '') !== sid || seen.has(id)) return;
+      const row = byId.get(id);
+      if (!row) return;   // no transcript on this machine any more: nothing to show or open
+      seen.add(id);
+      lanes.push(orchLane(row, { session_id: id, name: m.name, model: m.model, engine: m.engine, spawned_at: null }));
+    });
     // Newest first inside each band so a fresh lane enters on the left.
     lanes.sort((a, b) => b.mtime - a.mtime);
     return lanes;
   }
-  async function orchRefreshRegistry(force) {
+  // Two sources: /api/sessions/spawned is the live-ish window (recent
+  // runs, carries running/status) and /api/sessions/children is the full
+  // on-disk lineage for one parent (spawned_at, name, model survive after
+  // the lane's process is gone). Children of the current root are merged
+  // in so an old fan-out still replays.
+  let _orchChildrenSid = '';
+  let _orchChildren = [];
+  async function orchRefreshRegistry(force, rootSid) {
     if (_orchRegistryInFlight) return;
-    if (!force && Date.now() - _orchRegistryFetchedAt < 5000) return;
+    const sidChanged = rootSid && rootSid !== _orchChildrenSid;
+    if (!force && !sidChanged && Date.now() - _orchRegistryFetchedAt < 5000) return;
     _orchRegistryInFlight = true;
     try {
-      const r = await fetch('/api/sessions/spawned');
-      if (r.ok) {
-        const d = await r.json();
-        _orchSpawnedRegistry = Array.isArray(d) ? d : [];
-        _orchRegistryFetchedAt = Date.now();
+      const [r1, r2] = await Promise.all([
+        fetch('/api/sessions/spawned'),
+        rootSid ? fetch('/api/sessions/children?parent=' + encodeURIComponent(rootSid)) : Promise.resolve(null),
+      ]);
+      const live = r1 && r1.ok ? await r1.json() : [];
+      let kids = [];
+      if (r2 && r2.ok) {
+        const d = await r2.json();
+        kids = (d && Array.isArray(d.children)) ? d.children : [];
+        _orchChildrenSid = rootSid;
+        _orchChildren = kids;
+      } else if (rootSid === _orchChildrenSid) {
+        kids = _orchChildren;
       }
+      const seen = new Set();
+      const merged = [];
+      (Array.isArray(live) ? live : []).forEach(sp => { if (sp && sp.session_id) { seen.add(sp.session_id); merged.push(sp); } });
+      kids.forEach(sp => { if (sp && sp.session_id && !seen.has(sp.session_id)) { seen.add(sp.session_id); merged.push(sp); } });
+      _orchSpawnedRegistry = merged;
+      _orchRegistryFetchedAt = Date.now();
+      orchLaneMetaRemember(merged);
     } catch (_) {}
     _orchRegistryInFlight = false;
+  }
+  // ── Family rail ──────────────────────────────────────────────────────
+  // While a session that belongs to an orchestration family is selected,
+  // its rows in the session list get a coloured left rail (the root teal,
+  // lanes purple) and the root's hover row a lane count. Nothing moves:
+  // the rail is the row's existing 3px border-left. The list re-renders
+  // often, so a MutationObserver re-applies the last family after each
+  // rebuild instead of touching the render path.
+  let _orchFamily = { root: '', lanes: [], count: 0 };
+  function orchPaintFamilyRows(ctx) {
+    const list = document.getElementById('convList');
+    if (!list) return;
+    let root = '', laneIds = [], count = 0;
+    if (ctx && ctx.convId && !_orchSim) {
+      const lanes = orchCollectLanes(ctx.rootSid || ctx.sid);
+      if (lanes.length) {
+        root = (ctx.rootRow && ctx.rootRow.id) || (ctx.rootSid === ctx.sid ? ctx.convId : '');
+        laneIds = lanes.map(l => l.convId).filter(Boolean);
+        count = lanes.length;
+      }
+    }
+    _orchFamily = { root, lanes: laneIds, count };
+    orchApplyFamilyRows();
+  }
+  function orchApplyFamilyRows() {
+    const list = document.getElementById('convList');
+    if (!list) return;
+    const { root, lanes, count } = _orchFamily;
+    const laneSet = new Set(lanes);
+    list.querySelectorAll('.conv-item.is-orch-root, .conv-item.is-orch-lane').forEach(el => {
+      const id = el.getAttribute('data-id');
+      if (id !== root && !laneSet.has(id)) {
+        el.classList.remove('is-orch-root', 'is-orch-lane');
+        const chip = el.querySelector('.conv-orch-lanes-chip');
+        if (chip) chip.remove();
+      }
+    });
+    if (!root && !lanes.length) return;
+    list.querySelectorAll('.conv-item[data-id]').forEach(el => {
+      const id = el.getAttribute('data-id');
+      const isRoot = id === root, isLane = laneSet.has(id);
+      el.classList.toggle('is-orch-root', isRoot);
+      el.classList.toggle('is-orch-lane', isLane);
+      const meta = isRoot ? el.querySelector('.conv-hover-meta-row') : null;
+      let chip = el.querySelector('.conv-orch-lanes-chip');
+      if (isRoot && meta) {
+        const label = '\u21b3 ' + count + (count === 1 ? ' lane' : ' lanes');
+        if (!chip) { chip = document.createElement('span'); chip.className = 'conv-orch-lanes-chip'; meta.insertBefore(chip, meta.firstChild); }
+        if (chip.textContent !== label) chip.textContent = label;
+      } else if (chip) chip.remove();
+    });
+  }
+  let _orchFamilyRaf = 0;
+  function orchWatchList() {
+    const list = document.getElementById('convList');
+    if (!list || !window.MutationObserver) return;
+    new MutationObserver(() => {
+      if (_orchFamilyRaf || (!_orchFamily.root && !_orchFamily.lanes.length)) return;
+      _orchFamilyRaf = requestAnimationFrame(() => { _orchFamilyRaf = 0; orchApplyFamilyRows(); });
+    }).observe(list, { childList: true, subtree: true });
   }
   function orchPaneVisible() {
     const pane = document.getElementById('statusRailOrchestrationPane');
@@ -55201,8 +55449,9 @@
     const hasSession = !!ctx.convId;
     if (emptyEl) emptyEl.hidden = hasSession;
     playbooksEl.classList.toggle('is-disabled', !hasSession);
+    orchPaintFamilyRows(ctx);
     if (pane.hidden) return;   // nothing visible to measure — skip the work
-    if (hasSession) orchRefreshRegistry(false);
+    if (hasSession) orchRefreshRegistry(false, ctx.rootSid || ctx.sid);
 
     const sid = ctx.rootSid || ctx.sid;
     const hereSid = ctx.sid;
@@ -55233,7 +55482,9 @@
         + '</span></button>'
       : '';
     if (countEl) {
-      countEl.textContent = !lanes.length ? (clock !== null ? 'Replay · no lanes yet' : '')
+      const total = clock !== null ? orchCollectLanes(sid).length : 0;
+      countEl.textContent = !lanes.length
+        ? (clock !== null ? (total ? 'Replay · ' + total + (total === 1 ? ' lane' : ' lanes') + ' ahead' : 'Replay · this session spawned no lanes') : '')
         : (clock !== null ? 'Replay · ' : '') + lanes.length + (lanes.length === 1 ? ' lane' : ' lanes')
           + (working ? ' · ' + working + ' working' : '')
           + (waiting ? ' · ' + waiting + ' waiting' : '')
@@ -55424,7 +55675,8 @@
     _orchPollTimer = setInterval(() => {
       if (!orchPaneVisible()) return;
       if (document.hidden) return;
-      orchRefreshRegistry(false).then(() => updateOrchestrationPane(currentConversation));
+      const c = orchContext();
+      orchRefreshRegistry(false, c.rootSid || c.sid).then(() => updateOrchestrationPane(currentConversation));
     }, 6000);
   }
 
@@ -55437,6 +55689,7 @@
       if (chip) { orchSetExecutor(chip.getAttribute('data-orch-executor')); return; }
       const pb = ev.target.closest('[data-orch-playbook]');
       if (pb) { orchInject(pb.getAttribute('data-orch-playbook'), !ev.shiftKey); return; }
+      if (ev.target.closest('[data-orch-action="queue"]')) { orchQueueAction(); return; }
       if (ev.target.closest('#orchMapPreview')) { orchPlayPreview(); return; }
       // Video replay, joined with the orchestration replay (Preview) in the
       // lane-map header: replays the active conversation message by message.
@@ -55454,10 +55707,22 @@
       }
     });
     window.addEventListener('resize', () => { if (orchPaneVisible()) orchDrawEdges(); });
+    orchWatchList();
     orchStartPolling();
   });
   window.updateOrchestrationPane = updateOrchestrationPane;
   window.orchPlayPreview = orchPlayPreview;
+  // Console/debug hook: what the map thinks right now (live lanes, replay clock, staged lanes).
+  window.orchDebug = () => {
+    const c = orchContext();
+    const sid = c.rootSid || c.sid;
+    const clock = orchReplayClock();
+    const lanes = orchCollectLanes(sid);
+    const rows = (conversationsData || []).filter(r => r && r.session_id && lanes.some(l => l.id === r.session_id));
+    lanes.forEach(l => { l.spawnTs = l.born || orchSpawnTimeFor(l.id); });
+    return { sid, clock, lanes, at: clock !== null ? orchLanesAt(lanes, clock) : null, registry: _orchSpawnedRegistry.length,
+      rowKeys: rows.length ? Object.keys(rows[0]).filter(k => /time|ts$|modified|created|start/i.test(k)) : [], rowSample: rows[0] ? { mtime: rows[0].mtime, modified: rows[0].modified, timestamp: rows[0].timestamp } : null };
+  };
 
   function _applyStatusRailLayout() {
     const sticky = document.querySelector('.conv-sticky-header');
