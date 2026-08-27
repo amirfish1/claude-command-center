@@ -208,7 +208,7 @@ async function main() {
   await say('CCC Orchestration: one tap turns a session into an orchestrator.', 2200);
   await tap(rowSel);
   await sleep(2500);
-  await say('The right rail opens on Orchestration. Three playbooks. Each one is a single sentence.', 2600);
+  await say('The right rail opens on Orchestration. Three playbooks plus an optional status check. Each one is a short prompt.', 2600);
   await tap('[data-rail-tab="orchestration"]');
   await sleep(900);
 
@@ -221,7 +221,7 @@ async function main() {
   await tap('[data-orch-executor="sonnet-5"]');
   await sleep(900);
   await say('Verify and Critique pick the other model family automatically. No lane grades its own homework.', 3000);
-  await say('Delegate. One sentence goes into the session: "Use CCC orchestration to delegate execution to Sonnet 5."', 1400);
+  await say('Delegate. One sentence goes into the session: "CCC orchestration: delegate to Sonnet 5."', 1400);
   await tap('[data-orch-playbook="delegate"]');
   await sleep(1500);
   await say('The session now owns the plan and spawns CCC lanes for the work. It coordinates; lanes implement.', 5500);
@@ -274,7 +274,7 @@ async function main() {
   }
 
   // Verify: paste without sending, for a look.
-  await say('Shift-click pastes the prompt without sending. Verify: "Use CCC orchestration to verify with 5.6 Terra."', 1200);
+  await say('Shift-click pastes the prompt without sending. Verify: "CCC orchestration: verify with 5.6 Terra."', 1200);
   await tap('[data-orch-playbook="verify"]', { shift: true });
   await sleep(3500);
   await page.evaluate(() => {
@@ -287,7 +287,7 @@ async function main() {
   await tap('[data-rail-tab="metadata"]');
   await sleep(3200);
   await tap('[data-rail-tab="orchestration"]');
-  await say('Delegate. Verify. Critique. That is CCC Orchestration.', 3000);
+  await say('Delegate. Verify. Critique. Check status. That is CCC Orchestration.', 3000);
   await say('', 600);
   await recorder.stop();
   await browser.close();

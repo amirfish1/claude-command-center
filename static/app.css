@@ -25299,6 +25299,9 @@ html:not(.ccc-debug-mode) #statsModal {
 .orch-playbook-delegate { --pb: #a371f7; }
 .orch-playbook-verify   { --pb: #3fb950; }
 .orch-playbook-critique { --pb: #d29922; }
+.orch-playbook-status   { --pb: #8b949e; }
+.orch-playbook.is-optional { border-style: dashed; background: var(--surface); min-height: 44px; }
+.orch-playbook.is-optional .orch-playbook-title { font-weight: 600; }
 .orch-playbook-body { display: flex; flex-direction: column; min-width: 0; gap: 1px; }
 .orch-playbook-title { font-size: 13px; font-weight: 700; letter-spacing: -0.01em; }
 .orch-playbook-sub { font-size: 10.5px; line-height: 1.3; color: var(--text-muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
@@ -25396,8 +25399,9 @@ html:not(.ccc-debug-mode) #statsModal {
 
 /* Lane map */
 .orch-map-wrap { display: flex; flex-direction: column; gap: 6px; flex: 1 0 auto; }
-.orch-map-head { display: grid; grid-template-columns: minmax(0, 1fr) auto; grid-template-rows: auto auto; column-gap: 8px; row-gap: 2px; align-items: center; min-width: 0; }
-.orch-map-head .orch-map-preview { grid-column: 2; grid-row: 1 / span 2; }
+.orch-map-head { display: grid; grid-template-columns: minmax(0, 1fr) auto auto; grid-template-rows: auto auto; column-gap: 8px; row-gap: 2px; align-items: center; min-width: 0; }
+.orch-map-head .orch-map-replay { grid-column: 2; grid-row: 1 / span 2; }
+.orch-map-head .orch-map-preview:not(.orch-map-replay) { grid-column: 3; grid-row: 1 / span 2; }
 .orch-map-head .orch-map-count { grid-column: 1; grid-row: 2; }
 .orch-map-title {
   flex: 0 0 auto;
@@ -25431,8 +25435,8 @@ html:not(.ccc-debug-mode) #statsModal {
   background:
     radial-gradient(circle at 1px 1px, color-mix(in srgb, var(--text-muted) 18%, transparent) 1px, transparent 1.5px) 0 0 / 14px 14px,
     var(--bg);
-  padding: 14px 10px 12px;
-  min-height: 150px;
+  padding: 10px 8px 10px;
+  min-height: 118px;
   flex: 1 0 auto;
   overflow: hidden;
 }
@@ -25449,8 +25453,8 @@ html:not(.ccc-debug-mode) #statsModal {
   display: flex;
   flex-wrap: wrap;
   justify-content: center;
-  gap: 8px;
-  margin-top: 34px;
+  gap: 14px 10px;
+  margin-top: 26px;
   min-height: 44px;
   z-index: 1;
 }
@@ -25460,8 +25464,8 @@ html:not(.ccc-debug-mode) #statsModal {
   flex-direction: column;
   align-items: stretch;
   justify-content: flex-start;
-  margin: 18px 0 0 40px;
-  gap: 8px;
+  margin: 14px 0 0 40px;
+  gap: 14px;
 }
 .orch-map.is-narrow .orch-map-lanes .orch-node-lane { display: grid; width: 100%; }
 .orch-map.is-narrow .orch-node-name { max-width: none; }

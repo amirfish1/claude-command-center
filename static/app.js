@@ -26122,6 +26122,7 @@
     _convReplayHumanSendPending = false;
     _convReplayHumanSent = false;
     tagged.forEach(item => { _convReplaySeenEls.add(item.el); item.el.classList.add('conv-replay-hidden'); });
+    if (typeof _orchReplayStep === 'function') _orchReplayStep(null);
 
     let controls = document.getElementById('convReplayControls');
     if (!controls) {
@@ -26208,6 +26209,7 @@
       const item = _convReplayEvents[_convReplayMsgIndex];
       item.el.classList.remove('conv-replay-hidden');
       _convReplayMsgIndex++;
+      if (typeof _orchReplayStep === 'function') _orchReplayStep(item);
       if (item.meaningful) {
         _convReplayRevealAllWordsInstantly(_convReplayPrepareWordsForItem(item));
         _scrollConvReplayToBottom(item.paneId);
@@ -26300,6 +26302,7 @@
       _convReplayRevealAllWordsInstantly(_convReplayTextContainer(it.el));
     }
     _convReplayMsgIndex = idx;
+    if (typeof _orchReplayStep === 'function') _orchReplayStep(null);
     const paneIds = _convReplayPaneIds.length ? _convReplayPaneIds : [_convReplayPaneId];
     paneIds.forEach(pid => _scrollConvReplayToBottom(pid));
     renderConvReplayControls();
@@ -26327,6 +26330,7 @@
     _convReplayResetHumanTyping();
     _convReplayEvents = [];
     _convReplaySeenEls = null;
+    if (typeof _orchReplayStep === 'function') _orchReplayStep(null);
     const controls = document.getElementById('convReplayControls');
     if (controls) controls.remove();
     const btn = document.getElementById('convReplayBtn');
@@ -26446,6 +26450,7 @@
 
     item.el.classList.remove('conv-replay-hidden');
     _convReplayMsgIndex++;
+    if (typeof _orchReplayStep === 'function') _orchReplayStep(item);
     _scrollConvReplayToBottom(item.paneId);
 
     if (!item.meaningful) {
@@ -54846,7 +54851,7 @@
     { id: 'opus-5',        engine: 'claude',      model: 'opus-5',                label: 'Opus 5',         vendor: 'Claude',      family: 'anthropic' },
     { id: 'gpt-5.6-terra', engine: 'codex',       model: 'gpt-5.6-terra',         label: '5.6 Terra',      vendor: 'Codex',       family: 'openai' },
     { id: 'grok-4.6',      engine: 'grok',        model: 'grok-4.6',              label: 'Grok 4.6',       vendor: 'Grok',        family: 'xai' },
-    { id: 'devin',         engine: 'devin',       model: 'adaptive',              label: 'Devin',          vendor: 'Devin',       family: 'cognition' },
+    { id: 'glm-5.2',       engine: 'devin',       model: 'glm-5.2',               label: 'GLM 5.2',        vendor: 'Devin',       family: 'zhipu', via: true },
     { id: 'gemini-3.5',    engine: 'antigravity', model: 'Gemini 3.5 Pro (High)', label: 'Gemini 3.5 Pro', vendor: 'Antigravity', family: 'google' },
     { id: 'kimi-k3',       engine: 'kimi',        model: 'kimi-code/k3',          label: 'Kimi K3',        vendor: 'Kimi',        family: 'moonshot' },
   ];
@@ -54855,9 +54860,10 @@
   // the how (spawn API, report_to, lane briefs) lives in that skill, not
   // in the prompt.
   const ORCH_PLAYBOOKS = [
-    { id: 'delegate', title: 'Delegate', sub: 'Execution runs on lanes, not here.', tier: true },
-    { id: 'verify',   title: 'Verify',   sub: 'A different model family checks the work.' },
-    { id: 'critique', title: 'Critique', sub: 'Two outside reviewers, blunt.' },
+    { id: 'delegate', title: 'Delegate',     sub: 'Execution runs on cheaper lanes, not here.', tier: true },
+    { id: 'verify',   title: 'Verify',       sub: 'A different model family checks the work.' },
+    { id: 'critique', title: 'Critique',     sub: 'Two outside reviewers, blunt.' },
+    { id: 'status',   title: 'Check status', sub: 'Optional. Where does each lane stand?', optional: true },
   ];
   const ORCH_ENGINE_GLYPH = {
     claude: 'C', codex: 'X', antigravity: 'A', gemini: 'A', grok: 'G', devin: 'D',
@@ -54894,7 +54900,13 @@
       .filter(e => e && e.family !== executor.family);
     return pool.slice(0, 2);
   }
-  function orchExecLabel(e) { return e.label + ' (' + e.vendor + ')'; }
+  function orchExecLabel(e) { return e.via ? e.label + ' through ' + e.vendor : e.label + ' (' + e.vendor + ')'; }
+  // Second, cheaper example named next to the executor so the session
+  // knows it has a choice: GLM 5.2 through Devin, unless that is already
+  // the executor.
+  function orchAltExecutor(executor) {
+    return ORCH_EXECUTORS.find(e => e.id === (executor.id === 'glm-5.2' ? 'sonnet-5' : 'glm-5.2'));
+  }
 
   // Session context the prompts are addressed with — the real session id,
   // repo, and CCC URL, so the brief is copy-paste runnable by the session.
@@ -54932,10 +54944,23 @@
     const ex = orchExecutor();
     const tester = orchTester(ex);
     const critics = orchCritics(ex);
+    // Short, but complete: 'CCC orchestration' is the phrase the session's
+    // skill keys on; the rest names the models and the one rule that
+    // matters (lanes can ask the orchestrator questions).
+    const alt = orchAltExecutor(ex);
     switch (id) {
-      case 'delegate': return 'Use CCC orchestration to delegate execution to ' + orchExecLabel(ex) + '.';
-      case 'verify':   return 'Use CCC orchestration to verify with ' + orchExecLabel(tester) + '.';
-      case 'critique': return 'Use CCC orchestration to critique with ' + critics.map(orchExecLabel).join(' and ') + '.';
+      case 'delegate':
+        return 'When ready to execute, feel free to use CCC orchestration to spawn execution on cheaper models, e.g. '
+          + orchExecLabel(ex) + (alt ? ' or ' + orchExecLabel(alt) : '') + '.\n'
+          + 'Remind them they can ask you questions through CCC orchestration.';
+      case 'verify':
+        return 'When execution lands, use CCC orchestration to verify it with a fresh lane on a different model family, e.g. '
+          + orchExecLabel(tester) + '. It can ask you questions through CCC orchestration.';
+      case 'critique':
+        return 'Before landing, use CCC orchestration to get two blunt outside critiques, e.g. '
+          + critics.map(orchExecLabel).join(' and ') + '.';
+      case 'status':
+        return 'Use CCC orchestration to check the status of the agents you spawned and tell me where each one stands.';
     }
     return '';
   }
@@ -54954,12 +54979,7 @@
     if (!input) { showOpToast('This session has no composer to inject into.', 'error'); return; }
     input.value = text;
     input.dispatchEvent(new Event('input', { bubbles: true }));
-    const btn = document.querySelector('.orch-playbook[data-orch-playbook="' + playbookId + '"]');
-    if (btn) {
-      btn.classList.remove('is-fired');
-      void btn.offsetWidth;   // restart the pulse animation
-      btn.classList.add('is-fired');
-    }
+    orchFlashPlaybook(playbookId);
     if (sendNow === false) { input.focus(); return; }
     try {
       await sendToTerminal(paneId, 'send');
@@ -54968,6 +54988,14 @@
     } catch (e) {
       showOpToast('Inject failed: ' + (e && e.message ? e.message : e), 'error');
     }
+  }
+
+  function orchFlashPlaybook(playbookId) {
+    const btn = document.querySelector('.orch-playbook[data-orch-playbook="' + playbookId + '"]');
+    if (!btn) return;
+    btn.classList.remove('is-fired');
+    void btn.offsetWidth;   // restart the pulse animation
+    btn.classList.add('is-fired');
   }
 
   function renderOrchPlaybooks() {
@@ -54982,7 +55010,7 @@
       if (pb.id === 'delegate') meta = 'Executor: ' + orchExecLabel(ex);
       if (pb.id === 'verify') meta = 'Tester: ' + orchExecLabel(tester);
       if (pb.id === 'critique') meta = 'Reviewers: ' + critics.map(c => c.label).join(' + ');
-      let html = '<button type="button" class="orch-playbook orch-playbook-' + pb.id + '" data-orch-playbook="' + pb.id + '"'
+      let html = '<button type="button" class="orch-playbook orch-playbook-' + pb.id + (pb.optional ? ' is-optional' : '') + '" data-orch-playbook="' + pb.id + '"'
         + ' title="Inject the ' + pb.title + ' playbook into this session. Shift-click to paste without sending.">'
         + '<span class="orch-playbook-arrow" aria-hidden="true">&#8592;</span>'
         + '<span class="orch-playbook-body">'
@@ -55040,7 +55068,58 @@
       model: (row && row.model) || (spawn && spawn.model) || '',
       status: orchLaneStatus(row, spawn),
       mtime: Number((row && row.mtime) || 0),
+      // Replay timeline (epoch seconds): when the lane was spawned and
+      // when its transcript last moved, i.e. when it landed.
+      born: orchParseSpawnedAt(spawn && spawn.spawned_at) || orchParseSpawnedAt(row && row.timestamp) || 0,
+      landedAt: Number((row && row.mtime) || 0),
     };
+  }
+  function orchParseSpawnedAt(v) {
+    if (!v) return 0;
+    const m = /^(\d{4})(\d{2})(\d{2})T(\d{2})(\d{2})(\d{2})$/.exec(String(v));
+    if (m) return new Date(+m[1], +m[2] - 1, +m[3], +m[4], +m[5], +m[6]).getTime() / 1000;
+    const t = Date.parse(v);
+    return isNaN(t) ? 0 : t / 1000;
+  }
+  // ── Replay join ──────────────────────────────────────────────────────
+  // While the conversation Replay runs, the map follows the replay clock
+  // (the JSONL timestamp of the last revealed message) instead of live
+  // state: a lane exists once spawned_at has passed and is landed once
+  // its last transcript write has. Same real lanes, told in order.
+  function orchReplayClock() {
+    try {
+      if (!_convReplayActive) return null;
+      const idx = Math.min(_convReplayMsgIndex, _convReplayEvents.length) - 1;
+      if (idx < 0) return 0;
+      const ts = Number(_convReplayEvents[idx].ts);
+      return ts > 0 ? ts / 1000 : 0;
+    } catch (_) { return null; }
+  }
+  function orchLanesAt(lanes, clock) {
+    return lanes
+      .map(l => {
+        const born = l.born || l.landedAt;
+        if (!born || born > clock) return null;
+        return Object.assign({}, l, { status: l.landedAt && l.landedAt <= clock ? 'done' : 'working' });
+      })
+      .filter(Boolean);
+  }
+  // Called by the replay stepper (play, space-step, seek, exit). A
+  // replayed "CCC orchestration ..." user turn lights the playbook it
+  // came from, so the rail, the transcript and the map tell one story.
+  function _orchReplayStep(item) {
+    try {
+      if (item && item.el && item.el.classList && item.el.classList.contains('user_text')) {
+        const txt = String(item.el.textContent || '').toLowerCase();
+        if (txt.indexOf('ccc orchestration') !== -1) {
+          const id = txt.indexOf('verify') !== -1 ? 'verify'
+            : txt.indexOf('critique') !== -1 ? 'critique'
+            : txt.indexOf('status') !== -1 ? 'status' : 'delegate';
+          orchFlashPlaybook(id);
+        }
+      }
+      if (orchPaneVisible()) updateOrchestrationPane(currentConversation);
+    } catch (_) {}
   }
   function orchCollectLanes(sid) {
     if (_orchSim) return _orchSim.lanes.slice();
@@ -55119,7 +55198,9 @@
     const hereSid = ctx.sid;
     const atRoot = !ctx.rootSid || ctx.rootSid === ctx.sid;
     if (sid !== _orchLastSid) { _orchLastKeys = new Set(); _orchLastSid = sid; }
-    const lanes = orchCollectLanes(sid);
+    const clock = _orchSim ? null : orchReplayClock();
+    let lanes = orchCollectLanes(sid);
+    if (clock !== null) lanes = orchLanesAt(lanes, clock);
     const active = lanes.filter(l => l.status !== 'done');
     const landed = lanes.filter(l => l.status === 'done');
     const working = active.filter(l => l.status === 'working').length;
@@ -55142,12 +55223,12 @@
         + '</span></button>'
       : '';
     if (countEl) {
-      countEl.textContent = !lanes.length ? ''
-        : lanes.length + (lanes.length === 1 ? ' lane' : ' lanes')
+      countEl.textContent = !lanes.length ? (clock !== null ? 'Replay · no lanes yet' : '')
+        : (clock !== null ? 'Replay · ' : '') + lanes.length + (lanes.length === 1 ? ' lane' : ' lanes')
           + (working ? ' · ' + working + ' working' : '')
           + (waiting ? ' · ' + waiting + ' waiting' : '')
           + (landed.length ? ' · ' + landed.length + ' landed' : '');
-      countEl.classList.toggle('is-preview', !!_orchSim);
+      countEl.classList.toggle('is-preview', !!_orchSim || clock !== null);
     }
 
     // FLIP: remember where every existing node is before we touch the DOM.
@@ -55202,7 +55283,7 @@
     // the orchestrator node.
     const rootNode = rootEl.querySelector('.orch-node-root');
     const rootRect = rootNode ? rootNode.getBoundingClientRect() : rootRectBefore;
-    const firstPaintForSession = _orchLastKeys.size === 0 && !_orchSim;
+    const firstPaintForSession = _orchLastKeys.size === 0 && !_orchSim && clock === null;
     pane.querySelectorAll('.orch-node[data-lane-id]').forEach(el => {
       const id = el.getAttribute('data-lane-id');
       const after = el.getBoundingClientRect();
@@ -55347,6 +55428,15 @@
       const pb = ev.target.closest('[data-orch-playbook]');
       if (pb) { orchInject(pb.getAttribute('data-orch-playbook'), !ev.shiftKey); return; }
       if (ev.target.closest('#orchMapPreview')) { orchPlayPreview(); return; }
+      // Video replay, joined with the orchestration replay (Preview) in the
+      // lane-map header: replays the active conversation message by message.
+      if (ev.target.closest('#orchMapReplay')) {
+        if (typeof startConvReplay === 'function') {
+          startConvReplay();
+          if (!_convReplayActive) showOpToast('Nothing to replay yet.', 'info');
+        }
+        return;
+      }
       const node = ev.target.closest('.orch-node[data-conv-id]');
       if (node) {
         const cid = node.getAttribute('data-conv-id');
