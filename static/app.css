@@ -14350,15 +14350,20 @@
        .mobile-actions-wrap{display:none} base rule later in this file —
        same specificity, later source order would otherwise win. */
     #convToolbar .mobile-actions-wrap { display: inline-flex; margin-left: 8px; order: 100; }
-    /* .toolbar (base rule) never sets position, so #convToolbar has no
-       stacking context of its own — the dropdown's z-index:40 only ranks
-       against whatever ancestor context it inherits, not guaranteed to beat
-       the conversation pane painted after it. Worked in desktop Chrome
-       testing but reported opening BEHIND the transcript on real iOS
-       Safari (mobile compositing/stacking quirk on the scroll container).
-       Give the toolbar its own raised stacking context so the dropdown is
-       unconditionally on top regardless of what's happening below it. */
-    #convToolbar { position: relative; z-index: 30; }
+    /* Root cause of the dropdown rendering "behind the conversation":
+       .toolbar (base rule, line ~314) sets `overflow: hidden`. The dropdown
+       (.mobile-actions-menu) is absolutely positioned relative to
+       .mobile-actions-wrap, which lives INSIDE #convToolbar's box — once the
+       menu extends past the toolbar's own (short) height via `top: 100%`,
+       #convToolbar's overflow:hidden clips it to invisible. Reproduced on a
+       real iPhone; did not show up via getBoundingClientRect()/
+       elementFromPoint() checks in desktop Chrome, which report the menu's
+       unclipped geometry regardless of what's actually painted. Not fixed
+       by loosening #convToolbar's overflow — that risks the toolbar's own
+       nowrap button row spilling into horizontal scroll. Fixed instead in
+       app.js: the menu switches to `position: fixed` with a JS-computed
+       top/right on open, so it's laid out against the viewport and is not
+       subject to any ancestor's overflow clipping at all. */
     button.mobile-actions-btn {
       display: inline-flex;
       align-items: center;
@@ -14379,10 +14384,11 @@
       color: var(--green);
     }
     .mobile-actions-menu {
-      position: absolute;
-      right: 0;
-      top: 100%;
-      margin-top: 4px;
+      /* position:fixed on purpose — see the root-cause comment above
+         #convToolbar's .mobile-actions-wrap rule. top/right are set inline
+         by JS (_wireSimpleActionsMenu) from the button's own rect each time
+         the menu opens, since fixed positioning is viewport-relative. */
+      position: fixed;
       z-index: 40;
       display: flex;
       flex-direction: column;

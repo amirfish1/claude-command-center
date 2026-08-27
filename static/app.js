@@ -14741,6 +14741,15 @@
     btn.addEventListener('click', (ev) => {
       ev.stopPropagation();
       const open = !menu.hidden;
+      if (!open) {
+        // .mobile-actions-menu is position:fixed (escapes #convToolbar's
+        // overflow:hidden clip — see the CSS comment there). Fixed
+        // positioning is viewport-relative, so it needs its coordinates
+        // computed from the button's live rect every time it opens.
+        const r = btn.getBoundingClientRect();
+        menu.style.top = `${Math.round(r.bottom + 4)}px`;
+        menu.style.right = `${Math.round(window.innerWidth - r.right)}px`;
+      }
       menu.hidden = open;
       btn.setAttribute('aria-expanded', open ? 'false' : 'true');
     });
