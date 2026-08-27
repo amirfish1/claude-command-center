@@ -55759,9 +55759,15 @@ def _compact_via_hidden_pty(session_id, cwd):
     return result
 
 
-def _compact_via_live_spawn_stdin(spawn_entry, session_id, *, timeout=180.0):
-    """Compact a LIVE CCC-owned stream-json claude spawn by sending `/compact`
-    as a normal user message over its stdin FIFO — the native in-stream path.
+def _watch_compact_status(spawn_entry, *, log_pos, via, n0, jsonl, timeout):
+    """Poll a spawn's stdout log (from `log_pos` onward) plus the on-disk
+    JSONL for the compacting/compact_result status events Claude Code emits
+    after a `/compact` stream-json user message lands on stdin.
+
+    Shared by `_compact_via_live_spawn_stdin` (already-live spawn, `/compact`
+    sent mid-stream — watermark past prior turns) and `_compact_via_resume_spawn`
+    (freshly resumed spawn, `/compact` sent as the first message) — both write
+    `/compact` the same way and need the same wait-and-parse afterward.
 
     Current Claude Code (verified 2026-06-28, claude 2.1.195) executes a
     `/compact` user message inline: the spawn emits on its stdout
@@ -55769,39 +55775,9 @@ def _compact_via_live_spawn_stdin(spawn_entry, session_id, *, timeout=180.0):
     then
         {"type":"system","subtype":"status","status":null,
          "compact_result":"success"|"failed","compact_error":"<msg>", ...}
-    and (on success) writes a fresh `compact_boundary` to the JSONL. CCC
-    captures the spawn's stdout into `entry["log"]`, so we watch that log for
-    the status events and, as a belt-and-suspenders, the on-disk boundary.
-
-    This replaces the old hidden-pty path for live spawns, which KILLED the
-    session the user was actively using and then waited 180s for a boundary
-    that never came (the slash command never ran in `--resume`). We no longer
-    touch the live process — it stays up and compacts itself.
-
-    Returns {ok, via:"live-spawn-stdin", status, compact_result, compact_error,
-    ...}. Caller wraps with `_compact_result(...)` for the backup_path field.
+    and (on success) writes a fresh `compact_boundary` to the JSONL.
     """
-    sid = (session_id or "").strip()
     log = (spawn_entry or {}).get("log") if isinstance(spawn_entry, dict) else None
-    jsonl = _resolve_conversation_path(sid) if sid else None
-    n0 = _tail_count(jsonl, b'"compact_boundary"') if jsonl else 0
-
-    # Watermark the log size so we only read NEW lines emitted after our send,
-    # never an older compaction from a prior turn in the same long-lived spawn.
-    log_pos = 0
-    if log:
-        try:
-            log_pos = os.path.getsize(log)
-        except OSError:
-            log_pos = 0
-
-    if not _write_stream_json_user_message(spawn_entry, "/compact"):
-        return {
-            "ok": False,
-            "via": "live-spawn-stdin",
-            "code": "compact_stdin_write_failed",
-            "error": "Couldn't write /compact to the live session's stdin.",
-        }
 
     def _scan_new_status_events():
         """Read log lines appended since `log_pos`; return the latest
@@ -55859,7 +55835,7 @@ def _compact_via_live_spawn_stdin(spawn_entry, session_id, *, timeout=180.0):
             else:
                 return {
                     "ok": False,
-                    "via": "live-spawn-stdin",
+                    "via": via,
                     "code": "compact_spawn_exited",
                     "status": "compacting" if saw_compacting else None,
                     "error": "The live session exited before compaction completed.",
@@ -55872,7 +55848,7 @@ def _compact_via_live_spawn_stdin(spawn_entry, session_id, *, timeout=180.0):
     if compact_result == "success" or boundary_landed:
         return {
             "ok": True,
-            "via": "live-spawn-stdin",
+            "via": via,
             "status": "compacted",
             "compact_result": "success",
             "note": "Compacted in place — the live session ran /compact itself.",
@@ -55880,7 +55856,7 @@ def _compact_via_live_spawn_stdin(spawn_entry, session_id, *, timeout=180.0):
     if compact_result == "failed":
         return {
             "ok": False,
-            "via": "live-spawn-stdin",
+            "via": via,
             "code": "compact_failed",
             "status": "failed",
             "compact_result": "failed",
@@ -55890,11 +55866,94 @@ def _compact_via_live_spawn_stdin(spawn_entry, session_id, *, timeout=180.0):
     # Neither a result event nor a boundary within the timeout.
     return {
         "ok": False,
-        "via": "live-spawn-stdin",
+        "via": via,
         "code": "compact_timeout",
         "status": "compacting" if saw_compacting else None,
         "error": "Compaction did not complete in time (the live session is still up).",
     }
+
+
+def _compact_via_live_spawn_stdin(spawn_entry, session_id, *, timeout=180.0):
+    """Compact a LIVE CCC-owned stream-json claude spawn by sending `/compact`
+    as a normal user message over its stdin FIFO — the native in-stream path.
+
+    This replaces the old hidden-pty path for live spawns, which KILLED the
+    session the user was actively using and then waited 180s for a boundary
+    that never came (the slash command never ran in `--resume`). We no longer
+    touch the live process — it stays up and compacts itself.
+
+    Returns {ok, via:"live-spawn-stdin", status, compact_result, compact_error,
+    ...}. Caller wraps with `_compact_result(...)` for the backup_path field.
+    """
+    sid = (session_id or "").strip()
+    log = (spawn_entry or {}).get("log") if isinstance(spawn_entry, dict) else None
+    jsonl = _resolve_conversation_path(sid) if sid else None
+    n0 = _tail_count(jsonl, b'"compact_boundary"') if jsonl else 0
+
+    # Watermark the log size so we only read NEW lines emitted after our send,
+    # never an older compaction from a prior turn in the same long-lived spawn.
+    log_pos = 0
+    if log:
+        try:
+            log_pos = os.path.getsize(log)
+        except OSError:
+            log_pos = 0
+
+    if not _write_stream_json_user_message(spawn_entry, "/compact"):
+        return {
+            "ok": False,
+            "via": "live-spawn-stdin",
+            "code": "compact_stdin_write_failed",
+            "error": "Couldn't write /compact to the live session's stdin.",
+        }
+
+    return _watch_compact_status(
+        spawn_entry, log_pos=log_pos, via="live-spawn-stdin",
+        n0=n0, jsonl=jsonl, timeout=timeout,
+    )
+
+
+def _compact_via_resume_spawn(session_id, cwd, *, timeout=180.0):
+    """Compact a DORMANT session through the same wake path a normal message
+    send uses — `resume_session_headless` spawns `claude -p --resume ...
+    --input-format stream-json` and this sends `/compact` as the FIRST
+    stream-json message, then watches for the compacting/compact_result
+    status events the same way `_compact_via_live_spawn_stdin` does for an
+    already-live spawn.
+
+    Replaces killing a hidden-pty TUI and typing `/compact` into it with one
+    wake path for dormant sessions instead of two. `_compact_via_hidden_pty`
+    stays as the fallback for when this can't spawn or the resume dies before
+    a result lands (see call site in `_compact_session_context_impl`).
+    """
+    sid = (session_id or "").strip()
+    jsonl = _resolve_conversation_path(sid) if sid else None
+    n0 = _tail_count(jsonl, b'"compact_boundary"') if jsonl else 0
+
+    resumed = resume_session_headless(sid, "/compact", cwd=cwd)
+    if not resumed.get("ok"):
+        result = dict(resumed)
+        result["via"] = "resume-stdin"
+        result.setdefault("code", "compact_resume_spawn_failed")
+        result.setdefault("error", "Couldn't resume the dormant session to compact it.")
+        return result
+
+    spawn_entry = _find_live_spawn_entry_for_session(sid)
+    if spawn_entry is None:
+        return {
+            "ok": False,
+            "via": "resume-stdin",
+            "code": "compact_resume_spawn_missing",
+            "error": "Session resumed for /compact but CCC lost track of the spawn.",
+        }
+
+    # This log file was just created for this resume (see
+    # resume_session_headless's `resume-<sid8>-<timestamp>.log` naming) — there
+    # is no prior-turn content to watermark past, so start from the top.
+    return _watch_compact_status(
+        spawn_entry, log_pos=0, via="resume-stdin",
+        n0=n0, jsonl=jsonl, timeout=timeout,
+    )
 
 
 def _clear_via_live_spawn_stdin(spawn_entry, session_id, *, timeout=60.0):
@@ -56108,7 +56167,10 @@ def compact_session_context(session_id, *, terminal_app=None, _from_terminal_que
       - LIVE spawn BUSY mid-turn → queue (`_queue_terminal_input`).
       - LIVE interactive terminal → keystroke /compact into the TUI.
       - LIVE background agent → pty-socket inject.
-      - DORMANT (no live stdin) → hidden-pty `claude --resume` fallback.
+      - DORMANT (no live stdin) → resume headlessly via the same wake path
+        any other send uses (`_compact_via_resume_spawn`), sending /compact
+        as the first stream-json message. Hidden-pty `claude --resume` is
+        only the fallback if that resume can't spawn or times out.
 
     Wrapped with a per-session_id in-flight guard: nothing upstream stops two
     independent HTTP requests for the same session racing each other (a phone
@@ -56153,6 +56215,12 @@ def _compact_session_context_impl(session_id, *, terminal_app=None, _from_termin
                 "from_terminal_queue": bool(_from_terminal_queue),
             },
             idempotency_key=_take_control_plane_action_id(),
+            # Worker-side compaction can take up to ~300s on the hidden-pty
+            # fallback path (114s on the stdin path) — the client default
+            # (45s) would abandon the request as "timed out" while the worker
+            # was still finishing successfully. 330s = 300s hidden-pty budget
+            # + margin.
+            timeout_ms=330_000,
         )
         if routed is not None:
             return routed
@@ -56343,20 +56411,32 @@ def _compact_session_context_impl(session_id, *, terminal_app=None, _from_termin
         }
 
     backup_path = _backup_jsonl_before_compact(sid)
-    # SILENT path first for dormant sessions too: no Terminal window pops.
+    # Standard wake path first: resume headlessly the same way any other send
+    # would, sending /compact as the first stream-json message (CCC-XXX — one
+    # wake path instead of hidden-pty TUI driving a second, fragile one).
+    resumed = _compact_via_resume_spawn(sid, cwd)
+    if resumed.get("ok"):
+        return _compact_result(resumed, backup_path)
+    sys.stderr.write(
+        f"[compact] resume-stdin failed for {sid}: {resumed.get('error')!r} "
+        "— falling back to hidden-pty\n"
+    )
+    # SILENT fallback: no Terminal window pops.
     silent = _compact_via_hidden_pty(sid, cwd)
     if silent.get("ok"):
         return _compact_result(silent, backup_path)
-    # Hidden-pty failed. We no longer auto-open a terminal and type /compact —
-    # that keystroke injection lands in the wrong window when other terminals
-    # are opening (CCC-300). Surface a manual-needed status instead; the client
-    # explains how to run /compact and can open a terminal WITHOUT typing.
+    # Hidden-pty failed too. We no longer auto-open a terminal and type
+    # /compact — that keystroke injection lands in the wrong window when other
+    # terminals are opening (CCC-300). Surface a manual-needed status instead;
+    # the client explains how to run /compact and can open a terminal WITHOUT
+    # typing.
     return _compact_result({
         "ok": False,
         "code": "compact_needs_manual",
         "via": "manual",
         "error": "Couldn't compact in the background. Resume the session and run /compact yourself.",
         "fallback_from": silent.get("error"),
+        "resume_stdin_error": resumed.get("error"),
     }, backup_path)
 
 
