@@ -1,0 +1,1 @@
+- Devin CLI sessions: the sidebar no longer rescans every session's full history on each Devin write. Per-session fields are memoized and persisted, so a list rebuild drops from 40-87 s to ~0.1 s on a 4.8 GB sessions.db, and a freshly started Devin session appears within seconds.
