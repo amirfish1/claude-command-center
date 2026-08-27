@@ -100,6 +100,19 @@ _DEVIN_CLI_ROW_MEMO = {}
 _DEVIN_CLI_ROW_MEMO_LOCK = threading.Lock()
 _DEVIN_CLI_ROW_MEMO_LOADED = False
 _DEVIN_CLI_ROW_MEMO_VERSION = 1
+# Cold-memo bound for the request path. A fresh install, a deleted memo
+# file, or many sessions changing at once means every session is a miss,
+# and one miss on a huge session (observed: 1.3 GB of message_nodes) is
+# 5-10 s. The list request computes misses synchronously, most recently
+# active first, only until this budget is spent; the rest get placeholder
+# fields and a single background thread fills them in.
+_DEVIN_CLI_COLD_BUILD_BUDGET_S = 1.5
+# Background finisher state, guarded by _DEVIN_CLI_ROW_MEMO_BG_LOCK:
+#   pending: {raw_id: ver} in priority order, still to compute (the entry
+#            being computed right now stays in here until stamped)
+#   thread:  the one live worker, or None
+_DEVIN_CLI_ROW_MEMO_BG = {"pending": {}, "thread": None}
+_DEVIN_CLI_ROW_MEMO_BG_LOCK = threading.Lock()
 # Latest-assistant tail walk cap: a session's tail is normally a handful of
 # tool rows then an assistant row; the cap only bounds a pathological run
 # of tool-only rows.
@@ -1314,23 +1327,67 @@ def _devin_cli_row_fields_for_session(con, raw_id, prev):
     return out
 
 
+def _devin_cli_row_fields_placeholder(prev):
+    """Fields for a session whose recompute was deferred to the background.
+
+    Same keys as a real ``_devin_cli_row_fields_for_session`` result, so the
+    caller needs no special case. When a stale memo entry exists its values
+    are reused (last poll already showed them; blanking them would make the
+    row flicker back to "Devin session <id>"), otherwise everything is
+    empty. Never stored in the memo: ``deferred`` marks it as incomplete."""
+    if isinstance(prev, dict) and isinstance(prev.get("ver"), list):
+        out = dict(prev)
+    else:
+        out = {
+            "first_message": "",
+            "first_scanned_row_id": 0,
+            "model": "",
+            "last_assistant_text": "",
+            "latest_input_tokens": 0,
+            "ship": {},
+            "ship_row_id": 0,
+            "subagent": None,
+            "ver": None,
+        }
+    out["deferred"] = True
+    return out
+
+
 def _devin_cli_row_fields_memoized(con, rows):
     """{raw_id: fields} for every row, re-querying only changed sessions.
 
     Version = [sessions.last_activity_at, max(message_nodes.row_id), count].
     last_activity_at alone is not enough (observed: 1 of 42 sessions had
-    message rows newer than it), hence the message_nodes pair."""
+    message rows newer than it), hence the message_nodes pair.
+
+    Misses are computed synchronously, most recently active first, only
+    while ``_DEVIN_CLI_COLD_BUILD_BUDGET_S`` lasts; the remainder (and any
+    session the background finisher already owns) get placeholder fields
+    and are queued for ``_devin_cli_row_memo_background``."""
     if not rows:
         return {}
+    # The caller selects ORDER BY last_activity_at DESC; sort again so the
+    # budget priority does not depend on that.
+    def _activity(r):
+        try:
+            return float(r.get("_last_activity_raw") or 0)
+        except (TypeError, ValueError):
+            return 0.0
+    ordered = sorted(rows, key=_activity, reverse=True)
     raw_ids = [r["_raw_id"] for r in rows]
     versions = _devin_cli_session_versions(con, raw_ids)
     out = {}
     hits = 0
     misses = 0
+    deferred = []
     dirty = False
+    budget = _DEVIN_CLI_COLD_BUILD_BUDGET_S
+    start = time.perf_counter()
     with _DEVIN_CLI_ROW_MEMO_LOCK:
         _devin_cli_row_memo_load_locked()
-        for r in rows:
+        with _DEVIN_CLI_ROW_MEMO_BG_LOCK:
+            in_flight = dict(_DEVIN_CLI_ROW_MEMO_BG["pending"])
+        for r in ordered:
             raw_id = r["_raw_id"]
             mv = versions.get(raw_id) or [0, 0]
             ver = [r.get("_last_activity_raw"), mv[0], mv[1]]
@@ -1340,6 +1397,11 @@ def _devin_cli_row_fields_memoized(con, rows):
                 hits += 1
                 continue
             misses += 1
+            over_budget = (time.perf_counter() - start) >= budget
+            if raw_id in in_flight or over_budget:
+                out[raw_id] = _devin_cli_row_fields_placeholder(prev)
+                deferred.append((raw_id, ver))
+                continue
             fields = _devin_cli_row_fields_for_session(con, raw_id, prev)
             fields["ver"] = ver
             _DEVIN_CLI_ROW_MEMO[raw_id] = fields
@@ -1354,10 +1416,116 @@ def _devin_cli_row_fields_memoized(con, rows):
             dirty = True
         if dirty:
             _devin_cli_row_memo_save_locked()
+        if deferred:
+            _devin_cli_row_memo_background_schedule(deferred)
     _devin_cli_profile_log(
-        "row_fields_memoized", 0.0, f"hits={hits} misses={misses}",
+        "row_fields_memoized",
+        time.perf_counter() - start,
+        f"hits={hits} misses={misses} deferred={len(deferred)}",
     )
     return out
+
+
+def _devin_cli_row_memo_background_schedule(deferred):
+    """Queue (raw_id, ver) pairs for the background finisher; start it if
+    idle. One worker at a time: a second list rebuild while it runs only
+    refreshes the pending versions."""
+    with _DEVIN_CLI_ROW_MEMO_BG_LOCK:
+        bg = _DEVIN_CLI_ROW_MEMO_BG
+        for raw_id, ver in deferred:
+            bg["pending"][raw_id] = ver
+        t = bg.get("thread")
+        if t is not None and t.is_alive():
+            return
+        t = threading.Thread(
+            target=_devin_cli_row_memo_background,
+            name="devin-row-memo",
+            daemon=True,
+        )
+        bg["thread"] = t
+        t.start()
+
+
+def _devin_cli_row_memo_background():
+    """Finish deferred per-session fields off the request path.
+
+    Own read-only connection; drains ``pending`` in order, stamping each
+    result into the memo under the memo lock, saving the memo, and dropping
+    the list cache key so the next poll rebuilds with the filled fields (a
+    cheap rebuild: everything else is a memo hit and the sessions still
+    pending here stay deferred rather than being recomputed). Never raises."""
+    bg = _DEVIN_CLI_ROW_MEMO_BG
+    done = 0
+    started = time.perf_counter()
+    con = None
+    try:
+        con = _devin_cli_connect()
+        while True:
+            with _DEVIN_CLI_ROW_MEMO_BG_LOCK:
+                if con is None or not bg["pending"]:
+                    bg["pending"].clear()
+                    bg["thread"] = None
+                    break
+                raw_id = next(iter(bg["pending"]))
+                ver = bg["pending"][raw_id]
+            try:
+                with _DEVIN_CLI_ROW_MEMO_LOCK:
+                    prev = _DEVIN_CLI_ROW_MEMO.get(raw_id)
+                if isinstance(prev, dict) and prev.get("ver") == ver:
+                    fields = None  # a foreground call got there first
+                else:
+                    fields = _devin_cli_row_fields_for_session(con, raw_id, prev)
+                    fields["ver"] = ver
+                with _DEVIN_CLI_ROW_MEMO_LOCK:
+                    if fields is not None and _DEVIN_CLI_ROW_MEMO.get(raw_id) is prev:
+                        _DEVIN_CLI_ROW_MEMO[raw_id] = fields
+                        _devin_cli_row_memo_save_locked()
+                        done += 1
+                with _DEVIN_CLI_ROW_MEMO_BG_LOCK:
+                    # A newer version queued meanwhile stays for another pass.
+                    if bg["pending"].get(raw_id) == ver:
+                        bg["pending"].pop(raw_id, None)
+                with _DEVIN_CLI_LIST_CACHE_LOCK:
+                    _DEVIN_CLI_LIST_CACHE["key"] = None
+            except Exception:
+                with _DEVIN_CLI_ROW_MEMO_BG_LOCK:
+                    bg["pending"].pop(raw_id, None)
+    except Exception:
+        pass
+    finally:
+        with _DEVIN_CLI_ROW_MEMO_BG_LOCK:
+            if bg.get("thread") is threading.current_thread():
+                bg["thread"] = None
+                bg["pending"].clear()
+        try:
+            if con is not None:
+                con.close()
+        except Exception:
+            pass
+        _devin_cli_profile_log(
+            "row_fields_background",
+            time.perf_counter() - started,
+            f"sessions={done}",
+        )
+
+
+def _devin_cli_row_memo_background_join(timeout=None):
+    """Wait for the background finisher to drain (tests). True when idle."""
+    deadline = None if timeout is None else time.monotonic() + timeout
+    while True:
+        with _DEVIN_CLI_ROW_MEMO_BG_LOCK:
+            t = _DEVIN_CLI_ROW_MEMO_BG.get("thread")
+            pending = bool(_DEVIN_CLI_ROW_MEMO_BG["pending"])
+        if t is None or not t.is_alive():
+            if not pending:
+                return True
+        remaining = None if deadline is None else deadline - time.monotonic()
+        if remaining is not None and remaining <= 0:
+            return False
+        if t is not None and t.is_alive():
+            t.join(remaining if remaining is None else min(remaining, 0.5))
+        else:
+            time.sleep(0.01)
 
 
 def _devin_model_list_json():

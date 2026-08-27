@@ -462,11 +462,15 @@ class DevinListPerfTests(unittest.TestCase):
             mock.patch.object(devin_mod, "_DEVIN_CLI_ROW_MEMO", {}),
             mock.patch.object(devin_mod, "_DEVIN_CLI_ROW_MEMO_LOADED", False),
             mock.patch.object(devin_mod, "_devin_cli_row_memo_path", lambda: devin_mod.Path(memo_path)),
+            mock.patch.object(devin_mod, "_DEVIN_CLI_ROW_MEMO_BG", {"pending": {}, "thread": None}),
             mock.patch.object(server, "_spawned_sessions", []),
         ]
         for p in patches:
             p.start()
             self.addCleanup(p.stop)
+        # Cleanups run LIFO: drain the background finisher before the
+        # patches above unwind, so it never touches the real memo.
+        self.addCleanup(devin_mod._devin_cli_row_memo_background_join, 10)
         return server, devin_mod, db_path, now
 
     def _bump_mtime(self, db_path, secs):
@@ -530,6 +534,100 @@ class DevinListPerfTests(unittest.TestCase):
             self.assertTrue(rows["devincli-beta-two"]["has_push"])
             self.assertEqual(rows["devincli-alpha-one"]["model"], "claude-opus-5")
 
+
+    def test_devin_list_cold_memo_defers_to_background(self):
+        """With no budget every miss is deferred: the first list call returns
+        placeholder fields immediately, one background thread fills the memo
+        and drops the list cache, and the next call has the real fields. Each
+        session is computed exactly once overall."""
+        server, devin_mod, db_path, now = self._setup()
+        orig = devin_mod._devin_cli_row_fields_for_session
+        calls = []
+
+        def spy(con, raw_id, prev):
+            calls.append(raw_id)
+            return orig(con, raw_id, prev)
+
+        with mock.patch.object(devin_mod, "_DEVIN_CLI_COLD_BUILD_BUDGET_S", 0), \
+             mock.patch.object(devin_mod, "_devin_cli_row_fields_for_session", spy):
+            t0 = time.perf_counter()
+            rows = {r["id"]: r for r in server.find_devin_cli_conversations("/tmp/ccc", include_old=True)}
+            self.assertLess(time.perf_counter() - t0, 5.0)
+            self.assertEqual(sorted(rows), ["devincli-alpha-one", "devincli-beta-two"])
+            a = rows["devincli-alpha-one"]
+            self.assertEqual(a["first_message"], "")
+            self.assertEqual(a["model"], "")
+            self.assertEqual(a["last_assistant_text"], "")
+            self.assertEqual(a["latest_input_tokens"], 0)
+            self.assertFalse(a["has_commit"])
+            self.assertEqual(a["subagent_count"], 0)
+            self.assertTrue(a["display_name"].startswith("Devin session "))
+            # Placeholders are never stored as complete memo entries.
+            with devin_mod._DEVIN_CLI_ROW_MEMO_LOCK:
+                self.assertFalse(
+                    any(e.get("deferred") for e in devin_mod._DEVIN_CLI_ROW_MEMO.values())
+                )
+
+            self.assertTrue(devin_mod._devin_cli_row_memo_background_join(10))
+            self.assertIsNone(devin_mod._DEVIN_CLI_ROW_MEMO_BG["thread"])
+            self.assertEqual(devin_mod._DEVIN_CLI_ROW_MEMO_BG["pending"], {})
+            self.assertIsNone(devin_mod._DEVIN_CLI_LIST_CACHE["key"])
+            self.assertEqual(sorted(calls), ["alpha-one", "beta-two"])
+
+            rows = {r["id"]: r for r in server.find_devin_cli_conversations("/tmp/ccc", include_old=True)}
+            a = rows["devincli-alpha-one"]
+            self.assertEqual(a["first_message"], "fix payouts sort")
+            self.assertEqual(a["model"], "claude-opus-5")
+            self.assertEqual(a["last_assistant_text"], "Done: ran git commit")
+            self.assertEqual(a["latest_input_tokens"], 1500)
+            self.assertTrue(a["has_commit"])
+            self.assertEqual(a["subagent_count"], 1)
+            self.assertEqual(rows["devincli-beta-two"]["model"], "m-b")
+            self.assertEqual(sorted(calls), ["alpha-one", "beta-two"])
+            self.assertIsNotNone(devin_mod._DEVIN_CLI_LIST_CACHE["key"])
+            # The background stamp was persisted.
+            with open(devin_mod._devin_cli_row_memo_path(), encoding="utf-8") as f:
+                saved = json.load(f)["rows"]
+            self.assertEqual(saved["alpha-one"]["model"], "claude-opus-5")
+
+    def test_devin_list_default_budget_defers_nothing(self):
+        """The tiny fixture fits inside the default budget: every field is
+        computed on the request path and no background thread is started."""
+        server, devin_mod, db_path, now = self._setup()
+        orig = devin_mod._devin_cli_row_fields_for_session
+        calls = []
+
+        def spy(con, raw_id, prev):
+            calls.append(raw_id)
+            return orig(con, raw_id, prev)
+
+        with mock.patch.object(devin_mod, "_devin_cli_row_fields_for_session", spy):
+            rows = {r["id"]: r for r in server.find_devin_cli_conversations("/tmp/ccc", include_old=True)}
+            self.assertEqual(sorted(calls), ["alpha-one", "beta-two"])
+            self.assertEqual(rows["devincli-alpha-one"]["model"], "claude-opus-5")
+            self.assertEqual(rows["devincli-beta-two"]["first_message"], "hello there")
+            self.assertIsNone(devin_mod._DEVIN_CLI_ROW_MEMO_BG["thread"])
+            self.assertEqual(devin_mod._DEVIN_CLI_ROW_MEMO_BG["pending"], {})
+            self.assertIsNotNone(devin_mod._DEVIN_CLI_LIST_CACHE["key"])
+
+    def test_devin_list_cold_budget_prioritises_recent_sessions(self):
+        """Misses are computed most recently active first, so a budget that
+        runs out leaves the oldest sessions for the background."""
+        server, devin_mod, db_path, now = self._setup()
+        con = sqlite3.connect(db_path)
+        con.execute("UPDATE sessions SET last_activity_at = ? WHERE id = 'beta-two'", (now + 5000,))
+        con.commit()
+        con.close()
+        calls = []
+        orig = devin_mod._devin_cli_row_fields_for_session
+
+        def spy(con, raw_id, prev):
+            calls.append(raw_id)
+            return orig(con, raw_id, prev)
+
+        with mock.patch.object(devin_mod, "_devin_cli_row_fields_for_session", spy):
+            server.find_devin_cli_conversations("/tmp/ccc", include_old=True)
+        self.assertEqual(calls, ["beta-two", "alpha-one"])
 
     def test_devin_overlay_fills_snapshot_gap(self):
         """A just-spawned Devin CLI row missing from the archive snapshot is
