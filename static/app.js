@@ -29897,11 +29897,13 @@
     // the open conversation, render the engine pills as idle rather than painting
     // the new session with the PREVIOUS session's headless/terminal state.
     const ls = liveStatusMatchesOpenConv() ? (liveStatus || {}) : {};
-    const pill0 = (on, warn, label, title, recoverable) =>
+    const pill0 = (on, warn, label, title, action) =>
       '<span class="ccc-proc-pill ' + (on ? (warn ? 'is-stale' : 'is-on') : 'is-off') + '"'
-      + (recoverable
-          ? ' data-bridge-recovery role="button" tabindex="0" aria-label="Open bridge recovery"'
-          : '')
+      + (action === 'sys'
+          ? ' data-open-sys-status role="button" tabindex="0" aria-label="Open System status to restart this process"'
+          : action
+            ? ' data-bridge-recovery role="button" tabindex="0" aria-label="Open bridge recovery"'
+            : '')
       + ' title="' + escapeHtml(title) + '">'
       + '<span class="ccc-proc-dot"></span>' + escapeHtml(label) + '</span>';
     // Codex sessions reuse this breadcrumb slot for app-server/exec status
@@ -29938,8 +29940,9 @@
       const agLive = !!ls.live;
       setAll(pill0(agLive, false, agLive ? 'headless · running' : 'headless',
         agLive
-          ? 'Antigravity is running headlessly (CCC resumes it per turn - there is no live terminal)'
-          : 'Antigravity is idle - CCC resumes it headlessly when you send (there is no live terminal)'));
+          ? 'Antigravity is running headlessly (CCC resumes it per turn - there is no live terminal). Click to open System status and stop/restart the process.'
+          : 'Antigravity is idle - CCC resumes it headlessly when you send (there is no live terminal)',
+        agLive ? 'sys' : ''));
       return;
     }
     // Devin CLI sessions are one-shot `devin -p` processes — headless, no TTY.
@@ -29947,8 +29950,9 @@
       const dvLive = !!ls.live;
       setAll(pill0(dvLive, false, dvLive ? 'headless · running' : 'headless',
         dvLive
-          ? 'Devin CLI is running headlessly (one-shot `devin -p` - there is no live terminal)'
-          : 'Devin CLI is idle - CCC resumes it headlessly when you send (there is no live terminal)'));
+          ? 'Devin CLI is running headlessly (one-shot `devin -p` - there is no live terminal). Click to open System status and stop/restart the process.'
+          : 'Devin CLI is idle - CCC resumes it headlessly when you send (there is no live terminal)',
+        dvLive ? 'sys' : ''));
       return;
     }
     const headOn = !!ls.headlessPresent;
@@ -30182,12 +30186,24 @@
   }
 
   document.addEventListener('click', (ev) => {
+    const sysPill = ev.target && ev.target.closest && ev.target.closest('[data-open-sys-status]');
+    if (sysPill) {
+      ev.preventDefault();
+      if (typeof sysOpenModal === 'function') sysOpenModal(sysPill, 'status');
+      return;
+    }
     const pill = ev.target && ev.target.closest && ev.target.closest('[data-bridge-recovery]');
     if (!pill) return;
     ev.preventDefault();
     openBridgeRecoveryModal();
   });
   document.addEventListener('keydown', (ev) => {
+    const sysPill = ev.target && ev.target.closest && ev.target.closest('[data-open-sys-status]');
+    if (sysPill && (ev.key === 'Enter' || ev.key === ' ')) {
+      ev.preventDefault();
+      if (typeof sysOpenModal === 'function') sysOpenModal(sysPill, 'status');
+      return;
+    }
     const pill = ev.target && ev.target.closest && ev.target.closest('[data-bridge-recovery]');
     if (pill && (ev.key === 'Enter' || ev.key === ' ')) {
       ev.preventDefault();
