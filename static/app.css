@@ -6833,7 +6833,7 @@
     border-radius: 6px;
   }
   .conv-folder-group[data-object-drop-zone] > .conv-item.is-grouped-row {
-    padding-left: 29px;
+    padding-left: var(--conv-content-left);
   }
   /* Tree tick stubs removed with the vertical spine — see
      .conv-folder-group:not(.collapsed) note in the sidebar section. */
@@ -15007,7 +15007,7 @@
     margin: 0 4px 4px !important;
   }
   #convList[data-row-delineation="cards"] .conv-item.active {
-    background: var(--surface-2) !important;
+    background: color-mix(in srgb, var(--purple) 12%, var(--surface-2)) !important;
   }
   html[data-conv-rowstyle="rounded-xl"] .conv-item .conv-title {
     font-family: ui-rounded, "SF Pro Rounded", "Avenir Next", "Nunito", system-ui, sans-serif !important;
