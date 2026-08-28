@@ -15917,9 +15917,11 @@
     }
     try {
       const rows = await loadArchiveAll({ staleOk: true, window: 'all' });
-      _simpleHistoryRows = (Array.isArray(rows) ? rows : [])
-        .filter(r => r && (r.id || r.session_id))
-        .sort((a, b) => (Number(b.mtime || b.modified) || 0) - (Number(a.mtime || a.modified) || 0));
+      if (Array.isArray(rows)) {
+        _simpleHistoryRows = rows
+          .filter(r => r && (r.id || r.session_id))
+          .sort((a, b) => (Number(b.mtime || b.modified) || 0) - (Number(a.mtime || a.modified) || 0));
+      }
     } catch (_) { /* keep the previous cache */ }
     _simpleHistoryApply();
   }
@@ -59472,24 +59474,32 @@
         // caller re-renders, but the flicker guard skips the rebuild since the
         // structural signature is unchanged.
         if (r.status === 304) {
-          const cached = (_archiveAllData.get(url) || []).slice();
+          const cached = _archiveAllData.get(url);
+          if (!Array.isArray(cached)) {
+            _clientLog('[ARCHIVE-DIAG] conversations/list 304 with no cached body');
+            return null;
+          }
           // Archive body unchanged, but live tool/WIP chips still move —
           // refresh the cheap overlay and let the next render merge it in.
           if (typeof refreshLiveSessionsActivity === 'function') {
             refreshLiveSessionsActivity();
           }
-          return cached;
+          return cached.slice();
         }
         if (!r.ok) {
           _clientLog('[ARCHIVE-DIAG] conversations/list not-ok: HTTP ' + r.status + ' ' + url.split('?')[1]);
-          return [];
+          return null;
         }
         const etag = r.headers.get('ETag');
         const d = await r.json();
         if (d && d.cached && d.stale && d.refreshing) {
           _scheduleArchiveStaleRetry();
         }
-        const convs = Array.isArray(d.conversations) ? d.conversations : [];
+        if (!d || !Array.isArray(d.conversations)) {
+          _clientLog('[ARCHIVE-DIAG] conversations/list missing conversations array');
+          return null;
+        }
+        const convs = d.conversations;
         _clientLog('[ARCHIVE-DIAG] conversations/list ok: ' + convs.length + ' rows');
         // Cache the ETag only after the body parsed and landed — otherwise a
         // truncated/aborted download leaves an ETag whose next 304 replays
@@ -59499,7 +59509,7 @@
         return convs;
       } catch (e) {
         _clientLog('[ARCHIVE-DIAG] conversations/list threw: ' + ((e && e.name) || '?') + ' ' + String((e && e.message) || '').slice(0, 120));
-        return [];
+        return null;
       }
     })();
     _archiveAllInflight.set(url, p);
@@ -59781,6 +59791,17 @@
       try {
       const requestedWindow = opts.window || _archiveWindow();
       const convs = await loadArchiveAll({ staleOk: opts.staleOk !== false && !opts.force, window: requestedWindow });
+      if (!Array.isArray(convs)) {
+        _clientLog('[ARCHIVE-DIAG] refreshArchiveData keeping previous rows='
+          + (Array.isArray(archiveData) ? archiveData.length : -1)
+          + ' (fetch failed)');
+        return archiveData;
+      }
+      if (!convs.length && Array.isArray(archiveData) && archiveData.length) {
+        _clientLog('[ARCHIVE-DIAG] refreshArchiveData keeping previous rows='
+          + archiveData.length + ' (empty payload)');
+        return archiveData;
+      }
       archiveData = _mergeArchivePrSnapshot(convs, archiveData);
       archiveDataWindow = requestedWindow;
         archiveLoaded = true;
