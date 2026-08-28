@@ -4955,7 +4955,7 @@
      once the double-application is gone, the single default formula above
      already gives the right gap for every tier and no override is needed. */
   .conv-item:hover { background: var(--surface-2); }
-  .conv-item.active { background: var(--surface-2); border-left-color: var(--purple); }
+  .conv-item.active { background: color-mix(in srgb, var(--purple) 12%, var(--surface-2)); border-left-color: var(--purple); }
   /* Orchestration family of the selected session: root teal, lanes purple.
      Uses the row's existing 3px border-left, so nothing moves. */
   .conv-item.is-orch-root { border-left-color: #39c5cf; }
@@ -7133,14 +7133,14 @@
     animation: ccc-spin 0.7s linear infinite;
   }
   .conv-item .conv-last {
-    font-size: 14px; color: var(--text-muted); margin: 4px 0 0 var(--conv-content-left);
+    font-size: 14px; color: var(--text-muted); margin: 4px 0 0 0;
     line-height: 1.3;
     overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
   }
   .conv-item .conv-last .label { color: var(--text-muted); opacity: 0.7; margin-right: 4px; }
   /* GOAL-1 outcome line — the session's own DID self-report. */
   .conv-item .conv-outcome {
-    font-size: 14px; margin: 6px 0 0 var(--conv-content-left); line-height: 1.42;
+    font-size: 14px; margin: 6px 0 0 0; line-height: 1.42;
     display: block;
     padding: 8px 10px;
     border-left: 2px solid rgba(63,185,80,0.42);
