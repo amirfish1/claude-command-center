@@ -414,6 +414,38 @@
       });
     }
   }
+  // Worker-compat pill (OPS: run.sh's boot-time compat check is one-shot; a
+  // worker that stays busy at boot then goes idle later can run stale code
+  // for hours with no signal). Fed by /api/health's worker_compat field
+  // (server._worker_compat_maintenance_check / build_ccc_health), which the
+  // hourly Maintenance tick self-heals when the worker is idle -- this pill
+  // is purely informational, so it just mirrors whatever the server reports.
+  function _renderWorkerCompatPill(compat) {
+    const $pill = document.getElementById('workerCompatPill');
+    const $text = document.getElementById('workerCompatPillText');
+    if (!$pill) return;
+    // reachable === null means no check has run yet (fresh boot, race with
+    // the first Maintenance tick) -- stay hidden rather than false-alarm.
+    if (!compat || compat.ok !== false || compat.reachable !== true) {
+      $pill.hidden = true;
+      return;
+    }
+    $pill.hidden = false;
+    const caps = Array.isArray(compat.capabilities) ? compat.capabilities.join(', ') : '';
+    if ($text) $text.textContent = 'Worker outdated';
+    $pill.title = 'Persistent worker (pid ' + (compat.pid || '?') + ', v' +
+      (compat.worker_server_version || 'unknown') + ') is missing engine-execution-v1 -- ' +
+      'repo is v' + (compat.repo_version || '?') + '. Capabilities: [' + caps + ']. ' +
+      (compat.idle
+        ? 'It is idle, so the next Maintenance tick (hourly) will retire and restart it automatically.'
+        : 'It still has active/queued work, so it will not be restarted until idle.');
+    if (!$pill._workerCompatClickBound) {
+      $pill._workerCompatClickBound = true;
+      $pill.addEventListener('click', () => {
+        if (typeof showOpToast === 'function') showOpToast($pill.title, 'error');
+      });
+    }
+  }
   function _startHealthPoll(host) {
     const tick = _gated('cccHealth', function () {
       return fetch('/api/health', { cache: 'no-store' })
@@ -423,6 +455,7 @@
           _renderHealth(host, h);
           _reportStrayReaps(h.stray_processes_reaped);
           _renderRunawayWatch(h.inject_blocked);
+          _renderWorkerCompatPill(h.worker_compat);
         })
         .catch(() => {});
     });
@@ -55281,6 +55314,7 @@
     if ($topAlerts) {
       _moveToHome('updPill', $topAlerts);
       _moveToHome('runawayWatchPill', $topAlerts);
+      _moveToHome('workerCompatPill', $topAlerts);
     }
     if ($settingsSlot) {
       _moveToHome('termToggleBtn',     $settingsSlot);

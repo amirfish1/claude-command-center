@@ -8370,6 +8370,11 @@ def build_ccc_health():
         "resume": _resume_ledger_stats(),
         "stray_processes_reaped": _stray_reaper_recent_entries(),
         "inject_blocked": _inject_blocked_recent_entries(),
+        # ok:false means the worker is running but missing engine-execution-v1
+        # (or otherwise stale) -- see _worker_compat_maintenance_check. Cached,
+        # refreshed once per Maintenance tick (hourly) plus at boot -- never a
+        # live control-plane RPC on this frequently-polled (5s) endpoint.
+        "worker_compat": _get_worker_compat_cache(),
     }
 
 
@@ -12820,6 +12825,149 @@ def _wait_worker_healthy(timeout_s=20.0, interval_s=0.5):
             return True
         time.sleep(interval_s)
     return False
+
+
+# ── Worker compatibility self-heal ──────────────────────────────────────────
+# run.sh's boot-time worker-compat check (~line 606: "engine-execution-v1" in
+# capabilities, kill + let a fresh worker start) only runs once, at dashboard
+# startup. If the worker happens to be busy at that exact instant, run.sh just
+# logs "using compatibility execution" and moves on -- there is no retry, no
+# re-check, no UI signal. A worker that is busy-at-boot and idle five minutes
+# later then keeps running stale/incompatible code for as long as the
+# dashboard stays up (observed: ~2h in production, 2026-08-28), silently
+# degrading every engine spawn to legacy dashboard execution until an
+# unrelated later restart happens to catch it idle.
+#
+# _worker_compat_maintenance_check() re-applies run.sh's exact rule on every
+# Maintenance tick (see hermes._engine_maintenance_once, hourly via
+# _ENGINE_UPDATE_INTERVAL_SEC) instead of once at boot: idle + missing
+# engine-execution-v1 -> retire and let a fresh one start. A busy worker is
+# always left alone, matching run.sh's "never roll an older worker with
+# unresolved work". This is additive to run.sh's own check, not a
+# replacement -- it exists to catch exactly the case that check's one-shot
+# nature misses.
+_WORKER_COMPAT_CACHE_LOCK = threading.Lock()
+_WORKER_COMPAT_CACHE = {
+    "ok": True,
+    "reachable": None,
+    "idle": None,
+    "pid": None,
+    "worker_server_version": None,
+    "repo_version": None,
+    "capabilities": [],
+    "checked_at": None,
+}
+
+
+def _worker_compat_snapshot(health=None):
+    """Build the worker_compat status dict from a control-plane health reply.
+
+    `ok` is True only when the worker answered (reachable) AND advertises
+    engine-execution-v1 -- the same condition run.sh's boot check gates on.
+    Also backs /api/health's worker_compat field (build_ccc_health), via the
+    cache below, so the UI and the self-heal below agree on one definition.
+    """
+    if health is None:
+        try:
+            health = _control_plane_request("health")
+        except Exception:
+            health = {}
+    if not isinstance(health, dict):
+        health = {}
+    worker = health.get("worker") if isinstance(health.get("worker"), dict) else {}
+    capabilities = list(worker.get("capabilities") or [])
+    reachable = bool(health.get("ok"))
+    compatible = "engine-execution-v1" in capabilities
+    idle = not any(int(health.get(key) or 0) for key in ("active", "queued", "uncertain"))
+    return {
+        "ok": reachable and compatible,
+        "reachable": reachable,
+        "idle": idle,
+        "pid": worker.get("pid"),
+        "worker_server_version": worker.get("server_version"),
+        "repo_version": _repo_version_on_disk() or __version__,
+        "capabilities": capabilities,
+    }
+
+
+def _set_worker_compat_cache(snapshot):
+    with _WORKER_COMPAT_CACHE_LOCK:
+        _WORKER_COMPAT_CACHE.clear()
+        _WORKER_COMPAT_CACHE.update(snapshot)
+        _WORKER_COMPAT_CACHE["checked_at"] = time.time()
+
+
+def _get_worker_compat_cache():
+    with _WORKER_COMPAT_CACHE_LOCK:
+        return dict(_WORKER_COMPAT_CACHE)
+
+
+def _worker_compat_self_heal_restart(reason_prefix="worker-compat-selfheal"):
+    """Drain, restart, and reconcile the worker.
+
+    Reuses the exact safety sequence /api/restart/worker exposes as a manual
+    button (_safe_worker_restart_precheck -> _restart_worker_process ->
+    _wait_worker_healthy -> reconcile -> lift the drain), so an automatic
+    retire triggered by the maintenance tick is exactly as safe as a human
+    clicking the button -- same Kimi-turn guard, same drain, same adopt.
+    """
+    ok, precheck_err, adopted, protected = _safe_worker_restart_precheck(
+        reason_prefix=reason_prefix,
+    )
+    if not ok:
+        return {"ok": False, "restarted": False, "precheck_error": precheck_err}
+    outcome = _restart_worker_process()
+    healthy = False
+    if outcome.get("restarted"):
+        healthy = _wait_worker_healthy()
+        if healthy:
+            _control_plane_request("work.reconcile", {})
+            _control_plane_request("drain.set", {
+                "enabled": False,
+                "reason": "worker restart complete",
+            })
+    return {
+        "ok": bool(outcome.get("restarted")),
+        "restarted": bool(outcome.get("restarted")),
+        "worker": outcome,
+        "worker_reachable": healthy,
+        "adopted": int((adopted or {}).get("adopted") or 0),
+        "drain_queued": int((protected or {}).get("queued") or 0),
+    }
+
+
+def _worker_compat_maintenance_check():
+    """Periodic backstop for run.sh's one-shot boot-time worker-compat check.
+
+    Called once per Maintenance tick. Updates the cache /api/health reads
+    unconditionally; retires the worker only when it is BOTH idle (per the
+    worker's own active/queued/uncertain counts) AND missing
+    engine-execution-v1. Never touches a busy worker, an already-compatible
+    worker, or an unreachable one (that is a different problem -- Maintenance
+    already has _start_control_plane_worker for "no worker at all").
+    """
+    try:
+        health = _control_plane_request("health")
+    except Exception:
+        health = {}
+    snapshot = _worker_compat_snapshot(health)
+    _set_worker_compat_cache(snapshot)
+    if not snapshot["reachable"] or snapshot["ok"] or not snapshot["idle"]:
+        return snapshot
+    try:
+        pid = int(snapshot.get("pid") or 0)
+    except (TypeError, ValueError):
+        pid = 0
+    if pid <= 1:
+        return snapshot
+    result = _worker_compat_self_heal_restart()
+    print(
+        "  [maintenance] retired idle worker running stale/incompatible code "
+        f"(pid {pid}, capabilities={snapshot['capabilities']}): "
+        f"restarted={result.get('restarted')}"
+    )
+    _set_worker_compat_cache(_worker_compat_snapshot())
+    return snapshot
 
 
 def _ccc_last_updated_iso():
@@ -78653,6 +78801,10 @@ def main():
         worker_health.get("ok")
         and "engine-execution-v1" in worker_capabilities
     )
+    # Seed /api/health's worker_compat cache from the RPC we already made
+    # above (no extra socket round-trip) so the pill has a real value from
+    # the first poll, not just after the first hourly Maintenance tick.
+    _set_worker_compat_cache(_worker_compat_snapshot(worker_health))
     if worker_owns_engines:
         print(
             "  [control-plane] worker owns engine processes "
