@@ -12653,6 +12653,13 @@
     color: var(--text-muted) !important;
     border-color: var(--border) !important;
   }
+  /* The group header's own repo/project label is the section title for
+     everything under it — keep it full-brightness even in muted ("no
+     colors") mode so it still reads as a heading, not another dim chip. */
+  body.chips-muted .conv-folder-group-chip {
+    color: var(--text) !important;
+    font-weight: 700 !important;
+  }
   body.chips-muted .conv-folder-group-header {
     border-left-color: rgba(139,148,158,0.45) !important;
   }
@@ -12853,14 +12860,14 @@
     grid-column: 2 / 4;
     justify-self: start;
     min-width: 0;
-    padding: 2px 4px;
-    border-radius: 3px;
-    font-size: 11px;
+    padding: 2px 6px;
+    border-radius: 4px;
+    font-size: 11.5px;
     font-weight: 600;
     font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
-    background: none;
+    background: hsl(var(--chip-hue), 45%, 55%, 0.14);
     color: var(--text);
-    border: 1px solid transparent;
+    border: 1px solid hsl(var(--chip-hue), 45%, 55%, 0.28);
     white-space: nowrap;
     display: inline-flex;
     align-items: center;
