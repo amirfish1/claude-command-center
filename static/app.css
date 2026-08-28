@@ -14988,35 +14988,37 @@
     color: color-mix(in srgb, var(--text) 20%, var(--rs-hi)) !important;
     font-weight: 500 !important;
   }
-  /* Airy is an independent boolean toggle (class on #convList), not a
-     data-conv-rowstyle option — see CONV_ROWSTYLE_TOGGLES. It only touches
-     spacing, orthogonal to whatever font/color preset is active and to the
-     Comfortable toggle (which only shows/hides the outcome card via
-     .compact-rows, defined earlier in this file). */
-  .rows-airy .conv-item {
+  /* Row spacing is an independent 3-step radio (data-rows-spacing on
+     #convList), not a data-conv-rowstyle option — see CONV_ROWSTYLE_SPACING.
+     It only touches spacing, orthogonal to whatever font/color preset is
+     active and to the Comfortable toggle (which only shows/hides the
+     outcome card via .compact-rows, defined earlier in this file). 'cozy'
+     is the base spacing already baked into .conv-item, so it needs no rule
+     here — only 'roomy' (a middle ground) and 'airy' (max) override it. */
+  #convList[data-rows-spacing="roomy"] .conv-item {
+    padding-top: 8px !important; padding-bottom: 8px !important; margin-bottom: 3px !important;
+  }
+  #convList[data-rows-spacing="roomy"] .conv-item .conv-title { line-height: 1.55 !important; }
+  #convList[data-rows-spacing="airy"] .conv-item {
     padding-top: 10px !important; padding-bottom: 10px !important; margin-bottom: 4px !important;
   }
-  .rows-airy .conv-item .conv-title { line-height: 1.75 !important; }
-  html[data-conv-rowstyle="large"] .conv-item {
+  #convList[data-rows-spacing="airy"] .conv-item .conv-title { line-height: 1.75 !important; }
+  html[data-conv-rowstyle="large"] .conv-item,
+  html[data-conv-rowstyle="large-bright"] .conv-item {
     padding-top: 7px !important; padding-bottom: 7px !important;
   }
-  html[data-conv-rowstyle="large"] .conv-item .conv-title {
+  html[data-conv-rowstyle="large"] .conv-item .conv-title,
+  html[data-conv-rowstyle="large-bright"] .conv-item .conv-title {
     font-size: 16px !important; line-height: 1.45 !important;
   }
-
-  /* ---- Typeface variants ---- */
-  /* All three get the "bright" color+weight formula on top of their own
-     typeface (per user request), plus an "XL" sibling one more font-size
-     bump up from the base. */
-  html[data-conv-rowstyle="slab"] .conv-item .conv-title,
-  html[data-conv-rowstyle="slab-xl"] .conv-item .conv-title {
-    font-family: Charter, "Iowan Old Style", "Bitstream Charter", Palatino, serif !important;
-    letter-spacing: 0 !important;
+  html[data-conv-rowstyle="large-bright"] .conv-item .conv-title {
     color: color-mix(in srgb, var(--text) 20%, var(--rs-hi)) !important;
     font-weight: 500 !important;
   }
-  html[data-conv-rowstyle="slab"] .conv-item .conv-title { font-size: 15px !important; }
-  html[data-conv-rowstyle="slab-xl"] .conv-item .conv-title { font-size: 16px !important; }
+
+  /* ---- Typeface variants ---- */
+  /* Both get the "bright" color+weight formula on top of their own
+     typeface, plus an "XL" sibling one more font-size bump up from the base. */
   html[data-conv-rowstyle="rounded"] .conv-item .conv-title,
   html[data-conv-rowstyle="rounded-xl"] .conv-item .conv-title {
     font-family: ui-rounded, "SF Pro Rounded", "Avenir Next", "Nunito", system-ui, sans-serif !important;
@@ -15026,15 +15028,6 @@
   }
   html[data-conv-rowstyle="rounded"] .conv-item .conv-title { font-size: 14.5px !important; }
   html[data-conv-rowstyle="rounded-xl"] .conv-item .conv-title { font-size: 15.5px !important; }
-  html[data-conv-rowstyle="grotesk"] .conv-item .conv-title,
-  html[data-conv-rowstyle="grotesk-xl"] .conv-item .conv-title {
-    font-family: "Helvetica Neue", Helvetica, Inter, Arial, sans-serif !important;
-    letter-spacing: -0.015em !important;
-    color: color-mix(in srgb, var(--text) 20%, var(--rs-hi)) !important;
-    font-weight: 500 !important;
-  }
-  html[data-conv-rowstyle="grotesk"] .conv-item .conv-title { font-size: 14.5px !important; }
-  html[data-conv-rowstyle="grotesk-xl"] .conv-item .conv-title { font-size: 15.5px !important; }
   .conv-bg-swatch {
     width: 14px;
     height: 14px;

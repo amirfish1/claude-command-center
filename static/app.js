@@ -2617,17 +2617,20 @@
     try { return localStorage.getItem('ccc-wrap-titles') === '1'; }
     catch (_) { return false; }
   }
-  // Airy: extra padding/line-height between rows. Independent of both
-  // compact-rows (which just shows/hides the outcome card) and the
-  // font/color row-style preset. Off by default.
-  function rowsAiryOn() {
-    try { return localStorage.getItem('ccc-rows-airy') === '1'; }
-    catch (_) { return false; }
+  // Row spacing: independent 3-step control (cozy/roomy/airy) for
+  // padding/line-height between rows. Independent of both compact-rows
+  // (which just shows/hides the outcome card) and the font/color row-style
+  // preset. 'cozy' (the base spacing) is the default.
+  const ROWS_SPACING_KEY = 'ccc-rows-spacing';
+  function rowsSpacing() {
+    let v = null;
+    try { v = localStorage.getItem(ROWS_SPACING_KEY); } catch (_) {}
+    return (v === 'roomy' || v === 'airy') ? v : 'cozy';
   }
   function applyRowDensityToggles() {
     if (!$convList) return;
     $convList.classList.toggle('compact-rows', compactRowsOn());
-    $convList.classList.toggle('rows-airy', rowsAiryOn());
+    $convList.setAttribute('data-rows-spacing', rowsSpacing());
   }
   // session_id -> attention item, rebuilt every loadAttentionList() pass. Lets
   // the conversation list look up a row's NYA block without a second fetch.
@@ -69510,19 +69513,17 @@
     // user (2026-08-28) — don't re-add them to this list. Same day: Default,
     // Active, Contrast, Serif, Humanist, Geometric, Condensed, and Typewriter
     // were dropped too, with Bright promoted to the fallback/default choice.
-    // The remaining typeface presets (Slab/Rounded/Grotesk) all get the
-    // "bright" color+weight treatment, and each has an "XL" sibling one more
-    // font-size bump up. Comfortable and Airy moved out of this radio group
-    // into CONV_ROWSTYLE_TOGGLES below — they're independent booleans, not
-    // alternatives to a font/color choice.
-    { id: 'bright',     label: 'Bright',     kind: 'lines', op: 100, h: 2,   gap: 3 },
-    { id: 'large',      label: 'Large',      kind: 'lines', op: 78,  h: 3,   gap: 4 },
-    { id: 'slab',       label: 'Slab',       kind: 'font', font: 'Charter, "Iowan Old Style", Palatino, serif' },
-    { id: 'slab-xl',    label: 'Slab XL',    kind: 'font', font: 'Charter, "Iowan Old Style", Palatino, serif' },
-    { id: 'rounded',    label: 'Rounded',    kind: 'font', font: 'ui-rounded, "SF Pro Rounded", "Avenir Next", system-ui', weight: 500 },
-    { id: 'rounded-xl', label: 'Rounded XL', kind: 'font', font: 'ui-rounded, "SF Pro Rounded", "Avenir Next", system-ui', weight: 500 },
-    { id: 'grotesk',    label: 'Grotesk',    kind: 'font', font: '"Helvetica Neue", Helvetica, Inter, Arial, sans-serif' },
-    { id: 'grotesk-xl', label: 'Grotesk XL', kind: 'font', font: '"Helvetica Neue", Helvetica, Inter, Arial, sans-serif' },
+    // Slab and Grotesk (plus their XL siblings) were dropped in a follow-up
+    // round; Rounded/Rounded XL survived and keep the "bright" color+weight
+    // treatment. Comfortable moved out of this radio group into
+    // CONV_ROWSTYLE_TOGGLES below, and Airy became a separate 3-step spacing
+    // control (CONV_ROWSTYLE_SPACING) — neither is an alternative to a
+    // font/color choice.
+    { id: 'bright',       label: 'Bright',       kind: 'lines', op: 100, h: 2, gap: 3 },
+    { id: 'large',        label: 'Large',        kind: 'lines', op: 78,  h: 3, gap: 4 },
+    { id: 'large-bright', label: 'Large Bright', kind: 'lines', op: 100, h: 3, gap: 4 },
+    { id: 'rounded',      label: 'Rounded',      kind: 'font', font: 'ui-rounded, "SF Pro Rounded", "Avenir Next", system-ui', weight: 500 },
+    { id: 'rounded-xl',   label: 'Rounded XL',   kind: 'font', font: 'ui-rounded, "SF Pro Rounded", "Avenir Next", system-ui', weight: 500 },
   ];
 
   function storedConvRowStyle() {
@@ -69548,11 +69549,11 @@
     updateConvRowStyleState(variant.id);
   }
 
-  // Comfortable (show/hide the outcome-card under each row) and Airy
-  // (row spacing) used to be radio options inside the font/color picker
-  // above, but that conflated three unrelated axes into one control. Both
-  // are now independent boolean toggles rendered as two extra swatches in
-  // the same rail, orthogonal to whichever font/color preset is selected.
+  // Comfortable (show/hide the outcome-card under each row) used to be a
+  // radio option inside the font/color picker above, but that conflated
+  // unrelated axes into one control. It's now an independent boolean
+  // toggle rendered as an extra swatch in the same rail, orthogonal to
+  // whichever font/color preset is selected.
   const CONV_ROWSTYLE_TOGGLES = [
     { id: 'comfortable', label: 'Comfortable', title: 'Show the outcome/detail line under each row', op: 78, h: 3, gap: 6,
       isOn: () => !compactRowsOn(),
@@ -69562,13 +69563,14 @@
         if ($convList) $convList.classList.toggle('compact-rows', compactNext);
         renderArchiveList(document.getElementById('convSearch')?.value || '');
       } },
-    { id: 'airy', label: 'Airy', title: 'More breathing room between rows', op: 70, h: 2, gap: 5,
-      isOn: () => rowsAiryOn(),
-      toggle: () => {
-        const next = !rowsAiryOn();
-        try { localStorage.setItem('ccc-rows-airy', next ? '1' : '0'); } catch (_) {}
-        if ($convList) $convList.classList.toggle('rows-airy', next);
-      } },
+  ];
+
+  // Row spacing: a 3-step radio (not a boolean) so there's a middle ground
+  // between the tight default and full Airy — "Roomy" sits between them.
+  const CONV_ROWSTYLE_SPACING = [
+    { id: 'cozy',  label: 'Cozy',  title: 'Default row spacing', op: 70, h: 2, gap: 2 },
+    { id: 'roomy', label: 'Roomy', title: 'A bit more breathing room between rows', op: 70, h: 2, gap: 3.5 },
+    { id: 'airy',  label: 'Airy',  title: 'Maximum breathing room between rows', op: 70, h: 2, gap: 5 },
   ];
 
   function renderConvRowStylePalettes() {
@@ -69619,6 +69621,32 @@
           t.toggle();
           btn.classList.toggle('active', t.isOn());
           btn.setAttribute('aria-checked', String(t.isOn()));
+        });
+        host.appendChild(btn);
+      });
+      const currentSpacing = rowsSpacing();
+      CONV_ROWSTYLE_SPACING.forEach(s => {
+        const btn = document.createElement('button');
+        btn.type = 'button';
+        btn.className = 'conv-rowstyle-swatch is-spacing' + (s.id === currentSpacing ? ' active' : '');
+        btn.setAttribute('role', 'radio');
+        btn.setAttribute('aria-checked', String(s.id === currentSpacing));
+        btn.setAttribute('aria-label', s.label);
+        btn.setAttribute('data-rows-spacing-id', s.id);
+        btn.title = 'Row spacing: ' + s.label;
+        btn.style.setProperty('--rs-op', String(s.op));
+        btn.style.setProperty('--rs-h', s.h + 'px');
+        btn.style.setProperty('--rs-gap', s.gap + 'px');
+        btn.addEventListener('click', (ev) => {
+          ev.preventDefault();
+          ev.stopPropagation();
+          try { localStorage.setItem(ROWS_SPACING_KEY, s.id); } catch (_) {}
+          if ($convList) $convList.setAttribute('data-rows-spacing', s.id);
+          host.querySelectorAll('[data-rows-spacing-id]').forEach(b => {
+            const on = b.getAttribute('data-rows-spacing-id') === s.id;
+            b.classList.toggle('active', on);
+            b.setAttribute('aria-checked', String(on));
+          });
         });
         host.appendChild(btn);
       });
