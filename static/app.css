@@ -4947,6 +4947,18 @@
     border-left: 3px solid transparent;
     position: relative;
   }
+  /* --conv-content-left (54px) reserves room for the worst case: a
+     premium-tier row's 3-"$" cost glyph, which really does reach that far
+     (see .session-tier-cost). Every row with a shorter cost glyph — or no
+     glyph, cost-low/plain engine icons — kept that full-width gutter
+     anyway, reading as a big empty gap before the title. Tighten it per
+     the icon's actual tier so the gap tracks what's really drawn there. */
+  .conv-item:has(.conv-session-icon.cost-high) { --conv-content-left: 48px; }
+  .conv-item:has(.conv-session-icon.cost-medium) { --conv-content-left: 43px; }
+  .conv-item:has(.conv-session-icon.cost-low),
+  .conv-item:has(.conv-session-icon:not(.cost-premium):not(.cost-high):not(.cost-medium)) {
+    --conv-content-left: 35px;
+  }
   .conv-item:hover { background: var(--surface-2); }
   .conv-item.active { background: var(--surface-2); border-left-color: var(--purple); }
   /* Orchestration family of the selected session: root teal, lanes purple.
