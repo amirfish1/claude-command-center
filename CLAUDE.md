@@ -157,9 +157,12 @@ degrades instead of wedging. Don't rely on it: it's a backstop, not a licence.)
 
 ## Testing
 
-`tests/test_smoke.py` imports `server.py` and checks nothing explodes. CI is minimal by design. If you add a feature, a smoke-level assertion is nice-to-have but not required — the bar is "doesn't break the import."
+### Fast Local Unit Tests vs. CI Smoke Suite
+- **Local Machine**: Always run **fast, targeted unit tests** for the specific module you are touching (e.g. `python3 -m pytest tests/test_<feature>.py`). Targeted tests finish in < 1s with minimal memory and zero disk lockups.
+- **Heavy End-to-End Suites (`tests/test_smoke.py`)**: Do **not** run full `tests/test_smoke.py` in the background during local development. It consumes > 4GB RAM, spawns multiple subprocesses and mock servers, and chokes local disk I/O, freezing the local Command Center server.
+- **GitHub Actions CI**: Full multi-OS compile checks (`py-compile`), the complete unit test suite (`unittest`), and the end-to-end server smoke tests (`smoke`) run automatically on GitHub Actions runners in isolated cloud VMs on every push and PR.
 
-Don't mock external systems (`gh`, `claude`, `pkood`) in the smoke test. The smoke test is about import-time correctness, not behavior.
+Don't mock external systems (`gh`, `claude`, `pkood`) in unit tests. Keep tests focused on fast import-time correctness and specific module invariants.
 
 Running the suite locally with stdlib `python3 -m unittest discover` (Python 3.12+) floods the output with thousands of `ResourceWarning: unclosed database` lines — the test suite reloads `server.py`/`ccc_server` modules many times per run, and each reload drops the previous module's cached sqlite3 connections without closing them. `unittest.main()`'s `TestProgram` defaults to `warnings='default'` whenever `sys.warnoptions` is empty, and that `simplefilter('default')` call wipes any `warnings.filterwarnings()` set inside the test package before the run starts — so filtering from Python code doesn't stick. Set `sys.warnoptions` yourself via the environment instead, which suppresses the flood without hiding real assertion failures:
 
