@@ -7157,8 +7157,10 @@
   }
   .conv-item .conv-outcome-did {
     color: var(--text); opacity: 0.96;
-    display: block;
-    overflow: visible;
+    display: -webkit-box;
+    -webkit-line-clamp: 3;
+    -webkit-box-orient: vertical;
+    overflow: hidden;
     white-space: normal;
     overflow-wrap: anywhere;
     min-width: 0;
@@ -7180,10 +7182,12 @@
     vertical-align: 1px;
   }
   .conv-item .conv-outcome-next {
-    display: block;
+    display: -webkit-box;
+    -webkit-line-clamp: 2;
+    -webkit-box-orient: vertical;
     margin-top: 4px;
     color: var(--text-muted); opacity: 0.75;
-    overflow: visible;
+    overflow: hidden;
     white-space: normal;
     overflow-wrap: anywhere;
     min-width: 0;
