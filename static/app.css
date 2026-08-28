@@ -5485,6 +5485,13 @@
     word-break: keep-all;
     letter-spacing: -0.005em;
   }
+  .wrap-titles .conv-item .conv-title,
+  .wrap-titles.compact-rows .conv-item .conv-title {
+    white-space: normal;
+    display: -webkit-box;
+    -webkit-line-clamp: 2;
+    -webkit-box-orient: vertical;
+  }
   .conv-item .conv-empty-session-chip {
     flex: 0 0 auto;
     margin-left: 5px;

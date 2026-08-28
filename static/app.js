@@ -2611,6 +2611,12 @@
     try { return localStorage.getItem('ccc-compact-rows') !== '0'; }
     catch (_) { return true; }
   }
+  // Wrap session titles across two lines instead of single-line ellipsis.
+  // Off by default; persists in localStorage so it sticks across renders.
+  function wrapTitlesOn() {
+    try { return localStorage.getItem('ccc-wrap-titles') === '1'; }
+    catch (_) { return false; }
+  }
   // session_id -> attention item, rebuilt every loadAttentionList() pass. Lets
   // the conversation list look up a row's NYA block without a second fetch.
   const _nyaItemsBySid = new Map();
@@ -34324,9 +34330,12 @@
       // The in-progress "Details" toolbar button (row density toggle) was removed
       // and details default off — rows render compact/lean unless the user opts
       // back into comfortable via the compact-rows control. (CCC-291)
-      const _ipTools = (_ipWindowToggle || _currentSessionsModeToggle || _ipGroupingToggle || _ipObjectsExpandAll)
-        ? '<span class="conv-inprogress-tools">' + _currentSessionsModeToggle + _ipObjectsExpandAll + _ipWindowToggle + _ipGroupingToggle + '</span>'
-        : '';
+      // Wrap toggle: lets session titles break across two lines instead of
+      // truncating to one, so long titles are more readable at a glance.
+      const _ipWrapToggle = '<span class="conv-grouping-toggle conv-wrap-toggle" data-role="wrap-toggle" title="Wrap session titles across two lines">'
+          + '<span class="grouping-opt' + (wrapTitlesOn() ? ' is-active' : '') + '" data-wrap-toggle="1">Wrap</span>'
+        + '</span>';
+      const _ipTools = '<span class="conv-inprogress-tools">' + _currentSessionsModeToggle + _ipObjectsExpandAll + _ipWindowToggle + _ipGroupingToggle + _ipWrapToggle + '</span>';
       const _ipToolbarHtml = _ipTools
         ? '<div class="conv-inprogress-toolbar" data-role="inprogress-toolbar">' + _ipTools + '</div>'
         : '';
@@ -35928,6 +35937,18 @@
         const opt = ev.target.closest('[data-objects-collapse]');
         if (!opt) return;
         setInProgressObjectGroupsCollapsed(opt.getAttribute('data-objects-collapse') === '1');
+      });
+    }
+    $convList.classList.toggle('wrap-titles', wrapTitlesOn());
+    const $wrapToggle = $convList.querySelector('[data-role="wrap-toggle"]');
+    if ($wrapToggle) {
+      $wrapToggle.addEventListener('click', (ev) => {
+        ev.stopPropagation();
+        const next = localStorage.getItem('ccc-wrap-titles') !== '1';
+        try { localStorage.setItem('ccc-wrap-titles', next ? '1' : '0'); } catch (_) {}
+        $convList.classList.toggle('wrap-titles', next);
+        const opt = $wrapToggle.querySelector('[data-wrap-toggle]');
+        if (opt) opt.classList.toggle('is-active', next);
       });
     }
     const $currentSessionsModeToggle = $convList.querySelector('[data-role="current-sessions-mode-toggle"]');
