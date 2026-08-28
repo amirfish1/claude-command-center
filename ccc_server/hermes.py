@@ -633,7 +633,16 @@ def _run_engine_updates_once():
 def _engine_maintenance_once():
     catalog_status = _core._refresh_claude_model_catalog()
     update_status = _core._run_engine_updates_once()
-    return {"updates": update_status, "catalog": catalog_status}
+    # Continuous backstop for run.sh's one-shot boot-time worker-compat check
+    # (see server._worker_compat_maintenance_check): retires an idle worker
+    # still running stale/incompatible code, on this same hourly cadence,
+    # instead of waiting for the next full dashboard restart to catch it idle.
+    worker_compat_status = _core._worker_compat_maintenance_check()
+    return {
+        "updates": update_status,
+        "catalog": catalog_status,
+        "worker_compat": worker_compat_status,
+    }
 
 
 def _start_engine_update_pass():
