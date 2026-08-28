@@ -31171,14 +31171,6 @@
       return _openAskHasStableParent(parent, nextSeen);
     };
 
-    // Subagent and Continuation lineage resolution:
-    const _sessionProvenanceContinuationId = (row) => String(
-      (row && (row.continued_from_session_id || row.hermes_continued_from)) || ''
-    ).trim();
-    const _sessionProvenanceParentId = (row) => String(
-      (row && (row.parent_session_id || row.hermes_parent_session_id)) || ''
-    ).trim();
-
     // Pulling every waiting session into a top bucket made rows jump whenever a
     // turn paused/resumed. Keep ordinary questions and other waiting states in
     // their project groups, but promote formal unresolved approval prompts:
