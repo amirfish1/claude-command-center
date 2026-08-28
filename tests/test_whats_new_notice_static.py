@@ -63,7 +63,8 @@ class WhatsNewNoticeStaticTests(unittest.TestCase):
         self.assertIn("Simple Mode for the whole fleet", landing_page)
         self.assertIn('<span class="version">v5.29</span>', landing_page)
         self.assertIn('<span class="badge">v5.29</span>', landing_page)
-        self.assertIn("Apple-notarized for macOS 11+ &middot; v5.29.0", landing_page)
+        self.assertIn("https://github.com/amirfish1/claude-command-center/releases/tag/v5.29.0", landing_page)
+        self.assertIn("v5.29.0 source and Homebrew release", landing_page)
 
     def test_current_release_screenshot_is_used_on_public_surfaces(self):
         readme = (PROJECT_ROOT / "README.md").read_text(encoding="utf-8")
