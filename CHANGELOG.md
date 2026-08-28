@@ -42,7 +42,7 @@ get back to recent work.
 ### Fixed
 - Sidebar search no longer launches Total Recall on every keystroke. It scans
   recent local transcripts in-process across Claude, Codex, Kimi, Gemini, and
-  Cursor, returns in about a second, and keeps results stable while you type.
+  Cursor, and keeps results stable while you type.
 - Compact, grouped, and Cards rows now reserve the same icon gutter; long
   titles and outcome text no longer overlap or drift right of the content.
 - The worker automatically retires stale or incompatible code once idle,

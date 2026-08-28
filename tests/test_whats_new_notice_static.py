@@ -61,17 +61,22 @@ class WhatsNewNoticeStaticTests(unittest.TestCase):
         self.assertNotIn("mobile-responsiveness-pass", features)
         self.assertIn('<span class="ver">v5.29.0</span>', landing_page)
         self.assertIn("Simple Mode for the whole fleet", landing_page)
+        self.assertIn('<span class="version">v5.29</span>', landing_page)
+        self.assertIn('<span class="badge">v5.29</span>', landing_page)
+        self.assertIn("Apple-notarized for macOS 11+ &middot; v5.29.0", landing_page)
 
     def test_current_release_screenshot_is_used_on_public_surfaces(self):
         readme = (PROJECT_ROOT / "README.md").read_text(encoding="utf-8")
         landing_page = (PROJECT_ROOT / "docs" / "index.html").read_text(
             encoding="utf-8"
         )
-        screenshot = PROJECT_ROOT / "docs" / "images" / "ccc-v5-29-orchestration.png"
+        screenshot = (
+            PROJECT_ROOT / "docs" / "images" / "ccc-v5-29-orchestration-final.png"
+        )
 
         self.assertTrue(screenshot.exists())
-        self.assertIn("docs/images/ccc-v5-29-orchestration.png", readme)
-        self.assertIn("./images/ccc-v5-29-orchestration.png", landing_page)
+        self.assertIn("docs/images/ccc-v5-29-orchestration-final.png", readme)
+        self.assertIn("./images/ccc-v5-29-orchestration-final.png", landing_page)
 
 
 if __name__ == "__main__":
