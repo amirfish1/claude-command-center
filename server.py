@@ -11537,7 +11537,12 @@ def _archive_overlay_devin_cli_sessions(rows, now=None):
         if sid:
             existing.add(str(sid))
     try:
-        devin_rows = find_devin_cli_conversations(include_old=True, repo_only=False)
+        # Never block /list (and therefore trash POSTs queued behind it) on a
+        # multi-second Devin CLI sessions.db rebuild. Serve cache/stale rows;
+        # a cold miss with the rebuild lock held returns [].
+        devin_rows = find_devin_cli_conversations(
+            include_old=True, repo_only=False, stale_ok=True,
+        )
     except Exception:
         return []
     now = time.time() if now is None else now
@@ -18265,7 +18270,11 @@ def _find_descendant_sessions(sid, max_depth=6):
         return []
     # Primary path: SessionGraph (built at startup, incrementally updated).
     graph_descendants = _session_graph.descendants(sid, max_depth=max_depth)
-    if graph_descendants:
+    # An empty result is a valid answer once the graph has any edges.
+    # `if graph_descendants:` treated "this sid has no children" as "graph
+    # isn't ready" and fell back to scanning Codex sqlite + the thread
+    # registry on every trash of a leaf session.
+    if graph_descendants or _session_graph.stats().get("edges"):
         return graph_descendants
     # Fallback: original four-source merge (used before the graph is built
     # or if it somehow has no edges for this session).
@@ -18900,6 +18909,8 @@ def _set_conversation_trashed(sid, trashed):
 
         # Cascade: archive + trash every descendant that isn't already.
         if want_trashed:
+            if sid not in trashed_ids:
+                trashed_ids.append(sid)
             for dsid in descendants:
                 if not dsid or dsid.startswith(("backlog-", "pkood-")):
                     continue
@@ -18909,6 +18920,8 @@ def _set_conversation_trashed(sid, trashed):
                 if dsid not in trashed_ids:
                     trashed_ids.append(dsid)
                     cascaded.append(dsid)
+        else:
+            trashed_ids = [existing for existing in trashed_ids if existing != sid]
 
         # Persist both lists once after all mutations.
         _save_archived_conversations(archived_ids)
@@ -19191,6 +19204,32 @@ def _strip_ccc_session_state_instruction(text):
     if text is None:
         return ""
     return _CCC_SESSION_STATE_INSTRUCTION_TRAILER_RE.sub("", str(text)).rstrip()
+
+
+def _strip_f2_retrieval_prompt(text):
+    """If text is a CCC "Continue in a new session" F2 prompt, return only
+    the user's actual task line. Otherwise return the text unchanged.
+
+    The F2 prompt's first line is always "You are continuing a task from an
+    earlier <engine> session..." and the user's task is introduced by a
+    "Task: " line. Without this stripper, continued sessions show the
+    boilerplate as their row title.
+    """
+    if text is None:
+        return ""
+    t = str(text).strip()
+    if not t.startswith("You are continuing a task from an earlier"):
+        return t
+    # Find the "Task: " line and keep everything after it. The line may wrap
+    # or contain literal newlines; we return the remainder of the prompt so
+    # the user still sees their actual instruction.
+    marker = "\nTask: "
+    idx = t.find(marker)
+    if idx != -1:
+        return t[idx + len(marker):].strip()
+    # No explicit task line — strip the known boilerplate prefix so the row
+    # isn't dominated by CCC's own instructions.
+    return re.sub(r"^You are continuing a task from an earlier [^\s]+ session[^\n]*\n?", "", t).strip()
 
 
 def _mode3_prompt(text: str, *, bootstrap: bool = False) -> str:
@@ -20003,6 +20042,77 @@ def _auto_title_worker(session_id):
         _auto_title_sem.release()
 
 
+def _kimi_auto_title_needed(session_id):
+    """True when a Kimi session's title is just a copy of its first prompt.
+
+    Kimi Code sets state.json title from the raw first user message, so
+    continued sessions (which start with CCC's F2 retrieval prompt) and
+    pasted-image sessions ("this session seems stuck: /path/to/paste.png")
+    end up with a junk title. A user rename or prior auto-title wins.
+    """
+    if _load_session_name_overrides().get(session_id):
+        return False
+    if _auto_titled_session_ids().get(session_id):
+        return False
+    session_dir = _kimi_session_dir(session_id)
+    if not session_dir:
+        return None
+    try:
+        with (session_dir / "state.json").open() as f:
+            state = json.load(f)
+    except (OSError, ValueError):
+        return None
+    title = _strip_f2_retrieval_prompt(
+        _strip_ccc_kimi_goal_prefix(
+            _strip_ccc_session_state_instruction(str(state.get("title") or "")).strip()
+        )
+    ).strip()
+    if not title:
+        return True
+    wire_info = _kimi_wire_head(str(session_dir))
+    first_prompt = _strip_f2_retrieval_prompt(
+        _strip_ccc_kimi_goal_prefix(wire_info.get("first_prompt") or "")
+    ).strip()
+    if not first_prompt:
+        return False
+    # If the title is the same as the first prompt (possibly truncated), it is
+    # not an AI summary — re-title it.
+    return title == first_prompt or title == first_prompt[:80]
+
+
+def _kimi_auto_title_worker(session_id):
+    acquired = _auto_title_sem.acquire(blocking=False)
+    if not acquired:
+        _auto_title_release(session_id)
+        return
+    try:
+        session_dir = _kimi_session_dir(session_id)
+        if not session_dir:
+            _auto_title_release(session_id)
+            return
+        wire_info = _kimi_wire_head(str(session_dir))
+        first_prompt = _strip_f2_retrieval_prompt(
+            _strip_ccc_kimi_goal_prefix(wire_info.get("first_prompt") or "")
+        ).strip()
+        if not first_prompt or _is_transcript_control_text(first_prompt):
+            _auto_title_release(session_id)
+            return
+        result = _summarize_title_text(first_prompt, validate=True)
+        if not result.get("ok"):
+            _auto_title_release(session_id)
+            _log_activity("autotitle", "FAILED",
+                          f"sid={session_id[:8]} kimi err={str(result.get('error') or '')[:120]}")
+            return
+        title = result["title"]
+        _auto_title_record(session_id, title)
+        _log_activity("autotitle", "TITLED", f"sid={session_id[:8]} kimi title={title[:60]}")
+    except Exception as e:
+        _auto_title_release(session_id)
+        _log_activity("autotitle", "ERROR", f"sid={session_id[:8]} kimi {str(e)[:120]}")
+    finally:
+        _auto_title_sem.release()
+
+
 def request_auto_title(session_id):
     """Queue a background auto-title for a session. Returns immediately.
 
@@ -20015,6 +20125,17 @@ def request_auto_title(session_id):
         return {"ok": True, "queued": False, "reason": "disabled"}
     if _auto_title_marker_path(sid).exists():
         return {"ok": True, "queued": False, "reason": "already_attempted"}
+    # Kimi sessions live outside ~/.claude/projects; use their wire.jsonl.
+    if _is_kimi_session(sid):
+        needed = _kimi_auto_title_needed(sid)
+        if needed is None:
+            return {"ok": True, "queued": False, "reason": "no_transcript"}
+        if not needed:
+            return {"ok": True, "queued": False, "reason": "has_title"}
+        if not _auto_title_claim(sid):
+            return {"ok": True, "queued": False, "reason": "already_attempted"}
+        threading.Thread(target=_kimi_auto_title_worker, args=(sid,), daemon=True).start()
+        return {"ok": True, "queued": True}
     needed = _auto_title_needed(sid)
     if needed is None:
         return {"ok": True, "queued": False, "reason": "no_transcript"}
@@ -41475,6 +41596,10 @@ def find_kimi_conversations(
     except Exception:
         name_overrides = {}
     try:
+        auto_titled = _auto_titled_session_ids()
+    except Exception:
+        auto_titled = {}
+    try:
         archived_set, trashed_set = _load_conversation_lifecycle_sets()
     except Exception:
         archived_set, trashed_set = set(), set()
@@ -41537,18 +41662,25 @@ def find_kimi_conversations(
             pass
         if cutoff and modified and modified < cutoff:
             continue
-        title = _strip_ccc_kimi_goal_prefix(
-            _strip_ccc_session_state_instruction(str(meta.get("title") or "")).strip()
+        title = _strip_f2_retrieval_prompt(
+            _strip_ccc_kimi_goal_prefix(
+                _strip_ccc_session_state_instruction(str(meta.get("title") or "")).strip()
+            )
         )
-        last_prompt = _strip_ccc_kimi_goal_prefix(
-            _strip_ccc_session_state_instruction(str(meta.get("lastPrompt") or "")).strip()
+        last_prompt = _strip_f2_retrieval_prompt(
+            _strip_ccc_kimi_goal_prefix(
+                _strip_ccc_session_state_instruction(str(meta.get("lastPrompt") or "")).strip()
+            )
         )
         wire_info = _kimi_wire_head(idx.get("session_dir"))
-        first_message = _strip_ccc_kimi_goal_prefix(wire_info["first_prompt"]) or last_prompt
+        first_message = _strip_f2_retrieval_prompt(
+            _strip_ccc_kimi_goal_prefix(wire_info["first_prompt"])
+        ) or last_prompt
         wire_path = wire_info["wire_path"]
         display_name = (
             name_overrides.get(sid)
             or _truncate_session_name(title)
+            or (auto_titled.get(sid) if auto_titled else None)
             or (first_message[:80] if first_message else None)
             or (title[:80] if title else "Kimi session")
         )

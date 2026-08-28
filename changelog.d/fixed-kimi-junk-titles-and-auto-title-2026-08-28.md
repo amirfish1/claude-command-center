@@ -1,0 +1,1 @@
+Kimi sessions no longer show CCC's "You are continuing a task..." F2 prompt as their conversation-row title; the F2 boilerplate is stripped and a Kimi-specific auto-titler now summarizes the first prompt when Kimi's title is just a copy of it.
