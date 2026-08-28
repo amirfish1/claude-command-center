@@ -1,0 +1,1 @@
+- Idle ACP session delta streams (Kimi/GLM live bubble previews) now back their control-plane poll off from 4 Hz to 1 Hz after ~2 s of quiet, removing a constant per-stream background CPU drain (~12% of a core with two open streams); active turns still poll at full rate.
