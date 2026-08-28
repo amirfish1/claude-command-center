@@ -1,1 +1,0 @@
-Orchestration lane count on conversation rows is now visible even when the row is not selected, instead of only appearing on the root row's hover meta line.
