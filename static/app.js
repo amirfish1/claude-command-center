@@ -2269,6 +2269,10 @@
     if (!rawTitle) return rawTitle;
     const cleanedTitle = stripLeadingPathOrUrl(String(rawTitle))
       .replace(LEADING_CCC_PASTED_IMAGE_PATH_RE, '')
+      // Some AI-generated titles come back with a stray decorative prefix
+      // (✨/🪄, or a "› " quote-arrow) — objectTitleForConversation already
+      // strips this for object titles; rows need the same cleanup.
+      .replace(/^\s*[✨🪄›]\s*/, '')
       .replace(/-/g, ' ');
     return capitalizeSessionTitleStart(cleanedTitle);
   }
@@ -69696,7 +69700,7 @@
       CONV_ROWSTYLE_DELINEATION.forEach(d => {
         const btn = document.createElement('button');
         btn.type = 'button';
-        btn.className = 'conv-rowstyle-swatch is-delineation' + (d.id === currentDelineation ? ' active' : '');
+        btn.className = 'conv-rowstyle-swatch is-delineation is-delineation-' + d.id + (d.id === currentDelineation ? ' active' : '');
         btn.setAttribute('role', 'radio');
         btn.setAttribute('aria-checked', String(d.id === currentDelineation));
         btn.setAttribute('aria-label', d.label);
