@@ -6891,31 +6891,60 @@
     }
   });
 
-  // Antigravity "Push input" button inside the live tool strip. Uses
-  // delegation because the button is inside innerHTML-replaced content.
+  // "Wake up" / "Push input" button inside the live tool strip (Working... / Generating... / in-flight tool > 60s).
+  // Uses delegation because the button is inside innerHTML-replaced content.
   document.addEventListener('click', async (ev) => {
-    const btn = ev.target.closest('.cl-agy-wake-btn');
+    const btn = ev.target.closest('.cl-working-wake-btn, .cl-agy-wake-btn');
     if (!btn) return;
+    ev.preventDefault();
     ev.stopPropagation();
     const sid = currentSession && currentSession.id;
-    if (!sid || (currentSession.source !== 'antigravity')) return;
+    if (!sid || btn.disabled) return;
     btn.disabled = true;
-    btn.textContent = '…';
-    const AGY_WAKE = 'Status check: your last action has not returned for a while. If you are stuck, describe what you were waiting on and continue with the next concrete step.';
+    const origText = btn.textContent;
+    btn.textContent = 'Waking…';
+    const engine = ((currentSession && (currentSession.source || currentSession.engine)) || '').toLowerCase();
+    const wakeText = (engine === 'kimi')
+      ? 'continue'
+      : (engine === 'codex')
+        ? CODEX_WAKE_TEXT
+        : (engine === 'antigravity')
+          ? AGY_WAKE
+          : 'Status check: your last action has not returned for a while. If you are stuck, say what you were waiting on and continue with the next concrete step.';
     try {
-      const res = await fetch('/api/inject-input', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ session_id: sid, text: AGY_WAKE }),
-      });
-      const data = await res.json();
-      if (!data.ok) throw new Error(data.error || 'push failed');
-      showOpToast('Wake message pushed to Antigravity session.');
-      setTimeout(refreshConversationList, 2000);
+      let data;
+      if (engine === 'codex' && typeof postInjectInput === 'function') {
+        data = await postInjectInput(sid, wakeText, 'steer');
+        if (!data.ok && (
+          data.code === 'codex_no_active_turn'
+          || data.code === 'codex_steer_unavailable'
+          || data.code === 'codex_steer_failed'
+        )) {
+          data = await postInjectInput(sid, wakeText, 'send');
+        }
+      } else {
+        const res = await fetch('/api/inject-input', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ session_id: sid, text: wakeText }),
+        });
+        data = await res.json().catch(() => ({}));
+      }
+      if (!data.ok) throw new Error(data.error || 'wake failed');
+      btn.textContent = 'Sent';
+      showOpToast('Wake message sent to session.');
+      setTimeout(refreshConversationList, 1500);
+      setTimeout(() => {
+        btn.textContent = origText;
+        btn.disabled = false;
+      }, 3000);
     } catch (err) {
-      showOpToast('Push failed: ' + (err.message || 'unknown'), 'error');
-      btn.disabled = false;
-      btn.textContent = 'Push input';
+      showOpToast('Wake failed: ' + (err && err.message || 'unknown'), 'error');
+      btn.textContent = 'Failed';
+      setTimeout(() => {
+        btn.textContent = origText;
+        btn.disabled = false;
+      }, 3000);
     }
   });
 
@@ -7324,6 +7353,11 @@
       const _tokTxt = _liveMatches ? codexTokenUsageText(liveStatus.codexAppServerTokenUsage) : '';
       const _toolTxt = _activeItem.label || (_webuiPane ? 'Working…' : 'Generating…');
       const _detailTxt = _activeItem.label ? _activeItem.detail : '';
+      const _silenceSec = (_liveMatches && liveStatus.staleToolAgeS) || (ageSec < 9000 ? ageSec : 0);
+      const showGeneratingWakeBtn = _silenceSec >= 60 && !hasWakeProgress;
+      const _wakeBtnHtml = showGeneratingWakeBtn
+        ? '<button type="button" class="cl-working-wake-btn" title="No output for ' + Math.max(1, Math.floor(_silenceSec / 60)) + 'm — click to send a status check / wake input">Wake up</button>'
+        : '';
       inline.className = 'conv-live-tool-inline is-generating' + (_activeItem.label ? ' in-flight' : '');
       // Webui panes get the kimi-web moon-phases waiting spinner (honest
       // busy signal — no fake per-token streaming); other engines keep the
@@ -7331,7 +7365,8 @@
       inline.innerHTML = (_webuiPane && !_activeItem.label ? _kimiMoonHtml() : '<span class="cl-pulse"></span>')
         + '<span class="cl-tool">' + (_activeItem.label ? '▶ ' : '') + escapeHtml(_toolTxt) + '</span>'
         + (_detailTxt ? '<span class="cl-file">' + escapeHtml(truncate(_detailTxt, 80)) + '</span>' : '')
-        + (_tokTxt ? '<span class="cl-age cl-tokens">' + escapeHtml(_tokTxt) + '</span>' : '');
+        + (_tokTxt ? '<span class="cl-age cl-tokens">' + escapeHtml(_tokTxt) + '</span>' : '')
+        + _wakeBtnHtml;
       inline.title = _activeItem.label
         ? ('Codex is running: ' + _activeItem.label + (_activeItem.detail ? ' - ' + _activeItem.detail : '') + (_tokTxt ? ' (' + _tokTxt + ')' : ''))
         : ('Session is live - model is generating' + (_tokTxt ? ' (' + _tokTxt + ')' : ''));
@@ -7355,11 +7390,11 @@
     const detailHtml = isQuestion
       ? liveQuestionDetailHtml(file)
       : (shortFile ? ' <span class="cl-file' + liveActivityDetailClass(tool) + '">' + escapeHtml(shortFile) + '</span>' : '');
-    // Antigravity wake button: appears when the session is live-AGY and the
-    // in-flight tool has been running for > 60s. One click pushes the wake
-    // text via /api/inject-input without requiring the user to type anything.
-    const isAgySession = currentSession && currentSession.source === 'antigravity';
-    const showWakeBtn = isAgySession && inFlight && !isQuestion && ageSec > 60;
+    // Wake button: appears when the turn or in-flight tool has had no output
+    // for > 60s. One click pushes the wake text via /api/inject-input without
+    // requiring the user to type anything.
+    const _toolSilenceSec = (liveStatusMatchesOpenConv() && liveStatus.staleToolAgeS) || (ageSec < 9000 ? ageSec : 0);
+    const showWakeBtn = inFlight && !isQuestion && (_toolSilenceSec >= 60 || ageSec >= 60);
     updateLiveStripOffset($view, null);
     // Inline indicator at the bottom of the transcript. Re-append on every
     // refresh so it stays the last child even when new events have
@@ -7388,7 +7423,7 @@
       + (isQuestion ? '' : expandedDetailHtml)
       + '<span class="cl-age">' + ageLbl + '</span>'
       + (isQuestion ? detailHtml : '')
-      + (showWakeBtn ? '<button type="button" class="cl-agy-wake-btn" title="Session looks stuck - push a wake message to Antigravity">Push input</button>' : '');
+      + (showWakeBtn ? '<button type="button" class="cl-working-wake-btn cl-agy-wake-btn" title="Session has had no output for ' + dur + ' — click to push a wake message">Wake up</button>' : '');
     inline.innerHTML = expandHtml;
     _reanchorToTailUnlessOnlyTransientBetween($view, inline);
     _liveStripShown = true;
@@ -55740,7 +55775,7 @@
   // ── Family rail ──────────────────────────────────────────────────────
   // While a session that belongs to an orchestration family is selected,
   // its rows in the session list get a coloured left rail (the root teal,
-  // lanes purple) and the root's hover row a lane count. Nothing moves:
+  // lanes purple) and the root's main row a lane count. Nothing moves:
   // the rail is the row's existing 3px border-left. The list re-renders
   // often, so a MutationObserver re-applies the last family after each
   // rebuild instead of touching the render path.
@@ -55779,11 +55814,17 @@
       const isRoot = id === root, isLane = laneSet.has(id);
       el.classList.toggle('is-orch-root', isRoot);
       el.classList.toggle('is-orch-lane', isLane);
-      const meta = isRoot ? el.querySelector('.conv-hover-meta-row') : null;
+      const mainRow = isRoot ? el.querySelector('.conv-main-row') : null;
       let chip = el.querySelector('.conv-orch-lanes-chip');
-      if (isRoot && meta) {
+      if (isRoot && mainRow) {
         const label = '\u21b3 ' + count + (count === 1 ? ' lane' : ' lanes');
-        if (!chip) { chip = document.createElement('span'); chip.className = 'conv-orch-lanes-chip'; meta.insertBefore(chip, meta.firstChild); }
+        if (!chip) {
+          chip = document.createElement('span');
+          chip.className = 'conv-orch-lanes-chip';
+          const rowEnd = mainRow.querySelector('.conv-row-end');
+          if (rowEnd) mainRow.insertBefore(chip, rowEnd);
+          else mainRow.appendChild(chip);
+        }
         if (chip.textContent !== label) chip.textContent = label;
       } else if (chip) chip.remove();
     });
@@ -71787,7 +71828,10 @@
       .catch(function () { return { ids: [], sessions: {} }; });
   }
   function loadConversations() {
-    return fetchJSON('/api/conversations/list?window=all&stale_ok=1', 14000).then(function (data) {
+    // The hero only renders last-24h stats and the live-ticker lookup (live
+    // sessions are recent by definition), so the 1d window is sufficient —
+    // window=all made every Home visit download the full multi-MB archive.
+    return fetchJSON('/api/conversations/list?window=1d&stale_ok=1', 14000).then(function (data) {
       var rows = Array.isArray(data && data.conversations) ? data.conversations : [];
       var cutoff = Date.now() / 1000 - 86400;
       var recent = rows.filter(function (r) { return Number(r.mtime || r.modified || 0) >= cutoff; });

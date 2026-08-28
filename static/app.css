@@ -4954,7 +4954,21 @@
   .conv-item.is-orch-root { border-left-color: #39c5cf; }
   .conv-item.is-orch-lane { border-left-color: color-mix(in srgb, #a371f7 60%, transparent); }
   .conv-item.is-orch-lane.active { border-left-color: var(--purple); }
-  .conv-orch-lanes-chip { font-size: 10px; font-weight: 600; color: #39c5cf; white-space: nowrap; }
+  .conv-orch-lanes-chip {
+    display: inline-block;
+    margin-left: 6px;
+    padding: 1px 5px;
+    font-size: 9px;
+    font-weight: 500;
+    line-height: 1.4;
+    color: rgba(57, 197, 207, 0.95);
+    background: rgba(57, 197, 207, 0.12);
+    border: 1px solid rgba(57, 197, 207, 0.35);
+    border-radius: 3px;
+    letter-spacing: 0.03em;
+    vertical-align: middle;
+    white-space: nowrap;
+  }
   /* Completion cue. Pulses for as long as the class is on (JS removes it after
      ~6s) rather than running a single 1.8s fade — a one-shot animation restarts
      from zero on every sidebar re-render, which either swallowed the cue or
@@ -12231,21 +12245,31 @@
       font-size: 11px;
     }
   }
+  .cl-working-wake-btn,
   .cl-agy-wake-btn {
     flex-shrink: 0;
-    margin-left: 6px;
-    padding: 2px 7px;
-    border-radius: 3px;
+    margin-left: 8px;
+    padding: 2px 8px;
+    border-radius: 4px;
     border: 1px solid color-mix(in srgb, var(--accent) 55%, var(--border) 45%);
-    background: transparent;
+    background: color-mix(in srgb, var(--accent) 8%, transparent 92%);
     color: var(--accent);
     font-size: 11px;
+    font-weight: 500;
     cursor: pointer;
     line-height: 1.4;
-    transition: background 0.15s, opacity 0.15s;
+    transition: background 0.15s, opacity 0.15s, border-color 0.15s;
   }
-  .cl-agy-wake-btn:hover { background: color-mix(in srgb, var(--accent) 12%, transparent 88%); }
-  .cl-agy-wake-btn:disabled { opacity: 0.5; cursor: default; }
+  .cl-working-wake-btn:hover,
+  .cl-agy-wake-btn:hover {
+    background: color-mix(in srgb, var(--accent) 18%, transparent 82%);
+    border-color: var(--accent);
+  }
+  .cl-working-wake-btn:disabled,
+  .cl-agy-wake-btn:disabled {
+    opacity: 0.5;
+    cursor: default;
+  }
   .conv-live-tool-inline.is-generating {
     color: var(--text-muted); background: rgba(139,148,158,0.08); border-color: rgba(139,148,158,0.20);
   }
