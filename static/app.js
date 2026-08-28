@@ -55959,6 +55959,7 @@
         el.style.transform = 'translate(' + dx + 'px,' + dy + 'px) scale(0.3)';
         el.style.opacity = '0';
         el.classList.add('is-born');
+        el.addEventListener('animationend', () => el.classList.remove('is-born'), { once: true });
       }
     });
     const bornNow = lanes.some(l => !before.has(l.id)) && !firstPaintForSession;
@@ -55972,6 +55973,7 @@
         el.style.transition = '';
         el.style.transform = '';
         el.style.opacity = '';
+        setTimeout(() => el.classList.remove('is-born'), 950);
       });
       orchDrawEdges();
       setTimeout(orchDrawEdges, 520);   // once the FLIP transition settles

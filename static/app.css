@@ -25679,15 +25679,15 @@ button.orch-node:hover { border-color: color-mix(in srgb, var(--accent) 60%, var
 .orch-node.is-waiting { border-color: #d29922; box-shadow: 0 0 0 3px color-mix(in srgb, #d29922 18%, transparent); }
 .orch-node.is-waiting .orch-node-status { color: #d29922; }
 .orch-node.is-idle .orch-node-status { color: #58a6ff; }
-.orch-node.is-done { opacity: 0.72; }
+.orch-node.is-done { opacity: 0.72; animation: none !important; }
 .orch-node.is-done .orch-node-status { color: #3fb950; }
-.orch-node.is-done .orch-node-dot { background: none; width: auto; height: auto; }
+.orch-node.is-done .orch-node-dot { background: none; width: auto; height: auto; animation: none !important; }
 .orch-node.is-done .orch-node-dot::before { content: '\2713'; font-size: 10px; }
 .orch-node.is-compact { display: inline-flex; align-items: center; gap: 6px; padding: 4px 9px 4px 5px; border-radius: 999px; }
 .orch-node.is-compact .orch-node-glyph { width: 16px; height: 16px; font-size: 9px; border-radius: 4px; }
 .orch-node.is-compact .orch-node-name { font-size: 11px; max-width: 120px; }
 .orch-node.is-compact .orch-node-status { margin: 0; }
-.orch-node.is-born { animation: orch-born-glow 900ms ease-out; }
+.orch-node.is-born { animation: orch-born-glow 900ms ease-out forwards; }
 @keyframes orch-born-glow {
   0% { box-shadow: 0 0 0 0 color-mix(in srgb, #a371f7 60%, transparent); }
   100% { box-shadow: 0 0 0 12px transparent; }
