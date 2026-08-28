@@ -14984,75 +14984,57 @@
      .conv-title colour+weight at a higher specificity. */
   :root { --rs-hi: #ffffff; }
   :root[data-theme="light"] { --rs-hi: #000000; }
-  html[data-conv-rowstyle="active"] .conv-item .conv-title {
-    font-weight: 650 !important;
-    letter-spacing: 0 !important;
-    color: var(--text) !important;
-  }
-  html[data-conv-rowstyle="active"]:not([data-theme="light"]) .conv-item .conv-title {
-    color: #f0f4fb !important;
-  }
   html[data-conv-rowstyle="bright"] .conv-item .conv-title {
     color: color-mix(in srgb, var(--text) 20%, var(--rs-hi)) !important;
     font-weight: 500 !important;
   }
-  html[data-conv-rowstyle="airy"] .conv-item {
+  /* Airy is an independent boolean toggle (class on #convList), not a
+     data-conv-rowstyle option — see CONV_ROWSTYLE_TOGGLES. It only touches
+     spacing, orthogonal to whatever font/color preset is active and to the
+     Comfortable toggle (which only shows/hides the outcome card via
+     .compact-rows, defined earlier in this file). */
+  .rows-airy .conv-item {
     padding-top: 10px !important; padding-bottom: 10px !important; margin-bottom: 4px !important;
   }
-  html[data-conv-rowstyle="airy"] .conv-item .conv-title { line-height: 1.75 !important; }
-  html[data-conv-rowstyle="comfortable"] .conv-item {
-    padding-top: 10px !important; padding-bottom: 10px !important; margin-bottom: 4px !important;
-  }
-  html[data-conv-rowstyle="comfortable"] .conv-item .conv-title { line-height: 1.6 !important; }
+  .rows-airy .conv-item .conv-title { line-height: 1.75 !important; }
   html[data-conv-rowstyle="large"] .conv-item {
     padding-top: 7px !important; padding-bottom: 7px !important;
   }
   html[data-conv-rowstyle="large"] .conv-item .conv-title {
     font-size: 16px !important; line-height: 1.45 !important;
   }
-  html[data-conv-rowstyle="contrast"] .conv-item .conv-title {
-    color: color-mix(in srgb, var(--text) 15%, var(--rs-hi)) !important;
-    font-weight: 600 !important;
-  }
-  html[data-conv-rowstyle="contrast"] .conv-item .conv-row-meta,
-  html[data-conv-rowstyle="contrast"] .conv-item .conv-rel,
-  html[data-conv-rowstyle="contrast"] .conv-item .conv-branch-slot {
-    opacity: 0.45 !important;
-  }
 
   /* ---- Typeface variants ---- */
-  html[data-conv-rowstyle="serif"] .conv-item .conv-title {
-    font-family: ui-serif, "New York", Georgia, "Times New Roman", serif !important;
-    font-size: 15px !important; letter-spacing: 0 !important;
-  }
-  html[data-conv-rowstyle="rounded"] .conv-item .conv-title {
-    font-family: ui-rounded, "SF Pro Rounded", "Avenir Next", "Nunito", system-ui, sans-serif !important;
-    font-size: 14.5px !important; font-weight: 500 !important; letter-spacing: 0 !important;
-  }
-  html[data-conv-rowstyle="grotesk"] .conv-item .conv-title {
-    font-family: "Helvetica Neue", Helvetica, Inter, Arial, sans-serif !important;
-    font-size: 14.5px !important; letter-spacing: -0.015em !important;
-  }
-  html[data-conv-rowstyle="humanist"] .conv-item .conv-title {
-    font-family: Optima, Candara, "Gill Sans", "Gill Sans MT", sans-serif !important;
-    font-size: 15px !important; letter-spacing: 0.01em !important;
-  }
-  html[data-conv-rowstyle="geometric"] .conv-item .conv-title {
-    font-family: Futura, "Century Gothic", "Avenir Next", sans-serif !important;
-    font-size: 14px !important; letter-spacing: 0.015em !important;
-  }
-  html[data-conv-rowstyle="slab"] .conv-item .conv-title {
+  /* All three get the "bright" color+weight formula on top of their own
+     typeface (per user request), plus an "XL" sibling one more font-size
+     bump up from the base. */
+  html[data-conv-rowstyle="slab"] .conv-item .conv-title,
+  html[data-conv-rowstyle="slab-xl"] .conv-item .conv-title {
     font-family: Charter, "Iowan Old Style", "Bitstream Charter", Palatino, serif !important;
-    font-size: 15px !important; letter-spacing: 0 !important;
+    letter-spacing: 0 !important;
+    color: color-mix(in srgb, var(--text) 20%, var(--rs-hi)) !important;
+    font-weight: 500 !important;
   }
-  html[data-conv-rowstyle="typewriter"] .conv-item .conv-title {
-    font-family: "Courier New", Courier, ui-monospace, monospace !important;
-    font-size: 14px !important; font-weight: 600 !important; letter-spacing: -0.01em !important;
+  html[data-conv-rowstyle="slab"] .conv-item .conv-title { font-size: 15px !important; }
+  html[data-conv-rowstyle="slab-xl"] .conv-item .conv-title { font-size: 16px !important; }
+  html[data-conv-rowstyle="rounded"] .conv-item .conv-title,
+  html[data-conv-rowstyle="rounded-xl"] .conv-item .conv-title {
+    font-family: ui-rounded, "SF Pro Rounded", "Avenir Next", "Nunito", system-ui, sans-serif !important;
+    letter-spacing: 0 !important;
+    color: color-mix(in srgb, var(--text) 20%, var(--rs-hi)) !important;
+    font-weight: 500 !important;
   }
-  html[data-conv-rowstyle="condensed"] .conv-item .conv-title {
-    font-family: "Avenir Next Condensed", "Helvetica Neue Condensed", "Roboto Condensed", "Arial Narrow", sans-serif !important;
-    font-size: 15.5px !important; letter-spacing: 0.01em !important;
+  html[data-conv-rowstyle="rounded"] .conv-item .conv-title { font-size: 14.5px !important; }
+  html[data-conv-rowstyle="rounded-xl"] .conv-item .conv-title { font-size: 15.5px !important; }
+  html[data-conv-rowstyle="grotesk"] .conv-item .conv-title,
+  html[data-conv-rowstyle="grotesk-xl"] .conv-item .conv-title {
+    font-family: "Helvetica Neue", Helvetica, Inter, Arial, sans-serif !important;
+    letter-spacing: -0.015em !important;
+    color: color-mix(in srgb, var(--text) 20%, var(--rs-hi)) !important;
+    font-weight: 500 !important;
   }
+  html[data-conv-rowstyle="grotesk"] .conv-item .conv-title { font-size: 14.5px !important; }
+  html[data-conv-rowstyle="grotesk-xl"] .conv-item .conv-title { font-size: 15.5px !important; }
   .conv-bg-swatch {
     width: 14px;
     height: 14px;
