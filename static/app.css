@@ -6474,11 +6474,15 @@
     text-overflow: ellipsis;
     flex-shrink: 1;
   }
-  .conv-item .conv-hover-meta-row .conv-session-origin-chip.is-parent,
-  .conv-item .conv-hover-meta-row .conv-session-origin-chip.is-grandparent {
+  .conv-item .conv-hover-meta-row .conv-session-origin-chip.is-parent {
     border-color: rgba(188,140,255,0.30);
     background: rgba(188,140,255,0.10);
     color: var(--purple, #bc8cff);
+  }
+  .conv-item .conv-hover-meta-row .conv-session-origin-chip.is-successor {
+    border-color: rgba(88,166,255,0.35);
+    background: rgba(88,166,255,0.12);
+    color: var(--accent, #58a6ff);
   }
   /* Folded continuation ancestors: purple ↳ chips on the title row,
      only while that conversation is selected. */
@@ -6488,10 +6492,10 @@
     height: 18px;
     max-width: 140px;
     padding: 0 6px;
-    border: 1px solid rgba(188,140,255,0.35);
+    border: 1px solid rgba(88,166,255,0.35);
     border-radius: 4px;
-    background: rgba(188,140,255,0.14);
-    color: var(--purple, #bc8cff);
+    background: rgba(88,166,255,0.14);
+    color: var(--accent, #58a6ff);
     font-size: 11px;
     line-height: 18px;
     white-space: nowrap;
@@ -6504,8 +6508,8 @@
     align-items: center;
   }
   .conv-item.active .conv-main-row > .conv-session-origin-chip.is-continuation:hover {
-    border-color: var(--purple, #bc8cff);
-    background: rgba(188,140,255,0.24);
+    border-color: var(--accent, #58a6ff);
+    background: rgba(88,166,255,0.24);
   }
   /* Clickable only when a resolvable parent id was wired up (data-parent-sid) —
      an origin chip with no known parent (CCC/user/unknown) stays inert. */
@@ -6513,15 +6517,8 @@
     cursor: pointer;
   }
   .conv-item .conv-hover-meta-row .conv-session-origin-chip[data-parent-sid]:hover {
-    border-color: var(--purple, #bc8cff);
-    background: rgba(188,140,255,0.20);
-  }
-  /* CCC-864: the parent/grandparent origin chip ("continued from") is
-     provenance worth surfacing at a glance — keep it visible even when the
-     row is neither hovered nor selected, unlike the rest of the meta row. */
-  .conv-item .conv-hover-meta-row:has(.conv-session-origin-chip.is-parent),
-  .conv-item .conv-hover-meta-row:has(.conv-session-origin-chip.is-grandparent) {
-    display: flex;
+    border-color: var(--accent, #58a6ff);
+    background: rgba(88,166,255,0.20);
   }
   .conv-item .conv-hover-meta-row .conv-session-origin-chip.is-ccc {
     border-color: rgba(88,166,255,0.28);

@@ -31147,7 +31147,7 @@
     const _openAskCutoff = _nowSec - OPEN_ASK_RECENT_S;
     const _actionSessionId = (c) => String((c && (c.session_id || c.id)) || '').trim();
     const _actionParentId = (c) => f2EffectiveParentSessionId(
-      _actionSessionId(c), c && (c.parent_session_id || c.hermes_parent_session_id || c.hermes_continued_from)
+      _actionSessionId(c), c && (c.parent_session_id || c.hermes_parent_session_id)
     );
     const _actionSessionById = new Map();
     _sessionConvs.forEach(c => {
@@ -31170,6 +31170,15 @@
       nextSeen.add(parentId);
       return _openAskHasStableParent(parent, nextSeen);
     };
+
+    // Subagent and Continuation lineage resolution:
+    const _sessionProvenanceContinuationId = (row) => String(
+      (row && (row.continued_from_session_id || row.hermes_continued_from)) || ''
+    ).trim();
+    const _sessionProvenanceParentId = (row) => String(
+      (row && (row.parent_session_id || row.hermes_parent_session_id)) || ''
+    ).trim();
+
     // Pulling every waiting session into a top bucket made rows jump whenever a
     // turn paused/resumed. Keep ordinary questions and other waiting states in
     // their project groups, but promote formal unresolved approval prompts:
@@ -31243,23 +31252,25 @@
     });
     const _sessionProvenanceChipHtml = (c) => {
       if (!c || c.source === 'backlog' || c.source === 'github_pr' || c.backlog_type === 'github') return '';
-      const parentId = _sessionProvenanceParentId(c);
+      const contId = String((c && (c.continued_from_session_id || c.hermes_continued_from)) || '').trim();
+      const parentId = contId || _sessionProvenanceParentId(c);
       let label = '';
       let title = '';
       let className = '';
       let chipAttrs = '';
-      if (parentId) {
+      if (contId) {
+        // Successor relationship: this session is an evolution/successor of an earlier ancestor session
+        const ancestorTitle = _sessionProvenanceTitle(_sessionProvenanceById.get(contId), contId);
+        label = '\u2934 from: ' + ancestorTitle;
+        title = 'Successor of ' + ancestorTitle + ' (' + contId + ') \u2014 click to open ancestor';
+        className = ' is-successor';
+        chipAttrs = ' role="button" tabindex="0" data-parent-sid="' + escapeAttr(contId) + '"';
+      } else if (parentId) {
+        // Child subagent relationship: spawned by an orchestrator
         const parentTitle = _sessionProvenanceTitle(_sessionProvenanceById.get(parentId), parentId);
         label = '\u21b3 ' + parentTitle;
-        title = 'Spawned by ' + parentTitle + ' (' + parentId + ') \u2014 click to open it';
+        title = 'Subagent spawned by ' + parentTitle + ' (' + parentId + ') \u2014 click to open parent';
         className = ' is-parent';
-        // CCC-852: always wire up navigation, even when the parent row isn't
-        // loaded in THIS render's lists yet (e.g. an archived/old session
-        // outside the current lane or page). selectConversation() accepts a
-        // raw session id and loads it from scratch \u2014 same path the
-        // WatchTower "Open CCC" deep link uses \u2014 so gating this on
-        // _sessionProvenanceById silently made the chip look clickable but
-        // do nothing for exactly the sessions users most wanted to reach.
         chipAttrs = ' role="button" tabindex="0" data-parent-sid="' + escapeAttr(parentId) + '"';
       } else {
         const threadSource = String(c.thread_source || '').trim().toLowerCase();
@@ -31271,32 +31282,15 @@
           label = 'user';
           title = 'Top-level session started by the user; no parent session recorded';
         } else if (threadSource === 'subagent') {
-          label = 'parent unknown';
+          label = 'subagent';
           title = 'Spawned as a subagent; parent session not recorded';
           className = ' is-unknown';
         } else {
           return '';
         }
       }
-      let html = '<span class="conv-session-origin-chip' + className + '"' + chipAttrs
+      return '<span class="conv-session-origin-chip' + className + '"' + chipAttrs
         + ' title="' + escapeAttr(title) + '">' + escapeHtml(label) + '</span>';
-      // One more rung up the chain (CCC-840: "what about the previous
-      // previous session?"). Only shown when the parent's own row is loaded
-      // AND has a resolvable parent of its own \u2014 otherwise there's nothing
-      // to click through to.
-      if (parentId) {
-        const parentRow = _sessionProvenanceById.get(parentId);
-        const grandparentId = parentRow ? _sessionProvenanceParentId(parentRow) : '';
-        if (grandparentId && _sessionProvenanceById.has(grandparentId)) {
-          const grandparentTitle = _sessionProvenanceTitle(_sessionProvenanceById.get(grandparentId), grandparentId);
-          html += '<span class="conv-session-origin-chip is-grandparent" role="button" tabindex="0"'
-            + ' data-parent-sid="' + escapeAttr(grandparentId) + '"'
-            + ' title="Spawned by ' + escapeAttr(grandparentTitle) + ' (' + escapeAttr(grandparentId) + ') \u2014 click to open it">'
-            + '\u21b3\u21b3 ' + escapeHtml(grandparentTitle)
-            + '</span>';
-        }
-      }
-      return html;
     };
     // The inline NYA block — mirrors the attention-panel row markup so it looks
     // identical, minus the panel-only chrome (verify button, id chip, debug
@@ -32167,8 +32161,8 @@
           .replace(/^⤴︎\s*/, '');
         return '<span class="conv-session-origin-chip is-continuation" role="button" tabindex="0"'
           + ' data-continuation-sid="' + escapeAttr(sid) + '"'
-          + ' title="Jump to this earlier session in the merged conversation">'
-          + '\u21b3 ' + escapeHtml(label)
+          + ' title="Jump to this ancestor session in the merged conversation">'
+          + '\u2934 from: ' + escapeHtml(label)
           + '</span>';
       }).join('');
       // Continuation heads list folded ancestors as selected-only chips
@@ -32605,7 +32599,7 @@
     };
     const _subagentRowId = (c) => String((c && (c.session_id || c.id)) || '').trim();
     const _subagentRowParentId = (c) => f2EffectiveParentSessionId(
-      _subagentRowId(c), c && (c.parent_session_id || c.hermes_parent_session_id || c.hermes_continued_from)
+      _subagentRowId(c), c && (c.parent_session_id || c.hermes_parent_session_id)
     );
     const _subagentRowIsRecentBlocked = (c) => !!(c && c.ended_blocked
       && (c.modified || c.last_interacted || 0) >= _openAskCutoff);
@@ -33792,7 +33786,7 @@
       const _CUR_ORDER_KEY = 'ccc-current-sessions-order';
       const _currentSessionId = (c) => String((c && (c.session_id || c.id)) || '').trim();
       const _currentSessionParentId = (c) => f2EffectiveParentSessionId(
-        _currentSessionId(c), c && (c.parent_session_id || c.hermes_parent_session_id || c.hermes_continued_from)
+        _currentSessionId(c), c && (c.parent_session_id || c.hermes_parent_session_id)
       );
       const _currentSessionIsEndedSpawnChild = (c) => {
         if (!_currentSessionParentId(c)) return false;
@@ -34604,7 +34598,7 @@
       });
     }
     const _allTabParentId = (c) => f2EffectiveParentSessionId(
-      _allTabSessionId(c), c && (c.parent_session_id || c.hermes_parent_session_id || c.hermes_continued_from)
+      _allTabSessionId(c), c && (c.parent_session_id || c.hermes_parent_session_id)
     );
     const _allTabTreeRowsFor = (rows) => {
       const byId = new Map();
