@@ -1,1 +1,0 @@
-fixed: Compact row mode hardcoded the row's left padding to 10px, ignoring the session icon's own fixed-width box, so titles rendered underneath the icon; Compact rows now reserve the same gutter as every other row style

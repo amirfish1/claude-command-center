@@ -20,6 +20,36 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Changed
 - `watchtower.queue` is now a hard, unconditional dependency of CCC's queue system (ticket lifecycle: claim/close/edit/answer/comment/reopen). Removed the standalone `ux_fixes_queue.py` stdlib fallback that let CCC's queue features work without WatchTower installed — it had gone stale since WatchTower's own storage migrated from JSON to SQLite and was never updated, a latent risk of silent data divergence if watchtower ever became unimportable. If `watchtower.queue` can't be imported, CCC now fails loudly at startup with a clear error instead of silently falling back to a frozen JSON store.
 
+## [5.29.0] - 2026-08-28
+
+This is the polish-and-visibility follow-up to v5.28.0: better model
+selection, a sidebar that stays legible under real load, and faster ways to
+get back to recent work.
+
+### Added
+- The model catalog now includes current OpenAI Codex pricing and plan limits,
+  alongside the Claude, OpenCode, Factory Droid, and Devin information added
+  across the recent model-catalog work.
+- CCC self-checks the dashboard every five minutes and surfaces its health,
+  so a silent local failure is easier to catch.
+
+### Changed
+- Sidebar row styles are now intentionally adjustable: choose tighter or more
+  spacious rows, wrap long titles when they matter, and use divider, zebra, or
+  card delineation. The selected row now has a distinct purple tint instead
+  of looking like an ordinary hover state.
+
+### Fixed
+- Sidebar search no longer launches Total Recall on every keystroke. It scans
+  recent local transcripts in-process across Claude, Codex, Kimi, Gemini, and
+  Cursor, returns in about a second, and keeps results stable while you type.
+- Compact, grouped, and Cards rows now reserve the same icon gutter; long
+  titles and outcome text no longer overlap or drift right of the content.
+- The worker automatically retires stale or incompatible code once idle,
+  instead of remaining degraded until the next full dashboard restart.
+- Claude auto-titles work again after the CLI changed its `--mcp-config`
+  handling; Kimi titles also drop the injected continuation boilerplate.
+
 ## [5.28.0] - 2026-08-28
 
 ### Added
@@ -2836,7 +2866,8 @@ Initial public release.
 - `/api/repo/switch` validates targets against the picker allow-list.
 - See [`SECURITY.md`](SECURITY.md) for the full threat model.
 
-[Unreleased]: https://github.com/amirfish1/claude-command-center/compare/v5.28.0...HEAD
+[Unreleased]: https://github.com/amirfish1/claude-command-center/compare/v5.29.0...HEAD
+[5.29.0]: https://github.com/amirfish1/claude-command-center/releases/tag/v5.29.0
 [5.28.0]: https://github.com/amirfish1/claude-command-center/releases/tag/v5.28.0
 [5.27.3]: https://github.com/amirfish1/claude-command-center/releases/tag/v5.27.3
 [5.27.2]: https://github.com/amirfish1/claude-command-center/releases/tag/v5.27.2

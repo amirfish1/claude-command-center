@@ -16,28 +16,20 @@ class WhatsNewNoticeStaticTests(unittest.TestCase):
         self.assertIn("whatsNewShowNotice();", boot)
         self.assertNotIn("whatsNewOpenModal();", boot)
 
-    def test_notice_can_open_or_dismiss_whats_new_explicitly(self):
+    def test_sidebar_menu_opens_whats_new_explicitly(self):
         index_html = (
             PROJECT_ROOT / "static" / "index.html"
         ).read_text(encoding="utf-8")
         app_js = (PROJECT_ROOT / "static" / "app.js").read_text(encoding="utf-8")
 
-        self.assertIn('id="whatsNewNotice"', index_html)
-        self.assertIn('id="whatsNewNoticeOpen"', index_html)
-        self.assertIn('id="whatsNewNoticeDismiss"', index_html)
-        self.assertIn("$whatsNewNoticeOpen.addEventListener('click', whatsNewOpenModal);", app_js)
+        self.assertIn('id="cccWhatsNewLink"', index_html)
         self.assertIn(
-            "$whatsNewNoticeDismiss.addEventListener('click', whatsNewDismissNotice);",
+            "$cccWhatsNewLink.addEventListener('click', (e) => {",
             app_js,
         )
-        dismiss_start = app_js.index("function whatsNewDismissNotice()")
-        dismiss_end = app_js.index("\n  function ", dismiss_start + 1)
-        dismiss = app_js[dismiss_start:dismiss_end]
-        self.assertIn("ccc-last-seen-version", dismiss)
-        self.assertIn("classList.remove('visible')", dismiss)
-        self.assertNotIn("Don't show on startup", index_html)
+        self.assertIn("whatsNewOpenModal();", app_js)
 
-    def test_notice_badge_lives_beside_version_not_in_crowded_alert_strip(self):
+    def test_whats_new_lives_in_the_overflow_menu_not_the_brand_row(self):
         index_html = (
             PROJECT_ROOT / "static" / "index.html"
         ).read_text(encoding="utf-8")
@@ -48,8 +40,38 @@ class WhatsNewNoticeStaticTests(unittest.TestCase):
         title_row = index_html[title_start:title_end]
 
         self.assertIn('id="cccVersionLabel"', title_row)
-        self.assertIn('id="whatsNewNotice"', title_row)
-        self.assertNotIn("_moveToHome('whatsNewNotice'", app_js)
+        self.assertNotIn('id="cccWhatsNewLink"', title_row)
+        self.assertIn('id="cccWhatsNewLink"', index_html)
+        self.assertNotIn("_moveToHome('cccWhatsNewLink'", app_js)
+
+    def test_current_release_story_leads_the_dashboard_and_landing_page(self):
+        app_js = (PROJECT_ROOT / "static" / "app.js").read_text(encoding="utf-8")
+        landing_page = (PROJECT_ROOT / "docs" / "index.html").read_text(
+            encoding="utf-8"
+        )
+
+        features_start = app_js.index("const WHATS_NEW_FEATURES = [")
+        features_end = app_js.index("let whatsNewActiveId", features_start)
+        features = app_js[features_start:features_end]
+
+        self.assertIn("simple-mode-for-the-whole-fleet", features)
+        self.assertIn("orchestration-that-shows-its-work", features)
+        self.assertIn("every-model-in-one-place", features)
+        self.assertIn("find-recent-work-fast", features)
+        self.assertNotIn("mobile-responsiveness-pass", features)
+        self.assertIn('<span class="ver">v5.29.0</span>', landing_page)
+        self.assertIn("Simple Mode for the whole fleet", landing_page)
+
+    def test_current_release_screenshot_is_used_on_public_surfaces(self):
+        readme = (PROJECT_ROOT / "README.md").read_text(encoding="utf-8")
+        landing_page = (PROJECT_ROOT / "docs" / "index.html").read_text(
+            encoding="utf-8"
+        )
+        screenshot = PROJECT_ROOT / "docs" / "images" / "ccc-v5-29-orchestration.png"
+
+        self.assertTrue(screenshot.exists())
+        self.assertIn("docs/images/ccc-v5-29-orchestration.png", readme)
+        self.assertIn("./images/ccc-v5-29-orchestration.png", landing_page)
 
 
 if __name__ == "__main__":

@@ -13,7 +13,7 @@ One local dashboard that attaches to every **Claude Code**, **Codex**, **Cursor*
 
 > 📢 Shipping fast. **Watch → Releases** (top-right) to get pinged on new versions without the noise.
 
-![Claude Command Center demo](docs/images/demo.png)
+![CCC v5.29 showing the session fleet, an active agent conversation, one-tap orchestration controls, and a live lane map](docs/images/ccc-v5-29-orchestration.png)
 
 Install with curl:
 
@@ -216,6 +216,8 @@ Competitor cells reflect a survey of 20+ tools in this space (April–August 202
 The whole point is the first row: the moment you touch a terminal, a tool that owns execution goes blind. CCC reads the state the engines already write, so it never does. Deeper dives: [vs claude-squad / Conductor / Sculptor](docs/index.html), [vs heavyweight IDEs](docs/vs-heavyweight-ides.html).
 
 ## Recent
+
+- **2026-08-28**: **v5.29.0**. A follow-up for people running a real fleet: Simple Mode gives your phone a plain-language Home screen, the new orchestration rail lets you Delegate, Verify, or Critique and then watch the lanes work, and the model catalog now shows live Codex pricing and limits alongside the other engines. Recent-work search now scans local Claude, Codex, Kimi, Gemini, and Cursor transcripts without a slow subprocess per keystroke. The sidebar also gets its overdue polish pass: readable row styles, wrapping, a clear selected state, and correct icon alignment.
 
 - **2026-08-10**: **v5.21.0**. **A mobile and reliability release.** The phone dashboard got a full responsiveness pass — conversations open ~6× faster (2476ms → 395ms), the sidebar scrolls as one surface instead of trapping your finger in three panels, the new-session composer stops pushing its send button off-screen, and the list chrome condenses so far more sessions fit on a phone screen. On reliability: CCC no longer interrupts a possibly-mid-turn session on its own (automatic interrupt paths now file an approval ask), a global delivery-health banner surfaces lost WatchTower receipts, Kimi/Devin queues stopped wedging after mid-turn crashes, and trashed sessions stopped resurrecting for a few minutes after the click. Plus a cache-adjusted token headline in the status rail, a connection-type chip in the metadata rail, 1D/2D/7D cache-adjusted session ranking in the throughput sidebar, and a Kimi quota line in the combined throughput chart.
 - **2026-08-07**: **v5.20.0**. **Devin joins as the eighth engine**, now fully spawnable via its local CLI (`devin -p`) with headless spawn, resume, and transcript ingestion from its SQLite store — cloud API sessions stay read-only. Plus a per-repository new-session button in the sidebar, a private queue/worker diagnostic Q2 can send in one click, and a broad reasoning-effort picker rollout across every composer surface.
