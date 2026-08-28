@@ -632,9 +632,11 @@ def resume_session_opencode(session_id, text):
 # ---------------------------------------------------------------------------
 
 _OPENCODE_MODELS_TTL_S = 300.0
+_OPENCODE_MODELS_FILE_TTL_S = 7 * 24 * 3600.0
 _OPENCODE_MODELS_TIMEOUT_S = 30.0
 _OPENCODE_MODELS_LOCK = None
 _OPENCODE_MODELS_CACHE = {"ts": 0.0, "records": []}
+_OPENCODE_MODELS_CACHE_FILE = (Path.home() / ".local" / "share" / "opencode" / "ccc-models-cache.json")
 _OPENCODE_AUTH_PATH = (Path.home() / ".local" / "share" / "opencode" / "auth.json")
 
 
@@ -646,6 +648,44 @@ def _opencode_configured_providers():
         return set(data.keys()) if isinstance(data, dict) else set()
     except (OSError, ValueError, TypeError):
         return set()
+
+
+def _opencode_read_cache_file():
+    """Load a previously-persisted model list and its timestamp."""
+    try:
+        raw = _OPENCODE_MODELS_CACHE_FILE.read_text(encoding="utf-8")
+        data = json.loads(raw)
+        records = data.get("records") if isinstance(data, dict) else data
+        fetched_at = (
+            data.get("fetched_at", "1970-01-01T00:00:00+00:00")
+            if isinstance(data, dict)
+            else "1970-01-01T00:00:00+00:00"
+        )
+        if not isinstance(records, list):
+            return None, 0.0
+        try:
+            dt = datetime.fromisoformat(fetched_at)
+            ts = dt.timestamp()
+        except (ValueError, TypeError):
+            ts = 0.0
+        return records, ts
+    except (OSError, ValueError, TypeError):
+        return None, 0.0
+
+
+def _opencode_write_cache_file(records):
+    """Persist a model list so the launchd service can serve it without shell."""
+    try:
+        _OPENCODE_MODELS_CACHE_FILE.parent.mkdir(parents=True, exist_ok=True)
+        payload = {
+            "fetched_at": datetime.now(timezone.utc).isoformat(),
+            "records": records,
+        }
+        tmp = _OPENCODE_MODELS_CACHE_FILE.with_suffix(".tmp")
+        tmp.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+        os.replace(tmp, _OPENCODE_MODELS_CACHE_FILE)
+    except (OSError, ValueError, TypeError):
+        pass
 
 
 def _opencode_format_cost(cost):
@@ -767,9 +807,24 @@ def _opencode_model_catalog_records(force_refresh=False):
         ):
             return list(_OPENCODE_MODELS_CACHE["records"])
 
+    file_records, file_ts = _opencode_read_cache_file()
+    if (
+        not force_refresh
+        and file_records
+        and now - file_ts < _OPENCODE_MODELS_FILE_TTL_S
+    ):
+        with _OPENCODE_MODELS_LOCK:
+            _OPENCODE_MODELS_CACHE["ts"] = now
+            _OPENCODE_MODELS_CACHE["records"] = file_records
+        return list(file_records)
+
     resolved = _resolve_opencode_bin()
     if not resolved.get("available"):
         with _OPENCODE_MODELS_LOCK:
+            if file_records:
+                _OPENCODE_MODELS_CACHE["ts"] = now
+                _OPENCODE_MODELS_CACHE["records"] = file_records
+                return list(file_records)
             return list(_OPENCODE_MODELS_CACHE["records"])
 
     configured = _opencode_configured_providers()
@@ -821,9 +876,16 @@ def _opencode_model_catalog_records(force_refresh=False):
 
     with _OPENCODE_MODELS_LOCK:
         if records:
+            if file_records and len(records) < len(file_records) * 0.5:
+                _OPENCODE_MODELS_CACHE["ts"] = now
+                _OPENCODE_MODELS_CACHE["records"] = file_records
+                return list(file_records)
+            _opencode_write_cache_file(records)
             _OPENCODE_MODELS_CACHE["ts"] = now
             _OPENCODE_MODELS_CACHE["records"] = records
-        elif _OPENCODE_MODELS_CACHE["records"]:
-            records = list(_OPENCODE_MODELS_CACHE["records"])
+        elif file_records:
+            _OPENCODE_MODELS_CACHE["ts"] = now
+            _OPENCODE_MODELS_CACHE["records"] = file_records
+            records = list(file_records)
 
     return records
