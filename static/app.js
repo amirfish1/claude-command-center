@@ -2620,12 +2620,12 @@
   // Row spacing: independent 3-step control (cozy/roomy/airy) for
   // padding/line-height between rows. Independent of both compact-rows
   // (which just shows/hides the outcome card) and the font/color row-style
-  // preset. 'cozy' (the base spacing) is the default.
+  // preset. 'roomy' is the default.
   const ROWS_SPACING_KEY = 'ccc-rows-spacing';
   function rowsSpacing() {
     let v = null;
     try { v = localStorage.getItem(ROWS_SPACING_KEY); } catch (_) {}
-    return (v === 'roomy' || v === 'airy') ? v : 'cozy';
+    return (v === 'cozy' || v === 'airy') ? v : 'roomy';
   }
   function applyRowDensityToggles() {
     if (!$convList) return;
@@ -34342,15 +34342,20 @@
             + '<span class="grouping-opt" data-objects-collapse="1">Collapse all</span>'
           + '</span>'
         : '';
-      // The in-progress "Details" toolbar button (row density toggle) was removed
-      // and details default off — rows render compact/lean unless the user opts
-      // back into comfortable via the compact-rows control. (CCC-291)
       // Wrap toggle: lets session titles break across two lines instead of
       // truncating to one, so long titles are more readable at a glance.
       const _ipWrapToggle = '<span class="conv-grouping-toggle conv-wrap-toggle" data-role="wrap-toggle" title="Wrap session titles across two lines">'
           + '<span class="grouping-opt' + (wrapTitlesOn() ? ' is-active' : '') + '" data-wrap-toggle="1">Wrap</span>'
         + '</span>';
-      const _ipTools = '<span class="conv-inprogress-tools">' + _currentSessionsModeToggle + _ipObjectsExpandAll + _ipWindowToggle + _ipGroupingToggle + _ipWrapToggle + '</span>';
+      // Details toggle: shows/hides the outcome-card under each row (git
+      // state signals, ask preview). Was the row-style rail's "Comfortable"
+      // swatch; moved here next to Wrap since both are per-row display
+      // knobs a user reaches for from the session list itself, not from the
+      // typography rail. (CCC-291 originally lived here too.)
+      const _ipDetailsToggle = '<span class="conv-grouping-toggle conv-details-toggle" data-role="details-toggle" title="Show the outcome/detail line under each row">'
+          + '<span class="grouping-opt' + (!compactRowsOn() ? ' is-active' : '') + '" data-details-toggle="1">Details</span>'
+        + '</span>';
+      const _ipTools = '<span class="conv-inprogress-tools">' + _currentSessionsModeToggle + _ipObjectsExpandAll + _ipWindowToggle + _ipGroupingToggle + _ipWrapToggle + _ipDetailsToggle + '</span>';
       const _ipToolbarHtml = _ipTools
         ? '<div class="conv-inprogress-toolbar" data-role="inprogress-toolbar">' + _ipTools + '</div>'
         : '';
@@ -35112,6 +35117,12 @@
       const _arcWrapToggle = '<span class="conv-grouping-toggle conv-wrap-toggle" data-role="wrap-toggle" title="Wrap session titles across two lines">'
           + '<span class="grouping-opt' + (wrapTitlesOn() ? ' is-active' : '') + '" data-wrap-toggle="1">Wrap</span>'
         + '</span>';
+      // Details toggle (mirrors the In progress toolbar's): shows/hides the
+      // outcome-card under each row. Shares 'ccc-compact-rows' with the
+      // In progress view and the (now-removed) row-style rail toggle.
+      const _arcDetailsToggle = '<span class="conv-grouping-toggle conv-details-toggle" data-role="details-toggle" title="Show the outcome/detail line under each row">'
+          + '<span class="grouping-opt' + (!compactRowsOn() ? ' is-active' : '') + '" data-details-toggle="1">Details</span>'
+        + '</span>';
       // Expand-all lives in its own left-hand slot, separate from the
       // window/engine/grouping group on the right. It only renders when
       // grouped by project with multiple folders, so its own slot can
@@ -35121,7 +35132,7 @@
       // between "by time" and "by project".
       const _arcTools = '<div class="conv-archived-tools" data-role="archived-tools">'
           + '<span class="conv-archived-tools-left">' + _arcExpandAllToggle + '</span>'
-          + '<span class="conv-archived-tools-right">' + _arcWindowToggle + _arcEngineToggle + _arcGroupingToggle + _arcWrapToggle + '</span>'
+          + '<span class="conv-archived-tools-right">' + _arcWindowToggle + _arcEngineToggle + _arcGroupingToggle + _arcWrapToggle + _arcDetailsToggle + '</span>'
           + '</div>';
       _archivedHtml =
         '<div class="conv-archived-section" data-role="archived-section">'
@@ -35968,6 +35979,16 @@
         $convList.classList.toggle('wrap-titles', next);
         const opt = $wrapToggle.querySelector('[data-wrap-toggle]');
         if (opt) opt.classList.toggle('is-active', next);
+      });
+    }
+    const $detailsToggle = $convList.querySelector('[data-role="details-toggle"]');
+    if ($detailsToggle) {
+      $detailsToggle.addEventListener('click', (ev) => {
+        ev.stopPropagation();
+        const compactNext = !compactRowsOn();
+        try { localStorage.setItem('ccc-compact-rows', compactNext ? '1' : '0'); } catch (_) {}
+        $convList.classList.toggle('compact-rows', compactNext);
+        renderArchiveList(document.getElementById('convSearch')?.value || '');
       });
     }
     const $currentSessionsModeToggle = $convList.querySelector('[data-role="current-sessions-mode-toggle"]');
@@ -69512,24 +69533,22 @@
     // Small caps, Compact, Mono, and Bold were tried and rejected by the
     // user (2026-08-28) — don't re-add them to this list. Same day: Default,
     // Active, Contrast, Serif, Humanist, Geometric, Condensed, and Typewriter
-    // were dropped too, with Bright promoted to the fallback/default choice.
-    // Slab and Grotesk (plus their XL siblings) were dropped in a follow-up
-    // round; Rounded/Rounded XL survived and keep the "bright" color+weight
-    // treatment. Comfortable moved out of this radio group into
-    // CONV_ROWSTYLE_TOGGLES below, and Airy became a separate 3-step spacing
-    // control (CONV_ROWSTYLE_SPACING) — neither is an alternative to a
-    // font/color choice.
-    { id: 'bright',       label: 'Bright',       kind: 'lines', op: 100, h: 2, gap: 3 },
-    { id: 'large',        label: 'Large',        kind: 'lines', op: 78,  h: 3, gap: 4 },
+    // were dropped too. Slab and Grotesk (plus their XL siblings) were
+    // dropped in a follow-up round. Bright, Large, and base Rounded were
+    // narrowed away in a final round, leaving Large Bright (now the
+    // fallback/default) and Rounded XL as the only two survivors. Comfortable
+    // moved out of this radio group entirely (now the "Details" toggle next
+    // to Wrap in the sidebar toolbar), and Airy became a separate 3-step
+    // spacing control (CONV_ROWSTYLE_SPACING) — neither is an alternative to
+    // a font/color choice.
     { id: 'large-bright', label: 'Large Bright', kind: 'lines', op: 100, h: 3, gap: 4 },
-    { id: 'rounded',      label: 'Rounded',      kind: 'font', font: 'ui-rounded, "SF Pro Rounded", "Avenir Next", system-ui', weight: 500 },
     { id: 'rounded-xl',   label: 'Rounded XL',   kind: 'font', font: 'ui-rounded, "SF Pro Rounded", "Avenir Next", system-ui', weight: 500 },
   ];
 
   function storedConvRowStyle() {
     let id = null;
     try { id = localStorage.getItem(CONV_ROWSTYLE_STORAGE_KEY); } catch (_) {}
-    return CONV_ROWSTYLE_VARIANTS.some(v => v.id === id) ? id : 'bright';
+    return CONV_ROWSTYLE_VARIANTS.some(v => v.id === id) ? id : 'large-bright';
   }
 
   function updateConvRowStyleState(id) {
@@ -69549,21 +69568,10 @@
     updateConvRowStyleState(variant.id);
   }
 
-  // Comfortable (show/hide the outcome-card under each row) used to be a
-  // radio option inside the font/color picker above, but that conflated
-  // unrelated axes into one control. It's now an independent boolean
-  // toggle rendered as an extra swatch in the same rail, orthogonal to
-  // whichever font/color preset is selected.
-  const CONV_ROWSTYLE_TOGGLES = [
-    { id: 'comfortable', label: 'Comfortable', title: 'Show the outcome/detail line under each row', op: 78, h: 3, gap: 6,
-      isOn: () => !compactRowsOn(),
-      toggle: () => {
-        const compactNext = !compactRowsOn();
-        try { localStorage.setItem('ccc-compact-rows', compactNext ? '1' : '0'); } catch (_) {}
-        if ($convList) $convList.classList.toggle('compact-rows', compactNext);
-        renderArchiveList(document.getElementById('convSearch')?.value || '');
-      } },
-  ];
+  // Comfortable (show/hide the outcome-card under each row) used to live
+  // here as a radio option, then as an independent toggle swatch in this
+  // rail — it's now the "Details" toggle next to Wrap in the sidebar
+  // toolbar instead, so this rail no longer renders it at all.
 
   // Row spacing: a 3-step radio (not a boolean) so there's a middle ground
   // between the tight default and full Airy — "Roomy" sits between them.
@@ -69601,26 +69609,6 @@
           ev.preventDefault();
           ev.stopPropagation();
           applyConvRowStyle(variant.id, { persist: true });
-        });
-        host.appendChild(btn);
-      });
-      CONV_ROWSTYLE_TOGGLES.forEach(t => {
-        const btn = document.createElement('button');
-        btn.type = 'button';
-        btn.className = 'conv-rowstyle-swatch is-toggle' + (t.isOn() ? ' active' : '');
-        btn.setAttribute('role', 'checkbox');
-        btn.setAttribute('aria-checked', String(t.isOn()));
-        btn.setAttribute('aria-label', t.label);
-        btn.title = t.title;
-        btn.style.setProperty('--rs-op', String(t.op));
-        btn.style.setProperty('--rs-h', t.h + 'px');
-        btn.style.setProperty('--rs-gap', t.gap + 'px');
-        btn.addEventListener('click', (ev) => {
-          ev.preventDefault();
-          ev.stopPropagation();
-          t.toggle();
-          btn.classList.toggle('active', t.isOn());
-          btn.setAttribute('aria-checked', String(t.isOn()));
         });
         host.appendChild(btn);
       });

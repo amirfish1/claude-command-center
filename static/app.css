@@ -5492,6 +5492,16 @@
     -webkit-line-clamp: 2;
     -webkit-box-orient: vertical;
   }
+  /* Folder/object group headers title their row with .conv-folder-group-chip,
+     not .conv-item .conv-title — Wrap needs its own rule to reach them. */
+  .wrap-titles .conv-folder-group-chip {
+    white-space: normal;
+    display: -webkit-inline-box;
+    -webkit-line-clamp: 2;
+    -webkit-box-orient: vertical;
+    align-items: flex-start;
+    overflow: hidden;
+  }
   .conv-item .conv-empty-session-chip {
     flex: 0 0 auto;
     margin-left: 5px;
@@ -14984,10 +14994,6 @@
      .conv-title colour+weight at a higher specificity. */
   :root { --rs-hi: #ffffff; }
   :root[data-theme="light"] { --rs-hi: #000000; }
-  html[data-conv-rowstyle="bright"] .conv-item .conv-title {
-    color: color-mix(in srgb, var(--text) 20%, var(--rs-hi)) !important;
-    font-weight: 500 !important;
-  }
   /* Row spacing is an independent 3-step radio (data-rows-spacing on
      #convList), not a data-conv-rowstyle option — see CONV_ROWSTYLE_SPACING.
      It only touches spacing, orthogonal to whatever font/color preset is
@@ -15003,31 +15009,25 @@
     padding-top: 10px !important; padding-bottom: 10px !important; margin-bottom: 4px !important;
   }
   #convList[data-rows-spacing="airy"] .conv-item .conv-title { line-height: 1.75 !important; }
-  html[data-conv-rowstyle="large"] .conv-item,
   html[data-conv-rowstyle="large-bright"] .conv-item {
     padding-top: 7px !important; padding-bottom: 7px !important;
   }
-  html[data-conv-rowstyle="large"] .conv-item .conv-title,
   html[data-conv-rowstyle="large-bright"] .conv-item .conv-title {
     font-size: 16px !important; line-height: 1.45 !important;
-  }
-  html[data-conv-rowstyle="large-bright"] .conv-item .conv-title {
     color: color-mix(in srgb, var(--text) 20%, var(--rs-hi)) !important;
     font-weight: 500 !important;
   }
 
-  /* ---- Typeface variants ---- */
-  /* Both get the "bright" color+weight formula on top of their own
-     typeface, plus an "XL" sibling one more font-size bump up from the base. */
-  html[data-conv-rowstyle="rounded"] .conv-item .conv-title,
+  /* ---- Typeface variant ---- */
+  /* Rounded XL: the "bright" color+weight formula on top of its own
+     typeface, one notch larger than the old base Rounded's 15.5px. */
   html[data-conv-rowstyle="rounded-xl"] .conv-item .conv-title {
     font-family: ui-rounded, "SF Pro Rounded", "Avenir Next", "Nunito", system-ui, sans-serif !important;
     letter-spacing: 0 !important;
     color: color-mix(in srgb, var(--text) 20%, var(--rs-hi)) !important;
     font-weight: 500 !important;
+    font-size: 16.5px !important;
   }
-  html[data-conv-rowstyle="rounded"] .conv-item .conv-title { font-size: 14.5px !important; }
-  html[data-conv-rowstyle="rounded-xl"] .conv-item .conv-title { font-size: 15.5px !important; }
   .conv-bg-swatch {
     width: 14px;
     height: 14px;
