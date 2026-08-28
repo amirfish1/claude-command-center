@@ -18294,15 +18294,16 @@ def _find_descendant_sessions(sid, max_depth=6):
 #   3. Spawn registry (spawned-pids.json)        — source: "ccc-spawn"
 #   4. Codex thread registry (codex-thread-registry.json) — source: "codex-thread-registry"
 #   5. Claude Task-tool agent-*.jsonl transcripts — source: "claude-task-tool"
+#   6. Kimi Code Agent subagents (agents/<name>/wire.jsonl) — source: "kimi-subagent"
 #
 # Edges are added eagerly at startup (sources 1-4) and lazily on first
-# family_tree() query for source 5 (filesystem glob, cached). New CCC
+# family_tree() query for sources 5-6 (filesystem glob, cached). New CCC
 # spawns add their edge immediately via add_edge() called from
 # _record_spawn_to_registry.
 #
 # The graph is engine-agnostic: it stores parent_sid -> child_sid with
-# per-edge metadata ({source, engine, resumable}). The family_tree()
-# method returns a nested dict ready for the API / UI.
+# per-edge metadata ({source, engine, resumable, name, model}). The
+# family_tree() method returns a nested dict ready for the API / UI.
 
 class _SessionGraph:
     """Thread-safe parent-child adjacency list with disk persistence."""
@@ -18319,6 +18320,9 @@ class _SessionGraph:
         # parent_sid -> set of child_sids already enriched for Claude Task
         # tool subagents (so lazy enrichment runs once per parent).
         self._claude_task_enriched = set()
+        # parent_sid -> set of child_sids already enriched for Kimi Code
+        # Agent subagents (agents/<name>/wire.jsonl under the session dir).
+        self._kimi_subagents_enriched = set()
         self._dirty = False
 
     # -- persistence ---------------------------------------------------------
@@ -18351,6 +18355,8 @@ class _SessionGraph:
                     "source": str(e.get("source") or "unknown"),
                     "engine": str(e.get("engine") or ""),
                     "resumable": e.get("resumable", True),
+                    "name": str(e.get("name") or ""),
+                    "model": str(e.get("model") or ""),
                 }
                 self._parent_of[child] = parent
                 self._children_of.setdefault(parent, {})[child] = meta
@@ -18359,6 +18365,9 @@ class _SessionGraph:
             enriched = data.get("claude_task_enriched")
             if isinstance(enriched, list):
                 self._claude_task_enriched = set(enriched)
+            kimi_enriched = data.get("kimi_subagents_enriched")
+            if isinstance(kimi_enriched, list):
+                self._kimi_subagents_enriched = set(kimi_enriched)
             self._dirty = False
 
     def save(self):
@@ -18375,10 +18384,13 @@ class _SessionGraph:
                     "source": meta.get("source", "unknown"),
                     "engine": meta.get("engine", ""),
                     "resumable": meta.get("resumable", True),
+                    "name": meta.get("name", ""),
+                    "model": meta.get("model", ""),
                 })
             data = {
                 "edges": edges,
                 "claude_task_enriched": sorted(self._claude_task_enriched),
+                "kimi_subagents_enriched": sorted(self._kimi_subagents_enriched),
             }
             try:
                 tmp = self._path.with_suffix(".tmp")
@@ -18390,7 +18402,10 @@ class _SessionGraph:
 
     # -- mutation ------------------------------------------------------------
 
-    def add_edge(self, parent, child, source="ccc-spawn", engine="", resumable=True):
+    def add_edge(
+        self, parent, child, source="ccc-spawn", engine="", resumable=True,
+        name=None, model=None,
+    ):
         """Add or update a parent->child edge. Idempotent; first edge wins
         for the parent pointer, but metadata is always refreshed."""
         parent = str(parent or "").strip()
@@ -18398,7 +18413,13 @@ class _SessionGraph:
         if not parent or not child or parent == child:
             return
         with self._lock:
-            meta = {"source": source, "engine": str(engine or ""), "resumable": resumable}
+            meta = {
+                "source": source,
+                "engine": str(engine or ""),
+                "resumable": resumable,
+                "name": str(name or ""),
+                "model": str(model or ""),
+            }
             # If the child already has a different parent, keep the first
             # (matches _find_descendant_sessions' setdefault semantics).
             existing_parent = self._parent_of.get(child)
@@ -18502,7 +18523,7 @@ class _SessionGraph:
 
         Each node is:
           {"session_id": ..., "children": [...], "source": ..., "engine": ...,
-           "resumable": ...}
+           "resumable": ..., "name": ..., "model": ...}
 
         The root is the topmost ancestor (the orchestrator). ``sid`` itself
         and all its siblings/cousins under the root are included.
@@ -18525,6 +18546,8 @@ class _SessionGraph:
                 "source": meta.get("source", "root"),
                 "engine": meta.get("engine", ""),
                 "resumable": meta.get("resumable", True),
+                "name": meta.get("name", ""),
+                "model": meta.get("model", ""),
                 "children": children,
             }
 
@@ -18546,6 +18569,7 @@ class _SessionGraph:
                 "edges": len(self._parent_of),
                 "parents": len(self._children_of),
                 "claude_task_enriched": len(self._claude_task_enriched),
+                "kimi_subagents_enriched": len(self._kimi_subagents_enriched),
             }
 
 
@@ -18553,9 +18577,15 @@ class _SessionGraph:
 _session_graph = _SessionGraph(SESSION_GRAPH_FILE)
 
 
-def _session_graph_add_edge(parent, child, source="ccc-spawn", engine="", resumable=True):
+def _session_graph_add_edge(
+    parent, child, source="ccc-spawn", engine="", resumable=True,
+    name=None, model=None,
+):
     """Thin wrapper so callers don't touch the singleton directly."""
-    _session_graph.add_edge(parent, child, source=source, engine=engine, resumable=resumable)
+    _session_graph.add_edge(
+        parent, child, source=source, engine=engine, resumable=resumable,
+        name=name, model=model,
+    )
     _session_graph.save()
 
 
@@ -18645,8 +18675,54 @@ def _session_graph_enrich_claude_task_subagents(parent_sid):
     _session_graph.save()
 
 
+def _session_graph_enrich_kimi_subagents(parent_sid):
+    """Scan a Kimi session dir for ``agents/<name>/wire.jsonl`` subagents and
+    add each as a child of ``parent_sid``.
+
+    Kimi K2.7 (and later) can launch internal Agent subagents that live
+    under the parent session's ``agents/`` directory, outside CCC's spawn
+    registry. Each subagent gets a synthetic child id so the lane map can
+    display it as a non-resumable subagent lane. Cached per parent so the
+    directory scan runs at most once.
+    """
+    parent_sid = str(parent_sid or "").strip()
+    if not parent_sid:
+        return
+    with _session_graph._lock:
+        if parent_sid in _session_graph._kimi_subagents_enriched:
+            return
+    try:
+        session_dir = _kimi_session_dir(parent_sid)
+        # The graph may hold the bare id while the row uses the "session_"
+        # display prefix (or vice versa). Try the bare form as a fallback.
+        if session_dir is None and parent_sid.startswith("session_"):
+            session_dir = _kimi_session_dir(parent_sid[len("session_"):])
+        if session_dir is not None:
+            agents_dir = session_dir / "agents"
+            if agents_dir.is_dir():
+                for subdir in agents_dir.iterdir():
+                    if not subdir.is_dir() or subdir.name == "main":
+                        continue
+                    wire = subdir / "wire.jsonl"
+                    if not wire.is_file():
+                        continue
+                    child_id = f"kimi-subagent:{parent_sid}:{subdir.name}"
+                    _session_graph.add_edge(
+                        parent_sid, child_id,
+                        source="kimi-subagent", engine="kimi", resumable=False,
+                        name=subdir.name,
+                    )
+    except OSError:
+        pass
+    with _session_graph._lock:
+        _session_graph._kimi_subagents_enriched.add(parent_sid)
+        _session_graph._dirty = True
+    _session_graph.save()
+
+
 def _session_graph_family_tree(sid):
-    """Return the family tree for ``sid``, with Claude Task-tool enrichment.
+    """Return the family tree for ``sid``, with Claude Task-tool and Kimi
+    Code Agent subagent enrichment.
 
     This is the main entry point for the /api/sessions/family endpoint.
     """
@@ -18662,6 +18738,15 @@ def _session_graph_family_tree(sid):
     for ancestor in _session_graph.ancestors(sid):
         if not _session_graph.children_of(ancestor):
             _session_graph_enrich_claude_task_subagents(ancestor)
+    # Kimi Code Agent subagents live under the session dir, not in the spawn
+    # registry. Enrich this node, its ancestors, and any known descendants so
+    # a lane map rooted at the orchestrator still shows subagents under a
+    # Kimi child lane.
+    _session_graph_enrich_kimi_subagents(sid)
+    for ancestor in _session_graph.ancestors(sid):
+        _session_graph_enrich_kimi_subagents(ancestor)
+    for descendant in _session_graph.descendants(sid):
+        _session_graph_enrich_kimi_subagents(descendant)
     return _session_graph.family_tree(sid)
 
 
@@ -65455,7 +65540,8 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
             # Full family tree from the unified SessionGraph. Returns a nested
             # dict rooted at the topmost ancestor (orchestrator), with all
             # descendants at every depth. Includes Claude Task-tool subagents
-            # (lazily enriched) and Codex native subagents (background refresh).
+            # and Kimi Code Agent subagents (lazily enriched) plus Codex native
+            # subagents (background refresh).
             # Much cheaper than /api/sessions/children for deep trees — one
             # graph lookup, no registry scan, no liveness probes.
             qs = urllib.parse.parse_qs(parsed.query)
