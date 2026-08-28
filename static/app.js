@@ -59684,10 +59684,15 @@
       + ' conv=' + String(window.currentConversation || '')
       + ' hidden=' + document.hidden);
     if (_archiveStuckRenderRecoveryPromise) return _archiveStuckRenderRecoveryPromise;
-    _archiveStuckRenderRecoveryPromise = loadArchiveAll({ staleOk: true }).then(convs => {
+    const currentWin = _archiveWindow();
+    const targetWin = (currentWin === 'all') ? '7d' : currentWin;
+    if (currentWin === 'all') {
+      try { localStorage.setItem(ARCHIVE_WINDOW_KEY, '7d'); } catch (_) {}
+    }
+    _archiveStuckRenderRecoveryPromise = loadArchiveAll({ staleOk: true, window: targetWin }).then(convs => {
       if (!Array.isArray(convs) || !convs.length || !_archiveListStillShowsLoader()) return;
       archiveData = _mergeArchivePrSnapshot(convs, archiveData);
-      archiveDataWindow = _archiveWindow();
+      archiveDataWindow = targetWin;
       archiveLoaded = true;
       _archiveStuckRetryCount = 0;
       renderArchiveList(_archiveQuery(), { force: true });
@@ -64154,7 +64159,10 @@
           + (restartServerPort ? ' on :' + restartServerPort : '')
           + ' comes back.'
     );
-    try { sessionStorage.setItem('ccc-restarting', '1'); } catch (_) {}
+    try {
+      sessionStorage.setItem('ccc-restarting', '1');
+      localStorage.setItem(ARCHIVE_WINDOW_KEY, '7d');
+    } catch (_) {}
 
     let postError = null;
     try {
@@ -67621,6 +67629,7 @@
   try {
     if (sessionStorage.getItem('ccc-restarting')) {
       sessionStorage.removeItem('ccc-restarting');
+      localStorage.setItem(ARCHIVE_WINDOW_KEY, '7d');
       showOpToast('Server restarted', 'ok');
     } else if (sessionStorage.getItem('ccc-updating')) {
       sessionStorage.removeItem('ccc-updating');

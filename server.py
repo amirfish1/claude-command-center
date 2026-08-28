@@ -11171,6 +11171,19 @@ _archive_serve_refreshing = {}  # key -> start-time epoch, for in-flight backgro
 _archive_serve_generation = 0
 _archive_serve_version = 0       # monotonic per store; tags prebuilt response bodies
 
+# Prebuilt response bodies for /api/conversations/list, keyed by
+# (archive cache key, window, from_cache). The list path serves the shared
+# serve-snapshot row list (copy_rows=False) whenever no in-memory overlay
+# appended rows, so for a given snapshot version + window the projected
+# payload is byte-identical across the N tabs polling it — previously each
+# poll paid json.dumps + sha1 + gzip over the whole payload (13 MB for
+# window=all on large archives). Validity is by snapshot version only,
+# verified per request via _archive_serve_ver_for_rows (an identity check),
+# so an overlay append or a snapshot swap always misses and rebuilds.
+_ARCHIVE_LIST_BODY_CACHE = {}  # (cache_key, window, from_cache) -> {"ver", "raw", "gzip", "etag"}
+_ARCHIVE_LIST_BODY_LOCK = threading.Lock()
+_ARCHIVE_LIST_BODY_CACHE_MAX = 24
+
 
 def _archive_refresh_slot_available(key, now):
     """True if `key` has no background refresh in flight, or the one it has
@@ -14772,7 +14785,7 @@ def enqueue_annotation_ux_fixes_queue(
 
 
 def _schedule_restart(delay=0.5):
-    """Arm an os.execvp() that replaces this process with a fresh
+    """Arm a launchctl kickstart or os.execvp() that replaces this process with a fresh
     `python server.py` after `delay` seconds. Called AFTER the HTTP response
     is flushed so the client sees {ok:true} before the socket dies."""
     def _go():
@@ -14781,6 +14794,20 @@ def _schedule_restart(delay=0.5):
             sys.stderr.flush()
         except Exception:
             pass
+        if sys.platform == "darwin":
+            service_label = "com.github.claude-command-center"
+            plist_path = Path.home() / "Library" / "LaunchAgents" / f"{service_label}.plist"
+            if plist_path.is_file():
+                try:
+                    proc = subprocess.run(
+                        ["launchctl", "kickstart", "-k", f"gui/{os.getuid()}/{service_label}"],
+                        capture_output=True,
+                        timeout=5,
+                    )
+                    if proc.returncode == 0:
+                        return
+                except Exception:
+                    pass
         os.execvp(sys.executable, [sys.executable, str(Path(__file__).resolve())])
     t = threading.Timer(delay, _go)
     t.daemon = True
@@ -68035,8 +68062,15 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                 cache_options,
                 force_refresh=not stale_ok,
             )
-            self.send_json(
-                _archive_list_payload(rows, window=window, cached=from_cache), etag=True,
+            # Nonzero only when `rows` IS the stored serve snapshot (identity)
+            # — i.e. no in-memory ACP/Devin overlay appended — which is the
+            # only case where a prebuilt body may be replayed.
+            list_cache_key = _archive_response_cache_key(**cache_options)
+            snap_ver = _archive_serve_ver_for_rows(list_cache_key, rows)
+            self._send_archive_list_json(
+                list_cache_key, window, from_cache,
+                lambda: _archive_list_payload(rows, window=window, cached=from_cache),
+                snap_ver,
             )
         elif path == "/api/conversations/all":
             # Server-agnostic conversation archive: every JSONL across every
@@ -74191,6 +74225,7 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
         last_seq = 0
         last_keepalive = time.time()
         response = initial
+        idle_polls = 0
         try:
             while True:
                 deltas = response.get("deltas") or []
@@ -74204,11 +74239,21 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                     )
                     self.wfile.flush()
                     last_keepalive = time.time()
+                    idle_polls = 0
                 elif time.time() - last_keepalive >= 5:
                     self.wfile.write(b"event: keepalive\ndata: {}\n\n")
                     self.wfile.flush()
                     last_keepalive = time.time()
-                time.sleep(0.25)
+                    idle_polls += 1
+                else:
+                    idle_polls += 1
+                # Poll fast while a turn is streaming; back off once the
+                # session goes quiet. A fixed 250ms poll cost each open stream
+                # a control-plane round-trip 4x/sec forever (~12% of a core in
+                # a py-spy capture of an idle dashboard with two open
+                # streams), and the first chunk of a new burst still lands
+                # within one slow-interval.
+                time.sleep(0.25 if idle_polls < 8 else 1.0)
                 response = _control_plane_engine_call(
                     harness, "deltas",
                     {"session_id": session_id, "after": last_seq},
@@ -75134,6 +75179,65 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                         sc["body_raw"] = raw
                         sc["body_gzip"] = gzip_body
                         sc["etag"] = etag_val
+        if self.headers.get("If-None-Match") == etag_val:
+            self.send_response(304)
+            self.send_header("ETag", etag_val)
+            self.end_headers()
+            return
+        if accept_gzip and gzip_body is not None:
+            body, enc = gzip_body, "gzip"
+        else:
+            body, enc = raw, None
+        self.send_response(200)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(body)))
+        self.send_header("ETag", etag_val)
+        if enc:
+            self.send_header("Content-Encoding", enc)
+            self.send_header("Vary", "Accept-Encoding")
+        self.end_headers()
+        try:
+            self.wfile.write(body)
+        except (BrokenPipeError, ConnectionResetError):
+            pass
+
+    def _send_archive_list_json(self, cache_key, window, from_cache, build_payload, snap_ver):
+        """send_json for /api/conversations/list: same etag/304/gzip
+        semantics, but the serialized body + sha1 etag + gzip copy are built
+        once per (cache key, window, snapshot version) and replayed for every
+        tab polling the same snapshot. build_payload is called ONLY on a body
+        cache miss, so repeat polls skip the row projection too. snap_ver
+        comes from _archive_serve_ver_for_rows — an identity check — so it is
+        nonzero only when the payload is projected from exactly the stored
+        snapshot rows (no in-memory overlay appended); snap_ver=0 disables
+        the body cache and falls back to a fresh build."""
+        accept_gzip = "gzip" in (self.headers.get("Accept-Encoding", "") or "").lower()
+        body_key = (cache_key, window, bool(from_cache))
+        raw = gzip_body = etag_val = None
+        if snap_ver:
+            with _ARCHIVE_LIST_BODY_LOCK:
+                entry = _ARCHIVE_LIST_BODY_CACHE.get(body_key)
+                if entry is not None and entry.get("ver") == snap_ver:
+                    raw = entry["raw"]
+                    gzip_body = entry.get("gzip")
+                    etag_val = entry.get("etag")
+        if raw is None:
+            raw = json.dumps(build_payload()).encode()
+            etag_val = '"' + hashlib.sha1(raw).hexdigest() + '"'
+            gzip_body = (
+                gzip.compress(raw, compresslevel=5)
+                if len(raw) >= self._GZIP_MIN_BYTES else None
+            )
+            if snap_ver:
+                with _ARCHIVE_LIST_BODY_LOCK:
+                    if len(_ARCHIVE_LIST_BODY_CACHE) >= _ARCHIVE_LIST_BODY_CACHE_MAX:
+                        _ARCHIVE_LIST_BODY_CACHE.clear()
+                    _ARCHIVE_LIST_BODY_CACHE[body_key] = {
+                        "ver": snap_ver,
+                        "raw": raw,
+                        "gzip": gzip_body,
+                        "etag": etag_val,
+                    }
         if self.headers.get("If-None-Match") == etag_val:
             self.send_response(304)
             self.send_header("ETag", etag_val)
