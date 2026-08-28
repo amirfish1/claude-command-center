@@ -1275,7 +1275,7 @@ def _wt_queue_brief_generate(queue):
             proc = subprocess.run(
                 [
                     claude_bin["bin"], "-p", "--model", _QUEUE_BRIEF_MODEL,
-                    "--strict-mcp-config", "--mcp-config", "{}",  # skip user MCP servers -- pure text-in/text-out
+                    "--strict-mcp-config", '--mcp-config={"mcpServers":{}}',  # skip user MCP servers -- pure text-in/text-out
                     prompt,
                 ],
                 capture_output=True, text=True, timeout=180,
@@ -19930,7 +19930,7 @@ def _summarize_title_text(first_msg, validate=False):
         proc = subprocess.run(
             [
                 claude_bin["bin"], "-p", "--model", "claude-haiku-4-5-20251001",
-                "--strict-mcp-config", "--mcp-config", "{}",  # skip user MCP servers -- pure text-in/text-out
+                "--strict-mcp-config", '--mcp-config={"mcpServers":{}}',  # skip user MCP servers -- pure text-in/text-out
                 instruction,
             ],
             capture_output=True,

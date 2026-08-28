@@ -1,0 +1,1 @@
+- Fixed auto-titler (`claude -p` summarizer) silently failing on every call — a newer Claude Code CLI made `--mcp-config` variadic and stricter about its JSON shape, which swallowed the actual prompt as a bogus config file path (`ENAMETOOLONG`) and rejected bare `{}`. Sessions were stuck with raw, mid-word-truncated placeholder titles and no real AI title.
