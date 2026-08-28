@@ -79758,6 +79758,123 @@ def _other_instance_responding(port):
         return False
 
 
+# ── Self-serve-loop health check ────────────────────────────────────────────
+# 2026-08-28 incident: the dashboard process (still apparently OS-alive) went
+# silent across a sleep/wake cycle -- it served normal traffic up to 06:23:24,
+# the Mac slept 06:44:48-06:46:12, and it never answered another request.
+# Nothing in service.err.log or python-stacks.log recorded the transition; the
+# only thing that ever noticed was `run.sh`'s duplicate-guard, ~10 minutes
+# later, on an unrelated fresh invocation (see `_check_duplicate_repo_instance`
+# above). The existing SIGUSR2 stack dumper (`_install_python_stack_dump_handler`)
+# only ever fires from the Codex app-server's own liveness probe -- a
+# different subsystem entirely -- so a hang in the dashboard's own HTTP accept
+# loop had no monitor and left no evidence.
+#
+# This is diagnostic instrumentation, not a fix: no root cause was confirmed
+# (a live repro wasn't possible from a static code read), so per
+# systematic-debugging this adds cheap, periodic self-probing instead of
+# guessing at a patch. It reuses the exact same probe `_other_instance_responding`
+# already makes against a *peer* CCC instance at startup, aimed at this
+# process's own port, plus the existing SIGUSR2 all-thread dump on repeated
+# misses. One local HTTP GET every 5 minutes is negligible next to the
+# 30s-2h loops already running (idle reaper, telemetry, engine maintenance).
+_SELF_HEALTH_CHECK_INTERVAL_S = 300  # 5 min between self-probes.
+_SELF_HEALTH_CHECK_TIMEOUT_S = 5
+# Require 2 consecutive misses (like the Codex app-server dumper) before
+# treating it as a genuine stall -- one slow reply under load isn't proof.
+_SELF_HEALTH_CHECK_FAIL_THRESHOLD = 2
+
+
+def _dump_stacks_on_self_health_miss(port, consecutive_misses):
+    """All-thread traceback dump when the dashboard misses its own probe.
+
+    Reuses the SIGUSR2 handler installed by `_install_python_stack_dump_handler`
+    (see also `_codex_app_server_dump_stacks_on_liveness_miss`, the same
+    pattern for the Codex app-server subprocess) instead of duplicating dump
+    logic. Best-effort and silent on failure -- this must never be able to
+    take down the process it's trying to diagnose.
+    """
+    sigusr2 = getattr(signal, "SIGUSR2", None)
+    if sigusr2 is None or _PYTHON_STACK_DUMP_FILE is None:
+        return
+    try:
+        _PYTHON_STACK_DUMP_FILE.write(
+            f"\n=== dashboard self-health-check miss (port={port}, "
+            f"{consecutive_misses} consecutive) pid={os.getpid()} "
+            f"{time.strftime('%Y-%m-%d %H:%M:%S', time.gmtime())} UTC ===\n"
+        )
+        _PYTHON_STACK_DUMP_FILE.flush()
+        os.kill(os.getpid(), sigusr2)
+    except OSError:
+        pass
+
+
+def _self_health_check_once(port, consecutive_misses):
+    """Run one self-health-check cycle; returns the updated miss streak.
+
+    Split out from `_self_health_check_loop` so it's unit-testable without
+    waiting on the loop's 5-minute sleep interval.
+    """
+    url = f"http://127.0.0.1:{int(port)}/api/loading-status"
+    t0 = time.time()
+    ok = False
+    try:
+        with urllib.request.urlopen(url, timeout=_SELF_HEALTH_CHECK_TIMEOUT_S) as r:
+            ok = 200 <= r.status < 500
+    except Exception:
+        ok = False
+    elapsed = time.time() - t0
+    try:
+        if ok:
+            if consecutive_misses:
+                _log_activity(
+                    "self-health", "RECOVERED",
+                    f"responded again after {consecutive_misses} miss(es) "
+                    f"({elapsed:.2f}s)",
+                )
+            else:
+                _log_activity("self-health", "beat", f"ok ({elapsed:.2f}s)")
+            return 0
+        consecutive_misses += 1
+        _log_activity(
+            "self-health", "MISS",
+            f"no response on {url} within {_SELF_HEALTH_CHECK_TIMEOUT_S}s "
+            f"(waited {elapsed:.1f}s) "
+            f"({consecutive_misses}/{_SELF_HEALTH_CHECK_FAIL_THRESHOLD})",
+        )
+        if consecutive_misses >= _SELF_HEALTH_CHECK_FAIL_THRESHOLD:
+            _dump_stacks_on_self_health_miss(port, consecutive_misses)
+        return consecutive_misses
+    except Exception:
+        # Logging must never be able to kill this loop.
+        return consecutive_misses
+
+
+def _self_health_check_loop(port):
+    """Background daemon: periodically GETs our own /api/loading-status.
+
+    A real HTTP round-trip through the accept loop and a request-handler
+    thread is the only way to prove end-to-end that the server can still
+    serve -- unlike watching for arbitrary incoming traffic, this can't
+    produce false "stalled" reports when the dashboard is legitimately idle
+    (no browser tab open) for a long stretch, because the probe generates
+    its own traffic every cycle.
+
+    Logs a beat every cycle either way (`_log_activity` category
+    "self-health") so a gap in the activity log itself is evidence too: if
+    even this stops logging, the whole interpreter froze, not just the
+    listening socket -- a heartbeat log line is only useful if you can also
+    tell when it stopped ticking.
+    """
+    consecutive_misses = 0
+    while True:
+        try:
+            time.sleep(_SELF_HEALTH_CHECK_INTERVAL_S)
+        except Exception:
+            return
+        consecutive_misses = _self_health_check_once(port, consecutive_misses)
+
+
 def _kill_stale_duplicate(pid, port):
     """Best-effort reclaim of a hung duplicate: SIGTERM, wait briefly, SIGKILL.
 
@@ -80936,6 +81053,19 @@ def main():
         _throughput_week_rankings()
     if _should_prewarm_throughput_on_startup():
         threading.Thread(target=_prewarm_throughput, daemon=True, name="ccc-throughput-prewarm").start()
+    # Self-serve-loop health check: periodic self-probe + SIGUSR2 stack dump
+    # on repeated misses. See `_self_health_check_loop` docstring for the
+    # 2026-08-28 sleep/wake silent-hang incident this instruments for.
+    # Skipped for ephemeral verification instances (CCC_EPHEMERAL=1) -- same
+    # gate as _INTERRUPT_EVENTS_ENABLED above -- since those are short-lived
+    # and this is 5-minute-cadence diagnostic noise for them, not signal.
+    if not os.environ.get("CCC_EPHEMERAL"):
+        threading.Thread(
+            target=_self_health_check_loop,
+            args=(port,),
+            daemon=True,
+            name="ccc-self-health-check",
+        ).start()
     print()
     try:
         server.serve_forever()
