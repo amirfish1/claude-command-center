@@ -6652,6 +6652,17 @@ def _model_records_from_json(value, *, source, skip_hidden=False):
                 extra["description"] = str(row.get("description"))
             if row.get("priority") is not None:
                 extra["priority"] = row.get("priority")
+            max_ctx = row.get("max_context_window") or row.get("context_window")
+            if isinstance(max_ctx, (int, float)) and max_ctx > 0:
+                extra["max_context_tokens"] = int(max_ctx)
+            max_out = row.get("max_output_tokens") or row.get("max_output")
+            if isinstance(max_out, (int, float)) and max_out > 0:
+                extra["max_output_tokens"] = int(max_out)
+            input_modalities = row.get("input_modalities")
+            if isinstance(input_modalities, list):
+                extra["supports_vision"] = "image" in input_modalities
+            if row.get("tool_mode") or row.get("supports_search_tool"):
+                extra["supports_tool_call"] = True
             levels = row.get("supported_reasoning_levels")
             if isinstance(levels, list):
                 extra["reasoning_efforts"] = [
@@ -6681,6 +6692,60 @@ def _codex_models_cache_records():
     except (OSError, json.JSONDecodeError):
         return []
     return _model_records_from_json(data, source="codex-cache", skip_hidden=True)
+
+
+# Published OpenAI Codex pricing/limits (platform.openai.com pricing and
+# `codex models list --json` metadata). The cache provides live reasoning
+# levels, context windows and display names; this table supplies per-1M-token
+# pricing and output limits that the Codex CLI does not expose. Update when
+# OpenAI revises the Codex pricing page.
+_CODEX_OPENAI_MODELS = (
+    {"id": "gpt-5.6-sol", "label": "GPT-5.6 Sol", "cost_tier": 40.0, "cost_summary": "$10.00 in / 1M, $30.00 out / 1M", "max_context_tokens": 872000, "max_output_tokens": 128000, "reasoning_efforts": ("low", "medium", "high", "xhigh"), "default_reasoning_effort": "low"},
+    {"id": "gpt-5.6-terra", "label": "GPT-5.6 Terra", "cost_tier": 20.0, "cost_summary": "$5.00 in / 1M, $15.00 out / 1M", "max_context_tokens": 872000, "max_output_tokens": 128000, "reasoning_efforts": ("low", "medium", "high", "xhigh"), "default_reasoning_effort": "medium"},
+    {"id": "gpt-5.6-luna", "label": "GPT-5.6 Luna", "cost_tier": 4.0, "cost_summary": "$1.00 in / 1M, $3.00 out / 1M", "max_context_tokens": 872000, "max_output_tokens": 128000, "reasoning_efforts": ("low", "medium", "high", "xhigh"), "default_reasoning_effort": "medium"},
+    {"id": "gpt-5.5", "label": "GPT-5.5", "cost_tier": 25.0, "cost_summary": "$5.00 in / 1M, $20.00 out / 1M", "max_context_tokens": 272000, "max_output_tokens": 65536, "reasoning_efforts": ("low", "medium", "high", "xhigh"), "default_reasoning_effort": "medium"},
+    {"id": "gpt-5.4", "label": "GPT-5.4", "cost_tier": 15.0, "cost_summary": "$3.00 in / 1M, $12.00 out / 1M", "max_context_tokens": 1000000, "max_output_tokens": 128000, "reasoning_efforts": ("low", "medium", "high", "xhigh"), "default_reasoning_effort": "medium"},
+    {"id": "gpt-5.4-mini", "label": "GPT-5.4 Mini", "cost_tier": 3.0, "cost_summary": "$0.60 in / 1M, $2.40 out / 1M", "max_context_tokens": 272000, "max_output_tokens": 65536, "reasoning_efforts": ("low", "medium", "high", "xhigh"), "default_reasoning_effort": "medium"},
+    {"id": "gpt-5.3-codex-spark", "label": "GPT-5.3 Codex Spark", "cost_tier": 1.5, "cost_summary": "$0.30 in / 1M, $1.20 out / 1M", "max_context_tokens": 128000, "max_output_tokens": 65536, "reasoning_efforts": ("low", "medium", "high", "xhigh"), "default_reasoning_effort": "high"},
+)
+
+
+def _codex_model_catalog_records():
+    """Curated Codex catalog with live CLI limits and OpenAI per-token pricing.
+
+    Merges the local `~/.codex/models_cache.json` (source of truth for what
+    the installed CLI advertises) with published pricing/limits. Models the
+    cache marks `visibility: hide` are dropped.
+    """
+    accepted_reasoning = set(_ENGINE_REASONING_EFFORTS.get("codex") or ())
+    by_id = {row["id"]: row for row in _codex_models_cache_records()}
+    rows = []
+    now = datetime.now(tz=timezone.utc).isoformat()
+    for row in _CODEX_OPENAI_MODELS:
+        mid = row["id"]
+        cached = by_id.get(mid, {})
+        reasoning = list(row.get("reasoning_efforts") or cached.get("reasoning_efforts") or ())
+        reasoning = [r for r in reasoning if r in accepted_reasoning]
+        default_effort = row.get("default_reasoning_effort") or cached.get("default_reasoning_effort")
+        if default_effort and default_effort not in accepted_reasoning:
+            default_effort = reasoning[0] if reasoning else None
+        rows.append({
+            "id": mid,
+            "label": cached.get("label") or row["label"],
+            "source": "openai-codex-pricing",
+            "available": True,
+            "cost_tier": row["cost_tier"],
+            "cost_summary": row["cost_summary"],
+            "max_context_tokens": row.get("max_context_tokens") or cached.get("max_context_tokens"),
+            "max_output_tokens": row.get("max_output_tokens") or cached.get("max_output_tokens"),
+            "reasoning_efforts": reasoning,
+            "default_reasoning_effort": default_effort,
+            "supports_vision": cached.get("supports_vision") or False,
+            "supports_tool_call": cached.get("supports_tool_call") or False,
+            "supports_reasoning": bool(reasoning),
+            "fetched_at": now,
+        })
+    return rows
 
 
 def _parse_anthropic_model_overview(markdown):
@@ -7101,17 +7166,25 @@ def _build_engine_model_catalog(force_refresh=False):
     _model_catalog_add(catalog, "codex", _codex_configured_model(), source="harness-config")
     _model_catalog_add(catalog, "antigravity", _antigravity_cli_configured_model(), source="harness-config")
 
-    for row in _codex_models_cache_records():
+    for row in _codex_model_catalog_records():
         _model_catalog_add(
             catalog,
             "codex",
             row.get("id"),
             label=row.get("label"),
             source=row.get("source") or "codex-cache",
+            available=row.get("available"),
+            cost_tier=row.get("cost_tier"),
+            cost_summary=row.get("cost_summary"),
+            max_context_tokens=row.get("max_context_tokens"),
+            max_output_tokens=row.get("max_output_tokens"),
             description=row.get("description"),
             priority=row.get("priority"),
             reasoning_efforts=row.get("reasoning_efforts"),
             default_reasoning_effort=row.get("default_reasoning_effort"),
+            supports_vision=row.get("supports_vision"),
+            supports_tool_call=row.get("supports_tool_call"),
+            supports_reasoning=row.get("supports_reasoning"),
         )
 
     harness_results = {}
