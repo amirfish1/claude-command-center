@@ -141,3 +141,50 @@ def test_create_requires_command(captured):
         "sessionId": "s1", "command": "",
     })
     assert captured[1]["error"]["code"] == -32602
+
+
+def test_terminal_argv_keeps_command_plus_args():
+    assert server._acp_terminal_argv("/bin/echo", ["hello"]) == ["/bin/echo", "hello"]
+    assert server._acp_terminal_argv("/bin/echo") == ["/bin/echo"]
+    assert server._acp_terminal_argv("sleep", []) == ["sleep"]
+
+
+def test_terminal_argv_splits_grok_bash_lc_command_line():
+    assert server._acp_terminal_argv("/bin/bash -lc 'echo ok'") == [
+        "/bin/bash", "-lc", "echo ok",
+    ]
+    assert server._acp_terminal_argv("/bin/bash -lc 'echo ok'", []) == [
+        "/bin/bash", "-lc", "echo ok",
+    ]
+
+
+def test_terminal_argv_overlong_command_does_not_use_command_as_path():
+    payload = "/bin/bash -lc " + repr("x" * 8000)
+    argv = server._acp_terminal_argv(payload)
+    assert argv[0] == "/bin/bash"
+    assert argv[1] == "-lc"
+    assert len(argv[0]) < 64
+
+
+def test_create_accepts_grok_bash_lc_command_line(captured):
+    server._acp_handle_terminal_request("grok", 1, "terminal/create", {
+        "sessionId": "s1", "command": "/bin/bash -lc 'echo grok-shell'",
+    })
+    assert captured[1]["error"] is None
+    tid = captured[1]["result"]["terminalId"]
+
+    server._acp_handle_terminal_request("grok", 2, "terminal/wait_for_exit", {
+        "sessionId": "s1", "terminalId": tid,
+    })
+    resp = _wait_response(captured, 2)
+    assert resp["error"] is None
+    assert resp["result"]["exitCode"] == 0
+
+    server._acp_handle_terminal_request("grok", 3, "terminal/output", {
+        "sessionId": "s1", "terminalId": tid,
+    })
+    assert "grok-shell" in captured[3]["result"]["output"]
+
+    server._acp_handle_terminal_request("grok", 4, "terminal/release", {
+        "sessionId": "s1", "terminalId": tid,
+    })

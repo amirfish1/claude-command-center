@@ -39266,6 +39266,32 @@ def _acp_terminal_wait_and_respond(harness, req_id, tid):
     _acp_respond(harness, req_id, result)
 
 
+def _acp_terminal_argv(command, args=None):
+    """Build Popen argv for ACP terminal/create.
+
+    Spec-shaped agents (Kimi) send `command` as the executable and `args` as
+    a list. Grok sends the whole `/bin/bash -lc '…'` line in `command` with
+    no args; passing that as a single argv entry makes Popen look for a file
+    named `/bin/bash -lc 'echo ok'` (ENOENT, or ENAMETOOLONG on long scripts).
+    """
+    if isinstance(args, list) and args:
+        return [command] + [str(a) for a in args]
+    try:
+        if os.path.isfile(command) and os.access(command, os.X_OK):
+            return [command]
+    except OSError:
+        pass
+    if not any(c.isspace() for c in command):
+        return [command]
+    try:
+        argv = shlex.split(command, posix=True)
+    except ValueError:
+        argv = []
+    if len(argv) >= 2:
+        return argv
+    return ["/bin/bash", "-lc", command]
+
+
 def _acp_handle_terminal_request(harness, req_id, method, params):
     """Service ACP terminal/* requests by running the agent's shell commands
     as local subprocesses. This is what powers kimi's Bash/Glob/Grep tools."""
@@ -39275,8 +39301,7 @@ def _acp_handle_terminal_request(harness, req_id, method, params):
         if not command:
             _acp_respond(harness, req_id, error={"code": -32602, "message": "terminal/create: command is required"})
             return
-        args = params.get("args")
-        argv = [command] + [str(a) for a in args] if isinstance(args, list) else [command]
+        argv = _acp_terminal_argv(command, params.get("args"))
         cwd = params.get("cwd") or None
         if not cwd and sid:
             state = _acp_session(harness, sid)
