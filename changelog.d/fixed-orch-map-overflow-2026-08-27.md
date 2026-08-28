@@ -1,1 +1,0 @@
-- Orchestration lane map: changed `overflow: hidden` to `overflow-y: auto` so all lanes are visible and scrollable when an orchestrator has many children (e.g. 12 subagents in a narrow rail). Previously most lanes were clipped below the map's visible area.

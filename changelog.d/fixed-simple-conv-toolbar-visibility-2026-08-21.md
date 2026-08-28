@@ -1,1 +1,0 @@
-Fixed the Simple-mode conversation header: the technical-strip toggle, Stop button, and engine icon were being hidden by a stale `!important` toolbar rule that only allow-listed the back button and title — none of the three had actually been visible since they were added.

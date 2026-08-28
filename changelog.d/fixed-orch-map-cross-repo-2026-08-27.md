@@ -1,1 +1,0 @@
-- Orchestration lane map: clicking a subagent whose orchestrator lives in a different repo (e.g. a Codex worktree whose parent session is in the main repo) now roots the map at the highest visible ancestor instead of an invisible grandparent. The subagent and its siblings appear as lanes; previously the map showed only the middle layer and hid the grandchildren.

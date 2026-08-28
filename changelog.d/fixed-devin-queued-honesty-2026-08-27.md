@@ -1,1 +1,0 @@
-Devin CLI sessions: a message sent while Devin is still working on its previous turn is now labelled "queued" with the reason and wait time, instead of an ambiguous "sending" whose timestamp rendered as Jan 21 1970. New Devin sessions also appear in the sidebar within a few seconds of spawn instead of after the next full archive rebuild.

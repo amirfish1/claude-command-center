@@ -1,1 +1,0 @@
-- Simple mode lands on a plain-language Home screen: a "what do you want done" composer with one-tap agent chips, "Needs you" cards with inline answers, "Working on it" / "Finished" sections, and a back-home button in conversations — verified by the `simple-ui-clicks.js` grandma-test harness (every core task ≤3 taps).

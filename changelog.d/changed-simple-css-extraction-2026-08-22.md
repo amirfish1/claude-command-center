@@ -1,1 +1,0 @@
-Extracted all Simple-mode-scoped CSS (~1,060 lines) out of app.css into a new static/simple.css, loaded alongside it. Purely mechanical — no visual or behavioral change — done to shrink app.css's merge-conflict surface against upstream main, which has diverged substantially while this branch was open.

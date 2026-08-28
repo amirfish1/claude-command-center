@@ -1,1 +1,0 @@
-- Working / Generating indicator in the conversation pane now shows a subtle **Wake up** button when an active turn or in-flight tool has produced no transcript/tool output for > 60 seconds, allowing instant one-click nudging across Kimi, Codex, Claude, and other engines.

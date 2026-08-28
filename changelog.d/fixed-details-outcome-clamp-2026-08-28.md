@@ -1,1 +1,0 @@
-- Fixed rows in Details mode ballooning to 180px+ tall — the session outcome ("DONE ...") text had no line clamp and rendered full multi-sentence summaries unclamped. Now capped at 3 lines (2 for the "next" line).

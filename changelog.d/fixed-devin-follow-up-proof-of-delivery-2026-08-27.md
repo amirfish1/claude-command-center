@@ -1,1 +1,0 @@
-Devin CLI follow-ups now stay in the durable queue until the CLI writes the prompt to its own `prompt_history` table, with per-session pump locks preventing duplicate concurrent resumes and automatic retry on failed delivery.

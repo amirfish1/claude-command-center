@@ -1,1 +1,0 @@
-Fixed a real-device bug where Simple mode's Home screen could render fully blank: the R4 stuck-queue-alert fetch had been bundled into the same Promise.all as the Needs-you/Working/Finished data, so a slow /api/queue/status response delayed the entire screen instead of just the alert. Queue alerts now load independently and never block the rest of Home.

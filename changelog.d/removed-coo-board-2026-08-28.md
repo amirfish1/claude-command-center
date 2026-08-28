@@ -1,1 +1,0 @@
-Removed the COO board (`/coo`, the launcher button, and the per-row tracking checkbox/escalated badge/status chip it fed) — an unused personal feature that shipped 2026-06-17 but was never actually turned on.
