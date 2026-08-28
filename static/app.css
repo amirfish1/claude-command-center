@@ -6788,7 +6788,7 @@
      selector targets `.compact-rows` directly so the rule fires whether
      the parent is `.log-list`, `.conv-list`, or any other wrapper. */
   .compact-rows .conv-item {
-    padding: 4px 10px;
+    padding: 4px 10px 4px var(--conv-content-left);
     margin-bottom: 0;
   }
   .compact-rows .conv-item .conv-title {
