@@ -55740,7 +55740,7 @@
   // ── Family rail ──────────────────────────────────────────────────────
   // While a session that belongs to an orchestration family is selected,
   // its rows in the session list get a coloured left rail (the root teal,
-  // lanes purple) and the root's hover row a lane count. Nothing moves:
+  // lanes purple) and the root's main row a lane count. Nothing moves:
   // the rail is the row's existing 3px border-left. The list re-renders
   // often, so a MutationObserver re-applies the last family after each
   // rebuild instead of touching the render path.
@@ -55779,11 +55779,17 @@
       const isRoot = id === root, isLane = laneSet.has(id);
       el.classList.toggle('is-orch-root', isRoot);
       el.classList.toggle('is-orch-lane', isLane);
-      const meta = isRoot ? el.querySelector('.conv-hover-meta-row') : null;
+      const mainRow = isRoot ? el.querySelector('.conv-main-row') : null;
       let chip = el.querySelector('.conv-orch-lanes-chip');
-      if (isRoot && meta) {
+      if (isRoot && mainRow) {
         const label = '\u21b3 ' + count + (count === 1 ? ' lane' : ' lanes');
-        if (!chip) { chip = document.createElement('span'); chip.className = 'conv-orch-lanes-chip'; meta.insertBefore(chip, meta.firstChild); }
+        if (!chip) {
+          chip = document.createElement('span');
+          chip.className = 'conv-orch-lanes-chip';
+          const rowEnd = mainRow.querySelector('.conv-row-end');
+          if (rowEnd) mainRow.insertBefore(chip, rowEnd);
+          else mainRow.appendChild(chip);
+        }
         if (chip.textContent !== label) chip.textContent = label;
       } else if (chip) chip.remove();
     });

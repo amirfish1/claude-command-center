@@ -4954,7 +4954,21 @@
   .conv-item.is-orch-root { border-left-color: #39c5cf; }
   .conv-item.is-orch-lane { border-left-color: color-mix(in srgb, #a371f7 60%, transparent); }
   .conv-item.is-orch-lane.active { border-left-color: var(--purple); }
-  .conv-orch-lanes-chip { font-size: 10px; font-weight: 600; color: #39c5cf; white-space: nowrap; }
+  .conv-orch-lanes-chip {
+    display: inline-block;
+    margin-left: 6px;
+    padding: 1px 5px;
+    font-size: 9px;
+    font-weight: 500;
+    line-height: 1.4;
+    color: rgba(57, 197, 207, 0.95);
+    background: rgba(57, 197, 207, 0.12);
+    border: 1px solid rgba(57, 197, 207, 0.35);
+    border-radius: 3px;
+    letter-spacing: 0.03em;
+    vertical-align: middle;
+    white-space: nowrap;
+  }
   /* Completion cue. Pulses for as long as the class is on (JS removes it after
      ~6s) rather than running a single 1.8s fade — a one-shot animation restarts
      from zero on every sidebar re-render, which either swallowed the cue or
