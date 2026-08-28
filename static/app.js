@@ -69609,10 +69609,35 @@
     { id: 'airy',  label: 'Airy',  title: 'Maximum breathing room between rows', op: 70, h: 2, gap: 5 },
   ];
 
+  // Font/color (CONV_ROWSTYLE_VARIANTS) and spacing (CONV_ROWSTYLE_SPACING)
+  // are settled for now (Large Bright + Roomy) — temporarily hidden from
+  // this rail, not deleted, while the row-delineation trial below runs.
+  // Flip back to true to bring their swatches back.
+  const SHOW_ROWSTYLE_FONT_AND_SPACING = false;
+
+  // Delineation trial (2026-08-28): the list reads as a wall of same-weight
+  // sentences with no per-row boundary. Three candidate treatments, radio
+  // (one active at a time) so they're easy to compare live in this rail.
+  const ROW_DELINEATION_KEY = 'ccc-row-delineation';
+  const CONV_ROWSTYLE_DELINEATION = [
+    { id: 'divider', label: 'Divider', title: 'Thin hairline between rows', op: 70, h: 2, gap: 2 },
+    { id: 'zebra',   label: 'Zebra',   title: 'Faint alternating row tint', op: 70, h: 2, gap: 2 },
+    { id: 'cards',   label: 'Cards',   title: 'Each row as a separated card', op: 70, h: 2, gap: 2 },
+  ];
+  function rowDelineation() {
+    let v = null;
+    try { v = localStorage.getItem(ROW_DELINEATION_KEY); } catch (_) {}
+    return CONV_ROWSTYLE_DELINEATION.some(d => d.id === v) ? v : 'divider';
+  }
+  function applyRowDelineation(id) {
+    if ($convList) $convList.setAttribute('data-row-delineation', id);
+  }
+
   function renderConvRowStylePalettes() {
     const current = document.documentElement.getAttribute('data-conv-rowstyle') || storedConvRowStyle();
     document.querySelectorAll('[data-role="conv-rowstyle-palette"]').forEach(host => {
       host.innerHTML = '';
+      if (SHOW_ROWSTYLE_FONT_AND_SPACING) {
       CONV_ROWSTYLE_VARIANTS.forEach(variant => {
         const btn = document.createElement('button');
         btn.type = 'button';
@@ -69666,12 +69691,40 @@
         });
         host.appendChild(btn);
       });
+      }
+      const currentDelineation = rowDelineation();
+      CONV_ROWSTYLE_DELINEATION.forEach(d => {
+        const btn = document.createElement('button');
+        btn.type = 'button';
+        btn.className = 'conv-rowstyle-swatch is-delineation' + (d.id === currentDelineation ? ' active' : '');
+        btn.setAttribute('role', 'radio');
+        btn.setAttribute('aria-checked', String(d.id === currentDelineation));
+        btn.setAttribute('aria-label', d.label);
+        btn.setAttribute('data-row-delineation-id', d.id);
+        btn.title = d.title;
+        btn.style.setProperty('--rs-op', String(d.op));
+        btn.style.setProperty('--rs-h', d.h + 'px');
+        btn.style.setProperty('--rs-gap', d.gap + 'px');
+        btn.addEventListener('click', (ev) => {
+          ev.preventDefault();
+          ev.stopPropagation();
+          try { localStorage.setItem(ROW_DELINEATION_KEY, d.id); } catch (_) {}
+          applyRowDelineation(d.id);
+          host.querySelectorAll('[data-row-delineation-id]').forEach(b => {
+            const on = b.getAttribute('data-row-delineation-id') === d.id;
+            b.classList.toggle('active', on);
+            b.setAttribute('aria-checked', String(on));
+          });
+        });
+        host.appendChild(btn);
+      });
     });
     updateConvRowStyleState(current);
   }
 
   applyConvRowStyle(storedConvRowStyle());
   applyRowDensityToggles();
+  applyRowDelineation(rowDelineation());
   renderConvRowStylePalettes();
   window.addEventListener('storage', (ev) => {
     if (ev.key === CONV_ROWSTYLE_STORAGE_KEY) applyConvRowStyle(storedConvRowStyle());
