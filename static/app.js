@@ -35091,6 +35091,12 @@
           + _arcEngineButton('kimi', 'Kimi', getEngineSvg('kimi'))
           + _arcEngineButton('devin', 'Devin', getEngineSvg('devin'))
         + '</span>';
+      // Wrap toggle (mirrors the In progress toolbar's): lets session titles
+      // break across two lines instead of truncating to one. Shares the
+      // 'wrap-titles' class + localStorage key with the In progress view.
+      const _arcWrapToggle = '<span class="conv-grouping-toggle conv-wrap-toggle" data-role="wrap-toggle" title="Wrap session titles across two lines">'
+          + '<span class="grouping-opt' + (wrapTitlesOn() ? ' is-active' : '') + '" data-wrap-toggle="1">Wrap</span>'
+        + '</span>';
       // Expand-all lives in its own left-hand slot, separate from the
       // window/engine/grouping group on the right. It only renders when
       // grouped by project with multiple folders, so its own slot can
@@ -35098,12 +35104,10 @@
       // it inline with the others (all right-justified together) made the
       // window/engine buttons visibly jump left/right when switching
       // between "by time" and "by project".
-      const _arcTools = (_arcWindowToggle || _arcEngineToggle || _arcGroupingToggle || _arcExpandAllToggle)
-        ? '<div class="conv-archived-tools" data-role="archived-tools">'
+      const _arcTools = '<div class="conv-archived-tools" data-role="archived-tools">'
           + '<span class="conv-archived-tools-left">' + _arcExpandAllToggle + '</span>'
-          + '<span class="conv-archived-tools-right">' + _arcWindowToggle + _arcEngineToggle + _arcGroupingToggle + '</span>'
-          + '</div>'
-        : '';
+          + '<span class="conv-archived-tools-right">' + _arcWindowToggle + _arcEngineToggle + _arcGroupingToggle + _arcWrapToggle + '</span>'
+          + '</div>';
       _archivedHtml =
         '<div class="conv-archived-section" data-role="archived-section">'
         + _arcTools
