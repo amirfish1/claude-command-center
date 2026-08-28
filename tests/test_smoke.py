@@ -20252,3 +20252,91 @@ def test_continued_from_session_id_marker_parsing():
     assert _server._continued_from_session_id_from_text("just a task") == ""
     assert _server._continued_from_session_id_from_text(None) == ""
     assert _server._continued_from_session_id_from_text("") == ""
+
+
+def test_command_targets_other_session():
+    """Verify that _command_targets_other_session correctly handles session matches."""
+    import server as _server
+    target_sid = "1ebdd168-a845-4952-bbc7-c206fab7b2c1"
+    other_sid = "30741fa7-e236-43d1-a88b-c09813293f7c"
+
+    # Target is target_sid
+    assert _server._command_targets_other_session(
+        f"agy --conversation {target_sid}", target_sid, "antigravity"
+    ) is False
+
+    # Target is other_sid
+    assert _server._command_targets_other_session(
+        f"agy --conversation {other_sid}", target_sid, "antigravity"
+    ) is True
+
+    # No target
+    assert _server._command_targets_other_session(
+        "agy", target_sid, "antigravity"
+    ) is False
+
+    # Cursor target is target_sid
+    assert _server._command_targets_other_session(
+        f"cursor-agent --resume {target_sid}", target_sid, "cursor"
+    ) is False
+
+    # Cursor target is other_sid
+    assert _server._command_targets_other_session(
+        f"cursor-agent --resume {other_sid}", target_sid, "cursor"
+    ) is True
+
+
+def test_session_live_status_cwd_match_ignores_other_sessions():
+    """Verify that session_live_status's CWD fallback matching ignores other sessions."""
+    import server as _server
+    from unittest import mock
+
+    target_sid = "1ebdd168-a845-4952-bbc7-c206fab7b2c1"
+    other_sid = "30741fa7-e236-43d1-a88b-c09813293f7c"
+    session_cwd = "/Users/amirfish/Apps/BYM"
+
+    # Mock find_live_antigravity_processes to return a process running in the same CWD,
+    # but targeting other_sid.
+    mock_processes = [{
+        "pid": 56402,
+        "tty": "s000",
+        "cwd": session_cwd,
+        "terminal_app": "Terminal",
+        "command": f"agy --conversation {other_sid}"
+    }]
+
+    with mock.patch.object(_server, "find_live_antigravity_processes", return_value=mock_processes), \
+         mock.patch.object(_server, "_is_antigravity_session", return_value=True), \
+         mock.patch.object(_server, "_antigravity_transcript_path", return_value=None), \
+         mock.patch.object(_server, "_antigravity_cli_conversation_path", return_value=None), \
+         mock.patch.object(_server, "_antigravity_app_conversation_path", return_value=None), \
+         mock.patch.object(_server, "_spawn_registry_has_session", return_value=False), \
+         mock.patch.object(_server, "_live_spawn_registry_entry_for_session", return_value=None):
+
+        res = _server.session_live_status(target_sid, session_cwd)
+        # Should not be live because the process targets other_sid
+        assert res["live"] is False
+
+    # Now mock a process in the same CWD without a target (e.g. manually run 'agy' without args).
+    mock_processes_no_target = [{
+        "pid": 56402,
+        "tty": "s000",
+        "cwd": session_cwd,
+        "terminal_app": "Terminal",
+        "command": "agy"
+    }]
+
+    with mock.patch.object(_server, "find_live_antigravity_processes", return_value=mock_processes_no_target), \
+         mock.patch.object(_server, "_is_antigravity_session", return_value=True), \
+         mock.patch.object(_server, "_antigravity_transcript_path", return_value=None), \
+         mock.patch.object(_server, "_antigravity_cli_conversation_path", return_value=None), \
+         mock.patch.object(_server, "_antigravity_app_conversation_path", return_value=None), \
+         mock.patch.object(_server, "_spawn_registry_has_session", return_value=False), \
+         mock.patch.object(_server, "_live_spawn_registry_entry_for_session", return_value=None):
+
+        res = _server.session_live_status(target_sid, session_cwd)
+        # Should be live because of the CWD fallback (it doesn't target any other session)
+        assert res["live"] is True
+        assert res["pid"] == 56402
+
+

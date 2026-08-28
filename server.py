@@ -20559,6 +20559,38 @@ def _command_targets_engine_session(command, session_id, engine):
     return False
 
 
+def _command_targets_other_session(command, session_id, engine):
+    if not command:
+        return False
+    try:
+        tokens = shlex.split(command)
+    except ValueError:
+        tokens = command.split()
+    if not tokens:
+        return False
+    uuid_re = re.compile(
+        r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$",
+        re.IGNORECASE,
+    )
+    if engine == "antigravity":
+        for idx, tok in enumerate(tokens):
+            if tok != session_id and uuid_re.match(tok):
+                if (
+                    "--conversation" in tokens[:idx] or
+                    (idx > 0 and tokens[idx - 1] in ("--conversation", "conversation"))
+                ):
+                    return True
+    elif engine == "cursor":
+        for idx, tok in enumerate(tokens):
+            if tok != session_id and uuid_re.match(tok):
+                if (
+                    "--resume" in tokens[:idx] or
+                    (idx > 0 and tokens[idx - 1] in ("--resume", "resume"))
+                ):
+                    return True
+    return False
+
+
 def _process_comm_is_claude(comm):
     """Return True when a ps comm value belongs to Claude Code.
 
@@ -20998,7 +21030,8 @@ def session_live_status(session_id, session_cwd):
             if _command_targets_engine_session(cmd, session_id, "cursor"):
                 exact_matches.append(p)
             elif not registry_known and session_cwd and p.get("cwd") == session_cwd:
-                cwd_matches.append(p)
+                if not _command_targets_other_session(cmd, session_id, "cursor"):
+                    cwd_matches.append(p)
         matches = exact_matches or cwd_matches
         result["match_count"] = len(matches)
         if not matches:
@@ -21047,7 +21080,8 @@ def session_live_status(session_id, session_cwd):
             if _command_targets_engine_session(cmd, session_id, "antigravity"):
                 exact_matches.append(p)
             elif not registry_known and session_cwd and p.get("cwd") == session_cwd:
-                cwd_matches.append(p)
+                if not _command_targets_other_session(cmd, session_id, "antigravity"):
+                    cwd_matches.append(p)
         matches = exact_matches or cwd_matches
         result["match_count"] = len(matches)
         if not matches:

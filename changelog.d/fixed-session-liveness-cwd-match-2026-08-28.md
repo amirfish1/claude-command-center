@@ -1,0 +1,1 @@
+- Fixed false process liveness matches for Cursor and Antigravity sessions sharing the same workspace directory.
