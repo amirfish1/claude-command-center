@@ -19516,8 +19516,8 @@
       o && o.id === objectId && !o.archived && !isArchivedFlowObjectId(o.id)) || null;
   }
 
-  function newSessionObjectRepoMatchIds() {
-    const repoPath = newSessionObjectScopeKey();
+  function newSessionObjectRepoMatchIds(scopeKeyOverride) {
+    const repoPath = scopeKeyOverride || newSessionObjectScopeKey();
     const matches = new Set();
     if (!repoPath || repoPath === '__default__') return matches;
     const addObjectAndAncestors = (nodeId) => {
@@ -19538,6 +19538,24 @@
       addObjectAndAncestors(flowNodeParents[nodeId] || draft.parent_node_id);
     });
     return matches;
+  }
+
+  // CCC-950 removed the OBJECT picker, so a new session can no longer be
+  // hand-placed at creation time. Resolve where it belongs from its repo
+  // path instead of always dropping it in Inbox: an explicit per-cwd choice
+  // (legacy picker state, still writable via createNewSessionObjectFromTitle)
+  // wins first, then an object that repo's other sessions already live
+  // under, then the repo's own Flow node. Only a session with no resolvable
+  // repo path (e.g. a bare group-chat spawn) falls back to Inbox.
+  function resolveAutoParentNodeForRepoPath(repoPath) {
+    const scopeKey = normalizeSpawnCwdPath(repoPath) || '';
+    if (!scopeKey) return null;
+    const map = loadNewSessionObjectByCwd();
+    const overrideObj = findActiveFlowObject(map[scopeKey]);
+    if (overrideObj) return flowNodeKey('object', overrideObj.id);
+    const repoMatches = newSessionObjectRepoMatchIds(scopeKey);
+    if (repoMatches.size) return flowNodeKey('object', repoMatches.values().next().value);
+    return flowNodeKey('repo', repoPath);
   }
 
   function getNewSessionSelectedObject() {
@@ -19764,31 +19782,40 @@
 
   async function assignSessionNodeToObject(sid, objectId) {
     if (!sid || !objectId) return false;
+    return assignSessionNodeToParent(sid, flowNodeKey('object', objectId));
+  }
+
+  // Parent can be an object node (`object:<id>`, synced server-side via
+  // /api/objects/assign) or a repo node (`repo:<path>`, client-local only —
+  // repo nodes are synthesized from conversation data, not stored objects).
+  async function assignSessionNodeToParent(sid, parentNodeId) {
+    if (!sid || !parentNodeId) return false;
     const nodeId = flowNodeKey('session', sid);
-    const parentNode = flowNodeKey('object', objectId);
-    flowNodeParents[nodeId] = parentNode;
+    flowNodeParents[nodeId] = parentNodeId;
     persistFlowNodeParents();
-    _objectsApiPost('assign', { session_node_id: flowNodeKey('session', sid), object_id: objectId }).catch(() => {});
+    if (parentNodeId.indexOf('object:') === 0) {
+      _objectsApiPost('assign', { session_node_id: nodeId, object_id: parentNodeId.slice(7) }).catch(() => {});
+    }
     return true;
   }
 
-  function rememberPendingNewSessionObjectAssignment(spawnId, objectId) {
-    if (!spawnId || !objectId) return;
+  function rememberPendingNewSessionObjectAssignment(spawnId, parentNodeId) {
+    if (!spawnId || !parentNodeId) return;
     const pending = loadPendingNewSessionObjectAssignments();
-    pending[String(spawnId)] = { object_id: objectId, created_at: Date.now() };
+    pending[String(spawnId)] = { parent_node: parentNodeId, created_at: Date.now() };
     savePendingNewSessionObjectAssignments(pending);
   }
 
-  function assignSpawnedSessionToDefaultObject(data) {
-    const obj = getNewSessionSelectedObject();
-    const objectId = obj && obj.id;
+  function assignSpawnedSessionToDefaultObject(data, repoPath) {
+    const parentNodeId = resolveAutoParentNodeForRepoPath(repoPath)
+      || flowNodeKey('object', (getNewSessionSelectedObject() || {}).id);
     const sid = data && data.session_id;
     if (sid) {
-      assignSessionNodeToObject(sid, objectId);
+      assignSessionNodeToParent(sid, parentNodeId);
       return;
     }
     const spawnId = (data && (data.spawn_id || data.pid)) || '';
-    rememberPendingNewSessionObjectAssignment(spawnId, objectId);
+    rememberPendingNewSessionObjectAssignment(spawnId, parentNodeId);
   }
 
   function reconcilePendingNewSessionObjectAssignments() {
@@ -19808,7 +19835,7 @@
       if (!row || row.pending_spawn) continue;
       const sid = row.session_id || row.id;
       if (!sid || /^spawning-/.test(String(sid))) continue;
-      assignSessionNodeToObject(sid, rec.object_id || NEW_SESSION_DEFAULT_OBJECT_ID);
+      assignSessionNodeToParent(sid, rec.parent_node || flowNodeKey('object', NEW_SESSION_DEFAULT_OBJECT_ID));
       delete pending[key];
       changed = true;
     }
@@ -61467,6 +61494,7 @@
         });
         const data = await res.json();
         if (data.ok) {
+          assignSpawnedSessionToDefaultObject(data, repoPath);
           $kptNewSession.value = '';
           $kptRunBtn.textContent = engine === 'antigravity' ? 'Started!' : 'Spawned!';
           // Swap the temp-pid key for the real spawn id so the next /api/sessions
@@ -69193,7 +69221,7 @@
           spawnStatsMark(data.session_id, 'response_received');
         }
         const placeholder = adoptPendingSpawnPid(tempPid, data.spawn_id || data.pid, data.log, data.session_id);
-        assignSpawnedSessionToDefaultObject(data);
+        assignSpawnedSessionToDefaultObject(data, repoPath || launchCwd);
         if (placeholder && engine === 'claude' && data.session_id) {
           claudeSpawnAwaitingFirstPaint.add(data.session_id);
           setTimeout(() => releaseClaudeSpawnPaintGate(data.session_id), 30000);
