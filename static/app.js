@@ -48645,9 +48645,9 @@
       { id: 'kimi-code/kimi-for-coding-highspeed',   label: 'K2.7 Coding Highspeed' },
     ],
     opencode: [
-      { id: 'anthropic/claude-sonnet-4-5', label: 'claude-sonnet-4-5 (default)' },
-      { id: 'anthropic/claude-opus-4-1',   label: 'claude-opus-4-1' },
-      { id: 'openai/gpt-5',                label: 'gpt-5' },
+      { id: 'openrouter/anthropic/claude-sonnet-4.5', label: 'claude-sonnet-4.5 (default)' },
+      { id: 'openrouter/anthropic/claude-opus-4.1',   label: 'claude-opus-4.1' },
+      { id: 'openrouter/openai/gpt-5',                label: 'gpt-5' },
     ],
   };
 
@@ -60671,7 +60671,7 @@
     try { return normalizeSpawnDefaultEngine(localStorage.getItem('ccc.spawnEngine')); }
     catch (_) { return 'claude'; }
   }
-  let _defaultModelsByEngine = { claude: 'fable-5', codex: 'gpt-5.5', cursor: 'auto', antigravity: '', kilo: 'kilo/stepfun/step-3.7-flash:free', hermes: 'auto', kimi: 'kimi-code/k3', opencode: 'anthropic/claude-sonnet-4-5', grok: 'grok-4.6' };
+  let _defaultModelsByEngine = { claude: 'fable-5', codex: 'gpt-5.5', cursor: 'auto', antigravity: '', kilo: 'kilo/stepfun/step-3.7-flash:free', hermes: 'auto', kimi: 'kimi-code/k3', opencode: 'openrouter/anthropic/claude-sonnet-4.5', grok: 'grok-4.6' };
   let _spawnDefaultsLoaded = false;
   let spawnDefaultsState = {
     engine: readLegacySpawnEnginePref(),
@@ -60909,7 +60909,7 @@
     if (engine === 'codex' && !value) value = 'gpt-5.5';
     if (engine === 'cursor' && !value) value = 'auto';
     if (engine === 'kilo' && !value) value = 'kilo/stepfun/step-3.7-flash:free';
-    if (engine === 'opencode' && !value) value = 'anthropic/claude-sonnet-4-5';
+    if (engine === 'opencode' && !value) value = 'openrouter/anthropic/claude-sonnet-4.5';
     if (engine === 'hermes' && !value) value = 'auto';
     const unavailableReason = _modelUnavailableReason(engine, value);
     if (value && unavailableReason) {

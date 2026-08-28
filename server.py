@@ -6262,7 +6262,7 @@ def _spawn_fallback_model_for_engine(engine):
     if engine == "kilo":
         return os.environ.get("CCC_KILO_MODEL", "kilo/stepfun/step-3.7-flash:free")
     if engine == "opencode":
-        return os.environ.get("CCC_OPENCODE_MODEL", "anthropic/claude-sonnet-4-5")
+        return os.environ.get("CCC_OPENCODE_MODEL", "openrouter/anthropic/claude-sonnet-4.5")
     if engine == "aider":
         return os.environ.get("CCC_AIDER_MODEL", "")
     if engine == "hermes":
@@ -6328,9 +6328,9 @@ _ENGINE_CURATED_MODELS = {
         {"id": "kilo/openai/gpt-5.5", "label": "gpt-5.5"},
     ),
     "opencode": (
-        {"id": "anthropic/claude-sonnet-4-5", "label": "claude-sonnet-4-5"},
-        {"id": "anthropic/claude-opus-4-1", "label": "claude-opus-4-1"},
-        {"id": "openai/gpt-5", "label": "gpt-5"},
+        {"id": "openrouter/anthropic/claude-sonnet-4.5", "label": "claude-sonnet-4.5"},
+        {"id": "openrouter/anthropic/claude-opus-4.1", "label": "claude-opus-4.1"},
+        {"id": "openrouter/openai/gpt-5", "label": "gpt-5"},
     ),
     "aider": (),
     "hermes": (
@@ -7123,6 +7123,34 @@ def _build_engine_model_catalog(force_refresh=False):
                 base_multiplier=row.get("base_multiplier"),
                 deprecated=row.get("deprecated"),
                 notes=row.get("notes"),
+            )
+    except Exception:
+        pass
+
+    # OpenCode's catalog is built from `opencode models --verbose`. Provider
+    # IDs are matched against the configured auth.json keys, so only credentialed
+    # providers are marked available; the `opencode` built-in provider is always
+    # allowed. Cost and limit values are surfaced per-million-tokens.
+    try:
+        for row in _opencode_model_catalog_records():
+            _model_catalog_add(
+                catalog,
+                "opencode",
+                row.get("id"),
+                label=row.get("label"),
+                source=row.get("source") or "opencode-cli",
+                available=row.get("available"),
+                availability_reason=row.get("availability_reason"),
+                cost_tier=row.get("cost_tier"),
+                cost_summary=row.get("cost_summary"),
+                max_context_tokens=row.get("max_context_tokens"),
+                max_output_tokens=row.get("max_output_tokens"),
+                reasoning_efforts=row.get("reasoning_efforts"),
+                default_reasoning_effort=row.get("default_reasoning_effort"),
+                supports_vision=row.get("supports_vision"),
+                supports_audio=row.get("supports_audio"),
+                supports_tool_call=row.get("supports_tool_call"),
+                supports_reasoning=row.get("supports_reasoning"),
             )
     except Exception:
         pass
@@ -50161,7 +50189,7 @@ def spawn_session_opencode(prompt, name=None, cwd=None, repo_path=None, worktree
     session_name = _slugify(name or prompt) or "unnamed"
     timestamp = time.strftime("%Y%m%dT%H%M%S")
     log_filename = f"spawn-opencode-{session_name}-{timestamp}.log"
-    model_to_use = _spawn_model_for_engine("opencode", model) or os.environ.get("CCC_OPENCODE_MODEL", "anthropic/claude-sonnet-4-5")
+    model_to_use = _spawn_model_for_engine("opencode", model) or os.environ.get("CCC_OPENCODE_MODEL", "openrouter/anthropic/claude-sonnet-4.5")
     if model_to_use:
         _set_session_model(log_filename[:-4], model_to_use, False)
     log_dir = repo_log_dir(repo_for_logs)
@@ -65512,7 +65540,7 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
             self.send_json(info)
         elif path == "/api/sessions/spawn-opencode/availability":
             info = _resolve_opencode_bin()
-            info["model"] = os.environ.get("CCC_OPENCODE_MODEL", "anthropic/claude-sonnet-4-5")
+            info["model"] = os.environ.get("CCC_OPENCODE_MODEL", "openrouter/anthropic/claude-sonnet-4.5")
             self.send_json(info)
         elif path == "/api/sessions/spawn-grok/availability":
             routed = _control_plane_engine_call(

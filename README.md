@@ -691,7 +691,7 @@ For more depth: [`docs/architecture.md`](docs/architecture.md),
 | `CCC_KILO_BIN` | *(auto)* | Absolute path to the Kilo Code CLI (`kilo`) if it is not on the service PATH. |
 | `CCC_KILO_MODEL` | `kilo/stepfun/step-3.7-flash:free` | Default model for Kilo spawns when no dashboard or API model override is set. |
 | `CCC_OPENCODE_BIN` | *(auto)* | Absolute path to the OpenCode CLI (`opencode`) if it is not on the service PATH. |
-| `CCC_OPENCODE_MODEL` | `anthropic/claude-sonnet-4-5` | Default model for OpenCode spawns when no dashboard or API model override is set. |
+| `CCC_OPENCODE_MODEL` | `openrouter/anthropic/claude-sonnet-4.5` | Default model for OpenCode spawns when no dashboard or API model override is set. |
 | `DEVIN_API_KEY` | *(unset)* | Personal Devin API key (from app.devin.ai settings). When set, your Devin cloud sessions appear on the board and in the archive (read-only). `CCC_DEVIN_API_KEY` is accepted as a fallback. |
 | `CCC_WORKER_SOCKET` | `~/.claude/command-center/worker.sock` | Local Unix socket used between the restartable dashboard and persistent execution worker. |
 | `CCC_WORK_LEDGER` | `~/.claude/command-center/control-plane.sqlite3` | Durable SQLite work graph, idempotency, lease, and recovery ledger. |

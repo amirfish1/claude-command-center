@@ -8,6 +8,7 @@ Names still living in server.py are reached via `_core` at call time."""
 
 from __future__ import annotations
 
+from datetime import datetime, timezone
 from pathlib import Path
 import json
 import os
@@ -619,3 +620,210 @@ def resume_session_opencode(session_id, text):
         "engine": "opencode",
         "model": model or "",
     }
+
+
+# ---------------------------------------------------------------------------
+# OpenCode model catalog (provider/model pricing + limits).
+#
+# `opencode models --verbose` emits one `provider/id` header followed by a
+# compact JSON object per model. We parse that stream into CCC's model-catalog
+# shape so the new-session picker can show live per-token pricing, context
+# limits, and provider availability from the installed CLI.
+# ---------------------------------------------------------------------------
+
+_OPENCODE_MODELS_TTL_S = 300.0
+_OPENCODE_MODELS_TIMEOUT_S = 30.0
+_OPENCODE_MODELS_LOCK = None
+_OPENCODE_MODELS_CACHE = {"ts": 0.0, "records": []}
+_OPENCODE_AUTH_PATH = (Path.home() / ".local" / "share" / "opencode" / "auth.json")
+
+
+def _opencode_configured_providers():
+    """Provider IDs that have a saved API key in OpenCode's auth.json."""
+    try:
+        raw = _OPENCODE_AUTH_PATH.read_text(encoding="utf-8")
+        data = json.loads(raw)
+        return set(data.keys()) if isinstance(data, dict) else set()
+    except (OSError, ValueError, TypeError):
+        return set()
+
+
+def _opencode_format_cost(cost):
+    """Human-readable cost string from a `cost` object.
+
+    OpenCode prices are expressed per-million-input/output tokens, matching the
+    same units used by OpenRouter. We keep the summary short because the picker
+    already has a separate cost_tier field for sorting.
+    """
+    if not isinstance(cost, dict):
+        return ""
+    input_price = cost.get("input")
+    output_price = cost.get("output")
+    if input_price == 0 and output_price == 0:
+        return "free"
+    parts = []
+    if input_price == 0:
+        parts.append("free input")
+    elif isinstance(input_price, (int, float)) and input_price > 0:
+        parts.append(f"${input_price:.2f} in / 1M")
+    if output_price == 0:
+        parts.append("free output")
+    elif isinstance(output_price, (int, float)) and output_price > 0:
+        parts.append(f"${output_price:.2f} out / 1M")
+    return ", ".join(parts)
+
+
+def _opencode_record_from_payload(header, payload, usable_providers):
+    """Convert one parsed `opencode models --verbose` JSON block to a catalog row."""
+    if not isinstance(payload, dict):
+        return None
+
+    mid = payload.get("id") or header
+    provider = payload.get("providerID") or ""
+    if not provider and "/" in header:
+        provider = header.split("/", 1)[0]
+    full_id = header if "/" in header else f"{provider}/{mid}" if provider else mid
+
+    name = payload.get("name") or ""
+    if not name and "/" in full_id:
+        name = full_id.split("/")[-1]
+    label = (name or full_id).strip()
+
+    cost = payload.get("cost") or {}
+    cost_summary = _opencode_format_cost(cost)
+    cost_tier = 0.0
+    if isinstance(cost, dict):
+        input_price = cost.get("input") or 0
+        output_price = cost.get("output") or 0
+        if isinstance(input_price, (int, float)) and isinstance(output_price, (int, float)):
+            cost_tier = float(input_price) + float(output_price)
+
+    limits = payload.get("limit") or {}
+    max_context = None
+    max_output = None
+    if isinstance(limits, dict):
+        max_context = limits.get("context")
+        max_output = limits.get("output")
+
+    status = payload.get("status")
+    available = status == "active" and (provider == "opencode" or provider in usable_providers)
+    availability_reason = None
+    if not available:
+        if status != "active":
+            availability_reason = f"status: {status}"
+        elif provider not in usable_providers:
+            availability_reason = f"provider {provider} not configured"
+
+    variants = payload.get("variants") or {}
+    reasoning_efforts = []
+    for key in variants:
+        key = str(key).lower()
+        if key in ("none", "off", "minimal", "low", "medium", "high", "xhigh", "max"):
+            reasoning_efforts.append(key)
+    default_reasoning_effort = reasoning_efforts[0] if reasoning_efforts else None
+
+    capabilities = payload.get("capabilities") or {}
+    input_caps = capabilities.get("input") or {}
+    output_caps = capabilities.get("output") or {}
+    supports_vision = bool(capabilities.get("attachment")) or bool(input_caps.get("image"))
+    supports_audio = bool(input_caps.get("audio")) or bool(output_caps.get("audio"))
+    supports_tool_call = bool(capabilities.get("toolcall"))
+    supports_reasoning = bool(capabilities.get("reasoning"))
+
+    return {
+        "id": full_id,
+        "label": label,
+        "source": "opencode-cli",
+        "available": available,
+        "availability_reason": availability_reason,
+        "cost_tier": cost_tier,
+        "cost_summary": cost_summary,
+        "max_context_tokens": max_context,
+        "max_output_tokens": max_output,
+        "reasoning_efforts": reasoning_efforts,
+        "default_reasoning_effort": default_reasoning_effort,
+        "supports_vision": supports_vision,
+        "supports_audio": supports_audio,
+        "supports_tool_call": supports_tool_call,
+        "supports_reasoning": supports_reasoning,
+        "fetched_at": datetime.now(timezone.utc).isoformat(),
+    }
+
+
+def _opencode_model_catalog_records(force_refresh=False):
+    """Return OpenCode's live provider/model list with cost and limit metadata."""
+    global _OPENCODE_MODELS_LOCK
+    import threading
+
+    if _OPENCODE_MODELS_LOCK is None:
+        _OPENCODE_MODELS_LOCK = threading.Lock()
+
+    now = time.monotonic()
+    with _OPENCODE_MODELS_LOCK:
+        if (
+            not force_refresh
+            and _OPENCODE_MODELS_CACHE["records"]
+            and now - _OPENCODE_MODELS_CACHE["ts"] < _OPENCODE_MODELS_TTL_S
+        ):
+            return list(_OPENCODE_MODELS_CACHE["records"])
+
+    resolved = _resolve_opencode_bin()
+    if not resolved.get("available"):
+        with _OPENCODE_MODELS_LOCK:
+            return list(_OPENCODE_MODELS_CACHE["records"])
+
+    configured = _opencode_configured_providers()
+    usable_providers = configured | {"opencode"}
+
+    raw = ""
+    try:
+        proc = subprocess.run(
+            [resolved["bin"], "models", "--verbose"],
+            capture_output=True,
+            text=True,
+            timeout=_OPENCODE_MODELS_TIMEOUT_S,
+        )
+        raw = proc.stdout or "" if proc.returncode == 0 else ""
+    except (OSError, subprocess.SubprocessError, subprocess.TimeoutExpired):
+        raw = ""
+
+    records = []
+    if raw:
+        current_header = None
+        current_lines = []
+        for line in raw.splitlines():
+            stripped = line.strip()
+            if not stripped:
+                continue
+            if not line.startswith((" ", "\t", "{")) and "/" in stripped:
+                if current_header and current_lines:
+                    try:
+                        payload = json.loads("\n".join(current_lines))
+                        record = _opencode_record_from_payload(current_header, payload, usable_providers)
+                        if record:
+                            records.append(record)
+                    except (ValueError, TypeError):
+                        pass
+                current_header = stripped
+                current_lines = []
+                continue
+            if current_header is not None:
+                current_lines.append(line)
+
+        if current_header and current_lines:
+            try:
+                payload = json.loads("\n".join(current_lines))
+                record = _opencode_record_from_payload(current_header, payload, usable_providers)
+                if record:
+                    records.append(record)
+            except (ValueError, TypeError):
+                pass
+
+    with _OPENCODE_MODELS_LOCK:
+        if records:
+            _OPENCODE_MODELS_CACHE["ts"] = now
+            _OPENCODE_MODELS_CACHE["records"] = records
+        elif _OPENCODE_MODELS_CACHE["records"]:
+            records = list(_OPENCODE_MODELS_CACHE["records"])
+
+    return records
