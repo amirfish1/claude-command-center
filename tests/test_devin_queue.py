@@ -5,6 +5,7 @@ import json
 import os
 import sqlite3
 import tempfile
+import threading
 import time
 import unittest
 from datetime import datetime
@@ -321,7 +322,7 @@ class DevinQueueTests(unittest.TestCase):
             "proc": mock.Mock(poll=mock.Mock(return_value=None)),
         }
         with mock.patch.object(server, "_spawned_sessions", [entry]), \
-             mock.patch.object(devin_mod, "_DEVIN_CLI_LIST_CACHE", {"key": None, "rows": None}):
+             mock.patch.object(devin_mod, "_DEVIN_CLI_LIST_CACHE", {}):
             rows = server.find_devin_cli_conversations("/tmp/ccc", include_old=True)
         match = [r for r in rows if r.get("id") == "devincli-mighty-outfit"]
         self.assertTrue(match)
@@ -523,7 +524,7 @@ class DevinListPerfTests(unittest.TestCase):
             )
         )
         patches = [
-            mock.patch.object(devin_mod, "_DEVIN_CLI_LIST_CACHE", {"key": None, "rows": None}),
+            mock.patch.object(devin_mod, "_DEVIN_CLI_LIST_CACHE", {}),
             mock.patch.object(devin_mod, "_DEVIN_CLI_ROW_MEMO", {}),
             mock.patch.object(devin_mod, "_DEVIN_CLI_ROW_MEMO_LOADED", False),
             mock.patch.object(devin_mod, "_devin_cli_row_memo_path", lambda: devin_mod.Path(memo_path)),
@@ -551,7 +552,8 @@ class DevinListPerfTests(unittest.TestCase):
             calls.append(raw_id)
             return orig(con, raw_id, prev)
 
-        with mock.patch.object(devin_mod, "_devin_cli_row_fields_for_session", spy):
+        with mock.patch.object(devin_mod, "_devin_cli_row_fields_for_session", spy), \
+             mock.patch.object(devin_mod, "_DEVIN_CLI_LIST_TTL_SEC", 0):
             rows = {r["id"]: r for r in server.find_devin_cli_conversations("/tmp/ccc", include_old=True)}
             self.assertEqual(sorted(calls), ["alpha-one", "beta-two"])
             a = rows["devincli-alpha-one"]
@@ -592,13 +594,69 @@ class DevinListPerfTests(unittest.TestCase):
             # re-queries nothing when the DB is unchanged.
             devin_mod._DEVIN_CLI_ROW_MEMO.clear()
             devin_mod._DEVIN_CLI_ROW_MEMO_LOADED = False
-            devin_mod._DEVIN_CLI_LIST_CACHE["key"] = None
+            devin_mod._DEVIN_CLI_LIST_CACHE.clear()
             calls.clear()
             rows = {r["id"]: r for r in server.find_devin_cli_conversations("/tmp/ccc", include_old=True)}
             self.assertEqual(calls, [])
             self.assertTrue(rows["devincli-beta-two"]["has_push"])
             self.assertEqual(rows["devincli-alpha-one"]["model"], "claude-opus-5")
 
+
+    def test_devin_list_ttl_window_serves_without_restat(self):
+        """Within the TTL window a variant is served from cache even when the
+        DB changed (a live CLI touches WAL/SHM every few seconds); explicit
+        invalidation (key=None) bypasses the TTL and forces a rebuild."""
+        server, devin_mod, db_path, now = self._setup()
+        orig = devin_mod._devin_cli_row_fields_for_session
+        calls = []
+
+        def spy(con, raw_id, prev):
+            calls.append(raw_id)
+            return orig(con, raw_id, prev)
+
+        with mock.patch.object(devin_mod, "_DEVIN_CLI_LIST_TTL_SEC", 3600), \
+             mock.patch.object(devin_mod, "_devin_cli_row_fields_for_session", spy):
+            rows = {r["id"]: r for r in server.find_devin_cli_conversations("/tmp/ccc", include_old=True)}
+            self.assertEqual(sorted(calls), ["alpha-one", "beta-two"])
+
+            # A DB write inside the TTL window is still served from cache.
+            con = sqlite3.connect(db_path)
+            con.execute(
+                "INSERT INTO message_nodes (session_id, node_id, chat_message, created_at) "
+                "VALUES (?, ?, ?, ?)",
+                ("beta-two", 3, self._msg("assistant", "pushed via git push", generation_model="m-b2"), now + 1),
+            )
+            con.commit()
+            con.close()
+            self._bump_mtime(db_path, 10)
+            calls.clear()
+            rows = {r["id"]: r for r in server.find_devin_cli_conversations("/tmp/ccc", include_old=True)}
+            self.assertEqual(calls, [])
+            self.assertEqual(rows["devincli-beta-two"]["model"], "m-b")
+
+            # A second variant (limit=1) is a cold build that coexists with
+            # the first instead of evicting it: it re-queries only the changed
+            # session, and the base variant afterwards still serves its own
+            # cached (stale) rows rather than rebuilding.
+            rows_limited = server.find_devin_cli_conversations(
+                "/tmp/ccc", include_old=True, limit=1
+            )
+            self.assertEqual(len(rows_limited), 1)
+            self.assertEqual(len(devin_mod._DEVIN_CLI_LIST_CACHE), 2)
+            self.assertEqual(calls, ["beta-two"])
+            calls.clear()
+            rows = {r["id"]: r for r in server.find_devin_cli_conversations("/tmp/ccc", include_old=True)}
+            self.assertEqual(calls, [])
+            self.assertEqual(rows["devincli-beta-two"]["model"], "m-b")
+
+            # Invalidation (key=None) bypasses the TTL and rebuilds, picking
+            # up the appended turn from the (already warm) row memo.
+            for entry in devin_mod._DEVIN_CLI_LIST_CACHE.values():
+                entry["key"] = None
+                entry["ts"] = 0.0
+            rows = {r["id"]: r for r in server.find_devin_cli_conversations("/tmp/ccc", include_old=True)}
+            self.assertEqual(calls, [])
+            self.assertEqual(rows["devincli-beta-two"]["model"], "m-b2")
 
     def test_devin_list_cold_memo_defers_to_background(self):
         """With no budget every miss is deferred: the first list call returns
@@ -636,7 +694,11 @@ class DevinListPerfTests(unittest.TestCase):
             self.assertTrue(devin_mod._devin_cli_row_memo_background_join(10))
             self.assertIsNone(devin_mod._DEVIN_CLI_ROW_MEMO_BG["thread"])
             self.assertEqual(devin_mod._DEVIN_CLI_ROW_MEMO_BG["pending"], {})
-            self.assertIsNone(devin_mod._DEVIN_CLI_LIST_CACHE["key"])
+            # Background completion invalidates every cached list variant.
+            self.assertEqual(len(devin_mod._DEVIN_CLI_LIST_CACHE), 1)
+            self.assertIsNone(
+                next(iter(devin_mod._DEVIN_CLI_LIST_CACHE.values()))["key"]
+            )
             self.assertEqual(sorted(calls), ["alpha-one", "beta-two"])
 
             rows = {r["id"]: r for r in server.find_devin_cli_conversations("/tmp/ccc", include_old=True)}
@@ -649,7 +711,9 @@ class DevinListPerfTests(unittest.TestCase):
             self.assertEqual(a["subagent_count"], 1)
             self.assertEqual(rows["devincli-beta-two"]["model"], "m-b")
             self.assertEqual(sorted(calls), ["alpha-one", "beta-two"])
-            self.assertIsNotNone(devin_mod._DEVIN_CLI_LIST_CACHE["key"])
+            self.assertIsNotNone(
+                next(iter(devin_mod._DEVIN_CLI_LIST_CACHE.values()))["key"]
+            )
             # The background stamp was persisted.
             with open(devin_mod._devin_cli_row_memo_path(), encoding="utf-8") as f:
                 saved = json.load(f)["rows"]
@@ -673,7 +737,9 @@ class DevinListPerfTests(unittest.TestCase):
             self.assertEqual(rows["devincli-beta-two"]["first_message"], "hello there")
             self.assertIsNone(devin_mod._DEVIN_CLI_ROW_MEMO_BG["thread"])
             self.assertEqual(devin_mod._DEVIN_CLI_ROW_MEMO_BG["pending"], {})
-            self.assertIsNotNone(devin_mod._DEVIN_CLI_LIST_CACHE["key"])
+            self.assertIsNotNone(
+                next(iter(devin_mod._DEVIN_CLI_LIST_CACHE.values()))["key"]
+            )
 
     def test_devin_list_cold_budget_prioritises_recent_sessions(self):
         """Misses are computed most recently active first, so a budget that
@@ -714,6 +780,90 @@ class DevinListPerfTests(unittest.TestCase):
         self.assertTrue(all(r["source"] == "devin-cli" for r in rows))
         rows = server._archive_overlay_devin_cli_sessions([{"id": "devincli-alpha-one"}])
         self.assertEqual([r["id"] for r in rows], ["devincli-beta-two"])
+
+    def test_devin_list_ttl_hit_does_not_wait_on_rebuild_lock(self):
+        """A warm TTL hit must not queue behind a 30-60s Devin list rebuild.
+
+        Sidebar trash waits on a free HTTP/1.1 slot; if every /list poll
+        parks on `_DEVIN_CLI_LIST_REBUILD_LOCK`, the trash POST sits in the
+        browser queue for tens of seconds even though the handler is cheap.
+        """
+        server, devin_mod, db_path, now = self._setup()
+        with mock.patch.object(devin_mod, "_DEVIN_CLI_LIST_TTL_SEC", 3600):
+            warmed = server.find_devin_cli_conversations("/tmp/ccc", include_old=True)
+            self.assertEqual(len(warmed), 2)
+            held = threading.Event()
+            release = threading.Event()
+
+            def holder():
+                with devin_mod._DEVIN_CLI_LIST_REBUILD_LOCK:
+                    held.set()
+                    release.wait(timeout=5)
+
+            worker = threading.Thread(target=holder)
+            worker.start()
+            self.assertTrue(held.wait(timeout=1))
+            try:
+                t0 = time.perf_counter()
+                rows = server.find_devin_cli_conversations("/tmp/ccc", include_old=True)
+                elapsed = time.perf_counter() - t0
+                self.assertEqual(len(rows), 2)
+                self.assertLess(elapsed, 0.5)
+            finally:
+                release.set()
+                worker.join(timeout=2)
+
+    def test_devin_overlay_serves_expired_cache_without_rebuild(self):
+        """After the TTL window the overlay must not kick a 30-60s rebuild."""
+        server, devin_mod, db_path, now = self._setup()
+        orig = devin_mod._devin_cli_row_fields_for_session
+        calls = []
+
+        def spy(con, raw_id, prev):
+            calls.append(raw_id)
+            return orig(con, raw_id, prev)
+
+        with mock.patch.object(devin_mod, "_DEVIN_CLI_LIST_TTL_SEC", 3600), \
+             mock.patch.object(devin_mod, "_devin_cli_row_fields_for_session", spy):
+            # Warm the overlay's own cache variant (repo_path=None).
+            server._archive_overlay_devin_cli_sessions([])
+            self.assertEqual(sorted(calls), ["alpha-one", "beta-two"])
+            for entry in devin_mod._DEVIN_CLI_LIST_CACHE.values():
+                entry["ts"] = 0.0
+            calls.clear()
+            t0 = time.perf_counter()
+            rows = server._archive_overlay_devin_cli_sessions([])
+            elapsed = time.perf_counter() - t0
+            self.assertEqual(sorted(r["id"] for r in rows), [
+                "devincli-alpha-one", "devincli-beta-two",
+            ])
+            self.assertEqual(calls, [])
+            self.assertLess(elapsed, 0.5)
+
+    def test_devin_overlay_skips_rebuild_when_list_lock_is_held(self):
+        """The /list Devin overlay must not block on an in-flight rebuild."""
+        server, devin_mod, db_path, now = self._setup()
+        held = threading.Event()
+        release = threading.Event()
+
+        def holder():
+            with devin_mod._DEVIN_CLI_LIST_REBUILD_LOCK:
+                held.set()
+                release.wait(timeout=5)
+
+        worker = threading.Thread(target=holder)
+        worker.start()
+        self.assertTrue(held.wait(timeout=1))
+        try:
+            t0 = time.perf_counter()
+            rows = server._archive_overlay_devin_cli_sessions([])
+            elapsed = time.perf_counter() - t0
+            self.assertEqual(rows, [])
+            self.assertLess(elapsed, 0.5)
+        finally:
+            release.set()
+            worker.join(timeout=2)
+
 class DevinSpawnIdentityTests(unittest.TestCase):
     """Two Devin spawns with the same prompt must resolve to two sessions.
 

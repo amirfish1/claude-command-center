@@ -81,11 +81,29 @@ _DEVIN_CLI_PARSE_CACHE_MAX = 64
 
 # In-memory session-list cache for the local CLI backend. Opening the Devin
 # CLI sessions DB can take multiple seconds when the DB is large and the WAL
-# is huge, so we avoid reconnecting on every sidebar refresh/poll. The cache
-# invalidates whenever the DB (or its WAL/SHM sidecars), the lock files, or
-# the lifecycle side-car files change.
-_DEVIN_CLI_LIST_CACHE = {"key": None, "rows": None}
+# is huge, so we avoid reconnecting on every sidebar refresh/poll.
+#
+# Two guards against rebuild storms (observed: 1.5-7.7 s rebuilds every 2-5 s
+# against an 8.6 GB sessions.db, with all other sidebar polls parked behind
+# the rebuild lock):
+#   1. The cache is keyed per parameter variant — the dashboard sidebar polls
+#      with repo_only=True while the archive overlay polls repo_only=False,
+#      and a single-slot cache thrashed between the two on every call.
+#   2. A variant younger than _DEVIN_CLI_LIST_TTL_SEC is served without
+#      re-statting the DB at all — a live Devin CLI touches its WAL/SHM every
+#      few seconds, so pure mtime invalidation rebuilt almost every poll.
+# Explicit invalidation (entry key set to None, e.g. after a background
+# row-fields completion) bypasses the TTL so lifecycle changes still land on
+# the next poll. CCC_DEVIN_CLI_LIST_TTL_SEC=0 restores strict freshness.
+_DEVIN_CLI_LIST_CACHE = {}  # params_key -> {"key": full_key|None, "rows": list, "ts": float}
 _DEVIN_CLI_LIST_CACHE_LOCK = threading.Lock()
+_DEVIN_CLI_LIST_CACHE_MAX = 16
+try:
+    _DEVIN_CLI_LIST_TTL_SEC = max(
+        0.0, float(os.environ.get("CCC_DEVIN_CLI_LIST_TTL_SEC", "15"))
+    )
+except ValueError:
+    _DEVIN_CLI_LIST_TTL_SEC = 15.0
 # Serialises list rebuilds so N concurrent sidebar polls after one DB write
 # do one rebuild, not N.
 _DEVIN_CLI_LIST_REBUILD_LOCK = threading.Lock()
@@ -1529,7 +1547,12 @@ def _devin_cli_row_memo_background():
                     if bg["pending"].get(raw_id) == ver:
                         bg["pending"].pop(raw_id, None)
                 with _DEVIN_CLI_LIST_CACHE_LOCK:
-                    _DEVIN_CLI_LIST_CACHE["key"] = None
+                    # Background row-fields completion changed derived data:
+                    # force every cached variant to rebuild on its next call
+                    # (a None key bypasses the TTL grace window).
+                    for _entry in _DEVIN_CLI_LIST_CACHE.values():
+                        _entry["key"] = None
+                        _entry["ts"] = 0.0
             except Exception:
                 with _DEVIN_CLI_ROW_MEMO_BG_LOCK:
                     bg["pending"].pop(raw_id, None)
@@ -1738,19 +1761,102 @@ def _devin_model_catalog_records(allowed_families=None):
     return records
 
 
+def _devin_cli_list_params_key(repo_path, include_old, repo_only, limit):
+    return (
+        str(_devin_cli_db_path()),
+        repo_path,
+        bool(include_old),
+        bool(repo_only),
+        limit,
+    )
+
+
+def _devin_cli_cached_rows(params_key, *, ttl_only=True):
+    """Return a copy of cached rows for ``params_key``, or None.
+
+    ``ttl_only=True`` (default) requires a live cache key inside the TTL
+    window. ``ttl_only=False`` returns whatever rows are stored, including
+    expired or invalidated entries — used by stale-ok callers that must not
+    wait on a rebuild.
+    """
+    now = time.time()
+    with _DEVIN_CLI_LIST_CACHE_LOCK:
+        entry = _DEVIN_CLI_LIST_CACHE.get(params_key)
+        if entry is None or entry.get("rows") is None:
+            return None
+        if ttl_only:
+            if entry.get("key") is None:
+                return None
+            if (now - float(entry.get("ts") or 0)) >= _DEVIN_CLI_LIST_TTL_SEC:
+                return None
+        return list(entry["rows"])
+
+
 def find_devin_cli_conversations(
     repo_path=None,
     include_old=False,
     repo_only=False,
     progress=None,
     limit=None,
+    stale_ok=False,
 ):
     """Discover local Devin CLI sessions from the SQLite DB.
 
     Serialised: after one DB write, every concurrent sidebar poll would
     otherwise rebuild in parallel; under the lock the first rebuilds and the
     rest hit the refreshed cache. See ``_find_devin_cli_conversations_locked``.
+
+    Cache hits (TTL window) never take the rebuild lock — otherwise a 30-60s
+    rebuild against a multi-GB sessions.db parks every /list poll and the
+    browser's HTTP/1.1 slots, so cheap POSTs like trash wait tens of seconds
+    in the client queue.
+
+    ``stale_ok=True`` (the /list overlay): never wait on the rebuild lock.
+    Serve cached/stale rows, or [] if a rebuild is already in flight and
+    there is nothing cached.
     """
+    params_key = _devin_cli_list_params_key(
+        repo_path, include_old, repo_only, limit,
+    )
+    start = time.perf_counter()
+    hit = _devin_cli_cached_rows(params_key, ttl_only=True)
+    if hit is not None:
+        _devin_cli_profile_log(
+            "find_devin_cli_conversations",
+            time.perf_counter() - start,
+            f"rows={len(hit)} repo_only={repo_only} cached-ttl",
+        )
+        return hit
+    if stale_ok:
+        # Prefer any cached rows — even expired — over a 30-60s rebuild.
+        # The /list overlay is a gap-filler; freshness comes from the
+        # detached archive build, not from blocking the sidebar poll.
+        stale = _devin_cli_cached_rows(params_key, ttl_only=False)
+        if stale is not None:
+            _devin_cli_profile_log(
+                "find_devin_cli_conversations",
+                time.perf_counter() - start,
+                f"rows={len(stale)} repo_only={repo_only} stale-ok",
+            )
+            return stale
+        acquired = _DEVIN_CLI_LIST_REBUILD_LOCK.acquire(blocking=False)
+        if not acquired:
+            _devin_cli_profile_log(
+                "find_devin_cli_conversations",
+                time.perf_counter() - start,
+                f"rows=0 repo_only={repo_only} stale-ok-busy",
+            )
+            return []
+        try:
+            return _find_devin_cli_conversations_locked(
+                repo_path=repo_path,
+                include_old=include_old,
+                repo_only=repo_only,
+                progress=progress,
+                limit=limit,
+            )
+        finally:
+            _DEVIN_CLI_LIST_REBUILD_LOCK.release()
     with _DEVIN_CLI_LIST_REBUILD_LOCK:
         return _find_devin_cli_conversations_locked(
             repo_path=repo_path,
@@ -1779,19 +1885,45 @@ def _find_devin_cli_conversations_locked(
     sidebar refresh. The cache invalidates when the DB/WAL/SHM, lock files, or
     CCC lifecycle side-car files change."""
     start = time.perf_counter()
+    params_key = _devin_cli_list_params_key(
+        repo_path, include_old, repo_only, limit,
+    )
+    now = time.time()
+    with _DEVIN_CLI_LIST_CACHE_LOCK:
+        entry = _DEVIN_CLI_LIST_CACHE.get(params_key)
+        if (
+            entry is not None
+            and entry.get("key") is not None
+            and entry.get("rows") is not None
+            and (now - float(entry.get("ts") or 0)) < _DEVIN_CLI_LIST_TTL_SEC
+        ):
+            rows = entry["rows"]
+            elapsed = time.perf_counter() - start
+            _devin_cli_profile_log(
+                "find_devin_cli_conversations",
+                elapsed,
+                f"rows={len(rows)} repo_only={repo_only} cached-ttl",
+            )
+            return list(rows)
     cache_key = _devin_cli_list_cache_key(repo_path, include_old, repo_only, limit)
     with _DEVIN_CLI_LIST_CACHE_LOCK:
-        cached = _DEVIN_CLI_LIST_CACHE
-        if cached.get("key") == cache_key:
-            rows = cached.get("rows")
-            if rows is not None:
-                elapsed = time.perf_counter() - start
-                _devin_cli_profile_log(
-                    "find_devin_cli_conversations",
-                    elapsed,
-                    f"rows={len(rows)} repo_only={repo_only} cached",
-                )
-                return list(rows)
+        entry = _DEVIN_CLI_LIST_CACHE.get(params_key)
+        if (
+            entry is not None
+            and entry.get("key") == cache_key
+            and entry.get("rows") is not None
+        ):
+            # Corpus unchanged: serve without rebuilding and extend the
+            # freshness window, so a quiet DB never pays a rebuild.
+            entry["ts"] = now
+            rows = entry["rows"]
+            elapsed = time.perf_counter() - start
+            _devin_cli_profile_log(
+                "find_devin_cli_conversations",
+                elapsed,
+                f"rows={len(rows)} repo_only={repo_only} cached",
+            )
+            return list(rows)
 
     try:
         name_overrides = _core._load_session_name_overrides()
@@ -2055,8 +2187,17 @@ def _find_devin_cli_conversations_locked(
     if limit and limit > 0:
         rows = rows[:int(limit)]
     with _DEVIN_CLI_LIST_CACHE_LOCK:
-        _DEVIN_CLI_LIST_CACHE["key"] = cache_key
-        _DEVIN_CLI_LIST_CACHE["rows"] = rows
+        if len(_DEVIN_CLI_LIST_CACHE) >= _DEVIN_CLI_LIST_CACHE_MAX:
+            oldest = min(
+                _DEVIN_CLI_LIST_CACHE,
+                key=lambda k: float(_DEVIN_CLI_LIST_CACHE[k].get("ts") or 0),
+            )
+            _DEVIN_CLI_LIST_CACHE.pop(oldest, None)
+        _DEVIN_CLI_LIST_CACHE[params_key] = {
+            "key": cache_key,
+            "rows": rows,
+            "ts": time.time(),
+        }
     elapsed = time.perf_counter() - start
     _devin_cli_profile_log(
         "find_devin_cli_conversations",

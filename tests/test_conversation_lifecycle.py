@@ -127,9 +127,46 @@ def test_trash_active_session_archives_and_trashes(tmp_path, monkeypatch):
 
     result = server._set_conversation_trashed("sid-a", True)
 
-    assert result == {"archived": True, "trashed": True, "killed": {"ok": True}}
+    assert result == {
+        "archived": True, "trashed": True, "killed": {"ok": True}, "cascaded": [],
+    }
     assert server._load_archived_conversations(sweep=False) == ["sid-a"]
     assert server._load_trashed_conversations() == ["sid-a"]
+
+
+def test_find_descendant_sessions_skips_fallback_for_leaf_when_graph_has_edges(
+    tmp_path, monkeypatch,
+):
+    """Trashing a session with no children must not scan Codex sqlite.
+
+    `_find_descendant_sessions` used `if graph_descendants:` as the
+    ready-signal, so a leaf (empty list) always fell through to the
+    four-source merge on every trash click.
+    """
+    graph = server._SessionGraph(tmp_path / "session-graph.json")
+    graph.add_edge("parent-a", "child-a")
+    monkeypatch.setattr(server, "_session_graph", graph)
+    fallback_calls = []
+    monkeypatch.setattr(
+        server,
+        "_codex_spawn_parent_by_child",
+        lambda: fallback_calls.append("codex") or {},
+    )
+    monkeypatch.setattr(
+        server,
+        "_load_codex_parent_links",
+        lambda: fallback_calls.append("links") or {},
+    )
+    monkeypatch.setattr(server, "_load_spawn_registry", lambda: fallback_calls.append("spawn") or [])
+    monkeypatch.setattr(
+        server,
+        "_codex_thread_registry_entries",
+        lambda: fallback_calls.append("registry") or {},
+    )
+
+    assert server._find_descendant_sessions("leaf-sid") == []
+    assert server._find_descendant_sessions("parent-a") == ["child-a"]
+    assert fallback_calls == []
 
 
 def test_lifecycle_load_repairs_trashed_without_archived(tmp_path, monkeypatch):
@@ -340,7 +377,9 @@ def test_untrash_returns_to_archived(tmp_path, monkeypatch):
 
     result = server._set_conversation_trashed("sid-a", False)
 
-    assert result == {"archived": True, "trashed": False, "killed": None}
+    assert result == {
+        "archived": True, "trashed": False, "killed": None, "cascaded": [],
+    }
     assert server._load_archived_conversations(sweep=False) == ["sid-a"]
     assert server._load_trashed_conversations() == []
 
