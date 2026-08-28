@@ -38299,28 +38299,6 @@
       }
     });
   }
-  // Compact-rows toggle. Adds a class to the conv-list so the row
-  // styles in CSS take over: titles truncate to a single line and the
-  // ask preview disappears. Persists in localStorage so it sticks.
-  const $convCompactToggle = document.getElementById('convCompactToggle');
-  function applyCompactRowsState() {
-    const compact = compactRowsOn();
-    if ($convList) $convList.classList.toggle('compact-rows', compact);
-    if ($convCompactToggle) {
-      $convCompactToggle.classList.toggle('active', compact);
-      $convCompactToggle.setAttribute('aria-checked', String(compact));
-      const chk = $convCompactToggle.querySelector('[data-check-compact]');
-      if (chk) chk.textContent = compact ? '✓' : '';
-    }
-  }
-  if ($convCompactToggle) {
-    $convCompactToggle.addEventListener('click', () => {
-      const next = localStorage.getItem('ccc-compact-rows') !== '1';
-      localStorage.setItem('ccc-compact-rows', next ? '1' : '0');
-      applyCompactRowsState();
-    });
-  }
-  applyCompactRowsState();
   // Fast custom tooltip for truncated conversation titles. The native title=
   // attribute has a fixed ~500ms OS delay that read as "hover is laggy"; this
   // shows the full title in ~90ms, and only when the text is actually clipped.
@@ -69516,14 +69494,15 @@
   const CONV_ROWSTYLE_VARIANTS = [
     // kind 'lines' previews as a 3-bar glyph (density / brightness);
     // kind 'font' previews as "Aa" set in the typeface it applies.
+    // Small caps, Compact, Mono, and Bold were tried and rejected by the
+    // user (2026-08-28) — don't re-add them to this list.
     { id: 'default',    label: 'Default',    kind: 'lines', op: 70,  h: 2,   gap: 3 },
+    { id: 'active',     label: 'Active',     kind: 'lines', op: 95,  h: 2,   gap: 3 },
     { id: 'bright',     label: 'Bright',     kind: 'lines', op: 100, h: 2,   gap: 3 },
-    { id: 'bold',       label: 'Bold',       kind: 'lines', op: 92,  h: 3,   gap: 3 },
     { id: 'contrast',   label: 'Contrast',   kind: 'lines', op: 100, h: 3,   gap: 4 },
-    { id: 'compact',    label: 'Compact',    kind: 'lines', op: 70,  h: 2,   gap: 1 },
+    { id: 'comfortable', label: 'Comfortable', kind: 'lines', op: 78, h: 3,  gap: 6 },
     { id: 'airy',       label: 'Airy',       kind: 'lines', op: 70,  h: 2,   gap: 5 },
     { id: 'large',      label: 'Large',      kind: 'lines', op: 78,  h: 3,   gap: 4 },
-    { id: 'mono',       label: 'Mono',       kind: 'font', font: 'ui-monospace, SFMono-Regular, Menlo, monospace' },
     { id: 'serif',      label: 'Serif',      kind: 'font', font: 'ui-serif, "New York", Georgia, serif' },
     { id: 'slab',       label: 'Slab',       kind: 'font', font: 'Charter, "Iowan Old Style", Palatino, serif' },
     { id: 'rounded',    label: 'Rounded',    kind: 'font', font: 'ui-rounded, "SF Pro Rounded", "Avenir Next", system-ui', weight: 500 },
@@ -69532,7 +69511,6 @@
     { id: 'geometric',  label: 'Geometric',  kind: 'font', font: 'Futura, "Century Gothic", "Avenir Next", sans-serif' },
     { id: 'condensed',  label: 'Condensed',  kind: 'font', font: '"Avenir Next Condensed", "Arial Narrow", sans-serif' },
     { id: 'typewriter', label: 'Typewriter', kind: 'font', font: '"Courier New", Courier, monospace', weight: 600 },
-    { id: 'caps',       label: 'Small caps', kind: 'font', font: 'inherit', weight: 600, caps: true },
   ];
 
   function storedConvRowStyle() {
@@ -69554,6 +69532,17 @@
     document.documentElement.setAttribute('data-conv-rowstyle', variant.id);
     if (opts.persist) {
       try { localStorage.setItem(CONV_ROWSTYLE_STORAGE_KEY, variant.id); } catch (_) {}
+    }
+    // "Comfortable" is the one preset that opts out of compact rows (shows
+    // the ask-preview/detail line under each row); every other preset keeps
+    // compact rows on, matching the CCC-291 default. Folded in here instead
+    // of a separate toggle so row density lives in one control.
+    const wasCompact = compactRowsOn();
+    const compactDesired = variant.id !== 'comfortable';
+    try { localStorage.setItem('ccc-compact-rows', compactDesired ? '1' : '0'); } catch (_) {}
+    if ($convList) $convList.classList.toggle('compact-rows', compactDesired);
+    if (opts.persist && compactDesired !== wasCompact) {
+      renderArchiveList(document.getElementById('convSearch')?.value || '');
     }
     updateConvRowStyleState(variant.id);
   }

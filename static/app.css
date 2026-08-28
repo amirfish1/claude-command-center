@@ -5479,7 +5479,7 @@
     /* Omnara-style: slightly larger and looser line-height than the old
        13/1.2, weight stays at 400 — the difference reads as "designed
        breathing room" rather than "denser is better". */
-    font-size: 13.5px; font-weight: 400; color: var(--text);
+    font-size: 14.5px; font-weight: 400; color: var(--text);
     line-height: 1.4; flex: 1 1 auto; min-width: 0;
     white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
     word-break: keep-all;
@@ -14984,6 +14984,14 @@
      .conv-title colour+weight at a higher specificity. */
   :root { --rs-hi: #ffffff; }
   :root[data-theme="light"] { --rs-hi: #000000; }
+  html[data-conv-rowstyle="active"] .conv-item .conv-title {
+    font-weight: 650 !important;
+    letter-spacing: 0 !important;
+    color: var(--text) !important;
+  }
+  html[data-conv-rowstyle="active"]:not([data-theme="light"]) .conv-item .conv-title {
+    color: #f0f4fb !important;
+  }
   html[data-conv-rowstyle="bright"] .conv-item .conv-title {
     color: color-mix(in srgb, var(--text) 20%, var(--rs-hi)) !important;
     font-weight: 500 !important;
@@ -14992,25 +15000,15 @@
     padding-top: 10px !important; padding-bottom: 10px !important; margin-bottom: 4px !important;
   }
   html[data-conv-rowstyle="airy"] .conv-item .conv-title { line-height: 1.75 !important; }
-  html[data-conv-rowstyle="compact"] .conv-item {
-    padding-top: 2px !important; padding-bottom: 2px !important; margin-bottom: 0 !important;
+  html[data-conv-rowstyle="comfortable"] .conv-item {
+    padding-top: 10px !important; padding-bottom: 10px !important; margin-bottom: 4px !important;
   }
-  html[data-conv-rowstyle="compact"] .conv-item .conv-title {
-    font-size: 12.5px !important; line-height: 1.15 !important;
-  }
-  html[data-conv-rowstyle="bold"] .conv-item .conv-title {
-    font-weight: 700 !important;
-    color: color-mix(in srgb, var(--text) 35%, var(--rs-hi)) !important;
-  }
+  html[data-conv-rowstyle="comfortable"] .conv-item .conv-title { line-height: 1.6 !important; }
   html[data-conv-rowstyle="large"] .conv-item {
     padding-top: 7px !important; padding-bottom: 7px !important;
   }
   html[data-conv-rowstyle="large"] .conv-item .conv-title {
-    font-size: 15px !important; line-height: 1.45 !important;
-  }
-  html[data-conv-rowstyle="mono"] .conv-item .conv-title {
-    font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace !important;
-    font-size: 12.5px !important; letter-spacing: 0 !important;
+    font-size: 16px !important; line-height: 1.45 !important;
   }
   html[data-conv-rowstyle="contrast"] .conv-item .conv-title {
     color: color-mix(in srgb, var(--text) 15%, var(--rs-hi)) !important;
@@ -15025,40 +15023,35 @@
   /* ---- Typeface variants ---- */
   html[data-conv-rowstyle="serif"] .conv-item .conv-title {
     font-family: ui-serif, "New York", Georgia, "Times New Roman", serif !important;
-    font-size: 14px !important; letter-spacing: 0 !important;
+    font-size: 15px !important; letter-spacing: 0 !important;
   }
   html[data-conv-rowstyle="rounded"] .conv-item .conv-title {
     font-family: ui-rounded, "SF Pro Rounded", "Avenir Next", "Nunito", system-ui, sans-serif !important;
-    font-size: 13.5px !important; font-weight: 500 !important; letter-spacing: 0 !important;
+    font-size: 14.5px !important; font-weight: 500 !important; letter-spacing: 0 !important;
   }
   html[data-conv-rowstyle="grotesk"] .conv-item .conv-title {
     font-family: "Helvetica Neue", Helvetica, Inter, Arial, sans-serif !important;
-    font-size: 13.5px !important; letter-spacing: -0.015em !important;
+    font-size: 14.5px !important; letter-spacing: -0.015em !important;
   }
   html[data-conv-rowstyle="humanist"] .conv-item .conv-title {
     font-family: Optima, Candara, "Gill Sans", "Gill Sans MT", sans-serif !important;
-    font-size: 14px !important; letter-spacing: 0.01em !important;
+    font-size: 15px !important; letter-spacing: 0.01em !important;
   }
   html[data-conv-rowstyle="geometric"] .conv-item .conv-title {
     font-family: Futura, "Century Gothic", "Avenir Next", sans-serif !important;
-    font-size: 13px !important; letter-spacing: 0.015em !important;
+    font-size: 14px !important; letter-spacing: 0.015em !important;
   }
   html[data-conv-rowstyle="slab"] .conv-item .conv-title {
     font-family: Charter, "Iowan Old Style", "Bitstream Charter", Palatino, serif !important;
-    font-size: 14px !important; letter-spacing: 0 !important;
+    font-size: 15px !important; letter-spacing: 0 !important;
   }
   html[data-conv-rowstyle="typewriter"] .conv-item .conv-title {
     font-family: "Courier New", Courier, ui-monospace, monospace !important;
-    font-size: 13px !important; font-weight: 600 !important; letter-spacing: -0.01em !important;
+    font-size: 14px !important; font-weight: 600 !important; letter-spacing: -0.01em !important;
   }
   html[data-conv-rowstyle="condensed"] .conv-item .conv-title {
     font-family: "Avenir Next Condensed", "Helvetica Neue Condensed", "Roboto Condensed", "Arial Narrow", sans-serif !important;
-    font-size: 14.5px !important; letter-spacing: 0.01em !important;
-  }
-  html[data-conv-rowstyle="caps"] .conv-item .conv-title {
-    font-size: 12px !important; font-weight: 600 !important;
-    letter-spacing: 0.07em !important; text-transform: uppercase;
-    color: color-mix(in srgb, var(--text) 30%, var(--rs-hi)) !important;
+    font-size: 15.5px !important; letter-spacing: 0.01em !important;
   }
   .conv-bg-swatch {
     width: 14px;
