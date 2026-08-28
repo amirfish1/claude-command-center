@@ -30,16 +30,21 @@ class DevinQueueTests(unittest.TestCase):
                  "live": False, "status": None, "kind": None,
                  "tty": None, "terminal_app": None,
              }), \
-             mock.patch.object(server, "resume_session_devin", return_value={
-                 "ok": True, "resumed": True, "via": "devin-resume",
-             }) as resume, \
+             mock.patch.object(server, "_pump_devin_resume_queue") as pump, \
+             mock.patch.object(server, "_save_pending_inputs") as save, \
+             mock.patch.object(server, "resume_session_devin") as resume, \
              mock.patch.object(server, "_control_plane_engine_call") as cp:
             result = server._inject_text_into_session(sid, "follow up")
 
         self.assertTrue(result["ok"])
-        self.assertEqual(result["via"], "devin-resume")
-        resume.assert_called_once_with(sid, "follow up")
+        self.assertEqual(result["via"], "devin-resume-queued")
+        self.assertTrue(result.get("queued"))
+        pump.assert_called_once_with(sid)
+        save.assert_called_once()
+        resume.assert_not_called()
         cp.assert_not_called()
+        with server._pending_resume_lock:
+            self.assertEqual(server._pending_resume_queue.get(sid), ["follow up"])
 
     def test_devin_resume_watchdog_requeues_startup_failure(self):
         """A devin resume that dies at startup requeues the follow-up (OPS-807).
@@ -899,6 +904,125 @@ class DevinSpawnIdentityTests(unittest.TestCase):
         self.assertEqual(sid, "devincli-found")
         self.assertEqual(probes, [0.0, 0.1, 0.2])
         self.assertEqual(clock.sleeps, [0.07, 0.07])
+
+
+    def test_devin_inject_always_enqueues(self):
+        """Devin CLI follow-ups are persisted to the durable queue first."""
+        server = importlib.import_module("server")
+        sid = "devincli-queue-test"
+        with mock.patch.object(server, "_is_devin_cli_session", return_value=True), \
+             mock.patch.object(server, "_is_codex_session", return_value=False), \
+             mock.patch.object(server, "_is_kimi_session", return_value=False), \
+             mock.patch.object(server, "_is_gemini_session", return_value=False), \
+             mock.patch.object(server, "_is_cursor_session", return_value=False), \
+             mock.patch.object(server, "_is_antigravity_session", return_value=False), \
+             mock.patch.object(server, "_is_hermes_session", return_value=False), \
+             mock.patch.object(server, "_is_opencode_session", return_value=False), \
+             mock.patch.object(server, "_is_aider_session", return_value=False), \
+             mock.patch.object(server, "session_live_status", return_value={
+                 "live": False, "status": None, "kind": None,
+                 "tty": None, "terminal_app": None,
+             }), \
+             mock.patch.object(server, "_pump_devin_resume_queue") as pump, \
+             mock.patch.object(server, "_save_pending_inputs") as save:
+            result = server._inject_text_into_session(sid, "follow up")
+        self.assertTrue(result["ok"])
+        self.assertTrue(result.get("queued"))
+        self.assertEqual(result.get("via"), "devin-resume-queued")
+        with server._pending_resume_lock:
+            self.assertEqual(server._pending_resume_queue.get(sid), ["follow up"])
+        pump.assert_called_once_with(sid)
+        save.assert_called_once()
+
+    def test_devin_pump_lock_prevents_concurrent_pumps(self):
+        """Only one Devin pump may run per session at a time."""
+        server = importlib.import_module("server")
+        sid = "devincli-pump-lock-test"
+        lock = server._devin_queue_pump_lock(sid)
+        self.assertTrue(lock.acquire(blocking=False))
+        try:
+            result = server._pump_devin_resume_queue(sid)
+        finally:
+            lock.release()
+        self.assertEqual(result, {"ok": True, "waiting": "already-pumping"})
+
+    def test_devin_delivery_proof_watchdog_removes_on_proof(self):
+        """A matching prompt_history row proves delivery and drains the queue."""
+        server = importlib.import_module("server")
+        import subprocess
+        sid = "devincli-proof-test"
+        text = "hello devin"
+        queue = {sid: [text]}
+        with tempfile.TemporaryDirectory() as tmp:
+            log_path = os.path.join(tmp, "resume.log")
+            with open(log_path, "w") as fh:
+                proc = subprocess.Popen(
+                    ["/bin/sh", "-c", "sleep 2"],
+                    stdout=fh, stderr=subprocess.STDOUT,
+                )
+            retry_after = {}
+            with mock.patch.object(server, "_pending_resume_queue", queue), \
+                 mock.patch.object(server, "_pending_resume_retry_after", retry_after), \
+                 mock.patch.object(server, "_save_pending_inputs") as save, \
+                 mock.patch.object(server, "_devin_cli_prompt_history_count", return_value=1):
+                server._start_devin_delivery_proof_watchdog(proc, sid, text, time.time())
+                deadline = time.time() + 2
+                while time.time() < deadline and queue.get(sid):
+                    time.sleep(0.05)
+        self.assertIsNone(queue.get(sid))
+        self.assertNotIn(sid, retry_after)
+        save.assert_called_once()
+        proc.wait(timeout=5)
+
+    def test_devin_delivery_proof_watchdog_requeues_on_failure(self):
+        """No prompt_history row before the process exits means requeue."""
+        server = importlib.import_module("server")
+        import subprocess
+        sid = "devincli-fail-proof-test"
+        text = "hello devin"
+        with tempfile.TemporaryDirectory() as tmp:
+            log_path = os.path.join(tmp, "resume.log")
+            with open(log_path, "w") as fh:
+                proc = subprocess.Popen(
+                    ["/bin/sh", "-c", "exit 1"],
+                    stdout=fh, stderr=subprocess.STDOUT,
+                )
+            queue = {sid: [text]}
+            retry_after = {}
+            with mock.patch.object(server, "_pending_resume_queue", queue), \
+                 mock.patch.object(server, "_pending_resume_retry_after", retry_after), \
+                 mock.patch.object(server, "_save_pending_inputs") as save, \
+                 mock.patch.object(server, "_devin_cli_prompt_history_count", return_value=0), \
+                 mock.patch.object(server, "_DEVIN_DELIVERY_PROOF_POLL_INTERVAL_S", 0.05):
+                server._start_devin_delivery_proof_watchdog(proc, sid, text, time.time())
+                deadline = time.time() + 2
+                while time.time() < deadline and sid not in retry_after:
+                    time.sleep(0.05)
+        self.assertEqual(queue.get(sid), [text])
+        self.assertIn(sid, retry_after)
+        save.assert_called_once()
+        proc.wait(timeout=5)
+
+    def test_devin_pump_starts_resume_and_leaves_queue_for_proof(self):
+        """A successful resume returns 'started' and keeps the message queued."""
+        server = importlib.import_module("server")
+        sid = "devincli-pump-start-test"
+        text = "do the thing"
+        queue = {sid: [text]}
+        with mock.patch.object(server, "_pending_resume_queue", queue), \
+             mock.patch.object(server, "_pending_resume_retry_after", {}), \
+             mock.patch.object(server, "_save_pending_inputs") as save, \
+             mock.patch.object(server, "_resume_queue_engine_busy", return_value=False), \
+             mock.patch.object(server, "resume_session_devin", return_value={
+                 "ok": True, "pid": 12345, "via": "devin-resume",
+             }) as resume:
+            result = server._pump_devin_resume_queue(sid)
+        self.assertTrue(result["ok"])
+        self.assertTrue(result.get("started"))
+        resume.assert_called_once_with(sid, text)
+        # Message stays queued until the proof-of-delivery watchdog removes it.
+        self.assertEqual(queue.get(sid), [text])
+        save.assert_not_called()
 
 
 if __name__ == "__main__":

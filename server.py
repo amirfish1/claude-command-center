@@ -42101,6 +42101,11 @@ _pending_inputs_watcher_lock_file = None
 _pending_inputs_watcher_retry_started = False
 _codex_queue_pump_locks = {}
 _codex_queue_pump_locks_guard = threading.Lock()
+# Per-session Devin CLI resume pump lock. The watcher drains at most one
+# message at a time per session so retries cannot create duplicate concurrent
+# resumes (CCC robust-devin-session design, point 6).
+_devin_queue_pump_locks = {}
+_devin_queue_pump_locks_guard = threading.Lock()
 # Per-session opt-in for unattended auto-resume ("continue") pokes. Default
 # is NOT opted in -- see CCC-863 zombie-process incident (a leaked process
 # running pre-fix code injected literal "continue" into a live Codex session
@@ -43266,6 +43271,12 @@ def _codex_queue_pump_lock(session_id):
         return _codex_queue_pump_locks.setdefault(session_id, threading.Lock())
 
 
+def _devin_queue_pump_lock(session_id):
+    """Return the process-local delivery lock for one Devin CLI session."""
+    with _devin_queue_pump_locks_guard:
+        return _devin_queue_pump_locks.setdefault(session_id, threading.Lock())
+
+
 def _schedule_codex_queue_pump(session_id):
     """Trigger FIFO delivery for one conversation without blocking the caller."""
     if not session_id:
@@ -43337,6 +43348,44 @@ def _pump_codex_resume_queue(session_id):
             _save_pending_inputs()
         _pending_resume_retry_after.pop(session_id, None)
         return {"ok": True, "delivered": removed, "result": result}
+    finally:
+        lock.release()
+
+
+def _pump_devin_resume_queue(session_id):
+    """Deliver at most one durable Devin CLI message, preserving FIFO order.
+
+    Unlike the Codex pump, this pump does not remove the message from the
+    queue immediately on a successful ``Popen``. The message stays queued
+    until the Devin CLI writes it to its own ``prompt_history`` table
+    (proof-of-delivery). The ``_start_devin_delivery_proof_watchdog`` thread
+    handles the actual removal or requeue.
+    """
+    lock = _devin_queue_pump_lock(session_id)
+    if not lock.acquire(blocking=False):
+        return {"ok": True, "waiting": "already-pumping"}
+    try:
+        if not _pending_resume_retry_due(session_id):
+            return {"ok": True, "waiting": "backoff"}
+        if _resume_queue_engine_busy(session_id):
+            return {"ok": True, "waiting": "busy"}
+        with _pending_resume_lock:
+            queue = _pending_resume_queue.get(session_id) or []
+            text = queue[0] if queue else None
+        if text is None:
+            return {"ok": True, "empty": True}
+
+        result = resume_session_devin(session_id, text)
+        # resume_session_devin already queues internally if a turn is running.
+        # It starts both the startup-failure watchdog and the proof-of-delivery
+        # watchdog. The durable queue is left intact until proof arrives.
+        if result.get("queued"):
+            _mark_pending_resume_retry(session_id)
+            return {"ok": True, "waiting": "busy", "result": result}
+        if not result or not result.get("ok"):
+            _mark_pending_resume_retry(session_id)
+            return {"ok": False, "waiting": "retry", "result": result}
+        return {"ok": True, "started": True, "result": result}
     finally:
         lock.release()
 
@@ -44441,7 +44490,7 @@ def _start_resume_queue_watcher() -> None:
                         if _is_opencode_session(sid):
                             return resume_session_opencode(sid, text)
                         if _is_devin_cli_session(sid):
-                            return resume_session_devin(sid, text)
+                            return _pump_devin_resume_queue(sid)
                         return {"ok": False}
 
                     result = _deliver_with_auto_resume_barrier(
@@ -44458,7 +44507,10 @@ def _start_resume_queue_watcher() -> None:
                         _pending_resume_queue.setdefault(sid, []).insert(0, text)
                     _save_pending_inputs()
                     _mark_pending_resume_retry(sid)
-                elif result.get("queued"):
+                elif result.get("queued") or result.get("started"):
+                    # "queued" means the engine already queued it internally.
+                    # "started" (Devin) means the process launched but the
+                    # durable queue is kept until prompt_history proves delivery.
                     _mark_pending_resume_retry(sid)
                 else:
                     _pending_resume_retry_after.pop(sid, None)
@@ -47734,6 +47786,103 @@ def _start_devin_resume_watchdog(proc, session_id, text, log_path):
     ).start()
 
 
+# Proof-of-delivery window. A `devin --resume -p` must write the prompt into
+# its own sessions DB (`prompt_history` table) within this many seconds of
+# the dashboard launching it; otherwise the follow-up is requeued for retry.
+_DEVIN_DELIVERY_PROOF_WINDOW_S = 30.0
+# How long to sleep between DB polls while waiting for proof.
+_DEVIN_DELIVERY_PROOF_POLL_INTERVAL_S = 0.5
+
+
+def _devin_cli_prompt_history_count(raw_id, text, since_ts):
+    """Count prompt_history rows for ``raw_id`` with ``content == text`` and
+    timestamp >= ``since_ts``.
+
+    Returns 0 when the DB is unreadable or the row is missing. The count is
+    used instead of a boolean because tests can inject multiple matching rows.
+    """
+    con = _devin_cli_connect()
+    if con is None:
+        return 0
+    try:
+        row = con.execute(
+            "SELECT COUNT(*) AS n FROM prompt_history "
+            "WHERE session_id = ? AND content = ? AND timestamp >= ?",
+            (raw_id, text, int(since_ts)),
+        ).fetchone()
+        return int((row or {}).get("n", 0)) if row else 0
+    except sqlite3.Error:
+        return 0
+    finally:
+        con.close()
+
+
+def _devin_raw_id(session_id):
+    """Strip the devincli- prefix, or return the id unchanged."""
+    if session_id and session_id.startswith("devincli-"):
+        return session_id[len("devincli-"):]
+    return session_id or ""
+
+
+def _start_devin_delivery_proof_watchdog(proc, session_id, text, started_at):
+    """Wait for a new prompt_history row proving Devin accepted the follow-up.
+
+    If the row appears, remove the message from the durable queue. If the
+    process exits before the row appears, requeue it for retry with backoff.
+    A mid-turn crash after the prompt was written (row present) is treated as
+    delivered; resending would fork the session.
+    """
+    raw_id = _devin_raw_id(session_id)
+    if not raw_id:
+        return
+    # The CLI receives the instruction-stripped text, so prompt_history will
+    # contain the stripped form. Match against that, not the raw queued text.
+    text = _strip_ccc_session_state_instruction(text)
+
+    def _watch():
+        deadline = time.time() + _DEVIN_DELIVERY_PROOF_WINDOW_S
+        while time.time() < deadline:
+            if _devin_cli_prompt_history_count(raw_id, text, started_at) > 0:
+                removed = False
+                with _pending_resume_lock:
+                    queue = _pending_resume_queue.get(session_id) or []
+                    if queue and queue[0] == text:
+                        queue.pop(0)
+                        if not queue:
+                            _pending_resume_queue.pop(session_id, None)
+                        removed = True
+                if removed:
+                    _save_pending_inputs()
+                    _pending_resume_retry_after.pop(session_id, None)
+                return
+            try:
+                exit_code = proc.poll()
+            except Exception:
+                exit_code = None
+            if exit_code is not None and exit_code != 0:
+                break
+            time.sleep(_DEVIN_DELIVERY_PROOF_POLL_INTERVAL_S)
+        # No proof. Requeue at front for retry (unless it was already removed).
+        with _pending_resume_lock:
+            queue = _pending_resume_queue.get(session_id) or []
+            if queue and queue[0] == text:
+                pass  # already at front
+            elif text:
+                _pending_resume_queue.setdefault(session_id, []).insert(0, text)
+        _save_pending_inputs()
+        _mark_pending_resume_retry(session_id)
+        print(
+            f"[devin-proof] no delivery proof for {session_id} — requeuing follow-up",
+            flush=True,
+        )
+
+    threading.Thread(
+        target=_watch,
+        daemon=True,
+        name=f"devin-proof-watchdog-{str(session_id)[-12:]}",
+    ).start()
+
+
 def resume_session_devin(session_id, text):
     """Resume a Devin CLI session with a one-shot headless prompt.
 
@@ -47855,6 +48004,7 @@ def resume_session_devin(session_id, text):
         model=model,
     )
     _start_devin_resume_watchdog(proc, session_id, text, log_path)
+    _start_devin_delivery_proof_watchdog(proc, session_id, text, time.time())
     return {"ok": True, "pid": proc.pid, "log": str(log_path), "resumed": True, "via": "devin-resume"}
 
 
@@ -58388,7 +58538,24 @@ def _inject_text_into_session(
     if _is_aider_session(session_id):
         return resume_session_aider(session_id, text)
     if _is_devin_cli_session(session_id):
-        return resume_session_devin(session_id, text)
+        # Always enqueue first; the per-session pump drains the durable FIFO.
+        # The UI sees "queued" until Devin writes the prompt to prompt_history.
+        with _pending_resume_lock:
+            _pending_resume_queue.setdefault(session_id, []).append(text)
+        _note_pending_queued(session_id, text, "Queued for Devin delivery")
+        _save_pending_inputs()
+        threading.Thread(
+            target=_pump_devin_resume_queue,
+            args=(session_id,),
+            daemon=True,
+            name=f"devin-pump-{session_id[-12:]}",
+        ).start()
+        return {
+            "ok": True,
+            "queued": True,
+            "via": "devin-resume-queued",
+            "queued_reason": "Queued for Devin delivery",
+        }
     # force_terminal: the user confirmed a terminal is running and wants the
     # text sent there. Find the terminal's TTY and inject via osascript even
     # though the initial status check didn't see it.
