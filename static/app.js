@@ -54702,10 +54702,12 @@
       return Promise.resolve();
     }
     setConversationSearchLoading(true, q);
-    _historyState.query = qLower;
-    _historyState.map = new Map();
-    _historyState.repoRows = [];
-    _historyState.matchedRepo = null;
+    // NOTE: _historyState is deliberately NOT reset here. Clearing the map at
+    // fetch start makes every in-flight re-render collapse the list to
+    // local-only rows (the visible "results vanish, then come back" flicker);
+    // _mergeHistoryResults swaps the query and rebuilds the map when the
+    // first fresh result lands, which is the earliest moment stale hits
+    // actually need to go.
     // Sidebar conversation search is global. There is no visible repo-scope
     // control here, so silently narrowing history search to the active repo
     // hides relevant sessions and makes the search box feel inconsistent.
@@ -54729,21 +54731,18 @@
         .then(r => r.ok ? r.json() : [])
         .catch(() => [])
       : Promise.resolve([]);
-    const repaintIfCurrent = () => {
-      _convListRenderSig = null;
-      if ($convSearch && $convSearch.value === q) {
-        _renderConversationSearchResults(q);
-      }
-    };
+    // All three augmentations land in _historyState as they resolve, but the
+    // repaint happens ONCE after all settle. Repainting per fetch (recall,
+    // then history, then repo) rebuilt the whole sidebar DOM three times per
+    // keystroke — with the old 8s Total Recall timeout that meant the list
+    // visibly morphed for seconds after typing stopped.
     const recallDone = recallReq.then((recallData) => {
       if (seq !== _historyFetchSeq) return;
       _mergeHistoryResults(qLower, (recallData && recallData.results) || []);
-      repaintIfCurrent();
     });
     const historyDone = historyReq.then((data) => {
       if (seq !== _historyFetchSeq) return;
       _mergeHistoryResults(qLower, (data && data.results) || []);
-      repaintIfCurrent();
     });
     const repoDone = repoReq.then((repoRows) => {
       // Drop stale responses — newer keystroke already in flight.
@@ -54752,11 +54751,14 @@
       _historyState.matchedRepo = matchedRepo
         ? { path: matchedRepo.path, label: matchedRepo.label || _pathLeaf(matchedRepo.path) || matchedRepo.path }
         : null;
-      repaintIfCurrent();
     });
     return Promise.all([historyDone, recallDone, repoDone]).then(() => {
       if (seq !== _historyFetchSeq) return;
       setConversationSearchLoading(false, q);
+      _convListRenderSig = null;
+      if ($convSearch && $convSearch.value === q) {
+        _renderConversationSearchResults(q);
+      }
     });
   }
 
@@ -59705,7 +59707,12 @@
     _clientLog('[ARCHIVE-DIAG] refreshArchiveData start window=' + (opts.window || _archiveWindow()) + ' staleOk=' + (opts.staleOk !== false && !opts.force));
     _archiveRefreshPromise = (async () => {
       try {
-      const requestedWindow = opts.window || _archiveWindow();
+      // While a sidebar search is active the corpus must stay at the 'all'
+      // window: renderArchiveList widens to 'all' so every session is
+      // searchable, and a background refresh that re-fetches with the stored
+      // ('1d'/'7d') window would swap the data back under the user's feet —
+      // the visible "result count flips between small and full" flicker.
+      const requestedWindow = opts.window || (_archiveQuery().trim() ? 'all' : _archiveWindow());
       const convs = await loadArchiveAll({ staleOk: opts.staleOk !== false && !opts.force, window: requestedWindow });
       if (!Array.isArray(convs)) {
         _clientLog('[ARCHIVE-DIAG] refreshArchiveData keeping previous rows='
@@ -63505,36 +63512,36 @@
 
   const WHATS_NEW_FEATURES = [
     {
-      id: 'mobile-responsiveness-pass',
-      title: 'Mobile Responsiveness Pass',
-      date: 'Aug 10, 2026',
+      id: 'simple-mode-for-the-whole-fleet',
+      title: 'Simple Mode for the Whole Fleet',
+      date: 'Aug 28, 2026',
       tag: 'Mobile',
-      desc: '<p>The phone dashboard got a full responsiveness pass. Conversations now open <strong>~6× faster</strong> (worst main-thread block dropped from 2476ms to 395ms) by loading a 120-line window instead of 400 and skipping layout for offscreen rows.</p><p>The sidebar scrolls as <strong>one surface</strong> instead of trapping your finger in three separate panels, the new-session composer stops pushing its send button off-screen (selectors scroll horizontally), and the list chrome condenses so many more sessions fit on a phone screen.</p>',
-      mockup: '<div style="font-family:var(--mono,monospace);font-size:11px;line-height:1.7;color:#a6accd;padding:12px 14px;background:rgba(0,0,0,.25);border-radius:6px;border-left:3px solid #3dd68c;"><div style="display:flex;justify-content:space-between;gap:12px;"><span>Conversation open</span><span><span style="color:#f85149;text-decoration:line-through;opacity:0.6;">2476ms</span> &nbsp;→&nbsp; <span style="color:#3dd68c;">395ms</span></span></div><div style="display:flex;justify-content:space-between;gap:12px;"><span>Back navigation</span><span><span style="color:#f85149;text-decoration:line-through;opacity:0.6;">978ms</span> &nbsp;→&nbsp; <span style="color:#3dd68c;">221ms</span></span></div><div style="display:flex;justify-content:space-between;gap:12px;"><span>Initial window</span><span><span style="color:#f85149;text-decoration:line-through;opacity:0.6;">400 lines</span> &nbsp;→&nbsp; <span style="color:#3dd68c;">120 lines</span></span></div><div style="margin-top:6px;color:var(--text-muted);">Sidebar scrolls as one surface · send button stays on-screen</div></div>'
+      desc: '<p>CCC now has a plain-language phone home for the whole fleet: say what you need done, choose an agent, and scan <strong>Needs you</strong>, <strong>Working on it</strong>, and <strong>Finished</strong> without the usual orchestration vocabulary.</p><p>It includes direct answers to agent questions, visible engine badges, a clear Stop action, a project picker, task-reference copying, a Helpers screen, and mobile controls that stay on screen. Advanced mode is still one tap away.</p>',
+      mockup: '<div style="border:1px solid var(--border);border-radius:8px;padding:13px;background:var(--bg,#0d1117);font-size:11px;"><strong style="color:var(--text);">What do you want done?</strong><div style="margin:9px 0;padding:8px 10px;border:1px solid var(--border);border-radius:6px;color:var(--text-muted);">Finish the release notes…</div><div style="display:flex;gap:7px;flex-wrap:wrap;"><span style="padding:4px 7px;border-radius:999px;background:rgba(88,166,255,.16);color:#58a6ff;">Claude</span><span style="padding:4px 7px;border-radius:999px;background:rgba(61,214,140,.14);color:#3dd68c;">Codex</span><span style="padding:4px 7px;border-radius:999px;background:rgba(192,132,252,.14);color:#c084fc;">Kimi</span></div><div style="margin-top:12px;color:var(--text);">Needs you <span style="color:#f5a623;">● 2</span></div><div style="margin-top:5px;color:var(--text-muted);">Working on it · Finished</div></div>'
     },
     {
-      id: 'interrupt-approval-and-delivery-health',
-      title: 'Interrupt Approvals & Delivery Health',
-      date: 'Aug 10, 2026',
-      tag: 'Reliability',
-      desc: '<p>CCC no longer interrupts or kills a possibly-mid-turn session on its own. Automatic interrupt paths (Codex stalled-turn recovery, the idle reaper hitting a session with a tool still running) now file an <strong>approval ask</strong>, surfaced as a dashboard banner with Approve/Dismiss.</p><p>A new global <strong>delivery-health banner</strong> surfaces newly-lost WatchTower message receipts (read in-process, no <code>wt</code> subprocess), dismissible and durably acked across reloads. Plus fixes for Kimi/Devin queues wedging forever after a mid-turn crash and trashed sessions resurrecting for minutes after the click.</p>',
-      mockup: '<div style="border:1px solid rgba(248,81,73,.4);border-radius:8px;padding:12px 14px;background:rgba(248,81,73,0.06);font-size:11px;"><div style="color:#f85149;font-weight:600;text-transform:uppercase;letter-spacing:0.05em;margin-bottom:8px;">CCC wants to interrupt this session. Approve?</div><div style="color:var(--text);margin-bottom:10px;">Codex · stalled-turn recovery · a tool is still running</div><div style="display:flex;gap:8px;justify-content:flex-end;"><span style="padding:6px 12px;border:1px solid var(--border);border-radius:5px;color:var(--text-muted);">Dismiss</span><span style="padding:6px 12px;border-radius:5px;background:#f85149;color:white;">Approve interrupt</span></div></div>'
+      id: 'orchestration-that-shows-its-work',
+      title: 'Orchestration That Shows Its Work',
+      date: 'Aug 28, 2026',
+      tag: 'Orchestration',
+      desc: '<p>Delegate, Verify, Critique, and Check status are now one-tap playbooks in the conversation rail. Pick the execution tier, send a short task, and see the live lane map as agents fan out and land.</p><p>The session family is now real across engines: CCC recognizes Claude Tasks, Kimi Code Agent subagents, and Grok subagents, keeps the map rooted at the visible parent, and trashes descendants together instead of leaving orphans behind.</p>',
+      mockup: '<div style="font-family:var(--mono,monospace);font-size:11px;line-height:1.75;color:#a6accd;padding:12px 14px;background:rgba(0,0,0,.25);border-radius:6px;border-left:3px solid #c084fc;"><div style="color:var(--text);">Release v5.29 <span style="color:#c084fc;">● coordinating</span></div><div>&nbsp;├─ Delegate · Codex Terra <span style="color:#3dd68c;">✓ landed</span></div><div>&nbsp;├─ Verify · Claude <span style="color:#58a6ff;">● working</span></div><div>&nbsp;└─ Critique · Gemini <span style="color:#a6accd;">waiting</span></div><div style="margin-top:5px;color:var(--text-muted);">Delegate · Verify · Critique · Check status</div></div>'
     },
     {
-      id: 'throughput-cache-adjusted-ranking',
-      title: 'Cache-Adjusted Throughput',
-      date: 'Aug 10, 2026',
-      tag: 'Throughput',
-      desc: '<p>The status rail token headline now shows an <strong>aggregated cache-adjusted burn number</strong> (weighting cache writes/reads by model-specific list-price ratios) alongside the raw <code>in · in cached · out</code> breakdown.</p><p>The throughput sidebar adds <strong>1D, 2D, and 7D cache-adjusted session ranking</strong>, and the combined chart now draws a <strong>Kimi quota-utilization line</strong> (purple) next to the Claude and Codex series — all three engines\' weekly burn curves in one view.</p>',
-      mockup: '<div style="border:1px solid var(--border);border-radius:8px;padding:13px;background:var(--bg,#0d1117);font-size:11px;"><div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;"><strong style="color:var(--text);">Throughput · Combined</strong><span style="color:var(--text-muted);">7D cache-adjusted</span></div><div style="display:flex;gap:14px;align-items:center;padding:8px 0;"><span style="color:#58a6ff;">● Claude</span><span style="color:#60a5fa;">● Codex</span><span style="color:#c084fc;">● Kimi</span></div><div style="margin-top:6px;padding:8px 10px;border:1px solid var(--border);border-radius:6px;color:var(--text);">ctx 74k / 200k <span style="color:var(--text-muted);">(37%) · cache-adjusted</span></div></div>'
+      id: 'every-model-in-one-place',
+      title: 'Every Model in One Place',
+      date: 'Aug 28, 2026',
+      tag: 'Models',
+      desc: '<p>The model catalog is now useful when choosing where work should run: live pricing, plan limits, free tiers, multipliers, and promotions surface for Claude, Codex, OpenCode providers, Factory Droid, and Devin.</p><p>CCC also tracks three months of daily usage, cache-adjusted token burn, and Kimi quota alongside Claude and Codex, so the model picker and the cost picture finally agree.</p>',
+      mockup: '<div style="border:1px solid var(--border);border-radius:8px;padding:13px;background:var(--bg,#0d1117);font-size:11px;"><div style="display:flex;justify-content:space-between;color:var(--text);"><strong>Model catalog</strong><span style="color:var(--text-muted);">live rates</span></div><div style="display:flex;justify-content:space-between;margin-top:9px;"><span>Codex 5.6 Terra</span><span style="color:#3dd68c;">pricing + limits</span></div><div style="display:flex;justify-content:space-between;margin-top:6px;"><span>Devin / GLM 5.2</span><span style="color:#f5a623;">free tier</span></div><div style="display:flex;justify-content:space-between;margin-top:6px;"><span>OpenCode providers</span><span style="color:#58a6ff;">live catalog</span></div></div>'
     },
     {
-      id: 'liveness-and-system-status',
-      title: 'Rock-Solid Codex & System Status',
-      date: 'Jul 28, 2026',
-      tag: 'Reliability',
-      desc: '<p>The Codex app-server liveness probe no longer kills healthy bridges: it accepts real replies instead of demanding an envelope the app-server never sends, recent traffic counts as proof of life, and a running turn shields the bridge from replacement. No more WEDGED churn.</p><p>Upgrades now restart a stale execution worker automatically, the update modal opens itself once per version, and a new <strong>System status</strong> modal (Settings &rarr; Maintenance) shows every background process live.</p>',
-      mockup: '<div style="border:1px solid var(--border);border-radius:8px;padding:13px;background:var(--bg,#0d1117);font-size:11px;"><div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;"><strong style="color:var(--text);">System status</strong><span style="color:var(--text-muted);">Settings &rarr; Maintenance</span></div><div style="display:flex;justify-content:space-between;padding:6px 10px;border:1px solid var(--border);border-radius:6px;margin-bottom:6px;"><span style="color:var(--text);">Dashboard</span><span style="color:#3dd68c;">on &middot; v5.15.0</span></div><div style="display:flex;justify-content:space-between;padding:6px 10px;border:1px solid var(--border);border-radius:6px;margin-bottom:6px;"><span style="color:var(--text);">Execution worker</span><span style="color:#3dd68c;">on &middot; pid 27159</span></div><div style="display:flex;justify-content:space-between;padding:6px 10px;border:1px solid var(--border);border-radius:6px;"><span style="color:var(--text);">Codex app-server</span><span style="color:#3dd68c;">on &middot; misses 0/2</span></div></div>'
+      id: 'find-recent-work-fast',
+      title: 'Find Recent Work, Fast',
+      date: 'Aug 28, 2026',
+      tag: 'Search',
+      desc: '<p>Sidebar conversation search now looks through recent transcripts <strong>across every harness</strong>: Claude, Codex, Kimi, Gemini, and Cursor. It does this without sending each keystroke through a slow external process.</p><p>Results stay visible while the next query loads, repaint once rather than three times, and keep their complete corpus while you search. The sidebar also gained clearer row styles, readable wrapping, stronger active-row contrast, and fixed icon/title alignment.</p>',
+      mockup: '<div style="border:1px solid var(--border);border-radius:8px;padding:13px;background:var(--bg,#0d1117);font-size:11px;"><div style="padding:7px 9px;border:1px solid #58a6ff;border-radius:6px;color:var(--text);">⌕  release notes</div><div style="margin-top:9px;color:var(--text);">● Codex · Cut v5.29 <span style="color:#3dd68c;">matched</span></div><div style="margin-top:6px;color:var(--text);">● Kimi · Release copy <span style="color:#3dd68c;">matched</span></div><div style="margin-top:6px;color:var(--text-muted);">All harnesses · recent transcripts · no flicker</div></div>'
     },
     {
       id: 'engine-bridge-recovery',

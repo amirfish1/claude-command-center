@@ -60912,6 +60912,9 @@ _USAGE_SNAPSHOTS_FILE = COMMAND_CENTER_STATE_DIR / "usage" / "usage-snapshots.js
 _RESET_EVENTS_FILE = COMMAND_CENTER_STATE_DIR / "usage" / "reset-events.jsonl"
 
 _adopt_ccc_module("recall_usage")
+# Recent-session content search (all harnesses) — powers the sidebar search
+# via /api/search-recall-sessions, replacing the Total Recall subprocess.
+_adopt_ccc_module("recent_search")
 
 # ---------------------------------------------------------------------------
 # Global usage stats — aggregated across every transcript under PROJECTS_ROOT.
@@ -68246,9 +68249,11 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                     semantic=semantic,
                 ))
         elif path == "/api/search-recall-sessions":
-            # Optional Total Recall augmentation for the sidebar search.
-            # Returns only session-backed hits so the "Search conversations"
-            # field never turns into a document/knowledge search.
+            # Sidebar conversation search augmentation. Despite the legacy
+            # endpoint name this no longer shells out to the Total Recall CLI
+            # (8s-timeout subprocess per keystroke, claude-code/codex only);
+            # it scans recent transcripts across ALL harnesses in-process —
+            # sub-second warm, and Kimi/Gemini/Cursor sessions are findable.
             qs = urllib.parse.parse_qs(parsed.query)
             q = (qs.get("q", [""])[0] or "").strip()
             if not q:
@@ -68256,8 +68261,9 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
             else:
                 cwd_like = (qs.get("cwd", [""])[0] or "").strip() or None
                 limit_raw = (qs.get("limit", ["20"])[0] or "20").strip()
-                self.send_json(search_total_recall_sessions(
-                    q, limit=limit_raw, cwd_like=cwd_like,
+                days_raw = (qs.get("days", ["2"])[0] or "2").strip()
+                self.send_json(search_recent_sessions(
+                    q, days=days_raw, limit=limit_raw, cwd_like=cwd_like,
                 ))
         elif path == "/api/history/status":
             # Lay-of-the-land for the topbar pill: is the index file there,
