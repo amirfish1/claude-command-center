@@ -6480,6 +6480,29 @@ _CLAUDE_MODELS_OVERVIEW_URL = (
 )
 _CLAUDE_MODEL_CATALOG_FILE = COMMAND_CENTER_STATE_DIR / "claude-models.json"
 
+# Published Anthropic API pricing/limits (platform.claude.com models overview
+# + pricing docs). Anthropic aliases have no per-account entitlement concept
+# like Droid's CLI-scoped list or OpenCode's provider auth -- every alias
+# here is callable with any API key, so "available" is always true. Mirrors
+# _DROID_FACTORY_MODELS / opencode's per-model record shape so the three
+# curated engines (claude/droid/opencode) render through the same picker
+# columns (cost_tier, cost_summary, max_context/output tokens, reasoning
+# efforts). Update when Anthropic ships a new model or retires one --
+# cross-check against docs/en/about-claude/models/overview.md and
+# docs/en/about-claude/pricing.md.
+_CLAUDE_ANTHROPIC_MODELS = (
+    {"id": "claude-fable-5", "label": "Claude Fable 5", "cost_tier": 60.0, "cost_summary": "$10.00 in / 1M, $50.00 out / 1M", "max_context_tokens": 1000000, "max_output_tokens": 128000, "reasoning_efforts": ("low", "medium", "high", "xhigh", "max"), "default_reasoning_effort": "high"},
+    {"id": "claude-opus-5", "label": "Claude Opus 5", "cost_tier": 30.0, "cost_summary": "$5.00 in / 1M, $25.00 out / 1M", "max_context_tokens": 1000000, "max_output_tokens": 128000, "reasoning_efforts": ("low", "medium", "high", "xhigh", "max"), "default_reasoning_effort": "high"},
+    {"id": "claude-opus-4-8", "label": "Claude Opus 4.8", "cost_tier": 30.0, "cost_summary": "$5.00 in / 1M, $25.00 out / 1M", "max_context_tokens": 1000000, "max_output_tokens": 128000, "reasoning_efforts": ("low", "medium", "high", "xhigh", "max"), "default_reasoning_effort": "high"},
+    {"id": "claude-opus-4-7", "label": "Claude Opus 4.7", "cost_tier": 30.0, "cost_summary": "$5.00 in / 1M, $25.00 out / 1M", "max_context_tokens": 1000000, "max_output_tokens": 128000, "reasoning_efforts": ("low", "medium", "high", "xhigh", "max"), "default_reasoning_effort": "high"},
+    {"id": "claude-opus-4-6", "label": "Claude Opus 4.6", "cost_tier": 30.0, "cost_summary": "$5.00 in / 1M, $25.00 out / 1M", "max_context_tokens": 1000000, "max_output_tokens": 128000, "reasoning_efforts": ("low", "medium", "high", "max"), "default_reasoning_effort": "high"},
+    {"id": "claude-opus-4-5", "label": "Claude Opus 4.5", "cost_tier": 30.0, "cost_summary": "$5.00 in / 1M, $25.00 out / 1M", "max_context_tokens": 200000, "max_output_tokens": 64000, "reasoning_efforts": ("low", "medium", "high"), "default_reasoning_effort": "high"},
+    {"id": "claude-sonnet-5", "label": "Claude Sonnet 5", "cost_tier": 12.0, "cost_summary": "$2.00 in / 1M, $10.00 out / 1M", "max_context_tokens": 1000000, "max_output_tokens": 128000, "reasoning_efforts": ("low", "medium", "high", "xhigh", "max"), "default_reasoning_effort": "high"},
+    {"id": "claude-sonnet-4-6", "label": "Claude Sonnet 4.6", "cost_tier": 18.0, "cost_summary": "$3.00 in / 1M, $15.00 out / 1M", "max_context_tokens": 1000000, "max_output_tokens": 128000, "reasoning_efforts": ("low", "medium", "high", "max"), "default_reasoning_effort": "high"},
+    {"id": "claude-sonnet-4-5", "label": "Claude Sonnet 4.5", "cost_tier": 18.0, "cost_summary": "$3.00 in / 1M, $15.00 out / 1M", "max_context_tokens": 200000, "max_output_tokens": 64000, "reasoning_efforts": (), "default_reasoning_effort": None},
+    {"id": "claude-haiku-4-5", "label": "Claude Haiku 4.5", "cost_tier": 6.0, "cost_summary": "$1.00 in / 1M, $5.00 out / 1M", "max_context_tokens": 200000, "max_output_tokens": 64000, "reasoning_efforts": (), "default_reasoning_effort": None},
+)
+
 # Known typo/guess patterns for a model id that doesn't exist -- e.g. an
 # agent assuming codex model names always end in "-codex" (they don't; the
 # reported case was 'gpt-5.5-codex' when the real id is just 'gpt-5.5').
@@ -6726,6 +6749,38 @@ def _load_claude_model_catalog_records():
         row for row in rows
         if isinstance(row, dict) and _clean_spawn_default_model(row.get("id"))
     ]
+
+
+def _claude_model_catalog_records():
+    """Curated Anthropic catalog with pricing/limits (platform.claude.com docs).
+
+    Unlike Droid/OpenCode, an Anthropic API alias has no per-account
+    entitlement gate -- any API key can call any non-retired alias, and
+    Anthropic keeps a superseded alias (e.g. opus-4-5 after opus-5 ships)
+    callable for a long deprecation window rather than pulling it the
+    moment a newer one appears in the docs' "latest models" table. So
+    every curated row here is simply available; retire a row by deleting
+    it once Anthropic's model-deprecations page marks it retired."""
+    now = datetime.now(tz=timezone.utc).isoformat()
+    records = []
+    for row in _CLAUDE_ANTHROPIC_MODELS:
+        records.append({
+            "id": row["id"],
+            "label": row["label"],
+            "source": "anthropic-api-docs",
+            "available": True,
+            "cost_tier": row["cost_tier"],
+            "cost_summary": row["cost_summary"],
+            "max_context_tokens": row["max_context_tokens"],
+            "max_output_tokens": row["max_output_tokens"],
+            "reasoning_efforts": list(row["reasoning_efforts"]),
+            "default_reasoning_effort": row["default_reasoning_effort"],
+            "supports_vision": True,
+            "supports_tool_call": True,
+            "supports_reasoning": True,
+            "fetched_at": now,
+        })
+    return records
 
 
 def _refresh_claude_model_catalog():
@@ -6977,6 +7032,24 @@ def _build_engine_model_catalog(force_refresh=False):
             "_index": {},
         }
         if engine == "claude":
+            for row in _claude_model_catalog_records():
+                _model_catalog_add(
+                    catalog,
+                    "claude",
+                    row.get("id"),
+                    label=row.get("label"),
+                    source=row.get("source"),
+                    available=row.get("available"),
+                    cost_tier=row.get("cost_tier"),
+                    cost_summary=row.get("cost_summary"),
+                    max_context_tokens=row.get("max_context_tokens"),
+                    max_output_tokens=row.get("max_output_tokens"),
+                    reasoning_efforts=row.get("reasoning_efforts"),
+                    default_reasoning_effort=row.get("default_reasoning_effort"),
+                    supports_vision=row.get("supports_vision"),
+                    supports_tool_call=row.get("supports_tool_call"),
+                    supports_reasoning=row.get("supports_reasoning"),
+                )
             for row in _load_claude_model_catalog_records():
                 _model_catalog_add(
                     catalog,
