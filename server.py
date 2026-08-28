@@ -6181,7 +6181,7 @@ def _spawn_repo_context(cwd=None, repo_path=None):
     return {"repo_path": resolved, "cwd": str(p)}
 
 
-_ORCHESTRATION_SPAWN_ENGINES = ("claude", "codex", "cursor", "antigravity", "kilo", "opencode", "aider", "hermes", "kimi", "devin", "grok")
+_ORCHESTRATION_SPAWN_ENGINES = ("claude", "codex", "cursor", "antigravity", "kilo", "opencode", "aider", "hermes", "kimi", "devin", "droid", "grok")
 _ORCHESTRATION_SPAWN_ENGINE_ALIASES = {
     "claude": "claude",
     "claude-code": "claude",
@@ -6210,6 +6210,10 @@ _ORCHESTRATION_SPAWN_ENGINE_ALIASES = {
     "grok-build": "grok",
     "xai": "grok",
     "xai-grok": "grok",
+    "droid": "droid",
+    "factory-droid": "droid",
+    "factory_droid": "droid",
+    "factory": "droid",
     "devin": "devin",
     "devin-cli": "devin",
     "devin_cli": "devin",
@@ -6269,6 +6273,8 @@ def _spawn_fallback_model_for_engine(engine):
         return os.environ.get("CCC_GROK_MODEL", "grok-4.6")
     if engine == "devin":
         return os.environ.get("CCC_DEVIN_MODEL", "adaptive")
+    if engine == "droid":
+        return os.environ.get("CCC_DROID_MODEL", "claude-opus-5")
     return ""
 
 
@@ -6342,6 +6348,17 @@ _ENGINE_CURATED_MODELS = {
         {"id": "grok-4.6", "label": "Grok 4.6"},
         {"id": "grok-4.5", "label": "Grok 4.5"},
     ),
+    "droid": (
+        {"id": "claude-opus-5", "label": "Claude Opus 5"},
+        {"id": "claude-sonnet-5", "label": "Claude Sonnet 5"},
+        {"id": "gpt-5.4", "label": "GPT-5.4"},
+        {"id": "gemini-3.5-flash", "label": "Gemini 3.5 Flash"},
+        {"id": "grok-4.5", "label": "Grok 4.5"},
+        {"id": "glm-5.2", "label": "GLM-5.2"},
+        {"id": "deepseek-v4-pro", "label": "DeepSeek V4 Pro"},
+        {"id": "minimax-m3", "label": "MiniMax M3"},
+        {"id": "kimi-k3", "label": "Kimi K3"},
+    ),
     "devin": (
         {"id": "adaptive", "label": "Adaptive (default)"},
         {"id": "claude-opus-5", "label": "Claude Opus 5"},
@@ -6373,6 +6390,7 @@ _ENGINE_SUPPORTS_CUSTOM_MODELS = {
     "kimi": True,
     "grok": True,
     "devin": True,
+    "droid": True,
 }
 
 # Which effort ladder each engine actually accepts. Claude takes a top-level
@@ -6389,11 +6407,12 @@ _ENGINE_REASONING_EFFORTS = {
     # gpt-5-6-sol-low, etc.). The UI still shows the Claude ladder; at spawn
     # time the selected base model + effort are resolved to a concrete uid.
     "devin": CLAUDE_REASONING_EFFORTS,
+    "droid": ("none", "off", "minimal", "low", "medium", "high", "xhigh", "max"),
 }
 
 # Display order, cheap→expensive. Set membership is the contract; this is only
 # for listing a ladder back to a human or to a picker.
-_REASONING_EFFORT_ORDER = ("low", "medium", "high", "xhigh", "max")
+_REASONING_EFFORT_ORDER = ("none", "off", "minimal", "low", "medium", "high", "xhigh", "max")
 
 
 def _engine_reasoning_efforts(engine):
@@ -7075,6 +7094,35 @@ def _build_engine_model_catalog(force_refresh=False):
                 entitlement=row.get("entitlement"),
                 entitlement_summary=row.get("entitlement_summary"),
                 entitlement_source=row.get("entitlement_source"),
+            )
+    except Exception:
+        pass
+
+    # Droid's catalog is built from Factory's published model docs and cross-
+    # checked against the local Droid CLI. Factory uses usage multipliers, not
+    # per-token prices, and has a separate free Droid Core tier.
+    try:
+        for row in _droid_model_catalog_records():
+            _model_catalog_add(
+                catalog,
+                "droid",
+                row.get("id"),
+                label=row.get("label"),
+                source=row.get("source") or "droid-cli",
+                available=row.get("available"),
+                availability_reason=row.get("availability_reason"),
+                droid_core=row.get("droid_core"),
+                multiplier=row.get("multiplier"),
+                cost_tier=row.get("cost_tier"),
+                cost_summary=row.get("cost_summary"),
+                entitlement=row.get("entitlement"),
+                entitlement_summary=row.get("entitlement_summary"),
+                reasoning_efforts=row.get("reasoning_efforts"),
+                default_reasoning_effort=row.get("default_reasoning_effort"),
+                promotion_until=row.get("promotion_until"),
+                base_multiplier=row.get("base_multiplier"),
+                deprecated=row.get("deprecated"),
+                notes=row.get("notes"),
             )
     except Exception:
         pass
@@ -44605,6 +44653,8 @@ _adopt_ccc_module("grok")
 
 _adopt_ccc_module("devin")
 
+_adopt_ccc_module("droid")
+
 _adopt_ccc_module("vscode_copilot")
 
 # ---------------------------------------------------------------------------
@@ -70892,6 +70942,17 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                         )
                     elif engine == "devin":
                         result = spawn_session_devin(
+                            prompt,
+                            name=name,
+                            cwd=spawn_cwd,
+                            repo_path=payload.get("repo_path"),
+                            worktree=worktree_flag,
+                            model=model,
+                            parent_session_id=parent_session_id,
+                            reasoning_effort=reasoning_effort,
+                        )
+                    elif engine == "droid":
+                        result = spawn_session_droid(
                             prompt,
                             name=name,
                             cwd=spawn_cwd,

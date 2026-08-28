@@ -643,6 +643,8 @@ class EngineHost:
                 )
             if operation == "auto_handover_fire":
                 return legacy._fire_auto_handover_local(args.get("session_id"))
+        if engine == "droid" and operation == "spawn":
+            return legacy.spawn_session_droid(**args)
         raise ValueError(f"unsupported worker engine operation: {engine}.{operation}")
 
     def _track_async(self, work_id, engine, operation, args, result):
