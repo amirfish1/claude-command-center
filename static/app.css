@@ -5302,7 +5302,6 @@
     gap: 5px;
     min-width: 0;
     width: 100%;
-    padding-left: var(--conv-content-left);
     box-sizing: border-box;
   }
   .conv-summary-toggle {
