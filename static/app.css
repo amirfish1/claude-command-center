@@ -6268,8 +6268,6 @@
   .conv-evergreen-meta-row > .conv-goal,
   .conv-evergreen-meta-row > .conv-evergreen-state,
   .conv-evergreen-meta-row > .conv-row-meta,
-  .conv-evergreen-meta-row > .coo-status,
-  .conv-evergreen-meta-row > .coo-escalated,
   .conv-evergreen-meta-row > .conv-qc-badge,
   .conv-evergreen-meta-row > .conv-pct-badge,
   .conv-evergreen-agents-tree .conv-item.is-evergreen-agent-row .conv-main-row > .conv-row-end {
@@ -6304,8 +6302,6 @@
   .conv-evergreen-agents-tree .conv-item.is-evergreen-single-line .conv-evergreen-inline-badges > .conv-goal,
   .conv-evergreen-agents-tree .conv-item.is-evergreen-single-line .conv-evergreen-inline-badges > .conv-evergreen-state,
   .conv-evergreen-agents-tree .conv-item.is-evergreen-single-line .conv-evergreen-inline-badges > .conv-row-meta,
-  .conv-evergreen-agents-tree .conv-item.is-evergreen-single-line .conv-evergreen-inline-badges > .coo-status,
-  .conv-evergreen-agents-tree .conv-item.is-evergreen-single-line .conv-evergreen-inline-badges > .coo-escalated,
   .conv-evergreen-agents-tree .conv-item.is-evergreen-single-line .conv-evergreen-inline-badges > .conv-qc-badge,
   .conv-evergreen-agents-tree .conv-item.is-evergreen-single-line .conv-evergreen-inline-badges > .conv-pct-badge {
     display: inline-flex;
@@ -8400,7 +8396,6 @@
     #cccBreadcrumb .ccc-breadcrumb-size,
     #cccBreadcrumb .ccc-breadcrumb-popout,
     #cccBreadcrumb .ccc-proc-checked { display: none !important; }
-    #cccTopbar #cooPopButton,
     #cccTopbar #todayToggleBtn { display: none !important; }
     #cccBreadcrumb .ccc-breadcrumb-proc { order: 1; flex: 0 0 auto; }
     /* The "last ask" sticky uses full width with fewer boxes — drop the card
@@ -9405,73 +9400,6 @@
   .conv-item { position: relative; }
   .conv-item:hover .drag-handle { display: block; }
   .conv-item.dragging .drag-handle { cursor: grabbing; }
-
-  /* COO row layer — per-row tracking checkbox + escalated badge. Row-level
-     only: nothing here reorders or re-buckets a row. The checkbox sits in the
-     left of .conv-main-row as a stable flex item (constant margin so the
-     hover-only drag-handle never makes the row jump). Dimmed at rest so
-     resting rows stay quiet; full strength when checked or on row hover. */
-  .conv-item .coo-track {
-    flex: 0 0 auto;
-    display: inline-flex; align-items: center;
-    margin-left: 4px; margin-right: 1px;
-    cursor: pointer; opacity: 0.45; transition: opacity 0.12s;
-  }
-  .conv-item:hover .coo-track,
-  .conv-item.is-coo-tracked .coo-track { opacity: 1; }
-  .conv-item .coo-track-cb {
-    width: 13px; height: 13px; margin: 0;
-    cursor: pointer; accent-color: var(--purple);
-  }
-  /* Escalated badge — the COO bounced this tracked session back to you.
-     Amber/warn chrome, mirrors the small inline badge style (.conv-wt-badge /
-     .conv-history-badge) so it reads as row chrome, not a new section. */
-  .conv-item .coo-escalated {
-    display: inline-flex; align-items: center;
-    margin-left: 6px; padding: 1px 6px;
-    font-size: 9px; font-weight: 600; line-height: 1.5;
-    white-space: nowrap;
-    color: var(--warn, #d29922);
-    background: color-mix(in srgb, var(--warn, #d29922) 14%, transparent);
-    border: 1px solid color-mix(in srgb, var(--warn, #d29922) 40%, transparent);
-    border-radius: 3px; text-transform: uppercase; letter-spacing: 0.04em;
-    vertical-align: middle;
-  }
-  /* Live status chip — only rendered on COO-tracked rows. Mirrors the badge
-     chrome (small inline pill) and colours by the row's four-state label:
-     working=green, waiting=amber, idle=grey, ended=muted. */
-  .conv-item .coo-status {
-    display: inline-flex; align-items: center;
-    margin-left: 6px; padding: 1px 6px;
-    font-size: 9px; font-weight: 600; line-height: 1.5;
-    white-space: nowrap;
-    border-radius: 3px; text-transform: uppercase; letter-spacing: 0.04em;
-    vertical-align: middle;
-    color: var(--text-muted);
-    background: rgba(255, 255, 255, 0.05);
-    border: 1px solid rgba(255, 255, 255, 0.12);
-  }
-  .conv-item .coo-status.is-working {
-    color: var(--green, #3fb950);
-    background: color-mix(in srgb, var(--green, #3fb950) 13%, transparent);
-    border-color: color-mix(in srgb, var(--green, #3fb950) 38%, transparent);
-  }
-  .conv-item .coo-status.is-waiting {
-    color: var(--warn, #d29922);
-    background: color-mix(in srgb, var(--warn, #d29922) 14%, transparent);
-    border-color: color-mix(in srgb, var(--warn, #d29922) 40%, transparent);
-  }
-  .conv-item .coo-status.is-idle {
-    color: var(--text-muted);
-    background: rgba(255, 255, 255, 0.05);
-    border-color: rgba(255, 255, 255, 0.14);
-  }
-  .conv-item .coo-status.is-ended {
-    color: var(--text-muted);
-    opacity: 0.7;
-    background: rgba(255, 255, 255, 0.03);
-    border-color: rgba(255, 255, 255, 0.08);
-  }
 
   /* Current-goal chip (codex /goal). Reads like a soft second column after
      the title — truncates with ellipsis so it never pushes the row wider. */
@@ -24902,8 +24830,6 @@ body.ccc-mobile-redesign .conv-item > .mobile-status-line {
 }
 body.ccc-mobile-redesign .conv-item .conv-row-meta,
 body.ccc-mobile-redesign .conv-item .conv-hover-meta-row,
-body.ccc-mobile-redesign .conv-item .coo-status,
-body.ccc-mobile-redesign .conv-item .coo-escalated,
 body.ccc-mobile-redesign .conv-item .conv-history-badge,
 body.ccc-mobile-redesign .conv-item .conv-pct-badge,
 body.ccc-mobile-redesign .conv-item .conv-qc-badge,
@@ -24922,8 +24848,6 @@ body.ccc-mobile-redesign .conv-item .mobile-details-panel {
    which only targets the always-visible main-row copies). */
 body.ccc-mobile-redesign .conv-item .mobile-details-panel .conv-row-meta,
 body.ccc-mobile-redesign .conv-item .mobile-details-panel .conv-hover-meta-row,
-body.ccc-mobile-redesign .conv-item .mobile-details-panel .coo-status,
-body.ccc-mobile-redesign .conv-item .mobile-details-panel .coo-escalated,
 body.ccc-mobile-redesign .conv-item .mobile-details-panel .conv-history-badge,
 body.ccc-mobile-redesign .conv-item .mobile-details-panel .conv-pct-badge,
 body.ccc-mobile-redesign .conv-item .mobile-details-panel .conv-qc-badge,

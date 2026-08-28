@@ -67906,25 +67906,6 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                 self.send_header("Vary", "Accept-Encoding")
             self.end_headers()
             self.wfile.write(body)
-        elif path == "/coo" or path == "/coo-board.html":
-            # COO board — at-a-glance live status of the sessions you track.
-            # Narrow route (the generic static handler refuses arbitrary
-            # *.html), mirroring /throughput and /group-chat-live.html.
-            try:
-                body = (STATIC_DIR / "coo-board.html").read_bytes()
-            except OSError as e:
-                self.send_json({"error": "coo-board.html missing", "detail": str(e)}, 404)
-                return
-            body, enc = self._maybe_gzip(body, "text/html; charset=utf-8")
-            self.send_response(200)
-            self.send_header("Content-Type", "text/html; charset=utf-8")
-            self.send_header("Cache-Control", "no-store, must-revalidate")
-            self.send_header("Content-Length", str(len(body)))
-            if enc:
-                self.send_header("Content-Encoding", enc)
-                self.send_header("Vary", "Accept-Encoding")
-            self.end_headers()
-            self.wfile.write(body)
         elif path == "/group-chat-live.html":
             # Standalone group-chat live view. Keep this as a narrow route
             # instead of allowing arbitrary /static/*.html files.
@@ -68068,9 +68049,6 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
             self.send_json({
                 "version": __version__,
                 "morning": MORNING_ENABLED,
-                # COO board launcher. True when the board file is present, so
-                # the topbar button shows wherever the board ships.
-                "coo": (STATIC_DIR / "coo-board.html").exists(),
                 # Third-party Claude Code plugins that ship their own local
                 # dashboard server. Detected by their state-dir marker so the
                 # settings menu only offers a launcher when installed.
@@ -69197,47 +69175,6 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
             payload, status = _federation_handle_post(path, data, self)
             if payload is not None:
                 self.send_json(payload, status)
-            return
-
-        if path == "/api/coo/tracked":
-            # Persist the COO row-checkbox tracked-set into the shared
-            # coo-notes.json sidecar as a TOP-LEVEL "tracked" array, so a shell
-            # Monitor and the /api/sessions/events SSE stream can key off the
-            # same source of truth as the browser checkboxes. Read-modify-write
-            # so the COO's own keys (swept_global / seed / cards) are preserved.
-            # Same-origin already enforced by do_POST's _check_same_origin.
-            try:
-                content_len = int(self.headers.get("Content-Length", 0) or 0)
-                body = self.rfile.read(content_len) if content_len else b""
-                data = json.loads(body) if body else {}
-                tracked = data.get("tracked", [])
-                if not isinstance(tracked, list):
-                    self.send_json({"error": "tracked must be a list of session ids"}, 400)
-                    return
-                # Unique, order-preserving, strings only.
-                seen = set()
-                clean = []
-                for s in tracked:
-                    if isinstance(s, str) and s and s not in seen:
-                        seen.add(s)
-                        clean.append(s)
-                notes_file = STATIC_DIR / "coo-notes.json"
-                existing = {}
-                try:
-                    if notes_file.exists():
-                        existing = json.loads(notes_file.read_text()) or {}
-                        if not isinstance(existing, dict):
-                            existing = {}
-                except (OSError, ValueError):
-                    existing = {}
-                existing["tracked"] = clean
-                # Atomic write so a concurrent reader never sees a half-file.
-                tmp = notes_file.with_suffix(".json.tmp")
-                tmp.write_text(json.dumps(existing, indent=1) + "\n")
-                tmp.replace(notes_file)
-                self.send_json({"ok": True, "count": len(clean)})
-            except Exception as e:
-                self.send_json({"error": str(e)}, 400)
             return
 
         if path.startswith("/api/objects/"):

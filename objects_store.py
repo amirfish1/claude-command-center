@@ -10,9 +10,8 @@ arranging "what I have to do today" (see docs/objects-day-view-tracker.md,
 GOAL-3 / GOAL-4).
 
 This module mirrors that client state to a single JSON file in the CCC state
-dir, exactly the way COO tracking mirrors to ``coo-notes.json``: one small file,
-atomic temp-file + ``os.replace`` write, missing/corrupt file degrades to empty
-state instead of throwing.
+dir: one small file, atomic temp-file + ``os.replace`` write, missing/corrupt
+file degrades to empty state instead of throwing.
 
 Storage file: ``~/.claude/command-center/objects.json`` (override with
 ``CCC_OBJECTS_FILE`` or the ``CCC_STATE_DIR`` env var — tests point both at a

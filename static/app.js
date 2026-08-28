@@ -24046,103 +24046,6 @@
     renderTodayTray();
   }
 
-  // ── COO row layer (row-level only — never moves/reorders rows) ──────────
-  // (1) A per-row checkbox = "COO is tracking this session". Membership lives
-  //     in localStorage under 'ccc-coo-tracked', keyed by session_id. Toggling
-  //     it must NOT re-render or re-sort — the click handler flips one class.
-  //     NOT used as a sort/group key anywhere, so a checked row stays put.
-  const COO_TRACKED_KEY = 'ccc-coo-tracked';
-  const COO_MODE_KEY = 'ccc-coo-mode';
-  let _cooTrackedSet = null;       // in-memory cache - O(1) per-row reads
-  function isCooModeOn() {
-    try { return localStorage.getItem(COO_MODE_KEY) === '1'; }
-    catch (_) { return false; }
-  }
-  function getCooTrackedSet() {
-    if (_cooTrackedSet) return _cooTrackedSet;
-    try {
-      const raw = localStorage.getItem(COO_TRACKED_KEY);
-      const arr = raw ? JSON.parse(raw) : [];
-      _cooTrackedSet = new Set(Array.isArray(arr) ? arr.filter(x => typeof x === 'string') : []);
-    } catch (_) { _cooTrackedSet = new Set(); }
-    return _cooTrackedSet;
-  }
-  function _persistCooTracked(set) {
-    const arr = Array.from(set || []);
-    // localStorage is the instant-UI source of truth (synchronous, no row
-    // re-render needed). Mirror the full set to the server so coo-notes.json
-    // .tracked stays in sync — a shell Monitor and the /api/sessions/events
-    // SSE stream both read that file. Fire-and-forget: never block the toggle
-    // or surface an error to the user.
-    try { localStorage.setItem(COO_TRACKED_KEY, JSON.stringify(arr)); } catch (_) {}
-    try {
-      fetch('/api/coo/tracked', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ tracked: arr }),
-        keepalive: true,
-      }).catch(() => {});
-    } catch (_) {}
-  }
-  function toggleCooTracked(sid, on) {
-    if (!sid) return false;
-    const set = getCooTrackedSet();
-    if (on) set.add(sid); else set.delete(sid);
-    _persistCooTracked(set);
-    return on;
-  }
-
-  // (2) A per-row "escalated to you" badge. The COO writes the marker into the
-  //     SAME sidecar it already owns — static/coo-notes.json — by setting
-  //     cards[session_id].escalated (truthy; may be { reason, ts }). The list
-  //     reads it; the COO writes it. One file, one source of truth.
-  let _cooEscalatedMap = {};       // session_id -> { reason, ts } | true
-  let _cooEscalatedLoaded = false;
-  function getCooEscalated(sid) {
-    return sid ? _cooEscalatedMap[sid] : null;
-  }
-  function loadCooEscalated(opts) {
-    const force = !!(opts && opts.force);
-    if (_cooEscalatedLoaded && !force) return Promise.resolve(_cooEscalatedMap);
-    _cooEscalatedLoaded = true;
-    return fetch('/static/coo-notes.json?t=' + Date.now())
-      .then(r => (r.ok ? r.json() : { cards: {} }))
-      .then(j => {
-        // Seed the tracked-set from the server ONLY on a fresh browser (no
-        // local value yet) so a new client inherits the COO's tracked set.
-        // Never overwrite an existing local value — the user's own toggles
-        // win, and _persistCooTracked already mirrors them back to the server.
-        try {
-          if (localStorage.getItem(COO_TRACKED_KEY) === null
-              && Array.isArray(j && j.tracked) && j.tracked.length) {
-            const seed = j.tracked.filter(x => typeof x === 'string' && x);
-            localStorage.setItem(COO_TRACKED_KEY, JSON.stringify(seed));
-            _cooTrackedSet = new Set(seed);
-          }
-        } catch (_) {}
-        const cards = (j && j.cards) || {};
-        const next = {};
-        Object.keys(cards).forEach(sid => {
-          const esc = cards[sid] && cards[sid].escalated;
-          if (esc) next[sid] = (typeof esc === 'object') ? esc : { };
-        });
-        const changed = JSON.stringify(Object.keys(next).sort()) !== JSON.stringify(Object.keys(_cooEscalatedMap).sort());
-        _cooEscalatedMap = next;
-        if (changed) {
-          try { renderArchiveList(document.getElementById('convSearch')?.value || '', { force: true }); } catch (_) {}
-        }
-        return _cooEscalatedMap;
-      })
-      .catch(() => _cooEscalatedMap);
-  }
-  function rerenderConversationListForCooMode() {
-    try { renderArchiveList(document.getElementById('convSearch')?.value || '', { force: true }); } catch (_) {}
-  }
-  window.addEventListener('ccc-coo-mode-changed', rerenderConversationListForCooMode);
-  window.addEventListener('storage', (ev) => {
-    if (ev && ev.key === COO_MODE_KEY) rerenderConversationListForCooMode();
-  });
-
   function renderTodayTray() {
     const tray = document.getElementById('todayTray');
     const body = document.getElementById('todayTrayBody');
@@ -24658,7 +24561,6 @@
     '[data-role="detach-subsession"]',
     '[data-role="unpin-repo"]',
     '[data-role="conv-pct-compact"]',
-    '[data-role="coo-track-wrap"]',
     '[data-role="nya-collapse"]',
     '[data-role="subagent-cluster-toggle"]',
     '[data-role="move-lane"]',
@@ -30846,7 +30748,7 @@
   // text for the structural signature, and exec() can lift the fresh text for
   // in-place patching. Leaf spans (no nested tags), so [^<]* for the inner text
   // is safe.
-  const _VOLATILE_TIME_RE = /(<span class="[^"]*\b(?:conv-rel|conv-ingroupchat-row-when|conv-ingroupchat-participant-when|conv-repeat-group-rel|conv-subagent-completed-age|coo-status-age|cepw-age|cewf-age)\b[^"]*"[^>]*>)([^<]*)(<\/span>)/g;
+  const _VOLATILE_TIME_RE = /(<span class="[^"]*\b(?:conv-rel|conv-ingroupchat-row-when|conv-ingroupchat-participant-when|conv-repeat-group-rel|conv-subagent-completed-age|cepw-age|cewf-age)\b[^"]*"[^>]*>)([^<]*)(<\/span>)/g;
 
   // The live activity slot (.conv-status-slot) holds the live-tool indicator
   // ("Reading file…" / "Bash command…", with an in-flight class) and the
@@ -30901,7 +30803,7 @@
       }
     };
     _patchByOrder(_VOLATILE_TIME_RE, 2,
-      'span.conv-rel, span.conv-ingroupchat-row-when, span.conv-ingroupchat-participant-when, span.conv-repeat-group-rel, span.conv-subagent-completed-age, span.coo-status-age, span.cepw-age, span.cewf-age');
+      'span.conv-rel, span.conv-ingroupchat-row-when, span.conv-ingroupchat-participant-when, span.conv-repeat-group-rel, span.conv-subagent-completed-age, span.cepw-age, span.cewf-age');
     _patchByOrder(_VOLATILE_STATUS_RE, 2, 'span.conv-status-slot');
     const pctVals = [];
     let pm;
@@ -32349,58 +32251,6 @@
         : '';
       const rowRepoAttr = escapeAttr(rowRepoPath(c) || '');
 
-      // COO row layer — checkbox (tracking) + escalated badge. Row-level only:
-      // neither value reorders or re-buckets the row, so a checked/escalated
-      // row stays exactly where it is. Reads are O(1) (memoised set + map).
-      const _cooSid = c.session_id || c.id;
-      const _cooTracked = getCooTrackedSet().has(_cooSid);
-      const _cooEsc = getCooEscalated(_cooSid);
-      const cooTrackHtml = isCooModeOn()
-        ? '<label class="coo-track" title="'
-          + (_cooTracked ? 'COO is tracking this session - click to stop' : 'Track with COO')
-          + '" data-role="coo-track-wrap">'
-          + '<input type="checkbox" class="coo-track-cb" data-role="coo-track"'
-          + (_cooTracked ? ' checked' : '') + ' aria-label="COO tracking"></label>'
-        : '';
-      let cooEscalatedHtml = '';
-      if (_cooEsc) {
-        const _escReason = (_cooEsc && _cooEsc.reason) ? String(_cooEsc.reason) : '';
-        const _escTip = _escReason
-          ? 'COO escalated to you: ' + _escReason
-          : 'COO couldn’t clear this - escalated to you';
-        cooEscalatedHtml = '<span class="coo-escalated" title="'
-          + escapeAttr(_escTip) + '">↑ escalated</span>';
-      }
-      // Live status chip — only on COO-tracked rows. Reuses the row's own
-      // four-state label (c.state: working/idle/waiting/ended, stamped
-      // server-side) + the existing relative-age string. No per-row work, so
-      // it auto-refreshes on the same data cycle as the rest of the row.
-      let cooStatusHtml = '';
-      if (_cooTracked) {
-        const _cs = c.state || (c.is_live ? 'idle' : 'ended');
-        const _stateCls = _cs === 'working' ? ' is-working'
-          : _cs === 'waiting' ? ' is-waiting'
-          : _cs === 'ended' ? ' is-ended'
-          : ' is-idle';
-        // working/idle get an age suffix; waiting/ended read on their own.
-        // The age is wrapped in its own span so it can be patched in place
-        // without treating the whole COO status chip as volatile (state changes
-        // are rare and should still trigger a real rebuild).
-        const _showAge = (_cs === 'working' || _cs === 'idle') && rel;
-        const _cooStatusTip = "COO status from Command Center's COO tracker. "
-          + (_cs === 'working' ? 'The tracked session is currently working.'
-            : _cs === 'waiting' ? 'The tracked session is waiting for input.'
-            : _cs === 'ended' ? 'The tracked session is no longer live.'
-            : 'The tracked session is live but not currently working.');
-        cooStatusHtml = '<span class="coo-status' + _stateCls
-          + '" title="' + escapeAttr(_cooStatusTip)
-          + '" aria-label="' + escapeAttr(_cooStatusTip) + '">'
-          + escapeHtml('COO · ' + _cs)
-          + (_showAge ? '<span class="coo-status-age"> · ' + escapeHtml(rel) + '</span>' : '')
-          + '</span>';
-      }
-      const cooTrackedRowClass = _cooTracked ? ' is-coo-tracked' : '';
-
       // CCC-182: blinking in-row "needs you" marker. Replaces the old "Needs
       // you" section — a waiting session now stays in its project group and
       // just blinks here, so rows no longer jump categories as turns pause /
@@ -32426,8 +32276,6 @@
         + uxFixesQueueProgressHtml
         + evergreenStateHtml
         + rowMetaHtml
-        + cooStatusHtml
-        + cooEscalatedHtml
         + (qcBadgeHtml || '')
         + (lifetimeTokensHtml || '')
         + (pctBadgeHtml || '');
@@ -32497,7 +32345,7 @@
       if (isMobileChromeActive()) {
         const _mStatus = deriveMobileRowStatus(c, _isAgentRunning, _isWaitingForUser, _hasStaleToolCall, _knownActivityTool);
         mobileStatusHtml = mobileCardStatusLineHtml(_mStatus);
-        const _detailInner = rowMetaHtml + hoverMetaRowHtml + cooStatusHtml + cooEscalatedHtml
+        const _detailInner = rowMetaHtml + hoverMetaRowHtml
           + historyBadgeHtml + repoBadgeHtml + orchChildBadgeHtml + pctBadgeHtml + qcBadgeHtml
           + (opts.evergreenAgent ? '' : evergreenGoalHtml)
           + (goalIconOnly ? goalIconHtml : '');
@@ -32507,14 +32355,13 @@
         }
       }
 
-      return '<div class="conv-item' + active + _ctxLevelClass + cooTrackedRowClass + needsYouRowClass + groupedRowClass + evergreenRowClass + evergreenSingleLineClass + currentChildRowClass + subagentCompactClass + subagentBridgeClass + (isCodexRow ? ' is-codex' : '') + (isGeminiRow ? ' is-gemini' : '') + (isCursorRow ? ' is-cursor' : '') + (isAntigravityRow ? ' is-antigravity' : '') + (isHermesRow ? ' is-hermes' : '') + (c.pinned && lifecycleContext !== 'trash' ? ' is-pinned' : '') + (c.archived ? ' is-archived-row' : '') + (c.pinned_repo ? ' is-repo-pinned' : '') + (c._historyMatch ? ' is-history-match' : '') + (_historyIsSemantic ? ' is-semantic-match' : '') + (_historyIsRecall ? ' is-recall-match' : '') + ((c.backlog_type === 'github' || isGithubPrRow) ? ' is-github-issue' : '') + (_briefOpen ? ' is-brief-open' : '') + '"' + currentChildStyle + ' draggable="' + rowDraggableAttr() + '" data-id="' + c.id + '" data-session-id="' + escapeHtml(c.session_id || c.id) + '" data-repo-path="' + rowRepoAttr + '">'
+      return '<div class="conv-item' + active + _ctxLevelClass + needsYouRowClass + groupedRowClass + evergreenRowClass + evergreenSingleLineClass + currentChildRowClass + subagentCompactClass + subagentBridgeClass + (isCodexRow ? ' is-codex' : '') + (isGeminiRow ? ' is-gemini' : '') + (isCursorRow ? ' is-cursor' : '') + (isAntigravityRow ? ' is-antigravity' : '') + (isHermesRow ? ' is-hermes' : '') + (c.pinned && lifecycleContext !== 'trash' ? ' is-pinned' : '') + (c.archived ? ' is-archived-row' : '') + (c.pinned_repo ? ' is-repo-pinned' : '') + (c._historyMatch ? ' is-history-match' : '') + (_historyIsSemantic ? ' is-semantic-match' : '') + (_historyIsRecall ? ' is-recall-match' : '') + ((c.backlog_type === 'github' || isGithubPrRow) ? ' is-github-issue' : '') + (_briefOpen ? ' is-brief-open' : '') + '"' + currentChildStyle + ' draggable="' + rowDraggableAttr() + '" data-id="' + c.id + '" data-session-id="' + escapeHtml(c.session_id || c.id) + '" data-repo-path="' + rowRepoAttr + '">'
         + '<span class="drag-handle" data-role="drag">&#10495;</span>'
         + mobileStatusHtml
         + '<div class="conv-title-row">'
             + '<div class="conv-main-row">'
             + sessionIconHtml
             + _nyaChevronHtml
-            + cooTrackHtml
             + needsYouHtml
             + workingDotHtml
             + '<div class="conv-title ' + titleClass + '" data-role="title" aria-label="' + escapeAttr(title) + '">' + escapeHtml(title) + '</div>'
@@ -32529,8 +32376,6 @@
             + repoBadgeHtml
             + emptySessionChipHtml
             + (opts.evergreenAgent ? '' : rowMetaHtml)
-            + (opts.evergreenAgent ? '' : cooStatusHtml)
-            + (opts.evergreenAgent ? '' : cooEscalatedHtml)
             // Context-utilized % sits just left of the elapsed-time slot, in the
             // always-visible main row (not the hover row) — it's important enough
             // to read at a glance without hovering. (CCC-294, refines CCC-289)
@@ -36966,26 +36811,6 @@
       badge.addEventListener('click', runCompact);
       badge.addEventListener('keydown', (ev) => {
         if (ev.key === 'Enter' || ev.key === ' ') runCompact(ev);
-      });
-    });
-    // COO tracking checkbox. Toggle membership in the persisted tracked-set
-    // and flip the row's class IN PLACE — no re-render, no re-sort — so the
-    // row never jumps when you check it. stopPropagation keeps the row's own
-    // click (open conversation) from firing.
-    $convList.querySelectorAll('[data-role="coo-track"]').forEach(cb => {
-      cb.addEventListener('click', (ev) => { ev.stopPropagation(); });
-      cb.addEventListener('change', (ev) => {
-        ev.stopPropagation();
-        const item = cb.closest('.conv-item');
-        const sid = item && item.dataset.sessionId;
-        if (!sid) return;
-        const on = !!cb.checked;
-        toggleCooTracked(sid, on);
-        if (item) {
-          item.classList.toggle('is-coo-tracked', on);
-          const wrap = cb.closest('.coo-track');
-          if (wrap) wrap.title = on ? 'COO is tracking this session - click to stop' : 'Track with COO';
-        }
       });
     });
     // Unpin-repo button on rows whose folder bucket the user pinned.
@@ -56725,12 +56550,6 @@
       _moveToHome('statsBtn',          $settingsSlot);
       _moveToHome('todayToggleBtn',    $settingsSlot);
       _moveToHome('annotationNotesBtn', $settingsSlot);
-      _moveToHome('cooPopButton',      $settingsSlot);
-      if (window.MutationObserver) {
-        const cooMoveObserver = new MutationObserver(() => _moveToHome('cooPopButton', $settingsSlot));
-        cooMoveObserver.observe(document.body, { childList: true, subtree: true });
-        setTimeout(() => cooMoveObserver.disconnect(), 8000);
-      }
       // Clicking any launcher/action item in the Tools slot closes the
       // settings modal — except the A-/A+ font stepper (not actually
       // homed in this slot, but guarded defensively) which must stay
@@ -59911,9 +59730,6 @@
         if (typeof window.__cccRenderThroughputActivity === 'function') {
           window.__cccRenderThroughputActivity();
         }
-        // Re-poll COO escalated markers on each data refresh so newly-bounced
-        // sessions surface their badge without a manual reload.
-        loadCooEscalated({ force: true });
         setTimeout(() => {
           _hydrateArchiveSideData();
           _hydrateArchivePrData();
@@ -60039,9 +59855,6 @@
   function renderArchiveList(filter, opts) {
     const $list = document.getElementById('convList');
     if (!$list) return;
-    // Lazily pull the COO escalated-markers sidecar once; it re-renders itself
-    // (force) if the marker set changed, so badges appear without polling here.
-    loadCooEscalated();
     if (_renameInProgress) return;
     if (deferSidebarRenderIfDragging()) return;
     if (!(opts && opts.force) && !pendingSpawns.size && shouldPauseSidebarRender()) { _sidebarRenderPendingWhilePaused = true; return; }

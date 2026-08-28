@@ -212,7 +212,6 @@ it wrong publicly.
 | Pkood integration | `/api/pkood/*` | Experimental | None | High | NOT public |
 | Scheduled / cron agent jobs | none (manifest lists as planned) | Planned | None | High | NEVER claim. Periodic triggers are internal pollers, not user cron. |
 | Car mode / voice operator | `ccc-voice/` gitignored; launcher UI public | Private-only | None | High | NEVER in public copy. Public installs cannot use it. |
-| COO board sidecar | `static/coo-notes.json` gitignored | Private-only | None | High | NEVER in public copy |
 
 ### Site claims to retire or fix (found during audit, 2026-07-10; item 6 added 2026-07-18)
 

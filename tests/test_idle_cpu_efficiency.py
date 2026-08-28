@@ -7,7 +7,6 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 APP_CSS = (ROOT / "static" / "app.css").read_text(encoding="utf-8")
 APP_JS = (ROOT / "static" / "app.js").read_text(encoding="utf-8")
-COO_BOARD = (ROOT / "static" / "coo-board.html").read_text(encoding="utf-8")
 THROUGHPUT = (ROOT / "static" / "throughput.html").read_text(encoding="utf-8")
 
 
@@ -86,6 +85,4 @@ def test_ship_status_reuses_completed_responses_but_live_actions_force_refresh()
 def test_ccc_owned_archive_callers_avoid_duplicate_compatibility_payloads():
     projected_url = "/api/conversations/list?window=all&stale_ok=1"
     assert projected_url in APP_JS
-    assert COO_BOARD.count(projected_url) == 2
-    assert "/api/sessions?all=1" not in COO_BOARD
     assert "/api/conversations?all=1&compact=1&" in THROUGHPUT

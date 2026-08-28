@@ -2057,19 +2057,6 @@ class TestServerImports(unittest.TestCase):
         self.assertIn("restoreObjectTitleChip(finalTitle);", fn_body)
         self.assertNotIn("renderArchiveList(document.getElementById('convSearch')?.value || '');", fn_body)
 
-    def test_coo_tracking_checkboxes_are_coo_mode_only(self):
-        """The per-row COO tracking checkbox should stay hidden unless the
-        user has opened/enabled COO mode."""
-        app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
-        coo_button_js = pathlib.Path(PROJECT_ROOT, "static", "coo-button.js").read_text(encoding="utf-8")
-
-        self.assertIn("const COO_MODE_KEY = 'ccc-coo-mode';", app_js)
-        self.assertIn("function isCooModeOn()", app_js)
-        self.assertIn("const cooTrackHtml = isCooModeOn()", app_js)
-        self.assertIn('localStorage.setItem("ccc-coo-mode", "1")', coo_button_js)
-        self.assertIn('window.dispatchEvent(new Event("ccc-coo-mode-changed"))', coo_button_js)
-        self.assertIn("window.addEventListener('ccc-coo-mode-changed'", app_js)
-
     def test_by_object_headers_have_named_collapse_control(self):
         """Object groups should expose a visible, accessible collapse/expand
         control on each object header."""
@@ -2908,7 +2895,6 @@ class TestServerImports(unittest.TestCase):
 
         self.assertIn("const summaryActionBtn = _hasSummaryDetails", app_js)
         self.assertIn("wakeBtn + summaryActionBtn + mergeBtn", app_js)
-        self.assertNotIn("+ summaryToggleHtml\n            + cooTrackHtml", app_js)
         self.assertIn(".conv-row-actions .conv-summary-toggle", app_css)
         self.assertIn("width: 20px;", app_css[app_css.index(".conv-row-actions .conv-summary-toggle"):])
 
@@ -3076,15 +3062,6 @@ class TestServerImports(unittest.TestCase):
         # button; the invariant is still "no absolute overlay".
         self.assertIn(".status-rail-close {\n    flex: 0 0 auto;", app_css)
         self.assertNotIn(".status-rail-close {\n    position: absolute;", app_css)
-
-    def test_coo_status_pill_names_its_source(self):
-        """The COO activity badge should explain what creates the status."""
-        app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
-
-        self.assertIn("escapeHtml('COO · ' + _cs)", app_js)
-        self.assertIn("<span class=\"coo-status-age\">", app_js)
-        self.assertIn("COO status from Command Center's COO tracker", app_js)
-        self.assertIn("aria-label=\"' + escapeAttr(_cooStatusTip) + '\"", app_js)
 
     def test_stale_sidecar_does_not_count_as_live(self):
         """A Claude liveness sidecar only counts while fresh. The hooks never
@@ -5772,8 +5749,6 @@ class TestServerImports(unittest.TestCase):
 
         self.assertIn("_moveToHome('todayToggleBtn',    $settingsSlot);", app_js)
         self.assertIn("_moveToHome('annotationNotesBtn', $settingsSlot);", app_js)
-        self.assertIn("_moveToHome('cooPopButton',      $settingsSlot);", app_js)
-        self.assertIn("cooMoveObserver.observe(document.body, { childList: true, subtree: true });", app_js)
         self.assertNotIn("_captureRailEl(document.getElementById('cccBreadcrumb'));", app_js)
         self.assertIn("_captureRailEl(document.getElementById('convStatus'));", app_js)
         self.assertIn("_captureRailEl(document.getElementById('topbarTtsControl'));", app_js)
