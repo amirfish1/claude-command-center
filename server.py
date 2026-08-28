@@ -12429,6 +12429,8 @@ def _rehydrate_archive_cached_rows(rows):
                 spawn_parent_id = _parent_session_id_from_transcript_return_address(
                     row.get("jsonl_path")
                 )
+            if not spawn_parent_id:
+                spawn_parent_id = str(_session_graph.parent_of(sid) or "").strip()
             if spawn_parent_id:
                 row["parent_session_id"] = spawn_parent_id
             else:
@@ -18295,11 +18297,14 @@ def _find_descendant_sessions(sid, max_depth=6):
 #   4. Codex thread registry (codex-thread-registry.json) — source: "codex-thread-registry"
 #   5. Claude Task-tool agent-*.jsonl transcripts — source: "claude-task-tool"
 #   6. Kimi Code Agent subagents (agents/<name>/wire.jsonl) — source: "kimi-subagent"
+#   7. Grok Build subagents (sessions/<parent>/subagents/<child>/meta.json)
+#      — source: "grok-subagent" (real resumable child sessions)
 #
-# Edges are added eagerly at startup (sources 1-4) and lazily on first
-# family_tree() query for sources 5-6 (filesystem glob, cached). New CCC
-# spawns add their edge immediately via add_edge() called from
-# _record_spawn_to_registry.
+# Edges are added eagerly at startup (sources 1-4, 7) and lazily on first
+# family_tree() query for sources 5-6 (filesystem glob, cached). Source 7
+# is also refreshed on the Codex 30s loop and on family_tree() so a live
+# spawn_subagent appears without a restart. New CCC spawns add their edge
+# immediately via add_edge() called from _record_spawn_to_registry.
 #
 # The graph is engine-agnostic: it stores parent_sid -> child_sid with
 # per-edge metadata ({source, engine, resumable, name, model}). The
@@ -18637,6 +18642,12 @@ def _session_graph_build_from_all_sources():
     except Exception:
         pass
 
+    # 5. Grok Build native subagents (on-disk meta.json under the parent)
+    try:
+        _session_graph_ingest_grok_subagents()
+    except Exception:
+        pass
+
     _session_graph.save()
 
 
@@ -18720,6 +18731,39 @@ def _session_graph_enrich_kimi_subagents(parent_sid):
     _session_graph.save()
 
 
+def _session_graph_ingest_grok_subagents():
+    """Add parent->child edges from Grok Build ``subagents/*/meta.json``.
+
+    Unlike Kimi's synthetic ``kimi-subagent:`` child ids, Grok children are
+    real session UUIDs (resumable). Native ``spawn_subagent`` never goes
+    through CCC's spawn registry, so this on-disk map is the only parent
+    pointer. Cheap: one extra dir walk of ``~/.grok/sessions``.
+    """
+    try:
+        mapping = _grok_subagent_parent_map()
+    except Exception:
+        return 0
+    added = 0
+    for child, link in mapping.items():
+        if not isinstance(link, dict):
+            continue
+        parent = str(link.get("parent") or "").strip()
+        child_id = str(child or "").strip()
+        if not parent or not child_id or parent == child_id:
+            continue
+        if _session_graph.parent_of(child_id) == parent:
+            continue
+        _session_graph.add_edge(
+            parent, child_id,
+            source="grok-subagent", engine="grok", resumable=True,
+            name=link.get("name") or "",
+        )
+        added += 1
+    if added:
+        _session_graph.save()
+    return added
+
+
 def _session_graph_family_tree(sid):
     """Return the family tree for ``sid``, with Claude Task-tool and Kimi
     Code Agent subagent enrichment.
@@ -18747,6 +18791,10 @@ def _session_graph_family_tree(sid):
         _session_graph_enrich_kimi_subagents(ancestor)
     for descendant in _session_graph.descendants(sid):
         _session_graph_enrich_kimi_subagents(descendant)
+    # Grok Build spawn_subagent children are real sessions with a pointer
+    # under the parent dir. Ingest the full on-disk map so nested children
+    # (a subagent that spawned its own subagent) show up in one pass.
+    _session_graph_ingest_grok_subagents()
     return _session_graph.family_tree(sid)
 
 
@@ -18764,6 +18812,10 @@ def _session_graph_codex_refresh_loop():
                     parent, child, source="codex-native", engine="codex",
                 )
             _session_graph.save()
+        except Exception:
+            pass
+        try:
+            _session_graph_ingest_grok_subagents()
         except Exception:
             pass
         _session_graph_codex_refresh_stop.wait(_session_graph_codex_refresh_interval)

@@ -380,6 +380,75 @@ def _grok_mine_jsonl_texts(jsonl_path):
     return first_user, last_assistant, created, updated
 
 
+def _grok_read_subagent_meta(meta_path):
+    """Parse one Grok Build ``subagents/<child>/meta.json``, or {}."""
+    try:
+        data = json.loads(meta_path.read_text(encoding="utf-8", errors="replace"))
+    except (OSError, json.JSONDecodeError, UnicodeError, TypeError, ValueError):
+        return {}
+    return data if isinstance(data, dict) else {}
+
+
+def _grok_subagent_parent_map():
+    """child_sid -> {parent, name} from variant-A ``subagents/*/meta.json``.
+
+    Grok Build records native spawn_subagent links under
+    ``sessions/<cwd-bucket>/<parent>/subagents/<child>/meta.json``. The child
+    is also a first-class session dir at the bucket level; this map is the
+    parent pointer CCC's session graph and listing rows were missing.
+    """
+    out = {}
+    root = _grok_home() / "sessions"
+    try:
+        buckets = list(root.iterdir()) if root.is_dir() else []
+    except OSError:
+        return out
+    for bucket in buckets:
+        try:
+            if not bucket.is_dir():
+                continue
+            sessions = list(bucket.iterdir())
+        except OSError:
+            continue
+        for session_dir in sessions:
+            agents = session_dir / "subagents"
+            try:
+                if not session_dir.is_dir() or not agents.is_dir():
+                    continue
+                kids = list(agents.iterdir())
+            except OSError:
+                continue
+            parent_sid = session_dir.name
+            for child_dir in kids:
+                try:
+                    if not child_dir.is_dir():
+                        continue
+                except OSError:
+                    continue
+                meta = {}
+                meta_path = child_dir / "meta.json"
+                try:
+                    if meta_path.is_file():
+                        meta = _grok_read_subagent_meta(meta_path)
+                except OSError:
+                    meta = {}
+                child_id = str(
+                    meta.get("child_session_id")
+                    or meta.get("subagent_id")
+                    or child_dir.name
+                ).strip()
+                parent_id = str(meta.get("parent_session_id") or parent_sid).strip()
+                if not child_id or not parent_id or child_id == parent_id:
+                    continue
+                if not _grok_sid_ok(child_id) or not _grok_sid_ok(parent_id):
+                    continue
+                name = str(
+                    meta.get("description") or meta.get("subagent_type") or ""
+                ).strip()
+                out.setdefault(child_id, {"parent": parent_id, "name": name})
+    return out
+
+
 def _grok_session_dir_info(session_dir, cwd):
     """One listing dict for a variant-A session dir, or None when the dir
     carries neither a summary.json nor a readable transcript file."""
@@ -453,6 +522,7 @@ def _grok_sessions_from_dirs(limit=None):
         buckets = list(root.iterdir()) if root.is_dir() else []
     except OSError:
         return []
+    parent_map = _grok_subagent_parent_map()
     out = []
     for bucket in buckets:
         try:
@@ -469,8 +539,12 @@ def _grok_sessions_from_dirs(limit=None):
             except OSError:
                 continue
             info = _grok_session_dir_info(d, cwd)
-            if info:
-                out.append(info)
+            if not info:
+                continue
+            link = parent_map.get(info["id"]) or {}
+            info["parent_session_id"] = str(link.get("parent") or "")
+            info["subagent_name"] = str(link.get("name") or "")
+            out.append(info)
     out.sort(key=lambda s: s.get("updated") or 0, reverse=True)
     if limit and limit > 0:
         out = out[: int(limit)]
@@ -758,6 +832,7 @@ def find_grok_conversations(
             "needs_approval_message": "",
             "model": s.get("model") or "",
             "reasoning_effort": "",
+            "parent_session_id": s.get("parent_session_id") or "",
         })
     out.sort(key=lambda x: x.get("last_interacted") or x.get("modified") or 0, reverse=True)
     return out
