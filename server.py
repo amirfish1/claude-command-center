@@ -38761,28 +38761,198 @@ def _acp_transcript_first_prompt(harness, sid):
     return None
 
 
+def _kimi_wire_prompt_usages(wire_path):
+    """Ordered per-user-prompt usage totals from one Kimi wire log.
+
+    Durable ``usage.record`` rows and ``step.end.usage`` describe the same
+    model calls. Prefer durable records for a prompt and use step-end values
+    only when no durable record exists, so replay enrichment never doubles a
+    model step. ``None`` preserves alignment for prompts with no usage.
+    """
+    if not wire_path:
+        return []
+    try:
+        with Path(wire_path).open("rb") as handle:
+            lines = handle.read().decode("utf-8", "replace").splitlines()
+    except (OSError, TypeError, ValueError):
+        return []
+
+    def empty_usage():
+        return {
+            "input_tokens": 0,
+            "cache_read_input_tokens": 0,
+            "cache_creation_input_tokens": 0,
+            "output_tokens": 0,
+        }
+
+    def add_usage(total, raw):
+        if not isinstance(raw, dict):
+            return False
+        usage_keys = (
+            "inputOther", "inputCacheRead", "inputCacheCreation", "output",
+        )
+        if not any(key in raw for key in usage_keys):
+            return False
+        total["input_tokens"] += _codex_int(raw.get("inputOther"))
+        total["cache_read_input_tokens"] += _codex_int(raw.get("inputCacheRead"))
+        total["cache_creation_input_tokens"] += _codex_int(raw.get("inputCacheCreation"))
+        total["output_tokens"] += _codex_int(raw.get("output"))
+        return True
+
+    prompt_usages = []
+    current = None
+    awaiting_user_message = False
+
+    def new_prompt():
+        return {
+            "durable": empty_usage(),
+            "fallback": empty_usage(),
+            "saw_durable": False,
+        }
+
+    def finish_prompt():
+        nonlocal current, awaiting_user_message
+        if current is None:
+            return
+        chosen = current["durable"] if current["saw_durable"] else current["fallback"]
+        prompt_usages.append(chosen if any(chosen.values()) else None)
+        current = None
+        awaiting_user_message = False
+
+    for line in lines:
+        try:
+            record = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if not isinstance(record, dict):
+            continue
+        record_type = record.get("type")
+        if record_type == "turn.prompt":
+            finish_prompt()
+            current = new_prompt()
+            awaiting_user_message = True
+            continue
+        if record_type == "context.append_message":
+            message = record.get("message")
+            if not isinstance(message, dict):
+                continue
+            origin = message.get("origin") or {}
+            if not isinstance(origin, dict):
+                continue
+            if message.get("role") == "user" and origin.get("kind") in (None, "user"):
+                if current is None:
+                    current = new_prompt()
+                elif awaiting_user_message:
+                    awaiting_user_message = False
+                else:
+                    finish_prompt()
+                    current = new_prompt()
+                continue
+        if current is None:
+            continue
+        if record_type == "usage.record" and record.get("usageScope") in (None, "turn"):
+            usage = record.get("usage")
+            if add_usage(current["durable"], usage):
+                current["saw_durable"] = True
+            continue
+        if record_type == "context.append_loop_event":
+            loop = record.get("event")
+            if not isinstance(loop, dict):
+                continue
+            if loop.get("type") == "step.end":
+                add_usage(current["fallback"], loop.get("usage"))
+
+    finish_prompt()
+    return prompt_usages
+
+
+def _kimi_event_has_token_usage(event):
+    return any(
+        key in event
+        for key in ("tokens_in", "tokens_cached", "tokens_out", "token_usage")
+    )
+
+
+def _kimi_assistant_has_visible_reply(event):
+    for block in event.get("blocks") or []:
+        if not isinstance(block, dict):
+            continue
+        if block.get("kind") in ("text", "thinking") and str(block.get("text") or "").strip():
+            return True
+    return False
+
+
+def _enrich_kimi_transcript_token_usage(sid, events):
+    """Attach one wire-derived aggregate to each prompt's final reply."""
+    try:
+        wire_path = _acp_wire_path("kimi", sid)
+    except Exception:
+        return events
+    prompt_usages = _kimi_wire_prompt_usages(wire_path)
+    if not prompt_usages:
+        return events
+
+    prompt_index = -1
+    assistants = []
+
+    def finish_prompt():
+        if not assistants or not (0 <= prompt_index < len(prompt_usages)):
+            return
+        usage = prompt_usages[prompt_index]
+        if not usage or any(_kimi_event_has_token_usage(event) for event in assistants):
+            return
+        target = next(
+            (event for event in reversed(assistants) if _kimi_assistant_has_visible_reply(event)),
+            assistants[-1],
+        )
+        _apply_kimi_turn_usage(target, usage)
+
+    for event in events:
+        event_type = event.get("type")
+        if event_type == "user_text":
+            finish_prompt()
+            prompt_index += 1
+            assistants = []
+        elif event_type == "assistant" and prompt_index >= 0:
+            assistants.append(event)
+    finish_prompt()
+    return events
+
+
 def _acp_transcript_events_after(harness, sid, after_line):
     """Finalized conv events newer than `after_line`, read from the CCC-owned
     transcript (the replay source for SSE reconnects and CCC restarts)."""
-    events = []
+    all_events = []
     try:
-        with _acp_transcript_path(harness, sid).open() as f:
-            for raw in f:
+        with _acp_transcript_path(harness, sid).open() as handle:
+            for raw in handle:
                 raw = raw.strip()
                 if not raw:
                     continue
                 try:
-                    ev = json.loads(raw)
+                    event = json.loads(raw)
                 except json.JSONDecodeError:
                     continue
-                try:
-                    line = int(ev.get("line") or 0)
-                except (TypeError, ValueError):
-                    line = 0
-                if line > after_line:
-                    events.append(ev)
+                all_events.append(event)
     except OSError:
         return []
+
+    if harness == "kimi" and all_events:
+        try:
+            _enrich_kimi_transcript_token_usage(sid, all_events)
+        except Exception:
+            # Usage enrichment is optional metadata; transcript rendering is
+            # still authoritative when a wire log is missing or malformed.
+            pass
+
+    events = []
+    for event in all_events:
+        try:
+            line = int(event.get("line") or 0)
+        except (TypeError, ValueError):
+            line = 0
+        if line > after_line:
+            events.append(event)
     return events
 
 
