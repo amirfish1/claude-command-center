@@ -55588,7 +55588,8 @@
   // Flatten the family tree (from /api/sessions/family) into a list of
   // lanes with depth info. Each lane gets a `depth` field (0 for direct
   // children of the root, 1 for grandchildren, etc.) and a `isTaskSubagent`
-  // flag for Claude Task-tool subagents (agent-* transcripts, not resumable).
+  // flag for non-resumable subagents (Claude Task-tool transcripts and Kimi
+  // Code Agent subagents under agents/<name>/wire.jsonl).
   function orchFlattenTree(tree, rootSid) {
     if (!tree || typeof tree !== 'object') return [];
     const rows = conversationsData || [];
@@ -55606,16 +55607,19 @@
       const row = byId.get(sid);
       const spawn = spawnById.get(sid);
       const meta = orchLaneMetaGet(sid);
-      const isTaskSubagent = !node.resumable && node.source === 'claude-task-tool';
-      // For task-tool subagents, there's no row or spawn entry — build a
-      // minimal lane from the tree node itself.
+      const isTaskSubagent = !node.resumable && (
+        node.source === 'claude-task-tool' || node.source === 'kimi-subagent'
+      );
+      // For non-resumable subagents (Claude Task-tool transcripts, Kimi
+      // Code Agent subagents) there's no row or spawn entry — build a minimal
+      // lane from the tree node itself.
       if (isTaskSubagent) {
         out.push({
           id: sid,
-          convId: sid,
-          name: sid.slice(0, 16),
-          engine: 'claude',
-          model: '',
+          convId: '',
+          name: node.name || sid.slice(0, 16),
+          engine: node.engine || 'claude',
+          model: node.model || '',
           status: 'done',
           mtime: 0,
           born: 0,
@@ -55804,7 +55808,12 @@
     const statusWord = { working: 'working', waiting: 'needs you', idle: 'idle', done: 'landed' }[lane.status] || lane.status;
     const depth = lane.depth || 0;
     const indent = depth > 0 ? '<span class="orch-node-indent" style="margin-left:' + (depth * 14) + 'px"></span>' : '';
-    const taskBadge = lane.isTaskSubagent ? '<span class="orch-node-task-badge" title="Claude Task-tool subagent (read-only transcript)">transcript</span>' : '';
+    const taskBadgeTitle = lane.isTaskSubagent
+      ? (lane.source === 'kimi-subagent'
+         ? 'Kimi Code Agent subagent (read-only transcript)'
+         : 'Claude Task-tool subagent (read-only transcript)')
+      : '';
+    const taskBadge = lane.isTaskSubagent ? '<span class="orch-node-task-badge" title="' + escapeAttr(taskBadgeTitle) + '">transcript</span>' : '';
     return indent
       + '<span class="orch-node-glyph orch-glyph orch-glyph-' + escapeAttr(lane.engine) + '">' + glyph + '</span>'
       + '<span class="orch-node-body">'
