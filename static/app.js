@@ -55416,7 +55416,7 @@
     (_orchSpawnedRegistry || []).forEach(sp => { if (sp && sp.session_id) spawnById.set(sp.session_id, sp); });
     const out = [];
     const seen = new Set();
-    function walk(node, depth) {
+    function walk(node, depth, parentSid) {
       if (!node || !node.session_id) return;
       const sid = node.session_id;
       if (sid === rootSid || seen.has(sid)) return;
@@ -55431,9 +55431,15 @@
       // Code Agent subagents) there's no row or spawn entry — build a minimal
       // lane from the tree node itself.
       if (isTaskSubagent) {
+        // Claude Task-tool subagents open through the existing composite-id
+        // popout convention ("<parent>:agent-<id>", CCC-112 — same one the
+        // task-notification "agent transcript" button already uses). Kimi
+        // subagents use a different synthetic id (`kimi-subagent:...`) with
+        // no viewer built for it yet, so they stay unclickable for now.
+        const canOpen = node.source === 'claude-task-tool' && sid.startsWith('agent-') && parentSid;
         out.push({
           id: sid,
-          convId: '',
+          convId: canOpen ? (parentSid + ':' + sid) : '',
           name: node.name || sid.slice(0, 16),
           engine: node.engine || 'claude',
           model: node.model || '',
@@ -55452,9 +55458,9 @@
         lane.source = node.source || '';
         out.push(lane);
       }
-      (node.children || []).forEach(c => walk(c, depth + 1));
+      (node.children || []).forEach(c => walk(c, depth + 1, sid));
     }
-    (tree.children || []).forEach(c => walk(c, 0));
+    (tree.children || []).forEach(c => walk(c, 0, rootSid));
     // Newest first within each depth level.
     out.sort((a, b) => (a.depth - b.depth) || (b.mtime - a.mtime));
     return out;
@@ -55919,7 +55925,17 @@
       const node = ev.target.closest('.orch-node[data-conv-id]');
       if (node) {
         const cid = node.getAttribute('data-conv-id');
-        if (cid && typeof selectConversation === 'function') selectConversation(cid);
+        if (!cid) return;
+        // Task-tool subagent transcripts are read-only and non-resumable —
+        // they open the same way the task-notification "agent transcript"
+        // button does (CCC-112): a standalone popout, not selectConversation
+        // (which expects a normal row in conversationsData/archiveData).
+        if (node.classList.contains('is-task-subagent')) {
+          window.open('/?ccc_popout=conversation&conv=' + encodeURIComponent(cid), '_blank',
+            'width=900,height=800');
+        } else if (typeof selectConversation === 'function') {
+          selectConversation(cid);
+        }
       }
     });
     window.addEventListener('resize', () => { if (orchPaneVisible()) orchDrawEdges(); });
