@@ -17,11 +17,106 @@ import html
 import json
 import os
 import socket
+import time
+import uuid as _uuid
 from pathlib import Path
 
 MIN_PEER_VERSION = (2, 1, 234)
 MAX_LINE_BYTES = 1024 * 1024
 _CLOSE_TAG = "</cross-session-message>"
+
+# The registry row's `version` field is read by senders' own peer-protocol
+# compatibility gates (see MIN_PEER_VERSION above). CCC is not a Claude Code
+# build, so this is NOT "CCC's product version" -- it is the protocol version
+# CCC asserts wire-compatibility with, kept as one constant so a future
+# protocol bump only needs one edit. Observed on this machine 2026-08-29.
+CCC_PEER_COMPAT_VERSION = "2.1.251"
+
+# The keys every consumer in this codebase (resolve_target, _load_session_registry
+# staleness filter, _try_uds_peer_delivery) actually reads off a registry row.
+# validate_registry_row_shape checks these are present on both CCC's candidate
+# row and at least one real observed row, so a future Claude Code registry
+# format change is caught loudly instead of silently producing a row real
+# peers can't parse.
+REQUIRED_REGISTRY_KEYS = ("pid", "sessionId", "cwd", "messagingSocketPath", "peerProtocol", "version")
+
+
+def _ccc_session_id_for(pid, socket_path):
+    """Deterministic pseudo-sessionId for CCC's own registry row.
+
+    Real Claude sessionIds are random UUIDs; CCC's is derived (uuid5) from
+    (pid, socket_path) instead of `uuid.uuid4()` so re-publishing on the same
+    bind (e.g. a retry within one process lifetime) is idempotent and tests
+    can assert a stable value without a random seed.
+    """
+    return str(_uuid.uuid5(_uuid.NAMESPACE_URL, f"ccc:{pid}:{socket_path}"))
+
+
+def build_ccc_registry_row(pid, socket_path, cwd, *, name="ccc",
+                            version=None, started_at_epoch_ms=None, proc_start=None):
+    """Build CCC's own ~/.claude/sessions/<pid>.json row.
+
+    Shaped to match a real Claude Code registry row field-for-field (see
+    REQUIRED_REGISTRY_KEYS and validate_registry_row_shape) so existing
+    peer clients -- which read this file directly off disk, not through
+    CCC's own memoized _load_session_registry() -- can dial CCC exactly like
+    any other peer. `peerFeatures` is deliberately empty: CCC does not
+    implement notify_when_idle, reply_across_default_dirs, or artifact_yield,
+    and claiming otherwise would mislead a real sender.
+    """
+    now_ms = started_at_epoch_ms if started_at_epoch_ms is not None else int(time.time() * 1000)
+    return {
+        "pid": int(pid),
+        "sessionId": _ccc_session_id_for(pid, socket_path),
+        "cwd": str(cwd),
+        "startedAt": now_ms,
+        "procStart": proc_start or time.ctime(now_ms / 1000.0),
+        "version": version or CCC_PEER_COMPAT_VERSION,
+        "peerProtocol": 1,
+        "peerFeatures": [],
+        "kind": "background",
+        "entrypoint": "ccc",
+        "pidDomain": "darwin" if os.name == "posix" else "nt",
+        "messagingSocketPath": str(socket_path),
+        "name": name,
+        "nameSource": "system",
+        "nameSince": now_ms,
+        "updatedAt": now_ms,
+    }
+
+
+def ccc_key_payload(token):
+    return {"peerToken": str(token)}
+
+
+def validate_registry_row_shape(candidate, reference_rows):
+    """Cross-check CCC's candidate row against real, currently-observed
+    Claude Code registry rows before CCC publishes it.
+
+    Two independent checks, either of which can fail:
+    1. Every REQUIRED_REGISTRY_KEYS entry is present on `candidate` itself.
+    2. If any reference rows were supplied (real rows from other pids on
+       this machine), at least one of them must also carry every required
+       key -- if Claude Code's own format has drifted so that NONE of the
+       locally observed rows match what CCC expects, that's the "impersonation
+       risk" the spec calls out, and the caller (Task 3) must not publish.
+
+    No reference rows at all (a machine that has never run an interactive
+    Claude Code session) is NOT a failure -- there is nothing to compare
+    against, so CCC proceeds unverified and the caller logs that fact.
+    Never raises: always returns {"ok": bool, "reason": str}.
+    """
+    candidate = candidate if isinstance(candidate, dict) else {}
+    missing = [k for k in REQUIRED_REGISTRY_KEYS if k not in candidate]
+    if missing:
+        return {"ok": False, "reason": f"candidate missing keys: {', '.join(missing)}"}
+    refs = [r for r in (reference_rows or []) if isinstance(r, dict)]
+    if not refs:
+        return {"ok": True, "reason": "no_reference_rows"}
+    for row in refs:
+        if all(k in row for k in REQUIRED_REGISTRY_KEYS):
+            return {"ok": True, "reason": ""}
+    return {"ok": False, "reason": "no reference row on this machine carries all of: " + ", ".join(REQUIRED_REGISTRY_KEYS)}
 
 
 def version_tuple(v):
