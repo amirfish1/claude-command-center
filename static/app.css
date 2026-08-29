@@ -25465,6 +25465,36 @@ html:not(.ccc-debug-mode) #statsModal {
 .orch-glyph-devin { background: #3b82f6; }
 .orch-glyph-kimi { background: #7c3aed; }
 .orch-glyph-cursor { background: #111; border: 1px solid #555; }
+.orch-glyph-kilo { background: #f59e0b; }
+.orch-glyph-hermes { background: #10b981; }
+.orch-glyph-opencode { background: #ec4899; }
+
+/* New Session Stage Model Picker container */
+.ns-model-picker {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  width: min(460px, 92vw);
+  margin: 12px auto;
+  padding: 4px 6px 4px 8px;
+  border-left: 2px solid color-mix(in srgb, #a371f7 45%, transparent);
+  box-sizing: border-box;
+  text-align: left;
+}
+.ns-model-picker-title {
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+  margin-bottom: 8px;
+}
+.ns-model-picker-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
 
 /* Lane map */
 .orch-map-wrap { display: flex; flex-direction: column; gap: 6px; flex: 1 0 auto; }

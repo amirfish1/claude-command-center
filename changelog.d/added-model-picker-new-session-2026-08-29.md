@@ -1,0 +1,1 @@
+- Added an inline model picker with rounded pills to the new session Stage, which automatically remembers and surfaces the top 7-8 combinations of engine, model, and reasoning effort used in the last 30 days.

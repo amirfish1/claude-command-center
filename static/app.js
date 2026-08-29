@@ -60913,6 +60913,9 @@
         if (_uSlot.querySelector('.wp-spawn-ctx-badge')) _uSlot.innerHTML = '';
       }
     }
+    if (typeof syncNsModelPickerPillsSelection === 'function') {
+      syncNsModelPickerPillsSelection();
+    }
   }
   function setSpawnEngine(v) {
     v = normalizeSpawnDefaultEngine(v);
@@ -68598,6 +68601,250 @@
     });
   }
 
+  // ── Model picker for new session Stage (remembering top picks) ──
+  const MODEL_PICKER_ENGINE_GLYPHS = {
+    claude: 'C', codex: 'X', antigravity: 'A', gemini: 'A', grok: 'G', devin: 'D',
+    kimi: 'K', cursor: 'U', hermes: 'H', kilo: 'L', opencode: 'O', copilot: 'P',
+  };
+
+  function recordSpawnChoice(engine, model, effort) {
+    try {
+      const resolvedModel = model || _defaultModelsByEngine[engine] || '';
+      const resolvedEffort = effort || '';
+      const historyKey = 'ccc-spawn-history';
+      let history = [];
+      try {
+        const raw = localStorage.getItem(historyKey);
+        if (raw) history = JSON.parse(raw);
+      } catch (_) {}
+      if (!Array.isArray(history)) history = [];
+
+      history.push({
+        engine: engine,
+        model: resolvedModel,
+        effort: resolvedEffort,
+        timestamp: Date.now()
+      });
+
+      const thirtyDaysAgo = Date.now() - 30 * 24 * 60 * 60 * 1000;
+      history = history.filter(r => r && r.timestamp && r.timestamp > thirtyDaysAgo && r.engine);
+      localStorage.setItem(historyKey, JSON.stringify(history));
+    } catch (e) {
+      console.warn('Failed to record spawn choice', e);
+    }
+  }
+
+  function getTopSpawnPicks() {
+    try {
+      const historyKey = 'ccc-spawn-history';
+      let history = [];
+      try {
+        const raw = localStorage.getItem(historyKey);
+        if (raw) history = JSON.parse(raw);
+      } catch (_) {}
+      if (!Array.isArray(history)) history = [];
+
+      const thirtyDaysAgo = Date.now() - 30 * 24 * 60 * 60 * 1000;
+      history = history.filter(r => r && r.timestamp && r.timestamp > thirtyDaysAgo && r.engine);
+
+      const groups = {};
+      history.forEach(r => {
+        const key = [r.engine, r.model || '', r.effort || ''].join('|');
+        if (!groups[key]) {
+          groups[key] = {
+            engine: r.engine,
+            model: r.model || '',
+            effort: r.effort || '',
+            count: 0,
+            lastUsed: 0
+          };
+        }
+        groups[key].count++;
+        if (r.timestamp > groups[key].lastUsed) {
+          groups[key].lastUsed = r.timestamp;
+        }
+      });
+
+      let picks = Object.values(groups);
+      picks.sort((a, b) => {
+        if (b.count !== a.count) return b.count - a.count;
+        return b.lastUsed - a.lastUsed;
+      });
+
+      picks = picks.slice(0, 8);
+
+      if (picks.length < 7) {
+        const defaultPicks = [
+          { engine: 'claude', model: 'sonnet-5', effort: '' },
+          { engine: 'claude', model: 'opus-5', effort: '' },
+          { engine: 'codex', model: 'gpt-5.6-terra', effort: '' },
+          { engine: 'grok', model: 'grok-4.6', effort: '' },
+          { engine: 'devin', model: 'glm-5.2', effort: '' },
+          { engine: 'antigravity', model: 'Gemini 3.5 Pro (High)', effort: 'high' },
+          { engine: 'kimi', model: 'kimi-code/k3', effort: '' },
+          { engine: 'gemini', model: 'gemini-3.5-pro', effort: '' }
+        ];
+
+        for (const def of defaultPicks) {
+          if (picks.length >= 8) break;
+          const exists = picks.some(p => p.engine === def.engine && p.model === def.model && p.effort === def.effort);
+          if (!exists) {
+            picks.push({
+              engine: def.engine,
+              model: def.model,
+              effort: def.effort,
+              count: 0,
+              lastUsed: 0
+            });
+          }
+        }
+      }
+
+      return picks.slice(0, 8);
+    } catch (e) {
+      console.warn('Failed to compute top spawn picks', e);
+      return [];
+    }
+  }
+
+  function formatModelNameForBadge(engine, modelId) {
+    if (!modelId) return 'Default';
+    const options = MODEL_OPTIONS_BY_ENGINE[engine] || [];
+    const found = options.find(o => o.id === modelId);
+    if (found && found.label) {
+      return found.label;
+    }
+    let clean = modelId;
+    if (clean.includes('/')) {
+      clean = clean.split('/').pop();
+    }
+    return clean
+      .replace(/-/g, ' ')
+      .replace(/\b\w/g, c => c.toUpperCase());
+  }
+
+  function getModelPillLabel(engine, model, effort) {
+    let name = formatModelNameForBadge(engine, model);
+    if (effort) {
+      const effortLabel = REASONING_LEVEL_LABELS[effort] || effort;
+      if (!name.toLowerCase().includes(effortLabel.toLowerCase())) {
+        name += ' (' + effortLabel + ')';
+      }
+    }
+    name = name.replace(/\b\w/g, c => c.toUpperCase());
+    return name;
+  }
+
+  function selectSpawnPick(engine, model, effort) {
+    const eng = normalizeSpawnDefaultEngine(engine);
+    spawnDefaultsState.engine = eng;
+    try { localStorage.setItem('ccc.spawnEngine', eng); } catch (_) {}
+    [$convInputEngineSelect, $kptToolbarEngineSelect].forEach(s => {
+      if (s) s.value = eng;
+    });
+
+    if (model) {
+      spawnDefaultsState.models[eng] = model;
+      _defaultModelsByEngine[eng] = model;
+    }
+
+    if (effort) {
+      spawnEffortChoiceDirty = true;
+      if ($convInputEffortSelect) {
+        $convInputEffortSelect.value = effort;
+      }
+    } else {
+      spawnEffortChoiceDirty = false;
+      if ($convInputEffortSelect) {
+        $convInputEffortSelect.value = '';
+      }
+    }
+
+    syncSpawnEngineDependentUi();
+    if (typeof updateInputBar === 'function') updateInputBar();
+
+    const spawnCwd = getSpawnCwd();
+    updatePaneHeader(activePaneId(), {
+      source: eng,
+      display_name: 'New session',
+      folder_label_chip: spawnCwdLabel(spawnCwd),
+    }, { category: 'new session', title: 'New session' });
+
+    if (eng === 'claude') {
+      requestClaudePrewarm({ force: true });
+    }
+
+    const pillsContainer = document.getElementById('nsModelPickerPills');
+    if (pillsContainer) {
+      pillsContainer.querySelectorAll('.orch-tier-chip').forEach(chip => {
+        const cEngine = chip.getAttribute('data-engine');
+        const cModel = chip.getAttribute('data-model');
+        const cEffort = chip.getAttribute('data-effort') || '';
+        const isSel = (cEngine === eng && cModel === model && cEffort === effort);
+        chip.classList.toggle('is-selected', isSel);
+        chip.setAttribute('aria-checked', isSel ? 'true' : 'false');
+      });
+    }
+  }
+
+  function renderNsModelPickerPills(paneId) {
+    const container = document.getElementById('nsModelPickerPills');
+    if (!container) return;
+
+    const picks = getTopSpawnPicks();
+    const currentEngine = getSpawnEngine();
+    const currentModel = (typeof $convInputModelSelect !== 'undefined' && $convInputModelSelect && $convInputModelSelect.style.display !== 'none')
+      ? $convInputModelSelect.value
+      : (_defaultModelsByEngine[currentEngine] || '');
+    const currentEffort = spawnEffortChoiceDirty && $convInputEffortSelect ? $convInputEffortSelect.value : '';
+
+    container.innerHTML = picks.map(p => {
+      const isSel = (p.engine === currentEngine && p.model === currentModel && p.effort === currentEffort);
+      const label = getModelPillLabel(p.engine, p.model, p.effort);
+      const badge = MODEL_PICKER_ENGINE_GLYPHS[p.engine] || '?';
+      const badgeClass = 'orch-glyph orch-glyph-' + p.engine;
+      const title = p.engine + ' · ' + p.model + (p.effort ? ' (' + p.effort + ')' : '');
+
+      return '<button type="button" class="orch-tier-chip' + (isSel ? ' is-selected' : '') + '"'
+        + ' role="radio" aria-checked="' + (isSel ? 'true' : 'false') + '"'
+        + ' data-engine="' + escapeAttr(p.engine) + '"'
+        + ' data-model="' + escapeAttr(p.model) + '"'
+        + ' data-effort="' + escapeAttr(p.effort) + '"'
+        + ' title="' + escapeAttr(title) + '">'
+        + '<span class="' + badgeClass + '">' + escapeHtml(badge) + '</span>'
+        + escapeHtml(label)
+        + '</button>';
+    }).join('');
+
+    container.querySelectorAll('.orch-tier-chip').forEach(chip => {
+      chip.addEventListener('click', () => {
+        const eng = chip.getAttribute('data-engine');
+        const mod = chip.getAttribute('data-model');
+        const eff = chip.getAttribute('data-effort') || '';
+        selectSpawnPick(eng, mod, eff);
+      });
+    });
+  }
+
+  function syncNsModelPickerPillsSelection() {
+    const pillsContainer = document.getElementById('nsModelPickerPills');
+    if (!pillsContainer) return;
+    const currentEngine = getSpawnEngine();
+    const currentModel = (typeof $convInputModelSelect !== 'undefined' && $convInputModelSelect && $convInputModelSelect.style.display !== 'none')
+      ? $convInputModelSelect.value
+      : (_defaultModelsByEngine[currentEngine] || '');
+    const currentEffort = spawnEffortChoiceDirty && $convInputEffortSelect ? $convInputEffortSelect.value : '';
+
+    pillsContainer.querySelectorAll('.orch-tier-chip').forEach(chip => {
+      const cEngine = chip.getAttribute('data-engine');
+      const cModel = chip.getAttribute('data-model');
+      const cEffort = chip.getAttribute('data-effort') || '';
+      const isSel = (cEngine === currentEngine && cModel === currentModel && cEffort === currentEffort);
+      chip.classList.toggle('is-selected', isSel);
+      chip.setAttribute('aria-checked', isSel ? 'true' : 'false');
+    });
+  }
+
   function enterNewSessionMode() {
     const initialPrompt = typeof arguments[0] === 'string' ? arguments[0] : null;
     const paneId = activePaneId();
@@ -68654,6 +68901,10 @@
         + '<div class="empty-state ns-hero ns-hero-quiet" style="height:auto;flex-direction:column;gap:10px;text-align:center;">'
         + '<div class="ns-stage-title">New session</div>'
         + '<div class="ns-stage-subtitle">Choose the object and folder below, then type the first message.</div>'
+        + '<div class="ns-model-picker" id="nsModelPickerContainer">'
+        +   '<div class="ns-model-picker-title">Model</div>'
+        +   '<div class="ns-model-picker-chips" id="nsModelPickerPills"></div>'
+        + '</div>'
         + '<details class="ns-new-project-details" id="nsNewProjectDetails">'
         +   '<summary>Create a fresh folder</summary>'
         +   '<div class="ns-choice-card ns-choice-card-compact" id="nsCardNewProject">'
@@ -68688,6 +68939,9 @@
     }
     if (typeof mobileShowForCurrentMode === 'function') mobileShowForCurrentMode();
     requestClaudePrewarm();
+    if (typeof renderNsModelPickerPills === 'function') {
+      renderNsModelPickerPills(paneId);
+    }
     setTimeout(() => {
       const input = composerInputForPane(paneId) || $convInput;
       if (input) {
@@ -68988,6 +69242,9 @@
       });
       const data = await res.json().catch(() => ({ ok: false, error: 'invalid JSON response' }));
       if (data.ok) {
+        if (typeof recordSpawnChoice === 'function') {
+          recordSpawnChoice(engine, pickedModel, $convInputEffortSelect ? $convInputEffortSelect.value : '');
+        }
         if (data.prewarm_fallback) showClaudePrewarmFallbackRecovery();
         if (data.session_id) {
           spawnStatsBegin(data.session_id, spawnAskedAt);
