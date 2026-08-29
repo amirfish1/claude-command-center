@@ -53690,8 +53690,7 @@
         const blockParts = [];
         const agentAnswerParts = [];
         let lastToolPartIdx = -1;
-        const bridgeSenderHtml = whatsappBridgeSenderHtml(ev) + peerSenderHtml(ev);
-        if (ev.peer) div.classList.add('peer-message');
+        const bridgeSenderHtml = whatsappBridgeSenderHtml(ev);
         if (bridgeSenderHtml) blockParts.push(bridgeSenderHtml);
         const assistantBlocks = Array.isArray(ev.blocks)
           ? ev.blocks
