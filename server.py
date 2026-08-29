@@ -79976,8 +79976,13 @@ def _register_self(port, bind_host):
     """Insert (or replace) this process's entry in the registry.
 
     Dedup is by pid: each running process owns one entry. The registry
-    describes this CCC server process, not an active repo.
+    describes this CCC server process, not an active repo. Ephemeral
+    instances (CCC_EPHEMERAL=1) skip registration so they don't advertise
+    temporary/verification ports as peer instances.
     """
+    if os.environ.get("CCC_EPHEMERAL"):
+        print("  [registry] CCC_EPHEMERAL set — not claiming registry entry")
+        return
     self_pid = os.getpid()
     payload = {
         "label": CCC_ROOT.name,
@@ -80007,6 +80012,8 @@ def _unregister_self():
 
     Idempotent; silent on I/O error so it's safe to call from signal handlers.
     """
+    if os.environ.get("CCC_EPHEMERAL"):
+        return
     if not REGISTRY_FILE.exists():
         return
     self_pid = os.getpid()

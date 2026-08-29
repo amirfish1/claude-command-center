@@ -20315,3 +20315,29 @@ def test_session_live_status_cwd_match_ignores_other_sessions():
         assert res["pid"] == 56402
 
 
+class TestRegistryEphemeralGuard(unittest.TestCase):
+    def test_register_self_skips_when_ephemeral(self):
+        server = importlib.import_module("server")
+        with tempfile.TemporaryDirectory(prefix="ccc-test-reg-") as tmpdir:
+            reg_file = pathlib.Path(tmpdir) / "registry.json"
+            with mock.patch.object(server, "REGISTRY_FILE", reg_file), \
+                 mock.patch.dict(os.environ, {"CCC_EPHEMERAL": "1"}):
+                server._register_self(8099, "127.0.0.1")
+                self.assertFalse(reg_file.exists())
+
+    def test_register_self_writes_when_not_ephemeral(self):
+        server = importlib.import_module("server")
+        with tempfile.TemporaryDirectory(prefix="ccc-test-reg-") as tmpdir:
+            reg_file = pathlib.Path(tmpdir) / "registry.json"
+            with mock.patch.object(server, "REGISTRY_FILE", reg_file), \
+                 mock.patch.dict(os.environ, {}, clear=False):
+                os.environ.pop("CCC_EPHEMERAL", None)
+                server._register_self(8099, "127.0.0.1")
+                self.assertTrue(reg_file.exists())
+                data = json.loads(reg_file.read_text(encoding="utf-8"))
+                self.assertEqual(len(data), 1)
+                self.assertEqual(data[0]["port"], 8099)
+                self.assertEqual(data[0]["pid"], os.getpid())
+
+
+
