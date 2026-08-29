@@ -3329,24 +3329,6 @@
   // exposes it as continued_from_session_id; the first_message scan is the
   // fallback for rows built before that field existed.
   const _CONTINUATION_ORIGIN_RE = /Origin session id: ([A-Za-z0-9][A-Za-z0-9_.-]{7,127})/;
-  // survivorSid -> number of earlier chain sessions folded into it by the
-  // Current-sessions pipeline (one main row per continuation chain).
-  const _continuationFoldedCounts = new Map();
-  // headSid -> ancestor session ids (oldest first at render time).
-  const _continuationFoldedAncestors = new Map();
-  const CONTINUATION_FOLDING_STORAGE_KEY = 'ccc-fold-continuation-chains';
-  function getContinuationFoldingPref() {
-    try { return localStorage.getItem(CONTINUATION_FOLDING_STORAGE_KEY) === 'on'; }
-    catch (_) { return false; }
-  }
-  function setContinuationFoldingPref(on) {
-    try {
-      if (on) localStorage.setItem(CONTINUATION_FOLDING_STORAGE_KEY, 'on');
-      else localStorage.removeItem(CONTINUATION_FOLDING_STORAGE_KEY);
-    } catch (_) {}
-    refreshAppearanceChecks();
-    if (typeof conversationsData !== 'undefined') renderSidebar(conversationsData);
-  }
   function continuationParentId(c) {
     if (!c) return '';
     const serverField = String(c.continued_from_session_id || '').trim();
@@ -3378,97 +3360,6 @@
   function _continuationRowId(c) {
     return String((c && (c.session_id || c.id)) || '').trim();
   }
-  // Hide origin/ancestor rows when a newer continuation is in the same
-  // list. The surviving head keeps the ⤴︎ +N chip; the ancestor is still
-  // reachable via that chip / scrolling up in the merged view.
-  function _foldContinuationAncestorRows(rows, opts) {
-    const list = Array.isArray(rows) ? rows : [];
-    if (!getContinuationFoldingPref()) return list.slice();
-    const recordCounts = !opts || opts.recordCounts !== false;
-    const forward = new Map();
-    const note = (r) => {
-      if (!r) return;
-      const pid = continuationParentId(r);
-      if (!pid) return;
-      const rid = _continuationRowId(r);
-      if (!rid || rid === pid) return;
-      const ts = Number(r.modified || r.last_interacted || r.mtime || 0) || 0;
-      const prev = forward.get(pid);
-      if (!prev || ts >= prev.ts) forward.set(pid, { sid: rid, ts });
-    };
-    if (typeof conversationsData !== 'undefined' && Array.isArray(conversationsData)) {
-      conversationsData.forEach(note);
-    }
-    if (typeof archiveData !== 'undefined' && Array.isArray(archiveData)) {
-      archiveData.forEach(note);
-    }
-    list.forEach(note);
-    const windowIds = new Set(list.map(_continuationRowId));
-    // CCC-945: a row can simultaneously be the OLD side of an unrelated
-    // continuation elsewhere in the window (fold it away, the successor
-    // leads) AND the orchestration parent of a genuinely spawned child
-    // (keep it visible as that child's tree root) -- e.g. a long-lived
-    // session that both got F2-continued once AND later spawned a Codex
-    // review subagent. Folding only looks at the continuation edge, so it
-    // silently orphans the spawned child by erasing its only parent row.
-    // Never fold a row that another row in this same window still points
-    // to via a real spawn edge (raw parent_session_id, not a continuation).
-    const neededAsSpawnParent = new Set();
-    list.forEach(r => {
-      const pid = String((r && r.parent_session_id) || '').trim();
-      if (pid) neededAsSpawnParent.add(pid);
-    });
-    return list.filter(c => {
-      const id = _continuationRowId(c);
-      if (!id || !continuationParentId(c) && !forward.has(id)) return true;
-      if (neededAsSpawnParent.has(id)) return true;
-      let head = id;
-      const seen = new Set([id]);
-      for (;;) {
-        const next = forward.get(head);
-        if (!next || seen.has(next.sid)) break;
-        seen.add(next.sid);
-        head = next.sid;
-      }
-      if (head === id || !windowIds.has(head)) return true;
-      if (recordCounts) {
-        _continuationFoldedCounts.set(head, (_continuationFoldedCounts.get(head) || 0) + 1);
-        const anc = _continuationFoldedAncestors.get(head) || [];
-        if (anc.indexOf(id) === -1) anc.push(id);
-        _continuationFoldedAncestors.set(head, anc);
-      }
-      return false;
-    });
-  }
-  function _continuationAncestorSidsForRow(c) {
-    const id = _continuationRowId(c);
-    const mapped = _continuationFoldedAncestors.get(id)
-      || _continuationFoldedAncestors.get(String((c && c.id) || ''))
-      || _continuationFoldedAncestors.get(String((c && c.session_id) || ''))
-      || [];
-    if (mapped.length) return mapped.slice();
-    const out = [];
-    let pid = continuationParentId(c);
-    const seen = new Set(id ? [id] : []);
-    while (pid && !seen.has(pid) && out.length < 20) {
-      seen.add(pid);
-      out.push(pid);
-      pid = continuationParentIdForSid(pid);
-    }
-    return out;
-  }
-  function _isContinuationPair(childCard, parentCard) {
-    if (!childCard || !parentCard) return false;
-    const cid = _continuationRowId(childCard);
-    const pid = _continuationRowId(parentCard);
-    if (!cid || !pid) return false;
-    if (continuationParentId(childCard) === pid) return true;
-    if (continuationParentId(parentCard) === cid) return true;
-    const underParent = _continuationFoldedAncestors.get(pid) || [];
-    const underChild = _continuationFoldedAncestors.get(cid) || [];
-    return underParent.indexOf(cid) !== -1 || underChild.indexOf(pid) !== -1;
-  }
-
   let _f2ContinuationEdgesCache = { raw: null, edges: {} };
   function _f2ContinuationEdges() {
     let raw = '';
@@ -24571,7 +24462,6 @@
     '[data-role="move-lane"]',
     '.conv-title-input',
     '.conv-session-origin-chip[data-parent-sid]',
-    '.conv-session-origin-chip[data-continuation-sid]',
   ].join(',');
   let _mobileRowTap = null;
   let _lastMobileRowOpenId = '';
@@ -31695,8 +31585,7 @@
           signals += '<span class="conv-signal hermes-model" title="' + escapeAttr(hermesModelTitle) + '">' + escapeHtml(hermesModelLabel) + '</span>';
         }
         const lineageCount = Number(c.hermes_lineage_count || 0);
-        const _foldedHermes = (_continuationFoldedAncestors.get(_summarySid) || []).length;
-        if (lineageCount > 1 && !_foldedHermes) {
+        if (lineageCount > 1) {
           const parent = c.hermes_continued_from || c.parent_session_id || '';
           signals += '<span class="conv-signal hermes-lineage" title="Continuation session'
             + (parent ? ' continued from ' + escapeAttr(parent) : '')
@@ -31718,9 +31607,6 @@
           : ('🤖 ' + _subCount);
         signals += '<span class="conv-signal subagents' + (_subInFlight > 0 ? ' in-flight' : '') + '" title="' + escapeAttr(_subTip) + '">' + _subInner + '</span>';
       }
-      // Folded continuation ancestors are listed as purple chips on the
-      // selected row only (see continuationChipsHtml), not as a permanent
-      // sidebar signal.
       // Workflow chip — Workflow tool runs found under the session's
       // subagents/workflows dir. A running run adds the ▶ suffix + pulse so
       // live fan-out reads differently from historic runs. Hidden when the
@@ -32054,7 +31940,9 @@
       // orchestration lanes). Skipped when subagentClusterMeta is already
       // set: that live cluster disclosure shows the same "N agents" count
       // plus active/attention state, so both would be redundant.
-      const _orchChildCount = subagentClusterMeta ? 0 : (_sessionChildCountById.get(String(c.session_id || c.id || '')) || 0);
+      // Also skipped on a nested continuation ancestor: its lanes render as
+      // rows right under it, and the chain's head carries the cluster count.
+      const _orchChildCount = (subagentClusterMeta || opts.continuationAncestor) ? 0 : (_sessionChildCountById.get(String(c.session_id || c.id || '')) || 0);
       const orchChildBadgeHtml = _orchChildCount > 0
         ? '<span class="conv-orch-badge" title="Spawned ' + _orchChildCount + ' child session' + (_orchChildCount === 1 ? '' : 's') + '">'
           + _orchChildCount + (_orchChildCount === 1 ? ' lane' : ' lanes') + '</span>'
@@ -32145,28 +32033,10 @@
       // important to hide in the hover row or bury in the branch slot. (CCC-294)
       const branchSlotHtml = worktreeBadgeHtml + branch;
       const sessionIdChipHtml = sidebarSessionIdChipHtml(c);
-      const _foldedAncestorSids = _continuationAncestorSidsForRow(c).slice().sort((a, b) => {
-        const ra = _continuationRowForSid(a);
-        const rb = _continuationRowForSid(b);
-        return (Number(ra && (ra.modified || ra.last_interacted)) || 0)
-          - (Number(rb && (rb.modified || rb.last_interacted)) || 0);
-      });
-      const continuationChipsHtml = _foldedAncestorSids.map(sid => {
-        const row = _continuationRowForSid(sid);
-        const label = String(_sessionProvenanceTitle(row, sid) || '')
-          .replace(/^Continue\s+/, '')
-          .replace(/^⤴︎\s*/, '');
-        return '<span class="conv-session-origin-chip is-continuation" role="button" tabindex="0"'
-          + ' data-continuation-sid="' + escapeAttr(sid) + '"'
-          + ' title="Jump to this ancestor session in the merged conversation">'
-          + '\u2934 from: ' + escapeHtml(label)
-          + '</span>';
-      }).join('');
-      // Continuation heads list folded ancestors as selected-only chips
-      // instead of the always-visible ↳ parent/grandparent provenance.
-      const sessionProvenanceChipHtml = _foldedAncestorSids.length
-        ? ''
-        : _sessionProvenanceChipHtml(c);
+      // The continuation ancestor renders as a nested child row of this
+      // session (see _subagentClusterPresentation), so the only lineage chip
+      // here is the meta-row provenance chip.
+      const sessionProvenanceChipHtml = _sessionProvenanceChipHtml(c);
       const objectChipHtml = flowObjectChipHtml(c);
       // Current-goal chip — codex sessions only (the native `/goal` feature,
       // read server-side from ~/.codex/goals_1.sqlite into c.goal). Status
@@ -32307,7 +32177,7 @@
         : '';
 
       let subagentClusterDisclosureHtml = '';
-      if (subagentClusterMeta) {
+      if (subagentClusterMeta && Number(subagentClusterMeta.total || 0) > 0) {
         const _clusterTotal = Number(subagentClusterMeta.total || 0);
         const _clusterActive = Number(subagentClusterMeta.active || 0);
         const _clusterAttention = Number(subagentClusterMeta.attention || 0);
@@ -32383,7 +32253,6 @@
             + needsYouHtml
             + workingDotHtml
             + '<div class="conv-title ' + titleClass + '" data-role="title" aria-label="' + escapeAttr(title) + '">' + escapeHtml(title) + '</div>'
-            + continuationChipsHtml
             + subagentClusterDisclosureHtml
             + orchChildBadgeHtml
             + (goalIconOnly ? goalIconHtml : '')
@@ -32572,6 +32441,16 @@
         const id = _subagentRowId(item.card);
         if (id) byId.set(id, item);
       });
+      // Continuation ancestors — the session(s) this root (or a nested row)
+      // was F2-continued from. f2EffectiveParentSessionId already flips the
+      // old session's parent to its successor, so they arrive here as
+      // descendants; they are the same conversation's earlier half and
+      // always render as real child rows, never as completed chips.
+      const continuationIds = new Set();
+      rows.forEach(item => {
+        const pid = item && item.card ? continuationParentId(item.card) : '';
+        if (pid && byId.has(pid)) continuationIds.add(pid);
+      });
       const directActiveIds = new Set();
       const bridgeIds = new Set();
       descendants.forEach(item => {
@@ -32596,8 +32475,12 @@
       const completedRows = [];
       descendants.forEach(item => {
         const id = _subagentRowId(item.card);
-        if (directActiveIds.has(id) || bridgeIds.has(id)) {
-          activeRows.push({ item, bridge: bridgeIds.has(id) });
+        if (directActiveIds.has(id) || bridgeIds.has(id) || continuationIds.has(id)) {
+          activeRows.push({
+            item,
+            bridge: bridgeIds.has(id) && !continuationIds.has(id),
+            continuation: continuationIds.has(id),
+          });
         } else {
           completedRows.push(item);
         }
@@ -32611,6 +32494,9 @@
         activeRows,
         completedRows,
         total: descendants.length,
+        continuation: continuationIds.size,
+        // Spawned agents only — continuation ancestors are not lanes.
+        agents: descendants.length - continuationIds.size,
         active: directActiveIds.size,
         attention: descendants.filter(item => _subagentRowNeedsAttention(item.card)).length,
       };
@@ -32628,11 +32514,19 @@
       // you just as effectively as if it weren't rendered at all. Default to
       // expanded whenever a descendant needs attention, regardless of the
       // user's manual toggle history for this parent.
-      const expanded = _subagentExpandedParents.has(parentId) || presentation.attention > 0;
+      // A chain with a continuation ancestor opens by default (the ancestor
+      // is part of this conversation); the user's collapse is remembered
+      // under a distinct key so the plain expanded-set semantics stay intact.
+      const hasContinuation = presentation.continuation > 0;
+      const expanded = presentation.attention > 0
+        || (hasContinuation
+          ? !_subagentExpandedParents.has('collapsed:' + parentId)
+          : _subagentExpandedParents.has(parentId));
       const parentOpts = Object.assign({}, opts, {
         subagentClusterMeta: {
           parentId,
-          total: presentation.total,
+          total: presentation.agents,
+          continuation: presentation.continuation,
           active: presentation.active,
           attention: presentation.attention,
           expanded,
@@ -32640,8 +32534,9 @@
       });
       const activeHtml = presentation.activeRows.map(entry => _renderRow(entry.item.card, Object.assign({}, opts, {
         currentChildDepth: entry.item.depth,
-        subagentCompact: true,
+        subagentCompact: !entry.continuation,
         subagentBridge: entry.bridge,
+        continuationAncestor: !!entry.continuation,
       }))).join('');
       const completedHtml = presentation.completedRows.length
         ? '<div class="conv-subagent-completed">'
@@ -32666,7 +32561,8 @@
           + '</div>'
         : '';
       return '<div class="conv-subagent-cluster' + (expanded ? ' is-expanded' : '') + '"'
-        + ' data-subagent-parent-sid="' + escapeAttr(parentId) + '">'
+        + ' data-subagent-parent-sid="' + escapeAttr(parentId) + '"'
+        + (hasContinuation ? ' data-continuation-cluster="1"' : '') + '>'
         + _renderRow(rootItem.card, parentOpts)
         + '<div class="conv-subagent-cluster-body">' + activeHtml + completedHtml + '</div>'
         + '</div>';
@@ -33288,9 +33184,6 @@
       };
       const _byObject = new Map();
       const _unclassified = [];
-      const _objectKeepIds = (!_ipSearchActive)
-        ? new Set(_foldContinuationAncestorRows(_visibleSessionConvs, { recordCounts: false }).map(_continuationRowId))
-        : null;
       const _objectHasVisibleDrafts = (node) =>
         (flowDraftSessions || []).some(d => d && flowDraftParentNode(d) === node);
       // Match any object whose title starts with "evergreen" — "Evergreen
@@ -33300,7 +33193,6 @@
       const _isEvergreenAgentsObjectTitle = (title) =>
         String(title || '').trim().toLowerCase().replace(/[^a-z0-9]+/g, '').startsWith('evergreen');
       for (const c of _visibleSessionConvs) {
-        if (_objectKeepIds && !_objectKeepIds.has(_continuationRowId(c))) continue;
         const grp = _groupForSession(c);
         if (grp && grp.archived) continue;
         if (!grp) { _unclassified.push(c); continue; }
@@ -33789,18 +33681,6 @@
       const _currentSessionLineage = _ipSearchActive
         ? { rows: _currentSessionWindowed, openAsks: [] }
         : _currentSessionsKeepClusteredDescendants(_currentSessionWindowed);
-      // Continuation folding — ONE main row per F2-continue chain. A session
-      // whose continuation descendant is visible collapses into the chain's
-      // head: its transcript is reachable by scrolling up in the head's
-      // merged conversation view, and the head's ↳ chip still opens it
-      // directly. Only continuation edges (Origin-marker) fold; subagent /
-      // worker nesting is untouched. Skipped while searching so results
-      // stay complete.
-      _continuationFoldedCounts.clear();
-      _continuationFoldedAncestors.clear();
-      if (!_ipSearchActive) {
-        _currentSessionLineage.rows = _foldContinuationAncestorRows(_currentSessionLineage.rows);
-      }
       const _currentSessionVisibleIds = new Set(_currentSessionLineage.rows.map(_currentSessionId));
       const _currentSessionRehomedOpenAsks = new Map();
       if (!_ipSearchActive) {
@@ -33855,7 +33735,6 @@
           const id = _currentSessionId(c);
           const pid = _currentSessionParentId(c);
           if (!id || !pid || id === pid || !byId.has(pid)) return;
-          if (_isContinuationPair(c, byId.get(pid))) return;
           childIds.add(id);
           (childrenByParent.get(pid) || childrenByParent.set(pid, []).get(pid)).push(c);
         });
@@ -34530,21 +34409,6 @@
       + ((_gcItems || []).length || 0)
       + ((Array.isArray(_archivedGroupChats) ? _archivedGroupChats : []).length || 0);
     const _allTabSessionId = (c) => String((c && (c.session_id || c.id)) || '').trim();
-    // Same one-row-per-continuation-chain fold as Current sessions. Coding /
-    // Workers / Archived all render through this All-tab pipeline, so without
-    // this the origin session stays a sibling of its continuation.
-    if (!_ipSearchActive) {
-      const _allTabIsVisible = _sidebarTab === 'archived'
-        || _sidebarTab === 'coding'
-        || _sidebarTab === 'workers';
-      if (_allTabIsVisible) {
-        _continuationFoldedCounts.clear();
-        _continuationFoldedAncestors.clear();
-      }
-      _allTabConvs = _foldContinuationAncestorRows(_allTabConvs, {
-        recordCounts: _allTabIsVisible,
-      });
-    }
     const _allTabParentId = (c) => f2EffectiveParentSessionId(
       _allTabSessionId(c), c && (c.parent_session_id || c.hermes_parent_session_id)
     );
@@ -34560,7 +34424,6 @@
         const id = _allTabSessionId(c);
         const pid = _allTabParentId(c);
         if (!id || !pid || id === pid || !byId.has(pid)) return;
-        if (_isContinuationPair(c, byId.get(pid))) return;
         childIds.add(id);
         (childrenByParent.get(pid) || childrenByParent.set(pid, []).get(pid)).push(c);
       });
@@ -36451,7 +36314,10 @@
         const arrow = btn.querySelector('.conv-subagent-cluster-arrow');
         if (arrow) arrow.innerHTML = expanded ? '&#9662;' : '&#9656;';
         const set = _subagentClustersExpandedSet();
-        if (expanded) set.add(sid); else set.delete(sid);
+        if (cluster.hasAttribute('data-continuation-cluster')) {
+          // Continuation clusters default open; remember only the collapse.
+          if (expanded) set.delete('collapsed:' + sid); else set.add('collapsed:' + sid);
+        } else if (expanded) set.add(sid); else set.delete(sid);
         _subagentClustersSaveExpandedSet(set);
       });
     }
@@ -36548,14 +36414,6 @@
     if (!$convList._originChipWired) {
       $convList._originChipWired = true;
       $convList.addEventListener('click', (ev) => {
-        const contChip = ev.target && ev.target.closest && ev.target.closest('.conv-session-origin-chip[data-continuation-sid]');
-        if (contChip) {
-          ev.stopPropagation();
-          ev.preventDefault();
-          const sid = contChip.getAttribute('data-continuation-sid') || '';
-          if (sid) _jumpToContinuationSegment(sid);
-          return;
-        }
         const chip = ev.target && ev.target.closest && ev.target.closest('.conv-session-origin-chip[data-parent-sid]');
         if (!chip) return;
         ev.stopPropagation();
@@ -46020,39 +45878,6 @@
     // Cycle guard: never load the same segment twice.
     if (segs.some(s => String(s.sid) === next)) return '';
     return next;
-  }
-  function _jumpToContinuationSegment(sid) {
-    const target = String(sid || '').trim();
-    if (!target) return;
-    const paneId = (typeof activePaneId === 'function') ? activePaneId() : '';
-    const pane = paneByPaneId(paneId);
-    const $view = (typeof getConvViewForPane === 'function' ? getConvViewForPane(paneId) : null)
-      || $conversationsView;
-    if (!pane || !$view) return;
-    const findBoundary = () => $view.querySelector(
-      '.conv-session-boundary[data-boundary-parent-sid="' + target.replace(/"/g, '') + '"]'
-    );
-    const scrollTo = (el) => {
-      if (!el) return;
-      $view._pinnedToBottom = false;
-      el.scrollIntoView({ behavior: 'smooth', block: 'end' });
-      if (typeof updateConversationEndAffordance === 'function') updateConversationEndAffordance($view);
-    };
-    const already = findBoundary();
-    if (already) { scrollTo(already); return; }
-    (async () => {
-      const openId = pane.conversationId;
-      for (let i = 0; i < 20; i++) {
-        if (findBoundary()) break;
-        const beforeLine = Number(pane.firstLine || 0);
-        if (beforeLine > 1) pane.loadBeforeLine = beforeLine;
-        else if (_contNextParentForPane(pane, openId)) pane.loadAncestorHop = true;
-        else break;
-        await fetchConversationEvents(paneId);
-        if (!paneByPaneId(paneId) || paneByPaneId(paneId).conversationId !== openId) return;
-      }
-      scrollTo(findBoundary());
-    })().catch(() => {});
   }
   function _contSegmentTitle(sid) {
     const row = _continuationRowForSid(sid);
@@ -69770,12 +69595,6 @@
       $queueRhsListToggle.classList.toggle('is-on', on);
       $queueRhsListToggle.setAttribute('aria-checked', String(on));
     }
-    const $continuationFoldingToggle = document.getElementById('settingsContinuationFoldingToggle');
-    if ($continuationFoldingToggle) {
-      const on = getContinuationFoldingPref();
-      $continuationFoldingToggle.classList.toggle('is-on', on);
-      $continuationFoldingToggle.setAttribute('aria-checked', String(on));
-    }
     _syncUiModeBodyClass();
   }
   // Live-update when the user has 'system' selected and OS theme flips.
@@ -70219,7 +70038,6 @@
       localStorage.removeItem('ccc-spawn-cwd');
     } catch (_) {}
     refreshSpawnEngineValue();
-    setContinuationFoldingPref(false);
   }
 
   // ── Preview feature flags ───────────────────────────────────────────
@@ -70447,12 +70265,6 @@
         setUiMode(isSimpleMode() ? 'advanced' : 'simple');
         refreshAppearanceChecks();
         showSettingsSavedPulse(uiModeToggle.closest('.settings-row'));
-        return;
-      }
-      const continuationFoldingToggle = e.target.closest('[data-continuation-folding-toggle]');
-      if (continuationFoldingToggle) {
-        setContinuationFoldingPref(!getContinuationFoldingPref());
-        showSettingsSavedPulse(continuationFoldingToggle.closest('.settings-row'));
         return;
       }
       const ffToggle = e.target.closest('[data-ff-toggle]');

@@ -6224,9 +6224,6 @@
      reveal on hover. */
   .conv-project-tree .conv-item > :not(.conv-title-row) { display: none; }
   .conv-project-tree .conv-item .conv-main-row > :not(.conv-title):not(.conv-title-input) { display: none; }
-  .conv-project-tree .conv-item.active .conv-main-row > .conv-session-origin-chip.is-continuation {
-    display: inline-flex;
-  }
   .conv-project-tree .conv-item .conv-title-input {
     min-width: 0;
     height: 24px;
@@ -6513,33 +6510,6 @@
     border-color: rgba(88,166,255,0.35);
     background: rgba(88,166,255,0.12);
     color: var(--accent, #58a6ff);
-  }
-  /* Folded continuation ancestors: purple ↳ chips on the title row,
-     only while that conversation is selected. */
-  .conv-item .conv-main-row > .conv-session-origin-chip.is-continuation {
-    display: none;
-    flex: 0 0 auto;
-    height: 18px;
-    max-width: 140px;
-    padding: 0 6px;
-    border: 1px solid rgba(88,166,255,0.35);
-    border-radius: 4px;
-    background: rgba(88,166,255,0.14);
-    color: var(--accent, #58a6ff);
-    font-size: 11px;
-    line-height: 18px;
-    white-space: nowrap;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    cursor: pointer;
-  }
-  .conv-item.active .conv-main-row > .conv-session-origin-chip.is-continuation {
-    display: inline-flex;
-    align-items: center;
-  }
-  .conv-item.active .conv-main-row > .conv-session-origin-chip.is-continuation:hover {
-    border-color: var(--accent, #58a6ff);
-    background: rgba(88,166,255,0.24);
   }
   /* Clickable only when a resolvable parent id was wired up (data-parent-sid) —
      an origin chip with no known parent (CCC/user/unknown) stays inert. */
