@@ -7379,12 +7379,17 @@ class TestRepoContextHelpers(unittest.TestCase):
         ledger_path = self.server._wt_worker_sessions_path()
         ledger_path.parent.mkdir(parents=True, exist_ok=True)
         ledger_path.write_text(json.dumps({"session_ids": [worker_sid]}), encoding="utf-8")
-        rows = [{"session_id": worker_sid}, {"session_id": "ordinary-session"}]
+        rows = [
+            {"session_id": worker_sid},
+            {"session_id": "ordinary-session"},
+            {"session_id": worker_sid, "continued_from_session_id": "parent-sid"},
+        ]
 
         self.server._apply_watchtower_worker_display_names(rows)
 
         self.assertTrue(rows[0]["is_watchtower_worker"])
         self.assertNotIn("is_watchtower_worker", rows[1])
+        self.assertNotIn("is_watchtower_worker", rows[2])
 
     def test_queue_drain_api_writes_via_watchtower_config(self):
         """/api/queue/drain delegates to watchtower.config.set_auto_drain when

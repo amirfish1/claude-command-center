@@ -1,0 +1,1 @@
+- Prevent continuation sessions from being falsely classified as WatchTower workers or hidden from the Coding tab.

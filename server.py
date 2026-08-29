@@ -2388,7 +2388,10 @@ def _apply_watchtower_worker_display_names(rows):
             continue
         sid = str(row.get("session_id") or row.get("id") or "").strip()
         if sid in worker_session_ids:
-            row["is_watchtower_worker"] = True
+            # Continuation sessions (F2) are user interactive sessions continuing
+            # prior work; they must not be classified as WatchTower background workers.
+            if not row.get("continued_from_session_id"):
+                row["is_watchtower_worker"] = True
         if row.get("name_overridden"):
             continue
         titled = titles_by_sid.get(sid)

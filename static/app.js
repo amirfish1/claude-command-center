@@ -34716,7 +34716,7 @@
       + ((Array.isArray(_archivedGroupChats) ? _archivedGroupChats : []).length || 0);
     const _allTabSessionId = (c) => String((c && (c.session_id || c.id)) || '').trim();
     const _allTabParentId = (c) => f2EffectiveParentSessionId(
-      _allTabSessionId(c), c && (c.parent_session_id || c.hermes_parent_session_id)
+      _allTabSessionId(c), c && (c.parent_session_id || c.hermes_parent_session_id || continuationParentId(c) || c.continued_from_session_id)
     );
     const _allTabTreeRowsFor = (rows) => {
       const byId = new Map();
@@ -34803,6 +34803,10 @@
     };
     const _isWatchTowerWorkerRow = (c) => {
       if (!c) return false;
+      // F2 continuation sessions (continued_from_session_id / continuationParentId)
+      // are interactive user sessions continuing prior work; they must never be
+      // classified as WatchTower background workers.
+      if (continuationParentId(c) || (c && c.continued_from_session_id)) return false;
       const sid = String(c.session_id || c.id || '').trim();
       return !!(c._worker_id || (sid && _wtWorkerSessionIds.has(sid)) || _looksLikeWtWorkerTitle(c));
     };
