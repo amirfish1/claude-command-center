@@ -33,6 +33,7 @@ import json
 import math
 import os
 import platform
+import queue
 import re
 import select
 import shlex
@@ -105,6 +106,11 @@ from control_plane import ControlPlaneClient, socket_path, worker_pid_path
 # Native Claude Code peer Unix sockets (stdlib-only sibling module): the
 # agent-to-agent transport that rides ahead of tmux/AppleScript/FIFO relays.
 import ccc_peer_uds
+
+# Inbound frame parsing for CCC's own peer socket (slice 3: CCC as a peer).
+# Pure/stdlib, no imports from server.py -- mirrors ccc_peer_uds.py's split
+# between wire-format helpers (here) and registry/routing (server.py below).
+import ccc_peer_inbound
 
 # Productivity metrics and local persistence are isolated in a stdlib-only
 # sibling module.  server.py adapts CCC's transcripts, repositories, and queue
@@ -50273,18 +50279,55 @@ def _wrap_injected_text_with_announced_from(text, announced_from):
     return f"Announced from: {label}\n\n{text}"
 
 
-def _wrap_prompt_with_return_address(prompt, report_to, port=None):
+def _wrap_prompt_with_return_address(prompt, report_to, port=None, engine="claude"):
     """Append a 'report back when done' footer addressed to `report_to`.
 
-    Engine-agnostic by design: it is plain prompt text instructing the spawned
+    Engine-agnostic by default: plain prompt text instructing the spawned
     agent to POST one structured completion report to /api/inject-input,
     targeting the dispatching session. Works identically for claude / codex /
     cursor / antigravity since none of them need a special channel — they all
     can run the curl. No-op when `report_to` is falsy.
+
+    Claude children report back over native peer messaging (SendMessage to
+    CCC's own peer identity) instead, but ONLY when the uds gate is on AND
+    CCC's own peer socket is actually listening (checked via
+    _CCC_PEER_STATE, not just the env flag) -- a footer telling a child to
+    SendMessage a receiver that doesn't exist would silently black-hole the
+    report. Every other case (gate off, non-Claude engine, or the gate on
+    but CCC's own listener didn't start) keeps the curl footer byte-for-byte,
+    so this is a strict opt-in with automatic fallback, not a behavior
+    change for anyone not on the flag.
     """
     rid = (report_to or "").strip()
     if not rid:
         return prompt
+    envelope = json.dumps({
+        "session_id": rid, "mode": "steer",
+        "announced_from": "<your session name or id>", "text": "<your report>",
+    })
+    use_sendmessage = (
+        engine == "claude"
+        and _uds_messaging_enabled()
+        and bool(_CCC_PEER_STATE.get("socket_path"))
+    )
+    if use_sendmessage:
+        return prompt + (
+            "\n\n---\n"
+            "## Return address — report back when done\n"
+            f"You were dispatched by another CCC session (id `{rid}`). When this "
+            "task is fully complete — whether it SUCCEEDED or FAILED — send exactly "
+            "ONE completion report back via Claude Code's native peer messaging. "
+            "Call SendMessage with agent=\"ccc\" and a message whose ENTIRE content "
+            "is exactly this JSON (fill in your own values, keep it valid JSON, "
+            "escape quotes/newlines in \"text\"):\n\n"
+            f"```\n{envelope}\n```\n\n"
+            "The report text must contain, in this order:\n"
+            "- STATUS: SUCCEEDED or FAILED\n"
+            "- SUMMARY: 1-3 sentence summary of what you did\n"
+            "- FILES: relevant file paths touched/created (or \"none\")\n"
+            "- REASON: if FAILED, the reason and what blocked you (omit if succeeded)\n\n"
+            "Send the report once, at the very end — not progress updates mid-task.\n"
+        )
     p = port or PORT
     footer = (
         "\n\n---\n"
@@ -58623,6 +58666,291 @@ def _run_wt_import(doc_path, queue, *, apply=False, item_type=None):
     }
 
 
+_CCC_PEER_STATE = {"sock": None, "token": "", "socket_path": "", "row_path": None, "key_path": None}
+_CCC_PEER_LOCK = threading.Lock()
+_CCC_ASK_CORRELATION = {}  # msg_id -> {"sender_sid": str|None, "target_sid": str|None, "created": float, "queue": queue.Queue}
+_CCC_ASK_CORRELATION_LOCK = threading.Lock()
+_CCC_ASK_CORRELATION_TTL_S = 600.0
+
+
+def _ccc_peer_socket_dir():
+    return Path("/tmp/cc-socks")
+
+
+def _ccc_peer_server_start():
+    """Bind CCC's own Claude-peer socket and publish its registry row.
+
+    Dashboard-process-only (see main()): the worker never calls this, so
+    exactly one process owns the listener, mirroring the has_tty split that
+    already ensures exactly one process sends outbound UDS frames.
+
+    Fails closed on registry-shape drift: if every locally observed real
+    Claude registry row is missing a key CCC's own row (and the rest of this
+    codebase) depends on, this refuses to publish and returns ok=False --
+    CCC keeps running normally, it just isn't a dialable peer. A machine
+    with no live Claude session to cross-check against is NOT a failure
+    (see ccc_peer_uds.validate_registry_row_shape); it publishes unverified
+    and logs that.
+    """
+    if not _uds_messaging_enabled():
+        return {"ok": False, "reason": "gate_off"}
+    with _CCC_PEER_LOCK:
+        if _CCC_PEER_STATE["sock"] is not None:
+            return {"ok": True, "reason": "already_running"}
+        sock_dir = _ccc_peer_socket_dir()
+        try:
+            sock_dir.mkdir(parents=True, exist_ok=True, mode=0o700)
+        except OSError as e:
+            _log_activity("peer", "CCC-PEER-FAIL", f"could not create {sock_dir}: {e}")
+            return {"ok": False, "reason": f"mkdir_failed: {e}"}
+        pid = os.getpid()
+        socket_path = str(sock_dir / f"{pid}.sock")
+        try:
+            if os.path.exists(socket_path):
+                os.unlink(socket_path)
+        except OSError:
+            pass
+        sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        try:
+            sock.bind(socket_path)
+            os.chmod(socket_path, 0o600)
+            sock.listen(16)
+        except OSError as e:
+            _log_activity("peer", "CCC-PEER-FAIL", f"bind {socket_path} failed: {e}")
+            try:
+                sock.close()
+            except OSError:
+                pass
+            return {"ok": False, "reason": f"bind_failed: {e}"}
+        row = ccc_peer_uds.build_ccc_registry_row(pid, socket_path, str(CCC_ROOT))
+        # Cross-check against real rows already on disk (Claude sessions this
+        # same user has running, if any) before publishing.
+        real_rows = []
+        try:
+            for f in SESSIONS_REGISTRY.iterdir():
+                if f.name.endswith(".json") and f.is_file():
+                    try:
+                        real_rows.append(json.loads(f.read_text()))
+                    except (OSError, json.JSONDecodeError):
+                        pass
+        except OSError:
+            pass
+        check = ccc_peer_uds.validate_registry_row_shape(row, real_rows)
+        if not check["ok"]:
+            _log_activity(
+                "peer", "CCC-PEER-SHAPE-DRIFT",
+                f"refusing to publish CCC's peer registry row: {check['reason']}",
+            )
+            sock.close()
+            try:
+                os.unlink(socket_path)
+            except OSError:
+                pass
+            return {"ok": False, "reason": f"shape_drift: {check['reason']}"}
+        if check["reason"] == "no_reference_rows":
+            _log_activity(
+                "peer", "CCC-PEER-UNVERIFIED",
+                "no live Claude session on this machine to cross-check registry shape; publishing unverified",
+            )
+        token = str(uuid.uuid4())
+        try:
+            SESSIONS_REGISTRY.mkdir(parents=True, exist_ok=True)
+            row_path = SESSIONS_REGISTRY / f"{pid}.json"
+            row_path.write_text(json.dumps(row))
+            key_path = ccc_peer_uds.key_path_for(SESSIONS_REGISTRY, pid, socket_path)
+            key_path.write_text(json.dumps(ccc_peer_uds.ccc_key_payload(token)))
+            os.chmod(key_path, 0o600)
+        except OSError as e:
+            _log_activity("peer", "CCC-PEER-FAIL", f"could not publish registry row/key: {e}")
+            sock.close()
+            try:
+                os.unlink(socket_path)
+            except OSError:
+                pass
+            return {"ok": False, "reason": f"publish_failed: {e}"}
+        _CCC_PEER_STATE.update(
+            sock=sock, token=token, socket_path=socket_path,
+            row_path=row_path, key_path=key_path,
+        )
+        threading.Thread(
+            target=_ccc_peer_accept_loop, args=(sock,), daemon=True, name="ccc-peer-accept",
+        ).start()
+        _log_activity("peer", "CCC-PEER-START", f"socket={socket_path}")
+        return {"ok": True, "socket_path": socket_path}
+
+
+def _ccc_peer_server_stop():
+    """Unbind and un-publish, mirroring _unregister_self()'s cleanup shape."""
+    with _CCC_PEER_LOCK:
+        sock = _CCC_PEER_STATE["sock"]
+        if sock is None:
+            return
+        try:
+            sock.close()
+        except OSError:
+            pass
+        for p in (_CCC_PEER_STATE["socket_path"], _CCC_PEER_STATE["row_path"], _CCC_PEER_STATE["key_path"]):
+            if not p:
+                continue
+            try:
+                os.unlink(p)
+            except OSError:
+                pass
+        _CCC_PEER_STATE.update(sock=None, token="", socket_path="", row_path=None, key_path=None)
+
+
+def _ccc_ask_correlation_register(msg_id, sender_sid=None, target_sid=None):
+    """Record that CCC sent an ask (msg_id) to target_sid on behalf of
+    sender_sid, so a later inbound reply naming this msg_id (or, failing
+    that, coming FROM target_sid with exactly one ask outstanding) can be
+    resolved back to the original asker. See _try_uds_peer_delivery for the
+    write side and _ccc_peer_handle_connection for the read side."""
+    q = queue.Queue(maxsize=1)
+    with _CCC_ASK_CORRELATION_LOCK:
+        now = time.time()
+        # Opportunistic sweep of stale entries every registration -- bounds
+        # growth without a dedicated timer thread.
+        for k in [
+            k for k, v in _CCC_ASK_CORRELATION.items()
+            if now - v["created"] > _CCC_ASK_CORRELATION_TTL_S
+        ]:
+            _CCC_ASK_CORRELATION.pop(k, None)
+        _CCC_ASK_CORRELATION[msg_id] = {
+            "sender_sid": sender_sid, "target_sid": target_sid, "created": now, "queue": q,
+        }
+    return q
+
+
+def _ccc_ask_correlation_resolve(orig_msg_id, from_sid, reply_text):
+    """Best-effort match of an inbound reply to a pending ask. Primary key is
+    the orig_msg_id header CCC's own ask wrapper asks the replier to echo;
+    fallback is "the oldest still-outstanding ask whose target session is
+    from_sid" when no orig_msg_id was given and exactly one ask is
+    outstanding to that target. Returns True if a wait was resolved."""
+    entry = None
+    with _CCC_ASK_CORRELATION_LOCK:
+        if orig_msg_id:
+            entry = _CCC_ASK_CORRELATION.pop(orig_msg_id, None)
+        if entry is None and from_sid:
+            candidates = [
+                (k, v) for k, v in _CCC_ASK_CORRELATION.items()
+                if v.get("target_sid") == from_sid
+            ]
+            if len(candidates) == 1:
+                k, entry = candidates[0]
+                _CCC_ASK_CORRELATION.pop(k, None)
+    if entry is None:
+        return False
+    try:
+        entry["queue"].put_nowait(reply_text)
+    except queue.Full:
+        pass
+    return True
+
+
+def _ccc_peer_route_report(envelope, from_addr):
+    """A report_to report-back that arrived over SendMessage instead of
+    curl. Same effect as the curl footer's POST to /api/inject-input: one
+    inject into the dispatching session, through the same gated function
+    (circuit breaker, activity log) that endpoint already uses -- this is
+    the boundary that keeps inbound-frame authority equal to, not wider
+    than, CCC's existing loopback trust model (see _check_same_origin)."""
+    sid = str(envelope.get("session_id") or "").strip()
+    text = str(envelope.get("text") or "")
+    if not sid or not text:
+        return
+    mode = str(envelope.get("mode") or "steer")
+    announced_from = str(envelope.get("announced_from") or from_addr or "")
+    _inject_text_into_session(
+        sid, text, mode=mode, source="announced_from", announced_from=announced_from,
+    )
+
+
+def _ccc_sid_for_socket_addr(from_addr):
+    """Reverse-lookup a wrapper `from` address ("uds:/tmp/cc-socks/<pid>.sock")
+    back to the session id that registry row belongs to. Returns "" if the
+    address doesn't match any currently live row."""
+    from_addr = str(from_addr or "")
+    prefix = "uds:"
+    if not from_addr.startswith(prefix):
+        return ""
+    sock_path = from_addr[len(prefix):]
+    try:
+        registry = _load_session_registry()
+    except Exception:
+        return ""
+    for sid, meta in registry.items():
+        if str(meta.get("messagingSocketPath") or "") == sock_path:
+            return sid
+    return ""
+
+
+def _ccc_peer_handle_connection(conn):
+    """Classify and route one inbound connection on CCC's own peer socket.
+
+    Three buckets, checked in order, matching the spec: (1) a reply to an
+    outstanding CCC-initiated ask (resolves the wait, no injection); (2) a
+    report_to report-back JSON envelope (routes through
+    _inject_text_into_session, same as the curl path); (3) otherwise, logged
+    as unrouted -- CCC never guesses a destination for unaddressed text.
+    """
+    try:
+        token = _CCC_PEER_STATE.get("token") or ""
+        authed = not token  # if CCC somehow has no token, don't lock out every sender
+        for frame in ccc_peer_inbound.read_frames(conn):
+            ftype = frame.get("type")
+            if ftype == "auth":
+                authed = str(frame.get("token") or "") == token
+                if not authed:
+                    _log_activity("peer", "CCC-PEER-AUTH-FAIL", "inbound auth token mismatch")
+                    return
+                continue
+            if ftype != "user":
+                continue
+            if not authed:
+                _log_activity("peer", "CCC-PEER-AUTH-FAIL", "inbound frame before/without valid auth")
+                return
+            from_addr = str(frame.get("from") or "")
+            content = ((frame.get("message") or {}).get("content") or "")
+            body = ccc_peer_inbound.unwrap_message(content)
+            orig_msg_id, remainder = ccc_peer_inbound.extract_orig_msg_id(body)
+            from_sid = _ccc_sid_for_socket_addr(from_addr)
+            if _ccc_ask_correlation_resolve(orig_msg_id, from_sid, remainder):
+                _log_activity(
+                    "peer", "CCC-PEER-ASK-REPLY",
+                    f"from={from_addr} orig_msg_id={orig_msg_id or '-'}",
+                )
+                continue
+            envelope = ccc_peer_inbound.parse_report_envelope(body)
+            if envelope is not None:
+                _ccc_peer_route_report(envelope, from_addr)
+                _log_activity(
+                    "peer", "CCC-PEER-REPORT",
+                    f"from={from_addr} session_id={envelope.get('session_id')}",
+                )
+                continue
+            _log_activity(
+                "peer", "CCC-PEER-UNROUTED",
+                f"from={from_addr} preview=\"{_activity_log_preview(body)}\"",
+            )
+    finally:
+        try:
+            conn.close()
+        except OSError:
+            pass
+
+
+def _ccc_peer_accept_loop(sock):
+    while True:
+        try:
+            conn, _addr = sock.accept()
+        except OSError:
+            return  # socket closed by _ccc_peer_server_stop
+        threading.Thread(
+            target=_ccc_peer_handle_connection, args=(conn,), daemon=True, name="ccc-peer-conn",
+        ).start()
+
+
 def _try_uds_peer_delivery(session_id, text, *, source, mode="send", peer_sender_sid=None):
     """Deliver agent-origin text over the target's Claude Code peer socket.
 
@@ -58661,8 +58989,23 @@ def _try_uds_peer_delivery(session_id, text, *, source, mode="send", peer_sender
             # CCC spawns every headless Claude with
             # --dangerously-skip-permissions, so this attestation is true.
             from_mode = "bypass"
+    if not from_addr and _CCC_PEER_STATE.get("socket_path"):
+        # Sender has no Claude registry row of its own (a non-Claude engine
+        # CCC is relaying for, or peer_sender_sid unresolved) -- point the
+        # receiver back at CCC itself so it has SOMEWHERE to reply. This is
+        # what makes CCC a dialable address instead of leaving from blank.
+        from_addr = "uds:" + _CCC_PEER_STATE["socket_path"]
+        from_name = from_name or "ccc"
     msg_id = str(uuid.uuid4())
-    content = ccc_peer_uds.wrap(text, from_addr=from_addr, from_name=from_name, from_mode=from_mode)
+    ask_text = text
+    if source == "ask":
+        _ccc_ask_correlation_register(msg_id, sender_sid=peer_sender_sid, target_sid=session_id)
+        ask_text = (
+            f"orig_msg_id: {msg_id}\n{text}\n\n"
+            "(If you reply, please start your reply with the line above "
+            "exactly as shown, so the reply routes back correctly.)"
+        )
+    content = ccc_peer_uds.wrap(ask_text, from_addr=from_addr, from_name=from_name, from_mode=from_mode)
     token = ccc_peer_uds.load_peer_token(SESSIONS_REGISTRY, target["pid"], target["socket_path"])
     priority = "now" if str(mode or "") == "steer" else "next"
     try:
@@ -72222,7 +72565,7 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                 try:
                     # Return address: spawned session reports back to its
                     # dispatcher on completion. No-op when report_to is unset.
-                    prompt = _wrap_prompt_with_return_address(prompt, report_to)
+                    prompt = _wrap_prompt_with_return_address(prompt, report_to, engine=engine)
                     spawn_cwd = str(cwd_resolved) if cwd_resolved else None
                     _set_control_plane_action_id(payload.get("idempotency_key"))
                     if engine == "codex":
@@ -81426,12 +81769,24 @@ def main():
     _check_duplicate_repo_instance()
     write_port_file(bind_host, port=port)
     _register_self(port, bind_host)
+    # CCC as a Claude Code peer (slice 3): bind our own socket and publish a
+    # registry row real Claude sessions can dial, so a receiver has somewhere
+    # to reply and report_to children can use SendMessage instead of curl.
+    # Dashboard-process-only (the worker never calls this) and gated behind
+    # the same CCC_MESSAGING_BACKEND=uds opt-in as the rest of the peer
+    # transport -- a no-op on every install that hasn't flipped that flag.
+    if os.environ.get("CCC_WORKER_PROCESS") != "1":
+        _ccc_peer_server_start()
     # SIGTERM (systemd / `kill <pid>`) needs explicit cleanup; SIGINT (Ctrl+C)
     # raises KeyboardInterrupt below and is handled there. Both paths remove
     # this server's registry entry so peers don't see a stale ghost.
     def _on_sigterm(signum, frame):
         try:
             _unregister_self()
+        except Exception:
+            pass
+        try:
+            _ccc_peer_server_stop()
         except Exception:
             pass
         sys.exit(0)
@@ -81518,6 +81873,10 @@ def main():
         print("\nStopped.")
         try:
             _unregister_self()
+        except Exception:
+            pass
+        try:
+            _ccc_peer_server_stop()
         except Exception:
             pass
         server.server_close()
