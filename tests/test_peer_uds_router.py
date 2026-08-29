@@ -194,3 +194,55 @@ def test_try_uds_loads_registry_once_and_never_forks(monkeypatch, tmp_path):
     monkeypatch.setattr(server.subprocess, "Popen", lambda *a, **k: (_ for _ in ()).throw(AssertionError("subprocess in uds path")))
     server._try_uds_peer_delivery("target-sid", "x", source="ask")
     assert calls["registry"] == 1
+
+
+def _stub_inject_router_seams(monkeypatch, *, is_codex=False):
+    """Stub the router seams _inject_text_into_session runs before the UDS
+    hook, so a call against server._inject_text_into_session exercises the
+    real wiring around the hook instead of a fully mocked-out function."""
+    monkeypatch.setattr(server, "_federation_resolve_target", lambda sid: (sid, None))
+    monkeypatch.setattr(server, "_claude_subagent_parent_session_id", lambda sid: None)
+    monkeypatch.setattr(server, "_canonical_kimi_session_id", lambda sid: sid)
+    monkeypatch.setattr(server, "_inject_budget_check", lambda *a, **k: None)
+    monkeypatch.setattr(server, "_is_codex_session", lambda sid: is_codex)
+    monkeypatch.setattr(server, "find_session_cwd", lambda sid: None)
+    monkeypatch.setattr(server, "session_live_status", lambda sid, cwd: {})
+
+
+def test_inject_router_returns_uds_result_for_eligible_source(monkeypatch):
+    _stub_inject_router_seams(monkeypatch, is_codex=False)
+    calls = []
+    uds_reply = {"ok": True, "via": "uds", "source": "uds", "receipt_id": "m-9", "receipt": "delivered"}
+
+    def fake_try_uds(session_id, text, *, source, mode="send", peer_sender_sid=None):
+        calls.append({
+            "session_id": session_id,
+            "text": text,
+            "source": source,
+            "mode": mode,
+            "peer_sender_sid": peer_sender_sid,
+        })
+        return uds_reply
+
+    monkeypatch.setattr(server, "_try_uds_peer_delivery", fake_try_uds)
+    result = server._inject_text_into_session(
+        "target-sid", "please review", source="ask", mode="steer", peer_sender_sid="sender-sid",
+    )
+    assert result == uds_reply
+    assert len(calls) == 1
+    assert calls[0]["source"] == "ask"
+    assert calls[0]["mode"] == "steer"
+    assert calls[0]["peer_sender_sid"] == "sender-sid"
+
+
+def test_inject_router_skips_uds_hook_for_codex_sessions(monkeypatch):
+    _stub_inject_router_seams(monkeypatch, is_codex=True)
+
+    def fail_if_called(*a, **k):
+        raise AssertionError("uds hook called for codex")
+
+    monkeypatch.setattr(server, "_try_uds_peer_delivery", fail_if_called)
+    codex_reply = {"ok": True, "via": "stub"}
+    monkeypatch.setattr(server, "resume_session_codex", lambda sid, text: codex_reply)
+    result = server._inject_text_into_session("target-sid", "please review", source="ask")
+    assert result == codex_reply
