@@ -2260,13 +2260,12 @@
      ordering — `order` is ignored there, so this rule is harmless in
      both modes. DOM order kept the historical "context above input"
      layout for back-compat with anything that queried by index. */
-  .conv-pane > .conv-goal-strip    { order: 0; }
-  .conv-pane > .conv-input-bar     { order: 1; }
-  .conv-pane > .conv-input-context { order: 2; }
-  .conv-pane > .conv-input-hint    { order: 3; }
-  .conv-pane > .conv-input-context.is-new-session {
-    order: 0;
-  }
+  .conv-pane > .conv-goal-strip         { order: 0; }
+  .conv-pane > .conv-input-context.is-new-session { order: 1; }
+  .conv-pane > .conv-model-picker-strip { order: 2; }
+  .conv-pane > .conv-input-bar          { order: 3; }
+  .conv-pane > .conv-input-context      { order: 4; }
+  .conv-pane > .conv-input-hint         { order: 5; }
   .conv-pane.is-codex-session {
     box-shadow: inset 4px 0 0 rgba(88, 166, 255, 0.72);
   }
@@ -11060,6 +11059,221 @@
     border-color: var(--red, #d73a49);
     color: var(--text-primary);
   }
+
+  /* ── System Processes (Audit & Killness Score) ───────────────────── */
+  .sys-dialog.is-wide {
+    width: min(880px, 95vw);
+  }
+  .sys-proc-header {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    padding-bottom: 12px;
+    border-bottom: 1px solid var(--border, rgba(255, 255, 255, 0.08));
+  }
+  .sys-proc-title-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    flex-wrap: wrap;
+  }
+  .sys-proc-toolbar {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    flex-wrap: wrap;
+  }
+  .sys-proc-search {
+    flex: 1;
+    min-width: 220px;
+    background: rgba(0, 0, 0, 0.3);
+    border: 1px solid var(--border, rgba(255, 255, 255, 0.12));
+    color: var(--text);
+    border-radius: 6px;
+    padding: 6px 10px;
+    font-size: 12px;
+    font-family: inherit;
+  }
+  .sys-proc-search:focus {
+    outline: none;
+    border-color: var(--accent, #ffd266);
+  }
+  .sys-proc-filter-pills {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    flex-wrap: wrap;
+  }
+  .sys-proc-filter-pill {
+    background: transparent;
+    border: 1px solid var(--border, rgba(255, 255, 255, 0.1));
+    color: var(--text-muted);
+    border-radius: 6px;
+    padding: 4px 10px;
+    font-size: 11px;
+    font-weight: 500;
+    cursor: pointer;
+    font-family: inherit;
+    transition: all 0.15s ease;
+  }
+  .sys-proc-filter-pill:hover {
+    color: var(--text);
+    background: rgba(255, 255, 255, 0.05);
+  }
+  .sys-proc-filter-pill.active {
+    background: rgba(255, 255, 255, 0.12);
+    color: var(--text);
+    border-color: rgba(255, 255, 255, 0.2);
+  }
+  .sys-proc-filter-count {
+    opacity: 0.7;
+    font-size: 10.5px;
+  }
+  .sys-proc-list {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+  }
+  .sys-proc-card {
+    display: flex;
+    align-items: flex-start;
+    gap: 12px;
+    background: rgba(255, 255, 255, 0.02);
+    border: 1px solid var(--border, rgba(255, 255, 255, 0.07));
+    border-radius: 8px;
+    padding: 10px 12px;
+    transition: background 0.15s ease, border-color 0.15s ease;
+  }
+  .sys-proc-card:hover {
+    background: rgba(255, 255, 255, 0.04);
+    border-color: rgba(255, 255, 255, 0.12);
+  }
+  .sys-proc-card.score-critical {
+    border-left: 3px solid #ff4d4d;
+    background: rgba(255, 77, 77, 0.03);
+  }
+  .sys-proc-card.score-warn {
+    border-left: 3px solid #f1c40f;
+    background: rgba(241, 196, 15, 0.02);
+  }
+  .sys-proc-card.score-mod {
+    border-left: 3px solid #3498db;
+  }
+  .sys-proc-card.score-low {
+    border-left: 3px solid rgba(255, 255, 255, 0.15);
+  }
+  .sys-proc-score-box {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    min-width: 52px;
+    padding: 6px 4px;
+    border-radius: 6px;
+    background: rgba(0, 0, 0, 0.25);
+    border: 1px solid rgba(255, 255, 255, 0.06);
+    flex-shrink: 0;
+    text-align: center;
+  }
+  .sys-proc-score-num {
+    font-size: 15px;
+    font-weight: 700;
+    line-height: 1.1;
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  }
+  .score-critical .sys-proc-score-num { color: #ff5252; }
+  .score-warn .sys-proc-score-num { color: #ffd266; }
+  .score-mod .sys-proc-score-num { color: #64b5f6; }
+  .score-low .sys-proc-score-num { color: var(--text-muted); }
+  .sys-proc-score-denom {
+    font-size: 9.5px;
+    opacity: 0.5;
+  }
+  .sys-proc-risk-tag {
+    font-size: 8.5px;
+    font-weight: 700;
+    letter-spacing: 0.05em;
+    margin-top: 3px;
+    text-transform: uppercase;
+  }
+  .score-critical .sys-proc-risk-tag { color: #ff5252; }
+  .score-warn .sys-proc-risk-tag { color: #ffd266; }
+  .score-mod .sys-proc-risk-tag { color: #64b5f6; }
+  .score-low .sys-proc-risk-tag { color: var(--text-muted); }
+  .sys-proc-info {
+    flex: 1;
+    min-width: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+  }
+  .sys-proc-cmd-row {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    flex-wrap: wrap;
+  }
+  .sys-proc-cmd-title {
+    font-size: 13px;
+    font-weight: 600;
+    color: var(--text);
+  }
+  .sys-proc-tag {
+    display: inline-block;
+    padding: 1px 6px;
+    border-radius: 4px;
+    font-size: 10.5px;
+    font-weight: 600;
+  }
+  .sys-proc-tag.tag-danger {
+    background: rgba(255, 77, 77, 0.15);
+    color: #ff6b6b;
+    border: 1px solid rgba(255, 77, 77, 0.3);
+  }
+  .sys-proc-tag.tag-warn {
+    background: rgba(241, 196, 15, 0.15);
+    color: #ffd266;
+    border: 1px solid rgba(241, 196, 15, 0.3);
+  }
+  .sys-proc-tag.tag-subtle {
+    background: rgba(255, 255, 255, 0.06);
+    color: var(--text-muted);
+    border: 1px solid rgba(255, 255, 255, 0.08);
+  }
+  .sys-proc-cmd-text {
+    font-size: 11px;
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    color: var(--text-muted);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    max-width: 100%;
+  }
+  .sys-proc-meta-row {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    font-size: 11px;
+    color: var(--text-muted);
+    flex-wrap: wrap;
+  }
+  .sys-proc-path-line {
+    font-size: 10.5px;
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    word-break: break-all;
+  }
+  .sys-proc-path-label {
+    opacity: 0.6;
+    margin-right: 4px;
+  }
+  .sys-proc-action {
+    display: flex;
+    align-items: center;
+    align-self: center;
+    flex-shrink: 0;
+  }
+
   .sys-section { border: 1px solid var(--border); border-radius: 8px;
     padding: 10px 12px; background: var(--bg); }
   .sys-name { font-size: 13px; font-weight: 600; color: var(--text);
@@ -16501,11 +16715,12 @@
 body.status-pos-right .conv-pane.has-status-rail {
   display: grid;
   grid-template-columns: minmax(0, 1fr) var(--status-rail-width, 260px);
-  grid-template-rows: auto 1fr auto auto auto auto;
+  grid-template-rows: auto 1fr auto auto auto auto auto;
   grid-template-areas:
     "header  rail"
     "conv    rail"
     "goal    rail"
+    "model   rail"
     "input   rail"
     "context rail"
     "hint    rail";
@@ -16517,12 +16732,14 @@ body.status-pos-right .conv-pane.has-status-rail.has-new-session-context {
     "conv    rail"
     "context rail"
     "goal    rail"
+    "model   rail"
     "input   rail"
     "hint    rail";
 }
 body.status-pos-right .conv-pane.has-status-rail > .conv-pane-header   { grid-area: header;  min-width: 0; }
 body.status-pos-right .conv-pane.has-status-rail > .conversations-view { grid-area: conv;    min-width: 0; min-height: 0; }
 body.status-pos-right .conv-pane.has-status-rail > .conv-goal-strip    { grid-area: goal;    min-width: 0; }
+body.status-pos-right .conv-pane.has-status-rail > .conv-model-picker-strip { grid-area: model; min-width: 0; }
 body.status-pos-right .conv-pane.has-status-rail > .conv-input-bar     { grid-area: input;   min-width: 0; }
 body.status-pos-right .conv-pane.has-status-rail > .conv-input-hint    { grid-area: hint;    min-width: 0; }
 body.status-pos-right .conv-pane.has-status-rail > .conv-input-context { grid-area: context; min-width: 0; }
@@ -17045,6 +17262,7 @@ body.status-pos-right.status-rail-collapsed .conv-pane.has-status-rail {
     "header"
     "conv"
     "goal"
+    "model"
     "input"
     "hint"
     "context";
@@ -17055,6 +17273,7 @@ body.status-pos-right.status-rail-collapsed .conv-pane.has-status-rail.has-new-s
     "conv"
     "context"
     "goal"
+    "model"
     "input"
     "hint";
 }
@@ -23766,12 +23985,13 @@ body.has-gc-reader .pwa-install-banner {
    an explicit row for the per-pane selector so it does not fall
    into implicit-grid placement or displaces the composer. */
 body.status-pos-right .conv-pane.has-status-rail {
-  grid-template-rows: auto auto 1fr auto auto auto auto;
+  grid-template-rows: auto auto 1fr auto auto auto auto auto;
   grid-template-areas:
     "header rail"
     "present-toolbar rail"
     "conv rail"
     "goal rail"
+    "model rail"
     "input rail"
     "context rail"
     "hint rail";
@@ -23783,6 +24003,7 @@ body.status-pos-right .conv-pane.has-status-rail.has-new-session-context {
     "conv rail"
     "context rail"
     "goal rail"
+    "model rail"
     "input rail"
     "hint rail";
 }
@@ -23793,6 +24014,7 @@ body.status-pos-right.status-rail-collapsed .conv-pane.has-status-rail {
     "present-toolbar"
     "conv"
     "goal"
+    "model"
     "input"
     "hint"
     "context";
@@ -23804,6 +24026,7 @@ body.status-pos-right.status-rail-collapsed .conv-pane.has-status-rail.has-new-s
     "conv"
     "context"
     "goal"
+    "model"
     "input"
     "hint";
 }
@@ -24565,6 +24788,7 @@ a.settings-row:focus-visible .settings-launcher-btn { text-decoration: underline
       "conv"
       "context"
       "goal"
+      "model"
       "input"
       "hint";
   }
@@ -24614,6 +24838,7 @@ a.settings-row:focus-visible .settings-launcher-btn { text-decoration: underline
       "header  rail"
       "conv    rail"
       "goal    rail"
+      "model   rail"
       "input   rail"
       "context rail"
       "hint    rail";
@@ -25477,28 +25702,37 @@ html:not(.ccc-debug-mode) #statsModal {
 .orch-glyph-hermes { background: #10b981; }
 .orch-glyph-opencode { background: #ec4899; }
 
-/* New Session Stage Model Picker container */
-.ns-model-picker {
-  display: flex;
-  flex-direction: column;
-  align-items: flex-start;
-  width: min(460px, 92vw);
-  margin: 12px auto;
-  padding: 4px 6px 4px 8px;
-  border-left: 2px solid color-mix(in srgb, #a371f7 45%, transparent);
+/* Quick Model Picker right above composer */
+.conv-model-picker-strip {
+  display: none;
+  flex: 0 0 auto;
+  padding: 6px 14px 4px 14px;
+  background: var(--bg);
   box-sizing: border-box;
-  text-align: left;
 }
-.ns-model-picker-title {
+.conv-model-picker-strip.is-new-session {
+  display: flex;
+}
+.conv-model-picker-inner {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding-left: 8px;
+  border-left: 2px solid color-mix(in srgb, #a371f7 65%, transparent);
+}
+.conv-model-picker-label {
   font-size: 10px;
   font-weight: 700;
   letter-spacing: 0.06em;
   text-transform: uppercase;
   color: var(--text-muted);
-  margin-bottom: 8px;
+  flex: 0 0 auto;
+  margin-right: 2px;
 }
-.ns-model-picker-chips {
+.conv-model-picker-chips {
   display: flex;
+  align-items: center;
   flex-wrap: wrap;
   gap: 6px;
 }

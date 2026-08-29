@@ -9197,6 +9197,227 @@ def system_health_quit_app(app_id, timeout=8):
     return out
 
 
+_system_processes_snapshot = {"ts": 0.0, "data": None}
+_system_processes_lock = threading.Lock()
+_SYSTEM_PROCESSES_TTL = 3.0
+
+
+def _build_system_processes_uncached():
+    now = time.time()
+    uid = os.getuid() if hasattr(os, "getuid") else None
+
+    ps_cmd = [_SYS_PS, "-axo", "pid=,ppid=,rss=,pcpu=,etime=,stat=,tty=,command="]
+    if uid is not None and platform.system() == "Darwin":
+        ps_cmd = [_SYS_PS, "-u", str(uid), "-o", "pid=,ppid=,rss=,pcpu=,etime=,stat=,tty=,command="]
+
+    ps_out = _sys_run(ps_cmd, timeout=5)
+
+    lsof_cmd = [_SYS_LSOF, "-a", "-d", "0,cwd", "-Fpndft"]
+    if uid is not None:
+        try:
+            username = os.getlogin()
+        except Exception:
+            username = None
+        if username:
+            lsof_cmd += ["-u", username]
+        elif uid is not None:
+            lsof_cmd += ["-u", str(uid)]
+    lsof_out = _sys_run(lsof_cmd, timeout=5)
+
+    pid_files = {}
+    cur_pid = None
+    cur_fd = None
+    cur_type = None
+    for line in lsof_out.splitlines():
+        if not line:
+            continue
+        tag, val = line[0], line[1:]
+        if tag == "p":
+            try:
+                cur_pid = int(val)
+                pid_files[cur_pid] = {"cwd": None, "cwd_exists": True, "fd0": None, "fd0_type": None, "fd0_exists": True}
+            except ValueError:
+                cur_pid = None
+        elif cur_pid is not None:
+            if tag == "f":
+                cur_fd = val
+            elif tag == "t":
+                cur_type = val
+            elif tag == "n":
+                if cur_fd == "cwd":
+                    pid_files[cur_pid]["cwd"] = val
+                    pid_files[cur_pid]["cwd_exists"] = os.path.exists(val)
+                elif cur_fd == "0":
+                    pid_files[cur_pid]["fd0"] = val
+                    pid_files[cur_pid]["fd0_type"] = cur_type
+                    if cur_type == "FIFO":
+                        pid_files[cur_pid]["fd0_exists"] = os.path.exists(val)
+
+    procs = []
+    my_pid = os.getpid()
+    parent_pid = os.getppid()
+
+    for line in ps_out.splitlines():
+        parts = line.strip().split(None, 7)
+        if len(parts) < 8:
+            continue
+        try:
+            pid = int(parts[0])
+            ppid = int(parts[1])
+            rss_mb = int(parts[2]) / 1024.0
+            cpu = float(parts[3])
+        except (ValueError, IndexError):
+            continue
+        etime_str = parts[4]
+        stat = parts[5]
+        tty = parts[6]
+        cmd = parts[7]
+        etime_min = _sys_parse_etime(etime_str)
+
+        files = pid_files.get(pid, {"cwd": None, "cwd_exists": True, "fd0": None, "fd0_type": None, "fd0_exists": True})
+
+        score = 0.0
+        reasons = []
+
+        is_system_daemon = (
+            cmd.startswith(("/usr/libexec/", "/usr/sbin/", "/System/", "/Library/"))
+            or "LAUNCHED_BY_LAUNCHD" in cmd
+            or "/System/Library/" in cmd
+        )
+        is_gui = ("/Applications/" in cmd or "Contents/MacOS" in cmd)
+        is_ccc = ("server.py" in cmd or "ccc_worker.py" in cmd or "watchtower" in cmd or pid in (my_pid, parent_pid))
+        has_tty = bool(tty) and tty not in ("??", "?", "-", "")
+
+        if not files["cwd_exists"]:
+            score += 4.5
+            reasons.append("Deleted CWD")
+        if files["fd0_type"] == "FIFO" and not files["fd0_exists"]:
+            score += 4.5
+            reasons.append("Unlinked stdin FIFO")
+        if stat.startswith("Z") or "<defunct>" in cmd:
+            score += 5.0
+            reasons.append("Zombie process")
+
+        if any(k in cmd for k in ("fake_claude", "two-node", "test_")):
+            score += 3.0
+            reasons.append("Test artifact")
+        if files["cwd"] and any(p in files["cwd"] for p in ("/tmp/", "/var/folders/", "/.Trash/")):
+            score += 1.5
+            reasons.append("Temp/Trash path")
+
+        cmd_base = cmd.split(None, 1)[0].rsplit("/", 1)[-1]
+        if cmd_base in ("grep", "head", "tail", "cat", "find", "wc", "awk", "sed") and ppid == 1 and etime_min >= 10:
+            score += 3.5
+            reasons.append("Stuck orphan CLI")
+
+        if ppid == 1 and not is_system_daemon and not is_gui:
+            score += 2.0
+            reasons.append("Orphaned (PPID 1)")
+
+        if etime_min >= 2880:
+            score += 1.5
+            reasons.append("Running >48h")
+        elif etime_min >= 120:
+            score += 0.5
+            reasons.append("Running >2h")
+
+        if cpu == 0.0 and stat.startswith("S"):
+            score += 0.5
+
+        if is_ccc:
+            score -= 10.0
+        elif is_gui:
+            score -= 6.0
+        elif is_system_daemon:
+            score -= 7.0
+        if has_tty:
+            score -= 4.0
+
+        score = max(0.0, min(10.0, round(score, 1)))
+        risk = "critical" if score >= 7.0 else ("suspicious" if score >= 4.0 else ("low" if score >= 1.5 else "safe"))
+
+        procs.append({
+            "pid": pid,
+            "ppid": ppid,
+            "cmd": cmd,
+            "cmd_short": _sys_label(cmd),
+            "cpu": cpu,
+            "rss_mb": round(rss_mb, 1),
+            "etime": etime_str,
+            "etime_min": round(etime_min, 1),
+            "stat": stat,
+            "tty": tty,
+            "has_tty": has_tty,
+            "cwd": files["cwd"],
+            "cwd_exists": files["cwd_exists"],
+            "fd0": files["fd0"],
+            "fd0_type": files["fd0_type"],
+            "fd0_exists": files["fd0_exists"],
+            "score": score,
+            "risk": risk,
+            "reasons": reasons,
+            "can_kill": not is_ccc and pid > 1 and pid != my_pid and pid != parent_pid,
+        })
+
+    procs.sort(key=lambda x: (x["score"], x["cpu"], x["rss_mb"]), reverse=True)
+    high_count = sum(1 for p in procs if p["score"] >= 7.0)
+    med_count = sum(1 for p in procs if 4.0 <= p["score"] < 7.0)
+
+    return {
+        "ts": now,
+        "total_count": len(procs),
+        "high_risk_count": high_count,
+        "medium_risk_count": med_count,
+        "processes": procs,
+    }
+
+
+def build_system_processes(force=False):
+    snap = _system_processes_snapshot
+    now = time.time()
+    if not force and snap["data"] is not None and now - snap["ts"] < _SYSTEM_PROCESSES_TTL:
+        return snap["data"]
+    with _system_processes_lock:
+        now = time.time()
+        if not force and snap["data"] is not None and now - snap["ts"] < _SYSTEM_PROCESSES_TTL:
+            return snap["data"]
+        data = _build_system_processes_uncached()
+        snap["data"] = data
+        snap["ts"] = time.time()
+        return data
+
+
+def system_process_kill(pids, force=False):
+    my_pid = os.getpid()
+    parent_pid = os.getppid()
+    sig = signal.SIGKILL if force else signal.SIGTERM
+    sig_name = "SIGKILL" if force else "SIGTERM"
+    killed, blocked, errors = [], [], {}
+    for p in pids:
+        try:
+            pid = int(p)
+        except (ValueError, TypeError):
+            continue
+        if pid <= 1 or pid in (my_pid, parent_pid):
+            blocked.append(pid)
+            continue
+        try:
+            os.kill(pid, sig)
+            killed.append(pid)
+            _resume_ledger_append("kill", pid=pid, source=f"system_process_kill_{sig_name.lower()}")
+            _log_activity("kill", sig_name, f"pid={pid} source=system_process_kill")
+        except ProcessLookupError:
+            killed.append(pid)
+        except PermissionError:
+            blocked.append(pid)
+            errors[str(pid)] = "permission denied"
+        except Exception as e:
+            errors[str(pid)] = str(e)
+    _system_processes_snapshot["data"] = None
+    _system_health_snapshot["data"] = None
+    return {"ok": True, "killed": killed, "blocked": blocked, "errors": errors}
+
+
 def build_live_sessions_activity():
     """Map session_id → live-work fields for every currently-live session.
 
@@ -17246,6 +17467,242 @@ PENDING_INPUT_HANDOFF_DIR = COMMAND_CENTER_STATE_DIR / "pending-input-handoffs"
 # enabled=False deletes the key entirely rather than writing enabled:false, so
 # the watchdog's iteration never has to filter dead entries.
 AUTO_HANDOVER_FILE = COMMAND_CENTER_STATE_DIR / "auto-handover.json"
+MODEL_PICKER_HISTORY_FILE = COMMAND_CENTER_STATE_DIR / "model-picker-history.json"
+
+
+def _mine_real_model_history_last_7_days():
+    """Extract real session launches from the last 7 to 30 days on disk."""
+    import datetime
+    from collections import Counter
+
+    now_ts = time.time()
+    thirty_days_ago_ts = now_ts - 30 * 86400
+
+    counts = Counter()
+    last_seen = {}
+
+    def _normalize_and_add(eng, mod, eff, ts):
+        eng = str(eng or "").strip().lower()
+        mod = str(mod or "").strip()
+        eff = str(eff or "").strip()
+        if not eng:
+            return
+        if mod.startswith("claude-"):
+            mod = mod[7:]
+        if mod.startswith("gpt-") and eng == "claude":
+            eng = "codex"
+        key = (eng, mod, eff)
+        counts[key] += 1
+        if ts > last_seen.get(key, 0):
+            last_seen[key] = ts
+
+    # 1. Read spawn-timeline.json (has precise spawn timestamps and models)
+    tl_path = COMMAND_CENTER_STATE_DIR / "spawn-timeline.json"
+    if tl_path.exists():
+        try:
+            with open(tl_path, "r", encoding="utf-8") as f:
+                data = json.load(f)
+            if isinstance(data, dict):
+                for sid, entry in data.items():
+                    if isinstance(entry, dict):
+                        t0 = float(entry.get("t0") or 0)
+                        if t0 > thirty_days_ago_ts:
+                            _normalize_and_add(
+                                entry.get("engine"),
+                                entry.get("model"),
+                                entry.get("reasoning_effort"),
+                                t0,
+                            )
+        except Exception:
+            pass
+
+    # 2. Read session-overrides.json (has explicit user model choices with timestamps)
+    ov_path = COMMAND_CENTER_STATE_DIR / "session-overrides.json"
+    if ov_path.exists():
+        try:
+            with open(ov_path, "r", encoding="utf-8") as f:
+                data = json.load(f)
+            if isinstance(data, dict):
+                for sid, entry in data.items():
+                    if isinstance(entry, dict):
+                        set_at = entry.get("set_at")
+                        if set_at:
+                            try:
+                                dt = datetime.datetime.fromisoformat(
+                                    set_at.replace("Z", "+00:00")
+                                )
+                                ts = dt.timestamp()
+                                if ts > thirty_days_ago_ts:
+                                    _normalize_and_add(
+                                        entry.get("engine"),
+                                        entry.get("model"),
+                                        entry.get("reasoning_effort"),
+                                        ts,
+                                    )
+                            except Exception:
+                                pass
+        except Exception:
+            pass
+
+    # 3. Read spawned-pids.json (has active/recent engine/model runs)
+    pids_path = COMMAND_CENTER_STATE_DIR / "spawned-pids.json"
+    if pids_path.exists():
+        try:
+            with open(pids_path, "r", encoding="utf-8") as f:
+                data = json.load(f)
+            if isinstance(data, list):
+                for entry in data:
+                    if isinstance(entry, dict):
+                        _normalize_and_add(
+                            entry.get("engine"),
+                            entry.get("model"),
+                            entry.get("reasoning_effort"),
+                            now_ts,
+                        )
+        except Exception:
+            pass
+
+    ranked = sorted(
+        counts.items(), key=lambda x: (x[1], last_seen.get(x[0], 0)), reverse=True
+    )
+    picks = []
+    for (eng, mod, eff), cnt in ranked:
+        picks.append({
+            "engine": eng,
+            "model": mod,
+            "effort": eff,
+            "count": cnt,
+            "last_used": last_seen.get((eng, mod, eff), now_ts),
+        })
+    return picks
+
+
+def record_model_picker_pick(engine: str, model: str, effort: str = "") -> None:
+    eng = str(engine or "").strip().lower()
+    mod = str(model or "").strip()
+    eff = str(effort or "").strip()
+    if not eng:
+        return
+    if mod.startswith("claude-"):
+        mod = mod[7:]
+    if mod.startswith("gpt-") and eng == "claude":
+        eng = "codex"
+
+    entry = {
+        "engine": eng,
+        "model": mod,
+        "effort": eff,
+        "timestamp": time.time(),
+    }
+    history = []
+    if MODEL_PICKER_HISTORY_FILE.exists():
+        try:
+            with open(MODEL_PICKER_HISTORY_FILE, "r", encoding="utf-8") as f:
+                history = json.load(f)
+            if not isinstance(history, list):
+                history = []
+        except Exception:
+            history = []
+
+    if not history:
+        mined = _mine_real_model_history_last_7_days()
+        for p in mined:
+            history.append({
+                "engine": p["engine"],
+                "model": p["model"],
+                "effort": p["effort"],
+                "timestamp": p["last_used"],
+            })
+
+    history.append(entry)
+    thirty_days_ago = time.time() - 30 * 86400
+    history = [
+        h
+        for h in history
+        if isinstance(h, dict) and h.get("timestamp", 0) > thirty_days_ago
+    ]
+    if len(history) > 500:
+        history = history[-500:]
+
+    try:
+        tmp = MODEL_PICKER_HISTORY_FILE.with_suffix(".tmp")
+        with open(tmp, "w", encoding="utf-8") as f:
+            json.dump(history, f, indent=2)
+        tmp.replace(MODEL_PICKER_HISTORY_FILE)
+    except Exception:
+        pass
+
+
+def get_model_picker_picks() -> list:
+    """Return top 7-8 model picks based on real disk data from the last 7-30 days."""
+    history = []
+    if MODEL_PICKER_HISTORY_FILE.exists():
+        try:
+            with open(MODEL_PICKER_HISTORY_FILE, "r", encoding="utf-8") as f:
+                history = json.load(f)
+            if not isinstance(history, list):
+                history = []
+        except Exception:
+            history = []
+
+    if not history:
+        mined = _mine_real_model_history_last_7_days()
+        if mined:
+            history = [
+                {
+                    "engine": p["engine"],
+                    "model": p["model"],
+                    "effort": p["effort"],
+                    "timestamp": p["last_used"],
+                }
+                for p in mined
+            ]
+            try:
+                with open(MODEL_PICKER_HISTORY_FILE, "w", encoding="utf-8") as f:
+                    json.dump(history, f, indent=2)
+            except Exception:
+                pass
+            return mined[:8]
+
+    from collections import Counter
+
+    now = time.time()
+    thirty_days_ago = now - 30 * 86400
+    counts = Counter()
+    last_seen = {}
+    for item in history:
+        if not isinstance(item, dict):
+            continue
+        ts = float(item.get("timestamp") or 0)
+        if ts > thirty_days_ago:
+            key = (
+                item.get("engine", ""),
+                item.get("model", ""),
+                item.get("effort", ""),
+            )
+            counts[key] += 1
+            if ts > last_seen.get(key, 0):
+                last_seen[key] = ts
+
+    ranked = sorted(
+        counts.items(), key=lambda x: (x[1], last_seen.get(x[0], 0)), reverse=True
+    )
+    picks = [
+        {
+            "engine": eng,
+            "model": mod,
+            "effort": eff,
+            "count": cnt,
+            "last_used": last_seen.get((eng, mod, eff), now),
+        }
+        for (eng, mod, eff), cnt in ranked
+    ]
+
+    if not picks:
+        return _mine_real_model_history_last_7_days()[:8]
+
+    return picks[:8]
+
 
 
 # {path: {mtime, custom_title, last_prompt, agent_name, ...}}
@@ -29692,6 +30149,15 @@ def _spawn_timeline_start(session_id, t0_epoch_ms=None, **fields):
         }
         while len(_SPAWN_TIMELINE) > _SPAWN_TIMELINE_MAX:
             _SPAWN_TIMELINE.pop(next(iter(_SPAWN_TIMELINE)), None)
+    if fields.get("engine"):
+        try:
+            record_model_picker_pick(
+                fields.get("engine"),
+                fields.get("model") or "",
+                fields.get("reasoning_effort") or "",
+            )
+        except Exception:
+            pass
 
 
 def _spawn_timeline_sync():
@@ -66613,6 +67079,8 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
             self.send_html(_load_index_html())
         elif path == "/api/control-plane/status":
             self.send_json(_control_plane_request("health"))
+        elif path == "/api/model-picker/picks":
+            self.send_json({"ok": True, "picks": get_model_picker_picks()})
         elif path == "/api/session/spawn-timeline":
             # Debug stats for "why did this session take so long to appear".
             # Marks are ms since CCC accepted the spawn request.
@@ -68914,6 +69382,9 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
             # hogs, and Claude session trees with last-activity + reapability.
             # Cached 5s (build_system_health) so polling stays cheap.
             self.send_json(build_system_health())
+        elif path in ("/api/system-processes", "/api/system/processes"):
+            force = "force" in parsed.query
+            self.send_json(build_system_processes(force=force))
         elif path == "/api/injection-health":
             # The global delivery-health banner's feed: active foreign-writer
             # holds (P0b, auto-resolving) plus newly-lost wt receipts not yet
@@ -69711,6 +70182,20 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
             self.send_json({
                 "error": "Morning view is disabled. Set CCC_ENABLE_MORNING=1 to enable."
             }, 404)
+            return
+
+        if path == "/api/model-picker/record":
+            try:
+                content_len = int(self.headers.get("Content-Length", 0) or 0)
+                body = self.rfile.read(content_len) if content_len else b""
+                data = json.loads(body) if body else {}
+                eng = str(data.get("engine") or "").strip()
+                mod = str(data.get("model") or "").strip()
+                eff = str(data.get("effort") or "").strip()
+                record_model_picker_pick(eng, mod, eff)
+                self.send_json({"ok": True})
+            except Exception as e:
+                self.send_json({"ok": False, "error": str(e)}, 400)
             return
 
         if path == "/api/injection-health/ack":
@@ -74313,6 +74798,19 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
             else:
                 res = system_health_quit_app(app_id)
                 self.send_json(res, 200 if res.get("ok") else 400)
+        elif path in ("/api/system-processes/kill", "/api/system/processes/kill"):
+            length = int(self.headers.get("Content-Length", "0"))
+            body = self.rfile.read(length) if length > 0 else b""
+            try:
+                payload = json.loads(body) if body else {}
+            except json.JSONDecodeError:
+                payload = {}
+            pids = payload.get("pids")
+            force = bool(payload.get("force"))
+            if not isinstance(pids, list) or not pids:
+                self.send_json({"ok": False, "error": "missing pids"})
+            else:
+                self.send_json(system_process_kill(pids, force=force))
         elif path == "/api/system/next-server/kill":
             length = int(self.headers.get("Content-Length", "0"))
             body = self.rfile.read(length) if length > 0 else b""

@@ -1,1 +1,1 @@
-- Added an inline model picker with rounded pills to the new session Stage, which automatically remembers and surfaces the top 7-8 combinations of engine, model, and reasoning effort used in the last 30 days.
+- Added a quick model picker with rounded pills directly above the bottom composer in new session mode, which remembers and surfaces the top 7-8 combinations of engine, model, and reasoning effort across the last 30 days persisted on disk.

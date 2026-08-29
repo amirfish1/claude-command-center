@@ -1384,6 +1384,12 @@
           </svg>
         </button>
         <div class="conv-goal-strip" data-role="conv-goal-strip" hidden></div>
+        <div class="conv-model-picker-strip" id="convModelPickerStrip" style="display:none;" aria-label="Quick model picker">
+          <div class="conv-model-picker-inner">
+            <span class="conv-model-picker-label">Model</span>
+            <div class="conv-model-picker-chips" id="nsModelPickerPills"></div>
+          </div>
+        </div>
         <div class="conv-input-bar" id="convInputBar" data-tour="spawn-bar">
           <!-- Composer expand toggle — pinned to the bar's top-right corner. -->
           <button class="expand-btn" id="convExpandBtn" title="Expand composer for long prompts (Enter then adds newlines; Ctrl+Enter sends)" aria-label="Expand composer" aria-pressed="false">
@@ -1752,6 +1758,7 @@
       <div class="sys-tabs">
         <button type="button" class="sys-tab active" id="sysTabBtnStatus">Status</button>
         <button type="button" class="sys-tab" id="sysTabBtnHealth">Health</button>
+        <button type="button" class="sys-tab" id="sysTabBtnProcesses">Processes</button>
       </div>
 
       <!-- Tab Content: Status -->
@@ -1889,6 +1896,13 @@
       <div id="sysTabContentHealth" style="display: none;">
         <div class="sh-body" id="sysHealthBody" style="padding: 0; display: flex; flex-direction: column; gap: 16px;">
           <div style="opacity:.6">Loading…</div>
+        </div>
+      </div>
+
+      <!-- Tab Content: Processes (Audit & Killness Score) -->
+      <div id="sysTabContentProcesses" style="display: none;">
+        <div class="sys-proc-body" id="sysProcBody" style="padding: 0; display: flex; flex-direction: column; gap: 12px;">
+          <div style="opacity:.6">Loading processes…</div>
         </div>
       </div>
 

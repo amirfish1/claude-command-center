@@ -706,6 +706,246 @@
       .catch(function () { _pollSystemHealth(); });
   }
 
+  // ── System Processes (Process Audit & Killness Score) ─────────────────────
+  let _sysProcPollPromise = null;
+  let _sysProcessesTimer = null;
+  let _sysProcFilter = 'all';
+  let _sysProcSearch = '';
+  let _sysProcData = null;
+
+  function _pollSystemProcesses(force) {
+    if (document.hidden && !force) return;
+    if (_sysProcPollPromise) return _sysProcPollPromise;
+    const url = '/api/system/processes' + (force ? '?force=1' : '');
+    _sysProcPollPromise = fetch(url, { cache: 'no-store' })
+      .then(function (r) { return r.ok ? r.json() : null; })
+      .then(function (d) {
+        if (d) {
+          _sysProcData = d;
+          _renderSystemProcesses(d);
+        }
+      })
+      .catch(function () {})
+      .finally(function () { _sysProcPollPromise = null; });
+    return _sysProcPollPromise;
+  }
+
+  function _renderSystemProcesses(d) {
+    const body = document.getElementById('sysProcBody');
+    if (!body) return;
+    d = d || _sysProcData || {};
+    const procs = d.processes || [];
+    const total = d.total_count || procs.length;
+    const high = d.high_risk_count || 0;
+    const med = d.medium_risk_count || 0;
+
+    let html = '';
+
+    html += '<div class="sys-proc-header">';
+    html += '  <div class="sys-proc-title-row">';
+    html += '    <div>';
+    html += '      <span class="sh-sec-title" style="margin:0;display:inline-block">Process Audit · Killness Score</span>';
+    html += '      <div class="sh-def" style="margin:2px 0 0 0;font-size:11.5px">';
+    html += '        Scored 0–10 by redundancy &amp; deadlock risk (unlinked FIFOs, deleted CWD, orphaned test agents, defunct zombies).';
+    html += '      </div>';
+    html += '    </div>';
+    html += '    <div style="display:flex;align-items:center;gap:6px">';
+    if (high > 0) {
+      html += '      <button type="button" class="sh-btn sh-btn-danger" data-reap-high="1" title="Kill all processes scored >= 7.0">';
+      html += '        Kill all high risk (' + high + ')';
+      html += '      </button>';
+    }
+    html += '      <button type="button" class="sh-btn" id="sysProcRefreshBtn" title="Refresh processes">Refresh</button>';
+    html += '    </div>';
+    html += '  </div>';
+
+    html += '  <div class="sys-proc-toolbar">';
+    html += '    <input type="text" id="sysProcSearchInput" class="sys-proc-search" placeholder="Filter by PID, command, CWD, or reason…" value="' + _shEsc(_sysProcSearch) + '">';
+    html += '    <div class="sys-proc-filter-pills">';
+    const filterBtn = function (key, label, count) {
+      const active = _sysProcFilter === key ? ' active' : '';
+      const countStr = count != null ? ' <span class="sys-proc-filter-count">(' + count + ')</span>' : '';
+      return '<button type="button" class="sys-proc-filter-pill' + active + '" data-filter="' + key + '">' + label + countStr + '</button>';
+    };
+    html += filterBtn('all', 'All', total);
+    html += filterBtn('high', 'High Risk (≥7)', high);
+    html += filterBtn('suspicious', 'Suspicious (≥4)', med);
+    html += filterBtn('orphaned', 'Orphaned (PPID 1)');
+    html += filterBtn('deleted_cwd', 'Deleted CWD');
+    html += '    </div>';
+    html += '  </div>';
+    html += '</div>';
+
+    const searchLower = (_sysProcSearch || '').trim().toLowerCase();
+    const filtered = procs.filter(function (p) {
+      if (_sysProcFilter === 'high' && p.score < 7.0) return false;
+      if (_sysProcFilter === 'suspicious' && (p.score < 4.0 || p.score >= 7.0)) return false;
+      if (_sysProcFilter === 'orphaned' && p.ppid !== 1) return false;
+      if (_sysProcFilter === 'deleted_cwd' && p.cwd_exists) return false;
+
+      if (searchLower) {
+        const text = (p.pid + ' ' + p.ppid + ' ' + (p.cmd || '') + ' ' + (p.cwd || '') + ' ' + (p.reasons || []).join(' ')).toLowerCase();
+        if (text.indexOf(searchLower) === -1) return false;
+      }
+      return true;
+    });
+
+    html += '<div class="sys-proc-list">';
+    if (!filtered.length) {
+      html += '<div class="sh-meta" style="padding:24px 0;text-align:center;opacity:0.6">No processes match the selected filters.</div>';
+    } else {
+      filtered.forEach(function (p) {
+        const score = p.score.toFixed(1);
+        let scoreBadgeClass = 'score-low';
+        let riskLabel = 'SAFE';
+        if (p.score >= 7.0) { scoreBadgeClass = 'score-critical'; riskLabel = 'HIGH RISK'; }
+        else if (p.score >= 4.0) { scoreBadgeClass = 'score-warn'; riskLabel = 'SUSPICIOUS'; }
+        else if (p.score >= 1.5) { scoreBadgeClass = 'score-mod'; riskLabel = 'LOW RISK'; }
+
+        html += '<div class="sys-proc-card ' + scoreBadgeClass + '">';
+        
+        html += '  <div class="sys-proc-score-box">';
+        html += '    <span class="sys-proc-score-num">' + score + '</span>';
+        html += '    <span class="sys-proc-score-denom">/10</span>';
+        html += '    <div class="sys-proc-risk-tag">' + riskLabel + '</div>';
+        html += '  </div>';
+
+        html += '  <div class="sys-proc-info">';
+        html += '    <div class="sys-proc-cmd-row">';
+        html += '      <span class="sys-proc-cmd-title" title="' + _shEsc(p.cmd) + '">' + _shEsc(p.cmd_short || p.cmd.split(' ')[0]) + '</span>';
+        (p.reasons || []).forEach(function (r) {
+          let tagClass = 'tag-subtle';
+          if (r.indexOf('Deleted CWD') !== -1 || r.indexOf('Unlinked') !== -1 || r.indexOf('Zombie') !== -1) tagClass = 'tag-danger';
+          else if (r.indexOf('Orphaned') !== -1 || r.indexOf('Stuck') !== -1) tagClass = 'tag-warn';
+          html += '    <span class="sys-proc-tag ' + tagClass + '">' + _shEsc(r) + '</span>';
+        });
+        html += '    </div>';
+
+        html += '    <div class="sys-proc-cmd-text" title="' + _shEsc(p.cmd) + '">' + _shEsc(p.cmd) + '</div>';
+
+        html += '    <div class="sys-proc-meta-row">';
+        html += '      <span>PID <b>' + p.pid + '</b></span>';
+        html += '      <span>PPID <b>' + p.ppid + '</b>' + (p.ppid === 1 ? ' (launchd)' : '') + '</span>';
+        html += '      <span>up ' + _shFmtIdle(p.etime_min) + '</span>';
+        html += '      <span>' + p.cpu.toFixed(1) + '% cpu</span>';
+        html += '      <span>' + _shFmtMB(p.rss_mb) + '</span>';
+        html += '      <span>state ' + _shEsc(p.stat) + '</span>';
+        html += '    </div>';
+
+        if (p.cwd) {
+          const cwdClass = !p.cwd_exists ? 'sh-crit' : 'sh-meta';
+          const cwdLabel = !p.cwd_exists ? ' (DELETED)' : '';
+          html += '    <div class="sys-proc-path-line"><span class="sys-proc-path-label">CWD:</span> <span class="' + cwdClass + '">' + _shEsc(p.cwd) + cwdLabel + '</span></div>';
+        }
+        if (p.fd0 && p.fd0_type === 'FIFO') {
+          const fifoClass = !p.fd0_exists ? 'sh-crit' : 'sh-meta';
+          const fifoLabel = !p.fd0_exists ? ' (UNLINKED FIFO)' : ' (FIFO)';
+          html += '    <div class="sys-proc-path-line"><span class="sys-proc-path-label">stdin:</span> <span class="' + fifoClass + '">' + _shEsc(p.fd0) + fifoLabel + '</span></div>';
+        }
+
+        html += '  </div>';
+
+        html += '  <div class="sys-proc-action">';
+        if (p.can_kill) {
+          html += '    <button type="button" class="sh-btn" data-kill-pid="' + p.pid + '">kill</button>';
+        } else {
+          html += '    <span class="sh-meta" style="font-size:10px;opacity:0.5">protected</span>';
+        }
+        html += '  </div>';
+
+        html += '</div>';
+      });
+    }
+    html += '</div>';
+
+    body.innerHTML = html;
+
+    const searchInput = body.querySelector('#sysProcSearchInput');
+    if (searchInput) {
+      searchInput.addEventListener('input', function (e) {
+        _sysProcSearch = e.target.value;
+        _renderSystemProcesses();
+        const freshInput = document.getElementById('sysProcSearchInput');
+        if (freshInput) {
+          freshInput.focus();
+          freshInput.selectionStart = freshInput.selectionEnd = freshInput.value.length;
+        }
+      });
+    }
+
+    const refreshBtn = body.querySelector('#sysProcRefreshBtn');
+    if (refreshBtn) {
+      refreshBtn.addEventListener('click', function () {
+        refreshBtn.textContent = '…';
+        _pollSystemProcesses(true).then(function () {
+          refreshBtn.textContent = 'Refresh';
+        });
+      });
+    }
+
+    Array.prototype.forEach.call(body.querySelectorAll('[data-filter]'), function (btn) {
+      btn.addEventListener('click', function () {
+        _sysProcFilter = btn.getAttribute('data-filter');
+        _renderSystemProcesses();
+      });
+    });
+
+    Array.prototype.forEach.call(body.querySelectorAll('[data-kill-pid]'), function (btn) {
+      btn.addEventListener('click', function () {
+        const pid = parseInt(btn.getAttribute('data-kill-pid'), 10);
+        _confirmProcessKill(btn, [pid]);
+      });
+    });
+
+    const reapHighBtn = body.querySelector('[data-reap-high]');
+    if (reapHighBtn) {
+      reapHighBtn.addEventListener('click', function () {
+        const highPids = [];
+        procs.forEach(function (p) {
+          if (p.score >= 7.0 && p.can_kill) highPids.push(p.pid);
+        });
+        _confirmProcessKill(reapHighBtn, highPids, true);
+      });
+    }
+  }
+
+  function _confirmProcessKill(btn, pids, force) {
+    if (!pids || !pids.length) return;
+    if (btn.dataset.armed !== '1') {
+      btn.dataset.armed = '1';
+      btn.dataset.prev = btn.textContent;
+      btn.textContent = pids.length > 1 ? 'confirm kill ' + pids.length + '?' : 'confirm kill?';
+      btn.classList.add('sh-btn-danger');
+      setTimeout(function () {
+        if (btn.dataset.armed === '1') {
+          btn.dataset.armed = '0';
+          btn.textContent = btn.dataset.prev || 'kill';
+          btn.classList.remove('sh-btn-danger');
+        }
+      }, 3000);
+      return;
+    }
+    btn.dataset.armed = '0';
+    btn.textContent = 'killing…';
+    fetch('/api/system/processes/kill', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ pids: pids, force: Boolean(force) })
+    })
+    .then(function (r) { return r.json(); })
+    .then(function (d) {
+      if (d && d.ok) {
+        if (typeof showOpToast === 'function') {
+          showOpToast('Killed ' + (d.killed || []).length + ' process(es)', 'info');
+        }
+      }
+      _pollSystemProcesses(true);
+    })
+    .catch(function () {
+      _pollSystemProcesses(true);
+    });
+  }
+
   // ---- Model Advisor panel -------------------------------------------------
   // Full-screen overlay opened from the footer. Reads the cached advisor report
   // shows live model-drift recommendations (downgrade an Opus session gone
@@ -8908,7 +9148,20 @@
         }
         activeEffortSelect.style.display = isNewSession && canPickEffort ? '' : 'none';
       }
+      const pickerStrip = document.getElementById('convModelPickerStrip');
+      if (pickerStrip) {
+        pickerStrip.style.display = isNewSession ? 'flex' : 'none';
+        pickerStrip.classList.toggle('is-new-session', isNewSession);
+        if (isNewSession && typeof syncNsModelPickerPillsSelection === 'function') {
+          syncNsModelPickerPillsSelection();
+        }
+      }
     } else {
+      const pickerStrip = document.getElementById('convModelPickerStrip');
+      if (pickerStrip) {
+        pickerStrip.style.display = 'none';
+        pickerStrip.classList.remove('is-new-session');
+      }
       _activeInputBar.classList.remove('visible');
       _activeInputBar.classList.remove('is-new-session-launch');
       if (activeInput) {
@@ -60841,6 +61094,9 @@
 
   async function loadSpawnDefaults() {
     try {
+      if (typeof fetchModelPickerPicksFromServer === 'function') {
+        fetchModelPickerPicksFromServer();
+      }
       const res = await fetch('/api/spawn-defaults', { cache: 'no-store' });
       const data = await res.json().catch(() => ({}));
       if (res.ok && data && data.ok) {
@@ -62841,25 +63097,48 @@
   function sysSelectTab(tabName) {
     const $btnStatus = document.getElementById('sysTabBtnStatus');
     const $btnHealth = document.getElementById('sysTabBtnHealth');
+    const $btnProcesses = document.getElementById('sysTabBtnProcesses');
     const $contentStatus = document.getElementById('sysTabContentStatus');
     const $contentHealth = document.getElementById('sysTabContentHealth');
+    const $contentProcesses = document.getElementById('sysTabContentProcesses');
     
     if (tabName === 'health') {
       if ($btnStatus) $btnStatus.classList.remove('active');
       if ($btnHealth) $btnHealth.classList.add('active');
+      if ($btnProcesses) $btnProcesses.classList.remove('active');
       if ($contentStatus) $contentStatus.style.display = 'none';
       if ($contentHealth) $contentHealth.style.display = 'block';
+      if ($contentProcesses) $contentProcesses.style.display = 'none';
+      if ($sysDialog) $sysDialog.classList.remove('is-wide');
       
       _pollSystemHealth();
       if (_sysHealthTimer) clearInterval(_sysHealthTimer);
       _sysHealthTimer = setInterval(_pollSystemHealth, 4000);
+      if (_sysProcessesTimer) { clearInterval(_sysProcessesTimer); _sysProcessesTimer = null; }
+    } else if (tabName === 'processes') {
+      if ($btnStatus) $btnStatus.classList.remove('active');
+      if ($btnHealth) $btnHealth.classList.remove('active');
+      if ($btnProcesses) $btnProcesses.classList.add('active');
+      if ($contentStatus) $contentStatus.style.display = 'none';
+      if ($contentHealth) $contentHealth.style.display = 'none';
+      if ($contentProcesses) $contentProcesses.style.display = 'block';
+      if ($sysDialog) $sysDialog.classList.add('is-wide');
+      
+      _pollSystemProcesses(true);
+      if (_sysProcessesTimer) clearInterval(_sysProcessesTimer);
+      _sysProcessesTimer = setInterval(_pollSystemProcesses, 5000);
+      if (_sysHealthTimer) { clearInterval(_sysHealthTimer); _sysHealthTimer = null; }
     } else {
       if ($btnStatus) $btnStatus.classList.add('active');
       if ($btnHealth) $btnHealth.classList.remove('active');
+      if ($btnProcesses) $btnProcesses.classList.remove('active');
       if ($contentStatus) $contentStatus.style.display = 'block';
       if ($contentHealth) $contentHealth.style.display = 'none';
+      if ($contentProcesses) $contentProcesses.style.display = 'none';
+      if ($sysDialog) $sysDialog.classList.remove('is-wide');
       
       if (_sysHealthTimer) { clearInterval(_sysHealthTimer); _sysHealthTimer = null; }
+      if (_sysProcessesTimer) { clearInterval(_sysProcessesTimer); _sysProcessesTimer = null; }
     }
   }
 
@@ -62905,6 +63184,8 @@
     if (_sysPollTimer) { clearInterval(_sysPollTimer); _sysPollTimer = null; }
     if (_sysSpawnedTickTimer) { clearInterval(_sysSpawnedTickTimer); _sysSpawnedTickTimer = null; }
     if (_sysHealthTimer) { clearInterval(_sysHealthTimer); _sysHealthTimer = null; }
+    if (_sysProcessesTimer) { clearInterval(_sysProcessesTimer); _sysProcessesTimer = null; }
+    if ($sysDialog) $sysDialog.classList.remove('is-wide');
     document.removeEventListener('keydown', _sysTrapTab, true);
     const back = (_sysReturnFocus && document.contains(_sysReturnFocus)
       && _sysReturnFocus.offsetParent !== null) ? _sysReturnFocus : $sysChip;
@@ -62930,8 +63211,10 @@
   if ($sysBackdrop) $sysBackdrop.addEventListener('click', sysRequestClose);
   const $tabBtnStatus = document.getElementById('sysTabBtnStatus');
   const $tabBtnHealth = document.getElementById('sysTabBtnHealth');
+  const $tabBtnProcesses = document.getElementById('sysTabBtnProcesses');
   if ($tabBtnStatus) $tabBtnStatus.addEventListener('click', () => sysSelectTab('status'));
   if ($tabBtnHealth) $tabBtnHealth.addEventListener('click', () => sysSelectTab('health'));
+  if ($tabBtnProcesses) $tabBtnProcesses.addEventListener('click', () => sysSelectTab('processes'));
   document.addEventListener('keydown', (e) => {
     if (e.key === 'Escape' && $sysModal && $sysModal.classList.contains('open')) {
       if (_sysRestartInFlight) {
@@ -68623,110 +68906,67 @@
     });
   }
 
-  // ── Model picker for new session Stage (remembering top picks) ──
+  // ── Quick Model Picker right above composer (persisted on disk) ──
   const MODEL_PICKER_ENGINE_GLYPHS = {
     claude: 'C', codex: 'X', antigravity: 'A', gemini: 'A', grok: 'G', devin: 'D',
     kimi: 'K', cursor: 'U', hermes: 'H', kilo: 'L', opencode: 'O', copilot: 'P',
   };
 
+  var _cachedServerModelPicks = null;
+  var _fetchServerModelPicksPromise = null;
+
+  async function fetchModelPickerPicksFromServer(force = false) {
+    if (_cachedServerModelPicks && !force) return _cachedServerModelPicks;
+    if (_fetchServerModelPicksPromise && !force) return _fetchServerModelPicksPromise;
+    _fetchServerModelPicksPromise = (async () => {
+      try {
+        const res = await fetch('/api/model-picker/picks');
+        if (res.ok) {
+          const data = await res.json();
+          if (data && data.ok && Array.isArray(data.picks)) {
+            _cachedServerModelPicks = data.picks;
+            return data.picks;
+          }
+        }
+      } catch (e) {
+        console.warn('Failed to load model picks from disk API', e);
+      } finally {
+        _fetchServerModelPicksPromise = null;
+      }
+      return _cachedServerModelPicks || [];
+    })();
+    return _fetchServerModelPicksPromise;
+  }
+
   function recordSpawnChoice(engine, model, effort) {
     try {
       const resolvedModel = model || _defaultModelsByEngine[engine] || '';
       const resolvedEffort = effort || '';
-      const historyKey = 'ccc-spawn-history';
-      let history = [];
-      try {
-        const raw = localStorage.getItem(historyKey);
-        if (raw) history = JSON.parse(raw);
-      } catch (_) {}
-      if (!Array.isArray(history)) history = [];
-
-      history.push({
-        engine: engine,
-        model: resolvedModel,
-        effort: resolvedEffort,
-        timestamp: Date.now()
+      fetch('/api/model-picker/record', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          engine: engine,
+          model: resolvedModel,
+          effort: resolvedEffort,
+        })
+      }).then(() => {
+        fetchModelPickerPicksFromServer(true).then(() => {
+          renderNsModelPickerPills();
+        });
+      }).catch(e => {
+        console.warn('Failed to record spawn choice on server', e);
       });
-
-      const thirtyDaysAgo = Date.now() - 30 * 24 * 60 * 60 * 1000;
-      history = history.filter(r => r && r.timestamp && r.timestamp > thirtyDaysAgo && r.engine);
-      localStorage.setItem(historyKey, JSON.stringify(history));
     } catch (e) {
       console.warn('Failed to record spawn choice', e);
     }
   }
 
   function getTopSpawnPicks() {
-    try {
-      const historyKey = 'ccc-spawn-history';
-      let history = [];
-      try {
-        const raw = localStorage.getItem(historyKey);
-        if (raw) history = JSON.parse(raw);
-      } catch (_) {}
-      if (!Array.isArray(history)) history = [];
-
-      const thirtyDaysAgo = Date.now() - 30 * 24 * 60 * 60 * 1000;
-      history = history.filter(r => r && r.timestamp && r.timestamp > thirtyDaysAgo && r.engine);
-
-      const groups = {};
-      history.forEach(r => {
-        const key = [r.engine, r.model || '', r.effort || ''].join('|');
-        if (!groups[key]) {
-          groups[key] = {
-            engine: r.engine,
-            model: r.model || '',
-            effort: r.effort || '',
-            count: 0,
-            lastUsed: 0
-          };
-        }
-        groups[key].count++;
-        if (r.timestamp > groups[key].lastUsed) {
-          groups[key].lastUsed = r.timestamp;
-        }
-      });
-
-      let picks = Object.values(groups);
-      picks.sort((a, b) => {
-        if (b.count !== a.count) return b.count - a.count;
-        return b.lastUsed - a.lastUsed;
-      });
-
-      picks = picks.slice(0, 8);
-
-      if (picks.length < 7) {
-        const defaultPicks = [
-          { engine: 'claude', model: 'sonnet-5', effort: '' },
-          { engine: 'claude', model: 'opus-5', effort: '' },
-          { engine: 'codex', model: 'gpt-5.6-terra', effort: '' },
-          { engine: 'grok', model: 'grok-4.6', effort: '' },
-          { engine: 'devin', model: 'glm-5.2', effort: '' },
-          { engine: 'antigravity', model: 'Gemini 3.5 Pro (High)', effort: 'high' },
-          { engine: 'kimi', model: 'kimi-code/k3', effort: '' },
-          { engine: 'gemini', model: 'gemini-3.5-pro', effort: '' }
-        ];
-
-        for (const def of defaultPicks) {
-          if (picks.length >= 8) break;
-          const exists = picks.some(p => p.engine === def.engine && p.model === def.model && p.effort === def.effort);
-          if (!exists) {
-            picks.push({
-              engine: def.engine,
-              model: def.model,
-              effort: def.effort,
-              count: 0,
-              lastUsed: 0
-            });
-          }
-        }
-      }
-
-      return picks.slice(0, 8);
-    } catch (e) {
-      console.warn('Failed to compute top spawn picks', e);
-      return [];
+    if (_cachedServerModelPicks && _cachedServerModelPicks.length > 0) {
+      return _cachedServerModelPicks.slice(0, 8);
     }
+    return [];
   }
 
   function formatModelNameForBadge(engine, modelId) {
@@ -68813,39 +69053,50 @@
     const container = document.getElementById('nsModelPickerPills');
     if (!container) return;
 
-    const picks = getTopSpawnPicks();
-    const currentEngine = getSpawnEngine();
-    const currentModel = (typeof $convInputModelSelect !== 'undefined' && $convInputModelSelect && $convInputModelSelect.style.display !== 'none')
-      ? $convInputModelSelect.value
-      : (_defaultModelsByEngine[currentEngine] || '');
-    const currentEffort = spawnEffortChoiceDirty && $convInputEffortSelect ? $convInputEffortSelect.value : '';
+    const doRender = (picks) => {
+      if (!Array.isArray(picks) || picks.length === 0) return;
+      const currentEngine = getSpawnEngine();
+      const currentModel = (typeof $convInputModelSelect !== 'undefined' && $convInputModelSelect && $convInputModelSelect.style.display !== 'none')
+        ? $convInputModelSelect.value
+        : (_defaultModelsByEngine[currentEngine] || '');
+      const currentEffort = spawnEffortChoiceDirty && $convInputEffortSelect ? $convInputEffortSelect.value : '';
 
-    container.innerHTML = picks.map(p => {
-      const isSel = (p.engine === currentEngine && p.model === currentModel && p.effort === currentEffort);
-      const label = getModelPillLabel(p.engine, p.model, p.effort);
-      const badge = MODEL_PICKER_ENGINE_GLYPHS[p.engine] || '?';
-      const badgeClass = 'orch-glyph orch-glyph-' + p.engine;
-      const title = p.engine + ' · ' + p.model + (p.effort ? ' (' + p.effort + ')' : '');
+      container.innerHTML = picks.map(p => {
+        const isSel = (p.engine === currentEngine && p.model === currentModel && p.effort === currentEffort);
+        const label = getModelPillLabel(p.engine, p.model, p.effort);
+        const badge = MODEL_PICKER_ENGINE_GLYPHS[p.engine] || '?';
+        const badgeClass = 'orch-glyph orch-glyph-' + p.engine;
+        const title = p.engine + ' · ' + p.model + (p.effort ? ' (' + p.effort + ')' : '');
 
-      return '<button type="button" class="orch-tier-chip' + (isSel ? ' is-selected' : '') + '"'
-        + ' role="radio" aria-checked="' + (isSel ? 'true' : 'false') + '"'
-        + ' data-engine="' + escapeAttr(p.engine) + '"'
-        + ' data-model="' + escapeAttr(p.model) + '"'
-        + ' data-effort="' + escapeAttr(p.effort) + '"'
-        + ' title="' + escapeAttr(title) + '">'
-        + '<span class="' + badgeClass + '">' + escapeHtml(badge) + '</span>'
-        + escapeHtml(label)
-        + '</button>';
-    }).join('');
+        return '<button type="button" class="orch-tier-chip' + (isSel ? ' is-selected' : '') + '"'
+          + ' role="radio" aria-checked="' + (isSel ? 'true' : 'false') + '"'
+          + ' data-engine="' + escapeAttr(p.engine) + '"'
+          + ' data-model="' + escapeAttr(p.model) + '"'
+          + ' data-effort="' + escapeAttr(p.effort) + '"'
+          + ' title="' + escapeAttr(title) + '">'
+          + '<span class="' + badgeClass + '">' + escapeHtml(badge) + '</span>'
+          + escapeHtml(label)
+          + '</button>';
+      }).join('');
 
-    container.querySelectorAll('.orch-tier-chip').forEach(chip => {
-      chip.addEventListener('click', () => {
-        const eng = chip.getAttribute('data-engine');
-        const mod = chip.getAttribute('data-model');
-        const eff = chip.getAttribute('data-effort') || '';
-        selectSpawnPick(eng, mod, eff);
+      container.querySelectorAll('.orch-tier-chip').forEach(chip => {
+        chip.addEventListener('click', () => {
+          const eng = chip.getAttribute('data-engine');
+          const mod = chip.getAttribute('data-model');
+          const eff = chip.getAttribute('data-effort') || '';
+          selectSpawnPick(eng, mod, eff);
+        });
       });
-    });
+    };
+
+    const picks = getTopSpawnPicks();
+    if (picks.length > 0) {
+      doRender(picks);
+    } else {
+      fetchModelPickerPicksFromServer().then(fetched => {
+        doRender(fetched);
+      });
+    }
   }
 
   function syncNsModelPickerPillsSelection() {
@@ -68923,10 +69174,6 @@
         + '<div class="empty-state ns-hero ns-hero-quiet" style="height:auto;flex-direction:column;gap:10px;text-align:center;">'
         + '<div class="ns-stage-title">New session</div>'
         + '<div class="ns-stage-subtitle">Choose the object and folder below, then type the first message.</div>'
-        + '<div class="ns-model-picker" id="nsModelPickerContainer">'
-        +   '<div class="ns-model-picker-title">Model</div>'
-        +   '<div class="ns-model-picker-chips" id="nsModelPickerPills"></div>'
-        + '</div>'
         + '<details class="ns-new-project-details" id="nsNewProjectDetails">'
         +   '<summary>Create a fresh folder</summary>'
         +   '<div class="ns-choice-card ns-choice-card-compact" id="nsCardNewProject">'
@@ -68958,6 +69205,11 @@
       _cic.classList.add('is-new-session');
       _cic.classList.add('visible');
       if (typeof syncPaneHasFlags === 'function') syncPaneHasFlags(_cic.closest('.conv-pane'));
+    }
+    const _cmps = document.getElementById('convModelPickerStrip');
+    if (_cmps) {
+      _cmps.style.display = 'flex';
+      _cmps.classList.add('is-new-session');
     }
     if (typeof mobileShowForCurrentMode === 'function') mobileShowForCurrentMode();
     requestClaudePrewarm();
