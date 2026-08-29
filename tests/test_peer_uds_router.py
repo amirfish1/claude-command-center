@@ -297,3 +297,36 @@ def test_worker_ask_consumer_forwards_peer_sender():
     src = inspect.getsource(worker_engines)
     idx = src.index("legacy.ask_session_and_wait(")
     assert 'peer_sender_sid=args.get("peer_sender_sid")' in src[idx:idx + 400]
+
+
+def test_spawn_command_accepts_peer_inbound():
+    cmd = server._claude_spawn_command("/usr/local/bin/claude", "claude-sonnet-5", "worker-a", "", {}, effort="")
+    idx = cmd.index("--settings")
+    assert json.loads(cmd[idx + 1]) == {"crossSessionInbound": "accept"}
+
+
+def test_headless_resume_command_accepts_peer_inbound(monkeypatch, tmp_path):
+    seen = {}
+
+    def fake_popen(cmd, *a, **k):
+        seen["cmd"] = cmd
+        raise RuntimeError("stop here")
+
+    def fake_repo_from_session(sid):
+        return {"cwd": str(tmp_path), "repo_path": str(tmp_path)}
+
+    def fake_ensure_session_jsonl(sid, cwd):
+        return {"ok": True}
+
+    monkeypatch.setattr(server, "_control_plane_engine_call", lambda *a, **k: None)
+    monkeypatch.setattr(server, "_resolve_claude_bin", lambda: {"available": True, "bin": "/usr/local/bin/claude"})
+    monkeypatch.setattr(server, "repo_from_session", fake_repo_from_session)
+    monkeypatch.setattr(server, "_ensure_session_jsonl_for_cwd", fake_ensure_session_jsonl)
+    monkeypatch.setattr(server.subprocess, "Popen", fake_popen, raising=False)
+    try:
+        server.resume_session_headless("11111111-2222-4333-8444-555555555555", "hi")
+    except RuntimeError:
+        pass
+    cmd = seen.get("cmd") or []
+    assert "--settings" in cmd
+    assert json.loads(cmd[cmd.index("--settings") + 1]) == {"crossSessionInbound": "accept"}

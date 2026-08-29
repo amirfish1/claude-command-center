@@ -19403,6 +19403,18 @@ def _claude_session_state_args():
     ]
 
 
+def _claude_peer_inbound_args():
+    """Let CCC-spawned headless Claude sessions accept peer messages.
+
+    Claude's default is mode parity: a bypass-mode receiver holds any peer
+    message whose sender did not attest bypass, and a -p session cannot show
+    the hold dialog, so the message silently expires. The docs recommend
+    exactly this per-process setting for unattended workers; it never
+    touches the user's global settings.
+    """
+    return ["--settings", json.dumps({"crossSessionInbound": "accept"}, separators=(",", ":"))]
+
+
 def _parse_session_state(text):
     """Extract the structured `<session-state>` block sessions emit on final
     reply. Returns {did, insight, next_step_user} or None.
@@ -50214,6 +50226,7 @@ def _claude_spawn_command(claude_bin, model, session_name, session_id, capabilit
     if capabilities.get("partial_messages"):
         cmd.append("--include-partial-messages")
     cmd.extend(_claude_session_state_args())
+    cmd.extend(_claude_peer_inbound_args())
     return cmd
 
 
@@ -52904,6 +52917,7 @@ def resume_session_headless(session_id, text, cwd=None, idempotency_key=None):
         "--dangerously-skip-permissions",
     ]
     cmd.extend(_claude_session_state_args())
+    cmd.extend(_claude_peer_inbound_args())
     # Per-session override (set via the click-to-switch picker). Resume
     # would otherwise inherit the previously-recorded model.
     #
