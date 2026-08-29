@@ -75,3 +75,46 @@ def test_peer_body_from_wrapped_handles_missing_guidance_paragraph():
         "hello there\n</cross-session-message>"
     )
     assert server._peer_body_from_wrapped(text) == "hello there"
+
+
+def test_absorbed_mid_turn_peer_attachment_renders_with_peer_block():
+    row = {
+        "type": "attachment",
+        "timestamp": "2026-08-28T19:57:21.621Z",
+        "attachment": {
+            "type": "queued_command",
+            "commandMode": "prompt",
+            "prompt": (
+                '<cross-session-message from="uds:/tmp/cc-socks/4242.sock" '
+                'from-name="worker-a" from-mode="prompting">\n'
+                "Yep that is mine, clear to proceed.\n</cross-session-message>"
+            ),
+            "source_uuid": "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee",
+            "origin": {
+                "kind": "peer",
+                "from": "uds:/tmp/cc-socks/4242.sock",
+                "name": "worker-a",
+                "fromMode": "prompting",
+                "msg_id": "22222222-3333-4444-8555-666666666666",
+                "body": "Yep that is mine, clear to proceed.",
+            },
+            "isMeta": True,
+        },
+    }
+    ev = server._parse_conversation_event(row, 1617)
+    assert ev["type"] == "user_text"
+    assert ev["text"] == "Yep that is mine, clear to proceed."
+    assert ev["peer"]["name"] == "worker-a"
+    assert ev["peer"]["from_mode"] == "prompting"
+    assert ev["peer"]["msg_id"] == "22222222-3333-4444-8555-666666666666"
+
+
+def test_human_queued_command_has_no_peer_block():
+    row = {
+        "type": "attachment",
+        "attachment": {"type": "queued_command", "commandMode": "prompt", "prompt": "run the tests"},
+    }
+    ev = server._parse_conversation_event(row, 9)
+    assert ev["type"] == "user_text"
+    assert ev["text"] == "run the tests"
+    assert "peer" not in ev

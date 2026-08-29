@@ -9450,6 +9450,14 @@ def _extract_queued_command_prompt(ev):
     if attachment.get("commandMode") != "prompt":
         return None
     prompt = attachment.get("prompt", "")
+    origin = attachment.get("origin")
+    peer = None
+    if isinstance(origin, dict) and origin.get("kind") == "peer":
+        peer = _peer_block_from_origin(origin)
+        body = str(origin.get("body") or "").strip()
+        if not body:
+            body = _peer_body_from_wrapped(_extract_text_from_content(prompt))
+        return {"text": body, "images": [], "peer": peer}
     text = _extract_text_from_content(prompt)
     if _is_transcript_control_text(text):
         return None
@@ -29089,13 +29097,16 @@ def _parse_conversation_event(ev, line_num):
 
     queued = _extract_queued_command_prompt(ev)
     if queued:
-        return {
+        out_ev = {
             "line": line_num,
             "ts": ts,
             "type": "user_text",
             "text": queued.get("text", ""),
             "images": queued.get("images", []),
         }
+        if queued.get("peer"):
+            out_ev["peer"] = queued["peer"]
+        return out_ev
 
     if ev_type == "assistant":
         msg = _safe_parse_message(ev.get("message", {}))
