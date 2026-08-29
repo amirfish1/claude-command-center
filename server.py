@@ -102,6 +102,10 @@ import model_advisor
 import federation
 from control_plane import ControlPlaneClient, socket_path, worker_pid_path
 
+# Native Claude Code peer Unix sockets (stdlib-only sibling module): the
+# agent-to-agent transport that rides ahead of tmux/AppleScript/FIFO relays.
+import ccc_peer_uds
+
 # Productivity metrics and local persistence are isolated in a stdlib-only
 # sibling module.  server.py adapts CCC's transcripts, repositories, and queue
 # records into its normalized input contracts.
@@ -58224,6 +58228,34 @@ def _wt_messaging_enabled():
     return os.environ.get(CCC_MESSAGING_BACKEND_ENV, "").strip().lower() == "wt"
 
 
+def _uds_messaging_enabled():
+    """True when CCC_MESSAGING_BACKEND lists `uds` (e.g. "uds" or "wt,uds").
+
+    Opt-in for now. Once the live smoke passes on a release this flips to
+    default-on for Claude targets (see the design spec).
+    """
+    raw = os.environ.get(CCC_MESSAGING_BACKEND_ENV, "")
+    return "uds" in {p.strip().lower() for p in raw.split(",") if p.strip()}
+
+
+# Only agent-to-agent relays ride the peer socket. Anything a human typed in
+# the dashboard keeps the legacy transports so it still lands as USER intent
+# (peer-tagged text is "input, not authority" under Claude's own rules).
+_UDS_ELIGIBLE_SOURCES = (
+    "ask",
+    "group-chat-coordinate",
+    "group-chat-auto-nudge",
+    "group-chat-manual-nudge",
+    "announced_from",
+    "report_to",
+    "wt",
+)
+
+
+def _uds_source_eligible(source):
+    return str(source or "").strip() in _UDS_ELIGIBLE_SOURCES
+
+
 def _find_wt_cli():
     """Uncached resolution of the `wt` binary's absolute path, or "" if not
     found. Most callers want `_wt_cli_path()` (cached); use this directly
@@ -58448,6 +58480,62 @@ def _run_wt_import(doc_path, queue, *, apply=False, item_type=None):
         "counts": counts,
         "stdout_tail": "\n".join(stdout.strip().splitlines()[-40:]),
     }
+
+
+def _try_uds_peer_delivery(session_id, text, *, source, mode="send", peer_sender_sid=None):
+    """Deliver agent-origin text over the target's Claude Code peer socket.
+
+    Returns a CCC-shaped success dict ONLY after the transcript echoes our
+    msg_id (delivered idle or absorbed mid-turn). Held, unknown, socket
+    errors, ineligible sources, or a non-dialable target all return None so
+    the caller falls through to the legacy transports unchanged.
+    """
+    if not _uds_messaging_enabled() or not _uds_source_eligible(source):
+        return None
+    try:
+        registry = _load_session_registry()
+    except Exception:
+        return None
+    target = ccc_peer_uds.resolve_target(registry.get(session_id) or {})
+    if not target["ok"]:
+        return None
+    from_addr = ""
+    from_name = ""
+    from_mode = ""
+    if peer_sender_sid:
+        sender_row = registry.get(peer_sender_sid) or {}
+        sender_sock = str(sender_row.get("messagingSocketPath") or "").strip()
+        if sender_sock:
+            from_addr = "uds:" + sender_sock
+            from_name = str(sender_row.get("name") or "").strip()
+        spawn = _find_live_spawn_entry_for_session(peer_sender_sid)
+        if spawn is not None and (spawn.get("engine") or "claude") == "claude":
+            # CCC spawns every headless Claude with
+            # --dangerously-skip-permissions, so this attestation is true.
+            from_mode = "bypass"
+    msg_id = str(uuid.uuid4())
+    content = ccc_peer_uds.wrap(text, from_addr=from_addr, from_name=from_name, from_mode=from_mode)
+    token = ccc_peer_uds.load_peer_token(SESSIONS_REGISTRY, target["pid"], target["socket_path"])
+    priority = "now" if str(mode or "") == "steer" else "next"
+    try:
+        lines = ccc_peer_uds.build_frame_lines(
+            content, token=token, from_addr=from_addr, msg_id=msg_id, priority=priority,
+        )
+    except ValueError:
+        return None
+    sent = ccc_peer_uds.send_lines(target["socket_path"], lines)
+    if not sent.get("ok"):
+        _log_activity("inject", "UDS-FAIL", f"session={session_id} source={source} error={sent.get('error')}")
+        return None
+    receipt = _transcript_peer_receipt(session_id, msg_id, text)
+    _log_activity(
+        "inject", "UDS",
+        f"session={session_id} source={source} msg_id={msg_id} receipt={receipt} "
+        f"text=\"{_activity_log_preview(text)}\"",
+    )
+    if receipt != "delivered":
+        return None
+    return {"ok": True, "via": "uds", "source": "uds", "receipt_id": msg_id, "receipt": receipt}
 
 
 def _try_wt_send_for_headless_delivery(session_id, text):
@@ -58830,6 +58918,7 @@ def _inject_text_into_session(
     force_terminal=False,
     force_headless=False,
     force_queue=False,
+    peer_sender_sid=None,
 ):
     """Route `text` to a session using the same fall-through as /api/inject-input:
     terminal-control AppleScript when there's a TTY, FIFO write to a live spawn,
@@ -58931,6 +59020,16 @@ def _inject_text_into_session(
     tty = status.get("tty")
     term_app = status.get("terminal_app")
     has_tty = _is_real_tty(tty)
+    # Native Claude peer socket for agent-to-agent relays. Sits ahead of
+    # the worker hand-off and every legacy transport: no terminal focus, no
+    # FIFO ownership, reaches foreign headless sessions. Falls through on
+    # anything short of a transcript-confirmed delivery.
+    if not is_codex:
+        uds_result = _try_uds_peer_delivery(
+            session_id, text, source=source, mode=mode, peer_sender_sid=peer_sender_sid,
+        )
+        if uds_result is not None:
+            return uds_result
     is_cursor = _is_cursor_session(session_id)
     is_hermes = _is_hermes_session(session_id)
     is_kimi = _is_kimi_session(session_id)
@@ -58959,6 +59058,8 @@ def _inject_text_into_session(
                 "skip_wt": bool(skip_wt),
                 "preserve_queued_steer": bool(preserve_queued_steer),
                 "force_queue": bool(force_queue),
+                "source": source,
+                "peer_sender_sid": peer_sender_sid,
             },
             idempotency_key=idempotency_key,
         )
