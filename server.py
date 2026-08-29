@@ -43982,12 +43982,32 @@ def _transcript_gains_text(session_id, text, timeout_s=6.0):
     return False
 
 
-def _transcript_peer_receipt(session_id, msg_id, body, timeout_s=6.0):
-    """Delivery receipt for a peer-socket send: "delivered", "held", "unknown".
+def _transcript_peer_receipt(session_id, msg_id, body, start_offset=0, timeout_s=2.0):
+    """Delivery receipt for a peer-socket send: "delivered", "held", "queued",
+    "unknown".
 
-    Claude echoes the sender's msg_id into origin.msg_id on both delivered
-    shapes (idle user row, absorbed-mid-turn attachment). A held message is
-    logged as a system row whose preview quotes the body's first 40 chars.
+    Scans only bytes appended to the transcript AT OR AFTER `start_offset`
+    (the file's size measured right before the frame was sent), never the
+    whole tail. A row is only evidence of THIS send if it landed after we
+    sent it: scanning from file start (or an unbounded tail) lets a stale
+    "Held peer message" row from an earlier message with the same 40-char
+    preview match and report "held" for a frame that was never even sent
+    yet, which is why start_offset exists.
+
+    Four verdicts, checked in this order on every poll:
+    - "delivered": Claude echoed our msg_id into origin.msg_id (idle user
+      row, or an absorbed mid-turn attachment). The frame reached its
+      destination.
+    - "held": Claude logged a "Held peer message" system row quoting the
+      body's preview. The frame was received but explicitly not delivered.
+    - "queued": no delivered/held row yet, but a queue-operation/enqueue row
+      for this body appeared. The frame sits in the receiver's inbox and
+      Claude will deliver it at the next tool boundary or turn end, so the
+      caller should NOT fall through to a legacy transport (that would
+      duplicate it). Remembered once seen and re-checked at the deadline
+      alongside any later delivered/held row.
+    - "unknown": none of the above showed up before the deadline.
+
     A successful socket write is NOT a delivery; only this scan is.
     """
     msg_id = str(msg_id or "")
@@ -44003,23 +44023,37 @@ def _transcript_peer_receipt(session_id, msg_id, body, timeout_s=6.0):
             break
     preview_json = json.dumps(preview, ensure_ascii=False)[1:-1] if preview else ""
     path = _resolve_conversation_path(session_id)
+    start_offset = max(0, int(start_offset or 0))
     deadline = time.time() + timeout_s
+    queued = False
     while True:
         try:
             with open(path, "rb") as fh:
                 fh.seek(0, 2)
                 size = fh.tell()
-                fh.seek(max(0, size - 131072))
-                tail = fh.read().decode("utf-8", "replace")
+                if size > start_offset:
+                    fh.seek(start_offset)
+                    tail = fh.read().decode("utf-8", "replace")
+                else:
+                    tail = ""  # file shorter than start_offset: nothing appended yet
             if any(form in tail for form in id_forms):
                 return "delivered"
             if preview_json and "Held peer message" in tail and preview_json in tail:
                 return "held"
+            if preview_json and not queued:
+                for line in tail.splitlines():
+                    if (
+                        ('"type": "queue-operation"' in line or '"type":"queue-operation"' in line)
+                        and ('"operation": "enqueue"' in line or '"operation":"enqueue"' in line)
+                        and preview_json in line
+                    ):
+                        queued = True
+                        break
         except OSError:
             pass
         if time.time() >= deadline:
-            return "unknown"
-        time.sleep(0.5)
+            return "queued" if queued else "unknown"
+        time.sleep(0.25)
 
 
 def _resume_queue_engine_busy(sid):
@@ -58260,14 +58294,34 @@ _UDS_ELIGIBLE_SOURCES = (
     "group-chat-coordinate",
     "group-chat-auto-nudge",
     "group-chat-manual-nudge",
+    # "report_to" itself never reaches here as a literal source: a report-back
+    # footer arrives at /api/inject-input with an announced_from field, so it
+    # is classified as "announced_from" by _inject_source_for_request below.
     "announced_from",
-    "report_to",
     "wt",
+    # group-chat-add-participant is intentionally absent: adding a
+    # participant is a human action taken in the dashboard UI, not an
+    # agent-to-agent relay.
 )
 
 
 def _uds_source_eligible(source):
     return str(source or "").strip() in _UDS_ELIGIBLE_SOURCES
+
+
+def _inject_source_for_request(announced_from, wt_origin):
+    """Classify an /api/inject-input request into an inject `source` value.
+
+    announced_from wins: a report-back footer or an explicit announce both
+    carry this field, and it's the more specific signal. wt_origin covers
+    WatchTower-originated delivery. Anything else is a plain "api" call
+    (dashboard UI, curl, etc.) and stays on the legacy transports.
+    """
+    if announced_from:
+        return "announced_from"
+    if wt_origin:
+        return "wt"
+    return "api"
 
 
 def _find_wt_cli():
@@ -58499,10 +58553,13 @@ def _run_wt_import(doc_path, queue, *, apply=False, item_type=None):
 def _try_uds_peer_delivery(session_id, text, *, source, mode="send", peer_sender_sid=None):
     """Deliver agent-origin text over the target's Claude Code peer socket.
 
-    Returns a CCC-shaped success dict ONLY after the transcript echoes our
-    msg_id (delivered idle or absorbed mid-turn). Held, unknown, socket
-    errors, ineligible sources, or a non-dialable target all return None so
-    the caller falls through to the legacy transports unchanged.
+    Returns a CCC-shaped success dict ONLY when the post-send transcript
+    scan confirms the frame is at least in the receiver's inbox: either
+    "delivered" (msg_id echoed back) or "queued" (an enqueue row for this
+    body landed, delivery pending the receiver's next tool boundary or turn
+    end). Held, unknown, socket errors, ineligible sources, or a
+    non-dialable target all return None so the caller falls through to the
+    legacy transports unchanged.
     """
     if not _uds_messaging_enabled() or not _uds_source_eligible(source):
         return None
@@ -58512,6 +58569,10 @@ def _try_uds_peer_delivery(session_id, text, *, source, mode="send", peer_sender
         return None
     target = ccc_peer_uds.resolve_target(registry.get(session_id) or {})
     if not target["ok"]:
+        _log_activity(
+            "inject", "UDS-SKIP",
+            f"session={session_id} source={source} reason={target.get('reason')}",
+        )
         return None
     from_addr = ""
     from_name = ""
@@ -58537,18 +58598,27 @@ def _try_uds_peer_delivery(session_id, text, *, source, mode="send", peer_sender
         )
     except ValueError:
         return None
+    try:
+        start_offset = os.path.getsize(_resolve_conversation_path(session_id))
+    except OSError:
+        start_offset = 0
     sent = ccc_peer_uds.send_lines(target["socket_path"], lines)
     if not sent.get("ok"):
         _log_activity("inject", "UDS-FAIL", f"session={session_id} source={source} error={sent.get('error')}")
         return None
-    receipt = _transcript_peer_receipt(session_id, msg_id, text)
+    receipt = _transcript_peer_receipt(session_id, msg_id, text, start_offset=start_offset)
     _log_activity(
         "inject", "UDS",
         f"session={session_id} source={source} msg_id={msg_id} receipt={receipt} "
         f"text=\"{_activity_log_preview(text)}\"",
     )
-    if receipt != "delivered":
+    if receipt not in ("delivered", "queued"):
         return None
+    # "queued" means the frame is confirmed sitting in the receiver's inbox
+    # (an enqueue row landed after we sent it) even though Claude has not
+    # echoed our msg_id back yet. Claude delivers it at the next tool
+    # boundary or turn end. Falling through here would duplicate it over a
+    # legacy transport.
     return {"ok": True, "via": "uds", "source": "uds", "receipt_id": msg_id, "receipt": receipt}
 
 
@@ -59034,16 +59104,6 @@ def _inject_text_into_session(
     tty = status.get("tty")
     term_app = status.get("terminal_app")
     has_tty = _is_real_tty(tty)
-    # Native Claude peer socket for agent-to-agent relays. Sits ahead of
-    # the worker hand-off and every legacy transport: no terminal focus, no
-    # FIFO ownership, reaches foreign headless sessions. Falls through on
-    # anything short of a transcript-confirmed delivery.
-    if not is_codex:
-        uds_result = _try_uds_peer_delivery(
-            session_id, text, source=source, mode=mode, peer_sender_sid=peer_sender_sid,
-        )
-        if uds_result is not None:
-            return uds_result
     is_cursor = _is_cursor_session(session_id)
     is_hermes = _is_hermes_session(session_id)
     is_kimi = _is_kimi_session(session_id)
@@ -59079,6 +59139,19 @@ def _inject_text_into_session(
         )
         if routed is not None:
             return routed
+    # Native Claude peer socket for agent-to-agent relays. Sits AFTER the
+    # worker hand-off above and ahead of every legacy transport below: a
+    # headless target that just handed off already sent once (the worker's
+    # own copy of this router runs this same hook), so a dashboard-side send
+    # here would be a second frame with a second msg_id. No terminal focus,
+    # no FIFO ownership, reaches foreign headless sessions. Falls through on
+    # anything short of a transcript-confirmed delivery.
+    if not is_codex:
+        uds_result = _try_uds_peer_delivery(
+            session_id, text, source=source, mode=mode, peer_sender_sid=peer_sender_sid,
+        )
+        if uds_result is not None:
+            return uds_result
     # Codex: only its OWN TUI commands need a live interactive terminal.
     # Slash-shaped text that isn't one (e.g. /group-chat-checkin from the
     # group-chat flow) is just prompt text — route it through the normal
@@ -74444,7 +74517,9 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                             "idempotency_key"
                         )
                     result = _inject_text_into_session(
-                        sid, text, mode=mode, source="api", **inject_options,
+                        sid, text, mode=mode,
+                        source=_inject_source_for_request(announced_from, inject_options["wt_origin"]),
+                        **inject_options,
                     )
                 except Exception as e:
                     # An uncaught exception anywhere in this deep, subprocess-

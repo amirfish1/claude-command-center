@@ -55,6 +55,62 @@ def test_peer_receipt_held_matches_truncated_and_escaped_preview(monkeypatch, tm
     assert server._transcript_peer_receipt("sid", "m-5", body, timeout_s=0.2) == "held"
 
 
+def test_peer_receipt_ignores_stale_held_row_before_start_offset(monkeypatch, tmp_path):
+    """F2: a held row from an EARLIER message with the same preview must not
+    be mistaken for this send's receipt: only bytes appended after
+    start_offset count."""
+    p = tmp_path / "s.jsonl"
+    stale_held = {
+        "type": "system", "subtype": "informational",
+        "content": "Held peer message — from uds:/tmp/cc-socks/1.sock; preview: «please run tests now» — not delivered",
+    }
+    _write_jsonl(p, [stale_held])
+    start_offset = p.stat().st_size
+    with p.open("a") as fh:
+        fh.write(json.dumps({
+            "type": "user", "isMeta": True,
+            "origin": {"kind": "peer", "msg_id": "m-6", "body": "please run tests now"},
+        }) + "\n")
+    monkeypatch.setattr(server, "_resolve_conversation_path", lambda sid: str(p))
+    assert server._transcript_peer_receipt(
+        "sid", "m-6", "please run tests now", start_offset=start_offset, timeout_s=0.3,
+    ) == "delivered"
+
+
+def test_peer_receipt_stale_held_row_alone_is_unknown(monkeypatch, tmp_path):
+    """F2: the same stale held row, with nothing appended after
+    start_offset, must NOT report "held" for a send that hasn't happened
+    yet: it reports "unknown"."""
+    p = tmp_path / "s.jsonl"
+    stale_held = {
+        "type": "system", "subtype": "informational",
+        "content": "Held peer message — from uds:/tmp/cc-socks/1.sock; preview: «please run tests now» — not delivered",
+    }
+    _write_jsonl(p, [stale_held])
+    start_offset = p.stat().st_size
+    monkeypatch.setattr(server, "_resolve_conversation_path", lambda sid: str(p))
+    assert server._transcript_peer_receipt(
+        "sid", "m-7", "please run tests now", start_offset=start_offset, timeout_s=0.3,
+    ) == "unknown"
+
+
+def test_peer_receipt_queued_when_enqueue_row_lands_after_start_offset(monkeypatch, tmp_path):
+    p = tmp_path / "s.jsonl"
+    p.write_text("")
+    start_offset = p.stat().st_size
+    body = "please review the diff"
+    enqueue_row = {
+        "type": "queue-operation", "operation": "enqueue",
+        "timestamp": "2026-08-28T00:00:00Z", "sessionId": "sid", "content": body,
+    }
+    with p.open("a") as fh:
+        fh.write(json.dumps(enqueue_row) + "\n")
+    monkeypatch.setattr(server, "_resolve_conversation_path", lambda sid: str(p))
+    assert server._transcript_peer_receipt(
+        "sid", "m-8", body, start_offset=start_offset, timeout_s=0.3,
+    ) == "queued"
+
+
 import ccc_peer_uds
 
 
@@ -69,10 +125,22 @@ def test_uds_gate_reads_backend_env(monkeypatch):
 
 
 def test_uds_source_eligibility():
-    for src in ("ask", "group-chat-coordinate", "group-chat-auto-nudge", "group-chat-manual-nudge", "announced_from", "report_to", "wt"):
+    for src in ("ask", "group-chat-coordinate", "group-chat-auto-nudge", "group-chat-manual-nudge", "announced_from", "wt"):
         assert server._uds_source_eligible(src) is True
-    for src in ("api", "user", "manual", "ccc-spawn", "terminal-queue-watcher", "", None):
+    # "report_to" is not a literal source any caller passes: report-back
+    # footers arrive at /api/inject-input with an announced_from field, so
+    # they are classified as "announced_from" instead (see
+    # _inject_source_for_request below). The literal string stays ineligible.
+    for src in ("api", "user", "manual", "ccc-spawn", "terminal-queue-watcher", "report_to", "", None):
         assert server._uds_source_eligible(src) is False
+
+
+def test_inject_source_for_request_classifies_announced_from_wt_and_api():
+    assert server._inject_source_for_request("dispatcher", False) == "announced_from"
+    assert server._inject_source_for_request("dispatcher", True) == "announced_from"  # announced_from wins
+    assert server._inject_source_for_request(None, True) == "wt"
+    assert server._inject_source_for_request(None, False) == "api"
+    assert server._inject_source_for_request("", False) == "api"
 
 
 def _enable_uds(monkeypatch, tmp_path, registry_row, sent):
@@ -97,7 +165,7 @@ def _dialable_row(tmp_path):
 def test_try_uds_delivers_and_returns_receipt(monkeypatch, tmp_path):
     sent = []
     _enable_uds(monkeypatch, tmp_path, _dialable_row(tmp_path), sent)
-    monkeypatch.setattr(server, "_transcript_peer_receipt", lambda sid, mid, body, timeout_s=6.0: "delivered")
+    monkeypatch.setattr(server, "_transcript_peer_receipt", lambda sid, mid, body, start_offset=0, timeout_s=2.0: "delivered")
     monkeypatch.setattr(server, "_find_live_spawn_entry_for_session", lambda sid: None)
     result = server._try_uds_peer_delivery("target-sid", "please review", source="ask")
     assert result["ok"] is True and result["via"] == "uds" and result["receipt"] == "delivered"
@@ -158,6 +226,22 @@ def test_try_uds_falls_through_when_held_or_unknown(monkeypatch, tmp_path):
         assert server._try_uds_peer_delivery("target-sid", "x", source="ask") is None
 
 
+def test_try_uds_returns_ok_for_queued_and_none_for_unknown(monkeypatch, tmp_path):
+    """F2: "queued" is a confirmed-in-inbox receipt just like "delivered":
+    the caller must not fall through to a legacy transport and duplicate the
+    frame."""
+    sent = []
+    _enable_uds(monkeypatch, tmp_path, _dialable_row(tmp_path), sent)
+    monkeypatch.setattr(server, "_find_live_spawn_entry_for_session", lambda sid: None)
+    monkeypatch.setattr(server, "_transcript_peer_receipt", lambda *a, **k: "queued")
+    result = server._try_uds_peer_delivery("target-sid", "x", source="ask")
+    assert result["ok"] is True and result["via"] == "uds" and result["receipt"] == "queued"
+
+    sent.clear()
+    monkeypatch.setattr(server, "_transcript_peer_receipt", lambda *a, **k: "unknown")
+    assert server._try_uds_peer_delivery("target-sid", "x", source="ask") is None
+
+
 def test_try_uds_skips_ineligible_source_without_dialing(monkeypatch, tmp_path):
     sent = []
     _enable_uds(monkeypatch, tmp_path, _dialable_row(tmp_path), sent)
@@ -209,8 +293,27 @@ def _stub_inject_router_seams(monkeypatch, *, is_codex=False):
     monkeypatch.setattr(server, "session_live_status", lambda sid, cwd: {})
 
 
+def _stub_inject_router_engine_detectors(monkeypatch):
+    """F1: after the move, the UDS hook sits AFTER the worker hand-off
+    check, so a headless-target test now reaches the engine-detector calls
+    the hand-off condition guards on. Stub every one so the test exercises
+    only the ordering, not real filesystem/registry lookups."""
+    monkeypatch.setattr(server, "_is_cursor_session", lambda sid: False)
+    monkeypatch.setattr(server, "_is_hermes_session", lambda sid: False)
+    monkeypatch.setattr(server, "_is_kimi_session", lambda sid: False)
+    monkeypatch.setattr(server, "_session_acp_harness", lambda sid: None)
+    monkeypatch.setattr(server, "_is_opencode_session", lambda sid: False)
+    monkeypatch.setattr(server, "_is_gemini_session", lambda sid: False)
+    monkeypatch.setattr(server, "_is_antigravity_session", lambda sid: False)
+    monkeypatch.setattr(server, "_is_devin_cli_session", lambda sid: False)
+
+
 def test_inject_router_returns_uds_result_for_eligible_source(monkeypatch):
     _stub_inject_router_seams(monkeypatch, is_codex=False)
+    # session_live_status returns {} (no tty key) -> has_tty is False, so the
+    # worker hand-off branch runs first (F1 order). Decline it here so the
+    # call falls through to the UDS hook, same as "worker down".
+    monkeypatch.setattr(server, "_control_plane_engine_call", lambda *a, **k: None)
     calls = []
     uds_reply = {"ok": True, "via": "uds", "source": "uds", "receipt_id": "m-9", "receipt": "delivered"}
 
@@ -233,6 +336,39 @@ def test_inject_router_returns_uds_result_for_eligible_source(monkeypatch):
     assert calls[0]["source"] == "ask"
     assert calls[0]["mode"] == "steer"
     assert calls[0]["peer_sender_sid"] == "sender-sid"
+
+
+def test_inject_worker_handoff_sends_once_dashboard_side(monkeypatch, tmp_path):
+    """F1: a headless target hands off to the worker (routed is not None).
+    The dashboard-side router must NOT also dial the peer socket: the
+    worker runs its own copy of this same hook, so a dashboard-side send
+    here would be a second frame with a second msg_id."""
+    sent = []
+    _enable_uds(monkeypatch, tmp_path, _dialable_row(tmp_path), sent)
+    _stub_inject_router_seams(monkeypatch, is_codex=False)
+    _stub_inject_router_engine_detectors(monkeypatch)
+    monkeypatch.setattr(server, "session_live_status", lambda sid, cwd: {"live": True, "tty": None})
+    monkeypatch.setattr(server, "_control_plane_engine_call", lambda *a, **k: {"ok": True, "via": "worker"})
+    result = server._inject_text_into_session("target-sid", "hi", source="ask")
+    assert result == {"ok": True, "via": "worker"}
+    assert len(sent) == 0
+
+
+def test_inject_dashboard_sends_uds_when_worker_declines(monkeypatch, tmp_path):
+    """F1: when the worker hand-off declines (worker down, or _control_plane_
+    engine_call otherwise returns None), the dashboard is the only sender
+    and must still deliver over uds."""
+    sent = []
+    _enable_uds(monkeypatch, tmp_path, _dialable_row(tmp_path), sent)
+    _stub_inject_router_seams(monkeypatch, is_codex=False)
+    _stub_inject_router_engine_detectors(monkeypatch)
+    monkeypatch.setattr(server, "session_live_status", lambda sid, cwd: {"live": True, "tty": None})
+    monkeypatch.setattr(server, "_control_plane_engine_call", lambda *a, **k: None)
+    monkeypatch.setattr(server, "_transcript_peer_receipt", lambda *a, **k: "delivered")
+    monkeypatch.setattr(server, "_find_live_spawn_entry_for_session", lambda sid: None)
+    result = server._inject_text_into_session("target-sid", "hi", source="ask")
+    assert result["ok"] is True and result["via"] == "uds"
+    assert len(sent) == 1
 
 
 def test_inject_router_skips_uds_hook_for_codex_sessions(monkeypatch):
