@@ -60399,7 +60399,7 @@ def _iso_to_epoch(ts):
         return None
 
 
-def ask_session_via_live_tail(session_id, text, timeout_ms, status):
+def ask_session_via_live_tail(session_id, text, timeout_ms, status, peer_sender_sid=None):
     """Inject into a LIVE session via the existing TTY-keystroke path
     (same as /api/inject-input takes), then tail the session's .jsonl
     transcript for the assistant's reply. No `claude --resume` subprocess
@@ -60409,10 +60409,16 @@ def ask_session_via_live_tail(session_id, text, timeout_ms, status):
     `status` is the dict returned by `session_live_status()` and must
     have `live=True` plus a `tty`. Caller is expected to have checked.
 
+    Tries the target's Claude Code peer socket (`_try_uds_peer_delivery`)
+    before falling back to keystroke injection: a transcript-confirmed UDS
+    delivery skips the keystroke entirely. `peer_sender_sid` is the CCC
+    session id of the asker, if any, so the peer message can be attributed.
+
     Returns the same shape as `ask_session_via_resume`, with
     `source="live-tail"` and `cost_usd=None` (the live process doesn't
     expose its API cost back to us — that's the price of skipping the
-    resume).
+    resume). Success results also carry `"via"`, `"uds"` or `"keystroke"`,
+    naming which transport carried the ask.
     """
     tty = status.get("tty")
     term_app = status.get("terminal_app") or "Terminal"
@@ -60440,7 +60446,12 @@ def ask_session_via_live_tail(session_id, text, timeout_ms, status):
         }
     inject_epoch = time.time() - 1.0
 
-    inject = inject_input_via_keystroke(tty, term_app, text)
+    via = "keystroke"
+    inject = _try_uds_peer_delivery(session_id, text, source="ask", peer_sender_sid=peer_sender_sid)
+    if inject is not None:
+        via = "uds"
+    else:
+        inject = inject_input_via_keystroke(tty, term_app, text)
     if not inject.get("ok"):
         return {
             "ok": False,
@@ -60448,6 +60459,21 @@ def ask_session_via_live_tail(session_id, text, timeout_ms, status):
             "source": "live-tail",
         }
 
+    result = _ask_live_tail_wait_for_reply(session_id, jsonl_path, start_offset, inject_epoch, timeout_ms)
+    if result.get("ok"):
+        result["via"] = via
+    return result
+
+
+def _ask_live_tail_wait_for_reply(session_id, jsonl_path, start_offset, inject_epoch, timeout_ms):
+    """Tail `jsonl_path` from `start_offset` for the assistant's reply to an
+    ask that was just injected into `session_id`. Extracted from
+    `ask_session_via_live_tail` so the wait loop can be stubbed independently
+    of how the ask was injected (keystroke vs peer socket).
+
+    Returns the same success/timeout/error dict shapes the inline loop in
+    `ask_session_via_live_tail` used to return directly.
+    """
     started = time.monotonic()
     deadline = started + max(0.5, timeout_ms / 1000.0)
     text_blocks = []
@@ -60858,7 +60884,7 @@ def ask_engine_session_and_wait(session_id, text, timeout_ms, engine):
                 pass
 
 
-def ask_session_and_wait(session_id, text, timeout_ms=30000, cwd=None):
+def ask_session_and_wait(session_id, text, timeout_ms=30000, cwd=None, peer_sender_sid=None):
     """Synchronously inject `text` into a session and wait for its reply.
 
     Non-claude engines route first: codex/gemini/antigravity/hermes/opencode
@@ -60924,7 +60950,7 @@ def ask_session_and_wait(session_id, text, timeout_ms=30000, cwd=None):
     resolved_cwd = cwd or find_session_cwd(session_id)
     status = session_live_status(session_id, resolved_cwd)
     if status.get("live") and status.get("tty"):
-        return ask_session_via_live_tail(session_id, text, timeout_ms, status)
+        return ask_session_via_live_tail(session_id, text, timeout_ms, status, peer_sender_sid=peer_sender_sid)
 
     # Resume-headless path (original behaviour). Reuse an existing live
     # resume if we already have one (same path resume_session_headless takes).
@@ -74582,6 +74608,7 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
             sid = payload.get("session_id", "")
             text = payload.get("text", "")
             cwd = payload.get("cwd", "")
+            peer_sender_sid = str(payload.get("from_session_id") or "").strip() or None
             try:
                 timeout_ms = int(payload.get("timeout_ms") or 30000)
             except (TypeError, ValueError):
@@ -74596,7 +74623,9 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                 if guard:
                     self.send_json(guard, 409)
                 else:
-                    result = ask_session_and_wait(sid, text, timeout_ms=timeout_ms, cwd=cwd or None)
+                    result = ask_session_and_wait(
+                        sid, text, timeout_ms=timeout_ms, cwd=cwd or None, peer_sender_sid=peer_sender_sid,
+                    )
                     self.send_json(result)
         elif path == "/api/launch-terminal":
             length = int(self.headers.get("Content-Length", "0"))

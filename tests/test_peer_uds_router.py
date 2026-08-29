@@ -246,3 +246,29 @@ def test_inject_router_skips_uds_hook_for_codex_sessions(monkeypatch):
     monkeypatch.setattr(server, "resume_session_codex", lambda sid, text: codex_reply)
     result = server._inject_text_into_session("target-sid", "please review", source="ask")
     assert result == codex_reply
+
+
+def test_ask_live_tail_prefers_uds_and_skips_keystrokes(monkeypatch, tmp_path):
+    sent = []
+    _enable_uds(monkeypatch, tmp_path, _dialable_row(tmp_path), sent)
+    monkeypatch.setattr(server, "_transcript_peer_receipt", lambda *a, **k: "delivered")
+    monkeypatch.setattr(server, "_find_live_spawn_entry_for_session", lambda sid: None)
+    monkeypatch.setattr(server, "inject_input_via_keystroke",
+                        lambda *a, **k: (_ for _ in ()).throw(AssertionError("keystroke used")))
+    transcript = tmp_path / "t.jsonl"
+    transcript.write_text("")
+    monkeypatch.setattr(server, "_resolve_conversation_path", lambda sid: str(transcript))
+    # ask_session_via_live_tail locates the transcript via _find_session_jsonl
+    # (a real ~/.claude/projects scan), not _resolve_conversation_path above.
+    # Stub it too so this test does not depend on the real filesystem.
+    monkeypatch.setattr(server, "_find_session_jsonl", lambda sid: transcript)
+    monkeypatch.setattr(server, "_is_real_tty", lambda tty: True)
+    # Make the transcript "reply" as soon as the tail loop looks.
+    monkeypatch.setattr(server, "_ask_live_tail_wait_for_reply",
+                        lambda *a, **k: {"ok": True, "text": "PONG", "cost_usd": None, "duration_ms": 1, "num_turns": 1, "source": "live-tail"},
+                        raising=False)
+    status = {"live": True, "tty": "/dev/ttys004", "terminal_app": "Terminal"}
+    result = server.ask_session_via_live_tail("target-sid", "ping?", 2000, status)
+    assert result.get("ok") is True
+    assert result.get("via") == "uds"
+    assert len(sent) == 1
