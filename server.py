@@ -18632,9 +18632,12 @@ class _SessionGraph:
         self._children_of = {}
         # child_sid -> edge_meta (same objects as in _children_of values)
         self._edge_meta = {}
-        # parent_sid -> set of child_sids already enriched for Claude Task
-        # tool subagents (so lazy enrichment runs once per parent).
-        self._claude_task_enriched = set()
+        # parent_sid -> epoch of the last Task-tool subagent glob (throttled,
+        # not a one-time gate: two subagents spawned close together can land
+        # their agent-*.jsonl files at different times, so a permanent
+        # "already enriched" skip would miss whichever file wasn't written
+        # yet at the first glob).
+        self._claude_task_enriched = {}
         # parent_sid -> set of child_sids already enriched for Kimi Code
         # Agent subagents (agents/<name>/wire.jsonl under the session dir).
         self._kimi_subagents_enriched = set()
@@ -18678,8 +18681,13 @@ class _SessionGraph:
                 self._edge_meta[child] = meta
             # Persisted enrichment markers so we don't re-glob on restart.
             enriched = data.get("claude_task_enriched")
-            if isinstance(enriched, list):
-                self._claude_task_enriched = set(enriched)
+            if isinstance(enriched, dict):
+                self._claude_task_enriched = {str(k): float(v) for k, v in enriched.items()}
+            elif isinstance(enriched, list):
+                # Old format (a set of "done forever" parent ids): treat as
+                # never-enriched so they re-glob once on next access instead
+                # of staying stuck.
+                self._claude_task_enriched = {}
             kimi_enriched = data.get("kimi_subagents_enriched")
             if isinstance(kimi_enriched, list):
                 self._kimi_subagents_enriched = set(kimi_enriched)
@@ -18704,7 +18712,7 @@ class _SessionGraph:
                 })
             data = {
                 "edges": edges,
-                "claude_task_enriched": sorted(self._claude_task_enriched),
+                "claude_task_enriched": dict(self._claude_task_enriched),
                 "kimi_subagents_enriched": sorted(self._kimi_subagents_enriched),
             }
             try:
@@ -18961,20 +18969,28 @@ def _session_graph_build_from_all_sources():
     _session_graph.save()
 
 
+_CLAUDE_TASK_ENRICH_THROTTLE_S = 10
+
+
 def _session_graph_enrich_claude_task_subagents(parent_sid):
     """Glob ``<project>/<parent_sid>/subagents/agent-*.jsonl`` and add each
     agent transcript as a child of ``parent_sid``.
 
-    Called lazily by family_tree() when a Claude parent has no children in
-    the graph yet. Cached via _claude_task_enriched so the glob runs at most
-    once per parent per process lifetime. The enrichment marker is persisted
-    so a restart doesn't re-glob.
+    Called by family_tree() on every request for a Claude parent. Throttled
+    (not a one-time gate) via _claude_task_enriched's per-parent timestamp:
+    two Task-tool subagents spawned close together can write their
+    agent-*.jsonl files at different times, so a permanent "already
+    enriched" skip would drop whichever file wasn't there yet at the first
+    glob (add_edge is idempotent, so re-globbing a parent that already has
+    all its children is just a cheap no-op).
     """
     parent_sid = str(parent_sid or "").strip()
     if not parent_sid or not PROJECTS_ROOT.is_dir():
         return
+    now = time.time()
     with _session_graph._lock:
-        if parent_sid in _session_graph._claude_task_enriched:
+        last = _session_graph._claude_task_enriched.get(parent_sid, 0)
+        if now - last < _CLAUDE_TASK_ENRICH_THROTTLE_S:
             return
     # Glob all project dirs for <parent>/subagents/agent-*.jsonl
     try:
@@ -18991,7 +19007,7 @@ def _session_graph_enrich_claude_task_subagents(parent_sid):
     except OSError:
         pass
     with _session_graph._lock:
-        _session_graph._claude_task_enriched.add(parent_sid)
+        _session_graph._claude_task_enriched[parent_sid] = now
         _session_graph._dirty = True
     _session_graph.save()
 
@@ -19083,15 +19099,14 @@ def _session_graph_family_tree(sid):
     sid = str(sid or "").strip()
     if not sid:
         return None
-    # Lazy enrichment: if this is a Claude session with no children in the
-    # graph, check the filesystem for Task-tool subagent transcripts.
-    if not _session_graph.children_of(sid):
-        _session_graph_enrich_claude_task_subagents(sid)
-    # Also enrich ancestors that have no children (they might be the
-    # orchestrator that spawned Task-tool subagents).
+    # Lazy enrichment: check the filesystem for Task-tool subagent
+    # transcripts (throttled internally, so this is cheap even when the
+    # parent already has children — see _CLAUDE_TASK_ENRICH_THROTTLE_S).
+    _session_graph_enrich_claude_task_subagents(sid)
+    # Also enrich ancestors (they might be the orchestrator that spawned
+    # Task-tool subagents).
     for ancestor in _session_graph.ancestors(sid):
-        if not _session_graph.children_of(ancestor):
-            _session_graph_enrich_claude_task_subagents(ancestor)
+        _session_graph_enrich_claude_task_subagents(ancestor)
     # Kimi Code Agent subagents live under the session dir, not in the spawn
     # registry. Enrich this node, its ancestors, and any known descendants so
     # a lane map rooted at the orchestrator still shows subagents under a
