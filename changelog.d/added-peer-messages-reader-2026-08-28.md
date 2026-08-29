@@ -1,0 +1,1 @@
+- Transcript reader now shows messages that arrived from other Claude Code sessions (SendMessage / peer sockets) as a Peer bubble with the sender's name, including ones absorbed mid-turn, and shows a muted notice when Claude held a peer message instead of delivering it.
