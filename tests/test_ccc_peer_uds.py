@@ -112,18 +112,33 @@ def _fake_server(path, received):
 
 
 def test_send_lines_writes_all_lines_and_closes():
-    d = tempfile.mkdtemp()
-    path = os.path.join(d, "t.sock")
-    received = []
-    t = _fake_server(path, received)
-    lines = uds.build_frame_lines("hi", token="tok", msg_id="m1")
-    result = uds.send_lines(path, lines, timeout_s=2.0)
-    t.join(timeout=3)
-    assert result == {"ok": True, "error": ""}
-    assert json.loads(received[0])["type"] == "auth"
-    assert json.loads(received[1])["msg_id"] == "m1"
+    with tempfile.TemporaryDirectory() as d:
+        path = os.path.join(d, "t.sock")
+        received = []
+        t = _fake_server(path, received)
+        lines = uds.build_frame_lines("hi", token="tok", msg_id="m1")
+        result = uds.send_lines(path, lines, timeout_s=2.0)
+        t.join(timeout=3)
+        assert result == {"ok": True, "error": ""}
+        assert json.loads(received[0])["type"] == "auth"
+        assert json.loads(received[1])["msg_id"] == "m1"
 
 
 def test_send_lines_reports_connect_refused(tmp_path):
     result = uds.send_lines(str(tmp_path / "missing.sock"), [b"{}\n"], timeout_s=0.5)
+    assert result["ok"] is False and result["error"]
+
+
+def test_send_lines_never_raises_on_none_socket():
+    result = uds.send_lines(None, [b"{}\n"], timeout_s=0.5)
+    assert result["ok"] is False and result["error"]
+
+
+def test_send_lines_never_raises_on_invalid_socket_type():
+    result = uds.send_lines(12345, [b"{}\n"], timeout_s=0.5)
+    assert result["ok"] is False and result["error"]
+
+
+def test_send_lines_never_raises_on_negative_timeout():
+    result = uds.send_lines("/tmp/cc-socks/nope.sock", [b"{}\n"], timeout_s=-1)
     assert result["ok"] is False and result["error"]

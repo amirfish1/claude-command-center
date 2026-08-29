@@ -109,9 +109,10 @@ def build_frame_lines(content, *, token="", from_addr="", msg_id, priority="next
 
 def send_lines(socket_path, lines, timeout_s=3.0):
     """Connect, write every line, half-close, and return {"ok", "error"}."""
-    sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-    sock.settimeout(timeout_s)
+    sock = None
     try:
+        sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        sock.settimeout(timeout_s)
         sock.connect(socket_path)
         for line in lines:
             sock.sendall(line)
@@ -120,10 +121,11 @@ def send_lines(socket_path, lines, timeout_s=3.0):
         except OSError:
             pass
         return {"ok": True, "error": ""}
-    except (OSError, socket.timeout) as exc:
+    except (OSError, socket.timeout, TypeError, ValueError) as exc:
         return {"ok": False, "error": str(exc) or exc.__class__.__name__}
     finally:
-        try:
-            sock.close()
-        except OSError:
-            pass
+        if sock is not None:
+            try:
+                sock.close()
+            except OSError:
+                pass
