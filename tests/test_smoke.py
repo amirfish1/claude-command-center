@@ -1313,6 +1313,30 @@ class TestServerImports(unittest.TestCase):
         self.assertIn("Sessions stay on disk", app_js)
         self.assertIn("Hard kill is not offered", app_js)
 
+    def test_system_processes_tab_and_endpoints(self):
+        """Processes tab in System status dialog audits killness scores and wires /api/system/processes."""
+        index_html = pathlib.Path(PROJECT_ROOT, "static", "index.html").read_text(encoding="utf-8")
+        app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
+        app_css = pathlib.Path(PROJECT_ROOT, "static", "app.css").read_text(encoding="utf-8")
+
+        self.assertIn('id="sysTabBtnProcesses"', index_html)
+        self.assertIn('id="sysTabContentProcesses"', index_html)
+        self.assertIn('id="sysProcBody"', index_html)
+        self.assertIn("/api/system/processes", app_js)
+        self.assertIn("/api/system/processes/kill", app_js)
+        self.assertIn(".sys-proc-card", app_css)
+
+        import server
+        data = server.build_system_processes()
+        self.assertIn("processes", data)
+        self.assertIn("total_count", data)
+        self.assertIn("high_risk_count", data)
+        self.assertIsInstance(data["processes"], list)
+
+        kill_res = server.system_process_kill([1, os.getpid()])
+        self.assertIn(1, kill_res["blocked"])
+        self.assertIn(os.getpid(), kill_res["blocked"])
+
     def test_total_recall_search_ui_wires_sidebar_augmentation(self):
         """Conversation search calls the Recall session endpoint and labels
         Recall-backed sidebar hits without turning the field into doc search."""

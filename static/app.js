@@ -712,6 +712,7 @@
   let _sysProcFilter = 'all';
   let _sysProcSearch = '';
   let _sysProcData = null;
+  let _sysProcShowAll = false;
 
   function _pollSystemProcesses(force) {
     if (document.hidden && !force) return;
@@ -790,12 +791,16 @@
       return true;
     });
 
+    const isDefaultAll = _sysProcFilter === 'all' && !searchLower;
+    const displayProcs = (isDefaultAll && !_sysProcShowAll) ? filtered.slice(0, 50) : filtered;
+
     html += '<div class="sys-proc-list">';
     if (!filtered.length) {
       html += '<div class="sh-meta" style="padding:24px 0;text-align:center;opacity:0.6">No processes match the selected filters.</div>';
     } else {
-      filtered.forEach(function (p) {
-        const score = p.score.toFixed(1);
+      displayProcs.forEach(function (p) {
+        const scoreNum = typeof p.score === 'number' ? p.score : parseFloat(p.score || 0);
+        const score = scoreNum.toFixed(1);
         let scoreBadgeClass = 'score-low';
         let riskLabel = 'SAFE';
         if (p.score >= 7.0) { scoreBadgeClass = 'score-critical'; riskLabel = 'HIGH RISK'; }
@@ -812,7 +817,7 @@
 
         html += '  <div class="sys-proc-info">';
         html += '    <div class="sys-proc-cmd-row">';
-        html += '      <span class="sys-proc-cmd-title" title="' + _shEsc(p.cmd) + '">' + _shEsc(p.cmd_short || p.cmd.split(' ')[0]) + '</span>';
+        html += '      <span class="sys-proc-cmd-title" title="' + _shEsc(p.cmd) + '">' + _shEsc(p.cmd_short || (p.cmd ? p.cmd.split(' ')[0] : '')) + '</span>';
         (p.reasons || []).forEach(function (r) {
           let tagClass = 'tag-subtle';
           if (r.indexOf('Deleted CWD') !== -1 || r.indexOf('Unlinked') !== -1 || r.indexOf('Zombie') !== -1) tagClass = 'tag-danger';
@@ -827,7 +832,7 @@
         html += '      <span>PID <b>' + p.pid + '</b></span>';
         html += '      <span>PPID <b>' + p.ppid + '</b>' + (p.ppid === 1 ? ' (launchd)' : '') + '</span>';
         html += '      <span>up ' + _shFmtIdle(p.etime_min) + '</span>';
-        html += '      <span>' + p.cpu.toFixed(1) + '% cpu</span>';
+        html += '      <span>' + (p.cpu || 0).toFixed(1) + '% cpu</span>';
         html += '      <span>' + _shFmtMB(p.rss_mb) + '</span>';
         html += '      <span>state ' + _shEsc(p.stat) + '</span>';
         html += '    </div>';
@@ -855,6 +860,12 @@
 
         html += '</div>';
       });
+
+      if (displayProcs.length < filtered.length) {
+        html += '<div style="text-align:center;padding:12px 0">';
+        html += '  <button type="button" class="sh-btn" id="sysProcShowAllBtn">Show all ' + filtered.length + ' processes</button>';
+        html += '</div>';
+      }
     }
     html += '</div>';
 
@@ -905,6 +916,14 @@
           if (p.score >= 7.0 && p.can_kill) highPids.push(p.pid);
         });
         _confirmProcessKill(reapHighBtn, highPids, true);
+      });
+    }
+
+    const showAllBtn = body.querySelector('#sysProcShowAllBtn');
+    if (showAllBtn) {
+      showAllBtn.addEventListener('click', function () {
+        _sysProcShowAll = true;
+        _renderSystemProcesses();
       });
     }
   }
@@ -63124,7 +63143,7 @@
       if ($contentProcesses) $contentProcesses.style.display = 'block';
       if ($sysDialog) $sysDialog.classList.add('is-wide');
       
-      _pollSystemProcesses(true);
+      window._lastProcPromise = _pollSystemProcesses(true);
       if (_sysProcessesTimer) clearInterval(_sysProcessesTimer);
       _sysProcessesTimer = setInterval(_pollSystemProcesses, 5000);
       if (_sysHealthTimer) { clearInterval(_sysHealthTimer); _sysHealthTimer = null; }

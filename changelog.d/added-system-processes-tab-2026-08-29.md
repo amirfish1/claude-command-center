@@ -1,0 +1,1 @@
+- Added **Processes** tab to the System Status modal (`/api/system/processes`) with killness risk scoring (0-10), process audit reasons (orphans, deleted CWD, unlinked FIFOs, stuck CLI loops), filtering, search, and one-click single/batch kill controls.
