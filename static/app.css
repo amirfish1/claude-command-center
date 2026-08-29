@@ -3154,6 +3154,17 @@
     line-height: 1.45;
     overflow-wrap: anywhere;
   }
+  .peer-sender {
+    display: inline-flex; align-items: center; gap: 4px;
+    margin-right: 8px; padding: 1px 7px; border-radius: 999px;
+    font-size: 11px; line-height: 16px; vertical-align: middle;
+    background: color-mix(in srgb, var(--accent, #4c8bf5) 14%, transparent);
+    color: var(--accent, #4c8bf5);
+  }
+  .peer-sender-mode { opacity: 0.65; font-size: 10px; }
+  .event.user_text.peer-message .user-msg { border-left: 2px solid color-mix(in srgb, var(--accent, #4c8bf5) 45%, transparent); padding-left: 8px; }
+  .event.system.peer-held .system-compact-text { opacity: 0.7; }
+  .event.system.peer-held .peer-held-preview { font-style: italic; }
   /* User bubble — Claude-Desktop-style chat bubble. No label, no left
      border, rounded corners, constrained width, subtle blue tint. */
   .conversations-view .event.user_text {

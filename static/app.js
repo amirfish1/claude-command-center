@@ -52832,6 +52832,24 @@
       const title = ev.chat_id ? ('WhatsApp sender in ' + ev.chat_id) : 'WhatsApp sender';
       return '<div class="whatsapp-bridge-sender" title="' + escapeAttr(title) + '">' + escapeHtml(sender) + '</div>';
     }
+    // Chip for messages that arrived over Claude Code's cross-session peer
+    // mesh (SendMessage / uds sockets). Server tags these events with
+    // ev.peer = {name, from, from_mode, msg_id}. from_mode is the sender's
+    // attested permission mode; blank when the sender did not attest.
+    function peerSenderHtml(ev) {
+      const peer = ev && ev.peer;
+      if (!peer || typeof peer !== 'object') return '';
+      const name = String(peer.name || '').trim() || String(peer.from || '').replace(/^uds:/, '') || 'peer';
+      const mode = String(peer.from_mode || '').trim();
+      const title = 'Message from another Claude session'
+        + (peer.from ? ' (' + peer.from + ')' : '')
+        + (mode ? ', sender mode: ' + mode : '');
+      return '<span class="peer-sender" title="' + escapeAttr(title) + '">'
+        + '<span class="peer-sender-icon" aria-hidden="true">&#8644;</span>'
+        + '<span class="peer-sender-name">' + escapeHtml(name) + '</span>'
+        + (mode ? '<span class="peer-sender-mode">' + escapeHtml(mode) + '</span>' : '')
+        + '</span>';
+    }
     function eventModelMetaHtml(ev, role) {
       if (!ev || !ev.model) return '';
       const bits = [];
@@ -53149,7 +53167,19 @@
       }
 
       if (ev.type === 'system') {
-        if (ev.subtype === 'hermes_turn_summary') {
+        if (ev.subtype === 'peer_held') {
+          // A teammate's peer message was held by Claude's mode-parity rule
+          // and never reached the model. Muted, one line, expandable.
+          const who = String(ev.name || '').trim() || String(ev.from || '').replace(/^uds:/, '') || 'peer';
+          div.classList.add('system-compact', 'peer-held');
+          div.innerHTML = '<span class="label">Peer</span>'
+            + '<span class="line-num">L' + ev.line + '</span>'
+            + tsSpan(ev.ts)
+            + '<span class="system-compact-text" title="' + escapeAttr(String(ev.text || '')) + '">'
+            + 'Held message from ' + escapeHtml(who) + ' (not delivered)'
+            + (ev.preview ? ': <span class="peer-held-preview">' + escapeHtml(String(ev.preview)) + '</span>' : '')
+            + '</span>';
+        } else if (ev.subtype === 'hermes_turn_summary') {
           // At-a-glance session health, emitted at the top of the transcript:
           // how many turns ran and how many failed upstream. Failed turns live
           // only in request_dump files, so a session can look fine in the list
@@ -53368,7 +53398,9 @@
         // (the real event lands in its place below).
         const normed = _normSend(ev.text);
         let _reconciledExact = false;
-        const pIdx = _pendingSends.findIndex(p => _normSend(p.text) === normed);
+        // Peer (cross-session) messages are not the operator's own sends:
+        // never let one clear a pending echo, exact or FIFO.
+        const pIdx = ev.peer ? -1 : _pendingSends.findIndex(p => _normSend(p.text) === normed);
         if (pIdx >= 0) {
           const p = _pendingSends[pIdx];
           if (p.element && p.element.parentNode) p.element.parentNode.removeChild(p.element);
@@ -53390,7 +53422,7 @@
         // wins. Real events never carry these classes, so this can't remove a
         // genuine transcript row.
         const echoScope = $view.closest('.conv-pane') || $view;
-        const echoDivs = echoScope.querySelectorAll(
+        const echoDivs = ev.peer ? [] : echoScope.querySelectorAll(
           '.event.user_text.pending, .event.user_text.send-queued,'
           + ' .event.user_text.send-delivered, .event.user_text.not-acknowledged');
         for (const pDiv of echoDivs) {
@@ -53414,7 +53446,7 @@
         // nothing is lost. Skip synthetic continuation events so they never
         // consume a genuine pending echo.
         const _isContinuation = /^This session is being continued from a previous conversation\b/.test(ev.text || '');
-        if (!_reconciledExact && !_isContinuation && _pendingSends.length) {
+        if (!ev.peer && !_reconciledExact && !_isContinuation && _pendingSends.length) {
           const oldest = _pendingSends.shift();
           if (oldest) {
             if (oldest.element && oldest.element.parentNode) oldest.element.parentNode.removeChild(oldest.element);
@@ -53468,10 +53500,11 @@
           cleanedText = _stripKimiControlXml(cleanedText);
           if (!String(cleanedText || '').trim()) div.classList.add('kimi-xml-only');
         }
-        const bridgeSenderHtml = whatsappBridgeSenderHtml(ev);
+        const bridgeSenderHtml = whatsappBridgeSenderHtml(ev) + peerSenderHtml(ev);
+        if (ev.peer) div.classList.add('peer-message');
         const notification = parseTaskNotificationBlock(cleanedText);
         if (notification) div.classList.add('task-notification-event');
-        if (!notification && cleanedText) syncPaneLastUserMessage(paneId, cleanedText);
+        if (!notification && !ev.peer && cleanedText) syncPaneLastUserMessage(paneId, cleanedText);
         // Collapse /compact-resume blocks into a styled card — they're
         // multi-page walls of text that drown the actual conversation.
         // The card shows just the intro line + a click-to-expand toggle;
@@ -53540,7 +53573,7 @@
             + ' not a hook. Send a message to pick it back up.</span>'
             + '</div>';
         } else {
-        div.innerHTML = '<span class="label">User</span>'
+        div.innerHTML = '<span class="label">' + (ev.peer ? 'Peer' : 'User') + '</span>'
           + (ev.line != null ? '<span class="line-num">L' + ev.line + '</span>' : '')
           + tsSpan(ev.ts)
           + ambientContextHtml(ev.ambient_context)
@@ -53657,7 +53690,8 @@
         const blockParts = [];
         const agentAnswerParts = [];
         let lastToolPartIdx = -1;
-        const bridgeSenderHtml = whatsappBridgeSenderHtml(ev);
+        const bridgeSenderHtml = whatsappBridgeSenderHtml(ev) + peerSenderHtml(ev);
+        if (ev.peer) div.classList.add('peer-message');
         if (bridgeSenderHtml) blockParts.push(bridgeSenderHtml);
         const assistantBlocks = Array.isArray(ev.blocks)
           ? ev.blocks
