@@ -28920,6 +28920,13 @@ _PEER_WRAPPER_RE = re.compile(
     re.DOTALL,
 )
 
+_PEER_HELD_RE = re.compile(
+    r"^Held peer message\b.*?from\s+(?P<from>\S+)"
+    r"(?:\s*\(peer claims name:\s*(?P<name>[^)]*)\))?"
+    r".*?preview:\s*«(?P<preview>.*?)»",
+    re.DOTALL,
+)
+
 
 def _peer_body_from_wrapped(text):
     """Body of a Claude Code peer message, without the wrapper/prefix/guidance.
@@ -28975,6 +28982,23 @@ def _parse_conversation_event(ev, line_num):
                     "duration_ms": _codex_int(meta.get("durationMs")),
                 },
             }
+        if ev.get("subtype") == "informational":
+            content = str(ev.get("content") or "")
+            m = _PEER_HELD_RE.match(content.strip())
+            if m:
+                # Claude held a peer message (mode-parity rule) and never
+                # showed it to the model. Surface it muted so the operator
+                # knows a teammate tried and why nothing happened.
+                return {
+                    "line": line_num,
+                    "ts": ts,
+                    "type": "system",
+                    "subtype": "peer_held",
+                    "from": (m.group("from") or "").strip(),
+                    "name": (m.group("name") or "").strip(),
+                    "preview": (m.group("preview") or "").strip(),
+                    "text": content,
+                }
         if ev.get("subtype") == "local_command":
             content = ev.get("content", "")
             if content.startswith("<local-command-stdout>"):

@@ -118,3 +118,33 @@ def test_human_queued_command_has_no_peer_block():
     assert ev["type"] == "user_text"
     assert ev["text"] == "run the tests"
     assert "peer" not in ev
+
+
+HELD = (
+    "Held peer message — from uds:/tmp/cc-socks/4242.sock (peer claims name: worker-a); "
+    "preview: «PEER PROBE 44: reply with exactly the word PONG44.» — not delivered to Claude (1 held). "
+    "The sender did not attest its permission mode and this session bypasses prompts."
+)
+
+
+def test_held_peer_message_renders_as_muted_system_notice():
+    row = {
+        "type": "system",
+        "subtype": "informational",
+        "level": "warning",
+        "isMeta": False,
+        "content": HELD,
+        "timestamp": "2026-08-29T03:29:48.369Z",
+    }
+    ev = server._parse_conversation_event(row, 12)
+    assert ev["type"] == "system"
+    assert ev["subtype"] == "peer_held"
+    assert ev["from"] == "uds:/tmp/cc-socks/4242.sock"
+    assert ev["name"] == "worker-a"
+    assert ev["preview"] == "PEER PROBE 44: reply with exactly the word PONG44."
+    assert ev["text"] == HELD
+
+
+def test_other_informational_system_rows_stay_hidden():
+    row = {"type": "system", "subtype": "informational", "content": "Something else entirely"}
+    assert server._parse_conversation_event(row, 13) is None
