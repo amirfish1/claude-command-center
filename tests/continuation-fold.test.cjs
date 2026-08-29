@@ -1,6 +1,8 @@
 // Continuation chains (F2 "Continue in a new session" / auto-resume) render
-// as ONE unit: the successor is the row, the ancestor nests under it as a
-// child row. The old opt-in "Hide earlier continued sessions" fold is gone.
+// as ONE row: the origin folds into its successor, the successor's always-on
+// ⤴ from: chip opens the origin, and lanes the origin spawned re-home to the
+// chain head. The old opt-in "Hide earlier continued sessions" switch is gone:
+// folding is unconditional now.
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
@@ -33,11 +35,31 @@ test('the continuation fold preference and its Settings switch are gone', () => 
   assert.equal(html.includes('Hide earlier continued sessions'), false);
 });
 
-test('tree builders no longer refuse to nest a continuation pair', () => {
+test('both tree builders fold the origin into its successor and re-home its lanes', () => {
   assert.equal(app.includes('_isContinuationPair'), false);
-  // Both the Current-sessions and All-tab builders keep the plain parent walk.
-  const nestLine = /if \(!id \|\| !pid \|\| id === pid \|\| !byId\.has\(pid\)\) return;\n\s*childIds\.add\(id\);/g;
-  assert.equal((app.match(nestLine) || []).length, 2);
+  assert.equal((app.match(/const fold = _continuationFoldMaps\(rows, /g) || []).length, 2);
+  assert.equal((app.match(/if \(!id \|\| fold\.hidden\.has\(id\)\) return;/g) || []).length, 2);
+  assert.equal((app.match(/const pid = fold\.headOf\(/g) || []).length, 2);
+});
+
+test('_continuationFoldMaps hides the origin and points its lanes at the chain head', () => {
+  const ctx = { continuationParentId: (c) => String((c && c.continued_from_session_id) || '') };
+  vm.createContext(ctx);
+  vm.runInContext(extractFunction('_continuationFoldMaps') + '; this.fold = _continuationFoldMaps;', ctx);
+  const idOf = (c) => c.session_id;
+  const rows = [
+    { session_id: 'origin-session-01', modified: 1 },
+    { session_id: 'mid-session-0001', continued_from_session_id: 'origin-session-01', modified: 2 },
+    { session_id: 'head-session-001', continued_from_session_id: 'mid-session-0001', modified: 3 },
+    { session_id: 'lane-session-001', parent_session_id: 'origin-session-01', modified: 2 },
+  ];
+  const fold = ctx.fold(rows, idOf);
+  assert.deepEqual([...fold.hidden].sort(), ['mid-session-0001', 'origin-session-01']);
+  assert.equal(fold.headOf('origin-session-01'), 'head-session-001');
+  assert.equal(fold.headOf('lane-session-001'), 'lane-session-001');
+  // A successor outside the list does not fold its origin.
+  const alone = ctx.fold(rows.slice(0, 1), idOf);
+  assert.equal(alone.hidden.size, 0);
 });
 
 test('the successor is the effective parent of the session it continued from', () => {
@@ -61,12 +83,9 @@ test('the successor is the effective parent of the session it continued from', (
   assert.equal(ctx.eff('successor-sess-01', 'origin-session-01'), '');
 });
 
-test('continuation ancestors ride in the cluster as real rows, expanded by default', () => {
-  assert.match(app, /continuation: continuationIds\.has\(id\)/);
-  assert.match(app, /subagentCompact: !entry\.continuation/);
-  assert.match(app, /continuationAncestor: !!entry\.continuation/);
-  assert.match(app, /!_subagentExpandedParents\.has\('collapsed:' \+ parentId\)/);
-  assert.match(app, /data-continuation-cluster="1"/);
+test('the ⤴ from: chip survives the hover overlay like the parent chip does', () => {
+  assert.match(css, /\.conv-item:hover:not\(\.active\) \.conv-hover-meta-row \.conv-session-origin-chip\.is-successor,/);
+  assert.match(css, /\.conv-item:hover:not\(\.active\) \.conv-hover-meta-row:has\(\.conv-session-origin-chip\.is-successor\),/);
 });
 
 test('the selected-row title no longer carries ⤴ from: chips', () => {
@@ -75,6 +94,7 @@ test('the selected-row title no longer carries ⤴ from: chips', () => {
   assert.equal(css.includes('.conv-session-origin-chip.is-continuation'), false);
 });
 
-test('a nested continuation ancestor does not show its own lane badge', () => {
-  assert.match(app, /\(subagentClusterMeta \|\| opts\.continuationAncestor\) \? 0 :/);
+test('a continuation is not counted as a lane of its origin; the head carries the chain lanes', () => {
+  assert.match(app, /if \(!pid \|\| continuationParentId\(row\) === pid\) return;/);
+  assert.match(app, /subagentClusterMeta \? 0 : _sessionLaneCountWithAncestors\(c\)/);
 });

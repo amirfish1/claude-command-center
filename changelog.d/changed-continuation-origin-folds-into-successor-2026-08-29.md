@@ -1,0 +1,1 @@
+- Continued sessions render as one row: the earlier session folds into its successor, the successor's always-visible "⤴ from:" chip opens it, lanes the earlier session spawned follow the successor, and moving the successor to Trash takes the earlier session and its lanes along. The "Hide earlier continued sessions" setting is gone; folding is the default now.

@@ -6651,6 +6651,7 @@
   .conv-item:hover:not(.active) .conv-hover-meta-row .conv-sidebar-session-id-chip,
   .conv-item:hover:not(.active) .conv-hover-meta-row .conv-branch-slot,
   .conv-item:hover:not(.active) .conv-hover-meta-row .conv-session-origin-chip.is-parent,
+  .conv-item:hover:not(.active) .conv-hover-meta-row .conv-session-origin-chip.is-successor,
   .conv-item:hover:not(.active) .conv-hover-meta-row .conv-session-origin-chip.is-grandparent { display: inline-flex; }
   /* CCC-865: CCC-864 kept the origin chip visible on hover but the row
      around it still switched to the absolute single-line overlay above,
@@ -6659,6 +6660,7 @@
      flow on hover instead, same treatment as the current-sessions
      exception below (CCC-843). */
   .conv-item:hover:not(.active) .conv-hover-meta-row:has(.conv-session-origin-chip.is-parent),
+  .conv-item:hover:not(.active) .conv-hover-meta-row:has(.conv-session-origin-chip.is-successor),
   .conv-item:hover:not(.active) .conv-hover-meta-row:has(.conv-session-origin-chip.is-grandparent) {
     position: static;
     right: auto;
@@ -6670,6 +6672,15 @@
     background: transparent;
     padding-left: 0;
     z-index: auto;
+  }
+  /* The ⤴ from: chip is the only way back to a folded origin session (the
+     origin has no row of its own), so it stays visible at rest; the rest of
+     the meta row still waits for hover/select. */
+  .conv-item:not(.active):not(:hover) .conv-hover-meta-row:has(.conv-session-origin-chip.is-successor) {
+    display: flex;
+  }
+  .conv-item:not(.active):not(:hover) .conv-hover-meta-row:has(.conv-session-origin-chip.is-successor) > :not(.conv-session-origin-chip.is-successor) {
+    display: none;
   }
   /* Current-sessions rows already surface the full meta row by default; the
      generic one-line hover treatment above would shrink them back to a single

@@ -3360,6 +3360,34 @@
   function _continuationRowId(c) {
     return String((c && (c.session_id || c.id)) || '').trim();
   }
+  // One row per continuation chain. A session that was continued into a
+  // successor present in the same list folds into that successor (its
+  // ⤴ from: chip opens the origin); anything that hung off the folded row
+  // — the lanes it spawned — re-homes to the chain head so it is never
+  // orphaned (CCC-945). Returns { hidden: Set<sid>, headOf(sid) -> sid }.
+  function _continuationFoldMaps(rows, idOf) {
+    const byId = new Set();
+    (rows || []).forEach(c => { const id = idOf(c); if (id) byId.add(id); });
+    const successorOf = new Map();
+    (rows || []).forEach(c => {
+      const id = idOf(c);
+      const pid = continuationParentId(c);
+      if (!id || !pid || pid === id || !byId.has(pid)) return;
+      const prev = successorOf.get(pid);
+      const ts = Number(c.modified || c.last_interacted || c.mtime || 0) || 0;
+      if (!prev || ts >= prev.ts) successorOf.set(pid, { sid: id, ts });
+    });
+    const headOf = (sid) => {
+      let cur = String(sid || '');
+      const seen = new Set();
+      while (successorOf.has(cur) && !seen.has(cur)) {
+        seen.add(cur);
+        cur = successorOf.get(cur).sid;
+      }
+      return cur;
+    };
+    return { hidden: new Set(successorOf.keys()), headOf };
+  }
   let _f2ContinuationEdgesCache = { raw: null, edges: {} };
   function _f2ContinuationEdges() {
     let raw = '';
@@ -31962,9 +31990,9 @@
       // orchestration lanes). Skipped when subagentClusterMeta is already
       // set: that live cluster disclosure shows the same "N agents" count
       // plus active/attention state, so both would be redundant.
-      // Also skipped on a nested continuation ancestor: its lanes render as
-      // rows right under it, and the chain's head carries the cluster count.
-      const _orchChildCount = (subagentClusterMeta || opts.continuationAncestor) ? 0 : _sessionLaneCountWithAncestors(c);
+      // The chain head carries the lanes its continuation ancestors spawned
+      // (the ancestors themselves fold into it, see _continuationFoldMaps).
+      const _orchChildCount = subagentClusterMeta ? 0 : _sessionLaneCountWithAncestors(c);
       const orchChildBadgeHtml = _orchChildCount > 0
         ? '<span class="conv-orch-badge" title="Spawned ' + _orchChildCount + ' child session' + (_orchChildCount === 1 ? '' : 's') + '">'
           + _orchChildCount + (_orchChildCount === 1 ? ' lane' : ' lanes') + '</span>'
@@ -32055,9 +32083,8 @@
       // important to hide in the hover row or bury in the branch slot. (CCC-294)
       const branchSlotHtml = worktreeBadgeHtml + branch;
       const sessionIdChipHtml = sidebarSessionIdChipHtml(c);
-      // The continuation ancestor renders as a nested child row of this
-      // session (see _subagentClusterPresentation), so the only lineage chip
-      // here is the meta-row provenance chip.
+      // The session this one continued from folds into this row; its
+      // meta-row ⤴ from: chip is the way back to it.
       const sessionProvenanceChipHtml = _sessionProvenanceChipHtml(c);
       const objectChipHtml = flowObjectChipHtml(c);
       // Current-goal chip — codex sessions only (the native `/goal` feature,
@@ -32199,7 +32226,7 @@
         : '';
 
       let subagentClusterDisclosureHtml = '';
-      if (subagentClusterMeta && Number(subagentClusterMeta.total || 0) > 0) {
+      if (subagentClusterMeta) {
         const _clusterTotal = Number(subagentClusterMeta.total || 0);
         const _clusterActive = Number(subagentClusterMeta.active || 0);
         const _clusterAttention = Number(subagentClusterMeta.attention || 0);
@@ -32463,16 +32490,6 @@
         const id = _subagentRowId(item.card);
         if (id) byId.set(id, item);
       });
-      // Continuation ancestors — the session(s) this root (or a nested row)
-      // was F2-continued from. f2EffectiveParentSessionId already flips the
-      // old session's parent to its successor, so they arrive here as
-      // descendants; they are the same conversation's earlier half and
-      // always render as real child rows, never as completed chips.
-      const continuationIds = new Set();
-      rows.forEach(item => {
-        const pid = item && item.card ? continuationParentId(item.card) : '';
-        if (pid && byId.has(pid)) continuationIds.add(pid);
-      });
       const directActiveIds = new Set();
       const bridgeIds = new Set();
       descendants.forEach(item => {
@@ -32497,12 +32514,8 @@
       const completedRows = [];
       descendants.forEach(item => {
         const id = _subagentRowId(item.card);
-        if (directActiveIds.has(id) || bridgeIds.has(id) || continuationIds.has(id)) {
-          activeRows.push({
-            item,
-            bridge: bridgeIds.has(id) && !continuationIds.has(id),
-            continuation: continuationIds.has(id),
-          });
+        if (directActiveIds.has(id) || bridgeIds.has(id)) {
+          activeRows.push({ item, bridge: bridgeIds.has(id) });
         } else {
           completedRows.push(item);
         }
@@ -32516,9 +32529,6 @@
         activeRows,
         completedRows,
         total: descendants.length,
-        continuation: continuationIds.size,
-        // Spawned agents only — continuation ancestors are not lanes.
-        agents: descendants.length - continuationIds.size,
         active: directActiveIds.size,
         attention: descendants.filter(item => _subagentRowNeedsAttention(item.card)).length,
       };
@@ -32536,19 +32546,11 @@
       // you just as effectively as if it weren't rendered at all. Default to
       // expanded whenever a descendant needs attention, regardless of the
       // user's manual toggle history for this parent.
-      // A chain with a continuation ancestor opens by default (the ancestor
-      // is part of this conversation); the user's collapse is remembered
-      // under a distinct key so the plain expanded-set semantics stay intact.
-      const hasContinuation = presentation.continuation > 0;
-      const expanded = presentation.attention > 0
-        || (hasContinuation
-          ? !_subagentExpandedParents.has('collapsed:' + parentId)
-          : _subagentExpandedParents.has(parentId));
+      const expanded = _subagentExpandedParents.has(parentId) || presentation.attention > 0;
       const parentOpts = Object.assign({}, opts, {
         subagentClusterMeta: {
           parentId,
-          total: presentation.agents,
-          continuation: presentation.continuation,
+          total: presentation.total,
           active: presentation.active,
           attention: presentation.attention,
           expanded,
@@ -32556,9 +32558,8 @@
       });
       const activeHtml = presentation.activeRows.map(entry => _renderRow(entry.item.card, Object.assign({}, opts, {
         currentChildDepth: entry.item.depth,
-        subagentCompact: !entry.continuation,
+        subagentCompact: true,
         subagentBridge: entry.bridge,
-        continuationAncestor: !!entry.continuation,
       }))).join('');
       const completedHtml = presentation.completedRows.length
         ? '<div class="conv-subagent-completed">'
@@ -32583,8 +32584,7 @@
           + '</div>'
         : '';
       return '<div class="conv-subagent-cluster' + (expanded ? ' is-expanded' : '') + '"'
-        + ' data-subagent-parent-sid="' + escapeAttr(parentId) + '"'
-        + (hasContinuation ? ' data-continuation-cluster="1"' : '') + '>'
+        + ' data-subagent-parent-sid="' + escapeAttr(parentId) + '">'
         + _renderRow(rootItem.card, parentOpts)
         + '<div class="conv-subagent-cluster-body">' + activeHtml + completedHtml + '</div>'
         + '</div>';
@@ -33751,12 +33751,14 @@
           const id = _currentSessionId(c);
           if (id) byId.set(id, c);
         });
+        const fold = _continuationFoldMaps(rows, _currentSessionId);
         const childrenByParent = new Map();
         const childIds = new Set();
         (rows || []).forEach(c => {
           const id = _currentSessionId(c);
-          const pid = _currentSessionParentId(c);
-          if (!id || !pid || id === pid || !byId.has(pid)) return;
+          if (!id || fold.hidden.has(id)) return;
+          const pid = fold.headOf(_currentSessionParentId(c));
+          if (!pid || id === pid || !byId.has(pid)) return;
           childIds.add(id);
           (childrenByParent.get(pid) || childrenByParent.set(pid, []).get(pid)).push(c);
         });
@@ -33764,7 +33766,7 @@
         const emitted = new Set();
         const emit = (c, depth) => {
           const id = _currentSessionId(c);
-          if (!id || emitted.has(id)) return;
+          if (!id || emitted.has(id) || fold.hidden.has(id)) return;
           emitted.add(id);
           out.push({ card: c, depth });
           (childrenByParent.get(id) || []).forEach(child => emit(child, depth + 1));
@@ -34440,12 +34442,14 @@
         const id = _allTabSessionId(c);
         if (id) byId.set(id, c);
       });
+      const fold = _continuationFoldMaps(rows, _allTabSessionId);
       const childrenByParent = new Map();
       const childIds = new Set();
       (rows || []).forEach(c => {
         const id = _allTabSessionId(c);
-        const pid = _allTabParentId(c);
-        if (!id || !pid || id === pid || !byId.has(pid)) return;
+        if (!id || fold.hidden.has(id)) return;
+        const pid = fold.headOf(_allTabParentId(c));
+        if (!pid || id === pid || !byId.has(pid)) return;
         childIds.add(id);
         (childrenByParent.get(pid) || childrenByParent.set(pid, []).get(pid)).push(c);
       });
@@ -34453,7 +34457,7 @@
       const emitted = new Set();
       const emit = (c, depth) => {
         const id = _allTabSessionId(c);
-        if (!id || emitted.has(id)) return;
+        if (!id || emitted.has(id) || fold.hidden.has(id)) return;
         emitted.add(id);
         out.push({ card: c, depth });
         (childrenByParent.get(id) || []).forEach(child => emit(child, depth + 1));
@@ -36336,10 +36340,7 @@
         const arrow = btn.querySelector('.conv-subagent-cluster-arrow');
         if (arrow) arrow.innerHTML = expanded ? '&#9662;' : '&#9656;';
         const set = _subagentClustersExpandedSet();
-        if (cluster.hasAttribute('data-continuation-cluster')) {
-          // Continuation clusters default open; remember only the collapse.
-          if (expanded) set.delete('collapsed:' + sid); else set.add('collapsed:' + sid);
-        } else if (expanded) set.add(sid); else set.delete(sid);
+        if (expanded) set.add(sid); else set.delete(sid);
         _subagentClustersSaveExpandedSet(set);
       });
     }

@@ -1,1 +1,0 @@
-- Continued sessions render as one unit: the earlier session nests under its successor as a child row (expanded by default, still individually clickable), its lanes nest beneath it, the successor's title keeps full width, and moving the successor to Trash takes the earlier session and its lanes along. The "Hide earlier continued sessions" setting is gone; nesting replaces it.
