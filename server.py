@@ -28907,6 +28907,39 @@ def _extract_presentation_artifact(text: str) -> tuple[str, dict | None, str]:
     return prose, artifact, ""
 
 
+_PEER_WRAPPER_RE = re.compile(
+    r"<cross-session-message\b[^>]*>(.*?)</cross-session-message>",
+    re.DOTALL,
+)
+
+
+def _peer_body_from_wrapped(text):
+    """Body of a Claude Code peer message, without the wrapper/prefix/guidance.
+
+    Delivered peer rows store the whole prompt Claude built for the model:
+    a "Another Claude session sent a message:" prefix, the
+    <cross-session-message ...> wrapper, and a trailing safety paragraph.
+    The receiver's origin.body already holds the bare text; this is the
+    fallback when a row has no body (older senders, partial rows).
+    """
+    raw = str(text or "")
+    m = _PEER_WRAPPER_RE.search(raw)
+    if m:
+        return m.group(1).strip()
+    return raw.strip()
+
+
+def _peer_block_from_origin(origin):
+    """Normalise a transcript origin{kind:"peer"} into the reader's peer block."""
+    origin = origin if isinstance(origin, dict) else {}
+    return {
+        "name": str(origin.get("name") or "").strip(),
+        "from": str(origin.get("from") or "").strip(),
+        "from_mode": str(origin.get("fromMode") or "").strip(),
+        "msg_id": str(origin.get("msg_id") or "").strip(),
+    }
+
+
 def _parse_conversation_event(ev, line_num):
     """Parse a single conversation JSONL event."""
     ev_type = ev.get("type", "")
@@ -28967,6 +29000,23 @@ def _parse_conversation_event(ev, line_num):
         return None
 
     if ev_type == "user":
+        origin = ev.get("origin")
+        if isinstance(origin, dict) and origin.get("kind") == "peer":
+            # Delivered peer (cross-session) message. Claude marks these
+            # isMeta so its own TUI collapses them, but the model DID read
+            # them and answered, so the operator must see them too.
+            body = str(origin.get("body") or "").strip()
+            if not body:
+                msg = _safe_parse_message(ev.get("message", {}))
+                body = _peer_body_from_wrapped(_extract_text_from_content(msg.get("content", "")))
+            return {
+                "line": line_num,
+                "ts": ts,
+                "type": "user_text",
+                "text": body,
+                "images": [],
+                "peer": _peer_block_from_origin(origin),
+            }
         if ev.get("isMeta"):
             return None
         msg = _safe_parse_message(ev.get("message", {}))
