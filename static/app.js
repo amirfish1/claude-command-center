@@ -61524,6 +61524,71 @@
     const strip = host && host.querySelector(':scope > .paste-thumb-strip');
     if (strip) strip.remove();
   }
+  // Generic (non-image) attachment chip — same strip, same remove-strips-
+  // the-token behavior as _addPastedImageThumb, but shows a filename chip
+  // instead of a thumbnail since there is nothing to preview for a PDF/log/
+  // zip. Keeps a PDF from leaving a bare filesystem path token visible in
+  // the textarea.
+  function _addAttachmentChip(el, path, filename) {
+    const strip = _pastedImageThumbsContainer(el);
+    if (!strip) return;
+    const chip = document.createElement('div');
+    chip.className = 'paste-thumb paste-thumb-file';
+    chip.dataset.path = path;
+    chip.title = filename || path;
+    const label = document.createElement('span');
+    label.className = 'paste-thumb-file-name';
+    label.textContent = filename || path.split('/').pop();
+    const remove = document.createElement('button');
+    remove.type = 'button';
+    remove.className = 'paste-thumb-remove';
+    remove.innerHTML = '&times;';
+    remove.title = 'Remove this attachment from the message';
+    remove.addEventListener('click', (ev) => {
+      ev.preventDefault();
+      ev.stopPropagation();
+      try {
+        const re = new RegExp('\\s*' + path.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '\\s*', 'g');
+        el.value = el.value.replace(re, ' ').replace(/\s{2,}/g, ' ').trim();
+        el.dispatchEvent(new Event('input', { bubbles: true }));
+      } catch (_) {}
+      chip.remove();
+      if (!strip.querySelector('.paste-thumb')) strip.remove();
+    });
+    chip.appendChild(label);
+    chip.appendChild(remove);
+    strip.appendChild(chip);
+  }
+  // Shared upload-and-insert loop: every entry point that hands the composer
+  // a batch of browser File objects (desktop drag-drop, the mobile attach
+  // button's file input) funnels through here so the placeholder/thumbnail/
+  // error handling only lives in one place. Images route through
+  // uploadPastedImage (inline transcript rendering + thumbnail, matching
+  // clipboard-paste behavior); everything else (PDF, log, zip, ...) routes
+  // through uploadManagedAttachment with a filename chip.
+  async function uploadFilesToComposer(el, files) {
+    for (const file of files) {
+      const isImage = !!(file.type && file.type.startsWith('image/'));
+      const placeholder = ' [uploading ' + (file.name || 'attachment') + '...] ';
+      insertAtCursor(el, placeholder);
+      try {
+        if (isImage) {
+          const path = await uploadPastedImage(file);
+          el.value = el.value.replace(placeholder, ' ' + path + ' ');
+          el.dispatchEvent(new Event('input', { bubbles: true }));
+          _addPastedImageThumb(el, path, null);
+        } else {
+          const path = await uploadManagedAttachment(file);
+          el.value = el.value.replace(placeholder, ' ' + path + ' ');
+          el.dispatchEvent(new Event('input', { bubbles: true }));
+          _addAttachmentChip(el, path, file.name);
+        }
+      } catch (e) {
+        el.value = el.value.replace(placeholder, ' [upload failed: ' + e.message + '] ');
+        el.dispatchEvent(new Event('input', { bubbles: true }));
+      }
+    }
+  }
   function attachFileDrop(el) {
     if (!el || el._fileDropBound) return;
     el._fileDropBound = true;
@@ -61537,16 +61602,33 @@
       const files = Array.from((ev.dataTransfer && ev.dataTransfer.files) || []).filter(Boolean);
       if (!files.length) return;
       ev.preventDefault();
-      for (const file of files) {
-        const placeholder = ' [uploading ' + (file.name || 'attachment') + '...] ';
-        insertAtCursor(el, placeholder);
-        try {
-          const path = await uploadManagedAttachment(file);
-          el.value = el.value.replace(placeholder, ' ' + path + ' ');
-          el.dispatchEvent(new Event('input', { bubbles: true }));
-        } catch (e) {
-          el.value = el.value.replace(placeholder, ' [upload failed: ' + e.message + '] ');
-        }
+      await uploadFilesToComposer(el, files);
+    });
+  }
+  // Mobile/touch entry point: a bare <input type="file"> with no accept or
+  // capture restriction (see the markup comment) so it covers files, photo
+  // library, and camera in one control. Wired to whichever composer(s) carry
+  // a matching hidden file input + attach button pair.
+  function attachFilePickerButton(inputEl, buttonEl) {
+    if (!inputEl || !buttonEl || buttonEl._filePickerBound) return;
+    buttonEl._filePickerBound = true;
+    const targetEl = () => document.getElementById('convInput');
+    buttonEl.addEventListener('click', (ev) => {
+      ev.preventDefault();
+      inputEl.click();
+    });
+    inputEl.addEventListener('change', async () => {
+      const files = Array.from(inputEl.files || []).filter(Boolean);
+      const el = targetEl();
+      try {
+        if (files.length && el) await uploadFilesToComposer(el, files);
+      } finally {
+        // Reset AFTER the upload finishes, not before — clearing the file
+        // input's value can tear down the browser's handle backing the
+        // still-in-flight File/Blob reads on some engines, which silently
+        // stalls the upload fetch forever instead of erroring. Reset here
+        // only to allow re-selecting the same file next time.
+        inputEl.value = '';
       }
     });
   }
@@ -61627,6 +61709,7 @@
   // Expose so the group-chat reader (created lazily after this block
   // runs) can opt in too — see wireGcMentionAutocomplete's neighbor.
   window.__cccAttachImagePaste = attachImagePaste;
+  attachFilePickerButton(document.getElementById('convAttachInput'), document.getElementById('convAttachBtn'));
 
   if ($kptNewSession) {
     // Open new session mode the moment the user starts typing (or focuses)

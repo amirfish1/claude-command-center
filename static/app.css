@@ -8794,6 +8794,31 @@
     opacity: 0.5;
     cursor: not-allowed;
   }
+  .conv-input-bar .attach-btn {
+    width: 32px; height: 32px; flex-shrink: 0;
+    border-radius: 999px; border: 1px solid var(--border); cursor: pointer;
+    background: transparent; color: var(--text-muted);
+    line-height: 1; padding: 0;
+    display: inline-flex; align-items: center; justify-content: center;
+    transition: background 0.15s, color 0.15s, border-color 0.15s, transform 0.05s;
+  }
+  .conv-input-bar .attach-btn:hover {
+    background: var(--surface-2);
+    color: var(--text);
+  }
+  .conv-input-bar .attach-btn:active { transform: translateY(1px); }
+  .conv-input-bar .attach-btn svg { display: block; }
+  /* Larger touch target on phones (44px is the generally-cited minimum
+     comfortable tap size) since this is a primary mobile-only entry point,
+     not just a desktop convenience. Declared after the base rule above (and
+     the .tts-btn/.mic-btn mobile block earlier in this file, which this
+     would otherwise lose to under equal-specificity/later-wins cascade
+     ordering) so it actually applies at narrow widths. */
+  @media (max-width: 1200px) {
+    .conv-input-bar .attach-btn {
+      width: 40px; height: 40px;
+    }
+  }
 
   @keyframes ccc-mic-pulse {
     0% {
@@ -19680,6 +19705,33 @@ body.has-gc-reader .pwa-install-banner {
 }
 .paste-thumb:hover .paste-thumb-remove,
 .paste-thumb-remove:focus-visible { opacity: 1; }
+
+/* Non-image attachment chip (PDF, log, zip, ...) — same strip as the pasted-
+   image thumbnails, but a filename pill instead of a thumbnail since there's
+   nothing to preview. */
+.paste-thumb.paste-thumb-file {
+  width: auto; height: 32px;
+  display: inline-flex; align-items: center; gap: 6px;
+  padding: 0 22px 0 8px;
+  border-radius: 999px;
+  max-width: 160px;
+}
+.paste-thumb-file-name {
+  font-size: 12px;
+  color: var(--text-muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.paste-thumb-file .paste-thumb-remove {
+  position: absolute;
+  top: 50%; right: 4px;
+  transform: translateY(-50%);
+  opacity: 1;
+  background: transparent;
+  color: var(--text-muted);
+}
+.paste-thumb-file:hover .paste-thumb-remove { color: var(--text); }
 
 /* @ autocomplete menu for the group-chat input box. */
 .gc-mention-menu {

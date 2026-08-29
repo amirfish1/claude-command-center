@@ -1463,6 +1463,19 @@
                   <path d="M18.5 5.5a9 9 0 0 1 0 13"></path>
                 </svg>
               </button>
+              <!-- Attach files / photos — a bare file input with no accept/
+                   capture restriction. iOS/Android give Photo Library, Take
+                   Photo, and Browse (Files) from this single control; a
+                   restrictive accept would block non-image files like PDFs,
+                   and `capture` would force the camera and break the file
+                   case entirely. This is the only mobile path into the
+                   existing (desktop-only) drag-drop attachment flow. -->
+              <input type="file" id="convAttachInput" multiple hidden aria-hidden="true" tabindex="-1">
+              <button type="button" class="attach-btn" id="convAttachBtn" title="Attach files or photos" aria-label="Attach files or photos">
+                <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                  <path d="M21 9.5 12.5 18a4 4 0 0 1-5.7-5.7L15 4a2.7 2.7 0 0 1 3.8 3.8L10.5 16a1.3 1.3 0 0 1-1.9-1.9L16 6.5"></path>
+                </svg>
+              </button>
               <button class="mic-btn" id="convMicBtn" title="Record speech to input" aria-label="Record speech to input" aria-pressed="false">
                 <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
                   <path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"></path>
