@@ -83,7 +83,7 @@ def test_ccc_peer_server_start_publishes_row_and_key(monkeypatch, tmp_path, sock
 
 
 def test_ccc_peer_server_start_noop_when_gate_off(monkeypatch):
-    monkeypatch.delenv("CCC_MESSAGING_BACKEND", raising=False)
+    monkeypatch.setenv("CCC_MESSAGING_BACKEND", "legacy")
     result = server._ccc_peer_server_start()
     assert result == {"ok": False, "reason": "gate_off"}
 

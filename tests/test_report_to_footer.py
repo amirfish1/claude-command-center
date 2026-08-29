@@ -15,7 +15,7 @@ def test_footer_uses_sendmessage_for_claude_when_gate_on_and_peer_running(monkey
 
 
 def test_footer_stays_curl_when_gate_off(monkeypatch):
-    monkeypatch.delenv("CCC_MESSAGING_BACKEND", raising=False)
+    monkeypatch.setenv("CCC_MESSAGING_BACKEND", "legacy")
     monkeypatch.setitem(server._CCC_PEER_STATE, "socket_path", "/tmp/cc-socks/1.sock")
     out = server._wrap_prompt_with_return_address("do the thing", "dispatcher-sid", engine="claude")
     assert "curl" in out

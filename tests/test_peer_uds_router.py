@@ -116,12 +116,14 @@ import ccc_peer_uds
 
 def test_uds_gate_reads_backend_env(monkeypatch):
     monkeypatch.delenv("CCC_MESSAGING_BACKEND", raising=False)
-    assert server._uds_messaging_enabled() is False
+    assert server._uds_messaging_enabled() is True  # default-on, unset env
     monkeypatch.setenv("CCC_MESSAGING_BACKEND", "uds")
     assert server._uds_messaging_enabled() is True
     monkeypatch.setenv("CCC_MESSAGING_BACKEND", "wt,uds")
     assert server._uds_messaging_enabled() is True
     assert server._wt_messaging_enabled() is False  # unchanged: exact "wt" only
+    monkeypatch.setenv("CCC_MESSAGING_BACKEND", "legacy")
+    assert server._uds_messaging_enabled() is False  # explicit opt-out
 
 
 def test_uds_source_eligibility():
@@ -253,7 +255,7 @@ def test_try_uds_skips_ineligible_source_without_dialing(monkeypatch, tmp_path):
 def test_try_uds_skips_when_gate_off_or_target_not_dialable(monkeypatch, tmp_path):
     sent = []
     _enable_uds(monkeypatch, tmp_path, _dialable_row(tmp_path), sent)
-    monkeypatch.delenv("CCC_MESSAGING_BACKEND")
+    monkeypatch.setenv("CCC_MESSAGING_BACKEND", "legacy")
     assert server._try_uds_peer_delivery("target-sid", "x", source="ask") is None
     monkeypatch.setenv("CCC_MESSAGING_BACKEND", "uds")
     monkeypatch.setattr(server, "_load_session_registry", lambda: {})

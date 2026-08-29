@@ -58380,9 +58380,10 @@ def _compact_session_context_impl(session_id, *, terminal_app=None, _from_termin
 # CCC spawning its own `claude --resume`. Both sides of the swap are
 # headless-only, so this never touches the live-TTY keystroke path, the
 # bg-agent PTY socket path, FIFO spawns CCC already owns, or any non-claude
-# engine — those keep their native CCC transport unconditionally. Default
-# off; flag flip is opt-in and every failure mode falls through to the
-# pre-existing native path unchanged.
+# engine — those keep their native CCC transport unconditionally. Default-on
+# since 2026-08-29 (slice 3 landed; every failure mode still falls through
+# to the pre-existing native path unchanged). Set CCC_MESSAGING_BACKEND to
+# any value that does not contain "uds" (e.g. "legacy") to opt back out.
 CCC_MESSAGING_BACKEND_ENV = "CCC_MESSAGING_BACKEND"
 _WT_CLI_PATH_CACHE = None  # None = not checked yet; "" = checked, not found
 
@@ -58393,12 +58394,18 @@ def _wt_messaging_enabled():
 
 
 def _uds_messaging_enabled():
-    """True when CCC_MESSAGING_BACKEND lists `uds` (e.g. "uds" or "wt,uds").
+    """True unless CCC_MESSAGING_BACKEND is explicitly set to something
+    that does not list "uds" (e.g. "legacy" or "wt").
 
-    Opt-in for now. Once the live smoke passes on a release this flips to
-    default-on for Claude targets (see the design spec).
+    Default-on: unset (the common case) enables it. Every failure mode
+    (unresolvable target, held/unknown receipt, socket error) still falls
+    through to the pre-existing native transports unchanged, and every
+    attempt is logged to the activity log (category "inject", verb
+    "UDS"/"UDS-SKIP"/"UDS-FAIL") regardless of outcome.
     """
     raw = os.environ.get(CCC_MESSAGING_BACKEND_ENV, "")
+    if not raw.strip():
+        return True
     return "uds" in {p.strip().lower() for p in raw.split(",") if p.strip()}
 
 
