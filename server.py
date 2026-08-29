@@ -60934,6 +60934,7 @@ def ask_session_and_wait(session_id, text, timeout_ms=30000, cwd=None, peer_send
                 "text": text,
                 "timeout_ms": timeout_ms,
                 "cwd": cwd,
+                "peer_sender_sid": peer_sender_sid,
             },
             timeout_ms=timeout_ms,
         )

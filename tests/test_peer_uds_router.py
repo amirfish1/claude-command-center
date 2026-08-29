@@ -272,3 +272,28 @@ def test_ask_live_tail_prefers_uds_and_skips_keystrokes(monkeypatch, tmp_path):
     assert result.get("ok") is True
     assert result.get("via") == "uds"
     assert len(sent) == 1
+
+
+def test_ask_and_wait_forwards_peer_sender_to_control_plane(monkeypatch):
+    seen = {}
+
+    def fake_route(engine, operation, args, **kw):
+        seen["engine"], seen["op"], seen["args"] = engine, operation, args
+        return {"ok": True, "text": "routed"}
+
+    monkeypatch.setattr(server, "_control_plane_engine_call", fake_route)
+    monkeypatch.setattr(server, "_resolve_local_spawn_session_prefix", lambda sid: sid)
+    monkeypatch.setattr(server, "_detect_session_engine", lambda sid: "claude")
+    result = server.ask_session_and_wait("target-sid", "ping?", timeout_ms=1500, peer_sender_sid="sender-sid")
+    assert result == {"ok": True, "text": "routed"}
+    assert (seen["engine"], seen["op"]) == ("claude", "ask")
+    assert seen["args"]["peer_sender_sid"] == "sender-sid"
+    assert seen["args"]["session_id"] == "target-sid"
+
+
+def test_worker_ask_consumer_forwards_peer_sender():
+    import inspect
+    import worker_engines
+    src = inspect.getsource(worker_engines)
+    idx = src.index("legacy.ask_session_and_wait(")
+    assert 'peer_sender_sid=args.get("peer_sender_sid")' in src[idx:idx + 400]
