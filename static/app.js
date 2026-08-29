@@ -6959,6 +6959,16 @@
     _handleUxQueueNudge(el);
   });
 
+  // CCC-994: .conv-inprogress-toolbar sticks at `top: var(--conv-tab-bar-h)`
+  // so it settles directly under the also-sticky .conv-tab-bar instead of
+  // both pinning to top:0 and the (higher z-index) tab bar hiding it.
+  function _updateConvTabBarHeightVar($convList) {
+    if (!$convList) return;
+    const tabBar = $convList.querySelector(':scope > .conv-tab-bar');
+    const h = tabBar ? Math.ceil(tabBar.getBoundingClientRect().height) : 0;
+    $convList.style.setProperty('--conv-tab-bar-h', h + 'px');
+  }
+
   function updateLiveStripOffset($view, strip) {
     if (!$view) return;
     if (!strip) {
@@ -35092,6 +35102,7 @@
     const _projectTreeScrollTop = _projectTreeScrollBefore ? _projectTreeScrollBefore.scrollTop : 0;
     _parkSharedQueuePanelForSidebarRender();
     $convList.innerHTML = _convListHtml;
+    _updateConvTabBarHeightVar($convList);
     _mountSharedQueuePanel();
     if (_objectsSplitActive) _updateSidebarFillSection($convList);
     const _currentSessionsScrollAfter = _currentSessionsScrollBefore

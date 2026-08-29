@@ -7246,10 +7246,12 @@
     flex-wrap: wrap;
     padding: 6px 8px;
     /* Keep the controls (expand/collapse all, by project/time, Details,
-       window) reachable while scrolling a long list — pin to the top of the
-       scroll container; rows slide underneath. */
+       window) reachable while scrolling a long list — pin just below the
+       also-sticky .conv-tab-bar (--conv-tab-bar-h, measured in JS by
+       _updateConvTabBarHeightVar) so the two don't stack at the same top:0
+       and have the tab bar's higher z-index hide the toolbar (CCC-994). */
     position: sticky;
-    top: 0;
+    top: var(--conv-tab-bar-h, 0px);
     z-index: 6;
     background: var(--surface);
   }
@@ -14504,9 +14506,15 @@
     /* With #convList scrolling, the tab bar and the list toolbar are both
        `position: sticky; top: 0` and land on top of each other. Keep the tabs
        pinned (they are the primary navigation) and let the toolbar scroll
-       away — two stacked sticky bars would eat ~80px of an 844px screen. */
+       away on true phone widths only — two stacked sticky bars would eat
+       ~80px of an 844px-tall phone screen. On tablet/narrow-desktop widths
+       (701-1200px) there's headroom for both, so the toolbar (Collapse all,
+       Now/1d/7d/All, by project/by time, Wrap, Details) stays frozen at the
+       top while the list scrolls underneath it (CCC-994). */
     #convList > .conv-tab-bar { z-index: 7; }
-    #convList .conv-inprogress-toolbar { position: static; }
+    @media (max-width: 700px) {
+      #convList .conv-inprogress-toolbar { position: static; }
+    }
     .conv-current-sessions-scroll,
     .conv-project-tree-scroll,
     .conv-evergreen-agents-scroll,
