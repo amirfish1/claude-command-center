@@ -43966,6 +43966,46 @@ def _transcript_gains_text(session_id, text, timeout_s=6.0):
     return False
 
 
+def _transcript_peer_receipt(session_id, msg_id, body, timeout_s=6.0):
+    """Delivery receipt for a peer-socket send: "delivered", "held", "unknown".
+
+    Claude echoes the sender's msg_id into origin.msg_id on both delivered
+    shapes (idle user row, absorbed-mid-turn attachment). A held message is
+    logged as a system row whose preview quotes the body's first ~60 chars.
+    A successful socket write is NOT a delivery; only this scan is.
+    """
+    msg_id = str(msg_id or "")
+    if not msg_id:
+        return "unknown"
+    needle_id = json.dumps(msg_id, ensure_ascii=False)[1:-1]
+    id_forms = ('"msg_id": "%s"' % needle_id, '"msg_id":"%s"' % needle_id)
+    preview = ""
+    for line in str(body or "").splitlines():
+        line = line.strip()
+        if line:
+            preview = line[:40]
+            break
+    preview_json = json.dumps(preview, ensure_ascii=False)[1:-1] if preview else ""
+    path = _resolve_conversation_path(session_id)
+    deadline = time.time() + timeout_s
+    while True:
+        try:
+            with open(path, "rb") as fh:
+                fh.seek(0, 2)
+                size = fh.tell()
+                fh.seek(max(0, size - 131072))
+                tail = fh.read().decode("utf-8", "replace")
+            if any(form in tail for form in id_forms):
+                return "delivered"
+            if preview_json and "Held peer message" in tail and preview_json in tail:
+                return "held"
+        except OSError:
+            pass
+        if time.time() >= deadline:
+            return "unknown"
+        time.sleep(0.5)
+
+
 def _resume_queue_engine_busy(sid):
     if any(
         s.get("resumed_sid") == sid and _poll_spawn_entry(s) is None
