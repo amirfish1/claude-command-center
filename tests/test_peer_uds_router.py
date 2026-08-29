@@ -42,3 +42,14 @@ def test_peer_receipt_unknown_on_timeout(monkeypatch, tmp_path):
     _write_jsonl(p, [{"type": "user", "message": {"content": "unrelated"}}])
     monkeypatch.setattr(server, "_resolve_conversation_path", lambda sid: str(p))
     assert server._transcript_peer_receipt("sid", "m-4", "x", timeout_s=0.2) == "unknown"
+
+
+def test_peer_receipt_held_matches_truncated_and_escaped_preview(monkeypatch, tmp_path):
+    p = tmp_path / "s.jsonl"
+    body = 'Please re-run "tests/test_ccc_peer_uds.py" with ünïcode and then report back to me'
+    content = "Held peer message — from uds:/tmp/cc-socks/1.sock; preview: «" + body[:60] + "» — not delivered"
+    _write_jsonl(p, [
+        {"type": "system", "subtype": "informational", "content": content},
+    ])
+    monkeypatch.setattr(server, "_resolve_conversation_path", lambda sid: str(p))
+    assert server._transcript_peer_receipt("sid", "m-5", body, timeout_s=0.2) == "held"

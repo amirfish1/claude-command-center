@@ -43971,7 +43971,7 @@ def _transcript_peer_receipt(session_id, msg_id, body, timeout_s=6.0):
 
     Claude echoes the sender's msg_id into origin.msg_id on both delivered
     shapes (idle user row, absorbed-mid-turn attachment). A held message is
-    logged as a system row whose preview quotes the body's first ~60 chars.
+    logged as a system row whose preview quotes the body's first 40 chars.
     A successful socket write is NOT a delivery; only this scan is.
     """
     msg_id = str(msg_id or "")
