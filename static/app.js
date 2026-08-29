@@ -15217,7 +15217,12 @@
     const mtime = String(item.mtime || '');
     const title = _simpleNyaKindLabel(String(item.kind || ''));
     const task = String(item.name || '').trim();
-    const need = String(item.question_text || item.next_step || item.where || '').trim();
+    let need = String(item.question_text || item.next_step || item.where || '').trim();
+    const _nyaAgeS = Number(item.stale_tool_age_s) || 0;
+    if (_nyaAgeS && need.indexOf('{{stale_age}}') !== -1) {
+      const _nyaAgeMin = Math.max(1, Math.round(_nyaAgeS / 60));
+      need = need.replace(/\{\{stale_age\}\}/g, ' for about ' + _nyaAgeMin + 'm');
+    }
     const options = Array.isArray(item.question_options) ? item.question_options : [];
     // Swipe wrapper: a "Not now" action sits behind the card, revealed by
     // dragging the card left (see _wireSimpleNyaSwipe). Dismissing is
@@ -30741,14 +30746,14 @@
 
   // Per-tick volatile time labels in the sidebar rows: the relative "last
   // activity" stamp (.conv-rel), the group-chat "when" labels, repeat-group
-  // recency, subagent-cluster completed age, COO status age, and worker/queue
-  // ages (cepw/cewf). These tick every few seconds and, baked into row markup,
-  // were drivers of the periodic full-list rebuild flicker. The capture groups
-  // are (open-tag, inner-text, close-tag) so a `$1$3` replace blanks just the
-  // text for the structural signature, and exec() can lift the fresh text for
-  // in-place patching. Leaf spans (no nested tags), so [^<]* for the inner text
-  // is safe.
-  const _VOLATILE_TIME_RE = /(<span class="[^"]*\b(?:conv-rel|conv-ingroupchat-row-when|conv-ingroupchat-participant-when|conv-repeat-group-rel|conv-subagent-completed-age|cepw-age|cewf-age)\b[^"]*"[^>]*>)([^<]*)(<\/span>)/g;
+  // recency, subagent-cluster completed age, COO status age, worker/queue
+  // ages (cepw/cewf), and the NYA stale-tool age (conv-nya-stale-age). These tick
+  // every few seconds and, baked into row markup, were drivers of the periodic
+  // full-list rebuild flicker. The capture groups are (open-tag, inner-text,
+  // close-tag) so a `$1$3` replace blanks just the text for the structural
+  // signature, and exec() can lift the fresh text for in-place patching. Leaf
+  // spans (no nested tags), so [^<]* for the inner text is safe.
+  const _VOLATILE_TIME_RE = /(<span class="[^"]*\b(?:conv-rel|conv-ingroupchat-row-when|conv-ingroupchat-participant-when|conv-repeat-group-rel|conv-subagent-completed-age|cepw-age|cewf-age|conv-nya-stale-age)\b[^"]*"[^>]*>)([^<]*)(<\/span>)/g;
 
   // The live activity slot (.conv-status-slot) holds the live-tool indicator
   // ("Reading file…" / "Bash command…", with an in-flight class) and the
@@ -30781,10 +30786,10 @@
   const _VOLATILE_EG_STATE_RE = /(<span class="conv-evergreen-state[^"]*" title=")([^"]*)(")/g;
 
   // Update only the volatile bits (time labels + live status slot + pct
-  // badge + evergreen tooltip) in place from freshly-built markup, leaving the
-  // rest of the live DOM (and its attached handlers) untouched. Called when the
-  // structural signature is unchanged, i.e. only clocks / live activity /
-  // context% / evergreen tooltip moved.
+  // badge + evergreen tooltip + NYA stale-tool age) in place from freshly-built
+  // markup, leaving the rest of the live DOM (and its attached handlers) untouched.
+  // Called when the structural signature is unchanged, i.e. only clocks / live
+  // activity / context% / evergreen tooltip / NYA age moved.
   function _patchVolatileTimes(newHtml) {
     const $convList = document.getElementById('convList');
     if (!$convList) return;
@@ -30803,7 +30808,7 @@
       }
     };
     _patchByOrder(_VOLATILE_TIME_RE, 2,
-      'span.conv-rel, span.conv-ingroupchat-row-when, span.conv-ingroupchat-participant-when, span.conv-repeat-group-rel, span.conv-subagent-completed-age, span.cepw-age, span.cewf-age');
+      'span.conv-rel, span.conv-ingroupchat-row-when, span.conv-ingroupchat-participant-when, span.conv-repeat-group-rel, span.conv-subagent-completed-age, span.cepw-age, span.cewf-age, span.conv-nya-stale-age');
     _patchByOrder(_VOLATILE_STATUS_RE, 2, 'span.conv-status-slot');
     const pctVals = [];
     let pm;
@@ -31274,6 +31279,19 @@
     // The inline NYA block — mirrors the attention-panel row markup so it looks
     // identical, minus the panel-only chrome (verify button, id chip, debug
     // column). Display-only; the parent row already handles click-to-open.
+    const _nyaAgeText = (age_s) => {
+      const age_s_num = Number(age_s) || 0;
+      if (!age_s_num) return '';
+      const age_minutes = Math.max(1, Math.round(age_s_num / 60));
+      return ' for about ' + age_minutes + 'm';
+    };
+    const _nyaFormatText = (text, age_s) => {
+      if (!text) return '';
+      const escaped = escapeHtml(text);
+      const age_s_num = Number(age_s) || 0;
+      if (!age_s_num || escaped.indexOf('{{stale_age}}') === -1) return escaped;
+      return escaped.replace(/\{\{stale_age\}\}/g, '<span class="conv-nya-stale-age">' + escapeHtml(_nyaAgeText(age_s_num)) + '</span>');
+    };
     const _nyaRowBlockHtml = (it, collapsed) => {
       if (!it) return '';
       const kind = it.kind || '';
@@ -31283,10 +31301,10 @@
       // the signal; the tail just repeats the row's own last-message preview.
       return '<div class="conv-nya-detail' + (collapsed ? ' is-collapsed' : '') + '" data-sid="' + escapeHtml(it.session_id || '') + '">'
         + '<span class="att-kind k-' + escapeHtml(kind) + '">' + escapeHtml(label) + '</span>'
-        + (it.where ? '<div class="att-where">' + escapeHtml(it.where) + '</div>' : '')
+        + (it.where ? '<div class="att-where">' + _nyaFormatText(it.where, it.stale_tool_age_s) + '</div>' : '')
         + (it.did     ? '<div class="att-did"><strong>Did:</strong> '         + escapeHtml(it.did)     + '</div>' : '')
         + (it.insight ? '<div class="att-insight"><strong>Insight:</strong> ' + escapeHtml(it.insight) + '</div>' : '')
-        + (it.next_step ? '<div class="att-next">' + escapeHtml(it.next_step) + '</div>' : '')
+        + (it.next_step ? '<div class="att-next">' + _nyaFormatText(it.next_step, it.stale_tool_age_s) + '</div>' : '')
       + '</div>';
     };
     const _renderRow = (c, opts = {}) => {

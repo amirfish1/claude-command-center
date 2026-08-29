@@ -76027,7 +76027,10 @@ def _classify_attention(c):
         if c.get("stale_tool_call"):
             tool_age = c.get("stale_tool_age_s") or 0
             age_minutes = max(1, round(tool_age / 60)) if tool_age else None
-            age_text = f" for about {age_minutes}m" if age_minutes else ""
+            # Use a placeholder for the ticking age so the dashboard can render
+            # it in a volatile span and avoid rebuilding the whole conversation
+            # list every time the age increments.
+            age_text = "{{stale_age}}" if age_minutes else ""
             _stale_is_codex = (c.get("source") == "codex" or c.get("engine") == "codex")
             if _stale_is_codex:
                 _stale_where = "Needs attention · Codex tool stopped reporting"
@@ -76051,6 +76054,7 @@ def _classify_attention(c):
                 "did": state.get("did"),
                 "insight": state.get("insight"),
                 "next_step": _stale_next,
+                "stale_tool_age_s": tool_age,
                 "has_structured": has_structured,
             }
 
