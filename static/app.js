@@ -31122,11 +31122,33 @@
     const _sessionChildCountById = new Map();
     _sessionProvenanceById.forEach((row) => {
       const pid = _sessionProvenanceParentId(row);
-      if (pid) _sessionChildCountById.set(pid, (_sessionChildCountById.get(pid) || 0) + 1);
+      // A continuation is the same conversation carried on, not a lane the
+      // origin spawned — otherwise every continued session shows "1 lane".
+      if (!pid || continuationParentId(row) === pid) return;
+      _sessionChildCountById.set(pid, (_sessionChildCountById.get(pid) || 0) + 1);
     });
+    // Lanes spawned by this session plus by the sessions it was continued
+    // from: the chain reads as one unit, so its head carries the whole count.
+    const _sessionLaneCountWithAncestors = (c) => {
+      let total = 0;
+      let cur = c;
+      const seen = new Set();
+      while (cur) {
+        const id = String((cur.session_id || cur.id) || '').trim();
+        if (!id || seen.has(id)) break;
+        seen.add(id);
+        total += _sessionChildCountById.get(id) || 0;
+        const pid = continuationParentId(cur);
+        cur = pid ? _sessionProvenanceById.get(pid) : null;
+      }
+      return total;
+    };
     const _sessionProvenanceChipHtml = (c) => {
       if (!c || c.source === 'backlog' || c.source === 'github_pr' || c.backlog_type === 'github') return '';
-      const contId = String((c && (c.continued_from_session_id || c.hermes_continued_from)) || '').trim();
+      // continuationParentId also reads the first_message origin marker, so a
+      // successor whose server field is empty still labels as a successor
+      // instead of as a spawned lane of the session it replaced.
+      const contId = continuationParentId(c);
       const parentId = contId || _sessionProvenanceParentId(c);
       let label = '';
       let title = '';
@@ -31942,7 +31964,7 @@
       // plus active/attention state, so both would be redundant.
       // Also skipped on a nested continuation ancestor: its lanes render as
       // rows right under it, and the chain's head carries the cluster count.
-      const _orchChildCount = (subagentClusterMeta || opts.continuationAncestor) ? 0 : (_sessionChildCountById.get(String(c.session_id || c.id || '')) || 0);
+      const _orchChildCount = (subagentClusterMeta || opts.continuationAncestor) ? 0 : _sessionLaneCountWithAncestors(c);
       const orchChildBadgeHtml = _orchChildCount > 0
         ? '<span class="conv-orch-badge" title="Spawned ' + _orchChildCount + ' child session' + (_orchChildCount === 1 ? '' : 's') + '">'
           + _orchChildCount + (_orchChildCount === 1 ? ' lane' : ' lanes') + '</span>'
