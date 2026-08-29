@@ -18556,6 +18556,47 @@ def _find_descendant_sessions(sid, max_depth=6):
     return descendants
 
 
+def _find_continuation_ancestors(sid, max_depth=20):
+    """Return the chain of continuation-origin ancestors of ``sid``.
+
+    A "Continue in a new session" / auto-resume session records its origin
+    in its transcript's first user prompt as "Origin session id: <sid>".
+    This walks that link upward: resolve ``sid``'s jsonl (via
+    ``_find_session_jsonl``, falling back to
+    ``_find_session_jsonl_any_project``), read its continuation origin (via
+    ``_continued_from_session_id_from_transcript``), then repeat for that
+    origin. Cycle-guarded and capped at ``max_depth`` hops — cheap, since
+    each hop is one transcript-head read plus the jsonl finders' existing
+    project-dir scan.
+
+    Returns ancestors nearest-first (immediate origin first, oldest last),
+    excluding ``sid`` itself. Never raises; returns whatever was collected
+    so far if anything goes wrong.
+    """
+    ancestors = []
+    if not sid:
+        return ancestors
+    seen = {sid}
+    current = sid
+    for _ in range(max_depth):
+        try:
+            path = _find_session_jsonl(current)
+            if path is None:
+                path = _find_session_jsonl_any_project(current)
+            if path is None:
+                break
+            origin = _continued_from_session_id_from_transcript(path)
+        except Exception:
+            break
+        origin = str(origin or "").strip()
+        if not origin or origin in seen:
+            break
+        ancestors.append(origin)
+        seen.add(origin)
+        current = origin
+    return ancestors
+
+
 # ---------------------------------------------------------------------------
 # SessionGraph — unified parent-child adjacency list
 # ---------------------------------------------------------------------------
@@ -19104,16 +19145,33 @@ def _set_conversation_trashed(sid, trashed):
 
     When trashing, also trash all known descendant sessions (lanes the
     orchestrator spawned) so they follow the parent into the Trash instead
-    of lingering as orphaned rows. Untrashing only restores the one
-    session — descendants stay trashed until individually restored.
+    of lingering as orphaned rows, plus the session's continuation-origin
+    ancestor chain ("Continue in a new session" / auto-resume predecessors)
+    and each of those ancestors' own spawn descendants — the UI nests a
+    continuation chain under its successor as one unit, so trashing the
+    successor must take the whole unit with it. Untrashing only restores
+    the one session — descendants and ancestors stay trashed until
+    individually restored.
     """
     want_trashed = bool(trashed)
     kill_result = None
     should_kill = False
     cascaded = []
 
-    # Find descendants outside the lock (reads spawn registry / codex DBs).
-    descendants = _find_descendant_sessions(sid) if want_trashed else []
+    # Find descendants + continuation ancestors outside the lock (reads
+    # spawn registry / codex DBs / transcripts).
+    descendants = []
+    if want_trashed:
+        descendants = list(_find_descendant_sessions(sid))
+        seen_extra = {sid, *descendants}
+        for anc in _find_continuation_ancestors(sid):
+            if anc not in seen_extra:
+                descendants.append(anc)
+                seen_extra.add(anc)
+            for anc_desc in _find_descendant_sessions(anc):
+                if anc_desc not in seen_extra:
+                    descendants.append(anc_desc)
+                    seen_extra.add(anc_desc)
 
     with _conversation_lifecycle_lock:
         archived_ids, trashed_ids = _load_conversation_lifecycle_state()
