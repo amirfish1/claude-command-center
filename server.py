@@ -28921,7 +28921,7 @@ _PEER_WRAPPER_RE = re.compile(
 )
 
 _PEER_HELD_RE = re.compile(
-    r"^Held peer message\b.*?from\s+(?P<from>\S+)"
+    r"^Held peer message\b.*?from\s+(?P<from>[^\s;(]+)"
     r"(?:\s*\(peer claims name:\s*(?P<name>[^)]*)\))?"
     r".*?preview:\s*«(?P<preview>.*?)»",
     re.DOTALL,

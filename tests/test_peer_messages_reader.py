@@ -148,3 +148,25 @@ def test_held_peer_message_renders_as_muted_system_notice():
 def test_other_informational_system_rows_stay_hidden():
     row = {"type": "system", "subtype": "informational", "content": "Something else entirely"}
     assert server._parse_conversation_event(row, 13) is None
+
+
+def test_held_peer_message_without_name_clause_keeps_clean_from():
+    no_name_held = (
+        "Held peer message — from uds:/tmp/cc-socks/4242.sock; "
+        "preview: «PEER PROBE 44: reply with exactly the word PONG44.» — not delivered to Claude (1 held). "
+        "The sender did not attest its permission mode and this session bypasses prompts."
+    )
+    row = {
+        "type": "system",
+        "subtype": "informational",
+        "level": "warning",
+        "isMeta": False,
+        "content": no_name_held,
+        "timestamp": "2026-08-29T03:29:48.369Z",
+    }
+    ev = server._parse_conversation_event(row, 14)
+    assert ev["type"] == "system"
+    assert ev["subtype"] == "peer_held"
+    assert ev["from"] == "uds:/tmp/cc-socks/4242.sock"
+    assert ev["name"] == ""
+    assert ev["preview"] == "PEER PROBE 44: reply with exactly the word PONG44."
