@@ -55216,6 +55216,16 @@
   // fresh row can read idle for a beat before the hooks mark it working;
   // both used to retire a lane seconds after it was spawned.
   const ORCH_BOOT_GRACE_S = 45;
+  // CCC-995: these engines run headless one-shot (spawned with the whole
+  // prompt up front, no interactive hooks reporting pending_tool/
+  // sidecar_in_flight mid-turn) — see ccc_server/devin.py's CLI backend
+  // comment. For them `row.state` can only ever read 'idle', because the
+  // server's generic _session_state_label() has no in-flight signal to see,
+  // so a still-running lane fell through orchLaneStatus's boot-grace window
+  // and was wrongly reported 'done' (landed) while genuinely still working.
+  // is_live IS the working signal for a one-shot run: the process only goes
+  // non-live once it has actually exited.
+  const ORCH_ONE_SHOT_ENGINES = new Set(['devin', 'cursor', 'gemini', 'grok', 'kilo', 'opencode', 'copilot']);
   function orchSpawnExited(spawn) {
     if (!spawn) return false;
     if (spawn.running === false) return true;
@@ -55226,6 +55236,7 @@
     if (row) {
       if (row.question_waiting || row.needs_approval) return 'waiting';
       if (row.state === 'working' || row.sidecar_in_flight) return 'working';
+      if (row.is_live && ORCH_ONE_SHOT_ENGINES.has(row.engine)) return 'working';
       const age = born ? Date.now() / 1000 - born : Infinity;
       if (age < ORCH_BOOT_GRACE_S && !orchSpawnExited(spawn)) return 'working';   // booting: hooks not yet reporting
       return 'done';
