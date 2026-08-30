@@ -1756,16 +1756,33 @@ h1.q2-detail-title[data-q2-title-open]:hover { background: var(--bg-hover, rgba(
   .q2-topbar .q2-note,
   .q2-topbar .q2-stale { flex: 1 0 100%; }
   .q2-shell {
-    display: block;
+    display: flex;
+    flex-direction: column;
     overflow: hidden;
   }
-  .q2-col { display: none; height: 100%; border-right: 0; }
+  .q2-col { display: none; border-right: 0; min-height: 0; }
   /* Ticket detail is a popup on every viewport (CCC-904), so there is no
      third mobile panel to route to any more -- "tickets" shows column 2
-     (attendant/log) and column 3 (search + list) together. */
-  .q2-shell[data-mobile-panel="queues"] .q2-col-queues,
-  .q2-shell[data-mobile-panel="tickets"] .q2-col-tickets,
-  .q2-shell[data-mobile-panel="tickets"] .q2-col-detail { display: flex; }
+     (attendant/log) and column 3 (search + list) together, sharing the
+     viewport instead of stacking two height:100% columns (the list was
+     clipped under overflow:hidden). */
+  .q2-shell[data-mobile-panel="queues"] .q2-col-queues {
+    display: flex;
+    flex: 1 1 auto;
+  }
+  .q2-shell[data-mobile-panel="tickets"] .q2-col-tickets {
+    display: flex;
+    flex: 0 1 auto;
+    max-height: 38%;
+  }
+  .q2-shell[data-mobile-panel="tickets"] .q2-col-detail {
+    display: flex;
+    flex: 1 1 auto;
+    min-height: 0;
+    border-top: 1px solid var(--border);
+  }
+  .q2-diagram { min-height: 0; max-height: 28vh; }
+  .q2-diagram:has(.q2-diagram-mini) { max-height: none; }
   .q2-mobile-back {
     display: inline-flex;
     flex: 0 0 auto;
@@ -1781,6 +1798,55 @@ h1.q2-detail-title[data-q2-title-open]:hover { background: var(--bg-hover, rgba(
     font-weight: 600;
   }
   .q2-resizer { display: none; }
+  .q2-col-head {
+    height: auto;
+    min-height: 32px;
+    flex-wrap: wrap;
+    padding: 4px 8px;
+  }
+  /* "Edit Prompt" opens the learnings doc in the right-hand pane — a
+     desktop layout. On a phone the title already gets you there. */
+  #q2EditPromptBtn { display: none; }
+}
+
+/* Sessions vs Queues bottom nav. Mirrors the dashboard's
+   body.has-mobile-bottom-nav chrome (static/app.css). Shown at the same
+   1200px gate as the dashboard overlay so a phone never loses the rail's
+   Sessions/Queues switch (the rail itself hides at 700px). */
+.q2-mobile-bottom-nav { display: none; }
+@media (max-width: 1200px) {
+  .q2-mobile-bottom-nav {
+    position: fixed;
+    left: 0; right: 0; bottom: 0;
+    z-index: 50;
+    display: flex;
+    background: var(--surface);
+    border-top: 1px solid var(--border);
+    padding: 6px 4px calc(6px + env(safe-area-inset-bottom, 0px));
+  }
+  .q2-mobile-nav-btn {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 2px;
+    font-family: inherit;
+    text-decoration: none;
+    cursor: pointer;
+    border: none;
+    background: transparent;
+    color: var(--text-muted);
+    border-radius: 8px;
+    padding: 6px 4px;
+    min-height: 48px;
+  }
+  .q2-mobile-nav-btn.is-active { color: var(--green); }
+  .q2-mobile-nav-icon { font-size: 18px; line-height: 1; }
+  .q2-mobile-nav-label { font-size: 10.5px; font-weight: 600; }
+  .q2-shell {
+    padding-bottom: calc(64px + env(safe-area-inset-bottom, 0px));
+  }
 }
 
 /* ── modals ───────────────────────────────────────────────────────────── */

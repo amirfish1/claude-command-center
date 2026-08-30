@@ -25134,6 +25134,7 @@ body.has-mobile-bottom-nav .mobile-nav-btn {
   justify-content: center;
   gap: 2px;
   font-family: inherit;
+  text-decoration: none;
   cursor: pointer;
   border: none;
   background: transparent;

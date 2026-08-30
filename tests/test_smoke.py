@@ -4575,25 +4575,40 @@ class TestServerImports(unittest.TestCase):
 
     def test_advanced_mobile_bottom_nav_is_sessions_vs_queues(self):
         """Advanced (non-simple) mobile reuses #mobileBottomNav for Sessions
-        vs Queues. At <=1200px the status-rail Queue tab lives under the
-        conversation overlay, so the list needs its own switcher. Same
-        element as Simple mode's Home/Tasks/Helpers/More — not a second bar."""
+        vs Queues. Queues is the q2 board (same URL as the Applications
+        rail, which hides below 700px). Same element as Simple mode's
+        Home/Tasks/Helpers/More — not a second bar."""
         index_html = pathlib.Path(PROJECT_ROOT, "static", "index.html").read_text(encoding="utf-8")
         app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
         app_css = pathlib.Path(PROJECT_ROOT, "static", "app.css").read_text(encoding="utf-8")
+        q2_html = pathlib.Path(PROJECT_ROOT, "static", "q2.html").read_text(encoding="utf-8")
+        q2_css = pathlib.Path(PROJECT_ROOT, "static", "q2.css").read_text(encoding="utf-8")
 
         self.assertEqual(index_html.count('id="mobileBottomNav"'), 1)
         self.assertIn('data-mobile-nav="sessions"', index_html)
         self.assertIn('data-mobile-nav="queues"', index_html)
         self.assertIn('data-nav-chrome="advanced"', index_html)
         self.assertIn('data-nav-chrome="simple"', index_html)
-        self.assertIn("function _activateSidebarTabFromMobileNav(", app_js)
-        self.assertIn("activeNavKey = tab === 'queues' ? 'queues' : 'sessions';", app_js)
+        self.assertIn('href="/q2.html"', index_html)
+        self.assertIn('if (dest === \'queues\') return; // <a href="/q2.html">', app_js)
         self.assertIn("body.has-mobile-bottom-nav .mobile-bottom-nav", app_css)
         self.assertIn(
             'body.has-mobile-bottom-nav:not(.ccc-simple-mode) .mobile-nav-btn[data-nav-chrome="simple"]',
             app_css,
         )
+        self.assertIn('id="q2MobileBottomNav"', q2_html)
+        self.assertIn('href="/q2.html"', q2_html)
+        self.assertIn(".q2-mobile-bottom-nav", q2_css)
+
+    def test_mobile_boot_restore_stays_on_session_list(self):
+        """A phone cold-open must not slide the last conversation over the
+        list (that hid the Sessions/Queues nav). Boot restore still loads
+        the pane; only the overlay is skipped. Simple Home uses the same
+        depth counter."""
+        app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
+        self.assertIn("const _isBootRestore = typeof _qfBootRestoreDepth !== 'undefined'", app_js)
+        self.assertIn("if (!_isBootRestore) mobileShowForCurrentMode();", app_js)
+        self.assertNotIn("_isBootRestoreInSimpleMode", app_js)
 
     def test_simple_home_lives_in_sidebar_layer(self):
         """Simple Home (grandma-test landing screen) must render inside the

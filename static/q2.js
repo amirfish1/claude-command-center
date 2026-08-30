@@ -1284,7 +1284,13 @@
   // Mechanics-view fold: one global preference, not per queue -- if the
   // pipeline chrome is in the way, it's in the way on every queue.
   function diagramCollapsed() {
-    try { return localStorage.getItem('q2.diagram.collapsed') === '1'; } catch (_) { return false; }
+    try {
+      var stored = localStorage.getItem('q2.diagram.collapsed');
+      if (stored === '1') return true;
+      if (stored === '0') return false;
+    } catch (_) {}
+    // Unset: phones start folded so the ticket list gets the viewport.
+    try { return window.matchMedia('(max-width: 700px)').matches; } catch (_) { return false; }
   }
   function setDiagramCollapsed(on) {
     try { localStorage.setItem('q2.diagram.collapsed', on ? '1' : '0'); } catch (_) {}

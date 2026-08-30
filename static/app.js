@@ -14903,7 +14903,9 @@
       } else if (typeof _simpleHomeShowing !== 'undefined' && _simpleHomeShowing
         && document.getElementById('simpleHome')) activeNavKey = 'home';
     } else {
-      activeNavKey = tab === 'queues' ? 'queues' : 'sessions';
+      // This page is Sessions. The Queues item is a real navigation to
+      // /q2.html, so it is never aria-current here.
+      activeNavKey = 'sessions';
     }
     nav.querySelectorAll('[data-mobile-nav]').forEach(btn => {
       const active = btn.getAttribute('data-mobile-nav') === activeNavKey;
@@ -14933,22 +14935,12 @@
         if (typeof openSettingsModal === 'function') openSettingsModal();
         return;
       }
-      // Advanced mobile: Sessions vs Queues. Same tab-bar click reuse as
-      // the Simple fallback below; remember the last non-queues tab so
-      // Sessions returns to Active/Coding/Workers/Issues instead of
-      // always resetting to in-progress.
+      // Advanced mobile: Sessions vs Queues. Queues is the q2 board
+      // (same destination as the Applications rail, which is hidden on
+      // phones). Sessions stays on this page and dismisses the
+      // conversation overlay so the list is what's on screen.
       if (dest === 'sessions' || dest === 'queues') {
-        if (dest === 'queues') {
-          try {
-            const cur = localStorage.getItem('ccc-sidebar-tab') || 'inprogress';
-            if (cur && cur !== 'queues') _mobileLastSessionTab = cur;
-          } catch (_) {}
-          _activateSidebarTabFromMobileNav('queues');
-        } else {
-          let sessionTab = _mobileLastSessionTab || 'inprogress';
-          if (sessionTab === 'queues') sessionTab = 'inprogress';
-          _activateSidebarTabFromMobileNav(sessionTab);
-        }
+        if (dest === 'queues') return; // <a href="/q2.html"> — let the link navigate.
         if (typeof isMobile === 'function' && isMobile() && typeof mobileShowMain === 'function') {
           mobileShowMain(false);
         }
@@ -40675,20 +40667,16 @@
     if (_flowInspectorState) {
       try { stopFlowNodeInspector(); } catch (_) {}
     }
-    // Simple Home: a deliberate conversation open leaves the home screen (and
-    // refreshes the plain-language usage line); boot auto-restore does not
-    // (see _simpleOnConversationOpen's _qfBootRestoreDepth guard).
-    // mobileShowForCurrentMode() must honor that same guard — otherwise
-    // boot-restore on a phone slides `.main` into view (mobile-show-main)
-    // while Simple Home's own ccc-simple-conv-open class stays off (home is
-    // still "showing" by design), so the pane that lands on screen isn't in
-    // either finished state: not styled as a simple conversation, not hidden
-    // as home. The user sees a blank, wrongly-sized `.main` they can't do
-    // anything with, with no way back short of the (also-invisible-in-that-
-    // state) back button — the mobile "chat opens itself and I'm stuck" bug.
-    const _isBootRestoreInSimpleMode = isSimpleMode()
-      && typeof _qfBootRestoreDepth !== 'undefined' && _qfBootRestoreDepth > 0;
-    if (!_isBootRestoreInSimpleMode) mobileShowForCurrentMode();
+    // Boot auto-restore loads the last conversation into the pane but must
+    // NOT slide `.main` over the list. On Simple Home that left the user
+    // stuck in a blank overlay (ccc-simple-conv-open stayed off because
+    // home was still "showing"). On Advanced mobile the same slide hid
+    // the Sessions/Queues bottom nav behind the last-opened chat. A
+    // deliberate tap still calls mobileShowForCurrentMode() because
+    // _qfBootRestoreDepth is 0 then.
+    const _isBootRestore = typeof _qfBootRestoreDepth !== 'undefined'
+      && _qfBootRestoreDepth > 0;
+    if (!_isBootRestore) mobileShowForCurrentMode();
     try { if (typeof _simpleOnConversationOpen === 'function') _simpleOnConversationOpen(id); } catch (_) {}
     currentConversation = id;
     // The terminal panel (index.html) keys its cwd off the open

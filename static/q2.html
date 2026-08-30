@@ -83,6 +83,21 @@
     </section>
   </main>
 
+  <!-- Phone Sessions/Queues switcher. Same chrome as the dashboard's
+       #mobileBottomNav (Advanced). The Applications rail that normally
+       does this job is hidden below 700px, so this is the way back to
+       Sessions. Hidden on desktop via CSS. -->
+  <nav class="q2-mobile-bottom-nav" id="q2MobileBottomNav" aria-label="Main">
+    <a href="/" class="q2-mobile-nav-btn" data-mobile-nav="sessions" aria-label="Sessions">
+      <span class="q2-mobile-nav-icon" aria-hidden="true">&#128172;</span>
+      <span class="q2-mobile-nav-label">Sessions</span>
+    </a>
+    <a href="/q2.html" class="q2-mobile-nav-btn is-active" data-mobile-nav="queues" aria-current="page" aria-label="Queues">
+      <span class="q2-mobile-nav-icon" aria-hidden="true">&#128203;</span>
+      <span class="q2-mobile-nav-label">Queues</span>
+    </a>
+  </nav>
+
   <!-- Modal host: ticket composer and queue configuration both render here. -->
   <div class="q2-modal-host" id="q2Modal" hidden></div>
 
