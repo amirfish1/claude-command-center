@@ -3165,7 +3165,8 @@
   /* Cross-session (UDS peer) delivery gets its own green tint so it reads
      distinctly from a normal chat turn -- e.g. the WatchTower reconciler's
      release instruction, or any other Claude-to-Claude peer message. */
-  .conversations-view .event.user_text.peer-message {
+  .conversations-view .event.user_text.peer-message,
+  .conv-pane.has-conv-bg .conversations-view .event.user_text.peer-message {
     background:
       linear-gradient(135deg, rgba(63, 185, 80, 0.16), rgba(63, 185, 80, 0.08) 70%) padding-box,
       linear-gradient(135deg, rgba(63, 185, 80, 0.55), rgba(63, 185, 80, 0.25) 70%) border-box;
