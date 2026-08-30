@@ -53495,6 +53495,12 @@ def _headless_log_turn_open(entry):
     streaming text without a tool child. Returns False (not busy) if the log
     is missing, empty, or unreadable — the same fail-open default as the rest
     of the busy-detection chain.
+
+    KEEP IN SYNC with `worker_turn_open()` in watchtower/workers.py, which is
+    a character-identical copy apart from an engine=="claude" guard. The two
+    are maintained in parallel with no shared import; if you change the
+    turn-open predicate here, change it there too. Same rule as
+    ccc_peer_uds.py / watchtower's peer_uds.py.
     """
     if not isinstance(entry, dict):
         return False
@@ -59950,6 +59956,27 @@ def _try_uds_peer_delivery(session_id, text, *, source, mode="send", peer_sender
     legacy transports unchanged.
     """
     if not _uds_messaging_enabled() or not _uds_source_eligible(source):
+        return None
+    # CCC-1000 Phase 4: a slash command cannot execute over UDS, in any framing.
+    # Measured 2026-08-30 -- /compact was sent to a live session five times,
+    # wrapped and raw, at priority now and next; every send transported cleanly
+    # ({"ok": True}) and none executed. Claude's peer listener hands the frame's
+    # message.content to the session as message *content* and never runs it
+    # through the slash-command parser, so stripping the <cross-session-message>
+    # wrapper changes nothing.
+    #
+    # Falling through to None routes the text to the FIFO path, where a leading
+    # slash IS executed (see the /clear comment below). The alternative -- send
+    # it anyway -- hands the caller a transcript-confirmed "delivered" receipt
+    # for text that will sit inert in the target's context.
+    #
+    # /compact and /clear never reach here (intercepted above), so this guard
+    # covers /model, /cost, /status, /resume, /code-review and custom skills.
+    if _SLASH_COMMAND_TRIGGER_RE.match(str(text or "")):
+        _log_activity(
+            "inject", "UDS-SKIP",
+            f"session={session_id} source={source} reason=slash_command_needs_fifo",
+        )
         return None
     try:
         registry = _load_session_registry()
