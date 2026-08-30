@@ -25261,6 +25261,43 @@ body.has-mobile-bottom-nav:not(.ccc-simple-mode) #convList .conv-archived-tools-
 body.has-mobile-bottom-nav #convList {
   padding-bottom: calc(64px + env(safe-area-inset-bottom, 0px));
 }
+
+/* Pull-to-refresh on phone Coding/Workers. Sits above #convList so
+   renderArchiveList innerHTML cannot wipe it. Height is driven in JS. */
+.conv-ptr {
+  flex: 0 0 auto;
+  height: 0;
+  overflow: hidden;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--surface);
+  color: var(--text-muted);
+  font-size: 12px;
+  font-weight: 600;
+  pointer-events: none;
+}
+.conv-ptr.is-active,
+.conv-ptr.is-refreshing { overflow: hidden; }
+.conv-ptr-inner {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  height: 44px;
+}
+.conv-ptr-spinner {
+  width: 14px;
+  height: 14px;
+  border: 2px solid var(--border);
+  border-top-color: var(--accent, #58a6ff);
+  border-radius: 50%;
+  flex: 0 0 auto;
+}
+.conv-ptr.is-refreshing .conv-ptr-spinner {
+  animation: conv-ptr-spin 0.7s linear infinite;
+}
+@keyframes conv-ptr-spin { to { transform: rotate(360deg); } }
 .mobile-actions-wrap { position: relative; display: none; }
 
 /* ---- Icon-first Simple mode: chrome communicates via icon+color+shape+

@@ -24987,6 +24987,110 @@
   }
   wireConversationListScrollPause();
 
+  // Pull-to-refresh on phone Coding/Workers. Reuses refreshConversationList
+  // (the same path as the desktop refresh control) so we don't duplicate
+  // archive fetch + render. Only armed at scrollTop 0 so normal scrolling
+  // stays native; the move listener is attached for the gesture only.
+  const _PTR_THRESHOLD = 56;
+  const _PTR_MAX = 72;
+  const _ptr = { armed: false, pulling: false, startY: 0, dy: 0, refreshing: false };
+  function _mobilePtrAllowed() {
+    if (typeof isSimpleMode === 'function' && isSimpleMode()) return false;
+    if (typeof _mobileBottomNavShouldShow === 'function' && !_mobileBottomNavShouldShow()) return false;
+    if (typeof _coreApp !== 'undefined' && _coreApp === 'queues') return false;
+    let tab = 'coding';
+    try { tab = localStorage.getItem('ccc-sidebar-tab') || 'coding'; } catch (_) {}
+    return tab === 'coding' || tab === 'workers';
+  }
+  function _ptrEl() { return document.getElementById('convPtr'); }
+  function _ptrSet(px, releasing) {
+    const el = _ptrEl();
+    if (!el) return;
+    const h = Math.max(0, Math.min(_PTR_MAX, Math.round(px)));
+    el.style.height = h ? h + 'px' : '';
+    el.hidden = h === 0 && !_ptr.refreshing;
+    el.classList.toggle('is-active', h > 0);
+    el.setAttribute('aria-hidden', el.hidden ? 'true' : 'false');
+    const label = el.querySelector('.conv-ptr-label');
+    const spin = el.querySelector('.conv-ptr-spinner');
+    if (label) {
+      label.textContent = _ptr.refreshing ? 'Refreshing…'
+        : (h >= _PTR_THRESHOLD ? 'Release to refresh' : 'Pull to refresh');
+    }
+    if (spin && !_ptr.refreshing) spin.style.transform = 'rotate(' + (h * 4) + 'deg)';
+    if (releasing && h === 0 && !_ptr.refreshing) el.classList.remove('is-refreshing');
+  }
+  function _ptrFinish() {
+    _ptr.armed = false;
+    _ptr.pulling = false;
+    _ptr.dy = 0;
+    if ($convList) {
+      $convList.removeEventListener('touchmove', _ptrOnMove);
+      $convList.removeEventListener('touchend', _ptrOnEnd);
+      $convList.removeEventListener('touchcancel', _ptrOnEnd);
+    }
+  }
+  function _ptrOnMove(ev) {
+    if (!_ptr.armed || _ptr.refreshing) return;
+    if (ev.touches.length !== 1) return;
+    const dy = ev.touches[0].clientY - _ptr.startY;
+    if (!$convList || $convList.scrollTop > 1) {
+      if (!_ptr.pulling) _ptrFinish();
+      return;
+    }
+    if (dy < 8 && !_ptr.pulling) return;
+    if (Math.abs(ev.touches[0].clientX - (_ptr.startX || ev.touches[0].clientX)) > dy) return;
+    ev.preventDefault();
+    _ptr.pulling = true;
+    _ptr.dy = dy * 0.45;
+    _ptrSet(_ptr.dy);
+  }
+  function _ptrOnEnd() {
+    const shouldRefresh = _ptr.pulling && _ptr.dy >= _PTR_THRESHOLD && !_ptr.refreshing;
+    _ptrFinish();
+    if (!shouldRefresh) {
+      _ptrSet(0, true);
+      return;
+    }
+    const el = _ptrEl();
+    _ptr.refreshing = true;
+    if (el) el.classList.add('is-refreshing');
+    _ptrSet(44);
+    const done = () => {
+      _ptr.refreshing = false;
+      const node = _ptrEl();
+      if (node) {
+        node.classList.remove('is-refreshing');
+        const spin = node.querySelector('.conv-ptr-spinner');
+        if (spin) spin.style.transform = '';
+      }
+      _ptrSet(0, true);
+    };
+    const run = (typeof refreshConversationList === 'function')
+      ? refreshConversationList()
+      : Promise.resolve();
+    Promise.resolve(run).then(done, done);
+  }
+  function wireMobileListPullToRefresh() {
+    if (!$convList || $convList._ptrWired) return;
+    $convList._ptrWired = true;
+    $convList.addEventListener('touchstart', (ev) => {
+      if (_ptr.refreshing || _ptr.armed) return;
+      if (ev.touches.length !== 1) return;
+      if (!_mobilePtrAllowed()) return;
+      if ($convList.scrollTop > 1) return;
+      _ptr.armed = true;
+      _ptr.pulling = false;
+      _ptr.startY = ev.touches[0].clientY;
+      _ptr.startX = ev.touches[0].clientX;
+      _ptr.dy = 0;
+      $convList.addEventListener('touchmove', _ptrOnMove, { passive: false });
+      $convList.addEventListener('touchend', _ptrOnEnd);
+      $convList.addEventListener('touchcancel', _ptrOnEnd);
+    }, { passive: true });
+  }
+  wireMobileListPullToRefresh();
+
   function openCoordModal() {
     if (selectedListIds.size < 1) return;
     const backdrop = document.getElementById('coordModalBackdrop');

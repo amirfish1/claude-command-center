@@ -4613,6 +4613,10 @@ class TestServerImports(unittest.TestCase):
         self.assertIn('id="q2MobileBottomNav"', q2_html)
         self.assertIn('href="/q2.html"', q2_html)
         self.assertIn(".q2-mobile-bottom-nav", q2_css)
+        self.assertIn('id="convPtr"', index_html)
+        self.assertIn("function wireMobileListPullToRefresh(", app_js)
+        self.assertIn("refreshConversationList()", app_js)
+        self.assertIn(".conv-ptr", app_css)
 
     def test_sessions_queues_switch_keeps_the_session_list_mounted(self):
         """Sessions ↔ Queues must not navigate away from index.html: a full
