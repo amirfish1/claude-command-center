@@ -19724,7 +19724,10 @@ def _session_graph_build_from_all_sources():
     # 1. Codex thread_spawn_edges (sqlite)
     try:
         for child, parent in _codex_spawn_parent_by_child().items():
-            _session_graph.add_edge(parent, child, source="codex-native", engine="codex")
+            _session_graph.add_edge(
+                parent, child, source="codex-native", engine="codex",
+                name=_codex_spawn_edge_name(child) or None,
+            )
     except Exception:
         pass
 
@@ -19938,6 +19941,7 @@ def _session_graph_codex_refresh_loop():
             for child, parent in _codex_spawn_parent_by_child().items():
                 _session_graph.add_edge(
                     parent, child, source="codex-native", engine="codex",
+                    name=_codex_spawn_edge_name(child) or None,
                 )
             _session_graph.save()
         except Exception:
@@ -37210,6 +37214,18 @@ def _codex_fetch_threads(where="", params=(), limit=None):
     return []
 
 
+def _codex_spawn_edge_name(child_thread_id):
+    """Human label for a codex-native spawn edge, e.g. "PR113 Independent Review".
+
+    Bounded to spawned children only (never a full-thread scan) — one indexed
+    `id = ?` lookup per child in `_codex_spawn_parent_by_child()`'s output.
+    """
+    try:
+        return _codex_agent_task_label(_codex_thread_row(child_thread_id))
+    except Exception:
+        return ""
+
+
 def _codex_spawn_parent_by_child():
     """Map each spawned Codex thread to the thread that spawned it.
 
@@ -43582,12 +43598,16 @@ def _parse_codex_event(ev, line_num, token_usage=None, codex_turn_meta=None):
         if ptype == "item_completed":
             # Newer Codex threads (e.g. multi-agent mode) stop emitting the
             # classic "user_message"/"agent_message" event_msg pair entirely
-            # and wrap text in a nested `item` instead. Only UserMessage/
-            # AgentMessage are handled here: CommandExecution/McpToolCall/
+            # and wrap text in a nested `item` instead. UserMessage/AgentMessage
+            # are handled below for that reason. CommandExecution/McpToolCall/
             # FileChange/Reasoning items are dual-emitted as `response_item`
             # records (custom_tool_call, reasoning, ...) that already render
-            # via the branches below, so adding those here would duplicate
-            # the tool-call cards.
+            # via the branches further down, so they're deliberately skipped
+            # here to avoid duplicate tool-call cards. SubAgentActivity/
+            # CollabAgentToolCall are multi-agent-only bookkeeping (a root
+            # thread spawning/messaging its own sub-agent threads) with no
+            # response_item equivalent, so they get their own synthetic system
+            # rows instead of being silently dropped.
             item = payload.get("item") if isinstance(payload.get("item"), dict) else {}
             itype = item.get("type")
             if itype == "UserMessage":
@@ -43626,6 +43646,30 @@ def _parse_codex_event(ev, line_num, token_usage=None, codex_turn_meta=None):
                 if artifact_error:
                     result["presentation_artifact_error"] = artifact_error
                 return _apply_codex_turn_meta(result, codex_turn_meta)
+            if itype == "SubAgentActivity":
+                kind = str(item.get("kind") or "").strip()
+                agent_path = str(item.get("agent_path") or "").strip()
+                agent_thread_id = str(item.get("agent_thread_id") or "").strip()
+                label = agent_path or (agent_thread_id[:8] if agent_thread_id else "sub-agent")
+                verb = {"started": "Spawned sub-agent", "completed": "Sub-agent finished",
+                        "failed": "Sub-agent failed"}.get(kind, "Sub-agent " + (kind or "activity"))
+                return {
+                    "line": line_num, "ts": ts, "type": "system", "subtype": "codex_subagent",
+                    "kind": "subagent_" + (kind or "activity"), "agent_path": agent_path,
+                    "agent_thread_id": agent_thread_id, "text": f"{verb}: {label}",
+                }
+            if itype == "CollabAgentToolCall":
+                tool = str(item.get("tool") or "tool").strip()
+                status = str(item.get("status") or "").strip()
+                receivers = item.get("receiver_thread_ids") or item.get("receiver_agents") or []
+                receiver_label = ", ".join(str(r) for r in receivers if r) if isinstance(receivers, list) else ""
+                text = f"Agent {tool}" + (f" -> {receiver_label}" if receiver_label else "")
+                if status:
+                    text += f" ({status})"
+                return {
+                    "line": line_num, "ts": ts, "type": "system", "subtype": "codex_subagent",
+                    "kind": "collab_" + tool, "tool": tool, "status": status, "text": text,
+                }
             return None
         return None
     if ev_type != "response_item":

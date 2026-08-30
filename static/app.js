@@ -53810,6 +53810,20 @@
             + (_detail ? ' <span class="codex-app-item-detail">' + escapeHtml(truncate(_detail, 260)) + '</span>' : '')
             + '</span>'
             + tsSpan(ev.ts);
+        } else if (ev.subtype === 'codex_subagent') {
+          // Codex multi-agent mode: the root thread spawned/messaged its own
+          // sub-agent threads. Each sub-agent is a real, independently
+          // addressable Codex thread (its own rollout file) - this row is
+          // just the "something happened between agents" marker; opening the
+          // sub-agent's own session shows its actual transcript.
+          const _kind = String(ev.kind || '').replace(/[^a-z0-9_-]/gi, '');
+          const _isCollab = _kind.indexOf('collab_') === 0;
+          const _icon = _isCollab ? '↔' : '⊕';
+          div.classList.add('system-compact', 'codex-subagent');
+          if (_kind) div.classList.add('subagent-' + _kind);
+          div.innerHTML = '<span class="ccoord-icon" aria-hidden="true">' + _icon + '</span>'
+            + '<span class="ccoord-text">' + escapeHtml(ev.text || '') + '</span>'
+            + tsSpan(ev.ts);
         } else if (ev.subtype === 'grok_hook_execution' || ev.subtype === 'grok_note' || ev.subtype === 'grok_retry') {
           // Grok ACP status updates (hook runs, image-dropped notes, retries)
           // are meta, not model text — render as a compact Grok row so the

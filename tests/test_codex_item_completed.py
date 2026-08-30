@@ -69,6 +69,45 @@ class CodexItemCompletedTests(unittest.TestCase):
 
         self.assertIsNone(parsed)
 
+    def test_subagent_activity_item_renders_as_system_row(self):
+        parsed = server._parse_codex_event({
+            "type": "event_msg",
+            "payload": {
+                "type": "item_completed",
+                "item": {
+                    "type": "SubAgentActivity",
+                    "id": "call_1",
+                    "kind": "started",
+                    "agent_thread_id": "01a0533c-5f5d-7fb0-b5f2-125f50a10dd3",
+                    "agent_path": "/root/pr113_independent_review",
+                },
+            },
+        }, 6)
+
+        self.assertEqual(parsed["type"], "system")
+        self.assertEqual(parsed["subtype"], "codex_subagent")
+        self.assertIn("/root/pr113_independent_review", parsed["text"])
+
+    def test_collab_agent_tool_call_item_renders_as_system_row(self):
+        parsed = server._parse_codex_event({
+            "type": "event_msg",
+            "payload": {
+                "type": "item_completed",
+                "item": {
+                    "type": "CollabAgentToolCall",
+                    "id": "call_2",
+                    "tool": "wait",
+                    "status": "completed",
+                    "sender_thread_id": "01a0533a-1190-7b50-a5e2-60758b475c7d",
+                    "receiver_thread_ids": [],
+                },
+            },
+        }, 7)
+
+        self.assertEqual(parsed["type"], "system")
+        self.assertEqual(parsed["subtype"], "codex_subagent")
+        self.assertIn("wait", parsed["text"])
+
     def test_turn_meta_still_applies_to_item_completed_messages(self):
         turn_meta = {"model": "gpt-5.4", "reasoning_effort": "medium"}
 
