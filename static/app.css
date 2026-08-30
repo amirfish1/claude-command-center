@@ -14715,7 +14715,13 @@
     #convList,
     #convList.objects-scroll-split {
       overflow-y: auto !important;
+      /* clip (not hidden): hidden still creates a horizontal scroll
+         offset, which is the "UI drift" on a sideways finger pan.
+         clip forbids that offset. */
+      overflow-x: clip;
       overscroll-behavior-y: contain;
+      overscroll-behavior-x: none;
+      touch-action: pan-y;
       -webkit-overflow-scrolling: touch;
     }
     .conv-inprogress-section,
@@ -14740,7 +14746,10 @@
        ~80px of an 844px-tall phone screen. On tablet/narrow-desktop widths
        (701-1200px) there's headroom for both, so the toolbar (Collapse all,
        Now/1d/7d/All, by project/by time, Wrap, Details) stays frozen at the
-       top while the list scrolls underneath it (CCC-994). */
+       top while the list scrolls underneath it (CCC-994).
+       Phone Advanced hides the tab bar (bottom nav owns Coding/Workers),
+       so the filter row is the only chrome and stays sticky — see
+       body.has-mobile-bottom-nav rules later in this file. */
     #convList > .conv-tab-bar { z-index: 7; }
     @media (max-width: 700px) {
       #convList .conv-inprogress-toolbar { position: static; }
@@ -25218,11 +25227,34 @@ body.has-mobile-bottom-nav:not(.ccc-simple-mode) #convList .conv-archived-sectio
   justify-content: flex-start;
   align-items: center;
   gap: 4px;
-  padding: 4px 8px 2px;
+  padding: 4px 8px 6px;
+  min-width: 0;
+  max-width: 100%;
+  box-sizing: border-box;
+  /* Tab bar is hidden, so this is the only list chrome — freeze it.
+     Beats the max-width:700px `position: static` on the in-progress twin.
+     Do not use display:contents on the left/right slots: that drops this
+     box and the sticky background, so rows ghost through the chips. */
+  position: sticky;
+  top: 0;
+  z-index: 6;
+  background: var(--surface);
 }
-body.has-mobile-bottom-nav:not(.ccc-simple-mode) #convList .conv-archived-tools-left,
+body.has-mobile-bottom-nav:not(.ccc-simple-mode) #convList .conv-inprogress-toolbar {
+  position: sticky;
+  top: 0;
+  background: var(--surface);
+}
+body.has-mobile-bottom-nav:not(.ccc-simple-mode) #convList .conv-archived-tools-left {
+  display: flex;
+  flex: 0 0 auto;
+}
 body.has-mobile-bottom-nav:not(.ccc-simple-mode) #convList .conv-archived-tools-right {
-  display: contents;
+  display: flex;
+  flex: 1 1 0;
+  flex-wrap: wrap;
+  gap: 4px;
+  min-width: 0;
 }
 /* Reserve room at the bottom of the page so the fixed nav never overlaps
    the last card in the list. */

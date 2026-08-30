@@ -4606,6 +4606,10 @@ class TestServerImports(unittest.TestCase):
             'body.has-mobile-bottom-nav:not(.ccc-simple-mode) #convList .conv-archived-section > .conv-archived-tools',
             app_css,
         )
+        self.assertIn("overflow-x: clip;", app_css)
+        self.assertIn("overscroll-behavior-x: none;", app_css)
+        self.assertIn("touch-action: pan-y;", app_css)
+        self.assertIn("listEl.scrollLeft = 0", pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8"))
         self.assertIn('id="q2MobileBottomNav"', q2_html)
         self.assertIn('href="/q2.html"', q2_html)
         self.assertIn(".q2-mobile-bottom-nav", q2_css)

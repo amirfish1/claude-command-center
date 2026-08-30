@@ -2254,10 +2254,14 @@
       || (typeof isTouchPrimary === 'function' && isTouchPrimary());
     return mobileList && Date.now() < _convListScrollQuietUntil;
   }
-  function noteConversationListScrollActivity() {
+  function noteConversationListScrollActivity(ev) {
     const mobileList = (typeof isMobile === 'function' && isMobile())
       || (typeof isTouchPrimary === 'function' && isTouchPrimary());
     if (!mobileList) return;
+    // overflow-x:hidden still lets iOS keep a horizontal scroll offset
+    // ("UI drift"). Clamp it on every list scroll.
+    const listEl = ev && ev.currentTarget;
+    if (listEl && listEl.scrollLeft) listEl.scrollLeft = 0;
     _convListScrollQuietUntil = Date.now() + 550;
     if (_convListScrollFlushTimer) clearTimeout(_convListScrollFlushTimer);
     _convListScrollFlushTimer = setTimeout(() => {
