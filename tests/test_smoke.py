@@ -4053,7 +4053,13 @@ class TestServerImports(unittest.TestCase):
         self.assertIn("😀", kept)
         # _inject_text_into_session uses the same strip so a missed
         # entry point still can't leak a surrogate to the API.
-        self.assertIn("_strip_lone_surrogates", inspect.getsource(server._inject_text_into_session))
+        # The router, not the wrapper: since CCC-1000 Phase 1
+        # _inject_text_into_session only stamps the result contract and
+        # delegates, so the sanitizer lives one level down.
+        self.assertIn(
+            "_strip_lone_surrogates",
+            inspect.getsource(server._inject_text_into_session_router),
+        )
 
     def test_annotation_notes_render_screenshots(self):
         app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
@@ -6442,9 +6448,15 @@ class TestServerImports(unittest.TestCase):
 
     def test_steered_compact_interrupts_before_compacting(self):
         """`mode` must be parsed before the /compact early return, or a steered
-        /compact drops the steer and queues behind the turn it should abort."""
+        /compact drops the steer and queues behind the turn it should abort.
+
+        Reads the *router*, not `_inject_text_into_session`: since CCC-1000
+        Phase 1 the latter is a thin wrapper that stamps the result contract and
+        delegates, so slicing from it would scan a function that contains none
+        of the routing logic this test is about.
+        """
         server_py = pathlib.Path(PROJECT_ROOT, "server.py").read_text(encoding="utf-8")
-        fn = server_py[server_py.index("def _inject_text_into_session("):]
+        fn = server_py[server_py.index("def _inject_text_into_session_router("):]
         fn = fn[:fn.index("\ndef ", 10)]
         self.assertLess(
             fn.index('mode = mode_value if mode_value in ("answer", "steer", "send_queue")'),
@@ -8382,7 +8394,12 @@ class TestRepoContextHelpers(unittest.TestCase):
                 sid,
                 "Announced from: Gerry\n\nSTATUS: done",
                 mode="send",
-                source="api",
+                requested_verb="engine_default",
+                contract_fields={},
+                # announced_from wins over "api": it is the more specific
+                # signal and is what makes the send UDS-eligible
+                # (_inject_source_for_request).
+                source="announced_from",
                 wt_origin=False,
                 skip_wt=False,
                 force_terminal=False,
@@ -8434,6 +8451,8 @@ class TestRepoContextHelpers(unittest.TestCase):
                 sid,
                 "Use the selected scope",
                 mode="answer",
+                requested_verb="engine_default",
+                contract_fields={"answers_pending_question": True},
                 source="api",
                 wt_origin=False,
                 skip_wt=False,
@@ -8481,7 +8500,10 @@ class TestRepoContextHelpers(unittest.TestCase):
                 sid,
                 "delivered by wt delegate",
                 mode="send",
-                source="api",
+                requested_verb="engine_default",
+                contract_fields={},
+                # wt_origin maps to source="wt" (_inject_source_for_request).
+                source="wt",
                 wt_origin=True,
                 skip_wt=False,
                 force_terminal=False,

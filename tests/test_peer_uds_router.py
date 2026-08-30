@@ -352,7 +352,9 @@ def test_inject_worker_handoff_sends_once_dashboard_side(monkeypatch, tmp_path):
     monkeypatch.setattr(server, "session_live_status", lambda sid, cwd: {"live": True, "tty": None})
     monkeypatch.setattr(server, "_control_plane_engine_call", lambda *a, **k: {"ok": True, "via": "worker"})
     result = server._inject_text_into_session("target-sid", "hi", source="ask")
-    assert result == {"ok": True, "via": "worker"}
+    # Subset, not equality: inject results now also carry the CCC-1000 result
+    # contract. The claim under test is that the worker transport is used once.
+    assert result.items() >= {"ok": True, "via": "worker"}.items()
     assert len(sent) == 0
 
 
