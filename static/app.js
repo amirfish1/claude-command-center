@@ -56440,7 +56440,7 @@
     const x0 = narrow ? (r.left + 22 - mapRect.left) : (r.left + r.width / 2 - mapRect.left);
     const y0 = r.bottom - mapRect.top + map.scrollTop;
     const parts = [];
-    map.querySelectorAll('#orchMapLanes .orch-node-lane').forEach(el => {
+    map.querySelectorAll('#orchMapLanes .orch-node-lane, #orchMapDone .orch-node-lane').forEach(el => {
       const n = el.getBoundingClientRect();
       const status = (el.className.match(/\bis-(working|waiting|idle|done)\b/) || [])[1] || 'idle';
       let d;
