@@ -60520,13 +60520,17 @@ def _annotate_inject_result(result, *, requested, force_queue=False, fields=None
     else:
         landed = "unknown"
     result.setdefault("contract", _INJECT_CONTRACT_VERSION)
-    result.setdefault("requested", str(requested or "send"))
+    # `requested` is assigned, not setdefault-ed: the router delegates to other
+    # entry points that annotate on the way out, and the OUTERMOST caller's
+    # declared verb is the authoritative one. With setdefault an inner hop's
+    # default ("engine_default") would win and mislabel every queue/steer call.
+    result["requested"] = str(requested or "engine_default")
     result.setdefault("effect", effect)
     result.setdefault("aborted", aborted)
     result.setdefault("landed", landed)
     result.setdefault("transport", _INJECT_TRANSPORT_BY_VIA.get(via, via or "unknown"))
     for key, value in (fields or {}).items():
-        result.setdefault(key, value)
+        result[key] = value
     if force_queue:
         result.setdefault("reason", "caller forced queueing")
     return result
