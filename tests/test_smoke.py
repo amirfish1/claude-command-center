@@ -9,6 +9,7 @@ import ast
 import fcntl
 import json
 import os
+import re
 import pathlib
 import shutil
 import sqlite3
@@ -4723,6 +4724,35 @@ class TestServerImports(unittest.TestCase):
         self.assertNotIn(".conv-tab-strip.has-mobile-back", app_css)
         self.assertIn("#convToolbar .font-size-controls { display: none !important; }", app_css)
         self.assertIn("order: -100;", app_css)
+
+    def test_mobile_attach_button_can_reach_files_and_photos(self):
+        """Phones have no drag-drop and only a marginal clipboard path, so the
+        composer's file input is the ONLY way to attach from a device. An
+        `accept` or `capture` attribute on it silently breaks that: `capture`
+        forces the camera, and a narrow `accept` blocks PDFs/logs entirely."""
+        index_html = pathlib.Path(PROJECT_ROOT, "static", "index.html").read_text(encoding="utf-8")
+        app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
+        app_css = pathlib.Path(PROJECT_ROOT, "static", "app.css").read_text(encoding="utf-8")
+
+        # The picker exists and is wired to a visible button.
+        self.assertIn('<input type="file" id="convAttachInput" multiple', index_html)
+        self.assertIn('id="convAttachBtn"', index_html)
+        self.assertIn("attachFilePickerButton(", app_js)
+
+        # The picker must stay unrestricted — this is the whole feature.
+        picker = re.search(r"<input type=\"file\" id=\"convAttachInput\"[^>]*>", index_html)
+        self.assertIsNotNone(picker, "convAttachInput markup not found")
+        self.assertNotIn("accept=", picker.group(0))
+        self.assertNotIn("capture", picker.group(0))
+
+        # Non-images must route to the type-agnostic attachment endpoint, and
+        # images to the pasted-image one so they still render inline.
+        self.assertIn("uploadFilesToComposer", app_js)
+        self.assertIn("uploadManagedAttachment(file)", app_js)
+        self.assertIn("_addAttachmentChip", app_js)
+
+        # Touch tap target: >=40px on the mobile breakpoint.
+        self.assertIn(".attach-btn", app_css)
 
     def test_mobile_conversation_follows_visual_viewport(self):
         """The fixed conversation pane must remain inside the viewport after

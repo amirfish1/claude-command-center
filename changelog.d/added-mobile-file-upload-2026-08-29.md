@@ -1,0 +1,1 @@
+Added an attach button to the session composer so phones can attach files and photos (Photo Library, Take Photo, or browse Files/PDF/logs/zips) — previously only desktop drag-drop and image-paste worked.

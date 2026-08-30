@@ -4129,6 +4129,8 @@
   // retrieve selectively, and records continuation lineage so Flow shows the
   // new session as primary with the heavy origin nested beneath it.
   async function f2RunContinue(paneId, st, btn) {
+    const input = composerInputForPane(paneId) || $convInput;
+    if (!guardComposerSend(input)) return;
     if (btn) btn.disabled = true;
     const sid = st.sid;
     f2ManualPanes.delete(f2PaneKey(paneId));
@@ -10134,6 +10136,7 @@
     const _paneEl = document.querySelector(`.conv-pane[data-pane-id="${paneId}"]`);
     const $input = (_paneEl && _paneEl.querySelector('.conv-input-bar textarea, .conv-input-bar input[type="text"]')) || $convInput;
     if (!$input) return;
+    if (!guardComposerSend($input)) return;
     const base = ($input.value || '').trim();
     if (!base) return;
     // Augment the message, arm the auto-read, then reuse the normal send path
@@ -10165,6 +10168,7 @@
     const $sendBtn = (_paneEl && _paneEl.querySelector('.send-btn')) || $convSendBtn;
     const $steerBtn = (_paneEl && _paneEl.querySelector('.steer-btn')) || $convSteerBtn;
     const $actionBtn = injectMode === 'steer' ? ($steerBtn || $sendBtn) : $sendBtn;
+    if (!guardComposerSend($input)) return;
     const text = ($input && $input.value || '').trim();
     let announcedFrom = announcedFromForPane(paneId || activePaneId());
     const draftConversation = currentConversation;
@@ -27730,7 +27734,8 @@
           gcHumanInput.style.height = Math.min(gcHumanInput.scrollHeight, max) + 'px';
         };
         gcHumanInput.addEventListener('input', _autosizeGc);
-        const desc = Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value');
+        const ownDesc = Object.getOwnPropertyDescriptor(gcHumanInput, 'value');
+        const desc = ownDesc || Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value');
         if (desc && desc.get && desc.set) {
           Object.defineProperty(gcHumanInput, 'value', {
             configurable: true,
@@ -28378,6 +28383,7 @@
   async function sendHumanGcPost() {
     if (!_gcReaderPath && !_gcReaderId) return;
     const input = document.getElementById('gcHumanInput');
+    if (!guardComposerSend(input)) return;
     const text = input ? input.value.trim() : '';
     if (!text) return;
     try {
@@ -44219,6 +44225,7 @@
         resolve(String(value || '').trim());
       };
       const submit = () => {
+        if (!guardComposerSend(textarea)) return;
         const note = textarea ? (textarea.value || '').trim() : '';
         if (note) close(note);
       };
@@ -61969,12 +61976,12 @@
     if (!data.ok) throw new Error(data.error || 'upload failed');
     return data.path;
   }
-  async function uploadManagedAttachment(file) {
+  async function uploadManagedAttachment(file, fallbackName) {
     const res = await fetch('/api/upload-attachment', {
       method: 'POST',
       headers: {
         'Content-Type': file.type || 'application/octet-stream',
-        'X-CCC-Attachment-Name': encodeURIComponent(file.name || 'attachment'),
+        'X-CCC-Attachment-Name': encodeURIComponent(file.name || fallbackName || 'attachment'),
       },
       body: file,
     });
@@ -61982,13 +61989,13 @@
     if (!data.ok) throw new Error(data.error || 'upload failed');
     return data.path;
   }
-  function insertAtCursor(el, text) {
+  function insertAtCursor(el, text, emitInput = true) {
     if (el.tagName === 'TEXTAREA' || (el.tagName === 'INPUT' && el.type === 'text')) {
       const start = el.selectionStart || 0;
       const end = el.selectionEnd || 0;
       el.value = el.value.slice(0, start) + text + el.value.slice(end);
       el.selectionStart = el.selectionEnd = start + text.length;
-      el.dispatchEvent(new Event('input', { bubbles: true }));
+      if (emitInput) el.dispatchEvent(new Event('input', { bubbles: true }));
     }
   }
   function getClipboardImageFile(ev) {
@@ -62064,6 +62071,115 @@
     const strip = host && host.querySelector(':scope > .paste-thumb-strip');
     if (strip) strip.remove();
   }
+  // Generic (non-image) attachment chip — same strip, same remove-strips-
+  // the-token behavior as _addPastedImageThumb, but shows a filename chip
+  // instead of a thumbnail since there is nothing to preview for a PDF/log/
+  // zip. Keeps a PDF from leaving a bare filesystem path token visible in
+  // the textarea.
+  function _addAttachmentChip(el, path, filename) {
+    const strip = _pastedImageThumbsContainer(el);
+    if (!strip) return;
+    const chip = document.createElement('div');
+    chip.className = 'paste-thumb paste-thumb-file';
+    chip.dataset.path = path;
+    chip.title = filename || path;
+    const label = document.createElement('span');
+    label.className = 'paste-thumb-file-name';
+    label.textContent = filename || path.split('/').pop();
+    const remove = document.createElement('button');
+    remove.type = 'button';
+    remove.className = 'paste-thumb-remove';
+    remove.innerHTML = '&times;';
+    remove.title = 'Remove this attachment from the message';
+    remove.addEventListener('click', (ev) => {
+      ev.preventDefault();
+      ev.stopPropagation();
+      try {
+        const re = new RegExp('\\s*' + path.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '\\s*', 'g');
+        el.value = el.value.replace(re, ' ').replace(/\s{2,}/g, ' ').trim();
+        el.dispatchEvent(new Event('input', { bubbles: true }));
+      } catch (_) {}
+      chip.remove();
+      if (!strip.querySelector('.paste-thumb')) strip.remove();
+    });
+    chip.appendChild(label);
+    chip.appendChild(remove);
+    strip.appendChild(chip);
+  }
+  // Uploads are asynchronous while Send clears the composer synchronously.
+  // Keep a per-composer count so a message can never depart with an
+  // [uploading …] placeholder in place of its finished attachment path.
+  function beginComposerUpload(el) {
+    if (!el) return;
+    el._cccPendingUploadCount = (el._cccPendingUploadCount || 0) + 1;
+  }
+  function finishComposerUpload(el) {
+    if (!el) return;
+    el._cccPendingUploadCount = Math.max(0, (el._cccPendingUploadCount || 0) - 1);
+  }
+  function composerUploadIsPending(el) {
+    return !!(el && el._cccPendingUploadCount > 0);
+  }
+  function guardComposerSend(el) {
+    if (!composerUploadIsPending(el)) return true;
+    if (typeof showOpToast === 'function') {
+      showOpToast('Waiting for attachment upload to finish.', 'info');
+    }
+    return false;
+  }
+  // /api/pasted-image only serves these formats. Every other image type is
+  // retained through the managed-attachment path, where its original bytes
+  // and extension stay intact and the composer shows a filename chip.
+  function shouldUsePastedImageUpload(file) {
+    const type = String((file && file.type) || '').split(';')[0].trim().toLowerCase();
+    return type === 'image/png' || type === 'image/jpeg' || type === 'image/jpg'
+      || type === 'image/gif' || type === 'image/webp';
+  }
+  function attachmentNameForClipboardImage(file) {
+    if (file && file.name) return file.name;
+    const type = String((file && file.type) || '').split(';')[0].trim().toLowerCase();
+    const extByType = {
+      'image/svg+xml': 'svg',
+      'image/heic': 'heic',
+      'image/heif': 'heif',
+    };
+    const ext = extByType[type] || (type.startsWith('image/')
+      ? type.slice('image/'.length).replace(/[^a-z0-9]/g, '') : '');
+    return ext ? 'pasted-image.' + ext : 'pasted-image';
+  }
+  // Shared upload-and-insert loop: every entry point that hands the composer
+  // a batch of browser File objects (desktop drag-drop, the mobile attach
+  // button's file input) funnels through here so the placeholder/thumbnail/
+  // error handling only lives in one place. Images route through
+  // uploadPastedImage (inline transcript rendering + thumbnail, matching
+  // clipboard-paste behavior); everything else (PDF, log, zip, ...) routes
+  // through uploadManagedAttachment with a filename chip.
+  async function uploadFilesToComposer(el, files) {
+    for (const file of files) {
+      const isImage = shouldUsePastedImageUpload(file);
+      const placeholder = ' [uploading ' + (file.name || 'attachment') + '...] ';
+      beginComposerUpload(el);
+      insertAtCursor(el, placeholder, false);
+      try {
+        if (isImage) {
+          const path = await uploadPastedImage(file);
+          el.value = el.value.replace(placeholder, ' ' + path + ' ');
+          el.dispatchEvent(new Event('input', { bubbles: true }));
+          _addPastedImageThumb(el, path, null);
+        } else {
+          const path = await uploadManagedAttachment(file);
+          el.value = el.value.replace(placeholder, ' ' + path + ' ');
+          el.dispatchEvent(new Event('input', { bubbles: true }));
+          _addAttachmentChip(el, path, file.name);
+        }
+      } catch (e) {
+        el.value = el.value.replace(placeholder, ' [upload failed: ' + e.message + '] ');
+        el.dispatchEvent(new Event('input', { bubbles: true }));
+      } finally {
+        finishComposerUpload(el);
+      }
+    }
+  }
   function attachFileDrop(el) {
     if (!el || el._fileDropBound) return;
     el._fileDropBound = true;
@@ -62077,16 +62193,33 @@
       const files = Array.from((ev.dataTransfer && ev.dataTransfer.files) || []).filter(Boolean);
       if (!files.length) return;
       ev.preventDefault();
-      for (const file of files) {
-        const placeholder = ' [uploading ' + (file.name || 'attachment') + '...] ';
-        insertAtCursor(el, placeholder);
-        try {
-          const path = await uploadManagedAttachment(file);
-          el.value = el.value.replace(placeholder, ' ' + path + ' ');
-          el.dispatchEvent(new Event('input', { bubbles: true }));
-        } catch (e) {
-          el.value = el.value.replace(placeholder, ' [upload failed: ' + e.message + '] ');
-        }
+      await uploadFilesToComposer(el, files);
+    });
+  }
+  // Mobile/touch entry point: a bare <input type="file"> with no accept or
+  // capture restriction (see the markup comment) so it covers files, photo
+  // library, and camera in one control. Wired to whichever composer(s) carry
+  // a matching hidden file input + attach button pair.
+  function attachFilePickerButton(inputEl, buttonEl) {
+    if (!inputEl || !buttonEl || buttonEl._filePickerBound) return;
+    buttonEl._filePickerBound = true;
+    const targetEl = () => document.getElementById('convInput');
+    buttonEl.addEventListener('click', (ev) => {
+      ev.preventDefault();
+      inputEl.click();
+    });
+    inputEl.addEventListener('change', async () => {
+      const files = Array.from(inputEl.files || []).filter(Boolean);
+      const el = targetEl();
+      try {
+        if (files.length && el) await uploadFilesToComposer(el, files);
+      } finally {
+        // Reset AFTER the upload finishes, not before — clearing the file
+        // input's value can tear down the browser's handle backing the
+        // still-in-flight File/Blob reads on some engines, which silently
+        // stalls the upload fetch forever instead of erroring. Reset here
+        // only to allow re-selecting the same file next time.
+        inputEl.value = '';
       }
     });
   }
@@ -62098,37 +62231,47 @@
       const blob = getClipboardImageFile(ev);
       if (!blob) return;
       ev.preventDefault();
+      const canPreview = shouldUsePastedImageUpload(blob);
       const placeholder = ' [uploading image...] ';
-      insertAtCursor(el, placeholder);
+      beginComposerUpload(el);
+      insertAtCursor(el, placeholder, false);
       // Show an immediate thumbnail from the browser-side blob so the
       // user sees their image instantly — before the upload returns.
       // Once the server returns the real path, swap data-path to the
       // canonical value so the remove button can strip the token.
       let immediateBlobUrl = null;
       let pendingThumb = null;
+      if (canPreview) {
+        try {
+          immediateBlobUrl = URL.createObjectURL(blob);
+          const strip = _pastedImageThumbsContainer(el);
+          if (strip) {
+            pendingThumb = document.createElement('div');
+            pendingThumb.className = 'paste-thumb paste-thumb-pending';
+            const im = document.createElement('img');
+            im.src = immediateBlobUrl;
+            im.alt = 'Pasted image (uploading)';
+            pendingThumb.appendChild(im);
+            strip.appendChild(pendingThumb);
+          }
+        } catch (_) {}
+      }
       try {
-        immediateBlobUrl = URL.createObjectURL(blob);
-        const strip = _pastedImageThumbsContainer(el);
-        if (strip) {
-          pendingThumb = document.createElement('div');
-          pendingThumb.className = 'paste-thumb paste-thumb-pending';
-          const im = document.createElement('img');
-          im.src = immediateBlobUrl;
-          im.alt = 'Pasted image (uploading)';
-          pendingThumb.appendChild(im);
-          strip.appendChild(pendingThumb);
-        }
-      } catch (_) {}
-      try {
-        const p = await uploadPastedImage(blob);
+        const p = canPreview
+          ? await uploadPastedImage(blob)
+          : await uploadManagedAttachment(blob, attachmentNameForClipboardImage(blob));
         el.value = el.value.replace(placeholder, ' ' + p + ' ');
         el.dispatchEvent(new Event('input', { bubbles: true }));
         if (pendingThumb) pendingThumb.remove();
-        _addPastedImageThumb(el, p, immediateBlobUrl);
+        if (canPreview) _addPastedImageThumb(el, p, immediateBlobUrl);
+        else _addAttachmentChip(el, p, blob.name || 'pasted image');
       } catch (e) {
         el.value = el.value.replace(placeholder, ' [upload failed: ' + e.message + '] ');
+        el.dispatchEvent(new Event('input', { bubbles: true }));
         if (pendingThumb) pendingThumb.remove();
         if (immediateBlobUrl) try { URL.revokeObjectURL(immediateBlobUrl); } catch (_) {}
+      } finally {
+        finishComposerUpload(el);
       }
     });
     // Clear thumbnails when the input is cleared. Send paths call
@@ -62167,10 +62310,12 @@
   // Expose so the group-chat reader (created lazily after this block
   // runs) can opt in too — see wireGcMentionAutocomplete's neighbor.
   window.__cccAttachImagePaste = attachImagePaste;
+  attachFilePickerButton(document.getElementById('convAttachInput'), document.getElementById('convAttachBtn'));
 
   if ($kptNewSession) {
     // Open new session mode the moment the user starts typing (or focuses)
     function routeToNewSession() {
+      if (!guardComposerSend($kptNewSession)) return;
       if (typeof enterNewSessionMode === 'function') enterNewSessionMode();
       const $convInput = document.getElementById('convInput');
       if ($convInput) {
@@ -62194,6 +62339,7 @@
   // ── Split panel input bar send handler ──
   if ($cpSendBtn && $cpInput) {
     async function sendToSplitTerminal() {
+      if (!guardComposerSend($cpInput)) return;
       const text = ($cpInput.value || '').trim();
       const sid = currentSession.id;
       if (!text || !sid) return;
@@ -65559,6 +65705,7 @@
     let submitting = false;
     submitBtn.addEventListener('click', async () => {
       if (submitting) return;
+      if (!guardComposerSend(textArea)) return;
       submitting = true;
       submitBtn.disabled = true;
       submitBtn.textContent = 'Submitting…';
@@ -65791,6 +65938,7 @@
     };
     const persistAnnotation = async (busyLabel) => {
       if (savedAnnotation) return savedAnnotation;
+      if (!guardComposerSend(noteEl)) return null;
       const note = noteEl.value.trim();
       if (!note) {
         errEl.textContent = 'Note is required.';
@@ -66021,6 +66169,7 @@
     };
     const persistAnnotation = async (busyLabel) => {
       if (savedAnnotation) return savedAnnotation;
+      if (!guardComposerSend(noteEl)) return null;
       const note = noteEl.value.trim();
       if (!note) {
         errEl.textContent = 'Note is required.';
