@@ -34,7 +34,7 @@ class ProcessAuditTests(unittest.TestCase):
     def setUpClass(cls):
         cls.server = importlib.import_module("server")
 
-    def _build(self, ps_rows, lsof_blocks=(), launchd=()):
+    def _build(self, ps_rows, lsof_blocks=(), launchd=(), ccc_sessions=()):
         server = self.server
         ps_out = "\n".join(ps_rows) + "\n"
         lsof_out = "\n".join(lsof_blocks) + "\n"
@@ -51,6 +51,7 @@ class ProcessAuditTests(unittest.TestCase):
             return ""
 
         with mock.patch.object(server, "_sys_run", side_effect=fake_run), \
+             mock.patch.object(server, "_sys_ccc_session_pids", return_value=set(ccc_sessions)), \
              mock.patch.object(server.platform, "system", return_value="Darwin"), \
              mock.patch.object(server.os, "getpid", return_value=999901), \
              mock.patch.object(server.os, "getppid", return_value=999900):
@@ -140,6 +141,23 @@ class ProcessAuditTests(unittest.TestCase):
         self.assertFalse(by[700]["can_kill"])
         self.assertFalse(by[701]["can_kill"])
         self.assertTrue(by[702]["can_kill"])
+
+    def test_ccc_spawned_session_reparented_by_a_worker_restart_anchors_its_tree(self):
+        rows = [
+            ps_row(2100, 1, "/home/dev/.local/bin/claude -p --verbose --input-format stream-json", etime="00:30:00", stat="Ss"),
+            ps_row(2101, 2100, "node /x/puppeteer-launch.js", etime="00:01:00"),
+            ps_row(2102, 2101, "/x/chrome-headless-shell --headless --remote-debugging-pipe --type=renderer", etime="00:01:00"),
+        ]
+        by, _ = self._build(rows, ccc_sessions=[2100])
+        self.assertIn("CCC session", by[2100]["shields"])
+        self.assertNotIn("Orphaned (PPID 1)", by[2100]["reasons"])
+        self.assertTrue(by[2100]["can_kill"])
+        self.assertIsNone(by[2102]["tree_root"])
+        self.assertEqual(by[2102]["risk"], "safe", by[2102]["reasons"])
+        # The same tree with no registry entry is a real leak.
+        by2, _ = self._build(rows)
+        self.assertEqual(by2[2102]["tree_root"], 2100)
+        self.assertGreaterEqual(by2[2102]["score"], 4.0)
 
     # ── browsers ─────────────────────────────────────────────────────────
 

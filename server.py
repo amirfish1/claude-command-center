@@ -9302,6 +9302,31 @@ def _sys_launchd_jobs():
     return jobs
 
 
+def _sys_ccc_session_pids():
+    """PIDs of sessions CCC itself spawned (spawn registry on disk + this
+    process's in-memory list). A `claude -p` reparented to launchd because the
+    worker restarted is still a live, tracked session — an anchor, not an
+    orphan root. Cheap: one small JSON read per snapshot, no RPC."""
+    pids = set()
+    try:
+        for entry in _load_spawn_registry():
+            try:
+                pids.add(int(entry.get("pid") or 0))
+            except (TypeError, ValueError, AttributeError):
+                continue
+    except Exception:
+        pass
+    try:
+        for entry in list(_spawned_sessions):
+            pid = entry.get("pid") if isinstance(entry, dict) else None
+            if pid:
+                pids.add(int(pid))
+    except Exception:
+        pass
+    pids.discard(0)
+    return pids
+
+
 def _sys_worktree_gitdir_missing(cwd, _memo):
     """True when `cwd` (or an ancestor) is a git worktree whose admin dir is
     gone — the checkout was `git worktree remove`d under a still-running
@@ -9362,6 +9387,7 @@ def _build_system_processes_uncached():
             lsof_cmd += ["-u", str(uid)]
     lsof_out = _sys_run(lsof_cmd, timeout=5)
     launchd_jobs = _sys_launchd_jobs()
+    ccc_session_pids = _sys_ccc_session_pids()
 
     pid_files = {}
     cur_pid = None
@@ -9447,9 +9473,11 @@ def _build_system_processes_uncached():
             or (cmd_base == "ssh" and re.search(r"\s-[a-zA-Z]*[NLRDWM]", cmd) is not None)
         )
         has_tty = bool(tty) and tty not in ("??", "?", "-", "")
+        is_ccc_session = pid in ccc_session_pids
         # Anchored = something is deliberately keeping this alive; an orphan
         # tree never roots at an anchored process.
-        anchored = bool(label) or is_system_daemon or is_gui or is_ccc or is_known_daemon or has_tty
+        anchored = (bool(label) or is_system_daemon or is_gui or is_ccc or is_known_daemon
+                    or has_tty or is_ccc_session)
 
         rows[pid] = {
             "pid": pid, "ppid": ppid, "cmd": cmd, "cmd_base": cmd_base, "cpu": cpu, "rss_mb": rss_mb,
@@ -9459,6 +9487,7 @@ def _build_system_processes_uncached():
             "is_gui": is_gui, "is_ccc": is_ccc, "is_known_daemon": is_known_daemon,
             "is_automation": is_automation, "is_helper": is_helper, "is_lsp": is_lsp,
             "is_mcp": is_mcp, "is_dev_server": is_dev_server, "is_mp_worker": is_mp_worker,
+            "is_ccc_session": is_ccc_session,
             "anchored": anchored, "files": pid_files.get(pid, empty_files),
         }
 
@@ -9622,6 +9651,8 @@ def _build_system_processes_uncached():
             shields.append("Known dev daemon")
         if r["label"]:
             shields.append("launchd job: %s" % r["label"])
+        if r["is_ccc_session"]:
+            shields.append("CCC session")
         if has_tty:
             score -= 4.0
             shields.append("Attached TTY")

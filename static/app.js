@@ -824,7 +824,7 @@
         (p.reasons || []).forEach(function (r) {
           let tagClass = 'tag-subtle';
           if (/Deleted CWD|Unlinked|Zombie|Leaked|Owns runaway|is gone|Spinning/.test(r)) tagClass = 'tag-danger';
-          else if (/Orphaned|Stuck|Sustained|orphaned tree|Worktree removed|launcher gone|editor gone|host gone|coordinator gone|main app gone/.test(r)) tagClass = 'tag-warn';
+          else if (/Orphaned|Stuck|Sustained|orphaned tree|tree orphaned|Helper of leaked|Worktree removed|launcher gone|editor gone|host gone|coordinator gone|main app gone/.test(r)) tagClass = 'tag-warn';
           html += '    <span class="sys-proc-tag ' + tagClass + '">' + _shEsc(r) + '</span>';
         });
         (p.shields || []).forEach(function (s) {
