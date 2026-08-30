@@ -25795,6 +25795,15 @@ html:not(.ccc-debug-mode) #statsModal {
 .orch-edge-flow { stroke: #a371f7; stroke-width: 2; stroke-dasharray: 6 10; animation: orch-edge-flow 900ms linear infinite; }
 @keyframes orch-edge-flow { to { stroke-dashoffset: -16; } }
 @keyframes orch-edge-blink { 0%, 100% { opacity: 1; } 50% { opacity: 0.35; } }
+.orch-map-ancestor {
+  position: relative;
+  z-index: 1;
+  text-align: center;
+  font-size: 11px;
+  color: var(--text-muted);
+  margin-bottom: 6px;
+}
+.orch-map.is-narrow .orch-map-ancestor { text-align: left; padding-left: 4px; }
 .orch-map-root { position: relative; display: flex; justify-content: center; z-index: 1; }
 .orch-map-lanes {
   position: relative;

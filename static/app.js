@@ -55295,7 +55295,7 @@
     const sid = (row && row.session_id) || sessionIdByConv[convId] || (currentSession && currentSession.id) || '';
     const repo = (row && (row.session_cwd || row.folder_path)) || (currentSession && currentSession.cwd) || '';
     const root = orchResolveRoot(row, sid);
-    return { convId, row, sid, repo, cccUrl: location.origin, rootRow: root.row, rootSid: root.sid };
+    return { convId, row, sid, repo, cccUrl: location.origin, rootRow: root.row, rootSid: root.sid, hiddenParentSid: root.hiddenParentSid };
   }
   // The map is always drawn from the orchestrator down, so opening a lane
   // from the map shows the same picture with a different node lit up.
@@ -55313,17 +55313,20 @@
     (_orchSpawnedRegistry || []).forEach(sp => { if (sp && sp.session_id) spawnBySid.set(sp.session_id, sp); });
     let curRow = row || bySid.get(sid) || null;
     let curSid = sid;
+    let hiddenParentSid = '';
     for (let depth = 0; depth < 6; depth++) {
       const sp = spawnBySid.get(curSid);
       const pid = String((curRow && (curRow.parent_session_id || curRow.hermes_parent_session_id)) || (sp && sp.parent_session_id) || '');
       if (!pid || pid === curSid) break;
       // Don't walk past a parent we can't see — root at the highest
-      // visible ancestor instead of an invisible grandparent.
-      if (!bySid.has(pid) && !spawnBySid.has(pid)) break;
+      // visible ancestor instead of an invisible grandparent. Remember it
+      // so the map can hint "there's more above" instead of silently
+      // presenting this node as the true top of the tree.
+      if (!bySid.has(pid) && !spawnBySid.has(pid)) { hiddenParentSid = pid; break; }
       curSid = pid;
       curRow = bySid.get(pid) || null;
     }
-    return { row: curRow, sid: curSid };
+    return { row: curRow, sid: curSid, hiddenParentSid };
   }
 
   function orchPrompt(id) {
@@ -55978,6 +55981,7 @@
   function updateOrchestrationPane(convId) {
     const pane = document.getElementById('statusRailOrchestrationPane');
     const rootEl = document.getElementById('orchMapRoot');
+    const ancestorEl = document.getElementById('orchMapAncestor');
     const lanesEl = document.getElementById('orchMapLanes');
     const doneEl = document.getElementById('orchMapDone');
     const doneLabel = document.getElementById('orchMapDoneLabel');
@@ -56022,6 +56026,11 @@
         + '<span class="orch-node-model">' + escapeHtml(rootModel || rootEngine) + '</span>'
         + '</span></button>'
       : '';
+    if (ancestorEl) {
+      const hiddenParentSid = hasSession && !_orchSim ? ctx.hiddenParentSid : '';
+      ancestorEl.hidden = !hiddenParentSid;
+      if (hiddenParentSid) ancestorEl.textContent = '↑ spawned by ' + hiddenParentSid.slice(0, 8) + ' (different repo or not visible here)';
+    }
     if (countEl) {
       const total = clock !== null ? orchCollectLanes(sid).length : 0;
       countEl.textContent = !lanes.length
