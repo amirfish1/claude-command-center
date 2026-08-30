@@ -131,26 +131,36 @@
 </script>
 </head>
 <body>
-  <!-- Simple-mode mobile bottom nav (body.ccc-mobile-redesign.ccc-simple-mode
-       only). Drives the EXISTING sidebar tab bar (data-conv-tab) and Settings
-       modal rather than introducing new screens/state — see app.js
-       _wireMobileBottomNav(). Hidden everywhere else via inline style. -->
+  <!-- Shared mobile bottom nav. Same element for Simple and Advanced:
+       Simple (data-nav-chrome="simple") drives Home/Tasks/Helpers/More;
+       Advanced (data-nav-chrome="advanced") is Sessions vs Queues.
+       Both reuse _wireMobileBottomNav() and the existing sidebar tab bar
+       (data-conv-tab) rather than introducing new screens/state.
+       Hidden everywhere else via inline style. -->
   <nav id="mobileBottomNav" class="mobile-bottom-nav" style="display:none;" aria-label="Main">
-    <button type="button" class="mobile-nav-btn" data-mobile-nav="home" aria-current="page" aria-label="Home">
+    <button type="button" class="mobile-nav-btn" data-mobile-nav="home" data-nav-chrome="simple" aria-current="page" aria-label="Home">
       <span class="mobile-nav-icon" aria-hidden="true">&#8962;</span>
       <span class="mobile-nav-label mobile-sr-only">Home</span>
     </button>
-    <button type="button" class="mobile-nav-btn" data-mobile-nav="tasks" aria-label="Tasks">
+    <button type="button" class="mobile-nav-btn" data-mobile-nav="tasks" data-nav-chrome="simple" aria-label="Tasks">
       <span class="mobile-nav-icon" aria-hidden="true">&#128203;</span>
       <span class="mobile-nav-label mobile-sr-only">Tasks</span>
     </button>
-    <button type="button" class="mobile-nav-btn" data-mobile-nav="automations" aria-label="Helpers">
+    <button type="button" class="mobile-nav-btn" data-mobile-nav="automations" data-nav-chrome="simple" aria-label="Helpers">
       <span class="mobile-nav-icon" aria-hidden="true">&#9889;</span>
       <span class="mobile-nav-label mobile-sr-only">Helpers</span>
     </button>
-    <button type="button" class="mobile-nav-btn" data-mobile-nav="more" aria-label="More">
+    <button type="button" class="mobile-nav-btn" data-mobile-nav="more" data-nav-chrome="simple" aria-label="More">
       <span class="mobile-nav-icon" aria-hidden="true">&#8943;</span>
       <span class="mobile-nav-label mobile-sr-only">More</span>
+    </button>
+    <button type="button" class="mobile-nav-btn" data-mobile-nav="sessions" data-nav-chrome="advanced" aria-label="Sessions">
+      <span class="mobile-nav-icon" aria-hidden="true">&#128172;</span>
+      <span class="mobile-nav-label">Sessions</span>
+    </button>
+    <button type="button" class="mobile-nav-btn" data-mobile-nav="queues" data-nav-chrome="advanced" aria-label="Queues">
+      <span class="mobile-nav-icon" aria-hidden="true">&#128203;</span>
+      <span class="mobile-nav-label">Queues</span>
     </button>
   </nav>
   <!-- Floating Annotate button for popout contexts (CCC-166). The topbar

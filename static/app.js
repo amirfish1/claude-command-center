@@ -14478,6 +14478,7 @@
       localStorage.setItem('ccc-session-view', sidebarViewMode === 'flow' ? 'list' : sidebarViewMode);
       localStorage.setItem('ccc-kanban-view', kanbanView ? 'true' : 'false');
     } catch (_) {}
+    if (typeof _syncMobileBottomNav === 'function') _syncMobileBottomNav();
   }
   let kanbanCollapsed = {}; // column_key -> bool, tracks user collapse state
   try { kanbanCollapsed = JSON.parse(localStorage.getItem('ccc-kanban-collapsed') || '{}'); } catch (_) {}
@@ -14833,13 +14834,53 @@
     return ci !== undefined ? ci : key;
   }
 
-  // ── Simple-mode mobile bottom nav ──
-  // Drives the EXISTING sidebar tab bar (data-conv-tab, localStorage
-  // 'ccc-sidebar-tab') and Settings modal — no new screens/state, no
-  // duplicated render logic. Only visible when both Simple mode and the
-  // mobile chrome gate are active.
+  // ── Mobile bottom nav ──
+  // One #mobileBottomNav for both Simple and Advanced. Simple drives
+  // Home/Tasks/Helpers/More screens; Advanced is Sessions vs Queues.
+  // Both reuse the EXISTING sidebar tab bar (data-conv-tab, localStorage
+  // 'ccc-sidebar-tab') — no new screens/state, no duplicated render logic.
+  let _mobileLastSessionTab = 'inprogress';
+  try {
+    const _bootTab = localStorage.getItem('ccc-sidebar-tab');
+    if (_bootTab && _bootTab !== 'queues') _mobileLastSessionTab = _bootTab;
+  } catch (_) {}
   function _mobileBottomNavShouldShow() {
-    return isSimpleMode() && isMobileRedesign();
+    if (!isMobileRedesign()) return false;
+    if (isSimpleMode()) return true;
+    if (document.body.classList.contains('conversation-popout')) return false;
+    if (document.body.classList.contains('flow-popout')) return false;
+    if (typeof isFlowView === 'function' && isFlowView()) return false;
+    if (document.body.classList.contains('kanban-split')) return false;
+    return true;
+  }
+  function _activateSidebarTabFromMobileNav(targetTab) {
+    // Reuse the existing tab bar's own click handler by clicking its
+    // matching button when present, instead of duplicating its re-render
+    // logic here. The queues tab button is missing when "separate tabs"
+    // is off — fall through to the same localStorage + host + render
+    // sequence the tab bar uses. A remembered session tab (coding /
+    // workers / issues) that isn't on the current bar falls back to
+    // in-progress rather than landing on a hidden tab.
+    const existingTabBtn = document.querySelector('[data-conv-tab="' + targetTab + '"]');
+    if (existingTabBtn) {
+      existingTabBtn.click();
+      return;
+    }
+    if (targetTab !== 'queues' && targetTab !== 'inprogress') {
+      const inprogressBtn = document.querySelector('[data-conv-tab="inprogress"]');
+      if (inprogressBtn) {
+        inprogressBtn.click();
+        return;
+      }
+      targetTab = 'inprogress';
+    }
+    try { localStorage.setItem('ccc-sidebar-tab', targetTab); } catch (_) {}
+    if (typeof _setSharedQueuePanelHost === 'function') {
+      _setSharedQueuePanelHost(targetTab === 'queues' ? 'sidebar' : 'rail');
+    }
+    if (typeof renderArchiveList === 'function') {
+      renderArchiveList(document.getElementById('convSearch')?.value || '', { force: true });
+    }
   }
   function _syncMobileBottomNav() {
     const nav = document.getElementById('mobileBottomNav');
@@ -14861,6 +14902,8 @@
           : _simpleScreen === 'settings' ? 'more' : 'home';
       } else if (typeof _simpleHomeShowing !== 'undefined' && _simpleHomeShowing
         && document.getElementById('simpleHome')) activeNavKey = 'home';
+    } else {
+      activeNavKey = tab === 'queues' ? 'queues' : 'sessions';
     }
     nav.querySelectorAll('[data-mobile-nav]').forEach(btn => {
       const active = btn.getAttribute('data-mobile-nav') === activeNavKey;
@@ -14890,23 +14933,34 @@
         if (typeof openSettingsModal === 'function') openSettingsModal();
         return;
       }
+      // Advanced mobile: Sessions vs Queues. Same tab-bar click reuse as
+      // the Simple fallback below; remember the last non-queues tab so
+      // Sessions returns to Active/Coding/Workers/Issues instead of
+      // always resetting to in-progress.
+      if (dest === 'sessions' || dest === 'queues') {
+        if (dest === 'queues') {
+          try {
+            const cur = localStorage.getItem('ccc-sidebar-tab') || 'inprogress';
+            if (cur && cur !== 'queues') _mobileLastSessionTab = cur;
+          } catch (_) {}
+          _activateSidebarTabFromMobileNav('queues');
+        } else {
+          let sessionTab = _mobileLastSessionTab || 'inprogress';
+          if (sessionTab === 'queues') sessionTab = 'inprogress';
+          _activateSidebarTabFromMobileNav(sessionTab);
+        }
+        if (typeof isMobile === 'function' && isMobile() && typeof mobileShowMain === 'function') {
+          mobileShowMain(false);
+        }
+        _syncMobileBottomNav();
+        return;
+      }
       const tabByDest = { home: 'inprogress', tasks: 'archived', automations: 'queues' };
       const targetTab = tabByDest[dest];
       if (!targetTab) return;
       // (Simple mode returned early above — every nav destination there is a
       // simple screen, not an advanced sidebar tab.)
-      // Reuse the existing tab bar's own click handler by clicking its
-      // matching button when present, instead of duplicating its
-      // re-render logic here.
-      const existingTabBtn = document.querySelector('[data-conv-tab="' + targetTab + '"]');
-      if (existingTabBtn) {
-        existingTabBtn.click();
-      } else {
-        try { localStorage.setItem('ccc-sidebar-tab', targetTab); } catch (_) {}
-        if (typeof renderArchiveList === 'function') {
-          renderArchiveList(document.getElementById('convSearch')?.value || '', { force: true });
-        }
-      }
+      _activateSidebarTabFromMobileNav(targetTab);
       _syncMobileBottomNav();
     });
   }
@@ -36374,6 +36428,14 @@
         if (!tab) return;
         ev.stopPropagation();
         const nextTab = tab.getAttribute('data-conv-tab');
+        if (nextTab === 'queues') {
+          try {
+            const cur = localStorage.getItem('ccc-sidebar-tab');
+            if (cur && cur !== 'queues') _mobileLastSessionTab = cur;
+          } catch (_) {}
+        } else if (typeof _mobileLastSessionTab !== 'undefined') {
+          _mobileLastSessionTab = nextTab;
+        }
         try { localStorage.setItem('ccc-sidebar-tab', nextTab); } catch (_) {}
         _setSharedQueuePanelHost(nextTab === 'queues' ? 'sidebar' : 'rail');
         renderArchiveList(document.getElementById('convSearch')?.value || '', { force: true });

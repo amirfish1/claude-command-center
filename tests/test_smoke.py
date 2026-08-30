@@ -4566,10 +4566,34 @@ class TestServerImports(unittest.TestCase):
 
         self.assertIn("const _mobileRedesignMQ = window.matchMedia('(max-width: 1200px)')", app_js)
         self.assertNotIn("const _mobileRedesignMQ = window.matchMedia('(max-width: 768px)')", app_js)
-        self.assertIn("return isMobileRedesign() ? 'simple' : 'advanced';", app_js)
-        self.assertIn("body.ccc-mobile-redesign.ccc-simple-mode .mobile-bottom-nav", app_css)
+        # Simple mode is opt-in (localStorage 'ccc-ui-mode'); unset always
+        # defaults to advanced so a narrow window never flips chrome alone.
+        self.assertIn("function isSimpleMode() { return getUiMode() === 'simple'; }", app_js)
+        self.assertIn("body.has-mobile-bottom-nav .mobile-bottom-nav", app_css)
         self.assertIn('id="mobileSimpleHeader"', index_html)
         self.assertIn("Start a task", index_html)
+
+    def test_advanced_mobile_bottom_nav_is_sessions_vs_queues(self):
+        """Advanced (non-simple) mobile reuses #mobileBottomNav for Sessions
+        vs Queues. At <=1200px the status-rail Queue tab lives under the
+        conversation overlay, so the list needs its own switcher. Same
+        element as Simple mode's Home/Tasks/Helpers/More — not a second bar."""
+        index_html = pathlib.Path(PROJECT_ROOT, "static", "index.html").read_text(encoding="utf-8")
+        app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
+        app_css = pathlib.Path(PROJECT_ROOT, "static", "app.css").read_text(encoding="utf-8")
+
+        self.assertEqual(index_html.count('id="mobileBottomNav"'), 1)
+        self.assertIn('data-mobile-nav="sessions"', index_html)
+        self.assertIn('data-mobile-nav="queues"', index_html)
+        self.assertIn('data-nav-chrome="advanced"', index_html)
+        self.assertIn('data-nav-chrome="simple"', index_html)
+        self.assertIn("function _activateSidebarTabFromMobileNav(", app_js)
+        self.assertIn("activeNavKey = tab === 'queues' ? 'queues' : 'sessions';", app_js)
+        self.assertIn("body.has-mobile-bottom-nav .mobile-bottom-nav", app_css)
+        self.assertIn(
+            'body.has-mobile-bottom-nav:not(.ccc-simple-mode) .mobile-nav-btn[data-nav-chrome="simple"]',
+            app_css,
+        )
 
     def test_simple_home_lives_in_sidebar_layer(self):
         """Simple Home (grandma-test landing screen) must render inside the

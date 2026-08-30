@@ -25113,8 +25113,47 @@ body.ccc-mobile-redesign .conv-item .mobile-details-panel .conv-goal-icon-only {
   margin: 2px 4px 2px 0;
 }
 
-/* ---- Simple-mode mobile bottom nav ---- */
+/* ---- Mobile bottom nav (Simple Home/Tasks/Helpers/More AND Advanced
+   Sessions/Queues). Layout lives here so Advanced can reuse the Simple
+   chrome; simple.css only adds Simple-mode extras (icon size, sr-only). */
 .mobile-bottom-nav { display: none; }
+body.has-mobile-bottom-nav .mobile-bottom-nav {
+  position: fixed;
+  left: 0; right: 0; bottom: 0;
+  z-index: 50;
+  display: flex;
+  background: var(--surface);
+  border-top: 1px solid var(--border);
+  padding: 6px 4px calc(6px + env(safe-area-inset-bottom, 0px));
+}
+body.has-mobile-bottom-nav .mobile-nav-btn {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 2px;
+  font-family: inherit;
+  cursor: pointer;
+  border: none;
+  background: transparent;
+  color: var(--text-muted);
+  border-radius: 8px;
+  padding: 6px 4px;
+  min-height: 48px;
+}
+body.has-mobile-bottom-nav .mobile-nav-btn.is-active {
+  color: var(--green);
+}
+body.has-mobile-bottom-nav .mobile-nav-icon { font-size: 18px; line-height: 1; }
+body.has-mobile-bottom-nav .mobile-nav-label { font-size: 10.5px; font-weight: 600; }
+body.has-mobile-bottom-nav:not(.ccc-simple-mode) .mobile-nav-btn[data-nav-chrome="simple"] { display: none; }
+body.has-mobile-bottom-nav.ccc-simple-mode .mobile-nav-btn[data-nav-chrome="advanced"] { display: none; }
+/* The Queues surface fills the sidebar; the in-list tab bar is redundant
+   with the bottom Sessions/Queues control. */
+body.has-mobile-bottom-nav:not(.ccc-simple-mode) #convList:has(> .shared-queue-host-sidebar) > .conv-tab-bar {
+  display: none;
+}
 /* Reserve room at the bottom of the page so the fixed nav never overlaps
    the last card in the list. */
 body.has-mobile-bottom-nav #convList {
