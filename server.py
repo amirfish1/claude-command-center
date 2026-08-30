@@ -68183,7 +68183,21 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                 self.send_json({"ok": False, "error": "ref required"}, 400)
                 return
             try:
-                item = _q.get(ref)
+                # A live get() shells to `gh issue view` for GitHub-backed
+                # queues and dies whenever the GraphQL quota is exhausted
+                # (playbook-documented failure). The context key lives in the
+                # ticket body which the list cache already holds — fall back
+                # to it rather than failing the preview on quota.
+                try:
+                    item = _q.get(ref)
+                except Exception:
+                    item = None
+                if not item:
+                    item = next(
+                        (it for it in (_ux_fixes_list_items_cached(None, None) or [])
+                         if str(it.get("ref") or "") == ref),
+                        None,
+                    )
                 if not item:
                     self.send_json({"ok": False, "error": _uxq_not_found_error(ref)}, 404)
                     return
