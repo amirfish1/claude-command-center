@@ -7530,7 +7530,7 @@
     border-color: #49dc88;
     background: #49dc88;
     box-shadow: 0 0 4px rgba(73, 220, 136, 0.72);
-    animation: none;
+    animation: ccc-activity-dot-pulse 1.6s ease-in-out infinite;
   }
   .is-not-working .session-activity-dot {
     border-color: #657180;
