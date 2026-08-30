@@ -60425,7 +60425,50 @@ _INJECT_TRANSPORT_BY_VIA = {
 }
 
 
-def _annotate_inject_result(result, *, requested, force_queue=False):
+# --- CCC-1000 Phase 2: the delivery-verb vocabulary -------------------------
+# Callers may speak either the legacy `mode` vocabulary or the verb vocabulary
+# from docs/ccc-1000-implementation-plan.md (watchtower repo). Verbs are
+# translated DOWN to the legacy mode the router already implements, so the
+# observable behaviour is bit-identical and #6 -- Claude's native, non-aborting
+# composer semantics, which are correct today -- cannot regress.
+_INJECT_LEGACY_MODES = ("answer", "send", "steer")
+
+# verb -> (legacy mode, extra router options, contract fields)
+_VERB_TO_LEGACY = {
+    "engine_default": ("send", {}, {}),
+    "queue": ("send", {"force_queue": True}, {"position": "back"}),
+    "steer": ("steer", {}, {"abort_first": True}),
+    # `abort` is a control verb: it delivers nothing and is handled by the
+    # caller, not the router. Listed so validation accepts it.
+    "abort": ("", {}, {}),
+}
+
+# legacy mode -> (verb, contract fields) -- how today's callers are reported
+# back in the new vocabulary without changing what they do.
+_LEGACY_TO_VERB = {
+    "send": ("engine_default", {}),
+    "steer": ("steer", {"abort_first": True}),
+    "answer": ("engine_default", {"answers_pending_question": True}),
+    "send_queue": ("queue", {"position": "back"}),
+}
+
+
+def _normalize_delivery_verb(mode):
+    """Accept either vocabulary.
+
+    Returns (legacy_mode, verb, router_options, contract_fields, error).
+    """
+    mode = str(mode or "send").strip().lower()
+    if mode in _VERB_TO_LEGACY:
+        legacy, options, fields = _VERB_TO_LEGACY[mode]
+        return legacy, mode, dict(options), dict(fields), ""
+    if mode in _INJECT_LEGACY_MODES:
+        verb, fields = _LEGACY_TO_VERB[mode]
+        return mode, verb, {}, dict(fields), ""
+    return "", "", {}, {}, "invalid mode"
+
+
+def _annotate_inject_result(result, *, requested, force_queue=False, fields=None):
     """Stamp the result contract onto whatever the router returned."""
     if not isinstance(result, dict):
         return result
@@ -60455,6 +60498,8 @@ def _annotate_inject_result(result, *, requested, force_queue=False):
     result.setdefault("aborted", aborted)
     result.setdefault("landed", landed)
     result.setdefault("transport", _INJECT_TRANSPORT_BY_VIA.get(via, via or "unknown"))
+    for key, value in (fields or {}).items():
+        result.setdefault(key, value)
     if force_queue:
         result.setdefault("reason", "caller forced queueing")
     return result
@@ -60466,10 +60511,18 @@ def _inject_text_into_session(session_id, text, **kwargs):
     Every keyword of the router below is keyword-only, so forwarding **kwargs
     preserves the existing signature exactly.
     """
+    requested = str(kwargs.pop("requested_verb", "") or "")
+    mode = str(kwargs.get("mode", "send"))
+    fields = dict(kwargs.pop("contract_fields", None) or {})
+    if not requested:
+        requested, legacy_fields = _LEGACY_TO_VERB.get(mode, (mode, {}))
+        for key, value in legacy_fields.items():
+            fields.setdefault(key, value)
     return _annotate_inject_result(
         _inject_text_into_session_router(session_id, text, **kwargs),
-        requested=kwargs.get("mode", "send"),
+        requested=requested,
         force_queue=bool(kwargs.get("force_queue", False)),
+        fields=fields,
     )
 
 
@@ -76039,13 +76092,24 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
             text = payload.get("text", "")
             mode = (payload.get("mode") or ("steer" if payload.get("steer") else "send") or "send")
             mode = str(mode).strip().lower()
+            # CCC-1000 Phase 2: `mode` may be a legacy value or a delivery verb.
+            # Verbs are translated down to the legacy mode the router already
+            # implements, so behaviour is unchanged either way.
+            verb_mode, verb, verb_options, verb_fields, verb_error = _normalize_delivery_verb(mode)
             presentation_bootstrap = bool(payload.get("presentation_bootstrap"))
             announced_from, announced_from_error = _normalize_announced_from(payload)
-            if not sid or (not text and not presentation_bootstrap):
+            if not sid or (not text and not presentation_bootstrap and verb != "abort"):
                 self.send_json({"ok": False, "error": "missing session_id or text"})
-            elif mode not in ("answer", "send", "steer"):
-                self.send_json({"ok": False, "error": "invalid mode"}, 400)
-            elif presentation_bootstrap and mode != "send":
+            elif verb_error:
+                self.send_json({"ok": False, "error": verb_error}, 400)
+            elif verb == "abort":
+                # Control verb: interrupt the turn, deliver nothing.
+                _record_interaction(sid)
+                self.send_json(_annotate_inject_result(
+                    _interrupt_session(sid), requested="abort",
+                    fields={"aborted": True, "landed": "none", "effect": "aborted"},
+                ))
+            elif presentation_bootstrap and verb_mode != "send":
                 self.send_json({"ok": False, "error": "presentation bootstrap requires send mode"}, 400)
             elif announced_from_error:
                 self.send_json({"ok": False, "error": announced_from_error}, 400)
@@ -76066,7 +76130,7 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                     text = _wrap_injected_text_with_announced_from(text, announced_from)
                     if (
                         bool(payload.get("presentation_mode3"))
-                        and mode == "send"
+                        and verb_mode == "send"
                         and not replace_queued
                         and not str(queued_text).lstrip().startswith("/")
                     ):
@@ -76077,7 +76141,7 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                         "skip_wt": bool(payload.get("skip_wt")),
                         "force_terminal": bool(payload.get("force_terminal")),
                         "force_headless": bool(payload.get("force_headless")),
-                        "force_queue": bool(payload.get("force_queue")),
+                        "force_queue": bool(payload.get("force_queue")) or bool(verb_options.get("force_queue")),
                     }
                     if replace_queued:
                         inject_options["preserve_queued_steer"] = True
@@ -76086,7 +76150,9 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                             "idempotency_key"
                         )
                     result = _inject_text_into_session(
-                        sid, text, mode=mode,
+                        sid, text, mode=verb_mode,
+                        requested_verb=verb,
+                        contract_fields=verb_fields,
                         source=_inject_source_for_request(announced_from, inject_options["wt_origin"]),
                         **inject_options,
                     )
