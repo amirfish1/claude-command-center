@@ -794,6 +794,9 @@
     const isDefaultAll = _sysProcFilter === 'all' && !searchLower;
     const displayProcs = (isDefaultAll && !_sysProcShowAll) ? filtered.slice(0, 50) : filtered;
 
+    const procById = {};
+    procs.forEach(function (p) { procById[p.pid] = p; });
+
     html += '<div class="sys-proc-list">';
     if (!filtered.length) {
       html += '<div class="sh-meta" style="padding:24px 0;text-align:center;opacity:0.6">No processes match the selected filters.</div>';
@@ -820,9 +823,12 @@
         html += '      <span class="sys-proc-cmd-title" title="' + _shEsc(p.cmd) + '">' + _shEsc(p.cmd_short || (p.cmd ? p.cmd.split(' ')[0] : '')) + '</span>';
         (p.reasons || []).forEach(function (r) {
           let tagClass = 'tag-subtle';
-          if (r.indexOf('Deleted CWD') !== -1 || r.indexOf('Unlinked') !== -1 || r.indexOf('Zombie') !== -1) tagClass = 'tag-danger';
-          else if (r.indexOf('Orphaned') !== -1 || r.indexOf('Stuck') !== -1) tagClass = 'tag-warn';
+          if (/Deleted CWD|Unlinked|Zombie|Leaked|Owns runaway|is gone|Spinning/.test(r)) tagClass = 'tag-danger';
+          else if (/Orphaned|Stuck|Sustained|orphaned tree|Worktree removed|launcher gone|editor gone|host gone|coordinator gone|main app gone/.test(r)) tagClass = 'tag-warn';
           html += '    <span class="sys-proc-tag ' + tagClass + '">' + _shEsc(r) + '</span>';
+        });
+        (p.shields || []).forEach(function (s) {
+          html += '    <span class="sys-proc-tag tag-shield" title="Shield: lowers the score">' + _shEsc(s) + '</span>';
         });
         html += '    </div>';
 
@@ -830,9 +836,14 @@
 
         html += '    <div class="sys-proc-meta-row">';
         html += '      <span>PID <b>' + p.pid + '</b></span>';
-        html += '      <span>PPID <b>' + p.ppid + '</b>' + (p.ppid === 1 ? ' (launchd)' : '') + '</span>';
+        let ppidNote = '';
+        if (p.ppid === 1) ppidNote = p.launchd_label ? ' (launchd job)' : ' (adopted by launchd)';
+        html += '      <span>PPID <b>' + p.ppid + '</b>' + ppidNote + '</span>';
+        if (p.tree_orphan && p.tree_root) {
+          html += '      <span>tree root <b>' + p.tree_root + '</b></span>';
+        }
         html += '      <span>up ' + _shFmtIdle(p.etime_min) + '</span>';
-        html += '      <span>' + (p.cpu || 0).toFixed(1) + '% cpu</span>';
+        html += '      <span>' + (p.cpu || 0).toFixed(1) + '% cpu' + (p.cpu_ratio >= 0.05 ? ' (avg ' + Math.round(p.cpu_ratio * 100) + '%)' : '') + '</span>';
         html += '      <span>' + _shFmtMB(p.rss_mb) + '</span>';
         html += '      <span>state ' + _shEsc(p.stat) + '</span>';
         html += '    </div>';
@@ -847,6 +858,9 @@
           const fifoLabel = !p.fd0_exists ? ' (UNLINKED FIFO)' : ' (FIFO)';
           html += '    <div class="sys-proc-path-line"><span class="sys-proc-path-label">stdin:</span> <span class="' + fifoClass + '">' + _shEsc(p.fd0) + fifoLabel + '</span></div>';
         }
+        if (p.kill_hint) {
+          html += '    <div class="sys-proc-path-line"><span class="sys-proc-path-label">note:</span> <span class="sh-meta">' + _shEsc(p.kill_hint) + '</span></div>';
+        }
 
         html += '  </div>';
 
@@ -855,6 +869,17 @@
           html += '    <button type="button" class="sh-btn" data-kill-pid="' + p.pid + '">kill</button>';
         } else {
           html += '    <span class="sh-meta" style="font-size:10px;opacity:0.5">protected</span>';
+        }
+        // A leaked tree dies at its root: offer the root instead of asking the
+        // user to hunt for it. Zombies cannot be signalled at all; the only
+        // fix is the parent that never reaped them.
+        const isZombie = (p.stat || '').charAt(0) === 'Z';
+        const secondaryPid = isZombie ? p.ppid : ((p.tree_orphan && p.tree_root && p.tree_root !== p.pid) ? p.tree_root : null);
+        if (secondaryPid) {
+          const target = procById[secondaryPid];
+          if (target && target.can_kill) {
+            html += '    <button type="button" class="sh-btn" data-kill-pid="' + secondaryPid + '" title="' + _shEsc(target.cmd || '') + '">' + (isZombie ? 'kill parent ' : 'kill root ') + secondaryPid + '</button>';
+          }
         }
         html += '  </div>';
 
