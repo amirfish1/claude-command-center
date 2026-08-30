@@ -9205,13 +9205,148 @@ _system_processes_lock = threading.Lock()
 _SYSTEM_PROCESSES_TTL = 3.0
 
 
+# ── Process audit: pattern tables ──────────────────────────────────────────
+# Signals are combined additively; shields are subtractive. Every table below
+# is matched against the full command line (or its basename) of a row from a
+# single `ps` call — there is no per-process subprocess anywhere in this path.
+
+_PROC_DEV_SERVER_RE = re.compile(
+    r"(?:^|[\s/])(?:next-server|next dev|next start|vite|webpack(?:-dev-server)?|nuxt|remix|astro|"
+    r"ng serve|react-scripts|turbopack|nodemon|ts-node-dev|tsx watch|node --watch|bun --hot|"
+    r"storybook|expo start|uvicorn|gunicorn|flask run|runserver|rails s(?:erver)?|artisan serve|"
+    r"hugo server|jekyll serve|parcel|live-server|browser-sync|http-server)(?:\s|$)"
+)
+_PROC_LSP_RE = re.compile(
+    r"tsserver\.js|typingsInstaller|typescript-language-server|pyright-langserver|basedpyright|pylance|"
+    r"\bgopls\b|rust-analyzer|\bclangd\b|\bjdtls\b|lua-language-server|vscode-\w+-language-server|"
+    r"eslintServer\.js|eslint-server|tailwindcss-language-server|copilot(?:-agent|-language-server)|"
+    r"sourcekit-lsp|solargraph|ruby-lsp|intelephense|vue-language-server|svelte-language-server|"
+    r"yaml-language-server|bash-language-server|deno lsp|\bzls\b|haskell-language-server|marksman|"
+    r"texlab|ltex-ls|kotlin-language-server|elixir-ls|omnisharp|csharp-ls|terraform-ls|\bnixd\b|"
+    r"language[-_]server"
+)
+_PROC_MCP_RE = re.compile(r"[-_/.]mcp(?:[\s@\b]|$)|mcp[-_]server|@modelcontextprotocol|playwright-mcp|chrome-devtools-mcp")
+_PROC_MP_WORKER_RE = re.compile(
+    r"multiprocessing\.(?:spawn|resource_tracker|forkserver)|spawn_main\(|resource_tracker import main|"
+    r"loky\.backend|--multiprocessing-fork"
+)
+_PROC_AUTOMATION_BROWSER_RE = re.compile(
+    r"--remote-debugging-(?:pipe|port)|--headless|--enable-automation|chrome-headless-shell|"
+    r"ms-playwright|\.cache/puppeteer|Chrome for Testing|puppeteer_dev_chrome_profile|playwright_\w+_profile"
+)
+_PROC_PARENT_PID_RE = re.compile(r"--parent-pid[= ](\d+)")
+_PROC_GIT_BASES = frozenset((
+    "git", "git-remote-https", "git-remote-http", "git-remote-ssh", "git-credential-osxkeychain",
+    "git-credential-manager", "git-lfs", "gh",
+))
+_PROC_GIT_DAEMON_HINTS = ("fsmonitor--daemon", "credential-cache--daemon", " daemon", "maintenance")
+_PROC_STUCK_CLI_BASES = frozenset((
+    "grep", "head", "tail", "cat", "find", "wc", "awk", "sed", "sort", "xargs", "tee", "jq", "rg",
+    "less", "more", "curl", "wget", "sleep",
+))
+# Long-lived developer daemons that legitimately live under launchd (PPID 1)
+# and never have a TTY. Without this list every one of them reads as an
+# idle >48h orphan and lands in "Suspicious" — observed live: ssh-agent 4.0.
+_PROC_KNOWN_DAEMON_BASES = frozenset((
+    "ssh-agent", "gpg-agent", "dirmngr", "scdaemon", "pinentry",
+    "tmux", "screen", "wezterm-mux-server", "zellij",
+    "dockerd", "containerd", "containerd-shim", "docker", "com.docker.backend", "com.docker.vpnkit",
+    "colima", "limactl", "lima-guestagent", "vfkit", "krunkit", "virtiofsd", "podman", "podman-remote",
+    "ollama", "postgres", "postmaster", "redis-server", "mysqld", "mariadbd", "mongod",
+    "nginx", "caddy", "httpd", "tailscaled", "syncthing", "mutagen", "mutagen-agent", "watchman",
+    "nix-daemon", "cloudflared", "ngrok", "xbar", "unison", "rclone", "gitstatusd",
+    "eslint_d", "prettierd", "code-server", "cursor-server", "emacs", "nvim",
+))
+_PROC_KNOWN_DAEMON_HINTS = ("qemu-system", "emacs --daemon", "nvim --headless --listen", "git fsmonitor--daemon", ".vscode-server", ".cursor-server")
+_PROC_TMP_HINTS = ("/tmp/", "/var/folders/", "/.Trash/", "/private/tmp/", "/private/var/folders/")
+
+_CCC_SOURCE_DIR = os.path.dirname(os.path.abspath(__file__))
+
+
+def _sys_parse_cputime(s):
+    """ps `time` (MM:SS.cc, HH:MM:SS, DD-HH:MM:SS) -> minutes of CPU."""
+    days = 0
+    if "-" in s:
+        d, s = s.split("-", 1)
+        try:
+            days = int(d)
+        except ValueError:
+            return 0.0
+    parts = s.split(":")
+    try:
+        sec = float(parts[-1])
+        mins = int(parts[-2]) if len(parts) >= 2 else 0
+        hours = int(parts[-3]) if len(parts) >= 3 else 0
+    except (ValueError, IndexError):
+        return 0.0
+    return days * 1440 + hours * 60 + mins + sec / 60.0
+
+
+def _sys_launchd_jobs():
+    """pid -> launchd label for every job launchd itself is supervising.
+
+    On macOS a PPID of 1 means either 'launchd started this on purpose' or
+    'the real parent died and launchd adopted it'. `launchctl list` is the
+    only cheap way to tell those apart, and it is one subprocess per snapshot
+    rather than one per row."""
+    out = _sys_run(["/bin/launchctl", "list"], timeout=3) if platform.system() == "Darwin" else ""
+    jobs = {}
+    for line in out.splitlines():
+        parts = line.split("\t")
+        if len(parts) < 3:
+            continue
+        try:
+            jobs[int(parts[0])] = parts[2].strip()
+        except ValueError:
+            continue
+    return jobs
+
+
+def _sys_worktree_gitdir_missing(cwd, _memo):
+    """True when `cwd` (or an ancestor) is a git worktree whose admin dir is
+    gone — the checkout was `git worktree remove`d under a still-running
+    process. Memoised per snapshot; stats only, no subprocess."""
+    if not cwd or cwd == "/":
+        return False
+    d = cwd
+    for _ in range(8):
+        if d in _memo:
+            return _memo[d]
+        dotgit = os.path.join(d, ".git")
+        try:
+            if os.path.isfile(dotgit):
+                with open(dotgit, "r", encoding="utf-8", errors="replace") as f:
+                    head = f.readline().strip()
+                missing = False
+                if head.startswith("gitdir:"):
+                    target = head[len("gitdir:"):].strip()
+                    if not os.path.isabs(target):
+                        target = os.path.join(d, target)
+                    missing = not os.path.exists(target)
+                _memo[d] = missing
+                return missing
+            if os.path.isdir(dotgit):
+                _memo[d] = False
+                return False
+        except OSError:
+            _memo[d] = False
+            return False
+        parent = os.path.dirname(d)
+        if parent == d:
+            break
+        d = parent
+    _memo[cwd] = False
+    return False
+
+
 def _build_system_processes_uncached():
     now = time.time()
     uid = os.getuid() if hasattr(os, "getuid") else None
 
-    ps_cmd = [_SYS_PS, "-axo", "pid=,ppid=,rss=,pcpu=,etime=,stat=,tty=,command="]
+    ps_fmt = "pid=,ppid=,rss=,pcpu=,etime=,time=,stat=,tty=,command="
+    ps_cmd = [_SYS_PS, "-axo", ps_fmt]
     if uid is not None and platform.system() == "Darwin":
-        ps_cmd = [_SYS_PS, "-u", str(uid), "-o", "pid=,ppid=,rss=,pcpu=,etime=,stat=,tty=,command="]
+        ps_cmd = [_SYS_PS, "-u", str(uid), "-o", ps_fmt]
 
     ps_out = _sys_run(ps_cmd, timeout=5)
 
@@ -9226,6 +9361,7 @@ def _build_system_processes_uncached():
         elif uid is not None:
             lsof_cmd += ["-u", str(uid)]
     lsof_out = _sys_run(lsof_cmd, timeout=5)
+    launchd_jobs = _sys_launchd_jobs()
 
     pid_files = {}
     cur_pid = None
@@ -9256,13 +9392,17 @@ def _build_system_processes_uncached():
                     if cur_type == "FIFO":
                         pid_files[cur_pid]["fd0_exists"] = os.path.exists(val)
 
-    procs = []
     my_pid = os.getpid()
     parent_pid = os.getppid()
+    ccc_server_path = os.path.join(_CCC_SOURCE_DIR, "server.py")
+    ccc_worker_path = os.path.join(_CCC_SOURCE_DIR, "ccc_worker.py")
+    empty_files = {"cwd": None, "cwd_exists": True, "fd0": None, "fd0_type": None, "fd0_exists": True}
 
+    # ── pass 1: parse + classify every row (no scoring yet) ──────────────
+    rows = {}
     for line in ps_out.splitlines():
-        parts = line.strip().split(None, 7)
-        if len(parts) < 8:
+        parts = line.strip().split(None, 8)
+        if len(parts) < 9:
             continue
         try:
             pid = int(parts[0])
@@ -9271,73 +9411,220 @@ def _build_system_processes_uncached():
             cpu = float(parts[3])
         except (ValueError, IndexError):
             continue
-        etime_str = parts[4]
-        stat = parts[5]
-        tty = parts[6]
-        cmd = parts[7]
-        etime_min = _sys_parse_etime(etime_str)
-
-        files = pid_files.get(pid, {"cwd": None, "cwd_exists": True, "fd0": None, "fd0_type": None, "fd0_exists": True})
-
-        score = 0.0
-        reasons = []
+        etime_str, cputime_str, stat, tty, cmd = parts[4], parts[5], parts[6], parts[7], parts[8]
+        cmd_base = cmd.split(None, 1)[0].rsplit("/", 1)[-1]
+        label = launchd_jobs.get(pid)
 
         is_system_daemon = (
             cmd.startswith(("/usr/libexec/", "/usr/sbin/", "/System/", "/Library/"))
             or "LAUNCHED_BY_LAUNCHD" in cmd
             or "/System/Library/" in cmd
         )
+        is_automation = bool(_PROC_AUTOMATION_BROWSER_RE.search(cmd))
+        is_helper = "--type=" in cmd and "crashpad" not in cmd
+        is_lsp = bool(_PROC_LSP_RE.search(cmd))
+        is_mcp = bool(_PROC_MCP_RE.search(cmd))
+        is_dev_server = bool(_PROC_DEV_SERVER_RE.search(cmd))
+        is_mp_worker = bool(_PROC_MP_WORKER_RE.search(cmd))
         is_gui = ("/Applications/" in cmd or "Contents/MacOS" in cmd)
-        is_ccc = ("server.py" in cmd or "ccc_worker.py" in cmd or "watchtower" in cmd or pid in (my_pid, parent_pid))
+        # A GUI path is only a shield while the app that owns it is alive.
+        # Automation browsers (Puppeteer/Playwright/chrome-devtools) and any
+        # app *helper* / LSP / MCP that has been reparented to launchd are the
+        # leak we are hunting, not a desktop app.
+        if is_automation or (ppid == 1 and (is_helper or is_lsp or is_mcp)):
+            is_gui = False
+        is_ccc = (
+            pid in (my_pid, parent_pid)
+            or ccc_server_path in cmd
+            or ccc_worker_path in cmd
+            or cmd_base == "ccc_worker.py"
+            or "watchtower.cli" in cmd
+            or (label or "").startswith(("com.github.claude-command-center", "ai.watchtower"))
+        )
+        is_known_daemon = (
+            cmd_base in _PROC_KNOWN_DAEMON_BASES
+            or any(h in cmd for h in _PROC_KNOWN_DAEMON_HINTS)
+            or (cmd_base == "ssh" and re.search(r"\s-[a-zA-Z]*[NLRDWM]", cmd) is not None)
+        )
         has_tty = bool(tty) and tty not in ("??", "?", "-", "")
+        # Anchored = something is deliberately keeping this alive; an orphan
+        # tree never roots at an anchored process.
+        anchored = bool(label) or is_system_daemon or is_gui or is_ccc or is_known_daemon or has_tty
+
+        rows[pid] = {
+            "pid": pid, "ppid": ppid, "cmd": cmd, "cmd_base": cmd_base, "cpu": cpu, "rss_mb": rss_mb,
+            "etime_str": etime_str, "etime_min": _sys_parse_etime(etime_str),
+            "cputime_min": _sys_parse_cputime(cputime_str), "stat": stat, "tty": tty,
+            "has_tty": has_tty, "label": label, "is_system_daemon": is_system_daemon,
+            "is_gui": is_gui, "is_ccc": is_ccc, "is_known_daemon": is_known_daemon,
+            "is_automation": is_automation, "is_helper": is_helper, "is_lsp": is_lsp,
+            "is_mcp": is_mcp, "is_dev_server": is_dev_server, "is_mp_worker": is_mp_worker,
+            "anchored": anchored, "files": pid_files.get(pid, empty_files),
+        }
+
+    # ── pass 2: orphan trees ─────────────────────────────────────────────
+    # A row whose ancestry ends at an un-anchored PPID-1 process inherits
+    # that process's "launcher is gone" status: `npm exec next dev` (PPID 1)
+    # -> `next dev` -> `next-server` at 90% CPU is one leak, not three rows.
+    def _orphan_root(pid):
+        seen = 0
+        cur = rows.get(pid)
+        while cur is not None and seen < 64:
+            seen += 1
+            if cur["ppid"] == 1:
+                return cur["pid"] if not cur["anchored"] else None
+            if cur["anchored"]:
+                return None
+            cur = rows.get(cur["ppid"])
+        return None
+
+    for r in rows.values():
+        root = _orphan_root(r["pid"])
+        r["tree_root"] = root
+        r["tree_orphan"] = root is not None and root != r["pid"]
+
+    # ── pass 3: score ────────────────────────────────────────────────────
+    gitdir_memo = {}
+    runaway_children = {}  # orphan-root pid -> first runaway/stuck descendant pid
+    procs = []
+    for r in rows.values():
+        pid, ppid, cmd, stat, cpu = r["pid"], r["ppid"], r["cmd"], r["stat"], r["cpu"]
+        files = r["files"]
+        etime_min = r["etime_min"]
+        has_tty = r["has_tty"]
+        is_orphan = ppid == 1 and not r["anchored"]
+        tree_orphan = r["tree_orphan"]
+        detached = is_orphan or tree_orphan
+        score = 0.0
+        reasons = []
+        shields = []
+        kill_hint = None
+
+        def bump(full, half, text_full, text_half=None):
+            # Category boosts: full weight when this row itself is orphaned,
+            # half when it merely hangs under an orphaned root.
+            nonlocal score
+            if is_orphan:
+                score += full
+                reasons.append(text_full)
+            elif tree_orphan:
+                score += half
+                reasons.append(text_half or text_full)
 
         if not files["cwd_exists"]:
             score += 4.5
             reasons.append("Deleted CWD")
+        elif _sys_worktree_gitdir_missing(files["cwd"], gitdir_memo):
+            score += 3.5
+            reasons.append("Worktree removed (gitdir gone)")
         if files["fd0_type"] == "FIFO" and not files["fd0_exists"]:
             score += 4.5
             reasons.append("Unlinked stdin FIFO")
         if stat.startswith("Z") or "<defunct>" in cmd:
             score += 5.0
-            reasons.append("Zombie process")
+            reasons.append("Zombie process (reap: signal parent pid %d)" % ppid)
+            kill_hint = "zombie; signals are no-ops, terminate or restart parent pid %d" % ppid
 
         if any(k in cmd for k in ("fake_claude", "two-node", "test_")):
             score += 3.0
             reasons.append("Test artifact")
-        if files["cwd"] and any(p in files["cwd"] for p in ("/tmp/", "/var/folders/", "/.Trash/")):
+        if files["cwd"] and any(p in files["cwd"] for p in _PROC_TMP_HINTS):
             score += 1.5
             reasons.append("Temp/Trash path")
 
-        cmd_base = cmd.split(None, 1)[0].rsplit("/", 1)[-1]
-        if cmd_base in ("grep", "head", "tail", "cat", "find", "wc", "awk", "sed") and ppid == 1 and etime_min >= 10:
+        m = _PROC_PARENT_PID_RE.search(cmd)
+        if m:
+            declared = int(m.group(1))
+            if declared not in rows and declared != 1:
+                score += 4.0
+                reasons.append("Declared parent pid %d is gone" % declared)
+
+        cmd_base = r["cmd_base"]
+        stuck_cli = cmd_base in _PROC_STUCK_CLI_BASES and detached and etime_min >= 10
+        if stuck_cli:
             score += 3.5
             reasons.append("Stuck orphan CLI")
 
-        if ppid == 1 and not is_system_daemon and not is_gui:
+        if r["is_automation"] and not r["is_helper"]:
+            if is_orphan:
+                score += 5.0
+                reasons.append("Leaked headless browser (launcher gone)")
+            elif tree_orphan:
+                score += 3.0
+                reasons.append("Headless browser under orphaned tree")
+        elif r["is_automation"] and r["is_helper"] and detached:
+            score += 3.0
+            reasons.append("Helper of leaked headless browser (root pid %s)" % r["tree_root"])
+        elif r["is_helper"] and ppid == 1:
+            score += 4.0
+            reasons.append("Orphaned app helper (main app gone)")
+
+        if r["is_lsp"]:
+            bump(4.0, 2.0, "Orphaned language server (editor gone)", "Language server under orphaned tree")
+        if r["is_mcp"]:
+            bump(3.5, 1.5, "Orphaned MCP server (host gone)", "MCP server under orphaned tree")
+        if r["is_mp_worker"]:
+            bump(4.5, 2.0, "Orphaned multiprocessing worker (coordinator gone)", "Pool worker under orphaned tree")
+        if r["is_dev_server"]:
+            bump(2.5, 1.25, "Dev server, launcher gone", "Dev server under orphaned tree")
+
+        if cmd_base in _PROC_GIT_BASES and not has_tty and etime_min >= 30 \
+                and not any(h in cmd for h in _PROC_GIT_DAEMON_HINTS):
+            score += 3.0
+            reasons.append("Stuck git/gh op (>30m, no TTY)")
+        if cmd_base == "ssh" and not has_tty and etime_min >= 30 and not r["is_known_daemon"] \
+                and ("git@" in cmd or "GIT_PROTOCOL" in cmd):
+            score += 2.5
+            reasons.append("Stuck git transport (ssh, >30m, no TTY)")
+
+        if is_orphan:
             score += 2.0
             reasons.append("Orphaned (PPID 1)")
-
-        if etime_min >= 2880:
+        elif tree_orphan:
             score += 1.5
-            reasons.append("Running >48h")
-        elif etime_min >= 120:
-            score += 0.5
-            reasons.append("Running >2h")
+            reasons.append("Parent tree orphaned (root pid %d)" % r["tree_root"])
+
+        if not r["anchored"] or has_tty:
+            if etime_min >= 2880:
+                score += 1.5
+                reasons.append("Running >48h")
+            elif etime_min >= 120:
+                score += 0.5
+                reasons.append("Running >2h")
+
+        runaway = False
+        cpu_ratio = (r["cputime_min"] / etime_min) if etime_min >= 30 else 0.0
+        if cpu_ratio >= 0.5 and not has_tty and not r["is_ccc"]:
+            score += 2.0
+            runaway = True
+            reasons.append("Sustained high CPU (%d%% avg over %dh, no TTY)" % (round(cpu_ratio * 100), max(1, round(etime_min / 60))))
+        if cpu >= 90.0 and etime_min >= 15 and detached and not has_tty:
+            score += 2.0
+            runaway = True
+            reasons.append("Spinning orphan (%d%% CPU)" % round(cpu))
+        if (runaway or stuck_cli) and r["tree_root"] and r["tree_root"] != pid:
+            runaway_children.setdefault(r["tree_root"], pid)
 
         if cpu == 0.0 and stat.startswith("S"):
             score += 0.5
 
-        if is_ccc:
+        if r["is_ccc"]:
             score -= 10.0
-        elif is_gui:
+            shields.append("CCC component")
+        elif r["is_gui"]:
             score -= 6.0
-        elif is_system_daemon:
+            shields.append("GUI app")
+        elif r["is_system_daemon"]:
             score -= 7.0
+            shields.append("macOS system daemon")
+        elif r["is_known_daemon"]:
+            score -= 4.0
+            shields.append("Known dev daemon")
+        if r["label"]:
+            shields.append("launchd job: %s" % r["label"])
         if has_tty:
             score -= 4.0
-
-        score = max(0.0, min(10.0, round(score, 1)))
-        risk = "critical" if score >= 7.0 else ("suspicious" if score >= 4.0 else ("low" if score >= 1.5 else "safe"))
+            shields.append("Attached TTY")
 
         procs.append({
             "pid": pid,
@@ -9345,22 +9632,41 @@ def _build_system_processes_uncached():
             "cmd": cmd,
             "cmd_short": _sys_label(cmd),
             "cpu": cpu,
-            "rss_mb": round(rss_mb, 1),
-            "etime": etime_str,
+            "cpu_ratio": round(cpu_ratio, 2),
+            "cputime_min": round(r["cputime_min"], 1),
+            "rss_mb": round(r["rss_mb"], 1),
+            "etime": r["etime_str"],
             "etime_min": round(etime_min, 1),
             "stat": stat,
-            "tty": tty,
+            "tty": r["tty"],
             "has_tty": has_tty,
             "cwd": files["cwd"],
             "cwd_exists": files["cwd_exists"],
             "fd0": files["fd0"],
             "fd0_type": files["fd0_type"],
             "fd0_exists": files["fd0_exists"],
-            "score": score,
-            "risk": risk,
+            "launchd_label": r["label"],
+            "tree_root": r["tree_root"],
+            "tree_orphan": tree_orphan,
+            "_raw_score": score,
             "reasons": reasons,
-            "can_kill": not is_ccc and pid > 1 and pid != my_pid and pid != parent_pid,
+            "shields": shields,
+            "kill_hint": kill_hint,
+            "can_kill": not r["is_ccc"] and pid > 1 and pid != my_pid and pid != parent_pid,
         })
+
+    # ── pass 4: an orphan root that owns a runaway/stuck child is the thing
+    # to kill — `bash -c "... | grep -R | head"` adopted by launchd is one
+    # leak, and terminating the root takes the pipeline with it.
+    for p in procs:
+        child = runaway_children.get(p["pid"])
+        if child is not None and p["tree_root"] == p["pid"]:
+            p["_raw_score"] += 2.0
+            p["reasons"].append("Owns runaway/stuck child (pid %d)" % child)
+            p["kill_hint"] = "root of leaked tree; terminating it takes pid %d with it" % child
+        score = max(0.0, min(10.0, round(p.pop("_raw_score"), 1)))
+        p["score"] = score
+        p["risk"] = "critical" if score >= 7.0 else ("suspicious" if score >= 4.0 else ("low" if score >= 1.5 else "safe"))
 
     procs.sort(key=lambda x: (x["score"], x["cpu"], x["rss_mb"]), reverse=True)
     high_count = sum(1 for p in procs if p["score"] >= 7.0)
