@@ -3164,13 +3164,21 @@
   .event.user_text.peer-message .user-msg { border-left: 2px solid color-mix(in srgb, var(--accent, #4c8bf5) 45%, transparent); padding-left: 8px; }
   /* Cross-session (UDS peer) delivery gets its own green tint so it reads
      distinctly from a normal chat turn -- e.g. the WatchTower reconciler's
-     release instruction, or any other Claude-to-Claude peer message. */
+     release instruction, or any other Claude-to-Claude peer message.
+     CCC-1001: liked the green, disliked how loud it read -- dimmed the
+     tint/border/glow and the text itself goes smaller + italic instead of
+     the bright/bold default. */
   .conversations-view .event.user_text.peer-message,
   .conv-pane.has-conv-bg .conversations-view .event.user_text.peer-message {
     background:
-      linear-gradient(135deg, rgba(63, 185, 80, 0.16), rgba(63, 185, 80, 0.08) 70%) padding-box,
-      linear-gradient(135deg, rgba(63, 185, 80, 0.55), rgba(63, 185, 80, 0.25) 70%) border-box;
-    box-shadow: 0 2px 14px rgba(63, 185, 80, 0.08);
+      linear-gradient(135deg, rgba(63, 185, 80, 0.10), rgba(63, 185, 80, 0.05) 70%) padding-box,
+      linear-gradient(135deg, rgba(63, 185, 80, 0.35), rgba(63, 185, 80, 0.15) 70%) border-box;
+    box-shadow: 0 2px 14px rgba(63, 185, 80, 0.05);
+  }
+  .conversations-view .event.user_text.peer-message .user-msg {
+    font-size: 13px;
+    font-style: italic;
+    font-weight: 400;
   }
   .event.system.peer-held .system-compact-text { opacity: 0.7; }
   .event.system.peer-held .peer-held-preview { font-style: italic; }
@@ -23132,9 +23140,9 @@ body.has-gc-reader .pwa-install-banner {
    source order. */
 .conv-pane[data-conv-bg="stitch"] .conversations-view .event.user_text.peer-message:not(.is-pinned-in-sticky) {
   background:
-    linear-gradient(135deg, rgba(63, 185, 80, 0.16), rgba(63, 185, 80, 0.08) 70%) padding-box,
-    linear-gradient(135deg, rgba(63, 185, 80, 0.55), rgba(63, 185, 80, 0.25) 70%) border-box !important;
-  box-shadow: 0 2px 14px rgba(63, 185, 80, 0.08) !important;
+    linear-gradient(135deg, rgba(63, 185, 80, 0.10), rgba(63, 185, 80, 0.05) 70%) padding-box,
+    linear-gradient(135deg, rgba(63, 185, 80, 0.35), rgba(63, 185, 80, 0.15) 70%) border-box !important;
+  box-shadow: 0 2px 14px rgba(63, 185, 80, 0.05) !important;
 }
 
 /* Remove terminal prompt from subsequent user messages in the session */
