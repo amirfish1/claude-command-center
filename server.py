@@ -60391,7 +60391,89 @@ def _inject_blocked_recent_entries(limit=20):
     return list(_inject_blocked_memo["value"])[-limit:]
 
 
-def _inject_text_into_session(
+# --- CCC-1000 Phase 1: the inject result contract ---------------------------
+# Every inject result carries a uniform description of what actually happened,
+# so a caller can distinguish "delivered into the running turn" from "queued
+# until the turn ends" from "blocked" without pattern-matching on `via`. The
+# contract is stamped once, in the wrapper below, instead of at the router's
+# ~40 return sites. Purely additive: nothing existing is renamed or overwritten.
+_INJECT_CONTRACT_VERSION = 1
+
+# `via` values that mean the delivery cut into a turn in progress rather than
+# waiting for a seam. Explicit on purpose -- guessing here would make the
+# `aborted` field a lie, and the whole point of the contract is to be trusted.
+_INJECT_ABORTING_VIA = frozenset({
+    "spawn-sigint",
+    "headless-sigint",
+    "codex-app-interrupt",
+    "codex-steer",
+})
+
+_INJECT_TRANSPORT_BY_VIA = {
+    "uds": "uds",
+    "terminal-queued": "queue",
+    "spawn-fifo": "fifo",
+    "live-spawn-clear": "fifo",
+    "spawn-sigint": "fifo",
+    "headless-sigint": "fifo",
+    "codex-app-interrupt": "codex-app-server",
+    "codex-steer": "codex-app-server",
+    "terminal-control": "terminal",
+    "tmux": "terminal",
+    "hidden-pty": "terminal",
+    "bg-agent-pty": "terminal",
+}
+
+
+def _annotate_inject_result(result, *, requested, force_queue=False):
+    """Stamp the result contract onto whatever the router returned."""
+    if not isinstance(result, dict):
+        return result
+    via = str(result.get("via") or "")
+    if result.get("ok"):
+        effect = "queued" if result.get("queued") else "delivered"
+    elif result.get("blocked"):
+        effect = "blocked"
+    else:
+        effect = "failed"
+    aborted = bool(result.get("interrupted")) or via in _INJECT_ABORTING_VIA
+    if effect == "queued":
+        landed = "after_turn"
+    elif effect != "delivered":
+        landed = "none"
+    elif aborted:
+        landed = "now"
+    elif via == "uds":
+        # The UDS adapter sends priority=next, which Claude injects into the
+        # running turn without aborting it (measured 2026-08-30, CCC-1000).
+        landed = "next_seam"
+    else:
+        landed = "unknown"
+    result.setdefault("contract", _INJECT_CONTRACT_VERSION)
+    result.setdefault("requested", str(requested or "send"))
+    result.setdefault("effect", effect)
+    result.setdefault("aborted", aborted)
+    result.setdefault("landed", landed)
+    result.setdefault("transport", _INJECT_TRANSPORT_BY_VIA.get(via, via or "unknown"))
+    if force_queue:
+        result.setdefault("reason", "caller forced queueing")
+    return result
+
+
+def _inject_text_into_session(session_id, text, **kwargs):
+    """Route `text` to a session, then stamp the CCC-1000 result contract.
+
+    Every keyword of the router below is keyword-only, so forwarding **kwargs
+    preserves the existing signature exactly.
+    """
+    return _annotate_inject_result(
+        _inject_text_into_session_router(session_id, text, **kwargs),
+        requested=kwargs.get("mode", "send"),
+        force_queue=bool(kwargs.get("force_queue", False)),
+    )
+
+
+def _inject_text_into_session_router(
     session_id,
     text,
     *,
