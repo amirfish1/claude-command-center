@@ -268,7 +268,9 @@
     if (!item) return '';
     var candidates = [item.note, item.text, item.title];
     for (var i = 0; i < candidates.length; i++) {
-      var lines = String(candidates[i] || '').split(/\r?\n/);
+      // Machine markers (<!-- digest-finding-id: … -->) must never become the
+      // row/detail title — strip comments before deriving it.
+      var lines = String(candidates[i] || '').replace(/<!--[\s\S]*?-->/g, ' ').split(/\r?\n/);
       var kept = [];
       for (var j = 0; j < lines.length; j++) {
         var line = lines[j].trim();
@@ -2195,6 +2197,42 @@
       + esc(label) + '</button>';
   }
 
+  // Linked conversation (e.g. the Becky thread a digest ticket describes).
+  // The server resolves it through the user's local queue-context providers;
+  // fetched once per ref (renderDetail re-runs every 5s poll) and rendered
+  // from this cache. state-free module locals on purpose: switching tickets
+  // resets them.
+  var convCtx = null; // { ref, status: 'loading'|'done'|'failed', data }
+  function maybeLoadTicketContext(item) {
+    if (!item || !item.ref || !window.CCCTicketProse) return;
+    if (convCtx && convCtx.ref === item.ref) return;
+    convCtx = { ref: item.ref, status: 'loading', data: null };
+    fetch('/api/queue/context?ref=' + encodeURIComponent(item.ref), { cache: 'no-store' })
+      .then(function (r) { return r.json(); })
+      .then(function (d) {
+        if (!convCtx || convCtx.ref !== item.ref) return;
+        convCtx = { ref: item.ref, status: 'done', data: d };
+        renderDetail();
+      })
+      .catch(function () {
+        if (convCtx && convCtx.ref === item.ref) convCtx.status = 'failed';
+      });
+  }
+  function ticketContextHtml(item) {
+    if (!window.CCCTicketProse || !convCtx || convCtx.ref !== item.ref) return '';
+    if (convCtx.status !== 'done') return '';
+    var d = convCtx.data;
+    if (d && d.ok && d.transcript && Array.isArray(d.transcript.turns) && d.transcript.turns.length) {
+      return '<section class="q2-sec"><div class="q2-sec-label">Linked conversation</div>'
+        + window.CCCTicketProse.renderTranscript(d.transcript) + '</section>';
+    }
+    if (d && d.found && d.error) {
+      return '<section class="q2-sec"><div class="q2-sec-label">Linked conversation</div>'
+        + '<div class="tp-conv-status is-error">' + esc(d.error) + '</div></section>';
+    }
+    return '';
+  }
+
   function renderDetail() {
     var host = $('q2Detail');
     if (!host) return;
@@ -2236,8 +2274,10 @@
 
     var st = statusOf(item);
     var parts = splitFirstSentence(titleOf(item));
-    var prompt = (item.text && item.text.trim()) || '';
+    // _github_body is the full issue body; `text` can be a truncated copy.
+    var prompt = String(item._github_body || item.text || '').trim();
     var showPrompt = !!prompt && prompt !== String(item.note || '').trim();
+    maybeLoadTicketContext(item);
     var sid = sessionOf(item);
     var editCount = (Array.isArray(item.timeline) ? item.timeline : [])
       .filter(function (ev) { return ev && ev.event === 'edit'; }).length;
@@ -2380,8 +2420,12 @@
       + reopenFormHtml
       + (showPrompt
           ? '<section class="q2-sec"><div class="q2-sec-label">Full prompt</div>'
-            + '<pre class="q2-pre">' + esc(prompt) + '</pre></section>'
+            + (window.CCCTicketProse
+                ? window.CCCTicketProse.render(prompt)
+                : '<pre class="q2-pre">' + esc(prompt) + '</pre>')
+            + '</section>'
           : '')
+      + ticketContextHtml(item)
       + resolveActionsHtml
       + '<section class="q2-sec"><div class="q2-sec-label">Activity'
       + (editCount
@@ -2451,10 +2495,14 @@
     // innerHTML on every 5s poll reset that scroll to 0 mid-read (CCC-847).
     // Preserve by position since these blocks have no stable id.
     var preScroll = [];
-    top.querySelectorAll('.q2-pre').forEach(function (el) { preScroll.push(el.scrollTop); });
+    top.querySelectorAll('.q2-pre, .tp-body, .tp-conv').forEach(function (el) { preScroll.push(el.scrollTop); });
     top.innerHTML = topHtml;
-    top.querySelectorAll('.q2-pre').forEach(function (el, i) {
+    top.querySelectorAll('.q2-pre, .tp-body, .tp-conv').forEach(function (el, i) {
       if (preScroll[i]) el.scrollTop = preScroll[i];
+      else if (preScroll[i] == null && el.classList.contains('tp-conv')) {
+        // First paint of a transcript: land on the newest messages.
+        el.scrollTop = el.scrollHeight;
+      }
     });
     top.querySelectorAll('[data-q2-input]').forEach(function (el) {
       var k = el.getAttribute('data-q2-input');
@@ -2596,7 +2644,7 @@
     if (!ref) return;
 
     if (act === 'copy') {
-      var text = (state.detail && state.detail.text) || titleOf(state.detail) || '';
+      var text = (state.detail && (state.detail._github_body || state.detail.text)) || titleOf(state.detail) || '';
       try { await navigator.clipboard.writeText(text); note('Prompt copied'); }
       catch (e) { note('Could not copy: ' + e.message); }
       return;

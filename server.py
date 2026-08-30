@@ -2710,6 +2710,124 @@ def _uxq_not_found_error(ref):
     )
 
 
+# --- Queue context providers (linked-conversation preview) -------------------
+# Optional, user-local config mapping a queue name (or "*") to providers that
+# resolve a ticket's linked conversation — e.g. the Becky owner/client thread
+# a digest ticket describes. Each provider:
+#   {"extract": "<regex, first capture group = conversation key>",
+#    "command": ["argv", "…", "{key}"],   # {key} substituted, stdout = JSON
+#    "cwd": "/abs/path",                   # optional
+#    "timeout_s": 90, "cache_s": 300}      # optional
+# The command's stdout contract is {"ok":true, "kind":…, "org":…, "turns":[…]}
+# (see the ticket-prose renderer). Commands come from the user's OWN config
+# file — the same trust level as Claude Code hooks; nothing in a ticket body
+# can choose or alter the command, only the captured key is substituted.
+# This never runs per-row: only on explicit ticket-detail opens (perf gates).
+_QUEUE_CONTEXT_FILE = COMMAND_CENTER_STATE_DIR / "queue-context.json"
+_queue_context_cfg_cache = {"mtime": None, "cfg": {}}
+_queue_context_result_cache = {}  # (queue, key) -> (ts, ttl_s, payload)
+
+
+def _queue_context_providers(queue):
+    try:
+        mtime = _QUEUE_CONTEXT_FILE.stat().st_mtime
+    except OSError:
+        return []
+    cache = _queue_context_cfg_cache
+    if cache["mtime"] != mtime:
+        try:
+            cfg = json.loads(_QUEUE_CONTEXT_FILE.read_text())
+        except Exception:
+            cfg = {}
+        cache["mtime"] = mtime
+        cache["cfg"] = cfg if isinstance(cfg, dict) else {}
+    provs = []
+    for key in (queue, "*"):
+        val = cache["cfg"].get(key)
+        if isinstance(val, dict):
+            provs.append(val)
+        elif isinstance(val, list):
+            provs.extend(p for p in val if isinstance(p, dict))
+    return provs
+
+
+def _queue_context_lookup(item):
+    """Resolve a ticket's linked conversation via the user's providers.
+
+    Returns a JSON-able payload; ``found`` distinguishes "no key in the ticket"
+    (section stays hidden client-side) from "key found but fetch failed"
+    (section shows the error).
+    """
+    queue = str(item.get("project") or "")
+    provs = _queue_context_providers(queue)
+    if not provs:
+        return {"ok": True, "configured": False, "found": False}
+    hay = "\n".join(
+        str(item.get(f) or "") for f in ("_github_body", "text", "note")
+    )
+    now = time.time()
+
+    def _cached_or_run(ck, ttl_ok, payload_fn):
+        hit = _queue_context_result_cache.get(ck)
+        if hit and (now - hit[0]) < hit[1]:
+            return hit[2]
+        payload = payload_fn()
+        # Failures cache briefly too, so a broken provider can't burn a slow
+        # subprocess on every modal open.
+        ttl = ttl_ok if payload.get("ok") else min(30.0, ttl_ok)
+        _queue_context_result_cache[ck] = (now, ttl, payload)
+        if len(_queue_context_result_cache) > 64:
+            oldest = min(_queue_context_result_cache, key=lambda k: _queue_context_result_cache[k][0])
+            _queue_context_result_cache.pop(oldest, None)
+        return payload
+
+    for prov in provs:
+        pat = prov.get("extract") or ""
+        cmd = prov.get("command")
+        if not pat or not isinstance(cmd, list) or not cmd:
+            continue
+        try:
+            m = re.search(pat, hay)
+        except re.error:
+            continue
+        if not m:
+            continue
+        key = m.group(1) if m.groups() else m.group(0)
+
+        def _run(prov=prov, key=key):
+            argv = [str(a).replace("{key}", key) for a in cmd]
+            timeout_s = float(prov.get("timeout_s") or 90)
+            try:
+                proc = subprocess.run(
+                    argv, cwd=prov.get("cwd") or None,
+                    capture_output=True, text=True, timeout=timeout_s,
+                )
+            except subprocess.TimeoutExpired:
+                return {"ok": False, "found": True, "key": key,
+                        "error": f"context provider timed out after {int(timeout_s)}s"}
+            except OSError as e:
+                return {"ok": False, "found": True, "key": key,
+                        "error": f"context provider failed to start: {e}"}
+            if proc.returncode != 0:
+                tail = (proc.stderr or proc.stdout or "").strip().splitlines()
+                return {"ok": False, "found": True, "key": key,
+                        "error": "context provider failed: " + (tail[-1] if tail else f"exit {proc.returncode}")}
+            try:
+                transcript = json.loads(proc.stdout.strip() or "{}")
+            except ValueError:
+                return {"ok": False, "found": True, "key": key,
+                        "error": "context provider printed invalid JSON"}
+            if not isinstance(transcript, dict) or not transcript.get("ok"):
+                err = transcript.get("error") if isinstance(transcript, dict) else None
+                return {"ok": False, "found": True, "key": key,
+                        "error": str(err or "provider returned ok:false")}
+            return {"ok": True, "configured": True, "found": True,
+                    "key": key, "transcript": transcript}
+
+        return _cached_or_run((queue, key), float(prov.get("cache_s") or 300), _run)
+    return {"ok": True, "configured": True, "found": False}
+
+
 import objects_store  # durable server-side Flow object/parent/order state (GOAL-3/4)
 PROJECTS_ROOT = Path.home() / ".claude" / "projects"
 # User-picked repos that live outside the $HOME scan (e.g. ~/dev/foo, /workspaces/bar).
@@ -68052,6 +68170,24 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                     self.send_json({"ok": False, "error": _uxq_not_found_error(ref)}, 404)
                     return
                 self.send_json({"ok": True, "item": _uxq_item_payload(item)})
+            except Exception as e:
+                self.send_json({"ok": False, "error": str(e)}, 500)
+        elif path == "/api/queue/context":
+            # Linked-conversation preview for one ticket (see
+            # _queue_context_lookup). May run a user-configured subprocess for
+            # up to its timeout — fine under ThreadingHTTPServer, and only
+            # ever triggered by an explicit ticket-detail open.
+            qs = urllib.parse.parse_qs(parsed.query)
+            ref = (qs.get("ref", [""])[0] or "").strip()
+            if not ref:
+                self.send_json({"ok": False, "error": "ref required"}, 400)
+                return
+            try:
+                item = _q.get(ref)
+                if not item:
+                    self.send_json({"ok": False, "error": _uxq_not_found_error(ref)}, 404)
+                    return
+                self.send_json(_queue_context_lookup(item))
             except Exception as e:
                 self.send_json({"ok": False, "error": str(e)}, 500)
         elif path == "/api/queue/status" or path == "/api/ux-fixes/health":

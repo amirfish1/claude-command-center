@@ -42636,7 +42636,32 @@
   }
   function _uxqItemPrompt(item) {
     if (!item) return '';
-    return String(item.text || item.note || '');
+    // _github_body is the full issue body; `text` can be a truncated copy.
+    return String(item._github_body || item.text || item.note || '');
+  }
+  // Fetch the transcript a ticket points at (server resolves it via the
+  // user's local queue-context providers, e.g. the Becky conversation a
+  // digest ticket describes) and reveal the hidden section if one exists.
+  async function _uxqLoadLinkedConversation(modal, ref) {
+    const sec = modal.querySelector('.uxq-td-conv-sec');
+    const body = modal.querySelector('.uxq-td-conv-body');
+    if (!sec || !body || !window.CCCTicketProse) return;
+    try {
+      const res = await fetch('/api/queue/context?ref=' + encodeURIComponent(ref), { cache: 'no-store' });
+      const d = await res.json().catch(() => ({}));
+      if (!modal.isConnected) return;
+      if (d && d.ok && d.transcript && Array.isArray(d.transcript.turns) && d.transcript.turns.length) {
+        sec.hidden = false;
+        body.innerHTML = window.CCCTicketProse.renderTranscript(d.transcript);
+        const conv = body.querySelector('.tp-conv');
+        if (conv) conv.scrollTop = conv.scrollHeight;
+      } else if (d && d.found && d.error) {
+        // A provider matched a conversation key but the fetch failed — say so
+        // instead of silently showing nothing.
+        sec.hidden = false;
+        body.innerHTML = '<div class="tp-conv-status is-error">' + escapeHtml(d.error) + '</div>';
+      }
+    } catch (_) { /* no providers configured / server offline — stay hidden */ }
   }
   function _uxqItemTitle(item) {
     // Returns the full note/text (boilerplate stripped, no line/char cap) so
@@ -42713,9 +42738,17 @@
     const ref = _uxqItemRef(item);
     const promptText = _uxqItemPrompt(item);
     const detailTitle = _uxqItemTitle(item);
+    // GitHub-synced tickets: the note is the raw issue body head, often led by
+    // machine markers like <!-- digest-finding-id: … -->. Their title is not
+    // editable here anyway (edits 404 against the GitHub backend), so display
+    // a cleaned title instead of the marker.
+    const githubBacked = String(item.source || '') === 'github' || !!item.github_repo;
+    const displayTitle = (githubBacked && window.CCCTicketProse)
+      ? (window.CCCTicketProse.cleanForTitle(detailTitle) || detailTitle)
+      : detailTitle;
     // Long ticket notes are prose, not one enormous heading. Keep the opening
     // sentence prominent while preserving the complete, editable note below it.
-    const titleParts = splitFirstSentence(detailTitle);
+    const titleParts = splitFirstSentence(displayTitle);
     const status = item.needs_input ? 'blocked' : (item.status || 'open');
     const timeline = Array.isArray(item.timeline) ? item.timeline : [];
 
@@ -42762,14 +42795,29 @@
         + '</div></div>'
       : '';
 
-    // Full prompt (only if different from note/title)
-    const showPrompt = !!(item.text && item.text.trim() !== (item.note || '').trim());
+    // Full prompt (only if different from note/title). GitHub-backed items
+    // carry the FULL issue body in _github_body while `text` may be a
+    // truncated copy — prefer the full one. Rendered through the shared
+    // ticket-prose renderer (readable prose, meta chips, highlighted quotes)
+    // with the old raw <pre> as fallback if the script failed to load.
+    const fullBody = String(item._github_body || item.text || '');
+    const showPrompt = !!(fullBody.trim() && fullBody.trim() !== (item.note || '').trim());
     const promptHtml = showPrompt
       ? '<div class="uxq-td-sec">'
         + '<div class="uxq-td-sec-label">Full prompt</div>'
-        + '<pre class="uxq-td-prompt">' + escapeHtml(item.text) + '</pre>'
+        + (window.CCCTicketProse
+            ? window.CCCTicketProse.render(fullBody)
+            : '<pre class="uxq-td-prompt">' + escapeHtml(fullBody) + '</pre>')
         + '</div>'
       : '';
+    // Linked conversation (e.g. the Becky owner/client thread a digest ticket
+    // is about) — filled in async by _uxqLoadLinkedConversation after the
+    // modal mounts; stays hidden unless the server resolves a transcript.
+    const convSecHtml =
+      '<div class="uxq-td-sec uxq-td-conv-sec" hidden>'
+      + '<div class="uxq-td-sec-label">Linked conversation</div>'
+      + '<div class="uxq-td-conv-body"></div>'
+      + '</div>';
 
     // Timeline event builder
     function _tlEvt(cls, headHtml, bodyHtml) {
@@ -43025,7 +43073,8 @@
       +   '<button type="button" class="uxq-td-x" aria-label="Close" data-ux-close>×</button>'
       + '</div>'
       + '<div class="uxq-td-title-wrap">'
-      +   '<div class="uxq-td-title" contenteditable="true" spellcheck="true" data-field="note" role="textbox" aria-label="Ticket title">'
+      +   '<div class="uxq-td-title"' + (githubBacked ? '' : ' contenteditable="true"')
+      +   ' spellcheck="true" data-field="note" role="textbox" aria-label="Ticket title">'
       +   '<span class="uxq-td-title-first">' + escapeHtml(titleParts[0]) + '</span>'
       +   (titleParts[1] ? '<span class="uxq-td-title-rest">' + escapeHtml(titleParts[1]) + '</span>' : '')
       +   '</div>'
@@ -43033,6 +43082,7 @@
       + '<div class="uxq-td-cols">'
       +   '<div class="uxq-td-main">'
       +     promptHtml
+      +     convSecHtml
       +     imagesHtml
       +     '<div class="uxq-td-sec"><div class="uxq-td-sec-label">Activity' + editToggleHtml + '</div>'
       +       '<div class="uxq-timeline">' + tlHtml + '</div>'
@@ -43056,6 +43106,7 @@
       + '</div>';
 
     document.body.appendChild(modal);
+    _uxqLoadLinkedConversation(modal, ref);
 
     const close = () => { modal.remove(); document.removeEventListener('keydown', onKey, true); };
     const onKey = (e) => { if (e.key === 'Escape') { e.preventDefault(); close(); } };

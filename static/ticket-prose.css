@@ -1,0 +1,190 @@
+/* ticket-prose.css — styles for the shared ticket body / transcript renderer
+   (ticket-prose.js). Loaded by both index.html and q2.html. Colors are
+   self-contained dark-theme values (no dependency on either page's vars). */
+
+.tp-body {
+  font-family: Inter, -apple-system, sans-serif;
+  font-size: 13.5px;
+  line-height: 1.6;
+  color: #cdd6e4;
+  max-width: 74ch;
+  overflow-y: auto;
+  max-height: 55vh;
+}
+.tp-body .tp-p { margin: 0 0 0.85em; }
+.tp-body .tp-p:last-child { margin-bottom: 0; }
+.tp-h {
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: #8fa3bd;
+  margin: 1.2em 0 0.4em;
+}
+.tp-ul { margin: 0 0 0.85em; padding-left: 1.3em; }
+.tp-ul li { margin: 0.25em 0; }
+.tp-fence {
+  background: rgba(255, 255, 255, 0.05);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 6px;
+  padding: 8px 10px;
+  font-size: 12px;
+  overflow-x: auto;
+  white-space: pre-wrap;
+}
+
+/* meta strip: Studio / Evidence time / Finding … */
+.tp-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 14px;
+  margin: 0 0 12px;
+  padding: 8px 10px;
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid rgba(255, 255, 255, 0.07);
+  border-radius: 8px;
+}
+.tp-meta-item { display: inline-flex; align-items: baseline; gap: 6px; min-width: 0; }
+.tp-meta-k {
+  font-size: 10.5px;
+  font-weight: 600;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  color: #7d8fa8;
+  white-space: nowrap;
+}
+.tp-meta-v { font-size: 12.5px; color: #cdd6e4; word-break: break-word; }
+
+/* inline decorations */
+.tp-token {
+  font-family: "JetBrains Mono", ui-monospace, monospace;
+  font-size: 11px;
+  padding: 0 4px;
+  border-radius: 4px;
+  background: rgba(122, 162, 247, 0.12);
+  color: #9db8e8;
+  white-space: nowrap;
+}
+.tp-quote {
+  color: #e8d9a0;
+  font-style: italic;
+}
+.tp-time { color: #7fd1b9; font-variant-numeric: tabular-nums; }
+.tp-id {
+  font-family: "JetBrains Mono", ui-monospace, monospace;
+  font-size: 11px;
+  color: #8fa3bd;
+  word-break: break-all;
+}
+.tp-code-inline {
+  font-family: "JetBrains Mono", ui-monospace, monospace;
+  font-size: 11.5px;
+  padding: 0 4px;
+  border-radius: 4px;
+  background: rgba(255, 255, 255, 0.07);
+}
+.tp-link { color: #7aa2f7; text-decoration: none; }
+.tp-link:hover { text-decoration: underline; }
+
+/* linked-conversation transcript */
+.tp-conv {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  max-height: 46vh;
+  overflow-y: auto;
+  padding: 4px 2px;
+}
+.tp-conv-head {
+  font-size: 12px;
+  font-weight: 600;
+  color: #a9b8cc;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 6px;
+  position: sticky;
+  top: 0;
+}
+.tp-conv-sep { color: #55637a; }
+.tp-conv-key {
+  font-family: "JetBrains Mono", ui-monospace, monospace;
+  font-size: 10px;
+  font-weight: 400;
+  color: #6b7b94;
+}
+.tp-conv-note { font-size: 11px; color: #8fa3bd; font-style: italic; }
+.tp-msg {
+  max-width: 82%;
+  border-radius: 10px;
+  padding: 7px 10px;
+  font-size: 13px;
+  line-height: 1.5;
+  color: #d5dde9;
+  background: rgba(255, 255, 255, 0.05);
+  border: 1px solid rgba(255, 255, 255, 0.06);
+}
+.tp-msg.is-left { align-self: flex-start; }
+.tp-msg.is-right {
+  align-self: flex-end;
+  background: rgba(122, 162, 247, 0.10);
+  border-color: rgba(122, 162, 247, 0.18);
+}
+.tp-msg.is-center {
+  align-self: center;
+  max-width: 92%;
+  background: transparent;
+  border-style: dashed;
+  color: #93a3b8;
+  font-size: 12px;
+}
+.tp-msg-head {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  margin-bottom: 2px;
+}
+.tp-msg-role {
+  font-size: 10.5px;
+  font-weight: 700;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  color: #8fa3bd;
+}
+.tp-msg.is-becky .tp-msg-role { color: #9db8e8; }
+.tp-msg.is-client .tp-msg-role { color: #e8b98a; }
+.tp-msg-time { font-size: 10.5px; color: #6b7b94; font-variant-numeric: tabular-nums; }
+.tp-msg-body { word-break: break-word; }
+
+/* loading / error states for the linked-conversation section */
+.tp-conv-status { font-size: 12px; color: #8fa3bd; font-style: italic; padding: 4px 0; }
+.tp-conv-status.is-error { color: #d99; font-style: normal; }
+
+/* light theme (q2's data-theme toggle) */
+html[data-theme="light"] .tp-body,
+html[data-theme="light"] .tp-meta-v { color: #2c3644; }
+html[data-theme="light"] .tp-h,
+html[data-theme="light"] .tp-meta-k { color: #5b6b80; }
+html[data-theme="light"] .tp-meta,
+html[data-theme="light"] .tp-fence {
+  background: rgba(0, 0, 0, 0.04);
+  border-color: rgba(0, 0, 0, 0.08);
+}
+html[data-theme="light"] .tp-token { background: rgba(53, 92, 170, 0.10); color: #35507e; }
+html[data-theme="light"] .tp-quote { color: #8a6d1f; }
+html[data-theme="light"] .tp-time { color: #1e7a5f; }
+html[data-theme="light"] .tp-id,
+html[data-theme="light"] .tp-conv-key { color: #5b6b80; }
+html[data-theme="light"] .tp-code-inline { background: rgba(0, 0, 0, 0.06); }
+html[data-theme="light"] .tp-msg {
+  background: rgba(0, 0, 0, 0.04);
+  border-color: rgba(0, 0, 0, 0.07);
+  color: #2c3644;
+}
+html[data-theme="light"] .tp-msg.is-right {
+  background: rgba(53, 92, 170, 0.08);
+  border-color: rgba(53, 92, 170, 0.16);
+}
+html[data-theme="light"] .tp-msg.is-center { color: #5b6b80; }
+html[data-theme="light"] .tp-msg-role { color: #5b6b80; }
+html[data-theme="light"] .tp-conv-head { color: #43526a; }

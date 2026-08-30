@@ -23,7 +23,9 @@ def test_ticket_detail_emphasizes_only_the_first_sentence_of_a_long_note():
     end = app_js.index("function _renderQueuePanel", start)
     modal = app_js[start:end]
 
-    assert "const titleParts = splitFirstSentence(detailTitle);" in modal
+    # displayTitle = detailTitle with machine markers stripped for GitHub-backed
+    # tickets (still detailTitle verbatim for editable local tickets).
+    assert "const titleParts = splitFirstSentence(displayTitle);" in modal
     assert 'class="uxq-td-title-first"' in modal
     assert 'class="uxq-td-title-rest"' in modal
     assert ".uxq-td-title-first" in app_css
