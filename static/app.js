@@ -42610,7 +42610,34 @@
     function _tlText(text, cls) {
       return text ? '<div class="' + (cls || 'uxq-tl-block-q') + '">' + escapeHtml(String(text)) + '</div>' : '';
     }
-    function _tlResolution(resolution) {
+    // One chip per caveat/follow-up/unresolved entry, each with an ack
+    // toggle — parity with WatchTower's own dashboard (queue.ack_resolution /
+    // is_acked, CCC-997). An acked chip keeps its text (dimmed, struck
+    // through) rather than disappearing: the point is to clear the visual
+    // alarm without touching the close record. `ref` is omitted for
+    // resolutions that aren't a closed ticket's own live `item.resolution`
+    // (acks only make sense there), which suppresses the toggle button.
+    function _tlResChips(res, field, cls, label, ref) {
+      const list = res[field] || [];
+      if (!list.length) return '';
+      const chips = list.map((val, idx) => {
+        const acked = !!ref && _q_isAcked(res, field, idx);
+        const btn = ref
+          ? '<button type="button" class="uxq-ack-btn" title="' + (acked ? 'Un-acknowledge' : 'Acknowledge (keeps the record)') + '" '
+            + 'data-ack-ref="' + escapeAttr(ref) + '" data-ack-field="' + escapeAttr(field) + '" data-ack-index="' + idx + '" data-ack-acked="' + (acked ? 'true' : 'false') + '">'
+            + (acked ? '↺' : '✓') + '</button>'
+          : '';
+        return '<span class="uxq-tl-chip ' + cls + (acked ? ' is-acked' : '') + '">'
+          + '<span class="uxq-tl-chip-k">' + escapeHtml(label) + '</span> '
+          + '<span class="uxq-tl-chip-v">' + escapeHtml(String(val)) + '</span>' + btn + '</span>';
+      });
+      return '<div class="uxq-tl-res-row uxq-tl-res-' + cls + '"><div class="uxq-tl-chips">' + chips.join('') + '</div></div>';
+    }
+    function _q_isAcked(res, field, idx) {
+      const acks = res && res[field + '_ack'];
+      return !!(acks && typeof acks === 'object' && Object.prototype.hasOwnProperty.call(acks, String(idx)));
+    }
+    function _tlResolution(resolution, ref) {
       const res = (resolution && typeof resolution === 'object') ? resolution : {};
       const summary = res.summary || '';
       const caveats = res.caveats || res.caveat || [];
@@ -42619,9 +42646,9 @@
       if (!(summary || caveats.length || followUps.length || unresolved.length)) return '';
       return '<div class="uxq-tl-res">'
         + (summary ? '<div class="uxq-tl-res-row"><span class="uxq-tl-res-k">Summary</span><div class="uxq-tl-res-v">' + _fmtRes(summary) + '</div></div>' : '')
-        + (caveats.length ? '<div class="uxq-tl-res-row uxq-tl-res-caveat"><span class="uxq-tl-res-k">Caveat</span><div class="uxq-tl-res-v">' + _fmtRes(caveats) + '</div></div>' : '')
-        + (followUps.length ? '<div class="uxq-tl-res-row"><span class="uxq-tl-res-k">Follow-up</span><div class="uxq-tl-res-v">' + _fmtRes(followUps) + '</div></div>' : '')
-        + (unresolved.length ? '<div class="uxq-tl-res-row uxq-tl-res-unresolved"><span class="uxq-tl-res-k">Unresolved</span><div class="uxq-tl-res-v">' + _fmtRes(unresolved) + '</div></div>' : '')
+        + _tlResChips(res, 'caveats', 'caveat', 'Caveat', ref)
+        + _tlResChips(res, 'follow_ups', 'follow', 'Follow-up', ref)
+        + _tlResChips(res, 'unresolved', 'unresolved', 'Unresolved', ref)
         + '</div>';
     }
     function _tlEditFields(fields) {
@@ -42645,7 +42672,11 @@
       if (type === 'answer') return _tlEvt('uxq-tl-answer', _tlHead('Answered', ev), _tlText(ev.text, 'uxq-tl-sub-note uxq-tl-sub-answer'));
       if (type === 'comment') return _tlEvt('uxq-tl-comment', _tlHead('Comment', ev), _tlText(ev.text));
       if (type === 'reopen') return _tlEvt('uxq-tl-reopen', _tlHead('Reopened', ev), _tlText(ev.reason));
-      if (type === 'close') return _tlEvt('uxq-tl-closed', _tlHead('Closed', ev), _tlResolution(ev.resolution));
+      // Prefer the ticket's live `resolution` over the close event's
+      // snapshot: `wt ack` mutates the live field (see queue.ack_resolution)
+      // and never rewrites the historical close record, so the snapshot
+      // alone would never show an acked chip as acked (CCC-997).
+      if (type === 'close') return _tlEvt('uxq-tl-closed', _tlHead('Closed', ev), _tlResolution(item.resolution || ev.resolution, ref));
       if (type === 'move') {
         const body = [ev.from_ref, ev.to_ref].filter(Boolean).join(' -> ');
         return _tlEvt('uxq-tl-move', _tlHead('Moved', ev), body ? '<div class="uxq-tl-sub-note">' + escapeHtml(body) + '</div>' : '');
@@ -42837,6 +42868,51 @@
         if (timelineEl) timelineEl.classList.toggle('uxq-show-edits', showEditsInput.checked);
       });
     }
+
+    // Ack/un-ack a caveat/follow-up/unresolved chip in place (CCC-997) — no
+    // full modal rebuild, just flip the button + chip classes and mirror the
+    // change into `item.resolution` so reopening this same modal (from the
+    // still-cached item) doesn't show a stale un-acked chip.
+    modal.querySelectorAll('.uxq-ack-btn').forEach(btn => {
+      btn.addEventListener('click', async () => {
+        const field = btn.getAttribute('data-ack-field');
+        const index = parseInt(btn.getAttribute('data-ack-index'), 10);
+        const wasAcked = btn.getAttribute('data-ack-acked') === 'true';
+        btn.disabled = true;
+        try {
+          const res = await fetch('/api/ux-fixes/ack', {
+            method: 'POST', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ ref, field, index, undo: wasAcked }),
+          });
+          const d = await res.json().catch(() => ({}));
+          if (!res.ok || !d.ok) {
+            showOpToast('Ack failed: ' + (d.error || res.status), 'error');
+            btn.disabled = false;
+            return;
+          }
+          const nowAcked = !wasAcked;
+          const chip = btn.closest('.uxq-tl-chip');
+          if (chip) chip.classList.toggle('is-acked', nowAcked);
+          btn.setAttribute('data-ack-acked', nowAcked ? 'true' : 'false');
+          btn.title = nowAcked ? 'Un-acknowledge' : 'Acknowledge (keeps the record)';
+          btn.textContent = nowAcked ? '↺' : '✓';
+          if (item.resolution && typeof item.resolution === 'object') {
+            const key = field + '_ack';
+            if (nowAcked) {
+              item.resolution[key] = item.resolution[key] || {};
+              item.resolution[key][index] = { at: new Date().toISOString(), by: 'dashboard' };
+            } else if (item.resolution[key]) {
+              delete item.resolution[key][index];
+            }
+          }
+          _uxqReplaceCachedItem(d.item);
+        } catch (e) {
+          showOpToast('Ack failed: ' + e, 'error');
+        } finally {
+          btn.disabled = false;
+        }
+      });
+    });
 
     const copyBtn = modal.querySelector('[data-ux-copy]');
     if (copyBtn) {

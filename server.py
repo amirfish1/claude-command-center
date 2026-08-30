@@ -72034,6 +72034,49 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
             except Exception as e:
                 self.send_json({"ok": False, "error": str(e)}, 400)
             return
+        if path == "/api/ux-fixes/ack":
+            # Dim a closed ticket's caveat/follow-up/unresolved chip without
+            # rewriting the close record (parity with WatchTower's own
+            # dashboard — WATCHTOWER-12 / CCC-997). The chip text is
+            # untouched; only a `<field>_ack` marker is added to `resolution`.
+            length = int(self.headers.get("Content-Length", "0"))
+            body = self.rfile.read(length) if length > 0 else b""
+            try:
+                payload = json.loads(body) if body else {}
+            except json.JSONDecodeError:
+                payload = {}
+            ref = str(payload.get("ref") or "").strip()
+            if not ref:
+                self.send_json({"ok": False, "error": "ref required"}, 400)
+                return
+            ack_fn = getattr(_q, "ack_resolution", None)
+            if not callable(ack_fn):
+                self.send_json({"ok": False, "error": "WatchTower resolution acks unavailable"}, 400)
+                return
+            targets = []
+            if not payload.get("all"):
+                field = str(payload.get("field") or "")
+                try:
+                    index = int(payload.get("index"))
+                except (TypeError, ValueError):
+                    self.send_json({"ok": False, "error": "index must be an integer"}, 400)
+                    return
+                targets.append((field, index))
+            try:
+                item = ack_fn(
+                    ref,
+                    targets=targets,
+                    all_items=bool(payload.get("all")),
+                    by="dashboard",
+                    undo=bool(payload.get("undo")),
+                )
+                if not item:
+                    self.send_json({"ok": False, "error": _uxq_not_found_error(ref)}, 404)
+                    return
+                self.send_json({"ok": True, "item": _uxq_item_payload(item)})
+            except Exception as e:
+                self.send_json({"ok": False, "error": str(e)}, 400)
+            return
         if path == "/api/ux-fixes/enqueue":
             # Add a ticket to the queue straight from the UI (CCC-145 — the
             # queue panel's "+ Add" affordance). Same-origin is already enforced

@@ -21307,8 +21307,28 @@ body.has-gc-reader .pwa-install-banner {
   flex: 0 0 74px; font-weight: 600; color: var(--text-muted); font-size: 12px;
 }
 .uxq-tl-res-v { color: var(--text); overflow-wrap: anywhere; white-space: pre-wrap; }
-.uxq-tl-res-caveat     .uxq-tl-res-v { color: #f59e0b; }
-.uxq-tl-res-unresolved .uxq-tl-res-v { color: #f87171; }
+/* Caveat/follow-up/unresolved chips — one per resolution entry, each with an
+   ack toggle (parity with WatchTower's own dashboard: queue.ack_resolution /
+   is_acked, CCC-997). An acked chip dims + strikes through instead of
+   disappearing: the text stays, only the visual alarm clears. */
+.uxq-tl-chips { display: flex; flex-wrap: wrap; gap: 6px; }
+.uxq-tl-chip {
+  display: inline-flex; align-items: center; gap: 5px;
+  font-size: 12px; line-height: 1.3; border-radius: 5px;
+  padding: 3px 8px; background: rgba(245,158,11,0.10); color: #f59e0b;
+}
+.uxq-tl-chip.follow { background: rgba(88,166,255,0.10); color: var(--accent); }
+.uxq-tl-chip.unresolved { background: rgba(248,113,113,0.10); color: #f87171; }
+.uxq-tl-chip.is-acked { background: rgba(255,255,255,0.04); color: var(--text-muted); }
+.uxq-tl-chip.is-acked .uxq-tl-chip-v { text-decoration: line-through; }
+.uxq-tl-chip-k { font-weight: 600; opacity: 0.85; }
+.uxq-tl-chip-v { overflow-wrap: anywhere; }
+.uxq-ack-btn {
+  border: 0; background: transparent; color: inherit; opacity: 0.6;
+  cursor: pointer; font-size: 12px; line-height: 1; padding: 0 2px; border-radius: 3px;
+}
+.uxq-ack-btn:hover { opacity: 1; background: rgba(255,255,255,0.08); }
+.uxq-ack-btn:disabled { opacity: 0.35; cursor: default; }
 /* Answer section */
 .uxq-td-answer-sec { border: 1px solid rgba(245,158,11,0.3); border-radius: 8px; padding: 12px; background: rgba(245,158,11,0.05); }
 .uxq-answer-row { display: flex; gap: 6px; margin: 3px 0 2px; }
