@@ -25205,6 +25205,25 @@ body.has-mobile-bottom-nav .mobile-nav-label { white-space: nowrap; }
 body.has-mobile-bottom-nav:not(.ccc-simple-mode) #convList > .conv-tab-bar {
   display: none;
 }
+/* The hidden tab bar is still :first-child, so Coding/Workers kept the
+   18px + hairline meant for a *following* section — a blank band above
+   Expand all. Collapse that, and let the filter chips wrap as one row
+   instead of parking Expand all on its own line. */
+body.has-mobile-bottom-nav:not(.ccc-simple-mode) #convList .conv-archived-section {
+  margin-top: 0;
+  border-top: 0;
+  padding-top: 0;
+}
+body.has-mobile-bottom-nav:not(.ccc-simple-mode) #convList .conv-archived-section > .conv-archived-tools {
+  justify-content: flex-start;
+  align-items: center;
+  gap: 4px;
+  padding: 4px 8px 2px;
+}
+body.has-mobile-bottom-nav:not(.ccc-simple-mode) #convList .conv-archived-tools-left,
+body.has-mobile-bottom-nav:not(.ccc-simple-mode) #convList .conv-archived-tools-right {
+  display: contents;
+}
 /* Reserve room at the bottom of the page so the fixed nav never overlaps
    the last card in the list. */
 body.has-mobile-bottom-nav #convList {

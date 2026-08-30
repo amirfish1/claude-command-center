@@ -4602,6 +4602,10 @@ class TestServerImports(unittest.TestCase):
             'body.has-mobile-bottom-nav:not(.ccc-simple-mode) #convList > .conv-tab-bar',
             app_css,
         )
+        self.assertIn(
+            'body.has-mobile-bottom-nav:not(.ccc-simple-mode) #convList .conv-archived-section > .conv-archived-tools',
+            app_css,
+        )
         self.assertIn('id="q2MobileBottomNav"', q2_html)
         self.assertIn('href="/q2.html"', q2_html)
         self.assertIn(".q2-mobile-bottom-nav", q2_css)
