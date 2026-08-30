@@ -133,9 +133,7 @@
 <body>
   <!-- Shared mobile bottom nav. Same element for Simple and Advanced:
        Simple (data-nav-chrome="simple") drives Home/Tasks/Helpers/More;
-       Advanced (data-nav-chrome="advanced") is Sessions vs Queues.
-       Both reuse _wireMobileBottomNav() and the existing sidebar tab bar
-       (data-conv-tab) rather than introducing new screens/state.
+       Advanced (data-nav-chrome="advanced") is Coding / Workers / Queues / q2.
        Hidden everywhere else via inline style. -->
   <nav id="mobileBottomNav" class="mobile-bottom-nav" style="display:none;" aria-label="Main">
     <button type="button" class="mobile-nav-btn" data-mobile-nav="home" data-nav-chrome="simple" aria-current="page" aria-label="Home">
@@ -154,19 +152,27 @@
       <span class="mobile-nav-icon" aria-hidden="true">&#8943;</span>
       <span class="mobile-nav-label mobile-sr-only">More</span>
     </button>
-    <button type="button" class="mobile-nav-btn" data-mobile-nav="sessions" data-nav-chrome="advanced" aria-label="Sessions">
-      <span class="mobile-nav-icon" aria-hidden="true">&#128172;</span>
-      <span class="mobile-nav-label">Sessions</span>
+    <button type="button" class="mobile-nav-btn" data-mobile-nav="coding" data-nav-chrome="advanced" aria-label="Coding">
+      <span class="mobile-nav-icon" aria-hidden="true">&lt;/&gt;</span>
+      <span class="mobile-nav-label">Coding</span>
     </button>
-    <a href="/q2.html" class="mobile-nav-btn" data-mobile-nav="queues" data-nav-chrome="advanced" aria-label="Queues">
+    <button type="button" class="mobile-nav-btn" data-mobile-nav="workers" data-nav-chrome="advanced" aria-label="Workers">
+      <span class="mobile-nav-icon" aria-hidden="true">&#9881;</span>
+      <span class="mobile-nav-label">Workers</span>
+    </button>
+    <button type="button" class="mobile-nav-btn" data-mobile-nav="queues" data-nav-chrome="advanced" aria-label="Queues">
       <span class="mobile-nav-icon" aria-hidden="true">&#128203;</span>
       <span class="mobile-nav-label">Queues</span>
+    </button>
+    <a href="/q2.html" class="mobile-nav-btn" data-mobile-nav="q2" data-nav-chrome="advanced" aria-label="q2">
+      <span class="mobile-nav-icon" aria-hidden="true">&#9638;</span>
+      <span class="mobile-nav-label">q2</span>
     </a>
   </nav>
   <!-- Core-app frame: Queues (q2) overlays the dashboard without unloading
        the session list. src is set on first open. Hidden until then.
        See cccSwitchCoreApp() in app.js and the rail click intercept. -->
-  <iframe id="cccCoreAppFrame" class="ccc-core-app-frame" hidden title="Queues"></iframe>
+  <iframe id="cccCoreAppFrame" class="ccc-core-app-frame" hidden title="q2"></iframe>
   <!-- Floating Annotate button for popout contexts (CCC-166). The topbar
        Annotate button is hidden by the popout CSS, so this floating affordance
        surfaces the same flow in a conversation popout window. It reuses the

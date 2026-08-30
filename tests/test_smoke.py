@@ -4574,10 +4574,9 @@ class TestServerImports(unittest.TestCase):
         self.assertIn("Start a task", index_html)
 
     def test_advanced_mobile_bottom_nav_is_sessions_vs_queues(self):
-        """Advanced (non-simple) mobile reuses #mobileBottomNav for Sessions
-        vs Queues. Queues is the q2 board (same URL as the Applications
-        rail, which hides below 700px). Same element as Simple mode's
-        Home/Tasks/Helpers/More — not a second bar."""
+        """Advanced (non-simple) mobile reuses #mobileBottomNav for Coding /
+        Workers / Queues (sidebar list) / q2 (board overlay). The in-list
+        tab bar is hidden; Simple mode still has Home/Tasks/Helpers/More."""
         index_html = pathlib.Path(PROJECT_ROOT, "static", "index.html").read_text(encoding="utf-8")
         app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
         app_css = pathlib.Path(PROJECT_ROOT, "static", "app.css").read_text(encoding="utf-8")
@@ -4585,8 +4584,11 @@ class TestServerImports(unittest.TestCase):
         q2_css = pathlib.Path(PROJECT_ROOT, "static", "q2.css").read_text(encoding="utf-8")
 
         self.assertEqual(index_html.count('id="mobileBottomNav"'), 1)
-        self.assertIn('data-mobile-nav="sessions"', index_html)
+        self.assertIn('data-mobile-nav="coding"', index_html)
+        self.assertIn('data-mobile-nav="workers"', index_html)
         self.assertIn('data-mobile-nav="queues"', index_html)
+        self.assertIn('data-mobile-nav="q2"', index_html)
+        self.assertNotIn('data-mobile-nav="sessions"', index_html)
         self.assertIn('data-nav-chrome="advanced"', index_html)
         self.assertIn('data-nav-chrome="simple"', index_html)
         self.assertIn('href="/q2.html"', index_html)
@@ -4594,6 +4596,10 @@ class TestServerImports(unittest.TestCase):
         self.assertIn("body.has-mobile-bottom-nav .mobile-bottom-nav", app_css)
         self.assertIn(
             'body.has-mobile-bottom-nav:not(.ccc-simple-mode) .mobile-nav-btn[data-nav-chrome="simple"]',
+            app_css,
+        )
+        self.assertIn(
+            'body.has-mobile-bottom-nav:not(.ccc-simple-mode) #convList > .conv-tab-bar',
             app_css,
         )
         self.assertIn('id="q2MobileBottomNav"', q2_html)

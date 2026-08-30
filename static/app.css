@@ -25199,9 +25199,10 @@ body.has-mobile-bottom-nav .mobile-nav-icon { font-size: 18px; line-height: 1; }
 body.has-mobile-bottom-nav .mobile-nav-label { font-size: 10.5px; font-weight: 600; }
 body.has-mobile-bottom-nav:not(.ccc-simple-mode) .mobile-nav-btn[data-nav-chrome="simple"] { display: none; }
 body.has-mobile-bottom-nav.ccc-simple-mode .mobile-nav-btn[data-nav-chrome="advanced"] { display: none; }
-/* The Queues surface fills the sidebar; the in-list tab bar is redundant
-   with the bottom Sessions/Queues control. */
-body.has-mobile-bottom-nav:not(.ccc-simple-mode) #convList:has(> .shared-queue-host-sidebar) > .conv-tab-bar {
+body.has-mobile-bottom-nav .mobile-nav-label { white-space: nowrap; }
+/* Phone Advanced: Coding/Workers/Queues/q2 live in the bottom bar, so the
+   in-list Active/Coding/Workers tab bar is redundant and eats vertical space. */
+body.has-mobile-bottom-nav:not(.ccc-simple-mode) #convList > .conv-tab-bar {
   display: none;
 }
 /* Reserve room at the bottom of the page so the fixed nav never overlaps

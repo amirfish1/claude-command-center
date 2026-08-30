@@ -14836,16 +14836,11 @@
 
   // ── Mobile bottom nav ──
   // One #mobileBottomNav for both Simple and Advanced. Simple drives
-  // Home/Tasks/Helpers/More screens; Advanced is Sessions vs Queues.
-  // Both reuse the EXISTING sidebar tab bar (data-conv-tab, localStorage
-  // 'ccc-sidebar-tab') — no new screens/state, no duplicated render logic.
+  // Home/Tasks/Helpers/More. Advanced is Coding / Workers / Queues / q2.
+  // Coding/Workers/Queues reuse the sidebar tab bar (data-conv-tab);
+  // q2 is the core-app overlay (cccSwitchCoreApp).
   var _coreApp = 'sessions';
   const _sessionsDocumentTitle = document.title;
-  let _mobileLastSessionTab = 'inprogress';
-  try {
-    const _bootTab = localStorage.getItem('ccc-sidebar-tab');
-    if (_bootTab && _bootTab !== 'queues') _mobileLastSessionTab = _bootTab;
-  } catch (_) {}
   function _mobileBottomNavShouldShow() {
     if (!isMobileRedesign()) return false;
     if (isSimpleMode()) return true;
@@ -14857,24 +14852,14 @@
   }
   function _activateSidebarTabFromMobileNav(targetTab) {
     // Reuse the existing tab bar's own click handler by clicking its
-    // matching button when present, instead of duplicating its re-render
-    // logic here. The queues tab button is missing when "separate tabs"
-    // is off — fall through to the same localStorage + host + render
-    // sequence the tab bar uses. A remembered session tab (coding /
-    // workers / issues) that isn't on the current bar falls back to
-    // in-progress rather than landing on a hidden tab.
+    // matching button when present. Coding/Workers/Queues still work
+    // when that button is missing from the bar (separate-tabs pref, or
+    // the bar is hidden on mobile) — same localStorage + host + render
+    // sequence the tab bar uses.
     const existingTabBtn = document.querySelector('[data-conv-tab="' + targetTab + '"]');
     if (existingTabBtn) {
       existingTabBtn.click();
       return;
-    }
-    if (targetTab !== 'queues' && targetTab !== 'inprogress') {
-      const inprogressBtn = document.querySelector('[data-conv-tab="inprogress"]');
-      if (inprogressBtn) {
-        inprogressBtn.click();
-        return;
-      }
-      targetTab = 'inprogress';
     }
     try { localStorage.setItem('ccc-sidebar-tab', targetTab); } catch (_) {}
     if (typeof _setSharedQueuePanelHost === 'function') {
@@ -14905,7 +14890,18 @@
       } else if (typeof _simpleHomeShowing !== 'undefined' && _simpleHomeShowing
         && document.getElementById('simpleHome')) activeNavKey = 'home';
     } else {
-      activeNavKey = _coreApp === 'queues' ? 'queues' : 'sessions';
+      // Phone Advanced has no Active/Other. If the stored tab is one of
+      // those, land on Coding so the hidden top bar cannot strand us.
+      if (_coreApp !== 'queues' && tab !== 'coding' && tab !== 'workers' && tab !== 'queues') {
+        try { localStorage.setItem('ccc-sidebar-tab', 'coding'); } catch (_) {}
+        if (document.querySelector('[data-role="conv-tab-bar"]')) {
+          _activateSidebarTabFromMobileNav('coding');
+          return;
+        }
+        tab = 'coding';
+      }
+      activeNavKey = _coreApp === 'queues' ? 'q2'
+        : (tab === 'workers' ? 'workers' : tab === 'queues' ? 'queues' : 'coding');
     }
     nav.querySelectorAll('[data-mobile-nav]').forEach(btn => {
       const active = btn.getAttribute('data-mobile-nav') === activeNavKey;
@@ -14935,14 +14931,18 @@
         if (typeof openSettingsModal === 'function') openSettingsModal();
         return;
       }
-      // Advanced mobile: Sessions vs Queues. Same intercept as the rail —
-      // cccSwitchCoreApp keeps the session list mounted.
-      if (dest === 'sessions' || dest === 'queues') {
-        if (typeof cccSwitchCoreApp === 'function' && cccSwitchCoreApp(dest)) {
+      // Advanced mobile: Coding / Workers / Queues (sidebar list) / q2
+      // (board overlay). q2 reuses cccSwitchCoreApp so the session list
+      // stays mounted; the other three are sidebar tabs.
+      if (dest === 'q2') {
+        if (typeof cccSwitchCoreApp === 'function' && cccSwitchCoreApp('queues')) {
           ev.preventDefault();
-          return;
         }
-        if (dest === 'queues') return;
+        return;
+      }
+      if (dest === 'coding' || dest === 'workers' || dest === 'queues') {
+        if (typeof cccSwitchCoreApp === 'function') cccSwitchCoreApp('sessions');
+        _activateSidebarTabFromMobileNav(dest);
         if (typeof isMobile === 'function' && isMobile() && typeof mobileShowMain === 'function') {
           mobileShowMain(false);
         }
@@ -14982,7 +14982,7 @@
       frame.hidden = next !== 'queues';
     }
     document.body.classList.toggle('ccc-core-app-open', next === 'queues');
-    document.title = next === 'queues' ? 'Queues' : _sessionsDocumentTitle;
+    document.title = next === 'queues' ? 'q2' : _sessionsDocumentTitle;
     if (typeof window.cccMarkRailActive === 'function') window.cccMarkRailActive(next);
     if (typeof _syncMobileBottomNav === 'function') _syncMobileBottomNav();
     if (opts.push !== false) {
