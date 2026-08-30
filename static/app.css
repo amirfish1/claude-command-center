@@ -5519,12 +5519,13 @@
     -webkit-box-orient: vertical;
   }
   /* Folder/object group headers title their row with .conv-folder-group-chip,
-     not .conv-item .conv-title — Wrap needs its own rule to reach them. */
+     not .conv-item .conv-title — Wrap needs its own rule to reach them.
+     Stay inline-flex here (not -webkit-box): -webkit-box drops `gap` and
+     stacks the ::before swatch above the text instead of beside it, losing
+     the pill treatment non-wrap mode has (CCC-999). */
   .wrap-titles .conv-folder-group-chip {
     white-space: normal;
-    display: -webkit-inline-box;
-    -webkit-line-clamp: 2;
-    -webkit-box-orient: vertical;
+    display: inline-flex;
     align-items: flex-start;
     overflow: hidden;
   }
