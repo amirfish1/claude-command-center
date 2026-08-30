@@ -23112,6 +23112,21 @@ body.has-gc-reader .pwa-install-banner {
   font-weight: bold;
 }
 
+/* Cross-session (UDS peer) messages must keep their green tint even under
+   the stitch background theme. The stitch rule above uses !important, so
+   the non-important green rule near .peer-message (and the has-conv-bg
+   variant fixed in 6d949a0e) both lose to it. Beating an !important rule
+   requires our own !important PLUS equal-or-greater specificity -- add
+   .peer-message to match stitch's selector shape exactly, which makes ours
+   the more specific of the two !important declarations regardless of
+   source order. */
+.conv-pane[data-conv-bg="stitch"] .conversations-view .event.user_text.peer-message:not(.is-pinned-in-sticky) {
+  background:
+    linear-gradient(135deg, rgba(63, 185, 80, 0.16), rgba(63, 185, 80, 0.08) 70%) padding-box,
+    linear-gradient(135deg, rgba(63, 185, 80, 0.55), rgba(63, 185, 80, 0.25) 70%) border-box !important;
+  box-shadow: 0 2px 14px rgba(63, 185, 80, 0.08) !important;
+}
+
 /* Remove terminal prompt from subsequent user messages in the session */
 .conv-pane[data-conv-bg="stitch"] .conversations-view .event.user_text:not(.is-pinned-in-sticky) ~ .event.user_text:not(.is-pinned-in-sticky) .user-msg::after {
   content: '' !important;
