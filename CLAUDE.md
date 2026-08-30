@@ -266,6 +266,8 @@ Depends entirely on what you touched. Most changes ship the moment you `git push
 
 If you're unsure, default to pushing then checking the table — `git push` is reversible (`git revert`); a half-shipped release is harder to clean up.
 
+**Note:** the `hunch_*` names below are MCP tools, not shell commands. In Codex sessions they appear as `mcp__hunch__*`; there is no `hunch_context` CLI — never invoke them via the shell.
+
 <!-- HUNCH:START — auto-generated, do not edit by hand -->
 ## 🧠 Hunch (Engineering Memory)
 

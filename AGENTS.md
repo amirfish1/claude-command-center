@@ -168,6 +168,8 @@ If you're unsure, default to pushing then checking the table — `git push` is r
 
 Don't mock external systems (`gh`, agent CLIs, `pkood`) in the smoke test. The smoke test is about import-time correctness, not behavior.
 
+**Note:** the `hunch_*` names below are MCP tools, not shell commands. In Codex sessions they appear as `mcp__hunch__*`; there is no `hunch_context` CLI — never invoke them via the shell.
+
 <!-- HUNCH:START — auto-generated, do not edit by hand -->
 ## 🧠 Hunch (Engineering Memory)
 
