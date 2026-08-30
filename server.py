@@ -44617,7 +44617,17 @@ def _parse_ps_etime(text):
     return days * 86400 + h * 3600 + m * 60 + s
 
 
-def _queue_terminal_input(session_id, text, status=None):
+# CCC-1002: distinct queued_reason for "queued only to preserve order behind
+# an earlier queued message" — as opposed to the default reason, which says
+# the LIVE turn is the obstacle and is wrong (and misleading enough to drive
+# a destructive steer/interrupt) when the actual live turn has nothing to do
+# with this message.
+_TERMINAL_QUEUE_ORDER_REASON = (
+    "waiting behind an earlier queued message for this session"
+)
+
+
+def _queue_terminal_input(session_id, text, status=None, reason_hint=None):
     """Queue terminal input, gating the unattended marker at the barrier."""
     if _is_unattended_auto_continue(text):
         try:
@@ -44629,14 +44639,14 @@ def _queue_terminal_input(session_id, text, status=None):
                         "error": "auto-resume not opted in for this session",
                         "auto_resume_opt_in_required": True,
                     }
-                return _queue_terminal_input_unlocked(session_id, text, status)
+                return _queue_terminal_input_unlocked(session_id, text, status, reason_hint)
         except OSError:
             return {
                 "ok": False,
                 "queued": False,
                 "error": "auto-resume safety barrier unavailable",
             }
-    return _queue_terminal_input_unlocked(session_id, text, status)
+    return _queue_terminal_input_unlocked(session_id, text, status, reason_hint)
 
 
 def _terminal_queue_dedupe_key(text):
@@ -44651,7 +44661,7 @@ def _terminal_queue_dedupe_key(text):
     return None
 
 
-def _queue_terminal_input_unlocked(session_id, text, status=None):
+def _queue_terminal_input_unlocked(session_id, text, status=None, reason_hint=None):
     """Queue input until a live Claude session reports it is idle again."""
     deduped = False
     with _pending_terminal_input_lock:
@@ -44692,6 +44702,13 @@ def _queue_terminal_input_unlocked(session_id, text, status=None):
             payload["queued_reason"] = (
                 "the current turn is still running; your message will send next"
             )
+    # CCC-1002: a message queued only to preserve order behind an EARLIER
+    # queued entry is not blocked by "the current turn is still running" —
+    # that text told the user their live turn was the obstacle and drove
+    # them to steer/interrupt it, which then aborted a turn that had nothing
+    # to do with this message. Say what's actually true instead.
+    if reason_hint:
+        payload["queued_reason"] = reason_hint
     # CCC-796: a session already stuck as a foreign-writer hold (live
     # process, no recognized delivery channel) at submission time will NOT
     # clear on its own -- say so distinctly instead of the generic busy-turn
@@ -45961,6 +45978,55 @@ def _log_terminal_queue_hold(sid, reason):
         pass
 
 
+# CCC-1002: a held entry (ask-question / active-acp / tty-busy / headless-
+# turn / bg-not-ready / tool-child-blocks-inject) previously retried every 5s
+# forever. Observed holding 12 minutes, then firing the now-stale command
+# into a live turn that started well after the command was queued, aborting
+# it. Past this ceiling the head-of-queue entry is dropped instead of kept
+# armed — the context it was queued for no longer exists.
+_terminal_queue_hold_since: dict = {}
+_TERMINAL_QUEUE_HOLD_TTL_S = 600.0  # 10 min
+
+
+def _terminal_queue_clear_hold(sid):
+    _terminal_queue_hold_since.pop(sid, None)
+
+
+def _terminal_queue_hold_or_expire(sid, reason):
+    """Record another tick of holding `sid`'s head entry, or — once held past
+    `_TERMINAL_QUEUE_HOLD_TTL_S` — drop that stale entry instead. Either way
+    the caller should `continue` to the next sid; returns nothing."""
+    now = time.time()
+    started = _terminal_queue_hold_since.setdefault(sid, now)
+    if now - started < _TERMINAL_QUEUE_HOLD_TTL_S:
+        _log_terminal_queue_hold(sid, reason)
+        return
+    _terminal_queue_hold_since.pop(sid, None)
+    dropped_text = None
+    with _pending_terminal_input_lock:
+        queue = _pending_terminal_input_queue.get(sid, [])
+        if queue:
+            dropped_text = queue.pop(0)
+            if not queue:
+                _pending_terminal_input_queue.pop(sid, None)
+    if dropped_text is None:
+        return
+    _save_pending_inputs()
+    _complete_pending_input_handoff(dropped_text)
+    _pending_terminal_retry_after.pop(sid, None)
+    try:
+        _log_activity(
+            "inject", "Q_DROP",
+            f"session={sid} code=held_ttl_expired "
+            f"text={str(dropped_text)[:40]!r} — queued input held "
+            f"{_TERMINAL_QUEUE_HOLD_TTL_S:.0f}s (reason={reason}) with no "
+            "delivery window; dropped as stale instead of firing into an "
+            "unrelated later turn",
+        )
+    except Exception:
+        pass
+
+
 def _requeue_terminal_input_front(sid, text):
     """Put a popped-but-undelivered entry back where it came from (front,
     preserving order relative to anything queued behind it)."""
@@ -46375,6 +46441,7 @@ def _start_resume_queue_watcher() -> None:
                             for dropped_text in dropped:
                                 _complete_pending_input_handoff(dropped_text)
                         _clear_foreign_writer_hold(sid)
+                        _terminal_queue_clear_hold(sid)
                         continue
                     # Backoff gate (CCC-455): a sid whose last drain attempt
                     # failed or re-parked waits out its retry window before we
@@ -46399,31 +46466,31 @@ def _start_resume_queue_watcher() -> None:
                     # transcript scan here would deadlock forever.
                     status = session_live_status(sid, find_session_cwd(sid))
                     if _ask_question_blocking_inject(sid, status):
-                        _log_terminal_queue_hold(sid, "ask_question_blocking")
+                        _terminal_queue_hold_or_expire(sid, "ask_question_blocking")
                         continue
                     if _terminal_queue_waits_for_active_acp(status):
-                        _log_terminal_queue_hold(sid, "active_acp")
+                        _terminal_queue_hold_or_expire(sid, "active_acp")
                         continue
                     if status.get("live") and status.get("tty") and _session_status_is_busy(status):
-                        _log_terminal_queue_hold(sid, "tty_busy")
+                        _terminal_queue_hold_or_expire(sid, "tty_busy")
                         continue
                     if _terminal_queue_waits_for_headless_turn(sid, status):
-                        _log_terminal_queue_hold(sid, "headless_turn")
+                        _terminal_queue_hold_or_expire(sid, "headless_turn")
                         continue
                     if status.get("live") and status.get("kind") == "bg":
                         if not _bg_agent_ready_for_input(sid, status):
-                            _log_terminal_queue_hold(sid, "bg_not_ready")
+                            _terminal_queue_hold_or_expire(sid, "bg_not_ready")
                             continue
                         # Channel recently proven broken (pty inject wrote ok
                         # but nothing landed) — hold instead of churning the
                         # queue through it every tick.
                         if time.time() - _bg_pty_inject_failures.get(sid, 0) < 600:
-                            _log_terminal_queue_hold(sid, "bg_pty_recent_failure")
+                            _terminal_queue_hold_or_expire(sid, "bg_pty_recent_failure")
                             continue
                     if status.get("live") and not status.get("tty"):
                         spawn = _find_live_spawn_entry_for_session(sid)
                         if spawn is not None and _tool_child_blocks_inject(spawn):
-                            _log_terminal_queue_hold(sid, "tool_child_blocks_inject")
+                            _terminal_queue_hold_or_expire(sid, "tool_child_blocks_inject")
                             continue
                         # A live WatchTower-tracked worker's FIFO is a known,
                         # in-process-reachable channel even though CCC never
@@ -46455,6 +46522,7 @@ def _start_resume_queue_watcher() -> None:
                                 )
                             continue
                         _clear_foreign_writer_hold(sid)
+                    _terminal_queue_clear_hold(sid)
                     with _pending_terminal_input_lock:
                         queue = _pending_terminal_input_queue.get(sid, [])
                         if not queue:
@@ -60498,7 +60566,10 @@ def _inject_text_into_session(
     if is_codex and slash_command:
         if status.get("live") and has_tty:
             if not _from_terminal_queue and _terminal_input_queue_has_pending(session_id):
-                return _queue_terminal_input(session_id, text, status)
+                return _queue_terminal_input(
+                    session_id, text, status,
+                    reason_hint=_TERMINAL_QUEUE_ORDER_REASON,
+                )
             submit_key = "tab" if _session_status_is_busy(status) else "return"
             return inject_input_via_keystroke(
                 tty,
@@ -60669,10 +60740,12 @@ def _inject_text_into_session(
             # force_queue is the explicit "Send (queue if busy)" opt-in: skip
             # the TUI's own mid-turn keystroke acceptance and hold for the
             # next turn boundary even though nothing is queued yet.
-            if _terminal_input_queue_has_pending(session_id) or (
-                force_queue and _session_status_is_busy(status)
-            ):
-                return _queue_terminal_input(session_id, text, status)
+            _already_pending = _terminal_input_queue_has_pending(session_id)
+            if _already_pending or (force_queue and _session_status_is_busy(status)):
+                return _queue_terminal_input(
+                    session_id, text, status,
+                    reason_hint=_TERMINAL_QUEUE_ORDER_REASON if _already_pending else None,
+                )
         if answering_tty_question:
             _drop_matching_terminal_queue_entries(session_id, text)
         # tmux-hosted session: the peer registry carries Claude's own pane
@@ -60725,10 +60798,14 @@ def _inject_text_into_session(
         return keystroke_result
     if status.get("live") and status.get("kind") == "bg":
         if not _from_terminal_queue:
-            if _terminal_input_queue_has_pending(session_id) or not _bg_agent_ready_for_input(session_id, status):
+            _already_pending = _terminal_input_queue_has_pending(session_id)
+            if _already_pending or not _bg_agent_ready_for_input(session_id, status):
                 queued_status = dict(status or {})
                 queued_status["status"] = queued_status.get("status") or "busy"
-                return _queue_terminal_input(session_id, text, queued_status)
+                return _queue_terminal_input(
+                    session_id, text, queued_status,
+                    reason_hint=_TERMINAL_QUEUE_ORDER_REASON if _already_pending else None,
+                )
         worker = _find_live_bg_agent_entry_for_session(session_id)
         result = _inject_bg_agent_via_pty_socket(worker, text, session_id=session_id)
         # Unconfirmed delivery (app-managed terminal that eats socket input):

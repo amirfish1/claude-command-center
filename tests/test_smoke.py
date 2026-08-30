@@ -19237,6 +19237,64 @@ class TestTerminalQueueDrainSafety(unittest.TestCase):
         self.assertIn("_verify_terminal_drain_receipts()", server_py)
 
 
+class TestTerminalQueueHoldTtl(unittest.TestCase):
+    """CCC-1002: a held entry (ask-question/tty-busy/headless-turn/etc) must
+    not retry forever — past _TERMINAL_QUEUE_HOLD_TTL_S the stale head entry
+    is dropped instead of eventually firing into an unrelated later turn."""
+
+    SID = "00000000-0000-4000-8000-000000001002"
+
+    def setUp(self):
+        import server
+        self.server = server
+        self._cleanup_state()
+        self.addCleanup(self._cleanup_state)
+
+    def _cleanup_state(self):
+        self.server._terminal_queue_hold_since.pop(self.SID, None)
+        with self.server._pending_terminal_input_lock:
+            self.server._pending_terminal_input_queue.pop(self.SID, None)
+        self.server._pending_terminal_retry_after.pop(self.SID, None)
+
+    def test_hold_within_ttl_keeps_entry_queued(self):
+        with self.server._pending_terminal_input_lock:
+            self.server._pending_terminal_input_queue[self.SID] = ["/compact"]
+        with mock.patch.object(self.server, "_log_terminal_queue_hold"):
+            self.server._terminal_queue_hold_or_expire(self.SID, "headless_turn")
+        with self.server._pending_terminal_input_lock:
+            self.assertEqual(
+                self.server._pending_terminal_input_queue.get(self.SID), ["/compact"],
+            )
+        self.assertIn(self.SID, self.server._terminal_queue_hold_since)
+
+    def test_hold_past_ttl_drops_stale_head_entry(self):
+        with self.server._pending_terminal_input_lock:
+            self.server._pending_terminal_input_queue[self.SID] = ["/compact", "next"]
+        self.server._terminal_queue_hold_since[self.SID] = (
+            time.time() - self.server._TERMINAL_QUEUE_HOLD_TTL_S - 1
+        )
+        with mock.patch.object(self.server, "_save_pending_inputs"), \
+             mock.patch.object(self.server, "_complete_pending_input_handoff") as complete_mock:
+            self.server._terminal_queue_hold_or_expire(self.SID, "headless_turn")
+        with self.server._pending_terminal_input_lock:
+            self.assertEqual(
+                self.server._pending_terminal_input_queue.get(self.SID), ["next"],
+            )
+        complete_mock.assert_called_once_with("/compact")
+        self.assertNotIn(self.SID, self.server._terminal_queue_hold_since)
+
+    def test_pending_queue_reason_distinct_from_busy_turn_reason(self):
+        """CCC-1002: a message queued only to preserve order behind an
+        earlier queued entry must not claim the live turn is the obstacle —
+        that text drove a user to steer/interrupt an unrelated live turn."""
+        payload = self.server._queue_terminal_input(
+            self.SID, "hello", {"status": "idle"},
+            reason_hint=self.server._TERMINAL_QUEUE_ORDER_REASON,
+        )
+        self.assertEqual(payload["queued_reason"], self.server._TERMINAL_QUEUE_ORDER_REASON)
+        self.assertNotIn("current turn is still running", payload["queued_reason"])
+
+
 class TestAcpGlmHarness(unittest.TestCase):
     """ACP harness #2 (KIMI-FIXES-7): the generic layer must drive a second
     ACP-speaking agent with a registry entry only — no harness-specific code.
