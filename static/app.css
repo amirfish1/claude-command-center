@@ -25138,6 +25138,30 @@ body.ccc-mobile-redesign .conv-item .mobile-details-panel .conv-goal-icon-only {
   margin: 2px 4px 2px 0;
 }
 
+/* Core-app frame: q2 overlays the dashboard without unloading #convList.
+   Sits under the Applications rail (z-index 1000) and, on phones, above
+   the bottom Sessions/Queues bar. */
+.ccc-core-app-frame {
+  display: none;
+  position: fixed;
+  top: 0;
+  left: var(--ccc-rail-w, 76px);
+  z-index: 900;
+  border: 0;
+  /* iframes ignore inset stretch (intrinsic 300x150); size them explicitly. */
+  width: calc(100% - var(--ccc-rail-w, 76px));
+  height: 100%;
+  background: var(--bg, #0d1117);
+}
+.ccc-core-app-frame:not([hidden]) { display: block; }
+@media (max-width: 700px) {
+  .ccc-core-app-frame { left: 0; width: 100%; }
+}
+body.has-mobile-bottom-nav .ccc-core-app-frame {
+  height: calc(100% - 64px - env(safe-area-inset-bottom, 0px));
+}
+body.ccc-core-app-open.has-mobile-bottom-nav .mobile-bottom-nav { z-index: 950; }
+
 /* ---- Mobile bottom nav (Simple Home/Tasks/Helpers/More AND Advanced
    Sessions/Queues). Layout lives here so Advanced can reuse the Simple
    chrome; simple.css only adds Simple-mode extras (icon size, sr-only). */

@@ -16,8 +16,9 @@
  *   3. external embed  — an http(s) URL, or a local companion dashboard
  *                        reached through /proxy/<name>/*.
  *
- * Navigation is plain <a href> page navigation, not an SPA router: that is
- * how the Queues/Sessions toggle already worked, and the Mac app treats any
+ * Navigation is plain <a href> page navigation for user apps. Sessions ↔
+ * Queues is intercepted on the dashboard (cccSwitchCoreApp) so the session
+ * list stays mounted; other apps still navigate. The Mac app treats any
  * URL on the dashboard port as in-app (scripts/macapp/main.swift).
  *
  * Include with:  <script src="/static/app-rail.js" defer></script>
@@ -157,6 +158,33 @@
   var nav = document.createElement("nav");
   nav.className = "ccc-side-nav";
   nav.setAttribute("aria-label", "Applications");
+  // Sessions ↔ Queues: let the dashboard keep the conversation list
+  // mounted (iframe overlay) instead of a full navigation. Other apps
+  // and modified-clicks (cmd-click, middle-click) still follow the href.
+  // On standalone q2.html, cccSwitchCoreApp is undefined and this is a no-op.
+  nav.addEventListener("click", function (e) {
+    if (e.defaultPrevented) return;
+    if (e.button !== 0) return;
+    if (e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return;
+    var a = e.target.closest("a[data-app-id]");
+    if (!a || !nav.contains(a)) return;
+    var id = a.getAttribute("data-app-id");
+    if (id !== "sessions" && id !== "queues") return;
+    if (typeof window.cccSwitchCoreApp === "function" && window.cccSwitchCoreApp(id)) {
+      e.preventDefault();
+    }
+  });
+
+  function markRailActive(id) {
+    var links = nav.querySelectorAll("a[data-app-id]");
+    for (var i = 0; i < links.length; i++) {
+      var on = links[i].getAttribute("data-app-id") === id;
+      links[i].classList.toggle("active", on);
+      if (on) links[i].setAttribute("aria-current", "page");
+      else links[i].removeAttribute("aria-current");
+    }
+  }
+  window.cccMarkRailActive = markRailActive;
 
   function render(apps) {
     var activeId = activeIdFor(apps);

@@ -5,6 +5,13 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Queues</title>
   <link rel="stylesheet" href="/static/q2.css">
+  <script>
+    // When the dashboard hosts this page in #cccCoreAppFrame the parent
+    // already has the rail and the Sessions/Queues bar. Mark framed so
+    // CSS can hide the duplicates before first paint.
+    try { if (window.self !== window.top) document.documentElement.classList.add('ccc-framed'); }
+    catch (e) {}
+  </script>
 </head>
 <body>
   <header class="q2-topbar">

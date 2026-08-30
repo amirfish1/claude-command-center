@@ -14839,6 +14839,8 @@
   // Home/Tasks/Helpers/More screens; Advanced is Sessions vs Queues.
   // Both reuse the EXISTING sidebar tab bar (data-conv-tab, localStorage
   // 'ccc-sidebar-tab') — no new screens/state, no duplicated render logic.
+  var _coreApp = 'sessions';
+  const _sessionsDocumentTitle = document.title;
   let _mobileLastSessionTab = 'inprogress';
   try {
     const _bootTab = localStorage.getItem('ccc-sidebar-tab');
@@ -14903,9 +14905,7 @@
       } else if (typeof _simpleHomeShowing !== 'undefined' && _simpleHomeShowing
         && document.getElementById('simpleHome')) activeNavKey = 'home';
     } else {
-      // This page is Sessions. The Queues item is a real navigation to
-      // /q2.html, so it is never aria-current here.
-      activeNavKey = 'sessions';
+      activeNavKey = _coreApp === 'queues' ? 'queues' : 'sessions';
     }
     nav.querySelectorAll('[data-mobile-nav]').forEach(btn => {
       const active = btn.getAttribute('data-mobile-nav') === activeNavKey;
@@ -14935,12 +14935,14 @@
         if (typeof openSettingsModal === 'function') openSettingsModal();
         return;
       }
-      // Advanced mobile: Sessions vs Queues. Queues is the q2 board
-      // (same destination as the Applications rail, which is hidden on
-      // phones). Sessions stays on this page and dismisses the
-      // conversation overlay so the list is what's on screen.
+      // Advanced mobile: Sessions vs Queues. Same intercept as the rail —
+      // cccSwitchCoreApp keeps the session list mounted.
       if (dest === 'sessions' || dest === 'queues') {
-        if (dest === 'queues') return; // <a href="/q2.html"> — let the link navigate.
+        if (typeof cccSwitchCoreApp === 'function' && cccSwitchCoreApp(dest)) {
+          ev.preventDefault();
+          return;
+        }
+        if (dest === 'queues') return;
         if (typeof isMobile === 'function' && isMobile() && typeof mobileShowMain === 'function') {
           mobileShowMain(false);
         }
@@ -14958,6 +14960,43 @@
   }
   _wireMobileBottomNav();
   _syncMobileBottomNav();
+
+  // Sessions ↔ Queues without unloading the conversation list. The rail
+  // and the phone bottom nav call this; a full navigation would re-parse
+  // every transcript. Queues is hosted in #cccCoreAppFrame (lazy src).
+  // Returns true when handled so the caller can preventDefault.
+  function cccSwitchCoreApp(id, opts) {
+    opts = opts || {};
+    if (document.body.classList.contains('conversation-popout')) return false;
+    if (document.body.classList.contains('flow-popout')) return false;
+    const next = id === 'queues' ? 'queues' : 'sessions';
+    if (next === 'sessions' && typeof isMobile === 'function' && isMobile()
+        && typeof mobileShowMain === 'function') {
+      mobileShowMain(false);
+    }
+    if (next === _coreApp && !opts.force) return true;
+    _coreApp = next;
+    const frame = document.getElementById('cccCoreAppFrame');
+    if (frame) {
+      if (next === 'queues' && !frame.getAttribute('src')) frame.src = '/q2.html';
+      frame.hidden = next !== 'queues';
+    }
+    document.body.classList.toggle('ccc-core-app-open', next === 'queues');
+    document.title = next === 'queues' ? 'Queues' : _sessionsDocumentTitle;
+    if (typeof window.cccMarkRailActive === 'function') window.cccMarkRailActive(next);
+    if (typeof _syncMobileBottomNav === 'function') _syncMobileBottomNav();
+    if (opts.push !== false) {
+      const url = next === 'queues' ? '/q2.html' : '/';
+      try { history.pushState({ cccCoreApp: next }, '', url); } catch (_) {}
+    }
+    return true;
+  }
+  window.cccSwitchCoreApp = cccSwitchCoreApp;
+  window.addEventListener('popstate', function (ev) {
+    const st = ev && ev.state && ev.state.cccCoreApp;
+    const id = st || (location.pathname.indexOf('/q2.html') === 0 ? 'queues' : 'sessions');
+    cccSwitchCoreApp(id, { push: false, force: true });
+  });
 
   // ── Simple-mode slim header ──
   // The search button relocates the REAL .search-wrap (containing the

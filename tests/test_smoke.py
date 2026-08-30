@@ -4590,7 +4590,7 @@ class TestServerImports(unittest.TestCase):
         self.assertIn('data-nav-chrome="advanced"', index_html)
         self.assertIn('data-nav-chrome="simple"', index_html)
         self.assertIn('href="/q2.html"', index_html)
-        self.assertIn('if (dest === \'queues\') return; // <a href="/q2.html">', app_js)
+        self.assertIn("function cccSwitchCoreApp(", app_js)
         self.assertIn("body.has-mobile-bottom-nav .mobile-bottom-nav", app_css)
         self.assertIn(
             'body.has-mobile-bottom-nav:not(.ccc-simple-mode) .mobile-nav-btn[data-nav-chrome="simple"]',
@@ -4599,6 +4599,27 @@ class TestServerImports(unittest.TestCase):
         self.assertIn('id="q2MobileBottomNav"', q2_html)
         self.assertIn('href="/q2.html"', q2_html)
         self.assertIn(".q2-mobile-bottom-nav", q2_css)
+
+    def test_sessions_queues_switch_keeps_the_session_list_mounted(self):
+        """Sessions ↔ Queues must not navigate away from index.html: a full
+        load re-parses every transcript. The dashboard hosts q2 in
+        #cccCoreAppFrame; the rail intercepts those two ids only."""
+        index_html = pathlib.Path(PROJECT_ROOT, "static", "index.html").read_text(encoding="utf-8")
+        app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
+        app_css = pathlib.Path(PROJECT_ROOT, "static", "app.css").read_text(encoding="utf-8")
+        rail = pathlib.Path(PROJECT_ROOT, "static", "app-rail.js").read_text(encoding="utf-8")
+        q2_html = pathlib.Path(PROJECT_ROOT, "static", "q2.html").read_text(encoding="utf-8")
+        q2_css = pathlib.Path(PROJECT_ROOT, "static", "q2.css").read_text(encoding="utf-8")
+
+        self.assertIn('id="cccCoreAppFrame"', index_html)
+        self.assertIn("function cccSwitchCoreApp(", app_js)
+        self.assertIn("frame.src = '/q2.html'", app_js)
+        self.assertIn("window.cccSwitchCoreApp = cccSwitchCoreApp", app_js)
+        self.assertIn('id !== "sessions" && id !== "queues"', rail)
+        self.assertIn("window.cccSwitchCoreApp", rail)
+        self.assertIn(".ccc-core-app-frame", app_css)
+        self.assertIn("ccc-framed", q2_html)
+        self.assertIn("html.ccc-framed .q2-mobile-bottom-nav", q2_css)
 
     def test_mobile_boot_restore_stays_on_session_list(self):
         """A phone cold-open must not slide the last conversation over the
@@ -20222,6 +20243,9 @@ def test_apps_open_inside_the_ccc_window():
     assert "ccc-apps-scrim" in rail
     # A framed page must not draw a second rail inside the first.
     assert "window.self !== window.top" in rail
+    # Sessions ↔ Queues keep the dashboard mounted; other apps still navigate.
+    assert 'id !== "sessions" && id !== "queues"' in rail
+    assert "cccSwitchCoreApp" in rail
     # Rail width is a user preference, persisted across reloads.
     assert "ccc-rail-resizer" in rail
     assert "ccc-rail-width" in rail

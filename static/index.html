@@ -163,6 +163,10 @@
       <span class="mobile-nav-label">Queues</span>
     </a>
   </nav>
+  <!-- Core-app frame: Queues (q2) overlays the dashboard without unloading
+       the session list. src is set on first open. Hidden until then.
+       See cccSwitchCoreApp() in app.js and the rail click intercept. -->
+  <iframe id="cccCoreAppFrame" class="ccc-core-app-frame" hidden title="Queues"></iframe>
   <!-- Floating Annotate button for popout contexts (CCC-166). The topbar
        Annotate button is hidden by the popout CSS, so this floating affordance
        surfaces the same flow in a conversation popout window. It reuses the
