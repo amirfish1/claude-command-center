@@ -33,6 +33,24 @@
   white-space: pre-wrap;
 }
 
+.tp-table {
+  border-collapse: collapse;
+  margin: 0 0 0.85em;
+  font-size: 12.5px;
+}
+.tp-table td {
+  border: 1px solid rgba(255, 255, 255, 0.09);
+  padding: 4px 8px;
+  vertical-align: top;
+}
+.tp-table tr:first-child td { font-weight: 600; color: #a9b8cc; }
+.tp-bq {
+  margin: 0 0 0.85em;
+  padding: 4px 12px;
+  border-left: 3px solid rgba(122, 162, 247, 0.4);
+  color: #b4c0d0;
+}
+
 /* meta strip: Studio / Evidence time / Finding … */
 .tp-meta {
   display: flex;
@@ -103,8 +121,6 @@
   flex-wrap: wrap;
   align-items: baseline;
   gap: 6px;
-  position: sticky;
-  top: 0;
 }
 .tp-conv-sep { color: #55637a; }
 .tp-conv-key {
@@ -188,3 +204,6 @@ html[data-theme="light"] .tp-msg.is-right {
 html[data-theme="light"] .tp-msg.is-center { color: #5b6b80; }
 html[data-theme="light"] .tp-msg-role { color: #5b6b80; }
 html[data-theme="light"] .tp-conv-head { color: #43526a; }
+html[data-theme="light"] .tp-table td { border-color: rgba(0, 0, 0, 0.12); }
+html[data-theme="light"] .tp-table tr:first-child td { color: #43526a; }
+html[data-theme="light"] .tp-bq { color: #4a5a70; border-left-color: rgba(53, 92, 170, 0.35); }

@@ -42670,7 +42670,13 @@
     // clicking into the title and clicking away without editing could
     // silently overwrite the stored note with the truncated version.
     if (!item) return '';
-    const candidates = [item.note, item.text, item.title];
+    // GitHub-synced tickets: the issue title is the human headline; the body
+    // head (note) is often machine meta (digest markers, "Studio: …" lines).
+    // Their title isn't editable in the modal, so this can't feed a re-save.
+    const githubItem = String(item.source || '') === 'github' || !!item.github_repo;
+    const candidates = githubItem
+      ? [item.title, item.note, item.text]
+      : [item.note, item.text, item.title];
     for (const raw of candidates) {
       const lines = String(raw || '').split(/\r?\n/).map(s => s.trim()).filter(Boolean);
       const kept = [];

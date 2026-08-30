@@ -160,6 +160,35 @@
         i++;
         continue;
       }
+      if (trimmed.charAt(0) === '|') {
+        flushPara();
+        var trows = [];
+        while (i < lines.length && lines[i].trim().charAt(0) === '|') {
+          trows.push(lines[i].trim());
+          i++;
+        }
+        var cells = trows
+          .filter(function (r) { return !/^\|[\s\-:|]+\|?$/.test(r); }) // drop |---|---| separators
+          .map(function (r) {
+            return r.replace(/^\||\|$/g, '').split('|').map(function (c) {
+              return '<td>' + decorate(esc(c.trim())) + '</td>';
+            }).join('');
+          });
+        out.push('<table class="tp-table">' + cells.map(function (r) {
+          return '<tr>' + r + '</tr>';
+        }).join('') + '</table>');
+        continue;
+      }
+      if (/^>\s?/.test(trimmed)) {
+        flushPara();
+        var qlines = [];
+        while (i < lines.length && /^>\s?/.test(lines[i].trim())) {
+          qlines.push(lines[i].trim().replace(/^>\s?/, ''));
+          i++;
+        }
+        out.push('<blockquote class="tp-bq">' + decorate(esc(qlines.join('\n'))).replace(/\n/g, '<br>') + '</blockquote>');
+        continue;
+      }
       if (/^([-*]|\d+[.)])\s+/.test(trimmed)) {
         flushPara();
         var items = [];

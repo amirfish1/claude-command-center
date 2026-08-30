@@ -266,7 +266,12 @@
   // rows show the human sentence instead of "Fix the following UX issue…".
   function titleOf(item) {
     if (!item) return '';
-    var candidates = [item.note, item.text, item.title];
+    // GitHub-synced tickets: the issue title is the human headline; the body
+    // head (note) is often machine meta (digest markers, "Studio: …" lines).
+    var githubItem = String(item.source || '') === 'github' || !!item.github_repo;
+    var candidates = githubItem
+      ? [item.title, item.note, item.text]
+      : [item.note, item.text, item.title];
     for (var i = 0; i < candidates.length; i++) {
       // Machine markers (<!-- digest-finding-id: … -->) must never become the
       // row/detail title — strip comments before deriving it.
@@ -677,6 +682,16 @@
     } catch (e) {
       if (state.ref !== ref) return;
       state.detail = null;
+    }
+    if (!state.detail) {
+      // The item endpoint shells to `gh issue view` for GitHub-backed queues
+      // and dies during GraphQL quota storms — which left the pane on
+      // "Loading REF…" forever. The list row we already hold is a perfectly
+      // readable degraded view (body text, status, timeline-less), so show
+      // it rather than nothing.
+      state.detail = (state.items || []).find(function (it) {
+        return it && it.ref === ref;
+      }) || null;
     }
     renderDetail();
   }
