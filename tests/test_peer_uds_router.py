@@ -468,3 +468,61 @@ def test_headless_resume_command_accepts_peer_inbound(monkeypatch, tmp_path):
     cmd = seen.get("cmd") or []
     assert "--settings" in cmd
     assert json.loads(cmd[cmd.index("--settings") + 1]) == {"crossSessionInbound": "accept"}
+
+
+# ------------------------------------------------- CCC-1000 Phase 4: slash guard
+def test_uds_refuses_slash_commands(monkeypatch):
+    """A slash command must never take the UDS transport.
+
+    Measured 2026-08-30: /compact was sent to a live session five times --
+    wrapped in <cross-session-message> and raw, at priority now and next --
+    and every send transported cleanly while none executed. Claude's peer
+    listener hands the frame's content to the session as message *content* and
+    never runs it through the slash-command parser. Sending one anyway returns
+    a transcript-confirmed "delivered" receipt for text that lands inert.
+
+    The tripwire proves the guard fires *before* the registry lookup; a bare
+    "returns None" assertion would pass with the guard deleted.
+    """
+    monkeypatch.setattr(server, "_uds_messaging_enabled", lambda: True)
+    monkeypatch.setattr(server, "_uds_source_eligible", lambda source: True)
+
+    # Derives from BaseException on purpose: _try_uds_peer_delivery wraps the
+    # registry load in `except Exception`, which would swallow a normal
+    # AssertionError and make this test pass with the guard deleted.
+    class _Reached(BaseException):
+        pass
+
+    def _tripwire():
+        raise _Reached()
+
+    monkeypatch.setattr(server, "_load_session_registry", _tripwire)
+
+    for text in ("/compact", "/clear", "  /model sonnet", "/code-review ultra",
+                 "/plugin:skill arg"):
+        assert server._try_uds_peer_delivery(
+            "sid", text, source="wt") is None
+
+    for text in ("hello", "see http://x/y", "use /compact later"):
+        try:
+            server._try_uds_peer_delivery("sid", text, source="wt")
+        except _Reached:
+            pass
+        else:
+            raise AssertionError(f"ordinary text {text!r} skipped the UDS path")
+
+
+def test_announced_from_never_wraps_a_slash_command():
+    """Attribution prefixes push the leading slash off the start of the line,
+    which turns a command into inert prose on every transport AND blinds the
+    UDS guard above -- exactly the case it exists for. A command has no sender
+    semantics to attribute anyway."""
+    assert server._wrap_injected_text_with_announced_from(
+        "/status", "peer-a") == "/status"
+    assert server._wrap_injected_text_with_announced_from(
+        "  /model sonnet", "peer-a") == "  /model sonnet"
+    # Ordinary text is still attributed.
+    assert server._wrap_injected_text_with_announced_from(
+        "hello", "peer-a") == "Announced from: peer-a\n\nhello"
+    assert server._wrap_injected_text_with_announced_from(
+        "use /compact later", "peer-a").startswith("Announced from: peer-a")

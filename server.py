@@ -51252,9 +51252,20 @@ def _normalize_announced_from(payload):
 
 
 def _wrap_injected_text_with_announced_from(text, announced_from):
-    """Prefix injected follow-up text with explicit sender attribution."""
+    """Prefix injected follow-up text with explicit sender attribution.
+
+    Slash commands are returned unwrapped (CCC-1000 Phase 4). A prefix pushes
+    the leading slash off the start of the string, and a slash command only
+    executes when it is the first thing on the line -- so wrapping one turns it
+    into inert prose on every transport, and it also blinds the UDS slash guard
+    in _try_uds_peer_delivery, which is exactly the case that guard exists for.
+    Attribution is meaningless for a command anyway: it has no sender semantics,
+    it either runs or it does not.
+    """
     label = (announced_from or "").strip()
     if not label:
+        return text
+    if _SLASH_COMMAND_TRIGGER_RE.match(str(text or "")):
         return text
     return f"Announced from: {label}\n\n{text}"
 
