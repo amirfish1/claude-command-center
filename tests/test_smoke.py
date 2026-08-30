@@ -14787,6 +14787,21 @@ class TestRepoContextHelpers(unittest.TestCase):
         self.assertEqual(snap["writer"], "unknown")
         self.assertTrue(snap["external_active"])
 
+        # CCC-998: an authoritative "active" status with no fresh
+        # last_activity_at/last_event_at is a stale, abandoned turn (the
+        # writer that started it died without ever reporting idle) — must
+        # not be attributed to an active external writer forever.
+        snap = server._codex_thread_writer_snapshot(
+            "sid", now, rollout=old,
+            app_state={
+                "status": "active", "active_turn_id": "t3", "active_writer": "unknown",
+                "last_activity_at": now - 1800,
+            },
+            attached={}, exec_child=False,
+        )
+        self.assertIsNone(snap["writer"])
+        self.assertFalse(snap["external_active"])
+
         # a CCC-spawned `codex exec` child owns the thread → ccc writer
         snap = server._codex_thread_writer_snapshot(
             "sid", now, rollout=recent, app_state={},

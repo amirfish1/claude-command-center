@@ -34731,6 +34731,14 @@ def _codex_app_server_thread_is_active(session_id, *, start_if_needed=False):
 # itself refreshes the thread.
 _CODEX_DESKTOP_ATTACH_TTL_S = 10.0
 _CODEX_EXTERNAL_WRITER_WINDOW_S = 20.0
+# An authoritative "active" thread status is volatile in-memory state (see
+# _codex_load_coordination_state's docstring) with no automatic idle
+# transition if the writer that started the turn (desktop/mobile app-server
+# client) dies or disconnects without ever sending turn/completed. Without a
+# staleness cap, that leaves the thread permanently mis-attributed to an
+# "external active" writer — CCC shows "Active Codex turn detected" and
+# queues sends forever even though nothing is running (CCC-998).
+_CODEX_ACTIVE_STATUS_STALE_S = 300.0
 _CODEX_COORD_EVENTS_MAX = 40
 _CODEX_COORD_EVENTS_TAIL = 8
 _codex_desktop_attach_cache = {"ts": 0.0, "rollouts": {}}
@@ -34921,9 +34929,15 @@ def _codex_thread_writer_snapshot(session_id, now=None, *, rollout=None,
     # app-server client (mobile, desktop, or another integration). This is more
     # precise than rollout mtime and prevents CCC from becoming a second writer.
     if active_status and active_writer != "ccc":
-        snap["external_active"] = True
-        snap["writer"] = "desktop" if snap["desktop_attached"] else "unknown"
-        return snap
+        try:
+            last_seen_active = float(state.get("last_activity_at") or state.get("last_event_at") or 0)
+        except (TypeError, ValueError):
+            last_seen_active = 0.0
+        stale = bool(last_seen_active) and (now - last_seen_active) > _CODEX_ACTIVE_STATUS_STALE_S
+        if not stale:
+            snap["external_active"] = True
+            snap["writer"] = "desktop" if snap["desktop_attached"] else "unknown"
+            return snap
     if mtime_recent and not ccc_recent:
         snap["external_active"] = True
         snap["writer"] = "desktop" if snap["desktop_attached"] else "unknown"
