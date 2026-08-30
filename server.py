@@ -43579,6 +43579,54 @@ def _parse_codex_event(ev, line_num, token_usage=None, codex_turn_meta=None):
             if token_usage:
                 result["token_usage"] = token_usage
             return result
+        if ptype == "item_completed":
+            # Newer Codex threads (e.g. multi-agent mode) stop emitting the
+            # classic "user_message"/"agent_message" event_msg pair entirely
+            # and wrap text in a nested `item` instead. Only UserMessage/
+            # AgentMessage are handled here: CommandExecution/McpToolCall/
+            # FileChange/Reasoning items are dual-emitted as `response_item`
+            # records (custom_tool_call, reasoning, ...) that already render
+            # via the branches below, so adding those here would duplicate
+            # the tool-call cards.
+            item = payload.get("item") if isinstance(payload.get("item"), dict) else {}
+            itype = item.get("type")
+            if itype == "UserMessage":
+                parts = [
+                    c["text"] for c in (item.get("content") or [])
+                    if isinstance(c, dict) and c.get("type") == "text" and isinstance(c.get("text"), str)
+                ]
+                text = "\n\n".join(p.strip() for p in parts if p.strip()).strip()
+                text = _strip_ccc_session_state_instruction(text)
+                text = _strip_mode3_instruction(text)
+                text, ambient_context = _extract_codex_in_app_browser_context(text)
+                if not text and not ambient_context:
+                    return None
+                result = {"line": line_num, "ts": ts, "type": "user_text", "text": text, "images": []}
+                if ambient_context:
+                    result["ambient_context"] = ambient_context
+                return _apply_codex_turn_meta(result, codex_turn_meta)
+            if itype == "AgentMessage":
+                parts = [
+                    c["text"] for c in (item.get("content") or [])
+                    if isinstance(c, dict) and c.get("type") == "Text" and isinstance(c.get("text"), str)
+                ]
+                text = "\n\n".join(p.strip() for p in parts if p.strip()).strip()
+                text, artifact, artifact_error = _extract_presentation_artifact(text)
+                if not text and artifact is None and not artifact_error:
+                    return None
+                result = {
+                    "line": line_num,
+                    "ts": ts,
+                    "type": "assistant",
+                    "message_id": f"codex-{line_num}",
+                    "blocks": ([{"kind": "text", "text": text}] if text else []),
+                }
+                if artifact is not None:
+                    result["presentation_artifact"] = artifact
+                if artifact_error:
+                    result["presentation_artifact_error"] = artifact_error
+                return _apply_codex_turn_meta(result, codex_turn_meta)
+            return None
         return None
     if ev_type != "response_item":
         return None
