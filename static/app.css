@@ -26271,6 +26271,7 @@ body.status-pos-right .status-rail-pane[data-rail-pane="metadata"] > .files-pane
    followed by a classic-search-results card list (title/meta/snippet). */
 .ask-pane { display: flex; flex-direction: column; height: 100%; min-height: 0; }
 .ask-log { flex: 1 1 auto; overflow-y: auto; padding: 8px; display: flex; flex-direction: column; gap: 18px; }
+.ask-turn + .ask-turn { border-top: 1px solid var(--border); padding-top: 16px; }
 .ask-turn-q { font-weight: 600; opacity: 0.9; padding-left: 9px; border-left: 2px solid var(--accent, #e0a34a); }
 .ask-turn-a { white-space: pre-wrap; line-height: 1.5; margin-top: 8px; }
 .ask-turn-a.is-error { color: var(--danger, #e5484d); }
@@ -26284,7 +26285,10 @@ body.status-pos-right .status-rail-pane[data-rail-pane="metadata"] > .files-pane
 @media (prefers-reduced-motion: reduce) { .ask-dot.is-live { animation: none !important; } }
 .ask-action { margin-top: 4px; padding: 2px 10px; border-radius: 10px; border: 1px solid var(--accent, #7aa2ff); background: transparent; color: inherit; cursor: pointer; font-size: 12px; }
 .ask-action:disabled { opacity: 0.7; cursor: default; }
-.ask-results { display: flex; flex-direction: column; gap: 2px; margin-top: 8px; }
+.ask-sources { margin-top: 8px; }
+.ask-results { display: none; flex-direction: column; gap: 2px; margin-top: 8px; }
+.ask-sources.is-expanded .ask-results { display: flex; }
+.ask-sources.is-expanded .ask-toggle-caret { transform: rotate(90deg); }
 .ask-result { padding: 8px 9px; margin: 0 -9px; border-radius: 7px; cursor: pointer; }
 .ask-result:hover { background: var(--hover-bg, #12161d); }
 .ask-result.is-selected { background: #1b2534; box-shadow: inset 0 0 0 1px #4d7ea8; border-radius: 5px; }
@@ -26294,7 +26298,9 @@ body.status-pos-right .status-rail-pane[data-rail-pane="metadata"] > .files-pane
 .ask-result-meta { display: flex; gap: 7px; padding-left: 13px; margin-top: 4px; font-family: 'JetBrains Mono', monospace; font-size: 10.5px; color: #6e7681; }
 .ask-result-meta .is-live-status { color: #39d2c0; }
 .ask-result-snippet { padding-left: 13px; margin-top: 5px; font-size: 12px; line-height: 1.55; color: #8b949e; }
-.ask-result-count { margin-top: 9px; font-family: 'JetBrains Mono', monospace; font-size: 10.5px; color: #565e68; }
+.ask-result-count { display: flex; align-items: center; gap: 5px; background: none; border: none; padding: 0; margin: 0; cursor: pointer; font-family: 'JetBrains Mono', monospace; font-size: 10.5px; color: #565e68; }
+.ask-result-count:hover { color: #8b949e; }
+.ask-toggle-caret { display: inline-block; transition: transform .12s ease; }
 /* Stacked, not the mock's single row — the mock's 620px demo panel had room
    for title + id + 3 buttons inline; CCC's real right rail is ~260-380px,
    so that row overflows and pushes the action buttons off-screen. */

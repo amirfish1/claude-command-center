@@ -56824,12 +56824,13 @@
   function askResultsHtml(t, selectedId) {
     const sources = t.sources || [];
     if (!sources.length) return '';
-    let out = '<div class="ask-results">' + sources.map(s => askResultHtml(s, selectedId)).join('') + '</div>';
     const count = Number.isFinite(t.hitCount) ? t.hitCount : sources.length;
     const elapsed = Number.isFinite(t.elapsedMs) ? (t.elapsedMs / 1000).toFixed(1) + 's' : '';
-    out += '<div class="ask-result-count">' + count + (count === 1 ? ' session' : ' sessions') + ' found' +
-      (elapsed ? ' · ' + elapsed : '') + '</div>';
-    return out;
+    const list = '<div class="ask-results">' + sources.map(s => askResultHtml(s, selectedId)).join('') + '</div>';
+    const summary = '<button type="button" class="ask-result-count" data-ask-toggle-sources>' +
+      '<span class="ask-toggle-caret">▸</span> ' + count + (count === 1 ? ' source' : ' sources') + ' found' +
+      (elapsed ? ' · ' + elapsed : '') + '</button>';
+    return '<div class="ask-sources">' + summary + list + '</div>';
   }
 
   // Escape first, then swap validated action markers for spawn buttons — ids
@@ -56918,6 +56919,13 @@
     }
 
     log.addEventListener('click', (ev) => {
+      const toggleBtn = ev.target.closest('[data-ask-toggle-sources]');
+      if (toggleBtn) {
+        const wrap = toggleBtn.closest('.ask-sources');
+        if (wrap) wrap.classList.toggle('is-expanded');
+        return;
+      }
+
       const card = ev.target.closest('[data-ask-open]');
       if (card) {
         const id = card.getAttribute('data-ask-open');
