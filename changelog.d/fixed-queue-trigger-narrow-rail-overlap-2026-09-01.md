@@ -1,0 +1,1 @@
+- Fix queue trigger overflow in narrow rails: long queue names no longer push the field row past the panel edge, eliminating the overlap with rows below. Trigger now truncates with ellipsis and the field row wraps in mobile mode so the filter gets its own line.
