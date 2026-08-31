@@ -42538,68 +42538,640 @@
     }
     return [...set].sort(_uxqScopeCmp);
   }
+  // ── Queue picker redesign ────────────────────────────────────────────────
+  // Replaces the native <select id="queueScopeSelect"> with a custom trigger
+  // that opens an anchored card (desktop) / bottom sheet (mobile) listing
+  // queues grouped NEEDS YOU → RECENT → ALL QUEUES, plus a WORKING NOW strip.
+  // See docs/handoff design: CCC Queue Tab. One surface, two entry points
+  // (trigger click + ⌘K when the Queue rail tab is active).
+  //
+  // State lives on the panel element (#queuePanel) via data attributes + a
+  // module-level _uxqPicker object so a re-render of the ticket list (which
+  // does NOT rebuild the trigger) does not close the picker or lose the
+  // filter string. The picker re-reads the cached health/items on each paint.
+  const _uxqPicker = {
+    open: false,
+    filter: '',
+    highlight: 0,        // index into the flattened visible results
+    flat: [],            // flattened visible rows (queue + ticket), built each paint
+    isMobile: false,     // mirrors the pane's fq-mobile class
+  };
+  // GitHub mark — same inline SVG the q2 board uses (zero-asset contract).
+  // Kept here so the picker/trigger share one source of truth with q2.js.
+  const _UXQ_GH_MARK = '<svg class="fq-gh" viewBox="0 0 16 16" width="11" height="11" aria-hidden="true" focusable="false">'
+    + '<path fill="currentColor" d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38'
+    + ' 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53'
+    + '.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95'
+    + ' 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27s1.36.09 2 .27'
+    + 'c1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95'
+    + '.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.01 8.01 0 0 0 16 8c0-4.42-3.58-8-8-8Z"/>'
+    + '</svg>';
+  // Parent resolution: a sub-queue's parent is the LONGEST existing root
+  // queue that its name starts with, plus '-'. Do NOT chop the last hyphen
+  // segment — BECKY-CONTEXT-DIET's parent is BECKY, not BECKY-CONTEXT.
+  // "Root" = a queue whose name is not itself a child (no longer-root prefix).
+  function _uxqPickerParentOf(name, rootNames) {
+    const n = _uxqProjectKey(name);
+    if (!n) return '';
+    let best = '';
+    for (const root of rootNames) {
+      if (root && n.startsWith(root + '-') && root.length > best.length) best = root;
+    }
+    return best;
+  }
+  // Build the flat list of root queue names (queues that are not children of
+  // any other queue). Used for parent resolution + sub-queue counts.
+  function _uxqPickerRootNames(queues) {
+    const names = (Array.isArray(queues) ? queues : [])
+      .map(q => _uxqProjectKey(q && q.queue)).filter(n => n && n !== '?');
+    const set = new Set(names);
+    const roots = [];
+    for (const n of set) {
+      // n is a root if no other queue name is a longer prefix of it
+      let isChild = false;
+      for (const other of set) {
+        if (other !== n && other.length < n.length && n.startsWith(other + '-')) { isChild = true; break; }
+      }
+      if (!isChild) roots.push(n);
+    }
+    return roots.sort((a, b) => a.localeCompare(b));
+  }
+  // Per-queue rollup. One pass over health.queues + items + workers, cached
+  // on the health cache so the picker opens instantly (no per-queue fetch).
+  // Shape: { name, parent, openCount, needsInputCount, lastActivityAt,
+  //          hasRunningAgent, subQueueCount, repoPath, githubLinked,
+  //          autoDrainOn }
+  function _uxqPickerRollup() {
+    const health = _uxqHealthCache || {};
+    const queues = Array.isArray(health.queues) ? health.queues : [];
+    const items = Array.isArray(_uxqItemsCache.items) ? _uxqItemsCache.items : [];
+    const workers = Array.isArray(health.wt_workers) ? health.wt_workers : [];
+    const rootNames = _uxqPickerRootNames(queues);
+    // live worker queues
+    const liveQueues = new Set();
+    for (const w of workers) {
+      if (w && w.alive !== false) {
+        const k = _uxqProjectKey(w.queue);
+        if (k) liveQueues.add(k);
+      }
+    }
+    // needs-input + open counts per queue from items
+    const needsByQ = new Map();
+    const openByQ = new Map();
+    for (const it of items) {
+      if (!it) continue;
+      const k = _uxqProjectKey(it.project);
+      if (!k || k === '?') continue;
+      if (it.status === 'closed') continue;
+      openByQ.set(k, (openByQ.get(k) || 0) + 1);
+      if (it.needs_input) needsByQ.set(k, (needsByQ.get(k) || 0) + 1);
+    }
+    // sub-queue counts per root
+    const subsByRoot = new Map();
+    for (const q of queues) {
+      const n = _uxqProjectKey(q && q.queue);
+      if (!n) continue;
+      const parent = _uxqPickerParentOf(n, rootNames);
+      if (parent) subsByRoot.set(parent, (subsByRoot.get(parent) || 0) + 1);
+    }
+    // GitHub-backed? Mirror q2.js: a queue is github-backed if any of its
+    // items carry source==='github' / github_repo, OR its config backend is
+    // github. The queues[] row doesn't carry backend, so derive from items
+    // (the same source q2's queueFacts uses) + the _queue_is_github helper
+    // exposed on the server module is not client-side; items are.
+    const ghByQ = new Set();
+    for (const it of items) {
+      if (it && (String(it.source || '') === 'github' || it.github_repo)) {
+        ghByQ.add(_uxqProjectKey(it.project));
+      }
+    }
+    const out = [];
+    for (const q of queues) {
+      const name = _uxqProjectKey(q && q.queue);
+      if (!name) continue;
+      const parent = _uxqPickerParentOf(name, rootNames);
+      out.push({
+        name,
+        parent,
+        openCount: openByQ.get(name) || 0,
+        needsInputCount: needsByQ.get(name) || 0,
+        lastActivitySeconds: (q.last_activity_seconds != null) ? Number(q.last_activity_seconds) : null,
+        hasRunningAgent: liveQueues.has(name),
+        subQueueCount: parent ? 0 : (subsByRoot.get(name) || 0),
+        repoPath: String((q && q.repo_path) || ''),
+        githubLinked: ghByQ.has(name),
+        autoDrainOn: !!(q && q.auto_drain),
+      });
+    }
+    return out;
+  }
+  // Relative time for the picker/trigger. Reuses _uxqFmtAge (now/5m/5h/2d).
+  function _uxqPickerLastActivity(q) {
+    return (q.lastActivitySeconds != null) ? _uxqFmtAge(q.lastActivitySeconds) : '';
+  }
+  // Build the groups for the picker given a filter string.
+  // Returns [{label, tint, count, rows[]}] where rows are render-ready
+  // objects. Also sets _uxqPicker.flat to the flattened queue+ticket rows
+  // (skipping group headers) for keyboard navigation.
+  function _uxqPickerGroups(rollup, items, filter) {
+    const s = String(filter || '').trim().toLowerCase();
+    const all = rollup.slice();
+    // map by name for quick lookup
+    const byName = new Map(all.map(q => [q.name, q]));
+    if (s) {
+      // Filtered: queues first (by name substring), then tickets (id+title).
+      // Queue rank: needs-input desc, then match position (earlier wins),
+      // then open count desc.
+      const qHits = all.filter(q => q.name.toLowerCase().includes(s))
+        .sort((a, b) => (b.needsInputCount - a.needsInputCount)
+          || a.name.toLowerCase().indexOf(s) - b.name.toLowerCase().indexOf(s)
+          || b.openCount - a.openCount);
+      const tHits = (Array.isArray(items) ? items : [])
+        .filter(it => it && it.status !== 'closed' && (
+          String(_uxqItemRef(it)).toLowerCase().includes(s)
+          || String(it.note || it.title || it.text || '').toLowerCase().includes(s)
+        ))
+        .slice(0, 6);
+      const groups = [];
+      if (qHits.length) groups.push({
+        label: 'QUEUES', tint: '#8b949e', count: qHits.length,
+        rows: qHits.map(q => _uxqPickerQueueRow(q, { flat: true, allItems: items })),
+      });
+      if (tHits.length) groups.push({
+        label: 'TICKETS', tint: '#8b949e', count: tHits.length,
+        rows: tHits.map(t => _uxqPickerTicketRow(t)),
+      });
+      _uxqPicker.flat = groups.reduce((acc, g) => acc.concat(g.rows), []);
+      return groups;
+    }
+    // Unfiltered: NEEDS YOU → RECENT → ALL QUEUES.
+    // 1. NEEDS YOU: needsInputCount >= 1, sort by needs desc then last-activity desc.
+    const needs = all.filter(q => q.needsInputCount > 0)
+      .sort((a, b) => (b.needsInputCount - a.needsInputCount)
+        || _uxqPickerActDesc(b, a));
+    // 2. RECENT: next most-recently-active not in NEEDS YOU, cap 5.
+    const needsNames = new Set(needs.map(q => q.name));
+    const recent = all.filter(q => !needsNames.has(q.name))
+      .sort(_uxqPickerActDesc)
+      .slice(0, 5);
+    // 3. ALL QUEUES: alphabetical, sub-queues under parent (sort key =
+    //    parent||name, then depth, then name).
+    const allSorted = all.slice().sort((a, b) => {
+      const pa = a.parent || a.name;
+      const pb = b.parent || b.name;
+      const c = pa.localeCompare(pb);
+      if (c) return c;
+      const da = a.parent ? 1 : 0;
+      const db = b.parent ? 1 : 0;
+      if (da !== db) return da - db;
+      return a.name.localeCompare(b.name);
+    });
+    const groups = [];
+    if (needs.length) groups.push({
+      label: 'NEEDS YOU', tint: '#e5695c', count: needs.length,
+      rows: needs.map(q => _uxqPickerQueueRow(q, { flat: true, allItems: items })),
+    });
+    if (recent.length) groups.push({
+      label: 'RECENT', tint: '#39d2c0', count: recent.length,
+      rows: recent.map(q => _uxqPickerQueueRow(q, { flat: true, allItems: items })),
+    });
+    groups.push({
+      label: 'ALL QUEUES', tint: '#6e7681', count: allSorted.length,
+      rows: allSorted.map(q => _uxqPickerQueueRow(q, { flat: false, allItems: items })),
+    });
+    _uxqPicker.flat = groups.reduce((acc, g) => acc.concat(g.rows), []);
+    return groups;
+  }
+  function _uxqPickerActDesc(a, b) {
+    const av = (a.lastActivitySeconds != null) ? a.lastActivitySeconds : Infinity;
+    const bv = (b.lastActivitySeconds != null) ? b.lastActivitySeconds : Infinity;
+    return av - bv; // lower seconds = more recent = first
+  }
+  // One queue row as a render-ready object. `flat` = no └ glyph / sub chip
+  // (NEEDS YOU / RECENT / filtered). `allItems` for the meta line on mobile.
+  function _uxqPickerQueueRow(q, opts) {
+    const o = opts || {};
+    const isChild = !!q.parent && !o.flat;
+    const openLabel = q.openCount > 0 ? String(q.openCount) : '—';
+    const last = _uxqPickerLastActivity(q);
+    const needsLabel = q.needsInputCount > 0 ? (q.needsInputCount + ' need you') : '';
+    const subsLabel = q.subQueueCount > 0 ? ('+' + q.subQueueCount) : '';
+    const repoShort = q.repoPath ? _uxqPickerShortRepo(q.repoPath) : '';
+    const meta = _uxqPickerMetaLine(q);
+    return {
+      kind: 'queue',
+      name: q.name,
+      queue: q,
+      child: isChild,
+      live: q.hasRunningAgent,
+      subs: !o.flat && q.subQueueCount > 0,
+      subsLabel,
+      gh: q.githubLinked,
+      hasRepo: !!q.repoPath,
+      repo: repoShort,
+      hasNeeds: q.needsInputCount > 0,
+      needs: needsLabel,
+      openLabel,
+      last,
+      drainOn: q.autoDrainOn,
+      drainOff: !q.autoDrainOn,
+      meta,
+      pick: () => { _uxqPickerPickQueue(q.name); },
+    };
+  }
+  // One ticket row (filtered TICKETS group only).
+  function _uxqPickerTicketRow(t) {
+    const ref = _uxqItemRef(t);
+    const title = String(t.note || t.title || t.text || '').split('\n')[0];
+    const ageSrc = t.updated_at || t.created_at;
+    const ageMs = ageSrc ? Date.parse(ageSrc) : NaN;
+    const age = !isNaN(ageMs) ? timeAgo(ageMs).replace(/\s+ago$/, '') : '';
+    const kind = t.type === 'feature' ? 'FR' : 'BUG';
+    return {
+      kind: 'ticket',
+      name: ref + ' · ' + title,
+      child: false,
+      live: false,
+      subs: false,
+      subsLabel: '',
+      gh: false,
+      hasRepo: false,
+      repo: '',
+      hasNeeds: !!t.needs_input,
+      needs: t.needs_input ? 'needs input' : '',
+      openLabel: '',
+      last: age,
+      drainOn: false,
+      drainOff: false,
+      meta: kind + ' · ' + age,
+      pick: () => { _uxqPickerPickTicket(ref, t); },
+    };
+  }
+  // Last two segments of a repo path (matches q2.js shortPath).
+  function _uxqPickerShortRepo(p) {
+    const parts = String(p || '').replace(/\/+$/, '').split('/').filter(Boolean);
+    if (parts.length <= 2) return parts.join('/');
+    return parts.slice(-2).join('/');
+  }
+  // Mobile meta line, precomputed as one string (do not concatenate in view).
+  //   repo · N open · last      |  N open · last      |  repo · empty · last
+  function _uxqPickerMetaLine(q) {
+    const repo = q.repoPath ? _uxqPickerShortRepo(q.repoPath) : '';
+    const openPart = q.openCount > 0 ? (q.openCount + ' open') : 'empty';
+    const last = _uxqPickerLastActivity(q);
+    const bits = [];
+    if (repo) bits.push(repo);
+    bits.push(openPart);
+    if (last) bits.push(last);
+    return bits.join(' · ');
+  }
+  // Selecting a queue from the picker: set the scope override, close, repaint.
+  function _uxqPickerPickQueue(name) {
+    _uxqSetScopeOverride(name);
+    _uxqPickerClose();
+    _uxqResetHistoryPage();
+    _uxqItemsCache.ts = 0;
+    _uxqSetScopeLoading(true);
+    Promise.resolve(_renderQueuePanel({ allowStale: true })).finally(() => {
+      _uxqSetScopeLoading(false);
+    });
+    // Scroll the ticket list to top so the new selection's first row shows.
+    const $list = document.getElementById('sidebarQueueList');
+    if ($list) $list.scrollTop = 0;
+  }
+  // Selecting a ticket from the picker: switch queue if needed, then open it.
+  function _uxqPickerPickTicket(ref, item) {
+    const qName = _uxqProjectKey(item && item.project);
+    const currentOverride = _uxqGetScopeOverride();
+    const currentResolved = _uxqLastResolvedProject;
+    const inCurrent = currentResolved && _uxqInScope(item.project, currentResolved);
+    const pickAndOpen = () => {
+      _uxqPickerClose();
+      _uxqOpenItemDetail(ref);
+    };
+    if (inCurrent) { pickAndOpen(); return; }
+    // Switch queue to the ticket's queue, then open once the panel repaints.
+    if (qName) {
+      _uxqSetScopeOverride(qName);
+      _uxqResetHistoryPage();
+      _uxqItemsCache.ts = 0;
+      _uxqSetScopeLoading(true);
+      Promise.resolve(_renderQueuePanel({ allowStale: true })).then(() => {
+        _uxqSetScopeLoading(false);
+        _uxqPickerClose();
+        _uxqOpenItemDetail(ref);
+      });
+    } else {
+      pickAndOpen();
+    }
+  }
+  // ── trigger (the field row's clickable pill) ───────────────────────────
+  function _uxqRenderQueueTrigger(items, currentScope) {
+    const $trig = document.getElementById('queueScopeTrigger');
+    if (!$trig) return;
+    const rollup = _uxqPickerRollup();
+    const override = _uxqGetScopeOverride();
+    const resolvedKey = _uxqProjectKey(currentScope);
+    // The trigger shows the resolved queue (override or derived). 'All queues'
+    // (empty scope) shows a synthetic ALL row.
+    let q;
+    if (override) {
+      q = rollup.find(r => r.name === override);
+    }
+    if (!q && resolvedKey) {
+      q = rollup.find(r => r.name === resolvedKey);
+    }
+    const allQueues = !q && (!override || _uxqProjectKey(override) === 'ALL' || !resolvedKey);
+    const open = _uxqPicker.open;
+    const chev = open ? '▴' : '▾';
+    const liveDot = q && q.hasRunningAgent
+      ? '<span class="fq-qp-live pulse"></span>'
+      : (allQueues ? '<span class="fq-qp-live-spacer"></span>' : '');
+    const nameHtml = q
+      ? '<span class="fq-qp-trig-name">' + escapeHtml(q.name) + '</span>'
+      : '<span class="fq-qp-trig-name">ALL</span>';
+    const subsHtml = q && q.subQueueCount > 0
+      ? '<span class="fq-qp-trig-subs">' + escapeHtml('+' + q.subQueueCount + ' sub-queue' + (q.subQueueCount === 1 ? '' : 's')) + '</span>'
+      : '';
+    const ghHtml = q && q.githubLinked
+      ? '<span class="fq-gh-chip" title="Linked to GitHub">' + _UXQ_GH_MARK + '</span>'
+      : '';
+    const repoHtml = q && q.repoPath
+      ? '<span class="fq-qp-trig-repo" title="' + escapeAttr(q.repoPath) + '">' + escapeHtml(_uxqPickerShortRepo(q.repoPath)) + '</span>'
+      : '';
+    const drainGlyph = q
+      ? (q.autoDrainOn
+          ? '<span class="fq-qp-drain is-on" title="Auto-drain on">▶</span>'
+          : '<span class="fq-qp-drain is-off" title="Auto-drain off">▪</span>')
+      : '';
+    const needsHtml = q && q.needsInputCount > 0
+      ? '<span class="fq-qp-trig-needs">' + escapeHtml(q.needsInputCount + ' need you') + '</span>'
+      : '';
+    const openHtml = q
+      ? '<span class="fq-qp-trig-open">' + escapeHtml(q.openCount + ' open') + '</span>'
+      : '';
+    const right = '<span class="fq-qp-trig-right">'
+      + drainGlyph + needsHtml + openHtml
+      + '<span class="fq-qp-chev">' + chev + '</span></span>';
+    $trig.innerHTML = liveDot + nameHtml + subsHtml + ghHtml + repoHtml + right;
+    $trig.setAttribute('aria-expanded', open ? 'true' : 'false');
+    $trig.classList.toggle('is-open', open);
+  }
+  // ── WORKING NOW strip ──────────────────────────────────────────────────
+  // Spans ALL queues (not scoped). Updates live via the same health poll/SSE
+  // that drives _renderQueuePanel. Collapses to header-only when idle.
+  function _uxqRenderWorkingNow() {
+    const $el = document.getElementById('queueWorkingStrip');
+    if (!$el) return;
+    const health = _uxqHealthCache || {};
+    const workers = (Array.isArray(health.wt_workers) ? health.wt_workers : [])
+      .filter(w => w && w.alive !== false);
+    const items = Array.isArray(_uxqItemsCache.items) ? _uxqItemsCache.items : [];
+    const queues = Array.isArray(health.queues) ? health.queues : [];
+    const queueNames = [...new Set(workers.map(w => _uxqProjectKey(w.queue)).filter(Boolean))];
+    const summary = _uxqPicker.isMobile
+      ? (workers.length ? String(workers.length) : '0')
+      : (workers.length + ' agent' + (workers.length === 1 ? '' : 's') + ' · '
+         + queueNames.length + ' queue' + (queueNames.length === 1 ? '' : 's'));
+    // Build a row per worker, joined to its claimed ticket for id+title.
+    const rows = workers.map(w => {
+      const qKey = _uxqProjectKey(w && w.queue);
+      const on = items.find(it => {
+        if (!it || it.status === 'closed' || it.closed_at) return false;
+        const claimedSession = String((it && it.claimed_session_id) || '').trim();
+        const claimedBy = String((it && it.claimed_by) || '').trim();
+        const session = String(w.session_id || '').trim();
+        const id = String(w.worker_id || '').trim();
+        return (claimedSession && claimedSession === session)
+          || (claimedBy && (claimedBy === session || claimedBy === id));
+      });
+      const ref = on ? _uxqItemRef(on) : '';
+      const title = on ? String(on.note || on.title || on.text || '').split('\n')[0] : 'idle';
+      const startedMs = Date.parse((w && w.started_at) || '');
+      const elapsed = Number.isFinite(startedMs)
+        ? _uxqFmtAge(Math.max(0, (Date.now() - startedMs) / 1000)) : '';
+      return { ref, title, queue: qKey, worker: String(w.worker_id || 'worker'), elapsed };
+    });
+    const $rows = $el.querySelector('.fq-working-rows');
+    const $summary = $el.querySelector('.fq-working-summary');
+    const $head = $el.querySelector('.fq-working-head');
+    if ($summary) $summary.textContent = summary;
+    if ($head) $head.classList.toggle('is-only', rows.length === 0);
+    if ($rows) {
+      $rows.innerHTML = rows.map(r => {
+        if (_uxqPicker.isMobile) {
+          return '<div class="fq-working-row is-mobile" data-uxq-working-ref="' + escapeAttr(r.ref) + '">'
+            + '<span class="fq-working-id">' + escapeHtml(r.ref || '—') + '</span>'
+            + '<span class="fq-working-body">'
+            + '<span class="fq-working-title">' + escapeHtml(r.title) + '</span>'
+            + '<span class="fq-working-meta">' + escapeHtml(r.queue + ' · ' + r.elapsed) + '</span>'
+            + '</span>'
+            + '<span class="fq-working-dot"></span>'
+            + '</div>';
+        }
+        return '<div class="fq-working-row" data-uxq-working-ref="' + escapeAttr(r.ref) + '">'
+          + '<span class="fq-working-id">' + escapeHtml(r.ref || '—') + '</span>'
+          + '<span class="fq-working-title">' + escapeHtml(r.title) + '</span>'
+          + '<span class="fq-working-right">'
+          + '<span class="fq-working-queue">' + escapeHtml(r.queue) + '</span>'
+          + '<span class="fq-working-worker">' + escapeHtml(r.worker) + '</span>'
+          + '<span class="fq-working-elapsed">' + escapeHtml(r.elapsed) + '</span>'
+          + '</span></div>';
+      }).join('');
+    }
+  }
+  // ── picker card / sheet render ─────────────────────────────────────────
+  function _uxqRenderPicker() {
+    const $card = document.getElementById('queuePickerCard');
+    if (!$card) return;
+    const rollup = _uxqPickerRollup();
+    const items = Array.isArray(_uxqItemsCache.items) ? _uxqItemsCache.items : [];
+    const groups = _uxqPickerGroups(rollup, items, _uxqPicker.filter);
+    const $results = $card.querySelector('.fq-qp-results');
+    const $filter = $card.querySelector('.fq-qp-filter-input');
+    if ($filter && document.activeElement !== $filter) {
+      $filter.value = _uxqPicker.filter;
+    }
+    if (!$results) return;
+    // Clamp highlight into range.
+    if (_uxqPicker.highlight >= _uxqPicker.flat.length) _uxqPicker.highlight = Math.max(0, _uxqPicker.flat.length - 1);
+    const groupsHtml = groups.map(g => {
+      const header = '<div class="fq-qp-group-head">'
+        + '<span class="fq-qp-group-label" style="color:' + g.tint + '">' + escapeHtml(g.label) + '</span>'
+        + '<span class="fq-qp-group-count">' + escapeHtml(String(g.count)) + '</span>'
+        + '</div>';
+      const rowsHtml = g.rows.map((r, i) => {
+        const flatIdx = _uxqPicker.flat.indexOf(r);
+        const highlighted = flatIdx === _uxqPicker.highlight;
+        return _uxqPickerRowHtml(r, highlighted, flatIdx);
+      }).join('');
+      return '<div class="fq-qp-group">' + header + rowsHtml + '</div>';
+    }).join('');
+    $results.innerHTML = groupsHtml || '';
+  }
+  // One picker row's HTML. Mirrors the design's left→right layout for desktop
+  // and the two-line mobile layout (selected via .fq-mobile on the panel).
+  function _uxqPickerRowHtml(r, highlighted, flatIdx) {
+    const cls = 'fq-qp-row' + (highlighted ? ' is-hl' : '') + (r.kind === 'ticket' ? ' is-ticket' : '');
+    const childGlyph = r.child ? '<span class="fq-qp-tree">└</span>' : '';
+    const liveDot = r.live ? '<span class="fq-qp-row-live"></span>' : '';
+    const ghChip = r.gh ? '<span class="fq-gh-chip" title="Linked to GitHub">' + _UXQ_GH_MARK + '</span>' : '';
+    const subsChip = r.subs ? '<span class="fq-qp-row-subs">' + escapeHtml(r.subsLabel) + '</span>' : '';
+    const repo = r.hasRepo ? '<span class="fq-qp-row-repo" title="' + escapeAttr(r.repo) + '">' + escapeHtml(r.repo) + '</span>' : '';
+    const needsPill = r.hasNeeds ? '<span class="fq-qp-needs">' + escapeHtml(r.needs) + '</span>' : '';
+    const openCol = r.openLabel !== '' ? '<span class="fq-qp-open">' + escapeHtml(r.openLabel) + '</span>' : '';
+    const lastCol = r.last ? '<span class="fq-qp-last">' + escapeHtml(r.last) + '</span>' : '';
+    const drainGlyph = r.kind === 'queue'
+      ? (r.drainOn
+          ? '<span class="fq-qp-row-drain is-on" title="Auto-drain on">▶</span>'
+          : '<span class="fq-qp-row-drain is-off" title="Auto-drain off">▪</span>')
+      : '';
+    if (_uxqPicker.isMobile) {
+      // Two-line: name+gh on line 1, meta on line 2; right group = needs pill + drain.
+      const line1 = '<span class="fq-qp-row-line1">'
+        + liveDot + '<span class="fq-qp-row-name">' + escapeHtml(r.name) + '</span>' + ghChip + '</span>';
+      const line2 = '<span class="fq-qp-row-line2">' + escapeHtml(r.meta) + '</span>';
+      const body = '<span class="fq-qp-row-body">' + line1 + line2 + '</span>';
+      const right = '<span class="fq-qp-row-right">' + needsPill + drainGlyph + '</span>';
+      return '<div class="' + cls + '" data-uxq-qp-idx="' + flatIdx + '" role="option">'
+        + childGlyph + body + right + '</div>';
+    }
+    const name = '<span class="fq-qp-row-name">' + escapeHtml(r.name) + '</span>';
+    const right = '<span class="fq-qp-row-right">'
+      + needsPill + openCol + lastCol + drainGlyph + '</span>';
+    return '<div class="' + cls + '" data-uxq-qp-idx="' + flatIdx + '" role="option">'
+      + childGlyph + liveDot + name + subsChip + ghChip + repo + right + '</div>';
+  }
+  // ── open / close ───────────────────────────────────────────────────────
+  function _uxqPickerOpen() {
+    if (_uxqPicker.open) return;
+    // Refuse if the Queue pane isn't mounted (no trigger).
+    const $trig = document.getElementById('queueScopeTrigger');
+    if (!$trig) return;
+    _uxqPicker.open = true;
+    _uxqPicker.filter = '';
+    _uxqPicker.highlight = 0;
+    const $panel = document.getElementById('queuePanel');
+    if ($panel) $panel.classList.add('fq-picker-open');
+    // Anchor the scrim + card to the trigger's bottom edge (the handoff says
+    // "anchor to the trigger's bottom rather than copying 132px"). The trigger
+    // stays visible + clickable above the scrim (z-index: 51).
+    const $card = document.getElementById('queuePickerCard');
+    if ($card && $trig) {
+      const trigBottom = $trig.getBoundingClientRect().bottom;
+      const panelTop = $panel ? $panel.getBoundingClientRect().top : 0;
+      $card.style.setProperty('--fq-qp-top', Math.max(0, trigBottom - panelTop) + 'px');
+    }
+    _uxqRenderQueueTrigger(_uxqItemsCache.items, _uxqLastResolvedProject);
+    _uxqRenderPicker();
+    // Autofocus the filter field after the DOM settles.
+    setTimeout(() => {
+      const $f = $card && $card.querySelector('.fq-qp-filter-input');
+      if ($f) $f.focus();
+    }, 0);
+  }
+  function _uxqPickerClose() {
+    if (!_uxqPicker.open) return;
+    _uxqPicker.open = false;
+    const $panel = document.getElementById('queuePanel');
+    if ($panel) $panel.classList.remove('fq-picker-open');
+    _uxqRenderQueueTrigger(_uxqItemsCache.items, _uxqLastResolvedProject);
+  }
+  function _uxqPickerToggle() {
+    if (_uxqPicker.open) _uxqPickerClose(); else _uxqPickerOpen();
+  }
+  // ── keyboard ───────────────────────────────────────────────────────────
+  // Moves highlight across the flattened visible results, skipping group
+  // headers (already excluded from _uxqPicker.flat). Wraps at both ends.
+  function _uxqPickerMove(delta) {
+    if (!_uxqPicker.flat.length) return;
+    const n = _uxqPicker.flat.length;
+    let i = _uxqPicker.highlight + delta;
+    if (i < 0) i = n - 1;
+    if (i >= n) i = 0;
+    _uxqPicker.highlight = i;
+    _uxqRenderPicker();
+    _uxqPickerScrollHlIntoView();
+  }
+  function _uxqPickerScrollHlIntoView() {
+    const $card = document.getElementById('queuePickerCard');
+    if (!$card) return;
+    const $hl = $card.querySelector('.fq-qp-row.is-hl');
+    if ($hl) $hl.scrollIntoView({ block: 'nearest' });
+  }
+  function _uxqPickerActivate() {
+    const row = _uxqPicker.flat[_uxqPicker.highlight];
+    if (row && typeof row.pick === 'function') row.pick();
+  }
+  // Document-level keyboard handler. Attached once at boot; no-ops when the
+  // picker is closed. ⌘K/Ctrl-K is contextual: only opens the queue picker
+  // when the Queue rail tab is the active tab (otherwise the global session-
+  // search palette wins). Arrow/Enter/Esc only act while the picker is open.
+  function _uxqPickerIsQueueTabActive() {
+    const $tab = document.querySelector('[data-rail-tab="queue"]');
+    return !!($tab && $tab.classList.contains('is-active'));
+  }
+  function _uxqPickerOnKeydown(e) {
+    // ⌘K / Ctrl-K — contextual queue picker open, only on the Queue tab.
+    const meta = e.metaKey || e.ctrlKey;
+    if (meta && (e.key === 'k' || e.key === 'K')) {
+      if (_uxqPickerIsQueueTabActive()) {
+        e.preventDefault();
+        e.stopImmediatePropagation();
+        if (_uxqPicker.open) _uxqPickerClose(); else _uxqPickerOpen();
+        return;
+      }
+    }
+    if (!_uxqPicker.open) return;
+    if (e.key === 'Escape') {
+      e.preventDefault();
+      _uxqPickerClose();
+    } else if (e.key === 'ArrowDown') {
+      e.preventDefault();
+      _uxqPickerMove(1);
+    } else if (e.key === 'ArrowUp') {
+      e.preventDefault();
+      _uxqPickerMove(-1);
+    } else if (e.key === 'Enter') {
+      e.preventDefault();
+      _uxqPickerActivate();
+    }
+  }
+  // Pane-width responsive handling: toggle fq-mobile on the panel so the
+  // trigger + picker + working strip switch to the mobile treatment when the
+  // pane is narrow (≤ 620px — the design's mobile frame width). Works in
+  // popouts and narrow rails, not just the window.
+  function _uxqPickerSyncMobile() {
+    const $panel = document.getElementById('queuePanel');
+    if (!$panel) return;
+    const w = $panel.clientWidth || 0;
+    const wasMobile = _uxqPicker.isMobile;
+    _uxqPicker.isMobile = w > 0 && w <= 620;
+    if (wasMobile !== _uxqPicker.isMobile) {
+      $panel.classList.toggle('fq-mobile', _uxqPicker.isMobile);
+      // Re-render the working strip + picker (trigger rebuilds on next render).
+      _uxqRenderWorkingNow();
+      if (_uxqPicker.open) _uxqRenderPicker();
+    }
+  }
   // Fill the Queue-header scope picker and reflect the current scope. 'AUTO'
   // clears the override (back to repo-derived). Built fresh each render so new
   // projects appear without a reload.
   function _uxqRenderScopeSelect(items, currentScope) {
-    const $sel = document.getElementById('queueScopeSelect');
-    if (!$sel) return;
-    const override = _uxqGetScopeOverride();
-    const scopes = _uxqAvailableScopes(items);
-    // If the saved override isn't in the items-derived list (e.g. cache just
-    // busted so items is empty), add it explicitly so $sel.value sticks.
-    if (override && !scopes.includes(override)) scopes.push(override);
-    const opts = ['<option value="AUTO">Auto: ' + escapeHtml(currentScope || 'all') + '</option>',
-                  '<option value="ALL">All queues</option>'];
-    // Nest sub-queues under their family root so 40 queues read as ~15 rows.
-    // The root's own entry scopes to the whole family (that is what
-    // `_uxqInScope` does with a root), and each child stays selectable on its
-    // own inside the group.
-    const families = new Map(); // root -> child scopes
-    const roots = new Set();
-    const loose = [];
-    for (const s of scopes) {
-      const cand = _uxqFamilyCandidate(s);
-      if (cand && _UXQ_FAMILY_ROOTS.has(cand)) {
-        if (!families.has(cand)) families.set(cand, []);
-        families.get(cand).push(s);
-        roots.add(cand);
-      } else if (_UXQ_FAMILY_ROOTS.has(s)) {
-        if (!families.has(s)) families.set(s, []);
-        roots.add(s);
-      } else {
-        loose.push(s);
-      }
-    }
-    const plain = (name, label) =>
-      '<option value="' + escapeAttr(name) + '">' + escapeHtml(label || name) + '</option>';
-    // One ordered pass, so each family sits where its root would have sorted.
-    for (const name of loose.concat([...roots]).sort(_uxqScopeCmp)) {
-      const kids = (families.get(name) || []).slice().sort(_uxqScopeCmp);
-      if (!kids.length) { opts.push(plain(name)); continue; }
-      // Label starts with the queue's own name, not "All" — the <optgroup>
-      // label above it (also just "CCC") is native, unclickable HTML, so a
-      // "All CCC (+1)" option below it read as a DIFFERENT, broader thing
-      // than the queue itself, leaving no option that visibly says "CCC".
-      // This option's value is still the family root, so it keeps scoping
-      // to root + sub-queues (see _uxqInScope) — only the label changed.
-      opts.push('<optgroup label="' + escapeAttr(name) + '">');
-      opts.push(plain(name, name + ' (+' + kids.length + ' sub-queue' + (kids.length === 1 ? '' : 's') + ')'));
-      for (const kid of kids) opts.push(plain(kid));
-      opts.push('</optgroup>');
-    }
-    $sel.innerHTML = opts.join('');
-    $sel.value = override || 'AUTO';
-    $sel.title = override
-      ? ('Queue pinned to ' + override + ' for this session - pick Auto to follow the repo')
-      : ('Showing ' + (currentScope || 'all') + ' (from this session’s repo)');
+    // The native <select> is gone (replaced by #queueScopeTrigger). Keep the
+    // scope-busy indicator and reflect loading state on the trigger instead.
+    _uxqRenderQueueTrigger(items, currentScope);
+    _uxqPickerSyncMobile();
+    _uxqRenderWorkingNow();
+    // If the picker is open, refresh its contents too (live counts).
+    if (_uxqPicker.open) _uxqRenderPicker();
   }
   function _uxqSetScopeLoading(isLoading) {
-    const $sel = document.getElementById('queueScopeSelect');
+    const $trig = document.getElementById('queueScopeTrigger');
     const $busy = document.getElementById('queueScopeBusy');
-    if ($sel) {
-      $sel.disabled = !!isLoading;
-      $sel.setAttribute('aria-busy', isLoading ? 'true' : 'false');
+    if ($trig) {
+      $trig.classList.toggle('is-loading', !!isLoading);
+      $trig.setAttribute('aria-busy', isLoading ? 'true' : 'false');
     }
     if ($busy) $busy.classList.toggle('is-loading', !!isLoading);
   }
@@ -44078,9 +44650,8 @@
         ev.preventDefault();
         ev.stopPropagation();
         _uxqSetScopeOverride(project);
-        // Reflect in the scope <select> so it matches visually.
-        const $sel = document.getElementById('queueScopeSelect');
-        if ($sel) { $sel.value = project; }
+        // The trigger re-renders from _renderQueuePanel below, so no manual
+        // sync of a <select> is needed (the native select is gone).
         _uxqItemsCache.ts = 0;
         _renderQueuePanel();
       };
@@ -44191,22 +44762,100 @@
     if ($label) $label.textContent = 'Files';
     _renderQueuePanel();
   }
-  // Queue scope picker: change the source the Queue reads this session's
-  // project code from. Picking a code stores a per-session override so e.g. a
-  // CCC session can show WT; "Auto (repo)" clears it back to the repo-derived
-  // code. Repaint from completed caches so this client-side filter is
-  // immediate; the normal live poll remains responsible for freshness.
+  // Queue scope picker: the native <select> is gone (replaced by the
+  // #queueScopeTrigger pill + #queuePickerCard). This block wires the new
+  // trigger (click + keyboard), the picker card (filter input, row clicks,
+  // backdrop click, ⌘K contextual open), and the global keydown handler.
+  // Picking a queue stores a per-session override (same as before); "Auto"
+  // clears it back to repo-derived. Repaint from completed caches so the
+  // client-side filter is immediate; the normal live poll keeps it fresh.
   {
-    const $scope = document.getElementById('queueScopeSelect');
-    if ($scope) {
-      $scope.addEventListener('change', async () => {
-        _uxqSetScopeOverride($scope.value);
-        _uxqSetScopeLoading(true);
-        try {
-          await _renderQueuePanel({ allowStale: true });
-        } finally {
-          _uxqSetScopeLoading(false);
+    // Trigger: click or Enter/Space toggles the picker.
+    const $trig = document.getElementById('queueScopeTrigger');
+    if ($trig) {
+      $trig.addEventListener('click', (ev) => {
+        ev.preventDefault();
+        ev.stopPropagation();
+        _uxqPickerToggle();
+      });
+      $trig.addEventListener('keydown', (ev) => {
+        if (ev.key === 'Enter' || ev.key === ' ') {
+          ev.preventDefault();
+          _uxqPickerToggle();
         }
+      });
+    }
+    // Picker card: filter input, row clicks, backdrop click.
+    const $card = document.getElementById('queuePickerCard');
+    if ($card) {
+      const $filter = $card.querySelector('.fq-qp-filter-input');
+      if ($filter) {
+        $filter.addEventListener('input', () => {
+          _uxqPicker.filter = $filter.value || '';
+          _uxqPicker.highlight = 0;
+          _uxqRenderPicker();
+        });
+        // Keep typing from leaking into the composer while open.
+        $filter.addEventListener('keydown', (ev) => {
+          if (ev.key === 'ArrowDown' || ev.key === 'ArrowUp' || ev.key === 'Enter' || ev.key === 'Escape') {
+            ev.stopPropagation();
+          }
+        });
+      }
+      // Row click: pick. Row hover: set highlight (mouse + keyboard converge).
+      $card.addEventListener('mousemove', (ev) => {
+        const $row = ev.target.closest && ev.target.closest('.fq-qp-row[data-uxq-qp-idx]');
+        if (!$row) return;
+        const idx = Number($row.getAttribute('data-uxq-qp-idx'));
+        if (!isFinite(idx) || idx === _uxqPicker.highlight) return;
+        _uxqPicker.highlight = idx;
+        _uxqRenderPicker();
+      });
+      $card.addEventListener('click', (ev) => {
+        const $row = ev.target.closest && ev.target.closest('.fq-qp-row[data-uxq-qp-idx]');
+        if (!$row) return;
+        const idx = Number($row.getAttribute('data-uxq-qp-idx'));
+        if (!isFinite(idx)) return;
+        const row = _uxqPicker.flat[idx];
+        if (row && typeof row.pick === 'function') row.pick();
+      });
+      // Backdrop / Esc handled by the global keydown; click on the backdrop
+      // element itself closes (not clicks inside the card).
+      const $back = $card.querySelector('.fq-qp-backdrop');
+      if ($back) {
+        $back.addEventListener('click', () => _uxqPickerClose());
+      }
+      // Footer "esc" button — explicit close affordance per the handoff.
+      const $esc = $card.querySelector('[data-uxq-qp-esc]');
+      if ($esc) {
+        $esc.addEventListener('click', () => _uxqPickerClose());
+      }
+    }
+    // Global keydown: ⌘K contextual open + arrow/enter/esc while open.
+    document.addEventListener('keydown', _uxqPickerOnKeydown, true);
+    // Close the picker when clicking anywhere outside the card/trigger.
+    document.addEventListener('click', (ev) => {
+      if (!_uxqPicker.open) return;
+      const $t = ev.target;
+      if (!$t || !$t.closest) return;
+      if ($t.closest('#queuePickerCard') || $t.closest('#queueScopeTrigger')) return;
+      _uxqPickerClose();
+    });
+    // Pane resize / rail collapse → re-evaluate fq-mobile + reposition.
+    window.addEventListener('resize', _uxqPickerSyncMobile);
+    // WORKING NOW row click → open that ticket (switching queue if needed).
+    const $working = document.getElementById('queueWorkingStrip');
+    if ($working) {
+      $working.addEventListener('click', (ev) => {
+        const $row = ev.target.closest && ev.target.closest('.fq-working-row[data-uxq-working-ref]');
+        if (!$row) return;
+        const ref = $row.getAttribute('data-uxq-working-ref');
+        if (!ref) return;
+        // Find the item to switch queue if needed.
+        const it = (Array.isArray(_uxqItemsCache.items) ? _uxqItemsCache.items : [])
+          .find(x => x && _uxqItemRef(x) === ref);
+        if (it) _uxqPickerPickTicket(ref, it);
+        else if (typeof _uxqOpenItemDetail === 'function') _uxqOpenItemDetail(ref);
       });
     }
     const $queueAdd = document.getElementById('filesQueueAdd');
@@ -56921,24 +57570,40 @@
         '</div>';
     }
 
+    // Sticky-bottom: auto-scroll on every redraw, EXCEPT once the user has
+    // deliberately scrolled up to read something earlier — then leave the
+    // view alone until they scroll back near the bottom themselves.
+    let stickToBottom = true;
+    log.addEventListener('scroll', () => {
+      stickToBottom = (log.scrollHeight - log.scrollTop - log.clientHeight) < 40;
+    });
+
     function draw() {
-      log.innerHTML = turns.map((t, idx) =>
-        '<div class="ask-turn" data-ask-turn-index="' + idx + '">' +
-        '<div class="ask-turn-q">' + askEscapeHtml(t.q) + '</div>' +
-        '<div class="ask-turn-a assistant-text' + (t.error ? ' is-error' : '') + '">' +
-        (t.error ? askEscapeHtml(t.a) : renderAskVerdict(t.a, t.sources, t.spawned)) +
-        (!t.error && String(t.a || '').trim() ? askMessageActionsHtml() : '') + '</div>' +
-        (t.error ? '' : askResultsHtml(t, selection && selection.id)) +
-        '</div>').join('');
+      log.innerHTML = turns.map((t, idx) => {
+        if (t.pending) {
+          return '<div class="ask-turn is-pending" data-ask-turn-index="' + idx + '">' +
+            '<div class="ask-turn-q">' + askEscapeHtml(t.q) + '</div>' +
+            '<div class="ask-turn-a assistant-text ask-turn-pending">' +
+            '<span class="ask-thinking">Thinking' + (t.pendingElapsed ? ' · ' + t.pendingElapsed + 's' : '') + '</span></div>' +
+            '</div>';
+        }
+        return '<div class="ask-turn" data-ask-turn-index="' + idx + '">' +
+          '<div class="ask-turn-q">' + askEscapeHtml(t.q) + '</div>' +
+          '<div class="ask-turn-a assistant-text' + (t.error ? ' is-error' : '') + '">' +
+          (t.error ? askEscapeHtml(t.a) : renderAskVerdict(t.a, t.sources, t.spawned)) +
+          (!t.error && String(t.a || '').trim() ? askMessageActionsHtml() : '') + '</div>' +
+          (t.error ? '' : askResultsHtml(t, selection && selection.id)) +
+          '</div>';
+      }).join('');
       // renderAskVerdict/renderMarkdown already escaped the answer into HTML;
       // stash the raw text as a JS property (not an attribute) so the shared
       // copy/read-aloud handlers get clean prose instead of re-scraping the
       // rendered markup (which would include button labels, table pipes…).
       log.querySelectorAll('.ask-turn-a').forEach((el, idx) => {
         const t = turns[idx];
-        if (t && !t.error) el._agentAnswerText = String(t.a || '').trim();
+        if (t && !t.error && !t.pending) el._agentAnswerText = String(t.a || '').trim();
       });
-      log.scrollTop = log.scrollHeight;
+      if (stickToBottom) log.scrollTop = log.scrollHeight;
       drawSelBar();
     }
 
@@ -57055,16 +57720,21 @@
       busy = true;
       if (send) send.disabled = true;
       input.value = '';
+      // Echo the question immediately as a pending turn — the model call
+      // takes 20-40s, and the user should see what they typed land in the
+      // log right away instead of staring at an empty pane.
+      const turn = { q, a: '', pending: true };
+      turns.push(turn);
+      stickToBottom = true;
+      draw();
       const started = Date.now();
-      const busyEl = document.createElement('div');
-      busyEl.className = 'ask-busy';
-      busyEl.textContent = 'Asking…';
-      log.appendChild(busyEl);
       const tick = setInterval(() => {
-        busyEl.textContent = 'Asking… ' + Math.round((Date.now() - started) / 1000) + 's';
+        turn.pendingElapsed = Math.round((Date.now() - started) / 1000);
+        const el = log.querySelector('.ask-turn-pending .ask-thinking');
+        if (el) el.textContent = 'Thinking · ' + turn.pendingElapsed + 's';
       }, 1000);
       try {
-        const history = turns.filter(t => !t.error).slice(-ASK_HISTORY_TURNS)
+        const history = turns.filter(t => !t.error && !t.pending).slice(-ASK_HISTORY_TURNS)
           .map(t => ({ q: t.q, a: t.a }));
         const res = await fetch('/api/assistant/ask', {
           method: 'POST',
@@ -57072,16 +57742,20 @@
           body: JSON.stringify({ question: q, history, range: rangeKey }),
         });
         const data = await res.json();
+        delete turn.pending;
         if (data && data.ok) {
-          turns.push({
-            q, a: data.answer, sources: data.sources || [],
-            hitCount: data.hit_count, elapsedMs: data.elapsed_ms,
-          });
+          turn.a = data.answer;
+          turn.sources = data.sources || [];
+          turn.hitCount = data.hit_count;
+          turn.elapsedMs = data.elapsed_ms;
         } else {
-          turns.push({ q, a: (data && data.error) || ('HTTP ' + res.status), error: true });
+          turn.a = (data && data.error) || ('HTTP ' + res.status);
+          turn.error = true;
         }
       } catch (e) {
-        turns.push({ q, a: 'Request failed: ' + e, error: true });
+        delete turn.pending;
+        turn.a = 'Request failed: ' + e;
+        turn.error = true;
       } finally {
         clearInterval(tick);
         busy = false;
@@ -57094,7 +57768,7 @@
     form.addEventListener('submit', (ev) => { ev.preventDefault(); submit(); });
     input.addEventListener('keydown', (ev) => {
       if (ev.isComposing) return;
-      if (ev.key === 'Enter' && (ev.metaKey || ev.ctrlKey)) { ev.preventDefault(); submit(); }
+      if (ev.key === 'Enter' && !ev.shiftKey) { ev.preventDefault(); submit(); }
     });
     if (clearBtn) clearBtn.addEventListener('click', () => {
       turns = [];

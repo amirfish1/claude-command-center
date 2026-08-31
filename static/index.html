@@ -1348,9 +1348,9 @@
                     <span class="fq-health-resize-grip" aria-hidden="true"></span>
                     <button class="evergreen-log-btn" id="queueHealthLogBtn" data-role="evergreen-log-btn" type="button" title="Open Watchtower activity log">See log</button>
                   </div>
-                  <div class="files-header">
-                    <span class="files-title-label">Queue</span>
-                    <select class="fq-scope-select" id="queueScopeSelect" aria-label="Queue scope for this session" title="Which queue this session shows"></select>
+                  <div class="files-header fq-field-row">
+                    <span class="files-title-label fq-field-label">Queue</span>
+                    <div class="fq-trigger" id="queueScopeTrigger" role="button" tabindex="0" aria-haspopup="listbox" aria-expanded="false" aria-label="Queue scope for this session" title="Which queue this session shows"></div>
                     <span class="fq-scope-busy" id="queueScopeBusy" role="status" aria-label="Loading selected queue"></span>
                     <button class="files-queue-add" id="filesQueueAdd" type="button" title="Add a ticket to this queue" aria-label="Add a queue item">&#43;</button>
                     <div class="fq-more-wrap">
@@ -1365,6 +1365,16 @@
                       <button class="fq-filter-btn" type="button" data-uxq-filter="all">All</button>
                       <button class="fq-filter-btn" type="button" data-uxq-filter="open">Open</button>
                     </div>
+                  </div>
+                  <div class="fq-working-strip" id="queueWorkingStrip" aria-label="Working now across all queues">
+                    <div class="fq-working-head">
+                      <span class="fq-working-dot pulse"></span>
+                      <span class="fq-working-label">WORKING NOW</span>
+                      <span class="fq-working-summary"></span>
+                    </div>
+                    <div class="fq-working-rows"></div>
+                  </div>
+                  <div class="fq-ticket-filter-row">
                     <div class="fq-filter fq-type-filter" id="queueTypeFilterToggle" role="group" aria-label="Filter queue by ticket type">
                       <button class="fq-filter-btn" type="button" data-uxq-type-filter="all">All</button>
                       <button class="fq-filter-btn" type="button" data-uxq-type-filter="bug">Bugs</button>
@@ -1375,6 +1385,21 @@
                   </div>
                   <div class="fq-status-strip" id="queueStatusStrip" hidden></div>
                   <div class="files-queue-list" id="sidebarQueueList"></div>
+                  <div class="fq-qp" id="queuePickerCard" aria-hidden="true">
+                    <div class="fq-qp-backdrop"></div>
+                    <div class="fq-qp-card">
+                      <div class="fq-qp-filter">
+                        <input type="text" class="fq-qp-filter-input" placeholder="Filter queues and tickets…" aria-label="Filter queues and tickets" autocomplete="off" spellcheck="false">
+                      </div>
+                      <div class="fq-qp-results" role="listbox" aria-label="Queues and tickets"></div>
+                      <div class="fq-qp-footer">
+                        <span class="fq-qp-hint">↑↓ move</span>
+                        <span class="fq-qp-hint">↵ open</span>
+                        <span class="fq-qp-hint">⌘K from anywhere</span>
+                        <button type="button" class="fq-qp-esc" data-uxq-qp-esc>esc</button>
+                      </div>
+                    </div>
+                  </div>
                 </div>
               </div>
             </div>
@@ -1386,7 +1411,7 @@
                   <textarea id="askInput" rows="2" placeholder="Ask about your sessions…"></textarea>
                   <div class="ask-actions">
                     <button type="button" class="ask-range-btn" id="askRangeBtn"></button>
-                    <span class="ask-hint">⌘⏎ to send</span>
+                    <span class="ask-hint"><kbd>⏎</kbd> send &nbsp;·&nbsp; <kbd>⇧⏎</kbd> newline</span>
                     <button type="button" class="ask-clear" id="askClear" title="Clear conversation">Clear</button>
                     <button type="submit" class="ask-send" id="askSend">Ask</button>
                   </div>

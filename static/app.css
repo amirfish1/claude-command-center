@@ -14155,28 +14155,86 @@
     font-size: 10px; padding: 1px 7px; border-radius: 10px; font-weight: 700;
   }
   .files-count:empty { display: none; }
-  /* Queue scope picker — change the source the Queue reads the project code
-     from for this session (per-session override). Compact, sits in the header. */
-  .fq-scope-select {
-    background: transparent; color: var(--text);
-    border: 1px solid var(--border); border-radius: 6px;
-    font-size: 14px; font-weight: 800; padding: 8px 10px; max-width: 220px; cursor: pointer;
+  /* ── Queue picker redesign ────────────────────────────────────────────
+     Replaces the native <select> with a trigger pill + anchored card
+     (desktop) / bottom sheet (mobile). See design handoff for the spec.
+     All hex values are verbatim from the handoff; CCC tokens are NOT
+     substituted because none of the palette below matches an existing
+     token exactly (the handoff forbids "close" substitutions). */
+  .files-queue-panel { position: relative; }
+  /* Field row: QUEUE label + trigger + add/more + ALL/OPEN. No wrap — the
+     trigger truncates, not the controls. */
+  .files-queue-panel .fq-field-row {
+    flex-wrap: nowrap; gap: 8px; padding: 11px 14px 10px;
+    align-items: center;
   }
-  .fq-scope-select:hover { color: var(--text); border-color: var(--accent); }
-  .fq-scope-select:focus { outline: none; border-color: var(--accent); }
-  .fq-scope-select:disabled { cursor: wait; opacity: 0.7; }
-  /* Taller rows in the native dropdown popup — the default UA row height
-     reads as cramped once a project has several sub-queues nested under it.
-     CCC-882: padding/line-height on <option> are ignored by macOS's native
-     select popup (Chrome/Safari both render it via the OS menu there, not
-     Blink/WebKit), which is why an earlier pass at this via padding alone
-     never visibly changed anything for this user. font-size IS respected —
-     the native row height derives from it — so that's the lever that
-     actually adds space between rows on macOS; padding stays for platforms
-     (Windows/Linux Chrome, Firefox) that do honor it. */
-  .fq-scope-select option, .fq-scope-select optgroup {
-    font-size: 16px; padding: 12px 14px;
+  .fq-field-label {
+    font-family: 'JetBrains Mono', ui-monospace, monospace;
+    font-size: 10.5px; font-weight: 500; color: #6e7681;
+    letter-spacing: 0.06em; flex: 0 0 auto;
+    text-transform: none; /* already uppercase in markup */
   }
+  /* Trigger pill — the main field-row element. flex 1 so it takes the row. */
+  .fq-trigger {
+    flex: 1 1 auto; display: flex; align-items: center; gap: 9px;
+    padding: 6px 10px; background: #161b22; border: 1px solid #2b323b;
+    border-radius: 6px; cursor: pointer; min-width: 0;
+    position: relative; z-index: 51; /* sits above the picker scrim */
+    transition: border-color .12s, background .12s;
+  }
+  .fq-trigger:hover { border-color: #3f4854; background: #1c2129; }
+  .fq-trigger.is-open { border-color: #39d2c0; background: #1c2129; }
+  .fq-trigger.is-loading { opacity: 0.7; cursor: wait; }
+  .fq-trigger:focus-visible { outline: none; border-color: #39d2c0; }
+  /* Live dot (pulsing) on the trigger — only when the queue has a runner. */
+  .fq-qp-live {
+    flex: 0 0 6px; width: 6px; height: 6px; border-radius: 50%;
+    background: #39d2c0; animation: qPulse 2s ease-in-out infinite;
+  }
+  .fq-qp-live-spacer { flex: 0 0 6px; width: 6px; }
+  .fq-trigger .fq-qp-trig-name {
+    font-family: 'JetBrains Mono', ui-monospace, monospace;
+    font-size: 13px; font-weight: 600; color: #e6edf3;
+    white-space: nowrap; flex: 0 0 auto;
+  }
+  .fq-trigger .fq-qp-trig-subs {
+    font-family: 'Inter', system-ui, sans-serif;
+    font-size: 11.5px; color: #7d8590; white-space: nowrap; flex: 0 0 auto;
+  }
+  .fq-gh-chip {
+    display: inline-flex; align-items: center; flex: 0 0 auto;
+    font-family: 'JetBrains Mono', ui-monospace, monospace;
+    font-size: 9px; font-weight: 600; color: #b48af5;
+    background: #251a3a; border: 1px solid #34265a; border-radius: 3px;
+    padding: 0 4px; line-height: 1.5;
+  }
+  .fq-gh { color: #b48af5; }
+  .fq-trigger .fq-qp-trig-repo {
+    font-family: 'JetBrains Mono', ui-monospace, monospace;
+    font-size: 10px; color: #565e68; min-width: 0;
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+    flex: 1 1 auto; /* the only flexible child — it truncates */
+  }
+  .fq-trigger .fq-qp-drain {
+    font-size: 9px; flex: 0 0 auto; line-height: 1;
+  }
+  .fq-qp-drain.is-on { color: #3fb950; }
+  .fq-qp-drain.is-off { color: #3f4854; }
+  .fq-trigger .fq-qp-trig-needs {
+    font-family: 'Inter', system-ui, sans-serif;
+    font-size: 11px; font-weight: 600; color: #e5695c;
+    white-space: nowrap; flex: 0 0 auto;
+  }
+  .fq-trigger .fq-qp-trig-open {
+    font-family: 'JetBrains Mono', ui-monospace, monospace;
+    font-size: 11px; color: #7d8590; white-space: nowrap; flex: 0 0 auto;
+  }
+  .fq-trigger .fq-qp-trig-right {
+    margin-left: auto; display: flex; align-items: center; gap: 8px;
+    flex: 0 0 auto;
+  }
+  .fq-trigger .fq-qp-chev { font-size: 10px; color: #6e7681; flex: 0 0 auto; }
+  .fq-trigger.is-open .fq-qp-chev { color: #8b949e; }
   .fq-scope-busy { display: none; width: 10px; height: 10px; flex: 0 0 10px; }
   .fq-scope-busy.is-loading {
     display: inline-block;
@@ -14186,6 +14244,295 @@
     animation: fq-scope-spin 0.7s linear infinite;
   }
   @keyframes fq-scope-spin { to { transform: rotate(360deg); } }
+  @keyframes qPulse {
+    0%, 100% { box-shadow: 0 0 0 0 rgba(57,210,192,.5); opacity: 1; }
+    50%      { box-shadow: 0 0 0 4px rgba(57,210,192,0); opacity: .6; }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .fq-qp-live, .fq-working-dot.pulse { animation: none; }
+  }
+  /* ── WORKING NOW strip ──────────────────────────────────────────────── */
+  .fq-working-strip {
+    flex: 0 0 auto; padding: 8px 14px 11px;
+    background: #0f1319; border-top: 1px solid #171d24; border-bottom: 1px solid #21262d;
+  }
+  .fq-working-head {
+    display: flex; align-items: center; gap: 9px; padding-bottom: 7px;
+  }
+  .fq-working-head.is-only { padding-bottom: 0; }
+  .fq-working-dot {
+    flex: 0 0 6px; width: 6px; height: 6px; border-radius: 50%;
+    background: #39d2c0; animation: qPulse 2s ease-in-out infinite;
+  }
+  .fq-working-label {
+    font-family: 'JetBrains Mono', ui-monospace, monospace;
+    font-size: 10.5px; font-weight: 600; color: #8b949e;
+    letter-spacing: 0.07em;
+  }
+  .fq-working-summary {
+    font-family: 'JetBrains Mono', ui-monospace, monospace;
+    font-size: 10.5px; color: #4b535d;
+  }
+  .fq-working-rows { display: flex; flex-direction: column; gap: 5px; }
+  .fq-working-row {
+    display: flex; align-items: center; gap: 9px;
+    padding: 5px 8px; background: #12181f; border: 1px solid #232b34;
+    border-radius: 6px; cursor: pointer; min-width: 0;
+    transition: border-color .12s;
+  }
+  .fq-working-row:hover { border-color: #3f4854; }
+  .fq-working-id {
+    font-family: 'JetBrains Mono', ui-monospace, monospace;
+    font-size: 11px; color: #6e7681; flex: 0 0 40px;
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  }
+  .fq-working-title {
+    font-family: 'Inter', system-ui, sans-serif;
+    font-size: 12.5px; color: #d5dde5; min-width: 0;
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+    flex: 1 1 auto;
+  }
+  .fq-working-right {
+    display: flex; align-items: center; gap: 9px; flex: 0 0 auto;
+    margin-left: auto;
+  }
+  .fq-working-queue {
+    font-family: 'JetBrains Mono', ui-monospace, monospace;
+    font-size: 10.5px; color: #7d8590; white-space: nowrap;
+  }
+  .fq-working-worker {
+    font-family: 'JetBrains Mono', ui-monospace, monospace;
+    font-size: 10.5px; color: #39d2c0; white-space: nowrap;
+  }
+  .fq-working-elapsed {
+    font-family: 'JetBrains Mono', ui-monospace, monospace;
+    font-size: 10.5px; color: #565e68; white-space: nowrap;
+  }
+  /* ── Ticket filter row ──────────────────────────────────────────────── */
+  .fq-ticket-filter-row {
+    display: flex; align-items: center; gap: 8px; padding: 10px 14px;
+  }
+  .fq-ticket-filter-row .fq-type-filter { flex: 0 0 auto; }
+  .fq-ticket-filter-row .fq-search-input {
+    flex: 1 1 auto; min-width: 0; padding: 5px 10px;
+    background: #0b0f14; border: 1px solid #21262d; border-radius: 5px;
+    font-size: 12px; color: #c9d1d9;
+  }
+  .fq-ticket-filter-row .fq-search-input:focus { border-color: #39d2c0; outline: none; }
+  .fq-ticket-filter-row .fq-search-input::placeholder { color: #565e68; }
+  /* ── Picker overlay (desktop anchored card) ─────────────────────────── */
+  .fq-qp {
+    position: absolute; inset: 0; z-index: 50;
+    display: none; pointer-events: none;
+  }
+  #queuePanel.fq-picker-open .fq-qp { display: block; pointer-events: auto; }
+  .fq-qp-backdrop {
+    position: absolute; left: 0; right: 0; bottom: 0;
+    top: var(--fq-qp-top, 132px); background: rgba(8,9,12,.62);
+    z-index: 50;
+  }
+  .fq-qp-card {
+    position: absolute; left: 12px; right: 12px;
+    top: calc(var(--fq-qp-top, 132px) + 12px);
+    max-height: 660px; z-index: 52;
+    background: #11161d; border: 1px solid #333b45; border-radius: 9px;
+    box-shadow: 0 18px 44px rgba(0,0,0,.6);
+    display: flex; flex-direction: column; overflow: hidden;
+  }
+  .fq-qp-filter {
+    flex: 0 0 auto; padding: 10px 12px; border-bottom: 1px solid #21262d;
+  }
+  .fq-qp-filter-input {
+    width: 100%; box-sizing: border-box; padding: 7px 10px;
+    background: #0b0f14; border: 1px solid #2b323b; border-radius: 6px;
+    font-size: 13px; color: #e6edf3; outline: none;
+  }
+  .fq-qp-filter-input:focus { border-color: #39d2c0; }
+  .fq-qp-filter-input::placeholder { color: #565e68; }
+  .fq-qp-results {
+    flex: 1 1 auto; min-height: 0; overflow-y: auto; padding: 4px 0 6px;
+  }
+  .fq-qp-group { }
+  .fq-qp-group-head {
+    display: flex; align-items: baseline; gap: 7px; padding: 9px 13px 5px;
+  }
+  .fq-qp-group-label {
+    font-family: 'JetBrains Mono', ui-monospace, monospace;
+    font-size: 10px; font-weight: 600; letter-spacing: 0.09em;
+  }
+  .fq-qp-group-count {
+    font-family: 'JetBrains Mono', ui-monospace, monospace;
+    font-size: 10px; color: #4b535d;
+  }
+  .fq-qp-row {
+    display: flex; align-items: center; gap: 8px; padding: 5px 13px;
+    cursor: pointer; border-left: 2px solid transparent;
+  }
+  .fq-qp-row:hover, .fq-qp-row.is-hl {
+    background: #191f27; border-left-color: #3f4854;
+  }
+  .fq-qp-tree {
+    width: 15px; text-align: right; font-size: 10px; color: #3f4854;
+    flex: 0 0 auto;
+  }
+  .fq-qp-row-live {
+    flex: 0 0 5px; width: 5px; height: 5px; border-radius: 50%;
+    background: #39d2c0; /* static — no pulse on row dots */
+  }
+  .fq-qp-row-name {
+    font-family: 'JetBrains Mono', ui-monospace, monospace;
+    font-size: 12.5px; font-weight: 500; color: #d5dde5;
+    min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  }
+  .fq-qp-row-subs {
+    font-family: 'Inter', system-ui, sans-serif;
+    font-size: 10.5px; color: #565e68; flex: 0 0 auto; white-space: nowrap;
+  }
+  .fq-qp-row-repo {
+    font-family: 'JetBrains Mono', ui-monospace, monospace;
+    font-size: 10px; color: #565e68; white-space: nowrap; flex: 0 0 auto;
+  }
+  .fq-qp-row-right {
+    margin-left: auto; display: flex; align-items: center; gap: 9px;
+    flex: 0 0 auto;
+  }
+  .fq-qp-needs {
+    font-family: 'JetBrains Mono', ui-monospace, monospace;
+    font-size: 10.5px; font-weight: 600; color: #f0a79c;
+    background: #3a1d18; border-radius: 3px; padding: 1px 6px;
+    white-space: nowrap;
+  }
+  .fq-qp-open {
+    font-family: 'JetBrains Mono', ui-monospace, monospace;
+    font-size: 11px; color: #7d8590; width: 26px; text-align: right;
+    flex: 0 0 26px; white-space: nowrap;
+  }
+  .fq-qp-last {
+    font-family: 'JetBrains Mono', ui-monospace, monospace;
+    font-size: 10.5px; color: #565e68; width: 32px; text-align: right;
+    flex: 0 0 32px; white-space: nowrap;
+  }
+  .fq-qp-row-drain {
+    width: 9px; text-align: center; font-size: 9px; flex: 0 0 9px;
+  }
+  .fq-qp-row-drain.is-on { color: #3fb950; }
+  .fq-qp-row-drain.is-off { color: #3f4854; }
+  .fq-qp-row.is-ticket .fq-qp-row-name { color: #d5dde5; }
+  .fq-qp-footer {
+    flex: 0 0 auto; display: flex; align-items: center; gap: 14px;
+    padding: 8px 13px; border-top: 1px solid #21262d; background: #0d1117;
+  }
+  .fq-qp-hint {
+    font-family: 'JetBrains Mono', ui-monospace, monospace;
+    font-size: 10px; color: #565e68;
+  }
+  .fq-qp-esc {
+    margin-left: auto; background: transparent; border: 0; cursor: pointer;
+    font-family: 'Inter', system-ui, sans-serif;
+    font-size: 11px; color: #6e7681; padding: 2px 6px;
+  }
+  .fq-qp-esc:hover { color: #e6edf3; }
+  /* ── Mobile treatment (panel ≤ 620px) ─────────────────────────────────
+     Trigger becomes a two-line 44pt tap target; WORKING NOW collapses to
+     a header-only summary; picker becomes a bottom sheet. Triggered by
+     the fq-mobile class on #queuePanel (set by _uxqPickerSyncMobile). */
+  #queuePanel.fq-mobile .fq-field-row { padding: 6px 14px 12px; }
+  #queuePanel.fq-mobile .fq-trigger {
+    min-height: 44px; box-sizing: border-box; padding: 8px 12px;
+    border-radius: 9px; gap: 9px; flex-wrap: wrap; align-content: center;
+  }
+  #queuePanel.fq-mobile .fq-qp-live {
+    flex: 0 0 7px; width: 7px; height: 7px;
+  }
+  #queuePanel.fq-mobile .fq-qp-trig-name {
+    font-size: 14px; font-weight: 600;
+  }
+  /* Mobile trigger second line: gh chip + repo + drain + counts, all on
+     one row that truncates via min-width:0 + ellipsis. */
+  #queuePanel.fq-mobile .fq-qp-trig-repo { flex: 0 0 auto; }
+  #queuePanel.fq-mobile .fq-qp-trig-right { gap: 9px; }
+  /* WORKING NOW mobile: header-only when sheet is open, larger rows. */
+  #queuePanel.fq-mobile .fq-working-strip { padding: 9px 14px 11px; }
+  #queuePanel.fq-mobile .fq-working-head { padding-bottom: 8px; }
+  #queuePanel.fq-mobile .fq-working-rows { gap: 6px; }
+  #queuePanel.fq-mobile .fq-working-row {
+    min-height: 38px; padding: 6px 9px; border-radius: 7px; gap: 6px;
+    flex-wrap: nowrap;
+  }
+  #queuePanel.fq-mobile .fq-working-id { flex: 0 0 38px; font-size: 11px; }
+  #queuePanel.fq-mobile .fq-working-row .fq-working-body {
+    display: flex; flex-direction: column; gap: 2px; min-width: 0; flex: 1 1 auto;
+  }
+  #queuePanel.fq-mobile .fq-working-row .fq-working-title {
+    font-size: 12.5px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  }
+  #queuePanel.fq-mobile .fq-working-row .fq-working-meta {
+    font-family: 'JetBrains Mono', ui-monospace, monospace;
+    font-size: 10px; color: #565e68;
+  }
+  #queuePanel.fq-mobile .fq-working-row .fq-working-dot-static {
+    flex: 0 0 6px; width: 6px; height: 6px; border-radius: 50%;
+    background: #39d2c0; margin-left: auto;
+  }
+  /* Mobile ticket filter row: larger chips. */
+  #queuePanel.fq-mobile .fq-ticket-filter-row { gap: 7px; padding: 10px 14px; }
+  #queuePanel.fq-mobile .fq-ticket-filter-row .fq-filter-btn {
+    font-size: 11.5px; padding: 5px 11px; border-radius: 5px;
+  }
+  /* Mobile picker: bottom sheet, not anchored card. */
+  #queuePanel.fq-mobile.fq-picker-open .fq-qp { display: flex; flex-direction: column; }
+  #queuePanel.fq-mobile .fq-qp-backdrop {
+    top: 0; background: rgba(6,7,10,.6);
+  }
+  #queuePanel.fq-mobile .fq-qp-card {
+    position: absolute; left: 0; right: 0; top: 26px; bottom: 0;
+    max-height: none; border-radius: 14px 14px 0 0;
+    border-top: 1px solid #333b45; border-left: 0; border-right: 0; border-bottom: 0;
+    box-shadow: 0 -14px 40px rgba(0,0,0,.55);
+  }
+  #queuePanel.fq-mobile .fq-qp-filter { padding: 6px 13px 10px; }
+  #queuePanel.fq-mobile .fq-qp-filter-input {
+    min-height: 40px; padding: 9px 12px; border-radius: 8px; font-size: 14px;
+  }
+  #queuePanel.fq-mobile .fq-qp-group-head { padding: 10px 15px 5px; }
+  #queuePanel.fq-mobile .fq-qp-row {
+    min-height: 46px; padding: 8px 15px; gap: 9px;
+    border-top: 1px solid #171d24; border-left: 0;
+  }
+  #queuePanel.fq-mobile .fq-qp-row:hover, #queuePanel.fq-mobile .fq-qp-row.is-hl {
+    background: #191f27; border-left: 0;
+  }
+  #queuePanel.fq-mobile .fq-qp-tree { width: 14px; font-size: 11px; }
+  #queuePanel.fq-mobile .fq-qp-row-live { flex: 0 0 6px; width: 6px; height: 6px; }
+  /* Mobile picker row: two-line layout. The .fq-qp-row-body wraps name+meta. */
+  #queuePanel.fq-mobile .fq-qp-row .fq-qp-row-body {
+    display: flex; flex-direction: column; gap: 3px; min-width: 0; flex: 1 1 auto;
+  }
+  #queuePanel.fq-mobile .fq-qp-row .fq-qp-row-line1 {
+    display: flex; align-items: center; gap: 6px; min-width: 0;
+  }
+  #queuePanel.fq-mobile .fq-qp-row .fq-qp-row-line2 {
+    font-family: 'JetBrains Mono', ui-monospace, monospace;
+    font-size: 10px; color: #565e68;
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  }
+  #queuePanel.fq-mobile .fq-qp-row .fq-qp-row-name {
+    font-size: 13px; font-weight: 500;
+  }
+  #queuePanel.fq-mobile .fq-qp-row .fq-qp-needs {
+    font-family: 'Inter', system-ui, sans-serif;
+    font-size: 11px; font-weight: 600; padding: 3px 8px; border-radius: 4px;
+  }
+  #queuePanel.fq-mobile .fq-qp-row .fq-qp-row-drain {
+    width: 10px; font-size: 10px;
+  }
+  /* Mobile: hide the desktop-only meta columns (open/last) — replaced by
+     the single meta line. */
+  #queuePanel.fq-mobile .fq-qp-row .fq-qp-open,
+  #queuePanel.fq-mobile .fq-qp-row .fq-qp-last { display: none; }
+  /* Mobile: hide the desktop-only working row right group — replaced by
+     the two-line body + static dot. */
+  #queuePanel.fq-mobile .fq-working-row .fq-working-right { display: none; }
   /* Status filter toggle (All | Open) — segmented control in the Queue header. */
   .fq-filter {
     display: inline-flex; border: 1px solid var(--border); border-radius: 4px;
@@ -26269,7 +26616,10 @@ body.status-pos-right .status-rail-pane[data-rail-pane="metadata"] > .files-pane
 
 /* Ask tab (right rail) — "verdict + results": a one-line answer per turn,
    followed by a classic-search-results card list (title/meta/snippet). */
-.ask-pane { display: flex; flex-direction: column; height: 100%; min-height: 0; }
+/* Slight warm wash (accent-tinted, very low alpha) over the whole tab so
+   it reads as a distinct surface from a regular coding-agent conversation
+   at a glance, not just a difference in content. */
+.ask-pane { display: flex; flex-direction: column; height: 100%; min-height: 0; background: rgba(224, 163, 74, 0.035); }
 .ask-log { flex: 1 1 auto; overflow-y: auto; padding: 8px; display: flex; flex-direction: column; gap: 18px; }
 .ask-turn + .ask-turn { border-top: 1px solid var(--border); padding-top: 16px; }
 .ask-turn-q { font-weight: 600; opacity: 0.9; padding-left: 9px; border-left: 2px solid var(--accent, #e0a34a); }
@@ -26292,7 +26642,10 @@ body.status-pos-right .status-rail-pane[data-rail-pane="metadata"] > .files-pane
 .ask-turn-a .assistant-message-action.copied { color: var(--green); }
 .ask-turn-a .assistant-message-action.speaking { color: var(--accent); }
 .ask-turn-a .assistant-message-action.speaking.paused { color: var(--text-muted); opacity: 0.7; }
-.ask-busy { opacity: 0.7; font-style: italic; }
+.ask-turn-pending { padding-right: 0; }
+.ask-thinking { opacity: 0.7; font-style: italic; }
+.ask-thinking::after { content: ''; display: inline-block; width: 5px; height: 5px; margin-left: 6px; border-radius: 50%; background: #39d2c0; vertical-align: middle; animation: askPulse 1.8s ease-in-out infinite; }
+@media (prefers-reduced-motion: reduce) { .ask-thinking::after { animation: none !important; } }
 .ask-dot { width: 5px; height: 5px; border-radius: 50%; background: #4a5560; flex: 0 0 auto; }
 .ask-dot.is-live { background: #39d2c0; animation: askPulse 1.8s ease-in-out infinite; }
 @keyframes askPulse {
