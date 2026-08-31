@@ -55511,7 +55511,7 @@
     const queuePane = rail.querySelector('#statusRailQueuePane');
     // 'files' is a legacy value (the Files tab folded into Metadata); the
     // files panel now lives at the bottom of the Metadata pane.
-    const next = (tab === 'queue' || tab === 'orchestration') ? tab : 'metadata';
+    const next = (tab === 'queue' || tab === 'orchestration' || tab === 'ask') ? tab : 'metadata';
     rail.querySelectorAll('[data-rail-tab]').forEach(btn => {
       const active = btn.getAttribute('data-rail-tab') === next;
       btn.classList.toggle('is-active', active);
@@ -56719,6 +56719,126 @@
     _ensureFirstUserPinned(getConvViewForPane(activePaneId()) || $conversationsView);
   }
 
+  const ASK_HISTORY_KEY = 'ccc-ask-history';
+  const ASK_HISTORY_TURNS = 4;
+
+  function askEscapeHtml(s) {
+    return String(s == null ? '' : s)
+      .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+      .replace(/"/g, '&quot;');
+  }
+
+  function askChipHtml(src) {
+    const title = src.title || (src.repo ? src.repo + ' session' : 'session');
+    const live = src.status === 'live' ? ' is-live' : '';
+    return '<span class="ask-chip' + live + '" data-ask-open="' + askEscapeHtml(src.id) + '" title="' +
+      askEscapeHtml((src.repo ? src.repo + ' — ' : '') + src.id) + '">' +
+      '<span class="ask-dot"></span>' + askEscapeHtml(title) + '</span>';
+  }
+
+  // Escape first, then swap validated [[session:ID]] markers for chips —
+  // ids come only from the server's sources list, never raw model output.
+  function renderAskAnswer(answer, sources) {
+    const byId = {};
+    (sources || []).forEach(s => { if (s && s.id) byId[s.id] = s; });
+    let htmlOut = askEscapeHtml(answer);
+    htmlOut = htmlOut.replace(/\[\[session:([0-9A-Za-z_-]{5,64})\]\]/g, (m, id) =>
+      byId[id] ? askChipHtml(byId[id]) : askEscapeHtml(id));
+    const cited = new Set();
+    String(answer || '').replace(/\[\[session:([0-9A-Za-z_-]{5,64})\]\]/g, (m, id) => { cited.add(id); return m; });
+    const rest = (sources || []).filter(s => s && s.id && !cited.has(s.id));
+    if (rest.length) {
+      htmlOut += '<div class="ask-sources">' + rest.map(askChipHtml).join('') + '</div>';
+    }
+    return htmlOut;
+  }
+
+  function askLoadHistory() {
+    try { return JSON.parse(localStorage.getItem(ASK_HISTORY_KEY) || '[]') || []; }
+    catch (_) { return []; }
+  }
+
+  function askSaveHistory(turns) {
+    try { localStorage.setItem(ASK_HISTORY_KEY, JSON.stringify(turns.slice(-12))); } catch (_) {}
+  }
+
+  function initAskPane() {
+    const log = document.getElementById('askLog');
+    const form = document.getElementById('askForm');
+    const input = document.getElementById('askInput');
+    const send = document.getElementById('askSend');
+    const clearBtn = document.getElementById('askClear');
+    if (!log || !form || !input) return;
+
+    let turns = askLoadHistory();
+
+    function draw() {
+      log.innerHTML = turns.map(t =>
+        '<div class="ask-turn">' +
+        '<div class="ask-turn-q">' + askEscapeHtml(t.q) + '</div>' +
+        '<div class="ask-turn-a' + (t.error ? ' is-error' : '') + '">' +
+        (t.error ? askEscapeHtml(t.a) : renderAskAnswer(t.a, t.sources)) + '</div>' +
+        '</div>').join('');
+      log.scrollTop = log.scrollHeight;
+    }
+
+    log.addEventListener('click', (ev) => {
+      const chip = ev.target.closest('[data-ask-open]');
+      if (chip) selectConversation(chip.getAttribute('data-ask-open'));
+    });
+
+    let busy = false;
+    async function submit() {
+      const q = (input.value || '').trim();
+      if (!q || busy) return;
+      busy = true;
+      if (send) send.disabled = true;
+      input.value = '';
+      const started = Date.now();
+      const busyEl = document.createElement('div');
+      busyEl.className = 'ask-busy';
+      busyEl.textContent = 'Asking…';
+      log.appendChild(busyEl);
+      const tick = setInterval(() => {
+        busyEl.textContent = 'Asking… ' + Math.round((Date.now() - started) / 1000) + 's';
+      }, 1000);
+      try {
+        const history = turns.filter(t => !t.error).slice(-ASK_HISTORY_TURNS)
+          .map(t => ({ q: t.q, a: t.a }));
+        const res = await fetch('/api/assistant/ask', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ question: q, history }),
+        });
+        const data = await res.json();
+        if (data && data.ok) {
+          turns.push({ q, a: data.answer, sources: data.sources || [] });
+        } else {
+          turns.push({ q, a: (data && data.error) || ('HTTP ' + res.status), error: true });
+        }
+      } catch (e) {
+        turns.push({ q, a: 'Request failed: ' + e, error: true });
+      } finally {
+        clearInterval(tick);
+        busy = false;
+        if (send) send.disabled = false;
+        askSaveHistory(turns);
+        draw();
+      }
+    }
+
+    form.addEventListener('submit', (ev) => { ev.preventDefault(); submit(); });
+    input.addEventListener('keydown', (ev) => {
+      if (ev.key === 'Enter' && !ev.shiftKey) { ev.preventDefault(); submit(); }
+    });
+    if (clearBtn) clearBtn.addEventListener('click', () => {
+      turns = [];
+      askSaveHistory(turns);
+      draw();
+    });
+    draw();
+  }
+
   // Wire pill click + start polling once on first JS load.
   document.addEventListener('DOMContentLoaded', () => {
     const $pill = document.getElementById('historyStatusPill');
@@ -56739,6 +56859,7 @@
       try { savedRailTab = localStorage.getItem('ccc-status-rail-tab') || 'orchestration'; } catch (_) {}
       setStatusRailTab(savedRailTab);
     }
+    initAskPane();
 
     const $fileViewerClose = document.getElementById('fileViewerCloseBtn');
     if ($fileViewerClose) {

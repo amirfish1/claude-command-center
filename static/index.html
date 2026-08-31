@@ -1245,6 +1245,7 @@
               <button class="status-rail-tab is-active" type="button" role="tab" aria-selected="true" aria-controls="statusRailOrchestrationPane" data-rail-tab="orchestration">Orchestration</button>
               <button class="status-rail-tab" type="button" role="tab" aria-selected="false" aria-controls="statusRailMetadataPane" data-rail-tab="metadata">Metadata</button>
               <button class="status-rail-tab" type="button" role="tab" aria-selected="false" aria-controls="statusRailQueuePane" data-rail-tab="queue">Queue</button>
+              <button class="status-rail-tab" type="button" role="tab" aria-selected="false" aria-controls="statusRailAskPane" data-rail-tab="ask">Ask</button>
             </div>
             <div class="status-rail-pane is-active" id="statusRailOrchestrationPane" role="tabpanel" data-rail-pane="orchestration">
               <div class="orch-pane" id="orchPane">
@@ -1375,6 +1376,18 @@
                   <div class="fq-status-strip" id="queueStatusStrip" hidden></div>
                   <div class="files-queue-list" id="sidebarQueueList"></div>
                 </div>
+              </div>
+            </div>
+            <div class="status-rail-pane" id="statusRailAskPane" role="tabpanel" data-rail-pane="ask">
+              <div class="ask-pane">
+                <div class="ask-log" id="askLog" aria-live="polite"></div>
+                <form class="ask-form" id="askForm">
+                  <textarea id="askInput" rows="2" placeholder="Ask about your sessions… (Enter sends)"></textarea>
+                  <div class="ask-actions">
+                    <button type="submit" class="ask-send" id="askSend">Ask</button>
+                    <button type="button" class="ask-clear" id="askClear" title="Clear conversation">Clear</button>
+                  </div>
+                </form>
               </div>
             </div>
             <div class="rail-bottom-tools">
