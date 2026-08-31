@@ -56734,28 +56734,46 @@
       .replace(/"/g, '&quot;');
   }
 
+  // Marker syntax ([[...]]) must never survive into HTML built from
+  // server-supplied free text (titles, repo names) — a session title that
+  // happens to contain literal marker text must not manufacture a chip or
+  // action button the server never authorized.
+  function askNeutralizeMarkers(x) {
+    return String(x == null ? '' : x).replace(/\[\[/g, '[ [');
+  }
+
   function askChipHtml(src) {
-    const title = src.title || (src.repo ? src.repo + ' session' : 'session');
+    const title = askNeutralizeMarkers(src.title || (src.repo ? src.repo + ' session' : 'session'));
+    const repo = askNeutralizeMarkers(src.repo || '');
     const live = src.status === 'live' ? ' is-live' : '';
     return '<span class="ask-chip' + live + '" data-ask-open="' + askEscapeHtml(src.id) + '" title="' +
-      askEscapeHtml((src.repo ? src.repo + ' — ' : '') + src.id) + '">' +
+      askEscapeHtml((repo ? repo + ' — ' : '') + src.id) + '">' +
       '<span class="ask-dot"></span>' + askEscapeHtml(title) + '</span>';
   }
 
-  // Escape first, then swap validated [[session:ID]] markers for chips —
-  // ids come only from the server's sources list, never raw model output.
-  function renderAskAnswer(answer, sources) {
-    const byId = {};
+  // Escape first, then swap validated markers for chips/buttons — ids come
+  // only from the server's sources list, never raw model output. The
+  // action-marker pass runs BEFORE the citation-chip pass: chips inject
+  // src.title into htmlOut, and a title containing literal action-marker
+  // syntax must not get picked up and turned into a live spawn button by a
+  // later pass. `spawned` is the current turn's { [sessionId]: true } map so
+  // a page redraw renders an already-spawned action as done, not armed again.
+  function renderAskAnswer(answer, sources, spawned) {
+    const byId = Object.create(null);
     (sources || []).forEach(s => { if (s && s.id) byId[s.id] = s; });
+    const spawnedMap = spawned || {};
     let htmlOut = askEscapeHtml(answer);
+    htmlOut = htmlOut.replace(/\[\[action:spawn-continue:([0-9A-Za-z_-]{5,64})\]\]/g, (m, id) => {
+      if (!byId[id]) return '';
+      const done = !!spawnedMap[id];
+      const label = done ? '✓ Spawned'
+        : '▶ Spawn follow-up of ' + askEscapeHtml(askNeutralizeMarkers(byId[id].title || id.slice(0, 8)));
+      return '<button type="button" class="ask-action" data-ask-continue="' + askEscapeHtml(id) +
+        '" data-ask-cwd="' + askEscapeHtml(byId[id].cwd || '') + '"' + (done ? ' disabled' : '') + '>' +
+        label + '</button>';
+    });
     htmlOut = htmlOut.replace(/\[\[session:([0-9A-Za-z_-]{5,64})\]\]/g, (m, id) =>
       byId[id] ? askChipHtml(byId[id]) : askEscapeHtml(id));
-    htmlOut = htmlOut.replace(/\[\[action:spawn-continue:([0-9A-Za-z_-]{5,64})\]\]/g, (m, id) =>
-      byId[id]
-        ? '<button type="button" class="ask-action" data-ask-continue="' + askEscapeHtml(id) +
-          '" data-ask-cwd="' + askEscapeHtml(byId[id].cwd || '') + '">▶ Spawn follow-up of ' +
-          askEscapeHtml(byId[id].title || id.slice(0, 8)) + '</button>'
-        : '');
     const cited = new Set();
     String(answer || '').replace(/\[\[session:([0-9A-Za-z_-]{5,64})\]\]/g, (m, id) => { cited.add(id); return m; });
     const rest = (sources || []).filter(s => s && s.id && !cited.has(s.id));
@@ -56785,18 +56803,18 @@
     let turns = askLoadHistory();
 
     function draw() {
-      log.innerHTML = turns.map(t =>
-        '<div class="ask-turn">' +
+      log.innerHTML = turns.map((t, idx) =>
+        '<div class="ask-turn" data-ask-turn-index="' + idx + '">' +
         '<div class="ask-turn-q">' + askEscapeHtml(t.q) + '</div>' +
         '<div class="ask-turn-a' + (t.error ? ' is-error' : '') + '">' +
-        (t.error ? askEscapeHtml(t.a) : renderAskAnswer(t.a, t.sources)) + '</div>' +
+        (t.error ? askEscapeHtml(t.a) : renderAskAnswer(t.a, t.sources, t.spawned)) + '</div>' +
         '</div>').join('');
       log.scrollTop = log.scrollHeight;
     }
 
     log.addEventListener('click', (ev) => {
       const chip = ev.target.closest('[data-ask-open]');
-      if (chip) selectConversation(chip.getAttribute('data-ask-open'));
+      if (chip) { selectConversation(chip.getAttribute('data-ask-open')); return; }
 
       const act = ev.target.closest('[data-ask-continue]');
       if (act && !act.disabled) {
@@ -56804,6 +56822,13 @@
         act.textContent = 'Spawning…';
         const sid = act.getAttribute('data-ask-continue');
         const cwd = act.getAttribute('data-ask-cwd') || '';
+        // The confirm-once state (disabled + ✓ Spawned) has to survive the
+        // next draw() — draw() rebuilds log.innerHTML from `turns` on every
+        // answer/load, which would silently re-enable a DOM-only disabled
+        // flag and let one click fire two spawns. Record it on the turn
+        // instead so renderAskAnswer can render it done on redraw.
+        const turnEl = act.closest('[data-ask-turn-index]');
+        const turnIdx = turnEl ? parseInt(turnEl.getAttribute('data-ask-turn-index'), 10) : -1;
         fetch('/api/sessions/spawn', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
@@ -56813,7 +56838,17 @@
             repo_path: cwd || undefined,
           }),
         }).then(r => r.json()).then(d => {
-          act.textContent = d && d.ok ? '✓ Spawned' : '✗ ' + ((d && d.error) || 'spawn failed');
+          if (d && d.ok) {
+            act.textContent = '✓ Spawned';
+            const turn = turns[turnIdx];
+            if (turn) {
+              turn.spawned = turn.spawned || {};
+              turn.spawned[sid] = true;
+              askSaveHistory(turns);
+            }
+          } else {
+            act.textContent = '✗ ' + ((d && d.error) || 'spawn failed');
+          }
         }).catch(e => { act.textContent = '✗ ' + e; });
         return;
       }
@@ -56861,6 +56896,7 @@
 
     form.addEventListener('submit', (ev) => { ev.preventDefault(); submit(); });
     input.addEventListener('keydown', (ev) => {
+      if (ev.isComposing) return;
       if (ev.key === 'Enter' && !ev.shiftKey) { ev.preventDefault(); submit(); }
     });
     if (clearBtn) clearBtn.addEventListener('click', () => {

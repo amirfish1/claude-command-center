@@ -26,18 +26,32 @@ class ExtractTermsTest(unittest.TestCase):
 
 
 class MergeHitsTest(unittest.TestCase):
-    def test_interleaves_and_dedupes_by_session_id(self):
+    def test_interleaves_dedupes_then_sorts_newest_first(self):
+        # bbb-2 is newest (ts_unix 200) despite arriving second in the
+        # interleave order, so the sort — not the interleave position — must
+        # decide the final order.
         recent = [{"session_id": "aaa-1", "cwd": "/r/one", "ts_unix": 100, "snippet": "s1"},
-                  {"session_id": "bbb-2", "cwd": "/r/two", "ts_unix": 90, "snippet": "s2"}]
+                  {"session_id": "bbb-2", "cwd": "/r/two", "ts_unix": 200, "snippet": "s2"}]
         history = [{"session_id": "aaa-1", "cwd": "/r/one", "ts_unix": 100, "snippet": "dup"},
                    {"session_id": "ccc-3", "cwd": "/r/three", "ts_unix": 80, "snippet": "s3"}]
         hits = server.merge_ask_hits(recent, history)
-        # i=0 pushes recent aaa-1, skips history dup; i=1 pushes bbb-2 then ccc-3
-        self.assertEqual([h["id"] for h in hits], ["aaa-1", "bbb-2", "ccc-3"])
+        self.assertEqual([h["id"] for h in hits], ["bbb-2", "aaa-1", "ccc-3"])
         self.assertEqual(hits[0]["source"], "recent")
 
+    def test_older_recent_hit_ranks_below_newer_history_hit(self):
+        recent = [{"session_id": "old-recent", "cwd": "/r/one", "ts_unix": 10, "snippet": "s1"}]
+        history = [{"session_id": "new-history", "cwd": "/r/two", "ts_unix": 9999, "snippet": "s2"}]
+        hits = server.merge_ask_hits(recent, history)
+        self.assertEqual([h["id"] for h in hits], ["new-history", "old-recent"])
+
+    def test_missing_ts_unix_sorts_as_oldest(self):
+        recent = [{"session_id": "no-ts", "cwd": "/r/one", "snippet": "s1"},
+                  {"session_id": "has-ts", "cwd": "/r/two", "ts_unix": 5, "snippet": "s2"}]
+        hits = server.merge_ask_hits(recent, [])
+        self.assertEqual([h["id"] for h in hits], ["has-ts", "no-ts"])
+
     def test_cap_respected(self):
-        recent = [{"session_id": f"r-{i}", "snippet": ""} for i in range(20)]
+        recent = [{"session_id": f"r-{i}", "snippet": "", "ts_unix": i} for i in range(20)]
         self.assertEqual(len(server.merge_ask_hits(recent, [], cap=5)), 5)
 
     def test_snippet_marks_stripped_and_truncated(self):
@@ -79,6 +93,10 @@ class PromptTest(unittest.TestCase):
 
     def test_no_hits_says_none_found(self):
         self.assertIn("(none found)", server.build_ask_prompt("q", [], []))
+
+    def test_prompt_instructs_recency_preference(self):
+        p = server.build_ask_prompt("q", [], [])
+        self.assertIn("Prefer the most recent sessions", p)
 
 
 class CitationsTest(unittest.TestCase):

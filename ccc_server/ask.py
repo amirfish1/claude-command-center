@@ -69,14 +69,17 @@ def extract_ask_terms(question):
 
 
 def merge_ask_hits(recent, history, cap=_ASK_HIT_CAP):
-    """Interleave recent-scan and history-index results, newest-ish first,
-    deduped by session id. Both inputs are the raw `results` lists of their
-    endpoints (recent_search rows / history_search rows)."""
+    """Interleave recent-scan and history-index results, deduped by session
+    id, then sort newest-first by ts_unix before the cap is applied. Both
+    feeds already AND-match every query term, so recency is the right
+    tiebreak — the owner's questions are almost always about the last few
+    days to two weeks, not whatever an interleave position happens to
+    surface. Missing/None ts_unix sorts as oldest (0)."""
     out, seen = [], set()
 
     def _push(row, source):
         sid = str(row.get("session_id") or "").strip()
-        if not sid or sid in seen or len(out) >= cap:
+        if not sid or sid in seen:
             return
         seen.add(sid)
         snippet = _ASK_MARK_RE.sub("", str(row.get("snippet") or ""))
@@ -90,13 +93,12 @@ def merge_ask_hits(recent, history, cap=_ASK_HIT_CAP):
 
     rec, hist = list(recent or []), list(history or [])
     for i in range(max(len(rec), len(hist))):
-        if len(out) >= cap:
-            break
         if i < len(rec):
             _push(rec[i], "recent")
         if i < len(hist):
             _push(hist[i], "history")
-    return out
+    out.sort(key=lambda h: h.get("ts_unix") or 0, reverse=True)
+    return out[:cap]
 
 
 def enrich_ask_hits(hits, titles=None, live_ids=None):
@@ -138,6 +140,10 @@ def build_ask_prompt(question, history, hits):
         "continuation.",
         "If the hits do not answer the question, say so plainly and suggest "
         "a more specific phrase to ask with.",
+        "Prefer the most recent sessions — the user usually means work from "
+        "the last few days to two weeks. Lead with the newest matches and "
+        "give their dates; mention older matches only if nothing recent "
+        "fits.",
         "Reply in short readable prose (2-6 sentences).",
         "",
     ]
@@ -274,6 +280,10 @@ def handle_assistant_ask(payload, runner=None):
         history = []
     t0 = time.time()
 
+    engine = select_ask_engine()
+    if not engine.get("available"):
+        return {"ok": False, "error": engine["error"], "code": engine["code"]}, 503
+
     query = " ".join(extract_ask_terms(question))
     recent, hist_rows = [], []
     if query:
@@ -292,9 +302,6 @@ def handle_assistant_ask(payload, runner=None):
             hist_rows = []
 
     hits = enrich_ask_hits(merge_ask_hits(recent, hist_rows))
-    engine = select_ask_engine()
-    if not engine.get("available"):
-        return {"ok": False, "error": engine["error"], "code": engine["code"]}, 503
 
     try:
         answer = run_ask_engine(engine, build_ask_prompt(question, history, hits),
