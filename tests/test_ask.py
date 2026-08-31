@@ -214,14 +214,27 @@ class HandleAskTest(unittest.TestCase):
         self.assertEqual(body["code"], "ask_engine_unavailable")
 
     def test_search_layer_crash_degrades_to_no_hits(self):
-        def _boom(*a, **kw):
+        calls = {"recent": 0, "hist": 0}
+
+        def _boom_recent(*a, **kw):
+            calls["recent"] += 1
             raise RuntimeError("index locked")
-        with mock.patch.object(server, "search_recent_sessions", _boom), \
-             mock.patch.object(server, "search_conversation_history", _boom):
+
+        def _boom_hist(*a, **kw):
+            calls["hist"] += 1
+            raise RuntimeError("index locked")
+
+        with mock.patch.object(server, "search_recent_sessions", _boom_recent), \
+             mock.patch.object(server, "search_conversation_history", _boom_hist):
             runner = lambda argv, **kw: _FakeProc(stdout="No matching sessions found.")
-            body, status = server.handle_assistant_ask({"question": "q"}, runner=runner)
+            body, status = server.handle_assistant_ask(
+                {"question": "database sessions"}, runner=runner)
         self.assertEqual(status, 200)
         self.assertEqual(body["sources"], [])
+        # The point of this test is that the crash path was actually reached
+        # (a non-empty query must survive extract_ask_terms, or these mocks
+        # never fire and the test would pass for the wrong reason).
+        self.assertEqual(calls, {"recent": 1, "hist": 1})
 
 
 if __name__ == "__main__":
