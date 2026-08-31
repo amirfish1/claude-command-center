@@ -147,5 +147,82 @@ class ArgvTest(unittest.TestCase):
         self.assertEqual(argv[-1], "PROMPT")
 
 
+class _FakeProc:
+    def __init__(self, stdout="", stderr="", returncode=0):
+        self.stdout, self.stderr, self.returncode = stdout, stderr, returncode
+
+
+class HandleAskTest(unittest.TestCase):
+    """handle_assistant_ask with every external seam injected: search
+    functions patched on the server module, subprocess runner injected."""
+
+    def setUp(self):
+        self.env = mock.patch.dict(os.environ, {"CCC_ASK_ENGINE": "claude"})
+        self.env.start()
+        self.addCleanup(self.env.stop)
+        self.addCleanup(lambda: os.environ.pop("CCC_ASK_ENGINE", None))
+        patches = [
+            mock.patch.object(server, "_resolve_claude_bin",
+                              lambda: {"available": True, "bin": "/x/claude"}),
+            mock.patch.object(server, "search_recent_sessions",
+                              lambda q, days=2, limit=20, cwd_like=None: {"results": [
+                                  {"session_id": "aaa-1", "cwd": "/r/x",
+                                   "ts_unix": 100, "snippet": "bym ads work"}]}),
+            mock.patch.object(server, "search_conversation_history",
+                              lambda q, limit=20, cwd_like=None, since=None,
+                              semantic=False: {"results": []}),
+            mock.patch.object(server, "_auto_titled_session_ids", lambda: {"aaa-1": "BYM ads"}),
+            mock.patch.object(server, "_discover_live_session_ids", lambda: set()),
+        ]
+        for p in patches:
+            p.start()
+            self.addCleanup(p.stop)
+
+    def test_happy_path_cites_and_sources(self):
+        runner = lambda argv, **kw: _FakeProc(stdout="You did it in [[session:aaa-1]].")
+        body, status = server.handle_assistant_ask({"question": "where bym ads?"}, runner=runner)
+        self.assertEqual(status, 200)
+        self.assertTrue(body["ok"])
+        self.assertIn("[[session:aaa-1]]", body["answer"])
+        self.assertEqual(body["sources"][0]["id"], "aaa-1")
+        self.assertEqual(body["sources"][0]["title"], "BYM ads")
+        self.assertEqual(body["engine"], "claude")
+
+    def test_empty_question_400(self):
+        body, status = server.handle_assistant_ask({"question": "  "})
+        self.assertEqual(status, 400)
+        self.assertEqual(body["code"], "ask_bad_request")
+
+    def test_engine_failure_502(self):
+        runner = lambda argv, **kw: _FakeProc(stderr="boom", returncode=1)
+        body, status = server.handle_assistant_ask({"question": "q"}, runner=runner)
+        self.assertEqual(status, 502)
+        self.assertEqual(body["code"], "ask_engine_error")
+
+    def test_timeout_504(self):
+        import subprocess as sp
+        def runner(argv, **kw):
+            raise sp.TimeoutExpired(argv, kw.get("timeout", 0))
+        body, status = server.handle_assistant_ask({"question": "q"}, runner=runner)
+        self.assertEqual(status, 504)
+        self.assertEqual(body["code"], "ask_timeout")
+
+    def test_no_engine_503(self):
+        with mock.patch.object(server, "_resolve_claude_bin", lambda: {"available": False}):
+            body, status = server.handle_assistant_ask({"question": "q"})
+        self.assertEqual(status, 503)
+        self.assertEqual(body["code"], "ask_engine_unavailable")
+
+    def test_search_layer_crash_degrades_to_no_hits(self):
+        def _boom(*a, **kw):
+            raise RuntimeError("index locked")
+        with mock.patch.object(server, "search_recent_sessions", _boom), \
+             mock.patch.object(server, "search_conversation_history", _boom):
+            runner = lambda argv, **kw: _FakeProc(stdout="No matching sessions found.")
+            body, status = server.handle_assistant_ask({"question": "q"}, runner=runner)
+        self.assertEqual(status, 200)
+        self.assertEqual(body["sources"], [])
+
+
 if __name__ == "__main__":
     unittest.main()

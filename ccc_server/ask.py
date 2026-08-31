@@ -219,3 +219,84 @@ def ask_engine_argv(engine, prompt):
                 "--effort", "low", "--disable-slash-commands"]
     return [engine["bin"], "-p", "--model", engine["model"],
             "--strict-mcp-config", '--mcp-config={"mcpServers":{}}', prompt]
+
+
+def run_ask_engine(engine, prompt, runner=None):
+    """One headless CLI round-trip. `runner` is subprocess.run-compatible,
+    injected by tests. cwd is the scratch dir so throwaway session artifacts
+    stay out of repo scans (same as the auto-titler / queue brief)."""
+    run = runner or subprocess.run
+    scratch = Path(str(_core._SCRATCH_DIR))
+    try:
+        scratch.mkdir(parents=True, exist_ok=True)
+    except OSError:
+        pass
+    proc = run(ask_engine_argv(engine, prompt), capture_output=True, text=True,
+               timeout=_ASK_TIMEOUT_SEC, cwd=str(scratch))
+    if proc.returncode != 0:
+        detail = (proc.stderr or "").strip()[:300]
+        raise RuntimeError(detail or f"{engine['engine']} exited {proc.returncode}")
+    text = (proc.stdout or "").strip()
+    if not text:
+        raise RuntimeError(f"{engine['engine']} returned empty output")
+    return text
+
+
+def _ask_source_row(hit):
+    return {k: hit.get(k) for k in ("id", "title", "repo", "status", "ts_unix", "cwd")}
+
+
+def handle_assistant_ask(payload, runner=None):
+    """POST /api/assistant/ask body -> (response dict, HTTP status)."""
+    payload = payload if isinstance(payload, dict) else {}
+    question = str(payload.get("question") or "").strip()
+    if not question:
+        return {"ok": False, "error": "question is required", "code": "ask_bad_request"}, 400
+    history = payload.get("history")
+    if not isinstance(history, list):
+        history = []
+    t0 = time.time()
+
+    query = " ".join(extract_ask_terms(question))
+    recent, hist_rows = [], []
+    if query:
+        # Each layer degrades independently: a locked index or a scan error
+        # must not turn the whole Ask into a 500 — the model just gets fewer
+        # (or zero) hits and says so.
+        try:
+            recent = (_core.search_recent_sessions(
+                query, days=_ASK_RECENT_DAYS, limit=_ASK_HIT_CAP) or {}).get("results") or []
+        except Exception:
+            recent = []
+        try:
+            hist_rows = (_core.search_conversation_history(
+                query, limit=_ASK_HIT_CAP) or {}).get("results") or []
+        except Exception:
+            hist_rows = []
+
+    hits = enrich_ask_hits(merge_ask_hits(recent, hist_rows))
+    engine = select_ask_engine()
+    if not engine.get("available"):
+        return {"ok": False, "error": engine["error"], "code": engine["code"]}, 503
+
+    try:
+        answer = run_ask_engine(engine, build_ask_prompt(question, history, hits),
+                                runner=runner)
+    except subprocess.TimeoutExpired:
+        return {"ok": False, "code": "ask_timeout",
+                "error": f"{engine['engine']} timed out after {_ASK_TIMEOUT_SEC}s"}, 504
+    except (OSError, RuntimeError) as e:
+        return {"ok": False, "code": "ask_engine_error", "error": str(e)[:300]}, 502
+
+    cited = parse_ask_citations(answer, [h["id"] for h in hits])
+    by_id = {h["id"]: h for h in hits}
+    sources = [_ask_source_row(by_id[sid]) for sid in cited]
+    sources += [_ask_source_row(h) for h in hits if h["id"] not in cited]
+    return {
+        "ok": True,
+        "answer": answer,
+        "sources": sources[:_ASK_HIT_CAP],
+        "engine": engine["engine"],
+        "model": engine["model"],
+        "elapsed_ms": int((time.time() - t0) * 1000),
+    }, 200
