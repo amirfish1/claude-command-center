@@ -50315,6 +50315,9 @@ _adopt_ccc_module("recall_usage")
 # via /api/search-recall-sessions, replacing the Total Recall subprocess.
 _adopt_ccc_module("recent_search")
 
+# Ask tab — retrieval + one cheap-LLM call (/api/assistant/ask).
+_adopt_ccc_module("ask")
+
 # ---------------------------------------------------------------------------
 # Global usage stats — aggregated across every transcript under PROJECTS_ROOT.
 # Powers the /api/stats endpoint and the "Stats" overlay in the UI.
