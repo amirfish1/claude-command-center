@@ -1381,11 +1381,14 @@
             <div class="status-rail-pane" id="statusRailAskPane" role="tabpanel" data-rail-pane="ask">
               <div class="ask-pane">
                 <div class="ask-log" id="askLog" aria-live="polite"></div>
+                <div class="ask-sel-bar" id="askSelBar" hidden></div>
                 <form class="ask-form" id="askForm">
-                  <textarea id="askInput" rows="2" placeholder="Ask about your sessions… (Enter sends)"></textarea>
+                  <textarea id="askInput" rows="2" placeholder="Ask about your sessions…"></textarea>
                   <div class="ask-actions">
-                    <button type="submit" class="ask-send" id="askSend">Ask</button>
+                    <button type="button" class="ask-range-btn" id="askRangeBtn"></button>
+                    <span class="ask-hint">⌘⏎ to send</span>
                     <button type="button" class="ask-clear" id="askClear" title="Clear conversation">Clear</button>
+                    <button type="submit" class="ask-send" id="askSend">Ask</button>
                   </div>
                 </form>
               </div>

@@ -43590,8 +43590,16 @@
       const _prioRank = it => (it && _PR[it.priority] != null) ? _PR[it.priority] : (it && it.lane === 'express' ? 0 : 2);
       // A close with unresolved work is not a clean green close. Put it with
       // other attention-bearing rows, ahead of tickets merely waiting to run.
-      const _uxqUnresolvedNotes = it => (it && it.resolution && Array.isArray(it.resolution.unresolved))
-        ? it.resolution.unresolved.filter(Boolean) : [];
+      // Entries acked via the ack toggle (WatchTower queue.ack_resolution,
+      // stored in resolution.unresolved_ack keyed by 0-based index) keep
+      // their record in the modal but no longer earn the row its amber
+      // marker — ack means "reviewed", not "fixed".
+      const _uxqUnresolvedNotes = it => {
+        const res = it && it.resolution;
+        if (!res || !Array.isArray(res.unresolved)) return [];
+        const ack = res.unresolved_ack;
+        return res.unresolved.filter((v, idx) => v && !(ack && typeof ack === 'object' && ack[String(idx)]));
+      };
       const _hasUnresolved = it => _uxqUnresolvedNotes(it).length > 0;
       const _isWaitingToDrain = it => {
         if (_effectiveStatus(it) !== 'open') return false;
@@ -56742,28 +56750,72 @@
     return String(x == null ? '' : x).replace(/\[\[/g, '[ [');
   }
 
-  function askChipHtml(src) {
-    const title = askNeutralizeMarkers(src.title || (src.repo ? src.repo + ' session' : 'session'));
-    const repo = askNeutralizeMarkers(src.repo || '');
-    const live = src.status === 'live' ? ' is-live' : '';
-    return '<span class="ask-chip' + live + '" data-ask-open="' + askEscapeHtml(src.id) + '" title="' +
-      askEscapeHtml((repo ? repo + ' — ' : '') + src.id) + '">' +
-      '<span class="ask-dot"></span>' + askEscapeHtml(title) + '</span>';
+  const ASK_RANGE_LABELS = { any: 'Any time', '24h': 'Last 24h', '7d': 'Last 7 days', '30d': 'Last 30 days' };
+  const ASK_RANGE_ORDER = ['any', '24h', '7d', '30d'];
+  const ASK_MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+
+  // Compact result-card timestamp: "7m"/"3h" for recent, "31 Mar" once a day
+  // has passed — matches the reference-treatment mock, distinct from the
+  // "…ago"-suffixed timeAgo() used elsewhere in the sidebar.
+  function askResultTime(tsUnix) {
+    if (!tsUnix) return '';
+    const ms = Number(tsUnix) * 1000;
+    const diffSec = Math.floor((Date.now() - ms) / 1000);
+    if (diffSec < 60) return 'now';
+    if (diffSec < 3600) return Math.floor(diffSec / 60) + 'm';
+    if (diffSec < 86400) return Math.floor(diffSec / 3600) + 'h';
+    const d = new Date(ms);
+    return d.getDate() + ' ' + ASK_MONTHS[d.getMonth()];
   }
 
-  // Escape first, then swap validated markers for chips/buttons — ids come
-  // only from the server's sources list, never raw model output. The
-  // action-marker pass runs BEFORE the citation-chip pass: chips inject
-  // src.title into htmlOut, and a title containing literal action-marker
-  // syntax must not get picked up and turned into a live spawn button by a
-  // later pass. `spawned` is the current turn's { [sessionId]: true } map so
-  // a page redraw renders an already-spawned action as done, not armed again.
-  function renderAskAnswer(answer, sources, spawned) {
+  function askResultHtml(src, selectedId) {
+    const title = askNeutralizeMarkers(src.title || (src.repo ? src.repo + ' session' : 'session'));
+    const repo = askNeutralizeMarkers(src.repo || '');
+    const live = src.status === 'live';
+    const sel = selectedId && src.id === selectedId ? ' is-selected' : '';
+    const time = askResultTime(src.ts_unix);
+    const snippet = askNeutralizeMarkers(src.snippet || '');
+    return '<div class="ask-result' + sel + '" data-ask-open="' + askEscapeHtml(src.id) +
+      '" data-ask-title="' + askEscapeHtml(title) + '" data-ask-cwd="' + askEscapeHtml(src.cwd || '') +
+      '" title="Click to open · ⌘-click to select">' +
+      '<div class="ask-result-head">' +
+      '<span class="ask-dot' + (live ? ' is-live' : '') + '"></span>' +
+      '<span class="ask-result-title">' + askEscapeHtml(title) + '</span>' +
+      (time ? '<span class="ask-result-time">' + askEscapeHtml(time) + '</span>' : '') +
+      '</div>' +
+      '<div class="ask-result-meta">' +
+      (repo ? '<span>' + askEscapeHtml(repo) + '</span><span>·</span>' : '') +
+      '<span class="' + (live ? 'is-live-status' : '') + '">' + (live ? 'working' : 'idle') + '</span>' +
+      '<span>·</span><span>' + askEscapeHtml(src.id) + '</span>' +
+      '</div>' +
+      (snippet ? '<div class="ask-result-snippet">' + askEscapeHtml(snippet) + '</div>' : '') +
+      '</div>';
+  }
+
+  function askResultsHtml(t, selectedId) {
+    const sources = t.sources || [];
+    if (!sources.length) return '';
+    let out = '<div class="ask-results">' + sources.map(s => askResultHtml(s, selectedId)).join('') + '</div>';
+    const count = Number.isFinite(t.hitCount) ? t.hitCount : sources.length;
+    const elapsed = Number.isFinite(t.elapsedMs) ? (t.elapsedMs / 1000).toFixed(1) + 's' : '';
+    out += '<div class="ask-result-count">' + count + (count === 1 ? ' session' : ' sessions') + ' found' +
+      (elapsed ? ' · ' + elapsed : '') + '</div>';
+    return out;
+  }
+
+  // Escape first, then swap validated action markers for spawn buttons — ids
+  // come only from the server's sources list, never raw model output.
+  // Citations ([[session:ID]]) are NOT re-rendered inline here: the result
+  // cards below already list every source, so the marker is stripped from
+  // the verdict prose rather than becoming a second, redundant reference.
+  // `spawned` is the current turn's { [sessionId]: true } map so a page
+  // redraw renders an already-spawned action as done, not armed again.
+  function renderAskVerdict(answer, sources, spawned) {
     const byId = Object.create(null);
     (sources || []).forEach(s => { if (s && s.id) byId[s.id] = s; });
     const spawnedMap = spawned || {};
-    let htmlOut = askEscapeHtml(answer);
-    htmlOut = htmlOut.replace(/\[\[action:spawn-continue:([0-9A-Za-z_-]{5,64})\]\]/g, (m, id) => {
+    let verdict = askEscapeHtml(answer);
+    verdict = verdict.replace(/\[\[action:spawn-continue:([0-9A-Za-z_-]{5,64})\]\]/g, (m, id) => {
       if (!byId[id]) return '';
       const done = !!spawnedMap[id];
       const label = done ? '✓ Spawned'
@@ -56772,15 +56824,8 @@
         '" data-ask-cwd="' + askEscapeHtml(byId[id].cwd || '') + '"' + (done ? ' disabled' : '') + '>' +
         label + '</button>';
     });
-    htmlOut = htmlOut.replace(/\[\[session:([0-9A-Za-z_-]{5,64})\]\]/g, (m, id) =>
-      byId[id] ? askChipHtml(byId[id]) : askEscapeHtml(id));
-    const cited = new Set();
-    String(answer || '').replace(/\[\[session:([0-9A-Za-z_-]{5,64})\]\]/g, (m, id) => { cited.add(id); return m; });
-    const rest = (sources || []).filter(s => s && s.id && !cited.has(s.id));
-    if (rest.length) {
-      htmlOut += '<div class="ask-sources">' + rest.map(askChipHtml).join('') + '</div>';
-    }
-    return htmlOut;
+    verdict = verdict.replace(/\[\[session:[0-9A-Za-z_-]{5,64}\]\]/g, '');
+    return verdict.replace(/[ \t]{2,}/g, ' ').replace(/\s+([.,;:!?])/g, '$1').trim();
   }
 
   function askLoadHistory() {
@@ -56798,23 +56843,66 @@
     const input = document.getElementById('askInput');
     const send = document.getElementById('askSend');
     const clearBtn = document.getElementById('askClear');
+    const selBar = document.getElementById('askSelBar');
+    const rangeBtn = document.getElementById('askRangeBtn');
     if (!log || !form || !input) return;
 
     let turns = askLoadHistory();
+    // Global selection across the whole log (⌘/ctrl-click a result card) —
+    // one at a time, surfaced as an actions bar above the composer.
+    let selection = null;
+    let rangeKey = 'any';
+    try { rangeKey = localStorage.getItem('ccc-ask-range') || 'any'; } catch (_) {}
+    if (!ASK_RANGE_LABELS[rangeKey]) rangeKey = 'any';
+
+    function drawRangeBtn() {
+      if (rangeBtn) rangeBtn.textContent = ASK_RANGE_LABELS[rangeKey] + ' ▾';
+    }
+
+    function drawSelBar() {
+      if (!selBar) return;
+      if (!selection) { selBar.hidden = true; selBar.innerHTML = ''; return; }
+      selBar.hidden = false;
+      selBar.innerHTML =
+        '<div class="ask-sel-row1">' +
+        '<span class="ask-sel-title">' + askEscapeHtml(selection.title || selection.id) + '</span>' +
+        '<button type="button" class="ask-sel-close" data-ask-sel-action="clear" title="Clear selection">✕</button>' +
+        '</div>' +
+        '<div class="ask-sel-id">' + askEscapeHtml(selection.id) + '</div>' +
+        '<div class="ask-sel-actions">' +
+        '<button type="button" class="ask-sel-btn is-primary" data-ask-sel-action="spawn">+ Spawn</button>' +
+        '<button type="button" class="ask-sel-btn" data-ask-sel-action="copy">Copy id</button>' +
+        '<button type="button" class="ask-sel-btn" data-ask-sel-action="pin">Pin</button>' +
+        '</div>';
+    }
 
     function draw() {
       log.innerHTML = turns.map((t, idx) =>
         '<div class="ask-turn" data-ask-turn-index="' + idx + '">' +
         '<div class="ask-turn-q">' + askEscapeHtml(t.q) + '</div>' +
         '<div class="ask-turn-a' + (t.error ? ' is-error' : '') + '">' +
-        (t.error ? askEscapeHtml(t.a) : renderAskAnswer(t.a, t.sources, t.spawned)) + '</div>' +
+        (t.error ? askEscapeHtml(t.a) : renderAskVerdict(t.a, t.sources, t.spawned)) + '</div>' +
+        (t.error ? '' : askResultsHtml(t, selection && selection.id)) +
         '</div>').join('');
       log.scrollTop = log.scrollHeight;
+      drawSelBar();
     }
 
     log.addEventListener('click', (ev) => {
-      const chip = ev.target.closest('[data-ask-open]');
-      if (chip) { selectConversation(chip.getAttribute('data-ask-open')); return; }
+      const card = ev.target.closest('[data-ask-open]');
+      if (card) {
+        const id = card.getAttribute('data-ask-open');
+        if (ev.metaKey || ev.ctrlKey) {
+          selection = (selection && selection.id === id) ? null : {
+            id, title: card.getAttribute('data-ask-title') || id,
+            cwd: card.getAttribute('data-ask-cwd') || '',
+          };
+          draw();
+        } else {
+          selectConversation(id);
+        }
+        return;
+      }
 
       const act = ev.target.closest('[data-ask-continue]');
       if (act && !act.disabled) {
@@ -56826,7 +56914,7 @@
         // next draw() — draw() rebuilds log.innerHTML from `turns` on every
         // answer/load, which would silently re-enable a DOM-only disabled
         // flag and let one click fire two spawns. Record it on the turn
-        // instead so renderAskAnswer can render it done on redraw.
+        // instead so renderAskVerdict can render it done on redraw.
         const turnEl = act.closest('[data-ask-turn-index]');
         const turnIdx = turnEl ? parseInt(turnEl.getAttribute('data-ask-turn-index'), 10) : -1;
         fetch('/api/sessions/spawn', {
@@ -56854,6 +56942,51 @@
       }
     });
 
+    if (selBar) selBar.addEventListener('click', (ev) => {
+      const btn = ev.target.closest('[data-ask-sel-action]');
+      if (!btn || !selection) return;
+      const action = btn.getAttribute('data-ask-sel-action');
+      const sel = selection;
+      if (action === 'clear') { selection = null; drawSelBar(); return; }
+      if (action === 'copy') {
+        if (navigator.clipboard) navigator.clipboard.writeText(sel.id).catch(() => {});
+        showOpToast('Copied ' + sel.id);
+        return;
+      }
+      if (action === 'pin') {
+        btn.disabled = true;
+        ccPostJson('/api/conversations/' + encodeURIComponent(sel.id) + '/pin', { session_id: sel.id })
+          .then(d => showOpToast(d && d.pinned ? 'Pinned to top' : 'Unpinned'))
+          .catch(e => showOpToast('Pin failed: ' + e.message, 'error'))
+          .finally(() => { btn.disabled = false; });
+        return;
+      }
+      if (action === 'spawn') {
+        btn.disabled = true;
+        btn.textContent = 'Spawning…';
+        fetch('/api/sessions/spawn', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            prompt: 'Continue the work from session ' + sel.id +
+              '. Start by reading that session\'s transcript/context to pick up where it left off.',
+            repo_path: sel.cwd || undefined,
+          }),
+        }).then(r => r.json()).then(d => {
+          btn.textContent = d && d.ok ? '✓ Spawned' : '✗ ' + ((d && d.error) || 'spawn failed');
+        }).catch(e => { btn.textContent = '✗ ' + e; })
+          .finally(() => { setTimeout(() => { btn.disabled = false; }, 1200); });
+        return;
+      }
+    });
+
+    if (rangeBtn) rangeBtn.addEventListener('click', () => {
+      const i = ASK_RANGE_ORDER.indexOf(rangeKey);
+      rangeKey = ASK_RANGE_ORDER[(i + 1) % ASK_RANGE_ORDER.length];
+      try { localStorage.setItem('ccc-ask-range', rangeKey); } catch (_) {}
+      drawRangeBtn();
+    });
+
     let busy = false;
     async function submit() {
       const q = (input.value || '').trim();
@@ -56875,11 +57008,14 @@
         const res = await fetch('/api/assistant/ask', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ question: q, history }),
+          body: JSON.stringify({ question: q, history, range: rangeKey }),
         });
         const data = await res.json();
         if (data && data.ok) {
-          turns.push({ q, a: data.answer, sources: data.sources || [] });
+          turns.push({
+            q, a: data.answer, sources: data.sources || [],
+            hitCount: data.hit_count, elapsedMs: data.elapsed_ms,
+          });
         } else {
           turns.push({ q, a: (data && data.error) || ('HTTP ' + res.status), error: true });
         }
@@ -56897,13 +57033,15 @@
     form.addEventListener('submit', (ev) => { ev.preventDefault(); submit(); });
     input.addEventListener('keydown', (ev) => {
       if (ev.isComposing) return;
-      if (ev.key === 'Enter' && !ev.shiftKey) { ev.preventDefault(); submit(); }
+      if (ev.key === 'Enter' && (ev.metaKey || ev.ctrlKey)) { ev.preventDefault(); submit(); }
     });
     if (clearBtn) clearBtn.addEventListener('click', () => {
       turns = [];
+      selection = null;
       askSaveHistory(turns);
       draw();
     });
+    drawRangeBtn();
     draw();
   }
 
