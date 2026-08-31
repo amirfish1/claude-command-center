@@ -19795,11 +19795,12 @@ class _SessionGraph:
             with self._lock:
                 meta = self._edge_meta.get(node, {})
                 kids = self._children_of.get(node, {})
+                parent = self._parent_of.get(node, "")
             children = []
             if depth < max_depth:
                 for child in kids:
                     children.append(build(child, depth + 1))
-            return {
+            out = {
                 "session_id": node,
                 "source": meta.get("source", "root"),
                 "engine": meta.get("engine", ""),
@@ -19808,6 +19809,25 @@ class _SessionGraph:
                 "model": meta.get("model", ""),
                 "children": children,
             }
+            # In-process Task subagents have no spawn-registry entry and no
+            # hook-reported state, so without liveness evidence here the lane
+            # map hardcoded them "landed" from birth (2026-08-30: a lane shown
+            # landed while its transcript was still being written). Emit the
+            # transcript's mtime plus an `active` verdict from its tail.
+            if meta.get("source") == "claude-task-tool" and parent:
+                try:
+                    for f in PROJECTS_ROOT.glob(
+                        f"*/{parent}/subagents/{node}.jsonl"
+                    ):
+                        st = f.stat()
+                        out["mtime"] = st.st_mtime
+                        out["active"] = _agent_transcript_active(
+                            f, st.st_mtime, st.st_size
+                        )
+                        break
+                except OSError:
+                    pass
+            return out
 
         return build(root, 0)
 
@@ -19908,6 +19928,56 @@ def _session_graph_build_from_all_sources():
 
 
 _CLAUDE_TASK_ENRICH_THROTTLE_S = 10
+
+# (mtime, size) -> verdict cache for _agent_transcript_active: the family
+# endpoint is polled every ~5s by the lane map, and re-reading an unchanged
+# transcript tail each sweep is pure waste. Bounded, evicted oldest-first.
+_AGENT_ACTIVE_CACHE = {}
+_AGENT_ACTIVE_CACHE_MAX = 256
+
+
+def _agent_transcript_active(path, mtime, size):
+    """Is this Task-subagent transcript still mid-run?
+
+    A finished subagent's JSONL ends with a text-only assistant record (its
+    final report). A running one ends with an assistant record carrying
+    pending ``tool_use`` blocks, or a user/tool-result record the model
+    hasn't answered yet. Truncated trailing lines (mid-write) parse as the
+    previous record, which reads as active — correct, since a write was
+    literally in flight.
+    """
+    key = str(path)
+    cached = _AGENT_ACTIVE_CACHE.get(key)
+    if cached is not None and cached[0] == (mtime, size):
+        return cached[1]
+    active = True
+    try:
+        with open(path, "rb") as f:
+            if size > 65536:
+                f.seek(-65536, 2)
+            tail = f.read().decode("utf-8", "replace")
+        for line in reversed(tail.strip().split("\n")):
+            try:
+                rec = json.loads(line)
+            except (json.JSONDecodeError, ValueError):
+                continue
+            if rec.get("type") == "assistant":
+                content = (rec.get("message") or {}).get("content") or []
+                has_tool_use = any(
+                    isinstance(b, dict) and b.get("type") == "tool_use"
+                    for b in content
+                )
+                active = has_tool_use
+            break
+    except OSError:
+        active = False
+    if len(_AGENT_ACTIVE_CACHE) >= _AGENT_ACTIVE_CACHE_MAX:
+        for old in sorted(
+            _AGENT_ACTIVE_CACHE, key=lambda k: _AGENT_ACTIVE_CACHE[k][0][0]
+        )[: _AGENT_ACTIVE_CACHE_MAX // 4]:
+            _AGENT_ACTIVE_CACHE.pop(old, None)
+    _AGENT_ACTIVE_CACHE[key] = ((mtime, size), active)
+    return active
 
 
 def _session_graph_enrich_claude_task_subagents(parent_sid):

@@ -56131,16 +56131,22 @@
         // subagents use a different synthetic id (`kimi-subagent:...`) with
         // no viewer built for it yet, so they stay unclickable for now.
         const canOpen = node.source === 'claude-task-tool' && sid.startsWith('agent-') && parentSid;
+        // Liveness from the transcript itself (server-side tail check): an
+        // `active` node whose file moved recently is still working. The
+        // mtime freshness bound keeps a crashed lane (tail forever mid-tool,
+        // file never written again) from reading "working" indefinitely.
+        const nmt = Number(node.mtime || 0);
+        const working = !!node.active && nmt > 0 && (Date.now() / 1000 - nmt) < 600;
         out.push({
           id: sid,
           convId: canOpen ? (parentSid + ':' + sid) : '',
           name: node.name || sid.slice(0, 16),
           engine: node.engine || 'claude',
           model: node.model || '',
-          status: 'done',
-          mtime: 0,
+          status: working ? 'working' : 'done',
+          mtime: nmt,
           born: 0,
-          landedAt: 0,
+          landedAt: nmt,
           depth,
           isTaskSubagent: true,
           source: node.source || '',
