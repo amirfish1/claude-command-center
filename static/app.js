@@ -8025,7 +8025,7 @@
     if (!btn) return;
     ev.preventDefault();
     ev.stopPropagation();
-    const eventEl = btn.closest('.event.assistant') || btn.closest('.kimi-answer-meta');
+    const eventEl = btn.closest('.event.assistant') || btn.closest('.kimi-answer-meta') || btn.closest('.ask-turn-a');
     const text = assistantNodeTextForCopy(eventEl);
     if (!text) {
       showOpToast('No assistant message to copy', 'error');
@@ -8118,7 +8118,7 @@
       }
       return;
     }
-    const eventEl = btn.closest('.event.assistant') || btn.closest('.kimi-answer-meta');
+    const eventEl = btn.closest('.event.assistant') || btn.closest('.kimi-answer-meta') || btn.closest('.ask-turn-a');
     const text = assistantNodeTextForCopy(eventEl);
     if (!text) {
       showOpToast('No assistant message to read', 'error');
@@ -56833,18 +56833,23 @@
     return '<div class="ask-sources">' + summary + list + '</div>';
   }
 
-  // Escape first, then swap validated action markers for spawn buttons — ids
-  // come only from the server's sources list, never raw model output.
-  // Citations ([[session:ID]]) are NOT re-rendered inline here: the result
-  // cards below already list every source, so the marker is stripped from
-  // the verdict prose rather than becoming a second, redundant reference.
-  // `spawned` is the current turn's { [sessionId]: true } map so a page
-  // redraw renders an already-spawned action as done, not armed again.
+  // Render through the app's real markdown pipeline (renderMarkdown) instead
+  // of a hand-rolled escape+regex pass, so Ask prose gets the same links,
+  // code blocks, and lists as a regular conversation turn — renderMarkdown
+  // escapes its own input, so `answer` must stay raw going in. Then swap
+  // validated action markers for spawn buttons — ids come only from the
+  // server's sources list, never raw model output. Citations
+  // ([[session:ID]]) are NOT re-rendered inline here: the result cards below
+  // already list every source, so the marker is stripped from the verdict
+  // prose rather than becoming a second, redundant reference. `spawned` is
+  // the current turn's { [sessionId]: true } map so a page redraw renders an
+  // already-spawned action as done, not armed again.
   function renderAskVerdict(answer, sources, spawned) {
     const byId = Object.create(null);
     (sources || []).forEach(s => { if (s && s.id) byId[s.id] = s; });
     const spawnedMap = spawned || {};
-    let verdict = askEscapeHtml(answer);
+    const raw = String(answer || '').replace(/[ \t]{2,}/g, ' ').replace(/[ \t]+([.,;:!?])/g, '$1').trim();
+    let verdict = renderMarkdown(raw);
     verdict = verdict.replace(/\[\[action:spawn-continue:([0-9A-Za-z_-]{5,64})\]\]/g, (m, id) => {
       if (!byId[id]) return '';
       const done = !!spawnedMap[id];
@@ -56854,8 +56859,18 @@
         '" data-ask-cwd="' + askEscapeHtml(byId[id].cwd || '') + '"' + (done ? ' disabled' : '') + '>' +
         label + '</button>';
     });
-    verdict = verdict.replace(/\[\[session:[0-9A-Za-z_-]{5,64}\]\]/g, '');
-    return verdict.replace(/[ \t]{2,}/g, ' ').replace(/\s+([.,;:!?])/g, '$1').trim();
+    return verdict.replace(/\[\[session:[0-9A-Za-z_-]{5,64}\]\]/g, '');
+  }
+
+  // Mirrors assistantMessageActionsHtml's markup/classes so an Ask turn's
+  // toolbar picks up the same CSS + the two document-level click handlers
+  // (data-copy-assistant-message / data-read-assistant-message) with no
+  // handler changes beyond the .closest('.ask-turn-a') fallback below.
+  function askMessageActionsHtml() {
+    return '<span class="assistant-message-actions" data-role="assistant-message-actions">'
+      + '<button type="button" class="assistant-message-action" data-read-assistant-message title="Read answer aloud" aria-label="Read answer aloud">&#128266;</button>'
+      + '<button type="button" class="assistant-message-action" data-copy-assistant-message title="Copy answer" aria-label="Copy answer">&#128203;</button>'
+      + '</span>';
   }
 
   function askLoadHistory() {
@@ -56910,10 +56925,19 @@
       log.innerHTML = turns.map((t, idx) =>
         '<div class="ask-turn" data-ask-turn-index="' + idx + '">' +
         '<div class="ask-turn-q">' + askEscapeHtml(t.q) + '</div>' +
-        '<div class="ask-turn-a' + (t.error ? ' is-error' : '') + '">' +
-        (t.error ? askEscapeHtml(t.a) : renderAskVerdict(t.a, t.sources, t.spawned)) + '</div>' +
+        '<div class="ask-turn-a assistant-text' + (t.error ? ' is-error' : '') + '">' +
+        (t.error ? askEscapeHtml(t.a) : renderAskVerdict(t.a, t.sources, t.spawned)) +
+        (!t.error && String(t.a || '').trim() ? askMessageActionsHtml() : '') + '</div>' +
         (t.error ? '' : askResultsHtml(t, selection && selection.id)) +
         '</div>').join('');
+      // renderAskVerdict/renderMarkdown already escaped the answer into HTML;
+      // stash the raw text as a JS property (not an attribute) so the shared
+      // copy/read-aloud handlers get clean prose instead of re-scraping the
+      // rendered markup (which would include button labels, table pipes…).
+      log.querySelectorAll('.ask-turn-a').forEach((el, idx) => {
+        const t = turns[idx];
+        if (t && !t.error) el._agentAnswerText = String(t.a || '').trim();
+      });
       log.scrollTop = log.scrollHeight;
       drawSelBar();
     }
