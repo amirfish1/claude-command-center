@@ -2296,7 +2296,7 @@ def _parse_devin_cli_conversation(session_id, after_line=0):
             cached = _DEVIN_CLI_PARSE_CACHE.get(raw_id)
 
         incremental = False
-        if cached and cached.get("max_row_id") and cached.get("db_key") == db_key:
+        if cached and cached.get("max_row_id"):
             row = con.execute(
                 "SELECT MAX(row_id) FROM message_nodes WHERE session_id = ?",
                 (raw_id,),
