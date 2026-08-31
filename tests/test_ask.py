@@ -5,6 +5,7 @@ its inputs explicitly (titles/live_ids injection) or is a pure transform.
 """
 import os
 import unittest
+import uuid
 from unittest import mock
 
 import server  # binds ccc_server.ask names onto the server module
@@ -329,6 +330,29 @@ class ArgvTest(unittest.TestCase):
             {"engine": "claude", "bin": "/x/claude", "model": "haiku"}, "PROMPT")
         self.assertIn("--strict-mcp-config", argv)
         self.assertEqual(argv[-1], "PROMPT")
+
+    def test_claude_argv_uses_the_supplied_session_id(self):
+        session_id = "11111111-2222-3333-4444-555555555555"
+        argv = server.ask_engine_argv(
+            {"engine": "claude", "bin": "/x/claude", "model": "haiku"},
+            "PROMPT", session_id=session_id)
+        self.assertEqual(argv[argv.index("--session-id") + 1], session_id)
+
+
+class AskSessionClassificationTest(unittest.TestCase):
+    def test_claude_ask_marks_its_generated_session_as_other(self):
+        session_id = uuid.UUID("11111111-2222-3333-4444-555555555555")
+        runner = mock.Mock(return_value=_FakeProc(stdout="answer"))
+        with mock.patch("ccc_server.ask.uuid.uuid4", return_value=session_id), \
+                mock.patch.object(server, "_write_spawn_marker") as marker:
+            self.assertEqual(server.run_ask_engine(
+                {"engine": "claude", "bin": "/x/claude", "model": "haiku"},
+                "PROMPT", runner=runner), "answer")
+
+        marker.assert_called_once_with(
+            str(session_id), lane="other", kind="assistant", spawned_via="ccc-ask")
+        self.assertEqual(runner.call_args.args[0][runner.call_args.args[0].index("--session-id") + 1],
+                         str(session_id))
 
 
 class _FakeProc:

@@ -35050,14 +35050,17 @@
       const sid = String(c.session_id || c.id || '').trim();
       return !!(c._worker_id || (sid && _wtWorkerSessionIds.has(sid)) || _looksLikeWtWorkerTitle(c));
     };
-    // CCC-893: a session an external tool spawned (e.g. the reddit-writer
-    // skill, a separate repo) carries a `spawned_via` marker the server
-    // attaches from a sidecar file the spawning tool drops (see
-    // _apply_spawn_markers / SPAWN_MARKERS_DIR in server.py). Generic by
-    // design: ANY non-empty spawned_via routes to Workers, so a new external
-    // tool needs zero CCC changes to get auto-routed the same way.
+    // A typed spawn marker is trusted launch-time metadata. It lets internal
+    // and external tools choose Workers or Other without fragile title/prompt
+    // matching. The older spawned_via-only contract remains a Worker marker.
+    const _spawnMarkerLane = (c) => {
+      const lane = String((c && c.spawned_lane) || '').trim();
+      return lane === 'workers' || lane === 'other' ? lane : '';
+    };
     const _isExternalSpawnRow = (c) => !!(c && String(c.spawned_via || '').trim());
     const _allTabNaturalLane = (c) => {
+      const spawnedLane = _spawnMarkerLane(c);
+      if (spawnedLane) return spawnedLane;
       if (_isHermesWorkerRow(c) || _isWatchTowerWorkerRow(c) || _isExternalSpawnRow(c)) return 'workers';
       if (_isHermesMessageRow(c)) return 'messages';
       return 'coding';
@@ -35075,6 +35078,10 @@
     const _allTabCodingConvs = _allTabConvs.filter(c => _allTabLaneFor(c) === 'coding');
     const _allTabWorkerConvs = _allTabConvs.filter(c => _allTabLaneFor(c) === 'workers');
     const _allTabHermesMessageConvs = _allTabConvs.filter(c => _allTabLaneFor(c) === 'messages');
+    const _allTabOtherConvs = _allTabConvs.filter(c => {
+      const lane = _allTabLaneFor(c);
+      return lane === 'messages' || lane === 'other';
+    });
     // CCC-778: the top-level Coding/Workers tabs (shown instead of Issues/
     // Queues when "Show issues and queues as separate tabs" is off) are just
     // the All tab pre-filtered to that lane.
@@ -35086,7 +35093,7 @@
     const _allTabView = _topLevelLaneOverride || 'other';
     const _allTabMainConvs = _allTabView === 'workers'
       ? _allTabWorkerConvs
-      : (_allTabView === 'coding' ? _allTabCodingConvs : _allTabHermesMessageConvs);
+      : (_allTabView === 'coding' ? _allTabCodingConvs : _allTabOtherConvs);
     const _allTabTreeRows = _allTabTreeRowsFor(_allTabMainConvs);
     const _allTabRowsToClusters = (rows) => {
       const clusters = [];

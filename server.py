@@ -4160,20 +4160,20 @@ def _apply_session_lane_overrides(rows, overrides=None):
 # every time.
 #
 # Marker contract: the spawning tool drops one small JSON file per session at
-# SPAWN_MARKERS_DIR/<session_id>.json containing {"spawned_via": "<tool>"}
-# (e.g. "reddit-writer") right after it has the new session's id. This is a
-# plain filesystem write — no CCC API call, no auth, matching how an external
-# tool has filesystem access but not a running CCC to talk to at spawn time.
-# The check on the read side is deliberately generic: ANY non-empty
-# spawned_via value routes the row to Workers. CCC does not maintain an
-# allowlist of known external tool names — reddit-writer is just the first
-# consumer, not a hardcoded special case.
+# SPAWN_MARKERS_DIR/<session_id>.json. New writers specify a display lane, for
+# example {"kind": "assistant", "lane": "other", "spawned_via": "ccc-ask"}.
+# This is a plain filesystem write — no CCC API call or auth — matching how an
+# external tool has filesystem access but not a running CCC to talk to at spawn
+# time. Old {"spawned_via": "<tool>"} markers remain valid and mean Workers.
+# CCC intentionally has no source allowlist: a new external tool can classify
+# its own session without a CCC release.
 SPAWN_MARKERS_DIR = COMMAND_CENTER_STATE_DIR / "spawn-markers"  # <session_id>.json -> {"spawned_via": "<tool>"}
 _SPAWN_MARKER_VALUE_MAX_CHARS = 64
+_SPAWN_MARKER_LANES = frozenset({"workers", "other"})
 
 
 def _load_spawn_markers():
-    """Return {session_id: spawned_via} from SPAWN_MARKERS_DIR/<sid>.json files."""
+    """Return typed metadata from SPAWN_MARKERS_DIR/<sid>.json files."""
     out = {}
     try:
         files = list(SPAWN_MARKERS_DIR.iterdir())
@@ -4191,14 +4191,24 @@ def _load_spawn_markers():
             continue
         if not isinstance(data, dict):
             continue
-        via = str(data.get("spawned_via") or "").strip()
+        via = str(data.get("spawned_via") or "").strip()[:_SPAWN_MARKER_VALUE_MAX_CHARS]
+        lane = str(data.get("lane") or "").strip().lower()
+        if lane not in _SPAWN_MARKER_LANES:
+            lane = "workers" if via else ""
+        if not lane:
+            continue
+        marker = {"lane": lane}
+        kind = str(data.get("kind") or "").strip()[:_SPAWN_MARKER_VALUE_MAX_CHARS]
+        if kind:
+            marker["kind"] = kind
         if via:
-            out[sid] = via[:_SPAWN_MARKER_VALUE_MAX_CHARS]
+            marker["spawned_via"] = via
+        out[sid] = marker
     return out
 
 
 def _apply_spawn_markers(rows, markers=None):
-    """Stamp the external-spawn marker (CCC-893) onto any row shape."""
+    """Stamp external spawn metadata onto any row shape."""
     if markers is None:
         try:
             markers = _load_spawn_markers()
@@ -4211,10 +4221,45 @@ def _apply_spawn_markers(rows, markers=None):
             continue
         sid = row.get("session_id") or row.get("id")
         if sid:
-            via = markers.get(str(sid))
+            marker = markers.get(str(sid)) or {}
+            lane = marker.get("lane")
+            if lane:
+                row["spawned_lane"] = lane
+            kind = marker.get("kind")
+            if kind:
+                row["spawned_kind"] = kind
+            via = marker.get("spawned_via")
             if via:
                 row["spawned_via"] = via
     return rows
+
+
+def _write_spawn_marker(session_id, *, lane, kind="", spawned_via=""):
+    """Atomically persist typed launch metadata for one known session."""
+    sid = str(session_id or "").strip()
+    clean_lane = str(lane or "").strip().lower()
+    if not sid or Path(sid).name != sid:
+        raise ValueError("invalid session_id")
+    if clean_lane not in _SPAWN_MARKER_LANES:
+        raise ValueError("invalid spawn marker lane")
+    payload = {"lane": clean_lane}
+    clean_kind = str(kind or "").strip()[:_SPAWN_MARKER_VALUE_MAX_CHARS]
+    clean_via = str(spawned_via or "").strip()[:_SPAWN_MARKER_VALUE_MAX_CHARS]
+    if clean_kind:
+        payload["kind"] = clean_kind
+    if clean_via:
+        payload["spawned_via"] = clean_via
+    SPAWN_MARKERS_DIR.mkdir(parents=True, exist_ok=True)
+    marker_path = SPAWN_MARKERS_DIR / f"{sid}.json"
+    tmp_path = marker_path.with_suffix(f".json.{uuid.uuid4().hex}.tmp")
+    try:
+        tmp_path.write_text(json.dumps(payload, sort_keys=True), encoding="utf-8")
+        tmp_path.replace(marker_path)
+    finally:
+        try:
+            tmp_path.unlink(missing_ok=True)
+        except OSError:
+            pass
 
 
 def _load_session_overrides():

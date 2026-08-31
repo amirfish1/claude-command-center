@@ -24,6 +24,7 @@ import os
 import re
 import subprocess
 import time
+import uuid
 from pathlib import Path
 
 from ccc_server import core as _core
@@ -450,12 +451,16 @@ def select_ask_engine():
     }
 
 
-def ask_engine_argv(engine, prompt):
+def ask_engine_argv(engine, prompt, session_id=""):
     if engine["engine"] == "antigravity":
         return [engine["bin"], "--print", prompt, "--model", engine["model"],
                 "--effort", "low", "--disable-slash-commands"]
-    return [engine["bin"], "-p", "--model", engine["model"],
-            "--strict-mcp-config", '--mcp-config={"mcpServers":{}}', prompt]
+    argv = [engine["bin"], "-p"]
+    if session_id:
+        argv.extend(["--session-id", session_id])
+    argv.extend(["--model", engine["model"], "--strict-mcp-config",
+                 '--mcp-config={"mcpServers":{}}', prompt])
+    return argv
 
 
 def run_ask_engine(engine, prompt, runner=None):
@@ -468,7 +473,15 @@ def run_ask_engine(engine, prompt, runner=None):
         scratch.mkdir(parents=True, exist_ok=True)
     except OSError:
         pass
-    proc = run(ask_engine_argv(engine, prompt), capture_output=True, text=True,
+    session_id = ""
+    if engine["engine"] == "claude":
+        session_id = str(uuid.uuid4())
+        try:
+            _core._write_spawn_marker(
+                session_id, lane="other", kind="assistant", spawned_via="ccc-ask")
+        except OSError:
+            pass
+    proc = run(ask_engine_argv(engine, prompt, session_id=session_id), capture_output=True, text=True,
                timeout=_ASK_TIMEOUT_SEC, cwd=str(scratch))
     if proc.returncode != 0:
         detail = (proc.stderr or "").strip()[:300]
