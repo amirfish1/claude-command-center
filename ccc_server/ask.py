@@ -36,6 +36,11 @@ _ASK_RECENT_DAYS = 14
 _ASK_TIMEOUT_SEC = 90
 _ASK_DEFAULT_AGY_MODEL = "gemini-3.7-flash-low"
 _ASK_DEFAULT_CLAUDE_MODEL = "haiku"
+# UI range picker -> (days for the recent-transcript scan, days back for the
+# history index's `since` filter). "any" leaves `since` unset (full history)
+# but still bounds the recent scan at recent_search's own _MAX_DAYS — that
+# module clamps internally, so 30 here is a real ceiling, not a guess.
+_ASK_RANGE_DAYS = {"24h": 1, "7d": 7, "30d": 30, "any": 30}
 
 _ASK_CITATION_RE = re.compile(r"\[\[session:([0-9A-Za-z][0-9A-Za-z_-]{4,63})\]\]")
 _ASK_ACTION_RE = re.compile(r"\[\[action:spawn-continue:([0-9A-Za-z][0-9A-Za-z_-]{4,63})\]\]")
@@ -266,7 +271,16 @@ def run_ask_engine(engine, prompt, runner=None):
 
 
 def _ask_source_row(hit):
-    return {k: hit.get(k) for k in ("id", "title", "repo", "status", "ts_unix", "cwd")}
+    return {k: hit.get(k) for k in ("id", "title", "repo", "status", "ts_unix", "cwd", "snippet")}
+
+
+def _ask_range_window(range_key):
+    """UI range code -> (days for the recent scan, `since` unix ts for the
+    history index, or None for the whole index)."""
+    key = str(range_key or "").strip().lower()
+    days = _ASK_RANGE_DAYS.get(key, _ASK_RECENT_DAYS)
+    since = None if key in ("", "any") else time.time() - days * 86400
+    return days, since
 
 
 def handle_assistant_ask(payload, runner=None):
@@ -284,6 +298,7 @@ def handle_assistant_ask(payload, runner=None):
     if not engine.get("available"):
         return {"ok": False, "error": engine["error"], "code": engine["code"]}, 503
 
+    days, since = _ask_range_window(payload.get("range"))
     query = " ".join(extract_ask_terms(question))
     recent, hist_rows = [], []
     if query:
@@ -292,16 +307,20 @@ def handle_assistant_ask(payload, runner=None):
         # (or zero) hits and says so.
         try:
             recent = (_core.search_recent_sessions(
-                query, days=_ASK_RECENT_DAYS, limit=_ASK_HIT_CAP) or {}).get("results") or []
+                query, days=days, limit=_ASK_HIT_CAP) or {}).get("results") or []
         except Exception:
             recent = []
         try:
             hist_rows = (_core.search_conversation_history(
-                query, limit=_ASK_HIT_CAP) or {}).get("results") or []
+                query, limit=_ASK_HIT_CAP, since=since) or {}).get("results") or []
         except Exception:
             hist_rows = []
 
-    hits = enrich_ask_hits(merge_ask_hits(recent, hist_rows))
+    # Count candidates before the display cap so the UI can show "N found"
+    # even though only _ASK_HIT_CAP go to the model/results list.
+    all_hits = merge_ask_hits(recent, hist_rows, cap=200)
+    hit_count = len(all_hits)
+    hits = enrich_ask_hits(all_hits[:_ASK_HIT_CAP])
 
     try:
         answer = run_ask_engine(engine, build_ask_prompt(question, history, hits),
@@ -320,6 +339,7 @@ def handle_assistant_ask(payload, runner=None):
         "ok": True,
         "answer": answer,
         "sources": sources[:_ASK_HIT_CAP],
+        "hit_count": hit_count,
         "actions": parse_ask_actions(answer, [h["id"] for h in hits]),
         "engine": engine["engine"],
         "model": engine["model"],

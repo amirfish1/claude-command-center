@@ -189,16 +189,23 @@ class HandleAskTest(unittest.TestCase):
         self.env.start()
         self.addCleanup(self.env.stop)
         self.addCleanup(lambda: os.environ.pop("CCC_ASK_ENGINE", None))
+        self.recent_calls = []
+        self.history_calls = []
+
+        def _recent(q, days=2, limit=20, cwd_like=None):
+            self.recent_calls.append({"days": days, "limit": limit})
+            return {"results": [{"session_id": "aaa-1", "cwd": "/r/x",
+                                  "ts_unix": 100, "snippet": "bym ads work"}]}
+
+        def _hist(q, limit=20, cwd_like=None, since=None, semantic=False):
+            self.history_calls.append({"since": since})
+            return {"results": []}
+
         patches = [
             mock.patch.object(server, "_resolve_claude_bin",
                               lambda: {"available": True, "bin": "/x/claude"}),
-            mock.patch.object(server, "search_recent_sessions",
-                              lambda q, days=2, limit=20, cwd_like=None: {"results": [
-                                  {"session_id": "aaa-1", "cwd": "/r/x",
-                                   "ts_unix": 100, "snippet": "bym ads work"}]}),
-            mock.patch.object(server, "search_conversation_history",
-                              lambda q, limit=20, cwd_like=None, since=None,
-                              semantic=False: {"results": []}),
+            mock.patch.object(server, "search_recent_sessions", _recent),
+            mock.patch.object(server, "search_conversation_history", _hist),
             mock.patch.object(server, "_auto_titled_session_ids", lambda: {"aaa-1": "BYM ads"}),
             mock.patch.object(server, "_discover_live_session_ids", lambda: set()),
         ]
@@ -214,7 +221,27 @@ class HandleAskTest(unittest.TestCase):
         self.assertIn("[[session:aaa-1]]", body["answer"])
         self.assertEqual(body["sources"][0]["id"], "aaa-1")
         self.assertEqual(body["sources"][0]["title"], "BYM ads")
+        self.assertEqual(body["sources"][0]["snippet"], "bym ads work")
         self.assertEqual(body["engine"], "claude")
+        self.assertEqual(body["hit_count"], 1)
+
+    def test_range_maps_to_days_and_since(self):
+        runner = lambda argv, **kw: _FakeProc(stdout="ok")
+        server.handle_assistant_ask({"question": "bym ads", "range": "24h"}, runner=runner)
+        self.assertEqual(self.recent_calls[-1]["days"], 1)
+        self.assertIsNotNone(self.history_calls[-1]["since"])
+
+    def test_range_any_means_no_since_and_max_days(self):
+        runner = lambda argv, **kw: _FakeProc(stdout="ok")
+        server.handle_assistant_ask({"question": "bym ads", "range": "any"}, runner=runner)
+        self.assertEqual(self.recent_calls[-1]["days"], 30)
+        self.assertIsNone(self.history_calls[-1]["since"])
+
+    def test_default_range_matches_prior_behavior(self):
+        runner = lambda argv, **kw: _FakeProc(stdout="ok")
+        server.handle_assistant_ask({"question": "bym ads"}, runner=runner)
+        self.assertEqual(self.recent_calls[-1]["days"], 14)
+        self.assertIsNone(self.history_calls[-1]["since"])
 
     def test_empty_question_400(self):
         body, status = server.handle_assistant_ask({"question": "  "})
