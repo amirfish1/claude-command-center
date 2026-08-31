@@ -14345,6 +14345,22 @@
   // control from the stable list container so a redraw cannot leave the model
   // filter's newly-rendered buttons without their click behavior.
   function _handleArchiveEngineFilterClick(ev) {
+    const trigger = ev.target.closest('[data-archive-engine-trigger]');
+    if (trigger && $convList.contains(trigger)) {
+      ev.stopPropagation();
+      const wrap = trigger.closest('.conv-archived-engine-filter');
+      if (!wrap) return;
+      clearTimeout(wrap._archiveEngineCollapseTimer);
+      const expanded = wrap.classList.toggle('is-expanded');
+      trigger.setAttribute('aria-expanded', expanded ? 'true' : 'false');
+      if (expanded) {
+        wrap._archiveEngineCollapseTimer = setTimeout(() => {
+          wrap.classList.remove('is-expanded');
+          trigger.setAttribute('aria-expanded', 'false');
+        }, 2000);
+      }
+      return;
+    }
     const opt = ev.target.closest('[data-archive-engine]');
     if (!opt || !$convList.contains(opt)) return;
     ev.stopPropagation();
@@ -35431,11 +35447,24 @@
           + ' aria-label="' + escapeAttr(title) + '" aria-pressed="' + active + '"'
           + ' title="' + escapeAttr(title) + '">' + svg + '</button>';
       };
+      // Collapsed by default to a single trigger icon (the active engine's,
+      // or Claude's when no filter is set) to save toolbar space -- click to
+      // reveal the four options, click one to filter (re-collapses since the
+      // filter click re-renders this toolbar), or wait 2s idle to auto-close
+      // without changing the filter (CCC-1006).
+      const _arcEngineTriggerTitle = _arcEngineFilter
+        ? 'Filtered by ' + _arcEngineFilterLabel + ' -- click to change'
+        : 'Filter by engine';
       const _arcEngineToggle = '<span class="conv-archived-engine-filter" data-role="archived-engine-filter" role="group" aria-label="Filter All sessions by engine">'
-          + _arcEngineButton('claude', 'Claude', getEngineSvg('claude'))
-          + _arcEngineButton('codex', 'Codex', getEngineSvg('codex'))
-          + _arcEngineButton('kimi', 'Kimi', getEngineSvg('kimi'))
-          + _arcEngineButton('devin', 'Devin', getEngineSvg('devin'))
+          + '<button type="button" class="conv-archived-engine-trigger" data-archive-engine-trigger'
+            + ' aria-label="' + escapeAttr(_arcEngineTriggerTitle) + '" aria-expanded="false"'
+            + ' title="' + escapeAttr(_arcEngineTriggerTitle) + '">' + getEngineSvg(_arcEngineFilter || 'claude') + '</button>'
+          + '<span class="conv-archived-engine-options">'
+            + _arcEngineButton('claude', 'Claude', getEngineSvg('claude'))
+            + _arcEngineButton('codex', 'Codex', getEngineSvg('codex'))
+            + _arcEngineButton('kimi', 'Kimi', getEngineSvg('kimi'))
+            + _arcEngineButton('devin', 'Devin', getEngineSvg('devin'))
+          + '</span>'
         + '</span>';
       // Wrap toggle (mirrors the In progress toolbar's): lets session titles
       // break across two lines instead of truncating to one. Shares the
