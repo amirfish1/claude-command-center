@@ -339,6 +339,70 @@ class ArgvTest(unittest.TestCase):
         self.assertEqual(argv[argv.index("--session-id") + 1], session_id)
 
 
+class BuildAskToolPromptTest(unittest.TestCase):
+    def test_folds_history_verbatim_for_pronoun_resolution(self):
+        prompt = server.build_ask_tool_prompt(
+            "What triggers it?",
+            [{"q": "what does bym-perf-preflight do?", "a": "runs container + db checks"}])
+        self.assertIn("resolve it from the conversation history", prompt)
+        self.assertIn("bym-perf-preflight", prompt)
+        self.assertIn("runs container + db checks", prompt)
+
+    def test_lists_repo_roots(self):
+        prompt = server.build_ask_tool_prompt("what triggers it?", [], repo_roots=["/Users/x/Apps/BYM"])
+        self.assertIn("/Users/x/Apps/BYM", prompt)
+
+    def test_no_repo_roots_omits_section(self):
+        prompt = server.build_ask_tool_prompt("what triggers it?", [])
+        self.assertNotIn("Repos the user has recently worked in", prompt)
+
+
+class RunAskToolEngineTest(unittest.TestCase):
+    def test_argv_is_read_only_and_bounded(self):
+        calls = []
+
+        def runner(argv, **kw):
+            calls.append((argv, kw))
+            return _FakeProc(stdout="answer")
+
+        with mock.patch.object(server, "_resolve_claude_bin",
+                                lambda: {"available": True, "bin": "/x/claude"}):
+            result = server.run_ask_tool_engine("PROMPT", runner=runner)
+        self.assertEqual(result, "answer")
+        argv, kw = calls[0]
+        self.assertEqual(argv[0], "/x/claude")
+        self.assertIn("--allowedTools", argv)
+        self.assertEqual(argv[argv.index("--allowedTools") + 1], "Read,Grep,Glob")
+        self.assertIn("--disallowedTools", argv)
+        disallowed = argv[argv.index("--disallowedTools") + 1]
+        for tool in ("Bash", "Write", "Edit", "WebFetch", "WebSearch"):
+            self.assertIn(tool, disallowed)
+        self.assertEqual(argv[argv.index("--permission-mode") + 1], "dontAsk")
+        self.assertIn("--strict-mcp-config", argv)
+        self.assertEqual(argv[-1], "PROMPT")
+
+    def test_unavailable_claude_raises(self):
+        with mock.patch.object(server, "_resolve_claude_bin",
+                                lambda: {"available": False, "reason": "not found"}):
+            with self.assertRaises(RuntimeError):
+                server.run_ask_tool_engine("PROMPT", runner=lambda *a, **k: _FakeProc())
+
+    def test_nonzero_returncode_raises_with_stderr(self):
+        runner = lambda argv, **kw: _FakeProc(returncode=1, stderr="permission denied")
+        with mock.patch.object(server, "_resolve_claude_bin",
+                                lambda: {"available": True, "bin": "/x/claude"}):
+            with self.assertRaises(RuntimeError) as ctx:
+                server.run_ask_tool_engine("PROMPT", runner=runner)
+        self.assertIn("permission denied", str(ctx.exception))
+
+    def test_empty_stdout_raises(self):
+        runner = lambda argv, **kw: _FakeProc(stdout="")
+        with mock.patch.object(server, "_resolve_claude_bin",
+                                lambda: {"available": True, "bin": "/x/claude"}):
+            with self.assertRaises(RuntimeError):
+                server.run_ask_tool_engine("PROMPT", runner=runner)
+
+
 class AskSessionClassificationTest(unittest.TestCase):
     def test_claude_ask_marks_its_generated_session_as_other(self):
         session_id = uuid.UUID("11111111-2222-3333-4444-555555555555")
@@ -470,6 +534,64 @@ class HandleAskTest(unittest.TestCase):
                                 lambda terms, **kw: called.append(terms) or []):
             server.handle_assistant_ask({"question": "bym ads"}, runner=runner)
         self.assertFalse(called)
+
+    def test_trigger_question_empty_automation_escalates_to_tool_access(self):
+        calls = []
+
+        def runner(argv, **kw):
+            calls.append(argv)
+            return _FakeProc(stdout="It runs hourly via launchd, not a GitHub push.")
+
+        with mock.patch.object(server, "search_local_automation_hits",
+                                lambda terms, repo_roots=None, **kw: []):
+            body, status = server.handle_assistant_ask(
+                {"question": "what triggers it?",
+                 "history": [{"q": "what does bym-perf-preflight do?",
+                              "a": "runs container + db checks"}]},
+                runner=runner)
+        self.assertEqual(status, 200)
+        self.assertTrue(body["tools_used"])
+        self.assertEqual(body["engine"], "claude")
+        self.assertEqual(body["model"], "haiku")
+        self.assertEqual(len(calls), 1)  # no fallback call once escalation succeeds
+        argv = calls[0]
+        self.assertIn("--allowedTools", argv)
+        self.assertIn("Read,Grep,Glob", argv)
+        self.assertIn("--disallowedTools", argv)
+        self.assertIn("--permission-mode", argv)
+        self.assertIn("dontAsk", argv)
+
+    def test_trigger_question_with_automation_hits_skips_tool_escalation(self):
+        calls = []
+
+        def runner(argv, **kw):
+            calls.append(argv)
+            return _FakeProc(stdout="It runs hourly via launchd.")
+
+        with mock.patch.object(server, "search_local_automation_hits",
+                                lambda terms, repo_roots=None, **kw: [
+                                    {"path": "/x/com.amirfish.bym-perf-preflight.plist",
+                                     "kind": "launchd job", "snippet": "StartInterval 3600"}]):
+            body, status = server.handle_assistant_ask(
+                {"question": "what triggers my BYM pre-flight check?"}, runner=runner)
+        self.assertEqual(status, 200)
+        self.assertFalse(body["tools_used"])
+        self.assertEqual(body["engine"], "claude")
+        self.assertNotIn("--allowedTools", calls[0])
+
+    def test_tool_escalation_failure_falls_back_to_normal_engine(self):
+        def runner(argv, **kw):
+            if "--allowedTools" in argv:
+                raise RuntimeError("boom")
+            return _FakeProc(stdout="fallback answer")
+
+        with mock.patch.object(server, "search_local_automation_hits",
+                                lambda terms, repo_roots=None, **kw: []):
+            body, status = server.handle_assistant_ask(
+                {"question": "what triggers it?"}, runner=runner)
+        self.assertEqual(status, 200)
+        self.assertFalse(body["tools_used"])
+        self.assertEqual(body["answer"], "fallback answer")
 
     def test_default_range_matches_prior_behavior(self):
         runner = lambda argv, **kw: _FakeProc(stdout="ok")

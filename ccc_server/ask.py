@@ -94,6 +94,20 @@ _PLIST_TRIGGER_KEY_RE = re.compile(
     r"<key>(Label|StartInterval|StartCalendarInterval|WatchPaths|RunAtLoad|"
     r"KeepAlive|ProgramArguments)</key>.*?(?=<key>|</dict>)", re.DOTALL)
 _YAML_TRIGGER_RE = re.compile(r"^on:.*?(?=^\S|\Z)", re.DOTALL | re.MULTILINE)
+# Bounded tool-access escalation for trigger questions the deterministic
+# content search (search_local_automation_hits) came up empty on — most
+# often a pronoun follow-up ("What triggers it?") whose subject only lives
+# in prior conversation turns, which the term-extraction/AND-match approach
+# can never resolve since it only ever sees the current question's words.
+# Read/Grep/Glob only, no Bash/Write/Edit/network. --allowedTools alone does
+# NOT restrict the toolset (verified empirically: with --permission-mode
+# dontAsk it still ran Bash) — --disallowedTools is what actually enforces
+# the boundary.
+_ASK_TOOL_ALLOWED = "Read,Grep,Glob"
+_ASK_TOOL_DISALLOWED = ("Bash,Write,Edit,NotebookEdit,WebFetch,WebSearch,"
+                         "Agent,Task,Workflow,ScheduleWakeup")
+_ASK_TOOL_TIMEOUT_SEC = 60
+_ASK_TOOL_MODEL = "haiku"
 
 
 def _norm_match_text(s):
@@ -492,6 +506,81 @@ def run_ask_engine(engine, prompt, runner=None):
     return text
 
 
+def build_ask_tool_prompt(question, history, repo_roots=None):
+    """Prompt for the bounded tool-access escalation. Unlike build_ask_prompt
+    this folds recent history in VERBATIM (not just as context the model may
+    ignore) with an explicit instruction to resolve pronouns from it first —
+    the whole point of this path is answering a follow-up whose subject was
+    only ever named in a prior turn."""
+    q = str(question or "").strip()[:_ASK_QUESTION_MAX]
+    lines = [
+        "You are the Ask assistant inside Claude Command Center (CCC). The "
+        "user asked what triggers or schedules something on their own "
+        "machine (a launchd job, a GitHub Actions workflow, a cron-like "
+        "automation). An automatic search of known automation config "
+        "locations found nothing, so investigate yourself using your "
+        "Read/Grep/Glob tools.",
+        "If the question uses a pronoun (\"it\", \"that job\") without "
+        "naming the subject, resolve it from the conversation history below "
+        "before searching — never ask the user to clarify.",
+        "Start with ~/Library/LaunchAgents/*.plist (launchd jobs) and "
+        "<repo>/.github/workflows/*.yml (CI triggers) for any repo listed "
+        "below; grep for the subject name across those locations first.",
+        "Use at most 4-5 tool calls. Quote the actual trigger definition "
+        "verbatim (e.g. StartInterval seconds, StartCalendarInterval, "
+        "WatchPaths, or a workflow's `on:` block) — never guess or hedge.",
+        "If you genuinely find nothing after searching, say plainly that no "
+        "matching automation config was found on disk.",
+        "Reply in short readable prose (2-5 sentences), no citations.",
+        "",
+    ]
+    folded = [t for t in (history or []) if isinstance(t, dict)][-_ASK_HISTORY_TURNS:]
+    for turn in folded:
+        uq = str(turn.get("q") or "").strip()[:500]
+        ua = str(turn.get("a") or "").strip()[:800]
+        if uq:
+            lines.append(f"Previous question: {uq}")
+        if ua:
+            lines.append(f"Previous answer: {ua}")
+    if folded:
+        lines.append("")
+    if repo_roots:
+        lines.append("Repos the user has recently worked in:")
+        lines += [f"- {r}" for r in repo_roots]
+        lines.append("")
+    lines.append(f"Question: {q}")
+    return "\n".join(lines)
+
+
+def run_ask_tool_engine(prompt, runner=None):
+    """One headless Claude Code round-trip with bounded read-only tool
+    access. Always Claude (agy print mode has no tool access), regardless
+    of which engine select_ask_engine() picked for the plain-text path."""
+    info = _core._resolve_claude_bin()
+    if not info.get("available"):
+        raise RuntimeError(info.get("reason") or "Claude Code CLI not found")
+    run = runner or subprocess.run
+    scratch = Path(str(_core._SCRATCH_DIR))
+    try:
+        scratch.mkdir(parents=True, exist_ok=True)
+    except OSError:
+        pass
+    argv = [info["bin"], "-p", "--model", _ASK_TOOL_MODEL,
+            "--allowedTools", _ASK_TOOL_ALLOWED,
+            "--disallowedTools", _ASK_TOOL_DISALLOWED,
+            "--permission-mode", "dontAsk",
+            "--strict-mcp-config", '--mcp-config={"mcpServers":{}}', prompt]
+    proc = run(argv, capture_output=True, text=True,
+               timeout=_ASK_TOOL_TIMEOUT_SEC, cwd=str(scratch))
+    if proc.returncode != 0:
+        detail = (proc.stderr or "").strip()[:300]
+        raise RuntimeError(detail or f"claude exited {proc.returncode}")
+    text = (proc.stdout or "").strip()
+    if not text:
+        raise RuntimeError("claude returned empty output")
+    return text
+
+
 def _ask_source_row(hit):
     return {k: hit.get(k) for k in ("id", "title", "repo", "status", "ts_unix", "cwd", "snippet")}
 
@@ -553,28 +642,44 @@ def handle_assistant_ask(payload, runner=None):
             fs_hits = []
 
     automation_hits = None
+    tools_used = False
+    answer = None
     if looks_like_trigger_question(question):
+        repo_roots = []
+        seen_repo_roots = set()
+        for h in hits:
+            cwd = h.get("cwd")
+            if cwd and cwd not in seen_repo_roots:
+                seen_repo_roots.add(cwd)
+                repo_roots.append(cwd)
         try:
-            repo_roots = []
-            seen_repo_roots = set()
-            for h in hits:
-                cwd = h.get("cwd")
-                if cwd and cwd not in seen_repo_roots:
-                    seen_repo_roots.add(cwd)
-                    repo_roots.append(cwd)
             automation_hits = _core.search_local_automation_hits(terms, repo_roots)
         except Exception:
             automation_hits = []
+        if not automation_hits:
+            # The deterministic content search found nothing — most often
+            # because the question's own subject is a pronoun ("What
+            # triggers it?") that only resolves from history. Let the model
+            # investigate itself instead of answering against a search that
+            # never really ran on the right subject.
+            try:
+                answer = _core.run_ask_tool_engine(
+                    build_ask_tool_prompt(question, history, repo_roots),
+                    runner=runner)
+                tools_used = True
+            except (OSError, RuntimeError, subprocess.TimeoutExpired):
+                answer = None
 
-    try:
-        answer = run_ask_engine(
-            engine, build_ask_prompt(question, history, hits, fs_hits, automation_hits),
-            runner=runner)
-    except subprocess.TimeoutExpired:
-        return {"ok": False, "code": "ask_timeout",
-                "error": f"{engine['engine']} timed out after {_ASK_TIMEOUT_SEC}s"}, 504
-    except (OSError, RuntimeError) as e:
-        return {"ok": False, "code": "ask_engine_error", "error": str(e)[:300]}, 502
+    if answer is None:
+        try:
+            answer = run_ask_engine(
+                engine, build_ask_prompt(question, history, hits, fs_hits, automation_hits),
+                runner=runner)
+        except subprocess.TimeoutExpired:
+            return {"ok": False, "code": "ask_timeout",
+                    "error": f"{engine['engine']} timed out after {_ASK_TIMEOUT_SEC}s"}, 504
+        except (OSError, RuntimeError) as e:
+            return {"ok": False, "code": "ask_engine_error", "error": str(e)[:300]}, 502
 
     cited = parse_ask_citations(answer, [h["id"] for h in hits])
     by_id = {h["id"]: h for h in hits}
@@ -586,7 +691,8 @@ def handle_assistant_ask(payload, runner=None):
         "sources": sources[:_ASK_HIT_CAP],
         "hit_count": hit_count,
         "actions": parse_ask_actions(answer, [h["id"] for h in hits]),
-        "engine": engine["engine"],
-        "model": engine["model"],
+        "engine": "claude" if tools_used else engine["engine"],
+        "model": _ASK_TOOL_MODEL if tools_used else engine["model"],
+        "tools_used": tools_used,
         "elapsed_ms": int((time.time() - t0) * 1000),
     }, 200
