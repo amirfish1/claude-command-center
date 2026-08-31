@@ -56744,6 +56744,12 @@
     let htmlOut = askEscapeHtml(answer);
     htmlOut = htmlOut.replace(/\[\[session:([0-9A-Za-z_-]{5,64})\]\]/g, (m, id) =>
       byId[id] ? askChipHtml(byId[id]) : askEscapeHtml(id));
+    htmlOut = htmlOut.replace(/\[\[action:spawn-continue:([0-9A-Za-z_-]{5,64})\]\]/g, (m, id) =>
+      byId[id]
+        ? '<button type="button" class="ask-action" data-ask-continue="' + askEscapeHtml(id) +
+          '" data-ask-cwd="' + askEscapeHtml(byId[id].cwd || '') + '">▶ Spawn follow-up of ' +
+          askEscapeHtml(byId[id].title || id.slice(0, 8)) + '</button>'
+        : '');
     const cited = new Set();
     String(answer || '').replace(/\[\[session:([0-9A-Za-z_-]{5,64})\]\]/g, (m, id) => { cited.add(id); return m; });
     const rest = (sources || []).filter(s => s && s.id && !cited.has(s.id));
@@ -56785,6 +56791,26 @@
     log.addEventListener('click', (ev) => {
       const chip = ev.target.closest('[data-ask-open]');
       if (chip) selectConversation(chip.getAttribute('data-ask-open'));
+
+      const act = ev.target.closest('[data-ask-continue]');
+      if (act && !act.disabled) {
+        act.disabled = true;
+        act.textContent = 'Spawning…';
+        const sid = act.getAttribute('data-ask-continue');
+        const cwd = act.getAttribute('data-ask-cwd') || '';
+        fetch('/api/sessions/spawn', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            prompt: 'Continue the work from session ' + sid +
+              '. Start by reading that session\'s transcript/context to pick up where it left off.',
+            repo_path: cwd || undefined,
+          }),
+        }).then(r => r.json()).then(d => {
+          act.textContent = d && d.ok ? '✓ Spawned' : '✗ ' + ((d && d.error) || 'spawn failed');
+        }).catch(e => { act.textContent = '✗ ' + e; });
+        return;
+      }
     });
 
     let busy = false;
