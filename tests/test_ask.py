@@ -91,6 +91,16 @@ class CitationsTest(unittest.TestCase):
         self.assertEqual(server.parse_ask_citations("[[session:evil-99]]", ["aaa-1"]), [])
 
 
+class ActionsTest(unittest.TestCase):
+    def test_spawn_continue_marker_parsed_for_known_ids_only(self):
+        ans = "I can continue it: [[action:spawn-continue:aaa-1]] [[action:spawn-continue:zzz-9]]"
+        self.assertEqual(server.parse_ask_actions(ans, ["aaa-1"]), ["aaa-1"])
+
+    def test_prompt_mentions_action_marker(self):
+        p = server.build_ask_prompt("continue it", [], [])
+        self.assertIn("[[action:spawn-continue:ID]]", p)
+
+
 class EngineSelectTest(unittest.TestCase):
     def _fake_resolvers(self, agy=None, claude=None):
         # Patch on the server module: _core resolves attributes there at call time.

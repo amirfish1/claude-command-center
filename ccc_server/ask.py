@@ -38,6 +38,7 @@ _ASK_DEFAULT_AGY_MODEL = "gemini-3.7-flash-low"
 _ASK_DEFAULT_CLAUDE_MODEL = "haiku"
 
 _ASK_CITATION_RE = re.compile(r"\[\[session:([0-9A-Za-z][0-9A-Za-z_-]{4,63})\]\]")
+_ASK_ACTION_RE = re.compile(r"\[\[action:spawn-continue:([0-9A-Za-z][0-9A-Za-z_-]{4,63})\]\]")
 _ASK_MARK_RE = re.compile(r"</?mark>")
 _ASK_WORD_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.-]+")
 # Question scaffolding, not topic signal. "work"/"status"/"session" are here
@@ -131,6 +132,10 @@ def build_ask_prompt(question, history, hits):
         "exact ID from the hit, nothing else inside the brackets.",
         "Status and time facts come only from the hit metadata; never invent "
         "sessions, statuses, or file paths.",
+        "If the user asks to continue/resume work from a found session, "
+        "append the marker [[action:spawn-continue:ID]] for that session at "
+        "the end of your answer. Never emit it unless the user asked for a "
+        "continuation.",
         "If the hits do not answer the question, say so plainly and suggest "
         "a more specific phrase to ask with.",
         "Reply in short readable prose (2-6 sentences).",
@@ -170,6 +175,18 @@ def parse_ask_citations(answer, known_ids):
     known = {str(k) for k in (known_ids or [])}
     ordered = []
     for m in _ASK_CITATION_RE.finditer(answer or ""):
+        sid = m.group(1)
+        if sid in known and sid not in ordered:
+            ordered.append(sid)
+    return ordered
+
+
+def parse_ask_actions(answer, known_ids):
+    """Ordered unique spawn-continue action targets, restricted to the hit
+    set. The model proposes; the UI's confirm button is what executes."""
+    known = {str(k) for k in (known_ids or [])}
+    ordered = []
+    for m in _ASK_ACTION_RE.finditer(answer or ""):
         sid = m.group(1)
         if sid in known and sid not in ordered:
             ordered.append(sid)
@@ -296,6 +313,7 @@ def handle_assistant_ask(payload, runner=None):
         "ok": True,
         "answer": answer,
         "sources": sources[:_ASK_HIT_CAP],
+        "actions": parse_ask_actions(answer, [h["id"] for h in hits]),
         "engine": engine["engine"],
         "model": engine["model"],
         "elapsed_ms": int((time.time() - t0) * 1000),
