@@ -2276,6 +2276,15 @@
     if (isConversationListScrollActive()) return true;
     const ae = document.activeElement;
     if (ae && ae.id === 'convSearch') return false;
+    // CCC-1007: renderArchiveList() (the archive-window poll, every ~10s)
+    // rebuilds #convList wholesale via this same gate. A cursor parked over
+    // a row for the whole poll interval isn't caught by any move-based
+    // timer, so without a live check here the rebuild lands mid-hover: the
+    // replaced row briefly loses `:hover`, and if the new row's height
+    // differs from the old one by even a sub-pixel, the row under the
+    // pointer changes too — the hover-only affordances (kebab menu, meta
+    // chips) then flash between two adjacent rows on every poll tick.
+    if (document.querySelector('.conv-item:hover')) return true;
     return shouldPausePeriodicUiWork();
   }
 
@@ -24560,8 +24569,20 @@
       _convRowActionHoverUntil = Date.now() + 1200;
     }
   }, true);
+  // CCC-1007: the 1200ms window above only renews on `pointermove`, so a
+  // cursor parked over a row for longer than that (reading a card, not
+  // moving) loses its protection — the next poll rebuilds mid-hover anyway,
+  // and since the rebuild lands under an unmoved pointer, the row that
+  // regains `:hover` afterwards can differ from the one that had it (a
+  // sub-pixel row-height difference between renders shifts which row sits
+  // under the pointer), so the hover-only affordances flash back and forth
+  // between two adjacent rows indefinitely. Checking live `:hover` needs no
+  // recent movement to stay valid, so it covers arbitrarily long dwells.
+  function _sidebarHasHoveredConvItem() {
+    return !!document.querySelector('.conv-item:hover');
+  }
   function _pausePeriodicSidebarRender() {
-    return shouldPausePeriodicUiWork() || isConversationListScrollActive() || Date.now() < _convRowActionHoverUntil;
+    return shouldPausePeriodicUiWork() || isConversationListScrollActive() || Date.now() < _convRowActionHoverUntil || _sidebarHasHoveredConvItem();
   }
   function _flushDeferredSidebarRenderIfAny() {
     if (!_sidebarRenderPendingWhilePaused) return;
