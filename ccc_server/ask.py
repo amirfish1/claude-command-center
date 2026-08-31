@@ -41,6 +41,8 @@ _ASK_DEFAULT_CLAUDE_MODEL = "haiku"
 # but still bounds the recent scan at recent_search's own _MAX_DAYS — that
 # module clamps internally, so 30 here is a real ceiling, not a guess.
 _ASK_RANGE_DAYS = {"24h": 1, "7d": 7, "30d": 30, "any": 30}
+_ASK_FS_LIMIT = 8
+_ASK_FS_TIMEOUT_SEC = 4
 
 _ASK_CITATION_RE = re.compile(r"\[\[session:([0-9A-Za-z][0-9A-Za-z_-]{4,63})\]\]")
 _ASK_ACTION_RE = re.compile(r"\[\[action:spawn-continue:([0-9A-Za-z][0-9A-Za-z_-]{4,63})\]\]")
@@ -49,11 +51,20 @@ _ASK_WORD_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.-]+")
 # Question scaffolding, not topic signal. "work"/"status"/"session" are here
 # because they appear in nearly every Ask-tab question ("where did I work
 # on…", "what's the status of…") and would AND-filter recall to nothing.
+# "store"/"save"/"find"/"put"/"locate" are here for the same reason on file-
+# location questions ("where did I store/save/put the X file").
 _ASK_STOPWORDS = frozenset(
-    "a about an and are as at can could did do does for from how i in is it "
-    "me my of on or session sessions status that the them these this those "
-    "to was we were what when where which who with work worked working you".split()
+    "a about an and are as at can could did do does file files find for "
+    "from how i in is it locate me my of on or put save saved session "
+    "sessions status store stored that the them these this those to was we "
+    "were what when where which who with work worked working you".split()
 )
+# A question only pays for a Spotlight lookup when it plausibly names a file
+# — a bare noun/extension hint, not every "where did I work on X".
+_ASK_FS_HINT_RE = re.compile(
+    r"\b(file|files|folder|download|downloaded|screenshot|recording|video|"
+    r"photo|image|document|clip|mov|mp4|mkv|avi|png|jpe?g|gif|pdf|docx?|"
+    r"xlsx?|pptx?|csv|zip|key|psd|ai|mp3|wav|txt|md)\b", re.IGNORECASE)
 
 
 def extract_ask_terms(question):
@@ -71,6 +82,37 @@ def extract_ask_terms(question):
         seen.add(w)
         out.append(w)
     return out[:6] if out else words[:6]
+
+
+def looks_like_file_question(question):
+    """True when the question plausibly names a file — gates the Spotlight
+    lookup so ordinary "what did I work on" questions don't pay for it."""
+    return bool(_ASK_FS_HINT_RE.search(question or ""))
+
+
+def search_filesystem_hits(terms, limit=_ASK_FS_LIMIT, runner=None):
+    """Spotlight (mdfind) filename lookup for "where did I store/save/put X"
+    questions — those live on disk, not in any session transcript. AND-match
+    on filename substrings (a raw full-text mdfind query is too noisy — it
+    matches file *contents*, surfacing code and logs instead of the file
+    itself). Scoped to the user's home dir; empty on any failure (missing
+    mdfind, disabled Spotlight, timeout) so transcript hits still carry the
+    rest of the answer. `terms` come from extract_ask_terms, whose charset
+    excludes quotes, so building the query string from them is injection-safe."""
+    words = [w for w in (terms or []) if w][:4]
+    if not words:
+        return []
+    clause = " && ".join(f"kMDItemFSName == '*{w}*'c" for w in words)
+    run = runner or subprocess.run
+    try:
+        proc = run(["mdfind", "-onlyin", str(Path.home()), clause],
+                   capture_output=True, text=True, timeout=_ASK_FS_TIMEOUT_SEC)
+    except (OSError, subprocess.TimeoutExpired):
+        return []
+    if proc.returncode != 0:
+        return []
+    paths = [p for p in (proc.stdout or "").splitlines() if p.strip()]
+    return paths[:limit]
 
 
 def merge_ask_hits(recent, history, cap=_ASK_HIT_CAP):
@@ -128,7 +170,7 @@ def enrich_ask_hits(hits, titles=None, live_ids=None):
     return hits
 
 
-def build_ask_prompt(question, history, hits):
+def build_ask_prompt(question, history, hits, fs_hits=None):
     q = str(question or "").strip()[:_ASK_QUESTION_MAX]
     lines = [
         "You are the Ask assistant inside Claude Command Center (CCC), a "
@@ -150,8 +192,14 @@ def build_ask_prompt(question, history, hits):
         "give their dates; mention older matches only if nothing recent "
         "fits.",
         "Reply in short readable prose (2-6 sentences).",
-        "",
     ]
+    if fs_hits is not None:
+        lines.append(
+            "If the user asks where a FILE (not a session) is stored/saved, "
+            "answer from the File matches list below — quote the path "
+            "exactly as given, never invent or guess a path. If that list "
+            "is empty or nothing fits, say the file wasn't found on disk.")
+    lines.append("")
     folded = [t for t in (history or []) if isinstance(t, dict)][-_ASK_HISTORY_TURNS:]
     for turn in folded:
         uq = str(turn.get("q") or "").strip()[:500]
@@ -176,6 +224,9 @@ def build_ask_prompt(question, history, hits):
         lines.append(f"{n}. [[session:{h['id']}]] {meta}")
         if h.get("snippet"):
             lines.append(f"   snippet: {h['snippet']}")
+    if fs_hits is not None:
+        lines += ["", "File matches (from Spotlight, may be incomplete):"]
+        lines += [f"- {p}" for p in fs_hits] if fs_hits else ["(none found)"]
     lines += ["", f"Question: {q}"]
     return "\n".join(lines)
 
@@ -299,7 +350,8 @@ def handle_assistant_ask(payload, runner=None):
         return {"ok": False, "error": engine["error"], "code": engine["code"]}, 503
 
     days, since = _ask_range_window(payload.get("range"))
-    query = " ".join(extract_ask_terms(question))
+    terms = extract_ask_terms(question)
+    query = " ".join(terms)
     recent, hist_rows = [], []
     if query:
         # Each layer degrades independently: a locked index or a scan error
@@ -322,8 +374,15 @@ def handle_assistant_ask(payload, runner=None):
     hit_count = len(all_hits)
     hits = enrich_ask_hits(all_hits[:_ASK_HIT_CAP])
 
+    fs_hits = None
+    if looks_like_file_question(question):
+        try:
+            fs_hits = _core.search_filesystem_hits(terms)
+        except Exception:
+            fs_hits = []
+
     try:
-        answer = run_ask_engine(engine, build_ask_prompt(question, history, hits),
+        answer = run_ask_engine(engine, build_ask_prompt(question, history, hits, fs_hits),
                                 runner=runner)
     except subprocess.TimeoutExpired:
         return {"ok": False, "code": "ask_timeout",

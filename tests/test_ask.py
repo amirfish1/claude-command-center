@@ -25,6 +25,57 @@ class ExtractTermsTest(unittest.TestCase):
         self.assertEqual(server.extract_ask_terms(""), [])
 
 
+class FileQuestionHintTest(unittest.TestCase):
+    def test_extension_word_triggers(self):
+        self.assertTrue(server.looks_like_file_question(
+            "where did I store the shot 2 BYM .mov"))
+
+    def test_generic_file_word_triggers(self):
+        self.assertTrue(server.looks_like_file_question("where's that screenshot?"))
+
+    def test_ordinary_session_question_does_not_trigger(self):
+        self.assertFalse(server.looks_like_file_question("what did I work on yesterday"))
+
+
+class SearchFilesystemHitsTest(unittest.TestCase):
+    def test_ands_filename_terms_and_scopes_to_home(self):
+        calls = []
+
+        def runner(argv, **kw):
+            calls.append(argv)
+            return _FakeProc(stdout="/Users/x/Desktop/Shot 3 - BYM.mov\n")
+
+        paths = server.search_filesystem_hits(["shot", "bym", "mov"], runner=runner)
+        self.assertEqual(paths, ["/Users/x/Desktop/Shot 3 - BYM.mov"])
+        argv = calls[0]
+        self.assertEqual(argv[0], "mdfind")
+        self.assertIn("-onlyin", argv)
+        self.assertIn(
+            "kMDItemFSName == '*shot*'c && kMDItemFSName == '*bym*'c && kMDItemFSName == '*mov*'c",
+            argv)
+
+    def test_no_terms_skips_subprocess(self):
+        called = []
+        self.assertEqual(server.search_filesystem_hits([], runner=lambda *a, **k: called.append(1)), [])
+        self.assertFalse(called)
+
+    def test_nonzero_returncode_is_empty(self):
+        runner = lambda argv, **kw: _FakeProc(returncode=1, stderr="mdfind disabled")
+        self.assertEqual(server.search_filesystem_hits(["x"], runner=runner), [])
+
+    def test_timeout_is_empty(self):
+        import subprocess as _sp
+
+        def runner(argv, **kw):
+            raise _sp.TimeoutExpired(cmd="mdfind", timeout=4)
+
+        self.assertEqual(server.search_filesystem_hits(["x"], runner=runner), [])
+
+    def test_cap_respected(self):
+        runner = lambda argv, **kw: _FakeProc(stdout="\n".join(f"/f{i}" for i in range(20)))
+        self.assertEqual(len(server.search_filesystem_hits(["x"], limit=3, runner=runner)), 3)
+
+
 class MergeHitsTest(unittest.TestCase):
     def test_interleaves_dedupes_then_sorts_newest_first(self):
         # bbb-2 is newest (ts_unix 200) despite arriving second in the
@@ -97,6 +148,20 @@ class PromptTest(unittest.TestCase):
     def test_prompt_instructs_recency_preference(self):
         p = server.build_ask_prompt("q", [], [])
         self.assertIn("Prefer the most recent sessions", p)
+
+    def test_fs_hits_none_omits_file_section(self):
+        p = server.build_ask_prompt("q", [], [], fs_hits=None)
+        self.assertNotIn("File matches", p)
+
+    def test_fs_hits_listed_when_present(self):
+        p = server.build_ask_prompt("q", [], [], fs_hits=["/Users/x/Desktop/Shot 3 - BYM.mov"])
+        self.assertIn("File matches", p)
+        self.assertIn("/Users/x/Desktop/Shot 3 - BYM.mov", p)
+
+    def test_fs_hits_empty_list_says_none_found(self):
+        p = server.build_ask_prompt("q", [], [], fs_hits=[])
+        self.assertIn("File matches", p)
+        self.assertIn("(none found)", p)
 
 
 class CitationsTest(unittest.TestCase):
@@ -236,6 +301,35 @@ class HandleAskTest(unittest.TestCase):
         server.handle_assistant_ask({"question": "bym ads", "range": "any"}, runner=runner)
         self.assertEqual(self.recent_calls[-1]["days"], 30)
         self.assertIsNone(self.history_calls[-1]["since"])
+
+    def test_file_question_wires_filesystem_hits_into_prompt(self):
+        prompts = []
+
+        def runner(argv, **kw):
+            prompts.append(argv[-1])
+            return _FakeProc(stdout="It's at /Users/x/Desktop/Shot 3 - BYM.mov")
+
+        with mock.patch.object(server, "search_filesystem_hits",
+                                lambda terms, **kw: ["/Users/x/Desktop/Shot 3 - BYM.mov"]):
+            body, status = server.handle_assistant_ask(
+                {"question": "where did I store the shot 2 BYM .mov"}, runner=runner)
+        self.assertEqual(status, 200)
+        self.assertIn("File matches", prompts[-1])
+        self.assertIn("/Users/x/Desktop/Shot 3 - BYM.mov", prompts[-1])
+
+    def test_ordinary_question_skips_filesystem_lookup(self):
+        called = []
+        prompts = []
+
+        def runner(argv, **kw):
+            prompts.append(argv[-1])
+            return _FakeProc(stdout="ok")
+
+        with mock.patch.object(server, "search_filesystem_hits",
+                                lambda terms, **kw: called.append(terms) or []):
+            server.handle_assistant_ask({"question": "bym ads"}, runner=runner)
+        self.assertFalse(called)
+        self.assertNotIn("File matches", prompts[-1])
 
     def test_default_range_matches_prior_behavior(self):
         runner = lambda argv, **kw: _FakeProc(stdout="ok")
