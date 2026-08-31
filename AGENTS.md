@@ -128,6 +128,12 @@ choice) rather than Playwright-style locator chaining.
 
 **Do not use the Codex in-app browser (`iab`) backend or Playwright for this.** `iab` is unavailable outside a desktop app context, and Playwright is not a CCC dependency — "iab browser not available" / "cannot import playwright" means wrong tool, not a breakage. Use `node snapshot.js` (Chromium is sufficient; no WebKit/Firefox needed).
 
+**Vision for screenshots:** when the user pastes a screenshot and you need to understand what it shows (overlaps, layout, visual bugs), use the `claude` CLI (`/Users/amirfish/.local/bin/claude`) in headless mode to describe the image:
+```bash
+echo "Describe what you see in /path/to/screenshot.png, focusing on [specific question]" | claude -p --allowedTools ""
+```
+This is the fastest path to spatial/stacking information from an image. OCR (`tesseract`) reads words but cannot see stacking/overlap. Python PIL pixel analysis can detect bands and dark regions but cannot identify UI components. The `claude -p` CLI has vision and returns a text description of what it sees — use it instead of telling the user to go ask another LLM.
+
 ## Restart requirements
 
 For every code change, the agent must explicitly state which of these three
@@ -173,7 +179,7 @@ Don't mock external systems (`gh`, agent CLIs, `pkood`) in the smoke test. The s
 <!-- HUNCH:START — auto-generated, do not edit by hand -->
 ## 🧠 Hunch (Engineering Memory)
 
-This repo has **Hunch** — a curated graph of *why* the code is the way it is (decisions, bug history, invariants). It currently holds **0 decisions, 0 bugs, 0 constraints, 12 components, 0 policies**.
+This repo has **Hunch** — a curated graph of *why* the code is the way it is (decisions, bug history, invariants). It currently holds **30 decisions, 0 bugs, 3 constraints, 12 components, 0 policies, 1 open findings**.
 
 **Consult Hunch via the `hunch_*` MCP tools — pick by MOMENT, not from memory:**
 
@@ -181,7 +187,7 @@ This repo has **Hunch** — a curated graph of *why* the code is the way it is (
 - `hunch_context(target)` — the minimal relevant slice for what you're about to do; a task phrase falls back to the closest graph matches. **Call FIRST.**
 - `hunch_structure(target?)` — the indexed shape of the repo/dir/file/symbol — orient from the graph, not grep rounds.
 - `hunch_runbook(task)` — the proven steps for a recurring task, before re-deriving them.
-- `hunch_escalations()` — the decisions only the HUMAN can make (topic conflicts, candidate/proposed rules, repaired rules needing a re-prove). Normally empty; when it isn't, ASK the user inline — an entry is a question, never an approval.
+- `hunch_escalations()` — the decisions only the HUMAN can make (including one exact imported ADR at a time, topic conflicts, and policy calls). Normally empty; when it isn't, ASK the user inline — an entry is a question, silence is never approval. Apply an ADR answer only through `hunch_review_imported_adr` with its printed source and review hashes.
 - `hunch now` (CLI) — recent decisions + the live roadmap; `hunch log` — the memory-move timeline (every capture/adopt/supersede/prune/repair, each revertable).
 
 **Before designing / choosing an approach:**
@@ -209,6 +215,11 @@ This repo has **Hunch** — a curated graph of *why* the code is the way it is (
 - `hunch_record_correction(...)` — a human correction becomes an ENFORCED rule (Never Twice), not a one-session memory.
 - `hunch_record_finding(...)` — an OBSERVATION with no code change (an audit that found a gap, a measured number, an incident) becomes durable memory anchored to a date + evidence; `/audit` runs the ritual.
 - `hunch_timeline(target)` — decision history when investigating how something evolved.
+
+### ⛔ Top invariants (do not break)
+- **[warning]** server.py changes require restarting BOTH the dashboard (com.github.claude-command-center) AND the worker (com.github.claude-command-center.worker), never just the dashboard _(scope: server.py; con_2cc63a5abf)_
+- **[warning]** Never spawn a subprocess per row and never do O(all sessions/conversations) work uncached on a path that scans ~/.claude/projects or session state; gate by candidacy, cache by (mtime, size), batch subprocess calls _(scope: server.py; con_627861dec9)_
+- **[warning]** Never `git add -A`, `git add .`, or `git commit -a` in this repo; stage by explicit path and commit with `git commit --only <paths>` _(scope: **; con_db5f0fc0be)_
 
 _Hunch updates itself from commits and test failures. Records carry provenance + confidence; treat low-confidence items as advisory._
 <!-- HUNCH:END -->
