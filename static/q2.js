@@ -674,25 +674,25 @@
 
   async function loadDetail(ref) {
     if (!ref) { state.detail = null; renderDetail(); return; }
-    renderDetail();  // paint the loading state immediately
+    // Paint the cached list row instantly, then hydrate. The item endpoint
+    // shells to `gh issue view` for GitHub-backed queues, which can take
+    // 10s+ (or die) during GraphQL quota storms — a ticket the list already
+    // holds must never sit behind that wait, and the pane must never stick
+    // on "Loading REF…" when the fetch fails outright.
+    var cached = (state.items || []).find(function (it) {
+      return it && it.ref === ref;
+    }) || null;
+    state.detail = cached;
+    state.detailFailed = false;
+    renderDetail();
     try {
       var data = await getJson('/api/ux-fixes/item?ref=' + encodeURIComponent(ref));
       if (state.ref !== ref) return;  // user moved on while this was in flight
-      state.detail = (data && data.item) || null;
+      if (data && data.item) state.detail = data.item;
     } catch (e) {
       if (state.ref !== ref) return;
-      state.detail = null;
     }
-    if (!state.detail) {
-      // The item endpoint shells to `gh issue view` for GitHub-backed queues
-      // and dies during GraphQL quota storms — which left the pane on
-      // "Loading REF…" forever. The list row we already hold is a perfectly
-      // readable degraded view (body text, status, timeline-less), so show
-      // it rather than nothing.
-      state.detail = (state.items || []).find(function (it) {
-        return it && it.ref === ref;
-      }) || null;
-    }
+    state.detailFailed = !state.detail;
     renderDetail();
   }
 
@@ -2283,7 +2283,10 @@
 
     var item = state.detail;
     if (!item || item.ref !== state.ref) {
-      host.innerHTML = '<div class="q2-empty">Loading ' + esc(state.ref) + '&hellip;</div>';
+      host.innerHTML = state.detailFailed
+        ? '<div class="q2-empty"><div class="q2-empty-title">' + esc(state.ref) + ' unavailable</div>'
+          + 'Not in the cached list and the live fetch failed &mdash; GitHub sync may be rate-limited. Try again in a minute.</div>'
+        : '<div class="q2-empty">Loading ' + esc(state.ref) + '&hellip;</div>';
       return;
     }
 

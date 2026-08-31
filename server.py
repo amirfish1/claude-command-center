@@ -49825,11 +49825,31 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                 self.send_json({"ok": False, "error": "ref required"}, 400)
                 return
             try:
-                item = _q.get(ref)
+                # A live get() shells to `gh issue view` for GitHub-backed
+                # queues and fails whole minutes at a time during GraphQL
+                # quota storms (playbook §32). The cached list row is a
+                # strictly-better answer than an error page: same ticket,
+                # just without the live comment feed — mark it stale so the
+                # client can say so.
+                stale = False
+                try:
+                    item = _q.get(ref)
+                except Exception:
+                    item = None
+                if not item:
+                    item = next(
+                        (it for it in (_ux_fixes_list_items_cached(None, None) or [])
+                         if str(it.get("ref") or "") == ref),
+                        None,
+                    )
+                    stale = item is not None
                 if not item:
                     self.send_json({"ok": False, "error": _uxq_not_found_error(ref)}, 404)
                     return
-                self.send_json({"ok": True, "item": _uxq_item_payload(item)})
+                payload = {"ok": True, "item": _uxq_item_payload(item)}
+                if stale:
+                    payload["stale"] = True
+                self.send_json(payload)
             except Exception as e:
                 self.send_json({"ok": False, "error": str(e)}, 500)
         elif path == "/api/queue/context":

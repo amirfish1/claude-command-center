@@ -42614,22 +42614,39 @@
   }
   async function _uxqOpenItemDetail(ref) {
     const fallback = _uxqItemForRef(ref);
+    // Open instantly from the cached list row, then hydrate with the
+    // canonical item (fresh timeline, full _github_body). The item endpoint
+    // shells to `gh issue view` for GitHub-backed queues, which can take
+    // 10s+ or fail outright during GraphQL quota storms — the user should
+    // never wait on it just to read a ticket they can already see.
+    if (fallback) _uxqOpenItemModal(fallback);
     try {
       const res = await fetch('/api/ux-fixes/item?ref=' + encodeURIComponent(ref), { cache: 'no-store' });
       const data = await res.json().catch(() => ({}));
       if (res.ok && data.ok && data.item) {
-        _uxqOpenItemModal(data.item);
+        if (!fallback) {
+          _uxqOpenItemModal(data.item);
+          return;
+        }
+        // Hydrate only if this ticket's modal is still open and the user
+        // hasn't started typing into it — a rebuild would wipe their input.
+        const modal = document.getElementById('uxqItemModal');
+        if (!modal || _uxqItemRef(data.item) !== ref) return;
+        if (modal.contains(document.activeElement)
+            && /^(INPUT|TEXTAREA)$/.test(document.activeElement.tagName)) return;
+        const typed = Array.from(modal.querySelectorAll('input, textarea'))
+          .some(el => String(el.value || '').trim());
+        if (typed) return;
+        if (JSON.stringify(data.item) !== JSON.stringify(fallback)) {
+          _uxqOpenItemModal(data.item);
+        }
         return;
       }
-      if (fallback) {
-        _uxqOpenItemModal(fallback);
-      } else {
+      if (!fallback) {
         showOpToast('Ticket not found: ' + (data.error || res.status), 'error');
       }
     } catch (e) {
-      if (fallback) {
-        _uxqOpenItemModal(fallback);
-      } else {
+      if (!fallback) {
         showOpToast('Ticket load failed: ' + e, 'error');
       }
     }
