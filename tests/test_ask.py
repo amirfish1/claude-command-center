@@ -76,6 +76,80 @@ class SearchFilesystemHitsTest(unittest.TestCase):
         self.assertEqual(len(server.search_filesystem_hits(["x"], limit=3, runner=runner)), 3)
 
 
+class TriggerQuestionHintTest(unittest.TestCase):
+    def test_trigger_word_triggers(self):
+        self.assertTrue(server.looks_like_trigger_question(
+            "what triggers my BYM pre-flight check, a GitHub push?"))
+
+    def test_cron_word_triggers(self):
+        self.assertTrue(server.looks_like_trigger_question("is this a cron job?"))
+
+    def test_ordinary_session_question_does_not_trigger(self):
+        self.assertFalse(server.looks_like_trigger_question("what did I work on yesterday"))
+
+
+class SearchLocalAutomationHitsTest(unittest.TestCase):
+    def setUp(self):
+        import tempfile
+        from pathlib import Path
+        # search_local_automation_hits reads the module-level constant as a
+        # global at call time out of ccc_server.ask's OWN __dict__ — adoption
+        # onto `server` copies the value once, it doesn't alias the name, so
+        # patching server._LAUNCH_AGENTS_DIR would not reach the function.
+        from ccc_server import ask as ask_module
+        self._tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self._tmp.cleanup)
+        self.launch_agents = Path(self._tmp.name) / "LaunchAgents"
+        self.launch_agents.mkdir()
+        self.repo = Path(self._tmp.name) / "repo"
+        (self.repo / ".github" / "workflows").mkdir(parents=True)
+        self._patch = mock.patch.object(ask_module, "_LAUNCH_AGENTS_DIR", self.launch_agents)
+        self._patch.start()
+        self.addCleanup(self._patch.stop)
+
+    def test_finds_plist_by_hyphen_insensitive_subject_match_and_extracts_trigger_keys(self):
+        (self.launch_agents / "com.amirfish.bym-perf-preflight.plist").write_text(
+            "<plist><dict>\n"
+            "<key>Label</key><string>com.amirfish.bym-perf-preflight</string>\n"
+            "<key>StartInterval</key><integer>3600</integer>\n"
+            "</dict></plist>\n")
+        (self.launch_agents / "com.amirfish.unrelated.plist").write_text(
+            "<plist><dict><key>Label</key><string>com.amirfish.unrelated</string></dict></plist>\n")
+        terms = server.extract_ask_terms(
+            "what triggers my BYM pre-flight check, a GitHub push?")
+        hits = server.search_local_automation_hits(terms, repo_roots=[])
+        self.assertEqual(len(hits), 1)
+        self.assertIn("bym-perf-preflight.plist", hits[0]["path"])
+        self.assertIn("StartInterval", hits[0]["snippet"])
+        self.assertIn("3600", hits[0]["snippet"])
+
+    def test_no_subject_match_is_empty(self):
+        (self.launch_agents / "com.amirfish.unrelated.plist").write_text(
+            "<plist><dict><key>Label</key><string>com.amirfish.unrelated</string></dict></plist>\n")
+        terms = server.extract_ask_terms("what triggers my BYM pre-flight check?")
+        self.assertEqual(server.search_local_automation_hits(terms, repo_roots=[]), [])
+
+    def test_finds_github_workflow_trigger_block(self):
+        wf = self.repo / ".github" / "workflows" / "bym-deploy.yml"
+        wf.write_text(
+            "name: bym-deploy\n"
+            "on:\n"
+            "  push:\n"
+            "    branches: [main]\n"
+            "jobs:\n"
+            "  deploy:\n"
+            "    runs-on: ubuntu-latest\n")
+        terms = server.extract_ask_terms("what triggers the bym deploy workflow?")
+        hits = server.search_local_automation_hits(terms, repo_roots=[str(self.repo)])
+        self.assertEqual(len(hits), 1)
+        self.assertEqual(hits[0]["kind"], "GitHub workflow")
+        self.assertIn("push", hits[0]["snippet"])
+        self.assertNotIn("runs-on", hits[0]["snippet"])
+
+    def test_no_terms_returns_empty(self):
+        self.assertEqual(server.search_local_automation_hits([], repo_roots=[]), [])
+
+
 class MergeHitsTest(unittest.TestCase):
     def test_interleaves_dedupes_then_sorts_newest_first(self):
         # bbb-2 is newest (ts_unix 200) despite arriving second in the
@@ -157,6 +231,23 @@ class PromptTest(unittest.TestCase):
         p = server.build_ask_prompt("q", [], [], fs_hits=["/Users/x/Desktop/Shot 3 - BYM.mov"])
         self.assertIn("File matches", p)
         self.assertIn("/Users/x/Desktop/Shot 3 - BYM.mov", p)
+
+    def test_automation_hits_none_omits_section(self):
+        p = server.build_ask_prompt("q", [], [], automation_hits=None)
+        self.assertNotIn("Automation configs", p)
+
+    def test_automation_hits_listed_when_present(self):
+        p = server.build_ask_prompt("q", [], [], automation_hits=[
+            {"path": "/x/com.amirfish.bym-perf-preflight.plist", "kind": "launchd job",
+             "snippet": "StartInterval 3600"}])
+        self.assertIn("Automation configs", p)
+        self.assertIn("com.amirfish.bym-perf-preflight.plist", p)
+        self.assertIn("StartInterval 3600", p)
+
+    def test_automation_hits_empty_says_none_found(self):
+        p = server.build_ask_prompt("q", [], [], automation_hits=[])
+        self.assertIn("Automation configs", p)
+        self.assertIn("(none found)", p)
 
     def test_fs_hits_empty_list_says_none_found(self):
         p = server.build_ask_prompt("q", [], [], fs_hits=[])
@@ -330,6 +421,31 @@ class HandleAskTest(unittest.TestCase):
             server.handle_assistant_ask({"question": "bym ads"}, runner=runner)
         self.assertFalse(called)
         self.assertNotIn("File matches", prompts[-1])
+
+    def test_trigger_question_wires_automation_hits_into_prompt(self):
+        prompts = []
+
+        def runner(argv, **kw):
+            prompts.append(argv[-1])
+            return _FakeProc(stdout="It runs hourly via launchd, not a GitHub push.")
+
+        with mock.patch.object(server, "search_local_automation_hits",
+                                lambda terms, repo_roots=None, **kw: [
+                                    {"path": "/x/com.amirfish.bym-perf-preflight.plist",
+                                     "kind": "launchd job", "snippet": "StartInterval 3600"}]):
+            body, status = server.handle_assistant_ask(
+                {"question": "what triggers my BYM pre-flight check?"}, runner=runner)
+        self.assertEqual(status, 200)
+        self.assertIn("Automation configs", prompts[-1])
+        self.assertIn("StartInterval 3600", prompts[-1])
+
+    def test_ordinary_question_skips_automation_lookup(self):
+        called = []
+        runner = lambda argv, **kw: _FakeProc(stdout="ok")
+        with mock.patch.object(server, "search_local_automation_hits",
+                                lambda terms, **kw: called.append(terms) or []):
+            server.handle_assistant_ask({"question": "bym ads"}, runner=runner)
+        self.assertFalse(called)
 
     def test_default_range_matches_prior_behavior(self):
         runner = lambda argv, **kw: _FakeProc(stdout="ok")

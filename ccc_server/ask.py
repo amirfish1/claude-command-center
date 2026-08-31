@@ -55,9 +55,10 @@ _ASK_WORD_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.-]+")
 # location questions ("where did I store/save/put the X file").
 _ASK_STOPWORDS = frozenset(
     "a about an and are as at can could did do does file files find for "
-    "from how i in is it locate me my of on or put save saved session "
-    "sessions status store stored that the them these this those to was we "
-    "were what when where which who with work worked working you".split()
+    "from how i in is it know locate me my of on or put save saved session "
+    "sessions status store stored that the them these there this those to was "
+    "way ways we were what when where which who with work worked working "
+    "you".split()
 )
 # A question only pays for a Spotlight lookup when it plausibly names a file
 # — a bare noun/extension hint, not every "where did I work on X".
@@ -65,6 +66,37 @@ _ASK_FS_HINT_RE = re.compile(
     r"\b(file|files|folder|download|downloaded|screenshot|recording|video|"
     r"photo|image|document|clip|mov|mp4|mkv|avi|png|jpe?g|gif|pdf|docx?|"
     r"xlsx?|pptx?|csv|zip|key|psd|ai|mp3|wav|txt|md)\b", re.IGNORECASE)
+# "What triggers X / when does X run / is it a cron job" questions — the
+# real answer lives in a launchd plist or a GitHub workflow's `on:` block,
+# never in a chat transcript, so these need their own content search
+# (see search_local_automation_hits) instead of the session-hit retrieval.
+_ASK_TRIGGER_HINT_RE = re.compile(
+    r"\b(trigger|triggers|triggered|schedule|scheduled|scheduling|cron|"
+    r"crontab|launchd|automatic|automated|automation|hook|hooked|webhook|"
+    r"workflow|pre-?flight|preflight|runs? when|what runs|when does|"
+    r"when is|how often)\b", re.IGNORECASE)
+_ASK_AUTOMATION_LIMIT = 6
+_ASK_AUTOMATION_SNIPPET_MAX = 900
+_LAUNCH_AGENTS_DIR = Path.home() / "Library" / "LaunchAgents"
+# The question's own framing words ("what TRIGGERS X", "is it a CRON job")
+# never appear verbatim in a plist/workflow, so using them as match keys
+# only adds noise — every job file that happens to contain "automatic"
+# somewhere matches. Match on the SUBJECT words instead (e.g. "bym",
+# "preflight"), which is `terms` minus this vocabulary.
+_ASK_AUTOMATION_STOPWORDS = frozenset(
+    "trigger triggers triggered schedule scheduled scheduling cron crontab "
+    "launchd automatic automated automation hook hooked webhook workflow "
+    "runs run often does when github push check checks job jobs task tasks "
+    "test tested testing service services process background".split()
+)
+_PLIST_TRIGGER_KEY_RE = re.compile(
+    r"<key>(Label|StartInterval|StartCalendarInterval|WatchPaths|RunAtLoad|"
+    r"KeepAlive|ProgramArguments)</key>.*?(?=<key>|</dict>)", re.DOTALL)
+_YAML_TRIGGER_RE = re.compile(r"^on:.*?(?=^\S|\Z)", re.DOTALL | re.MULTILINE)
+
+
+def _norm_match_text(s):
+    return (s or "").lower().replace("-", "").replace("_", "")
 
 
 def extract_ask_terms(question):
@@ -88,6 +120,107 @@ def looks_like_file_question(question):
     """True when the question plausibly names a file — gates the Spotlight
     lookup so ordinary "what did I work on" questions don't pay for it."""
     return bool(_ASK_FS_HINT_RE.search(question or ""))
+
+
+def looks_like_trigger_question(question):
+    """True when the question asks what fires/schedules something (a
+    launchd job, a CI workflow) — gates search_local_automation_hits so
+    ordinary questions don't pay for the extra file reads."""
+    return bool(_ASK_TRIGGER_HINT_RE.search(question or ""))
+
+
+def _automation_snippet(text, is_plist):
+    """Pull just the trigger-defining lines (StartInterval, `on:` block…)
+    instead of the file head — a plain head-of-file cap gets eaten by XML/
+    YAML boilerplate before ever reaching the line that answers the
+    question."""
+    if is_plist:
+        parts = [m.group(0).strip() for m in _PLIST_TRIGGER_KEY_RE.finditer(text)]
+        if parts:
+            return "\n".join(parts)[:_ASK_AUTOMATION_SNIPPET_MAX]
+    else:
+        m = _YAML_TRIGGER_RE.search(text)
+        if m:
+            return m.group(0).strip()[:_ASK_AUTOMATION_SNIPPET_MAX]
+    return text.strip()[:_ASK_AUTOMATION_SNIPPET_MAX]
+
+
+def _automation_match(words, name_l, text):
+    """AND-match on the subject words (all must appear, in filename or
+    content) — the same word-count that would zero out recall on the
+    session-hit scan is exactly right here, because the subject words
+    (a job/repo name) really should co-occur precisely in the one file
+    that defines it. Hyphens are stripped on both sides so "pre-flight"
+    matches a file literally named "...preflight...")."""
+    haystack = _norm_match_text(name_l + " " + text)
+    return all(_norm_match_text(w) in haystack for w in words)
+
+
+def search_local_automation_hits(terms, repo_roots=None, limit=_ASK_AUTOMATION_LIMIT):
+    """Content search over launchd job plists and GitHub Actions workflows —
+    the actual trigger definition (StartInterval, StartCalendarInterval,
+    WatchPaths, or a workflow's `on:` block) lives in these files, never in
+    a chat transcript, so no amount of session retrieval will ever answer
+    "what triggers X". Matches by term appearing in the filename or file
+    content; empty on any read error so transcript hits still carry the
+    rest of the answer. `repo_roots` scopes the workflow search to repos
+    the user has actually been working in (derived from session hit cwds)
+    rather than crawling the whole filesystem."""
+    all_words = [w for w in (terms or []) if w][:6]
+    if not all_words:
+        return []
+    # Prefer the subject words (drop the question's own "trigger/cron/
+    # webhook" framing) so matching stays precise; if that empties the set
+    # (a bare "what triggers this?" with no named subject), fall back to
+    # the full word list rather than matching nothing.
+    words = [w for w in all_words if w not in _ASK_AUTOMATION_STOPWORDS] or all_words
+    hits = []
+
+    if _LAUNCH_AGENTS_DIR.is_dir():
+        try:
+            plists = sorted(_LAUNCH_AGENTS_DIR.glob("*.plist"))
+        except OSError:
+            plists = []
+        for p in plists:
+            if len(hits) >= limit:
+                break
+            try:
+                text = p.read_text(errors="ignore")
+            except OSError:
+                continue
+            if not _automation_match(words, p.name.lower(), text):
+                continue
+            hits.append({"path": str(p), "kind": "launchd job",
+                         "snippet": _automation_snippet(text, is_plist=True)})
+
+    seen_roots = set()
+    for root in (repo_roots or []):
+        if len(hits) >= limit:
+            break
+        root = str(root or "").strip()
+        if not root or root in seen_roots:
+            continue
+        seen_roots.add(root)
+        wf_dir = Path(root) / ".github" / "workflows"
+        if not wf_dir.is_dir():
+            continue
+        try:
+            wf_files = sorted(wf_dir.glob("*.yml")) + sorted(wf_dir.glob("*.yaml"))
+        except OSError:
+            wf_files = []
+        for p in wf_files:
+            if len(hits) >= limit:
+                break
+            try:
+                text = p.read_text(errors="ignore")
+            except OSError:
+                continue
+            if not _automation_match(words, p.name.lower(), text):
+                continue
+            hits.append({"path": str(p), "kind": "GitHub workflow",
+                         "snippet": _automation_snippet(text, is_plist=False)})
+
+    return hits[:limit]
 
 
 def search_filesystem_hits(terms, limit=_ASK_FS_LIMIT, runner=None):
@@ -170,7 +303,7 @@ def enrich_ask_hits(hits, titles=None, live_ids=None):
     return hits
 
 
-def build_ask_prompt(question, history, hits, fs_hits=None):
+def build_ask_prompt(question, history, hits, fs_hits=None, automation_hits=None):
     q = str(question or "").strip()[:_ASK_QUESTION_MAX]
     lines = [
         "You are the Ask assistant inside Claude Command Center (CCC), a "
@@ -204,6 +337,18 @@ def build_ask_prompt(question, history, hits, fs_hits=None):
             "answer from the File matches list below — quote the path "
             "exactly as given, never invent or guess a path. If that list "
             "is empty or nothing fits, say the file wasn't found on disk.")
+    if automation_hits is not None:
+        lines.append(
+            "If the user asks what TRIGGERS or SCHEDULES something (a "
+            "background job, a pre-flight check, a CI workflow) — e.g. is "
+            "it a GitHub push, a timer, a cron schedule — answer from the "
+            "Automation configs list below, not from session snippets. "
+            "Quote the actual trigger key/value verbatim (e.g. "
+            "'StartInterval 3600 seconds = hourly', 'StartCalendarInterval "
+            "= runs at a fixed time of day', 'on: push' or 'on: schedule: "
+            "cron'). If that list is empty or nothing fits, say plainly "
+            "that no matching automation config was found on disk — do not "
+            "guess or hedge from vague past mentions.")
     lines.append("")
     folded = [t for t in (history or []) if isinstance(t, dict)][-_ASK_HISTORY_TURNS:]
     for turn in folded:
@@ -232,6 +377,14 @@ def build_ask_prompt(question, history, hits, fs_hits=None):
     if fs_hits is not None:
         lines += ["", "File matches (from Spotlight, may be incomplete):"]
         lines += [f"- {p}" for p in fs_hits] if fs_hits else ["(none found)"]
+    if automation_hits is not None:
+        lines += ["", "Automation configs found on disk (may be incomplete):"]
+        if automation_hits:
+            for h in automation_hits:
+                lines.append(f"- {h['kind']}: {h['path']}")
+                lines.append(f"  content: {h['snippet']}")
+        else:
+            lines.append("(none found)")
     lines += ["", f"Question: {q}"]
     return "\n".join(lines)
 
@@ -386,9 +539,24 @@ def handle_assistant_ask(payload, runner=None):
         except Exception:
             fs_hits = []
 
+    automation_hits = None
+    if looks_like_trigger_question(question):
+        try:
+            repo_roots = []
+            seen_repo_roots = set()
+            for h in hits:
+                cwd = h.get("cwd")
+                if cwd and cwd not in seen_repo_roots:
+                    seen_repo_roots.add(cwd)
+                    repo_roots.append(cwd)
+            automation_hits = _core.search_local_automation_hits(terms, repo_roots)
+        except Exception:
+            automation_hits = []
+
     try:
-        answer = run_ask_engine(engine, build_ask_prompt(question, history, hits, fs_hits),
-                                runner=runner)
+        answer = run_ask_engine(
+            engine, build_ask_prompt(question, history, hits, fs_hits, automation_hits),
+            runner=runner)
     except subprocess.TimeoutExpired:
         return {"ok": False, "code": "ask_timeout",
                 "error": f"{engine['engine']} timed out after {_ASK_TIMEOUT_SEC}s"}, 504
