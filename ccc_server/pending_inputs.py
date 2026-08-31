@@ -28,6 +28,7 @@ from ccc_server import core as _core
 
 _pending_queued_meta: dict = {}
 _pending_queued_meta_lock = threading.Lock()
+_pending_devin_steers: dict = {}
 
 
 def _note_pending_queued(session_id, text, reason=None):
@@ -151,7 +152,7 @@ def _drop_unattended_auto_continues(queue):
 
 def _load_pending_inputs():
     """Load pending queues from PENDING_INPUTS_FILE into memory."""
-    global _pending_resume_queue, _pending_terminal_input_queue
+    global _pending_resume_queue, _pending_terminal_input_queue, _pending_devin_steers
     try:
         with open(_core.PENDING_INPUTS_FILE) as f:
             data = json.load(f)
@@ -172,6 +173,16 @@ def _load_pending_inputs():
                 empty.append(sid)
         for sid in empty:
             _core._pending_resume_queue.pop(sid, None)
+        for sid in list(_core._pending_resume_queue):
+            if _core._is_devin_cli_session(sid):
+                _core._dedupe_devin_resume_queue_unlocked(sid)
+        steers = data.get("devin_steers")
+        if isinstance(steers, dict):
+            _core._pending_devin_steers.update({
+                str(sid): str(text)
+                for sid, text in steers.items()
+                if str(sid) and isinstance(text, str) and text
+            })
     with _core._pending_terminal_input_lock:
         tq = data.get("terminal_queue")
         if isinstance(tq, dict):
@@ -199,6 +210,7 @@ def _save_pending_inputs():
     with _pending_inputs_lock:
         with _core._pending_resume_lock:
             rq = dict(_core._pending_resume_queue)
+            devin_steers = dict(_core._pending_devin_steers)
         with _core._pending_terminal_input_lock:
             # Worker handoff files remain the authority until delivery. Never
             # copy their in-memory string wrappers into the shared snapshot:
@@ -216,6 +228,7 @@ def _save_pending_inputs():
             opt_in = dict(_core._auto_resume_opt_in)
         payload = {
             "resume_queue": rq,
+            "devin_steers": devin_steers,
             "terminal_queue": tq,
             "auto_resume_opt_in": opt_in,
         }
@@ -1326,6 +1339,46 @@ def _devin_queue_pump_lock(session_id):
         return _devin_queue_pump_locks.setdefault(session_id, threading.Lock())
 
 
+def _dedupe_devin_resume_queue_unlocked(session_id):
+    """Collapse repeated existing Devin input without disturbing FIFO order."""
+    queue = _core._pending_resume_queue.get(session_id) or []
+    seen = set()
+    deduped = []
+    for item in queue:
+        if item not in seen:
+            seen.add(item)
+            deduped.append(item)
+    if deduped == queue:
+        return False
+    if deduped:
+        _core._pending_resume_queue[session_id] = deduped
+    else:
+        _core._pending_resume_queue.pop(session_id, None)
+    return True
+
+
+def _queue_devin_resume_input(session_id, text):
+    """Add a normal Devin follow-up once, preserving the existing FIFO."""
+    with _core._pending_resume_lock:
+        _core._dedupe_devin_resume_queue_unlocked(session_id)
+        queue = _core._pending_resume_queue.setdefault(session_id, [])
+        if text in queue:
+            return False
+        queue.append(text)
+    _core._save_pending_inputs()
+    return True
+
+
+def _queue_devin_steer(session_id, text):
+    """Store only the latest undeliverable Devin steer behind normal input."""
+    with _core._pending_resume_lock:
+        _core._dedupe_devin_resume_queue_unlocked(session_id)
+        changed = _core._pending_devin_steers.get(session_id) != text
+        _core._pending_devin_steers[session_id] = text
+    _core._save_pending_inputs()
+    return changed
+
+
 def _schedule_codex_queue_pump(session_id):
     """Trigger FIFO delivery for one conversation without blocking the caller."""
     if not session_id:
@@ -1418,13 +1471,32 @@ def _pump_devin_resume_queue(session_id):
             return {"ok": True, "waiting": "backoff"}
         if _core._resume_queue_engine_busy(session_id):
             return {"ok": True, "waiting": "busy"}
+        raw_id = _core._devin_cli_raw_id(session_id)
+        live_spawn = _core._find_live_spawn_entry_for_session(session_id)
+        if (
+            _core._devin_cli_session_live(raw_id)
+            and live_spawn is None
+        ):
+            return {
+                "ok": True,
+                "queued": True,
+                "waiting": "external-owner",
+                "external_devin_owner": True,
+                "via": "devin-external-owner-queued",
+            }
         with _core._pending_resume_lock:
             queue = _core._pending_resume_queue.get(session_id) or []
             text = queue[0] if queue else None
+            delivery_slot = "resume"
+            if text is None:
+                text = _core._pending_devin_steers.get(session_id)
+                delivery_slot = "steer"
         if text is None:
             return {"ok": True, "empty": True}
 
-        result = _core.resume_session_devin(session_id, text)
+        result = _core.resume_session_devin(
+            session_id, text, _delivery_slot=delivery_slot,
+        )
         # resume_session_devin already queues internally if a turn is running.
         # It starts both the startup-failure watchdog and the proof-of-delivery
         # watchdog. The durable queue is left intact until proof arrives.
@@ -2550,10 +2622,16 @@ def _start_resume_queue_watcher() -> None:
             # to call every tick.
             _core._run_stray_process_reaper_once()
             with _core._pending_resume_lock:
-                queued_sids = list(_core._pending_resume_queue.keys())
+                queued_sids = list(dict.fromkeys(
+                    list(_core._pending_resume_queue.keys())
+                    + list(_core._pending_devin_steers.keys())
+                ))
             for sid in queued_sids:
                 if _core._is_codex_session(sid):
                     _core._pump_codex_resume_queue(sid)
+                    continue
+                if _core._is_devin_cli_session(sid):
+                    _core._pump_devin_resume_queue(sid)
                     continue
                 if not _core._pending_resume_retry_due(sid):
                     continue
@@ -2931,4 +3009,3 @@ def _uxq_parse_ts(value):
         return datetime.fromisoformat(str(value or "").replace("Z", "+00:00")).timestamp()
     except (ValueError, TypeError):
         return 0
-

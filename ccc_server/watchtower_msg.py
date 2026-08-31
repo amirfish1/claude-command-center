@@ -1760,12 +1760,33 @@ def _inject_text_into_session_router(
     if _core._is_aider_session(session_id):
         return _core.resume_session_aider(session_id, text)
     if _core._is_devin_cli_session(session_id):
-        # Always enqueue first; the per-session pump drains the durable FIFO.
-        # The UI sees "queued" until Devin writes the prompt to prompt_history.
-        with _core._pending_resume_lock:
-            _core._pending_resume_queue.setdefault(session_id, []).append(text)
-        _core._note_pending_queued(session_id, text, "Queued for Devin delivery")
-        _core._save_pending_inputs()
+        # A Devin ACP process launched outside CCC owns its stdio connection.
+        # `devin --resume` cannot attach to it; retrying only duplicates the
+        # pending message when the CLI rejects the parallel session start.
+        raw_id = _core._devin_cli_raw_id(session_id)
+        live_spawn = _core._find_live_spawn_entry_for_session(session_id)
+        external_owner = (
+            _core._devin_cli_session_live(raw_id) and live_spawn is None
+        )
+        if mode == "steer":
+            _core._queue_devin_steer(session_id, text)
+        else:
+            _core._queue_devin_resume_input(session_id, text)
+        reason = (
+            "Devin is working in another client; the latest steering message "
+            "will send after that turn finishes."
+            if external_owner and mode == "steer"
+            else "Queued for Devin delivery"
+        )
+        _core._note_pending_queued(session_id, text, reason)
+        if external_owner:
+            return {
+                "ok": True,
+                "queued": True,
+                "external_devin_owner": True,
+                "via": "devin-external-owner-queued",
+                "queued_reason": reason,
+            }
         threading.Thread(
             target=_core._pump_devin_resume_queue,
             args=(session_id,),
@@ -1776,7 +1797,7 @@ def _inject_text_into_session_router(
             "ok": True,
             "queued": True,
             "via": "devin-resume-queued",
-            "queued_reason": "Queued for Devin delivery",
+            "queued_reason": reason,
         }
     # force_terminal: the user confirmed a terminal is running and wants the
     # text sent there. Find the terminal's TTY and inject via osascript even
@@ -3476,4 +3497,3 @@ def ask_session_and_wait(session_id, text, timeout_ms=30000, cwd=None, peer_send
                 fh.close()
             except OSError:
                 pass
-

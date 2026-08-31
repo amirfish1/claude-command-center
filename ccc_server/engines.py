@@ -2890,7 +2890,7 @@ def spawn_session_devin(prompt, name=None, cwd=None, repo_path=None, worktree=Fa
 _DEVIN_RESUME_WATCHDOG_WINDOW_S = 30.0
 
 
-def _start_devin_resume_watchdog(proc, session_id, text, log_path):
+def _start_devin_resume_watchdog(proc, session_id, text, log_path, *, delivery_slot="resume"):
     def _watch():
         try:
             exit_code = proc.wait(timeout=_core._DEVIN_RESUME_WATCHDOG_WINDOW_S)
@@ -2913,7 +2913,12 @@ def _start_devin_resume_watchdog(proc, session_id, text, log_path):
             flush=True,
         )
         with _core._pending_resume_lock:
-            _core._pending_resume_queue.setdefault(session_id, []).insert(0, text)
+            if delivery_slot == "steer":
+                _core._pending_devin_steers[session_id] = text
+            else:
+                queue = _core._pending_resume_queue.setdefault(session_id, [])
+                if text not in queue:
+                    queue.insert(0, text)
         _core._save_pending_inputs()
         _core._mark_pending_resume_retry(session_id)
 
@@ -2962,7 +2967,9 @@ def _devin_raw_id(session_id):
     return session_id or ""
 
 
-def _start_devin_delivery_proof_watchdog(proc, session_id, text, started_at):
+def _start_devin_delivery_proof_watchdog(
+    proc, session_id, text, started_at, *, delivery_slot="resume",
+):
     """Wait for a new prompt_history row proving Devin accepted the follow-up.
 
     If the row appears, remove the message from the durable queue. If the
@@ -2983,12 +2990,17 @@ def _start_devin_delivery_proof_watchdog(proc, session_id, text, started_at):
             if _core._devin_cli_prompt_history_count(raw_id, text, started_at) > 0:
                 removed = False
                 with _core._pending_resume_lock:
-                    queue = _core._pending_resume_queue.get(session_id) or []
-                    if queue and queue[0] == text:
-                        queue.pop(0)
-                        if not queue:
-                            _core._pending_resume_queue.pop(session_id, None)
-                        removed = True
+                    if delivery_slot == "steer":
+                        if _core._pending_devin_steers.get(session_id) == text:
+                            _core._pending_devin_steers.pop(session_id, None)
+                            removed = True
+                    else:
+                        queue = _core._pending_resume_queue.get(session_id) or []
+                        if queue and queue[0] == text:
+                            queue.pop(0)
+                            if not queue:
+                                _core._pending_resume_queue.pop(session_id, None)
+                            removed = True
                 if removed:
                     _core._save_pending_inputs()
                     _core._pending_resume_retry_after.pop(session_id, None)
@@ -3000,13 +3012,18 @@ def _start_devin_delivery_proof_watchdog(proc, session_id, text, started_at):
             if exit_code is not None and exit_code != 0:
                 break
             time.sleep(_core._DEVIN_DELIVERY_PROOF_POLL_INTERVAL_S)
-        # No proof. Requeue at front for retry (unless it was already removed).
+        # No proof. The selected delivery slot is intentionally still durable;
+        # only restore it if an unusual direct caller removed it meanwhile.
         with _core._pending_resume_lock:
-            queue = _core._pending_resume_queue.get(session_id) or []
-            if queue and queue[0] == text:
-                pass  # already at front
-            elif text:
-                _core._pending_resume_queue.setdefault(session_id, []).insert(0, text)
+            if delivery_slot == "steer":
+                if text and session_id not in _core._pending_devin_steers:
+                    _core._pending_devin_steers[session_id] = text
+            else:
+                queue = _core._pending_resume_queue.get(session_id) or []
+                if queue and queue[0] == text:
+                    pass  # already at front
+                elif text:
+                    _core._pending_resume_queue.setdefault(session_id, []).insert(0, text)
         _core._save_pending_inputs()
         _core._mark_pending_resume_retry(session_id)
         print(
@@ -3021,7 +3038,7 @@ def _start_devin_delivery_proof_watchdog(proc, session_id, text, started_at):
     ).start()
 
 
-def resume_session_devin(session_id, text):
+def resume_session_devin(session_id, text, _delivery_slot="resume"):
     """Resume a Devin CLI session with a one-shot headless prompt.
 
     Uses `devin --resume <id> -p "text" --permission-mode dangerous`.
@@ -3141,8 +3158,12 @@ def resume_session_devin(session_id, text):
         repo_path=repo_for_logs,
         model=model,
     )
-    _core._start_devin_resume_watchdog(proc, session_id, text, log_path)
-    _core._start_devin_delivery_proof_watchdog(proc, session_id, text, time.time())
+    _core._start_devin_resume_watchdog(
+        proc, session_id, text, log_path, delivery_slot=_delivery_slot,
+    )
+    _core._start_devin_delivery_proof_watchdog(
+        proc, session_id, text, time.time(), delivery_slot=_delivery_slot,
+    )
     return {"ok": True, "pid": proc.pid, "log": str(log_path), "resumed": True, "via": "devin-resume"}
 
 
@@ -7437,5 +7458,3 @@ def resume_session_headless(session_id, text, cwd=None, idempotency_key=None):
         "resumed": True,
         "initial_prompt_written": True,
     }
-
-

@@ -16312,6 +16312,7 @@ class TestCodexCompactionRecovery(unittest.TestCase):
             self.server._CODEX_APP_SERVER_EVENT_SEQ = 0
         with self.server._pending_resume_lock:
             self.server._pending_resume_queue.clear()
+            self.server._pending_devin_steers.clear()
         self.server._codex_coord_state_loaded = True
 
     def tearDown(self):
@@ -16321,6 +16322,7 @@ class TestCodexCompactionRecovery(unittest.TestCase):
             self.server._CODEX_APP_SERVER_TURN_THREAD.clear()
         with self.server._pending_resume_lock:
             self.server._pending_resume_queue.clear()
+            self.server._pending_devin_steers.clear()
 
     def _arm_via_notifications(self, sid="sid-recovery", now=None):
         server = self.server
@@ -16972,6 +16974,18 @@ class TestPendingInputs(unittest.TestCase):
         with self.server._pending_terminal_input_lock:
             self.assertEqual(self.server._pending_terminal_input_queue.get(sid), ["hello term"])
 
+    def test_load_pending_inputs_dedupes_existing_devin_messages(self):
+        sid = "devincli-old-duplicate-queue"
+        self.server.PENDING_INPUTS_FILE.write_text(json.dumps({
+            "resume_queue": {sid: ["same", "same", "next"]},
+            "terminal_queue": {},
+        }), encoding="utf-8")
+
+        self.server._load_pending_inputs()
+
+        with self.server._pending_resume_lock:
+            self.assertEqual(self.server._pending_resume_queue.get(sid), ["same", "next"])
+
     def test_pending_inputs_watcher_lock_rejects_another_process(self):
         """Only one CCC server may drain a shared durable input queue."""
         import fcntl
@@ -17005,6 +17019,35 @@ class TestPendingInputs(unittest.TestCase):
                 self.server._pending_resume_queue.get(sid),
                 ["verifier report", "different message"],
             )
+
+    def test_external_devin_owner_coalesces_steers_without_resuming(self):
+        """A live Devin ACP client is the only writer until it exits."""
+        sid = "devincli-test-external-owner"
+        with mock.patch.object(
+            self.server,
+            "session_live_status",
+            return_value={"live": True, "tty": None},
+        ), mock.patch.object(
+            self.server,
+            "_devin_cli_session_live",
+            return_value=True,
+        ), mock.patch.object(
+            self.server,
+            "_find_live_spawn_entry_for_session",
+            return_value=None,
+        ), mock.patch.object(self.server.threading, "Thread") as thread:
+            first = self.server._inject_text_into_session(
+                sid, "first steer", mode="steer"
+            )
+            latest = self.server._inject_text_into_session(
+                sid, "latest steer", mode="steer"
+            )
+
+        self.assertTrue(first["queued"])
+        self.assertTrue(latest.get("external_devin_owner"))
+        self.assertIsNone(self.server._pending_resume_queue.get(sid))
+        self.assertEqual(self.server._pending_devin_steers.get(sid), "latest steer")
+        thread.assert_not_called()
 
     def test_codex_queue_pump_delivers_and_removes_only_fifo_head(self):
         sid = "sid-fifo"
@@ -20573,6 +20616,3 @@ class TestRegistryEphemeralGuard(unittest.TestCase):
                 self.assertEqual(len(data), 1)
                 self.assertEqual(data[0]["port"], 8099)
                 self.assertEqual(data[0]["pid"], os.getpid())
-
-
-
