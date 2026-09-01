@@ -78,6 +78,48 @@ _auto_resume_opt_in: dict = {}   # session_id → True
 _auto_resume_opt_in_lock = threading.Lock()
 
 
+class _PendingInputEntry(str):
+    """String-compatible durable queue row with stable plain-entry identity."""
+
+    def __new__(cls, text, pending_id=None):
+        value = super().__new__(cls, str(text or ""))
+        value.pending_id = str(pending_id or uuid.uuid4())
+        return value
+
+
+def _decode_pending_queue_item(item):
+    if isinstance(item, dict):
+        pending_id = str(item.get("id") or "").strip()
+        text = item.get("text")
+        if pending_id and isinstance(text, str):
+            return _PendingInputEntry(text, pending_id)
+        return None
+    if isinstance(item, str):
+        return _PendingInputEntry(item)
+    return None
+
+
+def _decode_pending_queue(items):
+    decoded_items = []
+    seen_ids = set()
+    for item in items:
+        decoded = _decode_pending_queue_item(item)
+        if decoded is None:
+            continue
+        if decoded.pending_id in seen_ids:
+            decoded = _PendingInputEntry(str(decoded))
+        seen_ids.add(decoded.pending_id)
+        decoded_items.append(decoded)
+    return decoded_items
+
+
+def _serialize_pending_queue_item(item):
+    if isinstance(item, _PendingInputHandoff):
+        return None
+    entry = item if isinstance(item, _PendingInputEntry) else _PendingInputEntry(item)
+    return {"id": entry.pending_id, "text": str(entry)}
+
+
 def _auto_resume_barrier_path():
     return _core.PENDING_INPUTS_FILE.with_suffix(".auto-resume.lock")
 
@@ -250,10 +292,20 @@ def _load_pending_inputs():
         return
     stripped = False
     stripped_sessions = set()
+    legacy_sessions = set()
+    for field in ("resume_queue", "terminal_queue"):
+        queues = data.get(field)
+        if isinstance(queues, dict):
+            for sid, items in queues.items():
+                if isinstance(items, list) and any(not isinstance(item, dict) for item in items):
+                    legacy_sessions.add(str(sid))
     with _core._pending_resume_lock:
         rq = data.get("resume_queue")
         if isinstance(rq, dict):
-            _core._pending_resume_queue.update({k: list(v) for k, v in rq.items() if isinstance(v, list)})
+            _core._pending_resume_queue.update({
+                k: _decode_pending_queue(v)
+                for k, v in rq.items() if isinstance(v, list)
+            })
         empty = []
         for sid, queue in list(_core._pending_resume_queue.items()):
             if _drop_unattended_auto_continues(queue):
@@ -276,7 +328,10 @@ def _load_pending_inputs():
     with _core._pending_terminal_input_lock:
         tq = data.get("terminal_queue")
         if isinstance(tq, dict):
-            _core._pending_terminal_input_queue.update({k: list(v) for k, v in tq.items() if isinstance(v, list)})
+            _core._pending_terminal_input_queue.update({
+                k: _decode_pending_queue(v)
+                for k, v in tq.items() if isinstance(v, list)
+            })
         empty = []
         for sid, queue in list(_core._pending_terminal_input_queue.items()):
             if _drop_unattended_auto_continues(queue):
@@ -302,6 +357,15 @@ def _load_pending_inputs():
             ])
             if not cleanup.get("ok"):
                 print(f"  [pending-inputs] stale auto-continue cleanup failed: {sid}")
+    for sid in legacy_sessions - stripped_sessions:
+        def migrate_legacy(sid=sid):
+            if _core._is_devin_cli_session(sid):
+                _core._dedupe_devin_resume_queue_unlocked(sid)
+            return True
+
+        migration = _core._mutate_pending_inputs({sid}, migrate_legacy)
+        if not migration.get("ok"):
+            print(f"  [pending-inputs] legacy queue migration failed: {sid}")
     _core._recover_pending_input_claim_journals()
 
 
@@ -316,6 +380,7 @@ def _write_pending_input_claim_journal(claim):
         "queue_name": str(claim.get("queue_name") or "resume"),
         "index": int(claim.get("index") or 0),
         "text": str(item or ""),
+        "pending_id": getattr(item, "pending_id", None),
         "handoff_id": getattr(item, "handoff_id", None),
         "handoff_front": getattr(item, "handoff_front", None),
         "created_ns": created_ns,
@@ -364,6 +429,7 @@ def _validate_pending_claim_journal(path, payload):
             "queue_name": str(payload.get("queue_name") or ""),
             "index": int(payload.get("index")),
             "text": str(payload.get("text") or ""),
+            "pending_id": payload.get("pending_id"),
             "handoff_id": payload.get("handoff_id"),
             "handoff_front": payload.get("handoff_front"),
             "created_ns": int(payload.get("created_ns")),
@@ -409,26 +475,40 @@ def _keep_pending_input_claim_in_memory(claim):
         if queue_name == "resume"
         else (_core._pending_terminal_input_queue, _core._pending_terminal_input_lock)
     )
-    with _core._codex_queue_pump_lock(sid), lock:
-        items = queue.setdefault(sid, [])
-        if getattr(item, "handoff_id", None) and any(
-            getattr(existing, "handoff_id", None) == item.handoff_id
-            for existing in items
-        ):
-            return True
-        items.insert(min(max(int(claim.get("index") or 0), 0), len(items)), item)
-    with _pending_input_recovery_registry_lock:
-        claims = _pending_input_recovery_registry.setdefault(sid, [])
-        identity = (
-            claim.get("queue_name"), claim.get("claim_sequence"),
-            getattr(item, "handoff_id", None), str(item),
-        )
-        if not any((
-            existing.get("queue_name"), existing.get("claim_sequence"),
-            getattr(existing.get("item"), "handoff_id", None),
-            str(existing.get("item")),
-        ) == identity for existing in claims):
-            claims.append(dict(claim))
+    with _core._codex_queue_pump_lock(sid):
+        with lock:
+            items = queue.setdefault(sid, [])
+            stable_id = (
+                getattr(item, "handoff_id", None)
+                or getattr(item, "pending_id", None)
+            )
+            if stable_id and any(
+                (
+                    getattr(existing, "handoff_id", None)
+                    or getattr(existing, "pending_id", None)
+                ) == stable_id
+                for existing in items
+            ):
+                already_present = True
+            else:
+                items.insert(
+                    min(max(int(claim.get("index") or 0), 0), len(items)), item,
+                )
+                already_present = False
+        with _pending_input_recovery_registry_lock:
+            claims = _pending_input_recovery_registry.setdefault(sid, [])
+            identity = (
+                claim.get("queue_name"), claim.get("claim_sequence"),
+                getattr(item, "handoff_id", None),
+                getattr(item, "pending_id", None), str(item),
+            )
+            if not any((
+                existing.get("queue_name"), existing.get("claim_sequence"),
+                getattr(existing.get("item"), "handoff_id", None),
+                getattr(existing.get("item"), "pending_id", None),
+                str(existing.get("item")),
+            ) == identity for existing in claims):
+                claims.append(dict(claim))
     return True
 
 
@@ -489,13 +569,20 @@ def _retry_pending_input_recovery(session_id):
     )
     if transaction.get("ok"):
         return True
-    all_journaled = all(
-        _core._write_pending_input_claim_journal(claim) == "journaled"
-        for claim in claims
-    )
-    if all_journaled:
-        with _core._codex_queue_pump_lock(session_id):
-            clear_registry()
+    journaled_claims = [
+        claim for claim in claims
+        if _core._write_pending_input_claim_journal(claim) == "journaled"
+    ]
+    if journaled_claims:
+        with _core._codex_queue_pump_lock(session_id), \
+             _pending_input_recovery_registry_lock:
+            current = _pending_input_recovery_registry.get(session_id) or []
+            completed_ids = {id(claim) for claim in journaled_claims}
+            kept = [claim for claim in current if id(claim) not in completed_ids]
+            if kept:
+                _pending_input_recovery_registry[session_id] = kept
+            else:
+                _pending_input_recovery_registry.pop(session_id, None)
         _core._recover_pending_input_claim_journals()
     return not _pending_input_recovery_blocked(session_id)
 
@@ -569,7 +656,9 @@ def _recover_pending_input_claim_journals():
                 text, handoff_id, handoff_path,
                 front=bool(payload.get("handoff_front")),
             )
-            if handoff_id else text
+            if handoff_id else _PendingInputEntry(
+                text, payload.get("pending_id") or payload.get("id")
+            )
         )
 
         def restore():
@@ -643,9 +732,9 @@ def _refresh_pending_inputs_for_session(session_id):
         return False
 
     resume_items = resume_data.get(session_id)
-    resume_items = list(resume_items) if isinstance(resume_items, list) else []
+    resume_items = _decode_pending_queue(resume_items) if isinstance(resume_items, list) else []
     terminal_items = terminal_data.get(session_id)
-    terminal_items = list(terminal_items) if isinstance(terminal_items, list) else []
+    terminal_items = _decode_pending_queue(terminal_items) if isinstance(terminal_items, list) else []
 
     front_handoffs = []
     back_handoffs = []
@@ -731,10 +820,17 @@ def _persist_pending_inputs_current(
             if payload is None:
                 return False
             for sid in affected:
-                resume_value = final[sid]["resume"]
+                resume_value = [
+                    encoded for encoded in (
+                        _serialize_pending_queue_item(item)
+                        for item in final[sid]["resume"]
+                    ) if encoded is not None
+                ]
                 terminal_value = [
-                    item for item in final[sid]["terminal"]
-                    if not isinstance(item, _PendingInputHandoff)
+                    encoded for encoded in (
+                        _serialize_pending_queue_item(item)
+                        for item in final[sid]["terminal"]
+                    ) if encoded is not None
                 ]
                 for field, value in (
                     ("resume_queue", resume_value),
@@ -883,6 +979,11 @@ def _apply_pending_input_operations(session_id, operations):
                 with queue_lock:
                     queue = queue_map.setdefault(session_id, [])
                     value = op.get("value")
+                    if (
+                        action in ("append_tail", "insert_front", "insert_before_matching")
+                        and not isinstance(value, (_PendingInputEntry, _PendingInputHandoff))
+                    ):
+                        value = _PendingInputEntry(value)
                     if action == "append_tail":
                         if not op.get("dedupe") or value not in queue:
                             queue.append(value)
@@ -932,6 +1033,8 @@ def _apply_pending_input_operations(session_id, operations):
                             matched = (
                                 getattr(item, "handoff_id", None) == match
                                 if op.get("identity") == "handoff_id"
+                                else getattr(item, "pending_id", None) == match
+                                if op.get("identity") == "pending_id"
                                 else str(item or "").strip() == str(match or "").strip()
                             )
                             if not matched:
@@ -1535,6 +1638,40 @@ def _consume_matching_pending_input(session_id, text):
     return 0
 
 
+def _snapshot_matching_pending_input_id(session_id, text):
+    clean = str(text or "").strip()
+    if not session_id or not clean:
+        return None
+    try:
+        with _pending_inputs_file_exclusive_lock():
+            payload = _read_pending_inputs_payload_unlocked(missing_is_empty=True)
+    except OSError:
+        return None
+    for field in ("resume_queue", "terminal_queue"):
+        for item in ((payload or {}).get(field) or {}).get(session_id, []):
+            if not isinstance(item, dict):
+                continue
+            if str(item.get("text") or "").strip() == clean and item.get("id"):
+                return str(item["id"])
+    return None
+
+
+def _consume_pending_input_id(session_id, pending_id):
+    if not session_id or not pending_id:
+        return 0
+    for field in ("resume", "terminal"):
+        transaction = _core._apply_pending_input_operations(session_id, [{
+            "field": field,
+            "action": "remove_matching",
+            "identity": "pending_id",
+            "match": str(pending_id),
+        }])
+        removed = ((transaction.get("value") or [None])[0])
+        if transaction.get("ok") and removed is not None:
+            return 1
+    return 0
+
+
 def _finalize_queued_steer_result(session_id, text, result):
     """Commit a queued-row Steer only when Codex confirmed delivery.
 
@@ -1782,7 +1919,11 @@ def _queue_terminal_input_unlocked(session_id, text, status=None, reason_hint=No
             ):
                 deduped = True
             else:
-                queue.append(text)
+                queue.append(
+                    text if isinstance(
+                        text, (_PendingInputEntry, _PendingInputHandoff)
+                    ) else _PendingInputEntry(text)
+                )
             return deduped, len(queue)
     transaction = _core._mutate_pending_inputs({session_id}, enqueue)
     if not transaction.get("ok"):

@@ -2472,6 +2472,7 @@ def _engine_bridge_status(session_id):
             status = _core._engine_bridge_status_local(engine, sid)
     status = dict(status or {})
     status["queued_messages"] = _bridge_pending_inputs(sid)
+    status["pending_input_recovery"] = _core._pending_input_recovery_status(sid)
     status["session_id"] = sid
     status["can_restart"] = not bool(status.get("other_active_session_ids"))
     if not status["can_restart"]:

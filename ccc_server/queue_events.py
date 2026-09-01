@@ -1000,7 +1000,7 @@ def _queue_codex_resume(session_id, text, pid=None, reason=None, *, only_if_pend
         # verifier report landing on a finished Codex thread) cannot pile up
         # duplicate queued copies that get re-injected repeatedly.
             if text not in queue:
-                queue.append(text)
+                queue.append(_core._PendingInputEntry(text))
                 _core._pending_resume_queue[session_id] = queue
             return True
 
@@ -1300,14 +1300,14 @@ def _resume_session_codex_native_delivery(
 def _codex_queued_steer_transaction(
     session_id, text, *, preserve_queued_steer, idempotency_key,
 ):
-    if not _core._retry_pending_input_recovery(session_id):
-        return {
-            "ok": False,
-            "code": "pending_input_recovery_pending",
-            "error": "queued input recovery must complete before delivery",
-        }
-    ownership = _core._codex_queue_pump_lock(session_id)
-    with ownership:
+    with _core._codex_queue_pump_lock(session_id):
+        if not _core._retry_pending_input_recovery(session_id):
+            return {
+                "ok": False,
+                "code": "pending_input_recovery_pending",
+                "error": "queued input recovery must complete before delivery",
+                **_core._pending_input_recovery_status(session_id),
+            }
         claim = _core._claim_matching_pending_input(session_id, text)
         if isinstance(claim, dict) and claim.get("code"):
             result = dict(claim)
@@ -1452,15 +1452,17 @@ def _codex_restore_or_journal_claim(claim):
 
 
 def _codex_queued_delivery_transaction(session_id, *, idempotency_key=None):
-    if not _core._retry_pending_input_recovery(session_id):
-        return {
-            "ok": False,
-            "code": "pending_input_recovery_pending",
-            "error": "queued input recovery must complete before delivery",
-        }
-    claim_result = _core._apply_pending_input_operations(session_id, [{
-        "field": "resume", "action": "pop_head_claim",
-    }])
+    with _core._codex_queue_pump_lock(session_id):
+        if not _core._retry_pending_input_recovery(session_id):
+            return {
+                "ok": False,
+                "code": "pending_input_recovery_pending",
+                "error": "queued input recovery must complete before delivery",
+                **_core._pending_input_recovery_status(session_id),
+            }
+        claim_result = _core._apply_pending_input_operations(session_id, [{
+            "field": "resume", "action": "pop_head_claim",
+        }])
     if not claim_result.get("ok"):
         return {
             "ok": False,

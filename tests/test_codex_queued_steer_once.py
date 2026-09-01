@@ -458,9 +458,9 @@ def test_claim_suppresses_only_the_matching_native_steer_turn(
     )
 
     assert result["queued_consumed"] == 1
-    assert server._pending_resume_queue[sid] == ["last"]
+    assert server._pending_resume_queue[sid] == ["target", "last"]
     _notify_user_message(sid, "target", turn_id="claimed-turn")
-    assert server._pending_resume_queue[sid] == ["last"]
+    assert server._pending_resume_queue[sid] == ["target", "last"]
 
 
 def test_unbound_claim_does_not_suppress_resume_notification_before_failure(
@@ -493,7 +493,7 @@ def test_unbound_claim_does_not_suppress_resume_notification_before_failure(
     assert not result["ok"]
     assert result["code"] == "codex_steer_failed"
     assert result["queued_preserved"]
-    assert server._pending_resume_queue[sid] == ["target", "last"]
+    assert server._pending_resume_queue[sid] == ["target", "target", "last"]
 
 
 def test_matching_delivery_ack_commits_claim_before_failed_rpc_response(
@@ -633,7 +633,7 @@ def test_exception_restores_claim_and_does_not_suppress_a_later_ack(router_env):
 
     assert server._pending_resume_queue[sid] == ["first", "target", "last"]
     _notify_user_message(sid, "target", turn_id="later-turn")
-    assert server._pending_resume_queue[sid] == ["first", "last"]
+    assert server._pending_resume_queue[sid] == ["first", "target", "last"]
 
 
 def test_legacy_steer_claims_matching_queue_copy(router_env):
@@ -985,7 +985,10 @@ def test_two_process_session_rmw_neither_resurrects_nor_loses_rows(tmp_path):
     assert all(outcome[2] is True for outcome in outcomes)
     payload = json.loads(pending_file.read_text())
     assert "sid-a" not in payload["resume_queue"]
-    assert payload["resume_queue"]["sid-b"] == ["new-b"]
+    assert [item["text"] for item in payload["resume_queue"]["sid-b"]] == [
+        "new-b",
+    ]
+    assert payload["resume_queue"]["sid-b"][0]["id"]
     assert payload["devin_steers"] == {"other-sid": "preserve-steer"}
     assert payload["auto_resume_opt_in"] == {
         "sid-a": True,
@@ -1036,7 +1039,9 @@ def test_stale_same_session_enqueue_cannot_resurrect_worker_claim(tmp_path):
     assert released.is_set()
     assert all(outcome[0] != "error" for outcome in outcomes), outcomes
     payload = json.loads(pending_file.read_text())
-    assert payload["resume_queue"][sid] == ["keep", "new-row"]
+    assert [item["text"] for item in payload["resume_queue"][sid]] == [
+        "keep", "new-row",
+    ]
     assert claimant.exitcode == 0
     assert stale_enqueue.exitcode == 0
 
@@ -1515,9 +1520,10 @@ def test_mutation_exception_rolls_back_memory_and_disk(monkeypatch, tmp_path):
     assert not result["ok"]
     assert "value" not in result
     assert server._pending_resume_queue[sid] == ["first", "second"]
-    assert json.loads(pending_file.read_text())["resume_queue"][sid] == [
-        "first", "second",
-    ]
+    assert [
+        item["text"]
+        for item in json.loads(pending_file.read_text())["resume_queue"][sid]
+    ] == ["first", "second"]
 
 
 def test_persist_failure_rolls_back_memory_and_hides_value(monkeypatch, tmp_path):
@@ -1575,9 +1581,11 @@ def test_codex_pump_delivery_failure_restores_exact_claim(monkeypatch, tmp_path)
 
     assert not result["ok"]
     assert server._pending_resume_queue[sid] == ["target", "target", "next"]
-    assert json.loads((tmp_path / "pending.json").read_text())["resume_queue"][sid] == [
-        "target", "target", "next",
-    ]
+    assert [
+        item["text"] for item in json.loads(
+            (tmp_path / "pending.json").read_text()
+        )["resume_queue"][sid]
+    ] == ["target", "target", "next"]
 
 
 def test_devin_clear_if_matching_reports_truthful_boolean(monkeypatch, tmp_path):
