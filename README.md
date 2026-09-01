@@ -287,6 +287,24 @@ Automation access. Download the [latest release](https://github.com/amirfish1/cl
 
 If you'd rather clone first and run the script directly, pass the channel as a flag instead: `./scripts/install.sh --from=readme`.
 
+### The `ccc` CLI
+
+Once CCC is running, the repo-root `ccc` script answers "what sessions exist
+and what are they doing" in one command — no dashboard needed:
+
+```bash
+ccc sessions              # live census: state, age, engine, repo, name
+ccc list-sessions --since 5h   # only sessions active in the window
+ccc sessions --json       # machine-readable census
+```
+
+It finds the server via `~/.claude/command-center/port.txt` (override with
+`--server` or `$CCC_SERVER`) and shows every live session — including spawned
+children (indented under their parent) and sessions the dashboard has no
+conversation row for. The installer links it to `~/.local/bin/ccc`; from a
+checkout you can also run `./ccc`. With no subcommand, `ccc` passes through
+to `run.sh` (the same launching behaviour as the Homebrew `ccc`).
+
 ### WatchTower comes with it
 
 [WatchTower](https://github.com/amirfish1/watchtower) (`wt`) is CCC's queue

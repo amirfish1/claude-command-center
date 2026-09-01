@@ -1,0 +1,191 @@
+#!/usr/bin/env python3
+# Copyright (c) 2026 Amir Fish. All rights reserved.
+# SPDX-License-Identifier: LicenseRef-CCC-Software-License
+"""ccc — command-line client for a running Claude Command Center server.
+
+Answers "what sessions exist and what are they doing right now" in one
+command, without opening the dashboard:
+
+    ccc sessions              # live census table (alias: list-sessions)
+    ccc sessions --since 5h   # only sessions active within the window
+    ccc sessions --json       # raw census envelope (agent-consumable)
+
+Server discovery: --server URL > $CCC_SERVER > the port.txt the server
+publishes at ~/.claude/command-center/port.txt (see write_port_file in
+ccc_server/fleet_jobs.py). Stdlib-only by design, like server.py.
+"""
+
+import argparse
+import json
+import os
+import re
+import sys
+import urllib.error
+import urllib.request
+
+PORT_FILE = os.path.expanduser("~/.claude/command-center/port.txt")
+
+SUBCOMMANDS = ("sessions", "list-sessions")
+
+_SINCE_RE = re.compile(r"^(\d+)\s*([smhd])$", re.IGNORECASE)
+_SINCE_UNIT_S = {"s": 1, "m": 60, "h": 3600, "d": 86400}
+
+
+def _resolve_server(args_server):
+    if args_server:
+        return args_server.rstrip("/")
+    env = (os.environ.get("CCC_SERVER") or "").strip()
+    if env:
+        return env.rstrip("/")
+    try:
+        with open(PORT_FILE) as f:
+            url = f.read().strip()
+    except OSError:
+        return None
+    return url.rstrip("/") if url else None
+
+
+def _get_json(base, path):
+    req = urllib.request.Request(base + path, headers={"Accept": "application/json"})
+    with urllib.request.urlopen(req, timeout=10) as resp:
+        return json.loads(resp.read().decode("utf-8"))
+
+
+def _parse_since(text):
+    m = _SINCE_RE.match((text or "").strip())
+    if not m:
+        raise argparse.ArgumentTypeError(f"--since expects like 30s/15m/5h/2d, got {text!r}")
+    return int(m.group(1)) * _SINCE_UNIT_S[m.group(2).lower()]
+
+
+def _fmt_age(age_s):
+    if age_s is None:
+        return "?"
+    age_s = int(age_s)
+    if age_s < 60:
+        return f"{age_s}s"
+    if age_s < 3600:
+        return f"{age_s // 60}m"
+    if age_s < 86400:
+        return f"{age_s // 3600}h{age_s % 3600 // 60:02d}m"
+    return f"{age_s // 86400}d{age_s % 86400 // 3600:02d}h"
+
+
+def cmd_sessions(args):
+    base = _resolve_server(args.server)
+    if not base:
+        print(
+            "ccc: no server found — is CCC running? "
+            f"(looked for --server, $CCC_SERVER, {PORT_FILE})",
+            file=sys.stderr,
+        )
+        return 1
+    try:
+        census_path = "/api/sessions/census"
+        if args.since is not None:
+            # Server widens the candidate pool with recently-ended sessions in
+            # the window; the client-side filter below then applies uniformly.
+            census_path += f"?since={args.since}"
+        payload = _get_json(base, census_path)
+    except urllib.error.URLError as e:
+        print(f"ccc: cannot reach CCC at {base} ({e}) — is CCC running?", file=sys.stderr)
+        return 1
+    sessions = list(payload.get("sessions") or [])
+    if args.since is not None:
+        sessions = [
+            s for s in sessions
+            if s.get("last_event_age_s") is not None and s["last_event_age_s"] <= args.since
+        ]
+    if args.json:
+        out = dict(payload)
+        out["sessions"] = sessions
+        print(json.dumps(out, indent=2))
+        return 0
+
+    n_helpers = sum(1 for s in sessions if s.get("helper"))
+    if not args.all:
+        sessions = [s for s in sessions if not s.get("helper")]
+
+    children_of = {}
+    for s in sessions:
+        parent = s.get("parent_session_id") or ""
+        if parent:
+            children_of.setdefault(parent, []).append(s)
+    sids = {s.get("session_id") for s in sessions}
+    roots = [s for s in sessions if (s.get("parent_session_id") or "") not in sids]
+
+    def _row(s, depth):
+        flags = ""
+        if s.get("needs_approval"):
+            flags += " !approval"
+        if s.get("question_waiting"):
+            flags += " ?question"
+        tool = s.get("pending_tool") or "-"
+        name = (s.get("name") or "(no conversation row)")[:40]
+        indent = "  " * depth + ("↳ " if depth else "")
+        print(
+            f"{s.get('state') or '?':<10} {_fmt_age(s.get('last_event_age_s')):>7} "
+            f"{(s.get('engine') or '?'):<7} {(s.get('model') or '?')[:18]:<18} "
+            f"{(s.get('effort') or '?'):<5} {s.get('session_id') or '?'}  "
+            f"{s.get('repo_path') or '?'}  {indent}{name}  {tool}{flags}"
+        )
+
+    def _walk(s, depth):
+        _row(s, depth)
+        for child in sorted(children_of.get(s.get("session_id")) or (),
+                            key=lambda c: c.get("last_event_age_s") or 0):
+            _walk(child, depth + 1)
+
+    for s in roots:
+        _walk(s, 0)
+    n = len(sessions)
+    n_live = sum(1 for s in sessions if s.get("state") != "ended")
+    n_ended = n - n_live
+    n_orphan = sum(1 for s in sessions if not s.get("has_conversation_row"))
+    counts = f"{n_live} live"
+    if n_ended:
+        counts += f" + {n_ended} ended"
+    suffix = f", {n_orphan} with no conversation row" if n_orphan else ""
+    print(f"\n{counts} session{'s' if n != 1 else ''}{suffix}")
+    if n_helpers and not args.all:
+        print(f"({n_helpers} CCC helper session{'s' if n_helpers != 1 else ''} hidden — auto-title bots; --all to show)")
+    return 0
+
+
+def main(argv=None):
+    argv = list(sys.argv[1:] if argv is None else argv)
+    # `ccc` is also the Homebrew launcher's name (foreground server /
+    # --install-service). Keep one name for both roles: known query
+    # subcommands run the client below; anything else (no args, unknown
+    # flags) passes through to ./run.sh so `ccc` still launches CCC.
+    if argv and argv[0] not in SUBCOMMANDS and argv[0] not in ("-h", "--help", "--server"):
+        run_sh = os.path.join(os.path.dirname(os.path.realpath(__file__)), "run.sh")
+        os.execv(run_sh, [run_sh] + argv)
+    if not argv:
+        run_sh = os.path.join(os.path.dirname(os.path.realpath(__file__)), "run.sh")
+        os.execv(run_sh, [run_sh])
+
+    parser = argparse.ArgumentParser(
+        prog="ccc",
+        description="CLI for a running Claude Command Center server. "
+                    "(No subcommand → launches the server via run.sh.)",
+    )
+    parser.add_argument("--server", help="CCC base URL (default: $CCC_SERVER or port.txt)")
+    sub = parser.add_subparsers(dest="command", required=True)
+
+    for name in SUBCOMMANDS:
+        p = sub.add_parser(name, help="live session census (state, age, engine, repo, name)")
+        p.add_argument("--since", type=_parse_since,
+                       help="show sessions (live + recently-ended) with activity in "
+                            "the window, e.g. 5h / 30m / 2d")
+        p.add_argument("--all", action="store_true",
+                       help="include CCC helper sessions (auto-title bots), hidden by default")
+        p.add_argument("--json", action="store_true", help="raw census JSON")
+        p.set_defaults(func=cmd_sessions)
+
+    args = parser.parse_args(argv)
+    return args.func(args)
+
+
+if __name__ == "__main__":
+    sys.exit(main())

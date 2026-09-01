@@ -10010,6 +10010,264 @@ def _sessions_state_snapshot():
     return out
 
 
+_CENSUS_IDENTITY_CACHE_LOCK = threading.Lock()
+_CENSUS_IDENTITY_CACHE = {"token": None, "map": {}}
+
+
+def _census_identity_map():
+    """sid → lightweight identity (name/engine/model/effort/repo/parent).
+
+    Sources, lowest priority first so later ones override: the on-disk spawn
+    registry, then the archive response cache. The archive read itself is
+    hit-only — census never blocks on a build — but when the cache is
+    completely cold (fresh server, nobody opened "All repos" yet) it kicks
+    the same single-flight background refresh the UI uses, so the NEXT census
+    call has full identity instead of staying blind until someone opens the
+    dashboard. Memoized on the cache entries' (key, cached_at) plus the
+    registry file mtime, so polling census never re-walks the full
+    conversation archive (con_0496274e58: no uncached O(all-conversations)
+    work on session-state paths)."""
+    try:
+        registry_mtime = SPAWNED_PIDS_FILE.stat().st_mtime
+    except (OSError, NameError):
+        registry_mtime = None
+    _load_archive_response_cache()
+    with _ARCHIVE_RESPONSE_CACHE_LOCK:
+        cache_empty = not _ARCHIVE_RESPONSE_CACHE
+        token = (registry_mtime, tuple(sorted(
+            (key, float((entry or {}).get("cached_at") or 0))
+            for key, entry in _ARCHIVE_RESPONSE_CACHE.items()
+        )))
+    if cache_empty:
+        try:
+            cold_key = _archive_response_cache_key(
+                include_prs=False, resolve_pr_states=False,
+                resolve_effective=False, resolve_worktree_dirty=False,
+            )
+            _archive_refresh_response_cache_async(cold_key, {
+                "include_prs": False, "resolve_pr_states": False,
+                "resolve_effective": False, "resolve_worktree_dirty": False,
+            })
+        except Exception:
+            pass
+    with _CENSUS_IDENTITY_CACHE_LOCK:
+        if _CENSUS_IDENTITY_CACHE["token"] == token:
+            return _CENSUS_IDENTITY_CACHE["map"]
+    out = {}
+    for entry in _load_spawn_registry():
+        if not isinstance(entry, dict):
+            continue
+        ident = {
+            "name": entry.get("name") or entry.get("command_summary") or None,
+            "engine": entry.get("engine") or None,
+            "model": entry.get("model") or None,
+            "effort": entry.get("effort") or entry.get("reasoning_effort") or None,
+            "repo_path": entry.get("repo_path") or entry.get("cwd") or None,
+            "parent_session_id": entry.get("parent_session_id") or None,
+            "has_conversation_row": False,
+        }
+        for key in ("session_id", "resumed_sid"):
+            sid = (entry.get(key) or "").strip()
+            if sid:
+                out.setdefault(sid, ident)
+    with _ARCHIVE_RESPONSE_CACHE_LOCK:
+        snapshots = [
+            list((entry or {}).get("conversations") or [])
+            for entry in _ARCHIVE_RESPONSE_CACHE.values()
+        ]
+    for rows in snapshots:
+        for row in rows:
+            if not isinstance(row, dict):
+                continue
+            sid = (row.get("session_id") or row.get("id") or "").strip()
+            if not sid:
+                continue
+            existing = out.get(sid) or {}
+            if existing.get("has_conversation_row"):
+                continue
+            name = row.get("display_name") or row.get("first_message") or existing.get("name")
+            if isinstance(name, str):
+                name = " ".join(name.split())[:120] or None
+            else:
+                name = existing.get("name")
+            out[sid] = {
+                "name": name,
+                "engine": row.get("engine") or existing.get("engine"),
+                "model": row.get("model") or existing.get("model"),
+                "effort": row.get("reasoning_effort") or row.get("effort") or existing.get("effort"),
+                "repo_path": row.get("session_cwd") or existing.get("repo_path"),
+                "parent_session_id": row.get("parent_session_id") or existing.get("parent_session_id"),
+                "has_conversation_row": True,
+                "mtime": row.get("mtime") or row.get("modified") or None,
+            }
+    with _CENSUS_IDENTITY_CACHE_LOCK:
+        _CENSUS_IDENTITY_CACHE["token"] = token
+        _CENSUS_IDENTITY_CACHE["map"] = out
+    return out
+
+
+_CENSUS_HELPER_PROBE_CACHE = {}  # sid -> (is_helper, first_message) — stable per sid
+
+
+def _census_probe_helper_session(sid):
+    """Classify a census-rowless live session as a CCC generated helper.
+
+    Live discovery (sidecar/resume-args) sees CCC's own throwaway utility
+    sessions — auto-title bots (`claude -p` haiku spawns in the scratch
+    project dir) — but the conversation archive deliberately skips them
+    (_is_generated_helper_session), so they show up as identity-less "?"
+    rows. Probe the transcript head once (first ~20 lines, same pattern as
+    the archive head-parse) and cache the verdict forever: a sid's helper
+    classification never changes. Candidacy-gated — called only for live
+    sids with no other identity, so cost is O(rowless live), never a bulk
+    transcript scan (con_0496274e58)."""
+    if sid in _CENSUS_HELPER_PROBE_CACHE:
+        return _CENSUS_HELPER_PROBE_CACHE[sid]
+    verdict = (False, None)
+    try:
+        for proj in Path(_SYS_PROJECTS_DIR).iterdir():
+            cand = proj / f"{sid}.jsonl"
+            if not cand.is_file():
+                continue
+            first_message = ""
+            try:
+                with cand.open("r") as fh:
+                    for i, line in enumerate(fh):
+                        if i >= 20:
+                            break
+                        line = line.strip()
+                        if not line:
+                            continue
+                        try:
+                            ev = json.loads(line)
+                        except json.JSONDecodeError:
+                            continue
+                        text = _extract_user_prompt_text(ev)
+                        if text:
+                            first_message = text
+                            break
+            except (OSError, UnicodeDecodeError):
+                pass
+            verdict = (_is_generated_helper_session(first_message), first_message or None)
+            break
+    except OSError:
+        pass
+    _CENSUS_HELPER_PROBE_CACHE[sid] = verdict
+    return verdict
+
+
+def build_session_census(since_s=None):
+    """One-call live census: state + identity + lineage for every live session.
+
+    Answers "what sessions exist and what are they doing right now" — the
+    question the dashboard answers by stitching live-activity + the full
+    conversation archive + per-session family lookups. Built only from
+    cached/coalesced structures: no archive build, no transcript scan. `state`
+    is the canonical four-state label via `_stamp_session_state`
+    (ended/waiting/working/idle, same as the SSE stream). Rows are sorted by
+    most recent activity first; sessions with no usable timestamp sort last
+    with last_event_age_s null (never a garbage age).
+
+    With `since_s` (seconds), also merges recently-ENDED archive sessions
+    whose last activity falls inside the window (state "ended") — so
+    `ccc sessions --since 10h` answers "everything active in the last 10h",
+    not just "the live subset of it". Live rows always pass through."""
+    try:
+        activity = build_live_sessions_activity() or {}
+    except Exception:
+        activity = {}
+    try:
+        identity = _census_identity_map()
+    except Exception:
+        identity = {}
+    now = time.time()
+    children_of = {}
+    for sid in activity:
+        parent = (identity.get(sid) or {}).get("parent_session_id") or ""
+        if parent:
+            children_of.setdefault(parent, []).append(sid)
+    rows = []
+    for sid, fields in activity.items():
+        entry = dict(fields or {})
+        entry["session_id"] = sid
+        try:
+            state = _stamp_session_state(entry)
+        except Exception:
+            state = "idle" if entry.get("is_live") else "ended"
+        try:
+            ts = float(entry.get("sidecar_ts") or 0)
+        except (TypeError, ValueError):
+            ts = 0.0
+        age = None if ts <= 0 or ts > now + 60 else max(0.0, now - ts)
+        ident = identity.get(sid) or {}
+        helper = False
+        if not ident:
+            helper, helper_msg = _census_probe_helper_session(sid)
+            if helper:
+                ident = {
+                    "engine": "claude",
+                    "name": "[helper] " + ((helper_msg or "auto-title")[:60]),
+                    "repo_path": None,
+                    "parent_session_id": None,
+                    "has_conversation_row": False,
+                }
+        parent = ident.get("parent_session_id") or None
+        rows.append({
+            "session_id": sid,
+            "state": state,
+            "engine": ident.get("engine"),
+            "model": ident.get("model"),
+            "effort": ident.get("effort"),
+            "name": ident.get("name"),
+            "repo_path": ident.get("repo_path"),
+            "parent_session_id": parent,
+            "children": sorted(children_of.get(sid) or ()),
+            "last_event_age_s": age,
+            "pending_tool": entry.get("pending_tool") or entry.get("sidecar_tool") or None,
+            "question_waiting": bool(entry.get("question_waiting")),
+            "needs_approval": bool(entry.get("needs_approval")),
+            "has_conversation_row": bool(ident.get("has_conversation_row")),
+            "helper": helper,
+        })
+    if since_s is not None:
+        try:
+            since_s = float(since_s)
+        except (TypeError, ValueError):
+            since_s = None
+    if since_s is not None and since_s >= 0:
+        for sid, ident in identity.items():
+            if sid in activity or not ident.get("has_conversation_row"):
+                continue
+            try:
+                mtime = float(ident.get("mtime") or 0)
+            except (TypeError, ValueError):
+                continue
+            if mtime <= 0 or (now - mtime) > since_s:
+                continue
+            rows.append({
+                "session_id": sid,
+                "state": "ended",
+                "engine": ident.get("engine"),
+                "model": ident.get("model"),
+                "effort": ident.get("effort"),
+                "name": ident.get("name"),
+                "repo_path": ident.get("repo_path"),
+                "parent_session_id": ident.get("parent_session_id") or None,
+                "children": [],
+                "last_event_age_s": max(0.0, now - mtime),
+                "pending_tool": None,
+                "question_waiting": False,
+                "needs_approval": False,
+                "has_conversation_row": True,
+                "helper": False,
+            })
+    rows.sort(key=lambda r: (
+        r["last_event_age_s"] is None,
+        r["last_event_age_s"] if r["last_event_age_s"] is not None else 0.0,
+    ))
+    return {"ok": True, "now": now, "sessions": rows}
+
+
 def _decode_project_slug(slug):
     """Best-effort reverse of _encode_project_slug. The encoding is lossy
     (every non-alphanumeric becomes `-`), so a single slug can map to many
@@ -22747,6 +23005,21 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                     if str(entry.get("parent_session_id") or "").strip().startswith(parent)
                 ]
                 self.send_json({"ok": True, "parent": parent, "count": len(children), "children": children})
+        elif path == "/api/sessions/census":
+            # One-call live census (built for the `ccc` CLI): state + identity
+            # + lineage for every live session, joined server-side from cached
+            # structures only — no archive build, no transcript scan. Answers
+            # "what sessions exist and what are they doing" without the
+            # live-activity + full-archive + per-session family stitch.
+            # ?since=<seconds> also merges recently-ended archive sessions
+            # whose last activity is inside the window (state "ended").
+            qs = urllib.parse.parse_qs(parsed.query)
+            since_raw = (qs.get("since", [""])[0] or "").strip()
+            try:
+                since_s = float(since_raw) if since_raw else None
+            except ValueError:
+                since_s = None
+            self.send_json(build_session_census(since_s=since_s))
         elif path == "/api/sessions/family":
             # Full family tree from the unified SessionGraph. Returns a nested
             # dict rooted at the topmost ancestor (orchestrator), with all

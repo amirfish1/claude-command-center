@@ -90,6 +90,7 @@ Read `SECURITY.md` before changing anything about network binding, origin checks
 ## Conventions
 
 - `server.py` is stdlib-only on purpose — no pip dependencies at runtime. Don't import `requests`, `pydantic`, `fastapi`, etc. `urllib` + `http.server` + `json` cover it.
+- `ccc` (repo root) is the stdlib-only CLI for a running server — `ccc sessions` reads the live census from `GET /api/sessions/census`, finding the server via `--server` / `$CCC_SERVER` / `~/.claude/command-center/port.txt`. With no known subcommand it passes through to `run.sh` (same name/behaviour as the Homebrew launcher). `scripts/install.sh` symlinks it to `~/.local/bin/ccc`. Same stdlib-only rule as `server.py`.
 - `static/index.html` is a single-file app by design (no bundler, no npm). Inline CSS/JS is expected. Don't split it into modules without a strong reason.
 - In zsh, lowercase `path` is a special array tied directly to `PATH`. Never use
   `path` as a scratch, local, or loop variable in shell diagnostics; use a
@@ -179,7 +180,7 @@ Don't mock external systems (`gh`, agent CLIs, `pkood`) in the smoke test. The s
 <!-- HUNCH:START — auto-generated, do not edit by hand -->
 ## 🧠 Hunch (Engineering Memory)
 
-This repo has **Hunch** — a curated graph of *why* the code is the way it is (decisions, bug history, invariants). It currently holds **30 decisions, 0 bugs, 3 constraints, 12 components, 0 policies, 1 open findings**.
+This repo has **Hunch** — a curated graph of *why* the code is the way it is (decisions, bug history, invariants). It currently holds **30 decisions, 0 bugs, 8 constraints, 12 components, 0 policies, 3 open findings**.
 
 **Consult Hunch via the `hunch_*` MCP tools — pick by MOMENT, not from memory:**
 
@@ -217,9 +218,14 @@ This repo has **Hunch** — a curated graph of *why* the code is the way it is (
 - `hunch_timeline(target)` — decision history when investigating how something evolved.
 
 ### ⛔ Top invariants (do not break)
+- **[warning]** Never spawn a subprocess per row and never do O(all sessions/conversations) work uncached on a path that scans ~/.claude/projects or session state; gate by candidacy (recent-mtime window), cache by (mtime, size) persisted to disk, batch subprocess calls into one _(scope: ccc_server/ask.py; con_0496274e58)_
 - **[warning]** server.py changes require restarting BOTH the dashboard (com.github.claude-command-center) AND the worker (com.github.claude-command-center.worker), never just the dashboard _(scope: server.py; con_2cc63a5abf)_
+- **[warning]** When bounding a headless `claude -p` subprocess to a read-only toolset, `--allowedTools` alone does NOT restrict the toolset — you must also pass `--disallowedTools` to actually block Bash/Write/Edit/etc; `--allowedTools "Read,Grep,Glob"` combined with `--permission-mode dontAsk` still let the model run Bash successfully in a direct empirical test _(scope: **; con_418e0377d4)_
 - **[warning]** Never spawn a subprocess per row and never do O(all sessions/conversations) work uncached on a path that scans ~/.claude/projects or session state; gate by candidacy, cache by (mtime, size), batch subprocess calls _(scope: server.py; con_627861dec9)_
+- **[warning]** Never git add -A, git add ., or git commit -a in this repo; stage by explicit path and commit with git commit --only, and for partial-file staging (git apply --cached / git add -p) commit immediately after with no other commands in between _(scope: **; con_9ff65026e6)_
 - **[warning]** Never `git add -A`, `git add .`, or `git commit -a` in this repo; stage by explicit path and commit with `git commit --only <paths>` _(scope: **; con_db5f0fc0be)_
+- **[warning]** Never add a manual refresh button to fix UI staleness in CCC; fix the staleness at its source with auto-refresh instead _(scope: **; con_e3a02ac292)_
+- **[advisory]** Fix broken infra/tooling (a script, a launchd job, a missing dependency) the same turn you find it — don't ask the user first and don't just report it _(scope: **; con_cc564ad105)_
 
 _Hunch updates itself from commits and test failures. Records carry provenance + confidence; treat low-confidence items as advisory._
 <!-- HUNCH:END -->
