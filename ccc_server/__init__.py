@@ -22,16 +22,33 @@ class _CoreProxy:
     resolves against sys.modules["server"] on every call, so it survives
     the test suite's server-module reloads and sees monkeypatched
     attributes either way.
+
+    During the test suite's pop-and-reimport of "server" there is a wide
+    window where the fresh module has not yet run `_adopt_ccc_module` for
+    the subsystem that owns a name (adoption happens ~20k lines into
+    server.py). Background threads spawned by the previous server instance
+    (queue pumps, rollout watchers) that touch `_core.X` in that window
+    used to die on AttributeError. When "server" lacks the name (or is
+    popped entirely), fall back to the already-imported ccc_server.*
+    submodule that defines it — `_adopt_ccc_module` rebinds server to the
+    very same object once import catches up, and monkeypatches on server
+    still win on the primary path.
     """
 
     __slots__ = ()
 
     def __getattr__(self, name):
         mod = _sys.modules.get("server")
-        if mod is None:
-            # e.g. atexit callbacks after the test suite popped the module
-            raise AttributeError(name)
-        return getattr(mod, name)
+        if mod is not None:
+            try:
+                return getattr(mod, name)
+            except AttributeError:
+                pass  # server mid-reimport; try the owning submodule
+        for full, sub in list(_sys.modules.items()):
+            if full.startswith("ccc_server.") and hasattr(sub, name):
+                return getattr(sub, name)
+        # e.g. atexit callbacks after the test suite popped every module
+        raise AttributeError(name)
 
     def __setattr__(self, name, value):
         setattr(_sys.modules["server"], name, value)
