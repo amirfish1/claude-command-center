@@ -123,22 +123,33 @@ def test_successful_explicit_queued_steer_claims_before_delivery(router_env):
 
 @pytest.mark.parametrize("notification_timing", ["before_response", "after_response"])
 def test_successful_claim_suppresses_its_real_delivery_callback(
-    router_env, notification_timing,
+    router_env, monkeypatch, notification_timing,
 ):
     sid = f"steer-callback-{notification_timing}"
     server._pending_resume_queue[sid] = ["target", "target", "last"]
 
-    def deliver(*args, **kwargs):
-        if notification_timing == "before_response":
-            _notify_user_message(sid, "target")
-        return {"ok": True, "via": "codex-steer"}
+    def request(method, params=None, timeout=20):
+        if method == "thread/resume":
+            return {"result": {"thread": {
+                "id": sid,
+                "status": {"type": "active"},
+                "turns": [{"id": "claimed-turn", "status": "inProgress"}],
+            }}}
+        if method == "turn/steer":
+            if notification_timing == "before_response":
+                _notify_user_message(sid, "target", turn_id="claimed-turn")
+            return {"result": {"turnId": "claimed-turn"}}
+        raise AssertionError(f"unexpected app-server method: {method}")
 
-    router_env.resume.side_effect = deliver
+    monkeypatch.setattr(server, "_codex_app_server_request", request)
+    router_env.resume.side_effect = lambda session_id, text, **kwargs: (
+        server._codex_steer_via_app_server(session_id, text, cwd="/tmp")
+    )
     result = server._inject_text_into_session_router(
         sid, "target", mode="steer", preserve_queued_steer=True,
     )
     if notification_timing == "after_response":
-        _notify_user_message(sid, "target")
+        _notify_user_message(sid, "target", turn_id="claimed-turn")
 
     assert result["queued_consumed"] == 1
     assert server._pending_resume_queue[sid] == ["target", "last"]
@@ -175,6 +186,39 @@ def test_claim_suppresses_only_the_matching_native_steer_turn(
     assert server._pending_resume_queue[sid] == ["last"]
     _notify_user_message(sid, "target", turn_id="claimed-turn")
     assert server._pending_resume_queue[sid] == ["last"]
+
+
+def test_unbound_claim_does_not_suppress_resume_notification_before_failure(
+    router_env, monkeypatch,
+):
+    sid = "steer-callback-before-bind"
+    server._pending_resume_queue[sid] = ["target", "target", "last"]
+
+    def request(method, params=None, timeout=20):
+        if method == "thread/resume":
+            _notify_user_message(sid, "target", turn_id="other-turn")
+            return {"result": {"thread": {
+                "id": sid,
+                "status": {"type": "active"},
+                "turns": [{"id": "claimed-turn", "status": "inProgress"}],
+            }}}
+        if method == "turn/steer":
+            return {"error": {"message": "steer rejected"}}
+        raise AssertionError(f"unexpected app-server method: {method}")
+
+    monkeypatch.setattr(server, "_codex_app_server_request", request)
+    router_env.resume.side_effect = lambda session_id, text, **kwargs: (
+        server._codex_steer_via_app_server(session_id, text, cwd="/tmp")
+    )
+
+    result = server._inject_text_into_session_router(
+        sid, "target", mode="steer", preserve_queued_steer=True,
+    )
+
+    assert not result["ok"]
+    assert result["code"] == "codex_steer_failed"
+    assert result["queued_preserved"]
+    assert server._pending_resume_queue[sid] == ["target", "last"]
 
 
 def test_failed_queued_steer_restores_original_fifo_position(router_env):

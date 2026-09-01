@@ -2076,7 +2076,7 @@ def _begin_codex_queued_steer_ack_suppression(session_id, text):
         _prune_codex_queued_steer_acks_unlocked(now)
         _CODEX_QUEUED_STEER_ACK_SUPPRESSIONS.setdefault(key, []).append({
             "token_id": token_id,
-            "state": "pending",
+            "state": "unbound",
             "acknowledged": False,
             "created_at": now,
             "expires_at": now + _CODEX_QUEUED_STEER_ACK_TTL_S,
@@ -2100,7 +2100,7 @@ def _finish_codex_queued_steer_ack_suppression(token, delivered):
         if entry is None:
             return False
         acknowledged = bool(entry.get("acknowledged"))
-        if not delivered or acknowledged:
+        if not delivered or acknowledged or entry.get("state") == "unbound":
             _remove_codex_queued_steer_ack_unlocked(key, token_id)
         else:
             entry["state"] = "committed"
@@ -2118,9 +2118,10 @@ def _bind_codex_queued_steer_ack_suppression(session_id, text, turn_id):
     with _CODEX_QUEUED_STEER_ACK_LOCK:
         _prune_codex_queued_steer_acks_unlocked(now)
         for entry in _CODEX_QUEUED_STEER_ACK_SUPPRESSIONS.get(key) or []:
-            if entry.get("state") != "pending" or entry.get("turn_id"):
+            if entry.get("state") != "unbound" or entry.get("turn_id"):
                 continue
             entry["turn_id"] = str(turn_id)
+            entry["state"] = "pending"
             return True
     return False
 
@@ -2142,8 +2143,10 @@ def _suppress_codex_queued_steer_delivery_ack(session_id, text, turn_id=None):
         for entry in entries:
             if entry.get("acknowledged"):
                 continue
+            if entry.get("state") not in ("pending", "committed"):
+                continue
             expected_turn_id = str(entry.get("turn_id") or "")
-            if expected_turn_id and expected_turn_id != str(turn_id or ""):
+            if not expected_turn_id or expected_turn_id != str(turn_id or ""):
                 continue
             if entry.get("state") == "pending":
                 entry["acknowledged"] = True
