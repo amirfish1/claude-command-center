@@ -593,6 +593,63 @@ class HandleAskTest(unittest.TestCase):
         self.assertFalse(body["tools_used"])
         self.assertEqual(body["answer"], "fallback answer")
 
+    def test_generic_question_with_no_hits_escalates_to_tool_access(self):
+        """Not a trigger or file question — e.g. "who spawned this
+        session?" — but the ordinary session-hit search found nothing, so
+        it still gets the same bounded escalation instead of a punt."""
+        calls = []
+
+        def runner(argv, **kw):
+            calls.append(argv)
+            return _FakeProc(stdout="Session x was spawned by session y per activity.log.")
+
+        with mock.patch.object(
+                server, "search_recent_sessions",
+                lambda q, days=2, limit=20, cwd_like=None: {"results": []}), \
+                mock.patch.object(
+                    server, "search_conversation_history",
+                    lambda q, limit=20, cwd_like=None, since=None, semantic=False: {"results": []}):
+            body, status = server.handle_assistant_ask(
+                {"question": "who spawned session session_a1f93905?"}, runner=runner)
+        self.assertEqual(status, 200)
+        self.assertTrue(body["tools_used"])
+        self.assertEqual(len(calls), 1)  # no fallback call once escalation succeeds
+        argv = calls[0]
+        self.assertIn("--allowedTools", argv)
+        self.assertIn("activity.log", argv[-1])
+
+    def test_generic_escalation_skipped_when_file_hits_found(self):
+        """hit_count is 0 but the file lookup already found the answer —
+        don't pay for a second investigation of what fs_hits already
+        answered."""
+        calls = []
+        runner = lambda argv, **kw: calls.append(argv) or _FakeProc(
+            stdout="It's at /Users/x/Desktop/Shot.mov")
+
+        with mock.patch.object(
+                server, "search_recent_sessions",
+                lambda q, days=2, limit=20, cwd_like=None: {"results": []}), \
+                mock.patch.object(
+                    server, "search_conversation_history",
+                    lambda q, limit=20, cwd_like=None, since=None, semantic=False: {"results": []}), \
+                mock.patch.object(
+                    server, "search_filesystem_hits",
+                    lambda terms, **kw: ["/Users/x/Desktop/Shot.mov"]):
+            body, status = server.handle_assistant_ask(
+                {"question": "where did I save that screenshot"}, runner=runner)
+        self.assertEqual(status, 200)
+        self.assertFalse(body["tools_used"])
+        self.assertNotIn("--allowedTools", calls[0])
+
+    def test_generic_escalation_skipped_when_ordinary_hits_found(self):
+        """Default fixture returns one unrelated session hit — an ordinary
+        question with SOME hit_count should not pay for the tool-access
+        round trip."""
+        calls = []
+        runner = lambda argv, **kw: calls.append(argv) or _FakeProc(stdout="ok")
+        server.handle_assistant_ask({"question": "who spawned this session?"}, runner=runner)
+        self.assertNotIn("--allowedTools", calls[0])
+
     def test_default_range_matches_prior_behavior(self):
         runner = lambda argv, **kw: _FakeProc(stdout="ok")
         server.handle_assistant_ask({"question": "bym ads"}, runner=runner)

@@ -94,11 +94,19 @@ _PLIST_TRIGGER_KEY_RE = re.compile(
     r"<key>(Label|StartInterval|StartCalendarInterval|WatchPaths|RunAtLoad|"
     r"KeepAlive|ProgramArguments)</key>.*?(?=<key>|</dict>)", re.DOTALL)
 _YAML_TRIGGER_RE = re.compile(r"^on:.*?(?=^\S|\Z)", re.DOTALL | re.MULTILINE)
-# Bounded tool-access escalation for trigger questions the deterministic
-# content search (search_local_automation_hits) came up empty on — most
-# often a pronoun follow-up ("What triggers it?") whose subject only lives
-# in prior conversation turns, which the term-extraction/AND-match approach
-# can never resolve since it only ever sees the current question's words.
+# Bounded tool-access escalation — a general last resort for "ground truth
+# lives on disk, not in a chat transcript" questions. Fires in two cases:
+# (1) a trigger-shaped question whose deterministic content search
+#     (search_local_automation_hits) came up empty, or
+# (2) ANY question where the ordinary session-hit search AND the file
+#     lookup both came up empty — covers categories with no hint-regex of
+#     their own (e.g. "who spawned this session?"), so a 4th/5th/Nth
+#     narrow-category question doesn't need a hand-built search layer.
+# Both cases often boil down to a pronoun follow-up ("What triggers it?",
+# "who started it?") whose subject only lives in prior conversation turns,
+# which term-extraction/AND-match can never resolve since it only ever sees
+# the current question's words — build_ask_tool_prompt folds history in
+# verbatim so the model can resolve it itself.
 # Read/Grep/Glob only, no Bash/Write/Edit/network. --allowedTools alone does
 # NOT restrict the toolset (verified empirically: with --permission-mode
 # dontAsk it still ran Bash) — --disallowedTools is what actually enforces
@@ -507,30 +515,39 @@ def run_ask_engine(engine, prompt, runner=None):
 
 
 def build_ask_tool_prompt(question, history, repo_roots=None):
-    """Prompt for the bounded tool-access escalation. Unlike build_ask_prompt
-    this folds recent history in VERBATIM (not just as context the model may
-    ignore) with an explicit instruction to resolve pronouns from it first —
-    the whole point of this path is answering a follow-up whose subject was
-    only ever named in a prior turn."""
+    """Prompt for the bounded tool-access escalation — the general last
+    resort when the deterministic session-hit/file/automation searches all
+    came up empty, so the answer (if it exists at all) lives somewhere on
+    the user's own machine no hint-regex covers yet (e.g. "who spawned this
+    session?" pointing at activity.log). Unlike build_ask_prompt this folds
+    recent history in VERBATIM (not just as context the model may ignore)
+    with an explicit instruction to resolve pronouns from it first — the
+    whole point of this path is often answering a follow-up whose subject
+    was only ever named in a prior turn."""
     q = str(question or "").strip()[:_ASK_QUESTION_MAX]
     lines = [
         "You are the Ask assistant inside Claude Command Center (CCC). The "
-        "user asked what triggers or schedules something on their own "
-        "machine (a launchd job, a GitHub Actions workflow, a cron-like "
-        "automation). An automatic search of known automation config "
-        "locations found nothing, so investigate yourself using your "
-        "Read/Grep/Glob tools.",
-        "If the question uses a pronoun (\"it\", \"that job\") without "
-        "naming the subject, resolve it from the conversation history below "
-        "before searching — never ask the user to clarify.",
-        "Start with ~/Library/LaunchAgents/*.plist (launchd jobs) and "
-        "<repo>/.github/workflows/*.yml (CI triggers) for any repo listed "
-        "below; grep for the subject name across those locations first.",
-        "Use at most 4-5 tool calls. Quote the actual trigger definition "
-        "verbatim (e.g. StartInterval seconds, StartCalendarInterval, "
-        "WatchPaths, or a workflow's `on:` block) — never guess or hedge.",
-        "If you genuinely find nothing after searching, say plainly that no "
-        "matching automation config was found on disk.",
+        "user asked a question about their own machine, CCC's own state, or "
+        "a specific session — something an automatic search of the session "
+        "corpus, file locations, and known automation configs found nothing "
+        "for. Investigate yourself using your Read/Grep/Glob tools.",
+        "If the question uses a pronoun (\"it\", \"that job\", \"that "
+        "session\") without naming the subject, resolve it from the "
+        "conversation history below before searching — never ask the user "
+        "to clarify.",
+        "Likely places to look, depending on what the question is actually "
+        "about: ~/Library/LaunchAgents/*.plist and "
+        "<repo>/.github/workflows/*.yml for what triggers/schedules "
+        "something; ~/.claude/command-center/logs/activity.log for who "
+        "spawned/started/ran a session or job; ~/.claude/projects/*/*.jsonl "
+        "for a specific session's own transcript, if you can identify its "
+        "id. Grep for the subject name across whichever location fits "
+        "first.",
+        "Use at most 4-5 tool calls. Quote what you actually find verbatim "
+        "(e.g. a StartInterval value, a workflow's `on:` block, an "
+        "activity.log line) — never guess or hedge.",
+        "If you genuinely find nothing after searching, say plainly that "
+        "you could not find anything relevant on disk.",
         "Reply in short readable prose (2-5 sentences), no citations.",
         "",
     ]
@@ -644,31 +661,36 @@ def handle_assistant_ask(payload, runner=None):
     automation_hits = None
     tools_used = False
     answer = None
-    if looks_like_trigger_question(question):
-        repo_roots = []
-        seen_repo_roots = set()
-        for h in hits:
-            cwd = h.get("cwd")
-            if cwd and cwd not in seen_repo_roots:
-                seen_repo_roots.add(cwd)
-                repo_roots.append(cwd)
+    repo_roots = []
+    seen_repo_roots = set()
+    for h in hits:
+        cwd = h.get("cwd")
+        if cwd and cwd not in seen_repo_roots:
+            seen_repo_roots.add(cwd)
+            repo_roots.append(cwd)
+
+    is_trigger_question = looks_like_trigger_question(question)
+    if is_trigger_question:
         try:
             automation_hits = _core.search_local_automation_hits(terms, repo_roots)
         except Exception:
             automation_hits = []
-        if not automation_hits:
-            # The deterministic content search found nothing — most often
-            # because the question's own subject is a pronoun ("What
-            # triggers it?") that only resolves from history. Let the model
-            # investigate itself instead of answering against a search that
-            # never really ran on the right subject.
-            try:
-                answer = _core.run_ask_tool_engine(
-                    build_ask_tool_prompt(question, history, repo_roots),
-                    runner=runner)
-                tools_used = True
-            except (OSError, RuntimeError, subprocess.TimeoutExpired):
-                answer = None
+
+    # Escalate to the bounded tool-access model when either: this was a
+    # trigger question and its dedicated content search found nothing, or
+    # (the general case) every deterministic search layer that DID run for
+    # this question — session hits, file lookup — came back empty. The
+    # second arm is what lets a question category with no hint-regex of its
+    # own (e.g. session provenance) still get a real answer instead of a
+    # punt, without needing a new regex+search-layer per category.
+    if not automation_hits and (is_trigger_question or (hit_count == 0 and not fs_hits)):
+        try:
+            answer = _core.run_ask_tool_engine(
+                build_ask_tool_prompt(question, history, repo_roots),
+                runner=runner)
+            tools_used = True
+        except (OSError, RuntimeError, subprocess.TimeoutExpired):
+            answer = None
 
     if answer is None:
         try:
