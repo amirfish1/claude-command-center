@@ -139,9 +139,16 @@ permission, plan_mode, **context_tokens/max_context_tokens**; prompts POST +
 
 Verified against the checkout 2026-09-01.
 
-- Steering is a **core** capability, not a kap-server one:
-  `PromptService.steer()` (`packages/agent-core/src/services/prompt/promptService.ts:369`)
-  pulls the named prompts out of its queue and calls `core.rpc.steer(...)`.
+- Steering is a **core** capability, not a kap-server one. The live engine is
+  `agent-core-v2` (`agent-core` is the legacy v1 engine): `submitSteer()`
+  (`packages/agent-core-v2/src/agent/prompt/promptService.ts:356`) enqueues the
+  message and immediately steers it into the running turn via `steer()` (:394),
+  falling back to an ordinary turn when nothing is active — i.e. exactly the
+  "deliver this, steering if busy" primitive, in one call.
+- The klient facade maps `agent.steer(input)` straight onto it
+  (`packages/klient/src/core/facade/agent.ts:113` →
+  `agentPromptService.submitSteer`), next to `agent.prompt(input)` →
+  `agentPromptService.submit`.
 - kap-server exposes it as `POST /sessions/{session_id}/prompts::steer`
   (`packages/kap-server/src/routes/prompts.ts:375`), "Steer queued prompts into
   the active turn" — this is what Ctrl/Cmd+S in the web UI calls.
@@ -168,8 +175,11 @@ about process topology blocks us; the stdio surface we speak simply has no verb
 for it. Two ways to close that, in preference order:
 
 1. **Upstream:** ask MoonshotAI to expose it as `unstable_steer` (or via the
-   `extMethod` fallback). Small change against code that already holds the
-   facade, and it fixes every ACP client, not just CCC.
+   `extMethod` fallback). The engine-side diff is one word: `driveTurn` calls
+   `this.agent.prompt({ input })` (`session.ts:647`); the steering variant is
+   `this.agent.steer({ input })` — same facade, same `PromptLaunchResult`, same
+   settlement path, and `submitSteer` already degrades to a normal turn when
+   idle. Fixes every ACP client, not just CCC.
 2. **Local patched build:** MIT source, ordinary pnpm monorepo (`pnpm build`,
    Node >= 24.15). Either add the same `unstable_steer` method, or call
    `serveKlientIpc({ scope: core, socketPath })` inside `runAcpServer` to expose
