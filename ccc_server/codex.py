@@ -66,6 +66,10 @@ _CODEX_APP_SERVER_NEXT_ID = 1
 _CODEX_APP_SERVER_RESPONSES = {}
 _CODEX_APP_SERVER_THREAD_STATE = {}
 _CODEX_APP_SERVER_TURN_THREAD = {}
+_CODEX_QUEUED_STEER_ACK_LOCK = threading.Lock()
+_CODEX_QUEUED_STEER_ACK_SUPPRESSIONS = {}
+_CODEX_QUEUED_STEER_ACK_TTL_S = 120.0
+_CODEX_QUEUED_STEER_ACK_MAX_COMMITTED = 256
 _CODEX_APP_SERVER_WARMUP_LOCK = threading.Lock()
 _CODEX_APP_SERVER_WARMUP_LAST = 0.0
 _CODEX_APP_SERVER_LIVENESS_INTERVAL = 20.0
@@ -2018,6 +2022,140 @@ def _codex_app_server_activity_fields(session_id):
     return fields
 
 
+def _codex_queued_steer_ack_key(session_id, text):
+    clean = str(text or "").strip()
+    if not session_id or not clean:
+        return None
+    return str(session_id), clean
+
+
+def _remove_codex_queued_steer_ack_unlocked(key, token_id):
+    entries = _CODEX_QUEUED_STEER_ACK_SUPPRESSIONS.get(key) or []
+    for index, entry in enumerate(entries):
+        if entry.get("token_id") != token_id:
+            continue
+        removed = entries.pop(index)
+        if not entries:
+            _CODEX_QUEUED_STEER_ACK_SUPPRESSIONS.pop(key, None)
+        return removed
+    return None
+
+
+def _prune_codex_queued_steer_acks_unlocked(now):
+    committed = []
+    for key, entries in list(_CODEX_QUEUED_STEER_ACK_SUPPRESSIONS.items()):
+        live = []
+        for entry in entries:
+            if float(entry.get("expires_at") or 0.0) <= now:
+                continue
+            live.append(entry)
+            if entry.get("state") == "committed":
+                committed.append((
+                    float(entry.get("created_at") or 0.0),
+                    key,
+                    entry.get("token_id"),
+                ))
+        if live:
+            _CODEX_QUEUED_STEER_ACK_SUPPRESSIONS[key] = live
+        else:
+            _CODEX_QUEUED_STEER_ACK_SUPPRESSIONS.pop(key, None)
+    excess = len(committed) - _CODEX_QUEUED_STEER_ACK_MAX_COMMITTED
+    if excess > 0:
+        for _, key, token_id in sorted(committed)[:excess]:
+            _remove_codex_queued_steer_ack_unlocked(key, token_id)
+
+
+def _begin_codex_queued_steer_ack_suppression(session_id, text):
+    """Reserve one future userMessage ack for an already-claimed queue row."""
+    key = _codex_queued_steer_ack_key(session_id, text)
+    if key is None:
+        return None
+    now = time.monotonic()
+    token_id = uuid.uuid4().hex
+    with _CODEX_QUEUED_STEER_ACK_LOCK:
+        _prune_codex_queued_steer_acks_unlocked(now)
+        _CODEX_QUEUED_STEER_ACK_SUPPRESSIONS.setdefault(key, []).append({
+            "token_id": token_id,
+            "state": "pending",
+            "acknowledged": False,
+            "created_at": now,
+            "expires_at": now + _CODEX_QUEUED_STEER_ACK_TTL_S,
+        })
+    return key, token_id
+
+
+def _finish_codex_queued_steer_ack_suppression(token, delivered):
+    """Commit a successful claim's ack guard, or cancel a rolled-back claim."""
+    if not token:
+        return False
+    key, token_id = token
+    now = time.monotonic()
+    with _CODEX_QUEUED_STEER_ACK_LOCK:
+        _prune_codex_queued_steer_acks_unlocked(now)
+        entries = _CODEX_QUEUED_STEER_ACK_SUPPRESSIONS.get(key) or []
+        entry = next(
+            (item for item in entries if item.get("token_id") == token_id),
+            None,
+        )
+        if entry is None:
+            return False
+        acknowledged = bool(entry.get("acknowledged"))
+        if not delivered or acknowledged:
+            _remove_codex_queued_steer_ack_unlocked(key, token_id)
+        else:
+            entry["state"] = "committed"
+            entry["expires_at"] = now + _CODEX_QUEUED_STEER_ACK_TTL_S
+            _prune_codex_queued_steer_acks_unlocked(now)
+        return acknowledged
+
+
+def _bind_codex_queued_steer_ack_suppression(session_id, text, turn_id):
+    """Bind the in-flight guard before the native turn/steer RPC can notify."""
+    key = _codex_queued_steer_ack_key(session_id, text)
+    if key is None or not turn_id:
+        return False
+    now = time.monotonic()
+    with _CODEX_QUEUED_STEER_ACK_LOCK:
+        _prune_codex_queued_steer_acks_unlocked(now)
+        for entry in _CODEX_QUEUED_STEER_ACK_SUPPRESSIONS.get(key) or []:
+            if entry.get("state") != "pending" or entry.get("turn_id"):
+                continue
+            entry["turn_id"] = str(turn_id)
+            return True
+    return False
+
+
+def _suppress_codex_queued_steer_delivery_ack(session_id, text, turn_id=None):
+    """Consume exactly one ack belonging to a claimed queued Steer.
+
+    Notifications can beat the turn/steer response or arrive after its caller
+    releases the queue-pump lock. A pending entry records an early ack until
+    the router commits or rolls back; a committed entry handles the late case.
+    """
+    key = _codex_queued_steer_ack_key(session_id, text)
+    if key is None:
+        return False
+    now = time.monotonic()
+    with _CODEX_QUEUED_STEER_ACK_LOCK:
+        _prune_codex_queued_steer_acks_unlocked(now)
+        entries = _CODEX_QUEUED_STEER_ACK_SUPPRESSIONS.get(key) or []
+        for entry in entries:
+            if entry.get("acknowledged"):
+                continue
+            expected_turn_id = str(entry.get("turn_id") or "")
+            if expected_turn_id and expected_turn_id != str(turn_id or ""):
+                continue
+            if entry.get("state") == "pending":
+                entry["acknowledged"] = True
+                entry["expires_at"] = now + _CODEX_QUEUED_STEER_ACK_TTL_S
+            else:
+                _remove_codex_queued_steer_ack_unlocked(
+                    key, entry.get("token_id"),
+                )
+            return True
+    return False
+
+
 def _codex_app_server_handle_notification(method, params):
     if not isinstance(params, dict):
         params = {}
@@ -2166,8 +2304,12 @@ def _codex_app_server_handle_notification(method, params):
         # The app-server's userMessage item is the authoritative delivery ack.
         # Reconcile any durable copy left queued by an unconfirmed/phantom-owner
         # attempt; duplicate prompts remain valid because only one copy is
-        # consumed.
-        _core._consume_matching_pending_input(thread_id, delivered_user_text)
+        # consumed. A queued Steer already claimed its own copy before delivery,
+        # so its matching transaction guard suppresses exactly this callback.
+        if not _suppress_codex_queued_steer_delivery_ack(
+            thread_id, delivered_user_text, turn_id=turn_id,
+        ):
+            _core._consume_matching_pending_input(thread_id, delivered_user_text)
     if pump_after_notification:
         _core._schedule_codex_queue_pump(thread_id)
 
@@ -6033,6 +6175,9 @@ def _codex_steer_via_app_server(session_id, text, cwd=None, model=None, image_pa
             "code": "codex_no_active_turn",
             "error": "No running Codex turn to steer",
         }
+    _bind_codex_queued_steer_ack_suppression(
+        session_id, text, active_turn.get("id"),
+    )
     steered = _core._codex_app_server_request(
         "turn/steer",
         {

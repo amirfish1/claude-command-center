@@ -1474,6 +1474,7 @@ def _inject_text_into_session_router(
             steer_kwargs["idempotency_key"] = idempotency_key
         pump_lock = _core._codex_queue_pump_lock(session_id)
         claim = None
+        ack_suppression = None
         with pump_lock:
             claim = _core._claim_matching_pending_input(session_id, text)
             if preserve_queued_steer and claim is None:
@@ -1485,6 +1486,12 @@ def _inject_text_into_session_router(
                     "error": "queued message no longer exists",
                 }
             try:
+                if claim is not None:
+                    ack_suppression = (
+                        _core._begin_codex_queued_steer_ack_suppression(
+                            session_id, text,
+                        )
+                    )
                 steer_result = _core.resume_session_codex(
                     session_id, text, **steer_kwargs
                 )
@@ -1493,14 +1500,25 @@ def _inject_text_into_session_router(
                     and steer_result.get("via") == "codex-steer"
                 ):
                     if claim is not None:
+                        _core._finish_codex_queued_steer_ack_suppression(
+                            ack_suppression, delivered=True,
+                        )
+                        ack_suppression = None
                         steer_result = dict(steer_result)
                         steer_result["queued_consumed"] = 1
                     return steer_result
                 if claim is not None:
+                    _core._finish_codex_queued_steer_ack_suppression(
+                        ack_suppression, delivered=False,
+                    )
+                    ack_suppression = None
                     _core._restore_pending_input_claim(claim)
                     claim = None
             except Exception:
                 if claim is not None:
+                    _core._finish_codex_queued_steer_ack_suppression(
+                        ack_suppression, delivered=False,
+                    )
                     _core._restore_pending_input_claim(claim)
                 raise
             if preserve_queued_steer:
