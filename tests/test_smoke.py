@@ -13857,6 +13857,20 @@ class TestRepoContextHelpers(unittest.TestCase):
         ask_engine.assert_called_once_with(sid, "probe", 1000, "hermes")
         headless.assert_not_called()
 
+    def test_ask_session_routes_grok_to_its_acp_harness(self):
+        """Grok ACP sessions must not fall through to Claude JSONL resume."""
+        server = self.server
+        sid = "01a05b3d-d6e8-7852-a5e1-e78697cd9032"
+        expected = {"ok": True, "text": "coordinator reply", "source": "grok-acp"}
+        with mock.patch.object(server, "_detect_session_engine", return_value="grok"), \
+             mock.patch.object(server, "_acp_ask_and_wait", return_value=expected) as ask_acp, \
+             mock.patch.object(server, "resume_session_headless") as headless:
+            result = server.ask_session_and_wait(sid, "status?", timeout_ms=1000)
+
+        self.assertEqual(result, expected)
+        ask_acp.assert_called_once_with("grok", sid, "status?", 1000)
+        headless.assert_not_called()
+
     def test_ask_session_resolves_fresh_antigravity_session_prefix(self):
         """A copied eight-character spawn ID must not fall back to Claude."""
         server = self.server

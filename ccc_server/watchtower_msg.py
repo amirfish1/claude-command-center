@@ -3244,8 +3244,9 @@ def ask_session_and_wait(session_id, text, timeout_ms=30000, cwd=None, peer_send
     """Synchronously inject `text` into a session and wait for its reply.
 
     Non-claude engines route first: codex/gemini/antigravity/hermes/opencode
-    go to ask_engine_session_and_wait (engine resume + stream tail); kimi goes
-    to _acp_ask_and_wait (ACP session/prompt, blocks for the turn-end response).
+    go to ask_engine_session_and_wait (engine resume + stream tail); Kimi and
+    Grok go to _acp_ask_and_wait (ACP session/prompt, blocks for the turn-end
+    response).
     Claude sessions then pick between two paths, chosen from live status:
 
     - **Live target** (the user has `claude` open in a terminal for this
@@ -3298,8 +3299,8 @@ def ask_session_and_wait(session_id, text, timeout_ms=30000, cwd=None, peer_send
             return routed
     if engine in ("codex", "gemini", "antigravity", "hermes", "opencode"):
         return _core.ask_engine_session_and_wait(session_id, text, timeout_ms, engine)
-    if engine == "kimi":
-        return _core._acp_ask_and_wait("kimi", session_id, text, timeout_ms)
+    if engine in ("kimi", "grok"):
+        return _core._acp_ask_and_wait(engine, session_id, text, timeout_ms)
 
     # Live-tail short-circuit: if the target session has a running `claude`
     # process with a usable tty, drive it via keystroke + jsonl tail. This
