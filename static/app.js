@@ -3193,7 +3193,7 @@
   let sessionSourceByConv = {}; // {convId: 'interactive'|'pkood'|'task'}
   let sessionSpawnPidByConv = {}; // {convId: pid of claude we spawned (stdin inject)}
   // Currently-focused session and its live-process state (per-pane, shimmed via window.currentSession)
-  let liveStatus = { forSessionId: null, live: false, pid: null, tty: null, terminalApp: null, sidecarTool: null, sidecarFile: null, sidecarStatus: null, sidecarTs: 0, sidecarInFlight: false, staleToolCall: false, staleToolAgeS: 0, needsApproval: false, needsApprovalMessage: '', questionWaiting: false, questionText: '', questionHeader: '', questionPreamble: '', questionOptions: [], questionOptionDetails: [], codexAppServer: false, codexAppServerTransport: null, codexManagedAppServer: false, codexAppServerEventSeq: 0, codexAppServerLastActivityAt: 0, codexAppServerLastItemId: '' };
+  let liveStatus = { forSessionId: null, live: false, pid: null, tty: null, terminalApp: null, sidecarTool: null, sidecarFile: null, sidecarStatus: null, sidecarTs: 0, sidecarInFlight: false, staleToolCall: false, staleToolAgeS: 0, needsApproval: false, needsApprovalMessage: '', acpPendingPermission: null, questionWaiting: false, questionText: '', questionHeader: '', questionPreamble: '', questionOptions: [], questionOptionDetails: [], codexAppServer: false, codexAppServerTransport: null, codexManagedAppServer: false, codexAppServerEventSeq: 0, codexAppServerLastActivityAt: 0, codexAppServerLastItemId: '' };
   let liveStatusTimer = null;
   // Snapshot of liveStatus before the most recent refresh, used to detect
   // transitions (working -> idle, running -> idle) for audible feedback.
@@ -5443,7 +5443,7 @@
   async function refreshLiveStatus() {
     _liveStatusPrev = liveStatus;
     if (!currentSession.id) {
-      liveStatus = { forSessionId: null, live: false, pid: null, tty: null, terminalApp: null, ambiguous: false, matchCount: 0, staleToolCall: false, staleToolAgeS: 0, needsApproval: false, needsApprovalMessage: '', questionWaiting: false, questionText: '', questionHeader: '', questionPreamble: '', questionOptions: [], questionOptionDetails: [], codexAppServer: false, codexAppServerTransport: null, codexManagedAppServer: false, codexAppServerEventSeq: 0, codexAppServerLastActivityAt: 0, codexAppServerLastItemId: '' };
+      liveStatus = { forSessionId: null, live: false, pid: null, tty: null, terminalApp: null, ambiguous: false, matchCount: 0, staleToolCall: false, staleToolAgeS: 0, needsApproval: false, needsApprovalMessage: '', acpPendingPermission: null, questionWaiting: false, questionText: '', questionHeader: '', questionPreamble: '', questionOptions: [], questionOptionDetails: [], codexAppServer: false, codexAppServerTransport: null, codexManagedAppServer: false, codexAppServerEventSeq: 0, codexAppServerLastActivityAt: 0, codexAppServerLastItemId: '' };
       updateJumpButton();
       updateInputBar();
       return;
@@ -5518,6 +5518,9 @@
         pendingTool: data.pending_tool || null,
         needsApproval: !!data.needs_approval,
         needsApprovalMessage: data.needs_approval_message || '',
+        acpPendingPermission: (
+          data.acp_pending_permission && typeof data.acp_pending_permission === 'object'
+        ) ? data.acp_pending_permission : null,
         questionWaiting: !!data.question_waiting,
         questionText: data.question_text || '',
         questionHeader: data.question_header || '',
@@ -5656,7 +5659,7 @@
         codex_desktop_attached: !!data.codex_desktop_attached,
       });
     } catch (err) {
-      liveStatus = { forSessionId: _fetchedFor, live: false, status: null, recentlyWritten: false, pid: null, tty: null, terminalApp: null, ambiguous: false, matchCount: 0, sidecarTool: null, sidecarFile: null, sidecarStatus: null, sidecarTs: 0, sidecarInFlight: false, staleToolCall: false, staleToolAgeS: 0, needsApproval: false, needsApprovalMessage: '', questionWaiting: false, questionText: '', questionHeader: '', questionPreamble: '', questionOptions: [], questionOptionDetails: [], codexState: null, codexFresh: false, codexAppServer: false, codexAppServerTransport: null, codexManagedAppServer: false, codexAppServerEventSeq: 0, codexAppServerLastActivityAt: 0, codexAppServerLastItemId: '', codexWriter: null, codexDesktopAttached: false };
+      liveStatus = { forSessionId: _fetchedFor, live: false, status: null, recentlyWritten: false, pid: null, tty: null, terminalApp: null, ambiguous: false, matchCount: 0, sidecarTool: null, sidecarFile: null, sidecarStatus: null, sidecarTs: 0, sidecarInFlight: false, staleToolCall: false, staleToolAgeS: 0, needsApproval: false, needsApprovalMessage: '', acpPendingPermission: null, questionWaiting: false, questionText: '', questionHeader: '', questionPreamble: '', questionOptions: [], questionOptionDetails: [], codexState: null, codexFresh: false, codexAppServer: false, codexAppServerTransport: null, codexManagedAppServer: false, codexAppServerEventSeq: 0, codexAppServerLastActivityAt: 0, codexAppServerLastItemId: '', codexWriter: null, codexDesktopAttached: false };
     }
     updateJumpButton();
     updateInputBar();
@@ -7516,7 +7519,7 @@
       const canAnswerClaude = !canApprove && _isClaudeSess && !!_caps.answerPermission && _claudeLiveTty;
       const claudeDormant = !canApprove && _isClaudeSess && !!_caps.answerPermission && !_claudeLiveTty;
       const claudeNoRoute = !canApprove && _isClaudeSess && !_caps.answerPermission;
-      const hasButtons = canApprove || canAnswerClaude;
+      const hasButtons = canApprove || canAnswerClaude || canAnswerAcp;
       let actionsHtml;
       if (canApprove) {
         actionsHtml = '<span class="cl-approval-actions">'
@@ -7533,6 +7536,13 @@
               + '<button type="button" class="cl-approval-btn is-negative" data-claude-decision="decline" title="Deny. Sends Esc to the session\'s terminal picker">Deny</button>'
           + '</span>';
       } else if (claudeDormant) {
+      const acpApproval = liveStatusMatchesOpenConv() ? liveStatus.acpPendingPermission : null;
+      const canAnswerAcp = !!(
+        acpApproval
+        && Object.prototype.hasOwnProperty.call(acpApproval, 'request_id')
+        && Array.isArray(acpApproval.options)
+        && acpApproval.options.length
+      );
         actionsHtml = '<span class="cl-approval-actions">'
               + '<span class="cl-approval-note" title="This session has no live terminal right now, so CCC can\'t drive its approval picker. Resume the session, then approve or deny in its terminal">Resume to answer</span>'
           + '</span>';
@@ -7554,7 +7564,21 @@
         + (msg ? '<span class="cl-file">' + escapeHtml(truncate(msg, hasButtons ? 86 : 120)) + '</span>' : '')
         + actionsHtml;
       inline.title = msg;
-      if (canApprove) {
+      if (canAnswerAcp) {
+        const acpHarness = String(acpApproval.harness || (currentSession && currentSession.source) || 'grok');
+        const acpRequestId = String(acpApproval.request_id);
+        actionsHtml = '<span class="cl-approval-actions">'
+          + acpApproval.options.map((option) => {
+            const optionId = String((option && (option.optionId || option.id)) || '');
+            const optionName = String((option && (option.name || option.title || optionId)) || 'Choose');
+            return '<button type="button" class="cl-approval-btn acp-perm-opt"'
+              + ' data-acp-harness="' + escapeAttr(acpHarness) + '"'
+              + ' data-acp-req="' + escapeAttr(acpRequestId) + '"'
+              + ' data-acp-opt="' + escapeAttr(optionId) + '"'
+              + ' title="Respond to this permission request">' + escapeHtml(optionName) + '</button>';
+          }).join('')
+          + '</span>';
+      } else if (canApprove) {
         inline.querySelectorAll('.cl-approval-btn').forEach(btn => {
           btn.addEventListener('click', (ev) => {
             ev.preventDefault();
@@ -8328,7 +8352,7 @@
       // Pkood sessions don't need live status polling or resume button
       if (liveStatusTimer) { clearInterval(liveStatusTimer); liveStatusTimer = null; }
       if (liveStatusRenderTicker) { clearInterval(liveStatusRenderTicker); liveStatusRenderTicker = null; }
-      liveStatus = { forSessionId: sid, live: false, pid: null, tty: null, terminalApp: null, staleToolCall: false, staleToolAgeS: 0, needsApproval: false, needsApprovalMessage: '', questionWaiting: false, questionText: '', questionHeader: '', questionPreamble: '', questionOptions: [], questionOptionDetails: [] };
+      liveStatus = { forSessionId: sid, live: false, pid: null, tty: null, terminalApp: null, staleToolCall: false, staleToolAgeS: 0, needsApproval: false, needsApprovalMessage: '', acpPendingPermission: null, questionWaiting: false, questionText: '', questionHeader: '', questionPreamble: '', questionOptions: [], questionOptionDetails: [] };
       updateResumeButton();
       updateAnnounceButton();
       updateJumpButton();
@@ -30412,7 +30436,7 @@
   // 'interactive' / 'sdk-cli' / 'bg' / empty — anything not in this set is
   // treated as Claude. Used to gate the headless/terminal process indicator,
   // which models Claude's architecture specifically.
-  const NON_CLAUDE_SOURCES = new Set(['codex', 'gemini', 'cursor', 'antigravity', 'pkood']);
+  const NON_CLAUDE_SOURCES = new Set(['codex', 'gemini', 'cursor', 'antigravity', 'pkood', 'kimi', 'grok']);
   function isClaudeSource(source) {
     return !NON_CLAUDE_SOURCES.has(source);
   }

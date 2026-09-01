@@ -1,0 +1,1 @@
+- Show actionable Grok ACP permission choices in the live session banner instead of the non-functional Claude “Resume to answer” hint.
