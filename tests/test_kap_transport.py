@@ -22,103 +22,135 @@ def _frame(payload, seq=1, epoch="e1"):
             "session_id": "session_x", "payload": payload}
 
 
-class TestKapTurnMapper(unittest.TestCase):
+class TestKapTranscriptMapper(unittest.TestCase):
+    """The daemon streams `transcript.ops`, a small document protocol -- not
+    the raw agent event union. Ops here mirror what 0.39.1 actually sent."""
+
     def setUp(self):
-        self.m = kap.KapTurnMapper()
+        self.m = kap.KapTranscriptMapper()
 
-    def _feed(self, payloads):
-        out = []
-        for i, p in enumerate(payloads):
-            out.extend(self.m.feed(_frame(p, seq=i + 1)))
-        return out
+    def _ops(self, ops, seq=1, agent="main"):
+        return self.m.feed(_frame({"type": "transcript.ops", "agent_id": agent,
+                                   "ops": ops, "seq": seq}, seq=seq))
 
-    def test_deltas_fold_into_one_assistant_message(self):
-        events = self._feed([
-            {"type": "turn.started", "agentId": "main", "turnId": 7,
-             "origin": {"kind": "user"}},
-            {"type": "thinking.delta", "agentId": "main", "turnId": 7,
-             "delta": "let me think"},
-            {"type": "assistant.delta", "agentId": "main", "turnId": 7,
-             "delta": "Hello"},
-            {"type": "assistant.delta", "agentId": "main", "turnId": 7,
-             "delta": " world"},
-            {"type": "turn.ended", "agentId": "main", "turnId": 7,
-             "reason": "completed"},
+    def _run_turn(self, extra_ops=()):
+        self._ops([{"op": "turn.upsert",
+                    "turn": {"turnId": "t0", "state": "running"}}])
+        self._ops(list(extra_ops))
+        return self._ops([{"op": "turn.upsert",
+                           "turn": {"turnId": "t0", "state": "completed"}}])
+
+    def test_appends_stream_into_their_frame(self):
+        events = self._run_turn([
+            {"op": "frame.upsert",
+             "frame": {"frameId": "t0.1.f1", "kind": "text", "text": ""}},
+            {"op": "append", "target": {"frameId": "t0.1.f1"},
+             "offset": 0, "text": "Hello"},
+            {"op": "append", "target": {"frameId": "t0.1.f1"},
+             "offset": 5, "text": " world"},
         ])
         self.assertEqual([e["type"] for e in events], ["assistant", "result"])
-        msg = events[0]
-        self.assertEqual(msg["message_id"], "kap-kimi-7")
-        self.assertEqual(msg["blocks"], [
-            {"kind": "thinking", "text": "let me think"},
-            {"kind": "text", "text": "Hello world"},
-        ])
-        self.assertEqual(events[1]["subtype"], "completed")
+        self.assertEqual(events[0]["blocks"],
+                         [{"kind": "text", "text": "Hello world"}])
+        self.assertEqual(events[0]["message_id"], "kap-kimi-t0")
 
-    def test_subagent_events_do_not_leak_into_main_transcript(self):
-        events = self._feed([
-            {"type": "turn.started", "agentId": "main", "turnId": 1,
-             "origin": {"kind": "user"}},
-            {"type": "assistant.delta", "agentId": "main", "turnId": 1,
-             "delta": "mine"},
-            {"type": "assistant.delta", "agentId": "sub-1", "turnId": 4,
-             "delta": "NOT MINE"},
-            {"type": "turn.ended", "agentId": "sub-1", "turnId": 4,
-             "reason": "completed"},
-            {"type": "turn.ended", "agentId": "main", "turnId": 1,
-             "reason": "completed"},
+    def test_frames_keep_arrival_order(self):
+        events = self._run_turn([
+            {"op": "frame.upsert",
+             "frame": {"frameId": "f1", "kind": "thinking", "text": ""}},
+            {"op": "append", "target": {"frameId": "f1"},
+             "offset": 0, "text": "hmm"},
+            {"op": "frame.upsert",
+             "frame": {"frameId": "f2", "kind": "text", "text": ""}},
+            {"op": "append", "target": {"frameId": "f2"},
+             "offset": 0, "text": "answer"},
         ])
-        self.assertEqual([e["type"] for e in events], ["assistant", "result"])
+        self.assertEqual(events[0]["blocks"], [
+            {"kind": "thinking", "text": "hmm"},
+            {"kind": "text", "text": "answer"},
+        ])
+
+    def test_frame_upsert_with_text_reconciles_rather_than_doubles(self):
+        # The settled frame.upsert arrives again at turn end carrying the full
+        # text; concatenating it would duplicate the whole message.
+        events = self._run_turn([
+            {"op": "frame.upsert",
+             "frame": {"frameId": "f1", "kind": "text", "text": ""}},
+            {"op": "append", "target": {"frameId": "f1"},
+             "offset": 0, "text": "KAP_SPIKE_OK"},
+            {"op": "frame.upsert",
+             "frame": {"frameId": "f1", "kind": "text",
+                       "text": "KAP_SPIKE_OK"}},
+        ])
+        self.assertEqual(events[0]["blocks"],
+                         [{"kind": "text", "text": "KAP_SPIKE_OK"}])
+
+    def test_offset_gap_is_repaired_not_appended_blind(self):
+        events = self._run_turn([
+            {"op": "frame.upsert",
+             "frame": {"frameId": "f1", "kind": "text", "text": ""}},
+            {"op": "append", "target": {"frameId": "f1"},
+             "offset": 0, "text": "abcdef"},
+            {"op": "append", "target": {"frameId": "f1"},
+             "offset": 3, "text": "XYZ"},
+        ])
+        self.assertEqual(events[0]["blocks"],
+                         [{"kind": "text", "text": "abcXYZ"}])
+
+    def test_repeated_terminal_turn_upsert_emits_once(self):
+        self._ops([{"op": "turn.upsert",
+                    "turn": {"turnId": "t0", "state": "running"}},
+                   {"op": "frame.upsert",
+                    "frame": {"frameId": "f1", "kind": "text", "text": "hi"}}])
+        first = self._ops([{"op": "turn.upsert",
+                            "turn": {"turnId": "t0", "state": "completed"}}])
+        second = self._ops([{"op": "turn.upsert",
+                             "turn": {"turnId": "t0", "state": "completed"}}])
+        self.assertEqual([e["type"] for e in first], ["assistant", "result"])
+        self.assertEqual(second, [])
+
+    def test_end_reason_from_meta_phase_wins(self):
+        self._ops([{"op": "turn.upsert",
+                    "turn": {"turnId": "t0", "state": "running"}}])
+        self._ops([{"op": "meta.merge", "meta": {"agent": {"phase": {
+            "kind": "ended", "reason": "cancelled"}}}}])
+        events = self._ops([{"op": "turn.upsert",
+                             "turn": {"turnId": "t0", "state": "completed"}}])
+        self.assertEqual(events[-1]["subtype"], "cancelled")
+
+    def test_usage_and_context_are_captured(self):
+        self._ops([{"op": "meta.merge", "meta": {"agent": {
+            "usage": {"total": {"output": 38}}, "contextTokens": 26080}}}])
+        self.assertEqual(self.m.usage, {"total": {"output": 38}})
+        self.assertEqual(self.m.context_tokens, 26080)
+
+    def test_prompt_status_is_tracked(self):
+        self._ops([{"op": "prompt.upsert",
+                    "prompt": {"promptId": "p1", "status": "running"}}])
+        self.assertEqual(self.m.prompts, {"p1": "running"})
+        self._ops([{"op": "prompt.upsert",
+                    "prompt": {"promptId": "p1", "status": "completed"}}])
+        self.assertEqual(self.m.prompts, {"p1": "completed"})
+
+    def test_subagent_ops_do_not_leak_into_main_transcript(self):
+        self._ops([{"op": "turn.upsert",
+                    "turn": {"turnId": "t0", "state": "running"}},
+                   {"op": "frame.upsert",
+                    "frame": {"frameId": "f1", "kind": "text",
+                              "text": "mine"}}])
+        self._ops([{"op": "frame.upsert",
+                    "frame": {"frameId": "sf1", "kind": "text",
+                              "text": "NOT MINE"}}], agent="sub-1")
+        events = self._ops([{"op": "turn.upsert",
+                             "turn": {"turnId": "t0", "state": "completed"}}])
         self.assertEqual(events[0]["blocks"],
                          [{"kind": "text", "text": "mine"}])
 
-    def test_tool_result_folds_onto_its_call_block(self):
-        self._feed([
-            {"type": "turn.started", "agentId": "main", "turnId": 2,
-             "origin": {"kind": "user"}},
-            {"type": "tool.call.started", "agentId": "main", "turnId": 2,
-             "toolCallId": "tc1", "name": "Bash", "args": {"cmd": "ls"},
-             "description": "list files"},
-            {"type": "tool.result", "agentId": "main", "turnId": 2,
-             "toolCallId": "tc1", "output": "a\nb", "isError": False},
-        ])
-        events = self.m.feed(_frame(
-            {"type": "turn.ended", "agentId": "main", "turnId": 2,
-             "reason": "completed"}))
-        block = events[0]["blocks"][0]
-        self.assertEqual(block["kind"], "tool_use")
-        self.assertEqual(block["name"], "Bash")
-        self.assertEqual(block["input"], {"cmd": "ls"})
-        self.assertEqual(block["description"], "list files")
-        self.assertEqual(block["status"], "ok")
-        self.assertEqual(block["output"], "a\nb")
-
-    def test_tool_error_marks_status(self):
-        self._feed([
-            {"type": "turn.started", "agentId": "main", "turnId": 3,
-             "origin": {"kind": "user"}},
-            {"type": "tool.call.started", "agentId": "main", "turnId": 3,
-             "toolCallId": "t9", "name": "Bash", "args": {}},
-            {"type": "tool.result", "agentId": "main", "turnId": 3,
-             "toolCallId": "t9", "output": "boom", "isError": True},
-        ])
-        events = self.m.feed(_frame(
-            {"type": "turn.ended", "agentId": "main", "turnId": 3,
-             "reason": "completed"}))
-        self.assertEqual(events[0]["blocks"][0]["status"], "error")
-
-    def test_abort_flushes_partial_turn_as_cancelled(self):
-        events = self._feed([
-            {"type": "turn.started", "agentId": "main", "turnId": 5,
-             "origin": {"kind": "user"}},
-            {"type": "assistant.delta", "agentId": "main", "turnId": 5,
-             "delta": "partial"},
-            {"type": "prompt.aborted", "agentId": "main", "promptId": "p1",
-             "abortedAt": "2026-09-01T00:00:00.000Z"},
-        ])
-        self.assertEqual([e["type"] for e in events], ["assistant", "result"])
-        self.assertEqual(events[0]["blocks"],
-                         [{"kind": "text", "text": "partial"}])
-        self.assertEqual(events[1]["subtype"], "cancelled")
+    def test_work_changed_tracks_busy_without_emitting(self):
+        self.assertEqual(
+            self.m.feed({"type": "event.session.work_changed",
+                         "payload": {"busy": True}}), [])
+        self.assertIs(self.m.busy, True)
 
     def test_control_frames_are_not_conversation_events(self):
         for ftype in ("server_hello", "ack", "ping", "pong"):
@@ -132,11 +164,38 @@ class TestKapTurnMapper(unittest.TestCase):
                                    "subtype": "resync_required"}])
 
     def test_seq_and_epoch_tracked_for_resume(self):
-        self.m.feed(_frame({"type": "turn.started", "agentId": "main",
-                            "turnId": 1, "origin": {"kind": "user"}},
-                           seq=17, epoch="ep-9"))
+        self.m.feed(_frame({"type": "transcript.ops", "agent_id": "main",
+                            "ops": []}, seq=17, epoch="ep-9"))
         self.assertEqual(self.m.last_seq, 17)
         self.assertEqual(self.m.epoch, "ep-9")
+
+
+class TestKapCapturedTurnReplay(unittest.TestCase):
+    """Replay of a real turn captured off kap-server 0.39.1. This is the
+    regression anchor: if a Kimi upgrade changes the op protocol, the recorded
+    wire no longer reduces to the right conversation and this fails."""
+
+    def test_captured_turn_reduces_to_one_assistant_message(self):
+        fixture = (Path(__file__).parent / "fixtures"
+                   / "kap_turn_frames.jsonl")
+        mapper = kap.KapTranscriptMapper()
+        events = []
+        with fixture.open() as fh:
+            for line in fh:
+                if line.strip():
+                    events.extend(mapper.feed(json.loads(line)))
+        self.assertEqual([e["type"] for e in events], ["assistant", "result"])
+        self.assertEqual(events[0]["blocks"], [
+            {"kind": "thinking",
+             "text": 'User asks to reply with exactly "KAP_SPIKE_OK". '
+                     'Just do it.'},
+            {"kind": "text", "text": "KAP_SPIKE_OK"},
+        ])
+        self.assertEqual(events[1], {"type": "result",
+                                     "subtype": "completed"})
+        self.assertEqual(mapper.context_tokens, 26080)
+        self.assertEqual(mapper.usage["total"]["output"], 38)
+        self.assertIs(mapper.busy, False)
 
 
 class TestKapHeartbeat(unittest.TestCase):

@@ -388,64 +388,174 @@ def kap_open_stream(sid, transcript="delta", since=None):
     return ws
 
 
-# --- event mapping ---------------------------------------------------------
+# --- transcript mapping ----------------------------------------------------
 #
-# kap-server emits 58 agent event types wrapped in a `session_event` frame
-# carrying {type, seq, epoch, session_id, payload}. CCC's normalized shape is
-# far smaller -- user_text / assistant{blocks:[{kind}]} / result -- so this is
-# a narrowing, and only the handful below matter for a turn to render.
+# What the daemon actually streams is NOT the 58-type agent event union: with
+# subscribe_v2 you get `transcript.ops`, a small document protocol that
+# Kimi's own UI renders from. Seven ops, observed end-to-end on 0.39.1:
 #
-# Every agent event carries agentId and turnId. Subagent events share the
-# stream, so filtering on agentId is not optional: without it a spawned
-# subagent's deltas interleave into the main transcript.
+#   prompt.upsert  prompt + status (running -> completed): the queue state
+#   turn.upsert    turn t0, state running -> completed
+#   step.upsert    a step inside a turn (t0.1)
+#   frame.upsert   a content frame, kind thinking|text, id t0.1.f1
+#   append         text into a frame at a byte offset -- the streaming delta
+#   marker.upsert  undo markers
+#   meta.merge     activity, agent phase, usage, contextTokens
+#
+# This is a better surface than the raw events: frames are addressable, the
+# appends are offset-based so a resync can be reconciled rather than replayed
+# blind, and meta.merge carries live usage/context that ACP never exposed.
 
-_KAP_TOOL_PENDING = "pending"
 
+class KapTranscriptMapper:
+    """Reduces kap-server transcript ops into CCC conversation events.
 
-class KapTurnMapper:
-    """Folds a kap-server event stream into CCC conversation events.
-
-    Deltas accumulate into one assistant message per turn, matching what the
-    ACP path produces, so the frontend cannot tell the two transports apart.
-    Field names follow packages/kap-server/src/protocol/events-zod.ts.
+    Frames accumulate into one assistant message per turn, matching what the
+    ACP path emits, so the frontend cannot tell the two transports apart.
     """
 
     def __init__(self, agent_id=_KAP_MAIN_AGENT, message_id_prefix="kap-kimi"):
         self.agent_id = agent_id
         self.prefix = message_id_prefix
-        self.turn_id = 0
-        self.blocks = []
-        self.tools = {}
+        self.frames = {}
+        self.order = []
+        self.turn_id = None
+        self.turn_state = None
+        self.emitted_turns = set()
+        self.prompts = {}
+        self.usage = {}
+        self.context_tokens = None
+        self.activity = None
+        self.busy = None
+        self.end_reason = None
         self.last_seq = None
         self.epoch = None
 
-    def _text_block(self, kind):
-        if not self.blocks or self.blocks[-1].get("kind") != kind:
-            self.blocks.append({"kind": kind, "text": ""})
-        return self.blocks[-1]
+    # -- helpers ------------------------------------------------------------
+
+    def _reset_turn(self):
+        self.frames = {}
+        self.order = []
+        self.end_reason = None
+
+    def blocks(self):
+        """Current turn's frames as CCC blocks, in arrival order."""
+        out = []
+        for fid in self.order:
+            fr = self.frames.get(fid) or {}
+            kind = fr.get("kind") or "text"
+            if kind in ("thinking", "text"):
+                out.append({"kind": kind, "text": fr.get("text") or ""})
+            else:
+                # Tool frames are not exercised by the smoke turn; pass the
+                # kind through rather than inventing a shape for them.
+                block = {"kind": kind, "text": fr.get("text") or ""}
+                if fr.get("extra"):
+                    block.update(fr["extra"])
+                out.append(block)
+        return out
 
     def _flush(self, subtype):
         out = []
-        if self.blocks:
+        blocks = self.blocks()
+        if blocks:
             out.append({
                 "type": "assistant",
-                "message_id": "%s-%d" % (self.prefix, self.turn_id),
-                "blocks": self.blocks,
+                "message_id": "%s-%s" % (self.prefix, self.turn_id or "0"),
+                "blocks": blocks,
             })
-            self.blocks = []
-            self.tools = {}
         out.append({"type": "result", "subtype": subtype})
+        self._reset_turn()
         return out
+
+    # -- ops ----------------------------------------------------------------
+
+    def _apply_op(self, op):
+        kind = op.get("op")
+        if kind == "prompt.upsert":
+            prompt = op.get("prompt") or {}
+            pid = prompt.get("promptId")
+            if pid:
+                self.prompts[pid] = prompt.get("status")
+            return []
+        if kind == "turn.upsert":
+            turn = op.get("turn") or {}
+            tid = turn.get("turnId")
+            state = turn.get("state")
+            if state == "running":
+                if tid != self.turn_id:
+                    self._reset_turn()
+                self.turn_id = tid
+                self.turn_state = state
+                return []
+            if state in ("completed", "failed", "cancelled", "aborted"):
+                self.turn_state = state
+                # kap-server repeats the terminal turn.upsert; emit once.
+                if tid in self.emitted_turns:
+                    return []
+                self.emitted_turns.add(tid)
+                return self._flush(self.end_reason or state)
+            return []
+        if kind == "frame.upsert":
+            fr = op.get("frame") or {}
+            fid = fr.get("frameId")
+            if not fid:
+                return []
+            entry = self.frames.setdefault(fid, {"kind": None, "text": ""})
+            if fid not in self.order:
+                self.order.append(fid)
+            entry["kind"] = fr.get("kind") or entry["kind"]
+            # A frame.upsert carrying text is a reconciliation of the appends
+            # (it arrives again at turn end with the settled value), so it
+            # replaces rather than concatenates.
+            if fr.get("text"):
+                entry["text"] = fr["text"]
+            extra = {k: v for k, v in fr.items()
+                     if k not in ("frameId", "kind", "text")}
+            if extra:
+                entry.setdefault("extra", {}).update(extra)
+            return []
+        if kind == "append":
+            target = op.get("target") or {}
+            fid = target.get("frameId")
+            if not fid:
+                return []
+            entry = self.frames.setdefault(fid, {"kind": None, "text": ""})
+            if fid not in self.order:
+                self.order.append(fid)
+            offset = op.get("offset")
+            text = str(op.get("text") or "")
+            if isinstance(offset, int) and offset != len(entry["text"]):
+                # Offsets let a gap be repaired instead of replayed blind.
+                entry["text"] = entry["text"][:offset] + text
+            else:
+                entry["text"] += text
+            return []
+        if kind == "meta.merge":
+            meta = op.get("meta") or {}
+            if "activity" in meta:
+                self.activity = meta["activity"]
+            agent = meta.get("agent") or {}
+            if "usage" in agent:
+                self.usage = agent["usage"]
+            if "contextTokens" in agent:
+                self.context_tokens = agent["contextTokens"]
+            phase = agent.get("phase") or {}
+            if phase.get("kind") == "ended" and phase.get("reason"):
+                self.end_reason = phase["reason"]
+            return []
+        return []
+
+    # -- frames -------------------------------------------------------------
 
     def feed(self, frame):
         """Consume one WS frame; return a list of CCC events to emit."""
         ftype = frame.get("type") or ""
-        if ftype in ("server_hello", "ack", "ping", "pong", "client_hello_ack"):
+        if ftype in ("server_hello", "ack", "ping", "pong"):
             return []
         if ftype == "resync_required":
             # A seq gap. The caller reopens with transcript_since=last_seq;
-            # surfacing it as an event keeps the hole visible rather than
-            # silently dropping turns.
+            # surfacing it keeps the hole visible rather than dropping turns.
             return [{"type": "result", "subtype": "resync_required"}]
         if frame.get("seq") is not None:
             self.last_seq = frame["seq"]
@@ -453,51 +563,19 @@ class KapTurnMapper:
             self.epoch = frame["epoch"]
 
         payload = frame.get("payload") or {}
-        # The frame's own `type` is the event type -- `session_event` is the
-        # AsyncAPI *message* name, not a literal wrapper that appears on the
-        # wire. Observed frames repeat the type inside payload, so prefer the
-        # envelope and fall back.
-        etype = ftype or payload.get("type") or ""
-        if not etype:
+        if ftype == "transcript.reset":
+            self._reset_turn()
+            return []
+        if ftype == "event.session.work_changed":
+            self.busy = payload.get("busy")
+            return []
+        if ftype != "transcript.ops":
             return []
         # Subagents share this stream; only the main agent's turn is ours.
-        # Agent events use camelCase agentId; transcript ops use agent_id.
-        agent = payload.get("agentId", payload.get("agent_id"))
+        agent = payload.get("agent_id", payload.get("agentId"))
         if agent is not None and agent != self.agent_id:
             return []
-
-        if etype == "turn.started":
-            self.turn_id = int(payload.get("turnId") or (self.turn_id + 1))
-            self.blocks = []
-            self.tools = {}
-            return []
-        if etype == "assistant.delta":
-            self._text_block("text")["text"] += str(payload.get("delta") or "")
-            return []
-        if etype == "thinking.delta":
-            self._text_block("thinking")["text"] += str(payload.get("delta") or "")
-            return []
-        if etype == "tool.call.started":
-            block = {
-                "kind": "tool_use",
-                "name": payload.get("name") or "",
-                "input": payload.get("args"),
-                "tool_id": payload.get("toolCallId") or "",
-                "status": _KAP_TOOL_PENDING,
-            }
-            if payload.get("description"):
-                block["description"] = payload["description"]
-            self.blocks.append(block)
-            self.tools[block["tool_id"]] = block
-            return []
-        if etype == "tool.result":
-            block = self.tools.get(payload.get("toolCallId"))
-            if block is not None:
-                block["status"] = "error" if payload.get("isError") else "ok"
-                block["output"] = payload.get("output")
-            return []
-        if etype == "turn.ended":
-            return self._flush(str(payload.get("reason") or "completed"))
-        if etype == "prompt.aborted":
-            return self._flush("cancelled")
-        return []
+        out = []
+        for op in payload.get("ops") or []:
+            out.extend(self._apply_op(op))
+        return out
