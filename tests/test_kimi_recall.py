@@ -105,6 +105,23 @@ def test_sync_skips_unchanged_session_and_reexports_completed_wire_append(tmp_pa
     assert "Second reply" in (output_dir / "session_alpha.md").read_text(encoding="utf-8")
 
 
+def test_sync_writes_one_aggregate_markdown_source_for_total_recall(tmp_path):
+    kimi_home = _make_kimi_home(tmp_path, [
+        {"type": "context.append_message", "message": {
+            "role": "user", "origin": {"kind": "user"},
+            "content": [{"type": "text", "text": "Aggregate this"}],
+        }},
+    ])
+    output_dir = tmp_path / "knowledge"
+
+    kimi_recall.sync_kimi_knowledge(output_dir, kimi_home=kimi_home)
+
+    aggregate = (output_dir / "kimi-code-sessions.md").read_text(encoding="utf-8")
+    assert aggregate.startswith("# Kimi Code Knowledge Export")
+    assert "Session ID: session_alpha" in aggregate
+    assert "Aggregate this" in aggregate
+
+
 def test_launchd_plist_runs_sync_with_explicit_paths():
     plist = kimi_recall.launchd_plist(
         script_path="/opt/ccc/scripts/kimi-recall-bridge.py",
@@ -128,13 +145,15 @@ def test_launchd_plist_runs_sync_with_explicit_paths():
 
 def test_connect_total_recall_runs_supported_folder_ingest(tmp_path):
     output_dir = tmp_path / "knowledge"
+    output_dir.mkdir()
+    (output_dir / "kimi-code-sessions.md").write_text("# Kimi Code Knowledge Export\n", encoding="utf-8")
     with mock.patch("ccc_server.kimi_recall.subprocess.run") as run:
         run.return_value = subprocess.CompletedProcess([], 0, "connected", "")
         result = kimi_recall.connect_total_recall(output_dir, executable="total-recall")
 
     assert result.returncode == 0
     run.assert_called_once_with(
-        ["total-recall", "ingest", str(output_dir)],
+        ["total-recall", "ingest", str(output_dir / "kimi-code-sessions.md")],
         capture_output=True,
         text=True,
         check=False,
@@ -227,6 +246,7 @@ def test_sync_reexports_when_session_metadata_changes_without_wire_change(tmp_pa
 
 
 def test_connect_total_recall_returns_controlled_error_when_cli_is_missing(tmp_path):
+    (tmp_path / "kimi-code-sessions.md").write_text("# Kimi Code Knowledge Export\n", encoding="utf-8")
     with mock.patch("ccc_server.kimi_recall.subprocess.run", side_effect=FileNotFoundError):
         result = kimi_recall.connect_total_recall(tmp_path, executable="missing-total-recall")
 
