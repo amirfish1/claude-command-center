@@ -375,5 +375,178 @@ class TestCensusUnansweredInput(unittest.TestCase):
         self.assertTrue(rows[0]["unanswered_input"])
 
 
+class TestAcpLiveDiscovery(unittest.TestCase):
+    """ACP-attached sessions (kimi/grok) own no per-session OS process, so
+    registry/resume-arg/sidecar discovery never nominates them. The ACP
+    registry union in _discover_live_session_ids is what makes them visible
+    — gated to attached, non-closed, recently-active sessions."""
+
+    def setUp(self):
+        self._tmp = tempfile.TemporaryDirectory()
+        self._orig_registry = server._load_session_registry
+        self._orig_engine = server._live_engine_session_ids
+        self._orig_sidecar_dir = server.SIDECAR_STATE_DIR
+        self._orig_harnesses = server._ACP_HARNESSES
+        self._orig_enabled = server._acp_harness_enabled
+        self._orig_load = server._acp_load_state
+        self._orig_state = server._ACP_SESSION_STATE
+        server._load_session_registry = lambda: {}
+        server._live_engine_session_ids = lambda: frozenset()
+        server.SIDECAR_STATE_DIR = pathlib.Path(self._tmp.name)  # empty dir
+        server._ACP_HARNESSES = {"kimi": {"label": "Kimi"}, "grok": {"label": "Grok"}}
+        server._acp_harness_enabled = lambda harness: harness != "grok"
+        server._acp_load_state = lambda harness: None
+
+    def tearDown(self):
+        server._load_session_registry = self._orig_registry
+        server._live_engine_session_ids = self._orig_engine
+        server.SIDECAR_STATE_DIR = self._orig_sidecar_dir
+        server._ACP_HARNESSES = self._orig_harnesses
+        server._acp_harness_enabled = self._orig_enabled
+        server._acp_load_state = self._orig_load
+        server._ACP_SESSION_STATE = self._orig_state
+        self._tmp.cleanup()
+
+    def _set_acp(self, sessions):
+        server._ACP_SESSION_STATE = {"kimi": sessions, "grok": {"grok-1": {
+            "attached": True, "status": "idle", "updated_at": time.time()}}}
+
+    def test_fresh_attached_session_nominated(self):
+        now = time.time()
+        self._set_acp({"session_k1": {"attached": True, "status": "idle", "updated_at": now - 5}})
+        self.assertIn("session_k1", server._discover_live_session_ids())
+
+    def test_grok_included_via_acp_even_without_tui_process(self):
+        # The disabled-harness stub excludes grok here; enable it to prove
+        # the harness-driven (no `grok --resume` process) path nominates too.
+        server._acp_harness_enabled = lambda harness: True
+        self._set_acp({})
+        self.assertIn("grok-1", server._discover_live_session_ids())
+
+    def test_disabled_harness_closed_unattached_and_stale_excluded(self):
+        now = time.time()
+        self._set_acp({
+            "session_closed": {"attached": True, "status": "closed", "updated_at": now - 5},
+            "session_detached": {"attached": False, "status": "idle", "updated_at": now - 5},
+            "session_stale": {"attached": True, "status": "idle",
+                              "updated_at": now - server._SIDECAR_LIVE_WINDOW - 60},
+            "session_nots": {"attached": True, "status": "idle", "updated_at": 0},
+        })
+        sids = server._discover_live_session_ids()
+        for sid in ("session_closed", "session_detached", "session_stale", "session_nots", "grok-1"):
+            self.assertNotIn(sid, sids)
+
+
+class TestAcpLiveActivityFields(unittest.TestCase):
+    def setUp(self):
+        self._tmp = tempfile.TemporaryDirectory()
+        self._orig_state = server._ACP_SESSION_STATE
+        self._orig_load = server._acp_load_state
+        self._orig_kidx = server._kimi_session_index
+        self._orig_ktail = server._kimi_wire_tail_meta
+        self._orig_gsrc = server._grok_conversation_source
+        server._acp_load_state = lambda harness: None
+        server._ACP_SESSION_STATE = {}
+
+    def tearDown(self):
+        server._ACP_SESSION_STATE = self._orig_state
+        server._acp_load_state = self._orig_load
+        server._kimi_session_index = self._orig_kidx
+        server._kimi_wire_tail_meta = self._orig_ktail
+        server._grok_conversation_source = self._orig_gsrc
+        self._tmp.cleanup()
+
+    def test_kimi_wire_tail_drives_state_and_age(self):
+        now = time.time()
+        server._kimi_session_index = lambda: {"session_k1": {"session_dir": "/x"}}
+        server._kimi_wire_tail_meta = lambda d: {
+            "last_event_type": "assistant", "pending_tool": "Bash",
+            "mid_turn": True, "wire_mtime": now - 3}
+        out = server._acp_live_activity_fields("kimi", "session_k1")
+        self.assertEqual(out["sidecar_ts"], now - 3)
+        self.assertEqual(out["pending_tool"], "Bash")
+        self.assertEqual(out["last_event_type"], "assistant")
+        self.assertFalse(out["needs_approval"])
+
+    def test_kimi_mid_turn_without_tool_reads_thinking(self):
+        server._kimi_session_index = lambda: {"session_k1": {"session_dir": "/x"}}
+        server._kimi_wire_tail_meta = lambda d: {
+            "last_event_type": "assistant", "pending_tool": None,
+            "mid_turn": True, "wire_mtime": time.time()}
+        self.assertEqual(
+            server._acp_live_activity_fields("kimi", "session_k1")["pending_tool"],
+            "Thinking")
+
+    def test_pending_permissions_flag_needs_approval(self):
+        server._kimi_session_index = lambda: {}
+        server._ACP_SESSION_STATE = {"kimi": {"session_k1": {
+            "attached": True, "pending_permissions": [{"request_id": "r1"}],
+            "updated_at": time.time() - 9}}}
+        out = server._acp_live_activity_fields("kimi", "session_k1")
+        self.assertTrue(out["needs_approval"])
+        # No wire signal → falls back to the registry's updated_at.
+        self.assertAlmostEqual(out["sidecar_ts"], time.time() - 9, delta=2)
+
+    def test_grok_tail_mid_turn_then_finished(self):
+        path = pathlib.Path(self._tmp.name) / "grok.jsonl"
+        server._grok_conversation_source = lambda sid: path
+        server._GROK_WIRE_TAIL_CACHE.clear()
+        path.write_text(
+            json.dumps({"type": "user_text"}) + "\n" + json.dumps({"type": "assistant"}) + "\n")
+        out = server._acp_live_activity_fields("grok", "g1")
+        self.assertEqual(out["pending_tool"], "Thinking")
+        self.assertEqual(out["last_event_type"], "assistant")
+        with path.open("a") as f:
+            f.write(json.dumps({"type": "result"}) + "\n")
+        out = server._acp_live_activity_fields("grok", "g1")
+        self.assertIsNone(out["pending_tool"])
+        self.assertEqual(out["last_event_type"], "result")
+
+
+class TestCensusCodexPoolIdentity(unittest.TestCase):
+    def setUp(self):
+        self._orig_registry = server._load_spawn_registry
+        self._orig_threads = server._codex_fetch_threads
+        self._orig_cache = dict(server._ARCHIVE_RESPONSE_CACHE)
+        self._orig_loaded = server._ARCHIVE_RESPONSE_CACHE_LOADED
+        server._ARCHIVE_RESPONSE_CACHE.clear()
+        server._ARCHIVE_RESPONSE_CACHE_LOADED = True
+        server._CENSUS_IDENTITY_CACHE["token"] = None
+        server._CENSUS_IDENTITY_CACHE["map"] = {}
+
+    def tearDown(self):
+        server._load_spawn_registry = self._orig_registry
+        server._codex_fetch_threads = self._orig_threads
+        server._ARCHIVE_RESPONSE_CACHE.clear()
+        server._ARCHIVE_RESPONSE_CACHE.update(self._orig_cache)
+        server._ARCHIVE_RESPONSE_CACHE_LOADED = self._orig_loaded
+        server._CENSUS_IDENTITY_CACHE["token"] = None
+        server._CENSUS_IDENTITY_CACHE["map"] = {}
+
+    def test_pool_thread_identity_filled(self):
+        server._load_spawn_registry = lambda: []
+        server._codex_fetch_threads = lambda limit=None: [{
+            "id": "pool-1", "title": "  Fix\n the flaky test  ",
+            "model": "gpt-5.6-terra", "reasoning_effort": "xhigh",
+            "cwd": "/x/BYM", "updated_at": 1788286000,
+        }]
+        out = server._census_identity_map()
+        row = out["pool-1"]
+        self.assertEqual(row["engine"], "codex")
+        self.assertEqual(row["name"], "Fix the flaky test")
+        self.assertEqual(row["model"], "gpt-5.6-terra")
+        self.assertEqual(row["effort"], "xhigh")
+        self.assertEqual(row["repo_path"], "/x/BYM")
+        # Live-row identity only — never leaks into the ended-merge.
+        self.assertFalse(row["has_conversation_row"])
+
+    def test_pool_fill_never_overrides_known_identity(self):
+        server._load_spawn_registry = lambda: [{
+            "session_id": "pool-1", "engine": "codex", "name": "spawned-name"}]
+        server._codex_fetch_threads = lambda limit=None: [{
+            "id": "pool-1", "title": "sqlite-name", "cwd": "/x/BYM"}]
+        self.assertEqual(server._census_identity_map()["pool-1"]["name"], "spawned-name")
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -8346,7 +8346,137 @@ def _discover_live_session_ids():
                     sids.add(sid)
         except OSError:
             pass
+    # ACP-attached sessions (kimi/grok harnesses) own no per-session OS
+    # process — the harness is one shared stdio process with no session id
+    # on its command line — so neither the registry, the resume-arg scan,
+    # nor Claude sidecars ever nominate them. A live ACP session was
+    # invisible here: kimi always, and grok whenever the harness (not a
+    # `grok --resume` TUI) drives it. The ACP registry is in-memory, so
+    # this union is free; gate on recency with the same window as sidecar
+    # markers so ancient idle sessions don't flood candidacy (every kimi/
+    # grok sid passes the harness-availability liveness probe).
+    try:
+        now = time.time()
+        for harness in (_ACP_HARNESSES or ()):
+            try:
+                if not _acp_harness_enabled(harness):
+                    continue
+                with _ACP_LOCK:
+                    _acp_load_state(harness)
+                    acp_sessions = dict(_ACP_SESSION_STATE.get(harness) or {})
+            except Exception:
+                continue
+            for acp_sid, acp_state in acp_sessions.items():
+                if not acp_sid or not isinstance(acp_state, dict):
+                    continue
+                if not acp_state.get("attached"):
+                    continue
+                if str(acp_state.get("status") or "") == "closed":
+                    continue
+                try:
+                    updated = float(acp_state.get("updated_at") or 0)
+                except (TypeError, ValueError):
+                    updated = 0.0
+                if updated and (now - updated) < _SIDECAR_LIVE_WINDOW:
+                    sids.add(str(acp_sid))
+    except Exception:
+        pass
     return sids
+
+
+_GROK_WIRE_TAIL_BYTES = 8192
+_GROK_WIRE_TAIL_CACHE = {}  # path -> ((mtime_ns, size), meta) — same idiom as _KIMI_WIRE_TAIL_CACHE
+
+
+def _grok_wire_tail_meta(transcript_path):
+    """Last-turn shape from the tail of a Grok transcript (CCC ACP transcript
+    or the on-disk store, whichever _grok_conversation_source picked).
+
+    Events are user_text / assistant / result; a turn is mid-flight when the
+    last event is not a result. Bounded tail read, (mtime,size)-keyed cache —
+    repeat polls cost one stat."""
+    meta = {"last_event_type": None, "mid_turn": False, "wire_mtime": 0.0}
+    if not transcript_path:
+        return meta
+    path = Path(transcript_path)
+    try:
+        st = path.stat()
+    except OSError:
+        return meta
+    meta["wire_mtime"] = st.st_mtime
+    key = (st.st_mtime_ns, st.st_size)
+    cache_key = str(path)
+    cached = _GROK_WIRE_TAIL_CACHE.get(cache_key)
+    if cached and cached[0] == key:
+        return dict(cached[1])
+    try:
+        with path.open("rb") as f:
+            if st.st_size > _GROK_WIRE_TAIL_BYTES:
+                f.seek(-_GROK_WIRE_TAIL_BYTES, os.SEEK_END)
+            raw = f.read(_GROK_WIRE_TAIL_BYTES)
+    except OSError:
+        return meta
+    last_type = None
+    for line in raw.decode("utf-8", "replace").split("\n"):
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            ev = json.loads(line)
+        except json.JSONDecodeError:
+            continue  # the window's first line is usually truncated
+        etype = ev.get("type")
+        if etype in ("user", "user_text", "assistant", "result"):
+            last_type = etype
+    meta["last_event_type"] = "user" if last_type == "user_text" else last_type
+    meta["mid_turn"] = last_type in ("user", "user_text", "assistant")
+    _GROK_WIRE_TAIL_CACHE[cache_key] = (key, dict(meta))
+    if len(_GROK_WIRE_TAIL_CACHE) > 512:
+        _GROK_WIRE_TAIL_CACHE.pop(next(iter(_GROK_WIRE_TAIL_CACHE)))
+    return meta
+
+
+def _acp_live_activity_fields(harness, session_id):
+    """Live-activity fields for ACP-harness sessions (kimi/grok).
+
+    These sessions own no per-session OS process and write no Claude sidecar,
+    so without this their live rows rendered with no timestamp (age '?') and
+    no working/waiting signal at all. Reuses the same bounded, (mtime,size)-
+    cached tail reads as the conversation providers; needs_approval comes
+    from the ACP registry's pending_permissions (an approval parked on a
+    human is the 'waiting' state, e.g. what the auto-approve watcher polls).
+    """
+    out = {"sidecar_ts": 0.0, "pending_tool": None, "last_event_type": None}
+    state = {}
+    try:
+        with _ACP_LOCK:
+            _acp_load_state(harness)
+            state = dict(_ACP_SESSION_STATE.get(harness, {}).get(session_id) or {})
+    except Exception:
+        state = {}
+    out["needs_approval"] = bool(state.get("pending_permissions"))
+    if out["needs_approval"]:
+        out["needs_approval_message"] = "Approval requested"
+    try:
+        if harness == "kimi":
+            idx = _kimi_session_index().get(session_id) or {}
+            tail = _kimi_wire_tail_meta(idx.get("session_dir"))
+        else:
+            tail = _grok_wire_tail_meta(_grok_conversation_source(session_id))
+        out["sidecar_ts"] = float(tail.get("wire_mtime") or 0)
+        out["last_event_type"] = tail.get("last_event_type")
+        if tail.get("mid_turn"):
+            # A real pending tool beats the between-events think gap; the
+            # label mirrors codex's "Thinking" pseudo-tool.
+            out["pending_tool"] = tail.get("pending_tool") or "Thinking"
+    except Exception:
+        pass
+    if not out["sidecar_ts"]:
+        try:
+            out["sidecar_ts"] = float(state.get("updated_at") or 0)
+        except (TypeError, ValueError):
+            pass
+    return out
 
 
 def _live_activity_entry_for_session(session_id):
@@ -8387,6 +8517,8 @@ def _live_activity_entry_for_session(session_id):
         entry["pending_tool"] = tail.get("pending_tool")
         entry["pending_file"] = tail.get("pending_file")
         entry["last_event_type"] = tail.get("last_event_type")
+    elif engine in ("kimi", "grok"):
+        entry.update(_acp_live_activity_fields(engine, session_id))
     else:
         _add_sidecar_fields(entry)
     return entry
@@ -10101,6 +10233,38 @@ def _census_identity_map():
                 "mtime": row.get("mtime") or row.get("modified") or None,
                 "jsonl_path": row.get("jsonl_path") or None,
             }
+    # Codex pool threads (Codex.app app-server) reach liveness via
+    # _codex_pool_candidate_sids but are in neither the spawn registry nor
+    # (yet) the archive cache — they rendered as all-'?' rows. One bulk
+    # sqlite read, memoized with the rest of this map, fills identity for
+    # threads the other sources missed. has_conversation_row stays False:
+    # this only patches LIVE-row identity — ended coverage stays with the
+    # archive, whose codex rows carry richer metadata.
+    try:
+        for row in _codex_fetch_threads(limit=200) or ():
+            if not isinstance(row, dict):
+                continue
+            sid = str(row.get("id") or "").strip()
+            if not sid or sid in out:
+                continue
+            name = row.get("title") or row.get("first_user_message") or None
+            if isinstance(name, str):
+                name = " ".join(name.split())[:120] or None
+            else:
+                name = None
+            out[sid] = {
+                "name": name,
+                "engine": "codex",
+                "model": row.get("model") or None,
+                "effort": row.get("reasoning_effort") or None,
+                "repo_path": row.get("cwd") or None,
+                "parent_session_id": None,
+                "has_conversation_row": False,
+                "mtime": _codex_ts_seconds(row, prefix="updated")
+                or _codex_ts_seconds(row, prefix="created") or None,
+            }
+    except Exception:
+        pass
     with _CENSUS_IDENTITY_CACHE_LOCK:
         _CENSUS_IDENTITY_CACHE["token"] = token
         _CENSUS_IDENTITY_CACHE["map"] = out
