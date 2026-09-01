@@ -7170,31 +7170,60 @@
     }
   });
 
-  // Antigravity "Push input" button inside the live tool strip. Uses
-  // delegation because the button is inside innerHTML-replaced content.
+  // "Wake up" / "Push input" button inside the live tool strip (Working... / Generating... / in-flight tool > 60s).
+  // Uses delegation because the button is inside innerHTML-replaced content.
   document.addEventListener('click', async (ev) => {
-    const btn = ev.target.closest('.cl-agy-wake-btn');
+    const btn = ev.target.closest('.cl-working-wake-btn, .cl-agy-wake-btn');
     if (!btn) return;
+    ev.preventDefault();
     ev.stopPropagation();
     const sid = currentSession && currentSession.id;
-    if (!sid || (currentSession.source !== 'antigravity')) return;
+    if (!sid || btn.disabled) return;
     btn.disabled = true;
-    btn.textContent = '…';
-    const AGY_WAKE = 'Status check: your last action has not returned for a while. If you are stuck, describe what you were waiting on and continue with the next concrete step.';
+    const origText = btn.textContent;
+    btn.textContent = 'Waking…';
+    const engine = ((currentSession && (currentSession.source || currentSession.engine)) || '').toLowerCase();
+    const wakeText = (engine === 'kimi')
+      ? 'continue'
+      : (engine === 'codex')
+        ? CODEX_WAKE_TEXT
+        : (engine === 'antigravity')
+          ? AGY_WAKE
+          : 'Status check: your last action has not returned for a while. If you are stuck, say what you were waiting on and continue with the next concrete step.';
     try {
-      const res = await fetch('/api/inject-input', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ session_id: sid, text: AGY_WAKE }),
-      });
-      const data = await res.json();
-      if (!data.ok) throw new Error(data.error || 'push failed');
-      showOpToast('Wake message pushed to Antigravity session.');
-      setTimeout(refreshConversationList, 2000);
+      let data;
+      if (engine === 'codex' && typeof postInjectInput === 'function') {
+        data = await postInjectInput(sid, wakeText, 'steer');
+        if (!data.ok && (
+          data.code === 'codex_no_active_turn'
+          || data.code === 'codex_steer_unavailable'
+          || data.code === 'codex_steer_failed'
+        )) {
+          data = await postInjectInput(sid, wakeText, 'send');
+        }
+      } else {
+        const res = await fetch('/api/inject-input', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ session_id: sid, text: wakeText }),
+        });
+        data = await res.json().catch(() => ({}));
+      }
+      if (!data.ok) throw new Error(data.error || 'wake failed');
+      btn.textContent = 'Sent';
+      showOpToast('Wake message sent to session.');
+      setTimeout(refreshConversationList, 1500);
+      setTimeout(() => {
+        btn.textContent = origText;
+        btn.disabled = false;
+      }, 3000);
     } catch (err) {
-      showOpToast('Push failed: ' + (err.message || 'unknown'), 'error');
-      btn.disabled = false;
-      btn.textContent = 'Push input';
+      showOpToast('Wake failed: ' + (err && err.message || 'unknown'), 'error');
+      btn.textContent = 'Failed';
+      setTimeout(() => {
+        btn.textContent = origText;
+        btn.disabled = false;
+      }, 3000);
     }
   });
 
@@ -7634,6 +7663,11 @@
       const _tokTxt = _liveMatches ? codexTokenUsageText(liveStatus.codexAppServerTokenUsage) : '';
       const _toolTxt = _activeItem.label || (_webuiPane ? 'Working…' : 'Generating…');
       const _detailTxt = _activeItem.label ? _activeItem.detail : '';
+      const _silenceSec = (_liveMatches && liveStatus.staleToolAgeS) || (ageSec < 9000 ? ageSec : 0);
+      const showGeneratingWakeBtn = _silenceSec >= 60 && !hasWakeProgress;
+      const _wakeBtnHtml = showGeneratingWakeBtn
+        ? '<button type="button" class="cl-working-wake-btn" title="No output for ' + Math.max(1, Math.floor(_silenceSec / 60)) + 'm — click to send a status check / wake input">Wake up</button>'
+        : '';
       inline.className = 'conv-live-tool-inline is-generating' + (_activeItem.label ? ' in-flight' : '');
       // Webui panes get the kimi-web moon-phases waiting spinner (honest
       // busy signal — no fake per-token streaming); other engines keep the
@@ -7641,7 +7675,8 @@
       inline.innerHTML = (_webuiPane && !_activeItem.label ? _kimiMoonHtml() : '<span class="cl-pulse"></span>')
         + '<span class="cl-tool">' + (_activeItem.label ? '▶ ' : '') + escapeHtml(_toolTxt) + '</span>'
         + (_detailTxt ? '<span class="cl-file">' + escapeHtml(truncate(_detailTxt, 80)) + '</span>' : '')
-        + (_tokTxt ? '<span class="cl-age cl-tokens">' + escapeHtml(_tokTxt) + '</span>' : '');
+        + (_tokTxt ? '<span class="cl-age cl-tokens">' + escapeHtml(_tokTxt) + '</span>' : '')
+        + _wakeBtnHtml;
       inline.title = _activeItem.label
         ? ('Codex is running: ' + _activeItem.label + (_activeItem.detail ? ' - ' + _activeItem.detail : '') + (_tokTxt ? ' (' + _tokTxt + ')' : ''))
         : ('Session is live - model is generating' + (_tokTxt ? ' (' + _tokTxt + ')' : ''));
@@ -7665,11 +7700,11 @@
     const detailHtml = isQuestion
       ? liveQuestionDetailHtml(file)
       : (shortFile ? ' <span class="cl-file' + liveActivityDetailClass(tool) + '">' + escapeHtml(shortFile) + '</span>' : '');
-    // Antigravity wake button: appears when the session is live-AGY and the
-    // in-flight tool has been running for > 60s. One click pushes the wake
-    // text via /api/inject-input without requiring the user to type anything.
-    const isAgySession = currentSession && currentSession.source === 'antigravity';
-    const showWakeBtn = isAgySession && inFlight && !isQuestion && ageSec > 60;
+    // Wake button: appears when the turn or in-flight tool has had no output
+    // for > 60s. One click pushes the wake text via /api/inject-input without
+    // requiring the user to type anything.
+    const _toolSilenceSec = (liveStatusMatchesOpenConv() && liveStatus.staleToolAgeS) || (ageSec < 9000 ? ageSec : 0);
+    const showWakeBtn = inFlight && !isQuestion && (_toolSilenceSec >= 60 || ageSec >= 60);
     updateLiveStripOffset($view, null);
     // Inline indicator at the bottom of the transcript. Re-append on every
     // refresh so it stays the last child even when new events have
@@ -7698,7 +7733,7 @@
       + (isQuestion ? '' : expandedDetailHtml)
       + '<span class="cl-age">' + ageLbl + '</span>'
       + (isQuestion ? detailHtml : '')
-      + (showWakeBtn ? '<button type="button" class="cl-agy-wake-btn" title="Session looks stuck - push a wake message to Antigravity">Push input</button>' : '');
+      + (showWakeBtn ? '<button type="button" class="cl-working-wake-btn cl-agy-wake-btn" title="Session has had no output for ' + dur + ' — click to push a wake message">Wake up</button>' : '');
     inline.innerHTML = expandHtml;
     _reanchorToTailUnlessOnlyTransientBetween($view, inline);
     _liveStripShown = true;
@@ -8214,29 +8249,42 @@
     const original = btn.textContent;
     btn.disabled = true;
     btn.textContent = 'Steering…';
+    const $view = trayConversationView(btn.closest('.queued-steer-tray'));
+    const moved = beginOptimisticSteerMove([row], $view);
+    const giveBack = () => revertOptimisticSteerMove(moved, activePaneId());
     try {
       const data = await postInjectInput(sid, text, 'steer', { replaceQueued: true });
       if (data && data.queue_pump_started) {
+        giveBack();
         showOpToast('Turn ended; sending the oldest queued message now.');
         setTimeout(refreshConversationList, 500);
         return;
       }
       if (data && data.queued_preserved) {
+        giveBack();
         showOpToast(data.error ? ('Still queued: ' + data.error) : 'Queued', 'error');
         setTimeout(refreshConversationList, 500);
         return;
       }
       if (!data || !data.ok) throw new Error((data && (formatInjectFailure(data, 0) || data.error)) || 'steer failed');
       if (!data.queued_consumed) {
+        giveBack();
         showOpToast('Queue changed while steering; refreshing.', 'error');
         setTimeout(refreshConversationList, 200);
         return;
       }
-      if (row && row._pendingRef) removePendingSendEcho(row._pendingRef);
-      else if (row) row.remove();
-      showOpToast('Steered running Codex turn.');
+      // Delivered. Keep the optimistic row standing as "✓ Delivered" so the
+      // message never blinks out of the conversation between the steer and the
+      // durable transcript event that dedupes it away.
+      if (row) {
+        row.classList.remove('steering-optimistic');
+        if (row._pendingRef) markPendingSendDelivered(row._pendingRef, data);
+        else row.remove();
+      }
+      showOpToast(steeredToastText(data));
       setTimeout(refreshConversationList, 500);
     } catch (err) {
+      giveBack();
       btn.textContent = '!';
       showOpToast('Steer failed: ' + ((err && err.message) || 'unknown'), 'error');
     } finally {
@@ -8244,6 +8292,64 @@
         if (!btn.isConnected) return;
         btn.disabled = false;
         btn.textContent = original || 'Steer';
+      }, 900);
+    }
+  });
+
+  // Steer all: one prompt carrying every queued message, in order.
+  document.addEventListener('click', async (ev) => {
+    const btn = ev.target.closest('[data-steer-all-queued]');
+    if (!btn) return;
+    ev.preventDefault();
+    ev.stopPropagation();
+    const tray = btn.closest('.queued-steer-tray');
+    const sid = btn.dataset.sessionId || '';
+    const rows = tray ? Array.from(tray.querySelectorAll('.event.user_text')) : [];
+    const texts = rows.map(row => {
+      const msg = row.querySelector('.user-msg');
+      return ((msg && (msg.getAttribute('data-raw-text') || msg.textContent)) || '').trim();
+    }).filter(Boolean);
+    if (!sid || !texts.length) {
+      showOpToast('Nothing queued to steer.', 'error');
+      return;
+    }
+    const original = btn.textContent;
+    btn.disabled = true;
+    btn.textContent = 'Steering…';
+    const $view = trayConversationView(tray);
+    const moved = beginOptimisticSteerMove(rows, $view);
+    const giveBack = () => revertOptimisticSteerMove(moved, activePaneId());
+    try {
+      const data = await postInjectInput(sid, texts.join('\n\n'), 'steer', {
+        replaceQueuedTexts: texts,
+      });
+      if (data && (data.queue_pump_started || data.queued_preserved)) {
+        giveBack();
+        showOpToast(data.queue_pump_started
+          ? 'Turn ended; sending the oldest queued message now.'
+          : (data.error ? ('Still queued: ' + data.error) : 'Queued'), 'error');
+        setTimeout(refreshConversationList, 500);
+        return;
+      }
+      if (!data || !data.ok) throw new Error((data && (formatInjectFailure(data, 0) || data.error)) || 'steer failed');
+      // The delivered text is the concatenation, so no individual card can
+      // dedupe against the durable event -- drop them all and let the combined
+      // message render as one turn.
+      moved.forEach(row => {
+        if (row._pendingRef) removePendingSendEcho(row._pendingRef);
+        else if (row.parentNode) row.parentNode.removeChild(row);
+      });
+      showOpToast('Steered ' + texts.length + ' queued messages as one turn.');
+      setTimeout(refreshConversationList, 500);
+    } catch (err) {
+      giveBack();
+      btn.textContent = '!';
+      showOpToast('Steer all failed: ' + ((err && err.message) || 'unknown'), 'error');
+    } finally {
+      setTimeout(() => {
+        if (!btn.isConnected) return;
+        btn.disabled = false;
+        btn.textContent = original || 'Steer all';
       }, 900);
     }
   });
@@ -10580,6 +10686,16 @@
                     ? 'Queued /clear - will run when the session finishes its current step.'
                     : 'Queued - will send when the session finishes its current step.'));
           markPendingSendQueued(pendingSend, queuedMsg);
+          // Relocate the echo into the steer tray NOW rather than waiting for
+          // the next transcript render. The message was painted into the
+          // conversation optimistically the moment Enter was pressed (which is
+          // what makes sending feel instant), so deferring the move meant it
+          // sat there for a poll cycle and then visibly hopped back down into
+          // the composer.
+          try {
+            const _qPane = paneId || activePaneId();
+            syncQueuedSteerTray(getConvViewForPane(_qPane) || getConvView(), _qPane, false);
+          } catch (_) {}
           showOpToast(queuedMsg);
         } else if (data.via === 'codex-steer') {
           markPendingSendDelivered(pendingSend, data);
@@ -30351,6 +30467,12 @@
     const payload = { session_id: sessionId, text };
     if (mode) payload.mode = mode;
     if (opts && opts.replaceQueued) payload.replace_queued = true;
+    if (opts && Array.isArray(opts.replaceQueuedTexts) && opts.replaceQueuedTexts.length) {
+      // Steer-all delivers the concatenation, so the server cannot find the
+      // originals by matching the text it just sent -- name them explicitly.
+      payload.replace_queued = true;
+      payload.replace_queued_texts = opts.replaceQueuedTexts;
+    }
     const announcedFrom = opts && opts.announcedFrom ? String(opts.announcedFrom).trim() : '';
     if (announcedFrom) payload.announced_from = announcedFrom;
     const res = await fetch('/api/inject-input', {
@@ -30362,6 +30484,13 @@
     try { data = await res.json(); } catch (_) {}
     if (!res.ok && !data.error) data.error = 'HTTP ' + res.status;
     return data;
+  }
+
+  function steeredToastText(data) {
+    const via = String((data && data.via) || '');
+    if (via === 'codex-steer') return 'Steered running Codex turn.';
+    if (via.indexOf('acp') === 0) return 'Steered - the running turn was interrupted to take it.';
+    return 'Steered.';
   }
 
   function codexSteerUnavailable(data) {
@@ -51666,6 +51795,92 @@
     }
   }
 
+  // How many actual message cards a tray holds. NOT `tray.children.length` --
+  // the tray also carries the Steer-all bar, and counting that as content kept
+  // an empty tray alive as a stray strip above the composer.
+  function queuedSteerCardCount(tray) {
+    return tray ? tray.querySelectorAll('.event.user_text').length : 0;
+  }
+
+  function trayConversationView(tray) {
+    const pane = tray && tray.closest('.conv-pane');
+    return (pane && pane.querySelector('.conversations-view'))
+      || getConvViewForPane(activePaneId())
+      || getConvView();
+  }
+
+  // Move queued cards into the conversation the instant the user steers them.
+  // Steering a busy ACP session (Kimi/Grok) is session/cancel + a turn-teardown
+  // wait + a fresh session/prompt, all inside the one POST -- so waiting for
+  // the response left the message sitting in the tray for seconds with no sign
+  // the click had done anything. Show it in the transcript as in-flight now and
+  // put it back only if the send actually fails.
+  function beginOptimisticSteerMove(rows, $view) {
+    const moved = [];
+    (rows || []).forEach(row => {
+      if (!row) return;
+      const tray = row.closest('.queued-steer-tray');
+      row.classList.remove('send-queued');
+      row.classList.add('steering-optimistic');
+      // The note carries the Steer/Cancel buttons; an in-flight card offers
+      // neither, but keep the node so a revert can restore it intact.
+      const note = row.querySelector('.send-queued-note');
+      if (note) note.hidden = true;
+      if ($view) $view.appendChild(row);
+      moved.push(row);
+      if (tray && !queuedSteerCardCount(tray)) tray.remove();
+    });
+    if ($view) scrollConversationToEnd($view);
+    return moved;
+  }
+
+  function revertOptimisticSteerMove(moved, paneId) {
+    (moved || []).forEach(row => {
+      if (!row) return;
+      row.classList.remove('steering-optimistic');
+      row.classList.add('send-queued');
+      const note = row.querySelector('.send-queued-note');
+      if (note) note.hidden = false;
+    });
+    // Re-running the sync is the whole revert: it re-collects every
+    // `.send-queued` row back into the tray, rebuilding it if it was dropped
+    // for being empty.
+    try {
+      const pid = paneId || activePaneId();
+      syncQueuedSteerTray(getConvViewForPane(pid) || getConvView(), pid, false);
+    } catch (_) {}
+  }
+
+  // A steer-all sends every queued message as ONE prompt. Against a busy ACP
+  // session each separate steer is its own cancel-and-resend round and its own
+  // turn, so N clicks cost N interruptions and N model calls to say what one
+  // turn could have read at once -- which is exactly what Kimi's own Ctrl-S
+  // flush avoids.
+  function syncQueuedSteerAllControl(tray, sessionId) {
+    if (!tray) return;
+    const cards = queuedSteerCardCount(tray);
+    let bar = tray.querySelector('.queued-steer-all-bar');
+    if (cards < 2) {
+      if (bar) bar.remove();
+      return;
+    }
+    if (!bar) {
+      bar = document.createElement('div');
+      bar.className = 'queued-steer-all-bar';
+      bar.innerHTML = '<span class="queued-steer-all-hint"></span>'
+        + '<button type="button" class="queued-steer-all-btn" data-steer-all-queued'
+        + ' title="Send every queued message together, as a single turn">Steer all</button>';
+      tray.insertBefore(bar, tray.firstChild);
+    }
+    const hint = bar.querySelector('.queued-steer-all-hint');
+    if (hint) hint.textContent = cards + ' queued';
+    const allBtn = bar.querySelector('[data-steer-all-queued]');
+    if (allBtn) {
+      allBtn.dataset.sessionId = sessionId || '';
+      allBtn.textContent = 'Steer all ' + cards;
+    }
+  }
+
   // Queued sends are actionable steer candidates, not past conversation.
   // Keep their real event nodes in a small tray immediately above the composer
   // so ongoing output cannot scroll them out of reach.
@@ -51696,7 +51911,7 @@
       '.event.user_text.pending, .event.user_text.send-queued'
     )).filter(el => el.dataset.queuedSteerServer === 'true'
       || el.classList.contains('send-queued'));
-    if (!candidates.length && (!tray || !tray.children.length)) {
+    if (!candidates.length && !queuedSteerCardCount(tray)) {
       if (tray) tray.remove();
       return;
     }
@@ -51750,7 +51965,7 @@
       steer.dataset.sessionId = sessionId;
       tray.appendChild(el);
     });
-    if (!tray.children.length) { tray.remove(); return; }
+    if (!queuedSteerCardCount(tray)) { tray.remove(); return; }
     // A durable transcript event can be present before its matching synthetic
     // queue overlay arrives. Show just the actionable tray version until the
     // queued copy drains; otherwise the same prompt appears twice.
@@ -51782,7 +51997,7 @@
         if (el._pendingRef) removePendingSendEcho(el._pendingRef);
         else if (el.parentNode) el.parentNode.removeChild(el);
       });
-      if (!tray.children.length) { tray.remove(); return; }
+      if (!queuedSteerCardCount(tray)) { tray.remove(); return; }
       queuedTexts = new Set(Array.from(tray.querySelectorAll('.event.user_text'))
         .map(el => {
           const msg = el.querySelector('.user-msg');
@@ -51796,6 +52011,7 @@
       const text = msg && _normSend(msg.getAttribute('data-raw-text') || msg.textContent);
       if (text && queuedTexts.has(text)) el.classList.add('is-queued-steer-duplicate');
     });
+    syncQueuedSteerAllControl(tray, sessionId);
   }
 
   // ── Conversation presentation modes ──────────────────────────────────

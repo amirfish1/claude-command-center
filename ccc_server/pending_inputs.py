@@ -2960,6 +2960,37 @@ def _consume_pending_input_id(
     return 0
 
 
+# Transports whose successful result means the message really did reach the
+# session, so the durable queued copy must be withdrawn. Anything else leaves
+# the queue untouched — a steer that never landed has to stay queued.
+_QUEUED_STEER_CONSUMING_VIA = frozenset({"codex-steer", "acp-prompt"})
+
+
+def _finalize_queued_steer_batch_result(session_id, texts, result):
+    """Commit a Steer-all: withdraw every queued copy the one prompt carried.
+
+    The batch is delivered as a single concatenated prompt on purpose -- N
+    separate steers against a busy ACP session means N cancel-and-resend
+    rounds and N model turns to say what one turn could read at once. That is
+    also why the single-item finaliser cannot be reused: it matches the queue
+    against the text just delivered, and the delivered text here is the
+    concatenation, which matches nothing. Consume the originals by their own
+    texts instead.
+    """
+    result = dict(result or {})
+    if result.get("ok") and result.get("via") in _QUEUED_STEER_CONSUMING_VIA:
+        consumed = 0
+        for item in texts or []:
+            consumed += _core._consume_matching_pending_input(session_id, item)
+        if consumed:
+            result["queued_consumed"] = consumed
+        return result
+    # Not delivered: reuse the single-item finaliser purely for its
+    # error-code handling (pump restart, preserved-queue marking). It cannot
+    # consume anything here -- it never reaches its consume branch.
+    return _core._finalize_queued_steer_result(session_id, "", result)
+
+
 def _finalize_queued_steer_result(session_id, text, result):
     """Commit a queued-row Steer only when Codex confirmed delivery.
 
@@ -2979,7 +3010,14 @@ def _finalize_queued_steer_result(session_id, text, result):
         "queued_ack_capacity_exhausted",
     }:
         return result
-    if result.get("ok") and result.get("via") == "codex-steer":
+    # ACP harnesses (kimi/grok) steer by cancel-then-resend rather than a
+    # Codex-style in-place steer, so a successful one comes back as
+    # `acp-prompt`, not `codex-steer`. Matching only the Codex verb meant a
+    # Kimi queued-row Steer delivered the message AND left the durable copy in
+    # the queue: the UI reported "Queued" (an error toast) over a message that
+    # had in fact just been sent, kept the tray card above the composer, and
+    # the queue pump later delivered the same text a second time.
+    if result.get("ok") and result.get("via") in _QUEUED_STEER_CONSUMING_VIA:
         consumed = _core._consume_matching_pending_input(session_id, text)
         if consumed:
             result["queued_consumed"] = consumed

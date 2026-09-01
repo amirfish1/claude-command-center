@@ -1072,7 +1072,7 @@
   .queued-steer-tray .event {
     position: relative;
     margin: 0;
-    padding: 5px 168px 5px 10px;
+    padding: 5px 190px 5px 10px;
     font-size: 12px;
   }
   .queued-steer-tray .event.user_text {
@@ -1081,16 +1081,26 @@
   }
   .queued-steer-tray .send-queued-steer {
     position: absolute;
-    top: 6px;
+    top: 5px;
     right: 8px;
     opacity: 1;
-    border-color: color-mix(in srgb, var(--orange, #d29922) 70%, transparent);
-    color: #f0b93a;
+    padding: 3px 12px;
+    font-size: 11px;
+    font-weight: 600;
+    border-color: var(--orange, #d29922);
+    background: var(--orange, #d29922);
+    color: #1c1405;
+    box-shadow: 0 1px 4px color-mix(in srgb, var(--orange, #d29922) 40%, transparent);
+  }
+  .queued-steer-tray .send-queued-steer:hover {
+    background: #f0b93a;
+    border-color: #f0b93a;
+    color: #1c1405;
   }
   .queued-steer-tray .user-message-copy {
     position: absolute;
     top: 6px;
-    right: 58px;
+    right: 78px;
     opacity: 1;
     border-color: color-mix(in srgb, var(--text-muted) 45%, transparent);
     color: var(--text-muted);
@@ -1104,7 +1114,7 @@
   .queued-steer-tray .cancel-queued-message {
     position: absolute;
     top: 6px;
-    right: 108px;
+    right: 128px;
     flex-shrink: 0;
     padding: 1px 7px;
     border: 1px solid color-mix(in srgb, var(--text-muted) 45%, transparent);
@@ -1127,6 +1137,54 @@
   }
   .queued-steer-tray .event .user-msg { margin-top: 2px; font-size: 13px; }
   .conversations-view .event.user_text.is-queued-steer-duplicate { display: none; }
+  /* One action for the whole tray: every queued message delivered as a single
+     turn, instead of one interrupt-and-resend round per message. */
+  .queued-steer-all-bar {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+    padding: 0 2px 2px;
+  }
+  .queued-steer-all-hint {
+    font-size: 10px;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+    color: var(--text-muted);
+  }
+  .queued-steer-all-btn {
+    flex-shrink: 0;
+    padding: 3px 12px;
+    border: 1px solid var(--orange, #d29922);
+    border-radius: 3px;
+    background: color-mix(in srgb, var(--orange, #d29922) 22%, transparent);
+    color: #f0b93a;
+    font-size: 11px;
+    font-weight: 600;
+    cursor: pointer;
+    white-space: nowrap;
+  }
+  .queued-steer-all-btn:hover {
+    background: var(--orange, #d29922);
+    color: #1c1405;
+  }
+  .queued-steer-all-btn:disabled { cursor: default; opacity: 0.45; }
+  /* Clicked Steer, POST still in flight. Italic is this transcript's existing
+     "in flight, not yet acknowledged" vocabulary (see .pending); the row is
+     already in the conversation so the click reads as instant, and it either
+     firms up to delivered or drops back into the tray. */
+  .event.user_text.steering-optimistic {
+    font-style: italic;
+    opacity: 0.85;
+    background: rgba(210, 153, 34, 0.06);
+    border-left-color: color-mix(in srgb, var(--orange, #d29922) 70%, transparent);
+  }
+  .event.user_text.steering-optimistic .label::after {
+    content: ' · steering…';
+    font-style: normal; font-weight: 400;
+    color: var(--orange, #d29922); text-transform: none; letter-spacing: 0;
+    font-size: 10px; margin-left: 4px;
+  }
   .queued-steer-tray .msg-image {
     width: 44px;
     height: 32px;

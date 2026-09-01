@@ -31176,6 +31176,16 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                 # whether the keystroke injection itself ends up succeeding.
                 _record_interaction(sid)
                 replace_queued = bool(payload.get("replace_queued"))
+                # Steer-all names the queued messages it is replacing, because
+                # the text being delivered is their concatenation and so
+                # matches none of them.
+                replace_queued_texts = [
+                    str(item)
+                    for item in (payload.get("replace_queued_texts") or [])
+                    if str(item or "").strip()
+                ]
+                if replace_queued_texts:
+                    replace_queued = True
                 queued_text = text
                 if presentation_bootstrap:
                     text = _mode3_prompt("", bootstrap=True)
@@ -31223,7 +31233,11 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                     # "Failed to fetch" with no way to tell what went wrong.
                     # Turn it into a readable error instead.
                     result = {"ok": False, "error": str(e) or "internal error"}
-                if replace_queued:
+                if replace_queued_texts:
+                    result = _finalize_queued_steer_batch_result(
+                        sid, replace_queued_texts, result,
+                    )
+                elif replace_queued:
                     # Match against the text actually delivered/enqueued by
                     # _inject_text_into_session (`text`, post-wrap), not the
                     # raw pre-wrap `queued_text` — when announced_from is set,
