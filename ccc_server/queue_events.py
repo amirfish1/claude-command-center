@@ -1001,7 +1001,7 @@ def _queue_codex_resume(session_id, text, pid=None, reason=None, *, only_if_pend
         if text not in queue:
             queue.append(text)
             _core._pending_resume_queue[session_id] = queue
-    _core._save_pending_inputs()
+    _core._save_pending_inputs({session_id})
     _core._schedule_codex_queue_pump(session_id)
     payload = {
         "ok": True,
@@ -1276,24 +1276,165 @@ def build_codex_wake_status(session_id):
     }
 
 
+def _resume_session_codex_native_delivery(
+    session_id, text, *, steer=False, idempotency_key=None,
+):
+    return _core.resume_session_codex(
+        session_id,
+        text,
+        steer=steer,
+        idempotency_key=idempotency_key,
+        _native_delivery=True,
+    )
+
+
+def _codex_queued_steer_transaction(
+    session_id, text, *, preserve_queued_steer, idempotency_key,
+):
+    ownership = _core._codex_queue_pump_lock(session_id)
+    with ownership:
+        claim = _core._claim_matching_pending_input(session_id, text)
+        if isinstance(claim, dict) and claim.get("code"):
+            result = dict(claim)
+            result.setdefault("via", "codex-steer")
+            result.setdefault("queued_consumed", 0)
+            return result
+        if preserve_queued_steer and claim is None:
+            return {
+                "ok": False,
+                "via": "codex-steer",
+                "code": "queued_message_missing",
+                "queued_consumed": 0,
+                "error": "queued message no longer exists",
+            }
+
+        ack_suppression = None
+        if claim is not None:
+            ack_suppression = _core._begin_codex_queued_steer_ack_suppression(
+                session_id, text,
+            )
+            if isinstance(ack_suppression, dict):
+                if not _core._restore_pending_input_claim(claim):
+                    return {
+                        "ok": False,
+                        "via": "codex-steer",
+                        "code": "queued_rollback_persistence_failed",
+                        "queued_consumed": 0,
+                        "error": "could not persist queued message rollback",
+                    }
+                result = dict(ack_suppression)
+                result.setdefault("via", "codex-steer")
+                result.setdefault("queued_consumed", 0)
+                return result
+
+        try:
+            delivery_kwargs = {"steer": True}
+            if idempotency_key:
+                delivery_kwargs["idempotency_key"] = idempotency_key
+            result = _core._resume_session_codex_native_delivery(
+                session_id, text, **delivery_kwargs,
+            )
+        except Exception:
+            if claim is None:
+                raise
+            acknowledged = _core._finish_codex_queued_steer_ack_suppression(
+                ack_suppression, delivered=False,
+            )
+            if acknowledged:
+                if not _core._commit_pending_input_claim(claim):
+                    return {
+                        "ok": False,
+                        "via": "codex-steer",
+                        "code": "queued_handoff_commit_failed",
+                        "queued_consumed": 1,
+                        "delivered": True,
+                        "error": "acknowledged queued message could not be committed",
+                    }
+                return {
+                    "ok": True,
+                    "via": "codex-steer",
+                    "queued_consumed": 1,
+                    "delivery_acknowledged": True,
+                }
+            if not _core._restore_pending_input_claim(claim):
+                return {
+                    "ok": False,
+                    "via": "codex-steer",
+                    "code": "queued_rollback_persistence_failed",
+                    "queued_consumed": 0,
+                    "error": "could not persist queued message rollback",
+                }
+            raise
+
+        result = dict(result or {})
+        delivered = result.get("ok") and result.get("via") == "codex-steer"
+        if claim is None:
+            return result
+        acknowledged = _core._finish_codex_queued_steer_ack_suppression(
+            ack_suppression, delivered=bool(delivered),
+        )
+        if delivered or acknowledged:
+            if not _core._commit_pending_input_claim(claim):
+                return {
+                    "ok": False,
+                    "via": "codex-steer",
+                    "code": "queued_handoff_commit_failed",
+                    "queued_consumed": 1,
+                    "delivered": True,
+                    "error": "delivered queued message could not be committed",
+                }
+            if acknowledged and not delivered:
+                result.pop("code", None)
+                result.pop("error", None)
+                result.update({
+                    "ok": True,
+                    "via": "codex-steer",
+                    "delivery_acknowledged": True,
+                })
+            result["queued_consumed"] = 1
+            return result
+        if not _core._restore_pending_input_claim(claim):
+            return {
+                "ok": False,
+                "via": "codex-steer",
+                "code": "queued_rollback_persistence_failed",
+                "queued_consumed": 0,
+                "error": "could not persist queued message rollback",
+            }
+        if preserve_queued_steer:
+            result["queued"] = True
+            result["queued_preserved"] = True
+        return result
+
+
 def resume_session_codex(
     session_id, text, *, steer=False, _from_queue=False, idempotency_key=None,
+    preserve_queued_steer=False, _native_delivery=False,
 ):
     """Resume a dormant Codex thread with a new prompt via `codex exec resume`."""
-    routed = _core._control_plane_engine_call(
-        "codex", "resume", {
-            "session_id": session_id,
-            "text": text,
-            "steer": bool(steer),
-            "from_queue": bool(_from_queue),
-        },
-        idempotency_key=idempotency_key,
-    )
-    if routed is not None:
-        return routed
+    if not _native_delivery:
+        routed = _core._control_plane_engine_call(
+            "codex", "resume", {
+                "session_id": session_id,
+                "text": text,
+                "steer": bool(steer),
+                "from_queue": bool(_from_queue),
+                "preserve_queued_steer": bool(preserve_queued_steer),
+            },
+            idempotency_key=idempotency_key,
+        )
+        if routed is not None:
+            return routed
     text = _core._strip_ccc_session_state_instruction(text)
     if not text:
         return {"ok": False, "error": "missing text"}
+    if steer and not _native_delivery:
+        return _codex_queued_steer_transaction(
+            session_id,
+            text,
+            preserve_queued_steer=bool(preserve_queued_steer),
+            idempotency_key=idempotency_key,
+        )
     if not steer and not _from_queue:
         queued_behind_earlier = _core._queue_codex_resume(
             session_id,
@@ -1667,4 +1808,3 @@ def _extract_codex_timeline(session_id):
     except OSError:
         return {"events": [], "total_turns": 0}
     return {"events": events, "total_turns": turn}
-

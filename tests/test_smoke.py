@@ -16980,7 +16980,7 @@ class TestPendingInputs(unittest.TestCase):
             self.server._pending_terminal_input_queue[sid] = ["hello term"]
 
         # Save to disk
-        self.server._save_pending_inputs()
+        self.server._save_pending_inputs({sid})
         self.assertTrue(self.server.PENDING_INPUTS_FILE.is_file())
 
         # Clear memory queues

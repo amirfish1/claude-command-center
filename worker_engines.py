@@ -523,6 +523,9 @@ class EngineHost:
                     args.get("text") or "",
                     steer=bool(args.get("steer")),
                     _from_queue=bool(args.get("from_queue")),
+                    preserve_queued_steer=bool(
+                        args.get("preserve_queued_steer")
+                    ),
                 )
             if operation == "approval":
                 return legacy._codex_app_server_resolve_approval(

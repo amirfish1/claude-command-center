@@ -2042,26 +2042,16 @@ def _remove_codex_queued_steer_ack_unlocked(key, token_id):
 
 
 def _prune_codex_queued_steer_acks_unlocked(now):
-    all_live = []
     for key, entries in list(_CODEX_QUEUED_STEER_ACK_SUPPRESSIONS.items()):
         live = []
         for entry in entries:
             if float(entry.get("expires_at") or 0.0) <= now:
                 continue
             live.append(entry)
-            all_live.append((
-                float(entry.get("created_at") or 0.0),
-                key,
-                entry.get("token_id"),
-            ))
         if live:
             _CODEX_QUEUED_STEER_ACK_SUPPRESSIONS[key] = live
         else:
             _CODEX_QUEUED_STEER_ACK_SUPPRESSIONS.pop(key, None)
-    excess = len(all_live) - _CODEX_QUEUED_STEER_ACK_MAX_TOTAL
-    if excess > 0:
-        for _, key, token_id in sorted(all_live)[:excess]:
-            _remove_codex_queued_steer_ack_unlocked(key, token_id)
 
 
 def _begin_codex_queued_steer_ack_suppression(session_id, text):
@@ -2073,6 +2063,16 @@ def _begin_codex_queued_steer_ack_suppression(session_id, text):
     token_id = uuid.uuid4().hex
     with _CODEX_QUEUED_STEER_ACK_LOCK:
         _prune_codex_queued_steer_acks_unlocked(now)
+        live_count = sum(
+            len(entries)
+            for entries in _CODEX_QUEUED_STEER_ACK_SUPPRESSIONS.values()
+        )
+        if live_count >= _CODEX_QUEUED_STEER_ACK_MAX_TOTAL:
+            return {
+                "ok": False,
+                "code": "queued_ack_capacity_exhausted",
+                "error": "queued Steer acknowledgement capacity is exhausted",
+            }
         _CODEX_QUEUED_STEER_ACK_SUPPRESSIONS.setdefault(key, []).append({
             "token_id": token_id,
             "state": "unbound",
@@ -2080,7 +2080,6 @@ def _begin_codex_queued_steer_ack_suppression(session_id, text):
             "created_at": now,
             "expires_at": now + _CODEX_QUEUED_STEER_ACK_TTL_S,
         })
-        _prune_codex_queued_steer_acks_unlocked(now)
     return key, token_id
 
 

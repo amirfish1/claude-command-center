@@ -121,7 +121,7 @@ class UsageLimitAutoResumeDisabledTests(unittest.TestCase):
                 "  CONTINUE  ",
                 "user follow-up",
             ]
-        self.server._save_pending_inputs()
+        self.server._save_pending_inputs({sid})
 
         result = self.server._disable_session_auto_resume(sid)
 
@@ -236,7 +236,7 @@ class UsageLimitAutoResumeDisabledTests(unittest.TestCase):
         self.server._set_auto_resume_opt_in(sid, True)
         with self.server._pending_resume_lock:
             self.server._pending_resume_queue[sid] = ["continue"]
-        self.server._save_pending_inputs()
+        self.server._save_pending_inputs({sid})
 
         delivery_started = threading.Event()
         allow_delivery = threading.Event()

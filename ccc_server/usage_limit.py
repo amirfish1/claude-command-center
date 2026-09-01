@@ -278,7 +278,9 @@ def _disable_session_auto_resume(session_id):
                     else:
                         queue.pop(sid, None)
 
-            if not _core._save_pending_inputs():
+            if not _core._save_pending_inputs(
+                {sid}, include_auto_resume=True,
+            ):
                 return {
                     "ok": False,
                     "error": "failed to persist auto-resume disable",
@@ -2955,5 +2957,3 @@ def _group_chat_nudge(path, chat_uuid="", target_sid=""):
     if failed_labels:
         _core._group_chat_log_system(real_path, f"nudge FAILED — {'; '.join(failed_labels)}")
     return {"ok": True, "results": results}
-
-

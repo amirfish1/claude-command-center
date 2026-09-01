@@ -53,7 +53,7 @@ _pending_resume_retry_after: dict = {}
 _PENDING_RESUME_RETRY_DELAY_S = 60.0
 _pending_terminal_input_lock = threading.Lock()
 _pending_terminal_handoff_ids: dict = {}  # watcher-local handoff_id → path
-_pending_inputs_lock = threading.Lock()
+_pending_inputs_lock = threading.RLock()
 _pending_input_handoff_ingest_lock = threading.Lock()
 _auto_resume_barrier_thread_lock = threading.RLock()
 _auto_resume_barrier_local = threading.local()
@@ -77,6 +77,56 @@ _auto_resume_opt_in_lock = threading.Lock()
 
 def _auto_resume_barrier_path():
     return _core.PENDING_INPUTS_FILE.with_suffix(".auto-resume.lock")
+
+
+def _pending_inputs_file_lock_path():
+    return _core.PENDING_INPUTS_FILE.with_suffix(".lock")
+
+
+@contextlib.contextmanager
+def _pending_inputs_file_exclusive_lock():
+    """Serialize pending-input read/modify/write across every CCC process."""
+    with _pending_inputs_lock:
+        lock_path = _pending_inputs_file_lock_path()
+        lock_path.parent.mkdir(parents=True, exist_ok=True)
+        with open(lock_path, "a+") as lock_fh:
+            fcntl.flock(lock_fh.fileno(), fcntl.LOCK_EX)
+            try:
+                yield
+            finally:
+                fcntl.flock(lock_fh.fileno(), fcntl.LOCK_UN)
+
+
+def _empty_pending_inputs_payload():
+    return {
+        "resume_queue": {},
+        "devin_steers": {},
+        "terminal_queue": {},
+        "auto_resume_opt_in": {},
+    }
+
+
+def _read_pending_inputs_payload_unlocked(*, missing_is_empty):
+    try:
+        with open(_core.PENDING_INPUTS_FILE) as f:
+            data = json.load(f)
+    except FileNotFoundError:
+        return _empty_pending_inputs_payload() if missing_is_empty else None
+    except (OSError, json.JSONDecodeError):
+        return None
+    if not isinstance(data, dict):
+        return None
+    payload = dict(data)
+    for field in (
+        "resume_queue", "devin_steers", "terminal_queue",
+        "auto_resume_opt_in",
+    ):
+        value = payload.get(field)
+        if value is None:
+            payload[field] = {}
+        elif not isinstance(value, dict):
+            return None
+    return payload
 
 
 @contextlib.contextmanager
@@ -162,6 +212,7 @@ def _load_pending_inputs():
     if not isinstance(data, dict):
         return
     stripped = False
+    stripped_sessions = set()
     with _core._pending_resume_lock:
         rq = data.get("resume_queue")
         if isinstance(rq, dict):
@@ -170,6 +221,7 @@ def _load_pending_inputs():
         for sid, queue in list(_core._pending_resume_queue.items()):
             if _drop_unattended_auto_continues(queue):
                 stripped = True
+                stripped_sessions.add(sid)
             if not queue:
                 empty.append(sid)
         for sid in empty:
@@ -192,6 +244,7 @@ def _load_pending_inputs():
         for sid, queue in list(_core._pending_terminal_input_queue.items()):
             if _drop_unattended_auto_continues(queue):
                 stripped = True
+                stripped_sessions.add(sid)
             if not queue:
                 empty.append(sid)
         for sid in empty:
@@ -205,7 +258,7 @@ def _load_pending_inputs():
                 if v and not _core._is_session_auto_resume_disabled(sid)
             })
     if stripped:
-        _core._save_pending_inputs()
+        _core._save_pending_inputs(stripped_sessions)
 
 
 def _refresh_pending_inputs_for_session(session_id):
@@ -214,15 +267,19 @@ def _refresh_pending_inputs_for_session(session_id):
     if not session_id:
         return False
     try:
-        with open(_core.PENDING_INPUTS_FILE) as f:
-            data = json.load(f)
-    except (OSError, json.JSONDecodeError):
+        with _pending_inputs_file_exclusive_lock():
+            data = _read_pending_inputs_payload_unlocked(missing_is_empty=True)
+    except OSError:
         return False
-    if not isinstance(data, dict):
+    if data is None:
         return False
     resume_data = data.get("resume_queue")
     terminal_data = data.get("terminal_queue")
-    if not isinstance(resume_data, dict) or not isinstance(terminal_data, dict):
+    steer_data = data.get("devin_steers")
+    opt_in_data = data.get("auto_resume_opt_in")
+    if not all(isinstance(value, dict) for value in (
+        resume_data, terminal_data, steer_data, opt_in_data,
+    )):
         return False
 
     resume_items = resume_data.get(session_id)
@@ -251,51 +308,110 @@ def _refresh_pending_inputs_for_session(session_id):
             _core._pending_resume_queue[session_id] = resume_items
         else:
             _core._pending_resume_queue.pop(session_id, None)
+        if steer_data.get(session_id):
+            _core._pending_devin_steers[session_id] = steer_data[session_id]
+        else:
+            _core._pending_devin_steers.pop(session_id, None)
     with _core._pending_terminal_input_lock:
         refreshed_terminal = front_handoffs + terminal_items + back_handoffs
         if refreshed_terminal:
             _core._pending_terminal_input_queue[session_id] = refreshed_terminal
         else:
             _core._pending_terminal_input_queue.pop(session_id, None)
+    with _core._auto_resume_opt_in_lock:
+        if opt_in_data.get(session_id):
+            _core._auto_resume_opt_in[session_id] = True
+        else:
+            _core._auto_resume_opt_in.pop(session_id, None)
     return True
 
 
-def _save_pending_inputs():
-    """Save pending queues from memory to PENDING_INPUTS_FILE."""
-    with _pending_inputs_lock:
-        with _core._pending_resume_lock:
-            rq = dict(_core._pending_resume_queue)
-            devin_steers = dict(_core._pending_devin_steers)
-        with _core._pending_terminal_input_lock:
-            # Worker handoff files remain the authority until delivery. Never
-            # copy their in-memory string wrappers into the shared snapshot:
-            # a stale sibling CCC can replace this JSON, but it cannot erase
-            # the worker-owned inbox entry or create a duplicate on restart.
-            tq = {
-                sid: [
-                    item for item in queue
-                    if not isinstance(item, _PendingInputHandoff)
-                ]
-                for sid, queue in _core._pending_terminal_input_queue.items()
-            }
-            tq = {sid: queue for sid, queue in tq.items() if queue}
-        with _core._auto_resume_opt_in_lock:
-            opt_in = dict(_core._auto_resume_opt_in)
-        payload = {
-            "resume_queue": rq,
-            "devin_steers": devin_steers,
-            "terminal_queue": tq,
-            "auto_resume_opt_in": opt_in,
+def _save_pending_inputs(
+    affected_session_ids, *, include_devin_steers=False,
+    include_auto_resume=False,
+):
+    """Persist only affected sessions over the latest authoritative state."""
+    if isinstance(affected_session_ids, str):
+        affected = {affected_session_ids}
+    else:
+        affected = {
+            str(sid) for sid in affected_session_ids
+            if sid is not None and str(sid)
         }
-        try:
+    if not affected:
+        return True
+
+    with _core._pending_resume_lock:
+        local_resume = {
+            sid: list(_core._pending_resume_queue.get(sid) or [])
+            for sid in affected
+        }
+        local_steers = {
+            sid: _core._pending_devin_steers.get(sid)
+            for sid in affected
+        }
+    with _core._pending_terminal_input_lock:
+        local_terminal = {
+            sid: [
+                item for item in (_core._pending_terminal_input_queue.get(sid) or [])
+                if not isinstance(item, _PendingInputHandoff)
+            ]
+            for sid in affected
+        }
+    with _core._auto_resume_opt_in_lock:
+        local_opt_in = {
+            sid: bool(_core._auto_resume_opt_in.get(sid))
+            for sid in affected
+        }
+
+    tmp_path = None
+    try:
+        with _pending_inputs_file_exclusive_lock():
+            payload = _read_pending_inputs_payload_unlocked(missing_is_empty=True)
+            if payload is None:
+                return False
+            for sid in affected:
+                for field, value in (
+                    ("resume_queue", local_resume[sid]),
+                    ("terminal_queue", local_terminal[sid]),
+                ):
+                    if value:
+                        payload[field][sid] = value
+                    else:
+                        payload[field].pop(sid, None)
+                if include_devin_steers:
+                    if local_steers[sid]:
+                        payload["devin_steers"][sid] = local_steers[sid]
+                    else:
+                        payload["devin_steers"].pop(sid, None)
+                if include_auto_resume:
+                    if local_opt_in[sid]:
+                        payload["auto_resume_opt_in"][sid] = True
+                    else:
+                        payload["auto_resume_opt_in"].pop(sid, None)
+
             _core.PENDING_INPUTS_FILE.parent.mkdir(parents=True, exist_ok=True)
-            tmp = _core.PENDING_INPUTS_FILE.with_suffix(".json.tmp")
-            with open(tmp, "w") as f:
+            fd, tmp_name = tempfile.mkstemp(
+                prefix=f".{_core.PENDING_INPUTS_FILE.name}.",
+                suffix=".tmp",
+                dir=_core.PENDING_INPUTS_FILE.parent,
+            )
+            tmp_path = Path(tmp_name)
+            with os.fdopen(fd, "w") as f:
                 json.dump(payload, f, indent=2, sort_keys=True)
-            tmp.replace(_core.PENDING_INPUTS_FILE)
-        except OSError as e:
-            print(f"  [pending-inputs] save failed: {e}")
-            return False
+                f.flush()
+                os.fsync(f.fileno())
+            os.replace(tmp_path, _core.PENDING_INPUTS_FILE)
+            tmp_path = None
+    except OSError as e:
+        print(f"  [pending-inputs] save failed: {e}")
+        return False
+    finally:
+        if tmp_path is not None:
+            try:
+                tmp_path.unlink(missing_ok=True)
+            except OSError:
+                pass
     return True
 
 
@@ -321,7 +437,9 @@ def _set_auto_resume_opt_in(session_id, value=True):
             _core._auto_resume_opt_in[str(session_id)] = True
         else:
             _core._auto_resume_opt_in.pop(str(session_id), None)
-    _core._save_pending_inputs()
+    _core._save_pending_inputs(
+        {str(session_id)}, include_auto_resume=True,
+    )
 
 
 def _apply_spawn_auto_resume_opt_in(payload, result):
@@ -525,15 +643,23 @@ def _complete_pending_input_handoff(text):
     """Acknowledge one proven-delivered (or deliberately dropped) handoff."""
     if not isinstance(text, _PendingInputHandoff):
         return False
+    tombstone = text.handoff_path.with_suffix(
+        text.handoff_path.suffix + ".delivered"
+    )
     try:
-        text.handoff_path.unlink(missing_ok=True)
+        try:
+            text.handoff_path.replace(tombstone)
+        except FileNotFoundError:
+            if not tombstone.exists():
+                return True
+        _core._pending_terminal_handoff_ids.pop(text.handoff_id, None)
+        tombstone.unlink(missing_ok=True)
     except OSError as e:
         print(
             f"  [pending-inputs] handoff cleanup failed: {e}",
             flush=True,
         )
         return False
-    _core._pending_terminal_handoff_ids.pop(text.handoff_id, None)
     return True
 
 
@@ -681,7 +807,7 @@ def _drop_matching_terminal_queue_entries(session_id, text):
             else:
                 _core._pending_terminal_input_queue.pop(session_id, None)
     if removed:
-        _core._save_pending_inputs()
+        _core._save_pending_inputs({session_id})
         for item in removed_items:
             _core._complete_pending_input_handoff(item)
     return removed
@@ -722,7 +848,7 @@ def _claim_matching_pending_input(session_id, text):
                     break
                 else:
                     continue
-            if _core._save_pending_inputs():
+            if _core._save_pending_inputs({session_id}):
                 return claim
             with lock:
                 items = queue.setdefault(session_id, [])
@@ -759,7 +885,8 @@ def _restore_pending_input_claim(claim):
     )
     ownership = _core._codex_queue_pump_lock(sid)
     with ownership:
-        _core._refresh_pending_inputs_for_session(sid)
+        if not _core._refresh_pending_inputs_for_session(sid):
+            return False
         with lock:
             items = queue.setdefault(sid, [])
             already_restored = (
@@ -773,7 +900,7 @@ def _restore_pending_input_claim(claim):
             if not already_restored:
                 index = max(0, min(int(claim.get("index") or 0), len(items)))
                 items.insert(index, item)
-        return bool(_core._save_pending_inputs())
+        return bool(_core._save_pending_inputs({sid}))
 
 
 def _consume_matching_pending_input(session_id, text):
@@ -805,7 +932,7 @@ def _consume_matching_pending_input(session_id, text):
                 removed = True
                 break
         if removed:
-            _core._save_pending_inputs()
+            _core._save_pending_inputs({session_id})
             _core._complete_pending_input_handoff(removed_item)
             return 1
     return 0
@@ -821,6 +948,14 @@ def _finalize_queued_steer_result(session_id, text, result):
     if (result.get("queued_consumed") or 0) > 0:
         return result
     if result.get("code") == "queued_message_missing":
+        return result
+    if result.get("code") in {
+        "queued_claim_persistence_failed",
+        "queued_claim_refresh_failed",
+        "queued_rollback_persistence_failed",
+        "queued_handoff_commit_failed",
+        "queued_ack_capacity_exhausted",
+    }:
         return result
     if result.get("ok") and result.get("via") == "codex-steer":
         consumed = _core._consume_matching_pending_input(session_id, text)
@@ -1049,7 +1184,7 @@ def _queue_terminal_input_unlocked(session_id, text, status=None, reason_hint=No
         # now, since it will never be popped by the drain loop.
         _core._complete_pending_input_handoff(text)
     else:
-        _core._save_pending_inputs()
+        _core._save_pending_inputs({session_id})
     payload = {
 
         "ok": True,
@@ -1510,16 +1645,18 @@ class _CodexQueueSessionLock:
     def release(self):
         if self._depth <= 0:
             raise RuntimeError("cannot release un-acquired Codex queue lock")
-        self._depth -= 1
-        if self._depth == 0:
-            handle = self._handle
-            self._handle = None
-            if handle is not None:
-                try:
-                    fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
-                finally:
-                    handle.close()
-        self._thread_lock.release()
+        try:
+            self._depth -= 1
+            if self._depth == 0:
+                handle = self._handle
+                self._handle = None
+                if handle is not None:
+                    try:
+                        fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+                    finally:
+                        handle.close()
+        finally:
+            self._thread_lock.release()
 
     def __enter__(self):
         if not self.acquire():
@@ -1578,7 +1715,7 @@ def _queue_devin_resume_input(session_id, text):
         if text in queue:
             return False
         queue.append(text)
-    _core._save_pending_inputs()
+    _core._save_pending_inputs({session_id})
     return True
 
 
@@ -1588,7 +1725,9 @@ def _queue_devin_steer(session_id, text):
         _core._dedupe_devin_resume_queue_unlocked(session_id)
         changed = _core._pending_devin_steers.get(session_id) != text
         _core._pending_devin_steers[session_id] = text
-    _core._save_pending_inputs()
+    _core._save_pending_inputs(
+        {session_id}, include_devin_steers=True,
+    )
     return changed
 
 
@@ -1636,7 +1775,7 @@ def _pump_codex_resume_queue(session_id):
                                 queue.pop(0)
                                 if not queue:
                                     _core._pending_resume_queue.pop(session_id, None)
-                        _core._save_pending_inputs()
+                        _core._save_pending_inputs({session_id})
                         return {"ok": True, "delivered": False, "disabled": True}
                     result = _core.resume_session_codex(
                         session_id, text, _from_queue=True,
@@ -1666,7 +1805,7 @@ def _pump_codex_resume_queue(session_id):
                 if not queue:
                     _core._pending_resume_queue.pop(session_id, None)
         if removed:
-            _core._save_pending_inputs()
+            _core._save_pending_inputs({session_id})
         _core._pending_resume_retry_after.pop(session_id, None)
         return {"ok": True, "delivered": removed, "result": result}
     finally:
@@ -2507,7 +2646,7 @@ def _terminal_queue_hold_or_expire(sid, reason):
                 _core._pending_terminal_input_queue.pop(sid, None)
     if dropped_text is None:
         return
-    _core._save_pending_inputs()
+    _core._save_pending_inputs({sid})
     _core._complete_pending_input_handoff(dropped_text)
     _core._pending_terminal_retry_after.pop(sid, None)
     try:
@@ -2542,7 +2681,7 @@ def _requeue_terminal_input_front(sid, text):
 def _requeue_terminal_input_front_unlocked(sid, text):
     with _core._pending_terminal_input_lock:
         _core._pending_terminal_input_queue.setdefault(sid, []).insert(0, text)
-    _core._save_pending_inputs()
+    _core._save_pending_inputs({sid})
     return True
 
 
@@ -2866,7 +3005,7 @@ def _start_resume_queue_watcher() -> None:
                         text = queue.pop(0)
                         if not queue:
                             _core._pending_resume_queue.pop(sid, None)
-                _core._save_pending_inputs()
+                _core._save_pending_inputs({sid})
                 if text is None:
                     continue
                 result = None
@@ -2900,7 +3039,7 @@ def _start_resume_queue_watcher() -> None:
                 elif not result or not result.get("ok"):
                     with _core._pending_resume_lock:
                         _core._pending_resume_queue.setdefault(sid, []).insert(0, text)
-                    _core._save_pending_inputs()
+                    _core._save_pending_inputs({sid})
                     _core._mark_pending_resume_retry(sid)
                 elif result.get("queued") or result.get("started"):
                     # "queued" means the engine already queued it internally.
@@ -2939,7 +3078,7 @@ def _start_resume_queue_watcher() -> None:
                                 + "; ".join(repr(t[:80]) for t in dropped),
                                 flush=True,
                             )
-                            _core._save_pending_inputs()
+                            _core._save_pending_inputs({sid})
                             for dropped_text in dropped:
                                 _core._complete_pending_input_handoff(dropped_text)
                         _core._clear_foreign_writer_hold(sid)
@@ -3036,7 +3175,7 @@ def _start_resume_queue_watcher() -> None:
                             if not queue:
                                 _core._pending_terminal_input_queue.pop(sid, None)
                     if removed:
-                        _core._save_pending_inputs()
+                        _core._save_pending_inputs({sid})
                     if text is None:
                         continue
                     # CCC-455: a popped entry is only consumed by a PROVEN

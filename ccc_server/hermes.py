@@ -2131,7 +2131,7 @@ def resume_session_hermes(session_id, text):
                 if _core._poll_spawn_entry(s) is None:
                     with _core._pending_resume_lock:
                         _core._pending_resume_queue.setdefault(session_id, []).append(text)
-                    _core._save_pending_inputs()
+                    _core._save_pending_inputs({session_id})
                     return {
                         "ok": True,
                         "queued": True,

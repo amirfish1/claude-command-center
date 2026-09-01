@@ -1,5 +1,6 @@
 from types import SimpleNamespace
 from unittest import mock
+import ast
 import json
 import multiprocessing
 import os
@@ -15,7 +16,7 @@ import server
 
 
 def _cross_process_claim_worker(
-    pending_file, session_id, stale_loaded, claimed, release, results,
+    pending_file, session_id, stale_loaded, claimed, release, released, results,
 ):
     import server as process_server
 
@@ -35,12 +36,13 @@ def _cross_process_claim_worker(
             claimed.set()
             if not release.wait(5):
                 raise AssertionError("claim process was not released")
+        released.set()
     except BaseException as exc:
         results.put(("error", os.getpid(), repr(exc)))
 
 
 def _cross_process_pump_worker(
-    pending_file, session_id, stale_loaded, claimed, release, results,
+    pending_file, session_id, stale_loaded, claimed, release, released, results,
 ):
     import server as process_server
 
@@ -65,8 +67,38 @@ def _cross_process_pump_worker(
         results.put(("first-pump", os.getpid(), first, list(deliveries)))
         if not release.wait(5):
             raise AssertionError("pump process was not released")
+        if not released.wait(5):
+            raise AssertionError("claimant did not exit queue ownership")
         second = process_server._pump_codex_resume_queue(session_id)
         results.put(("second-pump", os.getpid(), second, list(deliveries)))
+    except BaseException as exc:
+        results.put(("error", os.getpid(), repr(exc)))
+
+
+def _cross_process_rmw_worker(
+    pending_file, session_id, action, both_loaded, first_saved, results,
+):
+    import server as process_server
+
+    try:
+        process_server.PENDING_INPUTS_FILE = Path(pending_file)
+        process_server._pending_resume_queue.clear()
+        process_server._pending_terminal_input_queue.clear()
+        process_server._pending_devin_steers.clear()
+        process_server._auto_resume_opt_in.clear()
+        process_server._load_pending_inputs()
+        both_loaded.put(os.getpid())
+        if action == "update" and not first_saved.wait(5):
+            raise AssertionError("delete writer did not persist")
+        with process_server._pending_resume_lock:
+            if action == "delete":
+                process_server._pending_resume_queue.pop(session_id, None)
+            else:
+                process_server._pending_resume_queue[session_id] = ["new-b"]
+        ok = process_server._save_pending_inputs({session_id})
+        if action == "delete":
+            first_saved.set()
+        results.put((action, os.getpid(), ok))
     except BaseException as exc:
         results.put(("error", os.getpid(), repr(exc)))
 
@@ -116,7 +148,8 @@ def router_env(monkeypatch):
     monkeypatch.setattr(server, "_session_acp_harness", lambda sid: None)
     monkeypatch.setattr(server, "_is_opencode_session", lambda sid: False)
     monkeypatch.setattr(server, "_is_devin_cli_session", lambda sid: False)
-    monkeypatch.setattr(server, "resume_session_codex", resume)
+    monkeypatch.setattr(server, "_control_plane_engine_call", lambda *args, **kwargs: None)
+    monkeypatch.setattr(server, "_resume_session_codex_native_delivery", resume)
     monkeypatch.setattr(
         server, "_save_codex_app_server_state_unlocked", mock.Mock(),
     )
@@ -486,7 +519,7 @@ def test_matching_delivery_ack_commits_claim_before_rpc_exception(
 
 def test_ack_suppression_total_cap_includes_every_state():
     now = time.monotonic()
-    states = ["unbound", "pending", "committed"] * 86
+    states = (["unbound", "pending", "committed"] * 85) + ["unbound"]
     with server._CODEX_QUEUED_STEER_ACK_LOCK:
         for index, state in enumerate(states):
             key = (f"sid-{index}", "target")
@@ -571,23 +604,108 @@ def test_legacy_steer_claims_matching_queue_copy(router_env):
     assert sid not in server._pending_resume_queue
 
 
-def test_codex_steer_never_crosses_control_plane_worker_boundary(
-    router_env, monkeypatch,
-):
-    router_env.resume.return_value = {"ok": True, "via": "codex-steer"}
-    route = mock.Mock(side_effect=AssertionError(
-        "Codex steer crossed the dashboard/worker boundary"
-    ))
-    monkeypatch.setattr(server, "_control_plane_engine_call", route)
+def test_codex_router_propagates_explicit_replacement_to_resume(monkeypatch):
+    resume = mock.Mock(return_value={"ok": True, "via": "codex-steer"})
+    monkeypatch.setattr(server, "_control_plane_engine_call", lambda *a, **k: None)
+    monkeypatch.setattr(server, "resume_session_codex", resume)
+    monkeypatch.setattr(server, "_inject_budget_check", lambda *args: None)
+    monkeypatch.setattr(server, "_is_codex_session", lambda sid: True)
+    monkeypatch.setattr(server, "find_session_cwd", lambda sid: "/tmp")
+    monkeypatch.setattr(
+        server, "session_live_status",
+        lambda sid, cwd=None: {"live": True, "status": "working", "tty": None},
+    )
+    monkeypatch.setattr(server, "_is_cursor_session", lambda sid: False)
+    monkeypatch.setattr(server, "_is_hermes_session", lambda sid: False)
+    monkeypatch.setattr(server, "_is_kimi_session", lambda sid: False)
+    monkeypatch.setattr(server, "_session_acp_harness", lambda sid: None)
+    monkeypatch.setattr(server, "_is_opencode_session", lambda sid: False)
+    monkeypatch.setattr(server, "_is_devin_cli_session", lambda sid: False)
 
     result = server._inject_text_into_session_router(
-        "codex-local-route", "historical correction", mode="steer",
+        "codex-worker-route", "queued correction", mode="steer",
+        preserve_queued_steer=True,
     )
 
     assert result["ok"]
-    route.assert_not_called()
-    router_env.resume.assert_called_once_with(
-        "codex-local-route", "historical correction", steer=True,
+    resume.assert_called_once_with(
+        "codex-worker-route", "queued correction",
+        steer=True,
+        preserve_queued_steer=True,
+    )
+
+
+def test_real_resume_worker_owns_acknowledged_ambiguous_steer(
+    monkeypatch,
+):
+    sid = "real-worker-transaction"
+    monkeypatch.delenv("CCC_WORKER_PROCESS", raising=False)
+    server._pending_resume_queue[sid] = ["target", "target", "last"]
+    monkeypatch.setattr(server, "_save_pending_inputs", mock.Mock(return_value=True))
+
+    def native_delivery(session_id, text, **kwargs):
+        server._bind_codex_queued_steer_ack_suppression(
+            session_id, text, "worker-turn",
+        )
+        _notify_user_message(session_id, text, turn_id="worker-turn")
+        raise RuntimeError("ambiguous worker response")
+
+    monkeypatch.setattr(
+        server, "_resume_session_codex_native_delivery", native_delivery,
+        raising=False,
+    )
+    routed_args = []
+
+    def route(engine, operation, args, **kwargs):
+        if os.environ.get("CCC_WORKER_PROCESS") == "1":
+            return None
+        routed_args.append(dict(args))
+        assert args["preserve_queued_steer"] is True
+        with mock.patch.dict(os.environ, {"CCC_WORKER_PROCESS": "1"}):
+            return server.resume_session_codex(
+                args["session_id"], args["text"],
+                steer=args["steer"],
+                _from_queue=args["from_queue"],
+                preserve_queued_steer=args["preserve_queued_steer"],
+            )
+
+    monkeypatch.setattr(server, "_control_plane_engine_call", route)
+
+    result = server.resume_session_codex(
+        sid, "target", steer=True, preserve_queued_steer=True,
+    )
+
+    assert routed_args[0]["preserve_queued_steer"] is True
+    assert result.items() >= {
+        "ok": True,
+        "queued_consumed": 1,
+        "delivery_acknowledged": True,
+    }.items()
+    assert server._pending_resume_queue[sid] == ["target", "last"]
+
+
+def test_worker_engine_forwards_explicit_replacement_semantics():
+    from worker_engines import EngineHost
+
+    resume = mock.Mock(return_value={"ok": True, "via": "codex-steer"})
+    host = object.__new__(EngineHost)
+    host._legacy = lambda: SimpleNamespace(resume_session_codex=resume)
+
+    result = host._call("codex", "resume", {
+        "session_id": "worker-forward",
+        "text": "target",
+        "steer": True,
+        "from_queue": False,
+        "preserve_queued_steer": True,
+    })
+
+    assert result["ok"]
+    resume.assert_called_once_with(
+        "worker-forward",
+        "target",
+        steer=True,
+        _from_queue=False,
+        preserve_queued_steer=True,
     )
 
 
@@ -687,14 +805,19 @@ def test_codex_claim_and_pump_share_cross_process_session_ownership(tmp_path):
     stale_loaded = context.Event()
     claimed = context.Event()
     release = context.Event()
+    released = context.Event()
     results = context.Queue()
     claimant = context.Process(
         target=_cross_process_claim_worker,
-        args=(pending_file, sid, stale_loaded, claimed, release, results),
+        args=(
+            pending_file, sid, stale_loaded, claimed, release, released, results,
+        ),
     )
     pump = context.Process(
         target=_cross_process_pump_worker,
-        args=(pending_file, sid, stale_loaded, claimed, release, results),
+        args=(
+            pending_file, sid, stale_loaded, claimed, release, released, results,
+        ),
     )
     claimant.start()
     pump.start()
@@ -712,6 +835,7 @@ def test_codex_claim_and_pump_share_cross_process_session_ownership(tmp_path):
         assert by_label["claim"][1] != by_label["first-pump"][1]
         release.set()
         second_pump = results.get(timeout=10)
+        assert released.is_set()
         assert second_pump[0] == "second-pump"
         assert second_pump[2] == {"ok": True, "empty": True}
         assert second_pump[3] == []
@@ -727,6 +851,239 @@ def test_codex_claim_and_pump_share_cross_process_session_ownership(tmp_path):
             pump.join(5)
     assert claimant.exitcode == 0
     assert pump.exitcode == 0
+
+
+def test_two_process_session_rmw_neither_resurrects_nor_loses_rows(tmp_path):
+    pending_file = tmp_path / "pending-inputs.json"
+    pending_file.write_text(json.dumps({
+        "resume_queue": {"sid-a": ["old-a"], "sid-b": ["old-b"]},
+        "devin_steers": {"other-sid": "preserve-steer"},
+        "terminal_queue": {},
+        "auto_resume_opt_in": {"sid-a": True, "other-sid": True},
+    }))
+    context = multiprocessing.get_context("spawn")
+    both_loaded = context.Queue()
+    first_saved = context.Event()
+    results = context.Queue()
+    delete_writer = context.Process(
+        target=_cross_process_rmw_worker,
+        args=(pending_file, "sid-a", "delete", both_loaded, first_saved, results),
+    )
+    update_writer = context.Process(
+        target=_cross_process_rmw_worker,
+        args=(pending_file, "sid-b", "update", both_loaded, first_saved, results),
+    )
+    delete_writer.start()
+    update_writer.start()
+    assert both_loaded.get(timeout=10) != both_loaded.get(timeout=10)
+    outcomes = [results.get(timeout=10), results.get(timeout=10)]
+    delete_writer.join(10)
+    update_writer.join(10)
+
+    assert all(outcome[0] != "error" for outcome in outcomes), outcomes
+    assert all(outcome[2] is True for outcome in outcomes)
+    payload = json.loads(pending_file.read_text())
+    assert "sid-a" not in payload["resume_queue"]
+    assert payload["resume_queue"]["sid-b"] == ["new-b"]
+    assert payload["devin_steers"] == {"other-sid": "preserve-steer"}
+    assert payload["auto_resume_opt_in"] == {
+        "sid-a": True,
+        "other-sid": True,
+    }
+    assert delete_writer.exitcode == 0
+    assert update_writer.exitcode == 0
+
+
+def test_all_pending_input_writers_identify_affected_sessions():
+    repo_root = Path(server.__file__).resolve().parent
+    offenders = []
+    for source_path in (repo_root / "ccc_server").glob("*.py"):
+        tree = ast.parse(source_path.read_text(), filename=str(source_path))
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.Call):
+                continue
+            func = node.func
+            name = (
+                func.attr if isinstance(func, ast.Attribute)
+                else func.id if isinstance(func, ast.Name)
+                else ""
+            )
+            if name == "_save_pending_inputs" and not (node.args or node.keywords):
+                offenders.append(f"{source_path.name}:{node.lineno}")
+    assert offenders == []
+
+
+def test_missing_pending_file_refreshes_as_empty_and_ingests_handoff(
+    monkeypatch, tmp_path,
+):
+    import ccc_server.pending_inputs as pending_inputs_module
+
+    sid = "fresh-install-handoff"
+    pending_file = tmp_path / "missing-pending-inputs.json"
+    handoff_dir = tmp_path / "handoffs"
+    monkeypatch.setattr(server, "PENDING_INPUTS_FILE", pending_file)
+    monkeypatch.setattr(server, "PENDING_INPUT_HANDOFF_DIR", handoff_dir)
+    monkeypatch.setattr(
+        server, "_refresh_pending_inputs_for_session",
+        pending_inputs_module._refresh_pending_inputs_for_session,
+    )
+    assert server._write_pending_input_handoff(sid, "from-worker") is not None
+
+    assert server._refresh_pending_inputs_for_session(sid)
+    assert server._pending_resume_queue.get(sid) is None
+    assert list(server._pending_terminal_input_queue[sid]) == ["from-worker"]
+
+
+def test_fresh_install_historical_steer_reaches_native_codex(
+    router_env, monkeypatch, tmp_path,
+):
+    import ccc_server.pending_inputs as pending_inputs_module
+
+    sid = "fresh-install-historical-steer"
+    monkeypatch.setattr(
+        server, "PENDING_INPUTS_FILE", tmp_path / "missing.json",
+    )
+    monkeypatch.setattr(
+        server, "PENDING_INPUT_HANDOFF_DIR", tmp_path / "handoffs",
+    )
+    monkeypatch.setattr(
+        server, "_refresh_pending_inputs_for_session",
+        pending_inputs_module._refresh_pending_inputs_for_session,
+    )
+    router_env.resume.return_value = {"ok": True, "via": "codex-steer"}
+
+    result = server._inject_text_into_session_router(
+        sid, "historical correction", mode="steer",
+    )
+
+    assert result["ok"]
+    router_env.resume.assert_called_once_with(
+        sid, "historical correction", steer=True,
+    )
+
+
+@pytest.mark.parametrize("code", [
+    "queued_claim_persistence_failed",
+    "queued_claim_refresh_failed",
+    "queued_rollback_persistence_failed",
+    "queued_handoff_commit_failed",
+    "queued_ack_capacity_exhausted",
+])
+def test_finalizer_preserves_transaction_terminal_error(code):
+    original = {"ok": False, "code": code, "error": "terminal"}
+    assert server._finalize_queued_steer_result(
+        "terminal-error", "target", original,
+    ) == original
+
+
+def test_ack_capacity_rejects_without_evicting_live_transaction():
+    now = time.monotonic()
+    with server._CODEX_QUEUED_STEER_ACK_LOCK:
+        for index in range(server._CODEX_QUEUED_STEER_ACK_MAX_TOTAL):
+            server._CODEX_QUEUED_STEER_ACK_SUPPRESSIONS[
+                (f"capacity-{index}", "target")
+            ] = [{
+                "token_id": f"capacity-token-{index}",
+                "state": ("unbound", "pending", "committed")[index % 3],
+                "acknowledged": False,
+                "created_at": now + index,
+                "expires_at": now + 1000,
+            }]
+    admission = server._begin_codex_queued_steer_ack_suppression(
+        "capacity-new", "target",
+    )
+
+    assert admission["code"] == "queued_ack_capacity_exhausted"
+    entries = sum(
+        len(values)
+        for values in server._CODEX_QUEUED_STEER_ACK_SUPPRESSIONS.values()
+    )
+    assert entries == server._CODEX_QUEUED_STEER_ACK_MAX_TOTAL
+    assert ("capacity-0", "target") in server._CODEX_QUEUED_STEER_ACK_SUPPRESSIONS
+
+
+def test_ack_capacity_restores_claim_before_native_delivery(router_env):
+    sid = "capacity-claim-restore"
+    server._pending_resume_queue[sid] = ["target"]
+    now = time.monotonic()
+    with server._CODEX_QUEUED_STEER_ACK_LOCK:
+        for index in range(server._CODEX_QUEUED_STEER_ACK_MAX_TOTAL):
+            server._CODEX_QUEUED_STEER_ACK_SUPPRESSIONS[
+                (f"capacity-live-{index}", "target")
+            ] = [{
+                "token_id": f"capacity-live-token-{index}",
+                "state": "pending",
+                "acknowledged": False,
+                "created_at": now + index,
+                "expires_at": now + 1000,
+            }]
+
+    result = server._inject_text_into_session_router(
+        sid, "target", mode="steer", preserve_queued_steer=True,
+    )
+
+    assert result["code"] == "queued_ack_capacity_exhausted"
+    assert server._pending_resume_queue[sid] == ["target"]
+    router_env.resume.assert_not_called()
+
+
+def test_rollback_stops_when_authoritative_refresh_fails(monkeypatch):
+    claim = {
+        "session_id": "rollback-refresh-failure",
+        "queue_name": "resume",
+        "index": 0,
+        "item": "target",
+    }
+    save = mock.Mock(return_value=True)
+    monkeypatch.setattr(
+        server, "_refresh_pending_inputs_for_session", lambda sid: False,
+    )
+    monkeypatch.setattr(server, "_save_pending_inputs", save)
+
+    assert not server._restore_pending_input_claim(claim)
+    assert server._pending_resume_queue.get(claim["session_id"]) is None
+    save.assert_not_called()
+
+
+def test_handoff_cleanup_failure_leaves_atomic_tombstone(monkeypatch, tmp_path):
+    handoff_path = tmp_path / "handoff.json"
+    handoff_path.write_text("{}")
+    item = server._PendingInputHandoff("target", "tombstone", handoff_path)
+    real_unlink = Path.unlink
+
+    def fail_tombstone_unlink(target_path, *args, **kwargs):
+        if str(target_path).endswith(".delivered"):
+            raise OSError("cleanup failed")
+        return real_unlink(target_path, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "unlink", fail_tombstone_unlink)
+
+    assert not server._complete_pending_input_handoff(item)
+    assert not handoff_path.exists()
+    assert list(tmp_path.glob("*.json")) == []
+    assert list(tmp_path.glob("*.delivered"))
+
+
+def test_codex_session_lock_releases_thread_lock_when_unlock_raises(
+    monkeypatch, tmp_path,
+):
+    import ccc_server.pending_inputs as pending_inputs_module
+
+    lock = pending_inputs_module._CodexQueueSessionLock(tmp_path / "lock")
+    thread_lock = mock.Mock()
+    handle = mock.Mock()
+    handle.fileno.return_value = 7
+    lock._thread_lock = thread_lock
+    lock._depth = 1
+    lock._handle = handle
+    monkeypatch.setattr(
+        pending_inputs_module.fcntl, "flock",
+        mock.Mock(side_effect=OSError("unlock failed")),
+    )
+
+    with pytest.raises(OSError, match="unlock failed"):
+        lock.release()
+    thread_lock.release.assert_called_once_with()
 
 
 def test_finalizer_does_not_consume_a_second_copy_after_router_commit():
@@ -806,3 +1163,44 @@ def test_inject_input_returns_http_409_for_missing_queued_replacement():
 
     assert error.value.code == 409
     assert body == missing
+
+
+def test_inject_input_preserves_transaction_terminal_error_body():
+    sid = "http-terminal-transaction-error"
+    httpd = server.http.server.ThreadingHTTPServer(
+        ("127.0.0.1", 0), server.CommandCenterHandler,
+    )
+    thread = threading.Thread(target=httpd.serve_forever, daemon=True)
+    thread.start()
+    request = urllib.request.Request(
+        f"http://127.0.0.1:{httpd.server_address[1]}/api/inject-input",
+        data=json.dumps({
+            "session_id": sid,
+            "text": "target",
+            "mode": "steer",
+            "replace_queued": True,
+        }).encode("utf-8"),
+        headers={"Content-Type": "application/json"},
+        method="POST",
+    )
+    terminal = {
+        "ok": False,
+        "via": "codex-steer",
+        "code": "queued_claim_persistence_failed",
+        "queued_consumed": 0,
+        "error": "could not persist queued message claim",
+    }
+    try:
+        with mock.patch.object(server, "_resolve_bridge_session_alias", return_value=sid), \
+             mock.patch.object(server, "_handoff_lease_guard", return_value=None), \
+             mock.patch.object(server, "_record_interaction"), \
+             mock.patch.object(server, "_inject_text_into_session", return_value=terminal):
+            with urllib.request.urlopen(request, timeout=5) as response:
+                body = json.loads(response.read().decode("utf-8"))
+    finally:
+        httpd.shutdown()
+        httpd.server_close()
+        thread.join(timeout=5)
+
+    assert body == terminal
+    assert "queued_preserved" not in body
