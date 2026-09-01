@@ -6923,10 +6923,17 @@ class TestServerImports(unittest.TestCase):
             queued_handler.index("if (data && data.queued_preserved)"),
         )
         self.assertIn("if (!data.queued_consumed)", queued_handler)
+        # The tray card is only retired after the server confirms it consumed
+        # the durable copy. It is now retired by advancing the optimistic row
+        # to "delivered" rather than deleting it, so the message never blinks
+        # out of the conversation between the steer and the transcript event.
         self.assertGreater(
-            queued_handler.index("if (row && row._pendingRef) removePendingSendEcho(row._pendingRef)"),
+            queued_handler.index("markPendingSendDelivered(row._pendingRef, data)"),
             queued_handler.index("if (!data.queued_consumed)"),
         )
+        # Every non-delivery outcome hands the card back to the tray.
+        self.assertIn("const giveBack = () => revertOptimisticSteerMove(", queued_handler)
+        self.assertEqual(queued_handler.count("giveBack();"), 4)
         self.assertIn("tray.dataset.conversationId", app_js)
         self.assertIn("replace_queued", app_js)
         self.assertIn("is-queued-steer-duplicate", app_js)

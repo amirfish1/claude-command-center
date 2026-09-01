@@ -8296,64 +8296,6 @@
     }
   });
 
-  // Steer all: one prompt carrying every queued message, in order.
-  document.addEventListener('click', async (ev) => {
-    const btn = ev.target.closest('[data-steer-all-queued]');
-    if (!btn) return;
-    ev.preventDefault();
-    ev.stopPropagation();
-    const tray = btn.closest('.queued-steer-tray');
-    const sid = btn.dataset.sessionId || '';
-    const rows = tray ? Array.from(tray.querySelectorAll('.event.user_text')) : [];
-    const texts = rows.map(row => {
-      const msg = row.querySelector('.user-msg');
-      return ((msg && (msg.getAttribute('data-raw-text') || msg.textContent)) || '').trim();
-    }).filter(Boolean);
-    if (!sid || !texts.length) {
-      showOpToast('Nothing queued to steer.', 'error');
-      return;
-    }
-    const original = btn.textContent;
-    btn.disabled = true;
-    btn.textContent = 'Steering…';
-    const $view = trayConversationView(tray);
-    const moved = beginOptimisticSteerMove(rows, $view);
-    const giveBack = () => revertOptimisticSteerMove(moved, activePaneId());
-    try {
-      const data = await postInjectInput(sid, texts.join('\n\n'), 'steer', {
-        replaceQueuedTexts: texts,
-      });
-      if (data && (data.queue_pump_started || data.queued_preserved)) {
-        giveBack();
-        showOpToast(data.queue_pump_started
-          ? 'Turn ended; sending the oldest queued message now.'
-          : (data.error ? ('Still queued: ' + data.error) : 'Queued'), 'error');
-        setTimeout(refreshConversationList, 500);
-        return;
-      }
-      if (!data || !data.ok) throw new Error((data && (formatInjectFailure(data, 0) || data.error)) || 'steer failed');
-      // The delivered text is the concatenation, so no individual card can
-      // dedupe against the durable event -- drop them all and let the combined
-      // message render as one turn.
-      moved.forEach(row => {
-        if (row._pendingRef) removePendingSendEcho(row._pendingRef);
-        else if (row.parentNode) row.parentNode.removeChild(row);
-      });
-      showOpToast('Steered ' + texts.length + ' queued messages as one turn.');
-      setTimeout(refreshConversationList, 500);
-    } catch (err) {
-      giveBack();
-      btn.textContent = '!';
-      showOpToast('Steer all failed: ' + ((err && err.message) || 'unknown'), 'error');
-    } finally {
-      setTimeout(() => {
-        if (!btn.isConnected) return;
-        btn.disabled = false;
-        btn.textContent = original || 'Steer all';
-      }, 900);
-    }
-  });
-
   document.addEventListener('click', async (ev) => {
     const btn = ev.target.closest('[data-steer-user-message]');
     if (!btn) return;
@@ -8418,6 +8360,64 @@
         if (!btn.isConnected) return;
         btn.disabled = false;
         btn.textContent = original || 'Steer';
+      }, 900);
+    }
+  });
+
+  // Steer all: one prompt carrying every queued message, in order.
+  document.addEventListener('click', async (ev) => {
+    const btn = ev.target.closest('[data-steer-all-queued]');
+    if (!btn) return;
+    ev.preventDefault();
+    ev.stopPropagation();
+    const tray = btn.closest('.queued-steer-tray');
+    const sid = btn.dataset.sessionId || '';
+    const rows = tray ? Array.from(tray.querySelectorAll('.event.user_text')) : [];
+    const texts = rows.map(row => {
+      const msg = row.querySelector('.user-msg');
+      return ((msg && (msg.getAttribute('data-raw-text') || msg.textContent)) || '').trim();
+    }).filter(Boolean);
+    if (!sid || !texts.length) {
+      showOpToast('Nothing queued to steer.', 'error');
+      return;
+    }
+    const original = btn.textContent;
+    btn.disabled = true;
+    btn.textContent = 'Steering…';
+    const $view = trayConversationView(tray);
+    const moved = beginOptimisticSteerMove(rows, $view);
+    const giveBack = () => revertOptimisticSteerMove(moved, activePaneId());
+    try {
+      const data = await postInjectInput(sid, texts.join('\n\n'), 'steer', {
+        replaceQueuedTexts: texts,
+      });
+      if (data && (data.queue_pump_started || data.queued_preserved)) {
+        giveBack();
+        showOpToast(data.queue_pump_started
+          ? 'Turn ended; sending the oldest queued message now.'
+          : (data.error ? ('Still queued: ' + data.error) : 'Queued'), 'error');
+        setTimeout(refreshConversationList, 500);
+        return;
+      }
+      if (!data || !data.ok) throw new Error((data && (formatInjectFailure(data, 0) || data.error)) || 'steer failed');
+      // The delivered text is the concatenation, so no individual card can
+      // dedupe against the durable event -- drop them all and let the combined
+      // message render as one turn.
+      moved.forEach(row => {
+        if (row._pendingRef) removePendingSendEcho(row._pendingRef);
+        else if (row.parentNode) row.parentNode.removeChild(row);
+      });
+      showOpToast('Steered ' + texts.length + ' queued messages as one turn.');
+      setTimeout(refreshConversationList, 500);
+    } catch (err) {
+      giveBack();
+      btn.textContent = '!';
+      showOpToast('Steer all failed: ' + ((err && err.message) || 'unknown'), 'error');
+    } finally {
+      setTimeout(() => {
+        if (!btn.isConnected) return;
+        btn.disabled = false;
+        btn.textContent = original || 'Steer all';
       }, 900);
     }
   });
