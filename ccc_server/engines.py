@@ -2620,9 +2620,7 @@ def resume_session_gemini(session_id, text):
                 if _core._poll_spawn_entry(s) is None:
                     with _core._pending_resume_lock:
                         _core._pending_resume_queue.setdefault(session_id, []).append(text)
-                    _core._save_pending_inputs(
-                        {session_id}, include_devin_steers=True,
-                    )
+                    _core._save_pending_inputs({session_id})
                     return {
 
                         "ok": True,

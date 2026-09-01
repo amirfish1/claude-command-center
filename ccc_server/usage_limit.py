@@ -245,7 +245,8 @@ def _disable_session_auto_resume(session_id):
         return {"ok": False, "error": "missing session_id"}
 
     try:
-        with _core._auto_resume_exclusive_lock():
+        with _core._codex_queue_pump_lock(sid), \
+             _core._auto_resume_exclusive_lock():
             # Persist the negative marker first. Every queue/write/delivery
             # path rechecks it while holding this same barrier.
             _core._dismiss_usage_limit_resume(sid)

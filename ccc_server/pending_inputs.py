@@ -8,7 +8,6 @@ from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone, time as datetime_time
 from pathlib import Path
-from collections import Counter
 import contextlib
 import fcntl
 import hashlib
@@ -160,25 +159,59 @@ def _pending_inputs_session_snapshot(session_id):
     }
 
 
-def _apply_pending_queue_delta(authoritative, baseline, desired):
-    """Replay one process-local FIFO edit over current authoritative state."""
-    result = list(authoritative)
-    removals = Counter(baseline) - Counter(desired)
-    for item in baseline:
-        if removals[item] <= 0:
-            continue
-        for index, existing in enumerate(result):
-            if existing == item:
-                result.pop(index)
-                break
-        removals[item] -= 1
+def _pending_item_stable_identity(item):
+    if isinstance(item, _PendingInputHandoff):
+        return "handoff", str(item.handoff_id)
+    return "plain", str(item)
 
-    remaining_baseline = Counter(baseline)
-    for index, item in enumerate(desired):
-        if remaining_baseline[item] > 0:
-            remaining_baseline[item] -= 1
+
+def _pending_item_tokens(items):
+    occurrences = {}
+    tokens = []
+    for item in items:
+        identity = _pending_item_stable_identity(item)
+        occurrence = occurrences.get(identity, 0) + 1
+        occurrences[identity] = occurrence
+        tokens.append((identity, occurrence))
+    return tokens
+
+
+def _apply_pending_queue_delta(authoritative, baseline, desired):
+    """Replay an occurrence-aware FIFO edit using retained-item anchors."""
+    result = list(authoritative)
+    baseline_tokens = _pending_item_tokens(baseline)
+    desired_tokens = _pending_item_tokens(desired)
+    desired_token_set = set(desired_tokens)
+
+    for token in baseline_tokens:
+        if token in desired_token_set:
             continue
-        result.insert(min(index, len(result)), item)
+        result_tokens = _pending_item_tokens(result)
+        if token in result_tokens:
+            result.pop(result_tokens.index(token))
+
+    baseline_token_set = set(baseline_tokens)
+    for desired_index, (item, token) in enumerate(zip(desired, desired_tokens)):
+        if token in baseline_token_set:
+            continue
+        previous = next((
+            candidate for candidate in reversed(desired_tokens[:desired_index])
+            if candidate in baseline_token_set
+        ), None)
+        following = next((
+            candidate for candidate in desired_tokens[desired_index + 1:]
+            if candidate in baseline_token_set
+        ), None)
+        result_tokens = _pending_item_tokens(result)
+        if following is not None and following in result_tokens:
+            insert_at = result_tokens.index(following)
+        elif previous is None and following is not None:
+            insert_at = 0
+        else:
+            # No retained right neighbor means an end-anchored append. This
+            # preserves commit order behind another process's prior append.
+            insert_at = len(result)
+        result.insert(insert_at, item)
     return result
 
 
@@ -745,6 +778,10 @@ def _ingest_pending_input_handoffs_unlocked():
                 ))
         for event in new_events:
             _core._pending_terminal_handoff_ids[event["id"]] = event["path"]
+        for session_id in {event["session_id"] for event in new_events}:
+            _pending_inputs_session_baselines[session_id] = (
+                _pending_inputs_session_snapshot(session_id)
+            )
         return len(new_events)
 
 
@@ -1240,24 +1277,29 @@ _TERMINAL_QUEUE_ORDER_REASON = (
 
 def _queue_terminal_input(session_id, text, status=None, reason_hint=None):
     """Queue terminal input, gating the unattended marker at the barrier."""
-    if _is_unattended_auto_continue(text):
-        try:
-            with _core._auto_resume_exclusive_lock():
-                if not _core._is_auto_resume_opted_in(session_id):
-                    return {
-                        "ok": False,
-                        "queued": False,
-                        "error": "auto-resume not opted in for this session",
-                        "auto_resume_opt_in_required": True,
-                    }
-                return _core._queue_terminal_input_unlocked(session_id, text, status, reason_hint)
-        except OSError:
-            return {
-                "ok": False,
-                "queued": False,
-                "error": "auto-resume safety barrier unavailable",
-            }
-    return _core._queue_terminal_input_unlocked(session_id, text, status, reason_hint)
+    with _core._codex_queue_pump_lock(session_id):
+        if _is_unattended_auto_continue(text):
+            try:
+                with _core._auto_resume_exclusive_lock():
+                    if not _core._is_auto_resume_opted_in(session_id):
+                        return {
+                            "ok": False,
+                            "queued": False,
+                            "error": "auto-resume not opted in for this session",
+                            "auto_resume_opt_in_required": True,
+                        }
+                    return _core._queue_terminal_input_unlocked(
+                        session_id, text, status, reason_hint,
+                    )
+            except OSError:
+                return {
+                    "ok": False,
+                    "queued": False,
+                    "error": "auto-resume safety barrier unavailable",
+                }
+        return _core._queue_terminal_input_unlocked(
+            session_id, text, status, reason_hint,
+        )
 
 
 def _terminal_queue_dedupe_key(text):
@@ -2775,17 +2817,18 @@ def _terminal_queue_hold_or_expire(sid, reason):
 def _requeue_terminal_input_front(sid, text):
     """Put a popped-but-undelivered entry back where it came from (front,
     preserving order relative to anything queued behind it)."""
-    if _is_unattended_auto_continue(text):
-        try:
-            with _core._auto_resume_exclusive_lock():
-                if not _core._is_auto_resume_opted_in(sid):
-                    _core._complete_pending_input_handoff(text)
-                    return False
-                return _requeue_terminal_input_front_unlocked(sid, text)
-        except OSError:
-            _core._complete_pending_input_handoff(text)
-            return False
-    return _requeue_terminal_input_front_unlocked(sid, text)
+    with _core._codex_queue_pump_lock(sid):
+        if _is_unattended_auto_continue(text):
+            try:
+                with _core._auto_resume_exclusive_lock():
+                    if not _core._is_auto_resume_opted_in(sid):
+                        _core._complete_pending_input_handoff(text)
+                        return False
+                    return _requeue_terminal_input_front_unlocked(sid, text)
+            except OSError:
+                _core._complete_pending_input_handoff(text)
+                return False
+        return _requeue_terminal_input_front_unlocked(sid, text)
 
 
 def _requeue_terminal_input_front_unlocked(sid, text):

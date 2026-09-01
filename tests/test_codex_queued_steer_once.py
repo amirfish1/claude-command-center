@@ -1308,6 +1308,107 @@ def test_missing_handoff_source_and_tombstone_clears_metadata(tmp_path):
     assert item.handoff_id not in server._pending_terminal_handoff_ids
 
 
+def test_auto_resume_paths_acquire_session_before_barrier():
+    import inspect
+
+    for function in (
+        server._queue_terminal_input,
+        server._requeue_terminal_input_front,
+        server._disable_session_auto_resume,
+    ):
+        source = inspect.getsource(function)
+        assert source.index("_codex_queue_pump_lock") < source.index(
+            "_auto_resume_exclusive_lock"
+        )
+
+
+def test_reverse_order_auto_resume_operations_finish(monkeypatch, tmp_path):
+    sid = "auto-resume-lock-order"
+    monkeypatch.setattr(server, "PENDING_INPUTS_FILE", tmp_path / "pending.json")
+    server._auto_resume_opt_in[sid] = True
+    assert server._save_pending_inputs({sid}, include_auto_resume=True)
+    start = threading.Event()
+    results = []
+
+    def enqueue():
+        start.wait()
+        results.append(server._queue_terminal_input(sid, "continue"))
+
+    def disable():
+        start.wait()
+        results.append(server._disable_session_auto_resume(sid))
+
+    threads = [threading.Thread(target=enqueue), threading.Thread(target=disable)]
+    for thread in threads:
+        thread.start()
+    start.set()
+    for thread in threads:
+        thread.join(2)
+
+    assert all(not thread.is_alive() for thread in threads)
+    assert len(results) == 2
+
+
+def test_handoff_ingest_pop_save_delivery_cannot_redeliver(monkeypatch, tmp_path):
+    sid = "handoff-baseline-delivery"
+    monkeypatch.setattr(server, "PENDING_INPUTS_FILE", tmp_path / "pending.json")
+    monkeypatch.setattr(server, "PENDING_INPUT_HANDOFF_DIR", tmp_path / "handoffs")
+    assert server._save_pending_inputs({sid})
+    assert server._write_pending_input_handoff(sid, "same-text") is not None
+    assert server._ingest_pending_input_handoffs() == 1
+    with server._pending_terminal_input_lock:
+        delivered = server._pending_terminal_input_queue[sid].pop(0)
+        server._pending_terminal_input_queue.pop(sid, None)
+    assert server._save_pending_inputs({sid})
+    assert server._complete_pending_input_handoff(delivered)
+
+    assert server._pending_terminal_input_queue.get(sid) is None
+    assert server._ingest_pending_input_handoffs() == 0
+
+
+def test_delta_duplicate_deletion_is_occurrence_aware():
+    assert server._apply_pending_queue_delta(
+        ["x", "x", "tail"], ["x", "x", "tail"], ["x", "tail"],
+    ) == ["x", "tail"]
+
+
+def test_delta_middle_insert_uses_retained_neighbor_anchor():
+    assert server._apply_pending_queue_delta(
+        ["front", "a", "b", "tail"], ["a", "b"], ["a", "middle", "b"],
+    ) == ["front", "a", "middle", "b", "tail"]
+
+
+def test_delta_concurrent_append_keeps_transaction_order():
+    assert server._apply_pending_queue_delta(
+        ["a", "concurrent"], ["a"], ["a", "local"],
+    ) == ["a", "concurrent", "local"]
+
+
+def test_delta_front_insert_stays_at_front():
+    assert server._apply_pending_queue_delta(
+        ["a", "concurrent-tail"], ["a"], ["front", "a"],
+    ) == ["front", "a", "concurrent-tail"]
+
+
+def test_delta_distinguishes_handoff_and_plain_identical_text(tmp_path):
+    handoff = server._PendingInputHandoff(
+        "same", "stable-handoff", tmp_path / "handoff.json",
+    )
+    result = server._apply_pending_queue_delta(
+        [handoff, "same", "tail"], [handoff, "same", "tail"],
+        ["same", "tail"],
+    )
+    assert result == ["same", "tail"]
+    assert not isinstance(result[0], server._PendingInputHandoff)
+
+
+def test_gemini_queue_save_does_not_persist_devin_steer_flag():
+    import inspect
+
+    source = inspect.getsource(server.resume_session_gemini)
+    assert "include_devin_steers" not in source
+
+
 def test_finalizer_does_not_consume_a_second_copy_after_router_commit():
     sid = "already-consumed"
     server._pending_resume_queue[sid] = ["target", "last"]
