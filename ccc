@@ -30,6 +30,11 @@ SUBCOMMANDS = ("sessions", "list-sessions")
 _SINCE_RE = re.compile(r"^(\d+)\s*([smhd])$", re.IGNORECASE)
 _SINCE_UNIT_S = {"s": 1, "m": 60, "h": 3600, "d": 86400}
 
+# --sort status category order: waiting (blocked on a human) is the most
+# actionable, then working, idle, ended. Within a category the server's
+# recency order is preserved (sorted() is stable).
+_STATUS_RANK = {"waiting": 0, "working": 1, "idle": 2, "ended": 3}
+
 
 def _resolve_server(args_server):
     if args_server:
@@ -105,6 +110,8 @@ def cmd_sessions(args):
     n_helpers = sum(1 for s in sessions if s.get("helper"))
     if not args.all:
         sessions = [s for s in sessions if not s.get("helper")]
+    if args.sort == "status":
+        sessions = sorted(sessions, key=lambda s: _STATUS_RANK.get(s.get("state") or "", 4))
 
     children_of = {}
     for s in sessions:
@@ -114,30 +121,46 @@ def cmd_sessions(args):
     sids = {s.get("session_id") for s in sessions}
     roots = [s for s in sessions if (s.get("parent_session_id") or "") not in sids]
 
-    def _row(s, depth):
+    def _row(s, depth=0, child=False):
         flags = ""
         if s.get("needs_approval"):
             flags += " !approval"
         if s.get("question_waiting"):
             flags += " ?question"
+        if s.get("unanswered_input"):
+            flags += " !unanswered"
         tool = s.get("pending_tool") or "-"
         name = (s.get("name") or "(no conversation row)")[:40]
-        indent = "  " * depth + ("↳ " if depth else "")
+        marker = ("  " * depth + "↳ ") if (depth or child) else ""
         print(
             f"{s.get('state') or '?':<10} {_fmt_age(s.get('last_event_age_s')):>7} "
             f"{(s.get('engine') or '?'):<7} {(s.get('model') or '?')[:18]:<18} "
             f"{(s.get('effort') or '?'):<5} {s.get('session_id') or '?'}  "
-            f"{s.get('repo_path') or '?'}  {indent}{name}  {tool}{flags}"
+            f"{s.get('repo_path') or '?'}  {marker}{name}  {tool}{flags}"
         )
 
     def _walk(s, depth):
         _row(s, depth)
-        for child in sorted(children_of.get(s.get("session_id")) or (),
-                            key=lambda c: c.get("last_event_age_s") or 0):
+        kids = children_of.get(s.get("session_id")) or ()
+        if args.sort == "status":
+            kids = sorted(kids, key=lambda c: (
+                _STATUS_RANK.get(c.get("state") or "", 4),
+                c.get("last_event_age_s") if c.get("last_event_age_s") is not None else float("inf"),
+            ))
+        else:
+            kids = sorted(kids, key=lambda c: c.get("last_event_age_s") or 0)
+        for child in kids:
             _walk(child, depth + 1)
 
-    for s in roots:
-        _walk(s, 0)
+    if args.tree:
+        for s in roots:
+            _walk(s, 0)
+    else:
+        # Flat (default): every row in the requested sort order, children
+        # marked ↳ inline. Nesting under parents (--tree) groups families but
+        # breaks the global sort order — the hiding problem in new clothes.
+        for s in sessions:
+            _row(s, 0, child=bool(s.get("parent_session_id")))
     n = len(sessions)
     n_live = sum(1 for s in sessions if s.get("state") != "ended")
     n_ended = n - n_live
@@ -178,8 +201,13 @@ def main(argv=None):
         p.add_argument("--since", type=_parse_since,
                        help="show sessions (live + recently-ended) with activity in "
                             "the window, e.g. 5h / 30m / 2d")
+        p.add_argument("--sort", choices=("recency", "status"), default="recency",
+                       help="recency (default): most recent first; status: waiting, "
+                            "working, idle, ended — recency within each")
         p.add_argument("--all", action="store_true",
                        help="include CCC helper sessions (auto-title bots), hidden by default")
+        p.add_argument("--tree", action="store_true",
+                       help="nest children under parents (default: flat, ↳ marks children)")
         p.add_argument("--json", action="store_true", help="raw census JSON")
         p.set_defaults(func=cmd_sessions)
 

@@ -240,14 +240,14 @@ class TestCensusHelperProbe(unittest.TestCase):
         self._tmp = tempfile.TemporaryDirectory()
         self._orig_projects = server._SYS_PROJECTS_DIR
         server._SYS_PROJECTS_DIR = self._tmp.name
-        server._CENSUS_HELPER_PROBE_CACHE.clear()
+        server._CENSUS_PROBE_CACHE.clear()
         proj = pathlib.Path(self._tmp.name) / "-scratch"
         proj.mkdir()
         self.proj = proj
 
     def tearDown(self):
         server._SYS_PROJECTS_DIR = self._orig_projects
-        server._CENSUS_HELPER_PROBE_CACHE.clear()
+        server._CENSUS_PROBE_CACHE.clear()
         self._tmp.cleanup()
 
     def _write_transcript(self, sid, prompt):
@@ -259,22 +259,18 @@ class TestCensusHelperProbe(unittest.TestCase):
             "sid-bot",
             "Produce a concise 4-8 word title summarizing what the user is trying to do below. …",
         )
-        is_helper, msg = server._census_probe_helper_session("sid-bot")
-        self.assertTrue(is_helper)
-        self.assertIn("4-8 word title", msg)
-        # Cached: second call returns the same object without re-reading.
-        (self.proj / "sid-bot.jsonl").unlink()
-        self.assertEqual(server._census_probe_helper_session("sid-bot"), (True, msg))
+        probe = server._census_probe_transcript("sid-bot")
+        self.assertTrue(probe["is_helper"])
+        self.assertIn("4-8 word title", probe["first_message"])
 
-    def test_real_session_not_helper(self):
+    def test_real_session_gets_identity_not_helper(self):
         self._write_transcript("sid-real", "Fix the failing payment webhook")
-        is_helper, _ = server._census_probe_helper_session("sid-real")
-        self.assertFalse(is_helper)
+        probe = server._census_probe_transcript("sid-real")
+        self.assertFalse(probe["is_helper"])
+        self.assertEqual(probe["first_message"], "Fix the failing payment webhook")
 
-    def test_no_transcript_not_helper(self):
-        is_helper, msg = server._census_probe_helper_session("sid-missing")
-        self.assertFalse(is_helper)
-        self.assertIsNone(msg)
+    def test_no_transcript_returns_none(self):
+        self.assertIsNone(server._census_probe_transcript("sid-missing"))
 
     def test_census_marks_helper_rows(self):
         self._write_transcript(
@@ -295,6 +291,88 @@ class TestCensusHelperProbe(unittest.TestCase):
         self.assertTrue(row["helper"])
         self.assertEqual(row["engine"], "claude")
         self.assertIn("[helper]", row["name"])
+
+
+class TestCensusUnansweredInput(unittest.TestCase):
+    def setUp(self):
+        self._tmp = tempfile.TemporaryDirectory()
+        server._CENSUS_UNANSWERED_CACHE.clear()
+
+    def tearDown(self):
+        server._CENSUS_UNANSWERED_CACHE.clear()
+        self._tmp.cleanup()
+
+    def _write(self, name, events):
+        p = pathlib.Path(self._tmp.name) / name
+        p.write_text("".join(json.dumps(e) + "\n" for e in events))
+        return str(p)
+
+    def test_claude_user_last_is_unanswered(self):
+        path = self._write("s.jsonl", [
+            {"type": "assistant", "message": {"role": "assistant", "content": "done"}},
+            {"type": "user", "message": {"role": "user", "content": "are you there?"}},
+        ])
+        self.assertTrue(server._census_unanswered_input("s1", path))
+
+    def test_claude_assistant_last_is_answered(self):
+        path = self._write("s.jsonl", [
+            {"type": "user", "message": {"role": "user", "content": "hi"}},
+            {"type": "assistant", "message": {"role": "assistant", "content": "hello"}},
+        ])
+        self.assertFalse(server._census_unanswered_input("s2", path))
+
+    def test_claude_tool_result_tail_not_unanswered(self):
+        path = self._write("s.jsonl", [
+            {"type": "assistant", "message": {"role": "assistant", "content": "working"}},
+            {"type": "user", "message": {"role": "user", "content": [
+                {"type": "tool_result", "tool_use_id": "t1", "content": "ok"}]}},
+        ])
+        self.assertFalse(server._census_unanswered_input("s3", path))
+
+    def test_grok_user_chunk_last_is_unanswered(self):
+        grok_dir = pathlib.Path(self._tmp.name) / ".grok"
+        grok_dir.mkdir()
+        gpath = grok_dir / "updates.jsonl"
+        gpath.write_text(
+            json.dumps({"params": {"update": {"sessionUpdate": "agent_message_chunk"}}}) + "\n"
+            + json.dumps({"params": {"update": {"sessionUpdate": "user_message_chunk"}}}) + "\n"
+        )
+        self.assertTrue(server._census_unanswered_input("s4", str(gpath)))
+
+    def test_grok_turn_completed_last_is_answered(self):
+        grok_dir = pathlib.Path(self._tmp.name) / ".grok"
+        grok_dir.mkdir()
+        gpath = grok_dir / "updates.jsonl"
+        gpath.write_text(
+            json.dumps({"params": {"update": {"sessionUpdate": "user_message_chunk"}}}) + "\n"
+            + json.dumps({"params": {"update": {"sessionUpdate": "turn_completed"}}}) + "\n"
+        )
+        self.assertFalse(server._census_unanswered_input("s5", str(gpath)))
+
+    def test_missing_file_is_false(self):
+        self.assertFalse(server._census_unanswered_input(
+            "s6", str(pathlib.Path(self._tmp.name) / "nope.jsonl")))
+
+    def test_ended_row_carries_unanswered_flag(self):
+        path = self._write("ended.jsonl", [
+            {"type": "assistant", "message": {"role": "assistant", "content": "bye"}},
+            {"type": "user", "message": {"role": "user", "content": "hello?"}},
+        ])
+        now = time.time()
+        orig_activity = server.build_live_sessions_activity
+        orig_identity = server._census_identity_map
+        server.build_live_sessions_activity = lambda: {}
+        server._census_identity_map = lambda: {
+            "sid-dead": {"name": "dead", "engine": "grok",
+                         "has_conversation_row": True, "mtime": now - 60,
+                         "jsonl_path": path},
+        }
+        try:
+            rows = server.build_session_census(since_s=3600)["sessions"]
+        finally:
+            server.build_live_sessions_activity = orig_activity
+            server._census_identity_map = orig_identity
+        self.assertTrue(rows[0]["unanswered_input"])
 
 
 if __name__ == "__main__":

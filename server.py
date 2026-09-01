@@ -10099,6 +10099,7 @@ def _census_identity_map():
                 "parent_session_id": row.get("parent_session_id") or existing.get("parent_session_id"),
                 "has_conversation_row": True,
                 "mtime": row.get("mtime") or row.get("modified") or None,
+                "jsonl_path": row.get("jsonl_path") or None,
             }
     with _CENSUS_IDENTITY_CACHE_LOCK:
         _CENSUS_IDENTITY_CACHE["token"] = token
@@ -10106,53 +10107,144 @@ def _census_identity_map():
     return out
 
 
-_CENSUS_HELPER_PROBE_CACHE = {}  # sid -> (is_helper, first_message) — stable per sid
+_CENSUS_PROBE_CACHE = {}  # sid -> ((mtime_ns, size), probe result) — keyed like _conv_head_cache
 
 
-def _census_probe_helper_session(sid):
-    """Classify a census-rowless live session as a CCC generated helper.
+def _census_probe_transcript(sid):
+    """Identity for a census-rowless live session, from its transcript head.
 
-    Live discovery (sidecar/resume-args) sees CCC's own throwaway utility
-    sessions — auto-title bots (`claude -p` haiku spawns in the scratch
-    project dir) — but the conversation archive deliberately skips them
-    (_is_generated_helper_session), so they show up as identity-less "?"
-    rows. Probe the transcript head once (first ~20 lines, same pattern as
-    the archive head-parse) and cache the verdict forever: a sid's helper
-    classification never changes. Candidacy-gated — called only for live
-    sids with no other identity, so cost is O(rowless live), never a bulk
-    transcript scan (con_0496274e58)."""
-    if sid in _CENSUS_HELPER_PROBE_CACHE:
-        return _CENSUS_HELPER_PROBE_CACHE[sid]
-    verdict = (False, None)
+    Two populations land here: CCC's own generated helpers (auto-title bots —
+    the archive deliberately skips them, _is_generated_helper_session) and
+    brand-new sessions the archive cache simply hasn't rebuilt to include yet.
+    Both have a transcript under ~/.claude/projects; read the first ~200 lines
+    once for first_message / cwd / model and classify.
+
+    Cached by (mtime_ns, size) like the archive head-parse — a growing live
+    transcript re-probes (identity improves as the first model turn lands), a
+    stable one never re-reads. Candidacy-gated: called only for live sids
+    with no other identity, so cost is O(rowless live), never a bulk
+    transcript scan (con_0496274e58).
+    Returns {is_helper, first_message, cwd, model} or None (no transcript)."""
     try:
-        for proj in Path(_SYS_PROJECTS_DIR).iterdir():
-            cand = proj / f"{sid}.jsonl"
-            if not cand.is_file():
-                continue
-            first_message = ""
-            try:
-                with cand.open("r") as fh:
-                    for i, line in enumerate(fh):
-                        if i >= 20:
-                            break
-                        line = line.strip()
-                        if not line:
-                            continue
-                        try:
-                            ev = json.loads(line)
-                        except json.JSONDecodeError:
-                            continue
-                        text = _extract_user_prompt_text(ev)
-                        if text:
-                            first_message = text
-                            break
-            except (OSError, UnicodeDecodeError):
-                pass
-            verdict = (_is_generated_helper_session(first_message), first_message or None)
-            break
+        projects = Path(_SYS_PROJECTS_DIR)
+        cand = None
+        for proj in projects.iterdir():
+            p = proj / f"{sid}.jsonl"
+            if p.is_file():
+                cand = p
+                break
+        if cand is None:
+            return None
+        st = cand.stat()
     except OSError:
+        return None
+    key = (st.st_mtime_ns, st.st_size)
+    hit = _CENSUS_PROBE_CACHE.get(sid)
+    if hit is not None and hit[0] == key:
+        return hit[1]
+    first_message = ""
+    cwd = None
+    model = None
+    try:
+        with cand.open("r") as fh:
+            for i, line in enumerate(fh):
+                if i >= 200:
+                    break
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    ev = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                if not first_message:
+                    text = _extract_user_prompt_text(ev)
+                    if text:
+                        first_message = text
+                if not cwd:
+                    cwd = ev.get("cwd") or None
+                if not model:
+                    msg = ev.get("message") or {}
+                    if isinstance(msg, dict) and msg.get("model"):
+                        model = msg["model"]
+                if first_message and cwd and model:
+                    break
+    except (OSError, UnicodeDecodeError):
         pass
-    _CENSUS_HELPER_PROBE_CACHE[sid] = verdict
+    result = {
+        "is_helper": _is_generated_helper_session(first_message),
+        "first_message": first_message or None,
+        "cwd": cwd,
+        "model": model,
+    }
+    _CENSUS_PROBE_CACHE[sid] = (key, result)
+    return result
+
+
+_CENSUS_UNANSWERED_CACHE = {}  # sid -> ((mtime_ns, size), bool)
+_CENSUS_UNANSWERED_TAIL_BYTES = 65536
+_CENSUS_UNANSWERED_MAX_LINES = 300
+
+
+def _census_unanswered_input(sid, transcript_path):
+    """True when the transcript's last actor event is a HUMAN message with no
+    agent reply after it — the "you injected text into a dead session and
+    nothing is listening" state (e.g. 01a05b3d: grok coordinator ended, user
+    kept injecting, user_message_chunk rows piled up with no agent turn).
+
+    Reads only the tail (~64KB, ≤300 lines), cached by (mtime_ns, size): a
+    dead session's transcript changes only when someone injects again, so the
+    verdict re-checks exactly then. Called per census row (bounded by the
+    --since window), never a bulk scan (con_0496274e58)."""
+    if not transcript_path:
+        return False
+    try:
+        st = os.stat(transcript_path)
+    except OSError:
+        return False
+    key = (st.st_mtime_ns, st.st_size)
+    hit = _CENSUS_UNANSWERED_CACHE.get(sid)
+    if hit is not None and hit[0] == key:
+        return hit[1]
+    verdict = False
+    try:
+        with open(transcript_path, "rb") as fh:
+            if st.st_size > _CENSUS_UNANSWERED_TAIL_BYTES:
+                fh.seek(-_CENSUS_UNANSWERED_TAIL_BYTES, os.SEEK_END)
+            tail = fh.read().decode("utf-8", errors="replace")
+        lines = tail.splitlines()[1:] if st.st_size > _CENSUS_UNANSWERED_TAIL_BYTES else tail.splitlines()
+        grok = "/.grok/" in transcript_path
+        scanned = 0
+        for line in reversed(lines):
+            if scanned >= _CENSUS_UNANSWERED_MAX_LINES:
+                break
+            line = line.strip()
+            if not line:
+                continue
+            scanned += 1
+            try:
+                ev = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            if grok:
+                kind = ((ev.get("params") or {}).get("update") or {}).get("sessionUpdate")
+                if kind == "user_message_chunk":
+                    verdict = True
+                    break
+                if kind in ("agent_message_chunk", "turn_completed"):
+                    break
+            else:
+                etype = ev.get("type")
+                if etype == "assistant":
+                    break
+                if etype == "user":
+                    text = _extract_user_prompt_text(ev)
+                    if text and not _is_transcript_control_text(text):
+                        verdict = True
+                        break
+    except (OSError, UnicodeDecodeError):
+        pass
+    _CENSUS_UNANSWERED_CACHE[sid] = (key, verdict)
     return verdict
 
 
@@ -10202,15 +10294,29 @@ def build_session_census(since_s=None):
         ident = identity.get(sid) or {}
         helper = False
         if not ident:
-            helper, helper_msg = _census_probe_helper_session(sid)
-            if helper:
-                ident = {
-                    "engine": "claude",
-                    "name": "[helper] " + ((helper_msg or "auto-title")[:60]),
-                    "repo_path": None,
-                    "parent_session_id": None,
-                    "has_conversation_row": False,
-                }
+            probe = _census_probe_transcript(sid)
+            if probe:
+                if probe.get("is_helper"):
+                    helper = True
+                    ident = {
+                        "engine": "claude",
+                        "name": "[helper] " + ((probe.get("first_message") or "auto-title")[:60]),
+                        "repo_path": None,
+                        "parent_session_id": None,
+                        "has_conversation_row": False,
+                    }
+                else:
+                    name = probe.get("first_message")
+                    if isinstance(name, str):
+                        name = " ".join(name.split())[:120] or None
+                    ident = {
+                        "engine": "claude",
+                        "model": probe.get("model"),
+                        "name": name,
+                        "repo_path": probe.get("cwd"),
+                        "parent_session_id": None,
+                        "has_conversation_row": False,
+                    }
         parent = ident.get("parent_session_id") or None
         rows.append({
             "session_id": sid,
@@ -10228,6 +10334,7 @@ def build_session_census(since_s=None):
             "needs_approval": bool(entry.get("needs_approval")),
             "has_conversation_row": bool(ident.get("has_conversation_row")),
             "helper": helper,
+            "unanswered_input": False,
         })
     if since_s is not None:
         try:
@@ -10260,6 +10367,7 @@ def build_session_census(since_s=None):
                 "needs_approval": False,
                 "has_conversation_row": True,
                 "helper": False,
+                "unanswered_input": _census_unanswered_input(sid, ident.get("jsonl_path")),
             })
     rows.sort(key=lambda r: (
         r["last_event_age_s"] is None,
