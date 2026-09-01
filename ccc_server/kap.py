@@ -643,11 +643,14 @@ def kap_flag_path():
     and drop every live session. The marker is checked per call, so touching
     or removing it takes effect on the next poll.
     """
+    # Not resolved off ccc_server.core: that proxy only populates inside the
+    # server process, and the whole point of the marker is that it can be
+    # created from a shell. Same literal server.py uses.
     try:
         from ccc_server import core as _core
         base = Path(_core.COMMAND_CENTER_STATE_DIR)
     except Exception:
-        base = Path("~/.claude-command-center").expanduser()
+        base = Path.home() / ".claude" / "command-center"
     return base / _KAP_FLAG_FILE
 
 
