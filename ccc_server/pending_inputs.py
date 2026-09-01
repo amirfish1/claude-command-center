@@ -66,6 +66,8 @@ _pending_metadata_backup_health = {
     "durability_uncertain": False,
     "durability_error": None,
 }
+_PENDING_INPUT_CAS_PROTOCOL = 1
+_PENDING_INPUT_CAS_CAPABILITY = "pending-input-cas-v1"
 _pending_inputs_lock = threading.RLock()
 _pending_inputs_file_lock_local = threading.local()
 _pending_input_handoff_ingest_lock = threading.Lock()
@@ -243,6 +245,93 @@ def _serialize_pending_conflict_item(item):
     return value
 
 
+def _validate_pending_primary_conflict(record):
+    if not isinstance(record, dict):
+        return None
+    body = dict(record)
+    integrity = str(body.pop("integrity", "") or "")
+    expected_integrity = hashlib.sha256(
+        json.dumps(body, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    ).hexdigest()
+    if integrity != expected_integrity or _pending_safe_int(
+        body.get("version"), 0
+    ) != 2:
+        return None
+    affected = body.get("affected_sessions")
+    if (
+        not isinstance(affected, list)
+        or not affected
+        or len(set(affected)) != len(affected)
+        or any(not isinstance(sid, str) or not sid for sid in affected)
+    ):
+        return None
+    intended_json = body.get("intended_json")
+    if not isinstance(intended_json, str):
+        return None
+    intended_hash = hashlib.sha256(intended_json.encode("utf-8")).hexdigest()
+    if intended_hash != body.get("intended_hash"):
+        return None
+    try:
+        payload = json.loads(intended_json)
+    except (TypeError, json.JSONDecodeError):
+        return None
+    if not isinstance(payload, dict):
+        return None
+    if intended_json != json.dumps(payload, indent=2, sort_keys=True):
+        return None
+    for field in (
+        "resume_queue", "terminal_queue", "devin_steers",
+        "auto_resume_opt_in", "applied_claim_journal_ids",
+        "pending_queue_revisions",
+    ):
+        if not isinstance(payload.get(field), dict):
+            return None
+    if not _pending_sidecar_valid_for_payload(
+        payload.get("pending_entry_ids"), payload,
+    ):
+        return None
+    for field in ("resume_queue", "terminal_queue"):
+        if any(not isinstance(sid, str) or not sid for sid in payload[field]):
+            return None
+    if any(
+        not isinstance(sid, str) or not sid
+        or not isinstance(text, str) or not text
+        for sid, text in payload["devin_steers"].items()
+    ):
+        return None
+    if any(
+        not isinstance(sid, str) or not sid or value is not True
+        for sid, value in payload["auto_resume_opt_in"].items()
+    ):
+        return None
+    if any(
+        not isinstance(journal_id, str) or not journal_id
+        or not isinstance(created, int) or isinstance(created, bool) or created < 0
+        for journal_id, created in payload["applied_claim_journal_ids"].items()
+    ):
+        return None
+    revisions = payload["pending_queue_revisions"]
+    if any(not isinstance(revisions.get(field), dict) for field in (
+        "resume_queue", "terminal_queue",
+    )):
+        return None
+    for field in ("resume_queue", "terminal_queue"):
+        if any(
+            not isinstance(sid, str) or not sid
+            or not isinstance(revision, int) or isinstance(revision, bool)
+            or revision < 0
+            for sid, revision in revisions[field].items()
+        ):
+            return None
+    for field in ("base_hash", "observed_hash", "intended_hash"):
+        value = body.get(field)
+        if value is not None and not re.fullmatch(r"[0-9a-f]{64}", str(value)):
+            return None
+    body["intended_payload"] = payload
+    body["integrity"] = integrity
+    return body
+
+
 def _load_pending_primary_conflicts():
     directory = _pending_primary_conflict_dir()
     try:
@@ -253,24 +342,15 @@ def _load_pending_primary_conflicts():
     for path in paths:
         try:
             record = json.loads(path.read_text())
-            sessions = record.get("sessions")
-            if (
-                not isinstance(record, dict)
-                or int(record.get("version") or 0) != 1
-                or not isinstance(sessions, dict)
-                or not str(record.get("intended_hash") or "")
-            ):
+            record = _validate_pending_primary_conflict(record)
+            if record is None:
                 raise ValueError("invalid primary conflict record")
-            for sid, intended in sessions.items():
-                if str(sid) and isinstance(intended, dict):
-                    loaded[str(sid)] = {
-                        "session_id": str(sid),
-                        "intended": intended,
-                        "intended_hash": str(record["intended_hash"]),
-                        "error": str(record.get("error") or "commit uncertain"),
-                        "recorded_at": float(record.get("recorded_at") or 0),
-                        "path": str(path),
-                    }
+            for sid in record["affected_sessions"]:
+                loaded[str(sid)] = {
+                    **record,
+                    "session_id": str(sid),
+                    "path": str(path),
+                }
         except (OSError, ValueError, TypeError, json.JSONDecodeError):
             try:
                 path.replace(path.with_suffix(".invalid"))
@@ -955,6 +1035,30 @@ def _pending_input_recovery_status(session_id):
             _pending_input_recovery_registry.get(session_id) or []
         )
     blocked = _pending_input_recovery_blocked(session_id)
+    conflict_details = []
+    if primary_conflict is not None:
+        try:
+            with _pending_inputs_file_exclusive_lock():
+                current_authority = _read_pending_inputs_authority_unlocked(
+                    missing_is_empty=True,
+                )
+            current_hash = current_authority.get("primary_hash")
+        except (AttributeError, OSError):
+            current_hash = None
+        conflict_details.append({
+            "affected_sessions": list(
+                primary_conflict.get("affected_sessions") or [session_id]
+            ),
+            "durable": bool(primary_conflict.get("path")),
+            "volatile": not bool(primary_conflict.get("path")),
+            "base_hash": primary_conflict.get("base_hash"),
+            "observed_hash": primary_conflict.get("observed_hash"),
+            "intended_hash": primary_conflict.get("intended_hash"),
+            "current_hash": current_hash,
+            "created_at": primary_conflict.get("recorded_at"),
+            "resolution_options": ["accept_intended", "accept_current"],
+        })
+    writer_compatibility = _pending_writer_compatibility_status()
     return {
         "blocked": blocked,
         "volatile_claims": volatile_count,
@@ -967,8 +1071,152 @@ def _pending_input_recovery_status(session_id):
             volatile_count == 0 and primary_conflict_volatile_count == 0
         ),
         "pending_schema_version": 2,
+        "pending_cas_protocol": _PENDING_INPUT_CAS_PROTOCOL,
+        "writer_compatibility": writer_compatibility,
+        "conflict_details": conflict_details,
         "metadata_backup": dict(_pending_metadata_backup_health),
     }
+
+
+def _clear_pending_primary_conflict(record):
+    path_value = record.get("path")
+    if path_value:
+        path = Path(path_value)
+        try:
+            path.unlink(missing_ok=True)
+            directory_fd = os.open(path.parent, os.O_RDONLY)
+            try:
+                os.fsync(directory_fd)
+            finally:
+                os.close(directory_fd)
+        except OSError:
+            return False
+    affected = set(record.get("affected_sessions") or [])
+    if not affected and record.get("session_id"):
+        affected.add(str(record["session_id"]))
+    with _pending_primary_conflicts_lock:
+        for sid in affected:
+            current = _pending_primary_conflicts.get(sid)
+            if current is not None and (
+                not path_value or current.get("path") == path_value
+            ):
+                _pending_primary_conflicts.pop(sid, None)
+        unresolved = bool(_pending_primary_conflicts)
+    if not unresolved:
+        _pending_metadata_backup_health.update({
+            "durability_uncertain": False,
+            "durability_error": None,
+        })
+    return True
+
+
+def _replace_pending_primary_bytes_unlocked(intended_bytes, expected_hash):
+    """CAS-replace primary with exact bytes while the global lock is held."""
+    current = _read_pending_inputs_authority_unlocked(missing_is_empty=True)
+    if current is None or current.get("primary_hash") != expected_hash:
+        return {"ok": False, "code": "pending_input_authority_conflict"}
+    tmp_path = None
+    try:
+        fd, tmp_name = tempfile.mkstemp(
+            prefix=f".{_core.PENDING_INPUTS_FILE.name}.",
+            suffix=".reconcile.tmp", dir=_core.PENDING_INPUTS_FILE.parent,
+        )
+        tmp_path = Path(tmp_name)
+        with os.fdopen(fd, "wb") as handle:
+            handle.write(intended_bytes)
+            handle.flush()
+            os.fsync(handle.fileno())
+        latest = _read_pending_inputs_authority_unlocked(missing_is_empty=True)
+        if latest is None or latest.get("primary_hash") != expected_hash:
+            return {"ok": False, "code": "pending_input_authority_conflict"}
+        os.replace(tmp_path, _core.PENDING_INPUTS_FILE)
+        tmp_path = None
+        directory_fd = os.open(_core.PENDING_INPUTS_FILE.parent, os.O_RDONLY)
+        try:
+            os.fsync(directory_fd)
+        finally:
+            os.close(directory_fd)
+        with open(_core.PENDING_INPUTS_FILE, "rb") as handle:
+            readback = handle.read()
+        intended_hash = hashlib.sha256(intended_bytes).hexdigest()
+        if hashlib.sha256(readback).hexdigest() != intended_hash:
+            return {
+                "ok": False,
+                "code": "pending_primary_commit_uncertain",
+            }
+        return {"ok": True, "primary_hash": intended_hash}
+    except OSError as exc:
+        return {"ok": False, "code": "pending_input_persist_failed", "error": str(exc)}
+    finally:
+        if tmp_path is not None:
+            try:
+                tmp_path.unlink(missing_ok=True)
+            except OSError:
+                pass
+
+
+def _reconcile_pending_primary_conflict(session_id, resolution=None):
+    """Resolve a primary commit conflict under affected-session/global CAS."""
+    sid = str(session_id or "").strip()
+    if not sid or resolution not in (None, "accept_intended", "accept_current"):
+        return {"ok": False, "code": "invalid_conflict_resolution"}
+    _load_pending_primary_conflicts()
+    with _pending_primary_conflicts_lock:
+        initial = _pending_primary_conflicts.get(sid)
+        record = dict(initial) if initial else None
+    if record is None:
+        return {"ok": True, "resolution": "no_conflict"}
+    affected = set(record.get("affected_sessions") or [sid])
+    with contextlib.ExitStack() as ownership:
+        for affected_sid in sorted(affected):
+            ownership.enter_context(_core._codex_queue_pump_lock(affected_sid))
+        with _pending_inputs_file_exclusive_lock():
+            with _pending_primary_conflicts_lock:
+                current_record = _pending_primary_conflicts.get(sid)
+                if current_record is None or current_record.get("intended_hash") != (
+                    record.get("intended_hash")
+                ):
+                    return {"ok": False, "code": "pending_input_authority_conflict"}
+            authority = _read_pending_inputs_authority_unlocked(
+                missing_is_empty=True,
+            )
+            current_hash = authority.get("primary_hash") if authority else None
+            intended_hash = record.get("intended_hash")
+            base_hash = record.get("base_hash")
+            if current_hash == intended_hash:
+                chosen = "commit_won"
+            elif resolution == "accept_current":
+                chosen = "accept_current"
+            elif current_hash == base_hash or resolution == "accept_intended":
+                intended_json = record.get("intended_json")
+                validated = _validate_pending_primary_conflict({
+                    key: value for key, value in record.items()
+                    if key not in ("path", "session_id", "intended_payload")
+                })
+                if validated is None or not isinstance(intended_json, str):
+                    return {"ok": False, "code": "invalid_primary_conflict"}
+                written = _replace_pending_primary_bytes_unlocked(
+                    intended_json.encode("utf-8"), current_hash,
+                )
+                if not written.get("ok"):
+                    return written
+                chosen = "accept_intended"
+            else:
+                return {
+                    "ok": False,
+                    "code": "pending_primary_commit_uncertain",
+                    "resolution_required": True,
+                    "base_hash": base_hash,
+                    "intended_hash": intended_hash,
+                    "current_hash": current_hash,
+                    "resolution_options": ["accept_intended", "accept_current"],
+                }
+            if not _clear_pending_primary_conflict(record):
+                return {
+                    "ok": False,
+                    "code": "pending_conflict_cleanup_failed",
+                }
+    return {"ok": True, "resolution": chosen}
 
 
 def _retry_pending_input_recovery(session_id):
@@ -1143,17 +1391,20 @@ def _recover_pending_input_claim_journals():
 
 
 def _refresh_pending_inputs_for_session(session_id):
-    """Replace one session's process-local queues from durable authority."""
+    """Read/decode one session without implicitly repairing durable state."""
     session_id = str(session_id or "").strip()
     if not session_id:
         return False
     try:
         with _pending_inputs_file_exclusive_lock():
-            data = _read_pending_inputs_payload_unlocked(missing_is_empty=True)
+            authority = _read_pending_inputs_authority_unlocked(
+                missing_is_empty=True,
+            )
     except OSError:
         return False
-    if data is None:
+    if authority is None:
         return False
+    data = authority["payload"]
     resume_data = data.get("resume_queue")
     terminal_data = data.get("terminal_queue")
     steer_data = data.get("devin_steers")
@@ -1259,9 +1510,11 @@ def _refresh_pending_inputs_for_session(session_id):
             items.insert(
                 min(max(int(claim.get("index") or 0), 0), len(items)), item,
             )
-    if resume_ids_dirty or terminal_ids_dirty:
-        _core._persist_pending_inputs_current({session_id})
-    return True
+    return {
+        "ok": True,
+        "authority": authority,
+        "ids_dirty": bool(resume_ids_dirty or terminal_ids_dirty),
+    }
 
 
 def _normalize_pending_session_ids(affected_session_ids):
@@ -1292,38 +1545,99 @@ def _pending_authority_matches(snapshot, expected_authority):
     return True
 
 
-def _record_pending_primary_conflict(affected, final, intended_hash, error):
+def _pending_expected_authority(snapshot, affected):
+    revisions = ((snapshot.get("payload") or {}).get(
+        "pending_queue_revisions"
+    ) or {})
+    return {
+        "primary_hash": snapshot.get("primary_hash"),
+        "revisions": {
+            field: {
+                sid: _pending_safe_int((revisions.get(field) or {}).get(sid), 0)
+                for sid in affected
+            }
+            for field in ("resume_queue", "terminal_queue")
+        },
+    }
+
+
+def _pending_writer_compatibility_status():
+    """Return current cross-process pending-input writer compatibility."""
+    if os.environ.get("CCC_WORKER_PROCESS") == "1":
+        return {
+            "ok": True, "restart_required": False,
+            "incompatible_writers": [],
+        }
+    incompatible = []
+    try:
+        state_root = _core.COMMAND_CENTER_STATE_DIR.resolve()
+        pending_root = _core.PENDING_INPUTS_FILE.parent.resolve()
+    except (AttributeError, OSError):
+        state_root = pending_root = None
+    try:
+        worker = _core._get_worker_compat_cache()
+    except (AttributeError, TypeError):
+        worker = {}
+    capabilities = set(worker.get("capabilities") or [])
+    if (
+        worker.get("reachable") is True
+        and "engine-execution-v1" in capabilities
+        and _PENDING_INPUT_CAS_CAPABILITY not in capabilities
+    ):
+        incompatible.append(
+            f"worker:{worker.get('pid') or 'active'}"
+        )
+    if state_root is not None and pending_root == state_root:
+        try:
+            peers = _core._read_registry_pruned()
+        except (AttributeError, OSError):
+            peers = []
+        for peer in peers:
+            if not isinstance(peer, dict) or peer.get("pid") == os.getpid():
+                continue
+            if _pending_safe_int(peer.get("pending_input_protocol"), 0) < (
+                _PENDING_INPUT_CAS_PROTOCOL
+            ):
+                incompatible.append(f"dashboard:{peer.get('pid') or 'active'}")
+    return {
+        "ok": not incompatible,
+        "restart_required": bool(incompatible),
+        "incompatible_writers": sorted(set(incompatible)),
+    }
+
+
+def _record_pending_primary_conflict(
+    affected, intended_payload, intended_primary_bytes, base_hash,
+    observed_hash, error,
+):
     recorded_at = time.time()
-    sessions = {}
-    with _pending_primary_conflicts_lock:
-        for sid in affected:
-            intended = {
-                "resume": [
-                    _serialize_pending_conflict_item(item)
-                    for item in final[sid]["resume"]
-                ],
-                "terminal": [
-                    _serialize_pending_conflict_item(item)
-                    for item in final[sid]["terminal"]
-                ],
-                "steer": final[sid]["steer"],
-                "opt_in": final[sid]["opt_in"],
-            }
-            sessions[sid] = intended
-            _pending_primary_conflicts[sid] = {
-                "session_id": sid,
-                "intended": intended,
-                "intended_hash": intended_hash,
-                "error": str(error),
-                "recorded_at": recorded_at,
-            }
-    conflict_record = {
-        "version": 1,
+    intended_json = intended_primary_bytes.decode("utf-8")
+    intended_hash = hashlib.sha256(intended_primary_bytes).hexdigest()
+    conflict_body = {
+        "version": 2,
+        "affected_sessions": sorted(affected),
+        "base_hash": base_hash,
+        "observed_hash": observed_hash,
         "intended_hash": intended_hash,
+        "intended_json": intended_json,
         "error": str(error),
         "recorded_at": recorded_at,
-        "sessions": sessions,
     }
+    conflict_record = {
+        **conflict_body,
+        "integrity": hashlib.sha256(
+            json.dumps(
+                conflict_body, sort_keys=True, separators=(",", ":"),
+            ).encode("utf-8")
+        ).hexdigest(),
+    }
+    with _pending_primary_conflicts_lock:
+        for sid in affected:
+            _pending_primary_conflicts[sid] = {
+                **conflict_record,
+                "session_id": sid,
+                "intended_payload": intended_payload,
+            }
     conflict_dir = _pending_primary_conflict_dir()
     conflict_tmp = None
     try:
@@ -1530,7 +1844,12 @@ def _persist_pending_inputs_current(
                 conflict_error = "primary readback did not match intended commit"
             if readback_hash != intended_primary_hash:
                 _record_pending_primary_conflict(
-                    affected, final, intended_primary_hash, conflict_error,
+                    affected,
+                    payload,
+                    intended_primary_bytes,
+                    authority.get("primary_hash"),
+                    readback_hash,
+                    conflict_error,
                 )
                 return {
                     "ok": False,
@@ -1633,10 +1952,49 @@ def _mutate_pending_inputs(
     with contextlib.ExitStack() as ownership:
         for sid in sorted(affected):
             ownership.enter_context(_core._codex_queue_pump_lock(sid))
+        _load_pending_primary_conflicts()
+        with _pending_primary_conflicts_lock:
+            if any(_pending_primary_conflicts.get(sid) for sid in affected):
+                return {
+                    "ok": False,
+                    "code": "pending_primary_commit_uncertain",
+                }
+        compatibility = _pending_writer_compatibility_status()
+        if not compatibility.get("ok"):
+            return {
+                "ok": False,
+                "code": "pending_writer_upgrade_required",
+                "restart_required": True,
+                "incompatible_writers": compatibility.get(
+                    "incompatible_writers"
+                ) or [],
+            }
+        refresh_authority = None
         for sid in sorted(affected):
-            if not _core._refresh_pending_inputs_for_session(sid):
+            refresh_result = _core._refresh_pending_inputs_for_session(sid)
+            if not refresh_result:
                 return {"ok": False, "code": "pending_input_refresh_failed"}
-        if expected_authority:
+            if isinstance(refresh_result, dict):
+                if not refresh_result.get("ok"):
+                    return {"ok": False, "code": "pending_input_refresh_failed"}
+                candidate = refresh_result.get("authority")
+                if candidate is not None:
+                    if (
+                        refresh_authority is not None
+                        and candidate.get("primary_hash")
+                        != refresh_authority.get("primary_hash")
+                    ):
+                        return {
+                            "ok": False,
+                            "code": "pending_input_authority_conflict",
+                        }
+                    refresh_authority = candidate
+        effective_expected_authority = expected_authority
+        if effective_expected_authority is None and refresh_authority is not None:
+            effective_expected_authority = _pending_expected_authority(
+                refresh_authority, affected,
+            )
+        if effective_expected_authority:
             try:
                 with _pending_inputs_file_exclusive_lock():
                     current_authority = _read_pending_inputs_authority_unlocked(
@@ -1645,7 +2003,7 @@ def _mutate_pending_inputs(
             except OSError:
                 return {"ok": False, "code": "pending_input_refresh_failed"}
             if not _pending_authority_matches(
-                current_authority or {}, expected_authority,
+                current_authority or {}, effective_expected_authority,
             ):
                 return {
                     "ok": False,
@@ -1704,7 +2062,7 @@ def _mutate_pending_inputs(
             include_auto_resume=include_auto_resume,
             applied_journal_id=applied_journal_id,
             changed_queue_fields=changed_queue_fields,
-            expected_authority=expected_authority,
+            expected_authority=effective_expected_authority,
         )
         persist_ok = (
             bool(persist_result.get("ok"))

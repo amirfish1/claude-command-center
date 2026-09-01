@@ -1490,6 +1490,7 @@ def _register_self(port, bind_host):
         "pid": self_pid,
         "started_at": datetime.now().astimezone().isoformat(timespec="seconds"),
         "version": _core.__version__,
+        "pending_input_protocol": 1,
     }
 
     def replace(entries):

@@ -1586,6 +1586,20 @@ def resume_session_codex(
         else int(queued_steer_transaction_protocol or 0)
     )
     if not _native_delivery:
+        compatibility = _core._pending_writer_compatibility_status()
+        if not compatibility.get("ok"):
+            return {
+                "ok": False,
+                "code": "pending_writer_upgrade_required",
+                "restart_required": True,
+                "incompatible_writers": compatibility.get(
+                    "incompatible_writers"
+                ) or [],
+                "error": (
+                    "Restart the CCC dashboard and worker before changing "
+                    "pending input"
+                ),
+            }
         routed = _core._control_plane_engine_call(
             "codex", "resume", {
                 "session_id": session_id,

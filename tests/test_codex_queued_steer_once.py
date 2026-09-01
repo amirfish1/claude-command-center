@@ -1,6 +1,7 @@
 from types import SimpleNamespace
 from unittest import mock
 import ast
+import hashlib
 import json
 import multiprocessing
 import os
@@ -714,6 +715,9 @@ def test_real_resume_worker_owns_acknowledged_ambiguous_steer(
 ):
     sid = "real-worker-transaction"
     monkeypatch.delenv("CCC_WORKER_PROCESS", raising=False)
+    monkeypatch.setattr(server, "_pending_writer_compatibility_status", lambda: {
+        "ok": True, "restart_required": False, "incompatible_writers": [],
+    })
     server._pending_resume_queue[sid] = ["target", "target", "last"]
     monkeypatch.setattr(
         server, "_persist_pending_inputs_current", mock.Mock(return_value=True),
@@ -1767,7 +1771,7 @@ def test_post_replace_old_writer_conflict_blocks_without_rollback_or_retry(
     assert restarted["metadata_backup"]["durability_uncertain"] is True
     monkeypatch.setattr(os, "replace", real_replace)
     server._pending_resume_queue[sid] = ["unrelated-write"]
-    assert server._save_pending_inputs({sid})
+    assert not server._save_pending_inputs({sid})
     still_blocked = server._pending_input_recovery_status(sid)
     assert still_blocked["blocked"] is True
     assert still_blocked["metadata_backup"]["durability_uncertain"] is True
@@ -1804,6 +1808,439 @@ def test_normalized_read_initializes_backup_health_and_success_clears_timestamp(
     assert healthy["degraded"] is False
     assert healthy["last_error"] is None
     assert healthy["last_error_at"] is None
+
+
+def test_refresh_dirty_ids_is_read_decode_only(monkeypatch, tmp_path):
+    import ccc_server.pending_inputs as pending_inputs_module
+
+    sid = "dirty-refresh-read-only"
+    pending_file = tmp_path / "pending.json"
+    monkeypatch.setattr(server, "PENDING_INPUTS_FILE", pending_file)
+    pending_file.write_text(json.dumps({
+        "resume_queue": {sid: ["legacy"]},
+        "terminal_queue": {},
+        "devin_steers": {},
+        "auto_resume_opt_in": {},
+        "pending_entry_ids": {"version": 1, "resume_queue": {}, "terminal_queue": {}},
+    }))
+    persist = mock.Mock(return_value=True)
+    monkeypatch.setattr(server, "_persist_pending_inputs_current", persist)
+
+    result = pending_inputs_module._refresh_pending_inputs_for_session(sid)
+
+    assert result["ok"] is True
+    assert result["ids_dirty"] is True
+    assert result["authority"]["primary_hash"] == hashlib.sha256(
+        pending_file.read_bytes()
+    ).hexdigest()
+    persist.assert_not_called()
+
+
+def test_dirty_id_repair_cas_stops_before_mutation_when_writer_races(
+    monkeypatch, tmp_path,
+):
+    import ccc_server.pending_inputs as pending_inputs_module
+
+    sid = "dirty-repair-race"
+    pending_file = tmp_path / "pending.json"
+    monkeypatch.setattr(server, "PENDING_INPUTS_FILE", pending_file)
+    pending_file.write_text(json.dumps({
+        "resume_queue": {sid: ["legacy"]},
+        "terminal_queue": {},
+        "devin_steers": {},
+        "auto_resume_opt_in": {},
+        "applied_claim_journal_ids": {},
+        "pending_entry_ids": {"version": 1, "resume_queue": {}, "terminal_queue": {}},
+        "pending_queue_revisions": {"resume_queue": {}, "terminal_queue": {}},
+    }, indent=2, sort_keys=True))
+    newer = json.loads(pending_file.read_text())
+    newer["resume_queue"][sid] = ["newer-authority"]
+    real_read = pending_inputs_module._read_pending_inputs_authority_unlocked
+    reads = {"count": 0}
+    mutation = mock.Mock(return_value=True)
+
+    def race_after_refresh(*, missing_is_empty):
+        reads["count"] += 1
+        if reads["count"] == 2:
+            pending_file.write_text(json.dumps(newer, indent=2, sort_keys=True))
+        return real_read(missing_is_empty=missing_is_empty)
+
+    monkeypatch.setattr(
+        pending_inputs_module,
+        "_read_pending_inputs_authority_unlocked",
+        race_after_refresh,
+    )
+    monkeypatch.setattr(
+        server,
+        "_refresh_pending_inputs_for_session",
+        pending_inputs_module._refresh_pending_inputs_for_session,
+    )
+    result = server._mutate_pending_inputs({sid}, mutation)
+
+    assert result["code"] == "pending_input_authority_conflict"
+    mutation.assert_not_called()
+    assert json.loads(pending_file.read_text())["resume_queue"][sid] == [
+        "newer-authority",
+    ]
+
+
+def test_conflict_blocks_generic_queue_and_flag_mutations(monkeypatch, tmp_path):
+    sid = "all-writers-conflict-block"
+    pending_file = tmp_path / "pending.json"
+    monkeypatch.setattr(server, "PENDING_INPUTS_FILE", pending_file)
+    server._pending_resume_queue[sid] = ["existing"]
+    assert server._save_pending_inputs({sid})
+    before = pending_file.read_bytes()
+    server._pending_primary_conflicts[sid] = {
+        "session_id": sid,
+        "intended_hash": "a" * 64,
+        "base_hash": "b" * 64,
+        "observed_hash": "c" * 64,
+        "recorded_at": time.time(),
+    }
+
+    for operation in (
+        {"field": "resume", "action": "append_tail", "value": "enqueue"},
+        {"field": "resume", "action": "remove_matching", "match": "existing"},
+        {"field": "terminal", "action": "append_tail", "value": "terminal"},
+        {"field": "auto_resume", "action": "set", "value": True},
+    ):
+        result = server._apply_pending_input_operations(sid, [operation])
+        assert result == {
+            "ok": False,
+            "code": "pending_primary_commit_uncertain",
+        }
+    assert pending_file.read_bytes() == before
+
+
+def test_primary_conflict_record_has_complete_transaction_and_integrity(
+    monkeypatch, tmp_path,
+):
+    sid = "complete-conflict-record"
+    pending_file = tmp_path / "pending.json"
+    monkeypatch.setattr(server, "PENDING_INPUTS_FILE", pending_file)
+    server._pending_resume_queue[sid] = ["claim", "later"]
+    assert server._save_pending_inputs({sid})
+    base_hash = hashlib.sha256(pending_file.read_bytes()).hexdigest()
+    old_writer = json.loads(pending_file.read_text())
+    old_writer["resume_queue"][sid] = ["observed"]
+    real_replace = os.replace
+
+    def replace_then_clobber(source, destination):
+        real_replace(source, destination)
+        if Path(destination) == pending_file:
+            pending_file.write_text(json.dumps(old_writer))
+
+    monkeypatch.setattr(os, "replace", replace_then_clobber)
+    result = server._apply_pending_input_operations(sid, [{
+        "field": "resume", "action": "pop_head",
+    }])
+    assert result["code"] == "pending_primary_commit_uncertain"
+    record_path = next(server._pending_primary_conflict_dir().glob("*.json"))
+    record = json.loads(record_path.read_text())
+    integrity = record.pop("integrity")
+
+    assert record["version"] == 2
+    assert record["affected_sessions"] == [sid]
+    assert record["base_hash"] == base_hash
+    assert record["observed_hash"] == hashlib.sha256(
+        pending_file.read_bytes()
+    ).hexdigest()
+    assert hashlib.sha256(record["intended_json"].encode()).hexdigest() == record[
+        "intended_hash"
+    ]
+    assert json.loads(record["intended_json"])["resume_queue"][sid] == ["later"]
+    assert integrity == hashlib.sha256(
+        json.dumps(record, sort_keys=True, separators=(",", ":")).encode()
+    ).hexdigest()
+
+
+def test_incompatible_active_writer_blocks_until_capability_refresh(
+    monkeypatch, tmp_path,
+):
+    import ccc_server.pending_inputs as pending_inputs_module
+
+    sid = "writer-protocol-gate"
+    monkeypatch.setattr(server, "PENDING_INPUTS_FILE", tmp_path / "pending.json")
+    server._pending_resume_queue[sid] = ["existing"]
+    assert server._save_pending_inputs({sid})
+    compatible = {"value": False}
+    monkeypatch.setattr(
+        pending_inputs_module,
+        "_pending_writer_compatibility_status",
+        lambda: {
+            "ok": compatible["value"],
+            "restart_required": not compatible["value"],
+            "incompatible_writers": ["worker:old"] if not compatible["value"] else [],
+        },
+    )
+
+    blocked = server._apply_pending_input_operations(sid, [{
+        "field": "resume", "action": "append_tail", "value": "new",
+    }])
+    assert blocked["code"] == "pending_writer_upgrade_required"
+    compatible["value"] = True
+    allowed = server._apply_pending_input_operations(sid, [{
+        "field": "resume", "action": "append_tail", "value": "new",
+    }])
+    assert allowed["ok"] is True
+
+
+def test_dashboard_does_not_route_pending_write_to_incompatible_worker(
+    monkeypatch,
+):
+    monkeypatch.delenv("CCC_WORKER_PROCESS", raising=False)
+    route = mock.Mock(return_value={"ok": True, "routed": True})
+    monkeypatch.setattr(server, "_control_plane_engine_call", route)
+    monkeypatch.setattr(server, "_pending_writer_compatibility_status", lambda: {
+        "ok": False,
+        "restart_required": True,
+        "incompatible_writers": ["worker:old"],
+    })
+
+    result = server.resume_session_codex(
+        "old-worker-route", "queued", _from_queue=True,
+        queued_delivery_transaction_protocol=1,
+    )
+
+    assert result == {
+        "ok": False,
+        "code": "pending_writer_upgrade_required",
+        "restart_required": True,
+        "incompatible_writers": ["worker:old"],
+        "error": (
+            "Restart the CCC dashboard and worker before changing pending input"
+        ),
+    }
+    route.assert_not_called()
+
+
+def _install_primary_conflict_fixture(server_module, sid, intended_payload):
+    pending_file = server_module.PENDING_INPUTS_FILE
+    base_hash = hashlib.sha256(pending_file.read_bytes()).hexdigest()
+    sidecar = intended_payload["pending_entry_ids"]
+    for field in ("resume_queue", "terminal_queue"):
+        rows = intended_payload[field].get(sid) or []
+        metadata = (sidecar.get(field) or {}).get(sid) or []
+        if len(rows) == len(metadata):
+            for text, entry in zip(rows, metadata):
+                entry["fingerprint"] = server_module._pending_text_fingerprint(text)
+    intended_bytes = json.dumps(
+        intended_payload, indent=2, sort_keys=True,
+    ).encode("utf-8")
+    import ccc_server.pending_inputs as pending_inputs_module
+    pending_inputs_module._record_pending_primary_conflict(
+        {sid}, intended_payload, intended_bytes,
+        base_hash, base_hash, "test commit uncertainty",
+    )
+    return base_hash, hashlib.sha256(intended_bytes).hexdigest(), intended_bytes
+
+
+def test_conflict_reconcile_auto_applies_when_base_still_current(
+    monkeypatch, tmp_path,
+):
+    sid = "reconcile-base-current"
+    pending_file = tmp_path / "pending.json"
+    monkeypatch.setattr(server, "PENDING_INPUTS_FILE", pending_file)
+    server._pending_resume_queue[sid] = ["base"]
+    assert server._save_pending_inputs({sid})
+    intended = json.loads(pending_file.read_text())
+    intended["resume_queue"][sid] = ["intended"]
+    _install_primary_conflict_fixture(server, sid, intended)
+
+    result = server._reconcile_pending_primary_conflict(sid)
+
+    assert result["ok"] is True
+    assert result["resolution"] == "accept_intended"
+    assert json.loads(pending_file.read_text())["resume_queue"][sid] == [
+        "intended",
+    ]
+    assert not server._pending_input_recovery_blocked(sid)
+
+
+def test_conflict_reconcile_marks_commit_won_when_intended_is_current(
+    monkeypatch, tmp_path,
+):
+    sid = "reconcile-intended-current"
+    pending_file = tmp_path / "pending.json"
+    monkeypatch.setattr(server, "PENDING_INPUTS_FILE", pending_file)
+    server._pending_resume_queue[sid] = ["base"]
+    assert server._save_pending_inputs({sid})
+    intended = json.loads(pending_file.read_text())
+    intended["resume_queue"][sid] = ["intended"]
+    _, _, intended_bytes = _install_primary_conflict_fixture(server, sid, intended)
+    pending_file.write_bytes(intended_bytes)
+
+    result = server._reconcile_pending_primary_conflict(sid)
+
+    assert result["ok"] is True
+    assert result["resolution"] == "commit_won"
+    assert not server._pending_input_recovery_blocked(sid)
+
+
+def test_divergent_conflict_requires_explicit_resolution_and_exposes_options(
+    monkeypatch, tmp_path,
+):
+    sid = "reconcile-divergent"
+    pending_file = tmp_path / "pending.json"
+    monkeypatch.setattr(server, "PENDING_INPUTS_FILE", pending_file)
+    server._pending_resume_queue[sid] = ["base"]
+    assert server._save_pending_inputs({sid})
+    intended = json.loads(pending_file.read_text())
+    intended["resume_queue"][sid] = ["intended"]
+    base_hash, intended_hash, _ = _install_primary_conflict_fixture(
+        server, sid, intended,
+    )
+    divergent = json.loads(pending_file.read_text())
+    divergent["resume_queue"][sid] = ["divergent"]
+    pending_file.write_text(json.dumps(divergent, indent=2, sort_keys=True))
+    current_hash = hashlib.sha256(pending_file.read_bytes()).hexdigest()
+
+    unresolved = server._reconcile_pending_primary_conflict(sid)
+    status = server._pending_input_recovery_status(sid)
+
+    assert unresolved == {
+        "ok": False,
+        "code": "pending_primary_commit_uncertain",
+        "resolution_required": True,
+        "base_hash": base_hash,
+        "intended_hash": intended_hash,
+        "current_hash": current_hash,
+        "resolution_options": ["accept_intended", "accept_current"],
+    }
+    conflict = status["conflict_details"][0]
+    assert conflict.items() >= {
+        "affected_sessions": [sid],
+        "base_hash": base_hash,
+        "intended_hash": intended_hash,
+        "current_hash": current_hash,
+        "resolution_options": ["accept_intended", "accept_current"],
+        "durable": True,
+    }.items()
+
+    accepted = server._reconcile_pending_primary_conflict(
+        sid, resolution="accept_current",
+    )
+    assert accepted["ok"] is True
+    assert accepted["resolution"] == "accept_current"
+    assert json.loads(pending_file.read_text())["resume_queue"][sid] == [
+        "divergent",
+    ]
+
+
+def test_divergent_conflict_can_explicitly_accept_intended(monkeypatch, tmp_path):
+    sid = "reconcile-accept-intended"
+    pending_file = tmp_path / "pending.json"
+    monkeypatch.setattr(server, "PENDING_INPUTS_FILE", pending_file)
+    server._pending_resume_queue[sid] = ["base"]
+    assert server._save_pending_inputs({sid})
+    intended = json.loads(pending_file.read_text())
+    intended["resume_queue"][sid] = ["intended"]
+    _install_primary_conflict_fixture(server, sid, intended)
+    divergent = json.loads(pending_file.read_text())
+    divergent["resume_queue"][sid] = ["divergent"]
+    pending_file.write_text(json.dumps(divergent, indent=2, sort_keys=True))
+
+    result = server._reconcile_pending_primary_conflict(
+        sid, resolution="accept_intended",
+    )
+
+    assert result == {"ok": True, "resolution": "accept_intended"}
+    assert json.loads(pending_file.read_text())["resume_queue"][sid] == [
+        "intended",
+    ]
+
+
+def test_corrupt_primary_conflict_is_quarantined_without_blocking(
+    monkeypatch, tmp_path,
+):
+    sid = "corrupt-conflict-record"
+    pending_file = tmp_path / "pending.json"
+    monkeypatch.setattr(server, "PENDING_INPUTS_FILE", pending_file)
+    server._pending_resume_queue[sid] = ["base"]
+    assert server._save_pending_inputs({sid})
+    intended = json.loads(pending_file.read_text())
+    intended["resume_queue"][sid] = ["intended"]
+    _install_primary_conflict_fixture(server, sid, intended)
+    record_path = next(server._pending_primary_conflict_dir().glob("*.json"))
+    record = json.loads(record_path.read_text())
+    record["intended_json"] = "{}"
+    record_path.write_text(json.dumps(record))
+    server._pending_primary_conflicts.clear()
+
+    server._load_pending_primary_conflicts()
+
+    assert not server._pending_input_recovery_blocked(sid)
+    assert not record_path.exists()
+    assert record_path.with_suffix(".invalid").exists()
+
+
+def test_semantically_invalid_conflict_payload_is_quarantined(
+    monkeypatch, tmp_path,
+):
+    sid = "invalid-conflict-payload"
+    pending_file = tmp_path / "pending.json"
+    monkeypatch.setattr(server, "PENDING_INPUTS_FILE", pending_file)
+    server._pending_resume_queue[sid] = ["base"]
+    assert server._save_pending_inputs({sid})
+    intended = json.loads(pending_file.read_text())
+    _install_primary_conflict_fixture(server, sid, intended)
+    record_path = next(server._pending_primary_conflict_dir().glob("*.json"))
+    record = json.loads(record_path.read_text())
+    payload = json.loads(record["intended_json"])
+    payload["devin_steers"][sid] = 7
+    record["intended_json"] = json.dumps(payload, indent=2, sort_keys=True)
+    record["intended_hash"] = hashlib.sha256(
+        record["intended_json"].encode()
+    ).hexdigest()
+    body = {key: value for key, value in record.items() if key != "integrity"}
+    record["integrity"] = hashlib.sha256(
+        json.dumps(body, sort_keys=True, separators=(",", ":")).encode()
+    ).hexdigest()
+    record_path.write_text(json.dumps(record))
+    server._pending_primary_conflicts.clear()
+
+    server._load_pending_primary_conflicts()
+
+    assert not server._pending_input_recovery_blocked(sid)
+    assert record_path.with_suffix(".invalid").exists()
+
+
+def test_writer_gate_uses_active_worker_capability_evidence(monkeypatch, tmp_path):
+    import ccc_server.pending_inputs as pending_inputs_module
+
+    monkeypatch.delenv("CCC_WORKER_PROCESS", raising=False)
+    monkeypatch.setattr(server, "COMMAND_CENTER_STATE_DIR", tmp_path)
+    monkeypatch.setattr(server, "PENDING_INPUTS_FILE", tmp_path / "pending.json")
+    evidence = {
+        "reachable": True,
+        "pid": 42,
+        "capabilities": ["engine-execution-v1"],
+    }
+    monkeypatch.setattr(server, "_get_worker_compat_cache", lambda: dict(evidence))
+    monkeypatch.setattr(server, "_read_registry_pruned", lambda: [])
+
+    stale = pending_inputs_module._pending_writer_compatibility_status()
+    evidence["capabilities"].append("pending-input-cas-v1")
+    restarted = pending_inputs_module._pending_writer_compatibility_status()
+
+    assert stale["ok"] is False
+    assert stale["restart_required"] is True
+    assert stale["incompatible_writers"] == ["worker:42"]
+    assert restarted == {
+        "ok": True,
+        "restart_required": False,
+        "incompatible_writers": [],
+    }
+
+
+def test_pending_writer_protocol_is_advertised_by_dashboard_and_worker():
+    repo_root = Path(server.__file__).resolve().parent
+    worker_source = (repo_root / "ccc_worker.py").read_text()
+    registry_source = (repo_root / "ccc_server" / "fleet_jobs.py").read_text()
+
+    assert '"pending-input-cas-v1"' in worker_source
+    assert '"pending_input_protocol": 1' in registry_source
 
 
 def test_codex_pump_persist_failure_prevents_native_delivery(

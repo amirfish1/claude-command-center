@@ -98,6 +98,7 @@ class WorkerRuntime:
                         "engine-execution-v1",
                         "work-graph-v1",
                         "safe-drain-v1",
+                        "pending-input-cas-v1",
                     ],
                 },
                 **summary,
