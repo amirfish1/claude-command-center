@@ -31195,10 +31195,12 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                         "force_terminal": bool(payload.get("force_terminal")),
                         "force_headless": bool(payload.get("force_headless")),
                         "force_queue": bool(payload.get("force_queue")) or bool(verb_options.get("force_queue")),
-                        # Opt out of duplicate suppression for a deliberate
-                        # re-send of text this session already received.
-                        "allow_duplicate": bool(payload.get("allow_duplicate")),
                     }
+                    # Only when asked for, like idempotency_key below: an
+                    # opt-out of duplicate suppression must not change the
+                    # call shape for every ordinary inject.
+                    if payload.get("allow_duplicate"):
+                        inject_options["allow_duplicate"] = True
                     if replace_queued:
                         inject_options["preserve_queued_steer"] = True
                     if payload.get("idempotency_key"):
