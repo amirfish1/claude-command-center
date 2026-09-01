@@ -247,47 +247,49 @@ def _disable_session_auto_resume(session_id):
     try:
         with _core._codex_queue_pump_lock(sid), \
              _core._auto_resume_exclusive_lock():
-            if not _core._refresh_pending_inputs_for_session(sid):
-                return {"ok": False, "error": "failed to refresh pending inputs"}
             # Persist the negative marker first. Every queue/write/delivery
             # path rechecks it while holding this same barrier.
             _core._dismiss_usage_limit_resume(sid)
-            removed = _purge_pending_auto_resume_handoffs(sid)
-            with _core._auto_resume_opt_in_lock:
-                _core._auto_resume_opt_in.pop(sid, None)
+            removed_items = []
 
-            handoff_cleanup_failed = False
-            for queue, lock in (
-                (_core._pending_resume_queue, _core._pending_resume_lock),
-                (_core._pending_terminal_input_queue, _core._pending_terminal_input_lock),
-            ):
-                with lock:
-                    items = queue.get(sid) or []
-                    kept = []
-                    for item in items:
-                        if not _core._is_unattended_auto_continue(item):
-                            kept.append(item)
-                            continue
-                        if (
-                            isinstance(item, _core._PendingInputHandoff)
-                            and not _core._complete_pending_input_handoff(item)
-                        ):
-                            kept.append(item)
-                            handoff_cleanup_failed = True
-                            continue
-                        removed += 1
-                    if kept:
-                        queue[sid] = kept
-                    else:
-                        queue.pop(sid, None)
+            def disable_mutation():
+                with _core._auto_resume_opt_in_lock:
+                    _core._auto_resume_opt_in.pop(sid, None)
+                for queue, lock in (
+                    (_core._pending_resume_queue, _core._pending_resume_lock),
+                    (_core._pending_terminal_input_queue, _core._pending_terminal_input_lock),
+                ):
+                    with lock:
+                        items = queue.get(sid) or []
+                        kept = []
+                        for item in items:
+                            if _core._is_unattended_auto_continue(item):
+                                removed_items.append(item)
+                            else:
+                                kept.append(item)
+                        if kept:
+                            queue[sid] = kept
+                        else:
+                            queue.pop(sid, None)
+                return len(removed_items)
 
-            if not _core._persist_pending_inputs_current(
-                {sid}, include_auto_resume=True,
-            ):
+            transaction = _core._mutate_pending_inputs(
+                {sid}, disable_mutation, include_auto_resume=True,
+            )
+            if not transaction.get("ok"):
                 return {
                     "ok": False,
                     "error": "failed to persist auto-resume disable",
                 }
+            removed = int(transaction.get("value") or 0)
+            handoff_cleanup_failed = False
+            for item in removed_items:
+                if (
+                    isinstance(item, _core._PendingInputHandoff)
+                    and not _core._complete_pending_input_handoff(item)
+                ):
+                    handoff_cleanup_failed = True
+            removed += _purge_pending_auto_resume_handoffs(sid)
             if handoff_cleanup_failed:
                 return {
                     "ok": False,

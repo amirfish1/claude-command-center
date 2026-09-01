@@ -2618,9 +2618,11 @@ def resume_session_gemini(session_id, text):
         if s.get("engine") == "gemini" and s.get("resumed_sid") == session_id:
             try:
                 if _core._poll_spawn_entry(s) is None:
-                    _core._apply_pending_input_operations(session_id, [{
+                    queued = _core._apply_pending_input_operations(session_id, [{
                         "field": "resume", "action": "append_tail", "value": text,
                     }])
+                    if not queued.get("ok"):
+                        return {"ok": False, "error": "failed to persist queued Gemini input"}
                     return {
 
                         "ok": True,
@@ -2920,8 +2922,9 @@ def _start_devin_resume_watchdog(proc, session_id, text, log_path, *, delivery_s
                 "dedupe": True,
             }
         )
-        _core._apply_pending_input_operations(session_id, [operation])
-        _core._mark_pending_resume_retry(session_id)
+        transaction = _core._apply_pending_input_operations(session_id, [operation])
+        if transaction.get("ok"):
+            _core._mark_pending_resume_retry(session_id)
 
     threading.Thread(
         target=_watch,
@@ -3023,7 +3026,9 @@ def _start_devin_delivery_proof_watchdog(
                 "dedupe_head": True,
             }
         )
-        _core._apply_pending_input_operations(session_id, [operation])
+        transaction = _core._apply_pending_input_operations(session_id, [operation])
+        if not transaction.get("ok"):
+            return
         _core._mark_pending_resume_retry(session_id)
         print(
             f"[devin-proof] no delivery proof for {session_id} — requeuing follow-up",
@@ -3072,9 +3077,11 @@ def resume_session_devin(session_id, text, _delivery_slot="resume"):
                         + (f" ({running_s}s so far)" if running_s is not None else "")
                         + ". It sends automatically when that turn ends."
                     )
-                    _core._apply_pending_input_operations(session_id, [{
+                    queued = _core._apply_pending_input_operations(session_id, [{
                         "field": "resume", "action": "append_tail", "value": text,
                     }])
+                    if not queued.get("ok"):
+                        return {"ok": False, "error": "failed to persist queued Devin input"}
                     _core._note_pending_queued(session_id, text, reason)
                     return {
                         "ok": True,
@@ -3366,9 +3373,11 @@ def resume_session_cursor(session_id, text):
         if s.get("engine") == "cursor" and s.get("resumed_sid") == session_id:
             try:
                 if _core._poll_spawn_entry(s) is None:
-                    _core._apply_pending_input_operations(session_id, [{
+                    queued = _core._apply_pending_input_operations(session_id, [{
                         "field": "resume", "action": "append_tail", "value": text,
                     }])
+                    if not queued.get("ok"):
+                        return {"ok": False, "error": "failed to persist queued Cursor input"}
                     return {
                         "ok": True,
                         "queued": True,
@@ -3836,9 +3845,11 @@ def resume_session_antigravity(session_id, text):
                     started = _spawn_entry_started_epoch(s)
                     if started and (time.time() - started) > _antigravity_resume_stale_seconds():
                         continue
-                    _core._apply_pending_input_operations(session_id, [{
+                    queued = _core._apply_pending_input_operations(session_id, [{
                         "field": "resume", "action": "append_tail", "value": text,
                     }])
+                    if not queued.get("ok"):
+                        return {"ok": False, "error": "failed to persist queued Antigravity input"}
                     return {
 
                         "ok": True,

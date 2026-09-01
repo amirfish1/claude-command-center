@@ -166,7 +166,9 @@ def clean_pending_queues(monkeypatch):
 @pytest.fixture
 def router_env(monkeypatch):
     resume = mock.Mock()
-    monkeypatch.setattr(server, "_save_pending_inputs", mock.Mock(return_value=True))
+    monkeypatch.setattr(
+        server, "_persist_pending_inputs_current", mock.Mock(return_value=True),
+    )
     monkeypatch.setattr(server, "_inject_budget_check", lambda *args: None)
     monkeypatch.setattr(server, "_is_codex_session", lambda sid: True)
     monkeypatch.setattr(server, "find_session_cwd", lambda sid: "/tmp")
@@ -208,7 +210,9 @@ def _notify_user_message(session_id, text, turn_id="turn-active"):
 def test_claim_removes_one_duplicate_and_restore_preserves_fifo(monkeypatch):
     sid = "claim-restore"
     server._pending_resume_queue[sid] = ["first", "target", "target", "last"]
-    monkeypatch.setattr(server, "_save_pending_inputs", mock.Mock(return_value=True))
+    monkeypatch.setattr(
+        server, "_persist_pending_inputs_current", mock.Mock(return_value=True),
+    )
 
     claim = server._claim_matching_pending_input(sid, "target")
 
@@ -227,7 +231,9 @@ def test_claim_prefers_resume_queue_and_claims_at_most_one(monkeypatch):
     sid = "claim-precedence"
     server._pending_resume_queue[sid] = ["target", "keep"]
     server._pending_terminal_input_queue[sid] = ["target"]
-    monkeypatch.setattr(server, "_save_pending_inputs", mock.Mock(return_value=True))
+    monkeypatch.setattr(
+        server, "_persist_pending_inputs_current", mock.Mock(return_value=True),
+    )
 
     claim = server._claim_matching_pending_input(sid, "target")
 
@@ -289,7 +295,7 @@ def test_rollback_persistence_failure_is_distinct_and_not_preserved(
 
     assert result["code"] == "queued_rollback_persistence_failed"
     assert not result.get("queued_preserved")
-    assert server._pending_resume_queue[sid] == ["target"]
+    assert sid not in server._pending_resume_queue
 
 
 def test_successful_explicit_queued_steer_claims_before_delivery(router_env):
@@ -708,7 +714,9 @@ def test_real_resume_worker_owns_acknowledged_ambiguous_steer(
     sid = "real-worker-transaction"
     monkeypatch.delenv("CCC_WORKER_PROCESS", raising=False)
     server._pending_resume_queue[sid] = ["target", "target", "last"]
-    monkeypatch.setattr(server, "_save_pending_inputs", mock.Mock(return_value=True))
+    monkeypatch.setattr(
+        server, "_persist_pending_inputs_current", mock.Mock(return_value=True),
+    )
 
     def native_delivery(session_id, text, **kwargs):
         server._bind_codex_queued_steer_ack_suppression(
@@ -1319,6 +1327,7 @@ def test_auto_resume_paths_acquire_session_before_barrier():
         server._queue_terminal_input,
         server._requeue_terminal_input_front,
         server._disable_session_auto_resume,
+        server._write_pending_input_handoff,
     ):
         source = inspect.getsource(function)
         assert source.index("_codex_queue_pump_lock") < source.index(
@@ -1437,8 +1446,14 @@ def test_gemini_queue_save_does_not_persist_devin_steer_flag():
 def test_production_writers_use_explicit_pending_mutations():
     repo_root = Path(server.__file__).resolve().parent
     offenders = []
+    direct_persist = []
+    ignored_transactions = []
     for source_path in (repo_root / "ccc_server").glob("*.py"):
         tree = ast.parse(source_path.read_text(), filename=str(source_path))
+        parents = {}
+        for parent in ast.walk(tree):
+            for child in ast.iter_child_nodes(parent):
+                parents[child] = parent
         for node in ast.walk(tree):
             if not isinstance(node, ast.Call):
                 continue
@@ -1449,7 +1464,22 @@ def test_production_writers_use_explicit_pending_mutations():
             )
             if name == "_save_pending_inputs":
                 offenders.append(f"{source_path.name}:{node.lineno}")
+            if name == "_persist_pending_inputs_current":
+                owner = node
+                while owner in parents and not isinstance(owner, ast.FunctionDef):
+                    owner = parents[owner]
+                if not (
+                    source_path.name == "pending_inputs.py"
+                    and isinstance(owner, ast.FunctionDef)
+                    and owner.name == "_mutate_pending_inputs"
+                ):
+                    direct_persist.append(f"{source_path.name}:{node.lineno}")
+            if name in {"_apply_pending_input_operations", "_mutate_pending_inputs"}:
+                if isinstance(parents.get(node), ast.Expr):
+                    ignored_transactions.append(f"{source_path.name}:{node.lineno}")
     assert offenders == []
+    assert direct_persist == []
+    assert ignored_transactions == []
     pending_source = (repo_root / "ccc_server" / "pending_inputs.py").read_text()
     assert "_pending_inputs_session_baselines" not in pending_source
     assert "_apply_pending_queue_delta" not in pending_source
@@ -1462,6 +1492,104 @@ def test_deliver_barrier_acquires_session_first():
     assert source.index("_codex_queue_pump_lock") < source.index(
         "_auto_resume_exclusive_lock"
     )
+    ingest_source = inspect.getsource(server._ingest_pending_input_handoffs)
+    assert ingest_source.index("_load_pending_inputs") < ingest_source.index(
+        "_auto_resume_exclusive_lock"
+    )
+
+
+def test_mutation_exception_rolls_back_memory_and_disk(monkeypatch, tmp_path):
+    sid = "mutation-exception"
+    pending_file = tmp_path / "pending.json"
+    monkeypatch.setattr(server, "PENDING_INPUTS_FILE", pending_file)
+    server._pending_resume_queue[sid] = ["first", "second"]
+    assert server._save_pending_inputs({sid})
+
+    def explode():
+        server._pending_resume_queue[sid].pop(0)
+        raise RuntimeError("mutation exploded")
+
+    result = server._mutate_pending_inputs({sid}, explode)
+
+    assert not result["ok"]
+    assert "value" not in result
+    assert server._pending_resume_queue[sid] == ["first", "second"]
+    assert json.loads(pending_file.read_text())["resume_queue"][sid] == [
+        "first", "second",
+    ]
+
+
+def test_persist_failure_rolls_back_memory_and_hides_value(monkeypatch, tmp_path):
+    sid = "mutation-persist-failure"
+    monkeypatch.setattr(server, "PENDING_INPUTS_FILE", tmp_path / "pending.json")
+    server._pending_resume_queue[sid] = ["first", "second"]
+    assert server._save_pending_inputs({sid})
+    monkeypatch.setattr(server, "_persist_pending_inputs_current", lambda *a, **k: False)
+
+    result = server._apply_pending_input_operations(sid, [{
+        "field": "resume", "action": "pop_head",
+    }])
+
+    assert not result["ok"]
+    assert "value" not in result
+    assert server._pending_resume_queue[sid] == ["first", "second"]
+
+
+def test_codex_pump_persist_failure_prevents_native_delivery(
+    monkeypatch, tmp_path,
+):
+    sid = "pump-claim-persist-failure"
+    monkeypatch.setattr(server, "PENDING_INPUTS_FILE", tmp_path / "pending.json")
+    server._pending_resume_queue[sid] = ["target", "next"]
+    assert server._save_pending_inputs({sid})
+    monkeypatch.setattr(server, "_persist_pending_inputs_current", lambda *a, **k: False)
+    monkeypatch.setattr(server, "_pending_resume_retry_due", lambda sid: True)
+    monkeypatch.setattr(server, "_resume_queue_engine_busy", lambda sid: False)
+    native = mock.Mock()
+    monkeypatch.setattr(server, "resume_session_codex", native)
+
+    result = server._pump_codex_resume_queue(sid)
+
+    assert not result["ok"]
+    assert result["code"] == "pending_input_persist_failed"
+    native.assert_not_called()
+    assert server._pending_resume_queue[sid] == ["target", "next"]
+
+
+def test_codex_pump_delivery_failure_restores_exact_claim(monkeypatch, tmp_path):
+    sid = "pump-delivery-rollback"
+    monkeypatch.setattr(server, "PENDING_INPUTS_FILE", tmp_path / "pending.json")
+    server._pending_resume_queue[sid] = ["target", "target", "next"]
+    assert server._save_pending_inputs({sid})
+    monkeypatch.setattr(server, "_pending_resume_retry_due", lambda sid: True)
+    monkeypatch.setattr(server, "_resume_queue_engine_busy", lambda sid: False)
+    monkeypatch.setattr(
+        server, "resume_session_codex",
+        lambda *a, **k: {"ok": False, "code": "delivery_failed"},
+    )
+
+    result = server._pump_codex_resume_queue(sid)
+
+    assert not result["ok"]
+    assert server._pending_resume_queue[sid] == ["target", "target", "next"]
+    assert json.loads((tmp_path / "pending.json").read_text())["resume_queue"][sid] == [
+        "target", "target", "next",
+    ]
+
+
+def test_devin_clear_if_matching_reports_truthful_boolean(monkeypatch, tmp_path):
+    sid = "devin-clear-truth"
+    monkeypatch.setattr(server, "PENDING_INPUTS_FILE", tmp_path / "pending.json")
+    server._pending_devin_steers[sid] = "newer"
+    assert server._save_pending_inputs({sid}, include_devin_steers=True)
+
+    result = server._apply_pending_input_operations(sid, [{
+        "field": "devin_steer", "action": "clear_if_matching", "match": "older",
+    }])
+
+    assert result["ok"]
+    assert result["value"] == [False]
+    assert server._pending_devin_steers[sid] == "newer"
 
 
 def test_finalizer_does_not_consume_a_second_copy_after_router_commit():

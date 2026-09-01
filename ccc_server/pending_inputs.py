@@ -289,10 +289,12 @@ def _load_pending_inputs():
             })
     if stripped:
         for sid in stripped_sessions:
-            _core._apply_pending_input_operations(sid, [
+            cleanup = _core._apply_pending_input_operations(sid, [
                 {"field": "resume", "action": "drop_unattended"},
                 {"field": "terminal", "action": "drop_unattended"},
             ])
+            if not cleanup.get("ok"):
+                print(f"  [pending-inputs] stale auto-continue cleanup failed: {sid}")
 
 
 def _refresh_pending_inputs_for_session(session_id):
@@ -440,13 +442,53 @@ def _mutate_pending_inputs(
         for sid in sorted(affected):
             if not _core._refresh_pending_inputs_for_session(sid):
                 return {"ok": False, "code": "pending_input_refresh_failed"}
-        value = mutation()
-        ok = _persist_pending_inputs_current(
+        snapshots = {
+            sid: _pending_inputs_session_snapshot(sid)
+            for sid in affected
+        }
+
+        def restore_memory():
+            for sid, snapshot in snapshots.items():
+                with _core._pending_resume_lock:
+                    if snapshot["resume"]:
+                        _core._pending_resume_queue[sid] = list(snapshot["resume"])
+                    else:
+                        _core._pending_resume_queue.pop(sid, None)
+                    if snapshot["steer"]:
+                        _core._pending_devin_steers[sid] = snapshot["steer"]
+                    else:
+                        _core._pending_devin_steers.pop(sid, None)
+                with _core._pending_terminal_input_lock:
+                    if snapshot["terminal"]:
+                        _core._pending_terminal_input_queue[sid] = list(
+                            snapshot["terminal"]
+                        )
+                    else:
+                        _core._pending_terminal_input_queue.pop(sid, None)
+                with _core._auto_resume_opt_in_lock:
+                    if snapshot["opt_in"]:
+                        _core._auto_resume_opt_in[sid] = True
+                    else:
+                        _core._auto_resume_opt_in.pop(sid, None)
+
+        try:
+            value = mutation()
+        except Exception as exc:
+            restore_memory()
+            return {
+                "ok": False,
+                "code": "pending_input_mutation_failed",
+                "error": str(exc),
+            }
+        ok = _core._persist_pending_inputs_current(
             affected,
             include_devin_steers=include_devin_steers,
             include_auto_resume=include_auto_resume,
         )
-        return {"ok": bool(ok), "value": value}
+        if not ok:
+            restore_memory()
+            return {"ok": False, "code": "pending_input_persist_failed"}
+        return {"ok": True, "value": value}
 
 
 def _apply_pending_input_operations(session_id, operations):
@@ -553,11 +595,15 @@ def _apply_pending_input_operations(session_id, operations):
                     if action == "set":
                         _core._pending_devin_steers[session_id] = op.get("value")
                     elif action == "clear_if_matching":
-                        if _core._pending_devin_steers.get(session_id) == op.get("match"):
+                        removed = (
+                            _core._pending_devin_steers.get(session_id)
+                            == op.get("match")
+                        )
+                        if removed:
                             _core._pending_devin_steers.pop(session_id, None)
                     else:
                         _core._pending_devin_steers.pop(session_id, None)
-                    results.append(True)
+                    results.append(removed if action == "clear_if_matching" else True)
             elif field == "auto_resume":
                 with _core._auto_resume_opt_in_lock:
                     if action == "set" and op.get("value"):
@@ -632,11 +678,11 @@ def _set_auto_resume_opt_in(session_id, value=True):
     """Durably set (or clear) the per-session auto-resume opt-in flag."""
     if not session_id:
         return
-    _core._apply_pending_input_operations(str(session_id), [{
+    return bool(_core._apply_pending_input_operations(str(session_id), [{
         "field": "auto_resume",
         "action": "set" if value else "clear",
         "value": bool(value),
-    }])
+    }]).get("ok"))
 
 
 def _apply_spawn_auto_resume_opt_in(payload, result):
@@ -669,7 +715,8 @@ def _write_pending_input_handoff(session_id, text, *, front=False):
     """Write a worker handoff, gating unattended auto-resume at the barrier."""
     if _is_unattended_auto_continue(text):
         try:
-            with _core._auto_resume_exclusive_lock():
+            with _core._codex_queue_pump_lock(session_id), \
+                 _core._auto_resume_exclusive_lock():
                 if not _core._is_auto_resume_opted_in(session_id):
                     return None
                 return _write_pending_input_handoff_unlocked(
@@ -756,6 +803,9 @@ def _read_pending_input_handoff(path):
 def _ingest_pending_input_handoffs():
     """Ingest handoffs behind the same barrier used by cancellation."""
     try:
+        # Loading may strip stale auto-continues for unrelated sessions, so it
+        # must run before the handoff barrier/ownership section.
+        _core._load_pending_inputs()
         session_ids = set()
         for path in _core.PENDING_INPUT_HANDOFF_DIR.glob("*.json"):
             event = _read_pending_input_handoff(path)
@@ -813,7 +863,6 @@ def _ingest_pending_input_handoffs_unlocked(owned_session_ids):
         # the dashboard or a sibling process remain in memory. Handoff-backed
         # strings are deliberately excluded from pending-inputs.json; their
         # unique files remain authoritative until proven delivery.
-        _core._load_pending_inputs()
         new_events = [
             event for event in events
             if event["id"] not in _core._pending_terminal_handoff_ids
@@ -1010,14 +1059,7 @@ def _claim_matching_pending_input(session_id, text):
     clean = str(text or "").strip()
     if not session_id or not clean:
         return None
-    ownership = _core._codex_queue_pump_lock(session_id)
-    with ownership:
-        if not _core._refresh_pending_inputs_for_session(session_id):
-            return {
-                "ok": False,
-                "code": "queued_claim_refresh_failed",
-                "error": "could not refresh queued message state",
-            }
+    def claim_one():
         for queue_name, queue, lock in (
             ("resume", _core._pending_resume_queue, _core._pending_resume_lock),
             ("terminal", _core._pending_terminal_input_queue, _core._pending_terminal_input_lock),
@@ -1041,17 +1083,16 @@ def _claim_matching_pending_input(session_id, text):
                     break
                 else:
                     continue
-            if _core._persist_pending_inputs_current({session_id}):
-                return claim
-            with lock:
-                items = queue.setdefault(session_id, [])
-                items.insert(min(index, len(items)), claimed)
-            return {
-                "ok": False,
-                "code": "queued_claim_persistence_failed",
-                "error": "could not persist queued message claim",
-            }
+            return claim
         return None
+    transaction = _core._mutate_pending_inputs({session_id}, claim_one)
+    if not transaction.get("ok"):
+        return {
+            "ok": False,
+            "code": "queued_claim_persistence_failed",
+            "error": "could not persist queued message claim",
+        }
+    return transaction.get("value")
 
 
 def _commit_pending_input_claim(claim):
@@ -1076,10 +1117,7 @@ def _restore_pending_input_claim(claim):
         if queue_name == "resume"
         else (_core._pending_terminal_input_queue, _core._pending_terminal_input_lock)
     )
-    ownership = _core._codex_queue_pump_lock(sid)
-    with ownership:
-        if not _core._refresh_pending_inputs_for_session(sid):
-            return False
+    def restore():
         with lock:
             items = queue.setdefault(sid, [])
             already_restored = (
@@ -1093,7 +1131,8 @@ def _restore_pending_input_claim(claim):
             if not already_restored:
                 index = max(0, min(int(claim.get("index") or 0), len(items)))
                 items.insert(index, item)
-        return bool(_core._persist_pending_inputs_current({sid}))
+        return True
+    return bool(_core._mutate_pending_inputs({sid}, restore).get("ok"))
 
 
 def _consume_matching_pending_input(session_id, text):
@@ -1350,27 +1389,35 @@ def _terminal_queue_dedupe_key(text):
 
 def _queue_terminal_input_unlocked(session_id, text, status=None, reason_hint=None):
     """Queue input until a live Claude session reports it is idle again."""
-    deduped = False
-    with _core._pending_terminal_input_lock:
-        queue = _core._pending_terminal_input_queue.setdefault(session_id, [])
+    def enqueue():
+        deduped = False
+        with _core._pending_terminal_input_lock:
+            queue = _core._pending_terminal_input_queue.setdefault(session_id, [])
         # A second /compact (or /clear) queued while the first is still
         # pending would land on the already-compacted session and be refused
         # ("Not enough messages to compact."). One copy per session is the
         # whole intent; collapse the duplicate instead of stacking it.
-        if _terminal_queue_dedupe_key(text) is not None and any(
-            _terminal_queue_dedupe_key(item) == _terminal_queue_dedupe_key(text)
-            for item in queue
-        ):
-            deduped = True
-        else:
-            queue.append(text)
-        queued_count = len(queue)
+            if _terminal_queue_dedupe_key(text) is not None and any(
+                _terminal_queue_dedupe_key(item) == _terminal_queue_dedupe_key(text)
+                for item in queue
+            ):
+                deduped = True
+            else:
+                queue.append(text)
+            return deduped, len(queue)
+    transaction = _core._mutate_pending_inputs({session_id}, enqueue)
+    if not transaction.get("ok"):
+        return {
+            "ok": False,
+            "queued": False,
+            "code": transaction.get("code") or "pending_input_persist_failed",
+            "error": "failed to persist terminal queue input",
+        }
+    deduped, queued_count = transaction["value"]
     if deduped:
         # A worker-handoff copy is str-compatible; release its inbox file
         # now, since it will never be popped by the drain loop.
         _core._complete_pending_input_handoff(text)
-    else:
-        _core._persist_pending_inputs_current({session_id})
     payload = {
 
         "ok": True,
@@ -1939,9 +1986,16 @@ def _pump_codex_resume_queue(session_id):
                 "delivered": False,
                 "code": "pending_input_refresh_failed",
             }
-        with _core._pending_resume_lock:
-            queue = _core._pending_resume_queue.get(session_id) or []
-            text = queue[0] if queue else None
+        claim = _core._apply_pending_input_operations(session_id, [{
+            "field": "resume", "action": "pop_head",
+        }])
+        if not claim.get("ok"):
+            return {
+                "ok": False,
+                "delivered": False,
+                "code": claim.get("code") or "pending_input_persist_failed",
+            }
+        text = ((claim.get("value") or [None])[0])
         if text is None:
             return {"ok": True, "empty": True}
 
@@ -1949,13 +2003,6 @@ def _pump_codex_resume_queue(session_id):
             try:
                 with _core._auto_resume_exclusive_lock():
                     if not _core._is_auto_resume_opted_in(session_id):
-                        with _core._pending_resume_lock:
-                            queue = _core._pending_resume_queue.get(session_id) or []
-                            if queue and queue[0] == text:
-                                queue.pop(0)
-                                if not queue:
-                                    _core._pending_resume_queue.pop(session_id, None)
-                        _core._persist_pending_inputs_current({session_id})
                         return {"ok": True, "delivered": False, "disabled": True}
                     result = _core.resume_session_codex(
                         session_id, text, _from_queue=True,
@@ -1973,21 +2020,20 @@ def _pump_codex_resume_queue(session_id):
             or not result.get("ok")
             or result.get("queued")
         ):
+            restored = _core._apply_pending_input_operations(session_id, [{
+                "field": "resume", "action": "insert_front", "value": text,
+            }])
             _core._mark_pending_resume_retry(session_id)
+            if not restored.get("ok"):
+                return {
+                    "ok": False,
+                    "delivered": False,
+                    "code": "pending_input_rollback_failed",
+                    "result": result,
+                }
             return {"ok": False, "delivered": False, "result": result}
-
-        removed = False
-        with _core._pending_resume_lock:
-            queue = _core._pending_resume_queue.get(session_id) or []
-            if queue and queue[0] == text:
-                queue.pop(0)
-                removed = True
-                if not queue:
-                    _core._pending_resume_queue.pop(session_id, None)
-        if removed:
-            _core._persist_pending_inputs_current({session_id})
         _core._pending_resume_retry_after.pop(session_id, None)
-        return {"ok": True, "delivered": removed, "result": result}
+        return {"ok": True, "delivered": True, "result": result}
     finally:
         lock.release()
 
@@ -3206,10 +3252,11 @@ def _start_resume_queue_watcher() -> None:
                     # terminal-queue watcher below for the same rule).
                     _core._pending_resume_retry_after.pop(sid, None)
                 elif not result or not result.get("ok"):
-                    _core._apply_pending_input_operations(sid, [{
+                    restored = _core._apply_pending_input_operations(sid, [{
                         "field": "resume", "action": "insert_front", "value": text,
                     }])
-                    _core._mark_pending_resume_retry(sid)
+                    if restored.get("ok"):
+                        _core._mark_pending_resume_retry(sid)
                 elif result.get("queued") or result.get("started"):
                     # "queued" means the engine already queued it internally.
                     # "started" (Devin) means the process launched but the
