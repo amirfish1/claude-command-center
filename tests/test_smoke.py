@@ -32,6 +32,16 @@ PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, PROJECT_ROOT)
 
 
+class TestKimiRecallBridge(unittest.TestCase):
+    def test_kimi_recall_bridge_is_documented(self):
+        root = pathlib.Path(PROJECT_ROOT)
+        self.assertTrue((root / "scripts" / "kimi-recall-bridge.py").is_file())
+        self.assertIn(
+            "## Kimi Knowledge Bridge",
+            (root / "README.md").read_text(encoding="utf-8"),
+        )
+
+
 class TestWebuiPaneRegressionGuards(unittest.TestCase):
     """Regression guards for the kimi/codex webui-pane bug fixes."""
 

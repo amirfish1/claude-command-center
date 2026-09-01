@@ -539,6 +539,39 @@ If you'd like to see an engine bumped from "partial" to first-class, open an iss
   via `claude -p` (Haiku by default). Used for cleaning up auto-generated
   session slugs.
 
+## Kimi Knowledge Bridge
+
+Kimi Code sessions can become searchable in [Total Recall](https://github.com/alexgreensh/total-recall)
+without copying them into another agent's session format or writing Total
+Recall's database. CCC exports a privacy-filtered Markdown brief for each Kimi
+session, then Total Recall ingests that folder as connected knowledge.
+
+From a CCC checkout, export the current Kimi sessions:
+
+```bash
+python3 scripts/kimi-recall-bridge.py sync
+```
+
+Connect the generated folder to Total Recall once (this runs the supported
+`total-recall ingest <folder>` command):
+
+```bash
+python3 scripts/kimi-recall-bridge.py connect
+```
+
+To keep it current on macOS, explicitly install the opt-in five-minute
+LaunchAgent:
+
+```bash
+python3 scripts/kimi-recall-bridge.py install-launchd
+```
+
+The bridge writes to `~/.ccc/total-recall/kimi-code` by default. It retains
+Kimi's session ID, project, model, and timestamps, but intentionally excludes
+system prompts, thinking blocks, and tool input/output. These are knowledge
+documents rather than native Total Recall session rows; native Kimi ingestion
+is tracked upstream in [Total Recall issue #18](https://github.com/alexgreensh/total-recall/issues/18).
+
 ## Orchestration skill
 
 CCC ships a Claude Code skill (`ccc-orchestration`) that lets one Claude
