@@ -543,8 +543,8 @@ If you'd like to see an engine bumped from "partial" to first-class, open an iss
 
 Kimi Code sessions can become searchable in [Total Recall](https://github.com/alexgreensh/total-recall)
 without copying them into another agent's session format or writing Total
-Recall's database. CCC exports privacy-filtered Markdown briefs for each Kimi
-session plus one aggregate Markdown knowledge file that Total Recall ingests.
+Recall's database. CCC exports one privacy-filtered Markdown brief for each
+Kimi session, then connects that folder through Total Recall's dashboard API.
 
 From a CCC checkout, export the current Kimi sessions:
 
@@ -566,12 +566,11 @@ LaunchAgent:
 python3 scripts/kimi-recall-bridge.py install-launchd
 ```
 
-The bridge writes to `~/.ccc/total-recall/kimi-code` by default. Its connected
-source is `kimi-code-sessions.md`; the individual per-session files remain
-there for inspection. It retains Kimi's session ID, project, model, and
-timestamps, but intentionally excludes system prompts, thinking blocks, and
-tool input/output. These are knowledge documents rather than native Total
-Recall session rows; native Kimi ingestion is tracked upstream in [Total Recall issue #18](https://github.com/alexgreensh/total-recall/issues/18).
+The bridge writes to `~/.ccc/total-recall/kimi-code` by default. It retains
+Kimi's session ID, project, model, and timestamps, but intentionally excludes
+system prompts, thinking blocks, and tool input/output. These are knowledge
+documents rather than native Total Recall session rows; native Kimi ingestion
+is tracked upstream in [Total Recall issue #18](https://github.com/alexgreensh/total-recall/issues/18).
 
 ## Orchestration skill
 

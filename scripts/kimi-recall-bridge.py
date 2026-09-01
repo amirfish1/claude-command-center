@@ -51,10 +51,9 @@ def main(argv=None):
             payload.update({"connected": False, "error": "Kimi export failed; Total Recall was not connected."})
             print(json.dumps(payload, sort_keys=True))
             return 1
-        payload.update({"connected": connected.returncode == 0, "output": connected.stdout.strip(),
-                        "error": connected.stderr.strip()})
+        payload.update({"connected": connected.ok, "name": connected.name, "error": connected.error})
         print(json.dumps(payload, sort_keys=True))
-        return connected.returncode
+        return 0 if connected.ok else 1
     result = kimi_recall.sync_kimi_knowledge(output_dir, kimi_home=kimi_home)
     payload = {"exported": result.exported, "skipped": result.skipped, "errors": result.errors}
     print(json.dumps(payload, sort_keys=True))

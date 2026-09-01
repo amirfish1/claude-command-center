@@ -7,6 +7,7 @@ import plistlib
 import subprocess
 import sys
 import time
+import urllib.error
 from unittest import mock
 
 from ccc_server import kimi_recall
@@ -105,23 +106,6 @@ def test_sync_skips_unchanged_session_and_reexports_completed_wire_append(tmp_pa
     assert "Second reply" in (output_dir / "session_alpha.md").read_text(encoding="utf-8")
 
 
-def test_sync_writes_one_aggregate_markdown_source_for_total_recall(tmp_path):
-    kimi_home = _make_kimi_home(tmp_path, [
-        {"type": "context.append_message", "message": {
-            "role": "user", "origin": {"kind": "user"},
-            "content": [{"type": "text", "text": "Aggregate this"}],
-        }},
-    ])
-    output_dir = tmp_path / "knowledge"
-
-    kimi_recall.sync_kimi_knowledge(output_dir, kimi_home=kimi_home)
-
-    aggregate = (output_dir / "kimi-code-sessions.md").read_text(encoding="utf-8")
-    assert aggregate.startswith("# Kimi Code Knowledge Export")
-    assert "Session ID: session_alpha" in aggregate
-    assert "Aggregate this" in aggregate
-
-
 def test_launchd_plist_runs_sync_with_explicit_paths():
     plist = kimi_recall.launchd_plist(
         script_path="/opt/ccc/scripts/kimi-recall-bridge.py",
@@ -143,21 +127,20 @@ def test_launchd_plist_runs_sync_with_explicit_paths():
     ]
 
 
-def test_connect_total_recall_runs_supported_folder_ingest(tmp_path):
+def test_connect_total_recall_posts_the_folder_to_the_dashboard(tmp_path):
     output_dir = tmp_path / "knowledge"
     output_dir.mkdir()
-    (output_dir / "kimi-code-sessions.md").write_text("# Kimi Code Knowledge Export\n", encoding="utf-8")
-    with mock.patch("ccc_server.kimi_recall.subprocess.run") as run:
-        run.return_value = subprocess.CompletedProcess([], 0, "connected", "")
-        result = kimi_recall.connect_total_recall(output_dir, executable="total-recall")
+    response = mock.MagicMock()
+    response.read.return_value = b'{"ok":true,"name":"kimi-code"}'
+    response.__enter__.return_value = response
+    with mock.patch("ccc_server.kimi_recall.urllib.request.urlopen", return_value=response) as open_url:
+        result = kimi_recall.connect_total_recall(output_dir, endpoint="http://127.0.0.1:24824/api/brain/connect")
 
-    assert result.returncode == 0
-    run.assert_called_once_with(
-        ["total-recall", "ingest", str(output_dir / "kimi-code-sessions.md")],
-        capture_output=True,
-        text=True,
-        check=False,
-    )
+    assert result.ok is True
+    request = open_url.call_args.args[0]
+    assert request.full_url == "http://127.0.0.1:24824/api/brain/connect"
+    assert json.loads(request.data)["path"] == str(output_dir)
+    assert request.get_header("X-tr-request") == "1"
 
 
 def test_bridge_cli_sync_exports_knowledge_document(tmp_path):
@@ -245,13 +228,12 @@ def test_sync_reexports_when_session_metadata_changes_without_wire_change(tmp_pa
     assert "# Kimi Code session: New title" in (output_dir / "session_alpha.md").read_text(encoding="utf-8")
 
 
-def test_connect_total_recall_returns_controlled_error_when_cli_is_missing(tmp_path):
-    (tmp_path / "kimi-code-sessions.md").write_text("# Kimi Code Knowledge Export\n", encoding="utf-8")
-    with mock.patch("ccc_server.kimi_recall.subprocess.run", side_effect=FileNotFoundError):
-        result = kimi_recall.connect_total_recall(tmp_path, executable="missing-total-recall")
+def test_connect_total_recall_returns_controlled_error_when_dashboard_is_unavailable(tmp_path):
+    with mock.patch("ccc_server.kimi_recall.urllib.request.urlopen", side_effect=urllib.error.URLError("offline")):
+        result = kimi_recall.connect_total_recall(tmp_path, endpoint="http://127.0.0.1:24824/api/brain/connect")
 
-    assert result.returncode == 127
-    assert "missing-total-recall" in result.stderr
+    assert result.ok is False
+    assert "offline" in result.error
 
 
 def test_connect_kimi_knowledge_does_not_connect_after_export_errors(tmp_path):
