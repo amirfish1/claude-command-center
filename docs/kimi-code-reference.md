@@ -161,7 +161,24 @@ Verified against the checkout 2026-09-01.
   `extMethod`/`extNotification` fallbacks (`packages/acp-server/src/server.ts:266,698`),
   so an extension method is the natural home if this is ever raised upstream.
 
-**Why CCC cannot reach the daemon steer for its own session:** acp-server builds
+**CCC already drives the live turn.** The `kimi acp` subprocess CCC spawns owns
+the engine core and is the process running the turn, so the steer capability is
+live inside it — `this.agent.steer()` is one call away in `session.ts`. Nothing
+about process topology blocks us; the stdio surface we speak simply has no verb
+for it. Two ways to close that, in preference order:
+
+1. **Upstream:** ask MoonshotAI to expose it as `unstable_steer` (or via the
+   `extMethod` fallback). Small change against code that already holds the
+   facade, and it fixes every ACP client, not just CCC.
+2. **Local patched build:** MIT source, ordinary pnpm monorepo (`pnpm build`,
+   Node >= 24.15). Either add the same `unstable_steer` method, or call
+   `serveKlientIpc({ scope: core, socketPath })` inside `runAcpServer` to expose
+   the *whole* klient facade over a unix socket — that helper already exists and
+   is tested (`packages/klient/test/ipc.test.ts`) but is never called by shipped
+   code. Prefer the `unstable_steer` shape: it is what you would upstream
+   anyway, so the fork stays a one-commit patch that rebases cleanly.
+
+**Why the kap-server daemon is NOT the way in:** acp-server builds
 its klient over the *in-memory* transport (`createKlient` from
 `@moonshot-ai/klient/memory`, `packages/acp-server/src/start.ts:42,128`), so a
 `kimi acp` subprocess owns its own engine core. A separate `kimi web` /
