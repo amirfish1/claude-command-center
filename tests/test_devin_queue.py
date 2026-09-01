@@ -1111,9 +1111,23 @@ class DevinSpawnIdentityTests(unittest.TestCase):
                     stdout=fh, stderr=subprocess.STDOUT,
                 )
             retry_after = {}
+            def apply_operation(session_id, operations):
+                operation = operations[0]
+                removed = None
+                if operation.get("action") == "pop_head_if_matching":
+                    items = queue.get(session_id) or []
+                    if items and items[0] == operation.get("match"):
+                        removed = items.pop(0)
+                        if not items:
+                            queue.pop(session_id, None)
+                return {"ok": True, "value": [removed]}
+
             with mock.patch.object(server, "_pending_resume_queue", queue), \
                  mock.patch.object(server, "_pending_resume_retry_after", retry_after), \
-                 mock.patch.object(server, "_save_pending_inputs") as save, \
+                 mock.patch.object(
+                     server, "_apply_pending_input_operations",
+                     side_effect=apply_operation,
+                 ) as apply, \
                  mock.patch.object(server, "_devin_cli_prompt_history_count", return_value=1):
                 server._start_devin_delivery_proof_watchdog(proc, sid, text, time.time())
                 deadline = time.time() + 2
@@ -1121,7 +1135,7 @@ class DevinSpawnIdentityTests(unittest.TestCase):
                     time.sleep(0.05)
         self.assertIsNone(queue.get(sid))
         self.assertNotIn(sid, retry_after)
-        save.assert_called_once()
+        apply.assert_called_once()
         proc.wait(timeout=5)
 
     def test_devin_delivery_proof_watchdog_requeues_on_failure(self):
@@ -1139,9 +1153,21 @@ class DevinSpawnIdentityTests(unittest.TestCase):
                 )
             queue = {sid: [text]}
             retry_after = {}
+            def apply_operation(session_id, operations):
+                operation = operations[0]
+                items = queue.setdefault(session_id, [])
+                value = operation.get("value")
+                changed = not (items and items[0] == value)
+                if changed:
+                    items.insert(0, value)
+                return {"ok": True, "value": [changed]}
+
             with mock.patch.object(server, "_pending_resume_queue", queue), \
                  mock.patch.object(server, "_pending_resume_retry_after", retry_after), \
-                 mock.patch.object(server, "_save_pending_inputs") as save, \
+                 mock.patch.object(
+                     server, "_apply_pending_input_operations",
+                     side_effect=apply_operation,
+                 ) as apply, \
                  mock.patch.object(server, "_devin_cli_prompt_history_count", return_value=0), \
                  mock.patch.object(server, "_DEVIN_DELIVERY_PROOF_POLL_INTERVAL_S", 0.05):
                 server._start_devin_delivery_proof_watchdog(proc, sid, text, time.time())
@@ -1150,7 +1176,7 @@ class DevinSpawnIdentityTests(unittest.TestCase):
                     time.sleep(0.05)
         self.assertEqual(queue.get(sid), [text])
         self.assertIn(sid, retry_after)
-        save.assert_called_once()
+        apply.assert_called_once()
         proc.wait(timeout=5)
 
     def test_devin_pump_starts_resume_and_leaves_queue_for_proof(self):

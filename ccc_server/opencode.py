@@ -532,9 +532,9 @@ def resume_session_opencode(session_id, text):
         if s.get("engine") == "opencode" and s.get("resumed_sid") == session_id:
             try:
                 if _core._poll_spawn_entry(s) is None:
-                    with _core._pending_resume_lock:
-                        _core._pending_resume_queue.setdefault(session_id, []).append(text)
-                    _core._save_pending_inputs({session_id})
+                    _core._apply_pending_input_operations(session_id, [{
+                        "field": "resume", "action": "append_tail", "value": text,
+                    }])
                     return {
                         "ok": True,
                         "queued": True,

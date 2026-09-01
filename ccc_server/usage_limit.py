@@ -247,6 +247,8 @@ def _disable_session_auto_resume(session_id):
     try:
         with _core._codex_queue_pump_lock(sid), \
              _core._auto_resume_exclusive_lock():
+            if not _core._refresh_pending_inputs_for_session(sid):
+                return {"ok": False, "error": "failed to refresh pending inputs"}
             # Persist the negative marker first. Every queue/write/delivery
             # path rechecks it while holding this same barrier.
             _core._dismiss_usage_limit_resume(sid)
@@ -279,7 +281,7 @@ def _disable_session_auto_resume(session_id):
                     else:
                         queue.pop(sid, None)
 
-            if not _core._save_pending_inputs(
+            if not _core._persist_pending_inputs_current(
                 {sid}, include_auto_resume=True,
             ):
                 return {

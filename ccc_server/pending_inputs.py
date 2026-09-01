@@ -55,7 +55,6 @@ _pending_terminal_input_lock = threading.Lock()
 _pending_terminal_handoff_ids: dict = {}  # watcher-local handoff_id → path
 _pending_inputs_lock = threading.RLock()
 _pending_inputs_file_lock_local = threading.local()
-_pending_inputs_session_baselines = {}
 _pending_input_handoff_ingest_lock = threading.Lock()
 _auto_resume_barrier_thread_lock = threading.RLock()
 _auto_resume_barrier_local = threading.local()
@@ -159,62 +158,6 @@ def _pending_inputs_session_snapshot(session_id):
     }
 
 
-def _pending_item_stable_identity(item):
-    if isinstance(item, _PendingInputHandoff):
-        return "handoff", str(item.handoff_id)
-    return "plain", str(item)
-
-
-def _pending_item_tokens(items):
-    occurrences = {}
-    tokens = []
-    for item in items:
-        identity = _pending_item_stable_identity(item)
-        occurrence = occurrences.get(identity, 0) + 1
-        occurrences[identity] = occurrence
-        tokens.append((identity, occurrence))
-    return tokens
-
-
-def _apply_pending_queue_delta(authoritative, baseline, desired):
-    """Replay an occurrence-aware FIFO edit using retained-item anchors."""
-    result = list(authoritative)
-    baseline_tokens = _pending_item_tokens(baseline)
-    desired_tokens = _pending_item_tokens(desired)
-    desired_token_set = set(desired_tokens)
-
-    for token in baseline_tokens:
-        if token in desired_token_set:
-            continue
-        result_tokens = _pending_item_tokens(result)
-        if token in result_tokens:
-            result.pop(result_tokens.index(token))
-
-    baseline_token_set = set(baseline_tokens)
-    for desired_index, (item, token) in enumerate(zip(desired, desired_tokens)):
-        if token in baseline_token_set:
-            continue
-        previous = next((
-            candidate for candidate in reversed(desired_tokens[:desired_index])
-            if candidate in baseline_token_set
-        ), None)
-        following = next((
-            candidate for candidate in desired_tokens[desired_index + 1:]
-            if candidate in baseline_token_set
-        ), None)
-        result_tokens = _pending_item_tokens(result)
-        if following is not None and following in result_tokens:
-            insert_at = result_tokens.index(following)
-        elif previous is None and following is not None:
-            insert_at = 0
-        else:
-            # No retained right neighbor means an end-anchored append. This
-            # preserves commit order behind another process's prior append.
-            insert_at = len(result)
-        result.insert(insert_at, item)
-    return result
-
-
 @contextlib.contextmanager
 def _auto_resume_exclusive_lock():
     """Cross-process barrier for auto-resume queueing, delivery, and cancel.
@@ -248,7 +191,8 @@ def _deliver_with_auto_resume_barrier(session_id, text, deliver):
     if not _is_unattended_auto_continue(text):
         return deliver()
     try:
-        with _core._auto_resume_exclusive_lock():
+        with _core._codex_queue_pump_lock(session_id), \
+             _core._auto_resume_exclusive_lock():
             if not _core._is_auto_resume_opted_in(session_id):
                 return {"ok": True, "delivered": False, "disabled": True}
             return deliver()
@@ -343,23 +287,12 @@ def _load_pending_inputs():
                 for sid, v in flags.items()
                 if v and not _core._is_session_auto_resume_disabled(sid)
             })
-    baseline_sids = set()
-    for field in (
-        "resume_queue", "terminal_queue", "devin_steers",
-        "auto_resume_opt_in",
-    ):
-        values = data.get(field)
-        if isinstance(values, dict):
-            baseline_sids.update(str(sid) for sid in values)
-    for sid in baseline_sids:
-        _pending_inputs_session_baselines[sid] = {
-            "resume": list((data.get("resume_queue") or {}).get(sid) or []),
-            "terminal": list((data.get("terminal_queue") or {}).get(sid) or []),
-            "steer": (data.get("devin_steers") or {}).get(sid),
-            "opt_in": bool((data.get("auto_resume_opt_in") or {}).get(sid)),
-        }
     if stripped:
-        _core._save_pending_inputs(stripped_sessions)
+        for sid in stripped_sessions:
+            _core._apply_pending_input_operations(sid, [
+                {"field": "resume", "action": "drop_unattended"},
+                {"field": "terminal", "action": "drop_unattended"},
+            ])
 
 
 def _refresh_pending_inputs_for_session(session_id):
@@ -424,127 +357,63 @@ def _refresh_pending_inputs_for_session(session_id):
             _core._auto_resume_opt_in[session_id] = True
         else:
             _core._auto_resume_opt_in.pop(session_id, None)
-    _pending_inputs_session_baselines[session_id] = (
-        _pending_inputs_session_snapshot(session_id)
-    )
     return True
 
 
-def _save_pending_inputs(
-    affected_session_ids, *, include_devin_steers=False,
-    include_auto_resume=False,
-):
-    """Persist only affected sessions over the latest authoritative state."""
+def _normalize_pending_session_ids(affected_session_ids):
     if isinstance(affected_session_ids, str):
-        affected = {affected_session_ids}
-    else:
-        affected = {
-            str(sid) for sid in affected_session_ids
-            if sid is not None and str(sid)
-        }
-    if not affected:
-        return True
-
-    desired = {
-        sid: _pending_inputs_session_snapshot(sid)
-        for sid in affected
-    }
-    baselines = {
-        sid: dict(_pending_inputs_session_baselines.get(sid) or {
-            "resume": [], "terminal": [], "steer": None, "opt_in": False,
-        })
-        for sid in affected
+        return {affected_session_ids}
+    return {
+        str(sid) for sid in affected_session_ids
+        if sid is not None and str(sid)
     }
 
+def _persist_pending_inputs_current(
+    affected, *, include_devin_steers=False, include_auto_resume=False,
+):
+    final = {sid: _pending_inputs_session_snapshot(sid) for sid in affected}
     tmp_path = None
     try:
-        with contextlib.ExitStack() as ownership:
-            for sid in sorted(affected):
-                ownership.enter_context(_core._codex_queue_pump_lock(sid))
-            for sid in sorted(affected):
-                if not _core._refresh_pending_inputs_for_session(sid):
-                    return False
-                with _core._pending_resume_lock:
-                    resume = _apply_pending_queue_delta(
-                        _core._pending_resume_queue.get(sid) or [],
-                        baselines[sid]["resume"],
-                        desired[sid]["resume"],
-                    )
-                    if resume:
-                        _core._pending_resume_queue[sid] = resume
-                    else:
-                        _core._pending_resume_queue.pop(sid, None)
-                    if include_devin_steers:
-                        steer = desired[sid]["steer"]
-                        if steer:
-                            _core._pending_devin_steers[sid] = steer
-                        else:
-                            _core._pending_devin_steers.pop(sid, None)
-                with _core._pending_terminal_input_lock:
-                    terminal = _apply_pending_queue_delta(
-                        _core._pending_terminal_input_queue.get(sid) or [],
-                        baselines[sid]["terminal"],
-                        desired[sid]["terminal"],
-                    )
-                    if terminal:
-                        _core._pending_terminal_input_queue[sid] = terminal
-                    else:
-                        _core._pending_terminal_input_queue.pop(sid, None)
-                if include_auto_resume:
-                    with _core._auto_resume_opt_in_lock:
-                        if desired[sid]["opt_in"]:
-                            _core._auto_resume_opt_in[sid] = True
-                        else:
-                            _core._auto_resume_opt_in.pop(sid, None)
-
-            final = {
-                sid: _pending_inputs_session_snapshot(sid)
-                for sid in affected
-            }
-            with _pending_inputs_file_exclusive_lock():
-                payload = _read_pending_inputs_payload_unlocked(missing_is_empty=True)
-                if payload is None:
-                    return False
-                for sid in affected:
-                    resume_value = final[sid]["resume"]
-                    terminal_value = [
-                        item for item in final[sid]["terminal"]
-                        if not isinstance(item, _PendingInputHandoff)
-                    ]
-                    for field, value in (
-                        ("resume_queue", resume_value),
-                        ("terminal_queue", terminal_value),
-                    ):
-                        if value:
-                            payload[field][sid] = value
-                        else:
-                            payload[field].pop(sid, None)
-                    if include_devin_steers:
-                        if final[sid]["steer"]:
-                            payload["devin_steers"][sid] = final[sid]["steer"]
-                        else:
-                            payload["devin_steers"].pop(sid, None)
-                    if include_auto_resume:
-                        if final[sid]["opt_in"]:
-                            payload["auto_resume_opt_in"][sid] = True
-                        else:
-                            payload["auto_resume_opt_in"].pop(sid, None)
-
-                _core.PENDING_INPUTS_FILE.parent.mkdir(parents=True, exist_ok=True)
-                fd, tmp_name = tempfile.mkstemp(
-                    prefix=f".{_core.PENDING_INPUTS_FILE.name}.",
-                    suffix=".tmp",
-                    dir=_core.PENDING_INPUTS_FILE.parent,
-                )
-                tmp_path = Path(tmp_name)
-                with os.fdopen(fd, "w") as f:
-                    json.dump(payload, f, indent=2, sort_keys=True)
-                    f.flush()
-                    os.fsync(f.fileno())
-                os.replace(tmp_path, _core.PENDING_INPUTS_FILE)
-                tmp_path = None
+        with _pending_inputs_file_exclusive_lock():
+            payload = _read_pending_inputs_payload_unlocked(missing_is_empty=True)
+            if payload is None:
+                return False
             for sid in affected:
-                _pending_inputs_session_baselines[sid] = final[sid]
+                resume_value = final[sid]["resume"]
+                terminal_value = [
+                    item for item in final[sid]["terminal"]
+                    if not isinstance(item, _PendingInputHandoff)
+                ]
+                for field, value in (
+                    ("resume_queue", resume_value),
+                    ("terminal_queue", terminal_value),
+                ):
+                    if value:
+                        payload[field][sid] = value
+                    else:
+                        payload[field].pop(sid, None)
+                if include_devin_steers:
+                    if final[sid]["steer"]:
+                        payload["devin_steers"][sid] = final[sid]["steer"]
+                    else:
+                        payload["devin_steers"].pop(sid, None)
+                if include_auto_resume:
+                    if final[sid]["opt_in"]:
+                        payload["auto_resume_opt_in"][sid] = True
+                    else:
+                        payload["auto_resume_opt_in"].pop(sid, None)
+            _core.PENDING_INPUTS_FILE.parent.mkdir(parents=True, exist_ok=True)
+            fd, tmp_name = tempfile.mkstemp(
+                prefix=f".{_core.PENDING_INPUTS_FILE.name}.",
+                suffix=".tmp", dir=_core.PENDING_INPUTS_FILE.parent,
+            )
+            tmp_path = Path(tmp_name)
+            with os.fdopen(fd, "w") as f:
+                json.dump(payload, f, indent=2, sort_keys=True)
+                f.flush()
+                os.fsync(f.fileno())
+            os.replace(tmp_path, _core.PENDING_INPUTS_FILE)
+            tmp_path = None
     except OSError as e:
         print(f"  [pending-inputs] save failed: {e}")
         return False
@@ -555,6 +424,195 @@ def _save_pending_inputs(
             except OSError:
                 pass
     return True
+
+
+def _mutate_pending_inputs(
+    affected_session_ids, mutation, *, include_devin_steers=False,
+    include_auto_resume=False,
+):
+    """Run one explicit mutation against refreshed authoritative sessions."""
+    affected = _normalize_pending_session_ids(affected_session_ids)
+    if not affected:
+        return {"ok": True, "value": None}
+    with contextlib.ExitStack() as ownership:
+        for sid in sorted(affected):
+            ownership.enter_context(_core._codex_queue_pump_lock(sid))
+        for sid in sorted(affected):
+            if not _core._refresh_pending_inputs_for_session(sid):
+                return {"ok": False, "code": "pending_input_refresh_failed"}
+        value = mutation()
+        ok = _persist_pending_inputs_current(
+            affected,
+            include_devin_steers=include_devin_steers,
+            include_auto_resume=include_auto_resume,
+        )
+        return {"ok": bool(ok), "value": value}
+
+
+def _apply_pending_input_operations(session_id, operations):
+    """Apply explicit FIFO/flag operations to one authoritative session."""
+    include_devin = any(op.get("field") == "devin_steer" for op in operations)
+    include_auto = any(op.get("field") == "auto_resume" for op in operations)
+
+    def mutate():
+        results = []
+        for op in operations:
+            field = op.get("field")
+            action = op.get("action")
+            if field in ("resume", "terminal"):
+                queue_map, queue_lock = (
+                    (_core._pending_resume_queue, _core._pending_resume_lock)
+                    if field == "resume"
+                    else (
+                        _core._pending_terminal_input_queue,
+                        _core._pending_terminal_input_lock,
+                    )
+                )
+                with queue_lock:
+                    queue = queue_map.setdefault(session_id, [])
+                    value = op.get("value")
+                    if action == "append_tail":
+                        if not op.get("dedupe") or value not in queue:
+                            queue.append(value)
+                            results.append(True)
+                        else:
+                            results.append(False)
+                    elif action == "insert_front":
+                        if op.get("dedupe") and value in queue:
+                            results.append(False)
+                        elif op.get("dedupe_head") and queue and queue[0] == value:
+                            results.append(False)
+                        else:
+                            queue.insert(0, value)
+                            results.append(True)
+                    elif action == "insert_before_matching":
+                        match = op.get("match")
+                        occurrence = int(op.get("occurrence") or 0)
+                        seen = 0
+                        insert_at = len(queue)
+                        for index, item in enumerate(queue):
+                            if item != match:
+                                continue
+                            if seen == occurrence:
+                                insert_at = index
+                                break
+                            seen += 1
+                        queue.insert(insert_at, value)
+                        results.append(True)
+                    elif action == "pop_head":
+                        results.append(queue.pop(0) if queue else None)
+                    elif action == "pop_head_if_matching":
+                        results.append(
+                            queue.pop(0)
+                            if queue and queue[0] == op.get("match") else None
+                        )
+                    elif action == "remove_matching":
+                        occurrence = int(op.get("occurrence") or 0)
+                        match = op.get("match")
+                        seen = 0
+                        removed = None
+                        for index, item in enumerate(queue):
+                            matched = (
+                                getattr(item, "handoff_id", None) == match
+                                if op.get("identity") == "handoff_id"
+                                else str(item or "").strip() == str(match or "").strip()
+                            )
+                            if not matched:
+                                continue
+                            if seen == occurrence:
+                                removed = queue.pop(index)
+                                break
+                            seen += 1
+                        results.append(removed)
+                    elif action == "remove_all_matching":
+                        match = str(op.get("match") or "").strip()
+                        removed = [
+                            item for item in queue
+                            if str(item or "").strip() == match
+                        ]
+                        queue[:] = [
+                            item for item in queue
+                            if str(item or "").strip() != match
+                        ]
+                        results.append(removed)
+                    elif action == "drop_unattended":
+                        before = len(queue)
+                        queue[:] = [
+                            item for item in queue
+                            if not _is_unattended_auto_continue(item)
+                        ]
+                        results.append(before - len(queue))
+                    elif action == "clear":
+                        removed = list(queue)
+                        queue.clear()
+                        results.append(removed)
+                    if not queue:
+                        queue_map.pop(session_id, None)
+            elif field == "devin_steer":
+                with _core._pending_resume_lock:
+                    if action == "set":
+                        _core._pending_devin_steers[session_id] = op.get("value")
+                    elif action == "clear_if_matching":
+                        if _core._pending_devin_steers.get(session_id) == op.get("match"):
+                            _core._pending_devin_steers.pop(session_id, None)
+                    else:
+                        _core._pending_devin_steers.pop(session_id, None)
+                    results.append(True)
+            elif field == "auto_resume":
+                with _core._auto_resume_opt_in_lock:
+                    if action == "set" and op.get("value"):
+                        _core._auto_resume_opt_in[session_id] = True
+                    else:
+                        _core._auto_resume_opt_in.pop(session_id, None)
+                    results.append(True)
+        return results
+
+    return _mutate_pending_inputs(
+        {session_id}, mutate,
+        include_devin_steers=include_devin,
+        include_auto_resume=include_auto,
+    )
+
+
+def _save_pending_inputs(
+    affected_session_ids, *, include_devin_steers=False,
+    include_auto_resume=False,
+):
+    """Test/setup compatibility: explicitly replace selected live fields."""
+    affected = _normalize_pending_session_ids(affected_session_ids)
+    desired = {sid: _pending_inputs_session_snapshot(sid) for sid in affected}
+
+    def replace():
+        for sid in affected:
+            with _core._pending_resume_lock:
+                if desired[sid]["resume"]:
+                    _core._pending_resume_queue[sid] = list(desired[sid]["resume"])
+                else:
+                    _core._pending_resume_queue.pop(sid, None)
+                if include_devin_steers:
+                    if desired[sid]["steer"]:
+                        _core._pending_devin_steers[sid] = desired[sid]["steer"]
+                    else:
+                        _core._pending_devin_steers.pop(sid, None)
+            with _core._pending_terminal_input_lock:
+                if desired[sid]["terminal"]:
+                    _core._pending_terminal_input_queue[sid] = list(
+                        desired[sid]["terminal"]
+                    )
+                else:
+                    _core._pending_terminal_input_queue.pop(sid, None)
+            if include_auto_resume:
+                with _core._auto_resume_opt_in_lock:
+                    if desired[sid]["opt_in"]:
+                        _core._auto_resume_opt_in[sid] = True
+                    else:
+                        _core._auto_resume_opt_in.pop(sid, None)
+
+    return bool(_mutate_pending_inputs(
+        affected, replace,
+        include_devin_steers=include_devin_steers,
+        include_auto_resume=include_auto_resume,
+    ).get("ok"))
 
 
 def _is_auto_resume_opted_in(session_id):
@@ -574,14 +632,11 @@ def _set_auto_resume_opt_in(session_id, value=True):
     """Durably set (or clear) the per-session auto-resume opt-in flag."""
     if not session_id:
         return
-    with _core._auto_resume_opt_in_lock:
-        if value:
-            _core._auto_resume_opt_in[str(session_id)] = True
-        else:
-            _core._auto_resume_opt_in.pop(str(session_id), None)
-    _core._save_pending_inputs(
-        {str(session_id)}, include_auto_resume=True,
-    )
+    _core._apply_pending_input_operations(str(session_id), [{
+        "field": "auto_resume",
+        "action": "set" if value else "clear",
+        "value": bool(value),
+    }])
 
 
 def _apply_spawn_auto_resume_opt_in(payload, result):
@@ -701,13 +756,21 @@ def _read_pending_input_handoff(path):
 def _ingest_pending_input_handoffs():
     """Ingest handoffs behind the same barrier used by cancellation."""
     try:
-        with _core._auto_resume_exclusive_lock():
-            return _ingest_pending_input_handoffs_unlocked()
+        session_ids = set()
+        for path in _core.PENDING_INPUT_HANDOFF_DIR.glob("*.json"):
+            event = _read_pending_input_handoff(path)
+            if event is not None:
+                session_ids.add(event["session_id"])
+        with contextlib.ExitStack() as ownership:
+            for session_id in sorted(session_ids):
+                ownership.enter_context(_core._codex_queue_pump_lock(session_id))
+            with _core._auto_resume_exclusive_lock():
+                return _ingest_pending_input_handoffs_unlocked(session_ids)
     except OSError:
         return 0
 
 
-def _ingest_pending_input_handoffs_unlocked():
+def _ingest_pending_input_handoffs_unlocked(owned_session_ids):
     """Expose authoritative worker retry files in the watcher-owned queue."""
     with _pending_input_handoff_ingest_lock:
         try:
@@ -729,6 +792,8 @@ def _ingest_pending_input_handoffs_unlocked():
                     f"  [pending-inputs] invalid worker handoff: {path.name}",
                     flush=True,
                 )
+                continue
+            if event["session_id"] not in owned_session_ids:
                 continue
             if (
                 _is_unattended_auto_continue(event["text"])
@@ -778,10 +843,6 @@ def _ingest_pending_input_handoffs_unlocked():
                 ))
         for event in new_events:
             _core._pending_terminal_handoff_ids[event["id"]] = event["path"]
-        for session_id in {event["session_id"] for event in new_events}:
-            _pending_inputs_session_baselines[session_id] = (
-                _pending_inputs_session_snapshot(session_id)
-            )
         return len(new_events)
 
 
@@ -935,29 +996,14 @@ def _drop_matching_terminal_queue_entries(session_id, text):
     clean = str(text or "").strip()
     if not session_id or not clean:
         return 0
-    removed = 0
-    removed_items = []
-    with _core._pending_terminal_input_lock:
-        queue = _core._pending_terminal_input_queue.get(session_id)
-        if not queue:
-            return 0
-        kept = []
-        for item in queue:
-            if str(item or "").strip() == clean:
-                removed += 1
-                removed_items.append(item)
-            else:
-                kept.append(item)
-        if removed:
-            if kept:
-                _core._pending_terminal_input_queue[session_id] = kept
-            else:
-                _core._pending_terminal_input_queue.pop(session_id, None)
-    if removed:
-        _core._save_pending_inputs({session_id})
+    transaction = _core._apply_pending_input_operations(session_id, [{
+        "field": "terminal", "action": "remove_all_matching", "match": clean,
+    }])
+    removed_items = ((transaction.get("value") or [[]])[0] or [])
+    if removed_items:
         for item in removed_items:
             _core._complete_pending_input_handoff(item)
-    return removed
+    return len(removed_items)
 
 
 def _claim_matching_pending_input(session_id, text):
@@ -995,7 +1041,7 @@ def _claim_matching_pending_input(session_id, text):
                     break
                 else:
                     continue
-            if _core._save_pending_inputs({session_id}):
+            if _core._persist_pending_inputs_current({session_id}):
                 return claim
             with lock:
                 items = queue.setdefault(session_id, [])
@@ -1047,7 +1093,7 @@ def _restore_pending_input_claim(claim):
             if not already_restored:
                 index = max(0, min(int(claim.get("index") or 0), len(items)))
                 items.insert(index, item)
-        return bool(_core._save_pending_inputs({sid}))
+        return bool(_core._persist_pending_inputs_current({sid}))
 
 
 def _consume_matching_pending_input(session_id, text):
@@ -1060,26 +1106,12 @@ def _consume_matching_pending_input(session_id, text):
     clean = str(text or "").strip()
     if not session_id or not clean:
         return 0
-    for queue, lock in (
-        (_core._pending_resume_queue, _core._pending_resume_lock),
-        (_core._pending_terminal_input_queue, _core._pending_terminal_input_lock),
-    ):
-        removed = False
-        removed_item = None
-        with lock:
-            items = queue.get(session_id)
-            if not items:
-                continue
-            for index, item in enumerate(items):
-                if str(item or "").strip() != clean:
-                    continue
-                removed_item = items.pop(index)
-                if not items:
-                    queue.pop(session_id, None)
-                removed = True
-                break
-        if removed:
-            _core._save_pending_inputs({session_id})
+    for field in ("resume", "terminal"):
+        transaction = _core._apply_pending_input_operations(session_id, [{
+            "field": field, "action": "remove_matching", "match": clean,
+        }])
+        removed_item = ((transaction.get("value") or [None])[0])
+        if removed_item is not None:
             _core._complete_pending_input_handoff(removed_item)
             return 1
     return 0
@@ -1278,6 +1310,8 @@ _TERMINAL_QUEUE_ORDER_REASON = (
 def _queue_terminal_input(session_id, text, status=None, reason_hint=None):
     """Queue terminal input, gating the unattended marker at the barrier."""
     with _core._codex_queue_pump_lock(session_id):
+        if not _core._refresh_pending_inputs_for_session(session_id):
+            return {"ok": False, "error": "failed to refresh pending inputs"}
         if _is_unattended_auto_continue(text):
             try:
                 with _core._auto_resume_exclusive_lock():
@@ -1336,7 +1370,7 @@ def _queue_terminal_input_unlocked(session_id, text, status=None, reason_hint=No
         # now, since it will never be popped by the drain loop.
         _core._complete_pending_input_handoff(text)
     else:
-        _core._save_pending_inputs({session_id})
+        _core._persist_pending_inputs_current({session_id})
     payload = {
 
         "ok": True,
@@ -1861,26 +1895,20 @@ def _dedupe_devin_resume_queue_unlocked(session_id):
 
 def _queue_devin_resume_input(session_id, text):
     """Add a normal Devin follow-up once, preserving the existing FIFO."""
-    with _core._pending_resume_lock:
-        _core._dedupe_devin_resume_queue_unlocked(session_id)
-        queue = _core._pending_resume_queue.setdefault(session_id, [])
-        if text in queue:
-            return False
-        queue.append(text)
-    _core._save_pending_inputs({session_id})
-    return True
+    transaction = _core._apply_pending_input_operations(session_id, [{
+        "field": "resume", "action": "append_tail", "value": text,
+        "dedupe": True,
+    }])
+    return bool((transaction.get("value") or [False])[0])
 
 
 def _queue_devin_steer(session_id, text):
     """Store only the latest undeliverable Devin steer behind normal input."""
-    with _core._pending_resume_lock:
-        _core._dedupe_devin_resume_queue_unlocked(session_id)
-        changed = _core._pending_devin_steers.get(session_id) != text
-        _core._pending_devin_steers[session_id] = text
-    _core._save_pending_inputs(
-        {session_id}, include_devin_steers=True,
-    )
-    return changed
+    before = _core._pending_devin_steers.get(session_id)
+    transaction = _core._apply_pending_input_operations(session_id, [{
+        "field": "devin_steer", "action": "set", "value": text,
+    }])
+    return bool(transaction.get("ok") and before != text)
 
 
 def _schedule_codex_queue_pump(session_id):
@@ -1927,7 +1955,7 @@ def _pump_codex_resume_queue(session_id):
                                 queue.pop(0)
                                 if not queue:
                                     _core._pending_resume_queue.pop(session_id, None)
-                        _core._save_pending_inputs({session_id})
+                        _core._persist_pending_inputs_current({session_id})
                         return {"ok": True, "delivered": False, "disabled": True}
                     result = _core.resume_session_codex(
                         session_id, text, _from_queue=True,
@@ -1957,7 +1985,7 @@ def _pump_codex_resume_queue(session_id):
                 if not queue:
                     _core._pending_resume_queue.pop(session_id, None)
         if removed:
-            _core._save_pending_inputs({session_id})
+            _core._persist_pending_inputs_current({session_id})
         _core._pending_resume_retry_after.pop(session_id, None)
         return {"ok": True, "delivered": removed, "result": result}
     finally:
@@ -2789,16 +2817,12 @@ def _terminal_queue_hold_or_expire(sid, reason):
         _core._log_terminal_queue_hold(sid, reason)
         return
     _core._terminal_queue_hold_since.pop(sid, None)
-    dropped_text = None
-    with _core._pending_terminal_input_lock:
-        queue = _core._pending_terminal_input_queue.get(sid, [])
-        if queue:
-            dropped_text = queue.pop(0)
-            if not queue:
-                _core._pending_terminal_input_queue.pop(sid, None)
+    transaction = _core._apply_pending_input_operations(sid, [{
+        "field": "terminal", "action": "pop_head",
+    }])
+    dropped_text = ((transaction.get("value") or [None])[0])
     if dropped_text is None:
         return
-    _core._save_pending_inputs({sid})
     _core._complete_pending_input_handoff(dropped_text)
     _core._pending_terminal_retry_after.pop(sid, None)
     try:
@@ -2832,10 +2856,9 @@ def _requeue_terminal_input_front(sid, text):
 
 
 def _requeue_terminal_input_front_unlocked(sid, text):
-    with _core._pending_terminal_input_lock:
-        _core._pending_terminal_input_queue.setdefault(sid, []).insert(0, text)
-    _core._save_pending_inputs({sid})
-    return True
+    return bool(_core._apply_pending_input_operations(sid, [{
+        "field": "terminal", "action": "insert_front", "value": text,
+    }]).get("ok"))
 
 
 def _verify_terminal_drain_receipts(now=None):
@@ -3148,17 +3171,10 @@ def _start_resume_queue_watcher() -> None:
                     continue
                 if _core._resume_queue_engine_busy(sid):
                     continue
-                with _core._pending_resume_lock:
-                    queue = _core._pending_resume_queue.get(sid, [])
-                    if not queue:
-                        _core._pending_resume_queue.pop(sid, None)
-                        _core._pending_resume_retry_after.pop(sid, None)
-                        text = None
-                    else:
-                        text = queue.pop(0)
-                        if not queue:
-                            _core._pending_resume_queue.pop(sid, None)
-                _core._save_pending_inputs({sid})
+                transaction = _core._apply_pending_input_operations(sid, [{
+                    "field": "resume", "action": "pop_head",
+                }])
+                text = ((transaction.get("value") or [None])[0])
                 if text is None:
                     continue
                 result = None
@@ -3190,9 +3206,9 @@ def _start_resume_queue_watcher() -> None:
                     # terminal-queue watcher below for the same rule).
                     _core._pending_resume_retry_after.pop(sid, None)
                 elif not result or not result.get("ok"):
-                    with _core._pending_resume_lock:
-                        _core._pending_resume_queue.setdefault(sid, []).insert(0, text)
-                    _core._save_pending_inputs({sid})
+                    _core._apply_pending_input_operations(sid, [{
+                        "field": "resume", "action": "insert_front", "value": text,
+                    }])
                     _core._mark_pending_resume_retry(sid)
                 elif result.get("queued") or result.get("started"):
                     # "queued" means the engine already queued it internally.
@@ -3219,9 +3235,10 @@ def _start_resume_queue_watcher() -> None:
                     # The memoized _archive_session_is_live is ~free and is a
                     # strict superset of "injectable", so no live session is lost.
                     if not _core._archive_session_is_live(sid):
-                        dropped = None
-                        with _core._pending_terminal_input_lock:
-                            dropped = _core._pending_terminal_input_queue.pop(sid, None)
+                        transaction = _core._apply_pending_input_operations(sid, [{
+                            "field": "terminal", "action": "clear",
+                        }])
+                        dropped = ((transaction.get("value") or [[]])[0])
                         if dropped:
                             # Loud, not silent (CCC-455): this is the one place
                             # queued user text is deliberately discarded.
@@ -3231,7 +3248,6 @@ def _start_resume_queue_watcher() -> None:
                                 + "; ".join(repr(t[:80]) for t in dropped),
                                 flush=True,
                             )
-                            _core._save_pending_inputs({sid})
                             for dropped_text in dropped:
                                 _core._complete_pending_input_handoff(dropped_text)
                         _core._clear_foreign_writer_hold(sid)
@@ -3317,18 +3333,10 @@ def _start_resume_queue_watcher() -> None:
                             continue
                         _core._clear_foreign_writer_hold(sid)
                     _terminal_queue_clear_hold(sid)
-                    with _core._pending_terminal_input_lock:
-                        queue = _core._pending_terminal_input_queue.get(sid, [])
-                        if not queue:
-                            removed = _core._pending_terminal_input_queue.pop(sid, None) is not None
-                            text = None
-                        else:
-                            text = queue.pop(0)
-                            removed = True
-                            if not queue:
-                                _core._pending_terminal_input_queue.pop(sid, None)
-                    if removed:
-                        _core._save_pending_inputs({sid})
+                    transaction = _core._apply_pending_input_operations(sid, [{
+                        "field": "terminal", "action": "pop_head",
+                    }])
+                    text = ((transaction.get("value") or [None])[0])
                     if text is None:
                         continue
                     # CCC-455: a popped entry is only consumed by a PROVEN

@@ -2618,9 +2618,9 @@ def resume_session_gemini(session_id, text):
         if s.get("engine") == "gemini" and s.get("resumed_sid") == session_id:
             try:
                 if _core._poll_spawn_entry(s) is None:
-                    with _core._pending_resume_lock:
-                        _core._pending_resume_queue.setdefault(session_id, []).append(text)
-                    _core._save_pending_inputs({session_id})
+                    _core._apply_pending_input_operations(session_id, [{
+                        "field": "resume", "action": "append_tail", "value": text,
+                    }])
                     return {
 
                         "ok": True,
@@ -2912,16 +2912,15 @@ def _start_devin_resume_watchdog(proc, session_id, text, log_path, *, delivery_s
             f"(exit {exit_code}): {first_line[:160]} — requeuing follow-up",
             flush=True,
         )
-        with _core._pending_resume_lock:
-            if delivery_slot == "steer":
-                _core._pending_devin_steers[session_id] = text
-            else:
-                queue = _core._pending_resume_queue.setdefault(session_id, [])
-                if text not in queue:
-                    queue.insert(0, text)
-        _core._save_pending_inputs(
-            {session_id}, include_devin_steers=True,
+        operation = (
+            {"field": "devin_steer", "action": "set", "value": text}
+            if delivery_slot == "steer"
+            else {
+                "field": "resume", "action": "insert_front", "value": text,
+                "dedupe": True,
+            }
         )
+        _core._apply_pending_input_operations(session_id, [operation])
         _core._mark_pending_resume_retry(session_id)
 
     threading.Thread(
@@ -2990,23 +2989,21 @@ def _start_devin_delivery_proof_watchdog(
         deadline = time.time() + _DEVIN_DELIVERY_PROOF_WINDOW_S
         while time.time() < deadline:
             if _core._devin_cli_prompt_history_count(raw_id, text, started_at) > 0:
-                removed = False
-                with _core._pending_resume_lock:
-                    if delivery_slot == "steer":
-                        if _core._pending_devin_steers.get(session_id) == text:
-                            _core._pending_devin_steers.pop(session_id, None)
-                            removed = True
-                    else:
-                        queue = _core._pending_resume_queue.get(session_id) or []
-                        if queue and queue[0] == text:
-                            queue.pop(0)
-                            if not queue:
-                                _core._pending_resume_queue.pop(session_id, None)
-                            removed = True
-                if removed:
-                    _core._save_pending_inputs(
-                        {session_id}, include_devin_steers=True,
-                    )
+                operation = (
+                    {
+                        "field": "devin_steer", "action": "clear_if_matching",
+                        "match": text,
+                    }
+                    if delivery_slot == "steer"
+                    else {
+                        "field": "resume", "action": "pop_head_if_matching",
+                        "match": text,
+                    }
+                )
+                transaction = _core._apply_pending_input_operations(
+                    session_id, [operation],
+                )
+                if (transaction.get("value") or [None])[0] is not None:
                     _core._pending_resume_retry_after.pop(session_id, None)
                 return
             try:
@@ -3018,19 +3015,15 @@ def _start_devin_delivery_proof_watchdog(
             time.sleep(_core._DEVIN_DELIVERY_PROOF_POLL_INTERVAL_S)
         # No proof. The selected delivery slot is intentionally still durable;
         # only restore it if an unusual direct caller removed it meanwhile.
-        with _core._pending_resume_lock:
-            if delivery_slot == "steer":
-                if text and session_id not in _core._pending_devin_steers:
-                    _core._pending_devin_steers[session_id] = text
-            else:
-                queue = _core._pending_resume_queue.get(session_id) or []
-                if queue and queue[0] == text:
-                    pass  # already at front
-                elif text:
-                    _core._pending_resume_queue.setdefault(session_id, []).insert(0, text)
-        _core._save_pending_inputs(
-            {session_id}, include_devin_steers=True,
+        operation = (
+            {"field": "devin_steer", "action": "set", "value": text}
+            if delivery_slot == "steer"
+            else {
+                "field": "resume", "action": "insert_front", "value": text,
+                "dedupe_head": True,
+            }
         )
+        _core._apply_pending_input_operations(session_id, [operation])
         _core._mark_pending_resume_retry(session_id)
         print(
             f"[devin-proof] no delivery proof for {session_id} — requeuing follow-up",
@@ -3079,10 +3072,10 @@ def resume_session_devin(session_id, text, _delivery_slot="resume"):
                         + (f" ({running_s}s so far)" if running_s is not None else "")
                         + ". It sends automatically when that turn ends."
                     )
-                    with _core._pending_resume_lock:
-                        _core._pending_resume_queue.setdefault(session_id, []).append(text)
+                    _core._apply_pending_input_operations(session_id, [{
+                        "field": "resume", "action": "append_tail", "value": text,
+                    }])
                     _core._note_pending_queued(session_id, text, reason)
-                    _core._save_pending_inputs({session_id})
                     return {
                         "ok": True,
                         "queued": True,
@@ -3373,9 +3366,9 @@ def resume_session_cursor(session_id, text):
         if s.get("engine") == "cursor" and s.get("resumed_sid") == session_id:
             try:
                 if _core._poll_spawn_entry(s) is None:
-                    with _core._pending_resume_lock:
-                        _core._pending_resume_queue.setdefault(session_id, []).append(text)
-                    _core._save_pending_inputs({session_id})
+                    _core._apply_pending_input_operations(session_id, [{
+                        "field": "resume", "action": "append_tail", "value": text,
+                    }])
                     return {
                         "ok": True,
                         "queued": True,
@@ -3843,9 +3836,9 @@ def resume_session_antigravity(session_id, text):
                     started = _spawn_entry_started_epoch(s)
                     if started and (time.time() - started) > _antigravity_resume_stale_seconds():
                         continue
-                    with _core._pending_resume_lock:
-                        _core._pending_resume_queue.setdefault(session_id, []).append(text)
-                    _core._save_pending_inputs({session_id})
+                    _core._apply_pending_input_operations(session_id, [{
+                        "field": "resume", "action": "append_tail", "value": text,
+                    }])
                     return {
 
                         "ok": True,

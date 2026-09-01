@@ -144,7 +144,6 @@ def clean_pending_queues(monkeypatch):
     server._pending_resume_queue.clear()
     server._pending_terminal_input_queue.clear()
     server._pending_terminal_handoff_ids.clear()
-    server._pending_inputs_session_baselines.clear()
     with server._CODEX_APP_SERVER_LOCK:
         server._CODEX_APP_SERVER_THREAD_STATE.clear()
         server._CODEX_APP_SERVER_TURN_THREAD.clear()
@@ -157,7 +156,6 @@ def clean_pending_queues(monkeypatch):
     server._pending_resume_queue.clear()
     server._pending_terminal_input_queue.clear()
     server._pending_terminal_handoff_ids.clear()
-    server._pending_inputs_session_baselines.clear()
     with server._CODEX_APP_SERVER_LOCK:
         server._CODEX_APP_SERVER_THREAD_STATE.clear()
         server._CODEX_APP_SERVER_TURN_THREAD.clear()
@@ -243,7 +241,9 @@ def test_claim_persistence_failure_restores_memory_and_fails_closed(
 ):
     sid = "claim-save-failure"
     server._pending_resume_queue[sid] = ["first", "target", "last"]
-    monkeypatch.setattr(server, "_save_pending_inputs", mock.Mock(return_value=False))
+    monkeypatch.setattr(
+        server, "_persist_pending_inputs_current", mock.Mock(return_value=False),
+    )
 
     claim = server._claim_matching_pending_input(sid, "target")
 
@@ -254,7 +254,9 @@ def test_claim_persistence_failure_restores_memory_and_fails_closed(
 def test_claim_persistence_failure_never_calls_codex(router_env, monkeypatch):
     sid = "steer-claim-save-failure"
     server._pending_resume_queue[sid] = ["target"]
-    monkeypatch.setattr(server, "_save_pending_inputs", mock.Mock(return_value=False))
+    monkeypatch.setattr(
+        server, "_persist_pending_inputs_current", mock.Mock(return_value=False),
+    )
 
     result = server._inject_text_into_session_router(
         sid, "target", mode="steer", preserve_queued_steer=True,
@@ -272,7 +274,8 @@ def test_rollback_persistence_failure_is_distinct_and_not_preserved(
     sid = "steer-rollback-save-failure"
     server._pending_resume_queue[sid] = ["target"]
     monkeypatch.setattr(
-        server, "_save_pending_inputs", mock.Mock(side_effect=[True, False]),
+        server, "_persist_pending_inputs_current",
+        mock.Mock(side_effect=[True, False]),
     )
     router_env.resume.return_value = {
         "ok": False,
@@ -1033,9 +1036,10 @@ def test_pending_save_enforces_authoritative_session_transaction():
     import inspect
 
     source = inspect.getsource(server._save_pending_inputs)
-    assert "_codex_queue_pump_lock" in source
-    assert "_refresh_pending_inputs_for_session" in source
-    assert "_apply_pending_queue_delta" in source
+    mutation_source = inspect.getsource(server._mutate_pending_inputs)
+    assert "_codex_queue_pump_lock" in mutation_source
+    assert "_refresh_pending_inputs_for_session" in mutation_source
+    assert "mutation()" in mutation_source
 
 
 def test_all_pending_input_writers_identify_affected_sessions():
@@ -1366,38 +1370,59 @@ def test_handoff_ingest_pop_save_delivery_cannot_redeliver(monkeypatch, tmp_path
     assert server._ingest_pending_input_handoffs() == 0
 
 
-def test_delta_duplicate_deletion_is_occurrence_aware():
-    assert server._apply_pending_queue_delta(
-        ["x", "x", "tail"], ["x", "x", "tail"], ["x", "tail"],
-    ) == ["x", "tail"]
+def _run_resume_operations(monkeypatch, tmp_path, initial, operations):
+    sid = "operation-corpus"
+    monkeypatch.setattr(server, "PENDING_INPUTS_FILE", tmp_path / "pending.json")
+    server._pending_resume_queue[sid] = list(initial)
+    assert server._save_pending_inputs({sid})
+    result = server._apply_pending_input_operations(sid, operations)
+    assert result["ok"]
+    return list(server._pending_resume_queue.get(sid) or [])
 
 
-def test_delta_middle_insert_uses_retained_neighbor_anchor():
-    assert server._apply_pending_queue_delta(
-        ["front", "a", "b", "tail"], ["a", "b"], ["a", "middle", "b"],
+def test_delta_duplicate_deletion_is_occurrence_aware(monkeypatch, tmp_path):
+    assert _run_resume_operations(monkeypatch, tmp_path, ["x", "x", "tail"], [{
+        "field": "resume", "action": "remove_matching", "match": "x",
+        "occurrence": 1,
+    }]) == ["x", "tail"]
+
+
+def test_delta_middle_insert_uses_retained_neighbor_anchor(monkeypatch, tmp_path):
+    assert _run_resume_operations(
+        monkeypatch, tmp_path, ["front", "a", "b", "tail"], [{
+            "field": "resume", "action": "insert_before_matching",
+            "match": "b", "value": "middle",
+        }],
     ) == ["front", "a", "middle", "b", "tail"]
 
 
-def test_delta_concurrent_append_keeps_transaction_order():
-    assert server._apply_pending_queue_delta(
-        ["a", "concurrent"], ["a"], ["a", "local"],
-    ) == ["a", "concurrent", "local"]
+def test_delta_concurrent_append_keeps_transaction_order(monkeypatch, tmp_path):
+    assert _run_resume_operations(monkeypatch, tmp_path, ["a", "concurrent"], [{
+        "field": "resume", "action": "append_tail", "value": "local",
+    }]) == ["a", "concurrent", "local"]
 
 
-def test_delta_front_insert_stays_at_front():
-    assert server._apply_pending_queue_delta(
-        ["a", "concurrent-tail"], ["a"], ["front", "a"],
-    ) == ["front", "a", "concurrent-tail"]
+def test_delta_front_insert_stays_at_front(monkeypatch, tmp_path):
+    assert _run_resume_operations(monkeypatch, tmp_path, ["a", "concurrent-tail"], [{
+        "field": "resume", "action": "insert_front", "value": "front",
+    }]) == ["front", "a", "concurrent-tail"]
 
 
-def test_delta_distinguishes_handoff_and_plain_identical_text(tmp_path):
-    handoff = server._PendingInputHandoff(
-        "same", "stable-handoff", tmp_path / "handoff.json",
-    )
-    result = server._apply_pending_queue_delta(
-        [handoff, "same", "tail"], [handoff, "same", "tail"],
-        ["same", "tail"],
-    )
+def test_delta_distinguishes_handoff_and_plain_identical_text(monkeypatch, tmp_path):
+    sid = "handoff-plain-corpus"
+    monkeypatch.setattr(server, "PENDING_INPUTS_FILE", tmp_path / "pending.json")
+    monkeypatch.setattr(server, "PENDING_INPUT_HANDOFF_DIR", tmp_path / "handoffs")
+    server._pending_terminal_input_queue[sid] = ["same", "tail"]
+    assert server._save_pending_inputs({sid})
+    assert server._write_pending_input_handoff(sid, "same", front=True)
+    assert server._ingest_pending_input_handoffs() == 1
+    handoff = server._pending_terminal_input_queue[sid][0]
+    result_tx = server._apply_pending_input_operations(sid, [{
+        "field": "terminal", "action": "remove_matching",
+        "identity": "handoff_id", "match": handoff.handoff_id,
+    }])
+    result = list(server._pending_terminal_input_queue[sid])
+    assert result_tx["ok"]
     assert result == ["same", "tail"]
     assert not isinstance(result[0], server._PendingInputHandoff)
 
@@ -1407,6 +1432,36 @@ def test_gemini_queue_save_does_not_persist_devin_steer_flag():
 
     source = inspect.getsource(server.resume_session_gemini)
     assert "include_devin_steers" not in source
+
+
+def test_production_writers_use_explicit_pending_mutations():
+    repo_root = Path(server.__file__).resolve().parent
+    offenders = []
+    for source_path in (repo_root / "ccc_server").glob("*.py"):
+        tree = ast.parse(source_path.read_text(), filename=str(source_path))
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.Call):
+                continue
+            name = (
+                node.func.attr if isinstance(node.func, ast.Attribute)
+                else node.func.id if isinstance(node.func, ast.Name)
+                else ""
+            )
+            if name == "_save_pending_inputs":
+                offenders.append(f"{source_path.name}:{node.lineno}")
+    assert offenders == []
+    pending_source = (repo_root / "ccc_server" / "pending_inputs.py").read_text()
+    assert "_pending_inputs_session_baselines" not in pending_source
+    assert "_apply_pending_queue_delta" not in pending_source
+
+
+def test_deliver_barrier_acquires_session_first():
+    import inspect
+
+    source = inspect.getsource(server._deliver_with_auto_resume_barrier)
+    assert source.index("_codex_queue_pump_lock") < source.index(
+        "_auto_resume_exclusive_lock"
+    )
 
 
 def test_finalizer_does_not_consume_a_second_copy_after_router_commit():

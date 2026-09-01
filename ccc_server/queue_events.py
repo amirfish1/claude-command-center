@@ -977,31 +977,40 @@ def build_ux_fixes_health_payload(force=False):
 
 
 def _queue_codex_resume(session_id, text, pid=None, reason=None, *, only_if_pending=False):
-    with _core._pending_resume_lock:
-        if only_if_pending and not _core._pending_resume_queue.get(session_id):
-            return None
+    def enqueue():
+        with _core._pending_resume_lock:
+            if only_if_pending and not _core._pending_resume_queue.get(session_id):
+                return None
         # The unattended auto-resume marker ("continue") is opt-in per
         # session (CCC-863 zombie-process incident: opt-out by default let a
         # leaked stale process burn a weekly quota unattended). Real user
         # text is never gated here.
-        if (
-            _core._is_unattended_auto_continue(text)
-            and not _core._is_auto_resume_opted_in(session_id)
-        ):
-            return {
-                "ok": False,
-                "queued": False,
-                "error": "auto-resume not opted in for this session",
-                "auto_resume_opt_in_required": True,
-            }
-        queue = _core._pending_resume_queue.setdefault(session_id, [])
+            if (
+                _core._is_unattended_auto_continue(text)
+                and not _core._is_auto_resume_opted_in(session_id)
+            ):
+                return {
+                    "ok": False,
+                    "queued": False,
+                    "error": "auto-resume not opted in for this session",
+                    "auto_resume_opt_in_required": True,
+                }
+            queue = _core._pending_resume_queue.setdefault(session_id, [])
         # Deduplicate identical text so a slow-to-confirm delivery (e.g. a
         # verifier report landing on a finished Codex thread) cannot pile up
         # duplicate queued copies that get re-injected repeatedly.
-        if text not in queue:
-            queue.append(text)
-            _core._pending_resume_queue[session_id] = queue
-    _core._save_pending_inputs({session_id})
+            if text not in queue:
+                queue.append(text)
+                _core._pending_resume_queue[session_id] = queue
+            return True
+
+    transaction = _core._mutate_pending_inputs({session_id}, enqueue)
+    if not transaction.get("ok"):
+        return {"ok": False, "error": "failed to persist queued Codex input"}
+    if transaction.get("value") is None:
+        return None
+    if isinstance(transaction.get("value"), dict):
+        return transaction["value"]
     _core._schedule_codex_queue_pump(session_id)
     payload = {
         "ok": True,
