@@ -2195,17 +2195,20 @@ def _suppress_codex_queued_steer_delivery_ack(session_id, text, turn_id=None):
 
 
 def _reconcile_codex_delivery_ack_nonblocking(session_id, text):
-    pending = _core._snapshot_matching_pending_input_id(session_id, text)
-    if not pending:
-        return 0
     ownership = _core._codex_queue_pump_lock(session_id)
     if ownership.acquire(blocking=False):
         try:
+            pending = _core._snapshot_matching_pending_input_id(session_id, text)
+            if not pending:
+                return 0
             return _core._consume_pending_input_id(
                 session_id, pending["pending_id"], pending["queue_name"],
             )
         finally:
             ownership.release()
+    pending = _core._snapshot_matching_pending_input_id_quick(session_id, text)
+    if not pending:
+        return 0
     threading.Thread(
         target=_core._consume_pending_input_id,
         args=(session_id, pending["pending_id"], pending["queue_name"]),

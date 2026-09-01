@@ -99,40 +99,53 @@ def _decode_pending_queue_item(item):
     return None
 
 
-def _decode_pending_queue(items, pending_ids=None, seen_ids=None):
-    decoded_items = []
+def _pending_text_fingerprint(text):
+    return hashlib.sha256(str(text).encode("utf-8")).hexdigest()
+
+
+def _pending_safe_int(value, default=0):
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return int(default)
+
+
+def _decode_pending_queue(
+    items, pending_ids=None, seen_ids=None, *, sidecar_version=0,
+):
     seen_ids = seen_ids if seen_ids is not None else set()
-    pending_ids = pending_ids if isinstance(pending_ids, list) else []
-    dirty = len(pending_ids) != len(items)
-    for index, item in enumerate(items):
+    rows = []
+    for item in items:
         decoded = _decode_pending_queue_item(item)
-        if decoded is None:
-            dirty = True
-            continue
-        if not isinstance(item, dict):
-            sidecar_id = (
-                str(pending_ids[index] or "").strip()
-                if index < len(pending_ids) else ""
-            )
-            if sidecar_id:
-                decoded = _PendingInputEntry(str(decoded), sidecar_id)
-            else:
-                dirty = True
-        else:
-            dirty = True  # migrate the prior {id,text} experiment
-        if decoded.pending_id in seen_ids:
-            decoded = _PendingInputEntry(str(decoded))
-            dirty = True
-        seen_ids.add(decoded.pending_id)
-        decoded_items.append(decoded)
-    return decoded_items, dirty
-
-
-def _serialize_pending_queue_item(item):
-    if isinstance(item, _PendingInputHandoff):
-        return None
-    entry = item if isinstance(item, _PendingInputEntry) else _PendingInputEntry(item)
-    return {"id": entry.pending_id, "text": str(entry)}
+        if decoded is not None:
+            rows.append(str(decoded))
+    metadata = pending_ids if isinstance(pending_ids, list) else []
+    valid = sidecar_version == 2 and len(metadata) == len(rows) == len(items)
+    candidate_ids = []
+    if valid:
+        for text, meta in zip(rows, metadata):
+            if not isinstance(meta, dict):
+                valid = False
+                break
+            pending_id = str(meta.get("id") or "").strip()
+            fingerprint = str(meta.get("fingerprint") or "")
+            if (
+                not pending_id
+                or fingerprint != _pending_text_fingerprint(text)
+                or pending_id in seen_ids
+                or pending_id in candidate_ids
+            ):
+                valid = False
+                break
+            candidate_ids.append(pending_id)
+    if not valid:
+        candidate_ids = [str(uuid.uuid4()) for _ in rows]
+    decoded_items = [
+        _PendingInputEntry(text, pending_id)
+        for text, pending_id in zip(rows, candidate_ids)
+    ]
+    seen_ids.update(candidate_ids)
+    return decoded_items, not valid
 
 
 def _auto_resume_barrier_path():
@@ -141,6 +154,10 @@ def _auto_resume_barrier_path():
 
 def _pending_inputs_file_lock_path():
     return _core.PENDING_INPUTS_FILE.with_suffix(".lock")
+
+
+def _pending_inputs_metadata_backup_path():
+    return _core.PENDING_INPUTS_FILE.with_suffix(".metadata.json")
 
 
 def _pending_input_claim_journal_dir():
@@ -181,7 +198,8 @@ def _empty_pending_inputs_payload():
         "auto_resume_opt_in": {},
         "applied_claim_journal_ids": {},
         "pending_entry_ids": {
-            "version": 1,
+            "version": 2,
+            "generation": 0,
             "resume_queue": {},
             "terminal_queue": {},
         },
@@ -199,6 +217,27 @@ def _read_pending_inputs_payload_unlocked(*, missing_is_empty):
     if not isinstance(data, dict):
         return None
     payload = dict(data)
+    primary_sidecar = payload.get("pending_entry_ids")
+    primary_generation = (
+        _pending_safe_int(primary_sidecar.get("generation"), 0)
+        if isinstance(primary_sidecar, dict) else 0
+    )
+    try:
+        backup = json.loads(_pending_inputs_metadata_backup_path().read_text())
+    except (OSError, json.JSONDecodeError):
+        backup = None
+    if isinstance(backup, dict):
+        backup_sidecar = backup.get("pending_entry_ids")
+        backup_generation = _pending_safe_int(backup.get("generation"), 0)
+        if (
+            isinstance(backup_sidecar, dict)
+            and backup_generation > primary_generation
+        ):
+            payload["pending_entry_ids"] = backup_sidecar
+            if not payload.get("applied_claim_journal_ids"):
+                payload["applied_claim_journal_ids"] = dict(
+                    backup.get("applied_claim_journal_ids") or {}
+                )
     for field in (
         "resume_queue", "devin_steers", "terminal_queue",
         "auto_resume_opt_in", "applied_claim_journal_ids",
@@ -211,10 +250,12 @@ def _read_pending_inputs_payload_unlocked(*, missing_is_empty):
     sidecar = payload.get("pending_entry_ids")
     if not isinstance(sidecar, dict):
         payload["pending_entry_ids"] = {
-            "version": 1, "resume_queue": {}, "terminal_queue": {},
+            "version": 2, "generation": 0,
+            "resume_queue": {}, "terminal_queue": {},
         }
     else:
-        sidecar.setdefault("version", 1)
+        sidecar.setdefault("version", 0)
+        sidecar.setdefault("generation", 0)
         sidecar.setdefault("resume_queue", {})
         sidecar.setdefault("terminal_queue", {})
     return payload
@@ -351,6 +392,7 @@ def _load_pending_inputs():
     legacy_sessions = set()
     id_dirty_sessions = set()
     id_sidecar = data.get("pending_entry_ids") or {}
+    sidecar_version = _pending_safe_int(id_sidecar.get("version"), 0)
     resume_ids = id_sidecar.get("resume_queue") or {}
     terminal_ids = id_sidecar.get("terminal_queue") or {}
     seen_by_sid = {}
@@ -360,6 +402,7 @@ def _load_pending_inputs():
         if isinstance(items, list):
             decoded, dirty = _decode_pending_queue(
                 items, resume_ids.get(sid), seen_by_sid.setdefault(str(sid), set()),
+                sidecar_version=sidecar_version,
             )
             decoded_resume[sid] = decoded
             if dirty:
@@ -368,6 +411,7 @@ def _load_pending_inputs():
         if isinstance(items, list):
             decoded, dirty = _decode_pending_queue(
                 items, terminal_ids.get(sid), seen_by_sid.setdefault(str(sid), set()),
+                sidecar_version=sidecar_version,
             )
             decoded_terminal[sid] = decoded
             if dirty:
@@ -528,6 +572,9 @@ def _validate_pending_claim_journal(path, payload):
         without_front = dict(without_pending)
         without_front.pop("handoff_front", None)
         candidate_identities.append(without_front)
+        eighth_wave_identity = dict(without_front)
+        eighth_wave_identity.pop("claim_sequence", None)
+        candidate_identities.append(eighth_wave_identity)
         expected_ids = {
             hashlib.sha256(
                 json.dumps(candidate, sort_keys=True).encode("utf-8")
@@ -659,6 +706,7 @@ def _pending_input_recovery_status(session_id):
         "volatile_claims": volatile_count,
         "recovery_volatile": volatile_count > 0,
         "restart_safe": volatile_count == 0,
+        "pending_schema_version": 2,
     }
 
 
@@ -850,6 +898,7 @@ def _refresh_pending_inputs_for_session(session_id):
     steer_data = data.get("devin_steers")
     opt_in_data = data.get("auto_resume_opt_in")
     id_sidecar = data.get("pending_entry_ids") or {}
+    sidecar_version = _pending_safe_int(id_sidecar.get("version"), 0)
     if not all(isinstance(value, dict) for value in (
         resume_data, terminal_data, steer_data, opt_in_data,
     )):
@@ -861,12 +910,14 @@ def _refresh_pending_inputs_for_session(session_id):
         resume_items,
         (id_sidecar.get("resume_queue") or {}).get(session_id),
         seen_ids,
+        sidecar_version=sidecar_version,
     ) if isinstance(resume_items, list) else ([], False)
     terminal_items = terminal_data.get(session_id)
     terminal_items, terminal_ids_dirty = _decode_pending_queue(
         terminal_items,
         (id_sidecar.get("terminal_queue") or {}).get(session_id),
         seen_ids,
+        sidecar_version=sidecar_version,
     ) if isinstance(terminal_items, list) else ([], False)
 
     front_handoffs = []
@@ -993,23 +1044,28 @@ def _persist_pending_inputs_current(
                     else:
                         payload[field].pop(sid, None)
                 id_sidecar = payload.setdefault("pending_entry_ids", {
-                    "version": 1, "resume_queue": {}, "terminal_queue": {},
+                    "version": 2, "generation": 0,
+                    "resume_queue": {}, "terminal_queue": {},
                 })
-                id_sidecar["version"] = 1
+                id_sidecar["version"] = 2
+                id_sidecar["generation"] = max(
+                    int(id_sidecar.get("generation") or 0) + 1,
+                    time.time_ns(),
+                )
                 for field, entries in (
                     ("resume_queue", resume_entries),
                     ("terminal_queue", terminal_entries),
                 ):
                     id_map = id_sidecar.setdefault(field, {})
                     if entries:
-                        id_map[sid] = [
-                            (
+                        id_map[sid] = [{
+                            "id": (
                                 item.pending_id
                                 if isinstance(item, _PendingInputEntry)
                                 else _PendingInputEntry(item).pending_id
-                            )
-                            for item in entries
-                        ]
+                            ),
+                            "fingerprint": _pending_text_fingerprint(item),
+                        } for item in entries]
                     else:
                         id_map.pop(sid, None)
                 if include_devin_steers:
@@ -1051,6 +1107,31 @@ def _persist_pending_inputs_current(
                 os.fsync(f.fileno())
             os.replace(tmp_path, _core.PENDING_INPUTS_FILE)
             tmp_path = None
+            backup_path = _pending_inputs_metadata_backup_path()
+            backup_fd, backup_name = tempfile.mkstemp(
+                prefix=f".{backup_path.name}.",
+                suffix=".tmp", dir=backup_path.parent,
+            )
+            backup_tmp = Path(backup_name)
+            with os.fdopen(backup_fd, "w") as backup_handle:
+                json.dump({
+                    "version": 1,
+                    "generation": int(
+                        payload["pending_entry_ids"].get("generation") or 0
+                    ),
+                    "pending_entry_ids": payload["pending_entry_ids"],
+                    "applied_claim_journal_ids": payload.get(
+                        "applied_claim_journal_ids"
+                    ) or {},
+                }, backup_handle, indent=2, sort_keys=True)
+                backup_handle.flush()
+                os.fsync(backup_handle.fileno())
+            os.replace(backup_tmp, backup_path)
+            directory_fd = os.open(backup_path.parent, os.O_RDONLY)
+            try:
+                os.fsync(directory_fd)
+            finally:
+                os.close(directory_fd)
     except OSError as e:
         print(f"  [pending-inputs] save failed: {e}")
         return False
@@ -1810,7 +1891,7 @@ def _consume_matching_pending_input(session_id, text):
     return 0
 
 
-def _snapshot_matching_pending_input_id(session_id, text):
+def _snapshot_matching_pending_input_id_quick(session_id, text):
     clean = str(text or "").strip()
     if not session_id or not clean:
         return None
@@ -1836,6 +1917,28 @@ def _snapshot_matching_pending_input_id(session_id, text):
                     ),
                     "pending_id": str(pending_id),
                 }
+    return None
+
+
+def _snapshot_matching_pending_input_id(session_id, text):
+    with _core._codex_queue_pump_lock(session_id):
+        if not _core._refresh_pending_inputs_for_session(session_id):
+            return None
+        clean = str(text or "").strip()
+        for queue_name, queue, lock in (
+            ("resume", _core._pending_resume_queue, _core._pending_resume_lock),
+            ("terminal", _core._pending_terminal_input_queue, _core._pending_terminal_input_lock),
+        ):
+            with lock:
+                for item in queue.get(session_id) or []:
+                    if (
+                        str(item or "").strip() == clean
+                        and getattr(item, "pending_id", None)
+                    ):
+                        return {
+                            "queue_name": queue_name,
+                            "pending_id": item.pending_id,
+                        }
     return None
 
 

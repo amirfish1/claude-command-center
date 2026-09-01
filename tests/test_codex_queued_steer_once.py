@@ -1038,7 +1038,9 @@ def test_stale_same_session_enqueue_cannot_resurrect_worker_claim(tmp_path):
     assert all(outcome[0] != "error" for outcome in outcomes), outcomes
     payload = json.loads(pending_file.read_text())
     assert payload["resume_queue"][sid] == ["keep", "new-row"]
-    assert len(set(payload["pending_entry_ids"]["resume_queue"][sid])) == 2
+    metadata = payload["pending_entry_ids"]["resume_queue"][sid]
+    assert len({row["id"] for row in metadata}) == 2
+    assert all(row["fingerprint"] for row in metadata)
     assert claimant.exitcode == 0
     assert stale_enqueue.exitcode == 0
 
