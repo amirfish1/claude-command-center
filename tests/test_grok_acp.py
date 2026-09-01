@@ -18,6 +18,7 @@ def test_grok_harness_is_registered():
 
 def test_session_new_sends_yolo_meta(monkeypatch):
     captured = {}
+    set_configs = []
 
     def fake_ensure(_harness):
         return {"initialized": True}
@@ -30,7 +31,11 @@ def test_session_new_sends_yolo_meta(monkeypatch):
 
     monkeypatch.setattr(server, "_acp_ensure", fake_ensure)
     monkeypatch.setattr(server, "_acp_request", fake_request)
-    monkeypatch.setattr(server, "_acp_set_config", lambda *a, **k: {"ok": True})
+    monkeypatch.setattr(
+        server,
+        "_acp_set_config",
+        lambda *args, **kwargs: set_configs.append((args, kwargs)) or {"ok": True},
+    )
     monkeypatch.setattr(server, "_acp_wire_tail_start", lambda *a, **k: None)
     monkeypatch.setattr(server, "_acp_prompt", lambda *a, **k: {"ok": True})
 
@@ -39,6 +44,30 @@ def test_session_new_sends_yolo_meta(monkeypatch):
     assert captured["method"] == "session/new"
     assert captured["params"]["_meta"]["yoloMode"] is True
     assert result["session_id"] == "01a00000-0000-0000-0000-000000000001"
+    assert set_configs == []
+
+
+def test_grok_approval_mode_is_not_sent_as_a_live_config_change(monkeypatch):
+    requests = []
+
+    monkeypatch.setattr(
+        server,
+        "_control_plane_engine_call",
+        lambda *args, **kwargs: requests.append((args, kwargs)),
+    )
+    monkeypatch.setattr(server, "_acp_request", lambda *args, **kwargs: requests.append((args, kwargs)))
+
+    result = server._acp_set_config("grok", "existing-grok-session", "mode", "yolo")
+
+    assert result == {
+        "ok": False,
+        "code": "grok_approval_mode_fixed_at_creation",
+        "error": (
+            "Grok approval mode is fixed when the session is created; "
+            "spawn a new session with yolo mode enabled."
+        ),
+    }
+    assert requests == []
 
 
 def test_spawn_session_grok_uses_acp(monkeypatch, tmp_path):

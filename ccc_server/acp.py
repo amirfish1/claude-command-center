@@ -1861,7 +1861,10 @@ def _acp_session_new(harness, cwd, prompt=None, model=None, mode=None, effort=No
         if isinstance(modes_block, dict):
             state["mode"] = modes_block.get("currentModeId")
         _acp_save_state_unlocked(harness)
-    if mode:
+    # Grok applies its approval mode from session/new `_meta`. Its ACP server
+    # does not implement session/set_config_option, so retrying mode here both
+    # fails noisily and suggests an existing session can be made unattended.
+    if mode and harness != "grok":
         _core._acp_set_config(harness, sid, "mode", mode)
     if model:
         _core._acp_set_config(harness, sid, "model", model)
@@ -2220,6 +2223,15 @@ def _acp_maybe_attach_on_view(harness, sid):
 
 
 def _acp_set_config(harness, sid, config_id, value):
+    if harness == "grok" and config_id == "mode":
+        return {
+            "ok": False,
+            "code": "grok_approval_mode_fixed_at_creation",
+            "error": (
+                "Grok approval mode is fixed when the session is created; "
+                "spawn a new session with yolo mode enabled."
+            ),
+        }
     if harness in _core._ACP_WORKER_HARNESSES:
         routed = _core._control_plane_engine_call(
             harness, "config", {
@@ -2407,4 +2419,3 @@ def _resolve_kimi_bin():
 
 def _resolve_grok_bin():
     return _core._acp_resolve_bin("grok")
-
