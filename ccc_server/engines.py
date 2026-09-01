@@ -2620,7 +2620,9 @@ def resume_session_gemini(session_id, text):
                 if _core._poll_spawn_entry(s) is None:
                     with _core._pending_resume_lock:
                         _core._pending_resume_queue.setdefault(session_id, []).append(text)
-                    _core._save_pending_inputs({session_id})
+                    _core._save_pending_inputs(
+                        {session_id}, include_devin_steers=True,
+                    )
                     return {
 
                         "ok": True,
@@ -3004,7 +3006,9 @@ def _start_devin_delivery_proof_watchdog(
                                 _core._pending_resume_queue.pop(session_id, None)
                             removed = True
                 if removed:
-                    _core._save_pending_inputs({session_id})
+                    _core._save_pending_inputs(
+                        {session_id}, include_devin_steers=True,
+                    )
                     _core._pending_resume_retry_after.pop(session_id, None)
                 return
             try:
@@ -3026,7 +3030,9 @@ def _start_devin_delivery_proof_watchdog(
                     pass  # already at front
                 elif text:
                     _core._pending_resume_queue.setdefault(session_id, []).insert(0, text)
-        _core._save_pending_inputs({session_id})
+        _core._save_pending_inputs(
+            {session_id}, include_devin_steers=True,
+        )
         _core._mark_pending_resume_retry(session_id)
         print(
             f"[devin-proof] no delivery proof for {session_id} — requeuing follow-up",

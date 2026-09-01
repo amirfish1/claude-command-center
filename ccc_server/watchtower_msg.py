@@ -1489,7 +1489,11 @@ def _inject_text_into_session_router(
                 )
             else:
                 steer_result = _core.resume_session_codex(session_id, text)
-        if steer_result.get("ok") and not steer_result.get("queued"):
+        if (
+            steer_result.get("ok")
+            and not steer_result.get("queued")
+            and int(steer_result.get("queued_consumed") or 0) <= 0
+        ):
             _core._consume_matching_pending_input(session_id, text)
         return steer_result
     if (

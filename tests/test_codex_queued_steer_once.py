@@ -103,6 +103,39 @@ def _cross_process_rmw_worker(
         results.put(("error", os.getpid(), repr(exc)))
 
 
+def _cross_process_stale_enqueue_worker(
+    pending_file, session_id, stale_loaded, claimed, finished, results,
+):
+    import server as process_server
+
+    try:
+        process_server.PENDING_INPUTS_FILE = Path(pending_file)
+        process_server._pending_resume_queue.clear()
+        process_server._pending_terminal_input_queue.clear()
+        process_server._load_pending_inputs()
+        stale_loaded.set()
+        if not claimed.wait(5):
+            raise AssertionError("worker did not claim queued row")
+        result = process_server._queue_codex_resume(session_id, "new-row")
+        finished.set()
+        results.put(("enqueue", os.getpid(), result))
+    except BaseException as exc:
+        results.put(("error", os.getpid(), repr(exc)))
+
+
+def _cross_process_nested_file_lock_worker(pending_file, results):
+    import ccc_server.pending_inputs as pending_inputs_module
+    import server as process_server
+
+    process_server.PENDING_INPUTS_FILE = Path(pending_file)
+    try:
+        with pending_inputs_module._pending_inputs_file_exclusive_lock():
+            with pending_inputs_module._pending_inputs_file_exclusive_lock():
+                results.put(("nested", os.getpid(), True))
+    except BaseException as exc:
+        results.put(("error", os.getpid(), repr(exc)))
+
+
 @pytest.fixture(autouse=True)
 def clean_pending_queues(monkeypatch):
     monkeypatch.setattr(
@@ -111,6 +144,7 @@ def clean_pending_queues(monkeypatch):
     server._pending_resume_queue.clear()
     server._pending_terminal_input_queue.clear()
     server._pending_terminal_handoff_ids.clear()
+    server._pending_inputs_session_baselines.clear()
     with server._CODEX_APP_SERVER_LOCK:
         server._CODEX_APP_SERVER_THREAD_STATE.clear()
         server._CODEX_APP_SERVER_TURN_THREAD.clear()
@@ -123,6 +157,7 @@ def clean_pending_queues(monkeypatch):
     server._pending_resume_queue.clear()
     server._pending_terminal_input_queue.clear()
     server._pending_terminal_handoff_ids.clear()
+    server._pending_inputs_session_baselines.clear()
     with server._CODEX_APP_SERVER_LOCK:
         server._CODEX_APP_SERVER_THREAD_STATE.clear()
         server._CODEX_APP_SERVER_TURN_THREAD.clear()
@@ -604,6 +639,35 @@ def test_legacy_steer_claims_matching_queue_copy(router_env):
     assert sid not in server._pending_resume_queue
 
 
+def test_legacy_local_fallback_does_not_consume_second_duplicate(router_env):
+    sid = "legacy-local-duplicate"
+    server._pending_resume_queue[sid] = ["target", "target", "last"]
+    router_env.resume.return_value = {
+        "ok": True, "via": "codex-steer", "queued_consumed": 1,
+    }
+
+    result = server._inject_text_into_session_router(sid, "target", mode="steer")
+
+    assert result["queued_consumed"] == 1
+    assert server._pending_resume_queue[sid] == ["target", "last"]
+
+
+def test_legacy_worker_result_does_not_consume_dashboard_duplicate(
+    router_env, monkeypatch,
+):
+    sid = "legacy-worker-duplicate"
+    server._pending_resume_queue[sid] = ["target", "last"]
+    worker_resume = mock.Mock(return_value={
+        "ok": True, "via": "codex-steer", "queued_consumed": 1,
+    })
+    monkeypatch.setattr(server, "resume_session_codex", worker_resume)
+
+    result = server._inject_text_into_session_router(sid, "target", mode="steer")
+
+    assert result["queued_consumed"] == 1
+    assert server._pending_resume_queue[sid] == ["target", "last"]
+
+
 def test_codex_router_propagates_explicit_replacement_to_resume(monkeypatch):
     resume = mock.Mock(return_value={"ok": True, "via": "codex-steer"})
     monkeypatch.setattr(server, "_control_plane_engine_call", lambda *a, **k: None)
@@ -661,12 +725,16 @@ def test_real_resume_worker_owns_acknowledged_ambiguous_steer(
             return None
         routed_args.append(dict(args))
         assert args["preserve_queued_steer"] is True
+        assert args["queued_steer_transaction_protocol"] == 1
         with mock.patch.dict(os.environ, {"CCC_WORKER_PROCESS": "1"}):
             return server.resume_session_codex(
                 args["session_id"], args["text"],
                 steer=args["steer"],
                 _from_queue=args["from_queue"],
                 preserve_queued_steer=args["preserve_queued_steer"],
+                queued_steer_transaction_protocol=args[
+                    "queued_steer_transaction_protocol"
+                ],
             )
 
     monkeypatch.setattr(server, "_control_plane_engine_call", route)
@@ -697,6 +765,7 @@ def test_worker_engine_forwards_explicit_replacement_semantics():
         "steer": True,
         "from_queue": False,
         "preserve_queued_steer": True,
+        "queued_steer_transaction_protocol": 1,
     })
 
     assert result["ok"]
@@ -706,7 +775,27 @@ def test_worker_engine_forwards_explicit_replacement_semantics():
         steer=True,
         _from_queue=False,
         preserve_queued_steer=True,
+        queued_steer_transaction_protocol=1,
     )
+
+
+def test_old_dashboard_new_worker_uses_native_compatibility_without_transaction(
+    monkeypatch,
+):
+    monkeypatch.setattr(server, "_control_plane_engine_call", lambda *a, **k: None)
+    transaction = mock.Mock(side_effect=AssertionError("worker reacquired transaction"))
+    native = mock.Mock(return_value={"ok": True, "via": "codex-steer"})
+    monkeypatch.setattr(server, "_codex_queued_steer_transaction", transaction)
+    monkeypatch.setattr(server, "_resume_session_codex_native_delivery", native)
+
+    result = server.resume_session_codex(
+        "rolling-upgrade", "target", steer=True,
+        queued_steer_transaction_protocol=0,
+    )
+
+    assert result["ok"]
+    transaction.assert_not_called()
+    native.assert_called_once_with("rolling-upgrade", "target", steer=True)
 
 
 def test_second_explicit_steer_cannot_deliver_after_first_claim(router_env):
@@ -894,6 +983,61 @@ def test_two_process_session_rmw_neither_resurrects_nor_loses_rows(tmp_path):
     assert update_writer.exitcode == 0
 
 
+def test_stale_same_session_enqueue_cannot_resurrect_worker_claim(tmp_path):
+    sid = "same-session-race"
+    pending_file = tmp_path / "pending-inputs.json"
+    pending_file.write_text(json.dumps({
+        "resume_queue": {sid: ["target", "keep"]},
+        "devin_steers": {},
+        "terminal_queue": {},
+        "auto_resume_opt_in": {},
+    }))
+    context = multiprocessing.get_context("spawn")
+    stale_loaded = context.Event()
+    claimed = context.Event()
+    release = context.Event()
+    released = context.Event()
+    enqueue_finished = context.Event()
+    results = context.Queue()
+    claimant = context.Process(
+        target=_cross_process_claim_worker,
+        args=(
+            pending_file, sid, stale_loaded, claimed, release, released, results,
+        ),
+    )
+    stale_enqueue = context.Process(
+        target=_cross_process_stale_enqueue_worker,
+        args=(
+            pending_file, sid, stale_loaded, claimed, enqueue_finished, results,
+        ),
+    )
+    claimant.start()
+    stale_enqueue.start()
+    assert claimed.wait(10)
+    time.sleep(0.1)
+    assert not enqueue_finished.is_set()
+    release.set()
+    outcomes = [results.get(timeout=10), results.get(timeout=10)]
+    claimant.join(10)
+    stale_enqueue.join(10)
+
+    assert released.is_set()
+    assert all(outcome[0] != "error" for outcome in outcomes), outcomes
+    payload = json.loads(pending_file.read_text())
+    assert payload["resume_queue"][sid] == ["keep", "new-row"]
+    assert claimant.exitcode == 0
+    assert stale_enqueue.exitcode == 0
+
+
+def test_pending_save_enforces_authoritative_session_transaction():
+    import inspect
+
+    source = inspect.getsource(server._save_pending_inputs)
+    assert "_codex_queue_pump_lock" in source
+    assert "_refresh_pending_inputs_for_session" in source
+    assert "_apply_pending_queue_delta" in source
+
+
 def test_all_pending_input_writers_identify_affected_sessions():
     repo_root = Path(server.__file__).resolve().parent
     offenders = []
@@ -1064,6 +1208,59 @@ def test_handoff_cleanup_failure_leaves_atomic_tombstone(monkeypatch, tmp_path):
     assert list(tmp_path.glob("*.delivered"))
 
 
+class _ImmediateThread:
+    def __init__(self, target, **kwargs):
+        self._target = target
+
+    def start(self):
+        self._target()
+
+
+def test_devin_proof_removal_persists_steer_field(monkeypatch, tmp_path):
+    sid = "devincli-proof-steer"
+    text_value = "steer target"
+    pending_file = tmp_path / "pending-inputs.json"
+    monkeypatch.setattr(server, "PENDING_INPUTS_FILE", pending_file)
+    server._pending_devin_steers[sid] = text_value
+    assert server._save_pending_inputs(
+        {sid}, include_devin_steers=True,
+    )
+    monkeypatch.setattr(server.threading, "Thread", _ImmediateThread)
+    monkeypatch.setattr(
+        server, "_devin_cli_prompt_history_count", lambda *args: 1,
+    )
+
+    server._start_devin_delivery_proof_watchdog(
+        SimpleNamespace(poll=lambda: None), sid, text_value, time.time(),
+        delivery_slot="steer",
+    )
+
+    payload = json.loads(pending_file.read_text())
+    assert sid not in payload["devin_steers"]
+
+
+def test_devin_unproven_restore_persists_steer_field(monkeypatch, tmp_path):
+    sid = "devincli-unproven-steer"
+    text_value = "restore target"
+    pending_file = tmp_path / "pending-inputs.json"
+    monkeypatch.setattr(server, "PENDING_INPUTS_FILE", pending_file)
+    assert server._save_pending_inputs(
+        {sid}, include_devin_steers=True,
+    )
+    monkeypatch.setattr(server.threading, "Thread", _ImmediateThread)
+    monkeypatch.setattr(
+        server, "_devin_cli_prompt_history_count", lambda *args: 0,
+    )
+
+    server._start_devin_delivery_proof_watchdog(
+        SimpleNamespace(poll=lambda: 1), sid, text_value, time.time(),
+        delivery_slot="steer",
+    )
+
+    payload = json.loads(pending_file.read_text())
+    assert payload["devin_steers"][sid] == text_value
+
+
 def test_codex_session_lock_releases_thread_lock_when_unlock_raises(
     monkeypatch, tmp_path,
 ):
@@ -1084,6 +1281,31 @@ def test_codex_session_lock_releases_thread_lock_when_unlock_raises(
     with pytest.raises(OSError, match="unlock failed"):
         lock.release()
     thread_lock.release.assert_called_once_with()
+
+
+def test_global_pending_file_lock_is_reentrant(tmp_path):
+    context = multiprocessing.get_context("spawn")
+    results = context.Queue()
+    process = context.Process(
+        target=_cross_process_nested_file_lock_worker,
+        args=(tmp_path / "pending-inputs.json", results),
+    )
+    process.start()
+    process.join(2)
+    if process.is_alive():
+        process.terminate()
+        process.join(5)
+    assert process.exitcode == 0
+    assert results.get(timeout=2)[0] == "nested"
+
+
+def test_missing_handoff_source_and_tombstone_clears_metadata(tmp_path):
+    missing = tmp_path / "gone.json"
+    item = server._PendingInputHandoff("target", "stale-metadata", missing)
+    server._pending_terminal_handoff_ids[item.handoff_id] = missing
+
+    assert server._complete_pending_input_handoff(item)
+    assert item.handoff_id not in server._pending_terminal_handoff_ids
 
 
 def test_finalizer_does_not_consume_a_second_copy_after_router_commit():

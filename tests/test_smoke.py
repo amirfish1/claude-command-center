@@ -17079,6 +17079,7 @@ class TestPendingInputs(unittest.TestCase):
             self.server._pending_resume_queue[sid] = ["first", "second"]
 
         with mock.patch.object(self.server, "_refresh_pending_inputs_for_session", return_value=True), \
+             mock.patch.object(self.server, "_save_pending_inputs", return_value=True), \
              mock.patch.object(self.server, "_pending_resume_retry_due", return_value=True), \
              mock.patch.object(self.server, "_resume_queue_engine_busy", return_value=False), \
              mock.patch.object(
@@ -17112,6 +17113,7 @@ class TestPendingInputs(unittest.TestCase):
             self.server._pending_resume_queue[sid] = ["keep"]
 
         with mock.patch.object(self.server, "_refresh_pending_inputs_for_session", return_value=True), \
+             mock.patch.object(self.server, "_save_pending_inputs", return_value=True), \
              mock.patch.object(self.server, "_pending_resume_retry_due", return_value=True), \
              mock.patch.object(self.server, "_resume_queue_engine_busy", return_value=False), \
              mock.patch.object(self.server, "resume_session_codex", return_value={"ok": False}):

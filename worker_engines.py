@@ -526,6 +526,9 @@ class EngineHost:
                     preserve_queued_steer=bool(
                         args.get("preserve_queued_steer")
                     ),
+                    queued_steer_transaction_protocol=int(
+                        args.get("queued_steer_transaction_protocol") or 0
+                    ),
                 )
             if operation == "approval":
                 return legacy._codex_app_server_resolve_approval(

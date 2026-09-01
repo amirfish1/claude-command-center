@@ -1407,11 +1407,20 @@ def _codex_queued_steer_transaction(
         return result
 
 
+_CODEX_QUEUED_STEER_TRANSACTION_PROTOCOL = 1
+
+
 def resume_session_codex(
     session_id, text, *, steer=False, _from_queue=False, idempotency_key=None,
     preserve_queued_steer=False, _native_delivery=False,
+    queued_steer_transaction_protocol=None,
 ):
     """Resume a dormant Codex thread with a new prompt via `codex exec resume`."""
+    transaction_protocol = (
+        _CODEX_QUEUED_STEER_TRANSACTION_PROTOCOL
+        if queued_steer_transaction_protocol is None
+        else int(queued_steer_transaction_protocol or 0)
+    )
     if not _native_delivery:
         routed = _core._control_plane_engine_call(
             "codex", "resume", {
@@ -1420,6 +1429,7 @@ def resume_session_codex(
                 "steer": bool(steer),
                 "from_queue": bool(_from_queue),
                 "preserve_queued_steer": bool(preserve_queued_steer),
+                "queued_steer_transaction_protocol": transaction_protocol,
             },
             idempotency_key=idempotency_key,
         )
@@ -1429,11 +1439,18 @@ def resume_session_codex(
     if not text:
         return {"ok": False, "error": "missing text"}
     if steer and not _native_delivery:
-        return _codex_queued_steer_transaction(
-            session_id,
-            text,
-            preserve_queued_steer=bool(preserve_queued_steer),
-            idempotency_key=idempotency_key,
+        if transaction_protocol >= _CODEX_QUEUED_STEER_TRANSACTION_PROTOCOL:
+            return _codex_queued_steer_transaction(
+                session_id,
+                text,
+                preserve_queued_steer=bool(preserve_queued_steer),
+                idempotency_key=idempotency_key,
+            )
+        delivery_kwargs = {"steer": True}
+        if idempotency_key:
+            delivery_kwargs["idempotency_key"] = idempotency_key
+        return _core._resume_session_codex_native_delivery(
+            session_id, text, **delivery_kwargs,
         )
     if not steer and not _from_queue:
         queued_behind_earlier = _core._queue_codex_resume(
