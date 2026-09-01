@@ -606,8 +606,32 @@ class KapTranscriptMapper:
 _KAP_FLAG_ENV = "CCC_KIMI_KAP"
 
 
+_KAP_FLAG_FILE = "kimi-kap.on"
+
+
+def kap_flag_path():
+    """Marker file that turns kap routing on for an already-running server.
+
+    The env var alone is not enough in practice: CCC servers run for days, so
+    an env-only flag means the only way to try kap is to restart the process
+    and drop every live session. The marker is checked per call, so touching
+    or removing it takes effect on the next poll.
+    """
+    try:
+        from ccc_server import core as _core
+        base = Path(_core.COMMAND_CENTER_STATE_DIR)
+    except Exception:
+        base = Path("~/.claude-command-center").expanduser()
+    return base / _KAP_FLAG_FILE
+
+
 def kap_enabled():
-    return os.environ.get(_KAP_FLAG_ENV, "").strip() in ("1", "true", "yes")
+    if os.environ.get(_KAP_FLAG_ENV, "").strip() in ("1", "true", "yes"):
+        return True
+    try:
+        return kap_flag_path().exists()
+    except OSError:
+        return False
 
 
 def kap_emit_to_ccc(sid, events, cwd=""):
