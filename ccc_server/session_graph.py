@@ -2714,6 +2714,28 @@ def session_live_status(session_id, session_cwd):
         return result
 
     if _core._is_kimi_session(session_id):
+        # kap-routed sessions report the daemon's own turn state, which is
+        # authoritative: it is the process holding the engine core, so its
+        # `busy` is the real answer rather than the ACP snapshot's inference.
+        # The distinct kind is also what the transport pill reads, so the user
+        # can see at a glance which transport is driving the conversation --
+        # and therefore whether steering will actually steer.
+        try:
+            from ccc_server import kap as _kap
+            if _kap.kap_routes(session_id):
+                status = _kap.kap_session_status(session_id) or {}
+                result["live"] = True
+                result["kind"] = "kap"
+                result["status"] = "running" if status.get("busy") else "idle"
+                result["cwd"] = session_cwd
+                result["match_count"] = 1
+                result["model"] = (
+                    (status.get("agent_config") or {}).get("model")
+                    or status.get("model")
+                )
+                return result
+        except Exception:
+            pass
         # ACP sessions have no per-session process; "live" means the harness
         # CLI is installed so the shared `kimi acp` subprocess can drive the
         # session. Status mirrors the ACP turn state for busy indicators.

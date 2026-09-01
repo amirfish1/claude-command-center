@@ -1948,6 +1948,33 @@ def _acp_prompt(
             ),
             "code": "unsupported_command",
         }
+    # Kimi over kap: real steering, when the daemon has this session.
+    #
+    # Everything below this block is the ACP path, whose whole steer story is
+    # the workaround described there. kap has none of that: the prompt is
+    # enqueued server-side with an id and `prompts:steer` promotes it into the
+    # turn that is running. Routing is per session and fails open -- flag off,
+    # daemon down, or a session the daemon cannot load all fall through to ACP.
+    if harness == "kimi":
+        from ccc_server import kap as _kap
+        try:
+            routed_kap = _kap.kap_routes(sid)
+        except Exception:
+            routed_kap = False
+        if routed_kap:
+            snap_cwd = ""
+            with _core._ACP_LOCK:
+                snap = _core._acp_session("kimi", sid, create=True) or {}
+                snap_cwd = snap.get("cwd") or ""
+            result = _kap.kap_prompt(
+                sid, text, visible_text=visible_text, cwd=snap_cwd, mode=mode,
+            )
+            if result.get("ok") or result.get("code") != "kap_unavailable":
+                return result
+            # The daemon went away between the routing check and the send.
+            # Forget it owns this session and let the ACP path below run.
+            _kap.kap_forget(sid)
+
     # ACP transports (kimi/grok) don't support IN-PLACE mid-turn steering the
     # way Codex/Claude do — a session/prompt sent while a turn is active gets
     # rejected by the agent itself ("Invalid request: another turn is
