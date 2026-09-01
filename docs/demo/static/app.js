@@ -3006,31 +3006,36 @@
 
   // Minimal markdown renderer for assistant text — tables, inline code, bold, headers
   function renderSessionStateBlock(body) {
-    // Parse `KEY: value` lines and emit a styled card. Unknown keys are
-    // shown verbatim. NEXT_STEP_USER renders as "→ <value>" without
-    // the key prefix because the arrow is the cue.
+    // Keep the machine-readable three-field footer, but render it as a
+    // decision aid: lead with the user's action and keep only the reason.
+    // DID becomes the primary line only when there is no user action.
     const lines = body.split('\n').map(s => s.trim()).filter(Boolean);
-    const rows = [];
+    const fields = {};
+    const otherRows = [];
+    const knownKeys = new Set(['DID', 'INSIGHT', 'NEXT_STEP_USER']);
     for (const ln of lines) {
       const m = ln.match(/^([A-Z_]+):\s*(.*)$/);
-      if (!m) {
-        rows.push('<div class="ssb-row ssb-other">' + escapeHtml(ln) + '</div>');
-        continue;
-      }
-      const key = m[1];
-      const val = escapeHtml(m[2]);
-      if (key === 'NEXT_STEP_USER') {
-        rows.push('<div class="ssb-row ssb-next"><span class="ssb-key">Next step user</span>' + val + '</div>');
-      } else if (key === 'DID') {
-        rows.push('<div class="ssb-row ssb-did"><span class="ssb-key">Did</span>' + val + '</div>');
-      } else if (key === 'INSIGHT') {
-        rows.push('<div class="ssb-row ssb-insight"><span class="ssb-key">Insight</span>' + val + '</div>');
+      if (m && knownKeys.has(m[1])) {
+        fields[m[1]] = m[2].trim();
+      } else if (m) {
+        otherRows.push('<div class="ssb-row ssb-other"><span class="ssb-key">' + escapeHtml(m[1].replace(/_/g, ' ').toLowerCase()) + '</span>' + escapeHtml(m[2]) + '</div>');
       } else {
-        // Fallback for any future keys: render the raw key name.
-        rows.push('<div class="ssb-row ssb-other"><span class="ssb-key">' + escapeHtml(key.replace(/_/g, ' ').toLowerCase()) + '</span>' + val + '</div>');
+        otherRows.push('<div class="ssb-row ssb-other">' + escapeHtml(ln) + '</div>');
       }
     }
-    return '<div class="session-state-block">' + rows.join('') + '</div>';
+
+    const rows = [];
+    const nextStep = fields.NEXT_STEP_USER || '';
+    const hasUserAction = !!nextStep && !/^(?:none|nothing|no action(?: is)? needed|n\/a|not applicable)[.!]?$/i.test(nextStep);
+    if (hasUserAction) {
+      rows.push('<div class="ssb-row ssb-primary ssb-next"><span class="ssb-key">Needs you</span>' + escapeHtml(nextStep) + '</div>');
+    } else if (fields.DID) {
+      rows.push('<div class="ssb-row ssb-primary ssb-done"><span class="ssb-key">Done</span>' + escapeHtml(fields.DID) + '</div>');
+    }
+    if (fields.INSIGHT) {
+      rows.push('<div class="ssb-row ssb-reason"><span class="ssb-key">Why</span>' + escapeHtml(fields.INSIGHT) + '</div>');
+    }
+    return '<div class="session-state-block">' + rows.concat(otherRows).join('') + '</div>';
   }
 
   function normalizeTaskNotificationField(value) {
