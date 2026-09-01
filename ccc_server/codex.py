@@ -3216,8 +3216,14 @@ def _ensure_codex_app_server(*, allow_stdio=True):
 
 def _codex_app_server_shutdown():
     """Close CCC's Codex app-server transport on server exit."""
-    with _core._CODEX_APP_SERVER_LOCK:
-        transport = _core._CODEX_APP_SERVER_TRANSPORT
+    # Pytest can remove ``server`` before its process-wide atexit callbacks
+    # run. At that point the state belongs to an unloaded module and there is
+    # no transport this callback can safely recover or close.
+    if "server" not in sys.modules:
+        return
+    lock = _core._CODEX_APP_SERVER_LOCK
+    with lock:
+        transport = getattr(_core, "_CODEX_APP_SERVER_TRANSPORT", None)
         _core._CODEX_APP_SERVER_PROC = None
         _core._CODEX_APP_SERVER_TRANSPORT = None
         _core._CODEX_APP_SERVER_INITIALIZED = False
@@ -9721,4 +9727,3 @@ def build_codex_stuck_summary(now=None, force=False):
         _codex_stuck_summary_cache["ts"] = cache_now
         _codex_stuck_summary_cache["value"] = dict(value)
     return value
-

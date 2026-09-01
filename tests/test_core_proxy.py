@@ -15,7 +15,7 @@ import sys
 import unittest
 
 import server  # noqa: F401  baseline: server imported once for the suite
-from ccc_server import acp, core, pending_inputs
+from ccc_server import acp, codex, core, pending_inputs
 
 
 class TestCoreProxyFallback(unittest.TestCase):
@@ -47,6 +47,15 @@ class TestCoreProxyFallback(unittest.TestCase):
     def test_missing_name_still_raises(self):
         with self.assertRaises(AttributeError):
             core._definitely_not_a_real_name_xyz_123
+
+    def test_codex_atexit_shutdown_ignores_unloaded_server_state(self):
+        """The atexit cleanup must not warn after test teardown removes server."""
+        saved = sys.modules.pop("server", None)
+        try:
+            codex._codex_app_server_shutdown()
+        finally:
+            if saved is not None:
+                sys.modules["server"] = saved
 
 
 if __name__ == "__main__":
