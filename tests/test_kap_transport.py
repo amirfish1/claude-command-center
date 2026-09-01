@@ -286,3 +286,146 @@ class TestKapDiscovery(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestKapTurnErrors(unittest.TestCase):
+    """A failed turn has to say why.
+
+    Observed on a live daemon: the account hit its provider quota and the only
+    human-readable explanation arrived as a step `endMessage` plus a notice
+    marker. Dropping those left the conversation simply stopping, which is the
+    worst possible rendering of a recoverable, user-actionable error.
+    """
+
+    QUOTA = ("[provider.auth_error] 403 You've reached your 5-hour usage "
+             "limit. Your quota will reset when the current 5-hour window ends.")
+
+    def _run(self, ops):
+        mapper = kap.KapTranscriptMapper()
+        events = []
+        for i, op in enumerate(ops):
+            events.extend(mapper.feed(_frame(
+                {"type": "transcript.ops", "agent_id": "main", "ops": [op]},
+                seq=i + 1)))
+        return events
+
+    def test_step_end_message_surfaces_on_the_result(self):
+        events = self._run([
+            {"op": "turn.upsert", "turn": {"turnId": "t0", "state": "running"}},
+            {"op": "step.upsert", "turnId": "t0", "step": {
+                "stepId": "t0.1", "state": "interrupted",
+                "endReason": "error", "endMessage": self.QUOTA}},
+            {"op": "turn.upsert", "turn": {"turnId": "t0", "state": "failed"}},
+        ])
+        result = [e for e in events if e["type"] == "result"][-1]
+        self.assertEqual(result["subtype"], "failed")
+        self.assertIn("5-hour usage limit", result["error"])
+
+    def test_turn_level_error_surfaces_when_there_is_no_step(self):
+        events = self._run([
+            {"op": "turn.upsert", "turn": {"turnId": "t0", "state": "running"}},
+            {"op": "turn.upsert", "turn": {"turnId": "t0", "state": "failed",
+                                           "error": "403 quota"}},
+        ])
+        self.assertEqual(
+            [e for e in events if e["type"] == "result"][-1]["error"], "403 quota")
+
+    def test_notice_marker_supplies_the_message(self):
+        events = self._run([
+            {"op": "turn.upsert", "turn": {"turnId": "t0", "state": "running"}},
+            {"op": "marker.upsert", "item": {
+                "marker": "notice",
+                "payload": {"level": "error", "message": self.QUOTA}}},
+            {"op": "turn.upsert", "turn": {"turnId": "t0", "state": "failed"}},
+        ])
+        self.assertIn("5-hour usage limit",
+                      [e for e in events if e["type"] == "result"][-1]["error"])
+
+    def test_a_clean_turn_carries_no_error_key(self):
+        events = self._run([
+            {"op": "turn.upsert", "turn": {"turnId": "t0", "state": "running"}},
+            {"op": "frame.upsert", "frame": {"frameId": "t0.1.f1",
+                                             "kind": "text", "text": "hi"}},
+            {"op": "turn.upsert", "turn": {"turnId": "t0", "state": "completed"}},
+        ])
+        self.assertNotIn("error", [e for e in events if e["type"] == "result"][-1])
+
+    def test_an_error_does_not_leak_into_the_next_turn(self):
+        mapper = kap.KapTranscriptMapper()
+        for i, op in enumerate([
+            {"op": "turn.upsert", "turn": {"turnId": "t0", "state": "running"}},
+            {"op": "turn.upsert", "turn": {"turnId": "t0", "state": "failed",
+                                           "error": "boom"}},
+            {"op": "turn.upsert", "turn": {"turnId": "t1", "state": "running"}},
+        ]):
+            mapper.feed(_frame({"type": "transcript.ops", "agent_id": "main",
+                                "ops": [op]}, seq=i + 1))
+        self.assertIsNone(mapper.error)
+
+
+class TestKapSteerRouting(unittest.TestCase):
+    """The point of the whole transport: a mid-turn send is a queued prompt
+    that gets promoted, not a cancelled turn that gets restarted."""
+
+    def setUp(self):
+        self.calls = []
+
+        def fake_request(method, path, body=None, timeout=30.0):
+            self.calls.append((method, path, body))
+            if path.endswith("/prompts") and method == "POST":
+                return {"prompt_id": "msg_123"}
+            return {}
+
+        self._orig = kap.kap_request
+        kap.kap_request = fake_request
+        self._orig_pump = kap.kap_ensure_pump
+        kap.kap_ensure_pump = lambda sid, cwd="": False
+        self._orig_emit = kap.kap_emit_to_ccc
+        kap.kap_emit_to_ccc = lambda sid, events, cwd="": 0
+
+    def tearDown(self):
+        kap.kap_request = self._orig
+        kap.kap_ensure_pump = self._orig_pump
+        kap.kap_emit_to_ccc = self._orig_emit
+
+    def test_steer_promotes_the_prompt_it_just_queued(self):
+        result = kap.kap_prompt("session_x", "hurry up", mode="steer")
+        self.assertTrue(result["ok"])
+        self.assertTrue(result["steered"])
+        self.assertEqual(
+            self.calls[-1],
+            ("POST", "/api/v1/sessions/session_x/prompts:steer",
+             {"prompt_ids": ["msg_123"]}))
+
+    def test_a_plain_send_never_calls_steer(self):
+        kap.kap_prompt("session_x", "hello", mode="send")
+        self.assertFalse(any("steer" in path for _, path, _ in self.calls))
+
+    def test_a_failed_steer_still_leaves_the_prompt_queued(self):
+        def boom(method, path, body=None, timeout=30.0):
+            if "steer" in path:
+                raise kap.KapError("nope")
+            return {"prompt_id": "msg_123"}
+
+        kap.kap_request = boom
+        result = kap.kap_prompt("session_x", "hurry up", mode="steer")
+        self.assertTrue(result["ok"])
+        self.assertFalse(result["steered"])
+        self.assertEqual(result["prompt_id"], "msg_123")
+
+    def test_a_dead_daemon_reports_kap_unavailable_so_acp_can_take_over(self):
+        def dead(method, path, body=None, timeout=30.0):
+            raise kap.KapUnavailable("no daemon")
+
+        kap.kap_request = dead
+        result = kap.kap_prompt("session_x", "hello")
+        self.assertFalse(result["ok"])
+        self.assertEqual(result["code"], "kap_unavailable")
+
+    def test_routing_is_off_whenever_the_flag_is_off(self):
+        orig = kap.kap_enabled
+        kap.kap_enabled = lambda: False
+        try:
+            self.assertFalse(kap.kap_routes("session_x"))
+        finally:
+            kap.kap_enabled = orig

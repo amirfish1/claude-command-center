@@ -437,6 +437,7 @@ class KapTranscriptMapper:
         self.activity = None
         self.busy = None
         self.end_reason = None
+        self.error = None
         self.last_seq = None
         self.epoch = None
 
@@ -446,6 +447,7 @@ class KapTranscriptMapper:
         self.frames = {}
         self.order = []
         self.end_reason = None
+        self.error = None
 
     def blocks(self):
         """Current turn's frames as CCC blocks, in arrival order."""
@@ -473,7 +475,14 @@ class KapTranscriptMapper:
                 "message_id": "%s-%s" % (self.prefix, self.turn_id or "0"),
                 "blocks": blocks,
             })
-        out.append({"type": "result", "subtype": subtype})
+        result = {"type": "result", "subtype": subtype}
+        if self.error:
+            # Without this the turn just stops. A quota 403 ("you've reached
+            # your 5-hour usage limit") arrives only as a step endMessage and
+            # a notice marker, so dropping it leaves the user staring at a
+            # dead conversation with nothing to act on.
+            result["error"] = self.error
+        out.append(result)
         self._reset_turn()
         return out
 
@@ -499,6 +508,8 @@ class KapTranscriptMapper:
                 return []
             if state in ("completed", "failed", "cancelled", "aborted"):
                 self.turn_state = state
+                if turn.get("error"):
+                    self.error = str(turn["error"])
                 # kap-server repeats the terminal turn.upsert; emit once.
                 if tid in self.emitted_turns:
                     return []
@@ -539,6 +550,21 @@ class KapTranscriptMapper:
                 entry["text"] = entry["text"][:offset] + text
             else:
                 entry["text"] += text
+            return []
+        if kind == "step.upsert":
+            # A step that ends in error carries the only human-readable
+            # explanation on the wire (`endMessage`); the turn.upsert that
+            # follows has the same text but arrives after the step, and a
+            # cancelled turn has no turn-level error at all.
+            step = op.get("step") or {}
+            if step.get("endReason") == "error" and step.get("endMessage"):
+                self.error = str(step["endMessage"])
+            return []
+        if kind == "marker.upsert":
+            item = op.get("item") or {}
+            payload = item.get("payload") or {}
+            if item.get("marker") == "notice" and payload.get("level") == "error":
+                self.error = str(payload.get("message") or self.error or "")
             return []
         if kind == "meta.merge":
             meta = op.get("meta") or {}
