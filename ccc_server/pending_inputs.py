@@ -55,6 +55,8 @@ _pending_terminal_input_lock = threading.Lock()
 _pending_terminal_handoff_ids: dict = {}  # watcher-local handoff_id → path
 _pending_input_recovery_registry = {}
 _pending_input_recovery_registry_lock = threading.Lock()
+_pending_primary_conflicts = {}
+_pending_primary_conflicts_lock = threading.Lock()
 _pending_metadata_backup_health = {
     "degraded": False,
     "last_error": None,
@@ -222,6 +224,68 @@ def _pending_inputs_metadata_backup_path():
     return _core.PENDING_INPUTS_FILE.with_suffix(".metadata.json")
 
 
+def _pending_primary_conflict_dir():
+    return _core.PENDING_INPUTS_FILE.with_suffix(".conflicts")
+
+
+def _serialize_pending_conflict_item(item):
+    value = {"text": str(item)}
+    pending_id = getattr(item, "pending_id", None)
+    handoff_id = getattr(item, "handoff_id", None)
+    if pending_id:
+        value["pending_id"] = str(pending_id)
+    if handoff_id:
+        value.update({
+            "handoff_id": str(handoff_id),
+            "handoff_path": str(getattr(item, "handoff_path", "") or ""),
+            "handoff_front": bool(getattr(item, "handoff_front", False)),
+        })
+    return value
+
+
+def _load_pending_primary_conflicts():
+    directory = _pending_primary_conflict_dir()
+    try:
+        paths = list(directory.glob("*.json"))
+    except OSError:
+        return
+    loaded = {}
+    for path in paths:
+        try:
+            record = json.loads(path.read_text())
+            sessions = record.get("sessions")
+            if (
+                not isinstance(record, dict)
+                or int(record.get("version") or 0) != 1
+                or not isinstance(sessions, dict)
+                or not str(record.get("intended_hash") or "")
+            ):
+                raise ValueError("invalid primary conflict record")
+            for sid, intended in sessions.items():
+                if str(sid) and isinstance(intended, dict):
+                    loaded[str(sid)] = {
+                        "session_id": str(sid),
+                        "intended": intended,
+                        "intended_hash": str(record["intended_hash"]),
+                        "error": str(record.get("error") or "commit uncertain"),
+                        "recorded_at": float(record.get("recorded_at") or 0),
+                        "path": str(path),
+                    }
+        except (OSError, ValueError, TypeError, json.JSONDecodeError):
+            try:
+                path.replace(path.with_suffix(".invalid"))
+            except OSError:
+                pass
+    if loaded:
+        with _pending_primary_conflicts_lock:
+            _pending_primary_conflicts.update(loaded)
+        newest = max(loaded.values(), key=lambda item: item["recorded_at"])
+        _pending_metadata_backup_health.update({
+            "durability_uncertain": True,
+            "durability_error": newest["error"],
+        })
+
+
 def _pending_input_claim_journal_dir():
     return _core.PENDING_INPUT_HANDOFF_DIR / "claim-recovery"
 
@@ -272,12 +336,28 @@ def _empty_pending_inputs_payload():
     }
 
 
-def _read_pending_inputs_payload_unlocked(*, missing_is_empty):
+def _read_pending_inputs_authority_unlocked(*, missing_is_empty):
+    """Read and normalize one immutable primary-file authority snapshot.
+
+    The raw digest and stat identity deliberately come from the same open file
+    descriptor as the JSON bytes.  Callers must not compose an authority
+    boundary from later path reads because a legacy writer can replace the
+    pathname between observations.
+    """
+    _load_pending_primary_conflicts()
     try:
-        primary_bytes = _core.PENDING_INPUTS_FILE.read_bytes()
+        with open(_core.PENDING_INPUTS_FILE, "rb") as primary_handle:
+            primary_bytes = primary_handle.read()
+            primary_stat = os.fstat(primary_handle.fileno())
         data = json.loads(primary_bytes)
     except FileNotFoundError:
-        return _empty_pending_inputs_payload() if missing_is_empty else None
+        if not missing_is_empty:
+            return None
+        return {
+            "payload": _empty_pending_inputs_payload(),
+            "primary_hash": None,
+            "primary_stat": None,
+        }
     except (OSError, json.JSONDecodeError):
         return None
     if not isinstance(data, dict):
@@ -289,8 +369,10 @@ def _read_pending_inputs_payload_unlocked(*, missing_is_empty):
         _pending_safe_int(primary_sidecar.get("generation"), 0)
         if _pending_sidecar_valid_for_payload(primary_sidecar, payload) else 0
     )
+    backup_path = _pending_inputs_metadata_backup_path()
+    backup_present = backup_path.exists()
     try:
-        backup = json.loads(_pending_inputs_metadata_backup_path().read_text())
+        backup = json.loads(backup_path.read_text())
     except (OSError, json.JSONDecodeError):
         backup = None
     if isinstance(backup, dict):
@@ -314,6 +396,7 @@ def _read_pending_inputs_payload_unlocked(*, missing_is_empty):
         ).hexdigest()
         if backup_integrity != expected_integrity:
             backup = None
+    backup_generation = 0
     if isinstance(backup, dict):
         backup_sidecar = backup.get("pending_entry_ids")
         backup_generation = _pending_safe_int(backup.get("generation"), 0)
@@ -377,7 +460,50 @@ def _read_pending_inputs_payload_unlocked(*, missing_is_empty):
     for field in ("resume_queue", "terminal_queue"):
         if not isinstance(revisions.get(field), dict):
             revisions[field] = {}
-    return payload
+    backup_matches_primary = bool(
+        isinstance(backup, dict)
+        and backup.get("primary_hash") == primary_hash
+    )
+    if backup_present and not isinstance(backup, dict):
+        _pending_metadata_backup_health.update({
+            "degraded": True,
+            "last_error": "metadata_backup_invalid",
+            "last_error_at": time.time(),
+            "primary_generation": primary_generation,
+            "backup_generation": 0,
+        })
+    elif isinstance(backup, dict) and not backup_matches_primary:
+        _pending_metadata_backup_health.update({
+            "degraded": True,
+            "last_error": "metadata_backup_stale",
+            "last_error_at": time.time(),
+            "primary_generation": primary_generation,
+            "backup_generation": backup_generation,
+        })
+    elif isinstance(backup, dict):
+        _pending_metadata_backup_health.update({
+            "degraded": False,
+            "last_error": None,
+            "last_error_at": None,
+            "primary_generation": primary_generation,
+            "backup_generation": backup_generation,
+        })
+    return {
+        "payload": payload,
+        "primary_hash": primary_hash,
+        "primary_stat": (
+            primary_stat.st_ino,
+            primary_stat.st_mtime_ns,
+            primary_stat.st_size,
+        ),
+    }
+
+
+def _read_pending_inputs_payload_unlocked(*, missing_is_empty):
+    snapshot = _read_pending_inputs_authority_unlocked(
+        missing_is_empty=missing_is_empty,
+    )
+    return snapshot["payload"] if snapshot is not None else None
 
 
 def _pending_inputs_session_snapshot(session_id):
@@ -793,6 +919,9 @@ def _keep_pending_input_claim_in_memory(claim):
 
 
 def _pending_input_recovery_blocked(session_id):
+    with _pending_primary_conflicts_lock:
+        if _pending_primary_conflicts.get(session_id):
+            return True
     with _pending_input_recovery_registry_lock:
         if _pending_input_recovery_registry.get(session_id):
             return True
@@ -815,6 +944,12 @@ def _pending_input_recovery_blocked(session_id):
 
 
 def _pending_input_recovery_status(session_id):
+    with _pending_primary_conflicts_lock:
+        primary_conflict = _pending_primary_conflicts.get(session_id)
+        primary_conflict_count = int(primary_conflict is not None)
+        primary_conflict_volatile_count = int(
+            primary_conflict is not None and not primary_conflict.get("path")
+        )
     with _pending_input_recovery_registry_lock:
         volatile_count = len(
             _pending_input_recovery_registry.get(session_id) or []
@@ -823,8 +958,14 @@ def _pending_input_recovery_status(session_id):
     return {
         "blocked": blocked,
         "volatile_claims": volatile_count,
-        "recovery_volatile": volatile_count > 0,
-        "restart_safe": volatile_count == 0,
+        "primary_conflicts": primary_conflict_count,
+        "primary_conflicts_volatile": primary_conflict_volatile_count,
+        "recovery_volatile": (
+            volatile_count > 0 or primary_conflict_volatile_count > 0
+        ),
+        "restart_safe": (
+            volatile_count == 0 and primary_conflict_volatile_count == 0
+        ),
         "pending_schema_version": 2,
         "metadata_backup": dict(_pending_metadata_backup_health),
     }
@@ -1131,9 +1272,104 @@ def _normalize_pending_session_ids(affected_session_ids):
         if sid is not None and str(sid)
     }
 
+
+def _pending_authority_matches(snapshot, expected_authority):
+    if not expected_authority:
+        return True
+    if snapshot.get("primary_hash") != expected_authority.get("primary_hash"):
+        return False
+    payload = snapshot.get("payload") or {}
+    current_revisions = payload.get("pending_queue_revisions") or {}
+    for field, expected_sessions in (
+        expected_authority.get("revisions") or {}
+    ).items():
+        current_sessions = current_revisions.get(field) or {}
+        for sid, expected_revision in (expected_sessions or {}).items():
+            if _pending_safe_int(current_sessions.get(sid), 0) != _pending_safe_int(
+                expected_revision, 0
+            ):
+                return False
+    return True
+
+
+def _record_pending_primary_conflict(affected, final, intended_hash, error):
+    recorded_at = time.time()
+    sessions = {}
+    with _pending_primary_conflicts_lock:
+        for sid in affected:
+            intended = {
+                "resume": [
+                    _serialize_pending_conflict_item(item)
+                    for item in final[sid]["resume"]
+                ],
+                "terminal": [
+                    _serialize_pending_conflict_item(item)
+                    for item in final[sid]["terminal"]
+                ],
+                "steer": final[sid]["steer"],
+                "opt_in": final[sid]["opt_in"],
+            }
+            sessions[sid] = intended
+            _pending_primary_conflicts[sid] = {
+                "session_id": sid,
+                "intended": intended,
+                "intended_hash": intended_hash,
+                "error": str(error),
+                "recorded_at": recorded_at,
+            }
+    conflict_record = {
+        "version": 1,
+        "intended_hash": intended_hash,
+        "error": str(error),
+        "recorded_at": recorded_at,
+        "sessions": sessions,
+    }
+    conflict_dir = _pending_primary_conflict_dir()
+    conflict_tmp = None
+    try:
+        conflict_dir.mkdir(parents=True, exist_ok=True)
+        conflict_id = hashlib.sha256(
+            json.dumps(
+                conflict_record, sort_keys=True, separators=(",", ":"),
+            ).encode("utf-8")
+        ).hexdigest()
+        conflict_fd, conflict_name = tempfile.mkstemp(
+            prefix=".primary-conflict-", suffix=".tmp", dir=conflict_dir,
+        )
+        conflict_tmp = Path(conflict_name)
+        with os.fdopen(conflict_fd, "w") as conflict_handle:
+            json.dump(conflict_record, conflict_handle, sort_keys=True)
+            conflict_handle.flush()
+            os.fsync(conflict_handle.fileno())
+        conflict_path = conflict_dir / f"{conflict_id}.json"
+        os.replace(conflict_tmp, conflict_path)
+        conflict_tmp = None
+        directory_fd = os.open(conflict_dir, os.O_RDONLY)
+        try:
+            os.fsync(directory_fd)
+        finally:
+            os.close(directory_fd)
+        with _pending_primary_conflicts_lock:
+            for sid in affected:
+                _pending_primary_conflicts[sid]["path"] = str(conflict_path)
+    except OSError:
+        # The in-memory record remains a fail-closed volatile fallback.
+        pass
+    finally:
+        if conflict_tmp is not None:
+            try:
+                conflict_tmp.unlink(missing_ok=True)
+            except OSError:
+                pass
+    _pending_metadata_backup_health.update({
+        "durability_uncertain": True,
+        "durability_error": str(error),
+    })
+
 def _persist_pending_inputs_current(
     affected, *, include_devin_steers=False, include_auto_resume=False,
     applied_journal_id=None, changed_queue_fields=None,
+    expected_authority=None,
 ):
     for sid in affected:
         _repair_pending_entry_ids_for_session(sid)
@@ -1143,9 +1379,17 @@ def _persist_pending_inputs_current(
     primary_committed = False
     try:
         with _pending_inputs_file_exclusive_lock():
-            payload = _read_pending_inputs_payload_unlocked(missing_is_empty=True)
-            if payload is None:
+            authority = _read_pending_inputs_authority_unlocked(
+                missing_is_empty=True,
+            )
+            if authority is None:
                 return False
+            if not _pending_authority_matches(authority, expected_authority):
+                return {
+                    "ok": False,
+                    "code": "pending_input_authority_conflict",
+                }
+            payload = authority["payload"]
             for sid in affected:
                 resume_entries = [
                     item for item in final[sid]["resume"]
@@ -1226,20 +1470,35 @@ def _persist_pending_inputs_current(
                     for _, journal_id in removable[:max(0, len(ledger) - 512)]:
                         ledger.pop(journal_id, None)
             _core.PENDING_INPUTS_FILE.parent.mkdir(parents=True, exist_ok=True)
+            intended_primary_bytes = json.dumps(
+                payload, indent=2, sort_keys=True,
+            ).encode("utf-8")
+            intended_primary_hash = hashlib.sha256(
+                intended_primary_bytes
+            ).hexdigest()
             fd, tmp_name = tempfile.mkstemp(
                 prefix=f".{_core.PENDING_INPUTS_FILE.name}.",
                 suffix=".tmp", dir=_core.PENDING_INPUTS_FILE.parent,
             )
             tmp_path = Path(tmp_name)
-            with os.fdopen(fd, "w") as f:
-                json.dump(payload, f, indent=2, sort_keys=True)
+            with os.fdopen(fd, "wb") as f:
+                f.write(intended_primary_bytes)
                 f.flush()
                 os.fsync(f.fileno())
+            if expected_authority:
+                pre_replace_authority = _read_pending_inputs_authority_unlocked(
+                    missing_is_empty=True,
+                )
+                if not _pending_authority_matches(
+                    pre_replace_authority or {}, expected_authority,
+                ):
+                    return {
+                        "ok": False,
+                        "code": "pending_input_authority_conflict",
+                    }
             os.replace(tmp_path, _core.PENDING_INPUTS_FILE)
             tmp_path = None
-            intended_primary_hash = hashlib.sha256(
-                _core.PENDING_INPUTS_FILE.read_bytes()
-            ).hexdigest()
+            directory_fsync_error = None
             try:
                 primary_directory_fd = os.open(
                     _core.PENDING_INPUTS_FILE.parent, os.O_RDONLY
@@ -1248,23 +1507,40 @@ def _persist_pending_inputs_current(
                     os.fsync(primary_directory_fd)
                 finally:
                     os.close(primary_directory_fd)
-                _pending_metadata_backup_health.update({
-                    "durability_uncertain": False,
-                    "durability_error": None,
-                })
+                with _pending_primary_conflicts_lock:
+                    unresolved_primary_conflict = bool(
+                        _pending_primary_conflicts
+                    )
+                if not unresolved_primary_conflict:
+                    _pending_metadata_backup_health.update({
+                        "durability_uncertain": False,
+                        "durability_error": None,
+                    })
             except OSError as fsync_error:
-                try:
-                    readback_hash = hashlib.sha256(
-                        _core.PENDING_INPUTS_FILE.read_bytes()
-                    ).hexdigest()
-                except OSError:
-                    raise fsync_error
-                if readback_hash != intended_primary_hash:
-                    raise fsync_error
-                primary_committed = True
+                directory_fsync_error = fsync_error
+            try:
+                with open(_core.PENDING_INPUTS_FILE, "rb") as readback_handle:
+                    readback_bytes = readback_handle.read()
+                    os.fstat(readback_handle.fileno())
+                readback_hash = hashlib.sha256(readback_bytes).hexdigest()
+            except OSError as readback_error:
+                readback_hash = None
+                conflict_error = readback_error
+            else:
+                conflict_error = "primary readback did not match intended commit"
+            if readback_hash != intended_primary_hash:
+                _record_pending_primary_conflict(
+                    affected, final, intended_primary_hash, conflict_error,
+                )
+                return {
+                    "ok": False,
+                    "code": "pending_primary_commit_uncertain",
+                    "committed": True,
+                }
+            if directory_fsync_error is not None:
                 _pending_metadata_backup_health.update({
                     "durability_uncertain": True,
-                    "durability_error": str(fsync_error),
+                    "durability_error": str(directory_fsync_error),
                 })
             primary_committed = True
             _pending_metadata_backup_health["primary_generation"] = int(
@@ -1315,6 +1591,7 @@ def _persist_pending_inputs_current(
                 _pending_metadata_backup_health.update({
                     "degraded": False,
                     "last_error": None,
+                    "last_error_at": None,
                     "backup_generation": backup_body["generation"],
                 })
             except OSError as backup_error:
@@ -1347,6 +1624,7 @@ def _persist_pending_inputs_current(
 def _mutate_pending_inputs(
     affected_session_ids, mutation, *, include_devin_steers=False,
     include_auto_resume=False, applied_journal_id=None, on_commit=None,
+    expected_authority=None,
 ):
     """Run one explicit mutation against refreshed authoritative sessions."""
     affected = _normalize_pending_session_ids(affected_session_ids)
@@ -1358,6 +1636,21 @@ def _mutate_pending_inputs(
         for sid in sorted(affected):
             if not _core._refresh_pending_inputs_for_session(sid):
                 return {"ok": False, "code": "pending_input_refresh_failed"}
+        if expected_authority:
+            try:
+                with _pending_inputs_file_exclusive_lock():
+                    current_authority = _read_pending_inputs_authority_unlocked(
+                        missing_is_empty=True,
+                    )
+            except OSError:
+                return {"ok": False, "code": "pending_input_refresh_failed"}
+            if not _pending_authority_matches(
+                current_authority or {}, expected_authority,
+            ):
+                return {
+                    "ok": False,
+                    "code": "pending_input_authority_conflict",
+                }
         snapshots = {
             sid: _pending_inputs_session_snapshot(sid)
             for sid in affected
@@ -1405,22 +1698,41 @@ def _mutate_pending_inputs(
                     ("terminal_queue", "terminal"),
                 ) if current[key] != snapshot[key]
             }
-        ok = _core._persist_pending_inputs_current(
+        persist_result = _core._persist_pending_inputs_current(
             affected,
             include_devin_steers=include_devin_steers,
             include_auto_resume=include_auto_resume,
             applied_journal_id=applied_journal_id,
             changed_queue_fields=changed_queue_fields,
+            expected_authority=expected_authority,
         )
-        if not ok:
+        persist_ok = (
+            bool(persist_result.get("ok"))
+            if isinstance(persist_result, dict) else bool(persist_result)
+        )
+        if not persist_ok:
+            persist_code = (
+                persist_result.get("code")
+                if isinstance(persist_result, dict) else None
+            )
+            if persist_code == "pending_primary_commit_uncertain":
+                return {
+                    "ok": False,
+                    "code": "pending_primary_commit_uncertain",
+                }
             restore_memory()
-            return {"ok": False, "code": "pending_input_persist_failed"}
+            return {
+                "ok": False,
+                "code": persist_code or "pending_input_persist_failed",
+            }
         if on_commit is not None:
             on_commit()
         return {"ok": True, "value": value}
 
 
-def _apply_pending_input_operations(session_id, operations):
+def _apply_pending_input_operations(
+    session_id, operations, *, expected_authority=None,
+):
     """Apply explicit FIFO/flag operations to one authoritative session."""
     include_devin = any(op.get("field") == "devin_steer" for op in operations)
     include_auto = any(op.get("field") == "auto_resume" for op in operations)
@@ -1558,6 +1870,7 @@ def _apply_pending_input_operations(session_id, operations):
         {session_id}, mutate,
         include_devin_steers=include_devin,
         include_auto_resume=include_auto,
+        expected_authority=expected_authority,
     )
 
 
@@ -2107,21 +2420,14 @@ def _snapshot_matching_pending_input_id_quick(session_id, text):
         return None
     try:
         with _pending_inputs_file_exclusive_lock():
-            payload = _read_pending_inputs_payload_unlocked(missing_is_empty=True)
-            primary_hash = hashlib.sha256(
-                _core.PENDING_INPUTS_FILE.read_bytes()
-            ).hexdigest()
-            try:
-                primary_stat = _core.PENDING_INPUTS_FILE.stat()
-                stat_identity = (
-                    primary_stat.st_ino,
-                    primary_stat.st_mtime_ns,
-                    primary_stat.st_size,
-                )
-            except OSError:
-                stat_identity = None
+            authority = _read_pending_inputs_authority_unlocked(
+                missing_is_empty=True,
+            )
     except OSError:
         return None
+    payload = authority["payload"]
+    primary_hash = authority["primary_hash"]
+    stat_identity = authority["primary_stat"]
     sidecar = (payload or {}).get("pending_entry_ids") or {}
     for field in ("resume_queue", "terminal_queue"):
         rows = ((payload or {}).get(field) or {}).get(session_id, [])
@@ -2185,18 +2491,14 @@ def _consume_deferred_pending_snapshot(session_id, snapshot):
     with _core._codex_queue_pump_lock(session_id):
         try:
             with _pending_inputs_file_exclusive_lock():
-                authority = _read_pending_inputs_payload_unlocked(missing_is_empty=True)
-                current_hash = hashlib.sha256(
-                    _core.PENDING_INPUTS_FILE.read_bytes()
-                ).hexdigest()
-                current_stat = _core.PENDING_INPUTS_FILE.stat()
-                current_stat_identity = (
-                    current_stat.st_ino,
-                    current_stat.st_mtime_ns,
-                    current_stat.st_size,
+                authority_snapshot = _read_pending_inputs_authority_unlocked(
+                    missing_is_empty=True,
                 )
         except OSError:
             return 0
+        authority = authority_snapshot["payload"]
+        current_hash = authority_snapshot["primary_hash"]
+        current_stat_identity = authority_snapshot["primary_stat"]
         field_name = (
             "resume_queue"
             if snapshot.get("queue_name") == "resume" else "terminal_queue"
@@ -2213,12 +2515,17 @@ def _consume_deferred_pending_snapshot(session_id, snapshot):
             or snapshot.get("primary_hash") != current_hash
         ):
             return 0
+        expected_authority = {
+            "primary_hash": current_hash,
+            "revisions": {field_name: {session_id: current_revision}},
+        }
         if not _core._refresh_pending_inputs_for_session(session_id):
             return 0
         queue_name = snapshot.get("queue_name")
         if snapshot.get("pending_id"):
             return _core._consume_pending_input_id(
                 session_id, snapshot["pending_id"], queue_name,
+                expected_authority=expected_authority,
             )
         queue, lock = (
             (_core._pending_resume_queue, _core._pending_resume_lock)
@@ -2240,8 +2547,26 @@ def _consume_deferred_pending_snapshot(session_id, snapshot):
         ):
             return 0
         pending_id = getattr(items[index], "pending_id", None)
+        try:
+            with _pending_inputs_file_exclusive_lock():
+                migrated_authority = _read_pending_inputs_authority_unlocked(
+                    missing_is_empty=True,
+                )
+        except OSError:
+            return 0
+        migrated_revision = _pending_safe_int(
+            (((migrated_authority["payload"].get(
+                "pending_queue_revisions"
+            ) or {}).get(field_name) or {}).get(session_id)),
+            0,
+        )
+        expected_authority = {
+            "primary_hash": migrated_authority["primary_hash"],
+            "revisions": {field_name: {session_id: migrated_revision}},
+        }
         return _core._consume_pending_input_id(
             session_id, pending_id, queue_name,
+            expected_authority=expected_authority,
         ) if pending_id else 0
 
 
@@ -2252,19 +2577,25 @@ def _snapshot_matching_pending_input_id(session_id, text):
         return _core._snapshot_matching_pending_input_id_quick(session_id, text)
 
 
-def _consume_pending_input_id(session_id, pending_id, queue_name=None):
+def _consume_pending_input_id(
+    session_id, pending_id, queue_name=None, *, expected_authority=None,
+):
     if not session_id or not pending_id:
         return 0
     fields = (queue_name,) if queue_name in ("resume", "terminal") else (
         "resume", "terminal",
     )
     for field in fields:
-        transaction = _core._apply_pending_input_operations(session_id, [{
-            "field": field,
-            "action": "remove_matching",
-            "identity": "pending_id",
-            "match": str(pending_id),
-        }])
+        transaction = _core._apply_pending_input_operations(
+            session_id,
+            [{
+                "field": field,
+                "action": "remove_matching",
+                "identity": "pending_id",
+                "match": str(pending_id),
+            }],
+            expected_authority=expected_authority,
+        )
         removed = ((transaction.get("value") or [None])[0])
         if transaction.get("ok") and removed is not None:
             return 1

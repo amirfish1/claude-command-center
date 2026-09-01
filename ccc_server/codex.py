@@ -2207,19 +2207,9 @@ def _reconcile_codex_delivery_ack_nonblocking(session_id, text):
     pending = _core._snapshot_matching_pending_input_id_quick(session_id, text)
     if not pending:
         return 0
-    target = (
-        _core._consume_pending_input_id
-        if pending.get("pending_id")
-        else _core._consume_deferred_pending_snapshot
-    )
-    args = (
-        (session_id, pending["pending_id"], pending["queue_name"])
-        if pending.get("pending_id")
-        else (session_id, pending)
-    )
     threading.Thread(
-        target=target,
-        args=args,
+        target=_core._consume_deferred_pending_snapshot,
+        args=(session_id, pending),
         daemon=True,
         name=f"codex-ack-reconcile-{str(session_id)[:8]}",
     ).start()

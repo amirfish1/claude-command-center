@@ -142,6 +142,7 @@ def clean_pending_queues(monkeypatch):
     server._pending_resume_queue.clear()
     server._pending_terminal_input_queue.clear()
     server._pending_terminal_handoff_ids.clear()
+    server._pending_primary_conflicts.clear()
     with server._CODEX_APP_SERVER_LOCK:
         server._CODEX_APP_SERVER_THREAD_STATE.clear()
         server._CODEX_APP_SERVER_TURN_THREAD.clear()
@@ -154,6 +155,7 @@ def clean_pending_queues(monkeypatch):
     server._pending_resume_queue.clear()
     server._pending_terminal_input_queue.clear()
     server._pending_terminal_handoff_ids.clear()
+    server._pending_primary_conflicts.clear()
     with server._CODEX_APP_SERVER_LOCK:
         server._CODEX_APP_SERVER_THREAD_STATE.clear()
         server._CODEX_APP_SERVER_TURN_THREAD.clear()
@@ -1541,6 +1543,267 @@ def test_persist_failure_rolls_back_memory_and_hides_value(monkeypatch, tmp_path
     assert not result["ok"]
     assert "value" not in result
     assert server._pending_resume_queue[sid] == ["first", "second"]
+
+
+def test_authority_snapshot_hash_and_stat_come_from_one_open_fd(
+    monkeypatch, tmp_path,
+):
+    pending_file = tmp_path / "pending.json"
+    monkeypatch.setattr(server, "PENDING_INPUTS_FILE", pending_file)
+    pending_file.write_text(json.dumps({
+        "resume_queue": {"authority-fd": ["old"]},
+        "terminal_queue": {},
+    }))
+
+    with server._pending_inputs_file_exclusive_lock():
+        snapshot = server._read_pending_inputs_authority_unlocked(
+            missing_is_empty=False,
+        )
+
+    assert snapshot["payload"]["resume_queue"]["authority-fd"] == ["old"]
+    assert snapshot["primary_hash"] == __import__("hashlib").sha256(
+        pending_file.read_bytes()
+    ).hexdigest()
+    current = pending_file.stat()
+    assert snapshot["primary_stat"] == (
+        current.st_ino, current.st_mtime_ns, current.st_size,
+    )
+
+
+def test_compare_and_mutate_rejects_stale_primary_authority(
+    monkeypatch, tmp_path,
+):
+    sid = "expected-authority-conflict"
+    pending_file = tmp_path / "pending.json"
+    monkeypatch.setattr(server, "PENDING_INPUTS_FILE", pending_file)
+    server._pending_resume_queue[sid] = ["captured", "newer"]
+    assert server._save_pending_inputs({sid})
+
+    result = server._mutate_pending_inputs(
+        {sid},
+        lambda: server._pending_resume_queue[sid].pop(0),
+        expected_authority={
+            "primary_hash": "0" * 64,
+            "revisions": {"resume_queue": {sid: 0}},
+        },
+    )
+
+    assert result == {"ok": False, "code": "pending_input_authority_conflict"}
+    assert server._pending_resume_queue[sid] == ["captured", "newer"]
+    assert json.loads(pending_file.read_text())["resume_queue"][sid] == [
+        "captured", "newer",
+    ]
+
+
+def test_compare_and_mutate_rechecks_after_temp_fsync_before_replace(
+    monkeypatch, tmp_path,
+):
+    import ccc_server.pending_inputs as pending_inputs_module
+
+    sid = "expected-authority-pre-replace"
+    pending_file = tmp_path / "pending.json"
+    monkeypatch.setattr(server, "PENDING_INPUTS_FILE", pending_file)
+    server._pending_resume_queue[sid] = ["captured", "tail"]
+    assert server._save_pending_inputs({sid})
+    with server._pending_inputs_file_exclusive_lock():
+        captured = server._read_pending_inputs_authority_unlocked(
+            missing_is_empty=False,
+        )
+    expected = {
+        "primary_hash": captured["primary_hash"],
+        "revisions": {"resume_queue": {sid: 0}},
+    }
+    newer = json.loads(pending_file.read_text())
+    newer["resume_queue"][sid] = ["new-writer"]
+    newer["pending_queue_revisions"]["resume_queue"][sid] = 1
+    real_read = server._read_pending_inputs_authority_unlocked
+    reads = {"count": 0}
+
+    def interleaving_read(*, missing_is_empty):
+        reads["count"] += 1
+        snapshot = real_read(missing_is_empty=missing_is_empty)
+        if reads["count"] == 2:
+            pending_file.write_text(json.dumps(newer, indent=2, sort_keys=True))
+        return snapshot
+
+    monkeypatch.setattr(
+        pending_inputs_module,
+        "_read_pending_inputs_authority_unlocked",
+        interleaving_read,
+    )
+    result = server._mutate_pending_inputs(
+        {sid}, lambda: server._pending_resume_queue[sid].pop(0),
+        expected_authority=expected,
+    )
+
+    assert result == {"ok": False, "code": "pending_input_authority_conflict"}
+    assert reads["count"] >= 3
+    assert json.loads(pending_file.read_text())["resume_queue"][sid] == [
+        "new-writer",
+    ]
+
+
+def test_deferred_exact_id_removal_rechecks_authority_before_write(
+    monkeypatch, tmp_path,
+):
+    sid = "deferred-compare-and-mutate"
+    pending_file = tmp_path / "pending.json"
+    monkeypatch.setattr(server, "PENDING_INPUTS_FILE", pending_file)
+    server._pending_resume_queue[sid] = ["same", "tail"]
+    assert server._save_pending_inputs({sid})
+    snapshot = server._snapshot_matching_pending_input_id_quick(sid, "same")
+    assert snapshot["pending_id"]
+    newer = json.loads(pending_file.read_text())
+    newer["resume_queue"][sid] = ["same", "newer"]
+    newer["pending_entry_ids"]["resume_queue"][sid] = [
+        {"id": "new-row-id", "fingerprint": server._pending_text_fingerprint("same")},
+        {"id": "new-tail-id", "fingerprint": server._pending_text_fingerprint("newer")},
+    ]
+    revisions = newer["pending_queue_revisions"]["resume_queue"]
+    revisions[sid] = int(revisions.get(sid) or 0) + 1
+    refresh_calls = {"count": 0}
+
+    def replace_during_refresh(_session_id):
+        refresh_calls["count"] += 1
+        if refresh_calls["count"] == 1:
+            pending_file.write_text(json.dumps(newer, indent=2, sort_keys=True))
+        return True
+
+    monkeypatch.setattr(
+        server, "_refresh_pending_inputs_for_session", replace_during_refresh,
+    )
+
+    assert server._consume_deferred_pending_snapshot(sid, snapshot) == 0
+    assert json.loads(pending_file.read_text())["resume_queue"][sid] == [
+        "same", "newer",
+    ]
+
+
+def test_busy_reader_defers_stable_id_with_full_authority_snapshot(monkeypatch):
+    sid = "busy-reader-authority"
+    pending = {
+        "queue_name": "resume",
+        "pending_id": "captured-id",
+        "revision": 7,
+        "primary_hash": "a" * 64,
+        "primary_stat": (1, 2, 3),
+    }
+
+    class BusyOwnership:
+        def acquire(self, blocking=True):
+            assert blocking is False
+            return False
+
+    started = {}
+
+    class ImmediateThread:
+        def __init__(self, *, target, args, **_kwargs):
+            started["target"] = target
+            started["args"] = args
+
+        def start(self):
+            started["started"] = True
+
+    monkeypatch.setattr(server, "_codex_queue_pump_lock", lambda _sid: BusyOwnership())
+    monkeypatch.setattr(
+        server, "_snapshot_matching_pending_input_id_quick",
+        lambda *_args: pending,
+    )
+    monkeypatch.setattr(threading, "Thread", ImmediateThread)
+
+    assert server._reconcile_codex_delivery_ack_nonblocking(sid, "same") == 0
+    assert started == {
+        "target": server._consume_deferred_pending_snapshot,
+        "args": (sid, pending),
+        "started": True,
+    }
+
+
+def test_post_replace_old_writer_conflict_blocks_without_rollback_or_retry(
+    monkeypatch, tmp_path,
+):
+    sid = "post-replace-authority-conflict"
+    pending_file = tmp_path / "pending.json"
+    monkeypatch.setattr(server, "PENDING_INPUTS_FILE", pending_file)
+    server._pending_resume_queue[sid] = ["captured", "later"]
+    assert server._save_pending_inputs({sid})
+    old_writer_payload = json.loads(pending_file.read_text())
+    old_writer_payload["resume_queue"][sid] = ["old-writer"]
+    real_replace = os.replace
+    replaced = {"primary": 0}
+
+    def replace_then_clobber(source, destination):
+        real_replace(source, destination)
+        if Path(destination) == pending_file:
+            replaced["primary"] += 1
+            pending_file.write_text(json.dumps(old_writer_payload))
+
+    monkeypatch.setattr(os, "replace", replace_then_clobber)
+    result = server._apply_pending_input_operations(sid, [{
+        "field": "resume", "action": "pop_head",
+    }])
+
+    assert result["ok"] is False
+    assert result["code"] == "pending_primary_commit_uncertain"
+    assert replaced["primary"] == 1
+    assert server._pending_resume_queue[sid] == ["later"]
+    assert server._pending_input_recovery_blocked(sid)
+    status = server._pending_input_recovery_status(sid)
+    assert status["primary_conflicts"] == 1
+    assert status["primary_conflicts_volatile"] == 0
+    assert status["recovery_volatile"] is False
+    assert status["restart_safe"] is True
+    assert status["metadata_backup"]["durability_uncertain"] is True
+    server._pending_primary_conflicts.clear()
+    server._pending_metadata_backup_health.update({
+        "durability_uncertain": False,
+        "durability_error": None,
+    })
+    with server._pending_inputs_file_exclusive_lock():
+        server._read_pending_inputs_authority_unlocked(missing_is_empty=False)
+    restarted = server._pending_input_recovery_status(sid)
+    assert restarted["blocked"] is True
+    assert restarted["primary_conflicts"] == 1
+    assert restarted["metadata_backup"]["durability_uncertain"] is True
+    monkeypatch.setattr(os, "replace", real_replace)
+    server._pending_resume_queue[sid] = ["unrelated-write"]
+    assert server._save_pending_inputs({sid})
+    still_blocked = server._pending_input_recovery_status(sid)
+    assert still_blocked["blocked"] is True
+    assert still_blocked["metadata_backup"]["durability_uncertain"] is True
+
+
+def test_normalized_read_initializes_backup_health_and_success_clears_timestamp(
+    monkeypatch, tmp_path,
+):
+    sid = "backup-health-read"
+    pending_file = tmp_path / "pending.json"
+    monkeypatch.setattr(server, "PENDING_INPUTS_FILE", pending_file)
+    server._pending_resume_queue[sid] = ["first"]
+    assert server._save_pending_inputs({sid})
+    backup_file = server._pending_inputs_metadata_backup_path()
+    backup_file.write_text('{"integrity":"corrupt"}')
+    server._pending_metadata_backup_health.update({
+        "degraded": False,
+        "last_error": None,
+        "last_error_at": None,
+    })
+
+    with server._pending_inputs_file_exclusive_lock():
+        assert server._read_pending_inputs_payload_unlocked(
+            missing_is_empty=False,
+        ) is not None
+    degraded = server._pending_input_recovery_status(sid)["metadata_backup"]
+    assert degraded["degraded"] is True
+    assert degraded["last_error"] == "metadata_backup_invalid"
+    assert degraded["last_error_at"] is not None
+
+    server._pending_resume_queue[sid].append("second")
+    assert server._save_pending_inputs({sid})
+    healthy = server._pending_input_recovery_status(sid)["metadata_backup"]
+    assert healthy["degraded"] is False
+    assert healthy["last_error"] is None
+    assert healthy["last_error_at"] is None
 
 
 def test_codex_pump_persist_failure_prevents_native_delivery(
