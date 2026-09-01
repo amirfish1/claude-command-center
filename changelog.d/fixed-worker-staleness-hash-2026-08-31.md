@@ -1,0 +1,1 @@
+Worker auto-restart-on-upgrade now detects code changes confined to a `ccc_server/*.py` module, not just `server.py` itself — previously the staleness check only hashed `server.py`, so it could miss real code changes and leave the worker running stale logic after an upgrade.
