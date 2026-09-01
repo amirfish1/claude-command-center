@@ -2054,7 +2054,9 @@ def _prune_codex_queued_steer_acks_unlocked(now):
             _CODEX_QUEUED_STEER_ACK_SUPPRESSIONS.pop(key, None)
 
 
-def _begin_codex_queued_steer_ack_suppression(session_id, text):
+def _begin_codex_queued_steer_ack_suppression(
+    session_id, text, *, allow_unbound_ack=False,
+):
     """Reserve one future userMessage ack for an already-claimed queue row."""
     key = _codex_queued_steer_ack_key(session_id, text)
     if key is None:
@@ -2075,7 +2077,8 @@ def _begin_codex_queued_steer_ack_suppression(session_id, text):
             }
         _CODEX_QUEUED_STEER_ACK_SUPPRESSIONS.setdefault(key, []).append({
             "token_id": token_id,
-            "state": "unbound",
+            "state": "pump_pending" if allow_unbound_ack else "unbound",
+            "allow_unbound_ack": bool(allow_unbound_ack),
             "acknowledged": False,
             "created_at": now,
             "expires_at": now + _CODEX_QUEUED_STEER_ACK_TTL_S,
@@ -2142,13 +2145,18 @@ def _suppress_codex_queued_steer_delivery_ack(session_id, text, turn_id=None):
         for entry in entries:
             if entry.get("acknowledged"):
                 continue
-            if entry.get("state") not in ("pending", "committed"):
+            if entry.get("state") not in ("pump_pending", "pending", "committed"):
                 continue
             expected_turn_id = str(entry.get("turn_id") or "")
-            if not expected_turn_id or expected_turn_id != str(turn_id or ""):
+            if (
+                not entry.get("allow_unbound_ack")
+                and (not expected_turn_id or expected_turn_id != str(turn_id or ""))
+            ):
                 continue
-            if entry.get("state") == "pending":
+            if entry.get("state") in ("pump_pending", "pending"):
                 entry["acknowledged"] = True
+                if turn_id:
+                    entry["turn_id"] = str(turn_id)
                 entry["expires_at"] = now + _CODEX_QUEUED_STEER_ACK_TTL_S
             else:
                 _remove_codex_queued_steer_ack_unlocked(

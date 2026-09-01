@@ -84,6 +84,10 @@ def _pending_inputs_file_lock_path():
     return _core.PENDING_INPUTS_FILE.with_suffix(".lock")
 
 
+def _pending_input_claim_journal_dir():
+    return _core.PENDING_INPUT_HANDOFF_DIR / "claim-recovery"
+
+
 @contextlib.contextmanager
 def _pending_inputs_file_exclusive_lock():
     """Serialize pending-input read/modify/write across every CCC process."""
@@ -295,6 +299,93 @@ def _load_pending_inputs():
             ])
             if not cleanup.get("ok"):
                 print(f"  [pending-inputs] stale auto-continue cleanup failed: {sid}")
+    _core._recover_pending_input_claim_journals()
+
+
+def _write_pending_input_claim_journal(claim):
+    if not isinstance(claim, dict):
+        return False
+    item = claim.get("item")
+    payload = {
+        "id": str(uuid.uuid4()),
+        "session_id": str(claim.get("session_id") or ""),
+        "queue_name": str(claim.get("queue_name") or "resume"),
+        "index": int(claim.get("index") or 0),
+        "text": str(item or ""),
+        "handoff_id": getattr(item, "handoff_id", None),
+        "handoff_path": str(getattr(item, "handoff_path", "") or ""),
+    }
+    if not payload["session_id"] or not payload["text"]:
+        return False
+    directory = _pending_input_claim_journal_dir()
+    tmp = None
+    try:
+        directory.mkdir(parents=True, exist_ok=True)
+        fd, tmp_name = tempfile.mkstemp(prefix=".claim-", suffix=".tmp", dir=directory)
+        tmp = Path(tmp_name)
+        with os.fdopen(fd, "w") as handle:
+            json.dump(payload, handle, sort_keys=True)
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(tmp, directory / f"{payload['id']}.json")
+        return True
+    except OSError:
+        return False
+    finally:
+        if tmp is not None and tmp.exists():
+            tmp.unlink(missing_ok=True)
+
+
+def _recover_pending_input_claim_journals():
+    directory = _pending_input_claim_journal_dir()
+    try:
+        paths = sorted(directory.glob("*.json"))
+    except OSError:
+        return 0
+    recovered = 0
+    for path in paths:
+        try:
+            payload = json.loads(path.read_text())
+        except (OSError, json.JSONDecodeError):
+            continue
+        sid = str(payload.get("session_id") or "")
+        queue_name = str(payload.get("queue_name") or "resume")
+        text = str(payload.get("text") or "")
+        if not sid or queue_name not in ("resume", "terminal") or not text:
+            continue
+        handoff_id = payload.get("handoff_id")
+        item = (
+            _PendingInputHandoff(
+                text, handoff_id, Path(payload.get("handoff_path") or ""),
+            )
+            if handoff_id else text
+        )
+
+        def restore():
+            queue, lock = (
+                (_core._pending_resume_queue, _core._pending_resume_lock)
+                if queue_name == "resume"
+                else (_core._pending_terminal_input_queue, _core._pending_terminal_input_lock)
+            )
+            with lock:
+                items = queue.setdefault(sid, [])
+                if handoff_id and any(
+                    getattr(existing, "handoff_id", None) == handoff_id
+                    for existing in items
+                ):
+                    return False
+                items.insert(min(max(int(payload.get("index") or 0), 0), len(items)), item)
+                if handoff_id:
+                    _core._pending_terminal_handoff_ids[handoff_id] = Path(
+                        payload.get("handoff_path") or ""
+                    )
+                return True
+
+        transaction = _core._mutate_pending_inputs({sid}, restore)
+        if transaction.get("ok"):
+            path.unlink(missing_ok=True)
+            recovered += int(bool(transaction.get("value")))
+    return recovered
 
 
 def _refresh_pending_inputs_for_session(session_id):
@@ -1971,71 +2062,22 @@ def _schedule_codex_queue_pump(session_id):
 
 
 def _pump_codex_resume_queue(session_id):
-    """Deliver at most one durable Codex message, preserving FIFO order."""
-    lock = _core._codex_queue_pump_lock(session_id)
-    if not lock.acquire(blocking=False):
-        return {"ok": True, "waiting": "already-pumping"}
-    try:
-        if not _core._pending_resume_retry_due(session_id):
-            return {"ok": True, "waiting": "backoff"}
-        if _core._resume_queue_engine_busy(session_id):
-            return {"ok": True, "waiting": "busy"}
-        if not _core._refresh_pending_inputs_for_session(session_id):
-            return {
-                "ok": False,
-                "delivered": False,
-                "code": "pending_input_refresh_failed",
-            }
-        claim = _core._apply_pending_input_operations(session_id, [{
-            "field": "resume", "action": "pop_head",
-        }])
-        if not claim.get("ok"):
-            return {
-                "ok": False,
-                "delivered": False,
-                "code": claim.get("code") or "pending_input_persist_failed",
-            }
-        text = ((claim.get("value") or [None])[0])
-        if text is None:
-            return {"ok": True, "empty": True}
-
-        if _is_unattended_auto_continue(text):
-            try:
-                with _core._auto_resume_exclusive_lock():
-                    if not _core._is_auto_resume_opted_in(session_id):
-                        return {"ok": True, "delivered": False, "disabled": True}
-                    result = _core.resume_session_codex(
-                        session_id, text, _from_queue=True,
-                    )
-            except OSError:
-                _core._mark_pending_resume_retry(session_id)
-                return {"ok": False, "delivered": False, "waiting": "barrier"}
-        else:
-            result = _core.resume_session_codex(session_id, text, _from_queue=True)
-        # An accepted turn already started. Holding the same text because
-        # app-server events were not observed re-sends it after the turn
-        # ends. Treat accepted as delivered; retry only when not accepted.
-        if (
-            not result
-            or not result.get("ok")
-            or result.get("queued")
-        ):
-            restored = _core._apply_pending_input_operations(session_id, [{
-                "field": "resume", "action": "insert_front", "value": text,
-            }])
-            _core._mark_pending_resume_retry(session_id)
-            if not restored.get("ok"):
-                return {
-                    "ok": False,
-                    "delivered": False,
-                    "code": "pending_input_rollback_failed",
-                    "result": result,
-                }
-            return {"ok": False, "delivered": False, "result": result}
+    """Ask the worker to own one authoritative queued-delivery transaction."""
+    if not _core._pending_resume_retry_due(session_id):
+        return {"ok": True, "waiting": "backoff"}
+    if _core._resume_queue_engine_busy(session_id):
+        return {"ok": True, "waiting": "busy"}
+    result = _core.resume_session_codex(
+        session_id,
+        "",
+        _from_queue=True,
+        queued_delivery_transaction_protocol=1,
+    )
+    if result.get("ok") and (result.get("delivered") or result.get("empty")):
         _core._pending_resume_retry_after.pop(session_id, None)
-        return {"ok": True, "delivered": True, "result": result}
-    finally:
-        lock.release()
+    elif not result.get("ok"):
+        _core._mark_pending_resume_retry(session_id)
+    return result
 
 
 def _pump_devin_resume_queue(session_id):

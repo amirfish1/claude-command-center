@@ -17078,19 +17078,25 @@ class TestPendingInputs(unittest.TestCase):
         with self.server._pending_resume_lock:
             self.server._pending_resume_queue[sid] = ["first", "second"]
 
-        with mock.patch.object(self.server, "_refresh_pending_inputs_for_session", return_value=True), \
-             mock.patch.object(self.server, "_save_pending_inputs", return_value=True), \
-             mock.patch.object(self.server, "_pending_resume_retry_due", return_value=True), \
+        def worker_delivery(*args, **kwargs):
+            with self.server._pending_resume_lock:
+                self.server._pending_resume_queue[sid].pop(0)
+            return {"ok": True, "delivered": True, "queued_consumed": 1}
+
+        with mock.patch.object(self.server, "_pending_resume_retry_due", return_value=True), \
              mock.patch.object(self.server, "_resume_queue_engine_busy", return_value=False), \
              mock.patch.object(
                  self.server,
                  "resume_session_codex",
-                 return_value={"ok": True, "accepted": True, "confirmed": True},
+                 side_effect=worker_delivery,
              ) as resume:
             result = self.server._pump_codex_resume_queue(sid)
 
         self.assertTrue(result["delivered"])
-        resume.assert_called_once_with(sid, "first", _from_queue=True)
+        resume.assert_called_once_with(
+            sid, "", _from_queue=True,
+            queued_delivery_transaction_protocol=1,
+        )
         with self.server._pending_resume_lock:
             self.assertEqual(self.server._pending_resume_queue[sid], ["second"])
 
@@ -17129,13 +17135,17 @@ class TestPendingInputs(unittest.TestCase):
         with self.server._pending_resume_lock:
             self.server._pending_resume_queue[sid] = ["keep until visible"]
 
-        with mock.patch.object(self.server, "_refresh_pending_inputs_for_session", return_value=True), \
-             mock.patch.object(self.server, "_pending_resume_retry_due", return_value=True), \
+        def worker_delivery(*args, **kwargs):
+            with self.server._pending_resume_lock:
+                self.server._pending_resume_queue.pop(sid, None)
+            return {"ok": True, "delivered": True, "queued_consumed": 1}
+
+        with mock.patch.object(self.server, "_pending_resume_retry_due", return_value=True), \
              mock.patch.object(self.server, "_resume_queue_engine_busy", return_value=False), \
              mock.patch.object(
                  self.server,
                  "resume_session_codex",
-                 return_value={"ok": True, "accepted": True, "confirmed": False},
+                 side_effect=worker_delivery,
              ):
             result = self.server._pump_codex_resume_queue(sid)
 
@@ -17154,13 +17164,21 @@ class TestPendingInputs(unittest.TestCase):
             )
         )
         try:
-            worker.start()
-            worker.join(timeout=2)
+            with mock.patch.object(
+                self.server, "_pending_resume_retry_due", return_value=True,
+            ), mock.patch.object(
+                self.server, "_resume_queue_engine_busy", return_value=False,
+            ), mock.patch.object(
+                self.server, "resume_session_codex",
+                return_value={"ok": True, "empty": True},
+            ):
+                worker.start()
+                worker.join(timeout=2)
         finally:
             lock.release()
 
         self.assertFalse(worker.is_alive())
-        self.assertEqual(result["waiting"], "already-pumping")
+        self.assertTrue(result["empty"])
 
     def test_get_queued_events_for_session(self):
         sid = "test-session-id"

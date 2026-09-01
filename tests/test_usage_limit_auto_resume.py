@@ -257,7 +257,9 @@ class UsageLimitAutoResumeDisabledTests(unittest.TestCase):
         ), mock.patch.object(
             self.server, "_resume_queue_engine_busy", return_value=False,
         ), mock.patch.object(
-            self.server, "resume_session_codex", side_effect=_deliver,
+            self.server, "_control_plane_engine_call", return_value=None,
+        ), mock.patch.object(
+            self.server, "_resume_session_codex_native_delivery", side_effect=_deliver,
         ):
             pump = threading.Thread(
                 target=self.server._pump_codex_resume_queue,

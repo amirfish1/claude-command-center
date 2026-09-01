@@ -1323,13 +1323,14 @@ def _codex_queued_steer_transaction(
                 session_id, text,
             )
             if isinstance(ack_suppression, dict):
-                if not _core._restore_pending_input_claim(claim):
+                if not _codex_restore_or_journal_claim(claim):
                     return {
                         "ok": False,
                         "via": "codex-steer",
                         "code": "queued_rollback_persistence_failed",
                         "queued_consumed": 0,
                         "error": "could not persist queued message rollback",
+                        "recovery_journaled": True,
                     }
                 result = dict(ack_suppression)
                 result.setdefault("via", "codex-steer")
@@ -1365,13 +1366,14 @@ def _codex_queued_steer_transaction(
                     "queued_consumed": 1,
                     "delivery_acknowledged": True,
                 }
-            if not _core._restore_pending_input_claim(claim):
+            if not _codex_restore_or_journal_claim(claim):
                 return {
                     "ok": False,
                     "via": "codex-steer",
                     "code": "queued_rollback_persistence_failed",
                     "queued_consumed": 0,
                     "error": "could not persist queued message rollback",
+                    "recovery_journaled": True,
                 }
             raise
 
@@ -1402,13 +1404,14 @@ def _codex_queued_steer_transaction(
                 })
             result["queued_consumed"] = 1
             return result
-        if not _core._restore_pending_input_claim(claim):
+        if not _codex_restore_or_journal_claim(claim):
             return {
                 "ok": False,
                 "via": "codex-steer",
                 "code": "queued_rollback_persistence_failed",
                 "queued_consumed": 0,
                 "error": "could not persist queued message rollback",
+                "recovery_journaled": True,
             }
         if preserve_queued_steer:
             result["queued"] = True
@@ -1417,12 +1420,91 @@ def _codex_queued_steer_transaction(
 
 
 _CODEX_QUEUED_STEER_TRANSACTION_PROTOCOL = 1
+_CODEX_QUEUED_DELIVERY_TRANSACTION_PROTOCOL = 1
+
+
+def _codex_restore_or_journal_claim(claim):
+    if _core._restore_pending_input_claim(claim):
+        return True
+    _core._write_pending_input_claim_journal(claim)
+    return False
+
+
+def _codex_queued_delivery_transaction(session_id, *, idempotency_key=None):
+    claim_result = _core._apply_pending_input_operations(session_id, [{
+        "field": "resume", "action": "pop_head",
+    }])
+    if not claim_result.get("ok"):
+        return {
+            "ok": False,
+            "delivered": False,
+            "code": claim_result.get("code") or "pending_input_persist_failed",
+        }
+    item = ((claim_result.get("value") or [None])[0])
+    if item is None:
+        return {"ok": True, "empty": True}
+    claim = {
+        "session_id": session_id,
+        "queue_name": "resume",
+        "index": 0,
+        "item": item,
+    }
+    ack = _core._begin_codex_queued_steer_ack_suppression(
+        session_id, str(item), allow_unbound_ack=True,
+    )
+    if isinstance(ack, dict):
+        if not _codex_restore_or_journal_claim(claim):
+            return {"ok": False, "code": "pending_input_rollback_journaled"}
+        return ack
+
+    try:
+        def deliver():
+            kwargs = {"steer": False}
+            if idempotency_key:
+                kwargs["idempotency_key"] = idempotency_key
+            return _core._resume_session_codex_native_delivery(
+                session_id, str(item), **kwargs,
+            )
+
+        result = _core._deliver_with_auto_resume_barrier(
+            session_id, item, deliver,
+        )
+    except Exception as exc:
+        acknowledged = _core._finish_codex_queued_steer_ack_suppression(
+            ack, delivered=False,
+        )
+        if acknowledged:
+            _core._commit_pending_input_claim(claim)
+            return {
+                "ok": True, "delivered": True,
+                "delivery_acknowledged": True,
+            }
+        if not _codex_restore_or_journal_claim(claim):
+            return {"ok": False, "code": "pending_input_rollback_journaled"}
+        return {"ok": False, "code": "codex_queue_delivery_exception", "error": str(exc)}
+
+    result = dict(result or {})
+    delivered = bool(result.get("ok") and not result.get("queued") and not result.get("disabled"))
+    acknowledged = _core._finish_codex_queued_steer_ack_suppression(
+        ack, delivered=delivered,
+    )
+    if delivered or acknowledged:
+        if not _core._commit_pending_input_claim(claim):
+            return {"ok": False, "code": "queued_handoff_commit_failed"}
+        result.update({"ok": True, "delivered": True, "queued_consumed": 1})
+        if acknowledged and not delivered:
+            result["delivery_acknowledged"] = True
+        return result
+    if not _codex_restore_or_journal_claim(claim):
+        return {"ok": False, "code": "pending_input_rollback_journaled"}
+    return {"ok": False, "delivered": False, "result": result}
 
 
 def resume_session_codex(
     session_id, text, *, steer=False, _from_queue=False, idempotency_key=None,
     preserve_queued_steer=False, _native_delivery=False,
     queued_steer_transaction_protocol=None,
+    queued_delivery_transaction_protocol=0,
 ):
     """Resume a dormant Codex thread with a new prompt via `codex exec resume`."""
     transaction_protocol = (
@@ -1439,12 +1521,24 @@ def resume_session_codex(
                 "from_queue": bool(_from_queue),
                 "preserve_queued_steer": bool(preserve_queued_steer),
                 "queued_steer_transaction_protocol": transaction_protocol,
+                "queued_delivery_transaction_protocol": int(
+                    queued_delivery_transaction_protocol or 0
+                ),
             },
             idempotency_key=idempotency_key,
         )
         if routed is not None:
             return routed
     text = _core._strip_ccc_session_state_instruction(text)
+    if (
+        _from_queue
+        and not _native_delivery
+        and int(queued_delivery_transaction_protocol or 0)
+        >= _CODEX_QUEUED_DELIVERY_TRANSACTION_PROTOCOL
+    ):
+        return _codex_queued_delivery_transaction(
+            session_id, idempotency_key=idempotency_key,
+        )
     if not text:
         return {"ok": False, "error": "missing text"}
     if steer and not _native_delivery:

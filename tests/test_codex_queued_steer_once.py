@@ -51,6 +51,7 @@ def _cross_process_pump_worker(
         process_server._pending_resume_queue.clear()
         process_server._pending_terminal_input_queue.clear()
         process_server._load_pending_inputs()
+        process_server._schedule_codex_queue_pump = lambda sid: None
         stale_loaded.set()
         if not claimed.wait(5):
             raise AssertionError("claim process did not claim the row")
@@ -58,19 +59,14 @@ def _cross_process_pump_worker(
         process_server._resume_queue_engine_busy = lambda sid: False
         deliveries = []
 
-        def deliver(sid, text, _from_queue=False):
+        def deliver(sid, text, _from_queue=False, **kwargs):
             deliveries.append(text)
             return {"ok": True, "accepted": True, "confirmed": True}
 
-        process_server.resume_session_codex = deliver
+        process_server._control_plane_engine_call = lambda *a, **k: None
+        process_server._resume_session_codex_native_delivery = deliver
         first = process_server._pump_codex_resume_queue(session_id)
         results.put(("first-pump", os.getpid(), first, list(deliveries)))
-        if not release.wait(5):
-            raise AssertionError("pump process was not released")
-        if not released.wait(5):
-            raise AssertionError("claimant did not exit queue ownership")
-        second = process_server._pump_codex_resume_queue(session_id)
-        results.put(("second-pump", os.getpid(), second, list(deliveries)))
     except BaseException as exc:
         results.put(("error", os.getpid(), repr(exc)))
 
@@ -787,6 +783,7 @@ def test_worker_engine_forwards_explicit_replacement_semantics():
         _from_queue=False,
         preserve_queued_steer=True,
         queued_steer_transaction_protocol=1,
+        queued_delivery_transaction_protocol=0,
     )
 
 
@@ -880,16 +877,24 @@ def test_direct_steer_excludes_codex_resume_queue_pump(router_env):
     thread.start()
     assert entered.wait(2)
 
-    pump_result = server._pump_codex_resume_queue(sid)
-
-    assert pump_result == {"ok": True, "waiting": "already-pumping"}
+    pump_result = {}
+    pump_thread = threading.Thread(
+        target=lambda: pump_result.update(server._pump_codex_resume_queue(sid))
+    )
+    pump_thread.start()
+    time.sleep(0.05)
+    assert pump_thread.is_alive()
     assert router_env.resume.call_count == 1
     release.set()
     thread.join(2)
+    pump_thread.join(2)
     assert not thread.is_alive()
+    assert not pump_thread.is_alive()
     assert thread_errors == []
     assert steer_result["ok"]
     assert steer_result["queued_consumed"] == 1
+    assert pump_result["ok"]
+    assert pump_result["delivered"]
 
 
 def test_codex_claim_and_pump_share_cross_process_session_ownership(tmp_path):
@@ -923,22 +928,15 @@ def test_codex_claim_and_pump_share_cross_process_session_ownership(tmp_path):
     pump.start()
     try:
         claim_result = results.get(timeout=10)
+        release.set()
         first_pump = results.get(timeout=10)
         by_label = {claim_result[0]: claim_result, first_pump[0]: first_pump}
         assert "error" not in by_label, by_label.get("error")
         assert by_label["claim"][2]["item"] == "target"
-        assert by_label["first-pump"][2] == {
-            "ok": True,
-            "waiting": "already-pumping",
-        }
+        assert by_label["first-pump"][2] == {"ok": True, "empty": True}
         assert by_label["first-pump"][3] == []
         assert by_label["claim"][1] != by_label["first-pump"][1]
-        release.set()
-        second_pump = results.get(timeout=10)
         assert released.is_set()
-        assert second_pump[0] == "second-pump"
-        assert second_pump[2] == {"ok": True, "empty": True}
-        assert second_pump[3] == []
     finally:
         release.set()
         claimant.join(10)
@@ -1546,7 +1544,8 @@ def test_codex_pump_persist_failure_prevents_native_delivery(
     monkeypatch.setattr(server, "_pending_resume_retry_due", lambda sid: True)
     monkeypatch.setattr(server, "_resume_queue_engine_busy", lambda sid: False)
     native = mock.Mock()
-    monkeypatch.setattr(server, "resume_session_codex", native)
+    monkeypatch.setattr(server, "_control_plane_engine_call", lambda *a, **k: None)
+    monkeypatch.setattr(server, "_resume_session_codex_native_delivery", native)
 
     result = server._pump_codex_resume_queue(sid)
 
@@ -1563,8 +1562,9 @@ def test_codex_pump_delivery_failure_restores_exact_claim(monkeypatch, tmp_path)
     assert server._save_pending_inputs({sid})
     monkeypatch.setattr(server, "_pending_resume_retry_due", lambda sid: True)
     monkeypatch.setattr(server, "_resume_queue_engine_busy", lambda sid: False)
+    monkeypatch.setattr(server, "_control_plane_engine_call", lambda *a, **k: None)
     monkeypatch.setattr(
-        server, "resume_session_codex",
+        server, "_resume_session_codex_native_delivery",
         lambda *a, **k: {"ok": False, "code": "delivery_failed"},
     )
 
@@ -1590,6 +1590,72 @@ def test_devin_clear_if_matching_reports_truthful_boolean(monkeypatch, tmp_path)
     assert result["ok"]
     assert result["value"] == [False]
     assert server._pending_devin_steers[sid] == "newer"
+
+
+def test_real_dashboard_worker_pump_ack_consumes_one_duplicate(
+    monkeypatch, tmp_path,
+):
+    sid = "real-worker-pump-ack"
+    monkeypatch.delenv("CCC_WORKER_PROCESS", raising=False)
+    monkeypatch.setattr(server, "PENDING_INPUTS_FILE", tmp_path / "pending.json")
+    server._pending_resume_queue[sid] = ["target", "target", "last"]
+    assert server._save_pending_inputs({sid})
+    monkeypatch.setattr(server, "_pending_resume_retry_due", lambda sid: True)
+    monkeypatch.setattr(server, "_resume_queue_engine_busy", lambda sid: False)
+    monkeypatch.setattr(server, "_schedule_codex_queue_pump", lambda sid: None)
+
+    def native(session_id, text, **kwargs):
+        _notify_user_message(session_id, text, turn_id="pump-turn")
+        return {"ok": True, "via": "codex-app-server", "accepted": True}
+
+    monkeypatch.setattr(server, "_resume_session_codex_native_delivery", native)
+
+    def route(engine, operation, args, **kwargs):
+        if os.environ.get("CCC_WORKER_PROCESS") == "1":
+            return None
+        assert args["queued_delivery_transaction_protocol"] == 1
+        with mock.patch.dict(os.environ, {"CCC_WORKER_PROCESS": "1"}):
+            return server.resume_session_codex(
+                args["session_id"], args["text"],
+                _from_queue=args["from_queue"],
+                queued_delivery_transaction_protocol=args[
+                    "queued_delivery_transaction_protocol"
+                ],
+            )
+
+    monkeypatch.setattr(server, "_control_plane_engine_call", route)
+
+    result = server._pump_codex_resume_queue(sid)
+
+    assert result["ok"] and result["delivered"]
+    assert server._pending_resume_queue[sid] == ["target", "last"]
+
+
+def test_claim_journal_recovers_duplicate_once_after_restart(monkeypatch, tmp_path):
+    sid = "journal-duplicate-recovery"
+    pending_file = tmp_path / "pending.json"
+    monkeypatch.setattr(server, "PENDING_INPUTS_FILE", pending_file)
+    monkeypatch.setattr(server, "PENDING_INPUT_HANDOFF_DIR", tmp_path / "handoffs")
+    server._pending_resume_queue[sid] = ["target", "target", "last"]
+    assert server._save_pending_inputs({sid})
+    claim_tx = server._apply_pending_input_operations(sid, [{
+        "field": "resume", "action": "pop_head",
+    }])
+    claim = {
+        "session_id": sid, "queue_name": "resume", "index": 0,
+        "item": claim_tx["value"][0],
+    }
+    real_persist = server._persist_pending_inputs_current
+    monkeypatch.setattr(server, "_persist_pending_inputs_current", lambda *a, **k: False)
+    assert not server._codex_restore_or_journal_claim(claim)
+    monkeypatch.setattr(server, "_persist_pending_inputs_current", real_persist)
+
+    server._pending_resume_queue.clear()
+    server._load_pending_inputs()
+    assert server._pending_resume_queue[sid] == ["target", "target", "last"]
+    server._load_pending_inputs()
+    assert server._pending_resume_queue[sid] == ["target", "target", "last"]
+    assert not list((tmp_path / "handoffs" / "claim-recovery").glob("*.json"))
 
 
 def test_finalizer_does_not_consume_a_second_copy_after_router_commit():
