@@ -8250,8 +8250,14 @@
     btn.disabled = true;
     btn.textContent = 'Steering…';
     const $view = trayConversationView(btn.closest('.queued-steer-tray'));
+    markSteerInFlight(sid, [text]);
     const moved = beginOptimisticSteerMove([row], $view);
-    const giveBack = () => revertOptimisticSteerMove(moved, activePaneId());
+    // Release the in-flight hold BEFORE reverting: the reverted card is a
+    // queued candidate again, and the in-flight filter would delete it.
+    const giveBack = () => {
+      clearSteerInFlight(sid, [text]);
+      revertOptimisticSteerMove(moved, activePaneId());
+    };
     try {
       const data = await postInjectInput(sid, text, 'steer', { replaceQueued: true });
       if (data && data.queue_pump_started) {
@@ -8279,7 +8285,7 @@
       if (row) {
         row.classList.remove('steering-optimistic');
         if (row._pendingRef) markPendingSendDelivered(row._pendingRef, data);
-        else row.remove();
+        else settleSteeredServerCard(row);
       }
       showOpToast(steeredToastText(data));
       setTimeout(refreshConversationList, 500);
@@ -8288,6 +8294,9 @@
       btn.textContent = '!';
       showOpToast('Steer failed: ' + ((err && err.message) || 'unknown'), 'error');
     } finally {
+      // Outlive the refresh kicked off above: its event payload may have been
+      // fetched before the server withdrew the queued copy.
+      setTimeout(() => clearSteerInFlight(sid, [text]), 2000);
       setTimeout(() => {
         if (!btn.isConnected) return;
         btn.disabled = false;
@@ -8385,8 +8394,12 @@
     btn.disabled = true;
     btn.textContent = 'Steering…';
     const $view = trayConversationView(tray);
+    markSteerInFlight(sid, texts);
     const moved = beginOptimisticSteerMove(rows, $view);
-    const giveBack = () => revertOptimisticSteerMove(moved, activePaneId());
+    const giveBack = () => {
+      clearSteerInFlight(sid, texts);
+      revertOptimisticSteerMove(moved, activePaneId());
+    };
     try {
       const data = await postInjectInput(sid, texts.join('\n\n'), 'steer', {
         replaceQueuedTexts: texts,
@@ -8414,6 +8427,7 @@
       btn.textContent = '!';
       showOpToast('Steer all failed: ' + ((err && err.message) || 'unknown'), 'error');
     } finally {
+      setTimeout(() => clearSteerInFlight(sid, texts), 2000);
       setTimeout(() => {
         if (!btn.isConnected) return;
         btn.disabled = false;
@@ -51815,6 +51829,39 @@
   // the response left the message sitting in the tray for seconds with no sign
   // the click had done anything. Show it in the transcript as in-flight now and
   // put it back only if the send actually fails.
+  // Normalized text of every queued message whose steer POST is still in
+  // flight, keyed by session. The durable server-side queue entry is only
+  // withdrawn when that POST returns, so every conversation refresh in between
+  // re-renders the message as a fresh queued candidate -- which is exactly what
+  // yanked an optimistically-moved card straight back above the composer a
+  // second after the click.
+  const _steerInFlightTexts = new Map();
+
+  function steerTextKeys(texts) {
+    return (texts || []).map(t => _normSend(String(t || ''))).filter(Boolean);
+  }
+
+  function markSteerInFlight(sid, texts) {
+    if (!sid) return;
+    let set = _steerInFlightTexts.get(sid);
+    if (!set) { set = new Set(); _steerInFlightTexts.set(sid, set); }
+    steerTextKeys(texts).forEach(key => set.add(key));
+  }
+
+  function clearSteerInFlight(sid, texts) {
+    const set = sid && _steerInFlightTexts.get(sid);
+    if (!set) return;
+    steerTextKeys(texts).forEach(key => set.delete(key));
+    if (!set.size) _steerInFlightTexts.delete(sid);
+  }
+
+  function steerIsInFlight(sid, text) {
+    const set = sid && _steerInFlightTexts.get(sid);
+    if (!set || !set.size) return false;
+    const key = _normSend(String(text || ''));
+    return !!key && set.has(key);
+  }
+
   function beginOptimisticSteerMove(rows, $view) {
     const moved = [];
     (rows || []).forEach(row => {
@@ -51832,6 +51879,21 @@
     });
     if ($view) scrollConversationToEnd($view);
     return moved;
+  }
+
+  // A steered card with no local pending echo behind it came from the server's
+  // durable queue, so nothing else is tracking it. Removing it on success left
+  // the message missing from the conversation until the next refresh; instead
+  // present it as delivered and let syncQueuedSteerTray retire it when the
+  // engine's own copy of the text renders.
+  function settleSteeredServerCard(row) {
+    if (!row) return;
+    row.dataset.steerSettled = '1';
+    delete row.dataset.queuedSteerServer;
+    row.classList.remove('pending', 'server-queued', 'send-queued');
+    row.classList.add('send-delivered');
+    const note = row.querySelector('.send-queued-note');
+    if (note) note.remove();
   }
 
   function revertOptimisticSteerMove(moved, paneId) {
@@ -51901,16 +51963,52 @@
     // candidate. Start clean so it returns as ordinary history once queued
     // input has drained.
     transcriptRows.forEach(el => el.classList.remove('is-queued-steer-duplicate'));
+    // A steered card that had no local pending echo behind it stays in the
+    // transcript as `delivered` until the engine writes its own durable copy of
+    // the same text. Retire it exactly then, so the message never blinks out of
+    // the conversation and never shows twice.
+    const settledSteerRows = Array.from(
+      $view.querySelectorAll('.event.user_text[data-steer-settled]'));
+    if (settledSteerRows.length) {
+      const durableNow = new Set(Array.from($view.querySelectorAll(
+        '.event.user_text:not(.pending):not(.send-queued):not(.send-delivered):not(.not-acknowledged)'
+      )).map(el => {
+        const msg = el.querySelector('.user-msg');
+        return msg && _normSend(msg.getAttribute('data-raw-text') || msg.textContent);
+      }).filter(Boolean));
+      settledSteerRows.forEach(el => {
+        const msg = el.querySelector('.user-msg');
+        const text = msg && _normSend(msg.getAttribute('data-raw-text') || msg.textContent);
+        if (text && durableNow.has(text) && el.parentNode) el.parentNode.removeChild(el);
+      });
+    }
     if (replaceServerCandidates && tray) {
       tray.querySelectorAll('[data-queued-steer-server="true"]').forEach(el => el.remove());
     }
     // Only durable server queue entries belong here. A local `.pending` row
     // merely means the browser is awaiting an acknowledgement; showing it as
     // a queued candidate made an idle session look as though it still had work.
+    const selected = (conversationsData || []).find(item => item && (
+      item.id === conversationId || item.session_id === conversationId
+    ));
+    const sessionId = String((selected && selected.session_id) || conversationId);
     const candidates = Array.from($view.querySelectorAll(
       '.event.user_text.pending, .event.user_text.send-queued'
     )).filter(el => el.dataset.queuedSteerServer === 'true'
-      || el.classList.contains('send-queued'));
+      || el.classList.contains('send-queued'))
+      // A card the user just steered is deliberately standing in the transcript
+      // as in-flight. Collecting it back would undo the optimistic move.
+      .filter(el => !el.classList.contains('steering-optimistic'))
+      .filter(el => {
+        // The server still lists this message as queued only because its steer
+        // POST has not returned yet. Drop the stale re-render rather than show
+        // the user's message in the transcript and above the composer at once.
+        const msg = el.querySelector('.user-msg');
+        const text = msg && (msg.getAttribute('data-raw-text') || msg.textContent);
+        if (!steerIsInFlight(sessionId, text)) return true;
+        if (el.parentNode) el.parentNode.removeChild(el);
+        return false;
+      });
     if (!candidates.length && !queuedSteerCardCount(tray)) {
       if (tray) tray.remove();
       return;
@@ -51925,10 +52023,6 @@
       // tray sits immediately above the textarea in every pane layout.
       inputBar.insertBefore(tray, inputBar.firstChild);
     }
-    const selected = (conversationsData || []).find(item => item && (
-      item.id === conversationId || item.session_id === conversationId
-    ));
-    const sessionId = String((selected && selected.session_id) || conversationId);
     candidates.forEach(el => {
       let cancel = el.querySelector('[data-cancel-queued-message]');
       if (!cancel) {

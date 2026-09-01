@@ -6931,9 +6931,23 @@ class TestServerImports(unittest.TestCase):
             queued_handler.index("markPendingSendDelivered(row._pendingRef, data)"),
             queued_handler.index("if (!data.queued_consumed)"),
         )
-        # Every non-delivery outcome hands the card back to the tray.
-        self.assertIn("const giveBack = () => revertOptimisticSteerMove(", queued_handler)
+        # Every non-delivery outcome hands the card back to the tray, and the
+        # in-flight hold is released BEFORE the revert -- the reverted card is a
+        # queued candidate again, so the in-flight filter would delete it.
+        self.assertIn("revertOptimisticSteerMove(moved, activePaneId())", queued_handler)
+        self.assertLess(
+            queued_handler.index("clearSteerInFlight(sid, [text])"),
+            queued_handler.index("revertOptimisticSteerMove(moved, activePaneId())"),
+        )
         self.assertEqual(queued_handler.count("giveBack();"), 4)
+        # A steer whose POST is still in flight must not be re-collected from a
+        # refresh that still lists the message as queued (that bounce was the
+        # whole complaint).
+        self.assertIn("markSteerInFlight(sid, [text])", queued_handler)
+        self.assertIn("if (!steerIsInFlight(sessionId, text)) return true;", app_js)
+        self.assertIn(
+            ".filter(el => !el.classList.contains('steering-optimistic'))", app_js)
+        self.assertIn("data-steer-settled", app_js)
         self.assertIn("tray.dataset.conversationId", app_js)
         self.assertIn("replace_queued", app_js)
         self.assertIn("is-queued-steer-duplicate", app_js)
