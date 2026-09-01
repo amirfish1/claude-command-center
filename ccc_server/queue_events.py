@@ -1339,6 +1339,8 @@ def _codex_queued_steer_transaction(
                         "error": "could not persist queued message rollback",
                         "recovery_journaled": recovery == "journaled",
                         "recovery_outcome": recovery,
+                        "recovery_volatile": recovery == "failed",
+                        "restart_safe": recovery != "failed",
                     }
                 result = dict(ack_suppression)
                 result.setdefault("via", "codex-steer")
@@ -1384,6 +1386,8 @@ def _codex_queued_steer_transaction(
                     "error": "could not persist queued message rollback",
                     "recovery_journaled": recovery == "journaled",
                     "recovery_outcome": recovery,
+                    "recovery_volatile": recovery == "failed",
+                    "restart_safe": recovery != "failed",
                 }
             raise
 
@@ -1424,6 +1428,8 @@ def _codex_queued_steer_transaction(
                 "error": "could not persist queued message rollback",
                 "recovery_journaled": recovery == "journaled",
                 "recovery_outcome": recovery,
+                "recovery_volatile": recovery == "failed",
+                "restart_safe": recovery != "failed",
             }
         if preserve_queued_steer:
             result["queued"] = True
@@ -1485,6 +1491,8 @@ def _codex_queued_delivery_transaction(session_id, *, idempotency_key=None):
                     if recovery == "journaled" else "pending_input_recovery_failed"
                 ),
                 "recovery_journaled": recovery == "journaled",
+                "recovery_volatile": recovery == "failed",
+                "restart_safe": recovery != "failed",
             }
         return ack
 
@@ -1526,6 +1534,8 @@ def _codex_queued_delivery_transaction(session_id, *, idempotency_key=None):
                     if recovery == "journaled" else "pending_input_recovery_failed"
                 ),
                 "recovery_journaled": recovery == "journaled",
+                "recovery_volatile": recovery == "failed",
+                "restart_safe": recovery != "failed",
             }
         return {"ok": False, "code": "codex_queue_delivery_exception", "error": str(exc)}
 
@@ -1555,6 +1565,8 @@ def _codex_queued_delivery_transaction(session_id, *, idempotency_key=None):
                 if recovery == "journaled" else "pending_input_recovery_failed"
             ),
             "recovery_journaled": recovery == "journaled",
+            "recovery_volatile": recovery == "failed",
+            "restart_safe": recovery != "failed",
         }
     return {"ok": False, "delivered": False, "result": result}
 

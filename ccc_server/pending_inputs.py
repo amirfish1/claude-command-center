@@ -317,6 +317,7 @@ def _write_pending_input_claim_journal(claim):
         "index": int(claim.get("index") or 0),
         "text": str(item or ""),
         "handoff_id": getattr(item, "handoff_id", None),
+        "handoff_front": getattr(item, "handoff_front", None),
         "created_ns": created_ns,
         "claim_sequence": claim_sequence,
     }
@@ -352,6 +353,47 @@ def _write_pending_input_claim_journal(claim):
     finally:
         if tmp is not None and tmp.exists():
             tmp.unlink(missing_ok=True)
+
+
+def _validate_pending_claim_journal(path, payload):
+    try:
+        if not isinstance(payload, dict):
+            raise ValueError
+        identity = {
+            "session_id": str(payload.get("session_id") or ""),
+            "queue_name": str(payload.get("queue_name") or ""),
+            "index": int(payload.get("index")),
+            "text": str(payload.get("text") or ""),
+            "handoff_id": payload.get("handoff_id"),
+            "handoff_front": payload.get("handoff_front"),
+            "created_ns": int(payload.get("created_ns")),
+            "claim_sequence": int(payload.get("claim_sequence")),
+        }
+        journal_id = str(payload.get("id") or "")
+        expected = hashlib.sha256(
+            json.dumps(identity, sort_keys=True).encode("utf-8")
+        ).hexdigest()
+        if (
+            not identity["session_id"]
+            or identity["queue_name"] not in ("resume", "terminal")
+            or identity["index"] < 0
+            or not identity["text"]
+            or identity["created_ns"] <= 0
+            or identity["claim_sequence"] <= 0
+            or journal_id != expected
+            or path.stem != journal_id
+            or (identity["handoff_id"] is not None and not isinstance(
+                identity["handoff_front"], bool
+            ))
+        ):
+            raise ValueError
+        return payload
+    except (TypeError, ValueError):
+        try:
+            path.replace(path.with_suffix(".invalid"))
+        except OSError:
+            pass
+        return None
 
 
 def _keep_pending_input_claim_in_memory(claim):
@@ -399,10 +441,31 @@ def _pending_input_recovery_blocked(session_id):
         try:
             payload = json.loads(path.read_text())
         except (OSError, json.JSONDecodeError):
+            try:
+                path.replace(path.with_suffix(".invalid"))
+            except OSError:
+                pass
+            continue
+        payload = _validate_pending_claim_journal(path, payload)
+        if payload is None:
             continue
         if str(payload.get("session_id") or "") == str(session_id):
             return True
     return False
+
+
+def _pending_input_recovery_status(session_id):
+    with _pending_input_recovery_registry_lock:
+        volatile_count = len(
+            _pending_input_recovery_registry.get(session_id) or []
+        )
+    blocked = _pending_input_recovery_blocked(session_id)
+    return {
+        "blocked": blocked,
+        "volatile_claims": volatile_count,
+        "recovery_volatile": volatile_count > 0,
+        "restart_safe": volatile_count == 0,
+    }
 
 
 def _retry_pending_input_recovery(session_id):
@@ -411,18 +474,28 @@ def _retry_pending_input_recovery(session_id):
     if not claims:
         _core._recover_pending_input_claim_journals()
         return not _pending_input_recovery_blocked(session_id)
-    transaction = _core._mutate_pending_inputs({session_id}, lambda: True)
-    if transaction.get("ok"):
+    def clear_registry():
         with _pending_input_recovery_registry_lock:
-            _pending_input_recovery_registry.pop(session_id, None)
+            current = _pending_input_recovery_registry.get(session_id) or []
+            claim_ids = {id(claim) for claim in claims}
+            kept = [claim for claim in current if id(claim) not in claim_ids]
+            if kept:
+                _pending_input_recovery_registry[session_id] = kept
+            else:
+                _pending_input_recovery_registry.pop(session_id, None)
+
+    transaction = _core._mutate_pending_inputs(
+        {session_id}, lambda: True, on_commit=clear_registry,
+    )
+    if transaction.get("ok"):
         return True
     all_journaled = all(
         _core._write_pending_input_claim_journal(claim) == "journaled"
         for claim in claims
     )
     if all_journaled:
-        with _pending_input_recovery_registry_lock:
-            _pending_input_recovery_registry.pop(session_id, None)
+        with _core._codex_queue_pump_lock(session_id):
+            clear_registry()
         _core._recover_pending_input_claim_journals()
     return not _pending_input_recovery_blocked(session_id)
 
@@ -438,6 +511,13 @@ def _recover_pending_input_claim_journals():
         try:
             payload = json.loads(path.read_text())
         except (OSError, json.JSONDecodeError):
+            try:
+                path.replace(path.with_suffix(".invalid"))
+            except OSError:
+                pass
+            continue
+        payload = _validate_pending_claim_journal(path, payload)
+        if payload is None:
             continue
         try:
             claim_sequence = int(payload.get("claim_sequence"))
@@ -450,9 +530,11 @@ def _recover_pending_input_claim_journals():
             except OSError:
                 pass
             continue
-        records.append((claim_sequence, path, payload))
+        records.append((claim_sequence, str(payload.get("id")), path, payload))
     recovered = 0
-    for _, path, payload in sorted(records, reverse=True, key=lambda row: row[0]):
+    for _, _, path, payload in sorted(
+        records, reverse=True, key=lambda row: (row[0], row[1]),
+    ):
         sid = str(payload.get("session_id") or "")
         queue_name = str(payload.get("queue_name") or "resume")
         text = str(payload.get("text") or "")
@@ -473,8 +555,9 @@ def _recover_pending_input_claim_journals():
                     and source_handoff["session_id"] == sid
                     and source_handoff["text"] == text
                     and queue_name == "terminal"
+                    and isinstance(payload.get("handoff_front"), bool)
                     and bool(source_handoff["front"])
-                    == (int(payload.get("index") or 0) == 0)
+                    == bool(payload.get("handoff_front"))
                 )
             except OSError:
                 valid_handoff = False
@@ -484,6 +567,7 @@ def _recover_pending_input_claim_journals():
         item = (
             _PendingInputHandoff(
                 text, handoff_id, handoff_path,
+                front=bool(payload.get("handoff_front")),
             )
             if handoff_id else text
         )
@@ -574,7 +658,7 @@ def _refresh_pending_inputs_for_session(session_id):
         if event is None or event["session_id"] != session_id:
             continue
         item = _PendingInputHandoff(
-            event["text"], event["id"], event["path"],
+            event["text"], event["id"], event["path"], front=event["front"],
         )
         (front_handoffs if event["front"] else back_handoffs).append(item)
         _core._pending_terminal_handoff_ids[event["id"]] = event["path"]
@@ -713,7 +797,7 @@ def _persist_pending_inputs_current(
 
 def _mutate_pending_inputs(
     affected_session_ids, mutation, *, include_devin_steers=False,
-    include_auto_resume=False, applied_journal_id=None,
+    include_auto_resume=False, applied_journal_id=None, on_commit=None,
 ):
     """Run one explicit mutation against refreshed authoritative sessions."""
     affected = _normalize_pending_session_ids(affected_session_ids)
@@ -772,6 +856,8 @@ def _mutate_pending_inputs(
         if not ok:
             restore_memory()
             return {"ok": False, "code": "pending_input_persist_failed"}
+        if on_commit is not None:
+            on_commit()
         return {"ok": True, "value": value}
 
 
@@ -993,10 +1079,11 @@ def _apply_spawn_auto_resume_opt_in(payload, result):
 class _PendingInputHandoff(str):
     """String-compatible queued input backed by an authoritative inbox file."""
 
-    def __new__(cls, text, handoff_id, path):
+    def __new__(cls, text, handoff_id, path, *, front=None):
         value = super().__new__(cls, text)
         value.handoff_id = handoff_id
         value.handoff_path = path
+        value.handoff_front = front
         return value
 
 
@@ -1168,6 +1255,7 @@ def _ingest_pending_input_handoffs_unlocked(owned_session_ids):
                     event["text"],
                     event["id"],
                     event["path"],
+                    front=event["front"],
                 ))
             for event in (
                 item for item in new_events if not item["front"]
@@ -1178,6 +1266,7 @@ def _ingest_pending_input_handoffs_unlocked(owned_session_ids):
                     event["text"],
                     event["id"],
                     event["path"],
+                    front=event["front"],
                 ))
         for event in new_events:
             _core._pending_terminal_handoff_ids[event["id"]] = event["path"]

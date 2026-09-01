@@ -2194,6 +2194,22 @@ def _suppress_codex_queued_steer_delivery_ack(session_id, text, turn_id=None):
     return False
 
 
+def _reconcile_codex_delivery_ack_nonblocking(session_id, text):
+    ownership = _core._codex_queue_pump_lock(session_id)
+    if ownership.acquire(blocking=False):
+        try:
+            return _core._consume_matching_pending_input(session_id, text)
+        finally:
+            ownership.release()
+    threading.Thread(
+        target=_core._consume_matching_pending_input,
+        args=(session_id, text),
+        daemon=True,
+        name=f"codex-ack-reconcile-{str(session_id)[:8]}",
+    ).start()
+    return 0
+
+
 def _codex_app_server_handle_notification(method, params):
     if not isinstance(params, dict):
         params = {}
@@ -2353,7 +2369,9 @@ def _codex_app_server_handle_notification(method, params):
         if not _suppress_codex_queued_steer_delivery_ack(
             thread_id, delivered_user_text, turn_id=turn_id,
         ):
-            _core._consume_matching_pending_input(thread_id, delivered_user_text)
+            _reconcile_codex_delivery_ack_nonblocking(
+                thread_id, delivered_user_text,
+            )
     if pump_after_notification:
         _core._schedule_codex_queue_pump(thread_id)
 

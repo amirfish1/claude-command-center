@@ -112,7 +112,9 @@ def _cross_process_stale_enqueue_worker(
         stale_loaded.set()
         if not claimed.wait(5):
             raise AssertionError("worker did not claim queued row")
-        result = process_server._queue_codex_resume(session_id, "new-row")
+        result = process_server._apply_pending_input_operations(session_id, [{
+            "field": "resume", "action": "append_tail", "value": "new-row",
+        }])
         finished.set()
         results.put(("enqueue", os.getpid(), result))
     except BaseException as exc:
