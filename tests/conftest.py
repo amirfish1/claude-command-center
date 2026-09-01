@@ -24,6 +24,25 @@ def _reset_ccc_ttl_caches():
 
 
 @pytest.fixture(autouse=True)
+def _reset_inject_dedupe_window():
+    """Clear the inject duplicate-suppression window between tests.
+
+    The window is process-global by design (see _inject_dedupe_recent): in
+    production every inject funnels through one server process. Under pytest
+    that makes two tests injecting the same text into the same session id
+    order-dependent — the second one gets legitimately suppressed.
+    """
+    def _reset():
+        mod = sys.modules.get("server")
+        recent = getattr(mod, "_inject_dedupe_recent", None)
+        if isinstance(recent, dict):
+            recent.clear()
+    _reset()
+    yield
+    _reset()
+
+
+@pytest.fixture(autouse=True)
 def _restore_canonical_server_module():
     """Undo per-test server re-imports at teardown.
 
