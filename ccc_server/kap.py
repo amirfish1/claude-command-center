@@ -322,7 +322,7 @@ class KapWebSocket:
     def send_json(self, obj):
         self._send_frame(0x1, json.dumps(obj).encode("utf-8"))
 
-    def recv_json(self):
+    def recv_json(self, timeout=None):
         """Next frame as a dict, answering heartbeats on the way.
 
         kap-server's heartbeat is an *application* frame -- {"type":"ping"}
@@ -331,8 +331,17 @@ class KapWebSocket:
         inbound frame resets its timer, so a client that only answers the
         protocol-level ping gets silently disconnected 20s in with no error.
         """
+        if timeout is not None:
+            # The pump needs to wake periodically to re-check the queue even
+            # when the socket is quiet; a bare recv would block through the
+            # whole idle window. An expired read is not an error -- {} is a
+            # no-op frame the mapper ignores.
+            self.sock.settimeout(timeout)
         while True:
-            msg = self.recv()
+            try:
+                msg = self.recv()
+            except socket.timeout:
+                return {}
             if msg is None:
                 return None
             try:
@@ -654,3 +663,185 @@ def kap_run_turn(sid, text, cwd="", on_events=None, timeout=300.0):
     finally:
         ws.close()
     return prompt_id, collected
+
+
+def kap_steer(sid, prompt_ids):
+    """Promote already-queued prompts into the turn that is running now.
+
+    This is the whole reason kap exists as a CCC transport. Over ACP a prompt
+    sent mid-turn is rejected by the agent ("another turn is already in
+    progress"), so CCC's steer degraded to cancel-then-resend: the turn died
+    and restarted, losing whatever it had done. Here the prompt is already on
+    the server's queue with an id, and steering is a promotion of that id into
+    the live turn -- the turn keeps running and sees the new text.
+    """
+    ids = [str(p) for p in (prompt_ids or []) if p]
+    if not ids:
+        return {}
+    return kap_request(
+        "POST", "/api/v1/sessions/%s/prompts:steer" % sid, {"prompt_ids": ids}
+    ) or {}
+
+
+# --- Routing: which sessions CCC drives over kap ---------------------------
+#
+# Adoption, not migration. The daemon and the ACP subprocess index the same
+# `~/.kimi-code/session_index.jsonl` and read the same transcript dir, so the
+# daemon can load a session the ACP transport created (Stage 0 probe). What
+# cannot be shared is the LIVE turn: whichever process holds the engine core
+# in memory owns `_active`/`_queued`. So a session is kap-routed only while the
+# daemon can actually serve it, and the answer is cached briefly rather than
+# asked on every keystroke -- session-status polls this per second.
+
+_KAP_OWNS_TTL_S = 20.0
+_KAP_OWNS_CACHE = {}
+_KAP_OWNS_LOCK = threading.Lock()
+
+
+def kap_owns(sid, ttl=_KAP_OWNS_TTL_S):
+    """True when the daemon can serve `sid` right now. Cached for `ttl`."""
+    if not sid:
+        return False
+    now = time.time()
+    with _KAP_OWNS_LOCK:
+        hit = _KAP_OWNS_CACHE.get(sid)
+        if hit and now - hit[0] < ttl:
+            return hit[1]
+    try:
+        ok = bool(kap_session_status(sid))
+    except (KapUnavailable, KapError, OSError):
+        ok = False
+    with _KAP_OWNS_LOCK:
+        _KAP_OWNS_CACHE[sid] = (now, ok)
+    return ok
+
+
+def kap_forget(sid):
+    """Drop the cached ownership answer (after a daemon restart, say)."""
+    with _KAP_OWNS_LOCK:
+        _KAP_OWNS_CACHE.pop(sid, None)
+
+
+def kap_routes(sid):
+    """Should this session's turns go over kap? Flag on, daemon up, session
+    loadable. Any 'no' falls straight back to the ACP path, so the flag being
+    off or the daemon being down is a downgrade, never a breakage."""
+    return bool(sid) and kap_enabled() and kap_available() and kap_owns(sid)
+
+
+# --- The live turn pump ----------------------------------------------------
+
+_KAP_PUMPS = {}
+_KAP_PUMP_LOCK = threading.Lock()
+
+
+def kap_pump_active(sid):
+    with _KAP_PUMP_LOCK:
+        pump = _KAP_PUMPS.get(sid)
+    return bool(pump and pump.get("thread") and pump["thread"].is_alive())
+
+
+def _kap_pump(sid, cwd, idle_grace=3.0, max_run=1800.0):
+    """Stream `sid` until its queue drains, writing mapped events into CCC.
+
+    One pump per session, not one per prompt: a steer lands in the SAME turn
+    the pump is already reading, so spawning a second reader would duplicate
+    every frame. The pump outlives an individual turn and exits only once the
+    server reports nothing active and nothing queued -- otherwise it would tear
+    down between two queued prompts and lose the second turn's stream.
+    """
+    mapper = KapTranscriptMapper()
+    ws = None
+    try:
+        ws = kap_open_stream(sid)
+        deadline = time.time() + max_run
+        idle_since = None
+        while time.time() < deadline:
+            frame = ws.recv_json(timeout=30.0)
+            if frame is None:
+                break
+            events = mapper.feed(frame)
+            if events:
+                kap_emit_to_ccc(sid, events, cwd=cwd)
+            if mapper.busy:
+                idle_since = None
+                continue
+            # Not busy. Give the server a grace window to pick the next queued
+            # prompt up before concluding the queue is really empty.
+            if idle_since is None:
+                idle_since = time.time()
+            elif time.time() - idle_since >= idle_grace:
+                try:
+                    queue = kap_prompt_queue(sid)
+                except (KapUnavailable, KapError, OSError):
+                    break
+                if not (queue.get("active") or queue.get("queued")):
+                    break
+                idle_since = None
+    except Exception as exc:  # noqa: BLE001 - a pump must never kill the server
+        try:
+            kap_emit_to_ccc(sid, [{
+                "type": "result", "subtype": "error",
+                "error": "kap stream ended: %s" % (exc,),
+            }], cwd=cwd)
+        except Exception:
+            pass
+    finally:
+        if ws is not None:
+            try:
+                ws.close()
+            except Exception:
+                pass
+        with _KAP_PUMP_LOCK:
+            _KAP_PUMPS.pop(sid, None)
+
+
+def kap_ensure_pump(sid, cwd=""):
+    """Start the session's pump if it isn't already reading."""
+    with _KAP_PUMP_LOCK:
+        pump = _KAP_PUMPS.get(sid)
+        if pump and pump["thread"].is_alive():
+            return False
+        thread = threading.Thread(
+            target=_kap_pump, args=(sid, cwd),
+            name="kap-pump-%s" % sid[:8], daemon=True,
+        )
+        _KAP_PUMPS[sid] = {"thread": thread, "started_at": time.time()}
+    thread.start()
+    return True
+
+
+def kap_prompt(sid, text, visible_text=None, cwd="", mode="send"):
+    """Send (or steer) one prompt over kap. CCC-shaped result dict.
+
+    Queue-first is what makes send and steer the same code path: every prompt
+    is enqueued and gets an id, so a mid-turn send is not an error to recover
+    from -- it is a queued prompt, and steering is one extra call that promotes
+    it. There is no busy rejection to handle here at all.
+    """
+    visible = visible_text if visible_text is not None else text
+    try:
+        prompt_id = kap_submit_prompt(sid, text)
+    except (KapUnavailable, KapError, OSError) as exc:
+        return {"ok": False, "error": "kap submit failed: %s" % (exc,),
+                "code": "kap_unavailable"}
+    if not prompt_id:
+        return {"ok": False, "error": "kap returned no prompt_id",
+                "code": "kap_error"}
+    # Echo the user's text into the transcript before the turn streams, so the
+    # message appears immediately -- same ordering the ACP path gives.
+    kap_emit_to_ccc(sid, [{"type": "user_text", "text": visible}], cwd=cwd)
+    steered = False
+    if mode == "steer":
+        try:
+            kap_steer(sid, [prompt_id])
+            steered = True
+        except (KapUnavailable, KapError, OSError) as exc:
+            # The prompt is still queued and will run in order; that is a
+            # weaker outcome than steering but not a lost message.
+            return {"ok": True, "prompt_id": prompt_id, "transport": "kap",
+                    "steered": False,
+                    "note": "queued (steer call failed: %s)" % (exc,)}
+    kap_ensure_pump(sid, cwd=cwd)
+    return {"ok": True, "prompt_id": prompt_id, "transport": "kap",
+            "steered": steered}
