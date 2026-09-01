@@ -30657,13 +30657,22 @@
       return;
     }
     if (currentSession && currentSession.source === 'kimi') {
-      const acpLive = !!ls.live && ls.kind === 'acp';
+      // Which transport is driving this Kimi session, named on the pill.
+      // The two are not interchangeable: only kap can steer a running turn
+      // in place, so 'is my steer real?' has to be answerable at a glance.
+      const onKap = ls.kind === 'kap';
+      const acpLive = !!ls.live && (ls.kind === 'acp' || onKap);
       const acpBusy = acpLive && (ls.status === 'running' || ls.status === 'busy');
-      const label = acpBusy ? 'Kimi ACP · working' : (acpLive ? 'Kimi ACP' : 'Kimi ACP · offline');
+      const proto = onKap ? 'KAP' : 'ACP';
+      const label = acpBusy
+        ? 'Kimi ' + proto + ' · working'
+        : (acpLive ? 'Kimi ' + proto : 'Kimi ' + proto + ' · offline');
       setAll(pill0(acpLive, false, label,
-        acpLive
-          ? 'Kimi sessions share this ACP adapter. Click to inspect or recover it safely.'
-          : 'Kimi ACP is not connected. Click to inspect or recover it.',
+        onKap
+          ? 'CCC is driving this Kimi session over the kap daemon, which can steer a running turn in place.'
+          : acpLive
+            ? 'Kimi sessions share this ACP adapter. Click to inspect or recover it safely.'
+            : 'Kimi ACP is not connected. Click to inspect or recover it.',
         true));
       return;
     }
