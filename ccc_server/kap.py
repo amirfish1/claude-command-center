@@ -604,6 +604,13 @@ def kap_enabled():
 def kap_emit_to_ccc(sid, events, cwd=""):
     """Push mapped events into CCC's conversation store for `sid`.
 
+    Must run **inside the CCC server process**: `ccc_server.acp` resolves
+    `COMMAND_CENTER_STATE_DIR` off the lazy `core` proxy at import time, which
+    only server.py populates. The import is deliberately kept inside this
+    function so the rest of the module (discovery, REST, WS, mapping) stays
+    usable standalone -- which is how the transport was proven against a live
+    daemon without booting CCC.
+
     Returns the number of events written, or 0 when the flag is off.
     """
     if not events or not kap_enabled():

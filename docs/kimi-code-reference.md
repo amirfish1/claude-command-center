@@ -259,3 +259,63 @@ Steer to promote one, and "Steer all" is a single call with several
 `prompt_ids`. The queue CCC renders today would become a read of `{active,
 queued}` rather than a local model, which is also what would kill the
 optimistic-move bounce at its source.
+
+## Stage 1 spike (2026-09-01): what the daemon actually streams
+
+Built `ccc_server/kap.py` and drove a session end-to-end against the live
+0.39.1 daemon: create → prompt → stream → map → CCC events. Four findings, each
+of which would have been a wrong assumption baked into the transport.
+
+**1. The agent event union is not what you subscribe to.** `events-zod.ts`
+defines 58 agent event types (`assistant.delta`, `turn.ended`, …) and it is
+tempting to map them. Subscribing with `subscribe_v2` delivers **none** of
+them. What arrives is `transcript.ops` — a seven-op document protocol that
+Kimi's own UI renders from:
+
+| op | carries |
+|---|---|
+| `prompt.upsert` | prompt + status (`running` → `completed`) — the queue state |
+| `turn.upsert` | turn `t0`, state `running` → `completed` |
+| `step.upsert` | a step inside a turn (`t0.1`) |
+| `frame.upsert` | a content frame, `kind` thinking/text, id `t0.1.f1` |
+| `append` | text into a frame **at a byte offset** — the streaming delta |
+| `marker.upsert` | undo markers |
+| `meta.merge` | activity, agent phase, usage, contextTokens |
+
+This is the better surface. Frames are addressable, appends carry offsets so a
+gap can be *reconciled* rather than replayed blind, and `meta.merge` streams
+usage and `contextTokens` live — **integration caveat #1 above (no usage over
+ACP, needs wire.jsonl) is resolved for free.** Turn boundaries also arrive as
+`event.session.work_changed` with `busy`.
+
+**2. WS auth rides the subprotocol.** Not a header:
+`Sec-WebSocket-Protocol: kimi-code.bearer.<token>`
+(`transport/ws/bearerProtocol.ts`). A bearer header alone fails the upgrade.
+
+**3. The heartbeat is an application frame, not the RFC 6455 ping opcode.**
+The daemon sends `{"type":"ping","payload":{"nonce":…}}` and expects
+`{"type":"pong","payload":{"nonce":…}}`. `wsConnectionV1.onHeartbeat` closes
+the socket after two missed replies, and *any* inbound frame resets the timer.
+A client that answers only the protocol-level ping is dropped ~20s in, mid-turn,
+with no error — the stream just stops. This cost a full debugging cycle.
+
+**4. `POST /sessions` advertises an `agent_config` it does not apply.** A
+session created without a model accepts a prompt, stores it, and then never
+runs a turn: status reports `model: null`, `busy` stays false, and nothing on
+the wire explains it. The effective route is `POST /sessions/{id}/profile`, so
+creating a usable session is two calls.
+
+Two smaller ones: the event type is on the frame envelope (`session_event` is
+the AsyncAPI *message* name, never sent literally); and the terminal
+`turn.upsert` is sent twice, so a mapper must emit once. A `frame.upsert`
+carrying text at turn end is a reconciliation of the appends — concatenating it
+duplicates the whole message.
+
+`tests/fixtures/kap_turn_frames.jsonl` is a real captured turn; the test
+replays it and asserts it reduces to one assistant message plus a result, so a
+protocol change fails loudly rather than silently producing empty turns.
+
+**Not yet done:** tool-call frames were not exercised (the smoke turn used no
+tools), so `frame.kind` for tool frames is passed through rather than mapped.
+Daemon supervision, per-session routing, and adoption of ACP-created sessions
+are the rest of Stage 1; approvals and steer are Stage 2.
