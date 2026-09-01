@@ -30615,6 +30615,11 @@
     const targets = [
       _procHost.querySelector('[data-role="pane-proc"]'),
       _procHost.querySelector('[data-role="rail-proc"]'),
+      // The toolbar breadcrumb lives OUTSIDE #convSplit, so it needs its own
+      // lookup. On a phone the per-pane header -- the pill's only other home in
+      // single-pane mode -- is display:none, which left the transport pill, and
+      // with it the sole entry point to bridge recovery, unreachable on mobile.
+      document.querySelector('#cccBreadcrumb [data-role="breadcrumb-proc"]'),
     ].filter(Boolean);
     if (!targets.length) return;
     const setAll = (html) => { targets.forEach((t) => { t.innerHTML = html; }); };
@@ -39331,6 +39336,9 @@
           + sidChip
           + (typeof window._cccHandoffMovedChipHtml === 'function' ? window._cccHandoffMovedChipHtml(row) : '')
           + (title ? '<span class="ccc-breadcrumb-title">' + escapeHtml(title) + '</span>' : '')
+          // Transport pill slot, filled by updateConvProcessIndicator below.
+          // CSS shows it only where the per-pane header is hidden (mobile).
+          + '<span class="conv-pane-proc ccc-breadcrumb-proc" data-role="breadcrumb-proc"></span>'
           // Transcript size lives in the pane titlebar (.conv-pane-size) already;
           // duplicating it here just crowded the narrow breadcrumb and forced the
           // category/title to ellipsize to uselessness ("cod…", "C…"). (CCC-280)

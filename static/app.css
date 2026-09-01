@@ -2430,6 +2430,21 @@
       display: none;
     }
   }
+  /* The transport pill (Kimi ACP / Codex app-server) is the only entry point
+     to bridge recovery, and the rule directly above hides its home -- the
+     per-pane header -- on any phone-width pane that has a conversation in it.
+     That left a stuck ACP bridge unrecoverable on mobile. Mirror the pill into
+     the toolbar breadcrumb, and show it only at the widths where the per-pane
+     copy is gone, so desktop does not render the same pill twice. */
+  #cccBreadcrumb .ccc-breadcrumb-proc { display: none; }
+  @media (max-width: 1200px) {
+    #cccBreadcrumb .ccc-breadcrumb-proc:not(:empty) {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      flex: 0 0 auto;
+    }
+  }
   /* In single-pane mode the active-pane breadcrumb is mirrored into the
      global toolbar (#cccBreadcrumb), so keep the per-pane header hidden
      to give the sticky "original ask" the slot below the toolbar. In
