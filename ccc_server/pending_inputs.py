@@ -632,6 +632,59 @@ def _drop_matching_terminal_queue_entries(session_id, text):
     return removed
 
 
+def _claim_matching_pending_input(session_id, text):
+    clean = str(text or "").strip()
+    if not session_id or not clean:
+        return None
+    for queue_name, queue, lock in (
+        ("resume", _core._pending_resume_queue, _core._pending_resume_lock),
+        ("terminal", _core._pending_terminal_input_queue, _core._pending_terminal_input_lock),
+    ):
+        with lock:
+            items = queue.get(session_id)
+            if not items:
+                continue
+            for index, item in enumerate(items):
+                if str(item or "").strip() != clean:
+                    continue
+                claimed = items.pop(index)
+                if not items:
+                    queue.pop(session_id, None)
+                claim = {
+                    "session_id": session_id,
+                    "queue_name": queue_name,
+                    "index": index,
+                    "item": claimed,
+                }
+                break
+            else:
+                continue
+        _core._save_pending_inputs()
+        return claim
+    return None
+
+
+def _restore_pending_input_claim(claim):
+    if not isinstance(claim, dict):
+        return False
+    sid = claim.get("session_id")
+    queue_name = claim.get("queue_name")
+    item = claim.get("item")
+    if not sid or queue_name not in ("resume", "terminal") or item is None:
+        return False
+    queue, lock = (
+        (_core._pending_resume_queue, _core._pending_resume_lock)
+        if queue_name == "resume"
+        else (_core._pending_terminal_input_queue, _core._pending_terminal_input_lock)
+    )
+    with lock:
+        items = queue.setdefault(sid, [])
+        index = max(0, min(int(claim.get("index") or 0), len(items)))
+        items.insert(index, item)
+    _core._save_pending_inputs()
+    return True
+
+
 def _consume_matching_pending_input(session_id, text):
     """Remove one queued copy before re-routing it through Steer.
 
