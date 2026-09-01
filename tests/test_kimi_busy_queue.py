@@ -1,6 +1,10 @@
 """Regression coverage for Kimi follow-ups while an ACP turn is active."""
 
 import importlib
+import inspect
+import pathlib
+import shutil
+import tempfile
 import unittest
 from unittest import mock
 
@@ -225,3 +229,104 @@ class KimiSteerCancelResendTests(unittest.TestCase):
         self.assertEqual(len(calls), 2)
         self.assertTrue(result["ok"])
         self.assertTrue(result["queued"])
+
+
+class KimiQueuedSteerConsumptionTests(unittest.TestCase):
+    """A Kimi queued-row Steer must withdraw the copy it just delivered.
+
+    ``_finalize_queued_steer_result`` used to match only ``codex-steer``. ACP
+    harnesses steer by cancel-then-resend and report ``acp-prompt``, so a
+    successful Kimi steer left the durable copy queued: the endpoint answered
+    ``queued_preserved`` over a message it had in fact just sent, the tray card
+    stayed pinned above the composer, and the queue pump delivered the same
+    text a second time later.
+    """
+
+    def setUp(self):
+        self.server = importlib.import_module("server")
+        # The queue helpers persist through PENDING_INPUTS_FILE; point it at a
+        # scratch path so these tests never touch the real pending queue.
+        self.tmp_dir = tempfile.mkdtemp(prefix="ccc-kimi-steer-")
+        self._prev_pending_file = self.server.PENDING_INPUTS_FILE
+        self.server.PENDING_INPUTS_FILE = pathlib.Path(self.tmp_dir) / "pending-inputs.json"
+        with self.server._pending_resume_lock:
+            self.server._pending_resume_queue.clear()
+        with self.server._pending_terminal_input_lock:
+            self.server._pending_terminal_input_queue.clear()
+
+    def tearDown(self):
+        self.server.PENDING_INPUTS_FILE = self._prev_pending_file
+        shutil.rmtree(self.tmp_dir, ignore_errors=True)
+        with self.server._pending_resume_lock:
+            self.server._pending_resume_queue.clear()
+        with self.server._pending_terminal_input_lock:
+            self.server._pending_terminal_input_queue.clear()
+
+    def _queue(self, sid, items):
+        with self.server._pending_resume_lock:
+            self.server._pending_resume_queue[sid] = list(items)
+        # The consume path reloads from the on-disk authority, so an
+        # in-memory-only queue reads back as empty. Persist the seed.
+        self.server._save_pending_inputs([sid])
+
+    def _remaining(self, sid):
+        with self.server._pending_resume_lock:
+            return list(self.server._pending_resume_queue.get(sid, []))
+
+    def test_acp_steer_consumes_its_queued_copy(self):
+        sid = "session_kimi-steer"
+        self._queue(sid, ["target", "later"])
+
+        result = self.server._finalize_queued_steer_result(
+            sid, "target", {"ok": True, "via": "acp-prompt"},
+        )
+
+        self.assertEqual(result["queued_consumed"], 1)
+        self.assertNotIn("queued_preserved", result)
+        self.assertEqual(self._remaining(sid), ["later"])
+
+    def test_a_failed_acp_steer_still_preserves_the_queue(self):
+        sid = "session_kimi-failed"
+        self._queue(sid, ["target"])
+
+        result = self.server._finalize_queued_steer_result(
+            sid, "target", {"ok": False, "error": "ACP kimi send failed"},
+        )
+
+        self.assertTrue(result["queued_preserved"])
+        self.assertEqual(self._remaining(sid), ["target"])
+
+    def test_steer_all_consumes_every_message_it_delivered(self):
+        """The batch is delivered as one prompt, so the queue is matched by
+        the individual texts rather than by the concatenation that was sent."""
+        sid = "session_kimi-batch"
+        self._queue(sid, ["first", "second", "third"])
+
+        result = self.server._finalize_queued_steer_batch_result(
+            sid, ["first", "second"], {"ok": True, "via": "acp-prompt"},
+        )
+
+        self.assertEqual(result["queued_consumed"], 2)
+        self.assertEqual(self._remaining(sid), ["third"])
+
+    def test_steer_all_that_did_not_land_leaves_every_message_queued(self):
+        sid = "session_kimi-batch-failed"
+        self._queue(sid, ["first", "second"])
+
+        result = self.server._finalize_queued_steer_batch_result(
+            sid, ["first", "second"], {"ok": False, "code": "codex_steer_unavailable"},
+        )
+
+        self.assertTrue(result["queued_preserved"])
+        self.assertEqual(self._remaining(sid), ["first", "second"])
+
+    def test_batch_endpoint_accepts_replace_queued_texts(self):
+        source = inspect.getsource(self.server.CommandCenterHandler.do_POST)
+        branch = source[
+            source.index('elif path == "/api/inject-input"'):
+            source.index('elif path == "/api/session/compact"')
+        ]
+        self.assertIn('payload.get("replace_queued_texts")', branch)
+        self.assertIn(
+            "_finalize_queued_steer_batch_result(", branch,
+        )
