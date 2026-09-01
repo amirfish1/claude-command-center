@@ -1477,6 +1477,11 @@ def _inject_text_into_session_router(
         ack_suppression = None
         with pump_lock:
             claim = _core._claim_matching_pending_input(session_id, text)
+            if isinstance(claim, dict) and claim.get("code"):
+                claim_result = dict(claim)
+                claim_result.setdefault("via", "codex-steer")
+                claim_result.setdefault("queued_consumed", 0)
+                return claim_result
             if preserve_queued_steer and claim is None:
                 return {
                     "ok": False,
@@ -1504,22 +1509,81 @@ def _inject_text_into_session_router(
                             ack_suppression, delivered=True,
                         )
                         ack_suppression = None
+                        if not _core._commit_pending_input_claim(claim):
+                            return {
+                                "ok": False,
+                                "via": "codex-steer",
+                                "code": "queued_handoff_commit_failed",
+                                "queued_consumed": 1,
+                                "delivered": True,
+                                "error": "delivered queued message could not be committed",
+                            }
                         steer_result = dict(steer_result)
                         steer_result["queued_consumed"] = 1
                     return steer_result
                 if claim is not None:
-                    _core._finish_codex_queued_steer_ack_suppression(
+                    acknowledged = _core._finish_codex_queued_steer_ack_suppression(
                         ack_suppression, delivered=False,
                     )
                     ack_suppression = None
-                    _core._restore_pending_input_claim(claim)
+                    if acknowledged:
+                        if not _core._commit_pending_input_claim(claim):
+                            return {
+                                "ok": False,
+                                "via": "codex-steer",
+                                "code": "queued_handoff_commit_failed",
+                                "queued_consumed": 1,
+                                "delivered": True,
+                                "error": "acknowledged queued message could not be committed",
+                            }
+                        steer_result = dict(steer_result)
+                        steer_result.pop("code", None)
+                        steer_result.pop("error", None)
+                        steer_result.update({
+                            "ok": True,
+                            "via": "codex-steer",
+                            "queued_consumed": 1,
+                            "delivery_acknowledged": True,
+                        })
+                        return steer_result
+                    if not _core._restore_pending_input_claim(claim):
+                        return {
+                            "ok": False,
+                            "via": "codex-steer",
+                            "code": "queued_rollback_persistence_failed",
+                            "queued_consumed": 0,
+                            "error": "could not persist queued message rollback",
+                        }
                     claim = None
             except Exception:
                 if claim is not None:
-                    _core._finish_codex_queued_steer_ack_suppression(
+                    acknowledged = _core._finish_codex_queued_steer_ack_suppression(
                         ack_suppression, delivered=False,
                     )
-                    _core._restore_pending_input_claim(claim)
+                    if acknowledged:
+                        if not _core._commit_pending_input_claim(claim):
+                            return {
+                                "ok": False,
+                                "via": "codex-steer",
+                                "code": "queued_handoff_commit_failed",
+                                "queued_consumed": 1,
+                                "delivered": True,
+                                "error": "acknowledged queued message could not be committed",
+                            }
+                        return {
+                            "ok": True,
+                            "via": "codex-steer",
+                            "queued_consumed": 1,
+                            "delivery_acknowledged": True,
+                        }
+                    if not _core._restore_pending_input_claim(claim):
+                        return {
+                            "ok": False,
+                            "via": "codex-steer",
+                            "code": "queued_rollback_persistence_failed",
+                            "queued_consumed": 0,
+                            "error": "could not persist queued message rollback",
+                        }
                 raise
             if preserve_queued_steer:
                 steer_result = dict(steer_result)

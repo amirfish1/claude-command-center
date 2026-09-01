@@ -10,6 +10,7 @@ from datetime import datetime, timedelta, timezone, time as datetime_time
 from pathlib import Path
 import contextlib
 import fcntl
+import hashlib
 import json
 import os
 import queue
@@ -205,6 +206,60 @@ def _load_pending_inputs():
             })
     if stripped:
         _core._save_pending_inputs()
+
+
+def _refresh_pending_inputs_for_session(session_id):
+    """Replace one session's process-local queues from durable authority."""
+    session_id = str(session_id or "").strip()
+    if not session_id:
+        return False
+    try:
+        with open(_core.PENDING_INPUTS_FILE) as f:
+            data = json.load(f)
+    except (OSError, json.JSONDecodeError):
+        return False
+    if not isinstance(data, dict):
+        return False
+    resume_data = data.get("resume_queue")
+    terminal_data = data.get("terminal_queue")
+    if not isinstance(resume_data, dict) or not isinstance(terminal_data, dict):
+        return False
+
+    resume_items = resume_data.get(session_id)
+    resume_items = list(resume_items) if isinstance(resume_items, list) else []
+    terminal_items = terminal_data.get(session_id)
+    terminal_items = list(terminal_items) if isinstance(terminal_items, list) else []
+
+    front_handoffs = []
+    back_handoffs = []
+    try:
+        handoff_paths = sorted(_core.PENDING_INPUT_HANDOFF_DIR.glob("*.json"))
+    except OSError:
+        handoff_paths = []
+    for handoff_path in handoff_paths:
+        event = _read_pending_input_handoff(handoff_path)
+        if event is None or event["session_id"] != session_id:
+            continue
+        item = _PendingInputHandoff(
+            event["text"], event["id"], event["path"],
+        )
+        (front_handoffs if event["front"] else back_handoffs).append(item)
+        _core._pending_terminal_handoff_ids[event["id"]] = event["path"]
+
+    with _core._pending_resume_lock:
+        if resume_items:
+            _core._pending_resume_queue[session_id] = resume_items
+        else:
+            _core._pending_resume_queue.pop(session_id, None)
+    with _core._pending_terminal_input_lock:
+        refreshed_terminal = front_handoffs + terminal_items + back_handoffs
+        if refreshed_terminal:
+            _core._pending_terminal_input_queue[session_id] = refreshed_terminal
+        else:
+            _core._pending_terminal_input_queue.pop(session_id, None)
+    return True
+
+
 def _save_pending_inputs():
     """Save pending queues from memory to PENDING_INPUTS_FILE."""
     with _pending_inputs_lock:
@@ -636,32 +691,57 @@ def _claim_matching_pending_input(session_id, text):
     clean = str(text or "").strip()
     if not session_id or not clean:
         return None
-    for queue_name, queue, lock in (
-        ("resume", _core._pending_resume_queue, _core._pending_resume_lock),
-        ("terminal", _core._pending_terminal_input_queue, _core._pending_terminal_input_lock),
-    ):
-        with lock:
-            items = queue.get(session_id)
-            if not items:
-                continue
-            for index, item in enumerate(items):
-                if str(item or "").strip() != clean:
-                    continue
-                claimed = items.pop(index)
+    ownership = _core._codex_queue_pump_lock(session_id)
+    with ownership:
+        if not _core._refresh_pending_inputs_for_session(session_id):
+            return {
+                "ok": False,
+                "code": "queued_claim_refresh_failed",
+                "error": "could not refresh queued message state",
+            }
+        for queue_name, queue, lock in (
+            ("resume", _core._pending_resume_queue, _core._pending_resume_lock),
+            ("terminal", _core._pending_terminal_input_queue, _core._pending_terminal_input_lock),
+        ):
+            with lock:
+                items = queue.get(session_id)
                 if not items:
-                    queue.pop(session_id, None)
-                claim = {
-                    "session_id": session_id,
-                    "queue_name": queue_name,
-                    "index": index,
-                    "item": claimed,
-                }
-                break
-            else:
-                continue
-        _core._save_pending_inputs()
-        return claim
-    return None
+                    continue
+                for index, item in enumerate(items):
+                    if str(item or "").strip() != clean:
+                        continue
+                    claimed = items.pop(index)
+                    if not items:
+                        queue.pop(session_id, None)
+                    claim = {
+                        "session_id": session_id,
+                        "queue_name": queue_name,
+                        "index": index,
+                        "item": claimed,
+                    }
+                    break
+                else:
+                    continue
+            if _core._save_pending_inputs():
+                return claim
+            with lock:
+                items = queue.setdefault(session_id, [])
+                items.insert(min(index, len(items)), claimed)
+            return {
+                "ok": False,
+                "code": "queued_claim_persistence_failed",
+                "error": "could not persist queued message claim",
+            }
+        return None
+
+
+def _commit_pending_input_claim(claim):
+    if not isinstance(claim, dict) or "item" not in claim:
+        return False
+    item = claim.get("item")
+    if isinstance(item, _PendingInputHandoff):
+        return _core._complete_pending_input_handoff(item)
+    return True
 
 
 def _restore_pending_input_claim(claim):
@@ -677,12 +757,23 @@ def _restore_pending_input_claim(claim):
         if queue_name == "resume"
         else (_core._pending_terminal_input_queue, _core._pending_terminal_input_lock)
     )
-    with lock:
-        items = queue.setdefault(sid, [])
-        index = max(0, min(int(claim.get("index") or 0), len(items)))
-        items.insert(index, item)
-    _core._save_pending_inputs()
-    return True
+    ownership = _core._codex_queue_pump_lock(sid)
+    with ownership:
+        _core._refresh_pending_inputs_for_session(sid)
+        with lock:
+            items = queue.setdefault(sid, [])
+            already_restored = (
+                isinstance(item, _PendingInputHandoff)
+                and any(
+                    isinstance(existing, _PendingInputHandoff)
+                    and existing.handoff_id == item.handoff_id
+                    for existing in items
+                )
+            )
+            if not already_restored:
+                index = max(0, min(int(claim.get("index") or 0), len(items)))
+                items.insert(index, item)
+        return bool(_core._save_pending_inputs())
 
 
 def _consume_matching_pending_input(session_id, text):
@@ -1384,10 +1475,75 @@ def _mark_pending_resume_retry(sid, now=None, delay=None):
     _core._pending_resume_retry_after[sid] = now + max(0.0, delay)
 
 
+class _CodexQueueSessionLock:
+    """Thread- and process-wide ownership for one Codex durable queue."""
+
+    def __init__(self, lock_path):
+        self._lock_path = lock_path
+        self._thread_lock = threading.RLock()
+        self._depth = 0
+        self._handle = None
+
+    def acquire(self, blocking=True):
+        if not self._thread_lock.acquire(blocking=blocking):
+            return False
+        try:
+            if self._depth == 0:
+                self._lock_path.parent.mkdir(parents=True, exist_ok=True)
+                handle = open(self._lock_path, "a+")
+                operation = fcntl.LOCK_EX
+                if not blocking:
+                    operation |= fcntl.LOCK_NB
+                try:
+                    fcntl.flock(handle.fileno(), operation)
+                except OSError:
+                    handle.close()
+                    self._thread_lock.release()
+                    return False
+                self._handle = handle
+            self._depth += 1
+            return True
+        except BaseException:
+            self._thread_lock.release()
+            raise
+
+    def release(self):
+        if self._depth <= 0:
+            raise RuntimeError("cannot release un-acquired Codex queue lock")
+        self._depth -= 1
+        if self._depth == 0:
+            handle = self._handle
+            self._handle = None
+            if handle is not None:
+                try:
+                    fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+                finally:
+                    handle.close()
+        self._thread_lock.release()
+
+    def __enter__(self):
+        if not self.acquire():
+            raise OSError("could not acquire Codex queue ownership")
+        return self
+
+    def __exit__(self, exc_type, exc, traceback):
+        self.release()
+
+
 def _codex_queue_pump_lock(session_id):
-    """Return the process-local delivery lock for one Codex conversation."""
+    """Return cross-process delivery ownership for one Codex conversation."""
+    durable_path = str(_core.PENDING_INPUTS_FILE)
+    key = durable_path, str(session_id)
+    digest = hashlib.sha256(str(session_id).encode("utf-8")).hexdigest()
+    lock_path = (
+        _core.PENDING_INPUTS_FILE.parent
+        / "codex-queue-locks"
+        / f"{digest}.lock"
+    )
     with _codex_queue_pump_locks_guard:
-        return _codex_queue_pump_locks.setdefault(session_id, threading.Lock())
+        return _codex_queue_pump_locks.setdefault(
+            key, _CodexQueueSessionLock(lock_path),
+        )
 
 
 def _devin_queue_pump_lock(session_id):
@@ -1458,6 +1614,12 @@ def _pump_codex_resume_queue(session_id):
             return {"ok": True, "waiting": "backoff"}
         if _core._resume_queue_engine_busy(session_id):
             return {"ok": True, "waiting": "busy"}
+        if not _core._refresh_pending_inputs_for_session(session_id):
+            return {
+                "ok": False,
+                "delivered": False,
+                "code": "pending_input_refresh_failed",
+            }
         with _core._pending_resume_lock:
             queue = _core._pending_resume_queue.get(session_id) or []
             text = queue[0] if queue else None

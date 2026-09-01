@@ -69,7 +69,7 @@ _CODEX_APP_SERVER_TURN_THREAD = {}
 _CODEX_QUEUED_STEER_ACK_LOCK = threading.Lock()
 _CODEX_QUEUED_STEER_ACK_SUPPRESSIONS = {}
 _CODEX_QUEUED_STEER_ACK_TTL_S = 120.0
-_CODEX_QUEUED_STEER_ACK_MAX_COMMITTED = 256
+_CODEX_QUEUED_STEER_ACK_MAX_TOTAL = 256
 _CODEX_APP_SERVER_WARMUP_LOCK = threading.Lock()
 _CODEX_APP_SERVER_WARMUP_LAST = 0.0
 _CODEX_APP_SERVER_LIVENESS_INTERVAL = 20.0
@@ -2042,26 +2042,25 @@ def _remove_codex_queued_steer_ack_unlocked(key, token_id):
 
 
 def _prune_codex_queued_steer_acks_unlocked(now):
-    committed = []
+    all_live = []
     for key, entries in list(_CODEX_QUEUED_STEER_ACK_SUPPRESSIONS.items()):
         live = []
         for entry in entries:
             if float(entry.get("expires_at") or 0.0) <= now:
                 continue
             live.append(entry)
-            if entry.get("state") == "committed":
-                committed.append((
-                    float(entry.get("created_at") or 0.0),
-                    key,
-                    entry.get("token_id"),
-                ))
+            all_live.append((
+                float(entry.get("created_at") or 0.0),
+                key,
+                entry.get("token_id"),
+            ))
         if live:
             _CODEX_QUEUED_STEER_ACK_SUPPRESSIONS[key] = live
         else:
             _CODEX_QUEUED_STEER_ACK_SUPPRESSIONS.pop(key, None)
-    excess = len(committed) - _CODEX_QUEUED_STEER_ACK_MAX_COMMITTED
+    excess = len(all_live) - _CODEX_QUEUED_STEER_ACK_MAX_TOTAL
     if excess > 0:
-        for _, key, token_id in sorted(committed)[:excess]:
+        for _, key, token_id in sorted(all_live)[:excess]:
             _remove_codex_queued_steer_ack_unlocked(key, token_id)
 
 
@@ -2081,6 +2080,7 @@ def _begin_codex_queued_steer_ack_suppression(session_id, text):
             "created_at": now,
             "expires_at": now + _CODEX_QUEUED_STEER_ACK_TTL_S,
         })
+        _prune_codex_queued_steer_acks_unlocked(now)
     return key, token_id
 
 

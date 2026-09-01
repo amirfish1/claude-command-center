@@ -30682,7 +30682,10 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                     # copy then survives a successful steer and the queue
                     # pump resends it later, delivering the message twice.
                     result = _finalize_queued_steer_result(sid, text, result)
-                self.send_json(result)
+                status_code = (
+                    409 if result.get("code") == "queued_message_missing" else 200
+                )
+                self.send_json(result, status_code)
         elif path == "/api/session/compact":
             length = int(self.headers.get("Content-Length", "0"))
             body = self.rfile.read(length) if length > 0 else b""

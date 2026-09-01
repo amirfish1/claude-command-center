@@ -17078,7 +17078,8 @@ class TestPendingInputs(unittest.TestCase):
         with self.server._pending_resume_lock:
             self.server._pending_resume_queue[sid] = ["first", "second"]
 
-        with mock.patch.object(self.server, "_pending_resume_retry_due", return_value=True), \
+        with mock.patch.object(self.server, "_refresh_pending_inputs_for_session", return_value=True), \
+             mock.patch.object(self.server, "_pending_resume_retry_due", return_value=True), \
              mock.patch.object(self.server, "_resume_queue_engine_busy", return_value=False), \
              mock.patch.object(
                  self.server,
@@ -17110,7 +17111,8 @@ class TestPendingInputs(unittest.TestCase):
         with self.server._pending_resume_lock:
             self.server._pending_resume_queue[sid] = ["keep"]
 
-        with mock.patch.object(self.server, "_pending_resume_retry_due", return_value=True), \
+        with mock.patch.object(self.server, "_refresh_pending_inputs_for_session", return_value=True), \
+             mock.patch.object(self.server, "_pending_resume_retry_due", return_value=True), \
              mock.patch.object(self.server, "_resume_queue_engine_busy", return_value=False), \
              mock.patch.object(self.server, "resume_session_codex", return_value={"ok": False}):
             self.server._pump_codex_resume_queue(sid)
@@ -17125,7 +17127,8 @@ class TestPendingInputs(unittest.TestCase):
         with self.server._pending_resume_lock:
             self.server._pending_resume_queue[sid] = ["keep until visible"]
 
-        with mock.patch.object(self.server, "_pending_resume_retry_due", return_value=True), \
+        with mock.patch.object(self.server, "_refresh_pending_inputs_for_session", return_value=True), \
+             mock.patch.object(self.server, "_pending_resume_retry_due", return_value=True), \
              mock.patch.object(self.server, "_resume_queue_engine_busy", return_value=False), \
              mock.patch.object(
                  self.server,
@@ -17142,11 +17145,19 @@ class TestPendingInputs(unittest.TestCase):
         sid = "sid-concurrent"
         lock = self.server._codex_queue_pump_lock(sid)
         lock.acquire()
+        result = {}
+        worker = threading.Thread(
+            target=lambda: result.update(
+                self.server._pump_codex_resume_queue(sid)
+            )
+        )
         try:
-            result = self.server._pump_codex_resume_queue(sid)
+            worker.start()
+            worker.join(timeout=2)
         finally:
             lock.release()
 
+        self.assertFalse(worker.is_alive())
         self.assertEqual(result["waiting"], "already-pumping")
 
     def test_get_queued_events_for_session(self):
