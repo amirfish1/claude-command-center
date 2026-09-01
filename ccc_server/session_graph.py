@@ -2708,6 +2708,7 @@ def session_live_status(session_id, session_cwd):
         "recently_written": False,
         "ambiguous": False,
         "match_count": 0,
+        "acp_pending_permission": None,
     }
     if not session_id:
         return result
@@ -2729,6 +2730,7 @@ def session_live_status(session_id, session_cwd):
             result["cwd"] = snap.get("cwd") or session_cwd
             result["match_count"] = 1
             result["model"] = snap.get("model")
+            result["acp_pending_permission"] = snap.get("pending_permission")
             if snap.get("pending_permissions"):
                 result["needs_approval"] = True
                 result["needs_approval_message"] = "Kimi is waiting for a tool approval"
@@ -2795,6 +2797,7 @@ def session_live_status(session_id, session_cwd):
             result["cwd"] = snap.get("cwd") or session_cwd
             result["match_count"] = 1
             result["model"] = snap.get("model")
+            result["acp_pending_permission"] = snap.get("pending_permission")
             if snap.get("pending_permissions"):
                 result["needs_approval"] = True
                 result["needs_approval_message"] = "Grok is waiting for a tool approval"
@@ -6180,5 +6183,4 @@ def _fetch_issue_titles(repo_path, _blocking=False):
     except (subprocess.TimeoutExpired, FileNotFoundError, json.JSONDecodeError):
         pass
     return data
-
 

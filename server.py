@@ -23456,10 +23456,12 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
             # to render an in-progress strip without polling /api/sessions.
             is_codex_status = _is_codex_session(sid) if sid else False
             is_kimi_status = _is_kimi_session(sid) if sid else False
+            is_grok_status = _is_grok_session(sid) if sid else False
+            is_acp_status = is_kimi_status or is_grok_status
             is_gemini_status = _is_gemini_session(sid) if sid else False
             is_antigravity_status = _is_antigravity_session(sid) if sid else False
             is_hermes_status = _is_hermes_session(sid) if sid else False
-            notif = None if (is_codex_status or is_gemini_status or is_antigravity_status or is_hermes_status) else (_read_notification_state(sid) if sid else None)
+            notif = None if (is_codex_status or is_acp_status or is_gemini_status or is_antigravity_status or is_hermes_status) else (_read_notification_state(sid) if sid else None)
             if is_codex_status:
                 _schedule_codex_managed_app_server_warmup()
                 _codex_app_server_refresh_thread_status(sid)
@@ -23595,9 +23597,9 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                 # already carry their own wire-tail stale fields from
                 # session_live_status — don't clobber them, and they have no
                 # Claude tool-child process to probe.
-                if not is_kimi_status:
+                if not is_acp_status:
                     status.update(_claude_stale_tool_fields(None, False))
-                if not is_kimi_status and status.get("live") and not status.get("tty"):
+                if not is_acp_status and status.get("live") and not status.get("tty"):
                     spawn = _find_live_spawn_entry_for_session(sid)
                     active_child = _spawn_entry_active_tool_child(spawn) if spawn else None
                     if active_child:
@@ -23684,7 +23686,7 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                     status["question_preamble"] = ""
                     status["question_options"] = []
                     status["question_option_details"] = []
-            if not (is_codex_status or is_gemini_status or is_antigravity_status or is_hermes_status):
+            if not is_acp_status and not (is_codex_status or is_gemini_status or is_antigravity_status or is_hermes_status):
                 status["needs_approval"] = _notification_is_blocking(notif)
                 status["needs_approval_message"] = notif.get("message", "") if notif else ""
             # Surface a count of CCC-initiated spawns so the client can
@@ -23707,7 +23709,7 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
             status["headless_pid"] = None
             status["headless_stale"] = False
             status["terminal_present"] = False
-            if sid and not (is_codex_status or is_gemini_status or is_antigravity_status or is_hermes_status):
+            if sid and not (is_codex_status or is_acp_status or is_gemini_status or is_antigravity_status or is_hermes_status):
                 try:
                     _spawn = _find_live_spawn_entry_for_session(sid)
                     if _spawn is None:

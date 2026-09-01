@@ -2327,6 +2327,28 @@ def _acp_session_snapshot(harness, sid):
         state = _core._acp_session(harness, sid)
         if state is None:
             return None
+        pending_permissions = state.get("pending_permissions") or {}
+        pending_permission = None
+        if pending_permissions:
+            request_id, raw_permission = next(iter(pending_permissions.items()))
+            if isinstance(raw_permission, dict):
+                raw_tool_call = raw_permission.get("tool_call")
+                raw_options = raw_permission.get("options")
+                pending_permission = {
+                    "request_id": str(request_id),
+                    "harness": harness,
+                    "tool_call": (
+                        dict(raw_tool_call)
+                        if isinstance(raw_tool_call, dict)
+                        else {}
+                    ),
+                    "options": [
+                        dict(option) if isinstance(option, dict) else option
+                        for option in (
+                            raw_options if isinstance(raw_options, list) else []
+                        )
+                    ],
+                }
         return {
             "sid": sid,
             "harness": harness,
@@ -2334,7 +2356,8 @@ def _acp_session_snapshot(harness, sid):
             "status": state.get("status") or "idle",
             "model": state.get("model"),
             "turn_seq": state.get("turn_seq") or 0,
-            "pending_permissions": len(state.get("pending_permissions") or {}),
+            "pending_permissions": len(pending_permissions),
+            "pending_permission": pending_permission,
             "config_options": state.get("config_options") or [],
             "updated_at": state.get("updated_at") or 0,
         }
@@ -2384,5 +2407,4 @@ def _resolve_kimi_bin():
 
 def _resolve_grok_bin():
     return _core._acp_resolve_bin("grok")
-
 
