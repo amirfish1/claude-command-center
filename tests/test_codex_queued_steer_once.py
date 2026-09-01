@@ -985,10 +985,8 @@ def test_two_process_session_rmw_neither_resurrects_nor_loses_rows(tmp_path):
     assert all(outcome[2] is True for outcome in outcomes)
     payload = json.loads(pending_file.read_text())
     assert "sid-a" not in payload["resume_queue"]
-    assert [item["text"] for item in payload["resume_queue"]["sid-b"]] == [
-        "new-b",
-    ]
-    assert payload["resume_queue"]["sid-b"][0]["id"]
+    assert payload["resume_queue"]["sid-b"] == ["new-b"]
+    assert payload["pending_entry_ids"]["resume_queue"]["sid-b"][0]
     assert payload["devin_steers"] == {"other-sid": "preserve-steer"}
     assert payload["auto_resume_opt_in"] == {
         "sid-a": True,
@@ -1039,9 +1037,8 @@ def test_stale_same_session_enqueue_cannot_resurrect_worker_claim(tmp_path):
     assert released.is_set()
     assert all(outcome[0] != "error" for outcome in outcomes), outcomes
     payload = json.loads(pending_file.read_text())
-    assert [item["text"] for item in payload["resume_queue"][sid]] == [
-        "keep", "new-row",
-    ]
+    assert payload["resume_queue"][sid] == ["keep", "new-row"]
+    assert len(set(payload["pending_entry_ids"]["resume_queue"][sid])) == 2
     assert claimant.exitcode == 0
     assert stale_enqueue.exitcode == 0
 
@@ -1477,7 +1474,10 @@ def test_production_writers_use_explicit_pending_mutations():
                 if not (
                     source_path.name == "pending_inputs.py"
                     and isinstance(owner, ast.FunctionDef)
-                    and owner.name == "_mutate_pending_inputs"
+                    and owner.name in {
+                        "_mutate_pending_inputs",
+                        "_refresh_pending_inputs_for_session",
+                    }
                 ):
                     direct_persist.append(f"{source_path.name}:{node.lineno}")
             if name in {"_apply_pending_input_operations", "_mutate_pending_inputs"}:
@@ -1520,10 +1520,9 @@ def test_mutation_exception_rolls_back_memory_and_disk(monkeypatch, tmp_path):
     assert not result["ok"]
     assert "value" not in result
     assert server._pending_resume_queue[sid] == ["first", "second"]
-    assert [
-        item["text"]
-        for item in json.loads(pending_file.read_text())["resume_queue"][sid]
-    ] == ["first", "second"]
+    assert json.loads(pending_file.read_text())["resume_queue"][sid] == [
+        "first", "second",
+    ]
 
 
 def test_persist_failure_rolls_back_memory_and_hides_value(monkeypatch, tmp_path):
@@ -1581,11 +1580,9 @@ def test_codex_pump_delivery_failure_restores_exact_claim(monkeypatch, tmp_path)
 
     assert not result["ok"]
     assert server._pending_resume_queue[sid] == ["target", "target", "next"]
-    assert [
-        item["text"] for item in json.loads(
-            (tmp_path / "pending.json").read_text()
-        )["resume_queue"][sid]
-    ] == ["target", "target", "next"]
+    assert json.loads(
+        (tmp_path / "pending.json").read_text()
+    )["resume_queue"][sid] == ["target", "target", "next"]
 
 
 def test_devin_clear_if_matching_reports_truthful_boolean(monkeypatch, tmp_path):
