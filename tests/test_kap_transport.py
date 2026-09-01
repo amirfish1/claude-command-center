@@ -136,6 +136,27 @@ class TestKapTurnMapper(unittest.TestCase):
         self.assertEqual(self.m.epoch, "ep-9")
 
 
+class TestKapHeartbeat(unittest.TestCase):
+    """kap-server's heartbeat is an application frame, not the RFC 6455 ping
+    opcode, and it drops the socket after two missed replies. Answering it is
+    what keeps a streaming turn alive past 20 seconds."""
+
+    def test_ping_gets_a_pong_carrying_the_nonce(self):
+        reply = kap.kap_heartbeat_reply(
+            {"type": "ping", "timestamp": "2026-09-01T00:00:00.000Z",
+             "payload": {"nonce": "n-123"}})
+        self.assertEqual(reply, {"type": "pong", "payload": {"nonce": "n-123"}})
+
+    def test_ping_without_nonce_still_replies(self):
+        reply = kap.kap_heartbeat_reply({"type": "ping"})
+        self.assertEqual(reply, {"type": "pong", "payload": {"nonce": ""}})
+
+    def test_non_ping_frames_are_not_answered(self):
+        for frame in ({"type": "server_hello"}, {"type": "session_event"},
+                      {"type": "ack"}, {}, None, "ping"):
+            self.assertIsNone(kap.kap_heartbeat_reply(frame))
+
+
 class TestKapDiscovery(unittest.TestCase):
     def _home(self, tmp, rec):
         inst = Path(tmp) / "server" / "instances"
