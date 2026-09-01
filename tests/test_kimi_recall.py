@@ -236,6 +236,20 @@ def test_connect_total_recall_returns_controlled_error_when_dashboard_is_unavail
     assert "offline" in result.error
 
 
+def test_connect_total_recall_syncs_when_the_folder_is_already_connected(tmp_path):
+    connected = mock.MagicMock()
+    connected.read.return_value = b'{"ok":false,"error":"Already connected: kimi-code"}'
+    connected.__enter__.return_value = connected
+    synced = mock.MagicMock()
+    synced.read.return_value = b'{"ok":true}'
+    synced.__enter__.return_value = synced
+    with mock.patch("ccc_server.kimi_recall.urllib.request.urlopen", side_effect=[connected, synced]) as open_url:
+        result = kimi_recall.connect_total_recall(tmp_path, endpoint="http://127.0.0.1:24824/api/brain/connect")
+
+    assert result.ok is True
+    assert open_url.call_args_list[1].args[0].full_url == "http://127.0.0.1:24824/api/brain/sync"
+
+
 def test_connect_kimi_knowledge_does_not_connect_after_export_errors(tmp_path):
     failed = kimi_recall.SyncResult(exported=[], skipped=[], errors=["session_alpha: permission denied"])
     with mock.patch("ccc_server.kimi_recall.sync_kimi_knowledge", return_value=failed), \

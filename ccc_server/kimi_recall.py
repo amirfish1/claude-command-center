@@ -214,8 +214,26 @@ def connect_total_recall(output_dir, endpoint=None):
             body = json.loads(response.read().decode("utf-8"))
     except (OSError, urllib.error.URLError, ValueError) as exc:
         return ConnectionResult(ok=False, error=str(exc))
-    if not isinstance(body, dict) or not body.get("ok"):
-        return ConnectionResult(ok=False, error=str((body or {}).get("error") or "Total Recall rejected the folder"))
+    if not isinstance(body, dict):
+        return ConnectionResult(ok=False, error="Total Recall returned an invalid connection response")
+    if not body.get("ok"):
+        error = str(body.get("error") or "Total Recall rejected the folder")
+        if not error.startswith("Already connected:"):
+            return ConnectionResult(ok=False, error=error)
+        sync_url = endpoint.rsplit("/connect", 1)[0] + "/sync"
+        sync_request = urllib.request.Request(
+            sync_url,
+            headers={"Content-Type": "application/json", "X-TR-Request": "1"},
+            method="POST",
+        )
+        try:
+            with urllib.request.urlopen(sync_request, timeout=15) as response:
+                sync_body = json.loads(response.read().decode("utf-8"))
+        except (OSError, urllib.error.URLError, ValueError) as exc:
+            return ConnectionResult(ok=False, error=str(exc))
+        if not isinstance(sync_body, dict) or not sync_body.get("ok"):
+            return ConnectionResult(ok=False, error=str((sync_body or {}).get("error") or "Total Recall could not start sync"))
+        return ConnectionResult(ok=True, name=error.removeprefix("Already connected:").strip())
     return ConnectionResult(ok=True, name=str(body.get("name") or ""))
 
 
