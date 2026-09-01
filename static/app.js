@@ -8058,6 +8058,39 @@
     showOpToast('Copied assistant message', 'ok');
   });
 
+  // Copy the raw text of a pending/queued/steerable user message — these
+  // transient rows had Cancel/Steer but no way to grab the text itself
+  // before it sends (CCC-1008).
+  document.addEventListener('click', async (ev) => {
+    const btn = ev.target.closest('[data-copy-user-message]');
+    if (!btn) return;
+    ev.preventDefault();
+    ev.stopPropagation();
+    const row = btn.closest('.event.user_text');
+    const msg = row && row.querySelector('.user-msg');
+    const text = (msg && (msg.getAttribute('data-raw-text') || msg.textContent || '')).trim();
+    if (!text) {
+      showOpToast('No message text to copy', 'error');
+      return;
+    }
+    const ok = await copyTextValue(text);
+    if (!ok) {
+      showOpToast('Copy failed - select and copy manually', 'error');
+      return;
+    }
+    const original = btn.innerHTML;
+    btn.classList.add('copied');
+    btn.innerHTML = '&#10003;';
+    btn.title = 'Copied';
+    setTimeout(() => {
+      if (!btn.isConnected) return;
+      btn.classList.remove('copied');
+      btn.innerHTML = original;
+      btn.title = 'Copy message';
+    }, 1200);
+    showOpToast('Copied message', 'ok');
+  });
+
   // Cancel one durable queued message. Remove the row only after the server
   // confirms the persisted FIFO entry was withdrawn.
   document.addEventListener('click', async (ev) => {
@@ -9601,6 +9634,7 @@
       pendingDiv.className = 'event user_text pending' + (pendingSteerHtml ? ' has-user-steer' : '');
       pendingDiv.innerHTML = '<span class="label">User</span>'
         + '<button type="button" class="pending-send-cancel" title="Cancel - discard this message">✕</button>'
+        + '<button type="button" class="user-message-copy" data-copy-user-message title="Copy message" aria-label="Copy message">&#128203;</button>'
         + '<div class="user-msg" dir="auto" data-raw-text="' + escapeAttr(text) + '">' + escapeHtml(text) + '</div>'
         + pendingSteerHtml;
       $view.appendChild(pendingDiv);
@@ -9715,6 +9749,7 @@
     const msg = label || 'Will send when the session finishes its current step.';
     note.innerHTML = '<span class="send-queued-icon">⏳</span>'
       + '<span class="send-queued-text">' + escapeHtml(msg) + '</span>'
+      + '<button type="button" class="user-message-copy" data-copy-user-message title="Copy message" aria-label="Copy message">&#128203;</button>'
       + '<button type="button" class="send-queued-steer" data-steer-queued-message'
       + ' data-session-id="' + escapeAttr(pending.sid || '') + '"'
       + ' title="Steer the active Codex turn with this queued message">Steer</button>'
@@ -51676,6 +51711,16 @@
         steer.setAttribute('data-steer-queued-message', '');
         steer.textContent = 'Steer';
         el.appendChild(steer);
+      }
+      if (!el.querySelector('[data-copy-user-message]')) {
+        const copyBtn = document.createElement('button');
+        copyBtn.type = 'button';
+        copyBtn.className = 'user-message-copy';
+        copyBtn.setAttribute('data-copy-user-message', '');
+        copyBtn.title = 'Copy message';
+        copyBtn.setAttribute('aria-label', 'Copy message');
+        copyBtn.innerHTML = '&#128203;';
+        el.insertBefore(copyBtn, steer);
       }
       cancel.dataset.sessionId = sessionId;
       steer.dataset.sessionId = sessionId;
