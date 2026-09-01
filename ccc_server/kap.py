@@ -345,11 +345,12 @@ def kap_open_stream(sid, transcript="delta", since=None):
 # carrying {type, seq, epoch, session_id, payload}. CCC's normalized shape is
 # far smaller -- user_text / assistant{blocks:[{kind}]} / result -- so this is
 # a narrowing, and only the handful below matter for a turn to render.
+#
+# Every agent event carries agentId and turnId. Subagent events share the
+# stream, so filtering on agentId is not optional: without it a spawned
+# subagent's deltas interleave into the main transcript.
 
-_KAP_IGNORED_PREFIXES = (
-    "event.workspace.", "event.config.", "event.model", "event.plugin",
-    "event.capability", "event.di_unit",
-)
+_KAP_TOOL_PENDING = "pending"
 
 
 class KapTurnMapper:
@@ -357,27 +358,45 @@ class KapTurnMapper:
 
     Deltas accumulate into one assistant message per turn, matching what the
     ACP path produces, so the frontend cannot tell the two transports apart.
+    Field names follow packages/kap-server/src/protocol/events-zod.ts.
     """
 
-    def __init__(self, message_id_prefix="kap-kimi"):
+    def __init__(self, agent_id=_KAP_MAIN_AGENT, message_id_prefix="kap-kimi"):
+        self.agent_id = agent_id
         self.prefix = message_id_prefix
-        self.turn = 0
+        self.turn_id = 0
         self.blocks = []
+        self.tools = {}
         self.last_seq = None
         self.epoch = None
 
-    def _block(self, kind):
+    def _text_block(self, kind):
         if not self.blocks or self.blocks[-1].get("kind") != kind:
             self.blocks.append({"kind": kind, "text": ""})
         return self.blocks[-1]
 
+    def _flush(self, subtype):
+        out = []
+        if self.blocks:
+            out.append({
+                "type": "assistant",
+                "message_id": "%s-%d" % (self.prefix, self.turn_id),
+                "blocks": self.blocks,
+            })
+            self.blocks = []
+            self.tools = {}
+        out.append({"type": "result", "subtype": subtype})
+        return out
+
     def feed(self, frame):
         """Consume one WS frame; return a list of CCC events to emit."""
         ftype = frame.get("type") or ""
-        if ftype in ("server_hello", "ack", "ping", "pong"):
+        if ftype in ("server_hello", "ack", "ping", "pong", "client_hello_ack"):
             return []
         if ftype == "resync_required":
-            # seq gap: the caller should reopen with transcript_since.
+            # A seq gap. The caller reopens with transcript_since=last_seq;
+            # surfacing it as an event keeps the hole visible rather than
+            # silently dropping turns.
             return [{"type": "result", "subtype": "resync_required"}]
         if frame.get("seq") is not None:
             self.last_seq = frame["seq"]
@@ -385,40 +404,46 @@ class KapTurnMapper:
             self.epoch = frame["epoch"]
 
         payload = frame.get("payload") or {}
-        etype = payload.get("type") or ftype
-        if any(etype.startswith(p) for p in _KAP_IGNORED_PREFIXES):
+        etype = payload.get("type") or ""
+        if not etype:
+            return []
+        # Subagents share this stream; only the main agent's turn is ours.
+        agent = payload.get("agentId")
+        if agent is not None and agent != self.agent_id:
             return []
 
         if etype == "turn.started":
-            self.turn += 1
+            self.turn_id = int(payload.get("turnId") or (self.turn_id + 1))
             self.blocks = []
+            self.tools = {}
             return []
         if etype == "assistant.delta":
-            self._block("text")["text"] += str(payload.get("text") or "")
+            self._text_block("text")["text"] += str(payload.get("delta") or "")
             return []
         if etype == "thinking.delta":
-            self._block("thinking")["text"] += str(payload.get("text") or "")
+            self._text_block("thinking")["text"] += str(payload.get("delta") or "")
             return []
-        if etype == "toolCall.started":
-            self.blocks.append({
+        if etype == "tool.call.started":
+            block = {
                 "kind": "tool_use",
-                "name": payload.get("toolName") or payload.get("name") or "",
-                "input": payload.get("args") or payload.get("input") or {},
-                "tool_id": payload.get("toolCallId") or payload.get("id") or "",
-            })
+                "name": payload.get("name") or "",
+                "input": payload.get("args"),
+                "tool_id": payload.get("toolCallId") or "",
+                "status": _KAP_TOOL_PENDING,
+            }
+            if payload.get("description"):
+                block["description"] = payload["description"]
+            self.blocks.append(block)
+            self.tools[block["tool_id"]] = block
+            return []
+        if etype == "tool.result":
+            block = self.tools.get(payload.get("toolCallId"))
+            if block is not None:
+                block["status"] = "error" if payload.get("isError") else "ok"
+                block["output"] = payload.get("output")
             return []
         if etype == "turn.ended":
-            out = []
-            if self.blocks:
-                out.append({
-                    "type": "assistant",
-                    "message_id": "%s-%d" % (self.prefix, self.turn),
-                    "blocks": self.blocks,
-                })
-                self.blocks = []
-            out.append({"type": "result",
-                        "subtype": payload.get("reason") or "completed"})
-            return out
+            return self._flush(str(payload.get("reason") or "completed"))
         if etype == "prompt.aborted":
-            return [{"type": "result", "subtype": "cancelled"}]
+            return self._flush("cancelled")
         return []
