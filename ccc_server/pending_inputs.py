@@ -55,6 +55,13 @@ _pending_terminal_input_lock = threading.Lock()
 _pending_terminal_handoff_ids: dict = {}  # watcher-local handoff_id → path
 _pending_input_recovery_registry = {}
 _pending_input_recovery_registry_lock = threading.Lock()
+_pending_metadata_backup_health = {
+    "degraded": False,
+    "last_error": None,
+    "last_error_at": None,
+    "primary_generation": 0,
+    "backup_generation": 0,
+}
 _pending_inputs_lock = threading.RLock()
 _pending_inputs_file_lock_local = threading.local()
 _pending_input_handoff_ingest_lock = threading.Lock()
@@ -221,6 +228,10 @@ def _empty_pending_inputs_payload():
             "resume_queue": {},
             "terminal_queue": {},
         },
+        "pending_queue_revisions": {
+            "resume_queue": {},
+            "terminal_queue": {},
+        },
     }
 
 
@@ -248,10 +259,14 @@ def _read_pending_inputs_payload_unlocked(*, missing_is_empty):
         backup_integrity = str(backup.get("integrity") or "")
         backup_body = {
             key: backup.get(key)
-            for key in (
+            for key in ((
                 "version", "generation", "pending_entry_ids",
                 "applied_claim_journal_ids",
-            )
+                "pending_queue_revisions",
+            ) if _pending_safe_int(backup.get("version"), 1) >= 2 else (
+                "version", "generation", "pending_entry_ids",
+                "applied_claim_journal_ids",
+            ))
         }
         expected_integrity = hashlib.sha256(
             json.dumps(backup_body, sort_keys=True, separators=(",", ":")).encode(
@@ -266,11 +281,21 @@ def _read_pending_inputs_payload_unlocked(*, missing_is_empty):
         if (
             isinstance(backup_sidecar, dict)
             and backup_generation > primary_generation
+            and backup_generation == _pending_safe_int(
+                backup_sidecar.get("generation"), -1
+            )
         ):
             payload["pending_entry_ids"] = backup_sidecar
-            primary_ledger = dict(payload.get("applied_claim_journal_ids") or {})
+            backup_revisions = backup.get("pending_queue_revisions")
+            if isinstance(backup_revisions, dict):
+                payload["pending_queue_revisions"] = backup_revisions
+            primary_raw_ledger = payload.get("applied_claim_journal_ids")
+            primary_ledger = dict(
+                primary_raw_ledger if isinstance(primary_raw_ledger, dict) else {}
+            )
+            backup_raw_ledger = backup.get("applied_claim_journal_ids")
             for journal_id, created in (
-                backup.get("applied_claim_journal_ids") or {}
+                backup_raw_ledger if isinstance(backup_raw_ledger, dict) else {}
             ).items():
                 primary_ledger[journal_id] = max(
                     _pending_safe_int(primary_ledger.get(journal_id), 0),
@@ -285,7 +310,10 @@ def _read_pending_inputs_payload_unlocked(*, missing_is_empty):
         if value is None:
             payload[field] = {}
         elif not isinstance(value, dict):
-            return None
+            if field == "applied_claim_journal_ids":
+                payload[field] = {}
+            else:
+                return None
     sidecar = payload.get("pending_entry_ids")
     if not isinstance(sidecar, dict):
         payload["pending_entry_ids"] = {
@@ -301,6 +329,13 @@ def _read_pending_inputs_payload_unlocked(*, missing_is_empty):
             sidecar["resume_queue"] = {}
         if not isinstance(sidecar.get("terminal_queue"), dict):
             sidecar["terminal_queue"] = {}
+    revisions = payload.get("pending_queue_revisions")
+    if not isinstance(revisions, dict):
+        revisions = {}
+        payload["pending_queue_revisions"] = revisions
+    for field in ("resume_queue", "terminal_queue"):
+        if not isinstance(revisions.get(field), dict):
+            revisions[field] = {}
     return payload
 
 
@@ -750,6 +785,7 @@ def _pending_input_recovery_status(session_id):
         "recovery_volatile": volatile_count > 0,
         "restart_safe": volatile_count == 0,
         "pending_schema_version": 2,
+        "metadata_backup": dict(_pending_metadata_backup_health),
     }
 
 
@@ -1056,7 +1092,7 @@ def _normalize_pending_session_ids(affected_session_ids):
 
 def _persist_pending_inputs_current(
     affected, *, include_devin_steers=False, include_auto_resume=False,
-    applied_journal_id=None,
+    applied_journal_id=None, changed_queue_fields=None,
 ):
     for sid in affected:
         _repair_pending_entry_ids_for_session(sid)
@@ -1123,6 +1159,14 @@ def _persist_pending_inputs_current(
                         payload["auto_resume_opt_in"][sid] = True
                     else:
                         payload["auto_resume_opt_in"].pop(sid, None)
+                revisions = payload.setdefault("pending_queue_revisions", {
+                    "resume_queue": {}, "terminal_queue": {},
+                })
+                for field in (changed_queue_fields or {}).get(sid, set()):
+                    revision_map = revisions.setdefault(field, {})
+                    revision_map[sid] = _pending_safe_int(
+                        revision_map.get(sid), 0
+                    ) + 1
             if applied_journal_id:
                 ledger = payload.setdefault("applied_claim_journal_ids", {})
                 ledger[str(applied_journal_id)] = time.time_ns()
@@ -1152,17 +1196,30 @@ def _persist_pending_inputs_current(
                 os.fsync(f.fileno())
             os.replace(tmp_path, _core.PENDING_INPUTS_FILE)
             tmp_path = None
+            primary_directory_fd = os.open(
+                _core.PENDING_INPUTS_FILE.parent, os.O_RDONLY
+            )
+            try:
+                os.fsync(primary_directory_fd)
+            finally:
+                os.close(primary_directory_fd)
             primary_committed = True
+            _pending_metadata_backup_health["primary_generation"] = int(
+                payload["pending_entry_ids"].get("generation") or 0
+            )
             try:
                 backup_path = _pending_inputs_metadata_backup_path()
                 backup_body = {
-                    "version": 1,
+                    "version": 2,
                     "generation": int(
                         payload["pending_entry_ids"].get("generation") or 0
                     ),
                     "pending_entry_ids": payload["pending_entry_ids"],
                     "applied_claim_journal_ids": payload.get(
                         "applied_claim_journal_ids"
+                    ) or {},
+                    "pending_queue_revisions": payload.get(
+                        "pending_queue_revisions"
                     ) or {},
                 }
                 backup_payload = {
@@ -1191,7 +1248,17 @@ def _persist_pending_inputs_current(
                     os.fsync(directory_fd)
                 finally:
                     os.close(directory_fd)
+                _pending_metadata_backup_health.update({
+                    "degraded": False,
+                    "last_error": None,
+                    "backup_generation": backup_body["generation"],
+                })
             except OSError as backup_error:
+                _pending_metadata_backup_health.update({
+                    "degraded": True,
+                    "last_error": str(backup_error),
+                    "last_error_at": time.time(),
+                })
                 print(
                     f"  [pending-inputs] metadata backup degraded: {backup_error}",
                     flush=True,
@@ -1265,11 +1332,21 @@ def _mutate_pending_inputs(
                 "code": "pending_input_mutation_failed",
                 "error": str(exc),
             }
+        changed_queue_fields = {}
+        for sid, snapshot in snapshots.items():
+            current = _pending_inputs_session_snapshot(sid)
+            changed_queue_fields[sid] = {
+                field for field, key in (
+                    ("resume_queue", "resume"),
+                    ("terminal_queue", "terminal"),
+                ) if current[key] != snapshot[key]
+            }
         ok = _core._persist_pending_inputs_current(
             affected,
             include_devin_steers=include_devin_steers,
             include_auto_resume=include_auto_resume,
             applied_journal_id=applied_journal_id,
+            changed_queue_fields=changed_queue_fields,
         )
         if not ok:
             restore_memory()
@@ -1967,6 +2044,15 @@ def _snapshot_matching_pending_input_id_quick(session_id, text):
     try:
         with _pending_inputs_file_exclusive_lock():
             payload = _read_pending_inputs_payload_unlocked(missing_is_empty=True)
+            try:
+                primary_stat = _core.PENDING_INPUTS_FILE.stat()
+                stat_identity = (
+                    primary_stat.st_ino,
+                    primary_stat.st_mtime_ns,
+                    primary_stat.st_size,
+                )
+            except OSError:
+                stat_identity = None
     except OSError:
         return None
     sidecar = (payload or {}).get("pending_entry_ids") or {}
@@ -1979,6 +2065,13 @@ def _snapshot_matching_pending_input_id_quick(session_id, text):
                 item.get("id") if isinstance(item, dict)
                 else ids[index] if index < len(ids) else None
             )
+            if isinstance(pending_id, dict):
+                pending_id = (
+                    pending_id.get("id")
+                    if pending_id.get("fingerprint")
+                    == _pending_text_fingerprint(item_text)
+                    else None
+                )
             if str(item_text or "").strip() == clean and pending_id:
                 return {
                     "queue_name": (
@@ -2001,12 +2094,45 @@ def _snapshot_matching_pending_input_id_quick(session_id, text):
                     "boundary": hashlib.sha256(
                         json.dumps(texts, separators=(",", ":")).encode("utf-8")
                     ).hexdigest(),
+                    "revision": _pending_safe_int(
+                        (((payload or {}).get("pending_queue_revisions") or {}).get(
+                            field
+                        ) or {}).get(session_id),
+                        0,
+                    ),
+                    "primary_stat": stat_identity,
                 }
     return None
 
 
 def _consume_deferred_pending_snapshot(session_id, snapshot):
     with _core._codex_queue_pump_lock(session_id):
+        try:
+            with _pending_inputs_file_exclusive_lock():
+                authority = _read_pending_inputs_payload_unlocked(missing_is_empty=True)
+                current_stat = _core.PENDING_INPUTS_FILE.stat()
+                current_stat_identity = (
+                    current_stat.st_ino,
+                    current_stat.st_mtime_ns,
+                    current_stat.st_size,
+                )
+        except OSError:
+            return 0
+        field_name = (
+            "resume_queue"
+            if snapshot.get("queue_name") == "resume" else "terminal_queue"
+        )
+        current_revision = _pending_safe_int(
+            (((authority or {}).get("pending_queue_revisions") or {}).get(
+                field_name
+            ) or {}).get(session_id),
+            0,
+        )
+        if (
+            tuple(snapshot.get("primary_stat") or ()) != current_stat_identity
+            or current_revision != int(snapshot.get("revision") or 0)
+        ):
+            return 0
         if not _core._refresh_pending_inputs_for_session(session_id):
             return 0
         queue_name = snapshot.get("queue_name")
