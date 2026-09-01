@@ -503,6 +503,79 @@ class TestAcpLiveActivityFields(unittest.TestCase):
         self.assertEqual(out["last_event_type"], "result")
 
 
+class TestAcpStuckAndTurnAge(unittest.TestCase):
+    def setUp(self):
+        self._orig_state = server._ACP_SESSION_STATE
+        self._orig_load = server._acp_load_state
+        self._orig_kidx = server._kimi_session_index
+        self._orig_ktail = server._kimi_wire_tail_meta
+        server._acp_load_state = lambda harness: None
+        server._ACP_SESSION_STATE = {}
+        server._ACP_TURN_TRACK.clear()
+
+    def tearDown(self):
+        server._ACP_SESSION_STATE = self._orig_state
+        server._acp_load_state = self._orig_load
+        server._kimi_session_index = self._orig_kidx
+        server._kimi_wire_tail_meta = self._orig_ktail
+        server._ACP_TURN_TRACK.clear()
+
+    def _tail(self, mid_turn, age_s):
+        return {"last_event_type": "assistant", "pending_tool": "Bash" if mid_turn else None,
+                "mid_turn": mid_turn, "wire_mtime": time.time() - age_s}
+
+    def test_turn_age_stamps_on_transition_and_clears(self):
+        server._kimi_session_index = lambda: {"session_k1": {"session_dir": "/x"}}
+        server._kimi_wire_tail_meta = lambda d: self._tail(True, 3)
+        out1 = server._acp_live_activity_fields("kimi", "session_k1")
+        self.assertIsNotNone(out1["turn_age_s"])
+        self.assertLess(out1["turn_age_s"], 5)
+        server._kimi_wire_tail_meta = lambda d: self._tail(False, 3)
+        out2 = server._acp_live_activity_fields("kimi", "session_k1")
+        self.assertIsNone(out2["turn_age_s"])
+
+    def test_fresh_mid_turn_is_not_stuck(self):
+        server._kimi_session_index = lambda: {"session_k1": {"session_dir": "/x"}}
+        server._kimi_wire_tail_meta = lambda d: self._tail(True, 10)
+        out = server._acp_live_activity_fields("kimi", "session_k1")
+        self.assertFalse(out["stale_tool_call"])
+        self.assertEqual(out["stale_tool_age_s"], 10)
+
+    def test_silent_mid_turn_past_threshold_is_stuck(self):
+        server._kimi_session_index = lambda: {"session_k1": {"session_dir": "/x"}}
+        server._kimi_wire_tail_meta = lambda d: self._tail(True, 1200)
+        out = server._acp_live_activity_fields("kimi", "session_k1")
+        self.assertTrue(out["stale_tool_call"])
+        self.assertEqual(out["stale_tool_age_s"], 1200)
+        self.assertEqual(out["stale_tool_threshold_s"], 900)
+
+    def test_silent_finished_turn_is_not_stuck(self):
+        server._kimi_session_index = lambda: {"session_k1": {"session_dir": "/x"}}
+        server._kimi_wire_tail_meta = lambda d: self._tail(False, 7200)
+        out = server._acp_live_activity_fields("kimi", "session_k1")
+        self.assertFalse(out["stale_tool_call"])
+
+    def test_census_row_maps_stuck_and_turn_age(self):
+        orig_activity = server.build_live_sessions_activity
+        orig_identity = server._census_identity_map
+        server.build_live_sessions_activity = lambda: {
+            "sid-stuck": {"is_live": True, "sidecar_ts": time.time() - 1000,
+                          "sidecar_in_flight": False, "pending_tool": "Thinking",
+                          "question_waiting": False, "needs_approval": False,
+                          "turn_age_s": 1000.0, "stale_tool_call": True,
+                          "stale_tool_age_s": 1000},
+        }
+        server._census_identity_map = lambda: {}
+        try:
+            row = server.build_session_census()["sessions"][0]
+        finally:
+            server.build_live_sessions_activity = orig_activity
+            server._census_identity_map = orig_identity
+        self.assertTrue(row["stuck"])
+        self.assertEqual(row["stuck_age_s"], 1000)
+        self.assertEqual(row["turn_age_s"], 1000.0)
+
+
 class TestCensusCodexPoolIdentity(unittest.TestCase):
     def setUp(self):
         self._orig_registry = server._load_spawn_registry

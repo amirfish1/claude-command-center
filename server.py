@@ -8290,6 +8290,10 @@ _LIVE_ACTIVITY_FIELD_KEYS = (
     "question_preamble",
     "question_options",
     "question_option_details",
+    "turn_age_s",
+    "stale_tool_call",
+    "stale_tool_age_s",
+    "stale_tool_threshold_s",
 )
 
 
@@ -8436,6 +8440,9 @@ def _grok_wire_tail_meta(transcript_path):
     return meta
 
 
+_ACP_TURN_TRACK = {}  # (harness, sid) -> {"mid_turn": bool, "turn_started_at": epoch|None}
+
+
 def _acp_live_activity_fields(harness, session_id):
     """Live-activity fields for ACP-harness sessions (kimi/grok).
 
@@ -8445,6 +8452,14 @@ def _acp_live_activity_fields(harness, session_id):
     cached tail reads as the conversation providers; needs_approval comes
     from the ACP registry's pending_permissions (an approval parked on a
     human is the 'waiting' state, e.g. what the auto-approve watcher polls).
+
+    Turn boundaries are tracked by observing mid_turn transitions here (the
+    poller calls this every few seconds): False→True stamps turn_started_at,
+    True→False clears it. No extra I/O, and honest: a long turn shows up as
+    turn_age_s, while a turn whose wire goes silent past CCC_STALE_TOOL_SEC
+    (default 900s) raises the dashboard's stale-tool contract — the "Stuck"
+    signal. A turn that started before this process did gets turn_age_s
+    None, never a fabricated age.
     """
     out = {"sidecar_ts": 0.0, "pending_tool": None, "last_event_type": None}
     state = {}
@@ -8457,6 +8472,7 @@ def _acp_live_activity_fields(harness, session_id):
     out["needs_approval"] = bool(state.get("pending_permissions"))
     if out["needs_approval"]:
         out["needs_approval_message"] = "Approval requested"
+    tail = {}
     try:
         if harness == "kimi":
             idx = _kimi_session_index().get(session_id) or {}
@@ -8470,12 +8486,39 @@ def _acp_live_activity_fields(harness, session_id):
             # label mirrors codex's "Thinking" pseudo-tool.
             out["pending_tool"] = tail.get("pending_tool") or "Thinking"
     except Exception:
-        pass
+        tail = {}
     if not out["sidecar_ts"]:
         try:
             out["sidecar_ts"] = float(state.get("updated_at") or 0)
         except (TypeError, ValueError):
             pass
+    now = time.time()
+    acp_active = str(state.get("status") or "") == "active"
+    mid_turn = bool(tail.get("mid_turn")) or acp_active
+    track_key = (harness, session_id)
+    track = _ACP_TURN_TRACK.get(track_key)
+    if track is None:
+        track = _ACP_TURN_TRACK[track_key] = {"mid_turn": False, "turn_started_at": None}
+        if len(_ACP_TURN_TRACK) > 512:
+            _ACP_TURN_TRACK.pop(next(iter(_ACP_TURN_TRACK)))
+    if mid_turn and not track["mid_turn"]:
+        track["turn_started_at"] = now
+    elif not mid_turn and track["mid_turn"]:
+        track["turn_started_at"] = None
+    track["mid_turn"] = mid_turn
+    out["turn_age_s"] = (
+        max(0.0, now - track["turn_started_at"]) if track["turn_started_at"] else None
+    )
+    try:
+        threshold = float(_stale_tool_threshold_s())
+    except Exception:
+        threshold = 900.0
+    silence = (now - out["sidecar_ts"]) if out["sidecar_ts"] else 0.0
+    out["stale_tool_age_s"] = int(max(0.0, silence))
+    out["stale_tool_threshold_s"] = int(threshold)
+    out["stale_tool_call"] = bool(
+        threshold > 0 and mid_turn and out["sidecar_ts"] and silence >= threshold
+    )
     return out
 
 
@@ -10499,6 +10542,9 @@ def build_session_census(since_s=None):
             "has_conversation_row": bool(ident.get("has_conversation_row")),
             "helper": helper,
             "unanswered_input": False,
+            "turn_age_s": entry.get("turn_age_s"),
+            "stuck": bool(entry.get("stale_tool_call")),
+            "stuck_age_s": entry.get("stale_tool_age_s") or None,
         })
     if since_s is not None:
         try:
@@ -10532,6 +10578,9 @@ def build_session_census(since_s=None):
                 "has_conversation_row": True,
                 "helper": False,
                 "unanswered_input": _census_unanswered_input(sid, ident.get("jsonl_path")),
+                "turn_age_s": None,
+                "stuck": False,
+                "stuck_age_s": None,
             })
     rows.sort(key=lambda r: (
         r["last_event_age_s"] is None,

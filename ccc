@@ -131,7 +131,13 @@ def cmd_sessions(args):
             flags += " ?question"
         if s.get("unanswered_input"):
             flags += " !unanswered"
+        if s.get("stuck"):
+            flags += " !stuck"
+            if s.get("stuck_age_s") is not None:
+                flags += f" {_fmt_age(s['stuck_age_s'])} silent"
         tool = s.get("pending_tool") or "-"
+        if s.get("turn_age_s") is not None and s.get("state") == "working":
+            tool = f"{tool} {_fmt_age(s['turn_age_s'])}"
         name = (s.get("name") or "(no conversation row)")[:44]
         marker = ("  " * depth + "↳ ") if (depth or child) else ""
         engine_effort = f"{s.get('engine') or '?'}/{s.get('effort') or '?'}"
