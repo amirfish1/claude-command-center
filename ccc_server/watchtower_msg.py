@@ -1472,40 +1472,66 @@ def _inject_text_into_session_router(
         steer_kwargs = {"steer": True}
         if idempotency_key:
             steer_kwargs["idempotency_key"] = idempotency_key
-        steer_result = _core.resume_session_codex(session_id, text, **steer_kwargs)
-        if steer_result.get("code") in (
-            "codex_no_active_turn",
-            "codex_steer_unavailable",
-        ):
+        pump_lock = _core._codex_queue_pump_lock(session_id)
+        claim = None
+        with pump_lock:
+            claim = _core._claim_matching_pending_input(session_id, text)
+            if preserve_queued_steer and claim is None:
+                return {
+                    "ok": False,
+                    "via": "codex-steer",
+                    "code": "queued_message_missing",
+                    "queued_consumed": 0,
+                    "error": "queued message no longer exists",
+                }
+            try:
+                steer_result = _core.resume_session_codex(
+                    session_id, text, **steer_kwargs
+                )
+                if (
+                    steer_result.get("ok")
+                    and steer_result.get("via") == "codex-steer"
+                ):
+                    if claim is not None:
+                        steer_result = dict(steer_result)
+                        steer_result["queued_consumed"] = 1
+                    return steer_result
+                if claim is not None:
+                    _core._restore_pending_input_claim(claim)
+                    claim = None
+            except Exception:
+                if claim is not None:
+                    _core._restore_pending_input_claim(claim)
+                raise
             if preserve_queued_steer:
                 steer_result = dict(steer_result)
                 steer_result["queued"] = True
                 steer_result["queued_preserved"] = True
                 return steer_result
-            if idempotency_key:
-                # Same trap as the ACP steer retry below: the steer attempt
-                # already spent `idempotency_key` and the worker's WorkLedger
-                # recorded it as failed (codex_no_active_turn /
-                # codex_steer_unavailable). Reusing the key here made
-                # submit() dedupe this fallback turn/start back to that
-                # failed row, so steering an idle Codex thread surfaced "No
-                # running Codex turn to steer" instead of just sending.
-                steer_result = _core.resume_session_codex(
-                    session_id, text,
-                    idempotency_key=f"{idempotency_key}:steer-fallback",
-                )
-            else:
-                steer_result = _core.resume_session_codex(session_id, text)
-        if (
-            steer_result.get("ok")
-            and not steer_result.get("queued")
-            and not preserve_queued_steer
-        ):
-            # A confirmed Codex steer (or the fallback turn/start it took)
-            # has delivered this text. Drop any durable queued copy so the
-            # queue pump cannot later resend the same message.
-            _core._consume_matching_pending_input(session_id, text)
-        return steer_result
+            if steer_result.get("code") in (
+                "codex_no_active_turn",
+                "codex_steer_unavailable",
+            ):
+                if idempotency_key:
+                    # Same trap as the ACP steer retry below: the steer attempt
+                    # already spent `idempotency_key` and the worker's WorkLedger
+                    # recorded it as failed (codex_no_active_turn /
+                    # codex_steer_unavailable). Reusing the key here made
+                    # submit() dedupe this fallback turn/start back to that
+                    # failed row, so steering an idle Codex thread surfaced "No
+                    # running Codex turn to steer" instead of just sending.
+                    steer_result = _core.resume_session_codex(
+                        session_id, text,
+                        idempotency_key=f"{idempotency_key}:steer-fallback",
+                    )
+                else:
+                    steer_result = _core.resume_session_codex(session_id, text)
+            if steer_result.get("ok") and not steer_result.get("queued"):
+                # A confirmed Codex steer (or the fallback turn/start it took)
+                # has delivered this text. Drop any durable queued copy so the
+                # queue pump cannot later resend the same message.
+                _core._consume_matching_pending_input(session_id, text)
+            return steer_result
     if (
         mode == "steer"
         and not is_codex

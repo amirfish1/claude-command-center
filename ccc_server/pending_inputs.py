@@ -727,6 +727,10 @@ def _finalize_queued_steer_result(session_id, text, result):
     prevents a retry from silently moving the selected item to the queue tail.
     """
     result = dict(result or {})
+    if (result.get("queued_consumed") or 0) > 0:
+        return result
+    if result.get("code") == "queued_message_missing":
+        return result
     if result.get("ok") and result.get("via") == "codex-steer":
         consumed = _core._consume_matching_pending_input(session_id, text)
         if consumed:
