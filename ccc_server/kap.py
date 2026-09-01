@@ -1,0 +1,424 @@
+"""kap-server transport for Kimi — Stage 1 spike (additive, flag-gated).
+
+CCC drives Kimi over ACP today (``ccc_server/acp.py``). ACP exposes no steer
+method, and the kap-server daemon that *does* cannot steer a turn an ACP
+subprocess owns: the session store is shared but the live turn belongs to
+whichever process holds the engine core in memory. Reaching steer therefore
+means running the session on kap-server, not calling kap-server alongside ACP.
+
+This module is the narrow proof of that path: adopt a running ``kimi web``
+daemon, create one session, submit a prompt, stream the turn over WebSocket,
+and emit CCC's own normalized events so the existing frontend renders it with
+no changes.
+
+Deliberately NOT here — daemon supervision/restart, adoption of ACP-created
+sessions, approvals, steer itself. Those are the rest of Stage 1 and Stage 2.
+
+The contract is machine-readable and served live by the daemon; pinned copies
+live in docs/kimi-kap/ so a Kimi upgrade shows up as a reviewable diff:
+  REST  /openapi.json   OpenAPI 3.0.3
+  WS    /asyncapi.json  AsyncAPI 3.1.0, 32 messages on /api/v1/ws
+"""
+
+from __future__ import annotations
+
+from pathlib import Path
+import base64
+import hashlib
+import json
+import os
+import socket
+import struct
+import threading
+import time
+import urllib.error
+import urllib.request
+import uuid
+
+# --- daemon discovery ------------------------------------------------------
+#
+# `kimi web` writes one JSON file per live server under
+# <home>/server/instances/<server_id>.json carrying pid, host, port and a
+# periodic heartbeat_at (epoch ms). That registry is the adoption mechanism:
+# CCC never guesses a port.
+
+_KAP_HOME_ENV = "KIMI_CODE_HOME"
+_KAP_HOME_DEFAULT = "~/.kimi-code"
+_KAP_HEARTBEAT_STALE_S = 120.0
+_KAP_MAIN_AGENT = "main"
+_KAP_WS_PATH = "/api/v1/ws"
+_KAP_WS_BEARER_PREFIX = "kimi-code.bearer."
+
+
+class KapUnavailable(RuntimeError):
+    """No live kap-server daemon to talk to."""
+
+
+class KapError(RuntimeError):
+    """The daemon answered, but with a non-zero envelope code."""
+
+
+def kap_home():
+    raw = os.environ.get(_KAP_HOME_ENV) or _KAP_HOME_DEFAULT
+    return Path(os.path.expanduser(raw))
+
+
+def kap_token():
+    """Bearer token for both REST and WS. Written by the daemon at startup."""
+    try:
+        return (kap_home() / "server.token").read_text().strip()
+    except OSError:
+        return ""
+
+
+def _pid_alive(pid):
+    try:
+        os.kill(int(pid), 0)
+        return True
+    except (OSError, TypeError, ValueError):
+        return False
+
+
+def kap_discover():
+    """Newest live daemon record, or None. Stale heartbeats and dead pids are
+    skipped so a crashed server's leftover file never wins."""
+    inst_dir = kap_home() / "server" / "instances"
+    try:
+        entries = sorted(inst_dir.glob("*.json"))
+    except OSError:
+        return None
+    now = time.time()
+    best = None
+    for path in entries:
+        try:
+            rec = json.loads(path.read_text() or "{}")
+        except (OSError, ValueError):
+            continue
+        beat = float(rec.get("heartbeat_at") or 0) / 1000.0
+        if beat and (now - beat) > _KAP_HEARTBEAT_STALE_S:
+            continue
+        if not _pid_alive(rec.get("pid")):
+            continue
+        if best is None or beat > best[0]:
+            best = (beat, rec)
+    return best[1] if best else None
+
+
+def kap_endpoint():
+    """(host, port) of the live daemon; raises KapUnavailable if there is none."""
+    rec = kap_discover()
+    if not rec or not rec.get("port"):
+        raise KapUnavailable("no live kimi kap-server instance registered")
+    return str(rec.get("host") or "127.0.0.1"), int(rec["port"])
+
+
+def kap_available():
+    try:
+        kap_endpoint()
+        return bool(kap_token())
+    except KapUnavailable:
+        return False
+
+
+# --- REST ------------------------------------------------------------------
+#
+# Every route answers the same envelope: {code, msg, data, request_id}, with
+# code 0 for success. Errors carry a dotted code (session.not_found, ...).
+
+def kap_request(method, path, body=None, timeout=30.0):
+    host, port = kap_endpoint()
+    data = json.dumps(body).encode("utf-8") if body is not None else None
+    req = urllib.request.Request(
+        "http://%s:%d%s" % (host, port, path), data=data, method=method)
+    req.add_header("Authorization", "Bearer " + kap_token())
+    if data is not None:
+        req.add_header("Content-Type", "application/json")
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
+            payload = json.loads(resp.read().decode("utf-8") or "{}")
+    except urllib.error.HTTPError as exc:
+        detail = ""
+        try:
+            detail = exc.read().decode("utf-8")[:400]
+        except Exception:
+            pass
+        raise KapError("%s %s -> HTTP %s %s" % (method, path, exc.code, detail))
+    except (urllib.error.URLError, OSError) as exc:
+        raise KapUnavailable("%s %s -> %s" % (method, path, exc))
+    code = payload.get("code")
+    if code not in (0, None):
+        raise KapError("%s %s -> code %s: %s" % (
+            method, path, code, payload.get("msg")))
+    return payload.get("data")
+
+
+def kap_meta():
+    return kap_request("GET", "/api/v1/meta", timeout=10.0)
+
+
+def kap_workspace_for(cwd):
+    """Workspace id whose root is `cwd`, creating it if the daemon has none.
+    Kimi keys its session tree by workspace, so this has to resolve first."""
+    root = str(Path(cwd).resolve())
+    data = kap_request("GET", "/api/v1/workspaces") or {}
+    items = data.get("items") if isinstance(data, dict) else data
+    for ws in (items or []):
+        if str(ws.get("root") or "").rstrip("/") == root.rstrip("/"):
+            return ws.get("id")
+    created = kap_request("POST", "/api/v1/workspaces",
+                          {"root": root, "name": Path(root).name})
+    return (created or {}).get("id")
+
+
+def kap_create_session(cwd, title=""):
+    body = {"workspace_id": kap_workspace_for(cwd)}
+    if title:
+        body["title"] = title
+    data = kap_request("POST", "/api/v1/sessions", body) or {}
+    sid = data.get("id") or (data.get("session") or {}).get("id")
+    if not sid:
+        raise KapError("session create returned no id: %s" % (data,))
+    return sid
+
+
+def kap_submit_prompt(sid, text, **opts):
+    """Enqueue a prompt. Returns its prompt_id -- the handle `prompts:steer`
+    takes, which is why the queue is addressable at all."""
+    body = {"content": [{"type": "text", "text": str(text)}]}
+    body.update({k: v for k, v in opts.items() if v is not None})
+    data = kap_request("POST", "/api/v1/sessions/%s/prompts" % sid, body) or {}
+    return data.get("prompt_id") or data.get("id")
+
+
+def kap_prompt_queue(sid):
+    """{active, queued} -- the durable server-side queue CCC reconstructs
+    client-side today."""
+    return kap_request("GET", "/api/v1/sessions/%s/prompts" % sid) or {}
+
+
+def kap_session_status(sid):
+    return kap_request("GET", "/api/v1/sessions/%s/status" % sid) or {}
+
+
+# --- WebSocket (RFC 6455 client, stdlib only) ------------------------------
+#
+# CCC ships zero runtime dependencies, so the client is hand-rolled rather
+# than pulling in `websockets`. Only what the event stream needs: a client
+# handshake, text/binary frame reassembly, close/ping control frames, and
+# masked client sends. Auth rides the subprotocol -- kap-server reads
+# `kimi-code.bearer.<token>` from Sec-WebSocket-Protocol, not a header
+# (packages/kap-server/src/transport/ws/bearerProtocol.ts).
+
+_WS_GUID = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11"
+
+
+class KapWebSocket:
+    def __init__(self, host, port, token, timeout=60.0):
+        self.sock = socket.create_connection((host, port), timeout=timeout)
+        self.sock.settimeout(timeout)
+        self._buf = b""
+        self._closed = False
+        self._send_lock = threading.Lock()
+        self._handshake(host, port, token)
+
+    def _handshake(self, host, port, token):
+        key = base64.b64encode(os.urandom(16)).decode("ascii")
+        req = (
+            "GET %s HTTP/1.1\r\n"
+            "Host: %s:%d\r\n"
+            "Upgrade: websocket\r\n"
+            "Connection: Upgrade\r\n"
+            "Sec-WebSocket-Key: %s\r\n"
+            "Sec-WebSocket-Version: 13\r\n"
+            "Sec-WebSocket-Protocol: %s%s\r\n"
+            "\r\n"
+        ) % (_KAP_WS_PATH, host, port, key, _KAP_WS_BEARER_PREFIX, token)
+        self.sock.sendall(req.encode("ascii"))
+        head = b""
+        while b"\r\n\r\n" not in head:
+            chunk = self.sock.recv(4096)
+            if not chunk:
+                raise KapUnavailable("ws handshake: server closed")
+            head += chunk
+        header, _, rest = head.partition(b"\r\n\r\n")
+        status = header.split(b"\r\n", 1)[0].decode("latin-1")
+        if "101" not in status:
+            raise KapUnavailable("ws handshake failed: %s" % status)
+        expect = base64.b64encode(
+            hashlib.sha1((key + _WS_GUID).encode("ascii")).digest()).decode("ascii")
+        if expect.lower() not in header.decode("latin-1").lower():
+            raise KapUnavailable("ws handshake: bad Sec-WebSocket-Accept")
+        self._buf = rest
+
+    def _recv_exact(self, n):
+        while len(self._buf) < n:
+            chunk = self.sock.recv(65536)
+            if not chunk:
+                raise ConnectionError("ws closed by peer")
+            self._buf += chunk
+        out, self._buf = self._buf[:n], self._buf[n:]
+        return out
+
+    def recv(self):
+        """Next application message as str, or None once the peer closes."""
+        payload = b""
+        while True:
+            b0, b1 = struct.unpack("!BB", self._recv_exact(2))
+            fin, opcode = b0 & 0x80, b0 & 0x0F
+            length = b1 & 0x7F
+            if length == 126:
+                length = struct.unpack("!H", self._recv_exact(2))[0]
+            elif length == 127:
+                length = struct.unpack("!Q", self._recv_exact(8))[0]
+            if b1 & 0x80:  # server frames must not be masked, but be lenient
+                mask = self._recv_exact(4)
+                raw = bytes(c ^ mask[i % 4]
+                            for i, c in enumerate(self._recv_exact(length)))
+            else:
+                raw = self._recv_exact(length)
+            if opcode == 0x8:
+                self.close()
+                return None
+            if opcode == 0x9:
+                self._send_frame(0xA, raw)
+                continue
+            if opcode == 0xA:
+                continue
+            payload += raw
+            if fin:
+                return payload.decode("utf-8", "replace")
+
+    def _send_frame(self, opcode, data):
+        mask = os.urandom(4)
+        masked = bytes(c ^ mask[i % 4] for i, c in enumerate(data))
+        n = len(data)
+        if n < 126:
+            head = struct.pack("!BB", 0x80 | opcode, 0x80 | n)
+        elif n < (1 << 16):
+            head = struct.pack("!BBH", 0x80 | opcode, 0x80 | 126, n)
+        else:
+            head = struct.pack("!BBQ", 0x80 | opcode, 0x80 | 127, n)
+        with self._send_lock:
+            self.sock.sendall(head + mask + masked)
+
+    def send_json(self, obj):
+        self._send_frame(0x1, json.dumps(obj).encode("utf-8"))
+
+    def close(self):
+        if self._closed:
+            return
+        self._closed = True
+        try:
+            self._send_frame(0x8, b"")
+        except OSError:
+            pass
+        try:
+            self.sock.close()
+        except OSError:
+            pass
+
+
+def kap_open_stream(sid, transcript="delta", since=None):
+    """Connected, subscribed socket for `sid`. `transcript` is the per-agent
+    granularity kap-server offers: off | turn | block | delta."""
+    host, port = kap_endpoint()
+    ws = KapWebSocket(host, port, kap_token())
+    ws.send_json({
+        "type": "client_hello",
+        "id": uuid.uuid4().hex,
+        "payload": {"client_id": "ccc-%s" % uuid.uuid4().hex[:12]},
+    })
+    payload = {"session_id": sid, "transcript": {_KAP_MAIN_AGENT: transcript}}
+    if since is not None:
+        payload["transcript_since"] = {_KAP_MAIN_AGENT: int(since)}
+    ws.send_json({
+        "type": "subscribe_v2",
+        "id": uuid.uuid4().hex,
+        "payload": payload,
+    })
+    return ws
+
+
+# --- event mapping ---------------------------------------------------------
+#
+# kap-server emits 58 agent event types wrapped in a `session_event` frame
+# carrying {type, seq, epoch, session_id, payload}. CCC's normalized shape is
+# far smaller -- user_text / assistant{blocks:[{kind}]} / result -- so this is
+# a narrowing, and only the handful below matter for a turn to render.
+
+_KAP_IGNORED_PREFIXES = (
+    "event.workspace.", "event.config.", "event.model", "event.plugin",
+    "event.capability", "event.di_unit",
+)
+
+
+class KapTurnMapper:
+    """Folds a kap-server event stream into CCC conversation events.
+
+    Deltas accumulate into one assistant message per turn, matching what the
+    ACP path produces, so the frontend cannot tell the two transports apart.
+    """
+
+    def __init__(self, message_id_prefix="kap-kimi"):
+        self.prefix = message_id_prefix
+        self.turn = 0
+        self.blocks = []
+        self.last_seq = None
+        self.epoch = None
+
+    def _block(self, kind):
+        if not self.blocks or self.blocks[-1].get("kind") != kind:
+            self.blocks.append({"kind": kind, "text": ""})
+        return self.blocks[-1]
+
+    def feed(self, frame):
+        """Consume one WS frame; return a list of CCC events to emit."""
+        ftype = frame.get("type") or ""
+        if ftype in ("server_hello", "ack", "ping", "pong"):
+            return []
+        if ftype == "resync_required":
+            # seq gap: the caller should reopen with transcript_since.
+            return [{"type": "result", "subtype": "resync_required"}]
+        if frame.get("seq") is not None:
+            self.last_seq = frame["seq"]
+        if frame.get("epoch"):
+            self.epoch = frame["epoch"]
+
+        payload = frame.get("payload") or {}
+        etype = payload.get("type") or ftype
+        if any(etype.startswith(p) for p in _KAP_IGNORED_PREFIXES):
+            return []
+
+        if etype == "turn.started":
+            self.turn += 1
+            self.blocks = []
+            return []
+        if etype == "assistant.delta":
+            self._block("text")["text"] += str(payload.get("text") or "")
+            return []
+        if etype == "thinking.delta":
+            self._block("thinking")["text"] += str(payload.get("text") or "")
+            return []
+        if etype == "toolCall.started":
+            self.blocks.append({
+                "kind": "tool_use",
+                "name": payload.get("toolName") or payload.get("name") or "",
+                "input": payload.get("args") or payload.get("input") or {},
+                "tool_id": payload.get("toolCallId") or payload.get("id") or "",
+            })
+            return []
+        if etype == "turn.ended":
+            out = []
+            if self.blocks:
+                out.append({
+                    "type": "assistant",
+                    "message_id": "%s-%d" % (self.prefix, self.turn),
+                    "blocks": self.blocks,
+                })
+                self.blocks = []
+            out.append({"type": "result",
+                        "subtype": payload.get("reason") or "completed"})
+            return out
+        if etype == "prompt.aborted":
+            return [{"type": "result", "subtype": "cancelled"}]
+        return []
