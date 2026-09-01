@@ -579,3 +579,71 @@ class KapTranscriptMapper:
         for op in payload.get("ops") or []:
             out.extend(self._apply_op(op))
         return out
+
+
+# --- render bridge (flag-gated) --------------------------------------------
+#
+# The mapper already emits CCC's own conversation shape, so rendering is just
+# a matter of putting those events where the frontend already looks: the ACP
+# layer's per-session deque and transcript file. Reusing that path means zero
+# frontend changes -- a kap-driven turn draws with the same code as an
+# ACP-driven one.
+#
+# Off unless CCC_KIMI_KAP=1. The flag is not decoration: registering a session
+# in the ACP registry makes CCC's Kimi layer believe an ACP subprocess owns
+# it, and the two transports cannot both drive one session. Until per-session
+# routing exists (rest of Stage 1), this stays opt-in.
+
+_KAP_FLAG_ENV = "CCC_KIMI_KAP"
+
+
+def kap_enabled():
+    return os.environ.get(_KAP_FLAG_ENV, "").strip() in ("1", "true", "yes")
+
+
+def kap_emit_to_ccc(sid, events, cwd=""):
+    """Push mapped events into CCC's conversation store for `sid`.
+
+    Returns the number of events written, or 0 when the flag is off.
+    """
+    if not events or not kap_enabled():
+        return 0
+    from ccc_server import acp as _acp
+    from ccc_server import core as _core
+    written = 0
+    with _core._ACP_LOCK:
+        _core._acp_session("kimi", sid, create=True, cwd=cwd)
+        for event in events:
+            _acp._acp_emit_event_unlocked("kimi", sid, event)
+            written += 1
+    return written
+
+
+def kap_run_turn(sid, text, cwd="", on_events=None, timeout=300.0):
+    """Submit `text` to `sid` and pump its turn to completion.
+
+    Returns (prompt_id, events). Events are also handed to `on_events` as they
+    are produced, and written into CCC's store when the flag is on.
+    """
+    mapper = KapTranscriptMapper()
+    ws = kap_open_stream(sid)
+    collected = []
+    try:
+        prompt_id = kap_submit_prompt(sid, text)
+        deadline = time.time() + timeout
+        while time.time() < deadline:
+            frame = ws.recv_json()
+            if frame is None:
+                break
+            events = mapper.feed(frame)
+            if not events:
+                continue
+            collected.extend(events)
+            if on_events:
+                on_events(events)
+            kap_emit_to_ccc(sid, events, cwd=cwd)
+            if any(e.get("type") == "result" for e in events):
+                break
+    finally:
+        ws.close()
+    return prompt_id, collected

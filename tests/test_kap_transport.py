@@ -219,6 +219,31 @@ class TestKapHeartbeat(unittest.TestCase):
             self.assertIsNone(kap.kap_heartbeat_reply(frame))
 
 
+class TestKapRenderFlag(unittest.TestCase):
+    """The render bridge writes into the ACP layer's store, which makes CCC's
+    Kimi layer believe an ACP subprocess owns the session. Until per-session
+    routing exists the flag must stay off by default."""
+
+    def tearDown(self):
+        os.environ.pop(kap._KAP_FLAG_ENV, None)
+
+    def test_disabled_by_default(self):
+        os.environ.pop(kap._KAP_FLAG_ENV, None)
+        self.assertFalse(kap.kap_enabled())
+        self.assertEqual(
+            kap.kap_emit_to_ccc("session_x", [{"type": "result"}]), 0)
+
+    def test_flag_values(self):
+        for value, expected in (("1", True), ("true", True), ("yes", True),
+                                ("0", False), ("", False), ("nope", False)):
+            os.environ[kap._KAP_FLAG_ENV] = value
+            self.assertEqual(kap.kap_enabled(), expected, value)
+
+    def test_no_events_writes_nothing(self):
+        os.environ[kap._KAP_FLAG_ENV] = "1"
+        self.assertEqual(kap.kap_emit_to_ccc("session_x", []), 0)
+
+
 class TestKapDiscovery(unittest.TestCase):
     def _home(self, tmp, rec):
         inst = Path(tmp) / "server" / "instances"
