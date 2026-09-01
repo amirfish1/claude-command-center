@@ -1088,6 +1088,137 @@ def _inject_blocked_recent_entries(limit=20):
     return list(_core._inject_blocked_memo["value"])[-limit:]
 
 
+# --- Duplicate suppression --------------------------------------------------
+# One delivery per message, even when the sender retries. WatchTower's delegate
+# adapter gives CCC 5s to answer /api/inject-input; a Codex steer of a long
+# comment routinely takes longer, so wt records the send as failed, parks it in
+# its outbox and retries with backoff -- while CCC delivered every attempt.
+# Observed 2026-09-01: one BYMPURCH-12 gate comment injected into a single
+# Codex session five times over nine minutes, each landing burning a full
+# 220k-token turn. The same window catches an agent relaying text a sibling
+# already delivered (an un-keyed `ccc inject --steer` of a line the terminal
+# queue had just drained, 9s apart).
+#
+# Deliberately narrow -- three exemptions, each load-bearing:
+#   * a caller-supplied idempotency_key means that caller already owns its
+#     replay semantics (the dashboard composer stamps one on every send, and
+#     the Codex steer path deliberately re-sends under a fresh key). Guessing
+#     for them here would break protocols that are already correct.
+#   * only text that actually reached the session is remembered, so a real
+#     retry after a real failure still lands.
+#   * never the terminal-queue drain: that call *completes* an earlier attempt
+#     which is already in the window, so suppressing it would strand the
+#     queued message forever.
+_INJECT_DEDUPE_WINDOW_S = 300
+
+_inject_dedupe_lock = threading.Lock()
+# {session_id: {text_key: last_seen_ts}} -- in-process on purpose. Every inject
+# (HTTP endpoint, queue-watcher thread, fleet CLI, wt's delegate POST) funnels
+# through this one server process, and forgetting the window on restart costs
+# one duplicate, never a lost message.
+_inject_dedupe_recent = {}
+
+
+def _inject_dedupe_window_s():
+    """Suppression window in seconds. 0 disables. Env overrides the constant."""
+    raw = str(os.environ.get("CCC_INJECT_DEDUPE_WINDOW_S", "")).strip()
+    if raw:
+        try:
+            return max(0.0, float(raw))
+        except ValueError:
+            pass
+    try:
+        return max(0.0, float(_core._INJECT_DEDUPE_WINDOW_S))
+    except (TypeError, ValueError):
+        return 0.0
+
+
+def _inject_dedupe_prune(now, window_s):
+    """Drop entries older than the window. Caller holds the lock."""
+    recent = _core._inject_dedupe_recent
+    for sid in list(recent):
+        seen = recent[sid]
+        for key in [k for k, ts in list(seen.items()) if now - ts > window_s]:
+            seen.pop(key, None)
+        if not seen:
+            recent.pop(sid, None)
+
+
+def _inject_dedupe_record(session_id, text, now=None):
+    """Remember that `text` reached `session_id`.
+
+    Keyed on the session id exactly as the caller passed it -- the router
+    canonicalises Kimi/sub-agent aliases further down, so two spellings of one
+    session simply miss each other here. That fails open (a duplicate gets
+    through), which is the only acceptable direction for this to be wrong in.
+    """
+    window_s = _inject_dedupe_window_s()
+    if window_s <= 0 or not session_id or not text:
+        return
+    now_ts = time.time() if now is None else float(now)
+    key = _core._inject_budget_text_key(text)
+    with _core._inject_dedupe_lock:
+        _core._inject_dedupe_prune(now_ts, window_s)
+        _core._inject_dedupe_recent.setdefault(str(session_id), {})[key] = now_ts
+
+
+def _inject_duplicate_check(
+    session_id, text, source="api", idempotency_key=None,
+    from_terminal_queue=False, allow_duplicate=False, now=None,
+):
+    """None to proceed, or a `deduped` result for text already delivered.
+
+    Every suppression refreshes the window, the same way the circuit breaker
+    keeps counting blocked attempts: wt's outbox retries with backoff (the
+    observed chain was +70s, +89s, +155s, +265s), so a window measured only
+    from the first delivery would let the late retries through.
+
+    Answers ``ok: True``. A rejection would send wt's adapter looking for
+    another transport and leave the message in its outbox to retry again --
+    the text did land, so reporting success is both true and the only reply
+    that ends the retry chain.
+    """
+    window_s = _inject_dedupe_window_s()
+    if (
+        window_s <= 0
+        or allow_duplicate
+        or idempotency_key
+        or from_terminal_queue
+        or not session_id
+        or not text
+    ):
+        return None
+    now_ts = time.time() if now is None else float(now)
+    sid = str(session_id)
+    key = _core._inject_budget_text_key(text)
+    with _core._inject_dedupe_lock:
+        _core._inject_dedupe_prune(now_ts, window_s)
+        seen = _core._inject_dedupe_recent.get(sid)
+        last = seen.get(key) if isinstance(seen, dict) else None
+        if last is None:
+            return None
+        seen[key] = now_ts
+    age = now_ts - last
+    return {
+        "ok": True,
+        "deduped": True,
+        "code": "duplicate_suppressed",
+        "via": "duplicate-suppressed",
+        "effect": "duplicate",
+        "landed": "already_delivered",
+        "queued": False,
+        "session_id": sid,
+        "source": source,
+        "window_s": window_s,
+        "age_s": round(age, 3),
+        "message": (
+            f"Identical text already delivered to this session {int(age)}s ago; "
+            f"suppressed as a duplicate (window {int(window_s)}s). Pass "
+            "allow_duplicate to send it again."
+        ),
+    }
+
+
 # --- CCC-1000 Phase 1: the inject result contract ---------------------------
 # Every inject result carries a uniform description of what actually happened,
 # so a caller can distinguish "delivered into the running turn" from "queued
@@ -1215,16 +1346,44 @@ def _inject_text_into_session(session_id, text, **kwargs):
     requested = str(kwargs.pop("requested_verb", "") or "")
     mode = str(kwargs.get("mode", "send"))
     fields = dict(kwargs.pop("contract_fields", None) or {})
+    allow_duplicate = bool(kwargs.pop("allow_duplicate", False))
     if not requested:
         requested, legacy_fields = _LEGACY_TO_VERB.get(mode, (mode, {}))
         for key, value in legacy_fields.items():
             fields.setdefault(key, value)
-    return _annotate_inject_result(
+    # Suppress a re-send of text this session already got (see the
+    # _inject_dedupe_* block). Checked here rather than in the router so the
+    # short-circuit answers in milliseconds -- a sender that timed out waiting
+    # for the first delivery must not time out on the reply that tells it to
+    # stop retrying.
+    duplicate = _core._inject_duplicate_check(
+        session_id, text,
+        source=str(kwargs.get("source", "api")),
+        idempotency_key=kwargs.get("idempotency_key"),
+        from_terminal_queue=bool(kwargs.get("_from_terminal_queue", False)),
+        allow_duplicate=allow_duplicate,
+    )
+    if duplicate is not None:
+        _core._log_activity(
+            "inject", "DEDUPE",
+            f"session={session_id} source={duplicate['source']} "
+            f"age={int(duplicate['age_s'])}s window={int(duplicate['window_s'])}s "
+            f"text=\"{_core._activity_log_preview(text)}\"",
+        )
+        return _annotate_inject_result(
+            duplicate, requested=requested, fields=fields,
+        )
+    result = _annotate_inject_result(
         _core._inject_text_into_session_router(session_id, text, **kwargs),
         requested=requested,
         force_queue=bool(kwargs.get("force_queue", False)),
         fields=fields,
     )
+    # Queued counts as reaching the session: CCC owns the text from here and
+    # the drain (exempt from the check above) delivers it exactly once.
+    if isinstance(result, dict) and result.get("ok"):
+        _core._inject_dedupe_record(session_id, text)
+    return result
 
 
 def _inject_text_into_session_router(

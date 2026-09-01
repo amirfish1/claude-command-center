@@ -31195,6 +31195,9 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                         "force_terminal": bool(payload.get("force_terminal")),
                         "force_headless": bool(payload.get("force_headless")),
                         "force_queue": bool(payload.get("force_queue")) or bool(verb_options.get("force_queue")),
+                        # Opt out of duplicate suppression for a deliberate
+                        # re-send of text this session already received.
+                        "allow_duplicate": bool(payload.get("allow_duplicate")),
                     }
                     if replace_queued:
                         inject_options["preserve_queued_steer"] = True
