@@ -453,11 +453,16 @@ class KapTurnMapper:
             self.epoch = frame["epoch"]
 
         payload = frame.get("payload") or {}
-        etype = payload.get("type") or ""
+        # The frame's own `type` is the event type -- `session_event` is the
+        # AsyncAPI *message* name, not a literal wrapper that appears on the
+        # wire. Observed frames repeat the type inside payload, so prefer the
+        # envelope and fall back.
+        etype = ftype or payload.get("type") or ""
         if not etype:
             return []
         # Subagents share this stream; only the main agent's turn is ours.
-        agent = payload.get("agentId")
+        # Agent events use camelCase agentId; transcript ops use agent_id.
+        agent = payload.get("agentId", payload.get("agent_id"))
         if agent is not None and agent != self.agent_id:
             return []
 

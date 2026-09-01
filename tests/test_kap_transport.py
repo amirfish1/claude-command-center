@@ -15,7 +15,10 @@ from ccc_server import kap
 
 
 def _frame(payload, seq=1, epoch="e1"):
-    return {"type": "session_event", "seq": seq, "epoch": epoch,
+    """Envelope as it appears on the wire: the frame's own `type` is the event
+    type. `session_event` is the AsyncAPI message name, not a wrapper that is
+    ever sent literally -- observed frames put the type at both levels."""
+    return {"type": payload.get("type"), "seq": seq, "epoch": epoch,
             "session_id": "session_x", "payload": payload}
 
 
