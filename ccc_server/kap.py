@@ -170,8 +170,21 @@ def kap_workspace_for(cwd):
     return (created or {}).get("id")
 
 
-def kap_create_session(cwd, title=""):
-    body = {"workspace_id": kap_workspace_for(cwd)}
+_KAP_DEFAULT_MODEL = "kimi-code/k3"
+
+
+def kap_create_session(cwd, title="", model=None, thinking=None,
+                       permission_mode=None):
+    """Create a session. `agent_config.model` is not optional in practice: a
+    session created without one is accepted, stores the prompt, and then never
+    runs a turn -- status reports no model and busy stays false forever."""
+    agent_config = {"model": model or _KAP_DEFAULT_MODEL}
+    if thinking:
+        agent_config["thinking"] = thinking
+    if permission_mode:
+        agent_config["permission_mode"] = permission_mode
+    body = {"workspace_id": kap_workspace_for(cwd),
+            "agent_config": agent_config}
     if title:
         body["title"] = title
     data = kap_request("POST", "/api/v1/sessions", body) or {}
