@@ -175,22 +175,27 @@ _KAP_DEFAULT_MODEL = "kimi-code/k3"
 
 def kap_create_session(cwd, title="", model=None, thinking=None,
                        permission_mode=None):
-    """Create a session. `agent_config.model` is not optional in practice: a
-    session created without one is accepted, stores the prompt, and then never
-    runs a turn -- status reports no model and busy stays false forever."""
-    agent_config = {"model": model or _KAP_DEFAULT_MODEL}
-    if thinking:
-        agent_config["thinking"] = thinking
-    if permission_mode:
-        agent_config["permission_mode"] = permission_mode
-    body = {"workspace_id": kap_workspace_for(cwd),
-            "agent_config": agent_config}
+    """Create a session and give it a model.
+
+    The model is not optional in practice: a session without one accepts a
+    prompt, stores it, and then never runs a turn -- status reports no model,
+    busy stays false, and nothing on the wire explains it. POST /sessions
+    advertises an `agent_config` but does not apply it; the effective route is
+    POST /sessions/{id}/profile, so creation is two calls."""
+    body = {"workspace_id": kap_workspace_for(cwd)}
     if title:
         body["title"] = title
     data = kap_request("POST", "/api/v1/sessions", body) or {}
     sid = data.get("id") or (data.get("session") or {}).get("id")
     if not sid:
         raise KapError("session create returned no id: %s" % (data,))
+    agent_config = {"model": model or _KAP_DEFAULT_MODEL}
+    if thinking:
+        agent_config["thinking"] = thinking
+    if permission_mode:
+        agent_config["permission_mode"] = permission_mode
+    kap_request("POST", "/api/v1/sessions/%s/profile" % sid,
+                {"agent_config": agent_config})
     return sid
 
 
