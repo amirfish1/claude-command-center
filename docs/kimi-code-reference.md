@@ -1,13 +1,17 @@
 # Kimi Code CLI — integration reference
 
-Condensed from a source read of `MoonshotAI/kimi-code` (MIT, TypeScript monorepo;
-shallow clone at /tmp/kimi-code-ref/repo, July 2026). Feeds the KIMI-FIXES queue.
-Citations are `file:line` inside that repo.
+Condensed from a source read of `MoonshotAI/kimi-code` (MIT, TypeScript monorepo).
+Feeds the KIMI-FIXES queue. Citations are `file:line` inside that repo.
+
+Checkout: **`~/dev/vendors/kimi-code`**. The original July 2026 read used a
+shallow clone at `/tmp/kimi-code-ref/repo`, which macOS reaped; re-cloned to a
+durable path 2026-09-01. Note `packages/acp-adapter` has since been renamed
+`packages/acp-server` — paths below that say `acp-adapter` are pre-rename.
 
 Repo layout that matters to CCC:
 
-- ACP adapter: `packages/acp-adapter` (event mapping in `src/events-map.ts`,
-  dispatch in `src/session.ts`).
+- ACP adapter: `packages/acp-adapter` → now `packages/acp-server` (event mapping
+  in `src/events-map.ts`, dispatch in `src/session.ts`).
 - wire.jsonl writer: `packages/agent-core/src/agent/records/persistence.ts`.
 - Daemon + web UI: `packages/kap-server` + `apps/kimi-web` (Vue 3).
   `kimi server` is **deprecated** → `kimi web` (`apps/kimi-code/src/cli/sub/web/deprecated-server.ts:13-16`).
@@ -130,6 +134,43 @@ permission, plan_mode, **context_tokens/max_context_tokens**; prompts POST +
 (structured `tool_input_display`); `GET|PATCH /config`; `/models`, `/providers`,
 `/workspaces`, `/healthz`. Streaming is WS-only (`event.*` frames incl.
 `event.assistant.delta`, `event.session.usage_updated`, `event.approval.requested`).
+
+## Steer: why ACP cannot, and what would make it possible
+
+Verified against the checkout 2026-09-01.
+
+- Steering is a **core** capability, not a kap-server one:
+  `PromptService.steer()` (`packages/agent-core/src/services/prompt/promptService.ts:369`)
+  pulls the named prompts out of its queue and calls `core.rpc.steer(...)`.
+- kap-server exposes it as `POST /sessions/{session_id}/prompts::steer`
+  (`packages/kap-server/src/routes/prompts.ts:375`), "Steer queued prompts into
+  the active turn" — this is what Ctrl/Cmd+S in the web UI calls.
+- ACP does **not**: `rg -i steer packages/acp-server/src` returns nothing, and
+  the bundled `@agentclientprotocol/sdk@0.23.0` `AGENT_METHODS` table has no
+  steer/interject method at all.
+- Instead acp-server rejects a concurrent prompt outright —
+  `assertNoActiveTurn()` (`packages/acp-server/src/session.ts:631`) throws
+  `TURN_AGENT_BUSY_CODE` → JSON-RPC -32600. Its comment gives the reason: the
+  adapter tracks a single in-flight "driver" per session, so a second prompt
+  would overwrite it and leave both turns' events unattributed.
+- **The capability is already in reach of that file.** acp-server drives the
+  engine through the klient facade (`this.agent = this.session.agent('main')`,
+  `session.ts:267`), and that facade has `steer(input)`
+  (`packages/klient/src/core/facade/agent.ts:64`). Nothing calls it — there is
+  simply no ACP method to carry it. ACP has `unstable_*` methods and legacy
+  `extMethod`/`extNotification` fallbacks (`packages/acp-server/src/server.ts:266,698`),
+  so an extension method is the natural home if this is ever raised upstream.
+
+**Why CCC cannot reach the daemon steer for its own session:** acp-server builds
+its klient over the *in-memory* transport (`createKlient` from
+`@moonshot-ai/klient/memory`, `packages/acp-server/src/start.ts:42,128`), so a
+`kimi acp` subprocess owns its own engine core. A separate `kimi web` /
+kap-server daemon is a different process with a different core, and
+`PromptService`'s `_active` / `_queued` are plain in-memory `Map`s
+(`promptService.ts:244,246`). Both processes can *load* the same persisted
+session, but only the one driving the live turn can steer it. Using the daemon
+steer would mean moving CCC's Kimi transport off ACP entirely, not adding a call
+alongside it.
 
 ## Integration caveats (from the study)
 
