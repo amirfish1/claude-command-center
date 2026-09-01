@@ -1323,14 +1323,16 @@ def _codex_queued_steer_transaction(
                 session_id, text,
             )
             if isinstance(ack_suppression, dict):
-                if not _codex_restore_or_journal_claim(claim):
+                recovery = _codex_restore_or_journal_claim(claim)
+                if recovery != "restored":
                     return {
                         "ok": False,
                         "via": "codex-steer",
                         "code": "queued_rollback_persistence_failed",
                         "queued_consumed": 0,
                         "error": "could not persist queued message rollback",
-                        "recovery_journaled": True,
+                        "recovery_journaled": recovery == "journaled",
+                        "recovery_outcome": recovery,
                     }
                 result = dict(ack_suppression)
                 result.setdefault("via", "codex-steer")
@@ -1366,14 +1368,16 @@ def _codex_queued_steer_transaction(
                     "queued_consumed": 1,
                     "delivery_acknowledged": True,
                 }
-            if not _codex_restore_or_journal_claim(claim):
+            recovery = _codex_restore_or_journal_claim(claim)
+            if recovery != "restored":
                 return {
                     "ok": False,
                     "via": "codex-steer",
                     "code": "queued_rollback_persistence_failed",
                     "queued_consumed": 0,
                     "error": "could not persist queued message rollback",
-                    "recovery_journaled": True,
+                    "recovery_journaled": recovery == "journaled",
+                    "recovery_outcome": recovery,
                 }
             raise
 
@@ -1404,14 +1408,16 @@ def _codex_queued_steer_transaction(
                 })
             result["queued_consumed"] = 1
             return result
-        if not _codex_restore_or_journal_claim(claim):
+        recovery = _codex_restore_or_journal_claim(claim)
+        if recovery != "restored":
             return {
                 "ok": False,
                 "via": "codex-steer",
                 "code": "queued_rollback_persistence_failed",
                 "queued_consumed": 0,
                 "error": "could not persist queued message rollback",
-                "recovery_journaled": True,
+                "recovery_journaled": recovery == "journaled",
+                "recovery_outcome": recovery,
             }
         if preserve_queued_steer:
             result["queued"] = True
@@ -1425,9 +1431,12 @@ _CODEX_QUEUED_DELIVERY_TRANSACTION_PROTOCOL = 1
 
 def _codex_restore_or_journal_claim(claim):
     if _core._restore_pending_input_claim(claim):
-        return True
-    _core._write_pending_input_claim_journal(claim)
-    return False
+        return "restored"
+    outcome = _core._write_pending_input_claim_journal(claim)
+    if outcome == "journaled":
+        return "journaled"
+    _core._keep_pending_input_claim_in_memory(claim)
+    return "failed"
 
 
 def _codex_queued_delivery_transaction(session_id, *, idempotency_key=None):
@@ -1453,8 +1462,16 @@ def _codex_queued_delivery_transaction(session_id, *, idempotency_key=None):
         session_id, str(item), allow_unbound_ack=True,
     )
     if isinstance(ack, dict):
-        if not _codex_restore_or_journal_claim(claim):
-            return {"ok": False, "code": "pending_input_rollback_journaled"}
+        recovery = _codex_restore_or_journal_claim(claim)
+        if recovery != "restored":
+            return {
+                "ok": False,
+                "code": (
+                    "pending_input_rollback_journaled"
+                    if recovery == "journaled" else "pending_input_recovery_failed"
+                ),
+                "recovery_journaled": recovery == "journaled",
+            }
         return ack
 
     try:
@@ -1479,11 +1496,24 @@ def _codex_queued_delivery_transaction(session_id, *, idempotency_key=None):
                 "ok": True, "delivered": True,
                 "delivery_acknowledged": True,
             }
-        if not _codex_restore_or_journal_claim(claim):
-            return {"ok": False, "code": "pending_input_rollback_journaled"}
+        recovery = _codex_restore_or_journal_claim(claim)
+        if recovery != "restored":
+            return {
+                "ok": False,
+                "code": (
+                    "pending_input_rollback_journaled"
+                    if recovery == "journaled" else "pending_input_recovery_failed"
+                ),
+                "recovery_journaled": recovery == "journaled",
+            }
         return {"ok": False, "code": "codex_queue_delivery_exception", "error": str(exc)}
 
     result = dict(result or {})
+    returned_turn_id = result.get("turn_id") or result.get("turnId")
+    if returned_turn_id:
+        _core._bind_codex_queued_delivery_ack_suppression(
+            session_id, returned_turn_id,
+        )
     delivered = bool(result.get("ok") and not result.get("queued") and not result.get("disabled"))
     acknowledged = _core._finish_codex_queued_steer_ack_suppression(
         ack, delivered=delivered,
@@ -1495,8 +1525,16 @@ def _codex_queued_delivery_transaction(session_id, *, idempotency_key=None):
         if acknowledged and not delivered:
             result["delivery_acknowledged"] = True
         return result
-    if not _codex_restore_or_journal_claim(claim):
-        return {"ok": False, "code": "pending_input_rollback_journaled"}
+    recovery = _codex_restore_or_journal_claim(claim)
+    if recovery != "restored":
+        return {
+            "ok": False,
+            "code": (
+                "pending_input_rollback_journaled"
+                if recovery == "journaled" else "pending_input_recovery_failed"
+            ),
+            "recovery_journaled": recovery == "journaled",
+        }
     return {"ok": False, "delivered": False, "result": result}
 
 

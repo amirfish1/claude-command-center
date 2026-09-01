@@ -17094,7 +17094,7 @@ class TestPendingInputs(unittest.TestCase):
 
         self.assertTrue(result["delivered"])
         resume.assert_called_once_with(
-            sid, "", _from_queue=True,
+            sid, "first", _from_queue=True,
             queued_delivery_transaction_protocol=1,
         )
         with self.server._pending_resume_lock:

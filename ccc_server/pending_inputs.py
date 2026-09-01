@@ -120,6 +120,7 @@ def _empty_pending_inputs_payload():
         "devin_steers": {},
         "terminal_queue": {},
         "auto_resume_opt_in": {},
+        "applied_claim_journal_ids": {},
     }
 
 
@@ -136,7 +137,7 @@ def _read_pending_inputs_payload_unlocked(*, missing_is_empty):
     payload = dict(data)
     for field in (
         "resume_queue", "devin_steers", "terminal_queue",
-        "auto_resume_opt_in",
+        "auto_resume_opt_in", "applied_claim_journal_ids",
     ):
         value = payload.get(field)
         if value is None:
@@ -304,19 +305,27 @@ def _load_pending_inputs():
 
 def _write_pending_input_claim_journal(claim):
     if not isinstance(claim, dict):
-        return False
+        return "failed"
     item = claim.get("item")
-    payload = {
-        "id": str(uuid.uuid4()),
+    created_ns = time.time_ns()
+    identity = {
         "session_id": str(claim.get("session_id") or ""),
         "queue_name": str(claim.get("queue_name") or "resume"),
         "index": int(claim.get("index") or 0),
         "text": str(item or ""),
         "handoff_id": getattr(item, "handoff_id", None),
+        "created_ns": created_ns,
+    }
+    journal_id = hashlib.sha256(
+        json.dumps(identity, sort_keys=True).encode("utf-8")
+    ).hexdigest()
+    payload = {
+        "id": journal_id,
+        **identity,
         "handoff_path": str(getattr(item, "handoff_path", "") or ""),
     }
     if not payload["session_id"] or not payload["text"]:
-        return False
+        return "failed"
     directory = _pending_input_claim_journal_dir()
     tmp = None
     try:
@@ -328,12 +337,41 @@ def _write_pending_input_claim_journal(claim):
             handle.flush()
             os.fsync(handle.fileno())
         os.replace(tmp, directory / f"{payload['id']}.json")
-        return True
+        directory_fd = os.open(directory, os.O_RDONLY)
+        try:
+            os.fsync(directory_fd)
+        finally:
+            os.close(directory_fd)
+        return "journaled"
     except OSError:
-        return False
+        return "failed"
     finally:
         if tmp is not None and tmp.exists():
             tmp.unlink(missing_ok=True)
+
+
+def _keep_pending_input_claim_in_memory(claim):
+    if not isinstance(claim, dict):
+        return False
+    sid = str(claim.get("session_id") or "")
+    queue_name = str(claim.get("queue_name") or "resume")
+    item = claim.get("item")
+    if not sid or queue_name not in ("resume", "terminal") or item is None:
+        return False
+    queue, lock = (
+        (_core._pending_resume_queue, _core._pending_resume_lock)
+        if queue_name == "resume"
+        else (_core._pending_terminal_input_queue, _core._pending_terminal_input_lock)
+    )
+    with _core._codex_queue_pump_lock(sid), lock:
+        items = queue.setdefault(sid, [])
+        if getattr(item, "handoff_id", None) and any(
+            getattr(existing, "handoff_id", None) == item.handoff_id
+            for existing in items
+        ):
+            return True
+        items.insert(min(max(int(claim.get("index") or 0), 0), len(items)), item)
+    return True
 
 
 def _recover_pending_input_claim_journals():
@@ -342,26 +380,49 @@ def _recover_pending_input_claim_journals():
         paths = sorted(directory.glob("*.json"))
     except OSError:
         return 0
-    recovered = 0
+    records = []
     for path in paths:
         try:
             payload = json.loads(path.read_text())
         except (OSError, json.JSONDecodeError):
             continue
+        records.append((int(payload.get("created_ns") or 0), path, payload))
+    recovered = 0
+    for _, path, payload in sorted(records, reverse=True, key=lambda row: row[0]):
         sid = str(payload.get("session_id") or "")
         queue_name = str(payload.get("queue_name") or "resume")
         text = str(payload.get("text") or "")
         if not sid or queue_name not in ("resume", "terminal") or not text:
             continue
         handoff_id = payload.get("handoff_id")
+        if handoff_id:
+            try:
+                handoff_path = Path(payload.get("handoff_path") or "").resolve()
+                handoff_root = _core.PENDING_INPUT_HANDOFF_DIR.resolve()
+                valid_handoff = (
+                    handoff_path.parent == handoff_root
+                    and handoff_path.suffix == ".json"
+                    and str(handoff_id) in handoff_path.name
+                )
+            except OSError:
+                valid_handoff = False
+            if not valid_handoff:
+                path.replace(path.with_suffix(".invalid"))
+                continue
         item = (
             _PendingInputHandoff(
-                text, handoff_id, Path(payload.get("handoff_path") or ""),
+                text, handoff_id, handoff_path,
             )
             if handoff_id else text
         )
 
         def restore():
+            with _pending_inputs_file_exclusive_lock():
+                authority = _read_pending_inputs_payload_unlocked(missing_is_empty=True)
+            if str(payload.get("id")) in (
+                (authority or {}).get("applied_claim_journal_ids") or {}
+            ):
+                return False
             queue, lock = (
                 (_core._pending_resume_queue, _core._pending_resume_lock)
                 if queue_name == "resume"
@@ -381,9 +442,19 @@ def _recover_pending_input_claim_journals():
                     )
                 return True
 
-        transaction = _core._mutate_pending_inputs({sid}, restore)
+        transaction = _core._mutate_pending_inputs(
+            {sid}, restore, applied_journal_id=str(payload.get("id")),
+        )
         if transaction.get("ok"):
             path.unlink(missing_ok=True)
+            try:
+                directory_fd = os.open(directory, os.O_RDONLY)
+                try:
+                    os.fsync(directory_fd)
+                finally:
+                    os.close(directory_fd)
+            except OSError:
+                pass
             recovered += int(bool(transaction.get("value")))
     return recovered
 
@@ -463,6 +534,7 @@ def _normalize_pending_session_ids(affected_session_ids):
 
 def _persist_pending_inputs_current(
     affected, *, include_devin_steers=False, include_auto_resume=False,
+    applied_journal_id=None,
 ):
     final = {sid: _pending_inputs_session_snapshot(sid) for sid in affected}
     tmp_path = None
@@ -495,6 +567,23 @@ def _persist_pending_inputs_current(
                         payload["auto_resume_opt_in"][sid] = True
                     else:
                         payload["auto_resume_opt_in"].pop(sid, None)
+            if applied_journal_id:
+                ledger = payload.setdefault("applied_claim_journal_ids", {})
+                ledger[str(applied_journal_id)] = time.time_ns()
+                if len(ledger) > 512:
+                    live_journals = {
+                        path.stem
+                        for path in _pending_input_claim_journal_dir().glob("*.json")
+                    }
+                    removable = sorted(
+                        (
+                            (int(created or 0), journal_id)
+                            for journal_id, created in ledger.items()
+                            if journal_id not in live_journals
+                        )
+                    )
+                    for _, journal_id in removable[:max(0, len(ledger) - 512)]:
+                        ledger.pop(journal_id, None)
             _core.PENDING_INPUTS_FILE.parent.mkdir(parents=True, exist_ok=True)
             fd, tmp_name = tempfile.mkstemp(
                 prefix=f".{_core.PENDING_INPUTS_FILE.name}.",
@@ -521,7 +610,7 @@ def _persist_pending_inputs_current(
 
 def _mutate_pending_inputs(
     affected_session_ids, mutation, *, include_devin_steers=False,
-    include_auto_resume=False,
+    include_auto_resume=False, applied_journal_id=None,
 ):
     """Run one explicit mutation against refreshed authoritative sessions."""
     affected = _normalize_pending_session_ids(affected_session_ids)
@@ -575,6 +664,7 @@ def _mutate_pending_inputs(
             affected,
             include_devin_steers=include_devin_steers,
             include_auto_resume=include_auto_resume,
+            applied_journal_id=applied_journal_id,
         )
         if not ok:
             restore_memory()
@@ -2067,9 +2157,13 @@ def _pump_codex_resume_queue(session_id):
         return {"ok": True, "waiting": "backoff"}
     if _core._resume_queue_engine_busy(session_id):
         return {"ok": True, "waiting": "busy"}
+    with _core._pending_resume_lock:
+        best_effort_head = str(
+            (_core._pending_resume_queue.get(session_id) or [""])[0] or ""
+        )
     result = _core.resume_session_codex(
         session_id,
-        "",
+        best_effort_head,
         _from_queue=True,
         queued_delivery_transaction_protocol=1,
     )

@@ -2078,7 +2078,7 @@ def _begin_codex_queued_steer_ack_suppression(
         _CODEX_QUEUED_STEER_ACK_SUPPRESSIONS.setdefault(key, []).append({
             "token_id": token_id,
             "state": "pump_pending" if allow_unbound_ack else "unbound",
-            "allow_unbound_ack": bool(allow_unbound_ack),
+            "allow_unbound_ack": False,
             "acknowledged": False,
             "created_at": now,
             "expires_at": now + _CODEX_QUEUED_STEER_ACK_TTL_S,
@@ -2128,6 +2128,27 @@ def _bind_codex_queued_steer_ack_suppression(session_id, text, turn_id):
     return False
 
 
+def _bind_codex_queued_delivery_ack_suppression(session_id, turn_id):
+    if not session_id or not turn_id:
+        return False
+    now = time.monotonic()
+    with _CODEX_QUEUED_STEER_ACK_LOCK:
+        _prune_codex_queued_steer_acks_unlocked(now)
+        candidates = []
+        for key, entries in _CODEX_QUEUED_STEER_ACK_SUPPRESSIONS.items():
+            if key[0] != str(session_id):
+                continue
+            for entry in entries:
+                if entry.get("state") == "pump_pending" and not entry.get("turn_id"):
+                    candidates.append((float(entry.get("created_at") or 0.0), entry))
+        if not candidates:
+            return False
+        entry = min(candidates, key=lambda pair: pair[0])[1]
+        entry["turn_id"] = str(turn_id)
+        entry["state"] = "pending"
+        return True
+
+
 def _suppress_codex_queued_steer_delivery_ack(session_id, text, turn_id=None):
     """Consume exactly one ack belonging to a claimed queued Steer.
 
@@ -2145,15 +2166,14 @@ def _suppress_codex_queued_steer_delivery_ack(session_id, text, turn_id=None):
         for entry in entries:
             if entry.get("acknowledged"):
                 continue
-            if entry.get("state") not in ("pump_pending", "pending", "committed"):
+            if entry.get("state") not in ("pending", "committed"):
                 continue
             expected_turn_id = str(entry.get("turn_id") or "")
             if (
-                not entry.get("allow_unbound_ack")
-                and (not expected_turn_id or expected_turn_id != str(turn_id or ""))
+                not expected_turn_id or expected_turn_id != str(turn_id or "")
             ):
                 continue
-            if entry.get("state") in ("pump_pending", "pending"):
+            if entry.get("state") == "pending":
                 entry["acknowledged"] = True
                 if turn_id:
                     entry["turn_id"] = str(turn_id)
@@ -2227,6 +2247,8 @@ def _codex_app_server_handle_notification(method, params):
         # running. Treat unproven ownership as unknown; the writer gate still
         # serializes behind it.
         writer = "ccc" if state.get("ccc_turn_start_pending") or known_ccc_turn else "unknown"
+        if writer == "ccc" and turn_id:
+            _bind_codex_queued_delivery_ack_suppression(thread_id, turn_id)
         state["active_writer"] = writer
         state["active_items"] = {}
         state.pop("active_item", None)

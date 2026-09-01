@@ -1605,6 +1605,13 @@ def test_real_dashboard_worker_pump_ack_consumes_one_duplicate(
     monkeypatch.setattr(server, "_schedule_codex_queue_pump", lambda sid: None)
 
     def native(session_id, text, **kwargs):
+        server._CODEX_APP_SERVER_THREAD_STATE.setdefault(session_id, {})[
+            "ccc_turn_start_pending"
+        ] = True
+        server._codex_app_server_handle_message({
+            "jsonrpc": "2.0", "method": "turn/started",
+            "params": {"threadId": session_id, "turnId": "pump-turn"},
+        })
         _notify_user_message(session_id, text, turn_id="pump-turn")
         return {"ok": True, "via": "codex-app-server", "accepted": True}
 
@@ -1647,7 +1654,7 @@ def test_claim_journal_recovers_duplicate_once_after_restart(monkeypatch, tmp_pa
     }
     real_persist = server._persist_pending_inputs_current
     monkeypatch.setattr(server, "_persist_pending_inputs_current", lambda *a, **k: False)
-    assert not server._codex_restore_or_journal_claim(claim)
+    assert server._codex_restore_or_journal_claim(claim) == "journaled"
     monkeypatch.setattr(server, "_persist_pending_inputs_current", real_persist)
 
     server._pending_resume_queue.clear()
