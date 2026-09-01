@@ -7507,6 +7507,13 @@
       const msg = liveStatus.needsApprovalMessage || liveStatus.sidecarFile || 'Codex is waiting for approval';
       const approvalItem = liveStatusMatchesOpenConv() ? liveStatus.codexAppServerActiveItem : null;
       const canApprove = !!(approvalItem && approvalItem.needs_approval && approvalItem.request_id && approvalItem.can_approve);
+      const acpApproval = liveStatusMatchesOpenConv() ? liveStatus.acpPendingPermission : null;
+      const canAnswerAcp = !!(
+        acpApproval
+        && Object.prototype.hasOwnProperty.call(acpApproval, 'request_id')
+        && Array.isArray(acpApproval.options)
+        && acpApproval.options.length
+      );
       // Claude has no approval API — its prompt can only be answered by driving
       // the TUI picker with a keystroke, which is macOS + live-TTY only. Offer
       // Approve/Deny when the server reports that capability AND the session
@@ -7521,7 +7528,21 @@
       const claudeNoRoute = !canApprove && _isClaudeSess && !_caps.answerPermission;
       const hasButtons = canApprove || canAnswerClaude || canAnswerAcp;
       let actionsHtml;
-      if (canApprove) {
+      if (canAnswerAcp) {
+        const acpHarness = String(acpApproval.harness || (currentSession && currentSession.source) || 'grok');
+        const acpRequestId = String(acpApproval.request_id);
+        actionsHtml = '<span class="cl-approval-actions">'
+          + acpApproval.options.map((option) => {
+            const optionId = String((option && (option.optionId || option.id)) || '');
+            const optionName = String((option && (option.name || option.title || optionId)) || 'Choose');
+            return '<button type="button" class="cl-approval-btn acp-perm-opt"'
+              + ' data-acp-harness="' + escapeAttr(acpHarness) + '"'
+              + ' data-acp-req="' + escapeAttr(acpRequestId) + '"'
+              + ' data-acp-opt="' + escapeAttr(optionId) + '"'
+              + ' title="Respond to this permission request">' + escapeHtml(optionName) + '</button>';
+          }).join('')
+          + '</span>';
+      } else if (canApprove) {
         actionsHtml = '<span class="cl-approval-actions">'
           + '<button type="button" class="cl-approval-btn" data-decision="accept">Approve</button>'
           + '<button type="button" class="cl-approval-btn" data-decision="acceptForSession">Approve session</button>'
@@ -7536,13 +7557,6 @@
               + '<button type="button" class="cl-approval-btn is-negative" data-claude-decision="decline" title="Deny. Sends Esc to the session\'s terminal picker">Deny</button>'
           + '</span>';
       } else if (claudeDormant) {
-      const acpApproval = liveStatusMatchesOpenConv() ? liveStatus.acpPendingPermission : null;
-      const canAnswerAcp = !!(
-        acpApproval
-        && Object.prototype.hasOwnProperty.call(acpApproval, 'request_id')
-        && Array.isArray(acpApproval.options)
-        && acpApproval.options.length
-      );
         actionsHtml = '<span class="cl-approval-actions">'
               + '<span class="cl-approval-note" title="This session has no live terminal right now, so CCC can\'t drive its approval picker. Resume the session, then approve or deny in its terminal">Resume to answer</span>'
           + '</span>';
@@ -7564,21 +7578,7 @@
         + (msg ? '<span class="cl-file">' + escapeHtml(truncate(msg, hasButtons ? 86 : 120)) + '</span>' : '')
         + actionsHtml;
       inline.title = msg;
-      if (canAnswerAcp) {
-        const acpHarness = String(acpApproval.harness || (currentSession && currentSession.source) || 'grok');
-        const acpRequestId = String(acpApproval.request_id);
-        actionsHtml = '<span class="cl-approval-actions">'
-          + acpApproval.options.map((option) => {
-            const optionId = String((option && (option.optionId || option.id)) || '');
-            const optionName = String((option && (option.name || option.title || optionId)) || 'Choose');
-            return '<button type="button" class="cl-approval-btn acp-perm-opt"'
-              + ' data-acp-harness="' + escapeAttr(acpHarness) + '"'
-              + ' data-acp-req="' + escapeAttr(acpRequestId) + '"'
-              + ' data-acp-opt="' + escapeAttr(optionId) + '"'
-              + ' title="Respond to this permission request">' + escapeHtml(optionName) + '</button>';
-          }).join('')
-          + '</span>';
-      } else if (canApprove) {
+      if (canApprove) {
         inline.querySelectorAll('.cl-approval-btn').forEach(btn => {
           btn.addEventListener('click', (ev) => {
             ev.preventDefault();
