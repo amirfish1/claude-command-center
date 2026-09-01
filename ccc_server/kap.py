@@ -322,6 +322,29 @@ class KapWebSocket:
     def send_json(self, obj):
         self._send_frame(0x1, json.dumps(obj).encode("utf-8"))
 
+    def recv_json(self):
+        """Next frame as a dict, answering heartbeats on the way.
+
+        kap-server's heartbeat is an *application* frame -- {"type":"ping"}
+        inside the payload -- not the RFC 6455 ping opcode, and it closes the
+        socket after two missed replies (wsConnectionV1.onHeartbeat). Any
+        inbound frame resets its timer, so a client that only answers the
+        protocol-level ping gets silently disconnected 20s in with no error.
+        """
+        while True:
+            msg = self.recv()
+            if msg is None:
+                return None
+            try:
+                frame = json.loads(msg)
+            except ValueError:
+                continue
+            reply = kap_heartbeat_reply(frame)
+            if reply is not None:
+                self.send_json(reply)
+                continue
+            return frame
+
     def close(self):
         if self._closed:
             return
@@ -334,6 +357,14 @@ class KapWebSocket:
             self.sock.close()
         except OSError:
             pass
+
+
+def kap_heartbeat_reply(frame):
+    """Pong for an application-level ping frame, else None."""
+    if not isinstance(frame, dict) or frame.get("type") != "ping":
+        return None
+    nonce = (frame.get("payload") or {}).get("nonce") or ""
+    return {"type": "pong", "payload": {"nonce": nonce}}
 
 
 def kap_open_stream(sid, transcript="delta", since=None):
