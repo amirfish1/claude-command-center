@@ -1300,6 +1300,12 @@ def _resume_session_codex_native_delivery(
 def _codex_queued_steer_transaction(
     session_id, text, *, preserve_queued_steer, idempotency_key,
 ):
+    if not _core._retry_pending_input_recovery(session_id):
+        return {
+            "ok": False,
+            "code": "pending_input_recovery_pending",
+            "error": "queued input recovery must complete before delivery",
+        }
     ownership = _core._codex_queue_pump_lock(session_id)
     with ownership:
         claim = _core._claim_matching_pending_input(session_id, text)
@@ -1440,8 +1446,14 @@ def _codex_restore_or_journal_claim(claim):
 
 
 def _codex_queued_delivery_transaction(session_id, *, idempotency_key=None):
+    if not _core._retry_pending_input_recovery(session_id):
+        return {
+            "ok": False,
+            "code": "pending_input_recovery_pending",
+            "error": "queued input recovery must complete before delivery",
+        }
     claim_result = _core._apply_pending_input_operations(session_id, [{
-        "field": "resume", "action": "pop_head",
+        "field": "resume", "action": "pop_head_claim",
     }])
     if not claim_result.get("ok"):
         return {
@@ -1449,7 +1461,8 @@ def _codex_queued_delivery_transaction(session_id, *, idempotency_key=None):
             "delivered": False,
             "code": claim_result.get("code") or "pending_input_persist_failed",
         }
-    item = ((claim_result.get("value") or [None])[0])
+    claim_value = ((claim_result.get("value") or [None])[0]) or {}
+    item = claim_value.get("item")
     if item is None:
         return {"ok": True, "empty": True}
     claim = {
@@ -1457,6 +1470,7 @@ def _codex_queued_delivery_transaction(session_id, *, idempotency_key=None):
         "queue_name": "resume",
         "index": 0,
         "item": item,
+        "claim_sequence": int(claim_value.get("claim_sequence") or 0),
     }
     ack = _core._begin_codex_queued_steer_ack_suppression(
         session_id, str(item), allow_unbound_ack=True,
@@ -1479,9 +1493,16 @@ def _codex_queued_delivery_transaction(session_id, *, idempotency_key=None):
             kwargs = {"steer": False}
             if idempotency_key:
                 kwargs["idempotency_key"] = idempotency_key
-            return _core._resume_session_codex_native_delivery(
-                session_id, str(item), **kwargs,
+            previous_token = getattr(
+                _core._CODEX_QUEUED_DELIVERY_CONTEXT, "token_id", None,
             )
+            _core._CODEX_QUEUED_DELIVERY_CONTEXT.token_id = ack[1]
+            try:
+                return _core._resume_session_codex_native_delivery(
+                    session_id, str(item), **kwargs,
+                )
+            finally:
+                _core._CODEX_QUEUED_DELIVERY_CONTEXT.token_id = previous_token
 
         result = _core._deliver_with_auto_resume_barrier(
             session_id, item, deliver,
@@ -1512,7 +1533,7 @@ def _codex_queued_delivery_transaction(session_id, *, idempotency_key=None):
     returned_turn_id = result.get("turn_id") or result.get("turnId")
     if returned_turn_id:
         _core._bind_codex_queued_delivery_ack_suppression(
-            session_id, returned_turn_id,
+            session_id, returned_turn_id, token_id=ack[1],
         )
     delivered = bool(result.get("ok") and not result.get("queued") and not result.get("disabled"))
     acknowledged = _core._finish_codex_queued_steer_ack_suppression(

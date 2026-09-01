@@ -70,6 +70,7 @@ _CODEX_QUEUED_STEER_ACK_LOCK = threading.Lock()
 _CODEX_QUEUED_STEER_ACK_SUPPRESSIONS = {}
 _CODEX_QUEUED_STEER_ACK_TTL_S = 120.0
 _CODEX_QUEUED_STEER_ACK_MAX_TOTAL = 256
+_CODEX_QUEUED_DELIVERY_CONTEXT = threading.local()
 _CODEX_APP_SERVER_WARMUP_LOCK = threading.Lock()
 _CODEX_APP_SERVER_WARMUP_LAST = 0.0
 _CODEX_APP_SERVER_LIVENESS_INTERVAL = 20.0
@@ -2128,7 +2129,9 @@ def _bind_codex_queued_steer_ack_suppression(session_id, text, turn_id):
     return False
 
 
-def _bind_codex_queued_delivery_ack_suppression(session_id, turn_id):
+def _bind_codex_queued_delivery_ack_suppression(
+    session_id, turn_id, token_id=None,
+):
     if not session_id or not turn_id:
         return False
     now = time.monotonic()
@@ -2139,7 +2142,12 @@ def _bind_codex_queued_delivery_ack_suppression(session_id, turn_id):
             if key[0] != str(session_id):
                 continue
             for entry in entries:
-                if entry.get("state") == "pump_pending" and not entry.get("turn_id"):
+                if (
+                    entry.get("state") in (
+                        ("pump_pending", "pending") if token_id else ("pump_pending",)
+                    )
+                    and (not token_id or entry.get("token_id") == token_id)
+                ):
                     candidates.append((float(entry.get("created_at") or 0.0), entry))
         if not candidates:
             return False
@@ -2248,7 +2256,11 @@ def _codex_app_server_handle_notification(method, params):
         # serializes behind it.
         writer = "ccc" if state.get("ccc_turn_start_pending") or known_ccc_turn else "unknown"
         if writer == "ccc" and turn_id:
-            _bind_codex_queued_delivery_ack_suppression(thread_id, turn_id)
+            _bind_codex_queued_delivery_ack_suppression(
+                thread_id,
+                turn_id,
+                token_id=state.get("queued_delivery_start_token"),
+            )
         state["active_writer"] = writer
         state["active_items"] = {}
         state.pop("active_item", None)
@@ -2867,6 +2879,11 @@ def _codex_app_server_request(method, params=None, timeout=20):
             state = _core._CODEX_APP_SERVER_THREAD_STATE.setdefault(thread_id, {})
             state["ccc_turn_start_pending"] = True
             state["ccc_turn_start_pending_at"] = time.time()
+            queued_token = getattr(
+                _CODEX_QUEUED_DELIVERY_CONTEXT, "token_id", None,
+            )
+            if queued_token:
+                state["queued_delivery_start_token"] = str(queued_token)
     transport = _core._ensure_codex_app_server()
     if transport is None:
         if method == "turn/start" and thread_id:
@@ -2874,6 +2891,7 @@ def _codex_app_server_request(method, params=None, timeout=20):
                 state = _core._CODEX_APP_SERVER_THREAD_STATE.setdefault(thread_id, {})
                 state.pop("ccc_turn_start_pending", None)
                 state.pop("ccc_turn_start_pending_at", None)
+                state.pop("queued_delivery_start_token", None)
         error = "Codex app-server is unavailable"
         conflict = _core._codex_shared_state_conflict()
         if conflict:
@@ -2895,6 +2913,7 @@ def _codex_app_server_request(method, params=None, timeout=20):
             state = _core._CODEX_APP_SERVER_THREAD_STATE.setdefault(thread_id, {})
             state.pop("ccc_turn_start_pending", None)
             state.pop("ccc_turn_start_pending_at", None)
+            state.pop("queued_delivery_start_token", None)
             if _core._codex_response_succeeded(response):
                 turn = ((response.get("result") or {}).get("turn") or {})
                 turn_id = str(turn.get("id") or "").strip()

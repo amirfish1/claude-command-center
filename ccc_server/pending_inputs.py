@@ -53,6 +53,8 @@ _pending_resume_retry_after: dict = {}
 _PENDING_RESUME_RETRY_DELAY_S = 60.0
 _pending_terminal_input_lock = threading.Lock()
 _pending_terminal_handoff_ids: dict = {}  # watcher-local handoff_id → path
+_pending_input_recovery_registry = {}
+_pending_input_recovery_registry_lock = threading.Lock()
 _pending_inputs_lock = threading.RLock()
 _pending_inputs_file_lock_local = threading.local()
 _pending_input_handoff_ingest_lock = threading.Lock()
@@ -308,6 +310,7 @@ def _write_pending_input_claim_journal(claim):
         return "failed"
     item = claim.get("item")
     created_ns = time.time_ns()
+    claim_sequence = int(claim.get("claim_sequence") or time.monotonic_ns())
     identity = {
         "session_id": str(claim.get("session_id") or ""),
         "queue_name": str(claim.get("queue_name") or "resume"),
@@ -315,6 +318,7 @@ def _write_pending_input_claim_journal(claim):
         "text": str(item or ""),
         "handoff_id": getattr(item, "handoff_id", None),
         "created_ns": created_ns,
+        "claim_sequence": claim_sequence,
     }
     journal_id = hashlib.sha256(
         json.dumps(identity, sort_keys=True).encode("utf-8")
@@ -371,7 +375,56 @@ def _keep_pending_input_claim_in_memory(claim):
         ):
             return True
         items.insert(min(max(int(claim.get("index") or 0), 0), len(items)), item)
+    with _pending_input_recovery_registry_lock:
+        claims = _pending_input_recovery_registry.setdefault(sid, [])
+        identity = (
+            claim.get("queue_name"), claim.get("claim_sequence"),
+            getattr(item, "handoff_id", None), str(item),
+        )
+        if not any((
+            existing.get("queue_name"), existing.get("claim_sequence"),
+            getattr(existing.get("item"), "handoff_id", None),
+            str(existing.get("item")),
+        ) == identity for existing in claims):
+            claims.append(dict(claim))
     return True
+
+
+def _pending_input_recovery_blocked(session_id):
+    with _pending_input_recovery_registry_lock:
+        if _pending_input_recovery_registry.get(session_id):
+            return True
+    directory = _pending_input_claim_journal_dir()
+    for path in directory.glob("*.json"):
+        try:
+            payload = json.loads(path.read_text())
+        except (OSError, json.JSONDecodeError):
+            continue
+        if str(payload.get("session_id") or "") == str(session_id):
+            return True
+    return False
+
+
+def _retry_pending_input_recovery(session_id):
+    with _pending_input_recovery_registry_lock:
+        claims = list(_pending_input_recovery_registry.get(session_id) or [])
+    if not claims:
+        _core._recover_pending_input_claim_journals()
+        return not _pending_input_recovery_blocked(session_id)
+    transaction = _core._mutate_pending_inputs({session_id}, lambda: True)
+    if transaction.get("ok"):
+        with _pending_input_recovery_registry_lock:
+            _pending_input_recovery_registry.pop(session_id, None)
+        return True
+    all_journaled = all(
+        _core._write_pending_input_claim_journal(claim) == "journaled"
+        for claim in claims
+    )
+    if all_journaled:
+        with _pending_input_recovery_registry_lock:
+            _pending_input_recovery_registry.pop(session_id, None)
+        _core._recover_pending_input_claim_journals()
+    return not _pending_input_recovery_blocked(session_id)
 
 
 def _recover_pending_input_claim_journals():
@@ -386,7 +439,18 @@ def _recover_pending_input_claim_journals():
             payload = json.loads(path.read_text())
         except (OSError, json.JSONDecodeError):
             continue
-        records.append((int(payload.get("created_ns") or 0), path, payload))
+        try:
+            claim_sequence = int(payload.get("claim_sequence"))
+            created_ns = int(payload.get("created_ns"))
+            if claim_sequence <= 0 or created_ns <= 0:
+                raise ValueError
+        except (TypeError, ValueError):
+            try:
+                path.replace(path.with_suffix(".invalid"))
+            except OSError:
+                pass
+            continue
+        records.append((claim_sequence, path, payload))
     recovered = 0
     for _, path, payload in sorted(records, reverse=True, key=lambda row: row[0]):
         sid = str(payload.get("session_id") or "")
@@ -399,10 +463,18 @@ def _recover_pending_input_claim_journals():
             try:
                 handoff_path = Path(payload.get("handoff_path") or "").resolve()
                 handoff_root = _core.PENDING_INPUT_HANDOFF_DIR.resolve()
+                source_handoff = _read_pending_input_handoff(handoff_path)
                 valid_handoff = (
                     handoff_path.parent == handoff_root
                     and handoff_path.suffix == ".json"
                     and str(handoff_id) in handoff_path.name
+                    and source_handoff is not None
+                    and source_handoff["id"] == str(handoff_id)
+                    and source_handoff["session_id"] == sid
+                    and source_handoff["text"] == text
+                    and queue_name == "terminal"
+                    and bool(source_handoff["front"])
+                    == (int(payload.get("index") or 0) == 0)
                 )
             except OSError:
                 valid_handoff = False
@@ -446,7 +518,13 @@ def _recover_pending_input_claim_journals():
             {sid}, restore, applied_journal_id=str(payload.get("id")),
         )
         if transaction.get("ok"):
-            path.unlink(missing_ok=True)
+            try:
+                path.unlink(missing_ok=True)
+            except OSError as exc:
+                print(
+                    f"  [pending-inputs] applied journal cleanup deferred: {exc}",
+                    flush=True,
+                )
             try:
                 directory_fd = os.open(directory, os.O_RDONLY)
                 try:
@@ -521,6 +599,31 @@ def _refresh_pending_inputs_for_session(session_id):
             _core._auto_resume_opt_in[session_id] = True
         else:
             _core._auto_resume_opt_in.pop(session_id, None)
+    with _pending_input_recovery_registry_lock:
+        recovery_claims = list(
+            _pending_input_recovery_registry.get(session_id) or []
+        )
+    for claim in sorted(
+        recovery_claims,
+        key=lambda item: int(item.get("claim_sequence") or 0),
+        reverse=True,
+    ):
+        queue, lock = (
+            (_core._pending_resume_queue, _core._pending_resume_lock)
+            if claim.get("queue_name") == "resume"
+            else (_core._pending_terminal_input_queue, _core._pending_terminal_input_lock)
+        )
+        item = claim.get("item")
+        with lock:
+            items = queue.setdefault(session_id, [])
+            if getattr(item, "handoff_id", None) and any(
+                getattr(existing, "handoff_id", None) == item.handoff_id
+                for existing in items
+            ):
+                continue
+            items.insert(
+                min(max(int(claim.get("index") or 0), 0), len(items)), item,
+            )
     return True
 
 
@@ -724,6 +827,11 @@ def _apply_pending_input_operations(session_id, operations):
                         results.append(True)
                     elif action == "pop_head":
                         results.append(queue.pop(0) if queue else None)
+                    elif action == "pop_head_claim":
+                        results.append({
+                            "item": queue.pop(0) if queue else None,
+                            "claim_sequence": time.monotonic_ns(),
+                        })
                     elif action == "pop_head_if_matching":
                         results.append(
                             queue.pop(0)
@@ -1260,6 +1368,7 @@ def _claim_matching_pending_input(session_id, text):
                         "queue_name": queue_name,
                         "index": index,
                         "item": claimed,
+                        "claim_sequence": time.monotonic_ns(),
                     }
                     break
                 else:

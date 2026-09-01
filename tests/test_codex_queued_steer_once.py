@@ -212,12 +212,13 @@ def test_claim_removes_one_duplicate_and_restore_preserves_fifo(monkeypatch):
 
     claim = server._claim_matching_pending_input(sid, "target")
 
-    assert claim == {
+    assert claim.items() >= {
         "session_id": sid,
         "queue_name": "resume",
         "index": 1,
         "item": "target",
-    }
+    }.items()
+    assert claim["claim_sequence"] > 0
     assert server._pending_resume_queue[sid] == ["first", "target", "last"]
     assert server._restore_pending_input_claim(claim)
     assert server._pending_resume_queue[sid] == ["first", "target", "target", "last"]
