@@ -668,18 +668,7 @@ worker = data.get("worker") if isinstance(data.get("worker"), dict) else {}
 sv = "absent" if "server_version" not in worker else (worker.get("server_version") or "")
 sh = worker.get("server_content_hash") or ""
 print(sv, sh, end=" ")
-' 2>/dev/null; "$PYTHON" -c '
-import hashlib, pathlib, re, sys
-try:
-    p = pathlib.Path(sys.argv[1]).resolve()
-    text = p.read_text(encoding="utf-8")
-    m = re.search(r"^__version__\s*=\s*\"([^\"]+)\"", text, re.M)
-    version = m.group(1) if m else ""
-    h = hashlib.sha256(text.encode("utf-8")).hexdigest()[:16]
-    print(version + " " + h, end="")
-except Exception:
-    print(" ", end="")
-' "$HERE/server.py")
+' 2>/dev/null; "$PYTHON" "$HERE/ccc_server/content_hash.py" "$HERE")
 EOF
       worker_stale_version=0
       worker_stale_hash=0
