@@ -210,3 +210,52 @@ alongside it.
 4. `plan` updates come only from TodoList tool calls, at tool-call start.
 5. Mode resets to default on load/resume; model/thinking persist per-session in
    wire.jsonl.
+
+## Stage 0 probe (2026-09-01, measured against a live daemon)
+
+Started `~/.kimi-code/bin/kimi web --no-open --port 58627` against the default
+`~/.kimi-code` home — the same home CCC's `kimi acp` subprocess uses
+(`ccc_server/acp.py:50-58`, `home_env: KIMI_CODE_HOME`). Meta reports
+`server_version 0.39.1`, `backend "v2"`, `dangerous_bypass_auth false`. The
+bearer token is printed to the startup log and also lives at
+`~/.kimi-code/server.token`. `/openapi.json` is served live (401 without the
+bearer, 200 with it): OpenAPI 3.0.3, 100 paths, schemas fully inlined
+(`components.schemas` is empty), so a client can be generated straight from the
+running binary.
+
+**Session store is shared, and the daemon reads ACP-created sessions.**
+Both surfaces index off `~/.kimi-code/session_index.jsonl` and store transcripts
+under `~/.kimi-code/sessions/<workspace_key>/<session_id>/`. `GET
+/api/v1/sessions` returned 340 sessions whose newest entries matched the on-disk
+dirs exactly, in order. `session_f0b5692f-…` — which CCC drove over ACP, and for
+which CCC holds its own normalized copy at
+`~/.claude/command-center/acp/kimi/session_f0b5692f-….jsonl` — resolved on the
+daemon for `GET {sid}`, `{sid}/status`, `{sid}/messages` and `{sid}/prompts`
+(all 200). So the two transports **can coexist during migration**; this is not a
+hard cutover. Note `{sid}/events` is 404 — the transcript routes are
+`{sid}/transcript`, `/transcript/ops`, `/transcript/plan`,
+`/transcript/user-messages`.
+
+The caveat above still stands and is the real boundary: the *store* is shared,
+the *live turn* is not. Whichever process holds the core in memory owns
+`_active`/`_queued`, so the daemon can read an ACP session but cannot steer a
+turn the ACP subprocess is currently driving.
+
+**The steer API is queue-first, which matches CCC's tray one-to-one.** The
+served path is single-colon `…/prompts:steer` (the `::` in the route source is
+declaration syntax). Two steps, not one:
+
+- `POST /api/v1/sessions/{sid}/prompts` — required `content` (array); optional
+  `prompt_id`, `model`, `thinking`, `permission_mode`, `plan_mode`,
+  `swarm_mode`, `agent_id`, `profile`, `skills`, `disabled_tools`,
+  `goal_objective`, `goal_control`, `metadata`.
+- `POST /api/v1/sessions/{sid}/prompts:steer` — required `prompt_ids` (array).
+  It promotes *already-queued* prompts into the running turn.
+- `GET /api/v1/sessions/{sid}/prompts` — returns `{active, queued}`, the durable
+  server-side queue CCC currently has to reconstruct client-side.
+
+That is exactly CCC's queued-steer tray: messages sit queued, the user clicks
+Steer to promote one, and "Steer all" is a single call with several
+`prompt_ids`. The queue CCC renders today would become a read of `{active,
+queued}` rather than a local model, which is also what would kill the
+optimistic-move bounce at its source.
