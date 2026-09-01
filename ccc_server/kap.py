@@ -428,6 +428,7 @@ class KapTranscriptMapper:
         self.prefix = message_id_prefix
         self.frames = {}
         self.order = []
+        self.user_frames = set()
         self.turn_id = None
         self.turn_state = None
         self.emitted_turns = set()
@@ -446,6 +447,7 @@ class KapTranscriptMapper:
     def _reset_turn(self):
         self.frames = {}
         self.order = []
+        self.user_frames = set()
         self.end_reason = None
         self.error = None
 
@@ -521,6 +523,19 @@ class KapTranscriptMapper:
             fid = fr.get("frameId")
             if not fid:
                 return []
+            if fr.get("role") == "user":
+                # A steered prompt is echoed back into the running turn as a
+                # user-role frame. Rendering it as an assistant block would
+                # show Kimi repeating the user's own words mid-answer, so it
+                # is dropped here -- CCC already wrote the message when it
+                # sent it (kap_prompt). The gap this leaves is a steer issued
+                # from Kimi's own UI rather than CCC, which CCC never echoed;
+                # that turn renders without the interjection until external
+                # turn adoption exists.
+                self.user_frames.add(fid)
+                return []
+            if fid in self.user_frames:
+                return []
             entry = self.frames.setdefault(fid, {"kind": None, "text": ""})
             if fid not in self.order:
                 self.order.append(fid)
@@ -538,7 +553,7 @@ class KapTranscriptMapper:
         if kind == "append":
             target = op.get("target") or {}
             fid = target.get("frameId")
-            if not fid:
+            if not fid or fid in self.user_frames:
                 return []
             entry = self.frames.setdefault(fid, {"kind": None, "text": ""})
             if fid not in self.order:

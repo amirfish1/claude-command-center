@@ -220,11 +220,19 @@ class TestKapHeartbeat(unittest.TestCase):
 
 
 class TestKapRenderFlag(unittest.TestCase):
-    """The render bridge writes into the ACP layer's store, which makes CCC's
-    Kimi layer believe an ACP subprocess owns the session. Until per-session
-    routing exists the flag must stay off by default."""
+    """kap routing is opt-in: off unless the env var or the marker file says
+    otherwise. Both inputs are isolated here -- the marker lives in the real
+    state dir, so a developer who has actually turned kap on would otherwise
+    see these tests fail on their machine and nowhere else."""
+
+    def setUp(self):
+        self._tmp = tempfile.TemporaryDirectory()
+        self._orig_path = kap.kap_flag_path
+        kap.kap_flag_path = lambda: Path(self._tmp.name) / "kimi-kap.on"
 
     def tearDown(self):
+        kap.kap_flag_path = self._orig_path
+        self._tmp.cleanup()
         os.environ.pop(kap._KAP_FLAG_ENV, None)
 
     def test_disabled_by_default(self):
@@ -242,6 +250,11 @@ class TestKapRenderFlag(unittest.TestCase):
     def test_no_events_writes_nothing(self):
         os.environ[kap._KAP_FLAG_ENV] = "1"
         self.assertEqual(kap.kap_emit_to_ccc("session_x", []), 0)
+
+    def test_the_marker_file_turns_routing_on_without_the_env_var(self):
+        os.environ.pop(kap._KAP_FLAG_ENV, None)
+        kap.kap_flag_path().write_text("")
+        self.assertTrue(kap.kap_enabled())
 
 
 class TestKapDiscovery(unittest.TestCase):
@@ -429,3 +442,60 @@ class TestKapSteerRouting(unittest.TestCase):
             self.assertFalse(kap.kap_routes("session_x"))
         finally:
             kap.kap_enabled = orig
+
+
+class TestKapSteeredPromptRendering(unittest.TestCase):
+    """A steered prompt comes back as a user-role frame inside the running
+    turn. Rendering it as an assistant block made Kimi appear to repeat the
+    user's own words mid-answer."""
+
+    def _mapper_with(self, ops):
+        mapper = kap.KapTranscriptMapper()
+        events = []
+        for i, op in enumerate(ops):
+            events.extend(mapper.feed(_frame(
+                {"type": "transcript.ops", "agent_id": "main", "ops": [op]},
+                seq=i + 1)))
+        return mapper, events
+
+    def test_user_role_frames_are_not_assistant_blocks(self):
+        mapper, events = self._mapper_with([
+            {"op": "turn.upsert", "turn": {"turnId": "t0", "state": "running"}},
+            {"op": "frame.upsert", "frame": {"frameId": "t0.1.f1",
+                                             "kind": "text", "role": "assistant",
+                                             "text": "1\n2\n3"}},
+            {"op": "frame.upsert", "frame": {"frameId": "t0.2.f1",
+                                             "kind": "text", "role": "user",
+                                             "text": "STOP. Reply only: ZZZ"}},
+            {"op": "frame.upsert", "frame": {"frameId": "t0.2.f3",
+                                             "kind": "text", "role": "assistant",
+                                             "text": "ZZZ"}},
+            {"op": "turn.upsert", "turn": {"turnId": "t0", "state": "completed"}},
+        ])
+        blocks = [e for e in events if e["type"] == "assistant"][-1]["blocks"]
+        texts = [b["text"] for b in blocks]
+        self.assertIn("1\n2\n3", texts)
+        self.assertIn("ZZZ", texts)
+        self.assertNotIn("STOP. Reply only: ZZZ", texts)
+
+    def test_appends_into_a_user_frame_are_dropped_too(self):
+        mapper, events = self._mapper_with([
+            {"op": "turn.upsert", "turn": {"turnId": "t0", "state": "running"}},
+            {"op": "frame.upsert", "frame": {"frameId": "t0.2.f1",
+                                             "kind": "text", "role": "user"}},
+            {"op": "append", "target": {"frameId": "t0.2.f1"},
+             "offset": 0, "text": "steered text"},
+            {"op": "turn.upsert", "turn": {"turnId": "t0", "state": "completed"}},
+        ])
+        self.assertEqual([e for e in events if e["type"] == "assistant"], [])
+
+    def test_thinking_frames_have_no_role_and_still_render(self):
+        mapper, events = self._mapper_with([
+            {"op": "turn.upsert", "turn": {"turnId": "t0", "state": "running"}},
+            {"op": "frame.upsert", "frame": {"frameId": "t0.2.f2",
+                                             "kind": "thinking",
+                                             "text": "reconsidering"}},
+            {"op": "turn.upsert", "turn": {"turnId": "t0", "state": "completed"}},
+        ])
+        blocks = [e for e in events if e["type"] == "assistant"][-1]["blocks"]
+        self.assertEqual(blocks, [{"kind": "thinking", "text": "reconsidering"}])
