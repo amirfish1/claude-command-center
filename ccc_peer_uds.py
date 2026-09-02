@@ -85,8 +85,13 @@ def build_ccc_registry_row(pid, socket_path, cwd, *, name="ccc",
     }
 
 
-def ccc_key_payload(token):
-    return {"peerToken": str(token)}
+def ccc_key_payload(token, proc_start=None, pid_domain=None):
+    payload = {"peerToken": str(token)}
+    if proc_start:
+        payload["procStart"] = str(proc_start)
+    if pid_domain:
+        payload["pidDomain"] = str(pid_domain)
+    return payload
 
 
 def validate_registry_row_shape(candidate, reference_rows):

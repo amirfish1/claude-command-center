@@ -164,6 +164,17 @@ def _send_frame(socket_path, token, content, from_field=None, msg_id="m-1"):
     return s
 
 
+def test_ccc_peer_server_publishes_32_hex_token(monkeypatch, tmp_path, sock_dir):
+    import re
+    socket_path, token = _start_real_peer(monkeypatch, tmp_path, sock_dir)
+    assert re.match(r"^[0-9a-f]{32}$", token), f"token {token!r} must be 32 hex chars without hyphens"
+    key_file = server._CCC_PEER_STATE["key_path"]
+    assert key_file and key_file.exists()
+    key_data = json.loads(key_file.read_text())
+    assert key_data["peerToken"] == token
+    assert re.match(r"^[0-9a-f]{32}$", key_data["peerToken"])
+
+
 def test_inbound_report_envelope_routes_to_inject_text_into_session(monkeypatch, tmp_path, sock_dir):
     socket_path, token = _start_real_peer(monkeypatch, tmp_path, sock_dir)
     calls = []

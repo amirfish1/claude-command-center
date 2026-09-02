@@ -418,13 +418,18 @@ def _ccc_peer_server_start():
                 "peer", "CCC-PEER-UNVERIFIED",
                 "no live Claude session on this machine to cross-check registry shape; publishing unverified",
             )
-        token = str(uuid.uuid4())
+        # Claude Code's peer key validator (Uz) strictly enforces:
+        # peerToken: /^[0-9a-f]{32}$/ (Xle). A uuid with dashes fails validation
+        # and causes callers to skip authentication.
+        token = uuid.uuid4().hex
         try:
             _core.SESSIONS_REGISTRY.mkdir(parents=True, exist_ok=True)
             row_path = _core.SESSIONS_REGISTRY / f"{pid}.json"
             row_path.write_text(json.dumps(row))
             key_path = ccc_peer_uds.key_path_for(_core.SESSIONS_REGISTRY, pid, socket_path)
-            key_path.write_text(json.dumps(ccc_peer_uds.ccc_key_payload(token)))
+            key_path.write_text(json.dumps(ccc_peer_uds.ccc_key_payload(
+                token, proc_start=row.get("procStart"), pid_domain=row.get("pidDomain"),
+            )))
             os.chmod(key_path, 0o600)
         except OSError as e:
             _core._log_activity("peer", "CCC-PEER-FAIL", f"could not publish registry row/key: {e}")

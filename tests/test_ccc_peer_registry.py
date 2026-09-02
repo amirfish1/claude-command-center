@@ -31,6 +31,12 @@ def test_build_ccc_registry_row_session_id_is_stable_for_same_pid_and_socket():
 
 def test_ccc_key_payload_shape():
     assert uds.ccc_key_payload("tok-abc") == {"peerToken": "tok-abc"}
+    payload = uds.ccc_key_payload("tok-abc", proc_start="Wed Sep  2 11:09:12 2026", pid_domain="darwin")
+    assert payload == {
+        "peerToken": "tok-abc",
+        "procStart": "Wed Sep  2 11:09:12 2026",
+        "pidDomain": "darwin",
+    }
 
 
 REAL_ROW = {
