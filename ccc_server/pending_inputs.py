@@ -3645,11 +3645,23 @@ def _transcript_peer_receipt(session_id, msg_id, body, start_offset=0, timeout_s
 
 
 def _resume_queue_engine_busy(sid):
-    if any(
-        s.get("resumed_sid") == sid and _core._poll_spawn_entry(s) is None
-        for s in _core._spawned_sessions
-        if s.get("engine") in ("codex", "gemini", "cursor", "antigravity", "hermes", "opencode", "devin")
-    ):
+    for s in _core._spawned_sessions:
+        if s.get("resumed_sid") != sid:
+            continue
+        engine = s.get("engine")
+        if engine not in ("codex", "gemini", "cursor", "antigravity", "hermes", "opencode", "devin"):
+            continue
+        if _core._poll_spawn_entry(s) is not None:
+            continue  # already exited
+        if engine == "antigravity":
+            # A headless Antigravity resume that's outlived the stale window
+            # is a lingering/hung process, not a real in-flight turn (same
+            # rule as resume_session_antigravity's own CCC-42/43 check) --
+            # without this, a hung process makes this function report "busy"
+            # forever and the durable resume queue never drains (CCC-1011).
+            started = _core._spawn_entry_started_epoch(s)
+            if started and (time.time() - started) > _core._antigravity_resume_stale_seconds():
+                continue
         return True
     if _core._is_codex_session(sid):
         # Preserve proven external writers on the cheap stat/lsof path. Only an
