@@ -531,9 +531,14 @@ def _ccc_peer_route_report(envelope, from_addr):
     if not sid or not text:
         return
     mode = str(envelope.get("mode") or "steer")
-    announced_from = str(envelope.get("announced_from") or from_addr or "")
+    announced_from = str(envelope.get("announced_from") or "").strip()
+    from_sid = _ccc_sid_for_socket_addr(from_addr)
+    if not announced_from:
+        announced_from = from_sid or from_addr
+    wrapped_text = _core._wrap_injected_text_with_announced_from(text, announced_from)
     _core._inject_text_into_session(
-        sid, text, mode=mode, source="announced_from", announced_from=announced_from,
+        sid, wrapped_text, mode=mode, source="announced_from",
+        peer_sender_sid=from_sid or None,
     )
 
 
@@ -604,6 +609,8 @@ def _ccc_peer_handle_connection(conn):
                 "peer", "CCC-PEER-UNROUTED",
                 f"from={from_addr} preview=\"{_core._activity_log_preview(body)}\"",
             )
+    except Exception as e:
+        _core._log_activity("peer", "CCC-PEER-ERR", f"error={e}")
     finally:
         try:
             conn.close()

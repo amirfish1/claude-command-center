@@ -195,10 +195,36 @@ def test_inbound_report_envelope_routes_to_inject_text_into_session(monkeypatch,
     assert len(calls) == 1
     sid, text, kw = calls[0]
     assert sid == "dispatcher-sid"
-    assert text == "STATUS: SUCCEEDED"
+    assert text == "Announced from: worker-a\n\nSTATUS: SUCCEEDED"
     assert kw["mode"] == "steer"
     assert kw["source"] == "announced_from"
-    assert kw["announced_from"] == "worker-a"
+    assert "announced_from" not in kw
+
+
+def test_inbound_report_envelope_end_to_end_router_args(monkeypatch, tmp_path, sock_dir):
+    socket_path, token = _start_real_peer(monkeypatch, tmp_path, sock_dir)
+    router_calls = []
+    monkeypatch.setattr(
+        server, "_inject_text_into_session_router",
+        lambda session_id, text, **kw: router_calls.append((session_id, text, kw)) or {"ok": True, "via": "mock"},
+    )
+    envelope = json.dumps({
+        "session_id": "dispatcher-sid-2", "mode": "steer",
+        "announced_from": "worker-b", "text": "STATUS: SUCCEEDED",
+    })
+    s = _send_frame(socket_path, token, envelope)
+    for _ in range(50):
+        if router_calls:
+            break
+        time.sleep(0.05)
+    s.close()
+    assert len(router_calls) == 1
+    sid, text, kw = router_calls[0]
+    assert sid == "dispatcher-sid-2"
+    assert text == "Announced from: worker-b\n\nSTATUS: SUCCEEDED"
+    assert kw["mode"] == "steer"
+    assert kw["source"] == "announced_from"
+    assert "announced_from" not in kw
 
 
 def test_inbound_ask_reply_resolves_pending_ask_and_does_not_inject(monkeypatch, tmp_path, sock_dir):
