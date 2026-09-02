@@ -11181,9 +11181,14 @@
     });
     // The live rate knob is only useful while there's something to
     // re-speak — show it whenever playback is active or paused, hide
-    // when fully stopped.
-    const ctrl = document.getElementById('convTtsRateControl');
-    if (ctrl) ctrl.hidden = !(active || _ttsPaused);
+    // when fully stopped. Split mode clones the whole composer per pane
+    // (buildPaneElement strips the clone's ids), so #convTtsRateControl
+    // only ever resolves to pane p1's copy — show the knob that lives in
+    // whichever pane is actually reading, hide the rest (CCC-1005).
+    document.querySelectorAll('.tts-rate-control').forEach((ctrl) => {
+      const ctrlPaneId = ctrl.closest('.conv-pane') ? ctrl.closest('.conv-pane').dataset.paneId : '';
+      ctrl.hidden = !((active || _ttsPaused) && ctrlPaneId === _ttsActivePaneId);
+    });
     if (failed) {
       setTimeout(() => ttsButtons().forEach(btn => btn.classList.remove('failed')), 1200);
     }
@@ -12229,10 +12234,15 @@
   // so the user hears the new speed within ~150ms instead of waiting
   // for the next turn. Initialize from the persisted value.
   const $convTtsRate = document.getElementById('convTtsRate');
-  const $convTtsRateLabel = document.getElementById('convTtsRateLabel');
+  // Rate is a single global setting, but split mode clones the whole
+  // composer per pane (ids stripped on clone) — update every pane's label/
+  // buttons, not just p1's, so the knob a user is actually looking at in a
+  // second/dual-view pane reflects the current rate too (CCC-1005).
   function _syncTtsRateUi() {
     if ($convTtsRate) $convTtsRate.value = String(_ttsRate);
-    if ($convTtsRateLabel) $convTtsRateLabel.textContent = _ttsRate.toFixed(2) + '×';
+    document.querySelectorAll('.tts-rate-label').forEach((el) => {
+      el.textContent = _ttsRate.toFixed(2) + '×';
+    });
   }
   function _restartTtsAtCurrentPosition() {
     // Only meaningful while playback is active. Cancel the in-flight
@@ -12273,16 +12283,12 @@
     _ttsLastCharIndex = m.index + m[0].length;
     _restartTtsAtCurrentPosition();
   }
-  const $convTtsNextBtn = document.getElementById('convTtsNextBtn');
-  if ($convTtsNextBtn) $convTtsNextBtn.addEventListener('click', () => _ttsJumpToNextSentence());
   // Rate is adjusted with − / + buttons (replaced the drag slider). Each click
   // steps ±0.05 within [MIN, MAX]; persist, relabel, disable at the ends, and
   // restart playback (debounced) so an active read picks up the new speed.
-  const $convTtsRateDown = document.getElementById('convTtsRateDown');
-  const $convTtsRateUp = document.getElementById('convTtsRateUp');
   function _refreshTtsRateBtns() {
-    if ($convTtsRateDown) $convTtsRateDown.disabled = _ttsRate <= _TTS_RATE_MIN + 1e-9;
-    if ($convTtsRateUp) $convTtsRateUp.disabled = _ttsRate >= _TTS_RATE_MAX - 1e-9;
+    document.querySelectorAll('.tts-rate-down').forEach((btn) => { btn.disabled = _ttsRate <= _TTS_RATE_MIN + 1e-9; });
+    document.querySelectorAll('.tts-rate-up').forEach((btn) => { btn.disabled = _ttsRate >= _TTS_RATE_MAX - 1e-9; });
   }
   function _stepTtsRate(delta) {
     const next = Math.min(_TTS_RATE_MAX, Math.max(_TTS_RATE_MIN,
@@ -12290,7 +12296,7 @@
     if (next === _ttsRate) { _refreshTtsRateBtns(); return; }
     _ttsRate = next;
     try { localStorage.setItem('ccc-tts-rate', String(_ttsRate)); } catch (_) {}
-    if ($convTtsRateLabel) $convTtsRateLabel.textContent = _ttsRate.toFixed(2) + '×';
+    _syncTtsRateUi();
     _refreshTtsRateBtns();
     if (_ttsRateRestartTimer) clearTimeout(_ttsRateRestartTimer);
     _ttsRateRestartTimer = setTimeout(() => {
@@ -12298,8 +12304,14 @@
       if (_ttsActive || _ttsPaused) _restartTtsAtCurrentPosition();
     }, 120);
   }
-  if ($convTtsRateDown) $convTtsRateDown.addEventListener('click', () => _stepTtsRate(-0.05));
-  if ($convTtsRateUp) $convTtsRateUp.addEventListener('click', () => _stepTtsRate(0.05));
+  // Delegated (not bound per-element) so the knob works from every pane's
+  // clone, including panes built after page load by buildPaneElement — a
+  // direct getElementById binding only ever reaches pane p1's copy.
+  document.addEventListener('click', (ev) => {
+    if (ev.target.closest('.tts-rate-down')) { _stepTtsRate(-0.05); return; }
+    if (ev.target.closest('.tts-rate-up')) { _stepTtsRate(0.05); return; }
+    if (ev.target.closest('.tts-rate-next')) { _ttsJumpToNextSentence(); }
+  });
   _syncTtsRateUi();
   _refreshTtsRateBtns();
   _wireTtsFloatingControl();
