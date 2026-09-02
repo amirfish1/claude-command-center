@@ -43724,6 +43724,36 @@
     document.addEventListener('keydown', _uxqNoteModalKeydownHandler);
   }
 
+  const UXQ_TD_ZOOM_KEY = 'ccc-ticket-font-zoom';
+  const UXQ_TD_ZOOM_MIN = 0.7;
+  const UXQ_TD_ZOOM_MAX = 1.6;
+  const UXQ_TD_ZOOM_STEP = 0.1;
+
+  function _uxqInitTicketZoom(modal) {
+    const card = modal.querySelector('.uxq-td-card');
+    if (!card) return;
+    let zoom = parseFloat(localStorage.getItem(UXQ_TD_ZOOM_KEY));
+    if (!isFinite(zoom)) zoom = 1;
+    zoom = Math.min(UXQ_TD_ZOOM_MAX, Math.max(UXQ_TD_ZOOM_MIN, zoom));
+    const btns = modal.querySelectorAll('.uxq-td-zoom-btn');
+    const apply = () => {
+      card.style.setProperty('--uxq-td-zoom', zoom);
+      btns.forEach(btn => {
+        const dir = parseFloat(btn.getAttribute('data-zoom-dir'));
+        btn.disabled = dir < 0 ? zoom <= UXQ_TD_ZOOM_MIN + 1e-6 : zoom >= UXQ_TD_ZOOM_MAX - 1e-6;
+      });
+    };
+    apply();
+    btns.forEach(btn => {
+      btn.addEventListener('click', () => {
+        const dir = parseFloat(btn.getAttribute('data-zoom-dir'));
+        zoom = Math.min(UXQ_TD_ZOOM_MAX, Math.max(UXQ_TD_ZOOM_MIN, zoom + dir * UXQ_TD_ZOOM_STEP));
+        localStorage.setItem(UXQ_TD_ZOOM_KEY, String(zoom));
+        apply();
+      });
+    });
+  }
+
   function _uxqOpenItemModal(item) {
     const existing = document.getElementById('uxqItemModal');
     if (existing) existing.remove();
@@ -44085,6 +44115,10 @@
       '<div class="uxq-td-card" role="dialog" aria-modal="true" aria-label="Ticket ' + escapeAttr(ref) + '">'
       + '<div class="uxq-td-topbar">'
       +   '<div class="uxq-td-topbar-left"><span class="uxq-td-ref">' + escapeHtml(ref) + '</span>' + topBadges + '</div>'
+      +   '<div class="uxq-td-zoom" role="group" aria-label="Font size">'
+      +     '<button type="button" class="uxq-td-zoom-btn" data-zoom-dir="-1" aria-label="Decrease font size" title="Decrease font size">−</button>'
+      +     '<button type="button" class="uxq-td-zoom-btn" data-zoom-dir="1" aria-label="Increase font size" title="Increase font size">+</button>'
+      +   '</div>'
       +   '<button type="button" class="uxq-td-x" aria-label="Close" data-ux-close>×</button>'
       + '</div>'
       + '<div class="uxq-td-title-wrap">'
@@ -44122,6 +44156,7 @@
 
     document.body.appendChild(modal);
     _uxqLoadLinkedConversation(modal, ref);
+    _uxqInitTicketZoom(modal);
 
     const close = () => { modal.remove(); document.removeEventListener('keydown', onKey, true); };
     const onKey = (e) => { if (e.key === 'Escape') { e.preventDefault(); close(); } };

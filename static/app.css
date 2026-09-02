@@ -21710,6 +21710,7 @@ body.has-gc-reader .pwa-install-banner {
   background: var(--surface); border: 1px solid var(--border);
   border-radius: 12px; box-shadow: 0 24px 60px rgba(0,0,0,0.5);
   overflow: hidden;
+  zoom: var(--uxq-td-zoom, 1);
 }
 /* Top bar */
 .uxq-td-topbar {
@@ -21743,6 +21744,17 @@ body.has-gc-reader .pwa-install-banner {
   padding: 0 4px; border-radius: 4px; margin-left: 8px;
 }
 .uxq-td-x:hover { background: rgba(139,148,158,0.15); color: var(--text); }
+/* Font-size zoom controls (CCC-1024) */
+.uxq-td-zoom { display: flex; align-items: center; gap: 2px; margin-left: 8px; }
+.uxq-td-zoom-btn {
+  background: none; border: 1px solid var(--border); cursor: pointer;
+  color: var(--text-muted); font: 700 12px var(--font-ui); line-height: 1;
+  width: 22px; height: 22px; border-radius: 4px;
+  display: flex; align-items: center; justify-content: center;
+}
+.uxq-td-zoom-btn:hover { background: rgba(139,148,158,0.15); color: var(--text); }
+.uxq-td-zoom-btn:disabled { opacity: 0.35; cursor: default; }
+.uxq-td-zoom-btn:disabled:hover { background: none; color: var(--text-muted); }
 /* Title */
 .uxq-td-title-wrap {
   padding: 12px 16px 10px; border-bottom: 1px solid var(--border); flex-shrink: 0;
