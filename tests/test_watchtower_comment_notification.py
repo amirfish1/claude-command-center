@@ -17,7 +17,7 @@ class TestWatchtowerCommentNotification(unittest.TestCase):
         queue = mock.Mock()
         queue.comment.return_value = item
         messages = mock.Mock()
-        messages.send.return_value = {"ok": True, "transport": "fifo"}
+        messages.deliver_message.return_value = {"ok": True, "transport": "fifo"}
         package = ModuleType("watchtower")
         package.messages = messages
 
@@ -32,11 +32,11 @@ class TestWatchtowerCommentNotification(unittest.TestCase):
 
         self.assertIs(returned, item)
         self.assertEqual(delivery, {"ok": True, "transport": "fifo"})
-        messages.send.assert_called_once_with(
+        messages.deliver_message.assert_called_once_with(
             "11111111-2222-3333-4444-555555555555",
             "[WATCHTOWER] A new comment was added to your claimed ticket "
             "CCC-617:\n\nPlease use the safer parser.",
-            mode="steer",
+            verb="steer",
         )
 
 

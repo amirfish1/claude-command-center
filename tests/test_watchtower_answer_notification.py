@@ -16,7 +16,7 @@ class TestWatchtowerAnswerNotification(unittest.TestCase):
         }
         answer = mock.Mock(return_value=item)
         messages = mock.Mock()
-        messages.send.return_value = {"ok": True, "transport": "fifo"}
+        messages.deliver_message.return_value = {"ok": True, "transport": "fifo"}
         package = ModuleType("watchtower")
         package.messages = messages
 
@@ -34,7 +34,7 @@ class TestWatchtowerAnswerNotification(unittest.TestCase):
         answer.assert_called_once_with(
             "CCC-672", "Workers should have their own effort default.", session_id="ccc"
         )
-        messages.send.assert_called_once_with(
+        messages.deliver_message.assert_called_once_with(
             "11111111-2222-3333-4444-555555555555",
             "[WATCHTOWER] A human answered your blocked question on ticket "
             "CCC-672:\n\nWorkers should have their own effort default.\n\n"
@@ -42,7 +42,7 @@ class TestWatchtowerAnswerNotification(unittest.TestCase):
             "--worker <your-id> --summary \"...\" --commit <SHA>` (or `--no-code` "
             "if no code changed). If it still cannot be resolved, run `wt block` "
             "again with the new open question.",
-            mode="steer",
+            verb="steer",
         )
 
 
