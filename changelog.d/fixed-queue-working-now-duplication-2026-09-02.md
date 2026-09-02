@@ -1,0 +1,1 @@
+- Mobile queue tab: the WORKING NOW strip and the compact per-queue status strip no longer duplicate the same worker/ticket rows, leaving room to actually see the ticket list (CCC-1019).
