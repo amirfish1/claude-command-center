@@ -657,6 +657,27 @@ def _wt_read_config():
         return {}
 
 
+def _reconcile_once_async():
+    """Nudge the reconciler off-thread after a config/drain/workers write.
+
+    reconcile_once() scans every registered queue's staffing/health and can
+    legitimately take several seconds (measured ~4s locally with ~60 queues,
+    worse under load or reconcile.lock contention with the daemon's own
+    tick) -- calling it inline on the request thread turned the Queue
+    settings dialog's Save/toggle actions into a 10-40s hang (CCC-1014).
+    The "act now, not on the next ~30s tick" intent (CCC-790) only needs
+    reconcile to START now, not for the HTTP response to wait on it.
+    """
+    if not (_WT_WORKERS_AVAILABLE and _wt_workers is not None):
+        return
+    def _run():
+        try:
+            _wt_workers.reconcile_once()
+        except Exception:
+            pass
+    threading.Thread(target=_run, daemon=True, name="queue-config-reconcile").start()
+
+
 _WT_SERVICE_ACTION_LOCK = threading.Lock()
 
 
@@ -27789,13 +27810,9 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                     tmp.replace(cfg_path)
                 # A settings change (e.g. flipping auto_drain on, raising
                 # desired_workers) should act now, not sit until the
-                # reconciler's next ~30s tick (CCC-790). Best-effort: a
-                # reconcile hiccup must never fail the config save itself.
-                if _WT_WORKERS_AVAILABLE and _wt_workers is not None:
-                    try:
-                        _wt_workers.reconcile_once()
-                    except Exception:
-                        pass
+                # reconciler's next ~30s tick (CCC-790) -- started off-thread
+                # so the save itself doesn't hang on it (CCC-1014).
+                _reconcile_once_async()
                 self.send_json({"ok": True, **normalized})
             except ValueError as e:
                 self.send_json({"ok": False, "error": str(e)}, 400)
@@ -27840,11 +27857,9 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                 # Turning auto-drain on should staff the queue now rather than
                 # wait for the reconciler's next tick (CCC-790); turning it off
                 # needs no push — reconcile_once only ever spawns, never stops.
-                if auto_drain and _WT_WORKERS_AVAILABLE and _wt_workers is not None:
-                    try:
-                        _wt_workers.reconcile_once()
-                    except Exception:
-                        pass
+                # Started off-thread so the toggle itself doesn't hang (CCC-1014).
+                if auto_drain:
+                    _reconcile_once_async()
                 self.send_json({"ok": True, "queue": key, "auto_drain": auto_drain})
             except Exception as e:
                 self.send_json({"ok": False, "error": str(e)}, 500)
@@ -27891,12 +27906,9 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                         json.dump(cfg, f, indent=2)
                     tmp.replace(cfg_path)
                 # Raising the count should staff up now, same reasoning as the
-                # drain toggle (CCC-790) — lowering it needs no push.
-                if _WT_WORKERS_AVAILABLE and _wt_workers is not None:
-                    try:
-                        _wt_workers.reconcile_once()
-                    except Exception:
-                        pass
+                # drain toggle (CCC-790) — lowering it needs no push. Started
+                # off-thread so the request itself doesn't hang (CCC-1014).
+                _reconcile_once_async()
                 self.send_json({"ok": True, "queue": key, "desired_workers": desired_workers})
             except Exception as e:
                 self.send_json({"ok": False, "error": str(e)}, 500)
