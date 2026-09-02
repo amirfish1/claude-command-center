@@ -14563,9 +14563,21 @@
      one row that truncates via min-width:0 + ellipsis. */
   #queuePanel.fq-mobile .fq-qp-trig-repo { flex: 1 1 auto; min-width: 0; }
   #queuePanel.fq-mobile .fq-qp-trig-right { gap: 9px; flex: 0 0 auto; }
-  /* WORKING NOW mobile: header-only when sheet is open, larger rows. */
+  /* WORKING NOW mobile: collapsed to a header-only summary by default (the
+     rows duplicate the ticket list right below and eat the whole screen —
+     CCC-1019); tap the head to expand. */
   #queuePanel.fq-mobile .fq-working-strip { padding: 9px 14px 11px; }
-  #queuePanel.fq-mobile .fq-working-head { padding-bottom: 8px; }
+  #queuePanel.fq-mobile .fq-working-head { padding-bottom: 8px; cursor: pointer; }
+  #queuePanel.fq-mobile .fq-working-strip.is-collapsed .fq-working-head { padding-bottom: 0; }
+  #queuePanel.fq-mobile .fq-working-strip.is-collapsed .fq-working-rows { display: none; }
+  .fq-working-chevron { display: none; }
+  #queuePanel.fq-mobile .fq-working-chevron {
+    display: inline-block; margin-left: auto; color: #6e7681;
+    transition: transform .15s ease;
+  }
+  #queuePanel.fq-mobile .fq-working-strip.is-collapsed .fq-working-chevron {
+    transform: rotate(-90deg);
+  }
   #queuePanel.fq-mobile .fq-working-rows { gap: 6px; }
   #queuePanel.fq-mobile .fq-working-row {
     min-height: 38px; padding: 6px 9px; border-radius: 7px; gap: 6px;

@@ -42866,6 +42866,8 @@
     highlight: 0,        // index into the flattened visible results
     flat: [],            // flattened visible rows (queue + ticket), built each paint
     isMobile: false,     // mirrors the pane's fq-mobile class
+    workingCollapsed: true, // mobile only: WORKING NOW rows hidden by default
+                             // (they duplicate the ticket list right below).
   };
   // GitHub mark — same inline SVG the q2 board uses (zero-asset contract).
   // Kept here so the picker/trigger share one source of truth with q2.js.
@@ -43273,6 +43275,11 @@
     const $head = $el.querySelector('.fq-working-head');
     if ($summary) $summary.textContent = summary;
     if ($head) $head.classList.toggle('is-only', rows.length === 0);
+    // Mobile: rows duplicate the ticket list right below and eat the whole
+    // screen, so they start collapsed to a header-only summary; tapping the
+    // head expands them (CCC-1019).
+    $el.classList.toggle('is-collapsed', _uxqPicker.isMobile && _uxqPicker.workingCollapsed);
+    if ($head) $head.setAttribute('aria-expanded', String(!(_uxqPicker.isMobile && _uxqPicker.workingCollapsed)));
     if ($rows) {
       $rows.innerHTML = rows.map(r => {
         if (_uxqPicker.isMobile) {
@@ -45282,6 +45289,12 @@
     const $working = document.getElementById('queueWorkingStrip');
     if ($working) {
       $working.addEventListener('click', (ev) => {
+        const $head = ev.target.closest && ev.target.closest('.fq-working-head');
+        if ($head && _uxqPicker.isMobile) {
+          _uxqPicker.workingCollapsed = !_uxqPicker.workingCollapsed;
+          _uxqRenderWorkingNow();
+          return;
+        }
         const $row = ev.target.closest && ev.target.closest('.fq-working-row[data-uxq-working-ref]');
         if (!$row) return;
         const ref = $row.getAttribute('data-uxq-working-ref');
