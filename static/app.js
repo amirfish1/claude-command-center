@@ -43799,7 +43799,9 @@
         + (actor.session ? _sessionBtn(actor.session, 'open session') : '');
     }
     function _tlText(text, cls) {
-      return text ? '<div class="' + (cls || 'uxq-tl-block-q') + '">' + escapeHtml(String(text)) + '</div>' : '';
+      if (!text) return '';
+      const body = window.CCCTicketProse ? window.CCCTicketProse.render(text) : escapeHtml(String(text));
+      return '<div class="' + (cls || 'uxq-tl-block-q') + '">' + body + '</div>';
     }
     // One chip per caveat/follow-up/unresolved entry, each with an ack
     // toggle — parity with WatchTower's own dashboard (queue.ack_resolution /

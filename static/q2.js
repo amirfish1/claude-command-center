@@ -2161,7 +2161,9 @@
         + (bodyHtml || '') + '</div></div>';
     }
     function text(t, cls) {
-      return t ? '<div class="' + (cls || 'q2-tl-note') + '">' + esc(String(t)) + '</div>' : '';
+      if (!t) return '';
+      var body = window.CCCTicketProse ? window.CCCTicketProse.render(t) : esc(String(t));
+      return '<div class="' + (cls || 'q2-tl-note') + '">' + body + '</div>';
     }
 
     var rows = tl.map(function (ev) {
