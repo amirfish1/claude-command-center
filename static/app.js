@@ -42700,6 +42700,24 @@
   function _uxqSetFilter(val) {
     try { localStorage.setItem(_UXQ_FILTER_LS, val === 'all' ? 'all' : 'open'); } catch (_) {}
   }
+  // Per-queue "hide sub-queue tickets" preference (CCC-1009: picking a family
+  // root like CCC still rolled up CCC-GH's tickets with no way to see CCC
+  // alone). Keyed by queue name so toggling it off for CCC doesn't affect WT.
+  const _UXQ_NOSUBS_LS = 'ccc-uxq-nosubs';
+  function _uxqLoadNoSubsMap() {
+    try { return JSON.parse(localStorage.getItem(_UXQ_NOSUBS_LS) || '{}') || {}; } catch (_) { return {}; }
+  }
+  function _uxqGetNoSubs(name) {
+    const k = _uxqProjectKey(name);
+    return !!(k && _uxqLoadNoSubsMap()[k]);
+  }
+  function _uxqToggleNoSubs(name) {
+    const k = _uxqProjectKey(name);
+    if (!k) return;
+    const map = _uxqLoadNoSubsMap();
+    if (map[k]) delete map[k]; else map[k] = true;
+    try { localStorage.setItem(_UXQ_NOSUBS_LS, JSON.stringify(map)); } catch (_) {}
+  }
   function _uxqRenderFilterToggle() {
     const $t = document.getElementById('queueFilterToggle');
     if (!$t) return;
@@ -43142,8 +43160,13 @@
     const nameHtml = q
       ? '<span class="fq-qp-trig-name">' + escapeHtml(q.name) + '</span>'
       : '<span class="fq-qp-trig-name">ALL</span>';
+    const noSubsOn = q && _uxqGetNoSubs(q.name);
     const subsHtml = q && q.subQueueCount > 0
-      ? '<span class="fq-qp-trig-subs">' + escapeHtml('+' + q.subQueueCount + ' sub-queue' + (q.subQueueCount === 1 ? '' : 's')) + '</span>'
+      ? '<span class="fq-qp-trig-subs' + (noSubsOn ? ' is-nosubs' : '') + '" data-uxq-nosubs-toggle="' + escapeAttr(q.name) + '"'
+        + ' title="' + escapeAttr(noSubsOn
+          ? ('Showing ' + q.name + ' only — click to include ' + q.subQueueCount + ' sub-queue' + (q.subQueueCount === 1 ? '' : 's'))
+          : ('Includes ' + q.subQueueCount + ' sub-queue' + (q.subQueueCount === 1 ? '' : 's') + ' — click to view ' + q.name + ' only'))
+        + '">' + escapeHtml(noSubsOn ? (q.name + ' only') : ('+' + q.subQueueCount + ' sub-queue' + (q.subQueueCount === 1 ? '' : 's'))) + '</span>'
       : '';
     const ghHtml = q && q.githubLinked
       ? '<span class="fq-gh-chip" title="Linked to GitHub">' + _UXQ_GH_MARK + '</span>'
@@ -44381,7 +44404,12 @@
       // cache, so this is normally a no-op await, not a fetch.
       await _fetchUxqHealth(allowStale);
       if (renderVersion !== _uxqItemsVersion) return _renderQueuePanel({ allowStale: true });
-      const inScope = proj ? items.filter(it => _uxqInScope(it && it.project, proj)) : items;
+      const noSubs = proj && _uxqGetNoSubs(proj);
+      const inScope = proj
+        ? items.filter(it => noSubs
+            ? _uxqProjectKey(it && it.project) === proj
+            : _uxqInScope(it && it.project, proj))
+        : items;
       const typeScoped = _uxqFilterItems(inScope, _uxqGetFilter(), _uxqGetTypeFilter());
       // Free-text search over ref/note/text (CCC-432).
       const $qSearch = document.getElementById('queueSearchInput');
@@ -45026,6 +45054,18 @@
     const $trig = document.getElementById('queueScopeTrigger');
     if ($trig) {
       $trig.addEventListener('click', (ev) => {
+        const $subs = ev.target.closest && ev.target.closest('[data-uxq-nosubs-toggle]');
+        if ($subs) {
+          ev.preventDefault();
+          ev.stopPropagation();
+          const name = $subs.getAttribute('data-uxq-nosubs-toggle');
+          if (name) {
+            _uxqToggleNoSubs(name);
+            _uxqItemsCache.ts = 0;
+            _renderQueuePanel({ allowStale: true });
+          }
+          return;
+        }
         ev.preventDefault();
         ev.stopPropagation();
         _uxqPickerToggle();

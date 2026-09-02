@@ -14306,6 +14306,11 @@
   .fq-trigger .fq-qp-trig-subs {
     font-family: 'Inter', system-ui, sans-serif;
     font-size: 11.5px; color: #7d8590; white-space: nowrap; flex: 0 0 auto;
+    cursor: pointer; border-radius: 3px; padding: 0 3px;
+  }
+  .fq-trigger .fq-qp-trig-subs:hover { background: #21262d; color: #c9d1d9; }
+  .fq-trigger .fq-qp-trig-subs.is-nosubs {
+    color: #39d2c0; background: rgba(57, 210, 192, 0.12);
   }
   .fq-gh-chip {
     display: inline-flex; align-items: center; flex: 0 0 auto;
