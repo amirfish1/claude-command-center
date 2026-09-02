@@ -2512,7 +2512,14 @@ def _answer_queue_item_and_notify_worker(ref, text):
         )
         try:
             from watchtower import messages as wt_messages
-            delivery = wt_messages.send(str(target), prompt, mode="steer")
+            # verb="steer", not legacy mode="steer": the legacy mode is the
+            # fused destructive one (steer + abort_first), and neither a
+            # ticket comment nor an answer is worth truncating a running
+            # turn for. The verb prefers the peer socket, which lands the
+            # text mid-turn without cutting anything off (CCC-1000).
+            delivery = wt_messages.deliver_message(
+                str(target), prompt, verb="steer"
+            )
         except Exception as e:
             delivery = {"ok": False, "error": str(e)}
     return item, delivery
@@ -2540,7 +2547,14 @@ def _comment_queue_item_and_notify_worker(ref, text):
         )
         try:
             from watchtower import messages as wt_messages
-            delivery = wt_messages.send(str(target), prompt, mode="steer")
+            # verb="steer", not legacy mode="steer": the legacy mode is the
+            # fused destructive one (steer + abort_first), and neither a
+            # ticket comment nor an answer is worth truncating a running
+            # turn for. The verb prefers the peer socket, which lands the
+            # text mid-turn without cutting anything off (CCC-1000).
+            delivery = wt_messages.deliver_message(
+                str(target), prompt, verb="steer"
+            )
         except Exception as e:
             delivery = {"ok": False, "error": str(e)}
     return item, delivery
