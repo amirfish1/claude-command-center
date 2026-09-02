@@ -21762,6 +21762,19 @@ body.has-gc-reader .pwa-install-banner {
   display: flex; flex-direction: column; gap: 16px;
   background: rgba(139,148,158,0.03);
 }
+/* Narrow viewports: the fixed 280px sidebar squeezed the main column
+   (timeline, full prompt) into an unreadable sliver next to it — stack
+   Activity above Properties/Assignment/Origin instead of side by side. */
+@media (max-width: 640px) {
+  .uxq-td-overlay { padding: 0; }
+  .uxq-td-card { width: 100vw; max-height: 100vh; height: 100vh; border-radius: 0; }
+  .uxq-td-cols { flex-direction: column; overflow-y: auto; }
+  .uxq-td-main { overflow-y: visible; }
+  .uxq-td-sidebar {
+    flex: 0 0 auto; width: auto; overflow-y: visible;
+    border-left: none; border-top: 1px solid var(--border);
+  }
+}
 /* Sections */
 .uxq-td-sec { display: flex; flex-direction: column; gap: 6px; }
 .uxq-td-sec-label {
