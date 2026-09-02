@@ -7953,6 +7953,41 @@
       + '</button>';
   }
 
+  // CCC-1026: the transcript view had no way to tell what spawned a session
+  // short of switching to the sidebar and hovering the row for its (hidden by
+  // default) origin chip. Mirrors sessionProvenanceChipHtml's parent/successor
+  // resolution but renders into the breadcrumb, which is always visible while
+  // reading a session's transcript.
+  function breadcrumbSpawnedByChipHtml(row) {
+    if (!row || row.source === 'backlog' || row.source === 'github_pr' || row.backlog_type === 'github') return '';
+    const sid = String(row.session_id || row.id || '').trim();
+    const contId = continuationParentId(row);
+    const parentId = contId || f2EffectiveParentSessionId(sid, row.parent_session_id || row.hermes_parent_session_id);
+    if (!parentId || parentId === sid) return '';
+    const parentRow = conversationsData.find(c => c && (c.session_id === parentId || c.id === parentId));
+    const cleanFirst = parentRow && parentRow.first_message ? cleanIssuePrompt(parentRow.first_message) : '';
+    const raw = (parentRow && (parentRow.display_name || parentRow.ai_title))
+      || (cleanFirst ? firstSentenceOf(cleanFirst, 60) : '')
+      || shortSessionId(parentId);
+    const label = sidebarRowDisplayTitle(raw);
+    const verb = contId ? 'Continued from' : 'Spawned by';
+    return '<span class="ccc-breadcrumb-spawned-by' + (contId ? ' is-successor' : ' is-parent') + '"'
+      + ' role="button" tabindex="0" data-parent-sid="' + escapeAttr(parentId) + '"'
+      + ' title="' + escapeAttr(verb + ': ' + label + ' (' + parentId + ') — click to open') + '">'
+      + (contId ? '⤴ ' : '↳ ') + escapeHtml(label)
+      + '</span>';
+  }
+
+  function handleBreadcrumbSpawnedByClick(ev) {
+    const chip = ev.target && ev.target.closest && ev.target.closest('.ccc-breadcrumb-spawned-by[data-parent-sid]');
+    if (!chip) return;
+    ev.preventDefault();
+    ev.stopPropagation();
+    const sid = chip.getAttribute('data-parent-sid') || '';
+    if (sid) selectConversation(sid);
+  }
+  document.addEventListener('click', handleBreadcrumbSpawnedByClick);
+
   async function handleSidebarSessionIdCopyClick(ev) {
     const btn = ev.target.closest('[data-copy-row-session-id]');
     if (!btn) return;
@@ -39381,10 +39416,12 @@
         // already delegated globally) instead of a new affordance.
         const sidChip = (typeof sidebarSessionIdChipHtml === 'function' && row)
           ? sidebarSessionIdChipHtml(row) : '';
+        const spawnedByChip = breadcrumbSpawnedByChipHtml(row);
         breadcrumbEl.innerHTML = ''
           + (category ? '<span class="ccc-breadcrumb-category">' + escapeHtml(category) + '</span>' : '')
           + uxBadge
           + sidChip
+          + spawnedByChip
           + (typeof window._cccHandoffMovedChipHtml === 'function' ? window._cccHandoffMovedChipHtml(row) : '')
           + (title ? '<span class="ccc-breadcrumb-title">' + escapeHtml(title) + '</span>' : '')
           // Transport pill slot, filled by updateConvProcessIndicator below.
@@ -54996,7 +55033,13 @@
                       if (!mostRecent || !mostRecent.ref) {
                         const parts = splitFirstSentence(mobileOriginalAskText);
                         const imagesHtml = renderImageDescriptors(ev.images);
+                        // CCC-1026: "who spawned this session" is the first
+                        // thing a reader asks when the ask itself is an opaque
+                        // task template (e.g. a WatchTower worker prompt) —
+                        // put the answer right next to it, not buried in a
+                        // sidebar hover chip.
                         let h = '<div class="csh-ask-original"><div class="label">Original ask</div>';
+                        h += breadcrumbSpawnedByChipHtml(conv);
                         h += '<div class="user-msg" dir="auto">';
                         h += '<span class="ask-first">' + linkifyPastedImages(escapeHtml(parts[0])) + '</span>';
                         h += '<span class="ask-rest"' + (parts[1] ? '' : ' style="display:none"') + '>' + linkifyPastedImages(escapeHtml(parts[1] || '')) + '</span>';
@@ -55013,6 +55056,7 @@
                       const recentText = _truncate(mostRecent.summary || mostRecent.note || mostRecent.title || '', 220);
                       let h = '<div class="csh-ask-original is-worker-summary">';
                       h += '<div class="label">' + escapeHtml(recentLabel) + '</div>';
+                      h += breadcrumbSpawnedByChipHtml(conv);
                       h += '<div class="user-msg" dir="auto">';
                       h += '<span class="ux-ticket-ref">' + escapeHtml(mostRecent.ref) + '</span> ';
                       h += '<span class="ask-first">' + escapeHtml(recentText) + '</span>';
