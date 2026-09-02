@@ -1,0 +1,2 @@
+- `/api/inject-input` now routes agent/API messages over native Unix Domain Socket (UDS) peer transport when targeting live Claude Code sessions, bypassing stream-json FIFO writes and preventing accidental turn interruptions; human messages typed in the dashboard composer explicitly declare `source="composer"` to retain legacy user transport and blue styling.
+- `ccc send` and `/api/inject-input` now accept `peer_sender_sid` (and `--from` CLI option or `$CLAUDE_SESSION_ID`) for peer attribution on UDS deliveries.

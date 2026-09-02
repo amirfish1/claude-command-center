@@ -10584,6 +10584,7 @@
         const payload = {
           session_id: sid,
           text,
+          source: 'composer',
           // send_queue isn't a real backend mode - it's plain "send" plus an
           // explicit opt-in to always defer to the next turn boundary
           // (force_queue), even on a tty session where regular "send" lets
@@ -64309,6 +64310,7 @@
           const payload = {
             session_id: sid,
             text,
+            source: 'composer',
             idempotency_key: idempotencyKey,
           };
           if (announcedFrom) payload.announced_from = announcedFrom;

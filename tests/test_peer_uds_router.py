@@ -127,13 +127,14 @@ def test_uds_gate_reads_backend_env(monkeypatch):
 
 
 def test_uds_source_eligibility():
-    for src in ("ask", "group-chat-coordinate", "group-chat-auto-nudge", "group-chat-manual-nudge", "announced_from", "wt"):
+    for src in ("ask", "group-chat-coordinate", "group-chat-auto-nudge", "group-chat-manual-nudge", "announced_from", "wt", "api"):
         assert server._uds_source_eligible(src) is True
     # "report_to" is not a literal source any caller passes: report-back
     # footers arrive at /api/inject-input with an announced_from field, so
     # they are classified as "announced_from" instead (see
     # _inject_source_for_request below). The literal string stays ineligible.
-    for src in ("api", "user", "manual", "ccc-spawn", "terminal-queue-watcher", "report_to", "", None):
+    # "composer" is human input from the web UI and stays on legacy transports.
+    for src in ("composer", "user", "manual", "ccc-spawn", "terminal-queue-watcher", "report_to", "", None):
         assert server._uds_source_eligible(src) is False
 
 
@@ -248,8 +249,18 @@ def test_try_uds_skips_ineligible_source_without_dialing(monkeypatch, tmp_path):
     sent = []
     _enable_uds(monkeypatch, tmp_path, _dialable_row(tmp_path), sent)
     assert server._try_uds_peer_delivery("target-sid", "x", source="user") is None
-    assert server._try_uds_peer_delivery("target-sid", "x", source="api") is None
+    assert server._try_uds_peer_delivery("target-sid", "x", source="composer") is None
     assert sent == []
+
+
+def test_try_uds_delivers_for_api_source(monkeypatch, tmp_path):
+    sent = []
+    _enable_uds(monkeypatch, tmp_path, _dialable_row(tmp_path), sent)
+    monkeypatch.setattr(server, "_transcript_peer_receipt", lambda sid, mid, body, start_offset=0, timeout_s=2.0: "delivered")
+    monkeypatch.setattr(server, "_find_live_spawn_entry_for_session", lambda sid: None)
+    result = server._try_uds_peer_delivery("target-sid", "curl text", source="api")
+    assert result["ok"] is True and result["via"] == "uds" and result["receipt"] == "delivered"
+    assert len(sent) == 1
 
 
 def test_try_uds_skips_when_gate_off_or_target_not_dialable(monkeypatch, tmp_path):
@@ -338,6 +349,43 @@ def test_inject_router_returns_uds_result_for_eligible_source(monkeypatch):
     assert calls[0]["source"] == "ask"
     assert calls[0]["mode"] == "steer"
     assert calls[0]["peer_sender_sid"] == "sender-sid"
+
+
+def test_inject_router_returns_uds_result_for_api_source(monkeypatch):
+    _stub_inject_router_seams(monkeypatch, is_codex=False)
+    monkeypatch.setattr(server, "_control_plane_engine_call", lambda *a, **k: None)
+    calls = []
+    uds_reply = {"ok": True, "via": "uds", "source": "uds", "receipt_id": "m-api", "receipt": "delivered"}
+
+    def fake_try_uds(session_id, text, *, source, mode="send", peer_sender_sid=None):
+        calls.append({
+            "session_id": session_id,
+            "text": text,
+            "source": source,
+            "mode": mode,
+            "peer_sender_sid": peer_sender_sid,
+        })
+        return uds_reply
+
+    monkeypatch.setattr(server, "_try_uds_peer_delivery", fake_try_uds)
+    result = server._inject_text_into_session(
+        "target-sid", "curl inject", source="api", peer_sender_sid="sender-sid",
+    )
+    assert result == uds_reply
+    assert len(calls) == 1
+    assert calls[0]["source"] == "api"
+    assert calls[0]["peer_sender_sid"] == "sender-sid"
+
+
+def test_inject_router_bypasses_uds_for_composer_source(monkeypatch):
+    _stub_inject_router_seams(monkeypatch, is_codex=False)
+    monkeypatch.setattr(server, "_control_plane_engine_call", lambda *a, **k: None)
+    monkeypatch.setattr(server, "_find_live_spawn_entry_for_session", lambda sid: None)
+    monkeypatch.setattr(server, "_is_real_tty", lambda tty: False)
+    monkeypatch.setattr(server, "_try_wt_send_for_headless_delivery", lambda *a, **k: None)
+    monkeypatch.setattr(server, "resume_session_headless", lambda sid, text, **kw: {"ok": True, "via": "resume"})
+    result = server._inject_text_into_session("target-sid", "human text", source="composer")
+    assert result.get("via") == "resume"
 
 
 def test_inject_worker_handoff_sends_once_dashboard_side(monkeypatch, tmp_path):
@@ -528,3 +576,108 @@ def test_announced_from_never_wraps_a_slash_command():
         "hello", "peer-a") == "Announced from: peer-a\n\nhello"
     assert server._wrap_injected_text_with_announced_from(
         "use /compact later", "peer-a").startswith("Announced from: peer-a")
+
+
+def test_inject_endpoint_forwards_source_and_peer_sender(monkeypatch):
+    import http.server
+    import threading
+    import urllib.request
+
+    httpd = http.server.ThreadingHTTPServer(("127.0.0.1", 0), server.CommandCenterHandler)
+    thread = threading.Thread(target=httpd.serve_forever, daemon=True)
+    thread.start()
+    url = f"http://127.0.0.1:{httpd.server_address[1]}/api/inject-input"
+
+    calls = []
+    def fake_inject(sid, text, **kw):
+        calls.append({"sid": sid, "text": text, "kw": kw})
+        return {"ok": True, "via": "mock"}
+
+    monkeypatch.setattr(server, "_inject_text_into_session", fake_inject)
+    monkeypatch.setattr(server, "_record_interaction", lambda sid: None)
+
+    def post(payload):
+        req = urllib.request.Request(
+            url,
+            data=json.dumps(payload).encode("utf-8"),
+            headers={"Content-Type": "application/json", "Origin": f"http://127.0.0.1:{httpd.server_address[1]}"},
+            method="POST",
+        )
+        with urllib.request.urlopen(req, timeout=5) as resp:
+            return json.loads(resp.read().decode("utf-8"))
+
+    try:
+        # 1. Plain API call defaults to source="api"
+        res = post({"session_id": "target-sid", "text": "hello from curl"})
+        assert res["ok"] is True
+        assert calls[-1]["kw"]["source"] == "api"
+        assert calls[-1]["kw"]["peer_sender_sid"] is None
+
+        # 2. Call with peer_sender_sid passes peer_sender_sid
+        res = post({"session_id": "target-sid", "text": "peer message", "peer_sender_sid": "sender-sid-1"})
+        assert res["ok"] is True
+        assert calls[-1]["kw"]["source"] == "api"
+        assert calls[-1]["kw"]["peer_sender_sid"] == "sender-sid-1"
+
+        # 3. Call with sender_session_id alias passes peer_sender_sid
+        res = post({"session_id": "target-sid", "text": "alias message", "sender_session_id": "sender-sid-2"})
+        assert res["ok"] is True
+        assert calls[-1]["kw"]["source"] == "api"
+        assert calls[-1]["kw"]["peer_sender_sid"] == "sender-sid-2"
+
+        # 4. Web UI composer specifies source="composer"
+        res = post({"session_id": "target-sid", "text": "human composer text", "source": "composer"})
+        assert res["ok"] is True
+        assert calls[-1]["kw"]["source"] == "composer"
+    finally:
+        httpd.shutdown()
+
+
+def test_ccc_send_forwards_peer_sender_sid(monkeypatch):
+    import importlib.machinery
+    import importlib.util
+    from pathlib import Path
+
+    # Load root 'ccc' script
+    ccc_path = Path(__file__).resolve().parent.parent / "ccc"
+    loader = importlib.machinery.SourceFileLoader("ccc_cli", str(ccc_path))
+    spec = importlib.util.spec_from_loader(loader.name, loader)
+    ccc_cli = importlib.util.module_from_spec(spec)
+    loader.exec_module(ccc_cli)
+
+    posted = []
+    monkeypatch.setattr(ccc_cli, "_resolve_server", lambda s: "http://127.0.0.1:8090")
+    monkeypatch.setattr(ccc_cli, "_resolve_target", lambda b, t: (t, None))
+    monkeypatch.setattr(ccc_cli, "_post_json", lambda b, p, payload, **kw: (200, {"ok": True, "effect": "delivered", "via": "uds"}))
+
+    # Test explicit --from
+    class Args:
+        server = None
+        target = "target-sid"
+        text = ["hello", "peer"]
+        steer = False
+        queue = False
+        sender = "sender-sid-cli"
+        json = False
+
+    def fake_post(base, endpoint, payload, **kw):
+        posted.append(payload)
+        return (200, {"ok": True, "effect": "delivered", "via": "uds"})
+
+    monkeypatch.setattr(ccc_cli, "_post_json", fake_post)
+    rc = ccc_cli.cmd_send(Args())
+    assert rc == 0
+    assert len(posted) == 1
+    assert posted[0]["session_id"] == "target-sid"
+    assert posted[0]["text"] == "hello peer"
+    assert posted[0]["peer_sender_sid"] == "sender-sid-cli"
+
+    # Test CLAUDE_SESSION_ID env var fallback
+    Args.sender = None
+    monkeypatch.setenv("CLAUDE_SESSION_ID", "env-sender-sid")
+    rc = ccc_cli.cmd_send(Args())
+    assert rc == 0
+    assert len(posted) == 2
+    assert posted[1]["peer_sender_sid"] == "env-sender-sid"
+
+

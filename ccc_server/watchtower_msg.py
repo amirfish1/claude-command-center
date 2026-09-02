@@ -82,6 +82,7 @@ _UDS_ELIGIBLE_SOURCES = (
     # is classified as "announced_from" by _inject_source_for_request below.
     "announced_from",
     "wt",
+    "api",
     # group-chat-add-participant is intentionally absent: adding a
     # participant is a human action taken in the dashboard UI, not an
     # agent-to-agent relay.
@@ -98,7 +99,9 @@ def _inject_source_for_request(announced_from, wt_origin):
     announced_from wins: a report-back footer or an explicit announce both
     carry this field, and it's the more specific signal. wt_origin covers
     WatchTower-originated delivery. Anything else is a plain "api" call
-    (dashboard UI, curl, etc.) and stays on the legacy transports.
+    (curl, CLI, scripts, sibling sessions) and rides UDS when targeting a
+    dialable Claude session. Human composer input passes source="composer"
+    explicitly to stay on the legacy transports and retain user authority.
     """
     if announced_from:
         return "announced_from"

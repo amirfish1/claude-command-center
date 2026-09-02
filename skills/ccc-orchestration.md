@@ -68,7 +68,7 @@ All operations (except List) use `curl -s -X POST "$CCC_URL<endpoint>" -H "Conte
   *Return address + hierarchy (recommended for spawned siblings):* Add `"report_to": "<your-session-id>"` (aliases: `return_to`, `reply_to`) to the payload. CCC appends a footer to the spawned agent's prompt instructing it to POST a structured completion report back to your session via `/api/inject-input` when it finishes (success or failure), and uses the same id as `parent_session_id` so the child appears nested under the dispatcher in Current Sessions. Use explicit `"parent_session_id": "<session-id>"` only when the visual parent differs from the report target.
   *Returns:* `{"ok": true, "session_id": "...", "spawn_id": "123", "parent_session_id": "...", "engine": "...", "repo_path": "...", "cwd": "...", "session_id_pending": false}`. Prefer `session_id` immediately; if pending, poll Spawned Runs by `spawn_id`.
 - **Inject (Fire & Forget):** `/api/inject-input`
-  *Payload:* `{"session_id": "<uuid>", "text": "..."}`. CCC detects the target session's engine.
+  *Payload:* `{"session_id": "<uuid>", "text": "...", "peer_sender_sid": "<your-session-id>"}`. CCC detects the target session's engine; live Claude sessions receive the message over native Unix Domain Socket (UDS) peer transport without interrupting active turns or touching FIFOs. `peer_sender_sid` (or `sender_session_id`) attributes the message to your session. Or use the `ccc send <target> <text>` CLI.
 - **Ask (Sync/Wait):** `/api/ask`
   *Payload:* `{"session_id": "<uuid>", "text": "...", "timeout_ms": 60000}`. 
   *Returns:* `{"ok": true, "text": "reply"}`. On timeout, work continues (you can re-ask or notify user). Requires a real engine `session_id`, not only a pending `spawn_id`.

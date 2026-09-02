@@ -31452,11 +31452,22 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                         inject_options["idempotency_key"] = payload.get(
                             "idempotency_key"
                         )
+                    peer_sender_sid = (
+                        payload.get("peer_sender_sid")
+                        or payload.get("sender_session_id")
+                        or payload.get("from_session_id")
+                        or payload.get("sender_id")
+                    )
+                    source = (
+                        str(payload.get("source") or "").strip()
+                        or _inject_source_for_request(announced_from, inject_options["wt_origin"])
+                    )
                     result = _inject_text_into_session(
                         sid, text, mode=verb_mode,
                         requested_verb=verb,
                         contract_fields=verb_fields,
-                        source=_inject_source_for_request(announced_from, inject_options["wt_origin"]),
+                        source=source,
+                        peer_sender_sid=peer_sender_sid,
                         **inject_options,
                     )
                 except Exception as e:

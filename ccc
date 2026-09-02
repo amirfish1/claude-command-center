@@ -300,6 +300,10 @@ def cmd_send(args):
         print(err, file=sys.stderr)
         return 1
     payload = {"session_id": sid, "text": text}
+    sender_sid = getattr(args, "sender", None) or os.environ.get("CLAUDE_SESSION_ID") or None
+    if sender_sid:
+        resolved_sender, _ = _resolve_target(base, sender_sid)
+        payload["peer_sender_sid"] = resolved_sender or sender_sid
     if args.steer:
         payload["mode"] = "steer"
     elif args.queue:
@@ -589,6 +593,8 @@ def main(argv=None):
                    help="interrupt the session's current turn with this message")
     g.add_argument("--queue", action="store_true",
                    help="queue behind the current turn instead of delivering now")
+    p.add_argument("--from", dest="sender", metavar="SESSION_ID",
+                   help="sender session id or name for peer attribution (defaults to $CLAUDE_SESSION_ID)")
     p.add_argument("--json", action="store_true", help="raw inject result JSON")
     p.set_defaults(func=cmd_send)
 
