@@ -56326,7 +56326,14 @@
       if (c.pinned) return true;
       // Recent-only filter (last N hours) — applies to everything, backlog included.
       // Backlog items use issue_created_at (falls back to modified).
-      if (showRecentOnly && c.source !== 'hermes' && c.engine !== 'hermes') {
+      // Exempt the conversation the user is actively looking at: resuming a
+      // stale session bumps its optimistic touch (touchSessionOptimistically)
+      // but a poll tick that lands between the send and the next full
+      // /api/sessions refresh could still re-evaluate it against a cutoff it
+      // was already inside of a moment ago — a session you're typing into
+      // right now must never vanish from its own filtered list (CCC-1022).
+      const isCurrentlyOpen = !!(currentConversation && c.id === currentConversation);
+      if (showRecentOnly && !isCurrentlyOpen && c.source !== 'hermes' && c.engine !== 'hermes') {
         const ts = (c.source === 'backlog')
           ? (c.issue_created_at || c.modified || 0)
           : (c.modified || 0);
