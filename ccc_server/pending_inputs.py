@@ -5074,6 +5074,7 @@ def _start_resume_queue_watcher() -> None:
                 elif not result or not result.get("ok"):
                     restored = _core._apply_pending_input_operations(sid, [{
                         "field": "resume", "action": "insert_front", "value": text,
+                        "dedupe": True,
                     }])
                     if restored.get("ok"):
                         _core._mark_pending_resume_retry(sid)

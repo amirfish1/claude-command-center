@@ -2493,3 +2493,18 @@ def test_inject_input_preserves_transaction_terminal_error_body():
 
     assert body == terminal
     assert "queued_preserved" not in body
+
+
+def test_resume_queue_insert_front_dedupe_skips_existing_value(monkeypatch, tmp_path):
+    sid = "retry-restore-dedupe"
+    monkeypatch.setattr(server, "PENDING_INPUTS_FILE", tmp_path / "pending.json")
+    server._pending_resume_queue[sid] = ["steer text"]
+    assert server._save_pending_inputs({sid})
+
+    restored = server._apply_pending_input_operations(sid, [{
+        "field": "resume", "action": "insert_front", "value": "steer text",
+        "dedupe": True,
+    }])
+
+    assert restored["ok"] is True
+    assert list(server._pending_resume_queue[sid]) == ["steer text"]
