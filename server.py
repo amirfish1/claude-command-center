@@ -1055,6 +1055,7 @@ def _watchtower_service_action(action):
 _QUEUE_CONFIG_NAME_RE = re.compile(r"^[A-Z0-9][A-Z0-9_-]{0,63}$")
 _QUEUE_CONFIG_DEFAULTS = {
     "auto_drain": False,
+    "product_gate": False,
     "desired_workers": 1,
     "backend": "file",
     "engine": "claude",
@@ -1749,6 +1750,7 @@ def _queue_config_from_payload(payload):
     config = dict(_QUEUE_CONFIG_DEFAULTS)
     config.update({
         "auto_drain": bool(payload.get("auto_drain", False)),
+        "product_gate": bool(payload.get("product_gate", False)),
         "desired_workers": workers,
         "backend": backend,
         "claim_types": claim_types,
@@ -27897,6 +27899,11 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                     _wt_config.set_desired_workers(queue_name, conf.get("desired_workers", 1))
                     _wt_config.set_auto_drain(queue_name, conf.get("auto_drain", False))
                     _wt_config.set_claim_types(queue_name, conf.get("claim_types", []))
+                    if hasattr(_wt_config, "set_product_gate"):
+                        # Older watchtower installs predate the product gate
+                        # (2026-09-01); the direct-JSON fallback below still
+                        # carries the field for them.
+                        _wt_config.set_product_gate(queue_name, conf.get("product_gate", False))
                 else:
                     cfg_path = _wt_config_path()
                     cfg_path.parent.mkdir(parents=True, exist_ok=True)

@@ -45490,6 +45490,7 @@
       +     '<div class="fq-config-section"><div class="fq-config-eyebrow">Policy</div><div class="fq-config-grid">'
       +       '<div class="fq-config-field"><label>Drain policy</label><div class="fq-config-checkrow"><button type="button" class="settings-toggle" id="fqDrainToggle" role="switch" aria-checked="false" aria-label="Auto-drain new work"><span class="settings-toggle-track"><span class="settings-toggle-thumb"></span></span></button><span class="fq-config-checkrow-label">Auto-drain new work</span></div><input type="checkbox" id="fqConfigDrain" hidden><span class="fq-config-help">Off keeps tickets as a deliberate backlog until run manually.</span></div>'
       +       '<div class="fq-config-field"><label>Claim types</label><div class="fq-config-checks"><label><input name="fq-config-claim-type" value="bug" type="checkbox"> Bugs</label><label><input name="fq-config-claim-type" value="feature" type="checkbox"> Features</label></div><span class="fq-config-help">Choose neither to accept both ticket types.</span></div>'
+      +       '<div class="fq-config-field"><label>Product gate</label><div class="fq-config-checkrow"><button type="button" class="settings-toggle" id="fqGateToggle" role="switch" aria-checked="false" aria-label="Require Ack before workers implement"><span class="settings-toggle-track"><span class="settings-toggle-thumb"></span></span></button><span class="fq-config-checkrow-label">Require my Ack before implementing</span></div><input type="checkbox" id="fqConfigGate" hidden><span class="fq-config-help">Workers post a short pitch after diagnosis and wait for Ack/Nack.</span></div>'
       +     '</div></div>'
       +     '<div class="fq-config-section fq-config-github" hidden><div class="fq-config-eyebrow">GitHub</div><div class="fq-config-grid">'
       +       '<div class="fq-config-field wide"><label for="fqConfigGithubRepo">GitHub repository</label><input id="fqConfigGithubRepo" list="fqConfigGithubRepos" placeholder="owner/repository"><datalist id="fqConfigGithubRepos">' + githubRepoChoices + '</datalist><span class="fq-config-help">Choose a configured repository or enter owner/repository.</span></div>'
@@ -45500,7 +45501,7 @@
       + '</div>';
     document.body.appendChild(modal);
     const $ = (sel) => modal.querySelector(sel);
-    const fields = { queue: $('#fqConfigQueue'), workers: $('#fqConfigWorkers'), backend: $('#fqConfigBackend'), engine: $('#fqConfigEngine'), path: $('#fqConfigPath'), model: $('#fqConfigModel'), customModel: $('#fqConfigCustomModel'), effort: $('#fqConfigEffort'), drain: $('#fqConfigDrain'), repo: $('#fqConfigGithubRepo'), assignee: $('#fqConfigGithubAssignee') };
+    const fields = { queue: $('#fqConfigQueue'), workers: $('#fqConfigWorkers'), backend: $('#fqConfigBackend'), engine: $('#fqConfigEngine'), path: $('#fqConfigPath'), model: $('#fqConfigModel'), customModel: $('#fqConfigCustomModel'), effort: $('#fqConfigEffort'), drain: $('#fqConfigDrain'), gate: $('#fqConfigGate'), repo: $('#fqConfigGithubRepo'), assignee: $('#fqConfigGithubAssignee') };
     // Friendly model labels + cost tiers (the "which model should this queue
     // run on" answer inline): curated labels from the picker registry, tier
     // from the production cost classifier ($$$/$$/$/low cost).
@@ -45528,12 +45529,13 @@
       fields.queue.value = (entry && entry.queue) || initialQueue || '';
       fields.workers.value = c.desired_workers == null ? 1 : c.desired_workers;
       fields.backend.value = c.backend || 'file'; fields.engine.value = c.engine || '';
-      fields.path.value = c.repo_path || ''; setModel(c.model); fields.effort.value = c.effort || ''; fields.drain.checked = !!c.auto_drain;
+      fields.path.value = c.repo_path || ''; setModel(c.model); fields.effort.value = c.effort || ''; fields.drain.checked = !!c.auto_drain; fields.gate.checked = !!c.product_gate;
       fields.repo.value = c.github_repo || ''; fields.assignee.value = c.github_assignee || '';
       modal.querySelectorAll('input[name="fq-config-claim-type"]').forEach(box => { box.checked = Array.isArray(c.claim_types) && c.claim_types.includes(box.value); });
       modal.querySelectorAll('.fq-config-github').forEach(el => { el.hidden = fields.backend.value !== 'github'; });
       syncSegmented();
       syncDrainToggle();
+      syncGateToggle();
     };
     // Segmented engine/backend pickers drive the hidden selects (kept so the
     // payload code below is untouched); the drain switch drives its checkbox.
@@ -45557,12 +45559,21 @@
       const t = $('#fqDrainToggle');
       if (t) { t.classList.toggle('is-on', fields.drain.checked); t.setAttribute('aria-checked', fields.drain.checked ? 'true' : 'false'); }
     }
+    function syncGateToggle() {
+      const t = $('#fqGateToggle');
+      if (t) { t.classList.toggle('is-on', fields.gate.checked); t.setAttribute('aria-checked', fields.gate.checked ? 'true' : 'false'); }
+    }
     segBtns('#fqBackendSeg', 'backend', fields.backend);
     segBtns('#fqEngineSeg', 'engine', fields.engine);
     const drainToggle = $('#fqDrainToggle');
     if (drainToggle) drainToggle.addEventListener('click', () => {
       fields.drain.checked = !fields.drain.checked;
       syncDrainToggle();
+    });
+    const gateToggle = $('#fqGateToggle');
+    if (gateToggle) gateToggle.addEventListener('click', () => {
+      fields.gate.checked = !fields.gate.checked;
+      syncGateToggle();
     });
     const close = () => modal.remove();
     apply(findQueue(initialQueue));
@@ -45579,7 +45590,7 @@
       const save = modal.querySelector('[data-fq-config-save]');
       const claim_types = Array.from(modal.querySelectorAll('input[name="fq-config-claim-type"]:checked')).map(box => box.value);
       const model = fields.model.value === '__custom__' ? fields.customModel.value : fields.model.value;
-      const payload = { queue: fields.queue.value, workers: fields.workers.value, backend: fields.backend.value, engine: fields.engine.value, repo_path: fields.path.value, model, effort: fields.effort.value, auto_drain: fields.drain.checked, claim_types, github_repo: fields.repo.value, github_assignee: fields.assignee.value };
+      const payload = { queue: fields.queue.value, workers: fields.workers.value, backend: fields.backend.value, engine: fields.engine.value, repo_path: fields.path.value, model, effort: fields.effort.value, auto_drain: fields.drain.checked, product_gate: fields.gate.checked, claim_types, github_repo: fields.repo.value, github_assignee: fields.assignee.value };
       save.disabled = true;
       save.classList.add('is-saving');
       try {

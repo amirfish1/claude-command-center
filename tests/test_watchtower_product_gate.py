@@ -90,5 +90,13 @@ class TestWatchtowerProductGate(unittest.TestCase):
         self.assertEqual(feat_row.get("gated"), 1)
 
 
+    def test_queue_config_payload_round_trips_product_gate(self):
+        on = server._queue_config_from_payload({"queue": "GATEQ", "product_gate": True})
+        self.assertIs(on["config"]["product_gate"], True)
+        off = server._queue_config_from_payload({"queue": "GATEQ"})
+        self.assertIs(off["config"]["product_gate"], False)
+        self.assertIs(server._QUEUE_CONFIG_DEFAULTS["product_gate"], False)
+
+
 if __name__ == "__main__":
     unittest.main()
