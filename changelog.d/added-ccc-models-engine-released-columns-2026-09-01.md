@@ -1,0 +1,1 @@
+`ccc models` rows now lead with the engine name and show a `released` date derived from dated model ids (`-2024-05-13` / `-20240513` suffixes; no catalog source publishes release dates, so undated ids stay blank).

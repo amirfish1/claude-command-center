@@ -40,6 +40,22 @@ SUBCOMMANDS = ("sessions", "list-sessions", "spawn", "models")
 _SINCE_RE = re.compile(r"^(\d+)\s*([smhd])$", re.IGNORECASE)
 _SINCE_UNIT_S = {"s": 1, "m": 60, "h": 3600, "d": 86400}
 
+# Release dates aren't published in any catalog source (Anthropic's docs
+# give cutoffs and retirement dates, not release dates), so the `released`
+# column is derived from the only date signal that exists: a trailing date
+# in the model id itself (-2024-05-13 or -20240513). Dated ids only.
+_RELEASED_RE = re.compile(r"-(\d{4})-?(\d{2})-?(\d{2})$")
+
+
+def _id_release_date(model_id):
+    m = _RELEASED_RE.search(model_id or "")
+    if not m:
+        return ""
+    year, month, day = (int(g) for g in m.groups())
+    if not (1 <= month <= 12 and 1 <= day <= 31):
+        return ""
+    return f"{year:04d}-{month:02d}-{day:02d}"
+
 # --sort status category order: waiting (blocked on a human) is the most
 # actionable, then working, idle, ended. Within a category the server's
 # recency order is preserved (sorted() is stable).
@@ -260,7 +276,7 @@ def cmd_models(args):
         print(header)
         models = bucket.get("models") or []
         if not models:
-            print("  (no catalogued models — spawn uses the default above)")
+            print(f" {engine:<12} (no catalogued models — spawn uses the default above)")
         for m in models:
             efforts = m.get("reasoning_efforts") or []
             cost = m.get("cost_summary") or m.get("cost_tier") or ""
@@ -277,7 +293,8 @@ def cmd_models(args):
             if label == m.get("id"):
                 label = ""
             print(
-                f"  {m.get('id') or '?':<44} {cost:<22} "
+                f" {engine:<12} {m.get('id') or '?':<44} "
+                f"{_id_release_date(m.get('id')):<10} {cost:<22} "
                 f"{('; '.join(notes)):<28} {label}".rstrip()
             )
     print("\nuse: ccc spawn \"<prompt>\" --engine <engine> --model <id> [--effort <level>]")
