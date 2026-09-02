@@ -29022,6 +29022,15 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                             f"engine={engine} session={result.get('session_id') or result.get('pid') or '-'} "
                             f"name={name!r}",
                         )
+                        # Without this, the archive-serve cache (up to
+                        # _ARCHIVE_SERVE_TTL=300s stale-while-revalidate) can
+                        # keep serving a snapshot from before this session
+                        # existed, leaving a freshly spawned session invisible
+                        # in the sidebar for up to 5 minutes -- worse for a
+                        # spawn into a repo CCC hasn't polled recently
+                        # (CCC-985). Restamping forces the next poll to kick a
+                        # background refresh instead of waiting out the TTL.
+                        _restamp_archive_serve_cache_after_mutation()
                     else:
                         _log_activity(
                             "spawn", "FAILED",
