@@ -76,9 +76,9 @@ def _resolve_server(args_server):
     return url.rstrip("/") if url else None
 
 
-def _get_json(base, path):
+def _get_json(base, path, timeout=10):
     req = urllib.request.Request(base + path, headers={"Accept": "application/json"})
-    with urllib.request.urlopen(req, timeout=10) as resp:
+    with urllib.request.urlopen(req, timeout=timeout) as resp:
         return json.loads(resp.read().decode("utf-8"))
 
 
@@ -139,7 +139,7 @@ def cmd_sessions(args):
             # the window; the client-side filter below then applies uniformly.
             census_path += f"?since={args.since}"
         payload = _get_json(base, census_path)
-    except urllib.error.URLError as e:
+    except OSError as e:  # URLError, plus raw TimeoutError from mid-read stalls
         print(f"ccc: cannot reach CCC at {base} ({e}) — is CCC running?", file=sys.stderr)
         return 1
     sessions = list(payload.get("sessions") or [])
@@ -244,8 +244,10 @@ def cmd_models(args):
         )
         return 1
     try:
-        payload = _get_json(base, "/api/engines/models")
-    except urllib.error.URLError as e:
+        # The catalog is server-side aggregated (harness probes, docs fetch)
+        # behind a short cache; a cold build can take several seconds.
+        payload = _get_json(base, "/api/engines/models", timeout=30)
+    except OSError as e:  # URLError, plus raw TimeoutError from mid-read stalls
         print(f"ccc: cannot reach CCC at {base} ({e}) — is CCC running?", file=sys.stderr)
         return 1
     catalog = payload.get("catalog") or {}
@@ -335,7 +337,7 @@ def cmd_spawn(args):
         payload["report_to"] = args.report_to
     try:
         status, result = _post_json(base, "/api/sessions/spawn", payload)
-    except urllib.error.URLError as e:
+    except OSError as e:  # URLError, plus raw TimeoutError from mid-read stalls
         print(f"ccc: cannot reach CCC at {base} ({e}) — is CCC running?", file=sys.stderr)
         return 1
     if args.json:

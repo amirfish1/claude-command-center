@@ -1,0 +1,1 @@
+Fixed `ccc models` (and `ccc sessions` / `ccc spawn`) crashing with a raw `TimeoutError` traceback when the server answers slowly: the catalog call now waits up to 30s, and mid-response stalls print the usual "cannot reach CCC" error instead of a traceback.
