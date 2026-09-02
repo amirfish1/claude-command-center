@@ -113,6 +113,7 @@ class TestSpawnCommand:
 
 class TestResumeCommand:
     def test_resume_passes_print_timeout(self, server_mod, tmp_path):
+        import ccc_server.engines as engines_mod
         sid = str(uuid_mod.uuid4())
         conv = tmp_path / "conv.pb"
         conv.write_bytes(b"pb")
@@ -131,6 +132,8 @@ class TestResumeCommand:
                 server_mod, "find_session_cwd", return_value=str(tmp_path),
             ), mock.patch.object(
                 server_mod, "_git_toplevel_for_existing_dir", return_value=str(tmp_path),
+            ), mock.patch.object(
+                engines_mod, "_antigravity_live_resume_pid", return_value=None,
             ), mock.patch.object(
                 server_mod.subprocess, "Popen", return_value=proc,
             ) as popen, mock.patch.object(server_mod, "_record_spawn_to_registry"):

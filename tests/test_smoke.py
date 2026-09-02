@@ -13642,6 +13642,7 @@ class TestRepoContextHelpers(unittest.TestCase):
         proc = mock.Mock(pid=4244)
         original_spawns = list(server._spawned_sessions)
         server._spawned_sessions.clear()
+        import ccc_server.engines as engines_mod
         try:
             with mock.patch.object(
                 server,
@@ -13650,6 +13651,7 @@ class TestRepoContextHelpers(unittest.TestCase):
             ), mock.patch.object(server, "_antigravity_cli_conversation_path", return_value=conv), \
                  mock.patch.object(server, "find_session_cwd", return_value=str(self.repo)), \
                  mock.patch.object(server, "_git_toplevel_for_existing_dir", return_value=str(self.repo)), \
+                 mock.patch.object(engines_mod, "_antigravity_live_resume_pid", return_value=None), \
                  mock.patch.object(server.subprocess, "Popen", return_value=proc) as popen, \
                  mock.patch.object(server, "_record_spawn_to_registry"):
                 result = server.resume_session_antigravity(sid, f"look at {image}")

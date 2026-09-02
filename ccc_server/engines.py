@@ -3830,6 +3830,48 @@ def _antigravity_resume_stale_seconds():
     return _core._antigravity_print_timeout_seconds() + 60
 
 
+def _antigravity_live_resume_pid(session_id):
+    """Ground-truth check: is any `agy ... --conversation <sid>` process
+    actually alive right now, independent of `_spawned_sessions`/the on-disk
+    registry?
+
+    CCC-1011 recurred because the registry-based busy-check can lose track
+    of a still-running resume across a worker/dashboard restart (the
+    boot-time reattach sweep drops an entry if its `ps` liveness probe
+    times out under load — observed live: a worker crash-restart storm hit
+    CPU hard enough that a healthy `agy` resume got dropped from the
+    registry, and the next queued message spawned a second `agy
+    --conversation <sid>` process racing the still-alive first one on the
+    same conversation). Scanning the live process table directly can't be
+    fooled by registry/in-memory bookkeeping drift.
+    """
+    if not session_id:
+        return None
+    try:
+        out = subprocess.run(
+            ["ps", "-eo", "pid=,command="],
+            capture_output=True, text=True, timeout=5,
+        )
+    except (subprocess.TimeoutExpired, FileNotFoundError, OSError):
+        return None
+    if out.returncode != 0:
+        return None
+    needle = f"--conversation {session_id}"
+    for line in out.stdout.splitlines():
+        line = line.strip()
+        if not line or needle not in line:
+            continue
+        pid_str, _, cmd = line.partition(" ")
+        first = cmd.strip().split()[0].rsplit("/", 1)[-1] if cmd.strip() else ""
+        if first != "agy":
+            continue
+        try:
+            return int(pid_str)
+        except ValueError:
+            continue
+    return None
+
+
 def _spawn_entry_started_epoch(entry):
     """Epoch seconds for a spawn entry's ``started`` stamp (``%Y%m%dT%H%M%S``,
     local time), or 0 when missing/unparseable."""
@@ -3894,6 +3936,24 @@ def resume_session_antigravity(session_id, text):
                     }
             except Exception:
                 pass
+    live_pid = _antigravity_live_resume_pid(session_id)
+    if live_pid is not None:
+        # `_spawned_sessions` has no entry for this sid (registry reattach
+        # can drop a live PID under load, CCC-1011) but a real `agy
+        # --conversation <sid>` process is still running -- queue behind it
+        # rather than racing a second process onto the same conversation.
+        queued = _core._apply_pending_input_operations(session_id, [{
+            "field": "resume", "action": "append_tail", "value": text,
+        }])
+        if not queued.get("ok"):
+            return {"ok": False, "error": "failed to persist queued Antigravity input"}
+        return {
+            "ok": True,
+            "queued": True,
+            "pid": live_pid,
+            "via": "antigravity-resume-queued",
+            "queued_reason": "waiting for the current Antigravity turn to finish (it can't take input mid-turn)",
+        }
     spawned_ctx = _core._spawn_registry_entry_for_session(session_id, "antigravity") or {}
     cwd = spawned_ctx.get("cwd") or _core.find_session_cwd(session_id) or str(Path.cwd())
     if not Path(cwd).is_dir():

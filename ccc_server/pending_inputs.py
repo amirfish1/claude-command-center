@@ -3663,6 +3663,13 @@ def _resume_queue_engine_busy(sid):
             if started and (time.time() - started) > _core._antigravity_resume_stale_seconds():
                 continue
         return True
+    if _core._antigravity_live_resume_pid(sid) is not None:
+        # Ground-truth fallback: `_spawned_sessions` lost track of a live
+        # `agy` resume for this sid (registry reattach can drop a live PID
+        # under load, CCC-1011) -- a real OS-level scan still finds it, so
+        # treat this as busy instead of racing a second `agy` process onto
+        # the same conversation.
+        return True
     if _core._is_codex_session(sid):
         # Preserve proven external writers on the cheap stat/lsof path. Only an
         # ownership-unknown turn needs the authoritative reattachment that
