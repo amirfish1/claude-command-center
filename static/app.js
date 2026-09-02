@@ -14589,9 +14589,38 @@
     } catch (_) {}
     renderArchiveList(document.getElementById('convSearch')?.value || '');
   }
+  // Hover expands/collapses the trigger (CCC-1015 -- clicking to open, then
+  // needing a second click to pick, was a misread of the original ask):
+  // entering the wrap opens it and cancels any pending collapse; leaving it
+  // (not just moving between its own children) starts the 2s collapse timer.
+  // Click still works too, for keyboard/touch activation.
+  function _handleArchiveEngineFilterHover(ev) {
+    const wrap = ev.target.closest && ev.target.closest('.conv-archived-engine-filter');
+    if (!wrap || !$convList.contains(wrap)) return;
+    const trigger = wrap.querySelector('[data-archive-engine-trigger]');
+    if (!trigger) return;
+    if (ev.type === 'mouseover') {
+      clearTimeout(wrap._archiveEngineCollapseTimer);
+      if (!wrap.classList.contains('is-expanded')) {
+        wrap.classList.add('is-expanded');
+        trigger.setAttribute('aria-expanded', 'true');
+      }
+      return;
+    }
+    // mouseout: relatedTarget still inside the wrap means the pointer moved
+    // between child elements, not off the control -- not a real leave.
+    if (wrap.contains(ev.relatedTarget)) return;
+    clearTimeout(wrap._archiveEngineCollapseTimer);
+    wrap._archiveEngineCollapseTimer = setTimeout(() => {
+      wrap.classList.remove('is-expanded');
+      trigger.setAttribute('aria-expanded', 'false');
+    }, 2000);
+  }
   if ($convList && !$convList._archiveEngineFilterWired) {
     $convList._archiveEngineFilterWired = true;
     $convList.addEventListener('click', _handleArchiveEngineFilterClick);
+    $convList.addEventListener('mouseover', _handleArchiveEngineFilterHover);
+    $convList.addEventListener('mouseout', _handleArchiveEngineFilterHover);
   }
 
   function readConversationSearchHistory() {
@@ -35709,12 +35738,12 @@
           + ' title="' + escapeAttr(title) + '">' + svg + '</button>';
       };
       // Collapsed by default to a single trigger icon (the active engine's,
-      // or Claude's when no filter is set) to save toolbar space -- click to
+      // or Claude's when no filter is set) to save toolbar space -- hover to
       // reveal the four options, click one to filter (re-collapses since the
-      // filter click re-renders this toolbar), or wait 2s idle to auto-close
-      // without changing the filter (CCC-1006).
+      // filter click re-renders this toolbar), or move away for 2s to
+      // auto-close without changing the filter (CCC-1006, hover model CCC-1015).
       const _arcEngineTriggerTitle = _arcEngineFilter
-        ? 'Filtered by ' + _arcEngineFilterLabel + ' -- click to change'
+        ? 'Filtered by ' + _arcEngineFilterLabel + ' -- hover to change'
         : 'Filter by engine';
       const _arcEngineToggle = '<span class="conv-archived-engine-filter" data-role="archived-engine-filter" role="group" aria-label="Filter All sessions by engine">'
           + '<button type="button" class="conv-archived-engine-trigger" data-archive-engine-trigger'
