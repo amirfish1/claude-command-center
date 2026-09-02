@@ -29070,6 +29070,28 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                             else:
                                 cwd_resolved = candidate
             worktree_flag = bool(payload.get("worktree"))
+            # Best-effort caller attribution (CCC-1026 follow-up): a same-origin
+            # browser fetch and a page.evaluate() call from an automation tool
+            # (Playwright/Puppeteer driving the dashboard) are indistinguishable
+            # to _check_same_origin — both just look like "the UI". These
+            # headers are the only signal available without caller cooperation:
+            # our own CLI sets its own User-Agent, and navigator.webdriver
+            # (relayed via X-CCC-Automated by static/app.js's spawn fetches) is
+            # the one flag CDP-driven browsers cannot suppress. Still spoofable
+            # by a caller that wants to lie, so treat this as a forensic aid,
+            # not an auth signal.
+            _ua = (self.headers.get("User-Agent") or "").strip()
+            _origin = (self.headers.get("Origin") or "").strip()
+            _referer = (self.headers.get("Referer") or "").strip()
+            _automated = (self.headers.get("X-CCC-Automated") or "").strip().lower() == "true"
+            if _ua == "ccc-cli":
+                spawned_via = "cli"
+            elif _automated:
+                spawned_via = "ui-automated"
+            elif _origin or _referer:
+                spawned_via = "ui"
+            else:
+                spawned_via = "api"
             # Logged unconditionally, before any validation, so a request that
             # never reaches spawn_session_* (missing prompt, bad cwd, unknown
             # engine, ...) still leaves a trace of what was actually submitted.
@@ -29079,6 +29101,7 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
             _log_activity(
                 "spawn", "REQUEST",
                 f"engine={engine_raw!r} name={name!r} cwd={cwd_input or '-'} "
+                f"via={spawned_via} ua={_ua!r} origin={_origin or '-'} "
                 f"prompt=\"{_activity_log_preview(prompt)}\"",
             )
             if not prompt:

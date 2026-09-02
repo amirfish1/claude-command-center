@@ -83,8 +83,13 @@ def _resolve_server(args_server):
     return url.rstrip("/") if url else None
 
 
+_CLI_USER_AGENT = "ccc-cli"
+
+
 def _get_json(base, path, timeout=10):
-    req = urllib.request.Request(base + path, headers={"Accept": "application/json"})
+    req = urllib.request.Request(
+        base + path, headers={"Accept": "application/json", "User-Agent": _CLI_USER_AGENT}
+    )
     with urllib.request.urlopen(req, timeout=timeout) as resp:
         return json.loads(resp.read().decode("utf-8"))
 
@@ -97,7 +102,11 @@ def _post_json(base, path, payload, timeout=60):
     req = urllib.request.Request(
         base + path,
         data=body,
-        headers={"Accept": "application/json", "Content-Type": "application/json"},
+        headers={
+            "Accept": "application/json",
+            "Content-Type": "application/json",
+            "User-Agent": _CLI_USER_AGENT,
+        },
         method="POST",
     )
     try:
@@ -479,6 +488,11 @@ def cmd_spawn(args):
         payload["worktree"] = True
     if args.report_to:
         payload["report_to"] = args.report_to
+    elif os.environ.get("CLAUDE_CODE_SESSION_ID"):
+        # Best-effort attribution: invoked from inside a Claude Code session
+        # (interactive or headless) with no explicit --report-to, so default
+        # to that session rather than leaving the spawn's provenance blank.
+        payload["report_to"] = os.environ["CLAUDE_CODE_SESSION_ID"]
     try:
         status, result = _post_json(base, "/api/sessions/spawn", payload)
     except OSError as e:  # URLError, plus raw TimeoutError from mid-read stalls
