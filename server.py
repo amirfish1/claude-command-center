@@ -2581,6 +2581,43 @@ def _comment_queue_item_and_notify_worker(ref, text):
     return item, delivery
 
 
+def _gate_ack_queue_item_and_notify_worker(ref, comment=""):
+    """Record a product-gate approval and deliver the go-signal to the worker.
+
+    ``wt ack`` sends this same follow-up through WatchTower's liveness-aware
+    messaging path. CCC's gate-ack endpoint must do so too."""
+    gate_ack_fn = getattr(_q, "gate_ack", None)
+    if not callable(gate_ack_fn):
+        raise ValueError("WatchTower product gate unavailable")
+    item = gate_ack_fn(ref, comment=comment, by="CCC")
+    delivery = None
+    target = (item or {}).get("claimed_session_id") or (item or {}).get("claimed_by")
+    if item and item.get("status") == "in_progress" and target:
+        comment_line = f" The approver added: {comment}." if comment else ""
+        prompt = (
+            f"[WATCHTOWER] Your product-gate pitch on ticket {item['ref']} was APPROVED — "
+            f"proceed to implementation now.{comment_line} Implement, verify, "
+            f"and close with `wt close {item['ref']} --worker <your-id> "
+            f"--summary \"...\" --commit <SHA>` (or `--no-code`)."
+        )
+        try:
+            from watchtower import messages as wt_messages
+            delivery = wt_messages.deliver_message(
+                str(target), prompt, verb="steer"
+            )
+        except Exception as e:
+            delivery = {"ok": False, "error": str(e)}
+    return item, delivery
+
+
+def _gate_nack_queue_item(ref, reason, close=False):
+    """Decline a product-gate pitch: icebox it or close it as Declined."""
+    gate_nack_fn = getattr(_q, "gate_nack", None)
+    if not callable(gate_nack_fn):
+        raise ValueError("WatchTower product gate unavailable")
+    return gate_nack_fn(ref, reason=reason, by="CCC", close=close)
+
+
 def _uxq_item_timeline(item):
     """Return ticket activity even when CCC uses its stdlib-only queue fallback.
 
@@ -27100,6 +27137,65 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                     "item": _uxq_item_payload(item),
                     "delivery": delivery,
                     "images_stripped": images_stripped,
+                })
+            except Exception as e:
+                self.send_json({"ok": False, "error": str(e)}, 400)
+            return
+        if path == "/api/ux-fixes/gate-ack" or path == "/api/watchtower/gate-ack":
+            length = int(self.headers.get("Content-Length", "0"))
+            body = self.rfile.read(length) if length > 0 else b""
+            try:
+                payload = json.loads(body) if body else {}
+            except json.JSONDecodeError:
+                payload = {}
+            if not isinstance(payload, dict):
+                self.send_json({"ok": False, "error": "expected JSON object"}, 400)
+                return
+            ref = str(payload.get("ref") or payload.get("number") or "").strip()
+            comment = str(payload.get("comment") or "").strip()
+            if not ref:
+                self.send_json({"ok": False, "error": "ref required"}, 400)
+                return
+            try:
+                item, delivery = _gate_ack_queue_item_and_notify_worker(ref, comment)
+                if not item:
+                    self.send_json({"ok": False, "error": _uxq_not_found_error(ref)}, 404)
+                    return
+                self.send_json({
+                    "ok": True,
+                    "item": _uxq_item_payload(item),
+                    "delivery": delivery,
+                })
+            except Exception as e:
+                self.send_json({"ok": False, "error": str(e)}, 400)
+            return
+        if path == "/api/ux-fixes/gate-nack" or path == "/api/watchtower/gate-nack":
+            length = int(self.headers.get("Content-Length", "0"))
+            body = self.rfile.read(length) if length > 0 else b""
+            try:
+                payload = json.loads(body) if body else {}
+            except json.JSONDecodeError:
+                payload = {}
+            if not isinstance(payload, dict):
+                self.send_json({"ok": False, "error": "expected JSON object"}, 400)
+                return
+            ref = str(payload.get("ref") or payload.get("number") or "").strip()
+            reason = str(payload.get("reason") or payload.get("comment") or "").strip()
+            close = bool(payload.get("close"))
+            if not ref:
+                self.send_json({"ok": False, "error": "ref required"}, 400)
+                return
+            if not reason:
+                self.send_json({"ok": False, "error": "reason required"}, 400)
+                return
+            try:
+                item = _gate_nack_queue_item(ref, reason, close=close)
+                if not item:
+                    self.send_json({"ok": False, "error": _uxq_not_found_error(ref)}, 404)
+                    return
+                self.send_json({
+                    "ok": True,
+                    "item": _uxq_item_payload(item),
                 })
             except Exception as e:
                 self.send_json({"ok": False, "error": str(e)}, 400)

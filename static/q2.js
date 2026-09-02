@@ -245,7 +245,7 @@
     return (it && it.lane === 'express') ? 0 : 2;
   }
   function unready(it) {
-    return (it && (it.readiness === 'needs-shaping' || it.readiness === 'needs-spec')) ? 1 : 0;
+    return (it && (it.readiness === 'needs-shaping' || it.readiness === 'needs-spec' || it.readiness === 'needs-rationale')) ? 1 : 0;
   }
   function isWaitingToDrain(it) {
     if (statusOf(it) !== 'open') return false;
@@ -336,7 +336,10 @@
       if (String(it.source || '') === 'github' || it.github_repo) b.github++; else b.local++;
       var st = statusOf(it);
       if (st === 'closed') return;
-      if (it.needs_input) b.needsInput++;
+      if (it.needs_input) {
+        if (it.block_kind === 'rationale') b.gated = (b.gated || 0) + 1;
+        b.needsInput++;
+      }
       else if (st === 'in_progress') b.wip++;
       // Waiting = open, unclaimed, and something a worker is actually allowed
       // to pick up. `claimable === false` marks GitHub issues without the
@@ -371,6 +374,10 @@
       ? 'Open and claimable here (this queue drains ' + types.join(' + ') + ')'
       : 'Open and unclaimed';
     return {
+      gated: f.gated
+        ? '<span class="q2-n is-gated" title="Product-gate pitch awaiting human Ack/Nack">'
+          + '<b>' + f.gated + '</b> gated</span>'
+        : '',
       needsInput: f.needsInput
         ? '<span class="q2-n is-blocked" title="Blocked waiting on a human answer">'
           + '<b>' + f.needsInput + '</b> needs input</span>'
@@ -910,10 +917,13 @@
     });
 
     var allItems = (state.items || []).filter(function (it) { return statusOf(it) !== 'closed'; });
-    var allFacts = { waiting: 0, wip: 0, needsInput: 0 };
+    var allFacts = { waiting: 0, wip: 0, needsInput: 0, gated: 0 };
     allItems.forEach(function (it) {
       var st = statusOf(it);
-      if (st === 'blocked') allFacts.needsInput++;
+      if (st === 'blocked') {
+        if (it.block_kind === 'rationale') allFacts.gated++;
+        allFacts.needsInput++;
+      }
       else if (st === 'in_progress') allFacts.wip++;
       else allFacts.waiting++;
     });
@@ -926,7 +936,7 @@
       + '<span class="q2-qrow-foot"><span class="q2-qrow-bl">'
       + '<span class="q2-all-workers">' + (state.workers || []).length + ' live worker'
       + ((state.workers || []).length === 1 ? '' : 's') + '</span></span>'
-      + '<span class="q2-qrow-br">' + allCounts.needsInput + '</span></span></span></div>';
+      + '<span class="q2-qrow-br">' + allCounts.gated + allCounts.needsInput + '</span></span></span></div>';
 
     host.innerHTML = allRow + ordered.map(function (q) {
       var f = facts[projectKey(q.queue)] || {};
@@ -968,6 +978,7 @@
             ? '<span class="q2-qage" title="Most recent ticket activity in this queue">'
               + esc(agoFromSeconds(q.last_activity_seconds)) + '</span>'
             : '')
+        + c.gated
         + c.needsInput
         + '</span>'
         + '</span>'
@@ -1831,7 +1842,7 @@
   // reason ("H/M"). The needs-input chip is deliberately omitted here — the
   // status dot on the same row already carries it.
   var TYPE_SHORT = { feature: 'FR', bug: 'BUG' };
-  var READY_SHORT = { 'needs-shaping': 'shape', 'needs-spec': 'spec' };
+  var READY_SHORT = { 'needs-shaping': 'shape', 'needs-spec': 'spec', 'needs-rationale': 'rationale' };
   // Two spellings of "this is fine" live in the store. Both stay silent.
   var READY_OK = { 'ready': 1, 'shovel-ready': 1 };
   // Last touch: the newest of updated / closed / created. Closed rows sort by
@@ -1845,6 +1856,9 @@
 
   function ticketChips(it) {
     var c = [];
+    if (it.needs_input && it.block_kind === 'rationale') {
+      c.push('<span class="q2-tchip is-gated" title="Product-gate pitch awaiting decision">GATE</span>');
+    }
     if (it.type) {
       // Colour carries the TYPE only. Tinting the same chip by priority as
       // well meant a p0 bug and a p0 feature looked identical, which defeats
@@ -2467,11 +2481,21 @@
               // The question is NOT repeated here. The timeline's last "Needs input"
               // event already shows it, immediately above, and printing it twice
               // read as two separate questions.
-              : '<div class="q2-inline q2-inline-answer">'
-                + '<textarea class="q2-input" data-q2-input="answer" rows="2"'
-                + ' placeholder="Answer the agent&hellip;" aria-label="Answer this ticket"></textarea>'
-                + '<div class="q2-actrow"><button type="button" class="q2-btn q2-btn-primary"'
-                + ' data-q2-act="answer">Send answer</button></div></div>')
+              : (item.block_kind === 'rationale'
+                  ? '<div class="q2-inline q2-inline-gate">'
+                    + '<div class="q2-sec-label">Product Gate Decision</div>'
+                    + '<div class="q2-actrow" style="display:flex;gap:8px;">'
+                    + '<button type="button" class="q2-btn q2-btn-primary" data-q2-act="gate_ack">Ack</button>'
+                    + '<button type="button" class="q2-btn" data-q2-act="gate_ack_plus">Ack+</button>'
+                    + '<button type="button" class="q2-btn q2-btn-warn" data-q2-act="gate_nack">Nack</button>'
+                    + '</div>'
+                    + '<div class="q2-dim" style="margin-top:6px;font-size:12px;">Approve or decline this product-gate pitch.</div>'
+                    + '</div>'
+                  : '<div class="q2-inline q2-inline-answer">'
+                    + '<textarea class="q2-input" data-q2-input="answer" rows="2"'
+                    + ' placeholder="Answer the agent&hellip;" aria-label="Answer this ticket"></textarea>'
+                    + '<div class="q2-actrow"><button type="button" class="q2-btn q2-btn-primary"'
+                    + ' data-q2-act="answer">Send answer</button></div></div>'))
           : '')
       // Comment sits after the last activity item, always available: it is a
       // reply to the thread, so it reads as the next entry in it. Not offered
@@ -2665,6 +2689,48 @@
       var text = (state.detail && (state.detail._github_body || state.detail.text)) || titleOf(state.detail) || '';
       try { await navigator.clipboard.writeText(text); note('Prompt copied'); }
       catch (e) { note('Could not copy: ' + e.message); }
+      return;
+    }
+
+    if (act === 'gate_ack') {
+      btn.disabled = true;
+      try {
+        await postJson('/api/ux-fixes/gate-ack', { ref: ref, comment: '' });
+        note('Product gate approved');
+        await loadDetail(ref);
+        await refresh();
+      } catch (e) { note('Failed: ' + e.message); }
+      finally { btn.disabled = false; }
+      return;
+    }
+
+    if (act === 'gate_ack_plus') {
+      var c = prompt('Ack with comment — steering note for the worker:');
+      if (c === null) return;
+      btn.disabled = true;
+      try {
+        await postJson('/api/ux-fixes/gate-ack', { ref: ref, comment: c });
+        note('Product gate approved with comment');
+        await loadDetail(ref);
+        await refresh();
+      } catch (e) { note('Failed: ' + e.message); }
+      finally { btn.disabled = false; }
+      return;
+    }
+
+    if (act === 'gate_nack') {
+      var r = prompt('Nack — WHY is this not being built? (required)');
+      if (!r) return;
+      var close = confirm('OK = icebox (not now).\nCancel then re-Nack with --close in the CLI for "not ever".\n\nIcebox this ticket?');
+      if (!close) return;
+      btn.disabled = true;
+      try {
+        await postJson('/api/ux-fixes/gate-nack', { ref: ref, reason: r, close: false });
+        note('Product gate declined (iceboxed)');
+        await loadDetail(ref);
+        await refresh();
+      } catch (e) { note('Failed: ' + e.message); }
+      finally { btn.disabled = false; }
       return;
     }
 

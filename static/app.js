@@ -43950,15 +43950,26 @@
       + '</div>';
 
     // Answer section (only when currently blocked)
+    const isGated = item.needs_input && item.block_kind === 'rationale';
     const answerSectionHtml = item.needs_input
-      ? '<div class="uxq-td-sec uxq-td-answer-sec">'
-        + '<div class="uxq-td-sec-label">Your Decision</div>'
-        + '<div class="uxq-answer-row">'
-        + '<input class="uxq-answer-input" type="text" placeholder="Type your decision / answer…" aria-label="Answer this blocked ticket">'
-        + '<button type="button" class="ann-btn ann-primary uxq-answer-send">Send</button>'
-        + '</div>'
-        + '<div class="uxq-td-answer-hint">Sends your decision to the worker. CLI: <code>wt discuss ' + escapeHtml(ref) + '</code></div>'
-        + '</div>'
+      ? (isGated
+          ? '<div class="uxq-td-sec uxq-td-gate-sec">'
+            + '<div class="uxq-td-sec-label">Product Gate Decision</div>'
+            + '<div class="uxq-gate-row" style="display:flex;gap:8px;align-items:center;">'
+            + '<button type="button" class="ann-btn ann-primary uxq-gate-ack" data-ref="' + escapeAttr(ref) + '">Ack</button>'
+            + '<button type="button" class="ann-btn uxq-gate-ack-plus" data-ref="' + escapeAttr(ref) + '">Ack+</button>'
+            + '<button type="button" class="ann-btn ann-warn uxq-gate-nack" data-ref="' + escapeAttr(ref) + '">Nack</button>'
+            + '</div>'
+            + '<div class="uxq-td-answer-hint" style="margin-top:6px;">Approve or decline this product-gate pitch. CLI: <code>wt ack ' + escapeHtml(ref) + '</code> / <code>wt nack ' + escapeHtml(ref) + '</code></div>'
+            + '</div>'
+          : '<div class="uxq-td-sec uxq-td-answer-sec">'
+            + '<div class="uxq-td-sec-label">Your Decision</div>'
+            + '<div class="uxq-answer-row">'
+            + '<input class="uxq-answer-input" type="text" placeholder="Type your decision / answer…" aria-label="Answer this blocked ticket">'
+            + '<button type="button" class="ann-btn ann-primary uxq-answer-send">Send</button>'
+            + '</div>'
+            + '<div class="uxq-td-answer-hint">Sends your decision to the worker. CLI: <code>wt discuss ' + escapeHtml(ref) + '</code></div>'
+            + '</div>')
       : '';
 
     // Reopen section (only when closed) — a real textarea in the main
@@ -44319,6 +44330,89 @@
       answerSend.addEventListener('click', submitAnswer);
       answerInput.addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); submitAnswer(); } });
     }
+
+    // Gate actions (product gate)
+    const gateAckBtn = modal.querySelector('.uxq-gate-ack');
+    const gateAckPlusBtn = modal.querySelector('.uxq-gate-ack-plus');
+    const gateNackBtn = modal.querySelector('.uxq-gate-nack');
+    if (gateAckBtn) {
+      gateAckBtn.addEventListener('click', async () => {
+        gateAckBtn.disabled = true;
+        try {
+          const res = await fetch('/api/ux-fixes/gate-ack', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ ref, comment: '' }),
+          });
+          const d = await res.json().catch(() => ({}));
+          if (res.ok && d.ok) {
+            showOpToast('Product gate approved', 'success');
+            _uxqItemsCache.ts = 0; _uxqHealthCache.ts = 0;
+            _renderQueuePanel(); close();
+          } else {
+            showOpToast('Gate Ack failed: ' + (d.error || res.status), 'error');
+            gateAckBtn.disabled = false;
+          }
+        } catch (e) {
+          showOpToast('Gate Ack failed: ' + e, 'error');
+          gateAckBtn.disabled = false;
+        }
+      });
+    }
+    if (gateAckPlusBtn) {
+      gateAckPlusBtn.addEventListener('click', async () => {
+        const comment = prompt('Ack with comment — steering note for the worker:');
+        if (comment === null) return;
+        gateAckPlusBtn.disabled = true;
+        try {
+          const res = await fetch('/api/ux-fixes/gate-ack', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ ref, comment }),
+          });
+          const d = await res.json().catch(() => ({}));
+          if (res.ok && d.ok) {
+            showOpToast('Product gate approved with comment', 'success');
+            _uxqItemsCache.ts = 0; _uxqHealthCache.ts = 0;
+            _renderQueuePanel(); close();
+          } else {
+            showOpToast('Gate Ack failed: ' + (d.error || res.status), 'error');
+            gateAckPlusBtn.disabled = false;
+          }
+        } catch (e) {
+          showOpToast('Gate Ack failed: ' + e, 'error');
+          gateAckPlusBtn.disabled = false;
+        }
+      });
+    }
+    if (gateNackBtn) {
+      gateNackBtn.addEventListener('click', async () => {
+        const reason = prompt('Nack — WHY is this not being built? (required)');
+        if (!reason) return;
+        const closeTicket = confirm('OK = icebox (not now).\nCancel then re-Nack with --close in the CLI for "not ever".\n\nIcebox this ticket?');
+        if (!closeTicket) return;
+        gateNackBtn.disabled = true;
+        try {
+          const res = await fetch('/api/ux-fixes/gate-nack', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ ref, reason, close: false }),
+          });
+          const d = await res.json().catch(() => ({}));
+          if (res.ok && d.ok) {
+            showOpToast('Product gate declined (iceboxed)', 'success');
+            _uxqItemsCache.ts = 0; _uxqHealthCache.ts = 0;
+            _renderQueuePanel(); close();
+          } else {
+            showOpToast('Gate Nack failed: ' + (d.error || res.status), 'error');
+            gateNackBtn.disabled = false;
+          }
+        } catch (e) {
+          showOpToast('Gate Nack failed: ' + e, 'error');
+          gateNackBtn.disabled = false;
+        }
+      });
+    }
   }
   // CCC-781: compact single-queue replacement for the RHS health strip when
   // "Show queue list on RHS" is off — auto-drain state + live worker + what
@@ -44561,7 +44655,7 @@
       const historyStart = historyOrder ? _uxqHistoryPage * _UXQ_HISTORY_PAGE_SIZE : 0;
       const historyEnd = historyOrder ? historyStart + _UXQ_HISTORY_PAGE_SIZE : rows.length;
       const visibleRows = historyOrder ? rows.slice(historyStart, historyEnd) : rows;
-      const _readyShort = { 'needs-shaping': 'shape', 'needs-spec': 'spec', 'shovel-ready': 'ready' };
+      const _readyShort = { 'needs-shaping': 'shape', 'needs-spec': 'spec', 'needs-rationale': 'rationale', 'shovel-ready': 'ready' };
       const _typeShort = { 'feature': 'FR', 'bug': 'BUG' };
       // A closed ticket can still carry resolution.unresolved (CCC-420): the
       // worker closed it but flagged something it couldn't finish. That read
@@ -44571,7 +44665,13 @@
       // engine needs to reason about).
       const _uxqChips = (it, priorityBumpHtml = '') => {
         const c = [];
-        if (it.needs_input) c.push('<span class="fq-chip fq-blocked" title="' + escapeAttr(it.block_question || 'needs human input') + '">needs input</span>');
+        if (it.needs_input) {
+          if (it.block_kind === 'rationale') {
+            c.push('<span class="fq-chip fq-gated" title="' + escapeAttr(it.block_question || 'pitch awaiting decision') + '">GATE</span>');
+          } else {
+            c.push('<span class="fq-chip fq-blocked" title="' + escapeAttr(it.block_question || 'needs human input') + '">needs input</span>');
+          }
+        }
         const unresolvedNotes = _uxqUnresolvedNotes(it);
         if (it.status === 'closed' && unresolvedNotes.length) {
           c.push('<span class="fq-chip fq-unresolved" title="' + escapeAttr(unresolvedNotes.join('\n\n')) + '">unresolved</span>');

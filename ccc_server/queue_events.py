@@ -327,7 +327,7 @@ _UXQ_STUCK_NO_PROGRESS_S = 10 * 60
 # Mirrors watchtower.queue.UNCLAIMABLE_READINESS. A ticket in one of these
 # states is not work a drainer can pick up, so it must not count toward the
 # depth that decides whether a queue is stuck.
-_UNCLAIMABLE_READINESS = ("needs-shaping", "needs-spec")
+_UNCLAIMABLE_READINESS = ("needs-shaping", "needs-spec", "needs-rationale")
 
 
 def compute_ux_fixes_health(items=None):
@@ -517,6 +517,7 @@ def compute_queues_health(health=None, wt_workers=None, items=None):
     # `open` stays = depth (from health); these add a done/total progress count.
     closed_by_q = {}
     total_by_q = {}
+    gated_by_q = {}
     claimable_by_q = {}  # queue → open items a worker is ALLOWED to claim
     last_activity_q = {}  # queue → most-recent item-touch epoch (any status)
     try:
@@ -527,6 +528,8 @@ def compute_queues_health(health=None, wt_workers=None, items=None):
             total_by_q[qn] = total_by_q.get(qn, 0) + 1
             if it.get("status") == "closed":
                 closed_by_q[qn] = closed_by_q.get(qn, 0) + 1
+            if it.get("needs_input") and it.get("block_kind") == "rationale":
+                gated_by_q[qn] = gated_by_q.get(qn, 0) + 1
             # Claimable depth honors the queue's claim_types filter. A bug-only
             # queue (claim_types=['bug']) whose open tickets are all features has
             # zero claimable work — the drainer is idle BY DESIGN, not stuck.
@@ -572,6 +575,7 @@ def compute_queues_health(health=None, wt_workers=None, items=None):
     except Exception:
         closed_by_q = {}
         total_by_q = {}
+        gated_by_q = {}
         last_activity_q = {}
 
     names = set()
@@ -633,6 +637,7 @@ def compute_queues_health(health=None, wt_workers=None, items=None):
             "claimable": claimable,
             "closed": int(closed_by_q.get(q, 0)),
             "total": int(total_by_q.get(q, 0)),
+            "gated": int(gated_by_q.get(q, 0)),
             "oldest_open_age_seconds": hr.get("oldest_open_age_seconds"),
             "workers": workers,
             "auto_drain": auto,
