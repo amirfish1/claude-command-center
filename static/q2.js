@@ -15,6 +15,19 @@
   var POLL_MS = 5000;
   var CLOSED_CAP = 50;
   var NEW_TICKET_GLOW_MS = 4500;
+  // A poll-driven rebuild lands every 5s regardless of what the user is doing.
+  // renderTickets() replaces the row list wholesale (host.innerHTML = html),
+  // so a poll landing between touchstart and click destroys the row under the
+  // user's finger — the browser has nothing left to deliver the click to, and
+  // the tap is silently swallowed. Same bug class fixed for the conv list in
+  // static/app.js (isConversationListScrollActive) and for draggable rows
+  // (rowDraggableAttr); q2's ticket list had no equivalent guard (CCC-1020).
+  // A short quiet window after any touch on the list is enough: real taps
+  // resolve in well under it, and the next 5s poll catches up regardless.
+  var TICKETS_TOUCH_QUIET_MS = 600;
+  var _ticketsTouchQuietUntil = 0;
+  function isTicketsListTouchActive() { return Date.now() < _ticketsTouchQuietUntil; }
+  function noteTicketsListTouchActivity() { _ticketsTouchQuietUntil = Date.now() + TICKETS_TOUCH_QUIET_MS; }
   // Keep a just-finished ticket in the working list for handoff context, while
   // leaving the all-time closure history behind the explicit control.
   var RECENT_CLOSED_WINDOW_MS = 12 * 60 * 60 * 1000;
@@ -1953,9 +1966,18 @@
       + '</button>';
   }
 
-  function renderTickets() {
+  function renderTickets(opts) {
     var host = $('q2Tickets');
     if (!host) return;
+    if (!host._q2TouchWired) {
+      host._q2TouchWired = true;
+      host.addEventListener('touchstart', noteTicketsListTouchActivity, { passive: true });
+    }
+    // Poll-driven calls (no opts.force) back off while a touch is in flight
+    // on the list — see TICKETS_TOUCH_QUIET_MS above. User-initiated calls
+    // (selecting a ticket, toggling closed, searching, ...) pass force:true
+    // and always paint immediately.
+    if (!(opts && opts.force) && isTicketsListTouchActive()) return;
 
     $('q2TicketsTitle').textContent = state.viewAll ? 'All queues' : (state.queue || 'Tickets');
     var closedBtn = $('q2ClosedBtn');
@@ -2879,7 +2901,7 @@
       state.ref = '';
       state.detail = null;
       rememberSelection();
-      renderTickets();
+      renderTickets({ force: true });
     }
   }
   function modalKey(e) {
@@ -3235,13 +3257,13 @@
     }
   }
 
-  function renderAll() {
+  function renderAll(opts) {
     renderChrome();
     renderQueues();
     renderDiagram();
     renderAttend();
     renderLogBar();
-    renderTickets();
+    renderTickets(opts);
     // The detail pane owns its own fetch; only repaint from cache here so a
     // 5s poll can't flicker the pane the user is reading.
     renderDetail();
@@ -3288,7 +3310,7 @@
     if (search) search.value = '';
     rememberSelection();
     state.log = [];
-    renderAll();
+    renderAll({ force: true });
     showMobileColumn('tickets');
     loadQueueLearnings(name);
     stopAttendPoll();
@@ -3308,7 +3330,7 @@
     state.ref = '';
     state.detail = null;
     rememberSelection();
-    renderTickets();
+    renderTickets({ force: true });
     openDetailModal();
   }
 
@@ -3326,7 +3348,7 @@
     // than leaving an interval running for a band that's now hidden.
     stopAttendPoll();
     rememberSelection();
-    renderAll();
+    renderAll({ force: true });
     showMobileColumn('tickets');
   }
 
@@ -3350,7 +3372,7 @@
     state.editingTitle = false;
     rememberSelection();
     renderQueues();
-    renderTickets();
+    renderTickets({ force: true });
     openDetailModal();
     loadDetail(ref);
   }
@@ -3512,10 +3534,10 @@
     }
     if (e.target.closest('[data-q2-more]')) {
       state.closedCap += CLOSED_CAP;
-      renderTickets();
+      renderTickets({ force: true });
       return;
     }
-    if (e.target.closest('#q2ClosedBtn')) { state.showClosed = !state.showClosed; renderTickets(); return; }
+    if (e.target.closest('#q2ClosedBtn')) { state.showClosed = !state.showClosed; renderTickets({ force: true }); return; }
     if (e.target.closest('#q2EditPromptBtn')) { showQueueLearningsInDetail(); return; }
     if (e.target.closest('#q2ThemeBtn')) { toggleTheme(); return; }
     if (e.target.closest('[data-q2-modal-close]')) { closeModal(); return; }
@@ -3566,7 +3588,7 @@
   if (searchInput) {
     searchInput.addEventListener('input', function () {
       state.search = searchInput.value || '';
-      renderTickets();
+      renderTickets({ force: true });
     });
   }
 
