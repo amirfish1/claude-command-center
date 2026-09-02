@@ -3474,6 +3474,22 @@ class TestServerImports(unittest.TestCase):
         self.assertEqual([row["oneM"] for row in records], [True, True, True, False])
         self.assertTrue(all(row["source"] == "anthropic-models-overview" for row in records))
 
+        # The live page retitled the section to "## Compare models" and turned
+        # row labels into markdown links — both must still parse.
+        overview_v2 = """
+## Compare models
+
+| Feature | Claude Fable 5.1 | Claude Haiku 4.5 |
+|:--|:--|:--|
+| **Claude API alias** | `claude-fable-5-1` | `claude-haiku-4-5` |
+| [Context window](https://platform.claude.com/docs/x) | 1M tokens | 200K tokens |
+
+## Legacy models
+"""
+        records_v2 = server._parse_anthropic_model_overview(overview_v2)
+        self.assertEqual([row["id"] for row in records_v2], ["fable-5-1", "haiku-4-5"])
+        self.assertEqual([row["oneM"] for row in records_v2], [True, False])
+
     def test_claude_model_catalog_refresh_persists_authoritative_cache(self):
         for mod in ("server", "morning", "morning_store"):
             sys.modules.pop(mod, None)

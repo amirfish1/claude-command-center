@@ -6702,6 +6702,7 @@ _CLAUDE_MODEL_CATALOG_FILE = COMMAND_CENTER_STATE_DIR / "claude-models.json"
 # cross-check against docs/en/about-claude/models/overview.md and
 # docs/en/about-claude/pricing.md.
 _CLAUDE_ANTHROPIC_MODELS = (
+    {"id": "claude-fable-5-1", "label": "Claude Fable 5.1", "cost_tier": 60.0, "cost_summary": "$10.00 in / 1M, $50.00 out / 1M", "max_context_tokens": 1000000, "max_output_tokens": 128000, "reasoning_efforts": ("low", "medium", "high", "xhigh", "max"), "default_reasoning_effort": "high"},
     {"id": "claude-fable-5", "label": "Claude Fable 5", "cost_tier": 60.0, "cost_summary": "$10.00 in / 1M, $50.00 out / 1M", "max_context_tokens": 1000000, "max_output_tokens": 128000, "reasoning_efforts": ("low", "medium", "high", "xhigh", "max"), "default_reasoning_effort": "high"},
     {"id": "claude-opus-5", "label": "Claude Opus 5", "cost_tier": 30.0, "cost_summary": "$5.00 in / 1M, $25.00 out / 1M", "max_context_tokens": 1000000, "max_output_tokens": 128000, "reasoning_efforts": ("low", "medium", "high", "xhigh", "max"), "default_reasoning_effort": "high"},
     {"id": "claude-opus-4-8", "label": "Claude Opus 4.8", "cost_tier": 30.0, "cost_summary": "$5.00 in / 1M, $25.00 out / 1M", "max_context_tokens": 1000000, "max_output_tokens": 128000, "reasoning_efforts": ("low", "medium", "high", "xhigh", "max"), "default_reasoning_effort": "high"},
@@ -6963,7 +6964,7 @@ def _parse_anthropic_model_overview(markdown):
     """Parse exact model aliases from Anthropic's latest-model table."""
     text = str(markdown or "")
     section = re.search(
-        r"(?ims)^###\s+Latest models comparison\s*$([\s\S]*?)(?=^###\s+|\Z)",
+        r"(?ims)^#{2,3}\s+(?:Latest models comparison|Compare models)\s*$([\s\S]*?)(?=^#{2,3}\s+|\Z)",
         text,
     )
     if not section:
@@ -6980,7 +6981,9 @@ def _parse_anthropic_model_overview(markdown):
         return []
 
     def clean(value):
-        return re.sub(r"[*_`]", "", str(value or "")).strip()
+        # Row labels may be markdown links: [Context window](https://...)
+        value = re.sub(r"\[([^\]]*)\]\([^)]*\)", r"\1", str(value or ""))
+        return re.sub(r"[*_`]", "", value).strip()
 
     header = rows[0]
     aliases = next(
