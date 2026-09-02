@@ -63413,6 +63413,7 @@
     spawnDefaultsState.models[engine] = value;
     _defaultModelsByEngine[engine] = value;
     syncSpawnEngineDependentUi();
+    recordSpawnChoice(engine, value, $convInputEffortSelect ? $convInputEffortSelect.value : '');
   }
 
   async function loadSpawnDefaults() {
@@ -63536,6 +63537,7 @@
       .forEach(s => { if (s && s.value !== v) s.value = v; });
     syncSpawnEngineDependentUi();
     if (typeof updateInputBar === 'function') updateInputBar();
+    recordSpawnChoice(v, _defaultModelsByEngine[v] || '', $convInputEffortSelect ? $convInputEffortSelect.value : '');
     if (currentConversation === '__new__' && typeof enterNewSessionMode === 'function') {
       enterNewSessionMode();
       // Switching to Claude in the new-session composer should prewarm
@@ -63576,6 +63578,11 @@
       // has to re-reserve exactly like a model change does — otherwise the
       // pending warm process no longer matches what submit will ask for.
       if (currentConversation === '__new__') scheduleClaudePrewarm();
+      const _effortEngine = getSpawnEngine();
+      const _effortModel = (typeof $convInputModelSelect !== 'undefined' && $convInputModelSelect && $convInputModelSelect.style.display !== 'none')
+        ? $convInputModelSelect.value
+        : (_defaultModelsByEngine[_effortEngine] || '');
+      recordSpawnChoice(_effortEngine, _effortModel, $convInputEffortSelect.value);
     });
   }
   const refreshEngineModelCatalog = _gated('modelCatalog', loadEngineModelCatalog);
@@ -71513,6 +71520,7 @@
         chip.setAttribute('aria-checked', isSel ? 'true' : 'false');
       });
     }
+    recordSpawnChoice(eng, model || _defaultModelsByEngine[eng] || '', effort);
   }
 
   function renderNsModelPickerPills(paneId) {
