@@ -5816,6 +5816,7 @@
   .conv-current-sessions-scroll .conv-item:hover {
     background: rgba(255, 255, 255, 0.045);
   }
+  .conv-item.is-current-child-row,
   .conv-current-sessions-scroll .conv-item.is-current-child-row,
   .conv-archived-list .conv-item.is-current-child-row {
     --current-child-indent: calc(var(--current-child-depth, 1) * 14px);
@@ -5835,12 +5836,14 @@
   :root:not([data-theme="light"]) .conv-current-sessions-scroll .conv-item .conv-title {
     color: #f0f4fb;
   }
+  .conv-item.is-current-child-row .conv-title,
   .conv-current-sessions-scroll .conv-item.is-current-child-row .conv-title,
   .conv-archived-list .conv-item.is-current-child-row .conv-title {
     font-weight: 450;
     font-style: italic;
     color: var(--text-secondary);
   }
+  :root:not([data-theme="light"]) .conv-item.is-current-child-row .conv-title,
   :root:not([data-theme="light"]) .conv-current-sessions-scroll .conv-item.is-current-child-row .conv-title,
   :root:not([data-theme="light"]) .conv-archived-list .conv-item.is-current-child-row .conv-title {
     color: color-mix(in srgb, #f0f4fb 65%, transparent);
@@ -5876,6 +5879,50 @@
     background: rgba(139, 148, 158, 0.16);
     border-color: rgba(139, 148, 158, 0.30);
     outline: none;
+  }
+  .conv-subagent-cluster-toggle.conv-orch-lanes-chip {
+    min-width: unset;
+    max-width: unset;
+    color: rgba(57, 197, 207, 0.95);
+    background: rgba(57, 197, 207, 0.12);
+    border: 1px solid rgba(57, 197, 207, 0.35);
+    border-radius: 3px;
+    font-size: 9px;
+    font-weight: 500;
+  }
+  .conv-subagent-cluster-toggle.conv-orch-lanes-chip.is-static {
+    cursor: default;
+  }
+  .conv-subagent-cluster-toggle.conv-orch-lanes-chip.is-collapsible:hover,
+  .conv-subagent-cluster-toggle.conv-orch-lanes-chip.is-collapsible:focus-visible {
+    color: #fff;
+    background: rgba(57, 197, 207, 0.24);
+    border-color: rgba(57, 197, 207, 0.55);
+  }
+  .conv-subagent-collapse-footer {
+    display: flex;
+    justify-content: flex-end;
+    padding: 2px 10px 4px 28px;
+  }
+  .conv-subagent-collapse-btn {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    padding: 1px 6px;
+    border: 1px solid rgba(139, 148, 158, 0.18);
+    border-radius: 3px;
+    background: rgba(139, 148, 158, 0.08);
+    color: var(--text-muted);
+    font-family: inherit;
+    font-size: 9px;
+    font-weight: 500;
+    line-height: 1.4;
+    cursor: pointer;
+  }
+  .conv-subagent-collapse-btn:hover {
+    color: var(--text);
+    background: rgba(139, 148, 158, 0.16);
+    border-color: rgba(139, 148, 158, 0.30);
   }
   .conv-subagent-cluster-arrow { flex: 0 0 auto; opacity: 0.7; }
   .conv-subagent-cluster-summary {

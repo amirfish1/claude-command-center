@@ -2192,6 +2192,25 @@
     }
   })();
 
+  // Spawn provenance: a same-origin fetch to /api/sessions/spawn* is
+  // indistinguishable server-side whether a human clicked or an automation
+  // tool (Playwright/Puppeteer/Selenium) drove this tab via page.evaluate() —
+  // same Origin, same cookies, no special headers. navigator.webdriver is the
+  // one signal CDP-controlled browsers can't suppress, so tag every spawn
+  // request with it; server.py logs it for later "who spawned this" lookups.
+  (function installSpawnProvenanceTag() {
+    const realFetch = window.fetch.bind(window);
+    window.fetch = function taggedSpawnFetch(input, init) {
+      const url = (typeof input === 'string') ? input : (input && input.url) || '';
+      if (url.indexOf('/api/sessions/spawn') === -1) return realFetch(input, init);
+      const opts = Object.assign({}, init || {});
+      const headers = new Headers(opts.headers || {});
+      headers.set('X-CCC-Automated', String(!!navigator.webdriver));
+      opts.headers = headers;
+      return realFetch(input, opts);
+    };
+  })();
+
   // A busy dashboard can have several slow list reads queued at once. Only
   // callers that explicitly identify themselves as background work enter this
   // pool; transcript loads, exports, split-pane reads, and other user actions
@@ -3012,6 +3031,14 @@
   }
   function _subagentClustersSaveExpandedSet(s) {
     try { localStorage.setItem(SUBAGENT_CLUSTERS_EXPANDED_KEY, JSON.stringify([...s])); } catch (_) {}
+  }
+  const SUBAGENT_CLUSTERS_COLLAPSED_KEY = 'ccc-subagent-clusters-collapsed';
+  function _subagentClustersCollapsedSet() {
+    try { return new Set(JSON.parse(localStorage.getItem(SUBAGENT_CLUSTERS_COLLAPSED_KEY) || '[]')); }
+    catch (_) { return new Set(); }
+  }
+  function _subagentClustersSaveCollapsedSet(s) {
+    try { localStorage.setItem(SUBAGENT_CLUSTERS_COLLAPSED_KEY, JSON.stringify([...s])); } catch (_) {}
   }
   let repoListState = { repos: [], current: '', recent: [] };
 
@@ -31949,6 +31976,8 @@
     let _briefExpandedRows = new Set();
     // Parent ids whose compact subagent clusters are expanded.
     let _subagentExpandedParents = new Set();
+    // Parent ids whose clusters are manually collapsed.
+    let _subagentCollapsedParents = new Set();
     function sessionSummaryStorageKey(sid) {
       return 'ccc-session-summary-expanded:' + String(sid || '').slice(0, 180);
     }
@@ -33072,20 +33101,20 @@
         const _clusterActive = Number(subagentClusterMeta.active || 0);
         const _clusterAttention = Number(subagentClusterMeta.attention || 0);
         const _clusterOpen = !!subagentClusterMeta.expanded;
+        const _clusterCollapsible = subagentClusterMeta.collapsible !== false;
         const _clusterSid = String(subagentClusterMeta.parentId || '');
-        const _clusterNoun = _clusterTotal === 1 ? 'agent' : 'agents';
-        const _clusterTotalLabel = _clusterTotal + ' ' + _clusterNoun;
-        const _clusterSummary = _clusterAttention > 0
-          ? (_clusterTotalLabel + ' · ' + _clusterAttention + (_clusterAttention === 1 ? ' needs attention' : ' need attention'))
-          : (_clusterActive > 0
-            ? (_clusterTotalLabel + ' · ' + _clusterActive + ' running')
-            : _clusterTotalLabel);
-        subagentClusterDisclosureHtml = '<button type="button" class="conv-subagent-cluster-toggle"'
+        const _clusterNoun = _clusterTotal === 1 ? 'lane' : 'lanes';
+        const _clusterArrow = _clusterCollapsible ? (_clusterOpen ? '&#9662;' : '&#9656;') : '';
+        const _clusterSummary = '\u21b3 ' + _clusterTotal + ' ' + _clusterNoun;
+        const _clusterTitle = _clusterCollapsible
+          ? (_clusterOpen ? 'Collapse ' + _clusterTotal + ' child sessions' : 'Expand ' + _clusterTotal + ' child sessions')
+          : (_clusterTotal + ' child ' + (_clusterTotal === 1 ? 'session' : 'sessions') + ' below');
+        subagentClusterDisclosureHtml = '<button type="button" class="conv-subagent-cluster-toggle conv-orch-lanes-chip' + (_clusterCollapsible ? ' is-collapsible' : ' is-static') + '"'
           + ' data-role="subagent-cluster-toggle" data-subagent-parent-sid="' + escapeAttr(_clusterSid) + '"'
           + ' aria-expanded="' + (_clusterOpen ? 'true' : 'false') + '"'
-          + ' title="' + (_clusterOpen ? 'Collapse subagents' : 'Expand subagents') + '">'
-          + '<span class="conv-subagent-cluster-arrow" aria-hidden="true">' + (_clusterOpen ? '&#9662;' : '&#9656;') + '</span>'
+          + ' title="' + escapeAttr(_clusterTitle) + '">'
           + '<span class="conv-subagent-cluster-summary">' + escapeHtml(_clusterSummary) + '</span>'
+          + (_clusterArrow ? ' <span class="conv-subagent-cluster-arrow" aria-hidden="true">' + _clusterArrow + '</span>' : '')
           + '</button>';
       }
 
@@ -33383,51 +33412,42 @@
       if (!rootItem || !rootItem.card) return '';
       if (!presentation.total) return _renderRow(rootItem.card, opts);
       const parentId = _subagentRowId(rootItem.card);
-      // A collapsed cluster hides a subagent asking a question or blocked on
-      // you just as effectively as if it weren't rendered at all. Default to
-      // expanded whenever a descendant needs attention, regardless of the
-      // user's manual toggle history for this parent.
-      const expanded = _subagentExpandedParents.has(parentId) || presentation.attention > 0;
+      const total = presentation.total;
+      const isCollapsible = total > 2;
+      // When 1-2 children: show directly below parent by default (not collapsed).
+      // When > 2 children: allow collapse (default collapsed unless attention needed or expanded).
+      let expanded;
+      if (!isCollapsible) {
+        expanded = !_subagentCollapsedParents.has(parentId);
+      } else {
+        expanded = _subagentExpandedParents.has(parentId) || presentation.attention > 0;
+      }
       const parentOpts = Object.assign({}, opts, {
         subagentClusterMeta: {
           parentId,
-          total: presentation.total,
+          total,
           active: presentation.active,
           attention: presentation.attention,
           expanded,
+          collapsible: isCollapsible,
         },
       });
-      const activeHtml = presentation.activeRows.map(entry => _renderRow(entry.item.card, Object.assign({}, opts, {
+      const descendants = (cluster && Array.isArray(cluster.rows)) ? cluster.rows.slice(1).map(item => ({ item, bridge: false })) : [];
+      const descendantsHtml = descendants.map(entry => _renderRow(entry.item.card, Object.assign({}, opts, {
         currentChildDepth: entry.item.depth,
-        subagentCompact: true,
-        subagentBridge: entry.bridge,
+        subagentCompact: false,
       }))).join('');
-      const completedHtml = presentation.completedRows.length
-        ? '<div class="conv-subagent-completed">'
-          + '<span class="conv-subagent-completed-label">Completed</span>'
-          + presentation.completedRows.map(item => {
-            const card = item.card;
-            const sid = _subagentRowId(card);
-            const label = _subagentChipLabel(card);
-            const ts = card.modified || card.last_interacted || 0;
-            const age = ts ? relativeTime(ts) : '';
-            // The visible age is in .conv-subagent-completed-age (patched in
-            // place). Keep the tooltip static so the title attribute doesn't
-            // force a full rebuild every time the age ticks.
-            const tip = label + (sid ? ' · ' + sid : '');
-            return '<button type="button" class="conv-subagent-completed-chip"'
-              + ' data-subagent-chip-sid="' + escapeAttr(sid) + '" title="' + escapeAttr(tip) + '">'
-              + '<span class="conv-subagent-completed-check" aria-hidden="true">&#10003;</span>'
-              + '<span class="conv-subagent-completed-name">' + escapeHtml(label) + '</span>'
-              + (age ? '<span class="conv-subagent-completed-age">' + escapeHtml(age) + '</span>' : '')
-              + '</button>';
-          }).join('')
+      const collapseFooterHtml = (isCollapsible && expanded)
+        ? '<div class="conv-subagent-collapse-footer">'
+          + '<button type="button" class="conv-subagent-collapse-btn" data-role="subagent-cluster-toggle" data-subagent-parent-sid="' + escapeAttr(parentId) + '" title="Collapse child sessions">'
+          + '<span class="conv-subagent-cluster-arrow">&#9652;</span> Collapse ' + total + ' ' + (total === 1 ? 'lane' : 'lanes')
+          + '</button>'
           + '</div>'
         : '';
       return '<div class="conv-subagent-cluster' + (expanded ? ' is-expanded' : '') + '"'
         + ' data-subagent-parent-sid="' + escapeAttr(parentId) + '">'
         + _renderRow(rootItem.card, parentOpts)
-        + '<div class="conv-subagent-cluster-body">' + activeHtml + completedHtml + '</div>'
+        + '<div class="conv-subagent-cluster-body">' + descendantsHtml + collapseFooterHtml + '</div>'
         + '</div>';
     };
     // Active list keeps the date-gap separators so morning/evening
@@ -34014,6 +34034,7 @@
     _nyaCollapsedRows = _ipNyaOn ? _nyaCollapsedSet() : new Set();
     _briefExpandedRows = _briefExpandedSet();
     _subagentExpandedParents = _subagentClustersExpandedSet();
+    _subagentCollapsedParents = _subagentClustersCollapsedSet();
     let _activeRowsHtml;
     if (_shouldGroupByObjects) {
       // Resolve a session to its grouping node (CCC-83 + CCC-88):
@@ -37209,13 +37230,24 @@
         if (!cluster) return;
         const expanded = !cluster.classList.contains('is-expanded');
         cluster.classList.toggle('is-expanded', expanded);
-        btn.setAttribute('aria-expanded', expanded ? 'true' : 'false');
-        btn.title = expanded ? 'Collapse subagents' : 'Expand subagents';
-        const arrow = btn.querySelector('.conv-subagent-cluster-arrow');
-        if (arrow) arrow.innerHTML = expanded ? '&#9662;' : '&#9656;';
-        const set = _subagentClustersExpandedSet();
-        if (expanded) set.add(sid); else set.delete(sid);
-        _subagentClustersSaveExpandedSet(set);
+        const allToggles = cluster.querySelectorAll('[data-role="subagent-cluster-toggle"]');
+        allToggles.forEach(t => {
+          t.setAttribute('aria-expanded', expanded ? 'true' : 'false');
+          t.title = expanded ? 'Collapse child sessions' : 'Expand child sessions';
+          const arrow = t.querySelector('.conv-subagent-cluster-arrow');
+          if (arrow) arrow.innerHTML = expanded ? '&#9662;' : '&#9656;';
+        });
+        const expSet = _subagentClustersExpandedSet();
+        const colSet = _subagentClustersCollapsedSet();
+        if (expanded) {
+          expSet.add(sid);
+          colSet.delete(sid);
+        } else {
+          expSet.delete(sid);
+          colSet.add(sid);
+        }
+        _subagentClustersSaveExpandedSet(expSet);
+        _subagentClustersSaveCollapsedSet(colSet);
       });
     }
     if (!$convList._subagentChipWired) {
@@ -57814,7 +57846,7 @@
       const id = el.getAttribute('data-id');
       if (id !== root && !laneSet.has(id)) {
         el.classList.remove('is-orch-root', 'is-orch-lane');
-        const chip = el.querySelector('.conv-orch-lanes-chip');
+        const chip = el.querySelector('.conv-orch-lanes-chip:not(.conv-subagent-cluster-toggle)');
         if (chip) chip.remove();
       }
     });
@@ -57827,6 +57859,10 @@
       const mainRow = isRoot ? el.querySelector('.conv-main-row') : null;
       let chip = el.querySelector('.conv-orch-lanes-chip');
       if (isRoot && mainRow) {
+        if (mainRow.querySelector('.conv-subagent-cluster-toggle')) {
+          if (chip && !chip.classList.contains('conv-subagent-cluster-toggle')) chip.remove();
+          return;
+        }
         const label = '\u21b3 ' + count + (count === 1 ? ' lane' : ' lanes');
         if (!chip) {
           chip = document.createElement('span');
@@ -57836,7 +57872,7 @@
           else mainRow.appendChild(chip);
         }
         if (chip.textContent !== label) chip.textContent = label;
-      } else if (chip) chip.remove();
+      } else if (chip && !chip.classList.contains('conv-subagent-cluster-toggle')) chip.remove();
     });
   }
   let _orchFamilyRaf = 0;

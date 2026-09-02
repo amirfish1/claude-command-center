@@ -1829,30 +1829,20 @@ class TestServerImports(unittest.TestCase):
         self.assertNotIn("state === 'idle'", active_classifier)
         self.assertIn("_subagentRowIsRecentBlocked(c) || c.needs_approval", app_js)
         self.assertIn('data-role="subagent-cluster-toggle"', app_js)
-        self.assertIn("const _clusterNoun = _clusterTotal === 1 ? 'agent' : 'agents';", app_js)
+        self.assertIn("const _clusterNoun = _clusterTotal === 1 ? 'lane' : 'lanes';", app_js)
         row_action_selector = app_js[
             app_js.index("const CONVERSATION_ROW_ACTION_SELECTOR = ["):
             app_js.index("].join(',');", app_js.index("const CONVERSATION_ROW_ACTION_SELECTOR = ["))
         ]
         self.assertIn("'[data-role=\"subagent-cluster-toggle\"]'", row_action_selector)
-        self.assertIn("subagentCompact: true", app_js)
-        self.assertIn('class="conv-subagent-completed"', app_js)
-        self.assertIn("data-subagent-chip-sid", app_js)
+        self.assertIn("const isCollapsible = total > 2;", app_js)
         self.assertIn("$convList._subagentClusterToggleWired", app_js)
-        self.assertIn("$convList._subagentChipWired", app_js)
-        self.assertIn(".conv-item.is-subagent-compact", app_css)
-        self.assertIn(".conv-subagent-completed-chip", app_css)
-        compact_css = app_css[
-            app_css.index(".conv-item.is-subagent-compact {"):
-            app_css.index(".conv-item.is-subagent-bridge", app_css.index(".conv-item.is-subagent-compact {"))
-        ]
-        self.assertIn(".conv-qc-badge", compact_css)
+        self.assertIn(".conv-subagent-collapse-footer", app_css)
         toggle_css = app_css[
             app_css.index(".conv-subagent-cluster-toggle {"):
             app_css.index(".conv-subagent-cluster-toggle:hover", app_css.index(".conv-subagent-cluster-toggle {"))
         ]
         self.assertIn("flex: 0 0 auto;", toggle_css)
-        self.assertIn("min-width: 58px;", toggle_css)
 
     def test_blocked_subagents_stay_with_visible_active_parent_clusters(self):
         app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
