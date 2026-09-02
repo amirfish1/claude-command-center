@@ -7366,6 +7366,74 @@ def _prune_claude_models_to_latest_tiers(models):
     return [best[fam][1] for fam in order]
 
 
+_ANTIGRAVITY_GENERATION_RE = re.compile(
+    r'^(Gemini|Claude)\s+(?:([\d.]+)\s+(Pro|Flash|Sonnet|Opus)|(Pro|Flash|Sonnet|Opus)\s+([\d.]+))'
+    r'(?:\s*\([^)]*\))?$',
+    re.IGNORECASE,
+)
+_ANTIGRAVITY_RAW_ID_RE = re.compile(r'^gemini-([\d.]+)-(pro|flash)(?:-preview)?$', re.IGNORECASE)
+
+
+def _antigravity_version_tuple(ver):
+    parts = []
+    for piece in str(ver or "").split("."):
+        if piece.isdigit():
+            parts.append(int(piece))
+    return tuple(parts)
+
+
+def _antigravity_model_generation(model_id):
+    """Parse an Antigravity model id/label into (brand, tier, version) for
+    tier-family grouping, mirroring _claude_model_family/_claude_model_version.
+    Handles both display labels ('Gemini 3.5 Pro (High)', 'Claude Sonnet 4.6
+    (Thinking)') and raw lowercase ids ('gemini-3.1-pro-preview'). Returns
+    None for ids that don't fit a known generation shape (e.g. 'GPT-OSS 120B
+    (Medium)', which has only one tier so pruning is a no-op there anyway)."""
+    mid = str(model_id or "").strip()
+    if not mid:
+        return None
+    m = _ANTIGRAVITY_GENERATION_RE.match(mid)
+    if m:
+        brand = m.group(1).title()
+        tier = (m.group(3) or m.group(4)).title()
+        ver = m.group(2) or m.group(5)
+        return (brand, tier, _antigravity_version_tuple(ver))
+    m = _ANTIGRAVITY_RAW_ID_RE.match(mid)
+    if m:
+        return ("Gemini", m.group(2).title(), _antigravity_version_tuple(m.group(1)))
+    return None
+
+
+def _prune_antigravity_models_to_latest_tiers(models, default_id=None):
+    """Keep only the newest generation of each (brand, tier) family in the
+    Antigravity picker, mirroring _prune_claude_models_to_latest_tiers. The
+    generation hosting the configured default model is always kept too, even
+    if a newer generation exists, so the picker never drops the model a
+    session is actually running. Entries whose id doesn't parse into a known
+    generation (e.g. GPT-OSS) are never pruned."""
+    best_version = {}  # (brand, tier) -> version tuple
+    for entry in models:
+        gen = _antigravity_model_generation((entry or {}).get("id"))
+        if not gen:
+            continue
+        brand, tier, ver = gen
+        fam = (brand, tier)
+        if fam not in best_version or ver > best_version[fam]:
+            best_version[fam] = ver
+
+    keep_generations = {(fam[0], fam[1], ver) for fam, ver in best_version.items()}
+    default_gen = _antigravity_model_generation(default_id)
+    if default_gen:
+        keep_generations.add(default_gen)
+
+    kept = []
+    for entry in models:
+        gen = _antigravity_model_generation((entry or {}).get("id"))
+        if gen is None or gen in keep_generations:
+            kept.append(entry)
+    return kept
+
+
 def _build_engine_model_catalog(force_refresh=False):
     now = time.monotonic()
     if (
@@ -7591,6 +7659,12 @@ def _build_engine_model_catalog(force_refresh=False):
     if "claude" in catalog:
         catalog["claude"]["models"] = _prune_claude_models_to_latest_tiers(
             catalog["claude"].get("models") or []
+        )
+
+    if "antigravity" in catalog:
+        catalog["antigravity"]["models"] = _prune_antigravity_models_to_latest_tiers(
+            catalog["antigravity"].get("models") or [],
+            default_id=catalog["antigravity"].get("default"),
         )
 
     for bucket in catalog.values():

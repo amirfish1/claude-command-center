@@ -50353,8 +50353,7 @@
       { id: 'Gemini 3.5 Pro (Low)', label: 'Gemini 3.5 Pro (Low)' },
       { id: 'Gemini 3.5 Flash (High)', label: 'Gemini 3.5 Flash (High)' },
       { id: 'Gemini 3.5 Flash (Medium)', label: 'Gemini 3.5 Flash (Medium)' },
-      { id: 'Gemini 3.1 Pro (High)', label: 'Gemini 3.1 Pro (High)' },
-      { id: 'Gemini 3.1 Pro (Low)', label: 'Gemini 3.1 Pro (Low)' },
+      { id: 'Gemini 3.8 Flash (High)', label: 'Gemini 3.8 Flash (High)' },
       { id: 'Claude Sonnet 4.6 (Thinking)', label: 'Claude Sonnet 4.6 (Thinking)' },
       { id: 'Claude Opus 4.6 (Thinking)', label: 'Claude Opus 4.6 (Thinking)' },
       { id: 'GPT-OSS 120B (Medium)', label: 'GPT-OSS 120B (Medium)' },
@@ -50560,6 +50559,14 @@
       byNorm.set(norm, next);
       if (!merged.some(o => _normalizeModelId(o.id) === norm)) merged.push(next);
     });
+    if (models.length) {
+      // Server catalog is authoritative when non-empty: server-side pruning
+      // (e.g. latest-tier collapsing) must actually remove stale/dropped
+      // entries from the picker, not just get unioned with the static
+      // fallback list forever.
+      MODEL_OPTIONS_BY_ENGINE[engine] = merged;
+      return;
+    }
     existing.forEach((opt) => {
       const norm = _normalizeModelId(opt.id);
       if (!merged.some(o => _normalizeModelId(o.id) === norm)) merged.push(byNorm.get(norm) || opt);
