@@ -10,6 +10,16 @@ command, without opening the dashboard:
     ccc sessions --since 5h   # only sessions active within the window
     ccc sessions --json       # raw census envelope (agent-consumable)
 
+    ccc spawn "fix the flaky test"            # new session, server defaults
+    ccc spawn "…" --engine claude --model opus-5 --effort high
+    ccc spawn "…" --name queue-drain --cwd ~/Apps/foo --report-to <sid>
+    ccc models               # every engine's models, efforts, cost
+    ccc models --engine claude --json
+
+Agents: model ids and effort ladders differ per engine and change over
+time — never guess them. `ccc models` is the live catalog; pass its ids
+to `ccc spawn --model` / `--effort` verbatim.
+
 Server discovery: --server URL > $CCC_SERVER > the port.txt the server
 publishes at ~/.claude/command-center/port.txt (see write_port_file in
 ccc_server/fleet_jobs.py). Stdlib-only by design, like server.py.
@@ -25,7 +35,7 @@ import urllib.request
 
 PORT_FILE = os.path.expanduser("~/.claude/command-center/port.txt")
 
-SUBCOMMANDS = ("sessions", "list-sessions")
+SUBCOMMANDS = ("sessions", "list-sessions", "spawn", "models")
 
 _SINCE_RE = re.compile(r"^(\d+)\s*([smhd])$", re.IGNORECASE)
 _SINCE_UNIT_S = {"s": 1, "m": 60, "h": 3600, "d": 86400}
@@ -54,6 +64,27 @@ def _get_json(base, path):
     req = urllib.request.Request(base + path, headers={"Accept": "application/json"})
     with urllib.request.urlopen(req, timeout=10) as resp:
         return json.loads(resp.read().decode("utf-8"))
+
+
+def _post_json(base, path, payload, timeout=60):
+    """POST JSON, returning (status, payload). HTTP error statuses still carry
+    a JSON body on /api/sessions/spawn (error + supported_engines et al), so
+    parse it instead of raising. Raises URLError only for transport failures."""
+    body = json.dumps(payload).encode("utf-8")
+    req = urllib.request.Request(
+        base + path,
+        data=body,
+        headers={"Accept": "application/json", "Content-Type": "application/json"},
+        method="POST",
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
+            return resp.status, json.loads(resp.read().decode("utf-8"))
+    except urllib.error.HTTPError as e:
+        try:
+            return e.code, json.loads(e.read().decode("utf-8"))
+        except (ValueError, UnicodeDecodeError):
+            return e.code, {"ok": False, "error": f"HTTP {e.code}"}
 
 
 def _parse_since(text):
@@ -187,6 +218,139 @@ def cmd_sessions(args):
     return 0
 
 
+def cmd_models(args):
+    base = _resolve_server(args.server)
+    if not base:
+        print(
+            "ccc: no server found — is CCC running? "
+            f"(looked for --server, $CCC_SERVER, {PORT_FILE})",
+            file=sys.stderr,
+        )
+        return 1
+    try:
+        payload = _get_json(base, "/api/engines/models")
+    except urllib.error.URLError as e:
+        print(f"ccc: cannot reach CCC at {base} ({e}) — is CCC running?", file=sys.stderr)
+        return 1
+    catalog = payload.get("catalog") or {}
+    efforts_by_engine = payload.get("efforts_by_engine") or {}
+    if args.engine:
+        catalog = {k: v for k, v in catalog.items() if k == args.engine}
+        if not catalog:
+            known = ", ".join(sorted(payload.get("catalog") or {}))
+            print(f"ccc: unknown engine {args.engine!r} (known: {known})", file=sys.stderr)
+            return 1
+    if args.json:
+        out = dict(payload)
+        if args.engine:
+            out["catalog"] = catalog
+        print(json.dumps(out, indent=2))
+        return 0
+
+    for engine, bucket in catalog.items():
+        default = bucket.get("default") or ""
+        ladder = efforts_by_engine.get(engine) or []
+        header = engine
+        if default:
+            header += f"  (default: {default})"
+        if ladder:
+            header += f"  efforts: {','.join(ladder)}"
+        if bucket.get("supports_custom"):
+            header += "  [custom ids accepted]"
+        print(header)
+        models = bucket.get("models") or []
+        if not models:
+            print("  (no catalogued models — spawn uses the default above)")
+        for m in models:
+            efforts = m.get("reasoning_efforts") or []
+            cost = m.get("cost_summary") or m.get("cost_tier") or ""
+            notes = []
+            if m.get("id") == default:
+                notes.append("default")
+            if m.get("available") is False:
+                notes.append("unavailable")
+            if m.get("oneM"):
+                notes.append("1M ctx")
+            if efforts and efforts != ladder:
+                notes.append("efforts: " + ",".join(str(e) for e in efforts))
+            label = m.get("label") or ""
+            if label == m.get("id"):
+                label = ""
+            print(
+                f"  {m.get('id') or '?':<44} {cost:<22} "
+                f"{('; '.join(notes)):<28} {label}".rstrip()
+            )
+    print("\nuse: ccc spawn \"<prompt>\" --engine <engine> --model <id> [--effort <level>]")
+    return 0
+
+
+def cmd_spawn(args):
+    base = _resolve_server(args.server)
+    if not base:
+        print(
+            "ccc: no server found — is CCC running? "
+            f"(looked for --server, $CCC_SERVER, {PORT_FILE})",
+            file=sys.stderr,
+        )
+        return 1
+    prompt = " ".join(args.prompt).strip()
+    if not prompt and not sys.stdin.isatty():
+        prompt = sys.stdin.read().strip()
+    if not prompt:
+        print("ccc spawn: missing prompt (pass it as an argument or pipe it on stdin)",
+              file=sys.stderr)
+        return 2
+    payload = {"prompt": prompt}
+    if args.engine:
+        payload["engine"] = args.engine
+    if args.model:
+        payload["model"] = args.model
+    if args.effort:
+        payload["reasoning_effort"] = args.effort
+    if args.name:
+        payload["name"] = args.name
+    # The endpoint is repo-scoped (explicit cwd/repo_path required). A CLI's
+    # natural scope is the directory it was invoked from.
+    payload["cwd"] = args.cwd or os.getcwd()
+    if args.worktree:
+        payload["worktree"] = True
+    if args.report_to:
+        payload["report_to"] = args.report_to
+    try:
+        status, result = _post_json(base, "/api/sessions/spawn", payload)
+    except urllib.error.URLError as e:
+        print(f"ccc: cannot reach CCC at {base} ({e}) — is CCC running?", file=sys.stderr)
+        return 1
+    if args.json:
+        print(json.dumps(result, indent=2))
+        return 0 if result.get("ok") else 1
+    if not result.get("ok"):
+        print(f"ccc: spawn failed: {result.get('error') or f'HTTP {status}'}", file=sys.stderr)
+        if result.get("supported_engines"):
+            print(f"  engines: {', '.join(result['supported_engines'])}", file=sys.stderr)
+        if result.get("known_codex_models"):
+            print(f"  known codex models: {', '.join(result['known_codex_models'])}",
+                  file=sys.stderr)
+        print("  see `ccc models` for valid --engine/--model/--effort values",
+              file=sys.stderr)
+        return 1
+    sid = result.get("session_id") or ""
+    pid = result.get("pid")
+    engine = result.get("engine") or args.engine or "claude"
+    bits = []
+    if args.name:
+        bits.append(f"name={args.name!r}")
+    if args.model:
+        bits.append(f"model={args.model}")
+    if args.effort:
+        bits.append(f"effort={args.effort}")
+    ident = f"session {sid}" if sid else (f"pid {pid}" if pid else "session")
+    suffix = f"  ({', '.join(bits)})" if bits else ""
+    print(f"spawned {engine} {ident}{suffix}")
+    print("track it: ccc sessions")
+    return 0
+
+
 def main(argv=None):
     argv = list(sys.argv[1:] if argv is None else argv)
     # `ccc` is also the Homebrew launcher's name (foreground server /
@@ -208,7 +372,7 @@ def main(argv=None):
     parser.add_argument("--server", help="CCC base URL (default: $CCC_SERVER or port.txt)")
     sub = parser.add_subparsers(dest="command", required=True)
 
-    for name in SUBCOMMANDS:
+    for name in ("sessions", "list-sessions"):
         p = sub.add_parser(name, help="live session census (state, age, engine, repo, name)")
         p.add_argument("--since", type=_parse_since,
                        help="show sessions (live + recently-ended) with activity in "
@@ -222,6 +386,45 @@ def main(argv=None):
                        help="nest children under parents (default: flat, ↳ marks children)")
         p.add_argument("--json", action="store_true", help="raw census JSON")
         p.set_defaults(func=cmd_sessions)
+
+    p = sub.add_parser(
+        "spawn",
+        help="spawn a new agent session via CCC orchestration",
+        description="Spawn a new session on a running CCC server. Model ids and "
+                    "effort ladders are per-engine and live in `ccc models` — "
+                    "never guess them.",
+    )
+    p.add_argument("prompt", nargs="*",
+                   help="the task prompt (or pipe it on stdin)")
+    p.add_argument("--engine",
+                   help="claude (default), codex, cursor, antigravity, kilo, "
+                        "opencode, aider, hermes, kimi, devin, droid, grok")
+    p.add_argument("--model",
+                   help="model id for the engine — see `ccc models` (omit for the "
+                        "server default)")
+    p.add_argument("--effort",
+                   help="reasoning effort for engines with a ladder — see the "
+                        "EFFORTS in `ccc models`")
+    p.add_argument("--name", help="display name for the session")
+    p.add_argument("--cwd", help="working directory for the session "
+                                 "(default: your current directory)")
+    p.add_argument("--worktree", action="store_true",
+                   help="run the session in a fresh git worktree")
+    p.add_argument("--report-to", metavar="SESSION_ID",
+                   help="session the spawned one reports back to on completion "
+                        "(orchestration; also becomes its parent)")
+    p.add_argument("--json", action="store_true", help="raw spawn result JSON")
+    p.set_defaults(func=cmd_spawn)
+
+    p = sub.add_parser(
+        "models",
+        help="list spawnable engines, models, effort ladders, and cost",
+        description="The live server-owned model catalog behind the dashboard "
+                    "picker. Use these ids verbatim with `ccc spawn --model`.",
+    )
+    p.add_argument("--engine", help="only this engine")
+    p.add_argument("--json", action="store_true", help="raw catalog JSON")
+    p.set_defaults(func=cmd_models)
 
     args = parser.parse_args(argv)
     return args.func(args)

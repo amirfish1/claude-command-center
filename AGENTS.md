@@ -90,7 +90,7 @@ Read `SECURITY.md` before changing anything about network binding, origin checks
 ## Conventions
 
 - `server.py` is stdlib-only on purpose — no pip dependencies at runtime. Don't import `requests`, `pydantic`, `fastapi`, etc. `urllib` + `http.server` + `json` cover it.
-- `ccc` (repo root) is the stdlib-only CLI for a running server — `ccc sessions` reads the live census from `GET /api/sessions/census`, finding the server via `--server` / `$CCC_SERVER` / `~/.claude/command-center/port.txt`. With no known subcommand it passes through to `run.sh` (same name/behaviour as the Homebrew launcher). `scripts/install.sh` symlinks it to `~/.local/bin/ccc`. Same stdlib-only rule as `server.py`.
+- `ccc` (repo root) is the stdlib-only CLI for a running server — `ccc sessions` reads the live census from `GET /api/sessions/census`, `ccc spawn` posts to `/api/sessions/spawn` (repo-scoped to the caller's cwd by default), and `ccc models` renders the `GET /api/engines/models` catalog, all finding the server via `--server` / `$CCC_SERVER` / `~/.claude/command-center/port.txt`. With no known subcommand it passes through to `run.sh` (same name/behaviour as the Homebrew launcher). `scripts/install.sh` symlinks it to `~/.local/bin/ccc`. Same stdlib-only rule as `server.py`.
 - `static/index.html` is a single-file app by design (no bundler, no npm). Inline CSS/JS is expected. Don't split it into modules without a strong reason.
 - In zsh, lowercase `path` is a special array tied directly to `PATH`. Never use
   `path` as a scratch, local, or loop variable in shell diagnostics; use a
@@ -180,7 +180,7 @@ Don't mock external systems (`gh`, agent CLIs, `pkood`) in the smoke test. The s
 <!-- HUNCH:START — auto-generated, do not edit by hand -->
 ## 🧠 Hunch (Engineering Memory)
 
-This repo has **Hunch** — a curated graph of *why* the code is the way it is (decisions, bug history, invariants). It currently holds **30 decisions, 0 bugs, 8 constraints, 12 components, 0 policies, 3 open findings**.
+This repo has **Hunch** — a curated graph of *why* the code is the way it is (decisions, bug history, invariants). It currently holds **30 decisions, 0 bugs, 8 constraints, 12 components, 0 policies, 5 open findings**.
 
 **Consult Hunch via the `hunch_*` MCP tools — pick by MOMENT, not from memory:**
 

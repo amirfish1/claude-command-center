@@ -296,14 +296,22 @@ and what are they doing" in one command — no dashboard needed:
 ccc sessions              # live census: state, age, engine, repo, name
 ccc list-sessions --since 5h   # only sessions active in the window
 ccc sessions --json       # machine-readable census
+
+ccc models                # every engine's models, effort ladders, cost
+ccc spawn "fix the flaky login test" --engine claude --model opus-5
+ccc spawn "drain the queue" --report-to <your-session-id>   # reports back
 ```
 
 It finds the server via `~/.claude/command-center/port.txt` (override with
 `--server` or `$CCC_SERVER`) and shows every live session — including spawned
 children (indented under their parent) and sessions the dashboard has no
-conversation row for. The installer links it to `~/.local/bin/ccc`; from a
-checkout you can also run `./ccc`. With no subcommand, `ccc` passes through
-to `run.sh` (the same launching behaviour as the Homebrew `ccc`).
+conversation row for. `ccc spawn` is the orchestration entry point: it posts
+to `/api/sessions/spawn` scoped to your current directory (override with
+`--cwd`), and `ccc models` lists the live per-engine model catalog so agents
+never have to guess a `--model` id. The installer links it to
+`~/.local/bin/ccc`; from a checkout you can also run `./ccc`. With no
+subcommand, `ccc` passes through to `run.sh` (the same launching behaviour
+as the Homebrew `ccc`).
 
 ### WatchTower comes with it
 
