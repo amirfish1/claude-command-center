@@ -200,6 +200,19 @@ def list_issues(repo_path):
     # circuit on the next call, and we will keep serving the cached copy.
     _check_gh_rate_limit()
 
+    if github_rate_limited()["rate_limited"]:
+        # Still rate-limited after the refresh above (the _LIST_ISSUES_RATE_
+        # LIMIT_TTL stale window has lapsed but the backoff hasn't). Calling
+        # gh here would almost certainly fail too, and _gh()'s `or []`
+        # fallback can't tell "confirmed zero issues" from "couldn't check" —
+        # treating a failed call as zero would silently empty out (and
+        # cache-poison, since the write below is unconditional) a GitHub-
+        # backed queue for good until the next successful fetch. Keep serving
+        # whatever was last known, however stale, instead.
+        with _LIST_ISSUES_CACHE["lock"]:
+            ent = _LIST_ISSUES_CACHE["by_repo"].get(cache_key)
+        return list(ent["data"]) if ent else []
+
     open_issues = _gh(
         repo_path,
         "issue", "list", "--state", "open", "--limit", "50",
