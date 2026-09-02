@@ -713,6 +713,24 @@ def _antigravity_read_log_tail(path, max_bytes=64000):
         return ""
 
 
+def _antigravity_read_log_head(path, max_bytes=64000):
+    """First `max_bytes` of an AGY CLI log.
+
+    The identity markers CCC binds a spawn to a row with (`Created
+    conversation <uuid>`, `Initializing CLI store manager for workspace ...`,
+    `Propagating selected model override to backend: label="..."`) are all
+    written in the first ~2 KB, before the run produces any output. A chatty
+    or long run pushes them out of the 64 KB tail window, and the row then
+    resolves with no session_id at all — the spawn looks stuck forever.
+    """
+    try:
+        with open(path, "rb") as fh:
+            raw = fh.read(max_bytes)
+        return raw.decode("utf-8", "replace")
+    except OSError:
+        return ""
+
+
 def _antigravity_app_ls_candidates():
     text = _core._antigravity_read_log_tail(_core.ANTIGRAVITY_MAIN_LOG, max_bytes=512000)
     tokens = _ANTIGRAVITY_APP_LS_TOKEN_RE.findall(text or "")
@@ -902,6 +920,20 @@ def _antigravity_cli_log_meta(path):
     for match in _ANTIGRAVITY_CLI_WORKSPACE_RE.finditer(text):
         workspace = match.group(1).strip().strip('"')
     model = _antigravity_model_from_text(text)
+    if not (session_id and workspace and model):
+        # Log grew past the tail window and took the header identity markers
+        # with it. Re-read the head only when the tail came up short, so the
+        # common (small log) case still costs a single read.
+        head = _core._antigravity_read_log_head(path)
+        if head and head != text:
+            if not session_id:
+                for match in _ANTIGRAVITY_CLI_CONVERSATION_RE.finditer(head):
+                    session_id = match.group(1)
+            if not workspace:
+                for match in _ANTIGRAVITY_CLI_WORKSPACE_RE.finditer(head):
+                    workspace = match.group(1).strip().strip('"')
+            if not model:
+                model = _antigravity_model_from_text(head)
     result = {"session_id": session_id, "cwd": workspace, "model": model}
     if _key is not None:
         _antigravity_cli_log_meta_cache[str(path)] = (_key, result)

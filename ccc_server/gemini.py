@@ -67,12 +67,16 @@ _antigravity_cli_settings_lock = threading.Lock()
 
 
 _ANTIGRAVITY_MODEL_LABELS = {
-    "gemini-3-5-pro-high": "Gemini 3.5 Pro (High)",
-    "gemini-3-5-pro-medium": "Gemini 3.5 Pro (Medium)",
-    "gemini-3-5-pro-low": "Gemini 3.5 Pro (Low)",
-    "gemini-3-5-pro": "Gemini 3.5 Pro (High)",
-    "gemini-3-5-flash-high": "Gemini 3.5 Flash (High)",
-    "gemini-3-5-flash-medium": "Gemini 3.5 Flash (Medium)",
+    "gemini-3-8-flash-high": "Gemini 3.8 Flash (High)",
+    "gemini-3-8-flash-medium": "Gemini 3.8 Flash (Medium)",
+    "gemini-3-8-flash-low": "Gemini 3.8 Flash (Low)",
+    "gemini-3-8-flash": "Gemini 3.8 Flash (High)",
+    "gemini-3-7-flash-high": "Gemini 3.7 Flash (High)",
+    "gemini-3-7-flash-medium": "Gemini 3.7 Flash (Medium)",
+    "gemini-3-7-flash-low": "Gemini 3.7 Flash (Low)",
+    "gemini-3-6-flash-high": "Gemini 3.6 Flash (High)",
+    "gemini-3-6-flash-medium": "Gemini 3.6 Flash (Medium)",
+    "gemini-3-6-flash-low": "Gemini 3.6 Flash (Low)",
     "gemini-3-1-pro-high": "Gemini 3.1 Pro (High)",
     "gemini-3-1-pro-low": "Gemini 3.1 Pro (Low)",
     "gemini-3-1-pro": "Gemini 3.1 Pro (High)",
