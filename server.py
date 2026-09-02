@@ -24003,6 +24003,20 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                     usage["cache_adjusted_tokens"] = round(
                         norm["effective_total_tokens"], 2
                     )
+                    # Cache-adjusted tokens are only comparable within one
+                    # model's own price ladder -- a cheap-model session and an
+                    # expensive-model session can show the same token count
+                    # for very different actual spend. Re-express the same
+                    # dollar cost in a fixed model's token units (Opus 5,
+                    # CCC-1016) so the headline number is comparable across
+                    # engines/models, not just within one.
+                    if norm.get("cost_available") and norm.get("cost_usd"):
+                        baseline_rate_in = _rates_for_model("claude-opus-5")[0]
+                        if baseline_rate_in > 0:
+                            usage["baseline_model"] = "claude-opus-5"
+                            usage["baseline_equivalent_tokens"] = round(
+                                norm["cost_usd"] * 1_000_000 / baseline_rate_in, 2
+                            )
             self.send_json(usage)
         elif re.match(r"^/api/session/[a-zA-Z0-9_-]+/slash-commands$", path):
             # Slash commands reported by Claude's system/init event. The

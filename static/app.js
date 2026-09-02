@@ -49522,7 +49522,15 @@
     const rawTotal = inFresh + inCached + outTok;
     const cacheAdjusted = u ? (Number(u.cache_adjusted_tokens) || NaN) : NaN;
     const hasCacheAdjusted = Number.isFinite(cacheAdjusted) && cacheAdjusted > 0;
-    const total = hasCacheAdjusted ? cacheAdjusted : rawTotal;
+    // Cache-adjusted tokens are only comparable within one model's own price
+    // ladder -- an Opus session and a Haiku session can show the same token
+    // count for wildly different actual spend. baseline_equivalent_tokens
+    // (server, CCC-1016) re-expresses the session's real $ cost in a fixed
+    // model's (Opus 5) token units, so the headline is comparable across
+    // engines/models, not just within one.
+    const baselineTokens = u ? (Number(u.baseline_equivalent_tokens) || NaN) : NaN;
+    const hasBaseline = Number.isFinite(baselineTokens) && baselineTokens > 0;
+    const total = hasBaseline ? baselineTokens : (hasCacheAdjusted ? cacheAdjusted : rawTotal);
     if (!total) {
       el.hidden = true;
       el.innerHTML = '';
@@ -49534,9 +49542,12 @@
       u, sessionId, monthlyPlan, _weeklyClaudeUsage
     );
     const costText = railSessionCostText(presentation);
-    const headlineLabel = hasCacheAdjusted
-      ? 'cache-adjusted tokens this conversation'
-      : 'tokens this conversation';
+    const baselineLabel = u && u.baseline_model
+      ? _claudeFriendlyModelName(u.baseline_model) + '-equivalent tokens'
+      : 'baseline-equivalent tokens';
+    const headlineLabel = hasBaseline
+      ? baselineLabel
+      : (hasCacheAdjusted ? 'cache-adjusted tokens this conversation' : 'tokens this conversation');
     el.innerHTML =
       '<div class="rail-tokens-value">' + _formatTokens(total) + '</div>'
       + '<div class="rail-tokens-label">' + headlineLabel
@@ -49547,7 +49558,11 @@
       + ' &middot; in cached ' + _formatTokens(inCached)
       + ' &middot; out ' + _formatTokens(outTok)
       + '</div>';
-    el.title = (hasCacheAdjusted
+    el.title = (hasBaseline
+        ? total.toLocaleString() + ' ' + baselineLabel + ' (same $ cost priced at '
+          + _claudeFriendlyModelName(u.baseline_model) + " rates -- raw total "
+          + rawTotal.toLocaleString() + ', '
+        : hasCacheAdjusted
         ? total.toLocaleString() + ' cache-adjusted tokens (raw total '
           + rawTotal.toLocaleString() + ', '
         : total.toLocaleString() + ' tokens (')
