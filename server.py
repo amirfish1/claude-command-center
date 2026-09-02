@@ -2510,6 +2510,28 @@ def _wt_past_workers(hours=24, max_per_queue=3):
 _queue_answer = _q.answer
 
 
+def _reraise_friendly_github_mutation_error(e):
+    """Turn a raw watchtower/`gh` exception into an actionable one.
+
+    A GitHub-backed queue's answer/comment/gate mutations go through
+    WatchTower's own `gh` calls (github_backend.py), not CCC's tracked ones
+    (ccc_server/github_issues.py) -- so a GraphQL rate-limit hit here reached
+    the dashboard as a raw GraphQL error dump, and CCC's own degraded-sync
+    banner (github_rate_limited()) never learned about it, leaving repeated
+    clicks to fail the same opaque way (CCC-1025). Record it into the shared
+    state so both sides agree the API is down, and raise a message a human
+    can act on instead of a stack of GraphQL text.
+    """
+    text = str(e)
+    if _is_rate_limit_error(text):
+        _record_rate_limit_error()
+        raise ValueError(
+            "GitHub API rate limit hit — this ticket's queue is GitHub-backed "
+            "and the API quota is exhausted. Wait a few minutes and try again."
+        ) from e
+    raise
+
+
 def _answer_queue_item_and_notify_worker(ref, text):
     """Record a dashboard answer and deliver it to the claimed worker.
 
@@ -2517,7 +2539,10 @@ def _answer_queue_item_and_notify_worker(ref, text):
     messaging path.  CCC's inline answer endpoint must do so too: clearing
     ``needs_input`` alone leaves a claimed, idle worker unaware of the answer.
     """
-    item = _queue_answer(ref, text, session_id="ccc")
+    try:
+        item = _queue_answer(ref, text, session_id="ccc")
+    except Exception as e:
+        _reraise_friendly_github_mutation_error(e)
     delivery = None
     target = (item or {}).get("claimed_session_id") or (item or {}).get("claimed_by")
     if (
@@ -2556,7 +2581,10 @@ def _comment_queue_item_and_notify_worker(ref, text):
     best-effort notification without letting a delivery failure lose the
     durable comment.
     """
-    item = _q.comment(ref, text, by="human", session_id="ccc")
+    try:
+        item = _q.comment(ref, text, by="human", session_id="ccc")
+    except Exception as e:
+        _reraise_friendly_github_mutation_error(e)
     delivery = None
     target = (item or {}).get("claimed_session_id") or (item or {}).get("claimed_by")
     if (
@@ -2591,7 +2619,10 @@ def _gate_ack_queue_item_and_notify_worker(ref, comment=""):
     gate_ack_fn = getattr(_q, "gate_ack", None)
     if not callable(gate_ack_fn):
         raise ValueError("WatchTower product gate unavailable")
-    item = gate_ack_fn(ref, comment=comment, by="CCC")
+    try:
+        item = gate_ack_fn(ref, comment=comment, by="CCC")
+    except Exception as e:
+        _reraise_friendly_github_mutation_error(e)
     delivery = None
     target = (item or {}).get("claimed_session_id") or (item or {}).get("claimed_by")
     if item and item.get("status") == "in_progress" and target:
@@ -2617,7 +2648,10 @@ def _gate_nack_queue_item(ref, reason, close=False):
     gate_nack_fn = getattr(_q, "gate_nack", None)
     if not callable(gate_nack_fn):
         raise ValueError("WatchTower product gate unavailable")
-    return gate_nack_fn(ref, reason=reason, by="CCC", close=close)
+    try:
+        return gate_nack_fn(ref, reason=reason, by="CCC", close=close)
+    except Exception as e:
+        _reraise_friendly_github_mutation_error(e)
 
 
 def _uxq_item_timeline(item):
