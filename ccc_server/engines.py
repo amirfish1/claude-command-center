@@ -1948,6 +1948,37 @@ def find_antigravity_conversations(
     return out
 
 
+_ANTIGRAVITY_GOT_MESSAGE_PREFIX = "Got message:\n"
+
+
+def _antigravity_task_completed_summary(content):
+    """Collapse the raw TASK_COMPLETED RPC blob Antigravity smuggles into
+    model text (full stdout + a tool list) into a one-line status."""
+    if not isinstance(content, str) or not content.startswith(_ANTIGRAVITY_GOT_MESSAGE_PREFIX):
+        return None
+    rest = content[len(_ANTIGRAVITY_GOT_MESSAGE_PREFIX):].lstrip()
+    if not rest.startswith("{"):
+        return None
+    try:
+        # strict=False: the embedded blob contains raw control characters
+        # (unescaped newlines) inside string values, so it isn't valid JSON
+        # under the default strict parser.
+        payload, _end = json.JSONDecoder(strict=False).raw_decode(rest)
+    except (json.JSONDecodeError, ValueError):
+        return None
+    if not isinstance(payload, dict) or payload.get("event") != "TASK_COMPLETED":
+        return None
+    task = payload.get("task")
+    task = task if isinstance(task, dict) else {}
+    task_id = str(task.get("taskId") or "").strip()
+    short_id = task_id.rsplit("/", 1)[-1] if task_id else ""
+    exit_code = task.get("exitCode")
+    status = "ok" if exit_code == 0 else f"exit {exit_code}"
+    if short_id:
+        return f"Task {short_id} completed ({status})"
+    return f"Task completed ({status})"
+
+
 def _parse_antigravity_event(ev, line_num, usage_map=None):
     ev_type = ev.get("type") or ""
     source = ev.get("source") or ""
@@ -1967,7 +1998,10 @@ def _parse_antigravity_event(ev, line_num, usage_map=None):
         elif signature:
             blocks.append({"kind": "thinking", "text": "", "signature_only": True})
         content = (ev.get("content") or "").strip()
-        if _antigravity_embedded_system_message(content):
+        task_summary = _antigravity_task_completed_summary(content)
+        if task_summary:
+            content = task_summary
+        elif _antigravity_embedded_system_message(content):
             content = ""
         if content:
             blocks.append({"kind": "text", "text": content})
