@@ -1,0 +1,1 @@
+Added best-effort caller attribution to session spawns: the activity log now records whether a spawn came from the CLI, the UI, an automated browser (CDP-driven), or a bare API call, and `ccc spawn` auto-fills the parent session from `CLAUDE_CODE_SESSION_ID` when not given explicitly.
