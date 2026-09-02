@@ -966,6 +966,17 @@ brew install ccc</pre>
           <p class="req">DMG is notarized and signed by Apple. Drag, drop, double-click. Homebrew installs the <code>ccc</code> command and can run CCC as a background service.</p>
         </div>
       </div>
+
+      <div class="install-block" style="margin-top: 24px;">
+        <h3># the ccc CLI — your whole fleet from the terminal</h3>
+<pre><span class="comment"># installed with CCC; talks to the running server</span>
+ccc sessions                        <span class="comment"># live census: state, age, engine, repo</span>
+ccc models                          <span class="comment"># every engine's models, efforts, cost</span>
+ccc spawn "fix the flaky test" --engine claude --model opus-5
+ccc send queue-drain "also update the changelog"
+ccc ask queue-drain "what's your status?"   <span class="comment"># blocks for the reply</span></pre>
+        <p class="req">Address sessions by id or by name fragment. <code>send</code> is fire-and-forget (with <code>--steer</code> to interrupt a turn), <code>ask</code> waits for the reply — no dashboard, no hand-rolled <code>curl</code>.</p>
+      </div>
     </div>
   </section>
 

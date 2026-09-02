@@ -301,6 +301,10 @@ ccc models                # every engine's models, effort ladders, cost,
                           # release dates where the id carries one
 ccc spawn "fix the flaky login test" --engine claude --model opus-5
 ccc spawn "drain the queue" --report-to <your-session-id>   # reports back
+
+ccc send queue-drain "also update the changelog"   # fire-and-forget
+ccc send <session-id> "stop, wrong branch" --steer # interrupt the turn
+ccc ask queue-drain "what's your status?"          # block for the reply
 ```
 
 It finds the server via `~/.claude/command-center/port.txt` (override with
@@ -309,7 +313,10 @@ children (indented under their parent) and sessions the dashboard has no
 conversation row for. `ccc spawn` is the orchestration entry point: it posts
 to `/api/sessions/spawn` scoped to your current directory (override with
 `--cwd`), and `ccc models` lists the live per-engine model catalog so agents
-never have to guess a `--model` id. The installer links it to
+never have to guess a `--model` id. `ccc send` and `ccc ask` message any
+running session — fire-and-forget or blocking for the reply — addressed by
+session id, a unique id prefix, or a unique fragment of the name shown in
+`ccc sessions`. The installer links it to
 `~/.local/bin/ccc`; from a checkout you can also run `./ccc`. With no
 subcommand, `ccc` passes through to `run.sh` (the same launching behaviour
 as the Homebrew `ccc`).

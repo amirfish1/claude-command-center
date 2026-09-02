@@ -1,0 +1,1 @@
+- `ccc send` and `ccc ask`: message a running session straight from the terminal — fire-and-forget (`send`, with `--steer`/`--queue` delivery modes) or block for the reply (`ask`). Targets accept a session id, a unique id prefix, or a unique name fragment from `ccc sessions`. No more hand-rolled `curl` against `/api/inject-input` or going through `wt`.
