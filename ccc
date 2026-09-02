@@ -16,6 +16,13 @@ command, without opening the dashboard:
     ccc models               # every engine's models, efforts, cost
     ccc models --engine claude --json
 
+    ccc send <session> "message"        # fire-and-forget into a session
+    ccc send <session> "…" --steer      # interrupt the current turn with it
+    ccc ask <session> "question"        # send and wait for the reply text
+
+<session> is a session id, a unique id prefix, or a (unique, case-
+insensitive) fragment of the session's display name from `ccc sessions`.
+
 Agents: model ids and effort ladders differ per engine and change over
 time — never guess them. `ccc models` is the live catalog; pass its ids
 to `ccc spawn --model` / `--effort` verbatim.
@@ -35,7 +42,7 @@ import urllib.request
 
 PORT_FILE = os.path.expanduser("~/.claude/command-center/port.txt")
 
-SUBCOMMANDS = ("sessions", "list-sessions", "spawn", "models")
+SUBCOMMANDS = ("sessions", "list-sessions", "spawn", "models", "send", "ask")
 
 _SINCE_RE = re.compile(r"^(\d+)\s*([smhd])$", re.IGNORECASE)
 _SINCE_UNIT_S = {"s": 1, "m": 60, "h": 3600, "d": 86400}
@@ -231,6 +238,139 @@ def cmd_sessions(args):
     print(f"\n{counts} session{'s' if n != 1 else ''}{suffix}")
     if n_helpers and not args.all:
         print(f"({n_helpers} CCC helper session{'s' if n_helpers != 1 else ''} hidden — auto-title bots; --all to show)")
+    return 0
+
+
+def _resolve_target(base, target):
+    """Turn a user-supplied target (session id, unique id prefix, or unique
+    name fragment) into a session id, using the live census. Returns
+    (session_id, error_message) — exactly one is set. An unmatched target
+    passes through untouched so server-side aliases (bridge ULIDs, spawn
+    prefixes) still work."""
+    target = (target or "").strip()
+    try:
+        payload = _get_json(base, "/api/sessions/census")
+        sessions = list(payload.get("sessions") or [])
+    except OSError:
+        return target, None  # census unreachable — let the send itself report
+    ids = [s.get("session_id") or "" for s in sessions]
+    if target in ids:
+        return target, None
+    prefix = [sid for sid in ids if sid and sid.startswith(target)]
+    if len(prefix) == 1:
+        return prefix[0], None
+    needle = target.lower()
+    named = [
+        s for s in sessions
+        if needle and needle in (s.get("name") or "").lower()
+    ]
+    if len(named) == 1:
+        return named[0].get("session_id") or target, None
+    if len(named) > 1:
+        lines = "\n".join(
+            f"  {s.get('session_id')}  {s.get('name')}" for s in named[:8]
+        )
+        return None, (
+            f"ccc: {target!r} matches {len(named)} sessions — be more "
+            f"specific or use the id:\n{lines}"
+        )
+    if len(prefix) > 1:
+        return None, f"ccc: id prefix {target!r} is ambiguous ({len(prefix)} sessions)"
+    return target, None
+
+
+def cmd_send(args):
+    base = _resolve_server(args.server)
+    if not base:
+        print(
+            "ccc: no server found — is CCC running? "
+            f"(looked for --server, $CCC_SERVER, {PORT_FILE})",
+            file=sys.stderr,
+        )
+        return 1
+    text = " ".join(args.text).strip()
+    if not text and not sys.stdin.isatty():
+        text = sys.stdin.read().strip()
+    if not text:
+        print("ccc send: missing message (pass it as an argument or pipe it on stdin)",
+              file=sys.stderr)
+        return 2
+    sid, err = _resolve_target(base, args.target)
+    if err:
+        print(err, file=sys.stderr)
+        return 1
+    payload = {"session_id": sid, "text": text}
+    if args.steer:
+        payload["mode"] = "steer"
+    elif args.queue:
+        payload["mode"] = "queue"
+    try:
+        status, result = _post_json(base, "/api/inject-input", payload)
+    except OSError as e:  # URLError, plus raw TimeoutError from mid-read stalls
+        print(f"ccc: cannot reach CCC at {base} ({e}) — is CCC running?", file=sys.stderr)
+        return 1
+    if args.json:
+        print(json.dumps(result, indent=2))
+        return 0 if result.get("ok") else 1
+    if not result.get("ok"):
+        print(f"ccc: send failed: {result.get('error') or f'HTTP {status}'}", file=sys.stderr)
+        return 1
+    effect = result.get("effect") or result.get("landed") or "delivered"
+    print(f"sent to {sid} ({effect})")
+    return 0
+
+
+def cmd_ask(args):
+    base = _resolve_server(args.server)
+    if not base:
+        print(
+            "ccc: no server found — is CCC running? "
+            f"(looked for --server, $CCC_SERVER, {PORT_FILE})",
+            file=sys.stderr,
+        )
+        return 1
+    text = " ".join(args.text).strip()
+    if not text and not sys.stdin.isatty():
+        text = sys.stdin.read().strip()
+    if not text:
+        print("ccc ask: missing question (pass it as an argument or pipe it on stdin)",
+              file=sys.stderr)
+        return 2
+    sid, err = _resolve_target(base, args.target)
+    if err:
+        print(err, file=sys.stderr)
+        return 1
+    timeout_ms = int(args.timeout * 1000)
+    try:
+        # HTTP timeout outlasts the server-side wait so the server, not the
+        # transport, decides when the ask has timed out.
+        status, result = _post_json(
+            base, "/api/ask",
+            {"session_id": sid, "text": text, "timeout_ms": timeout_ms},
+            timeout=timeout_ms / 1000 + 30,
+        )
+    except OSError as e:  # URLError, plus raw TimeoutError from mid-read stalls
+        print(f"ccc: cannot reach CCC at {base} ({e}) — is CCC running?", file=sys.stderr)
+        return 1
+    if args.json:
+        print(json.dumps(result, indent=2))
+        return 0 if result.get("ok") else 1
+    if not result.get("ok"):
+        err_text = result.get("error") or f"HTTP {status}"
+        print(f"ccc: ask failed: {err_text}", file=sys.stderr)
+        if result.get("partial"):
+            print(f"--- partial reply ---\n{result['partial']}", file=sys.stderr)
+        return 1
+    answer = (result.get("text") or "").strip()
+    if answer:
+        print(answer)
+    else:
+        # ok:true with no text is a real outcome: the session ended its turn
+        # without a message (tool-only turn, or an engine that doesn't reply
+        # through the ask channel).
+        src = result.get("source") or "?"
+        print(f"(session ended its turn with no reply text — source: {src})",
+              file=sys.stderr)
     return 0
 
 
@@ -434,6 +574,38 @@ def main(argv=None):
                         "(orchestration; also becomes its parent)")
     p.add_argument("--json", action="store_true", help="raw spawn result JSON")
     p.set_defaults(func=cmd_spawn)
+
+    p = sub.add_parser(
+        "send",
+        help="send a message into a running session (fire-and-forget)",
+        description="Deliver text to a session via /api/inject-input. The "
+                    "target is a session id, a unique id prefix, or a unique "
+                    "fragment of the display name from `ccc sessions`.",
+    )
+    p.add_argument("target", help="session id, id prefix, or name fragment")
+    p.add_argument("text", nargs="*", help="the message (or pipe it on stdin)")
+    g = p.add_mutually_exclusive_group()
+    g.add_argument("--steer", action="store_true",
+                   help="interrupt the session's current turn with this message")
+    g.add_argument("--queue", action="store_true",
+                   help="queue behind the current turn instead of delivering now")
+    p.add_argument("--json", action="store_true", help="raw inject result JSON")
+    p.set_defaults(func=cmd_send)
+
+    p = sub.add_parser(
+        "ask",
+        help="send a message and wait for the session's reply",
+        description="Synchronous ask via /api/ask: injects the text and blocks "
+                    "until the session's next assistant turn, then prints the "
+                    "reply. ok with empty text means the turn ended silently.",
+    )
+    p.add_argument("target", help="session id, id prefix, or name fragment")
+    p.add_argument("text", nargs="*", help="the question (or pipe it on stdin)")
+    p.add_argument("--timeout", type=float, default=120.0, metavar="SECONDS",
+                   help="how long the server waits for the reply "
+                        "(default 120, server caps at 600)")
+    p.add_argument("--json", action="store_true", help="raw ask result JSON")
+    p.set_defaults(func=cmd_ask)
 
     p = sub.add_parser(
         "models",
