@@ -473,24 +473,31 @@ def get_model_picker_picks() -> list:
             if ts > last_seen.get(key, 0):
                 last_seen[key] = ts
 
-    ranked = sorted(
-        counts.items(), key=lambda x: (x[1], last_seen.get(x[0], 0)), reverse=True
+    if not counts:
+        return _core._mine_real_model_history_last_7_days()[:8]
+
+    # Most recently recorded pick always leads, so a just-selected model is
+    # visible immediately instead of waiting to out-count the habitual picks.
+    most_recent_key = max(last_seen, key=last_seen.get)
+    other_keys = sorted(
+        (k for k in counts if k != most_recent_key),
+        key=lambda k: (counts[k], last_seen.get(k, 0)),
+        reverse=True,
     )
+    ordered_keys = [most_recent_key] + other_keys
+
     picks = [
         {
             "engine": eng,
             "model": mod,
             "effort": eff,
-            "count": cnt,
+            "count": counts[(eng, mod, eff)],
             "last_used": last_seen.get((eng, mod, eff), now),
         }
-        for (eng, mod, eff), cnt in ranked
+        for (eng, mod, eff) in ordered_keys[:8]
     ]
 
-    if not picks:
-        return _core._mine_real_model_history_last_7_days()[:8]
-
-    return picks[:8]
+    return picks
 
 
 

@@ -18257,7 +18257,7 @@
         const retryEngine = card.source === 'interactive' ? 'claude' : card.source;
         _removePendingSpawnCard(retryPid);
         if (retryCwd && typeof setSpawnCwdInputValue === 'function') setSpawnCwdInputValue(retryCwd, { focus: false });
-        if (retryEngine && typeof setSpawnEngine === 'function') setSpawnEngine(retryEngine);
+        if (retryEngine && typeof setSpawnEngine === 'function') setSpawnEngine(retryEngine, { record: false });
         if (retryPrompt && typeof spawnFromInlineInput === 'function') await spawnFromInlineInput(retryPrompt);
         else if (typeof enterNewSessionMode === 'function') enterNewSessionMode(retryPrompt);
       });
@@ -63519,7 +63519,7 @@
       syncNsModelPickerPillsSelection();
     }
   }
-  function setSpawnEngine(v) {
+  function setSpawnEngine(v, opts) {
     v = normalizeSpawnDefaultEngine(v);
     if (!SPAWN_DEFAULT_ENGINES.includes(v)) return;
     spawnDefaultsState.engine = v;
@@ -63537,7 +63537,9 @@
       .forEach(s => { if (s && s.value !== v) s.value = v; });
     syncSpawnEngineDependentUi();
     if (typeof updateInputBar === 'function') updateInputBar();
-    recordSpawnChoice(v, _defaultModelsByEngine[v] || '', $convInputEffortSelect ? $convInputEffortSelect.value : '');
+    if (!opts || opts.record !== false) {
+      recordSpawnChoice(v, _defaultModelsByEngine[v] || '', $convInputEffortSelect ? $convInputEffortSelect.value : '');
+    }
     if (currentConversation === '__new__' && typeof enterNewSessionMode === 'function') {
       enterNewSessionMode();
       // Switching to Claude in the new-session composer should prewarm
@@ -63620,7 +63622,7 @@
           opt.title = reason;
           opt.textContent = d.available ? engine : (engine + ' (unavailable)');
         });
-        if (!d.available && getSpawnEngine() === engine) setSpawnEngine('claude');
+        if (!d.available && getSpawnEngine() === engine) setSpawnEngine('claude', { record: false });
       } catch (_) {}
     }
     await Promise.all([
@@ -74429,7 +74431,7 @@
 
           // Set the engine dropdown and trigger the spawn
           if (typeof setSpawnEngine === 'function') {
-            setSpawnEngine(chosenEngine);
+            setSpawnEngine(chosenEngine, { record: false });
           }
 
           const modal = document.getElementById('onboardingModal');
