@@ -21900,11 +21900,13 @@ body.has-gc-reader .pwa-install-banner {
 .uxq-tl-chip-k { font-weight: 600; opacity: 0.85; }
 .uxq-tl-chip-v { overflow-wrap: anywhere; }
 .uxq-ack-btn {
-  border: 0; background: transparent; color: inherit; opacity: 0.6;
-  cursor: pointer; font-size: 12px; line-height: 1; padding: 0 2px; border-radius: 3px;
+  border: 1px solid rgba(255,255,255,0.15); background: transparent; color: inherit; opacity: 0.75;
+  cursor: pointer; font-size: 11px; line-height: 1.4; padding: 1px 6px; border-radius: 3px;
+  margin-left: 4px; white-space: nowrap;
 }
 .uxq-ack-btn:hover { opacity: 1; background: rgba(255,255,255,0.08); }
 .uxq-ack-btn:disabled { opacity: 0.35; cursor: default; }
+.uxq-ack-btn.is-acked-btn { border-color: transparent; }
 /* Answer section */
 .uxq-td-answer-sec { border: 1px solid rgba(245,158,11,0.3); border-radius: 8px; padding: 12px; background: rgba(245,158,11,0.05); }
 .uxq-answer-row { display: flex; gap: 6px; margin: 3px 0 2px; }

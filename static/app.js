@@ -43750,9 +43750,9 @@
       const chips = list.map((val, idx) => {
         const acked = !!ref && _q_isAcked(res, field, idx);
         const btn = ref
-          ? '<button type="button" class="uxq-ack-btn" title="' + (acked ? 'Un-acknowledge' : 'Acknowledge (keeps the record)') + '" '
+          ? '<button type="button" class="uxq-ack-btn' + (acked ? ' is-acked-btn' : '') + '" title="' + (acked ? 'Un-acknowledge' : 'Acknowledge (keeps the record)') + '" '
             + 'data-ack-ref="' + escapeAttr(ref) + '" data-ack-field="' + escapeAttr(field) + '" data-ack-index="' + idx + '" data-ack-acked="' + (acked ? 'true' : 'false') + '">'
-            + (acked ? '↺' : '✓') + '</button>'
+            + (acked ? '↺ Acked' : '✓ Ack') + '</button>'
           : '';
         return '<span class="uxq-tl-chip ' + cls + (acked ? ' is-acked' : '') + '">'
           + '<span class="uxq-tl-chip-k">' + escapeHtml(label) + '</span> '
