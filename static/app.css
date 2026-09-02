@@ -22228,15 +22228,6 @@ body.has-gc-reader .pwa-install-banner {
   padding: 1px 7px; border-radius: 999px;
   background: rgba(63,185,80,0.15); color: var(--green, #3fb950);
 }
-.fq-status-worker {
-  display: inline-flex; align-items: center; gap: 5px;
-  color: var(--text);
-  flex-basis: 100%;
-}
-.fq-status-worker.is-empty { color: var(--text-muted); }
-.fq-status-worker.is-clickable { cursor: pointer; }
-.fq-status-worker.is-clickable:hover { color: var(--accent, #4a9eff); }
-.fq-status-worker b { font-weight: 500; color: var(--text-muted); margin-left: 2px; }
 .fq-status-learnings-toggle, .fq-status-workers-toggle, .fq-status-log-toggle {
   flex-shrink: 0; cursor: pointer;
   font-size: 10.5px; font-weight: 500; letter-spacing: 0.02em;
@@ -22248,29 +22239,6 @@ body.has-gc-reader .pwa-install-banner {
 }
 .fq-status-learnings-toggle:hover, .fq-status-workers-toggle:hover, .fq-status-log-toggle:hover {
   background: rgba(139,148,158,0.18); border-color: rgba(139,148,158,0.30);
-}
-.fq-status-spin {
-  width: 6px; height: 6px; border-radius: 50%;
-  background: var(--accent); flex: 0 0 auto;
-  animation: fq-status-pulse 1s ease-in-out infinite;
-}
-@keyframes fq-status-pulse {
-  0%, 100% { opacity: 0.4; transform: scale(1); }
-  50% { opacity: 1; transform: scale(1.35); }
-}
-/* Idle (nothing currently claimed): a slow, dim green breathe reads as
-   resting rather than working -- the fast blue pulse above is reserved for
-   a worker actually attached to a ticket right now. */
-.fq-status-spin.is-idle {
-  background: var(--green, #3fb950);
-  animation: fq-status-pulse-sleepy 3.6s ease-in-out infinite;
-}
-@keyframes fq-status-pulse-sleepy {
-  0%, 100% { opacity: 0.3; transform: scale(0.85); }
-  50% { opacity: 0.8; transform: scale(1.05); }
-}
-@media (prefers-reduced-motion: reduce) {
-  .fq-status-spin, .fq-status-spin.is-idle { animation: none; }
 }
 .fq-health-add {
   width: 100%; border: 0; border-top: 1px solid rgba(139,148,158,0.12);
