@@ -21812,6 +21812,15 @@ body.has-gc-reader .pwa-install-banner {
 .uxq-bp-p1       { color: #fb923c; border-color: rgba(251,146,60,0.35); }
 .uxq-bp-p2       { color: #facc15; border-color: rgba(250,204,21,0.35); }
 .uxq-bp-p3       { color: var(--text-muted); border-color: var(--border); }
+.uxq-td-badge-jump { cursor: pointer; }
+.uxq-td-badge-jump:hover, .uxq-td-badge-jump:focus-visible {
+  background: rgba(139,148,158,0.16); outline: none;
+}
+@keyframes uxqJumpFlash {
+  0%, 100% { box-shadow: none; }
+  30% { box-shadow: 0 0 0 2px var(--accent, #58a6ff); }
+}
+.uxq-jump-flash { animation: uxqJumpFlash 0.9s ease; border-radius: 6px; }
 .uxq-td-x {
   background: none; border: none; cursor: pointer;
   color: var(--text-muted); font-size: 20px; line-height: 1;

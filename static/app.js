@@ -43863,13 +43863,23 @@
            + '<select class="uxq-td-ps" data-field="' + escapeAttr(field) + '">' + opts + '</select></div>';
     }
 
-    // Status / priority / type badges
+    // Status / priority / type badges — clickable, jumping to the section of
+    // the ticket that explains/acts on that badge (CCC-1027).
     const statusClass = { open: 'uxq-bs-open', in_progress: 'uxq-bs-wip', blocked: 'uxq-bs-blocked', closed: 'uxq-bs-closed' }[status] || 'uxq-bs-open';
     const priorityClass = { p0: 'uxq-bp-p0', p1: 'uxq-bp-p1', p2: 'uxq-bp-p2', p3: 'uxq-bp-p3' }[item.priority] || '';
-    const topBadges = '<span class="uxq-td-badge ' + statusClass + '">' + escapeHtml(status) + '</span>'
-      + (item.lane ? '<span class="uxq-td-badge uxq-bs-lane">' + escapeHtml(item.lane) + '</span>' : '')
-      + (item.priority ? '<span class="uxq-td-badge ' + priorityClass + '">' + escapeHtml(item.priority) + '</span>' : '')
-      + (item.type ? '<span class="uxq-td-badge uxq-bs-type">' + escapeHtml(item.type) + '</span>' : '');
+    const statusJumpTarget = status === 'blocked'
+      ? '.uxq-td-gate-sec, .uxq-td-answer-sec'
+      : status === 'closed'
+        ? '.uxq-td-reopen-sec'
+        : '.uxq-timeline';
+    function _jumpBadge(cls, label, target) {
+      return '<span class="uxq-td-badge uxq-td-badge-jump ' + cls + '" data-jump-target="' + escapeAttr(target)
+        + '" role="button" tabindex="0" title="Jump to section">' + escapeHtml(label) + '</span>';
+    }
+    const topBadges = _jumpBadge(statusClass, status, statusJumpTarget)
+      + (item.lane ? _jumpBadge('uxq-bs-lane', item.lane, '.uxq-td-pg-origin') : '')
+      + (item.priority ? _jumpBadge(priorityClass, item.priority, '.uxq-td-pg-properties') : '')
+      + (item.type ? _jumpBadge('uxq-bs-type', item.type, '.uxq-td-pg-properties') : '');
 
     // Images: screenshot_path + PNGs/images extracted from note/text
     const imagePaths = [];
@@ -44054,7 +44064,7 @@
 
     // Sidebar: editable selects + info
     const sideHtml =
-      '<div class="uxq-td-pg">'
+      '<div class="uxq-td-pg uxq-td-pg-properties">'
       + '<div class="uxq-td-pg-label">Properties</div>'
       + _propSel('Priority', 'priority',   [['','-'],['p0','p0 - urgent'],['p1','p1'],['p2','p2'],['p3','p3']], item.priority || '')
       + _propSel('Type', 'type',           [['','-'],['feature','feature'],['bug','bug']], item.type || '')
@@ -44102,7 +44112,7 @@
       + (item.claimed_at ? _propRow('Claimed', '<span class="uxq-td-pr-time" title="' + escapeAttr(item.claimed_at) + '">' + escapeHtml(_uxqRelTime(item.claimed_at)) + '</span>') : '')
       + (item.closed_at  ? _propRow('Closed',  '<span class="uxq-td-pr-time" title="' + escapeAttr(item.closed_at)  + '">' + escapeHtml(_uxqRelTime(item.closed_at))  + '</span>') : '')
       + '</div>'
-      + '<div class="uxq-td-pg">'
+      + '<div class="uxq-td-pg uxq-td-pg-origin">'
       + '<div class="uxq-td-pg-label">Origin</div>'
       + (item.project  ? _propRow('Project', escapeHtml(item.project)) : '')
       + (item.project  ? _propRow('Learnings', '<button type="button" class="uxq-td-learnings-btn" data-queue="' + escapeAttr(item.project) + '">edit learning file ↗</button>') : '')
@@ -44234,6 +44244,24 @@
     modal.addEventListener('click', (e) => { if (e.target === modal) close(); });
 
     modal.querySelectorAll('[data-ux-close]').forEach(btn => btn.addEventListener('click', close));
+
+    // Top badges (status/lane/priority/type) jump to the section that
+    // explains or acts on that badge, instead of sitting there inert
+    // (CCC-1027).
+    modal.querySelectorAll('.uxq-td-badge-jump').forEach(badge => {
+      const jump = () => {
+        const sel = badge.getAttribute('data-jump-target');
+        const target = sel ? modal.querySelector(sel) : null;
+        if (!target) return;
+        target.scrollIntoView({ behavior: 'smooth', block: 'start' });
+        target.classList.add('uxq-jump-flash');
+        setTimeout(() => target.classList.remove('uxq-jump-flash'), 900);
+      };
+      badge.addEventListener('click', jump);
+      badge.addEventListener('keydown', (e) => {
+        if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); jump(); }
+      });
+    });
 
     const showEditsInput = modal.querySelector('.uxq-show-edits-input');
     if (showEditsInput) {
