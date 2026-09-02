@@ -43675,6 +43675,45 @@
     while ((m = re.exec(text)) !== null) found.push(m[1]);
     return [...new Set(found)];
   }
+  let _uxqNoteModalEl = null;
+  let _uxqNoteModalKeydownHandler = null;
+  function _uxqCloseNoteModal() {
+    if (!_uxqNoteModalEl) return;
+    _uxqNoteModalEl.remove();
+    _uxqNoteModalEl = null;
+    if (_uxqNoteModalKeydownHandler) {
+      document.removeEventListener('keydown', _uxqNoteModalKeydownHandler);
+      _uxqNoteModalKeydownHandler = null;
+    }
+  }
+  // Focused, larger-font readout for a single caveat/follow-up/unresolved
+  // note — the inline chip crams long prose into one wrapped line, which is
+  // fine for a short note but unreadable for a multi-sentence one (CCC-1023).
+  function _uxqOpenNoteModal(label, text) {
+    _uxqCloseNoteModal();
+    const overlay = document.createElement('div');
+    // Opened from inside the ticket-detail modal (.uxq-td-overlay, z-index
+    // 100000) — needs a higher stacking context or it renders invisibly
+    // behind it (CCC-1023).
+    overlay.className = 'settings-modal-overlay uxq-note-overlay open';
+    const body = window.CCCTicketProse ? window.CCCTicketProse.render(text) : ('<p class="tp-p">' + escapeHtml(String(text)) + '</p>');
+    overlay.innerHTML = '<div class="settings-modal-backdrop"></div>'
+      + '<div class="uxq-note-modal" role="dialog" aria-modal="true" aria-label="' + escapeAttr(label) + '">'
+      +   '<div class="uxq-note-modal-header">'
+      +     '<div class="uxq-note-modal-title">' + escapeHtml(label) + '</div>'
+      +     '<button type="button" class="uxq-note-modal-close" title="Close" aria-label="Close">&times;</button>'
+      +   '</div>'
+      +   '<div class="uxq-note-modal-body">' + body + '</div>'
+      + '</div>';
+    document.body.appendChild(overlay);
+    _uxqNoteModalEl = overlay;
+    const closeIt = () => _uxqCloseNoteModal();
+    overlay.querySelector('.settings-modal-backdrop').addEventListener('click', closeIt);
+    overlay.querySelector('.uxq-note-modal-close').addEventListener('click', closeIt);
+    _uxqNoteModalKeydownHandler = (e) => { if (e.key === 'Escape') closeIt(); };
+    document.addEventListener('keydown', _uxqNoteModalKeydownHandler);
+  }
+
   function _uxqOpenItemModal(item) {
     const existing = document.getElementById('uxqItemModal');
     if (existing) existing.remove();
@@ -43827,9 +43866,15 @@
             + 'data-ack-ref="' + escapeAttr(ref) + '" data-ack-field="' + escapeAttr(field) + '" data-ack-index="' + idx + '" data-ack-acked="' + (acked ? 'true' : 'false') + '">'
             + (acked ? '↺ Acked' : '✓ Ack') + '</button>'
           : '';
+        // Long notes (e.g. a multi-sentence unresolved writeup) are unreadable
+        // crammed into an inline chip — expand into a focused, larger-font
+        // modal instead of forcing the user to squint at wrapped chip text
+        // (CCC-1023).
+        const expandBtn = '<button type="button" class="uxq-note-expand-btn" title="Expand" '
+          + 'data-expand-label="' + escapeAttr(label) + '" data-expand-text="' + escapeAttr(String(val)) + '">+</button>';
         return '<span class="uxq-tl-chip ' + cls + (acked ? ' is-acked' : '') + '">'
           + '<span class="uxq-tl-chip-k">' + escapeHtml(label) + '</span> '
-          + '<span class="uxq-tl-chip-v">' + escapeHtml(String(val)) + '</span>' + btn + '</span>';
+          + '<span class="uxq-tl-chip-v">' + escapeHtml(String(val)) + '</span>' + expandBtn + btn + '</span>';
       });
       return '<div class="uxq-tl-res-row uxq-tl-res-' + cls + '"><div class="uxq-tl-chips">' + chips.join('') + '</div></div>';
     }
@@ -44125,6 +44170,12 @@
         } finally {
           btn.disabled = false;
         }
+      });
+    });
+
+    modal.querySelectorAll('.uxq-note-expand-btn').forEach(btn => {
+      btn.addEventListener('click', () => {
+        _uxqOpenNoteModal(btn.getAttribute('data-expand-label') || 'Note', btn.getAttribute('data-expand-text') || '');
       });
     });
 
