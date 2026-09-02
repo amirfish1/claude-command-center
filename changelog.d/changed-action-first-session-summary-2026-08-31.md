@@ -1,1 +1,0 @@
-- Transcript session summaries now lead with a compact **Needs you** action and brief **Why**, falling back to **Done** when no user action remains.

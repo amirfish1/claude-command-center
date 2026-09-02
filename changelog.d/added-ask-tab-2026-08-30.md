@@ -1,1 +1,0 @@
-- Ask tab on the right status rail: ask questions like "where did I work on X?" in plain language; a cheap one-shot LLM call (Antigravity `agy` or `claude -p haiku`, auto-detected) answers over your recent sessions with clickable session chips, follow-up context, and a confirm-to-spawn "continue this session" action (`POST /api/assistant/ask`).

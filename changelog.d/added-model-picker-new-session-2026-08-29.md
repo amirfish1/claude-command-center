@@ -1,1 +1,0 @@
-- Added a quick model picker with rounded pills directly above the bottom composer in new session mode, which remembers and surfaces the top 7-8 combinations of engine, model, and reasoning effort across the last 30 days persisted on disk.

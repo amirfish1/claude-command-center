@@ -1,1 +1,0 @@
-- Ask-assistant sessions now appear in Other automatically instead of Coding.

@@ -1,1 +1,0 @@
-Fixed the hourly Anthropic model-catalog refresh silently failing: Anthropic retitled the overview table from `### Latest models comparison` to `## Compare models` and turned row labels into markdown links, so no new models (e.g. Fable 5.1) reached the cache since. The parser now accepts both headings and strips link syntax from row labels.

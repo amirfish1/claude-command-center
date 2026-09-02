@@ -1,1 +1,0 @@
-changed: the by-project repo/folder header label is now a real tinted chip (was flat text) and stays full-brightness/bold even in "no colors" mode, so section headers read clearly instead of blending into the rows below them

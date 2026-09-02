@@ -20,6 +20,80 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Changed
 - `watchtower.queue` is now a hard, unconditional dependency of CCC's queue system (ticket lifecycle: claim/close/edit/answer/comment/reopen). Removed the standalone `ux_fixes_queue.py` stdlib fallback that let CCC's queue features work without WatchTower installed — it had gone stale since WatchTower's own storage migrated from JSON to SQLite and was never updated, a latent risk of silent data divergence if watchtower ever became unimportable. If `watchtower.queue` can't be imported, CCC now fails loudly at startup with a clear error instead of silently falling back to a frozen JSON store.
 
+## [5.30.0] - 2026-09-02
+
+### Added
+- Ask-assistant sessions now appear in Other automatically instead of Coding.
+- Ask tab on the right status rail: ask questions like "where did I work on X?" in plain language; a cheap one-shot LLM call (Antigravity `agy` or `claude -p haiku`, auto-detected) answers over your recent sessions with clickable session chips, follow-up context, and a confirm-to-spawn "continue this session" action (`POST /api/assistant/ask`).
+- `ccc send` and `ccc ask`: message a running session straight from the terminal — fire-and-forget (`send`, with `--steer`/`--queue` delivery modes) or block for the reply (`ask`). Targets accept a session id, a unique id prefix, or a unique name fragment from `ccc sessions`. No more hand-rolled `curl` against `/api/inject-input` or going through `wt`.
+- Added a `ccc` CLI (`ccc sessions` / `ccc list-sessions`, with `--since 5h` and `--json`) backed by a new `GET /api/sessions/census` endpoint that joins liveness, identity, and lineage server-side — one command now shows every live session with engine, model, effort, full session id, and repo path, including the ones with no conversation row that the dashboard cannot render. `--since` also merges recently-ended sessions active within the window (`state=ended`), and a cold server kicks the archive cache's background refresh so identity fills in without opening the dashboard first. `--sort recency|status` orders the table (status = waiting, working, idle, ended, recency within each), the default flat view marks children with `↳` (`--tree` nests them instead), auto-title helper bots are hidden unless `--all`, sessions too new for the archive get identity probed straight from their transcript, and ended rows carry a `!unanswered` flag when the last word was yours (a session that stopped responding to injects).
+- Added `ccc spawn` and `ccc models` to the `ccc` CLI: `ccc spawn "<prompt>" [--engine …] [--model …] [--effort …] [--name …] [--cwd …] [--worktree] [--report-to <sid>]` posts to `/api/sessions/spawn` scoped to the caller's current directory (or piped stdin prompt), so agents can start orchestrated sessions without hand-assembling curl calls; `ccc models` renders the server-owned catalog from `/api/engines/models` as a table of engine, model id, cost, effort ladder, and availability (with `--engine` filter and `--json`) so `--model` ids are discovered, never guessed.
+- Added stuck detection to `ccc sessions` for ACP-harness sessions (kimi/grok): a turn that goes silent past the stale-tool threshold (15 min, `CCC_STALE_TOOL_SEC`) now shows `!stuck <age> silent`, matching the dashboard's Stuck pill contract, and working rows show how long the current turn has been running (e.g. `Thinking 5m`) so a session grinding forever no longer looks identical to a healthy one. Both fields are also in the census JSON as `stuck` / `stuck_age_s` / `turn_age_s`.
+- `ccc models` rows now lead with the engine name and show a `released` date derived from dated model ids (`-2024-05-13` / `-20240513` suffixes; no catalog source publishes release dates, so undated ids stay blank).
+- CCC now publishes its own Claude Code peer identity (a bound socket and registry row) when `CCC_MESSAGING_BACKEND=uds` is set: a Claude receiver can reply straight back to CCC, and dispatched Claude children report task completion over native peer messaging instead of a curl footer. Still opt-in; falls back to the previous curl-based report path automatically whenever CCC's own peer listener isn't running.
+- Claude model catalog now includes Fable 5.1 (`fable-5-1`); the picker shows it as the newest Fable and hides plain `fable-5` via the existing latest-per-family pruning.
+- Added an experimental kap-server transport for Kimi (`ccc_server/kap.py`),
+behind `CCC_KIMI_KAP=1` and off by default. CCC drives Kimi over ACP, which has
+no steer method — and the Kimi daemon that does cannot steer a turn an ACP
+subprocess owns, because the session store is shared but the live turn belongs
+to whichever process holds the engine core. Running the session on the daemon
+is therefore the only route to steering it. This lands the transport: daemon
+adoption from Kimi's instance registry, a REST client, a stdlib WebSocket
+client, and a mapper that reduces Kimi's transcript-op protocol into the same
+conversation events the ACP path emits, so the frontend is unchanged. The
+OpenAPI and AsyncAPI contracts are pinned under `docs/kimi-kap/` so a Kimi
+upgrade shows up as a reviewable diff.
+- Kimi Code sessions can now be exported as privacy-filtered Total Recall knowledge documents, with an optional scheduler for keeping them current.
+- Added an attach button to the session composer so phones can attach files and photos (Photo Library, Take Photo, or browse Files/PDF/logs/zips) — previously only desktop drag-drop and image-paste worked.
+- **Pull to refresh** on phone Coding and Workers. Pull the session list down
+and release to reload it (same path as the desktop refresh control).
+- **Sessions vs Queues bottom nav** on phone-sized Advanced mode. Reuses Simple
+mode's tab bar chrome so queues are reachable from the list without opening a
+conversation first.
+- Added a quick model picker with rounded pills directly above the bottom composer in new session mode, which remembers and surfaces the top 7-8 combinations of engine, model, and reasoning effort across the last 30 days persisted on disk.
+- Transcript reader now shows messages that arrived from other Claude Code sessions (SendMessage / peer sockets) as a Peer bubble with the sender's name, including ones absorbed mid-turn, and shows a muted notice when Claude held a peer message instead of delivering it.
+- Added **Processes** tab to the System Status modal (`/api/system/processes`) with killness risk scoring (0-10), process audit reasons (orphans, deleted CWD, unlinked FIFOs, stuck CLI loops), filtering, search, and one-click single/batch kill controls.
+- WatchTower tickets are now rendered as readable prose in both the dashboard modal and the q2 board via a shared renderer (`ticket-prose.js`): meta chip strip, headings, lists, code fences, markdown tables, blockquotes, and inline highlighting for quotes, event tokens, timestamps, and conversation keys. GitHub-synced tickets use the human issue title and their full issue body. A new generic `/api/queue/context` endpoint (configured per-queue in `~/.claude/command-center/queue-context.json`) resolves conversation keys found in a ticket into an inline chat-bubble transcript preview.
+- Agent-to-agent relays (ask, group-chat nudges, report-backs) can ride Claude Code's native peer sockets instead of terminal keystrokes or FIFOs. Opt in with `CCC_MESSAGING_BACKEND=uds`; delivery is confirmed against the target transcript and falls back to the previous transports otherwise. CCC-spawned Claude sessions now start with `crossSessionInbound: accept` so peer messages reach headless workers.
+
+### Changed
+- Transcript session summaries now lead with a compact **Needs you** action and brief **Why**, falling back to **Done** when no user action remains.
+- Changed the `ccc sessions` table column order to last-activity age, session name, status, model, session id, engine/effort (now one combined column), then repo path with the home-directory prefix (`/Users/<you>/`) dropped — the identifying columns you scan for are up front, and rows are noticeably shorter.
+- Continued sessions render as one row: the earlier session folds into its successor, the successor's always-visible "⤴ from:" chip opens it, lanes the earlier session spawned follow the successor, and moving the successor to Trash takes the earlier session and its lanes along. The "Hide earlier continued sessions" setting is gone; folding is the default now.
+- changed: the by-project repo/folder header label is now a real tinted chip (was flat text) and stays full-brightness/bold even in "no colors" mode, so section headers read clearly instead of blending into the rows below them
+- **Phone Advanced** bottom bar is now Coding / Workers / Queues / q2, and the
+in-list tab bar is hidden. Queues is the sidebar ticket list; q2 is the board.
+- **Phone Advanced** session list chrome is tighter: the blank band under search is
+gone, and Expand all / window / engine / grouping wrap as one chip row.
+- **Sessions vs Queues** on a phone now opens the q2 board (same destination as
+the Applications rail) instead of the in-sidebar queue panel. A cold open
+stays on the session list instead of sliding the last chat over the nav.
+- Cross-session (peer) messages in the conversation view now render with a green background, distinguishing them from regular chat turns.
+- Native UDS peer messaging (`CCC_MESSAGING_BACKEND=uds`) is now on by default; set it to any non-"uds" value (e.g. `legacy`) to opt back out.
+
+### Fixed
+- Fixed ACP-harness sessions (kimi, and grok when driven by the harness rather than a `grok --resume` TUI) being invisible to live session discovery: they own no per-session OS process, so they never appeared in `ccc sessions` while alive — kimi sessions never appeared at all, and grok rows vanished the moment a TUI-driven turn ended even though the session was still attached and accepting input. Live discovery now unions attached, recently-active ACP sessions, and their rows carry real state (working/idle/waiting-on-approval), age, and pending tool from the wire tail. Also fixed Codex desktop pool threads rendering as all-`?` rows — live-row identity is now filled from Codex's thread index when the spawn registry and archive have nothing.
+- Fixed the hourly Anthropic model-catalog refresh silently failing: Anthropic retitled the overview table from `### Latest models comparison` to `## Compare models` and turned row labels into markdown links, so no new models (e.g. Fable 5.1) reached the cache since. The parser now accepts both headings and strips link syntax from row labels.
+- Fixed `ccc models` (and `ccc sessions` / `ccc spawn`) crashing with a raw `TimeoutError` traceback when the server answers slowly: the catalog call now waits up to 30s, and mid-response stalls print the usual "cannot reach CCC" error instead of a traceback.
+- Fixed: Codex sessions using the newer `item_completed` rollout schema (e.g. multi-agent mode) showed an empty transcript — only tool-call groups and status rows, no user/assistant text. The parser now reads `UserMessage`/`AgentMessage` items from that schema.
+- Prevent queued Codex messages from being delivered again after they are steered into an active turn.
+- Prevent continuation sessions from being falsely classified as WatchTower workers or hidden from the Coding tab.
+- Identical text is no longer delivered to the same session twice: `/api/inject-input` now suppresses a re-send of text that already reached that session within the last 5 minutes (`CCC_INJECT_DEDUPE_WINDOW_S`, 0 disables) and answers `deduped: true`. WatchTower's delegate adapter gives CCC 5 seconds to respond, but a Codex steer of a long comment takes longer — so `wt` recorded the send as failed, parked it in its outbox and retried with backoff while CCC delivered every attempt, landing one gate comment in a Codex session five times over nine minutes and burning a full turn each time. Injects that carry an `idempotency_key` (every dashboard composer send), terminal-queue drains, and injects that pass `allow_duplicate` are exempt, and only text that actually reached the session is remembered, so a genuine retry after a genuine failure still lands.
+- fixed: ephemeral verification instances (`CCC_EPHEMERAL=1`) now skip writing to `registry.json`, preventing abandoned verification instances from blocking primary server startup with duplicate-repo fatal errors
+- Show actionable Grok ACP permission choices in the live session banner instead of the non-functional Claude “Resume to answer” hint.
+- **Phone session list** no longer pans sideways (UI drift), and the filter chip
+row stays frozen under search while the list scrolls.
+- Fixed attachment uploads being sent as an unfinished `[uploading …]` placeholder when a message was submitted before the file upload completed.
+- Stop the inline "Needs you" stale-tool age from forcing a full conversation-list rebuild every minute.
+- Fix queue trigger overflow in narrow rails: long queue names no longer push the field row past the panel edge, eliminating the overlap with rows below. Trigger now truncates with ellipsis and the field row wraps in mobile mode so the filter gets its own line.
+- Mobile queue tab: the WORKING NOW strip and the compact per-queue status strip no longer duplicate the same worker/ticket rows, leaving room to actually see the ticket list (CCC-1019).
+- Steering a queued message is now immediate and correct on Kimi/Grok. A successful ACP steer withdraws its queued copy instead of reporting "Queued" over a message it had just sent (which also left the queue pump to deliver the same text a second time); the card moves into the conversation as an italic "steering…" row the moment you click, rather than after the cancel-and-resend round trip; a queued send drops straight into the composer tray instead of visibly hopping down from the conversation a poll cycle later; and a new "Steer all N" sends every queued message as a single turn.
+- **Sessions ↔ Queues** no longer reloads the session list. The rail and the
+phone tab bar host q2 in an overlay so the conversation list stays mounted.
+- Fix a layout breakage in the Sessions & Spawning settings section caused by a stray closing div.
+- The Kimi ACP / Codex app-server transport pill is now reachable on a phone. It only ever rendered into the per-pane header and the status rail, and the per-pane header is hidden at phone width once a conversation has been used — so the pill, and with it the only entry point to bridge recovery, was unreachable on mobile and a stuck bridge could not be recovered without a desktop. Also fixes a steered queued message jumping into the conversation and then bouncing straight back above the composer: the durable queue entry is only withdrawn when the steer POST returns, and any refresh in that window re-collected the message as a fresh queued candidate.
+- Worker auto-restart-on-upgrade now detects code changes confined to a `ccc_server/*.py` module, not just `server.py` itself — previously the staleness check only hashed `server.py`, so it could miss real code changes and leave the worker running stale logic after an upgrade.
+
 ## [5.29.0] - 2026-08-28
 
 This is the polish-and-visibility follow-up to v5.28.0: better model
@@ -2866,7 +2940,8 @@ Initial public release.
 - `/api/repo/switch` validates targets against the picker allow-list.
 - See [`SECURITY.md`](SECURITY.md) for the full threat model.
 
-[Unreleased]: https://github.com/amirfish1/claude-command-center/compare/v5.29.0...HEAD
+[Unreleased]: https://github.com/amirfish1/claude-command-center/compare/v5.30.0...HEAD
+[5.30.0]: https://github.com/amirfish1/claude-command-center/releases/tag/v5.30.0
 [5.29.0]: https://github.com/amirfish1/claude-command-center/releases/tag/v5.29.0
 [5.28.0]: https://github.com/amirfish1/claude-command-center/releases/tag/v5.28.0
 [5.27.3]: https://github.com/amirfish1/claude-command-center/releases/tag/v5.27.3

@@ -1,1 +1,0 @@
-Fixed: Codex sessions using the newer `item_completed` rollout schema (e.g. multi-agent mode) showed an empty transcript — only tool-call groups and status rows, no user/assistant text. The parser now reads `UserMessage`/`AgentMessage` items from that schema.

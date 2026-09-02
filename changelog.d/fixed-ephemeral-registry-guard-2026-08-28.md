@@ -1,1 +1,0 @@
-fixed: ephemeral verification instances (`CCC_EPHEMERAL=1`) now skip writing to `registry.json`, preventing abandoned verification instances from blocking primary server startup with duplicate-repo fatal errors

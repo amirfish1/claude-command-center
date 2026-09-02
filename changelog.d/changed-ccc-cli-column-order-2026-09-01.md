@@ -1,1 +1,0 @@
-- Changed the `ccc sessions` table column order to last-activity age, session name, status, model, session id, engine/effort (now one combined column), then repo path with the home-directory prefix (`/Users/<you>/`) dropped — the identifying columns you scan for are up front, and rows are noticeably shorter.
