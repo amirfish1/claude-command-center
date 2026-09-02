@@ -22247,6 +22247,31 @@ body.has-gc-reader .pwa-install-banner {
 .fq-status-learnings-toggle:hover, .fq-status-workers-toggle:hover, .fq-status-log-toggle:hover {
   background: rgba(139,148,158,0.18); border-color: rgba(139,148,158,0.30);
 }
+.fq-status-synced { flex-shrink: 0; color: var(--faint, var(--text-muted)); opacity: 0.75; white-space: nowrap; }
+.fq-status-refresh-toggle {
+  flex-shrink: 0; cursor: pointer;
+  font-size: 12px; line-height: 1; padding: 1px 6px; border-radius: 999px;
+  background: rgba(139,148,158,0.10); color: var(--text-muted);
+  border: 1px solid rgba(139,148,158,0.18);
+  transition: background 0.12s, border-color 0.12s, transform 0.12s;
+}
+.fq-status-refresh-toggle:hover:not(:disabled) {
+  background: rgba(139,148,158,0.18); border-color: rgba(139,148,158,0.30);
+  color: var(--text);
+}
+.fq-status-refresh-toggle:disabled { opacity: 0.4; cursor: not-allowed; }
+.fq-status-refresh-toggle[aria-busy="true"] { animation: fq-status-refresh-spin 0.8s linear infinite; }
+@keyframes fq-status-refresh-spin { to { transform: rotate(360deg); } }
+/* Non-blocking degraded-sync banner (GitHub-backed queues only): the
+   GraphQL quota ran out, the panel is showing the last snapshot it had. */
+.fq-status-sync-notice {
+  flex-basis: 100%; order: -1;
+  font-size: 11px; color: var(--yellow, #d29922);
+  background: rgba(210,153,34,0.12);
+  border: 1px solid rgba(210,153,34,0.28);
+  border-radius: 6px;
+  padding: 4px 8px;
+}
 .fq-health-add {
   width: 100%; border: 0; border-top: 1px solid rgba(139,148,158,0.12);
   padding: 7px 10px; background: transparent; color: var(--text-muted);

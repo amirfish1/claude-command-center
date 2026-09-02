@@ -23013,12 +23013,23 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
             qs = urllib.parse.parse_qs(parsed.query)
             status_filter = (qs.get("status", [""])[0] or "").strip() or None
             lane_filter = (qs.get("lane", [""])[0] or "").strip() or None
+            # ?fresh=1 is the queue panel's manual Refresh button: bypass the
+            # TTL memo for a synchronous rebuild. Ignored while GitHub sync is
+            # rate-limited so a stale client can't be used to hammer the API
+            # the frontend button is already supposed to disable for.
+            fresh = (qs.get("fresh", [""])[0] or "").strip() in ("1", "true", "yes")
+            if fresh and _github_sync_status().get("rate_limited"):
+                fresh = False
             # Memoized a few seconds per (status, lane): the queue board polls
             # this per open tab, and list_items() can shell out to `gh issue
             # list` for GitHub-backed queues on a cold cache.
             try:
-                items = _ux_fixes_list_items_cached(status_filter, lane_filter)
-                self.send_json({"ok": True, "items": items, "count": len(items)})
+                items = _ux_fixes_list_items_cached(status_filter, lane_filter, fresh=fresh)
+                synced_at = _ux_fixes_list_synced_at(status_filter, lane_filter)
+                self.send_json({
+                    "ok": True, "items": items, "count": len(items),
+                    "synced_at": synced_at,
+                })
             except Exception as e:
                 self.send_json({"ok": False, "error": str(e)}, 500)
         elif path == "/api/queue/learnings":

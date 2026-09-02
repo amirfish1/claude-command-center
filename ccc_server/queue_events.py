@@ -488,6 +488,8 @@ def compute_queues_health(health=None, wt_workers=None, items=None):
     cfg_repo = {}
     cfg_claim = {}
     cfg_workers = {}
+    cfg_backend = {}
+    cfg_github_repo = {}
     cfg_names = set()
     try:
         for name, conf in (_core._wt_read_config() or {}).items():
@@ -503,11 +505,15 @@ def compute_queues_health(health=None, wt_workers=None, items=None):
                 cfg_workers[qn] = max(1, int((conf or {}).get("desired_workers", 1) or 1))
             except (TypeError, ValueError):
                 cfg_workers[qn] = 1
+            cfg_backend[qn] = str((conf or {}).get("backend") or "").strip()
+            cfg_github_repo[qn] = str((conf or {}).get("github_repo") or "").strip()
     except Exception:
         cfg_drain = {}
         cfg_repo = {}
         cfg_claim = {}
         cfg_workers = {}
+        cfg_backend = {}
+        cfg_github_repo = {}
         cfg_names = set()
 
     health_by_q = {_norm(r.get("project")): r for r in (health or [])}
@@ -647,6 +653,8 @@ def compute_queues_health(health=None, wt_workers=None, items=None):
             "repo_path": cfg_repo.get(q, ""),
             "claim_types": cfg_claim.get(q, []),
             "desired_workers": cfg_workers.get(q, 1),
+            "backend": cfg_backend.get(q, ""),
+            "github_repo": cfg_github_repo.get(q, ""),
             "configured": q in cfg_names,
             "last_activity_seconds": (
                 int(time.time() - last_activity_q[q]) if q in last_activity_q else None
@@ -676,11 +684,25 @@ def _ux_fixes_list_refresh(status_filter, lane_filter):
             _ux_fixes_list_refreshing.discard(key)
 
 
-def _ux_fixes_list_items_cached(status_filter=None, lane_filter=None):
+def _ux_fixes_list_items_cached(status_filter=None, lane_filter=None, fresh=False):
     """TTL memo for /api/ux-fixes/list, stale-while-revalidate: past the TTL
     the last copy is served immediately and one background thread rebuilds —
-    GitHub-backed queue merges (`gh issue list`) never block a request."""
+    GitHub-backed queue merges (`gh issue list`) never block a request.
+
+    fresh=True bypasses the memo for a synchronous rebuild (the queue
+    panel's manual Refresh button) — callers should check
+    `_github_sync_status()` first and skip `fresh` while rate-limited rather
+    than spend quota chasing a backoff window.
+    """
     key = (status_filter or "", lane_filter or "")
+    if fresh:
+        try:
+            items = _core._q.list_items(status=status_filter, lane=lane_filter, fresh=True) or []
+        except TypeError:
+            items = _core._q.list_items(status=status_filter, lane=lane_filter) or []
+        with _ux_fixes_list_cache_lock:
+            _ux_fixes_list_cache[key] = {"ts": time.time(), "items": items}
+        return items
     now = time.time()
     with _ux_fixes_list_cache_lock:
         ent = _ux_fixes_list_cache.get(key)
@@ -702,6 +724,15 @@ def _ux_fixes_list_items_cached(status_filter=None, lane_filter=None):
             _ux_fixes_list_cache.clear()
         _ux_fixes_list_cache[key] = {"ts": time.time(), "items": items}
     return items
+
+
+def _ux_fixes_list_synced_at(status_filter=None, lane_filter=None):
+    """Epoch of the cache entry serving the given (status, lane) key, for the
+    queue panel's "Last synced" label. None if nothing has been fetched yet."""
+    key = (status_filter or "", lane_filter or "")
+    with _ux_fixes_list_cache_lock:
+        ent = _ux_fixes_list_cache.get(key)
+    return ent["ts"] if ent else None
 
 
 # ---------------------------------------------------------------------------
@@ -869,6 +900,27 @@ _ux_fixes_health_snapshot = {"ts": 0.0, "data": None}
 _ux_fixes_health_snapshot_lock = threading.Lock()
 
 
+def _github_sync_status():
+    """Current GitHub sync health for the queue panel's degraded-sync notice.
+
+    Reads the shared rate-limit snapshot (no `refresh` — that would spend
+    quota on every /api/queue/status poll); the watch loop
+    (_gh_queue_watch_loop) is what keeps the snapshot current while a queue
+    board is open.
+    """
+    try:
+        state = github_rate_limited(refresh=False)
+    except Exception:
+        return {"rate_limited": False, "backoff_seconds": 0, "retry_at": None}
+    backoff = int(state.get("backoff_seconds") or 0)
+    return {
+        "rate_limited": bool(state.get("rate_limited")),
+        "backoff_seconds": backoff,
+        "retry_at": (time.time() + backoff) if backoff else None,
+        "last_remaining": state.get("last_remaining"),
+    }
+
+
 def _build_ux_fixes_health_payload_uncached():
     # One queue read for both builders — list_items() also merges GitHub-backed
     # queues via `gh issue list` subprocesses on cold cache, so calling it twice
@@ -925,6 +977,7 @@ def _build_ux_fixes_health_payload_uncached():
         "queues": queues,
         "worker_session_ids": worker_session_ids,
         "past_workers": past_workers,
+        "github_sync": _github_sync_status(),
     }
 
 

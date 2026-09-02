@@ -41732,7 +41732,7 @@
     return !!(queuePane && queuePane.classList.contains('is-active'));
   }
 
-  let _uxqItemsCache = { ts: 0, items: [] };
+  let _uxqItemsCache = { ts: 0, items: [], syncedAt: 0 };
   let _uxqItemsPromise = null;
   // Every server-confirmed ticket mutation advances this version. A list read
   // that began before that mutation is stale and must not overwrite its row.
@@ -41782,7 +41782,10 @@
       for (const [ref, expires] of _uxqNewItemExpires) {
         if (expires <= now) _uxqNewItemExpires.delete(ref);
       }
-      _uxqItemsCache = { ts: now, items };
+      // synced_at is epoch seconds of the cache entry that actually served
+      // this response (may be older than `now` under stale-while-revalidate).
+      const syncedAt = typeof (data && data.synced_at) === 'number' ? data.synced_at * 1000 : now;
+      _uxqItemsCache = { ts: now, items, syncedAt };
     } catch (_) { /* keep stale cache */ }
     finally { _uxqItemsPromise = null; }
     return _uxqItemsCache.items;
@@ -41791,7 +41794,7 @@
   }
   // Per-project queue-health snapshot (GET /api/ux-fixes/health). Same cache
   // window as the ticket list so a Queue refresh costs one extra cheap GET.
-  let _uxqHealthCache = { ts: 0, rows: [], wt_workers: [], queues: [], worker_session_ids: [], past_workers: [] };
+  let _uxqHealthCache = { ts: 0, rows: [], wt_workers: [], queues: [], worker_session_ids: [], past_workers: [], github_sync: null };
   // A queue-health refresh can finish after a drain click but before its POST.
   // Keep the requested state separately so that stale snapshot cannot repaint
   // the button back to its former value or hide its in-progress spinner.
@@ -41883,11 +41886,15 @@
         ? data.worker_session_ids : [];
       // Past workers from the last 24h (log file scan, excludes live workers).
       const past_workers = Array.isArray(data && data.past_workers) ? data.past_workers : [];
+      // GitHub sync health (rate-limit backoff state) for the degraded-sync
+      // notice on GitHub-backed queues. null on older servers pre-restart.
+      const github_sync = (data && data.github_sync && typeof data.github_sync === 'object')
+        ? data.github_sync : null;
       // Out-of-order guard: only the most recently INITIATED request may
       // write the cache, regardless of resolve order.
       if (seq >= _uxqHealthAppliedSeq) {
         _uxqHealthAppliedSeq = seq;
-        _uxqHealthCache = { ts: Date.now(), rows, wt_workers, queues, worker_session_ids, past_workers };
+        _uxqHealthCache = { ts: Date.now(), rows, wt_workers, queues, worker_session_ids, past_workers, github_sync };
         // A brand-new sub-queue can arrive here before any of its tickets do, so
         // re-derive the families off the fresh queue list.
         _uxqRefreshFamilyRoots();
@@ -42913,7 +42920,7 @@
   // on the health cache so the picker opens instantly (no per-queue fetch).
   // Shape: { name, parent, openCount, needsInputCount, lastActivityAt,
   //          hasRunningAgent, subQueueCount, repoPath, githubLinked,
-  //          autoDrainOn }
+  //          githubRepo, autoDrainOn }
   function _uxqPickerRollup() {
     const health = _uxqHealthCache || {};
     const queues = Array.isArray(health.queues) ? health.queues : [];
@@ -42947,11 +42954,11 @@
       const parent = _uxqPickerParentOf(n, rootNames);
       if (parent) subsByRoot.set(parent, (subsByRoot.get(parent) || 0) + 1);
     }
-    // GitHub-backed? Mirror q2.js: a queue is github-backed if any of its
-    // items carry source==='github' / github_repo, OR its config backend is
-    // github. The queues[] row doesn't carry backend, so derive from items
-    // (the same source q2's queueFacts uses) + the _queue_is_github helper
-    // exposed on the server module is not client-side; items are.
+    // GitHub-backed? Primary source is the queue's own config (backend/
+    // github_repo, now carried on the queues[] row) — true even with zero
+    // cached items, e.g. after a GraphQL quota outage wipes the item cache.
+    // Item-derived detection (source==='github' / github_repo on a ticket)
+    // is kept as a fallback for queues whose config predates this field.
     const ghByQ = new Set();
     for (const it of items) {
       if (it && (String(it.source || '') === 'github' || it.github_repo)) {
@@ -42972,7 +42979,8 @@
         hasRunningAgent: liveQueues.has(name),
         subQueueCount: parent ? 0 : (subsByRoot.get(name) || 0),
         repoPath: String((q && q.repo_path) || ''),
-        githubLinked: ghByQ.has(name),
+        githubLinked: String((q && q.backend) || '') === 'github' || !!(q && q.github_repo) || ghByQ.has(name),
+        githubRepo: String((q && q.github_repo) || ''),
         autoDrainOn: !!(q && q.auto_drain),
       });
     }
@@ -43533,7 +43541,9 @@
     const freshItems = items.slice();
     freshItems[index] = item;
     _uxqItemsVersion += 1;
-    _uxqItemsCache = { ts: Date.now(), items: freshItems };
+    // A single-ticket patch, not a real resync — keep the last known
+    // syncedAt so "Last synced" doesn't claim a full refresh just happened.
+    _uxqItemsCache = { ts: Date.now(), items: freshItems, syncedAt: _uxqItemsCache.syncedAt };
     return true;
   }
   async function _uxqOpenItemDetail(ref) {
@@ -44515,6 +44525,33 @@
     const logLink = '<button type="button" class="fq-status-log-toggle"'
       + ' data-log-queue="' + escapeAttr(key) + '"'
       + ' title="View this queue\'s activity log">Log</button>';
+    // GitHub-backed = config says so (backend/github_repo, survives a cold
+    // item cache — see _uxqPickerRollup) — a rate-limit outage that empties
+    // the item cache must not also make the queue look un-linked.
+    const githubLinked = !!(q && (String(q.backend || '') === 'github' || q.github_repo));
+    const sync = (_uxqHealthCache && _uxqHealthCache.github_sync) || null;
+    const syncDegraded = githubLinked && !!(sync && sync.rate_limited);
+    const retryLabel = syncDegraded && sync.retry_at
+      ? new Date(sync.retry_at * 1000).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+      : '';
+    const syncNoticeHtml = syncDegraded
+      ? '<div class="fq-status-sync-notice" role="status" title="'
+        + escapeAttr('GitHub API rate limit hit' + (retryLabel ? ('. Retrying around ' + retryLabel) : '') + '. Showing last-synced data.')
+        + '">GitHub sync paused — API rate limit'
+        + (retryLabel ? (', retrying ~' + escapeHtml(retryLabel)) : '')
+        + '. Showing last-synced data.</div>'
+      : '';
+    const syncedAtMs = (_uxqItemsCache && _uxqItemsCache.syncedAt) || 0;
+    const lastSyncedHtml = syncedAtMs
+      ? '<span class="fq-status-synced" title="' + escapeAttr('Last synced ' + new Date(syncedAtMs).toLocaleTimeString())
+        + '">Synced ' + escapeHtml(timeAgo(syncedAtMs)) + '</span>'
+      : '';
+    const refreshTitle = syncDegraded
+      ? ('GitHub rate-limited — retry ~' + (retryLabel || 'soon') + '. Manual refresh disabled to avoid hammering the API.')
+      : 'Refresh this queue now (bypasses the cache)';
+    const refreshBtn = '<button type="button" class="fq-status-refresh-toggle" data-refresh-queue="' + escapeAttr(key) + '"'
+      + (syncDegraded ? ' disabled' : '')
+      + ' title="' + escapeAttr(refreshTitle) + '" aria-label="' + escapeAttr(refreshTitle) + '">⟳</button>';
     const watchHtml = controls.configBtn
       // CCC-976: the queue name is already shown in the picker above this
       // strip — dropped the redundant fq-status-proj label from this row.
@@ -44522,6 +44559,8 @@
           + '<span class="fq-status-sep">·</span>'
           + '<span class="fq-status-age" title="' + escapeAttr('oldest ' + age) + '">' + escapeHtml(age) + '</span>') : '')
       + (workers.length ? '<span class="fq-status-live">LIVE</span>' : '')
+      + lastSyncedHtml
+      + refreshBtn
       + controls.drainToggle
       + controls.workersToggle
       + controls.typeToggle
@@ -44531,7 +44570,7 @@
     // what the WORKING NOW strip already shows above (CCC-1019) — this strip
     // now stays to the queue-level facts (depth/age/live/drain/claim-types).
     $el.hidden = false;
-    $el.innerHTML = watchHtml;
+    $el.innerHTML = syncNoticeHtml + watchHtml;
   }
   function _uxqRepaintStatusStrip() {
     const liveWorkers = ((_uxqHealthCache && _uxqHealthCache.wt_workers) || [])
@@ -45137,6 +45176,35 @@
         ev.stopPropagation();
         _openWtLogPanel(btn.getAttribute('data-log-queue'));
       };
+      // Manual "force a fresh fetch" button next to Last synced. The server
+      // ignores ?fresh=1 while GitHub sync is rate-limited (belt & braces —
+      // this button is already disabled+tooltipped in that state), so this
+      // never doubles as a way to hammer the API past the button's own guard.
+      const refreshQueue = async (ev) => {
+        const btn = ev.target && ev.target.closest && ev.target.closest('.fq-status-refresh-toggle[data-refresh-queue]');
+        if (!btn || btn.disabled) return;
+        ev.preventDefault();
+        ev.stopPropagation();
+        btn.disabled = true;
+        btn.setAttribute('aria-busy', 'true');
+        try {
+          const res = await fetch('/api/queue/list?fresh=1', { cache: 'no-store' });
+          const data = await res.json().catch(() => ({}));
+          if (data && data.ok) {
+            const items = Array.isArray(data.items) ? data.items : [];
+            const syncedAt = typeof data.synced_at === 'number' ? data.synced_at * 1000 : Date.now();
+            _uxqItemsVersion += 1;
+            _uxqItemsCache = { ts: Date.now(), items, syncedAt };
+          } else {
+            showOpToast('Refresh failed: ' + ((data && data.error) || res.status), 'error');
+          }
+        } catch (e) {
+          showOpToast('Refresh failed: ' + ((e && e.message) || 'network error'), 'error');
+        } finally {
+          _uxqHealthCache.ts = 0;
+          await _renderQueuePanel();
+        }
+      };
       // Desired-workers cycle (1x → 2x → 3x → 1x) for the compact strip.
       const cycleWorkers = async (ev) => {
         const btn = ev.target && ev.target.closest && ev.target.closest('.fq-status-workers-toggle[data-workers-queue]');
@@ -45189,6 +45257,7 @@
       $health.addEventListener('click', deleteQueue);
       $health.addEventListener('click', openLearnings);
       $health.addEventListener('click', openQueueLog);
+      $health.addEventListener('click', refreshQueue);
       $health.addEventListener('click', async (ev) => {
         const btn = ev.target && ev.target.closest && ev.target.closest('[data-fq-config-queue], #filesQueueConfigure');
         if (!btn) return;
@@ -45197,7 +45266,7 @@
       });
       $health.addEventListener('click', scopeFromRow);
       $health.addEventListener('keydown', (ev) => {
-        if (ev.key === 'Enter' || ev.key === ' ') { openWorkerSession(ev); nudgeFromBadge(ev); toggleDrain(ev); cycleClaimTypes(ev); cycleWorkers(ev); deleteQueue(ev); openLearnings(ev); openQueueLog(ev); scopeFromRow(ev); }
+        if (ev.key === 'Enter' || ev.key === ' ') { openWorkerSession(ev); nudgeFromBadge(ev); toggleDrain(ev); cycleClaimTypes(ev); cycleWorkers(ev); deleteQueue(ev); openLearnings(ev); openQueueLog(ev); refreshQueue(ev); scopeFromRow(ev); }
       });
     }
   }
