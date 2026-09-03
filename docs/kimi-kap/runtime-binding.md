@@ -175,16 +175,25 @@ Still open, roughly cheapest-first:
 
 ## Two questions that come up
 
-**Why do `kimi web` + the TUI get along, but CCC UI + TUI didn't?** Because
-Kimi's browser UI is a *thin client*: it talks REST+WS to a kap-server process
-that owns every session's engine core. The TUI (0.40.1) embeds that same
-server — one process, one owner per session, both UIs are views. CCC's default
-transport is different in kind: it spawns its **own** `kimi acp` subprocess —
-a second engine with its own warm copy of the session and its own binding
-writes. Two engines sharing one session store is where the poisoning and the
-interleaving come from. With kap routing on, CCC becomes a thin client of the
-daemon too, and CCC + TUI get along exactly as well as the web UI + TUI —
-provided discovery lands on the right daemon (hence the pin).
+**Why do `kimi web` + the TUI get along, but CCC UI + TUI didn't?** Two
+different answers depending on CCC's transport:
+
+- **CCC over ACP** (the default): CCC spawns its *own* `kimi acp` subprocess —
+  a second engine with its own warm copy of the session and its own `acp:<sid>`
+  binding writes. Two engines sharing one session store is where the poisoning
+  and the interleaving come from.
+- **CCC over kap**: CCC is a thin client of a daemon, architecturally
+  identical to the browser UI — the difference is *which* daemon process each
+  client talks to. The browser UI pairs explicitly (you browse to one server's
+  port). CCC paired by discovery: newest heartbeat across all registered
+  servers. If the TUI's embedded server (0.40.1 registers itself) wins, CCC's
+  prompt lands inside the TUI process — one owner, one queue, exactly as
+  harmonious as the web UI. If a separate `kimi web` daemon wins while the TUI
+  has the session open, the daemon resumes its own warm copy alongside the
+  TUI's — the "TUI + separate daemon" failure shape above. So kap-mode CCC +
+  TUI get along when, and only when, both talk to the same server process.
+  `CCC_KIMI_KAP_SERVER` pins that; the System status row shows which daemon
+  prompts land on.
 
 **Why does CCC keep the ACP transport at all?** Three reasons. (1) ACP is a
 published spec with a pinned SDK (`@agentclientprotocol/sdk`); kap is a
