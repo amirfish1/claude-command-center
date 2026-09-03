@@ -405,6 +405,16 @@ def _ticket_summary(state):
 _WT_RUNNER = None
 
 
+# `wt add` prints "FILED: <ref>" and then dispatches a worker for the new
+# ticket (may spawn a whole session), so it can run well past the point the
+# ticket exists. Give it a long leash, and on timeout still return whatever
+# stdout was produced so the caller can recover the ref — otherwise a
+# created-but-unrecorded ticket would be refiled every check (observed on
+# the very first live run: CCC ticket filed, 20s timeout, no state saved).
+_WT_ADD_TIMEOUT_S = 180
+_WT_TIMEOUT_RC = 124  # coreutils `timeout` convention
+
+
 def _wt_run(args, timeout=20):
     if _WT_RUNNER is not None:
         try:
@@ -424,12 +434,18 @@ def _wt_run(args, timeout=20):
             text=True,
             timeout=timeout,
         )
-        return (proc.returncode, proc.stdout or "")
+        return (proc.returncode, (proc.stdout or "") + "\n" + (proc.stderr or ""))
+    except subprocess.TimeoutExpired as e:
+        partial = e.stdout or b""
+        if isinstance(partial, bytes):
+            partial = partial.decode("utf-8", errors="ignore")
+        return (_WT_TIMEOUT_RC, partial)
     except Exception:
         return (1, "")
 
 
 _TICKET_REF_RE = re.compile(r"\b([A-Z][A-Z0-9]{1,15}-\d+)\b")
+_FILED_REF_RE = re.compile(r"FILED:\s*([A-Z][A-Z0-9]{1,15}-\d+)")
 
 
 def refresh_ticket_status(state):
@@ -529,26 +545,28 @@ def perf_ticket_check_once(now=None):
                 title,
                 "--note",
                 note,
-            ]
+            ],
+            timeout=_WT_ADD_TIMEOUT_S,
         )
         if rc == 127:
             return "wt-unavailable"
-        if rc != 0:
-            return "error"
 
-        m = _TICKET_REF_RE.search(out or "")
+        m = _FILED_REF_RE.search(out or "") or _TICKET_REF_RE.search(out or "")
         ref = m.group(1) if m else ""
-        if not ref:
+        if not ref and rc != 0 and rc != _WT_TIMEOUT_RC:
+            # Clean failure, nothing printed: safe to retry next check.
             return "error"
 
-        state["last_ref"] = ref
+        # A ref, or a timeout / odd exit AFTER wt may have created the ticket:
+        # arm the same-day dedupe either way. Refiling is the worse failure.
+        state["last_ref"] = ref or state.get("last_ref")
         state["last_filed_date"] = today
         state["last_status"] = "open"
         state["last_checked_at"] = _iso_now()
         state["last_kind"] = pattern["kind"]
         _save_ticket_state(state)
-        print(f"[PERF] filed {ref}", flush=True)
-        return f"filed:{ref}"
+        print(f"[PERF] filed {ref or '?'} (rc={rc})", flush=True)
+        return f"filed:{ref or '?'}"
     except Exception:
         return "error"
 

@@ -338,3 +338,55 @@ class TestArchiveWarmLedger(PerfEventsTestBase):
         res = pe.record_event("archive_load", 6000, detail={"since_nav_ms": 8000})
         self.assertFalse(res["warm"])
         self.assertTrue(res["breach"])  # 6000 >= cold 5000
+
+
+class TestTicketFilingRobustness(PerfEventsTestBase):
+    """`wt add` prints FILED then dispatches a worker, which can outlive the
+    subprocess timeout. The ticket exists either way; dedupe must arm."""
+
+    def _seed_pattern(self):
+        now = time.time()
+        _append_raw(pe._events_path(), _row("archive_load", 112000, now - 60, 5000))
+
+    def test_timeout_with_partial_output_still_records_ref(self):
+        self._seed_pattern()
+        calls = []
+        def runner(args, timeout):
+            calls.append(list(args))
+            if args[0] == "add":
+                return (pe._WT_TIMEOUT_RC, "FILED: CCC-77  [perf] slow archive load\n")
+            return (1, "")
+        with mock.patch.object(pe, "_WT_RUNNER", runner):
+            self.assertEqual(pe.perf_ticket_check_once(), "filed:CCC-77")
+            self.assertEqual(pe.perf_ticket_check_once(), "already-filed-today")
+        self.assertEqual(pe._load_ticket_state()["last_ref"], "CCC-77")
+        self.assertEqual(sum(1 for c in calls if c[0] == "add"), 1)
+
+    def test_timeout_without_output_still_arms_same_day_dedupe(self):
+        self._seed_pattern()
+        def runner(args, timeout):
+            return (pe._WT_TIMEOUT_RC, "") if args[0] == "add" else (1, "")
+        with mock.patch.object(pe, "_WT_RUNNER", runner):
+            self.assertEqual(pe.perf_ticket_check_once(), "filed:?")
+            self.assertEqual(pe.perf_ticket_check_once(), "already-filed-today")
+
+    def test_clean_failure_does_not_arm_dedupe(self):
+        self._seed_pattern()
+        def runner(args, timeout):
+            return (1, "") if args[0] == "add" else (1, "")
+        with mock.patch.object(pe, "_WT_RUNNER", runner):
+            self.assertEqual(pe.perf_ticket_check_once(), "error")
+            self.assertEqual(pe.perf_ticket_check_once(), "error")
+        self.assertIsNone(pe._load_ticket_state().get("last_filed_date"))
+
+    def test_add_uses_long_timeout(self):
+        self._seed_pattern()
+        seen = {}
+        def runner(args, timeout):
+            if args[0] == "add":
+                seen["timeout"] = timeout
+                return (0, "FILED: CCC-78  x")
+            return (1, "")
+        with mock.patch.object(pe, "_WT_RUNNER", runner):
+            pe.perf_ticket_check_once()
+        self.assertGreaterEqual(seen["timeout"], 120)
