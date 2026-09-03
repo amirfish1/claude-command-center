@@ -14,6 +14,8 @@ import collections
 import copy
 import json
 import os
+import re
+import shutil
 import subprocess
 import threading
 import time
@@ -445,6 +447,113 @@ def compute_ux_fixes_health(items=None):
     return out
 
 
+_WORKER_PLAN_EFFORTS = ("low", "medium", "high", "xhigh", "max")
+# Explicit remaps WatchTower keeps table-driven (watchtower.config.MODEL_ALIASES)
+# plus its structural rule for claude's versioned short forms.
+_WORKER_PLAN_MODEL_ALIASES = {"claude": {"opus-5": "claude-opus-5"}}
+_WORKER_PLAN_CLAUDE_VERSIONED = re.compile(r"^(sonnet|opus|haiku|fable)-\d", re.IGNORECASE)
+_WORKER_PLAN_PATH_CACHE = {}  # engine -> (checked_at, on_path)
+
+
+def _worker_plan_engine_on_path(engine, ttl_s=60.0):
+    """`shutil.which` with a short memo so the rollup never stats PATH per
+    queue per health poll."""
+    now = time.time()
+    hit = _WORKER_PLAN_PATH_CACHE.get(engine)
+    if hit and now - hit[0] < ttl_s:
+        return hit[1]
+    on_path = bool(shutil.which(engine))
+    _WORKER_PLAN_PATH_CACHE[engine] = (now, on_path)
+    return on_path
+
+
+def _worker_plan_canonical_model(engine, model):
+    """Mirror of `watchtower.config.canonical_model` for the display path."""
+    eng = str(engine or "").strip().lower()
+    value = str(model or "").strip()
+    if not value:
+        return ""
+    aliased = _WORKER_PLAN_MODEL_ALIASES.get(eng, {}).get(value)
+    if aliased:
+        return aliased
+    if eng == "claude" and _WORKER_PLAN_CLAUDE_VERSIONED.match(value) \
+            and not value.lower().startswith("claude-"):
+        return "claude-" + value
+    return value
+
+
+def compute_queue_worker_plan(conf, spawn_defaults):
+    """The engine/model/effort a worker spawned for this queue RIGHT NOW would
+    get, and where each came from (CCC-1036).
+
+    Mirrors `watchtower.config.engine()/model()/effort()` on the same two
+    inputs those read -- the queue's queue-config.json entry (``conf``) and
+    CCC's spawn-defaults.json (``spawn_defaults``, as `_load_spawn_defaults`
+    returns it) -- without importing watchtower (this module keeps that
+    boundary, see compute_queues_health) or forking `wt`.
+
+    Chain, per WT:
+      engine: queue ``engine`` > spawn ``worker_engine`` > codex-if-on-PATH > claude
+      model:  queue ``model`` > ``worker_model`` (only when ``worker_engine``
+              is this engine) > spawn ``models[engine]`` > "" (engine ambient)
+      effort: queue ``effort`` > ``worker_reasoning_effort`` > "" (engine ambient)
+
+    Each ``*_source`` is one of ``queue`` (explicit `wt set` / gear-dialog
+    override), ``ccc_worker_default``, ``ccc_default``, ``fallback`` (the
+    codex/claude PATH guess) or ``engine_default`` (nothing configured; the
+    CLI's own default applies). ``is_default`` is True when nothing on the
+    queue itself pins the engine -- the dashboard prefixes "default" then.
+    """
+    conf = conf if isinstance(conf, dict) else {}
+    sd = spawn_defaults if isinstance(spawn_defaults, dict) else {}
+    explicit_engine = str(conf.get("engine") or "").strip().lower()
+    worker_engine = str(sd.get("worker_engine") or "").strip().lower()
+    if explicit_engine:
+        engine, engine_source = explicit_engine, "queue"
+    elif worker_engine:
+        engine, engine_source = worker_engine, "ccc_worker_default"
+    elif _worker_plan_engine_on_path("codex"):
+        engine, engine_source = "codex", "fallback"
+    else:
+        engine, engine_source = "claude", "fallback"
+
+    explicit_model = str(conf.get("model") or "").strip()
+    worker_model = str(sd.get("worker_model") or "").strip()
+    models = sd.get("models") if isinstance(sd.get("models"), dict) else {}
+    shared_model = str(models.get(engine) or "").strip()
+    if explicit_model:
+        model, model_source = explicit_model, "queue"
+    elif worker_model and worker_engine == engine:
+        model, model_source = worker_model, "ccc_worker_default"
+    elif shared_model:
+        model, model_source = shared_model, "ccc_default"
+    else:
+        model, model_source = "", "engine_default"
+    # WT prefixes `claude-` onto CCC's bare defaults before canonicalising
+    # (its `_ccc_default_model` / `_ccc_worker_model_default`); an explicit
+    # queue value only gets the alias/versioned-short-form treatment.
+    if model_source != "queue" and engine == "claude" and model \
+            and not model.lower().startswith("claude-"):
+        model = "claude-" + model
+    model = _worker_plan_canonical_model(engine, model)
+
+    explicit_effort = str(conf.get("effort") or "").strip().lower()
+    worker_effort = str(sd.get("worker_reasoning_effort") or "").strip().lower()
+    if explicit_effort in _WORKER_PLAN_EFFORTS:
+        effort, effort_source = explicit_effort, "queue"
+    elif worker_effort in _WORKER_PLAN_EFFORTS:
+        effort, effort_source = worker_effort, "ccc_worker_default"
+    else:
+        effort, effort_source = "", "engine_default"
+
+    return {
+        "engine": engine, "engine_source": engine_source,
+        "model": model, "model_source": model_source,
+        "effort": effort, "effort_source": effort_source,
+        "is_default": engine_source != "queue",
+    }
+
+
 def compute_queues_health(health=None, wt_workers=None, items=None):
     """Per-QUEUE snapshot for the dashboard's "Evergreen" sidebar section.
 
@@ -490,11 +599,13 @@ def compute_queues_health(health=None, wt_workers=None, items=None):
     cfg_workers = {}
     cfg_backend = {}
     cfg_github_repo = {}
+    cfg_raw = {}
     cfg_names = set()
     try:
         for name, conf in (_core._wt_read_config() or {}).items():
             qn = _norm(name)
             cfg_names.add(qn)
+            cfg_raw[qn] = conf if isinstance(conf, dict) else {}
             cfg_drain[qn] = bool((conf or {}).get("auto_drain", False))
             rp = str((conf or {}).get("repo_path") or "").strip()
             if rp:
@@ -514,7 +625,14 @@ def compute_queues_health(health=None, wt_workers=None, items=None):
         cfg_workers = {}
         cfg_backend = {}
         cfg_github_repo = {}
+        cfg_raw = {}
         cfg_names = set()
+    # One read of spawn-defaults.json per rollup (not per queue) for the
+    # effective worker plan below.
+    try:
+        spawn_defaults = _core._load_spawn_defaults() or {}
+    except Exception:
+        spawn_defaults = {}
 
     health_by_q = {_norm(r.get("project")): r for r in (health or [])}
 
@@ -656,6 +774,7 @@ def compute_queues_health(health=None, wt_workers=None, items=None):
             "backend": cfg_backend.get(q, ""),
             "github_repo": cfg_github_repo.get(q, ""),
             "configured": q in cfg_names,
+            "worker_plan": compute_queue_worker_plan(cfg_raw.get(q), spawn_defaults),
             "last_activity_seconds": (
                 int(time.time() - last_activity_q[q]) if q in last_activity_q else None
             ),

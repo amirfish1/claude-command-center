@@ -44803,6 +44803,13 @@
     const refreshBtn = '<button type="button" class="fq-status-refresh-toggle" data-refresh-queue="' + escapeAttr(key) + '"'
       + (syncDegraded ? ' disabled' : '')
       + ' title="' + escapeAttr(refreshTitle) + '" aria-label="' + escapeAttr(refreshTitle) + '">⟳</button>';
+    // CCC-1036: what a worker spawned for this queue right now would run
+    // as (engine · model · effort), resolved server-side through the same
+    // chain WatchTower's config.engine()/model()/effort() use. "default"
+    // prefix when the queue itself pins no engine — the plan then comes from
+    // CCC's Spawn defaults (or the codex/claude PATH fallback), which the
+    // tooltip spells out per part. Clicking opens the same gear dialog.
+    const planHtml = _uxqWorkerPlanChipHtml(key, q && q.worker_plan);
     const watchHtml = controls.configBtn
       // CCC-976: the queue name is already shown in the picker above this
       // strip — dropped the redundant fq-status-proj label from this row.
@@ -44815,6 +44822,7 @@
       + controls.drainToggle
       + controls.workersToggle
       + controls.typeToggle
+      + planHtml
       + learningsLink
       + logLink;
     // Per-worker rows used to be appended here too, but they just repeated
@@ -44822,6 +44830,34 @@
     // now stays to the queue-level facts (depth/age/live/drain/claim-types).
     $el.hidden = false;
     $el.innerHTML = syncNoticeHtml + watchHtml;
+  }
+  function _uxqWorkerPlanChipHtml(queue, plan) {
+    if (!plan || !plan.engine) return '';
+    const sourceLabel = {
+      queue: 'set on this queue',
+      ccc_worker_default: 'CCC worker default (Spawn defaults)',
+      ccc_default: 'CCC new-session default (Spawn defaults)',
+      fallback: 'WatchTower fallback (codex if on PATH, else claude)',
+      engine_default: 'not configured — the engine CLI\'s own default',
+    };
+    const src = k => sourceLabel[String(plan[k + '_source'] || '')] || String(plan[k + '_source'] || '');
+    // Short display forms: the conv list shows "fable-5-1", not
+    // "claude-fable-5-1"; kimi ids carry a "kimi-code/" vendor prefix.
+    const shortModel = String(plan.model || '')
+      .replace(/^claude-/, '').replace(/^kimi-code\//, '').replace(/^anthropic\//, '');
+    const parts = [String(plan.engine)];
+    if (shortModel) parts.push(shortModel);
+    if (plan.effort) parts.push(String(plan.effort));
+    const label = (plan.is_default ? 'default · ' : '') + parts.join(' · ');
+    const title = 'Next worker spawned on ' + queue + ' runs as:'
+      + '\nengine: ' + plan.engine + ' — ' + src('engine')
+      + '\nmodel: ' + (plan.model || '(engine default)') + ' — ' + src('model')
+      + '\neffort: ' + (plan.effort || '(engine default)') + ' — ' + src('effort')
+      + '\nClick to change.';
+    return '<button type="button" class="fq-status-plan' + (plan.is_default ? ' is-default' : '') + '"'
+      + ' data-fq-config-queue="' + escapeAttr(queue) + '"'
+      + ' title="' + escapeAttr(title) + '" aria-label="' + escapeAttr(title) + '">'
+      + escapeHtml(label) + '</button>';
   }
   function _uxqRepaintStatusStrip() {
     const liveWorkers = ((_uxqHealthCache && _uxqHealthCache.wt_workers) || [])

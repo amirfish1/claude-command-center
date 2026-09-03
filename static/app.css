@@ -22364,6 +22364,20 @@ body.has-gc-reader .pwa-install-banner {
   background: rgba(139,148,158,0.18); border-color: rgba(139,148,158,0.30);
 }
 .fq-status-synced { flex-shrink: 0; color: var(--faint, var(--text-muted)); opacity: 0.75; white-space: nowrap; }
+/* CCC-1036: effective worker plan (engine · model · effort). Mono so the
+   model id reads as an identifier; muted when it's only the CCC default. */
+.fq-status-plan {
+  flex-shrink: 0; cursor: pointer;
+  font: 500 10.5px/1.4 'JetBrains Mono', ui-monospace, monospace;
+  letter-spacing: 0.01em;
+  padding: 1px 7px; border-radius: 999px;
+  background: rgba(88,166,255,0.10); color: var(--text);
+  border: 1px solid rgba(88,166,255,0.28);
+  transition: background 0.12s, border-color 0.12s;
+  white-space: nowrap;
+}
+.fq-status-plan.is-default { color: var(--text-muted); background: rgba(139,148,158,0.10); border-color: rgba(139,148,158,0.18); }
+.fq-status-plan:hover { background: rgba(88,166,255,0.18); border-color: rgba(88,166,255,0.45); color: var(--text); }
 .fq-status-refresh-toggle {
   flex-shrink: 0; cursor: pointer;
   font-size: 12px; line-height: 1; padding: 1px 6px; border-radius: 999px;
