@@ -43434,8 +43434,8 @@
       gh: false,
       hasRepo: false,
       repo: '',
-      hasNeeds: !!t.needs_input,
-      needs: t.needs_input ? 'needs input' : '',
+      hasNeeds: !!t.needs_input && t.status !== 'closed',
+      needs: (t.needs_input && t.status !== 'closed') ? 'needs input' : '',
       openLabel: '',
       last: age,
       drainOn: false,
@@ -44107,7 +44107,9 @@
     // Long ticket notes are prose, not one enormous heading. Keep the opening
     // sentence prominent while preserving the complete, editable note below it.
     const titleParts = splitFirstSentence(displayTitle);
-    const status = item.needs_input ? 'blocked' : (item.status || 'open');
+    // Closed wins: the GitHub backend historically never cleared needs_input
+    // on close, so a closed-but-once-blocked ticket must not read as blocked.
+    const status = item.status === 'closed' ? 'closed' : (item.needs_input ? 'blocked' : (item.status || 'open'));
     const timeline = Array.isArray(item.timeline) ? item.timeline : [];
 
     // Sidebar property row helpers
@@ -45095,6 +45097,10 @@
       };
       const _effectiveStatus = it => {
         const rawStatus = (it && it.status) || 'open';
+        // Closed wins over needs_input (mirrors q2.js statusOf): the GitHub
+        // backend used to leave needs_input=true on close, which made every
+        // closed-but-once-blocked ticket read as blocked forever.
+        if (rawStatus === 'closed') return 'closed';
         if (it && it.needs_input) return 'blocked';
         if (rawStatus === 'in_progress' && _isStaleClaim(it)) return 'open';
         if (rawStatus === 'open' && _hasLiveClaim(it)) {
@@ -45166,7 +45172,7 @@
       // engine needs to reason about).
       const _uxqChips = (it, priorityBumpHtml = '') => {
         const c = [];
-        if (it.needs_input) {
+        if (it.needs_input && it.status !== 'closed') {
           if (it.block_kind === 'rationale') {
             c.push('<span class="fq-chip fq-gated" title="' + escapeAttr(it.block_question || 'pitch awaiting decision') + '">GATE</span>');
           } else {
@@ -45207,7 +45213,7 @@
         const unverifiedClaim = _isUnverifiedClaim(it);
         const isNew = (_uxqNewItemExpires.get(ref) || 0) > Date.now();
         // When blocked, the worker's question is the most useful line to show.
-        const blocked = !!it.needs_input;
+        const blocked = !!it.needs_input && rawStatus !== 'closed';
         const unresolvedNotes = _uxqUnresolvedNotes(it);
         const hasUnresolved = rawStatus === 'closed' && unresolvedNotes.length > 0;
         const noteShown = blocked && it.block_question ? String(it.block_question) : noteFull;
