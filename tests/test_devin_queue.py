@@ -1179,6 +1179,110 @@ class DevinSpawnIdentityTests(unittest.TestCase):
         apply.assert_called_once()
         proc.wait(timeout=5)
 
+    def test_devin_delivery_proof_watchdog_drops_gone_session(self):
+        """A resume that fails with 'No session found' is permanent — drop it.
+
+        OPS-922: after Devin's sessions.db lost rows, the watchdog requeued
+        undeliverable follow-ups forever (a spawn loop every few minutes per
+        dead session). The watchdog must pop the queued message instead.
+        """
+        server = importlib.import_module("server")
+        import subprocess
+        sid = "devincli-gone-session-test"
+        text = "follow up"
+        with tempfile.TemporaryDirectory() as tmp:
+            log_path = os.path.join(tmp, "resume.log")
+            with open(log_path, "w") as fh:
+                fh.write("Error: No session found matching 'gone-session-test'\n")
+                fh.flush()
+                proc = subprocess.Popen(
+                    ["/bin/sh", "-c", "exit 1"],
+                    stdout=fh, stderr=subprocess.STDOUT,
+                )
+            queue = {sid: [text]}
+            retry_after = {}
+            calls = []
+
+            def apply_operation(session_id, operations):
+                operation = operations[0]
+                calls.append(operation)
+                removed = None
+                if operation.get("action") == "pop_head_if_matching":
+                    items = queue.get(session_id) or []
+                    if items and items[0] == operation.get("match"):
+                        removed = items.pop(0)
+                        if not items:
+                            queue.pop(session_id, None)
+                elif operation.get("action") == "insert_front":
+                    queue.setdefault(session_id, []).insert(0, operation.get("value"))
+                return {"ok": True, "value": [removed]}
+
+            with mock.patch.object(server, "_pending_resume_queue", queue), \
+                 mock.patch.object(server, "_pending_resume_retry_after", retry_after), \
+                 mock.patch.object(
+                     server, "_apply_pending_input_operations",
+                     side_effect=apply_operation,
+                 ), \
+                 mock.patch.object(server, "_devin_cli_prompt_history_count", return_value=0), \
+                 mock.patch.object(server, "_DEVIN_DELIVERY_PROOF_POLL_INTERVAL_S", 0.05):
+                server._start_devin_delivery_proof_watchdog(
+                    proc, sid, text, time.time(), log_path=log_path,
+                )
+                deadline = time.time() + 3
+                while time.time() < deadline and queue.get(sid):
+                    time.sleep(0.05)
+        self.assertIsNone(queue.get(sid))
+        self.assertNotIn(sid, retry_after)
+        self.assertEqual(
+            [c.get("action") for c in calls], ["pop_head_if_matching"],
+        )
+        proc.wait(timeout=5)
+
+    def test_devin_delivery_proof_watchdog_requeues_on_plain_startup_failure(self):
+        """A startup failure WITHOUT the gone-session signature still requeues."""
+        server = importlib.import_module("server")
+        import subprocess
+        sid = "devincli-transient-fail-test"
+        text = "follow up"
+        with tempfile.TemporaryDirectory() as tmp:
+            log_path = os.path.join(tmp, "resume.log")
+            with open(log_path, "w") as fh:
+                fh.write("Error: database is locked\n")
+                fh.flush()
+                proc = subprocess.Popen(
+                    ["/bin/sh", "-c", "exit 1"],
+                    stdout=fh, stderr=subprocess.STDOUT,
+                )
+            queue = {sid: [text]}
+            retry_after = {}
+
+            def apply_operation(session_id, operations):
+                operation = operations[0]
+                items = queue.setdefault(session_id, [])
+                value = operation.get("value")
+                changed = not (items and items[0] == value)
+                if changed:
+                    items.insert(0, value)
+                return {"ok": True, "value": [changed]}
+
+            with mock.patch.object(server, "_pending_resume_queue", queue), \
+                 mock.patch.object(server, "_pending_resume_retry_after", retry_after), \
+                 mock.patch.object(
+                     server, "_apply_pending_input_operations",
+                     side_effect=apply_operation,
+                 ), \
+                 mock.patch.object(server, "_devin_cli_prompt_history_count", return_value=0), \
+                 mock.patch.object(server, "_DEVIN_DELIVERY_PROOF_POLL_INTERVAL_S", 0.05):
+                server._start_devin_delivery_proof_watchdog(
+                    proc, sid, text, time.time(), log_path=log_path,
+                )
+                deadline = time.time() + 3
+                while time.time() < deadline and sid not in retry_after:
+                    time.sleep(0.05)
+        self.assertEqual(queue.get(sid), [text])
+        self.assertIn(sid, retry_after)
+        proc.wait(timeout=5)
+
     def test_devin_pump_starts_resume_and_leaves_queue_for_proof(self):
         """A successful resume returns 'started' and keeps the message queued."""
         server = importlib.import_module("server")

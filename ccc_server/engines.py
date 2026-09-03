@@ -3038,14 +3038,16 @@ def _devin_raw_id(session_id):
 
 
 def _start_devin_delivery_proof_watchdog(
-    proc, session_id, text, started_at, *, delivery_slot="resume",
+    proc, session_id, text, started_at, *, delivery_slot="resume", log_path=None,
 ):
     """Wait for a new prompt_history row proving Devin accepted the follow-up.
 
     If the row appears, remove the message from the durable queue. If the
     process exits before the row appears, requeue it for retry with backoff.
     A mid-turn crash after the prompt was written (row present) is treated as
-    delivered; resending would fork the session.
+    delivered; resending would fork the session. A fast exit whose log says
+    the session no longer exists in Devin's own DB is permanent — the
+    follow-up is dropped instead of requeued forever (OPS-922).
     """
     raw_id = _devin_raw_id(session_id)
     if not raw_id:
@@ -3056,6 +3058,7 @@ def _start_devin_delivery_proof_watchdog(
 
     def _watch():
         deadline = time.time() + _DEVIN_DELIVERY_PROOF_WINDOW_S
+        exit_code = None
         while time.time() < deadline:
             if _core._devin_cli_prompt_history_count(raw_id, text, started_at) > 0:
                 operation = (
@@ -3076,12 +3079,43 @@ def _start_devin_delivery_proof_watchdog(
                     _core._pending_resume_retry_after.pop(session_id, None)
                 return
             try:
-                exit_code = proc.poll()
+                polled = proc.poll()
             except Exception:
-                exit_code = None
-            if exit_code is not None and exit_code != 0:
-                break
+                polled = None
+            if polled is not None:
+                exit_code = polled
+                if exit_code != 0:
+                    break
             time.sleep(_core._DEVIN_DELIVERY_PROOF_POLL_INTERVAL_S)
+        if exit_code:
+            tail = ""
+            if log_path is not None:
+                try:
+                    tail = _core._antigravity_read_log_tail(log_path, max_bytes=4000)
+                except Exception:
+                    tail = ""
+            if "no session found" in tail.lower():
+                # The session is gone from Devin's DB (e.g. after a corrupt
+                # sessions.db rebuild) — no retry can ever deliver. Drop the
+                # queued follow-up rather than requeue-looping forever.
+                drop_operation = (
+                    {"field": "devin_steer", "action": "clear_if_matching",
+                     "match": text}
+                    if delivery_slot == "steer"
+                    else {"field": "resume", "action": "pop_head_if_matching",
+                          "match": text}
+                )
+                dropped = _core._apply_pending_input_operations(
+                    session_id, [drop_operation],
+                )
+                if (dropped.get("value") or [None])[0] is not None:
+                    _core._pending_resume_retry_after.pop(session_id, None)
+                    print(
+                        f"[devin-proof] {session_id} is gone from Devin's DB "
+                        "— dropping undeliverable follow-up",
+                        flush=True,
+                    )
+                return
         # No proof. The selected delivery slot is intentionally still durable;
         # only restore it if an unusual direct caller removed it meanwhile.
         operation = (
@@ -3235,6 +3269,7 @@ def resume_session_devin(session_id, text, _delivery_slot="resume"):
     )
     _core._start_devin_delivery_proof_watchdog(
         proc, session_id, text, time.time(), delivery_slot=_delivery_slot,
+        log_path=log_path,
     )
     return {"ok": True, "pid": proc.pid, "log": str(log_path), "resumed": True, "via": "devin-resume"}
 
