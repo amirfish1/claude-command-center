@@ -16,6 +16,8 @@ command, without opening the dashboard:
     ccc models               # every engine's models, efforts, cost
     ccc models --engine claude --json
 
+    ccc quota                # weekly quota left per engine + reset deadline
+
     ccc send <session> "message"        # fire-and-forget into a session
     ccc send <session> "…" --steer      # interrupt the current turn with it
     ccc ask <session> "question"        # send and wait for the reply text
@@ -39,10 +41,11 @@ import re
 import sys
 import urllib.error
 import urllib.request
+from datetime import datetime, timezone
 
 PORT_FILE = os.path.expanduser("~/.claude/command-center/port.txt")
 
-SUBCOMMANDS = ("sessions", "list-sessions", "spawn", "models", "send", "ask")
+SUBCOMMANDS = ("sessions", "list-sessions", "spawn", "models", "send", "ask", "quota")
 
 _SINCE_RE = re.compile(r"^(\d+)\s*([smhd])$", re.IGNORECASE)
 _SINCE_UNIT_S = {"s": 1, "m": 60, "h": 3600, "d": 86400}
@@ -457,6 +460,78 @@ def cmd_models(args):
     return 0
 
 
+def _parse_iso(ts):
+    """Parse the server's ISO-8601 timestamps (offset or trailing Z) into an
+    aware datetime; None on anything unexpected."""
+    if not isinstance(ts, str) or not ts.strip():
+        return None
+    text = ts.strip()
+    if text.endswith(("Z", "z")):
+        text = text[:-1] + "+00:00"
+    try:
+        dt = datetime.fromisoformat(text)
+    except ValueError:
+        return None
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    return dt
+
+
+def _quota_rows(payload):
+    """(engine, weekly_block, note) in display order. weekly_block is the
+    /api/usage/current {pct, resets_at} window, where pct is percent USED."""
+    claude_weekly = (payload.get("claude") or {}).get("seven_day") or {}
+    rows = [("claude", claude_weekly, "")]
+    for engine in ("codex", "kimi"):
+        eng = payload.get(engine) or {}
+        note = ""
+        if eng.get("stale"):
+            note = "stale cache"
+        elif eng.get("from_cache"):
+            note = "cached"
+        rows.append((engine, eng.get("weekly") or {}, note))
+    return rows
+
+
+def cmd_quota(args):
+    base = _resolve_server(args.server)
+    if not base:
+        print(
+            "ccc: no server found — is CCC running? "
+            f"(looked for --server, $CCC_SERVER, {PORT_FILE})",
+            file=sys.stderr,
+        )
+        return 1
+    try:
+        payload = _get_json(base, "/api/usage/current", timeout=15)
+    except OSError as e:  # URLError, plus raw TimeoutError from mid-read stalls
+        print(f"ccc: cannot reach CCC at {base} ({e}) — is CCC running?", file=sys.stderr)
+        return 1
+    if args.json:
+        print(json.dumps(payload, indent=2))
+        return 0
+
+    now = datetime.now(timezone.utc)
+    for engine, block, note in _quota_rows(payload):
+        pct = block.get("pct")
+        remaining = None if pct is None else max(0, round(100 - float(pct)))
+        remaining_s = "?%" if remaining is None else f"{remaining}%"
+        reset_dt = _parse_iso(block.get("resets_at"))
+        if reset_dt is None:
+            when = "?"
+        else:
+            delta = (reset_dt - now).total_seconds()
+            countdown = "overdue" if delta < 0 else f"in {_fmt_age(delta)}"
+            when = f"{reset_dt.astimezone().strftime('%a %b %d %H:%M')} ({countdown})"
+        flags = ""
+        if remaining == 0:
+            flags += "  !exhausted"
+        if note:
+            flags += f"  ({note})"
+        print(f"{engine:<8} {remaining_s:>4} remaining   resets {when}{flags}")
+    return 0
+
+
 def cmd_spawn(args):
     base = _resolve_server(args.server)
     if not base:
@@ -637,6 +712,15 @@ def main(argv=None):
     p.add_argument("--engine", help="only this engine")
     p.add_argument("--json", action="store_true", help="raw catalog JSON")
     p.set_defaults(func=cmd_models)
+
+    p = sub.add_parser(
+        "quota",
+        help="weekly quota per engine: percent remaining + reset deadline",
+        description="Per-engine weekly quota from /api/usage/current — percent "
+                    "remaining and when the window resets (local time + countdown).",
+    )
+    p.add_argument("--json", action="store_true", help="raw /api/usage/current JSON")
+    p.set_defaults(func=cmd_quota)
 
     args = parser.parse_args(argv)
     return args.func(args)

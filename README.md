@@ -299,6 +299,7 @@ ccc sessions --json       # machine-readable census
 
 ccc models                # every engine's models, effort ladders, cost,
                           # release dates where the id carries one
+ccc quota                 # weekly quota left per engine + when it resets
 ccc spawn "fix the flaky login test" --engine claude --model opus-5
 ccc spawn "drain the queue" --report-to <your-session-id>   # reports back
 
