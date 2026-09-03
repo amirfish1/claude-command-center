@@ -19873,6 +19873,55 @@ class TestAcpKimiEngine(unittest.TestCase):
                      if e.get("type") == "user_text"]
         self.assertNotIn("during", texts)
 
+    def test_wire_tail_yields_to_an_active_kap_pump(self):
+        """A kap pump streaming the session from the daemon folds the same
+        turns the wire tail would; both writing rendered kap-driven turns
+        twice. While the pump is alive the tail stays silent but keeps its
+        cursor moving, so post-pump appends still fold."""
+        server = self.server
+        sid = "session_kap_pump_yield"
+        d = tempfile.mkdtemp(prefix="ccc-wire-yield-")
+        self.addCleanup(shutil.rmtree, d, True)
+        wire = pathlib.Path(d) / "wire.jsonl"
+        wire.write_text("")
+        with server._ACP_LOCK:
+            server._acp_session("kimi", sid, create=True, cwd="/tmp")[
+                "wire_watch"] = True
+        self.addCleanup(
+            lambda: (server._ACP_SESSION_STATE.get("kimi") or {}).pop(sid, None))
+
+        def wire_path(harness, session_id):
+            return wire if session_id == sid else None
+
+        def append_user(text):
+            with wire.open("a") as fh:
+                fh.write(json.dumps({
+                    "type": "context.append_message", "message": {
+                        "role": "user", "origin": {"kind": "user"},
+                        "content": [{"type": "text", "text": text}]}}) + "\n")
+
+        folds = []
+        with mock.patch.object(server, "_acp_wire_path", side_effect=wire_path), \
+             mock.patch.object(server, "_acp_wire_fold",
+                               side_effect=lambda h, s, b: folds.append((s, b))), \
+             mock.patch("ccc_server.kap.kap_pump_active", return_value=True):
+            server._acp_wire_tail_tick()  # first sight seeds the cursor
+            append_user("from TUI")
+            server._acp_wire_tail_tick()  # pump active: silent, not stuck
+            self.assertEqual([f for f in folds if f[0] == sid], [])
+            with server._ACP_LOCK:
+                st = server._acp_session("kimi", sid)
+            self.assertEqual(st["wire_tail"]["offset"], wire.stat().st_size)
+
+        with mock.patch.object(server, "_acp_wire_path", side_effect=wire_path), \
+             mock.patch.object(server, "_acp_wire_fold",
+                               side_effect=lambda h, s, b: folds.append((s, b))), \
+             mock.patch("ccc_server.kap.kap_pump_active", return_value=False):
+            append_user("after pump")
+            server._acp_wire_tail_tick()
+            mine = [f for f in folds if f[0] == sid]
+            self.assertEqual(len(mine), 1)
+
     def test_acp_plan_update_folds_and_dedupes(self):
         """ACP plan updates (kimi TodoList) persist as plan blocks; identical
         snapshots are not re-emitted (KIMI-FIXES-4)."""

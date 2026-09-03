@@ -160,6 +160,11 @@ Done:
   `ps` can't tell `kimi web` from the TUI), and `/api/v1/meta` is identical
   between them. The pin is the deterministic answer; the status row shows
   which daemon prompts would land on.
+- **The wire tail yields to an active kap pump.** Both observers folded the
+  same turn into the CCC transcript when a prompt went over kap while the
+  session was live in the TUI (every assistant message rendered twice). While
+  the pump streams a session the tail stays silent but keeps its cursor
+  moving, so turns after the pump exits still fold.
 
 Still open, roughly cheapest-first:
 

@@ -407,7 +407,24 @@ def _acp_wire_tail_tick():
             except json.JSONDecodeError:
                 continue
         if batch:
-            _core._acp_wire_fold("kimi", sid, batch)
+            # While a kap pump streams this session from the daemon, IT owns
+            # folding: its mapper emits the same turns from the daemon's
+            # transcript stream, and both paths writing into the CCC
+            # transcript rendered every kap-driven turn twice. The cursor
+            # above still advances, so appends made after the pump exits fold
+            # cleanly — the tail only falls silent, never falls behind.
+            if not _kap_pump_active_for(sid):
+                _core._acp_wire_fold("kimi", sid, batch)
+
+
+def _kap_pump_active_for(sid):
+    """True while a kap pump is streaming this session from the daemon."""
+    try:
+        from ccc_server import kap as _kap
+        return _kap.kap_pump_active(sid)
+    except Exception:
+        # The tail is the rendering of last resort: any doubt means fold.
+        return False
 
 
 def _acp_wire_tail_start(harness):
