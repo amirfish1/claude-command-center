@@ -1,7 +1,7 @@
 # Lane C — Unified memory system + Ask tab backend (PLAN ONLY)
 
-Updated: 2026-09-03 09:55
-Status: measuring existing systems
+Updated: 2026-09-03 10:10
+Status: measurements done, writing plan
 Owner: CCC Lane C (dispatched by 25c52af6-c616-46a2-b47d-0f8a9e016055)
 
 ## Deliverables
@@ -24,11 +24,23 @@ Owner: CCC Lane C (dispatched by 25c52af6-c616-46a2-b47d-0f8a9e016055)
   so it cannot diagnose stuck/burning sessions.
 - iMessage chat.db: TCC denies read (Operation not permitted). OPS-925 filed.
 
+## Measured (evidence/)
+- TR brain search: 5/5 questions timed out at 300 s (backfill --cowork running,
+  load avg 45-85); TR's own degraded.log: 10,031/10,031 proactive-search
+  rc=142 at 5 s cap since 2026-07-31 (1,041 today). 63% of summaries
+  (18,198/29,087) are CCC scratch one-shots. Direct FTS on recall.db: 0.5 s.
+- Claude-Index NL query 83-159 s (OR-rewrite -> 650k-hit BM25); raw topic
+  query 1-7.5 s; GT hit 4/5 (miss = Kimi not indexed). Codex IS indexed.
+- Ask tab: 4/4 timed out (>150 s) under load; server restarted by sibling at
+  10:00 (Q5 conn refused). Retrieval endpoints re-timed after restart.
+- Gmail: ~200 inbound threads/7d, 45 sent threads/30d, >=200 starred.
+  Result bodies archived by the MCP wrapper; counts only.
+- Hunch: MCP timeout + 'database is locked' (3 hunch mcp procs) -> OPS-926.
+- iMessage: TCC denied -> OPS-925.
+
 ## Next
-1. Finish 5-question runs: TR, Claude-Index, Ask tab, Hunch. Score hits.
-2. Gmail MCP noise probe (search_threads) for the ingest filter.
-3. Write plan.md + decision HTML; 3 name candidates.
-4. Report to parent session.
+1. Write plan-2026-09-03.md + plan-2026-09-03.html (options A/B/C, rec B).
+2. Report to parent session.
 
 ## Decisions
 - Test questions fixed in evidence/questions.txt (2 Claude, 1 Kimi, 1 Codex, 1 strategic).
