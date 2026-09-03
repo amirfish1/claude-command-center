@@ -2975,6 +2975,31 @@ def _start_devin_resume_watchdog(proc, session_id, text, log_path, *, delivery_s
         )
         if not first_line.lower().startswith("error:"):
             return
+        if "no session found" in str(tail).lower():
+            # The session is gone from Devin's DB (e.g. after a corrupt
+            # sessions.db rebuild) — no retry can ever deliver. Drop the
+            # queued follow-up instead of requeue-looping forever (OPS-922);
+            # the delivery-proof watchdog has the same backstop in case this
+            # one loses the race.
+            drop_operation = (
+                {"field": "devin_steer", "action": "clear_if_matching",
+                 "match": text}
+                if delivery_slot == "steer"
+                else {"field": "resume", "action": "pop_head_if_matching",
+                      "match": text}
+            )
+            dropped = _core._apply_pending_input_operations(
+                session_id, [drop_operation],
+            )
+            if (dropped.get("value") or [None])[0] is not None:
+                _core._pending_resume_retry_after.pop(session_id, None)
+            print(
+                f"[devin-resume] {session_id} is gone from Devin's DB "
+                f"(exit {exit_code}): {first_line[:120]} — "
+                "dropping undeliverable follow-up",
+                flush=True,
+            )
+            return
         print(
             f"[devin-resume] startup failure for {session_id} "
             f"(exit {exit_code}): {first_line[:160]} — requeuing follow-up",

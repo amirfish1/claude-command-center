@@ -76,6 +76,34 @@ class DevinQueueTests(unittest.TestCase):
                     time.sleep(0.05)
         self.assertEqual(queue.get(sid), ["follow up"])
 
+    def test_devin_resume_watchdog_drops_gone_session(self):
+        """'No session found' at startup is permanent: drop, never requeue.
+
+        OPS-922: after Devin's sessions.db lost rows, the startup watchdog
+        requeued undeliverable follow-ups forever — a fresh `devin --resume`
+        spawn every ~60s per dead session (~70 spawns in 15 min).
+        """
+        import subprocess
+        server = importlib.import_module("server")
+        sid = "devincli-watchdog-gone-test"
+        with tempfile.TemporaryDirectory() as tmp:
+            log_path = os.path.join(tmp, "resume.log")
+            with open(log_path, "w") as fh:
+                proc = subprocess.Popen(
+                    ["/bin/sh", "-c",
+                     "echo \"Error: No session found matching 'watchdog-gone-test'\"; exit 1"],
+                    stdout=fh, stderr=subprocess.STDOUT,
+                )
+            with mock.patch.object(server, "_pending_resume_queue", {sid: ["follow up"]}) as queue, \
+                 mock.patch.object(server, "_pending_resume_retry_after", {}) as retry_after, \
+                 mock.patch.object(server, "_save_pending_inputs"):
+                server._start_devin_resume_watchdog(proc, sid, "follow up", log_path)
+                deadline = time.time() + 5
+                while time.time() < deadline and queue.get(sid):
+                    time.sleep(0.05)
+        self.assertFalse(queue.get(sid))
+        self.assertNotIn(sid, retry_after)
+
     def test_devin_resume_watchdog_ignores_success_and_running(self):
         """No requeue when the resume succeeds fast or outlives the window."""
         import subprocess
