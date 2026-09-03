@@ -42607,13 +42607,16 @@
     return '<div class="fq-alert-row is-' + escapeAttr(sev) + '" data-wt-alert-id="' + escapeAttr(a.id || '') + '"'
       + ' data-wt-alert-queue="' + escapeAttr(queue) + '" title="' + escapeAttr(tip) + '">'
       + '<span class="fq-alert-sev" aria-hidden="true"></span>'
+      // Chips (queue · count · age) on line 1, the human-readable reason on
+      // its own line (2-line clamp), raw detail last. At the 260px rail
+      // width a single-line layout truncated the reason to two words.
       + '<div class="fq-alert-main">'
       +   '<div class="fq-alert-top">'
       +     (queue ? '<span class="fq-alert-queue">' + escapeHtml(queue) + '</span>' : '')
-      +     '<span class="fq-alert-title">' + escapeHtml(title) + '</span>'
       +     (count > 1 ? '<span class="fq-alert-count" title="occurrences">×' + count + '</span>' : '')
       +     (meta ? '<span class="fq-alert-meta">' + escapeHtml(meta) + '</span>' : '')
       +   '</div>'
+      +   '<div class="fq-alert-title">' + escapeHtml(title) + '</div>'
       +   (detail ? '<div class="fq-alert-detail">' + escapeHtml(detail) + '</div>' : '')
       + '</div>'
       + '<button type="button" class="fq-alert-ack" title="Acknowledge and dismiss (re-alerts on a new occurrence)" aria-label="Acknowledge">✓</button>'

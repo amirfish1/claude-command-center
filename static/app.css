@@ -22337,7 +22337,7 @@ body.has-gc-reader .pwa-install-banner {
 .fq-alerts-label {
   font-family: 'JetBrains Mono', ui-monospace, monospace;
   font-size: 10.5px; font-weight: 700; letter-spacing: 0.07em;
-  color: var(--red, #f85149);
+  color: var(--red, #f85149); white-space: nowrap; flex: 0 0 auto;
 }
 .fq-alerts-summary {
   font-family: 'JetBrains Mono', ui-monospace, monospace;
@@ -22375,15 +22375,16 @@ body.has-gc-reader .pwa-install-banner {
   white-space: nowrap; flex: 0 0 auto;
 }
 .fq-alert-title {
-  font-size: 12.5px; font-weight: 600; color: var(--text);
-  min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  font-size: 12.5px; font-weight: 600; color: var(--text); line-height: 1.3;
+  min-width: 0; overflow: hidden;
+  display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical;
 }
 .fq-alert-detail {
   font-family: 'JetBrains Mono', ui-monospace, monospace;
   font-size: 10.5px; color: var(--text-muted);
   min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
 }
-.queue-wrap-titles .fq-alert-title,
+.queue-wrap-titles .fq-alert-title { -webkit-line-clamp: unset; }
 .queue-wrap-titles .fq-alert-detail { white-space: normal; overflow: visible; }
 .fq-alert-meta {
   font-family: 'JetBrains Mono', ui-monospace, monospace;
