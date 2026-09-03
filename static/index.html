@@ -1366,10 +1366,6 @@
                         <button class="fq-wrap-toggle" id="queueWrapToggle" type="button" role="menuitem" title="Wrap queue issue titles" aria-pressed="false">Wrap titles</button>
                       </div>
                     </div>
-                    <div class="fq-filter" id="queueFilterToggle" role="group" aria-label="Filter queue by status">
-                      <button class="fq-filter-btn" type="button" data-uxq-filter="all">All</button>
-                      <button class="fq-filter-btn" type="button" data-uxq-filter="open">Open</button>
-                    </div>
                   </div>
                   <div class="fq-working-strip" id="queueWorkingStrip" aria-label="Working now across all queues">
                     <div class="fq-working-head">
@@ -1381,6 +1377,12 @@
                     <div class="fq-working-rows"></div>
                   </div>
                   <div class="fq-ticket-filter-row">
+                    <!-- CCC-1038: the status filter sits with the type filter on the
+                         ticket list it scopes, not up in the queue-scope header. -->
+                    <div class="fq-filter fq-status-filter" id="queueFilterToggle" role="group" aria-label="Filter queue by status">
+                      <button class="fq-filter-btn" type="button" data-uxq-filter="all">All</button>
+                      <button class="fq-filter-btn" type="button" data-uxq-filter="open">Open</button>
+                    </div>
                     <div class="fq-filter fq-type-filter" id="queueTypeFilterToggle" role="group" aria-label="Filter queue by ticket type">
                       <button class="fq-filter-btn" type="button" data-uxq-type-filter="all">All</button>
                       <button class="fq-filter-btn" type="button" data-uxq-type-filter="bug">Bugs</button>

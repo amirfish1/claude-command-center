@@ -14489,9 +14489,16 @@
   }
   /* ── Ticket filter row ──────────────────────────────────────────────── */
   .fq-ticket-filter-row {
-    display: flex; align-items: center; gap: 8px; padding: 10px 14px;
+    display: flex; flex-wrap: wrap; align-items: center; gap: 5px; padding: 8px 8px;
   }
+  .fq-ticket-filter-row .fq-status-filter,
   .fq-ticket-filter-row .fq-type-filter { flex: 0 0 auto; }
+  /* Status (All/Open) and type (All/Bugs/Features) read as one filter bar
+     (CCC-1038). Spacing is tight enough that both groups share a line at the
+     default 260px status rail; the search box takes the remaining width and
+     wraps to its own line when there isn't room. */
+  .fq-ticket-filter-row .fq-filter-btn { padding: 1px 5px; letter-spacing: 0; }
+  .fq-ticket-filter-row .fq-search-input { flex-basis: 120px; }
   .fq-ticket-filter-row .fq-search-input {
     flex: 1 1 auto; min-width: 0; padding: 5px 10px;
     background: #0b0f14; border: 1px solid #21262d; border-radius: 5px;
@@ -14667,9 +14674,15 @@
     background: #39d2c0; margin-left: auto;
   }
   /* Mobile ticket filter row: larger chips. */
-  #queuePanel.fq-mobile .fq-ticket-filter-row { gap: 7px; padding: 10px 14px; }
-  #queuePanel.fq-mobile .fq-ticket-filter-row .fq-filter-btn {
-    font-size: 11.5px; padding: 5px 11px; border-radius: 5px;
+  /* Big touch targets only where there is a finger (phones/tablets). The
+     260px desktop status rail is also width-"mobile" (.fq-mobile), but a
+     mouse doesn't need 11px padding — and with status + type filters on
+     one row (CCC-1038) the big buttons wrapped into three stacked lines. */
+  @media (pointer: coarse) {
+    #queuePanel.fq-mobile .fq-ticket-filter-row { gap: 7px; padding: 10px 14px; }
+    #queuePanel.fq-mobile .fq-ticket-filter-row .fq-filter-btn {
+      font-size: 11.5px; padding: 5px 11px; border-radius: 5px;
+    }
   }
   /* Mobile picker: bottom sheet, not anchored card. */
   #queuePanel.fq-mobile.fq-picker-open .fq-qp { display: flex; flex-direction: column; }
@@ -14738,7 +14751,7 @@
   .fq-filter-btn + .fq-filter-btn { border-left: 1px solid var(--border); }
   .fq-filter-btn:hover { color: var(--text); }
   .fq-filter-btn.is-active { background: var(--accent); color: #fff; }
-  .fq-type-filter { margin-left: -4px; }
+  .fq-ticket-filter-row > .fq-filter:first-of-type { margin-left: -4px; }
   .fq-wrap-toggle {
     background: transparent; color: var(--text-muted); border: 1px solid var(--border);
     border-radius: 4px; cursor: pointer; font-size: 10px; font-weight: 700;
