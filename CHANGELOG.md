@@ -20,6 +20,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Changed
 - `watchtower.queue` is now a hard, unconditional dependency of CCC's queue system (ticket lifecycle: claim/close/edit/answer/comment/reopen). Removed the standalone `ux_fixes_queue.py` stdlib fallback that let CCC's queue features work without WatchTower installed — it had gone stale since WatchTower's own storage migrated from JSON to SQLite and was never updated, a latent risk of silent data divergence if watchtower ever became unimportable. If `watchtower.queue` can't be imported, CCC now fails loudly at startup with a clear error instead of silently falling back to a frozen JSON store.
 
+## [5.31.0] - 2026-09-03
+
+### Added
+- Added `ccc quota` — a CLI subcommand that prints each engine's weekly quota as percent remaining plus the reset deadline (local time with a countdown), read from the existing `/api/usage/current` endpoint. `--json` prints the raw payload.
+- Archive-load and conversation-open latency are now measured in the browser and logged to `~/.claude/command-center/perf-events.jsonl` (plus `[PERF]` lines in the service log); `GET /api/perf/summary` rolls them up, and a background check files at most one WatchTower `CCC` ticket per day when the 5 s / 1 s-warm budgets are breached.
+- Added best-effort caller attribution to session spawns: the activity log now records whether a spawn came from the CLI, the UI, an automated browser (CDP-driven), or a bare API call, and `ccc spawn` auto-fills the parent session from `CLAUDE_CODE_SESSION_ID` when not given explicitly.
+- Added a "via: CLI/UI/API" chip to the Metadata pane showing how a session's spawn request arrived, based on the caller attribution captured at spawn time.
+- Queue panel: a red WatchTower errors strip above the queue surfaces worker launch failures (engine usage limit, auth, API down), `ERROR` lines from the activity log, and a stopped daemon, so a queue can no longer sit undrained because of an error nobody saw. Each row has an ack (✓) and the header has Ack all; an ack is a timestamp, so the same alert re-appears if it happens again later. New `GET /api/watchtower/alerts` and `POST /api/watchtower/alerts/ack`.
+
+### Changed
+- Prune the Antigravity model picker to the latest tier per family (Gemini Pro/Flash, Claude Sonnet/Opus), so every session-spawn surface shows current models instead of an ever-growing historical list.
+- Render child sessions directly in the session list under their parent row by default (when 1-2 children), and provide collapsible controls when more than 2 children are present.
+- `/api/inject-input` now routes agent/API messages over native Unix Domain Socket (UDS) peer transport when targeting live Claude Code sessions, bypassing stream-json FIFO writes and preventing accidental turn interruptions; human messages typed in the dashboard composer explicitly declare `source="composer"` to retain legacy user transport and blue styling.
+- `ccc send` and `/api/inject-input` now accept `peer_sender_sid` (and `--from` CLI option or `$CLAUDE_SESSION_ID`) for peer attribution on UDS deliveries.
+- New-session favorite model pills now update immediately when you pick a model, engine, or effort — not only after spawning
+- New-session favorite model pills now always surface your most recently picked model first, with habitual picks after
+
+### Fixed
+- Fixed an unhandled `TypeError` in inbound Claude Code peer-report routing (`_ccc_peer_route_report`) where `announced_from` was forwarded as a keyword argument to the session router rather than wrapped into the text body via `_wrap_injected_text_with_announced_from`, causing cross-session completion reports sent to CCC's peer socket to crash the connection thread before injection.
+- Fix inbound peer authentication failure on CCC's UDS socket: Claude Code strictly validates peer tokens with `/^[0-9a-f]{32}$/`; CCC now publishes a 32-character hex token (and includes `procStart` / `pidDomain`) so native Claude Code sessions (`SendMessage` to `ccc`) successfully authenticate rather than dropping the auth frame.
+
 ## [5.30.0] - 2026-09-02
 
 ### Added
@@ -2940,7 +2961,8 @@ Initial public release.
 - `/api/repo/switch` validates targets against the picker allow-list.
 - See [`SECURITY.md`](SECURITY.md) for the full threat model.
 
-[Unreleased]: https://github.com/amirfish1/claude-command-center/compare/v5.30.0...HEAD
+[Unreleased]: https://github.com/amirfish1/claude-command-center/compare/v5.31.0...HEAD
+[5.31.0]: https://github.com/amirfish1/claude-command-center/releases/tag/v5.31.0
 [5.30.0]: https://github.com/amirfish1/claude-command-center/releases/tag/v5.30.0
 [5.29.0]: https://github.com/amirfish1/claude-command-center/releases/tag/v5.29.0
 [5.28.0]: https://github.com/amirfish1/claude-command-center/releases/tag/v5.28.0

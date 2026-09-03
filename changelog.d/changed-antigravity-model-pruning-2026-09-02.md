@@ -1,1 +1,0 @@
-Prune the Antigravity model picker to the latest tier per family (Gemini Pro/Flash, Claude Sonnet/Opus), so every session-spawn surface shows current models instead of an ever-growing historical list.

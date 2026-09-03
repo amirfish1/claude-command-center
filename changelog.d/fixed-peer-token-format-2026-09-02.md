@@ -1,1 +1,0 @@
-- Fix inbound peer authentication failure on CCC's UDS socket: Claude Code strictly validates peer tokens with `/^[0-9a-f]{32}$/`; CCC now publishes a 32-character hex token (and includes `procStart` / `pidDomain`) so native Claude Code sessions (`SendMessage` to `ccc`) successfully authenticate rather than dropping the auth frame.

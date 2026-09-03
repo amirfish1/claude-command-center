@@ -1,1 +1,0 @@
-Added `ccc quota` — a CLI subcommand that prints each engine's weekly quota as percent remaining plus the reset deadline (local time with a countdown), read from the existing `/api/usage/current` endpoint. `--json` prints the raw payload.

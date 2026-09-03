@@ -1,1 +1,0 @@
-Archive-load and conversation-open latency are now measured in the browser and logged to `~/.claude/command-center/perf-events.jsonl` (plus `[PERF]` lines in the service log); `GET /api/perf/summary` rolls them up, and a background check files at most one WatchTower `CCC` ticket per day when the 5 s / 1 s-warm budgets are breached.
