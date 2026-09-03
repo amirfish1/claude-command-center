@@ -626,3 +626,196 @@ class TestKapRuntimeRebind(unittest.TestCase):
         self.assertEqual(events, [])
         self.assertLess(self._index_of("POST", "/runtime"),
                         self._index_of("POST", "/prompts"))
+
+
+class TestKapServerDiscoveryPin(unittest.TestCase):
+    """More than one live daemon can be registered at once (a 0.40.1 TUI
+    embeds a kap server next to a dedicated `kimi web`). Newest-heartbeat is
+    then a coin flip; CCC_KIMI_KAP_SERVER (a port or server_id) makes the
+    target explicit."""
+
+    def _home(self, tmp, records):
+        inst = Path(tmp) / "server" / "instances"
+        inst.mkdir(parents=True)
+        for name, rec in records.items():
+            (inst / name).write_text(json.dumps(rec))
+        os.environ[kap._KAP_HOME_ENV] = tmp
+
+    def _rec(self, port, beat_age_s=1.0, pid=None, server_id=None):
+        return {
+            "server_id": server_id or "srv-%s" % port,
+            "pid": os.getpid() if pid is None else pid,
+            "host": "127.0.0.1", "port": port,
+            "started_at": int((time.time() - 60) * 1000),
+            "heartbeat_at": int((time.time() - beat_age_s) * 1000),
+            "host_version": "0.40.1",
+        }
+
+    def tearDown(self):
+        os.environ.pop(kap._KAP_HOME_ENV, None)
+        os.environ.pop(kap._KAP_SERVER_PIN_ENV, None)
+
+    def test_instances_are_annotated_with_liveness(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            self._home(tmp, {
+                "a.json": self._rec(58627, beat_age_s=1.0),
+                "b.json": self._rec(58628, beat_age_s=3600.0),
+                "c.json": self._rec(58629, pid=999999),
+            })
+            by_port = {r["port"]: r for r in kap.kap_instances()}
+            self.assertTrue(by_port[58627]["live"])
+            self.assertFalse(by_port[58628]["live"])
+            self.assertTrue(by_port[58628]["stale"])
+            self.assertFalse(by_port[58629]["live"])
+            self.assertFalse(by_port[58629]["pid_alive"])
+            self.assertIsNotNone(by_port[58627]["heartbeat_age_s"])
+
+    def test_newest_heartbeat_wins_without_a_pin(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            self._home(tmp, {
+                "a.json": self._rec(58627, beat_age_s=1.0),
+                "b.json": self._rec(58628, beat_age_s=5.0),
+            })
+            self.assertEqual(kap.kap_discover()["port"], 58627)
+
+    def test_the_pin_picks_the_named_daemon_not_the_newest(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            self._home(tmp, {
+                "a.json": self._rec(58627, beat_age_s=1.0),
+                "b.json": self._rec(58628, beat_age_s=5.0),
+            })
+            os.environ[kap._KAP_SERVER_PIN_ENV] = "58628"
+            self.assertEqual(kap.kap_discover()["port"], 58628)
+
+    def test_the_pin_matches_a_server_id_too(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            self._home(tmp, {
+                "a.json": self._rec(58627, server_id="dedicated"),
+                "b.json": self._rec(58628, server_id="tui"),
+            })
+            os.environ[kap._KAP_SERVER_PIN_ENV] = "tui"
+            self.assertEqual(kap.kap_discover()["port"], 58628)
+
+    def test_a_pin_matching_nothing_live_reads_as_no_daemon(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            self._home(tmp, {"a.json": self._rec(58627)})
+            os.environ[kap._KAP_SERVER_PIN_ENV] = "59999"
+            self.assertIsNone(kap.kap_discover())
+            with self.assertRaises(kap.KapUnavailable):
+                kap.kap_endpoint()
+
+    def test_a_pin_never_resurrects_a_stale_daemon(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            self._home(tmp, {"a.json": self._rec(58627, beat_age_s=3600.0)})
+            os.environ[kap._KAP_SERVER_PIN_ENV] = "58627"
+            self.assertIsNone(kap.kap_discover())
+
+
+class TestKapBindingCache(unittest.TestCase):
+    """The session-status endpoint polls per second; the binding lookup is
+    cached briefly so the transport pill's chip doesn't hammer the daemon."""
+
+    def setUp(self):
+        self.calls = []
+
+        def fake_request(method, path, body=None, timeout=30.0):
+            self.calls.append((method, path))
+            return {"workspace_id": "ws_1", "runtime_id": "local"}
+
+        self._orig = kap.kap_request
+        kap.kap_request = fake_request
+        kap._KAP_BINDING_CACHE.clear()
+
+    def tearDown(self):
+        kap.kap_request = self._orig
+        kap._KAP_BINDING_CACHE.clear()
+
+    def test_a_second_read_within_the_ttl_does_not_recall_the_daemon(self):
+        first = kap.kap_runtime_binding_cached("session_x", ttl=60)
+        second = kap.kap_runtime_binding_cached("session_x", ttl=60)
+        self.assertEqual(first["runtime_id"], "local")
+        self.assertEqual(second["runtime_id"], "local")
+        self.assertEqual(len(self.calls), 1)
+
+    def test_an_expired_entry_refetches(self):
+        kap.kap_runtime_binding_cached("session_x", ttl=0)
+        kap.kap_runtime_binding_cached("session_x", ttl=0)
+        self.assertEqual(len(self.calls), 2)
+
+    def test_a_failure_caches_none_instead_of_raising(self):
+        def dead(method, path, body=None, timeout=30.0):
+            raise kap.KapUnavailable("no daemon")
+        kap.kap_request = dead
+        self.assertIsNone(kap.kap_runtime_binding_cached("session_x"))
+        self.assertIsNone(kap.kap_runtime_binding_cached("session_x"))
+
+
+class TestKapHealBindingOnView(unittest.TestCase):
+    """Viewing a poisoned (acp:<sid>) session heals it back to local -- but
+    never mid-turn, never more than once per throttle window, and never when
+    kap routing is off."""
+
+    def setUp(self):
+        self.calls = []
+        self.binding = {"workspace_id": "ws_1", "runtime_id": "acp:session_x"}
+        self.busy = False
+
+        def fake_request(method, path, body=None, timeout=30.0):
+            self.calls.append((method, path, body))
+            if path.endswith("/runtime"):
+                if method == "POST":
+                    self.binding = dict(self.binding,
+                                        runtime_id=body["runtime_id"])
+                return dict(self.binding)
+            if path.endswith("/status"):
+                return {"busy": self.busy}
+            return {}
+
+        self._orig_request = kap.kap_request
+        kap.kap_request = fake_request
+        self._orig_enabled = kap.kap_enabled
+        kap.kap_enabled = lambda: True
+        kap._KAP_HEAL_VIEW_LAST.clear()
+
+    def tearDown(self):
+        kap.kap_request = self._orig_request
+        kap.kap_enabled = self._orig_enabled
+        kap._KAP_HEAL_VIEW_LAST.clear()
+
+    def test_a_local_binding_needs_no_heal_and_no_status_call(self):
+        self.binding = {"workspace_id": "ws_1", "runtime_id": "local"}
+        result = kap._kap_heal_binding_now("session_x")
+        self.assertEqual(result["runtime_id"], "local")
+        self.assertEqual(self.calls,
+                         [("GET", "/api/v1/sessions/session_x/runtime", None)])
+
+    def test_a_poisoned_idle_session_is_rebound(self):
+        result = kap._kap_heal_binding_now("session_x")
+        self.assertEqual(result["runtime_id"], "local")
+        self.assertIn(("POST", "/api/v1/sessions/session_x/runtime",
+                       {"runtime_id": "local"}), self.calls)
+
+    def test_a_busy_session_is_left_alone(self):
+        self.busy = True
+        self.assertIsNone(kap._kap_heal_binding_now("session_x"))
+        self.assertFalse(any(m == "POST" for m, _, _ in self.calls))
+
+    def test_the_view_hook_is_throttled_per_session(self):
+        started = []
+        orig = kap._kap_heal_binding_guarded
+        kap._kap_heal_binding_guarded = lambda sid: started.append(sid)
+        try:
+            self.assertTrue(kap.kap_heal_binding_on_view("session_x"))
+            self.assertFalse(kap.kap_heal_binding_on_view("session_x"))
+            self.assertTrue(kap.kap_heal_binding_on_view("session_y"))
+            for _ in range(50):
+                if len(started) >= 2:
+                    break
+                time.sleep(0.02)
+        finally:
+            kap._kap_heal_binding_guarded = orig
+        self.assertEqual(sorted(started), ["session_x", "session_y"])
+
+    def test_the_view_hook_is_off_when_the_flag_is_off(self):
+        kap.kap_enabled = lambda: False
+        self.assertFalse(kap.kap_heal_binding_on_view("session_x"))

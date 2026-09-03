@@ -24759,6 +24759,17 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                     _acp_maybe_attach_on_view(acp_harness, conv_id)
                 except Exception:
                     pass
+                if is_kimi_conv:
+                    # A session last attached over ACP sits on the virtual
+                    # acp:<sid> runtime (no fs/process capabilities) for every
+                    # other consumer until rebound. Viewing is when a poisoned
+                    # session gets noticed — heal it to local in the
+                    # background (threaded + throttled in kap.py).
+                    try:
+                        from ccc_server import kap as _kap
+                        _kap.kap_heal_binding_on_view(conv_id)
+                    except Exception:
+                        pass
             # Look for a fully-baked response (JSON-encoded body + matching
             # gzip variant) in the conv-bytes cache. On a hit we skip
             # parse_conversation, json.dumps, AND gzip — the click→render

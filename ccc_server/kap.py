@@ -79,26 +79,65 @@ def _pid_alive(pid):
         return False
 
 
-def kap_discover():
-    """Newest live daemon record, or None. Stale heartbeats and dead pids are
-    skipped so a crashed server's leftover file never wins."""
+_KAP_SERVER_PIN_ENV = "CCC_KIMI_KAP_SERVER"
+
+
+def kap_instances():
+    """Every registered daemon record, annotated with liveness.
+
+    ``live`` means adoptable right now (fresh heartbeat, pid alive, port
+    present) -- the same bar kap_discover applies. Malformed records are
+    skipped; everything else always parses, so the System status panel can
+    reason about "registered but stale/dead" without reimplementing this.
+    """
     inst_dir = kap_home() / "server" / "instances"
     try:
         entries = sorted(inst_dir.glob("*.json"))
     except OSError:
-        return None
+        return []
     now = time.time()
-    best = None
+    out = []
     for path in entries:
         try:
             rec = json.loads(path.read_text() or "{}")
         except (OSError, ValueError):
             continue
+        try:
+            beat = float(rec.get("heartbeat_at") or 0) / 1000.0
+        except (TypeError, ValueError):
+            beat = 0.0
+        alive = _pid_alive(rec.get("pid"))
+        stale = not beat or (now - beat) > _KAP_HEARTBEAT_STALE_S
+        rec = dict(rec)
+        rec["pid_alive"] = alive
+        rec["stale"] = stale
+        rec["heartbeat_age_s"] = round(now - beat, 1) if beat else None
+        rec["live"] = bool(alive and not stale and rec.get("port"))
+        out.append(rec)
+    return out
+
+
+def kap_discover():
+    """Newest live daemon record, or None. Stale heartbeats and dead pids are
+    skipped so a crashed server's leftover file never wins.
+
+    CCC_KIMI_KAP_SERVER pins the choice to a port or server_id. With more
+    than one live daemon registered -- e.g. an interactive TUI (0.40.1 embeds
+    a kap server) next to a dedicated `kimi web` -- the newest-heartbeat pick
+    can land prompts inside whichever process blinked last; nothing in the
+    instance record (or in the process table -- the SEA binary rewrites argv,
+    and /api/v1/meta is identical) says which is which, so the pin is the
+    only deterministic target. A pin matching no live record reads as "no
+    daemon" and falls back to ACP like any other miss."""
+    live = [rec for rec in kap_instances() if rec["live"]]
+    pin = os.environ.get(_KAP_SERVER_PIN_ENV, "").strip()
+    if pin:
+        live = [rec for rec in live
+                if pin in (str(rec.get("port") or ""),
+                           str(rec.get("server_id") or ""))]
+    best = None
+    for rec in live:
         beat = float(rec.get("heartbeat_at") or 0) / 1000.0
-        if beat and (now - beat) > _KAP_HEARTBEAT_STALE_S:
-            continue
-        if not _pid_alive(rec.get("pid")):
-            continue
         if best is None or beat > best[0]:
             best = (beat, rec)
     return best[1] if best else None
@@ -272,6 +311,92 @@ def kap_bind_runtime_local(sid, attempts=3, settle_s=0.5):
         if attempt + 1 < attempts:
             time.sleep(settle_s)
     return None
+
+
+_KAP_BINDING_CACHE = {}
+_KAP_BINDING_LOCK = threading.Lock()
+
+
+def kap_runtime_binding_cached(sid, ttl=5.0):
+    """kap_runtime_binding behind a short TTL. The session-status endpoint
+    polls about once a second for the open conversation, and the binding only
+    moves on attach/rebind events -- a 5s cache keeps the transport pill's
+    binding chip truthful without hammering the daemon. Failures cache as
+    None (chip hidden) rather than re-failing every poll."""
+    now = time.time()
+    with _KAP_BINDING_LOCK:
+        hit = _KAP_BINDING_CACHE.get(sid)
+        if hit and now - hit[0] < ttl:
+            return hit[1]
+    try:
+        binding = kap_runtime_binding(sid)
+    except (KapUnavailable, KapError, OSError, ValueError):
+        binding = None
+    with _KAP_BINDING_LOCK:
+        _KAP_BINDING_CACHE[sid] = (now, binding)
+    return binding
+
+
+# --- binding heal on view --------------------------------------------------
+#
+# Viewing a kimi conversation in CCC writes nothing by design, but a session
+# last attached over ACP sits poisoned (acp:<sid>) for every other consumer
+# until something rebinds it. The open is exactly when a human is looking at
+# the session, so it is the right moment to heal -- in a daemon thread (a
+# cold resume can take seconds and must not stall the transcript response),
+# throttled per sid, and never when the daemon reports a live turn: mid-turn
+# the binding is load-bearing in the serving process and flipping it changes
+# where the running turn's Bash executes. The next prompt rebinds at a safe
+# boundary regardless (kap_prompt), so a skipped heal is a delay, not a loss.
+
+_KAP_HEAL_VIEW_MIN_INTERVAL_S = 300.0
+_KAP_HEAL_VIEW_LAST = {}
+_KAP_HEAL_VIEW_LOCK = threading.Lock()
+
+
+def _kap_heal_binding_now(sid):
+    """The heal itself, synchronous. Returns the confirmed binding or None."""
+    try:
+        binding = kap_runtime_binding(sid)
+    except (KapUnavailable, KapError, OSError, ValueError):
+        return None
+    if binding.get("runtime_id") == "local":
+        return binding
+    try:
+        status = kap_session_status(sid)
+    except (KapUnavailable, KapError, OSError, ValueError):
+        return None
+    if status.get("busy"):
+        return None
+    return kap_bind_runtime_local(sid)
+
+
+def _kap_heal_binding_guarded(sid):
+    try:
+        _kap_heal_binding_now(sid)
+    except Exception:
+        pass
+
+
+def kap_heal_binding_on_view(sid, min_interval=_KAP_HEAL_VIEW_MIN_INTERVAL_S):
+    """Fire the heal for a viewed session, at most once per `min_interval`.
+
+    Returns True when a heal thread was started. Gated on the kap flag: with
+    routing off there is no daemon relationship to heal through, and the ACP
+    path owns the binding story for that session."""
+    if not sid or not kap_enabled():
+        return False
+    now = time.time()
+    with _KAP_HEAL_VIEW_LOCK:
+        last = _KAP_HEAL_VIEW_LAST.get(sid) or 0.0
+        if now - last < min_interval:
+            return False
+        _KAP_HEAL_VIEW_LAST[sid] = now
+    threading.Thread(
+        target=_kap_heal_binding_guarded, args=(sid,),
+        name="kap-heal-%s" % str(sid)[:8], daemon=True,
+    ).start()
+    return True
 
 
 # --- WebSocket (RFC 6455 client, stdlib only) ------------------------------
