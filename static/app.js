@@ -42560,6 +42560,144 @@
       .filter(w => w && w.alive !== false);
     _renderQueueStatusStrip(_uxqLastResolvedProject, _uxqItemsCache.items, liveWorkers);
   }
+  // ── WatchTower error strip (above the queue) ─────────────────────────────
+  // Worker launch failures (engine usage limit, auth, API down), ERROR lines
+  // from WatchTower's activity.log, and a stopped daemon — the failures that
+  // silently stop a queue from draining. GET /api/watchtower/alerts returns
+  // only un-acked alerts; acks are server-side timestamps so a NEWER
+  // occurrence re-surfaces after a dismiss. Polled alongside the health strip.
+  let _wtAlertsCache = { ts: 0, alerts: [], total: 0 };
+  let _wtAlertsPromise = null;
+  // Optimistic hide between the ack click and the server round-trip.
+  const _wtAlertsLocalAcked = new Set();
+  async function _fetchWtAlerts(force) {
+    if (!force && Date.now() - _wtAlertsCache.ts < 15000) return _wtAlertsCache;
+    if (_wtAlertsPromise && !force) return _wtAlertsPromise;
+    _wtAlertsPromise = (async () => {
+      try {
+        const res = await backgroundApiFetch('/api/watchtower/alerts', { cache: 'no-store' });
+        const data = await res.json().catch(() => ({}));
+        if (data && Array.isArray(data.alerts)) {
+          _wtAlertsCache = { ts: Date.now(), alerts: data.alerts, total: Number(data.total) || data.alerts.length };
+          // Server now agrees with every local ack — drop the optimistic set.
+          const ids = new Set(data.alerts.map(a => a && a.id));
+          _wtAlertsLocalAcked.forEach(id => { if (!ids.has(id)) _wtAlertsLocalAcked.delete(id); });
+        }
+      } catch (_) { /* keep stale cache */ }
+      finally { _wtAlertsPromise = null; }
+      return _wtAlertsCache;
+    })();
+    return _wtAlertsPromise;
+  }
+  function _wtAlertRowHtml(a) {
+    const sev = String(a.severity || 'error');
+    const queue = String(a.queue || '').toUpperCase();
+    const title = String(a.title || 'WatchTower error');
+    const detail = String(a.detail || '');
+    const count = Number(a.count) || 1;
+    const age = a.age_seconds != null ? _uxqFmtAge(a.age_seconds) : '';
+    let meta = age ? age + ' ago' : '';
+    if (a.cooldown_active && a.cooldown_until_iso) {
+      const until = new Date(a.cooldown_until_iso);
+      if (!isNaN(until)) meta += (meta ? ' · ' : '') + 'retry ' + until.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+    }
+    const tip = [queue, title, detail, a.ts_iso ? 'last ' + a.ts_iso : '',
+      a.cooldown_until_iso ? 'cooldown until ' + a.cooldown_until_iso : '',
+      a.log ? 'log: ' + a.log : ''].filter(Boolean).join('\n');
+    return '<div class="fq-alert-row is-' + escapeAttr(sev) + '" data-wt-alert-id="' + escapeAttr(a.id || '') + '"'
+      + ' data-wt-alert-queue="' + escapeAttr(queue) + '" title="' + escapeAttr(tip) + '">'
+      + '<span class="fq-alert-sev" aria-hidden="true"></span>'
+      + '<div class="fq-alert-main">'
+      +   '<div class="fq-alert-top">'
+      +     (queue ? '<span class="fq-alert-queue">' + escapeHtml(queue) + '</span>' : '')
+      +     '<span class="fq-alert-title">' + escapeHtml(title) + '</span>'
+      +     (count > 1 ? '<span class="fq-alert-count" title="occurrences">×' + count + '</span>' : '')
+      +     (meta ? '<span class="fq-alert-meta">' + escapeHtml(meta) + '</span>' : '')
+      +   '</div>'
+      +   (detail ? '<div class="fq-alert-detail">' + escapeHtml(detail) + '</div>' : '')
+      + '</div>'
+      + '<button type="button" class="fq-alert-ack" title="Acknowledge and dismiss (re-alerts on a new occurrence)" aria-label="Acknowledge">✓</button>'
+      + '</div>';
+  }
+  async function _ackWtAlerts(ids, all) {
+    const $strip = document.getElementById('queueAlertStrip');
+    (ids || []).forEach(id => {
+      _wtAlertsLocalAcked.add(id);
+      const row = $strip && $strip.querySelector('[data-wt-alert-id="' + (window.CSS && CSS.escape ? CSS.escape(id) : id) + '"]');
+      if (row) row.classList.add('is-acking');
+    });
+    try {
+      const res = await fetch('/api/watchtower/alerts/ack', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(all ? { all: true } : { ids }),
+      });
+      const d = await res.json().catch(() => ({}));
+      if (res.ok && d.ok && Array.isArray(d.alerts)) {
+        _wtAlertsCache = { ts: Date.now(), alerts: d.alerts, total: Number(d.total) || d.alerts.length };
+        _wtAlertsLocalAcked.clear();
+      } else {
+        (ids || []).forEach(id => _wtAlertsLocalAcked.delete(id));
+        showOpToast('Ack failed: ' + ((d && d.error) || res.status), 'error');
+      }
+    } catch (e) {
+      (ids || []).forEach(id => _wtAlertsLocalAcked.delete(id));
+      showOpToast('Ack failed: ' + (e && e.message || e), 'error');
+    }
+    _renderQueueAlertStrip(_wtAlertsCache);
+  }
+  function _renderQueueAlertStrip(data) {
+    const $strip = document.getElementById('queueAlertStrip');
+    if (!$strip) return;
+    const alerts = ((data && data.alerts) || []).filter(a => a && a.id && !_wtAlertsLocalAcked.has(a.id));
+    if (!alerts.length) {
+      $strip.hidden = true;
+      $strip.innerHTML = '';
+      return;
+    }
+    const total = Math.max(alerts.length, Number(data.total) || 0);
+    const queues = Array.from(new Set(alerts.map(a => String(a.queue || '').toUpperCase()).filter(Boolean)));
+    const summary = total + (total === 1 ? ' issue' : ' issues')
+      + (queues.length ? ' · ' + queues.slice(0, 4).join(', ') + (queues.length > 4 ? ' +' + (queues.length - 4) : '') : '');
+    $strip.innerHTML =
+      '<div class="fq-alerts-head">'
+      + '<span class="fq-alerts-dot" aria-hidden="true"></span>'
+      + '<span class="fq-alerts-label">WATCHTOWER ERRORS</span>'
+      + '<span class="fq-alerts-summary">' + escapeHtml(summary) + '</span>'
+      + '<button type="button" class="fq-alerts-ack-all" title="Acknowledge every listed error">Ack all</button>'
+      + '</div>'
+      + alerts.map(_wtAlertRowHtml).join('');
+    $strip.hidden = false;
+  }
+  // One delegated listener: row click → activity log filtered to that queue;
+  // ✓ → ack that row; "Ack all" → ack everything currently listed.
+  (function () {
+    const $strip = document.getElementById('queueAlertStrip');
+    if (!$strip || $strip.dataset.wtAlertsBound) return;
+    $strip.dataset.wtAlertsBound = '1';
+    $strip.addEventListener('click', (e) => {
+      const ackAll = e.target.closest('.fq-alerts-ack-all');
+      if (ackAll) {
+        e.stopPropagation();
+        const ids = Array.from($strip.querySelectorAll('[data-wt-alert-id]')).map(el => el.getAttribute('data-wt-alert-id')).filter(Boolean);
+        _ackWtAlerts(ids, true);
+        return;
+      }
+      const row = e.target.closest('[data-wt-alert-id]');
+      if (!row) return;
+      const id = row.getAttribute('data-wt-alert-id');
+      if (e.target.closest('.fq-alert-ack')) {
+        e.stopPropagation();
+        _ackWtAlerts([id], false);
+        return;
+      }
+      // Open the WatchTower activity log scoped to the failing queue so the
+      // full context (LAUNCH_FAIL / ERROR lines) is one click away.
+      const queue = row.getAttribute('data-wt-alert-queue') || '';
+      try { _openWtLogPanel(queue && queue !== 'WATCHTOWER' ? queue : undefined); } catch (_) {}
+    });
+  })();
+
   // Render the health strip at the top of the Queue tab. Scoped to the same
   // project the ticket list shows when one is resolvable; otherwise shows all
   // projects with open tickets. Bust the cache with force=true after a write.
@@ -42567,6 +42705,9 @@
     const $strip = document.getElementById('queueHealthStrip');
     if (!$strip) return;
     if (force) _uxqHealthCache.ts = 0;
+    // The error strip rides the same poll; fire-and-forget so it never
+    // delays the health rows.
+    _fetchWtAlerts(force).then(_renderQueueAlertStrip).catch(() => {});
     const health = await _fetchUxqHealth(allowStale, force);
     let rows = (health.rows || []).slice();
     // Keep recently-active queues visible even when fully drained (0 open), and
@@ -57618,7 +57759,7 @@
         backend: conf.backend || 'file',
         github_repo: conf.github_repo || '',
         github_assignee: conf.github_assignee || '',
-        engine: conf.engine || 'claude',
+        engine: conf.engine || '',   // blank = CCC worker default; never re-pin to claude
         model: conf.model || '',
         effort: conf.effort || '',
         desired_workers: Number(conf.desired_workers) || 1,

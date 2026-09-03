@@ -1120,7 +1120,9 @@ _QUEUE_CONFIG_DEFAULTS = {
     "product_gate": False,
     "desired_workers": 1,
     "backend": "file",
-    "engine": "claude",
+    # Blank = defer to CCC's shared worker engine default. A new queue must not
+    # be born pinned to claude (CCC-1038).
+    "engine": "",
     "claim_types": [],
 }
 _QUEUE_CONFIG_EFFORTS = {"", "low", "medium", "high", "xhigh", "max"}
@@ -1796,7 +1798,10 @@ def _queue_config_from_payload(payload):
     backend = str(payload.get("backend") or "file").strip().lower()
     if backend not in ("file", "github"):
         raise ValueError("backend must be file or github")
-    engine = str(payload.get("engine", "claude") or "").strip().lower()
+    # No key at all means "CCC spawn default" (blank), not claude: a caller that
+    # omits engine (session-created queues) must not get a hardcoded override
+    # written into queue-config.json (CCC-1038).
+    engine = str(payload.get("engine", "") or "").strip().lower()
     if engine not in ("", "claude", "codex", "kimi", "grok"):
         raise ValueError("engine must be claude, codex, kimi, grok, or blank for CCC spawn default")
     try:
@@ -22677,6 +22682,9 @@ _pending_terminal_input_queue: dict = {}   # session_id → [text, ...]
 _adopt_ccc_module("pending_inputs")
 
 _adopt_ccc_module("queue_events")
+# WatchTower error alerts (launch failures, activity.log ERRORs, daemon down)
+# with server-side acks — the strip above the Queue panel.
+_adopt_ccc_module("wt_alerts")
 # Test-patched globals kept here; ccc_server/gemini.py reads them via _core.
 GEMINI_HOME = Path.home() / ".gemini"
 
@@ -23062,6 +23070,18 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
             self.send_json(build_system_services())
         elif path == "/api/watchtower/service/status":
             self.send_json(_watchtower_service_status())
+        elif path == "/api/watchtower/alerts":
+            # WatchTower errors the Queue panel must not let go unnoticed:
+            # worker launch failures (usage limit / auth / API down), ERROR
+            # lines from activity.log, and a stopped daemon. Un-acked only
+            # unless ?include_acked=1. Cheap: two small file reads, a cached
+            # log-tail parse, and the cached service probe.
+            qs = urllib.parse.parse_qs(parsed.query)
+            include_acked = (qs.get("include_acked", ["0"])[0] or "0") not in ("0", "", "false")
+            try:
+                self.send_json({"ok": True, **collect_wt_alerts(include_acked=include_acked)})
+            except Exception as e:
+                self.send_json({"ok": False, "error": str(e), "alerts": []}, 500)
         elif path == "/api/control-plane/work":
             qs = urllib.parse.parse_qs(parsed.query)
             states = [
@@ -27404,6 +27424,39 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                 })
             except Exception as e:
                 self.send_json({"ok": False, "error": str(e)}, 400)
+            return
+        if path == "/api/watchtower/alerts/ack":
+            # Ack (dismiss) WatchTower alerts by id, or every current one with
+            # {"all": true}. An ack is a timestamp: the alert re-surfaces if a
+            # NEWER occurrence lands, so dismissing never hides a fresh failure.
+            length = int(self.headers.get("Content-Length", "0"))
+            body = self.rfile.read(length) if length > 0 else b""
+            try:
+                payload = json.loads(body) if body else {}
+            except json.JSONDecodeError:
+                payload = {}
+            if not isinstance(payload, dict):
+                self.send_json({"ok": False, "error": "expected JSON object"}, 400)
+                return
+            ids = payload.get("ids")
+            if isinstance(ids, str):
+                ids = [ids]
+            if not isinstance(ids, list):
+                ids = []
+            if payload.get("all"):
+                try:
+                    ids = [a["id"] for a in collect_wt_alerts()["alerts"]]
+                except Exception:
+                    ids = []
+            ids = [str(i).strip() for i in ids if str(i or "").strip()]
+            if not ids:
+                self.send_json({"ok": False, "error": "ids required"}, 400)
+                return
+            try:
+                ack_wt_alerts(ids)
+                self.send_json({"ok": True, "acked": ids, **collect_wt_alerts()})
+            except Exception as e:
+                self.send_json({"ok": False, "error": str(e)}, 500)
             return
         if path == "/api/ux-fixes/gate-ack" or path == "/api/watchtower/gate-ack":
             length = int(self.headers.get("Content-Length", "0"))
