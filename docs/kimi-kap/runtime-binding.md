@@ -142,27 +142,58 @@ Done:
 - **CCC rebinds to `local` before every kap-driven prompt** (`3083d496`),
   verified end-to-end: 19 → 51 tools, daemon persisted the binding, the turn
   used Bash.
+- **CCC heals on view** (`kap_heal_binding_on_view`, wired into the
+  conversation-open endpoint): opening a Kimi conversation in CCC rebinds a
+  poisoned session to `local` in the background — threaded, throttled per
+  session, skipped while a turn is running. Sessions you only ever *view* no
+  longer stay broken for the TUI and `kimi web`.
+- **The System status panel shows the kap daemon** (read-only row: state,
+  pid, version, port, heartbeat age — CCC adopts this daemon, it never
+  supervises it, so no Restart button). It flags the multi-daemon ambiguity
+  and only raises the attention banner when kap routing is on.
+- **The transport pill warns on a non-`local` binding**: a kap-routed session
+  the daemon still sees as `acp:<sid>` gets an amber `runtime: acp` chip next
+  to the KAP pill.
+- **`CCC_KIMI_KAP_SERVER=<port-or-server-id>` pins the routing target.**
+  Auto-preferring the dedicated daemon turned out to be impossible today: the
+  instance record carries no kind field, the SEA binary rewrites its argv (so
+  `ps` can't tell `kimi web` from the TUI), and `/api/v1/meta` is identical
+  between them. The pin is the deterministic answer; the status row shows
+  which daemon prompts would land on.
 
 Still open, roughly cheapest-first:
 
-1. **CCC: heal on adopt, not just on prompt.** When CCC first surfaces a Kimi
-   session (census/adopt/conversation open) and the kap daemon is reachable, a
-   best-effort rebind keeps the store healthy for *all* consumers — including
-   sessions the user only ever views in CCC. Must skip sessions with a live
-   turn (flipping the binding mid-turn changes where Bash executes), and is
-   always safe otherwise: the next ACP attach re-establishes `acp:<sid>`
-   anyway.
-2. **CCC: prefer a dedicated daemon in `kap_discover()`.** Today the
-   newest-heartbeat TUI can win. Needs either an upstream marker in the
-   instance record or a CCC-side preference (config/env) for a pinned port.
-3. **Upstream (kimi-code): fix the cold-session `/runtime` POST** so it
+1. **Upstream (kimi-code): fix the cold-session `/runtime` POST** so it
    persists instead of answering `code:0` into the void; and **have the TUI
    rebind to `local` on resume**, symmetric to the ACP attach rebind — then
    every consumer self-heals and the poison stops being sticky.
-4. **Upstream: a per-session live-owner lock.** Refusing (or cleanly handing
+2. **Upstream: a per-session live-owner lock.** Refusing (or cleanly handing
    off) a second warm copy would kill the interleaved-wire/double-spend class
    of problems outright.
-5. **CCC UI: surface the effective binding** on the session row next to the
-   existing KAP/ACP transport pill, so a poisoned session is visible before it
-   is puzzling. Heal at the source (items 1–3); the badge is for diagnosis,
-   not a manual fix button.
+3. **Upstream: a `kind` field in the instance record** (`web` vs `tui`) so
+   `kap_discover()` can prefer a dedicated daemon without a manual pin.
+
+## Two questions that come up
+
+**Why do `kimi web` + the TUI get along, but CCC UI + TUI didn't?** Because
+Kimi's browser UI is a *thin client*: it talks REST+WS to a kap-server process
+that owns every session's engine core. The TUI (0.40.1) embeds that same
+server — one process, one owner per session, both UIs are views. CCC's default
+transport is different in kind: it spawns its **own** `kimi acp` subprocess —
+a second engine with its own warm copy of the session and its own binding
+writes. Two engines sharing one session store is where the poisoning and the
+interleaving come from. With kap routing on, CCC becomes a thin client of the
+daemon too, and CCC + TUI get along exactly as well as the web UI + TUI —
+provided discovery lands on the right daemon (hence the pin).
+
+**Why does CCC keep the ACP transport at all?** Three reasons. (1) ACP is a
+published spec with a pinned SDK (`@agentclientprotocol/sdk`); kap is a
+private product API with no compatibility promise — the pinned
+`openapi.json`/`asyncapi.json` snapshots in this directory exist precisely
+because it can move under us. (2) ACP needs nothing but the `kimi` binary
+every user already has; kap requires a running `kimi web` daemon CCC cannot
+assume or start. (3) The kap transport is still a Stage-1 spike: approvals,
+adoption of ACP-created sessions, and daemon supervision are deliberately not
+there yet. So ACP is the compatibility floor, `kap_routes()` fails open into
+it, and every downgrade is supposed to be visible (the transport pill, the
+status row) rather than silent.
