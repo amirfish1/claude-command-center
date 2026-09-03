@@ -59,6 +59,36 @@
     } catch (_) {}
   }
   window._clientLog = _clientLog;
+  // ── Perf events (one-shot latency samples, NOT the _clientLog pipeline) ──
+  // _clientLog dedupes identical (digit-collapsed) messages for 5s, which
+  // would silently drop these — each call here is a genuinely new timing
+  // sample and must always post. Fire-and-forget: swallow every failure so a
+  // dead/not-yet-restarted /api/perf-event endpoint never breaks the UI.
+  function _perfEvent(kind, ms, extra) {
+    try { console.info('[PERF] ' + kind + ' ' + Math.round(ms) + 'ms'); } catch (_) {}
+    try {
+      const body = Object.assign({ kind: kind, ms: ms, boot_id: _cccBootId }, extra || {});
+      fetch('/api/perf-event', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+        keepalive: true,
+      }).then(r => (r && r.ok) ? r.json().catch(() => null) : null).then(d => {
+        if (d && d.breach) _clientLog('[PERF] BREACH ' + kind + ' ' + Math.round(ms) + 'ms');
+      }).catch(() => {});
+    } catch (_) {}
+  }
+  window._perfEvent = _perfEvent;
+  // Metric 1 (archive_load) state: t0 is set the first time the archive
+  // loading placeholder is shown this page load; _perfArchiveFired guards a
+  // single archive_load event per load even though the placeholder can be
+  // (re)shown from multiple call sites.
+  let _perfArchiveT0 = null;
+  let _perfArchiveFired = false;
+  // Metric 2 (conv_open) state: overwritten on every selectConversation()
+  // click. A click superseded by a later one before it finished simply gets
+  // dropped — no event fires for it.
+  let _perfConvOpen = null;
   // Single source of truth for every periodic trigger: poll period (ms, used
   // for the overrun check below + the strip's interval label), a short label
   // and a one-line description for the transparency strip. ms:null = cadence
@@ -41144,6 +41174,10 @@
 
   async function selectConversation(id, paneId) {
     paneId = paneId || activePaneId();
+    // Perf metric 2 start (conv_open): overwritten on every click, so a click
+    // superseded by a later one before its render lands is simply dropped —
+    // no event fires for the abandoned one.
+    try { _perfConvOpen = { id: id, paneId: paneId, t0: performance.now() }; } catch (_) {}
     const pane = paneByPaneId(paneId);
     if (!pane) return;
     // Kick the tail fetch before the synchronous chrome work below (35-60ms
@@ -48325,12 +48359,18 @@
         ? '/api/conversations/' + id + '?tail=' + convFirstOpenLines()
         : '/api/conversations/' + id + '?after=' + convLastLine;
       let data = null;
+      // Perf metric 2 detail: did this open serve from the pre-warmed tail
+      // (kicked in selectConversation) or fall through to a fresh fetch?
+      let _perfPrefetchHit = false;
       if (_freshOpen && !_wantFull && !_loadingEarlier) {
         const _prefetchRow = (conversationsData || []).find(x => x.id === id)
           || (Array.isArray(archiveData) ? archiveData.find(x => (x.id || x.session_id) === id) : null);
         const _prefetchSource = sessionSourceByConv[id] || (_prefetchRow && _prefetchRow.source) || '';
         const prefetched = _takePrefetchedConversationTail(id);
-        if (prefetched && _prefetchSource !== 'hermes') data = await prefetched;
+        if (prefetched && _prefetchSource !== 'hermes') {
+          data = await prefetched;
+          _perfPrefetchHit = true;
+        }
       }
       if (!data) {
         const res = await fetch(_url);
@@ -48410,8 +48450,27 @@
           // convLastLine tracks the OPEN conversation's live tail only — an
           // ancestor file's line count must never inflate it.
           if (_prepended !== false && _fetchSid === id) convLastLine = Math.max(convLastLine, data.last_line || 0);
-        } else if (renderConversationEvents(data.events, fetchPaneId, { initialLoad: _freshOpen, isTruncated: data.truncated_before }) !== false) {
-          convLastLine = data.last_line;
+        } else {
+          const _renderOk = renderConversationEvents(data.events, fetchPaneId, { initialLoad: _freshOpen, isTruncated: data.truncated_before }) !== false;
+          if (_renderOk) convLastLine = data.last_line;
+          // Perf metric 2 end (conv_open): only the initialLoad render for the
+          // click still pending in _perfConvOpen fires — a poll/backfill
+          // re-render of the same pane (opts.initialLoad false, or a click
+          // that already fired/was superseded) does not.
+          if (_freshOpen && _renderOk && _perfConvOpen
+              && _perfConvOpen.id === id && _perfConvOpen.paneId === fetchPaneId) {
+            try {
+              _perfEvent('conv_open', performance.now() - _perfConvOpen.t0, {
+                conv_id: id,
+                detail: {
+                  events: Array.isArray(data.events) ? data.events.length : 0,
+                  prefetch_hit: _perfPrefetchHit,
+                  truncated: !!data.truncated_before,
+                },
+              });
+            } catch (_) {}
+            _perfConvOpen = null;
+          }
         }
         // Live after= polls must not clobber the history cursor. Their
         // first_line is the start of the new tail slice (or absent), which
@@ -61922,6 +61981,10 @@
   // Generous: cold-cache scans take ~12s; a healthy response is <1s. This only
   // fires when the request is truly wedged.
   const ARCHIVE_ALL_FETCH_TIMEOUT_MS = 45 * 1000;
+  // Last /api/conversations/list HTTP status (304 vs 200 vs error), read by
+  // the archive_load perf event so it can report cache-hit vs full fetch
+  // without threading a return value through every loadArchiveAll caller.
+  let _lastArchiveListHttpStatus = null;
 
   async function loadArchiveAll(opts = {}) {
     const params = new URLSearchParams();
@@ -61958,6 +62021,7 @@
         } finally {
           clearTimeout(timeoutId);
         }
+        _lastArchiveListHttpStatus = r.status;
         // 304 → the server confirms our cached payload is still current, so we
         // skip re-parsing ~500KB and reuse the last conversations as-is. The
         // caller re-renders, but the flicker guard skips the rebuild since the
@@ -62075,6 +62139,12 @@
   // happening instead; the detailed folders→transcripts→… checklist replaces
   // this the moment the scan starts reporting progress.
   function _archiveLoadingPlaceholderHtml(title) {
+    // Perf metric 1 start (archive_load): first placeholder render this page
+    // load wins the clock. Guarded so a later re-show (search-cleared,
+    // window-switch) doesn't restart the timer for an already-loaded archive.
+    if (_perfArchiveT0 === null) {
+      try { _perfArchiveT0 = performance.now(); } catch (_) {}
+    }
     return '<div class="archive-empty-state archive-loading-placeholder">'
       + '<div class="alp-title">' + (title || 'Preparing archive…') + '</div>'
       + '<div class="alp-detail">Loading your active sessions first, then scanning conversation history. '
@@ -62910,6 +62980,23 @@
       maybeSelectPopoutConversation({ allowMissing: archiveLoaded });
     } else if (!(opts && opts.skipRestore)) {
       restoreLastViewOrConversation();
+    }
+    // Perf metric 1 end (archive_load): rows just landed in the DOM above
+    // (list/kanban/flow render branch). Only reachable past the empty-state
+    // early-returns above, so this really is "rows are visible", not merely
+    // "fetch returned". Fires once per page load, and only if the loading
+    // placeholder was actually shown (non-archive-mode loads never set t0).
+    if (_perfArchiveT0 !== null && !_perfArchiveFired) {
+      _perfArchiveFired = true;
+      try {
+        _perfEvent('archive_load', performance.now() - _perfArchiveT0, {
+          detail: {
+            rows: archiveRows.length,
+            status: _lastArchiveListHttpStatus,
+            since_nav_ms: performance.now(),
+          },
+        });
+      } catch (_) {}
     }
     _finishArchiveRender();
   }

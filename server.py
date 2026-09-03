@@ -12266,6 +12266,11 @@ def _load_archive_response_cache():
     if keep:
         with _ARCHIVE_RESPONSE_CACHE_LOCK:
             _ARCHIVE_RESPONSE_CACHE.update(keep)
+        try:
+            for _entry in keep.values():
+                note_archive_build(_entry.get("cached_at"))  # perf_events warm/cold ledger
+        except NameError:
+            pass
     if restored_signature_maps:
         with _archive_sig_lock:
             _ARCHIVE_STATMAP_BY_SIG.update(restored_signature_maps)
@@ -12347,12 +12352,17 @@ def _archive_response_cache_signature(key):
 
 def _archive_response_cache_put(key, conversations, signature=None):
     rows = [dict(r) for r in (conversations or []) if isinstance(r, dict)]
+    _put_ts = time.time()
     with _ARCHIVE_RESPONSE_CACHE_LOCK:
         _ARCHIVE_RESPONSE_CACHE[key] = {
-            "cached_at": time.time(),
+            "cached_at": _put_ts,
             "conversations": rows,
             "signature": signature,
         }
+    try:
+        note_archive_build(_put_ts)  # perf_events warm/cold ledger
+    except NameError:
+        pass
     _save_archive_response_cache()
 
 
@@ -22714,6 +22724,11 @@ _adopt_ccc_module("productivity")
 
 _adopt_ccc_module("terminal")
 
+# Client-side perf beacons (archive load / conversation open) + the
+# breach-pattern self-filing daemon. /api/perf-event and /api/perf/summary
+# call record_event / summarize as bare names via this adoption.
+_adopt_ccc_module("perf_events")
+
 # ---------------------------------------------------------------------------
 # HTTP handler
 # ---------------------------------------------------------------------------
@@ -23747,6 +23762,16 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
             # vertical stage list (folders → transcripts → infer …) instead
             # of the opaque "Loading archive…" spinner.
             self.send_json(_archive_load_snapshot())
+        elif path == "/api/perf/summary":
+            # Rolled-up client perf beacons (archive load / conversation
+            # open) over a trailing window, plus the self-filed-ticket
+            # state. See ccc_server/perf_events.py.
+            qs = urllib.parse.parse_qs(parsed.query)
+            try:
+                hours = int((qs.get("hours") or ["24"])[0])
+            except ValueError:
+                hours = 24
+            self.send_json(summarize(hours=hours))
         elif path == "/api/sessions":
             qs = urllib.parse.parse_qs(parsed.query)
             if qs.get("federated", ["0"])[0] in ("1", "true"):
@@ -26293,6 +26318,32 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                 self.send_json({"ok": True})
             except Exception as e:
                 self.send_json({"error": str(e)}, 400)
+            return
+
+        if path == "/api/perf-event":
+            # Client-measured timing beacon (archive load, conversation
+            # open). Persists + classifies warm/cold/breach; the actual
+            # self-filing check runs off a daemon thread, never here — see
+            # perf_ticket_loop / ccc_server/perf_events.py.
+            try:
+                content_len = int(self.headers.get("Content-Length", 0) or 0)
+                body = self.rfile.read(content_len) if content_len else b""
+                data = json.loads(body) if body else {}
+                if not isinstance(data, dict):
+                    self.send_json({"ok": False, "error": "expected JSON object"}, 400)
+                    return
+                result = record_event(
+                    str(data.get("kind") or ""),
+                    data.get("ms"),
+                    boot_id=str(data.get("boot_id") or ""),
+                    conv_id=str(data.get("conv_id") or ""),
+                    detail=data.get("detail"),
+                )
+                self.send_json(result)
+            except ValueError as e:
+                self.send_json({"ok": False, "error": str(e)}, 400)
+            except (TypeError, json.JSONDecodeError) as e:
+                self.send_json({"ok": False, "error": str(e)}, 400)
             return
 
         if path in ("/api/usage/reset-events/update", "/api/usage/reset-events/delete"):
@@ -29288,6 +29339,25 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                         result["report_to"] = report_to
                     if parent_session_id and isinstance(result, dict):
                         result["parent_session_id"] = parent_session_id
+                    # Persist spawned_via onto the registry entry too (not just
+                    # the activity log) so it survives past this one response
+                    # and reaches the row the UI reads on every future page
+                    # load — the Metadata pane's "Spawned via" chip. Patched
+                    # after the fact by pid rather than threaded through the
+                    # ~18 engine-specific spawn_session_*()/
+                    # _record_spawn_to_registry() call sites, which would be a
+                    # much larger, riskier change for a purely cosmetic field.
+                    if result.get("ok") and result.get("pid"):
+                        result["spawned_via"] = spawned_via
+                        _spawn_pid = result["pid"]
+                        def _tag_spawned_via(entries, _pid=_spawn_pid, _via=spawned_via):
+                            changed = False
+                            for _entry in entries:
+                                if _entry.get("pid") == _pid and _entry.get("spawned_via") != _via:
+                                    _entry["spawned_via"] = _via
+                                    changed = True
+                            return changed
+                        _mutate_spawn_registry(_tag_spawned_via)
                     # Opt in to unattended auto-resume ("continue") pokes at
                     # spawn time -- the main legitimate use case is a
                     # WatchTower queue-drain worker that should be nudged
@@ -35158,6 +35228,13 @@ def main():
     # it; that single switch is the user's guarantee that nothing leaves
     # the host. See docs/telemetry.md#anonymous-open-beacon.
     threading.Thread(target=_telemetry_open_beacon_loop, daemon=True, name="ccc-telemetry-open").start()
+    # Perf-event breach-pattern self-filer — checks the last 24h of
+    # archive_load/conv_open beacons every CCC_PERF_TICKET_CHECK_INTERVAL_S
+    # (default 900s) and self-files a WatchTower CCC bug ticket on a real
+    # regression pattern, deduped same-day / while a ticket is still open.
+    # Off for ephemeral test/CI processes and via an explicit opt-out.
+    if not os.environ.get("CCC_EPHEMERAL") and not os.environ.get("CCC_PERF_TICKETS_DISABLED"):
+        threading.Thread(target=perf_ticket_loop, daemon=True, name="ccc-perf-ticket").start()
     # Recover in-progress group-chat coordinations and start background watcher.
     _start_coordination_watcher()
     _start_resume_queue_watcher()
