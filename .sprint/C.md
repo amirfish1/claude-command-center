@@ -1,7 +1,7 @@
 # Lane C — Unified memory system + Ask tab backend (PLAN ONLY)
 
-Updated: 2026-09-03 10:10
-Status: measurements done, writing plan
+Updated: 2026-09-03 10:30
+Status: DONE — plan + HTML delivered, report sent to parent
 Owner: CCC Lane C (dispatched by 25c52af6-c616-46a2-b47d-0f8a9e016055)
 
 ## Deliverables
@@ -38,9 +38,16 @@ Owner: CCC Lane C (dispatched by 25c52af6-c616-46a2-b47d-0f8a9e016055)
 - Hunch: MCP timeout + 'database is locked' (3 hunch mcp procs) -> OPS-926.
 - iMessage: TCC denied -> OPS-925.
 
-## Next
-1. Write plan-2026-09-03.md + plan-2026-09-03.html (options A/B/C, rec B).
-2. Report to parent session.
+## Delivered
+- plan-2026-09-03.md (1,711 words, scoreboard + options A/B/C + rec B + 8-task
+  one-day plan across Sonnet/Kimi/Gemini/Grok + names Mazkir/Radar/Scout).
+- plan-2026-09-03.html (decision page with approve checklist).
+- Memory note: claude_index_vs_total_recall.md in the CCC project memory dir.
+- Tickets: OPS-925 (iMessage FDA), OPS-926 (hunch lock/MCP timeout).
+
+## Next (for whoever builds)
+- Start with T0/T1 (Sonnet): shim fix, stopword/AND query, scratch purge.
+- Then T5 (Ask agent v2) once T4 lands; run T6 eval before/after.
 
 ## Decisions
 - Test questions fixed in evidence/questions.txt (2 Claude, 1 Kimi, 1 Codex, 1 strategic).
