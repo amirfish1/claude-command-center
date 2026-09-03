@@ -8049,10 +8049,15 @@
   function _renderRailSpawnedVia(row) {
     const el = document.getElementById('railSpawnedVia');
     if (!el) return;
-    const via = row && row.spawned_via || '';
+    if (!row) { el.hidden = true; el.textContent = ''; el.removeAttribute('title'); return; }
+    const via = row.spawned_via || '';
     const info = RAIL_SPAWNED_VIA_LABELS[via];
-    if (!info) { el.hidden = true; el.textContent = ''; el.removeAttribute('title'); return; }
     el.hidden = false;
+    if (!info) {
+      el.textContent = 'via: not available';
+      el.title = 'Spawn origin unknown — this session predates spawn tracking, or its spawning process has already exited.';
+      return;
+    }
     el.textContent = 'via: ' + info[0];
     el.title = info[1];
   }
