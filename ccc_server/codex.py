@@ -3787,6 +3787,92 @@ def _system_services_app_server_entry(worker_entry):
     }
 
 
+def _system_services_kap_entry():
+    """The `kimi web` daemon CCC's kap transport routes Kimi sessions through.
+
+    CCC discovers and adopts this daemon (registry files under
+    ~/.kimi-code/server/instances), but never starts, supervises, or restarts
+    it -- it belongs to the user (or to their TUI: 0.40.1 embeds a kap
+    server). The row therefore carries status only, no restart endpoint.
+
+    Read path is files + kill(pid, 0) only: no HTTP, so the panel's cache TTL
+    never waits on a daemon round trip.
+    """
+    try:
+        from ccc_server import kap as _kap
+        enabled = bool(_kap.kap_enabled())
+        instances = _kap.kap_instances()
+        token = bool(_kap.kap_token())
+        pin = os.environ.get(_kap._KAP_SERVER_PIN_ENV, "").strip()
+    except Exception:
+        enabled, instances, token, pin = False, [], False, ""
+    live = [rec for rec in instances if rec.get("live")]
+    # The row is noise for a setup that has never run kimi web; the renderer
+    # hides it until kap routing is on or a daemon has ever registered.
+    relevant = bool(enabled or instances)
+    # Mirror kap_discover's pick (newest heartbeat, pin-filtered) so the row
+    # names the daemon prompts would actually land on.
+    chosen = None
+    for rec in live:
+        if pin and pin not in (str(rec.get("port") or ""),
+                               str(rec.get("server_id") or "")):
+            continue
+        if chosen is None or float(rec.get("heartbeat_at") or 0) > float(
+                chosen.get("heartbeat_at") or 0):
+            chosen = rec
+    if not instances:
+        state = "offline" if enabled else "idle"
+    elif not live:
+        # Registered but stale-heartbeat or dead-pid: a crashed daemon's
+        # leftovers. Alarming only when routing is on.
+        state = "degraded" if enabled else "idle"
+    elif chosen is None:
+        state = "degraded"  # pinned to a daemon that is not live
+    elif not token:
+        state = "degraded"  # daemon up, but no server.token to authenticate
+    elif len(live) > 1 and not pin:
+        # Ambiguous: newest heartbeat wins per call, and one of the records
+        # can be the interactive TUI's embedded server -- prompts then land
+        # inside the TUI process. CCC_KIMI_KAP_SERVER resolves it.
+        state = "degraded"
+    else:
+        state = "online"
+    started_at = None
+    if chosen:
+        try:
+            started_at = float(chosen.get("started_at")) / 1000.0
+        except (TypeError, ValueError):
+            started_at = None
+    return {
+        "id": "kimi_kap",
+        "label": "Kimi kap server",
+        "state": state,
+        "pid": (chosen or {}).get("pid"),
+        "started_at": started_at,
+        "started_at_approx": False,
+        "uptime_s": (
+            max(0, round(time.time() - started_at)) if started_at else None
+        ),
+        "version": (chosen or {}).get("host_version"),
+        "busy_count": 0,
+        # Not CCC's process to restart -- same reason the Codex app-server
+        # row carries none.
+        "restart_endpoint": None,
+        "restart_body": None,
+        "restart_blocking": False,
+        "relevant": relevant,
+        "kap_enabled": enabled,
+        "port": (chosen or {}).get("port"),
+        "instances": len(live),
+        "instances_registered": len(instances),
+        "token_present": token,
+        "pinned": pin or None,
+        "heartbeat_age_s": (chosen or {}).get("heartbeat_age_s"),
+        "versions": sorted({str(r.get("host_version"))
+                            for r in live if r.get("host_version")}),
+    }
+
+
 def _system_services_spawned_processes():
     """Every currently-running claude/codex/kimi process CCC has spawned, for
     the System status panel's process list. Prewarm entries carry
@@ -4120,6 +4206,7 @@ def _build_system_services_uncached():
             worker,
             _core._system_services_watchtower_entry(),
             _system_services_app_server_entry(worker),
+            _system_services_kap_entry(),
         ],
         "spawned_processes": _system_services_spawned_processes(),
         "next_servers": _system_services_next_servers(),

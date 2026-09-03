@@ -1956,6 +1956,21 @@
         <div class="sys-svc-result" id="sysWtResult" hidden></div>
       </div>
 
+      <!-- Kimi kap server: an external `kimi web` daemon CCC discovers and
+           adopts but never supervises (the user starts it, or a 0.40.1+ TUI
+           embeds one) — hence no Restart button. Hidden until kap routing is
+           on or a daemon has ever registered; renderSysKapRow decides. -->
+      <div class="sys-section sys-svc is-checking" id="sysRowKap" data-service="kimi_kap" style="display:none">
+        <div class="sys-svc-head">
+          <span class="sys-svc-led" aria-hidden="true"></span>
+          <div class="sys-name">Kimi kap server <span class="sys-state" id="sysKapState">checking</span></div>
+        </div>
+        <div class="sys-svc-started" id="sysKapStarted"></div>
+        <div class="sys-svc-busy" id="sysKapBusy"></div>
+        <div class="sys-desc" id="sysKapDetail">The Kimi daemon (kimi web) that CCC routes sessions through when kap routing is on — the transport that can steer a running turn in place. CCC adopts this daemon; it never starts or restarts it.</div>
+        <div class="sys-svc-meta" id="sysKapMeta"></div>
+      </div>
+
       <!-- Spawned processes: every claude/codex/kimi subprocess CCC has
            running right now. Prewarm slots are a bounded, disposable pool
            (max 4, see worker-row explainer) and carry a live countdown to

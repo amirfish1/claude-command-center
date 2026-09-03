@@ -12,6 +12,7 @@ Codex turn yet" would paint the header yellow on a perfectly healthy machine.
 """
 
 import importlib
+import os
 import unittest
 from unittest import mock
 
@@ -45,7 +46,9 @@ class SystemServicesTests(unittest.TestCase):
     def setUp(self):
         self.server._system_services_cache = {"ts": 0.0, "payload": None}
 
-    def _build(self, *, worker=None, watchtower=None, app_server=None, busy=None):
+    def _build(self, *, worker=None, watchtower=None, app_server=None, busy=None,
+               kap_enabled=False, kap_instances=None, kap_token="",
+               kap_pin=None):
         server = self.server
         worker = dict(WORKER_HEALTHY if worker is None else worker)
         worker.setdefault("worker", {}).setdefault(
@@ -55,6 +58,11 @@ class SystemServicesTests(unittest.TestCase):
         app = app_server if app_server is not None else {
             "live": False, "consecutive_liveness_misses": 0, "miss_threshold": 3,
         }
+        # The kap row reads the real ~/.kimi-code registry unless patched --
+        # keep the panel contract machine-independent.
+        kap_env = {}
+        if kap_pin is not None:
+            kap_env["CCC_KIMI_KAP_SERVER"] = kap_pin
         with mock.patch.object(server, "_control_plane_request",
                                side_effect=lambda *a, **k: worker), \
              mock.patch.object(server, "_watchtower_service_status",
@@ -62,7 +70,16 @@ class SystemServicesTests(unittest.TestCase):
              mock.patch.object(server, "_app_server_status_preferring_worker",
                                return_value=app), \
              mock.patch.object(server, "_dashboard_owned_active_executions",
-                               return_value=list(busy or [])):
+                               return_value=list(busy or [])), \
+             mock.patch("ccc_server.kap.kap_enabled",
+                        return_value=kap_enabled), \
+             mock.patch("ccc_server.kap.kap_instances",
+                        return_value=list(kap_instances or [])), \
+             mock.patch("ccc_server.kap.kap_token",
+                        return_value=kap_token), \
+             mock.patch.dict("os.environ", kap_env):
+            if kap_pin is None:
+                os.environ.pop("CCC_KIMI_KAP_SERVER", None)
             return server.build_system_services(force=True)
 
     def _row(self, payload, service_id):
@@ -73,13 +90,13 @@ class SystemServicesTests(unittest.TestCase):
 
     # ── shape ────────────────────────────────────────────────────────────
 
-    def test_returns_all_four_services_with_a_shared_state_vocabulary(self):
+    def test_returns_all_five_services_with_a_shared_state_vocabulary(self):
         payload = self._build()
         self.assertTrue(payload["ok"])
         self.assertEqual(payload["dashboard_version"], self.server.__version__)
         self.assertEqual(
             [row["id"] for row in payload["services"]],
-            ["dashboard", "worker", "watchtower", "app_server"],
+            ["dashboard", "worker", "watchtower", "app_server", "kimi_kap"],
         )
         for row in payload["services"]:
             self.assertIn(row["state"], SERVICE_STATES, row)
@@ -101,6 +118,8 @@ class SystemServicesTests(unittest.TestCase):
         # A worker subprocess, not a service: restarting it means restarting
         # the worker, which the row above already offers.
         self.assertIsNone(self._row(payload, "app_server")["restart_endpoint"])
+        # An adopted daemon, not a CCC-managed service: nothing to restart.
+        self.assertIsNone(self._row(payload, "kimi_kap")["restart_endpoint"])
 
     # ── dashboard ────────────────────────────────────────────────────────
 
@@ -210,6 +229,95 @@ class SystemServicesTests(unittest.TestCase):
         app = self._row(payload, "app_server")
         self.assertEqual(app["state"], "degraded")
         self.assertEqual(app["uptime_s"], 431)
+
+    # ── kimi kap server ──────────────────────────────────────────────────
+    # Read-only row: CCC adopts the `kimi web` daemon, it never supervises
+    # it. The fixtures carry the annotations kap_instances() would have
+    # computed (live/stale/pid_alive) so the machine's real registry is never
+    # consulted.
+
+    @staticmethod
+    def _kap_instance(port, *, pid=4242, version="0.40.1", server_id=None,
+                      live=True):
+        return {
+            "server_id": server_id or "srv-%s" % port,
+            "pid": pid, "host": "127.0.0.1", "port": port,
+            "started_at": 1785262538385, "heartbeat_at": 1785262538385,
+            "host_version": version,
+            "pid_alive": live, "stale": not live, "live": live,
+            "heartbeat_age_s": 2.0 if live else None,
+        }
+
+    def test_kap_row_hides_itself_when_kap_was_never_in_play(self):
+        row = self._row(self._build(), "kimi_kap")
+        self.assertEqual(row["state"], "idle")
+        self.assertFalse(row["relevant"])
+        self.assertFalse(row["kap_enabled"])
+
+    def test_kap_row_is_offline_when_routing_is_on_but_no_daemon_is_live(self):
+        row = self._row(self._build(kap_enabled=True), "kimi_kap")
+        self.assertEqual(row["state"], "offline")
+        self.assertTrue(row["relevant"])
+
+    def test_kap_row_names_the_daemon_prompts_would_land_on(self):
+        inst = self._kap_instance(58627, pid=52106, version="0.39.1")
+        row = self._row(self._build(kap_enabled=True, kap_token="tok",
+                                    kap_instances=[inst]), "kimi_kap")
+        self.assertEqual(row["state"], "online")
+        self.assertEqual(row["pid"], 52106)
+        self.assertEqual(row["port"], 58627)
+        self.assertEqual(row["version"], "0.39.1")
+        self.assertEqual(row["started_at"], 1785262538.385)
+        self.assertEqual(row["instances"], 1)
+
+    def test_kap_row_is_degraded_when_two_daemons_fight_over_heartbeats(self):
+        """A TUI (0.40.1) registers as a kap server too; without a pin the
+        newest-heartbeat pick can land prompts inside the TUI process."""
+        rows = [self._kap_instance(58627, pid=52106, version="0.39.1"),
+                self._kap_instance(58628, pid=9496, version="0.40.1")]
+        row = self._row(self._build(kap_enabled=True, kap_token="tok",
+                                    kap_instances=rows), "kimi_kap")
+        self.assertEqual(row["state"], "degraded")
+        self.assertEqual(row["instances"], 2)
+        self.assertEqual(row["versions"], ["0.39.1", "0.40.1"])
+
+    def test_kap_row_is_online_with_two_daemons_when_one_is_pinned(self):
+        rows = [self._kap_instance(58627, pid=52106, version="0.39.1"),
+                self._kap_instance(58628, pid=9496, version="0.40.1")]
+        row = self._row(self._build(kap_enabled=True, kap_token="tok",
+                                    kap_instances=rows, kap_pin="58628"),
+                        "kimi_kap")
+        self.assertEqual(row["state"], "online")
+        self.assertEqual(row["pid"], 9496)
+        self.assertEqual(row["pinned"], "58628")
+
+    def test_kap_row_is_degraded_when_the_pin_matches_nothing_live(self):
+        rows = [self._kap_instance(58627, pid=52106)]
+        row = self._row(self._build(kap_enabled=True, kap_token="tok",
+                                    kap_instances=rows, kap_pin="59999"),
+                        "kimi_kap")
+        self.assertEqual(row["state"], "degraded")
+
+    def test_kap_row_is_degraded_without_the_auth_token(self):
+        row = self._row(self._build(kap_enabled=True, kap_token="",
+                                    kap_instances=[self._kap_instance(58627)]),
+                        "kimi_kap")
+        self.assertEqual(row["state"], "degraded")
+        self.assertFalse(row["token_present"])
+
+    def test_kap_row_treats_stale_registrations_as_leftovers(self):
+        dead = self._kap_instance(58627, live=False)
+        row = self._row(self._build(kap_enabled=True, kap_token="tok",
+                                    kap_instances=[dead]), "kimi_kap")
+        self.assertEqual(row["state"], "degraded")
+        self.assertEqual(row["instances"], 0)
+        self.assertEqual(row["instances_registered"], 1)
+
+    def test_kap_row_stays_quiet_about_leftovers_when_routing_is_off(self):
+        dead = self._kap_instance(58627, live=False)
+        row = self._row(self._build(kap_instances=[dead]), "kimi_kap")
+        self.assertEqual(row["state"], "idle")
+        self.assertTrue(row["relevant"])
 
     # ── caching ──────────────────────────────────────────────────────────
 

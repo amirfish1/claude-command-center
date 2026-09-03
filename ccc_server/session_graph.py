@@ -2733,6 +2733,12 @@ def session_live_status(session_id, session_cwd):
                     (status.get("agent_config") or {}).get("model")
                     or status.get("model")
                 )
+                # The daemon's view of the runtime binding -- an acp:<sid>
+                # leftover means the session has no Bash/Read/... until the
+                # next rebind, which is worth a chip on the transport pill.
+                binding = _kap.kap_runtime_binding_cached(session_id)
+                if binding and binding.get("runtime_id"):
+                    result["runtime_binding"] = binding["runtime_id"]
                 return result
         except Exception:
             pass

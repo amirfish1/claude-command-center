@@ -5531,6 +5531,9 @@
         // elsewhere) — drives the webui-pane busy indicator for turns that
         // produce no live deltas (TUI-originated kimi turns).
         status: data.status || null,
+        // The daemon's runtime binding for kap-routed kimi sessions
+        // ("local" or "acp:<sid>") — the pill warns when it is not local.
+        runtimeBinding: data.runtime_binding || null,
         recentlyWritten: !!data.recently_written,
         transcriptMtime: Number(data.transcript_mtime) || 0,
         pid: data.pid || null,
@@ -30866,13 +30869,28 @@
       const label = acpBusy
         ? 'Kimi ' + proto + ' · working'
         : (acpLive ? 'Kimi ' + proto : 'Kimi ' + proto + ' · offline');
-      setAll(pill0(acpLive, false, label,
+      let html = pill0(acpLive, false, label,
         onKap
           ? 'CCC is driving this Kimi session over the kap daemon, which can steer a running turn in place.'
           : acpLive
             ? 'Kimi sessions share this ACP adapter. Click to inspect or recover it safely.'
             : 'Kimi ACP is not connected. Click to inspect or recover it.',
-        true));
+        true);
+      // A session bound to acp:<sid> has no fs/process capabilities in the
+      // daemon — no Bash/Read/Write/Edit/Glob/Grep — until it is rebound to
+      // local. The daemon's answer is only polled on the kap transport; when
+      // it says anything but local, say so on the pill.
+      const binding = onKap && ls.runtimeBinding && ls.runtimeBinding !== 'local'
+        ? String(ls.runtimeBinding) : '';
+      if (binding) {
+        const short = binding.indexOf('acp:') === 0 ? 'acp' : binding;
+        html += pill0(true, true, 'runtime: ' + short,
+          'This session is bound to the "' + binding + '" runtime, a virtual runtime with no fs/process '
+          + 'capabilities — over kap the model has no Bash, Read, Write, Edit, Glob or Grep. CCC rebinds '
+          + 'to local on the next prompt or conversation open.',
+          true);
+      }
+      setAll(html);
       return;
     }
     // Antigravity is always headless — CCC resumes it per turn, no TTY. Surface
@@ -65527,6 +65545,17 @@
     if (Number(appServer.consecutive_liveness_misses || 0) > 0) {
       reasons.push('Codex app-server missed a liveness probe');
     }
+    // The kap daemon is an opt-in routing dependency: with the flag off its
+    // absence is normal, and even with it on, prompts fall back to ACP — a
+    // downgrade, never an outage. Yellow-level reasons only; kap never joins
+    // the `tracked` red-vote list below.
+    const kap = map.get('kimi_kap') || {};
+    if (kap.kap_enabled && kap.state === 'offline') {
+      reasons.push('Kimi kap server is not running');
+    }
+    if (kap.kap_enabled && kap.state === 'degraded') {
+      reasons.push('Kimi kap server is degraded');
+    }
 
     const tracked = [dash, worker].concat(wtCounts ? [wt] : []);
     const notOnline = tracked.filter(s => s.state !== 'online');
@@ -65807,6 +65836,61 @@
     meta.textContent = text;
   }
 
+  // The kap row is read-only: CCC adopts the `kimi web` daemon (or the TUI's
+  // embedded server) but never supervises it, so there is no Restart button.
+  // Hidden until kap routing is on or a daemon has ever registered — for a
+  // setup that has never run kimi web the row is noise.
+  function renderSysKapRow(svc) {
+    const row = document.getElementById('sysRowKap');
+    if (!row) return;
+    if (!svc || !svc.relevant) { row.style.display = 'none'; return; }
+    row.style.display = '';
+    const state = svc.state || 'unknown';
+    row.classList.remove('is-checking', 'is-online', 'is-degraded', 'is-offline', 'is-idle');
+    row.classList.add('is-' + state);
+    sysSetState('sysKapState', _sysStateFlag(state), SYS_STATE_PILL[state] || 'checking');
+    const started = document.getElementById('sysKapStarted');
+    if (started) {
+      started.textContent = svc.pid
+        ? formatStarted(svc)
+        : (state === 'offline' ? 'No kap daemon is running' : '');
+    }
+    const busy = document.getElementById('sysKapBusy');
+    if (busy) {
+      let text = '';
+      if (state === 'online') {
+        text = 'Routing target for kap-driven Kimi sessions.';
+      } else if (state === 'offline') {
+        text = 'kap routing is on but no daemon is live — Kimi sessions fall back to the ACP transport. Start one with `kimi web`.';
+      } else if (state === 'degraded') {
+        if (svc.pinned) {
+          text = 'CCC_KIMI_KAP_SERVER pins a daemon that is not currently live.';
+        } else if (!svc.token_present && svc.instances > 0) {
+          text = 'The daemon is up but ~/.kimi-code/server.token is missing, so CCC cannot authenticate.';
+        } else if (svc.instances > 1) {
+          text = svc.instances + ' live daemons are registered; routing picks the newest heartbeat, which can be the TUI\u2019s embedded server. Pin one with CCC_KIMI_KAP_SERVER=<port>.';
+        } else {
+          text = 'A registered daemon has a stale heartbeat or a dead pid — restart `kimi web`.';
+        }
+      } else if (state === 'idle') {
+        text = svc.kap_enabled
+          ? ''
+          : 'kap routing is off, so the daemon is not in use. Enable with CCC_KIMI_KAP=1.';
+      }
+      busy.textContent = text;
+    }
+    const meta = document.getElementById('sysKapMeta');
+    if (meta) {
+      const bits = [];
+      if (svc.pid) bits.push('pid ' + svc.pid);
+      if (svc.version) bits.push('v' + svc.version);
+      if (svc.port) bits.push('port ' + svc.port);
+      if (svc.pinned) bits.push('pinned via CCC_KIMI_KAP_SERVER');
+      if (svc.instances > 1) bits.push(svc.instances + ' live daemons');
+      meta.textContent = bits.join(' · ');
+    }
+  }
+
   // ── Spawned processes (System status panel) ──────────────────────
   // Every claude/codex/kimi subprocess CCC has running right now. Prewarm
   // slots carry a kill deadline (expires_at_epoch, server-side TTL is
@@ -65955,6 +66039,7 @@
     renderSysRow('worker', map.get('worker'));
     renderSysRow('watchtower', map.get('watchtower'));
     renderSysAppServerRow(map.get('app_server'), map.get('worker'));
+    renderSysKapRow(map.get('kimi_kap'));
     _sysSpawnedList = Array.isArray(payload && payload.spawned_processes) ? payload.spawned_processes : [];
     renderSysSpawnedList(_sysSpawnedList);
     const nextServers = Array.isArray(payload && payload.next_servers) ? payload.next_servers : [];
