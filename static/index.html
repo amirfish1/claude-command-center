@@ -1348,6 +1348,11 @@
             <div class="status-rail-pane" id="statusRailQueuePane" role="tabpanel" data-rail-pane="queue">
               <div class="shared-queue-host shared-queue-host-rail" id="statusRailQueueHost">
                 <div class="files-panel files-queue-panel" id="queuePanel">
+                  <!-- WatchTower errors (worker launch failures, daemon down,
+                       backend ERRORs) that would otherwise stop a queue from
+                       draining unnoticed. Rendered by _renderQueueAlertStrip;
+                       hidden when there is nothing un-acked. -->
+                  <div class="fq-alerts" id="queueAlertStrip" role="region" aria-label="WatchTower errors" aria-live="polite" hidden></div>
                   <div class="fq-health" id="queueHealthStrip" aria-label="Queue health by project"></div>
                   <div class="fq-health-resize-handle" id="queueHealthResizeHandle" title="Drag to resize the queue list · double-click to reset" role="separator" aria-orientation="horizontal" aria-label="Resize queue health list">
                     <span class="fq-health-resize-grip" aria-hidden="true"></span>

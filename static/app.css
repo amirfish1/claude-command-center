@@ -22306,6 +22306,107 @@ body.has-gc-reader .pwa-install-banner {
 
 /* Queue-health strip: one glanceable line per project with open tickets,
    above the ticket list. Wraps gracefully at narrow widths. */
+/* WatchTower error strip: sits above everything else in the Queue panel so a
+   worker that failed to launch (usage limit, auth, API down) or a dead daemon
+   is the first thing seen. Red left rail + tinted background so it reads as
+   an alert, not another queue row. Each row acks individually; the header
+   acks all. Hidden ([hidden]) when there is nothing un-acked. */
+.fq-alerts {
+  flex: 0 0 auto;
+  display: flex; flex-direction: column; gap: 5px;
+  padding: 8px 10px 9px 12px;
+  background: rgba(248,81,73,0.07);
+  border-bottom: 1px solid rgba(248,81,73,0.35);
+  box-shadow: inset 3px 0 0 var(--red, #f85149);
+  max-height: 40%; overflow-y: auto;
+}
+.fq-alerts[hidden] { display: none; }
+.fq-alerts-head {
+  display: flex; align-items: center; gap: 8px; padding-bottom: 2px;
+}
+.fq-alerts-dot {
+  flex: 0 0 7px; width: 7px; height: 7px; border-radius: 50%;
+  background: var(--red, #f85149);
+  box-shadow: 0 0 0 0 rgba(248,81,73,0.6);
+  animation: fqAlertPulse 1.6s ease-out infinite;
+}
+@keyframes fqAlertPulse {
+  0% { box-shadow: 0 0 0 0 rgba(248,81,73,0.55); }
+  100% { box-shadow: 0 0 0 7px rgba(248,81,73,0); }
+}
+.fq-alerts-label {
+  font-family: 'JetBrains Mono', ui-monospace, monospace;
+  font-size: 10.5px; font-weight: 700; letter-spacing: 0.07em;
+  color: var(--red, #f85149);
+}
+.fq-alerts-summary {
+  font-family: 'JetBrains Mono', ui-monospace, monospace;
+  font-size: 10.5px; color: var(--text-muted);
+  min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.fq-alerts-ack-all {
+  margin-left: auto; flex: 0 0 auto;
+  font-size: 10.5px; font-weight: 600; letter-spacing: 0.02em;
+  padding: 2px 8px; border-radius: 999px; cursor: pointer;
+  color: var(--text-muted); background: rgba(139,148,158,0.10);
+  border: 1px solid rgba(139,148,158,0.22);
+}
+.fq-alerts-ack-all:hover { color: var(--text); border-color: rgba(139,148,158,0.45); }
+.fq-alert-row {
+  display: flex; align-items: flex-start; gap: 8px;
+  padding: 6px 8px; border-radius: 6px; min-width: 0;
+  background: rgba(13,17,23,0.55); border: 1px solid rgba(248,81,73,0.22);
+  cursor: pointer; transition: border-color .12s;
+}
+.fq-alert-row:hover { border-color: rgba(248,81,73,0.55); }
+.fq-alert-row.is-warning { border-color: rgba(210,153,34,0.28); }
+.fq-alert-row.is-warning:hover { border-color: rgba(210,153,34,0.6); }
+.fq-alert-sev {
+  flex: 0 0 8px; width: 8px; height: 8px; border-radius: 50%; margin-top: 4px;
+  background: var(--red, #f85149);
+}
+.fq-alert-row.is-warning .fq-alert-sev { background: var(--yellow, #d29922); }
+.fq-alert-row.is-critical .fq-alert-sev { box-shadow: 0 0 0 2px rgba(248,81,73,0.35); }
+.fq-alert-main { flex: 1 1 auto; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+.fq-alert-top { display: flex; align-items: baseline; gap: 6px; min-width: 0; }
+.fq-alert-queue {
+  font-family: 'JetBrains Mono', ui-monospace, monospace;
+  font-size: 10.5px; font-weight: 600; color: var(--text-muted);
+  white-space: nowrap; flex: 0 0 auto;
+}
+.fq-alert-title {
+  font-size: 12.5px; font-weight: 600; color: var(--text);
+  min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.fq-alert-detail {
+  font-family: 'JetBrains Mono', ui-monospace, monospace;
+  font-size: 10.5px; color: var(--text-muted);
+  min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.queue-wrap-titles .fq-alert-title,
+.queue-wrap-titles .fq-alert-detail { white-space: normal; overflow: visible; }
+.fq-alert-meta {
+  font-family: 'JetBrains Mono', ui-monospace, monospace;
+  font-size: 10.5px; color: var(--text-muted); white-space: nowrap;
+  flex: 0 0 auto; margin-left: auto;
+}
+.fq-alert-count {
+  font-size: 10px; font-weight: 700; padding: 0 5px; border-radius: 999px;
+  background: rgba(248,81,73,0.18); color: var(--red, #f85149);
+}
+.fq-alert-row.is-warning .fq-alert-count { background: rgba(210,153,34,0.18); color: var(--yellow, #d29922); }
+.fq-alert-ack {
+  flex: 0 0 auto; width: 22px; height: 22px; margin: -2px -2px -2px 0;
+  display: inline-flex; align-items: center; justify-content: center;
+  border: 1px solid transparent; border-radius: 6px; background: transparent;
+  color: var(--text-muted); font-size: 13px; line-height: 1; cursor: pointer;
+}
+.fq-alert-ack:hover {
+  color: var(--green, #3fb950); background: rgba(63,185,80,0.14);
+  border-color: rgba(63,185,80,0.35);
+}
+.fq-alert-row.is-acking { opacity: 0.35; pointer-events: none; }
+
 .fq-health {
   flex: 0 0 auto;
   display: flex; flex-direction: column;
