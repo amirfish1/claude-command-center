@@ -62881,6 +62881,9 @@
         goal: c.goal || '',
         goal_status: c.goal_status || '',
         parent_session_id: c.parent_session_id || '',
+        // Same allowlist trap as goal/parent_session_id above: silently
+        // dropped (and the rail chip never renders) if not named here.
+        spawned_via: c.spawned_via || '',
         hermes_parent_session_id: c.hermes_parent_session_id || c.parent_session_id || '',
         // CCC-945: do NOT fall back to parent_session_id here. That field is
         // an orchestration spawn edge (e.g. Codex's thread_spawn_edges) --
