@@ -204,6 +204,7 @@ def cmd_sessions(args):
         name = (s.get("name") or "(no conversation row)")[:44]
         marker = ("  " * depth + "↳ ") if (depth or child) else ""
         engine_effort = f"{s.get('engine') or '?'}/{s.get('effort') or '?'}"
+        via = s.get("spawned_via") or "-"
         path = s.get("repo_path") or "?"
         if path.startswith(home_prefix):
             path = path[len(home_prefix):]
@@ -211,7 +212,7 @@ def cmd_sessions(args):
             f"{_fmt_age(s.get('last_event_age_s')):>7}  {marker}{name:<44} "
             f"{s.get('state') or '?':<8} {(s.get('model') or '?')[:18]:<18} "
             f"{s.get('session_id') or '?'}  {engine_effort:<14} "
-            f"{path}  {tool}{flags}"
+            f"via:{via:<6} {path}  {tool}{flags}"
         )
 
     def _walk(s, depth):

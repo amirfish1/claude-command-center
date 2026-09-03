@@ -10414,6 +10414,7 @@ def _census_identity_map():
             "effort": entry.get("effort") or entry.get("reasoning_effort") or None,
             "repo_path": entry.get("repo_path") or entry.get("cwd") or None,
             "parent_session_id": entry.get("parent_session_id") or None,
+            "spawned_via": entry.get("spawned_via") or None,
             "has_conversation_row": False,
         }
         for key in ("session_id", "resumed_sid"):
@@ -10447,6 +10448,7 @@ def _census_identity_map():
                 "effort": row.get("reasoning_effort") or row.get("effort") or existing.get("effort"),
                 "repo_path": row.get("session_cwd") or existing.get("repo_path"),
                 "parent_session_id": row.get("parent_session_id") or existing.get("parent_session_id"),
+                "spawned_via": row.get("spawned_via") or existing.get("spawned_via"),
                 "has_conversation_row": True,
                 "mtime": row.get("mtime") or row.get("modified") or None,
                 "jsonl_path": row.get("jsonl_path") or None,
@@ -10709,6 +10711,7 @@ def build_session_census(since_s=None):
             "name": ident.get("name"),
             "repo_path": ident.get("repo_path"),
             "parent_session_id": parent,
+            "spawned_via": ident.get("spawned_via") or None,
             "children": sorted(children_of.get(sid) or ()),
             "last_event_age_s": age,
             "pending_tool": entry.get("pending_tool") or entry.get("sidecar_tool") or None,
@@ -10745,6 +10748,7 @@ def build_session_census(since_s=None):
                 "name": ident.get("name"),
                 "repo_path": ident.get("repo_path"),
                 "parent_session_id": ident.get("parent_session_id") or None,
+                "spawned_via": ident.get("spawned_via") or None,
                 "children": [],
                 "last_event_age_s": max(0.0, now - mtime),
                 "pending_tool": None,
@@ -19125,6 +19129,12 @@ def find_conversations(repo_path, progress=None, include_old=True, live_sids=Non
             "goal": tail_meta.get("goal") or "",
             "goal_status": tail_meta.get("goal_status") or "",
             "parent_session_id": parent_session_id,
+            # Third row-builder that needs its own copy (see the same field
+            # in find_all_conversations / _rehydrate_archive_cached_rows):
+            # this is the live per-repo listing behind /api/sessions, which
+            # feeds the sidebar directly — a completely separate code path
+            # from the archive endpoints.
+            "spawned_via": spawn_entry.get("spawned_via") or "",
             "continued_from_session_id": _continued_from_session_id_from_text(first_message),
             "model": tail_meta.get("model"),
             # Transcript-first, like the model beside it: the tail states the
