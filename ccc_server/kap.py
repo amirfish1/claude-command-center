@@ -218,6 +218,62 @@ def kap_session_status(sid):
     return kap_request("GET", "/api/v1/sessions/%s/status" % sid) or {}
 
 
+def kap_runtime_binding(sid):
+    """The main agent's current ``{workspace_id, runtime_id}`` binding."""
+    data = kap_request(
+        "GET", "/api/v1/sessions/%s/runtime" % sid, timeout=10.0)
+    return data if isinstance(data, dict) else {}
+
+
+def kap_bind_runtime_local(sid, attempts=3, settle_s=0.5):
+    """Best-effort: bind the session's main agent to the local runtime.
+
+    An ACP attach (``kimi acp`` -- CCC's default transport) rebinds the
+    session to ``acp:<sid>``, a virtual runtime that exists only inside that
+    ACP subprocess. The binding is durable (a ``runtime.set_binding`` wire
+    record), so when the kap daemon later serves the session the virtual
+    runtime is still bound and it carries no fs/process capabilities:
+    agent-core-v2's runtimeAllows gate then strips Bash, Read, Write, Edit,
+    Glob, Grep, Agent and ReadMediaFile, leaving only coordination tools --
+    which is why a broken session opens every turn with AgentSwarm. Rebinding
+    to ``local`` hands the capabilities back. The ACP side rebinds on every
+    attach, so flip-flopping between transports is safe by design.
+
+    Verification after the POST is not optional: on a session the daemon has
+    not loaded yet the POST answers code:0 and persists nothing (the switch
+    races the wire replay that re-asserts the old binding -- a kimi-code bug).
+    The POST itself is what makes the daemon resume the session, so retrying
+    the pair lands on a warm session where the switch sticks.
+
+    Returns the binding once ``runtime_id`` is confirmed ``local``, else None.
+    Every failure is swallowed: a daemon without the /runtime route (it is in
+    the pinned 0.39.1 contract, but older ones exist) or a mid-call daemon
+    death must degrade to pre-rebind behavior, never break a prompt.
+    """
+    if not sid:
+        return None
+    path = "/api/v1/sessions/%s/runtime" % sid
+    # ValueError joins the usual transport failures: a daemon answering with
+    # a malformed body must degrade the same way a missing route does.
+    try:
+        binding = kap_runtime_binding(sid)
+    except (KapUnavailable, KapError, OSError, ValueError):
+        return None
+    if binding.get("runtime_id") == "local":
+        return binding
+    for attempt in range(attempts):
+        try:
+            kap_request("POST", path, {"runtime_id": "local"}, timeout=10.0)
+            binding = kap_runtime_binding(sid)
+        except (KapUnavailable, KapError, OSError, ValueError):
+            return None
+        if binding.get("runtime_id") == "local":
+            return binding
+        if attempt + 1 < attempts:
+            time.sleep(settle_s)
+    return None
+
+
 # --- WebSocket (RFC 6455 client, stdlib only) ------------------------------
 #
 # CCC ships zero runtime dependencies, so the client is hand-rolled rather
@@ -710,6 +766,7 @@ def kap_run_turn(sid, text, cwd="", on_events=None, timeout=300.0):
     are produced, and written into CCC's store when the flag is on.
     """
     mapper = KapTranscriptMapper()
+    kap_bind_runtime_local(sid)
     ws = kap_open_stream(sid)
     collected = []
     try:
@@ -888,6 +945,9 @@ def kap_prompt(sid, text, visible_text=None, cwd="", mode="send"):
     it. There is no busy rejection to handle here at all.
     """
     visible = visible_text if visible_text is not None else text
+    # An ACP-attached session arrives bound to acp:<sid> (no fs/process
+    # capabilities); rebind before the turn or the model has no Bash/Read/...
+    kap_bind_runtime_local(sid)
     try:
         prompt_id = kap_submit_prompt(sid, text)
     except (KapUnavailable, KapError, OSError) as exc:

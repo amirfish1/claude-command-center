@@ -499,3 +499,130 @@ class TestKapSteeredPromptRendering(unittest.TestCase):
         ])
         blocks = [e for e in events if e["type"] == "assistant"][-1]["blocks"]
         self.assertEqual(blocks, [{"kind": "thinking", "text": "reconsidering"}])
+
+
+class TestKapRuntimeRebind(unittest.TestCase):
+    """An ACP attach durably rebinds the session to acp:<sid> -- a virtual
+    runtime with no fs/process capabilities, so a daemon-served turn loses
+    Bash/Read/Write/Edit/Glob/Grep/Agent and the model opens with AgentSwarm
+    instead. Driving the session over kap must rebind it to local first, and
+    a daemon too old to have the /runtime route must degrade to the
+    pre-rebind behavior rather than fail the prompt."""
+
+    def setUp(self):
+        self.calls = []
+        self.binding = {"workspace_id": "ws_1", "runtime_id": "acp:session_x"}
+        self.runtime_error = None
+        # POSTs that answer code:0 yet persist nothing -- the cold-session
+        # bug: the switch races the wire replay that re-asserts the old
+        # binding. The POST itself resumes the session, so the NEXT attempt
+        # lands on a warm session and sticks.
+        self.cold_misses = 0
+
+        def fake_request(method, path, body=None, timeout=30.0):
+            self.calls.append((method, path, body))
+            if path.endswith("/runtime"):
+                if self.runtime_error is not None:
+                    raise self.runtime_error
+                if method == "POST":
+                    if self.cold_misses > 0:
+                        self.cold_misses -= 1
+                    else:
+                        self.binding = dict(self.binding,
+                                            runtime_id=body["runtime_id"])
+                return dict(self.binding)
+            if path.endswith("/prompts") and method == "POST":
+                return {"prompt_id": "msg_123"}
+            return {}
+
+        self._orig_request = kap.kap_request
+        kap.kap_request = fake_request
+        self._orig_pump = kap.kap_ensure_pump
+        kap.kap_ensure_pump = lambda sid, cwd="": False
+        self._orig_emit = kap.kap_emit_to_ccc
+        kap.kap_emit_to_ccc = lambda sid, events, cwd="": 0
+
+    def tearDown(self):
+        kap.kap_request = self._orig_request
+        kap.kap_ensure_pump = self._orig_pump
+        kap.kap_emit_to_ccc = self._orig_emit
+
+    def _runtime_calls(self, method=None):
+        return [(m, p) for m, p, _ in self.calls
+                if p.endswith("/runtime") and (method is None or m == method)]
+
+    def _index_of(self, method, suffix):
+        return next(i for i, (m, p, _) in enumerate(self.calls)
+                    if m == method and p.endswith(suffix))
+
+    def test_acp_bound_session_rebinds_before_submitting(self):
+        result = kap.kap_prompt("session_x", "hello")
+        self.assertTrue(result["ok"])
+        rebind = self._index_of("POST", "/runtime")
+        self.assertEqual(self.calls[rebind][2], {"runtime_id": "local"})
+        self.assertLess(rebind, self._index_of("POST", "/prompts"))
+
+    def test_local_bound_session_skips_the_rebind(self):
+        self.binding = {"workspace_id": "ws_1", "runtime_id": "local"}
+        result = kap.kap_prompt("session_x", "hello")
+        self.assertTrue(result["ok"])
+        self.assertEqual(self._runtime_calls("POST"), [])
+        self.assertEqual(len(self._runtime_calls("GET")), 1)
+
+    def test_missing_runtime_route_does_not_fail_the_prompt(self):
+        self.runtime_error = kap.KapError("HTTP 404: unknown route")
+        result = kap.kap_prompt("session_x", "hello")
+        self.assertTrue(result["ok"])
+        self.assertEqual(result["prompt_id"], "msg_123")
+
+    def test_daemon_death_mid_rebind_does_not_fail_the_prompt(self):
+        def dying(method, path, body=None, timeout=30.0):
+            if path.endswith("/runtime") and method == "POST":
+                raise kap.KapUnavailable("daemon gone")
+            self.calls.append((method, path, body))
+            if path.endswith("/runtime"):
+                return dict(self.binding)
+            if path.endswith("/prompts") and method == "POST":
+                return {"prompt_id": "msg_123"}
+            return {}
+        kap.kap_request = dying
+        result = kap.kap_prompt("session_x", "hello")
+        self.assertTrue(result["ok"])
+
+    def test_cold_session_rebind_retries_until_it_sticks(self):
+        self.cold_misses = 1
+        binding = kap.kap_bind_runtime_local("session_x", settle_s=0)
+        self.assertIsNotNone(binding)
+        self.assertEqual(binding["runtime_id"], "local")
+        self.assertEqual(len(self._runtime_calls("POST")), 2)
+
+    def test_rebind_gives_up_quietly_when_it_never_sticks(self):
+        self.cold_misses = 99
+        binding = kap.kap_bind_runtime_local("session_x", attempts=3,
+                                             settle_s=0)
+        self.assertIsNone(binding)
+        self.assertEqual(len(self._runtime_calls("POST")), 3)
+
+    def test_a_daemon_without_the_route_is_none_not_an_exception(self):
+        self.runtime_error = kap.KapError("HTTP 404: unknown route")
+        self.assertIsNone(
+            kap.kap_bind_runtime_local("session_x", settle_s=0))
+
+    def test_kap_run_turn_binds_before_submitting(self):
+        class _FakeWS:
+            def recv_json(self, timeout=None):
+                return None
+
+            def close(self):
+                pass
+
+        orig_stream = kap.kap_open_stream
+        kap.kap_open_stream = lambda sid: _FakeWS()
+        try:
+            prompt_id, events = kap.kap_run_turn("session_x", "hello")
+        finally:
+            kap.kap_open_stream = orig_stream
+        self.assertEqual(prompt_id, "msg_123")
+        self.assertEqual(events, [])
+        self.assertLess(self._index_of("POST", "/runtime"),
+                        self._index_of("POST", "/prompts"))
