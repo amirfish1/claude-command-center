@@ -3916,7 +3916,7 @@ def _spawn_entry_started_epoch(entry):
         return 0
 
 
-def resume_session_antigravity(session_id, text):
+def resume_session_antigravity(session_id, text, mode="send"):
     """Resume an Antigravity conversation through AGY CLI or the running app.
 
     Routing:
@@ -3929,6 +3929,16 @@ def resume_session_antigravity(session_id, text):
          AGY rehydrates from the brain transcript on disk; previously
          orphaned transcripts (no .pb, no app file) were dead — now they
          get the new turn appended via headless print.
+
+    Antigravity is a one-shot headless process with no mid-turn steer
+    primitive (unlike Codex's resume/steer or Kimi/Grok's ACP session/cancel)
+    -- there is no safe way to interject without killing whatever the
+    current turn is mid-edit on. When ``mode == "steer"`` hits a still-busy
+    turn below, say so plainly (``queued_preserved``) instead of returning
+    the same silent re-queue a plain send would get: the queued-steer tray's
+    Steer button already renders on every engine (CCC-42/43), so a busy
+    Antigravity session needs an honest "can't interrupt" answer rather than
+    the click quietly reverting with no explanation (CCC-1030).
     """
     text = _core._strip_ccc_session_state_instruction(text)
     if not session_id or not text:
@@ -3953,6 +3963,18 @@ def resume_session_antigravity(session_id, text):
                     started = _spawn_entry_started_epoch(s)
                     if started and (time.time() - started) > _antigravity_resume_stale_seconds():
                         continue
+                    if mode == "steer":
+                        # The text is already sitting in the durable queue
+                        # (that's what put the Steer button in front of the
+                        # user) -- appending it again here would duplicate
+                        # it. Just report that it can't be pulled forward.
+                        return {
+                            "ok": True,
+                            "queued_preserved": True,
+                            "pid": s.get("pid"),
+                            "via": "antigravity-resume-queued",
+                            "error": "Antigravity can't be interrupted mid-turn — stays queued and sends automatically when this turn ends.",
+                        }
                     queued = _core._apply_pending_input_operations(session_id, [{
                         "field": "resume", "action": "append_tail", "value": text,
                     }])
@@ -3974,6 +3996,14 @@ def resume_session_antigravity(session_id, text):
         # can drop a live PID under load, CCC-1011) but a real `agy
         # --conversation <sid>` process is still running -- queue behind it
         # rather than racing a second process onto the same conversation.
+        if mode == "steer":
+            return {
+                "ok": True,
+                "queued_preserved": True,
+                "pid": live_pid,
+                "via": "antigravity-resume-queued",
+                "error": "Antigravity can't be interrupted mid-turn — stays queued and sends automatically when this turn ends.",
+            }
         queued = _core._apply_pending_input_operations(session_id, [{
             "field": "resume", "action": "append_tail", "value": text,
         }])

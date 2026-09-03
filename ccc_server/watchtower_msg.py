@@ -1916,7 +1916,7 @@ def _inject_text_into_session_router(
     if is_cursor:
         return _core.resume_session_cursor(session_id, text)
     if _core._is_antigravity_session(session_id):
-        return _core.resume_session_antigravity(session_id, text)
+        return _core.resume_session_antigravity(session_id, text, mode=mode)
     if is_hermes:
         return _core.resume_session_hermes(session_id, text)
     if is_opencode:
