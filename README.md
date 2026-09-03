@@ -100,24 +100,24 @@ Group chats keep two sessions on one goal in sync — post once and every partic
 <tr>
 <td width="50%" valign="middle">
 
-### Issue → session → verify
+### Durable queues, one inbox
 
-Start a session from a GitHub issue in one click; verifying closes the issue with a commit-SHA comment. The whole pipeline lives on the board.
+File work into named [WatchTower](https://github.com/amirfish1/watchtower) queues instead of remembering what to ask which session. Tickets survive closed sessions, workers drain them in parallel, and the queue inbox shows what needs you.
 
 </td>
 <td width="50%">
-  <img src="docs/images/feature-wall/issue-to-session.gif" alt="Starting a session from a GitHub issue in CCC" width="100%" />
+  <img src="docs/images/feature-wall/queues.gif" alt="CCC's queue inbox — the all-queues picker and a ticket waiting on a decision" width="100%" />
 </td>
 </tr>
 <tr>
 <td width="50%">
-  <img src="docs/images/feature-wall/attention.gif" alt="The CCC card that needs your approval, flagged in the Waiting column" width="100%" />
+  <img src="docs/images/feature-wall/queue-workers.gif" alt="WatchTower workers draining CCC queues, with per-queue health and live worker rows" width="100%" />
 </td>
 <td width="50%" valign="middle">
 
-### Tells you which session needs you
+### Workers that specialize over time
 
-Approvals, questions, and blocked ends are read straight from the transcript and surfaced as a needs-you signal — scan one column instead of nine terminals.
+Each worker reads its queue's shared learnings file before it starts and writes back when it ends, so a queue handling the same kind of ticket for months keeps getting faster, not just busier.
 
 </td>
 </tr>
@@ -137,7 +137,7 @@ The whole fleet on your phone — monitor sessions, answer agents, and steer fro
 
 **Also in the box:**
 
-- **Durable queues with workers that specialize over time** — [WatchTower](https://github.com/amirfish1/watchtower) queues carry a shared learnings file each worker reads before and writes after; an all-queues inbox, per-queue AI status briefs, and one-click "create a queue for this session" included.
+- **More queue tooling** — per-queue AI status briefs, GitHub-backed queues synced from issues, and one-click "create a queue for this session".
 - **Answer permission prompts from the dashboard** — Claude Code's approve/deny prompts surface inline; CCC never interrupts a possibly-mid-turn session without your Approve.
 - **Board view (kanban, optional)** — drag-drop columns derived from session state, with rubber-band multi-select. The list is the primary surface; the board is an opt-in lens.
 - **System status** — a health modal over the whole fleet: restart-all, spawned-process cleanup, delivery receipts.

@@ -1,0 +1,7 @@
+{
+  "ok": true,
+  "queue": "BUGS",
+  "path": "/home/demo/.watchtower/queues/BUGS/LEARNINGS.md",
+  "exists": true,
+  "content": "# BUGS — queue learnings\n\nWorkers read this file before claiming and append to it when they finish.\n\n- Pagination bugs in the admin list are almost always a filtered/unfiltered count mismatch — check the count query first.\n- The webhook retry worker and the scheduler both send; dedupe on delivery id, never on payload hash.\n- OAuth 401s right after a deploy are the signing-key race between old and new workers, not bad sessions.\n- Prefer a failing smoke test before touching `app/routes/` — the suite is fast and catches regressions here."
+}
