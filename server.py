@@ -7727,6 +7727,33 @@ def _build_engine_model_catalog(force_refresh=False):
     except Exception:
         pass
 
+    # BYOK-only models (openrouter/tokenrouter virtual routing, see
+    # ccc_server/byok.py). These run through OpenCode's own "<provider>/
+    # <vendor>/<model>" id format, so they're listed under the opencode
+    # engine bucket; `byok: True` plus per-1M-token cost lets the picker
+    # and Settings distinguish them from OpenCode's own credentialed models.
+    try:
+        configured_providers = {
+            provider
+            for profile in byok_list_profiles()
+            for provider in profile.get("providers", [])
+        }
+        for row in BYOK_MODEL_CATALOG:
+            _model_catalog_add(
+                catalog,
+                "opencode",
+                row["id"],
+                label=row.get("label"),
+                source="byok",
+                byok=True,
+                provider=row.get("provider"),
+                cost_in_per_1m=row.get("cost_in_per_1m"),
+                cost_out_per_1m=row.get("cost_out_per_1m"),
+                key_configured=row.get("provider") in configured_providers,
+            )
+    except Exception:
+        pass
+
     if "claude" in catalog:
         catalog["claude"]["models"] = _prune_claude_models_to_latest_tiers(
             catalog["claude"].get("models") or []
@@ -22766,6 +22793,7 @@ _WT_IMPORT_AVAILABLE_CACHE = None  # None = not probed yet; bool once probed
 _adopt_ccc_module("watchtower_msg")
 
 _adopt_ccc_module("pkood")
+_adopt_ccc_module("byok")
 
 _adopt_ccc_module("github_issues")
 
@@ -25521,6 +25549,23 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
             # bin resolvers + read-only session stores). Backs the First
             # Flight tour welcome chips.
             self.send_json(_engines_installed())
+        elif path == "/api/byok/profiles":
+            # BYOK (W2-2): key profiles and the provider catalog for the
+            # Settings screen. Never returns secret material — set_key/
+            # delete_key write-only. See ccc_server/byok.py.
+            self.send_json({
+                "backend": byok_storage_backend(),
+                "providers": BYOK_PROVIDERS,
+                "profiles": byok_list_profiles(),
+            })
+        elif path == "/api/byok/usage":
+            qs = urllib.parse.parse_qs(parsed.query)
+            days_raw = (qs.get("days", ["30"])[0] or "30").strip()
+            try:
+                days = max(1, min(int(days_raw), 365))
+            except ValueError:
+                days = 30
+            self.send_json(byok_usage_summary(days=days))
         elif path == "/api/engines/update-status":
             self.send_json(_engine_update_status())
         elif path == "/api/search-history":
@@ -27089,6 +27134,56 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                 "stored": True,
                 "supported_engines": list(_ORCHESTRATION_SPAWN_ENGINES),
             })
+            return
+        if path == "/api/byok/keys":
+            # BYOK (W2-2): store one provider key on one profile. Body:
+            # {"profile": "personal", "provider": "openrouter", "key": "sk-or-..."}.
+            # Same-origin already enforced at the top of do_POST. Never
+            # echoes the key back, and never logs the request body.
+            length = int(self.headers.get("Content-Length", "0"))
+            body = self.rfile.read(length) if length > 0 else b""
+            try:
+                payload = json.loads(body) if body else {}
+            except json.JSONDecodeError:
+                self.send_json({"ok": False, "error": "invalid JSON"}, 400)
+                return
+            if not isinstance(payload, dict):
+                self.send_json({"ok": False, "error": "invalid payload"}, 400)
+                return
+            profile = (payload.get("profile") or "").strip()
+            provider = (payload.get("provider") or "").strip().lower()
+            key = (payload.get("key") or "").strip()
+            if not profile or provider not in BYOK_PROVIDERS or not key:
+                self.send_json({
+                    "ok": False,
+                    "error": "profile, a known provider, and a non-empty key are required",
+                    "known_providers": sorted(BYOK_PROVIDERS),
+                }, 400)
+                return
+            ok = byok_set_key(profile, provider, key)
+            self.send_json({"ok": ok, "backend": byok_storage_backend()}, 200 if ok else 500)
+            return
+        if path == "/api/byok/keys/delete":
+            length = int(self.headers.get("Content-Length", "0"))
+            body = self.rfile.read(length) if length > 0 else b""
+            try:
+                payload = json.loads(body) if body else {}
+            except json.JSONDecodeError:
+                self.send_json({"ok": False, "error": "invalid JSON"}, 400)
+                return
+            if not isinstance(payload, dict):
+                self.send_json({"ok": False, "error": "invalid payload"}, 400)
+                return
+            profile = (payload.get("profile") or "").strip()
+            provider = (payload.get("provider") or "").strip().lower()
+            if not profile:
+                self.send_json({"ok": False, "error": "profile is required"}, 400)
+                return
+            if provider:
+                byok_delete_key(profile, provider)
+            else:
+                byok_delete_profile(profile)
+            self.send_json({"ok": True})
             return
         if path == "/api/engines/update-now":
             self.send_json(_start_engine_update_pass(), 202)
@@ -29214,6 +29309,12 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
             name = (payload.get("name") or "").strip() or None
             engine_raw = payload.get("engine")
             engine, model = _spawn_request_engine_and_model(payload)
+            # BYOK (W2-2): "key_profile" picks which stored profile's API
+            # keys get injected into the spawned subprocess's env. See
+            # ccc_server/byok.py. Only engines that read provider keys
+            # straight from the environment honor this today.
+            key_profile = (payload.get("key_profile") or "").strip() or None
+            byok_extra_env = byok_spawn_env(engine, model, key_profile)
             reasoning_effort = _spawn_request_reasoning_effort(payload, engine)
             auto_compact_k = _load_spawn_defaults().get("auto_compact_k", 250)
             if "auto_compact_k" in payload:
@@ -29440,7 +29541,15 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                             worktree=worktree_flag,
                             model=model,
                             parent_session_id=parent_session_id,
+                            env=byok_extra_env,
                         )
+                        if result.get("ok") and byok_extra_env:
+                            byok_record_usage(
+                                session_id=result.get("session_id"),
+                                engine="opencode",
+                                model=model,
+                                key_profile=key_profile,
+                            )
                     elif engine == "hermes":
                         result = spawn_session_hermes(
                             prompt,

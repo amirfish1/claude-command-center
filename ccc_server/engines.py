@@ -5919,8 +5919,13 @@ def spawn_session_kilo(prompt, name=None, cwd=None, repo_path=None, worktree=Fal
     return _finalize_spawn_response(resp, entry, ctx)
 
 
-def spawn_session_opencode(prompt, name=None, cwd=None, repo_path=None, worktree=False, model=None, parent_session_id=None):
-    """Spawn a headless OpenCode CLI run and return tracking info."""
+def spawn_session_opencode(prompt, name=None, cwd=None, repo_path=None, worktree=False, model=None, parent_session_id=None, env=None):
+    """Spawn a headless OpenCode CLI run and return tracking info.
+
+    ``env``, when given, is merged over the inherited process environment —
+    used by the BYOK layer (ccc_server/byok.py) to hand OpenCode a
+    provider API key for this one spawn without touching global state.
+    """
     prompt = _core._strip_ccc_session_state_instruction(prompt)
     resolved = _core._resolve_opencode_bin()
     if not resolved["available"]:
@@ -5952,10 +5957,11 @@ def spawn_session_opencode(prompt, name=None, cwd=None, repo_path=None, worktree
     log_fh = open(log_path, "w")
     if worktree_path:
         _core._run_worktree_init_hook(worktree_path, ctx["repo_path"], session_name, log_fh)
+    popen_env = {**os.environ, **env} if env else None
     try:
         proc = subprocess.Popen(
             cmd, stdin=subprocess.DEVNULL, stdout=log_fh, stderr=subprocess.STDOUT,
-            cwd=spawn_cwd, start_new_session=True,
+            cwd=spawn_cwd, start_new_session=True, env=popen_env,
         )
     except (FileNotFoundError, OSError) as e:
         log_fh.close()
