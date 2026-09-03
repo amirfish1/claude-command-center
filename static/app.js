@@ -8035,6 +8035,28 @@
       + '</span>';
   }
 
+  // CCC-1026 follow-up: the breadcrumb chip above already crowds the top bar
+  // with session-id/spawned-by/handoff chips, so the "how" (cli/ui/api) lives
+  // in the Metadata pane's rail-actions row instead of adding a fourth chip
+  // up top. Best-effort — row.spawned_via is only populated for sessions
+  // spawned after this landed; older rows render nothing.
+  const RAIL_SPAWNED_VIA_LABELS = {
+    cli: ['CLI', 'Spawned from the ccc CLI.'],
+    ui: ['UI', 'Spawned from the CCC dashboard UI.'],
+    'ui-automated': ['UI · automated', 'Spawned from a browser tab under automation control (navigator.webdriver) — e.g. a Playwright/Puppeteer-driven session, not necessarily a human click.'],
+    api: ['API', 'Spawned via a direct API call with no browser Origin/Referer.'],
+  };
+  function _renderRailSpawnedVia(row) {
+    const el = document.getElementById('railSpawnedVia');
+    if (!el) return;
+    const via = row && row.spawned_via || '';
+    const info = RAIL_SPAWNED_VIA_LABELS[via];
+    if (!info) { el.hidden = true; el.textContent = ''; el.removeAttribute('title'); return; }
+    el.hidden = false;
+    el.textContent = 'via: ' + info[0];
+    el.title = info[1];
+  }
+
   function handleBreadcrumbSpawnedByClick(ev) {
     const chip = ev.target && ev.target.closest && ev.target.closest('.ccc-breadcrumb-spawned-by[data-parent-sid]');
     if (!chip) return;
@@ -39517,6 +39539,7 @@
           }
         }
         _statusRailActiveRow = row || null;
+        _renderRailSpawnedVia(_statusRailActiveRow);
         const railRenameBtn = document.getElementById('statusRailTitleRenameBtn');
         if (railRenameBtn) railRenameBtn.style.display = (_statusRailActiveRow && _statusRailActiveRow.id) ? '' : 'none';
         const railActivityLogBtn = document.getElementById('statusRailActivityLogBtn');
@@ -39533,6 +39556,7 @@
         const railTitleRestEl = document.getElementById('statusRailTitleRest');
         if (railTitleRestEl) { railTitleRestEl.textContent = ''; railTitleRestEl.hidden = true; }
         _statusRailActiveRow = null;
+        _renderRailSpawnedVia(null);
         const railTokensEl = document.getElementById('statusRailTokens');
         if (railTokensEl) { railTokensEl.innerHTML = ''; railTokensEl.hidden = true; }
         const railRenameBtn = document.getElementById('statusRailTitleRenameBtn');

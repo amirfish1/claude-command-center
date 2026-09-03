@@ -1313,7 +1313,7 @@
                    (updateConvProcessIndicator). Placed as the first chip in
                    this row (not a separate label elsewhere) so it reads as
                    one of "the chips" alongside Vercel/Screen/dev-server. -->
-              <div class="rail-actions" id="railActions" data-role="rail-actions"><span class="conv-pane-proc ccc-breadcrumb-proc status-rail-conn-proc" data-role="rail-proc" title="How CCC is connected to this session"></span></div>
+              <div class="rail-actions" id="railActions" data-role="rail-actions"><span class="conv-pane-proc ccc-breadcrumb-proc status-rail-conn-proc" data-role="rail-proc" title="How CCC is connected to this session"></span><span id="railSpawnedVia" data-role="rail-spawned-via" hidden></span></div>
               <!-- Subagents panel — surfaces Claude Code Task tool spawns for
                    the currently selected session. Populated by
                    updateSubagentsPanel() in app.js whenever the active

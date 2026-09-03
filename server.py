@@ -13002,7 +13002,7 @@ _ARCHIVE_LIST_FIELDS = (
     "stale_tool_threshold_s", "stale_tool_queued_input", "subagent_count",
     "subagent_in_flight_count", "subagent_recent", "workflows", "session_state", "goal",
     "goal_status", "parent_session_id", "continued_from_session_id",
-    "hermes_parent_session_id",
+    "hermes_parent_session_id", "spawned_via",
     "hermes_continued_from", "hermes_child_session_ids",
     "hermes_lineage_session_ids", "hermes_lineage_count", "hermes_is_parent",
     "model", "reasoning_effort", "latest_input_tokens", "lifetime_tokens", "cost_usd", "cost_breakdown_usd",
@@ -14051,6 +14051,11 @@ def _rehydrate_archive_cached_rows(rows):
                 row["parent_session_id"] = spawn_parent_id
             else:
                 row.setdefault("parent_session_id", "")
+            # How this session's spawn request arrived (cli/ui/ui-automated/
+            # api), tagged onto the registry entry at spawn time (CCC-1026
+            # follow-up). Absent for anything spawned before that change, or
+            # for rows with no registry entry at all (archived/rehydrated).
+            row["spawned_via"] = (spawn_registry_by_sid.get(sid) or {}).get("spawned_via") or ""
             # Continuation lineage specifically (F2 "Continue in a new
             # session" / usage-limit auto-resume): the origin marker only
             # appears in continuation prompts, never in subagent spawns, so
