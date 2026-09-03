@@ -646,6 +646,68 @@ def _queue_store_path():
     return _q.store_path()
 
 
+def _queue_config_diff(before, after):
+    """Human-readable ``key: old → new`` fragments for the keys that changed
+    between two queue-config entries. Absent keys read as ``unset`` so a
+    cleared field ("model: opus-5 → unset") is as visible as a set one."""
+    before = before if isinstance(before, dict) else {}
+    after = after if isinstance(after, dict) else {}
+
+    def _fmt(value):
+        if value is None:
+            return "unset"
+        if isinstance(value, bool):
+            return "on" if value else "off"
+        if isinstance(value, (list, tuple)):
+            return ",".join(str(v) for v in value) if value else "unset"
+        text = str(value).strip()
+        return text if text else "unset"
+
+    out = []
+    for key in sorted(set(before) | set(after)):
+        if before.get(key) == after.get(key):
+            continue
+        out.append(f"{key}: {_fmt(before.get(key))} → {_fmt(after.get(key))}")
+    return out
+
+
+def _wt_log_queue_config_change(queue, changes, action="updated", via="CCC dashboard"):
+    """Append one CONFIG line for ``queue`` to ~/.watchtower/activity.log.
+
+    Every queue-config write the dashboard performs (gear dialog save, the
+    auto-drain / claim-types / worker-count toggles, delete) lands here so
+    the queue's Log panel and `wt log` show WHO changed WHAT and WHEN
+    alongside the CLAIM/CLOSE/SPAWN rows (CCC-1037). Goes through
+    WatchTower's own writer so the column layout and the per-queue filter
+    (`_wt_log_line_queue`) match; a direct append in the same format is the
+    fallback for an older watchtower without ``_log``. Best-effort: never
+    raises into the request handler.
+    """
+    try:
+        queue = str(queue or "").strip()
+        if not queue:
+            return False
+        if isinstance(changes, (list, tuple)):
+            body = "; ".join(str(c) for c in changes if str(c).strip())
+        else:
+            body = str(changes or "").strip()
+        detail = f"{queue} {action}"
+        if body:
+            detail += f" — {body}"
+        detail += f" (via {via})"
+        log_fn = getattr(_q, "_log", None)
+        if callable(log_fn):
+            return bool(log_fn("CONFIG", detail, queue))
+        now = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
+        log_path = _WT_HOME / "activity.log"
+        log_path.parent.mkdir(parents=True, exist_ok=True)
+        with open(log_path, "a") as f:
+            f.write(f"{now}  {queue:<14}  {'CONFIG':<9}{detail}\n")
+        return True
+    except Exception:
+        return False
+
+
 def _wt_read_config():
     """{queue: {auto_drain, repo_path, ...}} read straight from queue-config.json.
     Empty dict if the file is absent/unreadable. No watchtower import needed."""
@@ -28075,6 +28137,7 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                 cfg = _wt_read_config() or {}
                 matched = next((k for k in cfg if k.strip().upper() == queue_name), None)
                 case_mismatch = bool(matched and matched != queue_name)
+                before_conf = dict(cfg.get(matched) or {}) if matched else {}
                 if matched is None:
                     # A queue with no existing entry is being created here, not
                     # edited (CCC-768) — force auto_drain off no matter what the
@@ -28114,6 +28177,16 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                     with open(tmp, "w") as f:
                         json.dump(cfg, f, indent=2)
                     tmp.replace(cfg_path)
+                # Activity-log the save as a before/after diff (CCC-1037).
+                after_conf = (_wt_read_config() or {}).get(queue_name)
+                if after_conf is None:
+                    after_conf = normalized["config"]
+                diff = _queue_config_diff(before_conf, after_conf)
+                _wt_log_queue_config_change(
+                    queue_name,
+                    diff if diff else "no changes",
+                    action="created" if matched is None else "updated",
+                )
                 # A settings change (e.g. flipping auto_drain on, raising
                 # desired_workers) should act now, not sit until the
                 # reconciler's next ~30s tick (CCC-790) -- started off-thread
@@ -28147,6 +28220,7 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                 cfg = _wt_read_config() or {}
                 matched = next((k for k in cfg if k.strip().upper() == queue_name), None)
                 key = matched if matched else queue_name
+                was_drain = (cfg.get(key) or {}).get("auto_drain") if isinstance(cfg.get(key), dict) else None
                 if _WT_CONFIG_AVAILABLE and _wt_config is not None:
                     # WT owns auto_drain policy — same setter `wt drain on/off`
                     # uses (opting in also restores desired_workers >= 1, so the
@@ -28164,6 +28238,9 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                 # wait for the reconciler's next tick (CCC-790); turning it off
                 # needs no push — reconcile_once only ever spawns, never stops.
                 # Started off-thread so the toggle itself doesn't hang (CCC-1014).
+                _wt_log_queue_config_change(
+                    key, _queue_config_diff({"auto_drain": was_drain}, {"auto_drain": auto_drain})
+                    or "auto_drain unchanged")
                 if auto_drain:
                     _reconcile_once_async()
                 self.send_json({"ok": True, "queue": key, "auto_drain": auto_drain})
@@ -28201,6 +28278,7 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                 cfg = _wt_read_config() or {}
                 matched = next((k for k in cfg if k.strip().upper() == queue_name), None)
                 key = matched if matched else queue_name
+                was_workers = (cfg.get(key) or {}).get("desired_workers") if isinstance(cfg.get(key), dict) else None
                 if _WT_CONFIG_AVAILABLE and _wt_config is not None:
                     _wt_config.set_desired_workers(key, desired_workers)
                 else:
@@ -28211,6 +28289,10 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                     with open(tmp, "w") as f:
                         json.dump(cfg, f, indent=2)
                     tmp.replace(cfg_path)
+                _wt_log_queue_config_change(
+                    key, _queue_config_diff({"desired_workers": was_workers},
+                                            {"desired_workers": desired_workers})
+                    or "desired_workers unchanged")
                 # Raising the count should staff up now, same reasoning as the
                 # drain toggle (CCC-790) — lowering it needs no push. Started
                 # off-thread so the request itself doesn't hang (CCC-1014).
@@ -28244,6 +28326,9 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                 return
             claim_types = [t for t in raw if t in ("bug", "feature")]
             try:
+                _cfg_before = _wt_read_config() or {}
+                _key_before = next((k for k in _cfg_before if k.strip().upper() == queue_name), None)
+                was_types = (_cfg_before.get(_key_before) or {}).get("claim_types") if _key_before else None
                 # Prefer the watchtower helper when importable (it normalizes and
                 # pops the key when empty); fall back to a direct atomic write of
                 # queue-config.json (same tmp+replace pattern as the drain toggle).
@@ -28268,6 +28353,10 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                     with open(tmp, "w") as f:
                         json.dump(cfg, f, indent=2)
                     tmp.replace(cfg_path)
+                _wt_log_queue_config_change(
+                    key, _queue_config_diff({"claim_types": was_types or None},
+                                            {"claim_types": claim_types or None})
+                    or "claim_types unchanged")
                 self.send_json({"ok": True, "queue": key, "claim_types": claim_types})
             except Exception as e:
                 self.send_json({"ok": False, "error": str(e)}, 500)
@@ -28325,6 +28414,7 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                 with open(tmp2, "w") as f:
                     json.dump(deletions, f, indent=2)
                 tmp2.replace(deletions_path)
+                _wt_log_queue_config_change(matched or queue_name, "", action="deleted")
                 self.send_json({"ok": True, "queue": matched or queue_name})
             except Exception as e:
                 self.send_json({"ok": False, "error": str(e)}, 500)
