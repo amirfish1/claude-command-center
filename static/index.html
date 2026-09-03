@@ -1176,6 +1176,11 @@
         <div class="conversations-view" id="conversationsView">
           <div class="empty-state" style="height:auto;padding:40px;">Select a session from the sidebar</div>
         </div>
+        <!-- CCC-1033: last-write timestamp for the open conversation, centered
+             below the transcript. Populated + ticked by _updateLastWrittenLine()
+             in app.js from the row's modified/mtime field; empty + hidden when
+             no conversation is open. -->
+        <div class="conv-last-written" id="convLastWritten" aria-hidden="true"></div>
         <!-- Simple mode only (body.ccc-simple-mode): plain-language
              memory/usage line for the open conversation ("Memory: 71% full
              — plenty of room left"). Populated by _simpleUpdateUsageLine()

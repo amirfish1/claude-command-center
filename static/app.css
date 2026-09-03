@@ -3077,6 +3077,15 @@
        1s live-tool ticker re-rendered the inline status pill. */
     contain: layout style;
   }
+  /* CCC-1033: centered "LAST WRITTEN: Ng ago" row below the transcript.
+     Empty text (no conversation open, or row has no modified/mtime) collapses
+     it via :empty rather than a JS-toggled hidden class, so it never has to be
+     kept in sync with the conv-switch code path. */
+  .conv-last-written {
+    text-align: center; padding: 2px 0 4px; font-size: 11px;
+    color: var(--text-muted); opacity: 0.65; flex-shrink: 0;
+  }
+  .conv-last-written:empty { display: none; }
   .conv-sticky-header {
     /* Sits at top:0 of conversations-view (its scroll container). The
        :has() rule below pushes it to top:30px when the live-tool strip

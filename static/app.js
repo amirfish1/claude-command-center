@@ -19436,6 +19436,44 @@
     return Math.floor(diff / 604800) + 'w';
   }
 
+  // CCC-1033: full-word relative time for the "LAST WRITTEN" footer row
+  // (below), spelled out ("55 minutes ago") unlike the compact `relativeTime`
+  // above -- this one is a standalone status line, not squeezed into a row.
+  function _lastWrittenAgo(ts) {
+    const sec = Math.max(0, Math.floor(Date.now() / 1000 - ts));
+    if (sec < 60) return 'just now';
+    const min = Math.floor(sec / 60);
+    if (min < 60) return min + (min === 1 ? ' minute ago' : ' minutes ago');
+    const hr = Math.floor(min / 60);
+    if (hr < 24) return hr + (hr === 1 ? ' hour ago' : ' hours ago');
+    const day = Math.floor(hr / 24);
+    return day + (day === 1 ? ' day ago' : ' days ago');
+  }
+
+  // Centered "LAST WRITTEN: Ng ago" row under the transcript (#convLastWritten
+  // in index.html), sourced from the same modified/mtime fallback chain the
+  // sidebar uses. Ticked on an interval since selectConversation() only runs
+  // once per open -- without it the line would freeze at whatever "ago" value
+  // was true the moment the conversation was selected.
+  let _lastWrittenState = null; // { sid, ts } of the currently displayed row
+  function _updateLastWrittenLine(sid) {
+    const el = document.getElementById('convLastWritten');
+    if (!el) return;
+    const row = (conversationsData || []).find(x => x.id === sid)
+      || (Array.isArray(archiveData) ? archiveData.find(x => (x.id || x.session_id) === sid) : null);
+    const ts = row ? Number(row.modified || row.mtime || 0) : 0;
+    if (!sid || !ts) {
+      _lastWrittenState = null;
+      el.textContent = '';
+      return;
+    }
+    _lastWrittenState = { sid: sid, ts: ts };
+    el.textContent = 'LAST WRITTEN: ' + _lastWrittenAgo(ts);
+  }
+  setInterval(() => {
+    if (_lastWrittenState) _updateLastWrittenLine(_lastWrittenState.sid);
+  }, 30000);
+
   // ── Unified render dispatcher: list vs kanban ──
   // Shared stage logic — simple watermark
   function sessionStage(c) {
@@ -41250,6 +41288,7 @@
       || (Array.isArray(archiveData) ? archiveData.find(x => (x.id || x.session_id) === id) : null)
       || {};
     const source = sessionSourceByConv[id] || selectedConv.source || 'interactive';
+    try { _updateLastWrittenLine(id); } catch (_) {}
     // Make this pane active so the existing globals (which proxy through
     // splitState.activeIndex) target the right pane while we run.
     setActivePaneById(paneId, id);
