@@ -12149,29 +12149,18 @@ _ARCHIVE_RESPONSE_CACHE_FILE = COMMAND_CENTER_STATE_DIR / "archive-conversations
 
 
 def _archive_response_cache_build_id():
-    """Hash of server.py + ccc_server/*.py source files.
+    """Identifies the row-shaping code version for the persisted archive cache.
 
-    Busts the persisted archive cache whenever engine adapter logic changes,
-    so rows built by an older version of the code are not served after a
-    restart."""
-    try:
-        h = hashlib.sha1()
-        root = Path(__file__).resolve().parent
-        paths = [root / "server.py"]
-        ccc_server_dir = root / "ccc_server"
-        if ccc_server_dir.is_dir():
-            for p in sorted(ccc_server_dir.iterdir()):
-                if p.is_file() and p.suffix == ".py":
-                    paths.append(p)
-        for p in paths:
-            try:
-                st = p.stat()
-                h.update(f"{p}|{st.st_mtime_ns}|{st.st_size}\n".encode("utf-8"))
-            except OSError:
-                pass
-        return h.hexdigest()
-    except Exception:
-        return ""
+    CCC-1031: this used to be a sha1 over (path, mtime, size) of server.py +
+    every ccc_server/*.py, so ANY edit to those files - including an unrelated
+    comment or a routine dev-session change in this actively-edited repo -
+    busted the 22MB persisted cache and forced a ~100s cold rebuild on the
+    next restart. Row-shaping changes big enough to need a rebuild already
+    have an explicit, developer-maintained signal:
+    _ARCHIVE_RESPONSE_CACHE_SCHEMA_VERSION (bumped in the same commit that
+    changes what an entry looks like, see the v7 comment above). Key off that
+    instead of source mtimes."""
+    return str(_ARCHIVE_RESPONSE_CACHE_SCHEMA_VERSION)
 
 
 _ARCHIVE_RESPONSE_CACHE_BUILD_ID = _archive_response_cache_build_id()
