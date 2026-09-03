@@ -1101,10 +1101,12 @@
         <div class="conv-pane-header" data-role="pane-header">
           <div class="conv-pane-titlebar" data-role="pane-titlebar">
             <span class="conv-pane-category" data-role="pane-category"></span>
-            <!-- Headless/terminal process pills, mirrored from the global
-                 breadcrumb into the conversation pane header (right-hand side)
-                 and the popout. Filled by updateConvProcessIndicator(); empty
-                 for sources that have no process pill (CCC-147). -->
+            <!-- Headless/terminal process pill slot. In the dashboard the
+                 transport pill lives in the status rail (Metadata tab) and the
+                 topbar breadcrumb — NOT here (CCC-1043: a long pane title
+                 overlapped it in this titlebar). This pane slot is filled only
+                 by the popout's dedicated poll (_popoutProcPills), which has no
+                 rail; empty spans are display:none. -->
             <span class="conv-pane-proc ccc-breadcrumb-proc" data-role="pane-proc"></span>
             <span class="conv-pane-title" data-role="pane-title"></span>
           </div>

@@ -30805,17 +30805,21 @@
     return p(d.getHours()) + ':' + p(d.getMinutes()) + ':' + p(d.getSeconds());
   }
 
-  // Fill the breadcrumb and conversation-pane process-presence slots: a
+  // Fill the breadcrumb and status-rail process-presence slots: a
   // "headless" pill and a "terminal" pill (on/off/stale) plus a "checked Xs ago"
   // freshness label. Imperative (not part of the breadcrumb innerHTML) so the
   // "ago" stays live on every 5s poll without a full breadcrumb rebuild. No-op
   // when neither slot is present (non-Claude session, or breadcrumb hidden).
   function updateConvProcessIndicator() {
-    // Both slots live under #convSplit (pane header / status rail); scoping
+    // Both slots live under #convSplit (status rail); scoping
     // the attribute selectors there skips the sidebar's 10k+ nodes.
+    // CCC-1043: the pane-titlebar slot ([data-role="pane-proc"]) is
+    // deliberately NOT a target here — a long pane title overlapped the
+    // transport pill in the titlebar, and the pill already has a home in
+    // the rail (Metadata tab) plus the topbar breadcrumb. The popout
+    // (_popoutProcPills) fills the pane slot directly and is unaffected.
     const _procHost = document.getElementById('convSplit') || document;
     const targets = [
-      _procHost.querySelector('[data-role="pane-proc"]'),
       _procHost.querySelector('[data-role="rail-proc"]'),
       // The toolbar breadcrumb lives OUTSIDE #convSplit, so it needs its own
       // lookup. On a phone the per-pane header -- the pill's only other home in
@@ -75603,7 +75607,9 @@
       'body.flow-popout #cccThroughputStrip{display:none;}' +
       'html:not(.ccc-debug-mode) #cccThroughputStrip{display:none;}' +
       'html:not(.ccc-debug-mode) #announceBtnConv{display:none!important;}' +
-      'html:not(.ccc-debug-mode) .status-rail-conn-proc{display:none!important;}' +
+      // CCC-1043: the transport/connection chip's only non-debug homes were
+      // this rail slot and the (now removed) pane-titlebar pill — keep it
+      // visible here in normal mode.
       'html:not(.ccc-debug-mode) #frameHealth{display:none!important;}' +
       'html:not(.ccc-debug-mode) #convOverflowBtn{display:none!important;}' +
       'html:not(.ccc-debug-mode) #deployPill{display:none!important;}' +
