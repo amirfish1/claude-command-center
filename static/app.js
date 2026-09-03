@@ -43448,7 +43448,21 @@
       const startedMs = Date.parse((w && w.started_at) || '');
       const elapsed = Number.isFinite(startedMs)
         ? _uxqFmtAge(Math.max(0, (Date.now() - startedMs) / 1000)) : '';
-      return { ref, title, queue: qKey, worker: String(w.worker_id || 'worker'), elapsed };
+      // CCC-1035: engine glyph + $-tier, same presentation as the conv-list
+      // row for this worker. Prefer the loaded conversation row (carries the
+      // live state for the activity dot); fall back to the worker record's
+      // own engine/model so the icon still renders when the sidebar hasn't
+      // loaded that session (filtered list, cold start).
+      const sid = String(w.session_id || '').trim();
+      const conv = sid && Array.isArray(conversationsData)
+        ? conversationsData.find(c => c && c.id === sid) : null;
+      const idleS = Number(w.idle_seconds);
+      const iconRow = conv || {
+        engine: w.engine, source: w.engine, model: w.model,
+        state: Number.isFinite(idleS) && idleS < 60 ? 'working' : 'idle',
+      };
+      const icon = '<span class="fq-working-engine">' + sessionEngineIconHtml(iconRow) + '</span>';
+      return { ref, title, queue: qKey, worker: String(w.worker_id || 'worker'), elapsed, icon };
     });
     const $rows = $el.querySelector('.fq-working-rows');
     const $summary = $el.querySelector('.fq-working-summary');
@@ -43465,6 +43479,7 @@
         if (_uxqPicker.isMobile) {
           return '<div class="fq-working-row is-mobile" data-uxq-working-ref="' + escapeAttr(r.ref) + '">'
             + '<span class="fq-working-id">' + escapeHtml(r.ref || '—') + '</span>'
+            + r.icon
             + '<span class="fq-working-body">'
             + '<span class="fq-working-title">' + escapeHtml(r.title) + '</span>'
             + '<span class="fq-working-meta">' + escapeHtml(r.queue + ' · ' + r.elapsed) + '</span>'
@@ -43474,6 +43489,7 @@
         }
         return '<div class="fq-working-row" data-uxq-working-ref="' + escapeAttr(r.ref) + '">'
           + '<span class="fq-working-id">' + escapeHtml(r.ref || '—') + '</span>'
+          + r.icon
           + '<span class="fq-working-title">' + escapeHtml(r.title) + '</span>'
           + '<span class="fq-working-right">'
           + '<span class="fq-working-queue">' + escapeHtml(r.queue) + '</span>'

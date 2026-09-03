@@ -14453,6 +14453,18 @@
     font-size: 11px; color: #6e7681; flex: 0 0 40px;
     white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
   }
+  /* CCC-1035: engine glyph + $-tier (shared .conv-session-icon markup) laid
+     inline in the flex row. The conv-list positions the icon absolutely, so
+     give it a relative box here for the absolute tier/activity children. */
+  .fq-working-engine {
+    position: relative; display: inline-flex; align-items: center;
+    flex: 0 0 36px; height: 16px; margin-left: 2px;
+  }
+  .fq-working-engine .conv-session-icon {
+    position: relative; display: inline-flex; align-items: center;
+    justify-content: flex-start; width: 36px; height: 16px; padding-left: 2px;
+  }
+  .fq-working-engine .conv-session-svg { display: block; width: 13px; height: 13px; }
   .fq-working-title {
     font-family: 'Inter', system-ui, sans-serif;
     font-size: 12.5px; color: #d5dde5; min-width: 0;
