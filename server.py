@@ -11876,6 +11876,13 @@ def find_all_conversations(
                 "goal": tail_meta.get("goal") or "",
                 "goal_status": tail_meta.get("goal_status") or "",
                 "parent_session_id": parent_session_id,
+                # Re-layered per cheap serve by _rehydrate_archive_cached_rows
+                # too (same reason as parent_session_id above: a fresh full
+                # build like this one needs its own copy so the enriched
+                # /list variants — resolve_prs/resolve_worktrees/resolve_
+                # effective, which rebuild from scratch here rather than
+                # patching a cached snapshot — carry the field too.
+                "spawned_via": spawn_entry.get("spawned_via") or "",
                 "continued_from_session_id": _continued_from_session_id_from_text(first_message),
                 # Context % badge — same fields as find_conversations so
                 # archive rows can render sidebar usage without opening the
@@ -13272,6 +13279,7 @@ def _archive_overlay_acp_sessions(rows):
                 "goal": "",
                 "goal_status": "",
                 "parent_session_id": "",
+                "spawned_via": "",
                 "model": model,
                 "reasoning_effort": None,
                 "latest_input_tokens": 0,
