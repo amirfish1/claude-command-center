@@ -32,6 +32,22 @@ PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, PROJECT_ROOT)
 
 
+class TestConversationTranscriptPath(unittest.TestCase):
+    def test_resolves_the_reader_path_for_a_session(self):
+        """The copy affordance needs the concrete transcript path, even when
+        a live/deep-link row did not include it in the session list."""
+        server = importlib.import_module("server")
+        with tempfile.TemporaryDirectory() as tmpdir:
+            expected = pathlib.Path(tmpdir) / "ccc-transcript.jsonl"
+            expected.touch()
+            with mock.patch.object(
+                server, "_resolve_conversation_reader", return_value=(expected, object())
+            ):
+                self.assertEqual(
+                    server.conversation_transcript_path("session-id"), str(expected)
+                )
+
+
 class TestKimiRecallBridge(unittest.TestCase):
     def test_kimi_recall_bridge_is_documented(self):
         root = pathlib.Path(PROJECT_ROOT)

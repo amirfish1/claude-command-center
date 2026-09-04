@@ -8007,9 +8007,10 @@
     return '';
   }
 
-  function setCopyableSessionId(el, sid) {
+  function setCopyableSessionId(el, sid, transcriptPath) {
     if (!el) return;
     const value = sid || '';
+    const path = String(transcriptPath || '').trim();
     if (value) {
       // Render as a proper labeled affordance: "Session 2f1b1e0e 📋".
       // The short prefix is enough to disambiguate visually; clicking
@@ -8022,10 +8023,15 @@
         '<code class="sid-short">' + shortId + '</code>' +
         '<span class="sid-copy" aria-hidden="true">&#128203;</span>';
       el.dataset.copySessionId = value;
-      el.title = value + ' - click to copy full ID';
+      // CCC-1051: other sessions find this transcript fastest from
+      // "ID (path)" — carry the transcript path alongside the ID.
+      if (path) el.dataset.copyTranscriptPath = path;
+      else delete el.dataset.copyTranscriptPath;
+      el.title = value + (path ? '\n' + path : '') + '\nClick to copy ID + transcript path';
     } else {
       el.textContent = '';
       delete el.dataset.copySessionId;
+      delete el.dataset.copyTranscriptPath;
       el.title = '';
     }
   }
@@ -8166,17 +8172,26 @@
     if (!el) return;
     ev.stopPropagation();
     const sid = el.dataset.copySessionId || el.textContent || '';
-    const ok = await copyTextValue(sid);
+    // CCC-1051: include the transcript path so another session can locate
+    // the transcript regardless of which engine store it lives in.
+    const path = (el.dataset.copyTranscriptPath || '').trim();
+    const copyText = path ? (sid + ' (' + path + ')') : sid;
+    const ok = await copyTextValue(copyText);
     if (!ok) {
       showOpToast('Copy failed - select and copy manually', 'error');
       return;
     }
+    // Preserve the previous innerHTML (e.g. the breadcrumb's labeled
+    // "Session <short> 📋" markup) — restoring textContent would leave the
+    // raw UUID in place of the formatted chip after the flash.
+    const prevHtml = el.innerHTML;
     el.textContent = 'copied!';
     el.classList.add('copied');
     setTimeout(() => {
-      if (el.dataset.copySessionId === sid) el.textContent = sid;
+      if (el.dataset.copySessionId === sid) el.innerHTML = prevHtml;
       el.classList.remove('copied');
     }, 1000);
+    showOpToast(path ? 'Copied session ID + transcript path' : 'Copied session ID', 'ok');
   });
 
   // CCC-870: the "Done" footer at the end of a turn only had a copy button —
@@ -8617,7 +8632,7 @@
     }
   });
 
-  function setCurrentSession(source, sid, cwd, cwdExists, spawnPid, repoPath) {
+  function setCurrentSession(source, sid, cwd, cwdExists, spawnPid, repoPath, transcriptPath) {
     const row = (Array.isArray(conversationsData) ? conversationsData : []).find(c => (
       c && (
         (sid && (c.session_id === sid || c.id === sid))
@@ -8647,7 +8662,22 @@
       // chooser borrowed them (see _adoptCwdControlsIntoChooser, CCC-86).
       try { _restoreCwdControlsToInputBar(); } catch (_) {}
     }
-    setCopyableSessionId($convSessionId, sid);
+    const resolvedTranscriptPath = transcriptPath || (row && row.jsonl_path) || '';
+    setCopyableSessionId($convSessionId, sid, resolvedTranscriptPath);
+    // A live or deep-link session may not yet be in conversationsData even
+    // though its transcript is already on disk. Ask the server's resolver for
+    // the concrete engine-specific path instead of guessing it in the UI.
+    if (sid && !resolvedTranscriptPath) {
+      fetch('/api/conversations/' + encodeURIComponent(sid) + '/transcript-path')
+        .then(res => res.ok ? res.json() : null)
+        .then(data => {
+          const path = data && String(data.transcript_path || '').trim();
+          if (path && $convSessionId && $convSessionId.dataset.copySessionId === sid) {
+            setCopyableSessionId($convSessionId, sid, path);
+          }
+        })
+        .catch(() => {});
+    }
     updateConvOverflowButton();
     if (source === 'pkood') {
       // Pkood sessions don't need live status polling or resume button
@@ -41780,7 +41810,8 @@
         sessionCwdByConv[id] || (selectedRow && selectedRow.cwd) || null,
         sessionCwdExistsByConv[id],
         sessionSpawnPidByConv[id],
-        rowRepoPath(selectedConv) || popoutRepoPath()
+        rowRepoPath(selectedConv) || popoutRepoPath(),
+        selectedRow && selectedRow.jsonl_path
       );
     }
     // Update split panel input bar visibility

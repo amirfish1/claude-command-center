@@ -20680,6 +20680,27 @@ def _resolve_conversation_reader(conversation_id, repo_path=None):
     return claude_path, _parse_conversation_event
 
 
+def conversation_transcript_path(conversation_id, repo_path=None):
+    """Return the resolved on-disk transcript path for a known session.
+
+    Live and deep-link session rows can omit ``jsonl_path`` even when their
+    engine's transcript is already available. Keep that recovery on the
+    existing, cached reader-resolution path rather than asking the browser to
+    guess an engine-specific storage location.
+    """
+    session_id = str(conversation_id or "").strip()
+    if not session_id:
+        return ""
+    try:
+        path, _parser = _resolve_conversation_reader(session_id, repo_path=repo_path)
+    except Exception:
+        return ""
+    try:
+        return str(path) if path and path.is_file() else ""
+    except OSError:
+        return ""
+
+
 def _registry_only_conversation_stub(conversation_id, after_line=0):
     sid = str(conversation_id or "").strip()
     if not sid:
@@ -25106,6 +25127,12 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
             conv_id = path.split("/")[-2]
             payload = _extract_files_from_conversation(conv_id)
             self.send_json(payload)
+        elif re.match(r"^/api/conversations/[^/]+/transcript-path$", path):
+            conv_id = urllib.parse.unquote(path.split("/")[-2])
+            qs = urllib.parse.parse_qs(parsed.query)
+            repo_path = (qs.get("repo_path", [""])[0] or "").strip() or None
+            transcript_path = conversation_transcript_path(conv_id, repo_path=repo_path)
+            self.send_json({"transcript_path": transcript_path})
         elif re.match(r"^/api/conversations/[^/]+/stream$", path):
             conv_id = path.split("/")[-2]
             qs = urllib.parse.parse_qs(parsed.query)
