@@ -35399,7 +35399,7 @@
     // Synthesized open-PR rows (source 'github_pr') are kept out of the All
     // list — mixed into the session list they read as sessions and confuse.
     // Real sessions still carry their PR state via pr_* decoration fields.
-    let _allTabConvs = _allTabUnfilteredConvs.filter(
+    const _allTabConvs = _allTabUnfilteredConvs.filter(
       c => c.source !== 'github_pr'
         && _archiveEngineAllowsRow(c, _arcEngineFilter)
     );
