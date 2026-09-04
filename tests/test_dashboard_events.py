@@ -259,3 +259,10 @@ def test_unified_stream_owns_shared_external_watch_lifetime():
     source = inspect.getsource(server.CommandCenterHandler._stream_dashboard_events)
     assert "_dashboard_event_watch_enter()" in source
     assert "_dashboard_event_watch_exit()" in source
+
+
+def test_long_lived_event_stream_is_not_reported_as_a_slow_request():
+    import server
+
+    source = inspect.getsource(server.CommandCenterHandler.handle_one_request)
+    assert 'if _p not in ("/api/events", "/api/sessions/events", "/api/queue/events")' in source

@@ -34392,8 +34392,8 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
             # ~/.claude/command-center/logs/service.out.log under launchd.
             try:
                 _ms = (time.time() - _t0) * 1000.0
-                if _ms >= SLOW_REQ_MS:
-                    _p = getattr(self, "path", "?").split("?", 1)[0]
+                _p = getattr(self, "path", "?").split("?", 1)[0]
+                if _p not in ("/api/events", "/api/sessions/events", "/api/queue/events") and _ms >= SLOW_REQ_MS:
                     _ts = time.strftime("%H:%M:%S")
                     print(f"[SLOW] {_ts} {getattr(self, 'command', '?')} {_p} {_ms:.0f}ms",
                           flush=True)
