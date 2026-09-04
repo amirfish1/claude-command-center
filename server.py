@@ -3937,31 +3937,44 @@ def _cached_sessions_rows(key):
 
 
 def _load_sessions_singleflight(repo_path, *, include_old=False, progress=True):
-    """Run one /api/sessions scan per repo/age mode at a time.
+    """Serve the last snapshot while one repo/age-scoped refresh runs.
 
-    The browser can trigger a foreground load, a restore load, and a poller load
-    close together. Each scan walks transcript stores and may run git/GitHub
-    probes; parallel copies just contend on the GIL and make unrelated endpoints
-    feel hung. Followers wait for the leader's short-lived cached result.
+    Cold callers wait for the first scan. A warm caller never waits for a
+    transcript/git scan; TTL expiry schedules a refresh instead. A zero TTL
+    retains the explicit synchronous cache opt-out.
     """
     repo_path = resolve_repo_path(repo_path)
     key = (repo_path, bool(include_old))
-    cached = _cached_sessions_rows(key)
-    if cached is not None:
-        return cached
-
     while True:
         with _SESSIONS_SINGLEFLIGHT_LOCK:
+            ttl = _sessions_cache_ttl_seconds()
+            cached = _SESSIONS_RESPONSE_CACHE.get(key) if ttl > 0 else None
             flight = _SESSIONS_SINGLEFLIGHT.get(key)
+            if cached is not None:
+                rows = copy.deepcopy(cached.get("rows") or [])
+                now = time.time()
+                if flight is None and now - max(cached.get("ts", 0), cached.get("retry_at", 0)) > ttl:
+                    event = threading.Event()
+                    _SESSIONS_SINGLEFLIGHT[key] = {"event": event}
+                    threading.Thread(
+                        target=_refresh_sessions_snapshot,
+                        args=(key, progress, cached),
+                        daemon=True,
+                        name="sessions-refresh",
+                    ).start()
+                return rows
             if flight is None:
                 event = threading.Event()
                 _SESSIONS_SINGLEFLIGHT[key] = {"event": event}
                 break
             event = flight["event"]
         event.wait(timeout=60)
-        cached = _cached_sessions_rows(key)
-        if cached is not None:
-            return cached
+    return _refresh_sessions_snapshot(key, progress)
+
+
+def _refresh_sessions_snapshot(key, progress, previous=None):
+    """Refresh a reserved flight; failed warm refreshes keep their snapshot."""
+    repo_path, include_old = key
 
     try:
         if progress:
@@ -3974,12 +3987,18 @@ def _load_sessions_singleflight(repo_path, *, include_old=False, progress=True):
         if progress:
             _session_load_complete(rows)
         with _SESSIONS_SINGLEFLIGHT_LOCK:
-            _SESSIONS_RESPONSE_CACHE[key] = {"ts": time.time(), "rows": list(rows or [])}
+            # A cache invalidation during the scan must not resurrect old data.
+            if previous is None or _SESSIONS_RESPONSE_CACHE.get(key) is previous:
+                _SESSIONS_RESPONSE_CACHE[key] = {"ts": time.time(), "rows": copy.deepcopy(rows or [])}
         return rows
     except Exception as exc:
         if progress:
             _session_load_fail(exc)
-        raise
+        if previous is None:
+            raise
+        with _SESSIONS_SINGLEFLIGHT_LOCK:
+            if _SESSIONS_RESPONSE_CACHE.get(key) is previous:
+                previous["retry_at"] = time.time()
     finally:
         with _SESSIONS_SINGLEFLIGHT_LOCK:
             flight = _SESSIONS_SINGLEFLIGHT.pop(key, None)
