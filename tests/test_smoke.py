@@ -19525,7 +19525,7 @@ class TestTerminalQueueHoldTtl(unittest.TestCase):
 class TestAcpGlmHarness(unittest.TestCase):
     """ACP harness #2 (KIMI-FIXES-7): the generic layer must drive a second
     ACP-speaking agent with a registry entry only — no harness-specific code.
-    Live test against glm-acp-agent (Z.AI/Zhipu GLM) when installed: the
+    Opt-in live test against glm-acp-agent (Z.AI/Zhipu GLM): the
     handshake and the structured error/answer surfacing are asserted; turns
     need ZAI_API_KEY and are out of scope here."""
 
@@ -19535,6 +19535,16 @@ class TestAcpGlmHarness(unittest.TestCase):
         for mod in ("server", "morning", "morning_store"):
             sys.modules.pop(mod, None)
         self.server = importlib.import_module("server")
+        # A live handshake must never persist test sessions in the dashboard.
+        tmpdir = tempfile.TemporaryDirectory(prefix="ccc-glm-test-")
+        self.addCleanup(tmpdir.cleanup)
+        for name, value in (
+            ("COMMAND_CENTER_STATE_DIR", pathlib.Path(tmpdir.name)),
+            ("_ACP_TRANSCRIPT_DIR", pathlib.Path(tmpdir.name) / "acp"),
+        ):
+            patcher = mock.patch.object(self.server, name, value)
+            patcher.start()
+            self.addCleanup(patcher.stop)
         self.addCleanup(self._cleanup)
 
     def _cleanup(self):
@@ -19561,6 +19571,8 @@ class TestAcpGlmHarness(unittest.TestCase):
 
     def test_live_handshake_and_session_new_shape(self):
         server = self.server
+        if os.environ.get("CCC_TEST_LIVE_GLM") != "1":
+            self.skipTest("set CCC_TEST_LIVE_GLM=1 to run the live GLM handshake")
         if not shutil.which("glm-acp-agent"):
             self.skipTest("glm-acp-agent not installed")
         conn = server._acp_ensure(self.HARNESS)
