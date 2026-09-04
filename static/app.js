@@ -2261,15 +2261,49 @@
   // callers that explicitly identify themselves as background work enter this
   // pool; transcript loads, exports, split-pane reads, and other user actions
   // retain their own lifetime.
+  const BACKGROUND_API_READ_LIMIT = 4;
   const _backgroundApiReadControllers = new Set();
+  const _backgroundApiReadQueue = [];
+  let _backgroundApiReadActive = 0;
+
+  function _drainBackgroundApiReads() {
+    while (_backgroundApiReadActive < BACKGROUND_API_READ_LIMIT && _backgroundApiReadQueue.length) {
+      const task = _backgroundApiReadQueue.shift();
+      if (task.options.signal.aborted) {
+        task.cleanup();
+        task.reject(task.options.signal.reason || new DOMException('Aborted', 'AbortError'));
+        continue;
+      }
+      _backgroundApiReadActive += 1;
+      const { input, options } = task;
+      fetch(input, options).then(task.resolve, task.reject).finally(() => {
+        _backgroundApiReadActive -= 1;
+        task.cleanup();
+        _drainBackgroundApiReads();
+      });
+    }
+  }
+
   function backgroundApiFetch(input, init) {
     const options = Object.assign({}, init || {});
-    if (options.signal) return fetch(input, options);
     const controller = new AbortController();
+    const upstreamSignal = options.signal;
+    const forwardAbort = () => {
+      try { controller.abort(upstreamSignal && upstreamSignal.reason); } catch (_) { controller.abort(); }
+    };
+    if (upstreamSignal) {
+      if (upstreamSignal.aborted) forwardAbort();
+      else upstreamSignal.addEventListener('abort', forwardAbort, { once: true });
+    }
     options.signal = controller.signal;
     _backgroundApiReadControllers.add(controller);
-    return fetch(input, options).finally(() => {
-      _backgroundApiReadControllers.delete(controller);
+    return new Promise((resolve, reject) => {
+      const cleanup = () => {
+        _backgroundApiReadControllers.delete(controller);
+        if (upstreamSignal) upstreamSignal.removeEventListener('abort', forwardAbort);
+      };
+      _backgroundApiReadQueue.push({ input, options, resolve, reject, cleanup });
+      _drainBackgroundApiReads();
     });
   }
   window.__cccBackgroundApiFetch = backgroundApiFetch;
@@ -63487,7 +63521,6 @@
         }
         setTimeout(() => {
           _hydrateArchiveSideData();
-          _hydrateArchivePrData();
         }, 0);
         return archiveData;
       } finally {
@@ -64902,8 +64935,17 @@
     } catch (_) {}
   }
   if (!READER_ONLY_POPOUT) {
-    spawnDefaultsReady.finally(refreshCodexAvailability);
-    window.addEventListener('focus', refreshCodexAvailability);
+    _firstSessionsLoaded.then(() => {
+      const probeWhenIdle = () => Promise.resolve(spawnDefaultsReady).then(refreshCodexAvailability);
+      if (typeof requestIdleCallback === 'function') {
+        requestIdleCallback(probeWhenIdle, { timeout: 4000 });
+      } else {
+        setTimeout(probeWhenIdle, 2500);
+      }
+    });
+    window.addEventListener('focus', () => {
+      _firstSessionsLoaded.then(refreshCodexAvailability);
+    });
   }
   // Hide-descriptions toggle
   const $kptDescToggle = document.getElementById('kptDescToggle');
