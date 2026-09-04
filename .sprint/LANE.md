@@ -68,3 +68,15 @@ WatchTower server restart needed: N
 
 ## Commits
 9ef722b2, 55ab70d2, 7953b9df, 54346e4d, cbdf559d, 816ecf5e (not pushed).
+
+## W2-1b (follow-up, 2026-09-03 evening): external ingest — DONE
+- POST /api/decision-inbox (+ /api/decision-inbox/cards alias) ->
+  decision_inbox_ingest: validates {source?, source_id, title, detail|context,
+  options?, severity?}, dedupes by qualified source id (open card bumps
+  seen_count; decided/dismissed inside dedupe window or active snooze =
+  deduped, no new card), default options acknowledge / spawn investigator /
+  snooze 24h. Snooze is a new action kind (status "snoozed", snoozed_until).
+- Compatible with bym-studio-digest src/alert.mjs shorthand
+  {source_id, title, context}; verified e2e with the real module against an
+  ephemeral server (HOME=mktemp, PORT=8097). 35 tests pass. Commit ed6472ed.
+- Dashboard restart needed: Y (orchestrator does it). Worker: Y. WatchTower: N.
