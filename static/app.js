@@ -2300,9 +2300,10 @@
   function shouldPausePeriodicUiWork() {
     const activeConversation = window.currentConversation;
     if (activeConversation === '__new__'
-        || String(activeConversation || '').startsWith('spawning-')
         || (typeof claudeFastSpawnAwaitingPaint === 'function'
             && claudeFastSpawnAwaitingPaint())) return true;
+    const activeId = String(activeConversation || '');
+    if (activeId.startsWith('spawning-') && spawningSelectionStillPending(activeId)) return true;
     const findModal = document.getElementById('chatFindModal');
     if (findModal && findModal.style.display !== 'none') return true;
     const ae = document.activeElement;
@@ -2666,8 +2667,13 @@
       .replace(LEADING_CCC_PASTED_IMAGE_PATH_RE, '')
       // Some AI-generated titles come back with a stray decorative prefix
       // (✨/🪄, or a "› " quote-arrow) — objectTitleForConversation already
-      // strips this for object titles; rows need the same cleanup.
-      .replace(/^\s*[✨🪄›]\s*/, '')
+      // strips this for object titles; rows need the same cleanup. The `u`
+      // flag is load-bearing: without it the astral 🪄 enters the class as two
+      // raw UTF-16 halves, the high half then matches the leading code unit of
+      // ANY emoji in its range (🧵 included), and the replace beheads the emoji
+      // leaving a lone low surrogate that later kills the spawn with
+      // "surrogates not allowed" (OPS-935).
+      .replace(/^\s*[✨🪄›]\s*/u, '')
       .replace(/-/g, ' ');
     return capitalizeSessionTitleStart(cleanedTitle);
   }
@@ -4216,7 +4222,7 @@
     if (!guardComposerSend(input)) return;
     if (btn) btn.disabled = true;
     const sid = st.sid;
-    f2ManualPanes.delete(f2PaneKey(paneId));
+    const paneKey = f2PaneKey(paneId);
     const ctx = Object.assign({}, st.ctx || {}, { text: f2ComposerText(paneId) });
     const launch = st.launch;
     // The parent row already has the human-facing title. Keep it on the
@@ -4258,6 +4264,15 @@
         cwd: cwd || '',
         session_cwd: cwd || '',
         session_cwd_exists: !!cwd,
+        model: launch.model || '',
+        reasoning_effort: launch.effort || '',
+        parent_session_id: sid,
+        spawn_composer_text: ctx.text || '',
+        // The exact request, so a failed spawn's Retry re-runs it verbatim
+        // (prompt/engine/model/effort/cwd/origin all preserved) instead of
+        // routing through whatever the global spawn controls show by then.
+        spawn_endpoint: endpoint,
+        spawn_body: body,
       });
       const r = await fetch(endpoint, {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
@@ -4265,6 +4280,10 @@
       });
       const d = await r.json().catch(() => ({}));
       if (r.ok && d.ok !== false && (d.session_id || d.spawn_id || d.pid)) {
+        // Only now unpin the manual Continue panel: on failure the pin must
+        // survive so going back to the origin session reopens the panel
+        // exactly as it was (OPS-935).
+        f2ManualPanes.delete(paneKey);
         const newSid = d.session_id || '';
         const spawnId = d.spawn_id || d.pid || '';
         const placeholder = spawnId
@@ -4287,11 +4306,14 @@
         // of those refreshes is a multi-megabyte fetch of every row we have.
         chasePendingSpawn(tempPid, { sessionId: d && d.session_id });
       } else {
-        _removePendingSpawnCard(tempPid);
+        // Immediate rejection: keep a persistent failed card with the real
+        // error and Retry/Edit/Dismiss controls instead of deleting the
+        // placeholder and freezing the pane on its ghost id (OPS-935).
+        _failPendingSpawnCard(tempPid, 'Spawn failed: ' + ((d && d.error) || ('HTTP ' + r.status)));
         if (typeof showOpToast === 'function') showOpToast('Spawn failed: ' + ((d && d.error) || ('HTTP ' + r.status)), 'error');
       }
     } catch (e) {
-      _removePendingSpawnCard(tempPid);
+      _failPendingSpawnCard(tempPid, 'Spawn failed: ' + ((e && e.message) || 'network'));
       if (typeof showOpToast === 'function') showOpToast('Spawn failed: ' + ((e && e.message) || 'network'), 'error');
     } finally {
       if (btn) btn.disabled = false;
@@ -18247,6 +18269,30 @@
   const pendingSpawns = new Map();
   const claudeSpawnAwaitingFirstPaint = new Set();
 
+  // A 'spawning-*' selection may hold the global poll-pause gate only while
+  // the placeholder still has a live paint transition to protect. A failed
+  // card (error + Retry/Edit/Dismiss on screen) or an already-removed one has
+  // nothing coming — keeping the gate closed then freezes every poller in the
+  // tab indefinitely (UI-POLL-PAUSE-LEAK, OPS-935).
+  function spawningSelectionStillPending(id) {
+    try {
+      if (!id) return false;
+      const pid = String(id).replace(/^spawning-/, '');
+      if (pendingSpawns.has(pid)) {
+        const c = pendingSpawns.get(pid);
+        return !!(c && !c.spawn_failed);
+      }
+      for (const c of pendingSpawns.values()) {
+        if (c && c.id === id) return !c.spawn_failed;
+      }
+      return (conversationsData || []).some(c => c && c.id === id && !c.spawn_failed);
+    } catch (_) {
+      // Unknown state (e.g. TDZ during early boot): fail closed and keep the
+      // protective pause, matching the pre-fix behavior.
+      return true;
+    }
+  }
+
   function claudeFastSpawnAwaitingPaint() {
     if (claudeSpawnAwaitingFirstPaint.size) return true;
     return Array.from(pendingSpawns.values()).some((card) => card
@@ -18362,6 +18408,7 @@
       ? '<div class="not-ack-note">'
         + '<span class="not-ack-label">' + escapeHtml(card.spawn_error || 'Spawn was not acknowledged within 30s.') + '</span>'
         + '<button type="button" class="not-ack-retry" data-pending-spawn-retry>Retry</button>'
+        + '<button type="button" class="not-ack-retry" data-pending-spawn-edit title="Load this spawn back into the composer to edit before sending">Edit</button>'
         + '<button type="button" class="not-ack-dismiss" data-pending-spawn-dismiss title="Dismiss this placeholder">Dismiss</button>'
         + '</div>'
       : '';
@@ -18374,8 +18421,17 @@
       + '</div>';
     if (failed) {
       clearOptimisticAgentIndicator($view);
+      const cardOriginSid = card.parent_session_id
+        || (card.spawn_body && card.spawn_body.parent_session_id) || '';
       const retryBtn = $view.querySelector('[data-pending-spawn-retry]');
       if (retryBtn) retryBtn.addEventListener('click', async () => {
+        // A card carrying its original request body retries it verbatim
+        // (prompt/engine/model/effort/cwd/origin preserved); older cards fall
+        // back to re-filling the global spawn controls (OPS-935).
+        if (card.spawn_body && typeof _retryFailedPendingSpawn === 'function') {
+          await _retryFailedPendingSpawn(card, paneId || activePaneId());
+          return;
+        }
         const retryPrompt = prompt || card.first_message || card.prompt || card.display_name || '';
         const retryPid = card.spawn_pid || String(card.id || '').replace(/^spawning-/, '');
         const retryCwd = card.spawn_cwd || card.repo_path || card.folder_path || card.cwd || '';
@@ -18386,10 +18442,50 @@
         if (retryPrompt && typeof spawnFromInlineInput === 'function') await spawnFromInlineInput(retryPrompt);
         else if (typeof enterNewSessionMode === 'function') enterNewSessionMode(retryPrompt);
       });
+      const editBtn = $view.querySelector('[data-pending-spawn-edit]');
+      if (editBtn) editBtn.addEventListener('click', async () => {
+        const editPid = card.spawn_pid || String(card.id || '').replace(/^spawning-/, '');
+        const livePaneId = paneId || activePaneId();
+        if (cardOriginSid && typeof card.spawn_composer_text === 'string') {
+          // Continuation card: restore the exact pre-send moment — origin
+          // session selected, Continue panel pinned open, typed text back in
+          // the composer — so editing and pressing Continue again just works.
+          _removePendingSpawnCard(editPid);
+          try { f2ManualPanes.set(f2PaneKey(livePaneId), cardOriginSid); } catch (_) {}
+          try { await selectConversation(cardOriginSid, livePaneId); } catch (_) {}
+          setTimeout(() => {
+            try {
+              const editInput = composerInputForPane(livePaneId) || $convInput;
+              if (editInput && card.spawn_composer_text) {
+                editInput.value = card.spawn_composer_text;
+                editInput.dispatchEvent(new Event('input', { bubbles: true }));
+              }
+              f2RenderComposer(livePaneId, { force: true });
+              if (editInput) editInput.focus();
+            } catch (_) {}
+          }, 80);
+          return;
+        }
+        // Generic failed spawn: load the spec into the new-session composer
+        // without submitting, so the prompt is editable before the resend.
+        _removePendingSpawnCard(editPid);
+        const editPrompt = prompt || card.first_message || card.prompt || card.display_name || '';
+        const editCwd = card.spawn_cwd || card.repo_path || card.folder_path || card.cwd || '';
+        const editEngine = card.source === 'interactive' ? 'claude' : card.source;
+        if (editCwd && typeof setSpawnCwdInputValue === 'function') setSpawnCwdInputValue(editCwd, { focus: false });
+        if (editEngine && typeof setSpawnEngine === 'function') setSpawnEngine(editEngine, { record: false });
+        if (typeof enterNewSessionMode === 'function') enterNewSessionMode(editPrompt);
+      });
       const dismissBtn = $view.querySelector('[data-pending-spawn-dismiss]');
       if (dismissBtn) dismissBtn.addEventListener('click', () => {
         const dismissPid = card.spawn_pid || String(card.id || '').replace(/^spawning-/, '');
         _removePendingSpawnCard(dismissPid);
+        if (cardOriginSid && typeof selectConversation === 'function') {
+          // Hand selection back to the session this continuation came from so
+          // the pane isn't left on the removed placeholder's ghost id.
+          try { selectConversation(cardOriginSid, paneId || activePaneId()); } catch (_) {}
+          return;
+        }
         $view.innerHTML = '<div class="empty-state" style="height:auto;padding:40px;">Spawn placeholder dismissed.</div>';
         updateConversationEndAffordance($view);
       });
@@ -18659,6 +18755,91 @@
     // off: it triggered on almost every slow spawn, was almost never useful,
     // and interrupted whatever the user was doing. The placeholder card and
     // toast above keep the failure visible without the modal ambush.
+  }
+
+  // Immediate spawn rejection (HTTP error / network failure), as opposed to
+  // the not-acknowledged timeout above. Keeps the placeholder as a persistent
+  // failed card carrying the server's actual error and the Retry/Edit/Dismiss
+  // controls, instead of deleting it and leaving the pane selected on a ghost
+  // 'spawning-*' id — which also held the global poll-pause gate open and
+  // froze every poller in the tab (OPS-935).
+  function _failPendingSpawnCard(pid, errorMessage) {
+    if (!pid) return null;
+    const fallbackId = 'spawning-' + pid;
+    const direct = pendingSpawns.has(pid) ? [pid, pendingSpawns.get(pid)] : null;
+    const adopted = direct || Array.from(pendingSpawns.entries()).find(([, c]) => c && c.id === fallbackId);
+    if (!adopted) return null;
+    const key = adopted[0];
+    const card = adopted[1];
+    if (!card) return null;
+    const id = card.id || fallbackId;
+    pendingSpawns.delete(key);
+    card.pending_spawn = false;
+    card.is_live = false;
+    card.spawn_failed = true;
+    card.sidecar_status = '';
+    card.pending_tool = null;
+    card.last_event_type = 'result';
+    card.spawn_error = errorMessage || 'Spawn failed.';
+    delete columnOverrides[id];
+    try { localStorage.setItem('ccc-column-overrides', JSON.stringify(columnOverrides)); } catch (_) {}
+    renderSidebar(filterConversations($convSearch.value));
+    if (currentConversation === id) renderPendingSpawnConversation(card, activePaneId());
+    return card;
+  }
+
+  // Re-drive a failed spawn's preserved request body verbatim: same prompt,
+  // engine, model, effort, cwd and origin linkage, regardless of what the
+  // global spawn controls show by retry time. The card flips back to pending
+  // and re-enters the normal registration handoff on success (OPS-935).
+  async function _retryFailedPendingSpawn(card, paneId) {
+    const body = card && card.spawn_body;
+    if (!body || typeof body !== 'object') return false;
+    const pid = card.spawn_pid || String(card.id || '').replace(/^spawning-/, '');
+    if (!pid || !card.id) return false;
+    const endpoint = card.spawn_endpoint || '/api/sessions/spawn';
+    card.spawn_failed = false;
+    card.spawn_error = '';
+    card.pending_spawn = true;
+    card.is_live = true;
+    card.last_event_type = null;
+    pendingSpawns.set(pid, card);
+    columnOverrides[card.id] = 'working';
+    try { localStorage.setItem('ccc-column-overrides', JSON.stringify(columnOverrides)); } catch (_) {}
+    renderSidebar(filterConversations($convSearch.value));
+    if (currentConversation === card.id) renderPendingSpawnConversation(card, paneId || activePaneId());
+    try {
+      const r = await fetch(endpoint, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+      });
+      const d = await r.json().catch(() => ({}));
+      if (r.ok && d.ok !== false && (d.session_id || d.spawn_id || d.pid)) {
+        const newSid = d.session_id || '';
+        const spawnId = d.spawn_id || d.pid || '';
+        const placeholder = spawnId
+          ? adoptPendingSpawnPid(pid, spawnId, d.log, newSid)
+          : pendingSpawns.get(pid);
+        if (placeholder && newSid) placeholder.expected_session_id = newSid;
+        if (body.parent_session_id && typeof f2RecordContinuationLineage === 'function') {
+          try { f2RecordContinuationLineage(body.parent_session_id, newSid); } catch (_) {}
+        }
+        if (String(body.engine || '') === 'codex' && typeof _watchF2CodexSpawnRegistration === 'function') {
+          _watchF2CodexSpawnRegistration(spawnId || pid, card.id, newSid);
+        }
+        if (typeof isSpawnLogPlaceholderSource === 'function' && !isSpawnLogPlaceholderSource(card.source)) {
+          _watchPendingSpawnRegistration(spawnId || pid, card.id);
+        }
+        if (typeof showOpToast === 'function') showOpToast('Spawn retried — waiting for the session to register.', 'success');
+        setTimeout(refreshConversationList, 600);
+        chasePendingSpawn(pid, { sessionId: d && d.session_id });
+      } else {
+        _failPendingSpawnCard(pid, 'Spawn failed: ' + ((d && d.error) || ('HTTP ' + r.status)));
+      }
+    } catch (e) {
+      _failPendingSpawnCard(pid, 'Spawn failed: ' + ((e && e.message) || 'network'));
+    }
+    return true;
   }
 
   function insertPendingSpawnCard(pid, subject, sourceOrEngine, logPath, meta) {
@@ -31931,7 +32112,7 @@
       if (!c) return 'Object';
       const cleanFirst = c.first_message ? cleanIssuePrompt(c.first_message) : '';
       const raw = (c.display_name || c.ai_title || cleanFirst || c.id || 'Object');
-      const title = String(raw).replace(/^\s*[✨🪄›]\s*/, '').replace(/-/g, ' ').trim();
+      const title = String(raw).replace(/^\s*[✨🪄›]\s*/u, '').replace(/-/g, ' ').trim();
       return title || 'Object';
     }
     function elevateConversationToOwnObject(convId) {
@@ -35534,7 +35715,10 @@
     const _looksLikeWtWorkerTitle = (c) => {
       const raw = String((c && (c.display_name || c.ai_title || c.title || c.name)) || '').trim();
       if (!raw) return false;
-      const plain = raw.replace(/^🧵\s*/, '').trim();
+      // `u` flag: without it this strips only 🧵's high UTF-16 half, leaving a
+      // lone low surrogate that breaks the worker-title match below and leaks
+      // an unencodable char into spawn names (OPS-935).
+      const plain = raw.replace(/^🧵\s*/u, '').trim();
       const low = plain.toLowerCase();
       if (/^drain the [a-z0-9_]+(?:-[a-z0-9_]+)* watchtower queue\b/.test(low)) return true;
       if (_wtWorkerQueues.size) {
