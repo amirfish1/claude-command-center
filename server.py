@@ -28391,7 +28391,10 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                     _wt_config.set_github_repo(queue_name, conf.get("github_repo", ""))
                     _wt_config.set_github_assignee(queue_name, conf.get("github_assignee", ""))
                     _wt_config.set_repo_path(queue_name, conf.get("repo_path", ""))
-                    _wt_config.set_engine(queue_name, conf.get("engine", "claude"))
+                    # Blank means "CCC spawn default" (the payload normalizer
+                    # pops the key, CCC-1038) — re-injecting "claude" here made
+                    # a queue saved as CCC default come back as claude (CCC-1044).
+                    _wt_config.set_engine(queue_name, conf.get("engine") or "")
                     _wt_config.set_model(queue_name, conf.get("model", ""))
                     _wt_config.set_effort(queue_name, conf.get("effort", ""))
                     _wt_config.set_desired_workers(queue_name, conf.get("desired_workers", 1))

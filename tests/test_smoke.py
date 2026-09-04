@@ -7401,6 +7401,35 @@ class TestRepoContextHelpers(unittest.TestCase):
         self.assertNotIn("engine", config["config"])
         self.assertNotIn("model", config["config"])
 
+    def test_queue_config_blank_engine_clears_override_through_wt(self):
+        """CCC-1044: saving "CCC default" (blank engine) in the gear dialog must
+        clear the queue's engine override. The WT write-through used to default
+        a missing engine key back to "claude", so the queue snapped back to
+        claude the moment it was saved as CCC default."""
+        httpd = self.server.http.server.ThreadingHTTPServer(
+            ("127.0.0.1", 0), self.server.CommandCenterHandler,
+        )
+        thread = threading.Thread(target=httpd.serve_forever, daemon=True)
+        thread.start()
+        base = f"http://127.0.0.1:{httpd.server_address[1]}"
+        try:
+            for payload in ({"queue": "ENGQ", "engine": "claude"},
+                            {"queue": "ENGQ", "engine": ""}):
+                request = urllib.request.Request(
+                    base + "/api/queue/config",
+                    data=json.dumps(payload).encode("utf-8"),
+                    headers={"Content-Type": "application/json"}, method="POST",
+                )
+                with urllib.request.urlopen(request, timeout=5) as response:
+                    saved = json.loads(response.read().decode("utf-8"))
+                self.assertTrue(saved["ok"])
+            stored = (self.server._wt_read_config() or {}).get("ENGQ") or {}
+            self.assertFalse(stored.get("engine"))
+        finally:
+            httpd.shutdown()
+            httpd.server_close()
+            thread.join(timeout=5)
+
     def test_queue_config_accepts_kimi_engine_and_model(self):
         config = self.server._queue_config_from_payload({
             "queue": "DEMO_QUEUE",
