@@ -42,7 +42,29 @@ Owner: CCC lane W2-1 (dispatched by 25c52af6-c616-46a2-b47d-0f8a9e016055)
 - tests/test_perf_budget.py: 1 pre-existing failure
   (test_system_services_no_subprocess_on_warm_cache, service id set), not ours.
 
-## Next
-- Restart dashboard+worker (done 18:05), POST /api/decision-inbox/run, wait,
-  verify cards + governor, puppeteer screenshot -> docs/images/decision-inbox.png,
-  link from README, commit, send completion report to 25c52af6.
+## Status: DONE
+- Shipped ccc_server/decision_inbox.py, static/decision-inbox.html, tests
+  (28 pass), server wiring, README section + screenshot
+  (docs/images/decision-inbox.png).
+- Restarted worker+dashboard. Live scan produced 10 real Sonnet cards (3
+  options each, 1 recommended) + 1 governor context-high card. Cap 5/run and
+  source-id dedupe both verified across two runs.
+- Fixed a real bug found in verification: `--disallowedTools` is variadic in
+  current Claude Code and swallowed the analyst prompt; switched to the `=`
+  form (commit cbdf559d). Same class as the auto-titler --mcp-config break.
+- Infra note: a stray orphan server.py (pid 67616, port 8099) was tripping
+  the dashboard duplicate-repo guard and blocking 8090; killed it per the
+  guard's own docstring, dashboard rebound immediately.
+
+## Restart matrix
+Dashboard server restart needed:  Y (done)
+Worker restart needed:            Y (done)
+WatchTower server restart needed: N
+
+## Pre-existing, not this lane
+- tests/test_perf_budget.py::test_system_services_no_subprocess_on_warm_cache
+  fails on a service id-set mismatch (app_server/worker), unrelated to
+  decision_inbox. All other 103 perf-budget tests pass.
+
+## Commits
+9ef722b2, 55ab70d2, 7953b9df, 54346e4d, cbdf559d, 816ecf5e (not pushed).
