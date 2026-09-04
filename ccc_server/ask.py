@@ -622,6 +622,20 @@ def handle_assistant_ask(payload, runner=None):
         history = []
     t0 = time.time()
 
+    # Mazkir (tool-using Sonnet over the claude-index + ccc-state MCPs) is the
+    # default path for real requests. Tests inject `runner` and exercise the
+    # legacy pipeline below; CCC_ASK_MODE=legacy forces it at runtime. Engine
+    # failures (no claude binary, non-zero exit) fall through to legacy so the
+    # Ask tab still answers.
+    if runner is None and os.environ.get("CCC_ASK_MODE", "mazkir").lower() != "legacy":
+        try:
+            from ccc_server import mazkir as _mazkir
+            body, status = _mazkir.run_mazkir(question, history, payload.get("range"))
+            if status in (200, 400, 504):
+                return body, status
+        except Exception:
+            pass
+
     engine = select_ask_engine()
     if not engine.get("available"):
         return {"ok": False, "error": engine["error"], "code": engine["code"]}, 503
