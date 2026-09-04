@@ -1,7 +1,7 @@
 # Lane W2-1 — Decision Inbox daemon + idle-session token governor
 
-Updated: 2026-09-03 17:20
-Status: IN PROGRESS — design fixed, building module
+Updated: 2026-09-03 18:05
+Status: IN PROGRESS — code committed (9ef722b2, 55ab70d2, 7953b9df); verifying live + screenshot
 Owner: CCC lane W2-1 (dispatched by 25c52af6-c616-46a2-b47d-0f8a9e016055)
 
 ## Design (decided)
@@ -33,7 +33,16 @@ Owner: CCC lane W2-1 (dispatched by 25c52af6-c616-46a2-b47d-0f8a9e016055)
 
 ## Done
 - Orientation (app rail, queue-brief claude -p pattern, archive rows, wt CLI).
+- ccc_server/decision_inbox.py, static/decision-inbox.html, tests (28 pass),
+  server.py wiring (adopt + GET/POST routes + rail + loop), README section.
+- Personal config written: ~/.claude/command-center/decision-inbox.json
+  (board path, spawn_cwd=~/MyOfficeMgr, ignore "Sleep").
+- Public names prefixed decision_inbox_* / _di_* (adoption binds module
+  globals onto server; _iso/_lock/_parse_iso/_wt_run collided with siblings).
+- tests/test_perf_budget.py: 1 pre-existing failure
+  (test_system_services_no_subprocess_on_warm_cache, service id set), not ours.
 
 ## Next
-- Write module + tests + page + server wiring + README + screenshot.
-- Write personal config file, restart dashboard+worker, run once, screenshot.
+- Restart dashboard+worker (done 18:05), POST /api/decision-inbox/run, wait,
+  verify cards + governor, puppeteer screenshot -> docs/images/decision-inbox.png,
+  link from README, commit, send completion report to 25c52af6.
