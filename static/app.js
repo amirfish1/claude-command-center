@@ -18398,7 +18398,15 @@
   }
 
   function normalizePendingPrompt(value) {
-    return String(value || '').replace(/\s+/g, ' ').trim().toLowerCase();
+    // Punctuation-insensitive: placeholder titles are often the slugged spawn
+    // name ("why https bookyourmat com buy …") while the archive row carries
+    // the raw prompt ("why https://bookyourmat.com/buy/…"). Slug and raw must
+    // still fuzzy-match or the placeholder never reconciles and the session
+    // shows up twice. Guards that keep this safe live in the caller: a >=24
+    // char head match, equal cwd, and a 2-minute recency window.
+    return String(value || '').toLowerCase()
+      .replace(/[^\p{L}\p{N}]+/gu, ' ')
+      .trim();
   }
 
   function previewRepeatsTitle(titleText, previewText) {
