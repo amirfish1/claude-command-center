@@ -557,6 +557,8 @@ Keys are stored per **profile** (name them however you like — `work`,
   `droid`, `kilo`, `hermes`, `aider`, `pi` for when their spawn paths
   support it — adding one is a one-line change to the spawn dispatcher.
 
+![Settings → Engines: BYOK panel with an add-key form, profile list, and a 30-day spend summary](docs/images/byok-settings.png)
+
 ## Features
 
 - **One board, eight engines**: spawn, resume, and review **Claude Code**, **Codex**, **Cursor**, **Antigravity**, **Kilo Code**, **Kimi Code**, **OpenCode**, and **Devin** sessions from one dashboard. See the [engine support matrix](#engine-support) for per-engine parity. Kimi Code has a guided setup flow in Settings → Engines that detects the CLI, walks through install and `kimi login`, and verifies with a smoke-test spawn.
