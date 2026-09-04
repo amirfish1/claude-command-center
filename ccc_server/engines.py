@@ -1097,17 +1097,120 @@ def _antigravity_cli_log_diagnostic(text):
     return ""
 
 
+# Trajectory-DB tool-call marker: a `call_<n>` id, then the tool-name field,
+# then the args field tag. The step metadata blob is protobuf-framed, but the
+# tool payload inside it is a length-prefixed JSON document, so a full proto
+# schema isn't needed to show what the agent is doing.
+_ANTIGRAVITY_DB_TOOL_NAME_RE = re.compile(
+    rb'call_\d+\x12[\x02-\x40]([a-zA-Z_][a-zA-Z0-9_.]{1,63})\x1a'
+)
+# Only the tail matters for the pre-transcript live view; a long-running
+# session accumulates hundreds of steps, and this fallback stops being used
+# the moment the brain transcript exists.
+_ANTIGRAVITY_DB_LIVE_STEP_CAP = 60
+
+
+def _antigravity_db_tool_call_from_blob(blob):
+    """Lift (tool_name, args dict) out of one trajectory-step metadata blob."""
+    if not isinstance(blob, (bytes, bytearray)):
+        return None
+    m = _ANTIGRAVITY_DB_TOOL_NAME_RE.search(bytes(blob))
+    if not m:
+        return None
+    name = m.group(1).decode("utf-8", "replace")
+    brace = blob.find(b"{", m.end())
+    if brace < 0:
+        return None
+    try:
+        args, _end = json.JSONDecoder().raw_decode(
+            blob[brace:].decode("utf-8", "replace")
+        )
+    except (json.JSONDecodeError, UnicodeDecodeError, ValueError):
+        return None
+    if not isinstance(args, dict):
+        return None
+    return name, args
+
+
+def _antigravity_db_live_step_events(session_id, first_line=0):
+    """Tool-call events read from conversations/<sid>.db while no brain
+    transcript exists yet. Read-only against a live WAL store; any failure
+    just yields no events."""
+    db_path = _antigravity_db_path(session_id)
+    if not db_path:
+        return []
+    conn = None
+    try:
+        conn = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True, timeout=2.0)
+        rows = conn.execute("SELECT idx, metadata FROM steps ORDER BY idx").fetchall()
+    except (sqlite3.Error, OSError):
+        return []
+    finally:
+        if conn is not None:
+            try:
+                conn.close()
+            except sqlite3.Error:
+                pass
+    events = []
+    line_num = first_line
+    for _idx, blob in rows[-_ANTIGRAVITY_DB_LIVE_STEP_CAP:]:
+        extracted = _antigravity_db_tool_call_from_blob(blob)
+        if not extracted:
+            continue
+        name, args = extracted
+        tool_args = args.get("Arguments")
+        if not isinstance(tool_args, dict):
+            tool_args = args
+        display_name = args.get("ToolName")
+        if not isinstance(display_name, str) or not display_name:
+            display_name = name
+        call = {"name": display_name, "args": tool_args}
+        detail = _antigravity_tool_detail(call)
+        if not detail:
+            for key in ("toolSummary", "toolAction"):
+                label = args.get(key)
+                if isinstance(label, str) and label.strip():
+                    detail = label.strip()
+                    break
+        if isinstance(detail, str) and len(detail) > 1200:
+            detail = detail[:1200] + "..."
+        block = {
+            "kind": "tool_use",
+            "name": display_name,
+            "detail": detail or "",
+        }
+        command_text = _antigravity_tool_command(call)
+        if command_text:
+            redacted_command = _core._redacted_shell_command_text(command_text, max_len=12000)
+            if redacted_command and (
+                "\n" in redacted_command
+                or len(redacted_command) > 160
+                or re.sub(r"\s+", " ", redacted_command).strip() != (detail or "")
+            ):
+                block["command"] = redacted_command
+                here = _core._extract_shell_heredoc(command_text)
+                block["command_kind"] = _core._shell_script_label(here.get("head", "")) if here else "Shell command"
+        line_num += 1
+        events.append({
+            "line": line_num,
+            "ts": "",
+            "type": "assistant",
+            "message_id": f"antigravity-db-{line_num}",
+            "blocks": [block],
+        })
+    return events
+
+
 def _parse_antigravity_cli_log_conversation(session_id, after_line=0):
     meta = _antigravity_cli_log_meta_for_session(session_id)
     log_path = meta.get("log_path")
-    if not log_path:
-        return {"events": [], "last_line": 0}
     events = []
     line_num = 0
     prompt_label = ""
-    log_name = Path(log_path).name
-    if log_name.startswith("spawn-antigravity-"):
-        prompt_label = _antigravity_log_display_name(log_path)
+    if log_path:
+        log_name = Path(log_path).name
+        if log_name.startswith("spawn-antigravity-"):
+            prompt_label = _antigravity_log_display_name(log_path)
     if prompt_label:
         line_num += 1
         if line_num > after_line:
@@ -1118,6 +1221,18 @@ def _parse_antigravity_cli_log_conversation(session_id, after_line=0):
                 "text": prompt_label,
                 "images": [],
             })
+    # Live tool activity from the CLI's own trajectory store. The brain
+    # transcript a full parse needs only materializes once the Antigravity
+    # language server attaches to the conversation — observed lag of 10+
+    # minutes for headless spawns, during which the pane would otherwise sit
+    # on the static prompt. conversations/<sid>.db has the steps in real
+    # time, so bridge the gap until the transcript parser takes over.
+    for ev in _antigravity_db_live_step_events(session_id, first_line=line_num):
+        line_num = ev["line"]
+        if line_num > after_line:
+            events.append(ev)
+    if not log_path:
+        return {"events": events, "last_line": line_num}
     stdout_path = str(log_path)
     if stdout_path.endswith(".agy.log"):
         stdout_path = stdout_path[:-8]

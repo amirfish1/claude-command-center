@@ -12747,6 +12747,36 @@ def _codex_rollout_day_dirs():
     ]
 
 
+def _archive_antigravity_extra_paths():
+    """Antigravity brain dirs whose mtime marks a session lifecycle event.
+
+    Two gaps made headless agy sessions invisible to the archive signature.
+    First, only the desktop app's store (~/.gemini/antigravity/brain) was
+    covered; the CLI store (~/.gemini/antigravity-cli/brain), where every
+    headless `agy -p` session lives, produced no invalidation signal at all.
+    Second, the store ROOT's mtime only flips when a session dir is added or
+    removed — the transcript a row is built from materializes later, when
+    brain/<sid>/.system_generated/ is created (minutes into a run; observed
+    10+ min while the desktop language server was busy), which bumps only the
+    session dir's mtime. Folding in each session dir catches both events with
+    stat-only cost, same shape as the codex day-dirs above.
+    """
+    paths = []
+    for root in (ANTIGRAVITY_BRAIN, ANTIGRAVITY_CLI_BRAIN):
+        paths.append(root)
+        try:
+            with os.scandir(root) as it:
+                for entry in it:
+                    try:
+                        if entry.is_dir(follow_symlinks=False):
+                            paths.append(Path(entry.path))
+                    except OSError:
+                        continue
+        except OSError:
+            continue
+    return paths
+
+
 def _archive_corpus_signature_parts():
     """Cheap stat-only fingerprint of the conversation corpus on disk.
 
@@ -12799,7 +12829,10 @@ def _archive_corpus_signature_parts():
         Path.home() / ".codex" / "sessions",
         *_codex_rollout_day_dirs(),
         Path.home() / ".cursor" / "projects",
-        Path.home() / ".gemini" / "antigravity" / "brain",
+        # Antigravity, both stores: the desktop app's brain AND the CLI brain
+        # (where headless `agy -p` sessions live), plus each session dir so a
+        # transcript materializing mid-run invalidates the cache too.
+        *_archive_antigravity_extra_paths(),
         _ARCHIVE_HERMES_EXTRA_PATH,
         # Kimi sessions dir — NOT session_index.jsonl: that file's mtime
         # flips on per-turn updates, which forced a full O(all-rows) archive
