@@ -5736,6 +5736,26 @@ def _legacy_project_slug(path):
     """
     return "-" + str(path).lstrip("/").replace("/", "-")
 
+
+def _is_scratch_project_dir(path_or_slug):
+    """Check if path or slug matches the internal CCC scratch directory."""
+    if not path_or_slug:
+        return False
+    name = Path(path_or_slug).name
+    try:
+        slugs = {
+            _encode_project_slug(_SCRATCH_DIR),
+            _legacy_project_slug(_SCRATCH_DIR),
+        }
+    except Exception:
+        slugs = set()
+    if name in slugs or name == "scratch":
+        return True
+    if "-claude-command-center-scratch" in name:
+        return True
+    return False
+
+
 _fs_case_cache: dict = {}
 _git_root_cache: dict = {}
 
@@ -11299,6 +11319,15 @@ def _live_registry_conversation_row(
     if not sid:
         return None
     cwd = str((meta or {}).get("cwd") or "").strip()
+    if cwd and (_path_is_within(cwd, _SCRATCH_DIR) or "command-center/scratch" in cwd):
+        return None
+    spawn_entry = _spawn_registry_entry_for_session(sid, engine="claude") or {}
+    if (
+        spawn_entry.get("spawned_via") == "ccc-ask"
+        or (meta or {}).get("spawned_via") == "ccc-ask"
+        or spawn_entry.get("kind") == "assistant"
+    ):
+        return None
     natural_folder_path = folder_path or (_find_git_root(cwd) if cwd else "") or cwd
     natural_folder_label = folder_label or (
         _resolve_dir_case(natural_folder_path) if natural_folder_path else "Live session"
@@ -11317,7 +11346,6 @@ def _live_registry_conversation_row(
             pass
 
     overrides = name_overrides or {}
-    spawn_entry = _spawn_registry_entry_for_session(sid, engine="claude") or {}
     spawn_prompt = _strip_ccc_session_state_instruction(
         spawn_entry.get("command_summary") or ""
     ).strip()
@@ -11510,6 +11538,8 @@ def _prewarm_claude_transcripts(projects_root, progress_step=None):
         for project_dir in projects_root.iterdir():
             if not project_dir.is_dir():
                 continue
+            if _is_scratch_project_dir(project_dir):
+                continue
             try:
                 entries = list(project_dir.iterdir())
             except OSError:
@@ -11661,6 +11691,8 @@ def find_all_conversations(
 
     for project_dir in project_dirs:
         if _only_dirs is not None and str(project_dir) not in _only_dirs:
+            continue
+        if _is_scratch_project_dir(project_dir):
             continue
         slug = project_dir.name
 
@@ -12791,6 +12823,8 @@ def _archive_canonical_project_dirs(projects_root):
         try:
             directory = Path(candidate).resolve()
         except (OSError, RuntimeError):
+            continue
+        if _is_scratch_project_dir(directory):
             continue
         key = str(directory)
         if key in seen or not directory.is_dir():
@@ -14712,6 +14746,26 @@ def _install_dir():
     return Path(__file__).resolve().parent
 
 
+def _compute_server_code_rev():
+    """git HEAD of this install at process start — the build stamp doctor
+    checks use to tell a live server apart from what's on disk.
+
+    Computed once at import time, not on each call: a `git pull` landing
+    while this process is still running must NOT make it look current when
+    it's actually still running the code it loaded at start."""
+    try:
+        out = subprocess.check_output(
+            ["git", "-C", str(_install_dir()), "rev-parse", "HEAD"],
+            stderr=subprocess.DEVNULL, timeout=2,
+        ).decode("utf-8", "replace").strip()
+        return out or ""
+    except (OSError, subprocess.CalledProcessError, subprocess.TimeoutExpired):
+        return ""
+
+
+_SERVER_CODE_REV = _compute_server_code_rev()
+
+
 _WORKER_LAUNCHD_LABEL = "com.github.claude-command-center.worker"
 
 
@@ -14775,14 +14829,16 @@ def _restart_worker_process(worker=None, *, was=None, now=None):
             health = {}
         worker = health.get("worker") if isinstance(health, dict) and isinstance(health.get("worker"), dict) else {}
     target = f"gui/{os.getuid()}/{_WORKER_LAUNCHD_LABEL}"
-    try:
-        proc = subprocess.run(
-            ["launchctl", "kickstart", "-k", target],
-            capture_output=True, text=True, timeout=10,
-        )
-        kicked = proc.returncode == 0
-    except (OSError, subprocess.TimeoutExpired):
-        kicked = False
+    kicked = False
+    if _launchd_restart_targets_pid(_WORKER_LAUNCHD_LABEL, worker.get("pid")):
+        try:
+            proc = subprocess.run(
+                ["launchctl", "kickstart", "-k", target],
+                capture_output=True, text=True, timeout=10,
+            )
+            kicked = proc.returncode == 0
+        except (OSError, subprocess.TimeoutExpired):
+            kicked = False
     outcome = {"restarted": True, "was": was, "now": now}
     if kicked:
         outcome["via"] = "launchd"
@@ -16773,6 +16829,54 @@ def enqueue_annotation_ux_fixes_queue(
         }
 
 
+def _launchd_job_pid(label, timeout=3):
+    """PID launchd currently associates with `label`, or None.
+
+    `launchctl list <label>` only prints a `"PID" = N;` line while the job
+    is actively running; a stopped/never-loaded job yields no match, which
+    callers should treat as "nothing else is claiming this label right
+    now" rather than an error."""
+    try:
+        proc = subprocess.run(
+            ["launchctl", "list", label],
+            capture_output=True, text=True, timeout=timeout,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+    if proc.returncode != 0:
+        return None
+    m = re.search(r'"PID"\s*=\s*(\d+)', proc.stdout or "")
+    return int(m.group(1)) if m else None
+
+
+def _launchd_restart_targets_pid(label, expected_pid, timeout=3):
+    """True when `launchctl kickstart -k <label>` is safe to trust as having
+    restarted the process we mean (self, for the dashboard; the known
+    worker pid, for the worker).
+
+    A plist existing on disk only means the label is *installed*, not that
+    it's what's actually serving this port: a manually started dev/
+    duplicate instance (e.g. CCC_ALLOW_DUPLICATE_REPO=1 on another port),
+    or a stray process left over from an old worktree, can hold the port
+    while the launchd-registered job sits elsewhere or isn't running at
+    all. Kickstarting the label in that case restarts a process nobody is
+    talking to, `returncode == 0` still reads as success, and the live
+    process nobody touched keeps serving stale code — the exact "restart
+    said ok but nothing changed" symptom this guards against.
+
+    Safe: the label isn't currently running under launchd at all (kickstart
+    starts it fresh, no other live copy to conflict with), or its tracked
+    PID matches what we expect. Unsafe: something else is already running
+    under that label and we can't confirm it's the process we mean.
+    """
+    running_pid = _launchd_job_pid(label, timeout=timeout)
+    if running_pid is None:
+        return True
+    if not expected_pid:
+        return False
+    return int(running_pid) == int(expected_pid)
+
+
 def _schedule_restart(delay=0.5):
     """Arm a launchctl kickstart or os.execvp() that replaces this process with a fresh
     `python server.py` after `delay` seconds. Called AFTER the HTTP response
@@ -16786,7 +16890,7 @@ def _schedule_restart(delay=0.5):
         if sys.platform == "darwin":
             service_label = "com.github.claude-command-center"
             plist_path = Path.home() / "Library" / "LaunchAgents" / f"{service_label}.plist"
-            if plist_path.is_file():
+            if plist_path.is_file() and _launchd_restart_targets_pid(service_label, os.getpid()):
                 try:
                     proc = subprocess.run(
                         ["launchctl", "kickstart", "-k", f"gui/{os.getuid()}/{service_label}"],
@@ -25709,6 +25813,11 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                 "pid": os.getpid(),
                 "started_at": _SERVER_START_TS,
                 "uptime_s": round(time.time() - _SERVER_START_TS),
+                # Build stamp: git HEAD this process loaded at start, frozen
+                # for the process lifetime (see _compute_server_code_rev).
+                # `ccc doctor` diffs this against disk HEAD to tell "code
+                # committed" apart from "code actually running".
+                "code_rev": _SERVER_CODE_REV,
             })
         elif path == "/api/skills":
             # Read-only skills-ecosystem inventory (W86): CCC's own bundled
@@ -27247,6 +27356,17 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                 "adopted": int(adopted.get("adopted") or 0),
                 "worker_restarted": bool((worker_outcome or {}).get("restarted")),
                 "worker": worker_outcome,
+                # Snapshot of what THIS process was running, taken before the
+                # restart fires. The restart itself replaces this process
+                # (execvp) or hands off to launchd, so there is no "after"
+                # to report synchronously in this same response -- callers
+                # verify by polling GET /api/version until pid/started_at
+                # change and code_rev matches current `git rev-parse HEAD`.
+                "before": {
+                    "code_rev": _SERVER_CODE_REV,
+                    "started_at": _SERVER_START_TS,
+                    "pid": os.getpid(),
+                },
             })
             try:
                 self.wfile.flush()

@@ -39,6 +39,7 @@ import argparse
 import json
 import os
 import re
+import subprocess
 import sys
 import urllib.error
 import urllib.request
@@ -465,6 +466,32 @@ def cmd_models(args):
     return 0
 
 
+def _local_head_rev(timeout=2):
+    """git rev-parse HEAD of the ccc CLI's own install dir, or None when
+    this isn't a git checkout (zip/Homebrew keg without .git) or git is
+    unavailable."""
+    install_dir = os.path.dirname(os.path.realpath(__file__))
+    try:
+        out = subprocess.check_output(
+            ["git", "-C", install_dir, "rev-parse", "HEAD"],
+            stderr=subprocess.DEVNULL, timeout=timeout,
+        ).decode("utf-8", "replace").strip()
+        return out or None
+    except (OSError, subprocess.CalledProcessError, subprocess.TimeoutExpired):
+        return None
+
+
+def _code_freshness_verdict(running_rev, local_rev):
+    """Compare the running server's build stamp (/api/version's code_rev,
+    frozen at that process's start) against disk HEAD. Pure decision logic
+    so it's testable without a live server or a git checkout: "unknown"
+    when either side couldn't be determined (not a git install, or the
+    server predates the code_rev field), "match"/"stale" otherwise."""
+    if not running_rev or not local_rev:
+        return "unknown"
+    return "match" if running_rev == local_rev else "stale"
+
+
 def cmd_doctor(args):
     base = _resolve_server(args.server)
     if not base:
@@ -486,12 +513,37 @@ def cmd_doctor(args):
             known = ", ".join(sorted((payload.get("engines") or {})))
             print(f"ccc: unknown engine {args.engine!r} (known: {known})", file=sys.stderr)
             return 1
+
+    try:
+        version_payload = _get_json(base, "/api/version", timeout=5)
+    except OSError:
+        version_payload = None
+    running_rev = str((version_payload or {}).get("code_rev") or "")
+    local_rev = _local_head_rev() or ""
+    freshness = _code_freshness_verdict(running_rev, local_rev)
+
     if args.json:
         out = dict(payload)
         if args.engine:
             out["engines"] = engines
+        out["code_freshness"] = {
+            "status": freshness,
+            "running_rev": running_rev or None,
+            "local_rev": local_rev or None,
+        }
         print(json.dumps(out, indent=2))
         return 0
+
+    if freshness == "match":
+        print(f"server: code matches HEAD ({running_rev[:12]})\n")
+    elif freshness == "stale":
+        print(
+            f"server: STALE CODE — running {running_rev[:12]}, disk HEAD is "
+            f"{local_rev[:12]} — restart needed (POST /api/restart, or "
+            "launchctl kickstart -k gui/$(id -u)/com.github.claude-command-center)\n"
+        )
+    else:
+        print("server: code freshness unknown (not a git install, or /api/version unreachable)\n")
 
     def _flag(value, yes="yes", no="no", unknown="?"):
         if value is True:
@@ -514,7 +566,7 @@ def cmd_doctor(args):
             f"{_flag(smoke.get('ok'))}"
         )
     print("\n'?' = no CLI-based probe implemented for that check yet (not a failure).")
-    return 1 if (args.engine and any_unhealthy) else 0
+    return 1 if (freshness == "stale" or (args.engine and any_unhealthy)) else 0
 
 
 def _parse_iso(ts):
