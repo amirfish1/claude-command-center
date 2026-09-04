@@ -525,6 +525,38 @@ their transcripts, but can't be spawned or steered from the dashboard yet.
 
 If you'd like to see an engine bumped from "partial" to first-class, open an issue — it's mostly adapter work, the ingestion layer is engine-agnostic.
 
+## Bring your own key (BYOK)
+
+Paste provider API keys once in **Settings → Engines** and route spawns
+through them instead of whatever local CLI auth an engine already has.
+Keys are stored per **profile** (name them however you like — `work`,
+`personal`, `client-x`) so different projects can use different keys.
+
+- **Storage**: the macOS Keychain (`security`, service `ccc-byok`) when
+  available; a stdlib-only encrypted local file
+  (`~/.claude/command-center/byok/profiles.enc.json`, HMAC-SHA256
+  counter-mode stream cipher, machine-bound key) on other platforms. Keys
+  are never written to disk in plaintext and never appear in the repo.
+- **Supported providers**: Anthropic, OpenAI, OpenRouter, TokenRouter, xAI,
+  Moonshot, Google.
+- **Routing OpenRouter/TokenRouter models**: OpenCode accepts model ids in
+  `<provider>/<vendor>/<model>` form natively (e.g.
+  `openrouter/anthropic/claude-sonnet-5`), so pointing a spawn at one of
+  these ids and picking a profile with an `openrouter` key configured is
+  all "virtual engine" routing needs — no separate engine to select.
+- **Per-spawn profile**: the `/api/sessions/spawn` payload accepts
+  `"key_profile": "<name>"`. When a spawn uses an `openrouter/`- or
+  `tokenrouter/`-prefixed model and no profile is given, CCC falls back to
+  a profile named `default`.
+- **Cost visibility**: `GET /api/engines/models` marks BYOK-backed models
+  with indicative per-token cost, and BYOK spawns log tokens/cost to a
+  local ledger surfaced at `GET /api/byok/usage?days=30` and in the
+  Settings panel's spend summary.
+- **Current scope**: env injection is wired for **OpenCode** spawns today.
+  `BYOK_DIRECT_ENV_ENGINES` in `ccc_server/byok.py` already lists
+  `droid`, `kilo`, `hermes`, `aider`, `pi` for when their spawn paths
+  support it — adding one is a one-line change to the spawn dispatcher.
+
 ## Features
 
 - **One board, eight engines**: spawn, resume, and review **Claude Code**, **Codex**, **Cursor**, **Antigravity**, **Kilo Code**, **Kimi Code**, **OpenCode**, and **Devin** sessions from one dashboard. See the [engine support matrix](#engine-support) for per-engine parity. Kimi Code has a guided setup flow in Settings → Engines that detects the CLI, walks through install and `kimi login`, and verifies with a smoke-test spawn.
