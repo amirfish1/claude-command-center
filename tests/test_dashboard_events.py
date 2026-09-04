@@ -1,5 +1,7 @@
 import threading
 import time
+import json
+import urllib.request
 
 import pytest
 
@@ -146,3 +148,88 @@ def test_publish_rejects_invalid_envelopes(topic, kwargs):
 
     with pytest.raises((TypeError, ValueError)):
         hub.publish(topic, **kwargs)
+
+
+def _read_sse_event(response):
+    event_id = None
+    payload = None
+    deadline = time.monotonic() + 2.0
+    while time.monotonic() < deadline and payload is None:
+        line = response.readline().decode("utf-8")
+        if line.startswith("id: "):
+            event_id = int(line[len("id: "):].strip())
+        elif line.startswith("data: "):
+            payload = json.loads(line[len("data: "):])
+    return event_id, payload
+
+
+@pytest.fixture
+def dashboard_server(monkeypatch):
+    import server
+    from ccc_server.events import DashboardEventHub
+
+    monkeypatch.setattr(
+        server,
+        "_dashboard_events",
+        DashboardEventHub(capacity=8, boot_id="http-boot"),
+        raising=False,
+    )
+    httpd = server.http.server.ThreadingHTTPServer(
+        ("127.0.0.1", 0), server.CommandCenterHandler
+    )
+    thread = threading.Thread(target=httpd.serve_forever, daemon=True)
+    thread.start()
+    try:
+        yield server, f"http://127.0.0.1:{httpd.server_address[1]}"
+    finally:
+        httpd.shutdown()
+        httpd.server_close()
+        thread.join(timeout=2)
+
+
+def test_dashboard_events_endpoint_replays_envelope(dashboard_server):
+    server, base = dashboard_server
+    published = server._dashboard_events.publish(
+        "session.patch",
+        entity={"type": "session", "id": "session-1"},
+        patch={"status": "idle"},
+    )
+
+    with urllib.request.urlopen(base + "/api/events?since=0", timeout=2) as response:
+        event_id, payload = _read_sse_event(response)
+
+    assert response.headers.get("Content-Type") == "text/event-stream"
+    assert event_id == published["seq"]
+    assert payload == published
+
+
+def test_dashboard_events_endpoint_honors_last_event_id(dashboard_server):
+    server, base = dashboard_server
+    server._dashboard_events.publish("invalidate", invalidate=[{"resource": "queue"}])
+    second = server._dashboard_events.publish(
+        "invalidate", invalidate=[{"resource": "archive"}]
+    )
+    request = urllib.request.Request(
+        base + "/api/events", headers={"Last-Event-ID": "1"}
+    )
+
+    with urllib.request.urlopen(request, timeout=2) as response:
+        event_id, payload = _read_sse_event(response)
+
+    assert event_id == 2
+    assert payload == second
+
+
+def test_dashboard_events_endpoint_emits_resync_for_expired_cursor(dashboard_server):
+    server, base = dashboard_server
+    server._dashboard_events = _hub(capacity=1, boot_id="http-boot")
+    server._dashboard_events.publish("invalidate", invalidate=[{"resource": "one"}])
+    server._dashboard_events.publish("invalidate", invalidate=[{"resource": "two"}])
+
+    with urllib.request.urlopen(base + "/api/events?since=0", timeout=2) as response:
+        event_id, payload = _read_sse_event(response)
+
+    assert event_id == 2
+    assert payload["topic"] == "resync.required"
+    assert payload["boot_id"] == "http-boot"
+    assert payload["seq"] == 2

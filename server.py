@@ -111,6 +111,7 @@ import ccc_peer_uds
 # Pure/stdlib, no imports from server.py -- mirrors ccc_peer_uds.py's split
 # between wire-format helpers (here) and registry/routing (server.py below).
 import ccc_peer_inbound
+from ccc_server.events import DashboardEventHub
 
 # Productivity metrics and local persistence are isolated in a stdlib-only
 # sibling module.  server.py adapts CCC's transcripts, repositories, and queue
@@ -134,6 +135,7 @@ COMMAND_CENTER_STATE_DIR = Path.home() / ".claude" / "command-center"
 COMMAND_CENTER_PASTED_IMAGES_DIR = COMMAND_CENTER_STATE_DIR / "pasted-images"
 COMMAND_CENTER_ATTACHMENTS_DIR = COMMAND_CENTER_STATE_DIR / "attachments"
 PYTHON_STACK_DUMP_LOG = COMMAND_CENTER_STATE_DIR / "logs" / "python-stacks.log"
+_dashboard_events = DashboardEventHub(capacity=512)
 # Unified human-readable activity log — spawn/inject/kill/app-server-health
 # events, one line each. Mirrors ~/.watchtower/activity.log's format
 # (TIMESTAMP UTC  CATEGORY   VERB     detail) on purpose: the two logs get
@@ -24758,6 +24760,10 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
             # gated live-session set, so no extra full scan.
             qs = urllib.parse.parse_qs(parsed.query)
             self.send_json(get_model_advisor_report(qs.get("fresh", [""])[0]))
+        elif path == "/api/events":
+            # Unified, replayable dashboard state stream.  Existing narrower
+            # SSE routes stay available during the compatibility rollout.
+            self._stream_dashboard_events(parsed)
         elif path == "/api/sessions/events":
             # SSE: push session-state changes to a subscriber (e.g. a COO /
             # monitor session) instead of having it poll /api/sessions on a
@@ -33227,6 +33233,76 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                 else:
                     sleep_s = min(0.05 * (1.3 ** consecutive_empty), 0.25)
                 time.sleep(sleep_s)
+        except (BrokenPipeError, ConnectionResetError, OSError):
+            pass
+
+    def _stream_dashboard_events(self, parsed):
+        """Replay versioned dashboard changes, then block for new events."""
+        query = urllib.parse.parse_qs(parsed.query)
+        raw_cursor = (query.get("since") or [None])[0]
+        if raw_cursor is None:
+            raw_cursor = self.headers.get("Last-Event-ID", "0")
+        try:
+            cursor = max(0, int(raw_cursor or 0))
+        except (TypeError, ValueError):
+            cursor = 0
+        requested_boot = str((query.get("boot_id") or [""])[0] or "") or None
+
+        self.send_response(200)
+        self.send_header("Content-Type", "text/event-stream")
+        self.send_header("Cache-Control", "no-cache")
+        self.send_header("Connection", "keep-alive")
+        self.send_header("X-Accel-Buffering", "no")
+        self.end_headers()
+
+        def _emit(payload):
+            try:
+                event_id = int(payload.get("seq") or 0)
+                blob = json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
+                self.wfile.write(f"id: {event_id}\ndata: {blob}\n\n".encode("utf-8"))
+                self.wfile.flush()
+                return True
+            except (BrokenPipeError, ConnectionResetError, OSError):
+                return False
+
+        active_boot = requested_boot
+        try:
+            # EventSource applies this reconnect delay if the socket drops.
+            self.wfile.write(b"retry: 1000\n\n")
+            self.wfile.flush()
+            while True:
+                snapshot = _dashboard_events.snapshot_since(cursor, boot_id=active_boot)
+                active_boot = snapshot.boot_id
+                if snapshot.resync_required:
+                    resync = {
+                        "schema": 1,
+                        "boot_id": snapshot.boot_id,
+                        "seq": snapshot.latest_seq,
+                        "topic": "resync.required",
+                        "entity": None,
+                        "entity_version": None,
+                        "patch": {},
+                        "invalidate": [],
+                        "ts": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
+                    }
+                    if not _emit(resync):
+                        return
+                    cursor = snapshot.latest_seq
+                else:
+                    for event in snapshot.events:
+                        if not _emit(event):
+                            return
+                        cursor = event["seq"]
+
+                snapshot = _dashboard_events.wait_since(
+                    cursor, boot_id=active_boot, timeout=15.0
+                )
+                if snapshot.resync_required or snapshot.events:
+                    # Re-enter through snapshot_since so overflow and replay
+                    # use one serialization path.
+                    continue
+                self.wfile.write(b": keepalive\n\n")
+                self.wfile.flush()
         except (BrokenPipeError, ConnectionResetError, OSError):
             pass
 
