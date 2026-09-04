@@ -57732,7 +57732,7 @@
     const queuePane = rail.querySelector('#statusRailQueuePane');
     // 'files' is a legacy value (the Files tab folded into Metadata); the
     // files panel now lives at the bottom of the Metadata pane.
-    const next = (tab === 'queue' || tab === 'orchestration' || tab === 'ask') ? tab : 'metadata';
+    const next = (tab === 'queue' || tab === 'orchestration' || tab === 'ask' || tab === 'log') ? tab : 'metadata';
     rail.querySelectorAll('[data-rail-tab]').forEach(btn => {
       const active = btn.getAttribute('data-rail-tab') === next;
       btn.classList.toggle('is-active', active);
@@ -57756,6 +57756,116 @@
       // The pane was hidden until now — lay the lane map out for real.
       requestAnimationFrame(() => updateOrchestrationPane(currentConversation));
     }
+    if (next === 'log' && typeof refreshRailLogPane === 'function') {
+      // Pane was hidden until now (or the user switched back to it) — pull
+      // fresh events immediately instead of waiting for the next poll tick.
+      refreshRailLogPane();
+    }
+  }
+
+  // ── Rail Log pane (CCC-1049) ────────────────────────────────────────────
+  // The RHS "Log" tab: the unified activity log (~/.claude/command-center/
+  // logs/activity.log via GET /api/activity-log) living in the status rail
+  // instead of a modal. Global ("All") or narrowed to the open conversation
+  // ("This session"), plus a free-text filter over category/verb/detail.
+  // Auto-refreshes on an interval while the tab is visible — no refresh
+  // button (staleness is fixed at the source, per the house rule).
+  const RAIL_LOG_POLL_MS = 5000;
+  let _railLogEvents = [];
+  let _railLogScope = 'all';
+  let _railLogFilter = '';
+  let _railLogFetchInFlight = false;
+
+  function _railLogPaneVisible() {
+    const pane = document.getElementById('statusRailLogPane');
+    return !!(pane && pane.classList.contains('is-active'));
+  }
+
+  function _renderRailLogPane() {
+    const body = document.getElementById('railLogBody');
+    if (!body) return;
+    const needle = _railLogFilter.trim().toLowerCase();
+    let events = _railLogEvents;
+    if (needle) {
+      events = events.filter((ev) => (
+        String(ev.category || '').toLowerCase().includes(needle)
+        || String(ev.verb || '').toLowerCase().includes(needle)
+        || String(ev.detail || '').toLowerCase().includes(needle)
+      ));
+    }
+    if (!events.length) {
+      body.innerHTML = '<div class="activity-log-empty">'
+        + (_railLogEvents.length ? 'No events match the filter.' : 'No activity-log entries yet.')
+        + '</div>';
+      return;
+    }
+    // Newest first for reading — the API returns oldest-first (tail order).
+    body.innerHTML = events.slice().reverse().map(_activityLogRowHtml).join('');
+  }
+
+  async function refreshRailLogPane() {
+    if (_railLogFetchInFlight) return;
+    const body = document.getElementById('railLogBody');
+    if (!body) return;
+    let qs = '?limit=300';
+    let emptyHint = 'No activity-log entries yet.';
+    if (_railLogScope === 'session') {
+      const sid = (typeof currentConversation === 'string' && currentConversation) || '';
+      if (!sid) {
+        _railLogEvents = [];
+        body.innerHTML = '<div class="activity-log-empty">Select a session to scope the log, or switch to All.</div>';
+        return;
+      }
+      qs = '?session_id=' + encodeURIComponent(sid) + '&limit=300';
+      emptyHint = 'No activity-log entries for this session yet.';
+    }
+    _railLogFetchInFlight = true;
+    try {
+      const res = await fetch('/api/activity-log' + qs, { cache: 'no-store' });
+      const data = await res.json();
+      if (!_railLogPaneVisible()) return;  // tab switched while in flight
+      if (!data || !data.ok) {
+        body.innerHTML = '<div class="activity-log-error">Could not load the activity log.</div>';
+        return;
+      }
+      _railLogEvents = Array.isArray(data.events) ? data.events : [];
+      if (!_railLogEvents.length) {
+        body.innerHTML = '<div class="activity-log-empty">' + emptyHint + '</div>';
+        return;
+      }
+      _renderRailLogPane();
+    } catch (e) {
+      if (_railLogPaneVisible()) {
+        body.innerHTML = '<div class="activity-log-error">Could not load the activity log.</div>';
+      }
+    } finally {
+      _railLogFetchInFlight = false;
+    }
+  }
+
+  function initRailLogPane() {
+    const body = document.getElementById('railLogBody');
+    const filter = document.getElementById('railLogFilter');
+    const pane = document.getElementById('statusRailLogPane');
+    if (!body || !pane) return;
+    pane.querySelectorAll('[data-rail-log-scope]').forEach((btn) => {
+      btn.addEventListener('click', () => {
+        pane.querySelectorAll('[data-rail-log-scope]').forEach((b) => b.classList.remove('is-active'));
+        btn.classList.add('is-active');
+        _railLogScope = btn.getAttribute('data-rail-log-scope') || 'all';
+        _railLogEvents = [];
+        refreshRailLogPane();
+      });
+    });
+    if (filter) {
+      filter.addEventListener('input', () => {
+        _railLogFilter = filter.value || '';
+        if (_railLogEvents.length) _renderRailLogPane();
+      });
+    }
+    setInterval(() => {
+      if (_railLogPaneVisible()) refreshRailLogPane();
+    }, RAIL_LOG_POLL_MS);
   }
 
   // ── Orchestration pane ─────────────────────────────────────────────────
@@ -59495,6 +59605,7 @@
       setStatusRailTab(savedRailTab);
     }
     initAskPane();
+    initRailLogPane();
 
     const $fileViewerClose = document.getElementById('fileViewerCloseBtn');
     if ($fileViewerClose) {

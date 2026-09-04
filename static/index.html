@@ -1253,6 +1253,7 @@
               <button class="status-rail-tab" type="button" role="tab" aria-selected="false" aria-controls="statusRailMetadataPane" data-rail-tab="metadata">Metadata</button>
               <button class="status-rail-tab" type="button" role="tab" aria-selected="false" aria-controls="statusRailQueuePane" data-rail-tab="queue">Queue</button>
               <button class="status-rail-tab" type="button" role="tab" aria-selected="false" aria-controls="statusRailAskPane" data-rail-tab="ask">Ask</button>
+              <button class="status-rail-tab" type="button" role="tab" aria-selected="false" aria-controls="statusRailLogPane" data-rail-tab="log">Log</button>
             </div>
             <div class="status-rail-pane is-active" id="statusRailOrchestrationPane" role="tabpanel" data-rail-pane="orchestration">
               <div class="orch-pane" id="orchPane">
@@ -1452,6 +1453,20 @@
                     </button>
                   </div>
                 </form>
+              </div>
+            </div>
+            <div class="status-rail-pane" id="statusRailLogPane" role="tabpanel" data-rail-pane="log">
+              <div class="rail-log-pane">
+                <div class="rail-log-toolbar">
+                  <div class="activity-log-modal-scope rail-log-scope">
+                    <button type="button" class="activity-log-scope-btn is-active" data-rail-log-scope="all">All</button>
+                    <button type="button" class="activity-log-scope-btn" data-rail-log-scope="session">This session</button>
+                  </div>
+                  <input type="search" class="rail-log-filter" id="railLogFilter" placeholder="Filter events…" aria-label="Filter log events">
+                </div>
+                <div class="rail-log-body" id="railLogBody" aria-live="polite">
+                  <div class="activity-log-empty">Loading…</div>
+                </div>
               </div>
             </div>
             <div class="rail-bottom-tools">

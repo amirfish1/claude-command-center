@@ -27263,6 +27263,53 @@ body.status-pos-right .status-rail-pane[data-rail-pane="metadata"] > .files-pane
   gap: 16px;
   scroll-behavior: smooth;
 }
+
+/* Rail Log pane (CCC-1049): the activity log as a status-rail tab. */
+.rail-log-pane {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-height: 0;
+}
+.rail-log-toolbar {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 10px;
+  border-bottom: 1px solid color-mix(in srgb, var(--border) 70%, transparent);
+}
+.rail-log-scope {
+  flex: 0 0 auto;
+}
+.rail-log-filter {
+  flex: 1 1 auto;
+  min-width: 0;
+  font-size: 12px;
+  padding: 4px 8px;
+  border-radius: 6px;
+  border: 1px solid var(--border);
+  background: var(--bg);
+  color: var(--text);
+}
+.rail-log-filter:focus { outline: none; border-color: var(--accent); }
+.rail-log-body {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 4px 0;
+  font-family: var(--font-mono, ui-monospace, Menlo, monospace);
+  font-size: 12px;
+}
+/* Stacked rows (the rail is ~half the modal width): timestamp + verb on one
+   line, detail full-width below, so long details don't squeeze into a
+   one-character column. */
+.rail-log-body .activity-log-row {
+  flex-wrap: wrap;
+  padding: 5px 10px;
+  gap: 4px 8px;
+}
+.rail-log-body .activity-log-detail { flex-basis: 100%; font-size: 11.5px; }
 .ask-turn {
   display: flex;
   flex-direction: column;
