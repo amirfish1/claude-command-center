@@ -22,6 +22,20 @@ from . import parse
 CLAUDE_PROJECTS_DIR = Path.home() / ".claude" / "projects"
 CODEX_SESSIONS_DIR = Path.home() / ".codex" / "sessions"
 
+# CCC's own scratch one-shots (auto-titler, queue-brief, Ask spawns — see
+# `ccc_server.core._SCRATCH_DIR`) are throwaway plumbing, not real work, and
+# the canonical `claude-index ingest` (dev/tools/indexing) purges them after
+# every run. But this vendored copy runs on its own 120s timer
+# (IndexerManager.maybe_ingest) and previously had no purge step at all, so
+# any scratch session file created since the last canonical purge got
+# re-indexed here and stayed — quietly undoing the canonical purge and
+# polluting "where did I work on X" search results with self-referential
+# noise. `files` rows for purged sessions are intentionally left alone (see
+# `purge_scratch` below) so an unchanged scratch file is skipped rather than
+# re-ingested, matching the canonical ingester's behavior.
+SCRATCH_CWD_LIKE = "%/.claude/command-center/scratch%"
+SCRATCH_PROJECT_LIKE = "%claude-command-center-scratch%"
+
 # Codex filenames embed the session UUID as the trailing dash-delimited group:
 # rollout-2026-05-02T15-11-24-019deabf-13f9-7611-bc08-9873057cd8b7.jsonl
 _CODEX_FILENAME_UUID_RE = re.compile(
@@ -154,6 +168,31 @@ def _ingest_one_file(
             print(f"[ERROR] {path}: {e}")
 
 
+def purge_scratch(conn: sqlite3.Connection) -> dict:
+    """Delete CCC scratch one-shot sessions from messages/FTS/sessions. Keeps
+    the `files` row so a since-unchanged scratch file is skipped on the next
+    ingest instead of being re-added (mirrors the canonical purge_scratch in
+    dev/tools/indexing/src/claude_index/db.py)."""
+    ids = [r[0] for r in conn.execute(
+        "SELECT id FROM messages WHERE cwd LIKE ? OR project_dir LIKE ?",
+        (SCRATCH_CWD_LIKE, SCRATCH_PROJECT_LIKE),
+    )]
+    stats = {"messages": len(ids), "sessions": 0}
+    if not ids:
+        return stats
+    conn.execute("BEGIN")
+    for i in range(0, len(ids), 500):
+        chunk = ids[i:i + 500]
+        ph = ",".join("?" * len(chunk))
+        conn.execute(f"DELETE FROM messages WHERE id IN ({ph})", chunk)
+    stats["sessions"] = conn.execute(
+        "DELETE FROM sessions WHERE cwd LIKE ? OR project_dir LIKE ?",
+        (SCRATCH_CWD_LIKE, SCRATCH_PROJECT_LIKE),
+    ).rowcount
+    conn.commit()
+    return stats
+
+
 def ingest(
     conn: sqlite3.Connection,
     root: Path = CLAUDE_PROJECTS_DIR,
@@ -199,6 +238,11 @@ def ingest(
             stats,
             verbose,
         )
+
+    # Purge before rebuilding the sessions aggregate, so no scratch session
+    # row is ever (re)created from this run's freshly-ingested messages.
+    scratch_stats = purge_scratch(conn)
+    stats["scratch_purged"] = scratch_stats
 
     # --- Refresh sessions aggregate ---
     cur.execute(

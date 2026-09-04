@@ -10,7 +10,9 @@ Two entry points, one stdlib-only file:
     run_mazkir(question, history, range) -> (response dict, http status)
         The Ask tab pipeline (called from ask.handle_assistant_ask):
         1. pre-fetch candidate sessions from Claude-Index (`claude-index
-           sessions --json`, ~1 s) and a one-line fleet snapshot;
+           sessions --json`, ~1 s), excluding any currently-live session (it
+           can't be "where the work already happened" — see `_live_ids`),
+           and a one-line fleet snapshot;
         2. run headless Sonnet with two MCPs — `claude-index` (history) and
            `ccc-state` (live fleet) — and nothing else (no Bash/Write/Read);
         3. validate `[[session:ID]]` citations against the pre-fetched
@@ -392,17 +394,19 @@ Tools:
 - ccc-state: fleet_diagnostics (stuck / waiting / burning), list_sessions, live_activity, throughput_window, queue_status, session_detail.
 
 Method:
-1. CANDIDATES are pre-fetched below with excerpts from their best-matching messages. If they answer the question, answer immediately without any tool call (each tool round trip costs ~4 s); call session_info only when the excerpts do not say what was decided or how it ended.
+1. CANDIDATES are pre-fetched below with excerpts from their best-matching messages, best match first, with currently-live sessions already excluded (a session still open right now cannot be where past work "already happened" — it's likely the very session asking). If they answer the question, answer immediately without any tool call (each tool round trip costs ~4 s); call session_info only when the excerpts do not say what was decided or how it ended.
 2. Otherwise call search_sessions once (rephrase with 2-4 topic words), then at most one or two follow-ups. Never loop.
-3. For fleet questions (stuck, burning, waiting, what is running, cost) call fleet_diagnostics or the specific tool once.
-4. Be honest: if nothing matches, say what you searched and that you found nothing.
+3. Trust the candidate order: it already ranks by relevance with only a small recency tie-break, and demotes planning-only/self-referential sessions. Don't override it just because a lower-ranked candidate is more recent.
+4. For fleet questions (stuck, burning, waiting, what is running, cost) call fleet_diagnostics or the specific tool once.
+5. Be honest: if nothing matches, say what you searched and that you found nothing.
 
 Answer format (plain text, no markdown headers):
 - Lead with the answer in one or two sentences, then 1-4 short supporting lines.
+- Name up to 3 distinct sessions that actually did the work (skip near-duplicates like a continuation of a session you already named), each with its date, ranked best match first — not just the most recent.
 - Cite every session you rely on inline as [[session:SESSION_ID]] using the exact id from the tool output or the candidate list. Cite Gmail threads the same way with the thread id.
 - Give dates as YYYY-MM-DD and name the harness (Claude, Codex, Kimi, Antigravity, Gmail) when it is not Claude.
 - If a session should be resumed to continue that work, append [[action:spawn-continue:SESSION_ID]] on its own line.
-- Keep the whole answer under 110 words. Do not list every candidate; name the one or two sessions that did the work."""
+- Keep the whole answer under 110 words."""
 
 
 def _range_to_since(range_key) -> str | None:
@@ -410,10 +414,12 @@ def _range_to_since(range_key) -> str | None:
 
 
 def prefetch_sessions(question: str, since: str | None, runner=None, index_bin: str = INDEX_BIN,
-                      limit: int = PREFETCH_LIMIT) -> list[dict]:
+                      limit: int = PREFETCH_LIMIT, exclude_session_ids=None) -> list[dict]:
     argv = [index_bin, "sessions", question, "--json", "-n", str(limit), "--excerpts", "3"]
     if since:
         argv += ["--since", since]
+    for sid in exclude_session_ids or ():
+        argv += ["--exclude-session", sid]
     run = runner or (lambda a, **kw: subprocess.run(a, capture_output=True, text=True, **kw))
     try:
         proc = run(argv, timeout=PREFETCH_TIMEOUT_SEC)
@@ -632,13 +638,22 @@ def run_mazkir(question: str, history: list | None = None, range_key: str | None
     if not claude_bin:
         return {"ok": False, "code": "ask_engine_unavailable", "error": "claude binary not found"}, 503
 
+    # A currently-live session can't be "where the work already happened" —
+    # it's still in progress, and is often the very session asking the
+    # question (self-reference: the live check that motivated this fix cited
+    # today's active sprint sessions instead of the actual 2026-08-30 build).
+    # Computed once, up front, and reused for both the prefetch exclusion and
+    # the "live" status badge on sources below.
+    live_ids = _live_ids()
+
     def do_prefetch() -> tuple[list[dict], str]:
         # The census fetch and the index search are independent; overlap them
         # (round 3 lost 12 s on Q3 waiting for a restarting CCC).
         import concurrent.futures as _cf
         with _cf.ThreadPoolExecutor(max_workers=1) as ex:
             snap_f = ex.submit(fleet_snapshot, base, fetch)
-            cands = prefetch_sessions(question, since, runner=prefetch_runner)
+            cands = prefetch_sessions(question, since, runner=prefetch_runner,
+                                      exclude_session_ids=live_ids)
             try:
                 snap = snap_f.result(timeout=SNAPSHOT_TIMEOUT_SEC + 1)
             except Exception:
@@ -673,7 +688,6 @@ def run_mazkir(question: str, history: list | None = None, range_key: str | None
                 "error": (proc.stderr or "claude exited non-zero")[:300]}, 502
     res = parse_result(proc.stdout)
     answer = res["answer"] or "(no answer)"
-    live_ids = _live_ids()
     sources, cited, actions = assemble_sources(answer, candidates, db_path, live_ids)
     return {
         "ok": True,
