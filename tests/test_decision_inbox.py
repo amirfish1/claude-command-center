@@ -390,5 +390,99 @@ class Persistence(unittest.TestCase):
             self.assertFalse(cfg["strategy_board"].startswith("~"))
 
 
+class ExternalIngest(unittest.TestCase):
+    """POST /api/decision-inbox from producers outside CCC (OPS-928)."""
+
+    PRODUCER = {"source_id": "digest:studio-a:no-sessions",
+                "title": "bym-studio-digest: studio-a soft failure",
+                "context": "0 sessions extracted in 24h"}
+
+    def test_producer_shorthand_payload_creates_card_with_default_options(self):
+        cards = {}
+        res = di.decision_inbox_ingest(self.PRODUCER, cards=cards, now=NOW, persist=False)
+        self.assertTrue(res["ok"])
+        self.assertFalse(res["deduped"])
+        card = cards[res["card_id"]]
+        self.assertEqual(card["source_id"], "digest:studio-a:no-sessions")
+        self.assertEqual(card["kind"], "external")
+        self.assertEqual(card["context"], "0 sessions extracted in 24h")
+        self.assertEqual(card["severity"], "info")
+        self.assertEqual([o["action"]["kind"] for o in card["options"]], ["human", "spawn", "snooze"])
+        self.assertEqual(sum(o["recommended"] for o in card["options"]), 1)
+        self.assertIn("studio-a", card["options"][1]["action"]["prompt"])
+
+    def test_documented_shape_with_source_detail_severity_and_options(self):
+        cards = {}
+        payload = {"source": "monitor", "source_id": "disk-full", "title": "Disk 95%",
+                   "detail": "/ is at 95%", "severity": "critical", "cwd": "/repo",
+                   "options": [{"label": "Clean caches", "recommended": True,
+                                "action": {"kind": "spawn", "prompt": "rm caches"}},
+                               {"label": "Ignore", "action": {"kind": "human"}}]}
+        res = di.decision_inbox_ingest(payload, cards=cards, now=NOW, persist=False)
+        card = cards[res["card_id"]]
+        self.assertEqual(card["source_id"], "monitor:disk-full")
+        self.assertEqual(card["severity"], "critical")
+        self.assertEqual(len(card["options"]), 2)
+        self.assertEqual(card["options"][0]["action"]["cwd"], "/repo")
+        self.assertTrue(card["options"][0]["recommended"])
+
+    def test_dedupe_bumps_open_card_instead_of_stacking(self):
+        cards = {}
+        first = di.decision_inbox_ingest(self.PRODUCER, cards=cards, now=NOW, persist=False)
+        again = di.decision_inbox_ingest(dict(self.PRODUCER, context="still nothing"),
+                                         cards=cards, now=NOW + 3600, persist=False)
+        self.assertTrue(again["deduped"])
+        self.assertEqual(again["card_id"], first["card_id"])
+        self.assertEqual(len(cards), 1)
+        self.assertEqual(cards[first["card_id"]]["seen_count"], 2)
+        self.assertEqual(cards[first["card_id"]]["context"], "still nothing")
+
+    def test_dismissed_recently_dedupes_but_expired_window_refiles(self):
+        cards = {}
+        res = di.decision_inbox_ingest(self.PRODUCER, cards=cards, now=NOW, persist=False)
+        di.decision_inbox_dismiss(res["card_id"], cards=cards, now=NOW, persist=False)
+        again = di.decision_inbox_ingest(self.PRODUCER, cards=cards, now=NOW + 86400, persist=False)
+        self.assertTrue(again["deduped"])
+        self.assertEqual(again["status"], "dismissed")
+        later = di.decision_inbox_ingest(self.PRODUCER, cards=cards, now=NOW + 10 * 86400, persist=False)
+        self.assertFalse(later["deduped"])
+        self.assertEqual(len(cards), 2)
+
+    def test_snooze_hides_for_24h_then_allows_a_new_card(self):
+        cards = {}
+        res = di.decision_inbox_ingest(self.PRODUCER, cards=cards, now=NOW, persist=False)
+        card = cards[res["card_id"]]
+        idx = [o["action"]["kind"] for o in card["options"]].index("snooze")
+        dec = di.decision_inbox_decide(res["card_id"], idx, cards=cards, now=NOW, persist=False)
+        self.assertTrue(dec["ok"])
+        self.assertEqual(card["status"], "snoozed")
+        self.assertEqual(di._di_parse_iso(card["snoozed_until"]), NOW + 24 * 3600)
+        self.assertIn(card["source_id"], di.blocked_source_ids(cards, now=NOW + 3600, dedupe_days=7))
+        self.assertTrue(di.decision_inbox_ingest(self.PRODUCER, cards=cards, now=NOW + 3600, persist=False)["deduped"])
+        self.assertNotIn(card["source_id"], di.blocked_source_ids(cards, now=NOW + 25 * 3600, dedupe_days=7))
+        self.assertFalse(di.decision_inbox_ingest(self.PRODUCER, cards=cards, now=NOW + 25 * 3600, persist=False)["deduped"])
+
+    def test_validation_errors(self):
+        bad = [
+            ({}, "missing title"),
+            ({"title": "x"}, "missing source_id"),
+            ({"title": "x", "source_id": "a", "severity": "meh"}, "severity"),
+            ({"title": "x", "source_id": "a", "source": "bad source!"}, "source must"),
+            ({"title": "x", "source_id": "a", "options": "nope"}, "options must be a list"),
+            ({"title": "x", "source_id": "a", "options": [{"label": "z", "action": {"kind": "dance"}}]}, "each option"),
+            ({"title": "x", "source_id": "a", "options": [{"label": "z", "action": {"kind": "inject"}}]}, "each option"),
+            ("not a dict", "JSON object"),
+        ]
+        for payload, needle in bad:
+            res = di.decision_inbox_ingest(payload, cards={}, now=NOW, persist=False)
+            self.assertFalse(res["ok"], payload)
+            self.assertIn(needle, res["error"], payload)
+
+    def test_bare_source_id_is_filed_under_external(self):
+        cards = {}
+        res = di.decision_inbox_ingest({"title": "t", "source_id": "thing-1"}, cards=cards, now=NOW, persist=False)
+        self.assertEqual(cards[res["card_id"]]["source_id"], "external:thing-1")
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -36,6 +36,9 @@
   .tag.wt { color: #ffd27a; border-color: #6b5320; }
   .tag.session { color: #7ad0ff; border-color: #24506b; }
   .tag.governor { color: var(--warn); border-color: #6b4a14; }
+  .tag.external { color: #9fe0b8; border-color: #235c3a; }
+  .tag.sev-warn { color: var(--warn); border-color: #6b4a14; }
+  .tag.sev-critical { color: var(--bad); border-color: #6b2222; }
   .tag.status { color: var(--ok); border-color: #1e5a30; }
   .opts { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 10px; }
   .opt { border: 1px solid var(--line); border-radius: 10px; padding: 12px 14px; display: flex; flex-direction: column; gap: 6px; background: #11151b; }
@@ -117,7 +120,7 @@
 
   function actionVerb(a) {
     var k = (a && a.kind) || "human";
-    return { spawn: "Spawn session", inject: "Steer session", pause: "Pause", kill: "Kill", human: "I'll do it" }[k] || k;
+    return { spawn: "Spawn session", inject: "Steer session", pause: "Pause", kill: "Kill", human: "I'll do it", snooze: "Snooze" }[k] || k;
   }
 
   function renderCard(c) {
@@ -142,7 +145,10 @@
       esc(c.analyst.model || "") + " · " + (c.analyst.duration_s || 0) + "s") : "governor";
     var dres = c.decided && c.decided.result;
     return '<div class="card' + (closed ? " closed" : "") + '" id="card-' + esc(c.id) + '">' +
-      '<div class="top"><span class="title">' + esc(c.title) + '</span><span class="tag ' + esc(c.kind) + '">' + esc(c.kind) + "</span>" +
+      '<div class="top"><span class="title">' + esc(c.title) + '</span>' +
+      (c.severity && c.severity !== "info" ? '<span class="tag sev-' + esc(c.severity) + '">' + esc(c.severity) + "</span>" : "") +
+      (c.seen_count > 1 ? '<span class="tag">seen ' + esc(c.seen_count) + "x</span>" : "") +
+      '<span class="tag ' + esc(c.kind) + '">' + esc(c.kind) + "</span>" +
       (closed ? '<span class="tag">' + esc(c.status) + "</span>" : "") + "</div>" +
       '<div class="ctx">' + esc(c.context || "") + "</div>" +
       '<div class="opts">' + opts + "</div>" +

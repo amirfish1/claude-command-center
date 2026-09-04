@@ -846,6 +846,10 @@ def blocked_source_ids(cards, *, now, dedupe_days):
         if c.get("status") == "open":
             blocked.add(sid)
             continue
+        if c.get("status") == "snoozed":
+            if now < (_di_parse_iso(c.get("snoozed_until")) or 0):
+                blocked.add(sid)
+            continue
         ts = _di_parse_iso(c.get("updated_at")) or 0
         if c.get("status") in CLOSED_STATUSES and (now - ts) < window:
             blocked.add(sid)
@@ -1063,6 +1067,12 @@ def perform_action(action, *, title="", cfg=None, spawn=None, inject=None,
     prompt = str((action or {}).get("prompt") or "")
     if kind == "human":
         return {"ok": True, "effect": "noted", "detail": "owner will handle it"}
+    if kind == "snooze":
+        try:
+            seconds = max(60, int((action or {}).get("seconds") or SNOOZE_DEFAULT_S))
+        except (TypeError, ValueError):
+            seconds = SNOOZE_DEFAULT_S
+        return {"ok": True, "effect": "snoozed", "seconds": seconds}
     if kind == "spawn":
         if not prompt:
             return {"ok": False, "error": "option has no brief to spawn"}
@@ -1107,7 +1117,11 @@ def decision_inbox_decide(card_id, option_index, *, cards=None, now=None, persis
     except (TypeError, ValueError, IndexError, KeyError):
         return {"ok": False, "error": "unknown option"}
     result = perform_action(option.get("action"), title=card.get("title", ""), **hooks)
-    card["status"] = "decided" if result.get("ok") else "open"
+    if result.get("ok") and result.get("effect") == "snoozed":
+        card["status"] = "snoozed"
+        card["snoozed_until"] = _di_iso(now + result.get("seconds", SNOOZE_DEFAULT_S))
+    else:
+        card["status"] = "decided" if result.get("ok") else "open"
     card["updated_at"] = _di_iso(now)
     card["decided"] = {"option": idx, "label": option.get("label"), "at": _di_iso(now), "result": result}
     if persist:
@@ -1138,3 +1152,197 @@ def decision_inbox_governor_act(session_id, action, *, reason="", **hooks):
     if action in ("pause", "kill"):
         return perform_action({"kind": action, "session_id": session_id}, **hooks)
     return {"ok": False, "error": "action must be nudge, pause, or kill"}
+
+
+# ── external ingest: POST /api/decision-inbox (and /cards) ───────────────────
+#
+# Producers outside CCC (a digest job, a monitor, a cron) push a card with
+# {source, source_id, title, detail|context, options?, severity?}. The card
+# is deduped by the fully-qualified source id (``<source>:<source_id>``), so
+# a producer that fires every run only ever holds one open card; repeats bump
+# ``seen_count`` and ``last_seen_at`` instead of stacking. When a producer
+# sends no options it gets the default trio: acknowledge / spawn an
+# investigator / snooze 24h.
+
+SEVERITIES = ("info", "warn", "critical")
+SNOOZE_DEFAULT_S = 24 * 3600
+_SOURCE_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,39}$")
+
+
+def _qualified_source_id(source, source_id):
+    source = str(source or "").strip()
+    source_id = str(source_id or "").strip()
+    if not source_id:
+        return None, "missing source_id"
+    if source and not _SOURCE_RE.match(source):
+        return None, "source must match [A-Za-z0-9._-]{1,40}"
+    if len(source_id) > 200:
+        return None, "source_id too long (max 200)"
+    if source:
+        return f"{source}:{source_id}", ""
+    # No explicit source: a namespaced id ("digest:studio:reason") keeps its
+    # own prefix; a bare id is filed under "external".
+    if ":" in source_id:
+        return source_id, ""
+    return "external:" + source_id, ""
+
+
+def _sanitize_option(raw, *, default_session_id=None):
+    if not isinstance(raw, dict) or not str(raw.get("label") or "").strip():
+        return None
+    action = raw.get("action") if isinstance(raw.get("action"), dict) else {}
+    kind = str(action.get("kind") or "human").strip().lower()
+    if kind not in ("spawn", "inject", "human", "snooze"):
+        return None
+    out_action = {"kind": kind, "prompt": str(action.get("prompt") or "")[:4000]}
+    sid = action.get("session_id") or default_session_id
+    if kind == "inject":
+        if not sid:
+            return None
+        out_action["session_id"] = str(sid)[:80]
+    if action.get("cwd"):
+        out_action["cwd"] = str(action["cwd"])[:500]
+    if kind == "snooze":
+        try:
+            out_action["seconds"] = max(60, int(action.get("seconds") or SNOOZE_DEFAULT_S))
+        except (TypeError, ValueError):
+            out_action["seconds"] = SNOOZE_DEFAULT_S
+    return {
+        "label": str(raw.get("label")).strip()[:80],
+        "detail": str(raw.get("detail") or "")[:400],
+        "cost": str(raw.get("cost") or "")[:80],
+        "recommended": bool(raw.get("recommended")),
+        "action": out_action,
+    }
+
+
+def default_external_options(title, detail, *, source_id, cwd=""):
+    brief = (
+        f"Investigate this alert that an external producer filed in the CCC Decision Inbox: {title}. "
+        f"Detail: {detail or '(none)'} Source id: {source_id}. Find the root cause, fix it if it is "
+        "within reach, and end with a one-paragraph status plus the single next decision for the owner."
+    )
+    spawn_action = {"kind": "spawn", "prompt": brief}
+    if cwd:
+        spawn_action["cwd"] = cwd
+    return [
+        {"label": "Acknowledge", "detail": "Seen. Close the card; nothing spawns.",
+         "cost": "$0", "recommended": True, "action": {"kind": "human", "prompt": ""}},
+        {"label": "Spawn investigator", "detail": "A fresh session digs into the root cause.",
+         "cost": "one Sonnet session", "recommended": False, "action": spawn_action},
+        {"label": "Snooze 24h", "detail": "Hide it for a day; a repeat after that files a new card.",
+         "cost": "$0", "recommended": False, "action": {"kind": "snooze", "prompt": "", "seconds": SNOOZE_DEFAULT_S}},
+    ]
+
+
+def validate_external_card(payload):
+    """(card_fields, error). Accepts both the documented shape
+    ``{source, source_id, title, detail, options?, severity?}`` and the
+    producer shorthand ``{source_id, title, context}``."""
+    if not isinstance(payload, dict):
+        return None, "body must be a JSON object"
+    title = str(payload.get("title") or "").strip()
+    if not title:
+        return None, "missing title"
+    qualified, err = _qualified_source_id(payload.get("source"), payload.get("source_id"))
+    if err:
+        return None, err
+    detail = str(payload.get("detail") or payload.get("context") or "").strip()[:2000]
+    severity = str(payload.get("severity") or "info").strip().lower()
+    if severity not in SEVERITIES:
+        return None, f"severity must be one of {', '.join(SEVERITIES)}"
+    session_id = str(payload.get("session_id") or "").strip() or None
+    cwd = str(payload.get("cwd") or "").strip()[:500]
+    raw_opts = payload.get("options")
+    options = []
+    if raw_opts not in (None, []):
+        if not isinstance(raw_opts, list):
+            return None, "options must be a list"
+        for o in raw_opts[:3]:
+            clean = _sanitize_option(o, default_session_id=session_id)
+            if clean is None:
+                return None, "each option needs a label and an action kind of spawn|inject|human|snooze"
+            if cwd and clean["action"]["kind"] == "spawn":
+                clean["action"].setdefault("cwd", cwd)
+            options.append(clean)
+    if not options:
+        options = default_external_options(title, detail, source_id=qualified, cwd=cwd)
+    if sum(1 for o in options if o["recommended"]) != 1:
+        for o in options:
+            o["recommended"] = False
+        options[0]["recommended"] = True
+    return {
+        "source_id": qualified,
+        "source": str(payload.get("source") or qualified.split(":", 1)[0])[:40],
+        "title": title[:160],
+        "context": detail,
+        "severity": severity,
+        "options": options,
+        "session_id": session_id,
+        "cwd": cwd,
+        "extra": {k: v for k, v in payload.items()
+                  if k in ("url", "link", "studio", "run_id", "tags") and isinstance(v, (str, int, float, list))},
+    }, ""
+
+
+def decision_inbox_ingest(payload, *, cards=None, now=None, persist=True, cfg=None):
+    """Create (or dedupe onto) an externally produced card.
+
+    Returns ``{ok, card_id, deduped, status}``. A source id with an open card
+    bumps that card's seen_count instead of stacking a duplicate; one that
+    was decided/dismissed/snoozed inside the dedupe window is reported as
+    deduped with that status and no new card is filed."""
+    now = time.time() if now is None else now
+    cfg = cfg or load_config()
+    fields, err = validate_external_card(payload)
+    if err:
+        return {"ok": False, "error": err}
+    cards = load_cards() if cards is None else cards
+    qualified = fields["source_id"]
+    existing = None
+    for c in cards.values():
+        if isinstance(c, dict) and c.get("source_id") == qualified:
+            if c.get("status") == "open":
+                existing = c
+                break
+            if existing is None or (_di_parse_iso(c.get("updated_at")) or 0) > (_di_parse_iso(existing.get("updated_at")) or 0):
+                existing = c
+    if existing is not None:
+        status = existing.get("status")
+        blocked = status == "open"
+        if status == "snoozed":
+            blocked = now < (_di_parse_iso(existing.get("snoozed_until")) or 0)
+        elif status in CLOSED_STATUSES:
+            blocked = (now - (_di_parse_iso(existing.get("updated_at")) or 0)) < float(cfg.get("dedupe_days") or 0) * 86400
+        if blocked:
+            existing["seen_count"] = int(existing.get("seen_count") or 1) + 1
+            existing["last_seen_at"] = _di_iso(now)
+            if status == "open":
+                # Refresh the text so the card shows the latest detail.
+                existing["context"] = fields["context"] or existing.get("context", "")
+                existing["severity"] = fields["severity"]
+                existing["updated_at"] = _di_iso(now)
+            if persist:
+                save_cards(cards)
+            return {"ok": True, "card_id": existing["id"], "deduped": True, "status": status}
+    card = {
+        "id": "dc_" + uuid.uuid4().hex[:10],
+        "source_id": qualified,
+        "kind": "external",
+        "title": fields["title"],
+        "context": fields["context"],
+        "severity": fields["severity"],
+        "options": fields["options"],
+        "status": "open",
+        "created_at": _di_iso(now),
+        "updated_at": _di_iso(now),
+        "last_seen_at": _di_iso(now),
+        "seen_count": 1,
+        "run_id": None,
+        "source": dict(fields["extra"], source=fields["source"], session_id=fields["session_id"], cwd=fields["cwd"]),
+        "analyst": None,
+    }
+    cards[card["id"]] = card
+    if persist:
+        save_cards(cards)
+    return {"ok": True, "card_id": card["id"], "deduped": False, "status": "open"}

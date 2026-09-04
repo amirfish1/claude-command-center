@@ -661,6 +661,15 @@ Open it from the **Decisions** icon in the app rail or at
 }
 ```
 
+External producers (a digest job, a monitor, a cron) can file their own
+cards: `POST /api/decision-inbox` (alias `/api/decision-inbox/cards`) with
+`{"source": "digest", "source_id": "studio-a:no-sessions", "title": "...",
+"detail": "...", "severity": "warn", "options": [...]}`. The reply is
+`{ok, card_id, deduped}`. Cards dedupe by `source:source_id`, so a producer
+that fires every run holds one open card that counts repeats. Omit
+`options` to get the default trio: acknowledge, spawn an investigator, or
+snooze for 24 hours.
+
 Set `CCC_DECISION_INBOX_DISABLED=1` to keep the loop off entirely. Cards and
 run history live in `~/.claude/command-center/decision-inbox/`. API:
 `GET /api/decision-inbox`, `POST /api/decision-inbox/{run,decide,dismiss,governor}`.

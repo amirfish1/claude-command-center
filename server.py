@@ -31545,6 +31545,21 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
             else:
                 res = system_health_quit_app(app_id)
                 self.send_json(res, 200 if res.get("ok") else 400)
+        elif path in ("/api/decision-inbox", "/api/decision-inbox/cards"):
+            # External producers (a digest job, a monitor) file a card:
+            # {source, source_id, title, detail|context, options?, severity?}.
+            # Deduped by source id; see decision_inbox_ingest.
+            length = int(self.headers.get("Content-Length", "0"))
+            body = self.rfile.read(length) if length > 0 else b""
+            try:
+                payload = json.loads(body) if body else {}
+            except json.JSONDecodeError:
+                payload = None
+            if payload is None:
+                self.send_json({"ok": False, "error": "body must be valid JSON"}, 400)
+            else:
+                result = decision_inbox_ingest(payload)
+                self.send_json(result, 200 if result.get("ok") else 400)
         elif path in ("/api/decision-inbox/run", "/api/decision-inbox/decide",
                       "/api/decision-inbox/dismiss", "/api/decision-inbox/governor"):
             length = int(self.headers.get("Content-Length", "0"))
