@@ -351,6 +351,25 @@ def _mine_real_model_history_last_7_days():
         except Exception:
             pass
 
+    # 4. Read Antigravity transcripts (has active/recent AGY runs and models)
+    try:
+        ag_paths = _core._antigravity_transcript_paths() if hasattr(_core, "_antigravity_transcript_paths") else []
+        for p in ag_paths:
+            try:
+                st = p.stat()
+                if st.st_mtime > thirty_days_ago_ts:
+                    mod = ""
+                    if hasattr(_core, "_extract_antigravity_tail_meta"):
+                        tail = _core._extract_antigravity_tail_meta(p) or {}
+                        mod = tail.get("model") or ""
+                    if not mod:
+                        mod = "Gemini 3.8 Flash (High)"
+                    _normalize_and_add("antigravity", mod, "", st.st_mtime)
+            except Exception:
+                pass
+    except Exception:
+        pass
+
     ranked = sorted(
         counts.items(), key=lambda x: (x[1], last_seen.get(x[0], 0)), reverse=True
     )
@@ -476,15 +495,14 @@ def get_model_picker_picks() -> list:
     if not counts:
         return _core._mine_real_model_history_last_7_days()[:8]
 
-    # Most recently recorded pick always leads, so a just-selected model is
-    # visible immediately instead of waiting to out-count the habitual picks.
-    most_recent_key = max(last_seen, key=last_seen.get)
-    other_keys = sorted(
-        (k for k in counts if k != most_recent_key),
-        key=lambda k: (counts[k], last_seen.get(k, 0)),
+    # Order picks primarily by recency (last_seen), with frequency breaking ties.
+    # This guarantees that if the user used Antigravity, next time it remains in the
+    # top 8 picks instead of being ejected by historical counts.
+    ordered_keys = sorted(
+        counts.keys(),
+        key=lambda k: (last_seen.get(k, 0), counts[k]),
         reverse=True,
     )
-    ordered_keys = [most_recent_key] + other_keys
 
     picks = [
         {
@@ -496,6 +514,20 @@ def get_model_picker_picks() -> list:
         }
         for (eng, mod, eff) in ordered_keys[:8]
     ]
+
+    if len(picks) < 8:
+        seen_keys = {(p["engine"], p["model"], p.get("effort", "")) for p in picks}
+        try:
+            mined = _core._mine_real_model_history_last_7_days()
+            for m in mined:
+                m_key = (m["engine"], m["model"], m.get("effort", ""))
+                if m_key not in seen_keys:
+                    picks.append(m)
+                    seen_keys.add(m_key)
+                    if len(picks) >= 8:
+                        break
+        except Exception:
+            pass
 
     return picks
 

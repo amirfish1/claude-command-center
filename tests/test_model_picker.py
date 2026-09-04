@@ -40,15 +40,23 @@ class TestModelPickerContracts(unittest.TestCase):
 
                 picks = server.get_model_picker_picks()
                 self.assertGreaterEqual(len(picks), 2)
+                # Most recently recorded pick is first
                 top = picks[0]
-                self.assertEqual(top["engine"], "claude")
-                self.assertEqual(top["model"], "opus-5")
-                self.assertEqual(top["effort"], "high")
-                self.assertEqual(top["count"], 2)
+                self.assertEqual(top["engine"], "codex")
+                self.assertEqual(top["model"], "gpt-5.6-terra")
 
                 second = picks[1]
-                self.assertEqual(second["engine"], "codex")
-                self.assertEqual(second["model"], "gpt-5.6-terra")
+                self.assertEqual(second["engine"], "claude")
+                self.assertEqual(second["model"], "opus-5")
+                self.assertEqual(second["effort"], "high")
+                self.assertEqual(second["count"], 2)
+
+                # If antigravity was used, next time it remains in top 8
+                server.record_model_picker_pick("antigravity", "Gemini 3.8 Flash (High)", "")
+                server.record_model_picker_pick("claude", "opus-5", "high")
+                updated_picks = server.get_model_picker_picks()
+                engines = [p["engine"] for p in updated_picks[:8]]
+                self.assertIn("antigravity", engines)
 
 
 if __name__ == "__main__":

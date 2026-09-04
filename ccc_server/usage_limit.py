@@ -1051,6 +1051,11 @@ def _record_spawn_to_registry(
         "parent_session_id": parent_session_id or "",
         "spawned_via": clean_via,
     }
+    if engine and not prewarm:
+        try:
+            _core.record_model_picker_pick(engine, model or "", reasoning_effort or "")
+        except Exception:
+            pass
     input_state = {
         "input_result_target": input_result_target,
         "input_accepted_at": input_accepted_at,
