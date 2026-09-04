@@ -82,8 +82,37 @@ def ledger_path() -> Path:
     )
 
 
+def _strip_lone_surrogates_deep(value):
+    """Recursively drop unpaired UTF-16 surrogates from payload strings.
+
+    JS callers can deliver a lone surrogate (an emoji sliced mid-pair in
+    UTF-16); ``json.loads`` keeps it, and the strict UTF-8 encode of the
+    socket write (or sqlite3's TEXT binding) then raises ``UnicodeEncodeError:
+    surrogates not allowed``, killing the request before the worker ever sees
+    it (OPS-935). The encode-with-ignore round-trip drops exactly those
+    unencodable code points and leaves valid text untouched.
+    """
+    if isinstance(value, str):
+        return value.encode("utf-8", "ignore").decode("utf-8")
+    if isinstance(value, dict):
+        return {key: _strip_lone_surrogates_deep(val) for key, val in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_strip_lone_surrogates_deep(item) for item in value]
+    return value
+
+
+def _has_lone_surrogate(text):
+    return any(0xD800 <= ord(ch) <= 0xDFFF for ch in text)
+
+
 def _json(value):
-    return json.dumps(value, ensure_ascii=False, separators=(",", ":"), sort_keys=True)
+    text = json.dumps(value, ensure_ascii=False, separators=(",", ":"), sort_keys=True)
+    if _has_lone_surrogate(text):
+        text = json.dumps(
+            _strip_lone_surrogates_deep(value),
+            ensure_ascii=False, separators=(",", ":"), sort_keys=True,
+        )
+    return text
 
 
 def _decode_json(value, fallback):

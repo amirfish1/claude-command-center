@@ -16035,6 +16035,28 @@ def _strip_lone_surrogates(s):
     return _LONE_SURROGATE_RE.sub("", s)
 
 
+def _strip_spawn_payload_surrogates(payload):
+    """Drop unpaired UTF-16 surrogates from every string in a spawn payload.
+
+    Browser callers build spawn names/prompts by manipulating UTF-16 JS
+    strings; an emoji cut mid-pair arrives as a lone surrogate that
+    ``json.loads`` keeps, and the next strict UTF-8 encode downstream
+    (control-plane socket write, engine stdin, sqlite store) then raises
+    ``UnicodeEncodeError: surrogates not allowed`` — killing the spawn before
+    any registry row exists (OPS-935). Strip them at the HTTP boundary so the
+    effective spawn request is always encodable.
+    """
+    def _clean(value):
+        if isinstance(value, str):
+            return _strip_lone_surrogates(value)
+        if isinstance(value, dict):
+            return {key: _clean(val) for key, val in value.items()}
+        if isinstance(value, list):
+            return [_clean(item) for item in value]
+        return value
+    return _clean(payload)
+
+
 def _annotation_text(value, max_len=4000):
     s = "" if value is None else str(value)
     s = _strip_lone_surrogates(s).replace("\x00", "").strip()
@@ -29500,6 +29522,7 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                 payload = json.loads(body) if body else {}
             except json.JSONDecodeError:
                 payload = {}
+            payload = _strip_spawn_payload_surrogates(payload)
             # Placement: `node` (a paired peer's node_id or name) routes the
             # spawn to that CCC. Return routing and hierarchy are rewritten
             # to global refs so the child can report across machines.
@@ -29931,6 +29954,7 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                 payload = json.loads(body) if body else {}
             except json.JSONDecodeError:
                 payload = {}
+            payload = _strip_spawn_payload_surrogates(payload)
             prompt = _decode_over_url_encoded_text(payload.get("prompt") or "").strip()
             name = (payload.get("name") or "").strip() or None
             cwd_raw = payload.get("cwd")
@@ -30018,6 +30042,7 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                 payload = json.loads(body) if body else {}
             except json.JSONDecodeError:
                 payload = {}
+            payload = _strip_spawn_payload_surrogates(payload)
             prompt = _decode_over_url_encoded_text(payload.get("prompt") or "").strip()
             name = (payload.get("name") or "").strip() or None
             cwd_raw = payload.get("cwd")
@@ -30085,6 +30110,7 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                 payload = json.loads(body) if body else {}
             except json.JSONDecodeError:
                 payload = {}
+            payload = _strip_spawn_payload_surrogates(payload)
             prompt = _decode_over_url_encoded_text(payload.get("prompt") or "").strip()
             name = (payload.get("name") or "").strip() or None
             cwd_raw = payload.get("cwd")
@@ -30154,6 +30180,7 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                 payload = json.loads(body) if body else {}
             except json.JSONDecodeError:
                 payload = {}
+            payload = _strip_spawn_payload_surrogates(payload)
             prompt = _decode_over_url_encoded_text(payload.get("prompt") or "").strip()
             name = (payload.get("name") or "").strip() or None
             cwd_raw = payload.get("cwd")
@@ -30223,6 +30250,7 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                 payload = json.loads(body) if body else {}
             except json.JSONDecodeError:
                 payload = {}
+            payload = _strip_spawn_payload_surrogates(payload)
             prompt = _decode_over_url_encoded_text(payload.get("prompt") or "").strip()
             name = (payload.get("name") or "").strip() or None
             cwd_raw = payload.get("cwd")
@@ -30292,6 +30320,7 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                 payload = json.loads(body) if body else {}
             except json.JSONDecodeError:
                 payload = {}
+            payload = _strip_spawn_payload_surrogates(payload)
             prompt = _decode_over_url_encoded_text(payload.get("prompt") or "").strip()
             name = (payload.get("name") or "").strip() or None
             cwd_raw = payload.get("cwd")
@@ -30365,6 +30394,7 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                 payload = json.loads(body) if body else {}
             except json.JSONDecodeError:
                 payload = {}
+            payload = _strip_spawn_payload_surrogates(payload)
             prompt = _decode_over_url_encoded_text(payload.get("prompt") or "").strip()
             name = (payload.get("name") or "").strip() or None
             if not prompt:
@@ -30405,6 +30435,7 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                 payload = json.loads(body) if body else {}
             except json.JSONDecodeError:
                 payload = {}
+            payload = _strip_spawn_payload_surrogates(payload)
             prompt = _decode_over_url_encoded_text(payload.get("prompt") or "").strip()
             name = (payload.get("name") or "").strip() or None
             if not prompt:
@@ -30445,6 +30476,7 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                 payload = json.loads(body) if body else {}
             except json.JSONDecodeError:
                 payload = {}
+            payload = _strip_spawn_payload_surrogates(payload)
             prompt = _decode_over_url_encoded_text(payload.get("prompt") or "").strip()
             name = (payload.get("name") or "").strip() or None
             cwd_raw = payload.get("cwd")
@@ -31479,6 +31511,7 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                 payload = json.loads(body) if body else {}
             except json.JSONDecodeError:
                 payload = {}
+            payload = _strip_spawn_payload_surrogates(payload)
             prompt = _decode_over_url_encoded_text(payload.get("prompt") or "").strip()
             if not prompt:
                 self.send_json({"ok": False, "error": "missing prompt"})
