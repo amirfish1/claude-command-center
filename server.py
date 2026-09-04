@@ -6532,7 +6532,7 @@ def _spawn_repo_context(cwd=None, repo_path=None):
     return {"repo_path": resolved, "cwd": str(p)}
 
 
-_ORCHESTRATION_SPAWN_ENGINES = ("claude", "codex", "cursor", "antigravity", "kilo", "opencode", "aider", "hermes", "kimi", "devin", "droid", "grok")
+_ORCHESTRATION_SPAWN_ENGINES = ("claude", "codex", "cursor", "antigravity", "kilo", "opencode", "aider", "hermes", "kimi", "devin", "droid", "grok", "pi")
 _ORCHESTRATION_SPAWN_ENGINE_ALIASES = {
     "claude": "claude",
     "claude-code": "claude",
@@ -6569,6 +6569,7 @@ _ORCHESTRATION_SPAWN_ENGINE_ALIASES = {
     "devin-cli": "devin",
     "devin_cli": "devin",
     "cognition": "devin",
+    "pi": "pi",
 }
 
 
@@ -6626,6 +6627,8 @@ def _spawn_fallback_model_for_engine(engine):
         return os.environ.get("CCC_DEVIN_MODEL", "adaptive")
     if engine == "droid":
         return os.environ.get("CCC_DROID_MODEL", "claude-opus-5")
+    if engine == "pi":
+        return os.environ.get("CCC_PI_MODEL", "")
     return ""
 
 
@@ -6746,6 +6749,7 @@ _ENGINE_SUPPORTS_CUSTOM_MODELS = {
     "grok": True,
     "devin": True,
     "droid": True,
+    "pi": True,
 }
 
 # Which effort ladder each engine actually accepts. Claude takes a top-level
@@ -7519,6 +7523,11 @@ def _build_engine_model_catalog(force_refresh=False):
         catalog[engine] = {
             "default": _spawn_fallback_model_for_engine(engine),
             "supports_custom": _ENGINE_SUPPORTS_CUSTOM_MODELS.get(engine, True),
+            # W3-3: whether spawning this engine with a `key_profile` injects
+            # BYOK provider keys into the subprocess env (ccc_server/byok.py,
+            # BYOK_DIRECT_ENV_ENGINES). Surfaced so the model picker / `ccc
+            # models` can show which engines actually honor BYOK today.
+            "byok_ready": engine in BYOK_DIRECT_ENV_ENGINES,
             "models": [],
             "_index": {},
         }
@@ -22776,6 +22785,7 @@ _adopt_ccc_module("grok")
 _adopt_ccc_module("devin")
 
 _adopt_ccc_module("droid")
+_adopt_ccc_module("pi")
 
 _adopt_ccc_module("vscode_copilot")
 
@@ -25578,6 +25588,10 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
             # bin resolvers + read-only session stores). Backs the First
             # Flight tour welcome chips.
             self.send_json(_engines_installed())
+        elif path == "/api/engines/doctor":
+            # W3-3: per-engine CLI/auth/BYOK health, read-only (never spawns
+            # a real subprocess). Backs `ccc doctor`.
+            self.send_json(build_ccc_doctor())
         elif path == "/api/byok/profiles":
             # BYOK (W2-2): key profiles and the provider catalog for the
             # Settings screen. Never returns secret material — set_key/
@@ -29610,7 +29624,52 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                             model=model,
                             parent_session_id=parent_session_id,
                             reasoning_effort=reasoning_effort,
+                            env=byok_extra_env,
                         )
+                        if result.get("ok") and byok_extra_env:
+                            byok_record_usage(
+                                session_id=result.get("session_id"),
+                                engine="droid",
+                                model=model,
+                                key_profile=key_profile,
+                            )
+                    elif engine == "aider":
+                        result = spawn_session_aider(
+                            prompt,
+                            name=name,
+                            cwd=spawn_cwd,
+                            repo_path=payload.get("repo_path"),
+                            worktree=worktree_flag,
+                            model=model,
+                            parent_session_id=parent_session_id,
+                            env=byok_extra_env,
+                        )
+                        if result.get("ok") and byok_extra_env:
+                            byok_record_usage(
+                                session_id=result.get("session_id"),
+                                engine="aider",
+                                model=model,
+                                key_profile=key_profile,
+                            )
+                    elif engine == "pi":
+                        result = spawn_session_pi(
+                            prompt,
+                            name=name,
+                            cwd=spawn_cwd,
+                            repo_path=payload.get("repo_path"),
+                            worktree=worktree_flag,
+                            model=model,
+                            parent_session_id=parent_session_id,
+                            reasoning_effort=reasoning_effort,
+                            env=byok_extra_env,
+                        )
+                        if result.get("ok") and byok_extra_env:
+                            byok_record_usage(
+                                session_id=result.get("session_id"),
+                                engine="pi",
+                                model=model,
+                                key_profile=key_profile,
+                            )
                     elif engine == "remote" or payload.get("remote") or (os.environ.get("CCC_SSH_HOST") and payload.get("remote") is not False and engine in ("claude", "hermes", "remote", None)):
                         remote_engine = "hermes" if engine == "hermes" else "claude"
                         result = spawn_session_remote(
@@ -34618,6 +34677,69 @@ def _get_onboarding_status():
                 "login_instruction": "cursor-agent login"
             }
         }
+    }
+
+
+# ---------------------------------------------------------------------------
+# ccc doctor / GET /api/engines/doctor (W3-3): per-engine health for every
+# spawnable engine, not just the 5 covered by onboarding. Reuses the same
+# bin resolvers as _engines_installed() and the same auth probes as
+# _get_onboarding_status() rather than re-implementing detection — this is
+# a fusion view, not a new probe.
+# ---------------------------------------------------------------------------
+
+def _doctor_auth_present(engine, onboarding_clis):
+    """(bool_or_None, source) -- None means "no probe implemented", not
+    "not logged in". Never guess a false negative for an engine this repo
+    has no real auth signal for."""
+    cli_info = onboarding_clis.get(engine)
+    if cli_info is not None:
+        return bool(cli_info.get("logged_in")), "cli-login-check"
+    if engine == "opencode":
+        try:
+            return bool(_opencode_configured_providers()), "opencode-auth-json"
+        except Exception:
+            return None, "check-failed"
+    return None, "no-probe-implemented"
+
+
+def build_ccc_doctor():
+    """Per-engine: CLI present, auth present (where checkable), BYOK profile
+    present, and a dry-run smoke check. Read-only -- never spawns a real
+    subprocess or spends a token; the "smoke" step only confirms the CLI
+    resolves, so it is safe to poll on every ``ccc doctor`` invocation.
+    """
+    installed = {row["engine"]: row for row in _engines_installed().get("engines", [])}
+    onboarding_clis = _get_onboarding_status().get("clis", {})
+    try:
+        byok_profiles = byok_list_profiles()
+    except Exception:
+        byok_profiles = []
+    engines = {}
+    for engine in _ORCHESTRATION_SPAWN_ENGINES:
+        row = installed.get(engine) or {}
+        cli_present = bool(row.get("installed"))
+        auth_present, auth_source = _doctor_auth_present(engine, onboarding_clis)
+        byok_ready = engine in BYOK_DIRECT_ENV_ENGINES
+        byok_profile_present = byok_ready and bool(byok_profiles)
+        engines[engine] = {
+            "cli_present": cli_present,
+            "cli_bin": row.get("detail") or None,
+            "auth_present": auth_present,
+            "auth_source": auth_source,
+            "byok_ready": byok_ready,
+            "byok_profile_present": byok_profile_present,
+            "smoke_dry_run": {
+                "ok": cli_present,
+                "note": (
+                    "dry-run only: confirms the CLI binary resolves; no "
+                    "subprocess is launched and no tokens are spent"
+                ),
+            },
+        }
+    return {
+        "generated_at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+        "engines": engines,
     }
 
 

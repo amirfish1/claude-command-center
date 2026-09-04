@@ -87,6 +87,9 @@ def _detect_engines_installed():
         ("hermes", "Hermes", _core._resolve_hermes_bin),
         ("devin", "Devin", _core._resolve_devin_bin),
         ("grok", "Grok", _core._resolve_grok_bin),
+        ("aider", "Aider", _core._resolve_aider_bin),
+        ("droid", "Droid", _core._resolve_droid_bin),
+        ("pi", "Pi", _core._resolve_pi_bin),
     ):
         installed, detail = _spawn_engine_installed(resolver)
         engines.append({

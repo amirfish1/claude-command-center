@@ -223,8 +223,92 @@ def _droid_model_catalog_records():
     return records
 
 
-def spawn_session_droid(prompt, name=None, cwd=None, repo_path=None, worktree=False, model=None, parent_session_id=None, reasoning_effort=None):
+def _droid_reasoning_efforts_for_model(model):
+    for row in _DROID_FACTORY_MODELS:
+        if row["id"] == model:
+            return set(row.get("reasoning_efforts") or ())
+    return set()
+
+
+def spawn_session_droid(prompt, name=None, cwd=None, repo_path=None, worktree=False, model=None, parent_session_id=None, reasoning_effort=None, env=None):
+    """Spawn a headless Factory Droid CLI run and return tracking info.
+
+    ``droid exec`` is confirmed as the headless entry point (this module
+    already shells out to ``droid exec --help`` for the model catalog scrape
+    above); the ``--auto high`` / ``--reasoning-effort`` flags below are this
+    CLI's documented non-interactive flags as of the Droid CLI version this
+    was written against, matched against the model's own advertised
+    reasoning-effort ladder so an unsupported value is never passed. `--auto
+    high` is required, not optional, for a headless spawn: stdin is
+    DEVNULL, so any lower autonomy level that pauses for an approval prompt
+    would hang the subprocess forever instead of failing loudly.
+
+    ``env``, when given, is merged over the inherited process environment --
+    used by the BYOK layer (ccc_server/byok.py) to hand Droid a provider API
+    key for this one spawn without touching global state.
+    """
+    prompt = _core._strip_ccc_session_state_instruction(prompt)
     resolved = _resolve_droid_bin()
     if not resolved["available"]:
         return {"ok": False, "error": resolved.get("reason", "Droid unavailable"), "code": resolved.get("code", "droid_unavailable")}
-    return {"ok": False, "error": "Droid spawn is not yet wired in this CCC build", "code": "droid_unavailable"}
+    ctx = _core._spawn_repo_context(cwd=cwd, repo_path=repo_path)
+    spawn_cwd = ctx["cwd"]
+    repo_for_logs = ctx["repo_path"]
+    session_name = _core._slugify(name or prompt) or "unnamed"
+    timestamp = time.strftime("%Y%m%dT%H%M%S")
+    log_filename = f"spawn-droid-{session_name}-{timestamp}.log"
+    model_to_use = _core._spawn_model_for_engine("droid", model) or os.environ.get("CCC_DROID_MODEL", "claude-opus-5")
+    if model_to_use:
+        _core._set_session_model(log_filename[:-4], model_to_use, False)
+    log_dir = _core.repo_log_dir(repo_for_logs)
+    log_dir.mkdir(parents=True, exist_ok=True)
+    log_path = log_dir / log_filename
+    worktree_path = None
+    worktree_branch = None
+    if worktree:
+        try:
+            worktree_path, worktree_branch = _core._create_worktree_for_spawn(spawn_cwd, session_name)
+            spawn_cwd = worktree_path
+        except RuntimeError as e:
+            return {"ok": False, "error": f"worktree creation failed: {e}"}
+    cmd = [resolved["bin"], "exec", "--auto", "high"]
+    if model_to_use:
+        cmd.extend(["--model", model_to_use])
+    effort = (reasoning_effort or "").strip().lower()
+    if effort and effort in _droid_reasoning_efforts_for_model(model_to_use):
+        cmd.extend(["--reasoning-effort", effort])
+    cmd.append(prompt)
+    log_fh = open(log_path, "w")
+    if worktree_path:
+        _core._run_worktree_init_hook(worktree_path, ctx["repo_path"], session_name, log_fh)
+    popen_env = {**os.environ, **env} if env else None
+    try:
+        proc = subprocess.Popen(
+            cmd, stdin=subprocess.DEVNULL, stdout=log_fh, stderr=subprocess.STDOUT,
+            cwd=spawn_cwd, start_new_session=True, env=popen_env,
+        )
+    except (FileNotFoundError, OSError) as e:
+        log_fh.close()
+        return {"ok": False, "error": str(e), "code": "droid_launch_failed", "via": "droid-spawn"}
+    failure = _core._spawn_early_failure_payload(proc, log_path, log_fh, engine="droid", via="droid-spawn")
+    if failure:
+        return failure
+    entry = {
+        "pid": proc.pid, "name": session_name, "log": str(log_path),
+        "prompt": prompt[:200], "started": timestamp, "proc": proc,
+        "log_fh": log_fh, "fifo": None, "stdin_fd": None,
+        "engine": "droid", "cwd": spawn_cwd, "repo_path": repo_for_logs,
+        "model": model_to_use or "", "parent_session_id": parent_session_id or "",
+    }
+    _core._spawned_sessions.append(entry)
+    _core._record_spawn_to_registry(
+        pid=proc.pid, name=session_name, log_path=log_path, cwd=spawn_cwd,
+        spawned_at=timestamp, command_summary=prompt[:200],
+        fifo=None, engine="droid", repo_path=repo_for_logs, model=model_to_use,
+        parent_session_id=parent_session_id, reasoning_effort=effort or None,
+    )
+    resp = {"ok": True, "pid": proc.pid, "name": session_name, "log": str(log_path), "via": "droid-spawn"}
+    if worktree_path:
+        resp["worktree_path"] = worktree_path
+        resp["worktree_branch"] = worktree_branch
+    return _core._finalize_spawn_response(resp, entry, ctx)

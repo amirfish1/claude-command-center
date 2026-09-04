@@ -80,3 +80,13 @@ def test_aider_does_not_ingest_project_level_history(tmp_path, monkeypatch):
     monkeypatch.setattr(server, "AIDER_SESSIONS_DIR", tmp_path / "aider-sessions")
 
     assert server.find_aider_conversations(repo_path=str(repo), repo_only=True) == []
+
+
+def test_aider_is_in_orchestration_spawn_engines_dispatch_chain():
+    """Aider's spawn function existed but was never reachable via
+    /api/sessions/spawn (W2-2's own scope note) -- this pins the payload
+    normalization + engine allowlist side of that wiring (W3-3)."""
+    server = _fresh_server()
+    assert "aider" in server._ORCHESTRATION_SPAWN_ENGINES
+    engine, model = server._spawn_request_engine_and_model({"engine": "aider"})
+    assert engine == "aider"

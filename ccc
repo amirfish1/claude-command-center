@@ -15,6 +15,7 @@ command, without opening the dashboard:
     ccc spawn "…" --name queue-drain --cwd ~/Apps/foo --report-to <sid>
     ccc models               # every engine's models, efforts, cost
     ccc models --engine claude --json
+    ccc doctor               # per-engine CLI/auth/BYOK health, dry-run only
 
     ccc quota                # weekly quota left per engine + reset deadline
 
@@ -45,7 +46,7 @@ from datetime import datetime, timezone
 
 PORT_FILE = os.path.expanduser("~/.claude/command-center/port.txt")
 
-SUBCOMMANDS = ("sessions", "list-sessions", "spawn", "models", "send", "ask", "quota")
+SUBCOMMANDS = ("sessions", "list-sessions", "spawn", "models", "doctor", "send", "ask", "quota")
 
 _SINCE_RE = re.compile(r"^(\d+)\s*([smhd])$", re.IGNORECASE)
 _SINCE_UNIT_S = {"s": 1, "m": 60, "h": 3600, "d": 86400}
@@ -432,6 +433,8 @@ def cmd_models(args):
             header += f"  efforts: {','.join(ladder)}"
         if bucket.get("supports_custom"):
             header += "  [custom ids accepted]"
+        if bucket.get("byok_ready"):
+            header += "  [BYOK-ready]"
         print(header)
         models = bucket.get("models") or []
         if not models:
@@ -458,6 +461,58 @@ def cmd_models(args):
             )
     print("\nuse: ccc spawn \"<prompt>\" --engine <engine> --model <id> [--effort <level>]")
     return 0
+
+
+def cmd_doctor(args):
+    base = _resolve_server(args.server)
+    if not base:
+        print(
+            "ccc: no server found — is CCC running? "
+            f"(looked for --server, $CCC_SERVER, {PORT_FILE})",
+            file=sys.stderr,
+        )
+        return 1
+    try:
+        payload = _get_json(base, "/api/engines/doctor", timeout=15)
+    except OSError as e:  # URLError, plus raw TimeoutError from mid-read stalls
+        print(f"ccc: cannot reach CCC at {base} ({e}) — is CCC running?", file=sys.stderr)
+        return 1
+    engines = payload.get("engines") or {}
+    if args.engine:
+        engines = {k: v for k, v in engines.items() if k == args.engine}
+        if not engines:
+            known = ", ".join(sorted((payload.get("engines") or {})))
+            print(f"ccc: unknown engine {args.engine!r} (known: {known})", file=sys.stderr)
+            return 1
+    if args.json:
+        out = dict(payload)
+        if args.engine:
+            out["engines"] = engines
+        print(json.dumps(out, indent=2))
+        return 0
+
+    def _flag(value, yes="yes", no="no", unknown="?"):
+        if value is True:
+            return yes
+        if value is False:
+            return no
+        return unknown
+
+    print(f"{'engine':<12} {'cli':<5} {'auth':<5} {'byok-profile':<13} {'smoke(dry-run)'}")
+    any_unhealthy = False
+    for engine, row in engines.items():
+        cli_ok = bool(row.get("cli_present"))
+        if not cli_ok:
+            any_unhealthy = True
+        smoke = row.get("smoke_dry_run") or {}
+        print(
+            f"{engine:<12} {_flag(row.get('cli_present')):<5} "
+            f"{_flag(row.get('auth_present')):<5} "
+            f"{_flag(row.get('byok_profile_present')) if row.get('byok_ready') else '-':<13} "
+            f"{_flag(smoke.get('ok'))}"
+        )
+    print("\n'?' = no CLI-based probe implemented for that check yet (not a failure).")
+    return 1 if (args.engine and any_unhealthy) else 0
 
 
 def _parse_iso(ts):
@@ -651,7 +706,7 @@ def main(argv=None):
                    help="the task prompt (or pipe it on stdin)")
     p.add_argument("--engine",
                    help="claude (default), codex, cursor, antigravity, kilo, "
-                        "opencode, aider, hermes, kimi, devin, droid, grok")
+                        "opencode, aider, hermes, kimi, devin, droid, grok, pi")
     p.add_argument("--model",
                    help="model id for the engine — see `ccc models` (omit for the "
                         "server default)")
@@ -712,6 +767,17 @@ def main(argv=None):
     p.add_argument("--engine", help="only this engine")
     p.add_argument("--json", action="store_true", help="raw catalog JSON")
     p.set_defaults(func=cmd_models)
+
+    p = sub.add_parser(
+        "doctor",
+        help="per-engine health: CLI present, auth present, BYOK profile, dry-run smoke",
+        description="Read-only per-engine diagnostics from /api/engines/doctor -- "
+                    "never spawns a real subprocess or spends a token. '?' means "
+                    "no CLI-based auth probe exists for that engine yet, not a failure.",
+    )
+    p.add_argument("--engine", help="only this engine (exit 1 if it's unhealthy)")
+    p.add_argument("--json", action="store_true", help="raw doctor JSON")
+    p.set_defaults(func=cmd_doctor)
 
     p = sub.add_parser(
         "quota",
