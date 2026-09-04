@@ -13030,14 +13030,16 @@ _archive_serve_generation = 0
 _archive_serve_version = 0       # monotonic per store; tags prebuilt response bodies
 
 # Prebuilt response bodies for /api/conversations/list, keyed by
-# (archive cache key, window, from_cache). The list path serves the shared
-# serve-snapshot row list (copy_rows=False) whenever no in-memory overlay
-# appended rows, so for a given snapshot version + window the projected
+# (archive cache key, window, from_cache, body version). The list path serves
+# the shared serve-snapshot row list (copy_rows=False) whenever no in-memory
+# overlay appended rows, so for a given snapshot version + window the projected
 # payload is byte-identical across the N tabs polling it — previously each
 # poll paid json.dumps + sha1 + gzip over the whole payload (13 MB for
-# window=all on large archives). Validity is by snapshot version only,
-# verified per request via _archive_serve_ver_for_rows (an identity check),
-# so an overlay append or a snapshot swap always misses and rebuilds.
+# window=all on large archives). Validity is by snapshot version, verified
+# per request: bare version when rows ARE the stored snapshot (identity),
+# or (version, overlay content hash) when ACP/Devin overlay rows were
+# appended — _archive_list_body_ver — so a snapshot swap or any overlay
+# content change always misses and rebuilds.
 _ARCHIVE_LIST_BODY_CACHE = {}  # (cache_key, window, from_cache) -> {"ver", "raw", "gzip", "etag"}
 _ARCHIVE_LIST_BODY_LOCK = threading.Lock()
 _ARCHIVE_LIST_BODY_CACHE_MAX = 24
@@ -13371,7 +13373,40 @@ def _archive_list_source_rows_cached(cache_options, *, force_refresh=False):
     devin_overlay = _archive_overlay_devin_cli_sessions(rows)
     if devin_overlay:
         rows = list(rows or []) + devin_overlay
-    return rows, from_cache
+    extra = (overlay or []) + (devin_overlay or [])
+    return rows, from_cache, _archive_list_body_ver(key, rows, extra)
+
+
+def _archive_list_body_ver(key, rows, extra):
+    """Body-cache version for the /list payload.
+
+    Without overlay rows the payload is a pure projection of the stored
+    serve snapshot, so the snapshot's own version suffices (an identity
+    check). With overlays appended the row list is rebuilt per request and
+    the identity check always misses -- which forced json.dumps + sha1 +
+    gzip over the ~12MB payload on EVERY poll whenever an ACP/Devin session
+    was attached (permanent on an always-on agent box, and GIL-bound work
+    in the request thread). The overlay list is only a handful of rows, so
+    serializing just those and folding a content hash into the version
+    restores body replay without serving stale overlay bytes: any overlay
+    row content change changes the version.
+    """
+    with _archive_serve_lock:
+        sc = _archive_serve_cache.get(key)
+        if sc is None:
+            return 0
+        base = sc.get("rows") or []
+        ver = sc.get("ver", 0)
+        if rows is base:
+            return ver
+        if not extra or len(rows) != len(base) + len(extra):
+            return 0
+        if any(a is not b for a, b in zip(rows, base)):
+            return 0
+        sig = hashlib.sha1(
+            json.dumps(extra, sort_keys=True, separators=(",", ":"), default=str).encode()
+        ).hexdigest()
+        return (ver, sig)
 
 
 # A Devin CLI row missing from the snapshot is overlaid only while it is
@@ -26122,19 +26157,19 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                 "resolve_worktree_dirty": qs.get("resolve_worktrees", ["0"])[0] in ("1", "true"),
             }
             stale_ok = qs.get("stale_ok", ["0"])[0] in ("1", "true")
-            rows, from_cache = _archive_list_source_rows_cached(
+            # Body-cache version: snapshot version when rows ARE the stored
+            # snapshot, or (snapshot version, overlay content hash) when
+            # in-memory ACP/Devin overlay rows were appended — either way a
+            # prebuilt body may be replayed when the version matches.
+            rows, from_cache, body_ver = _archive_list_source_rows_cached(
                 cache_options,
                 force_refresh=not stale_ok,
             )
-            # Nonzero only when `rows` IS the stored serve snapshot (identity)
-            # — i.e. no in-memory ACP/Devin overlay appended — which is the
-            # only case where a prebuilt body may be replayed.
             list_cache_key = _archive_response_cache_key(**cache_options)
-            snap_ver = _archive_serve_ver_for_rows(list_cache_key, rows)
             self._send_archive_list_json(
                 list_cache_key, window, from_cache,
                 lambda: _archive_list_payload(rows, window=window, cached=from_cache),
-                snap_ver,
+                body_ver,
             )
         elif path == "/api/conversations/all":
             # Server-agnostic conversation archive: every JSONL across every
@@ -33793,12 +33828,16 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
         once per (cache key, window, snapshot version) and replayed for every
         tab polling the same snapshot. build_payload is called ONLY on a body
         cache miss, so repeat polls skip the row projection too. snap_ver
-        comes from _archive_serve_ver_for_rows — an identity check — so it is
-        nonzero only when the payload is projected from exactly the stored
-        snapshot rows (no in-memory overlay appended); snap_ver=0 disables
+        comes from _archive_list_body_ver: the snapshot version when rows are
+        exactly the stored snapshot (identity), or (version, overlay content
+        hash) when in-memory ACP/Devin overlay rows were appended; 0 disables
         the body cache and falls back to a fresh build."""
         accept_gzip = "gzip" in (self.headers.get("Accept-Encoding", "") or "").lower()
-        body_key = (cache_key, window, bool(from_cache))
+        # The version is part of the key (not just the equality check) so two
+        # alternating overlay states — e.g. a live ACP row whose counters move
+        # every poll — each keep a stable replay slot instead of evicting each
+        # other every poll.
+        body_key = (cache_key, window, bool(from_cache), snap_ver)
         raw = gzip_body = etag_val = None
         if snap_ver:
             with _ARCHIVE_LIST_BODY_LOCK:
