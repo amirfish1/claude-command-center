@@ -14724,7 +14724,8 @@
     if (!opt || !$convList.contains(opt)) return;
     ev.stopPropagation();
     const value = String(opt.getAttribute('data-archive-engine') || '').toLowerCase();
-    if (value !== 'claude' && value !== 'codex' && value !== 'kimi' && value !== 'devin') return;
+    if (value !== 'claude' && value !== 'codex' && value !== 'kimi' && value !== 'devin'
+      && value !== 'antigravity' && value !== 'grok') return;
     const current = _archiveEngineFilter();
     const next = current === value ? '' : value;
     try {
