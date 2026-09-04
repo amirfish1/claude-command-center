@@ -46,6 +46,31 @@ def test_engine_availability_waits_for_first_sessions_and_idle_time():
     start = SOURCE.index("async function refreshEngineAvailability()")
     source = SOURCE[start:SOURCE.index("// Hide-descriptions toggle", start)]
 
-    assert "_firstSessionsLoaded.then" in source
+    assert "Promise.all([_firstSessionsLoaded, _archiveFirstLoaded]).then" in source
     assert "requestIdleCallback" in source
     assert "spawnDefaultsReady.finally(refreshCodexAvailability);" not in source
+
+
+def test_archive_network_request_starts_before_optional_boot_probes():
+    bootstrap_at = SOURCE.index("const _archiveBootstrapFetchPromise")
+    telemetry_at = SOURCE.index("/api/telemetry/status")
+
+    assert bootstrap_at < telemetry_at
+    bootstrap = SOURCE[bootstrap_at:SOURCE.index("// Pause periodic", bootstrap_at)]
+    assert "backgroundApiFetch(_archiveBootstrapUrl)" in bootstrap
+
+
+def test_archive_boot_no_longer_waits_for_selected_repo_sessions():
+    start = SOURCE.index("(function wireArchiveMode()")
+    end = SOURCE.index("// Periodic archive refresh.", start)
+    source = SOURCE[start:end]
+
+    assert "queueMicrotask(() => setArchiveMode())" in source
+    assert "_firstSessionsLoaded.then" not in source
+
+
+def test_load_archive_consumes_the_early_response():
+    source = _function("async function loadArchiveAll", "// Cross-repo open GH issues")
+
+    assert "url === _archiveBootstrapUrl" in source
+    assert "await _archiveBootstrapFetchPromise" in source

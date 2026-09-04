@@ -2308,6 +2308,21 @@
   }
   window.__cccBackgroundApiFetch = backgroundApiFetch;
 
+  // Put the one payload needed for a useful sidebar at the front of the
+  // browser's connection queue. The response can finish while the rest of
+  // the script initializes; loadArchiveAll consumes this same Response once,
+  // so this is request reordering, not a duplicate fetch.
+  let _archiveBootstrapWindow = '7d';
+  try {
+    const savedWindow = localStorage.getItem('ccc-archive-window');
+    if (savedWindow === '8h' || savedWindow === '1d' || savedWindow === '7d' || savedWindow === 'all') {
+      _archiveBootstrapWindow = savedWindow;
+    }
+  } catch (_) {}
+  const _archiveBootstrapUrl = '/api/conversations/list?window=' + encodeURIComponent(_archiveBootstrapWindow) + '&stale_ok=1';
+  const _archiveBootstrapFetchPromise = backgroundApiFetch(_archiveBootstrapUrl).catch(() => null);
+  let _archiveBootstrapConsumed = false;
+
   function abortBackgroundApiReadsForSpawn() {
     for (const controller of _backgroundApiReadControllers) {
       try { controller.abort(); } catch (_) {}
@@ -62368,6 +62383,8 @@
   // ONLY mode; there is no repo picker / folder filter.
   let archiveData = [];
   let archiveLoaded = false;
+  let _archiveFirstLoadedResolve = null;
+  const _archiveFirstLoaded = new Promise(resolve => { _archiveFirstLoadedResolve = resolve; });
   window.__cccThroughputActivityRows = function () {
     const source = Array.isArray(archiveData) && archiveData.length
       ? archiveData : (Array.isArray(conversationsData) ? conversationsData : []);
@@ -63205,7 +63222,11 @@
         try {
           const init = { signal: controller.signal };
           if (prevEtag) init.headers = { 'If-None-Match': prevEtag };
-          r = await backgroundApiFetch(url, init);
+          if (!_archiveBootstrapConsumed && url === _archiveBootstrapUrl && !prevEtag) {
+            _archiveBootstrapConsumed = true;
+            r = await _archiveBootstrapFetchPromise;
+          }
+          if (!r) r = await backgroundApiFetch(url, init);
         } finally {
           clearTimeout(timeoutId);
         }
@@ -64189,6 +64210,10 @@
       } catch (_) {}
     }
     _finishArchiveRender();
+    if (_archiveFirstLoadedResolve) {
+      _archiveFirstLoadedResolve();
+      _archiveFirstLoadedResolve = null;
+    }
   }
 
   async function setArchiveMode() {
@@ -64252,12 +64277,10 @@
         renderArchiveList($search.value);
       });
     }
-    // Boot kick: wait for the first /api/sessions response before kicking
-    // the archive walk. Both endpoints share CPU/subprocess slots in the
-    // same Python process; running the slow one (cross-folder JSONL + git
-    // ops, ~12s on a cold cache) in parallel with /api/sessions starved it.
-    // Waiting until sessions returns means the selected repo is interactive
-    // in <1s, then the archive populates the sidebar.
+    // Boot kick: the base archive response was placed at the front of the
+    // connection queue above. The server now serves a persisted snapshot and
+    // refreshes out of process, so waiting behind every optional startup probe
+    // only recreates the old blank-sidebar delay.
     {
       // Show the placeholder immediately so the sidebar isn't blank
       // during the wait — the actual fetch fires after sessions land.
@@ -64289,10 +64312,7 @@
       // snapshot now so the scope selector is ready even when the cross-repo
       // archive scan takes much longer than the selected-repo session load.
       if (_sharedQueuePanelHost === 'sidebar') _renderQueuePanel();
-      _firstSessionsLoaded.then(() => {
-        _clientLog('[ARCHIVE-DIAG] first sessions loaded -> setArchiveMode');
-        setArchiveMode();
-      });
+      queueMicrotask(() => setArchiveMode());
     }
     // Periodic archive refresh. archiveData carries last_interacted /
     // modified / mtime for every session row, but used to only refresh
@@ -64989,7 +65009,7 @@
     } catch (_) {}
   }
   if (!READER_ONLY_POPOUT) {
-    _firstSessionsLoaded.then(() => {
+    Promise.all([_firstSessionsLoaded, _archiveFirstLoaded]).then(() => {
       const probeWhenIdle = () => Promise.resolve(spawnDefaultsReady).then(refreshCodexAvailability);
       if (typeof requestIdleCallback === 'function') {
         requestIdleCallback(probeWhenIdle, { timeout: 4000 });
@@ -64998,7 +65018,7 @@
       }
     });
     window.addEventListener('focus', () => {
-      _firstSessionsLoaded.then(refreshCodexAvailability);
+      Promise.all([_firstSessionsLoaded, _archiveFirstLoaded]).then(refreshCodexAvailability);
     });
   }
   // Hide-descriptions toggle

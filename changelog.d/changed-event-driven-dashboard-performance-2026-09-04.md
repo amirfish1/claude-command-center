@@ -1,0 +1,1 @@
+- Made dashboard freshness event-driven, bounded startup requests, and limited initial archive rendering so large histories no longer stall the UI.
