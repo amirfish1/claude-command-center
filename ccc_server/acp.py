@@ -750,12 +750,15 @@ def _acp_respond(harness, req_id, result=None, error=None):
     return _core._acp_send(harness, payload)
 
 
-def _acp_handle_message(harness, payload):
+def _acp_handle_message(harness, payload, *, source_conn=None):
     if not isinstance(payload, dict):
         return
     method = payload.get("method")
     if "id" in payload and method:
-        _acp_handle_agent_request(harness, payload.get("id"), str(method), payload.get("params") or {})
+        _acp_handle_agent_request(
+            harness, payload.get("id"), str(method), payload.get("params") or {},
+            source_conn=source_conn,
+        )
         return
     if "id" in payload:
         req_id = payload.get("id")
@@ -779,22 +782,62 @@ def _acp_handle_message(harness, payload):
             _core._acp_handle_session_update(harness, str(sid), update)
 
 
-def _acp_handle_agent_request(harness, req_id, method, params):
+def _acp_expire_permission(harness, sid, request_key, entry):
+    """Cancel an unanswered Grok request, unless an operator already won."""
+    with _core._ACP_LOCK:
+        state = _core._acp_session(harness, sid)
+        pending = (state or {}).get("pending_permissions") or {}
+        if pending.get(request_key) is not entry:
+            return
+        pending.pop(request_key)
+        conn = entry.get("connection")
+        if conn is None or _core._ACP_CONNS.get(harness) is not conn:
+            _core._ACP_LOCK.notify_all()
+            return
+        transport = conn.get("transport")
+        tool = entry.get("tool_call") or {}
+        _core._acp_emit_event_unlocked(harness, sid, {
+            "type": "assistant",
+            "message_id": f"acp-perm-expired-{entry['req_id']}",
+            "blocks": [{
+                "kind": "tool_use",
+                "name": tool.get("title") or tool.get("kind") or "tool",
+                "id": tool.get("toolCallId") or "",
+                "tool_status": "failed",
+                "output_preview": "Approval expired without an operator response; the tool request was cancelled.",
+            }],
+        }, save=True)
+    # Send only to the connection that issued the request. A replacement
+    # process can reuse JSON-RPC IDs while this timer is waking up.
+    if transport is not None and transport.alive():
+        try:
+            transport.send_json({
+                "jsonrpc": "2.0", "id": entry["req_id"],
+                "result": {"outcome": {"outcome": "cancelled"}},
+            })
+        except (BrokenPipeError, OSError, ValueError):
+            pass
+
+
+def _acp_handle_agent_request(harness, req_id, method, params, *, source_conn=None):
     """Agent→client requests. Permission prompts and terminal/* are serviced;
     anything else gets methodNotFound so the agent never hangs waiting on us."""
     if method == "session/request_permission":
         sid = str(params.get("sessionId") or "")
         with _core._ACP_LOCK:
+            if source_conn is not None and _core._ACP_CONNS.get(harness) is not source_conn:
+                return
             state = _core._acp_session(harness, sid, create=True)
             # Keyed by str(req_id) — UI round-trips ids as strings, while the
             # original (int|str) id is preserved for the JSON-RPC response.
-            state["pending_permissions"][str(req_id)] = {
+            entry = {
                 "req_id": req_id,
                 "session_id": sid,
                 "tool_call": params.get("toolCall") or {},
                 "options": params.get("options") or [],
                 "requested_at": time.time(),
             }
+            state["pending_permissions"][str(req_id)] = entry
             tool = params.get("toolCall") or {}
             _core._acp_emit_event_unlocked(harness, sid, {
                 "type": "assistant",
@@ -811,6 +854,22 @@ def _acp_handle_agent_request(harness, req_id, method, params):
                     "acp_options": params.get("options") or [],
                 }],
             }, save=True)
+            if harness == "grok":
+                entry["connection"] = source_conn if source_conn is not None else _core._ACP_CONNS.get(harness)
+                # Yolo mode can still produce permission requests. Leave a
+                # bounded operator window, then fail closed instead of hanging
+                # an unattended lane forever. Other ACP harnesses are unchanged.
+                try:
+                    timeout = int(os.environ.get("CCC_GROK_PERMISSION_TIMEOUT_SECONDS", "300"))
+                except (TypeError, ValueError):
+                    timeout = 300
+                timer = threading.Timer(
+                    max(1, min(3600, timeout)), _acp_expire_permission,
+                    args=(harness, sid, str(req_id), entry),
+                )
+                timer.daemon = True
+                entry["permission_timer"] = timer
+                timer.start()
         return
     if method.startswith("terminal/"):
         _core._acp_handle_terminal_request(harness, req_id, method, params)
@@ -1698,7 +1757,7 @@ def _acp_reader(harness, conn):
             except json.JSONDecodeError:
                 continue
             try:
-                _core._acp_handle_message(harness, payload)
+                _core._acp_handle_message(harness, payload, source_conn=conn)
             except Exception:
                 # A folding bug must never kill the reader loop.
                 pass
@@ -1728,6 +1787,13 @@ def _acp_reader(harness, conn):
                 entry["event"].set()
             sessions = _core._ACP_SESSION_STATE.get(harness) or {}
             for st in sessions.values():
+                permissions = st.get("pending_permissions") or {}
+                for request_key, permission in list(permissions.items()):
+                    if permission.get("connection") is conn:
+                        timer = permission.get("permission_timer")
+                        if timer is not None:
+                            timer.cancel()
+                        permissions.pop(request_key, None)
                 if st.get("status") == "active":
                     st["status"] = "idle"
                     st["active_turn"] = None
@@ -2344,6 +2410,9 @@ def _acp_resolve_approval(harness, sid, request_id, option_id=None):
         entry = pending.pop(str(request_id), None)
     if entry is None:
         return {"ok": False, "error": "no pending permission request"}
+    timer = entry.get("permission_timer")
+    if timer is not None:
+        timer.cancel()
     if option_id:
         outcome = {"outcome": "selected", "optionId": option_id}
     else:

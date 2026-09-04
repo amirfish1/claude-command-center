@@ -1,10 +1,153 @@
 """Grok ACP harness registration and spawn wiring."""
 import pathlib
+from types import SimpleNamespace
 from unittest import mock
 
 import server
+import pytest
+from ccc_server import acp
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
+
+
+@pytest.fixture
+def permission_timeout_probe(monkeypatch):
+    timers, responses, events = [], [], []
+
+    class Transport:
+        def alive(self):
+            return True
+
+        def send_json(self, payload):
+            responses.append((("grok", payload["id"]), {"result": payload["result"]}))
+
+    class Timer:
+        def __init__(self, interval, function, args=()):
+            self.interval, self.function, self.args = interval, function, args
+            self.cancelled = False
+            timers.append(self)
+
+        def start(self):
+            pass
+
+        def cancel(self):
+            self.cancelled = True
+
+        def fire(self):
+            self.function(*self.args)
+
+    monkeypatch.setattr(acp.threading, "Timer", Timer)
+    monkeypatch.setattr(server, "_ACP_SESSION_STATE", {})
+    monkeypatch.setattr(server, "_ACP_CONNS", {"grok": {"transport": Transport()}})
+    monkeypatch.setattr(server, "_acp_emit_event_unlocked", lambda harness, sid, event, **kw: events.append(event))
+    monkeypatch.setattr(server, "_acp_respond", lambda *args, **kw: responses.append((args, kw)) or True)
+    monkeypatch.setattr(acp, "_acp_save_state_unlocked", lambda *args: None)
+    monkeypatch.setattr(server, "_control_plane_engine_call", lambda *args, **kw: None)
+    monkeypatch.delenv("CCC_GROK_PERMISSION_TIMEOUT_SECONDS", raising=False)
+    return timers, responses, events
+
+
+def _request_permission(harness="grok"):
+    acp._acp_handle_agent_request(harness, 7, "session/request_permission", {
+        "sessionId": "permission-timeout-session",
+        "toolCall": {"toolCallId": "tool-7", "title": "Run command"},
+        "options": [{"optionId": "allow_once", "kind": "allow_once"}],
+    })
+
+
+def test_grok_unanswered_permission_expires_without_approval(permission_timeout_probe):
+    timers, responses, events = permission_timeout_probe
+    _request_permission()
+    assert len(timers) == 1
+    assert timers[0].interval == 300
+    timers[0].fire()
+    assert responses == [(("grok", 7), {"result": {"outcome": {"outcome": "cancelled"}}})]
+    assert not server._acp_session("grok", "permission-timeout-session")["pending_permissions"]
+    assert events[-1]["blocks"][0]["tool_status"] == "failed"
+    assert "expired" in events[-1]["blocks"][0]["output_preview"]
+
+
+def test_manual_grok_approval_wins_before_timeout(permission_timeout_probe):
+    timers, responses, events = permission_timeout_probe
+    _request_permission()
+    assert server._acp_resolve_approval("grok", "permission-timeout-session", 7, "allow_once")["ok"]
+    assert timers[0].cancelled
+    timers[0].fire()
+    assert len(responses) == 1
+    assert responses[0][1]["result"]["outcome"]["optionId"] == "allow_once"
+    assert len(events) == 1
+
+
+def test_old_timeout_does_not_cancel_reused_request_id(permission_timeout_probe):
+    timers, responses, events = permission_timeout_probe
+    _request_permission()
+    _request_permission()
+    timers[0].fire()
+    assert responses == []
+    assert "7" in server._acp_session("grok", "permission-timeout-session")["pending_permissions"]
+    timers[1].fire()
+    assert len(responses) == 1
+
+
+@pytest.mark.parametrize("configured, expected", [("12", 12), ("0", 1), ("-5", 1), ("7200", 3600), ("invalid", 300)])
+def test_grok_permission_timeout_configuration_is_bounded(monkeypatch, permission_timeout_probe, configured, expected):
+    monkeypatch.setenv("CCC_GROK_PERMISSION_TIMEOUT_SECONDS", configured)
+    _request_permission()
+    assert permission_timeout_probe[0][0].interval == expected
+
+
+def test_other_acp_harness_keeps_manual_approval(permission_timeout_probe):
+    _request_permission("kimi")
+    assert permission_timeout_probe[0] == []
+    assert permission_timeout_probe[1] == []
+
+
+def test_permission_timeout_never_replies_to_replacement_connection(permission_timeout_probe):
+    timers, responses, events = permission_timeout_probe
+    _request_permission()
+    server._ACP_CONNS["grok"] = {"transport": object()}
+    timers[0].fire()
+    assert responses == []
+    assert not server._acp_session("grok", "permission-timeout-session")["pending_permissions"]
+
+
+def test_timeout_reply_uses_original_transport_if_connection_changes_after_check(monkeypatch, permission_timeout_probe):
+    timers, responses, events = permission_timeout_probe
+    _request_permission()
+
+    def replace_connection(*args, **kwargs):
+        server._ACP_CONNS["grok"] = {"transport": object()}
+
+    monkeypatch.setattr(server, "_acp_emit_event_unlocked", replace_connection)
+    timers[0].fire()
+    assert responses == [(("grok", 7), {"result": {"outcome": {"outcome": "cancelled"}}})]
+
+
+def test_connection_exit_cancels_its_permission_timers(monkeypatch, permission_timeout_probe):
+    timers, responses, events = permission_timeout_probe
+    _request_permission()
+    conn = server._ACP_CONNS["grok"]
+    conn["transport"].proc = SimpleNamespace(stdout=[])
+    monkeypatch.setattr(server, "_ACP_TERMINALS", {})
+    monkeypatch.setattr(server, "_ACP_PENDING", {})
+    acp._acp_reader("grok", conn)
+    assert timers[0].cancelled
+    assert not server._acp_session("grok", "permission-timeout-session")["pending_permissions"]
+    timers[0].fire()
+    assert responses == []
+
+
+def test_old_reader_permission_is_not_associated_with_new_connection(permission_timeout_probe):
+    timers, responses, events = permission_timeout_probe
+    old_conn = server._ACP_CONNS["grok"]
+    server._ACP_CONNS["grok"] = {"transport": object()}
+    acp._acp_handle_message("grok", {
+        "id": 7, "method": "session/request_permission",
+        "params": {"sessionId": "permission-timeout-session"},
+    }, source_conn=old_conn)
+    assert timers == []
+    assert events == []
+    assert responses == []
 
 
 def test_grok_harness_is_registered():

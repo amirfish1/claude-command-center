@@ -1,0 +1,1 @@
+Unanswered Grok tool approvals now cancel after five minutes with an explicit error, preventing unattended sessions from waiting forever. Set `CCC_GROK_PERMISSION_TIMEOUT_SECONDS` to adjust the window between 1 and 3600 seconds; manual approvals still work before expiry.
