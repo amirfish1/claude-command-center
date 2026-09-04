@@ -136,6 +136,33 @@ COMMAND_CENTER_PASTED_IMAGES_DIR = COMMAND_CENTER_STATE_DIR / "pasted-images"
 COMMAND_CENTER_ATTACHMENTS_DIR = COMMAND_CENTER_STATE_DIR / "attachments"
 PYTHON_STACK_DUMP_LOG = COMMAND_CENTER_STATE_DIR / "logs" / "python-stacks.log"
 _dashboard_events = DashboardEventHub(capacity=512)
+
+
+def _publish_dashboard_patch(topic, entity_type, entity_id, patch):
+    """Publish cheap authoritative state after its durable write succeeds."""
+    try:
+        return _dashboard_events.publish(
+            topic,
+            entity={"type": str(entity_type), "id": str(entity_id)},
+            patch=dict(patch or {}),
+        )
+    except Exception:
+        # The event stream accelerates freshness; it is not part of the
+        # mutation's durability contract and must never invite a retry.
+        return None
+
+
+def _invalidate_dashboard(resource, *, entity_id=None, reason=None):
+    """Publish a scoped refetch hint for derived or externally owned state."""
+    target = {"resource": str(resource)}
+    if entity_id is not None:
+        target["id"] = str(entity_id)
+    if reason:
+        target["reason"] = str(reason)
+    try:
+        return _dashboard_events.publish("invalidate", invalidate=[target])
+    except Exception:
+        return None
 # Unified human-readable activity log — spawn/inject/kill/app-server-health
 # events, one line each. Mirrors ~/.watchtower/activity.log's format
 # (TIMESTAMP UTC  CATEGORY   VERB     detail) on purpose: the two logs get
@@ -28886,6 +28913,7 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                 # reconciler's next ~30s tick (CCC-790) -- started off-thread
                 # so the save itself doesn't hang on it (CCC-1014).
                 _reconcile_once_async()
+                _invalidate_dashboard("queue", entity_id=queue_name, reason="config")
                 self.send_json({"ok": True, **normalized})
             except ValueError as e:
                 self.send_json({"ok": False, "error": str(e)}, 400)
@@ -28937,6 +28965,7 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                     or "auto_drain unchanged")
                 if auto_drain:
                     _reconcile_once_async()
+                _invalidate_dashboard("queue", entity_id=key, reason="drain")
                 self.send_json({"ok": True, "queue": key, "auto_drain": auto_drain})
             except Exception as e:
                 self.send_json({"ok": False, "error": str(e)}, 500)
@@ -31104,6 +31133,11 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
             result = rename_session(sid, name)
             result["session_id"] = sid
             result["name"] = name
+            if result.get("ok"):
+                _publish_dashboard_patch(
+                    "conversation.patch", "conversation", sid,
+                    {"name": name, "title": name},
+                )
             self.send_json(result)
         elif re.match(r"^/api/conversations/[^/]+/pin$", path):
             conv_id = urllib.parse.unquote(path.split("/")[-2])
@@ -31129,6 +31163,10 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                 if now_pinned:
                     pinned.insert(0, sid)
                 _save_pinned_conversations(pinned)
+                _publish_dashboard_patch(
+                    "conversation.patch", "conversation", sid,
+                    {"pinned": now_pinned, "pin_rank": 0 if now_pinned else None},
+                )
                 self.send_json({
                     "ok": True,
                     "session_id": sid,
@@ -31158,6 +31196,10 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                     conv_id,
                 ], lane)
                 _restamp_archive_serve_cache_after_mutation()
+                _publish_dashboard_patch(
+                    "conversation.patch", "conversation", sid,
+                    {"all_lane_override": lane},
+                )
                 self.send_json({
                     "ok": True,
                     "session_id": sid,
@@ -31264,6 +31306,10 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                     except RepoContextError:
                         _bust_issue_state_cache()
                 _restamp_archive_serve_cache_after_mutation()
+                _publish_dashboard_patch(
+                    "conversation.patch", "conversation", sid,
+                    {"archived": now_archived, "trashed": False},
+                )
                 self.send_json({"ok": True, "archived": now_archived, "github": gh_result, "killed": kill_result})
             except OSError as e:
                 self.send_json({"ok": False, "error": str(e)}, 500)
@@ -31300,6 +31346,13 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
             try:
                 result = _set_conversation_trashed(sid, desired)
                 _restamp_archive_serve_cache_after_mutation()
+                _publish_dashboard_patch(
+                    "conversation.patch", "conversation", sid,
+                    {
+                        "archived": bool(result.get("archived")),
+                        "trashed": bool(result.get("trashed")),
+                    },
+                )
                 self.send_json({"ok": True, **result})
             except OSError as e:
                 self.send_json({"ok": False, "error": str(e)}, 500)
@@ -31351,6 +31404,8 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                         except (OSError, FileNotFoundError):
                             pass
                 _restamp_archive_serve_cache_after_mutation()
+                if changed:
+                    _invalidate_dashboard("archive", reason="archive-bulk")
                 self.send_json({
                     "ok": True,
                     "archived": want,
