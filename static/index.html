@@ -2749,6 +2749,41 @@
                 <a class="settings-action-btn" id="kimiDocsSetup" href="https://www.kimi.com/code/docs/en/third-party-tools/other-coding-agents.html" target="_blank" rel="noopener noreferrer">Install &amp; setup</a>
               </div>
             </div>
+
+            <div class="settings-row" data-keywords="byok bring your own key api key openrouter tokenrouter anthropic openai xai moonshot google keychain">
+              <div class="settings-row-main">
+                <div class="settings-row-label">BYOK — bring your own key</div>
+                <div class="settings-row-desc" id="byokBackendDesc">Checking key storage…</div>
+              </div>
+            </div>
+
+            <div class="settings-row byok-add-row" data-keywords="byok add key profile provider">
+              <div class="settings-row-main">
+                <div class="settings-row-label">Add a key</div>
+                <div class="settings-row-desc">Stored on this machine only — never committed, never sent anywhere but the provider you pick.</div>
+                <div class="byok-add-form">
+                  <input type="text" id="byokProfileInput" class="settings-text-input" placeholder="Profile name (e.g. personal)" autocomplete="off">
+                  <select id="byokProviderSelect" class="settings-select"></select>
+                  <input type="password" id="byokKeyInput" class="settings-text-input" placeholder="API key" autocomplete="off">
+                  <button type="button" class="settings-action-btn" id="byokSaveKeyBtn">Save key</button>
+                </div>
+                <div class="settings-row-desc" id="byokSaveStatus"></div>
+              </div>
+            </div>
+
+            <div class="settings-row" data-keywords="byok profiles configured keys spend usage cost">
+              <div class="settings-row-main">
+                <div class="settings-row-label">Profiles</div>
+                <div class="settings-row-desc" id="byokProfilesList">No profiles yet.</div>
+              </div>
+            </div>
+
+            <div class="settings-row" data-keywords="byok spend cost usage tokens dollars">
+              <div class="settings-row-main">
+                <div class="settings-row-label">BYOK spend (last 30 days)</div>
+                <div class="settings-row-desc" id="byokUsageDesc">No BYOK usage recorded yet.</div>
+              </div>
+            </div>
           </section>
 
           <section class="settings-section" id="settingsSection-network" data-section-id="network" role="tabpanel" aria-labelledby="settingsRailTab-network">

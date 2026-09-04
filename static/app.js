@@ -73323,6 +73323,121 @@
     document.getElementById('kimiSetupRecheckBtn').addEventListener('click', refreshKimiSetupStatus);
   }
 
+  // ── Engines section: BYOK (bring-your-own-key) profiles (W2-2) ──
+  // Keys never round-trip back from the server after being saved; this
+  // panel only ever renders provider/profile names plus the storage
+  // backend (Keychain vs. encrypted file), never key material.
+  let _byokProviders = {};
+  function _byokRenderProfiles(profiles) {
+    const el = document.getElementById('byokProfilesList');
+    if (!el) return;
+    if (!profiles || !profiles.length) {
+      el.textContent = 'No profiles yet.';
+      return;
+    }
+    el.innerHTML = profiles.map((p) => {
+      const chips = (p.providers || []).map((provider) => {
+        const label = (_byokProviders[provider] || {}).label || provider;
+        return '<span class="byok-profile-chip">' + escapeHtml(label) +
+          ' <button type="button" class="byok-chip-delete" data-byok-del-profile="' +
+          escapeHtml(p.name) + '" data-byok-del-provider="' + escapeHtml(provider) +
+          '" title="Remove ' + escapeHtml(label) + ' key from ' + escapeHtml(p.name) + '">&times;</button></span>';
+      }).join('');
+      return '<div class="byok-profile-row"><strong>' + escapeHtml(p.name) + '</strong> ' + chips + '</div>';
+    }).join('');
+    el.querySelectorAll('[data-byok-del-profile]').forEach((btn) => {
+      btn.addEventListener('click', async () => {
+        const profile = btn.getAttribute('data-byok-del-profile');
+        const provider = btn.getAttribute('data-byok-del-provider');
+        try {
+          await fetch('/api/byok/keys/delete', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ profile, provider }),
+          });
+        } catch (_) {}
+        refreshByokSettings();
+      });
+    });
+  }
+  async function refreshByokSettings() {
+    const backendDesc = document.getElementById('byokBackendDesc');
+    const providerSelect = document.getElementById('byokProviderSelect');
+    if (!backendDesc && !providerSelect) return;
+    try {
+      const res = await fetch('/api/byok/profiles', { cache: 'no-store' });
+      const data = await res.json();
+      _byokProviders = data.providers || {};
+      if (backendDesc) {
+        const backend = data.backend === 'keychain' ? 'macOS Keychain' : 'encrypted local file';
+        backendDesc.textContent = 'Keys for OpenRouter, TokenRouter, and other providers, stored in the ' +
+          backend + ' on this machine. Spawns pick a profile via "key_profile".';
+      }
+      if (providerSelect && !providerSelect.dataset.filled) {
+        providerSelect.innerHTML = Object.keys(_byokProviders).map((id) =>
+          '<option value="' + escapeHtml(id) + '">' + escapeHtml(_byokProviders[id].label || id) + '</option>'
+        ).join('');
+        providerSelect.dataset.filled = '1';
+      }
+      _byokRenderProfiles(data.profiles || []);
+    } catch (err) {
+      if (backendDesc) backendDesc.textContent = 'Could not load BYOK settings: ' + ((err && err.message) || 'network');
+    }
+    try {
+      const res2 = await fetch('/api/byok/usage?days=30', { cache: 'no-store' });
+      const usage = await res2.json();
+      const usageDesc = document.getElementById('byokUsageDesc');
+      if (usageDesc) {
+        if (usage && usage.spawns) {
+          usageDesc.textContent = usage.spawns + ' BYOK spawn' + (usage.spawns === 1 ? '' : 's') +
+            ', ~$' + (usage.total_cost_usd || 0).toFixed(4) + ' estimated, ' +
+            (usage.total_tokens || 0).toLocaleString() + ' tokens.';
+        } else {
+          usageDesc.textContent = 'No BYOK usage recorded yet.';
+        }
+      }
+    } catch (_) {}
+  }
+  if (document.getElementById('byokSaveKeyBtn')) {
+    document.getElementById('byokSaveKeyBtn').addEventListener('click', async () => {
+      const btn = document.getElementById('byokSaveKeyBtn');
+      const profileInput = document.getElementById('byokProfileInput');
+      const providerSelect = document.getElementById('byokProviderSelect');
+      const keyInput = document.getElementById('byokKeyInput');
+      const status = document.getElementById('byokSaveStatus');
+      const profile = (profileInput && profileInput.value || '').trim();
+      const provider = providerSelect && providerSelect.value;
+      const key = (keyInput && keyInput.value || '').trim();
+      if (!profile || !provider || !key) {
+        if (status) status.textContent = 'Profile name, provider, and key are all required.';
+        return;
+      }
+      btn.disabled = true;
+      btn.textContent = 'Saving…';
+      try {
+        const res = await fetch('/api/byok/keys', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ profile, provider, key }),
+        });
+        const data = await res.json().catch(() => ({}));
+        if (data && data.ok) {
+          if (status) status.textContent = 'Saved to ' + (data.backend === 'keychain' ? 'Keychain' : 'encrypted file') + '.';
+          if (keyInput) keyInput.value = '';
+          if (typeof showSettingsSavedPulse === 'function') showSettingsSavedPulse(btn.closest('.settings-row'));
+          refreshByokSettings();
+        } else if (status) {
+          status.textContent = 'Could not save: ' + ((data && data.error) || 'unknown error');
+        }
+      } catch (err) {
+        if (status) status.textContent = 'Save failed: ' + ((err && err.message) || 'network');
+      } finally {
+        btn.disabled = false;
+        btn.textContent = 'Save key';
+      }
+    });
+  }
+
   // ✓ Saved pulse — appended to a row's right edge (`.settings-row` is
   // `position: relative` so the absolutely-positioned pulse anchors to
   // it), removed after the CSS fade finishes. Fired on every setting
@@ -73660,6 +73775,7 @@
     refreshSpawnEngineValue();
     refreshEngineUpdateStatus();
     refreshKimiSetupStatus();
+    refreshByokSettings();
     setActiveSettingsRailSection(_settingsCurrentSection || 'appearance', { scroll: false });
     setTimeout(() => { if ($settingsSearchInput) $settingsSearchInput.focus(); }, 0);
   }

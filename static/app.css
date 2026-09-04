@@ -25194,6 +25194,30 @@ a.settings-row {
 }
 .settings-action-btn.danger:hover { background: rgba(248,81,73,0.16); }
 
+/* BYOK key-add form + profile chips (Settings → Engines) */
+.settings-text-input, .settings-select {
+  padding: 6px 10px; font-size: 12.5px;
+  border-radius: 6px; border: 1px solid var(--border);
+  background: var(--bg); color: var(--text);
+  font-family: inherit;
+}
+.byok-add-form {
+  display: flex; flex-wrap: wrap; gap: 6px; align-items: center;
+  margin-top: 8px;
+}
+.byok-add-form .settings-text-input { flex: 1 1 160px; min-width: 120px; }
+.byok-profile-chip {
+  display: inline-flex; align-items: center; gap: 6px;
+  padding: 3px 8px; margin: 2px 4px 2px 0;
+  border-radius: 999px; border: 1px solid var(--border);
+  background: var(--surface-2); font-size: 12px;
+}
+.byok-profile-chip .byok-chip-delete {
+  border: none; background: transparent; color: var(--text-muted);
+  cursor: pointer; font-size: 13px; line-height: 1; padding: 0;
+}
+.byok-profile-chip .byok-chip-delete:hover { color: var(--red); }
+
 /* Launcher rows ("Open ↗") */
 .settings-launcher-btn {
   display: inline-flex; align-items: center;
