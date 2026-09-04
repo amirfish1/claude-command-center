@@ -9,7 +9,9 @@ decision logic in isolation (no live server, no git checkout needed).
 
 import importlib.machinery
 import importlib.util
+import io
 import unittest
+from contextlib import redirect_stdout
 from pathlib import Path
 from unittest import mock
 
@@ -90,6 +92,62 @@ class DoctorReportsStaleCodeTests(unittest.TestCase):
         """Not being a git install is not itself unhealthy."""
         rc = self._run_doctor("", "")
         self.assertEqual(rc, 0)
+
+    def test_instance_warning_exits_nonzero_and_prints_fix(self):
+        ccc = self.ccc
+
+        class Args:
+            server = "http://127.0.0.1:8099"
+            engine = None
+            json = False
+
+        fix = (
+            "kill 222 && launchctl kickstart -k "
+            "gui/$(id -u)/com.github.claude-command-center"
+        )
+        payload = {
+            "engines": {"claude": {"cli_present": True, "auth_present": True}},
+            "server_instances": {
+                "ok": True,
+                "status": "warn",
+                "warning": "more than one CCC server.py process for this repo",
+                "fix": fix,
+                "instances": [
+                    {
+                        "pid": 111,
+                        "port": 8090,
+                        "started_at": "Fri Sep  4 01:02:03 2026",
+                        "launchd_owned": True,
+                    },
+                    {
+                        "pid": 222,
+                        "port": 8099,
+                        "started_at": "Fri Sep  4 01:03:03 2026",
+                        "launchd_owned": False,
+                    },
+                ],
+            },
+        }
+
+        with mock.patch.object(ccc, "_resolve_server", return_value="http://127.0.0.1:8099"), \
+             mock.patch.object(ccc, "_get_json") as get_json, \
+             mock.patch.object(ccc, "_local_head_rev", return_value="abc123"), \
+             redirect_stdout(io.StringIO()) as out:
+            def fake_get_json(base, path, timeout=10):
+                if path == "/api/engines/doctor":
+                    return payload
+                if path == "/api/version":
+                    return {"code_rev": "abc123"}
+                raise AssertionError(f"unexpected path {path!r}")
+            get_json.side_effect = fake_get_json
+            rc = ccc.cmd_doctor(Args())
+
+        text = out.getvalue()
+        self.assertEqual(rc, 1)
+        self.assertIn("ccc server instances: 2 (WARN)", text)
+        self.assertIn("pid 222", text)
+        self.assertIn("manual", text)
+        self.assertIn(f"fix: {fix}", text)
 
 
 if __name__ == "__main__":

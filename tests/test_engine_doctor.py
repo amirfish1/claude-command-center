@@ -68,3 +68,201 @@ def test_doctor_reuses_onboarding_login_signal():
     )
     assert present is True
     assert source == "cli-login-check"
+
+
+def test_doctor_process_listing_parsers_are_batched_and_read_only(monkeypatch):
+    server = _fresh_server()
+    calls = []
+
+    def fake_sys_run(cmd, timeout=3):
+        calls.append(cmd)
+        if cmd[:3] == [server._SYS_PS, "-axo", "pid=,lstart=,command="]:
+            return (
+                "111 Fri Sep  4 01:02:03 2026 /usr/bin/python3 server.py\n"
+                "222 Fri Sep  4 01:03:03 2026 /usr/bin/python3 other.py\n"
+                "333 Fri Sep  4 01:04:03 2026 /usr/bin/node server.py\n"
+            )
+        if cmd[:6] == [
+            server._SYS_LSOF,
+            "-nP",
+            "-a",
+            "-iTCP",
+            "-sTCP:LISTEN",
+            "-FpPn",
+        ]:
+            return "p111\nn*:8090\np222\nn*:3000\n"
+        raise AssertionError(f"unexpected command: {cmd!r}")
+
+    monkeypatch.setattr(server, "_sys_run", fake_sys_run)
+
+    rows = server._doctor_server_process_rows()
+    ports = server._doctor_listening_ports([111, 222])
+
+    assert rows == [{
+        "pid": 111,
+        "started_at": "Fri Sep 4 01:02:03 2026",
+        "cmd": "/usr/bin/python3 server.py",
+    }]
+    assert ports == {111: [8090], 222: [3000]}
+    assert len(calls) == 2
+
+
+def test_doctor_instances_warns_on_duplicate_repo_server(monkeypatch):
+    server = _fresh_server()
+    repo = str(server.CCC_ROOT)
+    monkeypatch.setattr(server, "_doctor_server_process_rows", lambda: [
+        {
+            "pid": 111,
+            "started_at": "Fri Sep  4 01:02:03 2026",
+            "cmd": "/usr/bin/python3 server.py",
+        },
+        {
+            "pid": 222,
+            "started_at": "Fri Sep  4 01:03:03 2026",
+            "cmd": "/usr/bin/python3 server.py --port 8099",
+        },
+        {
+            "pid": 333,
+            "started_at": "Fri Sep  4 01:04:03 2026",
+            "cmd": "/usr/bin/python3 other.py",
+        },
+    ])
+    monkeypatch.setattr(server, "_doctor_process_cwds", lambda pids: {
+        111: repo,
+        222: repo,
+        333: repo,
+    })
+    monkeypatch.setattr(server, "_doctor_listening_ports", lambda pids: {
+        111: [8090],
+        222: [8099],
+    })
+    monkeypatch.setattr(server, "_launchd_print_job_pid", lambda label: 111)
+    monkeypatch.setattr(server, "_read_registry_pruned", lambda: [
+        {
+            "pid": 111,
+            "port": 8090,
+            "install_path": repo,
+            "started_at": "2026-09-04T01:02:03-07:00",
+        },
+        {
+            "pid": 222,
+            "port": 8099,
+            "install_path": repo,
+            "started_at": "2026-09-04T01:03:03-07:00",
+        },
+    ])
+
+    report = server.build_doctor_instances()
+
+    assert report["status"] == "warn"
+    assert report["launchd_pid"] == 111
+    assert "more than one" in report["warning"]
+    assert report["fix"] == (
+        "kill 222 && launchctl kickstart -k "
+        "gui/$(id -u)/com.github.claude-command-center"
+    )
+    by_pid = {row["pid"]: row for row in report["instances"]}
+    assert by_pid[111]["port"] == 8090
+    assert by_pid[111]["launchd_owned"] is True
+    assert by_pid[111]["registered"] is True
+    assert by_pid[222]["port"] == 8099
+    assert by_pid[222]["launchd_owned"] is False
+
+
+def test_doctor_instances_warns_when_listener_is_not_launchd_owned(monkeypatch):
+    server = _fresh_server()
+    repo = str(server.CCC_ROOT)
+    monkeypatch.setattr(server, "_doctor_server_process_rows", lambda: [
+        {
+            "pid": 222,
+            "started_at": "Fri Sep  4 01:03:03 2026",
+            "cmd": "/usr/bin/python3 server.py --port 8099",
+        },
+    ])
+    monkeypatch.setattr(server, "_doctor_process_cwds", lambda pids: {222: repo})
+    monkeypatch.setattr(server, "_doctor_listening_ports", lambda pids: {222: [8099]})
+    monkeypatch.setattr(server, "_launchd_print_job_pid", lambda label: 111)
+    monkeypatch.setattr(server, "_read_registry_pruned", lambda: [])
+
+    report = server.build_doctor_instances()
+
+    assert report["status"] == "warn"
+    assert "not launchd-owned" in report["warning"]
+    assert report["fix"] == (
+        "kill 222 && launchctl kickstart -k "
+        "gui/$(id -u)/com.github.claude-command-center"
+    )
+
+
+def test_doctor_instances_warns_on_single_manual_listener(monkeypatch):
+    server = _fresh_server()
+    repo = str(server.CCC_ROOT)
+    monkeypatch.setattr(server, "_doctor_server_process_rows", lambda: [
+        {
+            "pid": 222,
+            "started_at": "Fri Sep  4 01:03:03 2026",
+            "cmd": "/usr/bin/python3 server.py --port 8099",
+        },
+    ])
+    monkeypatch.setattr(server, "_doctor_process_cwds", lambda pids: {222: repo})
+    monkeypatch.setattr(server, "_doctor_listening_ports", lambda pids: {222: [8099]})
+    monkeypatch.setattr(server, "_launchd_print_job_pid", lambda label: None)
+    monkeypatch.setattr(server, "_read_registry_pruned", lambda: [])
+
+    report = server.build_doctor_instances()
+
+    assert report["status"] == "warn"
+    assert "not launchd-owned" in report["warning"]
+    assert report["fix"] == (
+        "kill 222 && launchctl kickstart -k "
+        "gui/$(id -u)/com.github.claude-command-center"
+    )
+
+
+def test_doctor_instances_ignores_reused_pid_registry_from_other_repo(monkeypatch):
+    server = _fresh_server()
+    repo = str(server.CCC_ROOT)
+    monkeypatch.setattr(server, "_doctor_server_process_rows", lambda: [
+        {
+            "pid": 222,
+            "started_at": "Fri Sep  4 01:03:03 2026",
+            "cmd": "/usr/bin/python3 server.py --port 8099",
+        },
+    ])
+    monkeypatch.setattr(server, "_doctor_process_cwds", lambda pids: {222: repo})
+    monkeypatch.setattr(server, "_doctor_listening_ports", lambda pids: {222: [8099]})
+    monkeypatch.setattr(server, "_launchd_print_job_pid", lambda label: 222)
+    monkeypatch.setattr(server, "_read_registry_pruned", lambda: [
+        {
+            "pid": 222,
+            "port": 8101,
+            "install_path": "/Users/person/other-repo",
+            "repo_common_dir": "/Users/person/other-repo/.git",
+            "started_at": "2026-09-04T00:00:00-07:00",
+        },
+    ])
+
+    report = server.build_doctor_instances()
+
+    assert report["status"] == "ok"
+    row = report["instances"][0]
+    assert row["port"] == 8099
+    assert row["started_at"] == "Fri Sep  4 01:03:03 2026"
+    assert row["registered"] is False
+
+
+def test_doctor_instances_are_included_in_engine_doctor(monkeypatch):
+    server = _fresh_server()
+    expected = {"ok": True, "status": "ok", "instances": []}
+    monkeypatch.setattr(server, "build_doctor_instances", lambda: expected)
+
+    report = server.build_ccc_doctor()
+
+    assert report["server_instances"] == expected
+
+
+def test_doctor_instances_route_is_wired():
+    source = (PROJECT_ROOT / "server.py").read_text(encoding="utf-8")
+
+    assert 'path == "/api/doctor/instances"' in source
+    assert "self.send_json(build_doctor_instances())" in source

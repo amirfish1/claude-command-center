@@ -61,6 +61,23 @@ class LaunchdJobPidTests(unittest.TestCase):
         ):
             self.assertIsNone(server._launchd_job_pid("com.github.claude-command-center"))
 
+    def test_launchctl_print_pid_parser(self):
+        server = self.server
+        stdout = "state = running\npid = 36700\nprogram = /usr/bin/python3\n"
+        with mock.patch.object(server.platform, "system", return_value="Darwin"), \
+             mock.patch.object(server.os, "getuid", return_value=501), \
+             mock.patch.object(server.subprocess, "run") as run:
+            run.return_value = mock.Mock(returncode=0, stdout=stdout, stderr="")
+            self.assertEqual(
+                server._launchd_print_job_pid("com.github.claude-command-center"),
+                36700,
+            )
+        self.assertEqual(run.call_args[0][0], [
+            "launchctl",
+            "print",
+            "gui/501/com.github.claude-command-center",
+        ])
+
 
 class LaunchdRestartTargetsPidTests(unittest.TestCase):
     """The decision logic that fixes the actual bug: a plist existing on

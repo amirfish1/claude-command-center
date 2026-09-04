@@ -567,7 +567,8 @@ def cmd_doctor(args):
         )
     print("\n'?' = no CLI-based probe implemented for that check yet (not a failure).")
     _print_github_quota(payload.get("github_quota"))
-    return 1 if (freshness == "stale" or (args.engine and any_unhealthy)) else 0
+    instance_warn = _print_server_instances(payload.get("server_instances"))
+    return 1 if (freshness == "stale" or instance_warn or (args.engine and any_unhealthy)) else 0
 
 
 def _print_github_quota(quota):
@@ -602,6 +603,33 @@ def _print_github_quota(quota):
         f"{f' ({pct}%)' if pct is not None else ''}, "
         f"{remaining} remaining{reset_note}{flag}"
     )
+
+
+def _print_server_instances(report):
+    """Print duplicate dashboard-process diagnostics. Returns True on WARN."""
+    if not isinstance(report, dict):
+        return False
+    instances = report.get("instances") or []
+    status = str(report.get("status") or "unknown").upper()
+    print(f"\nccc server instances: {len(instances)} ({status})")
+    for row in instances:
+        pid = row.get("pid") or "?"
+        ports = row.get("ports")
+        if isinstance(ports, list) and ports:
+            port = ",".join(str(p) for p in ports)
+        else:
+            port = str(row.get("port") or "?")
+        owner = "launchd" if row.get("launchd_owned") else "manual"
+        started = row.get("started_at") or row.get("process_started_at") or "?"
+        print(f"  pid {pid} port {port} started {started} {owner}")
+    if status == "WARN":
+        warning = str(report.get("warning") or "duplicate server instance risk")
+        print(f"  WARN: {warning}")
+        fix = report.get("fix")
+        if fix:
+            print(f"  fix: {fix}")
+        return True
+    return False
 
 
 def _parse_iso(ts):

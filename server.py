@@ -14766,6 +14766,7 @@ def _compute_server_code_rev():
 _SERVER_CODE_REV = _compute_server_code_rev()
 
 
+_CCC_DASHBOARD_LAUNCHD_LABEL = "com.github.claude-command-center"
 _WORKER_LAUNCHD_LABEL = "com.github.claude-command-center.worker"
 
 
@@ -25881,9 +25882,12 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
             payload["pr_cache"] = pr_cache_stats()
             self.send_json(payload)
         elif path == "/api/engines/doctor":
-            # W3-3: per-engine CLI/auth/BYOK health, read-only (never spawns
-            # a real subprocess). Backs `ccc doctor`.
+            # W3-3/W9-1: per-engine CLI/auth/BYOK health plus read-only
+            # dashboard instance diagnostics. Backs `ccc doctor`.
             self.send_json(build_ccc_doctor())
+        elif path == "/api/doctor/instances":
+            # W9-1: read-only duplicate dashboard detector for `ccc doctor`.
+            self.send_json(build_doctor_instances())
         elif path == "/api/byok/profiles":
             # BYOK (W2-2): key profiles and the provider catalog for the
             # Settings screen. Never returns secret material — set_key/
@@ -35102,11 +35106,205 @@ def _doctor_auth_present(engine, onboarding_clis):
     return None, "no-probe-implemented"
 
 
+def _launchd_print_job_pid(label, timeout=3):
+    """PID launchd currently owns for `label` via `launchctl print`, or None."""
+    if platform.system() != "Darwin":
+        return None
+    try:
+        target = f"gui/{os.getuid()}/{label}"
+        proc = subprocess.run(
+            ["launchctl", "print", target],
+            capture_output=True, text=True, timeout=timeout,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+    if proc.returncode != 0:
+        return None
+    m = re.search(r"\bpid\s*=\s*(\d+)\b", proc.stdout or "", re.IGNORECASE)
+    return int(m.group(1)) if m else None
+
+
+def _doctor_is_server_py_command(cmd):
+    try:
+        argv = shlex.split(cmd or "")
+    except ValueError:
+        argv = str(cmd or "").split()
+    if len(argv) < 2:
+        return False
+    exe = os.path.basename(argv[0]).lower()
+    if "python" not in exe:
+        return False
+    return any(os.path.basename(arg) == "server.py" for arg in argv[1:])
+
+
+def _doctor_server_process_rows():
+    """Every python `server.py` process visible to ps, with process start time."""
+    rows = []
+    out = _sys_run([_SYS_PS, "-axo", "pid=,lstart=,command="], timeout=5)
+    for line in out.splitlines():
+        parts = line.strip().split(None, 6)
+        if len(parts) < 7:
+            continue
+        try:
+            pid = int(parts[0])
+        except ValueError:
+            continue
+        cmd = parts[6]
+        if not _doctor_is_server_py_command(cmd):
+            continue
+        rows.append({
+            "pid": pid,
+            "started_at": " ".join(parts[1:6]),
+            "cmd": cmd,
+        })
+    return rows
+
+
+def _doctor_process_cwds(pids):
+    return _sys_cwds(pids)
+
+
+def _doctor_listening_ports(pids):
+    if not pids:
+        return {}
+    out = _sys_run([
+        _SYS_LSOF,
+        "-nP",
+        "-a",
+        "-iTCP",
+        "-sTCP:LISTEN",
+        "-FpPn",
+        "-p",
+        ",".join(str(int(pid)) for pid in pids),
+    ], timeout=5)
+    ports = {}
+    cur = None
+    for line in out.splitlines():
+        if line.startswith("p"):
+            try:
+                cur = int(line[1:])
+            except ValueError:
+                cur = None
+        elif line.startswith("n") and cur is not None:
+            m = re.search(r":(\d+)(?:\s|\(|$)", line[1:])
+            if not m:
+                continue
+            ports.setdefault(cur, set()).add(int(m.group(1)))
+    return {pid: sorted(vals) for pid, vals in ports.items()}
+
+
+def _doctor_registry_by_pid(repo_path=None):
+    try:
+        entries = _read_registry_pruned()
+    except Exception:
+        entries = []
+    repo_path_norm = os.path.normpath(str(repo_path or "")) if repo_path else ""
+    by_pid = {}
+    for entry in entries:
+        if not isinstance(entry, dict):
+            continue
+        if repo_path_norm:
+            install_path = os.path.normpath(str(entry.get("install_path") or ""))
+            if install_path != repo_path_norm:
+                continue
+        try:
+            by_pid[int(entry.get("pid"))] = entry
+        except (TypeError, ValueError):
+            continue
+    return by_pid
+
+
+def _doctor_instance_fix_line(kill_pids):
+    restart = (
+        "launchctl kickstart -k "
+        f"gui/$(id -u)/{_CCC_DASHBOARD_LAUNCHD_LABEL}"
+    )
+    pids = [str(int(pid)) for pid in kill_pids]
+    return f"kill {' '.join(pids)} && {restart}" if pids else restart
+
+
+def build_doctor_instances():
+    """Read-only inventory of CCC dashboard server.py instances for this repo."""
+    repo_path = os.path.normpath(str(CCC_ROOT))
+    process_rows = _doctor_server_process_rows()
+    pids = [row["pid"] for row in process_rows]
+    cwds = _doctor_process_cwds(pids)
+    ports_by_pid = _doctor_listening_ports(pids)
+    registry_by_pid = _doctor_registry_by_pid(repo_path)
+    launchd_pid = _launchd_print_job_pid(_CCC_DASHBOARD_LAUNCHD_LABEL)
+
+    instances = []
+    for row in process_rows:
+        if not _doctor_is_server_py_command(row.get("cmd") or ""):
+            continue
+        pid = row["pid"]
+        cwd = cwds.get(pid)
+        if os.path.normpath(str(cwd or "")) != repo_path:
+            continue
+        reg = registry_by_pid.get(pid) or {}
+        ports = list(ports_by_pid.get(pid) or [])
+        reg_port = reg.get("port")
+        try:
+            reg_port = int(reg_port)
+        except (TypeError, ValueError):
+            reg_port = None
+        port = reg_port if reg_port is not None else (ports[0] if ports else None)
+        instances.append({
+            "pid": pid,
+            "port": port,
+            "ports": ports,
+            "started_at": reg.get("started_at") or row.get("started_at") or "",
+            "process_started_at": row.get("started_at") or "",
+            "cwd": cwd,
+            "cmd": row.get("cmd") or "",
+            "launchd_owned": bool(launchd_pid is not None and pid == launchd_pid),
+            "registered": pid in registry_by_pid,
+            "registry": {
+                "port": reg_port,
+                "install_path": reg.get("install_path") or None,
+                "started_at": reg.get("started_at") or None,
+            },
+        })
+    instances.sort(key=lambda item: item["pid"])
+
+    warnings = []
+    if len(instances) > 1:
+        warnings.append("more than one CCC server.py process for this repo")
+    non_launchd_listeners = [
+        item for item in instances
+        if item.get("ports") and item.get("pid") != launchd_pid
+    ]
+    if non_launchd_listeners:
+        warnings.append("one or more listeners are not launchd-owned")
+    elif launchd_pid is not None and instances and launchd_pid not in {item["pid"] for item in instances}:
+        warnings.append("the launchd-owned pid is not a server.py process for this repo")
+
+    kill_pids = []
+    if warnings:
+        kill_pids = [
+            item["pid"] for item in instances
+            if launchd_pid is None or item["pid"] != launchd_pid
+        ]
+
+    return {
+        "ok": True,
+        "generated_at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+        "repo_path": repo_path,
+        "launchd_label": _CCC_DASHBOARD_LAUNCHD_LABEL,
+        "launchd_pid": launchd_pid,
+        "status": "warn" if warnings else "ok",
+        "warning": "; ".join(warnings),
+        "fix": _doctor_instance_fix_line(kill_pids) if warnings else None,
+        "instances": instances,
+    }
+
+
 def build_ccc_doctor():
     """Per-engine: CLI present, auth present (where checkable), BYOK profile
-    present, and a dry-run smoke check. Read-only -- never spawns a real
-    subprocess or spends a token; the "smoke" step only confirms the CLI
-    resolves, so it is safe to poll on every ``ccc doctor`` invocation.
+    present, a dry-run smoke check, and dashboard instance diagnostics.
+    Read-only -- never spawns a model subprocess or spends a token; the
+    engine "smoke" step only confirms the CLI binary resolves, so it is safe
+    to poll on every ``ccc doctor`` invocation.
     """
     installed = {row["engine"]: row for row in _engines_installed().get("engines", [])}
     onboarding_clis = _get_onboarding_status().get("clis", {})
@@ -35144,6 +35342,7 @@ def build_ccc_doctor():
         # Cached, and the read itself is free (a rateLimit-only query does
         # not count against the limit -- measured), so doctor stays cheap.
         "github_quota": read_graphql_quota(),
+        "server_instances": build_doctor_instances(),
     }
 
 
