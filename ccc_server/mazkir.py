@@ -428,10 +428,15 @@ def prefetch_sessions(question: str, since: str | None, runner=None, index_bin: 
     return [d for d in data if isinstance(d, dict) and d.get("session_id")] if isinstance(data, list) else []
 
 
+SNAPSHOT_TIMEOUT_SEC = 2.0  # the snapshot is a nicety; Mazkir can call ccc-state itself
+
+
 def fleet_snapshot(base: str | None = None, fetch=None) -> str:
     try:
-        st = CccState(base, fetch=fetch)
-        census = st.get("/api/sessions/census")
+        if fetch is None:
+            b = resolve_base(base)
+            fetch = lambda path: fetch_json(b, path, timeout=SNAPSHOT_TIMEOUT_SEC)  # noqa: E731
+        census = CccState(base, fetch=fetch).get("/api/sessions/census")
     except Exception:
         return "fleet: (CCC census unavailable)"
     by_state: dict[str, int] = {}
@@ -622,8 +627,17 @@ def run_mazkir(question: str, history: list | None = None, range_key: str | None
         return {"ok": False, "code": "ask_engine_unavailable", "error": "claude binary not found"}, 503
 
     def do_prefetch() -> tuple[list[dict], str]:
-        return (prefetch_sessions(question, since, runner=prefetch_runner),
-                fleet_snapshot(base, fetch=fetch))
+        # The census fetch and the index search are independent; overlap them
+        # (round 3 lost 12 s on Q3 waiting for a restarting CCC).
+        import concurrent.futures as _cf
+        with _cf.ThreadPoolExecutor(max_workers=1) as ex:
+            snap_f = ex.submit(fleet_snapshot, base, fetch)
+            cands = prefetch_sessions(question, since, runner=prefetch_runner)
+            try:
+                snap = snap_f.result(timeout=SNAPSHOT_TIMEOUT_SEC + 1)
+            except Exception:
+                snap = "fleet: (CCC census unavailable)"
+        return cands, snap
 
     def make_prompt(cands: list[dict], snap: str) -> str:
         return build_prompt(question, history, cands, snap, range_key)
