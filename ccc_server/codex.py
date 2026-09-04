@@ -2776,9 +2776,8 @@ def _codex_context_window_args():
     a foot-gun — it is silently capped per model:
       - gpt-5.4: 272K default, 1M max -> reports ~950K effective context.
       - gpt-5.5: 272K max -> clamped to ~258K after reserved output/system
-        tokens. CCC still defaults Codex spawns to gpt-5.5 because it is the
-        stronger general model; choose gpt-5.4 explicitly when the larger
-        window matters more than the 5.5 model quality.
+        tokens.
+      - gpt-6-astra (CCC default): 272K default, 872K advertised maximum.
     Passed as a global `-c` override on spawn, resume, and the app-server so the
     window is consistent across a session's whole life. Set CCC_CODEX_CONTEXT_1M=0
     to fall back to the model default.

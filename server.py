@@ -6719,7 +6719,7 @@ def _codex_default_model():
     env_model = _clean_spawn_default_model(os.environ.get("CCC_CODEX_MODEL"))
     if env_model:
         return env_model
-    return "gpt-5.5"
+    return "gpt-6-astra"
 
 
 def _spawn_fallback_model_for_engine(engine):
@@ -6766,6 +6766,7 @@ _ENGINE_CURATED_MODELS = {
         {"id": "haiku-4-5", "label": "haiku-4-5", "oneM": False},
     ),
     "codex": (
+        {"id": "gpt-6-astra", "label": "6 Astra"},
         {"id": "gpt-5.5", "label": "5.5"},
         {"id": "gpt-5.6-sol", "label": "5.6 Sol"},
         {"id": "gpt-5.6-terra", "label": "5.6 Terra"},
@@ -7182,6 +7183,9 @@ def _codex_models_cache_records():
 # pricing and output limits that the Codex CLI does not expose. Update when
 # OpenAI revises the Codex pricing page.
 _CODEX_OPENAI_MODELS = (
+    # https://developers.openai.com/api/docs/models/gpt-6-astra (2026-09).
+    # Context limit follows the installed Codex catalog, not the API window.
+    {"id": "gpt-6-astra", "label": "GPT-6 Astra", "cost_tier": 60.0, "cost_summary": "$10.00 in / 1M, $50.00 out / 1M", "max_context_tokens": 872000, "max_output_tokens": 128000, "reasoning_efforts": ("low", "medium", "high", "xhigh"), "default_reasoning_effort": "medium"},
     {"id": "gpt-5.6-sol", "label": "GPT-5.6 Sol", "cost_tier": 40.0, "cost_summary": "$10.00 in / 1M, $30.00 out / 1M", "max_context_tokens": 872000, "max_output_tokens": 128000, "reasoning_efforts": ("low", "medium", "high", "xhigh"), "default_reasoning_effort": "low"},
     {"id": "gpt-5.6-terra", "label": "GPT-5.6 Terra", "cost_tier": 20.0, "cost_summary": "$5.00 in / 1M, $15.00 out / 1M", "max_context_tokens": 872000, "max_output_tokens": 128000, "reasoning_efforts": ("low", "medium", "high", "xhigh"), "default_reasoning_effort": "medium"},
     {"id": "gpt-5.6-luna", "label": "GPT-5.6 Luna", "cost_tier": 4.0, "cost_summary": "$1.00 in / 1M, $3.00 out / 1M", "max_context_tokens": 872000, "max_output_tokens": 128000, "reasoning_efforts": ("low", "medium", "high", "xhigh"), "default_reasoning_effort": "medium"},
@@ -7722,6 +7726,20 @@ def _build_engine_model_catalog(force_refresh=False):
 
     _model_catalog_add(catalog, "codex", _codex_configured_model(), source="harness-config")
     _model_catalog_add(catalog, "antigravity", _antigravity_cli_configured_model(), source="harness-config")
+
+    # Live Codex capabilities take precedence over the published fallback.
+    # Keep the cache provenance when pricing adds metadata for the same model.
+    for row in _codex_models_cache_records():
+        attrs = {key: value for key, value in row.items() if key not in ("id", "label", "source")}
+        if "reasoning_efforts" in attrs:
+            attrs["reasoning_efforts"] = [
+                effort for effort in attrs["reasoning_efforts"]
+                if effort in CODEX_REASONING_EFFORTS
+            ]
+        _model_catalog_add(
+            catalog, "codex", row["id"], label=row.get("label"),
+            source=row.get("source") or "codex-cache", **attrs,
+        )
 
     for row in _codex_model_catalog_records():
         _model_catalog_add(

@@ -3372,9 +3372,9 @@ class TestServerImports(unittest.TestCase):
             server.SPAWN_DEFAULTS_FILE = pathlib.Path(td) / "spawn-defaults.json"
             try:
                 with mock.patch.dict(os.environ, {}, clear=True):
-                    self.assertEqual(server._spawn_fallback_model_for_engine("codex"), "gpt-5.5")
+                    self.assertEqual(server._spawn_fallback_model_for_engine("codex"), "gpt-6-astra")
                     defaults = server._load_spawn_defaults()
-                    self.assertEqual(defaults["models"]["codex"], "gpt-5.5")
+                    self.assertEqual(defaults["models"]["codex"], "gpt-6-astra")
 
                     server.SPAWN_DEFAULTS_FILE.write_text(json.dumps({
                         "engine": "codex",
@@ -3438,6 +3438,7 @@ class TestServerImports(unittest.TestCase):
 
         codex_ids = payload["engines"]["codex"]
         self.assertEqual(codex_ids, [
+            "gpt-6-astra",
             "gpt-5.5",
             "gpt-5.6-sol",
             "gpt-5.6-terra",
@@ -3451,7 +3452,7 @@ class TestServerImports(unittest.TestCase):
         self.assertEqual(payload["enforced"], [])
         self.assertFalse(payload["catalog"]["codex"]["supports_custom"])
         labels = [m["label"] for m in payload["catalog"]["codex"]["models"]]
-        self.assertEqual(labels[:4], ["5.5", "5.6 Sol", "5.6 Terra", "5.6 Luna"])
+        self.assertEqual(labels[:5], ["6 Astra", "5.5", "5.6 Sol", "5.6 Terra", "5.6 Luna"])
         mini = next(m for m in payload["catalog"]["codex"]["models"] if m["id"] == "gpt-5.4-mini")
         self.assertIn("codex-cache", mini["sources"])
         self.assertEqual(mini["reasoning_efforts"], ["low"])
@@ -3792,6 +3793,7 @@ class TestServerImports(unittest.TestCase):
             sys.modules.pop(mod, None)
         server = importlib.import_module("server")
 
+        self.assertEqual(server._validate_codex_model("gpt-6-astra"), ("gpt-6-astra", None))
         self.assertEqual(server._validate_codex_model("gpt-5.6-luna"), ("gpt-5.6-luna", None))
         self.assertEqual(server._validate_codex_model("gpt-5.5-codex"), ("gpt-5.5", None))
         model, error = server._validate_codex_model("gpt-5.6-preview")
@@ -3837,6 +3839,7 @@ class TestServerImports(unittest.TestCase):
         self.assertIn("_gated('modelCatalog', loadEngineModelCatalog)", app_js)
         self.assertIn("setInterval(refreshEngineModelCatalog", app_js)
         self.assertIn("function _modelAllowedForEngine", app_js)
+        self.assertIn("gpt-6-astra", app_js)
         self.assertIn("gpt-5.6-sol", app_js)
         self.assertIn("gpt-5.6-terra", app_js)
         self.assertIn("gpt-5.6-luna", app_js)
@@ -11655,7 +11658,7 @@ class TestRepoContextHelpers(unittest.TestCase):
         self.assertEqual(start_params["runtimeWorkspaceRoots"], [str(self.repo)])
         self.assertEqual(start_params["approvalPolicy"], "never")
         self.assertEqual(start_params["sandbox"], "danger-full-access")
-        self.assertEqual(start_params["model"], "gpt-5.5")
+        self.assertEqual(start_params["model"], "gpt-6-astra")
         self.assertEqual(start_params["config"]["model_context_window"], 1000000)
 
         # turn/start now runs second (was third, behind the rename).
@@ -11683,7 +11686,7 @@ class TestRepoContextHelpers(unittest.TestCase):
         self.assertEqual(reg_thread["transport"], "managed")
         self.assertEqual(reg_thread["cwd"], str(self.repo))
         self.assertEqual(reg_thread["repo_path"], str(self.repo))
-        self.assertEqual(reg_thread["model"], "gpt-5.5")
+        self.assertEqual(reg_thread["model"], "gpt-6-astra")
         self.assertEqual(reg_thread["title"], "app-spawn")
         self.assertEqual(reg_thread["ccc"]["spawn_id"], result["spawn_id"])
 
@@ -11865,7 +11868,7 @@ class TestRepoContextHelpers(unittest.TestCase):
             server._CODEX_APP_SERVER_FALSE_MISSES = 0
 
     def test_spawn_codex_defaults_to_best_model_and_max_context_arg(self):
-        """Default Codex spawns should prefer 5.5 while requesting max context."""
+        """Default Codex spawns should prefer GPT-6 Astra while requesting max context."""
         server = self.server
         proc = mock.Mock(pid=4244)
         original_spawns = list(server._spawned_sessions)
@@ -11899,7 +11902,7 @@ class TestRepoContextHelpers(unittest.TestCase):
         cmd = popen.call_args.args[0]
         self.assertIn("-c", cmd)
         self.assertEqual(cmd[cmd.index("-c") + 1], "model_context_window=1000000")
-        self.assertEqual(cmd[cmd.index("--model") + 1], "gpt-5.5")
+        self.assertEqual(cmd[cmd.index("--model") + 1], "gpt-6-astra")
 
     def test_resume_codex_attaches_command_center_pasted_images(self):
         """Resumed Codex sessions need the same pasted-image attachment path."""

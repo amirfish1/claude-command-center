@@ -79,6 +79,7 @@ def test_week_rankings_force_refresh_bypasses_cached_rows(monkeypatch):
 @pytest.mark.parametrize(
     ("engine", "model", "expected"),
     [
+        ("codex", "gpt-6-astra", 10.0 + 0.0 + 1.0 + 50.0),
         ("codex", "gpt-5.6-sol", 5.0 + 6.25 + 0.5 + 30.0),
         ("codex", "gpt-5.6-terra", 2.5 + 3.125 + 0.25 + 15.0),
         ("codex", "gpt-5.6-luna", 1.0 + 1.25 + 0.1 + 6.0),

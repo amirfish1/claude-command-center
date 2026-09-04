@@ -3411,7 +3411,7 @@
   // route renderable even if that read ever fails.
   const F2_LAUNCH_ENGINES = [
     { id: 'claude', label: 'Claude', fallback: [{ id: 'sonnet-5', label: 'sonnet-5' }] },
-    { id: 'codex',  label: 'Codex',  fallback: [{ id: 'gpt-5.5', label: '5.5' }] },
+    { id: 'codex',  label: 'Codex',  fallback: [{ id: 'gpt-6-astra', label: '6 Astra' }] },
     { id: 'kimi',   label: 'Kimi',   fallback: [{ id: 'kimi-code/k3', label: 'K3' }] },
   ];
   // Fallback ladder only. The real one is per engine (Codex stops at Extra
@@ -6381,7 +6381,7 @@
       return '';
     }
     if (engineKey === 'codex') {
-      if (hasFamily('sol')) return 'premium';
+      if (hasFamily('astra') || hasFamily('sol')) return 'premium';
       if (hasFamily('terra')) return 'high';
       if (hasFamily('luna')) return 'medium';
     }
@@ -51125,6 +51125,7 @@
       { id: 'haiku-4-5', label: 'haiku-4-5', oneM: false },
     ],
     codex: [
+      { id: 'gpt-6-astra',          label: '6 Astra' },
       { id: 'gpt-5.5',              label: '5.5' },
       { id: 'gpt-5.6-sol',          label: '5.6 Sol' },
       { id: 'gpt-5.6-terra',        label: '5.6 Terra' },
@@ -57948,6 +57949,7 @@
   // dashboard already polls (conversationsData rows carry
   // parent_session_id) plus the cheap /api/sessions/spawned registry.
   const ORCH_EXECUTORS = [
+    { id: 'gpt-6-astra',   engine: 'codex',       model: 'gpt-6-astra',           label: '6 Astra',        vendor: 'Codex',       family: 'openai' },
     { id: 'sonnet-5',      engine: 'claude',      model: 'sonnet-5',              label: 'Sonnet 5',       vendor: 'Claude',      family: 'anthropic' },
     { id: 'opus-5',        engine: 'claude',      model: 'opus-5',                label: 'Opus 5',         vendor: 'Claude',      family: 'anthropic' },
     { id: 'gpt-5.6-terra', engine: 'codex',       model: 'gpt-5.6-terra',         label: '5.6 Terra',      vendor: 'Codex',       family: 'openai' },
@@ -57974,7 +57976,7 @@
   // with the bracket selected, so the user replaces the placeholder and
   // submits from the composer.
   const ORCH_PLAYBOOKS = [
-    { id: 'delegate', title: 'Delegate',          sub: 'Execution runs on cheaper lanes, not here.' },
+    { id: 'delegate', title: 'Delegate',          sub: 'Execution runs in a separate lane.' },
     { id: 'spawn',    title: 'Spawn a sub-agent', sub: 'Pick a model, tap, edit the task in the composer, send.', tier: true, draft: true },
     { id: 'critique', title: 'Critique',          sub: 'Two outside reviewers, blunt.' },
     { id: 'verify',   title: 'Verify',            sub: 'A different model family checks the work.', more: true },
@@ -58035,11 +58037,11 @@
   // lane never grades its own homework.
   function orchTester(executor) {
     return executor.family === 'anthropic'
-      ? ORCH_EXECUTORS.find(e => e.id === 'gpt-5.6-terra')
+      ? ORCH_EXECUTORS.find(e => e.id === 'gpt-6-astra')
       : ORCH_EXECUTORS.find(e => e.id === 'sonnet-5');
   }
   function orchCritics(executor) {
-    const pool = ['gpt-5.6-terra', 'sonnet-5', 'gemini-3.5', 'grok-4.6']
+    const pool = ['gpt-6-astra', 'sonnet-5', 'gemini-3.5', 'grok-4.6']
       .map(id => ORCH_EXECUTORS.find(e => e.id === id))
       .filter(e => e && e.family !== executor.family);
     return pool.slice(0, 2);
@@ -58104,7 +58106,7 @@
     const alt = orchAltExecutor(ex);
     switch (id) {
       case 'delegate':
-        return 'When ready to execute, feel free to use CCC orchestration to spawn execution on cheaper models, e.g. '
+        return 'When ready to execute, feel free to use CCC orchestration to spawn an execution lane, e.g. '
           + orchExecLabel(ex) + (alt ? ' or ' + orchExecLabel(alt) : '') + '.\n'
           + 'Remind them they can ask you questions through CCC orchestration.';
       case 'verify':
@@ -64203,7 +64205,7 @@
     try { return normalizeSpawnDefaultEngine(localStorage.getItem('ccc.spawnEngine')); }
     catch (_) { return 'claude'; }
   }
-  let _defaultModelsByEngine = { claude: 'fable-5', codex: 'gpt-5.5', cursor: 'auto', antigravity: '', kilo: 'kilo/stepfun/step-3.7-flash:free', hermes: 'auto', kimi: 'kimi-code/k3', opencode: 'openrouter/anthropic/claude-sonnet-4.5', grok: 'grok-4.6' };
+  let _defaultModelsByEngine = { claude: 'fable-5', codex: 'gpt-6-astra', cursor: 'auto', antigravity: '', kilo: 'kilo/stepfun/step-3.7-flash:free', hermes: 'auto', kimi: 'kimi-code/k3', opencode: 'openrouter/anthropic/claude-sonnet-4.5', grok: 'grok-4.6' };
   let _spawnDefaultsLoaded = false;
   let spawnDefaultsState = {
     engine: readLegacySpawnEnginePref(),
@@ -64438,7 +64440,7 @@
     engine = normalizeSpawnDefaultEngine(engine);
     let value = String(model == null ? '' : model).trim();
     if (engine === 'claude' && !value) value = 'opus';
-    if (engine === 'codex' && !value) value = 'gpt-5.5';
+    if (engine === 'codex' && !value) value = 'gpt-6-astra';
     if (engine === 'cursor' && !value) value = 'auto';
     if (engine === 'kilo' && !value) value = 'kilo/stepfun/step-3.7-flash:free';
     if (engine === 'opencode' && !value) value = 'openrouter/anthropic/claude-sonnet-4.5';
@@ -70274,7 +70276,7 @@
       model = ($spawnDefaultsOtherModel && $spawnDefaultsOtherModel.value || '').trim();
     }
     if (engine === 'claude' && !model) model = 'opus';
-    if (engine === 'codex' && !model) model = 'gpt-5.5';
+    if (engine === 'codex' && !model) model = 'gpt-6-astra';
     if (engine === 'cursor' && !model) model = 'auto';
     spawnDefaultsState.models[engine] = model;
   }

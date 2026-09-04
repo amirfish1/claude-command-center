@@ -1722,6 +1722,8 @@ _MODEL_RATES = {
     "claude-sonnet-4-5-20250514": (3.00, 3.75, 0.30, 15.00),
     "claude-sonnet-4-20250514": (3.00, 3.75, 0.30, 15.00),
     "claude-haiku-4-5-20251001": (1.00, 1.25, 0.10, 5.00),
+    # https://developers.openai.com/api/docs/models/gpt-6-astra (2026-09).
+    "gpt-6-astra": (10.00, 0.00, 1.00, 50.00),
     "gpt-5.5": (5.00, 0.00, 0.50, 30.00),
     # GPT-5.6 cache writes are 1.25x input and cache reads are 10% of input.
     # https://openai.com/index/gpt-5-6/ (checked 2026-08)
@@ -1783,7 +1785,7 @@ def _rates_for_model_known(model):
 
 _SESSION_COST_FALLBACK_MODELS = {
     "claude": "claude-sonnet-4-6",
-    "codex": "gpt-5.5",
+    "codex": "gpt-6-astra",
     "kimi": "kimi-code/k3",
 }
 
