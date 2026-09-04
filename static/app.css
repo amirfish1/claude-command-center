@@ -27220,6 +27220,20 @@ body.status-pos-right .status-rail-pane[data-rail-pane="metadata"] > .files-pane
   max-width: 280px;
   margin-top: 10px;
 }
+.ask-quick-prompts {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  padding: 6px 0 10px;
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  background: inherit;
+}
+.ask-quick-prompts .ask-prompt-chip {
+  padding: 5px 9px;
+  font-size: 11px;
+}
 .ask-prompt-chip {
   text-align: left;
   padding: 8px 11px;

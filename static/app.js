@@ -58955,7 +58955,14 @@
         drawSelBar();
         return;
       }
-      log.innerHTML = turns.map((t, idx) => {
+      // Quick prompts stay reachable after the first turn: the empty state
+      // (with the full chip list) never shows again once history exists.
+      const quickStrip = '<div class="ask-quick-prompts">' +
+        '<button type="button" class="ask-prompt-chip" data-ask-prompt="Daily check-in: what is open on my agenda and what should we discuss first?">☀️ Daily check-in</button>' +
+        '<button type="button" class="ask-prompt-chip" data-ask-prompt="What did I work on today?">Today</button>' +
+        '<button type="button" class="ask-prompt-chip" data-ask-prompt="Which sessions are currently working?">Working</button>' +
+        '</div>';
+      log.innerHTML = quickStrip + turns.map((t, idx) => {
         if (t.pending) {
           return '<div class="ask-turn is-pending" data-ask-turn-index="' + idx + '">' +
             '<div class="ask-turn-q"><span class="ask-user-badge">YOU</span><div class="ask-q-text">' + askEscapeHtml(t.q) + '</div></div>' +
