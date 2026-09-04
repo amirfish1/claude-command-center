@@ -58069,6 +58069,7 @@
         // file never written again) from reading "working" indefinitely.
         const nmt = Number(node.mtime || 0);
         const working = !!node.active && nmt > 0 && (Date.now() / 1000 - nmt) < 600;
+        const born = orchParseSpawnedAt(node.spawned_at) || (nmt ? (nmt - 1) : 0);
         out.push({
           id: sid,
           convId: canOpen ? (parentSid + ':' + sid) : '',
@@ -58077,7 +58078,7 @@
           model: node.model || '',
           status: working ? 'working' : 'done',
           mtime: nmt,
-          born: 0,
+          born,
           landedAt: nmt,
           depth,
           isTaskSubagent: true,
@@ -58191,6 +58192,9 @@
       orchLaneMetaRemember(merged);
     } catch (_) {}
     _orchRegistryInFlight = false;
+    if (orchPaneVisible()) {
+      updateOrchestrationPane(currentConversation);
+    }
   }
   // ── Family rail ──────────────────────────────────────────────────────
   // While a session that belongs to an orchestration family is selected,

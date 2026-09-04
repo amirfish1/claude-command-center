@@ -27035,7 +27035,7 @@ button.orch-node:hover { border-color: color-mix(in srgb, var(--accent) 60%, var
 .orch-node.is-done .orch-node-dot::before { content: '\2713'; font-size: 10px; }
 .orch-node.is-compact { display: inline-flex; align-items: center; gap: 6px; padding: 4px 9px 4px 5px; border-radius: 999px; }
 .orch-node.is-compact .orch-node-glyph { width: 16px; height: 16px; font-size: 9px; border-radius: 4px; }
-.orch-node.is-compact .orch-node-name { font-size: 11px; max-width: 120px; }
+.orch-node.is-compact .orch-node-name { font-size: 11px; max-width: 220px; }
 .orch-node.is-compact .orch-node-status { margin: 0; }
 .orch-node.is-born { animation: orch-born-glow 900ms ease-out forwards; }
 @keyframes orch-born-glow {

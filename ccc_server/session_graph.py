@@ -317,6 +317,8 @@ class _SessionGraph:
                         out["active"] = _agent_transcript_active(
                             f, st.st_mtime, st.st_size
                         )
+                        birth = getattr(st, "st_birthtime", None) or st.st_mtime
+                        out["spawned_at"] = time.strftime("%Y%m%dT%H%M%S", time.localtime(birth))
                         break
                 except OSError:
                     pass
@@ -420,7 +422,7 @@ def _session_graph_build_from_all_sources():
     _core._session_graph.save()
 
 
-_CLAUDE_TASK_ENRICH_THROTTLE_S = 10
+_CLAUDE_TASK_ENRICH_THROTTLE_S = 2
 
 # (mtime, size) -> verdict cache for _agent_transcript_active: the family
 # endpoint is polled every ~5s by the lane map, and re-reading an unchanged
@@ -454,14 +456,18 @@ def _agent_transcript_active(path, mtime, size):
                 rec = json.loads(line)
             except (json.JSONDecodeError, ValueError):
                 continue
-            if rec.get("type") == "assistant":
+            rtype = rec.get("type")
+            if rtype == "assistant":
                 content = (rec.get("message") or {}).get("content") or []
                 has_tool_use = any(
                     isinstance(b, dict) and b.get("type") == "tool_use"
                     for b in content
                 )
                 active = has_tool_use
-            break
+                break
+            elif rtype == "user":
+                active = True
+                break
     except OSError:
         active = False
     if len(_AGENT_ACTIVE_CACHE) >= _AGENT_ACTIVE_CACHE_MAX:
@@ -501,9 +507,44 @@ def _session_graph_enrich_claude_task_subagents(parent_sid):
             agent_id = agent_file.stem  # e.g. "agent-a7d894abf5832d"
             if not agent_id.startswith("agent-"):
                 continue
+            name = None
+            model = None
+            meta_file = agent_file.with_name(f"{agent_id}.meta.json")
+            if meta_file.is_file():
+                try:
+                    with open(meta_file, "r", encoding="utf-8") as mf:
+                        mdata = json.load(mf)
+                    name = mdata.get("description") or mdata.get("agentType")
+                    model = mdata.get("model")
+                except Exception:
+                    pass
+            if not name:
+                try:
+                    with open(agent_file, "r", encoding="utf-8") as af:
+                        for line in af:
+                            try:
+                                d = json.loads(line)
+                                if d.get("type") == "user":
+                                    msg = d.get("message", {})
+                                    content = msg.get("content", "")
+                                    if isinstance(content, list):
+                                        for c in content:
+                                            if isinstance(c, dict) and c.get("type") == "text":
+                                                text = c.get("text", "").strip()
+                                                if text:
+                                                    name = text[:60]
+                                                    break
+                                    elif isinstance(content, str) and content.strip():
+                                        name = content.strip()[:60]
+                                    break
+                            except Exception:
+                                pass
+                except OSError:
+                    pass
             _core._session_graph.add_edge(
                 parent_sid, agent_id,
                 source="claude-task-tool", engine="claude", resumable=False,
+                name=name or None, model=model or None,
             )
     except OSError:
         pass
