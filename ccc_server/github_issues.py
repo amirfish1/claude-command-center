@@ -23,6 +23,7 @@ import threading
 import time
 
 from ccc_server import core as _core
+from ccc_server import github_quota as _github_quota
 
 # ---------------------------------------------------------------------------
 # GitHub issues
@@ -94,12 +95,24 @@ def github_rate_limited(refresh=False):
     }
 
 
-def _check_gh_rate_limit():
-    """Fetch GitHub's current rate-limit status via the REST API.
+def _reset_epoch(reset_at):
+    """GraphQL `resetAt` is ISO-8601; the backoff state stores epoch seconds."""
+    if not reset_at:
+        return None
+    try:
+        return int(datetime.fromisoformat(str(reset_at).replace("Z", "+00:00")).timestamp())
+    except (TypeError, ValueError):
+        return None
 
-    This uses the REST quota (not GraphQL) and is cached for
-    _GH_RATE_LIMIT_CHECK_TTL seconds. Updates the shared state so other
-    modules can avoid optional GitHub API calls when quota is low.
+
+def _check_gh_rate_limit():
+    """Refresh the shared quota snapshot from the in-band GraphQL meter.
+
+    `gh api rate_limit`'s `.resources.graphql` block is not this token's
+    GraphQL quota — measured at one instant it read remaining=5000/used=0
+    while the real meter read remaining=1257/used=3743 — so a guard reading it
+    never trips. Cached for _GH_RATE_LIMIT_CHECK_TTL seconds on top of
+    github_quota's own TTL and single-flight.
     """
     now = time.time()
     with _GH_RATE_LIMIT_LOCK:
@@ -107,25 +120,19 @@ def _check_gh_rate_limit():
             return
         _GH_RATE_LIMIT_STATE["last_check_ts"] = now
 
-    try:
-        result = subprocess.run(
-            ["gh", "api", "rate_limit", "--jq", ".resources.graphql"],
-            capture_output=True, text=True, timeout=10,
-        )
-        if result.returncode == 0 and result.stdout.strip():
-            data = json.loads(result.stdout)
-            remaining = data.get("remaining")
-            reset = data.get("reset")
-            with _GH_RATE_LIMIT_LOCK:
-                _GH_RATE_LIMIT_STATE["last_remaining"] = remaining
-                if isinstance(reset, (int, float)) and reset > time.time():
-                    _GH_RATE_LIMIT_STATE["last_error_reset"] = int(reset)
-            # Pre-emptively treat low remaining as a soft rate-limit window so
-            # optional polling backs off before we actually hit the hard limit.
-            if isinstance(remaining, int) and remaining < _GH_RATE_LIMIT_LOW_THRESHOLD:
-                _record_rate_limit_error(reset)
-    except Exception:
-        pass
+    data = _github_quota.read_graphql_quota()
+    if not data.get("ok"):
+        return
+    remaining = data.get("remaining")
+    reset = _reset_epoch(data.get("reset_at"))
+    with _GH_RATE_LIMIT_LOCK:
+        _GH_RATE_LIMIT_STATE["last_remaining"] = remaining
+        if reset and reset > time.time():
+            _GH_RATE_LIMIT_STATE["last_error_reset"] = reset
+    # Pre-emptively treat low remaining as a soft rate-limit window so
+    # optional polling backs off before we actually hit the hard limit.
+    if isinstance(remaining, int) and remaining < _GH_RATE_LIMIT_LOW_THRESHOLD:
+        _record_rate_limit_error(reset)
 
 
 def _gh(repo_path, *args, timeout=10):

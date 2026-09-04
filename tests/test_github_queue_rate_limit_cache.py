@@ -14,10 +14,13 @@ from unittest import mock
 
 import server  # noqa: F401 — import order matters, registers ccc_server.github_issues
 
+from ccc_server import github_quota
+
 gi = sys.modules["ccc_server.github_issues"]
 
 
 def _reset_state():
+    github_quota.reset_quota_cache()
     gi._LIST_ISSUES_CACHE["by_repo"].clear()
     gi._GH_RATE_LIMIT_STATE["last_error_ts"] = 0.0
     gi._GH_RATE_LIMIT_STATE["last_error_reset"] = 0
@@ -36,8 +39,19 @@ _EMPTY_RESPONSE = mock.Mock(returncode=0, stdout="[]", stderr="")
 _RATE_LIMIT_ERROR_RESPONSE = mock.Mock(returncode=1, stdout="", stderr="API rate limit exceeded")
 
 
-def _run_stub(open_response, closed_response=_EMPTY_RESPONSE, rate_limit_response=_EMPTY_RESPONSE):
+_HEALTHY_QUOTA_RESPONSE = mock.Mock(
+    returncode=0,
+    stdout='{"data":{"rateLimit":{"limit":5000,"cost":1,"remaining":4900,'
+           '"used":100,"resetAt":"2099-01-01T00:00:00Z"}}}',
+    stderr="",
+)
+
+
+def _run_stub(open_response, closed_response=_EMPTY_RESPONSE, rate_limit_response=_EMPTY_RESPONSE,
+              quota_response=_HEALTHY_QUOTA_RESPONSE):
     def fake_run(args, **kwargs):
+        if "graphql" in args:
+            return quota_response
         if "rate_limit" in args:
             return rate_limit_response
         if "--state" in args and "closed" in args:

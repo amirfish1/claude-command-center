@@ -158,9 +158,12 @@ def _fetch_graphql_quota():
         detail = (out.stderr or out.stdout or "gh exited non-zero").strip()
         return {"ok": False, "error": detail[:200], "checked_at": time.time()}
     try:
-        block = (json.loads(out.stdout) or {}).get("data", {}).get("rateLimit") or {}
+        payload = json.loads(out.stdout)
     except ValueError:
         return {"ok": False, "error": "malformed JSON from gh", "checked_at": time.time()}
+    if not isinstance(payload, dict):
+        return {"ok": False, "error": "unexpected JSON shape from gh", "checked_at": time.time()}
+    block = (payload.get("data") or {}).get("rateLimit") or {}
     used = block.get("used")
     limit = block.get("limit")
     remaining = block.get("remaining")

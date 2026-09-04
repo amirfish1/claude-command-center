@@ -387,3 +387,23 @@ class GithubRemoteGateTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class UnexpectedPayloadTest(unittest.TestCase):
+    """read_graphql_quota promises it never raises. A well-formed JSON body of
+    the wrong shape (a list, a bare null) used to reach `.get` on a non-dict
+    and blow up with AttributeError, taking the caller's request with it."""
+
+    def setUp(self):
+        github_quota.reset_quota_cache()
+
+    def _read_with_stdout(self, stdout):
+        with mock.patch.object(github_quota, "_run_gh",
+                               return_value=_Proc(stdout)):
+            return github_quota.read_graphql_quota(force=True)
+
+    def test_json_list_body_degrades_to_an_error(self):
+        self.assertFalse(self._read_with_stdout('[{"number": 1}]')["ok"])
+
+    def test_null_data_block_degrades_to_an_error(self):
+        self.assertIsNone(self._read_with_stdout('{"data": null}')["remaining"])
