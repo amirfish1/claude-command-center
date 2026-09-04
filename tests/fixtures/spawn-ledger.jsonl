@@ -1,0 +1,7 @@
+{"ts":"2026-09-03T20:00:00Z","session_id":"s-codex-feature-a","engine":"codex","model":"gpt-5","effort":"high","task_type":"feature","lane":"W7-4","repo":"/repo/a","prompt_summary":"Add the scorecard","grade":5,"grade_notes":"Clean implementation"}
+{"ts":"2026-09-03T20:05:00Z","session_id":"s-codex-bugfix","engine":"codex","model":"gpt-5","effort":"medium","task_type":"bugfix","lane":"W7-4","repo":"/repo/a","prompt_summary":"Fix a routing issue","grade":3,"grade_notes":"Needed a retry"}
+not-json
+{"ts":"2026-09-03T20:10:00Z","session_id":"s-claude-feature","engine":"claude","model":"sonnet","effort":"medium","task_type":"feature","lane":"W7-3","repo":"/repo/b","prompt_summary":"Build a page","grade":4,"grade_notes":"Good"}
+{"ts":"2026-09-03T20:15:00Z","session_id":"s-codex-ungraded","engine":"codex","model":"gpt-5","effort":"low","task_type":"feature","lane":"W7-4","repo":"/repo/a","prompt_summary":"Unreviewed task","grade":null,"grade_notes":""}
+{"ts":"2026-09-03T20:20:00Z","session_id":"s-codex-feature-b","engine":"codex","model":"gpt-5","effort":"low","task_type":"feature","lane":"W7-4","repo":"/repo/a","prompt_summary":"Small UI polish","grade":1,"grade_notes":"Missed requirement"}
+{"ts":"2026-09-03T20:25:00Z","session_id":"s-bad-grade","engine":"codex","model":"gpt-5","effort":"low","task_type":"feature","lane":"W7-4","repo":"/repo/a","prompt_summary":"Invalid grade","grade":9,"grade_notes":"Out of range"}

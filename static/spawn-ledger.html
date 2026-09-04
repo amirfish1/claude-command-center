@@ -1,0 +1,162 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="dark">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Spawn Ledger</title>
+<script src="/static/app-rail.js" defer></script>
+<style>
+  :root {
+    --bg: #101216; --panel: #171b22; --panel2: #11151b; --line: #2a3039;
+    --ink: #eef1f5; --muted: #9aa3ae; --dim: #68717d; --accent: #60c2d7;
+    --green: #37c77f; --lime: #9fd76a; --amber: #f0b756; --orange: #ec7f4f;
+    --red: #e75f66; --font: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  }
+  html, body { margin: 0; background: var(--bg); color: var(--ink); font: 14px/1.5 var(--font); }
+  .wrap { max-width: 1180px; margin: 0 auto; padding: 28px 32px 72px; }
+  header { display: flex; align-items: baseline; gap: 14px; flex-wrap: wrap; margin-bottom: 18px; }
+  h1 { font-size: 24px; margin: 0; font-weight: 650; letter-spacing: 0; }
+  h2 { color: var(--dim); font-size: 12px; letter-spacing: .08em; margin: 26px 0 10px; text-transform: uppercase; }
+  .meta { color: var(--muted); font-size: 12px; margin-left: auto; display: flex; gap: 14px; flex-wrap: wrap; }
+  .pill { border: 1px solid var(--line); border-radius: 999px; color: var(--muted); padding: 2px 9px; }
+  .error { border-color: #683338; color: var(--red); }
+  .table-wrap { border: 1px solid var(--line); border-radius: 8px; overflow: auto; background: var(--panel); }
+  table { width: 100%; border-collapse: collapse; min-width: 760px; }
+  th, td { border-bottom: 1px solid var(--line); padding: 9px 10px; text-align: left; vertical-align: top; }
+  th { color: var(--muted); background: #131820; font-size: 12px; font-weight: 600; white-space: nowrap; }
+  tr:last-child td { border-bottom: 0; }
+  .num { text-align: right; white-space: nowrap; font-variant-numeric: tabular-nums; }
+  .cell { border-radius: 6px; color: #091016; display: inline-flex; min-width: 74px; justify-content: space-between; gap: 8px; padding: 3px 7px; font-weight: 650; }
+  .g5 { background: var(--green); }
+  .g4 { background: var(--lime); }
+  .g3 { background: var(--amber); }
+  .g2 { background: var(--orange); }
+  .g1 { background: var(--red); color: #170607; }
+  .empty-cell { color: var(--dim); }
+  .subtle { color: var(--muted); }
+  .raw td { background: var(--panel2); }
+  .summary { max-width: 460px; }
+  .notes { color: var(--muted); max-width: 300px; }
+  .empty { color: var(--dim); padding: 24px; border: 1px dashed var(--line); border-radius: 8px; text-align: center; }
+  @media (max-width: 720px) {
+    .wrap { padding: 20px 14px 60px; }
+    header { align-items: flex-start; }
+    .meta { margin-left: 0; width: 100%; }
+    h1 { font-size: 21px; }
+  }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <h1>Spawn Ledger</h1>
+    <span class="pill" id="count">0 graded</span>
+    <span class="pill error" id="err" hidden></span>
+    <div class="meta">
+      <span id="path"></span>
+      <span id="ignored"></span>
+    </div>
+  </header>
+
+  <h2>Scorecard</h2>
+  <div id="scorecard" class="empty">Loading...</div>
+
+  <h2>Graded Rows</h2>
+  <div id="rows" class="empty">Loading...</div>
+</div>
+
+<script>
+(function () {
+  "use strict";
+  var $ = function (id) { return document.getElementById(id); };
+
+  function esc(value) {
+    return String(value == null ? "" : value).replace(/[&<>"']/g, function (c) {
+      return { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c];
+    });
+  }
+
+  function gradeClass(avg) {
+    if (avg >= 4.5) return "g5";
+    if (avg >= 3.5) return "g4";
+    if (avg >= 2.5) return "g3";
+    if (avg >= 1.5) return "g2";
+    return "g1";
+  }
+
+  function scoreCell(cell) {
+    if (!cell || !cell.n) return '<span class="empty-cell">-</span>';
+    return '<span class="cell ' + gradeClass(cell.avg) + '"><span>' +
+      esc(Number(cell.avg).toFixed(2).replace(/\.00$/, ".0")) + '</span><span>n=' +
+      esc(cell.n) + "</span></span>";
+  }
+
+  function renderScorecard(scorecard) {
+    var tasks = (scorecard && scorecard.task_types) || [];
+    var rows = (scorecard && scorecard.rows) || [];
+    if (!rows.length) {
+      $("scorecard").className = "empty";
+      $("scorecard").textContent = "No graded ledger rows.";
+      return;
+    }
+    var head = '<tr><th>Engine</th><th>Model</th>' +
+      tasks.map(function (t) { return '<th class="num">' + esc(t) + "</th>"; }).join("") +
+      '<th class="num">Overall</th></tr>';
+    var body = rows.map(function (r) {
+      return "<tr><td>" + esc(r.engine) + "</td><td>" + esc(r.model) + "</td>" +
+        tasks.map(function (t) { return '<td class="num">' + scoreCell(r.tasks[t]) + "</td>"; }).join("") +
+        '<td class="num">' + scoreCell(r.overall) + "</td></tr>";
+    }).join("");
+    $("scorecard").className = "table-wrap";
+    $("scorecard").innerHTML = "<table><thead>" + head + "</thead><tbody>" + body + "</tbody></table>";
+  }
+
+  function shortDate(ts) {
+    if (!ts) return "";
+    var d = new Date(ts);
+    if (isNaN(d.getTime())) return ts;
+    return d.toLocaleString([], { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" });
+  }
+
+  function renderRows(rows) {
+    var graded = (rows || []).filter(function (r) { return r.grade != null; });
+    if (!graded.length) {
+      $("rows").className = "empty";
+      $("rows").textContent = "No graded rows.";
+      return;
+    }
+    var body = graded.map(function (r) {
+      return '<tr class="raw"><td>' + esc(shortDate(r.ts)) + '</td><td class="num">' +
+        scoreCell({ avg: r.grade, n: 1 }) + "</td><td>" + esc(r.engine) +
+        '<span class="subtle"> / ' + esc(r.model) + '</span></td><td>' +
+        esc(r.task_type) + '</td><td>' + esc(r.lane) + '</td><td class="summary">' +
+        esc(r.prompt_summary) + '</td><td class="notes">' + esc(r.grade_notes) + "</td></tr>";
+    }).join("");
+    $("rows").className = "table-wrap";
+    $("rows").innerHTML = '<table><thead><tr><th>When</th><th class="num">Grade</th><th>Engine / Model</th><th>Task</th><th>Lane</th><th>Prompt</th><th>Notes</th></tr></thead><tbody>' + body + "</tbody></table>";
+  }
+
+  async function load() {
+    var res = await fetch("/api/spawn-ledger", { cache: "no-store" });
+    var data = await res.json();
+    $("count").textContent = (data.graded_count || 0) + " graded";
+    $("path").textContent = data.path || "";
+    $("ignored").textContent = data.ignored_lines ? data.ignored_lines + " ignored line(s)" : "";
+    if (data.error) {
+      $("err").hidden = false;
+      $("err").textContent = data.error;
+    }
+    renderScorecard(data.scorecard || {});
+    renderRows(data.rows || []);
+  }
+
+  load().catch(function (e) {
+    $("scorecard").className = "empty";
+    $("scorecard").textContent = "Failed to load spawn ledger.";
+    $("rows").className = "empty";
+    $("rows").textContent = String(e && e.message || e);
+  });
+}());
+</script>
+</body>
+</html>

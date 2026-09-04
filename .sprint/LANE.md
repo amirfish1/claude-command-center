@@ -1,82 +1,53 @@
-# Lane W2-1 — Decision Inbox daemon + idle-session token governor
+# Lane W7-4 - Spawn Ledger Scorecard
 
-Updated: 2026-09-03 18:05
-Status: IN PROGRESS — code committed (9ef722b2, 55ab70d2, 7953b9df); verifying live + screenshot
-Owner: CCC lane W2-1 (dispatched by 25c52af6-c616-46a2-b47d-0f8a9e016055)
+Updated: 2026-09-04
+Status: DONE - implemented, verified, ready for restart
+Owner: CCC lane W7-4 (dispatched by 25c52af6-c616-46a2-b47d-0f8a9e016055)
 
-## Design (decided)
-- `ccc_server/decision_inbox.py` (stdlib-only, `_core` proxy). Hourly daemon
-  thread started from server.py startup (gated by CCC_EPHEMERAL /
-  CCC_DECISION_INBOX_DISABLED). No launchd: server already owns loops.
-- Config `~/.claude/command-center/decision-inbox.json` (personal paths live
-  here, never in repo): strategy_board path, interval_s, max_cards_per_run=5,
-  idle_hours=2, wt_age_days=3, model=claude-sonnet-5, spawn_cwd.
-- State `~/.claude/command-center/decision-inbox/cards.json` + `runs.jsonl`.
-- Sources: (1) Strategy Board table rows: ⚠️ Blocked, or 🔵 Open with ETA in
-  past (ISO date, or relative word anchored to file mtime + 2d). (2) `wt status
-  --json` once; stuck queues with oldest_open_age > wt_age_days; top-N get one
-  `wt ls --json`. (3) archive cached rows: is_live, mtime idle >= 2h, unfinished
-  (pending_tool / goal not done / session_state working).
-- Analyst: headless `claude -p --model sonnet` (same shape as queue brief),
-  returns JSON {title, context, options[<=3]{label,cost,recommended,action}}.
-  Governor cards need no analyst (fixed pause/nudge/kill options).
-- Governor detectors on live candidate sessions only (tail bytes of JSONL):
-  repeated identical tool errors (>=3 same hash), no edit >45m while working
-  (had edits earlier), context >=85%.
-- Dedupe by source_id (open or decided/dismissed within 7d = skip). Cap 5/run.
-- Page `static/decision-inbox.html` at `/decision-inbox.html`; rail entry
-  "Decisions" via _resolve_apps. Endpoints: GET /api/decision-inbox,
-  POST /api/decision-inbox/{run,decide,dismiss,governor}.
-- Follow-through: option.action.kind spawn -> _core.spawn_session; inject ->
-  _core._inject_text_into_session(sid, text, mode=steer); governor pause ->
-  _interrupt_session, nudge -> inject steer, kill -> system_process_kill(pid).
+## Scope
+- Add a read-only `GET /api/spawn-ledger` endpoint backed by
+  `SPAWN_LEDGER_PATH` or `/Users/amirfish/MyOfficeMgr/projects/spawn-ledger/ledger.jsonl`.
+- Add `/spawn-ledger` as a standalone CCC page showing scorecard averages and
+  newest-first graded rows.
+- Keep all ledger handling in `ccc_server/`, following the Decision Inbox
+  module + server adoption pattern.
+
+## Decisions
+- Normalize malformed, missing, or out-of-range grades to `null`; aggregates
+  count only numeric grades from 1 through 5.
+- Sort API rows newest first so the UI can render raw graded rows directly.
+- Scorecard rows are grouped by `engine` + `model`; columns are `task_type`.
+
+## Next
+- Commit only the W7-4 files with `git commit --only`.
+- Report back to dispatch session 25c52af6-c616-46a2-b47d-0f8a9e016055.
 
 ## Done
-- Orientation (app rail, queue-brief claude -p pattern, archive rows, wt CLI).
-- ccc_server/decision_inbox.py, static/decision-inbox.html, tests (28 pass),
-  server.py wiring (adopt + GET/POST routes + rail + loop), README section.
-- Personal config written: ~/.claude/command-center/decision-inbox.json
-  (board path, spawn_cwd=~/MyOfficeMgr, ignore "Sleep").
-- Public names prefixed decision_inbox_* / _di_* (adoption binds module
-  globals onto server; _iso/_lock/_parse_iso/_wt_run collided with siblings).
-- tests/test_perf_budget.py: 1 pre-existing failure
-  (test_system_services_no_subprocess_on_warm_cache, service id set), not ours.
+- Added `ccc_server/spawn_ledger.py`: read-only JSONL parser, env/default path
+  resolution, grade normalization, newest-first row ordering, and scorecard
+  aggregates.
+- Added server adoption plus `GET /api/spawn-ledger` and `/spawn-ledger`
+  (`/spawn-ledger.html` alias) routes.
+- Added Apps rail entry "Spawn Ledger".
+- Added `static/spawn-ledger.html`, rendering the engine/model x task_type
+  scorecard and raw graded rows newest first.
+- Added fixture-ledger tests in `tests/test_spawn_ledger.py`.
 
-## Status: DONE
-- Shipped ccc_server/decision_inbox.py, static/decision-inbox.html, tests
-  (28 pass), server wiring, README section + screenshot
-  (docs/images/decision-inbox.png).
-- Restarted worker+dashboard. Live scan produced 10 real Sonnet cards (3
-  options each, 1 recommended) + 1 governor context-high card. Cap 5/run and
-  source-id dedupe both verified across two runs.
-- Fixed a real bug found in verification: `--disallowedTools` is variadic in
-  current Claude Code and swallowed the analyst prompt; switched to the `=`
-  form (commit cbdf559d). Same class as the auto-titler --mcp-config break.
-- Infra note: a stray orphan server.py (pid 67616, port 8099) was tripping
-  the dashboard duplicate-repo guard and blocking 8090; killed it per the
-  guard's own docstring, dashboard rebound immediately.
+## Verification
+- RED: `python3 -m pytest tests/test_spawn_ledger.py` failed with
+  `ModuleNotFoundError: No module named 'ccc_server.spawn_ledger'`.
+- GREEN: `python3 -m pytest tests/test_spawn_ledger.py` passed: 5 passed.
+- Live API check against ephemeral server:
+  `curl -s --max-time 10 http://127.0.0.1:18097/api/spawn-ledger` returned
+  6 rows, 4 graded rows, 1 ignored line, and expected scorecard averages.
+- UI screenshot check against ephemeral server:
+  `SNAPSHOT_URL=http://127.0.0.1:18097/spawn-ledger SNAPSHOT_OUT=.sprint/W7-4-spawn-ledger.png node snapshot.js`
+  rendered the scorecard and graded rows correctly.
+- Broader smoke note: `python3 -m pytest tests/test_smoke.py -x -vv` hit an
+  existing sidebar CSS assertion in `static/app.css`, which W7-4 did not touch.
 
 ## Restart matrix
-Dashboard server restart needed:  Y (done)
-Worker restart needed:            Y (done)
-WatchTower server restart needed: N
-
-## Pre-existing, not this lane
-- tests/test_perf_budget.py::test_system_services_no_subprocess_on_warm_cache
-  fails on a service id-set mismatch (app_server/worker), unrelated to
-  decision_inbox. All other 103 perf-budget tests pass.
-
-## Commits
-9ef722b2, 55ab70d2, 7953b9df, 54346e4d, cbdf559d, 816ecf5e (not pushed).
-
-## W2-1b (follow-up, 2026-09-03 evening): external ingest — DONE
-- POST /api/decision-inbox (+ /api/decision-inbox/cards alias) ->
-  decision_inbox_ingest: validates {source?, source_id, title, detail|context,
-  options?, severity?}, dedupes by qualified source id (open card bumps
-  seen_count; decided/dismissed inside dedupe window or active snooze =
-  deduped, no new card), default options acknowledge / spawn investigator /
-  snooze 24h. Snooze is a new action kind (status "snoozed", snoozed_until).
-- Compatible with bym-studio-digest src/alert.mjs shorthand
-  {source_id, title, context}; verified e2e with the real module against an
-  ephemeral server (HOME=mktemp, PORT=8097). 35 tests pass. Commit ed6472ed.
-- Dashboard restart needed: Y (orchestrator does it). Worker: Y. WatchTower: N.
+- CCC dashboard server: needs restart.
+- CCC worker / control-plane worker: needs restart because `server.py` module
+  adoption changed.
+- WatchTower: no restart needed.
