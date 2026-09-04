@@ -122,3 +122,32 @@ def test_queue_config_save_publishes_scoped_invalidation(
     assert _events(recording_events)[-1]["invalidate"] == [
         {"resource": "queue", "id": "CCC", "reason": "config"}
     ]
+
+
+def test_successful_spawn_publishes_session_patch_and_archive_invalidation(recording_events):
+    server._publish_spawn_dashboard_event({
+        "ok": True,
+        "session_id": "session-new",
+        "engine": "codex",
+        "pid": 123,
+        "spawned_via": "ui",
+    })
+
+    events = _events(recording_events)
+    assert events[0]["topic"] == "session.patch"
+    assert events[0]["entity"] == {"type": "session", "id": "session-new"}
+    assert events[0]["patch"] == {
+        "status": "starting",
+        "engine": "codex",
+        "pid": 123,
+        "spawned_via": "ui",
+    }
+    assert events[1]["invalidate"] == [
+        {"resource": "archive", "id": "session-new", "reason": "spawn"}
+    ]
+
+
+def test_failed_spawn_publishes_nothing(recording_events):
+    server._publish_spawn_dashboard_event({"ok": False, "error": "no binary"})
+
+    assert _events(recording_events) == []

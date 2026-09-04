@@ -163,6 +163,22 @@ def _invalidate_dashboard(resource, *, entity_id=None, reason=None):
         return _dashboard_events.publish("invalidate", invalidate=[target])
     except Exception:
         return None
+
+
+def _publish_spawn_dashboard_event(result):
+    """Tell every dashboard about a successful spawn without waiting to poll."""
+    if not isinstance(result, dict) or not result.get("ok"):
+        return
+    sid = str(result.get("session_id") or result.get("id") or "").strip()
+    if not sid and result.get("pid") is not None:
+        sid = f"spawning-{result['pid']}"
+    if sid:
+        patch = {"status": "starting"}
+        for key in ("engine", "pid", "spawned_via", "name"):
+            if result.get(key) is not None:
+                patch[key] = result[key]
+        _publish_dashboard_patch("session.patch", "session", sid, patch)
+    _invalidate_dashboard("archive", entity_id=sid or None, reason="spawn")
 # Unified human-readable activity log — spawn/inject/kill/app-server-health
 # events, one line each. Mirrors ~/.watchtower/activity.log's format
 # (TIMESTAMP UTC  CATEGORY   VERB     detail) on purpose: the two logs get
@@ -34197,6 +34213,19 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
         # counter the dashboard's bottom-left bar reads. Cheap, no disk scan.
         if status >= 500:
             _record_server_error()
+        # Every spawn endpoint converges here after its engine-specific durable
+        # launch succeeds. Publishing at this boundary covers the compatibility
+        # endpoints too and cannot run before the underlying spawn call.
+        try:
+            response_path = urllib.parse.urlparse(self.path).path.rstrip("/")
+            if (
+                status < 400
+                and self.command == "POST"
+                and re.match(r"^/api/sessions/spawn(?:-[a-z0-9-]+)?$", response_path)
+            ):
+                _publish_spawn_dashboard_event(data)
+        except Exception:
+            pass
         body_str = json.dumps(data)
         etag_val = None
         if etag:
