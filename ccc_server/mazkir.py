@@ -634,17 +634,15 @@ def run_mazkir(question: str, history: list | None = None, range_key: str | None
     argv = mazkir_argv(claude_bin, base, session_id)
     env = dict(os.environ)
     env.pop("CLAUDECODE", None)  # allow nesting when called from inside a Claude session
+    # Sequential on purpose: `claude -p` gives up on stdin after 3 s, so the
+    # prompt cannot be fed after a slow prefetch (tried; it fails with
+    # "Input must be provided" whenever the index is under load).
+    run = runner or (lambda a, **kw: subprocess.run(a, capture_output=True, text=True, **kw))
     try:
-        if runner is None:
-            # Overlap: claude boots and connects both MCPs (~3 s) while the
-            # index prefetch runs; the prompt is written to stdin afterwards.
-            proc, (candidates, snapshot, prefetch_ms) = _run_overlapped(
-                argv, cwd, env, do_prefetch, make_prompt)
-        else:
-            candidates, snapshot = do_prefetch()
-            prefetch_ms = int((time.time() - t0) * 1000)
-            proc = runner(argv, input=make_prompt(candidates, snapshot),
-                          timeout=MAZKIR_TIMEOUT_SEC, cwd=cwd, env=env)
+        candidates, snapshot = do_prefetch()
+        prefetch_ms = int((time.time() - t0) * 1000)
+        proc = run(argv, input=make_prompt(candidates, snapshot),
+                   timeout=MAZKIR_TIMEOUT_SEC, cwd=cwd, env=env)
     except subprocess.TimeoutExpired:
         return {"ok": False, "code": "ask_timeout",
                 "error": f"mazkir timed out after {MAZKIR_TIMEOUT_SEC}s"}, 504
@@ -673,28 +671,6 @@ def run_mazkir(question: str, history: list | None = None, range_key: str | None
         "prefetch_ms": prefetch_ms,
         "elapsed_ms": int((time.time() - t0) * 1000),
     }, 200
-
-
-class _Done:
-    def __init__(self, stdout: str, stderr: str, returncode: int):
-        self.stdout, self.stderr, self.returncode = stdout, stderr, returncode
-
-
-def _run_overlapped(argv: list[str], cwd: str, env: dict, do_prefetch, make_prompt):
-    """Start claude, run the prefetch while it boots, then feed the prompt.
-    Returns (proc-like, (candidates, snapshot, prefetch_ms))."""
-    t0 = time.time()
-    p = subprocess.Popen(argv, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-                         text=True, cwd=cwd, env=env)
-    try:
-        candidates, snapshot = do_prefetch()
-        prefetch_ms = int((time.time() - t0) * 1000)
-        out, err = p.communicate(make_prompt(candidates, snapshot), timeout=MAZKIR_TIMEOUT_SEC)
-    except BaseException:
-        p.kill()
-        p.communicate()
-        raise
-    return _Done(out, err, p.returncode), (candidates, snapshot, prefetch_ms)
 
 
 # --- CCC-internal seams (lazy so the MCP half runs as a bare script) --------
