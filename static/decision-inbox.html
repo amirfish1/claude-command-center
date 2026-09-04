@@ -1,0 +1,230 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="dark">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Decision Inbox</title>
+<script src="/static/app-rail.js" defer></script>
+<style>
+  :root {
+    --bg: #0f1115; --panel: #151920; --line: #232830; --ink: #e6e9ee; --mute: #8a929e;
+    --dim: #5f6772; --accent: #5ac8fa; --ok: #34c759; --warn: #ffb340; --bad: #ff6b6b;
+    --font: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  }
+  html, body { margin: 0; background: var(--bg); color: var(--ink); font: 14px/1.55 var(--font); }
+  .wrap { max-width: 1040px; margin: 0 auto; padding: 28px 32px 80px; }
+  header { display: flex; align-items: baseline; gap: 14px; flex-wrap: wrap; margin-bottom: 6px; }
+  h1 { font-size: 22px; margin: 0; letter-spacing: -0.01em; }
+  h2 { font-size: 13px; text-transform: uppercase; letter-spacing: 0.08em; color: var(--dim); margin: 28px 0 10px; }
+  .sub { color: var(--mute); margin: 0 0 18px; }
+  .meta { color: var(--dim); font-size: 12px; margin-left: auto; display: flex; gap: 14px; align-items: center; }
+  button { font: 13px var(--font); border: 1px solid var(--line); background: #1b2029; color: var(--ink);
+           border-radius: 8px; padding: 7px 12px; cursor: pointer; }
+  button:hover { border-color: var(--accent); }
+  button:disabled { opacity: 0.5; cursor: default; }
+  button.primary { background: #123c50; border-color: #1f5f7a; }
+  button.primary:hover { background: #17506a; }
+  button.danger:hover { border-color: var(--bad); color: var(--bad); }
+  button.ghost { background: transparent; color: var(--mute); }
+  .card { background: var(--panel); border: 1px solid var(--line); border-radius: 12px; padding: 16px 18px; margin: 0 0 12px; }
+  .card.closed { opacity: 0.55; }
+  .card .top { display: flex; align-items: flex-start; gap: 10px; }
+  .card .title { font-weight: 600; font-size: 15px; flex: 1; }
+  .card .ctx { color: var(--mute); margin: 6px 0 12px; }
+  .tag { font-size: 11px; padding: 2px 8px; border-radius: 999px; border: 1px solid var(--line); color: var(--mute); white-space: nowrap; }
+  .tag.board { color: #c9a6ff; border-color: #4b3a72; }
+  .tag.wt { color: #ffd27a; border-color: #6b5320; }
+  .tag.session { color: #7ad0ff; border-color: #24506b; }
+  .tag.governor { color: var(--warn); border-color: #6b4a14; }
+  .tag.status { color: var(--ok); border-color: #1e5a30; }
+  .opts { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 10px; }
+  .opt { border: 1px solid var(--line); border-radius: 10px; padding: 12px 14px; display: flex; flex-direction: column; gap: 6px; background: #11151b; }
+  .opt.rec { border-color: #1f5f7a; box-shadow: inset 0 0 0 1px #1f5f7a; }
+  .opt .lbl { font-weight: 600; }
+  .opt .rec-pill { font-size: 10.5px; color: var(--accent); text-transform: uppercase; letter-spacing: 0.06em; }
+  .opt .det { color: var(--mute); font-size: 13px; flex: 1; }
+  .opt .cost { color: var(--dim); font-size: 12px; }
+  .opt button { align-self: flex-start; margin-top: 4px; }
+  .foot { display: flex; gap: 10px; align-items: center; margin-top: 12px; color: var(--dim); font-size: 12px; }
+  .foot .grow { flex: 1; }
+  .gov { display: grid; gap: 8px; }
+  .gov .row { display: flex; align-items: center; gap: 10px; background: var(--panel); border: 1px solid #3b2f14; border-radius: 10px; padding: 10px 14px; }
+  .gov .row .name { font-weight: 600; }
+  .gov .row .det { color: var(--mute); flex: 1; font-size: 13px; }
+  .gov .row .acts { display: flex; gap: 6px; }
+  .empty { color: var(--dim); padding: 22px; border: 1px dashed var(--line); border-radius: 12px; text-align: center; }
+  .result { font-size: 12px; color: var(--ok); }
+  .result.bad { color: var(--bad); }
+  details { color: var(--dim); font-size: 12px; }
+  details pre { white-space: pre-wrap; max-height: 220px; overflow: auto; background: #0b0e12; padding: 8px; border-radius: 8px; }
+  .toast { position: fixed; bottom: 18px; left: 50%; transform: translateX(-50%); background: #1b2029; border: 1px solid var(--line);
+           color: var(--ink); padding: 8px 14px; border-radius: 10px; font-size: 13px; opacity: 0; transition: opacity .2s; pointer-events: none; }
+  .toast.show { opacity: 1; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <h1>Decision Inbox</h1>
+    <span class="tag status" id="openCount">0 open</span>
+    <div class="meta">
+      <span id="lastRun">no scan yet</span>
+      <button id="scanBtn" title="Run the stalled-work scan now (hourly otherwise)">Scan now</button>
+    </div>
+  </header>
+  <p class="sub">CCC wakes up every hour, looks at what is stuck, does the thinking, and leaves you a choice.
+    Pick an option and CCC spawns or steers the follow-through. Nothing here needs a reply.</p>
+
+  <h2>Token governor</h2>
+  <div class="gov" id="governor"><div class="empty">No live session looks stuck or wasteful.</div></div>
+
+  <h2>Decisions</h2>
+  <div id="cards"><div class="empty">Nothing waiting. Sababa.</div></div>
+
+  <h2>Recently closed</h2>
+  <div id="closed"><div class="empty">Nothing yet.</div></div>
+</div>
+<div class="toast" id="toast"></div>
+
+<script>
+(function () {
+  "use strict";
+  var state = { cards: [], governor: [], busy: {} };
+  var $ = function (id) { return document.getElementById(id); };
+
+  function esc(s) {
+    return String(s == null ? "" : s).replace(/[&<>"']/g, function (c) {
+      return { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c];
+    });
+  }
+  function ago(iso) {
+    if (!iso) return "";
+    var s = (Date.now() - new Date(iso).getTime()) / 1000;
+    if (s < 90) return "just now";
+    if (s < 3600) return Math.round(s / 60) + " min ago";
+    if (s < 86400) return Math.round(s / 3600) + " h ago";
+    return Math.round(s / 86400) + " d ago";
+  }
+  function toast(msg, bad) {
+    var t = $("toast"); t.textContent = msg; t.style.color = bad ? "var(--bad)" : "var(--ink)";
+    t.classList.add("show"); clearTimeout(toast._t); toast._t = setTimeout(function () { t.classList.remove("show"); }, 2600);
+  }
+  async function post(url, body) {
+    var r = await fetch(url, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body || {}) });
+    var j = null; try { j = await r.json(); } catch (e) { j = { ok: false, error: "bad response" }; }
+    return j;
+  }
+
+  function actionVerb(a) {
+    var k = (a && a.kind) || "human";
+    return { spawn: "Spawn session", inject: "Steer session", pause: "Pause", kill: "Kill", human: "I'll do it" }[k] || k;
+  }
+
+  function renderCard(c) {
+    var closed = c.status !== "open";
+    var opts = (c.options || []).map(function (o, i) {
+      var decidedHere = c.decided && c.decided.option === i;
+      return '<div class="opt' + (o.recommended ? " rec" : "") + '">' +
+        (o.recommended ? '<span class="rec-pill">Recommended</span>' : "") +
+        '<span class="lbl">' + esc(o.label) + "</span>" +
+        '<span class="det">' + esc(o.detail || "") + "</span>" +
+        (o.cost ? '<span class="cost">Cost: ' + esc(o.cost) + "</span>" : "") +
+        (closed ? (decidedHere ? '<span class="result">Chosen ' + ago(c.decided.at) + "</span>" : "") :
+          '<button class="' + (o.recommended ? "primary" : "") + (o.action && o.action.kind === "kill" ? " danger" : "") +
+          '" data-decide="' + esc(c.id) + '" data-idx="' + i + '">' + esc(actionVerb(o.action)) + "</button>") +
+        "</div>";
+    }).join("");
+    var src = c.source || {};
+    var srcLine = c.kind === "wt" ? (src.tickets || []).join("\n") :
+      c.kind === "session" ? (src.goal || src.last_assistant_text || "") :
+      c.kind === "board" ? [src.category, src.status, src.eta, src.notes].filter(Boolean).join(" · ") : (src.detail || "");
+    var analyst = c.analyst ? (c.analyst.error ? "analyst failed (" + esc(c.analyst.error) + "), generic options" :
+      esc(c.analyst.model || "") + " · " + (c.analyst.duration_s || 0) + "s") : "governor";
+    var dres = c.decided && c.decided.result;
+    return '<div class="card' + (closed ? " closed" : "") + '" id="card-' + esc(c.id) + '">' +
+      '<div class="top"><span class="title">' + esc(c.title) + '</span><span class="tag ' + esc(c.kind) + '">' + esc(c.kind) + "</span>" +
+      (closed ? '<span class="tag">' + esc(c.status) + "</span>" : "") + "</div>" +
+      '<div class="ctx">' + esc(c.context || "") + "</div>" +
+      '<div class="opts">' + opts + "</div>" +
+      '<div class="foot"><span>' + esc(c.source_id) + " · " + ago(c.created_at) + " · " + analyst + "</span>" +
+      (srcLine ? '<details><summary>source</summary><pre>' + esc(srcLine) + "</pre></details>" : "") +
+      '<span class="grow"></span>' +
+      (dres ? '<span class="result' + (dres.ok ? "" : " bad") + '">' + esc(dres.effect || "") + (dres.session_id ? " · " + esc(String(dres.session_id).slice(0, 8)) : "") + (dres.error ? " · " + esc(dres.error) : "") + "</span>" : "") +
+      (closed ? "" : '<button class="ghost" data-dismiss="' + esc(c.id) + '">Dismiss</button>') +
+      "</div></div>";
+  }
+
+  function renderGovernor(findings) {
+    var el = $("governor");
+    if (!findings.length) { el.innerHTML = '<div class="empty">No live session looks stuck or wasteful.</div>'; return; }
+    el.innerHTML = findings.map(function (f) {
+      return '<div class="row"><span class="tag governor">' + esc(f.kind.replace("_", " ")) + "</span>" +
+        '<span class="name">' + esc(f.name) + "</span>" +
+        '<span class="det">' + esc(f.detail) + "</span>" +
+        '<span class="acts">' +
+        '<button class="primary" data-gov="nudge" data-sid="' + esc(f.session_id) + '" data-reason="' + esc(f.detail) + '">Nudge</button>' +
+        '<button data-gov="pause" data-sid="' + esc(f.session_id) + '">Pause</button>' +
+        '<button class="danger" data-gov="kill" data-sid="' + esc(f.session_id) + '">Kill</button>' +
+        "</span></div>";
+    }).join("");
+  }
+
+  function render(data) {
+    state.cards = data.cards || [];
+    state.governor = (data.governor && data.governor.findings) || [];
+    var open = state.cards.filter(function (c) { return c.status === "open"; });
+    var closed = state.cards.filter(function (c) { return c.status !== "open"; }).slice(0, 12);
+    $("openCount").textContent = open.length + " open";
+    $("cards").innerHTML = open.length ? open.map(renderCard).join("") : '<div class="empty">Nothing waiting. Sababa.</div>';
+    $("closed").innerHTML = closed.length ? closed.map(renderCard).join("") : '<div class="empty">Nothing yet.</div>';
+    renderGovernor(state.governor);
+    var lr = data.last_run;
+    var txt = data.running_since ? "scanning since " + ago(data.running_since) :
+      lr ? "last scan " + ago(lr.finished_at || lr.started_at) + " · " + (lr.created || []).length + " new" +
+        (lr.errors && lr.errors.length ? " · " + lr.errors.length + " error(s)" : "") : "no scan yet";
+    if (data.config && data.config.strategy_board === false) txt += " · no board configured";
+    $("lastRun").textContent = txt;
+    $("scanBtn").disabled = !!data.running_since;
+  }
+
+  async function load() {
+    try {
+      var r = await fetch("/api/decision-inbox", { cache: "no-store" });
+      render(await r.json());
+    } catch (e) { /* server restarting; next poll */ }
+  }
+
+  document.addEventListener("click", async function (ev) {
+    var b = ev.target.closest("button"); if (!b) return;
+    if (b.dataset.decide) {
+      var cid = b.dataset.decide, idx = +b.dataset.idx;
+      if (b.classList.contains("danger") && !confirm("Kill this session's process?")) return;
+      b.disabled = true; b.textContent = "…";
+      var res = await post("/api/decision-inbox/decide", { card_id: cid, option: idx });
+      toast(res.ok ? "Done: " + ((res.result && res.result.effect) || "ok") : "Failed: " + (res.error || (res.result && res.result.error) || "?"), !res.ok);
+      load();
+    } else if (b.dataset.dismiss) {
+      b.disabled = true;
+      var d = await post("/api/decision-inbox/dismiss", { card_id: b.dataset.dismiss });
+      toast(d.ok ? "Dismissed" : "Failed: " + (d.error || "?"), !d.ok);
+      load();
+    } else if (b.dataset.gov) {
+      if (b.dataset.gov === "kill" && !confirm("Kill this session's process?")) return;
+      b.disabled = true;
+      var g = await post("/api/decision-inbox/governor", { session_id: b.dataset.sid, action: b.dataset.gov, reason: b.dataset.reason || "" });
+      toast(g.ok ? (b.dataset.gov + " sent") : "Failed: " + (g.error || "?"), !g.ok);
+      b.disabled = false;
+    } else if (b.id === "scanBtn") {
+      b.disabled = true;
+      var s = await post("/api/decision-inbox/run", {});
+      toast(s.ok ? "Scan started" : (s.error || "could not start"), !s.ok);
+      setTimeout(load, 1500);
+    }
+  });
+
+  load();
+  setInterval(load, 30000);
+})();
+</script>
+</body>
+</html>
