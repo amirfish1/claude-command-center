@@ -402,7 +402,7 @@ Answer format (plain text, no markdown headers):
 - Cite every session you rely on inline as [[session:SESSION_ID]] using the exact id from the tool output or the candidate list. Cite Gmail threads the same way with the thread id.
 - Give dates as YYYY-MM-DD and name the harness (Claude, Codex, Kimi, Antigravity, Gmail) when it is not Claude.
 - If a session should be resumed to continue that work, append [[action:spawn-continue:SESSION_ID]] on its own line.
-- Keep the whole answer under 150 words."""
+- Keep the whole answer under 110 words. Do not list every candidate; name the one or two sessions that did the work."""
 
 
 def _range_to_since(range_key) -> str | None:
@@ -486,7 +486,7 @@ def build_prompt(question: str, history: list, candidates: list[dict], snapshot:
 
 def mcp_config(base: str, index_bin: str = INDEX_BIN) -> str:
     return json.dumps({"mcpServers": {
-        "claude-index": {"command": index_bin, "args": ["mcp"]},
+        "claude-index": {"command": index_bin, "args": ["mcp", "--lite"]},
         MCP_SERVER_NAME: {"command": sys.executable, "args": [os.path.abspath(__file__), "mcp", "--base", base]},
     }})
 
@@ -621,20 +621,30 @@ def run_mazkir(question: str, history: list | None = None, range_key: str | None
     if not claude_bin:
         return {"ok": False, "code": "ask_engine_unavailable", "error": "claude binary not found"}, 503
 
-    candidates = prefetch_sessions(question, since, runner=prefetch_runner)
-    snapshot = fleet_snapshot(base, fetch=fetch)
-    prefetch_ms = int((time.time() - t0) * 1000)
+    def do_prefetch() -> tuple[list[dict], str]:
+        return (prefetch_sessions(question, since, runner=prefetch_runner),
+                fleet_snapshot(base, fetch=fetch))
+
+    def make_prompt(cands: list[dict], snap: str) -> str:
+        return build_prompt(question, history, cands, snap, range_key)
 
     session_id = str(uuid.uuid4())
     cwd = _scratch_dir()
     _mark_spawn(session_id)
     argv = mazkir_argv(claude_bin, base, session_id)
-    prompt = build_prompt(question, history, candidates, snapshot, range_key)
-    run = runner or (lambda a, **kw: subprocess.run(a, capture_output=True, text=True, **kw))
     env = dict(os.environ)
     env.pop("CLAUDECODE", None)  # allow nesting when called from inside a Claude session
     try:
-        proc = run(argv, input=prompt, timeout=MAZKIR_TIMEOUT_SEC, cwd=cwd, env=env)
+        if runner is None:
+            # Overlap: claude boots and connects both MCPs (~3 s) while the
+            # index prefetch runs; the prompt is written to stdin afterwards.
+            proc, (candidates, snapshot, prefetch_ms) = _run_overlapped(
+                argv, cwd, env, do_prefetch, make_prompt)
+        else:
+            candidates, snapshot = do_prefetch()
+            prefetch_ms = int((time.time() - t0) * 1000)
+            proc = runner(argv, input=make_prompt(candidates, snapshot),
+                          timeout=MAZKIR_TIMEOUT_SEC, cwd=cwd, env=env)
     except subprocess.TimeoutExpired:
         return {"ok": False, "code": "ask_timeout",
                 "error": f"mazkir timed out after {MAZKIR_TIMEOUT_SEC}s"}, 504
@@ -663,6 +673,28 @@ def run_mazkir(question: str, history: list | None = None, range_key: str | None
         "prefetch_ms": prefetch_ms,
         "elapsed_ms": int((time.time() - t0) * 1000),
     }, 200
+
+
+class _Done:
+    def __init__(self, stdout: str, stderr: str, returncode: int):
+        self.stdout, self.stderr, self.returncode = stdout, stderr, returncode
+
+
+def _run_overlapped(argv: list[str], cwd: str, env: dict, do_prefetch, make_prompt):
+    """Start claude, run the prefetch while it boots, then feed the prompt.
+    Returns (proc-like, (candidates, snapshot, prefetch_ms))."""
+    t0 = time.time()
+    p = subprocess.Popen(argv, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                         text=True, cwd=cwd, env=env)
+    try:
+        candidates, snapshot = do_prefetch()
+        prefetch_ms = int((time.time() - t0) * 1000)
+        out, err = p.communicate(make_prompt(candidates, snapshot), timeout=MAZKIR_TIMEOUT_SEC)
+    except BaseException:
+        p.kill()
+        p.communicate()
+        raise
+    return _Done(out, err, p.returncode), (candidates, snapshot, prefetch_ms)
 
 
 # --- CCC-internal seams (lazy so the MCP half runs as a bare script) --------
