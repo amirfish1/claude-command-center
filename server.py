@@ -179,6 +179,100 @@ def _publish_spawn_dashboard_event(result):
                 patch[key] = result[key]
         _publish_dashboard_patch("session.patch", "session", sid, patch)
     _invalidate_dashboard("archive", entity_id=sid or None, reason="spawn")
+
+
+def _publish_queue_dashboard_event(path, data, status=200):
+    """Publish one scoped queue invalidation for a successful POST result."""
+    if status >= 400 or not isinstance(data, dict) or data.get("ok") is not True:
+        return None
+    item = data.get("item") if isinstance(data.get("item"), dict) else {}
+    queue_name = data.get("queue") or data.get("project") or item.get("project")
+    reason = str(path or "").rstrip("/").rsplit("/", 1)[-1] or "mutation"
+    return _invalidate_dashboard(
+        "queue", entity_id=queue_name or None, reason=reason,
+    )
+
+
+_dashboard_event_watch_lock = threading.Lock()
+_dashboard_event_watch_subscribers = 0
+_dashboard_event_watch_thread = None
+
+
+def _dashboard_queue_signature():
+    def _stat_signature(target):
+        try:
+            st = os.stat(target)
+            return st.st_mtime_ns, st.st_size
+        except OSError:
+            return None
+
+    try:
+        remote_version = gh_queue_version()
+    except Exception:
+        remote_version = 0
+    return (
+        _stat_signature(str(_queue_store_path())),
+        _stat_signature(str(_wt_workers_path())),
+        remote_version,
+    )
+
+
+def _dashboard_queue_watch_tick(previous):
+    current = _dashboard_queue_signature()
+    if previous is not None and current != previous:
+        _invalidate_dashboard("queue", reason="external-change")
+    return current
+
+
+def _dashboard_event_watch_loop():
+    global _dashboard_event_watch_thread
+    try:
+        gh_queue_watch_enter()
+    except Exception:
+        pass
+    previous = _dashboard_queue_signature()
+    try:
+        while True:
+            with _dashboard_event_watch_lock:
+                if _dashboard_event_watch_subscribers <= 0:
+                    return
+            time.sleep(1.0)
+            previous = _dashboard_queue_watch_tick(previous)
+    finally:
+        try:
+            gh_queue_watch_exit()
+        except Exception:
+            pass
+        with _dashboard_event_watch_lock:
+            _dashboard_event_watch_thread = None
+            if _dashboard_event_watch_subscribers > 0:
+                _dashboard_event_watch_thread = threading.Thread(
+                    target=_dashboard_event_watch_loop,
+                    name="dashboard-event-watch",
+                    daemon=True,
+                )
+                _dashboard_event_watch_thread.start()
+
+
+def _dashboard_event_watch_enter():
+    global _dashboard_event_watch_subscribers, _dashboard_event_watch_thread
+    with _dashboard_event_watch_lock:
+        _dashboard_event_watch_subscribers += 1
+        if _dashboard_event_watch_thread is None:
+            _dashboard_event_watch_thread = threading.Thread(
+                target=_dashboard_event_watch_loop,
+                name="dashboard-event-watch",
+                daemon=True,
+            )
+            _dashboard_event_watch_thread.start()
+
+
+def _dashboard_event_watch_exit():
+    global _dashboard_event_watch_subscribers
+    with _dashboard_event_watch_lock:
+        _dashboard_event_watch_subscribers = max(
+            0, _dashboard_event_watch_subscribers - 1,
+        )
 # Unified human-readable activity log — spawn/inject/kill/app-server-health
 # events, one line each. Mirrors ~/.watchtower/activity.log's format
 # (TIMESTAMP UTC  CATEGORY   VERB     detail) on purpose: the two logs get
@@ -28929,7 +29023,6 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                 # reconciler's next ~30s tick (CCC-790) -- started off-thread
                 # so the save itself doesn't hang on it (CCC-1014).
                 _reconcile_once_async()
-                _invalidate_dashboard("queue", entity_id=queue_name, reason="config")
                 self.send_json({"ok": True, **normalized})
             except ValueError as e:
                 self.send_json({"ok": False, "error": str(e)}, 400)
@@ -28981,7 +29074,6 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                     or "auto_drain unchanged")
                 if auto_drain:
                     _reconcile_once_async()
-                _invalidate_dashboard("queue", entity_id=key, reason="drain")
                 self.send_json({"ok": True, "queue": key, "auto_drain": auto_drain})
             except Exception as e:
                 self.send_json({"ok": False, "error": str(e)}, 500)
@@ -31152,7 +31244,12 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
             if result.get("ok"):
                 _publish_dashboard_patch(
                     "conversation.patch", "conversation", sid,
-                    {"name": name, "title": name},
+                    {
+                        "name": name,
+                        "title": name,
+                        "display_name": name,
+                        "name_overridden": bool(name),
+                    },
                 )
             self.send_json(result)
         elif re.match(r"^/api/conversations/[^/]+/pin$", path):
@@ -31179,10 +31276,16 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                 if now_pinned:
                     pinned.insert(0, sid)
                 _save_pinned_conversations(pinned)
-                _publish_dashboard_patch(
-                    "conversation.patch", "conversation", sid,
-                    {"pinned": now_pinned, "pin_rank": 0 if now_pinned else None},
-                )
+                if not now_pinned:
+                    _publish_dashboard_patch(
+                        "conversation.patch", "conversation", sid,
+                        {"pinned": False, "pin_rank": None},
+                    )
+                for pin_rank, pinned_sid in enumerate(pinned):
+                    _publish_dashboard_patch(
+                        "conversation.patch", "conversation", pinned_sid,
+                        {"pinned": True, "pin_rank": pin_rank},
+                    )
                 self.send_json({
                     "ok": True,
                     "session_id": sid,
@@ -33337,6 +33440,7 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                 return False
 
         active_boot = requested_boot
+        _dashboard_event_watch_enter()
         try:
             # EventSource applies this reconnect delay if the socket drops.
             self.wfile.write(b"retry: 1000\n\n")
@@ -33376,6 +33480,8 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                 self.wfile.flush()
         except (BrokenPipeError, ConnectionResetError, OSError):
             pass
+        finally:
+            _dashboard_event_watch_exit()
 
     def _stream_sessions_state_events(self):
         """SSE: emit one event whenever a session's (state, question_waiting,
@@ -34224,6 +34330,11 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                 and re.match(r"^/api/sessions/spawn(?:-[a-z0-9-]+)?$", response_path)
             ):
                 _publish_spawn_dashboard_event(data)
+            if (
+                self.command == "POST"
+                and response_path.startswith(("/api/queue/", "/api/ux-fixes/", "/api/wt/queue/"))
+            ):
+                _publish_queue_dashboard_event(response_path, data, status)
         except Exception:
             pass
         body_str = json.dumps(data)

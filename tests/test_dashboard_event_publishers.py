@@ -83,7 +83,12 @@ def test_successful_rename_publishes_after_mutation(
 
     assert calls == [("session-1", "New title")]
     assert response["ok"] is True
-    assert _events(recording_events)[-1]["patch"] == {"name": "New title", "title": "New title"}
+    assert _events(recording_events)[-1]["patch"] == {
+        "name": "New title",
+        "title": "New title",
+        "display_name": "New title",
+        "name_overridden": True,
+    }
 
 
 def test_failed_rename_emits_no_event(api_server, recording_events, monkeypatch):
@@ -99,6 +104,28 @@ def test_failed_rename_emits_no_event(api_server, recording_events, monkeypatch)
 
     assert response["ok"] is False
     assert _events(recording_events) == []
+
+
+def test_pinning_republishes_every_affected_rank(
+    api_server, recording_events, monkeypatch
+):
+    saved = []
+    monkeypatch.setattr(server, "_load_pinned_conversations", lambda: ["session-old"])
+    monkeypatch.setattr(server, "_save_pinned_conversations", lambda rows: saved.append(rows))
+
+    response = _post(
+        api_server,
+        "/api/conversations/session-new/pin",
+        {"session_id": "session-new", "pinned": True},
+    )
+
+    assert response["ok"] is True
+    assert saved == [["session-new", "session-old"]]
+    patches = [event["patch"] for event in _events(recording_events)]
+    assert patches == [
+        {"pinned": True, "pin_rank": 0},
+        {"pinned": True, "pin_rank": 1},
+    ]
 
 
 def test_queue_config_save_publishes_scoped_invalidation(
@@ -149,5 +176,23 @@ def test_successful_spawn_publishes_session_patch_and_archive_invalidation(recor
 
 def test_failed_spawn_publishes_nothing(recording_events):
     server._publish_spawn_dashboard_event({"ok": False, "error": "no binary"})
+
+    assert _events(recording_events) == []
+
+
+def test_successful_queue_mutation_response_publishes_invalidation(recording_events):
+    server._publish_queue_dashboard_event(
+        "/api/queue/delete", {"ok": True, "queue": "CCC"}, 200
+    )
+
+    assert _events(recording_events)[-1]["invalidate"] == [
+        {"resource": "queue", "id": "CCC", "reason": "delete"}
+    ]
+
+
+def test_failed_queue_mutation_response_publishes_nothing(recording_events):
+    server._publish_queue_dashboard_event(
+        "/api/queue/delete", {"ok": False, "queue": "CCC"}, 500
+    )
 
     assert _events(recording_events) == []

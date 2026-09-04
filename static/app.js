@@ -65905,6 +65905,7 @@
   // real-time row activity while this refresh catches structural changes.
   if (!READER_ONLY_POPOUT) {
 	  setInterval(async () => {
+		    if (_dashboardEventStreamHealthy) return;
 		    if (_pollerSkip('sessionsList')) return; if (activeTab !== 'sessions') return;
 			    _pollerTick('sessionsList');
 		    if (isInlineRenameInProgress()) return;

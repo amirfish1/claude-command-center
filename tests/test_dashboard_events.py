@@ -2,6 +2,7 @@ import threading
 import time
 import json
 import urllib.request
+import inspect
 
 import pytest
 
@@ -233,3 +234,28 @@ def test_dashboard_events_endpoint_emits_resync_for_expired_cursor(dashboard_ser
     assert payload["topic"] == "resync.required"
     assert payload["boot_id"] == "http-boot"
     assert payload["seq"] == 2
+
+
+def test_external_queue_signature_change_publishes_unified_invalidation(monkeypatch):
+    import server
+    from ccc_server.events import DashboardEventHub
+
+    hub = DashboardEventHub(capacity=8, boot_id="watch-test")
+    monkeypatch.setattr(server, "_dashboard_events", hub)
+    monkeypatch.setattr(server, "_dashboard_queue_signature", lambda: (2, 1, 0))
+
+    current = server._dashboard_queue_watch_tick((1, 1, 0))
+
+    assert current == (2, 1, 0)
+    events = hub.snapshot_since(0, boot_id="watch-test").events
+    assert events[-1]["invalidate"] == [
+        {"resource": "queue", "reason": "external-change"}
+    ]
+
+
+def test_unified_stream_owns_shared_external_watch_lifetime():
+    import server
+
+    source = inspect.getsource(server.CommandCenterHandler._stream_dashboard_events)
+    assert "_dashboard_event_watch_enter()" in source
+    assert "_dashboard_event_watch_exit()" in source

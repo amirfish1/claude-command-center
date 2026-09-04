@@ -38,3 +38,8 @@ def test_archive_and_queue_timers_are_stream_failure_fallbacks_only():
 
     queue_tick = source[source.index("setInterval(_gated('uxFixesQueueMeta'"):]
     assert "if (_uxqStreamLive) return;" in queue_tick
+
+    sessions_start = SOURCE.index("// Auto-refresh archive/session data")
+    sessions_end = SOURCE.index("// The convToolbar new-session input", sessions_start)
+    sessions_tick = SOURCE[sessions_start:sessions_end]
+    assert "if (_dashboardEventStreamHealthy) return;" in sessions_tick
