@@ -10577,6 +10577,10 @@ def _census_identity_map():
     with _CENSUS_IDENTITY_CACHE_LOCK:
         if _CENSUS_IDENTITY_CACHE["token"] == token:
             return _CENSUS_IDENTITY_CACHE["map"]
+    try:
+        spawn_markers = _load_spawn_markers()
+    except Exception:
+        spawn_markers = {}
     out = {}
     for entry in _load_spawn_registry():
         if not isinstance(entry, dict):
@@ -10588,7 +10592,7 @@ def _census_identity_map():
             "effort": entry.get("effort") or entry.get("reasoning_effort") or None,
             "repo_path": entry.get("repo_path") or entry.get("cwd") or None,
             "parent_session_id": entry.get("parent_session_id") or None,
-            "spawned_via": _infer_session_spawned_via(entry),
+            "spawned_via": _infer_session_spawned_via(entry, markers=spawn_markers),
             "has_conversation_row": False,
         }
         for key in ("session_id", "resumed_sid"):
@@ -10617,7 +10621,7 @@ def _census_identity_map():
                 name = existing.get("name")
             resolved_via = (
                 existing.get("spawned_via")
-                or _infer_session_spawned_via(row, sid=sid)
+                or _infer_session_spawned_via(row, sid=sid, markers=spawn_markers)
             )
             out[sid] = {
                 "name": name,
@@ -10835,6 +10839,10 @@ def build_session_census(since_s=None):
     except Exception:
         identity = {}
     now = time.time()
+    try:
+        spawn_markers = _load_spawn_markers()
+    except Exception:
+        spawn_markers = {}
     children_of = {}
     for sid in activity:
         parent = (identity.get(sid) or {}).get("parent_session_id") or ""
@@ -10889,7 +10897,7 @@ def build_session_census(since_s=None):
             "name": ident.get("name"),
             "repo_path": ident.get("repo_path"),
             "parent_session_id": parent,
-            "spawned_via": _infer_session_spawned_via(ident, sid=sid),
+            "spawned_via": _infer_session_spawned_via(ident, sid=sid, markers=spawn_markers),
             "children": sorted(children_of.get(sid) or ()),
             "last_event_age_s": age,
             "pending_tool": entry.get("pending_tool") or entry.get("sidecar_tool") or None,
@@ -10926,7 +10934,7 @@ def build_session_census(since_s=None):
                 "name": ident.get("name"),
                 "repo_path": ident.get("repo_path"),
                 "parent_session_id": ident.get("parent_session_id") or None,
-                "spawned_via": _infer_session_spawned_via(ident, sid=sid),
+                "spawned_via": _infer_session_spawned_via(ident, sid=sid, markers=spawn_markers),
                 "children": [],
                 "last_event_age_s": max(0.0, now - mtime),
                 "pending_tool": None,
@@ -11614,6 +11622,10 @@ def find_all_conversations(
     spawn_registry_by_sid = _spawn_registry_entries_by_session(engine="claude")
     # One read for the whole corpus scan — never per row.
     try:
+        spawn_markers = _load_spawn_markers()
+    except Exception:
+        spawn_markers = {}
+    try:
         session_overrides = _load_session_overrides()
     except Exception:
         session_overrides = {}
@@ -12064,7 +12076,10 @@ def find_all_conversations(
                 # /list variants — resolve_prs/resolve_worktrees/resolve_
                 # effective, which rebuild from scratch here rather than
                 # patching a cached snapshot — carry the field too.
-                "spawned_via": _infer_session_spawned_via(spawn_entry, sid=session_id),
+                "spawned_via": _infer_session_spawned_via(
+                    spawn_entry, sid=session_id,
+                    markers=spawn_markers, spawn_registry_by_sid=spawn_registry_by_sid,
+                ),
                 "continued_from_session_id": _continued_from_session_id_from_text(first_message),
                 # Context % badge — same fields as find_conversations so
                 # archive rows can render sidebar usage without opening the
@@ -13374,6 +13389,10 @@ def _archive_overlay_acp_sessions(rows):
     refresh."""
     if not _ACP_HARNESSES:
         return []
+    try:
+        spawn_markers = _load_spawn_markers()
+    except Exception:
+        spawn_markers = {}
     existing = set()
     for r in (rows or []):
         sid = r.get("session_id") or r.get("id")
@@ -13494,7 +13513,7 @@ def _archive_overlay_acp_sessions(rows):
                 "goal": "",
                 "goal_status": "",
                 "parent_session_id": "",
-                "spawned_via": _infer_session_spawned_via(card, sid=sid),
+                "spawned_via": _infer_session_spawned_via(card, sid=sid, markers=spawn_markers),
                 "model": model,
                 "reasoning_effort": None,
                 "latest_input_tokens": 0,
@@ -14127,6 +14146,11 @@ def _rehydrate_archive_cached_rows(rows):
         spawn_registry_by_sid = _spawn_registry_entries_by_session()
     except Exception:
         spawn_registry_by_sid = {}
+    # One read for the whole list, never per row (same rule as the registry).
+    try:
+        spawn_markers = _load_spawn_markers()
+    except Exception:
+        spawn_markers = {}
     # Effort lives in a side file the model picker rewrites, so a cached row
     # can be arbitrarily stale. Re-layer it here like the other user-mutable
     # state above; one read for the whole list, never one per row.
@@ -14266,7 +14290,10 @@ def _rehydrate_archive_cached_rows(rows):
             # How this session's spawn request arrived (cli/ui/ui-automated/
             # api), tagged onto the registry entry at spawn time (CCC-1026
             # follow-up) or inferred from launch metadata.
-            row["spawned_via"] = _infer_session_spawned_via(row, sid=sid, spawn_registry_by_sid=spawn_registry_by_sid)
+            row["spawned_via"] = _infer_session_spawned_via(
+                row, sid=sid,
+                markers=spawn_markers, spawn_registry_by_sid=spawn_registry_by_sid,
+            )
             # Continuation lineage specifically (F2 "Continue in a new
             # session" / usage-limit auto-resume): the origin marker only
             # appears in continuation prompts, never in subagent spawns, so
@@ -18945,6 +18972,12 @@ def find_conversations(repo_path, progress=None, include_old=True, live_sids=Non
     # One read for the whole scan — the row loop below must not call
     # _get_session_override() per session (see CLAUDE.md § Performance gates).
     session_overrides = _load_session_overrides()
+    # Same one-read rule for spawn markers: the per-row spawned_via inference
+    # must reuse this bulk load, never re-scan the markers dir itself.
+    try:
+        spawn_markers = _load_spawn_markers()
+    except Exception:
+        spawn_markers = {}
     # If the same session_id (file name) appears in multiple candidate
     # dirs (unlikely — claude-code uses one slug per process — but
     # possible if a repo path was historically encoded both ways), the
@@ -19350,7 +19383,10 @@ def find_conversations(repo_path, progress=None, include_old=True, live_sids=Non
             # this is the live per-repo listing behind /api/sessions, which
             # feeds the sidebar directly — a completely separate code path
             # from the archive endpoints.
-            "spawned_via": _infer_session_spawned_via(spawn_entry, sid=sid, spawn_registry_by_sid=spawn_registry_by_sid),
+            "spawned_via": _infer_session_spawned_via(
+                spawn_entry, sid=sid,
+                markers=spawn_markers, spawn_registry_by_sid=spawn_registry_by_sid,
+            ),
             "continued_from_session_id": _continued_from_session_id_from_text(first_message),
             "model": tail_meta.get("model"),
             # Transcript-first, like the model beside it: the tail states the
