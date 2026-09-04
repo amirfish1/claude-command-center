@@ -56,29 +56,108 @@ SCOPE_TITLE_OVERRIDES = {
     "ci": "CI", "byok": "BYOK", "kap": "Kap",
 }
 
-BUCKET_ORDER = ["new", "improved", "fixed"]
-BUCKET_LABELS = {"new": "New", "improved": "Improved", "fixed": "Fixed"}
+BUCKET_ORDER = ["new", "improved", "fixed", "removed"]
+BUCKET_LABELS = {
+    "new": "New",
+    "improved": "Improved",
+    "fixed": "Fixed",
+    "removed": "Removed",
+}
+MAX_SECTION_BULLETS = 12
+
+WHY_SCOPES = {
+    "ask": "answers questions from your own history instead of you digging for them",
+    "archive": "gets you to old conversations faster",
+    "byok": "lets each engine run with the provider keys you chose",
+    "census": "makes running sessions easier to identify and triage",
+    "cli": "puts the same dashboard controls in scriptable terminal commands",
+    "codex": "makes Codex sessions easier to steer and read from CCC",
+    "decision-inbox": "turns outside signals into trackable dashboard work",
+    "grok": "makes Grok sessions show up and behave like the rest of CCC",
+    "inject": "gets steered input to the intended session more reliably",
+    "kimi": "makes Kimi sessions more reliable inside CCC",
+    "layout": "keeps narrow screens usable without sideways drift or overlap",
+    "mazkir": "answers questions from your own history instead of you digging for them",
+    "messaging": "gets agent-to-agent messages delivered with less manual recovery",
+    "model-picker": "picks the right model with less clicking",
+    "models": "makes model choice easier to compare before you start",
+    "orchestration": "makes multi-agent work easier to follow from the lane map",
+    "orch": "makes multi-agent work easier to follow from the lane map",
+    "perf": "makes the app feel faster where it used to lag",
+    "processes": "makes runaway or stale processes easier to spot and stop",
+    "queue": "keeps queues moving without you babysitting them",
+    "queue-panel": "keeps queues moving without you babysitting them",
+    "search": "finds relevant recent work without a manual archive dig",
+    "sessions": "keeps session lists accurate after lifecycle changes",
+    "sidebar": "makes related sessions easier to scan and open",
+    "spawn": "makes it clearer where a session came from",
+    "tickets": "makes ticket details readable without opening another tool",
+    "uds": "gets agent-to-agent messages delivered with less manual recovery",
+    "worker": "keeps background workers aligned with the code they run",
+}
 
 WHY_KEYWORDS = [
-    ("queue", "keeps queues moving without you babysitting them"),
-    ("restart", "cuts down time spent chasing a stuck service"),
-    ("spawn", "makes it clearer where a session came from"),
-    ("token", "gives visibility into usage before you hit a limit"),
-    ("quota", "gives visibility into usage before you hit a limit"),
-    ("archive", "gets you to old conversations faster"),
-    ("model-picker", "picks the right model with less clicking"),
-    ("model picker", "picks the right model with less clicking"),
-    ("ask", "answers questions from your own history instead of you digging for them"),
-    ("mazkir", "answers questions from your own history instead of you digging for them"),
+    ("ack", "keeps queues moving without you babysitting them"),
     ("alert", "surfaces problems before they sit unnoticed"),
+    ("approval", "lets you act on blocked agent work from the dashboard"),
+    ("archive", "gets you to old conversations faster"),
+    ("ask", "answers questions from your own history instead of you digging for them"),
+    ("attach", "makes it easier to send files and screenshots into a session"),
+    ("byok", "lets each engine run with the provider keys you chose"),
+    ("context-usage", "gives visibility into usage before you hit a limit"),
+    ("context usage", "gives visibility into usage before you hit a limit"),
+    ("coo board", "keeps the dashboard focused on active command-center workflows"),
+    ("conversation row", "makes session lists easier to scan"),
+    ("engine", "makes model choice easier to compare before you start"),
+    ("github rate", "surfaces sync failures in terms you can act on"),
+    ("kap", "makes Kimi sessions more reliable inside CCC"),
+    ("lane", "makes multi-agent work easier to follow from the lane map"),
     ("latency", "makes the app feel faster where it used to lag"),
+    ("mazkir", "answers questions from your own history instead of you digging for them"),
+    ("model picker", "picks the right model with less clicking"),
+    ("model-picker", "picks the right model with less clicking"),
+    ("peer", "gets agent-to-agent messages delivered with less manual recovery"),
     ("perf", "makes the app feel faster where it used to lag"),
+    ("process", "makes runaway or stale processes easier to spot and stop"),
+    ("q2", "keeps queues moving without you babysitting them"),
+    ("queue", "keeps queues moving without you babysitting them"),
+    ("quota", "gives visibility into usage before you hit a limit"),
+    ("spawn", "makes it clearer where a session came from"),
+    ("steer", "gets steered input to the intended session more reliably"),
+    ("ticket", "makes ticket details readable without opening another tool"),
+    ("token", "gives visibility into usage before you hit a limit"),
+    ("transport", "makes engine routing visible before you steer"),
+    ("watchtower", "keeps queues moving without you babysitting them"),
 ]
-WHY_DEFAULT = {
-    "new": "adds a capability you didn't have before",
-    "improved": "makes an existing flow faster or more reliable",
-    "fixed": "removes a rough edge you may have hit without knowing why",
+
+NOUN_STOPWORDS = {
+    "a", "an", "and", "as", "at", "by", "for", "from", "in", "into", "is",
+    "it", "its", "no", "not", "of", "on", "or", "over", "per", "the", "to",
+    "via", "with", "without",
+    "accept", "accepted", "action", "actions", "active", "add", "added",
+    "adds", "allow", "allows", "answer", "answers", "app", "bar", "bind",
+    "bring", "button", "cap", "capture", "ccc", "centralize", "chip",
+    "chips", "classify", "collapse", "cold", "connect", "controls",
+    "correct", "dashboard", "dedupe", "default", "detect", "engine",
+    "engines",
+    "differentiate", "discover", "draw", "drop", "enable", "exclude",
+    "expose", "fill", "finalize", "fix", "focus", "fold", "freeze", "give",
+    "guard", "harden", "heal", "hint", "ingest", "invalidate", "keep",
+    "label", "let", "make", "map", "measure", "migrate", "move", "nest",
+    "normalize", "pass", "place", "preserve", "protect", "prune", "publish",
+    "list", "mode", "open", "opens", "pane", "pull", "queue", "queued",
+    "queues", "read", "reader", "rebind", "reconcile", "record",
+    "redesign", "register", "reject", "remove", "render", "repair",
+    "reserve", "resolve", "restore", "route", "row", "rows", "run", "scan",
+    "screen", "screens", "serialize", "server", "session", "sessions", "set",
+    "show", "sort", "stamp", "status", "stays", "stop", "strip", "surface",
+    "suppress", "system", "tab", "tabs", "tag", "thread", "tighten",
+    "toolbar", "transcript", "trim", "trust", "use", "validate", "verify",
+    "view", "views", "wire", "wrap",
 }
+
+REMOVAL_RE = re.compile(r"^(remove|drop|delete|retire|deprecate)\s+(?P<thing>.+)$", re.I)
+RENAME_RE = re.compile(r"^(rename|renames|renamed)\s+(?P<thing>.+)$", re.I)
 
 
 @dataclass
@@ -186,12 +265,82 @@ def humanize_scope(scope: str | None) -> str:
     return " ".join(out)
 
 
-def why_for(descs: list[str], bucket: str) -> str:
-    joined = " ".join(descs).lower()
+def is_removal(desc: str) -> bool:
+    return bool(REMOVAL_RE.match(desc.strip()) or RENAME_RE.match(desc.strip()))
+
+
+def _keyword_matches(text: str, keyword: str) -> bool:
+    return bool(re.search(
+        rf"(?<![a-z0-9]){re.escape(keyword.lower())}(?![a-z0-9])",
+        text.lower(),
+    ))
+
+
+def why_for(descs: list[str], bucket: str, scope: str | None = None,
+            files: list[str] | None = None) -> str | None:
+    joined = " ".join([scope or "", *(descs or [])]).lower()
+    if scope in WHY_SCOPES:
+        return WHY_SCOPES[scope]
     for kw, msg in WHY_KEYWORDS:
-        if kw in joined:
+        if _keyword_matches(joined, kw):
             return msg
-    return WHY_DEFAULT.get(bucket, WHY_DEFAULT["improved"])
+    return None
+
+
+def _noun_terms(desc: str) -> set[str]:
+    normalized = re.sub(r"[^a-zA-Z0-9]+", " ", desc.lower())
+    terms = {
+        token for token in normalized.split()
+        if len(token) > 2 and token not in NOUN_STOPWORDS and not token.isdigit()
+    }
+    expanded = set(terms)
+    for token in terms:
+        if "-" in token:
+            expanded.update(part for part in token.split("-") if len(part) > 2)
+    return expanded
+
+
+def _clean_desc(desc: str) -> str:
+    return desc.strip().rstrip(".")
+
+
+def _capitalized(text: str) -> str:
+    text = text.strip()
+    if not text:
+        return text
+    return text[0].upper() + text[1:]
+
+
+def _rewrite_desc(desc: str) -> str:
+    text = _clean_desc(desc)
+    removal = REMOVAL_RE.match(text)
+    if removal:
+        thing = _clean_desc(removal.group("thing"))
+        return f"{_capitalized(thing)} is gone"
+    rename = RENAME_RE.match(text)
+    if rename:
+        return f"{_capitalized(_clean_desc(rename.group('thing')))} is renamed"
+
+    replacements = [
+        (r"^add\s+(.+)$", r"\1 is available"),
+        (r"^surface\s+(.+)$", r"\1 is visible"),
+        (r"^show\s+(.+)$", r"\1 is visible"),
+        (r"^record\s+(.+)$", r"\1 is recorded"),
+        (r"^wire\s+(.+)$", r"\1 is wired in"),
+        (r"^route\s+(.+)$", r"\1 routes correctly"),
+        (r"^keep\s+(.+)$", r"\1 stays in place"),
+        (r"^stop\s+(.+)$", r"\1 no longer happens"),
+        (r"^restore\s+(.+)$", r"\1 is restored"),
+        (r"^accept\s+(.+)$", r"\1 is accepted"),
+        (r"^enable\s+(.+)$", r"\1 is enabled"),
+        (r"^make\s+(.+)$", r"\1 works correctly"),
+        (r"^fix\s+(.+)$", r"\1 works correctly"),
+    ]
+    for pattern, repl in replacements:
+        rewritten = re.sub(pattern, repl, text, flags=re.I)
+        if rewritten != text:
+            return _capitalized(rewritten)
+    return _capitalized(text)
 
 
 @dataclass
@@ -199,16 +348,40 @@ class Capability:
     bucket: str
     scope: str | None
     commits: list[ParsedCommit]
+    sequence: int = 0
 
     @property
     def title(self) -> str:
         return humanize_scope(self.scope)
 
     @property
-    def items(self) -> list[tuple[str, str]]:
-        """(what, why) pairs, one per commit — each keeps its own reason
-        instead of averaging unrelated commits into one run-on sentence."""
-        return [(c.desc.rstrip("."), why_for([c.desc], self.bucket)) for c in self.commits]
+    def terms(self) -> set[str]:
+        terms: set[str] = set()
+        for c in self.commits:
+            terms.update(_noun_terms(c.desc))
+        return terms
+
+    @property
+    def what(self) -> str:
+        slices = [_rewrite_desc(c.desc) for c in self.commits]
+        if not slices:
+            return ""
+        if len(slices) == 1:
+            return slices[0]
+        return f"{slices[0]}; includes " + "; ".join(slices[1:])
+
+    @property
+    def why(self) -> str | None:
+        return why_for(
+            [c.desc for c in self.commits],
+            self.bucket,
+            self.scope,
+            self.how_files,
+        )
+
+    @property
+    def evidence_weight(self) -> tuple[int, int, int]:
+        return (len(self.commits), len(self.how_files), -self.sequence)
 
     @property
     def how_files(self) -> list[str]:
@@ -222,6 +395,34 @@ class Capability:
         return files
 
 
+def _add_to_capability(caps: list[Capability], parsed: ParsedCommit, sequence: int) -> None:
+    terms = _noun_terms(parsed.desc)
+    for cap in caps:
+        if terms and terms & cap.terms:
+            cap.commits.append(parsed)
+            return
+    caps.append(Capability(
+        bucket=parsed.bucket,
+        scope=parsed.scope,
+        commits=[parsed],
+        sequence=sequence,
+    ))
+
+
+def _ranked_caps(caps: list[Capability]) -> list[Capability]:
+    return sorted(caps, key=lambda cap: cap.evidence_weight, reverse=True)
+
+
+def _section_caps(caps: list[Capability]) -> tuple[list[Capability], int]:
+    ranked = _ranked_caps(caps)
+    return ranked[:MAX_SECTION_BULLETS], max(0, len(ranked) - MAX_SECTION_BULLETS)
+
+
+def _under_the_hood_commits(commits: list[Commit]) -> tuple[list[Commit], int]:
+    ranked = sorted(commits, key=lambda commit: (len(commit.files), commit.short_sha), reverse=True)
+    return ranked[:MAX_SECTION_BULLETS], max(0, len(ranked) - MAX_SECTION_BULLETS)
+
+
 def group_commits(commits: list[Commit]) -> tuple[dict[str, list[Capability]], list[Commit]]:
     """Classify and group commits into capabilities per bucket.
 
@@ -229,23 +430,31 @@ def group_commits(commits: list[Commit]) -> tuple[dict[str, list[Capability]], l
     (bucket, scope); insertion order is preserved so the newest-touched
     capability leads its bucket.
     """
-    order: dict[tuple[str, str | None], list[ParsedCommit]] = {}
+    order: dict[tuple[str, str | None], list[Capability]] = {}
     under_the_hood: list[Commit] = []
 
-    for commit in commits:
+    for sequence, commit in enumerate(commits):
         ctype, scope, desc = parse_conventional(commit.subject)
         bucket = classify(ctype, scope)
+        if bucket != "under_the_hood" and is_removal(desc):
+            bucket = "removed"
         if bucket == "under_the_hood":
             under_the_hood.append(commit)
             continue
         key = (bucket, scope)
-        order.setdefault(key, []).append(
-            ParsedCommit(commit=commit, type=ctype, scope=scope, desc=desc, bucket=bucket)
+        _add_to_capability(
+            order.setdefault(key, []),
+            ParsedCommit(commit=commit, type=ctype, scope=scope, desc=desc, bucket=bucket),
+            sequence,
         )
 
     groups_by_bucket: dict[str, list[Capability]] = {b: [] for b in BUCKET_ORDER}
-    for (bucket, scope), parsed in order.items():
-        groups_by_bucket[bucket].append(Capability(bucket=bucket, scope=scope, commits=parsed))
+    for (bucket, _scope), caps in order.items():
+        for cap in caps:
+            if cap.why is None:
+                under_the_hood.extend(c.commit for c in cap.commits)
+            else:
+                groups_by_bucket[bucket].append(cap)
     return groups_by_bucket, under_the_hood
 
 
@@ -262,15 +471,21 @@ def render_markdown(groups_by_bucket: dict[str, list[Capability]],
         any_capability = True
         lines.append(f"## {BUCKET_LABELS[bucket]}")
         lines.append("")
-        for cap in caps:
-            lines.append(f"### {cap.title}")
-            for what, why in cap.items:
-                lines.append(f"- **What:** {what}. **Why it matters:** {why}.")
+        visible_caps, hidden_count = _section_caps(caps)
+        active_title = None
+        for cap in visible_caps:
+            if cap.title != active_title:
+                active_title = cap.title
+                lines.append(f"### {cap.title}")
+            lines.append(f"- **What:** {cap.what}. **Why it matters:** {cap.why}.")
             how = ", ".join(f"`{f}`" for f in cap.how_files[:4])
             if len(cap.how_files) > 4:
                 how += ", …"
             if how:
                 lines.append(f"\n**How:** {how}")
+            lines.append("")
+        if hidden_count:
+            lines.append(f"- and {hidden_count} more {BUCKET_LABELS[bucket]} capabilities.")
             lines.append("")
 
     if not any_capability:
@@ -281,8 +496,11 @@ def render_markdown(groups_by_bucket: dict[str, list[Capability]],
         lines.append(f"<details>")
         lines.append(f"<summary>Under the hood ({len(under_the_hood)} commits)</summary>")
         lines.append("")
-        for c in under_the_hood:
+        visible_commits, hidden_count = _under_the_hood_commits(under_the_hood)
+        for c in visible_commits:
             lines.append(f"- `{c.short_sha}` {c.subject}")
+        if hidden_count:
+            lines.append(f"- and {hidden_count} more under-the-hood commits.")
         lines.append("")
         lines.append("</details>")
         lines.append("")
@@ -337,21 +555,38 @@ def render_html(groups_by_bucket: dict[str, list[Capability]],
             continue
         any_capability = True
         body_parts.append(f"<h2>{html.escape(BUCKET_LABELS[bucket])}</h2>")
-        for cap in caps:
-            how = ", ".join(f"<code>{html.escape(f)}</code>" for f in cap.how_files[:4])
-            if len(cap.how_files) > 4:
+        visible_caps, hidden_count = _section_caps(caps)
+        scope_parts: dict[str, list[Capability]] = {}
+        for cap in visible_caps:
+            scope_parts.setdefault(cap.title, []).append(cap)
+        for title, scoped_caps in scope_parts.items():
+            item_html = ""
+            how_files: list[str] = []
+            seen_files = set()
+            for cap in scoped_caps:
+                item_html += (
+                    f"<li><strong>{html.escape(cap.what)}.</strong> "
+                    f"{html.escape(cap.why or '')}.</li>"
+                )
+                for f in cap.how_files:
+                    if f not in seen_files:
+                        seen_files.add(f)
+                        how_files.append(f)
+            how = ", ".join(f"<code>{html.escape(f)}</code>" for f in how_files[:4])
+            if len(how_files) > 4:
                 how += ", &hellip;"
             how_html = f'<p class="how"><strong>How:</strong> {how}</p>' if how else ""
-            item_html = "".join(
-                f"<li><strong>{html.escape(what)}.</strong> {html.escape(why)}.</li>"
-                for what, why in cap.items
-            )
             body_parts.append(
                 '<div class="cap">'
-                f"<h3>{html.escape(cap.title)}</h3>"
+                f"<h3>{html.escape(title)}</h3>"
                 f"<ul>{item_html}</ul>"
                 f"{how_html}"
                 "</div>"
+            )
+        if hidden_count:
+            body_parts.append(
+                f"<p>and {hidden_count} more "
+                f"{html.escape(BUCKET_LABELS[bucket])} capabilities.</p>"
             )
 
     if not any_capability:
@@ -360,8 +595,11 @@ def render_html(groups_by_bucket: dict[str, list[Capability]],
     if under_the_hood:
         body_parts.append("<details><summary>Under the hood "
                            f"({len(under_the_hood)} commits)</summary><ul>")
-        for c in under_the_hood:
+        visible_commits, hidden_count = _under_the_hood_commits(under_the_hood)
+        for c in visible_commits:
             body_parts.append(f"<li>{html.escape(c.short_sha)} {html.escape(c.subject)}</li>")
+        if hidden_count:
+            body_parts.append(f"<li>and {hidden_count} more under-the-hood commits.</li>")
         body_parts.append("</ul></details>")
 
     return _HTML_TEMPLATE.format(date=today, range_label=html.escape(range_label),
