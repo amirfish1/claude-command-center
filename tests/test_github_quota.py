@@ -126,6 +126,11 @@ class OpenPrCacheTests(unittest.TestCase):
     def setUp(self):
         github_quota.bust_pr_cache()
         self.addCleanup(github_quota.bust_pr_cache)
+        # These cases exercise the cache, not the candidacy gate (which has
+        # its own class below) -- so the synthetic paths are declared eligible.
+        gate = mock.patch.object(github_quota, "has_github_remote", return_value=True)
+        gate.start()
+        self.addCleanup(gate.stop)
 
     def test_repeated_callers_share_one_fetch(self):
         with mock.patch.object(github_quota, "_run_gh",
@@ -307,6 +312,77 @@ class CallSiteWiringTests(unittest.TestCase):
         self.assertEqual(
             bad, [],
             "issue-list --limit must come from github_quota (the cost lever)")
+
+
+class GithubRemoteGateTests(unittest.TestCase):
+    """The cross-repo PR sweep fans out over every known repo, which on a real
+    machine includes /opt/homebrew, index caches and agent scratch dirs. Those
+    must never reach a `gh` fork -- that is the subprocess-per-row shape the
+    repo's perf gates exist to stop."""
+
+    def setUp(self):
+        import tempfile
+        self.tmp = tempfile.mkdtemp()
+        self.addCleanup(__import__("shutil").rmtree, self.tmp, True)
+        github_quota.bust_pr_cache()
+        self.addCleanup(github_quota.bust_pr_cache)
+        with github_quota._REMOTE_LOCK:
+            github_quota._REMOTE_CACHE.clear()
+
+    def _repo(self, name, config_text):
+        import os as _os
+        root = _os.path.join(self.tmp, name)
+        _os.makedirs(_os.path.join(root, ".git"))
+        if config_text is not None:
+            with open(_os.path.join(root, ".git", "config"), "w") as fh:
+                fh.write(config_text)
+        return root
+
+    def test_github_remote_detected(self):
+        root = self._repo("gh", '[remote "origin"]\n\turl = git@github.com:o/r.git\n')
+        self.assertTrue(github_quota.has_github_remote(root))
+
+    def test_non_github_repo_never_forks_gh(self):
+        root = self._repo("brew", '[remote "origin"]\n\turl = https://gitlab.com/o/r.git\n')
+        with mock.patch.object(github_quota, "_run_gh") as run:
+            self.assertEqual(github_quota.open_prs(root), ([], None))
+        run.assert_not_called()
+
+    def test_repo_without_git_dir_never_forks_gh(self):
+        import os as _os
+        root = _os.path.join(self.tmp, "plain")
+        _os.makedirs(root)
+        with mock.patch.object(github_quota, "_run_gh") as run:
+            self.assertEqual(github_quota.open_prs(root), ([], None))
+        run.assert_not_called()
+
+    def test_verdict_is_memoised_and_reads_no_subprocess(self):
+        root = self._repo("gh2", '[remote "origin"]\n\turl = https://github.com/o/r\n')
+        with mock.patch.object(github_quota, "_run_gh") as run:
+            for _ in range(50):
+                github_quota.has_github_remote(root)
+        run.assert_not_called()
+        self.assertEqual(len(github_quota._REMOTE_CACHE), 1)
+
+    def test_added_remote_is_picked_up_without_restart(self):
+        root = self._repo("late", '[core]\n\tbare = false\n')
+        self.assertFalse(github_quota.has_github_remote(root))
+        import os as _os, time as _time
+        cfg = _os.path.join(root, ".git", "config")
+        with open(cfg, "a") as fh:
+            fh.write('[remote "origin"]\n\turl = git@github.com:o/r.git\n')
+        _os.utime(cfg, (_time.time() + 5, _time.time() + 5))
+        self.assertTrue(github_quota.has_github_remote(root))
+
+    def test_worktree_git_file_is_not_skipped(self):
+        """A linked worktree keeps a `.git` FILE, not a dir -- it must still be
+        allowed through rather than silently losing its PRs."""
+        import os as _os
+        root = _os.path.join(self.tmp, "wt")
+        _os.makedirs(root)
+        with open(_os.path.join(root, ".git"), "w") as fh:
+            fh.write("gitdir: /somewhere/.git/worktrees/wt\n")
+        self.assertTrue(github_quota.has_github_remote(root))
 
 
 if __name__ == "__main__":

@@ -240,6 +240,51 @@ PR_JSON_FIELDS_LIGHT = (
 )
 
 
+# ---------------------------------------------------------------------------
+# Candidacy gate: never fork `gh` for a repo that has no GitHub remote.
+# ---------------------------------------------------------------------------
+
+_REMOTE_LOCK = threading.Lock()
+_REMOTE_CACHE = {}  # repo_path -> (config_mtime, bool)
+
+
+def has_github_remote(repo_path):
+    """True if ``repo_path`` is a git repo whose origin points at GitHub.
+
+    The cross-repo PR sweep fans out over every known repo -- which on a real
+    machine includes ``/opt/homebrew``, index caches and agent scratch dirs.
+    Forking `gh` for those only to watch it fail is the "subprocess per row"
+    shape this repo's perf gates exist to stop. Reads ``.git/config`` directly
+    (no subprocess at all) and memoises on the file's mtime, so a newly added
+    remote is picked up without a restart.
+
+    Unreadable/missing config returns False: a repo we cannot prove is on
+    GitHub is not worth a GraphQL point.
+    """
+    if not repo_path:
+        return False
+    cfg = os.path.join(str(repo_path), ".git", "config")
+    try:
+        mtime = os.path.getmtime(cfg)
+    except OSError:
+        # Worktrees keep a `.git` FILE pointing at the real admin dir; fall
+        # back to letting the caller try rather than silently skipping them.
+        return os.path.isfile(os.path.join(str(repo_path), ".git"))
+    with _REMOTE_LOCK:
+        hit = _REMOTE_CACHE.get(repo_path)
+        if hit and hit[0] == mtime:
+            return hit[1]
+    try:
+        with open(cfg, "r", errors="replace") as fh:
+            text = fh.read()
+    except OSError:
+        text = ""
+    verdict = "github.com" in text
+    with _REMOTE_LOCK:
+        _REMOTE_CACHE[repo_path] = (mtime, verdict)
+    return verdict
+
+
 def _fetch_open_prs(repo_path, fields, timeout):
     try:
         out = _run_gh(
@@ -270,6 +315,8 @@ def open_prs(repo_path, checks=True, timeout=12, ttl=None):
     does not blank a panel.
     """
     if not repo_path:
+        return [], None
+    if not has_github_remote(repo_path):
         return [], None
     key = f"{repo_path}|{'full' if checks else 'light'}"
     ttl = pr_ttl_s() if ttl is None else ttl
