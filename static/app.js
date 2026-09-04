@@ -42241,6 +42241,8 @@
   // True while the /api/queue/events SSE stream is connected — the board then
   // refreshes on server push instead of the 15s fallback timer.
   let _uxqStreamLive = false;
+  let _dashboardEventStreamHealthy = false;
+  let _uxqLegacyEventSource = null;
   const _UXQ_NEW_ITEM_GLOW_MS = 4500;
   let _uxqKnownItemRefs = null;
   const _uxqNewItemExpires = new Map();
@@ -62305,6 +62307,193 @@
   let _uxFixesQueueMetaLoadedAt = 0;
   const UX_FIXES_QUEUE_META_TTL_MS = 15 * 1000;
 
+  // ── Unified dashboard events ──────────────────────────────────────────
+  // CCC-owned writes arrive as authoritative row patches. Expensive or
+  // externally owned state arrives as a narrow invalidation that is
+  // coalesced before any refetch. The cursor survives reloads so the server's
+  // bounded replay ring can close short disconnect gaps without a rescan.
+  const _dashboardEventCursorKey = 'ccc.dashboard.events.cursor';
+  let _dashboardSavedCursor = null;
+  try { _dashboardSavedCursor = JSON.parse(localStorage.getItem(_dashboardEventCursorKey) || 'null'); }
+  catch (_) { _dashboardSavedCursor = null; }
+  const _dashboardEventState = {
+    bootId: _dashboardSavedCursor && _dashboardSavedCursor.boot_id || '',
+    seq: Number(_dashboardSavedCursor && _dashboardSavedCursor.seq || 0),
+    entityVersions: new Map(),
+    invalidations: new Map(),
+    source: null,
+    retryMs: 1000,
+    retryTimer: null,
+  };
+  let _dashboardArchiveRenderQueued = false;
+
+  function _persistDashboardEventCursor() {
+    try {
+      localStorage.setItem(_dashboardEventCursorKey, JSON.stringify({
+        boot_id: _dashboardEventState.bootId,
+        seq: _dashboardEventState.seq,
+      }));
+    } catch (_) {}
+  }
+
+  function _queueDashboardArchiveRender() {
+    if (_dashboardArchiveRenderQueued) return;
+    _dashboardArchiveRenderQueued = true;
+    requestAnimationFrame(() => {
+      _dashboardArchiveRenderQueued = false;
+      try { renderArchiveList(_archiveQuery()); } catch (_) {}
+    });
+  }
+
+  function _applyDashboardConversationPatch(event) {
+    const id = String(event.entity && event.entity.id || '');
+    if (!id || !event.patch || typeof event.patch !== 'object') return;
+    let changed = false;
+    const patchRows = rows => Array.isArray(rows) ? rows.map(row => {
+      const rowId = String(row && (row.session_id || row.id) || '');
+      if (rowId !== id) return row;
+      changed = true;
+      return Object.assign({}, row, event.patch);
+    }) : rows;
+    archiveData = patchRows(archiveData);
+    conversationsData = patchRows(conversationsData);
+    if (currentSession && String(currentSession.id || '') === id) {
+      currentSession = Object.assign({}, currentSession, event.patch);
+    }
+    if (changed) _queueDashboardArchiveRender();
+  }
+
+  function _applyDashboardSessionPatch(event) {
+    const id = String(event.entity && event.entity.id || '');
+    if (!id || !event.patch || typeof event.patch !== 'object') return;
+    const current = (_liveSessionsActivityLast && _liveSessionsActivityLast.sessions) || {};
+    if (_liveSessionsActivityLast) {
+      _liveSessionsActivityLast.sessions = Object.assign({}, current, {
+        [id]: Object.assign({}, current[id] || {}, event.patch),
+      });
+    }
+    _queueDashboardArchiveRender();
+  }
+
+  function scheduleDashboardInvalidation(resource, id) {
+    const normalized = String(resource || '').trim();
+    if (!normalized) return;
+    const key = normalized + ':' + String(id || '');
+    if (_dashboardEventState.invalidations.has(key)) return;
+    _dashboardEventState.invalidations.set(key, { resource: normalized, id: id || null });
+    if (_dashboardEventState.invalidations.size === 1) {
+      queueMicrotask(_flushDashboardInvalidations);
+    }
+  }
+
+  function _flushDashboardInvalidations() {
+    const pending = Array.from(_dashboardEventState.invalidations.values());
+    _dashboardEventState.invalidations.clear();
+    const resources = new Set(pending.map(item => item.resource));
+    if (resources.has('queue')) {
+      _uxqItemsCache.ts = 0;
+      _uxqHealthCache.ts = 0;
+      _wtWorkersCache.ts = 0;
+      if (_queuePanelIsVisible() && typeof _renderQueuePanel === 'function') {
+        _renderQueuePanel();
+      }
+    }
+    if (resources.has('sessions') && typeof refreshLiveSessionsActivity === 'function') {
+      refreshLiveSessionsActivity().catch(() => {});
+    }
+    if (resources.has('archive') && typeof refreshArchiveData === 'function') {
+      refreshArchiveData({ staleOk: true }).then(_queueDashboardArchiveRender).catch(() => {});
+    }
+    if ((resources.has('repo') || resources.has('github'))
+        && typeof _hydrateArchiveSideData === 'function') {
+      _hydrateArchiveSideData(true).catch(() => {});
+    }
+  }
+
+  function applyDashboardEvent(event) {
+    if (!event || Number(event.schema) !== 1 || !event.topic) return false;
+    event.seq = Number(event.seq || 0);
+    if (event.topic === 'resync.required') {
+      _dashboardEventState.bootId = String(event.boot_id || '');
+      _dashboardEventState.seq = event.seq;
+      _dashboardEventState.entityVersions.clear();
+      _persistDashboardEventCursor();
+      scheduleDashboardInvalidation('sessions');
+      scheduleDashboardInvalidation('queue');
+      scheduleDashboardInvalidation('archive');
+      return true;
+    }
+    if (_dashboardEventState.bootId && event.boot_id !== _dashboardEventState.bootId) {
+      _dashboardEventState.seq = 0;
+      _dashboardEventState.entityVersions.clear();
+    }
+    if (event.seq <= _dashboardEventState.seq) return false;
+    _dashboardEventState.bootId = String(event.boot_id || '');
+    _dashboardEventState.seq = event.seq;
+
+    if (event.entity && event.entity.id && event.entity.type && event.entity_version != null) {
+      const entityKey = String(event.entity.type) + ':' + String(event.entity.id);
+      const knownVersion = Number(_dashboardEventState.entityVersions.get(entityKey) || 0);
+      if (event.entity_version <= knownVersion) {
+        _persistDashboardEventCursor();
+        return false;
+      }
+      _dashboardEventState.entityVersions.set(entityKey, Number(event.entity_version));
+    }
+
+    if (event.topic === 'conversation.patch') _applyDashboardConversationPatch(event);
+    else if (event.topic === 'session.patch') _applyDashboardSessionPatch(event);
+    else if (event.topic === 'queue.patch' || event.topic === 'queue.remove') {
+      scheduleDashboardInvalidation('queue', event.entity && event.entity.id);
+    } else if (event.topic === 'worker.patch') {
+      scheduleDashboardInvalidation('sessions', event.entity && event.entity.id);
+    }
+    (Array.isArray(event.invalidate) ? event.invalidate : []).forEach(item => {
+      if (item && item.resource) scheduleDashboardInvalidation(item.resource, item.id);
+    });
+    _persistDashboardEventCursor();
+    return true;
+  }
+
+  function connectDashboardEvents() {
+    if (typeof EventSource !== 'function') return;
+    if (_dashboardEventState.source) {
+      try { _dashboardEventState.source.close(); } catch (_) {}
+    }
+    const params = new URLSearchParams();
+    params.set('since', String(_dashboardEventState.seq || 0));
+    if (_dashboardEventState.bootId) params.set('boot_id', _dashboardEventState.bootId);
+    const source = new EventSource('/api/events?' + params.toString());
+    _dashboardEventState.source = source;
+    source.onopen = () => {
+      _dashboardEventState.retryMs = 1000;
+      _dashboardEventStreamHealthy = true;
+      _uxqStreamLive = true;
+      if (_uxqLegacyEventSource) {
+        try { _uxqLegacyEventSource.close(); } catch (_) {}
+        _uxqLegacyEventSource = null;
+      }
+    };
+    source.onmessage = ev => {
+      try { applyDashboardEvent(JSON.parse(ev.data)); } catch (_) {}
+    };
+    source.onerror = () => {
+      if (_dashboardEventState.source !== source) return;
+      _dashboardEventStreamHealthy = false;
+      _uxqStreamLive = false;
+      try { source.close(); } catch (_) {}
+      _dashboardEventState.source = null;
+      clearTimeout(_dashboardEventState.retryTimer);
+      const delay = _dashboardEventState.retryMs;
+      _dashboardEventState.retryMs = Math.min(delay * 2, 30000);
+      _dashboardEventState.retryTimer = setTimeout(connectDashboardEvents, delay);
+    };
+  }
+
+  connectDashboardEvents();
+  window.__cccDashboardEvents = { apply: applyDashboardEvent, schedule: scheduleDashboardInvalidation };
+  // ── End unified dashboard events ──────────────────────────────────────
+
   // A worker may claim with EITHER its real session UUID or its made-up CCC
   // name (e.g. "BYM UX-fixes-queue"). To let the badge match either, reduce
   // both `claimed_by` and each candidate row identity to the same key:
@@ -64078,20 +64267,24 @@
         }
       };
       const schedule = () => {
+        if (_dashboardEventStreamHealthy) return;
         setTimeout(connect, retryMs);
         retryMs = Math.min(retryMs * 2, 30000);
       };
       const connect = () => {
+        if (_dashboardEventStreamHealthy) return;
         try { es = new EventSource('/api/queue/events'); } catch (_) { schedule(); return; }
+        _uxqLegacyEventSource = es;
         es.onopen = () => { retryMs = 1000; _uxqStreamLive = true; invalidateAndRender(); };
         es.onmessage = () => { invalidateAndRender(); };
         es.onerror = () => {
-          _uxqStreamLive = false;
+          _uxqStreamLive = _dashboardEventStreamHealthy;
           try { es.close(); } catch (_) {}
+          if (_uxqLegacyEventSource === es) _uxqLegacyEventSource = null;
           schedule();
         };
       };
-      connect();
+      setTimeout(connect, 2000);
     })();
   })();
 
