@@ -3072,7 +3072,7 @@ def test_system_services_no_subprocess_on_warm_cache(monkeypatch):
 
     assert payload["ok"] is True
     assert {row["id"] for row in payload["services"]} == {
-        "dashboard", "worker", "watchtower", "app_server"
+        "dashboard", "worker", "watchtower", "app_server", "kimi_kap"
     }
     assert health_calls == [], (
         "build_system_services called build_system_health — that runs a ps+lsof "
