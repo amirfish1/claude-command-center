@@ -32029,6 +32029,35 @@
     }
   }
 
+  const SIDEBAR_RENDER_INITIAL_ROWS = 240;
+  const SIDEBAR_RENDER_MORE_ROWS = 240;
+  let _sidebarRenderRowLimit = SIDEBAR_RENDER_INITIAL_ROWS;
+  let _sidebarRenderScope = '';
+
+  function _boundSidebarRowsForRender(rows, limit) {
+    const source = Array.isArray(rows) ? rows : [];
+    if (source.length <= limit) return { rows: source, omitted: 0 };
+    const buckets = { active: [], archived: [], backlog: [], merge: [] };
+    source.forEach(row => {
+      const column = classifyKanbanColumn(row);
+      const key = column === 'archived' ? 'archived'
+        : (column === 'backlog' ? 'backlog' : (row && row.tail_pr_number ? 'merge' : 'active'));
+      buckets[key].push(row);
+    });
+    const selected = new Set();
+    const quota = Math.max(1, Math.floor(limit / Object.keys(buckets).length));
+    Object.values(buckets).forEach(bucket => bucket.slice(0, quota).forEach(row => selected.add(row)));
+    const selectedId = String(currentConversation || '');
+    const selectedRow = source.find(row => String(row && (row.session_id || row.id) || '') === selectedId);
+    if (selectedRow) selected.add(selectedRow);
+    for (const row of source) {
+      if (selected.size >= limit) break;
+      selected.add(row);
+    }
+    const result = source.filter(row => selected.has(row));
+    return { rows: result, omitted: Math.max(0, source.length - result.length) };
+  }
+
   function renderConversationList(convs) {
     if (window.__cccTourActive) return; // FIRST FLIGHT tour owns the list DOM
     convs = filterGhIssues(convs);
@@ -32039,7 +32068,17 @@
     convs = _prioritizeNameMatches(
       _prioritizeSessionIdMatches(convs, document.getElementById('convSearch')?.value || ''),
       document.getElementById('convSearch')?.value || '');
-    const _ipSearchActive = !!(document.getElementById('convSearch')?.value || '').trim();
+    const _ipSearchValue = (document.getElementById('convSearch')?.value || '').trim();
+    const _ipSearchActive = !!_ipSearchValue;
+    const _sidebarScope = _ipSearchValue.toLowerCase();
+    if (_sidebarScope !== _sidebarRenderScope) {
+      _sidebarRenderScope = _sidebarScope;
+      _sidebarRenderRowLimit = SIDEBAR_RENDER_INITIAL_ROWS;
+    }
+    const _sidebarFullRows = convs;
+    const _sidebarBounded = _boundSidebarRowsForRender(convs, _sidebarRenderRowLimit);
+    convs = _sidebarBounded.rows;
+    const _sidebarRowsOmitted = _sidebarBounded.omitted;
     _applyOptimisticTouches(convs);
     // Read the active tab before the row renderer is invoked below. Rows use
     // this to choose Archive vs Move to Trash, while the tab markup itself is
@@ -36340,7 +36379,12 @@
       : _sidebarTab === 'queues' ? '<div class="shared-queue-host shared-queue-host-sidebar" id="sidebarQueueHost"></div>'
       : (_sidebarTab === 'archived' || _sidebarTab === 'coding' || _sidebarTab === 'workers') ? (_forceOpen(_archivedHtml, 'conv-archived-section') || _tabEmpty('sessions'))
       : (_forceOpen(_inProgressHtml, 'conv-inprogress-section') || _tabEmpty('in-progress sessions'));
-    const _convListHtml = _tabBarHtml + _idSearchRowsHtml + _repoSearchRowsHtml + _tabBody;
+    const _showMoreRowsHtml = _sidebarRowsOmitted
+      ? '<div class="archive-empty-state"><button type="button" class="conv-window-btn" data-role="sidebar-show-more">Show '
+        + Math.min(SIDEBAR_RENDER_MORE_ROWS, _sidebarRowsOmitted)
+        + ' more sessions</button><div>' + _sidebarRowsOmitted + ' older rows are not rendered yet.</div></div>'
+      : '';
+    const _convListHtml = _tabBarHtml + _idSearchRowsHtml + _repoSearchRowsHtml + _tabBody + _showMoreRowsHtml;
     const _objectsSplitActive = _sidebarTab === 'inprogress' && _shouldGroupByObjects;
     $convList.classList.toggle('objects-scroll-split', _objectsSplitActive);
     if (_objectsSplitActive) { applyCurrentSessionsPanelHeight(); applyEvergreenPanelHeight(); }
@@ -36427,6 +36471,14 @@
     $convList.innerHTML = _convListHtml;
     _updateConvTabBarHeightVar($convList);
     _mountSharedQueuePanel();
+    const _showMoreRowsButton = $convList.querySelector('[data-role="sidebar-show-more"]');
+    if (_showMoreRowsButton) {
+      _showMoreRowsButton.addEventListener('click', () => {
+        _sidebarRenderRowLimit += SIDEBAR_RENDER_MORE_ROWS;
+        _convListRenderSig = null;
+        renderConversationList(_sidebarFullRows);
+      });
+    }
     if (_objectsSplitActive) _updateSidebarFillSection($convList);
     const _currentSessionsScrollAfter = _currentSessionsScrollBefore
       ? $convList.querySelector('[data-role="current-sessions-scroll"]')
@@ -64253,6 +64305,7 @@
     // overlap means the user sees row time advance within ~90s of any
     // real activity, even for non-live sessions.
     setInterval(_gated('archiveTimes', () => {
+      if (_dashboardEventStreamHealthy) return;
       if (document.hidden) return;
       if (typeof refreshArchiveData !== 'function') return;
       // Skip while the user is panning the flow board (or otherwise
@@ -64271,6 +64324,7 @@
       }).catch(() => {});
     }), 90 * 1000);
     setInterval(_gated('uxFixesQueueMeta', () => {
+      if (_uxqStreamLive) return;
       if (document.hidden) return;
       refreshUxFixesQueueMeta({ force: true }).catch(() => {});
       // Queue tab (status rail) only refetches when you switch to it —
