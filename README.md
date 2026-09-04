@@ -600,6 +600,8 @@ instruction in), **Pause** (interrupt the turn), or **Kill**.
 Anti-spam: at most five new cards per run, and a source that already has an
 open card, or was decided or dismissed in the last week, is skipped.
 
+![Decision Inbox: a token-governor strip flags a session at 98% context with Nudge/Pause/Kill, above three-option decision cards for stalled WatchTower queues and board items, one option recommended](docs/images/decision-inbox.png)
+
 Open it from the **Decisions** icon in the app rail or at
 `/decision-inbox.html`. Configure in
 `~/.claude/command-center/decision-inbox.json`:
