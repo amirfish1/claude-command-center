@@ -64,3 +64,29 @@ def test_write_spawn_marker_records_typed_metadata(monkeypatch, tmp_path):
         "lane": "other",
         "spawned_via": "ccc-ask",
     }
+
+
+def test_infer_session_spawned_via_rules():
+    assert server._infer_session_spawned_via({}) == "terminal"
+    assert server._infer_session_spawned_via({"spawned_via": ""}) == "terminal"
+    assert server._infer_session_spawned_via({"spawned_via": "-"}) == "terminal"
+    assert server._infer_session_spawned_via({"spawned_via": "not available"}) == "terminal"
+    assert server._infer_session_spawned_via(None) == "terminal"
+
+    assert server._infer_session_spawned_via({"spawned_via": "api"}) == "api"
+    assert server._infer_session_spawned_via({"spawned_via": "ui"}) == "ui"
+    assert server._infer_session_spawned_via({"spawned_via": "cli"}) == "cli"
+
+    assert server._infer_session_spawned_via({"parent_session_id": "p-123"}) == "subagent"
+    assert server._infer_session_spawned_via({"spawned_via": "-", "parent_session_id": "p-123"}) == "subagent"
+
+    assert server._infer_session_spawned_via({"_worker_id": "w-1"}) == "watchtower"
+    assert server._infer_session_spawned_via({"name": "lane-w-job"}) == "watchtower"
+    assert server._infer_session_spawned_via({"name": "fix bug [watchtower]"}) == "watchtower"
+
+    assert server._infer_session_spawned_via({"continued_from_session_id": "c-123"}) == "resumed"
+    assert server._infer_session_spawned_via({"name": "resume-session-abc"}) == "resumed"
+
+    assert server._infer_session_spawned_via({"session_id": "sid-1"}, sid="sid-1", spawn_registry_by_sid={"sid-1": {}}) == "ui"
+    assert server._infer_session_spawned_via({"session_id": "sid-1"}, sid="sid-1", spawn_registry_by_sid={"sid-1": {"spawned_via": "cli"}}) == "cli"
+

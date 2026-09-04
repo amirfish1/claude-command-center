@@ -8048,21 +8048,41 @@
     ui: ['UI', 'Spawned from the CCC dashboard UI.'],
     'ui-automated': ['UI · automated', 'Spawned from a browser tab under automation control (navigator.webdriver) — e.g. a Playwright/Puppeteer-driven session, not necessarily a human click.'],
     api: ['API', 'Spawned via a direct API call with no browser Origin/Referer.'],
+    terminal: ['Terminal', 'Started from an interactive terminal session outside CCC.'],
+    subagent: ['Subagent', 'Spawned as a subagent by another session.'],
+    watchtower: ['WatchTower', 'Spawned by the WatchTower queue runner.'],
+    'ccc-ask': ['ccc-ask', 'Spawned via the ccc-ask assistant.'],
+    resumed: ['Resumed', 'Resumed from an earlier session.'],
+    resume: ['Resumed', 'Resumed from an earlier session.'],
+    external: ['External', 'Spawned by an external tool or script.'],
+    'external-tool': ['External tool', 'Spawned by an external tool.'],
   };
   function _renderRailSpawnedVia(row) {
     const el = document.getElementById('railSpawnedVia');
     if (!el) return;
     if (!row) { el.hidden = true; el.textContent = ''; el.removeAttribute('title'); return; }
-    const via = row.spawned_via || '';
+    let via = String(row.spawned_via || '').trim().toLowerCase();
+    if (!via || via === 'none' || via === 'null' || via === '-' || via === 'not available' || via === 'not-available' || via === 'unknown') {
+      if (row.parent_session_id) {
+        via = 'subagent';
+      } else if (typeof _isWatchTowerWorkerRow === 'function' && _isWatchTowerWorkerRow(row)) {
+        via = 'watchtower';
+      } else if (row.continued_from_session_id) {
+        via = 'resumed';
+      } else {
+        via = 'terminal';
+      }
+    }
     const info = RAIL_SPAWNED_VIA_LABELS[via];
     el.hidden = false;
-    if (!info) {
-      el.textContent = 'via: not available';
-      el.title = 'Spawn origin unknown — this session predates spawn tracking, or its spawning process has already exited.';
-      return;
+    if (info) {
+      el.textContent = 'via: ' + info[0];
+      el.title = info[1];
+    } else {
+      const label = via.charAt(0).toUpperCase() + via.slice(1);
+      el.textContent = 'via: ' + label;
+      el.title = 'Spawned via ' + via + '.';
     }
-    el.textContent = 'via: ' + info[0];
-    el.title = info[1];
   }
 
   function handleBreadcrumbSpawnedByClick(ev) {
@@ -35522,7 +35542,29 @@
       const lane = String((c && c.spawned_lane) || '').trim();
       return lane === 'workers' || lane === 'other' ? lane : '';
     };
-    const _isExternalSpawnRow = (c) => !!(c && String(c.spawned_via || '').trim());
+    const _NON_WORKER_SPAWNED_VIAS = new Set([
+      'ui',
+      'ui-automated',
+      'cli',
+      'api',
+      'terminal',
+      'subagent',
+      'resumed',
+      'resume',
+      'ccc-ask',
+      'none',
+      'null',
+      '-',
+      'unknown',
+      'not available',
+      'not-available',
+    ]);
+    const _isExternalSpawnRow = (c) => {
+      if (!c) return false;
+      const via = String(c.spawned_via || '').trim().toLowerCase();
+      if (!via) return false;
+      return !_NON_WORKER_SPAWNED_VIAS.has(via);
+    };
     const _allTabNaturalLane = (c) => {
       const spawnedLane = _spawnMarkerLane(c);
       if (spawnedLane) return spawnedLane;

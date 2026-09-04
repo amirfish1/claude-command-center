@@ -86,6 +86,17 @@ def _load_spawn_registry():
     if not isinstance(data, list):
         print(f"  [spawn-registry] ignoring registry with unexpected shape (not a list)")
         return []
+    for entry in data:
+        if isinstance(entry, dict) and not str(entry.get("spawned_via") or "").strip():
+            name = str(entry.get("name") or entry.get("command_summary") or "").lower()
+            if entry.get("parent_session_id"):
+                entry["spawned_via"] = "subagent"
+            elif name.startswith("lane-w") or name.startswith("lane-e") or "[watchtower]" in name or "[wt]" in name:
+                entry["spawned_via"] = "watchtower"
+            elif name.startswith("resume-"):
+                entry["spawned_via"] = "resumed"
+            else:
+                entry["spawned_via"] = "ui"
     return data
 
 

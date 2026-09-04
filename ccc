@@ -208,7 +208,9 @@ def cmd_sessions(args):
         name = (s.get("name") or "(no conversation row)")[:44]
         marker = ("  " * depth + "↳ ") if (depth or child) else ""
         engine_effort = f"{s.get('engine') or '?'}/{s.get('effort') or '?'}"
-        via = s.get("spawned_via") or "-"
+        via = s.get("spawned_via") or "terminal"
+        if via in ("-", "none", "null", "not-available", "not available"):
+            via = "terminal"
         path = s.get("repo_path") or "?"
         if path.startswith(home_prefix):
             path = path[len(home_prefix):]

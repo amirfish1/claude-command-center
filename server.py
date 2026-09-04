@@ -4423,6 +4423,77 @@ def _write_spawn_marker(session_id, *, lane, kind="", spawned_via=""):
             pass
 
 
+def _infer_session_spawned_via(row_or_entry, sid=None, markers=None, spawn_registry_by_sid=None):
+    """Guarantees a concrete, non-empty spawned_via attribution for any session.
+
+    Never returns null, empty, or 'not available'. Priority:
+    1. Explicit spawned_via already present and valid on the row/entry.
+    2. Explicit spawned_via in spawn registry.
+    3. Explicit spawned_via in spawn markers (~/.claude/command-center/spawn-markers/<sid>.json).
+    4. Subagent if parent_session_id is present.
+    5. WatchTower if lane-w*, lane-e*, [watchtower], or [wt].
+    6. Resumed if continued_from_session_id or resume- prefix.
+    7. UI if recorded in spawn registry but missing via.
+    8. Terminal for all sessions started outside CCC (interactive CLI in terminal).
+    """
+    if not isinstance(row_or_entry, dict):
+        return "terminal"
+    via = str(row_or_entry.get("spawned_via") or "").strip().lower()
+    if via and via not in ("none", "null", "-", "not-available", "not available", "unknown"):
+        return via
+    sid_clean = str(sid or row_or_entry.get("session_id") or row_or_entry.get("id") or "").strip()
+    if spawn_registry_by_sid is not None and sid_clean and sid_clean in spawn_registry_by_sid:
+        reg_entry = spawn_registry_by_sid[sid_clean]
+        if isinstance(reg_entry, dict):
+            reg_via = str(reg_entry.get("spawned_via") or "").strip().lower()
+            if reg_via and reg_via not in ("none", "null", "-", "not-available", "not available", "unknown"):
+                return reg_via
+    if markers is None:
+        try:
+            markers = _load_spawn_markers()
+        except Exception:
+            markers = {}
+    if sid_clean and sid_clean in markers:
+        marker_via = str(markers[sid_clean].get("spawned_via") or "").strip().lower()
+        if marker_via:
+            return marker_via
+    parent = row_or_entry.get("parent_session_id")
+    if parent and str(parent).strip():
+        return "subagent"
+    name = str(row_or_entry.get("name") or row_or_entry.get("display_name") or row_or_entry.get("first_message") or "").strip().lower()
+    if (
+        name.startswith("lane-w")
+        or name.startswith("lane-e")
+        or "[watchtower]" in name
+        or "[wt]" in name
+        or name.startswith("wt-")
+        or bool(row_or_entry.get("_worker_id"))
+    ):
+        return "watchtower"
+    if row_or_entry.get("continued_from_session_id") or name.startswith("resume-"):
+        return "resumed"
+    if spawn_registry_by_sid is not None and sid_clean and sid_clean in spawn_registry_by_sid:
+        return "ui"
+    return "terminal"
+
+
+def _tag_spawned_via_in_registry(pid=None, session_id=None, via=""):
+    """Persist spawned_via onto the spawn registry entry by PID and/or session_id."""
+    clean_via = str(via or "").strip()
+    if not clean_via or (pid is None and not session_id):
+        return
+    def _mutator(entries):
+        changed = False
+        for entry in entries:
+            pid_match = pid is not None and entry.get("pid") == pid
+            sid_match = session_id and entry.get("session_id") == session_id
+            if (pid_match or sid_match) and entry.get("spawned_via") != clean_via:
+                entry["spawned_via"] = clean_via
+                changed = True
+        return changed
+    _mutate_spawn_registry(_mutator)
+
+
 def _load_session_overrides():
     """Return {session_id: {model, context_1m, engine, set_at}} or {}."""
     try:
@@ -10517,7 +10588,7 @@ def _census_identity_map():
             "effort": entry.get("effort") or entry.get("reasoning_effort") or None,
             "repo_path": entry.get("repo_path") or entry.get("cwd") or None,
             "parent_session_id": entry.get("parent_session_id") or None,
-            "spawned_via": entry.get("spawned_via") or None,
+            "spawned_via": _infer_session_spawned_via(entry),
             "has_conversation_row": False,
         }
         for key in ("session_id", "resumed_sid"):
@@ -10544,6 +10615,10 @@ def _census_identity_map():
                 name = " ".join(name.split())[:120] or None
             else:
                 name = existing.get("name")
+            resolved_via = (
+                existing.get("spawned_via")
+                or _infer_session_spawned_via(row, sid=sid)
+            )
             out[sid] = {
                 "name": name,
                 "engine": row.get("engine") or existing.get("engine"),
@@ -10551,7 +10626,7 @@ def _census_identity_map():
                 "effort": row.get("reasoning_effort") or row.get("effort") or existing.get("effort"),
                 "repo_path": row.get("session_cwd") or existing.get("repo_path"),
                 "parent_session_id": row.get("parent_session_id") or existing.get("parent_session_id"),
-                "spawned_via": row.get("spawned_via") or existing.get("spawned_via"),
+                "spawned_via": resolved_via,
                 "has_conversation_row": True,
                 "mtime": row.get("mtime") or row.get("modified") or None,
                 "jsonl_path": row.get("jsonl_path") or None,
@@ -10814,7 +10889,7 @@ def build_session_census(since_s=None):
             "name": ident.get("name"),
             "repo_path": ident.get("repo_path"),
             "parent_session_id": parent,
-            "spawned_via": ident.get("spawned_via") or None,
+            "spawned_via": _infer_session_spawned_via(ident, sid=sid),
             "children": sorted(children_of.get(sid) or ()),
             "last_event_age_s": age,
             "pending_tool": entry.get("pending_tool") or entry.get("sidecar_tool") or None,
@@ -10851,7 +10926,7 @@ def build_session_census(since_s=None):
                 "name": ident.get("name"),
                 "repo_path": ident.get("repo_path"),
                 "parent_session_id": ident.get("parent_session_id") or None,
-                "spawned_via": ident.get("spawned_via") or None,
+                "spawned_via": _infer_session_spawned_via(ident, sid=sid),
                 "children": [],
                 "last_event_age_s": max(0.0, now - mtime),
                 "pending_tool": None,
@@ -11989,7 +12064,7 @@ def find_all_conversations(
                 # /list variants — resolve_prs/resolve_worktrees/resolve_
                 # effective, which rebuild from scratch here rather than
                 # patching a cached snapshot — carry the field too.
-                "spawned_via": spawn_entry.get("spawned_via") or "",
+                "spawned_via": _infer_session_spawned_via(spawn_entry, sid=session_id),
                 "continued_from_session_id": _continued_from_session_id_from_text(first_message),
                 # Context % badge — same fields as find_conversations so
                 # archive rows can render sidebar usage without opening the
@@ -13419,7 +13494,7 @@ def _archive_overlay_acp_sessions(rows):
                 "goal": "",
                 "goal_status": "",
                 "parent_session_id": "",
-                "spawned_via": "",
+                "spawned_via": _infer_session_spawned_via(card, sid=sid),
                 "model": model,
                 "reasoning_effort": None,
                 "latest_input_tokens": 0,
@@ -14190,9 +14265,8 @@ def _rehydrate_archive_cached_rows(rows):
                 row.setdefault("parent_session_id", "")
             # How this session's spawn request arrived (cli/ui/ui-automated/
             # api), tagged onto the registry entry at spawn time (CCC-1026
-            # follow-up). Absent for anything spawned before that change, or
-            # for rows with no registry entry at all (archived/rehydrated).
-            row["spawned_via"] = (spawn_registry_by_sid.get(sid) or {}).get("spawned_via") or ""
+            # follow-up) or inferred from launch metadata.
+            row["spawned_via"] = _infer_session_spawned_via(row, sid=sid, spawn_registry_by_sid=spawn_registry_by_sid)
             # Continuation lineage specifically (F2 "Continue in a new
             # session" / usage-limit auto-resume): the origin marker only
             # appears in continuation prompts, never in subagent spawns, so
@@ -19276,7 +19350,7 @@ def find_conversations(repo_path, progress=None, include_old=True, live_sids=Non
             # this is the live per-repo listing behind /api/sessions, which
             # feeds the sidebar directly — a completely separate code path
             # from the archive endpoints.
-            "spawned_via": spawn_entry.get("spawned_via") or "",
+            "spawned_via": _infer_session_spawned_via(spawn_entry, sid=sid, spawn_registry_by_sid=spawn_registry_by_sid),
             "continued_from_session_id": _continued_from_session_id_from_text(first_message),
             "model": tail_meta.get("model"),
             # Transcript-first, like the model beside it: the tail states the
@@ -26366,6 +26440,20 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(payload)
 
+    def _extract_spawned_via(self):
+        """Detect how a spawn request arrived at CCC (cli, ui-automated, ui, or api)."""
+        ua = (self.headers.get("User-Agent") or "").strip()
+        origin = (self.headers.get("Origin") or "").strip()
+        referer = (self.headers.get("Referer") or "").strip()
+        automated = (self.headers.get("X-CCC-Automated") or "").strip().lower() == "true"
+        if ua == "ccc-cli":
+            return "cli"
+        if automated:
+            return "ui-automated"
+        if origin or referer:
+            return "ui"
+        return "api"
+
     def do_POST(self):
         if not self._check_same_origin():
             return
@@ -29741,22 +29829,14 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                     # Persist spawned_via onto the registry entry too (not just
                     # the activity log) so it survives past this one response
                     # and reaches the row the UI reads on every future page
-                    # load — the Metadata pane's "Spawned via" chip. Patched
-                    # after the fact by pid rather than threaded through the
-                    # ~18 engine-specific spawn_session_*()/
-                    # _record_spawn_to_registry() call sites, which would be a
-                    # much larger, riskier change for a purely cosmetic field.
-                    if result.get("ok") and result.get("pid"):
+                    # load — the Metadata pane's "Spawned via" chip.
+                    if isinstance(result, dict) and result.get("ok"):
                         result["spawned_via"] = spawned_via
-                        _spawn_pid = result["pid"]
-                        def _tag_spawned_via(entries, _pid=_spawn_pid, _via=spawned_via):
-                            changed = False
-                            for _entry in entries:
-                                if _entry.get("pid") == _pid and _entry.get("spawned_via") != _via:
-                                    _entry["spawned_via"] = _via
-                                    changed = True
-                            return changed
-                        _mutate_spawn_registry(_tag_spawned_via)
+                        _tag_spawned_via_in_registry(
+                            pid=result.get("pid"),
+                            session_id=result.get("session_id"),
+                            via=spawned_via,
+                        )
                     # Opt in to unattended auto-resume ("continue") pokes at
                     # spawn time -- the main legitimate use case is a
                     # WatchTower queue-drain worker that should be nudged
@@ -29865,6 +29945,7 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
             else:
                 try:
                     _set_control_plane_action_id(payload.get("idempotency_key"))
+                    spawned_via = self._extract_spawned_via()
                     result = spawn_session_codex(
                         prompt,
                         name=name,
@@ -29875,6 +29956,13 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                         reasoning_effort=reasoning_effort,
                         parent_session_id=payload.get("parent_session_id"),
                     )
+                    if isinstance(result, dict) and result.get("ok"):
+                        result["spawned_via"] = spawned_via
+                        _tag_spawned_via_in_registry(
+                            pid=result.get("pid"),
+                            session_id=result.get("session_id"),
+                            via=spawned_via,
+                        )
                     # Resolver-side failures (binary not found, CCC_CODEX_BIN
                     # misconfigured) carry a stable `"code": "codex_unavailable"`
                     # so the frontend can render an install hint without
@@ -29931,6 +30019,7 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                 self.send_json({"ok": False, "error": f"invalid cwd: {cwd_error}"}, 400)
             else:
                 try:
+                    spawned_via = self._extract_spawned_via()
                     result = spawn_session_gemini(
                         prompt,
                         name=name,
@@ -29938,6 +30027,13 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                         repo_path=payload.get("repo_path"),
                         worktree=bool(payload.get("worktree")),
                     )
+                    if isinstance(result, dict) and result.get("ok"):
+                        result["spawned_via"] = spawned_via
+                        _tag_spawned_via_in_registry(
+                            pid=result.get("pid"),
+                            session_id=result.get("session_id"),
+                            via=spawned_via,
+                        )
                     if result.get("code") in ("gemini_unavailable", "gemini_launch_failed"):
                         self.send_json(result, 503)
                     else:
@@ -29991,6 +30087,7 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                 self.send_json({"ok": False, "error": f"invalid cwd: {cwd_error}"}, 400)
             else:
                 try:
+                    spawned_via = self._extract_spawned_via()
                     result = spawn_session_cursor(
                         prompt,
                         name=name,
@@ -29999,6 +30096,13 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                         worktree=bool(payload.get("worktree")),
                         model=model,
                     )
+                    if isinstance(result, dict) and result.get("ok"):
+                        result["spawned_via"] = spawned_via
+                        _tag_spawned_via_in_registry(
+                            pid=result.get("pid"),
+                            session_id=result.get("session_id"),
+                            via=spawned_via,
+                        )
                     if result.get("code") in ("cursor_unavailable", "cursor_launch_failed"):
                         self.send_json(result, 503)
                     else:
@@ -30052,6 +30156,7 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                 self.send_json({"ok": False, "error": f"invalid cwd: {cwd_error}"}, 400)
             else:
                 try:
+                    spawned_via = self._extract_spawned_via()
                     result = spawn_session_antigravity(
                         prompt,
                         name=name,
@@ -30060,6 +30165,13 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                         worktree=bool(payload.get("worktree")),
                         model=model,
                     )
+                    if isinstance(result, dict) and result.get("ok"):
+                        result["spawned_via"] = spawned_via
+                        _tag_spawned_via_in_registry(
+                            pid=result.get("pid"),
+                            session_id=result.get("session_id"),
+                            via=spawned_via,
+                        )
                     if result.get("code") in ("antigravity_unavailable", "antigravity_launch_failed"):
                         self.send_json(result, 503)
                     else:
@@ -30113,6 +30225,7 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                 self.send_json({"ok": False, "error": f"invalid cwd: {cwd_error}"}, 400)
             else:
                 try:
+                    spawned_via = self._extract_spawned_via()
                     result = spawn_session_kilo(
                         prompt,
                         name=name,
@@ -30121,6 +30234,13 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                         worktree=bool(payload.get("worktree")),
                         model=model,
                     )
+                    if isinstance(result, dict) and result.get("ok"):
+                        result["spawned_via"] = spawned_via
+                        _tag_spawned_via_in_registry(
+                            pid=result.get("pid"),
+                            session_id=result.get("session_id"),
+                            via=spawned_via,
+                        )
                     if result.get("code") in ("kilo_unavailable", "kilo_launch_failed"):
                         self.send_json(result, 503)
                     else:
@@ -30174,6 +30294,7 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                 self.send_json({"ok": False, "error": f"invalid cwd: {cwd_error}"}, 400)
             else:
                 try:
+                    spawned_via = self._extract_spawned_via()
                     result = spawn_session_opencode(
                         prompt,
                         name=name,
@@ -30182,6 +30303,13 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                         worktree=bool(payload.get("worktree")),
                         model=model,
                     )
+                    if isinstance(result, dict) and result.get("ok"):
+                        result["spawned_via"] = spawned_via
+                        _tag_spawned_via_in_registry(
+                            pid=result.get("pid"),
+                            session_id=result.get("session_id"),
+                            via=spawned_via,
+                        )
                     if result.get("code") in ("opencode_unavailable", "opencode_launch_failed"):
                         self.send_json(result, 503)
                     else:
@@ -30208,6 +30336,7 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
             else:
                 try:
                     _set_control_plane_action_id(payload.get("idempotency_key"))
+                    spawned_via = self._extract_spawned_via()
                     result = spawn_session_kimi(
                         prompt,
                         name=name,
@@ -30218,6 +30347,13 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                         parent_session_id=payload.get("parent_session_id"),
                         effort=_spawn_request_kimi_effort(payload),
                     )
+                    if isinstance(result, dict) and result.get("ok"):
+                        result["spawned_via"] = spawned_via
+                        _tag_spawned_via_in_registry(
+                            pid=result.get("pid"),
+                            session_id=result.get("session_id"),
+                            via=spawned_via,
+                        )
                     if result.get("code") in ("kimi_spawn_failed", "not_installed"):
                         self.send_json(result, 503)
                     else:
@@ -30240,6 +30376,7 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
             else:
                 try:
                     _set_control_plane_action_id(payload.get("idempotency_key"))
+                    spawned_via = self._extract_spawned_via()
                     result = spawn_session_grok(
                         prompt,
                         name=name,
@@ -30250,6 +30387,13 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                         parent_session_id=payload.get("parent_session_id"),
                         effort=_spawn_request_reasoning_effort(payload, "grok"),
                     )
+                    if isinstance(result, dict) and result.get("ok"):
+                        result["spawned_via"] = spawned_via
+                        _tag_spawned_via_in_registry(
+                            pid=result.get("pid"),
+                            session_id=result.get("session_id"),
+                            via=spawned_via,
+                        )
                     if result.get("code") in ("grok_spawn_failed", "not_installed"):
                         self.send_json(result, 503)
                     else:
@@ -30303,6 +30447,7 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                 self.send_json({"ok": False, "error": f"invalid cwd: {cwd_error}"}, 400)
             else:
                 try:
+                    spawned_via = self._extract_spawned_via()
                     result = spawn_session_hermes(
                         prompt,
                         name=name,
@@ -30311,6 +30456,13 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                         worktree=bool(payload.get("worktree")),
                         model=model,
                     )
+                    if isinstance(result, dict) and result.get("ok"):
+                        result["spawned_via"] = spawned_via
+                        _tag_spawned_via_in_registry(
+                            pid=result.get("pid"),
+                            session_id=result.get("session_id"),
+                            via=spawned_via,
+                        )
                     if result.get("code") in ("hermes_unavailable", "hermes_launch_failed"):
                         self.send_json(result, 503)
                     else:

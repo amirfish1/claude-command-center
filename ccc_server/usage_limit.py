@@ -1012,6 +1012,7 @@ def _record_spawn_to_registry(
     parent_session_id=None, prewarm=False, prewarm_id=None, client_id=None,
     reasoning_effort="", auto_compact_k=None, created_at_epoch=None,
     input_result_target=None, input_accepted_at=None, input_command_uuids=None,
+    spawned_via="",
 ):
     """Append a freshly-spawned session to the on-disk registry. The
     session_id is provided for known resume calls and otherwise filled in
@@ -1030,6 +1031,7 @@ def _record_spawn_to_registry(
     serves the System status panel's process list (the worker vs. the
     dashboard), so the kill deadline has to live on disk, not just in the
     owning process's in-memory _CLAUDE_PREWARMS dict."""
+    clean_via = str(spawned_via or "").strip()
     record = {
         "pid": pid,
         "session_id": session_id,
@@ -1047,6 +1049,7 @@ def _record_spawn_to_registry(
         "reasoning_effort": str(reasoning_effort or ""),
         "auto_compact_k": int(auto_compact_k) if auto_compact_k is not None else None,
         "parent_session_id": parent_session_id or "",
+        "spawned_via": clean_via,
     }
     input_state = {
         "input_result_target": input_result_target,
@@ -1074,6 +1077,14 @@ def _record_spawn_to_registry(
             ),
         })
     def _append_record(entries):
+        nonlocal record
+        if not record.get("spawned_via"):
+            for entry in entries:
+                pid_match = pid is not None and str(entry.get("pid") or "") == str(pid)
+                sid_match = session_id and entry.get("session_id") == session_id
+                if (pid_match or sid_match) and entry.get("spawned_via"):
+                    record["spawned_via"] = entry["spawned_via"]
+                    break
         entries[:] = [
             entry for entry in entries
             if str(entry.get("pid") or "") != str(pid)
@@ -1138,17 +1149,22 @@ def _remove_spawn_from_registry(pid):
     _core._mutate_spawn_registry(_remove)
 
 
-def _update_spawn_session_id_in_registry(pid, session_id):
+def _update_spawn_session_id_in_registry(pid, session_id, spawned_via=""):
     """Dynamically backfill the session_id for a spawned session in the on-disk registry."""
     if not pid or not session_id:
         return
+    clean_via = str(spawned_via or "").strip()
     try:
         def _update(entries):
             updated = False
             for entry in entries:
-                if entry.get("pid") == pid and entry.get("session_id") != session_id:
-                    entry["session_id"] = session_id
-                    updated = True
+                if entry.get("pid") == pid:
+                    if entry.get("session_id") != session_id:
+                        entry["session_id"] = session_id
+                        updated = True
+                    if clean_via and entry.get("spawned_via") != clean_via:
+                        entry["spawned_via"] = clean_via
+                        updated = True
             return updated
 
         _core._mutate_spawn_registry(_update)
