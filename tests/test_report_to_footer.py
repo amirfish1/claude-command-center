@@ -11,7 +11,9 @@ def test_footer_uses_sendmessage_for_claude_when_gate_on_and_peer_running(monkey
     assert "SendMessage" in out
     assert 'agent="ccc"' in out
     assert '"session_id": "dispatcher-sid"' in out
-    assert "curl" not in out
+    # SendMessage is the primary path; the one-line curl *fallback* mention
+    # is fine, but the full curl command block must stay curl-footer-only.
+    assert "curl -s --max-time" not in out
 
 
 def test_footer_stays_curl_when_gate_off(monkeypatch):
@@ -52,3 +54,18 @@ def test_footer_defaults_to_claude_engine_when_unspecified(monkeypatch):
     monkeypatch.delenv("CCC_MESSAGING_BACKEND", raising=False)
     out = server._wrap_prompt_with_return_address("do the thing", "dispatcher-sid")
     assert "curl" in out
+
+
+def test_footer_sendmessage_warns_against_session_id_recipient(monkeypatch):
+    """OPS-927: a lane that loses the footer's exact wording to context
+    compaction tended to SendMessage the dispatcher's session UUID directly,
+    which peers reject with "No agent named ... is reachable". The footer
+    must state the recipient name prominently and forbid session-id
+    addressing, and keep a curl fallback."""
+    monkeypatch.setenv("CCC_MESSAGING_BACKEND", "uds")
+    monkeypatch.setitem(server._CCC_PEER_STATE, "socket_path", "/tmp/cc-socks/1.sock")
+    out = server._wrap_prompt_with_return_address("do the thing", "dispatcher-sid", engine="claude")
+    assert 'agent="ccc"' in out
+    assert "NEVER address SendMessage" in out
+    assert "No agent named" in out
+    assert "/api/inject-input" in out
