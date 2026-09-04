@@ -21,6 +21,7 @@ import threading
 import time
 
 from ccc_server import core as _core
+from ccc_server import github_quota as _github_quota
 
 # How many trailing assistant turns /usage ships for the status-rail
 # per-turn token graph. Older turns are noise in the rail; the full history
@@ -1086,52 +1087,43 @@ def _worktree_is_dirty(path):
         return False
 
 
-_OPEN_PRS_CACHE = {}  # repo_top -> (ts, list[dict])
-_OPEN_PRS_TTL = 30.0
+_OPEN_PRS_CACHE = {}  # legacy alias; the live cache is ccc_server/github_quota.py
 
 
 def _open_prs_cached(repo_top):
-    """Return open PRs for a repo via `gh pr list`, cached for 30s.
+    """Return open PRs for a repo, served from the shared GraphQL-aware cache.
 
-    Each entry includes PR metadata plus status checks. Empty list on
-    any failure (no `gh`, no GitHub remote, no auth, network blip) — the
-    worktrees modal must keep working without GitHub access.
+    `gh pr list` with `statusCheckRollup` is the most expensive GraphQL call
+    CCC makes (2.9 points, measured -- lane W6-1). It used to live behind a
+    30s memory-only cache here AND a second one in ccc_server/fleet.py, with
+    no single-flight, so the worktrees modal and a fleet scan each paid full
+    price and concurrent requests multiplied it. Both now share
+    github_quota.open_prs: one TTL (CCC_GH_PR_TTL_S, default 300s), one
+    in-flight fetch per repo.
+
+    Empty list on any failure (no `gh`, no GitHub remote, no auth, network
+    blip) -- the worktrees modal must keep working without GitHub access.
     """
     if not repo_top:
         return []
-    now = time.time()
-    cached = _core._OPEN_PRS_CACHE.get(repo_top)
-    if cached and now - cached[0] < _OPEN_PRS_TTL:
-        return cached[1]
-    prs = []
-    try:
-        r = subprocess.run(
-            ["gh", "pr", "list", "--state", "open", "--limit", "100",
-             "--json", "number,title,headRefName,isDraft,url,updatedAt,createdAt,statusCheckRollup,mergeable,reviewDecision"],
-            cwd=repo_top, capture_output=True, text=True, timeout=8,
-        )
-        if r.returncode == 0 and r.stdout.strip():
-            data = json.loads(r.stdout)
-            if isinstance(data, list):
-                prs = [
-                    {
-                        "number": int(p.get("number") or 0),
-                        "title": p.get("title") or "",
-                        "headRefName": p.get("headRefName") or "",
-                        "isDraft": bool(p.get("isDraft")),
-                        "url": p.get("url") or "",
-                        "updatedAt": p.get("updatedAt") or "",
-                        "createdAt": p.get("createdAt") or "",
-                        "statusCheckRollup": p.get("statusCheckRollup") or [],
-                        "mergeable": p.get("mergeable") or "",
-                        "reviewDecision": p.get("reviewDecision") or "",
-                    }
-                    for p in data if p.get("number")
-                ]
-    except (subprocess.SubprocessError, OSError, ValueError):
-        prs = []
-    _core._OPEN_PRS_CACHE[repo_top] = (now, prs)
-    return prs
+    prs, _error = _github_quota.open_prs(repo_top, checks=True, timeout=8)
+    out = []
+    for p in prs:
+        if not p.get("number"):
+            continue
+        out.append({
+            "number": int(p.get("number") or 0),
+            "title": p.get("title") or "",
+            "headRefName": p.get("headRefName") or "",
+            "isDraft": bool(p.get("isDraft")),
+            "url": p.get("url") or "",
+            "updatedAt": p.get("updatedAt") or "",
+            "createdAt": p.get("createdAt") or "",
+            "statusCheckRollup": p.get("statusCheckRollup") or [],
+            "mergeable": p.get("mergeable") or "",
+            "reviewDecision": p.get("reviewDecision") or "",
+        })
+    return out
 
 
 # path -> (last_session_event_ts, dirty, polled_at). The sidebar list

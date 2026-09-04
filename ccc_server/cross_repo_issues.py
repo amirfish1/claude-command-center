@@ -16,6 +16,7 @@ import threading
 import time
 
 from ccc_server import core as _core
+from ccc_server import github_quota as _github_quota
 
 # ---------------------------------------------------------------------------
 # Cross-repo issues — Phase B of the multi-repo design.
@@ -83,6 +84,27 @@ def _fetch_one_repo_issues(repo_path):
         if cached and (now - cached["ts"]) < _CROSS_REPO_ISSUES_TTL:
             return cached
 
+    # Single-flight (lane W6-1). fetch_cross_repo_issues() fans this out over
+    # every known repo in a thread pool, so without a per-repo flight N
+    # concurrent dashboard requests on a stale cache cost N x repos x 1.7
+    # GraphQL points. Followers re-read the cache the leader just filled.
+    value, was_leader = _github_quota.single_flight(
+        f"cross-repo-issues|{cache_key}",
+        lambda: _fetch_one_repo_issues_uncached(repo_path, cache_key),
+    )
+    if was_leader and value is not None:
+        return value
+    with _CROSS_REPO_ISSUES_LOCK:
+        cached = _core._CROSS_REPO_ISSUES_CACHE.get(cache_key)
+    if cached:
+        return cached
+    return {"issues": [], "error": "fetch in flight", "ts": now}
+
+
+def _fetch_one_repo_issues_uncached(repo_path, cache_key):
+    """The actual `gh` round-trips for one repo. Only ever entered by the
+    single-flight leader in _fetch_one_repo_issues()."""
+    now = time.time()
     issues = []
     error = None
     try:
@@ -93,7 +115,8 @@ def _fetch_one_repo_issues(repo_path):
         else:
             try:
                 open_out = subprocess.run(
-                    ["gh", "issue", "list", "--state", "open", "--limit", "100",
+                    ["gh", "issue", "list", "--state", "open",
+                     "--limit", str(_github_quota.issue_limit_open()),
                      "--json", "number,title,labels,body,createdAt,updatedAt,state,stateReason,url"],
                     capture_output=True, text=True, timeout=10, cwd=str(repo_path),
                 )
@@ -115,7 +138,8 @@ def _fetch_one_repo_issues(repo_path):
             if not error:
                 try:
                     closed_out = subprocess.run(
-                        ["gh", "issue", "list", "--state", "closed", "--limit", "60",
+                        ["gh", "issue", "list", "--state", "closed",
+                         "--limit", str(_github_quota.issue_limit_closed()),
                          "--json", "number,title,labels,body,createdAt,updatedAt,closedAt,state,stateReason,url"],
                         capture_output=True, text=True, timeout=10, cwd=str(repo_path),
                     )
@@ -409,7 +433,8 @@ def _fetch_backlog_issues(repo_path, _blocking=False):
     merged = []
     try:
         open_out = subprocess.run(
-            ["gh", "issue", "list", "--state", "open", "--limit", "100",
+            ["gh", "issue", "list", "--state", "open",
+             "--limit", str(_github_quota.issue_limit_open()),
              "--json", "number,title,labels,body,createdAt,updatedAt,state,stateReason"],
             capture_output=True, text=True, timeout=10, cwd=str(repo_path),
         )
@@ -419,7 +444,8 @@ def _fetch_backlog_issues(repo_path, _blocking=False):
         pass
     try:
         closed_out = subprocess.run(
-            ["gh", "issue", "list", "--state", "closed", "--limit", "60",
+            ["gh", "issue", "list", "--state", "closed",
+             "--limit", str(_github_quota.issue_limit_closed()),
              "--json", "number,title,labels,body,createdAt,updatedAt,closedAt,state,stateReason"],
             capture_output=True, text=True, timeout=10, cwd=str(repo_path),
         )

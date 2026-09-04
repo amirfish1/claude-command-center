@@ -17,6 +17,7 @@ import time
 import urllib.request
 
 from ccc_server import core as _core
+from ccc_server import github_quota as _github_quota
 
 # ---------------------------------------------------------------------------
 # CCC federation — cross-machine node identity, pairing, and peer protocol
@@ -736,42 +737,26 @@ def _fleet_set_pinned(identity, pinned):
                 "pinned": bool(pinned), "all_pinned": current}
 
 
-_FLEET_PRS_CACHE = {}
-_FLEET_PRS_TTL = 30.0
+_FLEET_PRS_CACHE = {}  # legacy alias; the live cache is ccc_server/github_quota.py
 
 
 def _fleet_prs(repo_path, repo_kind):
     """Open-PR dimension with an explicit error channel (unlike the UI's
     best-effort cache, a fleet scan must distinguish 'no PRs' from 'gh
-    failed')."""
+    failed').
+
+    Shares github_quota.open_prs with the worktrees modal (lane W6-1): the
+    two used to keep independent 30s caches of the same 2.9-point GraphQL
+    call, so a fleet scan with the modal open paid twice.
+    """
     if repo_kind != "remote":
         return {"skipped": "no remote host", "observed_at": time.time()}
+    prs, error = _github_quota.open_prs(repo_path, checks=True, timeout=12)
     now = time.time()
-    hit = _FLEET_PRS_CACHE.get(repo_path)
-    if hit and now - hit[0] < _FLEET_PRS_TTL:
-        return hit[1]
-    try:
-        proc = subprocess.run(
-            ["gh", "pr", "list", "--state", "open", "--limit", "100", "--json",
-             "number,title,headRefName,headRefOid,isDraft,url,updatedAt,"
-             "statusCheckRollup,mergeable,mergeStateStatus,reviewDecision"],
-            cwd=repo_path, capture_output=True, text=True, timeout=12,
-        )
-    except (OSError, subprocess.SubprocessError) as e:
-        payload = {"error": str(e), "observed_at": now}
-        _FLEET_PRS_CACHE[repo_path] = (now, payload)
-        return payload
-    if proc.returncode != 0:
-        payload = {"error": (proc.stderr or proc.stdout or "gh failed").strip()[:300],
-                   "observed_at": now}
-        _FLEET_PRS_CACHE[repo_path] = (now, payload)
-        return payload
-    try:
-        prs = json.loads(proc.stdout or "[]")
-    except ValueError:
-        prs = []
+    if error:
+        return {"error": error, "observed_at": now}
     out = []
-    for pr in prs if isinstance(prs, list) else []:
+    for pr in prs:
         checks = pr.get("statusCheckRollup") or []
         failing = [c.get("name") for c in checks
                    if isinstance(c, dict) and (c.get("conclusion") or "").upper()
@@ -794,9 +779,7 @@ def _fleet_prs(repo_path, repo_kind):
             "checks_pending": pending,
             "checks_total": len(checks),
         })
-    payload = {"open": out, "observed_at": now}
-    _FLEET_PRS_CACHE[repo_path] = (now, payload)
-    return payload
+    return {"open": out, "observed_at": now}
 
 
 _FLEET_DEPLOY_CACHE = {}

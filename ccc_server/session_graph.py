@@ -24,6 +24,7 @@ import urllib.request
 import uuid
 
 from ccc_server import core as _core
+from ccc_server import github_quota as _github_quota
 
 # ---------------------------------------------------------------------------
 # SessionGraph — unified parent-child adjacency list
@@ -6159,7 +6160,8 @@ def _fetch_issue_states(repo_path, _blocking=False):
     data = cached.get("data") or {}
     try:
         out = subprocess.run(
-            ["gh", "issue", "list", "--state", "all", "--limit", "500",
+            ["gh", "issue", "list", "--state", "all",
+             "--limit", str(_github_quota.issue_limit_states()),
              "--json", "number,title,state,labels"],
             capture_output=True, text=True, timeout=15, cwd=str(repo_path),
         )
@@ -6237,7 +6239,8 @@ def _fetch_issue_titles(repo_path, _blocking=False):
     data = cached.get("data") or {}
     try:
         out = subprocess.run(
-            ["gh", "issue", "list", "--state", "all", "--limit", "200",
+            ["gh", "issue", "list", "--state", "all",
+             "--limit", str(_github_quota.issue_limit_titles()),
              "--json", "number,title"],
             capture_output=True, text=True, timeout=10, cwd=str(repo_path),
         )

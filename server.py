@@ -17484,6 +17484,9 @@ def _resolve_apps(include_disabled=False):
     apps.append({"id": "decision-inbox", "label": "Decisions",
                  "icon": "\N{BALLOT BOX WITH CHECK}", "url": "/decision-inbox.html",
                  "builtin": False})
+    apps.append({"id": "spawn-ledger", "label": "Spawn Ledger",
+                 "icon": "\N{BAR CHART}", "url": "/spawn-ledger",
+                 "builtin": False})
     manifest_apps = _custom_links_config()[2]
     apps.extend(manifest_apps)
     # An id already declared in the manifest wins: that is how a user renames,
@@ -18867,6 +18870,9 @@ _INTERRUPT_EVENTS_ENABLED = False
 # Test-patched globals kept here; ccc_server/log_parse.py reads them via _core.
 _archive_auto_sweep_last = 0.0
 
+# Lane W6-1: GraphQL quota meter + the shared caches that spend it. Adopted
+# before its consumers (cross_repo_issues, session_graph, fleet, morning_launch).
+_adopt_ccc_module("github_quota")
 _adopt_ccc_module("log_parse")
 
 # Test-patched globals kept here; ccc_server/session_graph.py reads them via _core.
@@ -23102,6 +23108,7 @@ _adopt_ccc_module("terminal")
 # call record_event / summarize as bare names via this adoption.
 _adopt_ccc_module("perf_events")
 _adopt_ccc_module("decision_inbox")
+_adopt_ccc_module("spawn_ledger")
 
 # ---------------------------------------------------------------------------
 # HTTP handler
@@ -24152,6 +24159,9 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
             # Cards + governor findings + last run. Cache read only; a poll
             # never triggers a scan or an analyst call.
             self.send_json(decision_inbox_api_payload())
+        elif path == "/api/spawn-ledger":
+            # Read-only scorecard for the external spawned-session grade ledger.
+            self.send_json(spawn_ledger_payload())
         elif path == "/api/perf/summary":
             # Rolled-up client perf beacons (archive load / conversation
             # open) over a trailing window, plus the self-filed-ticket
@@ -25641,6 +25651,24 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                 self.send_header("Vary", "Accept-Encoding")
             self.end_headers()
             self.wfile.write(body)
+        elif path in ("/spawn-ledger", "/spawn-ledger.html"):
+            # Standalone read-only scorecard page, deliberately isolated from
+            # the main dashboard bundle.
+            try:
+                body = (STATIC_DIR / "spawn-ledger.html").read_bytes()
+            except OSError as e:
+                self.send_json({"error": "spawn-ledger.html missing", "detail": str(e)}, 500)
+                return
+            body, enc = self._maybe_gzip(body, "text/html; charset=utf-8")
+            self.send_response(200)
+            self.send_header("Content-Type", "text/html; charset=utf-8")
+            self.send_header("Cache-Control", "no-store, must-revalidate")
+            self.send_header("Content-Length", str(len(body)))
+            if enc:
+                self.send_header("Content-Encoding", enc)
+                self.send_header("Vary", "Accept-Encoding")
+            self.end_headers()
+            self.wfile.write(body)
         elif path == "/q2.html":
             # Standalone three-column queue board (queues | tickets | ticket).
             # Same narrow-route pattern as /group-chat-live.html above: the
@@ -25840,6 +25868,18 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
             # bin resolvers + read-only session stores). Backs the First
             # Flight tour welcome chips.
             self.send_json(_engines_installed())
+        elif path == "/api/github/quota":
+            # W6-1: authoritative GraphQL quota, read IN BAND. `gh api
+            # rate_limit`'s .resources.graphql block is NOT this token's
+            # GraphQL quota (OPS-929) -- it read used=0/remaining=5000 while
+            # the in-band block read used=1025/remaining=3975 at the same
+            # instant. TTL-cached and single-flighted in ccc_server/
+            # github_quota.py so this endpoint can never become the burn.
+            qs = urllib.parse.parse_qs(parsed.query)
+            force = (qs.get("force", ["0"])[0] or "0").strip().lower() in ("1", "true", "yes")
+            payload = read_graphql_quota(force=force)
+            payload["pr_cache"] = pr_cache_stats()
+            self.send_json(payload)
         elif path == "/api/engines/doctor":
             # W3-3: per-engine CLI/auth/BYOK health, read-only (never spawns
             # a real subprocess). Backs `ccc doctor`.
@@ -35099,6 +35139,11 @@ def build_ccc_doctor():
     return {
         "generated_at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
         "engines": engines,
+        # W6-1: GitHub GraphQL points are a 5,000/hr budget shared across
+        # every tool on this account, and CCC's issue/PR panels spend it.
+        # Cached, and the read itself is free (a rateLimit-only query does
+        # not count against the limit -- measured), so doctor stays cheap.
+        "github_quota": read_graphql_quota(),
     }
 
 

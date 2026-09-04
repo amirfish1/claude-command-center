@@ -566,7 +566,42 @@ def cmd_doctor(args):
             f"{_flag(smoke.get('ok'))}"
         )
     print("\n'?' = no CLI-based probe implemented for that check yet (not a failure).")
+    _print_github_quota(payload.get("github_quota"))
     return 1 if (freshness == "stale" or (args.engine and any_unhealthy)) else 0
+
+
+def _print_github_quota(quota):
+    """One line of GitHub GraphQL budget (W6-1).
+
+    The number comes from the in-band `{rateLimit{...}}` block, not from
+    `gh api rate_limit` -- the REST block reports a different bucket and can
+    read used=0 while the real one is two thirds spent (OPS-929).
+    """
+    if not isinstance(quota, dict):
+        return
+    if not quota.get("ok"):
+        detail = str(quota.get("error") or "unavailable")[:80]
+        print(f"\ngithub graphql quota: unavailable ({detail})")
+        return
+    used = quota.get("used")
+    limit = quota.get("limit")
+    remaining = quota.get("remaining")
+    pct = quota.get("used_pct")
+    reset = quota.get("reset_at") or "?"
+    reset_note = ""
+    dt = _parse_iso(reset)
+    if dt is not None:
+        mins = int((dt - datetime.now(timezone.utc)).total_seconds() // 60)
+        if mins >= 0:
+            reset_note = f", resets in {mins}m"
+    flag = ""
+    if isinstance(pct, (int, float)) and pct >= 80:
+        flag = "  <-- LOW"
+    print(
+        f"\ngithub graphql quota: {used}/{limit} used"
+        f"{f' ({pct}%)' if pct is not None else ''}, "
+        f"{remaining} remaining{reset_note}{flag}"
+    )
 
 
 def _parse_iso(ts):
