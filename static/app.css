@@ -14491,6 +14491,20 @@
     display: flex; align-items: center; gap: 9px; flex: 0 0 auto;
     margin-left: auto;
   }
+  /* CCC-1050: one-click worker kill. Hidden until the row is hovered so the
+     strip stays quiet; the button itself never triggers the row's
+     ticket-open click (the JS handler stopPropagation()s). */
+  .fq-worker-kill {
+    flex: 0 0 auto;
+    width: 18px; height: 18px; line-height: 1;
+    display: inline-flex; align-items: center; justify-content: center;
+    padding: 0; border-radius: 4px; cursor: pointer;
+    border: 1px solid #3f4854; background: #1c242e; color: #f85149;
+    font-size: 10px; opacity: 0; transition: opacity .12s;
+  }
+  .fq-working-row:hover .fq-worker-kill { opacity: 1; }
+  .fq-worker-kill:hover { background: rgba(248,81,73,0.16); border-color: #f85149; }
+  .fq-worker-kill:disabled { opacity: .5; cursor: progress; }
   .fq-working-queue {
     font-family: 'JetBrains Mono', ui-monospace, monospace;
     font-size: 10.5px; color: #7d8590; white-space: nowrap;

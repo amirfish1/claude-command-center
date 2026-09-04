@@ -43894,7 +43894,8 @@
         state: Number.isFinite(idleS) && idleS < 60 ? 'working' : 'idle',
       };
       const icon = '<span class="fq-working-engine">' + sessionEngineIconHtml(iconRow) + '</span>';
-      return { ref, title, queue: qKey, worker: String(w.worker_id || 'worker'), elapsed, icon };
+      return { ref, title, queue: qKey, worker: String(w.worker_id || 'worker'), elapsed, icon,
+        pid: parseInt(w.pid, 10) || 0, workerId: String(w.worker_id || '') };
     });
     const $rows = $el.querySelector('.fq-working-rows');
     const $summary = $el.querySelector('.fq-working-summary');
@@ -43908,6 +43909,11 @@
     if ($head) $head.setAttribute('aria-expanded', String(!(_uxqPicker.isMobile && _uxqPicker.workingCollapsed)));
     if ($rows) {
       $rows.innerHTML = rows.map(r => {
+        // CCC-1050: one-click kill — releases the worker from queue staffing
+        // and terminates its process (server route does both, release first).
+        const killBtn = r.pid
+          ? '<button type="button" class="fq-worker-kill" data-uxq-kill-worker="' + escapeAttr(r.workerId) + '" data-uxq-kill-pid="' + r.pid + '" title="Kill worker ' + escapeAttr(r.worker) + ' (pid ' + r.pid + ') — releases it from queue staffing and terminates its process" aria-label="Kill worker">&#10005;</button>'
+          : '';
         if (_uxqPicker.isMobile) {
           return '<div class="fq-working-row is-mobile" data-uxq-working-ref="' + escapeAttr(r.ref) + '">'
             + '<span class="fq-working-id">' + escapeHtml(r.ref || '—') + '</span>'
@@ -43916,6 +43922,7 @@
             + '<span class="fq-working-title">' + escapeHtml(r.title) + '</span>'
             + '<span class="fq-working-meta">' + escapeHtml(r.queue + ' · ' + r.elapsed) + '</span>'
             + '</span>'
+            + killBtn
             + '<span class="fq-working-dot"></span>'
             + '</div>';
         }
@@ -43927,6 +43934,7 @@
           + '<span class="fq-working-queue">' + escapeHtml(r.queue) + '</span>'
           + '<span class="fq-working-worker">' + escapeHtml(r.worker) + '</span>'
           + '<span class="fq-working-elapsed">' + escapeHtml(r.elapsed) + '</span>'
+          + killBtn
           + '</span></div>';
       }).join('');
     }
@@ -46109,6 +46117,33 @@
         if ($head && _uxqPicker.isMobile) {
           _uxqPicker.workingCollapsed = !_uxqPicker.workingCollapsed;
           _uxqRenderWorkingNow();
+          return;
+        }
+        const $kill = ev.target.closest && ev.target.closest('[data-uxq-kill-worker]');
+        if ($kill) {
+          ev.preventDefault();
+          ev.stopPropagation();
+          const killWorker = $kill.getAttribute('data-uxq-kill-worker') || '';
+          const killPid = parseInt($kill.getAttribute('data-uxq-kill-pid') || '0', 10) || 0;
+          const label = killWorker || ('pid ' + killPid);
+          if (!window.confirm('Kill worker ' + label + '?\n\nIt stops claiming queue tickets and its process (pid ' + killPid + ') will be terminated.')) return;
+          $kill.disabled = true;
+          fetch('/api/wt/workers/kill', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ worker_id: killWorker, pid: killPid }),
+          }).then(r => r.json()).then(d => {
+            if (d && d.ok) {
+              showOpToast('Killed worker ' + label, 'ok');
+              if (typeof _uxqRefreshQueueStrips === 'function') _uxqRefreshQueueStrips().catch(() => {});
+            } else {
+              $kill.disabled = false;
+              showOpToast('Kill failed: ' + ((d && d.error) || 'unknown'), 'error');
+            }
+          }).catch(e => {
+            $kill.disabled = false;
+            showOpToast('Kill failed: ' + ((e && e.message) || 'unknown'), 'error');
+          });
           return;
         }
         const $row = ev.target.closest && ev.target.closest('.fq-working-row[data-uxq-working-ref]');

@@ -719,6 +719,37 @@ def _wt_read_config():
         return {}
 
 
+def _wt_launch_failures_path():
+    return _WT_HOME / "launch-failures.json"
+
+
+def _wt_read_launch_failures():
+    """{(QUEUE, engine): entry} from WatchTower's launch-failures.json.
+
+    Each entry is the reconciler's last failed worker spawn for that
+    queue+engine: reason (e.g. "engine usage limit"), exit_code, failed_at
+    epoch, cooldown_until. Empty dict when absent/unreadable. Read straight
+    from the file -- no watchtower import, and cheap (single-digit KB)."""
+    try:
+        with open(_wt_launch_failures_path()) as f:
+            data = json.load(f)
+        if not isinstance(data, dict):
+            return {}
+        out = {}
+        for key, entry in data.items():
+            if not isinstance(entry, dict):
+                continue
+            queue = str(entry.get("queue") or "").strip().upper()
+            engine = str(entry.get("engine") or "").strip().lower()
+            if not queue and isinstance(key, str) and ":" in key:
+                queue = key.split(":", 1)[0].strip().upper()
+            if queue:
+                out[(queue, engine)] = entry
+        return out
+    except (OSError, ValueError):
+        return {}
+
+
 def _reconcile_once_async():
     """Nudge the reconciler off-thread after a config/drain/workers write.
 
@@ -31870,6 +31901,44 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                 self.send_json({"ok": False, "error": "missing pids"})
             else:
                 self.send_json(system_process_kill(pids, force=force))
+        elif path == "/api/wt/workers/kill":
+            # Queue-board "kill worker" (CCC-1050): release the worker from
+            # queue staffing (sentinel file — its next `wt claim` returns a
+            # stop) AND terminate its process, in one click. Releasing first
+            # closes the race where the worker claims a fresh ticket between
+            # the kill landing and the claim loop noticing the dead process.
+            length = int(self.headers.get("Content-Length", "0"))
+            body = self.rfile.read(length) if length > 0 else b""
+            try:
+                payload = json.loads(body) if body else {}
+            except json.JSONDecodeError:
+                payload = {}
+            worker_id = str(payload.get("worker_id") or "").strip()
+            try:
+                pid = int(payload.get("pid") or 0)
+            except (TypeError, ValueError):
+                pid = 0
+            force = bool(payload.get("force"))
+            if not worker_id and not pid:
+                self.send_json({"ok": False, "error": "missing worker_id or pid"}, 400)
+                return
+            released = False
+            if worker_id and _WT_WORKERS_AVAILABLE and _wt_workers is not None:
+                try:
+                    _wt_workers.request_stop(worker_id)
+                    released = True
+                except Exception:
+                    released = False
+            kill_result = (
+                system_process_kill([pid], force=force) if pid
+                else {"killed": [], "blocked": [], "errors": {}}
+            )
+            self.send_json({
+                "ok": bool(released or kill_result.get("killed")),
+                "released": released,
+                "worker_id": worker_id,
+                **kill_result,
+            })
         elif path == "/api/system/next-server/kill":
             length = int(self.headers.get("Content-Length", "0"))
             body = self.rfile.read(length) if length > 0 else b""
