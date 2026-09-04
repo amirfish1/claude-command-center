@@ -300,6 +300,7 @@ ccc sessions --json       # machine-readable census
 ccc models                # every engine's models, effort ladders, cost,
                           # release dates where the id carries one
 ccc quota                 # weekly quota left per engine + when it resets
+ccc doctor                # per-engine CLI/auth/BYOK health, dry-run only
 ccc spawn "fix the flaky login test" --engine claude --model opus-5
 ccc spawn "drain the queue" --report-to <your-session-id>   # reports back
 
@@ -552,10 +553,18 @@ Keys are stored per **profile** (name them however you like — `work`,
   with indicative per-token cost, and BYOK spawns log tokens/cost to a
   local ledger surfaced at `GET /api/byok/usage?days=30` and in the
   Settings panel's spend summary.
-- **Current scope**: env injection is wired for **OpenCode** spawns today.
-  `BYOK_DIRECT_ENV_ENGINES` in `ccc_server/byok.py` already lists
-  `droid`, `kilo`, `hermes`, `aider`, `pi` for when their spawn paths
-  support it — adding one is a one-line change to the spawn dispatcher.
+- **Current scope**: env injection is wired for **OpenCode, Droid, and
+  Aider** spawns today (`BYOK_DIRECT_ENV_ENGINES` in `ccc_server/byok.py`).
+  Kilo and Hermes are listed for when their spawn paths support it — adding
+  one is a one-line change to the spawn dispatcher. Pi has an adapter
+  (`ccc_server/pi.py`) that resolves the `pi` CLI but always reports
+  "not yet wired" — no verified `pi exec` invocation contract exists yet.
+  `GET /api/engines/models` and `ccc models` mark every BYOK-ready engine.
+- **Health check**: `ccc doctor` (or `GET /api/engines/doctor`) reports,
+  per engine, whether the CLI is present, whether it's logged in (where a
+  probe exists), whether a BYOK profile is configured, and a dry-run smoke
+  check that only confirms the CLI binary resolves — no subprocess is
+  launched and no tokens are spent.
 
 ![Settings → Engines: BYOK panel with an add-key form, profile list, and a 30-day spend summary](docs/images/byok-settings.png)
 
