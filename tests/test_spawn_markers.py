@@ -90,3 +90,46 @@ def test_infer_session_spawned_via_rules():
     assert server._infer_session_spawned_via({"session_id": "sid-1"}, sid="sid-1", spawn_registry_by_sid={"sid-1": {}}) == "ui"
     assert server._infer_session_spawned_via({"session_id": "sid-1"}, sid="sid-1", spawn_registry_by_sid={"sid-1": {"spawned_via": "cli"}}) == "cli"
 
+
+def test_archive_overlay_acp_sessions_infers_spawned_via(monkeypatch, tmp_path):
+    """Live ACP overlay must not NameError on a leftover `card` variable.
+
+    /api/conversations/list merges in-memory ACP sessions after the cached
+    snapshot. A copy-paste `card` (from the pending-spawn path) crashed every
+    list poll once any Kimi/GLM/Grok session was attached, leaving the
+    sidebar on "Loading archive…" and retry-storming the dashboard.
+    """
+    cwd = tmp_path / "repo"
+    cwd.mkdir()
+    sid = "acp-overlay-sid-1"
+    monkeypatch.setattr(server, "_ACP_HARNESSES", {"kimi": {"label": "Kimi"}})
+    monkeypatch.setattr(server, "_acp_harness_enabled", lambda harness: harness == "kimi")
+    monkeypatch.setattr(server, "_ACP_SESSION_STATE", {
+        "kimi": {
+            sid: {
+                "attached": True,
+                "status": "active",
+                "cwd": str(cwd),
+                "updated_at": 1_700_000_000,
+                "title": "ACP overlay session",
+                "model": "kimi-k2",
+            }
+        }
+    })
+    monkeypatch.setattr(server, "_load_spawn_markers", lambda: {
+        sid: {"spawned_via": "ui"},
+    })
+    monkeypatch.setattr(server, "_load_session_name_overrides", lambda: {})
+    monkeypatch.setattr(server, "_load_conversation_lifecycle_sets", lambda: (set(), set()))
+    monkeypatch.setattr(server, "_load_pinned_conversations", lambda: [])
+    monkeypatch.setattr(server, "_load_verified_conversations", lambda: [])
+    monkeypatch.setattr(server, "_acp_transcript_path", lambda harness, session_id: tmp_path / "missing.jsonl")
+    monkeypatch.setattr(server, "_acp_transcript_first_prompt", lambda harness, session_id: "")
+    monkeypatch.setattr(server, "_token_optimizer_quality_for_session", lambda session_id: {})
+
+    rows = server._archive_overlay_acp_sessions([])
+    assert len(rows) == 1
+    assert rows[0]["session_id"] == sid
+    assert rows[0]["spawned_via"] == "ui"
+    assert rows[0]["engine"] == "kimi"
+

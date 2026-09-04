@@ -13547,7 +13547,6 @@ def _archive_overlay_acp_sessions(rows):
                 "goal": "",
                 "goal_status": "",
                 "parent_session_id": "",
-                "spawned_via": _infer_session_spawned_via(card, sid=sid, markers=spawn_markers),
                 "model": model,
                 "reasoning_effort": None,
                 "latest_input_tokens": 0,
@@ -13592,6 +13591,7 @@ def _archive_overlay_acp_sessions(rows):
                 "ended_blocked": False,
                 **_token_optimizer_quality_for_session(sid),
             }
+            row["spawned_via"] = _infer_session_spawned_via(row, sid=sid, markers=spawn_markers)
             out.append(row)
     return out
 
