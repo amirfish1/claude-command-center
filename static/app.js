@@ -2933,7 +2933,8 @@
   function _archiveEngineFilter() {
     try {
       const value = String(localStorage.getItem(ARCHIVE_ENGINE_FILTER_KEY) || '').toLowerCase();
-      if (value === 'claude' || value === 'codex' || value === 'kimi' || value === 'devin') return value;
+      if (value === 'claude' || value === 'codex' || value === 'kimi' || value === 'devin'
+        || value === 'antigravity' || value === 'grok') return value;
     } catch (_) {}
     return '';
   }
@@ -35414,9 +35415,10 @@
       return (lane === 'coding' || lane === 'workers' || lane === 'messages') ? lane : '';
     };
     const _arcEngineFilter = _archiveEngineFilter();
-    const _arcEngineFilterLabel = _arcEngineFilter === 'codex'
-      ? 'Codex'
-      : (_arcEngineFilter === 'kimi' ? 'Kimi' : (_arcEngineFilter === 'devin' ? 'Devin' : 'Claude'));
+    const _arcEngineFilterLabel = {
+      codex: 'Codex', kimi: 'Kimi', devin: 'Devin',
+      antigravity: 'Antigravity', grok: 'Grok',
+    }[_arcEngineFilter] || 'Claude';
     const _trashConvs = _archivedConvs.filter(c => !!c.trashed);
     const _mainArchivedConvs = _archivedConvs.filter(c => !c.trashed);
     const _allTabUnfilteredConvs = _sessionConvs.concat(
@@ -35963,7 +35965,7 @@
       };
       // Collapsed by default to a single trigger icon (the active engine's,
       // or Claude's when no filter is set) to save toolbar space -- hover to
-      // reveal the four options, click one to filter (re-collapses since the
+      // reveal the six options, click one to filter (re-collapses since the
       // filter click re-renders this toolbar), or move away for 2s to
       // auto-close without changing the filter (CCC-1006, hover model CCC-1015).
       const _arcEngineTriggerTitle = _arcEngineFilter
@@ -35978,6 +35980,8 @@
             + _arcEngineButton('codex', 'Codex', getEngineSvg('codex'))
             + _arcEngineButton('kimi', 'Kimi', getEngineSvg('kimi'))
             + _arcEngineButton('devin', 'Devin', getEngineSvg('devin'))
+            + _arcEngineButton('antigravity', 'Antigravity', getEngineSvg('antigravity'))
+            + _arcEngineButton('grok', 'Grok', getEngineSvg('grok'))
           + '</span>'
         + '</span>';
       // Wrap toggle (mirrors the In progress toolbar's): lets session titles
@@ -58766,9 +58770,9 @@
       (time ? '<span class="ask-result-time">' + askEscapeHtml(time) + '</span>' : '') +
       '</div>' +
       '<div class="ask-result-meta">' +
-      (repo ? '<span>' + askEscapeHtml(repo) + '</span><span>·</span>' : '') +
-      '<span class="' + (live ? 'is-live-status' : '') + '">' + (live ? 'working' : 'idle') + '</span>' +
-      '<span>·</span><span>' + askEscapeHtml(src.id) + '</span>' +
+      (repo ? '<span class="ask-repo-badge">' + askEscapeHtml(repo) + '</span>' : '') +
+      '<span class="ask-status-badge ' + (live ? 'is-live-status' : '') + '">' + (live ? 'working' : 'idle') + '</span>' +
+      '<span class="ask-sid-badge">' + askEscapeHtml(src.id.slice(0, 8)) + '</span>' +
       '</div>' +
       (snippet ? '<div class="ask-result-snippet">' + askEscapeHtml(snippet) + '</div>' : '') +
       '</div>';
@@ -58883,18 +58887,37 @@
     });
 
     function draw() {
+      if (!turns.length) {
+        log.innerHTML =
+          '<div class="ask-empty-state">' +
+          '<div class="ask-empty-icon"><span class="ask-empty-glyph">✨</span></div>' +
+          '<div class="ask-empty-title">Ask Mazkir</div>' +
+          '<div class="ask-empty-desc">Search conversation transcripts, sessions, and fleet history across all your projects.</div>' +
+          '<div class="ask-empty-prompts">' +
+          '<button type="button" class="ask-prompt-chip" data-ask-prompt="What did I work on today?">What did I work on today?</button>' +
+          '<button type="button" class="ask-prompt-chip" data-ask-prompt="What sessions worked on the model picker recently?">Sessions on model picker</button>' +
+          '<button type="button" class="ask-prompt-chip" data-ask-prompt="Show recent Antigravity sessions">Recent Antigravity sessions</button>' +
+          '<button type="button" class="ask-prompt-chip" data-ask-prompt="Which sessions are currently working?">Working sessions</button>' +
+          '</div>' +
+          '</div>';
+        drawSelBar();
+        return;
+      }
       log.innerHTML = turns.map((t, idx) => {
         if (t.pending) {
           return '<div class="ask-turn is-pending" data-ask-turn-index="' + idx + '">' +
-            '<div class="ask-turn-q">' + askEscapeHtml(t.q) + '</div>' +
+            '<div class="ask-turn-q"><span class="ask-user-badge">YOU</span><div class="ask-q-text">' + askEscapeHtml(t.q) + '</div></div>' +
             '<div class="ask-turn-a assistant-text ask-turn-pending">' +
-            '<span class="ask-thinking">Thinking' + (t.pendingElapsed ? ' · ' + t.pendingElapsed + 's' : '') + '</span></div>' +
+            '<div class="ask-assistant-header"><span class="ask-assistant-glyph">M</span><span class="ask-assistant-name">Mazkir</span></div>' +
+            '<div class="ask-thinking-wrap"><span class="ask-thinking">Thinking' + (t.pendingElapsed ? ' · ' + t.pendingElapsed + 's' : '') + '</span></div></div>' +
             '</div>';
         }
+        const elapsedSec = Number.isFinite(t.elapsedMs) ? (t.elapsedMs / 1000).toFixed(1) + 's' : '';
         return '<div class="ask-turn" data-ask-turn-index="' + idx + '">' +
-          '<div class="ask-turn-q">' + askEscapeHtml(t.q) + '</div>' +
+          '<div class="ask-turn-q"><span class="ask-user-badge">YOU</span><div class="ask-q-text">' + askEscapeHtml(t.q) + '</div></div>' +
           '<div class="ask-turn-a assistant-text' + (t.error ? ' is-error' : '') + '">' +
-          (t.error ? askEscapeHtml(t.a) : renderAskVerdict(t.a, t.sources, t.spawned)) +
+          '<div class="ask-assistant-header"><span class="ask-assistant-glyph">M</span><span class="ask-assistant-name">Mazkir</span>' + (elapsedSec ? '<span class="ask-turn-time">' + elapsedSec + '</span>' : '') + '</div>' +
+          '<div class="ask-turn-body">' + (t.error ? askEscapeHtml(t.a) : renderAskVerdict(t.a, t.sources, t.spawned)) + '</div>' +
           (!t.error && String(t.a || '').trim() ? askMessageActionsHtml() : '') + '</div>' +
           (t.error ? '' : askResultsHtml(t, selection && selection.id)) +
           '</div>';
@@ -58912,6 +58935,16 @@
     }
 
     log.addEventListener('click', (ev) => {
+      const promptBtn = ev.target.closest('[data-ask-prompt]');
+      if (promptBtn) {
+        const text = promptBtn.getAttribute('data-ask-prompt');
+        if (text && input) {
+          input.value = text;
+          submit();
+        }
+        return;
+      }
+
       const toggleBtn = ev.target.closest('[data-ask-toggle-sources]');
       if (toggleBtn) {
         const wrap = toggleBtn.closest('.ask-sources');
@@ -71953,7 +71986,16 @@
     kimi: 'K', cursor: 'U', hermes: 'H', kilo: 'L', opencode: 'O', copilot: 'P',
   };
 
-  var _cachedServerModelPicks = null;
+  var _cachedServerModelPicks = (() => {
+    try {
+      const raw = localStorage.getItem('ccc-model-picker-picks');
+      if (raw) {
+        const parsed = JSON.parse(raw);
+        if (Array.isArray(parsed) && parsed.length > 0) return parsed;
+      }
+    } catch (_) {}
+    return null;
+  })();
   var _fetchServerModelPicksPromise = null;
 
   async function fetchModelPickerPicksFromServer(force = false) {
@@ -71966,6 +72008,9 @@
           const data = await res.json();
           if (data && data.ok && Array.isArray(data.picks)) {
             _cachedServerModelPicks = data.picks;
+            try {
+              localStorage.setItem('ccc-model-picker-picks', JSON.stringify(data.picks));
+            } catch (_) {}
             return data.picks;
           }
         }
@@ -71983,6 +72028,36 @@
     try {
       const resolvedModel = model || _defaultModelsByEngine[engine] || '';
       const resolvedEffort = effort || '';
+
+      // Optimistically update _cachedServerModelPicks immediately
+      if (!_cachedServerModelPicks) _cachedServerModelPicks = [];
+      const existingIdx = _cachedServerModelPicks.findIndex(p =>
+        p.engine === engine && (p.model || '') === resolvedModel && (p.effort || '') === resolvedEffort
+      );
+      let entry;
+      if (existingIdx >= 0) {
+        entry = _cachedServerModelPicks.splice(existingIdx, 1)[0];
+        entry.count = (entry.count || 0) + 1;
+        entry.last_used = Date.now() / 1000;
+      } else {
+        entry = {
+          engine: engine,
+          model: resolvedModel,
+          effort: resolvedEffort,
+          count: 1,
+          last_used: Date.now() / 1000,
+        };
+      }
+      _cachedServerModelPicks.unshift(entry);
+      try {
+        localStorage.setItem('ccc-model-picker-picks', JSON.stringify(_cachedServerModelPicks.slice(0, 16)));
+      } catch (_) {}
+
+      // Re-render pills immediately with zero latency
+      if (typeof renderNsModelPickerPills === 'function') {
+        renderNsModelPickerPills();
+      }
+
       fetch('/api/model-picker/record', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -71992,9 +72067,7 @@
           effort: resolvedEffort,
         })
       }).then(() => {
-        fetchModelPickerPicksFromServer(true).then(() => {
-          renderNsModelPickerPills();
-        });
+        fetchModelPickerPicksFromServer(true);
       }).catch(e => {
         console.warn('Failed to record spawn choice on server', e);
       });
@@ -72046,10 +72119,8 @@
       if (s) s.value = eng;
     });
 
-    if (model) {
-      spawnDefaultsState.models[eng] = model;
-      _defaultModelsByEngine[eng] = model;
-    }
+    spawnDefaultsState.models[eng] = model || '';
+    _defaultModelsByEngine[eng] = model || '';
 
     if (effort) {
       spawnEffortChoiceDirty = true;
@@ -72077,17 +72148,6 @@
       requestClaudePrewarm({ force: true });
     }
 
-    const pillsContainer = document.getElementById('nsModelPickerPills');
-    if (pillsContainer) {
-      pillsContainer.querySelectorAll('.orch-tier-chip').forEach(chip => {
-        const cEngine = chip.getAttribute('data-engine');
-        const cModel = chip.getAttribute('data-model');
-        const cEffort = chip.getAttribute('data-effort') || '';
-        const isSel = (cEngine === eng && cModel === model && cEffort === effort);
-        chip.classList.toggle('is-selected', isSel);
-        chip.setAttribute('aria-checked', isSel ? 'true' : 'false');
-      });
-    }
     recordSpawnChoice(eng, model || _defaultModelsByEngine[eng] || '', effort);
   }
 

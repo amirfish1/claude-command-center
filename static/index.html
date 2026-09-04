@@ -1420,15 +1420,36 @@
             </div>
             <div class="status-rail-pane" id="statusRailAskPane" role="tabpanel" data-rail-pane="ask">
               <div class="ask-pane">
+                <div class="ask-header">
+                  <div class="ask-header-brand">
+                    <div class="ask-avatar">M</div>
+                    <div class="ask-header-info">
+                      <div class="ask-header-title">Mazkir</div>
+                      <div class="ask-header-subtitle">Fleet Memory &amp; Assistant</div>
+                    </div>
+                  </div>
+                  <div class="ask-header-status" title="Mazkir ready to search sessions and fleet state">
+                    <span class="ask-status-dot pulse"></span>
+                    <span class="ask-status-label">Online</span>
+                  </div>
+                </div>
                 <div class="ask-log" id="askLog" aria-live="polite"></div>
                 <div class="ask-sel-bar" id="askSelBar" hidden></div>
                 <form class="ask-form" id="askForm">
-                  <textarea id="askInput" rows="2" placeholder="Ask about your sessions…"></textarea>
+                  <div class="ask-input-wrap">
+                    <textarea id="askInput" rows="2" placeholder="Ask Mazkir about your sessions, repos, code…"></textarea>
+                  </div>
                   <div class="ask-actions">
-                    <button type="button" class="ask-range-btn" id="askRangeBtn"></button>
+                    <button type="button" class="ask-range-btn" id="askRangeBtn" title="Filter session time window"></button>
                     <span class="ask-hint"><kbd>⏎</kbd> send &nbsp;·&nbsp; <kbd>⇧⏎</kbd> newline</span>
                     <button type="button" class="ask-clear" id="askClear" title="Clear conversation">Clear</button>
-                    <button type="submit" class="ask-send" id="askSend">Ask</button>
+                    <button type="submit" class="ask-send" id="askSend">
+                      <span>Ask</span>
+                      <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                        <line x1="22" y1="2" x2="11" y2="13"></line>
+                        <polygon points="22 2 15 22 11 13 2 9 22 2"></polygon>
+                      </svg>
+                    </button>
                   </div>
                 </form>
               </div>
