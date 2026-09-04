@@ -59060,9 +59060,108 @@
   // handler changes beyond the .closest('.ask-turn-a') fallback below.
   function askMessageActionsHtml() {
     return '<span class="assistant-message-actions" data-role="assistant-message-actions">'
+      + '<button type="button" class="assistant-message-action" data-ask-file-issue title="File an issue about this response" aria-label="File an issue">+</button>'
       + '<button type="button" class="assistant-message-action" data-read-assistant-message title="Read answer aloud" aria-label="Read answer aloud">&#128266;</button>'
       + '<button type="button" class="assistant-message-action" data-copy-assistant-message title="Copy answer" aria-label="Copy answer">&#128203;</button>'
       + '</span>';
+  }
+
+  // CCC-1048: "File an issue" on an Ask turn — a small dialog to describe the
+  // issue (⌥-V pastes an image, same uploader as the annotation editors), with
+  // the turn's question/response/time/id auto-appended. Submits to the
+  // WatchTower MAZKIR queue via /api/annotations/mazkir-queue so a worker
+  // picks it up against the Mazkir code repo.
+  function askOpenFileIssue(turn, idx, turnEl) {
+    const existing = document.getElementById('askIssueModal');
+    if (existing) existing.remove();
+    const when = turn.at ? new Date(turn.at).toLocaleString() : 'unknown (predates turn timestamps)';
+    const selector = turnEl
+      ? '.ask-log .ask-turn[data-ask-turn-index="' + idx + '"]'
+      : '.ask-log .ask-turn';
+    const context = [
+      '--- auto-context (do not edit) ---',
+      'Ask (Mazkir) turn ' + idx + (turn.id ? ' · turn id ' + turn.id : ''),
+      'Time: ' + when,
+      'Page: ' + location.href,
+      'Selector: ' + selector,
+      '',
+      'Question:',
+      turn.q,
+      '',
+      'Response:',
+      String(turn.a || ''),
+    ].join('\n');
+    const modal = document.createElement('div');
+    modal.id = 'askIssueModal';
+    modal.className = 'ann-ux-preview-modal';
+    modal.innerHTML =
+      '<div class="ann-ux-preview-card">' +
+        '<div class="ann-ux-preview-title">File an issue (Mazkir queue)</div>' +
+        '<div class="ann-ux-preview-label">Issue — the question, response, time, and ids below are included automatically. Paste an image with ⌥-V:</div>' +
+        '<textarea class="ann-ux-preview-text" rows="5" id="askIssueText" placeholder="Describe the issue…"></textarea>' +
+        '<div class="ann-ux-preview-label">Included automatically:</div>' +
+        '<textarea class="ann-ux-preview-text" rows="12" spellcheck="false" readonly></textarea>' +
+        '<div class="ann-ux-preview-actions">' +
+          '<button type="button" class="ann-btn" data-ask-issue-cancel>Cancel</button>' +
+          '<button type="button" class="ann-btn ann-primary" data-ask-issue-submit>File issue</button>' +
+        '</div>' +
+      '</div>';
+    document.body.appendChild(modal);
+    const issueEl = modal.querySelector('#askIssueText');
+    const contextEl = modal.querySelectorAll('.ann-ux-preview-text')[1];
+    contextEl.value = context;
+    try { if (typeof attachImagePaste === 'function') attachImagePaste(issueEl); } catch (_) {}
+    const close = () => { modal.remove(); document.removeEventListener('keydown', onKey, true); };
+    const onKey = (e) => { if (e.key === 'Escape') { e.preventDefault(); close(); } };
+    document.addEventListener('keydown', onKey, true);
+    modal.addEventListener('click', (e) => { if (e.target === modal) close(); });
+    modal.querySelector('[data-ask-issue-cancel]').addEventListener('click', close);
+    const submitBtn = modal.querySelector('[data-ask-issue-submit]');
+    let submitting = false;
+    submitBtn.addEventListener('click', async () => {
+      if (submitting) return;
+      const issue = (issueEl.value || '').trim();
+      if (!issue) {
+        if (typeof showOpToast === 'function') showOpToast('Describe the issue first', 'warn');
+        return;
+      }
+      if (typeof guardComposerSend === 'function' && !guardComposerSend(issueEl)) return;
+      submitting = true;
+      submitBtn.disabled = true;
+      submitBtn.textContent = 'Filing…';
+      try {
+        const shotMatch = issue.match(/(\/[^\s'"()]+\.(?:png|jpe?g|gif|webp))/i);
+        const firstLine = issue.split('\n')[0].trim();
+        const res = await fetch('/api/annotations/mazkir-queue', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            text: issue + '\n\n' + context,
+            note: firstLine.slice(0, 400),
+            title: firstLine.slice(0, 160),
+            url: location.href,
+            selector: selector,
+            screenshot_path: shotMatch ? shotMatch[1] : '',
+            source: 'ccc',
+            engine: (typeof getSpawnEngine === 'function') ? getSpawnEngine() : 'claude',
+          }),
+        });
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok || !data.ok) throw new Error((data && data.error) || ('HTTP ' + res.status));
+        if (typeof showOpToast === 'function') {
+          showOpToast(data.number ? ('Filed as MAZKIR #' + data.number) : 'Issue filed to MAZKIR queue', 'success');
+        }
+        close();
+      } catch (err) {
+        submitting = false;
+        submitBtn.disabled = false;
+        submitBtn.textContent = 'File issue';
+        if (typeof showOpToast === 'function') {
+          showOpToast('File issue failed: ' + ((err && err.message) || 'unknown'), 'error');
+        }
+      }
+    });
+    setTimeout(() => issueEl.focus(), 0);
   }
 
   function askLoadHistory() {
@@ -59246,6 +59345,17 @@
         }).catch(e => { act.textContent = '✗ ' + e; });
         return;
       }
+
+      const issueBtn = ev.target.closest('[data-ask-file-issue]');
+      if (issueBtn) {
+        ev.preventDefault();
+        ev.stopPropagation();
+        const turnEl = issueBtn.closest('[data-ask-turn-index]');
+        const idx = turnEl ? parseInt(turnEl.getAttribute('data-ask-turn-index'), 10) : -1;
+        const turn = turns[idx];
+        if (turn && !turn.pending) askOpenFileIssue(turn, idx, turnEl);
+        return;
+      }
     });
 
     if (selBar) selBar.addEventListener('click', (ev) => {
@@ -59328,9 +59438,13 @@
           turn.sources = data.sources || [];
           turn.hitCount = data.hit_count;
           turn.elapsedMs = data.elapsed_ms;
+          // CCC-1048: "File an issue" embeds when/id in the ticket context.
+          turn.at = Date.now();
+          turn.id = turn.at.toString(36) + '-' + Math.random().toString(36).slice(2, 8);
         } else {
           turn.a = (data && data.error) || ('HTTP ' + res.status);
           turn.error = true;
+          turn.at = Date.now();
         }
       } catch (e) {
         delete turn.pending;

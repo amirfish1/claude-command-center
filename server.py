@@ -27803,6 +27803,41 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
             status = int(result.pop("status", 200 if result.get("ok") else 500))
             self.send_json(result, status)
             return
+        if path == "/api/annotations/mazkir-queue":
+            # Ask-pane "File an issue" (CCC-1048): same durable-queue flow as
+            # the UX-fixes route, but routed to the MAZKIR queue so a worker
+            # claims it against the Mazkir code repo (CCC_ROOT).
+            length = int(self.headers.get("Content-Length", "0"))
+            body = self.rfile.read(length) if length > 0 else b""
+            try:
+                payload = json.loads(body) if body else {}
+            except json.JSONDecodeError:
+                self.send_json({"ok": False, "error": "invalid JSON"}, 400)
+                return
+            if not isinstance(payload, dict):
+                self.send_json({"ok": False, "error": "expected JSON object"}, 400)
+                return
+            engine = str(payload.get("engine") or "claude").strip().lower()
+            meta = {
+                "note": payload.get("note") or "",
+                "annotation_id": payload.get("annotation_id") or "",
+                "url": payload.get("url") or "",
+                "title": payload.get("title") or "",
+                "selector": payload.get("selector") or "",
+                "screenshot_path": payload.get("screenshot_path") or "",
+                "repo_path": payload.get("repo_path") or "",
+                "source": payload.get("source") or "ccc",
+                "lane": payload.get("lane") or "normal",
+            }
+            result = enqueue_annotation_ux_fixes_queue(
+                payload.get("text") or "",
+                engine=engine,
+                meta=meta,
+                project="MAZKIR",
+            )
+            status = int(result.pop("status", 200 if result.get("ok") else 500))
+            self.send_json(result, status)
+            return
         if path == "/api/annotations/throughput-queue":
             length = int(self.headers.get("Content-Length", "0"))
             body = self.rfile.read(length) if length > 0 else b""
