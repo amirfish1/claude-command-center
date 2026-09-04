@@ -47,6 +47,8 @@ PORT_FILE = Path.home() / ".claude" / "command-center" / "port.txt"
 INDEX_BIN = os.environ.get(
     "CLAUDE_INDEX_BIN", "/Users/amirfish/dev/tools/indexing/.venv/bin/claude-index")
 INDEX_DB = os.environ.get("CLAUDE_INDEX_DB", str(Path.home() / ".claude-index" / "index.db"))
+CHECKIN_PATH = os.environ.get(
+    "CCC_DAILY_CHECKIN_FILE", str(Path.home() / "MyOfficeMgr" / "daily-checkin.md"))
 CLAUDE_BIN_FALLBACK = str(Path.home() / ".local" / "bin" / "claude")
 
 MAZKIR_MODEL = os.environ.get("CCC_ASK_MODEL", "sonnet")
@@ -228,6 +230,62 @@ def fleet_diagnostics(census: dict, live: dict, window30: dict, now: float | Non
 
 
 # ---------------------------------------------------------------------------
+# Daily check-in agenda (~/MyOfficeMgr/daily-checkin.md)
+# ---------------------------------------------------------------------------
+
+CHECKIN_OPEN_STATES = ("open", "today", "active")
+
+
+def parse_checkin(text: str, include_closed: bool = False) -> dict:
+    """Parse the daily check-in agenda markdown into sections of items.
+
+    Each `## N. Title` section holds a table `| # | Item | Status | Notes |`;
+    rows whose status is done/dropped are skipped unless `include_closed`.
+    The `## Discussion log` bullets are returned separately (last 8)."""
+    sections, log = [], []
+    cur = None
+    in_log = False
+    for raw in (text or "").splitlines():
+        line = raw.strip()
+        if line.startswith("## "):
+            title = line[3:].strip()
+            in_log = title.lower().startswith("discussion log")
+            cur = None if in_log else {"title": title, "items": []}
+            if cur is not None:
+                sections.append(cur)
+            continue
+        if in_log:
+            if line.startswith("- "):
+                log.append(line[2:].strip())
+            continue
+        if cur is None or not line.startswith("|"):
+            continue
+        cells = [c.strip() for c in line.strip("|").split("|")]
+        if len(cells) < 4 or cells[0] in ("#", "") or set(cells[0]) <= set("-: "):
+            continue
+        status = cells[2].lower().strip("` ")
+        if status not in CHECKIN_OPEN_STATES and not include_closed:
+            continue
+        cur["items"].append({"id": cells[0], "item": cells[1], "status": status,
+                             "notes": " | ".join(cells[3:])})
+    sections = [sec for sec in sections if sec["items"]]
+    open_count = sum(1 for sec in sections for it in sec["items"] if it["status"] in CHECKIN_OPEN_STATES)
+    return {"sections": sections, "open_count": open_count, "discussion_log": log[-8:]}
+
+
+def tool_daily_checkin(path: str = CHECKIN_PATH, include_closed: bool = False, reader=None) -> dict:
+    read = reader or (lambda p: Path(p).read_text(encoding="utf-8"))
+    try:
+        text = read(path)
+    except OSError as e:
+        return {"path": path, "available": False, "error": f"{type(e).__name__}: {e}",
+                "sections": [], "open_count": 0, "discussion_log": []}
+    out = parse_checkin(text, include_closed=include_closed)
+    out.update({"path": path, "available": True})
+    return out
+
+
+# ---------------------------------------------------------------------------
 # MCP stdio server (JSON-RPC 2.0, newline-delimited)
 # ---------------------------------------------------------------------------
 
@@ -268,7 +326,14 @@ TOOLS = [
                     "which are waiting on a question/approval, and which are burning tokens "
                     "(>3× fleet median over the last 30 min). Call this first for 'is anything "
                     "stuck / burning / waiting on me?'.",
-     "inputSchema": {"type": "object", "properties": {}}},
+     "inputSchema": {"type": "object", "properties": {}}},    {"name": "daily_checkin",
+     "description": "Amir's standing daily check-in agenda (~/MyOfficeMgr/daily-checkin.md): open items "
+                    "grouped by section (immediate, Becky/BYM product, CCC/Mazkir tooling, growth) with "
+                    "ids, status and notes, plus the recent discussion log. Call this for 'daily check-in', "
+                    "'morning review', 'what's on my agenda', 'what should we discuss'.",
+     "inputSchema": {"type": "object", "properties": {
+         "include_closed": {"type": "boolean", "default": False,
+                            "description": "Also return done/dropped items."}}}},
 ]
 
 
@@ -312,6 +377,8 @@ class CccState:
             if row is None and live is None and tp is None:
                 return {"session_id": sid, "known": False}
             return {"session_id": sid, "known": True, "census": row, "live": live, "throughput_24h": tp}
+        if name == "daily_checkin":
+            return tool_daily_checkin(include_closed=bool(args.get("include_closed")))
         if name == "fleet_diagnostics":
             census = self.get("/api/sessions/census")
             notes = []
@@ -391,7 +458,7 @@ You answer questions about Amir's past work (across Claude Code, Codex, Kimi, An
 
 Tools:
 - claude-index: search_sessions (find which sessions are about X), search (specific facts/strings), session_info (confirm a session, see how it ended), show_message, recent_sessions.
-- ccc-state: fleet_diagnostics (stuck / waiting / burning), list_sessions, live_activity, throughput_window, queue_status, session_detail.
+- ccc-state: fleet_diagnostics (stuck / waiting / burning), list_sessions, live_activity, throughput_window, queue_status, session_detail., daily_checkin (Amir's standing agenda).
 
 Method:
 1. CANDIDATES are pre-fetched below with excerpts from their best-matching messages, best match first, with currently-live sessions already excluded (a session still open right now cannot be where past work "already happened" — it's likely the very session asking). If they answer the question, answer immediately without any tool call (each tool round trip costs ~4 s); call session_info only when the excerpts do not say what was decided or how it ended.
@@ -399,6 +466,7 @@ Method:
 3. Trust the candidate order: it already ranks by relevance with only a small recency tie-break, and demotes planning-only/self-referential sessions. Don't override it just because a lower-ranked candidate is more recent.
 4. For fleet questions (stuck, burning, waiting, what is running, cost) call fleet_diagnostics or the specific tool once.
 5. Be honest: if nothing matches, say what you searched and that you found nothing.
+6. For a daily check-in / morning review / "what should we discuss", call daily_checkin once, then walk every open item by section as "id — item — one-line status or note", lead with the "today" items, and end by asking which item to pull in first. The 110-word cap does not apply to that answer.
 
 Answer format (plain text, no markdown headers):
 - Lead with the answer in one or two sentences, then 1-4 short supporting lines.

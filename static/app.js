@@ -58945,6 +58945,7 @@
           '<div class="ask-empty-title">Ask Mazkir</div>' +
           '<div class="ask-empty-desc">Search conversation transcripts, sessions, and fleet history across all your projects.</div>' +
           '<div class="ask-empty-prompts">' +
+          '<button type="button" class="ask-prompt-chip" data-ask-prompt="Daily check-in: what is open on my agenda and what should we discuss first?">Daily check-in</button>' +
           '<button type="button" class="ask-prompt-chip" data-ask-prompt="What did I work on today?">What did I work on today?</button>' +
           '<button type="button" class="ask-prompt-chip" data-ask-prompt="What sessions worked on the model picker recently?">Sessions on model picker</button>' +
           '<button type="button" class="ask-prompt-chip" data-ask-prompt="Show recent Antigravity sessions">Recent Antigravity sessions</button>' +

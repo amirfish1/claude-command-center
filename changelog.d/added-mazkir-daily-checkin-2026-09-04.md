@@ -1,0 +1,1 @@
+- Mazkir gains a `daily_checkin` tool over `~/MyOfficeMgr/daily-checkin.md` (open items by section + discussion log) and a "Daily check-in" chip in the Ask rail, so the standing agenda is one click on every open.

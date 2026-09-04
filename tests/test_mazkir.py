@@ -77,7 +77,7 @@ class McpProtocolTest(unittest.TestCase):
         self.assertIsNone(mazkir.handle_request(self.state, {"jsonrpc": "2.0", "method": "notifications/initialized"}))
         names = [t["name"] for t in self.rpc("tools/list")["result"]["tools"]]
         self.assertEqual(names, ["list_sessions", "live_activity", "throughput_window", "queue_status",
-                                 "session_detail", "fleet_diagnostics"])
+                                 "session_detail", "fleet_diagnostics", "daily_checkin"])
 
     def test_tools_call_and_errors(self):
         r = self.rpc("tools/call", {"name": "queue_status", "arguments": {}})
@@ -176,3 +176,57 @@ class RunMazkirTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+CHECKIN_MD = """# Daily check-in agenda
+
+## 1. Immediate (today)
+
+| # | Item | Status | Notes |
+|---|------|--------|-------|
+| 1.1 | Demo prep | today | replay param |
+| 1.2 | Old thing | done | shipped |
+
+## 2. Product
+
+| # | Item | Status | Notes |
+|---|------|--------|-------|
+| 2.1 | Becky honesty | open | 1-in-3 hit rate |
+| 2.2 | Dropped idea | dropped | no |
+
+## Discussion log
+
+- 2026-09-04: agenda created.
+"""
+
+
+class DailyCheckinTest(unittest.TestCase):
+    def test_parse_open_items_and_log(self):
+        out = mazkir.parse_checkin(CHECKIN_MD)
+        self.assertEqual(out["open_count"], 2)
+        self.assertEqual([s["title"] for s in out["sections"]], ["1. Immediate (today)", "2. Product"])
+        self.assertEqual(out["sections"][0]["items"], [
+            {"id": "1.1", "item": "Demo prep", "status": "today", "notes": "replay param"}])
+        self.assertEqual(out["discussion_log"], ["2026-09-04: agenda created."])
+        everything = mazkir.parse_checkin(CHECKIN_MD, include_closed=True)
+        self.assertEqual(sum(len(s["items"]) for s in everything["sections"]), 4)
+        self.assertEqual(everything["open_count"], 2)
+
+    def test_tool_reads_file_and_degrades(self):
+        out = mazkir.tool_daily_checkin("/x/agenda.md", reader=lambda p: CHECKIN_MD)
+        self.assertTrue(out["available"])
+        self.assertEqual(out["open_count"], 2)
+
+        def missing(p):
+            raise FileNotFoundError(p)
+        out = mazkir.tool_daily_checkin("/x/missing.md", reader=missing)
+        self.assertFalse(out["available"])
+        self.assertEqual(out["sections"], [])
+
+    def test_mcp_dispatch(self):
+        st = mazkir.CccState("http://x", fetch=fake_fetch)
+        r = mazkir.handle_request(st, {"jsonrpc": "2.0", "id": 1, "method": "tools/call",
+                                       "params": {"name": "daily_checkin", "arguments": {}}})
+        body = json.loads(r["result"]["content"][0]["text"])
+        self.assertIn("open_count", body)
+        self.assertIn("path", body)
