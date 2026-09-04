@@ -263,7 +263,8 @@ def parse_checkin(text: str, include_closed: bool = False) -> dict:
         cells = [c.strip() for c in line.strip("|").split("|")]
         if len(cells) < 4 or cells[0] in ("#", "") or set(cells[0]) <= set("-: "):
             continue
-        status = cells[2].lower().strip("` ")
+        # First word only, so a hand-edited "today (ready)" still counts as today.
+        status = (cells[2].lower().strip("` ").split() or [""])[0].strip("`")
         if status not in CHECKIN_OPEN_STATES and not include_closed:
             continue
         cur["items"].append({"id": cells[0], "item": cells[1], "status": status,

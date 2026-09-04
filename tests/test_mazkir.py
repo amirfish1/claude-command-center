@@ -184,7 +184,7 @@ CHECKIN_MD = """# Daily check-in agenda
 
 | # | Item | Status | Notes |
 |---|------|--------|-------|
-| 1.1 | Demo prep | today | replay param |
+| 1.1 | Demo prep | today (ready) | replay param |
 | 1.2 | Old thing | done | shipped |
 
 ## 2. Product
