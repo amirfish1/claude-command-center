@@ -748,10 +748,17 @@ def run_analyst(candidate, cfg, *, timeout=180):
     if not claude_bin.get("available"):
         raise RuntimeError(claude_bin.get("reason") or "Claude Code CLI not found")
     prompt = analyst_prompt(candidate)
+    # `--disallowedTools` is variadic in current Claude Code: passed as a
+    # separate token it swallows the trailing prompt positional (the prompt's
+    # own words then surface as "deny rule X matches no known tool" warnings
+    # and the model never sees the prompt). The `=` form binds exactly one
+    # value -- same fix as the auto-titler's `--mcp-config=` break. The list
+    # is the mutating tools only; a pure JSON analyst never needs them, and
+    # `--allowedTools` alone does not restrict without this (con_418e0377d4).
     argv = [
         claude_bin["bin"], "-p", "--model", str(cfg.get("model") or DEFAULT_CONFIG["model"]),
         "--strict-mcp-config", '--mcp-config={"mcpServers":{}}',
-        "--disallowedTools", "Bash,Write,Edit,MultiEdit,NotebookEdit,Task,WebFetch,WebSearch",
+        "--disallowedTools=Bash,Write,Edit,NotebookEdit",
         prompt,
     ]
     try:
