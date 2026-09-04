@@ -392,7 +392,7 @@ Tools:
 - ccc-state: fleet_diagnostics (stuck / waiting / burning), list_sessions, live_activity, throughput_window, queue_status, session_detail.
 
 Method:
-1. CANDIDATES are pre-fetched below. If one clearly answers the question, answer from it; call session_info only when you must confirm what happened or how it ended.
+1. CANDIDATES are pre-fetched below with excerpts from their best-matching messages. If they answer the question, answer immediately without any tool call (each tool round trip costs ~4 s); call session_info only when the excerpts do not say what was decided or how it ended.
 2. Otherwise call search_sessions once (rephrase with 2-4 topic words), then at most one or two follow-ups. Never loop.
 3. For fleet questions (stuck, burning, waiting, what is running, cost) call fleet_diagnostics or the specific tool once.
 4. Be honest: if nothing matches, say what you searched and that you found nothing.
@@ -411,7 +411,7 @@ def _range_to_since(range_key) -> str | None:
 
 def prefetch_sessions(question: str, since: str | None, runner=None, index_bin: str = INDEX_BIN,
                       limit: int = PREFETCH_LIMIT) -> list[dict]:
-    argv = [index_bin, "sessions", question, "--json", "-n", str(limit)]
+    argv = [index_bin, "sessions", question, "--json", "-n", str(limit), "--excerpts", "3"]
     if since:
         argv += ["--since", since]
     run = runner or (lambda a, **kw: subprocess.run(a, capture_output=True, text=True, **kw))
@@ -456,9 +456,15 @@ def _fmt_candidate(i: int, s: dict) -> str:
     when = first if first == last or not last else f"{first}..{last}"
     title = " ".join(str(s.get("title") or "").split())[:140]
     snip = " ".join(str(s.get("best_snippet") or s.get("snippet") or "").split())[:220]
-    return (f"{i}. [[session:{s['session_id']}]] {s.get('harness') or 'claude'} {when} "
-            f"hits={s.get('hits', '?')} cwd={s.get('cwd') or '?'}\n"
-            f"   title: {title}\n   match: {snip}")
+    out = (f"{i}. [[session:{s['session_id']}]] {s.get('harness') or 'claude'} {when} "
+           f"hits={s.get('hits', '?')} cwd={s.get('cwd') or '?'}\n"
+           f"   title: {title}\n   match: {snip}")
+    for e in (s.get("excerpts") or [])[:3]:
+        if not isinstance(e, dict):
+            continue
+        text = " ".join(str(e.get("text") or "").split())[:400]
+        out += f"\n   excerpt ({e.get('type') or '?'} {(e.get('timestamp') or '')[:10]}): {text}"
+    return out
 
 
 def build_prompt(question: str, history: list, candidates: list[dict], snapshot: str,
