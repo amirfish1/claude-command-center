@@ -108,7 +108,7 @@ _RELATIVE_ETA_GRACE = {
     "this month": 31,
 }
 
-_lock = threading.Lock()
+_di_lock = threading.Lock()
 _run_lock = threading.Lock()
 _running = {"since": None, "thread": None}
 _last_findings = {"governor": [], "at": None}
@@ -208,14 +208,14 @@ def last_run(path=None):
     return None
 
 
-def _iso(ts):
+def _di_iso(ts):
     try:
         return datetime.fromtimestamp(float(ts), timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
     except (TypeError, ValueError, OSError, OverflowError):
         return None
 
 
-def _parse_iso(s):
+def _di_parse_iso(s):
     if not s:
         return None
     try:
@@ -364,7 +364,7 @@ def _wt_bin():
     return None
 
 
-def _wt_run(args, timeout=30):
+def _di_wt_run(args, timeout=30):
     wt = _wt_bin()
     if not wt:
         return None
@@ -421,7 +421,7 @@ def wt_candidate(queue_row, tickets):
 def wt_candidates(cfg, *, runner=None, limit=5):
     """One ``wt status`` per run, then one ``wt ls`` per surfaced queue
     (bounded by ``limit``). Never a call per ticket."""
-    run = runner or _wt_run
+    run = runner or _di_wt_run
     status = run(["status", "--json"])
     if not isinstance(status, list):
         return []
@@ -537,7 +537,7 @@ def analyze_transcript_tail(path, *, now, tail_bytes=400_000, window_s=45 * 60):
         if not isinstance(ev, dict):
             continue
         t = ev.get("type")
-        ts = _parse_iso(ev.get("timestamp")) or 0.0
+        ts = _di_parse_iso(ev.get("timestamp")) or 0.0
         if t == "system" and ev.get("subtype") == "compact_boundary":
             sig["compact_seen"] = True
             continue
@@ -663,8 +663,8 @@ def governor_card(finding, *, now, run_id):
              "action": {"kind": "kill", "session_id": sid}},
         ],
         "status": "open",
-        "created_at": _iso(now),
-        "updated_at": _iso(now),
+        "created_at": _di_iso(now),
+        "updated_at": _di_iso(now),
         "run_id": run_id,
         "source": {k: finding.get(k) for k in ("session_id", "name", "kind", "detail", "value", "cwd")},
         "analyst": None,
@@ -815,8 +815,8 @@ def analyst_card(candidate, body, *, now, run_id, analyst_meta):
         "context": body["context"],
         "options": options,
         "status": "open",
-        "created_at": _iso(now),
-        "updated_at": _iso(now),
+        "created_at": _di_iso(now),
+        "updated_at": _di_iso(now),
         "run_id": run_id,
         "source": {k: v for k, v in candidate.items() if k not in ("kind", "source_id")},
         "analyst": analyst_meta,
@@ -839,7 +839,7 @@ def blocked_source_ids(cards, *, now, dedupe_days):
         if c.get("status") == "open":
             blocked.add(sid)
             continue
-        ts = _parse_iso(c.get("updated_at")) or 0
+        ts = _di_parse_iso(c.get("updated_at")) or 0
         if c.get("status") in CLOSED_STATUSES and (now - ts) < window:
             blocked.add(sid)
     return blocked
@@ -861,7 +861,7 @@ def run_once(*, cfg=None, now=None, rows=None, live_ids=None, cards=None,
         live_ids = _server_live_ids()
     max_new = int(cfg.get("max_cards_per_run") or 5)
     blocked = blocked_source_ids(cards, now=now, dedupe_days=cfg.get("dedupe_days"))
-    record = {"run_id": run_id, "started_at": _iso(now), "sources": {}, "created": [],
+    record = {"run_id": run_id, "started_at": _di_iso(now), "sources": {}, "created": [],
               "skipped_dedupe": 0, "skipped_cap": 0, "errors": []}
 
     # Governor first: cheap, and a burning session outranks a stale board row.
@@ -869,9 +869,9 @@ def run_once(*, cfg=None, now=None, rows=None, live_ids=None, cards=None,
         findings = governor_findings(rows, live_ids, now=now, cfg=cfg)
     except Exception as e:  # never let one source kill the run
         findings, _ = [], record["errors"].append(f"governor: {e}"[:200])
-    with _lock:
+    with _di_lock:
         _last_findings["governor"] = findings
-        _last_findings["at"] = _iso(now)
+        _last_findings["at"] = _di_iso(now)
     record["sources"]["governor"] = len(findings)
 
     candidates = []
@@ -928,7 +928,7 @@ def run_once(*, cfg=None, now=None, rows=None, live_ids=None, cards=None,
         cards[c["id"]] = c
         record["created"].append({"id": c["id"], "source_id": c["source_id"], "title": c["title"]})
     record["duration_s"] = round(time.time() - started, 1)
-    record["finished_at"] = _iso(time.time())
+    record["finished_at"] = _di_iso(time.time())
     if persist:
         save_cards(cards)
         _append_run(record)
@@ -955,7 +955,7 @@ def _server_live_ids():
         return set()
 
 
-def start_background_run(cfg=None):
+def decision_inbox_start_background_run(cfg=None):
     """Kick one run on a daemon thread; refuse while one is in flight."""
     if not _run_lock.acquire(blocking=False):
         return {"ok": False, "error": "a scan is already running", "since": _running["since"]}
@@ -969,7 +969,7 @@ def start_background_run(cfg=None):
             _running["since"] = None
             _run_lock.release()
 
-    _running["since"] = _iso(time.time())
+    _running["since"] = _di_iso(time.time())
     t = threading.Thread(target=_go, daemon=True, name="ccc-decision-inbox-run")
     _running["thread"] = t
     t.start()
@@ -986,7 +986,7 @@ def decision_inbox_loop(initial_delay_s=120):
         cfg = load_config()
         if cfg.get("enabled", True):
             try:
-                start_background_run(cfg)
+                decision_inbox_start_background_run(cfg)
             except Exception:
                 pass
         try:
@@ -995,11 +995,11 @@ def decision_inbox_loop(initial_delay_s=120):
             return
 
 
-def api_payload(*, cards=None, cfg=None):
+def decision_inbox_api_payload(*, cards=None, cfg=None):
     cfg = cfg or load_config()
     cards = load_cards() if cards is None else cards
-    ordered = sorted(cards.values(), key=lambda c: (c.get("status") != "open", -(_parse_iso(c.get("created_at")) or 0)))
-    with _lock:
+    ordered = sorted(cards.values(), key=lambda c: (c.get("status") != "open", -(_di_parse_iso(c.get("created_at")) or 0)))
+    with _di_lock:
         findings = list(_last_findings["governor"])
         findings_at = _last_findings["at"]
     return {
@@ -1086,7 +1086,7 @@ def perform_action(action, *, title="", cfg=None, spawn=None, inject=None,
     return {"ok": False, "error": f"unknown action kind {kind!r}"}
 
 
-def decide(card_id, option_index, *, cards=None, now=None, persist=True, **hooks):
+def decision_inbox_decide(card_id, option_index, *, cards=None, now=None, persist=True, **hooks):
     now = time.time() if now is None else now
     cards = load_cards() if cards is None else cards
     card = cards.get(str(card_id))
@@ -1101,27 +1101,27 @@ def decide(card_id, option_index, *, cards=None, now=None, persist=True, **hooks
         return {"ok": False, "error": "unknown option"}
     result = perform_action(option.get("action"), title=card.get("title", ""), **hooks)
     card["status"] = "decided" if result.get("ok") else "open"
-    card["updated_at"] = _iso(now)
-    card["decided"] = {"option": idx, "label": option.get("label"), "at": _iso(now), "result": result}
+    card["updated_at"] = _di_iso(now)
+    card["decided"] = {"option": idx, "label": option.get("label"), "at": _di_iso(now), "result": result}
     if persist:
         save_cards(cards)
     return {"ok": bool(result.get("ok")), "card": card, "result": result}
 
 
-def dismiss(card_id, *, cards=None, now=None, persist=True):
+def decision_inbox_dismiss(card_id, *, cards=None, now=None, persist=True):
     now = time.time() if now is None else now
     cards = load_cards() if cards is None else cards
     card = cards.get(str(card_id))
     if not card:
         return {"ok": False, "error": "unknown card"}
     card["status"] = "dismissed"
-    card["updated_at"] = _iso(now)
+    card["updated_at"] = _di_iso(now)
     if persist:
         save_cards(cards)
     return {"ok": True, "card": card}
 
 
-def governor_act(session_id, action, *, reason="", **hooks):
+def decision_inbox_governor_act(session_id, action, *, reason="", **hooks):
     """One-click pause / nudge / kill from the governor strip (no card)."""
     action = str(action or "").lower()
     if action == "nudge":

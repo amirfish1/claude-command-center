@@ -574,6 +574,52 @@ If you'd like to see an engine bumped from "partial" to first-class, open an iss
   via `claude -p` (Haiku by default). Used for cleaning up auto-generated
   session slugs.
 
+## Decision Inbox
+
+Stalled work should not become your problem again. Once an hour CCC scans
+for what is stuck, does the thinking with a cheap analyst, and leaves you a
+three-option card. You click one; CCC spawns or steers the follow-through.
+
+Sources scanned each run:
+
+- **Strategy board** (optional): a markdown table with `Task | Status | ETA`
+  columns. Rows marked *Blocked*, or *Open* with an ETA in the past, become
+  candidates. Point the scanner at your file in the config below.
+- **WatchTower queues**: queues that are stuck with open tickets older than
+  `wt_age_days` (one `wt status --json` per run, one `wt ls` per surfaced
+  queue).
+- **Idle sessions**: live sessions idle for more than `idle_hours` whose last
+  task is unfinished (a pending tool, an open goal, a working state).
+
+The **token governor** runs in the same pass over live sessions only and
+flags the ones burning tokens for nothing: the same tool error repeated
+three times, no file edits for 45 minutes while still working, or context at
+85% with no compaction. Each finding gets one-click **Nudge** (steer a reset
+instruction in), **Pause** (interrupt the turn), or **Kill**.
+
+Anti-spam: at most five new cards per run, and a source that already has an
+open card, or was decided or dismissed in the last week, is skipped.
+
+Open it from the **Decisions** icon in the app rail or at
+`/decision-inbox.html`. Configure in
+`~/.claude/command-center/decision-inbox.json`:
+
+```json
+{
+  "strategy_board": "~/notes/Strategy Board.md",
+  "interval_s": 3600,
+  "max_cards_per_run": 5,
+  "idle_hours": 2,
+  "wt_age_days": 3,
+  "model": "claude-sonnet-5",
+  "spawn_cwd": "~/projects"
+}
+```
+
+Set `CCC_DECISION_INBOX_DISABLED=1` to keep the loop off entirely. Cards and
+run history live in `~/.claude/command-center/decision-inbox/`. API:
+`GET /api/decision-inbox`, `POST /api/decision-inbox/{run,decide,dismiss,governor}`.
+
 ## Kimi Knowledge Bridge
 
 Kimi Code sessions can become searchable in [Total Recall](https://github.com/alexgreensh/total-recall)

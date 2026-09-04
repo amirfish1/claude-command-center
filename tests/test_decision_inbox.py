@@ -130,7 +130,7 @@ class IdleSessions(unittest.TestCase):
 
 
 def _ev(t, ts, blocks):
-    return json.dumps({"type": t, "timestamp": di._iso(ts), "message": {"content": blocks}})
+    return json.dumps({"type": t, "timestamp": di._di_iso(ts), "message": {"content": blocks}})
 
 
 def _tool_use(name):
@@ -261,10 +261,10 @@ class RunContract(unittest.TestCase):
     def test_decided_recently_blocks_but_old_decisions_do_not(self):
         board = "| Cat | Task | Status | ETA | Notes |\n|---|---|---|---|---|\n| x | **Item** | ⚠️ Blocked | - | - |\n"
         cards = {"c1": {"id": "c1", "source_id": "board:item", "status": "decided",
-                        "updated_at": di._iso(NOW - 2 * 86400)}}
+                        "updated_at": di._di_iso(NOW - 2 * 86400)}}
         rec = self._run(cards, board_text=board, board_mtime=NOW)
         self.assertEqual(rec["created"], [])
-        cards["c1"]["updated_at"] = di._iso(NOW - 20 * 86400)
+        cards["c1"]["updated_at"] = di._di_iso(NOW - 20 * 86400)
         rec = self._run(cards, board_text=board, board_mtime=NOW)
         self.assertEqual(len(rec["created"]), 1)
 
@@ -323,7 +323,7 @@ class FollowThrough(unittest.TestCase):
             return {"ok": True, "session_id": "new1"}
 
         cards = self._cards()
-        res = di.decide("c1", 0, cards=cards, now=NOW, persist=False, spawn=spawn)
+        res = di.decision_inbox_decide("c1", 0, cards=cards, now=NOW, persist=False, spawn=spawn)
         self.assertTrue(res["ok"])
         self.assertEqual(seen["prompt"], "do it")
         self.assertEqual(seen["cwd"], "/repo")
@@ -331,40 +331,40 @@ class FollowThrough(unittest.TestCase):
         self.assertEqual(cards["c1"]["status"], "decided")
         self.assertEqual(cards["c1"]["decided"]["result"]["session_id"], "new1")
         # A decided card cannot be decided twice.
-        self.assertFalse(di.decide("c1", 1, cards=cards, now=NOW, persist=False)["ok"])
+        self.assertFalse(di.decision_inbox_decide("c1", 1, cards=cards, now=NOW, persist=False)["ok"])
 
     def test_decide_human_needs_no_hook(self):
         cards = self._cards()
-        res = di.decide("c1", 1, cards=cards, now=NOW, persist=False)
+        res = di.decision_inbox_decide("c1", 1, cards=cards, now=NOW, persist=False)
         self.assertTrue(res["ok"])
         self.assertEqual(res["result"]["effect"], "noted")
 
     def test_decide_inject_and_failed_action_keeps_card_open(self):
         cards = self._cards()
-        res = di.decide("c1", 2, cards=cards, now=NOW, persist=False,
+        res = di.decision_inbox_decide("c1", 2, cards=cards, now=NOW, persist=False,
                         inject=lambda sid, text: {"ok": False, "error": "no route"})
         self.assertFalse(res["ok"])
         self.assertEqual(cards["c1"]["status"], "open")
-        res = di.decide("c1", 2, cards=cards, now=NOW, persist=False,
+        res = di.decision_inbox_decide("c1", 2, cards=cards, now=NOW, persist=False,
                         inject=lambda sid, text: {"ok": True, "via": "uds"})
         self.assertTrue(res["ok"])
         self.assertEqual(res["result"]["effect"], "injected")
 
     def test_dismiss_and_unknown_ids(self):
         cards = self._cards()
-        self.assertTrue(di.dismiss("c1", cards=cards, now=NOW, persist=False)["ok"])
+        self.assertTrue(di.decision_inbox_dismiss("c1", cards=cards, now=NOW, persist=False)["ok"])
         self.assertEqual(cards["c1"]["status"], "dismissed")
-        self.assertFalse(di.dismiss("nope", cards=cards, persist=False)["ok"])
-        self.assertFalse(di.decide("nope", 0, cards=cards, persist=False)["ok"])
+        self.assertFalse(di.decision_inbox_dismiss("nope", cards=cards, persist=False)["ok"])
+        self.assertFalse(di.decision_inbox_decide("nope", 0, cards=cards, persist=False)["ok"])
 
     def test_governor_act_routes(self):
         log = []
-        di.governor_act("s1", "nudge", reason="same error 3x", inject=lambda sid, t: log.append(("inject", sid, t)) or {"ok": True})
-        di.governor_act("s1", "pause", pause=lambda sid: log.append(("pause", sid)) or {"ok": True})
-        di.governor_act("s1", "kill", kill=lambda sid: log.append(("kill", sid)) or {"ok": True})
+        di.decision_inbox_governor_act("s1", "nudge", reason="same error 3x", inject=lambda sid, t: log.append(("inject", sid, t)) or {"ok": True})
+        di.decision_inbox_governor_act("s1", "pause", pause=lambda sid: log.append(("pause", sid)) or {"ok": True})
+        di.decision_inbox_governor_act("s1", "kill", kill=lambda sid: log.append(("kill", sid)) or {"ok": True})
         self.assertEqual([e[0] for e in log], ["inject", "pause", "kill"])
         self.assertIn("same error 3x", log[0][2])
-        self.assertFalse(di.governor_act("s1", "dance")["ok"])
+        self.assertFalse(di.decision_inbox_governor_act("s1", "dance")["ok"])
 
 
 class Persistence(unittest.TestCase):

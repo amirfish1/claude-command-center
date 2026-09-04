@@ -17231,6 +17231,12 @@ def _resolve_apps(include_disabled=False):
         apps.append({"id": "morning", "label": "Morning",
                      "icon": "\N{BLACK SUN WITH RAYS}", "url": "/morning",
                      "builtin": True})
+    # Decision Inbox: the hourly stalled-work scanner + token governor
+    # (ccc_server/decision_inbox.py). Ships with the repo but is not core
+    # navigation, so it can be switched off from the Applications page.
+    apps.append({"id": "decision-inbox", "label": "Decisions",
+                 "icon": "\N{BALLOT BOX WITH CHECK}", "url": "/decision-inbox.html",
+                 "builtin": False})
     manifest_apps = _custom_links_config()[2]
     apps.extend(manifest_apps)
     # An id already declared in the manifest wins: that is how a user renames,
@@ -22838,6 +22844,7 @@ _adopt_ccc_module("terminal")
 # breach-pattern self-filing daemon. /api/perf-event and /api/perf/summary
 # call record_event / summarize as bare names via this adoption.
 _adopt_ccc_module("perf_events")
+_adopt_ccc_module("decision_inbox")
 
 # ---------------------------------------------------------------------------
 # HTTP handler
@@ -23884,6 +23891,10 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
             # vertical stage list (folders → transcripts → infer …) instead
             # of the opaque "Loading archive…" spinner.
             self.send_json(_archive_load_snapshot())
+        elif path == "/api/decision-inbox":
+            # Cards + governor findings + last run. Cache read only; a poll
+            # never triggers a scan or an analyst call.
+            self.send_json(decision_inbox_api_payload())
         elif path == "/api/perf/summary":
             # Rolled-up client perf beacons (archive load / conversation
             # open) over a trailing window, plus the self-filed-ticket
@@ -25346,6 +25357,24 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                                 "detail": str(e)}, 500)
                 return
             body, enc = self._maybe_gzip(body, "text/html")
+            self.send_response(200)
+            self.send_header("Content-Type", "text/html; charset=utf-8")
+            self.send_header("Cache-Control", "no-store, must-revalidate")
+            self.send_header("Content-Length", str(len(body)))
+            if enc:
+                self.send_header("Content-Encoding", enc)
+                self.send_header("Vary", "Accept-Encoding")
+            self.end_headers()
+            self.wfile.write(body)
+        elif path == "/decision-inbox.html":
+            # Decision Inbox page. Same narrow-route pattern as /q2.html: no
+            # app.js/app.css, so it cannot affect the main dashboard.
+            try:
+                body = (STATIC_DIR / "decision-inbox.html").read_bytes()
+            except OSError as e:
+                self.send_json({"error": "decision-inbox.html missing", "detail": str(e)}, 500)
+                return
+            body, enc = self._maybe_gzip(body, "text/html; charset=utf-8")
             self.send_response(200)
             self.send_header("Content-Type", "text/html; charset=utf-8")
             self.send_header("Cache-Control", "no-store, must-revalidate")
@@ -31233,6 +31262,24 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
             else:
                 res = system_health_quit_app(app_id)
                 self.send_json(res, 200 if res.get("ok") else 400)
+        elif path in ("/api/decision-inbox/run", "/api/decision-inbox/decide",
+                      "/api/decision-inbox/dismiss", "/api/decision-inbox/governor"):
+            length = int(self.headers.get("Content-Length", "0"))
+            body = self.rfile.read(length) if length > 0 else b""
+            try:
+                payload = json.loads(body) if body else {}
+            except json.JSONDecodeError:
+                payload = {}
+            if path.endswith("/run"):
+                self.send_json(decision_inbox_start_background_run())
+            elif path.endswith("/decide"):
+                self.send_json(decision_inbox_decide(payload.get("card_id"), payload.get("option")))
+            elif path.endswith("/dismiss"):
+                self.send_json(decision_inbox_dismiss(payload.get("card_id")))
+            else:
+                self.send_json(decision_inbox_governor_act(
+                    str(payload.get("session_id") or ""), payload.get("action"),
+                    reason=str(payload.get("reason") or "")[:300]))
         elif path in ("/api/system-processes/kill", "/api/system/processes/kill"):
             length = int(self.headers.get("Content-Length", "0"))
             body = self.rfile.read(length) if length > 0 else b""
@@ -35510,6 +35557,12 @@ def main():
     # Off for ephemeral test/CI processes and via an explicit opt-out.
     if not os.environ.get("CCC_EPHEMERAL") and not os.environ.get("CCC_PERF_TICKETS_DISABLED"):
         threading.Thread(target=perf_ticket_loop, daemon=True, name="ccc-perf-ticket").start()
+    # Decision Inbox: hourly stalled-work scan + token governor
+    # (ccc_server/decision_inbox.py). Off for ephemeral test/CI processes
+    # and via CCC_DECISION_INBOX_DISABLED=1; the config file's `enabled`
+    # flag is re-read every interval.
+    if not os.environ.get("CCC_EPHEMERAL") and not os.environ.get("CCC_DECISION_INBOX_DISABLED"):
+        threading.Thread(target=decision_inbox_loop, daemon=True, name="ccc-decision-inbox").start()
     # Recover in-progress group-chat coordinations and start background watcher.
     _start_coordination_watcher()
     _start_resume_queue_watcher()
