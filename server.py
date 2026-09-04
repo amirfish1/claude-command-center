@@ -24601,6 +24601,18 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                             usage["baseline_equivalent_tokens"] = round(
                                 norm["cost_usd"] * 1_000_000 / baseline_rate_in, 2
                             )
+                            # Price ratio between the session's own model and
+                            # the Opus 5 baseline, so the rail can SAY why an
+                            # expensive-model session's equivalent exceeds its
+                            # raw token count instead of looking mispriced
+                            # (CCC-1047: Fable 5 is 2x Opus 5 list price).
+                            _session_rates, _session_rates_known = (
+                                _rates_for_model_known(usage.get("model") or "")
+                            )
+                            if _session_rates_known and _session_rates[0] > 0:
+                                usage["baseline_price_ratio"] = round(
+                                    _session_rates[0] / baseline_rate_in, 2
+                                )
             self.send_json(usage)
         elif re.match(r"^/api/session/[a-zA-Z0-9_-]+/slash-commands$", path):
             # Slash commands reported by Claude's system/init event. The

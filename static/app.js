@@ -31995,6 +31995,11 @@
     };
     for (const c of _dedupedConvs) {
       if (!_cardInFolder(c)) continue;
+      if (c && (c.spawned_via === 'ccc-ask'
+          || c.spawned_kind === 'assistant'
+          || String(c.folder_path || '').includes('/command-center/scratch')
+          || String(c.slug || '').includes('-claude-command-center-scratch')
+          || c.folder_label === 'scratch')) continue;
       if (_repoSearchActive && _repoSearchActive.ids.has(c.session_id || c.id)) continue;
       // A UUID/prefix/substring search is a direct lookup; keep it above
       // pipeline sections and history-index matches.
@@ -35449,6 +35454,11 @@
     const _allTabConvs = _allTabUnfilteredConvs.filter(
       c => c.source !== 'github_pr'
         && _archiveEngineAllowsRow(c, _arcEngineFilter)
+        && c.spawned_via !== 'ccc-ask'
+        && c.spawned_kind !== 'assistant'
+        && !String(c.folder_path || '').includes('/command-center/scratch')
+        && !String(c.slug || '').includes('-claude-command-center-scratch')
+        && c.folder_label !== 'scratch'
     );
     const _allTabTrashConvs = _trashConvs.filter(
       c => _archiveEngineAllowsRow(c, _arcEngineFilter) && _archiveWindowAllowsRow(c, _ipWindowCutoff)
@@ -35587,6 +35597,7 @@
     const _allTabNaturalLane = (c) => {
       const spawnedLane = _spawnMarkerLane(c);
       if (spawnedLane) return spawnedLane;
+      if (c && (c.spawned_via === 'ccc-ask' || c.spawned_kind === 'assistant')) return 'other';
       if (_isHermesWorkerRow(c) || _isWatchTowerWorkerRow(c) || _isExternalSpawnRow(c)) return 'workers';
       if (_isHermesMessageRow(c)) return 'messages';
       return 'coding';
@@ -50217,11 +50228,25 @@
       u, sessionId, monthlyPlan, _weeklyClaudeUsage
     );
     const costText = railSessionCostText(presentation);
-    const baselineLabel = u && u.baseline_model
-      ? _claudeFriendlyModelName(u.baseline_model) + '-equivalent tokens'
+    const baselineFriendly = u && u.baseline_model
+      ? _claudeFriendlyModelName(u.baseline_model)
+      : '';
+    const baselineLabel = baselineFriendly
+      ? baselineFriendly + '-equivalent tokens'
       : 'baseline-equivalent tokens';
+    // When the session runs a model priced differently from the Opus 5
+    // baseline (e.g. Fable 5 at 2x Opus 5), the equivalent count diverges
+    // from the raw token count and reads as a misprice. Name the session's
+    // own model and the list-price ratio (server, baseline_price_ratio) so
+    // the direction of the conversion is explicit (CCC-1047).
+    const sessionModelName = u && u.model ? _claudeFriendlyModelName(u.model) : '';
+    const sessionDiffersBaseline = hasBaseline && sessionModelName
+      && sessionModelName !== baselineFriendly;
+    const priceRatio = u ? (Number(u.baseline_price_ratio) || 0) : 0;
     const headlineLabel = hasBaseline
-      ? baselineLabel
+      ? (sessionDiffersBaseline
+        ? sessionModelName + ' &middot; ' + baselineLabel
+        : baselineLabel)
       : (hasCacheAdjusted ? 'cache-adjusted tokens this conversation' : 'tokens this conversation');
     el.innerHTML =
       '<div class="rail-tokens-value">' + _formatTokens(total) + '</div>'
@@ -50234,7 +50259,14 @@
       + ' &middot; out ' + _formatTokens(outTok)
       + '</div>';
     el.title = (hasBaseline
-        ? total.toLocaleString() + ' ' + baselineLabel + ' (same $ cost priced at '
+        ? (sessionDiffersBaseline
+          ? sessionModelName + ' session'
+            + (priceRatio > 0
+              ? ' (list price ' + priceRatio.toFixed(2) + '\u00d7 ' + baselineFriendly + ')'
+              : '')
+            + ' \u2014 '
+          : '')
+          + total.toLocaleString() + ' ' + baselineLabel + ' (same $ cost priced at '
           + _claudeFriendlyModelName(u.baseline_model) + " rates -- raw total "
           + rawTotal.toLocaleString() + ', '
         : hasCacheAdjusted
@@ -51325,6 +51357,8 @@
     if (m) return m[1][0].toUpperCase() + m[1].slice(1) + ' ' + m[2] + '.' + m[3];
     const f = n.match(/^fable-(\d+)$/);
     if (f) return 'Fable ' + f[1];
+    const f2 = n.match(/^fable-(\d+)-(\d+)$/);
+    if (f2) return 'Fable ' + f2[1] + '.' + f2[2];
     const s = n.match(/^(opus|sonnet|haiku)-(\d+)$/);
     if (s) return s[1][0].toUpperCase() + s[1].slice(1) + ' ' + s[2];
     const bare = n.match(/^(opus|sonnet|haiku|fable)$/);
