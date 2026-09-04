@@ -4834,12 +4834,15 @@
     flex-shrink: 0;
     vertical-align: middle;
   }
-  /* Sonar-ping ring as a pseudo-element animating transform+opacity, which
-     WebKit composites on the GPU. The previous box-shadow-spread keyframe
-     forced a full CPU repaint every frame — multiplied across every live
-     sidebar row it pegged the WKWebView content process at ~95% CPU even
-     while idle. transform/opacity here is paint-free. */
+  /* Sonar-ping ring. transform+opacity is compositor-cheap in Chrome, but
+     WKWebView still CPU-paints N of these every frame and the GPU process
+     sits at 60-80%. Keep the static 7px dot on every live row; pulse only
+     the open (list-selected) one. */
   .conv-live-dot::after {
+    content: none;
+    animation: none;
+  }
+  .conv-item.list-selected .conv-live-dot::after {
     content: ''; position: absolute; inset: 0;
     border-radius: 50%;
     background: rgba(88,166,255,0.55);
@@ -5124,18 +5127,29 @@
      the beep. */
   .conv-item.conv-item-completion-glow,
   .kanban-card.conv-item-completion-glow {
+    position: relative;
+  }
+  .conv-item.conv-item-completion-glow::after,
+  .kanban-card.conv-item-completion-glow::after {
+    content: '';
+    position: absolute;
+    inset: 0;
+    border-radius: inherit;
+    pointer-events: none;
+    background: rgba(57, 210, 192, 0.22);
+    box-shadow: inset 0 0 0 1px rgba(57, 210, 192, 0.7), 0 0 14px rgba(57, 210, 192, 0.28);
     animation: conv-completion-glow 1.1s ease-in-out infinite;
+    will-change: opacity;
   }
   @keyframes conv-completion-glow {
-    0%, 100% { background: rgba(57, 210, 192, 0.10); box-shadow: inset 0 0 0 1px rgba(57, 210, 192, 0.35), 0 0 8px rgba(57, 210, 192, 0.16); }
-    50% { background: rgba(57, 210, 192, 0.30); box-shadow: inset 0 0 0 1px rgba(57, 210, 192, 0.85), 0 0 20px rgba(57, 210, 192, 0.40); }
+    0%, 100% { opacity: 0.45; }
+    50% { opacity: 1; }
   }
   @media (prefers-reduced-motion: reduce) {
-    .conv-item.conv-item-completion-glow,
-    .kanban-card.conv-item-completion-glow {
+    .conv-item.conv-item-completion-glow::after,
+    .kanban-card.conv-item-completion-glow::after {
       animation: none;
-      background: rgba(57, 210, 192, 0.24);
-      box-shadow: inset 0 0 0 1px rgba(57, 210, 192, 0.7);
+      opacity: 0.85;
     }
   }
   .conv-item.is-history-match { border-left-color: rgba(120, 168, 255, 0.5); }
@@ -7689,7 +7703,7 @@
     border-color: #49dc88;
     background: #49dc88;
     box-shadow: 0 0 4px rgba(73, 220, 136, 0.72);
-    animation: ccc-activity-dot-pulse 1.6s ease-in-out infinite;
+    animation: none;
   }
   .is-not-working .session-activity-dot {
     border-color: #657180;

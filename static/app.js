@@ -1860,9 +1860,25 @@
         '{ animation-play-state: paused !important; }';
       document.head.appendChild(st);
     }
+    // Auto-pause infinite CSS animations when the window is hidden or
+    // unfocused. WKWebView does not always set document.hidden when another
+    // app is in front, and those pulses kept the Mac GPU process at 60-80%
+    // for hours. Click still toggles a sticky user override.
+    let _animPauseUser = null;
+    function _syncAnimPause() {
+      const off = _animPauseUser !== null
+        ? _animPauseUser
+        : !!(document.hidden || (typeof document.hasFocus === 'function' && !document.hasFocus()));
+      document.documentElement.classList.toggle('ccc-anim-off', off);
+    }
     el.addEventListener('click', () => {
-      document.documentElement.classList.toggle('ccc-anim-off');
+      _animPauseUser = !document.documentElement.classList.contains('ccc-anim-off');
+      _syncAnimPause();
     });
+    document.addEventListener('visibilitychange', _syncAnimPause);
+    window.addEventListener('blur', _syncAnimPause);
+    window.addEventListener('focus', _syncAnimPause);
+    _syncAnimPause();
     const _isTyping = () => {
       const ae = document.activeElement;
       return !!ae && (ae.tagName === 'TEXTAREA' || (ae.tagName === 'INPUT' &&
