@@ -1,0 +1,1 @@
+- Added GPT-6 Astra to Codex model pickers and made it the default for Codex session launches and orchestration presets, with context limits and pricing. Explicit model overrides remain supported.
