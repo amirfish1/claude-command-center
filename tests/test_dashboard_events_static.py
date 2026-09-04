@@ -35,6 +35,21 @@ def test_dashboard_event_consumer_patches_conversations_without_refetch():
 
     assert "function _applyDashboardConversationPatch(event)" in source
     assert "Object.assign({}, row, event.patch)" in source
+    assert "pendingConversationPatches: new Map()" in source
+    assert "_dashboardEventState.pendingConversationPatches.set" in source
+    assert "function _applyPendingDashboardConversationPatches(rows)" in source
+    assert "expiresAt" in source
+    assert "pendingConversationPatches.clear()" in source
+
+
+def test_session_patches_update_the_live_overlay_and_clear_ended_state():
+    source = _dashboard_event_source()
+
+    session_patch = source[source.index("function _applyDashboardSessionPatch(event)"):]
+    session_patch = session_patch[:session_patch.index("function scheduleDashboardInvalidation")]
+    assert "_rememberLiveOverlay(id, normalizedPatch)" in session_patch
+    assert "_sessionLiveOverlay.delete(id)" in session_patch
+    assert "is_live" in session_patch
     assert "scheduleDashboardInvalidation('archive')" not in source.split(
         "function _applyDashboardConversationPatch(event)", 1
     )[1].split("function ", 1)[0]
@@ -46,6 +61,12 @@ def test_dashboard_invalidations_are_coalesced_by_resource_and_id():
     assert "function scheduleDashboardInvalidation(resource, id)" in source
     assert "_dashboardEventState.invalidations.has(key)" in source
     assert "queueMicrotask(_flushDashboardInvalidations)" in source
+    assert "_uxqItemsVersion += 1" in source
+    assert "_archiveRefreshAfterInflight = true" in source
+    assert "_uxqHealthAppliedSeq = ++_uxqHealthReqSeq" in source
+    assert "_wtWorkersVersion += 1" in source
+    assert "_fetchUxqHealth(false, true)" in source
+    assert "_fetchWtWorkers()" in source
 
 
 def test_legacy_queue_stream_is_only_a_unified_stream_fallback():

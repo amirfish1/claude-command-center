@@ -43,3 +43,5 @@ def test_archive_and_queue_timers_are_stream_failure_fallbacks_only():
     sessions_end = SOURCE.index("// The convToolbar new-session input", sessions_start)
     sessions_tick = SOURCE[sessions_start:sessions_end]
     assert "if (_dashboardEventStreamHealthy) return;" in sessions_tick
+    assert "ARCHIVE_RECOVERY_INTERVAL_MS" in SOURCE
+    assert "setInterval(_gated('archiveRecovery'" in SOURCE

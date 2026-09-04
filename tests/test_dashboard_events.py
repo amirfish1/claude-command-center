@@ -253,6 +253,51 @@ def test_external_queue_signature_change_publishes_unified_invalidation(monkeypa
     ]
 
 
+def test_external_session_state_change_publishes_patch(monkeypatch):
+    import server
+    from ccc_server.events import DashboardEventHub
+
+    hub = DashboardEventHub(capacity=8, boot_id="session-watch-test")
+    monkeypatch.setattr(server, "_dashboard_events", hub)
+    monkeypatch.setattr(server, "_sessions_state_snapshot", lambda: {
+        "session-1": {
+            "state": "waiting",
+            "question_waiting": True,
+            "needs_approval": False,
+        }
+    })
+
+    current = server._dashboard_session_watch_tick({})
+
+    assert current["session-1"]["state"] == "waiting"
+    event = hub.snapshot_since(0, boot_id="session-watch-test").events[-1]
+    assert event["topic"] == "session.patch"
+    assert event["entity"] == {"type": "session", "id": "session-1"}
+    assert event["patch"] == {
+        "state": "waiting",
+        "question_waiting": True,
+        "needs_approval": False,
+    }
+
+
+def test_shared_event_watcher_never_scans_the_full_archive_corpus():
+    import server
+
+    source = inspect.getsource(server._dashboard_event_watch_loop)
+    assert "_archive_corpus_signature" not in source
+    assert "_dashboard_archive_watch_tick" not in source
+    assert '_invalidate_dashboard("archive", reason="subscriber-baseline")' in source
+
+
+def test_queue_signature_includes_sqlite_wal_and_config_files():
+    import server
+
+    source = inspect.getsource(server._dashboard_queue_signature)
+    assert 'store_path + "-wal"' in source
+    assert 'store_path + "-shm"' in source
+    assert "_wt_config_path()" in source
+
+
 def test_unified_stream_owns_shared_external_watch_lifetime():
     import server
 

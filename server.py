@@ -210,8 +210,12 @@ def _dashboard_queue_signature():
         remote_version = gh_queue_version()
     except Exception:
         remote_version = 0
+    store_path = str(_queue_store_path())
     return (
-        _stat_signature(str(_queue_store_path())),
+        _stat_signature(store_path),
+        _stat_signature(store_path + "-wal"),
+        _stat_signature(store_path + "-shm"),
+        _stat_signature(str(_wt_config_path())),
         _stat_signature(str(_wt_workers_path())),
         remote_version,
     )
@@ -224,20 +228,58 @@ def _dashboard_queue_watch_tick(previous):
     return current
 
 
+def _dashboard_session_watch_tick(previous):
+    try:
+        raw = _sessions_state_snapshot()
+    except Exception:
+        return previous
+    current = {
+        str(sid): {
+            "state": values.get("state") or "unknown",
+            "question_waiting": bool(values.get("question_waiting")),
+            "needs_approval": bool(values.get("needs_approval")),
+        }
+        for sid, values in (raw or {}).items()
+        if isinstance(values, dict)
+    }
+    if previous is None:
+        return current
+    previous = previous or {}
+    for sid, fields in current.items():
+        if previous.get(sid) != fields:
+            _publish_dashboard_patch("session.patch", "session", sid, fields)
+    for sid in previous:
+        if sid not in current:
+            _publish_dashboard_patch(
+                "session.patch", "session", sid,
+                {"state": "ended", "question_waiting": False, "needs_approval": False},
+            )
+    return current
+
+
 def _dashboard_event_watch_loop():
     global _dashboard_event_watch_thread
     try:
         gh_queue_watch_enter()
     except Exception:
         pass
-    previous = _dashboard_queue_signature()
+    previous_queue = _dashboard_queue_signature()
+    try:
+        previous_sessions = _dashboard_session_watch_tick(None)
+    except Exception:
+        previous_sessions = {}
+    # Close the startup race between the browser's prioritized archive
+    # response and this watcher baseline. The client coalesces this with any
+    # in-flight base load and guarantees one post-baseline snapshot.
+    _invalidate_dashboard("archive", reason="subscriber-baseline")
     try:
         while True:
             with _dashboard_event_watch_lock:
                 if _dashboard_event_watch_subscribers <= 0:
                     return
             time.sleep(1.0)
-            previous = _dashboard_queue_watch_tick(previous)
+            previous_queue = _dashboard_queue_watch_tick(previous_queue)
+            previous_sessions = _dashboard_session_watch_tick(previous_sessions)
     finally:
         try:
             gh_queue_watch_exit()
