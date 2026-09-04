@@ -123,15 +123,15 @@ class RunMazkirTest(unittest.TestCase):
         tmp = tempfile.mkdtemp()
         dbp = os.path.join(tmp, "index.db")
         _index_db(dbp)
-        cands = [{"session_id": "c-1", "harness": "claude", "cwd": "/r/a", "title": "Ask tab build",
+        cands = [{"session_id": "c-100001", "harness": "claude", "cwd": "/r/a", "title": "Ask tab build",
                   "best_snippet": "«Ask» «tab»", "first_ts": "2026-08-30T00:00:00Z", "last_ts": "2026-08-31T00:00:00Z", "hits": 5}]
         prefetch = lambda argv, **kw: _Proc(stdout=json.dumps(cands))
         seen = {}
 
         def runner(argv, **kw):
             seen["argv"], seen["kw"] = argv, kw
-            return _Proc(stdout=json.dumps({"result": "Built in [[session:c-1]], continued in Kimi [[session:kimi-1]]. "
-                                                      "[[action:spawn-continue:c-1]]",
+            return _Proc(stdout=json.dumps({"result": "Built in [[session:c-100001]], continued in Kimi [[session:kimi-1]]. "
+                                                      "[[action:spawn-continue:c-100001]]",
                                             "num_turns": 2, "total_cost_usd": 0.01}))
 
         body, status = mazkir.run_mazkir("Where did I work on the Ask tab?", [{"q": "hi", "a": "yo"}], "7d",
@@ -139,10 +139,10 @@ class RunMazkirTest(unittest.TestCase):
                                          fetch=fake_fetch, prefetch_runner=prefetch, db_path=dbp)
         self.assertEqual(status, 200)
         self.assertEqual(body["agent"], "mazkir")
-        self.assertEqual(body["cited"], ["c-1", "kimi-1"])
-        self.assertEqual([s["id"] for s in body["sources"]], ["c-1", "kimi-1"])
+        self.assertEqual(body["cited"], ["c-100001", "kimi-1"])
+        self.assertEqual([s["id"] for s in body["sources"]], ["c-100001", "kimi-1"])
         self.assertEqual(body["sources"][1]["title"], "[kimi] Handoff: ccc spawn + ccc models")
-        self.assertEqual(body["actions"], [{"kind": "spawn-continue", "session_id": "c-1"}])
+        self.assertEqual(body["actions"], [{"kind": "spawn-continue", "session_id": "c-100001"}])
         self.assertEqual(body["turns"], 2)
         argv = seen["argv"]
         self.assertEqual(argv[:2], ["/x/claude", "-p"])
@@ -152,7 +152,7 @@ class RunMazkirTest(unittest.TestCase):
         cfg = json.loads(argv[argv.index("--mcp-config") + 1])
         self.assertEqual(set(cfg["mcpServers"]), {"claude-index", "ccc-state"})
         prompt = seen["kw"]["input"]
-        self.assertIn("[[session:c-1]]", prompt)
+        self.assertIn("[[session:c-100001]]", prompt)
         self.assertIn("QUESTION: Where did I work on the Ask tab?", prompt)
         self.assertIn("Q: hi", prompt)
         self.assertNotIn("CLAUDECODE", seen["kw"]["env"])

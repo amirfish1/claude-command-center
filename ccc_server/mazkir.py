@@ -616,14 +616,14 @@ def run_mazkir(question: str, history: list | None = None, range_key: str | None
     base = resolve_base(base)
     since = _range_to_since(range_key)
 
-    candidates = prefetch_sessions(question, since, runner=prefetch_runner)
-    snapshot = fleet_snapshot(base, fetch=fetch)
-    prefetch_ms = int((time.time() - t0) * 1000)
-
     if claude_bin is None:
         claude_bin = os.environ.get("CCC_CLAUDE_BIN") or _find_claude_bin()
     if not claude_bin:
         return {"ok": False, "code": "ask_engine_unavailable", "error": "claude binary not found"}, 503
+
+    candidates = prefetch_sessions(question, since, runner=prefetch_runner)
+    snapshot = fleet_snapshot(base, fetch=fetch)
+    prefetch_ms = int((time.time() - t0) * 1000)
 
     session_id = str(uuid.uuid4())
     cwd = _scratch_dir()
