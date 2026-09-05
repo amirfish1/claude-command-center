@@ -1,0 +1,1 @@
+- Keep the session title visible in desktop and narrow split-pane conversation headers.

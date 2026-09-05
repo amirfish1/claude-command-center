@@ -2386,7 +2386,7 @@
   }
   .conv-pane-last-user-message {
     min-width: 0;
-    flex: 1 1 auto;
+    flex: 0 1 50%;
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
@@ -2395,7 +2395,7 @@
     font-weight: 600;
   }
   .conv-pane-titlebar {
-    flex: 0 1 38%;
+    flex: 1 1 50%;
   }
   .conv-pane-popout {
     flex: 0 0 auto;

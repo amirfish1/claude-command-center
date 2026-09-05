@@ -93,6 +93,38 @@ class TestWebuiPaneRegressionGuards(unittest.TestCase):
             r"\.conv-input-buttons\s*\{[^}]*min-width:\s*0;[^}]*flex-wrap:\s*wrap;",
         )
 
+    def test_desktop_pane_header_reserves_half_its_space_for_session_title(self):
+        """The latest prompt must not squeeze the session identity out of view."""
+        app_css = pathlib.Path(PROJECT_ROOT, "static", "app.css").read_text(encoding="utf-8")
+
+        titlebar_css = app_css[
+            app_css.index(".conv-pane-titlebar {"):
+            app_css.index(".conv-pane-popout {", app_css.index(".conv-pane-titlebar {"))
+        ]
+        last_message_css = app_css[
+            app_css.index(".conv-pane-last-user-message {"):
+            app_css.index(".conv-pane-titlebar {", app_css.index(".conv-pane-last-user-message {"))
+        ]
+        self.assertIn("flex: 1 1 50%;", titlebar_css)
+        self.assertIn("flex: 0 1 50%;", last_message_css)
+
+    def test_narrow_split_panes_keep_their_session_title_headers(self):
+        """The single-pane mobile hide rule must not win in a split layout."""
+        app_css = pathlib.Path(PROJECT_ROOT, "static", "app.css").read_text(encoding="utf-8")
+
+        split_header_css = app_css[
+            app_css.index("body.conversation-popout .conv-pane > .conv-pane-header,"):
+            app_css.index("/* Toolbar breadcrumb", app_css.index("body.conversation-popout .conv-pane > .conv-pane-header,"))
+        ]
+        self.assertIn(
+            'body:not(.conversation-popout) .conv-split[data-orientation="vertical"] .conv-pane.has-last-user-message > .conv-pane-header',
+            split_header_css,
+        )
+        self.assertIn(
+            'body:not(.conversation-popout) .conv-split[data-orientation="horizontal"] .conv-pane.has-last-user-message > .conv-pane-header',
+            split_header_css,
+        )
+
     def test_pane_header_secondary_actions_use_overflow_menu(self):
         """Split-pane chrome stays compact without losing recording controls."""
         index_html = pathlib.Path(PROJECT_ROOT, "static", "index.html").read_text(encoding="utf-8")
