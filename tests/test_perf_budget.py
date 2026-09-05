@@ -3221,3 +3221,34 @@ def test_system_services_does_not_probe_watchtower_api_synchronously(monkeypatch
 
     server._watchtower_forget_api_probe()
     server._system_services_cache = {"ts": 0.0, "payload": None}
+
+
+def test_trash_conversation_execution_time_under_100ms(tmp_path, monkeypatch):
+    """Trashing a conversation must complete in <100ms."""
+    server._session_graph.load()
+    sid = "test-sid-perf-" + uuid.uuid4().hex[:8]
+
+    # Run through the backend trash flow
+    t0 = time.perf_counter()
+    res = server._set_conversation_trashed(sid, True)
+    cascaded = res.get("cascaded") or []
+    mutated = {sid, *cascaded}
+    server._restamp_archive_serve_cache_after_mutation(
+        archived_set=mutated,
+        trashed_set=mutated,
+        mutated_sids=mutated,
+    )
+    duration_ms = (time.perf_counter() - t0) * 1000
+    assert duration_ms < 100.0, f"Trashing session took {duration_ms:.2f}ms, expected <100ms"
+
+    # Clean up
+    server._set_conversation_trashed(sid, False)
+
+
+def test_ui_trash_is_optimistic():
+    """UI conv-trash-btn click handler must optimistically update before awaiting network."""
+    app_js = (Path(__file__).parent.parent / "static" / "app.js").read_text(encoding="utf-8")
+    assert "item.style.display = 'none'" in app_js, "Trash button must hide row immediately"
+    assert "setOptimisticOverride(sessionId, { archived: targetArchived, trashed: wantTrashed })" in app_js
+    assert "requestAnimationFrame(() => {" in app_js, "Sidebar re-render must be scheduled without blocking frame"
+

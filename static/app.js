@@ -36785,17 +36785,39 @@
         if (!Array.isArray(sessionIds) || !sessionIds.length) return;
         if (!confirm('Move ' + sessionIds.length + ' sessions to Trash? You can restore them later.')) return;
         btn.disabled = true;
-        try {
-          for (const sessionId of sessionIds) {
-            const data = await ccPostJson('/api/conversations/' + encodeURIComponent(sessionId) + '/trash', { trashed: true });
-            if (!data.ok) throw new Error(data.error || 'trash failed');
+        const groupEl = btn.closest('.conv-repeat-group') || btn.closest('.conv-item');
+        if (groupEl) groupEl.style.display = 'none';
+
+        const sidSet = new Set(sessionIds);
+        const patchRows = (rows) => {
+          if (!Array.isArray(rows)) return;
+          for (const r of rows) {
+            if (r && sidSet.has(r.session_id || r.id)) {
+              r.archived = true;
+              r.trashed = true;
+            }
           }
-          await refreshArchiveData({ force: true });
-          renderSidebar(filterConversations($convSearch.value));
+        };
+        patchRows(conversationsData);
+        patchRows(archiveData);
+        patchRows(currentRepoBacklogData);
+        sessionIds.forEach(sid => setOptimisticOverride(sid, { archived: true, trashed: true }));
+        requestAnimationFrame(() => {
+          renderSidebar(filterConversations($convSearch.value), { force: true });
+        });
+
+        try {
+          await Promise.all(sessionIds.map(sessionId =>
+            ccPostJson('/api/conversations/' + encodeURIComponent(sessionId) + '/trash', { trashed: true })
+              .then(data => { if (!data.ok) throw new Error(data.error || 'trash failed'); })
+          ));
           showOpToast('Moved ' + sessionIds.length + ' sessions to Trash');
         } catch (err) {
           showOpToast('Move to Trash failed (' + err.message + ')', 'error');
+          if (groupEl) groupEl.style.display = '';
           btn.disabled = false;
+          await refreshArchiveData({ force: true });
+          renderSidebar(filterConversations($convSearch.value), { force: true });
         }
       });
     });
@@ -38590,53 +38612,84 @@
         const nextSelectId = wantTrashed && currentConversation === convId
           ? _visibleConversationNeighborId(convId, item)
           : null;
-        btn.disabled = true;
-        btn.classList.add('is-pending');
-        btn.setAttribute('aria-busy', 'true');
-        try {
-          const c = conversationsData.find(x => x.id === convId || x.session_id === sessionId)
-            || (Array.isArray(archiveData) ? archiveData.find(x => x.id === convId || x.session_id === sessionId) : null);
-          const repoPath = (c && rowRepoPath(c)) || item.dataset.repoPath || '';
-          const data = await ccPostJson('/api/conversations/' + encodeURIComponent(convId) + '/trash', {
-            session_id: sessionId,
-            repo_path: repoPath,
-            trashed: wantTrashed,
-          });
+
+        const c = conversationsData.find(x => x.id === convId || x.session_id === sessionId)
+          || (Array.isArray(archiveData) ? archiveData.find(x => x.id === convId || x.session_id === sessionId) : null);
+        const priorArchived = c ? !!c.archived : false;
+        const priorTrashed = c ? !!c.trashed : false;
+        const repoPath = (c && rowRepoPath(c)) || item.dataset.repoPath || '';
+
+        // Immediate visual feedback (<16ms frame): hide row instantly so user feels zero delay
+        if (item) {
+          item.style.display = 'none';
+        }
+
+        const patchLifecycle = (rows, arch, tr) => {
+          if (!Array.isArray(rows)) return;
+          for (const row of rows) {
+            if (!row) continue;
+            if (row.id === convId || (row.session_id || row.id) === sessionId) {
+              row.archived = arch;
+              row.trashed = tr;
+            }
+          }
+        };
+
+        const targetArchived = wantTrashed ? true : priorArchived;
+        patchLifecycle(conversationsData, targetArchived, wantTrashed);
+        patchLifecycle(archiveData, targetArchived, wantTrashed);
+        patchLifecycle(currentRepoBacklogData, targetArchived, wantTrashed);
+        setOptimisticOverride(sessionId, { archived: targetArchived, trashed: wantTrashed });
+
+        if (wantTrashed && nextSelectId) {
+          selectConversation(nextSelectId);
+        }
+
+        // Re-render sidebar in next animation frame to avoid blocking click event
+        requestAnimationFrame(() => {
+          renderSidebar(filterConversations($convSearch.value), { force: true });
+        });
+
+        ccPostJson('/api/conversations/' + encodeURIComponent(convId) + '/trash', {
+          session_id: sessionId,
+          repo_path: repoPath,
+          trashed: wantTrashed,
+        }).then(data => {
           if (!data.ok) throw new Error(data.error || 'trash transition failed');
           const cascaded = Array.isArray(data.cascaded) ? data.cascaded : [];
-          const patchLifecycle = (rows) => {
-            if (!Array.isArray(rows)) return;
-            for (const row of rows) {
-              if (!row) continue;
-              if (row.id === convId || (row.session_id || row.id) === sessionId) {
-                row.archived = !!data.archived;
-                row.trashed = !!data.trashed;
-              }
-              // Cascade: trash descendants that followed the parent.
-              if (cascaded.length && cascaded.includes(row.session_id)) {
-                row.archived = true;
-                row.trashed = true;
-              }
+          if (cascaded.length) {
+            for (const dsid of cascaded) {
+              setOptimisticOverride(dsid, { archived: true, trashed: true });
             }
-          };
-          patchLifecycle(conversationsData);
-          patchLifecycle(archiveData);
-          patchLifecycle(currentRepoBacklogData);
-          setOptimisticOverride(sessionId, { archived: !!data.archived, trashed: !!data.trashed });
-          cascaded.forEach(dsid => setOptimisticOverride(dsid, { archived: true, trashed: true }));
-          renderSidebar(filterConversations($convSearch.value));
-          if (data.trashed && nextSelectId) {
-            selectConversation(nextSelectId);
+            const patchCascaded = (rows) => {
+              if (!Array.isArray(rows)) return;
+              for (const row of rows) {
+                if (row && cascaded.includes(row.session_id)) {
+                  row.archived = true;
+                  row.trashed = true;
+                }
+              }
+            };
+            patchCascaded(conversationsData);
+            patchCascaded(archiveData);
+            patchCascaded(currentRepoBacklogData);
+            renderSidebar(filterConversations($convSearch.value), { force: true });
           }
           showOpToast(data.trashed
             ? (cascaded.length ? 'Moved to Trash (' + (cascaded.length + 1) + ' sessions)' : 'Moved to Trash')
             : 'Untrashed to Archived');
-        } catch (err) {
+        }).catch(err => {
+          patchLifecycle(conversationsData, priorArchived, priorTrashed);
+          patchLifecycle(archiveData, priorArchived, priorTrashed);
+          patchLifecycle(currentRepoBacklogData, priorArchived, priorTrashed);
+          _optimisticOverrides.delete(sessionId);
+          if (item) item.style.display = '';
           btn.disabled = false;
           btn.classList.remove('is-pending');
           btn.removeAttribute('aria-busy');
+          renderSidebar(filterConversations($convSearch.value), { force: true });
           showOpToast((wantTrashed ? 'Trash' : 'Untrash') + ' failed (' + err.message + ')', 'error');
-        }
+        });
       });
     });
     $convList.querySelectorAll('.conv-wake-btn').forEach(btn => {

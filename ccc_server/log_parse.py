@@ -1621,12 +1621,23 @@ def _auto_unarchive_live_sessions(archived):
     return keep
 
 
+_archived_conversations_cache = {"mtime": 0.0, "size": -1, "data": []}
+_trashed_conversations_cache = {"mtime": 0.0, "size": -1, "data": []}
+
+
 def _load_archived_conversations(*, sweep=True):
     """Load list of archived session_ids from the side-car file."""
     with _conversation_lifecycle_lock:
         try:
-            data = json.loads(_core.ARCHIVED_CONVERSATIONS_FILE.read_text())
-            archived = [s for s in data if isinstance(s, str)] if isinstance(data, list) else []
+            st = _core.ARCHIVED_CONVERSATIONS_FILE.stat()
+            if st.st_mtime == _archived_conversations_cache["mtime"] and st.st_size == _archived_conversations_cache["size"]:
+                archived = list(_archived_conversations_cache["data"])
+            else:
+                data = json.loads(_core.ARCHIVED_CONVERSATIONS_FILE.read_text())
+                archived = [s for s in data if isinstance(s, str)] if isinstance(data, list) else []
+                _archived_conversations_cache["mtime"] = st.st_mtime
+                _archived_conversations_cache["size"] = st.st_size
+                _archived_conversations_cache["data"] = list(archived)
         except (OSError, json.JSONDecodeError):
             archived = []
         # Trash is a terminal subset of Archive. Repair older split-brain
@@ -1650,6 +1661,13 @@ def _write_archived_conversations(archived):
     """Write an already-normalized archive list while the lifecycle lock is held."""
     _core.LOG_VIEWER_STATE_DIR.mkdir(parents=True, exist_ok=True)
     _core.ARCHIVED_CONVERSATIONS_FILE.write_text(json.dumps(archived, indent=2))
+    try:
+        st = _core.ARCHIVED_CONVERSATIONS_FILE.stat()
+        _archived_conversations_cache["mtime"] = st.st_mtime
+        _archived_conversations_cache["size"] = st.st_size
+        _archived_conversations_cache["data"] = list(archived)
+    except OSError:
+        pass
     return archived
 
 
@@ -1668,9 +1686,16 @@ def _load_trashed_conversations(*, sweep=True):
     """Load trashed session ids. `sweep` exists for archive-helper parity."""
     with _conversation_lifecycle_lock:
         try:
+            st = _core.TRASHED_CONVERSATIONS_FILE.stat()
+            if st.st_mtime == _trashed_conversations_cache["mtime"] and st.st_size == _trashed_conversations_cache["size"]:
+                return list(_trashed_conversations_cache["data"])
             data = json.loads(_core.TRASHED_CONVERSATIONS_FILE.read_text())
             if isinstance(data, list):
-                return [sid for sid in data if isinstance(sid, str)]
+                res = [sid for sid in data if isinstance(sid, str)]
+                _trashed_conversations_cache["mtime"] = st.st_mtime
+                _trashed_conversations_cache["size"] = st.st_size
+                _trashed_conversations_cache["data"] = list(res)
+                return res
         except (OSError, json.JSONDecodeError):
             pass
         return []
@@ -1683,6 +1708,13 @@ def _save_trashed_conversations(trashed):
         if not isinstance(trashed, list):
             trashed = []
         _core.TRASHED_CONVERSATIONS_FILE.write_text(json.dumps(trashed, indent=2))
+        try:
+            st = _core.TRASHED_CONVERSATIONS_FILE.stat()
+            _trashed_conversations_cache["mtime"] = st.st_mtime
+            _trashed_conversations_cache["size"] = st.st_size
+            _trashed_conversations_cache["data"] = list(trashed)
+        except OSError:
+            pass
         return trashed
 
 
@@ -1844,6 +1876,9 @@ def _find_descendant_sessions(sid, max_depth=6):
     return descendants
 
 
+_continuation_origin_cache = {}
+
+
 def _find_continuation_ancestors(sid, max_depth=20):
     """Return the chain of continuation-origin ancestors of ``sid``.
 
@@ -1867,16 +1902,20 @@ def _find_continuation_ancestors(sid, max_depth=20):
     seen = {sid}
     current = sid
     for _ in range(max_depth):
-        try:
-            path = _core._find_session_jsonl(current)
-            if path is None:
-                path = _core._find_session_jsonl_any_project(current)
-            if path is None:
+        origin = _continuation_origin_cache.get(current)
+        if origin is None:
+            try:
+                path = _core._find_session_jsonl(current)
+                if path is None:
+                    path = _core._find_session_jsonl_any_project(current)
+                if path is None:
+                    _continuation_origin_cache[current] = ""
+                    break
+                origin = _core._continued_from_session_id_from_transcript(path)
+                origin = str(origin or "").strip()
+                _continuation_origin_cache[current] = origin
+            except Exception:
                 break
-            origin = _core._continued_from_session_id_from_transcript(path)
-        except Exception:
-            break
-        origin = str(origin or "").strip()
         if not origin or origin in seen:
             break
         ancestors.append(origin)

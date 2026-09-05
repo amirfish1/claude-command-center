@@ -1322,17 +1322,45 @@ def _save_session_name_override(session_id, name):
     return current
 
 
+_session_jsonl_path_cache = {}
+_session_jsonl_negative_cache = {}
+
+
 def _find_session_jsonl(session_id):
     """Scan ~/.claude/projects/*/ for <session_id>.jsonl. Returns Path or None."""
-    if not _core.PROJECTS_ROOT.is_dir():
+    sid = str(session_id or "").strip()
+    if not sid or not _core.PROJECTS_ROOT.is_dir():
         return None
-    target = session_id + ".jsonl"
-    for project_dir in _core.PROJECTS_ROOT.iterdir():
-        if not project_dir.is_dir():
-            continue
-        candidate = project_dir / target
-        if candidate.is_file():
-            return candidate
+    cached = _session_jsonl_path_cache.get(sid)
+    if cached is not None:
+        if cached.is_file():
+            return cached
+        _session_jsonl_path_cache.pop(sid, None)
+    now = time.time()
+    neg = _session_jsonl_negative_cache.get(sid)
+    if neg and (now - neg) < 10.0:
+        return None
+    meta_cache = getattr(_core, "_conv_meta_cache", None)
+    if meta_cache:
+        suffix = "/" + sid + ".jsonl"
+        for p_str in meta_cache:
+            if p_str.endswith(suffix):
+                p = Path(p_str)
+                if p.is_file():
+                    _session_jsonl_path_cache[sid] = p
+                    return p
+    target = sid + ".jsonl"
+    try:
+        for project_dir in _core.PROJECTS_ROOT.iterdir():
+            if not project_dir.is_dir():
+                continue
+            candidate = project_dir / target
+            if candidate.is_file():
+                _session_jsonl_path_cache[sid] = candidate
+                return candidate
+    except OSError:
+        pass
+    _session_jsonl_negative_cache[sid] = now
     return None
 
 

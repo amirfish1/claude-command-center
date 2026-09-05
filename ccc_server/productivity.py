@@ -749,6 +749,10 @@ def _kill_session_by_id(session_id):
         pid = data.get("pid")
         if not pid:
             continue
+        try:
+            os.kill(int(pid), 0)
+        except OSError:
+            continue
         matched += 1
         if not _core._pid_is_engine_process(pid, "claude"):
             # Stale sessions/<pid>.json — process is gone or the PID got
