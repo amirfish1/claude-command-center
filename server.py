@@ -322,12 +322,13 @@ def _dashboard_event_watch_exit():
 # format. Distinct from CODEX_TELEMETRY_FILE (JSONL, machine-oriented, one
 # record per codex RPC stage) and _RESUME_LEDGER_FILE (JSONL, internal wake/
 # resume bookkeeping) -- this one is for a human to skim "what did CCC do".
-if "pytest" in sys.modules:
+if "pytest" in sys.modules or "unittest" in sys.modules:
     # The test suite re-imports this module fresh per test (`sys.modules.pop
     # ("server"); import server`) without mocking this path, so every test
     # exercising an inject/spawn/kill code path wrote real lines into the
     # live dashboard's log -- polluting the file a human actually tails to
-    # debug production issues. Redirect for the whole pytest process instead
+    # debug production issues. Cover pytest and direct unittest runs, and
+    # redirect for the whole test process instead
     # of a per-test fixture, since that survives arbitrary re-imports.
     ACTIVITY_LOG_FILE = Path(tempfile.gettempdir()) / "ccc-test-activity.log"
 else:
@@ -9232,8 +9233,8 @@ _SERVER_START_TS = time.time()
 # behavior. Off the hot path: the ledger is written only at lifecycle
 # transitions (reuse/spawn/exit/retire/server_start), never per row or per poll
 # iteration (the exit write is guarded to fire once via `_cleanup_done`).
-if "pytest" in sys.modules:
-    # Same rationale as ACTIVITY_LOG_FILE's pytest redirect at line 132:
+if "pytest" in sys.modules or "unittest" in sys.modules:
+    # Same rationale as ACTIVITY_LOG_FILE's test-runner redirect:
     # the test suite re-imports this module fresh per test, and without a
     # redirect every test exercising an interrupt-detection code path would
     # write real lines into the live dashboard's resume ledger. Both the
