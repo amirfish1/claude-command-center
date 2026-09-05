@@ -1056,41 +1056,69 @@
     font-size: 14px; font-weight: 600; color: var(--orange, #d29922);
   }
   .session-interrupted-sub { font-size: 12px; color: var(--text-muted); }
-  /* Queue candidates belong at the composer, not in scrollback. Keep pasted
-     image previews recognizable without letting attachments dominate the
-     narrow handoff strip. */
+  /* Queued work has its own space above the composer. Each message gets a
+     full-width body and a separate action row, including at phone widths. */
   .queued-steer-tray {
     display: flex;
     flex-direction: column;
-    gap: 4px;
-    max-height: 124px;
+    flex: 0 1 auto;
+    min-height: 0;
+    min-width: 0;
+    gap: 8px;
+    max-height: min(38vh, 360px);
     overflow-y: auto;
-    padding: 6px 14px 0;
+    overscroll-behavior: contain;
+    padding: 8px 12px;
     border-top: 1px solid color-mix(in srgb, var(--orange, #d29922) 28%, transparent);
+    border-bottom: 1px solid var(--border);
     background: color-mix(in srgb, var(--surface) 88%, var(--bg));
   }
+  .conv-pane > .queued-steer-tray { grid-area: queued; order: 3; }
   .queued-steer-tray .event {
     position: relative;
+    flex: 0 0 auto;
+    box-sizing: border-box;
+    width: 100%;
+    max-width: none;
+    min-width: 0;
     margin: 0;
-    padding: 5px 190px 5px 10px;
+    padding: 10px;
     font-size: 12px;
   }
   .queued-steer-tray .event.user_text {
     background: rgba(63, 185, 80, 0.045);
     border-left-color: color-mix(in srgb, var(--green) 65%, transparent);
+    font-style: normal;
+    opacity: 1;
+  }
+  .queued-steer-tray .event .label,
+  .queued-steer-tray .event .msg-ts { display: none; }
+  .queued-steer-actions {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    justify-content: flex-end;
+    gap: 8px;
+    margin-top: 8px;
+  }
+  .queued-steer-actions[hidden], .queued-steer-all-btn[hidden] { display: none; }
+  .queued-steer-tray .event.user_text .queued-steer-actions > button {
+    position: static;
+    inset: auto;
+    transform: none;
+    min-height: 28px;
+    padding: 4px 8px;
+    font-size: 12px;
   }
   .queued-steer-tray .send-queued-steer {
-    position: absolute;
-    top: 5px;
-    right: 8px;
+    position: static;
     opacity: 1;
-    padding: 3px 12px;
-    font-size: 11px;
+    padding: 4px 12px;
+    font-size: 12px;
     font-weight: 600;
     border-color: var(--orange, #d29922);
     background: var(--orange, #d29922);
     color: #1c1405;
-    box-shadow: 0 1px 4px color-mix(in srgb, var(--orange, #d29922) 40%, transparent);
   }
   .queued-steer-tray .send-queued-steer:hover {
     background: #f0b93a;
@@ -1098,9 +1126,7 @@
     color: #1c1405;
   }
   .queued-steer-tray .user-message-copy {
-    position: absolute;
-    top: 6px;
-    right: 78px;
+    position: static;
     opacity: 1;
     border-color: color-mix(in srgb, var(--text-muted) 45%, transparent);
     color: var(--text-muted);
@@ -1112,34 +1138,39 @@
     background: rgba(63, 185, 80, 0.12);
   }
   .queued-steer-tray .cancel-queued-message {
-    position: absolute;
-    top: 6px;
-    right: 128px;
+    position: static;
     flex-shrink: 0;
-    padding: 1px 7px;
+    padding: 4px 8px;
     border: 1px solid color-mix(in srgb, var(--text-muted) 45%, transparent);
     border-radius: 3px;
     background: transparent;
     color: var(--text-muted);
-    font-size: 10px;
+    font-size: 12px;
     cursor: pointer;
-    opacity: 0.85;
     white-space: nowrap;
   }
   .queued-steer-tray .cancel-queued-message:hover {
-    opacity: 1;
     background: color-mix(in srgb, var(--text-muted) 10%, transparent);
   }
   .queued-steer-tray .cancel-queued-message:disabled,
-  .queued-steer-tray .send-queued-steer:disabled {
-    cursor: default;
-    opacity: 0.45;
+  .queued-steer-tray .send-queued-steer:disabled { cursor: default; opacity: 0.45; }
+  .queued-steer-tray .event .user-msg {
+    margin-top: 0;
+    font-size: 13px;
+    line-height: 1.5;
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
   }
-  .queued-steer-tray .event .user-msg { margin-top: 2px; font-size: 13px; }
+  .queued-steer-tray .send-queued-note { flex-wrap: wrap; }
   .conversations-view .event.user_text.is-queued-steer-duplicate { display: none; }
   /* One action for the whole tray: every queued message delivered as a single
      turn, instead of one interrupt-and-resend round per message. */
   .queued-steer-all-bar {
+    position: sticky;
+    top: -8px;
+    z-index: 1;
+    flex: 0 0 auto;
+    background: color-mix(in srgb, var(--surface) 88%, var(--bg));
     display: flex;
     align-items: center;
     justify-content: space-between;
@@ -1877,6 +1908,28 @@
   /* Pending / queued echo states keep readable without the green chrome. */
   .conv-pane.is-webui-session .event.user_text.pending,
   .conv-pane.is-webui-session .event.user_text.not-acknowledged { font-style: italic; }
+
+  /* A queue card uses the available panel width, even when this engine's
+     transcript normally right-aligns blue bubbles at 78% width. */
+  .conv-pane.is-webui-session .queued-steer-tray .event.user_text {
+    align-items: stretch;
+    padding: 10px;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    background: var(--surface);
+    font-style: normal;
+  }
+  .conv-pane.is-webui-session .queued-steer-tray .event.user_text .user-msg {
+    align-self: stretch;
+    width: 100%;
+    max-width: none;
+    box-sizing: border-box;
+    padding: 0;
+    background: none;
+    border: none;
+    color: var(--text);
+    font-size: 13px;
+  }
 
   /* Assistant text: plain left-aligned, no bubble/background/role label. */
   .conv-pane.is-webui-session .kimi-turn .assistant-text {
@@ -17431,12 +17484,13 @@
 body.status-pos-right .conv-pane.has-status-rail {
   display: grid;
   grid-template-columns: minmax(0, 1fr) var(--status-rail-width, 260px);
-  grid-template-rows: auto 1fr auto auto auto auto auto;
+  grid-template-rows: auto 1fr auto auto auto auto auto auto;
   grid-template-areas:
     "header  rail"
     "conv    rail"
     "goal    rail"
     "model   rail"
+    "queued rail"
     "input   rail"
     "context rail"
     "hint    rail";
@@ -17449,6 +17503,7 @@ body.status-pos-right .conv-pane.has-status-rail.has-new-session-context {
     "context rail"
     "goal    rail"
     "model   rail"
+    "queued rail"
     "input   rail"
     "hint    rail";
 }
@@ -17979,6 +18034,7 @@ body.status-pos-right.status-rail-collapsed .conv-pane.has-status-rail {
     "conv"
     "goal"
     "model"
+    "queued"
     "input"
     "hint"
     "context";
@@ -17990,6 +18046,7 @@ body.status-pos-right.status-rail-collapsed .conv-pane.has-status-rail.has-new-s
     "context"
     "goal"
     "model"
+    "queued"
     "input"
     "hint";
 }
@@ -24945,13 +25002,14 @@ body.has-gc-reader .pwa-install-banner {
    an explicit row for the per-pane selector so it does not fall
    into implicit-grid placement or displaces the composer. */
 body.status-pos-right .conv-pane.has-status-rail {
-  grid-template-rows: auto auto 1fr auto auto auto auto auto;
+  grid-template-rows: auto auto 1fr auto auto auto auto auto auto;
   grid-template-areas:
     "header rail"
     "present-toolbar rail"
     "conv rail"
     "goal rail"
     "model rail"
+    "queued rail"
     "input rail"
     "context rail"
     "hint rail";
@@ -24964,6 +25022,7 @@ body.status-pos-right .conv-pane.has-status-rail.has-new-session-context {
     "context rail"
     "goal rail"
     "model rail"
+    "queued rail"
     "input rail"
     "hint rail";
 }
@@ -24975,6 +25034,7 @@ body.status-pos-right.status-rail-collapsed .conv-pane.has-status-rail {
     "conv"
     "goal"
     "model"
+    "queued"
     "input"
     "hint"
     "context";
@@ -24987,6 +25047,7 @@ body.status-pos-right.status-rail-collapsed .conv-pane.has-status-rail.has-new-s
     "context"
     "goal"
     "model"
+    "queued"
     "input"
     "hint";
 }
@@ -25825,6 +25886,7 @@ a.settings-row:focus-visible .settings-launcher-btn { text-decoration: underline
       "context"
       "goal"
       "model"
+      "queued"
       "input"
       "hint";
   }
@@ -25869,12 +25931,14 @@ a.settings-row:focus-visible .settings-launcher-btn { text-decoration: underline
     font: 600 12px/1 inherit;
   }
   body.conversation-popout.popout-rail-forced .conv-pane.has-status-rail {
+    grid-template-rows: auto 1fr auto auto auto auto auto auto;
     grid-template-columns: minmax(0, 1fr) var(--status-rail-width, 260px);
     grid-template-areas:
       "header  rail"
       "conv    rail"
       "goal    rail"
       "model   rail"
+      "queued rail"
       "input   rail"
       "context rail"
       "hint    rail";

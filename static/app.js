@@ -8470,6 +8470,7 @@
     ev.preventDefault();
     ev.stopPropagation();
     const row = btn.closest('.event.user_text');
+    const tray = row && row.closest('.queued-steer-tray');
     const msg = row && row.querySelector('.user-msg');
     const text = (msg && (msg.getAttribute('data-raw-text') || msg.textContent || '')).trim();
     const sid = btn.dataset.sessionId || '';
@@ -8496,6 +8497,7 @@
       }
       if (row && row._pendingRef) removePendingSendEcho(row._pendingRef);
       else if (row) row.remove();
+      if (tray) syncQueuedSteerAllControl(tray, sid);
       showOpToast('Queued message cancelled.');
       setTimeout(refreshConversationList, 500);
     } catch (err) {
@@ -10082,22 +10084,26 @@
     return !!(view && view.querySelector('.event.user_text.pending, .event.user_text.send-queued, .event.user_text.send-delivered'));
   }
 
-  function syncPendingSendsMapForConv(pane, convId) {
+  function syncPendingSendsMapForConv(pane, convId, entries) {
     if (!pane || !convId) return;
+    const pendingEntries = entries || _pendingSends;
     if (!pane.pendingSendsByConv) pane.pendingSendsByConv = {};
-    if (!_pendingSends.length) {
+    if (!pendingEntries.length) {
       delete pane.pendingSendsByConv[convId];
       return;
     }
-    pane.pendingSendsByConv[convId] = _pendingSends.map(p => ({
+    pane.pendingSendsByConv[convId] = pendingEntries.map(p => ({
       text: p.text,
       ts: Number(p.ts || Date.now()),
       delivered: !!p.delivered,
+      queued: !!p.queued && !p.delivered,
+      queuedLabel: p.queuedLabel || '',
     }));
   }
 
   function appendPendingSendEcho(text, sid, paneId) {
-    const pending = { text, sid, element: null, list: null, entry: null };
+    const pending = { text, sid, paneId: paneId || activePaneId(), conversationId: currentConversation,
+      element: null, list: null, entry: null };
     const $view = getConvViewForPane(paneId) || getConvView();
     if ($view) {
       const pendingDiv = document.createElement('div');
@@ -10114,6 +10120,7 @@
 
       const entry = { text, sid, element: pendingDiv, ts: Date.now(), timer: null };
       pending.element = pendingDiv;
+      pendingDiv._pendingRef = pending;
       pending.list = _pendingSends;
       pending.entry = entry;
       pending.list.push(entry);
@@ -10202,11 +10209,20 @@
   // calm, persistent "queued" state and cancel its not-acknowledged timer, so
   // a long-running turn doesn't make a safely-parked message look dropped.
   // When the input finally delivers, the normal JSONL dedupe removes the echo.
-  function markPendingSendQueued(pending, label) {
+  function markPendingSendQueued(pending, label, opts) {
     if (!pending || !pending.entry) return;
     if (pending.entry.timer) { clearTimeout(pending.entry.timer); pending.entry.timer = null; }
+    pending.entry.queued = true;
+    pending.entry.queuedLabel = label || 'Will send when the session finishes its current step.';
     const div = pending.element;
     if (!div) return;
+    const pid = pending.paneId || activePaneId();
+    const pane = paneByPaneId(pid);
+    const convId = pending.conversationId || (pane && pane.conversationId);
+    if (pane && convId && pane.conversationId === convId) syncPendingSendsMapForConv(pane, convId, pending.list);
+    // The original queue POST can finish after the user has begun steering
+    // its server-confirmed card. Retain the in-flight move and rollback DOM.
+    if (div.classList.contains('steering-optimistic')) return;
     div.classList.remove('pending');
     div.classList.add('send-queued');
     // Store reference so the cancel button can reach removePendingSendEcho.
@@ -10217,7 +10233,7 @@
       note.className = 'send-queued-note';
       div.appendChild(note);
     }
-    const msg = label || 'Will send when the session finishes its current step.';
+    const msg = pending.entry.queuedLabel;
     note.innerHTML = '<span class="send-queued-icon">⏳</span>'
       + '<span class="send-queued-text">' + escapeHtml(msg) + '</span>'
       + '<button type="button" class="user-message-copy" data-copy-user-message title="Copy message" aria-label="Copy message">&#128203;</button>'
@@ -10227,6 +10243,12 @@
       + '<button type="button" class="send-queued-cancel" data-cancel-queued-message'
       + ' data-session-id="' + escapeAttr(pending.sid || '') + '"'
       + ' title="Cancel - discard this queued message">✕ Cancel</button>';
+    // Every transport's queue acknowledgement takes this path, including
+    // Codex app-server replies and missing-directory holds.
+    if (!(opts && opts.sync === false) && pane && pane.conversationId === convId) {
+      const view = getConvViewForPane(pid);
+      if (view) syncQueuedSteerTray(view, pid, false);
+    }
   }
 
   // State 2 of the echo lifecycle: the server confirmed the inject reached the
@@ -10245,6 +10267,8 @@
     if (div.classList.contains('send-queued') || div.classList.contains('not-acknowledged')) return;
     div.classList.remove('pending');
     div.classList.add('send-delivered');
+    div.querySelector('.queued-steer-actions')?.remove();
+    div.querySelector('.send-queued-note')?.remove();
     let note = div.querySelector('.send-delivered-note');
     if (!note) {
       note = document.createElement('div');
@@ -10452,35 +10476,66 @@
     if (!$view) return;
     const sid = sessionIdByConv[convId] || convId;
     const now = Date.now();
-    // Delivered sends are confirmed — keep them regardless of age (CCC-154);
-    // only optimistic, not-yet-acknowledged echoes expire after the window.
-    const fresh = saved.filter(row => row && row.text && (row.delivered
+    // Delivered and queued sends are acknowledged; only unacknowledged
+    // optimistic echoes expire while a long turn is still running.
+    const fresh = saved.filter(row => row && row.text && (row.delivered || row.queued
       || (Number(row.ts) && (now - Number(row.ts)) <= _PENDING_SEND_ECHO_MAX_MS)));
     if (fresh.length !== saved.length) {
       if (fresh.length) pane.pendingSendsByConv[convId] = fresh;
       else delete pane.pendingSendsByConv[convId];
     }
+    const shown = Array.from($view.querySelectorAll('.event.user_text'));
+    const paneEl = $view.closest('.conv-pane');
+    const tray = paneEl && paneEl.querySelector('.queued-steer-tray');
+    if (tray && tray.dataset.conversationId === String(convId)) {
+      shown.push(...tray.querySelectorAll('.event.user_text'));
+    }
+    // Each existing row represents one send. Snapshot before restoring so a
+    // newly appended echo cannot swallow a second genuinely repeated send.
     for (const row of fresh) {
       const text = row && row.text;
       if (!text) continue;
       const normed = _normSend(text);
-      let alreadyShown = false;
-      for (const el of $view.querySelectorAll('.event.user_text')) {
+      const shownIndex = shown.findIndex(el => {
         const userMsg = el.querySelector('.user-msg');
-        if (!userMsg) continue;
+        if (!userMsg) return false;
         const raw = userMsg.getAttribute('data-raw-text') || userMsg.textContent;
-        if (_normSend(raw) === normed) {
-          alreadyShown = true;
-          break;
+        if (_normSend(raw) !== normed) return false;
+        if (el.matches('.pending, .send-queued, .send-delivered, .not-acknowledged')) return true;
+        // Earlier history with identical words is not this new send's ACK.
+        const stamp = Number(el.dataset.tsEpoch || 0);
+        return !!stamp && stamp >= Number(row.ts || 0);
+      });
+      if (shownIndex >= 0) {
+        const existing = shown.splice(shownIndex, 1)[0];
+        if (existing.dataset.queuedSteerServer === 'true' && !existing._pendingRef) {
+          // After a session switch the durable queue card can arrive before
+          // its saved local echo. Reattach bookkeeping to that same node so
+          // Cancel/Steer also clear the saved echo instead of resurrecting it.
+          let entry = _pendingSends.find(p => p.sid === sid && _normSend(p.text) === normed && !p.element?.isConnected);
+          let pending = entry && entry.element && entry.element._pendingRef;
+          if (!entry) {
+            entry = { text, sid, ts: Number(row.ts) || now, timer: null };
+            _pendingSends.push(entry);
+          }
+          if (!pending) pending = { text, sid, paneId, conversationId: convId, list: _pendingSends, entry };
+          entry.element = existing;
+          pending.element = existing;
+          existing._pendingRef = pending;
+          delete existing.dataset.queuedSteerServer;
+          existing.classList.remove('server-queued');
+          markPendingSendQueued(pending, row.queuedLabel, { sync: false });
         }
-      }
-      if (!alreadyShown) {
+      } else {
         const restored = appendPendingSendEcho(text, sid, paneId);
+        if (restored && restored.entry) restored.entry.ts = Number(row.ts) || now;
         // Re-create it in the delivered state so it keeps the "✓ Delivered"
         // note and stops re-arming the not-acknowledged timer (CCC-154).
         if (row.delivered && restored) markPendingSendDelivered(restored, null);
+        else if (row.queued && restored) markPendingSendQueued(restored, row.queuedLabel);
       }
     }
+    syncQueuedSteerTray($view, paneId, false);
   }
 
   function restoreInputAfterSendFailure($input, text) {
@@ -41782,7 +41837,7 @@
         if ((sessionSourceByConv[id] || '') !== 'hermes') _prefetchConversationTail(id);
       } catch (_) {}
     }
-    const staleQueuedTray = getConvInputBarForPane(paneId)?.querySelector('.queued-steer-tray');
+    const staleQueuedTray = getConvInputBarForPane(paneId)?.closest('.conv-pane')?.querySelector('.queued-steer-tray');
     if (staleQueuedTray && staleQueuedTray.dataset.conversationId !== String(id || '')) {
       staleQueuedTray.remove();
     }
@@ -53299,9 +53354,11 @@
       // neither, but keep the node so a revert can restore it intact.
       const note = row.querySelector('.send-queued-note');
       if (note) note.hidden = true;
+      const actions = row.querySelector('.queued-steer-actions');
+      if (actions) actions.hidden = true;
       if ($view) $view.appendChild(row);
       moved.push(row);
-      if (tray && !queuedSteerCardCount(tray)) tray.remove();
+      if (tray) syncQueuedSteerAllControl(tray);
     });
     if ($view) scrollConversationToEnd($view);
     return moved;
@@ -53320,6 +53377,7 @@
     row.classList.add('send-delivered');
     const note = row.querySelector('.send-queued-note');
     if (note) note.remove();
+    row.querySelector('.queued-steer-actions')?.remove();
   }
 
   function revertOptimisticSteerMove(moved, paneId) {
@@ -53329,6 +53387,8 @@
       row.classList.add('send-queued');
       const note = row.querySelector('.send-queued-note');
       if (note) note.hidden = false;
+      const actions = row.querySelector('.queued-steer-actions');
+      if (actions) actions.hidden = false;
     });
     // Re-running the sync is the whole revert: it re-collects every
     // `.send-queued` row back into the tray, rebuilding it if it was dropped
@@ -53348,10 +53408,7 @@
     if (!tray) return;
     const cards = queuedSteerCardCount(tray);
     let bar = tray.querySelector('.queued-steer-all-bar');
-    if (cards < 2) {
-      if (bar) bar.remove();
-      return;
-    }
+    if (!cards) { tray.remove(); return; }
     if (!bar) {
       bar = document.createElement('div');
       bar.className = 'queued-steer-all-bar';
@@ -53364,13 +53421,14 @@
     if (hint) hint.textContent = cards + ' queued';
     const allBtn = bar.querySelector('[data-steer-all-queued]');
     if (allBtn) {
-      allBtn.dataset.sessionId = sessionId || '';
+      allBtn.dataset.sessionId = sessionId || allBtn.dataset.sessionId || '';
+      allBtn.hidden = cards < 2;
       allBtn.textContent = 'Steer all ' + cards;
     }
   }
 
   // Queued sends are actionable steer candidates, not past conversation.
-  // Keep their real event nodes in a small tray immediately above the composer
+  // Keep their real event nodes in a separate tray immediately above the composer
   // so ongoing output cannot scroll them out of reach.
   function syncQueuedSteerTray($view, paneId, replaceServerCandidates) {
     if (!$view) return;
@@ -53418,6 +53476,36 @@
       item.id === conversationId || item.session_id === conversationId
     ));
     const sessionId = String((selected && selected.session_id) || conversationId);
+    // A server snapshot and the local send echo can describe the same queued
+    // occurrence. Keep the local node (and its request/bookkeeping reference),
+    // consuming matches one-to-one so intentional repeated messages survive.
+    const localByText = new Map();
+    const queuedRowText = el => {
+      const msg = el.querySelector('.user-msg');
+      return msg && _normSend(msg.getAttribute('data-raw-text') || msg.textContent);
+    };
+    const localScope = [...$view.querySelectorAll('.event.user_text.pending, .event.user_text.send-queued'),
+      ...(tray ? tray.querySelectorAll('.event.user_text') : [])];
+    localScope.forEach(el => {
+      if (el.dataset.queuedSteerServer === 'true' || el.classList.contains('steering-optimistic')) return;
+      const text = queuedRowText(el);
+      if (!text) return;
+      if (!localByText.has(text)) localByText.set(text, []);
+      localByText.get(text).push(el);
+    });
+    $view.querySelectorAll('[data-queued-steer-server="true"]').forEach(serverRow => {
+      const text = queuedRowText(serverRow);
+      if (steerIsInFlight(sessionId, text)) return;
+      const local = (localByText.get(text) || []).shift();
+      if (!local) return;
+      if (local._pendingRef && !local.classList.contains('send-queued')) {
+        markPendingSendQueued(local._pendingRef, serverRow.dataset.queuedReason || undefined, { sync: false });
+      } else {
+        local.classList.remove('pending');
+        local.classList.add('send-queued');
+      }
+      serverRow.remove();
+    });
     const candidates = Array.from($view.querySelectorAll(
       '.event.user_text.pending, .event.user_text.send-queued'
     )).filter(el => el.dataset.queuedSteerServer === 'true'
@@ -53444,12 +53532,15 @@
       tray.className = 'queued-steer-tray';
       tray.dataset.conversationId = conversationId;
       tray.setAttribute('aria-label', 'Queued messages ready to steer');
-      // `.conv-pane` is a CSS grid; a sibling with no grid area gets
-      // auto-placed at the top. Nesting it in the composer guarantees the
-      // tray sits immediately above the textarea in every pane layout.
-      inputBar.insertBefore(tray, inputBar.firstChild);
+      // The dedicated queued grid area and flex order reserve room above
+      // the composer without taking over its textarea or focus treatment.
+      inputBar.parentNode.insertBefore(tray, inputBar);
     }
-    candidates.forEach(el => {
+    if (tray.parentNode !== inputBar.parentNode || tray.nextElementSibling !== inputBar) {
+      inputBar.parentNode.insertBefore(tray, inputBar);
+    }
+    const trayRows = [...tray.querySelectorAll('.event.user_text'), ...candidates];
+    [...new Set(trayRows)].forEach(el => {
       let cancel = el.querySelector('[data-cancel-queued-message]');
       if (!cancel) {
         cancel = el.querySelector('.send-queued-cancel');
@@ -53483,55 +53574,48 @@
       }
       cancel.dataset.sessionId = sessionId;
       steer.dataset.sessionId = sessionId;
+      let actions = el.querySelector('.queued-steer-actions');
+      if (!actions) {
+        actions = document.createElement('div');
+        actions.className = 'queued-steer-actions';
+      }
+      const copy = el.querySelector('[data-copy-user-message]');
+      // Pending-only controls must not bypass the durable queue actions.
+      el.querySelectorAll('.pending-send-cancel, [data-steer-user-message]').forEach(button => button.remove());
+      el.querySelectorAll('[data-cancel-queued-message], [data-steer-queued-message], [data-copy-user-message]')
+        .forEach(button => { if (button !== cancel && button !== steer && button !== copy) button.remove(); });
+      cancel.classList.add('cancel-queued-message');
+      if (copy) actions.appendChild(copy);
+      actions.append(cancel, steer);
+      actions.hidden = false;
+      el.appendChild(actions);
       tray.appendChild(el);
     });
     if (!queuedSteerCardCount(tray)) { tray.remove(); return; }
-    // A durable transcript event can be present before its matching synthetic
-    // queue overlay arrives. Show just the actionable tray version until the
-    // queued copy drains; otherwise the same prompt appears twice.
-    let queuedTexts = new Set(Array.from(tray.querySelectorAll('.event.user_text'))
-      .map(el => {
-        const msg = el.querySelector('.user-msg');
-        return msg && _normSend(msg.getAttribute('data-raw-text') || msg.textContent);
-      })
-      .filter(Boolean));
-    // Self-heal: if ANY durable user message matches a queued tray entry, the
-    // queued copy has already drained. Drop the stale tray card so the real
-    // message stays visible instead of hiding it behind the duplicate CSS
-    // class. Checking only the newest durable row (as this used to) missed a
-    // queued item that drained and was then followed by more traffic (e.g. a
-    // cross-session `announced_from` message landing mid-conversation) — the
-    // tray card was left orphaned forever since the last row no longer
-    // matched it (CCC-981).
-    const durableUserRows = Array.from($view.querySelectorAll(
-      '.event.user_text:not(.pending):not(.send-queued):not(.send-delivered):not(.not-acknowledged)'));
-    const durableUserTexts = new Set(durableUserRows.map(row => {
-      const msg = row.querySelector('.user-msg');
-      return msg && _normSend(msg.getAttribute('data-raw-text') || msg.textContent);
-    }).filter(Boolean));
-    if (durableUserTexts.size) {
-      tray.querySelectorAll('.event.user_text').forEach(el => {
-        const msg = el.querySelector('.user-msg');
-        const text = msg && _normSend(msg.getAttribute('data-raw-text') || msg.textContent);
-        if (!text || !durableUserTexts.has(text)) return;
-        if (el._pendingRef) removePendingSendEcho(el._pendingRef);
-        else if (el.parentNode) el.parentNode.removeChild(el);
-      });
-      if (!queuedSteerCardCount(tray)) { tray.remove(); return; }
-      queuedTexts = new Set(Array.from(tray.querySelectorAll('.event.user_text'))
-        .map(el => {
-          const msg = el.querySelector('.user-msg');
-          return msg && _normSend(msg.getAttribute('data-raw-text') || msg.textContent);
-        })
-        .filter(Boolean));
-    }
-    transcriptRows.forEach(el => {
-      if (isPendingSendEchoElement(el)) return;
-      const msg = el.querySelector('.user-msg');
-      const text = msg && _normSend(msg.getAttribute('data-raw-text') || msg.textContent);
-      if (text && queuedTexts.has(text)) el.classList.add('is-queued-steer-duplicate');
+    // A matching message from earlier history is not delivery proof for a
+    // new queued occurrence. Retire a stale card only against a later durable
+    // event, and consume each event once. Synthetic queue rows never count.
+    const durableRows = Array.from($view.querySelectorAll(
+      '.event.user_text:not(.pending):not(.send-queued):not(.send-delivered):not(.not-acknowledged):not(.steering-optimistic):not(.peer-message)'));
+    const usedDurable = new Set();
+    tray.querySelectorAll('.event.user_text').forEach(el => {
+      const text = queuedRowText(el);
+      const queuedAt = Number(el._pendingRef?.entry?.ts || el.dataset.tsEpoch || 0);
+      if (!text || !queuedAt) return;
+      const match = durableRows.find(row => !usedDurable.has(row)
+        && Number(row.dataset.tsEpoch || 0) >= queuedAt && queuedRowText(row) === text);
+      if (!match) return;
+      usedDurable.add(match);
+      if (el._pendingRef) removePendingSendEcho(el._pendingRef);
+      else el.remove();
     });
+    if (!queuedSteerCardCount(tray)) { tray.remove(); return; }
     syncQueuedSteerAllControl(tray, sessionId);
+    // The queue ACK has arrived. Once every local send is represented in the
+    // tray, a leftover "Sending…" indicator misstates the delivery state.
+    if (!$view.querySelector('.event.user_text.pending, .event.user_text.steering-optimistic')) {
+      $view.querySelectorAll('.conv-live-tool-inline.optimistic:not(.is-thinking)').forEach(el => el.remove());
+    }
   }
 
   // ── Conversation presentation modes ──────────────────────────────────
@@ -56457,9 +56541,16 @@
         // (the real event lands in its place below).
         const normed = _normSend(ev.text);
         let _reconciledExact = false;
+        const sendEventEpoch = ev.ts ? Date.parse(ev.ts) : NaN;
+        const canAcknowledgeSend = pending => !Number.isFinite(sendEventEpoch)
+          || !Number(pending && pending.ts)
+          || sendEventEpoch >= Number(pending.ts);
         // Peer (cross-session) messages are not the operator's own sends:
         // never let one clear a pending echo, exact or FIFO.
-        const pIdx = ev.peer ? -1 : _pendingSends.findIndex(p => _normSend(p.text) === normed);
+        // A synthetic queue overlay is still awaiting delivery. It must not
+        // acknowledge an echo or remove a card being optimistically steered.
+        const pIdx = (ev.peer || ev.pending) ? -1 : _pendingSends.findIndex(p =>
+          _normSend(p.text) === normed && canAcknowledgeSend(p));
         if (pIdx >= 0) {
           const p = _pendingSends[pIdx];
           if (p.element && p.element.parentNode) p.element.parentNode.removeChild(p.element);
@@ -56481,16 +56572,21 @@
         // wins. Real events never carry these classes, so this can't remove a
         // genuine transcript row.
         const echoScope = $view.closest('.conv-pane') || $view;
-        const echoDivs = ev.peer ? [] : echoScope.querySelectorAll(
+        const echoDivs = (ev.peer || ev.pending || _reconciledExact) ? [] : echoScope.querySelectorAll(
           '.event.user_text.pending, .event.user_text.send-queued,'
           + ' .event.user_text.send-delivered, .event.user_text.not-acknowledged');
         for (const pDiv of echoDivs) {
+          const echoEntry = pDiv._pendingRef && pDiv._pendingRef.entry;
+          if (!canAcknowledgeSend(echoEntry || { ts: pDiv.dataset.tsEpoch })) continue;
           const userMsgDiv = pDiv.querySelector('.user-msg');
           if (userMsgDiv) {
             const rawText = userMsgDiv.getAttribute('data-raw-text') || userMsgDiv.textContent;
             if (_normSend(rawText) === normed) {
               if (pDiv.parentNode) pDiv.parentNode.removeChild(pDiv);
               _reconciledExact = true;
+              // One durable message acknowledges one occurrence, even when
+              // the user has queued the same words more than once.
+              break;
             }
           }
         }
@@ -56505,7 +56601,8 @@
         // nothing is lost. Skip synthetic continuation events so they never
         // consume a genuine pending echo.
         const _isContinuation = /^This session is being continued from a previous conversation\b/.test(ev.text || '');
-        if (!ev.peer && !_reconciledExact && !_isContinuation && _pendingSends.length) {
+        if (!ev.peer && !ev.pending && !_reconciledExact && !_isContinuation
+            && _pendingSends.length && canAcknowledgeSend(_pendingSends[0])) {
           const oldest = _pendingSends.shift();
           if (oldest) {
             if (oldest.element && oldest.element.parentNode) oldest.element.parentNode.removeChild(oldest.element);
@@ -73485,10 +73582,10 @@
   function enterNewSessionMode() {
     const initialPrompt = typeof arguments[0] === 'string' ? arguments[0] : null;
     const paneId = activePaneId();
-    // The queued-steer tray lives in the persistent composer, outside the
+    // The queued-steer tray lives beside the persistent composer, outside the
     // transcript replaced below. It belongs to the previously open session,
     // so remove it before exposing a session-less composer.
-    const staleQueuedTray = getConvInputBarForPane(paneId)?.querySelector('.queued-steer-tray');
+    const staleQueuedTray = getConvInputBarForPane(paneId)?.closest('.conv-pane')?.querySelector('.queued-steer-tray');
     if (staleQueuedTray) staleQueuedTray.remove();
     spawnEffortChoiceDirty = false;
     syncSpawnEngineDependentUi();
