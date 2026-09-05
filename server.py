@@ -111,6 +111,7 @@ import ccc_peer_uds
 # Pure/stdlib, no imports from server.py -- mirrors ccc_peer_uds.py's split
 # between wire-format helpers (here) and registry/routing (server.py below).
 import ccc_peer_inbound
+from ccc_server.events import DashboardEventHub
 
 # Productivity metrics and local persistence are isolated in a stdlib-only
 # sibling module.  server.py adapts CCC's transcripts, repositories, and queue
@@ -134,6 +135,186 @@ COMMAND_CENTER_STATE_DIR = Path.home() / ".claude" / "command-center"
 COMMAND_CENTER_PASTED_IMAGES_DIR = COMMAND_CENTER_STATE_DIR / "pasted-images"
 COMMAND_CENTER_ATTACHMENTS_DIR = COMMAND_CENTER_STATE_DIR / "attachments"
 PYTHON_STACK_DUMP_LOG = COMMAND_CENTER_STATE_DIR / "logs" / "python-stacks.log"
+_dashboard_events = DashboardEventHub(capacity=512)
+
+
+def _publish_dashboard_patch(topic, entity_type, entity_id, patch):
+    """Publish cheap authoritative state after its durable write succeeds."""
+    try:
+        return _dashboard_events.publish(
+            topic,
+            entity={"type": str(entity_type), "id": str(entity_id)},
+            patch=dict(patch or {}),
+        )
+    except Exception:
+        # The event stream accelerates freshness; it is not part of the
+        # mutation's durability contract and must never invite a retry.
+        return None
+
+
+def _invalidate_dashboard(resource, *, entity_id=None, reason=None):
+    """Publish a scoped refetch hint for derived or externally owned state."""
+    target = {"resource": str(resource)}
+    if entity_id is not None:
+        target["id"] = str(entity_id)
+    if reason:
+        target["reason"] = str(reason)
+    try:
+        return _dashboard_events.publish("invalidate", invalidate=[target])
+    except Exception:
+        return None
+
+
+def _publish_spawn_dashboard_event(result):
+    """Tell every dashboard about a successful spawn without waiting to poll."""
+    if not isinstance(result, dict) or not result.get("ok"):
+        return
+    sid = str(result.get("session_id") or result.get("id") or "").strip()
+    if not sid and result.get("pid") is not None:
+        sid = f"spawning-{result['pid']}"
+    if sid:
+        patch = {"status": "starting"}
+        for key in ("engine", "pid", "spawned_via", "name"):
+            if result.get(key) is not None:
+                patch[key] = result[key]
+        _publish_dashboard_patch("session.patch", "session", sid, patch)
+    _invalidate_dashboard("archive", entity_id=sid or None, reason="spawn")
+
+
+def _publish_queue_dashboard_event(path, data, status=200):
+    """Publish one scoped queue invalidation for a successful POST result."""
+    if status >= 400 or not isinstance(data, dict) or data.get("ok") is not True:
+        return None
+    item = data.get("item") if isinstance(data.get("item"), dict) else {}
+    queue_name = data.get("queue") or data.get("project") or item.get("project")
+    reason = str(path or "").rstrip("/").rsplit("/", 1)[-1] or "mutation"
+    return _invalidate_dashboard(
+        "queue", entity_id=queue_name or None, reason=reason,
+    )
+
+
+_dashboard_event_watch_lock = threading.Lock()
+_dashboard_event_watch_subscribers = 0
+_dashboard_event_watch_thread = None
+
+
+def _dashboard_queue_signature():
+    def _stat_signature(target):
+        try:
+            st = os.stat(target)
+            return st.st_mtime_ns, st.st_size
+        except OSError:
+            return None
+
+    try:
+        remote_version = gh_queue_version()
+    except Exception:
+        remote_version = 0
+    store_path = str(_queue_store_path())
+    return (
+        _stat_signature(store_path),
+        _stat_signature(store_path + "-wal"),
+        _stat_signature(store_path + "-shm"),
+        _stat_signature(str(_wt_config_path())),
+        _stat_signature(str(_wt_workers_path())),
+        remote_version,
+    )
+
+
+def _dashboard_queue_watch_tick(previous):
+    current = _dashboard_queue_signature()
+    if previous is not None and current != previous:
+        _invalidate_dashboard("queue", reason="external-change")
+    return current
+
+
+def _dashboard_session_watch_tick(previous):
+    try:
+        raw = _sessions_state_snapshot()
+    except Exception:
+        return previous
+    current = {
+        str(sid): {
+            "state": values.get("state") or "unknown",
+            "question_waiting": bool(values.get("question_waiting")),
+            "needs_approval": bool(values.get("needs_approval")),
+        }
+        for sid, values in (raw or {}).items()
+        if isinstance(values, dict)
+    }
+    if previous is None:
+        return current
+    previous = previous or {}
+    for sid, fields in current.items():
+        if previous.get(sid) != fields:
+            _publish_dashboard_patch("session.patch", "session", sid, fields)
+    for sid in previous:
+        if sid not in current:
+            _publish_dashboard_patch(
+                "session.patch", "session", sid,
+                {"state": "ended", "question_waiting": False, "needs_approval": False},
+            )
+    return current
+
+
+def _dashboard_event_watch_loop():
+    global _dashboard_event_watch_thread
+    try:
+        gh_queue_watch_enter()
+    except Exception:
+        pass
+    previous_queue = _dashboard_queue_signature()
+    try:
+        previous_sessions = _dashboard_session_watch_tick(None)
+    except Exception:
+        previous_sessions = {}
+    # Close the startup race between the browser's prioritized archive
+    # response and this watcher baseline. The client coalesces this with any
+    # in-flight base load and guarantees one post-baseline snapshot.
+    _invalidate_dashboard("archive", reason="subscriber-baseline")
+    try:
+        while True:
+            with _dashboard_event_watch_lock:
+                if _dashboard_event_watch_subscribers <= 0:
+                    return
+            time.sleep(1.0)
+            previous_queue = _dashboard_queue_watch_tick(previous_queue)
+            previous_sessions = _dashboard_session_watch_tick(previous_sessions)
+    finally:
+        try:
+            gh_queue_watch_exit()
+        except Exception:
+            pass
+        with _dashboard_event_watch_lock:
+            _dashboard_event_watch_thread = None
+            if _dashboard_event_watch_subscribers > 0:
+                _dashboard_event_watch_thread = threading.Thread(
+                    target=_dashboard_event_watch_loop,
+                    name="dashboard-event-watch",
+                    daemon=True,
+                )
+                _dashboard_event_watch_thread.start()
+
+
+def _dashboard_event_watch_enter():
+    global _dashboard_event_watch_subscribers, _dashboard_event_watch_thread
+    with _dashboard_event_watch_lock:
+        _dashboard_event_watch_subscribers += 1
+        if _dashboard_event_watch_thread is None:
+            _dashboard_event_watch_thread = threading.Thread(
+                target=_dashboard_event_watch_loop,
+                name="dashboard-event-watch",
+                daemon=True,
+            )
+            _dashboard_event_watch_thread.start()
+
+
+def _dashboard_event_watch_exit():
+    global _dashboard_event_watch_subscribers
+    with _dashboard_event_watch_lock:
+        _dashboard_event_watch_subscribers = max(
+            0, _dashboard_event_watch_subscribers - 1,
+        )
 # Unified human-readable activity log — spawn/inject/kill/app-server-health
 # events, one line each. Mirrors ~/.watchtower/activity.log's format
 # (TIMESTAMP UTC  CATEGORY   VERB     detail) on purpose: the two logs get
@@ -24795,6 +24976,10 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
             # gated live-session set, so no extra full scan.
             qs = urllib.parse.parse_qs(parsed.query)
             self.send_json(get_model_advisor_report(qs.get("fresh", [""])[0]))
+        elif path == "/api/events":
+            # Unified, replayable dashboard state stream.  Existing narrower
+            # SSE routes stay available during the compatibility rollout.
+            self._stream_dashboard_events(parsed)
         elif path == "/api/sessions/events":
             # SSE: push session-state changes to a subscriber (e.g. a COO /
             # monitor session) instead of having it poll /api/sessions on a
@@ -31135,6 +31320,16 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
             result = rename_session(sid, name)
             result["session_id"] = sid
             result["name"] = name
+            if result.get("ok"):
+                _publish_dashboard_patch(
+                    "conversation.patch", "conversation", sid,
+                    {
+                        "name": name,
+                        "title": name,
+                        "display_name": name,
+                        "name_overridden": bool(name),
+                    },
+                )
             self.send_json(result)
         elif re.match(r"^/api/conversations/[^/]+/pin$", path):
             conv_id = urllib.parse.unquote(path.split("/")[-2])
@@ -31160,6 +31355,16 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                 if now_pinned:
                     pinned.insert(0, sid)
                 _save_pinned_conversations(pinned)
+                if not now_pinned:
+                    _publish_dashboard_patch(
+                        "conversation.patch", "conversation", sid,
+                        {"pinned": False, "pin_rank": None},
+                    )
+                for pin_rank, pinned_sid in enumerate(pinned):
+                    _publish_dashboard_patch(
+                        "conversation.patch", "conversation", pinned_sid,
+                        {"pinned": True, "pin_rank": pin_rank},
+                    )
                 self.send_json({
                     "ok": True,
                     "session_id": sid,
@@ -31189,6 +31394,10 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                     conv_id,
                 ], lane)
                 _restamp_archive_serve_cache_after_mutation()
+                _publish_dashboard_patch(
+                    "conversation.patch", "conversation", sid,
+                    {"all_lane_override": lane},
+                )
                 self.send_json({
                     "ok": True,
                     "session_id": sid,
@@ -31295,6 +31504,10 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                     except RepoContextError:
                         _bust_issue_state_cache()
                 _restamp_archive_serve_cache_after_mutation()
+                _publish_dashboard_patch(
+                    "conversation.patch", "conversation", sid,
+                    {"archived": now_archived, "trashed": False},
+                )
                 self.send_json({"ok": True, "archived": now_archived, "github": gh_result, "killed": kill_result})
             except OSError as e:
                 self.send_json({"ok": False, "error": str(e)}, 500)
@@ -31331,6 +31544,13 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
             try:
                 result = _set_conversation_trashed(sid, desired)
                 _restamp_archive_serve_cache_after_mutation()
+                _publish_dashboard_patch(
+                    "conversation.patch", "conversation", sid,
+                    {
+                        "archived": bool(result.get("archived")),
+                        "trashed": bool(result.get("trashed")),
+                    },
+                )
                 self.send_json({"ok": True, **result})
             except OSError as e:
                 self.send_json({"ok": False, "error": str(e)}, 500)
@@ -31382,6 +31602,8 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                         except (OSError, FileNotFoundError):
                             pass
                 _restamp_archive_serve_cache_after_mutation()
+                if changed:
+                    _invalidate_dashboard("archive", reason="archive-bulk")
                 self.send_json({
                     "ok": True,
                     "archived": want,
@@ -33267,6 +33489,79 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
         except (BrokenPipeError, ConnectionResetError, OSError):
             pass
 
+    def _stream_dashboard_events(self, parsed):
+        """Replay versioned dashboard changes, then block for new events."""
+        query = urllib.parse.parse_qs(parsed.query)
+        raw_cursor = (query.get("since") or [None])[0]
+        if raw_cursor is None:
+            raw_cursor = self.headers.get("Last-Event-ID", "0")
+        try:
+            cursor = max(0, int(raw_cursor or 0))
+        except (TypeError, ValueError):
+            cursor = 0
+        requested_boot = str((query.get("boot_id") or [""])[0] or "") or None
+
+        self.send_response(200)
+        self.send_header("Content-Type", "text/event-stream")
+        self.send_header("Cache-Control", "no-cache")
+        self.send_header("Connection", "keep-alive")
+        self.send_header("X-Accel-Buffering", "no")
+        self.end_headers()
+
+        def _emit(payload):
+            try:
+                event_id = int(payload.get("seq") or 0)
+                blob = json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
+                self.wfile.write(f"id: {event_id}\ndata: {blob}\n\n".encode("utf-8"))
+                self.wfile.flush()
+                return True
+            except (BrokenPipeError, ConnectionResetError, OSError):
+                return False
+
+        active_boot = requested_boot
+        _dashboard_event_watch_enter()
+        try:
+            # EventSource applies this reconnect delay if the socket drops.
+            self.wfile.write(b"retry: 1000\n\n")
+            self.wfile.flush()
+            while True:
+                snapshot = _dashboard_events.snapshot_since(cursor, boot_id=active_boot)
+                active_boot = snapshot.boot_id
+                if snapshot.resync_required:
+                    resync = {
+                        "schema": 1,
+                        "boot_id": snapshot.boot_id,
+                        "seq": snapshot.latest_seq,
+                        "topic": "resync.required",
+                        "entity": None,
+                        "entity_version": None,
+                        "patch": {},
+                        "invalidate": [],
+                        "ts": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
+                    }
+                    if not _emit(resync):
+                        return
+                    cursor = snapshot.latest_seq
+                else:
+                    for event in snapshot.events:
+                        if not _emit(event):
+                            return
+                        cursor = event["seq"]
+
+                snapshot = _dashboard_events.wait_since(
+                    cursor, boot_id=active_boot, timeout=15.0
+                )
+                if snapshot.resync_required or snapshot.events:
+                    # Re-enter through snapshot_since so overflow and replay
+                    # use one serialization path.
+                    continue
+                self.wfile.write(b": keepalive\n\n")
+                self.wfile.flush()
+        except (BrokenPipeError, ConnectionResetError, OSError):
+            pass
+        finally:
+            _dashboard_event_watch_exit()
+
     def _stream_sessions_state_events(self):
         """SSE: emit one event whenever a session's (state, question_waiting,
         needs_approval) tuple changes vs the last emitted snapshot for that
@@ -34103,6 +34398,24 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
         # counter the dashboard's bottom-left bar reads. Cheap, no disk scan.
         if status >= 500:
             _record_server_error()
+        # Every spawn endpoint converges here after its engine-specific durable
+        # launch succeeds. Publishing at this boundary covers the compatibility
+        # endpoints too and cannot run before the underlying spawn call.
+        try:
+            response_path = urllib.parse.urlparse(self.path).path.rstrip("/")
+            if (
+                status < 400
+                and self.command == "POST"
+                and re.match(r"^/api/sessions/spawn(?:-[a-z0-9-]+)?$", response_path)
+            ):
+                _publish_spawn_dashboard_event(data)
+            if (
+                self.command == "POST"
+                and response_path.startswith(("/api/queue/", "/api/ux-fixes/", "/api/wt/queue/"))
+            ):
+                _publish_queue_dashboard_event(response_path, data, status)
+        except Exception:
+            pass
         body_str = json.dumps(data)
         etag_val = None
         if etag:
@@ -34158,8 +34471,8 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
             # ~/.claude/command-center/logs/service.out.log under launchd.
             try:
                 _ms = (time.time() - _t0) * 1000.0
-                if _ms >= SLOW_REQ_MS:
-                    _p = getattr(self, "path", "?").split("?", 1)[0]
+                _p = getattr(self, "path", "?").split("?", 1)[0]
+                if _p not in ("/api/events", "/api/sessions/events", "/api/queue/events") and _ms >= SLOW_REQ_MS:
                     _ts = time.strftime("%H:%M:%S")
                     print(f"[SLOW] {_ts} {getattr(self, 'command', '?')} {_p} {_ms:.0f}ms",
                           flush=True)

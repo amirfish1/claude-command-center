@@ -21,7 +21,7 @@
   // transient archiveProgress are NOT listed: they only run while their view is
   // open / during load and clear themselves, so there's nothing to gate.
   const _PAUSE_WHEN_HIDDEN = new Set([
-    'liveStatus', 'liveToolStrip', 'sessionsList', 'gcActive', 'issues',
+    'liveStatus', 'liveToolStrip', 'sessionsList', 'archiveRecovery', 'gcActive', 'issues',
     'vercelDeploy', 'localhost', 'worktreesBadge', 'archiveTimes',
     'uxFixesQueueMeta', 'stuckSessions', 'modelCatalog',
   ]);
@@ -100,6 +100,7 @@
     liveStatus:     { ms: 5000,  label: 'status',  surface: 'Sidebar - conversation row status',           desc: 'Session statuses - the live row dots + state.' },
     issues:         { ms: 10000, label: 'issues',  surface: 'Sidebar - GitHub Issues section',             desc: 'GitHub issues for the active repo.' },
     sessionsList:   { ms: 60000, label: 'sessions',surface: 'Sidebar - session list',                      desc: 'Archive/session refresh (~3MB, stale-cache).' },
+    archiveRecovery:{ ms: 300000,label: 'recovery', surface: 'Sidebar - external transcript recovery',    desc: 'Slow recovery floor for changes made outside CCC.' },
     archiveTimes:   { ms: 90000, label: 'archive-t',surface: 'Sidebar - archive row times',                  desc: 'Refresh archive last_interacted/modified so row times stay live.' },
     uxFixesQueueMeta:{ ms: 15000, label: 'uxq',     surface: 'Sidebar - UX-fixes queue row',                 desc: 'UX-fixes queue current/last-number badge.' },
     gcActive:       { ms: 15000, label: 'gc-live', surface: 'Sidebar - active-group-chat footer pill',     desc: 'Active group-chat coordinations badge.' },
@@ -2261,18 +2262,133 @@
   // callers that explicitly identify themselves as background work enter this
   // pool; transcript loads, exports, split-pane reads, and other user actions
   // retain their own lifetime.
+  const BACKGROUND_API_READ_LIMIT = 4;
+  const _backgroundApiBaseFetch = window.fetch.bind(window);
   const _backgroundApiReadControllers = new Set();
+  const _backgroundApiReadQueue = [];
+  let _backgroundApiReadActive = 0;
+
+  async function _bufferBackgroundApiResponse(response) {
+    if (!response || response.status === 204 || response.status === 304) return response;
+    const body = await response.arrayBuffer();
+    const buffered = new Response(body, {
+      status: response.status,
+      statusText: response.statusText,
+      headers: response.headers,
+    });
+    try { Object.defineProperty(buffered, 'url', { value: response.url }); } catch (_) {}
+    return buffered;
+  }
+
+  function _drainBackgroundApiReads() {
+    while (_backgroundApiReadActive < BACKGROUND_API_READ_LIMIT && _backgroundApiReadQueue.length) {
+      const task = _backgroundApiReadQueue.shift();
+      if (task.options.signal.aborted) {
+        task.cleanup();
+        task.reject(task.options.signal.reason || new DOMException('Aborted', 'AbortError'));
+        continue;
+      }
+      _backgroundApiReadActive += 1;
+      const { input, options } = task;
+      _backgroundApiBaseFetch(input, options).then(_bufferBackgroundApiResponse).then(task.resolve, task.reject).finally(() => {
+        _backgroundApiReadActive -= 1;
+        task.cleanup();
+        _drainBackgroundApiReads();
+      });
+    }
+  }
+
   function backgroundApiFetch(input, init) {
     const options = Object.assign({}, init || {});
-    if (options.signal) return fetch(input, options);
     const controller = new AbortController();
+    const upstreamSignal = options.signal;
+    const forwardAbort = () => {
+      try { controller.abort(upstreamSignal && upstreamSignal.reason); } catch (_) { controller.abort(); }
+    };
+    if (upstreamSignal) {
+      if (upstreamSignal.aborted) forwardAbort();
+      else upstreamSignal.addEventListener('abort', forwardAbort, { once: true });
+    }
     options.signal = controller.signal;
     _backgroundApiReadControllers.add(controller);
-    return fetch(input, options).finally(() => {
-      _backgroundApiReadControllers.delete(controller);
+    return new Promise((resolve, reject) => {
+      const cleanup = () => {
+        _backgroundApiReadControllers.delete(controller);
+        if (upstreamSignal) upstreamSignal.removeEventListener('abort', forwardAbort);
+      };
+      _backgroundApiReadQueue.push({ input, options, resolve, reject, cleanup });
+      _drainBackgroundApiReads();
     });
   }
   window.__cccBackgroundApiFetch = backgroundApiFetch;
+
+  // Put the one payload needed for a useful sidebar at the front of the
+  // browser's connection queue. The response can finish while the rest of
+  // the script initializes; loadArchiveAll consumes this same Response once,
+  // so this is request reordering, not a duplicate fetch.
+  let _archiveBootstrapWindow = '7d';
+  try {
+    const savedWindow = localStorage.getItem('ccc-archive-window');
+    if (savedWindow === '8h' || savedWindow === '1d' || savedWindow === '7d' || savedWindow === 'all') {
+      _archiveBootstrapWindow = savedWindow;
+    }
+  } catch (_) {}
+  const _archiveBootstrapUrl = '/api/conversations/list?window=' + encodeURIComponent(_archiveBootstrapWindow) + '&stale_ok=1';
+  const _archiveBootstrapController = new AbortController();
+  const _archiveBootstrapTimeout = setTimeout(() => {
+    try { _archiveBootstrapController.abort(); } catch (_) {}
+  }, 45 * 1000);
+  const _archiveBootstrapFetchPromise = backgroundApiFetch(
+    _archiveBootstrapUrl, { signal: _archiveBootstrapController.signal }
+  ).catch(() => null).finally(() => clearTimeout(_archiveBootstrapTimeout));
+  let _archiveBootstrapConsumed = false;
+
+  // Optional boot reads used to issue all at once and fill every HTTP/1.1
+  // connection slot ahead of the archive. Hold GET-only status/catalog work
+  // until useful rows have painted, then feed it through the same four-slot
+  // background pool. Mutations and conversation/session reads always bypass.
+  const _startupDeferredApiReads = [];
+  const _startupBaseFetch = window.fetch.bind(window);
+  let _startupApiReadsReleased = false;
+  let _startupApiReleaseTimer = null;
+
+  function _startupCriticalApiRead(input, init) {
+    const rawUrl = typeof input === 'string' ? input : (input && input.url) || '';
+    const method = String((init && init.method) || (input && input.method) || 'GET').toUpperCase();
+    if (method !== 'GET') return true;
+    let parsed;
+    try { parsed = new URL(rawUrl, window.location.origin); } catch (_) { return true; }
+    if (parsed.origin !== window.location.origin || !parsed.pathname.startsWith('/api/')) return true;
+    const criticalPaths = [
+      '/api/conversations/list', '/api/conversations', '/api/sessions',
+      '/api/config', '/api/features', '/api/loading-status',
+    ];
+    return criticalPaths.some(prefix => parsed.pathname === prefix || parsed.pathname.startsWith(prefix + '/'));
+  }
+
+  function startupBudgetedFetch(input, init) {
+    if (_startupApiReadsReleased || _startupCriticalApiRead(input, init)) {
+      return _startupBaseFetch(input, init);
+    }
+    return new Promise((resolve, reject) => {
+      _startupDeferredApiReads.push({ input, init, resolve, reject });
+    });
+  }
+
+  function _releaseStartupApiReads() {
+    if (_startupApiReadsReleased) return;
+    _startupApiReadsReleased = true;
+    clearTimeout(_startupApiReleaseTimer);
+    const queued = _startupDeferredApiReads.splice(0);
+    queued.forEach(task => {
+      backgroundApiFetch(task.input, task.init).then(task.resolve, task.reject);
+    });
+  }
+
+  window.fetch = startupBudgetedFetch;
+  _startupApiReleaseTimer = setTimeout(_releaseStartupApiReads, 20 * 1000);
+  window.addEventListener('pointerdown', _releaseStartupApiReads, { capture: true, once: true });
+  window.addEventListener('keydown', _releaseStartupApiReads, { capture: true, once: true });
 
   function abortBackgroundApiReadsForSpawn() {
     for (const controller of _backgroundApiReadControllers) {
@@ -31995,6 +32111,35 @@
     }
   }
 
+  const SIDEBAR_RENDER_INITIAL_ROWS = 240;
+  const SIDEBAR_RENDER_MORE_ROWS = 240;
+  let _sidebarRenderRowLimit = SIDEBAR_RENDER_INITIAL_ROWS;
+  let _sidebarRenderScope = '';
+
+  function _boundSidebarRowsForRender(rows, limit) {
+    const source = Array.isArray(rows) ? rows : [];
+    if (source.length <= limit) return { rows: source, omitted: 0 };
+    const buckets = { active: [], archived: [], backlog: [], merge: [] };
+    source.forEach(row => {
+      const column = classifyKanbanColumn(row);
+      const key = column === 'archived' ? 'archived'
+        : (column === 'backlog' ? 'backlog' : (row && row.tail_pr_number ? 'merge' : 'active'));
+      buckets[key].push(row);
+    });
+    const selected = new Set();
+    const quota = Math.max(1, Math.floor(limit / Object.keys(buckets).length));
+    Object.values(buckets).forEach(bucket => bucket.slice(0, quota).forEach(row => selected.add(row)));
+    const selectedId = String(currentConversation || '');
+    const selectedRow = source.find(row => String(row && (row.session_id || row.id) || '') === selectedId);
+    if (selectedRow) selected.add(selectedRow);
+    for (const row of source) {
+      if (selected.size >= limit) break;
+      selected.add(row);
+    }
+    const result = source.filter(row => selected.has(row));
+    return { rows: result, omitted: Math.max(0, source.length - result.length) };
+  }
+
   function renderConversationList(convs) {
     if (window.__cccTourActive) return; // FIRST FLIGHT tour owns the list DOM
     convs = filterGhIssues(convs);
@@ -32006,6 +32151,16 @@
       _prioritizeSessionIdMatches(convs, document.getElementById('convSearch')?.value || ''),
       document.getElementById('convSearch')?.value || '');
     const _ipSearchActive = !!(document.getElementById('convSearch')?.value || '').trim();
+    const _ipSearchValue = (document.getElementById('convSearch')?.value || '').trim();
+    const _sidebarScope = _ipSearchValue.toLowerCase();
+    if (_sidebarScope !== _sidebarRenderScope) {
+      _sidebarRenderScope = _sidebarScope;
+      _sidebarRenderRowLimit = SIDEBAR_RENDER_INITIAL_ROWS;
+    }
+    const _sidebarFullRows = convs;
+    const _sidebarBounded = _boundSidebarRowsForRender(convs, _sidebarRenderRowLimit);
+    convs = _sidebarBounded.rows;
+    const _sidebarRowsOmitted = _sidebarBounded.omitted;
     _applyOptimisticTouches(convs);
     // Read the active tab before the row renderer is invoked below. Rows use
     // this to choose Archive vs Move to Trash, while the tab markup itself is
@@ -36306,7 +36461,12 @@
       : _sidebarTab === 'queues' ? '<div class="shared-queue-host shared-queue-host-sidebar" id="sidebarQueueHost"></div>'
       : (_sidebarTab === 'archived' || _sidebarTab === 'coding' || _sidebarTab === 'workers') ? (_forceOpen(_archivedHtml, 'conv-archived-section') || _tabEmpty('sessions'))
       : (_forceOpen(_inProgressHtml, 'conv-inprogress-section') || _tabEmpty('in-progress sessions'));
-    const _convListHtml = _tabBarHtml + _idSearchRowsHtml + _repoSearchRowsHtml + _tabBody;
+    const _showMoreRowsHtml = _sidebarRowsOmitted
+      ? '<div class="archive-empty-state"><button type="button" class="conv-window-btn" data-role="sidebar-show-more">Show '
+        + Math.min(SIDEBAR_RENDER_MORE_ROWS, _sidebarRowsOmitted)
+        + ' more sessions</button><div>' + _sidebarRowsOmitted + ' older rows are not rendered yet.</div></div>'
+      : '';
+    const _convListHtml = _tabBarHtml + _idSearchRowsHtml + _repoSearchRowsHtml + _tabBody + _showMoreRowsHtml;
     const _objectsSplitActive = _sidebarTab === 'inprogress' && _shouldGroupByObjects;
     $convList.classList.toggle('objects-scroll-split', _objectsSplitActive);
     if (_objectsSplitActive) { applyCurrentSessionsPanelHeight(); applyEvergreenPanelHeight(); }
@@ -36393,6 +36553,14 @@
     $convList.innerHTML = _convListHtml;
     _updateConvTabBarHeightVar($convList);
     _mountSharedQueuePanel();
+    const _showMoreRowsButton = $convList.querySelector('[data-role="sidebar-show-more"]');
+    if (_showMoreRowsButton) {
+      _showMoreRowsButton.addEventListener('click', () => {
+        _sidebarRenderRowLimit += SIDEBAR_RENDER_MORE_ROWS;
+        _convListRenderSig = null;
+        renderConversationList(_sidebarFullRows);
+      });
+    }
     if (_objectsSplitActive) _updateSidebarFillSection($convList);
     const _currentSessionsScrollAfter = _currentSessionsScrollBefore
       ? $convList.querySelector('[data-role="current-sessions-scroll"]')
@@ -42241,6 +42409,8 @@
   // True while the /api/queue/events SSE stream is connected — the board then
   // refreshes on server push instead of the 15s fallback timer.
   let _uxqStreamLive = false;
+  let _dashboardEventStreamHealthy = false;
+  let _uxqLegacyEventSource = null;
   const _UXQ_NEW_ITEM_GLOW_MS = 4500;
   let _uxqKnownItemRefs = null;
   const _uxqNewItemExpires = new Map();
@@ -42402,15 +42572,19 @@
   // cloud `session_id` used to resolve the worker to its session row.
   let _wtWorkersCache = { ts: 0, workers: [] };
   let _wtWorkersPromise = null;
+  let _wtWorkersVersion = 0;
   async function _fetchWtWorkers() {
     if (Date.now() - _wtWorkersCache.ts < 15000) return _wtWorkersCache;
     if (_wtWorkersPromise) return _wtWorkersPromise;
+    const requestVersion = _wtWorkersVersion;
     _wtWorkersPromise = (async () => {
     try {
       const res = await fetch('/api/wt/workers', { cache: 'no-store' });
       const data = await res.json().catch(() => ({}));
       const workers = Array.isArray(data && data.workers) ? data.workers : [];
-      _wtWorkersCache = { ts: Date.now(), workers };
+      if (requestVersion === _wtWorkersVersion) {
+        _wtWorkersCache = { ts: Date.now(), workers };
+      }
     } catch (_) { /* keep stale cache */ }
     finally { _wtWorkersPromise = null; }
     return _wtWorkersCache;
@@ -62282,6 +62456,14 @@
   // ONLY mode; there is no repo picker / folder filter.
   let archiveData = [];
   let archiveLoaded = false;
+  let _archiveFirstLoadedResolve = null;
+  const _archiveFirstLoaded = new Promise(resolve => { _archiveFirstLoadedResolve = resolve; });
+  function _markArchiveFirstLoaded() {
+    if (!_archiveFirstLoadedResolve) return;
+    _releaseStartupApiReads();
+    _archiveFirstLoadedResolve();
+    _archiveFirstLoadedResolve = null;
+  }
   window.__cccThroughputActivityRows = function () {
     const source = Array.isArray(archiveData) && archiveData.length
       ? archiveData : (Array.isArray(conversationsData) ? conversationsData : []);
@@ -62306,6 +62488,253 @@
   let _uxFixesQueueMetaPromise = null;
   let _uxFixesQueueMetaLoadedAt = 0;
   const UX_FIXES_QUEUE_META_TTL_MS = 15 * 1000;
+
+  // ── Unified dashboard events ──────────────────────────────────────────
+  // CCC-owned writes arrive as authoritative row patches. Expensive or
+  // externally owned state arrives as a narrow invalidation that is
+  // coalesced before any refetch. The cursor survives reloads so the server's
+  // bounded replay ring can close short disconnect gaps without a rescan.
+  const _dashboardEventCursorKey = 'ccc.dashboard.events.cursor';
+  let _dashboardSavedCursor = null;
+  try { _dashboardSavedCursor = JSON.parse(localStorage.getItem(_dashboardEventCursorKey) || 'null'); }
+  catch (_) { _dashboardSavedCursor = null; }
+  const _dashboardEventState = {
+    bootId: _dashboardSavedCursor && _dashboardSavedCursor.boot_id || '',
+    seq: Number(_dashboardSavedCursor && _dashboardSavedCursor.seq || 0),
+    entityVersions: new Map(),
+    invalidations: new Map(),
+    pendingConversationPatches: new Map(),
+    source: null,
+    retryMs: 1000,
+    retryTimer: null,
+  };
+  let _dashboardArchiveRenderQueued = false;
+
+  function _persistDashboardEventCursor() {
+    try {
+      localStorage.setItem(_dashboardEventCursorKey, JSON.stringify({
+        boot_id: _dashboardEventState.bootId,
+        seq: _dashboardEventState.seq,
+      }));
+    } catch (_) {}
+  }
+
+  function _queueDashboardArchiveRender() {
+    if (_dashboardArchiveRenderQueued) return;
+    _dashboardArchiveRenderQueued = true;
+    requestAnimationFrame(() => {
+      _dashboardArchiveRenderQueued = false;
+      try { renderArchiveList(_archiveQuery()); } catch (_) {}
+    });
+  }
+
+  function _applyDashboardConversationPatch(event) {
+    const id = String(event.entity && event.entity.id || '');
+    if (!id || !event.patch || typeof event.patch !== 'object') return;
+    const previousEntry = _dashboardEventState.pendingConversationPatches.get(id) || {};
+    const pending = previousEntry.patch || {};
+    _dashboardEventState.pendingConversationPatches.set(
+      id, {
+        patch: Object.assign({}, pending, event.patch),
+        expiresAt: Date.now() + 30 * 1000,
+      }
+    );
+    let changed = false;
+    const patchRows = rows => Array.isArray(rows) ? rows.map(row => {
+      const rowId = String(row && (row.session_id || row.id) || '');
+      if (rowId !== id) return row;
+      changed = true;
+      return Object.assign({}, row, event.patch);
+    }) : rows;
+    archiveData = patchRows(archiveData);
+    conversationsData = patchRows(conversationsData);
+    if (currentSession && String(currentSession.id || '') === id) {
+      currentSession = Object.assign({}, currentSession, event.patch);
+    }
+    if (changed) _queueDashboardArchiveRender();
+  }
+
+  function _applyPendingDashboardConversationPatches(rows) {
+    if (!Array.isArray(rows) || !_dashboardEventState.pendingConversationPatches.size) return rows;
+    return rows.map(row => {
+      const id = String(row && (row.session_id || row.id) || '');
+      const entry = id && _dashboardEventState.pendingConversationPatches.get(id);
+      if (entry && entry.expiresAt <= Date.now()) {
+        _dashboardEventState.pendingConversationPatches.delete(id);
+        return row;
+      }
+      const patch = entry && entry.patch;
+      return patch ? Object.assign({}, row, patch) : row;
+    });
+  }
+
+  function _applyDashboardSessionPatch(event) {
+    const id = String(event.entity && event.entity.id || '');
+    if (!id || !event.patch || typeof event.patch !== 'object') return;
+    const normalizedPatch = Object.assign({}, event.patch);
+    if (normalizedPatch.state === 'ended') normalizedPatch.is_live = false;
+    else if (normalizedPatch.state) normalizedPatch.is_live = true;
+    if (normalizedPatch.is_live === false) _sessionLiveOverlay.delete(id);
+    else _rememberLiveOverlay(id, normalizedPatch);
+    const current = (_liveSessionsActivityLast && _liveSessionsActivityLast.sessions) || {};
+    if (_liveSessionsActivityLast) {
+      _liveSessionsActivityLast.sessions = Object.assign({}, current, {
+        [id]: Object.assign({}, current[id] || {}, normalizedPatch),
+      });
+    }
+    let known = false;
+    const patchRows = rows => Array.isArray(rows) ? rows.map(row => {
+      if (String(row && (row.session_id || row.id) || '') !== id) return row;
+      known = true;
+      return Object.assign({}, row, normalizedPatch);
+    }) : rows;
+    archiveData = patchRows(archiveData);
+    conversationsData = patchRows(conversationsData);
+    if (known) _queueDashboardArchiveRender();
+    else scheduleDashboardInvalidation('archive', id);
+  }
+
+  function scheduleDashboardInvalidation(resource, id) {
+    const normalized = String(resource || '').trim();
+    if (!normalized) return;
+    const key = normalized + ':' + String(id || '');
+    if (_dashboardEventState.invalidations.has(key)) return;
+    _dashboardEventState.invalidations.set(key, { resource: normalized, id: id || null });
+    if (_dashboardEventState.invalidations.size === 1) {
+      queueMicrotask(_flushDashboardInvalidations);
+    }
+  }
+
+  function _flushDashboardInvalidations() {
+    const pending = Array.from(_dashboardEventState.invalidations.values());
+    _dashboardEventState.invalidations.clear();
+    const resources = new Set(pending.map(item => item.resource));
+    if (resources.has('queue')) {
+      const inFlightQueueRead = _uxqItemsPromise;
+      const inFlightWorkerRead = _wtWorkersPromise;
+      _uxqItemsVersion += 1;
+      _uxqHealthAppliedSeq = ++_uxqHealthReqSeq;
+      _wtWorkersVersion += 1;
+      _uxqItemsCache.ts = 0;
+      _uxqHealthCache.ts = 0;
+      _wtWorkersCache.ts = 0;
+      const refreshQueue = () => {
+        _uxqItemsCache.ts = 0;
+        if (_queuePanelIsVisible() && typeof _renderQueuePanel === 'function') {
+          _renderQueuePanel();
+        }
+      };
+      if (_queuePanelIsVisible()) {
+        const refreshItems = Promise.resolve(inFlightQueueRead).catch(() => {}).then(() => {
+          _uxqItemsCache.ts = 0;
+          return _fetchUxqItems(false);
+        });
+        const refreshHealth = _fetchUxqHealth(false, true);
+        const refreshWorkers = Promise.resolve(inFlightWorkerRead).catch(() => {}).then(() => {
+          _wtWorkersCache.ts = 0;
+          return _fetchWtWorkers();
+        });
+        Promise.allSettled([refreshItems, refreshHealth, refreshWorkers]).then(refreshQueue);
+      }
+    }
+    if (resources.has('sessions') && typeof refreshLiveSessionsActivity === 'function') {
+      refreshLiveSessionsActivity().catch(() => {});
+    }
+    if (resources.has('archive') && typeof refreshArchiveData === 'function') {
+      if (_archiveRefreshPromise) _archiveRefreshAfterInflight = true;
+      else refreshArchiveData({ staleOk: true }).then(_queueDashboardArchiveRender).catch(() => {});
+    }
+    if ((resources.has('repo') || resources.has('github'))
+        && typeof _hydrateArchiveSideData === 'function') {
+      _hydrateArchiveSideData(true).catch(() => {});
+    }
+  }
+
+  function applyDashboardEvent(event) {
+    if (!event || Number(event.schema) !== 1 || !event.topic) return false;
+    event.seq = Number(event.seq || 0);
+    if (event.topic === 'resync.required') {
+      _dashboardEventState.bootId = String(event.boot_id || '');
+      _dashboardEventState.seq = event.seq;
+      _dashboardEventState.entityVersions.clear();
+      _dashboardEventState.pendingConversationPatches.clear();
+      _persistDashboardEventCursor();
+      scheduleDashboardInvalidation('sessions');
+      scheduleDashboardInvalidation('queue');
+      scheduleDashboardInvalidation('archive');
+      return true;
+    }
+    if (_dashboardEventState.bootId && event.boot_id !== _dashboardEventState.bootId) {
+      _dashboardEventState.seq = 0;
+      _dashboardEventState.entityVersions.clear();
+      _dashboardEventState.pendingConversationPatches.clear();
+    }
+    if (event.seq <= _dashboardEventState.seq) return false;
+    _dashboardEventState.bootId = String(event.boot_id || '');
+    _dashboardEventState.seq = event.seq;
+
+    if (event.entity && event.entity.id && event.entity.type && event.entity_version != null) {
+      const entityKey = String(event.entity.type) + ':' + String(event.entity.id);
+      const knownVersion = Number(_dashboardEventState.entityVersions.get(entityKey) || 0);
+      if (event.entity_version <= knownVersion) {
+        _persistDashboardEventCursor();
+        return false;
+      }
+      _dashboardEventState.entityVersions.set(entityKey, Number(event.entity_version));
+    }
+
+    if (event.topic === 'conversation.patch') _applyDashboardConversationPatch(event);
+    else if (event.topic === 'session.patch') _applyDashboardSessionPatch(event);
+    else if (event.topic === 'queue.patch' || event.topic === 'queue.remove') {
+      scheduleDashboardInvalidation('queue', event.entity && event.entity.id);
+    } else if (event.topic === 'worker.patch') {
+      scheduleDashboardInvalidation('sessions', event.entity && event.entity.id);
+    }
+    (Array.isArray(event.invalidate) ? event.invalidate : []).forEach(item => {
+      if (item && item.resource) scheduleDashboardInvalidation(item.resource, item.id);
+    });
+    _persistDashboardEventCursor();
+    return true;
+  }
+
+  function connectDashboardEvents() {
+    if (typeof EventSource !== 'function') return;
+    if (_dashboardEventState.source) {
+      try { _dashboardEventState.source.close(); } catch (_) {}
+    }
+    const params = new URLSearchParams();
+    params.set('since', String(_dashboardEventState.seq || 0));
+    if (_dashboardEventState.bootId) params.set('boot_id', _dashboardEventState.bootId);
+    const source = new EventSource('/api/events?' + params.toString());
+    _dashboardEventState.source = source;
+    source.onopen = () => {
+      _dashboardEventState.retryMs = 1000;
+      _dashboardEventStreamHealthy = true;
+      _uxqStreamLive = true;
+      if (_uxqLegacyEventSource) {
+        try { _uxqLegacyEventSource.close(); } catch (_) {}
+        _uxqLegacyEventSource = null;
+      }
+    };
+    source.onmessage = ev => {
+      try { applyDashboardEvent(JSON.parse(ev.data)); } catch (_) {}
+    };
+    source.onerror = () => {
+      if (_dashboardEventState.source !== source) return;
+      _dashboardEventStreamHealthy = false;
+      _uxqStreamLive = false;
+      try { source.close(); } catch (_) {}
+      _dashboardEventState.source = null;
+      clearTimeout(_dashboardEventState.retryTimer);
+      const delay = _dashboardEventState.retryMs;
+      _dashboardEventState.retryMs = Math.min(delay * 2, 30000);
+      _dashboardEventState.retryTimer = setTimeout(connectDashboardEvents, delay);
+    };
+  }
+
+  connectDashboardEvents();
+  window.__cccDashboardEvents = { apply: applyDashboardEvent, schedule: scheduleDashboardInvalidation };
+  // ── End unified dashboard events ──────────────────────────────────────
 
   // A worker may claim with EITHER its real session UUID or its made-up CCC
   // name (e.g. "BYM UX-fixes-queue"). To let the badge match either, reduce
@@ -62932,7 +63361,11 @@
         try {
           const init = { signal: controller.signal };
           if (prevEtag) init.headers = { 'If-None-Match': prevEtag };
-          r = await backgroundApiFetch(url, init);
+          if (!_archiveBootstrapConsumed && url === _archiveBootstrapUrl && !prevEtag) {
+            _archiveBootstrapConsumed = true;
+            r = await _archiveBootstrapFetchPromise;
+          }
+          if (!r) r = await backgroundApiFetch(url, init);
         } finally {
           clearTimeout(timeoutId);
         }
@@ -63074,6 +63507,7 @@
   let _archiveSideDataHydratedAt = 0;
   let _archivePrHydratedAt = 0;
   const ARCHIVE_REFRESH_INTERVAL_MS = 60 * 1000;
+  const ARCHIVE_RECOVERY_INTERVAL_MS = 5 * 60 * 1000;
   const ARCHIVE_STALE_RETRY_MS = 30 * 1000;
   const ARCHIVE_HYDRATE_TTL_MS = 5 * 60 * 1000;
   function _archiveQuery() {
@@ -63259,6 +63693,7 @@
   }
 
   let _archiveRefreshPromise = null;
+  let _archiveRefreshAfterInflight = false;
   async function refreshArchiveData(opts = {}) {
     if (_archiveRefreshPromise) {
       _clientLog('[ARCHIVE-DIAG] refreshArchiveData deduped onto in-flight promise');
@@ -63286,26 +63721,40 @@
           + archiveData.length + ' (empty payload)');
         return archiveData;
       }
-      archiveData = _mergeArchivePrSnapshot(convs, archiveData);
+      archiveData = _applyPendingDashboardConversationPatches(
+        _mergeArchivePrSnapshot(convs, archiveData)
+      );
       archiveDataWindow = requestedWindow;
         archiveLoaded = true;
         _clientLog('[ARCHIVE-DIAG] refreshArchiveData merged ' + (Array.isArray(archiveData) ? archiveData.length : -1) + ' rows, archiveLoaded=true');
-        // The sidebar must learn worker-owned approval blockers even before a
-        // conversation is selected (startLiveStatusPolling begins on select).
-        // Await the cheap overlay here so the first full archive render can
-        // place those sessions in Open asks without a click or 5s poll.
-        await refreshLiveSessionsActivity();
+        // Base rows are useful immediately. Let the live/approval overlay land
+        // afterward instead of holding first paint behind a contended status
+        // read; the unified session watcher also pushes those state changes.
+        refreshLiveSessionsActivity().then(() => {
+          _queueDashboardArchiveRender();
+          if (typeof window.__cccRenderThroughputActivity === 'function') {
+            window.__cccRenderThroughputActivity();
+          }
+        }).catch(() => {});
         if (typeof window.__cccRenderThroughputActivity === 'function') {
           window.__cccRenderThroughputActivity();
         }
         setTimeout(() => {
           _hydrateArchiveSideData();
-          _hydrateArchivePrData();
         }, 0);
         return archiveData;
       } finally {
         _archiveRefreshPromise = null;
         _stopArchiveProgressPoll();
+        _markArchiveFirstLoaded();
+        if (_archiveRefreshAfterInflight) {
+          _archiveRefreshAfterInflight = false;
+          queueMicrotask(() => {
+            refreshArchiveData({ staleOk: true })
+              .then(_queueDashboardArchiveRender)
+              .catch(() => {});
+          });
+        }
       }
     })();
     return _archiveRefreshPromise;
@@ -63917,6 +64366,7 @@
       } catch (_) {}
     }
     _finishArchiveRender();
+    _markArchiveFirstLoaded();
   }
 
   async function setArchiveMode() {
@@ -63980,12 +64430,10 @@
         renderArchiveList($search.value);
       });
     }
-    // Boot kick: wait for the first /api/sessions response before kicking
-    // the archive walk. Both endpoints share CPU/subprocess slots in the
-    // same Python process; running the slow one (cross-folder JSONL + git
-    // ops, ~12s on a cold cache) in parallel with /api/sessions starved it.
-    // Waiting until sessions returns means the selected repo is interactive
-    // in <1s, then the archive populates the sidebar.
+    // Boot kick: the base archive response was placed at the front of the
+    // connection queue above. The server now serves a persisted snapshot and
+    // refreshes out of process, so waiting behind every optional startup probe
+    // only recreates the old blank-sidebar delay.
     {
       // Show the placeholder immediately so the sidebar isn't blank
       // during the wait — the actual fetch fires after sessions land.
@@ -64017,10 +64465,7 @@
       // snapshot now so the scope selector is ready even when the cross-repo
       // archive scan takes much longer than the selected-repo session load.
       if (_sharedQueuePanelHost === 'sidebar') _renderQueuePanel();
-      _firstSessionsLoaded.then(() => {
-        _clientLog('[ARCHIVE-DIAG] first sessions loaded -> setArchiveMode');
-        setArchiveMode();
-      });
+      queueMicrotask(() => setArchiveMode());
     }
     // Periodic archive refresh. archiveData carries last_interacted /
     // modified / mtime for every session row, but used to only refresh
@@ -64033,6 +64478,7 @@
     // overlap means the user sees row time advance within ~90s of any
     // real activity, even for non-live sessions.
     setInterval(_gated('archiveTimes', () => {
+      if (_dashboardEventStreamHealthy) return;
       if (document.hidden) return;
       if (typeof refreshArchiveData !== 'function') return;
       // Skip while the user is panning the flow board (or otherwise
@@ -64050,7 +64496,16 @@
         } catch (_) {}
       }).catch(() => {});
     }), 90 * 1000);
+    setInterval(_gated('archiveRecovery', () => {
+      if (!_dashboardEventStreamHealthy || document.hidden || activeTab !== 'sessions') return;
+      if (isInlineRenameInProgress() || conversationPaneLoading) return;
+      if (typeof deferSidebarRenderIfDragging === 'function' && deferSidebarRenderIfDragging()) return;
+      refreshArchiveData({ staleOk: true })
+        .then(() => renderArchiveList(_archiveQuery()))
+        .catch(() => {});
+    }), ARCHIVE_RECOVERY_INTERVAL_MS);
     setInterval(_gated('uxFixesQueueMeta', () => {
+      if (_uxqStreamLive) return;
       if (document.hidden) return;
       refreshUxFixesQueueMeta({ force: true }).catch(() => {});
       // Queue tab (status rail) only refetches when you switch to it —
@@ -64080,20 +64535,24 @@
         }
       };
       const schedule = () => {
+        if (_dashboardEventStreamHealthy) return;
         setTimeout(connect, retryMs);
         retryMs = Math.min(retryMs * 2, 30000);
       };
       const connect = () => {
+        if (_dashboardEventStreamHealthy) return;
         try { es = new EventSource('/api/queue/events'); } catch (_) { schedule(); return; }
+        _uxqLegacyEventSource = es;
         es.onopen = () => { retryMs = 1000; _uxqStreamLive = true; invalidateAndRender(); };
         es.onmessage = () => { invalidateAndRender(); };
         es.onerror = () => {
-          _uxqStreamLive = false;
+          _uxqStreamLive = _dashboardEventStreamHealthy;
           try { es.close(); } catch (_) {}
+          if (_uxqLegacyEventSource === es) _uxqLegacyEventSource = null;
           schedule();
         };
       };
-      connect();
+      setTimeout(connect, 2000);
     })();
   })();
 
@@ -64711,8 +65170,17 @@
     } catch (_) {}
   }
   if (!READER_ONLY_POPOUT) {
-    spawnDefaultsReady.finally(refreshCodexAvailability);
-    window.addEventListener('focus', refreshCodexAvailability);
+    Promise.all([_firstSessionsLoaded, _archiveFirstLoaded]).then(() => {
+      const probeWhenIdle = () => Promise.resolve(spawnDefaultsReady).then(refreshCodexAvailability);
+      if (typeof requestIdleCallback === 'function') {
+        requestIdleCallback(probeWhenIdle, { timeout: 4000 });
+      } else {
+        setTimeout(probeWhenIdle, 2500);
+      }
+    });
+    window.addEventListener('focus', () => {
+      Promise.all([_firstSessionsLoaded, _archiveFirstLoaded]).then(refreshCodexAvailability);
+    });
   }
   // Hide-descriptions toggle
   const $kptDescToggle = document.getElementById('kptDescToggle');
@@ -65598,6 +66066,7 @@
   // real-time row activity while this refresh catches structural changes.
   if (!READER_ONLY_POPOUT) {
 	  setInterval(async () => {
+		    if (_dashboardEventStreamHealthy) return;
 		    if (_pollerSkip('sessionsList')) return; if (activeTab !== 'sessions') return;
 			    _pollerTick('sessionsList');
 		    if (isInlineRenameInProgress()) return;
