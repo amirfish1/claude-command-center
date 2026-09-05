@@ -2452,7 +2452,9 @@
      tell the two panes apart at a glance. */
   body.conversation-popout .conv-pane > .conv-pane-header,
   .conv-split[data-orientation="vertical"] .conv-pane-header,
-  .conv-split[data-orientation="horizontal"] .conv-pane-header {
+  .conv-split[data-orientation="horizontal"] .conv-pane-header,
+  body:not(.conversation-popout) .conv-split[data-orientation="vertical"] .conv-pane.has-last-user-message > .conv-pane-header,
+  body:not(.conversation-popout) .conv-split[data-orientation="horizontal"] .conv-pane.has-last-user-message > .conv-pane-header {
     display: flex;
   }
   /* Toolbar breadcrumb — same look as the per-pane header but inline
@@ -2627,7 +2629,7 @@
   }
   .conv-pane-titlebar {
     min-width: 0;
-    flex: 0 1 38%;
+    flex: 1 1 50%;
     display: flex;
     align-items: center;
     gap: 8px;
