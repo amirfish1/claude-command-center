@@ -5545,7 +5545,7 @@
     display: inline-flex;
     align-items: center;
     justify-content: flex-end;
-    min-width: 36px;     /* ~"13h" or "13m" — enough for the time */
+    min-width: 44px;     /* fits rel time at rest, and quick trash + kebab on hover */
     min-height: 18px;    /* matches action-button height for clean swap */
     background: inherit;
   }
@@ -5573,9 +5573,59 @@
     z-index: 5;
   }
   .conv-item .conv-row-actions:empty { display: none; }
+  .conv-item .conv-row-hover-slot {
+    position: absolute;
+    right: 0;
+    top: 50%;
+    transform: translateY(-50%);
+    display: inline-flex;
+    align-items: center;
+    gap: 3px;
+    opacity: 0;
+    pointer-events: none;
+    transition: opacity 0.06s ease;
+    z-index: 3;
+  }
+  .conv-item:hover .conv-row-hover-slot,
+  .conv-item:focus-within .conv-row-hover-slot {
+    opacity: 1;
+    pointer-events: auto;
+  }
+  .conv-item.is-actions-open .conv-row-hover-slot {
+    opacity: 0;
+    pointer-events: none;
+  }
+  .conv-item .conv-row-hover-slot .conv-trash-btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 20px;
+    height: 18px;
+    border: none;
+    background: transparent;
+    padding: 0;
+    border-radius: 4px;
+    cursor: pointer;
+    flex: 0 0 auto;
+    font-size: 13px;
+    line-height: 1;
+    color: var(--text-muted);
+    opacity: 0.75;
+    transition: opacity 0.06s ease, color 0.1s ease, background 0.1s ease;
+  }
+  .conv-item .conv-row-hover-slot .conv-trash-btn:hover,
+  .conv-item .conv-row-hover-slot .conv-trash-btn:focus-visible {
+    opacity: 1;
+    color: var(--red);
+    background: rgba(248,81,73,0.12);
+  }
+  .conv-item .conv-row-hover-slot .conv-trash-btn.is-restore:hover {
+    color: var(--accent);
+    background: rgba(88,166,255,0.12);
+  }
   /* Three-state row-end swap (CCC-783): at rest, the time shows. On hover
-     (or focus-within for keyboard users), the time fades out and a 2-dot
-     kebab fades in. Clicking the kebab (`.is-actions-open`) swaps again to
+     (or focus-within for keyboard users), the time fades out and the hover slot
+     (trash can + 2-dot kebab) fades in. Clicking the kebab (`.is-actions-open`) swaps again to
      the actions bar itself — only one of the three is ever visible. */
   .conv-item .conv-kebab-btn {
     display: inline-flex;
@@ -5595,6 +5645,10 @@
     pointer-events: none;
     transition: opacity 0.06s ease, background 0.1s ease;
   }
+  .conv-item .conv-row-hover-slot .conv-kebab-btn {
+    opacity: 1;
+    pointer-events: auto;
+  }
   .conv-item .conv-kebab-btn:hover,
   .conv-item .conv-kebab-btn:focus-visible {
     background: rgba(255,255,255,0.08);
@@ -5606,7 +5660,9 @@
     background: var(--text-muted);
   }
   .conv-item:hover .conv-row-end > .conv-kebab-btn,
-  .conv-item:focus-within .conv-row-end > .conv-kebab-btn {
+  .conv-item:focus-within .conv-row-end > .conv-kebab-btn,
+  .conv-item:hover .conv-row-end .conv-kebab-btn,
+  .conv-item:focus-within .conv-row-end .conv-kebab-btn {
     opacity: 1;
     pointer-events: auto;
   }
@@ -5614,7 +5670,8 @@
     opacity: 1;
     pointer-events: auto;
   }
-  .conv-item.is-actions-open .conv-row-end > .conv-kebab-btn {
+  .conv-item.is-actions-open .conv-row-end > .conv-kebab-btn,
+  .conv-item.is-actions-open .conv-row-end .conv-kebab-btn {
     opacity: 0;
     pointer-events: none;
   }
@@ -5627,10 +5684,19 @@
     opacity: 0;
     pointer-events: none;
   }
+  .conv-item .conv-row-end > .conv-rel {
+    position: absolute;
+    right: 0;
+    top: 50%;
+    transform: translateY(-50%);
+    flex: 0 0 auto;            /* override the column-width flex from the base rule */
+    transition: opacity 0.06s ease;
+  }
   .conv-item:hover .conv-row-end > .conv-rel,
   .conv-item:focus-within .conv-row-end > .conv-rel,
   .conv-item.is-actions-open .conv-row-end > .conv-rel {
     opacity: 0;
+    pointer-events: none;
   }
   .conv-item.is-pinned:not(:hover):not(:focus-within):not(.is-actions-open) .conv-row-end > .conv-rel {
     opacity: 0;

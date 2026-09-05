@@ -33465,6 +33465,11 @@
       } else {
         lifecycleButtons = '<button class="conv-archive-btn" data-role="archive" data-archived="true" title="Archive" aria-label="Archive">&#128229;</button>';
       }
+      const quickTrashBtn = (!isBacklogRow && !isGithubPrRow && !opts.hideTrash)
+        ? (lifecycleContext === 'trash'
+          ? '<button type="button" class="conv-trash-btn is-restore" data-role="untrash" title="Untrash to Archived" aria-label="Untrash to Archived">&#8617;</button>'
+          : '<button type="button" class="conv-trash-btn" data-role="trash" title="Move to Trash" aria-label="Move to Trash">&#128465;</button>')
+        : '';
       // CCC-467 follow-up: the transcript-size badge ("3MB") was dropped from
       // the meta row — it wrapped onto a second line and is redundant with the
       // size shown in the status rail (#statusRailSize, see CCC-280/CCC-475).
@@ -33825,7 +33830,10 @@
             // states (CSS uses `position: absolute` for one of them).
             + '<span class="conv-row-end">'
             +   '<span class="conv-rel" data-role="rel" title="Last activity">' + escapeHtml(rel) + '</span>'
-            +   '<button type="button" class="conv-kebab-btn" data-role="kebab" title="Actions" aria-label="Row actions"><span class="conv-kebab-dot"></span><span class="conv-kebab-dot"></span></button>'
+            +   '<span class="conv-row-hover-slot">'
+            +     quickTrashBtn
+            +     '<button type="button" class="conv-kebab-btn" data-role="kebab" title="Actions" aria-label="Row actions"><span class="conv-kebab-dot"></span><span class="conv-kebab-dot"></span></button>'
+            +   '</span>'
             +   '<span class="conv-row-actions">' + ((opts.evergreenAgent && !_egSingleLine) ? '' : pctBadgeRowActionHtml) + wakeBtn + summaryActionBtn + mergeBtn + startBtn + pinBtn + moveLaneBtn + elevateObjectBtn + attachSubsessionBtn + lifecycleButtons + '</span>'
             + '</span>'
           + '</div>'
@@ -38612,6 +38620,9 @@
         const nextSelectId = wantTrashed && currentConversation === convId
           ? _visibleConversationNeighborId(convId, item)
           : null;
+        btn.disabled = true;
+        btn.classList.add('is-pending');
+        btn.setAttribute('aria-busy', 'true');
 
         const c = conversationsData.find(x => x.id === convId || x.session_id === sessionId)
           || (Array.isArray(archiveData) ? archiveData.find(x => x.id === convId || x.session_id === sessionId) : null);
@@ -38655,7 +38666,14 @@
           repo_path: repoPath,
           trashed: wantTrashed,
         }).then(data => {
+          btn.disabled = false;
+          btn.classList.remove('is-pending');
+          btn.removeAttribute('aria-busy');
           if (!data.ok) throw new Error(data.error || 'trash transition failed');
+          setOptimisticOverride(sessionId, { archived: !!data.archived, trashed: !!data.trashed });
+          if (data.trashed && nextSelectId) {
+            selectConversation(nextSelectId);
+          }
           const cascaded = Array.isArray(data.cascaded) ? data.cascaded : [];
           if (cascaded.length) {
             for (const dsid of cascaded) {
@@ -62374,7 +62392,11 @@
   }
 
   function _archiveRowsWithBacklog() {
-    const rows = Array.isArray(archiveData) ? archiveData.slice() : [];
+    let sourcePool = Array.isArray(archiveData) ? archiveData : [];
+    if (Array.isArray(_archiveMasterRows) && _archiveMasterRows.length > sourcePool.length) {
+      sourcePool = _archiveMasterRows;
+    }
+    const rows = sourcePool.slice();
     const seen = new Set(rows.map(c => c && (c.session_id || c.id)).filter(Boolean));
     // Cross-repo issues take precedence over single-repo backlog injection
     // — they cover the selected repo's issues too, so dropping the single-
@@ -64215,6 +64237,21 @@
       + '</div>';
   }
 
+  let _archiveMasterRows = [];
+  function _mergeIntoMasterRows(freshRows) {
+    if (!Array.isArray(freshRows) || !freshRows.length) return;
+    const byKey = new Map();
+    for (const r of _archiveMasterRows) {
+      const k = _archiveRowStableKey(r);
+      if (k) byKey.set(k, r);
+    }
+    for (const r of freshRows) {
+      const k = _archiveRowStableKey(r);
+      if (k) byKey.set(k, r);
+    }
+    _archiveMasterRows = Array.from(byKey.values());
+  }
+
   let _archiveProgressPollId = null;
   let _archiveSideDataPromise = null;
   let _archivePrHydratePromise = null;
@@ -64232,13 +64269,38 @@
     const next = (value === '8h' || value === '1d' || value === '7d' || value === 'all') ? value : 'all';
     try { localStorage.setItem(ARCHIVE_WINDOW_KEY, next); } catch (_) {}
     const query = _archiveQuery();
+
+    // 1. Immediate visual feedback (<1ms): sync active state on all matching window toggles in DOM
+    document.querySelectorAll('[data-role="window-toggle"] [data-window], [data-role="archived-window-toggle"] [data-window], .conv-window-toggle [data-window]').forEach(el => {
+      el.classList.toggle('is-active', el.getAttribute('data-window') === next);
+    });
+
+    // 2. Ensure archiveData contains all known master rows if master has a larger superset
+    if (Array.isArray(_archiveMasterRows) && _archiveMasterRows.length > (Array.isArray(archiveData) ? archiveData.length : 0)) {
+      archiveData = _archiveMasterRows.slice();
+    }
+
+    // 3. Immediately schedule in-memory re-render on next frame so click returns in <1ms and active tab highlights instantly
+    requestAnimationFrame(() => {
+      try {
+        renderSidebar(filterConversations(query), { force: true });
+      } catch (_) {
+        try { renderArchiveList(query, { force: true }); } catch (_) {}
+      }
+    });
+
+    // 4. Background refresh if needed, non-blocking
     if (!archiveLoaded || archiveDataWindow !== next) {
       refreshArchiveData({ staleOk: true, window: next })
-        .then(() => renderArchiveList(query))
-        .catch(() => renderArchiveList(query));
-      return;
+        .then(() => {
+          try {
+            renderSidebar(filterConversations(_archiveQuery()), { force: true });
+          } catch (_) {
+            try { renderArchiveList(_archiveQuery(), { force: true }); } catch (_) {}
+          }
+        })
+        .catch(() => {});
     }
-    renderArchiveList(query);
   }
   function _renderArchiveIfLoaded() {
     if (!archiveLoaded) return;
@@ -64439,6 +64501,7 @@
       archiveData = _applyPendingDashboardConversationPatches(
         _mergeArchivePrSnapshot(convs, archiveData)
       );
+      _mergeIntoMasterRows(archiveData);
       archiveDataWindow = requestedWindow;
         archiveLoaded = true;
         _clientLog('[ARCHIVE-DIAG] refreshArchiveData merged ' + (Array.isArray(archiveData) ? archiveData.length : -1) + ' rows, archiveLoaded=true');
