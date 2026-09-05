@@ -21876,7 +21876,10 @@ body.has-gc-reader .pwa-install-banner {
   background: rgba(0,0,0,0.6); padding: 16px;
 }
 .uxq-td-card {
-  width: min(1020px, 98vw); max-height: 92vh;
+  /* `zoom` scales the element after layout. Counter-scale its layout box so
+     the largest saved text size stays inside the fixed overlay viewport. */
+  width: min(1020px, calc(98vw / var(--uxq-td-zoom, 1)));
+  max-height: calc(92vh / var(--uxq-td-zoom, 1));
   display: flex; flex-direction: column;
   background: var(--surface); border: 1px solid var(--border);
   border-radius: 12px; box-shadow: 0 24px 60px rgba(0,0,0,0.5);
