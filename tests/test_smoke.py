@@ -80,6 +80,19 @@ class TestWebuiPaneRegressionGuards(unittest.TestCase):
         self.assertIn("conv-item-completion-glow", app_css)
         self.assertIn("animation: conv-completion-glow", app_css)
 
+    def test_composer_actions_wrap_inside_narrow_conversation_panes(self):
+        """A vertical split must not let the action toolbar escape its pane."""
+        app_css = pathlib.Path(PROJECT_ROOT, "static", "app.css").read_text(encoding="utf-8")
+
+        self.assertRegex(
+            app_css,
+            r"\.conv-input-row-bottom\s*\{[^}]*min-width:\s*0;[^}]*flex-wrap:\s*wrap;",
+        )
+        self.assertRegex(
+            app_css,
+            r"\.conv-input-buttons\s*\{[^}]*min-width:\s*0;[^}]*flex-wrap:\s*wrap;",
+        )
+
     def test_pane_header_secondary_actions_use_overflow_menu(self):
         """Split-pane chrome stays compact without losing recording controls."""
         index_html = pathlib.Path(PROJECT_ROOT, "static", "index.html").read_text(encoding="utf-8")

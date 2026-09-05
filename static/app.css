@@ -8025,6 +8025,8 @@
     align-items: center;
     justify-content: space-between;
     width: 100%;
+    min-width: 0;
+    flex-wrap: wrap;
     margin-top: 4px;
     gap: 12px;
   }
@@ -8081,6 +8083,9 @@
     align-items: center;
     gap: 8px;
     margin-left: auto;
+    min-width: 0;
+    flex-wrap: wrap;
+    justify-content: flex-end;
   }
   .conv-goal-strip[hidden] { display: none !important; }
   .conv-goal-strip {
