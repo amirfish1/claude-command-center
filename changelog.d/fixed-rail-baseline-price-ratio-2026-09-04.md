@@ -1,1 +1,0 @@
-- Rail token headline for a session priced above the Opus 5 baseline (e.g. Fable 5 at 2× Opus 5 list price) now names the session's own model and list-price ratio in the label and tooltip, instead of showing a bare "Opus 5-equivalent" count that exceeded the raw token total and read as a misprice (CCC-1047).

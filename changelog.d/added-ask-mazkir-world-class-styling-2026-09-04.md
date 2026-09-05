@@ -1,1 +1,0 @@
-- Redesign the Ask / Mazkir assistant rail with world-class typography, ambient backdrop glow, branded Mazkir header with live status badge, interactive prompt suggestion chips, and clean source badge metadata.

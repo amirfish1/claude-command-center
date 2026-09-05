@@ -1,1 +1,0 @@
-New `ccc doctor` subcommand (and `GET /api/engines/doctor`): per-engine CLI presence, login/auth status where a probe exists, BYOK profile presence, and a dry-run smoke check that never launches a subprocess or spends a token. `ccc models` and `GET /api/engines/models` now also mark which engines are BYOK-ready.

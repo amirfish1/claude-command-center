@@ -1,1 +1,0 @@
-- Exclude active live sessions from Mazkir candidate search and purge scratch one-shots during history indexing.

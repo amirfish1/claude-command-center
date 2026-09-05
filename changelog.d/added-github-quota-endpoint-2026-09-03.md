@@ -1,1 +1,0 @@
-`GET /api/github/quota` and a `ccc doctor` line report GitHub's GraphQL point budget (used/remaining/reset), read from the authoritative in-band `rateLimit` block rather than `gh api rate_limit`, which reports a different bucket.

@@ -1,1 +1,0 @@
-The `report_to` return-address footer for Claude children now spells out that SendMessage must be addressed to the peer name `ccc` — never to a session id/UUID — and adds a curl `/api/inject-input` fallback line. Fixes lanes whose compacted context mangled the footer into "SendMessage to <session-uuid>", which peers reject with "No agent named ... is reachable" (OPS-927).

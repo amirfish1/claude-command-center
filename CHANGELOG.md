@@ -20,6 +20,100 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Changed
 - `watchtower.queue` is now a hard, unconditional dependency of CCC's queue system (ticket lifecycle: claim/close/edit/answer/comment/reopen). Removed the standalone `ux_fixes_queue.py` stdlib fallback that let CCC's queue features work without WatchTower installed — it had gone stale since WatchTower's own storage migrated from JSON to SQLite and was never updated, a latent risk of silent data divergence if watchtower ever became unimportable. If `watchtower.queue` can't be imported, CCC now fails loudly at startup with a clear error instead of silently falling back to a frozen JSON store.
 
+## [5.32.0] - 2026-09-04
+
+### Added
+- Ask (Mazkir) turns now carry a small **+ File an issue** button next to Copy/Read.
+  It opens a dialog to describe the problem (⌥-V pastes an image, same uploader as
+  the annotation editors) and auto-attaches the turn's question, response, time,
+  and turn id. Submitting files a durable ticket into the WatchTower MAZKIR queue
+  (repo-scoped to the Mazkir code) via the new `/api/annotations/mazkir-queue`
+  endpoint.
+- Redesign the Ask / Mazkir assistant rail with world-class typography, ambient backdrop glow, branded Mazkir header with live status badge, interactive prompt suggestion chips, and clean source badge metadata.
+- BYOK env injection now reaches Droid and Aider spawns (not just OpenCode): Droid's spawn path is real (`droid exec --auto high` with model + per-model reasoning-effort ladder), and Aider is wired into the main `/api/sessions/spawn` dispatch chain. A new Pi engine adapter (`ccc_server/pi.py`) resolves the `pi` CLI but reports "not yet wired" cleanly, with no verified invocation contract to build against yet.
+- Bring-your-own-key support: paste Anthropic/OpenAI/OpenRouter/TokenRouter/xAI/Moonshot/Google keys in Settings → Engines, stored in the macOS Keychain (or an encrypted local file elsewhere), routed into OpenCode spawns via `key_profile`, with per-profile spend tracked at `GET /api/byok/usage`.
+- New `ccc doctor` subcommand (and `GET /api/engines/doctor`): per-engine CLI presence, login/auth status where a probe exists, BYOK profile presence, and a dry-run smoke check that never launches a subprocess or spends a token. `ccc models` and `GET /api/engines/models` now also mark which engines are BYOK-ready.
+- Added GPT-6 Astra to Codex model pickers and made it the default for Codex session launches and orchestration presets, with context limits and pricing. Explicit model overrides remain supported.
+- The conversation composer's attach button is now a `+` icon and sits on the
+  left-hand side of the toolbar row instead of a paperclip mid-row (CCC-1039).
+- `GET /api/github/quota` and a `ccc doctor` line report GitHub's GraphQL point budget (used/remaining/reset), read from the authoritative in-band `rateLimit` block rather than `gh api rate_limit`, which reports a different bucket.
+- Opening a Kimi conversation in CCC now heals a stale `acp:<sid>` runtime
+binding back to `local` in the background (threaded, throttled per session,
+skipped while a turn is running). Previously the rebind only happened when a
+prompt was driven over kap, so a session you only ever *viewed* stayed
+degraded for the TUI and `kimi web` — no Bash/Read/Write/Edit until something
+drove it.
+- The Kimi transport pill now warns when the kap daemon reports the session
+bound to a non-`local` runtime (e.g. `acp:<sid>` left by an ACP attach): a
+second amber `runtime: acp` chip appears next to the KAP pill, since that
+binding means no Bash/Read/Write/Edit/Glob/Grep until rebound.
+- `CCC_KIMI_KAP_SERVER=<port-or-server-id>` pins which kap daemon CCC routes
+Kimi sessions through. With multiple live daemons registered (e.g. an
+interactive TUI's embedded server next to a dedicated `kimi web`), routing
+previously picked the newest heartbeat — prompts could land inside the TUI
+process. A pin that matches no live daemon reads as "no daemon" and falls
+back to ACP like any other miss.
+- **Kimi kap server row in System status.** The panel now shows the `kimi web`
+daemon CCC's kap transport routes through: state (online/degraded/offline/idle),
+pid, version, port, and heartbeat age. The row is read-only — CCC adopts this
+daemon, it never supervises it, so there is no Restart button. It only appears
+once kap routing is on or a daemon has ever registered, flags the
+"two live daemons, newest heartbeat wins" ambiguity (a 0.40.1 TUI embeds a kap
+server too), and only raises the attention banner when kap routing is enabled.
+- The queue board's **Working Now** rows now have a one-click **kill** button
+  (shown on hover): it releases the worker from queue staffing and terminates
+  its process, via the new `POST /api/wt/workers/kill` endpoint. Releasing
+  before the SIGTERM closes the race where the worker claims a fresh ticket on
+  its way down.
+- Mazkir gains a `daily_checkin` tool over `~/MyOfficeMgr/daily-checkin.md` (open items by section + discussion log) and a "Daily check-in" chip in the Ask rail, so the standing agenda is one click on every open.
+- The status rail gains a **Log** tab: the unified activity log (spawns, injects,
+  kills, health events) rendered inline with an All / This-session scope toggle
+  and a free-text filter over category, verb, and detail. The pane
+  auto-refreshes every few seconds while it is visible — no manual refresh.
+
+### Changed
+- Clicking the breadcrumb session chip now copies **both** the full session ID
+  and its transcript path, formatted `ID (path)`, so another session can locate
+  the transcript no matter which engine store it lives in. The chip's tooltip
+  previews both values.
+- Made dashboard freshness event-driven, bounded startup requests, and limited initial archive rendering so large histories no longer stall the UI.
+- The conversation pane header no longer shows the transport/process pill —
+  a long session title could overlap it. The chip now lives in the status
+  rail's Metadata tab (un-hidden outside debug mode) and the topbar
+  breadcrumb; popouts keep their own pill (CCC-1043).
+
+### Fixed
+- Headless Antigravity (`agy`) sessions now reliably appear in the session list regardless of status: the archive corpus signature only watched the desktop app's brain store, so CLI sessions produced no cache-invalidation signal and could vanish after their process exited (or never appear) until an unrelated engine triggered a rebuild. Both brain stores and each session dir are now folded into the signature, so spawns and transcript materialization refresh the archive within one cycle.
+- Headless Antigravity sessions now switch into the live conversation view immediately instead of sitting on the static prompt: the pane previously stayed empty until the language server materialized the brain transcript (observed lag of 10+ minutes), so the conversation fallback now streams tool-call activity from the CLI's own trajectory store (`conversations/<sid>.db`) in the meantime.
+- `ccc doctor` now warns about duplicate `server.py` dashboard processes for the same repo, including PID, port, start time, launchd ownership, and the exact kill/kickstart recovery command.
+- Orchestration lane map: Claude Code Task and Agent subagents now immediately render upon switching sessions and live polls, extract task descriptions and models from `.meta.json` instead of displaying bare transcript ids, record accurate spawn times, and avoid being hidden behind async fetch race conditions.
+- Open-PR lists are fetched once per repo instead of once per caller: `gh pr list` with check status is CCC's most expensive GitHub GraphQL call (~2.9 points) and was cached for only 30s in two separate places with no request coalescing. Issue-list page sizes are now tunable (`CCC_GH_PR_TTL_S`, `CCC_GH_PR_LIMIT`, `CCC_GH_ISSUE_LIMIT_*`) and cross-repo issue fetches coalesce concurrent requests.
+- Fixed CCC's GitHub rate-limit brake never engaging, so it kept polling straight through GraphQL quota exhaustion. The guard read `gh api rate_limit`'s `.resources.graphql` block, which is not this token's GraphQL quota — measured at one instant it reported remaining=5000/used=0 while the in-band meter reported remaining=1257/used=3743 for the same token — so the "back off below 200 remaining" check could never be true. It now reads the authoritative in-band meter through `github_quota.read_graphql_quota()`, reusing that module's TTL cache and single-flight instead of forking its own `gh`. Also hardened `read_graphql_quota()` to honour its documented "never raises" contract when `gh` returns well-formed JSON of an unexpected shape.
+- Unanswered Grok tool approvals now cancel after five minutes with an explicit error, preventing unattended sessions from waiting forever. Set `CCC_GROK_PERMISSION_TIMEOUT_SECONDS` to adjust the window between 1 and 3600 seconds; manual approvals still work before expiry.
+- Kimi sessions driven over the kap transport no longer lose their tools. An
+ACP attach durably rebinds a session to the virtual `acp:<sid>` runtime (no
+fs/process capabilities), which left daemon-served turns without
+Bash/Read/Write/Edit/Glob/Grep — the model opened every turn with AgentSwarm
+because coordination tools were all it had. CCC now rebinds the session to
+the `local` runtime (POST `/api/v1/sessions/{id}/runtime`, verified by a
+follow-up GET with a retry for the cold-session case where the daemon's first
+POST answers success but persists nothing) before driving a prompt over kap.
+Best-effort: daemons without the route degrade to the previous behavior.
+- Kimi sessions no longer render a turn twice when both kap observers are live.
+The wire-log tail (folds TUI-originated turns) and the kap pump (folds
+daemon-streamed turns) both wrote the same turn into the CCC transcript when
+a prompt was sent over kap while the session was also live in the TUI. While
+a kap pump is streaming a session, the wire tail now stays silent but keeps
+its cursor moving, so turns after the pump exits still fold.
+- Exclude active live sessions from Mazkir candidate search and purge scratch one-shots during history indexing.
+- Make New Session model selection react immediately with optimistic local updates and switch model ranking to recency-first so Antigravity and recent engine picks stay in the top 8.
+- Duplicate sidebar row for one spawned session: the pending spawn placeholder now reconciles with the real archive row for URL- or punctuation-heavy prompts. The placeholder title is the slugged spawn name ("why https bookyourmat com buy …") while the archive row carries the raw prompt ("why https://bookyourmat.com/buy/…") — the fuzzy matcher normalized only whitespace/case, so the two never matched and both rows stayed. Prompt normalization is now punctuation-insensitive (still gated by the 24-char head match, same-cwd, and 2-minute recency guards).
+- Rail token headline for a session priced above the Opus 5 baseline (e.g. Fable 5 at 2× Opus 5 list price) now names the session's own model and list-price ratio in the label and tooltip, instead of showing a bare "Opus 5-equivalent" count that exceeded the raw token total and read as a misprice (CCC-1047).
+- The `report_to` return-address footer for Claude children now spells out that SendMessage must be addressed to the peer name `ccc` — never to a session id/UUID — and adds a curl `/api/inject-input` fallback line. Fixes lanes whose compacted context mangled the footer into "SendMessage to <session-uuid>", which peers reject with "No agent named ... is reachable" (OPS-927).
+- Repo-scoped session lists now return their last completed snapshot while one background refresh runs, avoiding repeated full-scan waits after the cache expires.
+- Fixed "Continue in a new session" silently vanishing when the origin session's title started with certain emoji (🧵/🪄 family): a UTF-16-unaware title cleanup left a lone surrogate in the spawn name, the control-plane UTF-8 encode rejected it, and the spawn died before registering while the UI froze on a ghost placeholder. The title cleanup now handles astral characters correctly, spawn payloads are stripped of unpaired surrogates at the API boundary, and an immediately-failed spawn now stays on screen as a persistent card with the real error plus Retry / Edit / Dismiss controls.
+- **Reliable `spawned_via` attribution**: `spawned_via` is now consistently inferred and recorded across active, ended, and archived sessions (distinguishing `terminal`, `ui`, `ui-automated`, `cli`, `subagent`, `watchtower`, and `resumed` sessions), eliminating `via: not available` in the session rail and `via: -` in `ccc sessions`.
+
 ## [5.31.0] - 2026-09-03
 
 ### Added
@@ -2961,7 +3055,8 @@ Initial public release.
 - `/api/repo/switch` validates targets against the picker allow-list.
 - See [`SECURITY.md`](SECURITY.md) for the full threat model.
 
-[Unreleased]: https://github.com/amirfish1/claude-command-center/compare/v5.31.0...HEAD
+[Unreleased]: https://github.com/amirfish1/claude-command-center/compare/v5.32.0...HEAD
+[5.32.0]: https://github.com/amirfish1/claude-command-center/releases/tag/v5.32.0
 [5.31.0]: https://github.com/amirfish1/claude-command-center/releases/tag/v5.31.0
 [5.30.0]: https://github.com/amirfish1/claude-command-center/releases/tag/v5.30.0
 [5.29.0]: https://github.com/amirfish1/claude-command-center/releases/tag/v5.29.0

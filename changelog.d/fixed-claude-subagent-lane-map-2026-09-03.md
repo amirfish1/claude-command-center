@@ -1,1 +1,0 @@
-- Orchestration lane map: Claude Code Task and Agent subagents now immediately render upon switching sessions and live polls, extract task descriptions and models from `.meta.json` instead of displaying bare transcript ids, record accurate spawn times, and avoid being hidden behind async fetch race conditions.

@@ -1,1 +1,0 @@
-**Reliable `spawned_via` attribution**: `spawned_via` is now consistently inferred and recorded across active, ended, and archived sessions (distinguishing `terminal`, `ui`, `ui-automated`, `cli`, `subagent`, `watchtower`, and `resumed` sessions), eliminating `via: not available` in the session rail and `via: -` in `ccc sessions`.

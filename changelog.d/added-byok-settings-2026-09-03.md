@@ -1,1 +1,0 @@
-Bring-your-own-key support: paste Anthropic/OpenAI/OpenRouter/TokenRouter/xAI/Moonshot/Google keys in Settings → Engines, stored in the macOS Keychain (or an encrypted local file elsewhere), routed into OpenCode spawns via `key_profile`, with per-profile spend tracked at `GET /api/byok/usage`.

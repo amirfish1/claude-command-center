@@ -1,1 +1,0 @@
-- Make New Session model selection react immediately with optimistic local updates and switch model ranking to recency-first so Antigravity and recent engine picks stay in the top 8.
