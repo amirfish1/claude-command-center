@@ -4628,9 +4628,9 @@ class TestServerImports(unittest.TestCase):
         self.assertIn('id="mobileSimpleHeader"', index_html)
         self.assertIn("Start a task", index_html)
 
-    def test_advanced_mobile_bottom_nav_is_sessions_vs_queues(self):
+    def test_advanced_mobile_bottom_nav_includes_ask(self):
         """Advanced (non-simple) mobile reuses #mobileBottomNav for Coding /
-        Workers / Queues (sidebar list) / q2 (board overlay). The in-list
+        Workers / Queues (sidebar list) / Ask. The in-list
         tab bar is hidden; Simple mode still has Home/Tasks/Helpers/More."""
         index_html = pathlib.Path(PROJECT_ROOT, "static", "index.html").read_text(encoding="utf-8")
         app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
@@ -4642,11 +4642,12 @@ class TestServerImports(unittest.TestCase):
         self.assertIn('data-mobile-nav="coding"', index_html)
         self.assertIn('data-mobile-nav="workers"', index_html)
         self.assertIn('data-mobile-nav="queues"', index_html)
-        self.assertIn('data-mobile-nav="q2"', index_html)
+        self.assertIn('data-mobile-nav="ask"', index_html)
+        self.assertNotIn('data-mobile-nav="q2"', index_html)
         self.assertNotIn('data-mobile-nav="sessions"', index_html)
         self.assertIn('data-nav-chrome="advanced"', index_html)
         self.assertIn('data-nav-chrome="simple"', index_html)
-        self.assertIn('href="/q2.html"', index_html)
+        self.assertIn("frame.src = '/q2.html'", app_js)
         self.assertIn("function cccSwitchCoreApp(", app_js)
         self.assertIn("body.has-mobile-bottom-nav .mobile-bottom-nav", app_css)
         self.assertIn(

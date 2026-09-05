@@ -136,7 +136,7 @@
 <body>
   <!-- Shared mobile bottom nav. Same element for Simple and Advanced:
        Simple (data-nav-chrome="simple") drives Home/Tasks/Helpers/More;
-       Advanced (data-nav-chrome="advanced") is Coding / Workers / Queues / q2.
+       Advanced (data-nav-chrome="advanced") is Coding / Workers / Queues / Ask.
        Hidden everywhere else via inline style. -->
   <nav id="mobileBottomNav" class="mobile-bottom-nav" style="display:none;" aria-label="Main">
     <button type="button" class="mobile-nav-btn" data-mobile-nav="home" data-nav-chrome="simple" aria-current="page" aria-label="Home">
@@ -167,10 +167,10 @@
       <span class="mobile-nav-icon" aria-hidden="true">&#128203;</span>
       <span class="mobile-nav-label">Queues</span>
     </button>
-    <a href="/q2.html" class="mobile-nav-btn" data-mobile-nav="q2" data-nav-chrome="advanced" aria-label="q2">
-      <span class="mobile-nav-icon" aria-hidden="true">&#9638;</span>
-      <span class="mobile-nav-label">q2</span>
-    </a>
+    <button type="button" class="mobile-nav-btn" data-mobile-nav="ask" data-nav-chrome="advanced" aria-label="Ask">
+      <span class="mobile-nav-icon" aria-hidden="true">✦</span>
+      <span class="mobile-nav-label">Ask</span>
+    </button>
   </nav>
   <!-- Core-app frame: Queues (q2) overlays the dashboard without unloading
        the session list. src is set on first open. Hidden until then.
@@ -1384,6 +1384,10 @@
                     </div>
                     <div class="fq-working-rows"></div>
                   </div>
+                  <details class="fq-recent-work" id="queueRecentWork" open>
+                    <summary>Last 10 issues worked on <span>All queues</span></summary>
+                    <div class="fq-recent-rows"></div>
+                  </details>
                   <div class="fq-ticket-filter-row">
                     <!-- CCC-1038: the status filter sits with the type filter on the
                          ticket list it scopes, not up in the queue-scope header. -->
@@ -1463,6 +1467,7 @@
                     <button type="button" class="activity-log-scope-btn" data-rail-log-scope="session">This session</button>
                   </div>
                   <input type="search" class="rail-log-filter" id="railLogFilter" placeholder="Filter events…" aria-label="Filter log events">
+                  <label class="rail-log-heartbeats"><input type="checkbox" id="railLogShowHeartbeats"> Show heartbeats</label>
                 </div>
                 <div class="rail-log-body" id="railLogBody" aria-live="polite">
                   <div class="activity-log-empty">Loading…</div>

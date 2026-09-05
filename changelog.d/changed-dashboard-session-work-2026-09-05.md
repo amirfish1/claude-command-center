@@ -1,0 +1,1 @@
+- Keep one stable model chip per model, make Ask the fourth mobile destination, show prominent source/session links on a warmer Ask surface, hide healthy heartbeat noise by default, and expose recent queue work and worker ticket histories.

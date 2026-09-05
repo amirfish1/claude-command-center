@@ -14439,6 +14439,32 @@
   @media (prefers-reduced-motion: reduce) {
     .fq-qp-live, .fq-working-dot.pulse { animation: none; }
   }
+  /* Recent queue work shares the live ticket cache with Working now. */
+  .fq-recent-work {
+    flex: 0 0 auto; min-width: 0; padding: 8px 14px;
+    background: #0f1319; border-bottom: 1px solid #21262d;
+  }
+  .fq-recent-work > summary { cursor: pointer; color: #b1bac4; font-size: 11px; font-weight: 600; }
+  .fq-recent-work > summary > span { color: #8b949e; font-weight: 400; margin-left: 6px; }
+  .fq-recent-rows { display: grid; gap: 6px; max-height: 230px; overflow-y: auto; margin-top: 8px; }
+  .fq-recent-row {
+    display: flex; flex-direction: column; align-items: stretch; gap: 4px;
+    min-width: 0; width: 100%; padding: 8px; text-align: left; font: inherit;
+    background: #12181f; border: 1px solid #232b34; border-radius: 6px; cursor: pointer;
+  }
+  .fq-recent-row:hover { border-color: #3f4854; }
+  .fq-recent-row:focus-visible { outline: 2px solid #58a6ff; outline-offset: -2px; }
+  .fq-recent-title { font-size: 12px; color: #d5dde5; overflow-wrap: anywhere; }
+  .fq-recent-ref { color: #8b949e; font-family: 'JetBrains Mono', ui-monospace, monospace; }
+  .fq-recent-meta { display: flex; flex-wrap: wrap; gap: 4px 10px; color: #8b949e; font-size: 10.5px; overflow-wrap: anywhere; }
+  .fq-recent-state { color: #d29922; }
+  .fq-recent-state.is-resolved { color: #39d2c0; }
+  .fq-recent-time { color: #8b949e; font-size: 10px; overflow-wrap: anywhere; }
+  .fq-recent-summary { color: #b1bac4; font-size: 11px; white-space: pre-line; overflow-wrap: anywhere;
+    display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; overflow: hidden; }
+  .fq-recent-details { font-size: 10px; color: #58a6ff; }
+  .fq-recent-empty { color: #8b949e; font-size: 11px; padding: 6px 0; }
+  #queuePanel.fq-mobile .fq-recent-rows { max-height: 190px; }
   /* ── WORKING NOW strip ──────────────────────────────────────────────── */
   .fq-working-strip {
     flex: 0 0 auto; padding: 8px 14px 11px;
@@ -27118,7 +27144,7 @@ body.status-pos-right .status-rail-pane[data-rail-pane="metadata"] > .files-pane
   background:
     radial-gradient(100% 45% at 50% 0%, rgba(224, 163, 74, 0.08) 0%, transparent 70%),
     radial-gradient(80% 40% at 100% 100%, rgba(57, 210, 192, 0.04) 0%, transparent 60%),
-    var(--bg, #0d1117);
+    color-mix(in srgb, var(--surface, #242b35) 78%, #96744b);
   position: relative;
   font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
   color: var(--text, #e6edf3);
@@ -27905,3 +27931,72 @@ body.status-pos-right .status-rail-pane[data-rail-pane="metadata"] > .files-pane
   background: rgba(255, 255, 255, 0.06);
   border-color: rgba(255, 255, 255, 0.18);
 }
+
+/* Persistent source references share the same treatment inside answers. */
+.ask-top-sources { display: flex; flex-wrap: wrap; gap: 6px; margin: 8px 0; }
+.ask-session-chip { display: inline-flex; align-items: center; gap: 6px; max-width: 100%; vertical-align: middle; padding: 3px 8px; border: 1px solid color-mix(in srgb, var(--accent) 40%, var(--border)); border-radius: 999px; background: color-mix(in srgb, var(--surface) 85%, var(--accent)); color: var(--text); font: inherit; font-size: 12px; cursor: pointer; }
+.ask-session-chip > span:last-child { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ask-session-chip:hover, .ask-session-chip:focus-visible, .ask-session-chip.is-selected { outline: 2px solid var(--accent); outline-offset: 1px; }
+.rail-log-toolbar { flex-wrap: wrap; }
+.rail-log-heartbeats { display: flex; align-items: center; gap: 5px; font-size: 11px; color: var(--text-muted); cursor: pointer; }
+
+#mobileAskHost { position: fixed; inset: 0 0 calc(58px + env(safe-area-inset-bottom, 0px)); z-index: 940; background: var(--surface); }
+#mobileAskHost[hidden] { display: none; }
+#mobileAskHost > #statusRailAskPane { display: flex; flex-direction: column; height: 100%; padding: 0; overflow: hidden; }
+#mobileAskHost .ask-pane { flex: 1; min-height: 0; }
+body.mobile-ask-open .mobile-bottom-nav { z-index: 950; }
+
+/* Worker identity stays stable; ticket history has its own compact row. */
+.conv-worker-history {
+  margin: 4px 0 1px 26px;
+  min-width: 0;
+  color: var(--text-muted);
+  font-size: 11px;
+}
+.conv-worker-history > summary {
+  cursor: pointer;
+  line-height: 1.7;
+}
+.conv-worker-history-recent {
+  display: inline-flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin-left: 7px;
+}
+.conv-worker-ticket {
+  padding: 1px 5px;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: transparent;
+  color: var(--text);
+  font: inherit;
+  cursor: pointer;
+}
+.conv-worker-ticket:hover,
+.conv-worker-ticket:focus-visible {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+.conv-worker-ticket > span { color: var(--text-muted); }
+.conv-worker-history-scope { margin: 6px 0; }
+.conv-worker-history-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  max-height: 240px;
+  overflow-y: auto;
+}
+.conv-worker-history-list > li {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 5px;
+  padding: 4px 0;
+}
+.conv-worker-history-title {
+  color: var(--text);
+  overflow-wrap: anywhere;
+}
+
+/* Expanded ticket history owns the row space; floating hover metadata must not cover it. */
+.conv-item:has(.conv-worker-history[open]) .conv-hover-extras { display: none !important; }

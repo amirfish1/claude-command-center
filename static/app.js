@@ -15433,11 +15433,47 @@
 
   // ── Mobile bottom nav ──
   // One #mobileBottomNav for both Simple and Advanced. Simple drives
-  // Home/Tasks/Helpers/More. Advanced is Coding / Workers / Queues / q2.
+  // Home/Tasks/Helpers/More. Advanced is Coding / Workers / Queues / Ask.
   // Coding/Workers/Queues reuse the sidebar tab bar (data-conv-tab);
-  // q2 is the core-app overlay (cccSwitchCoreApp).
+  // Ask shares the existing rail pane, preserving its draft and history.
   var _coreApp = 'sessions';
   const _sessionsDocumentTitle = document.title;
+  function _setMobileAskOpen(open) {
+    let host = document.getElementById('mobileAskHost');
+    const pane = document.getElementById('statusRailAskPane');
+    if (!pane) return;
+    if (open) {
+      if (!host) {
+        host = document.createElement('section');
+        host.id = 'mobileAskHost';
+        host.setAttribute('aria-label', 'Ask');
+        document.body.appendChild(host);
+      }
+      if (!host._askHome) host._askHome = { parent: pane.parentNode, next: pane.nextSibling };
+      host.appendChild(pane);
+      pane.hidden = false;
+      pane.classList.add('is-active');
+      host.hidden = false;
+      document.body.classList.add('mobile-ask-open');
+    } else {
+      document.body.classList.remove('mobile-ask-open');
+      if (host) {
+        if (host._askHome) {
+          const home = host._askHome;
+          home.parent.insertBefore(pane, home.next && home.next.parentNode === home.parent ? home.next : null);
+          host._askHome = null;
+          // Restore the rail's selected tab after sharing its pane on mobile.
+          const selected = home.parent.querySelector('[data-rail-tab].is-active');
+          pane.classList.toggle('is-active', !!selected && selected.dataset.railTab === 'ask');
+          pane.hidden = !pane.classList.contains('is-active');
+        }
+        host.hidden = true;
+      }
+    }
+  }
+  window.addEventListener('resize', () => {
+    if (!isMobileRedesign() || isSimpleMode()) _setMobileAskOpen(false);
+  });
   function _mobileBottomNavShouldShow() {
     if (!isMobileRedesign()) return false;
     if (isSimpleMode()) return true;
@@ -15472,6 +15508,7 @@
     const show = _mobileBottomNavShouldShow();
     nav.style.display = show ? '' : 'none';
     document.body.classList.toggle('has-mobile-bottom-nav', show);
+    if (!show || isSimpleMode()) _setMobileAskOpen(false);
     if (!show) return;
     let tab = 'inprogress';
     try { tab = localStorage.getItem('ccc-sidebar-tab') || 'inprogress'; } catch (_) {}
@@ -15500,6 +15537,7 @@
       activeNavKey = _coreApp === 'queues' ? 'q2'
         : (tab === 'workers' ? 'workers' : tab === 'queues' ? 'queues' : 'coding');
     }
+    if (!isSimpleMode() && document.body.classList.contains('mobile-ask-open')) activeNavKey = 'ask';
     nav.querySelectorAll('[data-mobile-nav]').forEach(btn => {
       const active = btn.getAttribute('data-mobile-nav') === activeNavKey;
       btn.classList.toggle('is-active', active);
@@ -15528,15 +15566,14 @@
         if (typeof openSettingsModal === 'function') openSettingsModal();
         return;
       }
-      // Advanced mobile: Coding / Workers / Queues (sidebar list) / q2
-      // (board overlay). q2 reuses cccSwitchCoreApp so the session list
-      // stays mounted; the other three are sidebar tabs.
-      if (dest === 'q2') {
-        if (typeof cccSwitchCoreApp === 'function' && cccSwitchCoreApp('queues')) {
-          ev.preventDefault();
-        }
+      if (dest === 'ask') {
+        ev.preventDefault();
+        if (typeof cccSwitchCoreApp === 'function') cccSwitchCoreApp('sessions');
+        _setMobileAskOpen(true);
+        _syncMobileBottomNav();
         return;
       }
+      _setMobileAskOpen(false);
       if (dest === 'coding' || dest === 'workers' || dest === 'queues') {
         if (typeof cccSwitchCoreApp === 'function') cccSwitchCoreApp('sessions');
         _activateSidebarTabFromMobileNav(dest);
@@ -32728,6 +32765,7 @@
       if (c.backlog_type === 'github' || c.issue_number || c.linked_issue) {
         rawTitle = stripGhIssueProjectTag(rawTitle);
       }
+      rawTitle = _uxFixesWorkerDisplayTitle(c, rawTitle);
       let title = sidebarRowDisplayTitle(rawTitle);
       // Continuation rows (F2 "Continue in a new session" / auto-resume):
       // the ⤴ badge says "this carries on an earlier session", so legacy
@@ -33738,6 +33776,7 @@
           + '</div>'
           + evergreenMetaRowHtml
         + '</div>'
+        + _uxFixesWorkerHistoryHtml(c)
         + mobileDetailsHtml
         // Hover-revealed extras wrapped in one container so the current-sessions
         // panel can float the whole stack out of flow on hover (no row reflow,
@@ -44052,10 +44091,76 @@
     $trig.setAttribute('aria-expanded', open ? 'true' : 'false');
     $trig.classList.toggle('is-open', open);
   }
+  // Select work evidence, not edits or newly filed tickets. Timeline claims
+  // retain history when reopening clears the current claim fields.
+  function _uxqRecentWorkItems(items) {
+    return (Array.isArray(items) ? items : []).filter(Boolean).map(item => {
+      const events = [
+        ...(Array.isArray(item.timeline) ? item.timeline : []),
+        ...(Array.isArray(item.history) ? item.history : []),
+        ...(Array.isArray(item.progress_notes) ? item.progress_notes : []).filter(Boolean)
+          .map(note => ({ ...note, event: 'progress' })),
+      ].filter(ev => ev && ['claim', 'progress', 'block', 'close'].includes(ev.event));
+      const candidates = [
+        ...events,
+        { at: item.claimed_at, by: { worker: item.claimed_by, session_id: item.claimed_session_id } },
+        { at: item.closed_at, by: { worker: item.closed_by || item.claimed_by, session_id: item.claimed_session_id } },
+      ].filter(ev => Number.isFinite(Date.parse(ev.at || '')))
+        .sort((a, b) => Date.parse(b.at) - Date.parse(a.at));
+      if (!candidates.length) return null;
+      const latest = candidates[0];
+      const by = typeof latest.by === 'string' ? { worker: latest.by } : latest.by || {};
+      const resolved = item.status === 'closed' || !!item.closed_at;
+      const summary = resolved
+        ? (item.resolution && item.resolution.summary) || ''
+        : latest.text || '';
+      return { item, at: latest.at, ms: Date.parse(latest.at), resolved,
+        worker: by.worker || latest.worker || by.session_id || latest.session_id
+          || (resolved && item.closed_by) || item.claimed_by || item.claimed_session_id || '',
+        summary: Array.isArray(summary) ? summary.filter(Boolean).join('\n') : String(summary),
+      };
+    }).filter(Boolean).sort((a, b) => b.ms - a.ms).slice(0, 10);
+  }
+  function _uxqRenderRecentWork() {
+    const $el = document.getElementById('queueRecentWork');
+    if (!$el) return;
+    const $rows = $el.querySelector('.fq-recent-rows');
+    if (!$rows) return;
+    const rows = _uxqRecentWorkItems(_uxqItemsCache.items);
+    $rows.innerHTML = rows.map(row => {
+      const item = row.item;
+      const ref = _uxqItemRef(item);
+      const title = String(item.note || item.title || item.text || '').split('\n')[0];
+      const state = row.resolved ? 'Resolved' : 'Worked · ' + String(item.status || 'open').replace(/_/g, ' ');
+      const absolute = new Date(row.at).toLocaleString();
+      const dates = [item.claimed_at ? 'Claimed: ' + item.claimed_at : '', item.closed_at ? 'Closed: ' + item.closed_at : ''].filter(Boolean).join('\n');
+      return '<button type="button" class="fq-recent-row" data-uxq-recent-ref="' + escapeAttr(ref) + '" aria-label="Open full details for ' + escapeAttr(ref + ': ' + title) + '">'
+        + '<span class="fq-recent-title"><span class="fq-recent-ref">' + escapeHtml(ref) + '</span> ' + escapeHtml(title) + '</span>'
+        + '<span class="fq-recent-meta"><span class="fq-recent-state' + (row.resolved ? ' is-resolved' : '') + '">' + escapeHtml(state) + '</span>'
+        + '<span>' + escapeHtml(row.worker || 'Worker not recorded') + '</span></span>'
+        + '<time class="fq-recent-time" datetime="' + escapeAttr(row.at) + '" title="' + escapeAttr(dates || row.at) + '">' + escapeHtml(_uxqRelTime(row.at) + ' · ' + absolute) + '</time>'
+        + (row.summary ? '<span class="fq-recent-summary">' + escapeHtml(row.summary) + '</span>' : '')
+        + '<span class="fq-recent-details">Full details ↗</span></button>';
+    }).join('') || '<div class="fq-recent-empty">No recorded work yet.</div>';
+    // Delegate from the stable container; native buttons also support Enter
+    // and Space, and the detail view hydrates the complete ticket timeline.
+    if (!$el.dataset.recentWorkBound) {
+      $el.dataset.recentWorkBound = '1';
+      $el.addEventListener('click', ev => {
+        const $row = ev.target.closest && ev.target.closest('[data-uxq-recent-ref]');
+        if (!$row) return;
+        const ref = $row.getAttribute('data-uxq-recent-ref');
+        const item = _uxqItemForRef(ref);
+        if (item) _uxqPickerPickTicket(ref, item);
+        else _uxqOpenItemDetail(ref);
+      });
+    }
+  }
   // ── WORKING NOW strip ──────────────────────────────────────────────────
   // Spans ALL queues (not scoped). Updates live via the same health poll/SSE
   // that drives _renderQueuePanel. Collapses to header-only when idle.
   function _uxqRenderWorkingNow() {
+    _uxqRenderRecentWork();
     const $el = document.getElementById('queueWorkingStrip');
     if (!$el) return;
     const health = _uxqHealthCache || {};
@@ -58016,6 +58121,12 @@
   let _railLogScope = 'all';
   let _railLogFilter = '';
   let _railLogFetchInFlight = false;
+  let _railLogShowHeartbeats = false;
+
+  function _isSuccessfulHeartbeat(ev) {
+    return String(ev.verb || '').toUpperCase() === 'BEAT'
+      && /^ok(?:\s+\(\d+(?:\.\d+)?s\))?\s*$/i.test(String(ev.detail || '').trim());
+  }
 
   function _railLogPaneVisible() {
     const pane = document.getElementById('statusRailLogPane');
@@ -58026,7 +58137,7 @@
     const body = document.getElementById('railLogBody');
     if (!body) return;
     const needle = _railLogFilter.trim().toLowerCase();
-    let events = _railLogEvents;
+    let events = _railLogShowHeartbeats ? _railLogEvents : _railLogEvents.filter(ev => !_isSuccessfulHeartbeat(ev));
     if (needle) {
       events = events.filter((ev) => (
         String(ev.category || '').toLowerCase().includes(needle)
@@ -58097,6 +58208,11 @@
         _railLogEvents = [];
         refreshRailLogPane();
       });
+    });
+    const heartbeats = document.getElementById('railLogShowHeartbeats');
+    if (heartbeats) heartbeats.addEventListener('change', () => {
+      _railLogShowHeartbeats = heartbeats.checked;
+      _renderRailLogPane();
     });
     if (filter) {
       filter.addEventListener('input', () => {
@@ -59371,39 +59487,70 @@
     const count = Number.isFinite(t.hitCount) ? t.hitCount : sources.length;
     const elapsed = Number.isFinite(t.elapsedMs) ? (t.elapsedMs / 1000).toFixed(1) + 's' : '';
     const list = '<div class="ask-results">' + sources.map(s => askResultHtml(s, selectedId)).join('') + '</div>';
-    const summary = '<button type="button" class="ask-result-count" data-ask-toggle-sources>' +
+    const summary = '<button type="button" class="ask-result-count" data-ask-toggle-sources aria-expanded="false">' +
       '<span class="ask-toggle-caret">▸</span> ' + count + (count === 1 ? ' source' : ' sources') + ' found' +
       (elapsed ? ' · ' + elapsed : '') + '</button>';
-    return '<div class="ask-sources">' + summary + list + '</div>';
+    const top = '<div class="ask-top-sources" aria-label="Top relevant sessions">'
+      + sources.slice(0, 2).map(src => askSessionChipHtml(src, selectedId)).join('') + '</div>';
+    return '<div class="ask-sources">' + top + summary + list + '</div>';
   }
 
-  // Render through the app's real markdown pipeline (renderMarkdown) instead
-  // of a hand-rolled escape+regex pass, so Ask prose gets the same links,
-  // code blocks, and lists as a regular conversation turn — renderMarkdown
-  // escapes its own input, so `answer` must stay raw going in. Then swap
-  // validated action markers for spawn buttons — ids come only from the
-  // server's sources list, never raw model output. Citations
-  // ([[session:ID]]) are NOT re-rendered inline here: the result cards below
-  // already list every source, so the marker is stripped from the verdict
-  // prose rather than becoming a second, redundant reference. `spawned` is
-  // the current turn's { [sessionId]: true } map so a page redraw renders an
-  // already-spawned action as done, not armed again.
+  function askSessionChipHtml(src, selectedId) {
+    const title = askNeutralizeMarkers(src.title || src.id.slice(0, 8));
+    return '<button type="button" class="ask-session-chip' + (src.id === selectedId ? ' is-selected' : '') + '"'
+      + ' data-ask-open="' + askEscapeHtml(src.id) + '" data-ask-title="' + askEscapeHtml(title) + '"'
+      + ' data-ask-cwd="' + askEscapeHtml(src.cwd || '') + '" title="Open session: ' + askEscapeHtml(title) + '">'
+      + '<span class="ask-dot' + (src.status === 'live' ? ' is-live' : '') + '"></span>'
+      + '<span>' + askEscapeHtml(title) + '</span></button>';
+  }
+
+  // Only decorate prose text nodes. Markers in links, code, or attributes
+  // cannot manufacture a session link or a follow-up action.
   function renderAskVerdict(answer, sources, spawned) {
-    const byId = Object.create(null);
-    (sources || []).forEach(s => { if (s && s.id) byId[s.id] = s; });
-    const spawnedMap = spawned || {};
-    const raw = String(answer || '').replace(/[ \t]{2,}/g, ' ').replace(/[ \t]+([.,;:!?])/g, '$1').trim();
-    let verdict = renderMarkdown(raw);
-    verdict = verdict.replace(/\[\[action:spawn-continue:([0-9A-Za-z_-]{5,64})\]\]/g, (m, id) => {
-      if (!byId[id]) return '';
-      const done = !!spawnedMap[id];
-      const label = done ? '✓ Spawned'
-        : '▶ Spawn follow-up of ' + askEscapeHtml(askNeutralizeMarkers(byId[id].title || id.slice(0, 8)));
-      return '<button type="button" class="ask-action" data-ask-continue="' + askEscapeHtml(id) +
-        '" data-ask-cwd="' + askEscapeHtml(byId[id].cwd || '') + '"' + (done ? ' disabled' : '') + '>' +
-        label + '</button>';
+    const byId = Object.create(null), byTitle = new Map();
+    (sources || []).forEach(src => {
+      if (!src || !src.id) return;
+      byId[src.id] = src;
+      const title = String(src.title || '').trim();
+      if (title.length >= 5) byTitle.set(title, byTitle.has(title) ? null : src);
     });
-    return verdict.replace(/\[\[session:[0-9A-Za-z_-]{5,64}\]\]/g, '');
+    const titles = [...byTitle.keys()].filter(t => byTitle.get(t)).sort((a, b) => b.length - a.length);
+    const escapeRx = text => text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    const token = /\[\[(session|action:spawn-continue):([0-9A-Za-z_.-]{5,128})\]\]/;
+    const pattern = new RegExp(token.source + (titles.length ? '|' + titles.map(escapeRx).join('|') : ''), 'g');
+    const template = document.createElement('template');
+    template.innerHTML = renderMarkdown(String(answer || '').trim());
+    const walker = document.createTreeWalker(template.content, NodeFilter.SHOW_TEXT);
+    const nodes = [];
+    while (walker.nextNode()) {
+      const node = walker.currentNode;
+      if (!node.parentElement || !node.parentElement.closest('a, button, code, pre, script, style')) nodes.push(node);
+    }
+    nodes.forEach(node => {
+      const text = node.textContent;
+      let cursor = 0, html = '', matched = false;
+      for (const match of text.matchAll(pattern)) {
+        // Plain names must be whole references, not part of a longer word.
+        if (!match[1] && (/[\p{L}\p{N}_]/u.test(text[match.index - 1] || '')
+          || /[\p{L}\p{N}_]/u.test(text[match.index + match[0].length] || ''))) continue;
+        matched = true;
+        html += askEscapeHtml(text.slice(cursor, match.index));
+        const src = match[1] ? byId[match[2]] : byTitle.get(match[0]);
+        if (src && match[1] === 'action:spawn-continue') {
+          const done = !!(spawned || {})[src.id];
+          html += '<button type="button" class="ask-action" data-ask-continue="' + askEscapeHtml(src.id)
+            + '" data-ask-cwd="' + askEscapeHtml(src.cwd || '') + '"' + (done ? ' disabled' : '') + '>'
+            + (done ? '✓ Spawned' : '▶ Spawn follow-up of ' + askEscapeHtml(askNeutralizeMarkers(src.title || src.id.slice(0, 8)))) + '</button>';
+        } else if (src) html += askSessionChipHtml(src);
+        cursor = match.index + match[0].length;
+      }
+      if (!matched) return;
+      html += askEscapeHtml(text.slice(cursor));
+      const fragment = document.createElement('template');
+      fragment.innerHTML = html;
+      node.replaceWith(fragment.content);
+    });
+    return template.innerHTML;
   }
 
   // Mirrors assistantMessageActionsHtml's markup/classes so an Ask turn's
@@ -59642,7 +59789,7 @@
       const toggleBtn = ev.target.closest('[data-ask-toggle-sources]');
       if (toggleBtn) {
         const wrap = toggleBtn.closest('.ask-sources');
-        if (wrap) wrap.classList.toggle('is-expanded');
+        if (wrap) toggleBtn.setAttribute('aria-expanded', String(wrap.classList.toggle('is-expanded')));
         return;
       }
 
@@ -59656,6 +59803,7 @@
           };
           draw();
         } else {
+          _setMobileAskOpen(false);
           selectConversation(id);
         }
         return;
@@ -62837,12 +62985,56 @@
     // CCC-785: every ticket closed by each session id, for the status rail's
     // "tickets handled this session" list (not just the single latest).
     const closedTicketsBySession = new Map();
+    const ticketsBySession = new Map();
     for (const item of (Array.isArray(items) ? items : [])) {
       const seq = _uxFixesSeq(item);
       if (!seq) continue;
       const project = String((item && item.project) || '').trim() || '?';
       projectMaxSeq.set(project, Math.max(projectMaxSeq.get(project) || 0, seq));
       const status = item.status || '';
+      // History uses explicit identities only. A claim is evidence of work
+      // even when another session later resolved it; never credit that
+      // claimant as the resolver, or infer ownership from a shared queue.
+      const credits = new Map();
+      const credit = (identities, event, at, current = false) => {
+        for (const key of new Set(identities.filter(_uxFixesPlausibleSessionId).map(_uxFixesIdentityKey))) {
+          const rec = credits.get(key) || { claimed: false, resolved: false, currentClaimed: false, workedAt: 0, claimedAt: 0, closedAt: 0 };
+          const ms = Date.parse(at || '') || 0;
+          rec.workedAt = Math.max(rec.workedAt, ms);
+          if (event === 'claim') {
+            rec.claimed = true;
+            rec.claimedAt = Math.max(rec.claimedAt, ms);
+            rec.currentClaimed ||= current && status === 'in_progress';
+          }
+          if (event === 'close') {
+            rec.resolved = true;
+            rec.closedAt = Math.max(rec.closedAt, ms);
+          }
+          credits.set(key, rec);
+        }
+      };
+      credit([item.claimed_by, item.claimed_session_id], 'claim', item.claimed_at, true);
+      if (status === 'closed') credit([item.closed_by, item.closed_session_id], 'close', item.closed_at);
+      const events = [
+        ...(Array.isArray(item.history) ? item.history : []),
+        ...(Array.isArray(item.timeline) ? item.timeline : []),
+        ...(Array.isArray(item.progress_notes) ? item.progress_notes : []).filter(Boolean)
+          .map(note => ({ ...note, event: 'progress' })),
+      ];
+      for (const event of events) {
+        if (!event || !['claim', 'progress', 'block', 'close'].includes(event.event)) continue;
+        const actor = typeof event.by === 'string' ? { worker: event.by } : event.by || {};
+        credit([actor.worker, actor.session_id, event.worker, event.session_id], event.event, event.at);
+      }
+      for (const [key, involvement] of credits) {
+        let list = ticketsBySession.get(key);
+        if (!list) { list = []; ticketsBySession.set(key, list); }
+        list.push({
+          ref: item.ref || '', project, status, title: item.title || '', note: item.note || '',
+          summary: (typeof item.resolution === 'string' ? item.resolution : item.resolution?.summary) || '',
+          ...involvement,
+        });
+      }
       if (status === 'closed') {
         // Credit the CLOSER (a worker may close by ref without a prior claim),
         // falling back to the claimer. Without this, by-ref closes are
@@ -62931,39 +63123,98 @@
     for (const [sid, rec] of lastFixBySession) sigParts.push('d' + sid + ':' + rec.seq);
     for (const [proj, rec] of lastFixByProject) sigParts.push('pd' + proj + ':' + rec.seq);
     for (const [proj, mx] of projectMaxSeq) sigParts.push('m' + proj + ':' + mx);
+    for (const [sid, list] of ticketsBySession) {
+      for (const ticket of list) sigParts.push('h' + sid + ':' + JSON.stringify(ticket));
+    }
     const _sig = sigParts.sort().join('|');
     for (const list of closedTicketsBySession.values()) {
       list.sort((a, b) => (b.closedAt || 0) - (a.closedAt || 0));
-      list.length = Math.min(list.length, 25);
     }
     uxFixesQueueMeta = {
       projectMaxSeq, byClaimedSession, activeByProject, lastFixBySession, lastFixByProject,
-      closedTicketsBySession, _sig,
+      closedTicketsBySession, ticketsBySession, _sig,
     };
     _uxFixesQueueMetaLoadedAt = Date.now();
     return uxFixesQueueMeta;
   }
-  // CCC-785: tickets this session has closed (via any of its identity keys),
-  // most recent first — feeds the status rail's "tickets handled" list for a
-  // long-running WatchTower drain worker.
-  function _uxFixesHandledTicketsForRow(c, limit = 25) {
+  // Claim/close/progress history keeps prior workers credited after a ticket
+  // is released, reassigned, or reopened. Deleted/unrecorded work is unavailable.
+  function _uxFixesWorkerTicketsForRow(c, limit = Infinity) {
     if (!uxFixesQueueMeta) return [];
-    const byId = uxFixesQueueMeta.closedTicketsBySession || new Map();
-    const keys = _uxFixesRowIdentityKeys(c);
-    const seen = new Set();
-    const out = [];
-    for (const key of keys) {
-      const list = byId.get(key);
-      if (!list) continue;
-      for (const t of list) {
-        if (!t.ref || seen.has(t.ref)) continue;
-        seen.add(t.ref);
-        out.push(t);
+    const byId = uxFixesQueueMeta.ticketsBySession || uxFixesQueueMeta.closedTicketsBySession || new Map();
+    const byRef = new Map();
+    for (const key of _uxFixesRowIdentityKeys(c)) {
+      for (const ticket of (byId.get(key) || [])) {
+        if (!ticket.ref) continue;
+        const previous = byRef.get(ticket.ref);
+        byRef.set(ticket.ref, previous
+          ? { ...previous, claimed: previous.claimed || ticket.claimed, resolved: previous.resolved || ticket.resolved,
+              currentClaimed: previous.currentClaimed || ticket.currentClaimed,
+              workedAt: Math.max(previous.workedAt || 0, ticket.workedAt || 0) }
+          : { ...ticket });
       }
     }
-    out.sort((a, b) => (b.closedAt || 0) - (a.closedAt || 0));
-    return out.slice(0, limit);
+    const touchedAt = t => t.workedAt || Math.max(t.claimedAt || 0, t.closedAt || 0);
+    return Array.from(byRef.values()).sort((a, b) => touchedAt(b) - touchedAt(a)).slice(0, limit);
   }
+
+  // Preserve the Original ask summary's closed-ticket contract.
+  function _uxFixesHandledTicketsForRow(c, limit = Infinity) {
+    return _uxFixesWorkerTicketsForRow(c).filter(t => t.status === 'closed').slice(0, limit);
+  }
+
+  function _uxFixesWorkerDisplayTitle(c, rawTitle) {
+    // Explicit user names and custom terminal names remain authoritative.
+    if (!c || c.name_overridden || c.continued_from_session_id) return rawTitle;
+    if (!c._worker_id && !c.is_watchtower_worker) return rawTitle;
+    const generated = String(rawTitle || '').match(/^🧵\s*([A-Z][A-Z0-9_ -]*)#\d+(?::.*)?$/u);
+    if (!generated) return rawTitle;
+    const identity = String(c._worker_id || c.session_id || c.id || '').split('-').pop().slice(0, 8);
+    return '🧵 ' + generated[1].trim() + ' worker' + (identity ? ' · ' + identity : '');
+  }
+
+  const _uxFixesHistoryExpanded = new Set();
+  function _uxFixesWorkerHistoryHtml(c) {
+    const tickets = _uxFixesWorkerTicketsForRow(c);
+    if (!tickets.length) return '';
+    const sid = c.session_id || c.id || c._worker_id || '';
+    const statusLabel = t => {
+      const status = String(t.status || 'unknown').replace(/_/g, ' ');
+      if (t.resolved) return t.status === 'closed' ? 'Resolved' : 'Resolved earlier · ' + status;
+      return t.currentClaimed ? 'Claimed' : 'Worked · ' + status;
+    };
+    const ticketButton = (t, recent) => '<button type="button" class="conv-worker-ticket" data-worker-ticket="' + escapeAttr(t.ref) + '"'
+      + ' title="' + escapeAttr(statusLabel(t) + ': ' + (t.title || t.note || t.summary || t.ref)) + '">'
+      + escapeHtml(t.ref) + (recent ? '' : ' <span>' + escapeHtml(statusLabel(t)) + '</span>') + '</button>';
+    return '<details class="conv-worker-history" data-worker-history-sid="' + escapeAttr(sid) + '"'
+      + (_uxFixesHistoryExpanded.has(sid) ? ' open' : '') + '>'
+      + '<summary><span>' + tickets.length + ' recorded ticket' + (tickets.length === 1 ? '' : 's') + '</span>'
+      + '<span class="conv-worker-history-recent">' + tickets.slice(0, 3).map(t => ticketButton(t, true)).join('') + '</span></summary>'
+      + '<div class="conv-worker-history-scope">Tickets attributed to this session by recorded claims, progress, and resolutions.</div>'
+      + '<ul class="conv-worker-history-list">' + tickets.map(t => '<li>' + ticketButton(t, false)
+        + '<span class="conv-worker-history-title">' + escapeHtml(t.title || t.note || t.summary || '') + '</span></li>').join('') + '</ul></details>';
+  }
+  // Capture before a session row's own handler. Native details/button keyboard
+  // behavior remains intact, and ticket navigation uses the usual opener.
+  document.addEventListener('click', ev => {
+    const history = ev.target.closest && ev.target.closest('.conv-worker-history');
+    if (!history) return;
+    ev.stopPropagation();
+    const ticket = ev.target.closest('[data-worker-ticket]');
+    if (ticket) {
+      ev.preventDefault();
+      _uxqOpenItemDetail(ticket.getAttribute('data-worker-ticket'));
+    }
+  }, true);
+  document.addEventListener('keydown', ev => {
+    if (ev.target.closest && ev.target.closest('.conv-worker-history')) ev.stopPropagation();
+  }, true);
+  document.addEventListener('toggle', ev => {
+    if (!ev.target.matches || !ev.target.matches('.conv-worker-history')) return;
+    const sid = ev.target.getAttribute('data-worker-history-sid');
+    if (ev.target.open) _uxFixesHistoryExpanded.add(sid);
+    else _uxFixesHistoryExpanded.delete(sid);
+  }, true);
   // Signature of the queue state last painted into the live sessions sidebar.
   let _uxFixesChipPaintedSig = '';
 
@@ -73081,11 +73332,16 @@
     }
   }
 
-  function getTopSpawnPicks() {
-    if (_cachedServerModelPicks && _cachedServerModelPicks.length > 0) {
-      return _cachedServerModelPicks.slice(0, 8);
-    }
-    return [];
+  function getTopSpawnPicks(picks = _cachedServerModelPicks) {
+    // History tracks effort too; the strip offers models, with effort chosen
+    // separately in the composer. Deduplicate before applying the display cap.
+    const seen = new Set();
+    return (Array.isArray(picks) ? picks : []).filter(p => {
+      const key = JSON.stringify([p.engine, p.model || '']);
+      if (seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    }).slice(0, 8);
   }
 
   function formatModelNameForBadge(engine, modelId) {
@@ -73116,7 +73372,7 @@
     return name;
   }
 
-  function selectSpawnPick(engine, model, effort) {
+  function selectSpawnPick(engine, model) {
     const eng = normalizeSpawnDefaultEngine(engine);
     spawnDefaultsState.engine = eng;
     try { localStorage.setItem('ccc.spawnEngine', eng); } catch (_) {}
@@ -73127,18 +73383,8 @@
     spawnDefaultsState.models[eng] = model || '';
     _defaultModelsByEngine[eng] = model || '';
 
-    if (effort) {
-      spawnEffortChoiceDirty = true;
-      if ($convInputEffortSelect) {
-        $convInputEffortSelect.value = effort;
-      }
-    } else {
-      spawnEffortChoiceDirty = false;
-      if ($convInputEffortSelect) {
-        $convInputEffortSelect.value = '';
-      }
-    }
-
+    // Keep the independent effort choice; the engine sync below validates
+    // it against the selected engine's supported effort levels.
     syncSpawnEngineDependentUi();
     if (typeof updateInputBar === 'function') updateInputBar();
 
@@ -73153,7 +73399,7 @@
       requestClaudePrewarm({ force: true });
     }
 
-    recordSpawnChoice(eng, model || _defaultModelsByEngine[eng] || '', effort);
+    recordSpawnChoice(eng, model || _defaultModelsByEngine[eng] || '', $convInputEffortSelect ? $convInputEffortSelect.value : '');
   }
 
   function renderNsModelPickerPills(paneId) {
@@ -73166,20 +73412,27 @@
       const currentModel = (typeof $convInputModelSelect !== 'undefined' && $convInputModelSelect && $convInputModelSelect.style.display !== 'none')
         ? $convInputModelSelect.value
         : (_defaultModelsByEngine[currentEngine] || '');
-      const currentEffort = spawnEffortChoiceDirty && $convInputEffortSelect ? $convInputEffortSelect.value : '';
+      // A selection updates the usage-ranked history. Keep models already
+      // visible in their existing positions, appending newly chosen models.
+      const previousOrder = new Map(Array.from(container.querySelectorAll('.orch-tier-chip'), (chip, index) => [
+        JSON.stringify([chip.getAttribute('data-engine'), chip.getAttribute('data-model') || '']), index,
+      ]));
+      picks = getTopSpawnPicks(picks).sort((a, b) => {
+        const rank = p => previousOrder.get(JSON.stringify([p.engine, p.model || ''])) ?? Infinity;
+        return rank(a) - rank(b);
+      });
 
       container.innerHTML = picks.map(p => {
-        const isSel = (p.engine === currentEngine && p.model === currentModel && p.effort === currentEffort);
-        const label = getModelPillLabel(p.engine, p.model, p.effort);
+        const isSel = (p.engine === currentEngine && p.model === currentModel);
+        const label = getModelPillLabel(p.engine, p.model);
         const badge = MODEL_PICKER_ENGINE_GLYPHS[p.engine] || '?';
         const badgeClass = 'orch-glyph orch-glyph-' + p.engine;
-        const title = p.engine + ' · ' + p.model + (p.effort ? ' (' + p.effort + ')' : '');
+        const title = p.engine + ' · ' + p.model;
 
         return '<button type="button" class="orch-tier-chip' + (isSel ? ' is-selected' : '') + '"'
           + ' role="radio" aria-checked="' + (isSel ? 'true' : 'false') + '"'
           + ' data-engine="' + escapeAttr(p.engine) + '"'
           + ' data-model="' + escapeAttr(p.model) + '"'
-          + ' data-effort="' + escapeAttr(p.effort) + '"'
           + ' title="' + escapeAttr(title) + '">'
           + '<span class="' + badgeClass + '">' + escapeHtml(badge) + '</span>'
           + escapeHtml(label)
@@ -73190,8 +73443,7 @@
         chip.addEventListener('click', () => {
           const eng = chip.getAttribute('data-engine');
           const mod = chip.getAttribute('data-model');
-          const eff = chip.getAttribute('data-effort') || '';
-          selectSpawnPick(eng, mod, eff);
+          selectSpawnPick(eng, mod);
         });
       });
     };
@@ -73213,13 +73465,11 @@
     const currentModel = (typeof $convInputModelSelect !== 'undefined' && $convInputModelSelect && $convInputModelSelect.style.display !== 'none')
       ? $convInputModelSelect.value
       : (_defaultModelsByEngine[currentEngine] || '');
-    const currentEffort = spawnEffortChoiceDirty && $convInputEffortSelect ? $convInputEffortSelect.value : '';
 
     pillsContainer.querySelectorAll('.orch-tier-chip').forEach(chip => {
       const cEngine = chip.getAttribute('data-engine');
       const cModel = chip.getAttribute('data-model');
-      const cEffort = chip.getAttribute('data-effort') || '';
-      const isSel = (cEngine === currentEngine && cModel === currentModel && cEffort === currentEffort);
+      const isSel = (cEngine === currentEngine && cModel === currentModel);
       chip.classList.toggle('is-selected', isSel);
       chip.setAttribute('aria-checked', isSel ? 'true' : 'false');
     });
