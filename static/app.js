@@ -58122,10 +58122,31 @@
   let _railLogFilter = '';
   let _railLogFetchInFlight = false;
   let _railLogShowHeartbeats = false;
+  let _railLogShowInjects = true;
 
   function _isSuccessfulHeartbeat(ev) {
     return String(ev.verb || '').toUpperCase() === 'BEAT'
       && /^ok(?:\s+\(\d+(?:\.\d+)?s\))?\s*$/i.test(String(ev.detail || '').trim());
+  }
+
+  // Hide only known routine transport events. Failure, blocked, unknown,
+  // and unconfirmed-delivery records stay visible regardless of the toggle.
+  function _isRoutineInjectEvent(ev) {
+    const verb = String(ev.verb || '').toUpperCase();
+    if (String(ev.category || '').toLowerCase() !== 'inject') return false;
+    if (verb === 'INJECT' || verb === 'REQUEST' || verb === 'DEDUPE') return true;
+    // A quoted message preview can contain words like receipt=delivered.
+    // Only the metadata before text= describes the transport outcome.
+    const detail = String(ev.detail || '').split(/(?:^|\s)text=/, 1)[0];
+    if (verb === 'UDS-SKIP') {
+      const reason = (detail.match(/(?:^|\s)reason=([^\s]+)/) || [])[1];
+      return reason === 'no_socket_path' || reason === 'slash_command_needs_fifo';
+    }
+    if (verb === 'UDS') {
+      const receipt = (detail.match(/(?:^|\s)receipt=([^\s]+)/) || [])[1];
+      return receipt === 'delivered' || receipt === 'queued';
+    }
+    return false;
   }
 
   function _railLogPaneVisible() {
@@ -58137,7 +58158,9 @@
     const body = document.getElementById('railLogBody');
     if (!body) return;
     const needle = _railLogFilter.trim().toLowerCase();
-    let events = _railLogShowHeartbeats ? _railLogEvents : _railLogEvents.filter(ev => !_isSuccessfulHeartbeat(ev));
+    let events = _railLogEvents.filter(ev =>
+      (_railLogShowHeartbeats || !_isSuccessfulHeartbeat(ev))
+      && (_railLogShowInjects || !_isRoutineInjectEvent(ev)));
     if (needle) {
       events = events.filter((ev) => (
         String(ev.category || '').toLowerCase().includes(needle)
@@ -58209,11 +58232,24 @@
         refreshRailLogPane();
       });
     });
-    const heartbeats = document.getElementById('railLogShowHeartbeats');
-    if (heartbeats) heartbeats.addEventListener('change', () => {
-      _railLogShowHeartbeats = heartbeats.checked;
-      _renderRailLogPane();
-    });
+    const bindToggle = (id, label, read, write) => {
+      const button = document.getElementById(id);
+      if (!button) return;
+      const sync = () => {
+        button.setAttribute('aria-pressed', String(read()));
+        button.title = (read() ? 'Hide ' : 'Show ') + label;
+      };
+      sync();
+      button.addEventListener('click', () => {
+        write(!read());
+        sync();
+        _renderRailLogPane();
+      });
+    };
+    bindToggle('railLogShowHeartbeats', 'successful heartbeats',
+      () => _railLogShowHeartbeats, value => { _railLogShowHeartbeats = value; });
+    bindToggle('railLogShowInjects', 'routine inject events (delivery problems stay visible)',
+      () => _railLogShowInjects, value => { _railLogShowInjects = value; });
     if (filter) {
       filter.addEventListener('input', () => {
         _railLogFilter = filter.value || '';

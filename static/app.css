@@ -27940,7 +27940,30 @@ body.status-pos-right .status-rail-pane[data-rail-pane="metadata"] > .files-pane
 .ask-session-chip > span:last-child { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .ask-session-chip:hover, .ask-session-chip:focus-visible, .ask-session-chip.is-selected { outline: 2px solid var(--accent); outline-offset: 1px; }
 .rail-log-toolbar { flex-wrap: wrap; }
-.rail-log-heartbeats { display: flex; align-items: center; gap: 5px; font-size: 11px; color: var(--text-muted); cursor: pointer; }
+.rail-log-kind-toggle {
+  flex: 0 0 28px;
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text-muted);
+  font-size: 16px;
+  line-height: 1;
+  cursor: pointer;
+}
+.rail-log-kind-toggle[aria-pressed="true"] {
+  background: color-mix(in srgb, var(--accent) 15%, var(--surface));
+  border-color: var(--accent);
+  color: var(--accent);
+}
+.rail-log-kind-toggle:hover, .rail-log-kind-toggle:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+.rail-log-filter { flex-basis: 60px; }
+.rail-log-toolbar { gap: 5px; }
 
 #mobileAskHost { position: fixed; inset: 0 0 calc(58px + env(safe-area-inset-bottom, 0px)); z-index: 940; background: var(--surface); }
 #mobileAskHost[hidden] { display: none; }
