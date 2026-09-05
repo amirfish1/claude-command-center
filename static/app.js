@@ -46755,6 +46755,7 @@
   // Create and revise the complete durable WatchTower queue configuration.
   // The compact health-row controls remain useful shortcuts; this manager is
   // the discoverable place for every field `wt config` supports.
+  window.openQueueManager = openQueueManager;
   async function openQueueManager(initialQueue) {
     document.querySelectorAll('.fq-config-composer').forEach(n => n.remove());
     let options;
@@ -46772,6 +46773,9 @@
     const pathChoices = (options.repo_paths || []).map(p => '<option value="' + escapeAttr(p) + '"></option>').join('');
     const githubRepoChoices = (options.github_repos || []).map(repo => '<option value="' + escapeAttr(repo) + '"></option>').join('');
     const modelsByEngine = options.models_by_engine || {};
+    if (options.efforts_by_engine) {
+      applyEffortsByEngine(options.efforts_by_engine);
+    }
     const queueChoices = queues.map(q => '<option value="' + escapeAttr(q.queue) + '"></option>').join('');
     const modal = document.createElement('div');
     modal.className = 'upd-overlay fq-config-composer open';
@@ -46832,10 +46836,14 @@
     };
     const modelLabel = (engine, id) => {
       const curated = (MODEL_OPTIONS_BY_ENGINE[engine] || []).find(o => _normalizeModelId(o.id) === _normalizeModelId(id));
-      return (curated && curated.label) || id;
+      if (curated && curated.label) return curated.label;
+      if (options.model_labels && options.model_labels[id]) return options.model_labels[id];
+      return id;
     };
     const setModel = (model) => {
-      const choices = Array.isArray(modelsByEngine[fields.engine.value]) ? modelsByEngine[fields.engine.value] : [];
+      const serverChoices = Array.isArray(modelsByEngine[fields.engine.value]) ? modelsByEngine[fields.engine.value] : [];
+      const clientChoices = (MODEL_OPTIONS_BY_ENGINE[fields.engine.value] || []).map(o => o.id);
+      const choices = Array.from(new Set([...serverChoices, ...clientChoices]));
       const selected = String(model || '');
       const known = !selected || choices.includes(selected);
       fields.model.innerHTML = '<option value="">CCC spawn default</option>'
@@ -46854,6 +46862,10 @@
       var eng = fields.engine.value;
       var levels = eng ? effortLevelsForEngine(eng) : allEffortLevels();
       renderEffortOptions(fields.effort, levels, c.effort || '', 'Use engine default');
+      const supportsCustom = !eng || ENGINE_SUPPORTS_CUSTOM_MODEL[eng] !== false;
+      const customOpt = fields.model.querySelector('option[value="__custom__"]');
+      if (customOpt) customOpt.hidden = !supportsCustom;
+      if (!supportsCustom && fields.model.value === '__custom__') { fields.customModel.hidden = true; fields.customModel.value = ''; fields.model.value = ''; }
       fields.drain.checked = !!c.auto_drain; fields.gate.checked = !!c.product_gate;
       fields.repo.value = c.github_repo || ''; fields.assignee.value = c.github_assignee || '';
       modal.querySelectorAll('input[name="fq-config-claim-type"]').forEach(box => { box.checked = Array.isArray(c.claim_types) && c.claim_types.includes(box.value); });
@@ -46915,7 +46927,7 @@
       const levels = eng ? effortLevelsForEngine(eng) : allEffortLevels();
       renderEffortOptions(fields.effort, levels, '', 'Use engine default');
       // Show/hide custom model based on engine support
-      const supportsCustom = !eng || ENGINE_SUPPORTS_CUSTOM_MODEL[eng];
+      const supportsCustom = !eng || ENGINE_SUPPORTS_CUSTOM_MODEL[eng] !== false;
       const customOpt = fields.model.querySelector('option[value="__custom__"]');
       if (customOpt) customOpt.hidden = !supportsCustom;
       if (!supportsCustom) { fields.customModel.hidden = true; fields.customModel.value = ''; if (fields.model.value === '__custom__') fields.model.value = ''; }
@@ -51629,17 +51641,51 @@
       { id: 'openrouter/anthropic/claude-opus-4.1',   label: 'claude-opus-4.1' },
       { id: 'openrouter/openai/gpt-5',                label: 'gpt-5' },
     ],
+    devin: [
+      { id: 'adaptive',        label: 'Adaptive (default)' },
+      { id: 'claude-opus-5',   label: 'Claude Opus 5' },
+      { id: 'claude-fable-5',  label: 'Claude Fable 5' },
+      { id: 'claude-sonnet-5', label: 'Claude Sonnet 5' },
+      { id: 'gpt-5.6-sol',     label: 'GPT-5.6 Sol' },
+      { id: 'gpt-5.6-luna',    label: 'GPT-5.6 Luna' },
+      { id: 'glm-5.2',         label: 'GLM 5.2' },
+      { id: 'kimi-k3',         label: 'Kimi K3' },
+      { id: 'swe-1.7',         label: 'SWE-1.7' },
+    ],
+    grok: [
+      { id: 'grok-4.6', label: 'Grok 4.6' },
+      { id: 'grok-4.5', label: 'Grok 4.5' },
+    ],
+    droid: [
+      { id: 'claude-opus-5',    label: 'Claude Opus 5' },
+      { id: 'claude-sonnet-5',  label: 'Claude Sonnet 5' },
+      { id: 'gpt-5.4',          label: 'GPT-5.4' },
+      { id: 'gemini-3.5-flash', label: 'Gemini 3.5 Flash' },
+      { id: 'grok-4.5',         label: 'Grok 4.5' },
+      { id: 'glm-5.2',          label: 'GLM 5.2' },
+      { id: 'deepseek-v4-pro',  label: 'DeepSeek V4 Pro' },
+      { id: 'minimax-m3',       label: 'MiniMax M3' },
+      { id: 'kimi-k3',          label: 'Kimi K3' },
+    ],
+    aider: [],
+    pi: [],
   };
 
   const ENGINE_SUPPORTS_CUSTOM_MODEL = {
     claude: true,
     codex: false,
     cursor: true,
+    gemini: true,
     antigravity: true,
     kilo: true,
     hermes: true,
     kimi: true,
     opencode: true,
+    devin: true,
+    droid: true,
+    grok: true,
+    aider: true,
+    pi: true,
   };
 
   // Each engine pairs a Model choice with a separate reasoning-effort choice

@@ -1339,6 +1339,11 @@ _QUEUE_CONFIG_DEFAULTS = {
     "claim_types": [],
 }
 _QUEUE_CONFIG_EFFORTS = {"", "low", "medium", "high", "xhigh", "max"}
+_QUEUE_CONFIG_ENGINES = {
+    "", "claude", "codex", "gemini", "cursor", "antigravity",
+    "kilo", "opencode", "kimi", "hermes", "devin", "grok",
+    "aider", "droid", "pi",
+}
 
 
 def _wt_queue_learnings_path(queue):
@@ -2015,8 +2020,8 @@ def _queue_config_from_payload(payload):
     # omits engine (session-created queues) must not get a hardcoded override
     # written into queue-config.json (CCC-1038).
     engine = str(payload.get("engine", "") or "").strip().lower()
-    if engine not in ("", "claude", "codex", "kimi", "grok"):
-        raise ValueError("engine must be claude, codex, kimi, grok, or blank for CCC spawn default")
+    if engine not in _QUEUE_CONFIG_ENGINES:
+        raise ValueError("engine must be one of %s, or blank for CCC spawn default" % ", ".join(sorted(e for e in _QUEUE_CONFIG_ENGINES if e)))
     try:
         workers = int(payload.get("workers", 1))
     except (TypeError, ValueError):
@@ -2068,8 +2073,12 @@ def _queue_config_options():
         engine: {str(option["id"]): str(option["label"])
                  for option in options}
         for engine, options in _ENGINE_CURATED_MODELS.items()
-        if engine in ("claude", "codex", "kimi")
+        if options
     }
+    model_labels = {}
+    for options in _ENGINE_CURATED_MODELS.values():
+        for opt in options:
+            model_labels[str(opt["id"])] = str(opt["label"])
     queues = []
     for name, conf in cfg.items():
         conf = conf if isinstance(conf, dict) else {}
@@ -2080,8 +2089,9 @@ def _queue_config_options():
             github_repos.add(str(conf["github_repo"]))
         engine = str(conf.get("engine") or "claude").lower()
         model = str(conf.get("model") or "").strip()
-        if model and engine in models_by_engine:
-            models_by_engine[engine].setdefault(model, model)
+        if model:
+            models_by_engine.setdefault(engine, {})[model] = model
+            model_labels.setdefault(model, model)
     repo_paths.add(str(Path.cwd()))
     return {
         "ok": True,
@@ -2093,6 +2103,7 @@ def _queue_config_options():
             engine: [model for model in choices]
             for engine, choices in models_by_engine.items()
         },
+        "model_labels": model_labels,
         # Effort sibling of models_by_engine, so the queue dialogs pick from
         # the engine's real ladder instead of the flat union _QUEUE_CONFIG_EFFORTS
         # accepts (which stays flat on purpose — see _queue_config_from_payload).
@@ -7052,6 +7063,14 @@ _ENGINE_CURATED_MODELS = {
         {"id": "kimi-k3", "label": "Kimi K3"},
         {"id": "swe-1.7", "label": "SWE-1.7"},
     ),
+    "gemini": (
+        {"id": "gemini-3.5-pro", "label": "Gemini 3.5 Pro"},
+        {"id": "gemini-3.5-flash", "label": "Gemini 3.5 Flash"},
+        {"id": "gemini-3.1-pro", "label": "Gemini 3.1 Pro"},
+        {"id": "gemini-2.5-pro", "label": "Gemini 2.5 Pro"},
+        {"id": "gemini-2.5-flash", "label": "Gemini 2.5 Flash"},
+    ),
+    "pi": (),
 }
 
 # Backward-compatible ID-only view used by older scripts and error payloads.
@@ -7063,6 +7082,7 @@ _ENGINE_KNOWN_MODELS = {
 _ENGINE_SUPPORTS_CUSTOM_MODELS = {
     "claude": True,
     "codex": False,
+    "gemini": True,
     "cursor": True,
     "antigravity": True,
     "kilo": True,
@@ -13383,7 +13403,7 @@ def _clear_archive_serve_cache():
         _archive_serve_generation += 1
 
 
-def _restamp_archive_serve_cache_after_mutation():
+def _restamp_archive_serve_cache_after_mutation(archived_set=None, trashed_set=None, mutated_sids=None):
     """Keep first paint correct after archive/trash/lane state changes.
 
     These mutations used to clear the warm serve cache outright. The next
@@ -13399,6 +13419,27 @@ def _restamp_archive_serve_cache_after_mutation():
     """
     global _archive_serve_generation, _archive_serve_version
     with _archive_serve_lock:
+        _archive_serve_generation += 1
+        _archive_serve_version += 1
+        if mutated_sids is not None:
+            mut_set = {str(s) for s in mutated_sids}
+            arch_set = archived_set if archived_set is not None else set()
+            tr_set = trashed_set if trashed_set is not None else set()
+            for entry in _archive_serve_cache.values():
+                for row in entry.get("rows") or []:
+                    if not isinstance(row, dict):
+                        continue
+                    sid = str(row.get("session_id") or row.get("id") or "")
+                    if sid in mut_set:
+                        if archived_set is not None:
+                            row["archived"] = sid in arch_set
+                        if trashed_set is not None:
+                            row["trashed"] = sid in tr_set
+                entry["ts"] = 0.0
+                entry["ver"] = _archive_serve_version
+            _archive_serve_refreshing.clear()
+            return
+
         # Read the mutation sidecars while holding the publication lock. A
         # concurrent mutation that starts earlier but waits longer must not
         # publish its now-obsolete view after a newer mutation has restamped
@@ -13411,7 +13452,6 @@ def _restamp_archive_serve_cache_after_mutation():
             lane_overrides = _load_session_lane_overrides()
         except Exception:
             lane_overrides = {}
-        _archive_serve_generation += 1
         refreshed = {}
         for key, entry in _archive_serve_cache.items():
             rows = []
@@ -13425,7 +13465,6 @@ def _restamp_archive_serve_cache_after_mutation():
                     row["trashed"] = sid in trashed_set
                     row["all_lane_override"] = lane_overrides.get(str(sid), "")
                 rows.append(row)
-            _archive_serve_version += 1
             refreshed[key] = {
                 "ts": 0.0,
                 "rows": rows,
@@ -31582,7 +31621,15 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                 return
             try:
                 result = _set_conversation_trashed(sid, desired)
-                _restamp_archive_serve_cache_after_mutation()
+                cascaded = result.get("cascaded") or []
+                mutated = {sid, *cascaded}
+                archived_set = {sid, *cascaded} if desired else set()
+                trashed_set = {sid, *cascaded} if desired else set()
+                _restamp_archive_serve_cache_after_mutation(
+                    archived_set=archived_set,
+                    trashed_set=trashed_set,
+                    mutated_sids=mutated,
+                )
                 _publish_dashboard_patch(
                     "conversation.patch", "conversation", sid,
                     {
