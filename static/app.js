@@ -43707,7 +43707,7 @@
   // ── Queue picker redesign ────────────────────────────────────────────────
   // Replaces the native <select id="queueScopeSelect"> with a custom trigger
   // that opens an anchored card (desktop) / bottom sheet (mobile) listing
-  // queues grouped NEEDS YOU → RECENT → ALL QUEUES, plus a WORKING NOW strip.
+  // queues by latest recorded activity, plus a WORKING NOW strip.
   // See docs/handoff design: CCC Queue Tab. One surface, two entry points
   // (trigger click + ⌘K when the Queue rail tab is active).
   //
@@ -43766,7 +43766,7 @@
   }
   // Per-queue rollup. One pass over health.queues + items + workers, cached
   // on the health cache so the picker opens instantly (no per-queue fetch).
-  // Shape: { name, parent, openCount, needsInputCount, lastActivityAt,
+  // Shape: { name, parent, openCount, needsInputCount, lastActivitySeconds,
   //          hasRunningAgent, subQueueCount, repoPath, githubLinked,
   //          githubRepo, autoDrainOn }
   function _uxqPickerRollup() {
@@ -43845,16 +43845,11 @@
   function _uxqPickerGroups(rollup, items, filter) {
     const s = String(filter || '').trim().toLowerCase();
     const all = rollup.slice();
-    // map by name for quick lookup
-    const byName = new Map(all.map(q => [q.name, q]));
     if (s) {
       // Filtered: queues first (by name substring), then tickets (id+title).
-      // Queue rank: needs-input desc, then match position (earlier wins),
-      // then open count desc.
+      // Matching queues keep the same latest-touch order as the full list.
       const qHits = all.filter(q => q.name.toLowerCase().includes(s))
-        .sort((a, b) => (b.needsInputCount - a.needsInputCount)
-          || a.name.toLowerCase().indexOf(s) - b.name.toLowerCase().indexOf(s)
-          || b.openCount - a.openCount);
+        .sort(_uxqPickerActDesc);
       const tHits = (Array.isArray(items) ? items : [])
         .filter(it => it && it.status !== 'closed' && (
           String(_uxqItemRef(it)).toLowerCase().includes(s)
@@ -43873,51 +43868,27 @@
       _uxqPicker.flat = groups.reduce((acc, g) => acc.concat(g.rows), []);
       return groups;
     }
-    // Unfiltered: NEEDS YOU → RECENT → ALL QUEUES.
-    // 1. NEEDS YOU: needsInputCount >= 1, sort by needs desc then last-activity desc.
-    const needs = all.filter(q => q.needsInputCount > 0)
-      .sort((a, b) => (b.needsInputCount - a.needsInputCount)
-        || _uxqPickerActDesc(b, a));
-    // 2. RECENT: next most-recently-active not in NEEDS YOU, cap 5.
-    const needsNames = new Set(needs.map(q => q.name));
-    const recent = all.filter(q => !needsNames.has(q.name))
-      .sort(_uxqPickerActDesc)
-      .slice(0, 5);
-    // 3. ALL QUEUES: alphabetical, sub-queues under parent (sort key =
-    //    parent||name, then depth, then name).
-    const allSorted = all.slice().sort((a, b) => {
-      const pa = a.parent || a.name;
-      const pb = b.parent || b.name;
-      const c = pa.localeCompare(pb);
-      if (c) return c;
-      const da = a.parent ? 1 : 0;
-      const db = b.parent ? 1 : 0;
-      if (da !== db) return da - db;
-      return a.name.localeCompare(b.name);
-    });
-    const groups = [];
-    if (needs.length) groups.push({
-      label: 'NEEDS YOU', tint: '#e5695c', count: needs.length,
-      rows: needs.map(q => _uxqPickerQueueRow(q, { flat: true, allItems: items })),
-    });
-    if (recent.length) groups.push({
-      label: 'RECENT', tint: '#39d2c0', count: recent.length,
-      rows: recent.map(q => _uxqPickerQueueRow(q, { flat: true, allItems: items })),
-    });
-    groups.push({
-      label: 'ALL QUEUES', tint: '#6e7681', count: allSorted.length,
-      rows: allSorted.map(q => _uxqPickerQueueRow(q, { flat: false, allItems: items })),
-    });
+    // One entry per queue, newest recorded activity first. Keep sub-queues
+    // flat so an older parent cannot pull a recently touched child downward.
+    const allSorted = all.sort(_uxqPickerActDesc);
+    const groups = [{
+      label: 'LATEST TOUCHED', tint: '#6e7681', count: allSorted.length,
+      rows: allSorted.map(q => _uxqPickerQueueRow(q, { flat: true, allItems: items })),
+    }];
     _uxqPicker.flat = groups.reduce((acc, g) => acc.concat(g.rows), []);
     return groups;
   }
   function _uxqPickerActDesc(a, b) {
-    const av = (a.lastActivitySeconds != null) ? a.lastActivitySeconds : Infinity;
-    const bv = (b.lastActivitySeconds != null) ? b.lastActivitySeconds : Infinity;
-    return av - bv; // lower seconds = more recent = first
+    const age = q => {
+      const value = q.lastActivitySeconds;
+      return value != null && Number.isFinite(Number(value)) && Number(value) >= 0
+        ? Number(value) : Infinity;
+    };
+    // Smaller age is newer. Unknown ages go last; names break equal-age ties.
+    return (age(a) - age(b)) || a.name.localeCompare(b.name);
   }
   // One queue row as a render-ready object. `flat` = no └ glyph / sub chip
-  // (NEEDS YOU / RECENT / filtered). `allItems` for the meta line on mobile.
+  // (latest-touch / filtered list). `allItems` for the meta line on mobile.
   function _uxqPickerQueueRow(q, opts) {
     const o = opts || {};
     const isChild = !!q.parent && !o.flat;

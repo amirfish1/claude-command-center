@@ -94,14 +94,11 @@ class TestQueueHeaderLayout(unittest.TestCase):
         ]
         self.assertIn('_closeQueueMoreMenu();', wrap_block)
 
-    def test_scope_picker_nests_sub_queues_under_a_derived_family_root(self):
-        """"FOO-BAR" queues group under "FOO" instead of stacking flat.
+    def test_scope_picker_retains_sub_queues_and_derived_family_scope(self):
+        """Keep family metadata and every child available for queue scoping.
 
-        The native <optgroup> is gone (replaced by the custom picker card).
-        Sub-queue nesting is now handled by _uxqPickerParentOf, which resolves
-        a sub-queue to the LONGEST existing root queue whose name is a prefix.
-        The ALL QUEUES group renders children with a └ glyph immediately
-        under their parent; NEEDS YOU / RECENT / filtered results stay flat.
+        The picker displays a flat latest-touch list; selecting a parent still
+        includes its sub-queues through the derived family relationships.
         """
         app_js = (PROJECT_ROOT / "static" / "app.js").read_text(encoding="utf-8")
 
@@ -127,7 +124,7 @@ class TestQueueHeaderLayout(unittest.TestCase):
         self.assertIn('function _uxqPickerParentOf(', app_js)
         self.assertIn("n.startsWith(root + '-')", app_js)
 
-        # The picker groups render the └ glyph for sub-queues in ALL QUEUES.
+        # Scope rendering still refreshes the shared trigger and work strip.
         render = app_js[
             app_js.index('function _uxqRenderScopeSelect('):
             app_js.index('function _uxqSetScopeLoading(')
@@ -135,7 +132,7 @@ class TestQueueHeaderLayout(unittest.TestCase):
         self.assertIn('_uxqRenderQueueTrigger', render)
         self.assertIn('_uxqRenderWorkingNow', render)
 
-        # The picker row builder emits the └ tree glyph for children.
+        # The row builder retains its optional tree treatment for callers.
         self.assertIn("r.child ? '<span class=\"fq-qp-tree\">└</span>'", app_js)
 
         # Families must be recomputed before anything asks whether a sub-queue
