@@ -45588,6 +45588,69 @@
     // CCC's Spawn defaults (or the codex/claude PATH fallback), which the
     // tooltip spells out per part. Clicking opens the same gear dialog.
     const planHtml = _uxqWorkerPlanChipHtml(key, q && q.worker_plan);
+    // OPS-938: persistent in-panel alarm when the selected auto-drain queue
+    // is stuck or has no effective worker. NOT a toast — it stays until
+    // health clears, names the exact reason (orphan worker missing session
+    // identity, last spawn failure, invalid worker config), and offers
+    // Retry reconcile + Inspect. Queues merely awaiting human answers
+    // (blocked tickets) or parked (backlog) stay calm — the distinction
+    // between draining work, awaiting-human work, and invalid config is the
+    // whole point.
+    const blockedCount = (items || []).filter(it => it && it.needs_input
+      && String(it.status || '') !== 'closed'
+      && _uxqProjectKey(it.project) === key).length;
+    const effectiveWorkers = q && q.effective_workers != null
+      ? Number(q.effective_workers) || 0
+      : workers.filter(w => String((w && w.session_id) || '').trim()).length;
+    const orphanWorkers = q && q.orphan_workers != null
+      ? Number(q.orphan_workers) || 0
+      : Math.max(0, workers.length - effectiveWorkers);
+    const sinceProgressS = q && q.since_progress_s != null ? Number(q.since_progress_s) : null;
+    const configIssue = q ? String(q.config_issue || '') : '';
+    const spawnIssue = q ? String(q.spawn_issue || '') : '';
+    const staffingAlarm = !!(q && q.auto_drain
+      && (q.staffing_alarm || q.stuck)
+      && Number(q.claimable || 0) > 0);
+    let alarmHtml = '';
+    if (staffingAlarm || configIssue) {
+      let title;
+      if (staffingAlarm && q.stuck) {
+        title = 'Queue ' + key + ' is stuck'
+          + (sinceProgressS != null ? ' — no progress in ' + _uxqFmtAge(sinceProgressS) : '');
+      } else if (staffingAlarm) {
+        title = 'Queue ' + key + ' has no effective worker'
+          + (sinceProgressS != null ? ' — no progress in ' + _uxqFmtAge(sinceProgressS) : '');
+      } else {
+        title = 'Queue ' + key + ' worker config is invalid';
+      }
+      const lines = [];
+      if (staffingAlarm) {
+        const counts = [Number(q.claimable || 0) + ' claimable'];
+        if (Number(q.in_progress || 0)) counts.push(Number(q.in_progress) + ' in progress');
+        if (blockedCount) counts.push(blockedCount + ' awaiting human input');
+        lines.push('Open work: ' + counts.join(' · '));
+        let wLine = 'Workers: ' + effectiveWorkers + ' effective of ' + workers.length + ' tracked';
+        if (orphanWorkers) {
+          wLine += ' — ' + orphanWorkers + ' orphan worker missing session identity (reconciler nudges cannot reach it)';
+        } else if (!workers.length) {
+          wLine += ' — the reconciler has not staffed this queue';
+        }
+        lines.push(wLine);
+      }
+      if (spawnIssue) lines.push(spawnIssue.charAt(0).toUpperCase() + spawnIssue.slice(1));
+      if (configIssue) lines.push('Config: ' + configIssue);
+      const severity = staffingAlarm ? 'error' : 'warn';
+      alarmHtml = '<div class="fq-queue-alarm is-' + severity + '" role="alert">'
+        + '<div class="fq-queue-alarm-title">' + escapeHtml(title) + '</div>'
+        + lines.map(l => '<div class="fq-queue-alarm-line">' + escapeHtml(l) + '</div>').join('')
+        + '<div class="fq-queue-alarm-actions">'
+        + '<button type="button" class="fq-queue-alarm-btn" data-alarm-retry="' + escapeAttr(key) + '"'
+        + (q && q.repo_path ? '' : ' disabled')
+        + ' title="Spawn a fresh worker for this queue now — the same action the reconciler retries on its tick">Retry reconcile</button>'
+        + '<button type="button" class="fq-queue-alarm-btn" data-alarm-inspect="' + escapeAttr(key) + '"'
+        + ' title="Open this queue\'s WatchTower activity log (spawns, nudges, reaps)">Inspect worker</button>'
+        + '</div></div>';
+    }
     const watchHtml = controls.configBtn
       // CCC-976: the queue name is already shown in the picker above this
       // strip — dropped the redundant fq-status-proj label from this row.
@@ -45607,7 +45670,7 @@
     // what the WORKING NOW strip already shows above (CCC-1019) — this strip
     // now stays to the queue-level facts (depth/age/live/drain/claim-types).
     $el.hidden = false;
-    $el.innerHTML = syncNoticeHtml + watchHtml;
+    $el.innerHTML = alarmHtml + syncNoticeHtml + watchHtml;
   }
   function _uxqWorkerPlanChipHtml(queue, plan) {
     if (!plan || !plan.engine) return '';
@@ -46327,6 +46390,48 @@
       $health.addEventListener('click', openLearnings);
       $health.addEventListener('click', openQueueLog);
       $health.addEventListener('click', refreshQueue);
+      // OPS-938 alarm banner actions: Retry reconcile spawns a fresh worker
+      // for the queue now (same WT path the reconciler uses on its tick);
+      // Inspect opens the queue's WatchTower activity log in the status-rail
+      // viewer, where orphan/nudge/reap evidence lives.
+      const retryQueueReconcile = async (ev) => {
+        const btn = ev.target && ev.target.closest && ev.target.closest('[data-alarm-retry]');
+        if (!btn || btn.disabled) return;
+        ev.preventDefault(); ev.stopPropagation();
+        const queue = btn.getAttribute('data-alarm-retry') || '';
+        const qrow = ((_uxqHealthCache || {}).queues || [])
+          .find(x => x && _uxqProjectKey(x.queue) === queue);
+        const repoPath = (qrow && qrow.repo_path) || '';
+        if (!repoPath) {
+          showOpToast('No repo path configured for ' + queue + ' — set one in the queue gear dialog first.', 'error');
+          return;
+        }
+        btn.disabled = true;
+        try {
+          const res = await fetch('/api/queue/spawn-worker', {
+            method: 'POST', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ repo_path: repoPath, project: queue }),
+          });
+          const d = await res.json().catch(() => ({}));
+          if (res.ok && d && d.ok !== false) {
+            showOpToast('Worker spawn requested for ' + queue + ' — it should claim work within a minute.', 'success');
+            _uxqHealthCache.ts = 0;
+            void _uxqRefreshQueueStrips();
+          } else {
+            showOpToast('Spawn failed: ' + ((d && d.error) || ('HTTP ' + res.status)), 'error');
+          }
+        } catch (e) {
+          showOpToast('Spawn failed: ' + ((e && e.message) || 'network'), 'error');
+        } finally { btn.disabled = false; }
+      };
+      const inspectQueueWorker = (ev) => {
+        const btn = ev.target && ev.target.closest && ev.target.closest('[data-alarm-inspect]');
+        if (!btn) return;
+        ev.preventDefault(); ev.stopPropagation();
+        _openWtLogPanel(btn.getAttribute('data-alarm-inspect'));
+      };
+      $health.addEventListener('click', retryQueueReconcile);
+      $health.addEventListener('click', inspectQueueWorker);
       $health.addEventListener('click', async (ev) => {
         const btn = ev.target && ev.target.closest && ev.target.closest('[data-fq-config-queue], #filesQueueConfigure');
         if (!btn) return;
@@ -46682,7 +46787,7 @@
       +       '<div class="fq-config-field wide"><label>Ticket backend</label><div class="fq-seg" id="fqBackendSeg" role="group" aria-label="Ticket backend"><button type="button" data-backend="file">Local WatchTower queue</button><button type="button" data-backend="github">GitHub issues</button></div><select id="fqConfigBackend" name="fq-config-backend" hidden><option value="file">Local WatchTower queue</option><option value="github">GitHub issues</option></select><span class="fq-config-help">GitHub queues require an owner/repository.</span></div>'
       +     '</div></div>'
       +     '<div class="fq-config-section"><div class="fq-config-eyebrow">Worker</div><div class="fq-config-grid">'
-      +       '<div class="fq-config-field wide"><label>Engine</label><div class="fq-seg" id="fqEngineSeg" role="group" aria-label="Worker engine"><button type="button" data-engine="">CCC default</button><button type="button" data-engine="claude">Claude</button><button type="button" data-engine="codex">Codex</button><button type="button" data-engine="kimi">Kimi</button></div><select id="fqConfigEngine" hidden><option value="">CCC spawn default</option><option value="claude">Claude</option><option value="codex">Codex</option><option value="kimi">Kimi</option></select><span class="fq-config-help">Choose an override, or let CCC pick its shared worker engine default.</span></div>'
+      +       '<div class="fq-config-field wide"><label>Engine</label><div class="fq-seg" id="fqEngineSeg" role="group" aria-label="Worker engine"><button type="button" data-engine="">CCC default</button><button type="button" data-engine="claude">Claude</button><button type="button" data-engine="codex">Codex</button><button type="button" data-engine="gemini">Gemini</button><button type="button" data-engine="cursor">Cursor</button><button type="button" data-engine="antigravity">Antigravity</button><button type="button" data-engine="kilo">Kilo</button><button type="button" data-engine="opencode">OpenCode</button><button type="button" data-engine="kimi">Kimi</button><button type="button" data-engine="hermes">Hermes</button><button type="button" data-engine="devin">Devin</button><button type="button" data-engine="grok">Grok</button><button type="button" data-engine="aider">Aider</button><button type="button" data-engine="droid">Droid</button><button type="button" data-engine="pi">Pi</button></div><select id="fqConfigEngine" hidden><option value="">CCC spawn default</option><option value="claude">Claude</option><option value="codex">Codex</option><option value="gemini">Gemini</option><option value="cursor">Cursor</option><option value="antigravity">Antigravity</option><option value="kilo">Kilo</option><option value="opencode">OpenCode</option><option value="kimi">Kimi</option><option value="hermes">Hermes</option><option value="devin">Devin</option><option value="grok">Grok</option><option value="aider">Aider</option><option value="droid">Droid</option><option value="pi">Pi</option></select><span class="fq-config-help">Choose an override, or let CCC pick its shared worker engine default.</span></div>'
       +       '<div class="fq-config-field"><label for="fqConfigModel">Model (optional)</label><select id="fqConfigModel"></select><input id="fqConfigCustomModel" placeholder="Model id" hidden><span class="fq-config-help">Cost tiers shown per model; Highspeed is the fast (2× price) tier.</span></div>'
       +       '<div class="fq-config-field"><label for="fqConfigEffort">Effort (optional)</label><select id="fqConfigEffort"><option value="">Use engine default</option><option value="low">Light</option><option value="medium">Medium</option><option value="high">High</option><option value="xhigh">Extra High</option><option value="max">Max</option></select><span class="fq-config-help">Reasoning budget passed to WatchTower workers for this queue.</span></div>'
       +       '<div class="fq-config-field wide"><label for="fqConfigPath">Working repository</label><input id="fqConfigPath" list="fqConfigPaths" placeholder="/path/to/repository"><datalist id="fqConfigPaths">' + pathChoices + '</datalist><span class="fq-config-help">Suggestions come from queues already configured on this machine.</span></div>'
@@ -55771,9 +55876,9 @@
   // ~/.watchtower/activity.log's one-line-per-event shape, but formatted
   // for the browser instead of a terminal.
   const _ACTIVITY_LOG_VERB_CLASS = {
-    SPAWN: 'is-good', INJECT: 'is-good',
+    SPAWN: 'is-good', INJECT: 'is-good', BEAT: 'is-good',
     FAILED: 'is-bad', REJECT: 'is-bad', DEAD: 'is-bad', KILL: 'is-bad',
-    WEDGED: 'is-warn', REAP: 'is-warn',
+    WEDGED: 'is-warn', REAP: 'is-warn', SHARED_STATE_BLOCK: 'is-warn',
     REQUEST: 'is-info',
   };
 
@@ -55783,12 +55888,21 @@
     return Number.isNaN(parsed.getTime()) ? raw.replace(' UTC', '') : parsed.toLocaleString();
   }
 
+  function _activityLogDetail(ev) {
+    const detail = String(ev.detail || '');
+    if (ev.verb === 'SHARED_STATE_BLOCK') {
+      return 'Safety safeguard: private app-server not started because another Codex process owns shared state. '
+        + 'CCC avoided a connection conflict; this needs attention only if Codex actions fail. ' + detail;
+    }
+    return detail;
+  }
+
   function _activityLogRowHtml(ev) {
     const cls = _ACTIVITY_LOG_VERB_CLASS[ev.verb] || '';
-    return '<div class="activity-log-row">'
+    return '<div class="activity-log-row ' + cls + '">'
       + '<span class="activity-log-ts">' + escapeHtml(_activityLogTimestampLocal(ev.ts)) + '</span>'
       + '<span class="activity-log-verb ' + cls + '">' + escapeHtml(ev.verb || '') + '</span>'
-      + '<span class="activity-log-detail">' + escapeHtml(ev.detail || '') + '</span>'
+      + '<span class="activity-log-detail">' + escapeHtml(_activityLogDetail(ev)) + '</span>'
       + '</div>';
   }
 
