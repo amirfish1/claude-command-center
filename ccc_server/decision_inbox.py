@@ -950,7 +950,7 @@ def run_once(*, cfg=None, now=None, rows=None, live_ids=None, cards=None,
 
 def _server_rows():
     try:
-        rows, _ = _core._archive_list_source_rows_cached({
+        rows, _, _body_ver = _core._archive_list_source_rows_cached({
             "include_prs": False, "resolve_pr_states": False,
             "resolve_effective": False, "resolve_worktree_dirty": False,
         })

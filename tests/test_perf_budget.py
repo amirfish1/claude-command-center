@@ -211,6 +211,7 @@ def test_archive_list_source_avoids_copying_full_snapshot(monkeypatch):
         return expected, True, 7
 
     monkeypatch.setattr(server, "_archive_serve_rows_versioned", serve)
+    monkeypatch.setattr(server, "_archive_list_body_ver", lambda key, rows, extra: 7)
     # The in-memory overlays (ACP, Devin CLI) legitimately append rows when
     # this machine has live sessions; keep the copy assertion about the
     # snapshot itself, not about the host's session state.
@@ -218,17 +219,19 @@ def test_archive_list_source_avoids_copying_full_snapshot(monkeypatch):
     monkeypatch.setattr(server, "_archive_overlay_devin_cli_sessions", lambda rows, now=None: [])
     options = {"include_prs": False}
 
-    rows, from_cache = server._archive_list_source_rows_cached(options)
+    rows, from_cache, body_ver = server._archive_list_source_rows_cached(options)
 
     assert rows is expected
     assert from_cache is True
-    fresh_rows, fresh_from_cache = server._archive_list_source_rows_cached(
+    assert body_ver == 7
+    fresh_rows, fresh_from_cache, fresh_body_ver = server._archive_list_source_rows_cached(
         options,
         force_refresh=True,
     )
 
     assert fresh_rows is expected
     assert fresh_from_cache is True
+    assert fresh_body_ver == 7
     assert calls == [(
         server._archive_response_cache_key(**options),
         options,
@@ -250,7 +253,7 @@ def test_archive_list_http_route_projects_cached_rows(monkeypatch):
             "session_id": "trashed-row", "engine": "claude", "mtime": 2_000_000,
             "archived": True, "trashed": True, "all_lane_override": "messages",
             "last_assistant_text": "not returned",
-        }], True),
+        }], True, 7),
     )
     httpd = server.http.server.ThreadingHTTPServer(("127.0.0.1", 0), server.CommandCenterHandler)
     thread = threading.Thread(target=httpd.serve_forever, daemon=True)
