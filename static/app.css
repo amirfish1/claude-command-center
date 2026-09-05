@@ -27144,9 +27144,9 @@ body.status-pos-right .status-rail-pane[data-rail-pane="metadata"] > .files-pane
   height: 100%;
   min-height: 0;
   background:
-    radial-gradient(100% 45% at 50% 0%, rgba(224, 163, 74, 0.08) 0%, transparent 70%),
-    radial-gradient(80% 40% at 100% 100%, rgba(57, 210, 192, 0.04) 0%, transparent 60%),
-    color-mix(in srgb, var(--surface, #242b35) 78%, #96744b);
+    radial-gradient(100% 55% at 20% 0%, rgba(99, 179, 255, 0.18) 0%, transparent 75%),
+    radial-gradient(90% 50% at 100% 100%, rgba(123, 232, 201, 0.14) 0%, transparent 70%),
+    color-mix(in srgb, var(--surface, #242b35) 65%, #3f8fc6);
   position: relative;
   font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
   color: var(--text, #e6edf3);
