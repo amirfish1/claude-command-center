@@ -9292,19 +9292,24 @@ def _log_activity(category, verb, detail):
     Format matches ~/.watchtower/activity.log: `TIMESTAMP UTC  CATEGORY  VERB  detail`.
     Best-effort and silent on failure -- logging must never break the caller.
 
-    category/verb are hard-truncated to their field widths (14/9 chars).
-    _parse_activity_log_line reads this file back with fixed-width slicing
-    -- chosen so `detail` can freely contain the same double-space
-    separator used elsewhere in the line -- which only stays correct if
-    every category/verb actually fits its column. A future caller passing
-    a longer one would otherwise silently corrupt the parse (lost tail
-    chars, a shifted detail with stray leading spaces) instead of failing
-    loudly; truncating here is the lesser, contained failure.
+    Short single-line fields retain the legacy fixed-width layout (14/9
+    chars). Other events use `TIMESTAMP UTC  @ccc-activity-v2 {JSON}` to
+    preserve full category/verb names and detail without shifting columns
+    or allowing embedded newlines to become extra records. Both formats
+    remain readable with tail/grep and share the same API response fields.
     """
     global _ACTIVITY_LOG_DIR_READY
     try:
         now = time.strftime("%Y-%m-%d %H:%M:%S", time.gmtime()) + " UTC"
-        line = f"{str(category)[:14]:<14}  {str(verb)[:9]:<9}{detail}\n"
+        category, verb, detail = str(category), str(verb), str(detail)
+        fields = (category, verb, detail)
+        if (len(category) <= 14 and len(verb) <= 9
+                and category == category.strip() and verb == verb.strip()
+                and all(not field or field.splitlines() == [field] for field in fields)):
+            line = f"{category:<14}  {verb:<9}{detail}\n"
+        else:
+            payload = {"category": category, "verb": verb, "detail": detail}
+            line = "@ccc-activity-v2 " + json.dumps(payload) + "\n"
         line = f"{now}  {line}"
         if not _ACTIVITY_LOG_DIR_READY:
             ACTIVITY_LOG_FILE.parent.mkdir(parents=True, exist_ok=True)
@@ -9325,15 +9330,27 @@ def _log_activity(category, verb, detail):
 def _parse_activity_log_line(line):
     """Split one `_log_activity` line back into its fields.
 
-    Fixed-width slicing, not a regex split, because `detail` is free text
-    and may itself contain the double-space separator used elsewhere in the
-    line. Layout (see _log_activity): 23-char UTC timestamp, 2 spaces,
-    14-char category, 2 spaces, 9-char verb, then detail with no separator.
-    Returns None for a line too short to be one of ours (e.g. a stray
-    newline) rather than raising.
+    Versioned records carry full fields as JSON. Legacy records use fixed
+    widths: 23-char UTC timestamp, 2 spaces, 14-char category, 2 spaces,
+    9-char verb, then detail. Slicing preserves double spaces in detail.
+    Historical truncated names are returned as stored, never inferred.
+    Malformed records return None rather than raising.
     """
     line = line.rstrip("\n")
-    if len(line) < 41:
+    if not re.match(r"^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2} UTC  ", line):
+        return None
+    prefix = "@ccc-activity-v2 "
+    if line[25:].startswith(prefix):
+        try:
+            payload = json.loads(line[25 + len(prefix):])
+        except (ValueError, RecursionError):
+            return None
+        if not isinstance(payload, dict) or not all(
+            isinstance(payload.get(key), str) for key in ("category", "verb", "detail")
+        ):
+            return None
+        return {"ts": line[:23], **{key: payload[key] for key in ("category", "verb", "detail")}}
+    if len(line) < 50 or line[39:41] != "  ":
         return None
     return {
         "ts": line[0:23].strip(),
