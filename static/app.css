@@ -28092,3 +28092,47 @@ body.mobile-ask-open .mobile-bottom-nav { z-index: 950; }
 
 /* Expanded ticket history owns the row space; floating hover metadata must not cover it. */
 .conv-item:has(.conv-worker-history[open]) .conv-hover-extras { display: none !important; }
+
+/* Readable log entries keep severity and summaries visible, diagnostics expandable. */
+.activity-log-entry {
+  --log-level: #78b7ff;
+  margin: 6px 8px;
+  min-width: 0;
+  border: 1px solid color-mix(in srgb, var(--log-level) 24%, var(--border));
+  border-left: 3px solid var(--log-level);
+  border-radius: 7px;
+  background: color-mix(in srgb, var(--log-level) 5%, var(--surface));
+  color: var(--text);
+  font-family: var(--font-ui, sans-serif);
+}
+.activity-log-entry.is-error { --log-level: #ff8585; }
+.activity-log-entry.is-warning { --log-level: #edbf68; }
+.activity-log-entry.is-success { --log-level: #67d7a5; }
+.activity-log-summary { display: block; padding: 9px 10px; cursor: pointer; list-style: none; }
+.activity-log-summary::-webkit-details-marker { display: none; }
+.activity-log-summary:hover { background: color-mix(in srgb, var(--log-level) 5%, transparent); }
+.activity-log-summary:focus-visible { outline: 2px solid var(--log-level); outline-offset: 1px; border-radius: 5px; }
+.activity-log-entry-meta { display: flex; align-items: baseline; flex-wrap: wrap; gap: 5px 8px; font-size: 10px; }
+.activity-log-level { color: var(--log-level); font-weight: 700; }
+.activity-log-time { margin-left: auto; color: var(--text-muted); font-variant-numeric: tabular-nums; }
+.activity-log-repeat { border-radius: 4px; background: color-mix(in srgb, var(--log-level) 15%, transparent); padding: 1px 5px; color: var(--log-level); font-weight: 700; }
+.activity-log-headline { display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 3; overflow: hidden; margin: 5px 0; font-size: 13px; line-height: 1.45; font-weight: 550; overflow-wrap: anywhere; }
+.activity-log-entry[open] .activity-log-headline { display: block; }
+.activity-log-origin { display: flex; flex-wrap: wrap; gap: 3px 8px; font-family: var(--font-mono, monospace); font-size: 9px; color: var(--text-muted); overflow-wrap: anywhere; }
+.activity-log-disclosure { margin-left: auto; white-space: nowrap; }
+.activity-log-entry[open] .activity-log-disclosure { color: var(--log-level); }
+.activity-log-occurrences { padding: 0 10px 10px; min-width: 0; }
+.activity-log-occurrence { border-top: 1px solid var(--border); padding-top: 7px; margin-top: 3px; }
+.activity-log-occurrence-time { color: var(--text-muted); font-size: 10px; }
+.activity-log-raw { margin: 5px 0; font: 11px/1.5 var(--font-mono, monospace); white-space: pre-wrap; overflow-wrap: anywhere; color: var(--text); }
+:root[data-theme="light"] .activity-log-entry { --log-level: #246ab6; }
+:root[data-theme="light"] .activity-log-entry.is-error { --log-level: #b52b35; }
+:root[data-theme="light"] .activity-log-entry.is-warning { --log-level: #926000; }
+:root[data-theme="light"] .activity-log-entry.is-success { --log-level: #167348; }
+
+/* Keep scope and event toggles together; search gets a full-width row. */
+.rail-log-toolbar { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 6px; }
+.rail-log-scope { grid-column: 1; grid-row: 1; justify-self: start; min-width: 0; }
+.rail-log-toolbar .activity-log-scope-btn { padding: 3px 5px; min-width: 0; }
+.rail-log-kind-filters { grid-column: 2; grid-row: 1; display: flex; gap: 4px; }
+.rail-log-filter { grid-column: 1 / -1; grid-row: 2; width: 100%; }

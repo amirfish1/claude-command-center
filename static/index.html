@@ -1467,8 +1467,11 @@
                     <button type="button" class="activity-log-scope-btn" data-rail-log-scope="session">This session</button>
                   </div>
                   <input type="search" class="rail-log-filter" id="railLogFilter" placeholder="Filter events…" aria-label="Filter log events">
+                  <div class="rail-log-kind-filters" role="group" aria-label="Log event filters">
                   <button type="button" class="rail-log-kind-toggle" id="railLogShowHeartbeats" aria-label="Show successful heartbeats" aria-pressed="false" title="Show successful heartbeats"><span aria-hidden="true">♥</span></button>
                   <button type="button" class="rail-log-kind-toggle" id="railLogShowInjects" aria-label="Show routine inject events" aria-pressed="true" title="Hide routine inject events (delivery problems stay visible)"><span aria-hidden="true">➤</span></button>
+                  <button type="button" class="rail-log-kind-toggle" id="railLogOnlyAttention" aria-label="Show only warnings and errors" aria-pressed="false" title="Show only warnings and errors"><span aria-hidden="true">⚠</span></button>
+                  </div>
                 </div>
                 <div class="rail-log-body" id="railLogBody" aria-live="polite">
                   <div class="activity-log-empty">Loading…</div>

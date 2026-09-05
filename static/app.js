@@ -55824,7 +55824,7 @@
         return;
       }
       // Newest first for reading — the API returns oldest-first (tail order).
-      body.innerHTML = events.slice().reverse().map(_activityLogRowHtml).join('');
+      _renderReadableActivityLog(body, events);
     } catch (e) {
       if (!_activityLogModalEl || _activityLogModalEl !== overlay) return;
       body.innerHTML = '<div class="activity-log-error">Could not load the activity log.</div>';
@@ -58177,6 +58177,113 @@
     }
   }
 
+  // Readable activity log: outcomes first, exact diagnostics on expansion.
+  function _readableLogEpoch(ts) {
+    return Date.parse(String(ts || '').replace(' UTC', 'Z').replace(' ', 'T'));
+  }
+  function _readableLogTime(ts) {
+    const date = new Date(_readableLogEpoch(ts));
+    if (!Number.isFinite(date.getTime())) return String(ts || '');
+    const time = date.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit', second: '2-digit' });
+    return date.toDateString() === new Date().toDateString() ? time
+      : date.toLocaleDateString([], { month: 'short', day: 'numeric' }) + ' · ' + time;
+  }
+  function _readableLogPresentation(ev) {
+    const verb = String(ev.verb || '').toUpperCase();
+    const category = String(ev.category || '');
+    const detail = String(ev.detail || '');
+    const metadata = detail.split(/(?:^|\s)text=/, 1)[0];
+    const method = (metadata.match(/(?:^|\s)method=([^\s]+)/) || [])[1] || '';
+    const subject = ({ 'thread/list': 'Session list', 'thread/read': 'Session read', 'turn/start': 'Turn start', 'turn/steer': 'Steer request' })[method] || method || 'Request';
+    let level = /(?:^|[-_])(?:FAIL(?:ED|URE)?|ERROR|ERR|REJECT(?:ED)?|DEAD|LOST|WEDGED)(?:$|[-_])/.test(verb) ? 'error'
+      : ['TIMEOUT', 'LATE', 'BLOCKED', 'SHARED_STATE_BLOCK', 'SHARED_ST', 'CCC-PEER-'].includes(verb) ? 'warning'
+      : ['SPAWN', 'DELIVERED', 'COMPLETE', 'COMPLETED', 'SUCCESS', 'RESOLVED'].includes(verb) ? 'success' : 'info';
+    let headline = verb.replace(/[-_]/g, ' ').toLowerCase().replace(/^./, ch => ch.toUpperCase()) || 'Activity';
+    if (verb === 'TIMEOUT') {
+      const wait = (detail.match(/no reply within ([\d.]+s)/) || [])[1];
+      headline = subject + ' timed out' + (wait ? ' after ' + wait : '');
+    } else if (verb === 'LATE') {
+      const late = (detail.match(/reply arrived ([\d.]+s) after/) || [])[1];
+      headline = subject + ' response arrived' + (late ? ' ' + late : '') + ' late';
+    } else if (verb === 'TITLED') {
+      const title = (detail.match(/(?:^|\s)title=(.*)/) || [])[1];
+      headline = title ? 'Session named “' + title + '”' : 'Session title updated';
+    } else if (verb === 'INJECT') headline = 'Message injection requested';
+    else if (verb === 'SPAWN') headline = 'Agent started';
+    else if (verb === 'UDS') {
+      const receipt = (metadata.match(/(?:^|\s)receipt=([^\s]+)/) || [])[1];
+      level = receipt === 'delivered' ? 'success' : receipt === 'queued' ? 'info' : 'warning';
+      headline = receipt === 'delivered' ? 'Message delivered through peer connection'
+        : receipt === 'queued' ? 'Message queued by peer connection' : 'Peer delivery is not confirmed';
+    } else if (verb === 'UDS-SKIP') {
+      headline = 'Direct socket skipped; another delivery route will be tried';
+      const reason = (metadata.match(/(?:^|\s)reason=([^\s]+)/) || [])[1];
+      level = ['no_socket_path', 'slash_command_needs_fifo'].includes(reason) ? 'info' : 'warning';
+    } else if (verb === 'UDS-FAIL') headline = 'Peer message delivery failed';
+    else if (verb === 'BEAT') {
+      const healthy = /^ok(?:\s+\(\d+(?:\.\d+)?s\))?\s*$/i.test(detail.trim());
+      level = healthy ? 'success' : 'warning';
+      headline = healthy ? 'Health check passed' : 'Health check needs attention';
+    } else if (verb === 'CCC-PEER-START') headline = 'Peer listener started';
+    else if (verb === 'CCC-PEER-REPORT') headline = 'Peer report received';
+    else if (verb === 'CCC-PEER-AUTH-FAIL') headline = 'Peer message authentication failed';
+    else if (verb === 'CCC-PEER-FAIL' || verb === 'CCC-PEER-ERR') headline = 'Peer connection failed';
+    else if (verb === 'CCC-PEER-ASK-REPLY') headline = 'Peer reply received';
+    else if (verb === 'CCC-PEER-') headline = 'Peer event — older log name was truncated';
+    else if (verb === 'SHARED_STATE_BLOCK') headline = 'Shared state already owned; private connection skipped';
+    else if (verb === 'SHARED_ST') headline = 'Shared-state event — older log name was truncated';
+    else if (detail) headline += ': ' + detail.replace(/^error=/, '');
+    // Only known repeated RPC diagnostics share a key despite differing ids
+    // or durations. Unknown failures group only when their exact text matches.
+    const key = JSON.stringify([category, verb, method && ['TIMEOUT', 'LATE'].includes(verb) ? method : detail]);
+    return { level, headline, key, verb, category };
+  }
+  function _readableLogGroups(events) {
+    const groups = [];
+    (events || []).slice().reverse().forEach(ev => {
+      const presentation = _readableLogPresentation(ev);
+      const previous = groups[groups.length - 1];
+      const gap = previous ? _readableLogEpoch(previous.events[previous.events.length - 1].ts) - _readableLogEpoch(ev.ts) : NaN;
+      if (previous && previous.presentation.key === presentation.key && gap >= 0 && gap <= 120000) previous.events.push(ev);
+      else groups.push({ presentation, events: [ev] });
+    });
+    groups.forEach(group => {
+      const oldest = group.events[group.events.length - 1];
+      group.id = JSON.stringify([group.presentation.key, oldest.ts, oldest.detail]);
+    });
+    return groups;
+  }
+  function _readableLogGroupHtml(group, open) {
+    const p = group.presentation, latest = group.events[0];
+    const severity = { error: ['!', 'Error'], warning: ['▲', 'Warning'], info: ['i', 'Info'], success: ['✓', 'Success'] }[p.level];
+    return '<details class="activity-log-entry is-' + p.level + '" data-log-key="' + escapeAttr(group.id) + '"' + (open ? ' open' : '') + '>'
+      + '<summary class="activity-log-summary"><span class="activity-log-entry-meta">'
+      + '<span class="activity-log-level"><span aria-hidden="true">' + severity[0] + '</span> ' + severity[1] + '</span>'
+      + '<time class="activity-log-time" title="' + escapeAttr(_activityLogTimestampLocal(latest.ts)) + '">' + escapeHtml(_readableLogTime(latest.ts)) + '</time>'
+      + (group.events.length > 1 ? '<span class="activity-log-repeat" title="Expand to see every occurrence">×' + group.events.length + '</span>' : '')
+      + '</span><span class="activity-log-headline">' + escapeHtml(p.headline) + '</span>'
+      + '<span class="activity-log-origin">' + escapeHtml(p.category || 'Activity') + ' · ' + escapeHtml(p.verb) + '<span class="activity-log-disclosure">Details ▾</span></span></summary>'
+      + '<div class="activity-log-occurrences">' + group.events.map(ev => '<div class="activity-log-occurrence">'
+        + '<div class="activity-log-occurrence-time">' + escapeHtml(_activityLogTimestampLocal(ev.ts)) + '</div>'
+        + '<pre class="activity-log-raw">' + escapeHtml(ev.detail || '(No additional details)') + '</pre></div>').join('') + '</div></details>';
+  }
+  function _renderReadableActivityLog(body, events) {
+    const entries = [...body.querySelectorAll('.activity-log-entry')];
+    const expanded = new Set(entries.filter(el => el.open).map(el => el.dataset.logKey));
+    const atTop = body.scrollTop < 2, oldScroll = body.scrollTop;
+    const top = body.getBoundingClientRect().top;
+    const anchor = !atTop && entries.find(el => el.getBoundingClientRect().bottom > top);
+    const anchorKey = anchor && anchor.dataset.logKey;
+    const offset = anchor && anchor.getBoundingClientRect().top - top;
+    body.innerHTML = _readableLogGroups(events).map(group => _readableLogGroupHtml(group, expanded.has(group.id))).join('');
+    if (atTop) body.scrollTop = 0;
+    else {
+      body.scrollTop = oldScroll;
+      const replacement = anchorKey && [...body.querySelectorAll('.activity-log-entry')].find(el => el.dataset.logKey === anchorKey);
+      if (replacement) body.scrollTop += replacement.getBoundingClientRect().top - top - offset;
+    }
+  }
+
   // ── Rail Log pane (CCC-1049) ────────────────────────────────────────────
   // The RHS "Log" tab: the unified activity log (~/.claude/command-center/
   // logs/activity.log via GET /api/activity-log) living in the status rail
@@ -58191,6 +58298,7 @@
   let _railLogFetchInFlight = false;
   let _railLogShowHeartbeats = false;
   let _railLogShowInjects = true;
+  let _railLogOnlyAttention = false;
 
   function _isSuccessfulHeartbeat(ev) {
     return String(ev.verb || '').toUpperCase() === 'BEAT'
@@ -58228,10 +58336,12 @@
     const needle = _railLogFilter.trim().toLowerCase();
     let events = _railLogEvents.filter(ev =>
       (_railLogShowHeartbeats || !_isSuccessfulHeartbeat(ev))
-      && (_railLogShowInjects || !_isRoutineInjectEvent(ev)));
+      && (_railLogShowInjects || !_isRoutineInjectEvent(ev))
+      && (!_railLogOnlyAttention || ['error', 'warning'].includes(_readableLogPresentation(ev).level)));
     if (needle) {
       events = events.filter((ev) => (
-        String(ev.category || '').toLowerCase().includes(needle)
+        _readableLogPresentation(ev).headline.toLowerCase().includes(needle)
+        || String(ev.category || '').toLowerCase().includes(needle)
         || String(ev.verb || '').toLowerCase().includes(needle)
         || String(ev.detail || '').toLowerCase().includes(needle)
       ));
@@ -58243,7 +58353,7 @@
       return;
     }
     // Newest first for reading — the API returns oldest-first (tail order).
-    body.innerHTML = events.slice().reverse().map(_activityLogRowHtml).join('');
+    _renderReadableActivityLog(body, events);
   }
 
   async function refreshRailLogPane() {
@@ -58300,12 +58410,12 @@
         refreshRailLogPane();
       });
     });
-    const bindToggle = (id, label, read, write) => {
+    const bindToggle = (id, label, read, write, activeTitle) => {
       const button = document.getElementById(id);
       if (!button) return;
       const sync = () => {
         button.setAttribute('aria-pressed', String(read()));
-        button.title = (read() ? 'Hide ' : 'Show ') + label;
+        button.title = read() && activeTitle ? activeTitle : (read() ? 'Hide ' : 'Show ') + label;
       };
       sync();
       button.addEventListener('click', () => {
@@ -58318,6 +58428,8 @@
       () => _railLogShowHeartbeats, value => { _railLogShowHeartbeats = value; });
     bindToggle('railLogShowInjects', 'routine inject events (delivery problems stay visible)',
       () => _railLogShowInjects, value => { _railLogShowInjects = value; });
+    bindToggle('railLogOnlyAttention', 'only warnings and errors',
+      () => _railLogOnlyAttention, value => { _railLogOnlyAttention = value; }, 'Show all event levels');
     if (filter) {
       filter.addEventListener('input', () => {
         _railLogFilter = filter.value || '';
