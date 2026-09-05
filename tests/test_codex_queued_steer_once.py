@@ -2508,3 +2508,36 @@ def test_resume_queue_insert_front_dedupe_skips_existing_value(monkeypatch, tmp_
 
     assert restored["ok"] is True
     assert list(server._pending_resume_queue[sid]) == ["steer text"]
+
+
+@pytest.mark.parametrize("engine_busy", [False, True])
+def test_fifo_pump_native_delivery_preserves_queue_origin(monkeypatch, tmp_path, engine_busy):
+    """Exercise the real native wrapper, including rollback when Codex is busy."""
+    sid = "fifo-native-origin"
+    monkeypatch.setattr(server, "_schedule_codex_queue_pump", lambda sid: None)
+    monkeypatch.setattr(server, "PENDING_INPUTS_FILE", tmp_path / "pending.json")
+    monkeypatch.setattr(server, "PENDING_INPUT_HANDOFF_DIR", tmp_path / "handoffs")
+    monkeypatch.setattr(server, "_control_plane_engine_call", lambda *a, **k: None)
+    monkeypatch.setattr(server, "_pending_resume_retry_due", lambda sid: True)
+    monkeypatch.setattr(server, "_resume_queue_engine_busy", lambda sid: False)
+    monkeypatch.setattr(server, "_spawned_sessions", [])
+    monkeypatch.setattr(server, "_resolve_codex_bin", lambda: {"available": True})
+    monkeypatch.setattr(server, "_codex_thread_row", lambda sid: {"cwd": str(tmp_path), "model": "test-model"})
+    monkeypatch.setattr(server, "_spawn_registry_entry_for_session", lambda *a: {})
+    monkeypatch.setattr(server, "_get_session_override", lambda sid: {})
+    monkeypatch.setattr(server, "_resume_ledger_append", lambda *a, **k: None)
+    result = ({"ok": False, "fallback": "queue", "error": "turn active"}
+              if engine_busy else {"ok": True, "accepted": True})
+    transport = mock.Mock(return_value=result)
+    monkeypatch.setattr(server, "_codex_resume_or_steer_via_app_server", transport)
+    server._pending_resume_queue[sid] = ["first", "second", "third"]
+    assert server._save_pending_inputs({sid})
+
+    outcome = server._pump_codex_resume_queue(sid)
+
+    transport.assert_called_once()
+    assert transport.call_args.args == (sid, "first")
+    assert bool(outcome.get("delivered")) is not engine_busy
+    expected = ["first", "second", "third"] if engine_busy else ["second", "third"]
+    assert server._pending_resume_queue[sid] == expected
+    assert json.loads(server.PENDING_INPUTS_FILE.read_text())["resume_queue"][sid] == expected

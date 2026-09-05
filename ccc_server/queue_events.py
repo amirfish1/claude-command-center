@@ -1471,6 +1471,9 @@ def _resume_session_codex_native_delivery(
         steer=steer,
         idempotency_key=idempotency_key,
         _native_delivery=True,
+        # Normal native delivery owns a FIFO claim. Preserve that origin so
+        # it neither queues behind its own tail nor appends a copy on busy.
+        _from_queue=not steer,
     )
 
 
