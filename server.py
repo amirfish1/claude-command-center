@@ -8166,15 +8166,14 @@ def _validate_codex_model(model, *, require_available=False):
     return model, None
 
 
-def _load_spawn_defaults():
-    """Return the server-backed defaults used by new-session spawns.
+def _factory_spawn_defaults():
+    """The one place factory literals live: seeds a brand-new defaults file,
 
-    These defaults are intentionally server-side rather than localStorage so
-    ccc-orchestration and other scripted callers see the same values as the UI.
-    Missing file means the historical behavior: Claude + opus, Codex env/gpt,
-    Cursor env/auto, and Antigravity's configured CLI model when one exists.
+    or backfills a key for an engine added after the user's file was
+    written. Never consulted at spawn time once a file exists — the file is
+    the single source of truth from then on (see _load_spawn_defaults).
     """
-    defaults = {
+    return {
         "engine": "claude",
         "reasoning_effort": "",
         "auto_compact_k": 250,
@@ -8187,12 +8186,43 @@ def _load_spawn_defaults():
             for engine in _ORCHESTRATION_SPAWN_ENGINES
         },
     }
+
+
+def _write_spawn_defaults_file(payload):
+    COMMAND_CENTER_STATE_DIR.mkdir(parents=True, exist_ok=True)
+    tmp = SPAWN_DEFAULTS_FILE.with_suffix(".json.tmp")
+    with open(tmp, "w", encoding="utf-8") as f:
+        json.dump(payload, f, indent=2, sort_keys=True)
+        f.write("\n")
+    tmp.replace(SPAWN_DEFAULTS_FILE)
+
+
+def _load_spawn_defaults():
+    """Return the server-backed defaults used by new-session spawns.
+
+    These defaults are intentionally server-side rather than localStorage so
+    ccc-orchestration and other scripted callers see the same values as the UI.
+    A missing file (first-ever run) is seeded once from factory literals and
+    persisted; a file that predates a newly added engine gets that one key
+    backfilled and re-saved. Beyond that one-time migration, this function
+    never substitutes a factory value for a blank one the user explicitly
+    set — the file is authoritative.
+    """
+    defaults = _factory_spawn_defaults()
     try:
         raw = json.loads(SPAWN_DEFAULTS_FILE.read_text())
+    except FileNotFoundError:
+        _write_spawn_defaults_file(defaults)
+        return defaults
     except (OSError, json.JSONDecodeError):
         return defaults
     if not isinstance(raw, dict):
         return defaults
+
+    needs_migration = any(
+        engine not in (raw.get("models") or {})
+        for engine in _ORCHESTRATION_SPAWN_ENGINES
+    )
 
     engine = _normalize_orchestration_spawn_engine(raw.get("engine"))
     if engine not in _ORCHESTRATION_SPAWN_ENGINES:
@@ -8208,9 +8238,6 @@ def _load_spawn_defaults():
             model = _clean_spawn_default_model(value)
             if len(model) <= 200:
                 models[norm] = model
-    for required in ("claude", "codex", "cursor", "hermes"):
-        if not models.get(required):
-            models[required] = defaults["models"].get(required) or _spawn_fallback_model_for_engine(required)
     reasoning_effort = _validate_reasoning_effort(
         raw.get("reasoning_effort") or raw.get("effort"), engine,
     )
@@ -8236,7 +8263,7 @@ def _load_spawn_defaults():
 
     auto_compact_k = _validate_auto_compact_k(raw.get("auto_compact_k"))
     worker_auto_compact_k = _validate_auto_compact_k(raw.get("worker_auto_compact_k"))
-    return {
+    result = {
         "engine": engine, "models": models,
         "reasoning_effort": reasoning_effort,
         "auto_compact_k": auto_compact_k,
@@ -8245,6 +8272,12 @@ def _load_spawn_defaults():
         "worker_reasoning_effort": worker_reasoning_effort,
         "worker_auto_compact_k": worker_auto_compact_k,
     }
+    if needs_migration:
+        # A new engine was added to _ORCHESTRATION_SPAWN_ENGINES after this
+        # file was written. Backfill it once and persist so every future
+        # read is complete without re-touching the literals in this function.
+        _write_spawn_defaults_file(result)
+    return result
 
 
 def _save_spawn_defaults(config):
@@ -8332,8 +8365,6 @@ def _save_spawn_defaults(config):
             model = _clean_spawn_default_model(value)
             if len(model) > 200:
                 return {"ok": False, "error": f"{engine} model is too long"}
-            if engine in ("claude", "codex", "cursor", "hermes") and not model:
-                model = _spawn_fallback_model_for_engine(engine)
             current["models"][engine] = model
 
     payload = {
@@ -8349,12 +8380,7 @@ def _save_spawn_defaults(config):
             for engine in _ORCHESTRATION_SPAWN_ENGINES
         },
     }
-    COMMAND_CENTER_STATE_DIR.mkdir(parents=True, exist_ok=True)
-    tmp = SPAWN_DEFAULTS_FILE.with_suffix(".json.tmp")
-    with open(tmp, "w", encoding="utf-8") as f:
-        json.dump(payload, f, indent=2, sort_keys=True)
-        f.write("\n")
-    tmp.replace(SPAWN_DEFAULTS_FILE)
+    _write_spawn_defaults_file(payload)
     return {"ok": True, **payload}
 
 
@@ -8389,10 +8415,7 @@ def _spawn_model_for_engine(engine, explicit_model=None):
     if model:
         return model
     defaults = _load_spawn_defaults()
-    model = _clean_spawn_default_model((defaults.get("models") or {}).get(engine))
-    if model:
-        return model
-    return _spawn_fallback_model_for_engine(engine)
+    return _clean_spawn_default_model((defaults.get("models") or {}).get(engine))
 
 
 def _spawn_request_engine_and_model(payload):
@@ -8406,8 +8429,6 @@ def _spawn_request_engine_and_model(payload):
     model = _clean_spawn_default_model(payload.get("model"))
     if not model:
         model = _clean_spawn_default_model((defaults.get("models") or {}).get(engine))
-    if not model:
-        model = _spawn_fallback_model_for_engine(engine)
     return engine, model or None
 
 
