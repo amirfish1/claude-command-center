@@ -46787,7 +46787,23 @@
       +       '<div class="fq-config-field wide"><label>Ticket backend</label><div class="fq-seg" id="fqBackendSeg" role="group" aria-label="Ticket backend"><button type="button" data-backend="file">Local WatchTower queue</button><button type="button" data-backend="github">GitHub issues</button></div><select id="fqConfigBackend" name="fq-config-backend" hidden><option value="file">Local WatchTower queue</option><option value="github">GitHub issues</option></select><span class="fq-config-help">GitHub queues require an owner/repository.</span></div>'
       +     '</div></div>'
       +     '<div class="fq-config-section"><div class="fq-config-eyebrow">Worker</div><div class="fq-config-grid">'
-      +       '<div class="fq-config-field wide"><label>Engine</label><div class="fq-seg" id="fqEngineSeg" role="group" aria-label="Worker engine"><button type="button" data-engine="">CCC default</button><button type="button" data-engine="claude">Claude</button><button type="button" data-engine="codex">Codex</button><button type="button" data-engine="gemini">Gemini</button><button type="button" data-engine="cursor">Cursor</button><button type="button" data-engine="antigravity">Antigravity</button><button type="button" data-engine="kilo">Kilo</button><button type="button" data-engine="opencode">OpenCode</button><button type="button" data-engine="kimi">Kimi</button><button type="button" data-engine="hermes">Hermes</button><button type="button" data-engine="devin">Devin</button><button type="button" data-engine="grok">Grok</button><button type="button" data-engine="aider">Aider</button><button type="button" data-engine="droid">Droid</button><button type="button" data-engine="pi">Pi</button></div><select id="fqConfigEngine" hidden><option value="">CCC spawn default</option><option value="claude">Claude</option><option value="codex">Codex</option><option value="gemini">Gemini</option><option value="cursor">Cursor</option><option value="antigravity">Antigravity</option><option value="kilo">Kilo</option><option value="opencode">OpenCode</option><option value="kimi">Kimi</option><option value="hermes">Hermes</option><option value="devin">Devin</option><option value="grok">Grok</option><option value="aider">Aider</option><option value="droid">Droid</option><option value="pi">Pi</option></select><span class="fq-config-help">Choose an override, or let CCC pick its shared worker engine default.</span></div>'
+      +       '<div class="fq-config-field wide"><label>Engine</label><div class="fq-engine-chips" id="fqEngineSeg" role="radiogroup" aria-label="Worker engine">'
+      +         '<button type="button" class="orch-tier-chip" data-engine="" role="radio"><span class="orch-glyph" style="font-size:8px">⚙</span>CCC default</button>'
+      +         '<button type="button" class="orch-tier-chip" data-engine="claude" role="radio"><span class="orch-glyph orch-glyph-claude">C</span>Claude</button>'
+      +         '<button type="button" class="orch-tier-chip" data-engine="codex" role="radio"><span class="orch-glyph orch-glyph-codex">X</span>Codex</button>'
+      +         '<button type="button" class="orch-tier-chip" data-engine="gemini" role="radio"><span class="orch-glyph orch-glyph-gemini">G</span>Gemini</button>'
+      +         '<button type="button" class="orch-tier-chip" data-engine="cursor" role="radio"><span class="orch-glyph orch-glyph-cursor">U</span>Cursor</button>'
+      +         '<button type="button" class="orch-tier-chip" data-engine="antigravity" role="radio"><span class="orch-glyph orch-glyph-antigravity">A</span>Antigravity</button>'
+      +         '<button type="button" class="orch-tier-chip" data-engine="kilo" role="radio"><span class="orch-glyph orch-glyph-kilo">L</span>Kilo</button>'
+      +         '<button type="button" class="orch-tier-chip" data-engine="opencode" role="radio"><span class="orch-glyph orch-glyph-opencode">O</span>OpenCode</button>'
+      +         '<button type="button" class="orch-tier-chip" data-engine="kimi" role="radio"><span class="orch-glyph orch-glyph-kimi">K</span>Kimi</button>'
+      +         '<button type="button" class="orch-tier-chip" data-engine="hermes" role="radio"><span class="orch-glyph orch-glyph-hermes">H</span>Hermes</button>'
+      +         '<button type="button" class="orch-tier-chip" data-engine="devin" role="radio"><span class="orch-glyph orch-glyph-devin">D</span>Devin</button>'
+      +         '<button type="button" class="orch-tier-chip" data-engine="grok" role="radio"><span class="orch-glyph orch-glyph-grok">G</span>Grok</button>'
+      +         '<button type="button" class="orch-tier-chip" data-engine="aider" role="radio"><span class="orch-glyph orch-glyph-aider">A</span>Aider</button>'
+      +         '<button type="button" class="orch-tier-chip" data-engine="droid" role="radio"><span class="orch-glyph orch-glyph-droid">D</span>Droid</button>'
+      +         '<button type="button" class="orch-tier-chip" data-engine="pi" role="radio"><span class="orch-glyph orch-glyph-pi">P</span>Pi</button>'
+      +       '</div><select id="fqConfigEngine" hidden><option value="">CCC spawn default</option><option value="claude">Claude</option><option value="codex">Codex</option><option value="gemini">Gemini</option><option value="cursor">Cursor</option><option value="antigravity">Antigravity</option><option value="kilo">Kilo</option><option value="opencode">OpenCode</option><option value="kimi">Kimi</option><option value="hermes">Hermes</option><option value="devin">Devin</option><option value="grok">Grok</option><option value="aider">Aider</option><option value="droid">Droid</option><option value="pi">Pi</option></select><span class="fq-config-help">Choose an override, or let CCC pick its shared worker engine default.</span></div>'
       +       '<div class="fq-config-field"><label for="fqConfigModel">Model (optional)</label><select id="fqConfigModel"></select><input id="fqConfigCustomModel" placeholder="Model id" hidden><span class="fq-config-help">Cost tiers shown per model; Highspeed is the fast (2× price) tier.</span></div>'
       +       '<div class="fq-config-field"><label for="fqConfigEffort">Effort (optional)</label><select id="fqConfigEffort"><option value="">Use engine default</option><option value="low">Light</option><option value="medium">Medium</option><option value="high">High</option><option value="xhigh">Extra High</option><option value="max">Max</option></select><span class="fq-config-help">Reasoning budget passed to WatchTower workers for this queue.</span></div>'
       +       '<div class="fq-config-field wide"><label for="fqConfigPath">Working repository</label><input id="fqConfigPath" list="fqConfigPaths" placeholder="/path/to/repository"><datalist id="fqConfigPaths">' + pathChoices + '</datalist><span class="fq-config-help">Suggestions come from queues already configured on this machine.</span></div>'
@@ -46834,7 +46850,11 @@
       fields.queue.value = (entry && entry.queue) || initialQueue || '';
       fields.workers.value = c.desired_workers == null ? 1 : c.desired_workers;
       fields.backend.value = c.backend || 'file'; fields.engine.value = c.engine || '';
-      fields.path.value = c.repo_path || ''; setModel(c.model); fields.effort.value = c.effort || ''; fields.drain.checked = !!c.auto_drain; fields.gate.checked = !!c.product_gate;
+      fields.path.value = c.repo_path || ''; setModel(c.model);
+      var eng = fields.engine.value;
+      var levels = eng ? effortLevelsForEngine(eng) : allEffortLevels();
+      renderEffortOptions(fields.effort, levels, c.effort || '', 'Use engine default');
+      fields.drain.checked = !!c.auto_drain; fields.gate.checked = !!c.product_gate;
       fields.repo.value = c.github_repo || ''; fields.assignee.value = c.github_assignee || '';
       modal.querySelectorAll('input[name="fq-config-claim-type"]').forEach(box => { box.checked = Array.isArray(c.claim_types) && c.claim_types.includes(box.value); });
       modal.querySelectorAll('.fq-config-github').forEach(el => { el.hidden = fields.backend.value !== 'github'; });
@@ -46858,7 +46878,11 @@
     function syncSegmented() {
       const bseg = $('#fqBackendSeg'), eseg = $('#fqEngineSeg');
       if (bseg) bseg.querySelectorAll('button').forEach(b => b.classList.toggle('is-active', (b.getAttribute('data-backend') || '') === fields.backend.value));
-      if (eseg) eseg.querySelectorAll('button').forEach(b => b.classList.toggle('is-active', (b.getAttribute('data-engine') || '') === fields.engine.value));
+      if (eseg) eseg.querySelectorAll('.orch-tier-chip').forEach(b => {
+        const sel = (b.getAttribute('data-engine') || '') === fields.engine.value;
+        b.classList.toggle('is-selected', sel);
+        b.setAttribute('aria-checked', sel ? 'true' : 'false');
+      });
     }
     function syncDrainToggle() {
       const t = $('#fqDrainToggle');
@@ -46884,7 +46908,18 @@
     apply(findQueue(initialQueue));
     fields.queue.addEventListener('change', () => { const found = findQueue(fields.queue.value); if (found) apply(found); });
     fields.backend.addEventListener('change', () => modal.querySelectorAll('.fq-config-github').forEach(el => { el.hidden = fields.backend.value !== 'github'; }));
-    fields.engine.addEventListener('change', () => setModel(''));
+    fields.engine.addEventListener('change', () => {
+      setModel('');
+      // Rebuild effort dropdown for the selected engine's ladder
+      const eng = fields.engine.value;
+      const levels = eng ? effortLevelsForEngine(eng) : allEffortLevels();
+      renderEffortOptions(fields.effort, levels, '', 'Use engine default');
+      // Show/hide custom model based on engine support
+      const supportsCustom = !eng || ENGINE_SUPPORTS_CUSTOM_MODEL[eng];
+      const customOpt = fields.model.querySelector('option[value="__custom__"]');
+      if (customOpt) customOpt.hidden = !supportsCustom;
+      if (!supportsCustom) { fields.customModel.hidden = true; fields.customModel.value = ''; if (fields.model.value === '__custom__') fields.model.value = ''; }
+    });
     fields.model.addEventListener('change', () => {
       const custom = fields.model.value === '__custom__';
       fields.customModel.hidden = !custom;

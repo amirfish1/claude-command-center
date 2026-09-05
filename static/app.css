@@ -22640,6 +22640,50 @@ body.has-gc-reader .pwa-install-banner {
   border-radius: 6px;
   padding: 4px 8px;
 }
+/* OPS-938: persistent per-queue alarm banner (stuck / no effective worker /
+   invalid worker config). Sits above the status strip until health clears —
+   deliberately NOT a transient toast. */
+.fq-queue-alarm {
+  flex-basis: 100%; order: -2;
+  border-radius: 8px;
+  padding: 8px 10px;
+  margin-bottom: 6px;
+  font-size: 12px;
+  line-height: 1.45;
+}
+.fq-queue-alarm.is-error {
+  color: var(--red, #f85149);
+  background: rgba(248,81,73,0.10);
+  border: 1px solid rgba(248,81,73,0.40);
+}
+.fq-queue-alarm.is-warn {
+  color: var(--yellow, #d29922);
+  background: rgba(210,153,34,0.10);
+  border: 1px solid rgba(210,153,34,0.35);
+}
+.fq-queue-alarm-title {
+  font-weight: 700;
+  margin-bottom: 2px;
+}
+.fq-queue-alarm-line {
+  color: var(--text-muted);
+  font-size: 11.5px;
+}
+.fq-queue-alarm-actions {
+  display: flex; gap: 8px;
+  margin-top: 6px;
+}
+.fq-queue-alarm-btn {
+  font: inherit; font-size: 11.5px; font-weight: 600;
+  padding: 3px 10px; border-radius: 6px; cursor: pointer;
+  border: 1px solid currentColor;
+  background: transparent; color: inherit;
+}
+.fq-queue-alarm-btn:hover:not(:disabled), .fq-queue-alarm-btn:focus-visible {
+  background: rgba(255,255,255,0.08); outline: none;
+}
+.fq-queue-alarm-btn:disabled { opacity: 0.5; cursor: default; }
+
 .fq-health-add {
   width: 100%; border: 0; border-top: 1px solid rgba(139,148,158,0.12);
   padding: 7px 10px; background: transparent; color: var(--text-muted);
@@ -25598,6 +25642,9 @@ a.settings-row:focus-visible .settings-launcher-btn { text-decoration: underline
   color: var(--text); word-break: break-word;
   white-space: pre-wrap;
 }
+.activity-log-row.is-good .activity-log-detail { color: #3fb950; }
+.activity-log-row.is-bad .activity-log-detail { color: #f85149; }
+.activity-log-row.is-warn .activity-log-detail { color: #d29922; }
 .activity-log-empty, .activity-log-error {
   padding: 24px 14px; text-align: center;
   color: var(--text-muted); font-size: 12px;
@@ -26945,6 +26992,12 @@ html:not(.ccc-debug-mode) #statsModal {
 .orch-glyph-kilo { background: #f59e0b; }
 .orch-glyph-hermes { background: #10b981; }
 .orch-glyph-opencode { background: #ec4899; }
+.orch-glyph-aider { background: #14b8a6; }
+.orch-glyph-droid { background: #6366f1; }
+.orch-glyph-pi { background: #f97316; }
+
+/* Queue config engine chip container */
+.fq-engine-chips { display: flex; flex-wrap: wrap; gap: 5px; }
 
 /* Quick Model Picker right above composer */
 .conv-model-picker-strip {
