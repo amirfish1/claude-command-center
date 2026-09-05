@@ -5373,7 +5373,9 @@
 
     // ── Entry, escape, and invalidation ────────────────────────────────────
     window.enterTputZoom = function (row) {
-      const slotMs = keyToMs(row && row.hour);
+      // Chart slots are UTC keys; only the raw summary rows use local time.
+      // Match the chart's timestamp parsing so the clicked hour stays in view.
+      const slotMs = chartRowTimeMs(row);
       if (slotMs == null) return;
       // 12h window: 4h of context before the clicked 3h slot, 5h after.
       let startMs = slotMs - 4 * 3600e3;
