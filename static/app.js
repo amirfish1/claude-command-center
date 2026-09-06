@@ -36888,15 +36888,19 @@
           + ' title="' + escapeAttr((wid || 'This worker') + ' is running on the '
               + (queue || 'WatchTower') + ' queue but has not opened its engine session yet. '
               + 'Click to open the queue.') + '">'
-          + icon
-          + '<div class="conv-main-row"><div class="conv-title-row">'
+          // Same nesting as a real row -- .conv-title-row outside .conv-main-row.
+          // The table flattens both with display:contents so the cells below
+          // become grid items of .conv-item and land in the shared columns; get
+          // the order wrong and the row silently opts out of the table.
+          + '<div class="conv-title-row"><div class="conv-main-row">'
+          +   icon
           +   '<span class="conv-title">' + escapeHtml((queue || 'WatchTower') + ' worker')
           +     ' <span class="conv-wt-pending-note">starting\u2026</span></span>'
+          +   '<div class="conv-meta-col"><span class="conv-wt-pending-id">'
+          +     escapeHtml(wid || 'worker') + '</span></div>'
+          +   '<span class="conv-row-end"><span class="conv-rel" data-role="rel" title="Started">'
+          +     escapeHtml(age) + '</span></span>'
           + '</div></div>'
-          + '<div class="conv-meta-col"><span class="conv-wt-pending-id">'
-          +   escapeHtml(wid || 'worker') + '</span></div>'
-          + '<span class="conv-row-end"><span class="conv-rel" data-role="rel" title="Started">'
-          +   escapeHtml(age) + '</span></span>'
           + '</div>';
       }).join('');
       let _workersUniformHtml = '';
