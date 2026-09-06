@@ -28258,6 +28258,44 @@ body.mobile-ask-open .mobile-bottom-nav { z-index: 950; }
 #convList.workers-dense .conv-item .conv-title-row { gap: 6px; }
 #convList.workers-dense .conv-worker-ticket { padding: 0 4px; }
 #convList.workers-dense .conv-gap-separator { margin: 6px 6px 3px; }
+
+/* Uniform-column hoist. When every worker in view shares an engine and/or a
+   cost tier, that per-row glyph is pure repetition: the strip above the list
+   states the shared value once and these rules reclaim the column it used to
+   occupy. Only the columns that are ACTUALLY uniform get hidden -- a varying
+   cost tier keeps its dollars on every row. The activity dot is never hidden:
+   working-vs-idle differs per row, which is the whole point. */
+.conv-workers-uniform {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  flex-wrap: wrap;
+  margin: 2px 8px 4px;
+  padding: 2px 0;
+  font-size: 11px;
+  line-height: 1.4;
+  color: var(--muted, #93a1b0);
+}
+.conv-workers-uniform b {
+  font-weight: 700;
+  color: var(--fg, #d8e2ec);
+}
+.conv-workers-uniform-note {
+  opacity: 0.6;
+  font-size: 10px;
+}
+#convList.workers-hoist-engine .conv-item .conv-session-icon .conv-session-svg,
+#convList.workers-hoist-engine .conv-item .conv-session-icon > svg {
+  display: none;
+}
+/* The $-tier sits at left:18px to clear the engine glyph; with the glyph gone
+   it slides back to the start of the (now narrower) column. */
+#convList.workers-hoist-engine .conv-item .session-tier-cost { left: 2px; }
+#convList.workers-hoist-cost .conv-item .session-tier-cost { display: none; }
+/* --conv-content-left is calc()'d off --conv-dot-col on .conv-item, so
+   narrowing the column here reflows the title's left edge with it. */
+#convList.workers-hoist-engine .conv-item { --conv-dot-col: 20px; }
+#convList.workers-hoist-engine.workers-hoist-cost .conv-item { --conv-dot-col: 8px; }
 /* Overflow chip: same affordance as the ticket chips, muted so it reads as a
    count rather than a fourth ticket ref. Shown in every density. */
 .conv-worker-history-more {

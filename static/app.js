@@ -36205,6 +36205,38 @@
       ? _allTabWorkerConvs
       : (_allTabView === 'coding' ? _allTabCodingConvs : _allTabOtherConvs);
     const _allTabTreeRows = _allTabTreeRowsFor(_allTabMainConvs);
+    // Uniform-column hoist (Workers). Engine glyph and $-tier are the two
+    // columns that repeat most on this tab -- a fleet of Codex workers prints
+    // the same mark on every single row. When the whole visible set shares a
+    // value that column carries zero information per row, so state it ONCE
+    // above the list and drop the per-row glyph, which hands the reclaimed
+    // icon column back to the title. Display only: no row is filtered, and a
+    // column that actually varies is left alone and stays per-row.
+    const _workersHoist = { engine: '', engineLabel: '', tier: '', tierLabel: '', count: 0 };
+    if (_allTabView === 'workers' && _allTabMainConvs.length > 1) {
+      const _hoistEngines = new Set();
+      const _hoistTiers = new Set();
+      let _hoistEngineLabel = '';
+      let _hoistTierLabel = '';
+      for (const c of _allTabMainConvs) {
+        const p = sessionIconPresentation(c);
+        _hoistEngines.add(p.engine || '');
+        _hoistTiers.add(p.tier || '');
+        _hoistEngineLabel = p.engineLabel || '';
+        _hoistTierLabel = p.tierLabel || '';
+      }
+      _workersHoist.count = _allTabMainConvs.length;
+      if (_hoistEngines.size === 1 && [..._hoistEngines][0]) {
+        _workersHoist.engine = [..._hoistEngines][0];
+        _workersHoist.engineLabel = _hoistEngineLabel;
+      }
+      // An unknown tier ('') is not a shared tier -- hoisting it would claim
+      // uniformity we never established.
+      if (_hoistTiers.size === 1 && [..._hoistTiers][0]) {
+        _workersHoist.tier = [..._hoistTiers][0];
+        _workersHoist.tierLabel = _hoistTierLabel;
+      }
+    }
     const _allTabRowsToClusters = (rows) => {
       const clusters = [];
       (rows || []).forEach(item => {
@@ -36613,6 +36645,26 @@
             + '<span class="grouping-opt' + (workersDenseOn() ? ' is-active' : '') + '" data-workers-dense-toggle="1">Dense</span>'
           + '</span>'
         : '';
+      // The strip that replaces the hoisted columns. It names what was folded
+      // away so the information is still on screen, just once instead of N
+      // times.
+      const _workersHoistDollars = (tier) => {
+        const n = { premium: 3, high: 2, medium: 1, low: 0 }[tier] || 0;
+        return n ? '$'.repeat(n) : 'Low cost';
+      };
+      let _workersUniformHtml = '';
+      if (_workersHoist.engine || _workersHoist.tier) {
+        const parts = [];
+        if (_workersHoist.engine) parts.push('<b>' + escapeHtml(_workersHoist.engineLabel || _workersHoist.engine) + '</b>');
+        if (_workersHoist.tier) parts.push('<b>' + escapeHtml(_workersHoistDollars(_workersHoist.tier)) + '</b>');
+        const noun = (_workersHoist.engine && _workersHoist.tier) ? 'engine &amp; cost columns'
+          : (_workersHoist.engine ? 'engine column' : 'cost column');
+        _workersUniformHtml = '<div class="conv-workers-uniform" data-role="workers-uniform"'
+          + ' title="' + escapeAttr('Every session in this view shares these values, so the per-row columns are hidden.') + '">'
+          + 'all <b>' + _workersHoist.count + '</b> workers: ' + parts.join(' &middot; ')
+          + '<span class="conv-workers-uniform-note">' + noun + ' hidden while uniform</span>'
+          + '</div>';
+      }
       const _arcTools = '<div class="conv-archived-tools" data-role="archived-tools">'
           + '<span class="conv-archived-tools-left">' + _arcExpandAllToggle + '</span>'
           + '<span class="conv-archived-tools-right">' + _arcWindowToggle + _arcEngineToggle + _arcGroupingToggle + _arcWrapToggle + _arcDenseToggle + _arcDetailsToggle + '</span>'
@@ -36620,6 +36672,7 @@
       _archivedHtml =
         '<div class="conv-archived-section" data-role="archived-section">'
         + _arcTools
+        + _workersUniformHtml
         + _allHermesTabBarHtml
         + '<div class="conv-archived-list">' + _arcRows + '</div>'
         + _trashHtmlForAllTabView
@@ -36682,6 +36735,16 @@
     const _convListHtml = _tabBarHtml + _idSearchRowsHtml + _repoSearchRowsHtml + _tabBody + _showMoreRowsHtml;
     const _objectsSplitActive = _sidebarTab === 'inprogress' && _shouldGroupByObjects;
     $convList.classList.toggle('objects-scroll-split', _objectsSplitActive);
+    // Hoist classes ride on $convList, like .compact-rows and .workers-dense:
+    // a class on the section wrapper does not survive every render path (that
+    // was the bug that left Dense inert). Set before the flicker guard's early
+    // return so a volatile-only tick can't leave them stale.
+    $convList.classList.toggle('workers-hoist-engine', !!_workersHoist.engine);
+    $convList.classList.toggle('workers-hoist-cost', !!_workersHoist.tier);
+    // Re-assert the density classes every render: workersDenseTabActive() is
+    // tab-dependent, and this only ran once at startup, so leaving Workers for
+    // Coding used to carry .workers-dense along with it.
+    applyRowDensityToggles();
     if (_objectsSplitActive) { applyCurrentSessionsPanelHeight(); applyEvergreenPanelHeight(); }
     else { $convList.style.removeProperty('--current-sessions-panel-h'); $convList.style.removeProperty('--evergreen-agents-panel-h'); }
     // Flicker guard. The 10s bulk-sessions poll and the 5s live-status tick both
