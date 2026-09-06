@@ -2394,6 +2394,17 @@
     const criticalPaths = [
       '/api/conversations/list', '/api/conversations', '/api/sessions',
       '/api/config', '/api/features', '/api/loading-status',
+      // Deferred like any other background read, these two raced
+      // abortBackgroundApiReadsForSpawn(): the first pointerdown anywhere
+      // (e.g. clicking New session) released them into the abortable
+      // backgroundApiFetch pool, then that same click's `click` handler
+      // aborted the pool before the response came back. loadSpawnDefaults()
+      // swallowed the AbortError and latched _spawnDefaultsLoaded=true with
+      // the model default still empty, so the composer fell back to
+      // MODEL_OPTIONS_BY_ENGINE[engine][0] (fable-5, the priciest tier) for
+      // the rest of the tab's life. Keeping them off the deferred queue lets
+      // them fetch immediately at load instead of racing the first click.
+      '/api/spawn-defaults', '/api/model-picker/picks',
     ];
     return criticalPaths.some(prefix => parsed.pathname === prefix || parsed.pathname.startsWith(prefix + '/'));
   }
@@ -66350,6 +66361,20 @@
         const fallbackOpt = allModels.find(opt => !opt.disabled) || allModels[0];
         if (defaultModel && defaultOpt) {
           $convInputModelSelect.value = defaultModel;
+        } else if (!_spawnDefaultsLoaded) {
+          // /api/spawn-defaults hasn't resolved yet (it can queue behind
+          // heavier page-load fetches for seconds). MODEL_OPTIONS_BY_ENGINE
+          // lists the priciest tier first for display purposes, so falling
+          // back to allModels[0] here would silently select and spawn on
+          // that tier during the race. Same failure shape as the
+          // spawn-default-model-fable-leak fix in server.py: never guess an
+          // expensive model as a placeholder. A blank value defers to the
+          // server's own persisted default once the spawn actually fires.
+          const placeholder = document.createElement('option');
+          placeholder.value = '';
+          placeholder.textContent = 'Loading default…';
+          $convInputModelSelect.insertBefore(placeholder, $convInputModelSelect.firstChild);
+          $convInputModelSelect.value = '';
         } else if (fallbackOpt) {
           $convInputModelSelect.value = fallbackOpt.id;
         }
