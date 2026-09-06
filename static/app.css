@@ -28218,6 +28218,51 @@ body.mobile-ask-open .mobile-bottom-nav { z-index: 950; }
 /* Expanded ticket history owns the row space; floating hover metadata must not cover it. */
 .conv-item:has(.conv-worker-history[open]) .conv-hover-extras { display: none !important; }
 
+/* ── Workers tab: dense mode ────────────────────────────────────────────────
+   Workers is the one lane where every row largely repeats its neighbours, so
+   it earns a table treatment the card lanes don't. Everything here is display
+   only — no row is filtered, and turning Dense off restores the card list
+   exactly. Scoped to .workers-dense (set on the Workers section wrapper), so
+   Coding/Other/Archived are untouched. */
+.workers-dense .conv-item {
+  padding-top: 3px;
+  padding-bottom: 3px;
+  margin-bottom: 0;
+}
+/* Wrap is a global preference, but a wrapped title costs a whole extra line
+   per row and that is the single biggest space sink on this tab. Dense wins
+   over Wrap here; the title's tooltip still shows the full text, and turning
+   Dense off hands Wrap back. Specificity (0,3,2) deliberately beats the
+   .wrap-titles rule's (0,2,2). */
+.wrap-titles .workers-dense .conv-item .conv-title,
+.workers-dense .conv-item .conv-title {
+  white-space: nowrap;
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  line-height: 1.3;
+  -webkit-line-clamp: none;
+}
+/* The prose count duplicates what the chips beside it already say. The chips
+   (plus the "+N" overflow) keep the total visible, so the words go. */
+.workers-dense .conv-worker-history-count { display: none; }
+.workers-dense .conv-worker-history {
+  margin: 0 0 0 26px;
+  font-size: 10.5px;
+}
+.workers-dense .conv-worker-history > summary { line-height: 1.45; }
+.workers-dense .conv-worker-history-recent { margin-left: 0; }
+.workers-dense .conv-worker-ticket { padding: 0 4px; }
+/* Overflow chip: same affordance as the ticket chips, muted so it reads as a
+   count rather than a fourth ticket ref. Shown in every density. */
+.conv-worker-history-more {
+  padding: 1px 5px;
+  border: 1px dashed var(--border);
+  border-radius: 4px;
+  color: var(--text-muted);
+  cursor: pointer;
+}
+
 /* Readable log entries keep severity and summaries visible, diagnostics expandable. */
 .activity-log-entry {
   --log-level: #78b7ff;

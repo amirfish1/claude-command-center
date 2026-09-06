@@ -3139,6 +3139,18 @@
     try { return localStorage.getItem('ccc-wrap-titles') === '1'; }
     catch (_) { return false; }
   }
+  // Workers-tab density. The Workers list is the one view where nearly every
+  // row repeats its neighbours: same engine, same cost tier, a ticket ref that
+  // is printed once in the title and again as a chip, and recurring queue
+  // drains spawned a dozen times under slightly different wording. Dense mode
+  // collapses each session to one line and folds those repeats into expandable
+  // rows -- nothing is filtered, so the tab stays comprehensive. Scoped to
+  // Workers; Coding/Other keep the card list. On by default.
+  const WORKERS_DENSE_KEY = 'ccc-workers-dense';
+  function workersDenseOn() {
+    try { return localStorage.getItem(WORKERS_DENSE_KEY) !== '0'; }
+    catch (_) { return true; }
+  }
   // Row spacing: independent 3-step control (cozy/roomy/airy) for
   // padding/line-height between rows. Independent of both compact-rows
   // (which just shows/hides the outcome card) and the font/color row-style
@@ -36507,12 +36519,21 @@
       // it inline with the others (all right-justified together) made the
       // window/engine buttons visibly jump left/right when switching
       // between "by time" and "by project".
+      // Dense toggle is Workers-only: it is the tab where row-to-row repetition
+      // (engine glyph, cost tier, ticket ref echoed in both title and chip)
+      // costs the most vertical space. Other lanes have no use for it.
+      const _arcDenseToggle = _allTabView === 'workers'
+        ? '<span class="conv-grouping-toggle conv-dense-toggle" data-role="workers-dense-toggle"'
+            + ' title="One line per worker: folds continuation legs and repeated spawns into expandable rows">'
+            + '<span class="grouping-opt' + (workersDenseOn() ? ' is-active' : '') + '" data-workers-dense-toggle="1">Dense</span>'
+          + '</span>'
+        : '';
       const _arcTools = '<div class="conv-archived-tools" data-role="archived-tools">'
           + '<span class="conv-archived-tools-left">' + _arcExpandAllToggle + '</span>'
-          + '<span class="conv-archived-tools-right">' + _arcWindowToggle + _arcEngineToggle + _arcGroupingToggle + _arcWrapToggle + _arcDetailsToggle + '</span>'
+          + '<span class="conv-archived-tools-right">' + _arcWindowToggle + _arcEngineToggle + _arcGroupingToggle + _arcWrapToggle + _arcDenseToggle + _arcDetailsToggle + '</span>'
           + '</div>';
       _archivedHtml =
-        '<div class="conv-archived-section" data-role="archived-section">'
+        '<div class="conv-archived-section' + (_allTabView === 'workers' && workersDenseOn() ? ' workers-dense' : '') + '" data-role="archived-section">'
         + _arcTools
         + _allHermesTabBarHtml
         + '<div class="conv-archived-list">' + _arcRows + '</div>'
@@ -37401,6 +37422,17 @@
         const compactNext = !compactRowsOn();
         try { localStorage.setItem('ccc-compact-rows', compactNext ? '1' : '0'); } catch (_) {}
         $convList.classList.toggle('compact-rows', compactNext);
+        renderArchiveList(document.getElementById('convSearch')?.value || '');
+      });
+    }
+    // Dense re-renders rather than toggling a class: grouping and continuation
+    // folding happen while building the row list, so the DOM has to be rebuilt.
+    const $workersDenseToggle = $convList.querySelector('[data-role="workers-dense-toggle"]');
+    if ($workersDenseToggle) {
+      $workersDenseToggle.addEventListener('click', (ev) => {
+        ev.stopPropagation();
+        const next = !workersDenseOn();
+        try { localStorage.setItem(WORKERS_DENSE_KEY, next ? '1' : '0'); } catch (_) {}
         renderArchiveList(document.getElementById('convSearch')?.value || '');
       });
     }
@@ -63690,8 +63722,15 @@
       + escapeHtml(t.ref) + (recent ? '' : ' <span>' + escapeHtml(statusLabel(t)) + '</span>') + '</button>';
     return '<details class="conv-worker-history" data-worker-history-sid="' + escapeAttr(sid) + '"'
       + (_uxFixesHistoryExpanded.has(sid) ? ' open' : '') + '>'
-      + '<summary><span>' + tickets.length + ' recorded ticket' + (tickets.length === 1 ? '' : 's') + '</span>'
-      + '<span class="conv-worker-history-recent">' + tickets.slice(0, 3).map(t => ticketButton(t, true)).join('') + '</span></summary>'
+      // The "+N" chip carries the same count the prose label does, in a tenth
+      // of the width. Dense mode hides the label and keeps the chips, so the
+      // total stays visible either way.
+      + '<summary><span class="conv-worker-history-count">' + tickets.length + ' recorded ticket' + (tickets.length === 1 ? '' : 's') + '</span>'
+      + '<span class="conv-worker-history-recent">' + tickets.slice(0, 3).map(t => ticketButton(t, true)).join('')
+      + (tickets.length > 3
+          ? '<span class="conv-worker-history-more" title="' + escapeAttr((tickets.length - 3) + ' more recorded ticket' + (tickets.length - 3 === 1 ? '' : 's')) + '">+' + (tickets.length - 3) + '</span>'
+          : '')
+      + '</span></summary>'
       + '<div class="conv-worker-history-scope">Tickets attributed to this session by recorded claims, progress, and resolutions.</div>'
       + '<ul class="conv-worker-history-list">' + tickets.map(t => '<li>' + ticketButton(t, false)
         + '<span class="conv-worker-history-title">' + escapeHtml(t.title || t.note || t.summary || '') + '</span></li>').join('') + '</ul></details>';
