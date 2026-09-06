@@ -653,7 +653,13 @@ _CODEX_SHARED_STATE_HOLDER_TTL_S = 5.0
 # resumed session showing "Thinking..." for 10+ minutes. The guard exists to
 # stop two *Codex* writers sharing the state store; our own processes are never
 # that, so filter them out by full command line.
-_CCC_INSTALL_ROOT = str(Path(__file__).resolve().parent.parent)
+# Match the entrypoint paths, never a bare substring: a foreign `codex exec`
+# whose PROMPT mentions this repo would otherwise be filtered out as "ours"
+# and the real guard would never fire (caught in live verification).
+_CCC_OWN_ENTRYPOINTS = tuple(
+    str(Path(__file__).resolve().parent.parent / name)
+    for name in ("server.py", "ccc_worker.py")
+)
 
 
 # The managed daemon can accept a socket connection and then never answer
@@ -698,6 +704,11 @@ def _codex_note_managed_init_result(ok, now=None):
         return True
 
 
+def _codex_cmd_is_own_ccc(cmd):
+    """True when a full command line is one of this install's own entrypoints."""
+    return any(entry in (cmd or "") for entry in _CCC_OWN_ENTRYPOINTS)
+
+
 def _codex_filter_own_ccc_holders(holders):
     """Drop shared-state holders that are this CCC install's own processes."""
     if not holders:
@@ -728,7 +739,7 @@ def _codex_filter_own_ccc_holders(holders):
             pid = int(head)
         except ValueError:
             continue
-        if _CCC_INSTALL_ROOT in cmd:
+        if _codex_cmd_is_own_ccc(cmd):
             ours.add(pid)
     return [h for h in foreign if h["pid"] not in ours]
 

@@ -7,6 +7,7 @@ refused because CCC's own dashboard held a read handle on the shared state DB.
 """
 
 import os
+import pathlib
 import unittest
 
 from ccc_server import codex
@@ -28,6 +29,19 @@ class OwnProcessHolderFilterTest(unittest.TestCase):
 
     def test_empty_in_empty_out(self):
         self.assertEqual(codex._codex_filter_own_ccc_holders([]), [])
+
+    def test_matches_our_entrypoints(self):
+        root = str(pathlib.Path(codex.__file__).resolve().parent.parent)
+        self.assertTrue(codex._codex_cmd_is_own_ccc(f"/usr/bin/python3 {root}/server.py"))
+        self.assertTrue(codex._codex_cmd_is_own_ccc(f"/usr/bin/python3 {root}/ccc_worker.py"))
+
+    def test_foreign_codex_quoting_our_path_is_not_ours(self):
+        # A `codex exec` whose PROMPT names this repo is still a foreign
+        # writer. A bare substring match filtered it out and silently disarmed
+        # the guard -- caught in live verification, 2026-09-06.
+        root = str(pathlib.Path(codex.__file__).resolve().parent.parent)
+        cmd = f"/opt/codex/bin/codex exec --model gpt-5.6-terra Drain the queue in {root} now"
+        self.assertFalse(codex._codex_cmd_is_own_ccc(cmd))
 
 
 class ManagedInitCooldownTest(unittest.TestCase):
