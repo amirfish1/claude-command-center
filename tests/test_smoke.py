@@ -5618,6 +5618,21 @@ class TestServerImports(unittest.TestCase):
         self.assertNotIn("overflow-y: visible;", activity_css)
         self.assertNotIn("flex: 0 0 auto;", activity_css)
 
+    def test_orchestration_lane_map_lands_rows_absent_from_live_snapshot(self):
+        """A cached archive row must not leave an ended child as working.
+
+        The live-activity feed contains every live session and deliberately
+        omits ended sessions, so the lane map needs to treat an old absent row
+        as landed after the first successful feed refresh.
+        """
+        app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
+        self.assertIn("let _liveSessionsActivityFetchedAt = 0;", app_js)
+        self.assertIn("_liveSessionsActivityFetchedAt = Date.now();", app_js)
+        self.assertIn("function orchLiveActivityForLane(row, born)", app_js)
+        self.assertIn("if (Object.prototype.hasOwnProperty.call(sessions, sid)) return sessions[sid];", app_js)
+        self.assertIn("return { is_live: false, state: 'ended' };", app_js)
+        self.assertIn("const fresh = orchLiveActivityForLane(row, born);", app_js)
+
     def test_queue_first_board_is_removed(self):
         """The retired Queue-first board must not remain reachable in the app."""
         app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")

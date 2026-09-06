@@ -4787,6 +4787,9 @@
 
   let _liveSessionsActivityPromise = null;
   let _liveSessionsActivityLast = { sessions: {} };
+  // A successful live-activity response is an authoritative snapshot: every
+  // live session is present and sessions that have exited are omitted.
+  let _liveSessionsActivityFetchedAt = 0;
   let _lastKillEventId = '';
   let _lastPrewarmEventId = '';
 
@@ -5092,6 +5095,7 @@
       const data = await res.json();
       const blockerData = await blockerRequest;
       _liveSessionsActivityLast = data || { sessions: {} };
+      _liveSessionsActivityFetchedAt = Date.now();
       // Surface kill events as toasts so the user knows CCC terminated a spawn.
       try { _handleKillEvents(data.kill_events || []); } catch (_) {}
       // Surface prewarm lifecycle events so the user can see when CCC is
@@ -59542,8 +59546,23 @@
     if (spawn.exit_code !== undefined && spawn.exit_code !== null) return true;
     return /^(exited|done|finished|stopped|killed|failed)$/i.test(String(spawn.status || ''));
   }
+  function orchLiveActivityForLane(row, born) {
+    const sid = row && row.session_id;
+    if (!sid || !_liveSessionsActivityFetchedAt) return null;
+    const sessions = (_liveSessionsActivityLast && _liveSessionsActivityLast.sessions) || {};
+    if (Object.prototype.hasOwnProperty.call(sessions, sid)) return sessions[sid];
+    // A new lane can take a poll cycle to appear in the live snapshot. Keep
+    // the existing boot grace, but once it has elapsed an omitted row is
+    // definitively ended rather than a stale archive-row "working" state.
+    const age = born ? Date.now() / 1000 - born : Infinity;
+    if (age < ORCH_BOOT_GRACE_S) return null;
+    return { is_live: false, state: 'ended' };
+  }
   function orchLaneStatus(row, spawn, born) {
     if (row) {
+      const fresh = orchLiveActivityForLane(row, born);
+      if (fresh) row = Object.assign({}, row, fresh);
+      if (row.state === 'ended' || row.is_live === false) return 'done';
       if (row.question_waiting || row.needs_approval) return 'waiting';
       if (row.state === 'working' || row.sidecar_in_flight) return 'working';
       if (row.is_live && ORCH_ONE_SHOT_ENGINES.has(row.engine)) return 'working';
