@@ -554,6 +554,70 @@ def compute_queue_worker_plan(conf, spawn_defaults):
     }
 
 
+def _queue_worker_config_issue(plan):
+    """Human-actionable fault in the queue's effective worker engine/model/effort,
+    validated against WatchTower's own approval catalog (the same check
+    `wt set` runs), else None.
+
+    OPS-938: an invalid combo (e.g. effort 'high' on kimi-code/k3) is silently
+    ignored at spawn time but makes `wt config` edits fail and confuses
+    recovery from a stuck queue — the Queue tab must surface it. Only engines
+    present in WT's catalog are judged; anything else passes."""
+    try:
+        cfg = _core._wt_config
+    except Exception:
+        return None
+    if cfg is None:
+        return None
+    engine = str((plan or {}).get("engine") or "").strip().lower()
+    model = str((plan or {}).get("model") or "").strip()
+    effort = str((plan or {}).get("effort") or "").strip().lower()
+    if not engine:
+        return None
+    try:
+        if not cfg.approved_models(engine):
+            return None
+        if model and not cfg.is_approved_model(engine, model):
+            choices = ", ".join(cfg.approved_models(engine))
+            return f"configured model {model!r} is not approved for {engine} (approved: {choices})"
+        if effort and not cfg.is_approved_effort(engine, model, effort):
+            supported = cfg.approved_efforts(engine, model)
+            label = model or f"{engine} default model"
+            suffix = (f"supported: {', '.join(supported)}" if supported
+                      else "no explicit effort supported")
+            return f"{label} does not support effort {effort!r} ({suffix})"
+    except Exception:
+        return None
+    return None
+
+
+def _queue_spawn_issue(q, plan_engine, launch_failures, now_epoch):
+    """The reconciler's last failed worker spawn for this queue, when recent
+    (failed within 24h or still in cooldown), as a human sentence; else None.
+    Prefers the entry for the queue's current plan engine."""
+    if not launch_failures:
+        return None
+    entries = [e for (fq, fe), e in launch_failures.items() if fq == q]
+    if not entries:
+        return None
+    entries.sort(key=lambda e: (str(e.get("engine") or "") != plan_engine,
+                                -float(e.get("failed_at") or 0)))
+    for entry in entries:
+        failed_at = float(entry.get("failed_at") or 0)
+        cooldown_until = float(entry.get("cooldown_until") or 0)
+        recent = (failed_at and now_epoch - failed_at < 86400) or cooldown_until > now_epoch
+        if not recent:
+            continue
+        reason = str(entry.get("reason") or "worker spawn failed").strip()
+        engine = str(entry.get("engine") or "").strip()
+        label = f"last worker spawn ({engine}) failed: {reason}" if engine else f"last worker spawn failed: {reason}"
+        if cooldown_until > now_epoch:
+            mins = int((cooldown_until - now_epoch + 59) // 60)
+            label += f" — spawn cooldown, retrying in ~{mins} min"
+        return label
+    return None
+
+
 def compute_queues_health(health=None, wt_workers=None, items=None):
     """Per-QUEUE snapshot for the dashboard's "Evergreen" sidebar section.
 
@@ -584,12 +648,31 @@ def compute_queues_health(health=None, wt_workers=None, items=None):
         return str(s or "").strip().upper()
 
     # Live worker counts per queue (one pass over the annotated worker rows).
+    # `effective` = the worker can actually be addressed/acted on — it carries
+    # its cloud session_id. A live-pid worker row with no session identity is
+    # an orphan the reconciler's nudges cannot reach ("nudged 0/1"), so it
+    # must not count as staffing (OPS-938). `inert` = WT's own activity
+    # evidence (log/rollout/wire mtime via _wt_worker_idle_fields) shows no
+    # output for 30+ min — the second half of the incident's orphan shape
+    # (no session, no output for hours). Engines with no session identity at
+    # all (kimi print-mode) stay "0 effective" even while draining, so the
+    # alarm path below requires inertness too, not just a missing session.
     worker_counts = {}
+    effective_worker_counts = {}
+    orphan_worker_counts = {}
+    inert_orphan_counts = {}
     for w in (wt_workers or []):
         q = _norm(w.get("queue"))
         if not q:
             continue
         worker_counts[q] = worker_counts.get(q, 0) + 1
+        if str(w.get("session_id") or "").strip():
+            effective_worker_counts[q] = effective_worker_counts.get(q, 0) + 1
+        else:
+            orphan_worker_counts[q] = orphan_worker_counts.get(q, 0) + 1
+            idle_s = w.get("idle_seconds")
+            if isinstance(idle_s, (int, float)) and not isinstance(idle_s, bool) and idle_s >= 1800:
+                inert_orphan_counts[q] = inert_orphan_counts.get(q, 0) + 1
 
     # Durable configured-queue list keyed by normalized name → auto_drain + repo_path.
     # Read the config file directly (no watchtower import dependency).
@@ -633,6 +716,14 @@ def compute_queues_health(health=None, wt_workers=None, items=None):
         spawn_defaults = _core._load_spawn_defaults() or {}
     except Exception:
         spawn_defaults = {}
+    # One read of WatchTower's launch-failures.json per rollup: the
+    # reconciler's last failed worker spawn per queue+engine (reason,
+    # exit_code, cooldown). A queue that keeps nudging but can never spawn
+    # reads "stuck" forever without this surfaced (OPS-938).
+    try:
+        launch_failures = _core._wt_read_launch_failures()
+    except Exception:
+        launch_failures = {}
 
     health_by_q = {_norm(r.get("project")): r for r in (health or [])}
 
@@ -643,7 +734,9 @@ def compute_queues_health(health=None, wt_workers=None, items=None):
     total_by_q = {}
     gated_by_q = {}
     claimable_by_q = {}  # queue → open items a worker is ALLOWED to claim
+    in_progress_by_q = {}  # queue → items currently claimed/in progress
     last_activity_q = {}  # queue → most-recent item-touch epoch (any status)
+    last_progress_q = {}  # queue → most-recent close OR claim epoch (WT health semantics)
     try:
         for it in ((_core._q.list_items() if items is None else items) or []):
             qn = _norm(it.get("project"))
@@ -652,6 +745,18 @@ def compute_queues_health(health=None, wt_workers=None, items=None):
             total_by_q[qn] = total_by_q.get(qn, 0) + 1
             if it.get("status") == "closed":
                 closed_by_q[qn] = closed_by_q.get(qn, 0) + 1
+                # A close is queue progress (WT health.py semantics: last of
+                # close/claim resets the stuck clock).
+                close_ts = _core._uxq_parse_ts(it.get("closed_at"))
+                if close_ts and close_ts > last_progress_q.get(qn, 0):
+                    last_progress_q[qn] = close_ts
+            if it.get("status") == "in_progress":
+                in_progress_by_q[qn] = in_progress_by_q.get(qn, 0) + 1
+                # A fresh claim means a worker just started on previously-idle
+                # work — that is progress too.
+                claim_ts = _core._uxq_parse_ts(it.get("claimed_at"))
+                if claim_ts and claim_ts > last_progress_q.get(qn, 0):
+                    last_progress_q[qn] = claim_ts
             if it.get("needs_input") and it.get("block_kind") == "rationale":
                 gated_by_q[qn] = gated_by_q.get(qn, 0) + 1
             # Claimable depth honors the queue's claim_types filter. A bug-only
@@ -726,11 +831,14 @@ def compute_queues_health(health=None, wt_workers=None, items=None):
             names.discard(qn)
 
     out = []
+    now_epoch = time.time()
     for q in names:
         hr = health_by_q.get(q) or {}
         depth = int(hr.get("depth") or 0)
         claimable = int(claimable_by_q.get(q, 0))
         workers = int(worker_counts.get(q, 0))
+        effective_workers = int(effective_worker_counts.get(q, 0))
+        orphan_workers = int(orphan_worker_counts.get(q, 0))
         auto = bool(cfg_drain.get(q, False))
         # A queue with a live WatchTower worker is NOT stuck — the worker is
         # draining it. The legacy fixer-based `stuck` (compute_ux_fixes_health)
@@ -755,17 +863,49 @@ def compute_queues_health(health=None, wt_workers=None, items=None):
             state = "draining"
         else:
             state = "backlog"
+        plan = compute_queue_worker_plan(cfg_raw.get(q), spawn_defaults)
+        # Last progress = most recent close OR claim, falling back to the
+        # oldest open item's creation (mirrors watchtower.health: a
+        # never-touched queue ages from creation).
+        progress_ts = last_progress_q.get(q, 0)
+        since_progress_s = (
+            int(now_epoch - progress_ts) if progress_ts
+            else hr.get("oldest_open_age_seconds")
+        )
+        # Staffing alarm (OPS-938): auto-drain queue with claimable work but
+        # no worker that can actually drain it. Two shapes: nothing tracked
+        # at all (workers == 0 — the reconciler has not staffed the queue),
+        # or every tracked worker is an orphan — no session identity for
+        # nudges AND no activity output for 30+ min (the incident shape:
+        # "nudged 0/1 live worker(s)" every ~5 min for 16h). A session-less
+        # worker with FRESH activity (a kimi print-mode worker mid-drain)
+        # does not alarm: fresh output is proof of staffing.
+        all_tracked_inert_orphans = (
+            workers > 0
+            and effective_workers == 0
+            and int(inert_orphan_counts.get(q, 0)) == workers
+        )
+        staffing_alarm = bool(
+            auto and claimable > 0
+            and (workers == 0 or all_tracked_inert_orphans)
+        )
         out.append({
             "queue": q,
             "depth": depth,
             "claimable": claimable,
+            "in_progress": int(in_progress_by_q.get(q, 0)),
             "closed": int(closed_by_q.get(q, 0)),
             "total": int(total_by_q.get(q, 0)),
             "gated": int(gated_by_q.get(q, 0)),
             "oldest_open_age_seconds": hr.get("oldest_open_age_seconds"),
+            "since_progress_s": since_progress_s,
             "workers": workers,
+            "effective_workers": effective_workers,
+            "orphan_workers": orphan_workers,
+            "inert_orphan_workers": int(inert_orphan_counts.get(q, 0)),
             "auto_drain": auto,
             "stuck": stuck,
+            "staffing_alarm": staffing_alarm,
             "state": state,
             "fixer_session_id": hr.get("fixer_session_id"),
             "repo_path": cfg_repo.get(q, ""),
@@ -774,9 +914,11 @@ def compute_queues_health(health=None, wt_workers=None, items=None):
             "backend": cfg_backend.get(q, ""),
             "github_repo": cfg_github_repo.get(q, ""),
             "configured": q in cfg_names,
-            "worker_plan": compute_queue_worker_plan(cfg_raw.get(q), spawn_defaults),
+            "worker_plan": plan,
+            "config_issue": _queue_worker_config_issue(plan),
+            "spawn_issue": _queue_spawn_issue(q, str(plan.get("engine") or ""), launch_failures, now_epoch),
             "last_activity_seconds": (
-                int(time.time() - last_activity_q[q]) if q in last_activity_q else None
+                int(now_epoch - last_activity_q[q]) if q in last_activity_q else None
             ),
         })
     # Stuck first, then deepest, then most workers, then name — most-urgent top.

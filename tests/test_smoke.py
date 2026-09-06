@@ -80,6 +80,18 @@ class TestWebuiPaneRegressionGuards(unittest.TestCase):
         self.assertIn("conv-item-completion-glow", app_css)
         self.assertIn("animation: conv-completion-glow", app_css)
 
+    def test_activity_log_colours_outcomes_and_explains_safety_blocks(self):
+        """Activity entries distinguish success, failure, and safe fallbacks."""
+        app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
+        app_css = pathlib.Path(PROJECT_ROOT, "static", "app.css").read_text(encoding="utf-8")
+
+        self.assertIn("BEAT: 'is-good'", app_js)
+        self.assertIn("SHARED_STATE_BLOCK: 'is-warn'", app_js)
+        self.assertIn("Safety safeguard: private app-server not started", app_js)
+        self.assertIn("activity-log-row ' + cls", app_js)
+        self.assertIn(".activity-log-row.is-good .activity-log-detail", app_css)
+        self.assertIn(".activity-log-row.is-bad .activity-log-detail", app_css)
+
     def test_composer_actions_wrap_inside_narrow_conversation_panes(self):
         """A vertical split must not let the action toolbar escape its pane."""
         app_css = pathlib.Path(PROJECT_ROOT, "static", "app.css").read_text(encoding="utf-8")
@@ -14105,6 +14117,31 @@ class TestRepoContextHelpers(unittest.TestCase):
         self.assertIn("function _captureArchiveListScroll", js)
         self.assertIn("function _restoreArchiveListScroll", js)
         self.assertIn("_lastArchiveRenderFilter = q;", js)
+
+    def test_archive_anchor_restores_after_a_structural_top_insert(self):
+        """A late archive row above the viewport must not shove idle cards.
+
+        A list reset at scrollTop=0 also reads as zero after the replacement,
+        so the restore path needs an explicit render generation instead of
+        treating equal scroll positions as proof that nothing changed.
+        """
+        js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text()
+        self.assertIn("let _convListRenderVersion = 0;", js)
+        self.assertIn("renderVersion: _convListRenderVersion", js)
+        self.assertIn("_convListRenderVersion++;", js)
+        self.assertIn("if (state.renderVersion === _convListRenderVersion) return;", js)
+        self.assertIn("const expectedRenderVersion = _convListRenderVersion;", js)
+        self.assertIn("if (expectedRenderVersion !== _convListRenderVersion) return;", js)
+        self.assertIn("$list.innerHTML = html;\n        _convListRenderVersion++;", js)
+
+    def test_current_session_hover_metadata_stays_single_line(self):
+        """Hovering a Current Sessions card must not make it grow taller."""
+        css = pathlib.Path(PROJECT_ROOT, "static", "app.css").read_text()
+        selector = ".conv-current-sessions-scroll:not(.is-search-results) .conv-item .conv-hover-meta-row"
+        start = css.index(selector)
+        block = css[start:css.index("}", start) + 1]
+        self.assertIn("flex-wrap: nowrap;", block)
+        self.assertIn("overflow: hidden;", block)
 
     def test_files_endpoint_route_registered(self):
         """Smoke check: GET /api/conversations/<id>/files dispatcher
