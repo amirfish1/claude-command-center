@@ -78,9 +78,15 @@ async function withList(fn) {
     // Desktop width: below 460px a container query hides the icon column and
     // below 760px it drops the meta chips, either of which would mask this.
     await page.setViewport({ width: 1400, height: 1000 });
+    // The live list carries the user's row presets, and every one of them
+    // declares !important. A bare #convList made this suite pass green while
+    // the real tab rendered 8px-padded rounded cards with 16px titles -- the
+    // card list Compact exists to replace. Set the LOUDEST combination here so
+    // the table has to beat it, not sit in a vacuum.
     await page.setContent(
-      `<html><head><style>${css}</style></head><body>`
-      + `<div id="convList" class="workers-dense workers-hoist-engine workers-hoist-cost" style="width:520px">`
+      `<html data-conv-rowstyle="large-bright"><head><style>${css}</style></head><body>`
+      + `<div id="convList" class="workers-dense workers-tickets-present workers-hoist-engine workers-hoist-cost"`
+      + ` data-rows-spacing="airy" data-row-delineation="cards" style="width:520px">`
       + ROWS.map(renderRow).join('')
       + `</div></body></html>`
     );
