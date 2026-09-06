@@ -1785,7 +1785,7 @@ def _rates_for_model_known(model):
 
 _SESSION_COST_FALLBACK_MODELS = {
     "claude": "claude-sonnet-4-6",
-    "codex": "gpt-6-astra",
+    "codex": "gpt-5.6-terra",
     "kimi": "kimi-code/k3",
 }
 

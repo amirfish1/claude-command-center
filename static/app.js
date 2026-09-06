@@ -59858,7 +59858,7 @@
     const tester = orchTester(ex);
     const rootName = (ctx.row && ctx.row.display_name) || 'This session';
     _orchSim = {
-      root: { name: rootName, engine: (ctx.row && ctx.row.engine) || 'claude', model: (ctx.row && ctx.row.model) || 'fable-5' },
+      root: { name: rootName, engine: (ctx.row && ctx.row.engine) || 'claude', model: (ctx.row && ctx.row.model) || '' },
       lanes: [],
     };
     const mk = (id, name, e, status) => ({ id: 'sim-' + id, convId: '', name, engine: e.engine, model: e.model, status, mtime: Date.now() / 1000 + id });
