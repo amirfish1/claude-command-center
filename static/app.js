@@ -33921,21 +33921,37 @@
       }
       return Math.abs(h).toString(36);
     };
-    const _repeatGroupRawTitle = (c) => {
-      if (!c) return '';
-      const cleanFirst = c.first_message ? cleanIssuePrompt(c.first_message) : '';
-      if ((c.name_overridden || c.spawn_named) && c.display_name) return c.display_name;
-      if (c.display_name && c.display_name !== c.ai_title) return c.display_name;
-      if (c.ai_title) return c.ai_title;
-      if (c.display_name) return c.display_name;
-      if (cleanFirst) return firstSentenceOf(cleanFirst, 60);
-      return '';
-    };
+    // Same chain the rows themselves title by, so a group header can never
+    // disagree with the rows it collapses.
+    const _repeatGroupRawTitle = (c) => (c ? rowRawTitle(c).rawTitle : '');
     const _repeatGroupTitle = (c) => sidebarRowDisplayTitle(_repeatGroupRawTitle(c) || '(untitled)');
+    // The key has to be self-consistent: the previous rule keyed titles of 48
+    // chars or less on their full text but longer ones on a 32-char prefix, so
+    // a title could never group with its own longer variant --
+    // "Drain the CCC WatchTower queue" and "Drain the CCC WatchTower queue and
+    // keep it empty. Work in the git repo at ..." landed on different keys even
+    // though one is a prefix of the other. That is exactly the shape queue
+    // workers come in, which is why the Workers tab showed the same recurring
+    // drain as four separate rows.
+    //
+    // Key on a fixed number of leading content words instead, with list glyphs
+    // and filler words dropped so "Drain CCC queue" and "Drain the CCC queue"
+    // agree. Four words is about the same reach as the old 32-char prefix, and
+    // engine/model/folder still qualify the key. Titles that differ only after
+    // the fourth content word still merge; that is the intended trade, and the
+    // group is expandable so no session is hidden.
+    const _REPEAT_KEY_FILLER = new Set([
+      'the', 'a', 'an', 'and', 'of', 'for', 'to', 'in', 'on', 'at', 'it', 'its', 'this', 'that',
+    ]);
+    const _REPEAT_KEY_WORDS = 4;
     const _repeatGroupTitleKey = (title) => {
-      const normalized = String(title || '').trim().toLowerCase().replace(/\s+/g, ' ');
-      if (normalized.length > 48) return normalized.slice(0, 32);
-      return normalized;
+      const words = String(title || '')
+        .toLowerCase()
+        .replace(/[^\p{L}\p{N}\s]+/gu, ' ')
+        .split(/\s+/)
+        .filter(w => w && !_REPEAT_KEY_FILLER.has(w));
+      if (!words.length) return '';
+      return words.slice(0, _REPEAT_KEY_WORDS).join(' ');
     };
     const _repeatGroupKey = (c) => {
       const title = _repeatGroupTitleKey(_repeatGroupTitle(c));
