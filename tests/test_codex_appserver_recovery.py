@@ -67,5 +67,57 @@ class ManagedInitCooldownTest(unittest.TestCase):
         self.assertLessEqual(codex._codex_managed_cooldown_s(), 60.0)
 
 
+
+class WakeStallOutcomeTest(unittest.TestCase):
+    """A resume that never reaches `running` must report a cause, not spin."""
+
+    @classmethod
+    def setUpClass(cls):
+        import server  # noqa: F401  (registers the _core namespace)
+        from ccc_server import core, queue_events
+        cls.core = core
+        cls.q = queue_events
+
+    def _seed(self, sid, events):
+        import collections
+        with self.core._RESUME_LEDGER_LOCK:
+            self.core._CODEX_WAKE_EVENTS[sid] = collections.deque(events)
+        self.addCleanup(self._clear, sid)
+
+    def _clear(self, sid):
+        with self.core._RESUME_LEDGER_LOCK:
+            self.core._CODEX_WAKE_EVENTS.pop(sid, None)
+
+    def test_silent_pre_running_wake_becomes_an_error(self):
+        sid = "test-stall-sid"
+        now = __import__("time").time()
+        self._seed(sid, [{"event": "codex_wake_attempt", "epoch": now - 300}])
+        out = self.q.build_codex_wake_status(sid)
+        self.assertEqual(out["outcome"], "error")
+        self.assertTrue(out["outcome_detail"])
+        self.assertGreaterEqual(out["stalled_s"], 60)
+        self.assertFalse(out["active"])
+
+    def test_fresh_wake_is_still_active(self):
+        sid = "test-fresh-sid"
+        now = __import__("time").time()
+        self._seed(sid, [{"event": "codex_wake_attempt", "epoch": now - 2}])
+        out = self.q.build_codex_wake_status(sid)
+        self.assertIsNone(out["outcome"])
+        self.assertIsNone(out["stalled_s"])
+        self.assertTrue(out["active"])
+
+    def test_running_turn_is_never_called_stalled(self):
+        # Silence after the turn starts is the model thinking; the separate
+        # stuck heuristic owns that window, not the wake breakdown.
+        sid = "test-running-sid"
+        now = __import__("time").time()
+        self._seed(sid, [
+            {"event": "codex_wake_attempt", "epoch": now - 900},
+            {"event": "codex_wake_ok", "epoch": now - 880},
+        ])
+        out = self.q.build_codex_wake_status(sid)
+        self.assertIsNone(out["stalled_s"])
+
 if __name__ == "__main__":
     unittest.main()

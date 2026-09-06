@@ -1466,6 +1466,31 @@ def _codex_wake_rollout_snapshot(session_id):
     return snap
 
 
+def _codex_wake_stall_threshold_s():
+    """Seconds of pre-`running` silence after which a wake is called stalled."""
+    try:
+        value = float(os.environ.get("CCC_CODEX_WAKE_STALL_SEC", "60"))
+    except (TypeError, ValueError):
+        value = 60.0
+    return max(5.0, value)
+
+
+def _codex_wake_stall_detail(quiet_s, app_transport):
+    """Name the actual blocker so the pane reports a cause, not a spinner."""
+    try:
+        conflict = _core._codex_shared_state_conflict()
+    except Exception:
+        conflict = None
+    if conflict:
+        return conflict["message"]
+    if not app_transport:
+        return (
+            f"No progress for {quiet_s}s - the Codex app-server never came up, "
+            f"so the resume never started. Restart the bridge to retry."
+        )
+    return f"No progress for {quiet_s}s - the resume stalled before the turn started."
+
+
 def build_codex_wake_status(session_id):
     """Assemble the live wake/turn breakdown for one Codex session. Reads the
     in-memory per-sid wake-event window plus a single rollout tail — no
@@ -1542,6 +1567,24 @@ def build_codex_wake_status(session_id):
         outcome = "warning"
         outcome_detail = warn.get("warning")
 
+    # A wake that never reaches `running` produces no further events, so the
+    # pane used to spin on "Thinking..." indefinitely -- observed 2026-09-06,
+    # ten minutes on a resume whose app-server never came up. Once the turn IS
+    # running, silence is just the model working (the stuck heuristic owns
+    # that), so only pre-running silence counts as a stall.
+    stalled_for = None
+    if outcome is None and attempt and not running_reached:
+        last_epoch = max(
+            (float(e.get("epoch") or 0.0) for e in events),
+            default=attempt_epoch,
+        ) or attempt_epoch
+        if last_epoch:
+            quiet_s = now - last_epoch
+            if quiet_s > _codex_wake_stall_threshold_s():
+                stalled_for = round(quiet_s)
+                outcome = "error"
+                outcome_detail = _codex_wake_stall_detail(stalled_for, app_transport)
+
     active = bool(attempt) and outcome is None
 
     # Stage timeline. Emit a stage only once it has STARTED; the current stage
@@ -1601,6 +1644,7 @@ def build_codex_wake_status(session_id):
         "elapsed_s": round(now - attempt_epoch, 1) if attempt_epoch else None,
         "outcome": outcome,
         "outcome_detail": outcome_detail,
+        "stalled_s": stalled_for,
     }
 
 

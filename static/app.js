@@ -3876,6 +3876,11 @@
   function isContinuationBoilerplateTitle(title) {
     return _CONTINUATION_BOILERPLATE_RE.test(String(title || ''));
   }
+  function continuationFallbackTitle(parentTitle, parentId) {
+    const parent = String(parentTitle || '').trim();
+    const fallback = String(parentId || '').trim().slice(0, 8) || 'earlier session';
+    return 'cont\u2019d: ' + (parent || fallback);
+  }
   // The sidebar's title-priority chain, lifted out of _renderRow so a
   // continuation leg can resolve its parent's title through the exact same
   // rules instead of a second, drift-prone copy of them.
@@ -7131,7 +7136,15 @@
       // real reply landed / was cleared), or we exceeded the sane cap.
       if (!currentSession || currentSession.id !== sid) { stopCodexWakeBreakdown(true); return; }
       if (rendered && !$view.querySelector('.conv-live-tool-inline.wake-breakdown')) { stopCodexWakeBreakdown(true); return; }
-      if (Date.now() - startedAt > CAP_MS) { stopCodexWakeBreakdown(true); return; }
+      // Never vanish silently: a wake that outlives the cap left the pane on
+      // an eternal "Thinking…" with nothing to click (2026-09-06 incident).
+      if (Date.now() - startedAt > CAP_MS) {
+        stopCodexWakeBreakdown(true);
+        clearOptimisticAgentIndicator($view);
+        renderInlineWakeError($view, '⚠ Codex never reported progress on this resume. '
+          + 'Restart the bridge from System status and resend.');
+        return;
+      }
       fetch('/api/codex-wake-status?session_id=' + encodeURIComponent(sid))
         .then(r => (r.ok ? r.json() : null))
         .then(data => {
@@ -32870,6 +32883,7 @@
       // spawn names that still carry a literal "Continue " prefix get it
       // stripped — the word is noise next to the glyph.
       const _continuationParentId = continuationParentId(c);
+      let _continuationFallbackTitle = false;
       if (_continuationParentId) {
         title = title.replace(/^Continue\s+/, '').replace(/^⤴︎\s*/, '');
         // When CCC's own auto-resume preamble survived auto-titling, the row is
@@ -32883,7 +32897,11 @@
           const _parentTitle = _parentRow
             ? sidebarRowDisplayTitle(rowRawTitle(_parentRow).rawTitle)
             : '';
-          if (_parentTitle && !isContinuationBoilerplateTitle(_parentTitle)) title = _parentTitle;
+          title = continuationFallbackTitle(
+            _parentTitle && !isContinuationBoilerplateTitle(_parentTitle) ? _parentTitle : '',
+            _continuationParentId,
+          );
+          _continuationFallbackTitle = true;
         }
       }
       // AI-generated titles (Claude/Codex/Antigravity) show with no glyph now
@@ -32897,7 +32915,7 @@
       // you actually scan for machine-named rows, and hiding it there would
       // make the marker invisible in the view that needs it most.
       else if (c.auto_titled && !titleSource) title = '🪄 ' + title;
-      if (_continuationParentId) title = '⤴︎ ' + title;
+      if (_continuationParentId && !_continuationFallbackTitle) title = '⤴︎ ' + title;
       // Auto-titling only fires from the session's Stop hook (after the
       // first assistant turn ends) — a still-live session showing its raw
       // first message hasn't reached that point yet, not stuck. Flagged via
