@@ -7876,7 +7876,8 @@
       const _liveMatches = liveStatusMatchesOpenConv();
       const _activeItem = _liveMatches ? codexActiveItemLabel(liveStatus.codexAppServerActiveItem) : { label: '', detail: '' };
       const _tokTxt = _liveMatches ? codexTokenUsageText(liveStatus.codexAppServerTokenUsage) : '';
-      const _toolTxt = _activeItem.label || (_webuiPane ? 'Working…' : 'Generating…');
+      const _isCodex = !!currentSession && (currentSession.source === 'codex' || currentSession.engine === 'codex');
+      const _toolTxt = _activeItem.label || (_isCodex ? 'Thinking…' : (_webuiPane ? 'Working…' : 'Generating…'));
       const _detailTxt = _activeItem.label ? _activeItem.detail : '';
       const _silenceSec = (_liveMatches && liveStatus.staleToolAgeS) || (ageSec < 9000 ? ageSec : 0);
       const showGeneratingWakeBtn = _silenceSec >= 60 && !hasWakeProgress;
@@ -12968,11 +12969,13 @@
   }
 
   // Human label + short detail for the app-server codex_app_server_active_item.
-  // Returns { label, detail } (either may be ''). Prefers an explicit tool name,
-  // then the item type; detail is the compact item detail/output.
+  // Returns { label, detail } (either may be ''). Give non-tool activities a
+  // readable label; otherwise preserve the tool name and compact detail/output.
   function codexActiveItemLabel(item) {
     if (!item || typeof item !== 'object') return { label: '', detail: '' };
-    const label = String(item.tool || item.type || '').trim();
+    const activityLabels = { reasoning: 'Thinking…', agentMessage: 'Writing…', plan: 'Planning…' };
+    const label = Object.prototype.hasOwnProperty.call(activityLabels, item.type)
+      ? activityLabels[item.type] : String(item.tool || item.type || '').trim();
     const detail = String(item.detail || item.output || '').trim();
     return { label: label, detail: detail };
   }
@@ -56157,6 +56160,13 @@
     return node;
   }
 
+  function isRoutineCodexCoordination(ev) {
+    // Activity observations belong in the live indicator, not durable chat
+    // rows. Keep delivery, recovery and unfamiliar events visible.
+    return !!ev && ev.type === 'system' && ev.subtype === 'codex_coordination'
+      && ['external_turn_started', 'external_turn_ended', 'ccc_turn_started', 'ccc_turn_completed'].includes(ev.kind);
+  }
+
   function renderConversationEvents(events, paneId, opts) {
     if (!Array.isArray(events)) return true;  // defensive: backlog/unknown responses
     // Do not defer transcript rendering while the composer is focused.
@@ -56258,6 +56268,7 @@
         + '</details>';
     }
     for (const ev of events) {
+      if (isRoutineCodexCoordination(ev)) continue;
       if (ev.line != null) {
         const escLine = (window.CSS && CSS.escape) ? CSS.escape(String(ev.line)) : String(ev.line);
         if ($view.querySelector('.event[data-jsonl-line="' + escLine + '"]')) continue;
