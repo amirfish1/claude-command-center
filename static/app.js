@@ -3179,9 +3179,32 @@
   // rows -- nothing is filtered, so the tab stays comprehensive. Scoped to
   // Workers; Coding/Other keep the card list. On by default.
   const WORKERS_DENSE_KEY = 'ccc-workers-dense';
+  // Three steps, one control. The tab used to carry a binary Dense pill AND a
+  // Details pill that between them expressed the same axis twice; Detailed is
+  // exactly "show the outcome card", so it drives the Details key rather than
+  // inventing a parallel flag.
+  const WORKERS_DENSITY_KEY = 'ccc-workers-density';
+  const WORKERS_DENSITY_MODES = ['compact', 'cozy', 'detailed'];
+  function workersDensity() {
+    let v = null;
+    try { v = localStorage.getItem(WORKERS_DENSITY_KEY); } catch (_) {}
+    if (WORKERS_DENSITY_MODES.indexOf(v) !== -1) return v;
+    // Migrate the old pill: Dense off meant "give me the row back", which is
+    // Cozy. It never meant "and also show me outcome cards".
+    let legacy = null;
+    try { legacy = localStorage.getItem(WORKERS_DENSE_KEY); } catch (_) {}
+    return legacy === '0' ? 'cozy' : 'compact';
+  }
+  function setWorkersDensity(mode) {
+    const next = WORKERS_DENSITY_MODES.indexOf(mode) !== -1 ? mode : 'compact';
+    try {
+      localStorage.setItem(WORKERS_DENSITY_KEY, next);
+      localStorage.setItem('ccc-compact-rows', next === 'detailed' ? '0' : '1');
+    } catch (_) {}
+    return next;
+  }
   function workersDenseOn() {
-    try { return localStorage.getItem(WORKERS_DENSE_KEY) !== '0'; }
-    catch (_) { return true; }
+    return workersDensity() === 'compact';
   }
   // Dense only applies while the Workers tab is the one on screen, so the
   // class can be driven straight off localStorage without waiting for a
@@ -36680,10 +36703,18 @@
       // Dense toggle is Workers-only: it is the tab where row-to-row repetition
       // (engine glyph, cost tier, ticket ref echoed in both title and chip)
       // costs the most vertical space. Other lanes have no use for it.
+      const _arcDensityMode = workersDensity();
+      const _arcDensityLabels = { compact: 'Compact', cozy: 'Cozy', detailed: 'Detailed' };
+      const _arcDensityTitles = {
+        compact: 'One line per worker',
+        cozy: 'The full row, without the outcome card',
+        detailed: 'Everything, including the outcome card',
+      };
       const _arcDenseToggle = _allTabView === 'workers'
-        ? '<span class="conv-grouping-toggle conv-dense-toggle" data-role="workers-dense-toggle"'
-            + ' title="One line per worker: folds continuation legs and repeated spawns into expandable rows">'
-            + '<span class="grouping-opt' + (workersDenseOn() ? ' is-active' : '') + '" data-workers-dense-toggle="1">Dense</span>'
+        ? '<span class="conv-grouping-toggle conv-density-toggle" data-role="workers-density-toggle">'
+            + WORKERS_DENSITY_MODES.map(m => '<span class="grouping-opt' + (m === _arcDensityMode ? ' is-active' : '') + '"'
+                + ' data-workers-density="' + m + '"'
+                + ' title="' + escapeAttr(_arcDensityTitles[m]) + '">' + _arcDensityLabels[m] + '</span>').join('')
           + '</span>'
         : '';
       // The strip that replaces the hoisted columns. It names what was folded
@@ -36708,7 +36739,8 @@
       }
       const _arcTools = '<div class="conv-archived-tools" data-role="archived-tools">'
           + '<span class="conv-archived-tools-left">' + _arcExpandAllToggle + '</span>'
-          + '<span class="conv-archived-tools-right">' + _arcWindowToggle + _arcEngineToggle + _arcGroupingToggle + _arcWrapToggle + _arcDenseToggle + _arcDetailsToggle + '</span>'
+          + '<span class="conv-archived-tools-right">' + _arcWindowToggle + _arcEngineToggle + _arcGroupingToggle + _arcWrapToggle + _arcDenseToggle
+            + (_allTabView === 'workers' ? '' : _arcDetailsToggle) + '</span>'
           + '</div>';
       _archivedHtml =
         '<div class="conv-archived-section" data-role="archived-section">'
@@ -37615,15 +37647,18 @@
         renderArchiveList(document.getElementById('convSearch')?.value || '');
       });
     }
-    // Dense re-renders rather than toggling a class: grouping and continuation
-    // folding happen while building the row list, so the DOM has to be rebuilt.
-    const $workersDenseToggle = $convList.querySelector('[data-role="workers-dense-toggle"]');
-    if ($workersDenseToggle) {
-      $workersDenseToggle.addEventListener('click', (ev) => {
+    // Density re-renders rather than just toggling a class: grouping and
+    // continuation folding happen while building the row list, so the DOM has
+    // to be rebuilt. applyRowDensityToggles runs first so the classes are
+    // right even if the re-render short-circuits on an unchanged structure.
+    const $workersDensityToggle = $convList.querySelector('[data-role="workers-density-toggle"]');
+    if ($workersDensityToggle) {
+      $workersDensityToggle.addEventListener('click', (ev) => {
         ev.stopPropagation();
-        const next = !workersDenseOn();
-        try { localStorage.setItem(WORKERS_DENSE_KEY, next ? '1' : '0'); } catch (_) {}
-        $convList.classList.toggle('workers-dense', next);
+        const opt = ev.target.closest('[data-workers-density]');
+        if (!opt) return;
+        setWorkersDensity(opt.getAttribute('data-workers-density'));
+        applyRowDensityToggles();
         renderArchiveList(document.getElementById('convSearch')?.value || '');
       });
     }
@@ -47145,8 +47180,10 @@
       const choices = Array.from(new Set([...serverChoices, ...clientChoices]));
       const selected = String(model || '');
       const known = !selected || choices.includes(selected);
+      const isBlocked = (id) => typeof spawnDefaultsState === 'object' && spawnDefaultsState.blockedModels instanceof Set
+        && spawnDefaultsState.blockedModels.has(String(id || '').trim().toLowerCase());
       fields.model.innerHTML = '<option value="">CCC spawn default</option>'
-        + choices.map(choice => '<option value="' + escapeAttr(choice) + '">' + escapeHtml(modelLabel(fields.engine.value, choice) + tierText(fields.engine.value, choice)) + '</option>').join('')
+        + choices.map(choice => '<option value="' + escapeAttr(choice) + '">' + escapeHtml(modelLabel(fields.engine.value, choice) + tierText(fields.engine.value, choice) + (isBlocked(choice) ? ' — ⚠ policy blocked, asks to confirm' : '')) + '</option>').join('')
         + '<option value="__custom__">Custom model…</option>';
       fields.model.value = known ? selected : '__custom__';
       fields.customModel.hidden = known;
@@ -52141,6 +52178,7 @@
       if (row.available !== undefined) next.available = !!row.available;
       if (row.availability_reason) next.availability_reason = String(row.availability_reason);
       if (row.sources) next.sources = row.sources;
+      next.policy_blocked = !!row.policy_blocked;
       ['max_context_tokens', 'max_output_tokens'].forEach(key => {
         if (row[key] != null) next[key] = Number(row[key]);
       });
@@ -52411,6 +52449,7 @@
       num: idx < 9 ? String(idx + 1) : '',
       context_1m: !!opt.oneM,
       legacy: !!opt.legacy,
+      policy_blocked: !!opt.policy_blocked,
     }));
   }
 
@@ -52447,6 +52486,7 @@
         + ' data-ctx1m="' + (ctx1m ? '1' : '0') + '">'
         + '<span class="mp-name">' + escapeHtml(opt.label) + (ctx1m ? ' (1M context)' : '') + '</span>'
         + (opt.legacy ? '<span class="mp-legacy">Legacy</span>' : '')
+        + (opt.policy_blocked ? '<span class="mp-entitlement blocked" title="Blocked by model policy -- spawning it asks for confirmation">⚠ policy</span>' : '')
         + '<span class="mp-check">' + (isActive ? '✓' : '') + '</span>'
         + '<span class="mp-num">' + escapeHtml(opt.num) + '</span>'
         + '</button>';
@@ -52531,6 +52571,9 @@
           + '</span>';
         if (entitlement === 'free') {
           html += '<span class="mp-entitlement free">FREE</span>';
+        }
+        if (opt.policy_blocked) {
+          html += '<span class="mp-entitlement blocked" title="Blocked by model policy -- spawning it asks for confirmation">⚠ policy</span>';
         }
         if (oneM) {
           html += '<span class="mp-1m-toggle' + (oneMOn ? ' on' : '') + '" data-1m-toggle title="1M context (anthropic-beta: context-1m)">1M</span>';
