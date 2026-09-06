@@ -6931,8 +6931,8 @@ def _codex_default_model():
     env_model = _clean_spawn_default_model(os.environ.get("CCC_CODEX_MODEL"))
     if env_model and not _model_policy_blocks(env_model):
         return env_model
-    if not _model_policy_blocks("gpt-6-astra"):
-        return "gpt-6-astra"
+    if not _model_policy_blocks("gpt-5.6-terra"):
+        return "gpt-5.6-terra"
     return _first_allowed_curated_model("codex")
 
 

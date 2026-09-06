@@ -65583,7 +65583,7 @@
     try { return normalizeSpawnDefaultEngine(localStorage.getItem('ccc.spawnEngine')); }
     catch (_) { return 'claude'; }
   }
-  let _defaultModelsByEngine = { claude: '', codex: 'gpt-6-astra', cursor: 'auto', antigravity: '', kilo: 'kilo/stepfun/step-3.7-flash:free', hermes: 'auto', kimi: 'kimi-code/k3', opencode: 'openrouter/anthropic/claude-sonnet-4.5', grok: 'grok-4.6' };
+  let _defaultModelsByEngine = { claude: '', codex: 'gpt-5.6-terra', cursor: 'auto', antigravity: '', kilo: 'kilo/stepfun/step-3.7-flash:free', hermes: 'auto', kimi: 'kimi-code/k3', opencode: 'openrouter/anthropic/claude-sonnet-4.5', grok: 'grok-4.6' };
   let _spawnDefaultsLoaded = false;
   let spawnDefaultsState = {
     engine: readLegacySpawnEnginePref(),
@@ -65818,7 +65818,7 @@
     engine = normalizeSpawnDefaultEngine(engine);
     let value = String(model == null ? '' : model).trim();
     if (engine === 'claude' && !value) value = 'opus';
-    if (engine === 'codex' && !value) value = 'gpt-6-astra';
+    if (engine === 'codex' && !value) value = 'gpt-5.6-terra';
     if (engine === 'cursor' && !value) value = 'auto';
     if (engine === 'kilo' && !value) value = 'kilo/stepfun/step-3.7-flash:free';
     if (engine === 'opencode' && !value) value = 'openrouter/anthropic/claude-sonnet-4.5';
