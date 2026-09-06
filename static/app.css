@@ -28367,9 +28367,12 @@ body.mobile-ask-open .mobile-bottom-nav { z-index: 950; }
   gap: 3px;
   margin-left: 0;
 }
+/* A ref must never break mid-token: one wrapped chip makes its row twice as
+   tall as every other row, and the column stops reading as a column. */
 #convList.workers-dense .conv-worker-ticket {
   padding: 0 5px;
   line-height: 15px;
+  white-space: nowrap;
 }
 #convList.workers-dense .conv-gap-separator { margin: 6px 6px 3px; }
 
