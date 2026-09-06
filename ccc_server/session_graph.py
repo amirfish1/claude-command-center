@@ -1645,6 +1645,17 @@ def _summarize_title_text(first_msg, validate=False):
         result["error"] = "no opening prompt found"
         return result
 
+    # Image-first prompts commonly come from CCC's screenshot helpers. Keep
+    # their request text, but do not hand the title model a local file target
+    # that it can try to read instead of producing a title.
+    prompt_text = re.sub(
+        r"^\s*/\S+\.(?:png|jpe?g|gif|webp)(?=\s|$)",
+        "[image]",
+        first_msg,
+        count=1,
+        flags=re.IGNORECASE,
+    )
+
     instruction = (
         "Produce a concise 4-8 word title summarizing what the user is trying to do "
         "below. No quotes, no trailing punctuation, just the title itself on a single "
@@ -1653,7 +1664,7 @@ def _summarize_title_text(first_msg, validate=False):
         "'issue 194', 'fix issue 194'), prefix the title with the issue ref: "
         "'#194 short description'. Otherwise just return the bare title.\n\n"
         "Opening prompt:\n"
-        + first_msg
+        + prompt_text
         + "\n\nTitle:"
     )
 
