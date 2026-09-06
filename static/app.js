@@ -8499,7 +8499,9 @@
       if (row && row._pendingRef) removePendingSendEcho(row._pendingRef);
       else if (row) row.remove();
       if (tray) syncQueuedSteerAllControl(tray, sid);
-      showOpToast('Queued message cancelled.');
+      showOpToast(data.already_consumed
+        ? 'Queued card was already delivered.'
+        : 'Queued message cancelled.');
       setTimeout(refreshConversationList, 500);
     } catch (err) {
       btn.textContent = '!';
@@ -57695,7 +57697,10 @@
     }
     // Keep queued steer candidates at the composer, including durable server
     // queue events (which are not represented in `_pendingSends`).
-    syncQueuedSteerTray($view, paneId, !!(opts.initialLoad || events.some(ev => ev && ev.pending)));
+    // Every server fetch includes the current durable pending overlay.  If a
+    // former server card is absent, that absence is authoritative: retaining
+    // it made successfully delivered messages look queued forever.
+    syncQueuedSteerTray($view, paneId, !!(opts.initialLoad || opts.queueSnapshot !== false));
     // Same story for not-yet-delivered send echoes (`.pending` /
     // `.send-queued` / `.not-acknowledged`) — a turn that streams in while
     // the agent hasn't drained the queued input yet would otherwise bury the
