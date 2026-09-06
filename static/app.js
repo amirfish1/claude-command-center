@@ -6670,6 +6670,39 @@
   }
   // SESSION_ICON_PRESENTATION_END
 
+  // Which of the icon columns are the same on every row in view. A single row
+  // is not a repeating column, so it hoists nothing; an unknown tier ('') is
+  // not a shared tier, so it doesn't count as uniform either -- hoisting it
+  // would claim agreement we never established.
+  // WORKERS_UNIFORM_COLUMNS_START
+  function _workersUniformColumns(convs) {
+    const out = { engine: '', engineLabel: '', tier: '', tierLabel: '', count: 0 };
+    const rows = convs || [];
+    if (rows.length < 2) return out;
+    const engines = new Set();
+    const tiers = new Set();
+    let engineLabel = '';
+    let tierLabel = '';
+    for (const c of rows) {
+      const p = sessionIconPresentation(c);
+      engines.add(p.engine || '');
+      tiers.add(p.tier || '');
+      engineLabel = p.engineLabel || '';
+      tierLabel = p.tierLabel || '';
+    }
+    out.count = rows.length;
+    if (engines.size === 1 && [...engines][0]) {
+      out.engine = [...engines][0];
+      out.engineLabel = engineLabel;
+    }
+    if (tiers.size === 1 && [...tiers][0]) {
+      out.tier = [...tiers][0];
+      out.tierLabel = tierLabel;
+    }
+    return out;
+  }
+  // WORKERS_UNIFORM_COLUMNS_END
+
   function sessionEngineIconHtml(row, options) {
     const opts = options || {};
     const sid = row && (row.session_id || row.id);
@@ -36212,31 +36245,7 @@
     // above the list and drop the per-row glyph, which hands the reclaimed
     // icon column back to the title. Display only: no row is filtered, and a
     // column that actually varies is left alone and stays per-row.
-    const _workersHoist = { engine: '', engineLabel: '', tier: '', tierLabel: '', count: 0 };
-    if (_allTabView === 'workers' && _allTabMainConvs.length > 1) {
-      const _hoistEngines = new Set();
-      const _hoistTiers = new Set();
-      let _hoistEngineLabel = '';
-      let _hoistTierLabel = '';
-      for (const c of _allTabMainConvs) {
-        const p = sessionIconPresentation(c);
-        _hoistEngines.add(p.engine || '');
-        _hoistTiers.add(p.tier || '');
-        _hoistEngineLabel = p.engineLabel || '';
-        _hoistTierLabel = p.tierLabel || '';
-      }
-      _workersHoist.count = _allTabMainConvs.length;
-      if (_hoistEngines.size === 1 && [..._hoistEngines][0]) {
-        _workersHoist.engine = [..._hoistEngines][0];
-        _workersHoist.engineLabel = _hoistEngineLabel;
-      }
-      // An unknown tier ('') is not a shared tier -- hoisting it would claim
-      // uniformity we never established.
-      if (_hoistTiers.size === 1 && [..._hoistTiers][0]) {
-        _workersHoist.tier = [..._hoistTiers][0];
-        _workersHoist.tierLabel = _hoistTierLabel;
-      }
-    }
+    const _workersHoist = _workersUniformColumns(_allTabView === 'workers' ? _allTabMainConvs : []);
     const _allTabRowsToClusters = (rows) => {
       const clusters = [];
       (rows || []).forEach(item => {
