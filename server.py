@@ -6929,9 +6929,11 @@ def _codex_context_1m_enabled():
 
 def _codex_default_model():
     env_model = _clean_spawn_default_model(os.environ.get("CCC_CODEX_MODEL"))
-    if env_model:
+    if env_model and not _model_policy_blocks(env_model):
         return env_model
-    return "gpt-6-astra"
+    if not _model_policy_blocks("gpt-6-astra"):
+        return "gpt-6-astra"
+    return _first_allowed_curated_model("codex")
 
 
 def _spawn_fallback_model_for_engine(engine):
@@ -7219,6 +7221,78 @@ def _model_catalog_key(model):
     return _clean_spawn_default_model(model).lower()
 
 
+# Model policy: a machine-wide deny-list that every spawn/resume/switch path
+# consults. Motivation (2026-09-05): a 2.5x-priced model was the default in
+# three places at once (the engine CLI's own config, CCC's spawn defaults,
+# and a queue's pinned model) and burned a week's quota in half an hour.
+# Blocking here is the one choke point: pickers hide the model, explicit
+# requests are rejected with a clear error, and inherited defaults fall back
+# to the first allowed curated model instead of failing the spawn.
+#
+#   ~/.claude/command-center/model-policy.json
+#   {"blocked_models": ["gpt-6-astra"]}
+#
+# CCC_BLOCKED_MODELS="a,b" is unioned in for one-off runs. Matching is on the
+# catalog key (trimmed, lowercased). WatchTower reads the same file so queue
+# workers honor it too.
+MODEL_POLICY_FILE = COMMAND_CENTER_STATE_DIR / "model-policy.json"
+_MODEL_POLICY_CACHE = {"sig": None, "blocked": frozenset()}
+
+
+def _model_policy_blocked_models():
+    """Return the frozenset of blocked catalog keys (env + policy file)."""
+    blocked = set()
+    for token in str(os.environ.get("CCC_BLOCKED_MODELS") or "").split(","):
+        key = _model_catalog_key(token)
+        if key:
+            blocked.add(key)
+    path = MODEL_POLICY_FILE
+    try:
+        st = path.stat()
+        sig = (str(path), st.st_mtime_ns, st.st_size)
+    except OSError:
+        sig = (str(path), None, None)
+    cache = _MODEL_POLICY_CACHE
+    if cache["sig"] != sig:
+        file_blocked = set()
+        if sig[1] is not None:
+            try:
+                data = json.loads(path.read_text())
+                raw = data.get("blocked_models") if isinstance(data, dict) else None
+                for item in raw or []:
+                    key = _model_catalog_key(item)
+                    if key:
+                        file_blocked.add(key)
+            except (OSError, ValueError, AttributeError):
+                pass
+        cache["sig"] = sig
+        cache["blocked"] = frozenset(file_blocked)
+    return frozenset(blocked | cache["blocked"])
+
+
+def _model_policy_blocks(model):
+    key = _model_catalog_key(model)
+    return bool(key) and key in _model_policy_blocked_models()
+
+
+def _model_policy_error(model):
+    """Human-readable rejection for a blocked model, else None."""
+    if not _model_policy_blocks(model):
+        return None
+    return (
+        f"model {_clean_spawn_default_model(model)!r} is blocked by model policy "
+        f"({MODEL_POLICY_FILE}); remove it from blocked_models to allow it"
+    )
+
+
+def _first_allowed_curated_model(engine):
+    for option in _ENGINE_CURATED_MODELS.get(engine, ()):
+        candidate = str(option.get("id") or "")
+        if candidate and not _model_policy_blocks(candidate):
+            return candidate
+    return ""
+
+
 def _model_catalog_known_engines(model):
     """Return curated engines that explicitly own a model id."""
     key = _model_catalog_key(model)
@@ -7233,6 +7307,8 @@ def _model_catalog_known_engines(model):
 
 def _model_catalog_allows_model(engine, model):
     engine = _normalize_orchestration_spawn_engine(engine)
+    if _model_policy_blocks(model):
+        return False
     if engine == "codex" and _model_catalog_key(model) not in _CODEX_PICKER_MODEL_IDS:
         return False
     known_engines = _model_catalog_known_engines(model)
@@ -8175,6 +8251,9 @@ def _validate_codex_model(model, *, require_available=False):
     alias = _CODEX_MODEL_ALIASES.get(key)
     if alias:
         model = alias
+    policy_error = _model_policy_error(model)
+    if policy_error:
+        return model, policy_error
     if not _model_catalog_allows_model("codex", model):
         return model, (
             f"unsupported codex model: {model!r}. Supported codex models: "
@@ -8431,12 +8510,23 @@ def _spawn_env(auto_compact_k=None):
     return env
 
 
+def _spawn_default_model_for_engine(engine, defaults=None):
+    """The persisted spawn default for ``engine``, unless model policy blocks
+    it -- then the first allowed curated model, so an inherited default never
+    fails the spawn while an explicit request for a blocked model still does."""
+    if defaults is None:
+        defaults = _load_spawn_defaults()
+    model = _clean_spawn_default_model((defaults.get("models") or {}).get(engine))
+    if model and _model_policy_blocks(model):
+        return _spawn_fallback_model_for_engine(engine) or _first_allowed_curated_model(engine)
+    return model
+
+
 def _spawn_model_for_engine(engine, explicit_model=None):
     model = _clean_spawn_default_model(explicit_model)
     if model:
         return model
-    defaults = _load_spawn_defaults()
-    return _clean_spawn_default_model((defaults.get("models") or {}).get(engine))
+    return _spawn_default_model_for_engine(engine)
 
 
 def _spawn_request_engine_and_model(payload):
@@ -8449,7 +8539,7 @@ def _spawn_request_engine_and_model(payload):
         return None, None
     model = _clean_spawn_default_model(payload.get("model"))
     if not model:
-        model = _clean_spawn_default_model((defaults.get("models") or {}).get(engine))
+        model = _spawn_default_model_for_engine(engine, defaults)
     return engine, model or None
 
 
@@ -30149,8 +30239,8 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
             auto_compact_k = _load_spawn_defaults().get("auto_compact_k", 250)
             if "auto_compact_k" in payload:
                 auto_compact_k = _validate_auto_compact_k(payload.get("auto_compact_k"))
-            model_error = None
-            if engine == "codex":
+            model_error = _model_policy_error(model)
+            if engine == "codex" and not model_error:
                 model, model_error = _validate_codex_model(model, require_available=True)
             report_to, report_to_error = _normalize_return_address(payload)
             parent_session_id, parent_session_error = _normalize_spawn_parent_session_id(

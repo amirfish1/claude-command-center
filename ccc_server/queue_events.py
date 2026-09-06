@@ -1874,6 +1874,17 @@ def resume_session_codex(
                 "code": "codex_model_unavailable",
                 "known_codex_models": list(_core._ENGINE_KNOWN_MODELS["codex"]),
             }
+    elif _core._model_policy_blocks(model):
+        # An inherited model (env default or the previous run's recorded
+        # model) that policy now blocks must not resume as-is: substitute
+        # the allowed default and leave a ledger trail instead of failing
+        # the wake, which would silently strand queue work.
+        blocked_model = model
+        model = _core._spawn_fallback_model_for_engine("codex")
+        _core._resume_ledger_append(
+            "codex_model_policy_substituted", sid=session_id,
+            blocked=blocked_model, model=model,
+        )
     _core._resume_ledger_append(
         "codex_wake_attempt", sid=session_id,
         cwd=cwd, model=model, effort=reasoning_effort, steer=bool(steer),
