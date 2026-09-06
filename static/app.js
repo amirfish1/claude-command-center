@@ -31384,7 +31384,15 @@
   }
 
   async function postInjectInput(sessionId, text, mode, opts) {
-    const payload = { session_id: sessionId, text };
+    // A queued-row Steer deliberately repeats the text from the Send that
+    // created the queue entry.  Key every dashboard action so the server's
+    // unkeyed retry guard does not mistake that intentional follow-up for a
+    // transport retry and suppress it before the steer router runs.
+    const payload = {
+      session_id: sessionId,
+      text,
+      idempotency_key: durableActionId('inject'),
+    };
     if (mode) payload.mode = mode;
     if (opts && opts.replaceQueued) payload.replace_queued = true;
     if (opts && Array.isArray(opts.replaceQueuedTexts) && opts.replaceQueuedTexts.length) {

@@ -101,3 +101,23 @@ test('conversation rendering treats every fetch response as an authoritative que
  const source=fs.readFileSync('static/app.js','utf8');
  assert.match(source,/syncQueuedSteerTray\(\$view, paneId, !!\(opts\.initialLoad \|\| opts\.queueSnapshot !== false\)\)/);
 });
+test('queued Steer is a distinct keyed action from the Send that created it',async()=>{
+ const start=app.indexOf('  async function postInjectInput(');
+ const helper=app.slice(start,app.indexOf('\n  function steeredToastText(',start)).trim();
+ const page=await browser.newPage();try{
+  const bodies=await page.evaluate(async helperSource=>{
+   const sent=[];let seq=0;
+   globalThis.durableActionId=kind=>kind+':test-'+(++seq);
+   globalThis.fetch=async(_url,init)=>{
+    sent.push(JSON.parse(init.body));
+    return {ok:true,json:async()=>({ok:true})};
+   };
+   const postInjectInput=(0,eval)('('+helperSource+')');
+   await postInjectInput('session-one','same queued text','steer',{replaceQueued:true});
+   await postInjectInput('session-one','same queued text','steer',{replaceQueued:true});
+   return sent;
+  },helper);
+  assert.equal(bodies[0].idempotency_key,'inject:test-1');
+  assert.equal(bodies[1].idempotency_key,'inject:test-2');
+ }finally{await page.close();}
+});
