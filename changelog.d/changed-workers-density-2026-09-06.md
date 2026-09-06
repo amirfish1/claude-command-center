@@ -1,0 +1,8 @@
+The Workers tab stops repeating itself. Every change here is display-only — no session is filtered out at any density.
+
+- **Uniform columns are hoisted out of the list.** When every worker in view runs the same engine and/or the same cost tier, those glyphs carry no per-row information — a fleet of Codex workers stamps the same mark on all N rows. A strip above the list now states the shared value once ("all 10 workers: Codex · $$"), the per-row glyph goes away, and the title takes back the reclaimed column. A column that actually varies is left alone and stays per-row, and the working/idle dot never folds — that is exactly what differs between rows.
+- **One density control instead of two.** Workers carried a binary Dense pill *and* a Details pill that between them expressed a single axis twice, so neither told you where you were. They are replaced by Compact / Cozy / Detailed. Anyone who had switched Dense off lands on Cozy — that meant "give me the row back", not "and show me outcome cards too".
+- **Ticket chip runs print their project once.** A worker that drained OPS-996, -995 and -994 printed "OPS" three times where once is enough; consecutive chips from the same project now read `OPS-996 -995 -994`. The full ref stays the click target and leads the tooltip, and the expanded list still gives every ticket its whole ref.
+- **A folded repeat group summarises what it hides.** The header reported only its newest row's age, so four spawns reaching back five hours read as one session from an hour ago. It now shows the range: `×4 · 3–12% · 1h–5h`.
+
+Density classes are also re-applied on every render. They were set once at startup, so leaving Workers for Coding used to drag the dense layout along with it.
