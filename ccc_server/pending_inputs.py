@@ -77,6 +77,9 @@ _pending_inputs_watcher_lock_file = None
 _pending_inputs_watcher_retry_started = False
 _codex_queue_pump_locks = {}
 _codex_queue_pump_locks_guard = threading.Lock()
+_codex_queue_retry_timers = {}
+_codex_queue_retry_timers_lock = threading.Lock()
+_CODEX_QUEUE_RETRY_BACKSTOP_DELAY_S = 2.0
 # Per-session Devin CLI resume pump lock. The watcher drains at most one
 # message at a time per session so retries cannot create duplicate concurrent
 # resumes (CCC robust-devin-session design, point 6).
@@ -3835,12 +3838,48 @@ def _schedule_codex_queue_pump(session_id):
     ).start()
 
 
-def _pump_codex_resume_queue(session_id):
+def _schedule_codex_queue_retry(session_id):
+    """Arm one short retry for a completion-vs-owner-snapshot race.
+
+    Completion notifications normally wake the pump.  If a notification and a
+    just-persisted queue row cross, though, the one wake can observe the old
+    active owner and no later notification exists to re-arm it.  This is a
+    one-shot backstop, not a polling loop: a busy backstop waits for the next
+    real completion notification instead of scheduling itself again.
+    """
+    if not session_id:
+        return False
+    with _codex_queue_retry_timers_lock:
+        existing = _codex_queue_retry_timers.get(session_id)
+        if existing is not None and existing.is_alive():
+            return False
+
+        def retry():
+            with _codex_queue_retry_timers_lock:
+                _codex_queue_retry_timers.pop(session_id, None)
+            _core._pump_codex_resume_queue(session_id, _backstop=True)
+
+        timer = threading.Timer(_CODEX_QUEUE_RETRY_BACKSTOP_DELAY_S, retry)
+        timer.daemon = True
+        _codex_queue_retry_timers[session_id] = timer
+        timer.start()
+    return True
+
+
+def _pump_codex_resume_queue(session_id, *, _backstop=False):
     """Ask the worker to own one authoritative queued-delivery transaction."""
     if not _core._pending_resume_retry_due(session_id):
         return {"ok": True, "waiting": "backoff"}
     if _core._resume_queue_engine_busy(session_id):
-        return {"ok": True, "waiting": "busy"}
+        retry_scheduled = bool(
+            _core._schedule_codex_queue_retry(session_id)
+            if not _backstop else False
+        )
+        return {
+            "ok": True,
+            "waiting": "busy",
+            "retry_scheduled": retry_scheduled,
+        }
     with _core._pending_resume_lock:
         best_effort_head = str(
             (_core._pending_resume_queue.get(session_id) or [""])[0] or ""

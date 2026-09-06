@@ -32943,10 +32943,16 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                 self.send_json({"ok": True, "cancelled": 1, "session_id": sid})
             else:
                 self.send_json({
-                    "ok": False,
+                    # A delivered queued row can briefly outlive its
+                    # authoritative pending snapshot in a browser.  Missing
+                    # here is therefore a successful reconciliation for this
+                    # idempotent cancellation request, not a user-facing
+                    # failure.
+                    "ok": True,
                     "cancelled": 0,
-                    "error": "queued message no longer exists",
-                }, 409)
+                    "already_consumed": True,
+                    "session_id": sid,
+                })
         elif path == "/api/usage-limit/cancel":
             length = int(self.headers.get("Content-Length", "0"))
             body = self.rfile.read(length) if length > 0 else b""

@@ -2454,6 +2454,50 @@ def test_inject_input_returns_http_409_for_missing_queued_replacement():
     assert body == missing
 
 
+def test_pending_input_cancel_treats_an_already_consumed_card_as_reconciled():
+    sid = "http-stale-queued-card"
+    httpd = server.http.server.ThreadingHTTPServer(
+        ("127.0.0.1", 0), server.CommandCenterHandler,
+    )
+    thread = threading.Thread(target=httpd.serve_forever, daemon=True)
+    thread.start()
+    request = urllib.request.Request(
+        f"http://127.0.0.1:{httpd.server_address[1]}/api/pending-input/cancel",
+        data=json.dumps({"session_id": sid, "text": "already delivered"}).encode("utf-8"),
+        headers={"Content-Type": "application/json"},
+        method="POST",
+    )
+    try:
+        with mock.patch.object(server, "_consume_matching_pending_input", return_value=0):
+            with urllib.request.urlopen(request, timeout=5) as response:
+                body = json.loads(response.read().decode("utf-8"))
+    finally:
+        httpd.shutdown()
+        httpd.server_close()
+        thread.join(timeout=5)
+
+    assert body == {
+        "ok": True,
+        "cancelled": 0,
+        "already_consumed": True,
+        "session_id": sid,
+    }
+
+
+def test_busy_codex_queue_pump_arms_one_completion_race_backstop(monkeypatch):
+    sid = "busy-queue-backstop"
+    server._pending_resume_queue[sid] = ["deliver after completion"]
+    retry = mock.Mock()
+    monkeypatch.setattr(server, "_pending_resume_retry_due", lambda _sid: True)
+    monkeypatch.setattr(server, "_resume_queue_engine_busy", lambda _sid: True)
+    monkeypatch.setattr(server, "_schedule_codex_queue_retry", retry)
+
+    result = server._pump_codex_resume_queue(sid)
+
+    assert result == {"ok": True, "waiting": "busy", "retry_scheduled": True}
+    retry.assert_called_once_with(sid)
+
+
 def test_inject_input_preserves_transaction_terminal_error_body():
     sid = "http-terminal-transaction-error"
     httpd = server.http.server.ThreadingHTTPServer(

@@ -91,3 +91,13 @@ test('one later durable occurrence retires only one stale queued copy',async()=>
   assert.equal(count,1);
  }finally{await page.close();}
 });
+test('an authoritative queue snapshot retires a server card that was already delivered',async()=>{
+ const page=await fixture();try{
+  const out=await page.evaluate(()=>{makeRow('already delivered','server');sync();syncQueuedSteerTray(getConvView(),'left',true);return {tray:!!document.querySelector('.queued-steer-tray'),rows:getConvView().querySelectorAll('.event.user_text').length};});
+  assert.deepEqual(out,{tray:false,rows:0});
+ }finally{await page.close();}
+});
+test('conversation rendering treats every fetch response as an authoritative queue snapshot',()=>{
+ const source=fs.readFileSync('static/app.js','utf8');
+ assert.match(source,/syncQueuedSteerTray\(\$view, paneId, !!\(opts\.initialLoad \|\| opts\.queueSnapshot !== false\)\)/);
+});
