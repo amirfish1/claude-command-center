@@ -36872,7 +36872,7 @@
             + _workersHoist.working + '</b> working now</span>'
           : '<span class="conv-workers-live is-idle">none working now</span>';
         const shared = parts.length
-          ? 'all <b>' + _workersHoist.count + '</b>: ' + parts.join(' &middot; ')
+          ? 'all <b>' + _workersHoist.count + '</b> workers: ' + parts.join(' &middot; ')
           : '<b>' + _workersHoist.count + '</b> workers';
         _workersUniformHtml = '<div class="conv-workers-uniform" data-role="workers-uniform"'
           + ' title="' + escapeAttr('Working now counts sessions mid-turn, the same signal the Queues tab shows. Engine and cost are stated once here and dropped from the rows that match; any session that differs keeps its own glyph.') + '">'
