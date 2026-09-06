@@ -1455,18 +1455,10 @@ def _inject_text_into_session_router(
     # before engine detection so a Kimi nudge cannot fall through to a Claude
     # resume and fail with an unrelated ``repo_required`` error.
     session_id = _core._canonical_kimi_session_id(session_id)
-    # idempotency_key differentiates two genuinely separate calls (real
-    # double-send from the caller) from a single call whose log line simply
-    # looks duplicated at second-resolution timestamps — CCC-736.
-    _core._log_activity(
-        "inject", "INJECT",
-        f"session={session_id} mode={mode} source={source} "
-        f"idem={idempotency_key or '-'} wt_origin={wt_origin} "
-        f"text=\"{_core._activity_log_preview(text)}\"",
-    )
-    # Circuit breaker. Logged as an attempt above (so the log still shows what
-    # was tried), refused here. See the _inject_budget_* block for why the
-    # counter is a file and why a trip returns `blocked` and not just `ok:false`.
+    # Circuit breaker. A refusal logs its own BLOCKED event below; successful
+    # local delivery logs INJECT after the worker-handoff decision. See the
+    # _inject_budget_* block for why the counter is a file and why a trip
+    # returns `blocked` and not just `ok:false`.
     _blocked = _core._inject_budget_check(session_id, text, source)
     if _blocked is not None:
         _core._log_activity(
@@ -1552,6 +1544,16 @@ def _inject_text_into_session_router(
         )
         if routed is not None:
             return routed
+    # The worker owns a routed Claude inject and emits its activity row. Log
+    # only local delivery attempts, so one logical composer send has one
+    # INJECT row instead of a dashboard handoff row plus the worker delivery.
+    # idempotency_key distinguishes separate user actions at the log surface.
+    _core._log_activity(
+        "inject", "INJECT",
+        f"session={session_id} mode={mode} source={source} "
+        f"idem={idempotency_key or '-'} wt_origin={wt_origin} "
+        f"text=\"{_core._activity_log_preview(text)}\"",
+    )
     # Native Claude peer socket for agent-to-agent relays. Sits AFTER the
     # worker hand-off above and ahead of every legacy transport below: a
     # headless target that just handed off already sent once (the worker's

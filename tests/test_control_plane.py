@@ -739,6 +739,10 @@ class TestEngineHost(unittest.TestCase):
         def _spawn_entry_active_tool_child(_entry):
             return None
 
+        @staticmethod
+        def _tool_child_blocks_inject(_entry):
+            return False
+
         def _reattach_spawned_orphans(self, **_kwargs):
             self.reattach_calls += 1
             self._spawned_sessions.append({"pid": 42, "engine": "claude"})
@@ -835,6 +839,19 @@ class TestEngineHost(unittest.TestCase):
         self.assertTrue(response["ok"])
         self.assertEqual(len(self.fake.inject_calls), 1)
         self.assertTrue(self.fake.inject_calls[0][2]["force_queue"])
+
+    def test_claude_inject_forwards_work_idempotency_key(self):
+        self.host.execute({
+            "engine": "claude",
+            "operation": "inject",
+            "idempotency_key": "composer-inject-key",
+            "args": {"session_id": "session-claude", "text": "continue"},
+        })
+
+        self.assertEqual(
+            self.fake.inject_calls[0][2]["idempotency_key"],
+            "composer-inject-key",
+        )
 
     def test_claude_input_state_exposes_worker_owned_busy_spawn(self):
         response = self.host.query({

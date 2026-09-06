@@ -330,6 +330,11 @@ class EngineHost:
         try:
             call_args = dict(args)
             call_args.pop("_work_result_baseline", None)
+            # The durable work record, rather than the untrusted request args,
+            # owns replay identity. Forward it into inject so worker delivery
+            # has the same key the dashboard submitted.
+            if engine == "claude" and operation == "inject":
+                call_args["idempotency_key"] = str(item.get("idempotency_key") or "")
             result = self._call(engine, operation, call_args)
         except Exception as exc:
             failed = self.ledger.transition(
@@ -610,6 +615,7 @@ class EngineHost:
                     force_queue=bool(args.get("force_queue")),
                     source=args.get("source") or "api",
                     peer_sender_sid=args.get("peer_sender_sid"),
+                    idempotency_key=args.get("idempotency_key"),
                 )
             if operation == "interrupt":
                 return legacy._interrupt_claude_headless_local(

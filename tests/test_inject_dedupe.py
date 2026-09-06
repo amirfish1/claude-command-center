@@ -18,6 +18,7 @@ Two properties make the window actually hold, and both are pinned here:
     already in the window, so suppressing it would strand the queued message.
 """
 import importlib
+from unittest import mock
 
 import pytest
 
@@ -149,6 +150,33 @@ def test_failed_delivery_is_not_remembered(window, monkeypatch):
     server._inject_text_into_session("s1", "gate PASS", source="wt")
 
     assert len(calls) == 2
+
+
+def test_worker_owned_inject_does_not_log_a_dashboard_attempt(monkeypatch):
+    """The worker is the sole delivery owner, so it emits the one INJECT row."""
+    with mock.patch.object(server, "find_session_cwd", return_value=None), \
+         mock.patch.object(server, "session_live_status", return_value={}), \
+         mock.patch.object(server, "_is_real_tty", return_value=False), \
+         mock.patch.object(server, "_is_codex_session", return_value=False), \
+         mock.patch.object(server, "_is_kimi_session", return_value=False), \
+         mock.patch.object(server, "_session_acp_harness", return_value=""), \
+         mock.patch.object(server, "_is_cursor_session", return_value=False), \
+         mock.patch.object(server, "_is_hermes_session", return_value=False), \
+         mock.patch.object(server, "_is_opencode_session", return_value=False), \
+         mock.patch.object(server, "_is_devin_cli_session", return_value=False), \
+         mock.patch.object(server, "_is_gemini_session", return_value=False), \
+         mock.patch.object(server, "_is_antigravity_session", return_value=False), \
+         mock.patch.object(
+             server, "_control_plane_engine_call",
+             return_value={"ok": True, "via": "worker"},
+         ), \
+         mock.patch.object(server, "_log_activity") as log_activity:
+        result = server._inject_text_into_session_router(
+            "sid", "body", idempotency_key="inject:key",
+        )
+
+    assert result["via"] == "worker"
+    log_activity.assert_not_called()
 
 
 # ── The window itself ────────────────────────────────────────────────────────
