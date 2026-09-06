@@ -52270,10 +52270,6 @@
       });
   }
 
-  // Claude Code's current shipped default model. Shown in the menu's top
-  // "· Default" row; the rest of the menu is built from MODEL_OPTIONS_BY_ENGINE.
-  const CLAUDE_DEFAULT_MODEL = 'fable-5';
-
   // Map a model alias/id to the menu's friendly label ("opus-4-8" → "Opus 4.8").
   function _claudeFriendlyModelName(id) {
     const n = _normalizeModelId(id);
@@ -52319,20 +52315,12 @@
   }
 
   function _buildClaudeModelMenuHtml(currentNorm, currentIs1M, currentReasoning) {
-    const defNorm = _normalizeModelId(CLAUDE_DEFAULT_MODEL);
-    const defaultActive = currentNorm === defNorm && !currentIs1M;
-    const defLabel = _claudeFriendlyModelName(CLAUDE_DEFAULT_MODEL);
     let html = ''
       + '<div class="mp-header">'
       +   '<span class="mp-header-title">Models</span>'
       +   '<span class="mp-keys"><kbd>⇧</kbd><kbd>⌘</kbd><kbd>I</kbd></span>'
       + '</div>'
-      + '<button type="button" class="mp-row mp-default-row' + (defaultActive ? ' active' : '') + '"'
-      +   ' data-mp-reset data-model="' + escapeHtml(CLAUDE_DEFAULT_MODEL) + '">'
-      +   '<span class="mp-name">' + escapeHtml(defLabel) + '</span>'
-      +   '<span class="mp-default-tag"> · Default</span>'
-      +   '<span class="mp-check">' + (defaultActive ? '✓' : '') + '</span>'
-      + '</button>'
+      + '<button type="button" class="mp-row mp-reset" data-mp-reset>↺ Reset to session default</button>'
       + '<div class="mp-divider"></div>';
     _claudeModelMenuOptions().forEach((opt) => {
       const ctx1m = !!opt.context_1m;
@@ -71675,9 +71663,6 @@
     if (model === SPAWN_DEFAULT_OTHER) {
       model = ($spawnDefaultsOtherModel && $spawnDefaultsOtherModel.value || '').trim();
     }
-    if (engine === 'claude' && !model) model = 'opus';
-    if (engine === 'codex' && !model) model = 'gpt-6-astra';
-    if (engine === 'cursor' && !model) model = 'auto';
     spawnDefaultsState.models[engine] = model;
   }
   function updateSpawnDefaultsWorkerModelFromControls() {
