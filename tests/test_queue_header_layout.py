@@ -143,3 +143,16 @@ class TestQueueHeaderLayout(unittest.TestCase):
             app_js.index('_uxqResolvePanelProject(items, requestedProject)', panel_start)
         ]
         self.assertIn('_uxqRefreshFamilyRoots(items)', panel)
+
+    def test_sub_queue_filter_lives_in_the_trigger_trailing_controls(self):
+        """The main queue-picker hit target stays contiguous around the name."""
+        app_js = (PROJECT_ROOT / "static" / "app.js").read_text(encoding="utf-8")
+
+        start = app_js.index('function _uxqRenderQueueTrigger(items, currentScope)')
+        trigger = app_js[start:app_js.index('function _uxqRecentWorkItems(items)', start)]
+
+        # The sub-queue filter remains available, but it belongs with the
+        # compact status controls at the trailing edge, not between the queue
+        # name and repo where it steals the obvious dropdown click target.
+        self.assertIn('+ drainGlyph + needsHtml + openHtml + subsHtml', trigger)
+        self.assertIn("$trig.innerHTML = liveDot + nameHtml + ghHtml + repoHtml + right;", trigger)

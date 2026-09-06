@@ -44185,9 +44185,9 @@
       ? '<span class="fq-qp-trig-open">' + escapeHtml(q.openCount + ' open') + '</span>'
       : '';
     const right = '<span class="fq-qp-trig-right">'
-      + drainGlyph + needsHtml + openHtml
+      + drainGlyph + needsHtml + openHtml + subsHtml
       + '<span class="fq-qp-chev">' + chev + '</span></span>';
-    $trig.innerHTML = liveDot + nameHtml + subsHtml + ghHtml + repoHtml + right;
+    $trig.innerHTML = liveDot + nameHtml + ghHtml + repoHtml + right;
     $trig.setAttribute('aria-expanded', open ? 'true' : 'false');
     $trig.classList.toggle('is-open', open);
   }
