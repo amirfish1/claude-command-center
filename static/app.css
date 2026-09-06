@@ -28269,6 +28269,25 @@ body.mobile-ask-open .mobile-bottom-nav { z-index: 950; }
   border-radius: 0;
   border-bottom: 1px solid var(--border-soft, rgba(255, 255, 255, 0.05));
 }
+/* The spacing, delineation and rowstyle presets all declare !important, so
+   Compact -- which is a deliberate choice to override them -- has to as well.
+   Without this the table renders inside 8px-padded rounded cards with 16px
+   titles and reads exactly like the card list it replaces. */
+#convList.workers-dense .conv-item {
+  padding-top: 3px !important;
+  padding-bottom: 3px !important;
+  margin: 0 !important;
+  background: transparent !important;
+  border: 0 !important;
+  border-left: 3px solid transparent !important;
+  border-bottom: 1px solid color-mix(in srgb, var(--text) 8%, transparent) !important;
+  border-radius: 0 !important;
+}
+#convList.workers-dense .conv-item:last-child { border-bottom: 0 !important; }
+#convList.workers-dense .conv-item .conv-title {
+  font-size: 13px !important;
+  line-height: 1.25 !important;
+}
 #convList.workers-dense .conv-item > .conv-title-row,
 #convList.workers-dense .conv-item .conv-main-row { display: contents; }
 #convList.workers-dense .conv-item .conv-nya-chevron { grid-column: 1; grid-row: 1; }
@@ -28358,7 +28377,10 @@ body.mobile-ask-open .mobile-bottom-nav { z-index: 950; }
    what it means -- but only in that layout: on the card list it would be a
    repeated string on every ticketless row. */
 .conv-worker-no-tickets { display: none; }
-#convList.workers-dense .conv-item .conv-worker-no-tickets {
+/* ...and only when some row in view actually HAS tickets. On a list where
+   nothing is attributed, "no tickets" on all 18 rows is just one more string
+   repeated 18 times -- the exact noise this tab came here to lose. */
+#convList.workers-dense.workers-tickets-present .conv-item .conv-worker-no-tickets {
   display: inline-block;
   font-size: 10.5px;
   line-height: 15px;
@@ -28414,18 +28436,22 @@ body.mobile-ask-open .mobile-bottom-nav { z-index: 950; }
   opacity: 0.6;
   font-size: 10px;
 }
-#convList.workers-hoist-engine .conv-item .conv-session-icon .conv-session-svg,
-#convList.workers-hoist-engine .conv-item .conv-session-icon > svg {
+/* .hoisted-engine / .hoisted-cost mark the rows whose value the banner above
+   the list already states. A row that DIFFERS carries neither class and keeps
+   its glyph, so the exceptions are exactly what the column still shows. */
+#convList.workers-hoist-engine .conv-item .conv-session-icon.hoisted-engine .conv-session-svg,
+#convList.workers-hoist-engine .conv-item .conv-session-icon.hoisted-engine > svg {
   display: none;
 }
 /* The $-tier sits at left:18px to clear the engine glyph; with the glyph gone
-   it slides back to the start of the (now narrower) column. */
-#convList.workers-hoist-engine .conv-item .session-tier-cost { left: 2px; }
-#convList.workers-hoist-cost .conv-item .session-tier-cost { display: none; }
+   it slides back to the start of the column. */
+#convList.workers-hoist-engine .conv-item .conv-session-icon.hoisted-engine .session-tier-cost { left: 2px; }
+#convList.workers-hoist-cost .conv-item .conv-session-icon.hoisted-cost .session-tier-cost { display: none; }
 /* --conv-content-left is calc()'d off --conv-dot-col on .conv-item, so
-   narrowing the column here reflows the title's left edge with it. */
-#convList.workers-hoist-engine .conv-item { --conv-dot-col: 20px; }
-#convList.workers-hoist-engine.workers-hoist-cost .conv-item { --conv-dot-col: 8px; }
+   narrowing the column here reflows the title's left edge with it. JS only
+   sets .workers-icon-narrow when nothing in the column renders on ANY row --
+   an exception still needs room for its glyph, and the width is shared. */
+#convList.workers-icon-narrow .conv-item { --conv-dot-col: 12px; }
 /* Overflow chip: same affordance as the ticket chips, muted so it reads as a
    count rather than a fourth ticket ref. Shown in every density. */
 .conv-worker-history-more {

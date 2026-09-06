@@ -6725,38 +6725,83 @@
   }
   // SESSION_ICON_PRESENTATION_END
 
-  // Which of the icon columns are the same on every row in view. A single row
-  // is not a repeating column, so it hoists nothing; an unknown tier ('') is
-  // not a shared tier, so it doesn't count as uniform either -- hoisting it
-  // would claim agreement we never established.
+  // Which of the icon columns repeat enough to be worth hoisting out of the
+  // rows. Requiring EVERY row to agree sounded safe and was useless: a real
+  // Workers tab is 16 Codex workers and 2 of something else, spread over three
+  // cost tiers, so an all-or-nothing rule never fires and the column that
+  // actually repeats stays on screen 18 times.
+  //
+  // Hoist the MAJORITY value instead and let the exceptions keep their glyph.
+  // The rows that match stop repeating it; the rows that differ are exactly the
+  // ones the glyph was ever informative on. Nothing is hidden that was not
+  // identical to the banner above it.
   // WORKERS_UNIFORM_COLUMNS_START
+  const WORKERS_TIER_DOLLARS = { premium: 3, high: 2, medium: 1, low: 0 };
+  function _workersTierLabel(tier) {
+    const n = WORKERS_TIER_DOLLARS[tier];
+    if (!n) return tier === 'low' ? 'Low' : '';
+    return '$'.repeat(n);
+  }
   function _workersUniformColumns(convs) {
-    const out = { engine: '', engineLabel: '', tier: '', tierLabel: '', count: 0 };
+    const out = {
+      count: 0,
+      engine: '', engineLabel: '', engineOthers: 0,
+      tier: '', tierLabel: '', tierOthers: 0, tierRange: '',
+      anyTickets: false,
+    };
     const rows = convs || [];
     if (rows.length < 2) return out;
-    const engines = new Set();
-    const tiers = new Set();
-    let engineLabel = '';
-    let tierLabel = '';
+    const engines = new Map();
+    const tiers = new Map();
+    const engineLabels = new Map();
+    const tierLabels = new Map();
     for (const c of rows) {
       const p = sessionIconPresentation(c);
-      engines.add(p.engine || '');
-      tiers.add(p.tier || '');
-      engineLabel = p.engineLabel || '';
-      tierLabel = p.tierLabel || '';
+      const e = p.engine || '';
+      const t = p.tier || '';
+      if (e) { engines.set(e, (engines.get(e) || 0) + 1); engineLabels.set(e, p.engineLabel || e); }
+      // An unknown tier is absence, not agreement: it can neither win the vote
+      // nor be hoisted, but it still counts as a row that keeps its column.
+      if (t) { tiers.set(t, (tiers.get(t) || 0) + 1); tierLabels.set(t, p.tierLabel || t); }
     }
     out.count = rows.length;
-    if (engines.size === 1 && [...engines][0]) {
-      out.engine = [...engines][0];
-      out.engineLabel = engineLabel;
+    const modal = (counts) => {
+      let best = '';
+      let bestN = 0;
+      counts.forEach((n, k) => { if (n > bestN) { best = k; bestN = n; } });
+      // A strict majority, so the banner is never a claim about a minority.
+      return bestN * 2 > rows.length ? { key: best, n: bestN } : null;
+    };
+    const topEngine = modal(engines);
+    if (topEngine) {
+      out.engine = topEngine.key;
+      out.engineLabel = engineLabels.get(topEngine.key) || topEngine.key;
+      out.engineOthers = rows.length - topEngine.n;
     }
-    if (tiers.size === 1 && [...tiers][0]) {
-      out.tier = [...tiers][0];
-      out.tierLabel = tierLabel;
+    const topTier = modal(tiers);
+    if (topTier) {
+      out.tier = topTier.key;
+      out.tierLabel = tierLabels.get(topTier.key) || topTier.key;
+      out.tierOthers = rows.length - topTier.n;
     }
+    // The banner states the whole spread, not just the value it hoisted, so a
+    // hidden column never understates what is in the list.
+    const seenTiers = [...tiers.keys()].sort((a, b) => WORKERS_TIER_DOLLARS[a] - WORKERS_TIER_DOLLARS[b]);
+    if (seenTiers.length) {
+      const lo = _workersTierLabel(seenTiers[0]);
+      const hi = _workersTierLabel(seenTiers[seenTiers.length - 1]);
+      out.tierRange = lo === hi ? lo : lo + '\u2013' + hi;
+    }
+    // A "no tickets" marker is only worth a column when some row in view HAS
+    // tickets. Printed on all 18 rows of a list where nothing is attributed it
+    // is just another string repeated 18 times.
+    out.anyTickets = rows.some(c => (_uxFixesWorkerTicketsForRow(c) || []).length > 0);
     return out;
   }
   // WORKERS_UNIFORM_COLUMNS_END
+  // Read by sessionEngineIconHtml to mark the rows whose glyph the banner has
+  // already spoken for. Set once per render, before any row is built.
+  let _workersHoistState = { engine: '', tier: '' };
 
   function sessionEngineIconHtml(row, options) {
     const opts = options || {};
@@ -6772,7 +6817,11 @@
     const tierCost = dollarCount
       ? '<span class="session-tier-cost" aria-hidden="true">' + '<i>$</i>'.repeat(dollarCount) + '</span>'
       : '';
-    return '<span class="' + baseClass + ' ' + presentation.engine + tierClass + activityClass + '"'
+    // Rows whose engine/tier the banner already states get marked, so the
+    // stylesheet can drop just those glyphs and leave the exceptions visible.
+    const hoistClass = (_workersHoistState.engine && presentation.engine === _workersHoistState.engine ? ' hoisted-engine' : '')
+      + (_workersHoistState.tier && presentation.tier === _workersHoistState.tier ? ' hoisted-cost' : '');
+    return '<span class="' + baseClass + ' ' + presentation.engine + tierClass + activityClass + hoistClass + '"'
       + ' title="' + escapeAttr(presentation.title) + '"'
       + ' role="img" aria-label="' + escapeAttr(presentation.title) + '">'
       + getEngineSvg(presentation.engine)
@@ -36363,6 +36412,7 @@
     // icon column back to the title. Display only: no row is filtered, and a
     // column that actually varies is left alone and stays per-row.
     const _workersHoist = _workersUniformColumns(_allTabView === 'workers' ? _allTabMainConvs : []);
+    _workersHoistState = { engine: _workersHoist.engine, tier: _workersHoist.tier };
     const _allTabRowsToClusters = (rows) => {
       const clusters = [];
       (rows || []).forEach(item => {
@@ -36782,21 +36832,25 @@
       // The strip that replaces the hoisted columns. It names what was folded
       // away so the information is still on screen, just once instead of N
       // times.
-      const _workersHoistDollars = (tier) => {
-        const n = { premium: 3, high: 2, medium: 1, low: 0 }[tier] || 0;
-        return n ? '$'.repeat(n) : 'Low cost';
-      };
       let _workersUniformHtml = '';
       if (_workersHoist.engine || _workersHoist.tier) {
         const parts = [];
         if (_workersHoist.engine) parts.push('<b>' + escapeHtml(_workersHoist.engineLabel || _workersHoist.engine) + '</b>');
-        if (_workersHoist.tier) parts.push('<b>' + escapeHtml(_workersHoistDollars(_workersHoist.tier)) + '</b>');
-        const noun = (_workersHoist.engine && _workersHoist.tier) ? 'engine &amp; cost columns'
-          : (_workersHoist.engine ? 'engine column' : 'cost column');
+        // The banner states the whole cost spread, not just the tier it
+        // hoisted, so hiding the column never understates the list.
+        if (_workersHoist.tierRange) parts.push('<b>' + escapeHtml(_workersHoist.tierRange) + '</b>');
+        const noun = (_workersHoist.engine && _workersHoist.tier) ? 'engine &amp; cost'
+          : (_workersHoist.engine ? 'engine' : 'cost');
+        const others = Math.max(
+          _workersHoist.engine ? _workersHoist.engineOthers : 0,
+          _workersHoist.tier ? _workersHoist.tierOthers : 0);
+        const note = others
+          ? noun + ' hidden where it matches &middot; ' + others + ' exception' + (others === 1 ? '' : 's') + ' still shown'
+          : noun + ' columns hidden while uniform';
         _workersUniformHtml = '<div class="conv-workers-uniform" data-role="workers-uniform"'
-          + ' title="' + escapeAttr('Every session in this view shares these values, so the per-row columns are hidden.') + '">'
+          + ' title="' + escapeAttr('Stated once here and dropped from the rows that match. Any session that differs keeps its own glyph.') + '">'
           + 'all <b>' + _workersHoist.count + '</b> workers: ' + parts.join(' &middot; ')
-          + '<span class="conv-workers-uniform-note">' + noun + ' hidden while uniform</span>'
+          + '<span class="conv-workers-uniform-note">' + note + '</span>'
           + '</div>';
       }
       const _arcTools = '<div class="conv-archived-tools" data-role="archived-tools">'
@@ -36876,6 +36930,14 @@
     // return so a volatile-only tick can't leave them stale.
     $convList.classList.toggle('workers-hoist-engine', !!_workersHoist.engine);
     $convList.classList.toggle('workers-hoist-cost', !!_workersHoist.tier);
+    // The icon column can only shrink when NOTHING in it renders on any row.
+    // Every row shares one column width, so a single exception keeping its
+    // glyph means the column keeps the room to draw it.
+    $convList.classList.toggle('workers-icon-narrow',
+      !!_workersHoist.engine && !!_workersHoist.tier
+      && !_workersHoist.engineOthers && !_workersHoist.tierOthers);
+    // "no tickets" earns its column only when some row in view has tickets.
+    $convList.classList.toggle('workers-tickets-present', !!_workersHoist.anyTickets);
     // Re-assert the density classes every render: workersDenseTabActive() is
     // tab-dependent, and this only ran once at startup, so leaving Workers for
     // Coding used to carry .workers-dense along with it.
