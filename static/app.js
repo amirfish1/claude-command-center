@@ -3209,6 +3209,13 @@
   // Dense only applies while the Workers tab is the one on screen, so the
   // class can be driven straight off localStorage without waiting for a
   // render pass to tell us which lane we're in.
+  // Lane only, no density: the thread badge is redundant in the Workers lane
+  // at every density, not just Compact.
+  function workersLaneActive() {
+    let tab = null;
+    try { tab = localStorage.getItem('ccc-sidebar-tab'); } catch (_) {}
+    return tab === 'workers';
+  }
   function workersDenseTabActive() {
     let tab = null;
     try { tab = localStorage.getItem('ccc-sidebar-tab'); } catch (_) {}
@@ -33052,6 +33059,13 @@
       const titleSource = _rowTitleParts.titleSource;
       const rawTitle = _rowTitleParts.rawTitle;
       let title = sidebarRowDisplayTitle(rawTitle);
+      // Every row in the Workers lane IS a WatchTower worker, so the server's
+      // 🧵 title prefix marks all of them and distinguishes none. It also
+      // flickers: the prefixed spawn name paints first and an ai_title without
+      // the badge replaces it seconds later, so the glyph appears to vanish on
+      // its own. `u` flag or the replace beheads the emoji and leaks a lone
+      // surrogate (OPS-935).
+      if (workersLaneActive()) title = title.replace(/^🧵\s*/u, '');
       // Continuation rows (F2 "Continue in a new session" / auto-resume):
       // the ⤴ badge says "this carries on an earlier session", so legacy
       // spawn names that still carry a literal "Continue " prefix get it
@@ -40167,59 +40181,11 @@
       }
     });
   }
-  // Fast custom tooltip for truncated conversation titles. The native title=
-  // attribute has a fixed ~500ms OS delay that read as "hover is laggy"; this
-  // shows the full title in ~90ms, and only when the text is actually clipped.
-  // Body-mounted + position:fixed so the scrolling list never clips it.
-  if (!window._cccTitleTipInit) {
-    window._cccTitleTipInit = true;
-    let tipEl = null, timer = 0, curTarget = null;
-    const ensureTip = () => {
-      if (!tipEl) {
-        tipEl = document.createElement('div');
-        tipEl.className = 'ccc-tip';
-        tipEl.setAttribute('role', 'tooltip');
-        document.body.appendChild(tipEl);
-      }
-      return tipEl;
-    };
-    const hideTip = () => {
-      if (timer) { clearTimeout(timer); timer = 0; }
-      curTarget = null;
-      if (tipEl) tipEl.classList.remove('show');
-    };
-    const showTip = (el) => {
-      const txt = (el.textContent || '').trim();
-      if (!txt || el.scrollWidth <= el.clientWidth + 1) return; // only when clipped
-      const tip = ensureTip();
-      tip.textContent = txt;
-      const r = el.getBoundingClientRect();
-      tip.style.left = Math.round(r.left) + 'px';
-      tip.style.top = Math.round(r.bottom + 4) + 'px';
-      tip.classList.add('show');
-      const tr = tip.getBoundingClientRect();
-      if (tr.right > window.innerWidth - 8) {
-        tip.style.left = Math.max(8, window.innerWidth - 8 - tr.width) + 'px';
-      }
-    };
-    document.addEventListener('mouseover', (ev) => {
-      const el = ev.target.closest && ev.target.closest('.conv-title');
-      if (!el || el === curTarget || el.querySelector('input')) return;
-      if (el.closest('.conv-current-sessions-scroll')) {
-        hideTip();
-        return;
-      }
-      hideTip();
-      curTarget = el;
-      timer = setTimeout(() => showTip(el), 90);
-    });
-    document.addEventListener('mouseout', (ev) => {
-      const el = ev.target.closest && ev.target.closest('.conv-title');
-      if (el && el === curTarget) hideTip();
-    });
-    document.addEventListener('scroll', hideTip, true);
-    window.addEventListener('blur', hideTip);
-  }
+  // The truncated-title hover tooltip was removed. It re-printed the same
+  // clipped string it was hovering -- .ccc-tip has its own max-width and
+  // ellipsis, so a title too long for the row was also too long for the tip --
+  // while covering the row beneath it. The full title is still on the element
+  // as aria-label, and the row opens on click.
   // Back-to-list button in split toolbar
   const $kptListViewBtn = document.getElementById('kptListViewBtn');
   if ($kptListViewBtn) {
