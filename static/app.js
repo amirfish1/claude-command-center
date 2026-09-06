@@ -32116,6 +32116,11 @@
   // render is the ticking clocks. Cleared (null) by every path that wipes
   // $convList to an empty/error state, so a later render after a wipe commits.
   let _convListRenderSig = null;
+  // Incremented only when renderConversationList replaces the list DOM. The
+  // archive scroll anchor uses this to distinguish a no-op render from a DOM
+  // reset at scrollTop=0: both report zero scroll, but only the reset can put
+  // a late-arriving row above the current viewport.
+  let _convListRenderVersion = 0;
 
   // Per-tick volatile time labels in the sidebar rows: the relative "last
   // activity" stamp (.conv-rel), the group-chat "when" labels, repeat-group
@@ -36658,6 +36663,7 @@
     const _projectTreeScrollTop = _projectTreeScrollBefore ? _projectTreeScrollBefore.scrollTop : 0;
     _parkSharedQueuePanelForSidebarRender();
     $convList.innerHTML = _convListHtml;
+    _convListRenderVersion++;
     _updateConvTabBarHeightVar($convList);
     _mountSharedQueuePanel();
     const _showMoreRowsButton = $convList.querySelector('[data-role="sidebar-show-more"]');
@@ -63969,7 +63975,14 @@
 
   function _captureArchiveListScroll(q, $list) {
     if (!$list || _lastArchiveRenderFilter !== q) return null;
-    const state = { filter: q, top: $list.scrollTop, anchorAttr: '', anchorValue: '', anchorOffset: 0 };
+    const state = {
+      filter: q,
+      top: $list.scrollTop,
+      renderVersion: _convListRenderVersion,
+      anchorAttr: '',
+      anchorValue: '',
+      anchorOffset: 0,
+    };
     const listRect = $list.getBoundingClientRect();
     for (const row of $list.querySelectorAll('[data-id], [data-gc-id], [data-collapse-key]')) {
       const rect = row.getBoundingClientRect();
@@ -64034,15 +64047,19 @@
 
   function _restoreArchiveListScroll(state, $list) {
     if (!state || !$list) return;
+    // The rAF retry below is useful for post-layout sizing, but it belongs to
+    // this exact render only. A later archive render gets its own anchor; an
+    // older deferred pass must never restore stale scroll state over it.
+    const expectedRenderVersion = _convListRenderVersion;
     const restore = () => {
       if (state.filter !== _lastArchiveRenderFilter) return;
-      // If the scroll position is still essentially where we captured it, the
-      // list wasn't rebuilt this pass (the render was a no-op skipped by the
-      // flicker guard, so innerHTML never reset scrollTop to 0). Running the
-      // anchor math anyway re-seats the viewport on sub-pixel/row-height
-      // differences and, fired on every poll, drifts the list steadily toward
-      // the top — the "list keeps jumping" symptom. Nothing to restore here.
-      if (Math.abs($list.scrollTop - state.top) < 4) return;
+      if (expectedRenderVersion !== _convListRenderVersion) return;
+      // A no-op render leaves the list DOM intact, so the user's current
+      // scroll position must win. Compare the render generation rather than
+      // the pixel position: a full reset at scrollTop=0 also reads as zero
+      // afterward, even when a newly-arrived row just pushed every old card
+      // down. That was the visible idle-list flicker in the archive view.
+      if (state.renderVersion === _convListRenderVersion) return;
       const row = _findArchiveListScrollAnchor($list, state);
       if (row) {
         const listRect = $list.getBoundingClientRect();
@@ -64690,6 +64707,7 @@
       } else {
         _convListRenderSig = null;
         $list.innerHTML = html;
+        _convListRenderVersion++;
       }
       _finishArchiveRender();
     };
