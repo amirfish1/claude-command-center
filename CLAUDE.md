@@ -271,7 +271,7 @@ If you're unsure, default to pushing then checking the table — `git push` is r
 <!-- HUNCH:START — auto-generated, do not edit by hand -->
 ## 🧠 Hunch (Engineering Memory)
 
-This repo has **Hunch** — a curated graph of *why* the code is the way it is (decisions, bug history, invariants). It currently holds **35 decisions, 0 bugs, 8 constraints, 12 components, 0 policies, 8 open findings**.
+This repo has **Hunch** — a curated graph of *why* the code is the way it is (decisions, bug history, invariants). It currently holds **36 decisions, 0 bugs, 8 constraints, 12 components, 0 policies, 8 open findings**.
 
 **Consult Hunch via the `hunch_*` MCP tools — pick by MOMENT, not from memory:**
 
