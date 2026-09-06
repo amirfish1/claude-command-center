@@ -656,6 +656,48 @@ _CODEX_SHARED_STATE_HOLDER_TTL_S = 5.0
 _CCC_INSTALL_ROOT = str(Path(__file__).resolve().parent.parent)
 
 
+# The managed daemon can accept a socket connection and then never answer
+# `initialize`. It is tried first on every ensure, so a wedged daemon cost 10s
+# per attempt forever while the caller (a resume, an inject) sat silent -- the
+# 2026-09-06 incident burned ten minutes that way. After two consecutive
+# initialize failures, skip the managed socket for a cooldown and go straight
+# to the stdio fallback, so recovery is bounded by a minute, not by patience.
+_CODEX_MANAGED_INIT_FAILS = 0
+_CODEX_MANAGED_COOLDOWN_UNTIL = 0.0
+_CODEX_MANAGED_COOLDOWN_LOCK = threading.Lock()
+_CODEX_MANAGED_MAX_FAILS = 2
+
+
+def _codex_managed_cooldown_s():
+    try:
+        value = float(os.environ.get("CCC_CODEX_MANAGED_COOLDOWN_SEC", "60"))
+    except (TypeError, ValueError):
+        value = 60.0
+    return max(0.0, value)
+
+
+def _codex_managed_in_cooldown(now=None):
+    now = time.time() if now is None else float(now)
+    with _CODEX_MANAGED_COOLDOWN_LOCK:
+        return now < _CODEX_MANAGED_COOLDOWN_UNTIL
+
+
+def _codex_note_managed_init_result(ok, now=None):
+    """Count consecutive managed-daemon initialize failures; arm the cooldown."""
+    global _CODEX_MANAGED_INIT_FAILS, _CODEX_MANAGED_COOLDOWN_UNTIL
+    now = time.time() if now is None else float(now)
+    with _CODEX_MANAGED_COOLDOWN_LOCK:
+        if ok:
+            _CODEX_MANAGED_INIT_FAILS = 0
+            _CODEX_MANAGED_COOLDOWN_UNTIL = 0.0
+            return False
+        _CODEX_MANAGED_INIT_FAILS += 1
+        if _CODEX_MANAGED_INIT_FAILS < _CODEX_MANAGED_MAX_FAILS:
+            return False
+        _CODEX_MANAGED_COOLDOWN_UNTIL = now + _codex_managed_cooldown_s()
+        return True
+
+
 def _codex_filter_own_ccc_holders(holders):
     """Drop shared-state holders that are this CCC install's own processes."""
     if not holders:
@@ -3363,7 +3405,13 @@ def _ensure_codex_app_server(*, allow_stdio=True):
     candidates = []
     managed_path = _core._codex_managed_app_server_socket_path()
     if _core._codex_managed_app_server_enabled() and managed_path.exists():
-        candidates.append(("managed-unix", managed_path))
+        if _codex_managed_in_cooldown():
+            _core._app_server_trace(
+                "managed-cooldown",
+                reason="managed daemon failed initialize; using stdio fallback",
+            )
+        else:
+            candidates.append(("managed-unix", managed_path))
     if allow_stdio:
         conflict = _core._codex_shared_state_conflict()
         if conflict is None:
@@ -3451,6 +3499,15 @@ def _ensure_codex_app_server(*, allow_stdio=True):
             },
             timeout=10,
         )
+        if kind == "managed-unix" and _codex_note_managed_init_result(
+            init.get("result") is not None,
+        ):
+            _core._log_activity(
+                "codex",
+                "MANAGED_COOLDOWN",
+                f"managed app-server failed initialize {_CODEX_MANAGED_MAX_FAILS}x; "
+                f"skipping it for {int(_codex_managed_cooldown_s())}s and using stdio",
+            )
         if init.get("result") is not None:
             try:
                 transport.send_json({"jsonrpc": "2.0", "method": "initialized", "params": {}})
