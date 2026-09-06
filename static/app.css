@@ -6140,9 +6140,13 @@
   .conv-current-sessions-scroll:not(.is-search-results) .conv-item .conv-hover-extras { display: contents; }
   .conv-current-sessions-scroll:not(.is-search-results) .conv-item .conv-hover-meta-row {
     display: flex;
-    flex-wrap: wrap;
+    /* Hover reveals more metadata, but the current-session card must retain
+       the same vertical footprint. Keep it to the existing meta line and
+       clip horizontally rather than wrapping IDs/chips onto new lines. */
+    flex-wrap: nowrap;
     align-items: center;
     gap: 4px;
+    overflow: hidden;
   }
   /* Chips in the meta row are always visible here (no hover gating). */
   .conv-current-sessions-scroll:not(.is-search-results) .conv-item .conv-hover-meta-row .conv-meta-inline,
