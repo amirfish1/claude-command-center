@@ -32302,7 +32302,7 @@
   // close-tag) so a `$1$3` replace blanks just the text for the structural
   // signature, and exec() can lift the fresh text for in-place patching. Leaf
   // spans (no nested tags), so [^<]* for the inner text is safe.
-  const _VOLATILE_TIME_RE = /(<span class="[^"]*\b(?:conv-rel|conv-ingroupchat-row-when|conv-ingroupchat-participant-when|conv-repeat-group-rel|conv-subagent-completed-age|cepw-age|cewf-age|conv-nya-stale-age)\b[^"]*"[^>]*>)([^<]*)(<\/span>)/g;
+  const _VOLATILE_TIME_RE = /(<span class="[^"]*\b(?:conv-rel|conv-ingroupchat-row-when|conv-ingroupchat-participant-when|conv-repeat-group-rel|conv-repeat-group-ctx|conv-subagent-completed-age|cepw-age|cewf-age|conv-nya-stale-age)\b[^"]*"[^>]*>)([^<]*)(<\/span>)/g;
 
   // The live activity slot (.conv-status-slot) holds the live-tool indicator
   // ("Reading file…" / "Bash command…", with an in-flight class) and the
@@ -34090,6 +34090,21 @@
       try { return localStorage.getItem(_repeatGroupStorageKey(key)) === '1'; }
       catch (_) { return false; }
     };
+    // A collapsed group used to report only the newest row's age, so four
+    // spawns of the same drain looked like one recent session and you had to
+    // expand to find out the group actually spans hours. Summarise the range
+    // instead -- same one line, and it stops understating what is folded.
+    // `newestFirst` because the two ranges read in opposite directions: ages
+    // want the newest (smallest) end first -- "1h-5h" -- while percentages
+    // want the smallest number first -- "3-12%".
+    const _repeatGroupRange = (values, format, newestFirst) => {
+      const nums = (values || []).filter(v => typeof v === 'number' && isFinite(v));
+      if (!nums.length) return '';
+      const min = String(format(Math.min(...nums)));
+      const max = String(format(Math.max(...nums)));
+      if (min === max) return min;
+      return newestFirst ? max + '\u2013' + min : min + '\u2013' + max;
+    };
     const _renderRepeatGroup = (cards, opts, key) => {
       if (!cards || cards.length < 2) return cards.map(c => _renderRow(c, opts)).join('');
       const first = cards[0] || {};
@@ -34097,7 +34112,20 @@
       const latest = cards.reduce((best, c) => Math.max(best, c.modified || c.last_interacted || 0), 0);
       const title = _repeatGroupTitle(first);
       const groupIconHtml = sessionEngineIconHtml(first, { context: 'sidebar' });
-      const rel = latest ? relativeTime(latest) : '';
+      // relativeTime counts backwards, so the newest stamp is the SMALLEST
+      // age: _repeatGroupRange emits max-first, which reads "1h-5h".
+      const stamps = cards.map(c => c.modified || c.last_interacted || 0).filter(Boolean);
+      const rel = _repeatGroupRange(stamps, relativeTime, true);
+      const groupPcts = cards.map(c => {
+        const ctx = _convRowContextPct(c);
+        return ctx ? ctx.pct : null;
+      }).filter(v => typeof v === 'number' && isFinite(v));
+      const ctxRange = _repeatGroupRange(groupPcts, v => v, false);
+      const ctxHtml = ctxRange
+        ? '<span class="conv-repeat-group-ctx" title="' + escapeAttr('Context use across '
+            + groupPcts.length + ' of ' + cards.length + ' folded session' + (cards.length === 1 ? '' : 's'))
+          + '">' + escapeHtml(ctxRange) + '%</span>'
+        : '';
       const keyAttr = escapeAttr(_repeatGroupStorageKey(key));
       const sessionIdsAttr = escapeAttr(JSON.stringify(cards.map(c => c.session_id || c.id).filter(Boolean)));
       const groupArchiveAction = opts.lifecycleContext === 'active'
@@ -34115,7 +34143,8 @@
         + '<span class="conv-repeat-group-arrow">' + (expanded ? '&#9662;' : '&#9656;') + '</span>'
         + groupIconHtml
         + '<span class="conv-repeat-group-title">' + escapeHtml(title) + '</span>'
-        + '<span class="conv-repeat-group-count">' + cards.length + '</span>'
+        + '<span class="conv-repeat-group-count">\u00d7' + cards.length + '</span>'
+        + ctxHtml
         + (rel ? '<span class="conv-repeat-group-rel">' + escapeHtml(rel) + '</span>' : '')
         + '</button>'
         + groupArchiveAction

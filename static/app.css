@@ -4022,6 +4022,9 @@
   .model-picker-pop .mp-entitlement.free {
     background: rgba(46,160,67,0.16); color: var(--success, #3fb950);
   }
+  .model-picker-pop .mp-entitlement.blocked {
+    background: rgba(219,109,40,0.16); color: var(--warning, #d97706);
+  }
   .model-picker-pop .mp-1m-toggle {
     margin-left: auto; font-size: 10px;
     padding: 1px 6px; border-radius: 3px;
@@ -5310,6 +5313,15 @@
     font-size: 11px;
     font-weight: 700;
     text-align: center;
+  }
+  /* Context span across the folded rows, next to the age span. Muted: it
+     summarises what is hidden, it is not a per-row reading. */
+  .conv-repeat-group-ctx {
+    flex: 0 0 auto;
+    color: var(--text-muted);
+    font-size: 11px;
+    font-variant-numeric: tabular-nums;
+    opacity: 0.85;
   }
   .conv-repeat-group-rel {
     flex: 0 0 auto;
