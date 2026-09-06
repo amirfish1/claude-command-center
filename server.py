@@ -29226,6 +29226,12 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                     # installs without the watchtower package, and for renaming
                     # a legacy case-mismatched key (wt has no delete/rename).
                     conf = normalized["config"]
+                    # Reject a blocked model before any setter runs, so a
+                    # refused save leaves no half-written queue entry behind
+                    # (WT's set_model raises too, but only after ensure_entry).
+                    policy_error = _model_policy_error(conf.get("model"))
+                    if policy_error:
+                        raise ValueError(policy_error)
                     _wt_config.ensure_entry(queue_name)
                     _wt_config.set_backend(queue_name, conf.get("backend", "file"))
                     _wt_config.set_github_repo(queue_name, conf.get("github_repo", ""))
