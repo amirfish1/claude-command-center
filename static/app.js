@@ -45720,9 +45720,9 @@
         + '<div class="fq-queue-alarm-actions">'
         + '<button type="button" class="fq-queue-alarm-btn" data-alarm-retry="' + escapeAttr(key) + '"'
         + (q && q.repo_path ? '' : ' disabled')
-        + ' title="Spawn a fresh worker for this queue now — the same action the reconciler retries on its tick">Retry reconcile</button>'
+        + ' title="Spawn a fresh worker for this queue now — the same action the reconciler retries on its tick">Spawn worker now</button>'
         + '<button type="button" class="fq-queue-alarm-btn" data-alarm-inspect="' + escapeAttr(key) + '"'
-        + ' title="Open this queue\'s WatchTower activity log (spawns, nudges, reaps)">Inspect worker</button>'
+        + ' title="Open this queue\'s WatchTower activity log (spawns, nudges, reaps)">Open queue activity log</button>'
         + '</div></div>';
     }
     const watchHtml = controls.configBtn
