@@ -3865,6 +3865,52 @@
   function _continuationRowId(c) {
     return String((c && (c.session_id || c.id)) || '').trim();
   }
+  // CCC writes its own preamble into a continued session's first prompt
+  // ("You are continuing a task from an earlier Codex session, which ran
+  // long. Origin session id: ..."). `_strip_f2_retrieval_prompt` removes it on
+  // the server paths that own titling, but auto-resume rows can still reach the
+  // sidebar with the boilerplate as their name — so the row advertises the
+  // handoff rather than the work. This is the client-side backstop.
+  const _CONTINUATION_BOILERPLATE_RE =
+    /^\s*(?:[⤴↱]︎?️?\s*)*(?:Continue\s+)?You are continuing a task from an earlier\b/i;
+  function isContinuationBoilerplateTitle(title) {
+    return _CONTINUATION_BOILERPLATE_RE.test(String(title || ''));
+  }
+  // The sidebar's title-priority chain, lifted out of _renderRow so a
+  // continuation leg can resolve its parent's title through the exact same
+  // rules instead of a second, drift-prone copy of them.
+  // Priority: user rename or CCC spawn name (display_name) > Claude Code's
+  // ai_title > raw first user prompt > "(untitled)". The prefix glyphs the
+  // caller adds say which slot won: ✏️ user-chosen, ✨ ai-title, none = raw.
+  function rowRawTitle(c) {
+    if (!c) return { rawTitle: '(untitled)', titleSource: '' };
+    const cleanFirst = c.first_message ? cleanIssuePrompt(c.first_message) : '';
+    let titleSource = '';
+    let rawTitle;
+    if ((c.name_overridden || c.spawn_named) && c.display_name) {
+      rawTitle = c.display_name;
+      titleSource = c.name_overridden ? 'user' : 'spawn';
+    } else if (c.display_name && c.display_name !== c.ai_title) {
+      // Server-side display_name diverged from ai_title — typically a user
+      // /rename in the terminal (Claude Code writes that as a custom-title
+      // event, which the server's display_name chain picks up ahead of
+      // ai_title). Prefer it so terminal renames actually surface here.
+      rawTitle = c.display_name;
+    } else if (c.ai_title) {
+      rawTitle = c.ai_title;
+      titleSource = 'ai';
+    } else if (c.display_name) {
+      rawTitle = c.display_name;
+    } else if (cleanFirst) {
+      rawTitle = firstSentenceOf(cleanFirst, 60);
+    } else {
+      rawTitle = '(untitled)';
+    }
+    if (c.backlog_type === 'github' || c.issue_number || c.linked_issue) {
+      rawTitle = stripGhIssueProjectTag(rawTitle);
+    }
+    return { rawTitle: _uxFixesWorkerDisplayTitle(c, rawTitle), titleSource };
+  }
   // One row per continuation chain. A session that was continued into a
   // successor present in the same list folds into that successor (its
   // ⤴ from: chip opens the origin); anything that hung off the folded row
@@ -32810,34 +32856,9 @@
       // Prefix glyphs let the user tell at-a-glance which slot won:
       //   ✏️  = user-chosen (rename), ✨ = Claude's ai-title, none = raw first
       //   message, italic "(untitled)" = nothing on file.
-      let titleSource = '';
-      let rawTitle;
-      if ((c.name_overridden || c.spawn_named) && c.display_name) {
-        rawTitle = c.display_name;
-        titleSource = c.name_overridden ? 'user' : 'spawn';
-      } else if (c.display_name && c.display_name !== c.ai_title) {
-        // Server-side display_name diverged from ai_title — typically a
-        // user /rename in the terminal (Claude Code writes that as a
-        // custom-title event, which the server's display_name chain
-        // picks up ahead of ai_title). Prefer it over the auto ai_title
-        // so renames from the terminal actually surface here. Without
-        // this we'd fall through to ai_title and the rename would be
-        // silently ignored.
-        rawTitle = c.display_name;
-      } else if (c.ai_title) {
-        rawTitle = c.ai_title;
-        titleSource = 'ai';
-      } else if (c.display_name) {
-        rawTitle = c.display_name;
-      } else if (cleanFirst) {
-        rawTitle = firstSentenceOf(cleanFirst, 60);
-      } else {
-        rawTitle = '(untitled)';
-      }
-      if (c.backlog_type === 'github' || c.issue_number || c.linked_issue) {
-        rawTitle = stripGhIssueProjectTag(rawTitle);
-      }
-      rawTitle = _uxFixesWorkerDisplayTitle(c, rawTitle);
+      const _rowTitleParts = rowRawTitle(c);
+      const titleSource = _rowTitleParts.titleSource;
+      const rawTitle = _rowTitleParts.rawTitle;
       let title = sidebarRowDisplayTitle(rawTitle);
       // Continuation rows (F2 "Continue in a new session" / auto-resume):
       // the ⤴ badge says "this carries on an earlier session", so legacy
@@ -32846,6 +32867,19 @@
       const _continuationParentId = continuationParentId(c);
       if (_continuationParentId) {
         title = title.replace(/^Continue\s+/, '').replace(/^⤴︎\s*/, '');
+        // When CCC's own auto-resume preamble survived auto-titling, the row is
+        // named after the handoff instead of the work. The leg's honest name is
+        // whatever its parent was doing, so borrow the parent's title (resolved
+        // through the same chain) and let the ⤴ badge carry the "continues"
+        // meaning. If the parent is boilerplate too, leave the title alone
+        // rather than walk the chain — one hop is enough in practice.
+        if (isContinuationBoilerplateTitle(title)) {
+          const _parentRow = _continuationRowForSid(_continuationParentId);
+          const _parentTitle = _parentRow
+            ? sidebarRowDisplayTitle(rowRawTitle(_parentRow).rawTitle)
+            : '';
+          if (_parentTitle && !isContinuationBoilerplateTitle(_parentTitle)) title = _parentTitle;
+        }
       }
       // AI-generated titles (Claude/Codex/Antigravity) show with no glyph now
       // (the ✨ prefix was removed, CCC-962). User renames also get NO glyph;
