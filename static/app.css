@@ -28309,6 +28309,19 @@ body.mobile-ask-open .mobile-bottom-nav { z-index: 950; }
    top of the meta cell. */
 #convList.workers-dense .conv-item .conv-evergreen-inline-badges { grid-column: 3 / -1; grid-row: 2; }
 #convList.workers-dense .conv-item .conv-evergreen-meta-row { grid-column: 1 / -1; grid-row: 2; }
+/* A sub-session row indents itself 14px per nesting level by moving
+   --conv-icon-left, which --conv-content-left is calc()'d from. In a card list
+   that reads as nesting; in a fixed-column table it means the child's title,
+   its glyph and its meta cell all sit 14px right of every other row's, and the
+   column stops being a column. The table states the nesting with a marker
+   inside the title cell instead, which costs no alignment. */
+#convList.workers-dense .conv-item.is-current-child-row { --conv-icon-left: 10px; }
+#convList.workers-dense .conv-item.is-current-child-row .conv-title::before {
+  content: '\21B3';
+  margin-right: 5px;
+  font-style: normal;
+  opacity: 0.5;
+}
 
 #convList.workers-dense .conv-item .conv-title,
 #convList.wrap-titles.workers-dense .conv-item .conv-title {
