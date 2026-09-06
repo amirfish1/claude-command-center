@@ -28434,7 +28434,10 @@ body.mobile-ask-open .mobile-bottom-nav { z-index: 950; }
 .conv-workers-live { display: inline-flex; align-items: center; gap: 5px; }
 .conv-workers-live-dot {
   flex: 0 0 6px; width: 6px; height: 6px; border-radius: 50%;
-  background: #39d2c0; animation: qPulse 2s ease-in-out infinite;
+  /* Queues' shape and pulse, but the session list's green rather than its
+     teal: inside this tab the header dot and the row dots are the same
+     signal, and two colours would read as two. */
+  background: #49dc88; animation: qPulse 2s ease-in-out infinite;
 }
 .conv-workers-live.is-idle { opacity: 0.55; }
 @media (prefers-reduced-motion: reduce) {
