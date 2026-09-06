@@ -645,6 +645,52 @@ _CODEX_SHARED_STATE_HOLDER_CACHE = {"ts": 0.0, "holders": None}
 _CODEX_SHARED_STATE_HOLDER_LOCK = threading.Lock()
 _CODEX_SHARED_STATE_HOLDER_TTL_S = 5.0
 
+# CCC's own dashboard and worker open ~/.codex/state_5.sqlite read-only to list
+# threads for the archive. lsof cannot tell a reader from a writer, so those
+# handles used to register as "another Codex writer" and permanently block CCC
+# from spawning its own app-server -- the dashboard blocking the worker, with no
+# user-visible error. Observed 2026-09-06: 47 self-blocks, one of which left a
+# resumed session showing "Thinking..." for 10+ minutes. The guard exists to
+# stop two *Codex* writers sharing the state store; our own processes are never
+# that, so filter them out by full command line.
+_CCC_INSTALL_ROOT = str(Path(__file__).resolve().parent.parent)
+
+
+def _codex_filter_own_ccc_holders(holders):
+    """Drop shared-state holders that are this CCC install's own processes."""
+    if not holders:
+        return holders
+    own_pid = os.getpid()
+    foreign = [h for h in holders if h["pid"] != own_pid]
+    if not foreign:
+        return []
+    pids = sorted({h["pid"] for h in foreign})
+    try:
+        out = subprocess.run(
+            ["/bin/ps", "-p", ",".join(str(p) for p in pids), "-o", "pid=,command="],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
+            text=True,
+            timeout=3.0,
+            check=False,
+        ).stdout
+    except (OSError, subprocess.SubprocessError):
+        return foreign
+    ours = set()
+    for line in out.splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        head, _, cmd = line.partition(" ")
+        try:
+            pid = int(head)
+        except ValueError:
+            continue
+        if _CCC_INSTALL_ROOT in cmd:
+            ours.add(pid)
+    return [h for h in foreign if h["pid"] not in ours]
+
+
 
 def _codex_shared_state_db_holders(now=None):
     """Processes other than CCC's own app-server that hold the shared state DBs.
@@ -717,6 +763,7 @@ def _codex_shared_state_db_holders(now=None):
         if h["pid"] not in seen:
             seen.add(h["pid"])
             unique.append(h)
+    unique = _codex_filter_own_ccc_holders(unique)
     with _CODEX_SHARED_STATE_HOLDER_LOCK:
         _CODEX_SHARED_STATE_HOLDER_CACHE["holders"] = unique
     return unique
