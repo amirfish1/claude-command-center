@@ -32848,6 +32848,31 @@
       }
       return total;
     };
+    // How many sessions this continuation chain is made of. A chain renders as
+    // ONE row (the successor folds its origin in), so without this the row says
+    // nothing about the four earlier legs standing behind it -- the ⤴ from:
+    // chip only ever names the immediate predecessor.
+    const _continuationLegCount = (c) => {
+      let legs = 0;
+      let cur = c;
+      const seen = new Set();
+      while (cur) {
+        const id = String((cur.session_id || cur.id) || '').trim();
+        if (!id || seen.has(id)) break;
+        seen.add(id);
+        legs++;
+        const pid = continuationParentId(cur);
+        cur = pid ? _sessionProvenanceById.get(pid) : null;
+      }
+      return legs;
+    };
+    const _continuationChainBadgeHtml = (c) => {
+      const legs = _continuationLegCount(c);
+      if (legs < 2) return '';
+      return '<span class="conv-chain-badge" title="' + escapeAttr(
+          'This row is the head of a ' + legs + '-leg continuation chain; the earlier legs fold into it.')
+        + '">\u21b1 ' + legs + ' legs</span>';
+    };
     const _sessionProvenanceChipHtml = (c) => {
       if (!c || c.source === 'backlog' || c.source === 'github_pr' || c.backlog_type === 'github') return '';
       // continuationParentId also reads the first_message origin marker, so a
@@ -33978,6 +34003,13 @@
             + needsYouHtml
             + workingDotHtml
             + '<div class="conv-title ' + titleClass + '" data-role="title" aria-label="' + escapeAttr(title) + '">' + escapeHtml(title) + '</div>'
+            // .conv-meta-col is display:contents everywhere except the Workers
+            // table layout, where it becomes the row's single meta CELL. Grid
+            // only lays out its own children, so the badges need one wrapper to
+            // occupy a column together; display:contents makes that wrapper
+            // invisible to every other view's flex layout.
+            + '<span class="conv-meta-col">'
+            + _continuationChainBadgeHtml(c)
             + subagentClusterDisclosureHtml
             + orchChildBadgeHtml
             + (goalIconOnly ? goalIconHtml : '')
@@ -33993,6 +34025,7 @@
             // to read at a glance without hovering. (CCC-294, refines CCC-289)
             + (opts.evergreenAgent ? '' : (qcBadgeHtml || ''))
             + (opts.evergreenAgent ? '' : (lifetimeTokensHtml || ''))
+            + '</span>'
             + (opts.evergreenAgent ? '' : (pctBadgeHtml || ''))
             // Single-line evergreen variant: the badges that normally drop to a
             // second meta line sit inline here, just left of the time slot.
@@ -63973,7 +64006,11 @@
   const _uxFixesHistoryExpanded = new Set();
   function _uxFixesWorkerHistoryHtml(c) {
     const tickets = _uxFixesWorkerTicketsForRow(c);
-    if (!tickets.length) return '';
+    // The Workers table keeps a fixed chips column, and a blank cell reads as
+    // "not loaded yet" rather than "this worker closed nothing". Say it. CSS
+    // shows this only in that layout: on a card list it would be a repeated
+    // string on every ticketless row, which is the noise we came to remove.
+    if (!tickets.length) return '<span class="conv-worker-no-tickets" aria-hidden="true">no tickets</span>';
     const sid = c.session_id || c.id || c._worker_id || '';
     const statusLabel = t => {
       const status = String(t.status || 'unknown').replace(/_/g, ' ');

@@ -28248,34 +28248,142 @@ body.mobile-ask-open .mobile-bottom-nav { z-index: 950; }
    Coding/Other/Archived are untouched. */
 /* Dense rides on #convList (like .compact-rows) so it survives every
    re-render path, and the id gives it the weight to beat the row presets. */
+/* Compact = the fixed-column table. Each row becomes its own grid so the
+   right-hand columns (context %, age) line up down the list while the title
+   and chips size to their content -- the layout the mock proposed.
+   .conv-title-row / .conv-main-row go display:contents so their children
+   become cells of that grid without any list-specific markup; every cell is
+   placed explicitly (column AND row 1) rather than auto-flowed, because the
+   ticket chips are a DOM sibling of the title row and sparse auto-placement
+   would push them onto a second line. */
 #convList.workers-dense .conv-item {
-  padding-top: 2px;
-  padding-bottom: 2px;
+  display: grid;
+  grid-template-columns: auto 6px minmax(0, 1fr) auto auto 46px 40px;
+  align-items: center;
+  column-gap: 8px;
+  padding-top: 3px;
+  padding-bottom: 3px;
+  padding-right: 10px;
   margin-bottom: 0;
   min-height: 0;
+  border-radius: 0;
+  border-bottom: 1px solid var(--border-soft, rgba(255, 255, 255, 0.05));
 }
-/* One line per worker. Wrap is a global preference, but a wrapped title costs
-   a whole extra line per row and that is the single biggest space sink on
-   this tab, so Dense wins over Wrap here; the title tooltip still carries the
-   full text and turning Dense off hands Wrap back. */
+#convList.workers-dense .conv-item > .conv-title-row,
+#convList.workers-dense .conv-item .conv-main-row { display: contents; }
+#convList.workers-dense .conv-item .conv-nya-chevron { grid-column: 1; grid-row: 1; }
+#convList.workers-dense .conv-item .conv-working-dot,
+#convList.workers-dense .conv-item .conv-needs-you { grid-column: 2; grid-row: 1; }
+#convList.workers-dense .conv-item .conv-title { grid-column: 3; grid-row: 1; }
+#convList.workers-dense .conv-item .conv-meta-col {
+  grid-column: 4;
+  grid-row: 1;
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  min-width: 0;
+  overflow: hidden;
+}
+#convList.workers-dense .conv-item .conv-worker-history,
+#convList.workers-dense .conv-item .conv-worker-no-tickets { grid-column: 5; grid-row: 1; }
+#convList.workers-dense .conv-item .conv-pct-badge {
+  grid-column: 6;
+  grid-row: 1;
+  justify-self: end;
+  text-align: right;
+}
+#convList.workers-dense .conv-item .conv-row-end { grid-column: 7; grid-row: 1; justify-self: end; }
+/* Evergreen rows carry a second badge block. They do not appear in the Workers
+   lane, but if one ever does it wraps to a second line rather than landing on
+   top of the meta cell. */
+#convList.workers-dense .conv-item .conv-evergreen-inline-badges { grid-column: 4 / -1; grid-row: 2; }
+#convList.workers-dense .conv-item .conv-evergreen-meta-row { grid-column: 1 / -1; grid-row: 2; }
+
 #convList.workers-dense .conv-item .conv-title,
 #convList.wrap-titles.workers-dense .conv-item .conv-title {
   white-space: nowrap;
   display: block;
   overflow: hidden;
   text-overflow: ellipsis;
+  /* 13/1.25 is what sets the row height. The card list's 14.5/1.4 is sized for
+     a card with room to breathe; in a table it is what makes the rows tall. */
+  font-size: 13px;
   line-height: 1.25;
   -webkit-line-clamp: none;
 }
-/* Second-line chrome. Every one of these is still reachable with Dense off,
-   and none of them changes which sessions are listed. */
+/* The second line and the drag affordance are what the table trades away. The
+   outcome card comes back under Detailed; nothing here removes a row. */
+#convList.workers-dense .conv-item .conv-hover-extras,
 #convList.workers-dense .conv-item .conv-last,
 #convList.workers-dense .conv-item .conv-outcome,
-#convList.workers-dense .conv-item .conv-worker-history,
+#convList.workers-dense .conv-item .drag-handle { display: none; }
+
+/* Ticket chips become the meta column instead of a second line: the prose
+   count label goes (the chips and the +N chip already carry it) and the
+   summary lays out as a single chip run. */
 #convList.workers-dense .conv-worker-history-count { display: none; }
-#convList.workers-dense .conv-item .conv-title-row { gap: 6px; }
-#convList.workers-dense .conv-worker-ticket { padding: 0 4px; }
+/* The card list indents the chips onto their own line and gives the summary a
+   1.7 line-height; in a table cell that margin and leading are what set the
+   row height. Strip both -- the chips are the tallest thing in the row. */
+#convList.workers-dense .conv-item .conv-worker-history {
+  margin: 0;
+  font-size: 10.5px;
+  line-height: 15px;
+}
+#convList.workers-dense .conv-worker-history > summary {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  line-height: 15px;
+  list-style: none;
+}
+#convList.workers-dense .conv-worker-history > summary::-webkit-details-marker { display: none; }
+#convList.workers-dense .conv-worker-history-recent {
+  display: flex;
+  align-items: center;
+  flex-wrap: nowrap;
+  gap: 3px;
+  margin-left: 0;
+}
+#convList.workers-dense .conv-worker-ticket {
+  padding: 0 5px;
+  line-height: 15px;
+}
 #convList.workers-dense .conv-gap-separator { margin: 6px 6px 3px; }
+
+/* A blank chips cell in a fixed-column table reads as "not loaded yet". Say
+   what it means -- but only in that layout: on the card list it would be a
+   repeated string on every ticketless row. */
+.conv-worker-no-tickets { display: none; }
+#convList.workers-dense .conv-item .conv-worker-no-tickets {
+  display: inline-block;
+  font-size: 10.5px;
+  line-height: 15px;
+  padding: 0 5px;
+  border: 1px dashed var(--border);
+  border-radius: 4px;
+  color: var(--text-muted);
+  opacity: 0.6;
+  white-space: nowrap;
+}
+
+/* Continuation chains render as one row, so the head states how many legs
+   stand behind it. Shown at every density -- it is new information, not
+   repetition. */
+.conv-chain-badge {
+  font-size: 10.5px;
+  line-height: 15px;
+  padding: 0 5px;
+  border: 1px dashed var(--border);
+  border-radius: 4px;
+  color: var(--text-muted);
+  white-space: nowrap;
+  flex: 0 0 auto;
+}
+
+/* display:contents everywhere else, so the wrapper is invisible to the flex
+   layouts every other list uses. */
+.conv-meta-col { display: contents; }
 
 /* Uniform-column hoist. When every worker in view shares an engine and/or a
    cost tier, that per-row glyph is pure repetition: the strip above the list
