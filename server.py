@@ -6938,7 +6938,7 @@ def _codex_default_model():
 
 def _spawn_fallback_model_for_engine(engine):
     if engine == "claude":
-        return os.environ.get("CCC_CLAUDE_MODEL", "claude-fable-5")
+        return os.environ.get("CCC_CLAUDE_MODEL", "")
     if engine == "codex":
         return _codex_default_model()
     if engine == "gemini":
