@@ -28272,7 +28272,10 @@ body.mobile-ask-open .mobile-bottom-nav { z-index: 950; }
 #convList.workers-dense .conv-item > .conv-title-row,
 #convList.workers-dense .conv-item .conv-main-row { display: contents; }
 #convList.workers-dense .conv-item .conv-nya-chevron { grid-column: 1; grid-row: 1; }
-#convList.workers-dense .conv-item .conv-working-dot,
+/* .conv-session-icon already carries an activity dot, so in the table the
+   separate working dot is the same signal printed twice in adjacent columns.
+   Needs-you is a different signal (blocked on YOU) and keeps its cell. */
+#convList.workers-dense .conv-item .conv-working-dot { display: none; }
 #convList.workers-dense .conv-item .conv-needs-you { grid-column: 2; grid-row: 1; }
 #convList.workers-dense .conv-item .conv-title { grid-column: 3; grid-row: 1; }
 #convList.workers-dense .conv-item .conv-meta-col {
@@ -28394,6 +28397,7 @@ body.mobile-ask-open .mobile-bottom-nav { z-index: 950; }
 .conv-workers-uniform {
   display: flex;
   align-items: baseline;
+  justify-content: center;
   gap: 6px;
   flex-wrap: wrap;
   margin: 2px 8px 4px;
