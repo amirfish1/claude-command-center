@@ -2245,15 +2245,47 @@
   // same Origin, same cookies, no special headers. navigator.webdriver is the
   // one signal CDP-controlled browsers can't suppress, so tag every spawn
   // request with it; server.py logs it for later "who spawned this" lookups.
+  // Same wrapper also gates policy-blocked models (2026-09-06): a blocked
+  // model still shows in every picker (server no longer hides it), but a
+  // spawn or queue-config save carrying it gets a browser confirm() here
+  // before the request goes out with confirm_blocked_model: true. This is a
+  // convenience prompt only -- server.py is the real gate and rejects a
+  // blocked model with no confirm flag regardless of what the client sends.
   (function installSpawnProvenanceTag() {
     const realFetch = window.fetch.bind(window);
+    function isBlockedModelName(model) {
+      const key = String(model || '').trim().toLowerCase();
+      return !!key && typeof spawnDefaultsState === 'object'
+        && spawnDefaultsState.blockedModels instanceof Set
+        && spawnDefaultsState.blockedModels.has(key);
+    }
     window.fetch = function taggedSpawnFetch(input, init) {
       const url = (typeof input === 'string') ? input : (input && input.url) || '';
-      if (url.indexOf('/api/sessions/spawn') === -1) return realFetch(input, init);
+      const isSpawn = url.indexOf('/api/sessions/spawn') !== -1;
+      const isQueueConfig = url.indexOf('/api/queue/config') !== -1 && url.indexOf('/api/queue/config-options') === -1;
+      if (!isSpawn && !isQueueConfig) return realFetch(input, init);
       const opts = Object.assign({}, init || {});
       const headers = new Headers(opts.headers || {});
-      headers.set('X-CCC-Automated', String(!!navigator.webdriver));
+      if (isSpawn) headers.set('X-CCC-Automated', String(!!navigator.webdriver));
       opts.headers = headers;
+      if (typeof opts.body === 'string' && opts.body) {
+        let body = null;
+        try { body = JSON.parse(opts.body); } catch (_) { body = null; }
+        if (body && typeof body === 'object' && !body.confirm_blocked_model && isBlockedModelName(body.model)) {
+          const label = String(body.model || '').trim();
+          const proceed = window.confirm(
+            '"' + label + '" is blocked by model policy (cost/quota risk).\n\nSpawn it anyway?'
+          );
+          if (!proceed) {
+            return Promise.resolve(new Response(
+              JSON.stringify({ ok: false, error: 'cancelled: blocked model not confirmed' }),
+              { status: 499, headers: { 'Content-Type': 'application/json' } }
+            ));
+          }
+          body.confirm_blocked_model = true;
+          opts.body = JSON.stringify(body);
+        }
+      }
       return realFetch(input, opts);
     };
   })();
@@ -63876,16 +63908,39 @@
       if (t.resolved) return t.status === 'closed' ? 'Resolved' : 'Resolved earlier · ' + status;
       return t.currentClaimed ? 'Claimed' : 'Worked · ' + status;
     };
-    const ticketButton = (t, recent) => '<button type="button" class="conv-worker-ticket" data-worker-ticket="' + escapeAttr(t.ref) + '"'
-      + ' title="' + escapeAttr(statusLabel(t) + ': ' + (t.title || t.note || t.summary || t.ref)) + '">'
-      + escapeHtml(t.ref) + (recent ? '' : ' <span>' + escapeHtml(statusLabel(t)) + '</span>') + '</button>';
+    const ticketButton = (t, recent, label) => {
+      const elided = !!label && label !== t.ref;
+      // The full ref stays in data-worker-ticket (that is what the click
+      // opens) and leads the tooltip, so an elided chip is never ambiguous.
+      const tip = (elided ? t.ref + ' \u00b7 ' : '') + statusLabel(t) + ': ' + (t.title || t.note || t.summary || t.ref);
+      return '<button type="button" class="conv-worker-ticket' + (elided ? ' is-elided' : '') + '"'
+        + ' data-worker-ticket="' + escapeAttr(t.ref) + '"'
+        + ' title="' + escapeAttr(tip) + '">'
+        + escapeHtml(label || t.ref) + (recent ? '' : ' <span>' + escapeHtml(statusLabel(t)) + '</span>') + '</button>';
+    };
+    // Consecutive chips from the same project repeat the project prefix
+    // (OPS-996 OPS-995 OPS-994) -- three copies of a string that only has to
+    // be read once. Print the prefix on the first chip and drop it from the
+    // runs that follow: OPS-996 -995 -994. Only the visible summary elides;
+    // the expanded list gives every ticket its full ref, since those rows are
+    // read one at a time and have to stand alone.
+    const elideRefs = (list) => {
+      let prev = null;
+      return list.map(t => {
+        const project = String(t.project || '');
+        const ref = String(t.ref || '');
+        const repeatsPrefix = project && project === prev && ref.startsWith(project);
+        prev = project;
+        return ticketButton(t, true, repeatsPrefix ? ref.slice(project.length) : ref);
+      }).join('');
+    };
     return '<details class="conv-worker-history" data-worker-history-sid="' + escapeAttr(sid) + '"'
       + (_uxFixesHistoryExpanded.has(sid) ? ' open' : '') + '>'
       // The "+N" chip carries the same count the prose label does, in a tenth
       // of the width. Dense mode hides the label and keeps the chips, so the
       // total stays visible either way.
       + '<summary><span class="conv-worker-history-count">' + tickets.length + ' recorded ticket' + (tickets.length === 1 ? '' : 's') + '</span>'
-      + '<span class="conv-worker-history-recent">' + tickets.slice(0, 3).map(t => ticketButton(t, true)).join('')
+      + '<span class="conv-worker-history-recent">' + elideRefs(tickets.slice(0, 3))
       + (tickets.length > 3
           ? '<span class="conv-worker-history-more" title="' + escapeAttr((tickets.length - 3) + ' more recorded ticket' + (tickets.length - 3 === 1 ? '' : 's')) + '">+' + (tickets.length - 3) + '</span>'
           : '')
@@ -65680,6 +65735,7 @@
     worker_reasoning_effort: '',
     worker_auto_compact_k: 250,
     codex_context_1m: true,
+    blockedModels: new Set(),
   };
   // The "new session modal" was removed from index.html, but several call
   // sites below (openNewSessionModal, template-apply, engine-change handler,
@@ -65877,6 +65933,12 @@
     spawnDefaultsState.auto_compact_k = _mergeAutoCompactK(data.auto_compact_k);
     spawnDefaultsState.worker_auto_compact_k = _mergeAutoCompactK(data.worker_auto_compact_k);
     if (typeof data.codex_context_1m === 'boolean') spawnDefaultsState.codex_context_1m = data.codex_context_1m;
+    // Model policy deny-list, for the confirm-before-spawn prompt (see
+    // installSpawnProvenanceTag). Server still enforces this -- this copy
+    // just lets the UI ask before round-tripping a 400.
+    spawnDefaultsState.blockedModels = new Set((Array.isArray(data.blocked_models) ? data.blocked_models : []).map(
+      m => String(m || '').trim().toLowerCase()
+    ));
     try { localStorage.setItem('ccc.spawnEngine', spawnDefaultsState.engine); } catch (_) {}
     // The engine <select> DOM nodes are set synchronously at boot from the
     // (possibly stale) localStorage pref, before this async server fetch

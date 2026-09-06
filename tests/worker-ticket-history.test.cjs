@@ -123,3 +123,45 @@ test('worker history expands all records and ticket clicks do not select the ses
     assert.equal(await page.evaluate(() => rowClicks), 0);
   } finally { await browser.close(); }
 });
+
+test('a run of same-project chips prints the prefix once, and stays clickable', () => {
+  const ctx = harness();
+  ctx._setUxFixesQueueMeta([
+    ticket(994), ticket(995), ticket(996),
+    {seq: 12, project: 'CCC', ref: 'CCC-12', title: 'Other project', status: 'closed',
+     claimed_by: 'worker-one', claimed_session_id: 'session-one', closed_by: 'worker-one',
+     closed_at: new Date(1700000000000 + 990 * 1000).toISOString()},
+  ]);
+  const html = ctx._uxFixesWorkerHistoryHtml(row);
+  const summary = html.slice(html.indexOf('conv-worker-history-recent'), html.indexOf('</summary>'));
+  const labels = Array.from(summary.matchAll(/>([^<>]*)<\/button>/g), m => m[1].trim());
+  // Newest first: the run leads with its full ref and the rest drop the prefix.
+  assert.deepEqual(labels, ['EXAMPLE-996', '-995', '-994']);
+  // Whatever the chip prints, the click target is still the whole ref.
+  assert.deepEqual(
+    Array.from(summary.matchAll(/data-worker-ticket="([^"]+)"/g), m => m[1]),
+    ['EXAMPLE-996', 'EXAMPLE-995', 'EXAMPLE-994']
+  );
+  // An elided chip leads its tooltip with the ref it no longer prints.
+  assert.match(summary, /title="EXAMPLE-995 \u00b7 [^"]*"/);
+  // The expanded list is read one row at a time, so it never elides.
+  const list = html.slice(html.indexOf('conv-worker-history-list'));
+  assert.ok(!list.includes('is-elided'));
+  assert.ok(list.includes('EXAMPLE-994 <span>'));
+});
+
+test('a chip only drops its prefix after a chip from the same project', () => {
+  const ctx = harness();
+  ctx._setUxFixesQueueMeta([
+    ticket(996),
+    {seq: 12, project: 'CCC', ref: 'CCC-12', title: 'Interleaved', status: 'closed',
+     claimed_by: 'worker-one', claimed_session_id: 'session-one', closed_by: 'worker-one',
+     closed_at: new Date(1700000000000 + 995 * 1000).toISOString()},
+    ticket(994),
+  ]);
+  const html = ctx._uxFixesWorkerHistoryHtml(row);
+  const summary = html.slice(html.indexOf('conv-worker-history-recent'), html.indexOf('</summary>'));
+  const labels = Array.from(summary.matchAll(/>([^<>]*)<\/button>/g), m => m[1].trim());
+  // EXAMPLE-994 follows a CCC chip, so it has to reprint its own prefix.
+  assert.deepEqual(labels, ['EXAMPLE-996', 'CCC-12', 'EXAMPLE-994']);
+});

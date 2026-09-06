@@ -28199,6 +28199,12 @@ body.mobile-ask-open .mobile-bottom-nav { z-index: 950; }
   color: var(--accent);
 }
 .conv-worker-ticket > span { color: var(--text-muted); }
+/* An elided chip ("-995") is a continuation of the one before it, so it sits
+   tighter against its neighbour and reads as part of the same run. */
+.conv-worker-ticket.is-elided {
+  padding-left: 3px;
+  margin-left: -2px;
+}
 .conv-worker-history-scope { margin: 6px 0; }
 .conv-worker-history-list {
   list-style: none;
