@@ -76,6 +76,8 @@ _CODEX_APP_SERVER_WARMUP_LAST = 0.0
 _CODEX_APP_SERVER_LIVENESS_INTERVAL = 20.0
 _CODEX_APP_SERVER_LIVENESS_TIMEOUT = 8.0
 _CODEX_APP_SERVER_LIVENESS_MISS_THRESHOLD = 2
+_CODEX_SHARED_STATE_BLOCK_RETRY_S = 30.0
+_CODEX_SHARED_STATE_BLOCK_RETRY_UNTIL = 0.0
 _CODEX_APP_SERVER_INFLIGHT_LOCK = threading.Lock()
 # `thread/list` is a GLOBAL call -- one reply carries every thread the
 # app-server knows -- so it must be throttled globally too. It used to be
@@ -3259,7 +3261,7 @@ def _codex_app_server_active_turn_fresh(now):
 
 def _ensure_codex_app_server(*, allow_stdio=True):
     """Start and initialize a persistent Codex app-server if needed."""
-    global _CODEX_APP_SERVER_READER
+    global _CODEX_APP_SERVER_READER, _CODEX_SHARED_STATE_BLOCK_RETRY_UNTIL
     # _log_activity and the stack-dump marker both do file I/O, and any
     # syscall can stall for seconds under memory pressure. Holding
     # _CODEX_APP_SERVER_LOCK across that I/O starves the reader thread that
@@ -3413,8 +3415,18 @@ def _ensure_codex_app_server(*, allow_stdio=True):
     if keep_transport is not None:
         return keep_transport
 
-    candidates = []
     managed_path = _core._codex_managed_app_server_socket_path()
+    # A foreign Codex writer is a durable safety block, not a transient
+    # transport failure. Rechecking it on every status poll produced a noisy
+    # 2–3s retry loop. Keep managed-daemon attachment eligible, but wait before
+    # retrying private stdio when it is the only available transport.
+    if (
+        allow_stdio
+        and time.time() < _CODEX_SHARED_STATE_BLOCK_RETRY_UNTIL
+        and not (_core._codex_managed_app_server_enabled() and managed_path.exists())
+    ):
+        return None
+    candidates = []
     if _core._codex_managed_app_server_enabled() and managed_path.exists():
         if _codex_managed_in_cooldown():
             _core._app_server_trace(
@@ -3428,6 +3440,9 @@ def _ensure_codex_app_server(*, allow_stdio=True):
         if conflict is None:
             candidates.append(("stdio", None))
         else:
+            _CODEX_SHARED_STATE_BLOCK_RETRY_UNTIL = (
+                time.time() + _CODEX_SHARED_STATE_BLOCK_RETRY_S
+            )
             _core._app_server_trace(
                 "shared-state-block",
                 reason="foreign codex process holds shared state db",

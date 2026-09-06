@@ -9,6 +9,7 @@ refused because CCC's own dashboard held a read handle on the shared state DB.
 import os
 import pathlib
 import unittest
+from unittest import mock
 
 from ccc_server import codex
 
@@ -79,6 +80,29 @@ class ManagedInitCooldownTest(unittest.TestCase):
 
     def test_cooldown_is_at_most_a_minute_by_default(self):
         self.assertLessEqual(codex._codex_managed_cooldown_s(), 60.0)
+
+
+class TestSharedStateConflictCooldownTest(unittest.TestCase):
+    def setUp(self):
+        import server  # noqa: F401  (registers the _core namespace)
+        self.previous = codex._CODEX_SHARED_STATE_BLOCK_RETRY_UNTIL
+        codex._CODEX_SHARED_STATE_BLOCK_RETRY_UNTIL = 0.0
+        self.addCleanup(setattr, codex, "_CODEX_SHARED_STATE_BLOCK_RETRY_UNTIL", self.previous)
+
+    def test_conflict_suppresses_stdio_retry_until_cooldown_expires(self):
+        conflict = {"summary": "pids=9 commands=codex"}
+        with mock.patch.object(codex._core, "_CODEX_APP_SERVER_TRANSPORT", None), \
+             mock.patch.object(codex._core, "_CODEX_APP_SERVER_INITIALIZED", False), \
+             mock.patch.object(codex._core, "_CODEX_APP_SERVER_INITIALIZING", False), \
+             mock.patch.object(codex, "_codex_managed_app_server_enabled", return_value=False), \
+             mock.patch.object(codex._core, "_codex_shared_state_conflict", return_value=conflict) as check, \
+             mock.patch.object(codex._core, "_log_activity") as log_activity, \
+             mock.patch.object(codex.time, "time", return_value=1000.0):
+            self.assertIsNone(codex._ensure_codex_app_server())
+            self.assertIsNone(codex._ensure_codex_app_server())
+
+        self.assertEqual(check.call_count, 1)
+        self.assertEqual(log_activity.call_count, 1)
 
 
 
