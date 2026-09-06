@@ -28428,6 +28428,25 @@ body.mobile-ask-open .mobile-bottom-nav { z-index: 950; }
   opacity: 0.6;
   font-size: 10px;
 }
+.conv-workers-uniform-sep { opacity: 0.4; }
+/* Same dot as the Queues tab's WORKING NOW strip -- teal, 6px, qPulse -- so
+   "live" reads identically in both places. */
+.conv-workers-live { display: inline-flex; align-items: center; gap: 5px; }
+.conv-workers-live-dot {
+  flex: 0 0 6px; width: 6px; height: 6px; border-radius: 50%;
+  background: #39d2c0; animation: qPulse 2s ease-in-out infinite;
+}
+.conv-workers-live.is-idle { opacity: 0.55; }
+@media (prefers-reduced-motion: reduce) {
+  .conv-workers-live-dot { animation: none; }
+}
+/* The per-row dot answers "which ones". At 4px hollow-vs-filled it was losing
+   that argument, so in the table a live row gets the WORKING NOW dot's size
+   and pulse -- the two surfaces now say "live" the same way. */
+#convList.workers-dense .conv-item .is-working .session-activity-dot {
+  width: 6px; height: 6px; margin-top: -3px; left: -5px;
+  animation: qPulse 2s ease-in-out infinite;
+}
 /* .hoisted-engine / .hoisted-cost mark the rows whose value the banner above
    the list already states. A row that DIFFERS carries neither class and keeps
    its glyph, so the exceptions are exactly what the column still shows. */

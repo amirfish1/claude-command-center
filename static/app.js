@@ -6754,7 +6754,7 @@
       count: 0,
       engine: '', engineLabel: '', engineOthers: 0,
       tier: '', tierLabel: '', tierOthers: 0, tierRange: '',
-      anyTickets: false,
+      anyTickets: false, working: 0,
     };
     const rows = convs || [];
     if (rows.length < 2) return out;
@@ -6770,6 +6770,9 @@
       // An unknown tier is absence, not agreement: it can neither win the vote
       // nor be hoisted, but it still counts as a row that keeps its column.
       if (t) { tiers.set(t, (tiers.get(t) || 0) + 1); tierLabels.set(t, p.tierLabel || t); }
+      // Same signal the Queues tab's WORKING NOW strip counts: mid-turn
+      // execution, not process liveness.
+      if (p.working) out.working++;
     }
     out.count = rows.length;
     const modal = (counts) => {
@@ -36847,7 +36850,7 @@
       // away so the information is still on screen, just once instead of N
       // times.
       let _workersUniformHtml = '';
-      if (_workersHoist.engine || _workersHoist.tier) {
+      if (_workersHoist.engine || _workersHoist.tier || _workersHoist.working) {
         const parts = [];
         if (_workersHoist.engine) parts.push('<b>' + escapeHtml(_workersHoist.engineLabel || _workersHoist.engine) + '</b>');
         // The banner states the whole cost spread, not just the tier it
@@ -36861,10 +36864,20 @@
         const note = others
           ? noun + ' hidden where it matches &middot; ' + others + ' exception' + (others === 1 ? '' : 's') + ' still shown'
           : noun + ' columns hidden while uniform';
+        // Liveness leads, in the Queues tab's WORKING NOW language: same teal
+        // pulsing dot, same count-first phrasing. The per-row dot says which
+        // ones; this says how many, which is the question you ask first.
+        const live = _workersHoist.working
+          ? '<span class="conv-workers-live"><span class="conv-workers-live-dot"></span><b>'
+            + _workersHoist.working + '</b> working now</span>'
+          : '<span class="conv-workers-live is-idle">none working now</span>';
+        const shared = parts.length
+          ? 'all <b>' + _workersHoist.count + '</b>: ' + parts.join(' &middot; ')
+          : '<b>' + _workersHoist.count + '</b> workers';
         _workersUniformHtml = '<div class="conv-workers-uniform" data-role="workers-uniform"'
-          + ' title="' + escapeAttr('Stated once here and dropped from the rows that match. Any session that differs keeps its own glyph.') + '">'
-          + 'all <b>' + _workersHoist.count + '</b> workers: ' + parts.join(' &middot; ')
-          + '<span class="conv-workers-uniform-note">' + note + '</span>'
+          + ' title="' + escapeAttr('Working now counts sessions mid-turn, the same signal the Queues tab shows. Engine and cost are stated once here and dropped from the rows that match; any session that differs keeps its own glyph.') + '">'
+          + live + '<span class="conv-workers-uniform-sep">&middot;</span>' + shared
+          + (parts.length ? '<span class="conv-workers-uniform-note">' + note + '</span>' : '')
           + '</div>';
       }
       const _arcTools = '<div class="conv-archived-tools" data-role="archived-tools">'
