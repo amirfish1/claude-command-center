@@ -1,0 +1,124 @@
+<!doctype html>
+<html lang="en" class="no-js">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Agent receipts: verify coding-agent work before it is done</title>
+<meta name="description" content="WatchTower resolutions record what changed, commit or no-code proof, and the verification evidence a coding-agent job required.">
+<link rel="canonical" href="https://ccc.amirfish.ai/receipts/">
+<link rel="icon" href="/brand/favicon.svg" type="image/svg+xml">
+<meta property="og:title" content="An agent saying done is not a receipt.">
+<meta property="og:description" content="Close coding-agent work with a resolution, proof, and the evidence the job required.">
+<meta property="og:type" content="website">
+<meta property="og:url" content="https://ccc.amirfish.ai/receipts/">
+<meta property="og:image" content="https://ccc.amirfish.ai/images/captain-social.png">
+<meta name="twitter:card" content="summary_large_image">
+<link rel="stylesheet" href="/agent-operations/site.css">
+<script>document.documentElement.classList.replace("no-js", "js");</script>
+</head>
+<body>
+<header class="site-nav">
+  <div class="wrap site-nav__inner">
+    <a class="brand" href="/"><img src="/brand/ccc-mark.svg" alt=""><span>claude command center</span></a>
+    <nav class="site-nav__links" aria-label="Primary navigation">
+      <a href="/captain/">Captain</a>
+      <a href="/watchtower/">WatchTower</a>
+      <a href="/receipts/" aria-current="page">Receipts</a>
+      <a href="/demo/">Full demo</a>
+      <a class="nav-github" href="https://github.com/amirfish1/watchtower">GitHub</a>
+    </nav>
+  </div>
+</header>
+
+<main>
+  <section class="hero" style="border-top:0">
+    <div class="wrap hero__content">
+      <p class="eyebrow">WatchTower resolutions</p>
+      <h1>An agent saying &ldquo;done&rdquo; is not a receipt.</h1>
+      <p class="lede">WatchTower closes work with a resolution: what changed, the commit or explicit no-code proof, and the tests, screenshots, or review evidence the job required.</p>
+      <div class="actions">
+        <a class="button button--primary" href="#receipt">Inspect a completed run</a>
+        <a class="button" href="/captain/">Watch the full loop</a>
+      </div>
+      <p class="microcopy">Evidence requirements follow the job. A documentation task and a UI change should not produce the same receipt.</p>
+    </div>
+  </section>
+
+  <section>
+    <div class="wrap">
+      <div class="section-heading">
+        <p class="eyebrow">Confidence versus evidence</p>
+        <h2>Completion needs a shared definition.</h2>
+        <p>A fluent summary is useful. It is not enough to close durable work.</p>
+      </div>
+      <div class="comparison" role="table" aria-label="Agent self-report compared with a WatchTower receipt">
+        <div class="comparison__row" role="row"><strong role="columnheader">Question</strong><strong role="columnheader">Self-report</strong><strong role="columnheader">Receipt</strong></div>
+        <div class="comparison__row" role="row"><span role="rowheader">What changed?</span><span>&ldquo;Implemented successfully.&rdquo;</span><span class="good">Bounded resolution summary.</span></div>
+        <div class="comparison__row" role="row"><span role="rowheader">Where is it?</span><span>May be implied.</span><span class="good">Commit or explicit no-code proof.</span></div>
+        <div class="comparison__row" role="row"><span role="rowheader">Was it checked?</span><span>&ldquo;Looks good.&rdquo;</span><span class="good">Named tests, screenshots, or review evidence.</span></div>
+        <div class="comparison__row" role="row"><span role="rowheader">Can another agent continue?</span><span>Requires transcript archaeology.</span><span class="good">Resolution lives with the durable job.</span></div>
+      </div>
+    </div>
+  </section>
+
+  <section id="receipt">
+    <div class="wrap split">
+      <div class="section-heading">
+        <p class="eyebrow">Illustrative receipt</p>
+        <h2>The last event should be useful tomorrow.</h2>
+        <p>This public-safe example shows the shape of a resolution. It is illustrative, not a claim that a browser visitor ran an agent.</p>
+      </div>
+      <article class="receipt" aria-label="Illustrative WatchTower receipt">
+        <strong>✓ CAPTAIN-DEMO-1 resolved</strong>
+        <p>Made the navigation collapse below the mobile breakpoint and preserved keyboard focus when the menu closes.</p>
+        <ul class="receipt-list">
+          <li>Commit proof recorded</li>
+          <li>Focused tests passed</li>
+          <li>Desktop and 390px screenshots attached</li>
+          <li>Independent review job resolved</li>
+        </ul>
+      </article>
+    </div>
+  </section>
+
+  <section>
+    <div class="wrap">
+      <div class="section-heading section-heading--center">
+        <p class="eyebrow">Four parts of a useful resolution</p>
+        <h2>Proof without ceremony.</h2>
+      </div>
+      <div class="card-grid card-grid--two">
+        <article class="card"><span class="card__number">01 &middot; Summary</span><h3>State the material change</h3><p>A bounded explanation of what the worker changed, decided, or discovered.</p></article>
+        <article class="card"><span class="card__number">02 &middot; Artifact</span><h3>Point to the work</h3><p>A commit when code changed, or explicit no-code proof when the outcome is research, review, or configuration.</p></article>
+        <article class="card"><span class="card__number">03 &middot; Verification</span><h3>Name the evidence</h3><p>Tests, browser checks, screenshots, or review findings selected for the job rather than added mechanically.</p></article>
+        <article class="card"><span class="card__number">04 &middot; Timeline</span><h3>Preserve the handoff</h3><p>The initiating agent can see dependencies, interventions, and the final resolution without reconstructing another transcript.</p></article>
+      </div>
+    </div>
+  </section>
+
+  <section class="cta-band">
+    <div class="wrap wrap--narrow">
+      <div class="section-heading section-heading--center">
+        <p class="eyebrow">Do not optimize for agents running</p>
+        <h2>Optimize for work returning with proof.</h2>
+        <p>See Captain turn one request into durable jobs, verification, and a receipt back in the original session.</p>
+      </div>
+      <div class="actions">
+        <a class="button button--primary" href="/captain/">Watch the Captain walkthrough</a>
+        <a class="button" href="/watchtower/">Explore WatchTower</a>
+      </div>
+    </div>
+  </section>
+</main>
+
+<footer class="site-footer">
+  <div class="wrap site-footer__inner">
+    <span>CCC + WatchTower &middot; evidence over self-report &middot; <span class="js-year">2026</span></span>
+    <nav class="site-footer__links" aria-label="Footer navigation">
+      <a href="/captain/">Captain</a><a href="/watchtower/">WatchTower</a><a href="/receipts/">Receipts</a><a href="/demo/">Demo</a><a href="https://github.com/amirfish1/watchtower">GitHub</a>
+    </nav>
+  </div>
+</footer>
+<script src="/agent-operations/site.js" defer></script>
+</body>
+</html>

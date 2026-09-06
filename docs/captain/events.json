@@ -1,0 +1,66 @@
+{
+  "label": "Recorded walkthrough",
+  "duration_ms": 45000,
+  "events": [
+    {
+      "at_ms": 0,
+      "kind": "GOAL_RECEIVED",
+      "title": "Goal received",
+      "detail": "Ship the mobile navigation fix. Reuse context, verify it visually, and bring me proof."
+    },
+    {
+      "at_ms": 6000,
+      "kind": "PLAN_SHAPED",
+      "title": "Plan shaped",
+      "detail": "Captain found three bounded jobs and one dependency."
+    },
+    {
+      "at_ms": 9000,
+      "kind": "JOB_FILED",
+      "title": "CAPTAIN-DEMO-1 filed",
+      "detail": "Implement the responsive navigation fix."
+    },
+    {
+      "at_ms": 11500,
+      "kind": "JOB_FILED",
+      "title": "CAPTAIN-DEMO-2 filed",
+      "detail": "Verify desktop and mobile behavior."
+    },
+    {
+      "at_ms": 13500,
+      "kind": "CONTEXT_REUSED",
+      "title": "Warm context reused",
+      "detail": "The existing navigation session already knows the affected files."
+    },
+    {
+      "at_ms": 17500,
+      "kind": "WORKER_SPAWNED",
+      "title": "Verification lane started",
+      "detail": "A separate worker owns browser verification."
+    },
+    {
+      "at_ms": 20500,
+      "kind": "DEPENDENCY_WAIT",
+      "title": "Review waits",
+      "detail": "The review job remains blocked until implementation resolves."
+    },
+    {
+      "at_ms": 27500,
+      "kind": "VERIFICATION_STARTED",
+      "title": "Verification running",
+      "detail": "Tests and responsive browser checks are in progress."
+    },
+    {
+      "at_ms": 36000,
+      "kind": "JOB_RESOLVED",
+      "title": "Jobs resolved",
+      "detail": "Implementation, visual verification, and review are complete."
+    },
+    {
+      "at_ms": 41000,
+      "kind": "RECEIPT_RETURNED",
+      "title": "Receipt returned",
+      "detail": "Resolution summary, commit proof, tests, and screenshots returned to the initiating session."
+    }
+  ]
+}
