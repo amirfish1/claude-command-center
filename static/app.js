@@ -36933,9 +36933,14 @@
     // The icon column can only shrink when NOTHING in it renders on any row.
     // Every row shares one column width, so a single exception keeping its
     // glyph means the column keeps the room to draw it.
-    $convList.classList.toggle('workers-icon-narrow',
-      !!_workersHoist.engine && !!_workersHoist.tier
-      && !_workersHoist.engineOthers && !_workersHoist.tierOthers);
+    const _iconEmpty = !!_workersHoist.engine && !!_workersHoist.tier
+      && !_workersHoist.engineOthers && !_workersHoist.tierOthers;
+    $convList.classList.toggle('workers-icon-narrow', _iconEmpty);
+    // No engine exception means no row draws a glyph, so the gutter only has
+    // to fit a $-tier -- which slides to the start of the column once the
+    // glyph beside it is gone.
+    $convList.classList.toggle('workers-icon-mid',
+      !_iconEmpty && !!_workersHoist.engine && !_workersHoist.engineOthers);
     // "no tickets" earns its column only when some row in view has tickets.
     $convList.classList.toggle('workers-tickets-present', !!_workersHoist.anyTickets);
     // Re-assert the density classes every render: workersDenseTabActive() is
