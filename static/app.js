@@ -75216,7 +75216,17 @@
   // because it is called from several places (settings-modal open, Reset,
   // mergeSpawnDefaults after any save) that predate the inline layout.
   function refreshSpawnEngineValue() {
-    if (typeof renderSpawnDefaultsInline === 'function') renderSpawnDefaultsInline();
+    // Re-fetch before rendering so opening Settings always shows the current
+    // server-side spawn-defaults.json, not whatever was cached at page boot
+    // (or an earlier Settings open) -- a stale in-memory copy is exactly what
+    // let a manual spawn-defaults.json edit go unnoticed in the dialog.
+    if (typeof loadSpawnDefaults === 'function') {
+      loadSpawnDefaults().then(() => {
+        if (typeof renderSpawnDefaultsInline === 'function') renderSpawnDefaultsInline();
+      });
+    } else if (typeof renderSpawnDefaultsInline === 'function') {
+      renderSpawnDefaultsInline();
+    }
   }
 
   function refreshMonthlyClaudePlanInput() {
