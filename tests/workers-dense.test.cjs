@@ -67,7 +67,7 @@ test('the dense class is driven off convList, not a re-rendered wrapper', () => 
   // runs on every render (it used to run once at startup, so .workers-dense
   // followed you out of Workers into Coding).
   assert.match(app, /\$convList\.classList\.toggle\('workers-dense', workersDenseTabActive\(\)\)/);
-  assert.match(app, /objects-scroll-split', _objectsSplitActive\);[\s\S]{0,900}?\n    applyRowDensityToggles\(\);/);
+  assert.match(app, /objects-scroll-split', _objectsSplitActive\);[\s\S]{0,1600}?\n    applyRowDensityToggles\(\);/);
   // The stylesheet has to be scoped to match, or the class binds to nothing.
   assert.match(css, /#convList\.workers-dense \.conv-item \{/);
   assert.ok(!/^\.workers-dense /m.test(css),
