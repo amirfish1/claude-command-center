@@ -156,3 +156,20 @@ class TestQueueHeaderLayout(unittest.TestCase):
         # name and repo where it steals the obvious dropdown click target.
         self.assertIn('+ drainGlyph + needsHtml + openHtml + subsHtml', trigger)
         self.assertIn("$trig.innerHTML = liveDot + nameHtml + ghHtml + repoHtml + right;", trigger)
+
+    def test_mobile_trigger_wraps_trailing_controls_inside_its_width(self):
+        """A family filter must not make the narrow status rail overflow."""
+        app_css = (PROJECT_ROOT / "static" / "app.css").read_text(encoding="utf-8")
+
+        mobile_right = app_css[
+            app_css.index('#queuePanel.fq-mobile .fq-qp-trig-right {'):
+            app_css.index('/* WORKING NOW mobile:', app_css.index('#queuePanel.fq-mobile .fq-qp-trig-right {'))
+        ]
+
+        # On the narrow rail this cluster moves to a bounded second line. It
+        # may wrap internally for a needs-input count, but cannot extend past
+        # the trigger's right edge.
+        self.assertIn('flex: 1 1 100%', mobile_right)
+        self.assertIn('min-width: 0', mobile_right)
+        self.assertIn('flex-wrap: wrap', mobile_right)
+        self.assertIn('justify-content: flex-end', mobile_right)

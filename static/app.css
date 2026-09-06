@@ -14819,7 +14819,13 @@
   /* Mobile trigger second line: gh chip + repo + drain + counts, all on
      one row that truncates via min-width:0 + ellipsis. */
   #queuePanel.fq-mobile .fq-qp-trig-repo { flex: 1 1 auto; min-width: 0; }
-  #queuePanel.fq-mobile .fq-qp-trig-right { gap: 9px; flex: 0 0 auto; }
+  /* The full status cluster used to stay at max-content width, so adding a
+     family filter could push its chevron out of the narrow status rail.
+     Give it a bounded second row and allow its compact controls to wrap. */
+  #queuePanel.fq-mobile .fq-qp-trig-right {
+    gap: 6px; flex: 1 1 100%; min-width: 0; flex-wrap: wrap;
+    justify-content: flex-end;
+  }
   /* WORKING NOW mobile: collapsed to a header-only summary by default (the
      rows duplicate the ticket list right below and eat the whole screen —
      CCC-1019); tap the head to expand. */
