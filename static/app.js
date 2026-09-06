@@ -3151,6 +3151,14 @@
     try { return localStorage.getItem(WORKERS_DENSE_KEY) !== '0'; }
     catch (_) { return true; }
   }
+  // Dense only applies while the Workers tab is the one on screen, so the
+  // class can be driven straight off localStorage without waiting for a
+  // render pass to tell us which lane we're in.
+  function workersDenseTabActive() {
+    let tab = null;
+    try { tab = localStorage.getItem('ccc-sidebar-tab'); } catch (_) {}
+    return tab === 'workers' && workersDenseOn();
+  }
   // Row spacing: independent 3-step control (cozy/roomy/airy) for
   // padding/line-height between rows. Independent of both compact-rows
   // (which just shows/hides the outcome card) and the font/color row-style
@@ -3164,6 +3172,10 @@
   function applyRowDensityToggles() {
     if (!$convList) return;
     $convList.classList.toggle('compact-rows', compactRowsOn());
+    // Dense rides on $convList for the same reason compact-rows does: the
+    // class has to survive every re-render path, and the section wrapper it
+    // used to live on is rebuilt by paths that don't know about the flag.
+    $convList.classList.toggle('workers-dense', workersDenseTabActive());
     $convList.setAttribute('data-rows-spacing', rowsSpacing());
   }
   // session_id -> attention item, rebuilt every loadAttentionList() pass. Lets
@@ -36606,7 +36618,7 @@
           + '<span class="conv-archived-tools-right">' + _arcWindowToggle + _arcEngineToggle + _arcGroupingToggle + _arcWrapToggle + _arcDenseToggle + _arcDetailsToggle + '</span>'
           + '</div>';
       _archivedHtml =
-        '<div class="conv-archived-section' + (_allTabView === 'workers' && workersDenseOn() ? ' workers-dense' : '') + '" data-role="archived-section">'
+        '<div class="conv-archived-section" data-role="archived-section">'
         + _arcTools
         + _allHermesTabBarHtml
         + '<div class="conv-archived-list">' + _arcRows + '</div>'
@@ -37507,6 +37519,7 @@
         ev.stopPropagation();
         const next = !workersDenseOn();
         try { localStorage.setItem(WORKERS_DENSE_KEY, next ? '1' : '0'); } catch (_) {}
+        $convList.classList.toggle('workers-dense', next);
         renderArchiveList(document.getElementById('convSearch')?.value || '');
       });
     }
