@@ -7225,9 +7225,12 @@ def _model_catalog_key(model):
 # consults. Motivation (2026-09-05): a 2.5x-priced model was the default in
 # three places at once (the engine CLI's own config, CCC's spawn defaults,
 # and a queue's pinned model) and burned a week's quota in half an hour.
-# Blocking here is the one choke point: pickers hide the model, explicit
-# requests are rejected with a clear error, and inherited defaults fall back
-# to the first allowed curated model instead of failing the spawn.
+# Blocked models still appear in pickers (tagged "policy_blocked" in the
+# catalog) so a deliberate pick is still possible -- but an explicit spawn or
+# queue-config save is rejected unless the request carries
+# confirm_blocked_model: true (2026-09-06). Inherited defaults never do this
+# silently: they fall back to the first allowed curated model instead of
+# resolving to a blocked one, confirmed or not.
 #
 #   ~/.claude/command-center/model-policy.json
 #   {"blocked_models": ["gpt-6-astra"]}
@@ -7306,9 +7309,11 @@ def _model_catalog_known_engines(model):
 
 
 def _model_catalog_allows_model(engine, model):
+    """Engine-ownership check only. A policy-blocked model still passes this
+    -- it stays listed/selectable (tagged policy_blocked, see
+    _model_catalog_add) so a deliberate, confirmed pick is possible. Use
+    _model_policy_blocks separately to gate an actual spawn/save."""
     engine = _normalize_orchestration_spawn_engine(engine)
-    if _model_policy_blocks(model):
-        return False
     if engine == "codex" and _model_catalog_key(model) not in _CODEX_PICKER_MODEL_IDS:
         return False
     known_engines = _model_catalog_known_engines(model)
@@ -7364,6 +7369,9 @@ def _model_catalog_add(catalog, engine, model, *, label=None, source="observed",
         entry["label"] = _clean_spawn_default_model(label)
     if source and source not in entry["sources"]:
         entry["sources"].append(source)
+    # Live, not merge-once: reflects the policy file's current state so a
+    # runtime edit (no restart) shows up next catalog read.
+    entry["policy_blocked"] = _model_policy_blocks(model)
     for key, value in attrs.items():
         if value in (None, ""):
             continue
@@ -8001,7 +8009,11 @@ def _build_engine_model_catalog(force_refresh=False):
         for engine, model in (defaults.get("models") or {}).items():
             _model_catalog_add(catalog, engine, model, source="spawn-default")
             norm = _normalize_orchestration_spawn_engine(engine)
-            if norm in catalog and model and _model_catalog_allows_model(norm, model):
+            if (
+                norm in catalog and model
+                and _model_catalog_allows_model(norm, model)
+                and not _model_policy_blocks(model)
+            ):
                 catalog[norm]["default"] = _clean_spawn_default_model(model)
     except Exception:
         pass
@@ -8243,7 +8255,7 @@ def _build_engine_model_catalog(force_refresh=False):
     return payload
 
 
-def _validate_codex_model(model, *, require_available=False):
+def _validate_codex_model(model, *, require_available=False, confirm_blocked=False):
     """Resolve known Codex aliases and enforce CCC's picker allowlist."""
     if not model:
         return model, None
@@ -8251,9 +8263,10 @@ def _validate_codex_model(model, *, require_available=False):
     alias = _CODEX_MODEL_ALIASES.get(key)
     if alias:
         model = alias
-    policy_error = _model_policy_error(model)
-    if policy_error:
-        return model, policy_error
+    if not confirm_blocked:
+        policy_error = _model_policy_error(model)
+        if policy_error:
+            return model, policy_error
     if not _model_catalog_allows_model("codex", model):
         return model, (
             f"unsupported codex model: {model!r}. Supported codex models: "
@@ -26547,6 +26560,10 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                     _ORCHESTRATION_SPAWN_ENGINES
                 ),
                 "codex_context_1m": os.environ.get("CCC_CODEX_CONTEXT_1M", "1").lower() not in ("0", "false", "no"),
+                # Client-side gate for the spawn/queue-config confirm prompt --
+                # let the UI warn before it sends confirm_blocked_model, rather
+                # than round-tripping a 400 first.
+                "blocked_models": sorted(_model_policy_blocked_models()),
             })
         elif path == "/api/objects":
             # Durable Flow-object organization (GOAL-3): object defs +
@@ -29220,18 +29237,23 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                     # deliberate backlog. Editing an existing queue (matched is
                     # not None) still respects whatever the form submitted.
                     normalized["config"]["auto_drain"] = False
+                # Reject a blocked model before any setter runs (both branches
+                # below), so a refused save leaves no half-written queue entry
+                # behind. confirm_blocked_model lets a deliberate pick through
+                # (2026-09-06) -- the model still shows in the picker either way.
+                confirm_blocked_model = bool(payload.get("confirm_blocked_model"))
+                queue_model = normalized["config"].get("model")
+                policy_error = None if confirm_blocked_model else _model_policy_error(queue_model)
+                if policy_error:
+                    raise ValueError(policy_error)
+                if confirm_blocked_model and _model_policy_blocks(queue_model):
+                    _log_activity("queue", "CONFIRM_BLOCKED", f"queue={queue_name} model={queue_model}")
                 if _WT_CONFIG_AVAILABLE and _wt_config is not None and not case_mismatch:
                     # WT owns queue-config.json — write through the same setters
                     # `wt config -q ...` uses. Direct write remains below for
                     # installs without the watchtower package, and for renaming
                     # a legacy case-mismatched key (wt has no delete/rename).
                     conf = normalized["config"]
-                    # Reject a blocked model before any setter runs, so a
-                    # refused save leaves no half-written queue entry behind
-                    # (WT's set_model raises too, but only after ensure_entry).
-                    policy_error = _model_policy_error(conf.get("model"))
-                    if policy_error:
-                        raise ValueError(policy_error)
                     _wt_config.ensure_entry(queue_name)
                     _wt_config.set_backend(queue_name, conf.get("backend", "file"))
                     _wt_config.set_github_repo(queue_name, conf.get("github_repo", ""))
@@ -29241,7 +29263,17 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                     # pops the key, CCC-1038) — re-injecting "claude" here made
                     # a queue saved as CCC default come back as claude (CCC-1044).
                     _wt_config.set_engine(queue_name, conf.get("engine") or "")
-                    _wt_config.set_model(queue_name, conf.get("model", ""))
+                    # Older WT installs predate confirm_blocked (2026-09-06);
+                    # fall back to the un-confirmed call rather than hard-fail
+                    # on TypeError (the pre-existing policy_error check above
+                    # already rejected an un-confirmed blocked model, so a
+                    # confirmed one just gets policy-enforced by the old WT).
+                    try:
+                        _wt_config.set_model(
+                            queue_name, conf.get("model", ""), confirm_blocked=confirm_blocked_model
+                        )
+                    except TypeError:
+                        _wt_config.set_model(queue_name, conf.get("model", ""))
                     _wt_config.set_effort(queue_name, conf.get("effort", ""))
                     _wt_config.set_desired_workers(queue_name, conf.get("desired_workers", 1))
                     _wt_config.set_auto_drain(queue_name, conf.get("auto_drain", False))
@@ -30245,9 +30277,14 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
             auto_compact_k = _load_spawn_defaults().get("auto_compact_k", 250)
             if "auto_compact_k" in payload:
                 auto_compact_k = _validate_auto_compact_k(payload.get("auto_compact_k"))
-            model_error = _model_policy_error(model)
+            confirm_blocked_model = bool(payload.get("confirm_blocked_model"))
+            model_error = None if confirm_blocked_model else _model_policy_error(model)
             if engine == "codex" and not model_error:
-                model, model_error = _validate_codex_model(model, require_available=True)
+                model, model_error = _validate_codex_model(
+                    model, require_available=True, confirm_blocked=confirm_blocked_model
+                )
+            if confirm_blocked_model and _model_policy_blocks(model):
+                _log_activity("spawn", "CONFIRM_BLOCKED", f"engine={engine} model={model}")
             report_to, report_to_error = _normalize_return_address(payload)
             parent_session_id, parent_session_error = _normalize_spawn_parent_session_id(
                 payload,
@@ -30687,11 +30724,15 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                             else:
                                 cwd_resolved = candidate
             model = payload.get("model")
+            confirm_blocked_model = bool(payload.get("confirm_blocked_model"))
             reasoning_effort = _spawn_request_reasoning_effort(payload, "codex")
             model, model_error = _validate_codex_model(
                 _spawn_model_for_engine("codex", model),
                 require_available=True,
+                confirm_blocked=confirm_blocked_model,
             )
+            if confirm_blocked_model and _model_policy_blocks(model):
+                _log_activity("spawn", "CONFIRM_BLOCKED", f"engine=codex model={model}")
             if not prompt:
                 self.send_json({"ok": False, "error": "missing prompt"}, 400)
             elif cwd_error:
