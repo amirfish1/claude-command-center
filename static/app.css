@@ -28315,6 +28315,22 @@ body.mobile-ask-open .mobile-bottom-nav { z-index: 950; }
    its glyph and its meta cell all sit 14px right of every other row's, and the
    column stops being a column. The table states the nesting with a marker
    inside the title cell instead, which costs no alignment. */
+/* The queue-progress chip prints the ticket ref that the chips column already
+   carries one cell away, plus a count the Queues tab states better. Two chips
+   for one ticket is the repetition this view exists to remove. */
+#convList.workers-dense .conv-item .conv-ux-fix-progress { display: none; }
+/* A WatchTower worker that has spawned but not yet opened its engine session.
+   Same row shape as every other -- the glyph, title, id and age land in the
+   normal columns -- so it reads as a worker, not as an alert. */
+.conv-item.conv-wt-pending { cursor: pointer; }
+.conv-wt-pending-note { color: var(--text-muted); font-style: italic; opacity: 0.75; }
+.conv-wt-pending .conv-title { color: var(--text-secondary); }
+.conv-wt-pending-id {
+  font-size: 10.5px; line-height: 15px; padding: 0 5px;
+  border: 1px dashed var(--border); border-radius: 4px;
+  color: var(--text-muted); white-space: nowrap; flex: 0 0 auto;
+}
+.conv-workers-starting { opacity: 0.75; }
 #convList.workers-dense .conv-item.is-current-child-row { --conv-icon-left: 10px; }
 #convList.workers-dense .conv-item.is-current-child-row .conv-title::before {
   content: '\21B3';

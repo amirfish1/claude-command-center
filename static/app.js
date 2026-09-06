@@ -36849,8 +36849,58 @@
       // The strip that replaces the hoisted columns. It names what was folded
       // away so the information is still on screen, just once instead of N
       // times.
+      // A WatchTower worker is a PROCESS first and an engine session second.
+      // `wt` spawns it and the Queues tab's WORKING NOW strip sees it within a
+      // second, but this lane is built from transcripts -- so for the first
+      // 30-60s of a worker's life, the one tab that exists to show workers is
+      // the one place that cannot. Synthesise a row from the worker record for
+      // exactly that window. It is matched on session_id, so the real row
+      // takes over silently the moment its session lands; no row is ever shown
+      // twice and none is filtered.
+      let _wtPending = [];
+      if (_allTabView === 'workers') {
+        const _knownSids = new Set();
+        _allTabConvs.forEach(c => {
+          const sid = String((c && (c.id || c.session_id)) || '').trim();
+          if (sid) _knownSids.add(sid);
+        });
+        _wtPending = (((_uxqHealthCache && _uxqHealthCache.wt_workers) || [])).filter(w => {
+          if (!w || w.alive === false) return false;
+          const sid = String(w.session_id || '').trim();
+          return !sid || !_knownSids.has(sid);
+        });
+        // The health poll only runs for the Queues panel, so on a cold sidebar
+        // this lane would show nothing until the user opened Queues once.
+        _wtWarmHealthForWorkersLane();
+      }
+      let _wtPendingHtml = _wtPending.map(w => {
+        const queue = String(w.queue || '').trim();
+        const wid = String(w.worker_id || '').trim();
+        const idleS = Number(w.idle_seconds);
+        const icon = sessionEngineIconHtml({
+          engine: w.engine, source: w.engine, model: w.model,
+          state: (Number.isFinite(idleS) && idleS < 60) ? 'working' : 'idle',
+        });
+        const startedMs = Date.parse(w.started_at || '');
+        const age = Number.isFinite(startedMs) ? relativeTime(startedMs / 1000) : '';
+        return '<div class="conv-item conv-wt-pending" data-role="wt-pending-worker"'
+          + ' data-wt-queue="' + escapeAttr(queue) + '"'
+          + ' title="' + escapeAttr((wid || 'This worker') + ' is running on the '
+              + (queue || 'WatchTower') + ' queue but has not opened its engine session yet. '
+              + 'Click to open the queue.') + '">'
+          + icon
+          + '<div class="conv-main-row"><div class="conv-title-row">'
+          +   '<span class="conv-title">' + escapeHtml((queue || 'WatchTower') + ' worker')
+          +     ' <span class="conv-wt-pending-note">starting\u2026</span></span>'
+          + '</div></div>'
+          + '<div class="conv-meta-col"><span class="conv-wt-pending-id">'
+          +   escapeHtml(wid || 'worker') + '</span></div>'
+          + '<span class="conv-row-end"><span class="conv-rel" data-role="rel" title="Started">'
+          +   escapeHtml(age) + '</span></span>'
+          + '</div>';
+      }).join('');
       let _workersUniformHtml = '';
-      if (_workersHoist.engine || _workersHoist.tier || _workersHoist.working) {
+      if (_workersHoist.engine || _workersHoist.tier || _workersHoist.working || _wtPending.length) {
         const parts = [];
         if (_workersHoist.engine) parts.push('<b>' + escapeHtml(_workersHoist.engineLabel || _workersHoist.engine) + '</b>');
         // The banner states the whole cost spread, not just the tier it
@@ -36871,12 +36921,16 @@
           ? '<span class="conv-workers-live"><span class="conv-workers-live-dot"></span><b>'
             + _workersHoist.working + '</b> working now</span>'
           : '<span class="conv-workers-live is-idle">none working now</span>';
+        const starting = _wtPending.length
+          ? '<span class="conv-workers-uniform-sep">&middot;</span><span class="conv-workers-starting"><b>'
+            + _wtPending.length + '</b> starting</span>'
+          : '';
         const shared = parts.length
           ? 'all <b>' + _workersHoist.count + '</b> workers: ' + parts.join(' &middot; ')
           : '<b>' + _workersHoist.count + '</b> workers';
         _workersUniformHtml = '<div class="conv-workers-uniform" data-role="workers-uniform"'
           + ' title="' + escapeAttr('Working now counts sessions mid-turn, the same signal the Queues tab shows. Engine and cost are stated once here and dropped from the rows that match; any session that differs keeps its own glyph.') + '">'
-          + live + '<span class="conv-workers-uniform-sep">&middot;</span>' + shared
+          + live + starting + '<span class="conv-workers-uniform-sep">&middot;</span>' + shared
           + (parts.length ? '<span class="conv-workers-uniform-note">' + note + '</span>' : '')
           + '</div>';
       }
@@ -36889,6 +36943,7 @@
         '<div class="conv-archived-section" data-role="archived-section">'
         + _arcTools
         + _workersUniformHtml
+        + _wtPendingHtml
         + _allHermesTabBarHtml
         + '<div class="conv-archived-list">' + _arcRows + '</div>'
         + _trashHtmlForAllTabView
@@ -37818,6 +37873,16 @@
         renderArchiveList(document.getElementById('convSearch')?.value || '');
       });
     }
+    // A pending worker has no session to open, so the row's normal click path
+    // has nothing to select. Send it where the worker actually is instead.
+    $convList.querySelectorAll('[data-role="wt-pending-worker"]').forEach(el => {
+      el.addEventListener('click', (ev) => {
+        ev.stopPropagation();
+        if (typeof _activateSidebarTabFromMobileNav === 'function') {
+          _activateSidebarTabFromMobileNav('queues');
+        }
+      });
+    });
     const $currentSessionsModeToggle = $convList.querySelector('[data-role="current-sessions-mode-toggle"]');
     if ($currentSessionsModeToggle) {
       $currentSessionsModeToggle.addEventListener('click', (ev) => {
@@ -43057,6 +43122,26 @@
   // nothing happened" until the next 15s TTL window.
   let _uxqHealthReqSeq = 0;
   let _uxqHealthAppliedSeq = 0;
+  // The Workers lane needs wt_workers, which only the Queues panel polls for.
+  // Warm it here and repaint only when the pending set actually changes, so a
+  // steady state costs one fetch per 15s and zero re-renders.
+  let _wtWarmInFlight = false;
+  let _wtWarmSig = null;
+  function _wtWarmHealthForWorkersLane() {
+    if (_wtWarmInFlight) return;
+    if (Date.now() - (_uxqHealthCache.ts || 0) < 15000) return;
+    _wtWarmInFlight = true;
+    _fetchUxqHealth(false).then(() => {
+      const sig = JSON.stringify((((_uxqHealthCache && _uxqHealthCache.wt_workers) || []))
+        .map(w => [String((w && w.worker_id) || ''), String((w && w.session_id) || ''), w && w.alive !== false]));
+      const changed = sig !== _wtWarmSig;
+      _wtWarmSig = sig;
+      if (changed && typeof renderArchiveList === 'function') {
+        const $s = document.getElementById('convSearch');
+        renderArchiveList(($s && $s.value) || '', { force: true });
+      }
+    }).catch(() => {}).then(() => { _wtWarmInFlight = false; });
+  }
   async function _fetchUxqHealth(allowStale, force) {
     if (allowStale && _uxqHealthCache.ts) return _uxqHealthCache;
     if (!force && Date.now() - _uxqHealthCache.ts < 15000) return _uxqHealthCache;
