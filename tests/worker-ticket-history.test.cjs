@@ -76,6 +76,23 @@ test('worker names stay stable across tickets and preserve explicit names', () =
   assert.equal(ctx._uxFixesWorkerDisplayTitle(row, 'Custom terminal name'), 'Custom terminal name');
 });
 
+test('a row without worker identity drops the ticket prefix its chips already carry', () => {
+  const ctx = harness();
+  ctx._setUxFixesQueueMeta([ticket(1)]);
+  // The Workers lane claims rows on broader evidence than the identity rule,
+  // so these reach the tab with "EXAMPLE#1:" printed in the title AND as an
+  // EXAMPLE-1 chip below. Keep the prose, drop the duplicated ref.
+  const chipped = { session_id: 'session-one', display_name: '🧵 EXAMPLE#1: Old ticket' };
+  assert.equal(ctx._uxFixesWorkerDisplayTitle(chipped, chipped.display_name), 'Old ticket');
+
+  // With no chip to carry it, the title is the only place the ref appears.
+  const noChips = { session_id: 'session-nine', display_name: '🧵 EXAMPLE#1: Old ticket' };
+  assert.equal(ctx._uxFixesWorkerDisplayTitle(noChips, noChips.display_name), '🧵 EXAMPLE#1: Old ticket');
+
+  // A real worker still gets the stable identity name, prose and all.
+  assert.match(ctx._uxFixesWorkerDisplayTitle(row, row.display_name), /worker/);
+});
+
 test('changes to attributed ticket history invalidate the sidebar content signature', () => {
   const ctx = harness();
   const initial = ctx._setUxFixesQueueMeta([ticket(1), ticket(2)])._sig;

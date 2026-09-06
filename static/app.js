@@ -3139,6 +3139,18 @@
     try { return localStorage.getItem('ccc-wrap-titles') === '1'; }
     catch (_) { return false; }
   }
+  // Workers-tab density. The Workers list is the one view where nearly every
+  // row repeats its neighbours: same engine, same cost tier, a ticket ref that
+  // is printed once in the title and again as a chip, and recurring queue
+  // drains spawned a dozen times under slightly different wording. Dense mode
+  // collapses each session to one line and folds those repeats into expandable
+  // rows -- nothing is filtered, so the tab stays comprehensive. Scoped to
+  // Workers; Coding/Other keep the card list. On by default.
+  const WORKERS_DENSE_KEY = 'ccc-workers-dense';
+  function workersDenseOn() {
+    try { return localStorage.getItem(WORKERS_DENSE_KEY) !== '0'; }
+    catch (_) { return true; }
+  }
   // Row spacing: independent 3-step control (cozy/roomy/airy) for
   // padding/line-height between rows. Independent of both compact-rows
   // (which just shows/hides the outcome card) and the font/color row-style
@@ -3852,6 +3864,52 @@
   }
   function _continuationRowId(c) {
     return String((c && (c.session_id || c.id)) || '').trim();
+  }
+  // CCC writes its own preamble into a continued session's first prompt
+  // ("You are continuing a task from an earlier Codex session, which ran
+  // long. Origin session id: ..."). `_strip_f2_retrieval_prompt` removes it on
+  // the server paths that own titling, but auto-resume rows can still reach the
+  // sidebar with the boilerplate as their name — so the row advertises the
+  // handoff rather than the work. This is the client-side backstop.
+  const _CONTINUATION_BOILERPLATE_RE =
+    /^\s*(?:[⤴↱]︎?️?\s*)*(?:Continue\s+)?You are continuing a task from an earlier\b/i;
+  function isContinuationBoilerplateTitle(title) {
+    return _CONTINUATION_BOILERPLATE_RE.test(String(title || ''));
+  }
+  // The sidebar's title-priority chain, lifted out of _renderRow so a
+  // continuation leg can resolve its parent's title through the exact same
+  // rules instead of a second, drift-prone copy of them.
+  // Priority: user rename or CCC spawn name (display_name) > Claude Code's
+  // ai_title > raw first user prompt > "(untitled)". The prefix glyphs the
+  // caller adds say which slot won: ✏️ user-chosen, ✨ ai-title, none = raw.
+  function rowRawTitle(c) {
+    if (!c) return { rawTitle: '(untitled)', titleSource: '' };
+    const cleanFirst = c.first_message ? cleanIssuePrompt(c.first_message) : '';
+    let titleSource = '';
+    let rawTitle;
+    if ((c.name_overridden || c.spawn_named) && c.display_name) {
+      rawTitle = c.display_name;
+      titleSource = c.name_overridden ? 'user' : 'spawn';
+    } else if (c.display_name && c.display_name !== c.ai_title) {
+      // Server-side display_name diverged from ai_title — typically a user
+      // /rename in the terminal (Claude Code writes that as a custom-title
+      // event, which the server's display_name chain picks up ahead of
+      // ai_title). Prefer it so terminal renames actually surface here.
+      rawTitle = c.display_name;
+    } else if (c.ai_title) {
+      rawTitle = c.ai_title;
+      titleSource = 'ai';
+    } else if (c.display_name) {
+      rawTitle = c.display_name;
+    } else if (cleanFirst) {
+      rawTitle = firstSentenceOf(cleanFirst, 60);
+    } else {
+      rawTitle = '(untitled)';
+    }
+    if (c.backlog_type === 'github' || c.issue_number || c.linked_issue) {
+      rawTitle = stripGhIssueProjectTag(rawTitle);
+    }
+    return { rawTitle: _uxFixesWorkerDisplayTitle(c, rawTitle), titleSource };
   }
   // One row per continuation chain. A session that was continued into a
   // successor present in the same list folds into that successor (its
@@ -32803,34 +32861,9 @@
       // Prefix glyphs let the user tell at-a-glance which slot won:
       //   ✏️  = user-chosen (rename), ✨ = Claude's ai-title, none = raw first
       //   message, italic "(untitled)" = nothing on file.
-      let titleSource = '';
-      let rawTitle;
-      if ((c.name_overridden || c.spawn_named) && c.display_name) {
-        rawTitle = c.display_name;
-        titleSource = c.name_overridden ? 'user' : 'spawn';
-      } else if (c.display_name && c.display_name !== c.ai_title) {
-        // Server-side display_name diverged from ai_title — typically a
-        // user /rename in the terminal (Claude Code writes that as a
-        // custom-title event, which the server's display_name chain
-        // picks up ahead of ai_title). Prefer it over the auto ai_title
-        // so renames from the terminal actually surface here. Without
-        // this we'd fall through to ai_title and the rename would be
-        // silently ignored.
-        rawTitle = c.display_name;
-      } else if (c.ai_title) {
-        rawTitle = c.ai_title;
-        titleSource = 'ai';
-      } else if (c.display_name) {
-        rawTitle = c.display_name;
-      } else if (cleanFirst) {
-        rawTitle = firstSentenceOf(cleanFirst, 60);
-      } else {
-        rawTitle = '(untitled)';
-      }
-      if (c.backlog_type === 'github' || c.issue_number || c.linked_issue) {
-        rawTitle = stripGhIssueProjectTag(rawTitle);
-      }
-      rawTitle = _uxFixesWorkerDisplayTitle(c, rawTitle);
+      const _rowTitleParts = rowRawTitle(c);
+      const titleSource = _rowTitleParts.titleSource;
+      const rawTitle = _rowTitleParts.rawTitle;
       let title = sidebarRowDisplayTitle(rawTitle);
       // Continuation rows (F2 "Continue in a new session" / auto-resume):
       // the ⤴ badge says "this carries on an earlier session", so legacy
@@ -32839,6 +32872,19 @@
       const _continuationParentId = continuationParentId(c);
       if (_continuationParentId) {
         title = title.replace(/^Continue\s+/, '').replace(/^⤴︎\s*/, '');
+        // When CCC's own auto-resume preamble survived auto-titling, the row is
+        // named after the handoff instead of the work. The leg's honest name is
+        // whatever its parent was doing, so borrow the parent's title (resolved
+        // through the same chain) and let the ⤴ badge carry the "continues"
+        // meaning. If the parent is boilerplate too, leave the title alone
+        // rather than walk the chain — one hop is enough in practice.
+        if (isContinuationBoilerplateTitle(title)) {
+          const _parentRow = _continuationRowForSid(_continuationParentId);
+          const _parentTitle = _parentRow
+            ? sidebarRowDisplayTitle(rowRawTitle(_parentRow).rawTitle)
+            : '';
+          if (_parentTitle && !isContinuationBoilerplateTitle(_parentTitle)) title = _parentTitle;
+        }
       }
       // AI-generated titles (Claude/Codex/Antigravity) show with no glyph now
       // (the ✨ prefix was removed, CCC-962). User renames also get NO glyph;
@@ -33880,21 +33926,37 @@
       }
       return Math.abs(h).toString(36);
     };
-    const _repeatGroupRawTitle = (c) => {
-      if (!c) return '';
-      const cleanFirst = c.first_message ? cleanIssuePrompt(c.first_message) : '';
-      if ((c.name_overridden || c.spawn_named) && c.display_name) return c.display_name;
-      if (c.display_name && c.display_name !== c.ai_title) return c.display_name;
-      if (c.ai_title) return c.ai_title;
-      if (c.display_name) return c.display_name;
-      if (cleanFirst) return firstSentenceOf(cleanFirst, 60);
-      return '';
-    };
+    // Same chain the rows themselves title by, so a group header can never
+    // disagree with the rows it collapses.
+    const _repeatGroupRawTitle = (c) => (c ? rowRawTitle(c).rawTitle : '');
     const _repeatGroupTitle = (c) => sidebarRowDisplayTitle(_repeatGroupRawTitle(c) || '(untitled)');
+    // The key has to be self-consistent: the previous rule keyed titles of 48
+    // chars or less on their full text but longer ones on a 32-char prefix, so
+    // a title could never group with its own longer variant --
+    // "Drain the CCC WatchTower queue" and "Drain the CCC WatchTower queue and
+    // keep it empty. Work in the git repo at ..." landed on different keys even
+    // though one is a prefix of the other. That is exactly the shape queue
+    // workers come in, which is why the Workers tab showed the same recurring
+    // drain as four separate rows.
+    //
+    // Key on a fixed number of leading content words instead, with list glyphs
+    // and filler words dropped so "Drain CCC queue" and "Drain the CCC queue"
+    // agree. Four words is about the same reach as the old 32-char prefix, and
+    // engine/model/folder still qualify the key. Titles that differ only after
+    // the fourth content word still merge; that is the intended trade, and the
+    // group is expandable so no session is hidden.
+    const _REPEAT_KEY_FILLER = new Set([
+      'the', 'a', 'an', 'and', 'of', 'for', 'to', 'in', 'on', 'at', 'it', 'its', 'this', 'that',
+    ]);
+    const _REPEAT_KEY_WORDS = 4;
     const _repeatGroupTitleKey = (title) => {
-      const normalized = String(title || '').trim().toLowerCase().replace(/\s+/g, ' ');
-      if (normalized.length > 48) return normalized.slice(0, 32);
-      return normalized;
+      const words = String(title || '')
+        .toLowerCase()
+        .replace(/[^\p{L}\p{N}\s]+/gu, ' ')
+        .split(/\s+/)
+        .filter(w => w && !_REPEAT_KEY_FILLER.has(w));
+      if (!words.length) return '';
+      return words.slice(0, _REPEAT_KEY_WORDS).join(' ');
     };
     const _repeatGroupKey = (c) => {
       const title = _repeatGroupTitleKey(_repeatGroupTitle(c));
@@ -36512,12 +36574,21 @@
       // it inline with the others (all right-justified together) made the
       // window/engine buttons visibly jump left/right when switching
       // between "by time" and "by project".
+      // Dense toggle is Workers-only: it is the tab where row-to-row repetition
+      // (engine glyph, cost tier, ticket ref echoed in both title and chip)
+      // costs the most vertical space. Other lanes have no use for it.
+      const _arcDenseToggle = _allTabView === 'workers'
+        ? '<span class="conv-grouping-toggle conv-dense-toggle" data-role="workers-dense-toggle"'
+            + ' title="One line per worker: folds continuation legs and repeated spawns into expandable rows">'
+            + '<span class="grouping-opt' + (workersDenseOn() ? ' is-active' : '') + '" data-workers-dense-toggle="1">Dense</span>'
+          + '</span>'
+        : '';
       const _arcTools = '<div class="conv-archived-tools" data-role="archived-tools">'
           + '<span class="conv-archived-tools-left">' + _arcExpandAllToggle + '</span>'
-          + '<span class="conv-archived-tools-right">' + _arcWindowToggle + _arcEngineToggle + _arcGroupingToggle + _arcWrapToggle + _arcDetailsToggle + '</span>'
+          + '<span class="conv-archived-tools-right">' + _arcWindowToggle + _arcEngineToggle + _arcGroupingToggle + _arcWrapToggle + _arcDenseToggle + _arcDetailsToggle + '</span>'
           + '</div>';
       _archivedHtml =
-        '<div class="conv-archived-section" data-role="archived-section">'
+        '<div class="conv-archived-section' + (_allTabView === 'workers' && workersDenseOn() ? ' workers-dense' : '') + '" data-role="archived-section">'
         + _arcTools
         + _allHermesTabBarHtml
         + '<div class="conv-archived-list">' + _arcRows + '</div>'
@@ -37407,6 +37478,17 @@
         const compactNext = !compactRowsOn();
         try { localStorage.setItem('ccc-compact-rows', compactNext ? '1' : '0'); } catch (_) {}
         $convList.classList.toggle('compact-rows', compactNext);
+        renderArchiveList(document.getElementById('convSearch')?.value || '');
+      });
+    }
+    // Dense re-renders rather than toggling a class: grouping and continuation
+    // folding happen while building the row list, so the DOM has to be rebuilt.
+    const $workersDenseToggle = $convList.querySelector('[data-role="workers-dense-toggle"]');
+    if ($workersDenseToggle) {
+      $workersDenseToggle.addEventListener('click', (ev) => {
+        ev.stopPropagation();
+        const next = !workersDenseOn();
+        try { localStorage.setItem(WORKERS_DENSE_KEY, next ? '1' : '0'); } catch (_) {}
         renderArchiveList(document.getElementById('convSearch')?.value || '');
       });
     }
@@ -63674,9 +63756,21 @@
   function _uxFixesWorkerDisplayTitle(c, rawTitle) {
     // Explicit user names and custom terminal names remain authoritative.
     if (!c || c.name_overridden || c.continued_from_session_id) return rawTitle;
-    if (!c._worker_id && !c.is_watchtower_worker) return rawTitle;
-    const generated = String(rawTitle || '').match(/^🧵\s*([A-Z][A-Z0-9_ -]*)#\d+(?::.*)?$/u);
+    const generated = String(rawTitle || '').match(/^🧵\s*([A-Z][A-Z0-9_ -]*)#\d+(?::\s*(.*))?$/u);
     if (!generated) return rawTitle;
+    if (!c._worker_id && !c.is_watchtower_worker) {
+      // The Workers lane claims rows on broader evidence than this function
+      // does (a known worker session id, or a worker-shaped title), so a row
+      // can land on the Workers tab without qualifying for the stable
+      // "<QUEUE> worker · <id>" identity below. Those rows still print their
+      // ticket twice — "OPS#996:" in the title and an OPS-996 chip underneath.
+      // Drop the prefix and keep the prose, which is the half that says what
+      // the session is doing. Only when a chip is actually there to carry the
+      // ref; otherwise the title would be the only place the ticket appears.
+      const prose = String(generated[2] || '').trim();
+      if (prose && _uxFixesWorkerTicketsForRow(c).length) return prose;
+      return rawTitle;
+    }
     const identity = String(c._worker_id || c.session_id || c.id || '').split('-').pop().slice(0, 8);
     return '🧵 ' + generated[1].trim() + ' worker' + (identity ? ' · ' + identity : '');
   }
@@ -63696,8 +63790,15 @@
       + escapeHtml(t.ref) + (recent ? '' : ' <span>' + escapeHtml(statusLabel(t)) + '</span>') + '</button>';
     return '<details class="conv-worker-history" data-worker-history-sid="' + escapeAttr(sid) + '"'
       + (_uxFixesHistoryExpanded.has(sid) ? ' open' : '') + '>'
-      + '<summary><span>' + tickets.length + ' recorded ticket' + (tickets.length === 1 ? '' : 's') + '</span>'
-      + '<span class="conv-worker-history-recent">' + tickets.slice(0, 3).map(t => ticketButton(t, true)).join('') + '</span></summary>'
+      // The "+N" chip carries the same count the prose label does, in a tenth
+      // of the width. Dense mode hides the label and keeps the chips, so the
+      // total stays visible either way.
+      + '<summary><span class="conv-worker-history-count">' + tickets.length + ' recorded ticket' + (tickets.length === 1 ? '' : 's') + '</span>'
+      + '<span class="conv-worker-history-recent">' + tickets.slice(0, 3).map(t => ticketButton(t, true)).join('')
+      + (tickets.length > 3
+          ? '<span class="conv-worker-history-more" title="' + escapeAttr((tickets.length - 3) + ' more recorded ticket' + (tickets.length - 3 === 1 ? '' : 's')) + '">+' + (tickets.length - 3) + '</span>'
+          : '')
+      + '</span></summary>'
       + '<div class="conv-worker-history-scope">Tickets attributed to this session by recorded claims, progress, and resolutions.</div>'
       + '<ul class="conv-worker-history-list">' + tickets.map(t => '<li>' + ticketButton(t, false)
         + '<span class="conv-worker-history-title">' + escapeHtml(t.title || t.note || t.summary || '') + '</span></li>').join('') + '</ul></details>';
