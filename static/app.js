@@ -63750,9 +63750,21 @@
   function _uxFixesWorkerDisplayTitle(c, rawTitle) {
     // Explicit user names and custom terminal names remain authoritative.
     if (!c || c.name_overridden || c.continued_from_session_id) return rawTitle;
-    if (!c._worker_id && !c.is_watchtower_worker) return rawTitle;
-    const generated = String(rawTitle || '').match(/^🧵\s*([A-Z][A-Z0-9_ -]*)#\d+(?::.*)?$/u);
+    const generated = String(rawTitle || '').match(/^🧵\s*([A-Z][A-Z0-9_ -]*)#\d+(?::\s*(.*))?$/u);
     if (!generated) return rawTitle;
+    if (!c._worker_id && !c.is_watchtower_worker) {
+      // The Workers lane claims rows on broader evidence than this function
+      // does (a known worker session id, or a worker-shaped title), so a row
+      // can land on the Workers tab without qualifying for the stable
+      // "<QUEUE> worker · <id>" identity below. Those rows still print their
+      // ticket twice — "OPS#996:" in the title and an OPS-996 chip underneath.
+      // Drop the prefix and keep the prose, which is the half that says what
+      // the session is doing. Only when a chip is actually there to carry the
+      // ref; otherwise the title would be the only place the ticket appears.
+      const prose = String(generated[2] || '').trim();
+      if (prose && _uxFixesWorkerTicketsForRow(c).length) return prose;
+      return rawTitle;
+    }
     const identity = String(c._worker_id || c.session_id || c.id || '').split('-').pop().slice(0, 8);
     return '🧵 ' + generated[1].trim() + ' worker' + (identity ? ' · ' + identity : '');
   }
