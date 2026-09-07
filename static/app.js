@@ -59000,7 +59000,15 @@
       const presentation = _readableLogPresentation(ev);
       const previous = groups[groups.length - 1];
       const gap = previous ? _readableLogEpoch(previous.events[previous.events.length - 1].ts) - _readableLogEpoch(ev.ts) : NaN;
-      if (previous && previous.presentation.key === presentation.key && gap >= 0 && gap <= 120000) previous.events.push(ev);
+      // A spawn request is preserved for rejected-launch diagnostics, but a
+      // successful launch is the useful outcome. Pair its immediately
+      // preceding request into the successful entry without merging distinct
+      // launch attempts that happen close together.
+      const spawnRequestForPreviousSuccess = previous
+        && previous.presentation.category === 'spawn' && previous.presentation.verb === 'SPAWN'
+        && previous.events.length === 1
+        && presentation.category === 'spawn' && presentation.verb === 'REQUEST';
+      if (previous && (previous.presentation.key === presentation.key || spawnRequestForPreviousSuccess) && gap >= 0 && gap <= 120000) previous.events.push(ev);
       else groups.push({ presentation, events: [ev] });
     });
     groups.forEach(group => {

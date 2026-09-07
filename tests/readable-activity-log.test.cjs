@@ -30,6 +30,17 @@ test('only adjacent matching bursts combine, with every raw occurrence retained'
  assert.deepEqual(Array.from(groups,g=>g.events.length),[1,1,2]);
  assert.deepEqual(Array.from(groups[2].events,e=>e.detail.match(/id=(\d+)/)[1]),['2','1']);
 });
+test('a successful spawn absorbs its immediately preceding request',()=>{
+ const h=helpers();const events=[
+  event('REQUEST',"engine='antigravity' prompt=\"Build a thing\"",'spawn','2026-09-05 19:00:00 UTC'),
+  event('SPAWN','engine=antigravity session=abc123','spawn','2026-09-05 19:00:01 UTC'),
+ ];
+ const groups=h._readableLogGroups(events);
+ assert.equal(groups.length,1);
+ assert.equal(groups[0].presentation.level,'success');
+ assert.equal(groups[0].presentation.headline,'Agent started');
+ assert.deepEqual(Array.from(groups[0].events,e=>e.verb),['SPAWN','REQUEST']);
+});
 test('unrelated failures and bursts separated by time stay separate',()=>{
  const h=helpers();
  assert.equal(h._readableLogGroups([event('FAILED','error=One'),event('FAILED','error=Two')]).length,2);
