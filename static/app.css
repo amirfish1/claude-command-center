@@ -7174,12 +7174,9 @@
       grid-template-columns: max-content max-content 12px;
     }
   }
-  /* CCC-724: preserve a useful slice of the session title before spending a
-     narrow sidebar row on secondary session metadata. The disclosure is the
-     aggregate "3 agents · 1 running" label, while the signal chips cover
-     standalone task/workflow counts in the same role. */
+  /* Secondary counts yield to the title in narrow rows. Keep the parent
+     session's lanes disclosure visible: it controls child-row visibility. */
   @container sidebar (max-width: 740px) {
-    .conv-item .conv-subagent-cluster-toggle,
     .conv-item .conv-signal.subagents,
     .conv-item .conv-signal.workflows { display: none; } /* ccc-724: agent counts yield before the conversation title */
   }
