@@ -37,6 +37,13 @@ class SnapshotHarnessTests(unittest.TestCase):
         self.assertIn("does not provide `Locator.first()`", guidance)
         self.assertIn("`page.evaluate()` with DOM selectors", guidance)
 
+    def test_breadcrumb_probe_uses_dom_state_not_private_conversation_cache(self):
+        source = (ROOT / "probe-ccc-1051.js").read_text()
+
+        self.assertNotIn("conversationsData", source)
+        self.assertIn("el.dataset.copySessionId", source)
+        self.assertIn("el.dataset.copyTranscriptPath", source)
+
 
 if __name__ == "__main__":
     unittest.main()

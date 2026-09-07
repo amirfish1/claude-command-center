@@ -8,19 +8,16 @@ const { findChromePath } = require('./puppeteer-browser-config.js');
     await page.goto('http://127.0.0.1:8090', { waitUntil: 'load', timeout: 120000 });
     await page.waitForFunction(() => document.querySelectorAll('.conv-item').length > 0, { timeout: 300000, polling: 1000 });
     await page.evaluate(() => document.querySelector('.conv-item').click());
-    await new Promise(r => setTimeout(r, 3000));
+    await page.waitForFunction(() => {
+      const el = document.getElementById('convSessionId');
+      return el && el.dataset.copySessionId;
+    }, { timeout: 30000, polling: 500 });
     const info = await page.evaluate(() => {
       const el = document.getElementById('convSessionId');
-      const sid = el && el.dataset.copySessionId;
-      const rows = (Array.isArray(conversationsData) ? conversationsData : []).filter(c => c && (c.session_id === sid || c.id === sid));
       return {
-        sid,
-        matches: rows.length,
-        first: rows[0] ? {
-          id: rows[0].id, session_id: rows[0].session_id,
-          jsonl_path: rows[0].jsonl_path || null,
-          pathishKeys: Object.keys(rows[0]).filter(k => /path|file|log|jsonl|transcript/i.test(k)),
-        } : null,
+        sid: el.dataset.copySessionId,
+        transcriptPath: el.dataset.copyTranscriptPath || null,
+        title: el.title,
       };
     });
     console.log(JSON.stringify(info, null, 2));
