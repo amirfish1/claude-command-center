@@ -12569,6 +12569,20 @@
     line-height: 1;
     padding: 0 2px;
   }
+  .conv-live-tool-inline .cl-cancel {
+    margin-left: auto;
+    flex: 0 0 auto;
+    padding: 2px 8px;
+    color: inherit;
+    background: transparent;
+    border: 1px solid currentColor;
+    border-radius: 5px;
+    font: inherit;
+    font-size: 11px;
+    cursor: pointer;
+  }
+  .conv-live-tool-inline .cl-cancel:hover:not(:disabled) { background: rgba(251, 202, 4, 0.16); }
+  .conv-live-tool-inline .cl-cancel:disabled { cursor: default; opacity: 0.65; }
   /* Live Codex wake progress. Fast, healthy stages collapse to checkmarks;
      only the current action speaks. The diagnostic readout appears after a
      stage lingers for a second or the server reports a warning. */

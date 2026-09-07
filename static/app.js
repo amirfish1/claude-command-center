@@ -6939,6 +6939,39 @@
     _optimisticAgentMisses = 0;
     _optimisticAgentTick = setInterval(_tickOptimisticAgeNow, 1000);
   }
+
+  async function cancelOptimisticAgentTurn($view, button) {
+    const sid = currentSession && currentSession.id;
+    if (!sid || !button || button.disabled) return;
+    button.disabled = true;
+    button.textContent = 'Cancelling…';
+    try {
+      const res = await fetch('/api/inject-esc', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({ session_id: sid }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (res.ok && data.ok) {
+        const card = $view && $view.querySelector('.conv-live-tool-inline.optimistic');
+        if (card) {
+          card.classList.add('is-cancelling');
+          const tool = card.querySelector('.cl-tool');
+          if (tool) tool.textContent = 'Cancelling…';
+        }
+        if (data.note && typeof showOpToast === 'function') showOpToast(data.note, 'info');
+        return;
+      }
+      throw new Error(data.error || ('HTTP ' + res.status));
+    } catch (err) {
+      button.disabled = false;
+      button.textContent = 'Cancel';
+      if (typeof showOpToast === 'function') {
+        showOpToast('Interrupt failed: ' + (err && err.message || 'network error'), 'error');
+      }
+    }
+  }
+
   function showOptimisticAgentIndicator($view) {
     if (!$view) return;
     // A live /compact owns the progress surface. Letting the generic
@@ -6964,7 +6997,12 @@
     // recreation flash the counter back to zero between 1s ticks.
     el.innerHTML = (_viewIsWebUiPane($view) ? _kimiMoonHtml() : '<span class="cl-pulse"></span>')
       + '<span class="cl-tool">Sending&hellip;</span>'
-      + '<span class="cl-age">' + _optimisticAgeLabel(Date.now() - _optimisticAgentStart) + '</span>';
+      + '<span class="cl-age">' + _optimisticAgeLabel(Date.now() - _optimisticAgentStart) + '</span>'
+      + '<button type="button" class="cl-cancel" title="Cancel this in-progress turn">Cancel</button>';
+    el.querySelector('.cl-cancel').addEventListener('click', (event) => {
+      event.stopPropagation();
+      cancelOptimisticAgentTurn($view, event.currentTarget);
+    });
     $view.appendChild(el);
     _startOptimisticAgeTicker($view);
     _armOptimisticAgentSafetyTimer($view, 60000);
