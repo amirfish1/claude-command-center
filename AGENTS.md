@@ -129,12 +129,12 @@ choice) rather than Playwright-style locator chaining.
 
 **Do not use the Codex in-app browser (`iab`) backend or Playwright for this.** `iab` is unavailable outside a desktop app context, and Playwright is not a CCC dependency — "iab browser not available" / "cannot import playwright" means wrong tool, not a breakage. Use `node snapshot.js` (Chromium is sufficient; no WebKit/Firefox needed).
 
-**Vision for screenshots:** when the user pastes a screenshot and you need to understand what it shows (overlaps, layout, visual bugs), use the `claude` CLI (`/Users/amirfish/.local/bin/claude`) in headless mode to describe the image:
+**Vision for screenshots:** inspect the image directly when your current model and available tools support image inspection. Only when the current model cannot directly inspect the image, use the `claude` CLI in headless mode as a low-cost vision fallback:
 ```bash
 echo "Describe what you see in /path/to/screenshot.png, focusing on [specific question]" | claude -p --model claude-haiku-4-5-20251001 --allowedTools "Read"
 ```
-Always pass `--model claude-haiku-4-5-20251001` (vision works on Haiku; without `--model` the probe inherits the user's default, currently Fable, and appears in CCC as a Fable session). `--allowedTools ""` leaves claude with no Read tool so it cannot open the PNG — use `"Read"` (OPS-909).
-This is the fastest path to spatial/stacking information from an image. OCR (`tesseract`) reads words but cannot see stacking/overlap. Python PIL pixel analysis can detect bands and dark regions but cannot identify UI components. The `claude -p` CLI has vision and returns a text description of what it sees — use it instead of telling the user to go ask another LLM.
+For this fallback, always pass `--model claude-haiku-4-5-20251001` (vision works on Haiku; without `--model` the probe inherits the user's default, currently Fable, and appears in CCC as a Fable session). `--allowedTools ""` leaves claude with no Read tool so it cannot open the PNG — use `"Read"` (OPS-909).
+Do not spawn a vision helper when you can inspect the image yourself. If the image itself is missing or inaccessible, resolve access first; a missing file is not a model capability gap. The explicit Haiku model prevents a model without image inspection from accidentally launching an expensive default model. OCR and pixel analysis are not substitutes for understanding visual layout. Apply the read-only tool restrictions below to the fallback command.
 
 ## Restart requirements
 
