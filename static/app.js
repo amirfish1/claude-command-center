@@ -66035,6 +66035,14 @@
   const $convInputModelSelect = document.getElementById('convInputModelSelect');
   const $convInputEffortSelect = document.getElementById('convInputEffortSelect');
   let spawnEffortChoiceDirty = false;
+  // Set the moment the user explicitly picks an engine (composer <select> or
+  // an nsModelPickerPills chip). Guards the one-time boot loadSpawnDefaults()
+  // response against clobbering that pick if it lands after the click —
+  // /api/spawn-defaults can queue for a few hundred ms behind other page-load
+  // traffic, and a user fast enough to pick Codex before it resolves would
+  // otherwise see mergeSpawnDefaults() silently snap them back to the
+  // server's persisted engine default.
+  let _spawnEngineChosenByUser = false;
   const $kptToolbarEngineSelect = document.getElementById('kptToolbarEngineSelect');
   function getSpawnEngine() {
     return normalizeSpawnDefaultEngine(spawnDefaultsState.engine);
@@ -66182,9 +66190,15 @@
     return out;
   }
 
-  function mergeSpawnDefaults(data) {
+  function mergeSpawnDefaults(data, opts) {
     if (!data || typeof data !== 'object') return;
-    spawnDefaultsState.engine = normalizeSpawnDefaultEngine(data.engine);
+    // Boot's loadSpawnDefaults() passes preserveUserEngineChoice so a pick
+    // the user already made while this fetch was in flight wins over the
+    // server's persisted default. The explicit settings-save path never
+    // sets this — that merge IS the user's just-submitted choice.
+    if (!(opts && opts.preserveUserEngineChoice && _spawnEngineChosenByUser)) {
+      spawnDefaultsState.engine = normalizeSpawnDefaultEngine(data.engine);
+    }
     const incoming = data.models && typeof data.models === 'object' ? data.models : {};
     SPAWN_DEFAULT_ENGINES.forEach(engine => {
       if (Object.prototype.hasOwnProperty.call(incoming, engine)) {
@@ -66299,7 +66313,7 @@
       const res = await fetch('/api/spawn-defaults', { cache: 'no-store' });
       const data = await res.json().catch(() => ({}));
       if (res.ok && data && data.ok) {
-        mergeSpawnDefaults(data);
+        mergeSpawnDefaults(data, { preserveUserEngineChoice: true });
         _spawnDefaultsLoaded = true;
         syncSpawnEngineDependentUi();
         return data;
@@ -66440,7 +66454,7 @@
   [$convInputEngineSelect, $kptToolbarEngineSelect].forEach(sel => {
     if (!sel) return;
     sel.value = getSpawnEngine();
-    sel.addEventListener('change', () => setSpawnEngine(sel.value));
+    sel.addEventListener('change', () => { _spawnEngineChosenByUser = true; setSpawnEngine(sel.value); });
   });
   if ($convInputModelSelect) {
     $convInputModelSelect.addEventListener('change', () => {
@@ -74482,6 +74496,7 @@
 
   function selectSpawnPick(engine, model) {
     const eng = normalizeSpawnDefaultEngine(engine);
+    _spawnEngineChosenByUser = true;
     spawnDefaultsState.engine = eng;
     try { localStorage.setItem('ccc.spawnEngine', eng); } catch (_) {}
     [$convInputEngineSelect, $kptToolbarEngineSelect].forEach(s => {
