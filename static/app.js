@@ -66043,6 +66043,14 @@
   // otherwise see mergeSpawnDefaults() silently snap them back to the
   // server's persisted engine default.
   let _spawnEngineChosenByUser = false;
+  // Same race, per engine's model instead of the engine itself: a model pick
+  // made via the composer <select> or an nsModelPickerPills chip must survive
+  // the boot loadSpawnDefaults() response landing late. Without this,
+  // mergeSpawnDefaults() unconditionally overwrote
+  // spawnDefaultsState.models[engine]/_defaultModelsByEngine[engine] from the
+  // server payload even after the user had already picked a different model
+  // for that engine, snapping the select back to the server default.
+  const _spawnModelChosenByUserForEngine = new Set();
   const $kptToolbarEngineSelect = document.getElementById('kptToolbarEngineSelect');
   function getSpawnEngine() {
     return normalizeSpawnDefaultEngine(spawnDefaultsState.engine);
@@ -66201,6 +66209,7 @@
     }
     const incoming = data.models && typeof data.models === 'object' ? data.models : {};
     SPAWN_DEFAULT_ENGINES.forEach(engine => {
+      if (opts && opts.preserveUserEngineChoice && _spawnModelChosenByUserForEngine.has(engine)) return;
       if (Object.prototype.hasOwnProperty.call(incoming, engine)) {
         const model = String(incoming[engine] == null ? '' : incoming[engine]).trim();
         spawnDefaultsState.models[engine] = model;
@@ -66301,6 +66310,7 @@
     }
     spawnDefaultsState.models[engine] = value;
     _defaultModelsByEngine[engine] = value;
+    _spawnModelChosenByUserForEngine.add(engine);
     syncSpawnEngineDependentUi();
     recordSpawnChoice(engine, value, $convInputEffortSelect ? $convInputEffortSelect.value : '');
   }
@@ -74505,6 +74515,7 @@
 
     spawnDefaultsState.models[eng] = model || '';
     _defaultModelsByEngine[eng] = model || '';
+    _spawnModelChosenByUserForEngine.add(eng);
 
     // Keep the independent effort choice; the engine sync below validates
     // it against the selected engine's supported effort levels.
