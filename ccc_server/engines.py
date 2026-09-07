@@ -3166,7 +3166,7 @@ def _devin_cli_prompt_history_count(raw_id, text, since_ts):
             "WHERE session_id = ? AND content = ? AND timestamp >= ?",
             (raw_id, text, int(since_ts)),
         ).fetchone()
-        return int((row or {}).get("n", 0)) if row else 0
+        return int(row["n"]) if row else 0
     except sqlite3.Error:
         return 0
     finally:

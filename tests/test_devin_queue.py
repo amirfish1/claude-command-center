@@ -13,6 +13,32 @@ from unittest import mock
 
 
 class DevinQueueTests(unittest.TestCase):
+    def test_devin_prompt_history_count_reads_sqlite_row(self):
+        """Delivery proof can count a row from the CLI's sqlite.Row connection."""
+        server = importlib.import_module("server")
+        with tempfile.TemporaryDirectory() as tmp:
+            db_path = os.path.join(tmp, "sessions.db")
+            con = sqlite3.connect(db_path)
+            try:
+                con.execute(
+                    "CREATE TABLE prompt_history "
+                    "(session_id TEXT, content TEXT, timestamp INTEGER)",
+                )
+                con.execute(
+                    "INSERT INTO prompt_history VALUES (?, ?, ?)",
+                    ("proof-test", "hello devin", 100),
+                )
+                con.commit()
+            finally:
+                con.close()
+            with mock.patch.dict(os.environ, {"CCC_DEVIN_DB": db_path}):
+                self.assertEqual(
+                    server._devin_cli_prompt_history_count(
+                        "proof-test", "hello devin", 99,
+                    ),
+                    1,
+                )
+
     def test_devin_cli_inject_not_routed_to_control_plane(self):
         """Devin CLI follow-ups must stay in the dashboard process.
 
