@@ -6294,4 +6294,3 @@ def _fetch_issue_titles(repo_path, _blocking=False):
     except (subprocess.TimeoutExpired, FileNotFoundError, json.JSONDecodeError):
         pass
     return data
-
