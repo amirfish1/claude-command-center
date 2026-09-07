@@ -70,6 +70,7 @@ test('the successor is the effective parent of the session it continued from', (
     ],
     localStorage: { getItem() { return null; } },
     manualSubsessionParentId() { return ''; },
+    _sidebarFamilyParents: new Map(),
   };
   vm.createContext(ctx);
   vm.runInContext(

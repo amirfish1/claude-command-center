@@ -1908,7 +1908,7 @@ class TestServerImports(unittest.TestCase):
             app_js.index("].join(',');", app_js.index("const CONVERSATION_ROW_ACTION_SELECTOR = ["))
         ]
         self.assertIn("'[data-role=\"subagent-cluster-toggle\"]'", row_action_selector)
-        self.assertIn("const isCollapsible = total > 2;", app_js)
+        self.assertIn("const isCollapsible = total > 0;", app_js)
         self.assertIn("$convList._subagentClusterToggleWired", app_js)
         self.assertIn(".conv-subagent-collapse-footer", app_css)
         toggle_css = app_css[

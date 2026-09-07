@@ -4039,9 +4039,28 @@
     _f2ContinuationEdgesCache = { raw, edges };
     return edges;
   }
+  // The family endpoint knows spawn relationships that older list rows omit.
+  // Cache them once per response so every sidebar tree uses the same lineage.
+  const _sidebarFamilyParents = new Map();
+  function rememberSidebarFamilyParents(tree) {
+    let changed = false;
+    const seen = new Set();
+    const walk = (node, parent) => {
+      const sid = String(node && node.session_id || '').trim();
+      if (!sid || seen.has(sid)) return;
+      seen.add(sid);
+      if (parent && _sidebarFamilyParents.get(sid) !== parent) {
+        _sidebarFamilyParents.set(sid, parent);
+        changed = true;
+      }
+      (Array.isArray(node.children) ? node.children : []).forEach(child => walk(child, sid));
+    };
+    walk(tree, '');
+    return changed;
+  }
   function f2EffectiveParentSessionId(sessionId, recordedParentId) {
     const sid = String(sessionId || '').trim();
-    const parentId = String(recordedParentId || '').trim();
+    const parentId = String(recordedParentId || _sidebarFamilyParents.get(sid) || '').trim();
     if (!sid) return parentId;
     // CCC-880: a manual "Attach as sub-session of…" always wins — it's an
     // explicit user assertion, independent of (and takes priority over) any
@@ -34428,15 +34447,11 @@
       if (!presentation.total) return _renderRow(rootItem.card, opts);
       const parentId = _subagentRowId(rootItem.card);
       const total = presentation.total;
-      const isCollapsible = total > 2;
-      // When 1-2 children: show directly below parent by default (not collapsed).
-      // When > 2 children: allow collapse (default collapsed unless attention needed or expanded).
-      let expanded;
-      if (!isCollapsible) {
-        expanded = !_subagentCollapsedParents.has(parentId);
-      } else {
-        expanded = _subagentExpandedParents.has(parentId) || presentation.attention > 0;
-      }
+      const isCollapsible = total > 0;
+      // Small families start open; explicit collapse always wins, including
+      // when a child needs attention, so polling respects the user's choice.
+      const expanded = !_subagentCollapsedParents.has(parentId)
+        && (total <= 2 || _subagentExpandedParents.has(parentId) || presentation.attention > 0);
       const parentOpts = Object.assign({}, opts, {
         subagentClusterMeta: {
           parentId,
@@ -59967,6 +59982,7 @@
         if (d && d.ok && d.tree) {
           _orchFamilyTreeSid = rootSid;
           _orchFamilyTree = d.tree;
+          if (rememberSidebarFamilyParents(d.tree)) renderSidebar(conversationsData);
         }
       } else if (rootSid === _orchFamilyTreeSid) {
         // keep cached tree
