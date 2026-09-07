@@ -1645,16 +1645,19 @@ def _load_archived_conversations(*, sweep=True):
         # observes the invariant even if a previous concurrent write lost the
         # archive entry while preserving the trash marker.
         trashed = _core._load_trashed_conversations(sweep=False)
-        repaired = archived + [sid for sid in trashed if sid not in archived]
-        if repaired != archived:
+        archived_set = set(archived)
+        missing = [sid for sid in trashed if sid not in archived_set]
+        if missing:
+            repaired = archived + missing
             _write_archived_conversations(repaired)
+            archived = repaired
         if not sweep:
-            return repaired
+            return archived
         trashed_set = set(trashed)
-        sweepable = [sid for sid in repaired if sid not in trashed_set]
+        sweepable = [sid for sid in archived if sid not in trashed_set]
         swept = _core._auto_unarchive_live_sessions(sweepable)
         swept_set = set(swept)
-        return [sid for sid in repaired if sid in trashed_set or sid in swept_set]
+        return [sid for sid in archived if sid in trashed_set or sid in swept_set]
 
 
 def _write_archived_conversations(archived):
@@ -1678,7 +1681,8 @@ def _save_archived_conversations(archived):
             archived = []
         archived = [sid for sid in archived if isinstance(sid, str)]
         trashed = _core._load_trashed_conversations(sweep=False)
-        normalized = archived + [sid for sid in trashed if sid not in archived]
+        archived_set = set(archived)
+        normalized = archived + [sid for sid in trashed if sid not in archived_set]
         return _write_archived_conversations(normalized)
 
 
