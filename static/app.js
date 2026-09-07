@@ -51525,7 +51525,7 @@
         ? (sessionDiffersBaseline
           ? sessionModelName + ' session'
             + (priceRatio > 0
-              ? ' (list price ' + priceRatio.toFixed(2) + '\u00d7 ' + baselineFriendly + ')'
+              ? ' (base input/output list price ' + priceRatio.toFixed(2) + '\u00d7 ' + baselineFriendly + ')'
               : '')
             + ' \u2014 '
           : '')
