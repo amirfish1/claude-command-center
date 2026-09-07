@@ -373,8 +373,8 @@ class RunAskToolEngineTest(unittest.TestCase):
         self.assertEqual(argv[0], "/x/claude")
         self.assertIn("--allowedTools", argv)
         self.assertEqual(argv[argv.index("--allowedTools") + 1], "Read,Grep,Glob")
-        self.assertIn("--disallowedTools", argv)
-        disallowed = argv[argv.index("--disallowedTools") + 1]
+        disallowed_arg = next(arg for arg in argv if arg.startswith("--disallowedTools="))
+        disallowed = disallowed_arg.split("=", 1)[1]
         for tool in ("Bash", "Write", "Edit", "WebFetch", "WebSearch"):
             self.assertIn(tool, disallowed)
         self.assertEqual(argv[argv.index("--permission-mode") + 1], "dontAsk")
@@ -557,7 +557,7 @@ class HandleAskTest(unittest.TestCase):
         argv = calls[0]
         self.assertIn("--allowedTools", argv)
         self.assertIn("Read,Grep,Glob", argv)
-        self.assertIn("--disallowedTools", argv)
+        self.assertTrue(any(arg.startswith("--disallowedTools=") for arg in argv))
         self.assertIn("--permission-mode", argv)
         self.assertIn("dontAsk", argv)
 

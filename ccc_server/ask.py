@@ -584,7 +584,7 @@ def run_ask_tool_engine(prompt, runner=None):
         pass
     argv = [info["bin"], "-p", "--model", _ASK_TOOL_MODEL,
             "--allowedTools", _ASK_TOOL_ALLOWED,
-            "--disallowedTools", _ASK_TOOL_DISALLOWED,
+            f"--disallowedTools={_ASK_TOOL_DISALLOWED}",
             "--permission-mode", "dontAsk",
             "--strict-mcp-config", '--mcp-config={"mcpServers":{}}', prompt]
     proc = run(argv, capture_output=True, text=True,
