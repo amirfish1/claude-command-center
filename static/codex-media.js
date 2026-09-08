@@ -806,10 +806,7 @@
       }
       if (realtimeCleanup) cleanup.push(realtimeCleanup);
       if (closeBarrier) cleanup.push(closeBarrier);
-      state.disposePromise = Promise.allSettled(cleanup).then(results => {
-        const failed = results.find(result => result.status === 'rejected');
-        if (failed) throw failed.reason;
-      });
+      state.disposePromise = Promise.all(cleanup).then(() => undefined);
       return state.disposePromise;
     }
 

@@ -794,6 +794,7 @@ test('dispose rejects when authoritative realtime close never arrives', async ()
         operation(method, params) {
           window.__calls.push({ method, params });
           if (method === 'thread/realtime/listVoices') return Promise.resolve({ voices: { defaultV1: 'alloy', defaultV2: 'marin', v1: ['alloy'], v2: ['marin'] } });
+          if (method === 'thread/realtime/stop') return new Promise(() => {});
           return Promise.resolve({});
         }, error() {},
       });
@@ -808,8 +809,11 @@ test('dispose rejects when authoritative realtime close never arrives', async ()
       await Promise.resolve(); await Promise.resolve();
       const timer = window.__closeTimers.find(entry => !entry.cleared);
       if (timer) timer.callback();
-      try { await pending; return { error: '', stopped: window.__track.stopped, timers: window.__closeTimers.length }; }
-      catch (error) { return { error: error.message, stopped: window.__track.stopped, timers: window.__closeTimers.length }; }
+      const outcome = await Promise.race([
+        pending.then(() => '', error => error.message),
+        new Promise(resolve => setTimeout(() => resolve('still pending'), 50)),
+      ]);
+      return { error: outcome, stopped: window.__track.stopped, timers: window.__closeTimers.length };
     });
     assert.equal(result.stopped, true);
     assert.equal(result.timers, 1);
