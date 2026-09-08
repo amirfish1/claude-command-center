@@ -3517,6 +3517,16 @@
     };
   };
   window.CCCCodexMarkdown = function (text) { return renderMarkdown(String(text || '')); };
+  window.CCCCodexInlineStateChanged = function (context) {
+    const index = paneIndexByPaneId(context.paneId);
+    if (index < 0) return;
+    const saved = splitState.activeIndex;
+    splitState.activeIndex = index;
+    try {
+      updateInputBar();
+      if (saved === index) _updateLastWrittenLine(paneByPaneId(context.paneId)?.conversationId);
+    } finally { splitState.activeIndex = saved; }
+  };
   window.CCCCodexClientLifecycle = function (detail) {
     scheduleDashboardInvalidation('archive');
     scheduleDashboardInvalidation('sessions');
@@ -9808,6 +9818,7 @@
     const activeEffortSelect = activeInputControls.effortSelect;
     const isPkood = currentSession.source === 'pkood';
     const isCodex = currentSession.source === 'codex';
+    const nativeCodex = isCodex && window.CCCCodexClient?.inlineState(convPaneElById(activePaneId()));
     const isGemini = currentSession.source === 'gemini';
     const isCursor = currentSession.source === 'cursor';
     const isAntigravity = currentSession.source === 'antigravity';
@@ -9874,7 +9885,7 @@
         if (activeInput) activeInput.placeholder = 'Send to pkood agent...';
       } else if (isCodex) {
         activeInputControls.ttyLabel.textContent = live ? (liveStatus.tty || 'codex') : 'codex';
-        if (activeInput) activeInput.placeholder = live ? 'Send to Codex terminal...' : 'Resume Codex and send...';
+        if (activeInput) activeInput.placeholder = nativeCodex?.connected ? 'Message Codex…' : (live ? 'Send to Codex terminal...' : 'Resume Codex and send...');
       } else if (isGemini) {
         activeInputControls.ttyLabel.textContent = live ? (liveStatus.tty || 'gemini') : 'gemini';
         if (activeInput) activeInput.placeholder = live ? 'Send to Gemini terminal...' : 'Resume Gemini and send...';
@@ -10031,7 +10042,7 @@
       // Codex app-server sessions signal liveness via codexState='working',
       // not liveStatus.live (which stays false for pool-model Codex.app runs).
       if (activeEscBtn) {
-        const codexWorking = isCodex && liveStatusMatchesOpenConv() && liveStatus.codexState === 'working';
+        const codexWorking = nativeCodex?.connected ? nativeCodex.thread?.turns?.some(turn => turn.status === 'inProgress') : (isCodex && liveStatusMatchesOpenConv() && liveStatus.codexState === 'working');
         const canEsc = hasSession && !isPkood && !isNewSession && !isBacklogIssue && (!!liveStatus.live || codexWorking);
         activeEscBtn.style.display = canEsc ? '' : 'none';
       }
@@ -20321,7 +20332,11 @@
     if (!el) return;
     const row = (conversationsData || []).find(x => x.id === sid)
       || (Array.isArray(archiveData) ? archiveData.find(x => (x.id || x.session_id) === sid) : null);
-    const ts = row ? Number(row.modified || row.mtime || 0) : 0;
+    const native = window.CCCCodexClient?.inlineState(convPaneElById(activePaneId()));
+    const matches = native?.connected && native.context?.threadId === (sessionIdByConv[sid] || sid);
+    const updated = matches ? Number(native.thread?.updatedAt || 0) : 0;
+    const nativeTime = updated > 1e11 ? updated / 1000 : updated;
+    const ts = Math.max(row ? Number(row.modified || row.mtime || 0) : 0, nativeTime);
     if (!sid || !ts) {
       _lastWrittenState = null;
       el.textContent = '';

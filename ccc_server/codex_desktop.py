@@ -111,7 +111,8 @@ def normalize_thread(state):
                            "items": items, "error": turn.get("error"), "diff": turn.get("diff")})
     return {"id": state.get("id"), "cwd": state.get("cwd"), "name": state.get("title"),
             "turns": normalized, "status": state.get("threadRuntimeStatus"),
-            "model": state.get("latestModel"), "forkedFromId": state.get("forkedFromId"),
+            "model": state.get("latestModel"), "updatedAt": state.get("updatedAt"),
+            "forkedFromId": state.get("forkedFromId"),
             "transport": "desktop-ipc", "historyComplete": bool(history.get("isComplete", True))
             and all((turn.get("itemsPagination") or {}).get("hasLoadedOldest", True) for turn in turns)}
 

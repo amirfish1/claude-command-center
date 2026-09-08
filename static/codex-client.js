@@ -1474,6 +1474,7 @@
     if (Array.isArray(data.requests)) state.requests = data.requests;
     if (includeHistoryCursor) state.historyCursor = data.next_cursor || null;
     updateChrome(); renderTurns(); renderRequests(); state.composerSync?.();
+    if (state.context?.inline && typeof window.CCCCodexInlineStateChanged === 'function') window.CCCCodexInlineStateChanged(state.context);
   }
 
   function updateChrome() {
