@@ -14642,7 +14642,21 @@
     background: #0c1014; border: 1px solid #1b222b; border-radius: 8px;
   }
   .conv-workers-activity .fq-working-strip { margin-bottom: 6px; }
-  .conv-workers-activity .fq-recent-rows { max-height: 320px; }
+  /* Tall enough that all three detailed cards AND the brief tier below them
+     are on screen at once — the tier split is pointless if the brief rows sit
+     under a scroll fold. */
+  .conv-workers-activity .fq-recent-rows { max-height: 560px; }
+  /* Three pieces of per-card chrome cost more than they pay for in this
+     column, so the detailed tier drops them: the absolute timestamp (still in
+     the tooltip, and the relative one is what you scan), the "Full details"
+     line (the whole card is already the click target), and the third line of
+     a long title. Together they take a card from ~129px to ~98px, which is
+     what lets all ten rows fit without a scroll fold. */
+  .conv-workers-activity .fq-recent-abs,
+  .conv-workers-activity .fq-recent-details { display: none; }
+  .conv-workers-activity .fq-recent-row.is-detailed .fq-recent-title {
+    display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; overflow: hidden;
+  }
   /* Worker id is the least useful of the three trailing fields at this width;
      queue and elapsed answer "where" and "how long", which is the question. */
   .conv-workers-activity .fq-working-worker { display: none; }

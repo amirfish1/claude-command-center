@@ -44949,7 +44949,12 @@
         + '<span class="fq-recent-title"><span class="fq-recent-ref">' + escapeHtml(ref) + '</span> ' + escapeHtml(title) + '</span>'
         + '<span class="fq-recent-meta"><span class="fq-recent-state' + (row.resolved ? ' is-resolved' : '') + '">' + escapeHtml(state) + '</span>'
         + '<span>' + escapeHtml(row.worker || 'Worker not recorded') + '</span></span>'
-        + '<time class="fq-recent-time" datetime="' + escapeAttr(row.at) + '" title="' + escapeAttr(dates || row.at) + '">' + escapeHtml(_uxqRelTime(row.at) + ' · ' + absolute) + '</time>'
+        // Relative and absolute are separate spans so the narrow Workers lane
+        // can drop the absolute stamp (still in the tooltip) without losing
+        // the "how long ago", which is the part you actually scan.
+        + '<time class="fq-recent-time" datetime="' + escapeAttr(row.at) + '" title="' + escapeAttr(dates || row.at) + '">'
+        + '<span class="fq-recent-rel">' + escapeHtml(_uxqRelTime(row.at)) + '</span>'
+        + '<span class="fq-recent-abs"> · ' + escapeHtml(absolute) + '</span></time>'
         + (row.summary ? '<span class="fq-recent-summary">' + escapeHtml(row.summary) + '</span>' : '')
         + '<span class="fq-recent-details">Full details ↗</span></button>';
     }).join('') || '<div class="fq-recent-empty">No recorded work yet.</div>';
