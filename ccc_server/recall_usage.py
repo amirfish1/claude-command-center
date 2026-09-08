@@ -24,6 +24,7 @@ import urllib.request
 import uuid
 
 from ccc_server import core as _core
+from ccc_server.quota_calibration import quota_cost_calibration
 
 # ---------------------------------------------------------------------------
 # Total Recall search — optional session-level augmentation for the sidebar
@@ -1498,6 +1499,10 @@ def usage_current_payload(now_epoch=None):
             "from_cache": bool((kimi or {}).get("from_cache")),
             "stale": kimi_stale,
         },
+        "quota_cost_calibration": quota_cost_calibration(
+            _core._USAGE_SNAPSHOTS_FILE, _core._THROUGHPUT_DISK_CACHE_DIR,
+            now=now_epoch,
+        ),
         "calibration": {
             "pct_per_token": (cal or {}).get("pct_per_token"),
             "calibrated_at": (cal or {}).get("calibrated_at"),

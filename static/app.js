@@ -51374,18 +51374,64 @@
   }
 
   const CCC_MONTHLY_SUBSCRIPTION_PRICE_KEY = 'ccc-monthly-claude-plan-usd';
+  const CCC_MONTHLY_CODEX_PLAN_PRICE_KEY = 'ccc-monthly-codex-plan-usd';
   const WEEKLY_CLAUDE_USAGE_REFRESH_MS = 60_000;
   let _weeklyClaudeUsage = null;
   let _weeklyClaudeUsageRequest = null;
 
-  function _monthlyClaudePlanUsd() {
+  // RAIL_QUOTA_COST_START
+  function railQuotaEngine(usage) {
+    const engine = String((usage && usage.engine) || '').trim().toLowerCase();
+    return engine === 'claude' || engine === 'codex' ? engine : null;
+  }
+
+  function railMonthlyPlanUsd(engine, storedValue) {
+    const defaults = { claude: 200, codex: 100 };
+    if (!Object.prototype.hasOwnProperty.call(defaults, engine)) return null;
+    const value = Number(storedValue);
+    return Number.isFinite(value) && value > 0 ? value : defaults[engine];
+  }
+
+  function railQuotaCostPresentation(usage, fullSessionApiCost, calibration, monthlyPlanUsd) {
+    const engine = railQuotaEngine(usage);
+    if (!engine) return { state: 'unavailable', reason: 'Unknown engine' };
+    if (calibration == null) return { state: 'calibrating', engine };
+    if (calibration.available !== true) {
+      return { state: 'unavailable', engine, reason: calibration.reason || 'Calibration unavailable' };
+    }
+    const apiCost = Number(fullSessionApiCost);
+    const rate = Number(calibration.pct_per_usd);
+    const plan = Number(monthlyPlanUsd);
+    if (fullSessionApiCost == null || !Number.isFinite(apiCost) || apiCost < 0) {
+      return { state: 'unavailable', engine, reason: 'API cost unavailable' };
+    }
+    if (calibration.pct_per_usd == null || !Number.isFinite(rate) || rate < 0) {
+      return { state: 'unavailable', engine, reason: 'Calibration unavailable' };
+    }
+    if (monthlyPlanUsd == null || !Number.isFinite(plan) || plan <= 0) {
+      return { state: 'unavailable', engine, reason: 'Monthly plan unavailable' };
+    }
+    const contributionPct = apiCost * rate;
+    return {
+      state: 'ready', engine, apiCost, contributionPct, monthlyPlanUsd: plan,
+      allocatedCost: contributionPct / 100 * plan / 30 * 7,
+    };
+  }
+  // RAIL_QUOTA_COST_END
+
+  function _monthlyPlanUsd(engine) {
+    const key = engine === 'claude' ? CCC_MONTHLY_SUBSCRIPTION_PRICE_KEY
+      : engine === 'codex' ? CCC_MONTHLY_CODEX_PLAN_PRICE_KEY : '';
+    if (!key) return null;
     try {
-      const price = Number(localStorage.getItem(CCC_MONTHLY_SUBSCRIPTION_PRICE_KEY));
-      return Number.isFinite(price) && price > 0 ? price : 0;
+      return railMonthlyPlanUsd(engine, localStorage.getItem(key));
     } catch (_) {
-      return 0;
+      return railMonthlyPlanUsd(engine);
     }
   }
+
+  function _monthlyClaudePlanUsd() { return _monthlyPlanUsd('claude'); }
+  function _monthlyCodexPlanUsd() { return _monthlyPlanUsd('codex'); }
 
   function _refreshWeeklyClaudeUsage() {
     if (document.hidden) return Promise.resolve(null);
@@ -51579,6 +51625,68 @@
   }
   // RAIL_USAGE_BREAKDOWN_END
 
+  const QUOTA_COST_CALIBRATION_TTL_MS = 60_000;
+  let _quotaCostCalibration = null;
+  let _quotaCostCalibrationRequest = null;
+  let _quotaCostCalibrationLoadedAt = 0;
+
+  function _refreshQuotaCostCalibration() {
+    if (document.hidden) return Promise.resolve(_quotaCostCalibration);
+    if (_quotaCostCalibrationRequest) return _quotaCostCalibrationRequest;
+    if (_quotaCostCalibrationLoadedAt
+        && Date.now() - _quotaCostCalibrationLoadedAt < QUOTA_COST_CALIBRATION_TTL_MS) {
+      return Promise.resolve(_quotaCostCalibration);
+    }
+    _quotaCostCalibrationRequest = fetch('/api/usage/current', { cache: 'no-store' })
+      .then(response => response.ok ? response.json() : null)
+      .then(data => {
+        _quotaCostCalibration = data && data.quota_cost_calibration
+          ? data.quota_cost_calibration : {};
+        _quotaCostCalibrationLoadedAt = Date.now();
+        if (!document.hidden) _renderRailTokens();
+        return _quotaCostCalibration;
+      }).catch(() => {
+        _quotaCostCalibration = {};
+        _quotaCostCalibrationLoadedAt = Date.now();
+        if (!document.hidden) _renderRailTokens();
+        return _quotaCostCalibration;
+      }).finally(() => {
+        _quotaCostCalibrationRequest = null;
+      });
+    return _quotaCostCalibrationRequest;
+  }
+
+  function railQuotaCostHtml(presentation, calibration) {
+    if (presentation.state === 'calibrating') {
+      return '<div class="rail-usage-breakdown rail-quota-cost"><div class="rail-usage-row">'
+        + '<div class="rail-usage-heading"><span>Estimated weekly quota</span><strong>Calibrating</strong></div>'
+        + '<div>Historical engine calibration is loading.</div></div></div>';
+    }
+    if (presentation.state !== 'ready') {
+      return '<div class="rail-usage-breakdown rail-quota-cost"><div class="rail-usage-row">'
+        + '<div class="rail-usage-heading"><span>Estimated weekly quota</span><strong>Unavailable</strong></div>'
+        + '<div>' + escapeHtml(presentation.reason || 'Calibration unavailable') + '</div></div></div>';
+    }
+    const rate = Number(calibration.pct_per_usd);
+    const sampleDays = Number(calibration.sample_days) || 0;
+    const sampledCost = Number(calibration.sampled_cost_usd);
+    const sampledPct = Number(calibration.sampled_pct);
+    const contribution = presentation.contributionPct.toFixed(2) + '%';
+    const allocated = '$' + presentation.allocatedCost.toFixed(2);
+    const title = 'Historical rate: ' + rate.toFixed(4) + '% per $1 API list price. '
+      + 'Sample: ' + sampleDays + ' days, $' + (Number.isFinite(sampledCost) ? sampledCost.toFixed(4) : 'Unavailable')
+      + ' API cost, ' + (Number.isFinite(sampledPct) ? sampledPct.toFixed(4) : 'Unavailable') + '% observed. '
+      + 'Formula: $' + presentation.apiCost.toFixed(4) + ' × ' + rate.toFixed(4) + '% per $1 = '
+      + contribution + '; ' + contribution + ' × ($' + presentation.monthlyPlanUsd.toFixed(2)
+      + ' / 30 × 7) = ' + allocated + '. Monthly plan: $' + presentation.monthlyPlanUsd.toFixed(2) + '. '
+      + String(calibration.assumption || 'Historical conversion assumes the same subscription plan and account.');
+    return '<div class="rail-usage-breakdown rail-quota-cost" title="' + escapeAttr(title) + '">'
+      + '<div class="rail-usage-row"><div class="rail-usage-heading"><span>Estimated weekly quota</span><strong>'
+      + contribution + '</strong></div><div>' + rate.toFixed(4) + '% per $1 API list price</div></div>'
+      + '<div class="rail-usage-row"><div class="rail-usage-heading"><span>Allocated subscription cost</span><strong>'
+      + allocated + '</strong></div><div>$' + presentation.monthlyPlanUsd.toFixed(2) + ' monthly plan</div></div></div>';
+  }
+
   // Full-session counts and API list-price equivalent, from the same usage
   // payload as the composer. Only the graph below is limited to recent turns.
   function _renderRailTokens(paneId) {
@@ -51598,15 +51706,24 @@
     const modelName = u && u.model ? _claudeFriendlyModelName(u.model) : '';
     const headline = breakdown.totalCost == null ? 'Cost unavailable'
       : '$' + breakdown.totalCost.toFixed(2);
+    const quotaEngine = railQuotaEngine(u);
+    const quotaPresentation = railQuotaCostPresentation(
+      u, breakdown.totalCost,
+      quotaEngine && _quotaCostCalibration ? _quotaCostCalibration[quotaEngine] : _quotaCostCalibration,
+      quotaEngine === 'claude' ? _monthlyClaudePlanUsd() : _monthlyCodexPlanUsd(),
+    );
     el.innerHTML = '<div class="rail-tokens-value">' + headline + '</div>'
       + '<div class="rail-usage-caption">Full session'
       + (modelName ? ' · ' + escapeHtml(modelName) : '')
       + '<br>API list-price equivalent</div>'
       + railUsageBreakdownHtml(breakdown)
+      + railQuotaCostHtml(quotaPresentation, quotaEngine && _quotaCostCalibration
+        ? _quotaCostCalibration[quotaEngine] || {} : {})
       + _railTurnGraphHtml(u && u.turn_series, u && u.model);
     el.title = 'Full-session API list-price equivalent. Each token bucket is counted once. '
       + 'This is not the subscription amount charged.';
     el.hidden = false;
+    _refreshQuotaCostCalibration();
   }
 
   document.addEventListener('visibilitychange', () => {
@@ -75768,6 +75885,13 @@
     if (document.activeElement !== input) input.value = value ? String(value) : '';
   }
 
+  function refreshMonthlyCodexPlanInput() {
+    const input = document.getElementById('settingsMonthlyCodexPlanInput');
+    if (!input) return;
+    const value = _monthlyCodexPlanUsd();
+    if (document.activeElement !== input) input.value = value ? String(value) : '';
+  }
+
   // ── Engines section: automatic harness updates ─────────────────────
   let _engineUpdatePollTimer = null;
   function _engineUpdateSummary(data) {
@@ -76363,6 +76487,7 @@
     buildSettingsSearchIndex();
     refreshAppearanceChecks();
     refreshMonthlyClaudePlanInput();
+    refreshMonthlyCodexPlanInput();
     refreshSpawnEngineValue();
     refreshEngineUpdateStatus();
     refreshKimiSetupStatus();
@@ -76584,6 +76709,22 @@
         _weeklyClaudeUsage = null;
         _renderRailTokens();
         showSettingsSavedPulse(monthlyPlanInput.closest('.settings-row'));
+      });
+    }
+
+    const monthlyCodexPlanInput = document.getElementById('settingsMonthlyCodexPlanInput');
+    if (monthlyCodexPlanInput) {
+      monthlyCodexPlanInput.addEventListener('change', () => {
+        const value = Number(monthlyCodexPlanInput.value);
+        try {
+          if (Number.isFinite(value) && value > 0) {
+            localStorage.setItem(CCC_MONTHLY_CODEX_PLAN_PRICE_KEY, String(value));
+          } else {
+            localStorage.removeItem(CCC_MONTHLY_CODEX_PLAN_PRICE_KEY);
+          }
+        } catch (_) {}
+        _renderRailTokens();
+        showSettingsSavedPulse(monthlyCodexPlanInput.closest('.settings-row'));
       });
     }
 
