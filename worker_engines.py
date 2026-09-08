@@ -507,6 +507,9 @@ class EngineHost:
                     ]
                 return {"ok": True, "deltas": deltas}
         if engine == "codex":
+            if operation == "client":
+                from ccc_server.codex_client import codex_client_dispatch
+                return codex_client_dispatch(args.get("action"), args.get("data") or {})
             if operation == "availability":
                 info = legacy._resolve_codex_bin()
                 info["model"] = legacy._spawn_model_for_engine("codex")

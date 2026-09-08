@@ -2728,6 +2728,10 @@ def _codex_app_server_thread_public_status(session_id):
 
 def _codex_app_server_reader(transport):
     """Collect JSON-RPC responses and notifications from Codex app-server."""
+    from ccc_server.codex_client import (
+        codex_client_connect, codex_client_disconnect, codex_client_observe,
+    )
+    codex_client_connect(transport)
     _core._app_server_trace("reader-start", kind=transport.kind,
                       child_pid=getattr(transport.proc, "pid", None))
     exit_reason = "eof"
@@ -2743,6 +2747,8 @@ def _codex_app_server_reader(transport):
                     _core._app_server_trace("reader-badjson", text=line[:120])
                     continue
                 try:
+                    if codex_client_observe(payload, transport):
+                        continue
                     _core._codex_app_server_handle_message(payload)
                 except Exception as e:
                     # Traced, then re-raised: killing the reader on one bad
@@ -2761,6 +2767,8 @@ def _codex_app_server_reader(transport):
                 except json.JSONDecodeError:
                     continue
                 try:
+                    if codex_client_observe(payload, transport):
+                        continue
                     _core._codex_app_server_handle_message(payload)
                 except Exception as e:
                     _core._app_server_trace("reader-msg-error", error=repr(e))
@@ -2769,6 +2777,7 @@ def _codex_app_server_reader(transport):
         exit_reason = f"error:{e!r}"
         raise
     finally:
+        codex_client_disconnect(transport)
         _core._app_server_trace("reader-exit", reason=exit_reason,
                           child_pid=getattr(transport.proc, "pid", None))
         with _core._CODEX_APP_SERVER_LOCK:
@@ -2808,7 +2817,7 @@ def _codex_app_server_request_to_transport(
                     "jsonrpc": "2.0",
                     "id": req_id,
                     "method": method,
-                    "params": params or {},
+                    "params": params,
                 })
                 sent_at = time.time()
                 _core._app_server_trace(
@@ -2957,27 +2966,15 @@ def _codex_app_server_track_thread_health(method, thread_id, response):
         _core._codex_app_server_shutdown()
 
 
-def _codex_app_server_request(method, params=None, timeout=20):
+def _codex_app_server_request(method, params=None, timeout=20, *, _route=True, _null_params=False, _expected_generation=None):
     """Send one JSON-RPC request to Codex app-server.
 
     The app-server is the only local Codex interface that can append input to
     a loaded thread; `codex exec resume` can only start a one-shot process.
     """
     params = params or {}
-    mutating = method in {
-        "turn/start",
-        "turn/steer",
-        "turn/interrupt",
-        "thread/start",
-        "thread/name/set",
-        "thread/settings/update",
-        "thread/compact/start",
-        "thread/goal/set",
-        "thread/goal/clear",
-        "item/tool/call/approve",
-        "item/file/change/approve",
-        "item/command/execution/approve",
-    }
+    from ccc_server.codex_capabilities import codex_method_is_mutating
+    mutating = codex_method_is_mutating(method)
     routed = _core._control_plane_engine_call(
         "codex", "rpc", {
             "method": method,
@@ -2988,7 +2985,7 @@ def _codex_app_server_request(method, params=None, timeout=20):
         idempotency_key=(
             _core._take_control_plane_action_id() if mutating else None
         ),
-    )
+    ) if _route else None
     if routed is not None:
         response = routed.get("response")
         if isinstance(response, dict):
@@ -3026,8 +3023,17 @@ def _codex_app_server_request(method, params=None, timeout=20):
             "error": error,
             "fallback": "exec",
         }
+    if _expected_generation is not None:
+        from ccc_server.codex_conversation import CODEX_CONVERSATIONS
+        if CODEX_CONVERSATIONS.generation != _expected_generation:
+            if method == "turn/start" and thread_id:
+                with _core._CODEX_APP_SERVER_LOCK:
+                    state = _core._CODEX_APP_SERVER_THREAD_STATE.get(thread_id, {})
+                    state.pop("ccc_turn_start_pending", None)
+                    state.pop("ccc_turn_start_pending_at", None)
+            return {"ok": False, "code": "stale_connection", "error": "Codex reconnected before this action was sent"}
     response = _core._codex_app_server_request_to_transport(
-        transport, method, params=params, timeout=timeout,
+        transport, method, params=None if _null_params else params, timeout=timeout,
     )
     try:
         _codex_app_server_track_thread_health(method, thread_id, response)
@@ -5553,6 +5559,8 @@ def _codex_app_server_resolve_approval(session_id, decision):
     response = {"jsonrpc": "2.0", "id": request_id, "result": result}
     try:
         transport.send_json(response)
+        from ccc_server.codex_requests import CODEX_REQUESTS
+        CODEX_REQUESTS.resolve(request_id, sid, CODEX_REQUESTS.generation)
     except (BrokenPipeError, OSError) as e:
         return {
             "ok": False,
