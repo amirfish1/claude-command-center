@@ -4725,6 +4725,34 @@ def _terminal_queue_clear_hold(sid):
     _core._terminal_queue_hold_since.pop(sid, None)
 
 
+def _drop_dead_terminal_queue(sid, *, code):
+    """Discard terminal input when there is no remaining delivery target.
+
+    A fresh Claude hook sidecar says a session was recently alive, not that a
+    one-shot process still has a tty, FIFO, or worker channel.  Terminal input
+    cannot revive that process safely, so make the terminal outcome durable
+    and visible instead of re-parking it for another failed inject.
+    """
+    transaction = _core._apply_pending_input_operations(sid, [{
+        "field": "terminal", "action": "clear",
+    }])
+    dropped = list((transaction.get("value") or [[]])[0] or [])
+    _core._pending_terminal_retry_after.pop(sid, None)
+    _core._clear_foreign_writer_hold(sid)
+    _terminal_queue_clear_hold(sid)
+    for dropped_text in dropped:
+        _core._complete_pending_input_handoff(dropped_text)
+        try:
+            _core._log_activity(
+                "inject", "Q_DROP",
+                f"session={sid} code={code} text={str(dropped_text)[:40]!r} "
+                "— no live delivery target; dropped as undeliverable",
+            )
+        except Exception:
+            pass
+    return dropped
+
+
 def _terminal_queue_hold_or_expire(sid, reason):
     """Record another tick of holding `sid`'s head entry, or — once held past
     `_TERMINAL_QUEUE_HOLD_TTL_S` — drop that stale entry instead. Either way
@@ -5153,25 +5181,10 @@ def _start_resume_queue_watcher() -> None:
                     # that closed weeks ago (observed: a 26-day-dead sid with 13
                     # stuck items). Drop the queue and skip the probe entirely.
                     # The memoized _archive_session_is_live is ~free and is a
-                    # strict superset of "injectable", so no live session is lost.
+                    # broad candidacy check, so it avoids expensive process
+                    # probes for unquestionably old sessions.
                     if not _core._archive_session_is_live(sid):
-                        transaction = _core._apply_pending_input_operations(sid, [{
-                            "field": "terminal", "action": "clear",
-                        }])
-                        dropped = ((transaction.get("value") or [[]])[0])
-                        if dropped:
-                            # Loud, not silent (CCC-455): this is the one place
-                            # queued user text is deliberately discarded.
-                            print(
-                                f"[terminal-queue] dropping {len(dropped)} queued "
-                                f"input(s) for dead session {sid}: "
-                                + "; ".join(repr(t[:80]) for t in dropped),
-                                flush=True,
-                            )
-                            for dropped_text in dropped:
-                                _core._complete_pending_input_handoff(dropped_text)
-                        _core._clear_foreign_writer_hold(sid)
-                        _terminal_queue_clear_hold(sid)
+                        _core._drop_dead_terminal_queue(sid, code="dead_session")
                         continue
                     # Backoff gate (CCC-455): a sid whose last drain attempt
                     # failed or re-parked waits out its retry window before we
@@ -5195,6 +5208,24 @@ def _start_resume_queue_watcher() -> None:
                     # the request file is gone and the queue drains — a plain
                     # transcript scan here would deadlock forever.
                     status = _core.session_live_status(sid, _core.find_session_cwd(sid))
+                    # `_archive_session_is_live` above admits fresh hook
+                    # sidecars. That is intentionally broad for candidacy, but
+                    # a just-exited `claude -p` leaves one fresh for 30 minutes:
+                    # it has no process and no channel to receive a queued
+                    # message. Require a real delivery target before popping
+                    # the head, while retaining known worker/spawn channels
+                    # whose registry status can momentarily lag.
+                    if not status.get("live"):
+                        live_spawn = _core._find_live_spawn_entry_for_session(sid)
+                        wt_fifo = _core._wt_worker_fifo_entry_for_session(sid)
+                        engine_worker = _worker_owned_claude_input_state(sid)
+                        if (
+                            live_spawn is None
+                            and wt_fifo is None
+                            and not engine_worker.get("owned")
+                        ):
+                            _core._drop_dead_terminal_queue(sid, code="dead_target")
+                            continue
                     if _core._ask_question_blocking_inject(sid, status):
                         _core._terminal_queue_hold_or_expire(sid, "ask_question_blocking")
                         continue

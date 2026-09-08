@@ -16,6 +16,7 @@ Two invariants pinned here:
     command for one session -- the second /compact could not have stacked.
 """
 import importlib
+import inspect
 
 import pytest
 
@@ -53,6 +54,58 @@ def test_other_session_refusals_are_terminal(code):
 ])
 def test_delivery_failures_are_not_terminal(result):
     assert server._terminal_queue_result_is_terminal(result) is False
+
+
+def test_dead_target_drop_is_loud_and_clears_the_entire_terminal_queue(monkeypatch):
+    """A fresh sidecar is not a delivery channel for an exited one-shot run."""
+    sid = "dead-cron-session"
+    text = "the user message"
+    completed = []
+    activity = []
+    monkeypatch.setattr(
+        server,
+        "_apply_pending_input_operations",
+        lambda *args, **kwargs: {"ok": True, "value": [[text]]},
+    )
+    monkeypatch.setattr(
+        server, "_complete_pending_input_handoff", lambda value: completed.append(value),
+    )
+    monkeypatch.setattr(
+        server, "_clear_foreign_writer_hold", lambda value: None,
+    )
+    monkeypatch.setattr(
+        server, "_terminal_queue_clear_hold", lambda value: None,
+    )
+    monkeypatch.setattr(
+        server, "_log_activity", lambda *args: activity.append(args),
+    )
+
+    dropped = server._drop_dead_terminal_queue(sid, code="dead_target")
+
+    assert dropped == [text]
+    assert completed == [text]
+    assert activity == [
+        (
+            "inject",
+            "Q_DROP",
+            "session=dead-cron-session code=dead_target "
+            "text='the user message' — no live delivery target; dropped as undeliverable",
+        )
+    ]
+
+
+def test_watcher_drops_a_fresh_but_dead_target_before_retrying_delivery():
+    """A fresh sidecar must not let a one-shot Claude process enter retries."""
+    source = inspect.getsource(server._start_resume_queue_watcher)
+    status_at = source.find("status = _core.session_live_status")
+    dead_drop_at = source.find(
+        '_core._drop_dead_terminal_queue(sid, code="dead_target")'
+    )
+    requeue_at = source.find("_core._requeue_terminal_input_front(sid, text)")
+
+    assert status_at != -1
+    assert dead_drop_at > status_at
+    assert requeue_at > dead_drop_at
 
 
 @pytest.fixture

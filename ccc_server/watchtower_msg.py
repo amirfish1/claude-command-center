@@ -1455,19 +1455,6 @@ def _inject_text_into_session_router(
     # before engine detection so a Kimi nudge cannot fall through to a Claude
     # resume and fail with an unrelated ``repo_required`` error.
     session_id = _core._canonical_kimi_session_id(session_id)
-    # Circuit breaker. A refusal logs its own BLOCKED event below; successful
-    # local delivery logs INJECT after the worker-handoff decision. See the
-    # _inject_budget_* block for why the counter is a file and why a trip
-    # returns `blocked` and not just `ok:false`.
-    _blocked = _core._inject_budget_check(session_id, text, source)
-    if _blocked is not None:
-        _core._log_activity(
-            "inject", "BLOCKED",
-            f"session={session_id} source={source} reason={_blocked['reason']} "
-            f"count={_blocked['count']}/{_blocked['limit']} "
-            f"text=\"{_core._activity_log_preview(text)}\"",
-        )
-        return _blocked
     is_codex = _core._is_codex_session(session_id)
     compact_command = bool(_core._COMPACT_TRIGGER_RE.match(text))
     clear_command = bool(_core._CLEAR_TRIGGER_RE.match(text))
@@ -1544,6 +1531,18 @@ def _inject_text_into_session_router(
         )
         if routed is not None:
             return routed
+    # Circuit breaker. The worker owns a routed Claude inject, so meter only
+    # after that hand-off declines; otherwise both dashboard and worker record
+    # the one logical attempt. A refusal logs its own BLOCKED event below.
+    _blocked = _core._inject_budget_check(session_id, text, source)
+    if _blocked is not None:
+        _core._log_activity(
+            "inject", "BLOCKED",
+            f"session={session_id} source={source} reason={_blocked['reason']} "
+            f"count={_blocked['count']}/{_blocked['limit']} "
+            f"text=\"{_core._activity_log_preview(text)}\"",
+        )
+        return _blocked
     # The worker owns a routed Claude inject and emits its activity row. Log
     # only local delivery attempts, so one logical composer send has one
     # INJECT row instead of a dashboard handoff row plus the worker delivery.
