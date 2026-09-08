@@ -491,6 +491,7 @@ class TestServerImports(unittest.TestCase):
 
         # route/dispatch wiring
         server_py = pathlib.Path(PROJECT_ROOT, "server.py").read_text(encoding="utf-8")
+        engines_py = pathlib.Path(PROJECT_ROOT, "ccc_server", "engines.py").read_text(encoding="utf-8")
         self.assertIn('_adopt_ccc_module("devin")', server_py)
         self.assertIn("if _is_devin_session(session_id):", server_py)
         self.assertIn("if _is_devin_cli_session(session_id):", server_py)
@@ -498,8 +499,8 @@ class TestServerImports(unittest.TestCase):
         self.assertIn("find_devin_cli_conversations(", server_py)
         self.assertIn("result = _parse_devin_conversation(conversation_id", server_py)
         self.assertIn("_parse_devin_cli_conversation(conversation_id", server_py)
-        self.assertIn("def spawn_session_devin(", server_py)
-        self.assertIn("def resume_session_devin(", server_py)
+        self.assertIn("def spawn_session_devin(", engines_py)
+        self.assertIn("def resume_session_devin(", engines_py)
         self.assertIn('"/api/sessions/spawn-devin/availability"', server_py)
 
         app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
@@ -3429,9 +3430,9 @@ class TestServerImports(unittest.TestCase):
             server.SPAWN_DEFAULTS_FILE = pathlib.Path(td) / "spawn-defaults.json"
             try:
                 with mock.patch.dict(os.environ, {}, clear=True):
-                    self.assertEqual(server._spawn_fallback_model_for_engine("codex"), "gpt-6-astra")
+                    self.assertEqual(server._spawn_fallback_model_for_engine("codex"), "gpt-5.6-terra")
                     defaults = server._load_spawn_defaults()
-                    self.assertEqual(defaults["models"]["codex"], "gpt-6-astra")
+                    self.assertEqual(defaults["models"]["codex"], "gpt-5.6-terra")
 
                     server.SPAWN_DEFAULTS_FILE.write_text(json.dumps({
                         "engine": "codex",
@@ -3850,7 +3851,7 @@ class TestServerImports(unittest.TestCase):
             sys.modules.pop(mod, None)
         server = importlib.import_module("server")
 
-        self.assertEqual(server._validate_codex_model("gpt-6-astra"), ("gpt-6-astra", None))
+        self.assertEqual(server._validate_codex_model("gpt-5.6-terra"), ("gpt-5.6-terra", None))
         self.assertEqual(server._validate_codex_model("gpt-5.6-luna"), ("gpt-5.6-luna", None))
         self.assertEqual(server._validate_codex_model("gpt-5.5-codex"), ("gpt-5.5", None))
         model, error = server._validate_codex_model("gpt-5.6-preview")
@@ -15723,7 +15724,7 @@ class TestModelPicker(unittest.TestCase):
         """New Codex sessions need an effort picker alongside their model picker."""
         js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text()
         html = pathlib.Path(PROJECT_ROOT, "static", "index.html").read_text()
-        server_py = pathlib.Path(PROJECT_ROOT, "server.py").read_text()
+        engines_py = pathlib.Path(PROJECT_ROOT, "ccc_server", "engines.py").read_text()
 
         self.assertIn('id="convInputEffortSelect"', html)
         self.assertIn('id="spawnDefaultsEffort"', html)
@@ -15741,8 +15742,8 @@ class TestModelPicker(unittest.TestCase):
         self.assertIn("if (engineSupportsEffort(engine) && (effort || o.effortExplicit)) {", js)
         self.assertIn("body.reasoning_effort = effort;", js)
         self.assertIn("effortExplicit: spawnEffortChoiceDirty", js)
-        self.assertIn("def spawn_session_codex(prompt, name=None, cwd=None, repo_path=None, worktree=False, model=None, reasoning_effort=\"\", parent_session_id=None):", server_py)
-        self.assertIn('cmd.extend(["-c", f"model_reasoning_effort={reasoning_effort}"])', server_py)
+        self.assertIn("def spawn_session_codex(prompt, name=None, cwd=None, repo_path=None, worktree=False, model=None, reasoning_effort=\"\", parent_session_id=None):", engines_py)
+        self.assertIn('cmd.extend(["-c", f"model_reasoning_effort={reasoning_effort}"])', engines_py)
 
     def test_context_footer_renders_token_optimizer_quality_score(self):
         js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text()
@@ -15851,10 +15852,12 @@ class TestModelPicker(unittest.TestCase):
         self.assertTrue(clipped.endswith("…"))
     def test_codex_rows_keep_a_full_title_for_the_status_rail(self):
         """CCC-566: the rail should not inherit the sidebar's 120-char cap."""
-        server_text = pathlib.Path(PROJECT_ROOT, "server.py").read_text(encoding="utf-8")
+        codex_parse = pathlib.Path(
+            PROJECT_ROOT, "ccc_server", "codex_parse.py"
+        ).read_text(encoding="utf-8")
         app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
 
-        self.assertIn('status_rail_title = title if title and title != first_message else display_name', server_text)
+        self.assertIn('status_rail_title = title if title and title != first_message else display_name', codex_parse)
         self.assertIn("const railTitle = row && row.status_rail_title || title || category || 'Session';", app_js)
         self.assertIn("addParam('status_rail_title', row.status_rail_title || '', 500);", app_js)
 
@@ -19802,14 +19805,16 @@ class TestAcpKimiEngine(unittest.TestCase):
 
     def test_engine_registration_pins(self):
         server_py = pathlib.Path(PROJECT_ROOT, "server.py").read_text(encoding="utf-8")
+        engines_py = pathlib.Path(PROJECT_ROOT, "ccc_server", "engines.py").read_text(encoding="utf-8")
+        watchtower_msg_py = pathlib.Path(PROJECT_ROOT, "ccc_server", "watchtower_msg.py").read_text(encoding="utf-8")
         self.assertIn('"/api/sessions/spawn-kimi"', server_py)
         self.assertIn('"/api/sessions/spawn-grok"', server_py)
-        self.assertIn("def spawn_session_grok(", server_py)
+        self.assertIn("def spawn_session_grok(", engines_py)
         self.assertIn('"/api/acp/approval"', server_py)
         self.assertIn('if _is_kimi_session(session_id):', server_py)
-        self.assertIn('result = _acp_prompt(', server_py)
-        self.assertIn('result.get("code") == "busy"', server_py)
-        self.assertIn('return _queue_terminal_input(session_id, text, {"status": "running"})', server_py)
+        self.assertIn('result = _core._acp_prompt(', watchtower_msg_py)
+        self.assertIn('result.get("code") == "busy"', watchtower_msg_py)
+        self.assertIn('return _core._queue_terminal_input(session_id, text, {"status": "running"})', watchtower_msg_py)
         app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
         self.assertIn("if (engine === 'kimi') return '/api/sessions/spawn-kimi';", app_js)
 
