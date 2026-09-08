@@ -569,7 +569,8 @@ def _throughput_normalize_usage(usage, *, engine="", model=""):
         "thoughts",
     )
     tool_tokens = _throughput_usage_int(usage, "tool_tokens", "tool")
-    output_total = output + reasoning + tool_tokens
+    # Codex reports reasoning as a subset of output_tokens.
+    output_total = output + tool_tokens + (0 if engine_l == "codex" else reasoning)
 
     has_subset_cached = any(
         key in usage for key in ("cached_input_tokens", "cached_tokens", "cached")
@@ -931,6 +932,7 @@ def _throughput_codex_turns_from_file(
                 effective_input_tps = effective_input / dur_sec if dur_sec > 0 else 0.0
                 effective_total_tps = effective_total / dur_sec if dur_sec > 0 else 0.0
                 turns.append({
+                    "codex_usage_schema": 3,
                     "turn_index": len(turns) + 1,
                     "session_id": session_id,
                     "session_name": session_name,
@@ -1969,19 +1971,23 @@ def _throughput_file_turns(path, extract_fn, progress=None):
     mtime = st.st_mtime
     size = st.st_size
 
+    def current_usage_schema(turns):
+        return all(turn.get("engine") != "codex" or turn.get("codex_usage_schema") == 3
+                   for turn in turns)
+
     # 1. In-memory hit
     with _THROUGHPUT_CACHE_LOCK:
         cached = _THROUGHPUT_TURN_CACHE.get(key)
-        if cached and cached["mtime"] == mtime and cached["size"] == size:
+        if cached and cached["mtime"] == mtime and cached["size"] == size and cached.get("usage_schema") == 3:
             if progress:
                 progress("cache_hit")
             return cached["turns"]
 
     # 2. Disk cache hit (lazy — reads only this one entry)
     disk_turns = _throughput_disk_get(key, mtime, size)
-    if disk_turns is not None:
+    if disk_turns is not None and current_usage_schema(disk_turns):
         with _THROUGHPUT_CACHE_LOCK:
-            _THROUGHPUT_TURN_CACHE[key] = {"mtime": mtime, "size": size, "turns": disk_turns}
+            _THROUGHPUT_TURN_CACHE[key] = {"mtime": mtime, "size": size, "turns": disk_turns, "usage_schema": 3}
         if progress:
             progress("cache_hit")
         return disk_turns
@@ -1991,7 +1997,7 @@ def _throughput_file_turns(path, extract_fn, progress=None):
     if progress:
         progress("parsed")
     with _THROUGHPUT_CACHE_LOCK:
-        _THROUGHPUT_TURN_CACHE[key] = {"mtime": mtime, "size": size, "turns": turns}
+        _THROUGHPUT_TURN_CACHE[key] = {"mtime": mtime, "size": size, "turns": turns, "usage_schema": 3}
     _throughput_disk_put(key, mtime, size, turns)
     return turns
 

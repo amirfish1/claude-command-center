@@ -415,6 +415,7 @@ def _extract_codex_in_app_browser_context(text):
 
 
 def _codex_usage_delta_from_event(ev, previous_totals=None):
+    """Bill cumulative increases once, preserving segments after counter resets."""
     payload = ev.get("payload") if isinstance(ev.get("payload"), dict) else {}
     if payload.get("type") != "token_count":
         return None, previous_totals
@@ -423,47 +424,30 @@ def _codex_usage_delta_from_event(ev, previous_totals=None):
         return None, previous_totals
     last_usage = info.get("last_token_usage")
     total_usage = info.get("total_token_usage")
-    if isinstance(last_usage, dict) and last_usage:
-        usage = last_usage
-    elif isinstance(total_usage, dict) and total_usage:
+    fields = ("input_tokens", "cached_input_tokens", "output_tokens",
+              "reasoning_output_tokens", "total_tokens")
+    if isinstance(total_usage, dict) and total_usage:
+        current = {key: _codex_int(total_usage.get(key)) for key in fields}
+        if not (current["input_tokens"] or current["output_tokens"]):
+            return None, previous_totals
         prev = previous_totals if isinstance(previous_totals, dict) else {}
-        usage = {
-            "input_tokens": max(
-                _codex_int(total_usage.get("input_tokens"))
-                - _codex_int(prev.get("input_tokens")),
-                0,
-            ),
-            "cached_input_tokens": max(
-                _codex_int(total_usage.get("cached_input_tokens"))
-                - _codex_int(prev.get("cached_input_tokens")),
-                0,
-            ),
-            "output_tokens": max(
-                _codex_int(total_usage.get("output_tokens"))
-                - _codex_int(prev.get("output_tokens")),
-                0,
-            ),
-            "reasoning_output_tokens": max(
-                _codex_int(total_usage.get("reasoning_output_tokens"))
-                - _codex_int(prev.get("reasoning_output_tokens")),
-                0,
-            ),
-            "total_tokens": max(
-                _codex_int(total_usage.get("total_tokens"))
-                - _codex_int(prev.get("total_tokens")),
-                0,
-            ),
-        }
+        # A reconnect/restart can begin a new cumulative segment. The preceding
+        # segment remains billed; the new segment starts from zero.
+        if any(current[key] < _codex_int(prev.get(key))
+               for key in ("input_tokens", "output_tokens")):
+            prev = {}
+        usage = {key: max(current[key] - _codex_int(prev.get(key)), 0) for key in fields}
+        next_totals = current
+    elif isinstance(last_usage, dict) and last_usage:
+        usage = {key: _codex_int(last_usage.get(key)) for key in fields}
+        next_totals = previous_totals
     else:
         return None, previous_totals
-    next_totals = total_usage if isinstance(total_usage, dict) else previous_totals
-    return {
-        "input_tokens": _codex_int(usage.get("input_tokens")),
-        "cached_input_tokens": _codex_int(usage.get("cached_input_tokens")),
-        "output_tokens": _codex_int(usage.get("output_tokens")),
-        "reasoning_output_tokens": _codex_int(usage.get("reasoning_output_tokens")),
-        "total_tokens": _codex_int(usage.get("total_tokens")),
-    }, next_totals
+    if not (usage["input_tokens"] or usage["output_tokens"]):
+        # Repeated status notifications and rebuilt-context markers are not
+        # additional API calls. Still advance/reset the cumulative baseline.
+        return None, next_totals
+    return usage, next_totals
 
 
 def _codex_compact_post_tokens_from_usage(usage):

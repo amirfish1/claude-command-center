@@ -17975,7 +17975,8 @@ class TestThroughputCacheAdjusted(unittest.TestCase):
         self.assertEqual(summary["total_raw_context_tokens"], 3_000)
         self.assertEqual(summary["total_fresh_input_tokens"], 300)
         self.assertEqual(summary["total_cache_read_tokens"], 2_700)
-        self.assertEqual(summary["total_output_tokens"], 160)
+        # Codex output already includes its 10 reasoning tokens.
+        self.assertEqual(summary["total_output_tokens"], 150)
         self.assertEqual(summary["total_effective_input_tokens"], 570)
         self.assertGreater(summary["cost_usd"], 0)
 

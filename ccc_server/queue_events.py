@@ -2223,13 +2223,16 @@ def _extract_codex_usage(session_id):
         return empty
     latest = {}
     latest_window = 0
-    totals = {}
+    totals = collections.Counter()
+    previous_totals = None
+    lifetime_costs = collections.Counter()
+    cost_meta = {}
     peak = 0
     context_limit = 0
     model = row.get("model") or ""
     reasoning_effort = row.get("reasoning_effort") or ""
     # Per-turn tail for the status-rail column graph — one entry per
-    # token_count event (Codex writes one per completed turn), same raw-count
+    # billed counter increase (status notifications may repeat), same raw-count
     # shape Claude's turn_series uses.
     turn_series = collections.deque(maxlen=_core.USAGE_TURN_SERIES_MAX)
     try:
@@ -2251,10 +2254,28 @@ def _extract_codex_usage(session_id):
                     reasoning_effort = effort or reasoning_effort
                 if payload.get("type") != "token_count":
                     continue
-                info = payload.get("info") or {}
+                info = payload.get("info") if isinstance(payload.get("info"), dict) else {}
+                model = (_core._throughput_codex_payload_model(info)
+                         or _core._throughput_codex_payload_model(payload) or model)
+                delta, previous_totals = _core._codex_usage_delta_from_event(ev, previous_totals)
+                if delta:
+                    totals.update(delta)
+                    delta_totals = {
+                        "total_input_tokens": max(delta["input_tokens"] - delta["cached_input_tokens"], 0),
+                        "total_cache_read_tokens": delta["cached_input_tokens"],
+                        "total_output_tokens": delta["output_tokens"],
+                    }
+                    cost_meta = _core._session_usage_cost("codex", model, delta_totals)
+                    lifetime_costs.update(cost_meta["cost_breakdown_usd"])
+                    turn_series.append({
+                        "ts": ev.get("timestamp") or "",
+                        "model": model,
+                        "tokens_in": delta["input_tokens"],
+                        "tokens_cached": delta["cached_input_tokens"],
+                        "tokens_out": delta["output_tokens"],
+                    })
                 context_limit = _core._codex_int(info.get("model_context_window")) or context_limit
                 usage = info.get("last_token_usage") or info.get("total_token_usage") or {}
-                total_usage = info.get("total_token_usage") or usage
                 if not isinstance(usage, dict):
                     continue
                 # Codex/OpenAI usage reports cached input as a subset of
@@ -2263,10 +2284,7 @@ def _extract_codex_usage(session_id):
                 raw_window = _core._codex_int(usage.get("input_tokens"))
                 turn_total = _core._codex_int(usage.get("total_tokens"))
                 turn_cached = _core._codex_int(usage.get("cached_input_tokens"))
-                turn_out = (
-                    _core._codex_int(usage.get("output_tokens"))
-                    + _core._codex_int(usage.get("reasoning_output_tokens"))
-                )
+                turn_out = _core._codex_int(usage.get("output_tokens"))
                 if not (raw_window or turn_cached or turn_out or turn_total):
                     # A token_count with every field zeroed carries no size at
                     # all. Keep whatever the previous one said.
@@ -2277,18 +2295,9 @@ def _extract_codex_usage(session_id):
                 # Reading input_tokens straight off it made the context pill
                 # claim "ctx 0" until the next real turn.
                 window = raw_window or turn_total
-                if isinstance(total_usage, dict):
-                    totals = total_usage
                 latest = usage
                 latest_window = window
                 peak = max(peak, window)
-                if raw_window or turn_out:
-                    turn_series.append({
-                        "ts": ev.get("timestamp") or "",
-                        "tokens_in": raw_window,
-                        "tokens_cached": turn_cached,
-                        "tokens_out": turn_out,
-                    })
     except OSError:
         return empty
     if not latest:
@@ -2303,7 +2312,10 @@ def _extract_codex_usage(session_id):
         "total_cache_read_tokens": cache_read,
         "total_output_tokens": total_output,
     }
-    cost = _core._session_usage_cost("codex", model, normalized_totals)
+    cost = dict(cost_meta) if cost_meta else _core._session_usage_cost("codex", model, normalized_totals)
+    cost["cost_breakdown_usd"] = {key: round(lifetime_costs.get(key, 0), 6)
+                                  for key in ("input", "cache_creation", "cache_read", "output")}
+    cost["cost_usd"] = round(sum(lifetime_costs.values()), 6)
     return {
         **empty,
         "latest_input_tokens": latest_input,
