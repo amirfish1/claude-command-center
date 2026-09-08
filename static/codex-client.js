@@ -28,6 +28,7 @@
     composerModels: [], composerAttachment: null, composerOptionsSync: null,
     activeRead: null, readRefreshTimer: null, readRefreshInFlight: false, readRefreshQueued: false,
     renderScheduled: false, visibilityHandler: null, composerSync: null, previousDisplay: new Map(),
+    mediaController: null, mediaCleanup: Promise.resolve(), mediaCleanupBlocked: false,
   };
 
   function el(tag, className, text) {
@@ -230,8 +231,12 @@
       : changes && typeof changes === 'object' ? Object.entries(changes) : [];
     entries.forEach(([filePath, change]) => {
       const row = el('div', 'codex-client-file-change');
-      const head = el('div', 'codex-client-file-change-head'); head.append(el('strong', '', filePath));
-      const kind = change && (change.kind || change.type || change.status);
+      const base = state.context && state.context.repoPath;
+      const displayPath = base && String(filePath).startsWith(base.replace(/\/$/, '') + '/')
+        ? String(filePath).slice(base.replace(/\/$/, '').length + 1) : filePath;
+      const head = el('div', 'codex-client-file-change-head'); head.append(el('strong', '', displayPath));
+      const rawKind = change && (change.kind || change.type || change.status);
+      const kind = rawKind && typeof rawKind === 'object' ? rawKind.type : rawKind;
       if (kind) head.append(el('span', 'codex-client-badge', pretty(kind)));
       row.append(head);
       const diff = change && (change.diff || change.unified_diff || change.patch);
@@ -721,17 +726,19 @@
   async function establishGeneration(context) {
     if (state.generation !== null && state.generation !== undefined) return state.generation;
     if (state.generationPromise) return state.generationPromise;
-    state.generationPromise = (async () => {
+    const token = state.requestToken;
+    const promise = (async () => {
       const data = await jsonFetch(API + '/operation', {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ method: 'account/read', params: {}, context: contextBody(context), action_id: uuid() }),
       });
       if (data.generation === null || data.generation === undefined) throw new Error('Codex did not provide a current connection receipt.');
-      state.generation = data.generation;
-      return state.generation;
+      if (token === state.requestToken) state.generation = data.generation;
+      return data.generation;
     })();
-    try { return await state.generationPromise; }
-    finally { state.generationPromise = null; }
+    state.generationPromise = promise;
+    try { return await promise; }
+    finally { if (state.generationPromise === promise) state.generationPromise = null; }
   }
 
   async function runOperation(method, params, context) {
@@ -742,19 +749,22 @@
     const mutating = descriptor ? !descriptor.read_only : true;
     if (mutating) state.mutationLocks.set(lockKey, true);
     const actionId = uuid();
+    const token = state.requestToken;
     try {
-      if (mutating) await establishGeneration(context);
+      const generation = mutating ? await establishGeneration(context) : null;
       const body = { method, params: params || {}, context: contextBody(context), action_id: actionId };
-      if (mutating) body.generation = state.generation;
+      if (mutating) body.generation = generation;
       const data = await jsonFetch(API + '/operation', {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(body),
       });
-      if (data.generation !== null && data.generation !== undefined) state.generation = data.generation;
+      if (token === state.requestToken && data.generation !== null && data.generation !== undefined) state.generation = data.generation;
+      if (token === state.requestToken && data.sidebar_sync_pending) showNotice('Codex completed the action; the sidebar update is still pending.');
+      if (token === state.requestToken && data.queue_owner_sync_pending) showNotice('Codex completed the queue action; queue ownership reconciliation is pending.');
       if (data.uncertain) throw new Error('Codex could not confirm whether that action completed. Check the conversation before trying again.');
       return data.result === undefined ? data : data.result;
     } catch (error) {
-      if (error && error.payload && error.payload.generation !== null && error.payload.generation !== undefined) state.generation = error.payload.generation;
+      if (token === state.requestToken && error && error.payload && error.payload.generation !== null && error.payload.generation !== undefined) state.generation = error.payload.generation;
       throw error;
     } finally {
       if (mutating) state.mutationLocks.delete(lockKey);
@@ -851,20 +861,26 @@
     dialog.append(header);
     const description = productDescription(full);
     if (description) dialog.append(el('p', 'codex-client-dialog-description', description));
+    if (!full.read_only && full.method.startsWith('thread/queue/')) dialog.append(el('p', 'codex-client-dialog-description',
+      'This action uses the Codex queue for this task. Send or remove existing CCC queued messages first. You can switch back when the Codex queue is empty.'));
     form.append(footer);
     dialog.append(form); layer.append(dialog); state.root.append(layer);
-    window.setTimeout(() => dialog.querySelector('input:not([type=hidden]),textarea,select,button')?.focus(), 0);
+    form.querySelector('input:not([type=hidden]),textarea,select,button')?.focus();
   }
 
   async function executeAction(descriptor, params) {
+    const token = state.requestToken;
     try {
+      if (['thread/archive', 'thread/delete', 'thread/revert', 'thread/rollback'].includes(descriptor.method)) await disposeMedia();
       const result = await runOperation(descriptor.method, params, state.context);
+      if (token !== state.requestToken || state.closed) return result;
       state.activeRead = descriptor.read_only ? { descriptor, params } : null;
       showOperationResult(descriptor, result);
       const lifecycleHandled = !descriptor.read_only && await handleOperationLifecycle(descriptor.method, params, result);
       if (!descriptor.read_only && !lifecycleHandled) await loadState();
       return result;
-    } catch (error) { showError(conciseError(error)); throw error; }
+    } catch (error) { if (token === state.requestToken) showError(conciseError(error)); throw error; }
+    finally { if (!state.closed && token === state.requestToken) mountMedia(); }
   }
 
   function threadResult(result) {
@@ -1353,9 +1369,9 @@
       + '<button type="submit" class="codex-client-button is-primary"><span data-codex-send-label>Send</span> <span aria-hidden="true">↑</span></button></form></section>'
       + '<aside class="codex-client-tools"><div class="codex-client-toolhead"><div><strong data-codex-tool-title>Conversation tools</strong><span>Everything available in this Codex version</span></div>'
       + '<input type="search" data-codex-search aria-label="Search actions" placeholder="Find an action"></div>'
-      + '<div class="codex-client-catalog" data-codex-catalog></div></aside></main>'
+      + '<div data-codex-media-host></div><div class="codex-client-catalog" data-codex-catalog></div></aside></main>'
       + '<aside class="codex-client-result" data-codex-result hidden></aside>'
-      + '<footer class="codex-client-footer"><span data-codex-connection>Connecting…</span><span data-codex-usage></span><label><input type="checkbox" data-codex-preview> Preview features</label></footer>';
+      + '<footer class="codex-client-footer"><span data-codex-connection>Connecting…</span><span data-codex-usage></span><label>Message queue <select data-codex-queue-owner><option value="ccc">CCC</option><option value="native">Codex</option></select></label><label><input type="checkbox" data-codex-preview> Preview features</label></footer>';
     pane.classList.add('codex-client-open');
     Array.from(pane.children).forEach(child => {
       if (child === root || child.matches('.conv-pane-header')) return;
@@ -1375,11 +1391,22 @@
       renderCatalog(); syncToolsToggle();
     }));
     root.querySelector('[data-codex-search]').addEventListener('input', event => { state.query = event.target.value; renderCatalog(); });
+    root.querySelector('[data-codex-queue-owner]').addEventListener('change', async event => {
+      const select = event.target;
+      select.disabled = true;
+      try {
+        await jsonFetch(API + '/queue-owner', {method:'POST', headers:{'Content-Type':'application/json'},
+          body:JSON.stringify({owner:select.value, context:contextBody(state.context)})});
+        await loadState();
+      } catch (error) { showError(conciseError(error)); await loadState().catch(() => {}); }
+      finally { select.disabled = false; }
+    });
     root.querySelector('[data-codex-preview]').addEventListener('change', async event => {
       event.target.disabled = true;
       try {
+        await disposeMedia();
         state.catalog = await jsonFetch(API + '/preferences', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ experimental: event.target.checked }) });
-        state.schemas.clear(); renderCatalog();
+        state.schemas.clear(); renderCatalog(); mountMedia();
       } catch (error) { event.target.checked = !event.target.checked; showError(conciseError(error)); }
       finally { event.target.disabled = false; }
     });
@@ -1396,6 +1423,7 @@
       close();
       return;
     }
+    if (data.queue_owner && state.root) state.root.querySelector('[data-codex-queue-owner]').value = data.queue_owner;
     state.generation = data.generation !== undefined ? data.generation : state.generation;
     state.eventCursor = data.cursor !== undefined ? data.cursor : state.eventCursor;
     state.connected = !!data.connected;
@@ -1451,15 +1479,17 @@
 
   async function loadState() {
     if (state.closed) return;
+    const token = state.requestToken;
     const params = new URLSearchParams({ thread_id: state.context.threadId, repo_path: state.context.repoPath });
     const data = await jsonFetch(API + '/state?' + params.toString());
-    if (state.closed) return;
+    if (state.closed || token !== state.requestToken) return;
     if (!data.thread) await loadHistory(state.requestToken, null);
     else setSnapshot(data, false);
   }
 
   function handleEvents(events) {
     if (!Array.isArray(events)) return;
+    if (state.mediaController) state.mediaController.handleEvents(events);
     events.forEach(event => {
       if (!event || typeof event !== 'object') return;
       if (event.seq !== undefined) state.eventCursor = event.seq;
@@ -1516,57 +1546,66 @@
 
   function schedulePoll(delay) {
     window.clearTimeout(state.pollTimer);
-    if (state.closed || document.hidden) return;
+    if (state.closed || document.hidden && !mediaActive()) return;
     state.pollTimer = window.setTimeout(pollNow, delay === undefined ? POLL_BASE_MS : delay);
   }
 
   async function pollNow() {
-    if (state.closed || state.pollInFlight || document.hidden) return;
+    if (state.closed || state.pollInFlight || document.hidden && !mediaActive()) return;
     state.pollInFlight = true;
+    const token = state.requestToken;
     const params = new URLSearchParams({ thread_id: state.context.threadId, repo_path: state.context.repoPath });
     if (state.eventCursor !== null && state.eventCursor !== undefined) params.set('cursor', String(state.eventCursor));
     if (state.generation !== null && state.generation !== undefined) params.set('generation', String(state.generation));
     const controller = new AbortController(); state.pollAbort = controller;
     try {
       const data = await jsonFetch(API + '/events?' + params.toString(), { signal: controller.signal });
-      if (state.closed) return;
+      if (state.closed || token !== state.requestToken) return;
       state.pollFailures = 0; state.connected = !!data.connected;
       if (data.resync_required || data.generation !== undefined && state.generation !== null && data.generation !== state.generation) {
         await loadHistory(state.requestToken, null);
       } else {
         if (data.generation !== undefined) state.generation = data.generation;
         handleEvents(data.events || []);
+        if (data.queue_owner && state.root) state.root.querySelector('[data-codex-queue-owner]').value = data.queue_owner;
         if (data.cursor !== undefined) state.eventCursor = data.cursor;
         if (Array.isArray(data.requests)) { state.requests = data.requests; renderRequests(); }
         if ((data.events || []).length) await loadState(); else updateChrome();
       }
     } catch (error) {
-      if (error.name !== 'AbortError' && !state.closed) { state.pollFailures++; state.connected = false; updateChrome(); }
+      if (token === state.requestToken && error.name !== 'AbortError' && !state.closed) { state.pollFailures++; state.connected = false; updateChrome(); }
     } finally {
       if (state.pollAbort === controller) state.pollAbort = null;
-      state.pollInFlight = false;
-      schedulePoll(Math.min(POLL_MAX_MS, POLL_BASE_MS * Math.pow(2, state.pollFailures)));
+      if (token === state.requestToken) {
+        state.pollInFlight = false;
+        schedulePoll(Math.min(POLL_MAX_MS, POLL_BASE_MS * Math.pow(2, state.pollFailures)));
+      }
     }
   }
 
   async function open(context) {
-    close();
+    const cleanup = close();
+    const closingToken = state.requestToken;
+    await cleanup;
+    if (closingToken !== state.requestToken) return;
     context = Object.assign({}, typeof window.CCCCodexClientContext === 'function' ? window.CCCCodexClientContext() : {}, context || {});
     if (!context.threadId || !context.repoPath) throw new Error('Open a Codex conversation with a known repository first.');
     state.closed = false; state.context = context; state.requestToken++; state.schemas = new Map();
     state.thread = null; state.requests = []; state.generation = null; state.eventCursor = null; state.historyCursor = null; state.activity = []; state.pollFailures = 0;
     state.root = mount(context);
-    state.visibilityHandler = () => { if (document.hidden) { state.pollAbort?.abort(); window.clearTimeout(state.pollTimer); } else { loadState().catch(() => {}); schedulePoll(0); } };
+    state.visibilityHandler = () => { if (document.hidden && !mediaActive()) { state.pollAbort?.abort(); window.clearTimeout(state.pollTimer); } else { loadState().catch(() => {}); schedulePoll(0); } };
     document.addEventListener('visibilitychange', state.visibilityHandler);
     const token = state.requestToken;
     const results = await Promise.allSettled([loadCatalog(token), loadHistory(token, null)]);
     if (state.closed || token !== state.requestToken) return;
     results.forEach(result => { if (result.status === 'rejected') showError(conciseError(result.reason)); });
+    mountMedia();
     schedulePoll(0);
     return state.root;
   }
 
   function close() {
+    const cleanup = disposeMedia();
     state.closed = true; state.requestToken++;
     window.clearTimeout(state.pollTimer); state.pollTimer = null;
     window.clearTimeout(state.readRefreshTimer); state.readRefreshTimer = null;
@@ -1581,6 +1620,77 @@
     state.activeRead = null; state.readRefreshInFlight = false; state.readRefreshQueued = false;
     state.activeSurface = 'conversation'; state.activeGroup = ''; state.query = ''; state.toolsOpen = false;
     state.mutationLocks.clear(); state.responseLocks.clear();
+    cleanup.catch(error => {
+      window.dispatchEvent(new CustomEvent('ccc:codex-media-cleanup-error', {detail:{message:conciseError(error)}}));
+    });
+    return cleanup;
+  }
+
+  function mediaActive() {
+    return !!(state.mediaController && typeof state.mediaController.isActive === 'function' && state.mediaController.isActive());
+  }
+
+  function disposeMedia() {
+    const controller = state.mediaController;
+    state.mediaController = null;
+    const prior = state.mediaCleanup;
+    let current;
+    const retiringContext = state.context && Object.assign({}, state.context);
+    const retiringGeneration = state.generation;
+    const retiringCursor = state.eventCursor;
+    const active = controller && typeof controller.isActive === 'function' && controller.isActive();
+    try { current = controller ? controller.dispose() : null; }
+    catch (error) { current = Promise.reject(error); }
+    if (active && retiringContext) {
+      const stopDrain = drainRetiringMedia(controller, retiringContext, retiringGeneration, retiringCursor);
+      current = Promise.resolve(current).finally(stopDrain);
+    }
+    state.mediaCleanupBlocked = true;
+    const cleanup = Promise.all([prior, current]).then(() => {
+      if (state.mediaCleanup === cleanup) state.mediaCleanupBlocked = false;
+    });
+    state.mediaCleanup = cleanup;
+    // DOM close handlers can ignore the Promise; avoid an unhandled rejection
+    // while callers that must wait (preview toggles) still receive the error.
+    state.mediaCleanup.catch(() => {});
+    return state.mediaCleanup;
+  }
+
+  function drainRetiringMedia(controller, context, generation, initialCursor) {
+    let stopped = false, cursor = initialCursor, timer = null, abort = null;
+    const poll = async () => {
+      if (stopped) return;
+      abort = new AbortController();
+      const deadline = window.setTimeout(() => abort?.abort(), 2500);
+      try {
+        const params = new URLSearchParams({thread_id:context.threadId, repo_path:context.repoPath});
+        if (cursor !== null && cursor !== undefined) params.set('cursor', String(cursor));
+        if (generation !== null && generation !== undefined) params.set('generation', String(generation));
+        const data = await jsonFetch(API + '/events?' + params, {signal:abort.signal});
+        if (!stopped && !data.resync_required && data.generation === generation) {
+          controller.handleEvents(data.events || []);
+          if (data.cursor !== undefined) cursor = data.cursor;
+        }
+      } catch (_) { /* The controller's bounded native-close deadline fences failure. */ }
+      finally {
+        window.clearTimeout(deadline);
+        if (!stopped) timer = window.setTimeout(poll, 300);
+      }
+    };
+    timer = window.setTimeout(poll, 0);
+    return () => { stopped = true; window.clearTimeout(timer); abort?.abort(); };
+  }
+
+  function mountMedia() {
+    if (state.closed || state.mediaCleanupBlocked || !state.root || !state.catalog || !window.CCCCodexMedia || state.mediaController) return;
+    const context = Object.assign({}, state.context);
+    try {
+      state.mediaController = window.CCCCodexMedia.attach({
+        root: state.root.querySelector('[data-codex-media-host]'), context, catalog: state.catalog,
+        operation: (method, params) => runOperation(method, params, context),
+        error: message => { if (!state.closed) showError(message); },
+      });
+    } catch (error) { showError('Media controls could not start: ' + conciseError(error)); }
   }
 
   function ensureLaunchers() {
@@ -1601,12 +1711,20 @@
     });
   }
 
+  window.addEventListener('ccc:conversation-selected', event => {
+    if (state.closed || !state.context) return;
+    const selected = event.detail || {};
+    const samePane = selected.paneEl === state.context.paneEl ||
+      selected.paneId && selected.paneId === state.context.paneId;
+    if (samePane && selected.threadId !== state.context.threadId) close();
+  });
+
   const observer = new MutationObserver(ensureLaunchers);
   const begin = () => { ensureLaunchers(); observer.observe(document.body, { subtree: true, childList: true, attributes: true, attributeFilter: ['class'] }); };
   if (document.body) begin(); else document.addEventListener('DOMContentLoaded', begin, { once: true });
 
   window.CCCCodexClient = {
     open, close, handleEvents,
-    __testing: { createForm, shapePendingResponse, renderItem, runOperation, pollNow, loadEarlier, state },
+    __testing: { createForm, shapePendingResponse, renderItem, runOperation, executeAction, pollNow, loadEarlier, state },
   };
 })();

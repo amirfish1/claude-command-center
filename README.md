@@ -498,6 +498,15 @@ the UI uses for the kanban.
   sessions" triage band (last 5h), so structure and live activity stay
   side by side.
 
+## Codex workspace
+
+Open a Codex conversation and choose **Workspace** for a readable conversation,
+inline approvals, terminal tools, and categorized app-server actions. Capability
+availability follows the installed Codex version and connected host. Live actions
+require CCC's app-server bridge; a desktop app may not expose an attachable endpoint.
+See the [Codex workspace guide](docs/codex-workspace.md) for setup boundaries,
+preview features, queue ownership, and verification coverage.
+
 ## Engine support
 
 CCC was built around Claude Code first; Codex, Cursor, Antigravity, Kilo Code, Kimi Code, OpenCode, and Devin support followed. Spawn-from-dashboard works for all eight. The rest varies:
@@ -505,7 +514,7 @@ CCC was built around Claude Code first; Codex, Cursor, Antigravity, Kilo Code, K
 | Engine        | Spawn (headless from UI) | Resume (terminal inject / headless resume) | Transcript ingestion | Per-session model + reasoning-effort picker |
 |---------------|--------------------------|--------------------------------------------|----------------------|--------------------------|
 | Claude Code   | yes                      | yes (both)                                 | yes — first-class JSONL (`~/.claude/projects/*.jsonl`) | yes — UI picker, incl. 1M-context toggle; effort `low` `medium` `high` `xhigh` `max` |
-| Codex         | yes                      | yes (both)                                 | partial — Codex JSONL parsed, broader parity tracked in [#57](https://github.com/amirfish1/claude-command-center/issues/57) | yes — UI picker via per-session override; default from `CCC_CODEX_MODEL`; effort `low` `medium` `high` `xhigh` (no `max`) |
+| Codex         | yes                      | yes (both)                                 | yes — JSONL ingestion plus native app-server workspace when connected | yes — UI picker via per-session override; default from `CCC_CODEX_MODEL`; effort `low` `medium` `high` `xhigh` (no `max`) |
 | Cursor        | yes — headless via `cursor-agent` | yes — follow-ups route through `cursor-agent --resume` | partial — Cursor agent transcripts parsed from `~/.cursor/projects/` | model only — UI/default picker, default from `CCC_CURSOR_MODEL`; no effort ladder |
 | Antigravity   | yes — headless via `agy` print mode | yes — follow-ups route through AGY CLI or the running app's language-server RPC | yes — JSONL transcripts from `~/.gemini/antigravity/brain/` | model auto-detected from transcript metadata; no effort ladder |
 | Kilo Code     | yes — headless via `kilo run --auto` | no — fire-and-forget headless run, no resume wiring yet | yes — reads Kilo's SQLite store (`~/.local/share/kilo/kilo.db`); externally-launched sessions appear on the board | model only — UI/default picker, default from `CCC_KILO_MODEL`; no effort ladder |

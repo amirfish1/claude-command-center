@@ -29,7 +29,7 @@
 }
 
 .codex-client-shell {
-  --codex-panel: color-mix(in srgb, var(--bg-secondary, #16191f) 92%, transparent);
+  --codex-panel: color-mix(in srgb, var(--surface, #16191f) 92%, transparent);
   --codex-soft: color-mix(in srgb, var(--text, #e6edf3) 5%, transparent);
   --codex-soft-strong: color-mix(in srgb, var(--text, #e6edf3) 9%, transparent);
   --codex-accent: var(--accent, #d97757);
@@ -154,7 +154,7 @@
   padding: 10px 14px;
   border: 1px solid color-mix(in srgb, var(--codex-accent) 17%, var(--border, #30363d));
   border-radius: 16px 16px 4px 16px;
-  background: color-mix(in srgb, var(--codex-accent) 10%, var(--bg-secondary, #16191f));
+  background: color-mix(in srgb, var(--codex-accent) 10%, var(--surface, #16191f));
 }
 .codex-client-message.is-agent { padding: 2px 4px; }
 .codex-client-message.is-final-answer {
@@ -162,7 +162,7 @@
   padding: 16px 18px;
   border: 1px solid color-mix(in srgb, var(--codex-accent) 18%, var(--border, #30363d));
   border-radius: 13px;
-  background: linear-gradient(135deg, color-mix(in srgb, var(--codex-accent) 6%, var(--bg-secondary, #16191f)), var(--codex-panel));
+  background: linear-gradient(135deg, color-mix(in srgb, var(--codex-accent) 6%, var(--surface, #16191f)), var(--codex-panel));
   box-shadow: 0 8px 28px rgba(0,0,0,.12);
 }
 .codex-client-message-phase {
@@ -266,7 +266,7 @@
   padding: 14px;
   border: 1px solid color-mix(in srgb, #e5a84b 38%, var(--border, #30363d));
   border-radius: 11px;
-  background: color-mix(in srgb, #e5a84b 7%, var(--bg-secondary, #16191f));
+  background: color-mix(in srgb, #e5a84b 7%, var(--surface, #16191f));
 }
 .codex-client-request + .codex-client-request { margin-top: 8px; }
 .codex-client-request h3 { margin: 0 0 8px; font-size: 13px; }
@@ -299,7 +299,7 @@
   padding: 8px;
   border: 1px solid var(--border, #30363d);
   border-radius: 13px;
-  background: var(--bg-secondary, #16191f);
+  background: var(--surface, #16191f);
   box-shadow: 0 8px 30px rgba(0,0,0,.16);
 }
 .codex-client-composer-options { display: flex; flex: 0 1 auto; align-items: center; gap: 5px; }
@@ -348,7 +348,7 @@
   background: color-mix(in srgb, var(--codex-panel) 72%, transparent);
   overflow: auto;
 }
-.codex-client-toolhead { position: sticky; top: 0; z-index: 2; display: grid; gap: 9px; padding: 13px; border-bottom: 1px solid var(--border, #30363d); background: color-mix(in srgb, var(--bg-secondary, #16191f) 94%, transparent); backdrop-filter: blur(16px); }
+.codex-client-toolhead { position: sticky; top: 0; z-index: 2; display: grid; gap: 9px; padding: 13px; border-bottom: 1px solid var(--border, #30363d); background: color-mix(in srgb, var(--surface, #16191f) 94%, transparent); backdrop-filter: blur(16px); }
 .codex-client-toolhead > div { display: flex; flex-direction: column; gap: 2px; }
 .codex-client-toolhead strong { font-size: 12px; }
 .codex-client-toolhead span { color: var(--text-muted, #8b949e); font-size: 10px; }
@@ -395,14 +395,14 @@
 .codex-client-footer label { display: flex; align-items: center; gap: 4px; cursor: pointer; }
 
 .codex-client-notices { position: absolute; z-index: 20; top: 62px; right: 14px; display: grid; gap: 6px; width: min(360px, calc(100% - 28px)); }
-.codex-client-notice { padding: 9px 11px; border: 1px solid var(--border, #30363d); border-radius: 9px; color: var(--text, #e6edf3); background: var(--bg-secondary, #16191f); box-shadow: 0 12px 32px rgba(0,0,0,.24); font-size: 11px; }
+.codex-client-notice { padding: 9px 11px; border: 1px solid var(--border, #30363d); border-radius: 9px; color: var(--text, #e6edf3); background: var(--surface, #16191f); box-shadow: 0 12px 32px rgba(0,0,0,.24); font-size: 11px; }
 .codex-client-notice.is-error { border-color: color-mix(in srgb, #f07178 45%, var(--border, #30363d)); }
 
-.codex-client-result { position: absolute; z-index: 10; right: max(14px, 32%); bottom: 42px; width: min(420px, 60%); max-height: 46%; overflow: auto; padding: 12px; border: 1px solid var(--border, #30363d); border-radius: 11px; background: var(--bg-secondary, #16191f); box-shadow: 0 18px 46px rgba(0,0,0,.3); }
+.codex-client-result { position: absolute; z-index: 10; right: max(14px, 32%); bottom: 42px; width: min(420px, 60%); max-height: 46%; overflow: auto; padding: 12px; border: 1px solid var(--border, #30363d); border-radius: 11px; background: var(--surface, #16191f); box-shadow: 0 18px 46px rgba(0,0,0,.3); }
 .codex-client-result-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px; font-size: 12px; }
 
 .codex-client-dialog-layer { position: absolute; z-index: 30; inset: 0; display: grid; place-items: center; padding: 18px; background: rgba(4,7,10,.58); backdrop-filter: blur(3px); }
-.codex-client-dialog { width: min(620px, 100%); max-height: min(760px, 92%); overflow: auto; border: 1px solid var(--border, #30363d); border-radius: 13px; padding: 16px; background: var(--bg-secondary, #16191f); box-shadow: 0 24px 70px rgba(0,0,0,.42); }
+.codex-client-dialog { width: min(620px, 100%); max-height: min(760px, 92%); overflow: auto; border: 1px solid var(--border, #30363d); border-radius: 13px; padding: 16px; background: var(--surface, #16191f); box-shadow: 0 24px 70px rgba(0,0,0,.42); }
 .codex-client-dialog > header { display: flex; justify-content: space-between; align-items: center; font-size: 14px; font-weight: 700; }
 .codex-client-dialog-description, .codex-schema-help { display: block; margin: 5px 0; color: var(--text-muted, #8b949e); font-size: 10px; line-height: 1.45; }
 .codex-client-dialog footer { display: flex; justify-content: flex-end; gap: 7px; margin-top: 14px; }
@@ -451,3 +451,8 @@ textarea.codex-schema-input { min-height: 82px; resize: vertical; }
   .codex-schema-map-row { grid-template-columns: 1fr auto; }
   .codex-schema-map-row > .codex-schema-field { grid-column: 1 / -1; }
 }
+
+.codex-client-shell:not([data-surface="workspace"]) [data-codex-media-host] { display: none; }
+[data-codex-media-host] { padding: 12px; }
+.codex-client-footer { flex-wrap: wrap; }
+.codex-client-footer select { font: inherit; color: var(--text); background: var(--bg); border: 1px solid var(--border); border-radius: 4px; }

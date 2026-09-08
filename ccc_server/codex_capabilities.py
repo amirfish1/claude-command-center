@@ -13,6 +13,7 @@ import math
 import os
 import re
 import subprocess
+import sys
 import tempfile
 import threading
 from pathlib import Path
@@ -97,18 +98,43 @@ _INTERNAL_METHODS = frozenset(
     }
 )
 
-_CACHE_VERSION = 2
+_CACHE_VERSION = 3
 _CACHE_DIR = Path.home() / ".claude" / "command-center" / "cache" / "codex-capabilities"
 _CATALOG_MEMORY: dict[str, dict] = {}
 _CATALOG_LOCK = threading.Lock()
+_HOST_PLATFORM = sys.platform
 
 _SPECIAL_TITLES = {
+    "fs/readFile": "Read File",
+    "fs/writeFile": "Write File",
+    "fs/readDirectory": "Browse Directory",
+    "fs/createDirectory": "Create Directory",
+    "fs/getMetadata": "File Details",
+    "fs/copy": "Copy File",
+    "fs/remove": "Remove File",
+    "fs/watch": "Watch Files",
+    "fs/unwatch": "Stop Watching Files",
+    "fuzzyFileSearch": "Find Files",
+    "permissionProfile/list": "Permission Profiles",
+    "windowsSandbox/setupStart": "Set Up Windows Sandbox",
+    "windowsSandbox/readiness": "Windows Sandbox Readiness",
     "thread/list": "List Conversations",
     "thread/name/set": "Set Conversation Name",
     "thread/read": "Read Conversation",
     "thread/start": "Start Conversation",
     "thread/loaded/list": "List Loaded Conversations",
     "threadSection/list": "List Conversation Sections",
+    "account/rateLimitResetCredit/consume": "Use a Usage Reset",
+    "account/sendAddCreditsNudgeEmail": "Request More Credits",
+}
+
+_ACTION_NOTES = {
+    "thread/delete": "Permanently delete this conversation and its spawned descendant conversations.",
+    "thread/archive": "Archive this conversation and its spawned descendant conversations.",
+    "thread/rollback": "Remove recent turns from the conversation context. This does not restore files on disk.",
+    "account/rateLimitResetCredit/consume": "Use one available usage reset for this account.",
+    "account/sendAddCreditsNudgeEmail": "Send an email request for more credits to the workspace owner.",
+    "feedback/upload": "Send this feedback and selected diagnostics to OpenAI.",
 }
 
 _ACTION_WORDS = frozenset(
@@ -227,7 +253,7 @@ def _group_for_method(method: str) -> str:
         return "Account"
     if method.startswith(("model/", "modelProvider/", "collaborationMode/")):
         return "Models"
-    if method.startswith(("config/", "configRequirements/", "experimentalFeature/")):
+    if method.startswith(("config/", "configRequirements/", "experimentalFeature/", "permissionProfile/")):
         return "Settings"
     if method.startswith("skills/") or method.startswith("plugin/skill/"):
         return "Skills"
@@ -308,8 +334,10 @@ def _unavailable_reason(method: str, direction: str, preview: bool) -> str | Non
         return "Managed internally by the CCC Codex transport"
     if method in {"attestation/generate", "account/chatgptAuthTokens/refresh"}:
         return "Host identity and attestation requests are not exposed by CCC"
+    if direction == "client_request" and method.startswith("windowsSandbox/") and _HOST_PLATFORM != "win32":
+        return "Available on Windows hosts"
     if preview:
-        return "Set CCC_CODEX_EXPERIMENTAL=1 to enable preview Codex methods"
+        return "Enable Preview features to use this action"
     return None
 
 
@@ -483,6 +511,7 @@ def _descriptors_for_direction(
             "params_schema": params_schema,
             "params_type": params_type,
             "direction": direction,
+            "internal": method in _INTERNAL_METHODS or method.startswith("mock/"),
         }
         if not experimental_only and method in full_variants:
             full_params_schema, full_params_type = _params_schema(
@@ -491,7 +520,7 @@ def _descriptors_for_direction(
             if full_params_schema != params_schema or full_params_type != params_type:
                 descriptor["_experimental_params_schema"] = full_params_schema
                 descriptor["_experimental_params_type"] = full_params_type
-        description = variant.get("description")
+        description = _ACTION_NOTES.get(method) or variant.get("description")
         if isinstance(description, str) and description.strip():
             descriptor["description"] = description.strip()
         descriptors.append(descriptor)
@@ -1206,16 +1235,15 @@ def _catalog_with_runtime_availability(catalog: dict, experimental: bool) -> dic
                 record["params_type"] = record.get(
                     "_experimental_params_type", record.get("params_type", "union")
                 )
-            if record.get("experimental"):
-                hard_reason = _unavailable_reason(
-                    record.get("method", ""), record.get("direction", ""), False
-                )
-                if experimental and hard_reason is None:
-                    record["available"] = True
-                    record["unavailable_reason"] = None
-                elif hard_reason is not None:
-                    record["available"] = False
-                    record["unavailable_reason"] = hard_reason
+            method = record.get("method", "")
+            reason = _unavailable_reason(method, record.get("direction", ""), bool(record.get("experimental")) and not experimental)
+            record["available"] = reason is None
+            record["unavailable_reason"] = reason
+            record["title"] = _title_for_method(method)
+            record["group"] = _group_for_method(method)
+            record["internal"] = method in _INTERNAL_METHODS or method.startswith("mock/")
+            if method in _ACTION_NOTES:
+                record["description"] = _ACTION_NOTES[method]
             record.pop("_experimental_params_schema", None)
             record.pop("_experimental_params_type", None)
             records.append(record)
@@ -1268,4 +1296,4 @@ def get_codex_catalog() -> dict:
             "error": _bounded_error(exc),
         }
     experimental = os.environ.get("CCC_CODEX_EXPERIMENTAL") == "1"
-    return _catalog_with_runtime_availability(base_catalog, experimental)
+    return {**_catalog_with_runtime_availability(base_catalog, experimental), "server_platform": _HOST_PLATFORM}

@@ -703,17 +703,19 @@ test('file-change items render filenames and colorized preformatted diffs', asyn
   try {
     const result = await page.evaluate(() => {
       const item = window.CCCCodexClient.__testing.renderItem({ type: 'fileChange', id: 'change-1', changes: [
-        { path: 'src/app.js', kind: 'update', diff: '@@ -1 +1 @@\n-old value\n+new value' },
+        { path: 'src/app.js', kind: {type:'update'}, diff: '@@ -1 +1 @@\n-old value\n+new value' },
       ] });
       document.body.append(item);
       return {
         filename: item.querySelector('.codex-client-file-change strong')?.textContent,
+        kind: item.querySelector('.codex-client-badge')?.textContent,
         pre: item.querySelector('pre')?.textContent,
         additions: item.querySelectorAll('.codex-diff-add').length,
         deletions: item.querySelectorAll('.codex-diff-delete').length,
       };
     });
     assert.equal(result.filename, 'src/app.js');
+    assert.equal(result.kind, 'Update');
     assert.match(result.pre, /@@ -1 \+1 @@/);
     assert.equal(result.additions, 1);
     assert.equal(result.deletions, 1);

@@ -154,7 +154,7 @@ def test_catalog_enumerates_all_protocol_directions_and_marks_preview_methods():
     assert methods["account/usage/read"]["params_schema"]["type"] == "object"
     assert methods["project/list"]["experimental"] is True
     assert methods["project/list"]["available"] is False
-    assert "CCC_CODEX_EXPERIMENTAL" in methods["project/list"]["unavailable_reason"]
+    assert "Preview features" in methods["project/list"]["unavailable_reason"]
     assert methods["plugin/list"]["experimental"] is True
     assert methods["plugin/list"]["available"] is False
     assert methods["initialize"]["available"] is False
@@ -546,6 +546,15 @@ def test_invalid_unicode_has_a_safe_validation_error():
         with pytest.raises(ValueError, match="invalid Unicode sequence") as error:
             validate_schema(value, True)
         assert type(error.value) is ValueError
+
+
+def test_platform_actions_follow_actual_host_on_warm_catalog(monkeypatch):
+    schema = _direction(_variant("windowsSandbox/setupStart"))
+    base = catalog_from_schemas({"ClientRequest": schema}, {"ClientRequest": schema})
+    monkeypatch.setattr(capabilities, "_HOST_PLATFORM", "darwin")
+    assert not capabilities._catalog_with_runtime_availability(base, True)["methods"][0]["available"]
+    monkeypatch.setattr(capabilities, "_HOST_PLATFORM", "win32")
+    assert capabilities._catalog_with_runtime_availability(base, True)["methods"][0]["available"]
 
 
 def test_unique_items_uses_linear_canonical_comparisons(monkeypatch):

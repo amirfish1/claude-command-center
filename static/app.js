@@ -3523,6 +3523,13 @@
     };
   };
   window.CCCCodexMarkdown = function (text) { return renderMarkdown(String(text || '')); };
+  window.CCCCodexClientLifecycle = function () {
+    scheduleDashboardInvalidation('archive');
+    scheduleDashboardInvalidation('sessions');
+  };
+  window.addEventListener('ccc:codex-media-cleanup-error', event => {
+    showOpToast(event.detail && event.detail.message || 'Codex media cleanup could not be confirmed.', 'error');
+  });
   // Currently-focused session and its live-process state (per-pane, shimmed via window.currentSession)
   let liveStatus = { forSessionId: null, live: false, pid: null, tty: null, terminalApp: null, sidecarTool: null, sidecarFile: null, sidecarStatus: null, sidecarTs: 0, sidecarInFlight: false, staleToolCall: false, staleToolAgeS: 0, needsApproval: false, needsApprovalMessage: '', acpPendingPermission: null, questionWaiting: false, questionText: '', questionHeader: '', questionPreamble: '', questionOptions: [], questionOptionDetails: [], codexAppServer: false, codexAppServerTransport: null, codexManagedAppServer: false, codexAppServerEventSeq: 0, codexAppServerLastActivityAt: 0, codexAppServerLastItemId: '' };
   let liveStatusTimer = null;
@@ -42468,6 +42475,9 @@
     try { _perfConvOpen = { id: id, paneId: paneId, t0: performance.now() }; } catch (_) {}
     const pane = paneByPaneId(paneId);
     if (!pane) return;
+    window.dispatchEvent(new CustomEvent('ccc:conversation-selected', { detail: {
+      threadId: sessionIdByConv[id] || id, paneId, paneEl: convPaneElById(paneId),
+    } }));
     // Kick the tail fetch before the synchronous chrome work below (35-60ms
     // of DOM writes and forced reads): fetchConversationEvents consumes it
     // via _takePrefetchedConversationTail, so the server round-trip overlaps
