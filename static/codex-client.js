@@ -24,7 +24,7 @@
     historyCursor: null, connected: false, activeSurface: 'conversation',
     activeGroup: '', query: '', toolsOpen: false, pollTimer: null, pollAbort: null,
     pollInFlight: false, pollFailures: 0, closed: true, requestToken: 0,
-    mutationLocks: new Map(), responseLocks: new Set(), generationPromise: null, activity: [],
+    mutationLocks: new Map(), responseLocks: new Map(), generationPromise: null, activity: [],
     composerModels: [], composerAttachment: null, composerOptionsSync: null,
     activeRead: null, readRefreshTimer: null, readRefreshInFlight: false, readRefreshQueued: false,
     renderScheduled: false, visibilityHandler: null, composerSync: null, previousDisplay: new Map(),
@@ -747,8 +747,8 @@
     if (state.mutationLocks.has(lockKey)) return { skipped: true };
     const descriptor = state.catalog && (state.catalog.methods || []).find(row => row.method === method);
     const mutating = descriptor ? !descriptor.read_only : true;
-    if (mutating) state.mutationLocks.set(lockKey, true);
     const actionId = uuid();
+    if (mutating) state.mutationLocks.set(lockKey, actionId);
     const token = state.requestToken;
     try {
       const generation = mutating ? await establishGeneration(context) : null;
@@ -767,19 +767,20 @@
       if (token === state.requestToken && error && error.payload && error.payload.generation !== null && error.payload.generation !== undefined) state.generation = error.payload.generation;
       throw error;
     } finally {
-      if (mutating) state.mutationLocks.delete(lockKey);
+      if (mutating && state.mutationLocks.get(lockKey) === actionId) state.mutationLocks.delete(lockKey);
     }
   }
 
   async function respond(request, result) {
     if (!request || request.state !== 'pending' || state.responseLocks.has(request.key)) return { skipped: true };
-    state.responseLocks.add(request.key);
+    const receipt = uuid();
+    state.responseLocks.set(request.key, receipt);
     try {
       return await jsonFetch(API + '/respond', {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ key: request.key, generation: request.generation || state.generation, result, context: contextBody(state.context) }),
       });
-    } finally { state.responseLocks.delete(request.key); }
+    } finally { if (state.responseLocks.get(request.key) === receipt) state.responseLocks.delete(request.key); }
   }
 
   function descriptorSurface(descriptor) {

@@ -209,3 +209,27 @@ test('late lifecycle results cannot replace a newly selected workspace', async()
     assert.deepEqual(result,{selected:'next',generation:'g'});
   } finally {await page.close();}
 });
+
+test('late mutation completion cannot release a replacement action lock', async()=>{
+  const page=await fixture();
+  try {
+    const result=await page.evaluate(async()=>{
+      const api=window.CCCCodexClient.__testing;
+      const original=window.fetch; const pending=[];
+      window.fetch=(url,options={})=>String(url).endsWith('/operation')&&JSON.parse(options.body).method==='thread/name/set'
+        ? new Promise(resolve=>pending.push(()=>resolve({ok:true,json:async()=>({ok:true,generation:'g',result:{}})})))
+        : original(url,options);
+      const first=api.runOperation('thread/name/set',{threadId:'task',name:'Name'});
+      await Promise.resolve(); await Promise.resolve();
+      await window.CCCCodexClient.open({threadId:'task',repoPath:'/repo'});
+      const second=api.runOperation('thread/name/set',{threadId:'task',name:'Name'});
+      await Promise.resolve(); await Promise.resolve();
+      pending[0](); await first;
+      const third=await api.runOperation('thread/name/set',{threadId:'task',name:'Name'});
+      pending[1](); await second;
+      await window.CCCCodexClient.close();
+      return {third,count:pending.length};
+    });
+    assert.deepEqual(result,{third:{skipped:true},count:2});
+  } finally {await page.close();}
+});
