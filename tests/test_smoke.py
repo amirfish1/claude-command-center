@@ -48,6 +48,13 @@ class TestConversationTranscriptPath(unittest.TestCase):
                 )
 
 
+class TestSpawnStreamBackoff(unittest.TestCase):
+    def test_idle_backoff_caps_before_exponentiation_can_overflow(self):
+        """An indefinitely quiet spawn stream must retain its capped cadence."""
+        server = importlib.import_module("server")
+        self.assertEqual(server._spawn_stream_idle_sleep_s(10_000), 0.25)
+
+
 class TestKimiRecallBridge(unittest.TestCase):
     def test_kimi_recall_bridge_is_documented(self):
         root = pathlib.Path(PROJECT_ROOT)

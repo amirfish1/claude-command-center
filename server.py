@@ -23910,6 +23910,17 @@ def _run_api_request(is_background, callback):
         return callback()
 
 
+def _spawn_stream_idle_sleep_s(consecutive_empty):
+    """Return the bounded idle delay for a quiet spawn-output stream.
+
+    The delay reaches its 250ms cap on the seventh empty poll. Limit the
+    exponent input before calculating it so an indefinitely idle SSE request
+    cannot overflow while it is already meant to remain capped.
+    """
+    exponent = min(max(0, int(consecutive_empty)), 7)
+    return min(0.05 * (1.3 ** exponent), 0.25)
+
+
 class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
     def _is_morning_path(self, path):
         """True if the request targets the (opt-in) Morning sub-feature."""
@@ -33821,7 +33832,7 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                 if first_visible_sent:
                     sleep_s = 0.25
                 else:
-                    sleep_s = min(0.05 * (1.3 ** consecutive_empty), 0.25)
+                    sleep_s = _spawn_stream_idle_sleep_s(consecutive_empty)
                 time.sleep(sleep_s)
         except (BrokenPipeError, ConnectionResetError, OSError):
             pass
