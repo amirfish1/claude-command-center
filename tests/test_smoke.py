@@ -48,6 +48,13 @@ class TestConversationTranscriptPath(unittest.TestCase):
                 )
 
 
+class TestSpawnStreamBackoff(unittest.TestCase):
+    def test_idle_backoff_caps_before_exponentiation_can_overflow(self):
+        """An indefinitely quiet spawn stream must retain its capped cadence."""
+        server = importlib.import_module("server")
+        self.assertEqual(server._spawn_stream_idle_sleep_s(10_000), 0.25)
+
+
 class TestKimiRecallBridge(unittest.TestCase):
     def test_kimi_recall_bridge_is_documented(self):
         root = pathlib.Path(PROJECT_ROOT)
@@ -2918,7 +2925,7 @@ class TestServerImports(unittest.TestCase):
         draft_css = app_css[app_css.index(".conv-project-tree .conv-draft-row {"):app_css.index(".conv-item .conv-ux-fix-progress", app_css.index(".conv-project-tree .conv-draft-row {"))]
         self.assertIn("padding: 0 8px;", header_css)
         self.assertIn("padding: 0 8px;", session_css)
-        self.assertIn("padding-left: 29px;", grouped_session_css)
+        self.assertIn("padding-left: var(--conv-content-left);", grouped_session_css)
         self.assertIn("display: flex;", draft_css)
         self.assertIn("align-items: center;", draft_css)
         self.assertIn("margin: 0 0 0 18px;", draft_css)

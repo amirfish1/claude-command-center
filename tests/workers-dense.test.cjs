@@ -89,7 +89,7 @@ const densityModel = (() => {
       },
     };
     vm.createContext(ctx);
-    vm.runInContext(app.slice(app.indexOf('  function compactRowsOn()'), app.indexOf('  // Workers-tab density.')) + src, ctx);
+    vm.runInContext(app.slice(app.indexOf('  function compactRowsOn()'), app.indexOf('  // Workers-tab density')) + src, ctx);
     return { ctx, store };
   };
 })();
@@ -162,9 +162,10 @@ test('Coding and Workers display modes control actual title wrapping and outcome
         },{'compact-rows':ctx.compactRowsOn(),'wrap-titles':ctx.wrapTitlesOn(),'workers-dense':ctx.workersDenseTabActive()});
         measured.push(await page.evaluate(()=>{
           const title=document.querySelector('.conv-title'),outcome=document.querySelector('.conv-outcome');
-          return {whiteSpace:getComputedStyle(title).whiteSpace,height:title.getBoundingClientRect().height,details:getComputedStyle(outcome).display!=='none'};
+          return {whiteSpace:getComputedStyle(title).whiteSpace,height:title.getBoundingClientRect().height,details:getComputedStyle(outcome).display!=='none',layout:getComputedStyle(title.closest('.conv-item')).display};
         }));
       }
+      assert.equal(measured[0].layout,'grid',`${lane}: Compact must use the shared dense row layout`);
       assert.equal(measured[0].whiteSpace,'nowrap',lane);
       assert.equal(measured[1].whiteSpace,'normal',lane);
       assert.equal(measured[2].whiteSpace,'normal',lane);
