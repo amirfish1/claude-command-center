@@ -1,0 +1,1 @@
+Automatically discover parent relationships for externally launched headless Claude sessions using live process ancestry and Codex task identity, without hooks or launcher changes. Confirmed relationships appear in the session hierarchy and Activity Log and survive restarts; ambiguous or missed short-lived launches remain unlinked.

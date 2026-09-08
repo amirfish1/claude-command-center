@@ -38,12 +38,14 @@ from ccc_server import github_quota as _github_quota
 #   6. Kimi Code Agent subagents (agents/<name>/wire.jsonl) — source: "kimi-subagent"
 #   7. Grok Build subagents (sessions/<parent>/subagents/<child>/meta.json)
 #      — source: "grok-subagent" (real resumable child sessions)
+#   8. Observed live Claude subprocess ancestry — source: "process-discovery"
 #
 # Edges are added eagerly at startup (sources 1-4, 7) and lazily on first
 # family_tree() query for sources 5-6 (filesystem glob, cached). Source 7
 # is also refreshed on the Codex 30s loop and on family_tree() so a live
 # spawn_subagent appears without a restart. New CCC spawns add their edge
-# immediately via add_edge() called from _record_spawn_to_registry.
+# immediately via add_edge() called from _record_spawn_to_registry. Source 8
+# is checked in the background every three seconds without hooks.
 #
 # The graph is engine-agnostic: it stores parent_sid -> child_sid with
 # per-edge metadata ({source, engine, resumable, name, model}). The
@@ -185,6 +187,21 @@ class _SessionGraph:
             self._children_of.setdefault(parent, {})[child] = meta
             self._edge_meta[child] = meta
             self._dirty = True
+
+    def try_add_discovered_edge(self, parent, child, model=""):
+        """Atomically accept a new observed edge without overriding lineage."""
+        with self._lock:
+            if not parent or not child or parent == child or self._parent_of.get(child):
+                return False
+            ancestor = parent
+            seen = {child}
+            while ancestor:
+                if ancestor in seen:
+                    return False
+                seen.add(ancestor)
+                ancestor = self._parent_of.get(ancestor)
+            self.add_edge(parent, child, source="process-discovery", engine="claude", model=model)
+            return True
 
     def remove_edge(self, parent, child):
         """Remove a single edge."""
@@ -673,24 +690,38 @@ _session_graph_codex_refresh_interval = 30.0
 _session_graph_codex_refresh_stop = threading.Event()
 
 def _session_graph_codex_refresh_loop():
+    next_full_refresh = 0.0
     while not _session_graph_codex_refresh_stop.is_set():
+        # Keep external discovery running even when no dashboard is open.
+        # The registry and process scans share their normal three-second cache.
         try:
-            for child, parent in _core._codex_spawn_parent_by_child().items():
-                _core._session_graph.add_edge(
-                    parent, child, source="codex-native", engine="codex",
-                    name=_core._codex_spawn_edge_name(child) or None,
-                )
-            _core._session_graph.save()
+            from ccc_server.external_sessions import discover
+            registry = _core._load_session_registry()
+            discover(registry, _core._scan_engine_processes())
         except Exception:
             pass
-        try:
-            _core._session_graph_ingest_grok_subagents()
-        except Exception:
-            pass
-        _session_graph_codex_refresh_stop.wait(_session_graph_codex_refresh_interval)
+        now = time.monotonic()
+        if now >= next_full_refresh:
+            next_full_refresh = now + _session_graph_codex_refresh_interval
+            try:
+                for child, parent in _core._codex_spawn_parent_by_child().items():
+                    _core._session_graph.add_edge(
+                        parent, child, source="codex-native", engine="codex",
+                        name=_core._codex_spawn_edge_name(child) or None,
+                    )
+                _core._session_graph.save()
+            except Exception:
+                pass
+            try:
+                _core._session_graph_ingest_grok_subagents()
+            except Exception:
+                pass
+        _session_graph_codex_refresh_stop.wait(min(3.0, _session_graph_codex_refresh_interval))
 
 
 def _start_session_graph_codex_refresh():
+    from ccc_server.external_sessions import enable
+    enable()
     t = threading.Thread(
         target=_session_graph_codex_refresh_loop,
         daemon=True,
