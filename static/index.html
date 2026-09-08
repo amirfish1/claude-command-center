@@ -1377,19 +1377,12 @@
                       </div>
                     </div>
                   </div>
-                  <div class="fq-working-strip" id="queueWorkingStrip" aria-label="Working now across all queues">
-                    <div class="fq-working-head">
-                      <span class="fq-working-dot pulse"></span>
-                      <span class="fq-working-label">WORKING NOW</span>
-                      <span class="fq-working-summary"></span>
-                      <span class="fq-working-chevron" aria-hidden="true">&#8964;</span>
-                    </div>
-                    <div class="fq-working-rows"></div>
-                  </div>
-                  <details class="fq-recent-work" id="queueRecentWork" open>
-                    <summary>Last 10 issues worked on <span>All queues</span></summary>
-                    <div class="fq-recent-rows"></div>
-                  </details>
+                  <!-- CCC-1061: WORKING NOW and the recent-work list used to sit
+                       here, between the queue picker and the ticket list. They are
+                       time-ordered activity, not queue state, and they duplicated
+                       what the Workers lane already shows — so both moved into the
+                       Workers tab's activity block (see .conv-workers-activity in
+                       app.js). This panel is queue selection + ticket list only. -->
                   <div class="fq-ticket-filter-row">
                     <!-- CCC-1038: the status filter sits with the type filter on the
                          ticket list it scopes, not up in the queue-scope header. -->
@@ -1467,6 +1460,7 @@
                   <div class="activity-log-modal-scope rail-log-scope">
                     <button type="button" class="activity-log-scope-btn is-active" data-rail-log-scope="all">All</button>
                     <button type="button" class="activity-log-scope-btn" data-rail-log-scope="session">This session</button>
+                    <button type="button" class="activity-log-scope-btn" id="railLogToggleAll" aria-label="Expand all visible log entries">Expand all</button>
                   </div>
                   <input type="search" class="rail-log-filter" id="railLogFilter" placeholder="Filter events…" aria-label="Filter log events">
                   <div class="rail-log-kind-filters" role="group" aria-label="Log event filters">

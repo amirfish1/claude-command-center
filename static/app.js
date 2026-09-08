@@ -33968,6 +33968,11 @@
         const costLabel = _formatRowCostUsd(
           opts.clusterCostUsd != null ? opts.clusterCostUsd : c.cost_usd
         );
+        const pctLabel = ctxPct.pct + '%';
+        // Badge shows cost only while the list is sorted "by cost" — the
+        // rest of the time it's the context-% reading it always was.
+        const showCost = _rowBadgeShowsCost();
+        const badgeLabel = showCost ? costLabel : pctLabel;
         const tip = costLabel + ' estimated cost · ' + ctxPct.source + ' ' + ctxPct.displayTokens.toLocaleString() + ' / ' + ctxPct.limit.toLocaleString() + ' tokens (' + ctxPct.pct + '%) - click to run /compact';
         const pctLevel = ctxPct.pct > 60 ? ' is-danger' : (ctxPct.pct > 30 ? ' is-warn' : '');
         // data-pct stays the context %, not the label — the /compact confirm
@@ -33978,7 +33983,7 @@
           + ' role="button" tabindex="' + tabIndex + '"'
           + ' data-role="conv-pct-compact"'
           + ' data-pct="' + ctxPct.pct + '"'
-          + ' title="' + escapeAttr(tip) + '">' + escapeHtml(costLabel) + '</span>';
+          + ' title="' + escapeAttr(tip) + '">' + escapeHtml(badgeLabel) + '</span>';
         pctBadgeHtml = _pctBadge(0);
         // Second copy, rendered as the first item INSIDE the hover action
         // bar (CCC-449): the absolutely-positioned bar extends left over the
@@ -37094,6 +37099,40 @@
           + (parts.length ? '<span class="conv-workers-uniform-note">' + note + '</span>' : '')
           + '</div>';
       }
+      // CCC-1061: the Workers lane owns TIME. WORKING NOW (who is live right
+      // now) and the recent-work list (which tickets moved, with their body
+      // text) both used to live in the Queues panel, above its ticket list —
+      // but they are the head and the tail of the same timeline this lane
+      // already draws, so the Queues panel carried half of this lane's job
+      // while this lane could not answer "is anything moving".
+      //
+      // Only the empty containers are emitted here, deliberately. Their
+      // contents are live (elapsed times, ticket state) and baking them into
+      // _convListHtml would defeat the structural-signature flicker guard
+      // below — every clock tick would rebuild the whole list. _uxqRender-
+      // WorkingNow() fills them by DOM after the innerHTML reset and again on
+      // every health poll, so they stay live without touching the signature.
+      let _workersActivityHtml = '';
+      if (_allTabView === 'workers') {
+        _wtWarmActivityForWorkersLane();
+        const recentOpen = _workersRecentOpen();
+        _workersActivityHtml = '<div class="conv-workers-activity" data-role="workers-activity">'
+          + '<div class="fq-working-strip wa-now" data-role="workers-working-now"'
+          +   ' aria-label="Working now across all queues">'
+          +   '<div class="fq-working-head">'
+          +     '<span class="fq-working-dot pulse"></span>'
+          +     '<span class="fq-working-label">WORKING NOW</span>'
+          +     '<span class="fq-working-summary"></span>'
+          +   '</div>'
+          +   '<div class="fq-working-rows"></div>'
+          + '</div>'
+          + '<details class="fq-recent-work wa-recent" data-role="workers-recent-work"'
+          +   (recentOpen ? ' open' : '') + '>'
+          +   '<summary>Recently worked tickets <span>All queues</span></summary>'
+          +   '<div class="fq-recent-rows"></div>'
+          + '</details>'
+          + '</div>';
+      }
       const _arcTools = '<div class="conv-archived-tools" data-role="archived-tools">'
           + '<span class="conv-archived-tools-left">' + _arcExpandAllToggle + '</span>'
           + '<span class="conv-archived-tools-right">' + _arcWindowToggle + _arcEngineToggle + _arcGroupingToggle
@@ -37103,6 +37142,7 @@
         '<div class="conv-archived-section" data-role="archived-section">'
         + _arcTools
         + _workersUniformHtml
+        + _workersActivityHtml
         + _wtPendingHtml
         + _allHermesTabBarHtml
         + '<div class="conv-archived-list">' + _arcRows + '</div>'
@@ -37273,6 +37313,13 @@
     _convListRenderVersion++;
     _updateConvTabBarHeightVar($convList);
     _mountSharedQueuePanel();
+    // The Workers lane emits the activity containers empty (see CCC-1061 above)
+    // so their live contents stay out of the structural signature. Fill them
+    // here, immediately after the reset, or the block flashes blank until the
+    // next 15s health poll.
+    if (_sidebarTab === 'workers' || _allTabView === 'workers') {
+      try { _uxqRenderWorkingNow(); } catch (_) { /* queue panel not ready */ }
+    }
     const _showMoreRowsButton = $convList.querySelector('[data-role="sidebar-show-more"]');
     if (_showMoreRowsButton) {
       _showMoreRowsButton.addEventListener('click', () => {
@@ -44837,20 +44884,42 @@
       };
     }).filter(Boolean).sort((a, b) => b.ms - a.ms).slice(0, 10);
   }
+  // The first N rows carry the full ticket body, state and timestamp; the rest
+  // collapse to one line. The detail is the whole point of this list — it is
+  // how you tell whether a ticket is actually progressing rather than just
+  // being touched — but ten detailed cards buried the session feed under them,
+  // and recency is the right thing to spend the pixels on (CCC-1061).
+  const WORKERS_RECENT_DETAILED = 3;
+  const WORKERS_RECENT_OPEN_KEY = 'ccc-workers-recent-open';
+  function _workersRecentOpen() {
+    try { return localStorage.getItem(WORKERS_RECENT_OPEN_KEY) !== 'off'; } catch (_) { return true; }
+  }
+  // Rendered into EVERY mounted host rather than one id. The block lives in the
+  // Workers lane now, whose list renderConversationList rebuilds wholesale — so
+  // the host is a brand-new element on most ticks, and a lookup pinned to a
+  // since-removed node would silently paint nothing.
+  function _uxqRecentWorkHosts() {
+    return document.querySelectorAll('[data-role="workers-recent-work"], #queueRecentWork');
+  }
   function _uxqRenderRecentWork() {
-    const $el = document.getElementById('queueRecentWork');
-    if (!$el) return;
-    const $rows = $el.querySelector('.fq-recent-rows');
-    if (!$rows) return;
+    const hosts = _uxqRecentWorkHosts();
+    if (!hosts.length) return;
     const rows = _uxqRecentWorkItems(_uxqItemsCache.items);
-    $rows.innerHTML = rows.map(row => {
+    const html = rows.map((row, i) => {
       const item = row.item;
       const ref = _uxqItemRef(item);
       const title = String(item.note || item.title || item.text || '').split('\n')[0];
       const state = row.resolved ? 'Resolved' : 'Worked · ' + String(item.status || 'open').replace(/_/g, ' ');
       const absolute = new Date(row.at).toLocaleString();
       const dates = [item.claimed_at ? 'Claimed: ' + item.claimed_at : '', item.closed_at ? 'Closed: ' + item.closed_at : ''].filter(Boolean).join('\n');
-      return '<button type="button" class="fq-recent-row" data-uxq-recent-ref="' + escapeAttr(ref) + '" aria-label="Open full details for ' + escapeAttr(ref + ': ' + title) + '">'
+      // Brief rows still carry their body in the tooltip, so nothing is lost
+      // by demoting them — only the room they took.
+      const brief = i >= WORKERS_RECENT_DETAILED;
+      const briefTitle = brief && row.summary ? '\n\n' + row.summary : '';
+      return '<button type="button" class="fq-recent-row' + (brief ? ' is-brief' : ' is-detailed') + '"'
+        + ' data-uxq-recent-ref="' + escapeAttr(ref) + '"'
+        + (brief ? ' title="' + escapeAttr(state + ' · ' + _uxqRelTime(row.at) + briefTitle) + '"' : '')
+        + ' aria-label="Open full details for ' + escapeAttr(ref + ': ' + title) + '">'
         + '<span class="fq-recent-title"><span class="fq-recent-ref">' + escapeHtml(ref) + '</span> ' + escapeHtml(title) + '</span>'
         + '<span class="fq-recent-meta"><span class="fq-recent-state' + (row.resolved ? ' is-resolved' : '') + '">' + escapeHtml(state) + '</span>'
         + '<span>' + escapeHtml(row.worker || 'Worker not recorded') + '</span></span>'
@@ -44858,9 +44927,14 @@
         + (row.summary ? '<span class="fq-recent-summary">' + escapeHtml(row.summary) + '</span>' : '')
         + '<span class="fq-recent-details">Full details ↗</span></button>';
     }).join('') || '<div class="fq-recent-empty">No recorded work yet.</div>';
-    // Delegate from the stable container; native buttons also support Enter
-    // and Space, and the detail view hydrates the complete ticket timeline.
-    if (!$el.dataset.recentWorkBound) {
+    hosts.forEach($el => {
+      const $rows = $el.querySelector('.fq-recent-rows');
+      // Skip the write when nothing moved: this runs on every health poll, and
+      // a needless innerHTML swap drops :hover and restarts the enter fade.
+      if ($rows && $rows.innerHTML !== html) $rows.innerHTML = html;
+      // Delegate from the stable container; native buttons also support Enter
+      // and Space, and the detail view hydrates the complete ticket timeline.
+      if ($el.dataset.recentWorkBound) return;
       $el.dataset.recentWorkBound = '1';
       $el.addEventListener('click', ev => {
         const $row = ev.target.closest && ev.target.closest('[data-uxq-recent-ref]');
@@ -44870,15 +44944,72 @@
         if (item) _uxqPickerPickTicket(ref, item);
         else _uxqOpenItemDetail(ref);
       });
-    }
+      // Persist collapse across the lane's wholesale rebuilds, which would
+      // otherwise re-open it from markup every render tick.
+      if ($el.tagName === 'DETAILS') {
+        $el.addEventListener('toggle', () => {
+          try { localStorage.setItem(WORKERS_RECENT_OPEN_KEY, $el.open ? 'on' : 'off'); } catch (_) {}
+        });
+      }
+    });
+  }
+  function _uxqBindWorkingStrip($working) {
+    if (!$working || $working.dataset.workingStripBound) return;
+    $working.dataset.workingStripBound = '1';
+    $working.addEventListener('click', (ev) => {
+      const $head = ev.target.closest && ev.target.closest('.fq-working-head');
+      if ($head && _uxqPicker.isMobile) {
+        _uxqPicker.workingCollapsed = !_uxqPicker.workingCollapsed;
+        _uxqRenderWorkingNow();
+        return;
+      }
+      const $kill = ev.target.closest && ev.target.closest('[data-uxq-kill-worker]');
+      if ($kill) {
+        ev.preventDefault();
+        ev.stopPropagation();
+        const killWorker = $kill.getAttribute('data-uxq-kill-worker') || '';
+        const killPid = parseInt($kill.getAttribute('data-uxq-kill-pid') || '0', 10) || 0;
+        const label = killWorker || ('pid ' + killPid);
+        if (!window.confirm('Kill worker ' + label + '?\n\nIt stops claiming queue tickets and its process (pid ' + killPid + ') will be terminated.')) return;
+        $kill.disabled = true;
+        fetch('/api/wt/workers/kill', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ worker_id: killWorker, pid: killPid }),
+        }).then(r => r.json()).then(d => {
+          if (d && d.ok) {
+            showOpToast('Killed worker ' + label, 'ok');
+            if (typeof _uxqRefreshQueueStrips === 'function') _uxqRefreshQueueStrips().catch(() => {});
+          } else {
+            $kill.disabled = false;
+            showOpToast('Kill failed: ' + ((d && d.error) || 'unknown'), 'error');
+          }
+        }).catch(e => {
+          $kill.disabled = false;
+          showOpToast('Kill failed: ' + ((e && e.message) || 'unknown'), 'error');
+        });
+        return;
+      }
+      const $row = ev.target.closest && ev.target.closest('.fq-working-row[data-uxq-working-ref]');
+      if (!$row) return;
+      const ref = $row.getAttribute('data-uxq-working-ref');
+      if (!ref) return;
+      // Find the item to switch queue if needed.
+      const it = (Array.isArray(_uxqItemsCache.items) ? _uxqItemsCache.items : [])
+        .find(x => x && _uxqItemRef(x) === ref);
+      if (it) _uxqPickerPickTicket(ref, it);
+      else if (typeof _uxqOpenItemDetail === 'function') _uxqOpenItemDetail(ref);
+    });
   }
   // ── WORKING NOW strip ──────────────────────────────────────────────────
   // Spans ALL queues (not scoped). Updates live via the same health poll/SSE
   // that drives _renderQueuePanel. Collapses to header-only when idle.
   function _uxqRenderWorkingNow() {
     _uxqRenderRecentWork();
-    const $el = document.getElementById('queueWorkingStrip');
-    if (!$el) return;
+    // Same multi-host lookup as the recent-work list, for the same reason: the
+    // strip now lives inside the Workers lane, which is rebuilt wholesale.
+    const hosts = document.querySelectorAll('[data-role="workers-working-now"], #queueWorkingStrip');
+    if (!hosts.length) return;
     const health = _uxqHealthCache || {};
     const workers = (Array.isArray(health.wt_workers) ? health.wt_workers : [])
       .filter(w => w && w.alive !== false);
@@ -44923,18 +45054,7 @@
       return { ref, title, queue: qKey, worker: String(w.worker_id || 'worker'), elapsed, icon,
         pid: parseInt(w.pid, 10) || 0, workerId: String(w.worker_id || '') };
     });
-    const $rows = $el.querySelector('.fq-working-rows');
-    const $summary = $el.querySelector('.fq-working-summary');
-    const $head = $el.querySelector('.fq-working-head');
-    if ($summary) $summary.textContent = summary;
-    if ($head) $head.classList.toggle('is-only', rows.length === 0);
-    // Mobile: rows duplicate the ticket list right below and eat the whole
-    // screen, so they start collapsed to a header-only summary; tapping the
-    // head expands them (CCC-1019).
-    $el.classList.toggle('is-collapsed', _uxqPicker.isMobile && _uxqPicker.workingCollapsed);
-    if ($head) $head.setAttribute('aria-expanded', String(!(_uxqPicker.isMobile && _uxqPicker.workingCollapsed)));
-    if ($rows) {
-      $rows.innerHTML = rows.map(r => {
+    const rowsHtml = rows.map(r => {
         // CCC-1050: one-click kill — releases the worker from queue staffing
         // and terminates its process (server route does both, release first).
         const killBtn = r.pid
@@ -44962,8 +45082,35 @@
           + '<span class="fq-working-elapsed">' + escapeHtml(r.elapsed) + '</span>'
           + killBtn
           + '</span></div>';
-      }).join('');
-    }
+    }).join('');
+    const collapsed = _uxqPicker.isMobile && _uxqPicker.workingCollapsed;
+    hosts.forEach($el => {
+      _uxqBindWorkingStrip($el);
+      const $rows = $el.querySelector('.fq-working-rows');
+      const $summary = $el.querySelector('.fq-working-summary');
+      const $head = $el.querySelector('.fq-working-head');
+      if ($summary) $summary.textContent = summary;
+      if ($head) $head.classList.toggle('is-only', rows.length === 0);
+      // Mobile: rows duplicate the ticket list right below and eat the whole
+      // screen, so they start collapsed to a header-only summary; tapping the
+      // head expands them (CCC-1019).
+      $el.classList.toggle('is-collapsed', collapsed);
+      if ($head) $head.setAttribute('aria-expanded', String(!collapsed));
+      if ($rows && $rows.innerHTML !== rowsHtml) $rows.innerHTML = rowsHtml;
+    });
+  }
+  // Tickets are fetched for the Queues panel, so a user who lands straight on
+  // the Workers tab would see an empty recent-work list until they opened
+  // Queues once. Warm it on the same terms as the worker-health poll.
+  let _wtActivityWarmInFlight = false;
+  function _wtWarmActivityForWorkersLane() {
+    if (_wtActivityWarmInFlight) return;
+    if (Date.now() - (_uxqItemsCache.ts || 0) < 15000) return;
+    _wtActivityWarmInFlight = true;
+    _fetchUxqItems(false)
+      .then(() => { try { _uxqRenderWorkingNow(); } catch (_) {} })
+      .catch(() => {})
+      .then(() => { _wtActivityWarmInFlight = false; });
   }
   // ── picker card / sheet render ─────────────────────────────────────────
   function _uxqRenderPicker() {
@@ -47240,54 +47387,9 @@
     });
     // Pane resize / rail collapse → re-evaluate fq-mobile + reposition.
     window.addEventListener('resize', _uxqPickerSyncMobile);
-    // WORKING NOW row click → open that ticket (switching queue if needed).
-    const $working = document.getElementById('queueWorkingStrip');
-    if ($working) {
-      $working.addEventListener('click', (ev) => {
-        const $head = ev.target.closest && ev.target.closest('.fq-working-head');
-        if ($head && _uxqPicker.isMobile) {
-          _uxqPicker.workingCollapsed = !_uxqPicker.workingCollapsed;
-          _uxqRenderWorkingNow();
-          return;
-        }
-        const $kill = ev.target.closest && ev.target.closest('[data-uxq-kill-worker]');
-        if ($kill) {
-          ev.preventDefault();
-          ev.stopPropagation();
-          const killWorker = $kill.getAttribute('data-uxq-kill-worker') || '';
-          const killPid = parseInt($kill.getAttribute('data-uxq-kill-pid') || '0', 10) || 0;
-          const label = killWorker || ('pid ' + killPid);
-          if (!window.confirm('Kill worker ' + label + '?\n\nIt stops claiming queue tickets and its process (pid ' + killPid + ') will be terminated.')) return;
-          $kill.disabled = true;
-          fetch('/api/wt/workers/kill', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ worker_id: killWorker, pid: killPid }),
-          }).then(r => r.json()).then(d => {
-            if (d && d.ok) {
-              showOpToast('Killed worker ' + label, 'ok');
-              if (typeof _uxqRefreshQueueStrips === 'function') _uxqRefreshQueueStrips().catch(() => {});
-            } else {
-              $kill.disabled = false;
-              showOpToast('Kill failed: ' + ((d && d.error) || 'unknown'), 'error');
-            }
-          }).catch(e => {
-            $kill.disabled = false;
-            showOpToast('Kill failed: ' + ((e && e.message) || 'unknown'), 'error');
-          });
-          return;
-        }
-        const $row = ev.target.closest && ev.target.closest('.fq-working-row[data-uxq-working-ref]');
-        if (!$row) return;
-        const ref = $row.getAttribute('data-uxq-working-ref');
-        if (!ref) return;
-        // Find the item to switch queue if needed.
-        const it = (Array.isArray(_uxqItemsCache.items) ? _uxqItemsCache.items : [])
-          .find(x => x && _uxqItemRef(x) === ref);
-        if (it) _uxqPickerPickTicket(ref, it);
-        else if (typeof _uxqOpenItemDetail === 'function') _uxqOpenItemDetail(ref);
-      });
-    }
+    // WORKING NOW row clicks are bound per host by _uxqRenderWorkingNow, not
+    // once by id here: the strip lives in the Workers lane now, whose DOM is
+    // replaced wholesale on every structural render (CCC-1061).
     const $queueAdd = document.getElementById('filesQueueAdd');
     if ($queueAdd) {
       $queueAdd.addEventListener('click', async (ev) => {
@@ -51977,11 +52079,18 @@
     return n === 'opus-4-8' || n === 'opus-4-7';
   }
 
-  // Estimated $ cost label for the sidebar row badge — mirrors the conv-pane
-  // cost pill's precision convention (2 decimals once it clears a dollar).
+  // Estimated $ cost label for the sidebar row badge — at most 1 decimal
+  // digit, the row is a glance-value not an invoice line.
   function _formatRowCostUsd(n) {
     n = Number(n) || 0;
-    return n >= 1 ? '$' + n.toFixed(2) : '$' + n.toFixed(4);
+    return '$' + n.toFixed(1);
+  }
+
+  // Row badge shows $ cost only while the list is actually sorted "by
+  // cost" — otherwise it stays the context-% reading it always was.
+  function _rowBadgeShowsCost() {
+    try { return localStorage.getItem('ccc-archived-grouping') === 'cost'; }
+    catch (_) { return false; }
   }
 
   // Context % for sidebar rows — mirrors the conv-pane usage pill math.

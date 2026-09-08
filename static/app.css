@@ -3740,8 +3740,7 @@
     /* Container query host — children query against the strip's own
        inline-size so the progressive-drop rules below fire based on
        actual rendered width (split panes, narrow windows). */
-    container-type: inline-size;
-    container-name: conv-ctx;
+      container-name: conv-ctx;
   }
   .conv-input-context > * {
     flex-shrink: 0;
@@ -14631,6 +14630,46 @@
   .fq-recent-details { font-size: 10px; color: #58a6ff; }
   .fq-recent-empty { color: #8b949e; font-size: 11px; padding: 6px 0; }
   #queuePanel.fq-mobile .fq-recent-rows { max-height: 190px; }
+  /* ── Workers lane activity block (CCC-1061) ────────────────────────────
+     WORKING NOW and the recently-worked list moved out of the Queues panel
+     and into the Workers tab. They keep their .fq-* classes (same renderers,
+     same markup) and only override what the narrower, already-scrolling
+     sidebar column needs. */
+  .conv-workers-activity { display: block; margin: 0 0 9px; }
+  .conv-workers-activity .fq-working-strip,
+  .conv-workers-activity .fq-recent-work {
+    padding-left: 10px; padding-right: 10px;
+    background: #0c1014; border: 1px solid #1b222b; border-radius: 8px;
+  }
+  .conv-workers-activity .fq-working-strip { margin-bottom: 6px; }
+  .conv-workers-activity .fq-recent-rows { max-height: 320px; }
+  /* Worker id is the least useful of the three trailing fields at this width;
+     queue and elapsed answer "where" and "how long", which is the question. */
+  .conv-workers-activity .fq-working-worker { display: none; }
+  /* Top-3 detailed, the rest brief. The brief tier drops the body, timestamp
+     and "Full details" affordance down to a single title line, so ten rows
+     cost about what three used to and the session feed below stays reachable.
+     Nothing is lost: the brief rows carry their body in the title tooltip and
+     still open the full ticket on click. */
+  .fq-recent-row.is-brief {
+    flex-direction: row; align-items: baseline; gap: 8px; padding: 4px 8px;
+  }
+  .fq-recent-row.is-brief .fq-recent-summary,
+  .fq-recent-row.is-brief .fq-recent-time,
+  .fq-recent-row.is-brief .fq-recent-details { display: none; }
+  .fq-recent-row.is-brief .fq-recent-title {
+    flex: 1 1 auto; min-width: 0; font-size: 11.5px; overflow-wrap: normal;
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  }
+  .fq-recent-row.is-brief .fq-recent-meta {
+    flex: 0 0 auto; gap: 0; font-size: 10px; flex-wrap: nowrap;
+  }
+  .fq-recent-row.is-brief .fq-recent-meta > span:not(.fq-recent-state) { display: none; }
+  /* One hairline marks where the detailed tier ends, so the size change reads
+     as a deliberate tier and not as rows that failed to load. */
+  .fq-recent-row.is-detailed + .fq-recent-row.is-brief {
+    margin-top: 3px; padding-top: 7px; border-top: 1px solid #1b222b;
+  }
   /* ── WORKING NOW strip ──────────────────────────────────────────────── */
   .fq-working-strip {
     flex: 0 0 auto; padding: 8px 14px 11px;
@@ -26871,7 +26910,6 @@ html:not(.ccc-debug-mode) #statsModal {
    a viewport media query) so it tracks the *sidebar* width, which is
    user-resizable and independent of the window. */
 #convList {
-  container-type: inline-size;
   container-name: convlist;
 }
 @container convlist (max-width: 300px) {
