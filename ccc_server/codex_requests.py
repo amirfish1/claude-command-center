@@ -10,7 +10,10 @@ import json
 import threading
 import time
 import uuid
+import subprocess
+import sys
 from collections import OrderedDict
+from pathlib import Path
 
 
 INTERACTIVE_METHODS = frozenset({
@@ -18,6 +21,23 @@ INTERACTIVE_METHODS = frozenset({
     "item/permissions/requestApproval", "item/tool/requestUserInput",
     "mcpServer/elicitation/request", "applyPatchApproval", "execCommandApproval",
 })
+
+
+def _validate_mcp_form(value, schema):
+    """Untrusted provider schemas cannot monopolize the native reader/GIL.
+
+    This subprocess runs only on a deliberate form submission, never during
+    row rendering, polling, or native streaming. Input travels over stdin.
+    """
+    try:
+        result = subprocess.run([sys.executable, "-m", "ccc_server.codex_form_check"],
+            input=json.dumps({"value": value, "schema": schema}), text=True,
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=2,
+            cwd=str(Path(__file__).resolve().parent.parent))
+    except subprocess.TimeoutExpired:
+        raise ValueError("Form validation exceeded the supported time limit") from None
+    if result.returncode != 0:
+        raise ValueError("Form input does not match the requested fields or rules")
 
 
 def _subset(granted, requested):
@@ -58,11 +78,10 @@ def validate_request_answer(method, params, result):
         if result.get("action") not in ("accept", "decline", "cancel"):
             raise ValueError("Choose accept, decline, or cancel")
         if result["action"] == "accept" and params.get("mode") == "form":
-            from ccc_server.codex_capabilities import validate_schema
             schema = params.get("requestedSchema")
             if not isinstance(schema, dict):
                 raise ValueError("The requested form has no supported schema")
-            validate_schema(result.get("content"), schema)
+            _validate_mcp_form(result.get("content"), schema)
     elif method == "item/permissions/requestApproval":
         if set(result) - {"permissions", "scope", "strictAutoReview"}:
             raise ValueError("Unexpected permission response field")

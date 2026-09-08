@@ -118,3 +118,15 @@ class RequestRegistryTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             registry.register(0, "item/tool/requestUserInput", params)
         self.assertEqual(len(self.sent), 256)
+
+    def test_standard_form_is_validated_in_bounded_child(self):
+        schema = {"type": "object", "properties": {"answer": {"type": "string"}}, "required": ["answer"]}
+        key = self.registry.register("form", "mcpServer/elicitation/request", {
+            "threadId": "task", "mode": "form", "requestedSchema": schema})
+        self.reply(key, {"action": "accept", "content": {"answer": "yes"}})
+        self.assertEqual(len(self.sent), 1)
+
+    def test_untrusted_regex_cannot_stall_the_host(self):
+        schema = {"type": "string", "pattern": "^(a+)+$"}
+        with self.assertRaisesRegex(ValueError, "time limit"):
+            codex_requests._validate_mcp_form("a" * 35 + "!", schema)

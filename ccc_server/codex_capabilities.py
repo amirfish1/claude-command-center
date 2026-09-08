@@ -79,6 +79,7 @@ _SAFE_READ_METHODS = frozenset(
 
 _PREVIEW_METHODS = frozenset(
     {
+        "thread/inject_items",
         "plugin/install",
         "plugin/list",
         "plugin/read",
@@ -93,11 +94,10 @@ _INTERNAL_METHODS = frozenset(
         "initialize",
         "thread/decrement_elicitation",
         "thread/increment_elicitation",
-        "thread/inject_items",
     }
 )
 
-_CACHE_VERSION = 1
+_CACHE_VERSION = 2
 _CACHE_DIR = Path.home() / ".claude" / "command-center" / "cache" / "codex-capabilities"
 _CATALOG_MEMORY: dict[str, dict] = {}
 _CATALOG_LOCK = threading.Lock()
@@ -280,6 +280,27 @@ def _preview_method(method: str, experimental_only: bool) -> bool:
     )
 
 
+def _params_marked_experimental(variant, root):
+    pending = [(variant.get("properties", {}).get("params", {}), 0)]
+    seen = set()
+    while pending:
+        schema, depth = pending.pop()
+        if not isinstance(schema, dict) or depth > 12:
+            continue
+        if re.match(r"\s*EXPERIMENTAL\b", str(schema.get("description", "")), re.I):
+            return True
+        ref = schema.get("$ref")
+        if ref and ref not in seen:
+            seen.add(ref)
+            try:
+                pending.append((_local_ref_target(ref, root, "$"), depth + 1))
+            except ValueError:
+                pass
+        for key in ("oneOf", "anyOf", "allOf"):
+            pending.extend((entry, depth + 1) for entry in schema.get(key, []) if isinstance(entry, dict))
+    return False
+
+
 def _unavailable_reason(method: str, direction: str, preview: bool) -> str | None:
     if method.startswith("mock/"):
         return "Test-only Codex protocol method"
@@ -445,9 +466,9 @@ def _descriptors_for_direction(
     descriptors = []
     for method in sorted(set(stable_variants) | set(full_variants)):
         experimental_only = method not in stable_variants
-        preview = _preview_method(method, experimental_only)
         root = full_root if experimental_only else stable_root
         variant = full_variants[method] if experimental_only else stable_variants[method]
+        preview = _preview_method(method, experimental_only) or _params_marked_experimental(variant, root)
         reason = _unavailable_reason(method, direction, preview)
         params_schema, params_type = _params_schema(variant, root)
         descriptor = {
@@ -518,6 +539,55 @@ def catalog_from_schemas(stable: dict, full: dict, version: str = "") -> dict:
 _MAX_VALIDATION_DEPTH = 64
 _MAX_COLLECTION_ITEMS = 10_000
 _MAX_STRING_LENGTH = 1_000_000
+
+
+def _check_json_structure(value):
+    pending = [(value, 0)]
+    nodes = 0
+    text_bytes = 0
+    while pending:
+        item, depth = pending.pop()
+        nodes += 1
+        if depth > _MAX_VALIDATION_DEPTH or nodes > 100_000:
+            raise ValueError("Input is nested too deeply or contains too many values")
+        if isinstance(item, (list, dict)):
+            if len(item) > _MAX_COLLECTION_ITEMS:
+                raise ValueError("Input has too many properties" if isinstance(item, dict) else "Input has too many items")
+            if isinstance(item, dict):
+                if not all(isinstance(key, str) for key in item):
+                    raise ValueError("Input object keys must be text")
+                try:
+                    text_bytes += sum(len(key.encode("utf-8")) for key in item)
+                except UnicodeEncodeError:
+                    raise ValueError("Input contains an invalid Unicode sequence") from None
+                pending.extend((child, depth + 1) for child in item.values())
+            else:
+                pending.extend((child, depth + 1) for child in item)
+        elif isinstance(item, str):
+            if len(item) > _MAX_STRING_LENGTH:
+                raise ValueError("Input text exceeds the supported size")
+            try:
+                text_bytes += len(item.encode("utf-8"))
+            except UnicodeEncodeError:
+                raise ValueError("Input contains an invalid Unicode sequence") from None
+        elif isinstance(item, float) and not math.isfinite(item):
+            raise ValueError("Input numbers must be finite")
+        elif item is not None and not isinstance(item, (bool, int, float)):
+            raise ValueError("Input must contain JSON values only")
+        if text_bytes > 4 * 1024 * 1024:
+            raise ValueError("Input text exceeds the supported total size")
+
+
+def _canonical_json(value):
+    if isinstance(value, dict):
+        return ["object", [[key, _canonical_json(child)] for key, child in sorted(value.items())]]
+    if isinstance(value, list):
+        return ["array", [_canonical_json(child) for child in value]]
+    if isinstance(value, bool):
+        return ["boolean", value]
+    if isinstance(value, (int, float)):
+        return ["number", int(value) if isinstance(value, float) and value.is_integer() else value]
+    return ["null" if value is None else "string", value]
 _SCHEMA_KEYWORDS = frozenset(
     {
         "$defs",
@@ -799,9 +869,13 @@ def _validate_schema(
         if not isinstance(unique, bool):
             raise _UnsupportedSchema(f"{path} has a malformed uniqueItems")
         if unique:
-            for index, item in enumerate(value):
-                if any(_json_equal(item, earlier) for earlier in value[:index]):
+            buckets = {}
+            for item in value:
+                digest = hashlib.sha256(json.dumps(_canonical_json(item), ensure_ascii=False).encode("utf-8")).digest()
+                earlier = buckets.setdefault(digest, [])
+                if any(_json_equal(item, candidate) for candidate in earlier):
                     raise _schema_error(path, "must contain unique items")
+                earlier.append(item)
         items = schema.get("items")
         if items is not None:
             if not isinstance(items, (dict, bool)):
@@ -832,6 +906,16 @@ def _validate_schema(
                 raise _schema_error(path, "does not match the required pattern")
 
     if isinstance(value, (int, float)) and not isinstance(value, bool):
+        format_name = str(schema.get("format", ""))
+        if format_name in ("uint", "int"):
+            format_name += "64"
+        wire = re.fullmatch(r"(u?int)(8|16|32|64|128)", format_name)
+        if wire:
+            bits = int(wire.group(2))
+            lower = 0 if wire.group(1) == "uint" else -(2 ** (bits - 1))
+            upper = 2 ** bits - 1 if wire.group(1) == "uint" else 2 ** (bits - 1) - 1
+            if not isinstance(value, int) or not lower <= value <= upper:
+                raise _schema_error(path, "is outside the supported integer range")
         for keyword, compare, phrase in (
             ("minimum", lambda a, b: a < b, "is below the minimum"),
             ("maximum", lambda a, b: a > b, "is above the maximum"),
@@ -857,6 +941,7 @@ def validate_schema(value: object, schema: dict | bool) -> None:
         raise ValueError("Schema must be an object or boolean")
     root = schema if isinstance(schema, dict) else {}
     try:
+        _check_json_structure(value)
         _validate_schema(value, schema, root, "$", 0, set())
     except _UnsupportedSchema as exc:
         raise ValueError(str(exc)) from None
@@ -1139,8 +1224,9 @@ def _catalog_with_runtime_availability(catalog: dict, experimental: bool) -> dic
 
 
 def _bounded_error(value: object) -> str:
-    message = re.sub(r"[\x00-\x1f\x7f]+", " ", str(value)).strip()
-    return (message or "Unable to load Codex capabilities")[:240]
+    # Resolver errors can contain a literal environment override or a path.
+    # Neither belongs in a public response, even when truncated.
+    return "Unable to load Codex capabilities. Check the Codex executable and cache permissions."
 
 
 def get_codex_catalog() -> dict:

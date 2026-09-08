@@ -507,3 +507,57 @@ def test_get_catalog_returns_a_bounded_error_when_codex_is_unavailable(monkeypat
     assert catalog["server_requests"] == []
     assert catalog["notifications"] == []
     assert len(catalog["error"]) <= 240
+    assert "private-token-value" not in catalog["error"]
+
+
+def test_advanced_injection_is_available_with_explicit_preview_opt_in():
+    base = catalog_from_schemas(_schemas(), _schemas(experimental=True))
+    preview = capabilities._catalog_with_runtime_availability(base, True)
+    assert _by_method(preview["methods"])["thread/inject_items"]["available"]
+
+
+def test_experimental_param_description_requires_opt_in_even_in_default_schema():
+    schema = _direction(_variant("app/list"))
+    schema["definitions"]["ListParams"]["description"] = "EXPERIMENTAL - available app integrations"
+    result = catalog_from_schemas({"ClientRequest": schema}, {"ClientRequest": schema})
+    method = result["methods"][0]
+    assert method["experimental"]
+    assert not method["available"]
+
+
+@pytest.mark.parametrize("fmt,value", [("uint16", 65536), ("uint32", 2**32), ("int64", 2**63), ("uint64", -1), ("uint", 2**128)])
+def test_integer_wire_widths_are_enforced(fmt, value):
+    with pytest.raises(ValueError):
+        validate_schema(value, {"type": "integer", "format": fmt})
+
+
+def test_open_values_cannot_bypass_structural_limits():
+    with pytest.raises(ValueError):
+        validate_schema({"open": [None] * 10001}, {"type": "object"})
+    deep = None
+    for _ in range(1000):
+        deep = {"nested": deep}
+    with pytest.raises(ValueError):
+        validate_schema(deep, True)
+
+
+def test_invalid_unicode_has_a_safe_validation_error():
+    for value in ("\ud800", {"\ud800": "value"}):
+        with pytest.raises(ValueError, match="invalid Unicode sequence") as error:
+            validate_schema(value, True)
+        assert type(error.value) is ValueError
+
+
+def test_unique_items_uses_linear_canonical_comparisons(monkeypatch):
+    comparisons = 0
+    original = capabilities._json_equal
+    def counted(a, b):
+        nonlocal comparisons
+        comparisons += 1
+        return original(a, b)
+    monkeypatch.setattr(capabilities, "_json_equal", counted)
+    validate_schema(list(range(1500)), {"type": "array", "uniqueItems": True})
+    assert comparisons < 3000
+    with pytest.raises(ValueError):
+        validate_schema([1, 1.0], {"type": "array", "uniqueItems": True})
+    validate_schema([True, 1], {"type": "array", "uniqueItems": True})
