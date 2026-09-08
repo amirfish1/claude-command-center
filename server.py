@@ -12795,7 +12795,10 @@ def find_all_conversations(
 # v7 persists the transcript stat map alongside cached rows. Detached refresh
 # workers and restarted servers can then calculate a file-level delta instead
 # of forgetting the previous signature's inputs and rebuilding every session.
-_ARCHIVE_RESPONSE_CACHE_SCHEMA_VERSION = 7
+# v8: Codex rows now carry a computed cost_usd/cost_breakdown_usd; bump so
+# persisted rows from before that row-shaping change get rebuilt instead of
+# permanently reusing their stale (cost-less) dict.
+_ARCHIVE_RESPONSE_CACHE_SCHEMA_VERSION = 8
 _ARCHIVE_RESPONSE_CACHE_FILE = COMMAND_CENTER_STATE_DIR / "archive-conversations-cache.json"
 
 
