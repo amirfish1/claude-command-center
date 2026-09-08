@@ -17775,10 +17775,30 @@ body.status-pos-right .conv-pane.has-status-rail > .status-rail {
   line-height: 1.3;
   font-family: 'SF Mono', SFMono-Regular, Consolas, monospace;
 }
-/* Accumulated token usage for the selected conversation — the RHS headline
-   number. Populated by _renderRailTokens() from the /usage payload. */
+/* Subscription allocation and weekly quota for the selected conversation. */
 .status-rail-tokens {
   margin-top: 8px;
+}
+.status-rail-tokens .rail-api-price {
+  margin-top: 5px;
+}
+.status-rail-tokens .rail-cost-details {
+  display: none;
+  padding-top: 10px;
+}
+.status-rail-tokens:hover .rail-cost-details,
+.status-rail-tokens:focus-within .rail-cost-details {
+  display: block;
+}
+.status-rail-tokens:focus-visible {
+  outline: 1px solid var(--accent);
+  outline-offset: 4px;
+}
+.status-rail-tokens .rail-quota-formula {
+  margin-top: 8px;
+  font-size: 10px;
+  line-height: 1.45;
+  color: var(--text-muted);
 }
 .status-rail-tokens .rail-tokens-value {
   font-size: 30px;
@@ -17788,6 +17808,11 @@ body.status-pos-right .conv-pane.has-status-rail > .status-rail {
   color: var(--text);
   font-variant-numeric: tabular-nums;
 }
+.status-rail-tokens .rail-cost-headline {
+  font-size: 30px;
+  white-space: nowrap;
+}
+
 /* Hidden by default — the same "cache-adjusted tokens … API list-price
    equivalent" text is already on #statusRailTokens's native title tooltip,
    so it only needs to show up on hover (CCC-964) rather than sit visible

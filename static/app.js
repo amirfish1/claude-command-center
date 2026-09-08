@@ -51696,8 +51696,21 @@
       + '<div class="rail-usage-row"><div class="rail-usage-heading"><span>Estimated weekly quota</span><strong>'
       + contribution + '</strong></div><div>' + rate.toFixed(4) + '% per $1 API list price</div></div>'
       + '<div class="rail-usage-row"><div class="rail-usage-heading"><span>Allocated subscription cost</span><strong>'
-      + allocated + '</strong></div><div>$' + presentation.monthlyPlanUsd.toFixed(2) + ' monthly plan</div></div></div>';
+      + allocated + '</strong></div><div>$' + presentation.monthlyPlanUsd.toFixed(2) + ' monthly plan</div></div>'
+      + '<div class="rail-quota-formula">' + escapeHtml(title) + '</div></div>';
   }
+
+  // RAIL_COST_HEADLINE_START
+  function railCostHeadline(quota, apiCost) {
+    return {
+      headline: quota.state === 'ready'
+        ? '$' + quota.allocatedCost.toFixed(2) + ' (' + quota.contributionPct.toFixed(1) + '%)'
+        : quota.state === 'calibrating' ? 'Calibrating…' : 'Unavailable',
+      apiLabel: apiCost == null ? 'API list-price unavailable'
+        : '$' + apiCost.toFixed(2) + ' API list-price equivalent',
+    };
+  }
+  // RAIL_COST_HEADLINE_END
 
   // Full-session counts and API list-price equivalent, from the same usage
   // payload as the composer. Only the graph below is limited to recent turns.
@@ -51716,24 +51729,27 @@
       return;
     }
     const modelName = u && u.model ? _claudeFriendlyModelName(u.model) : '';
-    const headline = breakdown.totalCost == null ? 'Cost unavailable'
-      : '$' + breakdown.totalCost.toFixed(2);
     const quotaEngine = railQuotaEngine(u);
     const quotaPresentation = railQuotaCostPresentation(
       u, breakdown.totalCost,
       quotaEngine && _quotaCostCalibration ? _quotaCostCalibration[quotaEngine] : _quotaCostCalibration,
       quotaEngine === 'claude' ? _monthlyClaudePlanUsd() : _monthlyCodexPlanUsd(),
     );
-    el.innerHTML = '<div class="rail-tokens-value">' + headline + '</div>'
+    const summary = railCostHeadline(quotaPresentation, breakdown.totalCost);
+    el.innerHTML = '<div class="rail-tokens-value rail-cost-headline">' + summary.headline + '</div>'
+      + '<div class="rail-usage-caption rail-api-price">' + summary.apiLabel + '</div>'
+      + '<div class="rail-cost-details" role="group" aria-label="Session cost details">'
       + '<div class="rail-usage-caption">Full session'
-      + (modelName ? ' · ' + escapeHtml(modelName) : '')
-      + '<br>API list-price equivalent</div>'
+      + (modelName ? ' · ' + escapeHtml(modelName) : '') + '</div>'
       + railUsageBreakdownHtml(breakdown)
       + railQuotaCostHtml(quotaPresentation, quotaEngine && _quotaCostCalibration
         ? _quotaCostCalibration[quotaEngine] || {} : {})
-      + _railTurnGraphHtml(u && u.turn_series, u && u.model);
-    el.title = 'Full-session API list-price equivalent. Each token bucket is counted once. '
-      + 'This is not the subscription amount charged.';
+      + _railTurnGraphHtml(u && u.turn_series, u && u.model)
+      + '</div>';
+    el.tabIndex = 0;
+    el.setAttribute('aria-label', 'Allocated subscription cost and estimated weekly quota: '
+      + summary.headline + '. ' + summary.apiLabel + '. Focus for calculation details.');
+    el.removeAttribute('title');
     el.hidden = false;
     _refreshQuotaCostCalibration();
   }
