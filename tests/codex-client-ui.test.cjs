@@ -878,3 +878,92 @@ test('a deleted tombstone closes the workspace and announces lifecycle', async (
     assert.equal(await page.evaluate(() => window.CCCCodexClient.__testing.state.pollTimer), null);
   } finally { await page.close(); }
 });
+
+test('MCP elicitation Continue validates its generated form before responding', async () => {
+  const page = await barePage();
+  try {
+    await page.evaluate(() => {
+      window.__responses = [];
+      const request = { key: 'mcp-form', generation: 'g', method: 'mcpServer/elicitation/request', thread_id: 'thread-1', state: 'pending', params: {
+        threadId: 'thread-1', mode: 'form', requestedSchema: { type: 'object', required: ['email'], properties: { email: { type: 'string', minLength: 3 } } },
+      } };
+      window.fetch = async (url, options = {}) => {
+        const u = String(url);
+        if (u.includes('/catalog')) return { ok: true, json: async () => ({ ok: true, fingerprint: 'mcp-form', methods: [], server_requests: [], notifications: [] }) };
+        if (u.includes('/history')) return { ok: true, json: async () => ({ ok: true, generation: 'g', cursor: 1, connected: true, thread: { id: 'thread-1', turns: [] }, next_cursor: null, requests: [request] }) };
+        if (u.includes('/events')) return { ok: true, json: async () => ({ ok: true, generation: 'g', cursor: 1, connected: true, events: [], requests: [request] }) };
+        if (u.includes('/respond')) { window.__responses.push(JSON.parse(options.body)); return { ok: true, json: async () => ({ ok: true }) }; }
+        if (u.includes('/state')) return { ok: true, json: async () => ({ ok: true, generation: 'g', cursor: 2, connected: true, thread: { id: 'thread-1', turns: [] }, requests: [] }) };
+        throw new Error('unexpected ' + u);
+      };
+    });
+    await page.evaluate(() => window.CCCCodexClient.open(window.CCCCodexClientContext()));
+    await page.waitForSelector('[data-request-key="mcp-form"] input[name="email"]');
+    await page.click('[data-request-key="mcp-form"] .codex-client-button.is-primary');
+    assert.equal(await page.evaluate(() => window.__responses.length), 0);
+    assert.equal(await page.$eval('[data-request-key="mcp-form"] input[name="email"]', input => input.getAttribute('aria-invalid')), 'true');
+    assert.match(await page.$eval('[data-request-key="mcp-form"] .codex-schema-errors', node => node.textContent), /required/i);
+    await page.type('[data-request-key="mcp-form"] input[name="email"]', 'me@example.com');
+    await page.click('[data-request-key="mcp-form"] .codex-client-button.is-primary');
+    await page.waitForFunction(() => window.__responses.length === 1);
+    assert.deepEqual(await page.evaluate(() => window.__responses[0].result), { action: 'accept', content: { email: 'me@example.com' } });
+  } finally { await page.close(); }
+});
+
+test('a required array without minItems submits an empty list', async () => {
+  const page = await barePage();
+  try {
+    await page.evaluate(() => {
+      window.__writes = [];
+      window.fetch = async (url, options = {}) => {
+        const u = String(url);
+        if (u.includes('/catalog')) return { ok: true, json: async () => ({ ok: true, fingerprint: 'empty-array', methods: [{ method: 'skills/extraRoots/set', title: 'Set skill folders', group: 'Skills', read_only: false, available: true }], server_requests: [], notifications: [] }) };
+        if (u.includes('/history')) return { ok: true, json: async () => ({ ok: true, generation: 'g', cursor: 1, connected: true, thread: { id: 'thread-1', turns: [] }, next_cursor: null, requests: [] }) };
+        if (u.includes('/schema')) return { ok: true, json: async () => ({ ok: true, descriptor: { method: 'skills/extraRoots/set', title: 'Set skill folders', read_only: false, params_type: 'object', params_schema: { type: 'object', required: ['extraRoots'], properties: { extraRoots: { type: 'array', items: { type: 'string' } } } } } }) };
+        if (u.includes('/operation')) { window.__writes.push(JSON.parse(options.body)); return { ok: true, json: async () => ({ ok: true, generation: 'g', result: {} }) }; }
+        if (u.includes('/state')) return { ok: true, json: async () => ({ ok: true, generation: 'g', cursor: 2, connected: true, thread: { id: 'thread-1', turns: [] }, requests: [] }) };
+        if (u.includes('/events')) return { ok: true, json: async () => ({ ok: true, generation: 'g', cursor: 2, connected: true, events: [], requests: [] }) };
+        throw new Error('unexpected ' + u);
+      };
+    });
+    await page.evaluate(() => window.CCCCodexClient.open(window.CCCCodexClientContext()));
+    await page.click('[data-surface="settings"]');
+    await page.click('[data-method="skills/extraRoots/set"]');
+    await page.waitForSelector('[data-schema-path="extraRoots"]');
+    await page.click('.codex-client-dialog .codex-client-button.is-primary');
+    await page.waitForFunction(() => window.__writes.length === 1);
+    assert.deepEqual(await page.evaluate(() => window.__writes[0].params), { extraRoots: [] });
+  } finally { await page.close(); }
+});
+
+test('a nullable ref preserves the referenced union variants and serialization', async () => {
+  const page = await barePage();
+  try {
+    await page.evaluate(() => {
+      window.__reads = [];
+      window.fetch = async (url, options = {}) => {
+        const u = String(url);
+        if (u.includes('/catalog')) return { ok: true, json: async () => ({ ok: true, fingerprint: 'nested-union', methods: [{ method: 'thread/list', title: 'Find tasks', group: 'Conversations', read_only: true, available: true }], server_requests: [], notifications: [] }) };
+        if (u.includes('/history')) return { ok: true, json: async () => ({ ok: true, generation: 'g', cursor: 1, connected: true, thread: { id: 'thread-1', turns: [] }, next_cursor: null, requests: [] }) };
+        if (u.includes('/schema')) return { ok: true, json: async () => ({ ok: true, descriptor: { method: 'thread/list', title: 'Find tasks', read_only: true, params_type: 'object', params_schema: {
+          type: 'object', properties: { cwd: { anyOf: [{ $ref: '#/definitions/ThreadListCwdFilter' }, { type: 'null' }] } },
+          definitions: { ThreadListCwdFilter: { anyOf: [{ title: 'One folder', type: 'string' }, { title: 'Several folders', type: 'array', items: { type: 'string' } }] } },
+        } } }) };
+        if (u.includes('/operation')) { window.__reads.push(JSON.parse(options.body)); return { ok: true, json: async () => ({ ok: true, generation: 'g', result: { data: [] } }) }; }
+        if (u.includes('/events')) return { ok: true, json: async () => ({ ok: true, generation: 'g', cursor: 1, connected: true, events: [], requests: [] }) };
+        throw new Error('unexpected ' + u);
+      };
+    });
+    await page.evaluate(() => window.CCCCodexClient.open(window.CCCCodexClientContext()));
+    await page.click('[data-codex-tools-toggle]');
+    await page.click('[data-method="thread/list"]');
+    await page.waitForSelector('[data-schema-path="cwd"] [data-schema-variant]');
+    assert.equal(await page.$$eval('[data-schema-path="cwd"] [data-schema-variant] > option', options => options.length), 2);
+    await page.select('[data-schema-path="cwd"] [data-schema-variant]', '1');
+    await page.click('[data-schema-path="cwd"] [data-array-add]');
+    await page.type('[data-schema-path="cwd"] .codex-schema-array-row input', '/tmp/repo');
+    await page.click('.codex-client-dialog .codex-client-button.is-primary');
+    await page.waitForFunction(() => window.__reads.length === 1);
+    assert.deepEqual(await page.evaluate(() => window.__reads[0].params), { cwd: ['/tmp/repo'] });
+  } finally { await page.close(); }
+});

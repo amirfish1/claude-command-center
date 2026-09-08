@@ -473,9 +473,11 @@
       let branches = current.oneOf || current.anyOf;
       if (Array.isArray(branches) && branches.length === 1) {
         const branch = mergeAllOf(branches[0], rootSchema);
-        current = Object.assign({}, current, branch);
-        delete current.oneOf; delete current.anyOf;
-        branches = null;
+        const outer = Object.assign({}, current);
+        if (outer.oneOf === branches) delete outer.oneOf;
+        if (outer.anyOf === branches) delete outer.anyOf;
+        current = Object.assign(outer, branch);
+        branches = current.oneOf || current.anyOf;
       }
       if (Array.isArray(branches) && branches.length > 1) {
         const label = el('label', 'codex-schema-label'); label.append(fieldLabel(current, name, required));
@@ -571,7 +573,7 @@
         add.addEventListener('click', () => addRow(undefined));
         label.append(rows, add); wrap.append(label);
         if (required) wrap.setAttribute('aria-required', 'true');
-        const minimumItems = Math.max(required ? 1 : 0, Number(current.minItems || 0));
+        const minimumItems = Number(current.minItems || 0);
         if (minimumItems > 0) validators.push(() => {
           if (nullToggle && nullToggle.checked) { wrap.removeAttribute('aria-invalid'); return ''; }
           const invalid = children.length < minimumItems;
@@ -1134,9 +1136,18 @@
       const actions = el('div', 'codex-client-request-actions');
       ['cancel', 'decline', 'accept'].forEach(action => {
         const button = el('button', 'codex-client-button ' + (action === 'accept' ? 'is-primary' : 'is-quiet'), action === 'accept' ? (url ? 'I completed it' : 'Continue') : pretty(action));
-        button.addEventListener('click', async () => submit({ action, content: action === 'accept' && built ? await built.read() : undefined })); actions.append(button);
+        button.type = action === 'accept' && built ? 'submit' : 'button';
+        if (!(action === 'accept' && built)) button.addEventListener('click', () => submit({ action }));
+        actions.append(button);
       });
-      card.append(actions);
+      if (built) {
+        built.element.addEventListener('submit', async event => {
+          event.preventDefault();
+          if (!built.validate()) return;
+          await submit({ action: 'accept', content: await built.read() });
+        });
+        built.element.append(actions);
+      } else card.append(actions);
     } else {
       const rawDecisions = params.availableDecisions || params.decisions || ['accept', 'decline', 'cancel'];
       const decisions = Array.isArray(rawDecisions) ? rawDecisions : Object.keys(rawDecisions);
