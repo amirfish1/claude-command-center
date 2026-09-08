@@ -3171,6 +3171,8 @@
     catch (_) { return false; }
   }
   function compactRowsOn() {
+    const lane = sessionDensityLane();
+    if (lane) return sessionDensity(lane) !== 'detailed';
     // Compact/lean rows are the default (details off, CCC-291). Only an explicit
     // '0' opts back into the comfortable density; an absent key means compact.
     try { return localStorage.getItem('ccc-compact-rows') !== '0'; }
@@ -3179,6 +3181,8 @@
   // Wrap session titles across two lines instead of single-line ellipsis.
   // Off by default; persists in localStorage so it sticks across renders.
   function wrapTitlesOn() {
+    const lane = sessionDensityLane();
+    if (lane) return sessionDensity(lane) !== 'compact';
     try { return localStorage.getItem('ccc-wrap-titles') === '1'; }
     catch (_) { return false; }
   }
@@ -3190,29 +3194,44 @@
   // rows -- nothing is filtered, so the tab stays comprehensive. Scoped to
   // Workers; Coding/Other keep the card list. On by default.
   const WORKERS_DENSE_KEY = 'ccc-workers-dense';
-  // Three steps, one control. The tab used to carry a binary Dense pill AND a
-  // Details pill that between them expressed the same axis twice; Detailed is
-  // exactly "show the outcome card", so it drives the Details key rather than
-  // inventing a parallel flag.
+  // Coding and Workers share the choices, but keep independent preferences.
   const WORKERS_DENSITY_KEY = 'ccc-workers-density';
+  const CODING_DENSITY_KEY = 'ccc-coding-density';
   const WORKERS_DENSITY_MODES = ['compact', 'cozy', 'detailed'];
+  function sessionDensityLane() {
+    let tab = null;
+    try { tab = localStorage.getItem('ccc-sidebar-tab'); } catch (_) {}
+    return tab === 'workers' ? 'workers' : (!tab || tab === 'coding' ? 'coding' : '');
+  }
+  function sessionDensity(lane) {
+    const key = lane === 'workers' ? WORKERS_DENSITY_KEY : CODING_DENSITY_KEY;
+    let mode = 'compact';
+    try {
+      const stored = localStorage.getItem(key);
+      if (WORKERS_DENSITY_MODES.includes(stored)) return stored;
+      if (lane === 'workers') {
+        mode = localStorage.getItem(WORKERS_DENSE_KEY) === '0' ? 'cozy' : 'compact';
+      } else {
+        mode = localStorage.getItem('ccc-compact-rows') === '0' ? 'detailed'
+          : (localStorage.getItem('ccc-wrap-titles') === '1' ? 'cozy' : 'compact');
+      }
+      // Snapshot legacy preferences once; later changes in another tab must
+      // not silently alter this lane's display mode.
+      localStorage.setItem(key, mode);
+    } catch (_) {}
+    return mode;
+  }
+  function setSessionDensity(lane, mode) {
+    const next = WORKERS_DENSITY_MODES.includes(mode) ? mode : 'compact';
+    if (lane !== 'coding' && lane !== 'workers') return next;
+    try { localStorage.setItem(lane === 'workers' ? WORKERS_DENSITY_KEY : CODING_DENSITY_KEY, next); } catch (_) {}
+    return next;
+  }
   function workersDensity() {
-    let v = null;
-    try { v = localStorage.getItem(WORKERS_DENSITY_KEY); } catch (_) {}
-    if (WORKERS_DENSITY_MODES.indexOf(v) !== -1) return v;
-    // Migrate the old pill: Dense off meant "give me the row back", which is
-    // Cozy. It never meant "and also show me outcome cards".
-    let legacy = null;
-    try { legacy = localStorage.getItem(WORKERS_DENSE_KEY); } catch (_) {}
-    return legacy === '0' ? 'cozy' : 'compact';
+    return sessionDensity('workers');
   }
   function setWorkersDensity(mode) {
-    const next = WORKERS_DENSITY_MODES.indexOf(mode) !== -1 ? mode : 'compact';
-    try {
-      localStorage.setItem(WORKERS_DENSITY_KEY, next);
-      localStorage.setItem('ccc-compact-rows', next === 'detailed' ? '0' : '1');
-    } catch (_) {}
-    return next;
+    return setSessionDensity('workers', mode);
   }
   function workersDenseOn() {
     return workersDensity() === 'compact';
@@ -3245,6 +3264,7 @@
   function applyRowDensityToggles() {
     if (!$convList) return;
     $convList.classList.toggle('compact-rows', compactRowsOn());
+    $convList.classList.toggle('wrap-titles', wrapTitlesOn());
     // Dense rides on $convList for the same reason compact-rows does: the
     // class has to survive every re-render path, and the section wrapper it
     // used to live on is rebuilt by paths that don't know about the flag.
@@ -36922,20 +36942,19 @@
       // it inline with the others (all right-justified together) made the
       // window/engine buttons visibly jump left/right when switching
       // between "by time" and "by project".
-      // Dense toggle is Workers-only: it is the tab where row-to-row repetition
-      // (engine glyph, cost tier, ticket ref echoed in both title and chip)
-      // costs the most vertical space. Other lanes have no use for it.
-      const _arcDensityMode = workersDensity();
+      // One display control combines title wrapping and details for each lane.
+      const _arcHasDensity = _allTabView === 'workers' || _allTabView === 'coding';
+      const _arcDensityMode = _arcHasDensity ? sessionDensity(_allTabView) : '';
       const _arcDensityLabels = { compact: 'Compact', cozy: 'Cozy', detailed: 'Detailed' };
       const _arcDensityTitles = {
-        compact: 'One line per worker',
-        cozy: 'The full row, without the outcome card',
-        detailed: 'Everything, including the outcome card',
+        compact: 'Single-line titles, no details',
+        cozy: 'Wrapped titles, no details',
+        detailed: 'Wrapped titles and session details',
       };
-      const _arcDenseToggle = _allTabView === 'workers'
-        ? '<span class="conv-grouping-toggle conv-density-toggle" data-role="workers-density-toggle">'
+      const _arcDenseToggle = _arcHasDensity
+        ? '<span class="conv-grouping-toggle conv-density-toggle" data-role="session-density-toggle" data-density-lane="' + _allTabView + '">'
             + WORKERS_DENSITY_MODES.map(m => '<span class="grouping-opt' + (m === _arcDensityMode ? ' is-active' : '') + '"'
-                + ' data-workers-density="' + m + '"'
+                + ' data-session-density="' + m + '"'
                 + ' title="' + escapeAttr(_arcDensityTitles[m]) + '">' + _arcDensityLabels[m] + '</span>').join('')
           + '</span>'
         : '';
@@ -37033,8 +37052,8 @@
       }
       const _arcTools = '<div class="conv-archived-tools" data-role="archived-tools">'
           + '<span class="conv-archived-tools-left">' + _arcExpandAllToggle + '</span>'
-          + '<span class="conv-archived-tools-right">' + _arcWindowToggle + _arcEngineToggle + _arcGroupingToggle + _arcWrapToggle + _arcDenseToggle
-            + (_allTabView === 'workers' ? '' : _arcDetailsToggle) + '</span>'
+          + '<span class="conv-archived-tools-right">' + _arcWindowToggle + _arcEngineToggle + _arcGroupingToggle
+            + (_arcHasDensity ? _arcDenseToggle : _arcWrapToggle + _arcDetailsToggle) + '</span>'
           + '</div>';
       _archivedHtml =
         '<div class="conv-archived-section" data-role="archived-section">'
@@ -37959,15 +37978,15 @@
     // continuation folding happen while building the row list, so the DOM has
     // to be rebuilt. applyRowDensityToggles runs first so the classes are
     // right even if the re-render short-circuits on an unchanged structure.
-    const $workersDensityToggle = $convList.querySelector('[data-role="workers-density-toggle"]');
-    if ($workersDensityToggle) {
-      $workersDensityToggle.addEventListener('click', (ev) => {
+    const $sessionDensityToggle = $convList.querySelector('[data-role="session-density-toggle"]');
+    if ($sessionDensityToggle) {
+      $sessionDensityToggle.addEventListener('click', (ev) => {
         ev.stopPropagation();
-        const opt = ev.target.closest('[data-workers-density]');
+        const opt = ev.target.closest('[data-session-density]');
         if (!opt) return;
-        setWorkersDensity(opt.getAttribute('data-workers-density'));
+        setSessionDensity($sessionDensityToggle.getAttribute('data-density-lane'), opt.getAttribute('data-session-density'));
         applyRowDensityToggles();
-        renderArchiveList(document.getElementById('convSearch')?.value || '');
+        renderArchiveList(document.getElementById('convSearch')?.value || '', { force: true });
       });
     }
     // A pending worker has no session to open, so the row's normal click path

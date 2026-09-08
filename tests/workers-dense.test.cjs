@@ -89,12 +89,12 @@ const densityModel = (() => {
       },
     };
     vm.createContext(ctx);
-    vm.runInContext(src, ctx);
+    vm.runInContext(app.slice(app.indexOf('  function compactRowsOn()'), app.indexOf('  // Workers-tab density.')) + src, ctx);
     return { ctx, store };
   };
 })();
 
-test('density is one control: three modes, and Detailed drives the Details key', () => {
+test('density is one control with independent lane preferences', () => {
   // Default: the tab opens compact, which is what the old pill defaulted to.
   assert.equal(densityModel({}).ctx.workersDensity(), 'compact');
   assert.equal(densityModel({}).ctx.workersDenseOn(), true);
@@ -114,11 +114,62 @@ test('density is one control: three modes, and Detailed drives the Details key',
     assert.equal(ctx.setWorkersDensity(mode), mode);
     assert.equal(ctx.workersDensity(), mode);
     assert.equal(ctx.workersDenseOn(), dense);
-    // Detailed is exactly "show the outcome card", so it writes the Details
-    // toggle's own key instead of a second flag that could disagree with it.
-    assert.equal(store['ccc-compact-rows'], compactRows);
+    assert.equal(store['ccc-compact-rows'], undefined);
+    store['ccc-sidebar-tab'] = 'workers';
+    assert.equal(ctx.compactRowsOn(), compactRows === '1');
+    assert.equal(ctx.wrapTitlesOn(), mode !== 'compact');
   }
 
   const { ctx } = densityModel({});
   assert.equal(ctx.setWorkersDensity('nonsense'), 'compact');
+});
+
+
+test('coding migrates wrap/details and never changes workers or other tabs', () => {
+  for (const [stored, expected] of [[{}, 'compact'], [{'ccc-wrap-titles':'1'}, 'cozy'], [{'ccc-compact-rows':'0'}, 'detailed']]) {
+    const {ctx,store}=densityModel(stored);
+    store['ccc-sidebar-tab']='coding';
+    assert.equal(ctx.sessionDensity('coding'),expected);
+    ctx.setSessionDensity('workers','compact');
+    assert.equal(ctx.sessionDensity('coding'),expected);
+    ctx.setSessionDensity('coding','detailed');
+    assert.equal(ctx.wrapTitlesOn(),true);
+    assert.equal(ctx.compactRowsOn(),false);
+    store['ccc-sidebar-tab']='workers';
+    assert.equal(ctx.wrapTitlesOn(),false);
+    assert.equal(ctx.compactRowsOn(),true);
+    store['ccc-sidebar-tab']='coding';
+    assert.equal(ctx.sessionDensity('coding'),'detailed');
+    store['ccc-sidebar-tab']='inprogress';
+    assert.equal(ctx.wrapTitlesOn(),stored['ccc-wrap-titles']==='1');
+    assert.equal(ctx.compactRowsOn(),stored['ccc-compact-rows']!=='0');
+  }
+});
+
+test('Coding and Workers display modes control actual title wrapping and outcomes', async () => {
+  const browser=await puppeteer.launch({headless:true});
+  try {
+    const page=await browser.newPage();
+    await page.setViewport({width:1400,height:900});
+    await page.setContent(`<style>${css}</style><div id="convList" style="width:360px"><div class="conv-item"><div class="conv-title-row"><div class="conv-main-row"><div class="conv-title">A long coding session title that needs a second line to describe the implementation and verification work clearly</div></div></div><div class="conv-outcome">Completed implementation and verified behavior.</div></div></div>`);
+    for(const lane of ['coding','workers']) {
+      const {ctx,store}=densityModel({'ccc-sidebar-tab':lane});
+      const measured=[];
+      for(const mode of ['compact','cozy','detailed']) {
+        ctx.setSessionDensity(lane,mode);
+        await page.$eval('#convList',(el,flags)=>{
+          for(const [name,on] of Object.entries(flags)) el.classList.toggle(name,on);
+        },{'compact-rows':ctx.compactRowsOn(),'wrap-titles':ctx.wrapTitlesOn(),'workers-dense':ctx.workersDenseTabActive()});
+        measured.push(await page.evaluate(()=>{
+          const title=document.querySelector('.conv-title'),outcome=document.querySelector('.conv-outcome');
+          return {whiteSpace:getComputedStyle(title).whiteSpace,height:title.getBoundingClientRect().height,details:getComputedStyle(outcome).display!=='none'};
+        }));
+      }
+      assert.equal(measured[0].whiteSpace,'nowrap',lane);
+      assert.equal(measured[1].whiteSpace,'normal',lane);
+      assert.equal(measured[2].whiteSpace,'normal',lane);
+      assert.deepEqual(measured.map(m=>m.details),[false,false,true],lane);
+      assert(measured[1].height>measured[0].height,`${lane}: Cozy must actually wrap`);
+    }
+  }finally{await browser.close();}
 });
