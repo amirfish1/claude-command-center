@@ -3561,7 +3561,10 @@
     return out;
   }
 
-  // Token/context fields for sidebar row % badge — must survive archive shaping.
+  // Token/context/cost fields for the sidebar row badge — must survive
+  // archive shaping (the shaping Object.assign below drops any field not
+  // explicitly named; cost_usd previously wasn't, so every archive-shaped
+  // row read as $0 regardless of the session's real spend).
   function _contextFieldsFromRow(c) {
     if (!c) return {};
     return {
@@ -3576,6 +3579,8 @@
       quality_grade: c.quality_grade || '',
       quality_summary: c.quality_summary || '',
       quality_timestamp: c.quality_timestamp || '',
+      cost_usd: c.cost_usd || 0,
+      cost_breakdown_usd: c.cost_breakdown_usd || null,
     };
   }
 
@@ -33956,15 +33961,24 @@
       let pctBadgeHtml = '';
       let pctBadgeRowActionHtml = '';
       if (ctxPct) {
-        const tip = ctxPct.source + ' ' + ctxPct.displayTokens.toLocaleString() + ' / ' + ctxPct.limit.toLocaleString() + ' tokens - click to run /compact';
+        // A subagent-cluster root row's OWN cost_usd often reads ~$0 while the
+        // spend actually accrued on its children — show the cluster total
+        // (passed down by _renderSubagentCluster) so the badge matches what
+        // the "by cost" sort actually ranks this row on.
+        const costLabel = _formatRowCostUsd(
+          opts.clusterCostUsd != null ? opts.clusterCostUsd : c.cost_usd
+        );
+        const tip = costLabel + ' estimated cost · ' + ctxPct.source + ' ' + ctxPct.displayTokens.toLocaleString() + ' / ' + ctxPct.limit.toLocaleString() + ' tokens (' + ctxPct.pct + '%) - click to run /compact';
         const pctLevel = ctxPct.pct > 60 ? ' is-danger' : (ctxPct.pct > 30 ? ' is-warn' : '');
+        // data-pct stays the context %, not the label — the /compact confirm
+        // dialog and the warn/danger threshold classing both key off it.
         // Tagged as an action target so the delegated click handler can
         // offer /compact without scooping the surrounding row click.
         const _pctBadge = tabIndex => '<span class="conv-pct-badge is-actionable' + pctLevel + '"'
           + ' role="button" tabindex="' + tabIndex + '"'
           + ' data-role="conv-pct-compact"'
           + ' data-pct="' + ctxPct.pct + '"'
-          + ' title="' + escapeAttr(tip) + '">' + ctxPct.pct + '%</span>';
+          + ' title="' + escapeAttr(tip) + '">' + escapeHtml(costLabel) + '</span>';
         pctBadgeHtml = _pctBadge(0);
         // Second copy, rendered as the first item INSIDE the hover action
         // bar (CCC-449): the absolutely-positioned bar extends left over the
@@ -34351,15 +34365,12 @@
       // age: _repeatGroupRange emits max-first, which reads "1h-5h".
       const stamps = cards.map(c => c.modified || c.last_interacted || 0).filter(Boolean);
       const rel = _repeatGroupRange(stamps, relativeTime, true);
-      const groupPcts = cards.map(c => {
-        const ctx = _convRowContextPct(c);
-        return ctx ? ctx.pct : null;
-      }).filter(v => typeof v === 'number' && isFinite(v));
-      const ctxRange = _repeatGroupRange(groupPcts, v => v, false);
+      const groupCosts = cards.map(c => Number(c.cost_usd) || 0).filter(v => v > 0);
+      const ctxRange = _repeatGroupRange(groupCosts, _formatRowCostUsd, false);
       const ctxHtml = ctxRange
-        ? '<span class="conv-repeat-group-ctx" title="' + escapeAttr('Context use across '
-            + groupPcts.length + ' of ' + cards.length + ' folded session' + (cards.length === 1 ? '' : 's'))
-          + '">' + escapeHtml(ctxRange) + '%</span>'
+        ? '<span class="conv-repeat-group-ctx" title="' + escapeAttr('Estimated cost across '
+            + groupCosts.length + ' of ' + cards.length + ' folded session' + (cards.length === 1 ? '' : 's'))
+          + '">' + escapeHtml(ctxRange) + '</span>'
         : '';
       const keyAttr = escapeAttr(_repeatGroupStorageKey(key));
       const sessionIdsAttr = escapeAttr(JSON.stringify(cards.map(c => c.session_id || c.id).filter(Boolean)));
@@ -34508,6 +34519,9 @@
       // when a child needs attention, so polling respects the user's choice.
       const expanded = !_subagentCollapsedParents.has(parentId)
         && (total <= 2 || _subagentExpandedParents.has(parentId) || presentation.attention > 0);
+      const clusterCostUsd = (cluster.rows || []).reduce((sum, item) => (
+        sum + (Number(item.card.cost_usd) || 0)
+      ), 0);
       const parentOpts = Object.assign({}, opts, {
         subagentClusterMeta: {
           parentId,
@@ -34517,6 +34531,7 @@
           expanded,
           collapsible: isCollapsible,
         },
+        clusterCostUsd,
       });
       const descendants = (cluster && Array.isArray(cluster.rows)) ? cluster.rows.slice(1).map(item => ({ item, bridge: false })) : [];
       const descendantsHtml = descendants.map(entry => _renderRow(entry.item.card, Object.assign({}, opts, {
@@ -36578,6 +36593,9 @@
     const _allTabClusterMtime = (cluster) => (cluster.rows || []).reduce((m, item) => Math.max(
       m, item.card.modified || item.card.last_interacted || 0
     ), 0);
+    const _allTabClusterCost = (cluster) => (cluster.rows || []).reduce((sum, item) => (
+      sum + (Number(item.card.cost_usd) || 0)
+    ), 0);
     const _renderAllTabClusters = (clusters, suppressFolderChip, hideTrash) => {
       const chunks = [];
       let repeatCards = [];
@@ -36718,7 +36736,10 @@
         : '');
       _arcCount = _allTabConvs.length + _archivedGroupChatsForRender.length + _allTabGroupChatItems.length + _allTabTrashConvs.length;
     } else {
-      // Flat chronological list — original behavior.
+      // Flat chronological (or cost-sorted) list — original behavior plus
+      // the "by cost" mode, which reuses the same pinned-first structure but
+      // orders by estimated $ spend instead of recency.
+      const _arcCostMode = _arcGrouping === 'cost';
       const _archivedItems = [];
       for (const cluster of _allTabClusters) {
         _archivedItems.push({
@@ -36726,6 +36747,7 @@
           cluster,
           pinRank: _allTabClusterPinRank(cluster),
           mtime: _allTabClusterMtime(cluster),
+          cost: _allTabClusterCost(cluster),
         });
       }
       // Archived group chats live in the Trash section (CCC-468).
@@ -36745,6 +36767,7 @@
       }
       _archivedItems.sort((a, b) => {
         if (a.pinRank !== b.pinRank) return a.pinRank - b.pinRank;
+        if (_arcCostMode) return (b.cost || 0) - (a.cost || 0);
         return (b.mtime || 0) - (a.mtime || 0);
       });
       const _arcChunks = [];
@@ -36761,6 +36784,7 @@
       let _arcPrevPinRank = null;
       const _arcSeparatorBefore = (mtime, pinRank) => {
         let sep = '';
+        if (_arcCostMode) return sep; // time gaps are meaningless when sorted by cost
         if (_arcPrevMtime && mtime && _arcPrevPinRank === Infinity && pinRank === Infinity) {
           const gapS = _arcPrevMtime - mtime;
           if (gapS >= ARCHIVE_GAP_SEPARATOR_S) {
@@ -36878,8 +36902,9 @@
     if (_allTabUnfilteredCount > 0) {
       const _arcGroupingToggle = _arcHasFolderChips && !_isSpecificFolderFilter
         ? '<span class="conv-grouping-toggle" data-role="archived-grouping-toggle">'
-            + '<span class="grouping-opt' + (_arcGrouping !== 'time' ? ' is-active' : '') + '" data-grouping="project">by project</span>'
+            + '<span class="grouping-opt' + (_arcGrouping === 'project' ? ' is-active' : '') + '" data-grouping="project">by project</span>'
             + '<span class="grouping-opt' + (_arcGrouping === 'time' ? ' is-active' : '') + '" data-grouping="time">by time</span>'
+            + '<span class="grouping-opt' + (_arcGrouping === 'cost' ? ' is-active' : '') + '" data-grouping="cost" title="Sort by estimated $ cost, highest first">by cost</span>'
           + '</span>'
         : '';
       // Expand / collapse all only meaningful when by-project rendered
@@ -37460,7 +37485,8 @@
         ev.stopPropagation();
         const opt = ev.target.closest('[data-grouping]');
         if (!opt) return;
-        const value = opt.getAttribute('data-grouping') === 'time' ? 'time' : 'project';
+        const raw = opt.getAttribute('data-grouping');
+        const value = (raw === 'time' || raw === 'cost') ? raw : 'project';
         try { localStorage.setItem('ccc-archived-grouping', value); } catch (_) {}
         renderArchiveList(document.getElementById('convSearch')?.value || '');
       });
@@ -51951,6 +51977,13 @@
     return n === 'opus-4-8' || n === 'opus-4-7';
   }
 
+  // Estimated $ cost label for the sidebar row badge — mirrors the conv-pane
+  // cost pill's precision convention (2 decimals once it clears a dollar).
+  function _formatRowCostUsd(n) {
+    n = Number(n) || 0;
+    return n >= 1 ? '$' + n.toFixed(2) : '$' + n.toFixed(4);
+  }
+
   // Context % for sidebar rows — mirrors the conv-pane usage pill math.
   function _convRowContextPct(c) {
     const engine = c.engine || 'claude';
@@ -52319,15 +52352,17 @@
     // polled conversation-list render/patch, so an actively-streaming
     // session showed a stale sidebar % while the strip right above it
     // already had the live count. Same pct formula as _convRowContextPct so
-    // the number matches once the next real poll lands.
+    // the number matches once the next real poll lands. The badge itself
+    // displays $ cost (not the %), so data-pct/threshold classes stay
+    // percentage-based while the visible text mirrors the cost pill above.
     const _sidebarSid = _usageSessionIdByPane[paneId];
     if (_sidebarSid && displayTokens) {
       const sidebarPct = (hasLiveContext && livePct) ? livePct : calcPct;
-      const sidebarTip = sourceLabel + ' ' + displayTokens.toLocaleString() + ' / ' + limit.toLocaleString() + ' tokens - click to run /compact';
+      const sidebarTip = _formatRowCostUsd(cost) + ' estimated cost · ' + sourceLabel + ' ' + displayTokens.toLocaleString() + ' / ' + limit.toLocaleString() + ' tokens (' + sidebarPct + '%) - click to run /compact';
       document.querySelectorAll('.conv-item[data-session-id="' + CSS.escape(_sidebarSid) + '"] [data-role="conv-pct-compact"]').forEach(el => {
         if (el.dataset.pct !== String(sidebarPct)) el.dataset.pct = String(sidebarPct);
         if (el.title !== sidebarTip) el.title = sidebarTip;
-        const text = sidebarPct + '%';
+        const text = _formatRowCostUsd(cost);
         if (el.textContent !== text) el.textContent = text;
         el.classList.toggle('is-danger', sidebarPct > 60);
         el.classList.toggle('is-warn', sidebarPct > 30 && sidebarPct <= 60);
@@ -59357,10 +59392,30 @@
       body.innerHTML = '<div class="activity-log-empty">'
         + (_railLogEvents.length ? 'No events match the filter.' : 'No activity-log entries yet.')
         + '</div>';
+      _syncRailLogToggleAll();
       return;
     }
     // Newest first for reading — the API returns oldest-first (tail order).
     _renderReadableActivityLog(body, events);
+    _syncRailLogToggleAll();
+  }
+
+  function _setRailLogEntriesOpen(open) {
+    const body = document.getElementById('railLogBody');
+    if (!body) return;
+    body.querySelectorAll('.activity-log-entry').forEach(entry => { entry.open = open; });
+    _syncRailLogToggleAll();
+  }
+
+  function _syncRailLogToggleAll() {
+    const button = document.getElementById('railLogToggleAll');
+    const body = document.getElementById('railLogBody');
+    if (!button || !body) return;
+    const entries = [...body.querySelectorAll('.activity-log-entry')];
+    const open = entries.length > 0 && entries.every(entry => entry.open);
+    button.textContent = open ? 'Collapse all' : 'Expand all';
+    button.setAttribute('aria-label', (open ? 'Collapse' : 'Expand') + ' all visible log entries');
+    button.disabled = !entries.length;
   }
 
   async function refreshRailLogPane() {
@@ -59437,6 +59492,14 @@
       () => _railLogShowInjects, value => { _railLogShowInjects = value; });
     bindToggle('railLogOnlyAttention', 'only warnings and errors',
       () => _railLogOnlyAttention, value => { _railLogOnlyAttention = value; }, 'Show all event levels');
+    const toggleAll = document.getElementById('railLogToggleAll');
+    if (toggleAll) {
+      toggleAll.addEventListener('click', () => {
+        const entries = [...body.querySelectorAll('.activity-log-entry')];
+        _setRailLogEntriesOpen(!entries.length || !entries.every(entry => entry.open));
+      });
+    }
+    body.addEventListener('toggle', () => _syncRailLogToggleAll(), true);
     if (filter) {
       filter.addEventListener('input', () => {
         _railLogFilter = filter.value || '';
