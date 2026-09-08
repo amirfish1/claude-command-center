@@ -969,3 +969,24 @@ test('a nullable ref preserves the referenced union variants and serialization',
     assert.deepEqual(await page.evaluate(() => window.__reads[0].params), { cwd: ['/tmp/repo'] });
   } finally { await page.close(); }
 });
+
+test('workspace launcher stays reachable when responsive layout hides the pane header', async () => {
+  const page = await barePage();
+  try {
+    await page.setViewport({width:900,height:800});
+    await page.addStyleTag({content:'@media(max-width:1200px){.conv-pane-header{display:none}}'});
+    await page.evaluate(()=>document.body.insertAdjacentHTML('afterbegin','<div class="toolbar"><div id="cccBreadcrumb"></div></div>'));
+    await page.evaluate(()=>new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve))));
+    const visible = () => page.evaluate(()=>{
+      const button=document.querySelector('[data-codex-toolbar-launch]');
+      return !!button && !button.hidden && button.getBoundingClientRect().width>0;
+    });
+    assert.equal(await visible(),true);
+    await page.setViewport({width:1500,height:800});
+    await page.waitForFunction(()=>document.querySelector('[data-codex-toolbar-launch]')?.hidden);
+    await page.setViewport({width:900,height:800});
+    await page.waitForFunction(()=>!document.querySelector('[data-codex-toolbar-launch]')?.hidden);
+    await page.evaluate(()=>document.querySelector('.conv-pane').classList.remove('is-codex-session'));
+    await page.waitForFunction(()=>document.querySelector('[data-codex-toolbar-launch]')?.hidden);
+  } finally {await page.close();}
+});

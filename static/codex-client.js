@@ -1712,6 +1712,29 @@
     });
   }
 
+  function syncToolbarLauncher() {
+    const breadcrumb = document.getElementById('cccBreadcrumb');
+    if (!breadcrumb || typeof window.CCCCodexClientContext !== 'function') return;
+    let button = document.querySelector('[data-codex-toolbar-launch]');
+    if (!button) {
+      button = el('button', 'conv-pane-action codex-client-launch', 'Codex workspace');
+      button.type = 'button'; button.dataset.codexToolbarLaunch = 'true';
+      button.title = 'Open the full Codex workspace';
+      button.addEventListener('click', () => {
+        open(window.CCCCodexClientContext()).catch(error => {
+          if (typeof window.showOpToast === 'function') window.showOpToast(conciseError(error), 'error');
+          else window.alert(conciseError(error));
+        });
+      });
+      breadcrumb.after(button);
+    }
+    const context = window.CCCCodexClientContext();
+    const pane = context && context.paneEl;
+    const header = pane && pane.querySelector('.conv-pane-header');
+    button.hidden = !pane || !pane.classList.contains('is-codex-session') ||
+      !!(header && header.getClientRects().length && getComputedStyle(header).display !== 'none');
+  }
+
   window.addEventListener('ccc:conversation-selected', event => {
     if (state.closed || !state.context) return;
     const selected = event.detail || {};
@@ -1720,8 +1743,10 @@
     if (samePane && selected.threadId !== state.context.threadId) close();
   });
 
-  const observer = new MutationObserver(ensureLaunchers);
-  const begin = () => { ensureLaunchers(); observer.observe(document.body, { subtree: true, childList: true, attributes: true, attributeFilter: ['class'] }); };
+  const syncLaunchers = () => { ensureLaunchers(); syncToolbarLauncher(); };
+  window.addEventListener('resize', syncToolbarLauncher);
+  const observer = new MutationObserver(syncLaunchers);
+  const begin = () => { syncLaunchers(); observer.observe(document.body, { subtree: true, childList: true, attributes: true, attributeFilter: ['class'] }); };
   if (document.body) begin(); else document.addEventListener('DOMContentLoaded', begin, { once: true });
 
   window.CCCCodexClient = {
