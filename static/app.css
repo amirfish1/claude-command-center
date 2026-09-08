@@ -28296,12 +28296,10 @@ body.mobile-ask-open .mobile-bottom-nav { z-index: 950; }
 /* Expanded ticket history owns the row space; floating hover metadata must not cover it. */
 .conv-item:has(.conv-worker-history[open]) .conv-hover-extras { display: none !important; }
 
-/* ── Workers tab: dense mode ────────────────────────────────────────────────
-   Workers is the one lane where every row largely repeats its neighbours, so
-   it earns a table treatment the card lanes don't. Everything here is display
-   only — no row is filtered, and turning Dense off restores the card list
-   exactly. Scoped to .workers-dense (set on the Workers section wrapper), so
-   Coding/Other/Archived are untouched. */
+/* ── Coding and Workers: compact row layout ────────────────────────────────
+   Both session lanes use this table treatment in Compact mode. The legacy
+   .workers-dense class lives on #convList; Cozy and Detailed restore cards.
+   This is display only: rows and lane controls remain available. */
 /* Dense rides on #convList (like .compact-rows) so it survives every
    re-render path, and the id gives it the weight to beat the row presets. */
 /* Compact = the fixed-column table. Each row becomes its own grid so the

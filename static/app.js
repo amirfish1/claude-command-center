@@ -3186,13 +3186,9 @@
     try { return localStorage.getItem('ccc-wrap-titles') === '1'; }
     catch (_) { return false; }
   }
-  // Workers-tab density. The Workers list is the one view where nearly every
-  // row repeats its neighbours: same engine, same cost tier, a ticket ref that
-  // is printed once in the title and again as a chip, and recurring queue
-  // drains spawned a dozen times under slightly different wording. Dense mode
-  // collapses each session to one line and folds those repeats into expandable
-  // rows -- nothing is filtered, so the tab stays comprehensive. Scoped to
-  // Workers; Coding/Other keep the card list. On by default.
+  // Workers-tab density legacy key. Compact now shares its table layout
+  // with Coding; worker-specific column summaries and ticket history remain
+  // scoped to Workers. No density mode filters sessions.
   const WORKERS_DENSE_KEY = 'ccc-workers-dense';
   // Coding and Workers share the choices, but keep independent preferences.
   const WORKERS_DENSITY_KEY = 'ccc-workers-density';
@@ -3236,20 +3232,18 @@
   function workersDenseOn() {
     return workersDensity() === 'compact';
   }
-  // Dense only applies while the Workers tab is the one on screen, so the
-  // class can be driven straight off localStorage without waiting for a
-  // render pass to tell us which lane we're in.
-  // Lane only, no density: the thread badge is redundant in the Workers lane
-  // at every density, not just Compact.
+  // Worker-specific badge suppression is independent of the shared Compact
+  // layout: the thread badge is redundant in Workers at every density.
   function workersLaneActive() {
     let tab = null;
     try { tab = localStorage.getItem('ccc-sidebar-tab'); } catch (_) {}
     return tab === 'workers';
   }
   function workersDenseTabActive() {
-    let tab = null;
-    try { tab = localStorage.getItem('ccc-sidebar-tab'); } catch (_) {}
-    return tab === 'workers' && workersDenseOn();
+    // Keep the legacy CSS class name, but share its compact table layout
+    // across both session lanes. Their saved mode choices stay independent.
+    const lane = sessionDensityLane();
+    return !!lane && sessionDensity(lane) === 'compact';
   }
   // Row spacing: independent 3-step control (cozy/roomy/airy) for
   // padding/line-height between rows. Independent of both compact-rows
@@ -37141,9 +37135,8 @@
       !_iconEmpty && !!_workersHoist.engine && !_workersHoist.engineOthers);
     // "no tickets" earns its column only when some row in view has tickets.
     $convList.classList.toggle('workers-tickets-present', !!_workersHoist.anyTickets);
-    // Re-assert the density classes every render: workersDenseTabActive() is
-    // tab-dependent, and this only ran once at startup, so leaving Workers for
-    // Coding used to carry .workers-dense along with it.
+    // Re-assert the shared compact layout each render so switching lanes
+    // follows that lane's saved mode rather than retaining the previous one.
     applyRowDensityToggles();
     if (_objectsSplitActive) { applyCurrentSessionsPanelHeight(); applyEvergreenPanelHeight(); }
     else { $convList.style.removeProperty('--current-sessions-panel-h'); $convList.style.removeProperty('--evergreen-agents-panel-h'); }
