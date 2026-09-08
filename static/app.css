@@ -7569,22 +7569,37 @@
   #convList .conv-archived-section > .conv-archived-tools {
     display: flex;
     justify-content: space-between;
-    flex-wrap: wrap;
+    flex-wrap: nowrap;
     margin-left: 0;
     padding: 6px 8px;
+    min-height: 36px;
+    box-sizing: border-box;
+    position: sticky;
+    top: var(--conv-tab-bar-h, 0px);
+    z-index: 6;
+    background: var(--surface);
   }
-  /* Left slot only ever holds Expand/Collapse all; keeping it out of the
-     right-hand group means it can appear/disappear without shifting the
-     window/engine/grouping buttons. */
+  /* Reserve the longer Collapse all label, including when this slot is
+     empty, so grouping/label changes never move the filter controls. */
   #convList .conv-archived-tools-left {
     display: flex;
     align-items: center;
+    flex: 0 0 82px;
+    min-width: 82px;
+    white-space: nowrap;
   }
   #convList .conv-archived-tools-right {
     display: flex;
     align-items: center;
+    justify-content: flex-end;
+    flex: 1 1 0;
+    min-width: 0;
     gap: 6px;
     flex-wrap: wrap;
+  }
+  #convList .conv-archived-tools-right > * {
+    flex: 0 0 auto;
+    white-space: nowrap;
   }
   #convList .conv-inprogress-list > .conv-item {
     padding-left: 8px;
@@ -13932,9 +13947,10 @@
   .conv-archived-engine-filter {
     display: inline-flex;
     align-items: stretch;
+    position: relative;
     border: 1px solid var(--border);
     border-radius: 4px;
-    overflow: hidden;
+    overflow: visible;
   }
   .conv-archived-engine-trigger {
     width: 24px;
@@ -13961,20 +13977,28 @@
     height: 13px;
     display: block;
   }
-  .conv-archived-engine-filter.is-expanded .conv-archived-engine-trigger {
-    border-right: 1px solid var(--border);
-  }
+  /* Hover/click opens a popup rather than widening the toolbar and moving
+     the controls under the pointer. Right alignment keeps it within narrow
+     sidebars; the toolbar supplies the stacking layer above session rows. */
   .conv-archived-engine-options {
     display: inline-flex;
     align-items: stretch;
-    max-width: 0;
+    position: absolute;
+    top: calc(100% + 4px);
+    right: 0;
+    width: max-content;
+    visibility: hidden;
     opacity: 0;
-    overflow: hidden;
     pointer-events: none;
-    transition: max-width 0.18s ease, opacity 0.15s ease;
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    background: var(--surface-2);
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
+    z-index: 1;
+    transition: opacity 0.15s ease;
   }
   .conv-archived-engine-filter.is-expanded .conv-archived-engine-options {
-    max-width: 140px;
+    visibility: visible;
     opacity: 1;
     pointer-events: auto;
   }
