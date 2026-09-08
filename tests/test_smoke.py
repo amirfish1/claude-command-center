@@ -2918,7 +2918,7 @@ class TestServerImports(unittest.TestCase):
         draft_css = app_css[app_css.index(".conv-project-tree .conv-draft-row {"):app_css.index(".conv-item .conv-ux-fix-progress", app_css.index(".conv-project-tree .conv-draft-row {"))]
         self.assertIn("padding: 0 8px;", header_css)
         self.assertIn("padding: 0 8px;", session_css)
-        self.assertIn("padding-left: 29px;", grouped_session_css)
+        self.assertIn("padding-left: var(--conv-content-left);", grouped_session_css)
         self.assertIn("display: flex;", draft_css)
         self.assertIn("align-items: center;", draft_css)
         self.assertIn("margin: 0 0 0 18px;", draft_css)
