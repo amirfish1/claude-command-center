@@ -5,6 +5,7 @@
   const API = '/api/codex/client';
   const POLL_BASE_MS = 900;
   const POLL_MAX_MS = 12000;
+  const MAX_COMPOSER_IMAGE_BYTES = 700 * 1024;
   const COMMON_METHODS = [
     'thread/read', 'thread/list', 'turn/start', 'turn/steer', 'turn/interrupt',
     'thread/fork', 'thread/name/set', 'thread/archive', 'thread/unarchive',
@@ -21,10 +22,12 @@
     root: null, context: null, catalog: null, schemas: new Map(),
     thread: null, requests: [], generation: null, eventCursor: null,
     historyCursor: null, connected: false, activeSurface: 'conversation',
-    activeGroup: '', query: '', pollTimer: null, pollAbort: null,
+    activeGroup: '', query: '', toolsOpen: false, pollTimer: null, pollAbort: null,
     pollInFlight: false, pollFailures: 0, closed: true, requestToken: 0,
     mutationLocks: new Map(), responseLocks: new Set(), generationPromise: null, activity: [],
-    renderScheduled: false, visibilityHandler: null, previousDisplay: new Map(),
+    composerModels: [], composerAttachment: null, composerOptionsSync: null,
+    activeRead: null, readRefreshTimer: null, readRefreshInFlight: false, readRefreshQueued: false,
+    renderScheduled: false, visibilityHandler: null, composerSync: null, previousDisplay: new Map(),
   };
 
   function el(tag, className, text) {
@@ -209,6 +212,35 @@
     return card;
   }
 
+  function diffNode(diff) {
+    const pre = el('pre', 'codex-client-diff');
+    String(diff || '').split('\n').forEach((line, index, lines) => {
+      const span = el('span', line.startsWith('@@') ? 'codex-diff-hunk'
+        : line.startsWith('+') && !line.startsWith('+++') ? 'codex-diff-add'
+        : line.startsWith('-') && !line.startsWith('---') ? 'codex-diff-delete' : '', line);
+      pre.append(span);
+      if (index < lines.length - 1) pre.append(document.createTextNode('\n'));
+    });
+    return pre;
+  }
+
+  function appendFileChanges(body, changes) {
+    const entries = Array.isArray(changes)
+      ? changes.map((change, index) => [change && (change.path || change.filePath || change.file_path) || 'Change ' + (index + 1), change])
+      : changes && typeof changes === 'object' ? Object.entries(changes) : [];
+    entries.forEach(([filePath, change]) => {
+      const row = el('div', 'codex-client-file-change');
+      const head = el('div', 'codex-client-file-change-head'); head.append(el('strong', '', filePath));
+      const kind = change && (change.kind || change.type || change.status);
+      if (kind) head.append(el('span', 'codex-client-badge', pretty(kind)));
+      row.append(head);
+      const diff = change && (change.diff || change.unified_diff || change.patch);
+      if (diff) row.append(diffNode(diff));
+      if (change && typeof change === 'object') row.append(keyValueView(change, ['path', 'filePath', 'file_path', 'kind', 'type', 'status', 'diff', 'unified_diff', 'patch']));
+      body.append(row);
+    });
+  }
+
   function activityIcon(kind) {
     if (/command|terminal|shell/i.test(kind)) return '›_';
     if (/file|patch|change/i.test(kind)) return '±';
@@ -270,13 +302,9 @@
     if (/filechange|file_change|patch|diff/.test(normalized)) {
       const body = el('div', 'codex-client-card-body');
       const changes = item.changes || item.files;
-      if (Array.isArray(changes)) {
-        const list = el('ul', 'codex-client-file-list');
-        changes.forEach(change => list.append(el('li', '', valueSummary(change))));
-        body.append(list);
-      }
+      appendFileChanges(body, changes);
       const diff = item.diff || item.patch;
-      if (diff) body.append(el('pre', 'codex-client-diff', String(diff)));
+      if (diff) body.append(diffNode(diff));
       return detailsCard('file-change', item, item.title || 'File changes', body, true);
     }
     if (/imageview|imagegeneration|image|media/.test(normalized)) {
@@ -367,7 +395,7 @@
 
   function productDescription(descriptor) {
     const description = String(descriptor && descriptor.description || '').trim();
-    if (!description || descriptor && descriptor.experimental) return '';
+    if (!description) return '';
     if (/\b(?:rpc|wire format|app[- ]server|internal|implementation|serde|json schema)\b|\b[a-z]+_[a-z0-9_]+\b/i.test(description)) return '';
     return description;
   }
@@ -392,6 +420,7 @@
 
   function createForm(schema, initial, context) {
     const rootSchema = schema && typeof schema === 'object' ? schema : { type: 'object' };
+    const validators = [];
     const contextValue = (name, value) => {
       if (value !== undefined && value !== null && value !== '') return value;
       if (/^thread_?id$/i.test(name)) return context && context.threadId || value;
@@ -400,7 +429,34 @@
       return value;
     };
 
+    function buildAny(value, name, required, path) {
+      const wrap = el('div', 'codex-schema-field codex-schema-any');
+      wrap.dataset.schemaPath = path || name || '';
+      const label = el('label', 'codex-schema-label'); label.append(fieldLabel({}, name, required));
+      const select = el('select', 'codex-schema-input'); select.dataset.anyValueType = 'true';
+      [['object', 'Key/value group'], ['array', 'List'], ['string', 'Text'], ['number', 'Number'], ['boolean', 'Yes or no'], ['null', 'No value']]
+        .forEach(([type, title]) => { const option = el('option', '', title); option.value = type; select.append(option); });
+      const initialType = value === null ? 'null' : Array.isArray(value) ? 'array' : typeof value === 'object' && value ? 'object'
+        : typeof value === 'number' ? 'number' : typeof value === 'boolean' ? 'boolean' : 'string';
+      select.value = initialType;
+      const slot = el('div', 'codex-schema-any-slot');
+      const schemaFor = type => type === 'object' ? { type: 'object', additionalProperties: true }
+        : type === 'array' ? { type: 'array', items: true }
+        : type === 'null' ? { const: null }
+        : { type };
+      let child = build(schemaFor(initialType), value, '', false, path);
+      slot.append(child.element);
+      select.addEventListener('change', () => {
+        child = build(schemaFor(select.value), undefined, '', false, path);
+        slot.replaceChildren(child.element);
+      });
+      label.append(select, slot); wrap.append(label);
+      if (required) wrap.setAttribute('aria-required', 'true');
+      return { element: wrap, read: () => child.read(), empty: () => false };
+    }
+
     function build(rawSchema, value, name, required, path) {
+      if (rawSchema === true) return buildAny(value, name, required, path);
       let current = mergeAllOf(rawSchema || {}, rootSchema);
       const nullable = allowsNull(current);
       if (nullable) current = withoutNull(current);
@@ -455,8 +511,8 @@
         });
         let mapRows = [];
         const namedKeys = new Set(Object.keys(current.properties || {}));
-        const additionalSchema = current.additionalProperties === true ? {} : current.additionalProperties;
-        if (additionalSchema && typeof additionalSchema === 'object') {
+        const additionalSchema = current.additionalProperties;
+        if (additionalSchema === true || additionalSchema && typeof additionalSchema === 'object') {
           const map = el('div', 'codex-schema-map');
           const rows = el('div', 'codex-schema-map-rows');
           const add = el('button', 'codex-schema-add', 'Add entry'); add.type = 'button'; add.dataset.mapAdd = 'true';
@@ -473,6 +529,16 @@
           add.addEventListener('click', () => addRow('', undefined));
           map.append(rows, add); fieldset.append(map);
         }
+        if (required) wrap.setAttribute('aria-required', 'true');
+        const minimumProperties = Number(current.minProperties || 0);
+        if (minimumProperties > 0) validators.push(() => {
+          if (nullToggle && nullToggle.checked) { wrap.removeAttribute('aria-invalid'); return ''; }
+          const namedCount = children.filter(entry => !entry.child.empty()).length;
+          const mapCount = mapRows.filter(entry => entry.keyInput.value.trim()).length;
+          const invalid = namedCount + mapCount < minimumProperties;
+          if (invalid) wrap.setAttribute('aria-invalid', 'true'); else wrap.removeAttribute('aria-invalid');
+          return invalid ? (current.title || pretty(name || 'This group')) + ' needs at least ' + minimumProperties + ' value' + (minimumProperties === 1 ? '.' : 's.') : '';
+        });
         wrap.append(fieldset);
         return {
           element: wrap,
@@ -504,6 +570,14 @@
         (Array.isArray(value) ? value : []).forEach(addRow);
         add.addEventListener('click', () => addRow(undefined));
         label.append(rows, add); wrap.append(label);
+        if (required) wrap.setAttribute('aria-required', 'true');
+        const minimumItems = Math.max(required ? 1 : 0, Number(current.minItems || 0));
+        if (minimumItems > 0) validators.push(() => {
+          if (nullToggle && nullToggle.checked) { wrap.removeAttribute('aria-invalid'); return ''; }
+          const invalid = children.length < minimumItems;
+          if (invalid) wrap.setAttribute('aria-invalid', 'true'); else wrap.removeAttribute('aria-invalid');
+          return invalid ? (current.title || pretty(name || 'This list')) + ' needs at least ' + minimumItems + ' item' + (minimumItems === 1 ? '.' : 's.') : '';
+        });
         return { element: wrap, read: async () => nullToggle && nullToggle.checked ? null : Promise.all(children.map(entry => entry.child.read())), empty: () => children.length === 0 };
       }
       const label = el('label', 'codex-schema-label'); label.append(fieldLabel(current, name, required));
@@ -535,6 +609,13 @@
         if (value !== undefined && value !== null) input.value = String(value);
       }
       input.name = name || '';
+      if (required) {
+        input.setAttribute('aria-required', 'true');
+        if (type !== 'boolean' && !nullable) input.required = true;
+      }
+      if (current.minLength !== undefined && 'minLength' in input) input.minLength = Number(current.minLength);
+      if (current.maxLength !== undefined && 'maxLength' in input) input.maxLength = Number(current.maxLength);
+      if (current.pattern && input.tagName === 'INPUT') input.pattern = current.pattern;
       if (current.default !== undefined && (value === undefined || value === null)) {
         if (type === 'boolean') input.checked = current.default === true; else input.value = String(current.default);
       }
@@ -552,8 +633,33 @@
     }
 
     const built = build(rootSchema, initial, '', true, '');
-    const form = el('form', 'codex-schema-form'); form.append(built.element);
-    return { element: form, read: built.read };
+    const form = el('form', 'codex-schema-form');
+    const errors = el('div', 'codex-schema-errors'); errors.setAttribute('role', 'alert'); errors.setAttribute('aria-live', 'polite'); errors.hidden = true;
+    form.append(errors, built.element);
+    form.addEventListener('invalid', event => {
+      const input = event.target;
+      input.setAttribute('aria-invalid', 'true');
+      const label = input.name ? pretty(input.name) : 'This field';
+      errors.textContent = label + (input.validity && input.validity.valueMissing ? ' is required.' : ' has an invalid value.');
+      errors.hidden = false;
+    }, true);
+    const clearInvalid = event => {
+      const input = event.target;
+      if (input && typeof input.checkValidity === 'function' && input.checkValidity()) input.removeAttribute('aria-invalid');
+      if (!form.querySelector('[aria-invalid="true"]')) { errors.textContent = ''; errors.hidden = true; }
+    };
+    form.addEventListener('input', clearInvalid);
+    form.addEventListener('change', clearInvalid);
+    const validate = () => {
+      const messages = validators.map(check => check()).filter(Boolean);
+      if (messages.length) {
+        errors.textContent = messages.join(' '); errors.hidden = false;
+        form.querySelector('[aria-invalid="true"]')?.focus();
+        return false;
+      }
+      return true;
+    };
+    return { element: form, read: built.read, validate };
   }
 
   function shapePendingResponse(request, fields) {
@@ -674,10 +780,15 @@
 
   function descriptorsFor(surface) {
     const methods = state.catalog && Array.isArray(state.catalog.methods) ? state.catalog.methods : [];
-    return methods.filter(row => descriptorSurface(row) === surface);
+    return methods.filter(row => !row.internal && descriptorSurface(row) === surface);
   }
 
   function hasRequired(schema) { return !!(schema && Array.isArray(schema.required) && schema.required.length); }
+  function hasFormFields(schema) {
+    if (!schema || typeof schema !== 'object') return schema === true;
+    if (Object.keys(schema.properties || {}).length || schema.additionalProperties) return true;
+    return ['oneOf', 'anyOf', 'allOf'].some(key => Array.isArray(schema[key]) && schema[key].length);
+  }
 
   async function getSchema(method) {
     const key = (state.catalog && state.catalog.fingerprint || '') + ':' + (state.catalog && state.catalog.experimental_enabled ? 'preview' : 'stable') + ':' + method;
@@ -707,7 +818,7 @@
     if (!descriptor.available) { showError(descriptor.unavailable_reason || 'This action is unavailable.'); return; }
     let full;
     try { full = await getSchema(descriptor.method); } catch (error) { showError(conciseError(error)); return; }
-    if (full.read_only && (full.params_type === 'null' || !hasRequired(full.params_schema))) {
+    if (full.read_only && (full.params_type === 'null' || !hasFormFields(full.params_schema))) {
       await executeAction(full, {}); return;
     }
     const layer = el('div', 'codex-client-dialog-layer');
@@ -728,7 +839,9 @@
     footer.append(cancel, run);
     const form = built.element;
     form.addEventListener('submit', async event => {
-      event.preventDefault(); run.disabled = true;
+      event.preventDefault();
+      if (!built.validate()) return;
+      run.disabled = true;
       try { await executeAction(full, await built.read()); closeDialog(); }
       catch (error) { showError(conciseError(error), dialog); }
       finally { run.disabled = false; }
@@ -736,17 +849,66 @@
     dialog.append(header);
     const description = productDescription(full);
     if (description) dialog.append(el('p', 'codex-client-dialog-description', description));
-    dialog.append(form, footer); layer.append(dialog); state.root.append(layer);
+    form.append(footer);
+    dialog.append(form); layer.append(dialog); state.root.append(layer);
     window.setTimeout(() => dialog.querySelector('input:not([type=hidden]),textarea,select,button')?.focus(), 0);
   }
 
   async function executeAction(descriptor, params) {
     try {
       const result = await runOperation(descriptor.method, params, state.context);
+      state.activeRead = descriptor.read_only ? { descriptor, params } : null;
       showOperationResult(descriptor, result);
-      if (!descriptor.read_only) await loadState();
+      const lifecycleHandled = !descriptor.read_only && await handleOperationLifecycle(descriptor.method, params, result);
+      if (!descriptor.read_only && !lifecycleHandled) await loadState();
       return result;
     } catch (error) { showError(conciseError(error)); throw error; }
+  }
+
+  function threadResult(result) {
+    if (!result || typeof result !== 'object') return null;
+    const candidate = result.thread || result.data && result.data.thread || result;
+    const id = candidate && (candidate.id || candidate.threadId) || result.threadId;
+    return id ? Object.assign({}, candidate, { id }) : null;
+  }
+
+  function emitThreadLifecycle(method, params, thread) {
+    const detail = {
+      method,
+      threadId: thread && thread.id || params && params.threadId || state.context && state.context.threadId || '',
+      previousThreadId: state.context && state.context.threadId || '',
+      thread: thread || null,
+    };
+    window.dispatchEvent(new CustomEvent('ccc:codex-lifecycle', { detail }));
+    if (typeof window.CCCCodexClientLifecycle === 'function') {
+      try { window.CCCCodexClientLifecycle(detail); } catch (_) {}
+    }
+    return detail;
+  }
+
+  async function handleOperationLifecycle(method, params, result) {
+    const createsThread = method === 'thread/start' || method === 'thread/fork';
+    if (createsThread) {
+      const thread = threadResult(result);
+      if (!thread) return false;
+      const prior = Object.assign({}, state.context);
+      emitThreadLifecycle(method, params, thread);
+      await open(Object.assign(prior, {
+        threadId: thread.id,
+        repoPath: thread.cwd || thread.repoPath || prior.repoPath,
+        title: thread.name || thread.title || prior.title,
+      }));
+      showNotice(method === 'thread/fork' ? 'Opened the forked task.' : 'Opened the new task.');
+      return true;
+    }
+    if (['thread/name/set', 'thread/archive', 'thread/unarchive', 'thread/delete'].includes(method)) {
+      emitThreadLifecycle(method, params, null);
+      if (method === 'thread/archive' || method === 'thread/delete') {
+        close();
+        return true;
+      }
+    }
+    return false;
   }
 
   function showOperationResult(descriptor, result) {
@@ -754,7 +916,7 @@
     if (!panel) return;
     panel.replaceChildren();
     const header = el('div', 'codex-client-result-header'); header.append(el('strong', '', descriptor.title || pretty(descriptor.method)));
-    const close = el('button', 'codex-client-icon-button', '×'); close.addEventListener('click', () => { panel.hidden = true; panel.replaceChildren(); }); header.append(close);
+    const close = el('button', 'codex-client-icon-button', '×'); close.addEventListener('click', () => { state.activeRead = null; panel.hidden = true; panel.replaceChildren(); }); header.append(close);
     panel.append(header);
     if (result && typeof result === 'object') panel.append(keyValueView(result));
     else panel.append(el('p', '', valueSummary(result) || 'Completed.'));
@@ -787,6 +949,7 @@
       groups.get(group).push(descriptor);
     });
     const ordered = Array.from(groups.entries()).sort(([a], [b]) => a.localeCompare(b));
+    syncToolsToggle();
     if (!ordered.length) { host.append(el('div', 'codex-client-empty', state.catalog ? 'No actions match this search.' : 'Loading available actions…')); return; }
     ordered.forEach(([group, methods]) => {
       const section = el('section', 'codex-client-action-group');
@@ -799,6 +962,17 @@
       }).forEach(descriptor => grid.append(actionCard(descriptor)));
       section.append(grid); host.append(section);
     });
+  }
+
+  function syncToolsToggle() {
+    if (!state.root) return;
+    const toggle = state.root.querySelector('[data-codex-tools-toggle]');
+    if (!toggle) return;
+    const count = descriptorsFor('conversation').length;
+    toggle.textContent = 'Tools' + (state.catalog ? ' (' + count + ')' : '');
+    toggle.hidden = state.activeSurface !== 'conversation';
+    toggle.setAttribute('aria-expanded', state.toolsOpen ? 'true' : 'false');
+    state.root.classList.toggle('is-tools-collapsed', !state.toolsOpen);
   }
 
   function renderTurns() {
@@ -838,12 +1012,76 @@
     return Array.isArray(questions) ? questions : [questions];
   }
 
+  function approvalContextView(params) {
+    const view = el('div', 'codex-client-approval-context');
+    const command = params.command || params.cmd;
+    if (command) {
+      view.append(el('div', 'codex-client-context-label', 'Command'));
+      view.append(el('pre', 'codex-client-approval-command', Array.isArray(command) ? command.join(' ') : String(command)));
+    }
+    if (params.cwd) {
+      const row = el('div', 'codex-client-context-row'); row.append(el('strong', '', 'Workspace'), el('span', '', String(params.cwd))); view.append(row);
+    }
+    if (params.environmentId) {
+      const row = el('div', 'codex-client-context-row'); row.append(el('strong', '', 'Environment'), el('span', '', String(params.environmentId))); view.append(row);
+    }
+    if (params.kind) {
+      const row = el('div', 'codex-client-context-row'); row.append(el('strong', '', 'Action'), el('span', '', pretty(params.kind))); view.append(row);
+    }
+    if (params.grantRoot) {
+      const row = el('div', 'codex-client-context-row'); row.append(el('strong', '', 'Requested write access'), el('span', '', String(params.grantRoot))); view.append(row);
+    }
+    const commandActions = params.commandActions || params.parsedCmd;
+    if (Array.isArray(commandActions) && commandActions.length) {
+      const details = el('details', 'codex-client-approval-details'); details.open = true;
+      details.append(el('summary', '', 'Command details'));
+      commandActions.forEach(action => details.append(keyValueView(action)));
+      view.append(details);
+    }
+    const fileChanges = params.fileChanges || params.changes;
+    if (fileChanges && typeof fileChanges === 'object') {
+      const entries = Array.isArray(fileChanges) ? fileChanges.map((value, index) => [String(index + 1), value]) : Object.entries(fileChanges);
+      const details = el('details', 'codex-client-approval-details'); details.open = true;
+      details.append(el('summary', '', 'File changes (' + entries.length + ')'));
+      entries.forEach(([filePath, change]) => {
+        const file = el('div', 'codex-client-approval-file'); file.append(el('strong', '', filePath));
+        if (change && typeof change === 'object') {
+          if (change.type) file.append(el('span', 'codex-client-badge', pretty(change.type)));
+          const patch = change.unified_diff || change.diff || change.patch || change.content;
+          if (patch) file.append(el('pre', 'codex-client-diff', String(patch)));
+          file.append(keyValueView(change, ['type', 'unified_diff', 'diff', 'patch', 'content']));
+        } else file.append(el('span', '', valueSummary(change)));
+        details.append(file);
+      });
+      view.append(details);
+    }
+    const contextFields = [
+      ['additionalPermissions', 'Additional permissions'], ['permissions', 'Requested permissions'],
+      ['networkPolicy', 'Network policy'], ['networkPolicyAmendment', 'Network policy change'],
+      ['networkApprovalContext', 'Network approval context'],
+      ['proposedExecpolicyAmendment', 'Command policy change'], ['execpolicyAmendment', 'Command policy change'],
+    ];
+    contextFields.forEach(([key, title]) => {
+      if (params[key] === undefined || params[key] === null) return;
+      const details = el('details', 'codex-client-approval-details'); details.open = true;
+      details.append(el('summary', '', title));
+      if (typeof params[key] === 'object') details.append(keyValueView(params[key]));
+      else details.append(el('p', '', valueSummary(params[key])));
+      view.append(details);
+    });
+    return view.childNodes.length ? view : null;
+  }
+
   function renderPendingRequest(request) {
     const card = el('section', 'codex-client-request'); card.dataset.requestKey = request.key;
     const method = String(request.method || '');
     const params = request.params || {};
     card.append(el('h3', '', /approval|permission/i.test(method) ? 'Approval needed' : /elicitation/i.test(method) ? 'More information needed' : 'Codex has a question'));
     if (params.reason || params.message || params.description) card.append(markdownNode(params.reason || params.message || params.description));
+    if (/approval|requestApproval/i.test(method)) {
+      const contextView = approvalContextView(params);
+      if (contextView) card.append(contextView);
+    }
     const submit = async fields => {
       card.classList.add('is-submitting');
       try { await respond(request, shapePendingResponse(request, fields)); await loadState(); }
@@ -904,10 +1142,16 @@
       const decisions = Array.isArray(rawDecisions) ? rawDecisions : Object.keys(rawDecisions);
       const actions = el('div', 'codex-client-request-actions');
       decisions.forEach(choice => {
-        const decision = typeof choice === 'string' ? choice : choice.decision || choice.value || choice.id;
-        if (!decision) return;
-        const label = typeof choice === 'string' ? pretty(choice) : choice.label || choice.title || pretty(decision);
+        const structured = !!choice && typeof choice === 'object';
+        const structuredKey = structured ? Object.keys(choice)[0] : '';
+        const decision = structured ? choice : choice;
+        if (!decision || structured && !structuredKey) return;
+        const label = structured ? pretty(structuredKey) : pretty(choice);
         const button = el('button', 'codex-client-button ' + (/accept|approve/i.test(decision) ? 'is-primary' : 'is-quiet'), label);
+        if (structured) {
+          button.dataset.structuredDecision = 'true';
+          button.append(el('small', '', valueSummary(choice[structuredKey])));
+        }
         button.addEventListener('click', () => submit({ decision })); actions.append(button);
       });
       card.append(actions);
@@ -938,7 +1182,7 @@
     return turns.slice().reverse().find(turn => /progress|running|active/i.test(String(turn.status || '')));
   }
 
-  async function sendComposer(text) {
+  async function sendComposer(text, attachment) {
     const threadId = state.context && state.context.threadId;
     const running = runningTurn();
     const descriptor = running ? findMethod(['turn/steer', 'turn/steerInput']) : findMethod(['turn/start']);
@@ -946,11 +1190,18 @@
     const full = await getSchema(descriptor.method);
     const props = full.params_schema && full.params_schema.properties || {};
     const params = {};
+    const inputs = [];
+    if (text) inputs.push({ type: 'text', text });
+    if (attachment) inputs.push({ type: 'image', url: attachment.url });
+    const modelSelect = state.root && state.root.querySelector('[data-codex-model]');
+    const effortSelect = state.root && state.root.querySelector('[data-codex-effort]');
     Object.keys(props).forEach(key => {
       if (/^thread_?id$/i.test(key)) params[key] = threadId;
-      else if (/^turn_?id$/i.test(key) && running) params[key] = running.id;
-      else if (/^(input|items|content)$/i.test(key)) params[key] = [{ type: 'text', text }];
+      else if (/^(?:turn_?id|expectedTurnId)$/i.test(key) && running) params[key] = running.id;
+      else if (/^(input|items|content)$/i.test(key)) params[key] = inputs;
       else if (/^(message|text|prompt)$/i.test(key)) params[key] = text;
+      else if (/^model$/i.test(key) && !running && modelSelect && modelSelect.value) params[key] = modelSelect.value;
+      else if (/^(effort|reasoningEffort)$/i.test(key) && !running && effortSelect && effortSelect.value) params[key] = effortSelect.value;
     });
     if (!Object.keys(params).some(key => /input|items|content|message|text|prompt/i.test(key))) throw new Error('This Codex version needs additional send fields. Open the full action form from Conversation.');
     return executeAction(full, params);
@@ -960,16 +1211,80 @@
     const form = root.querySelector('[data-codex-composer]');
     const input = form.querySelector('textarea');
     const interrupt = form.querySelector('[data-codex-interrupt]');
+    const modelSelect = form.querySelector('[data-codex-model]');
+    const effortSelect = form.querySelector('[data-codex-effort]');
+    const imageInput = form.querySelector('[data-codex-image-input]');
+    const attachment = form.querySelector('[data-codex-attachment]');
+    const attachmentName = attachment.querySelector('[data-codex-attachment-name]');
+    const clearAttachment = () => {
+      state.composerAttachment = null;
+      imageInput.value = '';
+      attachment.hidden = true;
+      attachmentName.textContent = '';
+    };
+    const syncEfforts = () => {
+      const selected = state.composerModels.find(model => (model.id || model.model) === modelSelect.value);
+      const efforts = selected && Array.isArray(selected.supportedReasoningEfforts) ? selected.supportedReasoningEfforts : [];
+      effortSelect.replaceChildren();
+      if (!efforts.length) { effortSelect.hidden = true; return; }
+      efforts.forEach(entry => {
+        const value = typeof entry === 'string' ? entry : entry.reasoningEffort || entry.effort;
+        if (!value) return;
+        const option = el('option', '', pretty(value)); option.value = value; option.title = typeof entry === 'object' ? entry.description || '' : '';
+        effortSelect.append(option);
+      });
+      effortSelect.value = selected.defaultReasoningEffort || effortSelect.options[0]?.value || '';
+      effortSelect.hidden = false;
+    };
+    const syncOptions = () => {
+      const previous = modelSelect.value;
+      modelSelect.replaceChildren();
+      const automatic = el('option', '', 'Default model'); automatic.value = ''; modelSelect.append(automatic);
+      state.composerModels.forEach(model => {
+        const id = model.id || model.model; if (!id) return;
+        const option = el('option', '', model.displayName || model.name || id); option.value = id; option.title = model.description || '';
+        modelSelect.append(option);
+      });
+      modelSelect.value = state.composerModels.some(model => (model.id || model.model) === previous) ? previous : '';
+      modelSelect.hidden = state.composerModels.length === 0;
+      syncEfforts();
+    };
+    state.composerOptionsSync = syncOptions;
+    modelSelect.addEventListener('change', syncEfforts);
+    imageInput.addEventListener('change', () => {
+      const file = imageInput.files && imageInput.files[0];
+      if (!file) { clearAttachment(); return; }
+      if (!String(file.type || '').startsWith('image/')) { clearAttachment(); showError('Choose an image file.'); return; }
+      if (file.size > MAX_COMPOSER_IMAGE_BYTES) { clearAttachment(); showError('Image must be smaller than 700 KB.'); return; }
+      const reader = new FileReader();
+      reader.onload = () => {
+        const url = String(reader.result || '');
+        if (!url.startsWith('data:image/') || url.length > 1000000) { clearAttachment(); showError('That image is too large to attach safely.'); return; }
+        state.composerAttachment = { name: file.name, size: file.size, url };
+        attachmentName.textContent = file.name;
+        attachment.hidden = false;
+      };
+      reader.onerror = () => { clearAttachment(); showError('Could not read that image.'); };
+      reader.readAsDataURL(file);
+    });
+    attachment.querySelector('[data-codex-attachment-remove]').addEventListener('click', clearAttachment);
     const sync = () => {
       const running = runningTurn();
       form.querySelector('[data-codex-send-label]').textContent = running ? 'Steer' : 'Send';
       interrupt.hidden = !running;
+      modelSelect.disabled = !!running;
+      effortSelect.disabled = !!running;
     };
+    state.composerSync = sync;
     sync();
     form.addEventListener('submit', async event => {
-      event.preventDefault(); const text = input.value.trim(); if (!text) return;
+      event.preventDefault(); const text = input.value.trim(); if (!text && !state.composerAttachment) return;
+      const selectedModel = state.composerModels.find(model => (model.id || model.model) === modelSelect.value);
+      if (state.composerAttachment && selectedModel && Array.isArray(selectedModel.inputModalities) && !selectedModel.inputModalities.includes('image')) {
+        showError('The selected model does not accept images.'); return;
+      }
       const button = form.querySelector('[type=submit]'); button.disabled = true;
-      try { await sendComposer(text); input.value = ''; }
+      try { await sendComposer(text, state.composerAttachment); input.value = ''; clearAttachment(); }
       catch (error) { showError(conciseError(error)); }
       finally { button.disabled = false; sync(); }
     });
@@ -983,25 +1298,46 @@
         await executeAction(full, params);
       } catch (error) { showError(conciseError(error)); }
     });
+    syncOptions();
+  }
+
+  async function loadComposerModels(token) {
+    const descriptor = state.catalog && (state.catalog.methods || []).find(row => row.method === 'model/list' && row.available);
+    if (!descriptor || state.closed) return;
+    try {
+      const result = await runOperation('model/list', { limit: 100 }, state.context);
+      if (state.closed || token !== state.requestToken) return;
+      const models = Array.isArray(result) ? result : result && (result.data || result.models);
+      state.composerModels = Array.isArray(models) ? models.filter(model => model && !model.hidden) : [];
+      state.composerOptionsSync?.();
+    } catch (_) {
+      state.composerModels = [];
+      state.composerOptionsSync?.();
+    }
   }
 
   function mount(context) {
     const pane = context.paneEl || document.querySelector('.conv-pane.is-codex-session');
     if (!pane) throw new Error('Open a Codex conversation first.');
-    const root = el('section', 'codex-client-shell'); root.dataset.codexClient = 'true'; root.dataset.surface = state.activeSurface;
+    const root = el('section', 'codex-client-shell is-tools-collapsed'); root.dataset.codexClient = 'true'; root.dataset.surface = state.activeSurface;
     root.innerHTML = '<header class="codex-client-topbar">'
       + '<div class="codex-client-title"><span class="codex-client-mark">⌘</span><div><strong>Codex workspace</strong><span data-codex-context></span></div></div>'
       + '<nav class="codex-client-tabs" aria-label="Codex workspace sections">'
       + '<button type="button" data-surface="conversation" aria-current="page">Conversation</button>'
       + '<button type="button" data-surface="workspace">Workspace</button>'
       + '<button type="button" data-surface="settings">Settings</button></nav>'
-      + '<button type="button" class="codex-client-icon-button" data-codex-close aria-label="Close Codex workspace">×</button></header>'
+      + '<div class="codex-client-top-actions"><button type="button" class="codex-client-button is-quiet codex-client-tools-toggle" data-codex-tools-toggle aria-expanded="false">Tools</button>'
+      + '<button type="button" class="codex-client-icon-button" data-codex-close aria-label="Close Codex workspace">×</button></div></header>'
       + '<div class="codex-client-notices" data-codex-notices aria-live="polite"></div>'
       + '<main class="codex-client-main">'
       + '<section class="codex-client-conversation" data-codex-conversation>'
       + '<div class="codex-client-requests" data-codex-requests hidden></div>'
       + '<div class="codex-client-transcript" data-codex-transcript></div>'
-      + '<form class="codex-client-composer" data-codex-composer><textarea aria-label="Message Codex" placeholder="Message Codex…" rows="1"></textarea>'
+      + '<form class="codex-client-composer" data-codex-composer><div class="codex-client-composer-options">'
+      + '<select data-codex-model aria-label="Model" title="Model for the next turn" hidden></select><select data-codex-effort aria-label="Reasoning effort" title="Reasoning effort for the next turn" hidden></select>'
+      + '<label class="codex-client-attach" title="Attach one image smaller than 700 KB" aria-label="Attach image">＋<input type="file" accept="image/*" data-codex-image-input></label></div>'
+      + '<span class="codex-client-attachment" data-codex-attachment hidden><span data-codex-attachment-name></span><button type="button" data-codex-attachment-remove aria-label="Remove image">×</button></span>'
+      + '<textarea aria-label="Message Codex" placeholder="Message Codex…" rows="1"></textarea>'
       + '<button type="button" class="codex-client-button is-quiet" data-codex-interrupt hidden>Stop</button>'
       + '<button type="submit" class="codex-client-button is-primary"><span data-codex-send-label>Send</span> <span aria-hidden="true">↑</span></button></form></section>'
       + '<aside class="codex-client-tools"><div class="codex-client-toolhead"><div><strong data-codex-tool-title>Conversation tools</strong><span>Everything available in this Codex version</span></div>'
@@ -1018,13 +1354,14 @@
     pane.append(root);
     root.querySelector('[data-codex-context]').textContent = (context.title || 'Selected task') + (context.repoPath ? ' · ' + context.repoPath.split('/').filter(Boolean).pop() : '');
     root.querySelector('[data-codex-close]').addEventListener('click', close);
+    root.querySelector('[data-codex-tools-toggle]').addEventListener('click', () => { state.toolsOpen = !state.toolsOpen; syncToolsToggle(); });
     root.querySelectorAll('[data-surface]').forEach(button => button.addEventListener('click', () => {
       state.activeSurface = button.dataset.surface;
       root.dataset.surface = state.activeSurface;
       root.querySelectorAll('[data-surface]').forEach(other => other.setAttribute('aria-current', String(other === button ? 'page' : 'false')));
       root.querySelector('[data-codex-tool-title]').textContent = pretty(state.activeSurface) + ' tools';
       root.querySelector('[data-codex-conversation]').hidden = state.activeSurface !== 'conversation';
-      renderCatalog();
+      renderCatalog(); syncToolsToggle();
     }));
     root.querySelector('[data-codex-search]').addEventListener('input', event => { state.query = event.target.value; renderCatalog(); });
     root.querySelector('[data-codex-preview]').addEventListener('change', async event => {
@@ -1041,13 +1378,20 @@
 
   function setSnapshot(data, includeHistoryCursor) {
     if (!data) return;
+    if (data.thread && data.thread.deleted && state.context && data.thread.id === state.context.threadId) {
+      emitThreadLifecycle('thread/deleted', { threadId: data.thread.id }, data.thread);
+      if (typeof window.showOpToast === 'function') window.showOpToast('This Codex task was deleted.', 'error');
+      else window.dispatchEvent(new CustomEvent('ccc:codex-notice', { detail: { message: 'This Codex task was deleted.', type: 'error' } }));
+      close();
+      return;
+    }
     state.generation = data.generation !== undefined ? data.generation : state.generation;
     state.eventCursor = data.cursor !== undefined ? data.cursor : state.eventCursor;
     state.connected = !!data.connected;
     if (data.thread !== undefined) state.thread = data.thread;
     if (Array.isArray(data.requests)) state.requests = data.requests;
     if (includeHistoryCursor) state.historyCursor = data.next_cursor || null;
-    updateChrome(); renderTurns(); renderRequests();
+    updateChrome(); renderTurns(); renderRequests(); state.composerSync?.();
   }
 
   function updateChrome() {
@@ -1067,7 +1411,7 @@
   async function loadCatalog(token) {
     const catalog = await jsonFetch(API + '/catalog');
     if (token !== state.requestToken || state.closed) return;
-    state.catalog = catalog; renderCatalog(); updateChrome();
+    state.catalog = catalog; renderCatalog(); updateChrome(); await loadComposerModels(token);
   }
 
   async function loadHistory(token, cursor) {
@@ -1112,10 +1456,51 @@
       if (/terminal|realtime|image|media/i.test(event.method || '')) {
         window.dispatchEvent(new CustomEvent('ccc:codex-stream-event', { detail: event }));
       }
+      if (event.method === 'account/login/completed') {
+        const success = !event.params || event.params.success !== false;
+        showNotice(success ? 'Signed in to Codex.' : 'Codex sign-in did not complete.');
+        window.dispatchEvent(new CustomEvent('ccc:codex-account-changed', { detail: event.params || {} }));
+      }
     });
     if (state.activity.length > 40) state.activity.splice(0, state.activity.length - 40);
     renderTurns();
+    scheduleReadRefresh(events);
     window.dispatchEvent(new CustomEvent('ccc:codex-events', { detail: { context: state.context, events } }));
+  }
+
+  function readResource(method) {
+    return String(method || '').replace(/\/(?:read|get|list)$/i, '');
+  }
+
+  function eventMatchesRead(eventMethod, readMethod) {
+    const resource = readResource(readMethod);
+    const changed = String(eventMethod || '').replace(/\/(?:updated|changed|completed)$/i, '');
+    return !!resource && (changed === resource || changed.startsWith(resource + '/') || resource.startsWith(changed + '/'));
+  }
+
+  function scheduleReadRefresh(events) {
+    const active = state.activeRead;
+    if (!active || !active.descriptor || !active.descriptor.read_only) return;
+    if (!events.some(event => event && eventMatchesRead(event.method, active.descriptor.method))) return;
+    window.clearTimeout(state.readRefreshTimer);
+    state.readRefreshTimer = window.setTimeout(refreshActiveRead, 120);
+  }
+
+  async function refreshActiveRead() {
+    state.readRefreshTimer = null;
+    const active = state.activeRead;
+    if (!active || state.closed || !state.root) return;
+    if (state.readRefreshInFlight) { state.readRefreshQueued = true; return; }
+    state.readRefreshInFlight = true;
+    try {
+      const result = await runOperation(active.descriptor.method, active.params, state.context);
+      if (state.activeRead === active && !state.closed) showOperationResult(active.descriptor, result);
+    } catch (error) {
+      if (!state.closed) showError('Could not update ' + (active.descriptor.title || 'this view') + ': ' + conciseError(error));
+    } finally {
+      state.readRefreshInFlight = false;
+      if (state.readRefreshQueued) { state.readRefreshQueued = false; scheduleReadRefresh([{ method: active.descriptor.method + '/updated' }]); }
+    }
   }
 
   function schedulePoll(delay) {
@@ -1173,6 +1558,7 @@
   function close() {
     state.closed = true; state.requestToken++;
     window.clearTimeout(state.pollTimer); state.pollTimer = null;
+    window.clearTimeout(state.readRefreshTimer); state.readRefreshTimer = null;
     state.pollAbort?.abort(); state.pollAbort = null; state.pollInFlight = false;
     if (state.visibilityHandler) document.removeEventListener('visibilitychange', state.visibilityHandler);
     state.visibilityHandler = null;
@@ -1180,7 +1566,9 @@
     document.querySelectorAll('.codex-client-open').forEach(pane => pane.classList.remove('codex-client-open'));
     state.previousDisplay.forEach((display, node) => { if (node && node.isConnected) node.style.display = display; });
     state.previousDisplay.clear(); state.root = null; state.context = null; state.generationPromise = null;
-    state.activeSurface = 'conversation'; state.activeGroup = ''; state.query = '';
+    state.composerSync = null; state.composerOptionsSync = null; state.composerModels = []; state.composerAttachment = null;
+    state.activeRead = null; state.readRefreshInFlight = false; state.readRefreshQueued = false;
+    state.activeSurface = 'conversation'; state.activeGroup = ''; state.query = ''; state.toolsOpen = false;
     state.mutationLocks.clear(); state.responseLocks.clear();
   }
 
