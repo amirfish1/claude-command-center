@@ -59,6 +59,7 @@ class _SessionGraph:
         self._lock = threading.RLock()
         # child_sid -> parent_sid
         self._parent_of = {}
+        self._parent_revision = 0
         # parent_sid -> {child_sid: edge_meta}
         self._children_of = {}
         # child_sid -> edge_meta (same objects as in _children_of values)
@@ -90,6 +91,7 @@ class _SessionGraph:
             edges = data.get("edges")
             if not isinstance(edges, list):
                 return
+            self._parent_revision += 1
             self._parent_of = {}
             self._children_of = {}
             self._edge_meta = {}
@@ -183,6 +185,8 @@ class _SessionGraph:
                 self._children_of.setdefault(existing_parent, {})[child] = meta
                 self._dirty = True
                 return
+            if existing_parent != parent:
+                self._parent_revision += 1
             self._parent_of[child] = parent
             self._children_of.setdefault(parent, {})[child] = meta
             self._edge_meta[child] = meta
@@ -208,6 +212,7 @@ class _SessionGraph:
         with self._lock:
             if child in self._parent_of and self._parent_of[child] == parent:
                 del self._parent_of[child]
+                self._parent_revision += 1
                 self._dirty = True
             if parent in self._children_of:
                 if child in self._children_of[parent]:
@@ -220,6 +225,11 @@ class _SessionGraph:
                 self._dirty = True
 
     # -- queries -------------------------------------------------------------
+
+    def parent_revision(self):
+        """Cheap cache version for projections that expose parent links."""
+        with self._lock:
+            return self._parent_revision
 
     def parent_of(self, child):
         """Return the parent session_id for ``child``, or None."""

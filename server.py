@@ -13748,6 +13748,12 @@ def _archive_list_project_row(row):
     # countdown for a session parked on a usage-limit auto-resume.
     sid = row.get("session_id") or row.get("id")
     if sid:
+        # The archive snapshot can predate family discovery. Parentage is
+        # cheap live graph state and must not depend on opening the reader.
+        if not out.get("parent_session_id"):
+            parent = _session_graph.parent_of(sid)
+            if parent:
+                out["parent_session_id"] = parent
         resume_at = usage_limit_resume_at_for_session(sid)
         if resume_at:
             out["usage_limit_resume_at"] = resume_at
@@ -34574,7 +34580,9 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
         # alternating overlay states — e.g. a live ACP row whose counters move
         # every poll — each keep a stable replay slot instead of evicting each
         # other every poll.
-        body_key = (cache_key, window, bool(from_cache), snap_ver)
+        # A new family edge changes the projection even if transcripts and
+        # the archive snapshot are unchanged. Preserve replay until it does.
+        body_key = (cache_key, window, bool(from_cache), snap_ver, _session_graph.parent_revision())
         raw = gzip_body = etag_val = None
         if snap_ver:
             with _ARCHIVE_LIST_BODY_LOCK:
