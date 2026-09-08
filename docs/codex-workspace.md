@@ -1,9 +1,14 @@
-# Codex workspace
+# Codex conversation controls
 
-Open a Codex conversation in CCC and choose **Workspace** in its header, or
-**Codex workspace** in the toolbar when the header is hidden. This is the expanded
-conversation view, not a new repository or checkout. Its tabs are Conversation,
-Workspace, and Settings.
+Open a Codex conversation normally in CCC. When its native connection is
+available, the richer transcript appears directly in the existing conversation
+pane. The header, draft, composer, model controls, queued messages, and status
+rail stay in place. There is no separate workspace screen or launch button.
+
+Chat, Files & terminal, Settings, and Tools controls sit within that conversation.
+The existing Send and Escape controls use the same selected task and desktop
+owner as the transcript. Busy desktop tasks use CCC's existing message queue;
+a delivery error never falls through to a second transport.
 
 The conversation renders Markdown, progress, final answers, tool results,
 file diffs, images, questions, and approvals. Tool details start collapsed.
@@ -20,7 +25,7 @@ and configured permissions.
 ## Connection requirements
 
 Install a compatible Codex CLI and connect CCC's existing Codex app-server bridge.
-The workspace uses that connection's owner; the browser does not launch a second
+The conversation uses that connection's owner; the browser does not launch a second
 writer against Codex's shared state. Transcript ingestion and the older exec
 fallback remain available separately.
 

@@ -457,3 +457,37 @@ textarea.codex-schema-input { min-height: 82px; resize: vertical; }
 [data-codex-media-host] { padding: 12px; }
 .codex-client-footer { flex-wrap: wrap; }
 .codex-client-footer select { font: inherit; color: var(--text); background: var(--bg); border: 1px solid var(--border); border-radius: 4px; }
+
+/* The Codex renderer occupies CCC's existing transcript slot. Pane grid,
+   status rail, header, and composer remain owned by the conversation UI. */
+.conversations-view > .codex-client-shell.is-inline {
+  display: block;
+  width: 100%;
+  height: auto;
+  min-height: 100%;
+  overflow: visible;
+  background: transparent;
+}
+.codex-client-shell.is-inline .codex-client-topbar {
+  display: flex;
+  justify-content: flex-end;
+  min-height: 32px;
+  padding: 4px 12px;
+  background: var(--bg);
+  position: sticky;
+  top: 0;
+  z-index: 3;
+}
+.codex-client-shell.is-inline .codex-client-main,
+.codex-client-shell.is-inline .codex-client-conversation,
+.codex-client-shell.is-inline .codex-client-transcript {
+  display: block;
+  height: auto;
+  min-height: 0;
+  overflow: visible;
+}
+.codex-client-shell.is-inline .codex-client-conversation[hidden] { display: none; }
+.codex-client-shell.is-inline.is-tools-collapsed[data-surface="conversation"] .codex-client-tools { display: none; }
+.codex-client-shell.is-inline .codex-client-tools { border: 0; }
+.codex-client-shell.is-inline .codex-client-notices { position: sticky; width: auto; margin: 0 12px; top: 36px; right: auto; }
+.codex-client-shell.is-inline .codex-client-footer { justify-content: flex-end; }

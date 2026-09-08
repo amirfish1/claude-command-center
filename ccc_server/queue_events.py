@@ -2075,6 +2075,13 @@ def resume_session_codex(
         "codex_wake_attempt", sid=session_id,
         cwd=cwd, model=model, effort=reasoning_effort, steer=bool(steer),
     )
+    from ccc_server.codex_client import resume_desktop_conversation
+    desktop_result = resume_desktop_conversation(
+        session_id, text, cwd=cwd, model=model, effort=reasoning_effort,
+        image_paths=image_paths, steer=steer, action_id=idempotency_key,
+    )
+    if desktop_result is not None and desktop_result.get("fallback") != "queue":
+        return desktop_result
     if steer:
         return _core._codex_steer_via_app_server(
             session_id,
@@ -2083,7 +2090,7 @@ def resume_session_codex(
             model=model,
             image_paths=image_paths,
         )
-    app_result = _core._codex_resume_or_steer_via_app_server(
+    app_result = desktop_result if desktop_result is not None else _core._codex_resume_or_steer_via_app_server(
         session_id,
         text,
         cwd=cwd,

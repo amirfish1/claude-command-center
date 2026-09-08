@@ -194,7 +194,7 @@ test('a mutation is single-flight and close cleans up before reopening', async (
       window.CCCCodexClient.close();
       return { mutations, duplicateSkipped: values[1]?.skipped === true, shells: document.querySelectorAll('.codex-client-shell').length };
     });
-    assert.deepEqual(result, { mutations: 1, duplicateSkipped: true, shells: 0 });
+    assert.deepEqual(result, { mutations: 1, duplicateSkipped: true, shells: 1 });
   } finally { await page.close(); }
 });
 
@@ -387,7 +387,7 @@ test('loading earlier history preserves the visible transcript position', async 
   } finally { await page.close(); }
 });
 
-test('reopening starts cleanly on Conversation with one launcher and one shell', async () => {
+test('reopening a client retains one shell without adding a separate workspace launcher', async () => {
   const page = await barePage();
   try {
     const result = await page.evaluate(async () => {
@@ -410,7 +410,7 @@ test('reopening starts cleanly on Conversation with one launcher and one shell',
         launchers: document.querySelectorAll('[data-codex-workspace-launch]').length,
       };
     });
-    assert.deepEqual(result, { current: 'conversation', surface: 'conversation', conversationHidden: false, shells: 1, launchers: 1 });
+    assert.deepEqual(result, { current: 'conversation', surface: 'conversation', conversationHidden: false, shells: 1, launchers: 0 });
   } finally { await page.close(); }
 });
 
@@ -970,23 +970,10 @@ test('a nullable ref preserves the referenced union variants and serialization',
   } finally { await page.close(); }
 });
 
-test('workspace launcher stays reachable when responsive layout hides the pane header', async () => {
+test('loading the renderer does not add a separate workspace entry point', async () => {
   const page = await barePage();
   try {
-    await page.setViewport({width:900,height:800});
-    await page.addStyleTag({content:'@media(max-width:1200px){.conv-pane-header{display:none}}'});
-    await page.evaluate(()=>document.body.insertAdjacentHTML('afterbegin','<div class="toolbar"><div id="cccBreadcrumb"></div></div>'));
-    await page.evaluate(()=>new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve))));
-    const visible = () => page.evaluate(()=>{
-      const button=document.querySelector('[data-codex-toolbar-launch]');
-      return !!button && !button.hidden && button.getBoundingClientRect().width>0;
-    });
-    assert.equal(await visible(),true);
-    await page.setViewport({width:1500,height:800});
-    await page.waitForFunction(()=>document.querySelector('[data-codex-toolbar-launch]')?.hidden);
-    await page.setViewport({width:900,height:800});
-    await page.waitForFunction(()=>!document.querySelector('[data-codex-toolbar-launch]')?.hidden);
-    await page.evaluate(()=>document.querySelector('.conv-pane').classList.remove('is-codex-session'));
-    await page.waitForFunction(()=>document.querySelector('[data-codex-toolbar-launch]')?.hidden);
+    await page.evaluate(()=>document.body.insertAdjacentHTML('afterbegin','<div id="cccBreadcrumb"></div>'));
+    assert.equal(await page.$$eval('[data-codex-workspace-launch],[data-codex-toolbar-launch]',nodes=>nodes.length),0);
   } finally {await page.close();}
 });

@@ -140,3 +140,53 @@ def test_native_catalog_does_not_advertise_unexposed_desktop_operations():
     assert catalog['methods'][0]['available']
     assert not catalog['methods'][1]['available']
     assert raw['methods'][1]['available']
+
+
+def test_existing_composer_routes_to_desktop_without_native_resume(peer):
+    import server
+    from ccc_server import codex_client as client
+    transport,_=peer
+    transport.snapshot('task')
+    transport.states['task'][1]['turnHistory']['history']['entitiesByKey']['turn:two']['status']='completed'
+    with mock.patch.object(desktop,'DESKTOP',transport), \
+         mock.patch.object(client,'_client_desktop_mode',return_value=True), \
+         mock.patch.object(client,'_client_rpc',return_value={'ok':True,'generation':'g'}), \
+         mock.patch.object(client,'_client_operation',return_value={'ok':True,'result':{'turn':{'id':'new'}}}) as send:
+        result=client.resume_desktop_conversation('task','Follow up',cwd='/repo',model='model',action_id='short')
+    assert result['confirmed'] and result['via']=='codex-desktop' and result['turn_id']=='new'
+    body=send.call_args.args[0]
+    assert body['context']=={'thread_id':'task','repo_path':'/repo'}
+    assert body['params']['input']==[{'type':'text','text':'Follow up'}]
+    assert len(body['action_id'])==64
+
+
+def test_existing_composer_busy_desktop_returns_queue_without_a_second_send(peer):
+    from ccc_server import codex_client as client
+    transport,_=peer
+    with mock.patch.object(desktop,'DESKTOP',transport), \
+         mock.patch.object(client,'_client_desktop_mode',return_value=True), \
+         mock.patch.object(client,'_client_operation') as send:
+        result=client.resume_desktop_conversation('task','Next',cwd='/repo')
+    assert result['fallback']=='queue'
+    send.assert_not_called()
+
+
+@pytest.mark.parametrize('reply',[
+    {'ok':True,'via':'codex-desktop','accepted':True,'confirmed':True,'turn_id':'new'},
+    {'ok':False,'via':'codex-desktop','error':'timed out','uncertain':True},
+])
+def test_existing_resume_entry_never_falls_through_after_desktop_delivery(tmp_path, reply):
+    import server
+    from ccc_server import queue_events, codex_client
+    with mock.patch.object(server,'_resolve_codex_bin',return_value={'available':True,'bin':'unused'}), \
+         mock.patch.object(server,'_spawned_sessions',[]), \
+         mock.patch.object(server,'_codex_thread_row',return_value={'cwd':str(tmp_path),'model':'test-model'}), \
+         mock.patch.object(server,'_spawn_registry_entry_for_session',return_value={}), \
+         mock.patch.object(server,'_get_session_override',return_value=None), \
+         mock.patch.object(server,'_model_policy_blocks',return_value=False), \
+         mock.patch.object(server,'_resume_ledger_append'), \
+         mock.patch.object(codex_client,'resume_desktop_conversation',return_value=reply) as desktop_send, \
+         mock.patch.object(server,'_codex_resume_or_steer_via_app_server',side_effect=AssertionError('second transport')):
+        result=queue_events.resume_session_codex('task','Follow up',_native_delivery=True,_from_queue=True)
+    assert result==reply
+    desktop_send.assert_called_once()

@@ -329,7 +329,9 @@ class DesktopClient:
         else:
             request = {"conversationId": tid}; method_name, version = "thread-follower-compact-thread", 1
         response = self.request(method_name, request, version=version, target=owner, timeout=25)["result"]
-        if method == "turn/start": return {"turn": response.get("result") or {}}
+        if method == "turn/start":
+            result = response.get("result") or {}
+            return result if isinstance(result, dict) and "turn" in result else {"turn": result}
         return response
 
     def answer(self, tid, wire):

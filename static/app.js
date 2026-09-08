@@ -3517,9 +3517,15 @@
     };
   };
   window.CCCCodexMarkdown = function (text) { return renderMarkdown(String(text || '')); };
-  window.CCCCodexClientLifecycle = function () {
+  window.CCCCodexClientLifecycle = function (detail) {
     scheduleDashboardInvalidation('archive');
     scheduleDashboardInvalidation('sessions');
+    if (detail?.inline && detail.paneId && ['thread/start','thread/fork'].includes(detail.method)) {
+      sessionSourceByConv[detail.threadId] = 'codex';
+      sessionIdByConv[detail.threadId] = detail.threadId;
+      if (detail.thread?.cwd) sessionCwdByConv[detail.threadId] = detail.thread.cwd;
+      Promise.resolve(refreshArchiveData({staleOk:false})).catch(()=>{}).then(()=>selectConversation(detail.threadId,detail.paneId));
+    }
   };
   window.addEventListener('ccc:codex-media-cleanup-error', event => {
     showOpToast(event.detail && event.detail.message || 'Codex media cleanup could not be confirmed.', 'error');
@@ -7013,7 +7019,9 @@
     button.disabled = true;
     button.textContent = 'Cancelling…';
     try {
-      const res = await fetch('/api/inject-esc', {
+      const inlinePane = convPaneElById(activePaneId());
+      const nativeInline = window.CCCCodexClient?.isInlineActive(inlinePane);
+      const res = nativeInline ? null : await fetch('/api/inject-esc', {
         method: 'POST',
         headers: {'Content-Type': 'application/json'},
         body: JSON.stringify({ session_id: sid }),
@@ -11453,6 +11461,12 @@
           try { refreshLiveStatus(); } catch (_) {}
           setTimeout(refreshConversationList, 1500);
           setTimeout(refreshConversationList, 3500);
+        } else if (data.via === 'codex-desktop' && data.confirmed) {
+          removePendingSendEcho(pendingSend);
+          clearOptimisticAgentIndicator(getConvViewForPane(paneId || activePaneId()) || getConvView());
+          showOpToast('Sent to Codex.');
+          refreshLiveStatus();
+          setTimeout(refreshConversationList, 1500);
         } else if (data.via === 'codex-app-turn') {
           showOpToast('Codex follow-up started.');
           setTimeout(refreshConversationList, 1500);
@@ -12864,15 +12878,16 @@
         body: JSON.stringify({ session_id: currentSession.id }),
       });
       let data = {};
-      try { data = await res.json(); } catch (_) {}
-      if (res.ok && data.ok) {
+      if (nativeInline) data = await window.CCCCodexClient.interruptInline(inlinePane);
+      else try { data = await res.json(); } catch (_) {}
+      if ((!res || res.ok) && data.ok) {
         $convEscBtn.classList.add('sent');
         $convEscBtn.textContent = data.via === 'spawn-sigint' ? 'Killed' : 'Esc ✓';
         if (data.note) showOpToast(data.note, 'info');
       } else {
         $convEscBtn.classList.add('failed');
         $convEscBtn.textContent = 'Esc ✗';
-        showOpToast('Interrupt failed: ' + (data.error || ('HTTP ' + res.status)), 'error');
+        showOpToast('Interrupt failed: ' + (data.error || ('HTTP ' + res?.status)), 'error');
       }
     } catch (err) {
       $convEscBtn.classList.add('failed');
@@ -50270,6 +50285,7 @@
     if (!currentConversation) return;
     const id = currentConversation;
     const $view = getConvViewForPane(fetchPaneId) || $conversationsView;
+    if (window.CCCCodexClient?.isInlineActive(convPaneElById(fetchPaneId))) return;
     // Backlog cards (open GH issues + TODO/PARKING/native-task) have no
     // session JSONL — /api/conversations/<id> returns 404. Render the
     // issue body directly from the card's already-loaded fields so the
@@ -50521,6 +50537,13 @@
       if (data.events && data.events.length > 0) {
         const sid = (conversationsData.find(x => x.id === id) || {}).session_id || id;
         fetchSessionUsage(sid);
+      }
+      if (data.engine === 'codex' && window.CCCCodexClient) {
+        const paneEl = convPaneElById(fetchPaneId);
+        const context = window.CCCCodexClientContext(paneEl);
+        if (paneByPaneId(fetchPaneId)?.conversationId === id) {
+          await window.CCCCodexClient.attachInline({...context, paneEl, viewEl:$view});
+        }
       }
     } catch (err) {
       if (convLastLine === 0) {
@@ -57191,6 +57214,7 @@
       pane.firstUserMsgRendered = true;
     }
     const $view = getConvViewForPane(paneId) || $conversationsView;
+    if (window.CCCCodexClient?.isInlineActive(convPaneElById(paneId))) return true;
     // Webui panes (kimi + codex) render kimi-web style: merged turns,
     // right-aligned user bubbles, ToolGroup cards. Gated here so the Claude
     // path below stays byte-for-byte the shared legacy renderer.

@@ -359,6 +359,9 @@ def _client_desktop_rpc(method, params, expected_generation):
                         "error": "Desktop owner changed during this operation", "resync_required": True}
             if _CLIENT_DESKTOP_REVISIONS.get(tid) != revision:
                 thread = normalize_thread(state)
+                previous_thread = CODEX_CONVERSATIONS.snapshot(tid).get("thread") or {}
+                was_working = any(t.get("status") == "inProgress" for t in previous_thread.get("turns", []))
+                is_working = any(t.get("status") == "inProgress" for t in thread.get("turns", []))
                 CODEX_CONVERSATIONS.record("ccc/desktop/snapshot", {"threadId": tid})
                 CODEX_CONVERSATIONS.hydrate(thread, CODEX_CONVERSATIONS.cursor, generation=generation)
                 active = {}
@@ -374,6 +377,8 @@ def _client_desktop_rpc(method, params, expected_generation):
                     if key not in active: CODEX_REQUESTS.resolve(rid, tid, generation)
                 _CLIENT_DESKTOP_REQUESTS[tid] = active
                 _CLIENT_DESKTOP_REVISIONS[tid] = revision
+                if was_working and not is_working:
+                    _core._schedule_codex_queue_pump(tid)
             return {"ok": True, "result": result, "generation": generation, "transport": "desktop-ipc"}
     except (ValueError, OSError, KeyError, TypeError) as error:
         if DESKTOP.sock is None:
@@ -926,3 +931,50 @@ def codex_client_call(action, data):
                 _core._publish_dashboard_patch("conversation.patch", "conversation", params.get("threadId"),
                     {"name": name, "title": name, "display_name": name, "name_overridden": bool(name)})
     return result
+
+
+def resume_desktop_conversation(session_id, text, *, cwd, model=None, effort=None,
+                                image_paths=(), steer=False, action_id=None):
+    """Use the same desktop owner for CCC's existing composer and queue pump.
+
+    None means this is not a desktop-owned task. Once ownership is found,
+    failures never fall through to a second delivery transport.
+    """
+    if not _client_desktop_mode():
+        return None
+    from ccc_server.codex_desktop import DESKTOP, normalize_thread
+    try:
+        _, state = DESKTOP.snapshot(session_id)
+    except (ValueError, OSError) as error:
+        if "no-client-found" in str(error):
+            return None
+        return {"ok": False, "via": "codex-desktop", "error": str(error),
+                "uncertain": isinstance(error, (TimeoutError, ConnectionError))}
+    if steer:
+        return {"ok": False, "via": "codex-desktop", "code": "desktop_steer_unavailable",
+                "error": "Use Send to queue a follow-up, or stop the desktop turn first."}
+    thread = normalize_thread(state)
+    if any(turn.get("status") == "inProgress" for turn in thread.get("turns", [])):
+        return {"ok": False, "fallback": "queue", "via": "codex-desktop",
+                "error": "Codex Desktop is working; this message will wait for the current turn."}
+    context = {"thread_id": session_id, "repo_path": cwd}
+    current = _client_rpc("thread/read", {"threadId": session_id})
+    if not current.get("ok"):
+        return {**current, "via": "codex-desktop"}
+    inputs = [{"type": "text", "text": text}]
+    inputs.extend({"type": "localImage", "path": str(path)} for path in image_paths)
+    params = {"threadId": session_id, "input": inputs}
+    if model: params["model"] = model
+    if effort: params["effort"] = effort
+    result = _client_operation({"method": "turn/start", "params": params, "context": context,
+        "generation": current["generation"], "action_id":
+        hashlib.sha256(("desktop:" + str(action_id)).encode()).hexdigest() if action_id else uuid.uuid4().hex})
+    if not result.get("ok"):
+        return {**result, "via": "codex-desktop", "ambiguous": bool(result.get("uncertain"))}
+    turn = (result.get("result") or {}).get("turn") or {}
+    turn_id = turn.get("id") or turn.get("turnId")
+    if not turn_id:
+        return {"ok": False, "via": "codex-desktop", "uncertain": True, "ambiguous": True,
+                "error": "Desktop accepted the request but did not return a turn receipt. It will not be resent."}
+    return {"ok": True, "via": "codex-desktop", "accepted": True, "confirmed": True,
+            "resumed": True, "session_id": session_id, "turn_id": turn_id, "cwd": cwd}

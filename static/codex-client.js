@@ -2,6 +2,8 @@
 (function () {
   'use strict';
 
+  function createClient() {
+
   const API = '/api/codex/client';
   const POLL_BASE_MS = 900;
   const POLL_MAX_MS = 12000;
@@ -264,6 +266,9 @@
     if (normalized === 'usermessage' || normalized === 'user_message') {
       const row = el('article', 'codex-client-item codex-client-message is-user');
       row.append(markdownNode(textFrom(item)));
+      for (const part of Array.isArray(item.content) ? item.content : []) {
+        if (/image/i.test(part?.type || '')) row.append(renderItem({...part, type:'imageView', id:(item.id || 'user')+'-image'}));
+      }
       return row;
     }
     if (normalized === 'agentmessage' || normalized === 'agent_message' || normalized === 'assistantmessage') {
@@ -300,7 +305,7 @@
       const output = textFrom(item.output || item.aggregatedOutput || item.result);
       if (output) { const pre = el('pre', 'codex-client-output', output); body.append(pre); }
       body.append(keyValueView(item, ['type', 'kind', 'command', 'cmd', 'input', 'output', 'aggregatedOutput', 'result']));
-      const card = detailsCard('command', item, item.title || 'Command', body, item.status === 'inProgress');
+      const card = detailsCard('command', item, item.title || 'Command', body, false);
       card.dataset.terminalItem = item.id || '';
       return card;
     }
@@ -310,12 +315,14 @@
       appendFileChanges(body, changes);
       const diff = item.diff || item.patch;
       if (diff) body.append(diffNode(diff));
-      return detailsCard('file-change', item, item.title || 'File changes', body, true);
+      return detailsCard('file-change', item, item.title || 'File changes', body, false);
     }
     if (/imageview|imagegeneration|image|media/.test(normalized)) {
       const body = el('div', 'codex-client-card-body codex-client-media');
-      const url = safeUrl(item.url || item.imageUrl || item.image_url || item.path, true);
-      if (url) { const image = el('img'); image.src = url; image.alt = item.alt || item.title || 'Generated image'; image.loading = 'lazy'; body.append(image); }
+      const raw = item.url || item.imageUrl || item.image_url || item.path;
+      const local = typeof raw === 'string' && (/^(?:\/|[A-Za-z]:[\\/])/.test(raw)) && !raw.startsWith('/api/');
+      const url = local ? '/api/local-image?path=' + encodeURIComponent(raw) : safeUrl(raw, true);
+      if (url) { const image = el('img'); image.src = url; image.alt = item.alt || item.title || 'Generated image'; image.loading = 'lazy'; image.addEventListener('error', () => image.replaceWith(el('span', 'codex-client-media-unavailable', 'Image is no longer available on this computer.')), {once:true}); body.append(image); }
       if (textFrom(item)) body.append(markdownNode(textFrom(item)));
       const card = detailsCard('media', item, item.title || (/generation/.test(normalized) ? 'Image generation' : 'Image'), body, true);
       card.dataset.mediaItem = item.id || '';
@@ -894,6 +901,8 @@
   function emitThreadLifecycle(method, params, thread) {
     const detail = {
       method,
+      paneId: state.context?.paneId,
+      inline: !!state.context?.inline,
       threadId: thread && thread.id || params && params.threadId || state.context && state.context.threadId || '',
       previousThreadId: state.context && state.context.threadId || '',
       thread: thread || null,
@@ -912,6 +921,10 @@
       if (!thread) return false;
       const prior = Object.assign({}, state.context);
       emitThreadLifecycle(method, params, thread);
+      if (prior.inline && typeof window.CCCCodexClientLifecycle === 'function') {
+        await close();
+        return true;
+      }
       await open(Object.assign(prior, {
         threadId: thread.id,
         repoPath: thread.cwd || thread.repoPath || prior.repoPath,
@@ -997,7 +1010,8 @@
   function renderTurns() {
     const host = state.root && state.root.querySelector('[data-codex-transcript]');
     if (!host) return;
-    const nearBottom = host.scrollHeight - host.scrollTop - host.clientHeight < 100;
+    const scrollHost = state.context?.inline ? host.closest('.conversations-view') : host;
+    const nearBottom = !state.didInitialRender || scrollHost.scrollHeight - scrollHost.scrollTop - scrollHost.clientHeight < 100;
     const openKeys = new Set(Array.from(host.querySelectorAll('details[open][data-item-key]')).map(node => node.dataset.itemKey));
     host.replaceChildren();
     if (state.historyCursor) {
@@ -1023,7 +1037,8 @@
       ));
       host.append(recent);
     }
-    if (nearBottom) host.scrollTop = host.scrollHeight;
+    if (nearBottom) scrollHost.scrollTop = scrollHost.scrollHeight;
+    state.didInitialRender = true;
   }
 
   function questionEntries(params) {
@@ -1381,6 +1396,21 @@
       + '<div data-codex-media-host></div><div class="codex-client-catalog" data-codex-catalog></div></aside></main>'
       + '<aside class="codex-client-result" data-codex-result hidden></aside>'
       + '<footer class="codex-client-footer"><span data-codex-connection>Connecting…</span><span data-codex-usage></span><label>Message queue <select data-codex-queue-owner><option value="ccc">CCC</option><option value="native">Codex</option></select></label><label><input type="checkbox" data-codex-preview> Preview features</label></footer>';
+    const inline = !!context.inline;
+    if (inline) {
+      const view = context.viewEl || pane.querySelector('.conversations-view');
+      if (!view) throw new Error('Conversation view is unavailable');
+      state.savedView = {view, nodes:Array.from(view.childNodes)};
+      view.replaceChildren(root);
+      root.classList.add('is-inline');
+      root.querySelector('.codex-client-title').remove();
+      root.querySelector('[data-codex-close]').remove();
+      root.querySelector('[data-codex-composer]').remove();
+      root.querySelector('[data-surface="conversation"]').textContent = 'Chat';
+      root.querySelector('[data-surface="workspace"]').textContent = 'Files & terminal';
+      root.querySelector('.codex-client-tabs').setAttribute('aria-label','Codex conversation tools');
+      pane.classList.add('has-codex-inline');
+    } else {
     pane.classList.add('codex-client-open');
     Array.from(pane.children).forEach(child => {
       if (child === root || child.matches('.conv-pane-header')) return;
@@ -1388,16 +1418,20 @@
       child.style.display = 'none';
     });
     pane.append(root);
-    root.querySelector('[data-codex-context]').textContent = (context.title || 'Selected task') + (context.repoPath ? ' · ' + context.repoPath.split('/').filter(Boolean).pop() : '');
-    root.querySelector('[data-codex-close]').addEventListener('click', close);
+    }
+    if (!inline) root.querySelector('[data-codex-context]').textContent = (context.title || 'Selected task') + (context.repoPath ? ' · ' + context.repoPath.split('/').filter(Boolean).pop() : '');
+    root.querySelector('[data-codex-close]')?.addEventListener('click', close);
     root.querySelector('[data-codex-tools-toggle]').addEventListener('click', () => { state.toolsOpen = !state.toolsOpen; syncToolsToggle(); });
     root.querySelectorAll('[data-surface]').forEach(button => button.addEventListener('click', () => {
+      const view = state.context?.inline && root.closest('.conversations-view');
+      if (view && state.activeSurface === 'conversation') state.chatScrollTop = view.scrollTop;
       state.activeSurface = button.dataset.surface;
       root.dataset.surface = state.activeSurface;
       root.querySelectorAll('[data-surface]').forEach(other => other.setAttribute('aria-current', String(other === button ? 'page' : 'false')));
       root.querySelector('[data-codex-tool-title]').textContent = pretty(state.activeSurface) + ' tools';
       root.querySelector('[data-codex-conversation]').hidden = state.activeSurface !== 'conversation';
       renderCatalog(); syncToolsToggle();
+      if (view) view.scrollTop = state.activeSurface === 'conversation' ? (state.chatScrollTop || 0) : 0;
     }));
     root.querySelector('[data-codex-search]').addEventListener('input', event => { state.query = event.target.value; renderCatalog(); });
     root.querySelector('[data-codex-queue-owner]').addEventListener('change', async event => {
@@ -1419,7 +1453,7 @@
       } catch (error) { event.target.checked = !event.target.checked; showError(conciseError(error)); }
       finally { event.target.disabled = false; }
     });
-    wireComposer(root);
+    if (!inline) wireComposer(root);
     return root;
   }
 
@@ -1460,14 +1494,14 @@
     const catalog = await jsonFetch(API + '/catalog');
     if (token !== state.requestToken || state.closed) return;
     state.catalog = catalog; renderCatalog(); updateChrome();
-    if (catalog.connection_note) showNotice(catalog.connection_note);
+    if (catalog.connection_note && !state.context?.inline) showNotice(catalog.connection_note);
     const owner = state.root.querySelector('[data-codex-queue-owner]');
     if (owner) owner.closest('label').hidden = catalog.connection_kind === 'desktop-ipc';
     await loadComposerModels(token);
   }
 
   async function loadHistory(token, cursor) {
-    const transcript = cursor && state.root && state.root.querySelector('[data-codex-transcript]');
+    const transcript = cursor && state.root && (state.context?.inline ? state.root.closest('.conversations-view') : state.root.querySelector('[data-codex-transcript]'));
     const anchor = transcript ? { top: transcript.scrollTop, height: transcript.scrollHeight } : null;
     const params = new URLSearchParams({ thread_id: state.context.threadId, repo_path: state.context.repoPath });
     if (cursor) params.set('cursor', cursor);
@@ -1605,6 +1639,7 @@
     if (!context.threadId || !context.repoPath) throw new Error('Open a Codex conversation with a known repository first.');
     state.closed = false; state.context = context; state.requestToken++; state.schemas = new Map();
     state.thread = null; state.requests = []; state.generation = null; state.eventCursor = null; state.historyCursor = null; state.activity = []; state.pollFailures = 0;
+    state.didInitialRender = false;
     state.root = mount(context);
     state.visibilityHandler = () => { if (document.hidden && !mediaActive()) { state.pollAbort?.abort(); window.clearTimeout(state.pollTimer); } else { loadState().catch(() => {}); schedulePoll(0); } };
     document.addEventListener('visibilitychange', state.visibilityHandler);
@@ -1612,6 +1647,11 @@
     const results = await Promise.allSettled([loadCatalog(token), loadHistory(token, null)]);
     if (state.closed || token !== state.requestToken) return;
     results.forEach(result => { if (result.status === 'rejected') showError(conciseError(result.reason)); });
+    if (context.inline && !state.connected) {
+      await close();
+      throw new Error('Native conversation connection is unavailable');
+    }
+    if (context.inline && state.savedView) state.savedView.nodes = [];
     mountMedia();
     schedulePoll(0);
     return state.root;
@@ -1625,8 +1665,13 @@
     state.pollAbort?.abort(); state.pollAbort = null; state.pollInFlight = false;
     if (state.visibilityHandler) document.removeEventListener('visibilitychange', state.visibilityHandler);
     state.visibilityHandler = null;
-    document.querySelectorAll('.codex-client-shell').forEach(node => node.remove());
-    document.querySelectorAll('.codex-client-open').forEach(pane => pane.classList.remove('codex-client-open'));
+    if (state.context?.inline && state.savedView) {
+      const {view,nodes} = state.savedView;
+      if (state.root?.parentElement === view) view.replaceChildren(...nodes);
+      state.context.paneEl?.classList.remove('has-codex-inline');
+    } else state.root?.remove();
+    state.savedView = null;
+    state.context?.paneEl?.classList.remove('codex-client-open');
     state.previousDisplay.forEach((display, node) => { if (node && node.isConnected) node.style.display = display; });
     state.previousDisplay.clear(); state.root = null; state.context = null; state.generationPromise = null;
     state.composerSync = null; state.composerOptionsSync = null; state.composerModels = []; state.composerAttachment = null;
@@ -1706,63 +1751,55 @@
     } catch (error) { showError('Media controls could not start: ' + conciseError(error)); }
   }
 
-  function ensureLaunchers() {
-    document.querySelectorAll('.conv-pane').forEach(pane => {
-      let button = pane.querySelector('[data-codex-workspace-launch]');
-      if (!pane.classList.contains('is-codex-session')) { button?.remove(); return; }
-      if (button) return;
-      const actions = pane.querySelector('.conv-pane-actions'); if (!actions) return;
-      button = el('button', 'conv-pane-action codex-client-launch', 'Workspace'); button.type = 'button'; button.dataset.codexWorkspaceLaunch = 'true'; button.title = 'Open the full Codex workspace';
-      button.addEventListener('click', () => {
-        const bridge = typeof window.CCCCodexClientContext === 'function' ? window.CCCCodexClientContext(pane) : { paneEl: pane };
-        open(Object.assign({}, bridge, { paneEl: pane })).catch(error => {
-          if (typeof window.showOpToast === 'function') window.showOpToast(conciseError(error), 'error');
-          else window.alert(conciseError(error));
-        });
-      });
-      actions.prepend(button);
-    });
-  }
-
-  function syncToolbarLauncher() {
-    const breadcrumb = document.getElementById('cccBreadcrumb');
-    if (!breadcrumb || typeof window.CCCCodexClientContext !== 'function') return;
-    let button = document.querySelector('[data-codex-toolbar-launch]');
-    if (!button) {
-      button = el('button', 'conv-pane-action codex-client-launch', 'Codex workspace');
-      button.type = 'button'; button.dataset.codexToolbarLaunch = 'true';
-      button.title = 'Open the full Codex workspace';
-      button.addEventListener('click', () => {
-        open(window.CCCCodexClientContext()).catch(error => {
-          if (typeof window.showOpToast === 'function') window.showOpToast(conciseError(error), 'error');
-          else window.alert(conciseError(error));
-        });
-      });
-      breadcrumb.after(button);
-    }
-    const context = window.CCCCodexClientContext();
-    const pane = context && context.paneEl;
-    const header = pane && pane.querySelector('.conv-pane-header');
-    button.hidden = !pane || !pane.classList.contains('is-codex-session') ||
-      !!(header && header.getClientRects().length && getComputedStyle(header).display !== 'none');
-  }
-
-  window.addEventListener('ccc:conversation-selected', event => {
-    if (state.closed || !state.context) return;
-    const selected = event.detail || {};
-    const samePane = selected.paneEl === state.context.paneEl ||
-      selected.paneId && selected.paneId === state.context.paneId;
-    if (samePane && selected.threadId !== state.context.threadId) close();
-  });
-
-  const syncLaunchers = () => { ensureLaunchers(); syncToolbarLauncher(); };
-  window.addEventListener('resize', syncToolbarLauncher);
-  const observer = new MutationObserver(syncLaunchers);
-  const begin = () => { syncLaunchers(); observer.observe(document.body, { subtree: true, childList: true, attributes: true, attributeFilter: ['class'] }); };
-  if (document.body) begin(); else document.addEventListener('DOMContentLoaded', begin, { once: true });
-
-  window.CCCCodexClient = {
+  return {
     open, close, handleEvents,
     __testing: { createForm, shapePendingResponse, renderItem, runOperation, executeAction, pollNow, loadEarlier, state },
   };
+  }
+
+  const defaultClient = createClient();
+  const inlineClients = new Map();
+  function entryFor(pane) { return inlineClients.get(pane); }
+  async function attachInline(context) {
+    const pane = context.paneEl;
+    if (!pane || !context.threadId || !context.repoPath) return false;
+    let entry = entryFor(pane);
+    if (entry && entry.threadId === context.threadId && entry.client.__testing.state.root?.isConnected) return true;
+    if (entry?.pending && entry.threadId === context.threadId) return entry.pending;
+    if (entry && entry.threadId === context.threadId && entry.retryAfter > Date.now()) return false;
+    if (entry) await entry.client.close();
+    entry = {threadId:context.threadId, client:createClient(), pending:null, retryAfter:0};
+    inlineClients.set(pane,entry);
+    entry.pending = entry.client.open({...context,inline:true}).then(()=>true).catch(()=>{
+      entry.retryAfter = Date.now()+15000;
+      return false;
+    }).finally(()=>{entry.pending=null;});
+    return entry.pending;
+  }
+  function isInlineActive(pane) {
+    const entry = entryFor(pane);
+    return !!(entry && (entry.pending || entry.client.__testing.state.root?.isConnected));
+  }
+  window.addEventListener('ccc:conversation-selected', event => {
+    const selected = event.detail || {};
+    for (const [pane,entry] of inlineClients) {
+      if (!pane.isConnected || pane === selected.paneEl && selected.threadId !== entry.threadId) {
+        entry.client.close(); inlineClients.delete(pane);
+      }
+    }
+    const context = defaultClient.__testing.state.context;
+    if (context && (selected.paneEl === context.paneEl || selected.paneId && selected.paneId === context.paneId)
+        && selected.threadId !== context.threadId) defaultClient.close();
+  });
+  async function interruptInline(pane) {
+    const client = entryFor(pane)?.client;
+    const current = client?.__testing.state;
+    if (!current?.connected) throw new Error('Codex is not connected');
+    const turn = current.thread?.turns?.slice().reverse().find(t => t.status === 'inProgress');
+    if (!turn) return {ok:true, note:'Codex has no active turn.'};
+    await client.__testing.runOperation('turn/interrupt', {threadId:current.context.threadId,turnId:turn.id});
+    return {ok:true, via:'codex-inline'};
+  }
+  window.CCCCodexClient = {...defaultClient, attachInline, isInlineActive, interruptInline,
+    inlineState: pane => entryFor(pane)?.client.__testing.state};
 })();
