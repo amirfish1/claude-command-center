@@ -3499,6 +3499,31 @@
   let sessionCwdExistsByConv = {}; // {convId: bool}
   let sessionSourceByConv = {}; // {convId: 'interactive'|'pkood'|'task'}
   let sessionSpawnPidByConv = {}; // {convId: pid of claude we spawned (stdin inject)}
+  // Explicit bridge for the full Codex workspace. The browser client stays in
+  // its own module while this closure remains the authority for split-pane
+  // selection, native session ids, and repository scope.
+  window.CCCCodexClientContext = function (paneEl) {
+    const paneId = (paneEl && paneEl.dataset && paneEl.dataset.paneId) || activePaneId();
+    const pane = paneByPaneId(paneId);
+    const conversationId = pane && pane.conversationId || currentConversation || '';
+    const row = convRowForPane(paneId);
+    return {
+      paneEl: paneEl || convPaneElById(paneId),
+      paneId,
+      threadId: sessionIdByConv[conversationId] || row && row.session_id || conversationId,
+      repoPath: rowRepoPath(row) || activeConvRepoPath(),
+      environmentId: row && (row.environment_id || row.environmentId) || '',
+      title: row && (row.custom_title || row.title || row.name) || 'Codex task',
+    };
+  };
+  window.CCCCodexMarkdown = function (text) { return renderMarkdown(String(text || '')); };
+  window.CCCCodexClientLifecycle = function () {
+    scheduleDashboardInvalidation('archive');
+    scheduleDashboardInvalidation('sessions');
+  };
+  window.addEventListener('ccc:codex-media-cleanup-error', event => {
+    showOpToast(event.detail && event.detail.message || 'Codex media cleanup could not be confirmed.', 'error');
+  });
   // Currently-focused session and its live-process state (per-pane, shimmed via window.currentSession)
   let liveStatus = { forSessionId: null, live: false, pid: null, tty: null, terminalApp: null, sidecarTool: null, sidecarFile: null, sidecarStatus: null, sidecarTs: 0, sidecarInFlight: false, staleToolCall: false, staleToolAgeS: 0, needsApproval: false, needsApprovalMessage: '', acpPendingPermission: null, questionWaiting: false, questionText: '', questionHeader: '', questionPreamble: '', questionOptions: [], questionOptionDetails: [], codexAppServer: false, codexAppServerTransport: null, codexManagedAppServer: false, codexAppServerEventSeq: 0, codexAppServerLastActivityAt: 0, codexAppServerLastItemId: '' };
   let liveStatusTimer = null;
@@ -42443,6 +42468,9 @@
     try { _perfConvOpen = { id: id, paneId: paneId, t0: performance.now() }; } catch (_) {}
     const pane = paneByPaneId(paneId);
     if (!pane) return;
+    window.dispatchEvent(new CustomEvent('ccc:conversation-selected', { detail: {
+      threadId: sessionIdByConv[id] || id, paneId, paneEl: convPaneElById(paneId),
+    } }));
     // Kick the tail fetch before the synchronous chrome work below (35-60ms
     // of DOM writes and forced reads): fetchConversationEvents consumes it
     // via _takePrefetchedConversationTail, so the server round-trip overlaps
@@ -50110,6 +50138,7 @@
       if (data && typeof data.engine === 'string' && data.engine) {
         const _enginePaneEl = convPaneElById(fetchPaneId);
         if (_enginePaneEl) {
+          _enginePaneEl.classList.toggle('is-codex-session', data.engine === 'codex');
           _enginePaneEl.classList.toggle('is-webui-session', data.engine === 'kimi' || data.engine === 'codex');
         }
       }
@@ -56502,17 +56531,19 @@
   // clicking toggles the full text inline (kimi-web opens a side panel —
   // inline toggle is the pragmatic equivalent here). Single-paragraph
   // thinking has nothing to fold and renders straight.
-  function _kimiThinkingHtml(text) {
+  function _kimiThinkingHtml(text, renderAsMarkdown) {
     const full = String(text || '');
     if (!full.trim()) return '';
     const paragraphs = full.split(/\n{2,}/).filter(p => p.trim().length > 0);
+    const renderBody = value => renderAsMarkdown ? renderMarkdown(value) : escapeHtml(value);
+    const bodyTag = renderAsMarkdown ? 'div' : 'pre';
     if (paragraphs.length <= 1) {
-      return '<div class="kimi-thinking is-single"><pre class="kimi-thinking-full">' + escapeHtml(full) + '</pre></div>';
+      return '<div class="kimi-thinking is-single"><' + bodyTag + ' class="kimi-thinking-full">' + renderBody(full) + '</' + bodyTag + '></div>';
     }
     const teaser = paragraphs[paragraphs.length - 1];
     return '<div class="kimi-thinking" onclick="this.classList.toggle(\'open\')" title="Click to show the full thinking">'
-      + '<pre class="kimi-thinking-teaser">' + escapeHtml(teaser) + '</pre>'
-      + '<pre class="kimi-thinking-full">' + escapeHtml(full) + '</pre>'
+      + '<' + bodyTag + ' class="kimi-thinking-teaser">' + renderBody(teaser) + '</' + bodyTag + '>'
+      + '<' + bodyTag + ' class="kimi-thinking-full">' + renderBody(full) + '</' + bodyTag + '>'
       + '</div>';
   }
 
@@ -56865,6 +56896,7 @@
     // right-aligned user bubbles, ToolGroup cards. Gated here so the Claude
     // path below stays byte-for-byte the shared legacy renderer.
     const _kimiPane = _viewIsWebUiPane($view);
+    const _codexPane = !!($view.closest && $view.closest('.conv-pane.is-codex-session'));
     // Stick-to-bottom only when the user is *already* near the bottom.
     // If they've scrolled up to read, leave the scroll position alone so
     // newly-streamed events don't yank them back down. 80px tolerance is
@@ -57738,7 +57770,7 @@
               // Thinking is NOT XML-stripped: the model quoting a wrapper
               // while reasoning about it is legitimate content (kimi-web
               // doesn't strip thinking either).
-              _kimiHolder.innerHTML = _kimiThinkingHtml(String(b.text));
+              _kimiHolder.innerHTML = _kimiThinkingHtml(String(b.text), _codexPane);
               if (_kimiHolder.firstElementChild) kimiBlockEls.push(_kimiHolder.firstElementChild);
             } else if (b.kind === 'plan') {
               const planHtml = _planEntriesHtml(b.entries);

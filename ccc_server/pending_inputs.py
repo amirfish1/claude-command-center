@@ -2050,6 +2050,15 @@ def _mutate_pending_inputs(
                 "code": "pending_input_mutation_failed",
                 "error": str(exc),
             }
+        from ccc_server.codex_queue_owner import native_queue_owned
+        for sid, snapshot in snapshots.items():
+            if not native_queue_owned(sid):
+                continue
+            current = _pending_inputs_session_snapshot(sid)
+            if any(current[key] and current[key] != snapshot[key] for key in ("resume", "terminal")):
+                restore_memory()
+                return {"ok": False, "code": "codex_native_queue_owned",
+                        "error": "This task uses the Codex queue. Open its Codex workspace to queue messages."}
         changed_queue_fields = {}
         for sid, snapshot in snapshots.items():
             current = _pending_inputs_session_snapshot(sid)
@@ -2340,9 +2349,10 @@ def _write_pending_input_handoff(session_id, text, *, front=False):
                 )
         except OSError:
             return None
-    return _write_pending_input_handoff_unlocked(
-        session_id, text, front=front,
-    )
+    with _core._codex_queue_pump_lock(session_id):
+        return _write_pending_input_handoff_unlocked(
+            session_id, text, front=front,
+        )
 
 
 def _write_pending_input_handoff_unlocked(session_id, text, *, front=False):
@@ -2355,6 +2365,9 @@ def _write_pending_input_handoff_unlocked(session_id, text, *, front=False):
     session_id = str(session_id or "").strip()
     text = str(text or "")
     if not session_id or not text:
+        return None
+    from ccc_server.codex_queue_owner import native_queue_owned
+    if native_queue_owned(session_id):
         return None
     handoff_id = str(uuid.uuid4())
     created_at = time.time()

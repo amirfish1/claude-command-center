@@ -1325,7 +1325,7 @@ def _queue_codex_resume(session_id, text, pid=None, reason=None, *, only_if_pend
 
     transaction = _core._mutate_pending_inputs({session_id}, enqueue)
     if not transaction.get("ok"):
-        return {"ok": False, "error": "failed to persist queued Codex input"}
+        return {"ok": False, "error": transaction.get("error") or "failed to persist queued Codex input", "code": transaction.get("code")}
     if transaction.get("value") is None:
         return None
     if isinstance(transaction.get("value"), dict):

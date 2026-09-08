@@ -14565,6 +14565,16 @@ def _overlay_conversation_lifecycle_flags(rows):
         archived_set, trashed_set = _load_conversation_lifecycle_sets()
     except Exception:
         return rows
+    try:
+        deleted_codex = _codex_deleted_thread_ids()
+    except Exception:
+        deleted_codex = set()
+    if isinstance(rows, list) and deleted_codex:
+        rows[:] = [row for row in rows if not (
+            isinstance(row, dict)
+            and row.get("engine") == "codex"
+            and str(row.get("session_id") or row.get("id") or "") in deleted_codex
+        )]
     for row in rows or []:
         if not isinstance(row, dict):
             continue
@@ -14765,6 +14775,10 @@ def _rehydrate_archive_cached_rows(rows):
         session_overrides = _load_session_overrides()
     except Exception:
         session_overrides = {}
+    try:
+        deleted_codex = _codex_deleted_thread_ids()
+    except Exception:
+        deleted_codex = set()
 
     # Same liveness gate as the build path. This rehydrate runs on EVERY
     # stale-cache serve — the path the dashboard hits on each load — so an
@@ -14798,6 +14812,8 @@ def _rehydrate_archive_cached_rows(rows):
             continue
         row = dict(raw)
         sid = row.get("session_id") or row.get("id")
+        if row.get("engine") == "codex" and str(sid or "") in deleted_codex:
+            continue
         if sid:
             override = name_overrides.get(sid)
             if override:
@@ -23942,6 +23958,20 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
         parsed = urllib.parse.urlparse(self.path)
         path = parsed.path.rstrip("/")
 
+        if path.startswith("/api/codex/client/"):
+            from ccc_server.codex_client import codex_client_call
+            action = path.rsplit("/", 1)[-1]
+            if action not in ("catalog", "schema", "history", "state", "events"):
+                self.send_json({"ok": False, "error": "Unknown Codex view"}, 404)
+                return
+            query = urllib.parse.parse_qs(parsed.query)
+            values = {key: value[-1] for key, value in query.items()}
+            data = {key: values[key] for key in ("method", "cursor", "generation") if key in values}
+            data["context"] = {key: values[key] for key in ("repo_path", "thread_id", "environment_id") if key in values}
+            result = codex_client_call(action, data)
+            self.send_json(result, 200 if result.get("ok") else 409)
+            return
+
         # Morning view is opt-in via CCC_ENABLE_MORNING=1.
         if self._is_morning_path(path) and not MORNING_ENABLED:
             self.send_json({
@@ -27300,6 +27330,26 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
         if not self._check_same_origin():
             return
         path = urllib.parse.urlparse(self.path).path.rstrip("/")
+        if path.startswith("/api/codex/client/"):
+            from ccc_server.codex_client import codex_client_call
+            action = path.rsplit("/", 1)[-1]
+            if action not in ("operation", "respond", "preferences", "queue-owner"):
+                self.send_json({"ok": False, "error": "Unknown Codex action"}, 404)
+                return
+            try:
+                length = int(self.headers.get("Content-Length", "0"))
+                if not 0 < length <= 4 * 1024 * 1024:
+                    self.send_json({"ok": False, "error": "Codex action body is missing or too large"}, 413)
+                    return
+                data = json.loads(self.rfile.read(length))
+                if not isinstance(data, dict):
+                    raise ValueError("Expected object")
+            except (ValueError, OSError):
+                self.send_json({"ok": False, "error": "Invalid Codex action"}, 400)
+                return
+            result = codex_client_call(action, data)
+            self.send_json(result, 200 if result.get("ok") else 409)
+            return
         if path.startswith("/proxy/"):
             self._proxy_local_view("POST")
             return
