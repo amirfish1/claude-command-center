@@ -20336,6 +20336,11 @@
     const matches = native?.connected && native.context?.threadId === (sessionIdByConv[sid] || sid);
     const updated = matches ? Number(native.thread?.updatedAt || 0) : 0;
     const nativeTime = updated > 1e11 ? updated / 1000 : updated;
+    if (matches) {
+      _lastWrittenState = {sid, ts:nativeTime};
+      el.textContent = 'LIVE · CODEX';
+      return;
+    }
     const ts = Math.max(row ? Number(row.modified || row.mtime || 0) : 0, nativeTime);
     if (!sid || !ts) {
       _lastWrittenState = null;
