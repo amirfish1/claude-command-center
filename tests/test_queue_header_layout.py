@@ -173,3 +173,14 @@ class TestQueueHeaderLayout(unittest.TestCase):
         self.assertIn('min-width: 0', mobile_right)
         self.assertIn('flex-wrap: wrap', mobile_right)
         self.assertIn('justify-content: flex-end', mobile_right)
+
+    def test_mobile_queue_header_keeps_scope_and_actions_on_one_row(self):
+        """The compact scope trigger yields width before header actions wrap."""
+        app_css = (PROJECT_ROOT / "static" / "app.css").read_text(encoding="utf-8")
+
+        mobile_header = app_css[
+            app_css.index('#queuePanel.fq-mobile .fq-field-row {'):
+            app_css.index('#queuePanel.fq-mobile .fq-trigger {', app_css.index('#queuePanel.fq-mobile .fq-field-row {'))
+        ]
+
+        self.assertIn('flex-wrap: nowrap', mobile_header)

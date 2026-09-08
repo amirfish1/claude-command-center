@@ -14922,7 +14922,7 @@
      Trigger becomes a two-line 44pt tap target; WORKING NOW collapses to
      a header-only summary; picker becomes a bottom sheet. Triggered by
      the fq-mobile class on #queuePanel (set by _uxqPickerSyncMobile). */
-  #queuePanel.fq-mobile .fq-field-row { padding: 6px 14px 12px; flex-wrap: wrap; }
+  #queuePanel.fq-mobile .fq-field-row { padding: 6px 14px 12px; flex-wrap: nowrap; }
   #queuePanel.fq-mobile .fq-trigger {
     min-height: 44px; box-sizing: border-box; padding: 8px 12px;
     border-radius: 9px; gap: 9px; flex-wrap: wrap; align-content: center;
