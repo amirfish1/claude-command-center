@@ -63818,6 +63818,9 @@
     _dashboardEventState.invalidations.clear();
     const resources = new Set(pending.map(item => item.resource));
     if (resources.has('queue')) {
+      // Worker registration/claims can precede the transcript archive. The
+      // list endpoint overlays those live sessions, so refresh it with queues.
+      resources.add('archive');
       const inFlightQueueRead = _uxqItemsPromise;
       const inFlightWorkerRead = _wtWorkersPromise;
       _uxqItemsVersion += 1;

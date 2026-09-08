@@ -217,6 +217,7 @@ def test_archive_list_source_avoids_copying_full_snapshot(monkeypatch):
     # snapshot itself, not about the host's session state.
     monkeypatch.setattr(server, "_archive_overlay_acp_sessions", lambda rows: [])
     monkeypatch.setattr(server, "_archive_overlay_devin_cli_sessions", lambda rows, now=None: [])
+    monkeypatch.setattr(server, "_archive_overlay_wt_worker_sessions", lambda rows: [])
     options = {"include_prs": False}
 
     rows, from_cache, body_ver = server._archive_list_source_rows_cached(options)

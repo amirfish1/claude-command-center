@@ -2343,7 +2343,7 @@ def _render_queue_diagnostic_text(snapshot):
     return text
 
 
-def _wt_read_workers():
+def _wt_read_workers(include_activity=True):
     """Live WatchTower worker records read straight from workers.json.
 
     Each row is annotated with ``alive`` (os.kill liveness) and carries the
@@ -2360,7 +2360,10 @@ def _wt_read_workers():
     for w in rows:
         if not isinstance(w, dict):
             continue
-        pid = int(w.get("pid", 0) or 0)
+        try:
+            pid = int(w.get("pid", 0) or 0)
+        except (TypeError, ValueError, OverflowError):
+            continue
         alive = False
         if pid:
             try:
@@ -2376,12 +2379,13 @@ def _wt_read_workers():
             continue
         row = dict(w)
         row["alive"] = True
-        row.update(_wt_worker_idle_fields(row))
+        if include_activity:
+            row.update(_wt_worker_idle_fields(row))
         # Self-heal: if WT hasn't backfilled this worker's cloud session_id into
         # the file yet, resolve it from the worker's stream-json log in-memory
         # (no file write -> no race with WT's own writer) so the dashboard can
         # link the worker to its conversation immediately.
-        if not row.get("session_id") and row.get("log"):
+        if include_activity and not row.get("session_id") and row.get("log"):
             try:
                 sid = extract_session_id(row["log"])
                 if sid:
@@ -13809,8 +13813,106 @@ def _archive_list_source_rows_cached(cache_options, *, force_refresh=False):
     devin_overlay = _archive_overlay_devin_cli_sessions(rows)
     if devin_overlay:
         rows = list(rows or []) + devin_overlay
-    extra = (overlay or []) + (devin_overlay or [])
+    # WatchTower already knows the engine session before the archive scan.
+    # Keep that worker in its normal session/queue group during the gap.
+    worker_overlay = _archive_overlay_wt_worker_sessions(rows)
+    if worker_overlay:
+        rows = list(rows or []) + worker_overlay
+    extra = (overlay or []) + (devin_overlay or []) + (worker_overlay or [])
     return rows, from_cache, _archive_list_body_ver(key, rows, extra)
+
+
+
+_ARCHIVE_WT_WORKERS_LOCK = threading.Lock()
+_ARCHIVE_WT_WORKERS_CACHE = {"ts": 0.0, "rows": []}
+
+
+def _archive_live_wt_workers():
+    """Share worker reads across list polls without blocking behind a refresh."""
+    now = time.monotonic()
+    try:
+        stat = _wt_workers_path().stat()
+        signature = (stat.st_mtime_ns, stat.st_size)
+    except OSError:
+        signature = None
+    if (_ARCHIVE_WT_WORKERS_CACHE.get("signature") == signature
+            and now - _ARCHIVE_WT_WORKERS_CACHE["ts"] < 3):
+        return _ARCHIVE_WT_WORKERS_CACHE["rows"]
+    if not _ARCHIVE_WT_WORKERS_LOCK.acquire(blocking=False):
+        return _ARCHIVE_WT_WORKERS_CACHE["rows"]
+    try:
+        # The sidebar only needs registered identity/liveness. Skip WT's
+        # transcript-globbing activity resolver and log session-ID recovery.
+        try:
+            workers = _wt_read_workers(include_activity=False)
+        except Exception:
+            workers = []  # A broken worker ledger must not break the sidebar.
+        _ARCHIVE_WT_WORKERS_CACHE.update(ts=now, rows=workers, signature=signature)
+        return workers
+    finally:
+        _ARCHIVE_WT_WORKERS_LOCK.release()
+
+
+def _archive_overlay_wt_worker_sessions(rows):
+    """Missing live worker sessions, until their real archive rows arrive."""
+    workers = _archive_live_wt_workers()
+    if not workers:
+        return []
+    existing = {str(r.get("session_id") or r.get("id") or "") for r in rows or [] if isinstance(r, dict)}
+    missing = [w for w in workers if w.get("alive") and not w.get("released_at")
+               and w.get("session_id") and str(w["session_id"]) not in existing]
+    if not missing:
+        return []
+    archived, trashed = _load_conversation_lifecycle_sets()
+    config = _wt_read_config()
+    out = []
+    for worker in missing:
+        sid = str(worker["session_id"])
+        if sid in existing or sid in archived or sid in trashed:
+            continue
+        queue = str(worker.get("queue") or "WatchTower")
+        queue_config = config.get(queue) or config.get(queue.upper()) or config.get(queue.lower()) or {}
+        if not isinstance(queue_config, dict):
+            queue_config = {}
+        cwd = str(worker.get("repo_path") or worker.get("cwd") or queue_config.get("repo_path") or "")
+        engine = str(worker.get("engine") or "claude").lower()
+        source = "interactive" if engine == "claude" else engine
+        started = worker.get("started_at")
+        try:
+            stamp = float(started) if isinstance(started, (int, float)) else datetime.fromisoformat(str(started).replace("Z", "+00:00")).timestamp()
+        except (ValueError, TypeError, OverflowError):
+            # A live row with no timestamp must still survive window filtering.
+            # This fallback is stable within the shared worker-cache snapshot.
+            stamp = worker.setdefault("_ccc_first_seen", time.time())
+        if not math.isfinite(stamp) or stamp <= 0:
+            continue
+        if stamp > 100000000000:
+            stamp /= 1000
+        idle = worker.get("idle_seconds")
+        if idle is None:
+            activity_at = stamp
+            if worker.get("log"):
+                try:
+                    activity_at = max(stamp, Path(worker["log"]).stat().st_mtime)
+                except (OSError, TypeError, ValueError):
+                    pass
+            idle = max(0, time.time() - activity_at)
+        working = isinstance(idle, (int, float)) and not isinstance(idle, bool) and 0 <= idle < 60
+        out.append({
+            "id": sid, "session_id": sid, "engine": engine, "source": source,
+            "model": str(worker.get("model") or ""),
+            "display_name": queue + " worker", "first_message": "",
+            "spawned_via": "watchtower", "spawn_pid": worker.get("pid"),
+            "folder_label": Path(cwd).name if cwd else queue.lower(),
+            "folder_path": cwd, "session_cwd": cwd,
+            "session_cwd_exists": bool(cwd and Path(cwd).is_dir()),
+            "slug": _encode_project_slug(cwd) if cwd else "",
+            "mtime": stamp, "modified": stamp, "is_live": True,
+            "state": "working" if working else "idle",
+            "archived": False, "trashed": False,
+        })
+        existing.add(sid)
+    return out
 
 
 def _archive_list_body_ver(key, rows, extra):
