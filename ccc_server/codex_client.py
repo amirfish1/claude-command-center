@@ -25,6 +25,7 @@ from ccc_server.codex_requests import CODEX_REQUESTS
 _CLIENT_LOCK = threading.RLock()
 _CLIENT_ACTIONS = OrderedDict()
 _CLIENT_RECEIPTS = {}
+_CLIENT_QUEUE_SWITCHES = set()
 _CLIENT_RECEIPT_LIMIT = 65536
 _CLIENT_COMMAND_LIMIT_MS = 30 * 60 * 1000
 _CLIENT_THREADS = OrderedDict()
@@ -642,6 +643,8 @@ def _client_operation(data):
             if not generation or data.get("generation") != generation:
                 return {"ok": False, "code": "stale_connection", "generation": generation,
                         "error": "The Codex connection changed. Read the current task state before trying again."}
+            if method.startswith("thread/queue/") and params.get("threadId") in _CLIENT_QUEUE_SWITCHES:
+                raise ValueError("Wait for the message queue ownership change")
             old = _CLIENT_ACTIONS.get(action_id)
             if old:
                 if old["fingerprint"] != fingerprint:
@@ -666,10 +669,27 @@ def _client_operation(data):
                     _CLIENT_HANDLES[handle] = context_repo
             _CLIENT_RECEIPTS[action_id] = fingerprint
             _CLIENT_ACTIONS[action_id] = {"fingerprint": fingerprint, "state": "pending",
+                "method": method, "thread_id": params.get("threadId"),
                 "result": {"ok": False, "uncertain": True, "error": "This action is already in progress; it will not be sent twice"}}
+    if mutating and method.startswith("thread/queue/"):
+        from ccc_server.codex_queue_owner import begin_native_queue_action
+        try:
+            begin_native_queue_action(params["threadId"], action_id)
+        except (ValueError, OSError) as error:
+            with _CLIENT_LOCK:
+                result = {"ok": False, "error": str(error), "code": "queue_owner_conflict"}
+                _CLIENT_ACTIONS[action_id]["result"] = result
+                _CLIENT_ACTIONS[action_id]["state"] = "complete"
+            return result
     result = _client_rpc(method, None if descriptor.get("params_type") == "null" else params,
                          timeout=_client_rpc_timeout(method, params),
                          expected_generation=generation if mutating else None)
+    if mutating and method.startswith("thread/queue/") and not result.get("uncertain"):
+        from ccc_server.codex_queue_owner import finish_native_queue_action
+        try:
+            finish_native_queue_action(params["threadId"], action_id)
+        except (ValueError, OSError):
+            result["queue_owner_sync_pending"] = True
     if result.get("ok"):
         output = result.get("result")
         try:
@@ -741,7 +761,10 @@ def codex_client_dispatch(action, data):
         if action == "operation":
             return _client_operation(data)
         if action == "history":
-            return _client_history(data)
+            from ccc_server.codex_queue_owner import native_queue_owned
+            result = _client_history(data)
+            result["queue_owner"] = "native" if native_queue_owned((data.get("context") or {}).get("thread_id")) else "ccc"
+            return result
         context = data.get("context") or {}
         tid = context.get("thread_id")
         if not tid:
@@ -752,12 +775,35 @@ def codex_client_dispatch(action, data):
                 resolve_repo=_core.resolve_repo_path, read_thread=lambda _: tombstone)
         else:
             _client_scope("thread/read", {"threadId": tid}, context)
+        if action == "queue-owner":
+            from ccc_server.codex_queue_owner import claim_native_queue, release_native_queue, native_queue_owned
+            with _CLIENT_LOCK:
+                if tid in _CLIENT_QUEUE_SWITCHES or any(
+                    entry.get("thread_id") == tid and entry.get("method", "").startswith("thread/queue/")
+                    and entry.get("state") != "complete" for entry in _CLIENT_ACTIONS.values()
+                ):
+                    raise ValueError("Wait for the pending Codex queue action before switching queues")
+                _CLIENT_QUEUE_SWITCHES.add(tid)
+            try:
+                if data.get("owner") == "native":
+                    claim_native_queue(tid)
+                elif data.get("owner") == "ccc":
+                    release_native_queue(tid, lambda: _client_rpc("thread/queue/list", {"threadId": tid}))
+                else:
+                    raise ValueError("Choose the CCC or Codex queue")
+                return {"ok": True, "queue_owner": "native" if native_queue_owned(tid) else "ccc"}
+            finally:
+                with _CLIENT_LOCK:
+                    _CLIENT_QUEUE_SWITCHES.discard(tid)
         if action == "state":
-            return {**CODEX_CONVERSATIONS.snapshot(tid), "requests": CODEX_REQUESTS.snapshot(tid)["requests"]}
+            from ccc_server.codex_queue_owner import native_queue_owned
+            return {**CODEX_CONVERSATIONS.snapshot(tid), "requests": CODEX_REQUESTS.snapshot(tid)["requests"],
+                    "queue_owner": "native" if native_queue_owned(tid) else "ccc"}
         if action == "events":
+            from ccc_server.codex_queue_owner import native_queue_owned
             cursor = max(0, int(data.get("cursor") or 0))
             return {**CODEX_CONVERSATIONS.events_since(cursor, data.get("generation"), tid),
-                    "requests": CODEX_REQUESTS.snapshot(tid)["requests"]}
+                    "queue_owner": "native" if native_queue_owned(tid) else "ccc", "requests": CODEX_REQUESTS.snapshot(tid)["requests"]}
         if action == "respond":
             with _CLIENT_LOCK:
                 transport = _CLIENT_TRANSPORT

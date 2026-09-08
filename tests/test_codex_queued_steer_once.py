@@ -2585,3 +2585,19 @@ def test_fifo_pump_native_delivery_preserves_queue_origin(monkeypatch, tmp_path,
     expected = ["first", "second", "third"] if engine_busy else ["second", "third"]
     assert server._pending_resume_queue[sid] == expected
     assert json.loads(server.PENDING_INPUTS_FILE.read_text())["resume_queue"][sid] == expected
+
+
+def test_native_queue_owner_rejects_ccc_enqueue_without_mutating_memory(monkeypatch, tmp_path):
+    from ccc_server import codex_queue_owner
+    sid = 'native-queue-owner'
+    monkeypatch.setattr(server, 'PENDING_INPUTS_FILE', tmp_path / 'pending.json')
+    marker = codex_queue_owner._owner_file(sid)
+    marker.parent.mkdir(parents=True)
+    marker.write_text('native\n')
+    result = server._apply_pending_input_operations(sid, [{
+        'field': 'resume', 'action': 'append_tail', 'value': 'do this once',
+    }])
+    assert not result['ok']
+    assert result['code'] == 'codex_native_queue_owned'
+    assert not server._pending_resume_queue.get(sid)
+    assert not (tmp_path / 'pending.json').exists()

@@ -27322,7 +27322,7 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
         if path.startswith("/api/codex/client/"):
             from ccc_server.codex_client import codex_client_call
             action = path.rsplit("/", 1)[-1]
-            if action not in ("operation", "respond", "preferences"):
+            if action not in ("operation", "respond", "preferences", "queue-owner"):
                 self.send_json({"ok": False, "error": "Unknown Codex action"}, 404)
                 return
             try:
