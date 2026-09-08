@@ -45,7 +45,7 @@ CODEX_STATE_DB = Path.home() / ".codex" / "state_5.sqlite"
 # `thread_id` (== our codex session_id). Both the legacy and the sqlite/-nested
 # path have been observed; newest non-empty wins.
 KIMI_SESSIONS_ROOT = Path.home() / ".kimi-code" / "sessions"
-_CODEX_META_VERSION = 7
+_CODEX_META_VERSION = 8
 _CODEX_APP_SERVER_STATE_SCHEMA = 1
 _CODEX_THREAD_REGISTRY_SCHEMA = 1
 _CODEX_THREAD_VISIBILITY_RANK = {
@@ -9614,13 +9614,17 @@ def _extract_codex_tail_meta(path):
             "latest_input_tokens": 0,
             "lifetime_tokens": 0,
             "context_limit": 0,
-            "total_input_tokens": 0,
-            "total_cache_read_tokens": 0,
-            "total_output_tokens": 0,
-            "cost_usd": None,
-            "cost_breakdown_usd": None,
+            "cost_usd": 0.0,
+            "cost_breakdown_usd": {
+                "input": 0.0, "cache_creation": 0.0, "cache_read": 0.0, "output": 0.0,
+            },
             "cost_basis": None,
             "cost_model": None,
+            # Running cumulative counters from the last token_count event, so a
+            # counter reset (reconnect) bills the next segment from zero instead
+            # of double-billing or going negative. Not part of the public
+            # meta contract; only _codex_usage_delta_from_event reads it.
+            "_cost_prev_totals": None,
         }
         pending_calls = {}
         pos = 0
@@ -9663,6 +9667,36 @@ def _extract_codex_tail_meta(path):
                         inp = _core._codex_int(usage.get("total_tokens"))
                     if inp:
                         meta["latest_input_tokens"] = inp
+                    # Bill only the cumulative increase since the last
+                    # token_count (same delta math queue_events.py uses for
+                    # worker-queue cost), not a plain read of the final
+                    # cumulative snapshot — a reconnect/restart can reset
+                    # Codex's counters mid-session, and pricing the raw final
+                    # total would silently drop everything billed before the
+                    # reset.
+                    delta, next_totals = _core._codex_usage_delta_from_event(
+                        ev, meta.get("_cost_prev_totals")
+                    )
+                    meta["_cost_prev_totals"] = next_totals
+                    if delta:
+                        delta_totals = {
+                            "total_input_tokens": max(
+                                delta["input_tokens"] - delta["cached_input_tokens"], 0
+                            ),
+                            "total_cache_creation_tokens": 0,
+                            "total_cache_read_tokens": delta["cached_input_tokens"],
+                            "total_output_tokens": delta["output_tokens"],
+                        }
+                        turn_cost = _core._session_usage_cost(
+                            "codex", meta.get("model") or "", delta_totals
+                        )
+                        for k, v in turn_cost["cost_breakdown_usd"].items():
+                            meta["cost_breakdown_usd"][k] = round(
+                                meta["cost_breakdown_usd"].get(k, 0.0) + v, 6
+                            )
+                        meta["cost_usd"] = round(sum(meta["cost_breakdown_usd"].values()), 6)
+                        meta["cost_basis"] = turn_cost["cost_basis"]
+                        meta["cost_model"] = turn_cost["cost_model"]
                     payload = ev.get("payload") if isinstance(ev.get("payload"), dict) else {}
                     info = payload.get("info") or {}
                     if isinstance(info, dict):
@@ -9678,17 +9712,6 @@ def _extract_codex_tail_meta(path):
                             meta["lifetime_tokens"] = max(
                                 _core._codex_int(meta.get("lifetime_tokens")),
                                 reported_total,
-                            )
-                            # total_token_usage is a running cumulative snapshot
-                            # (not a per-turn delta), so pricing reads it directly
-                            # rather than summing every last_token_usage.
-                            total_in = _core._codex_int(total_usage.get("input_tokens"))
-                            total_cached = _core._codex_int(total_usage.get("cached_input_tokens"))
-                            meta["total_input_tokens"] = max(0, total_in - total_cached)
-                            meta["total_cache_read_tokens"] = total_cached
-                            meta["total_output_tokens"] = (
-                                _core._codex_int(total_usage.get("output_tokens"))
-                                + _core._codex_int(total_usage.get("reasoning_output_tokens"))
                             )
                         else:
                             meta["lifetime_tokens"] += (
@@ -9852,12 +9875,6 @@ def _extract_codex_tail_meta(path):
     meta["mtime"] = mtime
     if not meta.get("last_meaningful_ts"):
         meta["last_meaningful_ts"] = mtime
-    if meta.get("total_input_tokens") or meta.get("total_output_tokens"):
-        cost = _core._session_usage_cost("codex", meta.get("model") or "", meta)
-        meta["cost_usd"] = cost.get("cost_usd")
-        meta["cost_breakdown_usd"] = cost.get("cost_breakdown_usd")
-        meta["cost_basis"] = cost.get("cost_basis")
-        meta["cost_model"] = cost.get("cost_model")
     with _core._conv_meta_cache_lock:
         _core._conv_meta_cache[spath] = meta
         _core._codex_tail_resume[spath] = {
