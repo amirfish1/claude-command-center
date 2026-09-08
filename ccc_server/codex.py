@@ -45,7 +45,7 @@ CODEX_STATE_DB = Path.home() / ".codex" / "state_5.sqlite"
 # `thread_id` (== our codex session_id). Both the legacy and the sqlite/-nested
 # path have been observed; newest non-empty wins.
 KIMI_SESSIONS_ROOT = Path.home() / ".kimi-code" / "sessions"
-_CODEX_META_VERSION = 6
+_CODEX_META_VERSION = 7
 _CODEX_APP_SERVER_STATE_SCHEMA = 1
 _CODEX_THREAD_REGISTRY_SCHEMA = 1
 _CODEX_THREAD_VISIBILITY_RANK = {
