@@ -7236,6 +7236,10 @@
     if (!$view || !data) return false;
     const via = String(data.via || '');
     const stage = String(data.stage || '');
+    if (data.ok && via === 'codex-desktop' && data.confirmed) {
+      if (_codexWakePollSid === (data.session_id || currentSession?.id)) stopCodexWakeBreakdown(true);
+      return true;
+    }
     // A normal Codex wake is represented by the compact progress line below.
     // Do not add a second yellow resume banner above it.
     if (data.ok && via === 'codex-app-turn') {
@@ -11253,7 +11257,7 @@
     // explicit inline feedback.
     if (!compactCommand && !clearCommand && looksDormantNoProcess()) {
       const $wv = getConvViewForPane(paneId || activePaneId()) || getConvView();
-      if (currentSession.source === 'codex') {
+      if (currentSession.source === 'codex' && !window.CCCCodexClient?.isInlineActive($wv.closest('.conv-pane'))) {
         startCodexWakeBreakdown($wv, sid);
       }
     }
@@ -51716,25 +51720,36 @@
     const engine = railQuotaEngine(usage);
     if (!engine) return { state: 'unavailable', reason: 'Unknown engine' };
     if (calibration == null) return { state: 'calibrating', engine };
-    if (calibration.available !== true) {
-      return { state: 'unavailable', engine, reason: calibration.reason || 'Calibration unavailable' };
-    }
     const apiCost = Number(fullSessionApiCost);
-    const rate = Number(calibration.pct_per_usd);
     const plan = Number(monthlyPlanUsd);
     if (fullSessionApiCost == null || !Number.isFinite(apiCost) || apiCost < 0) {
       return { state: 'unavailable', engine, reason: 'API cost unavailable' };
     }
-    if (calibration.pct_per_usd == null || !Number.isFinite(rate) || rate < 0) {
-      return { state: 'unavailable', engine, reason: 'Calibration unavailable' };
-    }
     if (monthlyPlanUsd == null || !Number.isFinite(plan) || plan <= 0) {
       return { state: 'unavailable', engine, reason: 'Monthly plan unavailable' };
     }
+    let rate = Number(calibration.pct_per_usd);
+    let provisional = false;
+    if (calibration.available !== true || calibration.pct_per_usd == null || !Number.isFinite(rate) || rate < 0) {
+      // The strict 2-clean-day gate (calibrate_days) hasn't cleared yet for
+      // this engine, but the same daily-observation pass already computed a
+      // same-formula rate from whatever partial data it has (e.g. Codex with
+      // only 1 matched day instead of 2 required). A provisional number from
+      // real observed data beats withholding one entirely while the second
+      // clean day accumulates.
+      const sampledCost = Number(calibration.sampled_cost_usd);
+      const sampledPct = Number(calibration.sampled_pct);
+      if (sampledCost > 0 && sampledPct > 0) {
+        rate = sampledPct / sampledCost;
+        provisional = true;
+      } else {
+        return { state: 'unavailable', engine, reason: calibration.reason || 'Calibration unavailable' };
+      }
+    }
     const contributionPct = apiCost * rate;
     return {
-      state: 'ready', engine, apiCost, contributionPct, monthlyPlanUsd: plan,
-      allocatedCost: contributionPct / 100 * plan / 30 * 7,
+      state: provisional ? 'provisional' : 'ready', engine, apiCost, contributionPct, rate,
+      monthlyPlanUsd: plan, allocatedCost: contributionPct / 100 * plan / 30 * 7,
     };
   }
   // RAIL_QUOTA_COST_END
@@ -51766,23 +51781,8 @@
     const calibration = _quotaCostCalibration ? _quotaCostCalibration[eng] : null;
     const monthlyPlanUsd = eng === 'claude' ? _monthlyClaudePlanUsd() : _monthlyCodexPlanUsd();
     const presentation = railQuotaCostPresentation({ engine: eng }, apiCostUsd, calibration, monthlyPlanUsd);
-    if (presentation.state === 'ready') return presentation.allocatedCost;
-    // The strict 2-clean-day gate (calibrate_days) hasn't cleared yet for
-    // this engine, but the same daily-observation pass already computed a
-    // same-formula rate from whatever partial data it has (e.g. Codex with
-    // only 1 matched day instead of 2). A provisional number from real
-    // observed data beats withholding one entirely while the second day
-    // accumulates -- same math the "ready" state uses, just below its
-    // confidence bar.
-    const sampledCost = Number(calibration && calibration.sampled_cost_usd);
-    const sampledPct = Number(calibration && calibration.sampled_pct);
-    const plan = Number(monthlyPlanUsd);
-    if (sampledCost > 0 && sampledPct > 0 && Number.isFinite(plan) && plan > 0) {
-      const rate = sampledPct / sampledCost;
-      const contributionPct = Number(apiCostUsd) * rate;
-      return contributionPct / 100 * plan / 30 * 7;
-    }
-    return null;
+    return presentation.state === 'ready' || presentation.state === 'provisional'
+      ? presentation.allocatedCost : null;
   }
 
   function _refreshWeeklyClaudeUsage() {
@@ -52026,18 +52026,23 @@
         + '<div class="rail-usage-heading"><span>Estimated weekly quota</span><strong>Calibrating</strong></div>'
         + '<div>Historical engine calibration is loading.</div></div></div>';
     }
-    if (presentation.state !== 'ready') {
+    if (presentation.state !== 'ready' && presentation.state !== 'provisional') {
       return '<div class="rail-usage-breakdown rail-quota-cost"><div class="rail-usage-row">'
         + '<div class="rail-usage-heading"><span>Estimated weekly quota</span><strong>Unavailable</strong></div>'
         + '<div>' + escapeHtml(presentation.reason || 'Calibration unavailable') + '</div></div></div>';
     }
-    const rate = Number(calibration.pct_per_usd);
+    const isProvisional = presentation.state === 'provisional';
+    const rate = Number(presentation.rate);
     const sampleDays = Number(calibration.sample_days) || 0;
     const sampledCost = Number(calibration.sampled_cost_usd);
     const sampledPct = Number(calibration.sampled_pct);
     const contribution = presentation.contributionPct.toFixed(2) + '%';
+    const costLabel = isProvisional ? 'Estimated subscription cost' : 'Allocated subscription cost';
     const allocated = '$' + presentation.allocatedCost.toFixed(2);
-    const title = 'Historical rate: ' + rate.toFixed(4) + '% per $1 API list price. '
+    const title = (isProvisional
+        ? 'Provisional rate (calibration not yet confirmed — ' + sampleDays + ' of 2+ clean days banked): '
+        : 'Historical rate: ')
+      + rate.toFixed(4) + '% per $1 API list price. '
       + 'Sample: ' + sampleDays + ' days, $' + (Number.isFinite(sampledCost) ? sampledCost.toFixed(4) : 'Unavailable')
       + ' API cost, ' + (Number.isFinite(sampledPct) ? sampledPct.toFixed(4) : 'Unavailable') + '% observed. '
       + 'Formula: $' + presentation.apiCost.toFixed(4) + ' × ' + rate.toFixed(4) + '% per $1 = '
@@ -52047,7 +52052,7 @@
     return '<div class="rail-usage-breakdown rail-quota-cost" title="' + escapeAttr(title) + '">'
       + '<div class="rail-usage-row"><div class="rail-usage-heading"><span>Estimated weekly quota</span><strong>'
       + contribution + '</strong></div><div>' + rate.toFixed(4) + '% per $1 API list price</div></div>'
-      + '<div class="rail-usage-row"><div class="rail-usage-heading"><span>Allocated subscription cost</span><strong>'
+      + '<div class="rail-usage-row"><div class="rail-usage-heading"><span>' + costLabel + '</span><strong>'
       + allocated + '</strong></div><div>$' + presentation.monthlyPlanUsd.toFixed(2) + ' monthly plan</div></div>'
       + '<div class="rail-quota-formula">' + escapeHtml(title) + '</div></div>';
   }
@@ -52055,8 +52060,9 @@
   // RAIL_COST_HEADLINE_START
   function railCostHeadline(quota, apiCost) {
     return {
-      headline: quota.state === 'ready'
-        ? '$' + quota.allocatedCost.toFixed(2) + ' (' + quota.contributionPct.toFixed(1) + '%)'
+      headline: quota.state === 'ready' || quota.state === 'provisional'
+        ? (quota.state === 'provisional' ? '~' : '') + '$' + quota.allocatedCost.toFixed(2)
+          + ' (' + quota.contributionPct.toFixed(1) + '%)'
         : quota.state === 'calibrating' ? 'Calibrating…' : 'Unavailable',
       apiLabel: apiCost == null ? 'API list-price unavailable'
         : '$' + apiCost.toFixed(2) + ' API list-price equivalent',
