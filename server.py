@@ -1144,6 +1144,24 @@ def _watchtower_api_refresh_worker(key):
         _WT_API_PROBE_CACHE[key] = {"ts": time.time(), "ok": ok, "probing": False}
 
 
+# `watchtower.queue` is a hard import-time dependency (see above), so by the
+# time this module has loaded, `watchtower` itself is already in sys.modules
+# -- no separate probe needed. Cached because __version__ can't change without
+# a process restart, and this is read on every 5s System-status poll.
+_WT_VERSION_CACHE = None
+
+
+def _watchtower_version():
+    global _WT_VERSION_CACHE
+    if _WT_VERSION_CACHE is None:
+        try:
+            import watchtower as _wt_pkg
+            _WT_VERSION_CACHE = str(getattr(_wt_pkg, "__version__", "") or "") or False
+        except Exception:
+            _WT_VERSION_CACHE = False
+    return _WT_VERSION_CACHE or None
+
+
 def _watchtower_service_status(*, probe_api=True, include_queues=False):
     pid = None
     pid_alive = False
@@ -1173,6 +1191,7 @@ def _watchtower_service_status(*, probe_api=True, include_queues=False):
     status = {
         "ok": True,
         "installed": bool(_wt_cli_path()),
+        "version": _watchtower_version(),
         "running": running,
         "pid": pid if running else None,
         "command_verified": command_verified,
