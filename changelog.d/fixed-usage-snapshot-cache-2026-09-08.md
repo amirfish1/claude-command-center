@@ -1,0 +1,1 @@
+- Speed up repeated usage API reads by caching unchanged snapshot history.

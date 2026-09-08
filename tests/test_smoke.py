@@ -684,6 +684,35 @@ class TestServerImports(unittest.TestCase):
                 server._USAGE_SNAPSHOTS_FILE = old_snapshot_file
                 server._WEEKLY_PCT_FILE = old_legacy_file
 
+    def test_native_usage_snapshot_reader_reuses_unchanged_file_and_invalidates_on_write(self):
+        """Usage-current can reuse parsed snapshot history until its file changes."""
+        for mod in ("server", "morning", "morning_store"):
+            sys.modules.pop(mod, None)
+        server = importlib.import_module("server")
+
+        with tempfile.TemporaryDirectory() as tmp:
+            snapshots_file = pathlib.Path(tmp) / "usage-snapshots.jsonl"
+            snapshots_file.write_text(
+                json.dumps({"ts": "2026-07-02T16:00:00Z", "source": "native"}) + "\n",
+                encoding="utf-8",
+            )
+            old_snapshot_file = server._USAGE_SNAPSHOTS_FILE
+            try:
+                server._USAGE_SNAPSHOTS_FILE = snapshots_file
+                with mock.patch("ccc_server.recall_usage.json.loads", wraps=json.loads) as loads:
+                    self.assertEqual(len(server._read_native_usage_snapshots_unlocked()), 1)
+                    self.assertEqual(len(server._read_native_usage_snapshots_unlocked()), 1)
+                    self.assertEqual(loads.call_count, 1)
+
+                    snapshots_file.write_text(
+                        json.dumps({"ts": "2026-07-02T16:05:00Z", "source": "native"}) + "\n",
+                        encoding="utf-8",
+                    )
+                    self.assertEqual(len(server._read_native_usage_snapshots_unlocked()), 1)
+                    self.assertEqual(loads.call_count, 2)
+            finally:
+                server._USAGE_SNAPSHOTS_FILE = old_snapshot_file
+
     def test_watchtower_worker_titles_replace_raw_codex_drain_prompt(self):
         """Live WT worker rows should show the active ticket, not the drain prompt."""
         for mod in ("server", "morning", "morning_store"):
