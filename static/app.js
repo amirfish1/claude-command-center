@@ -37143,6 +37143,7 @@
         _wtWarmActivityForWorkersLane();
         const recentOpen = _workersRecentOpen();
         _workersActivityHtml = '<div class="conv-workers-activity" data-role="workers-activity">'
+          + '<div class="wa-health" data-role="workers-queue-health"></div>'
           + '<div class="fq-working-strip wa-now" data-role="workers-working-now"'
           +   ' aria-label="Working now across all queues">'
           +   '<div class="fq-working-head">'
@@ -45035,6 +45036,68 @@
   // ── WORKING NOW strip ──────────────────────────────────────────────────
   // Spans ALL queues (not scoped). Updates live via the same health poll/SSE
   // that drives _renderQueuePanel. Collapses to header-only when idle.
+  // A worker alive this long without its queue closing anything is the shape
+  // of a loop that quietly burns tokens. It is a heuristic, so it only ever
+  // raises an advisory chip — never blocks or kills anything.
+  const WORKERS_LOOP_SUSPECT_S = 3 * 3600;
+  // A queue with work claimed but no recorded progress for this long is not
+  // draining, whatever its auto_drain flag says.
+  const WORKERS_STALLED_PROGRESS_S = 3600;
+  // One line above WORKING NOW answering the two questions the Workers tab
+  // could not: are the queues actually auto-draining, and is anything running
+  // in a circle. Every field is already on /api/queue/status, so this costs no
+  // extra request and no per-row work (CCC-1061).
+  function _uxqRenderWorkersQueueHealth(health, workers) {
+    const hosts = document.querySelectorAll('[data-role="workers-queue-health"]');
+    if (!hosts.length) return;
+    const queues = (Array.isArray(health.queues) ? health.queues : []).filter(Boolean);
+    const num = (v) => (Number.isFinite(Number(v)) ? Number(v) : 0);
+    // Only queues with something in them can be "not draining". A configured
+    // but empty queue is idle, not stuck, and counting it would make the strip
+    // cry wolf on every quiet morning.
+    const live = queues.filter(q => num(q.depth) || num(q.in_progress) || num(q.workers));
+    const open = live.reduce((n, q) => n + num(q.depth), 0);
+    const inProgress = live.reduce((n, q) => n + num(q.in_progress), 0);
+    const draining = live.filter(q => q.auto_drain).length;
+    const stuck = live.filter(q => q.stuck || q.staffing_alarm);
+    const stalled = live.filter(q => !q.stuck && num(q.in_progress) > 0
+      && num(q.since_progress_s) > WORKERS_STALLED_PROGRESS_S);
+    const loopers = workers.filter(w => {
+      const started = Date.parse((w && w.started_at) || '');
+      return Number.isFinite(started) && (Date.now() - started) / 1000 > WORKERS_LOOP_SUSPECT_S;
+    });
+    const names = (rows, key) => rows.map(r => String(r[key] || '')).filter(Boolean).join(', ');
+    const chip = (cls, text, tip) => '<span class="wa-chip ' + cls + '"'
+      + (tip ? ' title="' + escapeAttr(tip) + '"' : '') + '>' + text + '</span>';
+    const chips = [];
+    chips.push(chip('is-quiet', '<b>' + live.length + '</b> active · <b>' + draining + '</b> draining',
+      live.length
+        ? 'Queues holding open or claimed work. ' + draining + ' of them have auto-drain on.'
+        : 'No queue is holding open or claimed work right now.'));
+    chips.push(chip('is-quiet', '<b>' + open + '</b> open · <b>' + inProgress + '</b> in progress',
+      'Open tickets and tickets currently claimed by a worker, across every active queue.'));
+    if (stuck.length) {
+      chips.push(chip('is-bad', '<b>' + stuck.length + '</b> stuck',
+        'Not draining: ' + names(stuck, 'queue')
+        + '\n\nWatchTower flagged these as stuck or short-staffed.'));
+    }
+    if (stalled.length) {
+      chips.push(chip('is-warn', '<b>' + stalled.length + '</b> no progress 1h+',
+        'Work is claimed but nothing has been recorded for over an hour: '
+        + names(stalled, 'queue')));
+    }
+    if (loopers.length) {
+      chips.push(chip('is-warn', '<b>' + loopers.length + '</b> long-running',
+        'Alive for over 3h, which is the shape of a loop burning tokens: '
+        + names(loopers, 'worker_id')
+        + '\n\nAdvisory only — a genuinely long ticket looks the same.'));
+    }
+    const html = chips.join('');
+    hosts.forEach($el => {
+      if ($el.innerHTML !== html) $el.innerHTML = html;
+      $el.classList.toggle('has-alarm', !!(stuck.length || stalled.length || loopers.length));
+    });
+  }
   function _uxqRenderWorkingNow() {
     _uxqRenderRecentWork();
     // Same multi-host lookup as the recent-work list, for the same reason: the
@@ -45044,6 +45107,7 @@
     const health = _uxqHealthCache || {};
     const workers = (Array.isArray(health.wt_workers) ? health.wt_workers : [])
       .filter(w => w && w.alive !== false);
+    _uxqRenderWorkersQueueHealth(health, workers);
     const items = Array.isArray(_uxqItemsCache.items) ? _uxqItemsCache.items : [];
     const queues = Array.isArray(health.queues) ? health.queues : [];
     const queueNames = [...new Set(workers.map(w => _uxqProjectKey(w.queue)).filter(Boolean))];

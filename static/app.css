@@ -14642,10 +14642,30 @@
     background: #0c1014; border: 1px solid #1b222b; border-radius: 8px;
   }
   .conv-workers-activity .fq-working-strip { margin-bottom: 6px; }
+  /* Queue health: one wrapping line of chips above WORKING NOW. Counts first
+     (is anything draining), alarms only when there is one — a strip that shows
+     a green "all clear" chip every day stops being read. */
+  .wa-health {
+    display: flex; flex-wrap: wrap; align-items: center; gap: 4px 6px;
+    padding: 0 2px 7px;
+  }
+  .wa-health:empty { display: none; }
+  .wa-chip {
+    display: inline-flex; align-items: baseline; gap: 4px;
+    padding: 2px 7px; border-radius: 999px; cursor: default;
+    font-family: 'JetBrains Mono', ui-monospace, monospace;
+    font-size: 10px; letter-spacing: .01em;
+    border: 1px solid #232b34; background: #12181f; color: #8b949e;
+  }
+  .wa-chip b { font-weight: 600; color: #b1bac4; }
+  .wa-chip.is-warn { border-color: #4a3a12; background: #1d1707; color: #d29922; }
+  .wa-chip.is-warn b { color: #e3b341; }
+  .wa-chip.is-bad { border-color: #5c2626; background: #1f1010; color: #f0776c; }
+  .wa-chip.is-bad b { color: #ff9f97; }
   /* Tall enough that all three detailed cards AND the brief tier below them
      are on screen at once — the tier split is pointless if the brief rows sit
      under a scroll fold. */
-  .conv-workers-activity .fq-recent-rows { max-height: 560px; }
+  .conv-workers-activity .fq-recent-rows { max-height: 600px; }
   /* Three pieces of per-card chrome cost more than they pay for in this
      column, so the detailed tier drops them: the absolute timestamp (still in
      the tooltip, and the relative one is what you scan), the "Full details"
