@@ -15249,12 +15249,25 @@
   // The sidebar list is rebuilt wholesale on archive refreshes. Delegate this
   // control from the stable list container so a redraw cannot leave the model
   // filter's newly-rendered buttons without their click behavior.
+  function _closeArchiveEngineFilters() {
+    $convList?.querySelectorAll('.conv-archived-engine-filter').forEach(wrap => {
+      clearTimeout(wrap._archiveEngineCollapseTimer);
+      wrap.classList.remove('is-expanded');
+      wrap.querySelector('[data-archive-engine-trigger]')?.setAttribute('aria-expanded', 'false');
+    });
+  }
   function _handleArchiveEngineFilterClick(ev) {
     const trigger = ev.target.closest('[data-archive-engine-trigger]');
     if (trigger && $convList.contains(trigger)) {
       ev.stopPropagation();
       const wrap = trigger.closest('.conv-archived-engine-filter');
       if (!wrap) return;
+      if (_archiveEngineFilter()) {
+        try { localStorage.removeItem(ARCHIVE_ENGINE_FILTER_KEY); } catch (_) {}
+        _closeArchiveEngineFilters();
+        renderArchiveList(document.getElementById('convSearch')?.value || '', { force: true });
+        return;
+      }
       clearTimeout(wrap._archiveEngineCollapseTimer);
       const expanded = wrap.classList.toggle('is-expanded');
       trigger.setAttribute('aria-expanded', expanded ? 'true' : 'false');
@@ -15278,7 +15291,8 @@
       if (next) localStorage.setItem(ARCHIVE_ENGINE_FILTER_KEY, next);
       else localStorage.removeItem(ARCHIVE_ENGINE_FILTER_KEY);
     } catch (_) {}
-    renderArchiveList(document.getElementById('convSearch')?.value || '');
+    _closeArchiveEngineFilters();
+    renderArchiveList(document.getElementById('convSearch')?.value || '', { force: true });
   }
   // Hover expands/collapses the trigger (CCC-1015 -- clicking to open, then
   // needing a second click to pick, was a misread of the original ask):
@@ -15312,6 +15326,9 @@
     $convList.addEventListener('click', _handleArchiveEngineFilterClick);
     $convList.addEventListener('mouseover', _handleArchiveEngineFilterHover);
     $convList.addEventListener('mouseout', _handleArchiveEngineFilterHover);
+    document.addEventListener('click', ev => {
+      if (!ev.target.closest?.('.conv-archived-engine-filter')) _closeArchiveEngineFilters();
+    }, true); // Close even when the clicked control stops propagation.
   }
 
   function readConversationSearchHistory() {
@@ -36871,10 +36888,10 @@
       // filter click re-renders this toolbar), or move away for 2s to
       // auto-close without changing the filter (CCC-1006, hover model CCC-1015).
       const _arcEngineTriggerTitle = _arcEngineFilter
-        ? 'Filtered by ' + _arcEngineFilterLabel + ' -- hover to change'
+        ? 'Filtered by ' + _arcEngineFilterLabel + ' -- click to clear; hover to change'
         : 'Filter by engine';
       const _arcEngineToggle = '<span class="conv-archived-engine-filter" data-role="archived-engine-filter" role="group" aria-label="Filter All sessions by engine">'
-          + '<button type="button" class="conv-archived-engine-trigger" data-archive-engine-trigger'
+          + '<button type="button" class="conv-archived-engine-trigger' + (_arcEngineFilter ? ' is-filtered ' + _arcEngineFilter : '') + '" data-archive-engine-trigger'
             + ' aria-label="' + escapeAttr(_arcEngineTriggerTitle) + '" aria-expanded="false"'
             + ' title="' + escapeAttr(_arcEngineTriggerTitle) + '">' + getEngineSvg(_arcEngineFilter || 'claude') + '</button>'
           + '<span class="conv-archived-engine-options">'
