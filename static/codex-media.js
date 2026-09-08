@@ -9,6 +9,7 @@
   const PLAYBACK_SOURCE_LIMIT = 24;
   const PLAYBACK_AHEAD_LIMIT_SECONDS = 5;
   const PLAYBACK_CHUNK_BYTES_LIMIT = 512 * 1024;
+  const REALTIME_CLOSE_TIMEOUT_MS = 10000;
   const EXEC_TIMEOUT_MS = 30 * 60 * 1000;
   const EXEC_OUTPUT_CAP = 1024 * 1024;
   const RESIZE_DELAY_MS = 140;
@@ -163,7 +164,7 @@
         dropped: 0, playbackDropped: 0, stream: null, audioContext: null, source: null,
         processor: null, playback: new Set(), playbackAt: 0, startAttempt: null,
         phase: 'idle', startedSeq: null, closeFenceSeq: null, stoppingToken: null,
-        stoppingNeedsStarted: false, pendingStopStatus: null },
+        stoppingNeedsStarted: false, pendingStopStatus: null, disposeClose: null },
     };
 
     const root = element('section', 'codex-media');
@@ -221,7 +222,7 @@
     mode.setAttribute('data-codex-command-mode', '');
     mode.append(new Option('Program and arguments', 'program'));
     const serverPlatform = String(catalog.server_platform || catalog.platform || '').toLowerCase();
-    if (serverPlatform.includes('win')) {
+    if (/^(win32|windows)$/.test(serverPlatform)) {
       mode.append(new Option('PowerShell command', 'powershell'), new Option('POSIX shell command', 'posix-shell'));
     } else {
       mode.append(new Option('POSIX shell command', 'posix-shell'), new Option('PowerShell command', 'powershell'));
@@ -391,6 +392,36 @@
       if (media.audioContext) { try { media.audioContext.close(); } catch (_) {} }
       media.audioContext = null;
       media.queue.length = 0;
+    }
+
+    function beginDisposeCloseBarrier() {
+      const media = state.realtime;
+      if (media.disposeClose) return media.disposeClose.promise;
+      let resolve;
+      let reject;
+      const barrier = { settled: false, timer: null, promise: null };
+      barrier.promise = new Promise((resolvePromise, rejectPromise) => {
+        resolve = resolvePromise;
+        reject = rejectPromise;
+      });
+      barrier.resolve = () => {
+        if (barrier.settled) return;
+        barrier.settled = true;
+        window.clearTimeout(barrier.timer);
+        resolve();
+      };
+      barrier.timer = window.setTimeout(() => {
+        if (barrier.settled) return;
+        barrier.settled = true;
+        reject(new Error('Realtime session did not close before the cleanup deadline.'));
+      }, REALTIME_CLOSE_TIMEOUT_MS);
+      media.disposeClose = barrier;
+      return barrier.promise;
+    }
+
+    function resolveDisposeCloseBarrier() {
+      const barrier = state.realtime.disposeClose;
+      if (barrier) barrier.resolve();
     }
 
     function setRealtimeActive(active) {
@@ -666,11 +697,12 @@
     }
 
     function handleEvents(events) {
-      if (state.disposed || !Array.isArray(events)) return;
+      if (!Array.isArray(events) || state.disposed && !state.realtime.disposeClose) return;
       events.forEach(event => {
         if (!event || typeof event !== 'object') return;
         const params = event.params && typeof event.params === 'object' ? event.params : event;
         const method = String(event.method || '');
+        if (state.disposed && method !== 'thread/realtime/started' && method !== 'thread/realtime/closed') return;
         const seq = Number(event.seq);
         const hasSeq = Number.isFinite(seq);
         const session = state.terminal;
@@ -696,7 +728,13 @@
         } else if (method === 'thread/realtime/outputAudio/delta') playPcm(params.audio);
         else if (method === 'thread/realtime/item/transcript/delta' || method === 'thread/realtime/transcript/delta') appendTranscript(params.delta);
         else if (method === 'thread/realtime/transcript/done') appendTranscript((transcript.textContent ? '\n' : '') + (params.role ? params.role + ': ' : '') + params.text + '\n');
-        else if (method === 'thread/realtime/error') failRealtime(params.message || 'Realtime session failed.', state.realtime.token);
+        else if (method === 'thread/realtime/error') {
+          // Errors do not acknowledge a stop. Keep the ordered close barrier
+          // until native closed arrives, even when the retiring session fails.
+          if (media.phase === 'stopping') {
+            realtimeStatus.textContent = params.message || 'Waiting for realtime to close.';
+          } else failRealtime(params.message || 'Realtime session failed.', media.token);
+        }
         else if (method === 'thread/realtime/closed') {
           if (hasSeq && media.closeFenceSeq !== null && seq <= media.closeFenceSeq) return;
           if (media.phase === 'starting' || media.phase === 'stopping' && media.stoppingNeedsStarted) return;
@@ -714,6 +752,7 @@
           media.pendingStopStatus = null;
           media.token++; setRealtimeActive(false); releaseRealtimeMedia();
           realtimeStatus.textContent = pendingStatus || (params.reason ? 'Voice closed: ' + params.reason : 'Voice closed');
+          resolveDisposeCloseBarrier();
         }
       });
     }
@@ -722,7 +761,6 @@
       if (state.disposePromise) return state.disposePromise;
       if (state.disposed) return Promise.resolve();
       const cleanupRequests = [];
-      let pendingStart = null;
       const session = state.terminal;
       if (session && session.running && !session.stopSent) {
         session.stopSent = true;
@@ -731,11 +769,23 @@
         cleanupRequests.push([method, params]);
       }
       const media = state.realtime;
+      const pendingStart = media.startAttempt && !media.startAttempt.settled
+        ? media.startAttempt.promise : null;
+      const expectsRealtimeClose = !!(realtimeCapabilities.stop && (
+        media.nativeToken !== null || pendingStart || media.phase === 'stopping'
+      ));
+      if (expectsRealtimeClose) {
+        const wasStarting = media.phase === 'starting';
+        media.phase = 'stopping';
+        media.stoppingToken = media.token;
+        media.stoppingNeedsStarted = wasStarting && media.startedSeq === null;
+        media.pendingStopStatus = null;
+      }
+      const closeBarrier = expectsRealtimeClose ? beginDisposeCloseBarrier() : null;
+      let stopRealtimeNow = false;
       if (media.nativeToken !== null && realtimeCapabilities.stop) {
         media.nativeToken = null;
-        cleanupRequests.push(['thread/realtime/stop', { threadId: context.threadId }]);
-      } else if (media.startAttempt && !media.startAttempt.settled && realtimeCapabilities.stop) {
-        pendingStart = media.startAttempt.promise;
+        stopRealtimeNow = true;
       }
       state.disposed = true;
       media.token++;
@@ -745,10 +795,17 @@
       if (resizeObserver) resizeObserver.disconnect();
       root.remove();
       const cleanup = cleanupRequests.map(([method, params]) => rawOperation(method, params));
-      if (pendingStart) cleanup.push(pendingStart.then(
-        () => rawOperation('thread/realtime/stop', { threadId: context.threadId }),
-        () => undefined,
-      ));
+      let realtimeCleanup = null;
+      if (stopRealtimeNow) {
+        realtimeCleanup = rawOperation('thread/realtime/stop', { threadId: context.threadId }).catch(() => undefined);
+      } else if (pendingStart && realtimeCapabilities.stop) {
+        realtimeCleanup = pendingStart.then(
+          () => rawOperation('thread/realtime/stop', { threadId: context.threadId }).catch(() => undefined),
+          error => { if (!uncertainError(error)) resolveDisposeCloseBarrier(); },
+        );
+      }
+      if (realtimeCleanup) cleanup.push(realtimeCleanup);
+      if (closeBarrier) cleanup.push(closeBarrier);
       state.disposePromise = Promise.allSettled(cleanup).then(results => {
         const failed = results.find(result => result.status === 'rejected');
         if (failed) throw failed.reason;

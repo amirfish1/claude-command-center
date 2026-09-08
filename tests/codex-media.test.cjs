@@ -278,6 +278,10 @@ test('dispose stops native realtime and releases a late microphone acquisition',
     assert.equal(await page.$('.codex-media'), null);
     assert.deepEqual(await page.evaluate(() => ({ isPromise: window.__disposeIsPromise, done: window.__disposeDone })), { isPromise: true, done: false });
     await page.evaluate(() => window.__resolveStop());
+    await page.evaluate(() => window.__controller.handleEvents([
+      { seq: 1, method: 'thread/realtime/started', params: { threadId: 'late-thread', version: 'v2', realtimeSessionId: null } },
+      { seq: 2, method: 'thread/realtime/closed', params: { threadId: 'late-thread', reason: 'stopped' } },
+    ]));
     await page.waitForFunction(() => window.__disposeDone === true);
   } finally { await page.close(); }
 });
@@ -640,16 +644,176 @@ test('dispose releases active local media before dispatching native cleanup', as
     }, realtimeCatalog());
     await page.click('[data-codex-realtime-start]');
     await page.waitForFunction(() => window.__processor);
+    await page.evaluate(() => window.__controller.handleEvents([
+      { seq: 1, method: 'thread/realtime/started', params: { threadId: 'dispose-order-thread', version: 'v2', realtimeSessionId: null } },
+    ]));
     const result = await page.evaluate(async () => {
-      await window.__controller.dispose();
+      window.__disposeDone = false;
+      window.__disposePromise = window.__controller.dispose();
+      window.__disposePromise.then(() => { window.__disposeDone = true; });
+      await Promise.resolve(); await Promise.resolve();
       return {
         stopped: window.__track.stopped,
         closed: window.__context.closed,
         stoppedAtNativeDispatch: window.__stoppedAtNativeDispatch,
         mounted: !!document.querySelector('.codex-media'),
+        done: window.__disposeDone,
       };
     });
-    assert.deepEqual(result, { stopped: true, closed: true, stoppedAtNativeDispatch: true, mounted: false });
+    assert.deepEqual(result, { stopped: true, closed: true, stoppedAtNativeDispatch: true, mounted: false, done: false });
+    await page.evaluate(() => window.__controller.handleEvents([
+      { seq: 2, method: 'thread/realtime/closed', params: { threadId: 'dispose-order-thread', reason: 'stopped' } },
+    ]));
+    await page.waitForFunction(() => window.__disposeDone);
+  } finally { await page.close(); }
+});
+
+test('dispose waits for authoritative realtime close after releasing local media', async () => {
+  const page = await mediaPage(() => {
+    window.__calls = [];
+    window.__track = { stopped: false, stop() { this.stopped = true; } };
+    navigator.mediaDevices = { getUserMedia: async () => ({ getTracks: () => [window.__track] }) };
+    window.AudioContext = class {
+      constructor() { this.sampleRate = 48000; this.destination = {}; window.__context = this; }
+      createMediaStreamSource() { return { connect(node) { window.__processor = node; }, disconnect() {} }; }
+      createScriptProcessor() { return { connect() {}, disconnect() {}, onaudioprocess: null }; }
+      resume() { return Promise.resolve(); }
+      close() { this.closed = true; return Promise.resolve(); }
+    };
+  });
+  try {
+    await page.evaluate(catalog => {
+      window.__controller = window.CCCCodexMedia.attach({
+        root: document.querySelector('#workspace'), context: { threadId: 'dispose-fence-thread', repoPath: '/workspace' }, catalog,
+        operation(method, params) {
+          window.__calls.push({ method, params });
+          if (method === 'thread/realtime/listVoices') return Promise.resolve({ voices: { defaultV1: 'alloy', defaultV2: 'marin', v1: ['alloy'], v2: ['marin'] } });
+          return Promise.resolve({});
+        }, error() {},
+      });
+    }, realtimeCatalog());
+    await page.click('[data-codex-realtime-start]');
+    await page.waitForFunction(() => window.__processor);
+    await page.evaluate(() => window.__controller.handleEvents([
+      { seq: 10, method: 'thread/realtime/started', params: { threadId: 'dispose-fence-thread', version: 'v2', realtimeSessionId: null } },
+    ]));
+    const immediate = await page.evaluate(async () => {
+      window.__disposeSettled = false;
+      window.__disposeError = '';
+      window.__disposePromise = window.__controller.dispose();
+      window.__disposePromise.then(
+        () => { window.__disposeSettled = true; },
+        error => { window.__disposeSettled = true; window.__disposeError = error.message; },
+      );
+      await new Promise(resolve => setTimeout(resolve, 30));
+      return {
+        stopped: window.__track.stopped,
+        contextClosed: window.__context.closed === true,
+        mounted: !!document.querySelector('.codex-media'),
+        settled: window.__disposeSettled,
+      };
+    });
+    assert.deepEqual(immediate, { stopped: true, contextClosed: true, mounted: false, settled: false });
+    await page.evaluate(() => window.__controller.handleEvents([
+      { seq: 20, method: 'thread/realtime/closed', params: { threadId: 'dispose-fence-thread', reason: 'stopped' } },
+    ]));
+    await page.waitForFunction(() => window.__disposeSettled);
+    assert.equal(await page.evaluate(() => window.__disposeError), '');
+  } finally { await page.close(); }
+});
+
+test('disposed controller accepts retiring started then closed events', async () => {
+  const page = await mediaPage(() => {
+    window.__calls = [];
+  });
+  try {
+    await page.evaluate(catalog => {
+      let resolveStart;
+      window.__resolveStart = () => resolveStart({});
+      window.__controller = window.CCCCodexMedia.attach({
+        root: document.querySelector('#workspace'), context: { threadId: 'dispose-starting-thread', repoPath: '/workspace' }, catalog,
+        operation(method, params) {
+          window.__calls.push({ method, params });
+          if (method === 'thread/realtime/listVoices') return Promise.resolve({ voices: { defaultV1: 'alloy', defaultV2: 'marin', v1: ['alloy'], v2: ['marin'] } });
+          if (method === 'thread/realtime/start') return new Promise(resolve => { resolveStart = resolve; });
+          return Promise.resolve({});
+        }, error() {},
+      });
+    }, realtimeCatalog());
+    await page.click('[data-codex-realtime-start]');
+    await page.waitForFunction(() => window.__calls.some(call => call.method === 'thread/realtime/start'));
+    await page.evaluate(() => {
+      window.__disposeSettled = false;
+      window.__disposePromise = window.__controller.dispose();
+      window.__disposePromise.then(() => { window.__disposeSettled = true; });
+      window.__resolveStart();
+    });
+    await page.waitForFunction(() => window.__calls.some(call => call.method === 'thread/realtime/stop'));
+    await new Promise(resolve => setTimeout(resolve, 30));
+    assert.equal(await page.evaluate(() => window.__disposeSettled), false);
+    await page.evaluate(() => window.__controller.handleEvents([
+      { seq: 30, method: 'thread/realtime/started', params: { threadId: 'dispose-starting-thread', version: 'v2', realtimeSessionId: null } },
+      { seq: 31, method: 'thread/realtime/closed', params: { threadId: 'dispose-starting-thread', reason: 'stopped' } },
+    ]));
+    await page.waitForFunction(() => window.__disposeSettled);
+  } finally { await page.close(); }
+});
+
+test('dispose rejects when authoritative realtime close never arrives', async () => {
+  const page = await mediaPage(() => {
+    window.__calls = [];
+    window.__track = { stopped: false, stop() { this.stopped = true; } };
+    navigator.mediaDevices = { getUserMedia: async () => ({ getTracks: () => [window.__track] }) };
+    window.AudioContext = class {
+      constructor() { this.sampleRate = 48000; this.destination = {}; }
+      createMediaStreamSource() { return { connect(node) { window.__processor = node; }, disconnect() {} }; }
+      createScriptProcessor() { return { connect() {}, disconnect() {}, onaudioprocess: null }; }
+      resume() { return Promise.resolve(); }
+      close() { return Promise.resolve(); }
+    };
+    const realSetTimeout = window.setTimeout.bind(window);
+    const realClearTimeout = window.clearTimeout.bind(window);
+    window.__closeTimers = [];
+    window.setTimeout = (callback, delay, ...args) => {
+      if (delay >= 1000) {
+        const timer = { callback, cleared: false };
+        window.__closeTimers.push(timer);
+        return timer;
+      }
+      return realSetTimeout(callback, delay, ...args);
+    };
+    window.clearTimeout = timer => {
+      if (timer && typeof timer === 'object' && 'cleared' in timer) timer.cleared = true;
+      else realClearTimeout(timer);
+    };
+  });
+  try {
+    await page.evaluate(catalog => {
+      window.__controller = window.CCCCodexMedia.attach({
+        root: document.querySelector('#workspace'), context: { threadId: 'dispose-timeout-thread', repoPath: '/workspace' }, catalog,
+        operation(method, params) {
+          window.__calls.push({ method, params });
+          if (method === 'thread/realtime/listVoices') return Promise.resolve({ voices: { defaultV1: 'alloy', defaultV2: 'marin', v1: ['alloy'], v2: ['marin'] } });
+          return Promise.resolve({});
+        }, error() {},
+      });
+    }, realtimeCatalog());
+    await page.click('[data-codex-realtime-start]');
+    await page.waitForFunction(() => window.__processor);
+    await page.evaluate(() => window.__controller.handleEvents([
+      { seq: 40, method: 'thread/realtime/started', params: { threadId: 'dispose-timeout-thread', version: 'v2', realtimeSessionId: null } },
+    ]));
+    const result = await page.evaluate(async () => {
+      const pending = window.__controller.dispose();
+      await Promise.resolve(); await Promise.resolve();
+      const timer = window.__closeTimers.find(entry => !entry.cleared);
+      if (timer) timer.callback();
+      try { await pending; return { error: '', stopped: window.__track.stopped, timers: window.__closeTimers.length }; }
+      catch (error) { return { error: error.message, stopped: window.__track.stopped, timers: window.__closeTimers.length }; }
+    });
+    assert.equal(result.stopped, true);
+    assert.equal(result.timers, 1);
+    assert.match(result.error, /realtime.*close|close.*realtime/i);
   } finally { await page.close(); }
 });
 
@@ -696,6 +860,11 @@ test('native close ordering fences a stopped realtime session from its replaceme
       active: window.__controller.isActive(),
     }));
     assert.deepEqual(stopping, { startDisabled: true, active: true });
+    await page.evaluate(() => window.__controller.handleEvents([
+      { seq: 15, method: 'thread/realtime/error', params: { threadId: 'close-fence-thread', message: 'old session error' } },
+    ]));
+    assert.equal(await page.evaluate(() => document.querySelector('[data-codex-realtime-start]').disabled), true);
+    assert.equal(await page.evaluate(() => window.__controller.isActive()), true);
     await page.click('[data-codex-realtime-start]');
     assert.equal(await page.evaluate(() => window.__calls.filter(call => call.method === 'thread/realtime/start').length), 1);
 
