@@ -33969,17 +33969,19 @@
         // spend actually accrued on its children — show the cluster total
         // (passed down by _renderSubagentCluster) so the badge matches what
         // the "by cost" sort actually ranks this row on.
-        const rawCost = opts.clusterCostUsd != null ? opts.clusterCostUsd : c.cost_usd;
-        const costKnown = rawCost != null;
-        const costLabel = _formatRowCostUsd(rawCost);
+        const rawApiCost = opts.clusterCostUsd != null ? opts.clusterCostUsd : c.cost_usd;
+        // The badge is "cost out of my subscription", not the API sticker
+        // price — a flat-rate plan makes the raw API number wildly overstate
+        // what a session actually costs. Convert via the same calibration
+        // the usage rail uses; null when calibration isn't ready yet for
+        // this engine, which falls back to the always-available context %.
+        const subCost = _rowSubscriptionCostUsd(rawApiCost, c.engine);
+        const costKnown = subCost != null;
+        const costLabel = _formatRowCostUsd(subCost);
         const pctLabel = ctxPct.pct + '%';
-        // Badge shows cost only while the list is sorted "by cost" AND the
-        // engine actually reports a cost (Codex et al. don't) — otherwise a
-        // real "no data" reads as a fake "$0 spent". Falls back to the
-        // always-available context % rather than a misleading $0.0.
         const showCost = _rowBadgeShowsCost() && costKnown;
         const badgeLabel = showCost ? costLabel : pctLabel;
-        const tip = (costKnown ? costLabel + ' estimated cost · ' : '') + ctxPct.source + ' ' + ctxPct.displayTokens.toLocaleString() + ' / ' + ctxPct.limit.toLocaleString() + ' tokens (' + ctxPct.pct + '%) - click to run /compact';
+        const tip = (costKnown ? costLabel + ' allocated subscription cost · ' : '') + ctxPct.source + ' ' + ctxPct.displayTokens.toLocaleString() + ' / ' + ctxPct.limit.toLocaleString() + ' tokens (' + ctxPct.pct + '%) - click to run /compact';
         const pctLevel = ctxPct.pct > 60 ? ' is-danger' : (ctxPct.pct > 30 ? ' is-warn' : '');
         // data-pct stays the context %, not the label — the /compact confirm
         // dialog and the warn/danger threshold classing both key off it.
@@ -34379,10 +34381,12 @@
       const _showGroupCost = _rowBadgeShowsCost();
       const ctxHtml = _showGroupCost
         ? (() => {
-            const groupCosts = cards.map(c => Number(c.cost_usd) || 0).filter(v => v > 0);
+            const groupCosts = cards
+              .map(c => _rowSubscriptionCostUsd(c.cost_usd, c.engine))
+              .filter(v => v != null && v > 0);
             const ctxRange = _repeatGroupRange(groupCosts, _formatRowCostUsd, false);
             return ctxRange
-              ? '<span class="conv-repeat-group-ctx" title="' + escapeAttr('Estimated cost across '
+              ? '<span class="conv-repeat-group-ctx" title="' + escapeAttr('Estimated subscription cost across '
                   + groupCosts.length + ' of ' + cards.length + ' folded session' + (cards.length === 1 ? '' : 's'))
                 + '">' + escapeHtml(ctxRange) + '</span>'
               : '';
@@ -36624,8 +36628,11 @@
     const _allTabClusterMtime = (cluster) => (cluster.rows || []).reduce((m, item) => Math.max(
       m, item.card.modified || item.card.last_interacted || 0
     ), 0);
+    // Sort key matches what the badge shows: subscription-allocated $, not
+    // raw API list price, so a $2 subscription row never outranks a $0.50
+    // one just because its API-equivalent sticker price was bigger.
     const _allTabClusterCost = (cluster) => (cluster.rows || []).reduce((sum, item) => (
-      sum + (Number(item.card.cost_usd) || 0)
+      sum + (_rowSubscriptionCostUsd(item.card.cost_usd, item.card.engine) || 0)
     ), 0);
     const _renderAllTabClusters = (clusters, suppressFolderChip, hideTrash) => {
       const chunks = [];
@@ -36771,6 +36778,12 @@
       // the "by cost" mode, which reuses the same pinned-first structure but
       // orders by estimated $ spend instead of recency.
       const _arcCostMode = _arcGrouping === 'cost';
+      // Subscription-cost badges need calibration data that a pane's usage
+      // rail may never have fetched (e.g. no pane open at all) — kick it off
+      // here too so the list doesn't sit on the % fallback indefinitely.
+      if (_arcCostMode && typeof _refreshQuotaCostCalibration === 'function') {
+        _refreshQuotaCostCalibration();
+      }
       const _archivedItems = [];
       for (const cluster of _allTabClusters) {
         _archivedItems.push({
@@ -51697,6 +51710,22 @@
   function _monthlyClaudePlanUsd() { return _monthlyPlanUsd('claude'); }
   function _monthlyCodexPlanUsd() { return _monthlyPlanUsd('codex'); }
 
+  // Row-level analogue of railQuotaCostPresentation: converts a raw
+  // API-list-price $ estimate into "cost out of my subscription" for the
+  // conv-list cost badges, using the same calibration data as the composer's
+  // usage rail. Returns null when the API cost, engine, or calibration isn't
+  // available -- callers fall back to the context-% badge rather than show a
+  // raw API number the user never asked to see (they pay a flat subscription,
+  // not per-token).
+  function _rowSubscriptionCostUsd(apiCostUsd, engine) {
+    const eng = railQuotaEngine({ engine });
+    if (!eng || apiCostUsd == null) return null;
+    const calibration = _quotaCostCalibration ? _quotaCostCalibration[eng] : null;
+    const monthlyPlanUsd = eng === 'claude' ? _monthlyClaudePlanUsd() : _monthlyCodexPlanUsd();
+    const presentation = railQuotaCostPresentation({ engine: eng }, apiCostUsd, calibration, monthlyPlanUsd);
+    return presentation.state === 'ready' ? presentation.allocatedCost : null;
+  }
+
   function _refreshWeeklyClaudeUsage() {
     if (document.hidden) return Promise.resolve(null);
     if (_weeklyClaudeUsageRequest) return _weeklyClaudeUsageRequest;
@@ -51907,17 +51936,29 @@
         _quotaCostCalibration = data && data.quota_cost_calibration
           ? data.quota_cost_calibration : {};
         _quotaCostCalibrationLoadedAt = Date.now();
-        if (!document.hidden) _renderRailTokens();
+        if (!document.hidden) { _renderRailTokens(); _refreshArchiveListIfCostMode(); }
         return _quotaCostCalibration;
       }).catch(() => {
         _quotaCostCalibration = {};
         _quotaCostCalibrationLoadedAt = Date.now();
-        if (!document.hidden) _renderRailTokens();
+        if (!document.hidden) { _renderRailTokens(); _refreshArchiveListIfCostMode(); }
         return _quotaCostCalibration;
       }).finally(() => {
         _quotaCostCalibrationRequest = null;
       });
     return _quotaCostCalibrationRequest;
+  }
+
+  // Conv-list cost badges depend on calibration data that loads
+  // asynchronously and independently of any open pane (_refreshRailTokens
+  // only fires per-pane). Without this, a row sorted "by cost" shows the
+  // context-% fallback until some UNRELATED event happens to re-render the
+  // list after calibration lands.
+  function _refreshArchiveListIfCostMode() {
+    let grouping = '';
+    try { grouping = localStorage.getItem('ccc-archived-grouping') || ''; } catch (_) { /* ignore */ }
+    if (grouping !== 'cost') return;
+    try { renderArchiveList(document.getElementById('convSearch')?.value || ''); } catch (_) { /* ignore */ }
   }
 
   function railQuotaCostHtml(presentation, calibration) {
@@ -52562,13 +52603,14 @@
     const _sidebarSid = _usageSessionIdByPane[paneId];
     if (_sidebarSid && displayTokens) {
       const sidebarPct = (hasLiveContext && livePct) ? livePct : calcPct;
-      const _showCost = _rowBadgeShowsCost();
-      const sidebarTip = (_showCost ? _formatRowCostUsd(cost) + ' estimated cost · ' : '')
+      const sidebarSubCost = _rowSubscriptionCostUsd(cost, u.engine);
+      const _showCost = _rowBadgeShowsCost() && sidebarSubCost != null;
+      const sidebarTip = (_showCost ? _formatRowCostUsd(sidebarSubCost) + ' allocated subscription cost · ' : '')
         + sourceLabel + ' ' + displayTokens.toLocaleString() + ' / ' + limit.toLocaleString() + ' tokens (' + sidebarPct + '%) - click to run /compact';
       document.querySelectorAll('.conv-item[data-session-id="' + CSS.escape(_sidebarSid) + '"] [data-role="conv-pct-compact"]').forEach(el => {
         if (el.dataset.pct !== String(sidebarPct)) el.dataset.pct = String(sidebarPct);
         if (el.title !== sidebarTip) el.title = sidebarTip;
-        const text = _showCost ? _formatRowCostUsd(cost) : sidebarPct + '%';
+        const text = _showCost ? _formatRowCostUsd(sidebarSubCost) : sidebarPct + '%';
         if (el.textContent !== text) el.textContent = text;
         el.classList.toggle('is-danger', sidebarPct > 60);
         el.classList.toggle('is-warn', sidebarPct > 30 && sidebarPct <= 60);
