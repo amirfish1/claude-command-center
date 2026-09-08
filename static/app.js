@@ -51470,11 +51470,12 @@
   // turn" number on that turn. Scaled to the visible max; caption names it so
   // the y-axis is readable without an axis.
   const RAIL_TURN_GRAPH_MAX = 30;
-  function _railTurnGraphHtml(series) {
+  function _railTurnGraphHtml(series, model) {
     if (!Array.isArray(series) || !series.length) return '';
     const rows = series.slice(-RAIL_TURN_GRAPH_MAX).map(t => ({
+      model: t.model || model,
       ts: t.ts || '',
-      v: _cacheAdjustedTurnTokens(t.tokens_in, t.tokens_out, t.tokens_cached),
+      v: _cacheAdjustedTurnTokens(t.tokens_in, t.tokens_out, t.tokens_cached, t.model || model),
       tin: Number(t.tokens_in) || 0,
       tcached: Number(t.tokens_cached) || 0,
       tout: Number(t.tokens_out) || 0,
@@ -51491,7 +51492,7 @@
         if (!isNaN(d)) when = ' · ' + d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
       }
       const title = r.v.toLocaleString() + ' cache-adjusted tokens' + when
-        + '\n' + _cacheAdjustedTurnTitle(r.tin, r.tout, r.tcached);
+        + '\n' + _cacheAdjustedTurnTitle(r.tin, r.tout, r.tcached, r.model);
       bars += '<span class="rail-turn-bar' + (i === rows.length - 1 ? ' is-latest' : '')
         + '" style="height:' + pct + '%" title="' + escapeAttr(title) + '"></span>';
     });
@@ -51569,10 +51570,11 @@
       + '<div class="rail-tokens-label">' + headlineLabel
       + (presentation ? ' &middot; ' + costText.label : '')
       + '</div>'
-      + _railTurnGraphHtml(u && u.turn_series)
-      + '<div class="rail-tokens-cache">in ' + _formatTokens(inFresh)
-      + ' &middot; in cached ' + _formatTokens(inCached)
-      + ' &middot; out ' + _formatTokens(outTok)
+      + _railTurnGraphHtml(u && u.turn_series, u && u.model)
+      + '<div class="rail-tokens-cache">Full session · fresh in ' + inFresh.toLocaleString()
+      + ' &middot; cache read ' + (Number(u.total_cache_read_tokens) || 0).toLocaleString()
+      + ' &middot; cache write ' + (Number(u.total_cache_creation_tokens) || 0).toLocaleString()
+      + ' &middot; out ' + outTok.toLocaleString()
       + '</div>';
     el.title = (hasBaseline
         ? (sessionDiffersBaseline
@@ -51687,22 +51689,20 @@
     return 'CACHE MISS: ' + _formatTokensAntigravity(missed) + ' input tokens uncached';
   }
 
-  // Cache-adjusted tokens for a single turn (CCC-930). Mirrors the same
-  // discount the aggregate "cache-adjusted tokens this conversation" rail
-  // headline applies server-side (server.py _throughput_usage_weights):
-  // cache-read tokens are worth ~10% of a fresh input token across every
-  // priced Claude model (Sonnet 0.30/3.00, Opus 1.50/15.00, Haiku 0.08/0.80
-  // — all the same 0.1 ratio), so it's a fixed constant rather than a
-  // per-model lookup. Output tokens are NOT reweighted here, same as the
-  // server-side total (only the input side has a cache-vs-fresh price
-  // split; effective_total = effective_input + output).
+  // Cache-read weights follow the model's cache-read / fresh-input price.
+  // Fable 5.1 uses $0.25 / $10; older Claude models use a 10% ratio.
   const CACHE_READ_TOKEN_WEIGHT = 0.10;
+  function _cacheReadTokenWeight(model) {
+    return /^(?:claude-)?fable-5[-.]1(?:$|\[|-[0-9]{8}$)/i.test(String(model || ''))
+      ? 0.025 : CACHE_READ_TOKEN_WEIGHT;
+  }
 
-  function _cacheAdjustedTurnTokens(tIn, tOut, tCached) {
+  function _cacheAdjustedTurnTokens(tIn, tOut, tCached, model) {
+    const weight = _cacheReadTokenWeight(model);
     const total = Number(tIn) || 0;
     const cached = Math.min(Number(tCached) || 0, total);
     const fresh = total - cached;
-    return Math.round(fresh + cached * CACHE_READ_TOKEN_WEIGHT + (Number(tOut) || 0));
+    return Math.round(fresh + cached * weight + (Number(tOut) || 0));
   }
 
   // CCC-936: the formula-only tooltip ("discounted to 10%...") told people
@@ -51710,15 +51710,16 @@
   // "184,350" next to "683.3k in | 565.2k cached | 9.7k out" had to do the
   // arithmetic themselves to believe it. Plug the turn's actual numbers into
   // the explanation so the tooltip proves the total instead of asserting it.
-  function _cacheAdjustedTurnTitle(tIn, tOut, tCached) {
+  function _cacheAdjustedTurnTitle(tIn, tOut, tCached, model) {
+    const weight = _cacheReadTokenWeight(model);
     const total = Number(tIn) || 0;
     const cached = Math.min(Number(tCached) || 0, total);
     const fresh = total - cached;
     const out = Number(tOut) || 0;
-    const cachedWeighted = Math.round(cached * CACHE_READ_TOKEN_WEIGHT);
+    const cachedWeighted = Math.round(cached * weight);
     const grand = fresh + cachedWeighted + out;
-    return 'Cache-read input tokens are discounted to ' + (CACHE_READ_TOKEN_WEIGHT * 100) + '% of a fresh input token before summing with output.\n'
-      + fresh.toLocaleString() + ' fresh in + ' + cachedWeighted.toLocaleString() + ' (' + cached.toLocaleString() + ' cached × ' + (CACHE_READ_TOKEN_WEIGHT * 100) + '%) + ' + out.toLocaleString() + ' out = ' + grand.toLocaleString();
+    return 'Cache-read input tokens are discounted to ' + (weight * 100) + '% of a fresh input token before summing with output.\n'
+      + fresh.toLocaleString() + ' fresh in + ' + cachedWeighted.toLocaleString() + ' (' + cached.toLocaleString() + ' cached × ' + (weight * 100) + '%) + ' + out.toLocaleString() + ' out = ' + grand.toLocaleString();
   }
 
   // A running, cross-turn log of cache misses (CCC-750): a chip on screen
@@ -57629,9 +57630,9 @@
                 metaEl.innerHTML += '<span class="event-token-chips is-merged" title="'
                   + escapeAttr(_kimiChipTitle) + '">' + escapeHtml(_kimiChipText) + '</span>';
               }
-              const _kimiCacheAdjusted = _cacheAdjustedTurnTokens(ev.tokens_in, ev.tokens_out, _kimiChipCached);
+              const _kimiCacheAdjusted = _cacheAdjustedTurnTokens(ev.tokens_in, ev.tokens_out, _kimiChipCached, ev.model);
               metaEl.innerHTML += '<span class="event-token-chips cache-adjusted is-merged" title="'
-                + escapeAttr(_cacheAdjustedTurnTitle(ev.tokens_in, ev.tokens_out, _kimiChipCached))
+                + escapeAttr(_cacheAdjustedTurnTitle(ev.tokens_in, ev.tokens_out, _kimiChipCached, ev.model))
                 + '">Cached-adjusted tokens this turn: ' + _kimiCacheAdjusted.toLocaleString() + '</span>';
             }
             kimiBlockEls.push(metaEl);
@@ -57854,9 +57855,9 @@
             ) + '">' + escapeHtml(cacheMiss) + '</div>');
           }
           if (Number(ev.tokens_in) || Number(ev.tokens_out)) {
-            const cacheAdjustedTurn = _cacheAdjustedTurnTokens(ev.tokens_in, ev.tokens_out, chipCached);
+            const cacheAdjustedTurn = _cacheAdjustedTurnTokens(ev.tokens_in, ev.tokens_out, chipCached, ev.model);
             blockParts.push('<div class="event-token-chips cache-adjusted" title="'
-              + escapeAttr(_cacheAdjustedTurnTitle(ev.tokens_in, ev.tokens_out, chipCached))
+              + escapeAttr(_cacheAdjustedTurnTitle(ev.tokens_in, ev.tokens_out, chipCached, ev.model))
               + '">Cached-adjusted tokens this turn: ' + cacheAdjustedTurn.toLocaleString() + '</div>');
           }
           _recordCacheMissLog(renderedConversationId, ev, ev.tokens_in, chipCached);
