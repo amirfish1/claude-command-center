@@ -33981,7 +33981,7 @@
         const pctLabel = ctxPct.pct + '%';
         const showCost = _rowBadgeShowsCost() && costKnown;
         const badgeLabel = showCost ? costLabel : pctLabel;
-        const tip = (costKnown ? costLabel + ' allocated subscription cost · ' : '') + ctxPct.source + ' ' + ctxPct.displayTokens.toLocaleString() + ' / ' + ctxPct.limit.toLocaleString() + ' tokens (' + ctxPct.pct + '%) - click to run /compact';
+        const tip = (costKnown ? costLabel + ' estimated subscription cost · ' : '') + ctxPct.source + ' ' + ctxPct.displayTokens.toLocaleString() + ' / ' + ctxPct.limit.toLocaleString() + ' tokens (' + ctxPct.pct + '%) - click to run /compact';
         const pctLevel = ctxPct.pct > 60 ? ' is-danger' : (ctxPct.pct > 30 ? ' is-warn' : '');
         // data-pct stays the context %, not the label — the /compact confirm
         // dialog and the warn/danger threshold classing both key off it.
@@ -51713,17 +51713,33 @@
   // Row-level analogue of railQuotaCostPresentation: converts a raw
   // API-list-price $ estimate into "cost out of my subscription" for the
   // conv-list cost badges, using the same calibration data as the composer's
-  // usage rail. Returns null when the API cost, engine, or calibration isn't
-  // available -- callers fall back to the context-% badge rather than show a
-  // raw API number the user never asked to see (they pay a flat subscription,
-  // not per-token).
+  // usage rail. Returns null when the API cost or engine isn't available --
+  // callers fall back to the context-% badge rather than show a raw API
+  // number the user never asked to see (they pay a flat subscription, not
+  // per-token).
   function _rowSubscriptionCostUsd(apiCostUsd, engine) {
     const eng = railQuotaEngine({ engine });
     if (!eng || apiCostUsd == null) return null;
     const calibration = _quotaCostCalibration ? _quotaCostCalibration[eng] : null;
     const monthlyPlanUsd = eng === 'claude' ? _monthlyClaudePlanUsd() : _monthlyCodexPlanUsd();
     const presentation = railQuotaCostPresentation({ engine: eng }, apiCostUsd, calibration, monthlyPlanUsd);
-    return presentation.state === 'ready' ? presentation.allocatedCost : null;
+    if (presentation.state === 'ready') return presentation.allocatedCost;
+    // The strict 2-clean-day gate (calibrate_days) hasn't cleared yet for
+    // this engine, but the same daily-observation pass already computed a
+    // same-formula rate from whatever partial data it has (e.g. Codex with
+    // only 1 matched day instead of 2). A provisional number from real
+    // observed data beats withholding one entirely while the second day
+    // accumulates -- same math the "ready" state uses, just below its
+    // confidence bar.
+    const sampledCost = Number(calibration && calibration.sampled_cost_usd);
+    const sampledPct = Number(calibration && calibration.sampled_pct);
+    const plan = Number(monthlyPlanUsd);
+    if (sampledCost > 0 && sampledPct > 0 && Number.isFinite(plan) && plan > 0) {
+      const rate = sampledPct / sampledCost;
+      const contributionPct = Number(apiCostUsd) * rate;
+      return contributionPct / 100 * plan / 30 * 7;
+    }
+    return null;
   }
 
   function _refreshWeeklyClaudeUsage() {
@@ -52605,7 +52621,7 @@
       const sidebarPct = (hasLiveContext && livePct) ? livePct : calcPct;
       const sidebarSubCost = _rowSubscriptionCostUsd(cost, u.engine);
       const _showCost = _rowBadgeShowsCost() && sidebarSubCost != null;
-      const sidebarTip = (_showCost ? _formatRowCostUsd(sidebarSubCost) + ' allocated subscription cost · ' : '')
+      const sidebarTip = (_showCost ? _formatRowCostUsd(sidebarSubCost) + ' estimated subscription cost · ' : '')
         + sourceLabel + ' ' + displayTokens.toLocaleString() + ' / ' + limit.toLocaleString() + ' tokens (' + sidebarPct + '%) - click to run /compact';
       document.querySelectorAll('.conv-item[data-session-id="' + CSS.escape(_sidebarSid) + '"] [data-role="conv-pct-compact"]').forEach(el => {
         if (el.dataset.pct !== String(sidebarPct)) el.dataset.pct = String(sidebarPct);
