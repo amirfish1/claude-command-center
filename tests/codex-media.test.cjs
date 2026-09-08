@@ -77,8 +77,9 @@ test('command terminal is interactive while exec is pending and isolates decoded
     }, terminalCatalog());
 
     await page.waitForFunction(() => document.querySelector('[data-codex-terminal-running]').hidden === false);
-    const started = await page.evaluate(() => ({ call: window.__calls[0], running: document.querySelector('[data-codex-terminal-running]').hidden }));
+    const started = await page.evaluate(() => ({ call: window.__calls[0], running: document.querySelector('[data-codex-terminal-running]').hidden, active: window.__controller.isActive() }));
     assert.equal(started.running, false);
+    assert.equal(started.active, true);
     assert.equal(started.call.method, 'command/exec');
     assert.deepEqual(started.call.params.command, ['printf', 'hello']);
     assert.equal(started.call.params.cwd, '/workspace');
@@ -125,6 +126,7 @@ test('command terminal is interactive while exec is pending and isolates decoded
 
     await page.evaluate(() => window.__settleExec({ exitCode: 0, stdout: '', stderr: '' }));
     await page.waitForFunction(() => /Exited 0/.test(document.querySelector('[data-codex-terminal-status]').textContent));
+    assert.equal(await page.evaluate(() => window.__controller.isActive()), false);
   } finally { await page.close(); }
 });
 
@@ -402,15 +404,22 @@ test('a rejected upload from a stopped session cannot tear down its replacement'
     }, realtimeCatalog());
     await page.click('[data-codex-realtime-start]');
     await page.waitForFunction(() => window.__processors.length === 1);
+    await page.evaluate(() => window.__controller.handleEvents([
+      { seq: 1, method: 'thread/realtime/started', params: { threadId: 'restart-thread', version: 'v2', realtimeSessionId: null } },
+    ]));
     await page.evaluate(() => {
       const samples = new Float32Array(480).fill(0.1);
       window.__processors[0].onaudioprocess({ inputBuffer: { numberOfChannels: 1, getChannelData: () => samples } });
     });
     await page.waitForFunction(() => window.__calls.filter(call => call.method === 'thread/realtime/appendAudio').length === 1);
     await page.click('[data-codex-realtime-stop]');
+    await page.evaluate(() => window.__controller.handleEvents([
+      { seq: 2, method: 'thread/realtime/closed', params: { threadId: 'restart-thread', reason: 'stopped' } },
+    ]));
     await page.click('[data-codex-realtime-start]');
     await page.waitForFunction(() => window.__processors.length === 2);
     await page.evaluate(() => {
+      window.__controller.handleEvents([{ seq: 3, method: 'thread/realtime/started', params: { threadId: 'restart-thread', version: 'v2', realtimeSessionId: null } }]);
       const samples = new Float32Array(480).fill(0.2);
       window.__processors[1].onaudioprocess({ inputBuffer: { numberOfChannels: 1, getChannelData: () => samples } });
       window.__rejectFirstUpload();
@@ -569,7 +578,7 @@ test('an uncertain exec timeout keeps terminal recovery controls active', async 
   });
   try {
     await page.evaluate(catalog => {
-      window.CCCCodexMedia.attach({
+      window.__controller = window.CCCCodexMedia.attach({
         root: document.querySelector('#workspace'), context: { threadId: 'uncertain-thread', repoPath: '/workspace' }, catalog,
         operation(method, params) {
           window.__calls.push({ method, params });
@@ -592,10 +601,12 @@ test('an uncertain exec timeout keeps terminal recovery controls active', async 
     });
     const result = await page.evaluate(() => ({
       controlsHidden: document.querySelector('[data-codex-terminal-running]').hidden,
+      active: window.__controller.isActive(),
       methods: window.__calls.map(call => call.method),
       status: document.querySelector('[data-codex-terminal-status]').textContent,
     }));
     assert.equal(result.controlsHidden, false);
+    assert.equal(result.active, true);
     assert.match(result.status, /could not confirm/i);
     assert.ok(result.methods.includes('command/exec/write'));
     assert.ok(result.methods.includes('command/exec/terminate'));
@@ -639,5 +650,105 @@ test('dispose releases active local media before dispatching native cleanup', as
       };
     });
     assert.deepEqual(result, { stopped: true, closed: true, stoppedAtNativeDispatch: true, mounted: false });
+  } finally { await page.close(); }
+});
+
+test('native close ordering fences a stopped realtime session from its replacement', async () => {
+  const page = await mediaPage(() => {
+    window.__calls = [];
+    window.__tracks = [];
+    window.__processors = [];
+    navigator.mediaDevices = { getUserMedia: async () => {
+      const track = { stopped: false, stop() { this.stopped = true; } };
+      window.__tracks.push(track);
+      return { getTracks: () => [track] };
+    } };
+    window.AudioContext = class {
+      constructor() { this.sampleRate = 48000; this.destination = {}; }
+      createMediaStreamSource() { return { connect(node) { window.__processors.push(node); }, disconnect() {} }; }
+      createScriptProcessor() { return { connect() {}, disconnect() {}, onaudioprocess: null }; }
+      resume() { return Promise.resolve(); }
+      close() { return Promise.resolve(); }
+    };
+  });
+  try {
+    await page.evaluate(catalog => {
+      window.__controller = window.CCCCodexMedia.attach({
+        root: document.querySelector('#workspace'), context: { threadId: 'close-fence-thread', repoPath: '/workspace' }, catalog,
+        operation(method, params) {
+          window.__calls.push({ method, params });
+          if (method === 'thread/realtime/listVoices') return Promise.resolve({ voices: { defaultV1: 'alloy', defaultV2: 'marin', v1: ['alloy'], v2: ['marin'] } });
+          return Promise.resolve({});
+        }, error() {},
+      });
+    }, realtimeCatalog());
+    assert.equal(await page.evaluate(() => typeof window.__controller.isActive), 'function');
+    assert.equal(await page.evaluate(() => window.__controller.isActive()), false);
+    await page.click('[data-codex-realtime-start]');
+    await page.waitForFunction(() => window.__processors.length === 1);
+    await page.evaluate(() => window.__controller.handleEvents([
+      { seq: 10, method: 'thread/realtime/started', params: { threadId: 'close-fence-thread', version: 'v2', realtimeSessionId: null } },
+    ]));
+    assert.equal(await page.evaluate(() => window.__controller.isActive()), true);
+    await page.click('[data-codex-realtime-stop]');
+    const stopping = await page.evaluate(() => ({
+      startDisabled: document.querySelector('[data-codex-realtime-start]').disabled,
+      active: window.__controller.isActive(),
+    }));
+    assert.deepEqual(stopping, { startDisabled: true, active: true });
+    await page.click('[data-codex-realtime-start]');
+    assert.equal(await page.evaluate(() => window.__calls.filter(call => call.method === 'thread/realtime/start').length), 1);
+
+    await page.evaluate(() => window.__controller.handleEvents([
+      { seq: 20, method: 'thread/realtime/closed', params: { threadId: 'close-fence-thread', reason: 'old session stopped' } },
+    ]));
+    assert.equal(await page.evaluate(() => window.__controller.isActive()), false);
+    await page.click('[data-codex-realtime-start]');
+    await page.waitForFunction(() => window.__processors.length === 2);
+    await page.evaluate(() => window.__controller.handleEvents([
+      { seq: 30, method: 'thread/realtime/started', params: { threadId: 'close-fence-thread', version: 'v2', realtimeSessionId: null } },
+    ]));
+    const replacement = await page.evaluate(() => ({
+      stopped: window.__tracks[1].stopped,
+      active: window.__controller.isActive(),
+      status: document.querySelector('[data-codex-realtime-status]').textContent,
+    }));
+    assert.equal(replacement.stopped, false);
+    assert.equal(replacement.active, true);
+    assert.doesNotMatch(replacement.status, /old session stopped/);
+  } finally { await page.close(); }
+});
+
+test('audio-output-only realtime creates playback without microphone capture', async () => {
+  const page = await mediaPage(() => {
+    window.__calls = [];
+    window.__gumCalls = 0;
+    window.__contexts = 0;
+    window.__played = 0;
+    navigator.mediaDevices = { getUserMedia: async () => { window.__gumCalls++; return { getTracks: () => [] }; } };
+    window.AudioContext = class {
+      constructor() { this.sampleRate = 48000; this.currentTime = 1; this.destination = {}; window.__contexts++; }
+      createBuffer() { return { copyToChannel() {} }; }
+      createBufferSource() { return { connect() {}, start() { window.__played++; }, stop() {} }; }
+      resume() { return Promise.resolve(); }
+      close() { return Promise.resolve(); }
+    };
+  });
+  try {
+    await page.evaluate(() => {
+      const catalog = { methods: ['thread/realtime/start', 'thread/realtime/stop'].map(method => ({ method, available: true })) };
+      window.__controller = window.CCCCodexMedia.attach({
+        root: document.querySelector('#workspace'), context: { threadId: 'output-only-thread', repoPath: '/workspace' }, catalog,
+        operation(method, params) { window.__calls.push({ method, params }); return Promise.resolve({}); }, error() {},
+      });
+      document.querySelector('[data-codex-realtime-start]').click();
+    });
+    await page.waitForFunction(() => window.__calls.some(call => call.method === 'thread/realtime/start'));
+    await page.evaluate(() => window.__controller.handleEvents([
+      { seq: 1, method: 'thread/realtime/started', params: { threadId: 'output-only-thread', version: 'v2', realtimeSessionId: null } },
+      { seq: 2, method: 'thread/realtime/outputAudio/delta', params: { threadId: 'output-only-thread', audio: { data: btoa('\u0000\u0000'), numChannels: 1, sampleRate: 24000, samplesPerChannel: 1 } } },
+    ]));
+    const result = await page.evaluate(() => ({ gumCalls: window.__gumCalls, contexts: window.__contexts, played: window.__played }));
+    assert.deepEqual(result, { gumCalls: 0, contexts: 1, played: 1 });
   } finally { await page.close(); }
 });

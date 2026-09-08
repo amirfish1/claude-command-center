@@ -161,7 +161,9 @@
       terminal: null,
       realtime: { active: false, token: 0, nativeToken: null, queue: [], uploadingToken: null,
         dropped: 0, playbackDropped: 0, stream: null, audioContext: null, source: null,
-        processor: null, playback: new Set(), playbackAt: 0, startAttempt: null },
+        processor: null, playback: new Set(), playbackAt: 0, startAttempt: null,
+        phase: 'idle', startedSeq: null, closeFenceSeq: null, stoppingToken: null,
+        stoppingNeedsStarted: false, pendingStopStatus: null },
     };
 
     const root = element('section', 'codex-media');
@@ -392,9 +394,10 @@
     }
 
     function setRealtimeActive(active) {
-      state.realtime.active = active;
-      if (realtimeStart) realtimeStart.disabled = active || !realtimeCapabilities.stop;
-      if (realtimeStop) realtimeStop.disabled = !active || !realtimeCapabilities.stop;
+      const media = state.realtime;
+      media.active = active;
+      if (realtimeStart) realtimeStart.disabled = active || media.phase === 'stopping' || !realtimeCapabilities.stop;
+      if (realtimeStop) realtimeStop.disabled = !active || media.phase === 'stopping' || !realtimeCapabilities.stop;
     }
 
     function stopNativeRealtime(token) {
@@ -408,7 +411,13 @@
       const media = state.realtime;
       token = token === undefined ? media.token : token;
       if (token !== media.token) return Promise.resolve();
+      const expectsClose = media.nativeToken === token;
+      const wasStarting = media.phase === 'starting';
       media.token++;
+      media.phase = expectsClose ? 'stopping' : 'idle';
+      media.stoppingToken = expectsClose ? token : null;
+      media.stoppingNeedsStarted = expectsClose && wasStarting;
+      media.pendingStopStatus = message;
       setRealtimeActive(false);
       releaseRealtimeMedia();
       report(message, realtimeStatus);
@@ -455,19 +464,29 @@
       pumpAudio(token);
     }
 
+    async function ensurePlaybackContext(token) {
+      const media = state.realtime;
+      if (media.audioContext) return media.audioContext;
+      const AudioContextClass = window.AudioContext || window.webkitAudioContext;
+      if (!AudioContextClass) throw new Error('Web Audio is unavailable in this browser.');
+      const audioContext = new AudioContextClass();
+      media.audioContext = audioContext;
+      if (typeof audioContext.resume === 'function') await audioContext.resume();
+      if (state.disposed || token !== media.token || !media.active) {
+        try { audioContext.close(); } catch (_) {}
+        if (media.audioContext === audioContext) media.audioContext = null;
+        return null;
+      }
+      return audioContext;
+    }
+
     async function acquireMicrophone(token) {
       if (!navigator.mediaDevices || typeof navigator.mediaDevices.getUserMedia !== 'function') throw new Error('Microphone capture is unavailable in this browser.');
       const stream = await navigator.mediaDevices.getUserMedia({ audio: { channelCount: 1, echoCancellation: true, noiseSuppression: true }, video: false });
       if (state.disposed || token !== state.realtime.token || !state.realtime.active) { stopStream(stream); return; }
       state.realtime.stream = stream;
-      const AudioContextClass = window.AudioContext || window.webkitAudioContext;
-      if (!AudioContextClass) { stopStream(stream); throw new Error('Web Audio is unavailable in this browser.'); }
-      const audioContext = new AudioContextClass();
-      state.realtime.audioContext = audioContext;
-      if (typeof audioContext.resume === 'function') await audioContext.resume();
-      if (state.disposed || token !== state.realtime.token || !state.realtime.active) {
-        stopStream(stream); try { audioContext.close(); } catch (_) {} return;
-      }
+      const audioContext = await ensurePlaybackContext(token);
+      if (!audioContext) return;
       const source = audioContext.createMediaStreamSource(stream);
       state.realtime.source = source;
       const processor = audioContext.createScriptProcessor(4096, 1, 1);
@@ -478,8 +497,13 @@
     }
 
     async function startRealtime() {
-      if (state.disposed || state.realtime.active || !realtimeCapabilities.stop) return;
+      if (state.disposed || state.realtime.active || state.realtime.phase === 'stopping' || !realtimeCapabilities.stop) return;
       const token = ++state.realtime.token;
+      state.realtime.phase = 'starting';
+      state.realtime.startedSeq = null;
+      state.realtime.stoppingToken = null;
+      state.realtime.stoppingNeedsStarted = false;
+      state.realtime.pendingStopStatus = null;
       state.realtime.dropped = 0;
       state.realtime.playbackDropped = 0;
       setRealtimeActive(true);
@@ -488,6 +512,11 @@
       if (voiceSelect && voiceSelect.value) params.voice = voiceSelect.value;
       const attempt = { token, settled: false, promise: null };
       try {
+        if (!realtimeCapabilities.audio) {
+          realtimeStatus.textContent = 'Starting audio output…';
+          await ensurePlaybackContext(token);
+          if (state.disposed || token !== state.realtime.token || !state.realtime.active) return;
+        }
         attempt.promise = rawOperation('thread/realtime/start', params);
         state.realtime.startAttempt = attempt;
         await attempt.promise;
@@ -505,16 +534,28 @@
       } catch (error) {
         attempt.settled = true;
         if (!state.disposed && token === state.realtime.token) failRealtime(conciseError(error), token);
+        else if (!state.disposed && state.realtime.phase === 'stopping' && state.realtime.stoppingToken === token && state.realtime.nativeToken !== token) {
+          state.realtime.phase = 'idle';
+          state.realtime.stoppingToken = null;
+          state.realtime.stoppingNeedsStarted = false;
+          setRealtimeActive(false);
+          realtimeStatus.textContent = 'Voice stopped';
+        }
       }
     }
 
     function stopRealtime(sendNative) {
       const token = state.realtime.token;
       const wasActive = state.realtime.active;
+      const wasStarting = state.realtime.phase === 'starting';
       state.realtime.token++;
+      state.realtime.phase = wasActive ? 'stopping' : 'idle';
+      state.realtime.stoppingToken = wasActive ? token : null;
+      state.realtime.stoppingNeedsStarted = wasActive && wasStarting;
+      state.realtime.pendingStopStatus = null;
       setRealtimeActive(false);
       releaseRealtimeMedia();
-      if (realtimeStatus && !state.disposed) realtimeStatus.textContent = 'Voice stopped';
+      if (realtimeStatus && !state.disposed) realtimeStatus.textContent = wasActive ? 'Stopping voice… waiting for native close' : 'Voice stopped';
       if (sendNative && wasActive) stopNativeRealtime(token);
     }
 
@@ -630,6 +671,8 @@
         if (!event || typeof event !== 'object') return;
         const params = event.params && typeof event.params === 'object' ? event.params : event;
         const method = String(event.method || '');
+        const seq = Number(event.seq);
+        const hasSeq = Number.isFinite(seq);
         const session = state.terminal;
         if (method === 'command/exec/outputDelta' && session && session.backend === 'command' && params.processId === session.id) {
           const decoder = params.stream === 'stderr' ? session.stderrDecoder : session.stdoutDecoder;
@@ -641,14 +684,36 @@
           finishTerminal(params.exitCode, params.stdout, params.stderr);
         }
         if (!realtimePanel || params.threadId !== context.threadId) return;
-        if (method === 'thread/realtime/outputAudio/delta') playPcm(params.audio);
+        const media = state.realtime;
+        if (method === 'thread/realtime/started') {
+          if (media.phase === 'starting') {
+            media.phase = 'active';
+            media.startedSeq = hasSeq ? seq : null;
+          } else if (media.phase === 'stopping' && media.stoppingNeedsStarted) {
+            media.startedSeq = hasSeq ? seq : null;
+            media.stoppingNeedsStarted = false;
+          }
+        } else if (method === 'thread/realtime/outputAudio/delta') playPcm(params.audio);
         else if (method === 'thread/realtime/item/transcript/delta' || method === 'thread/realtime/transcript/delta') appendTranscript(params.delta);
         else if (method === 'thread/realtime/transcript/done') appendTranscript((transcript.textContent ? '\n' : '') + (params.role ? params.role + ': ' : '') + params.text + '\n');
         else if (method === 'thread/realtime/error') failRealtime(params.message || 'Realtime session failed.', state.realtime.token);
         else if (method === 'thread/realtime/closed') {
-          state.realtime.nativeToken = null;
-          state.realtime.token++; setRealtimeActive(false); releaseRealtimeMedia();
-          realtimeStatus.textContent = params.reason ? 'Voice closed: ' + params.reason : 'Voice closed';
+          if (hasSeq && media.closeFenceSeq !== null && seq <= media.closeFenceSeq) return;
+          if (media.phase === 'starting' || media.phase === 'stopping' && media.stoppingNeedsStarted) return;
+          if (media.phase !== 'stopping' && !media.active) {
+            if (hasSeq) media.closeFenceSeq = Math.max(media.closeFenceSeq === null ? seq : media.closeFenceSeq, seq);
+            return;
+          }
+          if (hasSeq) media.closeFenceSeq = Math.max(media.closeFenceSeq === null ? seq : media.closeFenceSeq, seq);
+          if (media.phase === 'active' && hasSeq && media.startedSeq !== null && seq <= media.startedSeq) return;
+          const pendingStatus = media.pendingStopStatus;
+          media.nativeToken = null;
+          media.phase = 'idle';
+          media.stoppingToken = null;
+          media.stoppingNeedsStarted = false;
+          media.pendingStopStatus = null;
+          media.token++; setRealtimeActive(false); releaseRealtimeMedia();
+          realtimeStatus.textContent = pendingStatus || (params.reason ? 'Voice closed: ' + params.reason : 'Voice closed');
         }
       });
     }
@@ -691,7 +756,14 @@
       return state.disposePromise;
     }
 
-    return { dispose, handleEvents };
+    function isActive() {
+      if (state.disposed) return false;
+      const terminalActive = !!(state.terminal && state.terminal.running);
+      const realtimeActive = state.realtime.active || state.realtime.phase === 'starting' || state.realtime.phase === 'stopping';
+      return terminalActive || realtimeActive;
+    }
+
+    return { dispose, handleEvents, isActive };
   }
 
   window.CCCCodexMedia = Object.freeze({ attach });
