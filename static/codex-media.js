@@ -6,6 +6,9 @@
   const TRANSCRIPT_LIMIT = 64 * 1024;
   const AUDIO_SAMPLE_RATE = 24000;
   const AUDIO_QUEUE_LIMIT = 6;
+  const PLAYBACK_SOURCE_LIMIT = 24;
+  const PLAYBACK_AHEAD_LIMIT_SECONDS = 5;
+  const PLAYBACK_CHUNK_BYTES_LIMIT = 512 * 1024;
   const EXEC_TIMEOUT_MS = 30 * 60 * 1000;
   const EXEC_OUTPUT_CAP = 1024 * 1024;
   const RESIZE_DELAY_MS = 140;
@@ -37,8 +40,14 @@
 
   function conciseError(error) {
     if (!error) return 'Unknown native error';
-    if (error.uncertain) return 'Codex could not confirm whether that action completed. Check the task before trying again.';
+    if (error.uncertain || error.payload && error.payload.uncertain) return 'Codex could not confirm whether that action completed. Check the task before trying again.';
     return String(error.message || error.error || error).replace(/\s+/g, ' ').slice(0, 500);
+  }
+
+  function uncertainError(error) {
+    if (!error) return false;
+    if (error.uncertain || error.payload && error.payload.uncertain) return true;
+    return /could not confirm|state is uncertain|may still be running/i.test(String(error.message || error.error || error));
   }
 
   function bytesToBase64(bytes) {
@@ -138,13 +147,21 @@
     }
     const catalog = ports.catalog || {};
     const context = ports.context;
+    const realtimeCapabilities = {
+      audio: available(catalog, 'thread/realtime/appendAudio'),
+      text: available(catalog, 'thread/realtime/appendText'),
+      speech: available(catalog, 'thread/realtime/appendSpeech'),
+      stop: available(catalog, 'thread/realtime/stop'),
+    };
     const listeners = [];
     const timers = new Set();
     const state = {
       disposed: false,
+      disposePromise: null,
       terminal: null,
-      realtime: { active: false, token: 0, queue: [], uploading: false, dropped: 0, stream: null,
-        audioContext: null, source: null, processor: null, playback: new Set(), playbackAt: 0 },
+      realtime: { active: false, token: 0, nativeToken: null, queue: [], uploadingToken: null,
+        dropped: 0, playbackDropped: 0, stream: null, audioContext: null, source: null,
+        processor: null, playback: new Set(), playbackAt: 0, startAttempt: null },
     };
 
     const root = element('section', 'codex-media');
@@ -178,6 +195,11 @@
         report(conciseError(error), statusNode);
         return Promise.reject(error);
       }
+    }
+
+    function rawOperation(method, params) {
+      try { return Promise.resolve(ports.operation(method, params)); }
+      catch (error) { return Promise.reject(error); }
     }
 
     const terminalPanel = element('section', 'codex-media-panel');
@@ -233,17 +255,28 @@
       output.scrollTop = output.scrollHeight;
     }
 
-    function terminalFollowup(commandMethod, processMethod, extra) {
-      const session = state.terminal;
-      if (!session || !session.running || state.disposed) return Promise.resolve();
+    function terminalFollowupFor(session, commandMethod, processMethod, extra) {
+      if (!session || state.terminal !== session || !session.running || state.disposed) return Promise.resolve();
       const method = session.backend === 'process' ? processMethod : commandMethod;
       const handle = session.backend === 'process' ? { processHandle: session.id } : { processId: session.id };
       return invoke(method, Object.assign(handle, extra || {}), terminalStatus).catch(() => {});
     }
 
+    function terminalFollowup(commandMethod, processMethod, extra) {
+      return terminalFollowupFor(state.terminal, commandMethod, processMethod, extra);
+    }
+
+    function cancelTerminalResize(session) {
+      if (!session || !session.resizeTimer) return;
+      window.clearTimeout(session.resizeTimer);
+      timers.delete(session.resizeTimer);
+      session.resizeTimer = null;
+    }
+
     function finishTerminal(exitCode, stdout, stderr) {
       const session = state.terminal;
       if (!session || !session.running) return;
+      cancelTerminalResize(session);
       appendOutput(session.stdoutDecoder.decode());
       appendOutput(session.stderrDecoder.decode());
       appendOutput(stdout || ''); appendOutput(stderr || '');
@@ -264,6 +297,7 @@
       const selectedBackend = backend.value === 'process' ? 'process' : 'command';
       const method = selectedBackend === 'process' ? 'process/spawn' : 'command/exec';
       if (!available(catalog, method)) { report('This Codex server does not offer ' + method + '.', terminalStatus); return; }
+      cancelTerminalResize(state.terminal);
       const id = uuid(selectedBackend === 'process' ? 'ccc-process' : 'ccc-command');
       const size = terminalSize(output.getBoundingClientRect());
       const params = {
@@ -274,7 +308,7 @@
       if (selectedBackend === 'process') params.processHandle = id;
       else params.processId = id;
       state.terminal = {
-        id, backend: selectedBackend, running: true, stopSent: false,
+        id, backend: selectedBackend, tty: !!tty.checked, running: true, stopSent: false, resizeTimer: null,
         stdoutDecoder: new TextDecoder(), stderrDecoder: new TextDecoder(),
       };
       output.textContent = '';
@@ -289,6 +323,11 @@
         else terminalStatus.textContent = 'Running';
       }).catch(error => {
         if (state.disposed || !state.terminal || state.terminal.id !== id) return;
+        if (selectedBackend === 'command' && uncertainError(error)) {
+          state.terminal.uncertainMessage = conciseError(error);
+          report(state.terminal.uncertainMessage, terminalStatus);
+          return;
+        }
         state.terminal.running = false; running.hidden = true;
         report(conciseError(error), terminalStatus);
       });
@@ -306,17 +345,21 @@
     listen(closeStdin, 'click', () => terminalFollowup('command/exec/write', 'process/writeStdin', { closeStdin: true }));
     listen(stopTerminalButton, 'click', () => {
       if (!state.terminal || state.terminal.stopSent) return;
-      state.terminal.stopSent = true; terminalStatus.textContent = 'Stopping…';
+      state.terminal.stopSent = true;
+      terminalStatus.textContent = state.terminal.uncertainMessage
+        ? state.terminal.uncertainMessage + ' Stop requested.'
+        : 'Stopping…';
       terminalFollowup('command/exec/terminate', 'process/kill');
     });
 
-    let resizeTimer = null;
     const resizeObserver = typeof ResizeObserver === 'function' ? new ResizeObserver(entries => {
-      if (!state.terminal || !state.terminal.running || !tty.checked || !entries[0]) return;
-      if (resizeTimer) { window.clearTimeout(resizeTimer); timers.delete(resizeTimer); }
-      resizeTimer = later(() => {
-        resizeTimer = null;
-        terminalFollowup('command/exec/resize', 'process/resizePty', { size: terminalSize(entries[0].contentRect) });
+      const session = state.terminal;
+      if (!session || !session.running || !session.tty || !entries[0]) return;
+      cancelTerminalResize(session);
+      const size = terminalSize(entries[0].contentRect);
+      session.resizeTimer = later(() => {
+        session.resizeTimer = null;
+        terminalFollowupFor(session, 'command/exec/resize', 'process/resizePty', { size });
       }, RESIZE_DELAY_MS);
     }) : null;
     if (resizeObserver) resizeObserver.observe(output);
@@ -350,28 +393,46 @@
 
     function setRealtimeActive(active) {
       state.realtime.active = active;
-      if (realtimeStart) realtimeStart.disabled = active;
-      if (realtimeStop) realtimeStop.disabled = !active;
+      if (realtimeStart) realtimeStart.disabled = active || !realtimeCapabilities.stop;
+      if (realtimeStop) realtimeStop.disabled = !active || !realtimeCapabilities.stop;
     }
 
-    function failRealtime(message) {
-      state.realtime.token++;
+    function stopNativeRealtime(token) {
+      const media = state.realtime;
+      if (media.nativeToken !== token || !realtimeCapabilities.stop) return Promise.resolve();
+      media.nativeToken = null;
+      return invoke('thread/realtime/stop', { threadId: context.threadId }, realtimeStatus).catch(() => {});
+    }
+
+    function failRealtime(message, token) {
+      const media = state.realtime;
+      token = token === undefined ? media.token : token;
+      if (token !== media.token) return Promise.resolve();
+      media.token++;
       setRealtimeActive(false);
       releaseRealtimeMedia();
       report(message, realtimeStatus);
+      return stopNativeRealtime(token);
     }
 
-    async function pumpAudio() {
+    async function pumpAudio(token) {
       const media = state.realtime;
-      if (media.uploading || state.disposed) return;
-      media.uploading = true;
+      if (media.uploadingToken !== null || state.disposed) return;
+      media.uploadingToken = token;
       try {
-        while (!state.disposed && media.active && media.queue.length) {
-          const audio = media.queue.shift();
-          try { await ports.operation('thread/realtime/appendAudio', { threadId: context.threadId, audio }); }
-          catch (error) { failRealtime(conciseError(error)); break; }
+        while (!state.disposed && media.active && media.token === token && media.queue.length) {
+          const entry = media.queue.shift();
+          if (!entry || entry.token !== token) continue;
+          try { await ports.operation('thread/realtime/appendAudio', { threadId: context.threadId, audio: entry.audio }); }
+          catch (error) {
+            if (media.token === token) failRealtime(conciseError(error), token);
+            break;
+          }
         }
-      } finally { media.uploading = false; }
+      } finally {
+        if (media.uploadingToken === token) media.uploadingToken = null;
+        if (!state.disposed && media.active && media.queue.length) pumpAudio(media.token);
+      }
     }
 
     function queueAudio(inputBuffer, sourceRate) {
@@ -389,54 +450,72 @@
         realtimeStatus.textContent = 'Listening · ' + media.dropped + ' audio chunk' + (media.dropped === 1 ? '' : 's') + ' dropped';
         return;
       }
-      media.queue.push(audio);
-      pumpAudio();
+      const token = media.token;
+      media.queue.push({ token, audio });
+      pumpAudio(token);
     }
 
     async function acquireMicrophone(token) {
       if (!navigator.mediaDevices || typeof navigator.mediaDevices.getUserMedia !== 'function') throw new Error('Microphone capture is unavailable in this browser.');
       const stream = await navigator.mediaDevices.getUserMedia({ audio: { channelCount: 1, echoCancellation: true, noiseSuppression: true }, video: false });
       if (state.disposed || token !== state.realtime.token || !state.realtime.active) { stopStream(stream); return; }
+      state.realtime.stream = stream;
       const AudioContextClass = window.AudioContext || window.webkitAudioContext;
       if (!AudioContextClass) { stopStream(stream); throw new Error('Web Audio is unavailable in this browser.'); }
       const audioContext = new AudioContextClass();
+      state.realtime.audioContext = audioContext;
       if (typeof audioContext.resume === 'function') await audioContext.resume();
       if (state.disposed || token !== state.realtime.token || !state.realtime.active) {
         stopStream(stream); try { audioContext.close(); } catch (_) {} return;
       }
       const source = audioContext.createMediaStreamSource(stream);
+      state.realtime.source = source;
       const processor = audioContext.createScriptProcessor(4096, 1, 1);
+      state.realtime.processor = processor;
       processor.onaudioprocess = event => queueAudio(event.inputBuffer, audioContext.sampleRate);
       source.connect(processor); processor.connect(audioContext.destination);
-      Object.assign(state.realtime, { stream, audioContext, source, processor });
       realtimeStatus.textContent = 'Listening';
     }
 
     async function startRealtime() {
-      if (state.disposed || state.realtime.active) return;
+      if (state.disposed || state.realtime.active || !realtimeCapabilities.stop) return;
       const token = ++state.realtime.token;
       state.realtime.dropped = 0;
+      state.realtime.playbackDropped = 0;
       setRealtimeActive(true);
       realtimeStatus.textContent = 'Starting voice…';
       const params = { threadId: context.threadId, outputModality: 'audio' };
       if (voiceSelect && voiceSelect.value) params.voice = voiceSelect.value;
+      const attempt = { token, settled: false, promise: null };
       try {
-        await ports.operation('thread/realtime/start', params);
-        if (state.disposed || token !== state.realtime.token || !state.realtime.active) return;
-        realtimeStatus.textContent = 'Starting microphone…';
-        await acquireMicrophone(token);
+        attempt.promise = rawOperation('thread/realtime/start', params);
+        state.realtime.startAttempt = attempt;
+        await attempt.promise;
+        attempt.settled = true;
+        if (state.disposed) return;
+        state.realtime.nativeToken = token;
+        if (token !== state.realtime.token || !state.realtime.active) {
+          await stopNativeRealtime(token);
+          return;
+        }
+        if (realtimeCapabilities.audio) {
+          realtimeStatus.textContent = 'Starting microphone…';
+          await acquireMicrophone(token);
+        } else realtimeStatus.textContent = 'Connected · microphone input unavailable';
       } catch (error) {
-        if (!state.disposed && token === state.realtime.token) failRealtime(conciseError(error));
+        attempt.settled = true;
+        if (!state.disposed && token === state.realtime.token) failRealtime(conciseError(error), token);
       }
     }
 
     function stopRealtime(sendNative) {
+      const token = state.realtime.token;
       const wasActive = state.realtime.active;
       state.realtime.token++;
       setRealtimeActive(false);
       releaseRealtimeMedia();
       if (realtimeStatus && !state.disposed) realtimeStatus.textContent = 'Voice stopped';
-      if (sendNative && wasActive) invoke('thread/realtime/stop', { threadId: context.threadId }, realtimeStatus).catch(() => {});
+      if (sendNative && wasActive) stopNativeRealtime(token);
     }
 
     function appendTranscript(value) {
@@ -451,11 +530,22 @@
       const media = state.realtime;
       if (!media.active || !media.audioContext || !audio || !audio.data) return;
       try {
+        if (String(audio.data).length > Math.ceil(PLAYBACK_CHUNK_BYTES_LIMIT * 4 / 3) + 4) {
+          throw new RangeError('Realtime audio chunk exceeds the playback limit.');
+        }
         const bytes = base64ToBytes(audio.data);
         const channels = Math.max(1, Number(audio.numChannels) || 1);
         const frames = Math.floor(bytes.length / 2 / channels);
         if (!frames) return;
         const sampleRate = Number(audio.sampleRate) || AUDIO_SAMPLE_RATE;
+        const currentTime = Number(media.audioContext.currentTime) || 0;
+        const startAt = Math.max(currentTime, media.playbackAt || 0);
+        const duration = frames / sampleRate;
+        if (bytes.byteLength > PLAYBACK_CHUNK_BYTES_LIMIT || media.playback.size >= PLAYBACK_SOURCE_LIMIT || startAt + duration - currentTime > PLAYBACK_AHEAD_LIMIT_SECONDS) {
+          media.playbackDropped++;
+          realtimeStatus.textContent = 'Listening · ' + media.playbackDropped + ' output chunk' + (media.playbackDropped === 1 ? '' : 's') + ' dropped';
+          return;
+        }
         const buffer = media.audioContext.createBuffer(channels, frames, sampleRate);
         const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
         for (let channel = 0; channel < channels; channel++) {
@@ -466,10 +556,9 @@
         }
         const source = media.audioContext.createBufferSource();
         source.buffer = buffer; source.connect(media.audioContext.destination);
-        const startAt = Math.max(Number(media.audioContext.currentTime) || 0, media.playbackAt || 0);
-        media.playbackAt = startAt + frames / sampleRate;
+        media.playbackAt = startAt + duration;
         media.playback.add(source); source.onended = () => media.playback.delete(source); source.start(startAt);
-      } catch (error) { failRealtime('Could not play realtime audio: ' + conciseError(error)); }
+      } catch (error) { failRealtime('Could not play realtime audio: ' + conciseError(error), media.token); }
     }
 
     if (available(catalog, 'thread/realtime/start')) {
@@ -480,27 +569,47 @@
       voiceSelect = element('select', 'codex-media-select'); voiceSelect.setAttribute('aria-label', 'Voice'); voiceSelect.setAttribute('data-codex-voice', '');
       realtimeStart = button('Start', 'data-codex-realtime-start');
       realtimeStop = button('Stop', 'data-codex-realtime-stop'); realtimeStop.disabled = true;
+      realtimeStart.disabled = !realtimeCapabilities.stop;
       voiceControls.append(voiceSelect, realtimeStart, realtimeStop);
       transcript = element('div', 'codex-media-transcript'); transcript.tabIndex = 0; transcript.setAttribute('aria-label', 'Voice transcript'); transcript.setAttribute('data-codex-realtime-transcript', '');
       const textRow = element('div', 'codex-media-text-row');
       const textInput = element('input', 'codex-media-command'); textInput.type = 'text'; textInput.placeholder = 'Text for the voice session'; textInput.setAttribute('data-codex-realtime-text', '');
       const sendText = button('Send text', 'data-codex-realtime-send-text');
+      sendText.disabled = !realtimeCapabilities.text;
       textRow.append(textInput, sendText);
-      if (available(catalog, 'thread/realtime/appendSpeech')) textRow.append(button('Speak', 'data-codex-realtime-speak'));
+      const speakButton = button('Speak', 'data-codex-realtime-speak');
+      speakButton.disabled = !realtimeCapabilities.speech;
+      textRow.append(speakButton);
       realtimeStatus = element('div', 'codex-media-status', 'Voice ready'); realtimeStatus.setAttribute('role', 'status'); realtimeStatus.setAttribute('data-codex-realtime-status', '');
-      realtimePanel.append(title, voiceControls, transcript, textRow, realtimeStatus); root.append(realtimePanel);
+      const unsupported = [];
+      if (!realtimeCapabilities.audio) unsupported.push('Microphone input unavailable');
+      if (!realtimeCapabilities.text) unsupported.push('Text input unavailable');
+      if (!realtimeCapabilities.speech) unsupported.push('Speech input unavailable');
+      if (!realtimeCapabilities.stop) unsupported.push('Stop unavailable; voice cannot start safely');
+      const support = element('div', 'codex-media-support', unsupported.join(' · '));
+      support.setAttribute('data-codex-realtime-support', '');
+      support.hidden = unsupported.length === 0;
+      realtimePanel.append(title, voiceControls, transcript, textRow, support, realtimeStatus); root.append(realtimePanel);
       listen(realtimeStart, 'click', startRealtime);
       listen(realtimeStop, 'click', () => stopRealtime(true));
-      listen(sendText, 'click', () => {
+      if (realtimeCapabilities.text) listen(sendText, 'click', () => {
         const text = textInput.value.trim(); if (!text || !state.realtime.active) return;
         textInput.value = '';
-        invoke('thread/realtime/appendText', { threadId: context.threadId, text, role: 'user' }, realtimeStatus).catch(() => {});
+        const token = state.realtime.token;
+        try {
+          Promise.resolve(ports.operation('thread/realtime/appendText', { threadId: context.threadId, text, role: 'user' }))
+            .catch(error => failRealtime(conciseError(error), token));
+        } catch (error) { failRealtime(conciseError(error), token); }
       });
       const speak = realtimePanel.querySelector('[data-codex-realtime-speak]');
-      if (speak) listen(speak, 'click', () => {
+      if (realtimeCapabilities.speech) listen(speak, 'click', () => {
         const text = textInput.value.trim(); if (!text || !state.realtime.active) return;
         textInput.value = '';
-        invoke('thread/realtime/appendSpeech', { threadId: context.threadId, text }, realtimeStatus).catch(() => {});
+        const token = state.realtime.token;
+        try {
+          Promise.resolve(ports.operation('thread/realtime/appendSpeech', { threadId: context.threadId, text }))
+            .catch(error => failRealtime(conciseError(error), token));
+        } catch (error) { failRealtime(conciseError(error), token); }
       });
       if (available(catalog, 'thread/realtime/listVoices')) {
         invoke('thread/realtime/listVoices', {}, realtimeStatus).then(result => {
@@ -535,8 +644,9 @@
         if (method === 'thread/realtime/outputAudio/delta') playPcm(params.audio);
         else if (method === 'thread/realtime/item/transcript/delta' || method === 'thread/realtime/transcript/delta') appendTranscript(params.delta);
         else if (method === 'thread/realtime/transcript/done') appendTranscript((transcript.textContent ? '\n' : '') + (params.role ? params.role + ': ' : '') + params.text + '\n');
-        else if (method === 'thread/realtime/error') failRealtime(params.message || 'Realtime session failed.');
+        else if (method === 'thread/realtime/error') failRealtime(params.message || 'Realtime session failed.', state.realtime.token);
         else if (method === 'thread/realtime/closed') {
+          state.realtime.nativeToken = null;
           state.realtime.token++; setRealtimeActive(false); releaseRealtimeMedia();
           realtimeStatus.textContent = params.reason ? 'Voice closed: ' + params.reason : 'Voice closed';
         }
@@ -544,24 +654,41 @@
     }
 
     function dispose() {
-      if (state.disposed) return;
+      if (state.disposePromise) return state.disposePromise;
+      if (state.disposed) return Promise.resolve();
+      const cleanupRequests = [];
+      let pendingStart = null;
       const session = state.terminal;
       if (session && session.running && !session.stopSent) {
         session.stopSent = true;
         const method = session.backend === 'process' ? 'process/kill' : 'command/exec/terminate';
         const params = session.backend === 'process' ? { processHandle: session.id } : { processId: session.id };
-        try { Promise.resolve(ports.operation(method, params)).catch(() => {}); } catch (_) {}
+        cleanupRequests.push([method, params]);
       }
-      if (state.realtime.active) {
-        try { Promise.resolve(ports.operation('thread/realtime/stop', { threadId: context.threadId })).catch(() => {}); } catch (_) {}
+      const media = state.realtime;
+      if (media.nativeToken !== null && realtimeCapabilities.stop) {
+        media.nativeToken = null;
+        cleanupRequests.push(['thread/realtime/stop', { threadId: context.threadId }]);
+      } else if (media.startAttempt && !media.startAttempt.settled && realtimeCapabilities.stop) {
+        pendingStart = media.startAttempt.promise;
       }
       state.disposed = true;
-      state.realtime.token++;
+      media.token++;
       releaseRealtimeMedia();
       listeners.splice(0).forEach(remove => remove());
       timers.forEach(timer => window.clearTimeout(timer)); timers.clear();
       if (resizeObserver) resizeObserver.disconnect();
       root.remove();
+      const cleanup = cleanupRequests.map(([method, params]) => rawOperation(method, params));
+      if (pendingStart) cleanup.push(pendingStart.then(
+        () => rawOperation('thread/realtime/stop', { threadId: context.threadId }),
+        () => undefined,
+      ));
+      state.disposePromise = Promise.allSettled(cleanup).then(results => {
+        const failed = results.find(result => result.status === 'rejected');
+        if (failed) throw failed.reason;
+      });
+      return state.disposePromise;
     }
 
     return { dispose, handleEvents };

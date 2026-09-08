@@ -84,6 +84,7 @@
 
 .codex-media-transcript { min-height: 62px; background: var(--bg, #fff); color: var(--text, #222); }
 .codex-media-status { min-height: 1.2em; color: var(--text-muted, #666); font-size: 11px; }
+.codex-media-support { color: var(--text-muted, #666); font-size: 11px; }
 
 @media (max-width: 760px) {
   .codex-media-fields,
