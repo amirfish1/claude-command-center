@@ -9,8 +9,10 @@ from __future__ import annotations
 import copy
 import hashlib
 import json
+import math
 import os
 import threading
+import tempfile
 import time
 import uuid
 from collections import OrderedDict
@@ -24,11 +26,146 @@ _CLIENT_LOCK = threading.RLock()
 _CLIENT_ACTIONS = OrderedDict()
 _CLIENT_RECEIPTS = {}
 _CLIENT_RECEIPT_LIMIT = 65536
+_CLIENT_COMMAND_LIMIT_MS = 30 * 60 * 1000
 _CLIENT_THREADS = OrderedDict()
 _CLIENT_HANDLES = OrderedDict()
 _CLIENT_TOOLS = {}
 _CLIENT_TOOL_SLOTS = threading.BoundedSemaphore(4)
 _CLIENT_TRANSPORT = None
+_CLIENT_PREFERENCES_LOADED = False
+_CLIENT_LIFECYCLE_COND = threading.Condition()
+_CLIENT_LIFECYCLE_PENDING = OrderedDict()
+_CLIENT_LIFECYCLE_LIMIT = 2048
+_CLIENT_LIFECYCLE_WORKER = None
+_CLIENT_LIFECYCLE_LAST_ERROR = None
+
+
+def _client_lifecycle_worker():
+    global _CLIENT_LIFECYCLE_LAST_ERROR
+    while True:
+        with _CLIENT_LIFECYCLE_COND:
+            while not _CLIENT_LIFECYCLE_PENDING:
+                _CLIENT_LIFECYCLE_COND.wait()
+            sid, method = _CLIENT_LIFECYCLE_PENDING.popitem(last=False)
+        try:
+            _core._codex_sync_native_lifecycle(method, {sid})
+            _CLIENT_LIFECYCLE_LAST_ERROR = None
+        except Exception as error:
+            _client_requeue_lifecycle_failure(sid, method, error)
+            try:
+                _core._log_activity(
+                    "codex-client", "LIFECYCLE_SYNC_PENDING",
+                    f"method={method} thread={sid} error={type(error).__name__}",
+                )
+            except Exception:
+                print(
+                    f"[codex-client] lifecycle sync pending for {method} {sid}: "
+                    f"{type(error).__name__}", flush=True,
+                )
+            time.sleep(1)
+
+
+def _client_requeue_lifecycle_failure(sid, method, error):
+    """Retain failed work unless a newer exact state is already pending."""
+    global _CLIENT_LIFECYCLE_LAST_ERROR
+    with _CLIENT_LIFECYCLE_COND:
+        if sid not in _CLIENT_LIFECYCLE_PENDING:
+            _CLIENT_LIFECYCLE_PENDING[sid] = method
+        _CLIENT_LIFECYCLE_LAST_ERROR = {
+            "method": method, "thread_id": sid,
+            "error": str(error)[:240], "ts": time.time(),
+        }
+
+
+def _client_enqueue_lifecycle(method, thread_ids):
+    """Coalesce exact native ids; the reader never performs filesystem work."""
+    global _CLIENT_LIFECYCLE_WORKER, _CLIENT_LIFECYCLE_LAST_ERROR
+    if os.environ.get("CCC_EPHEMERAL"):
+        return True
+    ids = {sid.strip() for sid in thread_ids if isinstance(sid, str) and sid.strip()}
+    if method not in ("thread/archived", "thread/unarchived", "thread/deleted") or not ids:
+        return False
+    accepted = True
+    with _CLIENT_LIFECYCLE_COND:
+        for sid in sorted(ids):
+            current = _CLIENT_LIFECYCLE_PENDING.get(sid)
+            if current == "thread/deleted":
+                continue
+            if sid not in _CLIENT_LIFECYCLE_PENDING and len(_CLIENT_LIFECYCLE_PENDING) >= _CLIENT_LIFECYCLE_LIMIT:
+                accepted = False
+                _CLIENT_LIFECYCLE_LAST_ERROR = {
+                    "method": method, "thread_id": sid,
+                    "error": "lifecycle sync queue is full", "ts": time.time(),
+                }
+                try:
+                    _core._log_activity(
+                        "codex-client", "LIFECYCLE_SYNC_OVERFLOW",
+                        f"method={method} thread={sid}",
+                    )
+                except Exception:
+                    print(
+                        f"[codex-client] lifecycle sync queue full for {method} {sid}",
+                        flush=True,
+                    )
+                continue
+            _CLIENT_LIFECYCLE_PENDING[sid] = method
+            _CLIENT_LIFECYCLE_PENDING.move_to_end(sid)
+        if _CLIENT_LIFECYCLE_WORKER is None or not _CLIENT_LIFECYCLE_WORKER.is_alive():
+            _CLIENT_LIFECYCLE_WORKER = threading.Thread(
+                target=_client_lifecycle_worker,
+                daemon=True,
+                name="codex-client-lifecycle",
+            )
+            _CLIENT_LIFECYCLE_WORKER.start()
+        _CLIENT_LIFECYCLE_COND.notify()
+    return accepted
+
+
+def _client_retire_deleted_thread(tid):
+    if not isinstance(tid, str) or not tid:
+        return
+    CODEX_REQUESTS.cancel_thread(tid, CODEX_REQUESTS.generation)
+    _core._codex_retire_deleted_thread_state({tid}, persist=False)
+    with _CLIENT_LOCK:
+        _CLIENT_THREADS.pop(tid, None)
+
+
+def _client_preferences_path():
+    return _core.COMMAND_CENTER_STATE_DIR / "codex-client-preferences.json"
+
+
+def _client_load_preferences():
+    global _CLIENT_PREFERENCES_LOADED
+    with _CLIENT_LOCK:
+        if _CLIENT_PREFERENCES_LOADED:
+            return
+        if "CCC_CODEX_EXPERIMENTAL" not in os.environ and not os.environ.get("CCC_EPHEMERAL"):
+            try:
+                with _client_preferences_path().open(encoding="utf-8") as handle:
+                    raw = handle.read(4097)
+                value = json.loads(raw) if len(raw) <= 4096 else {}
+                if isinstance(value, dict) and isinstance(value.get("experimental"), bool):
+                    os.environ["CCC_CODEX_EXPERIMENTAL"] = "1" if value["experimental"] else "0"
+            except (OSError, ValueError):
+                pass
+        _CLIENT_PREFERENCES_LOADED = True
+
+
+def _client_save_preferences(experimental):
+    if not os.environ.get("CCC_EPHEMERAL"):
+        destination = _client_preferences_path()
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        descriptor, filename = tempfile.mkstemp(prefix=".codex-client-", dir=str(destination.parent))
+        try:
+            with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
+                json.dump({"experimental": experimental}, handle)
+            os.replace(filename, destination)
+        finally:
+            try:
+                os.unlink(filename)
+            except FileNotFoundError:
+                pass
+    os.environ["CCC_CODEX_EXPERIMENTAL"] = "1" if experimental else "0"
 
 
 def redact_client_data(value):
@@ -196,6 +333,18 @@ def _client_rpc(method, params, timeout=25, expected_generation=None):
             "uncertain": bool(reply.get("ambiguous") or "timeout" in message.lower() or "timed out" in message.lower())}
 
 
+def _client_rpc_timeout(method, params):
+    if method != "command/exec" or not isinstance(params, dict):
+        return 25
+    duration = params.get("timeoutMs")
+    if duration is None:
+        duration = _CLIENT_COMMAND_LIMIT_MS
+    if (isinstance(duration, bool) or not isinstance(duration, (int, float))
+            or isinstance(duration, float) and not math.isfinite(duration)):
+        return 25
+    return max(25, int(min(_CLIENT_COMMAND_LIMIT_MS, max(0, duration)) / 1000) + 5)
+
+
 def _client_read_thread(tid, *, fresh=False):
     with _CLIENT_LOCK:
         cached = _CLIENT_THREADS.get(tid)
@@ -282,6 +431,13 @@ def _codex_client_observe_locked(payload, transport):
         current = _CLIENT_TRANSPORT
     if transport is not None and transport is not current:
         return True  # a late message from a retired reader cannot change state
+    tid = params.get("threadId") or params.get("conversationId")
+    tombstone = CODEX_CONVERSATIONS.snapshot(tid).get("thread") if tid else None
+    if tombstone and tombstone.get("deleted") and method != "thread/deleted":
+        if "id" in payload and current is not None:
+            current.send_json({"id": payload["id"], "error": {
+                "code": -32600, "message": "This task has been deleted"}})
+        return True
     if "id" in payload:
         if current is None:
             return False
@@ -332,6 +488,14 @@ def _codex_client_observe_locked(payload, transport):
     elif method == "turn/completed":
         turn = params.get("turn") or {}
         CODEX_REQUESTS.cancel_turn(tid, turn.get("id") or params.get("turnId"), CODEX_REQUESTS.generation)
+    if method in ("thread/archived", "thread/unarchived", "thread/deleted") and tid:
+        if method == "thread/deleted":
+            _client_retire_deleted_thread(tid)
+        _client_enqueue_lifecycle(method, {tid})
+        if method == "thread/deleted":
+            # The legacy handler creates state for every notification before
+            # specializing it. A delete has already retired that state above.
+            return True
     if method in ("thread/metadata/updated", "thread/project/updated", "thread/deleted", "thread/settings/updated"):
         with _CLIENT_LOCK:
             _CLIENT_THREADS.pop(tid, None)
@@ -406,6 +570,34 @@ def _client_legacy_request_resolved(tid, request_id):
             state.pop("active_item", None)
 
 
+def _client_sync_lifecycle(method, params, result, context_repo):
+    """Mirror explicit native user actions into CCC's existing sidebar data."""
+    if os.environ.get("CCC_EPHEMERAL"):
+        return
+    output = result.get("result")
+    thread = output.get("thread") if isinstance(output, dict) else None
+    if method in ("thread/start", "thread/fork") and isinstance(thread, dict) and thread.get("id"):
+        _core._codex_thread_registry_upsert(thread["id"], source="ccc-client",
+            visibility="user-visible", transport_owner="ccc-managed-app-server",
+            transport=_core._codex_app_server_transport_kind(),
+            cwd=thread.get("cwd") or context_repo, repo_path=context_repo,
+            title=thread.get("name") or thread.get("preview") or "Codex conversation",
+            parent_session_id=thread.get("forkedFromId") or (
+                params.get("threadId") if method == "thread/fork" else ""))
+    elif method == "thread/name/set":
+        sid = params.get("threadId")
+        name = params.get("name") or ""
+        _core._save_session_name_override(sid, name or None)
+        _core._codex_thread_registry_upsert(sid, source="ccc-client", name=name, title=name)
+    elif method in ("thread/archive", "thread/unarchive", "thread/delete"):
+        notification = {
+            "thread/archive": "thread/archived",
+            "thread/unarchive": "thread/unarchived",
+            "thread/delete": "thread/deleted",
+        }[method]
+        _core._codex_sync_native_lifecycle(notification, {params.get("threadId")})
+
+
 def _client_operation(data):
     from ccc_server.codex_capabilities import get_codex_catalog, validate_codex_operation
     method = data.get("method")
@@ -420,6 +612,13 @@ def _client_operation(data):
     if not isinstance(raw_params, dict) or not isinstance(context, dict):
         raise ValueError("Parameters and context must be objects")
     params = _client_scope(method, raw_params, context, descriptor=selected)
+    if method == "command/exec":
+        if params.get("disableTimeout") is True:
+            raise ValueError("Use a host process for commands without a time limit")
+        if params.get("timeoutMs") is None:
+            params["timeoutMs"] = _CLIENT_COMMAND_LIMIT_MS
+        elif isinstance(params["timeoutMs"], (int, float)) and params["timeoutMs"] > _CLIENT_COMMAND_LIMIT_MS:
+            raise ValueError("Commands support up to 30 minutes; use a host process for longer work")
     descriptor = validate_codex_operation(method, params, catalog=catalog)
     # Native process and watcher handles are capabilities tied to the repo
     # where this client created them. Do not accept arbitrary global handles.
@@ -469,9 +668,31 @@ def _client_operation(data):
             _CLIENT_ACTIONS[action_id] = {"fingerprint": fingerprint, "state": "pending",
                 "result": {"ok": False, "uncertain": True, "error": "This action is already in progress; it will not be sent twice"}}
     result = _client_rpc(method, None if descriptor.get("params_type") == "null" else params,
+                         timeout=_client_rpc_timeout(method, params),
                          expected_generation=generation if mutating else None)
     if result.get("ok"):
         output = result.get("result")
+        try:
+            _client_sync_lifecycle(method, params, result, context_repo)
+        except Exception:
+            # The native mutation already succeeded. A mirror failure must
+            # never turn it into a failed action that a caller might replay.
+            result["sidebar_sync_pending"] = True
+            notification = {
+                "thread/archive": "thread/archived",
+                "thread/unarchive": "thread/unarchived",
+                "thread/delete": "thread/deleted",
+            }.get(method)
+            if notification and params.get("threadId"):
+                _client_enqueue_lifecycle(notification, {params["threadId"]})
+        if method in ("thread/revert", "thread/rollback"):
+            CODEX_CONVERSATIONS.invalidate_history(params.get("threadId"))
+        elif method == "thread/delete":
+            CODEX_CONVERSATIONS.record("thread/deleted", {
+                "threadId": params.get("threadId"),
+                "thread": {"id": params.get("threadId"), "cwd": context_repo},
+            })
+            _client_retire_deleted_thread(params.get("threadId"))
         with _CLIENT_LOCK:
             for obj in (params, output if isinstance(output, dict) else {}):
                 for field in ("processId", "processHandle", "watchId"):
@@ -503,10 +724,11 @@ def codex_client_dispatch(action, data):
         if "context" in data and not isinstance(data["context"], dict):
             raise ValueError("Client context must be an object")
         if action in ("catalog", "schema", "preferences"):
+            _client_load_preferences()
             if action == "preferences":
                 if not isinstance(data.get("experimental"), bool):
                     raise ValueError("Preview preference must be a boolean")
-                os.environ["CCC_CODEX_EXPERIMENTAL"] = "1" if data["experimental"] else "0"
+                _client_save_preferences(data["experimental"])
             catalog = get_codex_catalog()
             if action == "schema":
                 descriptor = next((d for d in catalog.get("methods", []) if d["method"] == data.get("method")), None)
@@ -524,7 +746,12 @@ def codex_client_dispatch(action, data):
         tid = context.get("thread_id")
         if not tid:
             raise ValueError("Select a Codex task")
-        _client_scope("thread/read", {"threadId": tid}, context)
+        tombstone = CODEX_CONVERSATIONS.snapshot(tid).get("thread")
+        if action in ("state", "events") and tombstone and tombstone.get("deleted"):
+            validate_operation_context("thread/read", {"threadId": tid}, context,
+                resolve_repo=_core.resolve_repo_path, read_thread=lambda _: tombstone)
+        else:
+            _client_scope("thread/read", {"threadId": tid}, context)
         if action == "state":
             return {**CODEX_CONVERSATIONS.snapshot(tid), "requests": CODEX_REQUESTS.snapshot(tid)["requests"]}
         if action == "events":
@@ -550,8 +777,20 @@ def codex_client_call(action, data):
     # Engine query dispatch deliberately does not persist the payload. This
     # channel carries OAuth answers and audio as well as ordinary operations.
     # Mutation receipts above prevent a retry from submitting an action twice.
+    deadline = 70000 if action == "history" else 45000
+    if action == "operation" and isinstance(data, dict):
+        deadline = max(deadline, (_client_rpc_timeout(data.get("method"), data.get("params")) + 10) * 1000)
     routed = _core._control_plane_engine_call("codex", "client", {
-        "action": action, "data": data}, mutate=False, timeout_ms=35000)
-    if routed is not None:
-        return routed
-    return codex_client_dispatch(action, data)
+        "action": action, "data": data}, mutate=False, timeout_ms=deadline)
+    result = routed if routed is not None else codex_client_dispatch(action, data)
+    if action == "operation" and result.get("ok") and isinstance(data, dict):
+        method = data.get("method")
+        if method in ("thread/start", "thread/fork", "thread/name/set", "thread/archive", "thread/unarchive", "thread/delete", "thread/metadata/update"):
+            _core._invalidate_dashboard("archive", reason="codex-client")
+            _core._invalidate_dashboard("sessions", reason="codex-client")
+            if method == "thread/name/set":
+                params = data.get("params") or {}
+                name = params.get("name") or ""
+                _core._publish_dashboard_patch("conversation.patch", "conversation", params.get("threadId"),
+                    {"name": name, "title": name, "display_name": name, "name_overridden": bool(name)})
+    return result

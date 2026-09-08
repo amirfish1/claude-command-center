@@ -217,5 +217,15 @@ class CodexRequestRegistry:
                     self._pending.pop(key, None)
                     self._remember_terminal(pending["request_id"])
 
+    def cancel_thread(self, thread_id, generation):
+        """Retire every unanswered request for an irreversibly deleted task."""
+        with self._lock:
+            if generation != self._generation:
+                return
+            for key, pending in list(self._pending.items()):
+                if pending["generation"] == generation and pending["thread_id"] == thread_id:
+                    self._pending.pop(key, None)
+                    self._remember_terminal(pending["request_id"])
+
 
 CODEX_REQUESTS = CodexRequestRegistry()

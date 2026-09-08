@@ -53,6 +53,10 @@ class CodexConversationStore:
             if self._generation == str(generation):
                 self._connected = False
 
+    def invalidate_history(self, thread_id):
+        with self._lock:
+            self._threads.pop(thread_id, None)
+
     def _bounded(self, value):
         remaining = [256 * 1024, 4096]
         clipped = [False]
@@ -185,6 +189,9 @@ class CodexConversationStore:
         with self._lock:
             if generation is not None and generation != self._generation:
                 return False
+            existing = self._threads.get(thread["id"])
+            if existing and existing.get("meta", {}).get("deleted"):
+                return False
             target = self._thread(thread["id"])
             target["truncated"] |= clipped
             self._metadata(target, target, {k: v for k, v in bounded.items() if k != "turns"},
@@ -221,14 +228,44 @@ class CodexConversationStore:
             raise ValueError("Invalid event method")
         p, clipped = self._bounded(params)
         with self._lock:
-            self._seq += 1
             thread_data = p.get("thread") if isinstance(p.get("thread"), dict) else {}
             tid = p.get("threadId") or p.get("thread_id") or thread_data.get("id")
             turn_data = p.get("turn") if isinstance(p.get("turn"), dict) else {}
             turn_id = p.get("turnId") or p.get("turn_id") or turn_data.get("id")
+            if method == "thread/deleted" and isinstance(tid, str) and 1 <= len(tid) <= 256:
+                old = self._threads.pop(tid, None)
+                old_meta = old.get("meta", {}) if isinstance(old, dict) else {}
+                cwd = thread_data.get("cwd") or old_meta.get("cwd")
+                self._events = deque(
+                    (event for event in self._events if event.get("thread_id") != tid),
+                    maxlen=self._events.maxlen,
+                )
+                self._seq += 1
+                self._events.append({
+                    "seq": self._seq,
+                    "method": method,
+                    "params": {"threadId": tid},
+                    "thread_id": tid,
+                    "ts": time.time(),
+                    "truncated": False,
+                })
+                thread = self._thread(tid)
+                fields = {"archived": False, "deleted": True}
+                if isinstance(cwd, str) and cwd:
+                    fields["cwd"] = cwd
+                self._metadata(thread, thread, fields, self._seq)
+                self._trim_global()
+                return
+            stored = self._threads.get(tid) if isinstance(tid, str) else None
+            if stored and stored.get("meta", {}).get("deleted"):
+                return
+            self._seq += 1
             self._events.append({"seq": self._seq, "method": method, "params": p,
                                  "thread_id": tid, "ts": time.time(), "truncated": clipped})
             if not isinstance(tid, str) or not 1 <= len(tid) <= 256:
+                return
+            if method == "thread/reverted":
+                self._threads.pop(tid, None)
                 return
             thread = self._thread(tid)
             thread["truncated"] |= clipped
@@ -320,7 +357,10 @@ class CodexConversationStore:
     def events_since(self, cursor, generation=None, thread_id=None):
         with self._lock:
             oldest = self._events[0]["seq"] if self._events else self._seq + 1
-            gap = (generation is not None and generation != self._generation) or cursor < oldest - 1 or cursor > self._seq
+            stored = self._threads.get(thread_id) if thread_id else None
+            deleted_scope = bool(stored and stored.get("meta", {}).get("deleted"))
+            gap = ((generation is not None and generation != self._generation)
+                   or (cursor < oldest - 1 and not deleted_scope) or cursor > self._seq)
             events = [] if gap else [event for event in self._events if event["seq"] > cursor
                                      and (not thread_id or not event["thread_id"] or event["thread_id"] == thread_id)]
             return copy.deepcopy({"ok": True, "generation": self._generation,

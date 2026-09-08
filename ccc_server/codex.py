@@ -10,6 +10,7 @@ from datetime import datetime, timedelta, timezone, time as datetime_time
 from pathlib import Path
 import ast
 import base64
+import copy
 import fcntl
 import hashlib
 import json
@@ -60,6 +61,7 @@ _CODEX_THREAD_OWNER_RANK = {
     "wt-private-app-server": 2,
     "ccc-managed-app-server": 3,
 }
+_CODEX_THREAD_REGISTRY_CACHE = {"token": None, "data": None}
 _CODEX_APP_SERVER_LOCK = threading.Condition()
 _CODEX_APP_SERVER_READER = None
 _CODEX_APP_SERVER_NEXT_ID = 1
@@ -404,10 +406,19 @@ def _codex_thread_registry_empty():
         "source": "ccc-wt-codex-reconciliation",
         "updated_at": _codex_thread_registry_now(),
         "threads": {},
+        "deleted_threads": {},
     }
 
 
 def _load_codex_thread_registry():
+    try:
+        st = _core.CODEX_THREAD_REGISTRY_FILE.stat()
+        token = (str(_core.CODEX_THREAD_REGISTRY_FILE), st.st_mtime_ns, st.st_size)
+    except OSError:
+        token = (str(_core.CODEX_THREAD_REGISTRY_FILE), None, None)
+    if (_CODEX_THREAD_REGISTRY_CACHE["token"] == token
+            and isinstance(_CODEX_THREAD_REGISTRY_CACHE["data"], dict)):
+        return copy.deepcopy(_CODEX_THREAD_REGISTRY_CACHE["data"])
     try:
         with _core.CODEX_THREAD_REGISTRY_FILE.open("r", encoding="utf-8") as f:
             data = json.load(f)
@@ -417,9 +428,13 @@ def _load_codex_thread_registry():
         return _codex_thread_registry_empty()
     if not isinstance(data.get("threads"), dict):
         data["threads"] = {}
+    if not isinstance(data.get("deleted_threads"), dict):
+        data["deleted_threads"] = {}
     data["schema_version"] = _CODEX_THREAD_REGISTRY_SCHEMA
     data["authoritative"] = False
     data.setdefault("source", "ccc-wt-codex-reconciliation")
+    _CODEX_THREAD_REGISTRY_CACHE["token"] = token
+    _CODEX_THREAD_REGISTRY_CACHE["data"] = copy.deepcopy(data)
     return data
 
 
@@ -433,6 +448,15 @@ def _save_codex_thread_registry(data):
     with tmp.open("w", encoding="utf-8") as f:
         json.dump(data, f, indent=2, sort_keys=True)
     tmp.replace(_core.CODEX_THREAD_REGISTRY_FILE)
+    try:
+        st = _core.CODEX_THREAD_REGISTRY_FILE.stat()
+        _CODEX_THREAD_REGISTRY_CACHE["token"] = (
+            str(_core.CODEX_THREAD_REGISTRY_FILE), st.st_mtime_ns, st.st_size,
+        )
+        _CODEX_THREAD_REGISTRY_CACHE["data"] = copy.deepcopy(data)
+    except OSError:
+        _CODEX_THREAD_REGISTRY_CACHE["token"] = None
+        _CODEX_THREAD_REGISTRY_CACHE["data"] = None
 
 
 class _CodexThreadRegistryLock:
@@ -518,6 +542,8 @@ def _codex_thread_registry_upsert(thread_id, **fields):
         with _CodexThreadRegistryLock():
             data = _load_codex_thread_registry()
             threads = data.setdefault("threads", {})
+            if sid in data.setdefault("deleted_threads", {}):
+                return None
             now = _codex_thread_registry_now()
             existing = threads.get(sid) if isinstance(threads.get(sid), dict) else {}
             rec = _codex_thread_registry_merge_record(existing, fields, now)
@@ -526,6 +552,35 @@ def _codex_thread_registry_upsert(thread_id, **fields):
             return rec
     except OSError:
         return None
+
+
+def _codex_thread_registry_delete(thread_ids):
+    """Remove native-deleted rows and retain only their durable ids."""
+    ids = {sid.strip() for sid in thread_ids if isinstance(sid, str) and sid.strip()}
+    if not ids:
+        return set()
+    try:
+        with _CodexThreadRegistryLock():
+            data = _load_codex_thread_registry()
+            threads = data.setdefault("threads", {})
+            deleted = data.setdefault("deleted_threads", {})
+            now = _codex_thread_registry_now()
+            removed = {sid for sid in ids if sid in threads}
+            for sid in ids:
+                threads.pop(sid, None)
+                deleted[sid] = now
+            _save_codex_thread_registry(data)
+            return removed
+    except OSError:
+        return None
+
+
+def _codex_deleted_thread_ids():
+    try:
+        deleted = _load_codex_thread_registry().get("deleted_threads") or {}
+    except Exception:
+        return set()
+    return {str(sid) for sid in deleted if sid}
 
 
 def _codex_thread_registry_entries():
@@ -538,6 +593,68 @@ def _codex_thread_registry_entries():
         for sid, rec in threads.items()
         if sid and isinstance(rec, dict)
     }
+
+
+def _codex_retire_deleted_thread_state(thread_ids, *, persist=True):
+    """Drop volatile approval/live/recovery state without recreating a thread."""
+    ids = {sid.strip() for sid in thread_ids if isinstance(sid, str) and sid.strip()}
+    if not ids:
+        return
+    with _core._CODEX_APP_SERVER_LOCK:
+        for sid in ids:
+            _core._CODEX_APP_SERVER_THREAD_STATE.pop(sid, None)
+        for turn_id, sid in list(_core._CODEX_APP_SERVER_TURN_THREAD.items()):
+            if sid in ids:
+                _core._CODEX_APP_SERVER_TURN_THREAD.pop(turn_id, None)
+        if persist and not _core._save_codex_app_server_state_unlocked():
+            raise OSError("Could not persist retired Codex task state")
+
+
+def _codex_sync_native_lifecycle(method, thread_ids):
+    """Mirror exact native lifecycle notification ids into CCC state."""
+    ids = {sid.strip() for sid in thread_ids if isinstance(sid, str) and sid.strip()}
+    if not ids or os.environ.get("CCC_EPHEMERAL"):
+        return False
+    ordered = sorted(ids)
+    if method in ("thread/archived", "thread/unarchived"):
+        _core._set_conversations_archived(ordered, method == "thread/archived")
+    elif method == "thread/deleted":
+        if _core._codex_thread_registry_delete(ids) is None:
+            raise OSError("Could not update the deleted Codex task registry")
+        _core._set_conversations_archived(ordered, False)
+        graph = _core._session_graph
+        for sid in ordered:
+            parent = graph.parent_of(sid)
+            if parent:
+                graph.remove_edge(parent, sid)
+            for child in graph.children_of(sid):
+                graph.remove_edge(sid, child)
+            try:
+                (_core.SIDECAR_STATE_DIR / f"{sid}_needs_approval.json").unlink()
+            except FileNotFoundError:
+                pass
+            pending = _core._apply_pending_input_operations(sid, [
+                {"field": "resume", "action": "clear"},
+                {"field": "terminal", "action": "clear"},
+                {"field": "auto_resume", "action": "clear"},
+            ])
+            if not pending.get("ok"):
+                raise RuntimeError("Could not retire pending input for deleted Codex task")
+        graph.save()
+        if getattr(graph, "_dirty", False):
+            raise OSError("Could not persist the Codex task graph cleanup")
+        _core._codex_retire_deleted_thread_state(ids)
+    else:
+        return False
+    archived_set, trashed_set = _core._load_conversation_lifecycle_sets(sweep=False)
+    _core._restamp_archive_serve_cache_after_mutation(
+        archived_set=archived_set,
+        trashed_set=trashed_set,
+        mutated_sids=ids,
+    )
+    _core._invalidate_dashboard("archive", reason="codex-native-lifecycle")
+    _core._invalidate_dashboard("sessions", reason="codex-native-lifecycle")
+    return True
 
 
 def _codex_thread_registry_entry(thread_id):
@@ -620,8 +737,9 @@ def _save_codex_app_server_state_unlocked():
         with tmp.open("w") as f:
             json.dump(_core._codex_app_server_state_payload_unlocked(), f, indent=2, sort_keys=True)
         tmp.replace(_core.CODEX_APP_SERVER_STATE_FILE)
+        return True
     except OSError:
-        pass
+        return False
 
 
 def _codex_managed_app_server_socket_path():
@@ -2505,8 +2623,15 @@ def _codex_app_server_handle_message(payload):
             if isinstance(result, dict):
                 thread = result.get("thread")
                 if isinstance(thread, dict) and thread.get("id"):
-                    _core._codex_app_server_record_thread(str(thread["id"]), thread)
-                    _core._save_codex_app_server_state_unlocked()
+                    thread_id = str(thread["id"])
+                    try:
+                        from ccc_server.codex_conversation import CODEX_CONVERSATIONS
+                        deleted = bool((CODEX_CONVERSATIONS.snapshot(thread_id).get("thread") or {}).get("deleted"))
+                    except Exception:
+                        deleted = False
+                    if not deleted:
+                        _core._codex_app_server_record_thread(thread_id, thread)
+                        _core._save_codex_app_server_state_unlocked()
             orphaned = _CODEX_APP_SERVER_ORPHANED_WAITERS.pop(payload.get("id"), None)
             _core._app_server_trace(
                 "msg-response", id=payload.get("id"),
@@ -7336,7 +7461,9 @@ def _codex_fetch_threads(where="", params=(), limit=None):
             if limit:
                 sql += " LIMIT ?"
                 params = tuple(params) + (int(limit),)
-            rows = [dict(r) for r in con.execute(sql, tuple(params)).fetchall()]
+            deleted = _core._codex_deleted_thread_ids()
+            rows = [dict(r) for r in con.execute(sql, tuple(params)).fetchall()
+                    if str(r["id"]) not in deleted]
             return rows
         except sqlite3.Error:
             continue
@@ -7372,6 +7499,7 @@ def _codex_spawn_parent_by_child():
     Returns {child_thread_id: parent_thread_id}. (CCC-298)
     """
     out = {}
+    deleted = _core._codex_deleted_thread_ids()
     for db in _codex_state_db_candidates():
         try:
             con = sqlite3.connect(f"file:{db}?mode=ro", uri=True, timeout=0.25)
@@ -7391,7 +7519,8 @@ def _codex_spawn_parent_by_child():
                 child = (r["child_thread_id"] or "").strip()
                 parent = (r["parent_thread_id"] or "").strip()
                 # First edge wins (DBs scanned newest-first); never self-parent.
-                if child and parent and child != parent:
+                if (child and parent and child != parent
+                        and child not in deleted and parent not in deleted):
                     out.setdefault(child, parent)
         except sqlite3.Error:
             continue

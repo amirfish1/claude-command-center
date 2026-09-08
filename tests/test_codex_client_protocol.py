@@ -18,6 +18,8 @@ class ClientProtocolTests(unittest.TestCase):
         self.transport = Transport()
         client.codex_client_connect(self.transport)
         client._CLIENT_ACTIONS.clear()
+        client._CLIENT_LIFECYCLE_PENDING.clear()
+        client._CLIENT_LIFECYCLE_LAST_ERROR = None
 
     def test_registered_question_can_be_answered_on_original_connection(self):
         client.codex_client_observe({"id": 7, "method": "item/tool/requestUserInput", "params": {
@@ -187,3 +189,174 @@ class ClientProtocolTests(unittest.TestCase):
         for context in ([1], "bad", 42, True):
             result = client.codex_client_dispatch("respond", {"context": context})
             self.assertFalse(result["ok"])
+
+    def test_explicit_native_creation_updates_sidebar_registry(self):
+        import os
+        with mock.patch.dict(os.environ, {"CCC_EPHEMERAL": ""}), \
+             mock.patch.object(server, "_codex_thread_registry_upsert") as registry, \
+             mock.patch.object(server, "_codex_app_server_transport_kind", return_value="stdio"):
+            client._client_sync_lifecycle("thread/start", {}, {"result": {"thread": {"id": "new-task", "cwd": "/test", "name": "New task"}}}, "/test")
+        self.assertEqual(registry.call_args.args[0], "new-task")
+        self.assertEqual(registry.call_args.kwargs["visibility"], "user-visible")
+
+    def test_fork_registration_falls_back_to_requested_parent(self):
+        import os
+        with mock.patch.dict(os.environ, {"CCC_EPHEMERAL": ""}), \
+             mock.patch.object(server, "_codex_thread_registry_upsert") as registry, \
+             mock.patch.object(server, "_codex_app_server_transport_kind", return_value="stdio"):
+            client._client_sync_lifecycle("thread/fork", {"threadId": "parent"},
+                {"result": {"thread": {"id": "child", "cwd": "/test"}}}, "/test")
+        self.assertEqual(registry.call_args.kwargs["parent_session_id"], "parent")
+
+    def test_preview_never_writes_real_sidebar_registry(self):
+        import os
+        with mock.patch.dict(os.environ, {"CCC_EPHEMERAL": "1"}), \
+             mock.patch.object(server, "_codex_thread_registry_upsert") as registry:
+            client._client_sync_lifecycle("thread/start", {}, {"result": {"thread": {"id": "preview", "cwd": "/test"}}}, "/test")
+        registry.assert_not_called()
+
+    def test_native_delete_tombstone_can_finish_scoped_ui_polling(self):
+        client.CODEX_CONVERSATIONS.hydrate({"id": "deleted", "cwd": "/test", "turns": []}, 0)
+        client.CODEX_CONVERSATIONS.record("thread/deleted", {"threadId": "deleted"})
+        with mock.patch.object(server, "resolve_repo_path", return_value="/test"), \
+             mock.patch.object(client, "_client_rpc") as rpc:
+            result = client.codex_client_dispatch("state", {"context": {"thread_id": "deleted", "repo_path": "/test"}})
+        self.assertTrue(result["thread"]["deleted"])
+        rpc.assert_not_called()
+
+    def test_native_delete_purges_requests_and_skips_legacy_recreation(self):
+        client.CODEX_CONVERSATIONS.record("item/completed", {"threadId": "deleted", "turnId": "turn",
+            "item": {"id": "reply", "type": "agentMessage", "text": "deleted secret"}})
+        client.codex_client_observe({"id": 91, "method": "item/tool/requestUserInput", "params": {
+            "threadId": "deleted", "turnId": "turn", "questions": [{"id": "q"}]}}, self.transport)
+        states = {"deleted": {"pending_approval_request": {"request_id_raw": 91},
+            "compaction_recovery": {"message": "deleted recovery"}}}
+        turns = {"turn": "deleted"}
+        with mock.patch.object(server, "_CODEX_APP_SERVER_THREAD_STATE", states), \
+             mock.patch.object(server, "_CODEX_APP_SERVER_TURN_THREAD", turns), \
+             mock.patch.object(server, "_save_codex_app_server_state_unlocked"), \
+             mock.patch.object(client, "_client_enqueue_lifecycle", return_value=True):
+            handled = client.codex_client_observe({"method": "thread/deleted",
+                "params": {"threadId": "deleted"}}, self.transport)
+        self.assertTrue(handled)
+        self.assertEqual(client.CODEX_REQUESTS.snapshot("deleted")["requests"], [])
+        self.assertNotIn("deleted", states)
+        self.assertNotIn("turn", turns)
+        self.assertNotIn("deleted secret", str(client.CODEX_CONVERSATIONS.events_since(
+            0, client.CODEX_CONVERSATIONS.generation, "deleted")))
+
+    def test_late_deleted_thread_messages_cannot_recreate_state_or_questions(self):
+        client.CODEX_CONVERSATIONS.record("thread/deleted", {"threadId": "deleted"})
+        states = {}
+        with mock.patch.object(server, "_CODEX_APP_SERVER_THREAD_STATE", states):
+            handled_event = client.codex_client_observe({"method": "item/completed", "params": {
+                "threadId": "deleted", "turnId": "late", "item": {
+                    "id": "late", "type": "agentMessage", "text": "late secret"}}}, self.transport)
+            handled_request = client.codex_client_observe({"id": 101,
+                "method": "item/tool/requestUserInput", "params": {
+                    "threadId": "deleted", "turnId": "late", "questions": [{"id": "q"}]}}, self.transport)
+        self.assertTrue(handled_event)
+        self.assertTrue(handled_request)
+        self.assertEqual(states, {})
+        self.assertEqual(client.CODEX_REQUESTS.snapshot("deleted")["requests"], [])
+        self.assertNotIn("late secret", str(client.CODEX_CONVERSATIONS.snapshot("deleted")))
+
+    def test_late_thread_read_response_does_not_recreate_deleted_legacy_state(self):
+        client.CODEX_CONVERSATIONS.record("thread/deleted", {"threadId": "deleted"})
+        states = {}
+        responses = {}
+        with mock.patch.object(server, "_CODEX_APP_SERVER_THREAD_STATE", states), \
+             mock.patch.object(server, "_CODEX_APP_SERVER_RESPONSES", responses), \
+             mock.patch.object(server, "_CODEX_APP_SERVER_ORPHANED_WAITERS", {}):
+            server._codex_app_server_handle_message({"id": 404, "result": {
+                "thread": {"id": "deleted", "status": {"type": "idle"}, "turns": []}}})
+        self.assertEqual(states, {})
+        self.assertIn(404, responses)
+
+    def test_native_lifecycle_notifications_enqueue_only_the_exact_id(self):
+        for method in ("thread/archived", "thread/unarchived", "thread/deleted"):
+            with self.subTest(method=method), \
+                 mock.patch.object(client, "_client_enqueue_lifecycle", return_value=True) as enqueue, \
+                 mock.patch.object(server, "_codex_retire_deleted_thread_state"), \
+                 mock.patch.object(server, "_find_descendant_sessions") as descendants:
+                client.codex_client_observe({"method": method,
+                    "params": {"threadId": "exact-native-id"}}, self.transport)
+            enqueue.assert_called_once_with(method, {"exact-native-id"})
+            descendants.assert_not_called()
+
+    def test_failed_sync_does_not_overwrite_a_newer_lifecycle_state(self):
+        client._CLIENT_LIFECYCLE_PENDING["task"] = "thread/unarchived"
+
+        client._client_requeue_lifecycle_failure(
+            "task", "thread/archived", RuntimeError("sidecar unavailable"))
+
+        self.assertEqual(client._CLIENT_LIFECYCLE_PENDING["task"], "thread/unarchived")
+        self.assertEqual(client._CLIENT_LIFECYCLE_LAST_ERROR["thread_id"], "task")
+
+    def test_lifecycle_queue_overflow_is_explicit(self):
+        class RunningWorker:
+            @staticmethod
+            def is_alive():
+                return True
+
+        with mock.patch.dict("os.environ", {"CCC_EPHEMERAL": ""}), \
+             mock.patch.object(client, "_CLIENT_LIFECYCLE_LIMIT", 1), \
+             mock.patch.object(client, "_CLIENT_LIFECYCLE_WORKER", RunningWorker()), \
+             mock.patch.object(server, "_log_activity"):
+            client._CLIENT_LIFECYCLE_PENDING["existing"] = "thread/archived"
+            accepted = client._client_enqueue_lifecycle("thread/archived", {"overflow"})
+        self.assertFalse(accepted)
+        self.assertEqual(client._CLIENT_LIFECYCLE_LAST_ERROR["error"],
+                         "lifecycle sync queue is full")
+
+    def test_native_success_survives_sidebar_sync_failure_without_replay(self):
+        from ccc_server import codex_capabilities
+        catalog = {"ok": True, "methods": [{"method": "thread/archive", "available": True,
+            "read_only": False, "params_schema": {"type": "object"}}]}
+        data = {"method": "thread/archive", "params": {"threadId": "task"},
+            "context": {"thread_id": "task", "repo_path": "/test"},
+            "generation": client.CODEX_CONVERSATIONS.generation, "action_id": "archive-failure"}
+        with mock.patch.dict("os.environ", {"CCC_EPHEMERAL": ""}), \
+             mock.patch.object(codex_capabilities, "get_codex_catalog", return_value=catalog), \
+             mock.patch.object(server, "resolve_repo_path", return_value="/test"), \
+             mock.patch.object(client, "_client_read_thread", return_value={"id": "task", "cwd": "/test"}), \
+             mock.patch.object(client, "_client_rpc", return_value={"ok": True, "result": {}}) as rpc, \
+             mock.patch.object(server, "_codex_sync_native_lifecycle", side_effect=OSError("disk")), \
+             mock.patch.object(client, "_client_enqueue_lifecycle", return_value=True) as enqueue:
+            first = client._client_operation(data)
+            second = client._client_operation(data)
+        self.assertTrue(first["ok"])
+        self.assertTrue(first["sidebar_sync_pending"])
+        self.assertEqual(second, first)
+        rpc.assert_called_once()
+        enqueue.assert_called_once_with("thread/archived", {"task"})
+
+    def test_deferred_command_response_has_a_matching_bounded_deadline(self):
+        self.assertEqual(client._client_rpc_timeout("command/exec", {"timeoutMs": 60000}), 65)
+        self.assertEqual(client._client_rpc_timeout("command/exec", {"timeoutMs": 10**100}), 1805)
+        self.assertEqual(client._client_rpc_timeout("command/exec", {"timeoutMs": 1800000}), 1805)
+        self.assertEqual(client._client_rpc_timeout("command/exec", {}), 1805)
+        self.assertEqual(client._client_rpc_timeout("command/exec", {"timeoutMs": False}), 25)
+        self.assertEqual(client._client_rpc_timeout("account/read", {}), 25)
+
+    def test_preview_preference_survives_worker_reload_without_secrets(self):
+        import json
+        import os
+        import tempfile
+        from pathlib import Path
+        with tempfile.TemporaryDirectory() as directory, \
+             mock.patch.object(server, "COMMAND_CENTER_STATE_DIR", Path(directory)), \
+             mock.patch.dict(os.environ, {"CCC_EPHEMERAL": ""}), \
+             mock.patch.object(client, "_CLIENT_PREFERENCES_LOADED", False):
+            original = os.environ.pop("CCC_CODEX_EXPERIMENTAL", None)
+            try:
+                client._client_save_preferences(True)
+                self.assertEqual(json.loads(client._client_preferences_path().read_text()), {"experimental": True})
+                os.environ.pop("CCC_CODEX_EXPERIMENTAL", None)
+                client._client_load_preferences()
+                self.assertEqual(os.environ.get("CCC_CODEX_EXPERIMENTAL"), "1")
+            finally:
+                if original is None:
+                    os.environ.pop("CCC_CODEX_EXPERIMENTAL", None)
+                else:
+                    os.environ["CCC_CODEX_EXPERIMENTAL"] = original

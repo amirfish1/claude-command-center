@@ -133,3 +133,47 @@ class ConversationStoreTests(unittest.TestCase):
             self.store.record("m" * 10000, {})
         with self.assertRaises(ValueError):
             self.store.hydrate({"id": "x" * 10000}, 0)
+
+    def test_revert_invalidates_history_and_delete_keeps_only_tombstone(self):
+        self.store.hydrate({"id": "task", "cwd": "/repo", "turns": []}, 0)
+        self.event("item/completed", item={"id": "i", "type": "agentMessage", "text": "old"})
+        self.event("thread/reverted")
+        self.assertIsNone(self.store.snapshot("task")["thread"])
+        self.store.hydrate({"id": "task", "cwd": "/repo", "turns": []}, self.store.cursor)
+        self.event("item/completed", item={"id": "i", "type": "agentMessage", "text": "old"})
+        self.event("thread/deleted")
+        thread = self.store.snapshot("task")["thread"]
+        self.assertTrue(thread["deleted"])
+        self.assertEqual(thread["turns"], [])
+        self.assertEqual(thread["cwd"], "/repo")
+
+    def test_delete_purges_prior_payload_events_and_metadata(self):
+        self.store.hydrate({"id": "task", "cwd": "/repo", "name": "secret title", "turns": []}, 0)
+        self.event("item/completed", item={"id": "i", "type": "agentMessage", "text": "deleted secret"})
+        self.event("thread/realtime/outputAudio/delta", itemId="audio", delta="private audio")
+        self.event("item/mcpToolCall/progress", itemId="tool", message="private tool data")
+
+        self.event("thread/deleted")
+
+        thread = self.store.snapshot("task")["thread"]
+        self.assertEqual(thread, {"id": "task", "cwd": "/repo", "archived": False,
+                                  "deleted": True, "turns": []})
+        stream = self.store.events_since(0, "first", "task")
+        self.assertFalse(stream["resync_required"])
+        self.assertEqual([event["method"] for event in stream["events"]], ["thread/deleted"])
+        self.assertNotIn("deleted secret", str(stream))
+        self.assertNotIn("private audio", str(stream))
+        self.assertNotIn("private tool data", str(stream))
+
+    def test_deleted_tombstone_rejects_late_events_and_history(self):
+        before = self.store.cursor
+        self.event("thread/deleted")
+
+        self.event("item/completed", item={"id": "late", "type": "agentMessage", "text": "late secret"})
+        hydrated = self.store.hydrate({"id": "task", "turns": [{"id": "old", "items": [
+            {"id": "old-item", "type": "agentMessage", "text": "old secret"}]}]}, before)
+
+        self.assertFalse(hydrated)
+        self.assertEqual(self.store.snapshot("task")["thread"]["turns"], [])
+        self.assertNotIn("late secret", str(self.store.events_since(0, "first", "task")))
+        self.assertNotIn("old secret", str(self.store.snapshot("task")))

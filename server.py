@@ -14565,6 +14565,16 @@ def _overlay_conversation_lifecycle_flags(rows):
         archived_set, trashed_set = _load_conversation_lifecycle_sets()
     except Exception:
         return rows
+    try:
+        deleted_codex = _codex_deleted_thread_ids()
+    except Exception:
+        deleted_codex = set()
+    if isinstance(rows, list) and deleted_codex:
+        rows[:] = [row for row in rows if not (
+            isinstance(row, dict)
+            and row.get("engine") == "codex"
+            and str(row.get("session_id") or row.get("id") or "") in deleted_codex
+        )]
     for row in rows or []:
         if not isinstance(row, dict):
             continue
@@ -14765,6 +14775,10 @@ def _rehydrate_archive_cached_rows(rows):
         session_overrides = _load_session_overrides()
     except Exception:
         session_overrides = {}
+    try:
+        deleted_codex = _codex_deleted_thread_ids()
+    except Exception:
+        deleted_codex = set()
 
     # Same liveness gate as the build path. This rehydrate runs on EVERY
     # stale-cache serve — the path the dashboard hits on each load — so an
@@ -14798,6 +14812,8 @@ def _rehydrate_archive_cached_rows(rows):
             continue
         row = dict(raw)
         sid = row.get("session_id") or row.get("id")
+        if row.get("engine") == "codex" and str(sid or "") in deleted_codex:
+            continue
         if sid:
             override = name_overrides.get(sid)
             if override:

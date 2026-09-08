@@ -100,6 +100,16 @@ class RequestRegistryTests(unittest.TestCase):
         self.registry.cancel_turn("task", "turn", "one")
         self.assertEqual(len(self.registry.snapshot()["requests"]), 1)
 
+    def test_delete_cancels_thread_requests_and_terminalizes_ids(self):
+        self.question(17, "deleted")
+        self.question(18, "other")
+
+        self.registry.cancel_thread("deleted", "one")
+
+        self.assertEqual([row["thread_id"] for row in self.registry.snapshot()["requests"]], ["other"])
+        with self.assertRaisesRegex(ValueError, "already been resolved"):
+            self.question(17, "deleted")
+
     def test_provider_specific_forms_accept_protocol_valid_content(self):
         for mode in ("openai/form", "openaiForm"):
             key = self.registry.register(mode, "mcpServer/elicitation/request", {
