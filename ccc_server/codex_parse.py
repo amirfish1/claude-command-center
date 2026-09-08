@@ -266,6 +266,8 @@ def find_codex_conversations(
             "latest_input_tokens": tail.get("latest_input_tokens") or 0,
             "lifetime_tokens": tail.get("lifetime_tokens") or 0,
             "context_limit": tail.get("context_limit") or 0,
+            "cost_usd": tail.get("cost_usd"),
+            "cost_breakdown_usd": tail.get("cost_breakdown_usd"),
             **_core._token_optimizer_quality_for_session(sid),
             "goal": _goal.get("objective") or "",
             "goal_status": _goal.get("status") or "",

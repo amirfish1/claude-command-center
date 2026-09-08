@@ -9614,6 +9614,13 @@ def _extract_codex_tail_meta(path):
             "latest_input_tokens": 0,
             "lifetime_tokens": 0,
             "context_limit": 0,
+            "total_input_tokens": 0,
+            "total_cache_read_tokens": 0,
+            "total_output_tokens": 0,
+            "cost_usd": None,
+            "cost_breakdown_usd": None,
+            "cost_basis": None,
+            "cost_model": None,
         }
         pending_calls = {}
         pos = 0
@@ -9671,6 +9678,17 @@ def _extract_codex_tail_meta(path):
                             meta["lifetime_tokens"] = max(
                                 _core._codex_int(meta.get("lifetime_tokens")),
                                 reported_total,
+                            )
+                            # total_token_usage is a running cumulative snapshot
+                            # (not a per-turn delta), so pricing reads it directly
+                            # rather than summing every last_token_usage.
+                            total_in = _core._codex_int(total_usage.get("input_tokens"))
+                            total_cached = _core._codex_int(total_usage.get("cached_input_tokens"))
+                            meta["total_input_tokens"] = max(0, total_in - total_cached)
+                            meta["total_cache_read_tokens"] = total_cached
+                            meta["total_output_tokens"] = (
+                                _core._codex_int(total_usage.get("output_tokens"))
+                                + _core._codex_int(total_usage.get("reasoning_output_tokens"))
                             )
                         else:
                             meta["lifetime_tokens"] += (
@@ -9834,6 +9852,12 @@ def _extract_codex_tail_meta(path):
     meta["mtime"] = mtime
     if not meta.get("last_meaningful_ts"):
         meta["last_meaningful_ts"] = mtime
+    if meta.get("total_input_tokens") or meta.get("total_output_tokens"):
+        cost = _core._session_usage_cost("codex", meta.get("model") or "", meta)
+        meta["cost_usd"] = cost.get("cost_usd")
+        meta["cost_breakdown_usd"] = cost.get("cost_breakdown_usd")
+        meta["cost_basis"] = cost.get("cost_basis")
+        meta["cost_model"] = cost.get("cost_model")
     with _core._conv_meta_cache_lock:
         _core._conv_meta_cache[spath] = meta
         _core._codex_tail_resume[spath] = {
