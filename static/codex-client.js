@@ -1236,6 +1236,7 @@
   }
 
   function wireComposer(root) {
+    let sending = false;
     const form = root.querySelector('[data-codex-composer]');
     const input = form.querySelector('textarea');
     const interrupt = form.querySelector('[data-codex-interrupt]');
@@ -1299,6 +1300,13 @@
     const sync = () => {
       const running = runningTurn();
       form.querySelector('[data-codex-send-label]').textContent = running ? 'Steer' : 'Send';
+      const desktopBusy = !!running && state.catalog?.connection_kind === 'desktop-ipc';
+      if (state.catalog?.connection_kind === 'desktop-ipc') {
+        const submit = form.querySelector('[type=submit]');
+        submit.disabled = desktopBusy || sending;
+        submit.title = desktopBusy ? 'Wait for the desktop turn to finish, or stop it first.' : '';
+        if (desktopBusy) form.querySelector('[data-codex-send-label]').textContent = 'Working';
+      }
       interrupt.hidden = !running;
       modelSelect.disabled = !!running;
       effortSelect.disabled = !!running;
@@ -1311,10 +1319,10 @@
       if (state.composerAttachment && selectedModel && Array.isArray(selectedModel.inputModalities) && !selectedModel.inputModalities.includes('image')) {
         showError('The selected model does not accept images.'); return;
       }
-      const button = form.querySelector('[type=submit]'); button.disabled = true;
+      const button = form.querySelector('[type=submit]'); sending = true; button.disabled = true;
       try { await sendComposer(text, state.composerAttachment); input.value = ''; clearAttachment(); }
       catch (error) { showError(conciseError(error)); }
-      finally { button.disabled = false; sync(); }
+      finally { sending = false; button.disabled = false; sync(); }
     });
     input.addEventListener('keydown', event => { if (event.key === 'Enter' && !event.shiftKey && !event.isComposing) { event.preventDefault(); form.requestSubmit(); } });
     interrupt.addEventListener('click', async () => {
@@ -1437,7 +1445,7 @@
   function updateChrome() {
     if (!state.root) return;
     const connection = state.root.querySelector('[data-codex-connection]');
-    connection.textContent = state.connected ? 'Connected' : 'Reconnecting…';
+    connection.textContent = state.connected ? (state.catalog?.connection_kind === 'desktop-ipc' ? 'Desktop connected' : 'Connected') : 'Reconnecting…';
     connection.classList.toggle('is-connected', state.connected);
     const preview = state.root.querySelector('[data-codex-preview]');
     if (preview && state.catalog) preview.checked = !!state.catalog.experimental_enabled;
@@ -1451,7 +1459,11 @@
   async function loadCatalog(token) {
     const catalog = await jsonFetch(API + '/catalog');
     if (token !== state.requestToken || state.closed) return;
-    state.catalog = catalog; renderCatalog(); updateChrome(); await loadComposerModels(token);
+    state.catalog = catalog; renderCatalog(); updateChrome();
+    if (catalog.connection_note) showNotice(catalog.connection_note);
+    const owner = state.root.querySelector('[data-codex-queue-owner]');
+    if (owner) owner.closest('label').hidden = catalog.connection_kind === 'desktop-ipc';
+    await loadComposerModels(token);
   }
 
   async function loadHistory(token, cursor) {

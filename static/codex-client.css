@@ -29,6 +29,7 @@
 }
 
 .codex-client-shell {
+  position: relative;
   --codex-panel: color-mix(in srgb, var(--surface, #16191f) 92%, transparent);
   --codex-soft: color-mix(in srgb, var(--text, #e6edf3) 5%, transparent);
   --codex-soft-strong: color-mix(in srgb, var(--text, #e6edf3) 9%, transparent);

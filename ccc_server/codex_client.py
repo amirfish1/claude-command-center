@@ -26,6 +26,9 @@ _CLIENT_LOCK = threading.RLock()
 _CLIENT_ACTIONS = OrderedDict()
 _CLIENT_RECEIPTS = {}
 _CLIENT_QUEUE_SWITCHES = set()
+_CLIENT_DESKTOP_EPOCH = None
+_CLIENT_DESKTOP_REVISIONS = {}
+_CLIENT_DESKTOP_REQUESTS = {}
 _CLIENT_RECEIPT_LIMIT = 65536
 _CLIENT_COMMAND_LIMIT_MS = 30 * 60 * 1000
 _CLIENT_THREADS = OrderedDict()
@@ -309,9 +312,87 @@ def validate_operation_context(method, params, context, *, resolve_repo, read_th
     return normalized
 
 
+def _client_desktop_mode():
+    from ccc_server.codex_desktop import endpoint
+    return _core._CODEX_APP_SERVER_TRANSPORT is None and endpoint() is not None
+
+
+def _client_catalog():
+    from ccc_server.codex_capabilities import get_codex_catalog
+    catalog = get_codex_catalog()
+    if _client_desktop_mode():
+        from ccc_server.codex_desktop import METHODS
+        catalog = copy.deepcopy(catalog)
+        catalog["connection_kind"] = "desktop-ipc"
+        catalog["connection_note"] = "Connected through Codex Desktop. Conversation controls are available; standalone app-server settings and workspace tools require an app-server connection."
+        for descriptor in catalog.get("methods", []):
+            if descriptor["method"] not in METHODS:
+                descriptor["available"] = False
+                descriptor["unavailable_reason"] = "This operation is not exposed by the desktop connection"
+    return catalog
+
+
+def _client_desktop_rpc(method, params, expected_generation):
+    global _CLIENT_TRANSPORT, _CLIENT_DESKTOP_EPOCH
+    from ccc_server.codex_desktop import DESKTOP, ANSWERS
+    try:
+        if not isinstance(params, dict): raise ValueError("Desktop operation requires task parameters")
+        tid = params.get("threadId")
+        if not isinstance(tid, str) or not tid: raise ValueError("Choose a desktop conversation")
+        revision, state = DESKTOP.snapshot(tid)
+        with _CLIENT_LOCK:
+            if _CLIENT_TRANSPORT is not DESKTOP or _CLIENT_DESKTOP_EPOCH != DESKTOP.epoch:
+                _CLIENT_TRANSPORT = None
+                codex_client_connect(DESKTOP)
+                _CLIENT_DESKTOP_EPOCH = DESKTOP.epoch
+                _CLIENT_DESKTOP_REVISIONS.clear(); _CLIENT_DESKTOP_REQUESTS.clear()
+            generation = CODEX_CONVERSATIONS.generation
+            if expected_generation is not None and expected_generation != generation:
+                return {"ok": False, "code": "stale_connection", "generation": generation,
+                        "error": "The desktop connection changed; check the current task before retrying"}
+        result = DESKTOP.rpc(method, params)
+        revision, state = DESKTOP.snapshot(tid)
+        from ccc_server.codex_desktop import normalize_thread
+        with _CLIENT_LOCK:
+            if DESKTOP.epoch != _CLIENT_DESKTOP_EPOCH or _CLIENT_TRANSPORT is not DESKTOP:
+                return {"ok": False, "uncertain": method not in ("thread/read", "thread/turns/list"),
+                        "error": "Desktop owner changed during this operation", "resync_required": True}
+            if _CLIENT_DESKTOP_REVISIONS.get(tid) != revision:
+                thread = normalize_thread(state)
+                CODEX_CONVERSATIONS.record("ccc/desktop/snapshot", {"threadId": tid})
+                CODEX_CONVERSATIONS.hydrate(thread, CODEX_CONVERSATIONS.cursor, generation=generation)
+                active = {}
+                for request in state.get("requests") or []:
+                    if request.get("method") not in ANSWERS: continue
+                    rid = request.get("id")
+                    fields = {**(request.get("params") or {}), "threadId": tid}
+                    key = (type(rid).__name__, rid)
+                    active[key] = rid
+                    try: CODEX_REQUESTS.register(rid, request["method"], fields)
+                    except ValueError: pass  # A just-answered request may remain in an older snapshot.
+                for key, rid in _CLIENT_DESKTOP_REQUESTS.get(tid, {}).items():
+                    if key not in active: CODEX_REQUESTS.resolve(rid, tid, generation)
+                _CLIENT_DESKTOP_REQUESTS[tid] = active
+                _CLIENT_DESKTOP_REVISIONS[tid] = revision
+            return {"ok": True, "result": result, "generation": generation, "transport": "desktop-ipc"}
+    except (ValueError, OSError, KeyError, TypeError) as error:
+        if DESKTOP.sock is None:
+            codex_client_disconnect(DESKTOP)
+        return {"ok": False, "error": str(error)[:400], "code": "desktop_connection_error",
+                "uncertain": isinstance(error, (TimeoutError, ConnectionError)) or
+                any(word in str(error).lower() for word in ("disconnected", "timeout", "timed out", "connection-closed")),
+                "generation": CODEX_CONVERSATIONS.generation}
+
+
 def _client_rpc(method, params, timeout=25, expected_generation=None):
+    # An existing desktop owner needs no native process discovery or startup.
+    # Keep those potentially slow paths out of the desktop polling loop.
+    if _client_desktop_mode() and not _core._codex_managed_app_server_socket_path().exists():
+        return _client_desktop_rpc(method, params, expected_generation)
     transport = _core._ensure_codex_app_server()
     if transport is None:
+        if _client_desktop_mode():
+            return _client_desktop_rpc(method, params, expected_generation)
         return {"ok": False, "error": "Codex app-server is unavailable", "code": "codex_unavailable"}
     generation = CODEX_CONVERSATIONS.generation
     if expected_generation is not None and expected_generation != generation:
@@ -604,7 +685,7 @@ def _client_operation(data):
     method = data.get("method")
     if not isinstance(method, str):
         raise ValueError("Choose an operation")
-    catalog = get_codex_catalog()
+    catalog = _client_catalog()
     selected = next((entry for entry in catalog.get("methods", []) if entry.get("method") == method), None)
     if not selected or not selected.get("available"):
         raise ValueError((selected or {}).get("unavailable_reason") or "Unknown Codex operation")
@@ -749,7 +830,7 @@ def codex_client_dispatch(action, data):
                 if not isinstance(data.get("experimental"), bool):
                     raise ValueError("Preview preference must be a boolean")
                 _client_save_preferences(data["experimental"])
-            catalog = get_codex_catalog()
+            catalog = _client_catalog()
             if action == "schema":
                 descriptor = next((d for d in catalog.get("methods", []) if d["method"] == data.get("method")), None)
                 if descriptor is None:
@@ -776,6 +857,8 @@ def codex_client_dispatch(action, data):
         else:
             _client_scope("thread/read", {"threadId": tid}, context)
         if action == "queue-owner":
+            if _client_desktop_mode():
+                raise ValueError("This desktop conversation keeps its queue with Codex Desktop")
             from ccc_server.codex_queue_owner import claim_native_queue, release_native_queue, native_queue_owned
             with _CLIENT_LOCK:
                 if tid in _CLIENT_QUEUE_SWITCHES or any(
@@ -807,10 +890,13 @@ def codex_client_dispatch(action, data):
         if action == "respond":
             with _CLIENT_LOCK:
                 transport = _CLIENT_TRANSPORT
-                if transport is None or transport is not _core._CODEX_APP_SERVER_TRANSPORT:
+                from ccc_server.codex_desktop import DESKTOP
+                desktop = transport is DESKTOP and DESKTOP.sock is not None
+                if transport is None or not desktop and transport is not _core._CODEX_APP_SERVER_TRANSPORT:
                     raise ValueError("The original connection is no longer available")
+                send = (lambda wire: DESKTOP.answer(tid, wire)) if desktop else transport.send_json
                 result = CODEX_REQUESTS.respond(data.get("key"), data.get("result"),
-                    generation=data.get("generation"), thread_id=tid, send=transport.send_json)
+                    generation=data.get("generation"), thread_id=tid, send=send)
             _client_legacy_request_resolved(tid, result["request_id"])
             CODEX_CONVERSATIONS.record("serverRequest/resolved", {"threadId": tid, "requestId": result["request_id"]})
             return {"ok": True}

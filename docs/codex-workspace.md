@@ -1,7 +1,9 @@
 # Codex workspace
 
-Open a Codex conversation in CCC and choose **Workspace** in its header. The
-workspace has three views: Conversation, Workspace, and Settings.
+Open a Codex conversation in CCC and choose **Workspace** in its header, or
+**Codex workspace** in the toolbar when the header is hidden. This is the expanded
+conversation view, not a new repository or checkout. Its tabs are Conversation,
+Workspace, and Settings.
 
 The conversation renders Markdown, progress, final answers, tool results,
 file diffs, images, questions, and approvals. Tool details start collapsed.
@@ -22,11 +24,23 @@ The workspace uses that connection's owner; the browser does not launch a second
 writer against Codex's shared state. Transcript ingestion and the older exec
 fallback remain available separately.
 
-A running Codex or ChatGPT desktop app does **not** necessarily expose a supported
-external app-server endpoint. When CCC cannot attach to its owner, live workspace
-actions are unavailable. Do not point CCC at private desktop IPC sockets or start
-a competing writer against the same profile. A separately owned app-server needs
-its own profile and authentication, or a supported owner-provided control endpoint.
+CCC can also follow conversations already owned by the running Codex/ChatGPT
+desktop app. Its separate desktop adapter discovers the owner, subscribes to
+versioned history updates, and routes supported replies back to that owner. It
+never starts a second writer against the same profile. The footer says
+**Desktop connected** when this connection is active.
+
+The desktop adapter supports conversation history, sending a new turn when idle,
+stopping the expected active turn, compaction, questions, and supported approvals.
+In-flight steering is unavailable because the desktop follower interface does not
+expose the native API's atomic expected-turn guard. Queues stay with the desktop.
+Other workspace/settings/media operations require a direct app-server connection;
+the UI explains which actions the current connection exposes.
+
+This desktop follower protocol is an installed-app integration, distinct from the
+public app-server protocol, and can change between desktop releases. Unknown
+stream versions and changed owners fail closed. The selected conversation must
+have an available desktop owner; opening it in the desktop app establishes one.
 
 ## Capability discovery
 

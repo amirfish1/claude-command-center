@@ -15,6 +15,9 @@ class Transport:
 
 class ClientProtocolTests(unittest.TestCase):
     def setUp(self):
+        desktop_mode = mock.patch.object(client, "_client_desktop_mode", return_value=False)
+        desktop_mode.start()
+        self.addCleanup(desktop_mode.stop)
         self.transport = Transport()
         client.codex_client_connect(self.transport)
         client._CLIENT_ACTIONS.clear()
