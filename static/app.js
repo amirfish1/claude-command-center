@@ -59019,6 +59019,13 @@
       headline = title ? 'Session named “' + title + '”' : 'Session title updated';
     } else if (verb === 'INJECT') headline = 'Message injection requested';
     else if (verb === 'SPAWN') headline = 'Agent started';
+    else if (verb === 'KILL' && /(?:^|\s)source=spawn_idle_ttl(?:\s|$)/.test(metadata)) {
+      const idleHours = (metadata.match(/(?:^|\s)idle_hours=([^\s]+)/) || [])[1];
+      const ttlHours = (metadata.match(/(?:^|\s)ttl_hours=([^\s]+)/) || [])[1];
+      headline = 'CCC idle-TTL reaper ended a session'
+        + (idleHours ? ' after ' + idleHours + 'h idle' : '')
+        + (ttlHours ? ' (TTL ' + ttlHours + 'h)' : '');
+    }
     else if (verb === 'UDS') {
       const receipt = (metadata.match(/(?:^|\s)receipt=([^\s]+)/) || [])[1];
       level = receipt === 'delivered' ? 'success' : receipt === 'queued' ? 'info' : 'warning';
