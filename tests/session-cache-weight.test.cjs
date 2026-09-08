@@ -18,7 +18,7 @@ test('Opus and original Fable retain their 10% cache discount', () => {
 });
 test('graph keeps the 30-turn window and passes the session model to its tooltip', () => {
   const graphStart = source.indexOf('  const RAIL_TURN_GRAPH_MAX');
-  const graphEnd = source.indexOf('  // Big accumulated-token headline', graphStart);
+  const graphEnd = source.indexOf('  // RAIL_USAGE_BREAKDOWN_START', graphStart);
   ctx.escapeAttr = s => s;
   ctx._formatTokens = n => String(n);
   vm.runInContext(source.slice(graphStart, graphEnd), ctx);

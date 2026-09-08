@@ -51519,12 +51519,68 @@
       + _formatTokens(max) + '</div>';
   }
 
-  // Big accumulated-token headline in the status rail head. When the server
-  // provides a cache-adjusted total, the headline shows that number instead of
-  // raw window size; the raw in / cached / out breakdown still appears below.
-  // The rail is global, so only the active pane drives it. Reuses the /usage
-  // payload the composer strip already fetched (_usageDataByPane) — no extra
-  // request per selection.
+  // RAIL_USAGE_BREAKDOWN_START
+  // Use the server's priced buckets: cache creation is an alternative input
+  // rate, never an additional set of tokens on top of noncached input.
+  function railUsageBreakdown(usage) {
+    const u = usage || {};
+    const costs = u.cost_breakdown_usd || {};
+    const count = key => Math.max(0, Number(u[key]) || 0);
+    const base = count('total_input_tokens');
+    const write = count('total_cache_creation_tokens');
+    const read = count('total_cache_read_tokens');
+    const output = count('total_output_tokens');
+    const cost = (key, tokens) => {
+      const value = costs[key];
+      return value != null && Number.isFinite(Number(value)) && Number(value) >= 0
+        ? Number(value) : (tokens === 0 ? 0 : null);
+    };
+    const baseCost = cost('input', base);
+    const writeCost = cost('cache_creation', write);
+    const inputCost = baseCost != null && writeCost != null ? baseCost + writeCost : null;
+    const rate = (amount, tokens) => amount != null && tokens > 0 ? amount * 1e6 / tokens : null;
+    const rows = [
+      { label: 'Input, not cached', tokens: base + write, cost: inputCost,
+        baseRate: rate(baseCost, base), writeRate: rate(writeCost, write), writeTokens: write },
+      { label: 'Cached input', tokens: read, cost: cost('cache_read', read) },
+      { label: 'Output', tokens: output, cost: cost('output', output) },
+    ];
+    rows.forEach(row => { row.rate = rate(row.cost, row.tokens); });
+    return {
+      rows,
+      totalTokens: base + write + read + output,
+      totalCost: rows.every(row => row.cost != null)
+        ? rows.reduce((sum, row) => sum + row.cost, 0) : null,
+    };
+  }
+
+  function railUsageBreakdownHtml(presentation) {
+    const money = value => value == null ? 'Unavailable' : '$' + value.toFixed(4);
+    const price = value => '$' + value.toFixed(2);
+    return '<div class="rail-usage-breakdown">' + presentation.rows.map(row => {
+      const rate = row.rate == null ? 'Rate unavailable'
+        : price(row.rate) + ' / MTok' + (row.writeTokens ? ' blended' : '');
+      let detail = '';
+      if (row.writeTokens) {
+        const rates = [];
+        if (row.baseRate != null) rates.push(price(row.baseRate) + ' base');
+        if (row.writeRate != null) rates.push(price(row.writeRate) + ' cache write');
+        detail = '<div class="rail-usage-detail">'
+          + row.writeTokens.toLocaleString() + ' cache-write tokens included'
+          + (rates.length ? ' · ' + rates.join(' / ') + ' per MTok' : '') + '</div>';
+      }
+      return '<div class="rail-usage-row"><div class="rail-usage-heading"><span>'
+        + row.label + '</span><strong>' + money(row.cost) + '</strong></div>'
+        + '<div>' + row.tokens.toLocaleString() + ' tokens · ' + rate + '</div>'
+        + detail + '</div>';
+    }).join('') + '<div class="rail-usage-total">Total · '
+      + presentation.totalTokens.toLocaleString() + ' tokens · '
+      + money(presentation.totalCost) + '</div></div>';
+  }
+  // RAIL_USAGE_BREAKDOWN_END
+
+  // Full-session counts and API list-price equivalent, from the same usage
+  // payload as the composer. Only the graph below is limited to recent turns.
   function _renderRailTokens(paneId) {
     if (document.hidden) return;
     const el = document.getElementById('statusRailTokens');
@@ -51533,92 +51589,24 @@
     if (paneId && active && paneId !== active) return;
     const pid = paneId || active;
     const u = pid ? _usageDataByPane[pid] : null;
-    const inFresh = u ? (Number(u.total_input_tokens) || 0) : 0;
-    const inCached = u
-      ? (Number(u.total_cache_read_tokens) || 0)
-        + (Number(u.total_cache_creation_tokens) || 0)
-      : 0;
-    const outTok = u ? (Number(u.total_output_tokens) || 0) : 0;
-    const rawTotal = inFresh + inCached + outTok;
-    const cacheAdjusted = u ? (Number(u.cache_adjusted_tokens) || NaN) : NaN;
-    const hasCacheAdjusted = Number.isFinite(cacheAdjusted) && cacheAdjusted > 0;
-    // Cache-adjusted tokens are only comparable within one model's own price
-    // ladder -- an Opus session and a Haiku session can show the same token
-    // count for wildly different actual spend. baseline_equivalent_tokens
-    // (server, CCC-1016) re-expresses the session's real $ cost in a fixed
-    // model's (Opus 5) token units, so the headline is comparable across
-    // engines/models, not just within one.
-    const baselineTokens = u ? (Number(u.baseline_equivalent_tokens) || NaN) : NaN;
-    const hasBaseline = Number.isFinite(baselineTokens) && baselineTokens > 0;
-    const total = hasBaseline ? baselineTokens : (hasCacheAdjusted ? cacheAdjusted : rawTotal);
-    if (!total) {
+    const breakdown = railUsageBreakdown(u);
+    if (!breakdown.totalTokens) {
       el.hidden = true;
       el.innerHTML = '';
       return;
     }
-    const sessionId = pid ? _usageSessionIdByPane[pid] : '';
-    const monthlyPlan = _monthlyClaudePlanUsd();
-    const presentation = railSessionCostPresentation(
-      u, sessionId, monthlyPlan, _weeklyClaudeUsage
-    );
-    const costText = railSessionCostText(presentation);
-    const baselineFriendly = u && u.baseline_model
-      ? _claudeFriendlyModelName(u.baseline_model)
-      : '';
-    const baselineLabel = baselineFriendly
-      ? baselineFriendly + '-equivalent tokens'
-      : 'baseline-equivalent tokens';
-    // When the session runs a model priced differently from the Opus 5
-    // baseline (e.g. Fable 5 at 2x Opus 5), the equivalent count diverges
-    // from the raw token count and reads as a misprice. Name the session's
-    // own model and the list-price ratio (server, baseline_price_ratio) so
-    // the direction of the conversion is explicit (CCC-1047).
-    const sessionModelName = u && u.model ? _claudeFriendlyModelName(u.model) : '';
-    const sessionDiffersBaseline = hasBaseline && sessionModelName
-      && sessionModelName !== baselineFriendly;
-    const priceRatio = u ? (Number(u.baseline_price_ratio) || 0) : 0;
-    const headlineLabel = hasBaseline
-      ? (sessionDiffersBaseline
-        ? sessionModelName + ' &middot; ' + baselineLabel
-        : baselineLabel)
-      : (hasCacheAdjusted ? 'cache-adjusted tokens this conversation' : 'tokens this conversation');
-    el.innerHTML =
-      '<div class="rail-tokens-value">' + _formatTokens(total) + '</div>'
-      + '<div class="rail-tokens-label">' + headlineLabel
-      + (presentation ? ' &middot; ' + costText.label : '')
-      + '</div>'
-      + _railTurnGraphHtml(u && u.turn_series, u && u.model)
-      + '<div class="rail-tokens-cache">Full session · fresh in ' + inFresh.toLocaleString()
-      + ' &middot; cache read ' + (Number(u.total_cache_read_tokens) || 0).toLocaleString()
-      + ' &middot; cache write ' + (Number(u.total_cache_creation_tokens) || 0).toLocaleString()
-      + ' &middot; out ' + outTok.toLocaleString()
-      + '</div>';
-    el.title = (hasBaseline
-        ? (sessionDiffersBaseline
-          ? sessionModelName + ' session'
-            + (priceRatio > 0
-              ? ' (base input/output list price ' + priceRatio.toFixed(2) + '\u00d7 ' + baselineFriendly + ')'
-              : '')
-            + ' \u2014 '
-          : '')
-          + total.toLocaleString() + ' ' + baselineLabel + ' (same $ cost priced at '
-          + _claudeFriendlyModelName(u.baseline_model) + " rates -- raw total "
-          + rawTotal.toLocaleString() + ', '
-        : hasCacheAdjusted
-        ? total.toLocaleString() + ' cache-adjusted tokens (raw total '
-          + rawTotal.toLocaleString() + ', '
-        : total.toLocaleString() + ' tokens (')
-      + _formatTokens(inFresh) + ' in, '
-      + _formatTokens(inCached) + ' in cached, '
-      + _formatTokens(outTok) + ' out)'
-      + (presentation ? ' · ' + costText.tooltip : '');
+    const modelName = u && u.model ? _claudeFriendlyModelName(u.model) : '';
+    const headline = breakdown.totalCost == null ? 'Cost unavailable'
+      : '$' + breakdown.totalCost.toFixed(2);
+    el.innerHTML = '<div class="rail-tokens-value">' + headline + '</div>'
+      + '<div class="rail-usage-caption">Full session'
+      + (modelName ? ' · ' + escapeHtml(modelName) : '')
+      + '<br>API list-price equivalent</div>'
+      + railUsageBreakdownHtml(breakdown)
+      + _railTurnGraphHtml(u && u.turn_series, u && u.model);
+    el.title = 'Full-session API list-price equivalent. Each token bucket is counted once. '
+      + 'This is not the subscription amount charged.';
     el.hidden = false;
-    const weeklyUsageIsStale = !_weeklyClaudeUsage
-      || Date.now() - _weeklyClaudeUsage.loadedAt >= WEEKLY_CLAUDE_USAGE_REFRESH_MS;
-    if (railSessionUsageEngine(u) === 'claude'
-        && monthlyPlan && weeklyUsageIsStale && !_weeklyClaudeUsageRequest) {
-      _refreshWeeklyClaudeUsage();
-    }
   }
 
   document.addEventListener('visibilitychange', () => {
