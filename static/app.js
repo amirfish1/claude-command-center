@@ -3579,7 +3579,11 @@
       quality_grade: c.quality_grade || '',
       quality_summary: c.quality_summary || '',
       quality_timestamp: c.quality_timestamp || '',
-      cost_usd: c.cost_usd || 0,
+      // null (not 0) when the server never reported a cost — engines like
+      // Codex don't write total_cost_usd, so null means "untracked", not
+      // "spent nothing"; the row badge needs that distinction to avoid
+      // showing a misleading $0.0 for every non-Claude session.
+      cost_usd: c.cost_usd != null ? c.cost_usd : null,
       cost_breakdown_usd: c.cost_breakdown_usd || null,
     };
   }
@@ -33965,15 +33969,17 @@
         // spend actually accrued on its children — show the cluster total
         // (passed down by _renderSubagentCluster) so the badge matches what
         // the "by cost" sort actually ranks this row on.
-        const costLabel = _formatRowCostUsd(
-          opts.clusterCostUsd != null ? opts.clusterCostUsd : c.cost_usd
-        );
+        const rawCost = opts.clusterCostUsd != null ? opts.clusterCostUsd : c.cost_usd;
+        const costKnown = rawCost != null;
+        const costLabel = _formatRowCostUsd(rawCost);
         const pctLabel = ctxPct.pct + '%';
-        // Badge shows cost only while the list is sorted "by cost" — the
-        // rest of the time it's the context-% reading it always was.
-        const showCost = _rowBadgeShowsCost();
+        // Badge shows cost only while the list is sorted "by cost" AND the
+        // engine actually reports a cost (Codex et al. don't) — otherwise a
+        // real "no data" reads as a fake "$0 spent". Falls back to the
+        // always-available context % rather than a misleading $0.0.
+        const showCost = _rowBadgeShowsCost() && costKnown;
         const badgeLabel = showCost ? costLabel : pctLabel;
-        const tip = costLabel + ' estimated cost · ' + ctxPct.source + ' ' + ctxPct.displayTokens.toLocaleString() + ' / ' + ctxPct.limit.toLocaleString() + ' tokens (' + ctxPct.pct + '%) - click to run /compact';
+        const tip = (costKnown ? costLabel + ' estimated cost · ' : '') + ctxPct.source + ' ' + ctxPct.displayTokens.toLocaleString() + ' / ' + ctxPct.limit.toLocaleString() + ' tokens (' + ctxPct.pct + '%) - click to run /compact';
         const pctLevel = ctxPct.pct > 60 ? ' is-danger' : (ctxPct.pct > 30 ? ' is-warn' : '');
         // data-pct stays the context %, not the label — the /compact confirm
         // dialog and the warn/danger threshold classing both key off it.
@@ -34370,13 +34376,29 @@
       // age: _repeatGroupRange emits max-first, which reads "1h-5h".
       const stamps = cards.map(c => c.modified || c.last_interacted || 0).filter(Boolean);
       const rel = _repeatGroupRange(stamps, relativeTime, true);
-      const groupCosts = cards.map(c => Number(c.cost_usd) || 0).filter(v => v > 0);
-      const ctxRange = _repeatGroupRange(groupCosts, _formatRowCostUsd, false);
-      const ctxHtml = ctxRange
-        ? '<span class="conv-repeat-group-ctx" title="' + escapeAttr('Estimated cost across '
-            + groupCosts.length + ' of ' + cards.length + ' folded session' + (cards.length === 1 ? '' : 's'))
-          + '">' + escapeHtml(ctxRange) + '</span>'
-        : '';
+      const _showGroupCost = _rowBadgeShowsCost();
+      const ctxHtml = _showGroupCost
+        ? (() => {
+            const groupCosts = cards.map(c => Number(c.cost_usd) || 0).filter(v => v > 0);
+            const ctxRange = _repeatGroupRange(groupCosts, _formatRowCostUsd, false);
+            return ctxRange
+              ? '<span class="conv-repeat-group-ctx" title="' + escapeAttr('Estimated cost across '
+                  + groupCosts.length + ' of ' + cards.length + ' folded session' + (cards.length === 1 ? '' : 's'))
+                + '">' + escapeHtml(ctxRange) + '</span>'
+              : '';
+          })()
+        : (() => {
+            const groupPcts = cards.map(c => {
+              const ctx = _convRowContextPct(c);
+              return ctx ? ctx.pct : null;
+            }).filter(v => typeof v === 'number' && isFinite(v));
+            const ctxRange = _repeatGroupRange(groupPcts, v => v, false);
+            return ctxRange
+              ? '<span class="conv-repeat-group-ctx" title="' + escapeAttr('Context use across '
+                  + groupPcts.length + ' of ' + cards.length + ' folded session' + (cards.length === 1 ? '' : 's'))
+                + '">' + escapeHtml(ctxRange) + '%</span>'
+              : '';
+          })();
       const keyAttr = escapeAttr(_repeatGroupStorageKey(key));
       const sessionIdsAttr = escapeAttr(JSON.stringify(cards.map(c => c.session_id || c.id).filter(Boolean)));
       const groupArchiveAction = opts.lifecycleContext === 'active'
@@ -34527,6 +34549,10 @@
       const clusterCostUsd = (cluster.rows || []).reduce((sum, item) => (
         sum + (Number(item.card.cost_usd) || 0)
       ), 0);
+      // If every row's own cost is untracked (e.g. an all-Codex cluster),
+      // the sum is a fake $0, not a real known total — keep that distinct
+      // so the badge can fall back to % instead of a misleading $0.0.
+      const clusterCostKnown = (cluster.rows || []).some(item => item.card.cost_usd != null);
       const parentOpts = Object.assign({}, opts, {
         subagentClusterMeta: {
           parentId,
@@ -34536,7 +34562,7 @@
           expanded,
           collapsible: isCollapsible,
         },
-        clusterCostUsd,
+        clusterCostUsd: clusterCostKnown ? clusterCostUsd : null,
       });
       const descendants = (cluster && Array.isArray(cluster.rows)) ? cluster.rows.slice(1).map(item => ({ item, bridge: false })) : [];
       const descendantsHtml = descendants.map(entry => _renderRow(entry.item.card, Object.assign({}, opts, {
@@ -52461,17 +52487,19 @@
     // polled conversation-list render/patch, so an actively-streaming
     // session showed a stale sidebar % while the strip right above it
     // already had the live count. Same pct formula as _convRowContextPct so
-    // the number matches once the next real poll lands. The badge itself
-    // displays $ cost (not the %), so data-pct/threshold classes stay
-    // percentage-based while the visible text mirrors the cost pill above.
+    // the number matches once the next real poll lands. data-pct/threshold
+    // classes always stay percentage-based; the visible text only swaps to
+    // $ cost while the list is sorted "by cost" (_rowBadgeShowsCost).
     const _sidebarSid = _usageSessionIdByPane[paneId];
     if (_sidebarSid && displayTokens) {
       const sidebarPct = (hasLiveContext && livePct) ? livePct : calcPct;
-      const sidebarTip = _formatRowCostUsd(cost) + ' estimated cost · ' + sourceLabel + ' ' + displayTokens.toLocaleString() + ' / ' + limit.toLocaleString() + ' tokens (' + sidebarPct + '%) - click to run /compact';
+      const _showCost = _rowBadgeShowsCost();
+      const sidebarTip = (_showCost ? _formatRowCostUsd(cost) + ' estimated cost · ' : '')
+        + sourceLabel + ' ' + displayTokens.toLocaleString() + ' / ' + limit.toLocaleString() + ' tokens (' + sidebarPct + '%) - click to run /compact';
       document.querySelectorAll('.conv-item[data-session-id="' + CSS.escape(_sidebarSid) + '"] [data-role="conv-pct-compact"]').forEach(el => {
         if (el.dataset.pct !== String(sidebarPct)) el.dataset.pct = String(sidebarPct);
         if (el.title !== sidebarTip) el.title = sidebarTip;
-        const text = _formatRowCostUsd(cost);
+        const text = _showCost ? _formatRowCostUsd(cost) : sidebarPct + '%';
         if (el.textContent !== text) el.textContent = text;
         el.classList.toggle('is-danger', sidebarPct > 60);
         el.classList.toggle('is-warn', sidebarPct > 30 && sidebarPct <= 60);
