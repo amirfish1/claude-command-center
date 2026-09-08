@@ -79023,3 +79023,7 @@
     boot();
   }
 })();
+    // A normal click on the row already shown in this pane has nothing to
+    // select. In particular, do not re-run selectConversation(): it resets
+    // the active reader and restarts its streams.
+    if (paneByPaneId(activePaneId())?.conversationId === el.dataset.id) return true;

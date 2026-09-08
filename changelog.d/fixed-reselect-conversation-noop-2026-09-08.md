@@ -1,0 +1,1 @@
+- Clicking the already-open conversation row no longer reloads its reader.
