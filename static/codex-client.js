@@ -1782,17 +1782,27 @@
     if (entry && entry.threadId === context.threadId && entry.client.__testing.state.root?.isConnected) return true;
     if (entry?.pending && entry.threadId === context.threadId) return entry.pending;
     if (entry && entry.threadId === context.threadId && entry.retryAfter > Date.now()) return false;
-    try {
-      if (entry) await retire(entry);
-      if (retiredCleanup.has(context.threadId)) await retiredCleanup.get(context.threadId);
-    } catch (_) { return false; }
-    if (retiredCleanup.size >= 128) return false;
+    // Claim the pane synchronously, before the first await: two attachInline
+    // calls racing past `await retire(...)` would otherwise mount two shells,
+    // and the loser's close() restores a savedView that already contains the
+    // winner's shell — orphaning a dead shell over the legacy transcript.
+    const previous = entry;
     entry = {threadId:context.threadId, client:createClient(), pending:null, retryAfter:0};
     inlineClients.set(pane,entry);
-    entry.pending = entry.client.open({...context,inline:true}).then(()=>true).catch(()=>{
-      entry.retryAfter = Date.now()+15000;
-      return false;
-    }).finally(()=>{entry.pending=null;});
+    entry.pending = (async () => {
+      try {
+        if (previous) await retire(previous);
+        if (retiredCleanup.has(context.threadId)) await retiredCleanup.get(context.threadId);
+      } catch (_) { return false; }
+      if (retiredCleanup.size >= 128) return false;
+      try {
+        await entry.client.open({...context,inline:true});
+        return true;
+      } catch (_) {
+        entry.retryAfter = Date.now()+15000;
+        return false;
+      }
+    })().finally(()=>{entry.pending=null;});
     return entry.pending;
   }
   function isInlineActive(pane) {

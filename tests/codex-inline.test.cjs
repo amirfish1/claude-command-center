@@ -62,6 +62,49 @@ test('late engine identification upgrades an already-painted conversation',async
  }finally{await page.close()}
 });
 
+test('racing inline attaches never orphan a dead shell over the transcript',async()=>{
+ const page=await browser.newPage();await page.setViewport({width:1400,height:900});
+ await page.setContent('<body class="status-pos-right"><div class="conv-pane has-status-rail is-codex-session" data-pane-id="p1"><header class="conv-pane-header">Existing header</header><div class="conversations-view"><div class="event">Old transcript</div></div><aside class="status-rail">Existing rail</aside><div class="conv-input-bar"><textarea>Draft stays here</textarea><button>Send</button></div></div></body>');
+ await page.addStyleTag({path:path.resolve('static/codex-client.css')});
+ // The desktop is unreachable: catalog answers, history/state fail like the
+ // live [Errno 61] offline case. Two attach triggers fire at once (the pane
+ // watcher and the render hooks); they must share one attempt, and the
+ // failed attempt must leave the legacy transcript exactly as it was.
+ await page.evaluate(()=>{
+  let historyFetches=0;
+  window.__historyFetches=()=>historyFetches;
+  window.fetch=async(url)=>{
+   const u=String(url);
+   if(u.includes('/catalog'))return{ok:true,json:async()=>({ok:true,methods:[],connection_kind:'desktop-ipc'})};
+   if(u.includes('/history')||u.includes('/state')){historyFetches++;return{ok:true,json:async()=>({ok:false,code:'codex_client_error',error:'[Errno 61] Connection refused',available:true})};}
+   return{ok:true,json:async()=>({ok:true})};
+  };
+ });
+ await page.addScriptTag({path:path.resolve('static/codex-client.js')});
+ try{
+  const result=await page.evaluate(async()=>{
+   const pane=document.querySelector('.conv-pane');
+   const view=pane.querySelector('.conversations-view');
+   const context={paneEl:pane,threadId:'one',repoPath:'/repo',paneId:'p1',viewEl:view};
+   // First attempt fails and leaves an entry with a 15s retry gate. The
+   // race window the live dashboard hit is the `await retire(previousEntry)`
+   // in the NEXT attempt — so lapse the gate, then fire two attaches at once.
+   const first=await window.CCCCodexClient.attachInline(context);
+   const realNow=Date.now;
+   Date.now=()=>realNow()+16000;
+   let pair;
+   try{ pair=await Promise.all([window.CCCCodexClient.attachInline(context),window.CCCCodexClient.attachInline(context)]); }
+   finally{ Date.now=realNow; }
+   return{first,pair,shells:view.querySelectorAll('.codex-client-shell').length,
+    events:view.querySelectorAll('.event').length,
+    transcript:view.textContent.includes('Old transcript'),
+    draft:pane.querySelector('.conv-input-bar textarea').value,
+    historyFetches:window.__historyFetches()};
+  });
+  assert.deepEqual(result,{first:false,pair:[false,false],shells:0,events:1,transcript:true,draft:'Draft stays here',historyFetches:2});
+ }finally{await page.close()}
+});
+
 // Batch-1 recovery assertions: the inline native renderer reuses the
 // original CCC step renderer (kimi tool rows/groups + thinking blocks)
 // instead of generic Reasoning/Command cards. The real helpers are sliced
