@@ -78,6 +78,10 @@ _CODEX_APP_SERVER_WARMUP_LAST = 0.0
 _CODEX_APP_SERVER_LIVENESS_INTERVAL = 20.0
 _CODEX_APP_SERVER_LIVENESS_TIMEOUT = 8.0
 _CODEX_APP_SERVER_LIVENESS_MISS_THRESHOLD = 2
+# A previous initializer can lose its transport before reaching its cleanup
+# path. Callers must fall back rather than waiting behind that stale flag
+# forever; a normal initialize request itself has a 10-second deadline.
+_CODEX_APP_SERVER_INITIALIZING_WAIT_S = 15.0
 _CODEX_SHARED_STATE_BLOCK_RETRY_S = 30.0
 _CODEX_SHARED_STATE_BLOCK_RETRY_UNTIL = 0.0
 _CODEX_APP_SERVER_INFLIGHT_LOCK = threading.Lock()
@@ -3403,14 +3407,43 @@ def _ensure_codex_app_server(*, allow_stdio=True):
     pending_log = None
     pending_dump_reason = None
     keep_transport = None
+    initialization_wait_timed_out = False
+    initialization_wait_started = time.monotonic()
     with _core._CODEX_APP_SERVER_LOCK:
         while _core._CODEX_APP_SERVER_INITIALIZING:
-            _core._CODEX_APP_SERVER_LOCK.wait(0.5)
+            remaining = _CODEX_APP_SERVER_INITIALIZING_WAIT_S - (
+                time.monotonic() - initialization_wait_started
+            )
+            if remaining <= 0:
+                initialization_wait_timed_out = True
+                break
+            _core._CODEX_APP_SERVER_LOCK.wait(min(0.5, remaining))
             transport = _core._CODEX_APP_SERVER_TRANSPORT
             if transport is not None and transport.alive() and _core._CODEX_APP_SERVER_INITIALIZED:
                 return transport
             if not _core._CODEX_APP_SERVER_INITIALIZING:
                 break
+    if initialization_wait_timed_out:
+        with _core._CODEX_APP_SERVER_LOCK:
+            transport = _core._CODEX_APP_SERVER_TRANSPORT
+            if (
+                transport is not None
+                and transport.alive()
+                and _core._CODEX_APP_SERVER_INITIALIZED
+            ):
+                return transport
+        _core._app_server_trace(
+            "initializing-timeout",
+            wait_s=_CODEX_APP_SERVER_INITIALIZING_WAIT_S,
+        )
+        _core._log_activity(
+            "app-server",
+            "INIT_STALE",
+            "Codex app-server initialization did not finish before the "
+            f"{_CODEX_APP_SERVER_INITIALIZING_WAIT_S:g}s fallback deadline",
+        )
+        return None
+    with _core._CODEX_APP_SERVER_LOCK:
         transport = _core._CODEX_APP_SERVER_TRANSPORT
         if transport is not None and transport.alive() and _core._CODEX_APP_SERVER_INITIALIZED:
             now = time.time()

@@ -105,6 +105,29 @@ class TestSharedStateConflictCooldownTest(unittest.TestCase):
         self.assertEqual(log_activity.call_count, 1)
 
 
+class StaleAppServerInitializationTest(unittest.TestCase):
+    """An initializer that loses its transport must not strand all callers."""
+
+    def test_stale_initialization_returns_unavailable_instead_of_waiting_forever(self):
+        import server  # noqa: F401  (registers the _core namespace)
+        transport = mock.Mock()
+        transport.alive.return_value = False
+
+        with mock.patch.object(codex._core, "_CODEX_APP_SERVER_TRANSPORT", transport), \
+             mock.patch.object(codex._core, "_CODEX_APP_SERVER_PROC", mock.Mock()), \
+             mock.patch.object(codex._core, "_CODEX_APP_SERVER_INITIALIZED", False), \
+             mock.patch.object(codex._core, "_CODEX_APP_SERVER_INITIALIZING", True), \
+             mock.patch.object(codex, "_CODEX_APP_SERVER_INITIALIZING_WAIT_S", 0), \
+             mock.patch.object(codex, "_codex_managed_app_server_enabled", return_value=False), \
+             mock.patch.object(codex._core, "_log_activity") as log_activity:
+            self.assertIsNone(codex._ensure_codex_app_server(allow_stdio=False))
+            self.assertTrue(codex._core._CODEX_APP_SERVER_INITIALIZING)
+            self.assertFalse(codex._core._CODEX_APP_SERVER_INITIALIZED)
+
+        transport.close.assert_not_called()
+        self.assertTrue(any(call.args[1] == "INIT_STALE" for call in log_activity.call_args_list))
+
+
 
 class WakeStallOutcomeTest(unittest.TestCase):
     """A resume that never reaches `running` must report a cause, not spin."""
