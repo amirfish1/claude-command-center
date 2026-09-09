@@ -3511,18 +3511,56 @@
       paneEl: paneEl || convPaneElById(paneId),
       paneId,
       threadId: sessionIdByConv[conversationId] || row && row.session_id || conversationId,
-      repoPath: rowRepoPath(row) || activeConvRepoPath(),
+      repoPath: rowRepoPath(row) || sessionCwdByConv[conversationId] || pane?.currentSession?.cwd || _workspaceDataByPane[paneId]?.cwd || activeConvRepoPath(),
       environmentId: row && (row.environment_id || row.environmentId) || '',
       title: row && (row.custom_title || row.title || row.name) || 'Codex task',
     };
   };
   window.CCCCodexMarkdown = function (text) { return renderMarkdown(String(text || '')); };
+  window.CCCCodexStepNode = function (item) {
+    const type = String(item.type || '').toLowerCase();
+    const holder = document.createElement('div');
+    const strings = value => typeof value === 'string' ? value : Array.isArray(value) ? value.map(strings).filter(Boolean).join('\n\n') : value?.text || '';
+    if (type === 'reasoning') {
+      const text = strings(item.summary) || strings(item.content);
+      if (!text.trim()) { holder.className = 'kimi-marker'; holder.hidden = true; return holder; }
+      holder.innerHTML = _kimiThinkingHtml(text, true);
+      return holder.firstElementChild;
+    }
+    let block;
+    if (type === 'commandexecution') {
+      const command = Array.isArray(item.command) ? item.command.join(' ') : String(item.command || '');
+      block = {id:item.id,name:'Bash',command,input:{command},output_preview:String(item.aggregatedOutput || '')};
+      const actions = item.commandActions || [];
+      if (actions.length === 1 && actions[0].type === 'read') {
+        block.name = 'Read'; block.input = {path:actions[0].path || actions[0].name};
+      } else if (actions.length === 1 && actions[0].type === 'search') {
+        block.name = 'Grep'; block.input = {pattern:actions[0].query, path:actions[0].path};
+      }
+    } else if (type === 'mcptoolcall' || type === 'dynamictoolcall') {
+      block = {id:item.id,name:item.tool || item.toolName || item.name || 'Tool',input:item.arguments || item.input,
+        output_preview:strings(item.result?.content || item.result || item.output)};
+    } else if (type === 'websearch') {
+      block = {id:item.id,name:'WebSearch',input:{query:item.query || item.action?.query || ''}};
+    } else return null;
+    block.tool_status = item.status === 'inProgress' ? 'running' : /failed|error/i.test(item.status || '') ? 'failed' : 'completed';
+    holder.innerHTML = _kimiToolRowHtml(block);
+    return holder.firstElementChild;
+  };
+  window.CCCCodexGroupSteps = function (section) { _kimiRegroupTools(section); };
+
   window.CCCCodexInlineStateChanged = function (context) {
     const index = paneIndexByPaneId(context.paneId);
     if (index < 0) return;
     const saved = splitState.activeIndex;
     splitState.activeIndex = index;
     try {
+      const pane = paneByPaneId(context.paneId);
+      if (pane?.currentSession && window.CCCCodexClient?.inlineState(context.paneEl)?.connected) {
+        pane.currentSession.source = 'codex';
+        sessionSourceByConv[pane.conversationId] = 'codex';
+      }
+      if (_codexWakePollSid === context.threadId) stopCodexWakeBreakdown(true);
       updateInputBar();
       if (saved === index) _updateLastWrittenLine(paneByPaneId(context.paneId)?.conversationId);
     } finally { splitState.activeIndex = saved; }
@@ -7029,15 +7067,15 @@
     button.disabled = true;
     button.textContent = 'Cancelling…';
     try {
-      const inlinePane = convPaneElById(activePaneId());
+      const inlinePane = $view?.closest('.conv-pane');
       const nativeInline = window.CCCCodexClient?.isInlineActive(inlinePane);
       const res = nativeInline ? null : await fetch('/api/inject-esc', {
         method: 'POST',
         headers: {'Content-Type': 'application/json'},
         body: JSON.stringify({ session_id: sid }),
       });
-      const data = await res.json().catch(() => ({}));
-      if (res.ok && data.ok) {
+      const data = nativeInline ? await window.CCCCodexClient.interruptInline(inlinePane) : await res.json().catch(() => ({}));
+      if ((!res || res.ok) && data.ok) {
         const card = $view && $view.querySelector('.conv-live-tool-inline.optimistic');
         if (card) {
           card.classList.add('is-cancelling');
@@ -7047,7 +7085,7 @@
         if (data.note && typeof showOpToast === 'function') showOpToast(data.note, 'info');
         return;
       }
-      throw new Error(data.error || ('HTTP ' + res.status));
+      throw new Error(data.error || ('HTTP ' + res?.status));
     } catch (err) {
       button.disabled = false;
       button.textContent = 'Cancel';
@@ -12887,7 +12925,9 @@
     $convEscBtn.classList.remove('sent', 'failed');
     const orig = $convEscBtn.textContent;
     try {
-      const res = await fetch('/api/inject-esc', {
+      const inlinePane = convPaneElById(activePaneId());
+      const nativeInline = window.CCCCodexClient?.isInlineActive(inlinePane);
+      const res = nativeInline ? null : await fetch('/api/inject-esc', {
         method: 'POST',
         headers: {'Content-Type': 'application/json'},
         body: JSON.stringify({ session_id: currentSession.id }),
@@ -26223,6 +26263,10 @@
       toggleConversationRowSelection(el);
       return true;
     }
+    // A normal click on the row already shown in this pane has nothing to
+    // select. In particular, do not re-run selectConversation(): it resets
+    // the active reader and restarts its streams.
+    if (paneByPaneId(activePaneId())?.conversationId === el.dataset.id) return true;
     if (selectedListIds.size > 0) {
       clearSelectedConversationRows();
     }
@@ -51005,6 +51049,11 @@
       if (_workspaceSessionIdByPane[pid] !== sid) return;
       _workspaceDataByPane[pid] = data;
       renderSessionWorkspaceIntoSticky(pid);
+      const nativePane = convPaneElById(pid);
+      if (data.cwd && nativePane?.classList.contains('is-codex-session') && window.CCCCodexClient) {
+        const view = getConvViewForPane(pid);
+        if (view?.querySelector('.event')) window.CCCCodexClient.attachInline({...window.CCCCodexClientContext(nativePane),paneEl:nativePane,viewEl:view});
+      }
     } catch (_) {}
   }
 
@@ -58909,6 +58958,13 @@
       _reconcileAnnotationsForPane(paneId);
     } catch (_) {
       // Best-effort re-apply of stored annotations — never blocks rendering.
+    }
+    if (_codexPane && window.CCCCodexClient) {
+      queueMicrotask(() => {
+        if (paneByPaneId(paneId)?.conversationId !== renderedConversationId) return;
+        const paneEl = convPaneElById(paneId);
+        window.CCCCodexClient.attachInline({...window.CCCCodexClientContext(paneEl),paneEl,viewEl:$view});
+      });
     }
     return true;
   }
@@ -79023,7 +79079,3 @@
     boot();
   }
 })();
-    // A normal click on the row already shown in this pane has nothing to
-    // select. In particular, do not re-run selectConversation(): it resets
-    // the active reader and restarts its streams.
-    if (paneByPaneId(activePaneId())?.conversationId === el.dataset.id) return true;

@@ -263,6 +263,10 @@
     item = item && typeof item === 'object' ? item : { type: 'unknown', value: item };
     const kind = itemKind(item);
     const normalized = kind.toLowerCase();
+    if (state.context?.inline && typeof window.CCCCodexStepNode === 'function') {
+      const step = window.CCCCodexStepNode(item);
+      if (step) { step.dataset.itemKey = String(item.id || kind); return step; }
+    }
     if (normalized === 'usermessage' || normalized === 'user_message') {
       const row = el('article', 'codex-client-item codex-client-message is-user');
       row.append(markdownNode(textFrom(item)));
@@ -1012,7 +1016,8 @@
     if (!host) return;
     const scrollHost = state.context?.inline ? host.closest('.conversations-view') : host;
     const nearBottom = !state.didInitialRender || scrollHost.scrollHeight - scrollHost.scrollTop - scrollHost.clientHeight < 100;
-    const openKeys = new Set(Array.from(host.querySelectorAll('details[open][data-item-key]')).map(node => node.dataset.itemKey));
+    const openKeys = new Set(Array.from(host.querySelectorAll('[data-item-key]')).filter(node => node.open || node.classList.contains('open')).map(node => node.dataset.itemKey));
+    const expandedGroups = new Set(Array.from(host.querySelectorAll('.kimi-tool-group:not(.collapsed) [data-item-key]')).map(node => node.dataset.itemKey));
     host.replaceChildren();
     if (state.historyCursor) {
       const older = el('button', 'codex-client-load-earlier', 'Load earlier messages'); older.type = 'button'; older.addEventListener('click', loadEarlier); host.append(older);
@@ -1023,14 +1028,16 @@
       const section = el('section', 'codex-client-turn'); section.dataset.turnId = turn.id || '';
       (turn.items || []).forEach(item => {
         const node = renderItem(item);
-        if (node.matches('details') && openKeys.has(node.dataset.itemKey)) node.open = true;
+        if (openKeys.has(node.dataset.itemKey)) { if (node.matches('details')) node.open = true; else node.classList.add('open'); }
+        if (expandedGroups.has(node.dataset.itemKey)) node.dataset.kimiCollapsed = '0';
         section.append(node);
       });
       if (turn.plan && !(turn.items || []).some(item => itemKind(item).toLowerCase() === 'plan')) section.append(renderItem({ type: 'plan', id: (turn.id || '') + '-plan', plan: turn.plan }));
       if (turn.diff && !(turn.items || []).some(item => /diff|filechange/i.test(itemKind(item)))) section.append(renderItem({ type: 'diff', id: (turn.id || '') + '-diff', diff: turn.diff }));
+      if (state.context?.inline && typeof window.CCCCodexGroupSteps === 'function') window.CCCCodexGroupSteps(section);
       host.append(section);
     });
-    if (state.activity.length) {
+    if (state.activity.length && !state.context?.inline) {
       const recent = el('details', 'codex-client-event-log'); recent.append(el('summary', '', 'Recent activity'));
       state.activity.slice(-12).forEach(event => recent.append(
         el('div', '', pretty(event.method) + (event.truncated ? ' · More detail available in task state' : ''))
@@ -1760,6 +1767,13 @@
 
   const defaultClient = createClient();
   const inlineClients = new Map();
+  const retiredCleanup = new Map();
+  function retire(entry) {
+    const cleanup = Promise.all([retiredCleanup.get(entry.threadId), entry.client.close()]).then(()=>undefined);
+    retiredCleanup.set(entry.threadId,cleanup);
+    cleanup.then(()=>{if(retiredCleanup.get(entry.threadId)===cleanup)retiredCleanup.delete(entry.threadId);},()=>{});
+    return cleanup;
+  }
   function entryFor(pane) { return inlineClients.get(pane); }
   async function attachInline(context) {
     const pane = context.paneEl;
@@ -1768,7 +1782,11 @@
     if (entry && entry.threadId === context.threadId && entry.client.__testing.state.root?.isConnected) return true;
     if (entry?.pending && entry.threadId === context.threadId) return entry.pending;
     if (entry && entry.threadId === context.threadId && entry.retryAfter > Date.now()) return false;
-    if (entry) await entry.client.close();
+    try {
+      if (entry) await retire(entry);
+      if (retiredCleanup.has(context.threadId)) await retiredCleanup.get(context.threadId);
+    } catch (_) { return false; }
+    if (retiredCleanup.size >= 128) return false;
     entry = {threadId:context.threadId, client:createClient(), pending:null, retryAfter:0};
     inlineClients.set(pane,entry);
     entry.pending = entry.client.open({...context,inline:true}).then(()=>true).catch(()=>{
@@ -1785,7 +1803,7 @@
     const selected = event.detail || {};
     for (const [pane,entry] of inlineClients) {
       if (!pane.isConnected || pane === selected.paneEl && selected.threadId !== entry.threadId) {
-        entry.client.close(); inlineClients.delete(pane);
+        retire(entry); inlineClients.delete(pane);
       }
     }
     const context = defaultClient.__testing.state.context;
@@ -1803,4 +1821,24 @@
   }
   window.CCCCodexClient = {...defaultClient, attachInline, isInlineActive, interruptInline,
     inlineState: pane => entryFor(pane)?.client.__testing.state};
+  // Engine discovery can finish after either script loading or first paint.
+  // Watch only pane identity classes, not the transcript's token mutations.
+  const watchedPanes = new WeakSet();
+  function upgradePaintedPane(pane) {
+    if (!pane.classList.contains('is-codex-session') || typeof window.CCCCodexClientContext !== 'function') return;
+    const view = pane.querySelector('.conversations-view');
+    if (view?.querySelector('.event')) attachInline({...window.CCCCodexClientContext(pane),paneEl:pane,viewEl:view});
+  }
+  function watchPanes() {
+    for (const pane of document.querySelectorAll('.conv-pane')) {
+      if (!watchedPanes.has(pane)) {
+        watchedPanes.add(pane);
+        new MutationObserver(()=>upgradePaintedPane(pane)).observe(pane,{attributes:true,attributeFilter:['class']});
+      }
+      upgradePaintedPane(pane);
+    }
+  }
+  queueMicrotask(watchPanes);
+  const split = document.getElementById('convSplit');
+  if (split) new MutationObserver(watchPanes).observe(split,{childList:true});
 })();
