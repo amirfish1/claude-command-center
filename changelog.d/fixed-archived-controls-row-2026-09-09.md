@@ -1,0 +1,1 @@
+- Kept archived-session controls on one horizontally scrollable row instead of wrapping display options below the filters.

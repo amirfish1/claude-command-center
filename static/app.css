@@ -7594,8 +7594,13 @@
     flex: 1 1 0;
     min-width: 0;
     gap: 6px;
-    flex-wrap: wrap;
+    /* Keep all archive filters together; overflow horizontally rather than
+       putting the density control on a surprise second row. */
+    flex-wrap: nowrap;
+    overflow-x: auto;
+    scrollbar-width: none;
   }
+  #convList .conv-archived-tools-right::-webkit-scrollbar { display: none; }
   #convList .conv-archived-tools-right > * {
     flex: 0 0 auto;
     white-space: nowrap;
