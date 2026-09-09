@@ -3589,6 +3589,9 @@ def _ensure_codex_app_server(*, allow_stdio=True):
         and time.time() < _CODEX_SHARED_STATE_BLOCK_RETRY_UNTIL
         and not (_core._codex_managed_app_server_enabled() and managed_path.exists())
     ):
+        with _core._CODEX_APP_SERVER_LOCK:
+            _core._CODEX_APP_SERVER_INITIALIZING = False
+            _core._CODEX_APP_SERVER_LOCK.notify_all()
         return None
     candidates = []
     if _core._codex_managed_app_server_enabled() and managed_path.exists():

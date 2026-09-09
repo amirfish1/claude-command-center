@@ -1,0 +1,1 @@
+- Clear stalled Codex app-server initialization state during shared-state cooldowns so later calls can retry.
