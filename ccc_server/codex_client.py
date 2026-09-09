@@ -951,8 +951,41 @@ def resume_desktop_conversation(session_id, text, *, cwd, model=None, effort=Non
         return {"ok": False, "via": "codex-desktop", "error": str(error),
                 "uncertain": isinstance(error, (TimeoutError, ConnectionError))}
     if steer:
-        return {"ok": False, "via": "codex-desktop", "code": "desktop_steer_unavailable",
-                "error": "Use Send to queue a follow-up, or stop the desktop turn first."}
+        thread = normalize_thread(state)
+        active = [turn for turn in thread.get("turns", []) if turn.get("status") == "inProgress"]
+        if not active:
+            return {"ok": False, "via": "codex-steer", "transport": "codex-desktop",
+                    "code": "codex_no_active_turn",
+                    "error": "No running Codex Desktop turn to steer"}
+        # Same ack guard the native steer path binds: the queued row's
+        # streamed userMessage copy must not reappear as a new message.
+        _core._bind_codex_queued_steer_ack_suppression(session_id, text, active[-1].get("id"))
+        client_message_id = (hashlib.sha256(("steer:" + str(action_id)).encode()).hexdigest()
+                             if action_id else None)
+        try:
+            receipt = DESKTOP.steer(session_id, text, cwd=cwd, image_paths=image_paths,
+                                    client_message_id=client_message_id)
+        except (TimeoutError, ConnectionError) as error:
+            # Outcome unknown: the desktop may have accepted the steer. Never
+            # resent, never rerouted through a second transport.
+            return {"ok": False, "via": "codex-steer", "transport": "codex-desktop",
+                    "code": "desktop_steer_uncertain", "uncertain": True, "ambiguous": True,
+                    "error": str(error)}
+        except (ValueError, OSError) as error:
+            cause = str(error)
+            lowered = cause.lower()
+            if "no active desktop turn" in lowered or "active turn already ended" in lowered \
+                    or "no active turn" in lowered or "not being streamed" in lowered:
+                code = "codex_no_active_turn"
+            elif "owner changed" in lowered:
+                code = "desktop_owner_changed"
+            else:
+                code = "codex_steer_failed"
+            return {"ok": False, "via": "codex-steer", "transport": "codex-desktop",
+                    "code": code, "error": cause}
+        return {"ok": True, "via": "codex-steer", "transport": "codex-desktop",
+                "accepted": True, "confirmed": True, "resumed": True,
+                "session_id": session_id, "turn_id": receipt["turn_id"], "cwd": cwd}
     thread = normalize_thread(state)
     if any(turn.get("status") == "inProgress" for turn in thread.get("turns", [])):
         return {"ok": False, "fallback": "queue", "via": "codex-desktop",

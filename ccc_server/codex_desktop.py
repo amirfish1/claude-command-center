@@ -21,7 +21,10 @@ MAX_FRAME = 32 * 1024 * 1024
 MAX_STATE = 16 * 1024 * 1024
 READ_METHODS = {"thread/read", "thread/turns/list"}
 # The follower steer contract has no atomic expected-turn guard. Keep native
-# turn/steer unavailable here instead of weakening that API guarantee.
+# turn/steer unavailable here instead of weakening that API guarantee. CCC's
+# Steer button uses the dedicated DesktopClient.steer() below, which follows
+# the desktop's own owner-resolves-the-active-turn semantics and reports the
+# steered turn id as its receipt.
 WRITE_METHODS = {"turn/start", "turn/interrupt", "thread/compact/start"}
 METHODS = READ_METHODS | WRITE_METHODS
 ANSWERS = {
@@ -344,6 +347,56 @@ class DesktopClient:
         result = wire["result"]
         value = result.get("decision") if field == "decision" else result
         self.request(method, {"conversationId": tid, "requestId": wire["id"], field: value}, target=self.owners[tid], timeout=25)
+
+    def steer(self, tid, text, *, cwd=None, image_paths=(), client_message_id=None):
+        """Steer the desktop's active turn through the owner (CCC Steer button).
+
+        This is the follower steer contract (thread-follower-steer-turn v1),
+        NOT native turn/steer: the owning desktop window resolves the current
+        in-progress turn itself and answers with the steered turn id. The
+        restoreMessage mirrors what the desktop composer sends, so a failed
+        steer lands the text back in the desktop's own queued follow-ups
+        instead of vanishing. Raises ValueError when there is no active turn
+        or the owner rejects the steer; TimeoutError/ConnectionError leave
+        the outcome unknown — callers must surface that, never retry blindly.
+        """
+        _, state = self.snapshot(tid)
+        thread = normalize_thread(state)
+        active = [turn for turn in thread.get("turns", []) if turn.get("status") == "inProgress"]
+        if not active:
+            raise ValueError("no active desktop turn to steer")
+        owner = self.owners[tid]
+        root = cwd or thread.get("cwd") or "/"
+        inputs = [{"type": "text", "text": text, "text_elements": []}]
+        inputs.extend({"type": "localImage", "path": str(path)} for path in image_paths)
+        params = {
+            "conversationId": tid,
+            "clientUserMessageId": client_message_id or uuid.uuid4().hex,
+            "input": inputs,
+            "restoreMessage": {
+                "id": uuid.uuid4().hex,
+                "text": text,
+                "context": {
+                    "prompt": text,
+                    "turnTrigger": None,
+                    "addedFiles": [],
+                    "fileAttachments": [],
+                    "ideContext": None,
+                    "imageAttachments": [],
+                    "workspaceRoots": [root],
+                },
+                "cwd": root,
+                "createdAt": int(time.time() * 1000),
+            },
+            "serviceTier": None,
+            "attachments": [],
+            "additionalContext": None,
+            "toolOutput": None,
+        }
+        response = self.request("thread-follower-steer-turn", params, version=1, target=owner, timeout=25)
+        result = (response.get("result") or {}).get("result") or {}
+        turn_id = result.get("turnId") if isinstance(result, dict) else None
+        return {"turn_id": turn_id or active[-1].get("id"), "owner": owner}
 
 
 DESKTOP = DesktopClient()

@@ -73,6 +73,7 @@ def peer(tmp_path):
                     method=incoming['method']
                     result={'clientId':'ccc-client'} if method=='initialize' else {}
                     if method=='thread-follower-start-turn':result={'result':{'id':'new','status':'inProgress'}}
+                    if method=='thread-follower-steer-turn':result={'result':{'turnId':'two'}}
                     send({'type':'response','requestId':incoming['requestId'],'method':method,'resultType':'success',
                           'handledByClientId':'ccc-client' if method=='initialize' else 'owner','result':result})
                 elif incoming.get('method')=='thread-stream-following-changed' and incoming['params']['following']:
@@ -188,5 +189,105 @@ def test_existing_resume_entry_never_falls_through_after_desktop_delivery(tmp_pa
          mock.patch.object(codex_client,'resume_desktop_conversation',return_value=reply) as desktop_send, \
          mock.patch.object(server,'_codex_resume_or_steer_via_app_server',side_effect=AssertionError('second transport')):
         result=queue_events.resume_session_codex('task','Follow up',_native_delivery=True,_from_queue=True)
+    assert result==reply
+    desktop_send.assert_called_once()
+
+
+def test_desktop_steer_targets_owner_with_desktop_composer_payload(peer):
+    client,requests=peer
+    client.snapshot('task')
+    receipt=client.steer('task','Hold on, check tests first',cwd='/repo',client_message_id='idem-1')
+    assert receipt=={'turn_id':'two','owner':'owner'}
+    wire=next(r for r in requests if r.get('method')=='thread-follower-steer-turn')
+    assert wire['targetClientId']=='owner' and wire['version']==1
+    params=wire['params']
+    assert params['conversationId']=='task'
+    assert params['clientUserMessageId']=='idem-1'
+    assert params['input']==[{'type':'text','text':'Hold on, check tests first','text_elements':[]}]
+    restore=params['restoreMessage']
+    assert restore['text']=='Hold on, check tests first'
+    assert restore['cwd']=='/repo'
+    assert restore['context']['prompt']=='Hold on, check tests first'
+    assert restore['context']['workspaceRoots']==['/repo']
+    assert params['toolOutput'] is None and params['attachments']==[]
+
+
+def test_desktop_steer_requires_an_active_turn(peer):
+    client,requests=peer
+    client.snapshot('task')
+    client.states['task'][1]['turnHistory']['history']['entitiesByKey']['turn:two']['status']='completed'
+    with pytest.raises(ValueError,match='no active desktop turn'):
+        client.steer('task','too late',cwd='/repo')
+    assert not any(r.get('method')=='thread-follower-steer-turn' for r in requests)
+
+
+def test_desktop_steer_reports_confirmed_receipt_under_the_steer_contract(peer):
+    from ccc_server import codex_client as client
+    transport,_=peer
+    transport.snapshot('task')
+    with mock.patch.object(desktop,'DESKTOP',transport), \
+         mock.patch.object(client,'_client_desktop_mode',return_value=True):
+        result=client.resume_desktop_conversation('task','Hold on',cwd='/repo',steer=True,action_id='claim-7')
+    assert result['ok'] and result['confirmed'] and result['accepted']
+    assert result['via']=='codex-steer' and result['transport']=='codex-desktop'
+    assert result['turn_id']=='two'
+    wire=next(r for r in _ if r.get('method')=='thread-follower-steer-turn')
+    import hashlib
+    assert wire['params']['clientUserMessageId']==hashlib.sha256(b'steer:claim-7').hexdigest()
+
+
+def test_desktop_steer_without_active_turn_uses_the_queue_preserving_code(peer):
+    from ccc_server import codex_client as client
+    transport,_=peer
+    transport.snapshot('task')
+    transport.states['task'][1]['turnHistory']['history']['entitiesByKey']['turn:two']['status']='completed'
+    with mock.patch.object(desktop,'DESKTOP',transport), \
+         mock.patch.object(client,'_client_desktop_mode',return_value=True):
+        result=client.resume_desktop_conversation('task','Hold on',cwd='/repo',steer=True)
+    assert result['ok'] is False
+    assert result['code']=='codex_no_active_turn'
+    assert result['via']=='codex-steer' and result['transport']=='codex-desktop'
+    assert not any(r.get('method')=='thread-follower-steer-turn' for r in _)
+
+
+@pytest.mark.parametrize('failure,code',[
+    (TimeoutError('Desktop request timed out; it will not be retried'),'desktop_steer_uncertain'),
+    (ValueError('Desktop task owner changed'),'desktop_owner_changed'),
+    (ValueError('Desktop: Cannot steer conversation task because its active turn already ended'),'codex_no_active_turn'),
+])
+def test_desktop_steer_failure_surfaces_actual_cause_without_retry(peer, failure, code):
+    from ccc_server import codex_client as client
+    transport,_=peer
+    transport.snapshot('task')
+    with mock.patch.object(desktop,'DESKTOP',transport), \
+         mock.patch.object(client,'_client_desktop_mode',return_value=True), \
+         mock.patch.object(transport,'steer',side_effect=failure) as steer:
+        result=client.resume_desktop_conversation('task','Hold on',cwd='/repo',steer=True)
+    steer.assert_called_once()
+    assert result['ok'] is False and result['code']==code
+    assert result['via']=='codex-steer' and result['transport']=='codex-desktop'
+    assert str(failure) in result['error']
+    if code=='desktop_steer_uncertain':
+        assert result['uncertain'] and result['ambiguous']
+    assert not any(r.get('method')=='thread-follower-steer-turn' for r in _)
+
+
+@pytest.mark.parametrize('reply',[
+    {'ok':True,'via':'codex-steer','transport':'codex-desktop','accepted':True,'confirmed':True,'turn_id':'two'},
+    {'ok':False,'via':'codex-steer','transport':'codex-desktop','code':'desktop_steer_uncertain','uncertain':True,'ambiguous':True,'error':'timed out'},
+])
+def test_desktop_steer_never_falls_through_to_a_second_transport(tmp_path, reply):
+    import server
+    from ccc_server import queue_events, codex_client
+    with mock.patch.object(server,'_resolve_codex_bin',return_value={'available':True,'bin':'unused'}), \
+         mock.patch.object(server,'_spawned_sessions',[]), \
+         mock.patch.object(server,'_codex_thread_row',return_value={'cwd':str(tmp_path),'model':'test-model'}), \
+         mock.patch.object(server,'_spawn_registry_entry_for_session',return_value={}), \
+         mock.patch.object(server,'_get_session_override',return_value=None), \
+         mock.patch.object(server,'_model_policy_blocks',return_value=False), \
+         mock.patch.object(server,'_resume_ledger_append'), \
+         mock.patch.object(codex_client,'resume_desktop_conversation',return_value=reply) as desktop_send, \
+         mock.patch.object(server,'_codex_steer_via_app_server',side_effect=AssertionError('second transport')):
+        result=queue_events.resume_session_codex('task','Hold on',steer=True,_native_delivery=True)
     assert result==reply
     desktop_send.assert_called_once()
