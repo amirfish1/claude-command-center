@@ -152,6 +152,55 @@ def test_failed_delivery_is_not_remembered(window, monkeypatch):
     assert len(calls) == 2
 
 
+def test_failed_inject_logs_rejection_not_success(window, monkeypatch):
+    """A rejected delegate request must not inflate successful inject counts."""
+    monkeypatch.setattr(
+        server, "_inject_text_into_session_router",
+        lambda *args, **kwargs: {
+            "ok": False,
+            "code": "dead_target",
+            "error": "delegate rejected the message",
+        },
+    )
+
+    with mock.patch.object(server, "_log_activity") as log_activity:
+        result = server._inject_text_into_session(
+            "s1", "answer to a closed ticket", source="wt",
+        )
+
+    assert result["ok"] is False
+    assert [call.args[1] for call in log_activity.call_args_list] == ["INJECT_REJECT"]
+    assert "code=dead_target" in log_activity.call_args.args[2]
+
+
+def test_successful_inject_keeps_success_activity_log(window, monkeypatch):
+    monkeypatch.setattr(
+        server, "_inject_text_into_session_router",
+        lambda *args, **kwargs: {"ok": True, "via": "codex-steer"},
+    )
+
+    with mock.patch.object(server, "_log_activity") as log_activity:
+        result = server._inject_text_into_session("s1", "working answer", source="wt")
+
+    assert result["ok"] is True
+    assert [call.args[1] for call in log_activity.call_args_list] == ["INJECT"]
+    assert "via=codex-steer" in log_activity.call_args.args[2]
+
+
+def test_worker_and_uds_results_do_not_duplicate_downstream_logs(window, monkeypatch):
+    """Those delivery owners already record their accepted result."""
+    for via in ("worker", "uds"):
+        monkeypatch.setattr(
+            server, "_inject_text_into_session_router",
+            lambda *args, **kwargs: {"ok": True, "via": via},
+        )
+        with mock.patch.object(server, "_log_activity") as log_activity:
+            result = server._inject_text_into_session("s1", f"through {via}", source="wt")
+
+        assert result["ok"] is True
+        log_activity.assert_not_called()
+
+
 def test_worker_owned_inject_does_not_log_a_dashboard_attempt(monkeypatch):
     """The worker is the sole delivery owner, so it emits the one INJECT row."""
     with mock.patch.object(server, "find_session_cwd", return_value=None), \

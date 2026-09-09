@@ -1352,6 +1352,39 @@ def _annotate_inject_result(result, *, requested, force_queue=False, fields=None
     return result
 
 
+def _log_inject_result(
+    session_id, text, *, mode, source, idempotency_key, wt_origin, result,
+):
+    """Log an inject only after its router result establishes the outcome."""
+    if not isinstance(result, dict) or result.get("blocked"):
+        # Circuit-breaker refusals log their own BLOCKED row at the point the
+        # gate decides to hold the message; do not duplicate it here.
+        return
+    if result.get("via") in ("worker", "uds"):
+        # The control-plane worker and the UDS adapter each own a downstream
+        # delivery record. Emitting an outer INJECT would count the same
+        # accepted message twice.
+        return
+    detail = (
+        f"session={session_id} mode={mode} source={source} "
+        f"idem={idempotency_key or '-'} wt_origin={wt_origin} "
+    )
+    if result.get("ok"):
+        _core._log_activity(
+            "inject", "INJECT",
+            f"{detail}via={result.get('via') or '-'} "
+            f"queued={bool(result.get('queued'))} "
+            f"text=\"{_core._activity_log_preview(text)}\"",
+        )
+        return
+    _core._log_activity(
+        "inject", "INJECT_REJECT",
+        f"{detail}code={result.get('code') or '-'} "
+        f"error=\"{_core._activity_log_preview(str(result.get('error') or 'delivery failed'))}\" "
+        f"text=\"{_core._activity_log_preview(text)}\"",
+    )
+
+
 def _inject_text_into_session(session_id, text, **kwargs):
     """Route `text` to a session, then stamp the CCC-1000 result contract.
 
@@ -1398,6 +1431,14 @@ def _inject_text_into_session(session_id, text, **kwargs):
     # the drain (exempt from the check above) delivers it exactly once.
     if isinstance(result, dict) and result.get("ok"):
         _core._inject_dedupe_record(session_id, text)
+    _core._log_inject_result(
+        session_id, text,
+        mode=mode,
+        source=str(kwargs.get("source", "api")),
+        idempotency_key=kwargs.get("idempotency_key"),
+        wt_origin=bool(kwargs.get("wt_origin")),
+        result=result,
+    )
     return result
 
 
@@ -1543,16 +1584,6 @@ def _inject_text_into_session_router(
             f"text=\"{_core._activity_log_preview(text)}\"",
         )
         return _blocked
-    # The worker owns a routed Claude inject and emits its activity row. Log
-    # only local delivery attempts, so one logical composer send has one
-    # INJECT row instead of a dashboard handoff row plus the worker delivery.
-    # idempotency_key distinguishes separate user actions at the log surface.
-    _core._log_activity(
-        "inject", "INJECT",
-        f"session={session_id} mode={mode} source={source} "
-        f"idem={idempotency_key or '-'} wt_origin={wt_origin} "
-        f"text=\"{_core._activity_log_preview(text)}\"",
-    )
     # Native Claude peer socket for agent-to-agent relays. Sits AFTER the
     # worker hand-off above and ahead of every legacy transport below: a
     # headless target that just handed off already sent once (the worker's
