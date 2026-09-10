@@ -1,0 +1,1 @@
+- Speed up opening long Grok conversations by loading only the recent transcript window first.

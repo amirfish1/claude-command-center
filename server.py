@@ -21498,6 +21498,34 @@ def _parse_conversation_windowed(conversation_id, filepath, tail, before, parser
     return result
 
 
+def _window_parsed_conversation_events(result, tail=None, before=None):
+    """Apply the conversation tail/paging contract to an already parsed source.
+
+    Some engines build structured events from stores that cannot use the
+    line-by-line JSONL reader above.  They still need the same bounded first
+    paint: keep the requested tail of logical transcript lines and report the
+    first visible line so the client can page older history on demand.
+    """
+    all_events = list(result.get("events") or [])
+    last_line = int(result.get("last_line") or 0)
+    window = int(tail or _CONV_TAIL_DEFAULT)
+    if before is not None:
+        candidates = [
+            event for event in all_events
+            if int(event.get("line") or 0) < before
+        ]
+    else:
+        candidates = all_events
+    events = candidates[-window:]
+    first_line = int(events[0].get("line") or 0) if events else 0
+    return {
+        "events": events,
+        "last_line": last_line,
+        "first_line": first_line,
+        "truncated_before": bool(first_line > 1 and len(candidates) > len(events)),
+    }
+
+
 def parse_conversation(conversation_id, after_line=0, repo_path=None, use_cache=True,
                        tail=None, before=None):
     """Parse a conversation JSONL file into structured events.
@@ -21507,8 +21535,9 @@ def parse_conversation(conversation_id, after_line=0, repo_path=None, use_cache=
     guaranteed re-parse.
 
     `tail`/`before` request a windowed parse (last N lines / the window before
-    a line) instead of the whole file — see _parse_conversation_windowed. Only
-    honored for claude transcripts (stateless parser); other engines full-parse.
+    a line) instead of the whole file — see _parse_conversation_windowed.
+    Engines whose source formats require a full parse apply the same window to
+    their resulting structured event stream before returning it.
     """
     windowed = bool(tail) or (before is not None)
     if use_cache and not windowed:
@@ -21575,13 +21604,27 @@ def parse_conversation(conversation_id, after_line=0, repo_path=None, use_cache=
         if src == _acp_transcript_path("grok", conversation_id):
             events = _acp_transcript_events_after("grok", conversation_id, after_line)
             last_line = _acp_transcript_last_line("grok", conversation_id)
-            events = _merge_synthetic_conversation_events(list(events), _get_queued_events_for_session(conversation_id))
-            return {"events": events, "last_line": last_line}
+            result = {"events": events, "last_line": last_line}
+            if windowed:
+                result = _window_parsed_conversation_events(result, tail=tail, before=before)
+            if before is None:
+                result["events"] = _merge_synthetic_conversation_events(
+                    list(result.get("events") or []),
+                    _get_queued_events_for_session(conversation_id),
+                )
+            return result
         result = _parse_grok_conversation(conversation_id, after_line=after_line)
-        _conv_parse_cache_put(conversation_id, after_line, repo_path, result)
+        if windowed:
+            result = _window_parsed_conversation_events(result, tail=tail, before=before)
+        else:
+            _conv_parse_cache_put(conversation_id, after_line, repo_path, result)
         events_copy = list(result.get("events") or [])
-        events_copy = _merge_synthetic_conversation_events(events_copy, _get_queued_events_for_session(conversation_id))
-        return {"events": events_copy, "last_line": result.get("last_line", 0)}
+        if before is None:
+            events_copy = _merge_synthetic_conversation_events(
+                events_copy, _get_queued_events_for_session(conversation_id)
+            )
+        result["events"] = events_copy
+        return result
     if engine == "copilot":
         result = _parse_copilot_conversation(conversation_id, after_line=after_line)
         _conv_parse_cache_put(conversation_id, after_line, repo_path, result)

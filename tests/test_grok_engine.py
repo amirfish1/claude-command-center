@@ -182,6 +182,36 @@ def test_variant_a_transcript_from_updates_jsonl(monkeypatch, tmp_path):
     assert tail["last_line"] == 4
 
 
+def test_acp_grok_tail_open_returns_only_the_requested_window(monkeypatch, tmp_path):
+    """ACP-backed Grok sessions must honor the fast-open tail contract.
+
+    Without this, a browser open with ``?tail=120`` returned every finalized
+    ACP event, forcing the client to build a transcript's entire command
+    history before it could paint the current conversation.
+    """
+    sid = "grok-acp-tail-window"
+    transcript = tmp_path / "grok-acp.jsonl"
+    all_events = [
+        {"line": line, "type": "system", "subtype": "grok_hook_execution"}
+        for line in range(1, 241)
+    ]
+    monkeypatch.setattr(server, "_detect_session_engine", lambda _sid: "grok")
+    monkeypatch.setattr(server, "_grok_conversation_source", lambda _sid: transcript)
+    monkeypatch.setattr(server, "_acp_transcript_path", lambda _harness, _sid: transcript)
+    monkeypatch.setattr(
+        server, "_acp_transcript_events_after", lambda _harness, _sid, _after: list(all_events)
+    )
+    monkeypatch.setattr(server, "_acp_transcript_last_line", lambda _harness, _sid: 240)
+    monkeypatch.setattr(server, "_get_queued_events_for_session", lambda _sid: [])
+
+    result = server.parse_conversation(sid, tail=120, use_cache=False)
+
+    assert [event["line"] for event in result["events"]] == list(range(121, 241))
+    assert result["first_line"] == 121
+    assert result["last_line"] == 240
+    assert result["truncated_before"] is True
+
+
 def test_variant_a_falls_back_to_chat_history(monkeypatch, tmp_path):
     home = _make_variant_a_home(tmp_path)
     # Drop updates.jsonl; chat_history.jsonl is the transcript fallback.
