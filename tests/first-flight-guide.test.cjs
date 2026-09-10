@@ -109,9 +109,13 @@ const FIXTURE_HTML = `<!DOCTYPE html>
     min-height: 32px; min-width: 88px; }
   .status-rail { width: 280px; height: 100vh; float: right; padding: 12px;
     border-left: 1px solid #30363d; }
-  #convInputBar { position: fixed; left: 300px; right: 300px; bottom: 16px;
-    min-height: 88px; padding: 8px; border: 1px solid #30363d; }
+  /* Dashboard hide: .conv-input-bar { display:none } until JS adds .visible. */
+  .conv-input-bar { display: none; position: fixed; left: 300px; right: 300px;
+    bottom: 16px; min-height: 88px; padding: 8px; border: 1px solid #30363d; }
+  .conv-input-bar.visible { display: flex; align-items: center; gap: 8px; }
   #convInput { width: 70%; min-height: 36px; }
+  #convInputEngineSelect { min-width: 88px; min-height: 32px; }
+  #convSendBtn { min-height: 32px; min-width: 88px; }
   #queuePanel { min-height: 48px; padding: 8px; border: 1px solid #30363d; }
   #orchPlaybooks { min-height: 40px; }
 </style>
@@ -314,6 +318,10 @@ test('Settings replay and auto-start guards stay on the shipped start path', () 
     false,
     'auto-start must not open the 3-step wizard in front of the guide'
   );
+  const tour = fs.readFileSync(TOUR_JS, 'utf8');
+  const composerReveal = tour.slice(tour.indexOf('composer: function'), tour.indexOf('workers: function'));
+  assert.match(composerReveal, /sidebarNewBtn/, 'composer reveal must click New session');
+  assert.match(composerReveal, /classList\.add\(\s*['"]visible['"]\s*\)/, 'composer reveal must add .visible');
 });
 
 test('first-run walk records >=20 steps covering every named topic', async () => {
@@ -490,7 +498,7 @@ test('CLI step shows install/login/re-detect for missing and logged-out, not for
   }
 });
 
-test('Queue, Workers, and Delegation reveals make the live target visible before spotlight', async () => {
+test('Queue, Workers, Delegation, and composer reveals make the live target visible before spotlight', async () => {
   const page = await openFixture({
     force: true,
     cliStatus: CLI_FIXTURE,
@@ -522,9 +530,32 @@ test('Queue, Workers, and Delegation reveals make the live target visible before
           workers: box('[data-conv-tab="workers"]'),
           queueTab: box('[data-rail-tab="queue"]'),
           delegate: box('[data-orch-playbook="delegate"]'),
+          composerBar: box('#convInputBar'),
+          engineSelect: box('#convInputEngineSelect'),
+          sendBtn: box('#convSendBtn'),
         };
       });
       if (!snap.overlay && !snap.active) break;
+      if (snap.stepId === 'composer') {
+        hits.push({ kind: 'composer', ...snap });
+        assert.equal(snap.composerBar.visible, true, 'composer bar still display:none on composer step');
+        assert.ok(snap.revealed && snap.revealed.visible, 'reveal did not report visible composer');
+        assert.equal(snap.revealed.beforeSpotlight, true);
+        assert.match(String((snap.revealed && snap.revealed.matched) || ''), /spawn-bar|convInputBar/,
+          'composer step must spotlight the live bar, not a fallback');
+      }
+      if (snap.stepId === 'engine-picker') {
+        hits.push({ kind: 'engine', ...snap });
+        assert.equal(snap.engineSelect.visible, true, 'engine picker still display:none on engine step');
+        assert.ok(snap.revealed && snap.revealed.visible);
+        assert.equal(snap.revealed.beforeSpotlight, true);
+      }
+      if (snap.stepId === 'send') {
+        hits.push({ kind: 'send', ...snap });
+        assert.equal(snap.sendBtn.visible, true, 'send button not visible on send step');
+        assert.ok(snap.revealed && snap.revealed.visible);
+        assert.equal(snap.revealed.beforeSpotlight, true);
+      }
       if (snap.stepId === 'workers-tab' || snap.stepId === 'workers-lane') {
         hits.push({ kind: 'workers', ...snap });
         assert.equal(snap.workers.visible, true, 'Workers target not visible on workers step');
@@ -546,6 +577,9 @@ test('Queue, Workers, and Delegation reveals make the live target visible before
       await clickPrimary(page);
     }
     const kinds = hits.map((h) => h.kind);
+    assert.ok(kinds.includes('composer'), 'never landed on a composer step with a live bar');
+    assert.ok(kinds.includes('engine'), 'never landed on an engine-picker step with a live select');
+    assert.ok(kinds.includes('send'), 'never landed on a send step with a live send button');
     assert.ok(kinds.includes('workers'), 'never landed on a Workers step (would match missing-anchor skip)');
     assert.ok(kinds.includes('queue'), 'never landed on a Queue step (would match missing-anchor skip)');
     assert.ok(kinds.includes('delegation'), 'never landed on a Delegation step (would match missing-anchor skip)');

@@ -510,8 +510,15 @@
 
   const REVEALS = {
     composer: function () {
+      // First-run has no session, so the dashboard keeps .conv-input-bar at
+      // display:none until New session / updateInputBar() adds .visible.
+      const newBtn = document.getElementById('sidebarNewBtn');
+      try { if (newBtn) newBtn.click(); } catch (_) {}
       const bar = document.getElementById('convInputBar');
-      setVisible(bar);
+      if (bar) {
+        bar.classList.add('visible');
+        setVisible(bar);
+      }
       const engine = document.getElementById('convInputEngineSelect');
       if (engine) {
         engine.style.display = '';
@@ -595,7 +602,7 @@
       const el = document.querySelector(sels[i]);
       if (!el) continue;
       const r = el.getBoundingClientRect();
-      if (r.width > 0 && r.height > 0) return el;
+      if (r.width > 0 && r.height > 0) return { el: el, selector: sels[i], rect: r };
     }
     return null;
   }
@@ -829,8 +836,9 @@
       }
     }
     if (step.reveal) applyReveal(step.reveal);
-    const el = resolveAnchor(step.anchor);
-    let rect = null;
+    const hit = resolveAnchor(step.anchor);
+    const el = hit && hit.el;
+    let rect = hit && hit.rect;
     if (el) {
       try { el.scrollIntoView({ block: 'center', behavior: 'instant' }); } catch (_) {
         try { el.scrollIntoView(); } catch (__) {}
@@ -841,6 +849,7 @@
     state.lastReveal = {
       id: step.id,
       selector: Array.isArray(step.anchor) ? step.anchor[0] : step.anchor,
+      matched: hit ? hit.selector : null,
       visible: visible,
       beforeSpotlight: true
     };
