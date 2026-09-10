@@ -1,4 +1,4 @@
-"""Tests for GET /api/engines/installed (First Flight tour welcome chips).
+"""Tests for GET /api/engines/installed (engine probe used by first-run CLI setup).
 
 Handler-level: exercises server._detect_engines_installed() directly with
 monkeypatched env (COPILOT_HOME / GROK_HOME / CCC_VSCODE_USER_DIRS point at
@@ -15,6 +15,7 @@ TOUR_JS = ROOT / "static" / "tour.js"
 ALL_ENGINES = [
     "claude", "codex", "gemini", "cursor", "antigravity",
     "kilo", "opencode", "kimi", "hermes", "devin", "grok",
+    "aider", "droid", "pi",
     "copilot", "copilotchat",
 ]
 
@@ -33,7 +34,7 @@ def _point_readonly_stores_at(monkeypatch, tmp_path):
     return copilot_home, grok_home, vscode_user
 
 
-def test_returns_all_eleven_engines_in_stable_order():
+def test_returns_all_engines_in_stable_order():
     payload = server._detect_engines_installed()
     assert [row["engine"] for row in payload["engines"]] == ALL_ENGINES
     for row in payload["engines"]:
@@ -42,7 +43,7 @@ def test_returns_all_eleven_engines_in_stable_order():
         assert isinstance(row["label"], str) and row["label"]
         assert isinstance(row["detail"], str)
     kinds = [row["kind"] for row in payload["engines"]]
-    assert kinds == ["spawn"] * 11 + ["readonly"] * 2
+    assert kinds == ["spawn"] * 14 + ["readonly"] * 2
 
 
 def test_readonly_engines_absent_stores(monkeypatch, tmp_path):
@@ -92,6 +93,8 @@ def test_spawnable_present_binary_reports_installed(monkeypatch, tmp_path):
     assert rows["kilo"]["detail"] == str(fake_bin)
 
 
-def test_tour_js_references_installed_engines_endpoint():
+def test_tour_js_references_onboarding_cli_status_endpoint():
     source = TOUR_JS.read_text(encoding="utf-8")
-    assert "/api/engines/installed" in source
+    assert "/api/onboarding/status" in source
+    assert "/api/onboarding/install-terminal" in source
+    assert "/api/onboarding/login-terminal" in source

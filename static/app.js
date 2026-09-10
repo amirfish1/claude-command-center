@@ -37298,7 +37298,8 @@
       ];
     const _tabBarHtml = '<div class="conv-tab-bar" data-role="conv-tab-bar">'
       + _tabDefs.map(([k, label, n]) =>
-        '<button type="button" class="conv-tab' + (k === _sidebarTab ? ' is-active' : '') + '" data-conv-tab="' + k + '">'
+        '<button type="button" class="conv-tab' + (k === _sidebarTab ? ' is-active' : '') + '" data-conv-tab="' + k + '"'
+        + (k === 'workers' ? ' data-tour="workers"' : '') + '>'
         + escapeHtml(simpleLabel(label))
         + (n ? '<span class="conv-tab-count">' + n + '</span>' : '')
         + '</button>').join('')
@@ -60141,6 +60142,7 @@
       if (pb.id === 'critique') meta = 'Reviewers: ' + critics.map(c => c.label).join(' + ');
       const title = 'Click to draft into the composer. Shift-click to send now.';
       let html = '<button type="button" class="orch-playbook orch-playbook-' + pb.id + (pb.optional ? ' is-optional' : '') + (pb.draft ? ' is-draft' : '') + '" data-orch-playbook="' + pb.id + '"'
+        + (pb.id === 'delegate' ? ' data-tour="delegate"' : '')
         + ' title="' + escapeAttr(title) + '">'
         + '<span class="orch-playbook-arrow" aria-hidden="true">' + (pb.draft ? '&#9998;' : '&#8592;') + '</span>'
         + '<span class="orch-playbook-body">'
@@ -72891,13 +72893,10 @@
     closeSettingsModal();
     try {
       await fetch('/api/onboarding/reset', { method: 'POST' });
-      const res = await fetch('/api/onboarding/status');
-      const data = await res.json();
-      showOnboarding(data);
     } catch (err) {
-      console.error('Failed to trigger onboarding:', err);
-      showOpToast('Failed to trigger onboarding.', 'error');
+      console.error('Failed to reset onboarding:', err);
     }
+    loadFirstFlightTour(true);
   });
   // ── Car Mode (hands-free voice operator) ──────────────────────────────
   // Explainer + cost + optional key setup + start/stop. Status/keys go through
@@ -77948,16 +77947,10 @@
   }
 
   async function checkOnboarding() {
-    try {
-      const res = await fetch('/api/onboarding/status');
-      if (!res.ok) return;
-      const data = await res.json();
-      if (data && data.clis && !data.completed) {
-        showOnboarding(data);
-      }
-    } catch (e) {
-      console.error('Failed to check onboarding status:', e);
-    }
+    // First-run is the First Flight guide (tour.js). Auto-opening this
+    // wizard stacked a second modal in front of that guide. Settings
+    // "Run onboarding" force-starts the same unified walkthrough.
+    return;
   }
 
   function showOnboarding(statusData) {
@@ -78386,7 +78379,7 @@
     // be panned out of the visible frame and block invisibly). The Settings
     // "Take the tour" button (force=true) still works everywhere.
     if (window.matchMedia && window.matchMedia('(max-width: 1200px)').matches) return;
-    // Defer while any modal (e.g. the login onboarding wizard) is open.
+    // Defer while any modal is open so the guide is not covered.
     if (document.querySelector('.upd-overlay.open')) {
       if ((attempt || 0) < 50) setTimeout(() => maybeStartFirstFlight((attempt || 0) + 1), 4000);
       return;
