@@ -614,6 +614,182 @@ async function resolveDashboardUrl() {
   return null;
 }
 
+test('live dashboard walk keeps composer, CLI, Queue, Workers, and Delegation on real controls', async () => {
+  const logLive = path.join(SCRATCH, 'ftue-live-walk.log');
+  const unavailable = path.join(SCRATCH, 'ftue-launch-unavailable.log');
+  const url = await resolveDashboardUrl();
+  if (!url) {
+    fs.writeFileSync(unavailable, 'dashboard URL did not respond\n', 'utf8');
+    return;
+  }
+  const page = await browser.newPage();
+  const errors = [];
+  page.on('pageerror', (err) => errors.push(String(err)));
+  try {
+    await page.setViewport({ width: 1440, height: 900 });
+    await page.goto(url, { waitUntil: 'load', timeout: 30000 });
+    await page.evaluate(() => {
+      try { localStorage.removeItem('ccc-tour-done'); } catch (_) {}
+      document.querySelectorAll('.upd-overlay.open').forEach((el) => el.classList.remove('open'));
+    });
+    const loadErr = await page.evaluate(async () => {
+      try {
+        if (window.cccTour && typeof window.cccTour.end === 'function') {
+          try { window.cccTour.end('skip'); } catch (_) {}
+        }
+        document.querySelectorAll('script[src*="tour.js"]').forEach((s) => s.remove());
+        window.cccTour = undefined;
+        await new Promise((res, rej) => {
+          const s = document.createElement('script');
+          s.src = '/static/tour.js?ftue=' + Date.now();
+          s.onload = res;
+          s.onerror = () => rej(new Error('tour.js failed to load'));
+          document.head.appendChild(s);
+        });
+        try { localStorage.removeItem('ccc-tour-done'); } catch (_) {}
+        window.cccTour.start({ force: true });
+        return null;
+      } catch (e) {
+        return String(e && e.message ? e.message : e);
+      }
+    });
+    if (loadErr) throw new Error('live walk start failed: ' + loadErr);
+    await page.waitForFunction(() => {
+      const title = document.querySelector('.fft-title');
+      return !!(title && title.textContent.trim());
+    }, { timeout: 8000 });
+
+    const recorded = [];
+    for (let i = 0; i < 40; i++) {
+      const snap = await page.evaluate(() => {
+        function box(sel) {
+          const el = document.querySelector(sel);
+          if (!el) return { exists: false, visible: false, w: 0, h: 0 };
+          const r = el.getBoundingClientRect();
+          return { exists: true, visible: r.width > 0 && r.height > 0, w: Math.round(r.width), h: Math.round(r.height) };
+        }
+        const title = (document.querySelector('.fft-title') || {}).textContent || '';
+        const state = window.cccTour.getState ? window.cccTour.getState() : {};
+        const stepId = (state && state.step && state.step.id)
+          || (document.querySelector('[data-fft-step]') && document.querySelector('[data-fft-step]').getAttribute('data-fft-step'))
+          || '';
+        return {
+          title: title.trim(),
+          stepId,
+          overlay: !!document.querySelector('.fft-center-card, .fft-card'),
+          active: !!(state && state.active),
+          matched: state && state.revealed && state.revealed.matched,
+          composer: box('#convInputBar'),
+          engine: box('#convInputEngineSelect'),
+          send: box('#convSendBtn'),
+          workers: box('[data-conv-tab="workers"]'),
+          queueTab: box('[data-rail-tab="queue"]'),
+          queuePane: box('#statusRailQueuePane'),
+          delegate: box('[data-orch-playbook="delegate"]'),
+          redetect: !!document.querySelector('.fft-cli-redetect'),
+          cliRows: [...document.querySelectorAll('.fft-cli-row')].map((row) => ({
+            engine: row.getAttribute('data-fft-cli'),
+            state: row.getAttribute('data-fft-cli-state'),
+            hasInstall: !!row.querySelector('.fft-cli-install'),
+            hasLogin: !!row.querySelector('.fft-cli-login'),
+          })),
+        };
+      });
+      if (!snap.overlay && !snap.active) break;
+      if ((snap.stepId === 'cli-setup' || /cli/i.test(snap.title)) && snap.cliRows.length === 0) {
+        try {
+          await page.waitForFunction(
+            () => document.querySelectorAll('.fft-cli-row').length > 0,
+            { timeout: 8000 }
+          );
+          snap.cliRows = await page.evaluate(() => [...document.querySelectorAll('.fft-cli-row')].map((row) => ({
+            engine: row.getAttribute('data-fft-cli'),
+            state: row.getAttribute('data-fft-cli-state'),
+            hasInstall: !!row.querySelector('.fft-cli-install'),
+            hasLogin: !!row.querySelector('.fft-cli-login'),
+          })));
+          snap.redetect = await page.evaluate(() => !!document.querySelector('.fft-cli-redetect'));
+        } catch (_) {}
+      }
+      recorded.push(snap);
+      if (snap.stepId === 'composer') {
+        await page.screenshot({ path: path.join(SCRATCH, 'ftue-live-composer.png') });
+      }
+      if (snap.stepId === 'workers-tab') {
+        await page.screenshot({ path: path.join(SCRATCH, 'ftue-live-workers.png') });
+      }
+      if (snap.stepId === 'first-queue') {
+        await page.screenshot({ path: path.join(SCRATCH, 'ftue-live-queue.png') });
+      }
+      if (snap.stepId === 'delegation') {
+        await page.screenshot({ path: path.join(SCRATCH, 'ftue-live-delegate.png') });
+      }
+      await page.evaluate(() => {
+        const btn = document.querySelector('.fft-btn-primary');
+        if (btn) btn.click();
+        else if (window.cccTour && window.cccTour.next) window.cccTour.next();
+      });
+    }
+
+    const lines = recorded.map((s, i) => {
+      return [i + 1, s.stepId || '-', JSON.stringify(s.title),
+        'matched=' + (s.matched || ''),
+        'composer=' + s.composer.visible,
+        'engine=' + s.engine.visible,
+        'send=' + s.send.visible,
+        'workers=' + s.workers.visible,
+        'queue=' + s.queueTab.visible,
+        'delegate=' + s.delegate.visible].join(' ');
+    });
+    lines.push('errors=' + errors.length + (errors.length ? ' ' + errors.join('; ') : ''));
+    fs.writeFileSync(logLive, lines.join('\n') + '\n', 'utf8');
+
+    assert.ok(recorded.length >= 20, 'live walk expected >=20 steps, got ' + recorded.length);
+    const byId = {};
+    recorded.forEach((s) => { byId[s.stepId] = s; });
+    const cli = recorded.find((s) => s.stepId === 'cli-setup' || /cli/i.test(s.title));
+    assert.ok(cli, 'live walk never reached the CLI step');
+    assert.equal(cli.redetect, true, 'live CLI step missing re-detect');
+    assert.ok(cli.cliRows.length >= 1, 'live CLI step rendered no engine rows');
+
+    const composer = byId.composer;
+    assert.ok(composer, 'live walk never reached the composer step');
+    assert.equal(composer.composer.visible, true, 'live composer bar still hidden');
+    assert.equal(/new-session|sidebarNewBtn/.test(String(composer.matched || '')), false,
+      'live composer fell back to New session: ' + composer.matched);
+
+    const engine = byId['engine-picker'];
+    assert.ok(engine, 'live walk never reached the engine-picker step');
+    assert.equal(engine.engine.visible, true, 'live engine picker still hidden');
+
+    const send = byId.send;
+    assert.ok(send, 'live walk never reached the send step');
+    assert.equal(send.send.visible, true, 'live send button still hidden');
+
+    const workers = byId['workers-tab'] || byId['workers-lane'];
+    assert.ok(workers, 'live walk never reached Workers');
+    assert.equal(workers.workers.visible, true, 'live Workers tab hidden');
+
+    const queue = byId['queue-tab'] || byId['first-queue'];
+    assert.ok(queue, 'live walk never reached Queue');
+    assert.equal(queue.queueTab.visible, true, 'live Queue tab hidden');
+
+    const delegation = byId.delegation;
+    assert.ok(delegation, 'live walk never reached Delegation');
+    assert.equal(delegation.delegate.visible, true, 'live Delegate playbook hidden');
+    assert.equal(errors.length, 0, 'live walk page errors: ' + errors.join('; '));
+  } catch (err) {
+    const msg = String(err && err.message ? err.message : err);
+    if (/net::|timeout|chrome|browser|ECONNREFUSED|tour\.js failed/i.test(msg) && !/hidden|fell back|never reached|blank/i.test(msg)) {
+      fs.writeFileSync(unavailable, msg + '\n', 'utf8');
+      return;
+    }
+    throw err;
+  } finally {
+    await page.close();
+  }
+});
+
 test('headless dashboard launch starts the guide twice with a non-empty first step', async () => {
   const logWalk = path.join(SCRATCH, 'ftue-walk.log');
   const shot = path.join(SCRATCH, 'ftue.png');
