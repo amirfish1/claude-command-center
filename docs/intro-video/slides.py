@@ -42,10 +42,10 @@ SLIDES = [
     },
     {
         "type": "video",
-        "video": str(VIDEO / "V-01-fleet-scan.mp4"),
+        "video": str(HERE / "assets" / "intro-fleet-list.mp4"),
         "title": "One board, eight engines",
         "scene": "fleet",
-        "visual": "V-01-fleet-scan.mp4",
+        "visual": "intro-fleet-list.mp4",
         "moment": "fleet/list with multiple engines",
         "narration": (
             "One board, eight engines. Every Claude Code, Codex, Cursor, "
@@ -76,10 +76,10 @@ SLIDES = [
     },
     {
         "type": "video",
-        "video": str(VIDEO / "V-03-attention.mp4"),
+        "video": str(HERE / "assets" / "intro-attention-list.mp4"),
         "title": "Needs you",
         "scene": "attention",
-        "visual": "V-03-attention.mp4",
+        "visual": "intro-attention-list.mp4",
         "moment": "needs-you / attention moment",
         "narration": (
             "When an agent is waiting on you, the row flags it. Attention "
@@ -118,23 +118,10 @@ SLIDES = [
     },
     {
         "type": "video",
-        "video": str(VIDEO / "V-06-kanban-drag.mp4"),
-        "title": "Board view, optional",
-        "scene": "kanban",
-        "visual": "V-06-kanban-drag.mp4",
-        "moment": "optional kanban board view",
-        "narration": (
-            "Board view is optional. Drag-drop columns derived from session "
-            "state, with rubber-band multi-select. The list is the primary "
-            "surface. The board is an opt-in lens on the same state."
-        ),
-    },
-    {
-        "type": "video",
-        "video": str(VIDEO / "V-14-issue-to-session.mp4"),
+        "video": str(HERE / "assets" / "intro-spawn-list.mp4"),
         "title": "Spawn from the dashboard",
         "scene": "spawn",
-        "visual": "V-14-issue-to-session.mp4",
+        "visual": "intro-spawn-list.mp4",
         "moment": "spawn or steer from the dashboard",
         "narration": (
             "Start a session from a GitHub issue with one click. Verify "

@@ -152,6 +152,7 @@ throughput_*.png
 docs/intro-video/video_build/
 docs/intro-video/**/__pycache__/
 !docs/intro-video/out/*.mp4
+!docs/intro-video/assets/*.mp4
 static/reddit/
 
 # Hunch local index cache (was accidentally committed once at 47MB — never again)

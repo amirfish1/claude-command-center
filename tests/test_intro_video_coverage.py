@@ -48,7 +48,6 @@ INVENTORY = (
     ("Settings modal", ("search",)),
     ("Plan-to-fleet", ("WatchTower", "queue")),
     ("ACP adapter", ("Agent Client Protocol",)),
-    ("Board view", ("optional", "drag")),
     ("Project tree", ("objects",)),
     ("Flow canvas", ("zoom",)),
     ("two transcripts", ("side by side",)),
@@ -104,6 +103,10 @@ BANNED_PRIVATE = (
     "ccc-voice",
     "SSH multiplexer",
     "ssh_multiplexer",
+    "kanban",
+    "Kanban",
+    "Board view",
+    "ICEBOX",
 )
 
 # Overstatements that must not appear as positive claims. Qualifying
@@ -119,9 +122,9 @@ BANNED_OVERSTATE = (
 )
 
 REQUIRED_VISUAL_SOURCES = (
-    "V-01-fleet-scan.mp4",
-    "V-03-attention.mp4",
-    "V-14-issue-to-session.mp4",
+    "intro-fleet-list.mp4",
+    "intro-attention-list.mp4",
+    "intro-spawn-list.mp4",
     "V-07-flow-canvas.mp4",
     "V-16-group-chat.mp4",
     "V-09-search.mp4",
