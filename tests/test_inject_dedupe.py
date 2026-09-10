@@ -18,6 +18,7 @@ Two properties make the window actually hold, and both are pinned here:
     already in the window, so suppressing it would strand the queued message.
 """
 import importlib
+import threading
 from unittest import mock
 
 import pytest
@@ -112,15 +113,148 @@ def test_terminal_queue_drain_is_never_suppressed(window, router):
     assert result.get("deduped") is None
 
 
-def test_idempotency_key_bypasses_suppression(window, router):
-    """A keyed caller owns its own replay semantics -- e.g. the Codex steer
-    path deliberately re-sends the same text under a fresh key."""
+def test_new_idempotency_key_sends_again(window, router):
+    """A fresh key is a distinct composer action, even for identical text."""
     server._inject_text_into_session("s1", "gate PASS", source="api")
     server._inject_text_into_session(
         "s1", "gate PASS", source="api", idempotency_key="inject:abc",
     )
 
     assert len(router) == 2
+
+
+def test_matching_idempotency_key_delivers_only_once_during_a_race(
+    window, monkeypatch,
+):
+    """Dashboard and worker replays of one composer send share its key."""
+    router_entered = threading.Event()
+    release_router = threading.Event()
+    calls = []
+
+    def _router(session_id, text, **kwargs):
+        calls.append((session_id, text))
+        router_entered.set()
+        release_router.wait(timeout=1)
+        return {"ok": True, "via": "spawn-fifo"}
+
+    replay_waiting = threading.Event()
+    original_acquire = server._inject_dedupe_acquire
+
+    def _acquire(*args, **kwargs):
+        acquired = original_acquire(*args, **kwargs)
+        if acquired[1] is not None:
+            replay_waiting.set()
+        return acquired
+
+    monkeypatch.setattr(server, "_inject_dedupe_acquire", _acquire)
+    monkeypatch.setattr(server, "_inject_text_into_session_router", _router)
+    first_result = []
+    first = threading.Thread(
+        target=lambda: first_result.append(server._inject_text_into_session(
+            "s1", "composer send", source="composer",
+            idempotency_key="inject:composer-send",
+        )),
+    )
+    first.start()
+    assert router_entered.wait(timeout=1)
+
+    second_result = []
+    second = threading.Thread(
+        target=lambda: second_result.append(server._inject_text_into_session(
+            "s1", "composer send", source="composer",
+            idempotency_key="inject:composer-send",
+        )),
+    )
+    second.start()
+    assert replay_waiting.wait(timeout=1)
+    release_router.set()
+    first.join(timeout=1)
+    second.join(timeout=1)
+
+    assert len(calls) == 1
+    assert first_result[0]["ok"] is True
+    assert second_result[0]["deduped"] is True
+
+
+def test_keyed_replay_times_out_while_owner_is_stuck(window, monkeypatch):
+    """A stuck owner must not retain every same-key request thread forever."""
+    router_entered = threading.Event()
+    release_router = threading.Event()
+
+    def _router(session_id, text, **kwargs):
+        router_entered.set()
+        release_router.wait(timeout=1)
+        return {"ok": True, "via": "spawn-fifo"}
+
+    monkeypatch.setattr(server, "_INJECT_DEDUPE_WAIT_S", 0.05, raising=False)
+    monkeypatch.setattr(server, "_inject_text_into_session_router", _router)
+    first = threading.Thread(target=lambda: server._inject_text_into_session(
+        "s1", "composer send", source="composer",
+        idempotency_key="inject:composer-send",
+    ))
+    first.start()
+    assert router_entered.wait(timeout=1)
+
+    result = []
+    second = threading.Thread(target=lambda: result.append(
+        server._inject_text_into_session(
+            "s1", "composer send", source="composer",
+            idempotency_key="inject:composer-send",
+        )
+    ))
+    second.start()
+    second.join(timeout=0.5)
+    release_router.set()
+    first.join(timeout=1)
+    second.join(timeout=1)
+
+    assert result[0]["ok"] is False
+    assert result[0]["code"] == "delivery_in_progress"
+
+
+def test_waiting_keyed_replay_retries_after_owner_failure(window, monkeypatch):
+    """A failed owner releases its reservation instead of losing the replay."""
+    first_router_entered = threading.Event()
+    release_first = threading.Event()
+    second_router_entered = threading.Event()
+    calls = []
+
+    def _router(session_id, text, **kwargs):
+        calls.append((session_id, text))
+        if len(calls) == 1:
+            first_router_entered.set()
+            release_first.wait(timeout=1)
+            return {"ok": False, "error": "fifo unavailable"}
+        second_router_entered.set()
+        return {"ok": True, "via": "spawn-fifo"}
+
+    monkeypatch.setattr(server, "_inject_text_into_session_router", _router)
+    first_result = []
+    second_result = []
+    first = threading.Thread(
+        target=lambda: first_result.append(server._inject_text_into_session(
+            "s1", "composer send", source="composer",
+            idempotency_key="inject:composer-send",
+        )),
+    )
+    first.start()
+    assert first_router_entered.wait(timeout=1)
+    second = threading.Thread(
+        target=lambda: second_result.append(server._inject_text_into_session(
+            "s1", "composer send", source="composer",
+            idempotency_key="inject:composer-send",
+        )),
+    )
+    second.start()
+
+    assert not second_router_entered.wait(timeout=0.1)
+    release_first.set()
+    first.join(timeout=1)
+    second.join(timeout=1)
+
+    assert len(calls) == 2
+    assert first_result[0]["ok"] is False
+    assert second_result[0]["ok"] is True
 
 
 def test_allow_duplicate_sends_again_without_reaching_the_router_signature(
