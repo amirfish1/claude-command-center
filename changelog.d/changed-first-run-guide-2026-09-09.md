@@ -1,0 +1,1 @@
+First-run is now one skippable ~20-step guide (CLIs, conversations, LHS/RHS, queue, workers, Delegation) instead of a 3-step wizard plus a 6-step look-tour. Missing CLIs can be installed or logged in from the guide; Queue, Workers, and Delegate are opened on the live dashboard before they are coached. Settings "Run onboarding" and "Take the tour" both replay it.
