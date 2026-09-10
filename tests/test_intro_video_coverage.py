@@ -222,6 +222,10 @@ class TestIntroVideoCoverage(unittest.TestCase):
     def test_master_video_path_is_named(self):
         self.assertIn("ccc-introduction.mp4", self.text)
 
+    def test_master_video_file_is_the_shipped_playable(self):
+        self.assertTrue(MASTER.is_file(), MASTER)
+        self.assertGreater(MASTER.stat().st_size, 1_000_000, MASTER)
+
 
 if __name__ == "__main__":
     unittest.main()

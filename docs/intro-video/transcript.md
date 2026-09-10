@@ -9,26 +9,26 @@ Timestamps are filled from the rendered per-slide durations after compose.
 
 | # | scene | start | end | visual source | required moment |
 |---|---|---|---|---|---|
-| 00 | identity | TBD | TBD | brand title card | identity: local dashboard, attaches, needs you |
-| 01 | fleet | TBD | TBD | V-01-fleet-scan.mp4 | fleet/list with multiple engines |
-| 02 | engines | TBD | TBD | engine support matrix card | eight spawnable plus three read-only, with qualifications |
-| 03 | attention | TBD | TBD | V-03-attention.mp4 | needs-you / attention moment |
-| 04 | flow | TBD | TBD | V-07-flow-canvas.mp4 | Flow canvas or project tree |
-| 05 | split | TBD | TBD | V-08-split-pane.mp4 | split conversations |
-| 06 | kanban | TBD | TBD | V-06-kanban-drag.mp4 | optional kanban board view |
-| 07 | spawn | TBD | TBD | V-14-issue-to-session.mp4 | spawn or steer from the dashboard |
-| 08 | steer | TBD | TBD | feature grid: attach, desktop, titles, permissions, composer | attach, resume-on-demand, titles, permission prompts |
-| 09 | cost | TBD | TBD | usage and deploy callouts | usage tracking, auto-fix deploys |
-| 10 | group-chat | TBD | TBD | V-16-group-chat.mp4 | group chat or queues/workers |
-| 11 | inbox | TBD | TBD | Decision Inbox card (synthetic demo copy) | Decision Inbox |
-| 12 | queues | TBD | TBD | V-17-queues.mp4 | group chat or queues/workers |
-| 13 | workers | TBD | TBD | V-18-queue-workers.mp4 | queues/workers |
-| 14 | search | TBD | TBD | V-09-search.mp4 | search |
-| 15 | mobile | TBD | TBD | V-15-mobile.mp4 | mobile or Simple Mode |
-| 16 | simple-mode | TBD | TBD | docs/simple-mode/assets/01-home.png | mobile or Simple Mode |
-| 17 | settings | TBD | TBD | settings, tour, system status, ACP | FIRST FLIGHT, Settings modal, System status, ACP adapter |
-| 18 | cli | TBD | TBD | ccc CLI command panel | ccc CLI |
-| 19 | install | TBD | TBD | install paths and live demo | demo and install |
+| 00 | identity | 0:00 | 0:12 | brand title card | identity: local dashboard, attaches, needs you |
+| 01 | fleet | 0:12 | 0:31 | V-01-fleet-scan.mp4 | fleet/list with multiple engines |
+| 02 | engines | 0:31 | 1:07 | engine support matrix card | eight spawnable plus three read-only, with qualifications |
+| 03 | attention | 1:07 | 1:21 | V-03-attention.mp4 | needs-you / attention moment |
+| 04 | flow | 1:21 | 1:37 | V-07-flow-canvas.mp4 | Flow canvas or project tree |
+| 05 | split | 1:37 | 1:45 | V-08-split-pane.mp4 | split conversations |
+| 06 | kanban | 1:45 | 1:55 | V-06-kanban-drag.mp4 | optional kanban board view |
+| 07 | spawn | 1:55 | 2:13 | V-14-issue-to-session.mp4 | spawn or steer from the dashboard |
+| 08 | steer | 2:13 | 2:55 | feature grid: attach, desktop, titles, permissions, composer | attach, resume-on-demand, titles, permission prompts |
+| 09 | cost | 2:55 | 3:17 | usage and deploy callouts | usage tracking, auto-fix deploys |
+| 10 | group-chat | 3:17 | 3:38 | V-16-group-chat.mp4 | group chat or queues/workers |
+| 11 | inbox | 3:38 | 4:00 | Decision Inbox card (synthetic demo copy) | Decision Inbox |
+| 12 | queues | 4:00 | 4:16 | V-17-queues.mp4 | group chat or queues/workers |
+| 13 | workers | 4:16 | 4:36 | V-18-queue-workers.mp4 | queues/workers |
+| 14 | search | 4:36 | 4:50 | V-09-search.mp4 | search |
+| 15 | mobile | 4:50 | 5:00 | V-15-mobile.mp4 | mobile or Simple Mode |
+| 16 | simple-mode | 5:00 | 5:09 | docs/simple-mode/assets/01-home.png | mobile or Simple Mode |
+| 17 | settings | 5:09 | 5:40 | settings, tour, system status, ACP | FIRST FLIGHT, Settings modal, System status, ACP adapter |
+| 18 | cli | 5:40 | 6:12 | ccc CLI command panel | ccc CLI |
+| 19 | install | 6:12 | 6:32 | install paths and live demo | demo and install |
 
 Required visual moments (criterion 3) map to these sources:
 
