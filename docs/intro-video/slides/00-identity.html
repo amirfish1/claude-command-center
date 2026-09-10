@@ -1,0 +1,35 @@
+<!doctype html>
+<html><head>
+<meta charset="utf-8">
+<link rel="stylesheet" href="_shared.css">
+<style>
+  .hero { display: flex; flex-direction: column; justify-content: center; align-items: center;
+          text-align: center; height: 100%; gap: 28px; }
+  .lockup { display: flex; align-items: center; justify-content: center; gap: 28px; }
+  .word {
+    font-size: 92px; font-weight: 800; letter-spacing: -0.03em; margin: 0;
+  }
+  .descriptor {
+    font-size: 22px; letter-spacing: 0.18em; text-transform: uppercase;
+    color: var(--muted); font-weight: 600;
+  }
+  .tagline { font-size: 36px; font-weight: 700; margin: 0; }
+  .url {
+    font-family: ui-monospace, "SF Mono", Menlo, monospace;
+    font-size: 24px; color: var(--muted);
+  }
+</style>
+</head>
+<body class="canvas h">
+  <div class="hero">
+    <div class="descriptor">The coding-agent command center</div>
+    <div class="lockup">
+      <div class="mark" aria-hidden="true">
+        <i></i><i class="need"></i><i></i><i></i>
+      </div>
+      <h1 class="word">CCC</h1>
+    </div>
+    <p class="tagline">Start <span class="accent">the next</span> while Claude builds the first.</p>
+    <div class="url">ccc.amirfish.ai</div>
+  </div>
+</body></html>

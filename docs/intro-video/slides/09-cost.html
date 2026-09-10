@@ -1,0 +1,33 @@
+<!doctype html>
+<html><head>
+<meta charset="utf-8">
+<link rel="stylesheet" href="_shared.css">
+<style>
+  .wrap { display: flex; flex-direction: column; height: 100%; }
+  h1 { font-size: 48px; }
+  .stat-row { display: grid; grid-template-columns: repeat(3, 1fr); gap: 22px; margin-top: 28px; }
+  .stat { background: var(--panel); border: 1px solid var(--line); border-radius: 16px; padding: 28px; }
+  .stat .v { font-size: 36px; font-weight: 800; color: var(--accent); margin-bottom: 10px; }
+  .stat .l { font-size: 22px; color: var(--muted); line-height: 1.4; }
+</style>
+</head>
+<body class="canvas h">
+  <div class="wrap">
+    <div class="eyebrow">Cost and usage</div>
+    <h1>See the spend before you hit the wall.</h1>
+    <div class="stat-row">
+      <div class="stat">
+        <div class="v">Usage tracking</div>
+        <div class="l">Pace against plan limits, per engine, with cache-adjusted rankings.</div>
+      </div>
+      <div class="stat">
+        <div class="v">Throughput</div>
+        <div class="l">A spike gets a name: the session or automation that caused it.</div>
+      </div>
+      <div class="stat">
+        <div class="v">Auto-fix deploys</div>
+        <div class="l">Opt-in Vercel poll. Spawns a fix-deploy session. The agent still investigates.</div>
+      </div>
+    </div>
+  </div>
+</body></html>

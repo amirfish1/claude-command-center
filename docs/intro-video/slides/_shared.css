@@ -1,0 +1,116 @@
+/* Shared design tokens + base layout for narrated-video slides.
+ *
+ * Each slide HTML should:
+ *   <link rel="stylesheet" href="_shared.css">
+ *   <body class="canvas h">   for horizontal (1920x1080)
+ *   <body class="canvas v">   for vertical/short (1080x1920)
+ *
+ * Add slide-specific CSS in a <style> block inside <head>.
+ */
+
+:root {
+  --bg:      #0d1117; /* CCC brand near-black */
+  --panel:   #161b22;
+  --line:    #30363d;
+  --text:    #e6ebf2;
+  --muted:   #8b949e;
+  --accent:  #f5a623; /* CCC amber: the session that needs you */
+  --blue:    #6e8caf; /* CCC slate-blue */
+  --strike:  #d97757;
+  --good:    #7cb37c;
+  --c: #5b8def; --r: #c44a4a; --s: #888888;
+}
+
+* { box-sizing: border-box; }
+
+html, body {
+  margin: 0; padding: 0;
+  background: var(--bg);
+  color: var(--text);
+  font-family: -apple-system, "SF Pro Display", "SF Pro Text",
+               Inter, system-ui, sans-serif;
+  font-feature-settings: "ss01", "ss02";
+  -webkit-font-smoothing: antialiased;
+}
+
+/* Canvas sizing. Chrome screenshots at body.clientWidth x clientHeight. */
+body.canvas {
+  width: 1920px; height: 1080px;        /* default: horizontal */
+  padding: 64px 96px;
+  display: flex; flex-direction: column;
+  overflow: hidden;
+}
+body.canvas.h { width: 1920px; height: 1080px; padding: 64px 96px; }
+body.canvas.v {
+  width: 1080px; height: 1920px;
+  padding: 96px 72px;
+}
+
+.eyebrow {
+  font-size: 18px; letter-spacing: 0.22em; text-transform: uppercase;
+  color: var(--accent); font-weight: 700; margin-bottom: 14px;
+}
+
+h1 {
+  font-size: 64px; line-height: 1.08; letter-spacing: -0.02em;
+  margin: 0 0 18px; font-weight: 800;
+}
+
+h2 {
+  font-size: 40px; line-height: 1.15; letter-spacing: -0.01em;
+  margin: 0 0 14px; font-weight: 700;
+}
+
+p { font-size: 24px; line-height: 1.5; margin: 0 0 18px; color: var(--text); }
+
+.accent { color: var(--accent); font-weight: 600; }
+.strike { color: var(--strike); font-weight: 600; }
+.good   { color: var(--good);   font-weight: 600; }
+.muted  { color: var(--muted); }
+
+/* Vertical canvas: scale type down so it still reads. */
+body.canvas.v h1     { font-size: 76px; }
+body.canvas.v h2     { font-size: 48px; }
+body.canvas.v p      { font-size: 30px; }
+body.canvas.v .eyebrow { font-size: 22px; }
+
+.chips { display: flex; flex-wrap: wrap; gap: 12px; margin-top: 8px; }
+.chip {
+  background: var(--panel); border: 1px solid var(--line);
+  border-radius: 999px; padding: 10px 18px; font-size: 22px; font-weight: 600;
+}
+.chip.amber { border-color: var(--accent); color: var(--accent); }
+.chip.blue { border-color: var(--blue); color: #b9cbe0; }
+.chip.mute { color: var(--muted); }
+
+.grid2 {
+  display: grid; grid-template-columns: 1fr 1fr; gap: 22px;
+  margin-top: 22px; align-items: start;
+}
+.card {
+  background: var(--panel); border: 1px solid var(--line);
+  border-radius: 16px; padding: 22px 24px;
+}
+.card h3 { margin: 0 0 10px; font-size: 22px; font-weight: 700; }
+.card p, .card li { font-size: 20px; line-height: 1.4; color: var(--muted); margin: 0; }
+.card ul { margin: 0; padding-left: 1.1em; }
+
+.code {
+  font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+  background: var(--panel); border: 1px solid var(--line);
+  border-radius: 14px; padding: 22px 28px; font-size: 26px; line-height: 1.55;
+  color: var(--text); white-space: pre;
+}
+.code .kw { color: var(--accent); }
+
+.mark {
+  width: 168px; height: 168px; border-radius: 38px;
+  background: var(--panel); border: 2px solid var(--line);
+  display: grid; grid-template-columns: 1fr 1fr; gap: 14px; padding: 28px;
+}
+.mark i { display: block; border-radius: 14px; background: var(--blue); }
+.mark i.need { background: var(--accent); position: relative; }
+.mark i.need::after {
+  content: ""; position: absolute; top: 10px; right: 10px;
+  width: 16px; height: 16px; border-radius: 50%; background: var(--bg);
+}
