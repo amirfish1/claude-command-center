@@ -2836,6 +2836,15 @@ def session_live_status(session_id, session_cwd):
         return result
 
     if _core._is_kimi_session(session_id):
+        # The open-pane status poll is also the freshness source for the
+        # cold-session composer. Kimi returns early for both KAP and ACP, so
+        # expose its wire transcript mtime before either branch can return.
+        try:
+            wire = _core._acp_wire_path("kimi", session_id)
+            if wire:
+                result["transcript_mtime"] = wire.stat().st_mtime
+        except OSError:
+            pass
         # kap-routed sessions report the daemon's own turn state, which is
         # authoritative: it is the process holding the engine core, so its
         # `busy` is the real answer rather than the ACP snapshot's inference.
