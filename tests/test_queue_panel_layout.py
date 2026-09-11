@@ -12,40 +12,68 @@ PROJECT_ROOT = pathlib.Path(__file__).resolve().parents[1]
 
 class TestQueuePanelLayout(unittest.TestCase):
     def test_standalone_queue_uses_single_panel_master_detail_on_phone(self):
-        """A phone swaps one active Q2 pane at a time instead of panning columns."""
+        """A phone swaps one active Q2 pane at a time instead of panning columns.
+
+        Ticket detail is a popup on every viewport now (CCC-904), so mobile
+        routing only toggles between the 'queues' and 'tickets' panels —
+        there is no third 'detail' panel to route to.
+        """
         q2_js = (PROJECT_ROOT / "static" / "q2.js").read_text(encoding="utf-8")
         q2_css = (PROJECT_ROOT / "static" / "q2.css").read_text(encoding="utf-8")
         q2_html = (PROJECT_ROOT / "static" / "q2.html").read_text(encoding="utf-8")
 
         self.assertIn("function showMobileColumn(column)", q2_js)
         self.assertIn("showMobileColumn('tickets');", q2_js)
-        self.assertIn("showMobileColumn('detail');", q2_js)
+        # 'detail' was dropped from the mobile router: only queues/tickets
+        # panels are valid routing targets.
+        self.assertIn("['queues', 'tickets'].indexOf(column) === -1", q2_js)
+        # Picking a ticket opens the detail popup instead of a third pane.
+        self.assertIn("openDetailModal();", q2_js)
         self.assertIn("data-mobile-panel", q2_js)
         self.assertIn("@media (max-width: 700px)", q2_css)
         self.assertIn('data-mobile-panel="queues"', q2_css)
         self.assertIn('data-mobile-panel="tickets"', q2_css)
-        self.assertIn('data-mobile-panel="detail"', q2_css)
+        self.assertNotIn('data-mobile-panel="detail"', q2_css)
         self.assertNotIn("scroll-snap-type: x mandatory;", q2_css)
         self.assertIn('class="q2-shell" data-mobile-panel="queues"', q2_html)
 
     def test_phone_queue_navigation_has_explicit_back_controls(self):
         """Swiping advances the master/detail panes, but phone users can also
-        return from tickets to queues and from a ticket to its list."""
+        return from tickets to queues and from a ticket back to its list.
+
+        Ticket detail is a popup on every viewport now (CCC-904), so the
+        ticket→list direction is the popup's explicit close control (× button
+        or Escape), not a second back button.
+        """
         q2_html = (PROJECT_ROOT / "static" / "q2.html").read_text(encoding="utf-8")
         q2_js = (PROJECT_ROOT / "static" / "q2.js").read_text(encoding="utf-8")
         q2_css = (PROJECT_ROOT / "static" / "q2.css").read_text(encoding="utf-8")
 
         self.assertIn('data-q2-mobile-back="queues"', q2_html)
-        self.assertIn('data-q2-mobile-back="tickets"', q2_html)
         self.assertIn("showMobileColumn(back.getAttribute('data-q2-mobile-back'));", q2_js)
         self.assertIn(".q2-mobile-back", q2_css)
+
+        # Ticket → list: the detail popup carries an explicit × close control
+        # and Escape also closes it (via modalKey → closeModal()).
+        self.assertIn('function openDetailModal()', q2_js)
+        self.assertIn('q2-modal-detail-close', q2_js)
+        self.assertIn('data-q2-modal-close', q2_js)
+        self.assertIn("e.key === 'Escape'", q2_js)
+        self.assertIn('function closeModal()', q2_js)
 
     def test_standalone_queue_keeps_recent_closed_tickets_visible(self):
         """Recent closes stay in context without expanding full history."""
         q2_js = (PROJECT_ROOT / "static" / "q2.js").read_text(encoding="utf-8")
 
         self.assertIn("var RECENT_CLOSED_WINDOW_MS = 12 * 60 * 60 * 1000;", q2_js)
-        self.assertIn("var recentClosed = closed.filter(isRecentClosed);", q2_js)
+        # Recent closed also keeps tickets with unresolved notes, and the
+        # all-time closure history stays behind the explicit "Show closed"
+        # control (state.showClosed).
+        self.assertIn(
+            "var recentClosed = closed.filter(function (it) { return isRecentClosed(it) || unresolvedNotes(it).length > 0; });",
+            q2_js,
+        )
+        self.assertIn("state.showClosed ? closed.slice(0, state.closedCap) : recentClosed", q2_js)
         self.assertIn("Recent closed", q2_js)
 
     def test_standalone_queue_glows_a_newly_filed_ticket(self):
@@ -163,7 +191,9 @@ class TestQueuePanelLayout(unittest.TestCase):
             app_js,
         )
         self.assertIn(
-            "$convList.innerHTML = _convListHtml;\n    _mountSharedQueuePanel();",
+            "$convList.innerHTML = _convListHtml;\n"
+            "    _updateConvTabBarHeightVar($convList);\n"
+            "    _mountSharedQueuePanel();",
             app_js,
         )
         self.assertIn("if (next === 'queue' && queuePane) {", app_js)
@@ -176,7 +206,7 @@ class TestQueuePanelLayout(unittest.TestCase):
 
         health_pos = index_html.index('id="queueHealthStrip"')
         log_pos = index_html.index('id="queueHealthLogBtn"')
-        tickets_pos = index_html.index('<div class="files-header">', log_pos)
+        tickets_pos = index_html.index('<div class="files-header fq-field-row">', log_pos)
         self.assertLess(health_pos, log_pos)
         self.assertLess(log_pos, tickets_pos)
         self.assertIn('data-role="evergreen-log-btn"', index_html[health_pos:tickets_pos])
@@ -216,7 +246,7 @@ class TestQueuePanelLayout(unittest.TestCase):
         ]
         sidebar_panel_css = app_css[
             app_css.index(".shared-queue-host-sidebar > .files-queue-panel {"):
-            app_css.index(".conv-all-hermes-tabs", app_css.index(".shared-queue-host-sidebar > .files-queue-panel {"))
+            app_css.index("/* Section headers double as collapse toggles", app_css.index(".shared-queue-host-sidebar > .files-queue-panel {"))
         ]
 
         self.assertIn("min-width: 0;", sidebar_host_css)
@@ -281,14 +311,29 @@ class TestQueuePanelLayout(unittest.TestCase):
         self.assertIn(".fq-empty-sub", app_css)
 
     def test_auto_queue_scope_names_the_repo_selected_queue(self):
-        """Auto scope remains explicit about the queue it resolves to."""
+        """The trigger shows the resolved queue name (override or repo-derived).
+
+        The old native <select> had an "Auto: <scope>" option string. The new
+        trigger pill shows the resolved queue name directly — no "Auto" label.
+        The override/resolve logic (_uxqGetScopeOverride) is unchanged.
+        """
         app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
         scope_render = app_js[
             app_js.index("function _uxqRenderScopeSelect(items, currentScope)"):
-            app_js.index("function _uxqEmptyHtml", app_js.index("function _uxqRenderScopeSelect(items, currentScope)"))
+            app_js.index("function _uxqSetScopeLoading(", app_js.index("function _uxqRenderScopeSelect(items, currentScope)"))
         ]
 
-        self.assertIn("Auto: ' + escapeHtml(currentScope || 'all')", scope_render)
+        # The new trigger renders the resolved queue name, not "Auto: …".
+        self.assertIn("_uxqRenderQueueTrigger(items, currentScope)", scope_render)
+        self.assertNotIn("Auto: ' + escapeHtml(currentScope || 'all')", scope_render)
+
+        # The trigger renderer reads the override + resolved scope.
+        trigger_fn = app_js[
+            app_js.index("function _uxqRenderQueueTrigger(items, currentScope)"):
+            app_js.index("function _uxqRenderWorkingNow()", app_js.index("function _uxqRenderQueueTrigger(items, currentScope)"))
+        ]
+        self.assertIn("_uxqGetScopeOverride()", trigger_fn)
+        self.assertIn("_uxqProjectKey(currentScope)", trigger_fn)
 
     def test_claimed_queue_items_do_not_render_as_open_green(self):
         """Claim metadata should force the row out of the open/green state."""

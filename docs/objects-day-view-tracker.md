@@ -86,9 +86,9 @@ branch, `conv-object-empty-hint`).
 ### GOAL-3 — Persistent storage for the organization
 State lives in localStorage: `ccc-flow-custom-objects`, `ccc-flow-node-parents`,
 `ccc-flow-node-positions`, `ccc-objects-order`, `ccc-flow-collapsed-nodes`. Move
-to durable server-side storage with an `/api/*` surface (the way COO tracking
-mirrors to `coo-notes.json`). Enables cross-surface use + server-side daily
-routines/notifications reading your day. Adds an API contract + migration from
+to durable server-side storage with an `/api/*` surface. Enables cross-surface
+use + server-side daily routines/notifications reading your day. Adds an API
+contract + migration from
 existing localStorage; respect the same-origin POST guard.
 
 ### GOAL-4 — Create objects + assign sessions via the CCC API

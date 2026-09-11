@@ -579,6 +579,19 @@
     return ENGINE_COLORS[getEngine(name)] || ENGINE_COLORS.claude;
   }
 
+  /* getEngine() only ever guesses, by substring-matching whatever nickname the
+     participant happens to carry. When the server tells us the real engine,
+     use it: an exact key first, then the substring guess for colour with the
+     real engine name as the label, so an unmapped engine is never mislabelled
+     "Claude". */
+  function engineInfoFor(engine, fallbackName) {
+    var key = String(engine || '').trim().toLowerCase();
+    if (!key) return engineInfo(fallbackName);
+    if (ENGINE_COLORS[key]) return ENGINE_COLORS[key];
+    var guess = ENGINE_COLORS[getEngine(key)] || ENGINE_COLORS.claude;
+    return { cls: guess.cls, label: key, color: guess.color };
+  }
+
   /* ── DOM refs ── */
   var chatListScroll = document.getElementById('chatListScroll');
   var chatCount = document.getElementById('chatCount');
@@ -625,6 +638,14 @@
 	    return String(row.engine || row.source || '').trim() || 'claude';
 	  }
 
+	  /* Engine · model · effort, in one line, skipping whatever is unset.
+	     Rows that predate the reasoning_effort field just render shorter. */
+	  function routingSummary(engineLabel, model, effort) {
+	    return [engineLabel, String(model || '').trim(), String(effort || '').trim()]
+	      .filter(function(part) { return !!part; })
+	      .join(' · ');
+	  }
+
 	  function normalizeSessionRows(data) {
 	    var raw = [];
 	    if (Array.isArray(data)) raw = data;
@@ -641,6 +662,8 @@
 	        id: sid,
 	        title: sessionTitle(row),
 	        engine: sessionEngine(row),
+	        model: String(row.model || '').trim(),
+	        effort: String(row.reasoning_effort || '').trim(),
 	        repo: String(row.repo_name || row.folder_label || row.project || row.repo_path || row.cwd || '').trim(),
 	        raw: row
 	      });
@@ -680,7 +703,7 @@
 	    }
 	    sessionPickerSelected.innerHTML = rows.map(function(row) {
 	      var eng = engineInfo(row.engine || row.title);
-	      return '<span class="pill ' + eng.cls + '"><span class="dot"></span>' + escHtml(row.title || row.id.substring(0, 8)) + '</span>';
+	      return '<span class="pill ' + eng.cls + '" title="' + escAttr(routingSummary(eng.label, row.model, row.effort)) + '"><span class="dot"></span>' + escHtml(row.title || row.id.substring(0, 8)) + '</span>';
 	    }).join('');
 	  }
 
@@ -694,7 +717,7 @@
 	    }
 	    var rows = pickerSessions.filter(function(row) {
 	      if (!query) return true;
-	      return (row.title + ' ' + row.id + ' ' + row.engine + ' ' + row.repo).toLowerCase().indexOf(query) >= 0;
+	      return (row.title + ' ' + row.id + ' ' + row.engine + ' ' + row.model + ' ' + row.effort + ' ' + row.repo).toLowerCase().indexOf(query) >= 0;
 	    }).slice(0, 80);
 	    if (!rows.length) {
 	      sessionPickerList.innerHTML = '<div class="no-chats">No matching sessions</div>';
@@ -707,7 +730,7 @@
 	        '<input type="checkbox"' + (selected ? ' checked' : '') + ' aria-hidden="true">' +
 	        '<span class="session-picker-main">' +
 	          '<span class="session-picker-title">' + escHtml(row.title) + '</span>' +
-	          '<span class="session-picker-meta">' + escHtml(eng.label + ' · ' + row.id.substring(0, 8) + (row.repo ? ' · ' + row.repo : '')) + '</span>' +
+	          '<span class="session-picker-meta">' + escHtml(routingSummary(eng.label, row.model, row.effort) + ' · ' + row.id.substring(0, 8) + (row.repo ? ' · ' + row.repo : '')) + '</span>' +
 	        '</span>' +
 	      '</button>';
 	    }).join('');
@@ -863,13 +886,22 @@
     var participantMeta = data.participant_meta || {};
     var waiting = data.waiting || {};
 
+    // Engine · model · effort per participant, keyed both ways so the message
+    // headers below can resolve an author back to its routing without a
+    // second pass over participant_meta.
+    var routingByName = {};
+    var routingByHash = {};
+
     var participantBar = '';
     sessionIds.forEach(function(sid) {
       var displayName = nameMap[sid] || sid.substring(0, 8);
-      var eng = engineInfo(displayName);
       var pm = participantMeta[sid] || {};
+      var eng = engineInfoFor(pm.engine, displayName);
+      var summary = routingSummary(eng.label, pm.model, pm.reasoning_effort);
+      routingByName[displayName.toLowerCase()] = { eng: eng, summary: summary };
+      routingByHash[sid.substring(0, 8)] = { eng: eng, summary: summary };
       var isLive = pm.is_live ? ' is-live' : '';
-      participantBar += '<span class="pill ' + eng.cls + isLive + '"><span class="dot"></span>' + escHtml(displayName) + '</span>';
+      participantBar += '<span class="pill ' + eng.cls + isLive + '" title="' + escAttr(summary) + '"><span class="dot"></span>' + escHtml(displayName) + '</span>';
     });
     // ＋ participant chip (CCC-103): opens a search-and-add popover.
     participantBar += '<span class="pill add-part-pill" onclick="openAddParticipant()" title="Add a participant session">＋</span>';
@@ -896,16 +928,18 @@
     messages.forEach(function(msg) {
       var isHuman = msg.author.toLowerCase() === 'human';
       var isSystem = msg.isSystem;
-      var eng = isSystem ? null : engineInfo(msg.author);
+      var routing = isHuman ? null : (routingByHash[msg.hash] || routingByName[msg.author.toLowerCase()] || null);
+      var eng = isSystem ? null : (routing ? routing.eng : engineInfo(msg.author));
       var groupClass = isSystem ? 'system' : (isHuman ? 'human' : 'assistant');
 
       var headerHtml = '';
       if (!isSystem) {
         var dotColor = eng ? eng.color : '#8b949e';
         var authorLabel = msg.hash ? msg.hash + ': ' + msg.author : msg.author;
+        var authorTitle = routing ? routing.summary : '';
         headerHtml = '<div class="msg-header">' +
           '<span class="engine-dot" style="background:' + dotColor + '"></span>' +
-          '<span>' + escHtml(authorLabel) + '</span>' +
+          '<span' + (authorTitle ? ' title="' + escAttr(authorTitle) + '"' : '') + '>' + escHtml(authorLabel) + '</span>' +
           (msg.action ? '<span class="msg-action-badge">' + msg.action + '</span>' : '') +
         '</div>';
       }

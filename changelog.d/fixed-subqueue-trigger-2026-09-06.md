@@ -1,0 +1,1 @@
+- Moved the queue sub-queue filter beside the dropdown chevron so it no longer interrupts the main trigger click target.

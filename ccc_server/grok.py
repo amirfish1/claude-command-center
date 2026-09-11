@@ -8,7 +8,7 @@ in server.py are reached via `_core` at call time."""
 
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 import json
 import os
@@ -20,7 +20,7 @@ from ccc_server import core as _core
 from ccc_server import dbutil
 
 # ---------------------------------------------------------------------------
-# Grok CLI conversation ingestion (read-only).
+# Grok CLI conversation ingestion + ACP spawn (xAI Grok Build).
 #
 # Two different tools install a `grok` binary under ~/.grok (overridable via
 # the GROK_HOME env var) and overwrite each other:
@@ -31,8 +31,9 @@ from ccc_server import dbutil
 #   Variant B — superagent-ai/grok-cli (npm): a single SQLite grok.db with
 #     workspaces / sessions / messages tables.
 # Both stores may coexist (one tool overwrote the other's binary while old
-# data remained), so both are scanned and their rows merged. Listing +
-# transcript view only; no spawn / resume support.
+# data remained), so both are scanned and their rows merged.
+# Spawn / follow-up / cancel for variant A go through `grok agent stdio`
+# (ACP) in server.py; this module stays the on-disk listing + replay path.
 # ---------------------------------------------------------------------------
 
 GROK_LIVE_WINDOW_S = 180
@@ -125,6 +126,98 @@ def _is_grok_session(session_id):
         con.close()
 
 
+def grok_session_cwd(session_id):
+    """cwd for a Grok CLI session (variant-A dir bucket or variant-B db row),
+    or None. Used by server.py's find_session_cwd — without this, a Grok
+    session with no live spawn-registry entry has no cwd resolution path at
+    all, so "Launch" fails with "could not derive repo context"."""
+    sid = _grok_sid_ok(session_id)
+    if not sid:
+        return None
+    session_dir = _grok_session_dir(sid)
+    if session_dir is not None:
+        cwd = _grok_decode_bucket_cwd(session_dir.parent)
+        if cwd:
+            return cwd
+    con = _grok_db_connect()
+    if con is None:
+        return None
+    try:
+        cols = {r["name"] for r in con.execute("PRAGMA table_info(sessions)")}
+        if "id" not in cols:
+            return None
+        cwd_col = _core._copilot_first_col(cols, ("cwd_at_start", "cwd_last", "cwd"))
+        if not cwd_col:
+            return None
+        row = con.execute(
+            f"SELECT {cwd_col} AS cwd FROM sessions WHERE id=? LIMIT 1", (sid,)
+        ).fetchone()
+        return str(row["cwd"]).strip() if row and row["cwd"] else None
+    except sqlite3.Error:
+        return None
+    finally:
+        con.close()
+
+
+def _extract_grok_usage(session_id):
+    """Usage stats for a Grok session — model + reasoning effort only.
+
+    Grok's local session store (variant-A summary.json / variant-B db row)
+    doesn't record per-turn token usage the way kimi's wire.jsonl does, so
+    token counts stay at 0 (same "unknown" shape cursor's usage uses).
+    Without a model/engine here the conv-pane model pill has nothing to
+    render and disappears entirely — the pill's `if (displayModel)` guard
+    in app.js silently no-ops on an empty model (CCC-879).
+    """
+    override = _core._get_session_override(session_id)
+    result = {
+        "latest_input_tokens": 0,
+        "peak_input_tokens": 0,
+        "total_output_tokens": 0,
+        "total_input_tokens": 0,
+        "total_cache_creation_tokens": 0,
+        "total_cache_read_tokens": 0,
+        "model": "",
+        "context_limit": 0,
+        "cost_usd": 0.0,
+        "cost_breakdown_usd": {"input": 0.0, "cache_creation": 0.0,
+                               "cache_read": 0.0, "output": 0.0},
+        "engine": "grok",
+        "override": override,
+        "reasoning_effort": (override or {}).get("reasoning_effort") or "",
+    }
+    sid = _grok_sid_ok(session_id)
+    if not sid:
+        return result
+    session_dir = _grok_session_dir(sid)
+    if session_dir is not None:
+        try:
+            summary = json.loads((session_dir / "summary.json").read_text())
+            result["model"] = str(summary.get("current_model_id") or "")
+            if not result["reasoning_effort"]:
+                result["reasoning_effort"] = str(summary.get("reasoning_effort") or "")
+            return result
+        except (OSError, ValueError, json.JSONDecodeError):
+            pass
+    con = _grok_db_connect()
+    if con is None:
+        return result
+    try:
+        cols = {r["name"] for r in con.execute("PRAGMA table_info(sessions)")}
+        model_col = _core._copilot_first_col(cols, ("model", "model_id", "current_model_id"))
+        if model_col:
+            row = con.execute(
+                f"SELECT {model_col} AS model FROM sessions WHERE id=? LIMIT 1", (sid,)
+            ).fetchone()
+            if row and row["model"]:
+                result["model"] = str(row["model"]).strip()
+    except sqlite3.Error:
+        pass
+    finally:
+        con.close()
+    return result
+
+
 def _grok_content_text(content):
     """Pull text out of a Grok/ACP content payload: a plain string, a
     {type: "text", text: ...} part, a list of parts, or a nested message
@@ -151,10 +244,37 @@ def _grok_content_text(content):
     return ""
 
 
+def _grok_unwrap_acp_event(ev):
+    """Flatten a Grok JSON-RPC envelope to the inner session-update dict.
+
+    Newer Grok Build writes lines as `{"method": "session/update",
+    "params": {"update": {...}, "sessionId": ...}}`.  Older lines and
+    `chat_history.jsonl` are already flat.  Returns the inner `update` when
+    wrapped, else the original dict, or `None` for non-dicts."""
+    if not isinstance(ev, dict):
+        return None
+    if "sessionUpdate" in ev or "role" in ev or "type" in ev:
+        return ev
+    params = ev.get("params")
+    if isinstance(params, dict):
+        update = params.get("update")
+        if isinstance(update, dict):
+            return update
+    return ev
+
+
 def _grok_event_role_text(ev):
     """(role, text) for one line of a Grok ACP updates.jsonl or a raw
     chat_history.jsonl — role is 'user' | 'assistant' | 'tool' | ''.
-    Unknown shapes return ('', '') and are skipped by callers."""
+    Unknown shapes return ('', '') and are skipped by callers.
+
+    The envelope is unwrapped first, then `sessionUpdate`, `role`, or `type`
+    is used to decide the role.  `chat_history.jsonl` uses `type` (not
+    `role`) in real Grok Build output, so mapping `type` is required for the
+    fallback transcript to load at all."""
+    if not isinstance(ev, dict):
+        return "", ""
+    ev = _grok_unwrap_acp_event(ev)
     if not isinstance(ev, dict):
         return "", ""
     kind = str(ev.get("sessionUpdate") or "").lower()
@@ -166,9 +286,11 @@ def _grok_event_role_text(ev):
         if "agent" in kind or "assistant" in kind:
             return "assistant", _grok_content_text(ev.get("content"))
         return "", ""
-    role = str(ev.get("role") or "").lower()
+    role = str(ev.get("role") or ev.get("type") or "").lower()
     if role in ("user", "assistant"):
         return role, _grok_content_text(ev.get("content"))
+    if role == "tool_result":
+        return "tool", _grok_content_text(ev.get("content"))
     if role == "tool":
         return "tool", ""
     return "", ""
@@ -246,6 +368,75 @@ def _grok_mine_jsonl_texts(jsonl_path):
     return first_user, last_assistant, created, updated
 
 
+def _grok_read_subagent_meta(meta_path):
+    """Parse one Grok Build ``subagents/<child>/meta.json``, or {}."""
+    try:
+        data = json.loads(meta_path.read_text(encoding="utf-8", errors="replace"))
+    except (OSError, json.JSONDecodeError, UnicodeError, TypeError, ValueError):
+        return {}
+    return data if isinstance(data, dict) else {}
+
+
+def _grok_subagent_parent_map():
+    """child_sid -> {parent, name} from variant-A ``subagents/*/meta.json``.
+
+    Grok Build records native spawn_subagent links under
+    ``sessions/<cwd-bucket>/<parent>/subagents/<child>/meta.json``. The child
+    is also a first-class session dir at the bucket level; this map is the
+    parent pointer CCC's session graph and listing rows were missing.
+    """
+    out = {}
+    root = _grok_home() / "sessions"
+    try:
+        buckets = list(root.iterdir()) if root.is_dir() else []
+    except OSError:
+        return out
+    for bucket in buckets:
+        try:
+            if not bucket.is_dir():
+                continue
+            sessions = list(bucket.iterdir())
+        except OSError:
+            continue
+        for session_dir in sessions:
+            agents = session_dir / "subagents"
+            try:
+                if not session_dir.is_dir() or not agents.is_dir():
+                    continue
+                kids = list(agents.iterdir())
+            except OSError:
+                continue
+            parent_sid = session_dir.name
+            for child_dir in kids:
+                try:
+                    if not child_dir.is_dir():
+                        continue
+                except OSError:
+                    continue
+                meta = {}
+                meta_path = child_dir / "meta.json"
+                try:
+                    if meta_path.is_file():
+                        meta = _grok_read_subagent_meta(meta_path)
+                except OSError:
+                    meta = {}
+                child_id = str(
+                    meta.get("child_session_id")
+                    or meta.get("subagent_id")
+                    or child_dir.name
+                ).strip()
+                parent_id = str(meta.get("parent_session_id") or parent_sid).strip()
+                if not child_id or not parent_id or child_id == parent_id:
+                    continue
+                if not _grok_sid_ok(child_id) or not _grok_sid_ok(parent_id):
+                    continue
+                name = str(
+                    meta.get("description") or meta.get("subagent_type") or ""
+                ).strip()
+                out.setdefault(child_id, {"parent": parent_id, "name": name})
+    return out
+
+
 def _grok_session_dir_info(session_dir, cwd):
     """One listing dict for a variant-A session dir, or None when the dir
     carries neither a summary.json nor a readable transcript file."""
@@ -319,6 +510,7 @@ def _grok_sessions_from_dirs(limit=None):
         buckets = list(root.iterdir()) if root.is_dir() else []
     except OSError:
         return []
+    parent_map = _grok_subagent_parent_map()
     out = []
     for bucket in buckets:
         try:
@@ -335,8 +527,12 @@ def _grok_sessions_from_dirs(limit=None):
             except OSError:
                 continue
             info = _grok_session_dir_info(d, cwd)
-            if info:
-                out.append(info)
+            if not info:
+                continue
+            link = parent_map.get(info["id"]) or {}
+            info["parent_session_id"] = str(link.get("parent") or "")
+            info["subagent_name"] = str(link.get("name") or "")
+            out.append(info)
     out.sort(key=lambda s: s.get("updated") or 0, reverse=True)
     if limit and limit > 0:
         out = out[: int(limit)]
@@ -624,15 +820,118 @@ def find_grok_conversations(
             "needs_approval_message": "",
             "model": s.get("model") or "",
             "reasoning_effort": "",
+            "parent_session_id": s.get("parent_session_id") or "",
         })
     out.sort(key=lambda x: x.get("last_interacted") or x.get("modified") or 0, reverse=True)
     return out
 
 
+def _grok_event_ts(ev):
+    """Best-effort ISO 8601 timestamp for a Grok ACP event."""
+    raw = ev.get("timestamp") or ev.get("ts") or ev.get("created_at")
+    if raw is None:
+        return ""
+    try:
+        epoch = _grok_epoch(raw)
+        if epoch:
+            return datetime.fromtimestamp(epoch, tz=timezone.utc).isoformat().replace("+00:00", "Z")
+    except (ValueError, OverflowError, OSError):
+        pass
+    return str(raw)
+
+
+def _grok_tool_args_detail(args):
+    """Return a human-readable detail string and command (if any) for a
+    Grok tool-call rawInput dict."""
+    if not isinstance(args, dict):
+        s = str(args).strip()
+        return (s[:200], s if " " in s or "\n" in s else None)
+    for key in ("command", "query", "target_file", "path", "file_path", "description"):
+        if args.get(key):
+            val = str(args[key]).strip()
+            return (val[:200], val if key == "command" else None)
+    if args:
+        try:
+            compact = json.dumps(args, ensure_ascii=False)
+        except (TypeError, ValueError):
+            compact = str(args)
+        return (compact[:200], None)
+    return ("", None)
+
+
+def _grok_tool_result_text(ev):
+    """(text, is_error) for a Grok tool_call_update event."""
+    status = str(ev.get("status") or "").lower()
+    is_error = bool(ev.get("error")) or status in ("failed", "error")
+    error_text = _grok_content_text(ev.get("error"))
+    if error_text:
+        return error_text[:1600], True
+    for key in ("rawOutput", "output", "result", "content"):
+        val = ev.get(key)
+        if val is None:
+            continue
+        text = _grok_content_text(val)
+        if text:
+            return text[:1600], is_error
+        # If the value is not text-extractable (e.g. an image payload), show
+        # a small placeholder instead of a wall of base64 JSON.
+        if isinstance(val, (dict, list)):
+            try:
+                dumped = json.dumps(val, ensure_ascii=False)
+            except (TypeError, ValueError):
+                dumped = str(val)
+            if "data:image" in dumped or '"type":"image"' in dumped:
+                return "[image output]", is_error
+            return dumped[:400], is_error
+        return str(val)[:400], is_error
+    if is_error:
+        return "Tool call failed", True
+    return "", False
+
+
+def _grok_hook_summary(ev):
+    """Compact human-readable summary of a Grok hook_execution event."""
+    event_name = str(ev.get("event_name") or "").strip()
+    tool_name = str(ev.get("tool_name") or "").strip()
+    runs = ev.get("runs") or []
+    ok = 0
+    failed = 0
+    failed_names = []
+    for run in runs:
+        if not isinstance(run, dict):
+            continue
+        status = run.get("status")
+        if isinstance(status, dict):
+            status = status.get("status")
+        name = str(run.get("name") or "").strip()
+        if str(status or "").lower() in ("success", "ok"):
+            ok += 1
+        else:
+            failed += 1
+            short = name.split(":")[-1].split("[")[0] if name else ""
+            if short and short not in failed_names:
+                failed_names.append(short)
+    parts = []
+    if event_name:
+        parts.append(event_name)
+    if tool_name:
+        parts.append(tool_name)
+    if ok or failed:
+        parts.append(f"{ok} ok, {failed} failed")
+    if failed_names:
+        parts.append("failed: " + ", ".join(failed_names[:3]))
+    return " · ".join(parts)
+
+
 def _parse_grok_updates_file(path):
     """CCC transcript events from a variant-A updates.jsonl (ACP
     session-update stream). Defensive by design: unknown update kinds are
-    skipped and a malformed line never aborts the parse."""
+    skipped and a malformed line never aborts the parse.
+
+    Newer Grok Build wraps each line in a JSON-RPC envelope and interleaves
+    `agent_thought_chunk`, `hook_execution`, `image_dropped`, and
+    `retry_state` updates alongside tool calls; all of these are surfaced so
+    the conversation view matches the terminal."""
     events = []
     line = 0
     try:
@@ -642,13 +941,22 @@ def _parse_grok_updates_file(path):
                 if not raw:
                     continue
                 try:
-                    ev = json.loads(raw)
+                    top = json.loads(raw)
                 except json.JSONDecodeError:
                     continue
+                if not isinstance(top, dict):
+                    continue
+                ev = _grok_unwrap_acp_event(top)
                 if not isinstance(ev, dict):
                     continue
-                kind = str(ev.get("sessionUpdate") or ev.get("type") or "").lower()
-                ts = str(ev.get("timestamp") or ev.get("ts") or "")
+                # Carry the envelope timestamp into the inner update when the
+                # inner dict doesn't already have one.
+                if "timestamp" not in ev and "ts" not in ev:
+                    ts_top = top.get("timestamp") or top.get("ts")
+                    if ts_top is not None:
+                        ev["timestamp"] = ts_top
+                kind = str(ev.get("sessionUpdate") or "").lower()
+                ts = _grok_event_ts(ev)
                 if "user" in kind:
                     text = _grok_content_text(ev.get("content")).strip()
                     if not text:
@@ -658,28 +966,65 @@ def _parse_grok_updates_file(path):
                         "line": line, "ts": ts, "type": "user_text",
                         "text": text, "images": [],
                     })
+                elif "thought" in kind:
+                    text = _grok_content_text(ev.get("content")).strip()
+                    if not text:
+                        continue
+                    line += 1
+                    events.append({
+                        "line": line, "ts": ts, "type": "assistant",
+                        "message_id": f"grok-{line}",
+                        "blocks": [{"kind": "thinking", "text": text}],
+                    })
+                elif "hook" in kind and "execution" in kind:
+                    summary = _grok_hook_summary(ev)
+                    if not summary:
+                        continue
+                    line += 1
+                    events.append({
+                        "line": line, "ts": ts, "type": "system",
+                        "subtype": "grok_hook_execution",
+                        "text": summary,
+                    })
+                elif kind == "image_dropped":
+                    notes = ev.get("notes") or []
+                    if isinstance(notes, str):
+                        notes = [notes]
+                    note_text = " ".join(str(n) for n in notes if n).strip()
+                    if not note_text:
+                        continue
+                    line += 1
+                    events.append({
+                        "line": line, "ts": ts, "type": "system",
+                        "subtype": "grok_note",
+                        "text": note_text,
+                    })
+                elif kind == "retry_state":
+                    reason = str(ev.get("reason") or "").strip()
+                    if not reason:
+                        continue
+                    attempt = ev.get("attempt")
+                    max_retries = ev.get("max_retries")
+                    label = "Retrying"
+                    if attempt is not None and max_retries is not None:
+                        label += f" ({attempt}/{max_retries})"
+                    line += 1
+                    events.append({
+                        "line": line, "ts": ts, "type": "system",
+                        "subtype": "grok_retry",
+                        "text": f"{label}: {reason}",
+                    })
                 elif "tool" in kind and (
                     "result" in kind or "update" in kind
                     or "complete" in kind or "finish" in kind
                 ):
-                    result = ev.get("rawOutput")
-                    if result is None:
-                        result = ev.get("output")
-                    if result is None:
-                        result = ev.get("result")
-                    if result is None:
-                        result = ev.get("error")
-                    if isinstance(result, (dict, list)):
-                        result = json.dumps(result)[:800]
-                    is_error = bool(ev.get("error")) or str(
-                        ev.get("status") or ""
-                    ).lower() in ("failed", "error")
-                    if result is None and not is_error:
+                    result_text, is_error = _grok_tool_result_text(ev)
+                    if not result_text and not is_error:
                         continue
                     line += 1
                     events.append({
                         "line": line, "ts": ts, "type": "tool_result",
-                        "text": str(result or "")[:800],
+                        "text": str(result_text)[:1600],
                         "tool_use_id": str(
                             ev.get("toolCallId") or ev.get("id") or ""
                         ),
@@ -691,16 +1036,7 @@ def _parse_grok_updates_file(path):
                         or ev.get("toolName") or ev.get("kind") or ""
                     )
                     args = ev.get("rawInput") or ev.get("input") or ev.get("arguments") or {}
-                    if isinstance(args, dict):
-                        detail = (
-                            args.get("command")
-                            or args.get("description")
-                            or (json.dumps(args)[:200] if args else "")
-                        )
-                        command = args.get("command")
-                    else:
-                        detail = str(args)[:200] if args else ""
-                        command = None
+                    detail, command = _grok_tool_args_detail(args)
                     line += 1
                     events.append({
                         "line": line, "ts": ts, "type": "assistant",
@@ -708,7 +1044,7 @@ def _parse_grok_updates_file(path):
                         "blocks": [{
                             "kind": "tool_use",
                             "name": name,
-                            "detail": str(detail)[:200],
+                            "detail": detail,
                             "id": str(ev.get("toolCallId") or ev.get("id") or ""),
                             "command": command,
                             "command_kind": None,
@@ -724,8 +1060,8 @@ def _parse_grok_updates_file(path):
                         "message_id": f"grok-{line}",
                         "blocks": [{"kind": "text", "text": text}],
                     })
-                # Anything else (plan updates, usage signals, unknown future
-                # kinds) carries no transcript text — skip, never crash.
+                # turn_completed, plan updates, usage signals, and unknown future
+                # kinds carry no useful transcript text on their own — skip.
     except OSError:
         pass
     return events, line
@@ -733,7 +1069,9 @@ def _parse_grok_updates_file(path):
 
 def _parse_grok_chat_history_file(path):
     """CCC transcript events from a variant-A chat_history.jsonl fallback
-    ({role, content} raw model messages)."""
+    (raw model messages).  Real Grok Build output uses `type`, not `role`,
+    and assistant messages carry `tool_calls`; tool results carry `content`
+    and reasoning messages carry a `summary`."""
     events = []
     line = 0
     try:
@@ -748,24 +1086,80 @@ def _parse_grok_chat_history_file(path):
                     continue
                 if not isinstance(ev, dict):
                     continue
-                role, text = _grok_event_role_text(ev)
-                text = text.strip()
-                if not text:
+                ev = _grok_unwrap_acp_event(ev)
+                if not isinstance(ev, dict):
                     continue
-                ts = str(ev.get("timestamp") or ev.get("ts") or "")
-                if role == "user":
+                ts = _grok_event_ts(ev)
+                typ = str(ev.get("type") or ev.get("role") or "").lower()
+                if typ == "user":
+                    text = _grok_content_text(ev.get("content")).strip()
+                    if not text:
+                        continue
                     line += 1
                     events.append({
                         "line": line, "ts": ts, "type": "user_text",
                         "text": text, "images": [],
                     })
-                elif role == "assistant":
+                elif typ == "reasoning":
+                    summary = ev.get("summary") or []
+                    if isinstance(summary, dict):
+                        summary = [summary]
+                    text = _grok_content_text(summary).strip()
+                    if not text:
+                        continue
                     line += 1
                     events.append({
                         "line": line, "ts": ts, "type": "assistant",
                         "message_id": f"grok-{line}",
-                        "blocks": [{"kind": "text", "text": text}],
+                        "blocks": [{"kind": "thinking", "text": text}],
                     })
+                elif typ == "assistant":
+                    blocks = []
+                    content_text = _grok_content_text(ev.get("content")).strip()
+                    if content_text:
+                        blocks.append({"kind": "text", "text": content_text})
+                    tool_calls = ev.get("tool_calls") or []
+                    if isinstance(tool_calls, dict):
+                        tool_calls = [tool_calls]
+                    for tc in tool_calls:
+                        if not isinstance(tc, dict):
+                            continue
+                        name = str(tc.get("name") or "").strip()
+                        args = tc.get("arguments") or tc.get("input") or {}
+                        if isinstance(args, str):
+                            try:
+                                args = json.loads(args)
+                            except json.JSONDecodeError:
+                                args = {"arguments": args}
+                        detail, command = _grok_tool_args_detail(args)
+                        blocks.append({
+                            "kind": "tool_use",
+                            "name": name,
+                            "detail": detail,
+                            "id": str(tc.get("id") or ""),
+                            "command": command,
+                            "command_kind": None,
+                        })
+                    if not blocks:
+                        continue
+                    line += 1
+                    events.append({
+                        "line": line, "ts": ts, "type": "assistant",
+                        "message_id": f"grok-{line}",
+                        "blocks": blocks,
+                    })
+                elif typ == "tool_result":
+                    text = _grok_content_text(ev.get("content")).strip()
+                    if not text:
+                        continue
+                    line += 1
+                    events.append({
+                        "line": line, "ts": ts, "type": "tool_result",
+                        "text": text[:1600],
+                        "tool_use_id": str(ev.get("tool_call_id") or ev.get("id") or ""),
+                        "is_error": False,
+                    })
+                # system / unknown types carry no transcript text — skip.
     except OSError:
         pass
     return events, line

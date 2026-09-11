@@ -97,6 +97,37 @@ def _build_filters(
     return where, params
 
 
+# _title_row_hits() needs the id of each session's first real user message.
+# Computing that inline (GROUP BY session_id over the whole messages table)
+# is an uncached full-table scan on every search call — observed taking
+# 20-75s under concurrent load from multiple agent sessions, serialised
+# behind _history_query_lock into a convoy that stalled the whole endpoint.
+# The set changes only when a new session starts, so cache it in memory
+# (mirrors the COUNT/MAX cache in manager.py's status()).
+_FIRST_USER_MSG_ID_CACHE: dict = {"ids": None, "at": 0.0}
+_FIRST_USER_MSG_ID_CACHE_TTL_S = 60.0
+
+
+def _first_user_message_ids(conn: sqlite3.Connection) -> frozenset[int]:
+    now = time.time()
+    cached = _FIRST_USER_MSG_ID_CACHE
+    if cached["ids"] is not None and (now - cached["at"]) < _FIRST_USER_MSG_ID_CACHE_TTL_S:
+        return cached["ids"]
+    rows = conn.execute(
+        """
+        SELECT id FROM (
+            SELECT id, MIN(ts_unix) FROM messages
+            WHERE type = 'user' AND LTRIM(content) NOT LIKE '<%'
+            GROUP BY session_id
+        )
+        """
+    )
+    ids = frozenset(r[0] for r in rows)
+    cached["ids"] = ids
+    cached["at"] = now
+    return ids
+
+
 def _title_row_hits(
     conn: sqlite3.Connection,
     fts_query: str,
@@ -123,18 +154,16 @@ def _title_row_hits(
         FROM messages_fts
         JOIN messages m ON m.id = messages_fts.rowid
         WHERE {' AND '.join(where)}
-          AND m.id IN (
-              SELECT id FROM (
-                  SELECT id, MIN(ts_unix) FROM messages
-                  WHERE type = 'user' AND LTRIM(content) NOT LIKE '<%'
-                  GROUP BY session_id
-              )
-          )
         ORDER BY score
         LIMIT ?
     """
-    params.append(cap)
-    return list(conn.execute(sql, params))
+    # Title-matching rows are a small slice of all FTS hits, so over-fetch a
+    # wider pool before filtering in Python against the cached id set — no
+    # per-request table scan.
+    first_ids = _first_user_message_ids(conn)
+    params.append(max(cap * 20, 500))
+    rows = [r for r in conn.execute(sql, params) if r["id"] in first_ids]
+    return rows[:cap]
 
 
 def _bm25_hits(

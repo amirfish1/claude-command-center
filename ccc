@@ -1,0 +1,913 @@
+#!/usr/bin/env python3
+# Copyright (c) 2026 Amir Fish. All rights reserved.
+# SPDX-License-Identifier: LicenseRef-CCC-Software-License
+"""ccc — command-line client for a running Claude Command Center server.
+
+Answers "what sessions exist and what are they doing right now" in one
+command, without opening the dashboard:
+
+    ccc sessions              # live census table (alias: list-sessions)
+    ccc sessions --since 5h   # only sessions active within the window
+    ccc sessions --json       # raw census envelope (agent-consumable)
+
+    ccc spawn "fix the flaky test"            # new session, server defaults
+    ccc spawn "…" --engine claude --model opus-5 --effort high
+    ccc spawn "…" --name queue-drain --cwd ~/Apps/foo --report-to <sid>
+    ccc models               # every engine's models, efforts, cost
+    ccc models --engine claude --json
+    ccc doctor               # per-engine CLI/auth/BYOK health, dry-run only
+
+    ccc quota                # weekly quota left per engine + reset deadline
+
+    ccc send <session> "message"        # fire-and-forget into a session
+    ccc send <session> "…" --steer      # interrupt the current turn with it
+    ccc ask <session> "question"        # send and wait for the reply text
+
+<session> is a session id, a unique id prefix, or a (unique, case-
+insensitive) fragment of the session's display name from `ccc sessions`.
+
+Agents: model ids and effort ladders differ per engine and change over
+time — never guess them. `ccc models` is the live catalog; pass its ids
+to `ccc spawn --model` / `--effort` verbatim.
+
+Server discovery: --server URL > $CCC_SERVER > the port.txt the server
+publishes at ~/.claude/command-center/port.txt (see write_port_file in
+ccc_server/fleet_jobs.py). Stdlib-only by design, like server.py.
+"""
+
+import argparse
+import json
+import os
+import re
+import subprocess
+import sys
+import urllib.error
+import urllib.request
+from datetime import datetime, timezone
+
+PORT_FILE = os.path.expanduser("~/.claude/command-center/port.txt")
+
+SUBCOMMANDS = ("sessions", "list-sessions", "spawn", "models", "doctor", "send", "ask", "quota")
+
+_SINCE_RE = re.compile(r"^(\d+)\s*([smhd])$", re.IGNORECASE)
+_SINCE_UNIT_S = {"s": 1, "m": 60, "h": 3600, "d": 86400}
+
+# Release dates aren't published in any catalog source (Anthropic's docs
+# give cutoffs and retirement dates, not release dates), so the `released`
+# column is derived from the only date signal that exists: a trailing date
+# in the model id itself (-2024-05-13 or -20240513). Dated ids only.
+_RELEASED_RE = re.compile(r"-(\d{4})-?(\d{2})-?(\d{2})$")
+
+
+def _id_release_date(model_id):
+    m = _RELEASED_RE.search(model_id or "")
+    if not m:
+        return ""
+    year, month, day = (int(g) for g in m.groups())
+    if not (1 <= month <= 12 and 1 <= day <= 31):
+        return ""
+    return f"{year:04d}-{month:02d}-{day:02d}"
+
+# --sort status category order: waiting (blocked on a human) is the most
+# actionable, then working, idle, ended. Within a category the server's
+# recency order is preserved (sorted() is stable).
+_STATUS_RANK = {"waiting": 0, "working": 1, "idle": 2, "ended": 3}
+
+
+def _resolve_server(args_server):
+    if args_server:
+        return args_server.rstrip("/")
+    env = (os.environ.get("CCC_SERVER") or "").strip()
+    if env:
+        return env.rstrip("/")
+    try:
+        with open(PORT_FILE) as f:
+            url = f.read().strip()
+    except OSError:
+        return None
+    return url.rstrip("/") if url else None
+
+
+_CLI_USER_AGENT = "ccc-cli"
+
+
+def _get_json(base, path, timeout=10):
+    req = urllib.request.Request(
+        base + path, headers={"Accept": "application/json", "User-Agent": _CLI_USER_AGENT}
+    )
+    with urllib.request.urlopen(req, timeout=timeout) as resp:
+        return json.loads(resp.read().decode("utf-8"))
+
+
+def _post_json(base, path, payload, timeout=60):
+    """POST JSON, returning (status, payload). HTTP error statuses still carry
+    a JSON body on /api/sessions/spawn (error + supported_engines et al), so
+    parse it instead of raising. Raises URLError only for transport failures."""
+    body = json.dumps(payload).encode("utf-8")
+    req = urllib.request.Request(
+        base + path,
+        data=body,
+        headers={
+            "Accept": "application/json",
+            "Content-Type": "application/json",
+            "User-Agent": _CLI_USER_AGENT,
+        },
+        method="POST",
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
+            return resp.status, json.loads(resp.read().decode("utf-8"))
+    except urllib.error.HTTPError as e:
+        try:
+            return e.code, json.loads(e.read().decode("utf-8"))
+        except (ValueError, UnicodeDecodeError):
+            return e.code, {"ok": False, "error": f"HTTP {e.code}"}
+
+
+def _parse_since(text):
+    m = _SINCE_RE.match((text or "").strip())
+    if not m:
+        raise argparse.ArgumentTypeError(f"--since expects like 30s/15m/5h/2d, got {text!r}")
+    return int(m.group(1)) * _SINCE_UNIT_S[m.group(2).lower()]
+
+
+def _fmt_age(age_s):
+    if age_s is None:
+        return "?"
+    age_s = int(age_s)
+    if age_s < 60:
+        return f"{age_s}s"
+    if age_s < 3600:
+        return f"{age_s // 60}m"
+    if age_s < 86400:
+        return f"{age_s // 3600}h{age_s % 3600 // 60:02d}m"
+    return f"{age_s // 86400}d{age_s % 86400 // 3600:02d}h"
+
+
+def cmd_sessions(args):
+    base = _resolve_server(args.server)
+    if not base:
+        print(
+            "ccc: no server found — is CCC running? "
+            f"(looked for --server, $CCC_SERVER, {PORT_FILE})",
+            file=sys.stderr,
+        )
+        return 1
+    try:
+        census_path = "/api/sessions/census"
+        if args.since is not None:
+            # Server widens the candidate pool with recently-ended sessions in
+            # the window; the client-side filter below then applies uniformly.
+            census_path += f"?since={args.since}"
+        payload = _get_json(base, census_path)
+    except OSError as e:  # URLError, plus raw TimeoutError from mid-read stalls
+        print(f"ccc: cannot reach CCC at {base} ({e}) — is CCC running?", file=sys.stderr)
+        return 1
+    sessions = list(payload.get("sessions") or [])
+    if args.since is not None:
+        sessions = [
+            s for s in sessions
+            if s.get("last_event_age_s") is not None and s["last_event_age_s"] <= args.since
+        ]
+    if args.json:
+        out = dict(payload)
+        out["sessions"] = sessions
+        print(json.dumps(out, indent=2))
+        return 0
+
+    n_helpers = sum(1 for s in sessions if s.get("helper"))
+    if not args.all:
+        sessions = [s for s in sessions if not s.get("helper")]
+    if args.sort == "status":
+        sessions = sorted(sessions, key=lambda s: _STATUS_RANK.get(s.get("state") or "", 4))
+
+    children_of = {}
+    for s in sessions:
+        parent = s.get("parent_session_id") or ""
+        if parent:
+            children_of.setdefault(parent, []).append(s)
+    sids = {s.get("session_id") for s in sessions}
+    roots = [s for s in sessions if (s.get("parent_session_id") or "") not in sids]
+
+    home_prefix = os.path.expanduser("~") + os.sep
+
+    def _row(s, depth=0, child=False):
+        flags = ""
+        if s.get("needs_approval"):
+            flags += " !approval"
+        if s.get("question_waiting"):
+            flags += " ?question"
+        if s.get("unanswered_input"):
+            flags += " !unanswered"
+        if s.get("stuck"):
+            flags += " !stuck"
+            if s.get("stuck_age_s") is not None:
+                flags += f" {_fmt_age(s['stuck_age_s'])} silent"
+        tool = s.get("pending_tool") or "-"
+        if s.get("turn_age_s") is not None and s.get("state") == "working":
+            tool = f"{tool} {_fmt_age(s['turn_age_s'])}"
+        name = (s.get("name") or "(no conversation row)")[:44]
+        marker = ("  " * depth + "↳ ") if (depth or child) else ""
+        engine_effort = f"{s.get('engine') or '?'}/{s.get('effort') or '?'}"
+        via = s.get("spawned_via") or "terminal"
+        if via in ("-", "none", "null", "not-available", "not available"):
+            via = "terminal"
+        path = s.get("repo_path") or "?"
+        if path.startswith(home_prefix):
+            path = path[len(home_prefix):]
+        print(
+            f"{_fmt_age(s.get('last_event_age_s')):>7}  {marker}{name:<44} "
+            f"{s.get('state') or '?':<8} {(s.get('model') or '?')[:18]:<18} "
+            f"{s.get('session_id') or '?'}  {engine_effort:<14} "
+            f"via:{via:<6} {path}  {tool}{flags}"
+        )
+
+    def _walk(s, depth):
+        _row(s, depth)
+        kids = children_of.get(s.get("session_id")) or ()
+        if args.sort == "status":
+            kids = sorted(kids, key=lambda c: (
+                _STATUS_RANK.get(c.get("state") or "", 4),
+                c.get("last_event_age_s") if c.get("last_event_age_s") is not None else float("inf"),
+            ))
+        else:
+            kids = sorted(kids, key=lambda c: c.get("last_event_age_s") or 0)
+        for child in kids:
+            _walk(child, depth + 1)
+
+    if args.tree:
+        for s in roots:
+            _walk(s, 0)
+    else:
+        # Flat (default): every row in the requested sort order, children
+        # marked ↳ inline. Nesting under parents (--tree) groups families but
+        # breaks the global sort order — the hiding problem in new clothes.
+        for s in sessions:
+            _row(s, 0, child=bool(s.get("parent_session_id")))
+    n = len(sessions)
+    n_live = sum(1 for s in sessions if s.get("state") != "ended")
+    n_ended = n - n_live
+    n_orphan = sum(1 for s in sessions if not s.get("has_conversation_row"))
+    counts = f"{n_live} live"
+    if n_ended:
+        counts += f" + {n_ended} ended"
+    suffix = f", {n_orphan} with no conversation row" if n_orphan else ""
+    print(f"\n{counts} session{'s' if n != 1 else ''}{suffix}")
+    if n_helpers and not args.all:
+        print(f"({n_helpers} CCC helper session{'s' if n_helpers != 1 else ''} hidden — auto-title bots; --all to show)")
+    return 0
+
+
+def _resolve_target(base, target):
+    """Turn a user-supplied target (session id, unique id prefix, or unique
+    name fragment) into a session id, using the live census. Returns
+    (session_id, error_message) — exactly one is set. An unmatched target
+    passes through untouched so server-side aliases (bridge ULIDs, spawn
+    prefixes) still work."""
+    target = (target or "").strip()
+    try:
+        payload = _get_json(base, "/api/sessions/census")
+        sessions = list(payload.get("sessions") or [])
+    except OSError:
+        return target, None  # census unreachable — let the send itself report
+    ids = [s.get("session_id") or "" for s in sessions]
+    if target in ids:
+        return target, None
+    prefix = [sid for sid in ids if sid and sid.startswith(target)]
+    if len(prefix) == 1:
+        return prefix[0], None
+    needle = target.lower()
+    named = [
+        s for s in sessions
+        if needle and needle in (s.get("name") or "").lower()
+    ]
+    if len(named) == 1:
+        return named[0].get("session_id") or target, None
+    if len(named) > 1:
+        lines = "\n".join(
+            f"  {s.get('session_id')}  {s.get('name')}" for s in named[:8]
+        )
+        return None, (
+            f"ccc: {target!r} matches {len(named)} sessions — be more "
+            f"specific or use the id:\n{lines}"
+        )
+    if len(prefix) > 1:
+        return None, f"ccc: id prefix {target!r} is ambiguous ({len(prefix)} sessions)"
+    return target, None
+
+
+def cmd_send(args):
+    base = _resolve_server(args.server)
+    if not base:
+        print(
+            "ccc: no server found — is CCC running? "
+            f"(looked for --server, $CCC_SERVER, {PORT_FILE})",
+            file=sys.stderr,
+        )
+        return 1
+    text = " ".join(args.text).strip()
+    if not text and not sys.stdin.isatty():
+        text = sys.stdin.read().strip()
+    if not text:
+        print("ccc send: missing message (pass it as an argument or pipe it on stdin)",
+              file=sys.stderr)
+        return 2
+    sid, err = _resolve_target(base, args.target)
+    if err:
+        print(err, file=sys.stderr)
+        return 1
+    payload = {"session_id": sid, "text": text}
+    sender_sid = getattr(args, "sender", None) or os.environ.get("CLAUDE_SESSION_ID") or None
+    if sender_sid:
+        resolved_sender, _ = _resolve_target(base, sender_sid)
+        payload["peer_sender_sid"] = resolved_sender or sender_sid
+    if args.steer:
+        payload["mode"] = "steer"
+    elif args.queue:
+        payload["mode"] = "queue"
+    try:
+        status, result = _post_json(base, "/api/inject-input", payload)
+    except OSError as e:  # URLError, plus raw TimeoutError from mid-read stalls
+        print(f"ccc: cannot reach CCC at {base} ({e}) — is CCC running?", file=sys.stderr)
+        return 1
+    if args.json:
+        print(json.dumps(result, indent=2))
+        return 0 if result.get("ok") else 1
+    if not result.get("ok"):
+        print(f"ccc: send failed: {result.get('error') or f'HTTP {status}'}", file=sys.stderr)
+        return 1
+    effect = result.get("effect") or result.get("landed") or "delivered"
+    print(f"sent to {sid} ({effect})")
+    return 0
+
+
+def cmd_ask(args):
+    base = _resolve_server(args.server)
+    if not base:
+        print(
+            "ccc: no server found — is CCC running? "
+            f"(looked for --server, $CCC_SERVER, {PORT_FILE})",
+            file=sys.stderr,
+        )
+        return 1
+    text = " ".join(args.text).strip()
+    if not text and not sys.stdin.isatty():
+        text = sys.stdin.read().strip()
+    if not text:
+        print("ccc ask: missing question (pass it as an argument or pipe it on stdin)",
+              file=sys.stderr)
+        return 2
+    sid, err = _resolve_target(base, args.target)
+    if err:
+        print(err, file=sys.stderr)
+        return 1
+    timeout_ms = int(args.timeout * 1000)
+    try:
+        # HTTP timeout outlasts the server-side wait so the server, not the
+        # transport, decides when the ask has timed out.
+        status, result = _post_json(
+            base, "/api/ask",
+            {"session_id": sid, "text": text, "timeout_ms": timeout_ms},
+            timeout=timeout_ms / 1000 + 30,
+        )
+    except OSError as e:  # URLError, plus raw TimeoutError from mid-read stalls
+        print(f"ccc: cannot reach CCC at {base} ({e}) — is CCC running?", file=sys.stderr)
+        return 1
+    if args.json:
+        print(json.dumps(result, indent=2))
+        return 0 if result.get("ok") else 1
+    if not result.get("ok"):
+        err_text = result.get("error") or f"HTTP {status}"
+        print(f"ccc: ask failed: {err_text}", file=sys.stderr)
+        if result.get("partial"):
+            print(f"--- partial reply ---\n{result['partial']}", file=sys.stderr)
+        return 1
+    answer = (result.get("text") or "").strip()
+    if answer:
+        print(answer)
+    else:
+        # ok:true with no text is a real outcome: the session ended its turn
+        # without a message (tool-only turn, or an engine that doesn't reply
+        # through the ask channel).
+        src = result.get("source") or "?"
+        print(f"(session ended its turn with no reply text — source: {src})",
+              file=sys.stderr)
+    return 0
+
+
+def cmd_models(args):
+    base = _resolve_server(args.server)
+    if not base:
+        print(
+            "ccc: no server found — is CCC running? "
+            f"(looked for --server, $CCC_SERVER, {PORT_FILE})",
+            file=sys.stderr,
+        )
+        return 1
+    try:
+        # The catalog is server-side aggregated (harness probes, docs fetch)
+        # behind a short cache; a cold build can take several seconds.
+        payload = _get_json(base, "/api/engines/models", timeout=30)
+    except OSError as e:  # URLError, plus raw TimeoutError from mid-read stalls
+        print(f"ccc: cannot reach CCC at {base} ({e}) — is CCC running?", file=sys.stderr)
+        return 1
+    catalog = payload.get("catalog") or {}
+    efforts_by_engine = payload.get("efforts_by_engine") or {}
+    if args.engine:
+        catalog = {k: v for k, v in catalog.items() if k == args.engine}
+        if not catalog:
+            known = ", ".join(sorted(payload.get("catalog") or {}))
+            print(f"ccc: unknown engine {args.engine!r} (known: {known})", file=sys.stderr)
+            return 1
+    if args.json:
+        out = dict(payload)
+        if args.engine:
+            out["catalog"] = catalog
+        print(json.dumps(out, indent=2))
+        return 0
+
+    for engine, bucket in catalog.items():
+        default = bucket.get("default") or ""
+        ladder = efforts_by_engine.get(engine) or []
+        header = engine
+        if default:
+            header += f"  (default: {default})"
+        if ladder:
+            header += f"  efforts: {','.join(ladder)}"
+        if bucket.get("supports_custom"):
+            header += "  [custom ids accepted]"
+        if bucket.get("byok_ready"):
+            header += "  [BYOK-ready]"
+        print(header)
+        models = bucket.get("models") or []
+        if not models:
+            print(f" {engine:<12} (no catalogued models — spawn uses the default above)")
+        for m in models:
+            efforts = m.get("reasoning_efforts") or []
+            cost = m.get("cost_summary") or m.get("cost_tier") or ""
+            notes = []
+            if m.get("id") == default:
+                notes.append("default")
+            if m.get("available") is False:
+                notes.append("unavailable")
+            if m.get("oneM"):
+                notes.append("1M ctx")
+            if efforts and efforts != ladder:
+                notes.append("efforts: " + ",".join(str(e) for e in efforts))
+            label = m.get("label") or ""
+            if label == m.get("id"):
+                label = ""
+            print(
+                f" {engine:<12} {m.get('id') or '?':<44} "
+                f"{_id_release_date(m.get('id')):<10} {cost:<22} "
+                f"{('; '.join(notes)):<28} {label}".rstrip()
+            )
+    print("\nuse: ccc spawn \"<prompt>\" --engine <engine> --model <id> [--effort <level>]")
+    return 0
+
+
+def _local_head_rev(timeout=2):
+    """git rev-parse HEAD of the ccc CLI's own install dir, or None when
+    this isn't a git checkout (zip/Homebrew keg without .git) or git is
+    unavailable."""
+    install_dir = os.path.dirname(os.path.realpath(__file__))
+    try:
+        out = subprocess.check_output(
+            ["git", "-C", install_dir, "rev-parse", "HEAD"],
+            stderr=subprocess.DEVNULL, timeout=timeout,
+        ).decode("utf-8", "replace").strip()
+        return out or None
+    except (OSError, subprocess.CalledProcessError, subprocess.TimeoutExpired):
+        return None
+
+
+def _code_freshness_verdict(running_rev, local_rev):
+    """Compare the running server's build stamp (/api/version's code_rev,
+    frozen at that process's start) against disk HEAD. Pure decision logic
+    so it's testable without a live server or a git checkout: "unknown"
+    when either side couldn't be determined (not a git install, or the
+    server predates the code_rev field), "match"/"stale" otherwise."""
+    if not running_rev or not local_rev:
+        return "unknown"
+    return "match" if running_rev == local_rev else "stale"
+
+
+def cmd_doctor(args):
+    base = _resolve_server(args.server)
+    if not base:
+        print(
+            "ccc: no server found — is CCC running? "
+            f"(looked for --server, $CCC_SERVER, {PORT_FILE})",
+            file=sys.stderr,
+        )
+        return 1
+    try:
+        payload = _get_json(base, "/api/engines/doctor", timeout=15)
+    except OSError as e:  # URLError, plus raw TimeoutError from mid-read stalls
+        print(f"ccc: cannot reach CCC at {base} ({e}) — is CCC running?", file=sys.stderr)
+        return 1
+    engines = payload.get("engines") or {}
+    if args.engine:
+        engines = {k: v for k, v in engines.items() if k == args.engine}
+        if not engines:
+            known = ", ".join(sorted((payload.get("engines") or {})))
+            print(f"ccc: unknown engine {args.engine!r} (known: {known})", file=sys.stderr)
+            return 1
+
+    try:
+        version_payload = _get_json(base, "/api/version", timeout=5)
+    except OSError:
+        version_payload = None
+    running_rev = str((version_payload or {}).get("code_rev") or "")
+    local_rev = _local_head_rev() or ""
+    freshness = _code_freshness_verdict(running_rev, local_rev)
+
+    if args.json:
+        out = dict(payload)
+        if args.engine:
+            out["engines"] = engines
+        out["code_freshness"] = {
+            "status": freshness,
+            "running_rev": running_rev or None,
+            "local_rev": local_rev or None,
+        }
+        print(json.dumps(out, indent=2))
+        return 0
+
+    if freshness == "match":
+        print(f"server: code matches HEAD ({running_rev[:12]})\n")
+    elif freshness == "stale":
+        print(
+            f"server: STALE CODE — running {running_rev[:12]}, disk HEAD is "
+            f"{local_rev[:12]} — restart needed (POST /api/restart, or "
+            "launchctl kickstart -k gui/$(id -u)/com.github.claude-command-center)\n"
+        )
+    else:
+        print("server: code freshness unknown (not a git install, or /api/version unreachable)\n")
+
+    def _flag(value, yes="yes", no="no", unknown="?"):
+        if value is True:
+            return yes
+        if value is False:
+            return no
+        return unknown
+
+    print(f"{'engine':<12} {'cli':<5} {'auth':<5} {'byok-profile':<13} {'smoke(dry-run)'}")
+    any_unhealthy = False
+    for engine, row in engines.items():
+        cli_ok = bool(row.get("cli_present"))
+        if not cli_ok:
+            any_unhealthy = True
+        smoke = row.get("smoke_dry_run") or {}
+        print(
+            f"{engine:<12} {_flag(row.get('cli_present')):<5} "
+            f"{_flag(row.get('auth_present')):<5} "
+            f"{_flag(row.get('byok_profile_present')) if row.get('byok_ready') else '-':<13} "
+            f"{_flag(smoke.get('ok'))}"
+        )
+    print("\n'?' = no CLI-based probe implemented for that check yet (not a failure).")
+    _print_github_quota(payload.get("github_quota"))
+    instance_warn = _print_server_instances(payload.get("server_instances"))
+    return 1 if (freshness == "stale" or instance_warn or (args.engine and any_unhealthy)) else 0
+
+
+def _print_github_quota(quota):
+    """One line of GitHub GraphQL budget (W6-1).
+
+    The number comes from the in-band `{rateLimit{...}}` block, not from
+    `gh api rate_limit` -- the REST block reports a different bucket and can
+    read used=0 while the real one is two thirds spent (OPS-929).
+    """
+    if not isinstance(quota, dict):
+        return
+    if not quota.get("ok"):
+        detail = str(quota.get("error") or "unavailable")[:80]
+        print(f"\ngithub graphql quota: unavailable ({detail})")
+        return
+    used = quota.get("used")
+    limit = quota.get("limit")
+    remaining = quota.get("remaining")
+    pct = quota.get("used_pct")
+    reset = quota.get("reset_at") or "?"
+    reset_note = ""
+    dt = _parse_iso(reset)
+    if dt is not None:
+        mins = int((dt - datetime.now(timezone.utc)).total_seconds() // 60)
+        if mins >= 0:
+            reset_note = f", resets in {mins}m"
+    flag = ""
+    if isinstance(pct, (int, float)) and pct >= 80:
+        flag = "  <-- LOW"
+    print(
+        f"\ngithub graphql quota: {used}/{limit} used"
+        f"{f' ({pct}%)' if pct is not None else ''}, "
+        f"{remaining} remaining{reset_note}{flag}"
+    )
+
+
+def _print_server_instances(report):
+    """Print duplicate dashboard-process diagnostics. Returns True on WARN."""
+    if not isinstance(report, dict):
+        return False
+    instances = report.get("instances") or []
+    status = str(report.get("status") or "unknown").upper()
+    print(f"\nccc server instances: {len(instances)} ({status})")
+    for row in instances:
+        pid = row.get("pid") or "?"
+        ports = row.get("ports")
+        if isinstance(ports, list) and ports:
+            port = ",".join(str(p) for p in ports)
+        else:
+            port = str(row.get("port") or "?")
+        owner = "launchd" if row.get("launchd_owned") else "manual"
+        started = row.get("started_at") or row.get("process_started_at") or "?"
+        print(f"  pid {pid} port {port} started {started} {owner}")
+    if status == "WARN":
+        warning = str(report.get("warning") or "duplicate server instance risk")
+        print(f"  WARN: {warning}")
+        fix = report.get("fix")
+        if fix:
+            print(f"  fix: {fix}")
+        return True
+    return False
+
+
+def _parse_iso(ts):
+    """Parse the server's ISO-8601 timestamps (offset or trailing Z) into an
+    aware datetime; None on anything unexpected."""
+    if not isinstance(ts, str) or not ts.strip():
+        return None
+    text = ts.strip()
+    if text.endswith(("Z", "z")):
+        text = text[:-1] + "+00:00"
+    try:
+        dt = datetime.fromisoformat(text)
+    except ValueError:
+        return None
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    return dt
+
+
+def _quota_rows(payload):
+    """(engine, weekly_block, note) in display order. weekly_block is the
+    /api/usage/current {pct, resets_at} window, where pct is percent USED."""
+    claude_weekly = (payload.get("claude") or {}).get("seven_day") or {}
+    rows = [("claude", claude_weekly, "")]
+    for engine in ("codex", "kimi"):
+        eng = payload.get(engine) or {}
+        note = ""
+        if eng.get("stale"):
+            note = "stale cache"
+        elif eng.get("from_cache"):
+            note = "cached"
+        rows.append((engine, eng.get("weekly") or {}, note))
+    return rows
+
+
+def cmd_quota(args):
+    base = _resolve_server(args.server)
+    if not base:
+        print(
+            "ccc: no server found — is CCC running? "
+            f"(looked for --server, $CCC_SERVER, {PORT_FILE})",
+            file=sys.stderr,
+        )
+        return 1
+    try:
+        payload = _get_json(base, "/api/usage/current", timeout=15)
+    except OSError as e:  # URLError, plus raw TimeoutError from mid-read stalls
+        print(f"ccc: cannot reach CCC at {base} ({e}) — is CCC running?", file=sys.stderr)
+        return 1
+    if args.json:
+        print(json.dumps(payload, indent=2))
+        return 0
+
+    now = datetime.now(timezone.utc)
+    for engine, block, note in _quota_rows(payload):
+        pct = block.get("pct")
+        remaining = None if pct is None else max(0, round(100 - float(pct)))
+        remaining_s = "?%" if remaining is None else f"{remaining}%"
+        reset_dt = _parse_iso(block.get("resets_at"))
+        if reset_dt is None:
+            when = "?"
+        else:
+            delta = (reset_dt - now).total_seconds()
+            countdown = "overdue" if delta < 0 else f"in {_fmt_age(delta)}"
+            when = f"{reset_dt.astimezone().strftime('%a %b %d %H:%M')} ({countdown})"
+        flags = ""
+        if remaining == 0:
+            flags += "  !exhausted"
+        if note:
+            flags += f"  ({note})"
+        print(f"{engine:<8} {remaining_s:>4} remaining   resets {when}{flags}")
+    return 0
+
+
+def cmd_spawn(args):
+    base = _resolve_server(args.server)
+    if not base:
+        print(
+            "ccc: no server found — is CCC running? "
+            f"(looked for --server, $CCC_SERVER, {PORT_FILE})",
+            file=sys.stderr,
+        )
+        return 1
+    prompt = " ".join(args.prompt).strip()
+    if not prompt and not sys.stdin.isatty():
+        prompt = sys.stdin.read().strip()
+    if not prompt:
+        print("ccc spawn: missing prompt (pass it as an argument or pipe it on stdin)",
+              file=sys.stderr)
+        return 2
+    payload = {"prompt": prompt}
+    if args.engine:
+        payload["engine"] = args.engine
+    if args.model:
+        payload["model"] = args.model
+    if args.effort:
+        payload["reasoning_effort"] = args.effort
+    if args.name:
+        payload["name"] = args.name
+    # The endpoint is repo-scoped (explicit cwd/repo_path required). A CLI's
+    # natural scope is the directory it was invoked from.
+    payload["cwd"] = args.cwd or os.getcwd()
+    if args.worktree:
+        payload["worktree"] = True
+    if args.report_to:
+        payload["report_to"] = args.report_to
+    elif os.environ.get("CLAUDE_CODE_SESSION_ID"):
+        # Best-effort attribution: invoked from inside a Claude Code session
+        # (interactive or headless) with no explicit --report-to, so default
+        # to that session rather than leaving the spawn's provenance blank.
+        payload["report_to"] = os.environ["CLAUDE_CODE_SESSION_ID"]
+    try:
+        status, result = _post_json(base, "/api/sessions/spawn", payload)
+    except OSError as e:  # URLError, plus raw TimeoutError from mid-read stalls
+        print(f"ccc: cannot reach CCC at {base} ({e}) — is CCC running?", file=sys.stderr)
+        return 1
+    if args.json:
+        print(json.dumps(result, indent=2))
+        return 0 if result.get("ok") else 1
+    if not result.get("ok"):
+        print(f"ccc: spawn failed: {result.get('error') or f'HTTP {status}'}", file=sys.stderr)
+        if result.get("supported_engines"):
+            print(f"  engines: {', '.join(result['supported_engines'])}", file=sys.stderr)
+        if result.get("known_codex_models"):
+            print(f"  known codex models: {', '.join(result['known_codex_models'])}",
+                  file=sys.stderr)
+        print("  see `ccc models` for valid --engine/--model/--effort values",
+              file=sys.stderr)
+        return 1
+    sid = result.get("session_id") or ""
+    pid = result.get("pid")
+    engine = result.get("engine") or args.engine or "claude"
+    bits = []
+    if args.name:
+        bits.append(f"name={args.name!r}")
+    if args.model:
+        bits.append(f"model={args.model}")
+    if args.effort:
+        bits.append(f"effort={args.effort}")
+    ident = f"session {sid}" if sid else (f"pid {pid}" if pid else "session")
+    suffix = f"  ({', '.join(bits)})" if bits else ""
+    print(f"spawned {engine} {ident}{suffix}")
+    print("track it: ccc sessions")
+    return 0
+
+
+def main(argv=None):
+    argv = list(sys.argv[1:] if argv is None else argv)
+    # `ccc` is also the Homebrew launcher's name (foreground server /
+    # --install-service). Keep one name for both roles: known query
+    # subcommands run the client below; anything else (no args, unknown
+    # flags) passes through to ./run.sh so `ccc` still launches CCC.
+    if argv and argv[0] not in SUBCOMMANDS and argv[0] not in ("-h", "--help", "--server"):
+        run_sh = os.path.join(os.path.dirname(os.path.realpath(__file__)), "run.sh")
+        os.execv(run_sh, [run_sh] + argv)
+    if not argv:
+        run_sh = os.path.join(os.path.dirname(os.path.realpath(__file__)), "run.sh")
+        os.execv(run_sh, [run_sh])
+
+    parser = argparse.ArgumentParser(
+        prog="ccc",
+        description="CLI for a running Claude Command Center server. "
+                    "(No subcommand → launches the server via run.sh.)",
+    )
+    parser.add_argument("--server", help="CCC base URL (default: $CCC_SERVER or port.txt)")
+    sub = parser.add_subparsers(dest="command", required=True)
+
+    for name in ("sessions", "list-sessions"):
+        p = sub.add_parser(name, help="live session census (state, age, engine, repo, name)")
+        p.add_argument("--since", type=_parse_since,
+                       help="show sessions (live + recently-ended) with activity in "
+                            "the window, e.g. 5h / 30m / 2d")
+        p.add_argument("--sort", choices=("recency", "status"), default="recency",
+                       help="recency (default): most recent first; status: waiting, "
+                            "working, idle, ended — recency within each")
+        p.add_argument("--all", action="store_true",
+                       help="include CCC helper sessions (auto-title bots), hidden by default")
+        p.add_argument("--tree", action="store_true",
+                       help="nest children under parents (default: flat, ↳ marks children)")
+        p.add_argument("--json", action="store_true", help="raw census JSON")
+        p.set_defaults(func=cmd_sessions)
+
+    p = sub.add_parser(
+        "spawn",
+        help="spawn a new agent session via CCC orchestration",
+        description="Spawn a new session on a running CCC server. Model ids and "
+                    "effort ladders are per-engine and live in `ccc models` — "
+                    "never guess them.",
+    )
+    p.add_argument("prompt", nargs="*",
+                   help="the task prompt (or pipe it on stdin)")
+    p.add_argument("--engine",
+                   help="claude (default), codex, cursor, antigravity, kilo, "
+                        "opencode, aider, hermes, kimi, devin, droid, grok, pi")
+    p.add_argument("--model",
+                   help="model id for the engine — see `ccc models` (omit for the "
+                        "server default)")
+    p.add_argument("--effort",
+                   help="reasoning effort for engines with a ladder — see the "
+                        "EFFORTS in `ccc models`")
+    p.add_argument("--name", help="display name for the session")
+    p.add_argument("--cwd", help="working directory for the session "
+                                 "(default: your current directory)")
+    p.add_argument("--worktree", action="store_true",
+                   help="run the session in a fresh git worktree")
+    p.add_argument("--report-to", metavar="SESSION_ID",
+                   help="session the spawned one reports back to on completion "
+                        "(orchestration; also becomes its parent)")
+    p.add_argument("--json", action="store_true", help="raw spawn result JSON")
+    p.set_defaults(func=cmd_spawn)
+
+    p = sub.add_parser(
+        "send",
+        help="send a message into a running session (fire-and-forget)",
+        description="Deliver text to a session via /api/inject-input. The "
+                    "target is a session id, a unique id prefix, or a unique "
+                    "fragment of the display name from `ccc sessions`.",
+    )
+    p.add_argument("target", help="session id, id prefix, or name fragment")
+    p.add_argument("text", nargs="*", help="the message (or pipe it on stdin)")
+    g = p.add_mutually_exclusive_group()
+    g.add_argument("--steer", action="store_true",
+                   help="interrupt the session's current turn with this message")
+    g.add_argument("--queue", action="store_true",
+                   help="queue behind the current turn instead of delivering now")
+    p.add_argument("--from", dest="sender", metavar="SESSION_ID",
+                   help="sender session id or name for peer attribution (defaults to $CLAUDE_SESSION_ID)")
+    p.add_argument("--json", action="store_true", help="raw inject result JSON")
+    p.set_defaults(func=cmd_send)
+
+    p = sub.add_parser(
+        "ask",
+        help="send a message and wait for the session's reply",
+        description="Synchronous ask via /api/ask: injects the text and blocks "
+                    "until the session's next assistant turn, then prints the "
+                    "reply. ok with empty text means the turn ended silently.",
+    )
+    p.add_argument("target", help="session id, id prefix, or name fragment")
+    p.add_argument("text", nargs="*", help="the question (or pipe it on stdin)")
+    p.add_argument("--timeout", type=float, default=120.0, metavar="SECONDS",
+                   help="how long the server waits for the reply "
+                        "(default 120, server caps at 600)")
+    p.add_argument("--json", action="store_true", help="raw ask result JSON")
+    p.set_defaults(func=cmd_ask)
+
+    p = sub.add_parser(
+        "models",
+        help="list spawnable engines, models, effort ladders, and cost",
+        description="The live server-owned model catalog behind the dashboard "
+                    "picker. Use these ids verbatim with `ccc spawn --model`.",
+    )
+    p.add_argument("--engine", help="only this engine")
+    p.add_argument("--json", action="store_true", help="raw catalog JSON")
+    p.set_defaults(func=cmd_models)
+
+    p = sub.add_parser(
+        "doctor",
+        help="per-engine health: CLI present, auth present, BYOK profile, dry-run smoke",
+        description="Read-only per-engine diagnostics from /api/engines/doctor -- "
+                    "never spawns a real subprocess or spends a token. '?' means "
+                    "no CLI-based auth probe exists for that engine yet, not a failure.",
+    )
+    p.add_argument("--engine", help="only this engine (exit 1 if it's unhealthy)")
+    p.add_argument("--json", action="store_true", help="raw doctor JSON")
+    p.set_defaults(func=cmd_doctor)
+
+    p = sub.add_parser(
+        "quota",
+        help="weekly quota per engine: percent remaining + reset deadline",
+        description="Per-engine weekly quota from /api/usage/current — percent "
+                    "remaining and when the window resets (local time + countdown).",
+    )
+    p.add_argument("--json", action="store_true", help="raw /api/usage/current JSON")
+    p.set_defaults(func=cmd_quota)
+
+    args = parser.parse_args(argv)
+    return args.func(args)
+
+
+if __name__ == "__main__":
+    sys.exit(main())

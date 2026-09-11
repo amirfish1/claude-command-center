@@ -44,6 +44,7 @@ def test_cost_tier_matrix_executes_production_classifier():
         ["claude", "sonnet-5", "medium"],
         ["claude", "claude-haiku-4-5", "low"],
         ["codex", "sol", "premium"],
+        ["codex", "gpt-6-astra", "premium"],
         ["codex", "gpt-5.6-sol", "premium"],
         ["codex", "gpt-5.6-terra", "high"],
         ["codex", "gpt-5.6-luna", "medium"],

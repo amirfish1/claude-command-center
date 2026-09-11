@@ -1,0 +1,1 @@
+Coding and Workers now each have an independent Compact / Cozy / Detailed display setting. Compact uses single-line titles, Cozy wraps titles without details, and Detailed wraps titles with session details. This replaces their separate Wrap and Details controls and preserves prior preferences through migration.

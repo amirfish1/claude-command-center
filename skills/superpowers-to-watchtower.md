@@ -79,8 +79,9 @@ curl -s -X POST "$CCC_URL/api/sessions/spawn" -H "Content-Type: application/json
 JSON
 ```
 
-- Omit `"model"` to use the server spawn default; if you pass `"model"`, pass
-  `"engine"` alongside it (model names are validated per engine).
+- Omit `"model"` and `"reasoning_effort"` to use the server spawn defaults; if
+  you pass either, pass `"engine"` alongside it (both are validated per engine,
+  and the effort ladder differs by engine: see `ccc-orchestration` § 2).
 - Dispatch **independent** tickets in parallel; serialize tickets that touch the
   same files (superpowers' own rule — parallel writers to one file conflict).
 - After spawning, **end your turn.** Lanes report back by injection; do not poll.

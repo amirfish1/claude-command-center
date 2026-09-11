@@ -1,0 +1,36 @@
+{
+  "ok": true,
+  "item": {
+    "ref": "WEBSITE-3",
+    "number": 3,
+    "project": "WEBSITE",
+    "status": "open",
+    "needs_input": true,
+    "block_question": "Hero video: ship the 4K loop or the compressed 1080p cut?",
+    "note": "Swap the landing hero to the new product reel",
+    "text": "Swap the landing hero to the new product reel\n\nThe reel is cut and exported. Blocked on which master to ship — the 4K loop is 38MB, the 1080p cut is 6MB.",
+    "type": "feature",
+    "priority": "p1",
+    "created_at": "2026-09-03T16:30:00Z",
+    "updated_at": "2026-09-03T21:15:00Z",
+    "claimable": true,
+    "watchtower_runnable": true,
+    "timeline": [
+      {
+        "event": "created",
+        "ts": "2026-09-03T16:30:00Z",
+        "detail": "Filed from the dashboard"
+      },
+      {
+        "event": "claimed",
+        "ts": "2026-09-03T20:10:00Z",
+        "detail": "website-1 picked it up"
+      },
+      {
+        "event": "needs_input",
+        "ts": "2026-09-03T21:15:00Z",
+        "detail": "Hero video: ship the 4K loop or the compressed 1080p cut?"
+      }
+    ]
+  }
+}

@@ -1,0 +1,1 @@
+- Keep routine Codex turn activity out of conversation history and show progress in one live status line, with Thinking, Writing, or Planning labels when available. Delivery and recovery notices remain visible.

@@ -1,0 +1,1 @@
+- Avoid duplicate activity-log rows when the worker owns a Claude inject.

@@ -1,1 +1,0 @@
-- Add a per-repository new-session button to conversation sidebar headers.

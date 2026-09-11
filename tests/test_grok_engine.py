@@ -153,6 +153,7 @@ def test_variant_a_finder_returns_row(monkeypatch, tmp_path):
     assert row["modified"] > 0
     assert row["modified_human"]
     assert row["jsonl_path"].endswith("updates.jsonl")
+    assert row["parent_session_id"] == ""
 
 
 def test_variant_a_transcript_from_updates_jsonl(monkeypatch, tmp_path):
@@ -167,6 +168,8 @@ def test_variant_a_transcript_from_updates_jsonl(monkeypatch, tmp_path):
     tool_block = events[1]["blocks"][0]
     assert tool_block["kind"] == "tool_use"
     assert tool_block["name"] == "run_shell"
+    assert tool_block["detail"] == "ls fake"
+    assert tool_block["command"] == "ls fake"
     assert events[2]["text"] == "fake.txt"
     assert events[2]["is_error"] is False
     assert events[3]["blocks"][0]["text"] == "Relay routed."
@@ -285,3 +288,375 @@ def test_is_grok_session(monkeypatch, tmp_path):
     assert server._detect_session_engine_uncached(SID_A) == "grok"
     assert server._detect_session_engine_uncached(SID_B) == "grok"
     assert server._detect_session_engine_uncached("deadbeef-0000-0000-0000-000000000000") == "claude"
+
+
+CHILD_SID = "01999999-ffff-7bbb-8ccc-eeeeeeeeeeee"
+GRANDCHILD_SID = "01999999-aaaa-7bbb-8ccc-ffffffffffff"
+
+
+def _add_grok_subagent(home, parent_sid, child_sid, description="du worktree heavy dirs"):
+    bucket = home / "sessions" / FAKE_CWD_ENCODED
+    child_dir = bucket / child_sid
+    child_dir.mkdir(parents=True, exist_ok=True)
+    (child_dir / "summary.json").write_text(
+        json.dumps({
+            "title": description,
+            "createdAt": "2026-07-20T09:10:00Z",
+            "updatedAt": "2026-07-20T09:11:00Z",
+        }),
+        encoding="utf-8",
+    )
+    meta_dir = bucket / parent_sid / "subagents" / child_sid
+    meta_dir.mkdir(parents=True, exist_ok=True)
+    (meta_dir / "meta.json").write_text(
+        json.dumps({
+            "subagent_id": child_sid,
+            "parent_session_id": parent_sid,
+            "child_session_id": child_sid,
+            "subagent_type": "general-purpose",
+            "description": description,
+        }),
+        encoding="utf-8",
+    )
+
+
+def test_variant_a_subagent_sets_listing_parent(monkeypatch, tmp_path):
+    home = _make_variant_a_home(tmp_path)
+    _add_grok_subagent(home, SID_A, CHILD_SID)
+    monkeypatch.setenv("GROK_HOME", str(home))
+
+    rows = server.find_grok_conversations(repo_only=False, include_old=True)
+    by_id = {r["session_id"]: r for r in rows}
+    assert set(by_id) == {SID_A, CHILD_SID}
+    assert by_id[SID_A]["parent_session_id"] == ""
+    assert by_id[CHILD_SID]["parent_session_id"] == SID_A
+    assert by_id[CHILD_SID]["display_name"] == "du worktree heavy dirs"
+
+
+def test_grok_subagent_graph_edge_and_family_tree(monkeypatch, tmp_path):
+    home = _make_variant_a_home(tmp_path)
+    _add_grok_subagent(home, SID_A, CHILD_SID)
+    _add_grok_subagent(home, CHILD_SID, GRANDCHILD_SID, description="nested probe")
+    monkeypatch.setenv("GROK_HOME", str(home))
+    graph = server._SessionGraph(tmp_path / "session-graph.json")
+    monkeypatch.setattr(server, "_session_graph", graph)
+
+    added = server._session_graph_ingest_grok_subagents()
+    assert added == 2
+    assert graph.parent_of(CHILD_SID) == SID_A
+    assert graph.parent_of(GRANDCHILD_SID) == CHILD_SID
+    meta = graph.edge_meta(CHILD_SID)
+    assert meta["source"] == "grok-subagent"
+    assert meta["engine"] == "grok"
+    assert meta["resumable"] is True
+    assert meta["name"] == "du worktree heavy dirs"
+    assert server._session_graph_ingest_grok_subagents() == 0
+
+    tree = server._session_graph_family_tree(GRANDCHILD_SID)
+    assert tree["session_id"] == SID_A
+    assert [c["session_id"] for c in tree["children"]] == [CHILD_SID]
+    assert [c["session_id"] for c in tree["children"][0]["children"]] == [GRANDCHILD_SID]
+
+
+def test_grok_subagent_skips_path_shaped_ids(monkeypatch, tmp_path):
+    home = _make_variant_a_home(tmp_path)
+    meta_dir = home / "sessions" / FAKE_CWD_ENCODED / SID_A / "subagents" / "not-a-sid"
+    meta_dir.mkdir(parents=True)
+    (meta_dir / "meta.json").write_text(
+        json.dumps({
+            "subagent_id": "../escape",
+            "parent_session_id": SID_A,
+            "child_session_id": "../escape",
+        }),
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("GROK_HOME", str(home))
+    assert server._grok_subagent_parent_map() == {}
+
+
+def _wrap_rpc(update, timestamp="2026-07-20T09:00:05Z"):
+    """Wrap an update in the newer Grok Build JSON-RPC envelope."""
+    return {
+        "timestamp": timestamp,
+        "method": "session/update",
+        "params": {"sessionId": SID_A, "update": update},
+    }
+
+
+def _fixture_updates_rpc():
+    """Same logical events as _fixture_updates but wrapped in JSON-RPC and
+    enriched with agent_thought_chunk, hook_execution, image_dropped, and
+    retry_state updates."""
+    base = _fixture_updates()
+    return [
+        _wrap_rpc({
+            "sessionUpdate": "hook_execution",
+            "event_name": "session_start",
+            "runs": [
+                {"name": "global/orca-status:session_start[0].hooks[0]", "status": {"status": "success", "elapsed_ms": 11}},
+                {"name": "global/settings:session_start[0].hooks[0]", "status": {"status": "failed", "error": "not found", "elapsed_ms": 0}},
+            ],
+        }, timestamp="2026-07-20T09:00:04Z"),
+        _wrap_rpc(base[0], timestamp="2026-07-20T09:00:05Z"),
+        _wrap_rpc({
+            "sessionUpdate": "agent_thought_chunk",
+            "content": {"type": "text", "text": "The user wants to route the plasma relay."},
+        }, timestamp="2026-07-20T09:00:05.500Z"),
+        _wrap_rpc(base[1], timestamp="2026-07-20T09:00:06Z"),
+        _wrap_rpc({
+            "sessionUpdate": "hook_execution",
+            "event_name": "pre_tool_use",
+            "tool_name": "run_shell",
+            "runs": [
+                {"name": "global/orca-status:pre_tool_use[0].hooks[0]", "status": {"status": "success", "elapsed_ms": 5}},
+            ],
+        }, timestamp="2026-07-20T09:00:06.100Z"),
+        _wrap_rpc(base[2], timestamp="2026-07-20T09:00:07Z"),
+        _wrap_rpc({
+            "sessionUpdate": "image_dropped",
+            "notes": ["This request failed over its images; 1 image(s) were left out of the retry."],
+        }, timestamp="2026-07-20T09:00:07.500Z"),
+        _wrap_rpc({
+            "sessionUpdate": "retry_state",
+            "type": "retrying",
+            "attempt": 1,
+            "max_retries": 5,
+            "reason": "request error: connection refused",
+        }, timestamp="2026-07-20T09:00:07.600Z"),
+        _wrap_rpc(base[3], timestamp="2026-07-20T09:00:09Z"),
+    ]
+
+
+def test_variant_a_transcript_from_updates_jsonl_rpc_envelope(monkeypatch, tmp_path):
+    """Newer Grok Build wraps updates in JSON-RPC; the parser must unwrap and
+    surface hook_execution, agent_thought_chunk, image_dropped, and retry_state
+    events."""
+    home = tmp_path / ".grok"
+    session_dir = home / "sessions" / FAKE_CWD_ENCODED / SID_A
+    session_dir.mkdir(parents=True, exist_ok=True)
+    (session_dir / "summary.json").write_text(json.dumps({"title": "RPC session"}), encoding="utf-8")
+    _write_jsonl(session_dir / "updates.jsonl", _fixture_updates_rpc())
+    monkeypatch.setenv("GROK_HOME", str(home))
+
+    result = server._parse_grok_conversation(SID_A)
+    events = result["events"]
+    types = [e["type"] for e in events]
+    assert types == [
+        "system",       # session_start hook summary
+        "user_text",
+        "assistant",    # thinking
+        "assistant",    # tool_call run_shell
+        "system",       # pre_tool_use hook summary
+        "tool_result",
+        "system",       # image_dropped
+        "system",       # retry_state
+        "assistant",    # final assistant text
+    ]
+    assert events[0]["subtype"] == "grok_hook_execution"
+    assert "session_start" in events[0]["text"]
+    assert "1 ok, 1 failed" in events[0]["text"]
+    assert events[2]["blocks"][0]["kind"] == "thinking"
+    assert "plasma relay" in events[2]["blocks"][0]["text"]
+    assert events[3]["blocks"][0]["name"] == "run_shell"
+    assert events[4]["subtype"] == "grok_hook_execution"
+    assert "pre_tool_use" in events[4]["text"]
+    assert events[5]["text"] == "fake.txt"
+    assert events[6]["subtype"] == "grok_note"
+    assert "image" in events[6]["text"]
+    assert events[7]["subtype"] == "grok_retry"
+    assert "Retrying (1/5)" in events[7]["text"]
+    assert all(e["ts"] for e in events)
+
+
+def test_variant_a_chat_history_with_type_and_tool_calls(monkeypatch, tmp_path):
+    """Real Grok Build chat_history.jsonl uses `type` (not `role`) and places
+    tool_calls on assistant turns; tool_result turns carry `content`."""
+    home = tmp_path / ".grok"
+    session_dir = home / "sessions" / FAKE_CWD_ENCODED / SID_A
+    session_dir.mkdir(parents=True, exist_ok=True)
+    (session_dir / "summary.json").write_text(json.dumps({"title": "CH session"}), encoding="utf-8")
+    _write_jsonl(session_dir / "chat_history.jsonl", [
+        {"type": "user", "content": [{"type": "text", "text": "ping the fake array"}]},
+        {
+            "type": "reasoning",
+            "summary": [{"type": "summary_text", "text": "Need to ping the array."}],
+            "encrypted_content": "abc123",
+        },
+        {
+            "type": "assistant",
+            "content": "I will ping it.",
+            "tool_calls": [
+                {
+                    "id": "tc-1",
+                    "name": "run_shell",
+                    "arguments": {"command": "ping fake-array"},
+                },
+            ],
+        },
+        {"type": "tool_result", "tool_call_id": "tc-1", "content": "pong"},
+        {"type": "assistant", "content": "Array ponged."},
+    ])
+    # No updates.jsonl, so chat_history is the fallback.
+    monkeypatch.setenv("GROK_HOME", str(home))
+
+    result = server._parse_grok_conversation(SID_A)
+    events = result["events"]
+    types = [e["type"] for e in events]
+    assert types == ["user_text", "assistant", "assistant", "tool_result", "assistant"]
+    assert events[0]["text"] == "ping the fake array"
+    assert events[1]["blocks"][0]["kind"] == "thinking"
+    assert events[2]["blocks"][0]["kind"] == "text"
+    assert events[2]["blocks"][1]["kind"] == "tool_use"
+    assert events[2]["blocks"][1]["name"] == "run_shell"
+    assert events[2]["blocks"][1]["detail"] == "ping fake-array"
+    assert events[3]["text"] == "pong"
+    assert events[3]["tool_use_id"] == "tc-1"
+    assert events[4]["blocks"][0]["text"] == "Array ponged."
+
+
+# --- Codex-style single-writer coordination (terminal vs CCC ACP) ---------
+
+
+def test_command_targets_engine_session_grok_resume(monkeypatch, tmp_path):
+    home = _make_variant_a_home(tmp_path)
+    monkeypatch.setenv("GROK_HOME", str(home))
+
+    assert server._command_targets_engine_session(
+        f"grok --resume {SID_A}", SID_A, "grok"
+    ) is True
+    assert server._command_targets_engine_session(
+        f"grok --resume {SID_A} --dangerously-skip-permissions", SID_A, "grok"
+    ) is True
+    assert server._command_targets_engine_session(
+        f"grok chat --resume {SID_A}", SID_A, "grok"
+    ) is True
+    assert server._command_targets_engine_session(
+        "grok agent stdio", SID_A, "grok"
+    ) is False
+    assert server._command_targets_engine_session(
+        f"grok --resume {SID_A}", SID_B, "grok"
+    ) is False
+
+
+def test_grok_external_writer_active_false_when_no_tui(monkeypatch, tmp_path):
+    home = _make_variant_a_home(tmp_path)
+    monkeypatch.setenv("GROK_HOME", str(home))
+    monkeypatch.setattr(server, "_raw_engine_process_commands", lambda engine: iter([]))
+    server._grok_external_writer_cache.clear()
+    assert server._grok_external_writer_active(SID_A) is False
+
+
+def test_grok_conversation_source_prefers_disk_when_acp_not_loaded(monkeypatch, tmp_path):
+    home = _make_variant_a_home(tmp_path)
+    monkeypatch.setenv("GROK_HOME", str(home))
+    # Ensure no ACP session is loaded for this sid.
+    server._ACP_CONNS.pop("grok", None)
+    server._ACP_SESSION_STATE.setdefault("grok", {}).pop(SID_A, None)
+
+    src = server._grok_conversation_source(SID_A)
+    assert src.name == "updates.jsonl"
+
+
+def test_grok_conversation_source_prefers_acp_when_loaded(monkeypatch, tmp_path):
+    home = _make_variant_a_home(tmp_path)
+    monkeypatch.setenv("GROK_HOME", str(home))
+    server._grok_external_writer_cache.clear()
+
+    # Fake an alive ACP connection with the session loaded.
+    class _FakeTransport:
+        def alive(self):
+            return True
+
+    conn = {"transport": _FakeTransport()}
+    server._ACP_CONNS["grok"] = conn
+    server._ACP_SESSION_STATE.setdefault("grok", {})[SID_A] = {
+        "loaded_conn": id(conn),
+    }
+    try:
+        src = server._grok_conversation_source(SID_A)
+        assert src == server._acp_transcript_path("grok", SID_A)
+    finally:
+        server._ACP_CONNS.pop("grok", None)
+        server._ACP_SESSION_STATE.setdefault("grok", {}).pop(SID_A, None)
+
+
+def test_acp_transcript_last_line_missing_returns_zero():
+    assert server._acp_transcript_last_line("grok", "does-not-exist-0000") == 0
+
+
+# ── CCC-884: terminal-vs-ACP conflict should queue, not hard-error ─────────
+# Mirrors Codex's write-gate (_codex_writer_gate_response): a live
+# `grok --resume` TUI and CCC's ACP connection can't safely write the same
+# session at once, but the send UX should still match Claude's "just works"
+# feel instead of surfacing the raw conflict to the user.
+
+def test_grok_external_writer_conflict_queues_the_message(monkeypatch):
+    sid = "grok-terminal-conflict-session"
+    with server._pending_terminal_input_lock:
+        original_queue = dict(server._pending_terminal_input_queue)
+        server._pending_terminal_input_queue.clear()
+    try:
+        monkeypatch.setattr(server, "_is_codex_session", lambda sid: False)
+        monkeypatch.setattr(server, "_is_kimi_session", lambda sid: False)
+        monkeypatch.setattr(server, "_session_acp_harness", lambda sid: "grok")
+        monkeypatch.setattr(server, "find_session_cwd", lambda sid: "/tmp")
+        monkeypatch.setattr(server, "session_live_status", lambda sid, cwd: {
+            "live": True, "status": "running", "kind": "acp",
+            "tty": None, "terminal_app": None,
+        })
+        monkeypatch.setattr(server, "_acp_prompt", lambda *a, **k: {
+            "ok": False, "code": "grok_external_active",
+            "error": "Grok session is active in a terminal — close it before sending.",
+        })
+        monkeypatch.setattr(server, "_save_pending_inputs", lambda: None)
+
+        result = server._inject_text_into_session(sid, "follow up")
+
+        assert result["ok"] is True
+        assert result["queued"] is True
+        assert result["via"] == "terminal-queued"
+        assert "terminal" in result["queued_reason"]
+        with server._pending_terminal_input_lock:
+            assert server._pending_terminal_input_queue[sid] == ["follow up"]
+    finally:
+        with server._pending_terminal_input_lock:
+            server._pending_terminal_input_queue.clear()
+            server._pending_terminal_input_queue.update(original_queue)
+
+
+def test_grok_external_writer_retry_from_queue_does_not_requeue_itself(monkeypatch):
+    """A watcher-driven retry (_from_terminal_queue=True) must return the raw
+    failure so the existing terminal-queue watcher re-parks it via its own
+    front-of-queue + backoff logic -- double-queuing here would duplicate
+    the message once the TUI finally closes."""
+    sid = "grok-terminal-conflict-retry"
+    with server._pending_terminal_input_lock:
+        original_queue = dict(server._pending_terminal_input_queue)
+        server._pending_terminal_input_queue.clear()
+    try:
+        monkeypatch.setattr(server, "_is_codex_session", lambda sid: False)
+        monkeypatch.setattr(server, "_is_kimi_session", lambda sid: False)
+        monkeypatch.setattr(server, "_session_acp_harness", lambda sid: "grok")
+        monkeypatch.setattr(server, "find_session_cwd", lambda sid: "/tmp")
+        monkeypatch.setattr(server, "session_live_status", lambda sid, cwd: {
+            "live": True, "status": "running", "kind": "acp",
+            "tty": None, "terminal_app": None,
+        })
+        monkeypatch.setattr(server, "_acp_prompt", lambda *a, **k: {
+            "ok": False, "code": "grok_external_active",
+            "error": "Grok session is active in a terminal — close it before sending.",
+        })
+        monkeypatch.setattr(server, "_save_pending_inputs", lambda: None)
+
+        result = server._inject_text_into_session(
+            sid, "follow up", _from_terminal_queue=True,
+        )
+
+        assert result["ok"] is False
+        assert result["code"] == "grok_external_active"
+        with server._pending_terminal_input_lock:
+            assert sid not in server._pending_terminal_input_queue
+    finally:
+        with server._pending_terminal_input_lock:
+            server._pending_terminal_input_queue.clear()
+            server._pending_terminal_input_queue.update(original_queue)

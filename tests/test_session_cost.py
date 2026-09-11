@@ -39,6 +39,16 @@ def test_claude_usage_cost_breakdown_uses_one_hour_cache_write_rate():
     assert cost["total"] == pytest.approx(10.0)
 
 
+def test_fable_5_1_uses_its_discounted_cache_read_rate():
+    cost = server._claude_usage_cost_breakdown(
+        "claude-fable-5-1",
+        {"cache_read_input_tokens": 1_000_000},
+    )
+
+    assert cost["cache_read"] == pytest.approx(0.25)
+    assert cost["total"] == pytest.approx(0.25)
+
+
 def test_claude_tail_meta_exposes_cache_aware_session_cost(tmp_path):
     transcript = tmp_path / "claude.jsonl"
     transcript.write_text(json.dumps({
@@ -79,6 +89,7 @@ def test_week_rankings_force_refresh_bypasses_cached_rows(monkeypatch):
 @pytest.mark.parametrize(
     ("engine", "model", "expected"),
     [
+        ("codex", "gpt-6-astra", 10.0 + 0.0 + 1.0 + 50.0),
         ("codex", "gpt-5.6-sol", 5.0 + 6.25 + 0.5 + 30.0),
         ("codex", "gpt-5.6-terra", 2.5 + 3.125 + 0.25 + 15.0),
         ("codex", "gpt-5.6-luna", 1.0 + 1.25 + 0.1 + 6.0),

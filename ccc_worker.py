@@ -22,6 +22,7 @@ from control_plane import (
     ControlPlaneClient, WorkLedger, authenticated, ensure_token, socket_path,
     token_path, worker_pid_path,
 )
+from worker_engines import RETIRE_UNCERTAIN_AFTER_S
 
 
 MAX_REQUEST_BYTES = 4 * 1024 * 1024
@@ -73,6 +74,17 @@ class WorkerRuntime:
             # worker when they differ, so upgrades actually reach worker-owned
             # code paths (e.g. the Codex app-server liveness probe).
             server_mod = sys.modules.get("server")
+            summary = self.ledger.summary()
+            # A restart marks in-flight work "uncertain" on purpose (see
+            # WorkLedger.recover_orphaned_running) -- that's expected on
+            # every restart, not a problem. Only call it "stale" once it has
+            # had a full sweep cycle past the retirement window to clear on
+            # its own; that's the point at which a human should look.
+            summary["uncertain_stale"] = bool(
+                summary.get("uncertain")
+                and summary.get("uncertain_max_age_s", 0.0)
+                > RETIRE_UNCERTAIN_AFTER_S + UNCERTAIN_SWEEP_INTERVAL_S
+            )
             return {
                 "ok": True,
                 "worker": {
@@ -86,9 +98,10 @@ class WorkerRuntime:
                         "engine-execution-v1",
                         "work-graph-v1",
                         "safe-drain-v1",
+                        "pending-input-cas-v1",
                     ],
                 },
-                **self.ledger.summary(),
+                **summary,
             }
         if method == "system.app_server":
             # The Codex transport lives HERE, not in the dashboard:
@@ -163,10 +176,16 @@ class WorkerRuntime:
         if method == "work.graph":
             return {"ok": True, "graph": self.ledger.graph(params.get("root_id"))}
         if method == "work.reconcile":
-            reconciled = self._engines().reconcile_uncertain()
+            host = self._engines()
+            reconciled = host.reconcile_uncertain()
+            # Reclaim first, retire second: anything with live evidence has
+            # already left `uncertain` by the time the retirement pass reads
+            # the table, so the two can never fight over the same item.
+            retired = host.retire_stale_uncertain()
             return {
                 "ok": True,
                 "reconciled": len(reconciled),
+                "retired": len(retired),
                 "work": reconciled,
                 **self.ledger.summary(),
             }
@@ -254,6 +273,55 @@ class WorkerServer(socketserver.ThreadingUnixStreamServer):
         super().__init__(str(path), WorkerRequestHandler)
 
 
+def _release_stale_restart_drain(runtime):
+    """Lift a "worker-restart:" drain left over from the restart window.
+
+    That drain protects the restart that produced THIS worker process; once
+    the worker is serving, the window is over. The dashboard's restart
+    handler normally lifts it, but if that dashboard died mid-restart nobody
+    else would -- every later submit would defer forever.
+    """
+    drain = runtime.ledger.drain_state()
+    if drain.get("enabled") and str(drain.get("reason") or "").startswith(
+        "worker-restart:"
+    ):
+        runtime.ledger.set_drain(False, "worker online")
+        return True
+    return False
+
+
+# How often the worker sweeps orphaned `uncertain` work. Retirement itself is
+# age-gated (RETIRE_UNCERTAIN_AFTER_S), so this only decides how long the
+# System status chip carries a stale "N items need reconciliation" before it
+# settles — not how eagerly anything is retired.
+UNCERTAIN_SWEEP_INTERVAL_S = 300.0
+
+
+def _uncertain_sweep(runtime, stop_event, interval=UNCERTAIN_SWEEP_INTERVAL_S):
+    """Keep the uncertain count able to reach zero without a human.
+
+    Startup reconcile only sees the orphans that already aged past the
+    retirement window; the batch this very restart just created is minutes
+    old and survives it. With no sweep, those sit `uncertain` until somebody
+    presses Reconcile or the worker restarts again — which is how the count
+    grew to 48 items over 16 days in the first place.
+
+    Reconcile runs first, every time: liveness is re-checked immediately
+    before anything is retired, so a long-running turn the worker lost track
+    of is reclaimed rather than written off.
+    """
+    while not stop_event.wait(interval):
+        try:
+            if not runtime.ledger.summary().get("uncertain"):
+                continue
+            host = runtime._engines()
+            host.reconcile_uncertain()
+            host.retire_stale_uncertain()
+        except Exception:
+            # A sweep is best-effort bookkeeping; never take the worker down.
+            continue
+
+
 def serve(path=None):
     path = Path(path or socket_path())
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -286,6 +354,7 @@ def serve(path=None):
         f"socket={path} nofile={open_files}",
         flush=True,
     )
+    _release_stale_restart_drain(runtime)
     if (
         not runtime.ledger.drain_state().get("enabled")
         and (
@@ -295,15 +364,24 @@ def serve(path=None):
     ):
         def recover():
             runtime._engines().reconcile_uncertain()
+            runtime._engines().retire_stale_uncertain()
             runtime._engines().dispatch_queued()
         threading.Thread(
             target=recover,
             daemon=True,
             name="ccc-reconcile",
         ).start()
+    sweep_stop = threading.Event()
+    threading.Thread(
+        target=_uncertain_sweep,
+        args=(runtime, sweep_stop),
+        daemon=True,
+        name="ccc-uncertain-sweep",
+    ).start()
     try:
         server.serve_forever(poll_interval=0.25)
     finally:
+        sweep_stop.set()
         server.server_close()
         try:
             path.unlink()

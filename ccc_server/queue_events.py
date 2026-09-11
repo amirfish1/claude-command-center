@@ -14,12 +14,14 @@ import collections
 import copy
 import json
 import os
+import re
+import shutil
 import subprocess
 import threading
 import time
-import ux_fixes_queue  # kept as fallback when watchtower is not installed
 
 from ccc_server import core as _core
+from ccc_server.github_issues import github_rate_limited
 
 # ---------------------------------------------------------------------------
 # Queue / ticket-appearance events for replay (W22 / B4)
@@ -42,17 +44,10 @@ _queue_replay_cache_lock = threading.Lock()
 def _queue_store_path_for_cache():
     """Resolve the durable queue-store file so we can cache by (mtime, size).
 
-    The active engine (`_q`) owns disk layout: WatchTower exposes
-    `_resolve_store_path()`; the stdlib fallback uses `ux_fixes_queue.QUEUE_FILE`
-    (the same file). Returns a Path or None."""
-    resolve = getattr(_core._q, "_resolve_store_path", None)
-    if callable(resolve):
-        try:
-            return Path(resolve())
-        except Exception:
-            pass
+    `_core._q` is watchtower.queue (a hard dependency, no fallback), which
+    always exposes `_resolve_store_path()`. Returns a Path or None."""
     try:
-        return Path(ux_fixes_queue.QUEUE_FILE)
+        return Path(_core._q._resolve_store_path())
     except Exception:
         return None
 
@@ -146,11 +141,195 @@ def _queue_replay_events():
     return result
 
 
+# ---------------------------------------------------------------------------
+# All-queues history graph (CCC-903): open / needs_input / closed counts over
+# time, for the "Queues" dashboard's all-queues header.
+#
+# Two-part construction, because only half the series has a real event log:
+#   - open/closed are event-sourced (a ticket's created_at/closed_at ARE the
+#     event), so history before this feature existed can be reconstructed
+#     exactly by folding those timestamps — same technique as
+#     _queue_replay_events_uncached above, just summed globally instead of
+#     per-queue.
+#   - needs_input is a live boolean flag with no timestamped transition, so
+#     there is nothing to replay for the past. Real snapshots start
+#     accumulating in a durable JSONL log from whenever this code first runs;
+#     backfilled points before that carry needs_input=None + backfilled=True
+#     so the frontend can visibly stop that series instead of drawing a false
+#     flat line.
+# ---------------------------------------------------------------------------
+_QUEUE_HISTORY_SNAPSHOT_MIN_GAP_S = 15 * 60  # throttle: >=1 written row / 15min
+_QUEUE_HISTORY_CACHE_TTL_S = 60.0
+_queue_history_cache = {"ts": 0.0, "key": None, "result": None}
+_queue_history_cache_lock = threading.Lock()
+
+
+def _queue_history_path():
+    return _core.COMMAND_CENTER_STATE_DIR / "queue-history.jsonl"
+
+
+def _current_queue_counts(items):
+    return {
+        "open": sum(1 for it in items if it.get("status") not in ("closed", "in_progress")),
+        "in_progress": sum(1 for it in items if it.get("status") == "in_progress"),
+        "closed": sum(1 for it in items if it.get("status") == "closed"),
+        "needs_input": sum(
+            1 for it in items
+            if it.get("status") == "blocked" or bool(it.get("needs_input"))
+        ),
+    }
+
+
+def _record_queue_snapshot_if_due(items):
+    """Append one row to the durable history log, throttled so a dashboard
+    polling every few seconds doesn't spam the file — this IS the "updates
+    every 15 minutes" cadence, driven by normal traffic rather than a new
+    background timer/cron (no extra process to keep alive or restart)."""
+    path = _queue_history_path()
+    now = time.time()
+    try:
+        if path.exists():
+            with open(path, "rb") as f:
+                try:
+                    f.seek(-2000, os.SEEK_END)
+                except OSError:
+                    f.seek(0)
+                tail = f.read().decode("utf-8", "ignore").strip().splitlines()
+            if tail:
+                try:
+                    last = json.loads(tail[-1])
+                    if now - float(last.get("ts", 0)) < _QUEUE_HISTORY_SNAPSHOT_MIN_GAP_S:
+                        return
+                except Exception:
+                    pass
+    except Exception:
+        pass
+    counts = _current_queue_counts(items)
+    row = {
+        "ts": now,
+        "open": counts["open"] + counts["in_progress"],
+        "needs_input": counts["needs_input"],
+        "closed": counts["closed"],
+    }
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with open(path, "a") as f:
+            f.write(json.dumps(row) + "\n")
+    except Exception:
+        pass
+
+
+def _read_queue_history_rows():
+    rows = []
+    try:
+        with open(_queue_history_path()) as f:
+            for line in f:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    rows.append(json.loads(line))
+                except Exception:
+                    continue
+    except FileNotFoundError:
+        pass
+    return rows
+
+
+def _backfill_queue_history(days, bucket_hours, items, before_ts):
+    """Reconstruct open/closed bucket counts before `before_ts` (the earliest
+    real snapshot, or now if there are none yet) by folding each item's
+    created_at (+1 open) / closed_at (-1 open, +1 closed) in time order."""
+    events = []
+    for it in items:
+        if not isinstance(it, dict):
+            continue
+        created = _core._uxq_parse_ts(it.get("created_at"))
+        closed = _core._uxq_parse_ts(it.get("closed_at"))
+        if created:
+            events.append((created, 1))
+        if closed:
+            events.append((closed, -1))
+    events.sort(key=lambda e: e[0])
+
+    bucket_s = max(1, bucket_hours) * 3600
+    start = before_ts - days * 86400
+    idx = 0
+    running_open = 0
+    running_closed = 0
+    while idx < len(events) and events[idx][0] < start:
+        if events[idx][1] == 1:
+            running_open += 1
+        else:
+            running_open = max(0, running_open - 1)
+            running_closed += 1
+        idx += 1
+    points = []
+    t = start
+    while t < before_ts:
+        boundary = min(t + bucket_s, before_ts)
+        while idx < len(events) and events[idx][0] < boundary:
+            if events[idx][1] == 1:
+                running_open += 1
+            else:
+                running_open = max(0, running_open - 1)
+                running_closed += 1
+            idx += 1
+        points.append({
+            "ts": boundary, "open": running_open, "closed": running_closed,
+            "needs_input": None, "backfilled": True,
+        })
+        t += bucket_s
+    return points
+
+
+def compute_queue_history(days=7, bucket_hours=1):
+    """All-queues open/needs_input/closed series for the dashboard history
+    graph. Cached briefly (repeated polls from an open dashboard tab must not
+    re-read the item store and re-fold events on every call)."""
+    days = max(1, min(int(days or 7), 30))
+    bucket_hours = max(1, min(int(bucket_hours or 1), 24))
+    now = time.time()
+    key = (days, bucket_hours)
+    with _queue_history_cache_lock:
+        c = _queue_history_cache
+        if c["result"] is not None and c["key"] == key and now - c["ts"] < _QUEUE_HISTORY_CACHE_TTL_S:
+            return c["result"]
+
+    try:
+        items = _core._q.list_items() or []
+    except Exception:
+        items = []
+    _record_queue_snapshot_if_due(items)
+
+    real_rows = _read_queue_history_rows()
+    cutoff = now - days * 86400
+    real_rows = [r for r in real_rows if float(r.get("ts", 0)) >= cutoff]
+    real_rows.sort(key=lambda r: r.get("ts", 0))
+    before_ts = real_rows[0]["ts"] if real_rows else now
+    backfilled = _backfill_queue_history(days, bucket_hours, items, before_ts)
+
+    result = {
+        "points": backfilled + real_rows,
+        "days": days,
+        "bucket_hours": bucket_hours,
+        "generated_at": now,
+    }
+    with _queue_history_cache_lock:
+        _queue_history_cache.update({"ts": now, "key": key, "result": result})
+    return result
+
 
 # Minutes a fixer can make no closing progress before its project's queue is
 # judged STUCK (used by compute_ux_fixes_health). Mirrors the nudge watcher's
 # "no progress" intuition; kept generous so a slow-but-working fix isn't flagged.
 _UXQ_STUCK_NO_PROGRESS_S = 10 * 60
+
+
+# Mirrors watchtower.queue.UNCLAIMABLE_READINESS. A ticket in one of these
+# states is not work a drainer can pick up, so it must not count toward the
+# depth that decides whether a queue is stuck.
+_UNCLAIMABLE_READINESS = ("needs-shaping", "needs-spec", "needs-rationale")
 
 
 def compute_ux_fixes_health(items=None):
@@ -268,6 +447,177 @@ def compute_ux_fixes_health(items=None):
     return out
 
 
+_WORKER_PLAN_EFFORTS = ("low", "medium", "high", "xhigh", "max")
+# Explicit remaps WatchTower keeps table-driven (watchtower.config.MODEL_ALIASES)
+# plus its structural rule for claude's versioned short forms.
+_WORKER_PLAN_MODEL_ALIASES = {"claude": {"opus-5": "claude-opus-5"}}
+_WORKER_PLAN_CLAUDE_VERSIONED = re.compile(r"^(sonnet|opus|haiku|fable)-\d", re.IGNORECASE)
+_WORKER_PLAN_PATH_CACHE = {}  # engine -> (checked_at, on_path)
+
+
+def _worker_plan_engine_on_path(engine, ttl_s=60.0):
+    """`shutil.which` with a short memo so the rollup never stats PATH per
+    queue per health poll."""
+    now = time.time()
+    hit = _WORKER_PLAN_PATH_CACHE.get(engine)
+    if hit and now - hit[0] < ttl_s:
+        return hit[1]
+    on_path = bool(shutil.which(engine))
+    _WORKER_PLAN_PATH_CACHE[engine] = (now, on_path)
+    return on_path
+
+
+def _worker_plan_canonical_model(engine, model):
+    """Mirror of `watchtower.config.canonical_model` for the display path."""
+    eng = str(engine or "").strip().lower()
+    value = str(model or "").strip()
+    if not value:
+        return ""
+    aliased = _WORKER_PLAN_MODEL_ALIASES.get(eng, {}).get(value)
+    if aliased:
+        return aliased
+    if eng == "claude" and _WORKER_PLAN_CLAUDE_VERSIONED.match(value) \
+            and not value.lower().startswith("claude-"):
+        return "claude-" + value
+    return value
+
+
+def compute_queue_worker_plan(conf, spawn_defaults):
+    """The engine/model/effort a worker spawned for this queue RIGHT NOW would
+    get, and where each came from (CCC-1036).
+
+    Mirrors `watchtower.config.engine()/model()/effort()` on the same two
+    inputs those read -- the queue's queue-config.json entry (``conf``) and
+    CCC's spawn-defaults.json (``spawn_defaults``, as `_load_spawn_defaults`
+    returns it) -- without importing watchtower (this module keeps that
+    boundary, see compute_queues_health) or forking `wt`.
+
+    Chain, per WT:
+      engine: queue ``engine`` > spawn ``worker_engine`` > codex-if-on-PATH > claude
+      model:  queue ``model`` > ``worker_model`` (only when ``worker_engine``
+              is this engine) > spawn ``models[engine]`` > "" (engine ambient)
+      effort: queue ``effort`` > ``worker_reasoning_effort`` > "" (engine ambient)
+
+    Each ``*_source`` is one of ``queue`` (explicit `wt set` / gear-dialog
+    override), ``ccc_worker_default``, ``ccc_default``, ``fallback`` (the
+    codex/claude PATH guess) or ``engine_default`` (nothing configured; the
+    CLI's own default applies). ``is_default`` is True when nothing on the
+    queue itself pins the engine -- the dashboard prefixes "default" then.
+    """
+    conf = conf if isinstance(conf, dict) else {}
+    sd = spawn_defaults if isinstance(spawn_defaults, dict) else {}
+    explicit_engine = str(conf.get("engine") or "").strip().lower()
+    worker_engine = str(sd.get("worker_engine") or "").strip().lower()
+    if explicit_engine:
+        engine, engine_source = explicit_engine, "queue"
+    elif worker_engine:
+        engine, engine_source = worker_engine, "ccc_worker_default"
+    elif _worker_plan_engine_on_path("codex"):
+        engine, engine_source = "codex", "fallback"
+    else:
+        engine, engine_source = "claude", "fallback"
+
+    explicit_model = str(conf.get("model") or "").strip()
+    worker_model = str(sd.get("worker_model") or "").strip()
+    models = sd.get("models") if isinstance(sd.get("models"), dict) else {}
+    shared_model = str(models.get(engine) or "").strip()
+    if explicit_model:
+        model, model_source = explicit_model, "queue"
+    elif worker_model and worker_engine == engine:
+        model, model_source = worker_model, "ccc_worker_default"
+    elif shared_model:
+        model, model_source = shared_model, "ccc_default"
+    else:
+        model, model_source = "", "engine_default"
+    # WT prefixes `claude-` onto CCC's bare defaults before canonicalising
+    # (its `_ccc_default_model` / `_ccc_worker_model_default`); an explicit
+    # queue value only gets the alias/versioned-short-form treatment.
+    if model_source != "queue" and engine == "claude" and model \
+            and not model.lower().startswith("claude-"):
+        model = "claude-" + model
+    model = _worker_plan_canonical_model(engine, model)
+
+    explicit_effort = str(conf.get("effort") or "").strip().lower()
+    worker_effort = str(sd.get("worker_reasoning_effort") or "").strip().lower()
+    if explicit_effort in _WORKER_PLAN_EFFORTS:
+        effort, effort_source = explicit_effort, "queue"
+    elif worker_effort in _WORKER_PLAN_EFFORTS:
+        effort, effort_source = worker_effort, "ccc_worker_default"
+    else:
+        effort, effort_source = "", "engine_default"
+
+    return {
+        "engine": engine, "engine_source": engine_source,
+        "model": model, "model_source": model_source,
+        "effort": effort, "effort_source": effort_source,
+        "is_default": engine_source != "queue",
+    }
+
+
+def _queue_worker_config_issue(plan):
+    """Human-actionable fault in the queue's effective worker engine/model/effort,
+    validated against WatchTower's own approval catalog (the same check
+    `wt set` runs), else None.
+
+    OPS-938: an invalid combo (e.g. effort 'high' on kimi-code/k3) is silently
+    ignored at spawn time but makes `wt config` edits fail and confuses
+    recovery from a stuck queue — the Queue tab must surface it. Only engines
+    present in WT's catalog are judged; anything else passes."""
+    try:
+        cfg = _core._wt_config
+    except Exception:
+        return None
+    if cfg is None:
+        return None
+    engine = str((plan or {}).get("engine") or "").strip().lower()
+    model = str((plan or {}).get("model") or "").strip()
+    effort = str((plan or {}).get("effort") or "").strip().lower()
+    if not engine:
+        return None
+    try:
+        if not cfg.approved_models(engine):
+            return None
+        if model and not cfg.is_approved_model(engine, model):
+            choices = ", ".join(cfg.approved_models(engine))
+            return f"configured model {model!r} is not approved for {engine} (approved: {choices})"
+        if effort and not cfg.is_approved_effort(engine, model, effort):
+            supported = cfg.approved_efforts(engine, model)
+            label = model or f"{engine} default model"
+            suffix = (f"supported: {', '.join(supported)}" if supported
+                      else "no explicit effort supported")
+            return f"{label} does not support effort {effort!r} ({suffix})"
+    except Exception:
+        return None
+    return None
+
+
+def _queue_spawn_issue(q, plan_engine, launch_failures, now_epoch):
+    """The reconciler's last failed worker spawn for this queue, when recent
+    (failed within 24h or still in cooldown), as a human sentence; else None.
+    Prefers the entry for the queue's current plan engine."""
+    if not launch_failures:
+        return None
+    entries = [e for (fq, fe), e in launch_failures.items() if fq == q]
+    if not entries:
+        return None
+    entries.sort(key=lambda e: (str(e.get("engine") or "") != plan_engine,
+                                -float(e.get("failed_at") or 0)))
+    for entry in entries:
+        failed_at = float(entry.get("failed_at") or 0)
+        cooldown_until = float(entry.get("cooldown_until") or 0)
+        recent = (failed_at and now_epoch - failed_at < 86400) or cooldown_until > now_epoch
+        if not recent:
+            continue
+        reason = str(entry.get("reason") or "worker spawn failed").strip()
+        engine = str(entry.get("engine") or "").strip()
+        label = f"last worker spawn ({engine}) failed: {reason}" if engine else f"last worker spawn failed: {reason}"
+        if cooldown_until > now_epoch:
+            mins = int((cooldown_until - now_epoch + 59) // 60)
+            label += f" — spawn cooldown, retrying in ~{mins} min"
+        return label
+    return None
+
+
 def compute_queues_health(health=None, wt_workers=None, items=None):
     """Per-QUEUE snapshot for the dashboard's "Evergreen" sidebar section.
 
@@ -298,34 +648,82 @@ def compute_queues_health(health=None, wt_workers=None, items=None):
         return str(s or "").strip().upper()
 
     # Live worker counts per queue (one pass over the annotated worker rows).
+    # `effective` = the worker can actually be addressed/acted on — it carries
+    # its cloud session_id. A live-pid worker row with no session identity is
+    # an orphan the reconciler's nudges cannot reach ("nudged 0/1"), so it
+    # must not count as staffing (OPS-938). `inert` = WT's own activity
+    # evidence (log/rollout/wire mtime via _wt_worker_idle_fields) shows no
+    # output for 30+ min — the second half of the incident's orphan shape
+    # (no session, no output for hours). Engines with no session identity at
+    # all (kimi print-mode) stay "0 effective" even while draining, so the
+    # alarm path below requires inertness too, not just a missing session.
     worker_counts = {}
+    effective_worker_counts = {}
+    orphan_worker_counts = {}
+    inert_orphan_counts = {}
     for w in (wt_workers or []):
         q = _norm(w.get("queue"))
         if not q:
             continue
         worker_counts[q] = worker_counts.get(q, 0) + 1
+        if str(w.get("session_id") or "").strip():
+            effective_worker_counts[q] = effective_worker_counts.get(q, 0) + 1
+        else:
+            orphan_worker_counts[q] = orphan_worker_counts.get(q, 0) + 1
+            idle_s = w.get("idle_seconds")
+            if isinstance(idle_s, (int, float)) and not isinstance(idle_s, bool) and idle_s >= 1800:
+                inert_orphan_counts[q] = inert_orphan_counts.get(q, 0) + 1
 
     # Durable configured-queue list keyed by normalized name → auto_drain + repo_path.
     # Read the config file directly (no watchtower import dependency).
     cfg_drain = {}
     cfg_repo = {}
     cfg_claim = {}
+    cfg_workers = {}
+    cfg_backend = {}
+    cfg_github_repo = {}
+    cfg_raw = {}
     cfg_names = set()
     try:
         for name, conf in (_core._wt_read_config() or {}).items():
             qn = _norm(name)
             cfg_names.add(qn)
+            cfg_raw[qn] = conf if isinstance(conf, dict) else {}
             cfg_drain[qn] = bool((conf or {}).get("auto_drain", False))
             rp = str((conf or {}).get("repo_path") or "").strip()
             if rp:
                 cfg_repo[qn] = rp
             ct = (conf or {}).get("claim_types", [])
             cfg_claim[qn] = [t for t in ct if t in ("bug", "feature")] if isinstance(ct, list) else []
+            try:
+                cfg_workers[qn] = max(1, int((conf or {}).get("desired_workers", 1) or 1))
+            except (TypeError, ValueError):
+                cfg_workers[qn] = 1
+            cfg_backend[qn] = str((conf or {}).get("backend") or "").strip()
+            cfg_github_repo[qn] = str((conf or {}).get("github_repo") or "").strip()
     except Exception:
         cfg_drain = {}
         cfg_repo = {}
         cfg_claim = {}
+        cfg_workers = {}
+        cfg_backend = {}
+        cfg_github_repo = {}
+        cfg_raw = {}
         cfg_names = set()
+    # One read of spawn-defaults.json per rollup (not per queue) for the
+    # effective worker plan below.
+    try:
+        spawn_defaults = _core._load_spawn_defaults() or {}
+    except Exception:
+        spawn_defaults = {}
+    # One read of WatchTower's launch-failures.json per rollup: the
+    # reconciler's last failed worker spawn per queue+engine (reason,
+    # exit_code, cooldown). A queue that keeps nudging but can never spawn
+    # reads "stuck" forever without this surfaced (OPS-938).
+    try:
+        launch_failures = _core._wt_read_launch_failures()
+    except Exception:
+        launch_failures = {}
 
     health_by_q = {_norm(r.get("project")): r for r in (health or [])}
 
@@ -334,8 +732,11 @@ def compute_queues_health(health=None, wt_workers=None, items=None):
     # `open` stays = depth (from health); these add a done/total progress count.
     closed_by_q = {}
     total_by_q = {}
-    claimable_by_q = {}  # queue → open items a worker is ALLOWED to claim (claim_types)
+    gated_by_q = {}
+    claimable_by_q = {}  # queue → open items a worker is ALLOWED to claim
+    in_progress_by_q = {}  # queue → items currently claimed/in progress
     last_activity_q = {}  # queue → most-recent item-touch epoch (any status)
+    last_progress_q = {}  # queue → most-recent close OR claim epoch (WT health semantics)
     try:
         for it in ((_core._q.list_items() if items is None else items) or []):
             qn = _norm(it.get("project"))
@@ -344,6 +745,20 @@ def compute_queues_health(health=None, wt_workers=None, items=None):
             total_by_q[qn] = total_by_q.get(qn, 0) + 1
             if it.get("status") == "closed":
                 closed_by_q[qn] = closed_by_q.get(qn, 0) + 1
+                # A close is queue progress (WT health.py semantics: last of
+                # close/claim resets the stuck clock).
+                close_ts = _core._uxq_parse_ts(it.get("closed_at"))
+                if close_ts and close_ts > last_progress_q.get(qn, 0):
+                    last_progress_q[qn] = close_ts
+            if it.get("status") == "in_progress":
+                in_progress_by_q[qn] = in_progress_by_q.get(qn, 0) + 1
+                # A fresh claim means a worker just started on previously-idle
+                # work — that is progress too.
+                claim_ts = _core._uxq_parse_ts(it.get("claimed_at"))
+                if claim_ts and claim_ts > last_progress_q.get(qn, 0):
+                    last_progress_q[qn] = claim_ts
+            if it.get("needs_input") and it.get("block_kind") == "rationale":
+                gated_by_q[qn] = gated_by_q.get(qn, 0) + 1
             # Claimable depth honors the queue's claim_types filter. A bug-only
             # queue (claim_types=['bug']) whose open tickets are all features has
             # zero claimable work — the drainer is idle BY DESIGN, not stuck.
@@ -352,6 +767,20 @@ def compute_queues_health(health=None, wt_workers=None, items=None):
             # claimable=True; un-runnable issues must not trigger drain state.
             if it.get("status") == "open":
                 if it.get("claimable") is False:
+                    continue
+                # Readiness gating, the other half of WatchTower's claim
+                # filter. `claim_next` skips needs-shaping/needs-spec tickets
+                # unless it is explicitly shaping, and the WT reconciler counts
+                # claimable depth through that same filter — so a queue whose
+                # only open tickets are unshaped is NOT under-staffed, it is
+                # correctly unstaffed, and WT will never spawn for it. CCC used
+                # to copy only the claim_types half, which made those queues
+                # read "stuck" forever: an alarm about work no worker is
+                # allowed to touch, which no restart or spawn could ever clear.
+                # A ticket a human pressed ▶ on is claimable regardless — that
+                # is the manual override WT honours too.
+                readiness = str(it.get("readiness") or "").strip().lower()
+                if readiness in _UNCLAIMABLE_READINESS and not it.get("run_requested"):
                     continue
                 types = cfg_claim.get(qn, [])
                 # Untyped == bug (matches WatchTower's claim filter): a ticket
@@ -375,6 +804,7 @@ def compute_queues_health(health=None, wt_workers=None, items=None):
     except Exception:
         closed_by_q = {}
         total_by_q = {}
+        gated_by_q = {}
         last_activity_q = {}
 
     names = set()
@@ -401,11 +831,14 @@ def compute_queues_health(health=None, wt_workers=None, items=None):
             names.discard(qn)
 
     out = []
+    now_epoch = time.time()
     for q in names:
         hr = health_by_q.get(q) or {}
         depth = int(hr.get("depth") or 0)
         claimable = int(claimable_by_q.get(q, 0))
         workers = int(worker_counts.get(q, 0))
+        effective_workers = int(effective_worker_counts.get(q, 0))
+        orphan_workers = int(orphan_worker_counts.get(q, 0))
         auto = bool(cfg_drain.get(q, False))
         # A queue with a live WatchTower worker is NOT stuck — the worker is
         # draining it. The legacy fixer-based `stuck` (compute_ux_fixes_health)
@@ -430,23 +863,62 @@ def compute_queues_health(health=None, wt_workers=None, items=None):
             state = "draining"
         else:
             state = "backlog"
+        plan = compute_queue_worker_plan(cfg_raw.get(q), spawn_defaults)
+        # Last progress = most recent close OR claim, falling back to the
+        # oldest open item's creation (mirrors watchtower.health: a
+        # never-touched queue ages from creation).
+        progress_ts = last_progress_q.get(q, 0)
+        since_progress_s = (
+            int(now_epoch - progress_ts) if progress_ts
+            else hr.get("oldest_open_age_seconds")
+        )
+        # Staffing alarm (OPS-938): auto-drain queue with claimable work but
+        # no worker that can actually drain it. Two shapes: nothing tracked
+        # at all (workers == 0 — the reconciler has not staffed the queue),
+        # or every tracked worker is an orphan — no session identity for
+        # nudges AND no activity output for 30+ min (the incident shape:
+        # "nudged 0/1 live worker(s)" every ~5 min for 16h). A session-less
+        # worker with FRESH activity (a kimi print-mode worker mid-drain)
+        # does not alarm: fresh output is proof of staffing.
+        all_tracked_inert_orphans = (
+            workers > 0
+            and effective_workers == 0
+            and int(inert_orphan_counts.get(q, 0)) == workers
+        )
+        staffing_alarm = bool(
+            auto and claimable > 0
+            and (workers == 0 or all_tracked_inert_orphans)
+        )
         out.append({
             "queue": q,
             "depth": depth,
             "claimable": claimable,
+            "in_progress": int(in_progress_by_q.get(q, 0)),
             "closed": int(closed_by_q.get(q, 0)),
             "total": int(total_by_q.get(q, 0)),
+            "gated": int(gated_by_q.get(q, 0)),
             "oldest_open_age_seconds": hr.get("oldest_open_age_seconds"),
+            "since_progress_s": since_progress_s,
             "workers": workers,
+            "effective_workers": effective_workers,
+            "orphan_workers": orphan_workers,
+            "inert_orphan_workers": int(inert_orphan_counts.get(q, 0)),
             "auto_drain": auto,
             "stuck": stuck,
+            "staffing_alarm": staffing_alarm,
             "state": state,
             "fixer_session_id": hr.get("fixer_session_id"),
             "repo_path": cfg_repo.get(q, ""),
             "claim_types": cfg_claim.get(q, []),
+            "desired_workers": cfg_workers.get(q, 1),
+            "backend": cfg_backend.get(q, ""),
+            "github_repo": cfg_github_repo.get(q, ""),
             "configured": q in cfg_names,
+            "worker_plan": plan,
+            "config_issue": _queue_worker_config_issue(plan),
+            "spawn_issue": _queue_spawn_issue(q, str(plan.get("engine") or ""), launch_failures, now_epoch),
             "last_activity_seconds": (
-                int(time.time() - last_activity_q[q]) if q in last_activity_q else None
+                int(now_epoch - last_activity_q[q]) if q in last_activity_q else None
             ),
         })
     # Stuck first, then deepest, then most workers, then name — most-urgent top.
@@ -473,11 +945,25 @@ def _ux_fixes_list_refresh(status_filter, lane_filter):
             _ux_fixes_list_refreshing.discard(key)
 
 
-def _ux_fixes_list_items_cached(status_filter=None, lane_filter=None):
+def _ux_fixes_list_items_cached(status_filter=None, lane_filter=None, fresh=False):
     """TTL memo for /api/ux-fixes/list, stale-while-revalidate: past the TTL
     the last copy is served immediately and one background thread rebuilds —
-    GitHub-backed queue merges (`gh issue list`) never block a request."""
+    GitHub-backed queue merges (`gh issue list`) never block a request.
+
+    fresh=True bypasses the memo for a synchronous rebuild (the queue
+    panel's manual Refresh button) — callers should check
+    `_github_sync_status()` first and skip `fresh` while rate-limited rather
+    than spend quota chasing a backoff window.
+    """
     key = (status_filter or "", lane_filter or "")
+    if fresh:
+        try:
+            items = _core._q.list_items(status=status_filter, lane=lane_filter, fresh=True) or []
+        except TypeError:
+            items = _core._q.list_items(status=status_filter, lane=lane_filter) or []
+        with _ux_fixes_list_cache_lock:
+            _ux_fixes_list_cache[key] = {"ts": time.time(), "items": items}
+        return items
     now = time.time()
     with _ux_fixes_list_cache_lock:
         ent = _ux_fixes_list_cache.get(key)
@@ -499,6 +985,15 @@ def _ux_fixes_list_items_cached(status_filter=None, lane_filter=None):
             _ux_fixes_list_cache.clear()
         _ux_fixes_list_cache[key] = {"ts": time.time(), "items": items}
     return items
+
+
+def _ux_fixes_list_synced_at(status_filter=None, lane_filter=None):
+    """Epoch of the cache entry serving the given (status, lane) key, for the
+    queue panel's "Last synced" label. None if nothing has been fetched yet."""
+    key = (status_filter or "", lane_filter or "")
+    with _ux_fixes_list_cache_lock:
+        ent = _ux_fixes_list_cache.get(key)
+    return ent["ts"] if ent else None
 
 
 # ---------------------------------------------------------------------------
@@ -566,9 +1061,16 @@ def _gh_queue_signature(items):
 
 
 def _gh_queue_poll_once():
-    """One forced remote refresh. Warms the list memo, returns True on change."""
+    """One remote-list read. Warms the list memo, returns True on change."""
     try:
-        items = _core._q.list_items(fresh=True) or []
+        # Soft read on purpose: the WatchTower daemon's background poller
+        # already pays the live `gh` cost and persists a fresh snapshot every
+        # few seconds, and a soft list_items() serves that snapshot (it
+        # self-heals with an ETag-probed live read when the daemon is down).
+        # A forced fresh=True here bypassed the snapshot and made every CCC
+        # server pay its own full GraphQL fetch on busy repos — duplicating
+        # the daemon's spend against the account's hourly quota.
+        items = _core._q.list_items() or []
     except TypeError:
         # The stdlib fallback engine has no `fresh` kwarg — and no remote to
         # refresh either, so this degrades to a plain read.
@@ -593,6 +1095,7 @@ def _gh_queue_poll_once():
 
 
 def _gh_queue_watch_loop():
+    interval = _GH_POLL_INTERVAL_S
     while True:
         with _gh_watch_lock:
             if _gh_watch["subscribers"] <= 0:
@@ -601,11 +1104,28 @@ def _gh_queue_watch_loop():
         # Re-read config every pass so a queue switched to the GitHub backend
         # starts being watched without needing a reconnect.
         if _github_queue_configured():
+            # Refresh the shared rate-limit snapshot before spending GraphQL quota
+            # via WatchTower's `gh issue list`. The check itself is cached, so the
+            # extra call is cheap; if we are rate-limited or nearly out of quota,
+            # skip this poll and back off instead of hammering the API.
+            try:
+                rl = github_rate_limited(refresh=True)
+                if rl.get("rate_limited"):
+                    interval = max(
+                        _GH_POLL_INTERVAL_S,
+                        min(rl.get("backoff_seconds", 60), 300),
+                    )
+                    _gh_watch_wake.wait(interval)
+                    _gh_watch_wake.clear()
+                    continue
+            except Exception:
+                pass
+            interval = _GH_POLL_INTERVAL_S
             try:
                 _gh_queue_poll_once()
             except Exception:
                 pass
-        _gh_watch_wake.wait(_GH_POLL_INTERVAL_S)
+        _gh_watch_wake.wait(interval)
         _gh_watch_wake.clear()
 
 
@@ -641,6 +1161,27 @@ _ux_fixes_health_snapshot = {"ts": 0.0, "data": None}
 _ux_fixes_health_snapshot_lock = threading.Lock()
 
 
+def _github_sync_status():
+    """Current GitHub sync health for the queue panel's degraded-sync notice.
+
+    Reads the shared rate-limit snapshot (no `refresh` — that would spend
+    quota on every /api/queue/status poll); the watch loop
+    (_gh_queue_watch_loop) is what keeps the snapshot current while a queue
+    board is open.
+    """
+    try:
+        state = github_rate_limited(refresh=False)
+    except Exception:
+        return {"rate_limited": False, "backoff_seconds": 0, "retry_at": None}
+    backoff = int(state.get("backoff_seconds") or 0)
+    return {
+        "rate_limited": bool(state.get("rate_limited")),
+        "backoff_seconds": backoff,
+        "retry_at": (time.time() + backoff) if backoff else None,
+        "last_remaining": state.get("last_remaining"),
+    }
+
+
 def _build_ux_fixes_health_payload_uncached():
     # One queue read for both builders — list_items() also merges GitHub-backed
     # queues via `gh issue list` subprocesses on cold cache, so calling it twice
@@ -657,6 +1198,21 @@ def _build_ux_fixes_health_payload_uncached():
         wt_workers = _core._wt_read_workers()
     except Exception:
         wt_workers = []
+    # A released worker's process is deliberately kept alive (WatchTower
+    # design: release detaches it from staffing but leaves the conversation
+    # resumable) -- but it is no longer doing anything. Surfacing it here
+    # reads as still-working (spinning "live" dot, claimed-ticket label, LIVE
+    # badge) everywhere this payload's wt_workers/queues feed the UI, which is
+    # actively misleading. Filter it out of every normal-view consumer; the
+    # count survives separately so a debug affordance can still list them on
+    # request (GET /api/wt/workers?include_released=1).
+    wt_workers_released_count = sum(
+        1 for w in wt_workers if isinstance(w, dict) and w.get("released_at")
+    )
+    wt_workers = [
+        w for w in wt_workers
+        if not (isinstance(w, dict) and w.get("released_at"))
+    ]
     # Per-queue rollup (durable) for the dashboard's Evergreen section.
     try:
         queues = _core.compute_queues_health(health, wt_workers, items=items)
@@ -678,9 +1234,11 @@ def _build_ux_fixes_health_payload_uncached():
         "projects": health,
         "count": len(health),
         "wt_workers": wt_workers,
+        "wt_workers_released_count": wt_workers_released_count,
         "queues": queues,
         "worker_session_ids": worker_session_ids,
         "past_workers": past_workers,
+        "github_sync": _github_sync_status(),
     }
 
 
@@ -738,11 +1296,40 @@ def build_ux_fixes_health_payload(force=False):
 
 
 def _queue_codex_resume(session_id, text, pid=None, reason=None, *, only_if_pending=False):
-    with _core._pending_resume_lock:
-        if only_if_pending and not _core._pending_resume_queue.get(session_id):
-            return None
-        _core._pending_resume_queue.setdefault(session_id, []).append(text)
-    _core._save_pending_inputs()
+    def enqueue():
+        with _core._pending_resume_lock:
+            if only_if_pending and not _core._pending_resume_queue.get(session_id):
+                return None
+        # The unattended auto-resume marker ("continue") is opt-in per
+        # session (CCC-863 zombie-process incident: opt-out by default let a
+        # leaked stale process burn a weekly quota unattended). Real user
+        # text is never gated here.
+            if (
+                _core._is_unattended_auto_continue(text)
+                and not _core._is_auto_resume_opted_in(session_id)
+            ):
+                return {
+                    "ok": False,
+                    "queued": False,
+                    "error": "auto-resume not opted in for this session",
+                    "auto_resume_opt_in_required": True,
+                }
+            queue = _core._pending_resume_queue.setdefault(session_id, [])
+        # Deduplicate identical text so a slow-to-confirm delivery (e.g. a
+        # verifier report landing on a finished Codex thread) cannot pile up
+        # duplicate queued copies that get re-injected repeatedly.
+            if text not in queue:
+                queue.append(_core._PendingInputEntry(text))
+                _core._pending_resume_queue[session_id] = queue
+            return True
+
+    transaction = _core._mutate_pending_inputs({session_id}, enqueue)
+    if not transaction.get("ok"):
+        return {"ok": False, "error": transaction.get("error") or "failed to persist queued Codex input", "code": transaction.get("code")}
+    if transaction.get("value") is None:
+        return None
+    if isinstance(transaction.get("value"), dict):
+        return transaction["value"]
     _core._schedule_codex_queue_pump(session_id)
     payload = {
         "ok": True,
@@ -879,6 +1466,31 @@ def _codex_wake_rollout_snapshot(session_id):
     return snap
 
 
+def _codex_wake_stall_threshold_s():
+    """Seconds of pre-`running` silence after which a wake is called stalled."""
+    try:
+        value = float(os.environ.get("CCC_CODEX_WAKE_STALL_SEC", "60"))
+    except (TypeError, ValueError):
+        value = 60.0
+    return max(5.0, value)
+
+
+def _codex_wake_stall_detail(quiet_s, app_transport):
+    """Name the actual blocker so the pane reports a cause, not a spinner."""
+    try:
+        conflict = _core._codex_shared_state_conflict()
+    except Exception:
+        conflict = None
+    if conflict:
+        return conflict["message"]
+    if not app_transport:
+        return (
+            f"No progress for {quiet_s}s - the Codex app-server never came up, "
+            f"so the resume never started. Restart the bridge to retry."
+        )
+    return f"No progress for {quiet_s}s - the resume stalled before the turn started."
+
+
 def build_codex_wake_status(session_id):
     """Assemble the live wake/turn breakdown for one Codex session. Reads the
     in-memory per-sid wake-event window plus a single rollout tail — no
@@ -955,6 +1567,24 @@ def build_codex_wake_status(session_id):
         outcome = "warning"
         outcome_detail = warn.get("warning")
 
+    # A wake that never reaches `running` produces no further events, so the
+    # pane used to spin on "Thinking..." indefinitely -- observed 2026-09-06,
+    # ten minutes on a resume whose app-server never came up. Once the turn IS
+    # running, silence is just the model working (the stuck heuristic owns
+    # that), so only pre-running silence counts as a stall.
+    stalled_for = None
+    if outcome is None and attempt and not running_reached:
+        last_epoch = max(
+            (float(e.get("epoch") or 0.0) for e in events),
+            default=attempt_epoch,
+        ) or attempt_epoch
+        if last_epoch:
+            quiet_s = now - last_epoch
+            if quiet_s > _codex_wake_stall_threshold_s():
+                stalled_for = round(quiet_s)
+                outcome = "error"
+                outcome_detail = _codex_wake_stall_detail(stalled_for, app_transport)
+
     active = bool(attempt) and outcome is None
 
     # Stage timeline. Emit a stage only once it has STARTED; the current stage
@@ -1014,27 +1644,370 @@ def build_codex_wake_status(session_id):
         "elapsed_s": round(now - attempt_epoch, 1) if attempt_epoch else None,
         "outcome": outcome,
         "outcome_detail": outcome_detail,
+        "stalled_s": stalled_for,
     }
+
+
+def _resume_session_codex_native_delivery(
+    session_id, text, *, steer=False, idempotency_key=None,
+):
+    return _core.resume_session_codex(
+        session_id,
+        text,
+        steer=steer,
+        idempotency_key=idempotency_key,
+        _native_delivery=True,
+        # Normal native delivery owns a FIFO claim. Preserve that origin so
+        # it neither queues behind its own tail nor appends a copy on busy.
+        _from_queue=not steer,
+    )
+
+
+def _codex_queued_steer_transaction(
+    session_id, text, *, preserve_queued_steer, idempotency_key,
+):
+    with _core._codex_queue_pump_lock(session_id):
+        if not _core._retry_pending_input_recovery(session_id):
+            return {
+                "ok": False,
+                "code": "pending_input_recovery_pending",
+                "error": "queued input recovery must complete before delivery",
+                **_core._pending_input_recovery_status(session_id),
+            }
+        claim = _core._claim_matching_pending_input(session_id, text)
+        if isinstance(claim, dict) and claim.get("code"):
+            result = dict(claim)
+            result.setdefault("via", "codex-steer")
+            result.setdefault("queued_consumed", 0)
+            return result
+        if preserve_queued_steer and claim is None:
+            return {
+                "ok": False,
+                "via": "codex-steer",
+                "code": "queued_message_missing",
+                "queued_consumed": 0,
+                "error": "queued message no longer exists",
+            }
+
+        ack_suppression = None
+        if claim is not None:
+            ack_suppression = _core._begin_codex_queued_steer_ack_suppression(
+                session_id, text,
+            )
+            if isinstance(ack_suppression, dict):
+                recovery = _codex_restore_or_journal_claim(claim)
+                if recovery != "restored":
+                    return {
+                        "ok": False,
+                        "via": "codex-steer",
+                        "code": "queued_rollback_persistence_failed",
+                        "queued_consumed": 0,
+                        "error": "could not persist queued message rollback",
+                        "recovery_journaled": recovery == "journaled",
+                        "recovery_outcome": recovery,
+                        "recovery_volatile": recovery == "failed",
+                        "restart_safe": recovery != "failed",
+                    }
+                result = dict(ack_suppression)
+                result.setdefault("via", "codex-steer")
+                result.setdefault("queued_consumed", 0)
+                return result
+
+        try:
+            delivery_kwargs = {"steer": True}
+            if idempotency_key:
+                delivery_kwargs["idempotency_key"] = idempotency_key
+            result = _core._resume_session_codex_native_delivery(
+                session_id, text, **delivery_kwargs,
+            )
+        except Exception:
+            if claim is None:
+                raise
+            acknowledged = _core._finish_codex_queued_steer_ack_suppression(
+                ack_suppression, delivered=False,
+            )
+            if acknowledged:
+                if not _core._commit_pending_input_claim(claim):
+                    return {
+                        "ok": False,
+                        "via": "codex-steer",
+                        "code": "queued_handoff_commit_failed",
+                        "queued_consumed": 1,
+                        "delivered": True,
+                        "error": "acknowledged queued message could not be committed",
+                    }
+                return {
+                    "ok": True,
+                    "via": "codex-steer",
+                    "queued_consumed": 1,
+                    "delivery_acknowledged": True,
+                }
+            recovery = _codex_restore_or_journal_claim(claim)
+            if recovery != "restored":
+                return {
+                    "ok": False,
+                    "via": "codex-steer",
+                    "code": "queued_rollback_persistence_failed",
+                    "queued_consumed": 0,
+                    "error": "could not persist queued message rollback",
+                    "recovery_journaled": recovery == "journaled",
+                    "recovery_outcome": recovery,
+                    "recovery_volatile": recovery == "failed",
+                    "restart_safe": recovery != "failed",
+                }
+            raise
+
+        result = dict(result or {})
+        delivered = result.get("ok") and result.get("via") == "codex-steer"
+        if claim is None:
+            return result
+        acknowledged = _core._finish_codex_queued_steer_ack_suppression(
+            ack_suppression, delivered=bool(delivered),
+        )
+        if delivered or acknowledged:
+            if not _core._commit_pending_input_claim(claim):
+                return {
+                    "ok": False,
+                    "via": "codex-steer",
+                    "code": "queued_handoff_commit_failed",
+                    "queued_consumed": 1,
+                    "delivered": True,
+                    "error": "delivered queued message could not be committed",
+                }
+            if acknowledged and not delivered:
+                result.pop("code", None)
+                result.pop("error", None)
+                result.update({
+                    "ok": True,
+                    "via": "codex-steer",
+                    "delivery_acknowledged": True,
+                })
+            result["queued_consumed"] = 1
+            return result
+        recovery = _codex_restore_or_journal_claim(claim)
+        if recovery != "restored":
+            return {
+                "ok": False,
+                "via": "codex-steer",
+                "code": "queued_rollback_persistence_failed",
+                "queued_consumed": 0,
+                "error": "could not persist queued message rollback",
+                "recovery_journaled": recovery == "journaled",
+                "recovery_outcome": recovery,
+                "recovery_volatile": recovery == "failed",
+                "restart_safe": recovery != "failed",
+            }
+        if preserve_queued_steer:
+            result["queued"] = True
+            result["queued_preserved"] = True
+        return result
+
+
+_CODEX_QUEUED_STEER_TRANSACTION_PROTOCOL = 1
+_CODEX_QUEUED_DELIVERY_TRANSACTION_PROTOCOL = 1
+
+
+def _codex_restore_or_journal_claim(claim):
+    if _core._restore_pending_input_claim(claim):
+        return "restored"
+    outcome = _core._write_pending_input_claim_journal(claim)
+    if outcome == "journaled":
+        return "journaled"
+    _core._keep_pending_input_claim_in_memory(claim)
+    return "failed"
+
+
+def _codex_queued_delivery_transaction(session_id, *, idempotency_key=None):
+    with _core._codex_queue_pump_lock(session_id):
+        if not _core._retry_pending_input_recovery(session_id):
+            return {
+                "ok": False,
+                "code": "pending_input_recovery_pending",
+                "error": "queued input recovery must complete before delivery",
+                **_core._pending_input_recovery_status(session_id),
+            }
+        claim_result = _core._apply_pending_input_operations(session_id, [{
+            "field": "resume", "action": "pop_head_claim",
+        }])
+    if not claim_result.get("ok"):
+        return {
+            "ok": False,
+            "delivered": False,
+            "code": claim_result.get("code") or "pending_input_persist_failed",
+        }
+    claim_value = ((claim_result.get("value") or [None])[0]) or {}
+    item = claim_value.get("item")
+    if item is None:
+        return {"ok": True, "empty": True}
+    claim = {
+        "session_id": session_id,
+        "queue_name": "resume",
+        "index": 0,
+        "item": item,
+        "claim_sequence": int(claim_value.get("claim_sequence") or 0),
+    }
+    ack = _core._begin_codex_queued_steer_ack_suppression(
+        session_id, str(item), allow_unbound_ack=True,
+    )
+    if isinstance(ack, dict):
+        recovery = _codex_restore_or_journal_claim(claim)
+        if recovery != "restored":
+            return {
+                "ok": False,
+                "code": (
+                    "pending_input_rollback_journaled"
+                    if recovery == "journaled" else "pending_input_recovery_failed"
+                ),
+                "recovery_journaled": recovery == "journaled",
+                "recovery_volatile": recovery == "failed",
+                "restart_safe": recovery != "failed",
+            }
+        return ack
+
+    try:
+        def deliver():
+            kwargs = {"steer": False}
+            if idempotency_key:
+                kwargs["idempotency_key"] = idempotency_key
+            previous_token = getattr(
+                _core._CODEX_QUEUED_DELIVERY_CONTEXT, "token_id", None,
+            )
+            _core._CODEX_QUEUED_DELIVERY_CONTEXT.token_id = ack[1]
+            try:
+                return _core._resume_session_codex_native_delivery(
+                    session_id, str(item), **kwargs,
+                )
+            finally:
+                _core._CODEX_QUEUED_DELIVERY_CONTEXT.token_id = previous_token
+
+        result = _core._deliver_with_auto_resume_barrier(
+            session_id, item, deliver,
+        )
+    except Exception as exc:
+        acknowledged = _core._finish_codex_queued_steer_ack_suppression(
+            ack, delivered=False,
+        )
+        if acknowledged:
+            _core._commit_pending_input_claim(claim)
+            return {
+                "ok": True, "delivered": True,
+                "delivery_acknowledged": True,
+            }
+        recovery = _codex_restore_or_journal_claim(claim)
+        if recovery != "restored":
+            return {
+                "ok": False,
+                "code": (
+                    "pending_input_rollback_journaled"
+                    if recovery == "journaled" else "pending_input_recovery_failed"
+                ),
+                "recovery_journaled": recovery == "journaled",
+                "recovery_volatile": recovery == "failed",
+                "restart_safe": recovery != "failed",
+            }
+        return {"ok": False, "code": "codex_queue_delivery_exception", "error": str(exc)}
+
+    result = dict(result or {})
+    returned_turn_id = result.get("turn_id") or result.get("turnId")
+    if returned_turn_id:
+        _core._bind_codex_queued_delivery_ack_suppression(
+            session_id, returned_turn_id, token_id=ack[1],
+        )
+    delivered = bool(result.get("ok") and not result.get("queued") and not result.get("disabled"))
+    acknowledged = _core._finish_codex_queued_steer_ack_suppression(
+        ack, delivered=delivered,
+    )
+    if delivered or acknowledged:
+        if not _core._commit_pending_input_claim(claim):
+            return {"ok": False, "code": "queued_handoff_commit_failed"}
+        result.update({"ok": True, "delivered": True, "queued_consumed": 1})
+        if acknowledged and not delivered:
+            result["delivery_acknowledged"] = True
+        return result
+    recovery = _codex_restore_or_journal_claim(claim)
+    if recovery != "restored":
+        return {
+            "ok": False,
+            "code": (
+                "pending_input_rollback_journaled"
+                if recovery == "journaled" else "pending_input_recovery_failed"
+            ),
+            "recovery_journaled": recovery == "journaled",
+            "recovery_volatile": recovery == "failed",
+            "restart_safe": recovery != "failed",
+        }
+    return {"ok": False, "delivered": False, "result": result}
 
 
 def resume_session_codex(
     session_id, text, *, steer=False, _from_queue=False, idempotency_key=None,
+    preserve_queued_steer=False, _native_delivery=False,
+    queued_steer_transaction_protocol=None,
+    queued_delivery_transaction_protocol=0,
 ):
     """Resume a dormant Codex thread with a new prompt via `codex exec resume`."""
-    routed = _core._control_plane_engine_call(
-        "codex", "resume", {
-            "session_id": session_id,
-            "text": text,
-            "steer": bool(steer),
-            "from_queue": bool(_from_queue),
-        },
-        idempotency_key=idempotency_key,
+    transaction_protocol = (
+        _CODEX_QUEUED_STEER_TRANSACTION_PROTOCOL
+        if queued_steer_transaction_protocol is None
+        else int(queued_steer_transaction_protocol or 0)
     )
-    if routed is not None:
-        return routed
+    if not _native_delivery:
+        compatibility = _core._pending_writer_compatibility_status()
+        if not compatibility.get("ok"):
+            return {
+                "ok": False,
+                "code": "pending_writer_upgrade_required",
+                "restart_required": True,
+                "incompatible_writers": compatibility.get(
+                    "incompatible_writers"
+                ) or [],
+                "error": (
+                    "Restart the CCC dashboard and worker before changing "
+                    "pending input"
+                ),
+            }
+        routed = _core._control_plane_engine_call(
+            "codex", "resume", {
+                "session_id": session_id,
+                "text": text,
+                "steer": bool(steer),
+                "from_queue": bool(_from_queue),
+                "preserve_queued_steer": bool(preserve_queued_steer),
+                "queued_steer_transaction_protocol": transaction_protocol,
+                "queued_delivery_transaction_protocol": int(
+                    queued_delivery_transaction_protocol or 0
+                ),
+            },
+            idempotency_key=idempotency_key,
+        )
+        if routed is not None:
+            return routed
     text = _core._strip_ccc_session_state_instruction(text)
+    if (
+        _from_queue
+        and not _native_delivery
+        and int(queued_delivery_transaction_protocol or 0)
+        >= _CODEX_QUEUED_DELIVERY_TRANSACTION_PROTOCOL
+    ):
+        return _codex_queued_delivery_transaction(
+            session_id, idempotency_key=idempotency_key,
+        )
     if not text:
         return {"ok": False, "error": "missing text"}
+    if steer and not _native_delivery:
+        if transaction_protocol >= _CODEX_QUEUED_STEER_TRANSACTION_PROTOCOL:
+            return _codex_queued_steer_transaction(
+                session_id,
+                text,
+                preserve_queued_steer=bool(preserve_queued_steer),
+                idempotency_key=idempotency_key,
+            )
+        delivery_kwargs = {"steer": True}
+        if idempotency_key:
+            delivery_kwargs["idempotency_key"] = idempotency_key
+        return _core._resume_session_codex_native_delivery(
+            session_id, text, **delivery_kwargs,
+        )
     if not steer and not _from_queue:
         queued_behind_earlier = _core._queue_codex_resume(
             session_id,
@@ -1087,6 +2060,17 @@ def resume_session_codex(
                 "code": "codex_model_unavailable",
                 "known_codex_models": list(_core._ENGINE_KNOWN_MODELS["codex"]),
             }
+    elif _core._model_policy_blocks(model):
+        # An inherited model (env default or the previous run's recorded
+        # model) that policy now blocks must not resume as-is: substitute
+        # the allowed default and leave a ledger trail instead of failing
+        # the wake, which would silently strand queue work.
+        blocked_model = model
+        model = _core._spawn_fallback_model_for_engine("codex")
+        _core._resume_ledger_append(
+            "codex_model_policy_substituted", sid=session_id,
+            blocked=blocked_model, model=model,
+        )
     _core._resume_ledger_append(
         "codex_wake_attempt", sid=session_id,
         cwd=cwd, model=model, effort=reasoning_effort, steer=bool(steer),
@@ -1109,45 +2093,10 @@ def resume_session_codex(
         reasoning_effort=reasoning_effort,
     )
     if app_result.get("ok"):
-        if (
-            app_result.get("accepted")
-            and app_result.get("confirmed") is not True
-            and not _from_queue
-        ):
-            reason = (
-                app_result.get("warning")
-                or "Codex accepted the turn but the input is not visible yet"
-            )
-            queued = _core._queue_codex_resume(session_id, text, reason=reason)
-            # Close the notification-vs-enqueue race: if the authoritative
-            # userMessage arrived just before the durable copy was added, its
-            # state marker is still available and can reconcile the copy now.
-            delivered = _core._codex_app_server_thread_state(session_id)
-            if (
-                str(delivered.get("last_delivered_user_text") or "").strip()
-                == str(text or "").strip()
-                and (
-                    not app_result.get("turn_id")
-                    or str(delivered.get("last_delivered_user_turn_id") or "")
-                    == str(app_result.get("turn_id"))
-                )
-            ):
-                _core._consume_matching_pending_input(session_id, text)
-                confirmed = dict(app_result)
-                confirmed["confirmed"] = True
-                confirmed["confirmation_source"] = "app-server-notification"
-                return confirmed
-            accepted_via = app_result.get("via")
-            queued.update({
-                key: value
-                for key, value in app_result.items()
-                if key not in ("via", "queued", "queued_reason", "error")
-            })
-            if accepted_via:
-                queued["accepted_via"] = accepted_via
-            queued["queued"] = True
-            queued["queued_reason"] = reason
-            return queued
+        # Accepted means the engine already started this turn. Re-queueing
+        # the same text (especially a lone "continue") fires a second turn
+        # when the first completes — the unattended quota burn. Still queue
+        # below when the turn was not accepted.
         return app_result
     if app_result.get("fallback") == "queue":
         if _from_queue:
@@ -1273,11 +2222,19 @@ def _extract_codex_usage(session_id):
     if not path:
         return empty
     latest = {}
-    totals = {}
+    latest_window = 0
+    totals = collections.Counter()
+    previous_totals = None
+    lifetime_costs = collections.Counter()
+    cost_meta = {}
     peak = 0
     context_limit = 0
     model = row.get("model") or ""
     reasoning_effort = row.get("reasoning_effort") or ""
+    # Per-turn tail for the status-rail column graph — one entry per
+    # billed counter increase (status notifications may repeat), same raw-count
+    # shape Claude's turn_series uses.
+    turn_series = collections.deque(maxlen=_core.USAGE_TURN_SERIES_MAX)
     try:
         with open(path, "r", encoding="utf-8", errors="replace") as f:
             for line in f:
@@ -1297,25 +2254,55 @@ def _extract_codex_usage(session_id):
                     reasoning_effort = effort or reasoning_effort
                 if payload.get("type") != "token_count":
                     continue
-                info = payload.get("info") or {}
+                info = payload.get("info") if isinstance(payload.get("info"), dict) else {}
+                model = (_core._throughput_codex_payload_model(info)
+                         or _core._throughput_codex_payload_model(payload) or model)
+                delta, previous_totals = _core._codex_usage_delta_from_event(ev, previous_totals)
+                if delta:
+                    totals.update(delta)
+                    delta_totals = {
+                        "total_input_tokens": max(delta["input_tokens"] - delta["cached_input_tokens"], 0),
+                        "total_cache_read_tokens": delta["cached_input_tokens"],
+                        "total_output_tokens": delta["output_tokens"],
+                    }
+                    cost_meta = _core._session_usage_cost("codex", model, delta_totals)
+                    lifetime_costs.update(cost_meta["cost_breakdown_usd"])
+                    turn_series.append({
+                        "ts": ev.get("timestamp") or "",
+                        "model": model,
+                        "tokens_in": delta["input_tokens"],
+                        "tokens_cached": delta["cached_input_tokens"],
+                        "tokens_out": delta["output_tokens"],
+                    })
                 context_limit = _core._codex_int(info.get("model_context_window")) or context_limit
                 usage = info.get("last_token_usage") or info.get("total_token_usage") or {}
-                total_usage = info.get("total_token_usage") or usage
                 if not isinstance(usage, dict):
                     continue
-                if isinstance(total_usage, dict):
-                    totals = total_usage
-                latest = usage
                 # Codex/OpenAI usage reports cached input as a subset of
                 # input_tokens. Adding it again turns cumulative session usage
                 # into impossible context-window numbers.
-                window = _core._codex_int(usage.get("input_tokens"))
+                raw_window = _core._codex_int(usage.get("input_tokens"))
+                turn_total = _core._codex_int(usage.get("total_tokens"))
+                turn_cached = _core._codex_int(usage.get("cached_input_tokens"))
+                turn_out = _core._codex_int(usage.get("output_tokens"))
+                if not (raw_window or turn_cached or turn_out or turn_total):
+                    # A token_count with every field zeroed carries no size at
+                    # all. Keep whatever the previous one said.
+                    continue
+                # Post-compaction marker: Codex writes a token_count whose
+                # last_token_usage has every PER-TURN field zeroed and reports
+                # the size of the freshly rebuilt context in total_tokens only.
+                # Reading input_tokens straight off it made the context pill
+                # claim "ctx 0" until the next real turn.
+                window = raw_window or turn_total
+                latest = usage
+                latest_window = window
                 peak = max(peak, window)
     except OSError:
         return empty
     if not latest:
         return {**empty, "override": _core._get_session_override(session_id)}
-    latest_input = _core._codex_int(latest.get("input_tokens"))
+    latest_input = latest_window
     total_input = _core._codex_int(totals.get("input_tokens"))
     cache_read = _core._codex_int(totals.get("cached_input_tokens"))
     total_output = _core._codex_int(totals.get("output_tokens"))
@@ -1325,7 +2312,10 @@ def _extract_codex_usage(session_id):
         "total_cache_read_tokens": cache_read,
         "total_output_tokens": total_output,
     }
-    cost = _core._session_usage_cost("codex", model, normalized_totals)
+    cost = dict(cost_meta) if cost_meta else _core._session_usage_cost("codex", model, normalized_totals)
+    cost["cost_breakdown_usd"] = {key: round(lifetime_costs.get(key, 0), 6)
+                                  for key in ("input", "cache_creation", "cache_read", "output")}
+    cost["cost_usd"] = round(sum(lifetime_costs.values()), 6)
     return {
         **empty,
         "latest_input_tokens": latest_input,
@@ -1335,6 +2325,7 @@ def _extract_codex_usage(session_id):
         "reasoning_effort": reasoning_effort,
         "context_limit": context_limit,
         "override": _core._get_session_override(session_id),
+        "turn_series": list(turn_series),
         **cost,
     }
 
@@ -1413,4 +2404,3 @@ def _extract_codex_timeline(session_id):
     except OSError:
         return {"events": [], "total_turns": 0}
     return {"events": events, "total_turns": turn}
-

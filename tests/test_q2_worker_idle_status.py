@@ -94,3 +94,36 @@ def test_q2_idle_severity_styles_exist():
     source = (PROJECT_ROOT / "static" / "q2.css").read_text(encoding="utf-8")
     assert ".q2-dg-worker.is-idle-warning" in source
     assert ".q2-dg-worker.is-idle-stale" in source
+
+
+def test_q2_worker_card_stops_spinning_the_warm_idle_tier():
+    """A worker idle < 30m ('warm') used to fall through idleClass with no
+    class at all, so it kept the plain is-live look -- a spinning ring
+    identical to a worker actually attached to a ticket. It must now get its
+    own class, and that class must swap the spin for a slow breathe rather
+    than just recolouring a still-rotating ring."""
+    js = (PROJECT_ROOT / "static" / "q2.js").read_text(encoding="utf-8")
+    assert "idle.severity === 'warm' ? ' is-idle-warm'" in js
+
+    css = (PROJECT_ROOT / "static" / "q2.css").read_text(encoding="utf-8")
+    assert "q2-dg-sleepy" in css
+    # Each idle tier's ring must be solid (no transparent gap -- that's what
+    # makes the base .q2-dg-spin rule read as a rotating arc) and must join
+    # the shared slow-breathe animation, not keep the fast rotation.
+    for color in ("var(--green)", "var(--text-muted)", "var(--orange)", "var(--red)"):
+        assert f"border-color: {color}; border-right-color: {color};" in css
+    animated_tiers = css.split("animation: q2-dg-sleepy 2.6s ease-in-out infinite;", 1)[0]
+    for tier in ("warm", "pending", "warning", "stale"):
+        assert f".q2-dg-worker.is-idle-{tier} .q2-dg-spin" in animated_tiers
+
+
+def test_rhs_status_strip_no_longer_duplicates_per_worker_rows():
+    """The compact queueStatusStrip used to render one row per live worker
+    (idle/working dot + claimed ticket), which just repeated what the
+    WORKING NOW strip already shows above it and pushed the ticket list
+    further down (CCC-1019). It now renders only the queue-level facts
+    (depth/age/live/drain/claim-types), no per-worker rows."""
+    js = (PROJECT_ROOT / "static" / "app.js").read_text(encoding="utf-8")
+    strip_fn = js.split("function _renderQueueStatusStrip(")[1].split("\n  function ", 1)[0]
+    assert "fq-status-worker" not in strip_fn
+    assert "$el.innerHTML = watchHtml;" in strip_fn

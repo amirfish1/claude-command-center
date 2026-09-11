@@ -1,0 +1,228 @@
+{
+  "ok": true,
+  "count": 4,
+  "projects": [
+    {
+      "project": "BUGS",
+      "depth": 3,
+      "oldest_open_age_seconds": 172800,
+      "last_activity_seconds": 240,
+      "fixer_session_id": "f0000001-0000-4000-8000-000000000001",
+      "fixer_live": true,
+      "fixer_idle_or_stale": false,
+      "stuck": false
+    },
+    {
+      "project": "CONTENT",
+      "depth": 2,
+      "oldest_open_age_seconds": 86400,
+      "last_activity_seconds": 900,
+      "fixer_session_id": "f0000002-0000-4000-8000-000000000002",
+      "fixer_live": true,
+      "fixer_idle_or_stale": false,
+      "stuck": false
+    },
+    {
+      "project": "WEBSITE",
+      "depth": 2,
+      "oldest_open_age_seconds": 18000,
+      "last_activity_seconds": 1200,
+      "fixer_session_id": "",
+      "fixer_live": false,
+      "fixer_idle_or_stale": true,
+      "stuck": false
+    },
+    {
+      "project": "RELEASE",
+      "depth": 1,
+      "oldest_open_age_seconds": 10800,
+      "last_activity_seconds": 5400,
+      "fixer_session_id": "",
+      "fixer_live": false,
+      "fixer_idle_or_stale": true,
+      "stuck": true
+    }
+  ],
+  "wt_workers": [
+    {
+      "worker_id": "bugs-1",
+      "queue": "BUGS",
+      "session_id": "f0000001-0000-4000-8000-000000000001",
+      "pid": 48213,
+      "alive": true,
+      "engine": "claude",
+      "model": "claude-sonnet-4-5",
+      "started_at": "2026-09-03T20:48:00Z",
+      "idle_seconds": 12
+    },
+    {
+      "worker_id": "content-1",
+      "queue": "CONTENT",
+      "session_id": "f0000002-0000-4000-8000-000000000002",
+      "pid": 49021,
+      "alive": true,
+      "engine": "claude",
+      "model": "claude-sonnet-4-5",
+      "started_at": "2026-09-03T19:40:00Z",
+      "idle_seconds": 8
+    },
+    {
+      "worker_id": "content-2",
+      "queue": "CONTENT",
+      "session_id": "f0000003-0000-4000-8000-000000000003",
+      "pid": 49117,
+      "alive": true,
+      "engine": "codex",
+      "model": "gpt-5-codex",
+      "started_at": "2026-09-03T21:04:00Z",
+      "idle_seconds": 30
+    }
+  ],
+  "queues": [
+    {
+      "queue": "BUGS",
+      "depth": 3,
+      "claimable": 2,
+      "closed": 14,
+      "total": 17,
+      "gated": 0,
+      "oldest_open_age_seconds": 172800,
+      "workers": 1,
+      "auto_drain": true,
+      "stuck": false,
+      "state": "draining",
+      "fixer_session_id": "f0000001-0000-4000-8000-000000000001",
+      "repo_path": "/home/demo/code/widgets-api",
+      "claim_types": [],
+      "desired_workers": 1,
+      "backend": "github",
+      "github_repo": "demo/widgets-api",
+      "configured": true,
+      "worker_plan": {
+        "engine": "claude",
+        "engine_source": "queue",
+        "model": "claude-sonnet-4-5",
+        "model_source": "queue",
+        "effort": "high",
+        "effort_source": "queue",
+        "is_default": false
+      },
+      "last_activity_seconds": 240
+    },
+    {
+      "queue": "CONTENT",
+      "depth": 2,
+      "claimable": 1,
+      "closed": 21,
+      "total": 25,
+      "gated": 0,
+      "oldest_open_age_seconds": 86400,
+      "workers": 2,
+      "auto_drain": true,
+      "stuck": false,
+      "state": "draining",
+      "fixer_session_id": "f0000002-0000-4000-8000-000000000002",
+      "repo_path": "/home/demo/code/blog-engine",
+      "claim_types": [],
+      "desired_workers": 2,
+      "backend": "",
+      "github_repo": "",
+      "configured": true,
+      "worker_plan": {
+        "engine": "claude",
+        "engine_source": "fallback",
+        "model": "",
+        "model_source": "engine_default",
+        "effort": "",
+        "effort_source": "engine_default",
+        "is_default": true
+      },
+      "last_activity_seconds": 900
+    },
+    {
+      "queue": "WEBSITE",
+      "depth": 2,
+      "claimable": 2,
+      "closed": 6,
+      "total": 8,
+      "gated": 0,
+      "oldest_open_age_seconds": 18000,
+      "workers": 0,
+      "auto_drain": false,
+      "stuck": false,
+      "state": "backlog",
+      "fixer_session_id": "",
+      "repo_path": "/home/demo/code/marketing-site",
+      "claim_types": [],
+      "desired_workers": 1,
+      "backend": "",
+      "github_repo": "",
+      "configured": true,
+      "worker_plan": {
+        "engine": "claude",
+        "engine_source": "fallback",
+        "model": "",
+        "model_source": "engine_default",
+        "effort": "",
+        "effort_source": "engine_default",
+        "is_default": true
+      },
+      "last_activity_seconds": 1200
+    },
+    {
+      "queue": "RELEASE",
+      "depth": 1,
+      "claimable": 1,
+      "closed": 9,
+      "total": 10,
+      "gated": 0,
+      "oldest_open_age_seconds": 10800,
+      "workers": 0,
+      "auto_drain": false,
+      "stuck": true,
+      "state": "backlog",
+      "fixer_session_id": "",
+      "repo_path": "/home/demo/code/widgets-api",
+      "claim_types": [],
+      "desired_workers": 1,
+      "backend": "",
+      "github_repo": "",
+      "configured": true,
+      "worker_plan": {
+        "engine": "claude",
+        "engine_source": "fallback",
+        "model": "",
+        "model_source": "engine_default",
+        "effort": "",
+        "effort_source": "engine_default",
+        "is_default": true
+      },
+      "last_activity_seconds": 5400
+    }
+  ],
+  "worker_session_ids": [
+    "f0000001-0000-4000-8000-000000000001",
+    "f0000002-0000-4000-8000-000000000002",
+    "f0000003-0000-4000-8000-000000000003"
+  ],
+  "past_workers": [
+    {
+      "worker_id": "website-1",
+      "queue": "WEBSITE",
+      "session_id": "",
+      "ended_ago_seconds": 10800,
+      "ended_at_iso": "2026-09-03T18:30:00Z"
+    },
+    {
+      "worker_id": "content-0",
+      "queue": "CONTENT",
+      "session_id": "",
+      "ended_ago_seconds": 18000,
+      "ended_at_iso": "2026-09-03T16:30:00Z"
+    }
+  ],
+  "github_sync": {
+    "rate_limited": false,
+    "retry_at": null
+  }
+}

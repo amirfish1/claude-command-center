@@ -1,0 +1,126 @@
+<!doctype html>
+<html lang="en" class="no-js">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>WatchTower: a job system your coding agents can operate</title>
+<meta name="description" content="WatchTower gives Claude and Codex durable queues, workers, dependencies, messaging, waits, learnings, and verifiable resolutions through skills and the wt CLI.">
+<link rel="canonical" href="https://ccc.amirfish.ai/watchtower/">
+<link rel="icon" href="/brand/favicon.svg" type="image/svg+xml">
+<meta property="og:title" content="A job system your coding agents can operate.">
+<meta property="og:description" content="File durable work, wait on dependencies, message other agents, and return only after the queue drains.">
+<meta property="og:type" content="website">
+<meta property="og:url" content="https://ccc.amirfish.ai/watchtower/">
+<meta property="og:image" content="https://ccc.amirfish.ai/images/captain-social.png">
+<meta name="twitter:card" content="summary_large_image">
+<link rel="stylesheet" href="/agent-operations/site.css">
+<script>document.documentElement.classList.replace("no-js", "js");</script>
+</head>
+<body>
+<header class="site-nav">
+  <div class="wrap site-nav__inner">
+    <a class="brand" href="/"><img src="/brand/ccc-mark.svg" alt=""><span>claude command center</span></a>
+    <nav class="site-nav__links" aria-label="Primary navigation">
+      <a href="/captain/">Captain</a>
+      <a href="/watchtower/" aria-current="page">WatchTower</a>
+      <a href="/receipts/">Receipts</a>
+      <a href="/demo/">Full demo</a>
+      <a class="nav-github" href="https://github.com/amirfish1/watchtower">GitHub</a>
+    </nav>
+  </div>
+</header>
+
+<main>
+  <section class="hero" style="border-top:0">
+    <div class="wrap hero__content">
+      <p class="eyebrow">WatchTower &middot; CLI-first fleet runtime</p>
+      <h1>A job system your coding agents can operate.</h1>
+      <p class="lede">Skills teach Claude and Codex to file durable work, wait on dependencies, message other agents, and return after the queue is actually drained.</p>
+      <div class="actions">
+        <a class="button button--primary" href="#three-commands">See the three-command loop</a>
+        <a class="button" href="https://github.com/amirfish1/watchtower">Install WatchTower</a>
+      </div>
+      <p class="microcopy">Use it standalone. Open CCC when you want a visual control plane.</p>
+    </div>
+  </section>
+
+  <section id="three-commands">
+    <div class="wrap split">
+      <div class="section-heading">
+        <p class="eyebrow">The executable surface</p>
+        <h2>Your agent does not need another dashboard tutorial.</h2>
+        <p>Give it a skill that explains a small, stable command surface. The job system remains scriptable, portable, and easy to inspect.</p>
+      </div>
+      <div class="terminal command-wrap">
+        <div class="terminal__bar"><span class="terminal__lights"><span></span><span></span><span></span></span><span>watchtower</span></div>
+        <button class="button button--small command-copy" type="button" data-copy="watchtowerCommands">Copy</button>
+        <pre id="watchtowerCommands"><span class="prompt">$</span> wt import plan.md -q LAUNCH --apply
+<span class="prompt">$</span> wt status -q LAUNCH
+<span class="prompt">$</span> wt wait -q LAUNCH --timeout 1800</pre>
+      </div>
+    </div>
+  </section>
+
+  <section>
+    <div class="wrap">
+      <div class="section-heading section-heading--center">
+        <p class="eyebrow">What survives the prompt</p>
+        <h2>Work remains real after the conversation moves on.</h2>
+        <p>WatchTower stores job state outside any one model context and gives workers a consistent protocol for claiming, resolving, and handing off work.</p>
+      </div>
+      <div class="card-grid">
+        <article class="card"><span class="card__number">01 &middot; Queue</span><h3>Durable named work</h3><p>File one ticket or import a full plan. Dependencies and status remain available to every worker.</p></article>
+        <article class="card"><span class="card__number">02 &middot; Drain</span><h3>Workers pull the next job</h3><p>Configured workers drain queues, wake for new work, and expose when a queue is aging or stuck.</p></article>
+        <article class="card"><span class="card__number">03 &middot; Wait</span><h3>Completion becomes scriptable</h3><p><code>wt wait</code> blocks until the queue has no open tickets, then lets a script or initiating agent continue.</p></article>
+      </div>
+    </div>
+  </section>
+
+  <section>
+    <div class="wrap split">
+      <div>
+        <div class="section-heading">
+          <p class="eyebrow">Agents can talk directly</p>
+          <h2>Stop relaying every message yourself.</h2>
+          <p>Use durable delivery when one session needs to warn, question, or hand context to another.</p>
+        </div>
+        <div class="terminal">
+          <div class="terminal__bar"><span class="terminal__lights"><span></span><span></span><span></span></span><span>cross-agent messaging</span></div>
+          <pre><span class="prompt">$</span> wt send @planner "schema changed, re-read models.py"
+<span class="prompt">$</span> wt ask @reviewer "is PR 42 safe to merge?" --timeout 60</pre>
+        </div>
+      </div>
+      <div class="stack">
+        <div class="callout"><h3>Durable outbox</h3><p>If the target cannot receive immediately, delivery intent remains visible instead of disappearing into a failed subprocess.</p></div>
+        <div class="callout"><h3>Queue-scoped learnings</h3><p>Workers read what earlier workers learned about that queue and can add concise lessons when they finish.</p></div>
+        <div class="callout"><h3>Honest engine scope</h3><p>Worker execution is configured per queue. Capabilities differ by agent CLI, so the documentation names the current matrix rather than promising identical behavior.</p></div>
+      </div>
+    </div>
+  </section>
+
+  <section class="cta-band">
+    <div class="wrap wrap--narrow">
+      <div class="section-heading section-heading--center">
+        <p class="eyebrow">CLI first. Dashboard optional.</p>
+        <h2>Put one real plan into a durable queue.</h2>
+        <p>Install WatchTower directly, or install CCC and use WatchTower as its queue and fleet runtime.</p>
+      </div>
+      <div class="actions">
+        <a class="button button--primary" href="https://github.com/amirfish1/watchtower">Install WatchTower</a>
+        <a class="button" href="/captain/">Watch Captain use it</a>
+      </div>
+    </div>
+  </section>
+</main>
+
+<footer class="site-footer">
+  <div class="wrap site-footer__inner">
+    <span>WatchTower &middot; local and dependency-light &middot; <span class="js-year">2026</span></span>
+    <nav class="site-footer__links" aria-label="Footer navigation">
+      <a href="/captain/">Captain</a><a href="/watchtower/">WatchTower</a><a href="/receipts/">Receipts</a><a href="/demo/">Demo</a><a href="https://github.com/amirfish1/watchtower">GitHub</a>
+    </nav>
+  </div>
+</footer>
+<script src="/agent-operations/site.js" defer></script>
+</body>
+</html>

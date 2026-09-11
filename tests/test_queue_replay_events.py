@@ -14,8 +14,8 @@ def _load_server():
     return importlib.import_module("server")
 
 
-# Synthetic durable ticket items — same shape ux_fixes_queue / watchtower.queue
-# persist (ref/queue/status/created_at/claimed_at/closed_at).
+# Synthetic durable ticket items — same shape watchtower.queue persists
+# (ref/queue/status/created_at/claimed_at/closed_at).
 _FAKE_ITEMS = [
     {
         "ref": "DEMO-1", "queue": "DEMO", "project": "DEMO", "status": "closed",

@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <link rel="icon" type="image/svg+xml" href="data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'><rect width='64' height='64' rx='14' fill='%230d1117'/><text x='32' y='48' text-anchor='middle' font-family='-apple-system,Helvetica,Arial,sans-serif' font-size='44' font-weight='700' fill='%2339d2c0'>⌘</text></svg>">
 <meta name="theme-color" content="#0d1117">
-<title>Daily Throughput — CCC</title>
+<title>Daily Throughput: CCC</title>
 <style>
   /* Palette lifted from throughput.html so the daily report reads as one
      product with the main analyzer (GitHub-dark-ish, teal accent). */
@@ -313,6 +313,7 @@
   }
   .eng-badge.codex { background: rgba(171,125,255,0.1); color: var(--purple); border-color: rgba(171,125,255,0.22); }
   .models-cell { font-size: 10px; color: var(--text-muted); font-family: var(--font-mono); white-space: normal; max-width: 200px; }
+  .models-cell .effort { color: var(--text); opacity: 0.75; }
   .trunc-note { font-size: 11px; color: var(--text-muted); margin-top: 10px; }
 
   /* ── Tickets strip ── */
@@ -477,7 +478,7 @@
     return m + "m " + String(s).padStart(2, "0") + "s";
   }
   function fmtPct(ratio) {
-    if (ratio == null || isNaN(ratio)) return "—";
+    if (ratio == null || isNaN(ratio)) return "-";
     return (Number(ratio) * 100).toFixed(1) + "%";
   }
   function esc(s) {
@@ -494,9 +495,9 @@
   }
   // Extract HH:MM (local) from an ISO timestamp for span display.
   function hhmm(iso) {
-    if (!iso) return "—";
+    if (!iso) return "-";
     var d = new Date(iso);
-    if (isNaN(d.getTime())) return "—";
+    if (isNaN(d.getTime())) return "-";
     return String(d.getHours()).padStart(2, "0") + ":" + String(d.getMinutes()).padStart(2, "0");
   }
 
@@ -567,7 +568,7 @@
       badge.className = "status-badge progress";
       badge.textContent = "in progress";
     }
-    document.title = "Daily Throughput " + d.date + " — CCC";
+    document.title = "Daily Throughput " + d.date + ": CCC";
   }
 
   function kpiTile(label, value, sub, accent) {
@@ -658,7 +659,7 @@
     rows.forEach(function (r) {
       var m = r.m;
       html += "<tr>" +
-        '<td class="left name">' + esc(m.model || "—") + "</td>" +
+        '<td class="left name">' + esc(m.model || "-") + "</td>" +
         "<td>" + fmtInt(m.turns) + "</td>" +
         '<td class="strong">' + fmtCompact(r.cacheAdj) + "</td>" +
         "<td>" + fmtCompact(m.output_tokens) + "</td>" +
@@ -675,15 +676,19 @@
     var html = "<thead><tr>" +
       '<th class="left">#</th><th class="left">Lane</th><th class="left">Engine</th>' +
       "<th>Turns</th><th>Cache-adj</th><th>Output</th><th>Cost</th>" +
-      '<th>Active</th><th class="left">Span</th><th class="left">Models</th>' +
+      '<th>Active</th><th class="left">Span</th><th class="left">Models &amp; effort</th>' +
       "</tr></thead><tbody>";
     if (!sessions.length) {
       html += '<tr><td class="left" colspan="10" style="color:var(--text-muted)">No sessions for this day.</td></tr>';
     }
     sessions.forEach(function (s, i) {
-      var name = s.session_name || (s.session_id ? String(s.session_id).slice(0, 8) : "—");
+      var name = s.session_name || (s.session_id ? String(s.session_id).slice(0, 8) : "-");
       var engCls = (s.engine === "codex") ? " codex" : "";
       var models = (s.models || []).join(", ");
+      // The day payload does not aggregate reasoning effort yet, so this stays
+      // empty until _throughput_sessions_from_turns rolls it up the way it
+      // already rolls up models. Accept either shape when it does.
+      var efforts = Array.isArray(s.efforts) ? s.efforts.join(", ") : String(s.reasoning_effort || "").trim();
       var span = hhmm(s.first_turn_at) + "→" + hhmm(s.last_turn_at);
       var href = "/?ccc_popout=conversation&conv=" + encodeURIComponent(s.session_id || "");
       html += "<tr>" +
@@ -696,7 +701,8 @@
         "<td>" + fmtCost(s.cost_usd) + "</td>" +
         "<td>" + fmtDuration(s.active_duration_sec) + "</td>" +
         '<td class="left">' + esc(span) + "</td>" +
-        '<td class="left models-cell">' + esc(models) + "</td>" +
+        '<td class="left models-cell">' + esc(models) +
+          (efforts ? ' <span class="effort">· ' + esc(efforts) + "</span>" : "") + "</td>" +
         "</tr>";
     });
     html += "</tbody>";

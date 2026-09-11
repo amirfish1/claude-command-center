@@ -1,4 +1,5 @@
 import pathlib
+import subprocess
 import unittest
 
 
@@ -49,7 +50,7 @@ class TestSidebarRowLayout(unittest.TestCase):
 
         self.assertIn("const _renderRowsWithRepeatGroups = (cards, opts = {}) =>", app_js)
         self.assertIn("const _repeatGroupTitleKey = (title) =>", app_js)
-        self.assertIn("if (normalized.length > 48) return normalized.slice(0, 32);", app_js)
+        self.assertIn("return words.slice(0, _REPEAT_KEY_WORDS).join(' ');", app_js)
         self.assertIn("data-role=\"repeat-row-group\"", app_js)
         self.assertIn("data-role=\"repeat-row-group-toggle\"", app_js)
         self.assertIn("ccc-repeat-row-group-expanded:", app_js)
@@ -68,6 +69,41 @@ class TestSidebarRowLayout(unittest.TestCase):
         self.assertIn(".conv-repeat-group-header", app_css)
         self.assertIn(".conv-repeat-group.is-collapsed .conv-repeat-group-body", app_css)
         self.assertIn("display: none;", app_css)
+
+    def test_repeat_key_groups_a_title_with_its_own_longer_variant(self):
+        """A title and its longer variant must land on the same repeat key.
+
+        The old rule keyed titles of 48 chars or less on their full text but
+        longer ones on a 32-char prefix, so "Drain the CCC WatchTower queue"
+        could never group with "Drain the CCC WatchTower queue and keep it
+        empty...". Queue workers spawn in exactly that shape, which is why the
+        Workers tab listed one recurring drain as four separate rows.
+        """
+        app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
+
+        start = app_js.index("const _REPEAT_KEY_FILLER = new Set([")
+        end = app_js.index("const _repeatGroupKey = (c) =>", start)
+        key_source = app_js[start:end]
+
+        script = key_source + """
+const variants = [
+  '\\u203a Drain the CCC WatchTower queue',
+  '\\u203a Drain CCC WatchTower queue',
+  'Drain the CCC WatchTower queue and keep it empty. Work in the git repo at ~/Apps/watchtower',
+];
+const keys = new Set(variants.map(_repeatGroupTitleKey));
+if (keys.size !== 1) throw new Error('variants split across keys: ' + [...keys].join(' | '));
+if (_repeatGroupTitleKey('Review the auth module') === _repeatGroupTitleKey('Review the billing module')) {
+  throw new Error('distinct tasks collapsed onto one key');
+}
+if (_repeatGroupTitleKey('   ') !== '') throw new Error('blank title should produce no key');
+console.log('ok');
+"""
+        proc = subprocess.run(
+            ["node", "-e", script], capture_output=True, text=True, timeout=30
+        )
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        self.assertEqual(proc.stdout.strip(), "ok")
 
     def test_repeated_sidebar_group_uses_the_standard_engine_cost_icon(self):
         """A repeated-row header matches a regular row's compact engine signal."""

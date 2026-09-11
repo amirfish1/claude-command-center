@@ -113,6 +113,7 @@ body {
 .q2-btn:hover { border-color: var(--accent); }
 .q2-btn-ghost { background: transparent; }
 .q2-btn[aria-pressed="true"] { border-color: var(--accent); color: var(--accent); }
+.q2-btn.is-pending { border-color: var(--accent); color: var(--accent); cursor: progress; opacity: 0.85; }
 
 /* ── three-column shell ───────────────────────────────────────────────── */
 .q2-shell {
@@ -163,9 +164,26 @@ body {
 }
 .q2-resizer:hover::after,
 .q2-resizer.is-dragging::after { opacity: 0; }
+/* Horizontal variant: the activity-log handle, dragged up/down instead of
+   left/right. Same grip-dot treatment, rotated. */
+.q2-resizer-h {
+  flex: 0 0 auto;
+  height: 6px;
+  cursor: row-resize;
+  border-left: none;
+  border-right: none;
+  border-top: 3px solid transparent;
+  border-bottom: 3px solid transparent;
+}
+.q2-resizer-h::after {
+  width: 26px;
+  height: 2px;
+}
 /* While dragging, kill text selection and pointer noise everywhere else. */
 body.q2-resizing { cursor: col-resize; user-select: none; }
-body.q2-resizing .q2-col { pointer-events: none; }
+body.q2-resizing-v { cursor: row-resize; user-select: none; }
+body.q2-resizing .q2-col,
+body.q2-resizing-v .q2-col { pointer-events: none; }
 
 .q2-col-head {
   flex: 0 0 auto;
@@ -215,13 +233,16 @@ body.q2-resizing .q2-col { pointer-events: none; }
 .q2-diagram {
   flex: 0 0 auto;
   min-height: 96px;
-  max-height: 168px;
+  max-height: 320px;
   border-bottom: 1px solid var(--border);
   background: var(--surface);
   overflow: hidden;
 }
 /* Sized for the tickets column at its 440px default, which is the tightest
-   this has to work at; the column is resizable, so it only gets roomier. */
+   this has to work at; the column is resizable, so it only gets roomier.
+   Raised from 168px (CCC-757 reopen): the worker-stage scroll fix wasn't
+   what was wanted -- the whole band should get taller before anything
+   inside it needs to scroll. */
 .q2-dg {
   height: 100%;
   display: flex;
@@ -239,7 +260,10 @@ body.q2-resizing .q2-col { pointer-events: none; }
   padding: 2px 0;
 }
 .q2-dg-stage.is-narrow { flex: 0 0 46px; align-items: center; }
-.q2-dg-stage.is-worker { flex: 1.4 1 0; justify-content: flex-start; }
+/* Live workers aren't capped like the backlog/done stacks (no "+N more"
+   chip makes sense for a running instance) -- scroll instead of silently
+   clipping workers past the band's fixed height. */
+.q2-dg-stage.is-worker { flex: 1.4 1 0; justify-content: flex-start; overflow-y: auto; max-height: 100%; }
 .q2-dg-label {
   display: flex;
   align-items: baseline;
@@ -442,10 +466,40 @@ body.q2-resizing .q2-col { pointer-events: none; }
   border-color: var(--red);
   background: color-mix(in srgb, var(--bg) 90%, var(--red));
 }
-.q2-dg-worker.is-idle-warning .q2-dg-spin { border-color: var(--orange); border-right-color: transparent; }
-.q2-dg-worker.is-idle-stale .q2-dg-spin { border-color: var(--red); border-right-color: transparent; }
+/* Kept warm on purpose (holding a blocked/needs-input ticket) -- same
+   "needs input" blue used for ticket rows (.q2-trow.is-blocked), not the
+   pending/warning/stale escalation: this worker isn't overdue for release,
+   it's correctly waiting on a human answer. */
+.q2-dg-worker.is-live.is-idle-blocked {
+  border-color: var(--wip-blue);
+  background: color-mix(in srgb, var(--bg) 90%, var(--wip-blue));
+}
+/* Idle (any severity, including the < 30m "warm" tier that used to fall
+   through with no class at all) doesn't spin -- a rotating ring means
+   "doing something right now"; idle means waiting for reuse. Severity
+   still escalates warm -> pending -> warning -> stale via colour, same as
+   the border/background above; here it only breathes gently instead of
+   rotating, and the ring goes solid (no transparent gap) so it doesn't
+   read as a spinner arc even at a glance. */
+.q2-dg-worker.is-idle-warm .q2-dg-spin { border-color: var(--green); border-right-color: var(--green); }
+.q2-dg-worker.is-idle-pending .q2-dg-spin { border-color: var(--text-muted); border-right-color: var(--text-muted); }
+.q2-dg-worker.is-idle-warning .q2-dg-spin { border-color: var(--orange); border-right-color: var(--orange); }
+.q2-dg-worker.is-idle-stale .q2-dg-spin { border-color: var(--red); border-right-color: var(--red); }
+.q2-dg-worker.is-idle-blocked .q2-dg-spin { border-color: var(--wip-blue); border-right-color: var(--wip-blue); }
+.q2-dg-worker.is-idle-warm .q2-dg-spin,
+.q2-dg-worker.is-idle-pending .q2-dg-spin,
+.q2-dg-worker.is-idle-warning .q2-dg-spin,
+.q2-dg-worker.is-idle-stale .q2-dg-spin,
+.q2-dg-worker.is-idle-blocked .q2-dg-spin {
+  animation: q2-dg-sleepy 2.6s ease-in-out infinite;
+}
+@keyframes q2-dg-sleepy {
+  0%, 100% { opacity: 0.35; transform: scale(0.85); }
+  50% { opacity: 0.9; transform: scale(1); }
+}
 .q2-dg-worker.is-idle-warning .q2-dg-worker-idle { color: var(--orange); opacity: 1; }
 .q2-dg-worker.is-idle-stale .q2-dg-worker-idle { color: var(--red); opacity: 1; }
+.q2-dg-worker.is-idle-blocked .q2-dg-worker-idle { color: var(--wip-blue); opacity: 1; }
 .q2-dg-worker.is-empty {
   border-style: dashed;
   flex-direction: row;
@@ -510,6 +564,22 @@ body.q2-resizing .q2-col { pointer-events: none; }
   text-overflow: ellipsis;
 }
 .q2-dg-worker-idle { font-size: 10.5px; color: var(--text-muted); opacity: 0.7; }
+/* Ticks every second (q2.js tickCountdowns) -- tabular-nums so the digits
+   don't jitter the surrounding text's width as they change. */
+.q2-countdown { font-variant-numeric: tabular-nums; font-family: var(--font-mono); }
+/* What the running worker was spawned with. Same readout as the tickets-column
+   header spec, but these are facts about a live process rather than links into
+   the config form, so nothing here invites a click. */
+/* Wraps rather than clips: the card is narrower than one model name, and half
+   a truncated model reads as a rendering bug. */
+.q2-dg-worker-spec {
+  flex-wrap: wrap;
+  overflow: visible;
+  font-size: 10px;
+  color: var(--text-muted);
+}
+.q2-dg-worker-spec .q2-spec-v { color: var(--text-muted); cursor: default; }
+.q2-dg-worker-spec .q2-spec-v:hover { color: var(--text-muted); border-bottom-color: transparent; }
 .q2-dg-worker-release {
   margin-left: auto;
   padding: 1px 5px;
@@ -536,12 +606,208 @@ body.q2-resizing .q2-col { pointer-events: none; }
   .q2-dg-spin { animation: none; }
 }
 
+/* ── queue attendant (manual, above the ticket list) ──────────────────────
+   Sits between the diagram and the ticket list. It replaced the status-brief
+   band while keeping the same shell,
+   tint, resizer and collapse toggle (class names below still say "brief"),
+   new content. Height-capped at 40% of the column with its own scroll -- a
+   long question or report must not push the ticket list off screen. */
+.q2-brief {
+  flex: 0 0 auto;
+  /* Height is user-adjustable via the handle below the band (sets the var
+     in px); the 40% default returns on double-click reset. */
+  max-height: var(--q2-brief-h, 40%);
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  border-bottom: 1px solid var(--border);
+  /* A faint wash of the in-progress blue: the attendant reads as its own
+     layer, distinct from the mechanical chrome above and the ticket list
+     below. */
+  background: linear-gradient(180deg, rgba(88, 166, 255, 0.07), rgba(88, 166, 255, 0.02)), var(--surface);
+}
+/* When the attendant has a body worth showing (a question, a report), it
+   should grow into whatever room the logbar handle frees up below it,
+   capped at the same max-height -- otherwise dragging that handle down just
+   shrinks the log with nothing absorbing the freed space. Collapsed/empty
+   states stay content-sized (no flex-grow) so they don't stretch into a
+   blank gap. */
+.q2-brief.q2-brief-has-body {
+  flex: 1 1 auto;
+}
+:root[data-theme="light"] .q2-brief {
+  background: linear-gradient(180deg, rgba(9, 105, 218, 0.06), rgba(9, 105, 218, 0.015)), var(--surface);
+}
+.q2-brief-elapsed { font-family: var(--font-mono); color: var(--text); }
+.q2-brief-head {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  padding: 6px 10px;
+  min-height: 28px;
+}
+.q2-brief-title {
+  font-size: 11px;
+  font-weight: 650;
+  text-transform: uppercase;
+  letter-spacing: 0.6px;
+  color: var(--text-muted);
+  white-space: nowrap;
+}
+.q2-brief-toggle {
+  flex: 0 0 auto;
+  font: inherit;
+  font-size: 10px;
+  color: var(--text-muted);
+  background: transparent;
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  padding: 2px 6px;
+  cursor: pointer;
+}
+.q2-brief-toggle:hover { color: var(--text); }
+.q2-brief-body {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 0 12px 12px;
+  font-size: 14px;
+  line-height: 1.55;
+}
+
+/* ── queue attendant: idle / ended body (last-report line) ──────────────── */
+.q2-attend-report {
+  color: var(--text-muted);
+  font-size: 12.5px;
+  padding-top: 2px;
+}
+.q2-attend-error {
+  color: var(--red);
+  font-size: 11.5px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 32ch;
+}
+.q2-attend-updated {
+  color: var(--text-muted);
+  font-size: 11px;
+  white-space: nowrap;
+  margin-left: 8px;
+}
+.q2-attend-tend { flex: 0 0 auto; }
+.q2-attend-tend[disabled] { opacity: 0.6; cursor: default; }
+
+/* ── queue attendant: pending question ───────────────────────────────────
+   "Attendant asks:" card -- one option button per choice (the attendant's
+   recommended direction arrives first), plus a free-text fallback. */
+.q2-attend-question { padding-top: 2px; }
+.q2-attend-question-title {
+  font-size: 11px;
+  font-weight: 650;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  color: var(--text-muted);
+  margin-bottom: 4px;
+}
+.q2-attend-question-header {
+  font-size: 12.5px;
+  font-weight: 650;
+  color: var(--text);
+  margin-bottom: 2px;
+}
+.q2-attend-question-text {
+  color: var(--text);
+  margin-bottom: 8px;
+}
+.q2-attend-options {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-bottom: 8px;
+}
+.q2-attend-opt {
+  text-align: left;
+  white-space: normal;
+}
+.q2-attend-opt[disabled] { opacity: 0.6; cursor: default; }
+.q2-attend-freeform {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+}
+.q2-attend-freeform .q2-attend-freetext { flex: 1 1 auto; }
+.q2-attend-freeform .q2-btn[disabled] { opacity: 0.6; cursor: default; }
+.q2-attend-question .q2-attend-error { max-width: none; margin-top: 6px; white-space: normal; }
+
+/* ── queue mechanics collapse ─────────────────────────────────────────────
+   The full backlog→watcher→worker→closed diagram folds down to one line:
+   a live dot plus the in-progress refs. The board's owner mostly wants the
+   analysis; the mechanics stay one click away. */
+.q2-diagram { position: relative; }
+.q2-dg-fold {
+  position: absolute;
+  top: 6px;
+  right: 8px;
+  font: inherit;
+  font-size: 10px;
+  color: var(--text-muted);
+  background: transparent;
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  padding: 2px 6px;
+  cursor: pointer;
+  z-index: 2;
+}
+.q2-dg-fold:hover { color: var(--text); }
+.q2-diagram-mini {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 7px 12px;
+  cursor: pointer;
+  font-size: 12px;
+  color: var(--text-muted);
+  min-width: 0;
+}
+.q2-diagram-mini:hover { color: var(--text); }
+.q2-diagram-mini .q2-mini-refs {
+  font-family: var(--font-mono);
+  color: var(--text);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.q2-mini-dot {
+  flex: none;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--green);
+  box-shadow: 0 0 7px var(--green);
+  animation: q2MiniPulse 2.4s ease-in-out infinite;
+}
+.q2-mini-dot.is-idle {
+  background: var(--text-muted);
+  box-shadow: none;
+  animation: none;
+  opacity: 0.6;
+}
+@keyframes q2MiniPulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.45; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .q2-mini-dot { animation: none; }
+}
+
 /* ── reconciler log (bottom band) ─────────────────────────────────────── */
 .q2-logbar {
   flex: 0 0 auto;
-  height: 28%;
+  height: var(--q2-logbar-h, 28%);
   min-height: 96px;
-  max-height: 230px;
+  max-height: 60vh;
   display: flex;
   flex-direction: column;
   border-top: 1px solid var(--border);
@@ -640,6 +906,15 @@ body.q2-resizing .q2-col { pointer-events: none; }
 }
 .q2-qrow:hover { background: var(--surface); }
 .q2-qrow.is-selected { background: var(--surface-2); border-left-color: var(--accent); }
+.q2-qrow-del {
+  flex: 0 0 auto; align-self: center; width: 16px; height: 16px; margin-left: 2px;
+  display: flex; align-items: center; justify-content: center;
+  border: none; background: transparent; color: var(--text-muted);
+  font-size: 14px; line-height: 1; padding: 0; border-radius: 3px;
+  cursor: pointer; opacity: 0; transition: opacity 0.12s, background 0.12s, color 0.12s;
+}
+.q2-qrow:hover .q2-qrow-del { opacity: 0.6; }
+.q2-qrow-del:hover { opacity: 1 !important; background: rgba(248,81,73,0.18); color: var(--red, #f85149); }
 .q2-qrow-main { flex: 1 1 auto; min-width: 0; }
 .q2-qrow-head { display: flex; align-items: center; gap: 6px; min-width: 0; }
 .q2-qname {
@@ -697,6 +972,7 @@ body.q2-resizing .q2-col { pointer-events: none; }
 .q2-n.is-done, .q2-n.is-done b { color: var(--text-muted); }
 /* A zero is not news. Dim it so the eye lands on the counts that matter. */
 .q2-n.is-zero, .q2-n.is-zero b { color: var(--text-muted); opacity: 0.45; }
+.q2-n.is-parked, .q2-n.is-parked b { color: var(--text-muted); }
 .q2-n-sep { color: var(--border); }
 .q2-qage { flex: 0 0 auto; color: var(--text-muted); opacity: 0.8; }
 .q2-chip {
@@ -929,6 +1205,10 @@ body.q2-resizing .q2-col { pointer-events: none; }
   box-shadow: 0 0 0 2px rgba(88, 166, 255, 0.20);
 }
 .q2-trow.is-blocked .q2-tstatus { color: var(--wip-blue); }
+/* Queued to run: an idle open ticket WatchTower will pick up on its own,
+   distinct from a plain "open" row waiting for a human decision. Wins over
+   is-open's orange since it's the more specific rule. */
+.q2-trow.is-run-requested .q2-tstatus { color: var(--purple); }
 
 .q2-tref {
   flex: 0 0 auto;
@@ -949,9 +1229,45 @@ body.q2-resizing .q2-col { pointer-events: none; }
 .q2-live-workers { padding: 10px 12px; border-bottom: 1px solid var(--border); background: var(--surface); }
 .q2-live-workers-head { font-size: 11px; font-weight: 650; color: var(--text-muted); }
 .q2-live-workers-head span { color: var(--green); }
-.q2-live-workers-list { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 7px; }
-.q2-live-worker { display: inline-flex; align-items: center; gap: 4px; font: 10.5px var(--font-mono); color: var(--text); }
-.q2-live-worker b { font: inherit; color: var(--cyan); }
+/* Same q2-dg-worker cards the per-queue diagram uses, just wrapped instead of
+   stacked in one column (workerCardHtml() is shared -- see its comment). */
+.q2-live-workers-grid {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 7px;
+}
+.q2-live-workers-grid .q2-dg-worker { width: 220px; }
+
+/* All-queues history graph (CCC-903): open / needs input / closed over the
+   last 7 days. Plain inline SVG, no chart library -- three <path> lines
+   drawn against a viewBox, matching q2's zero-dependency static/ posture. */
+.q2-history-chart { padding: 10px 12px 4px; border-bottom: 1px solid var(--border); background: var(--surface); }
+.q2-history-head { display: flex; align-items: center; gap: 10px; font-size: 11px; font-weight: 650; color: var(--text-muted); }
+.q2-history-title { white-space: nowrap; }
+.q2-history-legend-item { display: inline-flex; align-items: center; gap: 4px; font-weight: 500; white-space: nowrap; }
+.q2-history-legend-item b { font-weight: 700; color: var(--text); }
+.q2-history-swatch { width: 8px; height: 8px; border-radius: 50%; display: inline-block; }
+.q2-history-legend-open .q2-history-swatch { background: var(--cyan); }
+.q2-history-legend-needs_input .q2-history-swatch { background: var(--orange); }
+.q2-history-legend-closed .q2-history-swatch { background: var(--green); }
+.q2-history-svg { width: 100%; height: 88px; display: block; margin-top: 4px; }
+.q2-history-line { fill: none; stroke-width: 1.6; vector-effect: non-scaling-stroke; }
+.q2-history-line-open { stroke: var(--cyan); }
+.q2-history-line-needs_input { stroke: var(--orange); stroke-dasharray: 3 2; }
+.q2-history-line-closed { stroke: var(--green); }
+/* Only present with showQueue: true (the ALL view) -- a single-queue diagram
+   never needs to say which queue a card belongs to, it's the whole column.
+   Its own line rather than squeezed into the header row, which already
+   holds the worker id and two buttons. */
+.q2-dg-worker-queue {
+  font: 10px var(--font-mono);
+  color: var(--cyan);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  margin-top: 2px;
+}
 /* Triage chips: type/priority, readiness, value/confidence. Fixed width, never
    shrink — the title yields the space instead, since it is truncated anyway. */
 .q2-tchips { flex: 0 0 auto; display: inline-flex; gap: 2px; }
@@ -1049,6 +1365,9 @@ body.q2-resizing .q2-col { pointer-events: none; }
 }
 .q2-title-first { display: block; font-size: 14px; font-weight: 650; line-height: 1.4; }
 .q2-title-rest { display: block; margin-top: 6px; color: var(--text-muted); }
+h1.q2-detail-title[data-q2-title-open] { cursor: pointer; }
+h1.q2-detail-title[data-q2-title-open]:hover { background: var(--bg-hover, rgba(255,255,255,0.06)); border-radius: 4px; }
+.q2-title-edit textarea.q2-input { width: 100%; font-size: 12.5px; }
 
 /* No properties rail: the pane is one column, split top (ticket) / bottom
    (conversation). The old fixed 232px sidebar is what stopped this column
@@ -1069,6 +1388,16 @@ body.q2-resizing .q2-col { pointer-events: none; }
 }
 .q2-detail-foot .q2-dim { flex: 1 1 auto; color: var(--text-muted); }
 .q2-learnings-body { max-height: none; margin: 0; }
+.q2-learnings-edit-btn {
+  display: block;
+  width: 100%;
+  margin-top: 14px;
+  padding: 12px 16px;
+  font-size: 14px;
+  font-weight: 600;
+  text-align: center;
+  border-radius: 8px;
+}
 
 /* Assignment + origin, one wrapping strip instead of a sidebar. */
 .q2-meta-strip {
@@ -1107,6 +1436,11 @@ body.q2-resizing .q2-col { pointer-events: none; }
   padding-left: 14px;
 }
 .q2-actrow { display: flex; justify-content: flex-end; gap: 6px; margin-top: 6px; }
+
+/* Resolution actions below the full prompt: close-as-completed,
+   close-as-not-relevant, run now. Left-aligned, unlike .q2-actrow's
+   confirm/cancel row — these are the primary next step, not a footer. */
+.q2-resolve-row { display: flex; flex-wrap: wrap; gap: 6px; }
 
 /* Chips that edit on click. */
 .q2-echip { cursor: pointer; font: inherit; font-size: 10px; }
@@ -1225,6 +1559,10 @@ body.q2-resizing .q2-col { pointer-events: none; }
 .q2-status.is-in_progress { color: var(--green); }
 .q2-status.is-blocked { color: var(--wip-blue); }
 .q2-status.is-closed { color: var(--text-muted); }
+/* Queued to run: idle but not "just open" — WatchTower's reconciler will
+   pick it up on its own. Purple keeps it out of the orange/green/blue set
+   already meaning open/in-progress/blocked. */
+.q2-status.is-run-requested { color: var(--purple); }
 
 .q2-sec { margin-bottom: 18px; }
 .q2-sec-label {
@@ -1418,13 +1756,33 @@ body.q2-resizing .q2-col { pointer-events: none; }
   .q2-topbar .q2-note,
   .q2-topbar .q2-stale { flex: 1 0 100%; }
   .q2-shell {
-    display: block;
+    display: flex;
+    flex-direction: column;
     overflow: hidden;
   }
-  .q2-col { display: none; height: 100%; border-right: 0; }
-  .q2-shell[data-mobile-panel="queues"] .q2-col-queues,
-  .q2-shell[data-mobile-panel="tickets"] .q2-col-tickets,
-  .q2-shell[data-mobile-panel="detail"] .q2-col-detail { display: flex; }
+  .q2-col { display: none; border-right: 0; min-height: 0; }
+  /* Ticket detail is a popup on every viewport (CCC-904), so there is no
+     third mobile panel to route to any more -- "tickets" shows column 2
+     (attendant/log) and column 3 (search + list) together, sharing the
+     viewport instead of stacking two height:100% columns (the list was
+     clipped under overflow:hidden). */
+  .q2-shell[data-mobile-panel="queues"] .q2-col-queues {
+    display: flex;
+    flex: 1 1 auto;
+  }
+  .q2-shell[data-mobile-panel="tickets"] .q2-col-tickets {
+    display: flex;
+    flex: 0 1 auto;
+    max-height: 38%;
+  }
+  .q2-shell[data-mobile-panel="tickets"] .q2-col-detail {
+    display: flex;
+    flex: 1 1 auto;
+    min-height: 0;
+    border-top: 1px solid var(--border);
+  }
+  .q2-diagram { min-height: 0; max-height: 28vh; }
+  .q2-diagram:has(.q2-diagram-mini) { max-height: none; }
   .q2-mobile-back {
     display: inline-flex;
     flex: 0 0 auto;
@@ -1439,11 +1797,58 @@ body.q2-resizing .q2-col { pointer-events: none; }
     font-size: 11px;
     font-weight: 600;
   }
-  .q2-detail-mobile-back {
-    margin: 6px 8px 0;
-    align-self: flex-start;
-  }
   .q2-resizer { display: none; }
+  .q2-col-head {
+    height: auto;
+    min-height: 32px;
+    flex-wrap: wrap;
+    padding: 4px 8px;
+  }
+  /* "Edit Prompt" opens the learnings doc in the right-hand pane — a
+     desktop layout. On a phone the title already gets you there. */
+  #q2EditPromptBtn { display: none; }
+}
+
+/* Sessions vs Queues bottom nav. Mirrors the dashboard's
+   body.has-mobile-bottom-nav chrome (static/app.css). Shown at the same
+   1200px gate as the dashboard overlay so a phone never loses the rail's
+   Sessions/Queues switch (the rail itself hides at 700px). */
+html.ccc-framed .q2-mobile-bottom-nav { display: none !important; }
+html.ccc-framed .q2-shell { padding-bottom: 0; }
+.q2-mobile-bottom-nav { display: none; }
+@media (max-width: 1200px) {
+  .q2-mobile-bottom-nav {
+    position: fixed;
+    left: 0; right: 0; bottom: 0;
+    z-index: 50;
+    display: flex;
+    background: var(--surface);
+    border-top: 1px solid var(--border);
+    padding: 6px 4px calc(6px + env(safe-area-inset-bottom, 0px));
+  }
+  .q2-mobile-nav-btn {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 2px;
+    font-family: inherit;
+    text-decoration: none;
+    cursor: pointer;
+    border: none;
+    background: transparent;
+    color: var(--text-muted);
+    border-radius: 8px;
+    padding: 6px 4px;
+    min-height: 48px;
+  }
+  .q2-mobile-nav-btn.is-active { color: var(--green); }
+  .q2-mobile-nav-icon { font-size: 18px; line-height: 1; }
+  .q2-mobile-nav-label { font-size: 10.5px; font-weight: 600; }
+  .q2-shell {
+    padding-bottom: calc(64px + env(safe-area-inset-bottom, 0px));
+  }
 }
 
 /* ── modals ───────────────────────────────────────────────────────────── */
@@ -1489,6 +1894,20 @@ body.q2-resizing .q2-col { pointer-events: none; }
 .q2-modal-sys { font-size: 10.5px; white-space: nowrap; }
 .q2-btn-primary { border-color: var(--accent); color: var(--accent); }
 
+/* Ticket detail popup (CCC-904): wider than the form modals since it carries
+   the full detail pane (chips, prompt, timeline, answer box). The close
+   button floats over renderDetail()'s own markup rather than living inside
+   it, because renderDetail() replaces #q2Detail's innerHTML wholesale on
+   every repaint and would wipe a button placed inside it. */
+.q2-modal.q2-modal-detail { width: min(760px, calc(100vw - 40px)); }
+.q2-modal-detail-close {
+  position: absolute;
+  top: 10px;
+  right: 10px;
+  z-index: 1;
+  background: var(--surface);
+}
+
 /* Paste / drop target for ticket screenshots. */
 .q2-drop {
   min-height: 74px;
@@ -1529,6 +1948,13 @@ body.q2-resizing .q2-col { pointer-events: none; }
 .q2-checkrow label { display: inline-flex; align-items: center; gap: 5px; cursor: pointer; }
 @media (max-width: 620px) { .q2-fields { grid-template-columns: 1fr; } }
 
+.q2-fields-optional { margin-top: 4px; border-top: 1px solid var(--border); padding-top: 8px; }
+.q2-fields-optional > summary { cursor: pointer; font-size: 12px; color: var(--text-muted); list-style: none; }
+.q2-fields-optional > summary::-webkit-details-marker { display: none; }
+.q2-fields-optional > summary::before { content: '\25b8'; display: inline-block; margin-right: 5px; transition: transform 0.1s; }
+.q2-fields-optional[open] > summary::before { transform: rotate(90deg); }
+.q2-fields-optional > .q2-fields { margin-top: 10px; }
+
 /* The ticket dot doubles as a run control: hover swaps it for a play glyph,
    click queues the ticket. Mirrors the main dashboard's .fq-status-action.
    Only rendered for tickets that CAN run — closed and live-claimed rows keep
@@ -1561,6 +1987,23 @@ body.q2-resizing .q2-col { pointer-events: none; }
 .q2-tdot-wrap.is-queued { color: var(--orange); }
 .q2-tdot-wrap.is-queued .q2-tdot { opacity: 0; }
 .q2-tdot-wrap.is-queued .q2-tdot-play { opacity: 1; }
+/* Click-to-run round trip: the row doesn't re-render until /api/ux-fixes/run
+   resolves and refresh() comes back, so without this the click looked like
+   nothing happened. */
+.q2-tdot-wrap.is-pending { pointer-events: none; color: var(--accent); }
+.q2-tdot-wrap.is-pending .q2-tdot,
+.q2-tdot-wrap.is-pending .q2-tdot-play { opacity: 0; }
+.q2-tdot-wrap.is-pending::after {
+  content: '';
+  position: absolute;
+  width: 9px;
+  height: 9px;
+  border: 1.5px solid currentColor;
+  border-right-color: transparent;
+  border-radius: 50%;
+  animation: q2-run-spin 0.7s linear infinite;
+}
+@keyframes q2-run-spin { to { transform: rotate(360deg); } }
 
 .q2-icon-btn svg { display: block; }
 

@@ -1,0 +1,1 @@
+Make conversation time-window toggles (Now, 1d, 7d, All) respond immediately (<1ms) via in-memory filtering and immediate tab feedback, and surface the quick trash button alongside the 2-dot kebab menu and session UUID on row hover.

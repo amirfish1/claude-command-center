@@ -9,15 +9,50 @@ Disabled gracefully when:
 - osascript isn't on PATH (non-macOS)
 - the user's display is locked / the call fails — Popen is fire-and-forget
   so a hook never blocks on notification delivery
+
+The Stop hook fires on every turn a session takes, not just when it goes
+truly idle — a session doing many quick turns in a row (e.g. an automated
+worker draining a queue) would otherwise bang out a banner+sound per turn.
+notify() is debounced per (session, title) pair via CCC_NOTIFY_COOLDOWN_S
+(default 30s) so bursts collapse to one sound.
 """
 
 import os
 import shutil
 import subprocess
+import time
+
+LIVE_STATE_DIR = os.path.expanduser("~/.claude/command-center/live-state")
 
 
 def _enabled():
     return os.environ.get("CCC_NOTIFY", "1") != "0"
+
+
+def _cooldown_s():
+    try:
+        return float(os.environ.get("CCC_NOTIFY_COOLDOWN_S", "30"))
+    except ValueError:
+        return 30.0
+
+
+def _debounced(session_id, title):
+    """True if a notification with this (session, title) fired too recently."""
+    cooldown = _cooldown_s()
+    if cooldown <= 0 or not session_id:
+        return False
+    try:
+        os.makedirs(LIVE_STATE_DIR, exist_ok=True)
+        key = "".join(c if c.isalnum() else "_" for c in f"{session_id}_{title}")
+        marker = os.path.join(LIVE_STATE_DIR, f"_notify_{key}.ts")
+        now = time.time()
+        if os.path.exists(marker) and (now - os.path.getmtime(marker)) < cooldown:
+            return True
+        with open(marker, "w") as f:
+            f.write(str(now))
+    except OSError:
+        return False
+    return False
 
 
 def _esc(s):
@@ -28,8 +63,10 @@ def _esc(s):
     return s.replace("\\", "\\\\").replace('"', '\\"')[:240]
 
 
-def notify(title, message, subtitle=""):
+def notify(title, message, subtitle="", session_id=""):
     if not _enabled():
+        return
+    if _debounced(session_id or subtitle, title):
         return
     osascript = shutil.which("osascript")
     if not osascript:

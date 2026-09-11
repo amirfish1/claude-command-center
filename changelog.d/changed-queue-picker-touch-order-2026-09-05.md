@@ -1,0 +1,1 @@
+- Sort the queue dropdown by latest ticket activity, with one entry per queue and the same ordering in search results. Queues without activity appear last.

@@ -59,7 +59,7 @@ def test_trashing_open_row_selects_visible_neighbor_after_success():
 
 def test_workers_lane_rows_use_all_main_lifecycle_actions():
     assert "const _allTabWorkerConvs = _allTabConvs.filter" in APP_JS
-    assert "const _allTabMainConvs = (_allTabHasHermesSplit && _allTabView === 'workers')" in APP_JS
+    assert "const _allTabMainConvs = _allTabView === 'workers'" in APP_JS
     assert "{ lifecycleContext: 'all-main', suppressFolderChip:" in APP_JS
 
 

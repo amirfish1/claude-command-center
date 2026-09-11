@@ -1,0 +1,95 @@
+/* Copyright (c) 2026 Amir Fish. All rights reserved. SPDX-License-Identifier: LicenseRef-CCC-Software-License */
+.codex-media {
+  display: grid;
+  gap: 10px;
+  min-width: 0;
+}
+
+.codex-media-panel {
+  display: grid;
+  gap: 8px;
+  min-width: 0;
+  padding: 10px;
+  border: 1px solid var(--border, #30363d);
+  border-radius: 10px;
+  background: var(--surface, #161b22);
+}
+
+.codex-media-title {
+  margin: 0;
+  color: var(--text, #e6edf3);
+  font-size: 13px;
+  font-weight: 650;
+}
+
+.codex-media-fields,
+.codex-media-running,
+.codex-media-text-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+
+.codex-media-command,
+.codex-media-stdin,
+.codex-media-select {
+  min-width: 0;
+  height: 30px;
+  border: 1px solid var(--border, #30363d);
+  border-radius: 6px;
+  background: var(--bg, #0d1117);
+  color: var(--text, #e6edf3);
+  font: inherit;
+}
+
+.codex-media-command,
+.codex-media-stdin {
+  flex: 1 1 12rem;
+  padding: 0 8px;
+}
+
+.codex-media-select { max-width: 11rem; padding: 0 5px; }
+.codex-media-check { white-space: nowrap; color: var(--text-muted, #666); font-size: 12px; }
+
+.codex-media-button {
+  min-height: 30px;
+  padding: 4px 9px;
+  border: 1px solid var(--border, #30363d);
+  border-radius: 6px;
+  background: var(--bg, #0d1117);
+  color: var(--text, #e6edf3);
+  font: inherit;
+  cursor: pointer;
+}
+
+.codex-media-button.is-primary { border-color: var(--accent, #d97757); color: var(--accent, #b55235); }
+.codex-media-button:disabled { cursor: default; opacity: .5; }
+
+.codex-media-output,
+.codex-media-transcript {
+  box-sizing: border-box;
+  min-height: 86px;
+  max-height: 220px;
+  margin: 0;
+  overflow: auto;
+  padding: 8px;
+  border-radius: 6px;
+  background: #141414;
+  color: #e9e9e9;
+  font: 12px/1.45 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.codex-media-transcript { min-height: 62px; background: var(--bg, #0d1117); color: var(--text, #e6edf3); }
+.codex-media-status { min-height: 1.2em; color: var(--text-muted, #666); font-size: 11px; }
+.codex-media-support { color: var(--text-muted, #666); font-size: 11px; }
+
+@media (max-width: 760px) {
+  .codex-media-fields,
+  .codex-media-running,
+  .codex-media-text-row { flex-wrap: wrap; }
+  .codex-media-command,
+  .codex-media-stdin { flex-basis: 100%; }
+}
