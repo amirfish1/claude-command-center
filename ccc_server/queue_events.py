@@ -2052,7 +2052,15 @@ def resume_session_codex(
     reasoning_effort = (override or {}).get("reasoning_effort") or ""
     model = override_model or os.environ.get("CCC_CODEX_MODEL") or row.get("model") or _core._spawn_fallback_model_for_engine("codex")
     if override_model:
-        model, model_error = _core._validate_codex_model(model, require_available=True)
+        # A session that began on a policy-blocked model only got here after
+        # the user confirmed that one explicit choice. Keep that confirmation
+        # with the override, rather than rejecting the same model on every
+        # later wake.
+        model, model_error = _core._validate_codex_model(
+            model,
+            require_available=True,
+            confirm_blocked=bool((override or {}).get("policy_confirmed")),
+        )
         if model_error:
             return {
                 "ok": False,

@@ -15440,6 +15440,12 @@ class TestModelPicker(unittest.TestCase):
                 self.assertEqual(got["model"], "claude-sonnet-4-6")
                 self.assertFalse(got["context_1m"])
                 self.assertEqual(got["engine"], "claude")
+                server._set_session_override(
+                    "sid-1", "gpt-6-astra", False, "codex",
+                    policy_confirmed=True,
+                )
+                got = server._get_session_override("sid-1")
+                self.assertTrue(got["policy_confirmed"])
                 server._clear_session_override("sid-1")
                 self.assertIsNone(server._get_session_override("sid-1"))
             finally:

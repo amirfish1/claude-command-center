@@ -193,6 +193,32 @@ def test_existing_resume_entry_never_falls_through_after_desktop_delivery(tmp_pa
     desktop_send.assert_called_once()
 
 
+def test_confirmed_blocked_codex_override_resumes_without_reprompt(tmp_path):
+    """A policy warning accepted at spawn remains valid for that session."""
+    import server
+    from ccc_server import queue_events, codex_client
+
+    def validate(model, *, require_available=False, confirm_blocked=False):
+        assert model == "gpt-6-astra"
+        assert require_available is True
+        assert confirm_blocked is True
+        return model, None
+
+    reply = {"ok": True, "via": "codex-desktop", "accepted": True}
+    with mock.patch.object(server, "_resolve_codex_bin", return_value={"available": True, "bin": "unused"}), \
+         mock.patch.object(server, "_spawned_sessions", []), \
+         mock.patch.object(server, "_codex_thread_row", return_value={"cwd": str(tmp_path), "model": "gpt-5.6-terra"}), \
+         mock.patch.object(server, "_spawn_registry_entry_for_session", return_value={}), \
+         mock.patch.object(server, "_get_session_override", return_value={"model": "gpt-6-astra", "policy_confirmed": True}), \
+         mock.patch.object(server, "_validate_codex_model", side_effect=validate), \
+         mock.patch.object(server, "_resume_ledger_append"), \
+         mock.patch.object(codex_client, "resume_desktop_conversation", return_value=reply) as desktop_send:
+        result = queue_events.resume_session_codex("task", "Follow up", _native_delivery=True)
+
+    assert result == reply
+    assert desktop_send.call_args.kwargs["model"] == "gpt-6-astra"
+
+
 def test_desktop_steer_targets_owner_with_desktop_composer_payload(peer):
     client,requests=peer
     client.snapshot('task')

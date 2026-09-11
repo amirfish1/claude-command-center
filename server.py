@@ -4995,7 +4995,10 @@ CODEX_REASONING_EFFORTS = {"", "low", "medium", "high", "xhigh"}
 CLAUDE_REASONING_EFFORTS = {"", "low", "medium", "high", "xhigh", "max"}
 
 
-def _set_session_override(session_id, model, context_1m, engine, reasoning_effort=""):
+def _set_session_override(
+    session_id, model, context_1m, engine, reasoning_effort="", *,
+    policy_confirmed=False,
+):
     overrides = _load_session_overrides()
     engine = str(engine or "claude")
     overrides[session_id] = {
@@ -5003,6 +5006,10 @@ def _set_session_override(session_id, model, context_1m, engine, reasoning_effor
         "context_1m": _model_context_1m_allowed(model, context_1m, engine),
         "engine": engine,
         "reasoning_effort": str(reasoning_effort or ""),
+        # A blocked model can only reach a spawn after the user explicitly
+        # confirms the policy warning. Preserve that receipt with this
+        # session's chosen model so a later resume does not ask again.
+        "policy_confirmed": bool(policy_confirmed),
         "set_at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
     }
     _save_session_overrides(overrides)
