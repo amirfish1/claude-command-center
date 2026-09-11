@@ -60528,6 +60528,32 @@
     out.sort((a, b) => (a.depth - b.depth) || (b.mtime - a.mtime));
     return out;
   }
+  // Manual sidebar links are explicit user assertions for sessions that did
+  // not originate through CCC's spawn API. The lane map needs to honor them
+  // too; otherwise an attached child is visible in the sidebar but silently
+  // disappears from the parent's orchestration view.
+  function orchAppendManualLanes(parentSid, lanes) {
+    const rows = conversationsData || [];
+    const byId = new Map();
+    rows.forEach(row => { if (row && row.session_id) byId.set(row.session_id, row); });
+    const spawnById = new Map();
+    (_orchSpawnedRegistry || []).forEach(spawn => {
+      if (spawn && spawn.session_id) spawnById.set(spawn.session_id, spawn);
+    });
+    const seen = new Set((lanes || []).map(lane => lane.id));
+    rows.forEach(row => {
+      const id = String((row && row.session_id) || '');
+      if (!id || seen.has(id) || manualSubsessionParentId(id) !== parentSid) return;
+      const lane = orchLane(row, spawnById.get(id) || null);
+      lane.depth = 0;
+      lane.isTaskSubagent = false;
+      lane.source = 'manual-subsession';
+      seen.add(id);
+      lanes.push(lane);
+    });
+    lanes.sort((a, b) => ((a.depth || 0) - (b.depth || 0)) || (b.mtime - a.mtime));
+    return lanes;
+  }
   function orchCollectLanes(sid) {
     if (_orchSim) return _orchSim.lanes.slice();
     if (!sid) return [];
@@ -60536,7 +60562,7 @@
     // and Claude Task-tool subagents that the flat lookup can't see.
     if (_orchFamilyTree && _orchFamilyTreeSid === sid) {
       const treeLanes = orchFlattenTree(_orchFamilyTree, sid);
-      if (treeLanes.length) return treeLanes;
+      if (treeLanes.length) return orchAppendManualLanes(sid, treeLanes);
     }
     // Fallback: original flat collection (direct children only).
     const rows = conversationsData || [];
@@ -60568,7 +60594,7 @@
     });
     // Newest first inside each band so a fresh lane enters on the left.
     lanes.sort((a, b) => b.mtime - a.mtime);
-    return lanes;
+    return orchAppendManualLanes(sid, lanes);
   }
   // Two sources: /api/sessions/spawned is the live-ish window (recent
   // runs, carries running/status) and /api/sessions/children is the full

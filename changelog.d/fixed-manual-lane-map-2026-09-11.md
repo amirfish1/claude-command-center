@@ -1,0 +1,1 @@
+- Show manually attached sub-sessions in their parent's orchestration lane map.
