@@ -2385,8 +2385,22 @@ def _set_session_model(session_id, model, context_1m, reasoning_effort=None, eff
     if not session_id or not model:
         return {"ok": False, "error": "missing session_id or model"}
     engine = _core._detect_session_engine(session_id)
+    override = _core._get_session_override(session_id) or {}
+    # An effort-only picker update re-sends the current model.  When that
+    # model was explicitly policy-confirmed for this session, retain the
+    # confirmation instead of treating the unchanged selection as a new
+    # blocked-model request.
+    policy_confirmed = (
+        engine == "codex"
+        and effort_only
+        and bool(override.get("policy_confirmed"))
+        and str(override.get("model") or "").strip().lower()
+        == str(model or "").strip().lower()
+    )
     if engine == "codex":
-        model, model_error = _core._validate_codex_model(model, require_available=True)
+        model, model_error = _core._validate_codex_model(
+            model, require_available=True, confirm_blocked=policy_confirmed,
+        )
         if model_error:
             return {
                 "ok": False,
@@ -2427,7 +2441,15 @@ def _set_session_model(session_id, model, context_1m, reasoning_effort=None, eff
             "applied": "live",
             "via": "kimi-acp-config",
         }
-    _core._set_session_override(session_id, model, context_1m, engine, reasoning_effort)
+    if policy_confirmed:
+        _core._set_session_override(
+            session_id, model, context_1m, engine, reasoning_effort,
+            policy_confirmed=True,
+        )
+    else:
+        _core._set_session_override(
+            session_id, model, context_1m, engine, reasoning_effort,
+        )
     payload = {
         "ok": True,
         "model": model,

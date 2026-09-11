@@ -129,6 +129,25 @@ class TestModelPolicy(_PolicyFixture):
         self.assertIsNone(err)
         self.assertEqual(model, "gpt-6-astra")
 
+    def test_confirmed_blocked_codex_model_allows_effort_only_update(self):
+        """Changing effort keeps the confirmation for the unchanged model."""
+        self.block("gpt-6-astra")
+        with patch.object(server, "_detect_session_engine", return_value="codex"), \
+             patch.object(
+                 server,
+                 "_get_session_override",
+                 return_value={"model": "gpt-6-astra", "policy_confirmed": True},
+             ), \
+             patch.object(server, "_set_session_override") as set_override:
+            result = server._set_session_model(
+                "sid-1", "gpt-6-astra", False, "high", effort_only=True,
+            )
+
+        self.assertTrue(result["ok"])
+        self.assertEqual(result["applied"], "queued")
+        self.assertEqual(result["reasoning_effort"], "high")
+        self.assertTrue(set_override.call_args.kwargs["policy_confirmed"])
+
     def test_default_resolution_never_honors_confirm(self):
         # confirm_blocked_model is only meaningful for an explicit ask -- an
         # inherited/blank default must never resolve to a blocked model, human
