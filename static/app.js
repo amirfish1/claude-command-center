@@ -53396,7 +53396,7 @@
     }
     pop.querySelectorAll('.mp-reasoning-row[data-reasoning]').forEach((row) => {
       row.addEventListener('click', () => {
-        applyModel(currentModel, currentIs1M, row.dataset.reasoning, engine === 'claude');
+        applyModel(currentModel, currentIs1M, row.dataset.reasoning, engine === 'claude' || engine === 'codex');
       });
     });
     const otherInput = pop.querySelector('[data-mp-other-input]');

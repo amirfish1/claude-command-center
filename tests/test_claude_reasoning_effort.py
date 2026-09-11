@@ -27,6 +27,16 @@ def test_claude_picker_uses_effort_only_requests_and_resume_flag():
     assert 'cmd.extend(["--effort", effort])' in server_py
 
 
+def test_codex_picker_marks_reasoning_updates_as_effort_only():
+    app_js = Path("static/app.js").read_text(encoding="utf-8")
+    handler = app_js[
+        app_js.index("pop.querySelectorAll('.mp-reasoning-row[data-reasoning]')"):
+        app_js.index("const otherInput =", app_js.index("pop.querySelectorAll('.mp-reasoning-row[data-reasoning]')"))
+    ]
+
+    assert "engine === 'claude' || engine === 'codex'" in handler
+
+
 def test_effort_ladder_is_per_engine():
     assert "max" in server._engine_reasoning_efforts("claude")
     assert "max" not in server._engine_reasoning_efforts("codex")
