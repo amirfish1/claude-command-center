@@ -1,0 +1,1 @@
+- Remove the composer’s usage-limit auto-resume countdown banner.

@@ -9592,51 +9592,6 @@
     to { transform: rotate(360deg); }
   }
 
-  /* CCC-863: unattended usage-limit auto-resume countdown, shown above the
-     composer while a stopped session waits out its quota reset. No manual
-     resume control by design -- the server sends "continue" itself. */
-  .usage-limit-resume-banner {
-    margin: 0 0 8px;
-    padding: 6px 8px 6px 12px;
-    border: 1px dashed color-mix(in srgb, var(--warning, #d9822b) 55%, var(--border) 45%);
-    border-radius: 8px;
-    background: color-mix(in srgb, var(--warning, #d9822b) 10%, var(--surface) 90%);
-    font-size: 12px; font-weight: 600; letter-spacing: 0.02em;
-    font-variant-numeric: tabular-nums;
-    color: var(--text);
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    gap: 8px;
-  }
-  .usage-limit-resume-banner.is-cancel-error {
-    border-style: solid;
-    border-color: color-mix(in srgb, var(--danger, #f85149) 65%, var(--border) 35%);
-    background: color-mix(in srgb, var(--danger, #f85149) 10%, var(--surface) 90%);
-  }
-
-  .usage-limit-resume-cancel {
-    flex: 0 0 auto;
-    border: none;
-    background: transparent;
-    color: var(--text-secondary, var(--text));
-    font-size: 15px;
-    line-height: 1;
-    cursor: pointer;
-    padding: 2px 4px;
-    border-radius: 4px;
-    opacity: 0.7;
-    white-space: nowrap;
-  }
-  .usage-limit-resume-banner.is-cancel-error .usage-limit-resume-cancel {
-    font-size: 11px;
-    font-weight: 700;
-  }
-  .usage-limit-resume-cancel:hover {
-    opacity: 1;
-    background: color-mix(in srgb, var(--warning, #d9822b) 20%, transparent);
-  }
-
   .conv-input-bar .tts-btn.speaking.paused {
     /* Paused but still active — calmer color so the button reads as
        "click to resume" instead of "still speaking". */
