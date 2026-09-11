@@ -7592,20 +7592,16 @@
   #convList .conv-archived-tools-right {
     display: flex;
     align-items: center;
-    justify-content: flex-end;
+    justify-content: space-between;
     flex: 1 1 0;
     min-width: 0;
     gap: 6px;
-    /* Keep all archive filters together; overflow horizontally rather than
-       putting the density control on a surprise second row. */
-    flex-wrap: nowrap;
-    overflow-x: auto;
-    scrollbar-width: none;
+    /* Use the toolbar width before adding a line, so every filter remains
+       reachable without a hidden horizontal scroll area. */
+    flex-wrap: wrap;
+    overflow: visible;
   }
-  #convList .conv-archived-tools-right::-webkit-scrollbar { display: none; }
-  /* `overflow-x:auto` also creates an overflow clip vertically, which would
-     hide the engine picker below its trigger. Let the popup escape only while
-     that picker is open; the normal closed toolbar still scrolls horizontally. */
+  /* Keep the engine popup outside the toolbar while it is open. */
   #convList .conv-archived-tools-right.has-engine-filter-open { overflow: visible; }
   #convList .conv-archived-tools-right > * {
     flex: 0 0 auto;

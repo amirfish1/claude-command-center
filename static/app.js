@@ -37134,8 +37134,11 @@
           + '</details>'
           + '</div>';
       }
+      const _arcToolsLeft = _arcExpandAllToggle
+        ? '<span class="conv-archived-tools-left">' + _arcExpandAllToggle + '</span>'
+        : '';
       const _arcTools = '<div class="conv-archived-tools" data-role="archived-tools">'
-          + '<span class="conv-archived-tools-left">' + _arcExpandAllToggle + '</span>'
+          + _arcToolsLeft
           + '<span class="conv-archived-tools-right">' + _arcWindowToggle + _arcEngineToggle + _arcGroupingToggle
             + (_arcHasDensity ? _arcDenseToggle : _arcWrapToggle + _arcDetailsToggle) + '</span>'
           + '</div>';

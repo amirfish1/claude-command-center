@@ -1,0 +1,1 @@
+- Archived-session filters now use the full toolbar and wrap instead of scrolling horizontally.
