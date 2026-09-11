@@ -44906,6 +44906,8 @@
         + ' aria-label="Open full details for ' + escapeAttr(ref + ': ' + title) + '">'
         + '<span class="fq-recent-title"><span class="fq-recent-ref">' + escapeHtml(ref) + '</span> ' + escapeHtml(title) + '</span>'
         + '<span class="fq-recent-meta"><span class="fq-recent-state' + (row.resolved ? ' is-resolved' : '') + '">' + escapeHtml(state) + '</span>'
+        + (row.resolved ? '<time class="fq-recent-resolved" datetime="' + escapeAttr(item.closed_at || row.at) + '" title="Resolved: ' + escapeAttr(new Date(item.closed_at || row.at).toLocaleString()) + '">'
+          + escapeHtml('resolved ' + _uxqRelTime(item.closed_at || row.at)) + '</time>' : '')
         + '<span>' + escapeHtml(row.worker || 'Worker not recorded') + '</span></span>'
         // Relative and absolute are separate spans so the narrow Workers lane
         // can drop the absolute stamp (still in the tooltip) without losing

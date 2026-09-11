@@ -1,0 +1,1 @@
+- Show a compact resolution time on recently worked closed tickets in the Workers lane.
