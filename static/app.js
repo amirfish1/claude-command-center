@@ -15227,10 +15227,14 @@
   // The sidebar list is rebuilt wholesale on archive refreshes. Delegate this
   // control from the stable list container so a redraw cannot leave the model
   // filter's newly-rendered buttons without their click behavior.
+  function _setArchiveEngineFilterOpen(wrap, open) {
+    wrap?.closest('.conv-archived-tools-right')?.classList.toggle('has-engine-filter-open', !!open);
+  }
   function _closeArchiveEngineFilters() {
     $convList?.querySelectorAll('.conv-archived-engine-filter').forEach(wrap => {
       clearTimeout(wrap._archiveEngineCollapseTimer);
       wrap.classList.remove('is-expanded');
+      _setArchiveEngineFilterOpen(wrap, false);
       wrap.querySelector('[data-archive-engine-trigger]')?.setAttribute('aria-expanded', 'false');
     });
   }
@@ -15248,10 +15252,12 @@
       }
       clearTimeout(wrap._archiveEngineCollapseTimer);
       const expanded = wrap.classList.toggle('is-expanded');
+      _setArchiveEngineFilterOpen(wrap, expanded);
       trigger.setAttribute('aria-expanded', expanded ? 'true' : 'false');
       if (expanded) {
         wrap._archiveEngineCollapseTimer = setTimeout(() => {
           wrap.classList.remove('is-expanded');
+          _setArchiveEngineFilterOpen(wrap, false);
           trigger.setAttribute('aria-expanded', 'false');
         }, 2000);
       }
@@ -15286,6 +15292,7 @@
       clearTimeout(wrap._archiveEngineCollapseTimer);
       if (!wrap.classList.contains('is-expanded')) {
         wrap.classList.add('is-expanded');
+        _setArchiveEngineFilterOpen(wrap, true);
         trigger.setAttribute('aria-expanded', 'true');
       }
       return;
@@ -15296,6 +15303,7 @@
     clearTimeout(wrap._archiveEngineCollapseTimer);
     wrap._archiveEngineCollapseTimer = setTimeout(() => {
       wrap.classList.remove('is-expanded');
+      _setArchiveEngineFilterOpen(wrap, false);
       trigger.setAttribute('aria-expanded', 'false');
     }, 2000);
   }

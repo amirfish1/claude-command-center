@@ -7601,6 +7601,10 @@
     scrollbar-width: none;
   }
   #convList .conv-archived-tools-right::-webkit-scrollbar { display: none; }
+  /* `overflow-x:auto` also creates an overflow clip vertically, which would
+     hide the engine picker below its trigger. Let the popup escape only while
+     that picker is open; the normal closed toolbar still scrolls horizontally. */
+  #convList .conv-archived-tools-right.has-engine-filter-open { overflow: visible; }
   #convList .conv-archived-tools-right > * {
     flex: 0 0 auto;
     white-space: nowrap;
