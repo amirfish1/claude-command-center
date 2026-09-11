@@ -23557,6 +23557,30 @@ def _slugify(text, max_len=40):
     return slug[:max_len].rstrip("-")
 
 
+def _cleanup_failed_spawn_worktree(toplevel, candidate, branch):
+    """Remove the exact worktree/branch reserved for a failed spawn attempt."""
+    if not candidate.exists():
+        return ""
+    try:
+        remove = subprocess.run(
+            ["git", "-C", str(toplevel), "worktree", "remove", "--force", str(candidate)],
+            capture_output=True, text=True, timeout=30,
+        )
+    except (OSError, subprocess.SubprocessError) as exc:
+        return f"; cleanup failed: {exc}"
+    if remove.returncode != 0:
+        detail = remove.stderr.strip() or remove.stdout.strip() or str(remove.returncode)
+        return f"; cleanup failed: {detail}"
+    try:
+        subprocess.run(
+            ["git", "-C", str(toplevel), "branch", "-D", branch],
+            capture_output=True, text=True, timeout=10,
+        )
+    except (OSError, subprocess.SubprocessError) as exc:
+        return f"; worktree removed but branch cleanup failed: {exc}"
+    return ""
+
+
 def _create_worktree_for_spawn(source_cwd, slug):
     """Create `<source-parent>/<source-name>-wt/<slug>/` as a git worktree
     on a fresh `feat/<slug>` branch off `source_cwd`'s current HEAD, and
@@ -23621,12 +23645,21 @@ def _create_worktree_for_spawn(source_cwd, slug):
                 branch = cand_branch
                 break
             branch_suffix += 1
-    add = subprocess.run(
-        ["git", "-C", str(toplevel), "worktree", "add", str(candidate), "-b", branch],
-        capture_output=True, text=True, timeout=15,
-    )
+    try:
+        add = subprocess.run(
+            ["git", "-C", str(toplevel), "worktree", "add", str(candidate), "-b", branch],
+            capture_output=True, text=True, timeout=60,
+        )
+    except subprocess.TimeoutExpired as exc:
+        cleanup_note = _cleanup_failed_spawn_worktree(toplevel, candidate, branch)
+        raise RuntimeError(
+            f"git worktree add timed out after {exc.timeout} seconds{cleanup_note}"
+        ) from exc
     if add.returncode != 0:
-        raise RuntimeError(f"git worktree add failed: {add.stderr.strip() or add.stdout.strip()}")
+        cleanup_note = _cleanup_failed_spawn_worktree(toplevel, candidate, branch)
+        raise RuntimeError(
+            f"git worktree add failed: {add.stderr.strip() or add.stdout.strip()}{cleanup_note}"
+        )
     return str(candidate), branch
 
 

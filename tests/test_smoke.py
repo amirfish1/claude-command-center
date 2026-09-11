@@ -32,6 +32,56 @@ PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, PROJECT_ROOT)
 
 
+class TestSpawnWorktreeCreation(unittest.TestCase):
+    def test_cleanup_removes_only_the_reserved_worktree_and_branch(self):
+        server = importlib.import_module("server")
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = pathlib.Path(tmpdir)
+            candidate = root / "repo-wt" / "slow"
+            candidate.mkdir(parents=True)
+            commands = []
+
+            def fake_run(args, **kwargs):
+                commands.append(args)
+                return subprocess.CompletedProcess(args, 0)
+
+            with mock.patch.object(server.subprocess, "run", side_effect=fake_run):
+                self.assertEqual(
+                    server._cleanup_failed_spawn_worktree(root / "repo", candidate, "feat/slow"),
+                    "",
+                )
+            self.assertEqual(
+                commands,
+                [
+                    ["git", "-C", str(root / "repo"), "worktree", "remove", "--force", str(candidate)],
+                    ["git", "-C", str(root / "repo"), "branch", "-D", "feat/slow"],
+                ],
+            )
+
+    def test_worktree_add_timeout_is_reported_as_a_spawn_error(self):
+        """A slow checkout must not escape as an unhandled subprocess error."""
+        server = importlib.import_module("server")
+        with tempfile.TemporaryDirectory() as tmpdir:
+            repo = pathlib.Path(tmpdir) / "repo"
+            repo.mkdir()
+            timeouts = []
+
+            def fake_run(args, **kwargs):
+                if args[-2:] == ["rev-parse", "--show-toplevel"]:
+                    return subprocess.CompletedProcess(args, 0, stdout=str(repo) + "\n")
+                if "rev-parse" in args and "--verify" in args:
+                    return subprocess.CompletedProcess(args, 1)
+                if "worktree" in args and "add" in args:
+                    timeouts.append(kwargs["timeout"])
+                    raise subprocess.TimeoutExpired(args, kwargs["timeout"])
+                return subprocess.CompletedProcess(args, 0)
+
+            with mock.patch.object(server.subprocess, "run", side_effect=fake_run):
+                with self.assertRaisesRegex(RuntimeError, "timed out"):
+                    server._create_worktree_for_spawn(str(repo), "slow")
+            self.assertEqual(timeouts, [60])
+
+
 class TestConversationTranscriptPath(unittest.TestCase):
     def test_resolves_the_reader_path_for_a_session(self):
         """The copy affordance needs the concrete transcript path, even when
