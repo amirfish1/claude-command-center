@@ -71707,8 +71707,17 @@
     }
     if (uxQueueNowBtn) {
       uxQueueNowBtn.addEventListener('click', async () => {
+        // Persisting can include a screenshot upload. A Queue click must
+        // acknowledge immediately and become single-shot before that await,
+        // otherwise the unchanged button invites a confusing second click.
+        uxQueueNowBtn.disabled = true;
+        uxQueueNowBtn.textContent = 'Saving…';
         const ann = await persistAnnotation('Saving…');
-        if (!ann) return;
+        if (!ann) {
+          uxQueueNowBtn.disabled = false;
+          uxQueueNowBtn.textContent = 'Queue';
+          return;
+        }
         // "Queue" (1-click, CCC-179): enqueue immediately with the default
         // prompt — no preview. annOpenUxFixesQueue closes the editor itself.
         annOpenUxFixesQueue(ann, annStop, errEl, null);
