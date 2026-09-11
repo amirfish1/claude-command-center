@@ -1569,6 +1569,7 @@ def _inject_text_into_session_router(
     force_headless=False,
     force_queue=False,
     peer_sender_sid=None,
+    queued_steer_batch=False,
 ):
     """Route `text` to a session using the same fall-through as /api/inject-input:
     terminal-control AppleScript when there's a TTY, FIFO write to a live spawn,
@@ -1791,6 +1792,16 @@ def _inject_text_into_session_router(
         if idempotency_key:
             steer_kwargs["idempotency_key"] = idempotency_key
         steer_kwargs["preserve_queued_steer"] = bool(preserve_queued_steer)
+        if queued_steer_batch:
+            # Steer-all delivers every queued original as one concatenated
+            # prompt. The claim-before-delivery transaction can only match a
+            # SINGLE queue entry's exact text, so against the concatenation
+            # it always misses and reports "queued_message_missing" even
+            # though every original is still queued. Batch consumption is
+            # handled afterward by _finalize_queued_steer_batch_result, which
+            # matches each original by its own text -- skip straight to plain
+            # delivery instead of the single-item transaction.
+            steer_kwargs["queued_steer_transaction_protocol"] = 0
         steer_result = _core.resume_session_codex(
             session_id, text, **steer_kwargs
         )

@@ -33420,6 +33420,8 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                         inject_options["allow_duplicate"] = True
                     if replace_queued:
                         inject_options["preserve_queued_steer"] = True
+                    if replace_queued_texts:
+                        inject_options["queued_steer_batch"] = True
                     if payload.get("idempotency_key"):
                         inject_options["idempotency_key"] = payload.get(
                             "idempotency_key"
