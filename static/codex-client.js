@@ -1425,7 +1425,12 @@
       const view = context.viewEl || pane.querySelector('.conversations-view');
       if (!view) throw new Error('Conversation view is unavailable');
       state.savedView = {view, nodes:Array.from(view.childNodes)};
-      view.replaceChildren(root);
+      // Keep the legacy transcript on screen (append, don't replace) until
+      // loadCatalog/loadHistory below confirm the native connection is
+      // actually usable -- otherwise every selection flashes an empty
+      // "Connecting..." shell over already-loaded conversation content.
+      root.style.display = 'none';
+      view.appendChild(root);
       root.classList.add('is-inline');
       root.querySelector('.codex-client-title').remove();
       root.querySelector('[data-codex-close]').remove();
@@ -1683,7 +1688,12 @@
       await close();
       throw new Error('Native conversation connection is unavailable');
     }
-    if (context.inline && state.savedView) state.savedView.nodes = [];
+    if (context.inline) {
+      // Native connection confirmed usable: swap the legacy transcript out
+      // for the freshly-rendered native shell now, not before.
+      if (state.savedView) { state.savedView.nodes.forEach(node => node.remove()); state.savedView.nodes = []; }
+      if (state.root) state.root.style.removeProperty('display');
+    }
     mountMedia();
     schedulePoll(0);
     return state.root;
