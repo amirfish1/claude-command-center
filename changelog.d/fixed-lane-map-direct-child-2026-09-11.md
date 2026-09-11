@@ -1,0 +1,1 @@
+- Fixed Lane Map so current direct child sessions remain visible when family data is incomplete.

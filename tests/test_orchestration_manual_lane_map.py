@@ -19,5 +19,17 @@ def test_manual_subsession_children_are_collected_as_orchestration_lanes():
     ]
 
     assert "manualSubsessionParentId(id)" in helper
-    assert "return orchAppendManualLanes(sid, treeLanes);" in collect_lanes
+    assert "const treeLanes = (_orchFamilyTree && _orchFamilyTreeSid === sid)" in collect_lanes
     assert "return orchAppendManualLanes(sid, lanes);" in collect_lanes
+
+
+def test_family_tree_lanes_are_supplemented_by_current_direct_children():
+    """A partial family response must not hide a newer spawned child."""
+    app_js = (PROJECT_ROOT / "static" / "app.js").read_text(encoding="utf-8")
+    collect_lanes = app_js[
+        app_js.index("  function orchCollectLanes(sid) {"):
+        app_js.index("  // Two sources: /api/sessions/spawned", app_js.index("  function orchCollectLanes(sid) {"))
+    ]
+
+    assert "const lanes = treeLanes.slice();" in collect_lanes
+    assert "if (treeLanes.length) return orchAppendManualLanes(sid, treeLanes);" not in collect_lanes

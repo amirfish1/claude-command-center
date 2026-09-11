@@ -60382,21 +60382,23 @@
   function orchCollectLanes(sid) {
     if (_orchSim) return _orchSim.lanes.slice();
     if (!sid) return [];
-    // Primary path: use the family tree from the unified SessionGraph if
-    // it's available for this root. This gives us multi-depth descendants
-    // and Claude Task-tool subagents that the flat lookup can't see.
-    if (_orchFamilyTree && _orchFamilyTreeSid === sid) {
-      const treeLanes = orchFlattenTree(_orchFamilyTree, sid);
-      if (treeLanes.length) return orchAppendManualLanes(sid, treeLanes);
-    }
-    // Fallback: original flat collection (direct children only).
+    // Start with the unified SessionGraph when available: it contributes
+    // multi-depth descendants and non-resumable Task-tool subagents. It is
+    // not a replacement for the live direct-child sources, though. Family
+    // indexing can lag a fresh spawn, so returning early here previously hid
+    // a child the conversation list already knew about.
+    const treeLanes = (_orchFamilyTree && _orchFamilyTreeSid === sid)
+      ? orchFlattenTree(_orchFamilyTree, sid)
+      : [];
+    const lanes = treeLanes.slice();
+    // Merge direct children from rows, the spawned registry, and the lane
+    // meta cache. `seen` preserves the richer tree record when sources agree.
     const rows = conversationsData || [];
     const byId = new Map();
     rows.forEach(r => { if (r && r.session_id) byId.set(r.session_id, r); });
     const spawnById = new Map();
     (_orchSpawnedRegistry || []).forEach(sp => { if (sp && sp.session_id) spawnById.set(sp.session_id, sp); });
-    const seen = new Set();
-    const lanes = [];
+    const seen = new Set(lanes.map(lane => lane.id));
     rows.forEach(r => {
       const pid = String((r && (r.parent_session_id || r.hermes_parent_session_id)) || '');
       if (pid !== sid || !r.session_id || seen.has(r.session_id)) return;
