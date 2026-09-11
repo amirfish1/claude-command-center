@@ -96,6 +96,21 @@ class TestQueuePanelLayout(unittest.TestCase):
         self.assertIn('class="q2-tstatus"', q2_js)
         self.assertIn(".q2-tstatus", q2_css)
 
+    def test_ticket_answer_clears_before_waiting_for_delivery(self):
+        """A worker-delivery delay must not leave a submitted answer visible."""
+        q2_js = (PROJECT_ROOT / "static" / "q2.js").read_text(encoding="utf-8")
+        submit = q2_js[
+            q2_js.index("var plan = {"):
+            q2_js.index("// Edit events are bookkeeping noise by default;")
+        ]
+
+        self.assertIn("var submittedText = box ? box.value : '';", submit)
+        self.assertLess(
+            submit.index("if (box) box.value = '';"),
+            submit.index("var sent = await postJson(plan[0], plan[1]);"),
+        )
+        self.assertIn("if (box && !box.value) box.value = submittedText;", submit)
+
     def test_all_queue_view_is_a_read_first_global_inbox(self):
         """ALL combines live work without pretending to be a real queue."""
         q2_js = (PROJECT_ROOT / "static" / "q2.js").read_text(encoding="utf-8")
