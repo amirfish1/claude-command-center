@@ -1,0 +1,32 @@
+# Self-updating star history chart for the README.
+#
+# GitHub restricted the stargazers endpoint to a repo's own admins and
+# collaborators (2026-06-30), so the hosted api.star-history.com badge renders
+# blank for us. This workflow reads our own stargazers with the automatic
+# GITHUB_TOKEN (no PAT, nothing handed to a third party), renders the chart
+# with star-history's vendored renderer, and commits assets/star-history/*
+# when — and only when — the data changed.
+name: Star History
+
+on:
+  schedule:
+    - cron: '17 */6 * * *' # every 6 hours; picks up unstars and quiet-day axis moves
+  watch:
+    types: [started] # refresh right after a new star
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: star-history
+  cancel-in-progress: true # collapse a burst of stars into one run
+
+jobs:
+  star-history:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: narayann7/star-history-action@v1
+        with:
+          repos: ${{ github.repository }}

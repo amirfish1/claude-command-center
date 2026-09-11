@@ -211,19 +211,28 @@ def test_archive_list_source_avoids_copying_full_snapshot(monkeypatch):
         return expected, True, 7
 
     monkeypatch.setattr(server, "_archive_serve_rows_versioned", serve)
+    monkeypatch.setattr(server, "_archive_list_body_ver", lambda key, rows, extra: 7)
+    # The in-memory overlays (ACP, Devin CLI) legitimately append rows when
+    # this machine has live sessions; keep the copy assertion about the
+    # snapshot itself, not about the host's session state.
+    monkeypatch.setattr(server, "_archive_overlay_acp_sessions", lambda rows: [])
+    monkeypatch.setattr(server, "_archive_overlay_devin_cli_sessions", lambda rows, now=None: [])
+    monkeypatch.setattr(server, "_archive_overlay_wt_worker_sessions", lambda rows: [])
     options = {"include_prs": False}
 
-    rows, from_cache = server._archive_list_source_rows_cached(options)
+    rows, from_cache, body_ver = server._archive_list_source_rows_cached(options)
 
     assert rows is expected
     assert from_cache is True
-    fresh_rows, fresh_from_cache = server._archive_list_source_rows_cached(
+    assert body_ver == 7
+    fresh_rows, fresh_from_cache, fresh_body_ver = server._archive_list_source_rows_cached(
         options,
         force_refresh=True,
     )
 
     assert fresh_rows is expected
     assert fresh_from_cache is True
+    assert fresh_body_ver == 7
     assert calls == [(
         server._archive_response_cache_key(**options),
         options,
@@ -245,7 +254,7 @@ def test_archive_list_http_route_projects_cached_rows(monkeypatch):
             "session_id": "trashed-row", "engine": "claude", "mtime": 2_000_000,
             "archived": True, "trashed": True, "all_lane_override": "messages",
             "last_assistant_text": "not returned",
-        }], True),
+        }], True, 7),
     )
     httpd = server.http.server.ThreadingHTTPServer(("127.0.0.1", 0), server.CommandCenterHandler)
     thread = threading.Thread(target=httpd.serve_forever, daemon=True)
@@ -368,6 +377,14 @@ def big_projects(tmp_path, monkeypatch):
     monkeypatch.setattr(server, "HERMES_WHATSAPP_BRIDGE_LOG", hermes_home / "whatsapp" / "bridge.log")
     monkeypatch.setattr(server, "HERMES_CHUCK_PENDING_DIR", hermes_home / "whatsapp" / "chuck_realtor_pending")
     monkeypatch.setattr(server, "HERMES_PROFILES_DIR", hermes_home / "profiles")
+    # Devin CLI reads its sessions DB via CCC_DEVIN_DB (env override, checked
+    # fresh per call) rather than a server-module global, so it isn't covered
+    # by the monkeypatch.setattr overrides above. Without this, find_all_
+    # conversations hits the developer's REAL ~/.local/share/devin/cli/
+    # sessions.db (can be multi-GB with a large WAL) on every call, which is
+    # slow and makes this perf gate depend on the developer's box. Point it at
+    # a path with no file so _devin_cli_connect() short-circuits to None.
+    monkeypatch.setenv("CCC_DEVIN_DB", str(tmp_path / ".local" / "share" / "devin" / "cli" / "sessions.db"))
     return n, sids
 
 
@@ -1092,8 +1109,6 @@ def test_ux_fixes_health_no_all_sessions_or_subprocess(monkeypatch):
     resolved at most once per project-with-open-tickets, and the full archive
     build is never touched.
     """
-    uxq = importlib.import_module("ux_fixes_queue")
-
     def _item(number, project, status, claimed_by=None, seq=None):
         return {
             "number": number, "project": project, "seq": seq or number,
@@ -1153,8 +1168,6 @@ def test_ux_fixes_health_resolves_label_claimed_fixer(monkeypatch):
     All three must resolve to a real UUID in fixer_session_id (the old code
     returned None and the queue looked unreachable / always stuck).
     """
-    uxq = importlib.import_module("ux_fixes_queue")
-
     sid_a = str(uuid.uuid4())
     sid_b = str(uuid.uuid4())
     sid_c = str(uuid.uuid4())
@@ -1237,22 +1250,31 @@ def test_ux_fixes_claim_stores_real_session_id(monkeypatch, tmp_path):
     in the label) records the reachable id without touching claimed_by — so old
     label-only behavior is preserved and the new field is purely additive.
     """
-    uxq = importlib.import_module("ux_fixes_queue")
-    qf = tmp_path / "ux-fixes-queue.json"
-    monkeypatch.setattr(uxq, "QUEUE_FILE", qf)
-    monkeypatch.setattr(uxq, "_LOCK_FILE", qf.with_suffix(".lock"))
+    wq = importlib.import_module("watchtower.queue")
+    import watchtower.config as wt_config
+    import watchtower.workers as wt_workers
+    # queue._resolve_store_path() reads $WATCHTOWER_STORE fresh per call, but
+    # config.CONFIG_FILE / workers.WORKERS_FILE / workers.WORKER_IDS_FILE are
+    # bound once at import time -- enqueue()/claim_next() touch all three
+    # (queue-config auto-registration, the spawn-registry liveness check), so
+    # each must be isolated or this test would read/write the real production
+    # files under ~/.watchtower.
+    monkeypatch.setenv("WATCHTOWER_STORE", str(tmp_path / "queues.json"))
+    monkeypatch.setattr(wt_config, "CONFIG_FILE", tmp_path / "queue-config.json")
+    monkeypatch.setattr(wt_workers, "WORKERS_FILE", tmp_path / "workers.json")
+    monkeypatch.setattr(wt_workers, "WORKER_IDS_FILE", tmp_path / "worker-ids.json")
 
     real_sid = str(uuid.uuid4())
-    uxq.enqueue(project="ZZ", note="first")
-    uxq.enqueue(project="ZZ", note="second")
+    wq.enqueue(project="ZZ", note="first")
+    wq.enqueue(project="ZZ", note="second")
 
     # (a) explicit session_uuid alongside a human label.
-    claimed = uxq.claim_next("codex-ccc-drain", project="ZZ", session_uuid=real_sid)
+    claimed = wq.claim_next("codex-ccc-drain", project="ZZ", session_uuid=real_sid)
     assert claimed["claimed_by"] == "codex-ccc-drain", "label attribution lost"
     assert claimed["claimed_session_id"] == real_sid, "real session id not stored"
 
     # (b) label-only claim leaves the additive field empty (non-breaking).
-    claimed2 = uxq.claim_next("just-a-label", project="ZZ")
+    claimed2 = wq.claim_next("just-a-label", project="ZZ")
     assert claimed2["claimed_by"] == "just-a-label"
     assert claimed2.get("claimed_session_id") in (None, ""), (
         "a label-only claim must not fabricate a claimed_session_id"
@@ -1505,6 +1527,120 @@ def test_archive_cache_clear_rejects_inflight_stale_write(isolated_archive_cache
     assert server._archive_serve_cache[_ALL_KEY]["rows"][0]["archived"] is True
 
 
+def test_archive_mutation_restamps_warm_snapshot_and_refreshes_async(
+    isolated_archive_cache, monkeypatch,
+):
+    """Archive/lane writes keep first paint current while refresh stays detached."""
+    old_generation = server._archive_serve_generation
+    cached_rows = [{
+        "session_id": "sid-a", "archived": False, "trashed": False,
+        "all_lane_override": "", "mtime": 1,
+    }]
+    assert server._archive_serve_cache_store(_ALL_KEY, cached_rows, old_generation)
+    monkeypatch.setattr(
+        server, "_load_conversation_lifecycle_sets", lambda: ({"sid-a"}, {"sid-a"}),
+    )
+    monkeypatch.setattr(server, "_load_session_lane_overrides", lambda: {"sid-a": "review"})
+
+    server._restamp_archive_serve_cache_after_mutation()
+
+    assert server._archive_serve_generation == old_generation + 1
+    with server._archive_serve_lock:
+        snapshot = server._archive_serve_cache[_ALL_KEY]
+        assert snapshot["rows"] == [{
+            "session_id": "sid-a", "archived": True, "trashed": True,
+            "all_lane_override": "review", "mtime": 1,
+        }]
+        assert snapshot["ts"] == 0.0
+    assert server._archive_serve_cache_store(
+        _ALL_KEY, [{"session_id": "sid-a", "archived": False}], old_generation,
+    ) is False
+
+    spawned = []
+
+    class FakeThread:
+        def __init__(self, *, target, args=(), daemon=None, **_kwargs):
+            self.target = target
+            self.args = args
+            self.daemon = daemon
+
+        def start(self):
+            spawned.append(self)
+
+    monkeypatch.setattr(server.threading, "Thread", FakeThread)
+    rows, from_cache, _ver = server._archive_serve_rows_versioned(_ALL_KEY, _ALL_OPTS)
+
+    assert rows[0]["archived"] is True
+    assert rows[0]["trashed"] is True
+    assert rows[0]["all_lane_override"] == "review"
+    assert from_cache is True
+    assert len(spawned) == 1
+    assert spawned[0].target is server._archive_serve_refresh
+
+
+def test_archive_mutation_restamps_are_serialized_by_publish_order(
+    isolated_archive_cache, monkeypatch,
+):
+    """A slower older mutation must not overwrite a newer restamped snapshot."""
+    generation = server._archive_serve_generation
+    assert server._archive_serve_cache_store(
+        _ALL_KEY,
+        [{"session_id": "sid-a", "archived": False, "trashed": False,
+          "all_lane_override": "", "mtime": 1}],
+        generation,
+    )
+    with server._archive_serve_lock:
+        initial_version = server._archive_serve_cache[_ALL_KEY]["ver"]
+
+    older_loaded = threading.Event()
+    newer_loaded = threading.Event()
+    release_older = threading.Event()
+
+    def lifecycle_state():
+        if threading.current_thread().name == "older-mutation":
+            older_loaded.set()
+            assert release_older.wait(timeout=2)
+            return {"sid-a"}, {"sid-a"}
+        newer_loaded.set()
+        return set(), set()
+
+    def lane_overrides():
+        return {"sid-a": "review"} if threading.current_thread().name == "older-mutation" else {"sid-a": "queued"}
+
+    monkeypatch.setattr(server, "_load_conversation_lifecycle_sets", lifecycle_state)
+    monkeypatch.setattr(server, "_load_session_lane_overrides", lane_overrides)
+    older = threading.Thread(
+        name="older-mutation", target=server._restamp_archive_serve_cache_after_mutation,
+    )
+    newer = threading.Thread(
+        name="newer-mutation", target=server._restamp_archive_serve_cache_after_mutation,
+    )
+    older.start()
+    assert older_loaded.wait(timeout=1)
+    newer.start()
+
+    # Before the fix, the newer mutation reads and publishes while the older
+    # mutation waits, then the older pre-lock sidecar snapshot overwrites it.
+    if newer_loaded.wait(timeout=1):
+        deadline = time.time() + 1
+        while time.time() < deadline:
+            with server._archive_serve_lock:
+                entry = server._archive_serve_cache[_ALL_KEY]
+                if entry["ver"] > initial_version:
+                    break
+            time.sleep(0.01)
+
+    release_older.set()
+    older.join(timeout=2)
+    newer.join(timeout=2)
+    assert not older.is_alive() and not newer.is_alive()
+    with server._archive_serve_lock:
+        row = server._archive_serve_cache[_ALL_KEY]["rows"][0]
+    assert row["archived"] is False
+    assert row["trashed"] is False
+    assert row["all_lane_override"] == "queued"
+
+
 def test_archive_build_cache_skips_rebuild_when_unchanged(big_projects, isolated_archive_cache, monkeypatch):
     """The signature-gated build cache must NOT re-scan all sessions when the
     transcript corpus is unchanged.
@@ -1718,7 +1854,7 @@ def test_archive_background_refresh_uses_detached_process(
     )
 
     generation = server._archive_serve_generation
-    server._archive_serve_refresh(_ALL_KEY, _ALL_OPTS, generation)
+    server._archive_serve_refresh(_ALL_KEY, _ALL_OPTS, generation, time.time())
 
     assert detached_calls == [(_ALL_KEY, _ALL_OPTS, generation)]
 
@@ -1779,6 +1915,9 @@ def test_cold_persisted_snapshot_does_not_rehydrate_on_request(
         "_rehydrate_archive_cached_rows",
         lambda _rows: pytest.fail("cold request synchronously rehydrated the archive"),
     )
+    # The cold-serve path re-stamps archived/trashed from lifecycle sidecars
+    # (the trash-resurrect fix). Pin empty sets so the overlay is deterministic.
+    monkeypatch.setattr(server, "_load_conversation_lifecycle_sets", lambda: (set(), set()))
 
     rows, from_cache, _ver = server._archive_serve_rows_versioned(
         _ALL_KEY,
@@ -1786,7 +1925,9 @@ def test_cold_persisted_snapshot_does_not_rehydrate_on_request(
         force_refresh=False,
     )
 
-    assert rows == entry["conversations"]
+    assert rows == [
+        {"session_id": "persisted", "state": "ended", "archived": False, "trashed": False}
+    ]
     assert from_cache is True
 
 
@@ -1825,13 +1966,18 @@ def test_cold_archive_variant_borrows_base_snapshot_and_refreshes_detached(
             "missing archive variant full-built on the request thread"
         ),
     )
+    # The cold-serve path re-stamps archived/trashed from lifecycle sidecars
+    # (the trash-resurrect fix). Pin empty sets so the overlay is deterministic.
+    monkeypatch.setattr(server, "_load_conversation_lifecycle_sets", lambda: (set(), set()))
 
     rows, from_cache, _ver = server._archive_serve_rows_versioned(
         variant_key,
         variant_options,
     )
 
-    assert rows == base_entry["conversations"]
+    assert rows == [
+        {"session_id": "base-snapshot", "archived": False, "trashed": False}
+    ]
     assert from_cache is True
     assert len(spawned) == 1
     assert spawned[0].target is server._archive_serve_refresh
@@ -2499,6 +2645,12 @@ def test_throughput_refresh_persists_completed_metadata(monkeypatch):
     monkeypatch.setattr(server, "_throughput_payload", fake_payload)
     monkeypatch.setattr(server, "_throughput_build_bootstrap", fake_build)
     monkeypatch.setattr(server, "_throughput_write_bootstrap", lambda *_: True)
+    # The refresh thread also calls _weekly_usage_block() for real. That is
+    # several seconds of filesystem work on a cold cache — longer than the
+    # wait below — and it has nothing to do with the metadata this test
+    # asserts. Left unpatched, the test passes or fails on whether some other
+    # process happened to warm the cache first.
+    monkeypatch.setattr(server, "_weekly_usage_block", lambda *a, **k: {})
     with server._THROUGHPUT_REFRESH_LOCK:
         server._THROUGHPUT_REFRESH_JOBS.clear()
         server._THROUGHPUT_REFRESH_LAST_SUCCESS.clear()
@@ -2924,7 +3076,7 @@ def test_system_services_no_subprocess_on_warm_cache(monkeypatch):
 
     assert payload["ok"] is True
     assert {row["id"] for row in payload["services"]} == {
-        "dashboard", "worker", "watchtower", "app_server"
+        "dashboard", "worker", "watchtower", "app_server", "kimi_kap"
     }
     assert health_calls == [], (
         "build_system_services called build_system_health — that runs a ps+lsof "
@@ -2988,8 +3140,8 @@ def test_watchtower_process_argv_is_memoised_per_pid(monkeypatch):
 def test_watchtower_api_probe_is_cached_and_never_blocks_twice(monkeypatch):
     """A degraded WatchTower must not cost 0.8s of an HTTP thread per poll.
 
-    `_watchtower_api_probe` is a urlopen with a 0.8s timeout. When the daemon
-    is up but its API is not answering, that timeout is paid in full — and the
+    `_watchtower_api_probe` is a urlopen with a bounded timeout. When the
+    daemon is up but its API is not answering, that timeout is paid in full — and the
     System status panel polls on a 5s cadence against a 3s payload TTL, so
     nearly every poll paid it, in exactly the degraded state the panel exists
     to report. It also stretched the window where a settled restart still
@@ -3070,3 +3222,34 @@ def test_system_services_does_not_probe_watchtower_api_synchronously(monkeypatch
 
     server._watchtower_forget_api_probe()
     server._system_services_cache = {"ts": 0.0, "payload": None}
+
+
+def test_trash_conversation_execution_time_under_100ms(tmp_path, monkeypatch):
+    """Trashing a conversation must complete in <100ms."""
+    server._session_graph.load()
+    sid = "test-sid-perf-" + uuid.uuid4().hex[:8]
+
+    # Run through the backend trash flow
+    t0 = time.perf_counter()
+    res = server._set_conversation_trashed(sid, True)
+    cascaded = res.get("cascaded") or []
+    mutated = {sid, *cascaded}
+    server._restamp_archive_serve_cache_after_mutation(
+        archived_set=mutated,
+        trashed_set=mutated,
+        mutated_sids=mutated,
+    )
+    duration_ms = (time.perf_counter() - t0) * 1000
+    assert duration_ms < 100.0, f"Trashing session took {duration_ms:.2f}ms, expected <100ms"
+
+    # Clean up
+    server._set_conversation_trashed(sid, False)
+
+
+def test_ui_trash_is_optimistic():
+    """UI conv-trash-btn click handler must optimistically update before awaiting network."""
+    app_js = (Path(__file__).parent.parent / "static" / "app.js").read_text(encoding="utf-8")
+    assert "item.style.display = 'none'" in app_js, "Trash button must hide row immediately"
+    assert "setOptimisticOverride(sessionId, { archived: targetArchived, trashed: wantTrashed })" in app_js
+    assert "requestAnimationFrame(() => {" in app_js, "Sidebar re-render must be scheduled without blocking frame"
+

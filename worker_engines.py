@@ -2,16 +2,26 @@
 
 from __future__ import annotations
 
-import hashlib
 import os
 import threading
 import time
 from pathlib import Path
 
+from ccc_server.content_hash import compute as _compute_ccc_content_hash
+
+
+# A worker restart re-adopts every live transport within seconds, so an
+# uncertain item still unexplained a quarter of an hour later is not coming
+# back. Long enough that a slow Codex app-server handshake is never retired
+# out from under a reconcile; short enough that the count actually drains.
+RETIRE_UNCERTAIN_AFTER_S = 900.0
+
 
 ASYNC_OPERATIONS = {
     ("kimi", "spawn"),
     ("kimi", "prompt"),
+    ("grok", "spawn"),
+    ("grok", "prompt"),
     ("codex", "spawn"),
     ("codex", "resume"),
     ("claude", "spawn"),
@@ -45,14 +55,14 @@ class EngineHost:
                 os.environ["CCC_WORKER_PROCESS"] = "1"
                 import server
                 self._module = server
-                # Capture a fingerprint of the server.py this process actually
-                # loaded.  run.sh compares it to the file on disk so code changes
-                # that do not bump __version__ still trigger a worker restart.
+                # Capture a fingerprint of the server.py + ccc_server/*.py
+                # this process actually loaded (see content_hash.py for why
+                # both matter, not just server.py). run.sh compares it to
+                # the files on disk so code changes that do not bump
+                # __version__ still trigger a worker restart.
                 try:
-                    server_path = Path(server.__file__).resolve()
-                    server._ccc_content_hash = hashlib.sha256(
-                        server_path.read_bytes()
-                    ).hexdigest()[:16]
+                    repo_root = Path(server.__file__).resolve().parent
+                    _, server._ccc_content_hash = _compute_ccc_content_hash(repo_root)
                 except Exception:
                     server._ccc_content_hash = None
                 # server.main() installs this for the dashboard process, but
@@ -76,7 +86,7 @@ class EngineHost:
                 # their durable FIFOs here, in the process that owns engine
                 # execution, rather than in the restartable dashboard.
                 server._reattach_spawned_orphans(
-                    skip_engines=("kimi",),
+                    skip_engines=("kimi", "grok"),
                     only_engines=("claude", "codex"),
                 )
         return self._module
@@ -161,9 +171,9 @@ class EngineHost:
                     live = live or legacy._codex_app_server_thread_is_active(
                         sid, start_if_needed=True
                     )
-            elif engine == "kimi" and sid:
-                legacy._acp_maybe_attach_on_view("kimi", sid)
-                snap = legacy._acp_session_snapshot("kimi", sid) or {}
+            elif engine in ("kimi", "grok") and sid:
+                legacy._acp_maybe_attach_on_view(engine, sid)
+                snap = legacy._acp_session_snapshot(engine, sid) or {}
                 live = snap.get("status") == "active"
             if not live:
                 continue
@@ -178,6 +188,46 @@ class EngineHost:
             reconciled.append(running)
         return reconciled
 
+    def retire_stale_uncertain(self, older_than_s=None):
+        """Close out uncertain work that no reconcile can ever reclaim.
+
+        ``reconcile_uncertain`` only *reclaims*; anything without live
+        execution evidence was left in ``uncertain`` forever. Every worker
+        restart adds a fresh batch, none of them ever leave, and the count is
+        monotonic — so "N items need reconciliation" pinned the System status
+        chip amber permanently and stopped meaning anything. Items measured up
+        to 16 days old, all of them from processes that exited long ago.
+
+        The terminal state is ``cancelled``, not ``failed``: the outcome is
+        genuinely unknown (an inject may well have landed before the worker
+        died), and recording an unknown as a failure would corrupt the failure
+        count the same way this corrupted the uncertain one. The real reason
+        goes on the item and into the event log.
+        """
+        cutoff = time.time() - (
+            RETIRE_UNCERTAIN_AFTER_S if older_than_s is None else float(older_than_s)
+        )
+        retired = []
+        for item in self.ledger.list(states=["uncertain"], limit=2000):
+            touched = item.get("updated_at") or item.get("created_at") or 0
+            if float(touched or 0) > cutoff:
+                continue
+            age_h = max(0.0, (time.time() - float(touched or 0)) / 3600.0)
+            try:
+                retired.append(self.ledger.transition(
+                    item["id"], "cancelled",
+                    error=(
+                        "retired by reconciler: no live execution evidence "
+                        f"{age_h:.0f}h after the worker restart that orphaned it"
+                    ),
+                    event_payload={"resolution": "reconciler retired stale uncertain"},
+                ))
+            except (KeyError, ValueError):
+                # Raced another reconcile or an operator resolve. Either way it
+                # left `uncertain`, which is the only outcome this wants.
+                continue
+        return retired
+
     def adopt_registry(self):
         """Adopt live legacy-owned transports before a dashboard restart."""
         legacy = self._legacy()
@@ -187,19 +237,20 @@ class EngineHost:
             if item.get("pid") is not None
         }
         legacy._reattach_spawned_orphans(
-            skip_engines=("kimi",),
+            skip_engines=("kimi", "grok"),
             only_engines=("claude", "codex"),
         )
-        attached_kimi = 0
+        attached_acp = 0
         for entry in legacy._load_spawn_registry():
-            if (entry.get("engine") or "") != "kimi":
+            harness = entry.get("engine") or ""
+            if harness not in ("kimi", "grok"):
                 continue
             sid = entry.get("session_id") or entry.get("resumed_sid")
             if not sid:
                 continue
-            result = legacy._acp_maybe_attach_on_view("kimi", sid)
+            result = legacy._acp_maybe_attach_on_view(harness, sid)
             if result is None or not isinstance(result, dict) or result.get("ok", True):
-                attached_kimi += 1
+                attached_acp += 1
         after = {
             str(item.get("pid") or "")
             for item in legacy._spawned_sessions
@@ -209,7 +260,7 @@ class EngineHost:
             "ok": True,
             "adopted": len(after - before),
             "tracked": len(after),
-            "kimi_attached": attached_kimi,
+            "kimi_attached": attached_acp,
         }
 
     def resolve_uncertain(self, work_id, action):
@@ -279,6 +330,11 @@ class EngineHost:
         try:
             call_args = dict(args)
             call_args.pop("_work_result_baseline", None)
+            # The durable work record, rather than the untrusted request args,
+            # owns replay identity. Forward it into inject so worker delivery
+            # has the same key the dashboard submitted.
+            if engine == "claude" and operation == "inject":
+                call_args["idempotency_key"] = str(item.get("idempotency_key") or "")
             result = self._call(engine, operation, call_args)
         except Exception as exc:
             failed = self.ledger.transition(
@@ -363,11 +419,15 @@ class EngineHost:
 
     def _call(self, engine, operation, args, query=False):
         legacy = self._legacy()
-        if engine == "kimi":
+        if engine in ("kimi", "grok"):
             if operation == "availability":
-                info = legacy._resolve_kimi_bin()
-                info["model"] = legacy._spawn_model_for_engine("kimi")
-                conn = legacy._acp_conn("kimi")
+                resolve = (
+                    legacy._resolve_kimi_bin if engine == "kimi"
+                    else legacy._resolve_grok_bin
+                )
+                info = resolve()
+                info["model"] = legacy._spawn_model_for_engine(engine)
+                conn = legacy._acp_conn(engine)
                 info["acp"] = bool(
                     conn
                     and conn.get("initialized")
@@ -375,12 +435,18 @@ class EngineHost:
                 )
                 return {"ok": True, "availability": info}
             if operation == "verify":
+                if engine != "kimi":
+                    return {"ok": False, "error": "verify is kimi-only"}
                 return legacy._kimi_setup_verify()
             if operation == "spawn":
-                return legacy.spawn_session_kimi(**args)
+                spawn_fn = (
+                    legacy.spawn_session_kimi if engine == "kimi"
+                    else legacy.spawn_session_grok
+                )
+                return spawn_fn(**args)
             if operation == "prompt":
                 return legacy._acp_prompt(
-                    "kimi",
+                    engine,
                     args.get("session_id") or args.get("sid"),
                     args.get("text") or "",
                     mode=args.get("mode") or "send",
@@ -388,52 +454,52 @@ class EngineHost:
                 )
             if operation == "ask":
                 return legacy._acp_ask_and_wait(
-                    "kimi",
+                    engine,
                     args.get("session_id") or args.get("sid"),
                     args.get("text") or "",
                     timeout_ms=int(args.get("timeout_ms") or 30000),
                 )
             if operation == "cancel":
                 return legacy._acp_cancel(
-                    "kimi", args.get("session_id") or args.get("sid")
+                    engine, args.get("session_id") or args.get("sid")
                 )
             if operation == "approval":
                 return legacy._acp_resolve_approval(
-                    "kimi",
+                    engine,
                     args.get("session_id") or args.get("sid"),
                     args.get("request_id"),
                     args.get("option_id"),
                 )
             if operation == "config":
                 return legacy._acp_set_config(
-                    "kimi",
+                    engine,
                     args.get("session_id") or args.get("sid"),
                     args.get("config_id"),
                     args.get("value"),
                 )
             if operation == "attach":
                 return legacy._acp_maybe_attach_on_view(
-                    "kimi", args.get("session_id") or args.get("sid")
+                    engine, args.get("session_id") or args.get("sid")
                 ) or {"ok": True}
             if operation == "snapshot":
                 snap = legacy._acp_session_snapshot(
-                    "kimi", args.get("session_id") or args.get("sid")
+                    engine, args.get("session_id") or args.get("sid")
                 )
                 return {"ok": True, "snapshot": snap}
             if operation == "bridge_status":
                 return legacy._engine_bridge_status_local(
-                    "kimi", args.get("session_id") or args.get("sid")
+                    engine, args.get("session_id") or args.get("sid")
                 )
             if operation == "bridge_restart":
                 return legacy._restart_engine_bridge_local(
-                    "kimi", args.get("session_id") or args.get("sid")
+                    engine, args.get("session_id") or args.get("sid")
                 )
             if operation == "deltas":
                 sid = args.get("session_id") or args.get("sid")
                 after = int(args.get("after") or 0)
                 with legacy._ACP_LOCK:
                     state = (
-                        legacy._ACP_SESSION_STATE.get("kimi") or {}
+                        legacy._ACP_SESSION_STATE.get(engine) or {}
                     ).get(sid) or {}
                     deltas = [
                         delta for delta in (state.get("deltas") or [])
@@ -441,6 +507,9 @@ class EngineHost:
                     ]
                 return {"ok": True, "deltas": deltas}
         if engine == "codex":
+            if operation == "client":
+                from ccc_server.codex_client import codex_client_dispatch
+                return codex_client_dispatch(args.get("action"), args.get("data") or {})
             if operation == "availability":
                 info = legacy._resolve_codex_bin()
                 info["model"] = legacy._spawn_model_for_engine("codex")
@@ -462,6 +531,15 @@ class EngineHost:
                     args.get("text") or "",
                     steer=bool(args.get("steer")),
                     _from_queue=bool(args.get("from_queue")),
+                    preserve_queued_steer=bool(
+                        args.get("preserve_queued_steer")
+                    ),
+                    queued_steer_transaction_protocol=int(
+                        args.get("queued_steer_transaction_protocol") or 0
+                    ),
+                    queued_delivery_transaction_protocol=int(
+                        args.get("queued_delivery_transaction_protocol") or 0
+                    ),
                 )
             if operation == "approval":
                 return legacy._codex_app_server_resolve_approval(
@@ -498,6 +576,32 @@ class EngineHost:
                     "codex", args.get("session_id")
                 )
         if engine == "claude":
+            if operation == "input_state":
+                spawn = legacy._find_live_spawn_entry_for_session(
+                    args.get("session_id")
+                )
+                if spawn is None or (spawn.get("engine") or "claude") != "claude":
+                    return {"ok": True, "owned": False, "busy": False}
+                tool_child = legacy._spawn_entry_active_tool_child(spawn)
+                turn_in_progress = bool(legacy._headless_turn_in_progress(spawn))
+                # CCC-935: a stuck/long-running tool child (e.g. a background
+                # `npx vercel deploy` that never exits) used to hold queued
+                # input forever — this call's "busy" folded in the RAW tool
+                # child presence with no age cap. `_tool_child_blocks_inject`
+                # is the same signal but bounded (_INJECT_TOOL_CHILD_MAX_HOLD_S),
+                # matching the in-process terminal-queue gate's intent.
+                tool_child_blocks = bool(legacy._tool_child_blocks_inject(spawn))
+                return {
+                    "ok": True,
+                    "owned": True,
+                    "busy": turn_in_progress or tool_child_blocks,
+                    "turn_in_progress": turn_in_progress,
+                    "tool_child_blocks": tool_child_blocks,
+                    "pid": spawn.get("pid"),
+                    "active_child_pid": (
+                        tool_child.get("pid") if isinstance(tool_child, dict) else None
+                    ),
+                }
             if operation == "prewarm":
                 return legacy._start_claude_prewarm(**args)
             if operation == "spawn":
@@ -511,6 +615,22 @@ class EngineHost:
                     wt_origin=bool(args.get("wt_origin")),
                     skip_wt=bool(args.get("skip_wt")),
                     preserve_queued_steer=bool(args.get("preserve_queued_steer")),
+                    force_queue=bool(args.get("force_queue")),
+                    source=args.get("source") or "api",
+                    peer_sender_sid=args.get("peer_sender_sid"),
+                    idempotency_key=args.get("idempotency_key"),
+                )
+            if operation == "interrupt":
+                return legacy._interrupt_claude_headless_local(
+                    args.get("session_id")
+                )
+            if operation == "model":
+                return legacy._set_session_model_headless_local(
+                    args.get("session_id"),
+                    args.get("model"),
+                    bool(args.get("context_1m")),
+                    args.get("reasoning_effort"),
+                    bool(args.get("effort_only")),
                 )
             if operation == "inject_pid":
                 return legacy.inject_into_spawned(
@@ -522,12 +642,31 @@ class EngineHost:
                     args.get("text") or "",
                     cwd=args.get("cwd"),
                 )
+            if operation == "ask":
+                return legacy.ask_session_and_wait(
+                    args.get("session_id"),
+                    args.get("text") or "",
+                    timeout_ms=int(args.get("timeout_ms") or 30000),
+                    cwd=args.get("cwd"),
+                    peer_sender_sid=args.get("peer_sender_sid"),
+                )
             if operation == "compact":
                 return legacy.compact_session_context(
                     args.get("session_id"),
                     terminal_app=args.get("terminal_app"),
                     _from_terminal_queue=bool(args.get("from_terminal_queue")),
                 )
+            if operation == "clear":
+                return legacy.clear_session_context(
+                    args.get("session_id"),
+                    terminal_app=args.get("terminal_app"),
+                    initial_message=args.get("initial_message"),
+                    _from_terminal_queue=bool(args.get("from_terminal_queue")),
+                )
+            if operation == "auto_handover_fire":
+                return legacy._fire_auto_handover_local(args.get("session_id"))
+        if engine == "droid" and operation == "spawn":
+            return legacy.spawn_session_droid(**args)
         raise ValueError(f"unsupported worker engine operation: {engine}.{operation}")
 
     def _track_async(self, work_id, engine, operation, args, result):
@@ -599,8 +738,8 @@ class EngineHost:
     @staticmethod
     def _async_state(legacy, engine, operation, sid, result, args=None):
         args = args if isinstance(args, dict) else {}
-        if engine == "kimi":
-            snap = legacy._acp_session_snapshot("kimi", sid) or {}
+        if engine in ("kimi", "grok"):
+            snap = legacy._acp_session_snapshot(engine, sid) or {}
             active = snap.get("status") == "active"
             return active, not active, {
                 "stop_reason": snap.get("stop_reason"),

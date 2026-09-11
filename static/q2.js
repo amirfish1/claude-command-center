@@ -15,9 +15,36 @@
   var POLL_MS = 5000;
   var CLOSED_CAP = 50;
   var NEW_TICKET_GLOW_MS = 4500;
+  // A poll-driven rebuild lands every 5s regardless of what the user is doing.
+  // renderTickets() replaces the row list wholesale (host.innerHTML = html),
+  // so a poll landing between touchstart and click destroys the row under the
+  // user's finger — the browser has nothing left to deliver the click to, and
+  // the tap is silently swallowed. Same bug class fixed for the conv list in
+  // static/app.js (isConversationListScrollActive) and for draggable rows
+  // (rowDraggableAttr); q2's ticket list had no equivalent guard (CCC-1020).
+  // A short quiet window after any touch on the list is enough: real taps
+  // resolve in well under it, and the next 5s poll catches up regardless.
+  var TICKETS_TOUCH_QUIET_MS = 600;
+  var _ticketsTouchQuietUntil = 0;
+  function isTicketsListTouchActive() { return Date.now() < _ticketsTouchQuietUntil; }
+  function noteTicketsListTouchActivity() { _ticketsTouchQuietUntil = Date.now() + TICKETS_TOUCH_QUIET_MS; }
   // Keep a just-finished ticket in the working list for handoff context, while
   // leaving the all-time closure history behind the explicit control.
   var RECENT_CLOSED_WINDOW_MS = 12 * 60 * 60 * 1000;
+
+  // Reasoning-effort ladders differ per engine: Claude goes up to max, Codex
+  // stops at xhigh, Kimi skips rungs entirely. The server publishes the real
+  // ladders as efforts_by_engine; this map is only the fallback for a server
+  // that predates that field, so an older build still offers a usable list
+  // instead of one engine's ladder applied to all of them.
+  var EFFORTS_FALLBACK = {
+    claude: ['low', 'medium', 'high', 'xhigh', 'max'],
+    codex: ['low', 'medium', 'high', 'xhigh'],
+    kimi: ['low', 'high', 'max'],
+  };
+  var EFFORT_LABEL = {
+    low: 'Light', medium: 'Medium', high: 'High', xhigh: 'Extra High', max: 'Max',
+  };
 
   var state = {
     queues: [],
@@ -26,6 +53,7 @@
     items: [],
     queue: '',
     viewAll: false,     // global inbox mode; never overloaded onto a queue name
+    queueHistory: null, // all-queues open/needs_input/closed series (CCC-903)
     ref: '',
     detail: null,       // full item payload for state.ref
     showClosed: false,
@@ -42,8 +70,56 @@
     learningsQueue: '',
     learnings: null,    // selected queue's learnings file, loaded on demand
     learningsError: '',
+    attendQueue: '',      // which queue state.attend* belongs to
+    attendExists: false,  // has this queue ever had an attendant run
+    attendPhase: 'idle',  // idle | working | waiting (on the owner) | done | gone
+    attendSessionId: '',
+    attendSessionRunning: false,  // liveness probe from the last GET -- lets the "waiting" card
+                                   // show a dead session instead of looking permanently frozen
+    attendStartedAt: '',
+    attendLastReport: null,  // {summary, at} | null
+    attendQuestion: null,    // {ref, question, options:[str], at} | null -- the ONE escalated decision
+    attendError: '',         // inline error for the band (load/tend failures) -- never alert()
+    attendStarting: false,   // POST /api/queue/attend in flight
+    attendAnswering: false,  // POST /api/queue/attend/answer in flight
+    attendRefreshing: false, // manual GET /api/queue/attend in flight (Refresh button)
+    attendAnswerError: '',
   };
   var newTicketExpires = {};
+  // Only one attendant can be polled at a time: the queue on screen. Torn
+  // down on every queue change so a stale poll can never leak past the
+  // selection that started it.
+  var attendPollTimer = null;
+  var attendPollQueue = '';
+  // Live "Attendant working… 4m 12s" timer: anchored to the server's
+  // elapsed seconds, ticked client-side every second so the owner can see
+  // it isn't stuck. Same trick the old analyze timer used.
+  var attendRunAnchor = 0;
+  var attendTickTimer = null;
+
+  function fmtElapsed(ms) {
+    var s = Math.max(0, Math.round(ms / 1000));
+    return s < 60 ? (s + 's') : (Math.floor(s / 60) + 'm ' + (s % 60) + 's');
+  }
+
+  // The ticker writes ONLY the elapsed span's text. It must not go through
+  // renderAttend: the band's html string is deliberately kept constant while
+  // running so the repaint-skip cache preserves scroll, selection, and any
+  // in-progress free-text answer.
+  function attendTick() {
+    var el = document.querySelector('.q2-brief-elapsed');
+    if (el) el.textContent = fmtElapsed(Date.now() - attendRunAnchor);
+  }
+  function syncAttendTicker() {
+    var working = state.attendPhase === 'working';
+    if (working && !attendTickTimer) {
+      attendTickTimer = window.setInterval(attendTick, 1000);
+    } else if (!working && attendTickTimer) {
+      window.clearInterval(attendTickTimer);
+      attendTickTimer = null;
+    }
+    if (working) attendTick();
+  }
 
   function markNewTicket(ref) {
     if (!ref) return;
@@ -182,7 +258,7 @@
     return (it && it.lane === 'express') ? 0 : 2;
   }
   function unready(it) {
-    return (it && (it.readiness === 'needs-shaping' || it.readiness === 'needs-spec')) ? 1 : 0;
+    return (it && (it.readiness === 'needs-shaping' || it.readiness === 'needs-spec' || it.readiness === 'needs-rationale')) ? 1 : 0;
   }
   function isWaitingToDrain(it) {
     if (statusOf(it) !== 'open') return false;
@@ -203,9 +279,16 @@
   // rows show the human sentence instead of "Fix the following UX issue…".
   function titleOf(item) {
     if (!item) return '';
-    var candidates = [item.note, item.text, item.title];
+    // GitHub-synced tickets: the issue title is the human headline; the body
+    // head (note) is often machine meta (digest markers, "Studio: …" lines).
+    var githubItem = String(item.source || '') === 'github' || !!item.github_repo;
+    var candidates = githubItem
+      ? [item.title, item.note, item.text]
+      : [item.note, item.text, item.title];
     for (var i = 0; i < candidates.length; i++) {
-      var lines = String(candidates[i] || '').split(/\r?\n/);
+      // Machine markers (<!-- digest-finding-id: … -->) must never become the
+      // row/detail title — strip comments before deriving it.
+      var lines = String(candidates[i] || '').replace(/<!--[\s\S]*?-->/g, ' ').split(/\r?\n/);
       var kept = [];
       for (var j = 0; j < lines.length; j++) {
         var line = lines[j].trim();
@@ -266,7 +349,10 @@
       if (String(it.source || '') === 'github' || it.github_repo) b.github++; else b.local++;
       var st = statusOf(it);
       if (st === 'closed') return;
-      if (it.needs_input) b.needsInput++;
+      if (it.needs_input) {
+        if (it.block_kind === 'rationale') b.gated = (b.gated || 0) + 1;
+        b.needsInput++;
+      }
       else if (st === 'in_progress') b.wip++;
       // Waiting = open, unclaimed, and something a worker is actually allowed
       // to pick up. `claimable === false` marks GitHub issues without the
@@ -301,6 +387,10 @@
       ? 'Open and claimable here (this queue drains ' + types.join(' + ') + ')'
       : 'Open and unclaimed';
     return {
+      gated: f.gated
+        ? '<span class="q2-n is-gated" title="Product-gate pitch awaiting human Ack/Nack">'
+          + '<b>' + f.gated + '</b> gated</span>'
+        : '',
       needsInput: f.needsInput
         ? '<span class="q2-n is-blocked" title="Blocked waiting on a human answer">'
           + '<b>' + f.needsInput + '</b> needs input</span>'
@@ -309,12 +399,21 @@
         ? '<span class="q2-n is-wip" title="Claimed by a worker and in progress">'
           + '<b>' + f.wip + '</b> wip</span>'
         : '',
-      open: '<span class="q2-n is-open' + ((f.waiting || 0) ? '' : ' is-zero')
-        + '" title="' + esc(openTip) + '"><b>'
-        + (f.waiting || 0) + '</b> ' + esc(openWord) + '</span>',
-      // Parked (open, but excluded by claim_types) is deliberately NOT counted
-      // here. It is inventory nothing will act on, and a second number beside
-      // the real one only competed with it. The diagram still shows the pile.
+      // CCC-811: "0 open" read as "nothing here" when it actually meant
+      // "nothing CLAIMABLE" — a queue whose open tickets are all parked
+      // (wrong claim type, or a GitHub issue missing the queue's label)
+      // still showed a flat 0 with no hint the ticket list wasn't empty.
+      // Only surface the parked count as a fallback when it would otherwise
+      // be the whole story (waiting === 0); once there's a real open count
+      // to show, parked stays folded away as before (a second number next
+      // to a nonzero one only competed with it).
+      open: (f.waiting || 0)
+        ? '<span class="q2-n is-open" title="' + esc(openTip) + '"><b>'
+          + f.waiting + '</b> ' + esc(openWord) + '</span>'
+        : (f.parked
+            ? '<span class="q2-n is-parked" title="Open, but nothing here is claimable right now (wrong ticket type, or a GitHub issue missing this queue&#39;s label)"><b>'
+              + f.parked + '</b> parked</span>'
+            : '<span class="q2-n is-open is-zero" title="' + esc(openTip) + '"><b>0</b> ' + esc(openWord) + '</span>'),
       parked: '',
       done: '<span class="q2-n is-done' + ((done || 0) ? '' : ' is-zero')
         + '" title="Closed, all time"><b>' + (done || 0) + '</b> closed</span>',
@@ -561,10 +660,9 @@
     // the board on an empty column with no way back.
     if (!state.booted && state.queues.length) {
       state.booted = true;
-      var savedQueue = '', savedRef = '', savedAll = false;
+      var savedQueue = '', savedAll = false;
       try {
         savedQueue = localStorage.getItem(LS_QUEUE) || '';
-        savedRef = localStorage.getItem(LS_REF) || '';
         savedAll = localStorage.getItem(LS_VIEW_ALL) === '1';
       } catch (_) {}
       var match = state.queues.filter(function (q) {
@@ -572,21 +670,10 @@
       })[0];
       if (savedAll) {
         state.viewAll = true;
-        if (savedRef && state.items.some(function (it) { return it.ref === savedRef; })) {
-          state.ref = savedRef;
-          loadDetail(savedRef);
-        }
+        // Ticket ref is intentionally NOT restored (CCC-904): detail is a
+        // popup now, and popping one open on page load would be intrusive.
       } else if (match) {
         state.queue = match.queue;
-        // The ticket is only restored if it is still in that queue. Validating
-        // against the item list rather than trusting the id avoids a detail
-        // pane stuck on "Loading" for a ref that no longer exists.
-        if (savedRef && state.items.some(function (it) {
-          return it.ref === savedRef && projectKey(it.project) === projectKey(match.queue);
-        })) {
-          state.ref = savedRef;
-          loadDetail(savedRef);
-        }
       }
     }
     // Default selection: first queue with open work, else the first queue.
@@ -597,6 +684,9 @@
     if (!state.viewAll && state.queue && projectKey(state.learningsQueue) !== projectKey(state.queue)) {
       loadQueueLearnings(state.queue);
     }
+    if (!state.viewAll && state.queue && projectKey(state.attendQueue) !== projectKey(state.queue)) {
+      loadQueueAttend(state.queue);
+    }
     // One extra tail per poll, only for the queue on screen.
     if (!state.viewAll && state.queue) await loadLog(state.queue);
     renderAll();
@@ -604,15 +694,25 @@
 
   async function loadDetail(ref) {
     if (!ref) { state.detail = null; renderDetail(); return; }
-    renderDetail();  // paint the loading state immediately
+    // Paint the cached list row instantly, then hydrate. The item endpoint
+    // shells to `gh issue view` for GitHub-backed queues, which can take
+    // 10s+ (or die) during GraphQL quota storms — a ticket the list already
+    // holds must never sit behind that wait, and the pane must never stick
+    // on "Loading REF…" when the fetch fails outright.
+    var cached = (state.items || []).find(function (it) {
+      return it && it.ref === ref;
+    }) || null;
+    state.detail = cached;
+    state.detailFailed = false;
+    renderDetail();
     try {
       var data = await getJson('/api/ux-fixes/item?ref=' + encodeURIComponent(ref));
       if (state.ref !== ref) return;  // user moved on while this was in flight
-      state.detail = (data && data.item) || null;
+      if (data && data.item) state.detail = data.item;
     } catch (e) {
       if (state.ref !== ref) return;
-      state.detail = null;
     }
+    state.detailFailed = !state.detail;
     renderDetail();
   }
 
@@ -630,6 +730,159 @@
       state.learningsError = e.message || 'Could not load queue learnings.';
     }
     renderDetail();
+  }
+
+  function attendPath(queue) {
+    return '/api/queue/attend?queue=' + encodeURIComponent(String(queue || ''));
+  }
+
+  function stopAttendPoll() {
+    if (attendPollTimer) { window.clearInterval(attendPollTimer); attendPollTimer = null; }
+    attendPollQueue = '';
+  }
+
+  // Polls every 3s only while the attendant is `running`, and only for the
+  // queue that started it -- a poll for a queue the user has since left
+  // would repaint state nobody is looking at, and would leak forever if the
+  // user bounces between queues fast enough to never see `running: false`.
+  function startAttendPoll(queue) {
+    if (attendPollTimer && attendPollQueue === projectKey(queue)) return;  // already polling this one
+    stopAttendPoll();
+    attendPollQueue = projectKey(queue);
+    attendPollTimer = window.setInterval(function () {
+      if (state.viewAll || projectKey(state.queue) !== attendPollQueue) { stopAttendPoll(); return; }
+      getJson(attendPath(queue)).then(function (data) {
+        if (projectKey(state.queue) !== projectKey(queue)) return;
+        applyAttendResponse(queue, data);
+      }).catch(function () {
+        // Swallow poll errors; the next tick will retry rather than
+        // surfacing a flicker every 3s.
+      });
+    }, 3000);
+  }
+
+  function applyAttendResponse(queue, data) {
+    state.attendExists = !!(data && data.exists);
+    state.attendPhase = (data && data.phase) || (data && data.running ? 'working' : 'idle');
+    state.attendSessionId = (data && data.session_id) || '';
+    state.attendSessionRunning = !!(data && data.session_running);
+    state.attendStartedAt = (data && data.started_at) || '';
+    state.attendLastReport = (data && data.last_report) || null;
+    state.attendQuestion = (data && data.question) || null;
+    // A fresh GET landed -- any earlier load/tend error is stale now.
+    state.attendError = '';
+    if (state.attendPhase === 'working' || state.attendPhase === 'waiting') {
+      // Anchor the live elapsed timer to the server's clock, so a page
+      // opened mid-run still shows the true "working for 4m 12s". Keep
+      // polling through `waiting` too: the attendant can give up on an
+      // unanswered question and report, and the band must notice.
+      attendRunAnchor = Date.now() - ((data && data.running_for_s) || 0) * 1000;
+      startAttendPoll(queue);
+    } else {
+      stopAttendPoll();
+    }
+    renderAttend();
+  }
+
+  async function loadQueueAttend(queue) {
+    state.attendQueue = queue;
+    state.attendExists = false;
+    state.attendPhase = 'idle';
+    state.attendSessionId = '';
+    state.attendStartedAt = '';
+    state.attendLastReport = null;
+    state.attendQuestion = null;
+    state.attendError = '';
+    renderAttend();
+    try {
+      var data = await getJson(attendPath(queue));
+      if (projectKey(state.queue) !== projectKey(queue)) return;  // user moved on
+      applyAttendResponse(queue, data);
+    } catch (e) {
+      if (projectKey(state.queue) !== projectKey(queue)) return;
+      state.attendError = e.message || 'Could not load the queue attendant.';
+      renderAttend();
+    }
+  }
+
+  // The [Refresh] click on a "waiting" question card -- lets the operator
+  // check right now (e.g. after answering elsewhere) instead of waiting up
+  // to 3s for the next poll tick.
+  async function refreshAttend() {
+    if (!state.queue || state.viewAll || state.attendRefreshing) return;
+    var queue = state.queue;
+    state.attendRefreshing = true;
+    renderAttend();
+    try {
+      var data = await getJson(attendPath(queue));
+      if (projectKey(state.queue) !== projectKey(queue)) return;
+      applyAttendResponse(queue, data);
+    } catch (e) {
+      if (projectKey(state.queue) !== projectKey(queue)) return;
+      state.attendError = e.message || 'Could not load the queue attendant.';
+    } finally {
+      state.attendRefreshing = false;
+      renderAttend();
+    }
+  }
+
+  // The [Tend queue] click. Optimistically flips to the running head the
+  // moment the POST resolves rather than waiting on the next poll tick, so
+  // the disabled-while-running button and the pulsing dot land together.
+  async function tendQueue() {
+    if (!state.queue || state.viewAll || state.attendStarting
+        || state.attendPhase === 'working' || state.attendPhase === 'waiting') return;
+    var queue = state.queue;
+    state.attendStarting = true;
+    state.attendError = '';
+    renderAttend();
+    try {
+      var data = await postJson('/api/queue/attend', { queue: queue });
+      state.attendStarting = false;
+      if (projectKey(state.queue) !== projectKey(queue)) return;  // user moved on
+      state.attendExists = true;
+      state.attendPhase = 'working';
+      state.attendSessionId = (data && data.session_id) || state.attendSessionId;
+      state.attendQuestion = null;
+      attendRunAnchor = Date.now();
+      renderAttend();
+      startAttendPoll(queue);
+    } catch (e) {
+      state.attendStarting = false;
+      if (projectKey(state.queue) !== projectKey(queue)) return;
+      // Shown inline in the band, not alert() -- a queue with a stale wt
+      // config ("configure the queue's repo path first") is common enough
+      // that a modal would just be one more click to dismiss.
+      state.attendError = e.message || 'Could not start the attendant.';
+      renderAttend();
+    }
+  }
+
+  // Answering the attendant's one pending question: the server clears the
+  // question from the state file and resumes the session by injecting the
+  // answer as its next message (there is no AskUserQuestion tool in headless
+  // sessions -- the question arrived over HTTP and the answer goes back the
+  // same way). `text` is either a clicked option's full label or free text.
+  async function answerAttendQuestion(text) {
+    if (!state.queue || state.attendAnswering || !String(text || '').trim()) return;
+    var queue = state.queue;
+    state.attendAnswering = true;
+    state.attendAnswerError = '';
+    renderAttend();
+    try {
+      await postJson('/api/queue/attend/answer', { queue: queue, text: text });
+      state.attendAnswering = false;
+      if (projectKey(state.queue) !== projectKey(queue)) return;  // moved on mid-request
+      state.attendQuestion = null;
+      state.attendPhase = 'working';  // resumed; the poll confirms shortly
+      renderAttend();
+      startAttendPoll(queue);
+    } catch (e) {
+      state.attendAnswering = false;
+      if (projectKey(state.queue) !== projectKey(queue)) return;
+      state.attendAnswerError = e.message || 'Could not send the answer.';
+      renderAttend();
+    }
   }
 
   // ── render: chrome ───────────────────────────────────────────────────────
@@ -677,10 +930,13 @@
     });
 
     var allItems = (state.items || []).filter(function (it) { return statusOf(it) !== 'closed'; });
-    var allFacts = { waiting: 0, wip: 0, needsInput: 0 };
+    var allFacts = { waiting: 0, wip: 0, needsInput: 0, gated: 0 };
     allItems.forEach(function (it) {
       var st = statusOf(it);
-      if (st === 'blocked') allFacts.needsInput++;
+      if (st === 'blocked') {
+        if (it.block_kind === 'rationale') allFacts.gated++;
+        allFacts.needsInput++;
+      }
       else if (st === 'in_progress') allFacts.wip++;
       else allFacts.waiting++;
     });
@@ -693,12 +949,23 @@
       + '<span class="q2-qrow-foot"><span class="q2-qrow-bl">'
       + '<span class="q2-all-workers">' + (state.workers || []).length + ' live worker'
       + ((state.workers || []).length === 1 ? '' : 's') + '</span></span>'
-      + '<span class="q2-qrow-br">' + allCounts.needsInput + '</span></span></span></div>';
+      + '<span class="q2-qrow-br">' + allCounts.gated + allCounts.needsInput + '</span></span></span></div>';
 
     host.innerHTML = allRow + ordered.map(function (q) {
-      var f = facts[projectKey(q.queue)];
+      var f = facts[projectKey(q.queue)] || {};
       var isSel = projectKey(q.queue) === selected;
       var c = countParts(f, q.closed, claimTypesFor(projectKey(q.queue)));
+      // CCC-808: total tickets ever, not just currently-open — a queue with
+      // 0 open but old closed history still has something to lose, so it
+      // gets a confirm too. Only a truly untouched queue (0 and 0) deletes
+      // with no prompt.
+      var totalTickets = (f.waiting || 0) + (f.wip || 0) + (f.needsInput || 0) + (q.closed || 0);
+      var delTitle = totalTickets > 0
+        ? ('Delete queue ' + q.queue + ' (' + totalTickets + ' ticket' + (totalTickets === 1 ? '' : 's') + ' - asks to confirm)')
+        : ('Delete queue ' + q.queue + ' (empty - no confirmation needed)');
+      var delBtn = '<button type="button" class="q2-qrow-del" data-q2-del-queue="' + esc(q.queue)
+        + '" data-q2-del-total="' + totalTickets + '"'
+        + ' title="' + esc(delTitle) + '" aria-label="' + esc(delTitle) + '">&times;</button>';
       return '<div class="q2-qrow' + (isSel ? ' is-selected' : '')
         + (q.state === 'stuck' ? ' is-stuck' : '') + '"'
         + ' role="button" tabindex="0"'
@@ -724,6 +991,7 @@
             ? '<span class="q2-qage" title="Most recent ticket activity in this queue">'
               + esc(agoFromSeconds(q.last_activity_seconds)) + '</span>'
             : '')
+        + c.gated
         + c.needsInput
         + '</span>'
         + '</span>'
@@ -731,6 +999,7 @@
         + '</span>'
         // Spans both rows: the policy governs the whole queue, not one line.
         + drainControl(q)
+        + delBtn
         + '</div>';
     }).join('');
   }
@@ -858,6 +1127,51 @@
     return html;
   }
 
+  // Is this live worker the one running this ticket? Asked in both directions:
+  // the diagram asks it per worker, the ticket detail asks it per ticket.
+  function workerMatchesItem(w, it) {
+    var s = String((it && it.claimed_session_id) || '').trim();
+    var by = String((it && it.claimed_by) || '').trim();
+    return !!(w && ((s && s === w.session_id) || (by && (by === w.session_id || by === w.worker_id))));
+  }
+
+  // What a LIVE worker is actually running: the same engine / model / effort
+  // triple the tickets-column header shows for the queue, so the two can be
+  // compared at a glance when a worker predates a config change. Rendered as
+  // plain text rather than links: these are facts about a process that already
+  // started, not fields you can still edit. A worker with no effort was spawned
+  // without one, which is NOT the header's "unset here, inherited from the
+  // defaults", so a missing field is left out rather than shown as a default.
+  function workerSpecFields(w) {
+    return [
+      String((w && w.engine) || ''),
+      String((w && w.model) || ''),
+      String((w && w.effort) || ''),
+    ];
+  }
+
+  // The worker cards are barely wider than one model name, so the vendor prefix
+  // is dropped on screen only. The title always carries the exact values.
+  function shortModel(model) {
+    return String(model || '').split('/').pop().replace(/^claude-/, '');
+  }
+
+  function workerSpecTitle(w) {
+    var f = workerSpecFields(w);
+    return 'engine ' + (f[0] || 'default') + ' · model ' + (f[1] || 'default')
+      + ' · effort ' + (f[2] || 'none set at spawn');
+  }
+
+  function workerSpecHtml(w, cls) {
+    var f = workerSpecFields(w);
+    var shown = [f[0], shortModel(f[1]), f[2]].filter(Boolean);
+    if (!shown.length) return '';
+    return '<div class="q2-spec ' + esc(cls) + '" title="' + esc(workerSpecTitle(w)) + '">'
+      + shown.map(function (v) { return '<span class="q2-spec-v">' + esc(v) + '</span>'; })
+          .join('<span class="q2-spec-sep">&middot;</span>')
+      + '</div>';
+  }
+
   // Re-rendering the diagram on every 5s poll would restart every CSS
   // animation mid-cycle, which reads as a stutter. Only rebuild when something
   // it actually draws has changed.
@@ -867,22 +1181,204 @@
       m.waiting.length, m.parked.length, m.blocked.length,
       m.working.map(function (it) { return it.ref; }).join(','),
       m.workers.map(function (w) {
-        return w.worker_id + ':' + Q2WorkerIdle.signatureBucket(w.idle_seconds);
+        // The spec is part of what the card draws, so a worker that respawned
+        // on a different engine/model/effort has to repaint. session_id has to
+        // be in here too: the "open" link is baked from it at render time, so
+        // a worker that resumes under the same worker_id with a new session
+        // must repaint or that link keeps pointing at the stale session.
+        return w.worker_id + ':' + Q2WorkerIdle.signatureBucket(w.idle_seconds)
+          + ':' + workerSpecFields(w).join('/') + ':' + (w.session_id || '');
       }).join(','),
       m.doneRecent.map(function (it) { return it.ref; }).join(','),
     ].join('|');
   }
 
+  // mm:ss, counting down to 0 and staying there (never negative, never
+  // rolls over past an hour since both ceilings below cap at 60:00).
+  function countdownClock(remainingMs) {
+    var totalSeconds = Math.max(0, Math.round(remainingMs / 1000));
+    var m = Math.floor(totalSeconds / 60);
+    var s = totalSeconds % 60;
+    return (m < 10 ? '0' : '') + m + ':' + (s < 10 ? '0' : '') + s;
+  }
+
+  // A ticking countdown span: data-q2-release-at is the absolute epoch-ms
+  // deadline tickCountdowns() (bottom of file) rewrites every second from
+  // Date.now(), independent of the poll/repaint cycle. `releaseAtMs` null
+  // means idle_seconds wasn't a valid number -- render nothing rather than
+  // a countdown to a made-up time.
+  function countdownSpanHtml(releaseAtMs) {
+    if (releaseAtMs === null) return '';
+    return '<span class="q2-countdown" data-q2-release-at="' + releaseAtMs + '">'
+      + esc(countdownClock(releaseAtMs - Date.now())) + '</span>';
+  }
+
+  // The per-worker card, shared between the per-queue diagram's Worker stage
+  // and the ALL-queues live-workers view -- both need the same idle/"kept
+  // warm while blocked"/release-button treatment, and having two copies is
+  // exactly how the ALL view fell behind (it never got the idle-severity or
+  // blocked-ticket handling added to the per-queue card over time).
+  // `working`/`blocked` are the ticket pools to match this worker against
+  // (one queue's, for the diagram; every queue's, for the ALL view).
+  // `opts.showQueue` labels which queue a card belongs to -- meaningless in
+  // the per-queue diagram (the whole column is already that queue) but the
+  // only way to tell workers apart once they're mixed together in ALL view.
+  function workerCardHtml(w, working, blocked, opts) {
+    opts = opts || {};
+    var on = working.filter(function (it) { return workerMatchesItem(w, it); })[0];
+    // A worker whose only claimed ticket just got blocked (needs_input)
+    // is not "idle" in the WatchTower-would-release sense: it is being
+    // deliberately kept warm because the ticket needs a human answer,
+    // not a fresh claim (see workers.py's IDLE_DECISION PRESERVE with
+    // reason "blocked_ticket"). Q2WorkerIdle's plain idle-time buckets
+    // ("release pending" / "should have released") don't know this and
+    // read as an alarm for a worker that is behaving exactly as designed.
+    var blockedOn = !on && blocked.filter(function (it) { return workerMatchesItem(w, it); })[0];
+    var idle;
+    if (blockedOn) {
+      // Kept warm is bounded, not forever (workers.py's blocked_only_past_
+      // ceiling, mirrored here as BLOCKED_RELEASE_CEILING_S): past it the
+      // worker is released like any other idle one. `wt answer` still reaches
+      // the same session after that -- it resumes fresh instead of steering
+      // a live process -- so the countdown is to "this card goes away", not
+      // to "your answer stops working".
+      //
+      // A live MM:SS clock (not a static "released in Xm" that only updates
+      // on the next 5s poll, or worse the per-minute repaint bucket) needs a
+      // fixed target: data-q2-release-at is an absolute epoch-ms deadline,
+      // computed once here from the freshest idle_seconds. tickCountdowns()
+      // (a separate 1s setInterval, see bottom of file) finds every such
+      // element in the DOM each second and rewrites its text from
+      // Date.now() vs. that deadline -- no re-render, no drift, because
+      // idle_seconds and wall-clock time advance at the same rate.
+      var idleKnown = typeof w.idle_seconds === 'number' && isFinite(w.idle_seconds) && w.idle_seconds >= 0;
+      var releaseAtMs = idleKnown
+        ? Date.now() + Math.max(0, Q2WorkerIdle.BLOCKED_RELEASE_CEILING_S - w.idle_seconds) * 1000
+        : null;
+      var countdownHtml = countdownSpanHtml(releaseAtMs);
+      idle = {
+        // esc()'d normally at the render site below; this one path needs the
+        // <span> to survive, so it's carried separately as trusted HTML --
+        // built entirely from a computed number, nothing ticket-authored.
+        labelHtml: 'Kept warm' + (countdownHtml ? ' — released in ' + countdownHtml + ' unless answered' : ''),
+        label: 'Kept warm',
+        severity: 'blocked',
+        title: 'Holding ' + blockedOn.ref + ', blocked on your answer'
+          + (blockedOn.block_question ? ': ' + String(blockedOn.block_question).slice(0, 160) : '')
+          + '. WatchTower keeps this worker alive so it can resume the moment you answer'
+          + (releaseAtMs === null
+              ? '.'
+              : ', but releases it automatically once the countdown reaches 0. wt answer still '
+                + 'reaches the same session after that (it resumes fresh instead of steering a '
+                + 'live process) -- release just means the process itself stops, about '
+                + Q2WorkerIdle.ageText(Q2WorkerIdle.BLOCKED_RELEASE_CEILING_S) + ' later.'),
+      };
+    } else {
+      idle = Q2WorkerIdle.presentation(w.idle_seconds);
+      if (idle.severity === 'warm') {
+        // Same ticking-deadline treatment as the blocked-only countdown
+        // above, counting down to the OTHER boundary: when this worker
+        // stops being "warm" and becomes release-eligible.
+        var warmAtMs = Date.now()
+          + Math.max(0, Q2WorkerIdle.WARM_CEILING_S - w.idle_seconds) * 1000;
+        idle = {
+          labelHtml: 'Idle ' + esc(idle.age) + ' · warm for '
+            + countdownSpanHtml(warmAtMs) + ' more',
+          label: idle.label,
+          severity: 'warm',
+          title: idle.title + ' Eligible for release once the countdown reaches 0.',
+        };
+      }
+    }
+    // 'warm' (< 30m idle) used to fall through to '' here, so a worker
+    // with nothing claimed still got the plain is-live look -- same
+    // spinning green ring as one actively working a ticket. Every idle
+    // tier now gets a class so the spin can read as "sleeping" instead.
+    var idleClass = idle.severity === 'warm' ? ' is-idle-warm'
+      : idle.severity === 'pending' ? ' is-idle-pending'
+      : idle.severity === 'warning' ? ' is-idle-warning'
+      : idle.severity === 'stale' ? ' is-idle-stale'
+      : idle.severity === 'blocked' ? ' is-idle-blocked' : '';
+    return '<div class="q2-dg-worker is-live' + (on ? '' : idleClass) + '"'
+      + (on ? '' : ' data-idle-severity="' + esc(idle.severity) + '"') + '>'
+      + '<div class="q2-dg-worker-head">'
+      + '<span class="q2-dg-spin" aria-hidden="true"></span>'
+      + '<span class="q2-dg-worker-id">' + esc(w.worker_id || 'worker') + '</span>'
+      + (w.session_id ? sessionBtn(w.session_id, 'open ' + String(w.session_id).slice(0, 8)) : '')
+      + '<button type="button" class="q2-dg-worker-release"'
+      + ' data-q2-release-worker="' + esc(w.worker_id || '') + '"'
+      + ' title="Release this worker and requeue its ticket"'
+      + ' aria-label="Release ' + esc(w.worker_id || 'worker') + ' and requeue its ticket">Release</button>'
+      + '</div>'
+      + (opts.showQueue
+          ? '<div class="q2-dg-worker-queue">' + esc(w.queue || 'unknown queue') + '</div>' : '')
+      + workerSpecHtml(w, 'q2-dg-worker-spec')
+      + (on
+          ? '<div class="q2-dg-worker-on" data-q2-ref="' + esc(on.ref) + '" title="' + esc(titleOf(on).split('\n')[0]) + '">'
+            + '<span class="q2-dg-card-ref">' + esc(on.ref) + '</span>'
+            + '<span class="q2-dg-worker-title">' + esc(titleOf(on).split('\n')[0].slice(0, 60)) + '</span></div>'
+          : '<div class="q2-dg-worker-idle" title="' + esc(idle.title) + '">'
+            + (idle.labelHtml || esc(idle.label)) + '</div>')
+      + '</div>';
+  }
+
+  // Mechanics-view fold: one global preference, not per queue -- if the
+  // pipeline chrome is in the way, it's in the way on every queue.
+  function diagramCollapsed() {
+    try {
+      var stored = localStorage.getItem('q2.diagram.collapsed');
+      if (stored === '1') return true;
+      if (stored === '0') return false;
+    } catch (_) {}
+    // Unset: phones start folded so the ticket list gets the viewport.
+    try { return window.matchMedia('(max-width: 700px)').matches; } catch (_) { return false; }
+  }
+  function setDiagramCollapsed(on) {
+    try { localStorage.setItem('q2.diagram.collapsed', on ? '1' : '0'); } catch (_) {}
+    var host = $('q2Diagram');
+    if (host) host.removeAttribute('data-sig');  // bust the render cache
+    renderDiagram();
+  }
+
+  function miniRef(ref) {
+    var m = String(ref || '').match(/(\d+)$/);
+    return m ? '#' + m[1] : String(ref || '');
+  }
+
   function renderDiagram() {
     var host = $('q2Diagram');
     if (!host) return;
-    if (state.viewAll) { renderLiveWorkersStrip(host); return; }
+    if (state.viewAll) {
+      if (!host.querySelector('.q2-history-chart') || !host.querySelector('.q2-live-workers-wrap')) {
+        host.innerHTML = '<div class="q2-history-chart" id="q2HistoryChart"></div>'
+          + '<div class="q2-live-workers-wrap" id="q2LiveWorkersWrap"></div>';
+      }
+      renderQueueHistoryChart($('q2HistoryChart'));
+      renderLiveWorkersStrip($('q2LiveWorkersWrap'));
+      return;
+    }
     if (!state.queue) { host.innerHTML = ''; return; }
 
     var m = flowModel();
-    var sig = flowSignature(m);
+    var collapsed = diagramCollapsed();
+    var sig = (collapsed ? 'mini|' : 'full|') + flowSignature(m);
     if (host.getAttribute('data-sig') === sig) return;
     host.setAttribute('data-sig', sig);
+
+    if (collapsed) {
+      // The SUPER-short strip: live dot + which refs are being worked right
+      // now. Click anywhere on it to unfold the full pipeline.
+      var live = m.working.length > 0;
+      var label = live
+        ? 'In progress: ' + m.working.map(function (it) { return miniRef(it.ref); }).join(', ')
+        : 'Idle' + (m.blocked.length ? ' · ' + m.blocked.length + ' need input' : '');
+      host.innerHTML = '<div class="q2-diagram-mini" data-q2-dg-expand'
+        + ' title="Expand queue mechanics" role="button" tabindex="0">'
+        + '<span class="q2-mini-dot' + (live ? '' : ' is-idle') + '" aria-hidden="true"></span>'
+        + '<span class="q2-mini-refs">' + esc(label) + '</span>'
+        + '</div>';
+      return;
+    }
 
     // Flow is only animated where work can actually move. A manual queue draws
     // the same pipeline with the links dead, which is the honest picture.
@@ -900,32 +1396,7 @@
     var workerBody;
     if (m.workers.length) {
       workerBody = m.workers.map(function (w) {
-        var on = m.working.filter(function (it) {
-          var s = String(it.claimed_session_id || '').trim(), by = String(it.claimed_by || '').trim();
-          return (s && s === w.session_id) || (by && (by === w.session_id || by === w.worker_id));
-        })[0];
-        var idle = Q2WorkerIdle.presentation(w.idle_seconds);
-        var idleClass = idle.severity === 'pending' ? ' is-idle-pending'
-          : idle.severity === 'warning' ? ' is-idle-warning'
-          : idle.severity === 'stale' ? ' is-idle-stale' : '';
-        return '<div class="q2-dg-worker is-live' + (on ? '' : idleClass) + '"'
-          + (on ? '' : ' data-idle-severity="' + esc(idle.severity) + '"') + '>'
-          + '<div class="q2-dg-worker-head">'
-          + '<span class="q2-dg-spin" aria-hidden="true"></span>'
-          + '<span class="q2-dg-worker-id">' + esc(w.worker_id || 'worker') + '</span>'
-          + (w.session_id ? sessionBtn(w.session_id, 'open') : '')
-          + '<button type="button" class="q2-dg-worker-release"'
-          + ' data-q2-release-worker="' + esc(w.worker_id || '') + '"'
-          + ' title="Release this worker and requeue its ticket"'
-          + ' aria-label="Release ' + esc(w.worker_id || 'worker') + ' and requeue its ticket">Release</button>'
-          + '</div>'
-          + (on
-              ? '<div class="q2-dg-worker-on" data-q2-ref="' + esc(on.ref) + '" title="' + esc(titleOf(on).split('\n')[0]) + '">'
-                + '<span class="q2-dg-card-ref">' + esc(on.ref) + '</span>'
-                + '<span class="q2-dg-worker-title">' + esc(titleOf(on).split('\n')[0].slice(0, 60)) + '</span></div>'
-              : '<div class="q2-dg-worker-idle" title="' + esc(idle.title) + '">'
-                + esc(idle.label) + '</div>')
-          + '</div>';
+        return workerCardHtml(w, m.working, m.blocked);
       }).join('');
     } else {
       // The Worker stage is about the running INSTANCE. What the queue would
@@ -994,24 +1465,323 @@
       + '<div class="q2-dg-sub" title="Closed in this queue, all time">'
       + (m.q.closed || 0) + ' total</div>'
       + '</div>'
+      + '</div>'
+      + '<button type="button" class="q2-dg-fold" data-q2-dg-fold'
+      + ' title="Collapse queue mechanics to one line">&#9650;</button>';
+  }
+
+  // ── render: queue attendant ──────────────────────────────────────────────
+  // Collapse state is per-queue (a queue mid-question wants it open; a quiet
+  // one gets collapsed once and should stay that way), and persists the same
+  // way the logbar height does: a plain localStorage key, read fresh on
+  // every render rather than cached in `state`. Same keys as the old status
+  // brief -- it's the same band, just repurposed, so an existing collapse
+  // preference carries over.
+  function briefCollapsedKey(queue) { return 'q2.brief.collapsed.' + projectKey(queue); }
+  function briefCollapsed(queue) {
+    try { return localStorage.getItem(briefCollapsedKey(queue)) === '1'; } catch (_) { return false; }
+  }
+  function setBriefCollapsed(queue, on) {
+    try { localStorage.setItem(briefCollapsedKey(queue), on ? '1' : '0'); } catch (_) {}
+  }
+
+  // The pending question's answer form. Escaped throughout -- question text,
+  // header, and option labels are model-provided. One button per option
+  // (the attendant prompt puts its recommended direction first) plus a
+  // free-text field for anything else. `data-q2-attend-draft` marks the
+  // input whose value setAttendRegions() preserves across a same-content
+  // repaint (mirrors the detail pane's comment/answer draft preservation).
+  function attendQuestionHtml(question) {
+    if (!question || !question.question) return '';
+    var opts = Array.isArray(question.options) ? question.options : [];
+    var busy = !!state.attendAnswering;
+    // The prompt contract puts the attendant's recommended direction first;
+    // give that one the primary treatment so "approve their direction" is
+    // the biggest target.
+    var optsHtml = opts.map(function (opt, oi) {
+      return '<button type="button" class="q2-btn q2-attend-opt' + (oi === 0 ? ' q2-btn-primary' : '') + '"'
+        + ' data-q2-attend-answer-opt="' + oi + '"'
+        + (busy ? ' disabled' : '')
+        + '>' + esc(String(opt || '')) + '</button>';
+    }).join('');
+    return '<div class="q2-attend-question">'
+      + '<div class="q2-attend-question-title">Attendant asks'
+      + (question.ref ? ' <span class="q2-mono">(' + esc(question.ref) + ')</span>' : '') + ':</div>'
+      + '<div class="q2-attend-question-text">' + esc(question.question) + '</div>'
+      + (optsHtml ? '<div class="q2-attend-options">' + optsHtml + '</div>' : '')
+      + '<div class="q2-attend-freeform">'
+      + '<input type="text" class="q2-input q2-attend-freetext" data-q2-attend-draft="answer"'
+      + ' placeholder="Or type your own answer&hellip;" aria-label="Type your own answer"'
+      + (busy ? ' disabled' : '') + '>'
+      + '<button type="button" class="q2-btn q2-btn-primary" data-q2-attend-answer-send'
+      + (busy ? ' disabled' : '') + '>' + (busy ? 'Sending&hellip;' : 'Send') + '</button>'
+      + '<button type="button" class="q2-btn q2-btn-ghost q2-attend-skip" data-q2-attend-skip'
+      + (busy ? ' disabled' : '') + ' title="Let the attendant use its own judgment and move on">'
+      + 'Skip' + '</button>'
+      + '</div>'
+      + (state.attendAnswerError ? '<div class="q2-attend-error">' + esc(state.attendAnswerError) + '</div>' : '')
       + '</div>';
+  }
+
+  // renderAttend runs on every main poll (renderAll) plus after every action
+  // (tend, answer). The band is split into two independently-repainted
+  // regions so the header's live elapsed timer can tick every second without
+  // rebuilding the body -- an innerHTML reset on the body would throw away
+  // scroll position, text selection, and any half-typed free-text answer.
+  // `attendShape` tracks which skeleton is mounted; the head/body strings
+  // gate their own region's repaint. Kept from the old status-brief band.
+  var attendShape = null;
+  var attendHeadHtml = null;
+  var attendBodyHtml = null;
+
+  function setAttendRegions(host, shape, headHtml, bodyHtml, bodyHidden) {
+    host.hidden = (shape === 'hidden');
+    if (shape !== attendShape) {
+      attendShape = shape;
+      attendHeadHtml = null;
+      attendBodyHtml = null;
+      if (shape === 'hidden') { host.innerHTML = ''; return; }
+      host.innerHTML = '<div class="q2-brief-head"></div><div class="q2-brief-body"></div>';
+    }
+    if (shape === 'hidden') return;
+    var head = host.querySelector('.q2-brief-head');
+    var body = host.querySelector('.q2-brief-body');
+    if (head && attendHeadHtml !== headHtml) { attendHeadHtml = headHtml; head.innerHTML = headHtml; }
+    if (body && attendBodyHtml !== bodyHtml) {
+      // Preserve a focused free-text draft across a body rebuild (e.g. the
+      // answer-error line appearing after a failed send) -- same pattern
+      // renderDetail() uses for its always-open comment/answer boxes.
+      var drafts = {}, focused = null, selStart = 0, selEnd = 0;
+      body.querySelectorAll('[data-q2-attend-draft]').forEach(function (el) {
+        var k = el.getAttribute('data-q2-attend-draft');
+        if (el.value) drafts[k] = el.value;
+        if (document.activeElement === el) { focused = k; selStart = el.selectionStart; selEnd = el.selectionEnd; }
+      });
+      attendBodyHtml = bodyHtml;
+      body.innerHTML = bodyHtml;
+      body.querySelectorAll('[data-q2-attend-draft]').forEach(function (el) {
+        var k = el.getAttribute('data-q2-attend-draft');
+        if (drafts[k] != null) el.value = drafts[k];
+        if (focused === k) {
+          el.focus();
+          try { el.setSelectionRange(selStart, selEnd); } catch (_) {}
+        }
+      });
+    }
+    if (body) body.hidden = !!bodyHidden;
+  }
+
+  function renderAttend() {
+    var host = $('q2Brief');
+    if (!host) return;
+
+    // Hidden: all-queues view (the attendant is per-queue) or no queue
+    // selected.
+    if (state.viewAll || !state.queue) {
+      setAttendRegions(host, 'hidden', '', '', false);
+      setBriefHandleHidden(true);
+      syncAttendTicker();
+      return;
+    }
+
+    var collapsed = briefCollapsed(state.queue);
+    var phase = state.attendPhase;
+    var headHtml, bodyHtml, bodyHidden;
+
+    if (phase === 'working') {
+      // Pulsing dot + live elapsed (anchored to the server's running_for_s,
+      // ticked client-side) + a link to the spawned session.
+      headHtml = '<span class="q2-mini-dot" aria-hidden="true"></span>'
+        + '<span class="q2-brief-title">Attendant working&hellip; <span class="q2-brief-elapsed"></span></span>'
+        + '<span class="q2-spacer"></span>'
+        + sessionBtn(state.attendSessionId, 'open session')
+        + '<button type="button" class="q2-brief-toggle" data-q2-brief-toggle'
+        + ' aria-expanded="' + (collapsed ? 'false' : 'true') + '"'
+        + ' title="' + (collapsed ? 'Expand' : 'Collapse') + '">'
+        + (collapsed ? '&#9660;' : '&#9650;') + '</button>';
+      bodyHtml = '';
+      bodyHidden = true;
+    } else if (phase === 'waiting') {
+      // The attendant escalated ONE decision and ended its turn. This is
+      // the state the whole feature exists for -- the question card gets
+      // the body, and collapse is ignored (a hidden question would look
+      // like a hung attendant).
+      headHtml = '<span class="q2-mini-dot" style="animation:none" aria-hidden="true"></span>'
+        + '<span class="q2-brief-title">Attendant needs a decision</span>'
+        + (state.attendQuestion && state.attendQuestion.at
+          ? '<span class="q2-attend-updated">Updated ' + esc(relTime(state.attendQuestion.at)) + '</span>' : '')
+        + (!state.attendSessionRunning
+          ? '<span class="q2-attend-error" title="The attendant session that asked this ended -- Refresh will not get a new answer. Tend queue to start a fresh run.">session ended</span>'
+          : '')
+        + '<span class="q2-spacer"></span>'
+        + '<button type="button" class="q2-btn q2-btn-ghost q2-attend-refresh" data-q2-attend-refresh'
+        + (state.attendRefreshing ? ' disabled' : '') + ' title="Check for a new question now">'
+        + (state.attendRefreshing ? 'Refreshing&hellip;' : 'Refresh') + '</button>'
+        + sessionBtn(state.attendSessionId, 'open session');
+      bodyHtml = attendQuestionHtml(state.attendQuestion);
+      bodyHidden = false;
+    } else {
+      // Idle (never run, or ended) -- one manual trigger, disabled only
+      // while the POST that starts it is in flight (once it lands, the
+      // `running` branch above takes over and the button disappears).
+      headHtml = '<span class="q2-brief-title">Queue attendant</span>'
+        + '<span class="q2-spacer"></span>'
+        + (state.attendError ? '<span class="q2-attend-error">' + esc(state.attendError) + '</span>' : '')
+        + '<button type="button" class="q2-btn q2-btn-ghost q2-attend-tend" data-q2-attend-tend'
+        + (state.attendStarting ? ' disabled' : '') + '>'
+        + (state.attendStarting ? 'Tending&hellip;' : 'Tend queue') + '</button>'
+        + '<button type="button" class="q2-brief-toggle" data-q2-brief-toggle'
+        + ' aria-expanded="' + (collapsed ? 'false' : 'true') + '"'
+        + ' title="' + (collapsed ? 'Expand' : 'Collapse') + '">'
+        + (collapsed ? '&#9660;' : '&#9650;') + '</button>';
+
+      if (state.attendLastReport && state.attendLastReport.summary) {
+        bodyHtml = '<div class="q2-attend-report">Last tended '
+          + esc(relTime(state.attendLastReport.at)) + ' &mdash; '
+          + esc(state.attendLastReport.summary) + '</div>';
+        bodyHidden = collapsed;
+      } else if (state.attendExists) {
+        // Ran to completion but never posted its report (e.g. the process
+        // died mid-cleanup) -- still one click away via the session link.
+        bodyHtml = '<div class="q2-attend-report">Attendant finished &mdash; '
+          + sessionBtn(state.attendSessionId, 'open session') + '</div>';
+        bodyHidden = collapsed;
+      } else {
+        bodyHtml = '';
+        bodyHidden = true;
+      }
+    }
+
+    setAttendRegions(host, 'full', headHtml, bodyHtml, bodyHidden);
+    // Only stretch into space freed by the logbar handle when there's a body
+    // to actually show more of -- collapsed/empty states stay content-sized
+    // so shrinking the log doesn't just open a blank gap above it.
+    host.classList.toggle('q2-brief-has-body', !bodyHidden);
+    // The drag handle only earns its pixels when there is a body to resize.
+    setBriefHandleHidden(collapsed || bodyHidden);
+    syncAttendTicker();
+  }
+
+  function setBriefHandleHidden(hidden) {
+    var handle = document.querySelector('[data-q2-resize-v="brief"]');
+    if (handle) handle.hidden = hidden;
   }
 
   // ALL is a triage view, not a synthetic queue. Its summary therefore shows
   // only real, live workers and does not imply that an armed queue is working.
+  // ALL-queues worker view. Used to be a flat one-line-per-worker strip with
+  // no idle status, no "on ticket X", no release button -- everything the
+  // per-queue diagram's Worker stage already had. Now it's the same
+  // workerCardHtml() cards, just matched against every queue's tickets
+  // instead of one, with a queue badge added since that context is no
+  // longer implicit from a single selected column.
+  // History graph for the all-queues view (CCC-903): open / needs input /
+  // closed counts over the last 7 days. Backend snapshots at most once every
+  // 15 minutes (see compute_queue_history in ccc_server/queue_events.py), so
+  // polling here on a slower cadence than the rest of q2 is enough -- a
+  // tighter poll would just re-fetch the same cached backend response.
+  var HISTORY_POLL_MS = 5 * 60 * 1000;
+  var historyFetchedAt = 0;
+  var historyFetching = false;
+
+  function fetchQueueHistoryIfStale() {
+    if (historyFetching || Date.now() - historyFetchedAt < HISTORY_POLL_MS) return;
+    historyFetching = true;
+    fetch('/api/wt/queue/history?days=7&bucket_hours=1')
+      .then(function (r) { return r.json(); })
+      .then(function (data) {
+        historyFetchedAt = Date.now();
+        if (data && data.ok) {
+          state.queueHistory = data.points || [];
+          renderDiagram();
+        }
+      })
+      .catch(function () {})
+      .then(function () { historyFetching = false; });
+  }
+
+  function renderQueueHistoryChart(host) {
+    if (!host) return;
+    fetchQueueHistoryIfStale();
+    var pts = state.queueHistory;
+    if (pts == null) { host.innerHTML = '<div class="q2-dg-empty">Loading history…</div>'; return; }
+    if (!pts.length) { host.innerHTML = '<div class="q2-dg-empty">No history yet.</div>'; return; }
+
+    var w = 720, h = 120, padL = 4, padR = 4, padT = 8, padB = 18;
+    var innerW = w - padL - padR, innerH = h - padT - padB;
+    var tMin = pts[0].ts, tMax = pts[pts.length - 1].ts;
+    var tSpan = Math.max(1, tMax - tMin);
+
+    function x(ts) { return padL + ((ts - tMin) / tSpan) * innerW; }
+
+    // closed is a monotonic cumulative total (thousands) while open/needs_input
+    // are small live counts -- one shared y-scale would flatten the latter two
+    // to a barely-visible line at the bottom. Each series gets its own y-scale
+    // so shape/trend is legible for all three; the legend numbers carry the
+    // real magnitude comparison.
+    function pathFor(field, requireNonNull) {
+      var vMax = 1;
+      pts.forEach(function (p) {
+        var v = p[field];
+        if (v != null) vMax = Math.max(vMax, v);
+      });
+      function y(v) { return padT + innerH - (v / vMax) * innerH; }
+      var d = '', pen = false;
+      pts.forEach(function (p) {
+        var v = p[field];
+        if (requireNonNull && (v == null)) { pen = false; return; }
+        d += (pen ? ' L ' : ' M ') + x(p.ts).toFixed(1) + ' ' + y(v || 0).toFixed(1);
+        pen = true;
+      });
+      return d.trim();
+    }
+
+    var latest = pts[pts.length - 1];
+    var legend = [
+      ['open', 'Open', latest.open],
+      ['needs_input', 'Needs input', latest.needs_input],
+      ['closed', 'Closed', latest.closed],
+    ].map(function (row) {
+      return '<span class="q2-history-legend-item q2-history-legend-' + row[0] + '">'
+        + '<span class="q2-history-swatch"></span>' + row[1]
+        + (row[2] == null ? '' : ' <b>' + row[2] + '</b>') + '</span>';
+    }).join('');
+
+    host.innerHTML = '<div class="q2-history-head">'
+      + '<span class="q2-history-title">Last 7 days</span>'
+      + '<span class="q2-spacer"></span>' + legend + '</div>'
+      + '<svg class="q2-history-svg" viewBox="0 0 ' + w + ' ' + h + '" preserveAspectRatio="none" aria-hidden="true">'
+      + '<path class="q2-history-line q2-history-line-open" d="' + esc(pathFor('open', false)) + '"></path>'
+      + '<path class="q2-history-line q2-history-line-needs_input" d="' + esc(pathFor('needs_input', true)) + '"></path>'
+      + '<path class="q2-history-line q2-history-line-closed" d="' + esc(pathFor('closed', false)) + '"></path>'
+      + '</svg>';
+  }
+
   function renderLiveWorkersStrip(host) {
     var workers = state.workers || [];
+    var working = [], blocked = [];
+    (state.items || []).forEach(function (it) {
+      var st = statusOf(it);
+      if (st === 'in_progress') working.push(it);
+      else if (st === 'blocked') blocked.push(it);
+    });
     var sig = 'all|' + workers.map(function (w) {
-      return String(w.worker_id || '') + '|' + String(w.queue || '');
-    }).join(',');
+      // Same signature shape as flowSignature's per-worker entry: engine/
+      // model/effort (respawn on a new spec must repaint), idle bucket, and
+      // session_id (a resumed worker's "open" link must repaint too).
+      return String(w.worker_id || '') + '|' + String(w.queue || '')
+        + '|' + Q2WorkerIdle.signatureBucket(w.idle_seconds)
+        + '|' + workerSpecFields(w).join('/') + '|' + (w.session_id || '');
+    }).join(',')
+      + '|' + working.map(function (it) { return it.ref; }).join(',')
+      + '|' + blocked.map(function (it) { return it.ref; }).join(',');
     if (host.getAttribute('data-sig') === sig) return;
     host.setAttribute('data-sig', sig);
     host.innerHTML = '<div class="q2-live-workers">'
       + '<div class="q2-live-workers-head">Live workers <span>' + workers.length + '</span></div>'
       + (workers.length
-          ? '<div class="q2-live-workers-list">' + workers.map(function (w) {
-              return '<span class="q2-live-worker"><span class="q2-dg-spin" aria-hidden="true"></span>'
-                + esc(w.worker_id || 'worker') + '<b>' + esc(w.queue || 'unknown queue') + '</b></span>';
+          ? '<div class="q2-live-workers-grid">' + workers.map(function (w) {
+              return workerCardHtml(w, working, blocked, { showQueue: true });
             }).join('') + '</div>'
           : '<div class="q2-dg-empty">No workers are live.</div>')
       + '</div>';
@@ -1085,7 +1855,7 @@
   // reason ("H/M"). The needs-input chip is deliberately omitted here — the
   // status dot on the same row already carries it.
   var TYPE_SHORT = { feature: 'FR', bug: 'BUG' };
-  var READY_SHORT = { 'needs-shaping': 'shape', 'needs-spec': 'spec' };
+  var READY_SHORT = { 'needs-shaping': 'shape', 'needs-spec': 'spec', 'needs-rationale': 'rationale' };
   // Two spellings of "this is fine" live in the store. Both stay silent.
   var READY_OK = { 'ready': 1, 'shovel-ready': 1 };
   // Last touch: the newest of updated / closed / created. Closed rows sort by
@@ -1099,6 +1869,9 @@
 
   function ticketChips(it) {
     var c = [];
+    if (it.needs_input && it.block_kind === 'rationale') {
+      c.push('<span class="q2-tchip is-gated" title="Product-gate pitch awaiting decision">GATE</span>');
+    }
     if (it.type) {
       // Colour carries the TYPE only. Tinting the same chip by priority as
       // well meant a p0 bug and a p0 feature looked identical, which defeats
@@ -1141,17 +1914,34 @@
     var age = relTime(ageSrc);
     // Only an idle, open ticket can be "run now": a closed one has nothing to
     // do and a live-claimed one is already being worked.
-    var queued = !!it.run_requested;
     var canRun = st !== 'closed' && !isLiveWip(it);
+    // run_requested is its own state, distinct from plain "open": the ticket
+    // is sitting idle until WatchTower's reconciler picks it up. Only surface
+    // it where it can actually mean something (an idle, runnable row) --
+    // and never over "needs input": a worker already read this ticket, hit
+    // a question only a human can answer, and blocked on it. The stale run
+    // request is still true but no longer the thing to tell someone; showing
+    // "run requested" here reads as if nothing had happened yet.
+    var queued = canRun && !!it.run_requested && st !== 'blocked';
     var dotTitle = unresolved ? 'closed, unresolved follow-up'
       : unverified ? 'claimed by ' + String(it.claimed_by || '') + ', liveness unverified'
       : (stale && st !== 'blocked') ? 'stale claim, no live worker is on this'
+      : queued ? 'launching\u2026'
       : statusLabel(st);
+    // Hover-only detail for the stale-claim dot: names the actual source
+    // (workers.json + a liveness check) so "stale claim" isn't an opaque
+    // label -- kept out of dotTitle since that string also renders as
+    // visible row text via .q2-tstatus.
+    var dotHoverTitle = (stale && st !== 'blocked' && !unresolved && !unverified)
+      ? dotTitle + ' (source: claimed_by/claimed_session_id on this ticket matches no worker in '
+        + 'workers.json whose process is still alive -- os.kill liveness check, per worker record)'
+      : dotTitle;
     return '<button type="button" class="q2-trow is-' + esc(st)
       + (ref === state.ref ? ' is-selected' : '')
       + (isNewTicket(ref) ? ' q2-new-ticket' : '')
       + (stale ? ' is-stale-claim' : '')
       + (unverified ? ' is-unverified-claim' : '')
+      + (queued ? ' is-run-requested' : '')
       + (unresolved ? ' has-unresolved' : '') + '"'
       + ' data-q2-ref="' + esc(ref) + '">'
       + '<span class="q2-tref">' + esc(ref) + '</span>'
@@ -1166,26 +1956,37 @@
           ? '<span class="q2-tdot-wrap' + (queued ? ' is-queued' : '') + '"'
             + ' data-q2-run="' + esc(ref) + '" data-q2-queued="' + (queued ? '1' : '0') + '"'
             + ' role="button" tabindex="0"'
-            + ' title="' + esc(queued ? 'Queued to run - click to cancel' : dotTitle + ' - click to run now') + '">'
+            + ' title="' + esc(queued ? 'Launching\u2026 - click to cancel' : dotHoverTitle + ' - click to run now') + '">'
             + '<span class="q2-tdot" aria-hidden="true"></span>'
             + (queued ? ICON_TINY_STOP : ICON_TINY_PLAY)
             + '</span>'
-          : '<span class="q2-tdot" title="' + esc(dotTitle) + '" aria-label="' + esc(dotTitle) + '"></span>')
+          : '<span class="q2-tdot" title="' + esc(dotHoverTitle) + '" aria-label="' + esc(dotHoverTitle) + '"></span>')
       + '<span class="q2-tstatus">' + esc(dotTitle) + '</span>'
       + '</span>'
       + '</button>';
   }
 
-  function renderTickets() {
+  function renderTickets(opts) {
     var host = $('q2Tickets');
     if (!host) return;
+    if (!host._q2TouchWired) {
+      host._q2TouchWired = true;
+      host.addEventListener('touchstart', noteTicketsListTouchActivity, { passive: true });
+    }
+    // Poll-driven calls (no opts.force) back off while a touch is in flight
+    // on the list — see TICKETS_TOUCH_QUIET_MS above. User-initiated calls
+    // (selecting a ticket, toggling closed, searching, ...) pass force:true
+    // and always paint immediately.
+    if (!(opts && opts.force) && isTicketsListTouchActive()) return;
 
     $('q2TicketsTitle').textContent = state.viewAll ? 'All queues' : (state.queue || 'Tickets');
     var closedBtn = $('q2ClosedBtn');
     var newTicketBtn = $('q2NewTicketBtn');
     var settingsBtn = $('q2QueueSettingsBtn');
+    var editPromptBtn = $('q2EditPromptBtn');
     if (newTicketBtn) newTicketBtn.hidden = state.viewAll;
     if (settingsBtn) settingsBtn.hidden = state.viewAll;
+    if (editPromptBtn) editPromptBtn.hidden = state.viewAll;
     if (closedBtn) {
       closedBtn.hidden = state.viewAll;
       closedBtn.setAttribute('aria-pressed', state.showClosed ? 'true' : 'false');
@@ -1235,7 +2036,11 @@
     closed.sort(function (a, b) { return touchedAt(b) - touchedAt(a); });
     var recentClosedCutoff = Date.now() - RECENT_CLOSED_WINDOW_MS;
     function isRecentClosed(it) { return touchedAt(it) >= recentClosedCutoff; }
-    var recentClosed = closed.filter(isRecentClosed);
+    // A closed-unresolved follow-up is a signal someone still needs to act on,
+    // so it stays visible under "Hide closed" even once it ages out of the
+    // 12h recent window - the 12h cutoff is about noise reduction, not about
+    // hiding open follow-up work.
+    var recentClosed = closed.filter(function (it) { return isRecentClosed(it) || unresolvedNotes(it).length > 0; });
 
     // Same counts renderer as the queue rows. Derived from the rows actually on
     // screen (so it honours the search filter) but split by the same statuses,
@@ -1340,8 +2145,13 @@
 
   function sessionBtn(sid, label) {
     if (!sid) return '';
+    // Must match the ccc_popout=conversation&conv= link built elsewhere in
+    // this file (renderConvPane) and in app.js -- a bare ?session= is not
+    // read by any boot param (app.js only checks conv/conversation/
+    // session_id), so the page ignored it and opened whatever conversation
+    // was last selected instead of this one.
     return '<a class="q2-linkbtn" target="_blank" rel="noopener"'
-      + ' href="/?session=' + encodeURIComponent(sid) + '"'
+      + ' href="/?ccc_popout=conversation&conv=' + encodeURIComponent(sid) + '"'
       + ' title="' + esc(sid) + '">' + esc(label) + ' &#8599;</a>';
   }
 
@@ -1373,7 +2183,9 @@
         + (bodyHtml || '') + '</div></div>';
     }
     function text(t, cls) {
-      return t ? '<div class="' + (cls || 'q2-tl-note') + '">' + esc(String(t)) + '</div>' : '';
+      if (!t) return '';
+      var body = window.CCCTicketProse ? window.CCCTicketProse.render(t) : esc(String(t));
+      return '<div class="' + (cls || 'q2-tl-note') + '">' + body + '</div>';
     }
 
     var rows = tl.map(function (ev) {
@@ -1403,9 +2215,12 @@
     // mid-story. Cap it with where the ticket actually stands.
     if (!item.closed_at) {
       var st = statusOf(item);
+      // This row summarizes current status, not a new event — no one "opened"
+      // it. Say so plainly for the unclaimed case, since "Open" alone reads
+      // like an action someone just took.
       var verb = st === 'in_progress' ? 'In progress'
-        : st === 'blocked' ? 'Needs your input' : 'Open';
-      rows += evt('now', '<span class="q2-tl-verb">' + esc(verb) + '</span>'
+        : st === 'blocked' ? 'Needs your input' : 'Open · unclaimed';
+      rows += evt('now', '<span class="q2-tl-verb" title="Current status, not a new event">' + esc(verb) + '</span>'
         + (item.claimed_by ? '<span class="q2-tl-who">' + esc(String(item.claimed_by).slice(0, 26)) + '</span>' : ''), '');
     }
     return '<div class="q2-tl">' + rows + '</div>';
@@ -1435,6 +2250,42 @@
       + esc(label) + '</button>';
   }
 
+  // Linked conversation (e.g. the Becky thread a digest ticket describes).
+  // The server resolves it through the user's local queue-context providers;
+  // fetched once per ref (renderDetail re-runs every 5s poll) and rendered
+  // from this cache. state-free module locals on purpose: switching tickets
+  // resets them.
+  var convCtx = null; // { ref, status: 'loading'|'done'|'failed', data }
+  function maybeLoadTicketContext(item) {
+    if (!item || !item.ref || !window.CCCTicketProse) return;
+    if (convCtx && convCtx.ref === item.ref) return;
+    convCtx = { ref: item.ref, status: 'loading', data: null };
+    fetch('/api/queue/context?ref=' + encodeURIComponent(item.ref), { cache: 'no-store' })
+      .then(function (r) { return r.json(); })
+      .then(function (d) {
+        if (!convCtx || convCtx.ref !== item.ref) return;
+        convCtx = { ref: item.ref, status: 'done', data: d };
+        renderDetail();
+      })
+      .catch(function () {
+        if (convCtx && convCtx.ref === item.ref) convCtx.status = 'failed';
+      });
+  }
+  function ticketContextHtml(item) {
+    if (!window.CCCTicketProse || !convCtx || convCtx.ref !== item.ref) return '';
+    if (convCtx.status !== 'done') return '';
+    var d = convCtx.data;
+    if (d && d.ok && d.transcript && Array.isArray(d.transcript.turns) && d.transcript.turns.length) {
+      return '<section class="q2-sec"><div class="q2-sec-label">Linked conversation</div>'
+        + window.CCCTicketProse.renderTranscript(d.transcript) + '</section>';
+    }
+    if (d && d.found && d.error) {
+      return '<section class="q2-sec"><div class="q2-sec-label">Linked conversation</div>'
+        + '<div class="tp-conv-status is-error">' + esc(d.error) + '</div></section>';
+    }
+    return '';
+  }
+
   function renderDetail() {
     var host = $('q2Detail');
     if (!host) return;
@@ -1455,14 +2306,14 @@
       } else {
         var path = learnings.path || '';
         host.innerHTML = '<div class="q2-detail-top q2-learnings">'
-          + '<div class="q2-detail-head"><span class="q2-detail-ref">' + esc(state.queue) + '</span>'
-          + '<span class="q2-spacer"></span>'
-          + '<button type="button" class="q2-btn" data-q2-learnings-open title="Open this learnings file in its default editor">Open &#8599;</button></div>'
+          + '<div class="q2-detail-head"><span class="q2-detail-ref">' + esc(state.queue) + '</span></div>'
           + '<h1 class="q2-detail-title">Queue learnings</h1>'
           + (learnings.exists
             ? '<pre class="q2-pre q2-learnings-body">' + esc(learnings.content || '') + '</pre>'
             : '<div class="q2-empty">No learnings file yet.<br><span class="q2-dim">'
               + esc(path) + '</span></div>')
+          + '<button type="button" class="q2-btn q2-btn-primary q2-learnings-edit-btn" '
+          + 'data-q2-learnings-open title="Open this learnings file in its default editor">Edit File</button>'
           + '</div>';
       }
       return;
@@ -1470,22 +2321,35 @@
 
     var item = state.detail;
     if (!item || item.ref !== state.ref) {
-      host.innerHTML = '<div class="q2-empty">Loading ' + esc(state.ref) + '&hellip;</div>';
+      host.innerHTML = state.detailFailed
+        ? '<div class="q2-empty"><div class="q2-empty-title">' + esc(state.ref) + ' unavailable</div>'
+          + 'Not in the cached list and the live fetch failed &mdash; GitHub sync may be rate-limited. Try again in a minute.</div>'
+        : '<div class="q2-empty">Loading ' + esc(state.ref) + '&hellip;</div>';
       return;
     }
 
     var st = statusOf(item);
     var parts = splitFirstSentence(titleOf(item));
-    var prompt = (item.text && item.text.trim()) || '';
+    // _github_body is the full issue body; `text` can be a truncated copy.
+    var prompt = String(item._github_body || item.text || '').trim();
     var showPrompt = !!prompt && prompt !== String(item.note || '').trim();
+    maybeLoadTicketContext(item);
     var sid = sessionOf(item);
     var editCount = (Array.isArray(item.timeline) ? item.timeline : [])
       .filter(function (ev) { return ev && ev.event === 'edit'; }).length;
     var closed = st === 'closed';
+    var runQueued = !closed && !isLiveWip(item) && !!item.run_requested;
+    // GitHub-backed queues sync tickets read-only: run/answer/comment/close/
+    // reopen all 404 with "not found in the local queue store" (see
+    // _uxq_not_found_error server-side), which read as an unexplained
+    // failure. Gate the write UI up front instead of letting the user
+    // click into a dead end (CCC-759).
+    var githubBacked = String(item.source || '') === 'github' || !!item.github_repo;
 
     // Everything editable lives on one chip row, next to the read-only state.
     var chips = ''
-      + '<span class="q2-status is-' + esc(st) + '">' + esc(statusLabel(st)) + '</span>'
+      + '<span class="q2-status is-' + esc(st) + (runQueued ? ' is-run-requested' : '') + '">'
+      + esc(runQueued ? 'launching\u2026' : statusLabel(st)) + '</span>'
       + (item.lane ? '<span class="q2-chip is-lane">' + esc(item.lane) + '</span>' : '')
       + editChip('type', item.type ? (TYPE_SHORT[item.type] || item.type) : 'type?',
                  item.type, item.type ? 'is-type-' + item.type : '')
@@ -1503,15 +2367,19 @@
         + (state.arm === k ? ' is-armed' : '') + '" data-q2-arm="' + esc(k) + '">'
         + esc(label) + '</button>';
     }
-    var runQueued = !!item.run_requested;
+    // GitHub-backed queues used to be read-only here (CCC-759) because the
+    // write endpoints 404'd against the local store. WatchTower's GitHub
+    // backend now implements close/reopen/mark_runnable for real (it shells
+    // to `gh issue close/reopen/edit`), so gate on nothing here — every
+    // action below already round-trips through `_q`, which dispatches to the
+    // right backend server-side. Only the info line changes for GitHub.
     var toolbar = '<div class="q2-actions">'
-      + (closed ? '' :
-          '<button type="button" class="q2-btn' + (runQueued ? ' is-armed' : '') + '"'
-          + ' data-q2-act="run" title="' + (runQueued
-              ? 'Queued to run. Click to cancel.'
-              : 'Ask WatchTower to run this ticket next.') + '">'
-          + (runQueued ? '&#9632; Queued' : '&#9654; Run now') + '</button>')
-      + (closed ? act('reopen', 'Reopen') : act('close', 'Close'))
+      + (closed ? act('reopen', 'Reopen') : '')
+      + (githubBacked
+          ? '<span class="q2-dim">Synced from GitHub.'
+            + (item.url ? ' <a class="q2-linklike" href="' + esc(item.url) + '" target="_blank" rel="noopener">Open on GitHub &#8599;</a>' : '')
+            + '</span>'
+          : '')
       + '<span class="q2-spacer"></span>'
       + '<button type="button" class="q2-btn" data-q2-act="copy">Copy prompt</button>'
       + '</div>';
@@ -1521,26 +2389,62 @@
     // ticket to do, and hiding them behind a button made the ticket read-only
     // until you found the toolbar.
     var FORMS = {
-      close:   ['Resolution summary (optional)', 'Mark as closed', 'close'],
-      reopen:  ['Reason for reopening (optional)', 'Reopen ticket', 'reopen'],
+      close_completed:    ['Resolution summary (optional)', 'Mark as completed', 'close_completed'],
+      close_not_relevant: ['Reason (optional)', 'Mark as not relevant', 'close_not_relevant'],
+      reopen:              ['Reason for reopening (optional)', 'Reopen ticket', 'reopen'],
     };
-    var armed = FORMS[state.arm];
-    var formHtml = armed
-      ? '<section class="q2-sec q2-armed">'
-        + (state.arm === 'answer' && item.block_question
-            ? '<div class="q2-block-q">' + esc(item.block_question) + '</div>' : '')
-        + '<textarea class="q2-input" data-q2-input="' + esc(armed[2]) + '" rows="2" autofocus'
-        + ' placeholder="' + esc(armed[0]) + '" aria-label="' + esc(armed[1]) + '"></textarea>'
+    function armedForm(key) {
+      var spec = FORMS[key];
+      if (state.arm !== key || !spec) return '';
+      return '<section class="q2-sec q2-armed">'
+        + '<textarea class="q2-input" data-q2-input="' + esc(spec[2]) + '" rows="2" autofocus'
+        + ' placeholder="' + esc(spec[0]) + '" aria-label="' + esc(spec[1]) + '"></textarea>'
         + '<div class="q2-actrow">'
         + '<button type="button" class="q2-btn" data-q2-arm="">Cancel</button>'
-        + '<button type="button" class="q2-btn q2-btn-primary" data-q2-act="' + esc(armed[2]) + '">'
-        + esc(armed[1]) + '</button></div></section>'
-      : '';
+        + '<button type="button" class="q2-btn q2-btn-primary" data-q2-act="' + esc(spec[2]) + '">'
+        + esc(spec[1]) + '</button></div></section>';
+    }
+    var reopenFormHtml = armedForm('reopen');
+    // Resolution actions live below the full prompt, not buried in the
+    // toolbar: this is where you land after reading what the ticket asks
+    // for, so "what do I do with this" and "here's the answer" are adjacent.
+    // Close is split into two outcomes (completed vs not relevant) because a
+    // single generic "Close" button couldn't tell the difference later when
+    // triaging a queue's history. Run now stays a one-click action — it
+    // doesn't need a comment, it needs to happen now.
+    var resolveActionsHtml = closed ? '' :
+      '<section class="q2-sec q2-resolve-actions">'
+      + '<div class="q2-resolve-row">'
+      + '<button type="button" class="q2-btn' + (state.arm === 'close_completed' ? ' is-armed' : '') + '"'
+      + ' data-q2-arm="close_completed">Close as completed</button>'
+      + '<button type="button" class="q2-btn' + (state.arm === 'close_not_relevant' ? ' is-armed' : '') + '"'
+      + ' data-q2-arm="close_not_relevant">Close as not relevant</button>'
+      + '<button type="button" class="q2-btn' + (runQueued ? ' is-armed' : '') + '"'
+      + ' data-q2-act="run" title="' + (runQueued
+          ? 'Queued to run. Click to cancel.'
+          : 'Ask WatchTower to run this ticket next.') + '">'
+      + (runQueued ? '&#9632; Queued' : '&#9654; Run now') + '</button>'
+      + '</div>'
+      + armedForm('close_completed')
+      + armedForm('close_not_relevant')
+      + '</section>';
+
+    // What the ticket is running ON, resolved from the live worker roster we
+    // already poll. Only a claimed ticket with a still-live worker can answer
+    // this: a closed one is not "no engine", it is a record we never kept, so
+    // the bit is labelled "running on" and simply absent otherwise.
+    var runner = (state.workers || []).filter(function (w) {
+      return workerMatchesItem(w, item);
+    })[0];
+    var runnerSpec = runner ? workerSpecFields(runner).filter(Boolean).join(' · ') : '';
 
     // Assignment and origin: one compact strip at the very bottom, replacing
     // the fixed sidebar. It is reference data, not something you act on.
     var metaBits = [
       item.claimed_by ? 'worker <span class="q2-mono">' + esc(String(item.claimed_by).slice(0, 26)) + '</span>' : '',
+      runnerSpec ? (closed ? 'ran on ' : 'running on ')
+        + '<span class="q2-mono" title="' + esc(workerSpecTitle(runner)) + '">'
+        + esc(runnerSpec) + '</span>' : '',
       sid ? 'session ' + sessionBtn(sid, 'open in CCC') : '',
       item.claimed_at ? 'claimed ' + esc(relTime(item.claimed_at)) : '',
       item.closed_at ? 'closed ' + esc(relTime(item.closed_at)) : '',
@@ -1555,16 +2459,30 @@
       + '<span class="q2-detail-ref">' + esc(item.ref) + '</span>'
       + chips
       + '</div>'
-      + '<h1 class="q2-detail-title">'
-      + '<span class="q2-title-first">' + esc(parts[0]) + '</span>'
-      + (parts[1] ? '<span class="q2-title-rest"> ' + esc(parts[1]) + '</span>' : '')
-      + '</h1>'
+      + (!githubBacked && state.editingTitle
+          ? '<div class="q2-detail-title q2-title-edit">'
+            + '<textarea class="q2-input" data-q2-input="title" rows="2"'
+            + ' placeholder="Ticket title" aria-label="Edit ticket title">' + esc(titleOf(item)) + '</textarea>'
+            + '<div class="q2-actrow">'
+            + '<button type="button" class="q2-btn" data-q2-title-cancel>Cancel</button>'
+            + '<button type="button" class="q2-btn q2-btn-primary" data-q2-title-save>Save</button>'
+            + '</div></div>'
+          : '<h1 class="q2-detail-title"' + (githubBacked ? '' : ' data-q2-title-open title="Click to edit"')
+            + '>'
+            + '<span class="q2-title-first">' + esc(parts[0]) + '</span>'
+            + (parts[1] ? '<span class="q2-title-rest"> ' + esc(parts[1]) + '</span>' : '')
+            + '</h1>')
       + toolbar
-      + formHtml
+      + reopenFormHtml
       + (showPrompt
           ? '<section class="q2-sec"><div class="q2-sec-label">Full prompt</div>'
-            + '<pre class="q2-pre">' + esc(prompt) + '</pre></section>'
+            + (window.CCCTicketProse
+                ? window.CCCTicketProse.render(prompt)
+                : '<pre class="q2-pre">' + esc(prompt) + '</pre>')
+            + '</section>'
           : '')
+      + ticketContextHtml(item)
+      + resolveActionsHtml
       + '<section class="q2-sec"><div class="q2-sec-label">Activity'
       + (editCount
           ? '<label class="q2-show-edits"><input type="checkbox" data-q2-show-edits> show edits (' + editCount + ')</label>'
@@ -1573,22 +2491,46 @@
       // The answer box belongs WITH the question, at the end of the thread —
       // the agent is waiting on it and it should need no hunting.
       + (st === 'blocked'
-          // The question is NOT repeated here. The timeline's last "Needs input"
-          // event already shows it, immediately above, and printing it twice
-          // read as two separate questions.
-          ? '<div class="q2-inline q2-inline-answer">'
-            + '<textarea class="q2-input" data-q2-input="answer" rows="2"'
-            + ' placeholder="Answer the agent&hellip;" aria-label="Answer this ticket"></textarea>'
-            + '<div class="q2-actrow"><button type="button" class="q2-btn q2-btn-primary"'
-            + ' data-q2-act="answer">Send answer</button></div></div>'
+          ? (githubBacked
+              // CCC-807: a GitHub-backed ticket can still land in "needs
+              // input" (synced label), but answering here 404s (CCC-759) —
+              // it was simply omitted, which read as a missing feature
+              // ("I no longer see a place to enter the input"). Tell the
+              // user explicitly where to actually respond instead of
+              // silently dropping the box.
+              ? '<div class="q2-inline q2-inline-answer">'
+                + '<span class="q2-dim">This ticket needs input, but is synced from GitHub — answer it there.'
+                + (item.url ? ' <a class="q2-linklike" href="' + esc(item.url) + '" target="_blank" rel="noopener">Open on GitHub &#8599;</a>' : '')
+                + '</span></div>'
+              // The question is NOT repeated here. The timeline's last "Needs input"
+              // event already shows it, immediately above, and printing it twice
+              // read as two separate questions.
+              : (item.block_kind === 'rationale'
+                  ? '<div class="q2-inline q2-inline-gate">'
+                    + '<div class="q2-sec-label">Product Gate Decision</div>'
+                    + '<div class="q2-actrow" style="display:flex;gap:8px;">'
+                    + '<button type="button" class="q2-btn q2-btn-primary" data-q2-act="gate_ack">Ack</button>'
+                    + '<button type="button" class="q2-btn" data-q2-act="gate_ack_plus">Ack+</button>'
+                    + '<button type="button" class="q2-btn q2-btn-warn" data-q2-act="gate_nack">Nack</button>'
+                    + '</div>'
+                    + '<div class="q2-dim" style="margin-top:6px;font-size:12px;">Approve or decline this product-gate pitch.</div>'
+                    + '</div>'
+                  : '<div class="q2-inline q2-inline-answer">'
+                    + '<textarea class="q2-input" data-q2-input="answer" rows="2"'
+                    + ' placeholder="Answer the agent&hellip;" aria-label="Answer this ticket"></textarea>'
+                    + '<div class="q2-actrow"><button type="button" class="q2-btn q2-btn-primary"'
+                    + ' data-q2-act="answer">Send answer</button></div></div>'))
           : '')
       // Comment sits after the last activity item, always available: it is a
-      // reply to the thread, so it reads as the next entry in it.
-      + '<div class="q2-inline">'
-      + '<textarea class="q2-input" data-q2-input="comment" rows="2"'
-      + ' placeholder="Add a comment - an update, not a resolution" aria-label="Add a comment"></textarea>'
-      + '<div class="q2-actrow"><button type="button" class="q2-btn" data-q2-act="comment">Comment</button></div>'
-      + '</div>'
+      // reply to the thread, so it reads as the next entry in it. Not offered
+      // for GitHub-backed tickets, which are read-only here (CCC-759).
+      + (githubBacked ? '' : (
+        '<div class="q2-inline">'
+        + '<textarea class="q2-input" data-q2-input="comment" rows="2"'
+        + ' placeholder="Add a comment - an update, not a resolution" aria-label="Add a comment"></textarea>'
+        + '<div class="q2-actrow"><button type="button" class="q2-btn" data-q2-act="comment">Comment</button></div>'
+        + '</div>'
+      ))
       + '</section>'
       + (metaBits.length ? '<div class="q2-meta-strip">' + metaBits.join('<span class="q2-n-sep">·</span>') + '</div>' : '')
       + '<div class="q2-detail-foot"><span class="q2-dim">Filed '
@@ -1615,7 +2557,19 @@
         focused = k; selStart = el.selectionStart; selEnd = el.selectionEnd;
       }
     });
+    // .q2-pre blocks (prompt/learnings text) scroll internally; rewriting
+    // innerHTML on every 5s poll reset that scroll to 0 mid-read (CCC-847).
+    // Preserve by position since these blocks have no stable id.
+    var preScroll = [];
+    top.querySelectorAll('.q2-pre, .tp-body, .tp-conv').forEach(function (el) { preScroll.push(el.scrollTop); });
     top.innerHTML = topHtml;
+    top.querySelectorAll('.q2-pre, .tp-body, .tp-conv').forEach(function (el, i) {
+      if (preScroll[i]) el.scrollTop = preScroll[i];
+      else if (preScroll[i] == null && el.classList.contains('tp-conv')) {
+        // First paint of a transcript: land on the newest messages.
+        el.scrollTop = el.scrollHeight;
+      }
+    });
     top.querySelectorAll('[data-q2-input]').forEach(function (el) {
       var k = el.getAttribute('data-q2-input');
       if (drafts[k] != null) el.value = drafts[k];
@@ -1756,9 +2710,51 @@
     if (!ref) return;
 
     if (act === 'copy') {
-      var text = (state.detail && state.detail.text) || titleOf(state.detail) || '';
+      var text = (state.detail && (state.detail._github_body || state.detail.text)) || titleOf(state.detail) || '';
       try { await navigator.clipboard.writeText(text); note('Prompt copied'); }
       catch (e) { note('Could not copy: ' + e.message); }
+      return;
+    }
+
+    if (act === 'gate_ack') {
+      btn.disabled = true;
+      try {
+        await postJson('/api/ux-fixes/gate-ack', { ref: ref, comment: '' });
+        note('Product gate approved');
+        await loadDetail(ref);
+        await refresh();
+      } catch (e) { note('Failed: ' + e.message); }
+      finally { btn.disabled = false; }
+      return;
+    }
+
+    if (act === 'gate_ack_plus') {
+      var c = prompt('Ack with comment — steering note for the worker:');
+      if (c === null) return;
+      btn.disabled = true;
+      try {
+        await postJson('/api/ux-fixes/gate-ack', { ref: ref, comment: c });
+        note('Product gate approved with comment');
+        await loadDetail(ref);
+        await refresh();
+      } catch (e) { note('Failed: ' + e.message); }
+      finally { btn.disabled = false; }
+      return;
+    }
+
+    if (act === 'gate_nack') {
+      var r = prompt('Nack — WHY is this not being built? (required)');
+      if (!r) return;
+      var close = confirm('OK = icebox (not now).\nCancel then re-Nack with --close in the CLI for "not ever".\n\nIcebox this ticket?');
+      if (!close) return;
+      btn.disabled = true;
+      try {
+        await postJson('/api/ux-fixes/gate-nack', { ref: ref, reason: r, close: false });
+        note('Product gate declined (iceboxed)');
+        await loadDetail(ref);
+        await refresh();
+      } catch (e) { note('Failed: ' + e.message); }
+      finally { btn.disabled = false; }
       return;
     }
 
@@ -1767,6 +2763,9 @@
     if (act === 'run') {
       var queued = !!(state.detail && state.detail.run_requested);
       btn.disabled = true;
+      btn.classList.add('is-pending');
+      var prevLabel = btn.textContent;
+      btn.textContent = queued ? 'Cancelling…' : 'Queuing…';
       try {
         await postJson('/api/ux-fixes/run', { ref: ref, cancel: queued });
         note(queued ? 'Run request cancelled' : 'Queued to run');
@@ -1774,7 +2773,8 @@
         await refresh();
       } catch (e) {
         note('Failed: ' + e.message);
-      } finally { btn.disabled = false; }
+        btn.textContent = prevLabel;
+      } finally { btn.disabled = false; btn.classList.remove('is-pending'); }
       return;
     }
 
@@ -1783,11 +2783,20 @@
     // required"); only comment happened to match. Verified against
     // server.py:52747 (answer.text), :52943 (close.note), :52890 (reopen.note),
     // :52913 (comment.text).
+    // Outcome tags prefix the resolution note so "closed as not relevant" is
+    // legible later in the timeline, not just a generic "Closed" event —
+    // there is no separate outcome field on the ticket, just the resolution
+    // text (see /api/ux-fixes/close in server.py).
     var plan = {
-      answer:  ['/api/ux-fixes/answer',  { ref: ref, text: detailInput('answer') },  true,  'Answer sent'],
-      comment: ['/api/ux-fixes/comment', { ref: ref, text: detailInput('comment') }, true,  'Comment added'],
-      close:   ['/api/ux-fixes/close',   { ref: ref, note: detailInput('close') },   false, 'Ticket closed'],
-      reopen:  ['/api/ux-fixes/reopen',  { ref: ref, note: detailInput('reopen') },  false, 'Ticket reopened'],
+      answer:  ['/api/ux-fixes/answer',  { ref: ref, text: detailInput('answer') },  true,  'Answer sent',    'Sending…'],
+      comment: ['/api/ux-fixes/comment', { ref: ref, text: detailInput('comment') }, true,  'Comment added',  'Adding…'],
+      close_completed: ['/api/ux-fixes/close', { ref: ref,
+        note: 'Completed' + (detailInput('close_completed') ? ': ' + detailInput('close_completed') : '') },
+        false, 'Closed as completed', 'Closing…'],
+      close_not_relevant: ['/api/ux-fixes/close', { ref: ref,
+        note: 'Not relevant' + (detailInput('close_not_relevant') ? ': ' + detailInput('close_not_relevant') : '') },
+        false, 'Closed as not relevant', 'Closing…'],
+      reopen:  ['/api/ux-fixes/reopen',  { ref: ref, note: detailInput('reopen') },  false, 'Ticket reopened', 'Reopening…'],
     }[act];
     if (!plan) return;
     // Answer and comment carry the user's words; sending an empty one would
@@ -1797,10 +2806,21 @@
       return;
     }
 
+    // CCC-810: give write actions (answer above all — it is the one an
+    // agent is actively blocked waiting on) the same in-flight feedback the
+    // Run button already had, instead of just a disabled-but-unlabeled
+    // button that looked like nothing happened on click.
     btn.disabled = true;
+    btn.classList.add('is-pending');
+    var prevLabel = btn.textContent;
+    btn.textContent = plan[4];
     try {
-      await postJson(plan[0], plan[1]);
-      note(plan[3]);
+      var sent = await postJson(plan[0], plan[1]);
+      // GitHub-backed tickets: the server relays text only — pasted-image
+      // path tokens are stripped rather than failing the reply (issue #101).
+      note(sent && sent.images_stripped
+        ? plan[3] + ' — images not supported for GitHub-backed tickets, text sent without them'
+        : plan[3]);
       state.arm = '';
       var box = document.querySelector('[data-q2-input="' + act + '"]');
       if (box) box.value = '';
@@ -1811,8 +2831,10 @@
       await refresh();
     } catch (e) {
       note('Failed: ' + e.message);
+      btn.textContent = prevLabel;
     } finally {
       btn.disabled = false;
+      btn.classList.remove('is-pending');
     }
   }
 
@@ -1824,13 +2846,63 @@
     if (tl) tl.classList.toggle('show-edits', box.checked);
   });
 
-  // ── modals: new ticket, queue configuration ──────────────────────────────
+  // Answer / comment / close / reopen boxes are plain textareas rebuilt on
+  // every poll (see renderDetail), so a listener bound to one instance would
+  // be gone by the next render. Delegate on document instead, and insert the
+  // uploaded path at the cursor the same way the new-ticket note does — that
+  // is what the worker on the other end can actually open.
+  function insertPastedPath(el, path) {
+    var start = el.selectionStart || 0, end = el.selectionEnd || 0;
+    var val = el.value || '';
+    var before = val.slice(0, start), after = val.slice(end);
+    var sep = (before && !/\s$/.test(before)) ? ' ' : '';
+    var insert = sep + path;
+    el.value = before + insert + after;
+    var pos = (before + insert).length;
+    el.focus();
+    try { el.setSelectionRange(pos, pos); } catch (_) {}
+  }
+  document.addEventListener('paste', function (e) {
+    var el = e.target;
+    if (!el || !el.matches || !el.matches('textarea.q2-input') || el.id === 'q2TicketNote') return;
+    var files = (e.clipboardData && e.clipboardData.files) || [];
+    var imgs = Array.prototype.filter.call(files, function (f) { return /^image\//.test(f.type || ''); });
+    if (!imgs.length) return;
+    e.preventDefault();
+    // GitHub-backed ticket: the reply relays to the GitHub issue as text via
+    // `gh issue comment`; a local pasted-image path would leak a private path
+    // and never render there. Be honest at paste time instead of erroring at
+    // send time (issue #101).
+    var d = state.detail;
+    if (d && (String(d.source || '') === 'github' || d.github_repo)) {
+      note("Images aren't supported for GitHub-backed tickets — the reply sends text only");
+      return;
+    }
+    imgs.forEach(function (f) {
+      uploadImage(f).then(function (path) {
+        insertPastedPath(el, path);
+      }).catch(function (err) {
+        note('Image upload failed: ' + err.message);
+      });
+    });
+  });
+
+  // ── modals: new ticket, queue configuration, ticket detail ───────────────
   function closeModal() {
     var host = $('q2Modal');
     if (!host) return;
     host.hidden = true;
     host.innerHTML = '';
     document.removeEventListener('keydown', modalKey, true);
+    // Closing the detail popup (CCC-904) is how a ticket gets deselected now
+    // — nothing else clears state.ref. Harmless no-op for the other modals
+    // (new ticket / queue settings), which never set state.ref.
+    if (state.ref) {
+      state.ref = '';
+      state.detail = null;
+      rememberSelection();
+      renderTickets({ force: true });
+    }
   }
   function modalKey(e) {
     if (e.key === 'Escape') { e.preventDefault(); closeModal(); }
@@ -1843,6 +2915,20 @@
     host.hidden = false;
     document.addEventListener('keydown', modalKey, true);
     if (onMount) onMount(host.querySelector('.q2-modal'));
+  }
+
+  // Ticket detail (and the queue-learnings fallback renderDetail() shows when
+  // state.ref is empty) now opens as a popup instead of a third-column pane
+  // (CCC-904) -- renderDetail() itself is unchanged, only its host moved.
+  function openDetailModal() {
+    openModal(
+      '<button type="button" class="q2-icon-btn q2-modal-detail-close" data-q2-modal-close aria-label="Close">&times;</button>'
+      + '<div class="q2-detail" id="q2Detail"></div>',
+      function (modalEl) {
+        modalEl.classList.add('q2-modal-detail');
+        renderDetail();
+      }
+    );
   }
 
   // ── new ticket ───────────────────────────────────────────────────────────
@@ -1989,6 +3075,7 @@
     })[0];
     var c = Object.assign({}, options.defaults || {}, (existing && existing.config) || {});
     var models = options.models_by_engine || {};
+    var efforts = options.efforts_by_engine || {};
     var engine = c.engine || 'claude';
     var types = Array.isArray(c.claim_types) ? c.claim_types : [];
 
@@ -1998,6 +3085,24 @@
         + list.map(function (m) { return opt(m, m, cur); }).join('');
     }
 
+    function effortsFor(eng) {
+      var list = efforts[eng];
+      return Array.isArray(list) ? list : (EFFORTS_FALLBACK[eng] || []);
+    }
+
+    function effortOptions(eng, cur) {
+      var list = effortsFor(eng);
+      // A saved value this engine no longer offers stays selectable rather than
+      // silently collapsing to the first option: the main dashboard's dialog
+      // can save a queue at an effort this list does not contain, and editing
+      // an unrelated field here must not quietly downgrade it.
+      var extra = cur && list.indexOf(cur) === -1
+        ? opt(cur, (EFFORT_LABEL[cur] || cur) + ' (not offered by ' + eng + ')', cur) : '';
+      return opt('', 'default', cur)
+        + list.map(function (x) { return opt(x, EFFORT_LABEL[x] || x, cur); }).join('')
+        + extra;
+    }
+
     openModal(
       '<div class="q2-modal-head"><h2>' + (isNew ? 'New queue' : 'Queue ' + esc(queueName)) + '</h2>'
       + '<button type="button" class="q2-icon-btn" data-q2-modal-close aria-label="Close">&times;</button></div>'
@@ -2005,6 +3110,7 @@
       + field('Name', '<input class="q2-input" data-q2-cfg="queue" value="' + esc(queueName || '')
           + '"' + (isNew ? '' : ' readonly') + ' placeholder="MYQUEUE">',
           isNew ? '1-64 letters, numbers, _ or -' : 'Renaming is not supported here')
+      + (isNew ? '</div><details class="q2-fields-optional"><summary>Optional settings <span class="q2-dim">(defaults are fine)</span></summary><div class="q2-fields">' : '')
       + field('Repo path', '<input class="q2-input" data-q2-cfg="repo_path" list="q2RepoPaths" value="'
           + esc(c.repo_path || '') + '" placeholder="/Users/you/Apps/project">')
       + '<datalist id="q2RepoPaths">'
@@ -2025,9 +3131,8 @@
           + '</select>')
       + field('Model', '<select class="q2-input" data-q2-cfg="model">' + modelOptions(engine, c.model) + '</select>')
       + field('Effort', '<select class="q2-input" data-q2-cfg="effort">'
-          + opt('', 'default', c.effort) + ['low', 'medium', 'high', 'xhigh'].map(function (x) {
-              return opt(x, x, c.effort); }).join('')
-          + '</select>')
+          + effortOptions(engine, c.effort || '')
+          + '</select>', 'Reasoning budget for workers this queue spawns')
       + field('Desired workers', '<input class="q2-input" type="number" min="0" max="16"'
           + ' data-q2-cfg="desired_workers" value="' + esc(String(c.desired_workers != null ? c.desired_workers : 1)) + '">')
       + field('Auto-drain', '<select class="q2-input" data-q2-cfg="auto_drain">'
@@ -2037,7 +3142,7 @@
           + '<label><input type="checkbox" data-q2-claim="bug"' + (types.indexOf('bug') !== -1 ? ' checked' : '') + '> bug</label>'
           + '<label><input type="checkbox" data-q2-claim="feature"' + (types.indexOf('feature') !== -1 ? ' checked' : '') + '> feature</label>'
           + '</span>', 'Neither ticked means every type')
-      + '</div>'
+      + '</div>' + (isNew ? '</details>' : '')
       + '<div class="q2-modal-foot">'
       // These fields override the SYSTEM spawn defaults. When a queue leaves
       // one unset it falls through to those, so the form has to say where they
@@ -2052,7 +3157,16 @@
         // Model list follows the engine, or it offers models the engine cannot run.
         var eng = modal.querySelector('[data-q2-cfg="engine"]');
         var mod = modal.querySelector('[data-q2-cfg="model"]');
-        eng.addEventListener('change', function () { mod.innerHTML = modelOptions(eng.value, ''); });
+        var eff = modal.querySelector('[data-q2-cfg="effort"]');
+        eng.addEventListener('change', function () {
+          mod.innerHTML = modelOptions(eng.value, '');
+          // Effort ladders are per engine too (Claude has max, Codex does not),
+          // so a value the new engine cannot run is dropped back to default.
+          // Unlike the model it is kept when it survives the switch: the rung
+          // is the same intent on either engine, the model name is not.
+          var keep = effortsFor(eng.value).indexOf(eff.value) !== -1 ? eff.value : '';
+          eff.innerHTML = effortOptions(eng.value, keep);
+        });
         // Land on the field the user clicked, not the top of the form.
         var target = focusField && modal.querySelector('[data-q2-cfg="' + focusField + '"]');
         var first = target || modal.querySelector('[data-q2-cfg="' + (isNew ? 'queue' : 'repo_path') + '"]');
@@ -2098,14 +3212,36 @@
 
   // Run-now straight from the ticket list. Same endpoint as the detail pane's
   // button; a second press on a still-queued ticket cancels it.
-  async function runTicket(ref, queued) {
+  async function runTicket(ref, queued, dotEl) {
+    if (dotEl) dotEl.classList.add('is-pending');
     try {
       await postJson('/api/ux-fixes/run', { ref: ref, cancel: !!queued });
-      note(queued ? 'Run cancelled for ' + ref : 'Queued ' + ref + ' to run');
+      note(queued ? 'Run cancelled for ' + ref : 'Launching ' + ref + '\u2026');
       if (state.ref === ref) await loadDetail(ref);
       await refresh();
     } catch (e) {
       note('Could not run ' + ref + ': ' + e.message);
+      if (dotEl) dotEl.classList.remove('is-pending');
+    }
+  }
+
+  // CCC-808: an empty queue (never had a ticket) deletes with no prompt;
+  // anything with ticket history - open or just closed - asks to confirm,
+  // since deleting it also drops that history from the queue panel.
+  async function deleteQueueRow(queue, total) {
+    if (!queue) return;
+    if (total > 0 && !window.confirm('Delete queue ' + queue + '? It has ' + total
+        + ' ticket' + (total === 1 ? '' : 's') + ' (open and/or closed). This removes it from the queue panel.')) {
+      return;
+    }
+    try {
+      await postJson('/api/queue/delete', { queue: queue });
+      note('Deleted queue ' + queue);
+      if (projectKey(state.queue) === projectKey(queue)) selectAllQueues();
+      await loadConfigs();
+      await refresh();
+    } catch (e) {
+      note('Could not delete ' + queue + ': ' + e.message);
     }
   }
 
@@ -2121,12 +3257,13 @@
     }
   }
 
-  function renderAll() {
+  function renderAll(opts) {
     renderChrome();
     renderQueues();
     renderDiagram();
+    renderAttend();
     renderLogBar();
-    renderTickets();
+    renderTickets(opts);
     // The detail pane owns its own fetch; only repaint from cache here so a
     // 5s poll can't flicker the pane the user is reading.
     renderDetail();
@@ -2155,7 +3292,9 @@
   function showMobileColumn(column) {
     if (!window.matchMedia('(max-width: 700px)').matches) return;
     var shell = document.querySelector('.q2-shell');
-    if (!shell || ['queues', 'tickets', 'detail'].indexOf(column) === -1) return;
+    // 'detail' dropped (CCC-904): ticket detail is a popup on every viewport,
+    // not a third mobile panel to route to.
+    if (!shell || ['queues', 'tickets'].indexOf(column) === -1) return;
     shell.setAttribute('data-mobile-panel', column);
   }
 
@@ -2171,10 +3310,28 @@
     if (search) search.value = '';
     rememberSelection();
     state.log = [];
-    renderAll();
+    renderAll({ force: true });
     showMobileColumn('tickets');
     loadQueueLearnings(name);
+    stopAttendPoll();
+    loadQueueAttend(name);
     loadLog(name).then(renderLogBar);
+    // CCC-904: ticket detail is a popup now, so picking a queue must not pop
+    // one open automatically (CCC-809's old "land on the topmost ticket"
+    // behavior would mean a modal on every queue click). The RHS list is
+    // already scoped to this queue; opening a ticket is an explicit click.
+  }
+
+  function showQueueLearningsInDetail() {
+    // Opens the queue's learnings doc in the same popup renderDetail() uses
+    // for a ticket (CCC-904) — deselect the ticket first so renderDetail()'s
+    // no-ref branch renders learnings instead.
+    if (!state.queue || state.viewAll) return;
+    state.ref = '';
+    state.detail = null;
+    rememberSelection();
+    renderTickets({ force: true });
+    openDetailModal();
   }
 
   function selectAllQueues() {
@@ -2187,8 +3344,11 @@
     var search = $('q2Search');
     if (search) search.value = '';
     state.log = [];
+    // No per-queue attendant in the all-queues view; stop polling rather
+    // than leaving an interval running for a band that's now hidden.
+    stopAttendPoll();
     rememberSelection();
-    renderAll();
+    renderAll({ force: true });
     showMobileColumn('tickets');
   }
 
@@ -2203,14 +3363,17 @@
   }
 
   function selectTicket(ref) {
-    if (ref === state.ref) return;
+    // No same-ref early-return: the detail pane is a popup now (CCC-904), so
+    // clicking a ticket whose ref is already state.ref (e.g. re-clicking
+    // after closing the popup) must still reopen it.
     state.ref = ref;
     state.detail = null;
     state.arm = '';
+    state.editingTitle = false;
     rememberSelection();
     renderQueues();
-    renderTickets();
-    showMobileColumn('detail');
+    renderTickets({ force: true });
+    openDetailModal();
     loadDetail(ref);
   }
 
@@ -2232,7 +3395,7 @@
     var runDot = e.target.closest('[data-q2-run]');
     if (runDot) {
       e.stopPropagation();
-      runTicket(runDot.getAttribute('data-q2-run'), runDot.getAttribute('data-q2-queued') === '1');
+      runTicket(runDot.getAttribute('data-q2-run'), runDot.getAttribute('data-q2-queued') === '1', runDot);
       return;
     }
     var releaseWorkerBtn = e.target.closest('[data-q2-release-worker]');
@@ -2250,11 +3413,69 @@
     var act = e.target.closest('[data-q2-act]');
     if (act) { e.stopPropagation(); detailAction(act.getAttribute('data-q2-act'), act); return; }
     if (e.target.closest('[data-q2-learnings-open]')) { openQueueLearnings(); return; }
+    var delQBtn = e.target.closest('[data-q2-del-queue]');
+    if (delQBtn) {
+      e.stopPropagation();
+      deleteQueueRow(delQBtn.getAttribute('data-q2-del-queue'), Number(delQBtn.getAttribute('data-q2-del-total')) || 0);
+      return;
+    }
     if (e.target.closest('[data-q2-all-queues]')) { selectAllQueues(); return; }
     var qBtn = e.target.closest('[data-q2-queue]');
     if (qBtn) { selectQueue(qBtn.getAttribute('data-q2-queue')); return; }
     var tBtn = e.target.closest('[data-q2-ref]');
     if (tBtn) { selectTicket(tBtn.getAttribute('data-q2-ref')); return; }
+    var dgFold = e.target.closest('[data-q2-dg-fold]');
+    if (dgFold) { e.stopPropagation(); setDiagramCollapsed(true); return; }
+    var dgExpand = e.target.closest('[data-q2-dg-expand]');
+    if (dgExpand) { e.stopPropagation(); setDiagramCollapsed(false); return; }
+    var briefToggle = e.target.closest('[data-q2-brief-toggle]');
+    if (briefToggle) {
+      e.stopPropagation();
+      setBriefCollapsed(state.queue, !briefCollapsed(state.queue));
+      renderAttend();
+      return;
+    }
+    var tendBtn = e.target.closest('[data-q2-attend-tend]');
+    if (tendBtn) {
+      e.stopPropagation();
+      if (!tendBtn.disabled) tendQueue();
+      return;
+    }
+    var attendRefreshBtn = e.target.closest('[data-q2-attend-refresh]');
+    if (attendRefreshBtn) {
+      e.stopPropagation();
+      if (!attendRefreshBtn.disabled) refreshAttend();
+      return;
+    }
+    var attendOptBtn = e.target.closest('[data-q2-attend-answer-opt]');
+    if (attendOptBtn) {
+      e.stopPropagation();
+      if (!attendOptBtn.disabled) {
+        var oi = parseInt(attendOptBtn.getAttribute('data-q2-attend-answer-opt'), 10) || 0;
+        var q = state.attendQuestion || {};
+        var optText = (q.options || [])[oi];
+        if (optText) answerAttendQuestion(optText);
+      }
+      return;
+    }
+    var attendSendBtn = e.target.closest('[data-q2-attend-answer-send]');
+    if (attendSendBtn) {
+      e.stopPropagation();
+      if (!attendSendBtn.disabled) {
+        var attendInput = document.querySelector('[data-q2-attend-draft="answer"]');
+        var attendText = attendInput ? String(attendInput.value || '').trim() : '';
+        if (attendText) answerAttendQuestion(attendText);
+      }
+      return;
+    }
+    var attendSkipBtn = e.target.closest('[data-q2-attend-skip]');
+    if (attendSkipBtn) {
+      e.stopPropagation();
+      if (!attendSkipBtn.disabled) {
+        answerAttendQuestion('Skip -- use your own best judgment, proceed without waiting on me, and do not re-ask this.');
+      }
+      return;
+    }
     var convT = e.target.closest('[data-q2-conv-toggle], .q2-conv-head');
     if (convT && !e.target.closest('a')) {
       setConvOpen(!convOpen());
@@ -2278,6 +3499,26 @@
       saveField(field, nextInCycle(field, cyc.getAttribute('data-q2-val')));
       return;
     }
+    if (e.target.closest('[data-q2-title-open]')) {
+      state.editingTitle = true;
+      renderDetail();
+      var titleTa = document.querySelector('[data-q2-input="title"]');
+      if (titleTa) { titleTa.focus(); titleTa.setSelectionRange(titleTa.value.length, titleTa.value.length); }
+      return;
+    }
+    if (e.target.closest('[data-q2-title-cancel]')) {
+      state.editingTitle = false;
+      renderDetail();
+      return;
+    }
+    if (e.target.closest('[data-q2-title-save]')) {
+      var titleVal = document.querySelector('[data-q2-input="title"]');
+      var newTitle = titleVal ? titleVal.value.trim() : '';
+      if (!newTitle) { note('Title cannot be empty.'); return; }
+      state.editingTitle = false;
+      saveField('title', newTitle);
+      return;
+    }
     // The whole log header toggles, not just the caret.
     var logHead = e.target.closest('.q2-logbar-head');
     if (logHead && !e.target.closest('a')) {
@@ -2293,10 +3534,11 @@
     }
     if (e.target.closest('[data-q2-more]')) {
       state.closedCap += CLOSED_CAP;
-      renderTickets();
+      renderTickets({ force: true });
       return;
     }
-    if (e.target.closest('#q2ClosedBtn')) { state.showClosed = !state.showClosed; renderTickets(); return; }
+    if (e.target.closest('#q2ClosedBtn')) { state.showClosed = !state.showClosed; renderTickets({ force: true }); return; }
+    if (e.target.closest('#q2EditPromptBtn')) { showQueueLearningsInDetail(); return; }
     if (e.target.closest('#q2ThemeBtn')) { toggleTheme(); return; }
     if (e.target.closest('[data-q2-modal-close]')) { closeModal(); return; }
     if (e.target.closest('#q2NewTicketBtn')) { openNewTicket(); return; }
@@ -2321,6 +3563,18 @@
   // Queue rows are divs now (they contain a real button), so the Enter/Space
   // activation a <button> gave for free has to be restored by hand.
   document.addEventListener('keydown', function (e) {
+    var titleTa = e.target.closest && e.target.closest('[data-q2-input="title"]');
+    if (titleTa) {
+      if (e.key === 'Escape') { e.preventDefault(); state.editingTitle = false; renderDetail(); return; }
+      if (e.key === 'Enter' && !e.shiftKey) {
+        e.preventDefault();
+        var newTitle = titleTa.value.trim();
+        if (!newTitle) { note('Title cannot be empty.'); return; }
+        state.editingTitle = false;
+        saveField('title', newTitle);
+      }
+      return;
+    }
     if (e.key !== 'Enter' && e.key !== ' ' && e.key !== 'Spacebar') return;
     var row = e.target.closest && e.target.closest('.q2-qrow[data-q2-queue]');
     var all = e.target.closest && e.target.closest('.q2-all-row[data-q2-all-queues]');
@@ -2334,7 +3588,7 @@
   if (searchInput) {
     searchInput.addEventListener('input', function () {
       state.search = searchInput.value || '';
-      renderTickets();
+      renderTickets({ force: true });
     });
   }
 
@@ -2447,6 +3701,157 @@
     setColWidth('tickets', readColWidth('tickets'), false);
   });
 
+  // ── activity-log resizer ─────────────────────────────────────────────────
+  // Same drag pattern as the column resizers, but vertical: drags the log
+  // band's height instead of a column's width. The CSS var falls back to the
+  // original 28% when nothing has been dragged yet.
+  var LOGBAR_KEY = 'ccc-q2-logbar-h';
+  var LOGBAR_MIN = 96;
+
+  function logbarMax() {
+    var host = $('q2LogBar');
+    var avail = (host && host.parentElement) ? host.parentElement.clientHeight : window.innerHeight;
+    return Math.max(LOGBAR_MIN, Math.round(avail * 0.7));
+  }
+
+  function setLogbarHeight(px, persist) {
+    var h = Math.round(Math.max(LOGBAR_MIN, Math.min(logbarMax(), px)));
+    document.documentElement.style.setProperty('--q2-logbar-h', h + 'px');
+    if (persist) {
+      try { localStorage.setItem(LOGBAR_KEY, String(h)); } catch (_) {}
+    }
+    return h;
+  }
+
+  (function initLogbarHeight() {
+    var saved = null;
+    try { saved = localStorage.getItem(LOGBAR_KEY); } catch (_) {}
+    var n = parseFloat(saved);
+    if (!isNaN(n)) setLogbarHeight(n, false);
+  })();
+
+  var logbarHandle = document.querySelector('[data-q2-resize-v="logbar"]');
+  if (logbarHandle) {
+    logbarHandle.addEventListener('pointerdown', function (e) {
+      if (e.button !== 0) return;
+      e.preventDefault();
+      var startY = e.clientY;
+      var host = $('q2LogBar');
+      var startH = host ? host.getBoundingClientRect().height : LOGBAR_MIN;
+      logbarHandle.setPointerCapture(e.pointerId);
+      logbarHandle.classList.add('is-dragging');
+      document.body.classList.add('q2-resizing-v');
+
+      // Dragging the handle up (clientY decreases) grows the log band below it.
+      function onMove(ev) { setLogbarHeight(startH + (startY - ev.clientY), false); }
+      function onUp() {
+        logbarHandle.removeEventListener('pointermove', onMove);
+        logbarHandle.removeEventListener('pointerup', onUp);
+        logbarHandle.removeEventListener('pointercancel', onUp);
+        logbarHandle.classList.remove('is-dragging');
+        document.body.classList.remove('q2-resizing-v');
+        var host2 = $('q2LogBar');
+        if (host2) setLogbarHeight(host2.getBoundingClientRect().height, true);
+      }
+      logbarHandle.addEventListener('pointermove', onMove);
+      logbarHandle.addEventListener('pointerup', onUp);
+      logbarHandle.addEventListener('pointercancel', onUp);
+    });
+
+    logbarHandle.addEventListener('dblclick', function () {
+      document.documentElement.style.removeProperty('--q2-logbar-h');
+      try { localStorage.removeItem(LOGBAR_KEY); } catch (_) {}
+    });
+
+    logbarHandle.addEventListener('keydown', function (e) {
+      var step = e.shiftKey ? 60 : 20;
+      var host = $('q2LogBar');
+      var cur = host ? host.getBoundingClientRect().height : LOGBAR_MIN;
+      if (e.key === 'ArrowUp') { e.preventDefault(); setLogbarHeight(cur + step, true); }
+      else if (e.key === 'ArrowDown') { e.preventDefault(); setLogbarHeight(cur - step, true); }
+      else if (e.key === 'Home') {
+        e.preventDefault();
+        document.documentElement.style.removeProperty('--q2-logbar-h');
+        try { localStorage.removeItem(LOGBAR_KEY); } catch (_) {}
+      }
+    });
+  }
+
+  // ── attendant band height handle ─────────────────────────────────────────
+  // Same idiom as the logbar handle above, with the drag direction inverted:
+  // this handle sits BELOW the band it resizes, so dragging DOWN grows it.
+  // Variable/localStorage names still say "brief" -- it's the same band,
+  // now showing the queue attendant instead of the status brief, and an
+  // existing saved height/collapse preference should carry over unchanged.
+  var BRIEF_HMIN = 90;
+  var BRIEF_HKEY = 'q2.brief.height';
+
+  function briefHeightMax() {
+    var host = $('q2Brief');
+    var avail = (host && host.parentElement) ? host.parentElement.clientHeight : window.innerHeight;
+    return Math.max(BRIEF_HMIN, Math.round(avail * 0.75));
+  }
+
+  function setBriefHeight(px, persist) {
+    var h = Math.round(Math.max(BRIEF_HMIN, Math.min(briefHeightMax(), px)));
+    document.documentElement.style.setProperty('--q2-brief-h', h + 'px');
+    if (persist) {
+      try { localStorage.setItem(BRIEF_HKEY, String(h)); } catch (_) {}
+    }
+    return h;
+  }
+
+  function resetBriefHeight() {
+    document.documentElement.style.removeProperty('--q2-brief-h');
+    try { localStorage.removeItem(BRIEF_HKEY); } catch (_) {}
+  }
+
+  (function initBriefHeight() {
+    var saved = null;
+    try { saved = localStorage.getItem(BRIEF_HKEY); } catch (_) {}
+    var n = parseFloat(saved);
+    if (!isNaN(n)) setBriefHeight(n, false);
+  })();
+
+  var briefHandle = document.querySelector('[data-q2-resize-v="brief"]');
+  if (briefHandle) {
+    briefHandle.addEventListener('pointerdown', function (e) {
+      if (e.button !== 0) return;
+      e.preventDefault();
+      var startY = e.clientY;
+      var host = $('q2Brief');
+      var startH = host ? host.getBoundingClientRect().height : BRIEF_HMIN;
+      briefHandle.setPointerCapture(e.pointerId);
+      briefHandle.classList.add('is-dragging');
+      document.body.classList.add('q2-resizing-v');
+
+      function onMove(ev) { setBriefHeight(startH + (ev.clientY - startY), false); }
+      function onUp() {
+        briefHandle.removeEventListener('pointermove', onMove);
+        briefHandle.removeEventListener('pointerup', onUp);
+        briefHandle.removeEventListener('pointercancel', onUp);
+        briefHandle.classList.remove('is-dragging');
+        document.body.classList.remove('q2-resizing-v');
+        var host2 = $('q2Brief');
+        if (host2) setBriefHeight(host2.getBoundingClientRect().height, true);
+      }
+      briefHandle.addEventListener('pointermove', onMove);
+      briefHandle.addEventListener('pointerup', onUp);
+      briefHandle.addEventListener('pointercancel', onUp);
+    });
+
+    briefHandle.addEventListener('dblclick', resetBriefHeight);
+
+    briefHandle.addEventListener('keydown', function (e) {
+      var step = e.shiftKey ? 60 : 20;
+      var host = $('q2Brief');
+      var cur = host ? host.getBoundingClientRect().height : BRIEF_HMIN;
+      if (e.key === 'ArrowDown') { e.preventDefault(); setBriefHeight(cur + step, true); }
+      else if (e.key === 'ArrowUp') { e.preventDefault(); setBriefHeight(cur - step, true); }
+      else if (e.key === 'Home') { e.preventDefault(); resetBriefHeight(); }
+    });
+  }
+
   // Glyph buttons in the markup are filled with drawn icons here, so the page
   // never depends on a font shipping a decent gear or plus.
   document.querySelectorAll('[data-q2-icon]').forEach(function (el) {
@@ -2456,10 +3861,31 @@
 
   loadConfigs().then(renderAll);
 
+  // Every "kept warm" worker card's countdown span (data-q2-release-at, an
+  // absolute epoch-ms deadline set once at render time -- see
+  // workerCardHtml) ticks independently of the 5s poll / per-minute repaint
+  // bucket, so the seconds visibly count down instead of jumping once a
+  // minute.
+  function tickCountdowns() {
+    if (document.hidden) return;
+    var now = Date.now();
+    document.querySelectorAll('[data-q2-release-at]').forEach(function (el) {
+      var at = parseInt(el.getAttribute('data-q2-release-at'), 10);
+      if (!isFinite(at)) return;
+      el.textContent = countdownClock(at - now);
+    });
+  }
+
   // ── boot ─────────────────────────────────────────────────────────────────
   refresh();
   setInterval(function () {
     if (document.hidden) return;
     refresh();
   }, POLL_MS);
+  setInterval(tickCountdowns, 1000);
+
+  // Lets same-page callers (e.g. the annotate widget, which files a ticket
+  // straight into this board's own queue) skip the up-to-5s poll wait and
+  // show a just-filed ticket immediately.
+  window.q2Refresh = refresh;
 })();

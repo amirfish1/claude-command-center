@@ -299,5 +299,76 @@ class ActivityLogEndpointTests(unittest.TestCase):
         self.assertEqual(data["events"], [])
 
 
+class SelfHealthCheckLoopTests(unittest.TestCase):
+    """Coverage for `_self_health_check_once` -- the periodic self-probe added
+    after the 2026-08-28 sleep/wake silent-hang incident (see its docstring
+    and `_self_health_check_loop`). Diagnostic-only: proves the probe/miss/
+    dump wiring behaves as designed, not a fix for the underlying hang
+    (root cause wasn't confirmed from a static read of a non-reproducible
+    incident)."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.server = importlib.import_module("server")
+
+    def test_unreachable_port_logs_a_miss_without_dumping_below_threshold(self):
+        server = self.server
+        with mock.patch.object(server, "_log_activity") as log_activity, \
+             mock.patch.object(server, "_dump_stacks_on_self_health_miss") as dump:
+            # Port 1 is a reserved/unbound low port -- guaranteed refused,
+            # no real network access needed for this to fail fast.
+            result = server._self_health_check_once(1, 0)
+        self.assertEqual(result, 1)
+        kinds = [c.args[1] for c in log_activity.call_args_list]
+        self.assertIn("MISS", kinds)
+        dump.assert_not_called()
+
+    def test_reaching_the_fail_threshold_triggers_a_stack_dump(self):
+        server = self.server
+        with mock.patch.object(server, "_log_activity"), \
+             mock.patch.object(server, "_dump_stacks_on_self_health_miss") as dump:
+            result = server._self_health_check_once(
+                1, server._SELF_HEALTH_CHECK_FAIL_THRESHOLD - 1
+            )
+        self.assertEqual(result, server._SELF_HEALTH_CHECK_FAIL_THRESHOLD)
+        dump.assert_called_once_with(1, server._SELF_HEALTH_CHECK_FAIL_THRESHOLD)
+
+    def test_dump_is_a_noop_without_the_sigusr2_handler_installed(self):
+        server = self.server
+        with mock.patch.object(server, "_PYTHON_STACK_DUMP_FILE", None), \
+             mock.patch.object(server.os, "kill") as kill:
+            server._dump_stacks_on_self_health_miss(8090, 2)  # must not raise
+        kill.assert_not_called()
+
+    def _serve(self):
+        httpd = self.server.http.server.ThreadingHTTPServer(
+            ("127.0.0.1", 0), self.server.CommandCenterHandler,
+        )
+        thread = threading.Thread(target=httpd.serve_forever, daemon=True)
+        thread.start()
+        self.addCleanup(thread.join, timeout=5)
+        self.addCleanup(httpd.server_close)
+        self.addCleanup(httpd.shutdown)
+        return httpd.server_address[1]
+
+    def test_a_real_responding_server_logs_a_beat_and_resets_the_streak(self):
+        server = self.server
+        port = self._serve()
+        with mock.patch.object(server, "_log_activity") as log_activity:
+            result = server._self_health_check_once(port, 0)
+        self.assertEqual(result, 0)
+        kinds = [c.args[1] for c in log_activity.call_args_list]
+        self.assertIn("beat", kinds)
+
+    def test_a_real_responding_server_logs_recovered_after_prior_misses(self):
+        server = self.server
+        port = self._serve()
+        with mock.patch.object(server, "_log_activity") as log_activity:
+            result = server._self_health_check_once(port, 1)
+        self.assertEqual(result, 0)
+        kinds = [c.args[1] for c in log_activity.call_args_list]
+        self.assertIn("RECOVERED", kinds)
+
+
 if __name__ == "__main__":
     unittest.main()

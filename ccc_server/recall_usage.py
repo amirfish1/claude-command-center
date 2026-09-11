@@ -24,6 +24,7 @@ import urllib.request
 import uuid
 
 from ccc_server import core as _core
+from ccc_server.quota_calibration import quota_cost_calibration
 
 # ---------------------------------------------------------------------------
 # Total Recall search — optional session-level augmentation for the sidebar
@@ -223,6 +224,12 @@ _plan_usage_cache_lock = threading.Lock()
 _USAGE_SNAPSHOT_MAX_LINES = 50_000
 _USAGE_SNAPSHOT_MAX_AGE_DAYS = 90
 _USAGE_NATIVE_FRESH_SECS = 15 * 60
+# A provider snapshot older than this (or whose weekly window already reset)
+# is surfaced with an additive `stale: true` marker so the UI can render it
+# in a visibly-stale style instead of the live visual language. Kimi's access
+# token only lives ~15 minutes after its own CLI runs, so its snapshots can
+# legitimately sit cached for days — the marker is the honest presentation.
+_USAGE_PROVIDER_STALE_SECS = 24 * 3600
 _PLAN_USAGE_POLL_SECS = 5 * 60
 _RESET_DETECT_JITTER_SECS = 5 * 60
 _RESET_DETECT_MAX_PREV_AGE_SECS = 30 * 60
@@ -992,9 +999,22 @@ def _usage_snapshot_epoch(snapshot):
     return dt.timestamp()
 
 
+_native_usage_snapshots_memo = {"path": None, "signature": None, "snapshots": None}
+
+
 def _read_native_usage_snapshots_unlocked():
+    path = _core._USAGE_SNAPSHOTS_FILE
     try:
-        with _core._USAGE_SNAPSHOTS_FILE.open("r", encoding="utf-8") as f:
+        stat = path.stat()
+    except OSError:
+        return []
+    signature = (stat.st_mtime_ns, stat.st_size)
+    path_str = str(path)
+    cached = _native_usage_snapshots_memo
+    if cached["path"] == path_str and cached["signature"] == signature:
+        return list(cached["snapshots"] or [])
+    try:
+        with path.open("r", encoding="utf-8") as f:
             lines = f.readlines()
     except OSError:
         return []
@@ -1009,7 +1029,12 @@ def _read_native_usage_snapshots_unlocked():
             continue
         if isinstance(item, dict):
             snapshots.append(item)
-    return snapshots
+    _native_usage_snapshots_memo.update({
+        "path": path_str,
+        "signature": signature,
+        "snapshots": snapshots,
+    })
+    return list(snapshots)
 
 
 def _write_native_usage_snapshots_unlocked(snapshots):
@@ -1414,6 +1439,24 @@ def usage_snapshots_payload(hours=24, now_epoch=None):
     return {"ok": True, "hours": hours, "snapshots": recent}
 
 
+def _usage_provider_stale(usage, now_epoch):
+    """True when a provider usage snapshot (codex/kimi shape) should render as
+    stale: its own snapshot_ts/fetched_at is older than
+    _USAGE_PROVIDER_STALE_SECS, or its weekly resets_at has already passed
+    (the number describes a window that is over)."""
+    if not isinstance(usage, dict):
+        return False
+    ts_epoch = _usage_snapshot_epoch({
+        "ts": usage.get("snapshot_ts") or usage.get("fetched_at")
+    })
+    if ts_epoch is None or now_epoch - ts_epoch > _USAGE_PROVIDER_STALE_SECS:
+        return True
+    resets = _core._stats_parse_ts((usage.get("weekly") or {}).get("resets_at"))
+    if resets is not None and resets.timestamp() < now_epoch:
+        return True
+    return False
+
+
 def usage_current_payload(now_epoch=None):
     if now_epoch is None:
         now_epoch = time.time()
@@ -1427,6 +1470,14 @@ def usage_current_payload(now_epoch=None):
     kimi = _core._latest_kimi_usage_from_snapshots(now_epoch=now_epoch)
     cal = _core._weekly_pct_calibration()
     reset_events = _core.usage_reset_events_payload(days=30, now_epoch=now_epoch).get("events", [])
+    codex_stale = _usage_provider_stale(codex, now_epoch)
+    kimi_stale = _usage_provider_stale(kimi, now_epoch)
+    codex_pace = _core.codex_usage_pace_payload(codex=codex, now_epoch=now_epoch)
+    kimi_pace = _core.kimi_usage_pace_payload(kimi=kimi, now_epoch=now_epoch)
+    if isinstance(codex_pace, dict) and codex_stale:
+        codex_pace["stale"] = True
+    if isinstance(kimi_pace, dict) and kimi_stale:
+        kimi_pace["stale"] = True
     return {
         "ok": True,
         "claude": {
@@ -1451,15 +1502,25 @@ def usage_current_payload(now_epoch=None):
         "codex": {
             "session": (codex or {}).get("session"),
             "weekly": (codex or {}).get("weekly"),
-            "pace": _core.codex_usage_pace_payload(codex=codex, now_epoch=now_epoch),
+            "pace": codex_pace,
             "plan_type": (codex or {}).get("plan_type"),
+            "snapshot_ts": (codex or {}).get("snapshot_ts") or (codex or {}).get("fetched_at"),
+            "from_cache": bool((codex or {}).get("from_cache")),
+            "stale": codex_stale,
         },
         "kimi": {
             "session": (kimi or {}).get("session"),
             "weekly": (kimi or {}).get("weekly"),
-            "pace": _core.kimi_usage_pace_payload(kimi=kimi, now_epoch=now_epoch),
+            "pace": kimi_pace,
             "plan_type": (kimi or {}).get("plan_type"),
+            "snapshot_ts": (kimi or {}).get("snapshot_ts") or (kimi or {}).get("fetched_at"),
+            "from_cache": bool((kimi or {}).get("from_cache")),
+            "stale": kimi_stale,
         },
+        "quota_cost_calibration": quota_cost_calibration(
+            _core._USAGE_SNAPSHOTS_FILE, _core._THROUGHPUT_DISK_CACHE_DIR,
+            now=now_epoch,
+        ),
         "calibration": {
             "pct_per_token": (cal or {}).get("pct_per_token"),
             "calibrated_at": (cal or {}).get("calibrated_at"),
@@ -1518,4 +1579,3 @@ def _start_plan_usage_poller():
         name="ccc-plan-usage-poller",
     ).start()
     return True
-

@@ -1,9 +1,12 @@
 # WatchTower migration state
 
-Status: audit + gap-closing refactor, 2026-07-17. Companion to
-`ccc-watchtower-boundary.md` in the WatchTower repo (the canonical ownership
-contract: WT owns durable queue/worker/delivery semantics; CCC owns desktop UI
-surfaces and local transports).
+Status: audit + gap-closing refactor, 2026-07-17; updated 2026-08-21 (WT-92:
+`ux_fixes_queue.py`, the stdlib ticket-lifecycle fallback, was deleted —
+`watchtower.queue` is now a hard, unconditional dependency for ticket
+lifecycle, with no fallback). Companion to `ccc-watchtower-boundary.md` in the
+WatchTower repo (the canonical ownership contract: WT owns durable
+queue/worker/delivery semantics; CCC owns desktop UI surfaces and local
+transports).
 
 ## Question
 
@@ -26,14 +29,14 @@ below as an accepted follow-up.
 
 | Domain | Engine when WT is installed | Fallback without WT |
 |---|---|---|
-| Ticket lifecycle (claim/close/edit/answer/comment/reopen) | `watchtower.queue` (in-process import, `_q` indirection; "WT-32 Phase 2") | `ux_fixes_queue.py` (CCC's stdlib engine, same store shape) |
+| Ticket lifecycle (claim/close/edit/answer/comment/reopen) | `watchtower.queue` (in-process import, `_q` indirection; "WT-32 Phase 2") | none — hard dependency since WT-92 (2026-08-21); CCC fails loudly at import if `watchtower.queue` is missing |
 | Doc → tickets (plan-to-fleet import) | `wt import` CLI subprocess; availability probed via `wt import --help` | feature hidden (`available: false`) |
 | Queue config writes (`/api/queue/config`, `/drain`, claim-types) | `watchtower.config` setters — same code path as `wt config` / `wt drain` *(closed by this change; previously direct file writes)* | direct atomic write of `queue-config.json` |
 | Worker dispatch after enqueue / run-once | `watchtower.workers.dispatch_after_enqueue` / `spawn_run_once_worker` | no dispatch (tickets wait) |
 | Dashboard "drain with N workers" spawn | `watchtower.workers.spawn_workers` — WT-tracked, in `workers.json` + WT logs *(closed by this change; previously untracked CCC shadow sessions)* | CCC `spawn_session()` worker polling CCC's HTTP API |
 | Delivery receipts | `wt receipts get` subprocess (transcript-verified) | n/a |
 | Message send/ask | CCC-native transports (AppleScript/FIFO/resume) by default; `wt send`/`wt ask` behind `CCC_MESSAGING_BACKEND=wt` | CCC-native |
-| Health strip / queue analytics | read-only reads of `~/.watchtower` JSON + `activity.log`, plus `_q.list_items()` | same reads; `ux_fixes_queue` store |
+| Health strip / queue analytics | read-only reads of `~/.watchtower` JSON + `activity.log`, plus `_q.list_items()` | none — same reads, no fallback store |
 
 ## What this change closed (2026-07-17)
 
@@ -83,11 +86,6 @@ below as an accepted follow-up.
 
 ## What remains CCC-side, and why
 
-- **`ux_fixes_queue.py` (the full fallback ticket engine).** Kept so CCC works
-  standalone (public OSS install without WatchTower). It mirrors WT's store
-  shape; the known risk is silent drift between the two writers. Follow-up
-  worth considering: a shared schema fixture test, or demoting the fallback to
-  read-only display.
 - **Messaging default (`CCC_MESSAGING_BACKEND` unset → CCC-native).** This is
   contract-compliant, not a gap: the boundary doc assigns live local
   transports to CCC and reserves `wt send`/`wt ask` for durable delivery.

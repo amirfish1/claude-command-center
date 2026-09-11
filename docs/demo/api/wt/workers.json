@@ -1,0 +1,38 @@
+{
+  "ok": true,
+  "workers": [
+    {
+      "worker_id": "bugs-1",
+      "queue": "BUGS",
+      "session_id": "f0000001-0000-4000-8000-000000000001",
+      "pid": 48213,
+      "alive": true,
+      "engine": "claude",
+      "model": "claude-sonnet-4-5",
+      "started_at": "2026-09-03T20:48:00Z",
+      "idle_seconds": 12
+    },
+    {
+      "worker_id": "content-1",
+      "queue": "CONTENT",
+      "session_id": "f0000002-0000-4000-8000-000000000002",
+      "pid": 49021,
+      "alive": true,
+      "engine": "claude",
+      "model": "claude-sonnet-4-5",
+      "started_at": "2026-09-03T19:40:00Z",
+      "idle_seconds": 8
+    },
+    {
+      "worker_id": "content-2",
+      "queue": "CONTENT",
+      "session_id": "f0000003-0000-4000-8000-000000000003",
+      "pid": 49117,
+      "alive": true,
+      "engine": "codex",
+      "model": "gpt-5-codex",
+      "started_at": "2026-09-03T21:04:00Z",
+      "idle_seconds": 30
+    }
+  ]
+}

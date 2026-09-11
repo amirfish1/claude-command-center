@@ -73,7 +73,7 @@ def test_spawn_stream_accepts_selected_pending_placeholder_and_replays():
     assert "claudeSpawnAwaitingFirstPaint.has(sid)" in body
     assert "handleSpawnEvents(data.events, streamPaneId, pane.conversationId, sid)" in body
     assert body.index("if (!streamStillSelected(latestPane)) return;") < body.index("stopSpawnStream();")
-    rebind = _function_source("rebindCurrentSelectionToRealCard", 2400)
+    rebind = _function_source("rebindCurrentSelectionToRealCard", 4000)
     assert "claudeSpawnAwaitingFirstPaint.has(sid)" in rebind
     assert "{ replay: true }" in rebind
     source = APP_JS.read_text(encoding="utf-8")

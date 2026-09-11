@@ -125,7 +125,7 @@ def test_prewarmed_model_metadata_is_scheduled_after_first_response(monkeypatch)
     timer = created[0]
     assert timer.delay >= 10
     assert timer.target is server._set_session_model
-    assert timer.args == ("session-fast", "claude-sonnet-5", False)
+    assert timer.args == ("session-fast", "claude-sonnet-5", False, None)
     assert timer.daemon is True
     assert timer.started is True
 
@@ -488,8 +488,13 @@ def test_orphaned_registered_prewarm_is_reaped_on_owner_restart(monkeypatch):
     saved = []
     killed = []
     unlinked = []
-    monkeypatch.setattr(server, "_load_spawn_registry", lambda: list(entries))
-    monkeypatch.setattr(server, "_save_spawn_registry", lambda rows: saved.append(rows))
+
+    def mutate_registry(mutator):
+        rows = list(entries)
+        if mutator(rows):
+            saved.append(rows)
+
+    monkeypatch.setattr(server, "_mutate_spawn_registry", mutate_registry)
     monkeypatch.setattr(server.os, "killpg", lambda pid, sig: killed.append(pid))
     monkeypatch.setattr(server, "_unlink_quiet", lambda path: unlinked.append(path))
 

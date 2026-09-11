@@ -1,0 +1,1 @@
+Estimate each Claude and Codex session's weekly quota contribution from historical API-cost-to-quota observations, and show its allocated subscription cost using configurable monthly plan prices. Keep full-session scope across weekly resets and distinguish estimates from actual billing.

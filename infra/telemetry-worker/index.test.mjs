@@ -61,9 +61,11 @@ test("download click remains opaque when D1 fails", async () => {
 
 
 test("stats exposes aggregate clicks without event rows", async () => {
+  const queries = [];
   const env = {
     DB: {
       prepare(sql) {
+        queries.push(sql);
         return {
           first: async () => ({
             total_opens: 3,
@@ -93,4 +95,49 @@ test("stats exposes aggregate clicks without event rows", async () => {
     { day: "2026-07-15", download_clicks: 4 },
   ]);
   assert.equal(payload.downloads, undefined);
+  assert.equal(queries.filter(sql => /GROUP BY day ORDER BY day DESC LIMIT 90/.test(sql)).length, 3);
+});
+
+test("an unknown engine name never rejects the ping", async () => {
+  const writes = [];
+  const env = {
+    DB: {
+      prepare(sql) {
+        return {
+          bind(...values) {
+            writes.push({ sql, values });
+            return { run: async () => ({ success: true }) };
+          },
+        };
+      },
+    },
+    IP_HASH_SECRET: "test-secret",
+  };
+  const body = {
+    schema_version: 3,
+    install_id: "00000000-0000-4000-8000-000000000002",
+    version: "5.23.0",
+    platform: "darwin",
+    // `opencode` is known now; `warpdrive` stands in for the next engine
+    // CCC learns to detect before this Worker is redeployed.
+    engines: "claude,opencode,warpdrive",
+    last_active_date: "2026-08-12",
+    sessions_today: 1,
+    active_seconds_today: 30,
+    total_sessions_managed: 1,
+  };
+  const response = await worker.fetch(
+    new Request("https://telemetry.example/v1/ping", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "CF-Connecting-IP": "203.0.113.9" },
+      body: JSON.stringify(body),
+    }),
+    env,
+  );
+
+  assert.equal(response.status, 204);
+  const ping = writes.find((w) => /INSERT INTO pings/.test(w.sql));
+  assert.ok(ping, "ping row written");
+  // Unknown name filtered out, known ones kept in client order.
+  assert.equal(ping.values[4], "claude,opencode");
 });

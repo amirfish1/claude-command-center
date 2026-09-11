@@ -142,7 +142,14 @@ require_git() {
 sync_repo() {
   if [ -d "$INSTALL_DIR/.git" ]; then
     printf 'install: updating existing checkout at %s\n' "$INSTALL_DIR"
-    git -C "$INSTALL_DIR" pull --ff-only
+    if git -C "$INSTALL_DIR" pull --ff-only; then
+      return
+    fi
+    # History no longer fast-forwards (e.g. an upstream rewrite) or the
+    # checkout is otherwise broken. Don't leave the user stuck on a crashed
+    # installer — reclone fresh and replace it.
+    err "existing checkout at ${INSTALL_DIR} could not fast-forward; recloning fresh"
+    clone_into_install_dir replace
     return
   fi
 
@@ -151,13 +158,23 @@ sync_repo() {
     return 1
   fi
 
-  local parent staging
+  clone_into_install_dir fresh
+}
+
+# Clone into a staging dir next to INSTALL_DIR, then atomically publish it.
+#   mode=fresh:   INSTALL_DIR must not exist yet. If a concurrent installer
+#                 published it while we were cloning, leave that untouched
+#                 rather than overwrite it.
+#   mode=replace: INSTALL_DIR is expected to already exist (a broken or
+#                 diverged checkout) and gets replaced.
+clone_into_install_dir() {
+  local mode="$1" parent staging
   parent="$(dirname "$INSTALL_DIR")"
   staging="${INSTALL_DIR}.installing.$$"
   mkdir -p "$parent"
   INSTALL_STAGING="$staging"
 
-  printf 'install: cloning %s to %s\n' "$REPO_URL" "$INSTALL_DIR"
+  printf 'install: cloning %s to %s\n' "$REPO_URL" "$staging"
   if ! git clone "$REPO_URL" "$staging"; then
     cleanup_install_staging
     INSTALL_STAGING=""
@@ -165,14 +182,17 @@ sync_repo() {
     return 1
   fi
 
-  # A concurrent installer may have published while this clone was running.
-  # Never turn its checkout into a parent directory or overwrite it.
-  if [ -e "$INSTALL_DIR" ]; then
+  if [ "$mode" = "fresh" ] && [ -e "$INSTALL_DIR" ]; then
     cleanup_install_staging
     INSTALL_STAGING=""
     err "another installer published ${INSTALL_DIR}; leaving it untouched"
     return 1
   fi
+
+  if [ "$mode" = "replace" ]; then
+    rm -rf "$INSTALL_DIR"
+  fi
+
   if ! mv "$staging" "$INSTALL_DIR"; then
     cleanup_install_staging
     INSTALL_STAGING=""
@@ -281,10 +301,41 @@ install_watchtower() {
   fi
   # CCC_WATCHTOWER_FORCE: an explicit install is a user asking for this now,
   # so it must not be silently skipped by the once-a-day rate limits.
+  # CCC_VERSION: records what we just installed, so the very next routine
+  # `run.sh` launch (no force) does not redundantly re-force on the same
+  # version — see wt_ccc_version_changed in install-watchtower.sh.
   CCC_PYTHON="$PYTHON3" \
   CCC_WATCHTOWER_LOG_PREFIX="install: " \
   CCC_WATCHTOWER_FORCE=1 \
+  CCC_VERSION="$(grep -m1 '^__version__ = ' "$INSTALL_DIR/server.py" 2>/dev/null | sed -E 's/^__version__ = "(.*)"$/\1/')" \
     bash "$script" || true
+}
+
+# ---------------------------------------------------------------------------
+# ccc CLI: symlink the repo-root client onto PATH so `ccc sessions` works
+# from anywhere. Convenience only — never fatal.
+# ---------------------------------------------------------------------------
+link_ccc_cli() {
+  local bin_dir="$HOME/.local/bin"
+  local target="$INSTALL_DIR/ccc"
+  local link="$bin_dir/ccc"
+  if [ ! -f "$target" ]; then
+    return 0
+  fi
+  chmod +x "$target" 2>/dev/null || true
+  mkdir -p "$bin_dir" 2>/dev/null || true
+  if [ -L "$link" ] && [ "$(readlink "$link")" = "$target" ]; then
+    return 0
+  fi
+  if ln -sfn "$target" "$link" 2>/dev/null; then
+    printf 'install: ccc CLI linked at %s\n' "$link"
+    case ":$PATH:" in
+      *":$bin_dir:"*) ;;
+      *) printf 'install: note: %s is not on PATH — add it to use `ccc` from anywhere\n' "$bin_dir" ;;
+    esac
+  else
+    printf 'install: could not link ccc CLI — run it as %s\n' "$target"
+  fi
 }
 
 # ---------------------------------------------------------------------------
@@ -303,6 +354,7 @@ main() {
 
   sync_repo
   install_watchtower  # WT-26: bundle WT as CCC's queue engine
+  link_ccc_cli        # put `ccc` on PATH
   launch_server
 }
 

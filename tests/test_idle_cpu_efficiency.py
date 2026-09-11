@@ -7,7 +7,6 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 APP_CSS = (ROOT / "static" / "app.css").read_text(encoding="utf-8")
 APP_JS = (ROOT / "static" / "app.js").read_text(encoding="utf-8")
-COO_BOARD = (ROOT / "static" / "coo-board.html").read_text(encoding="utf-8")
 THROUGHPUT = (ROOT / "static" / "throughput.html").read_text(encoding="utf-8")
 
 
@@ -54,6 +53,40 @@ def test_visible_working_indicators_are_static_across_poll_rerenders():
         )
 
 
+def test_live_dot_sonar_pulses_only_on_the_selected_row():
+    """Every live sidebar row used to run an infinite scale ping. WKWebView
+    still CPU-paints those even when the keyframes are transform/opacity,
+    and N live rows kept the GPU process pegged. Only the open row pulses."""
+    default_after = _css_rule(".conv-live-dot::after")
+    assert re.search(r"animation:\s*none", default_after), default_after
+    selected_after = _css_rule(".conv-item.list-selected .conv-live-dot::after")
+    assert "ccc-live-dot-pulse" in selected_after
+    assert "infinite" in selected_after
+
+
+def test_completion_glow_does_not_animate_box_shadow():
+    keyframes = re.search(
+        r"@keyframes\s+conv-completion-glow\s*\{(?P<body>.*?)\n\s*\}",
+        APP_CSS,
+        flags=re.DOTALL,
+    )
+    assert keyframes, "missing completion glow keyframes"
+    body = keyframes.group("body")
+    assert "box-shadow" not in body
+    assert "opacity" in body
+
+
+def test_frame_monitor_pauses_css_animations_when_hidden_or_unfocused():
+    block = APP_JS[
+        APP_JS.index("function _initFrameMonitor()"):
+        APP_JS.index("function _resumeForegroundPollers()")
+    ]
+    assert "ccc-anim-off" in block
+    assert "visibilitychange" in block
+    assert "hasFocus" in block
+    assert "blur" in block
+
+
 def test_collapsed_poller_strip_has_no_recurring_label_timer():
     block = APP_JS[
         APP_JS.index("function _initPollerStrip()"):
@@ -86,6 +119,4 @@ def test_ship_status_reuses_completed_responses_but_live_actions_force_refresh()
 def test_ccc_owned_archive_callers_avoid_duplicate_compatibility_payloads():
     projected_url = "/api/conversations/list?window=all&stale_ok=1"
     assert projected_url in APP_JS
-    assert COO_BOARD.count(projected_url) == 2
-    assert "/api/sessions?all=1" not in COO_BOARD
     assert "/api/conversations?all=1&compact=1&" in THROUGHPUT

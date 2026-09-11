@@ -35,6 +35,11 @@ from ccc_server import core as _core
 _ACP_WIRE_TAIL = {"thread": None, "stop": False}
 _ACP_WIRE_TAIL_POLL_S = 1.0
 _ACP_WIRE_DEDUP_WINDOW = 50
+# A live turn appends step/tool boundaries continuously; the longest quiet
+# stretch is one slow tool call. A wire this old with no terminal event means
+# the kimi-code process died mid-turn (crash or worker restart) — treating it
+# as active would wedge the send queue forever.
+_KIMI_WIRE_ACTIVE_STALE_S = 600.0
 
 
 def _acp_wire_path(harness, sid):
@@ -70,6 +75,8 @@ def _kimi_wire_turn_active(sid):
     if path is None:
         return False
     try:
+        if time.time() - path.stat().st_mtime > _KIMI_WIRE_ACTIVE_STALE_S:
+            return False
         with path.open("rb") as fh:
             fh.seek(0, 2)
             size = fh.tell()
@@ -203,7 +210,7 @@ def _acp_wire_fold(harness, sid, events):
                     bid = str(b.get("id") or "")
                     if bid == rid or bid.rsplit(":", 1)[-1] == rid:
                         if out_text:
-                            b["output_preview"] = out_text[:400]
+                            b["output_preview"] = out_text[:_core._ACP_TOOL_OUTPUT_PREVIEW_MAX]
                         b["tool_status"] = "failed" if is_error else "completed"
                         return True
             return False
@@ -287,7 +294,7 @@ def _acp_wire_fold(harness, sid, events):
                     if res is not None:
                         out_text, is_error = res
                         if out_text:
-                            block["output_preview"] = out_text[:400]
+                            block["output_preview"] = out_text[:_core._ACP_TOOL_OUTPUT_PREVIEW_MAX]
                         block["tool_status"] = "failed" if is_error else "completed"
                     else:
                         # No result yet — the tool is genuinely in flight
@@ -328,7 +335,7 @@ def _acp_wire_fold(harness, sid, events):
             out_text, is_error = res
             _core._acp_emit_event_unlocked(harness, sid, {
                 "type": "tool_result",
-                "text": out_text[:400],
+                "text": out_text[:_core._ACP_TOOL_OUTPUT_PREVIEW_MAX],
                 "tool_use_id": rid,
                 "is_error": is_error,
                 "via": "wire-tail",
@@ -400,7 +407,24 @@ def _acp_wire_tail_tick():
             except json.JSONDecodeError:
                 continue
         if batch:
-            _core._acp_wire_fold("kimi", sid, batch)
+            # While a kap pump streams this session from the daemon, IT owns
+            # folding: its mapper emits the same turns from the daemon's
+            # transcript stream, and both paths writing into the CCC
+            # transcript rendered every kap-driven turn twice. The cursor
+            # above still advances, so appends made after the pump exits fold
+            # cleanly — the tail only falls silent, never falls behind.
+            if not _kap_pump_active_for(sid):
+                _core._acp_wire_fold("kimi", sid, batch)
+
+
+def _kap_pump_active_for(sid):
+    """True while a kap pump is streaming this session from the daemon."""
+    try:
+        from ccc_server import kap as _kap
+        return _kap.kap_pump_active(sid)
+    except Exception:
+        # The tail is the rendering of last resort: any doubt means fold.
+        return False
 
 
 def _acp_wire_tail_start(harness):

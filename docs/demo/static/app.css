@@ -723,31 +723,34 @@
     font-size: 15px; padding: 4px 0;
     line-height: 1.5;
   }
-  /* <session-state> block — slightly muted, italic body, with breathing
-     room between rows. Each row keeps a small uppercase label
-     (DID / INSIGHT / NEXT STEP USER) so it reads consistently. */
+  /* <session-state> block — a compact decision aid. The action (or completed
+     work when no action remains) is dominant; the rationale stays secondary. */
   .session-state-block {
     margin: 12px 0;
     padding: 12px 14px;
     border-left: 2px solid var(--border);
     color: var(--text-muted);
-    font-style: italic;
     font-size: 14px;
-    line-height: 1.55;
+    line-height: 1.45;
     opacity: 0.9;
   }
-  .session-state-block .ssb-row { margin: 0 0 10px; }
-  .session-state-block .ssb-row:last-child { margin-bottom: 0; }
+  .session-state-block .ssb-row { margin: 0; }
   .session-state-block .ssb-key {
-    display: inline-block; min-width: 96px; margin-right: 10px;
-    color: var(--text-muted); font-style: normal;
+    display: inline-block; min-width: 76px; margin-right: 10px;
+    color: var(--text-muted);
     font-size: 11px; font-weight: 600;
     text-transform: uppercase; letter-spacing: 0.05em;
     opacity: 0.75;
   }
-  .session-state-block .ssb-next {
-    margin-top: 10px; padding-top: 10px;
-    border-top: 1px dashed var(--border);
+  .session-state-block .ssb-primary {
+    color: var(--text);
+    font-size: 15px;
+  }
+  .session-state-block .ssb-next .ssb-key { color: #f59e0b; opacity: 0.9; }
+  .session-state-block .ssb-done .ssb-key { color: #10b981; opacity: 0.9; }
+  .session-state-block .ssb-reason {
+    margin-top: 6px;
+    font-size: 13px;
   }
   .md-table {
     border-collapse: collapse; margin: 8px 0; font-size: 13px;
@@ -8966,4 +8969,3 @@ body:has(.gc-reader) .pwa-install-banner {
 .conv-pane[data-conv-bg="stitch"] .conversations-view::-webkit-scrollbar-thumb:hover {
   background: #839493;
 }
-

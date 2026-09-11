@@ -1,0 +1,178 @@
+<!doctype html>
+<html lang="en" class="no-js">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>CCC Captain: one goal, a crew of coding agents, proof</title>
+<meta name="description" content="Stay in Claude or Codex. CCC Captain and WatchTower turn one goal into durable coding-agent jobs, verification, and a receipt.">
+<link rel="canonical" href="https://ccc.amirfish.ai/captain/">
+<link rel="icon" href="/brand/favicon.svg" type="image/svg+xml">
+<meta property="og:title" content="Give one agent a goal. WatchTower gives it a crew.">
+<meta property="og:description" content="One request becomes durable jobs, the right coding-agent contexts, verification, and a receipt.">
+<meta property="og:type" content="website">
+<meta property="og:url" content="https://ccc.amirfish.ai/captain/">
+<meta property="og:image" content="https://ccc.amirfish.ai/images/captain-social.png">
+<meta name="twitter:card" content="summary_large_image">
+<link rel="stylesheet" href="/agent-operations/site.css">
+<script>document.documentElement.classList.replace("no-js", "js");</script>
+</head>
+<body>
+<header class="site-nav">
+  <div class="wrap site-nav__inner">
+    <a class="brand" href="/">
+      <img src="/brand/ccc-mark.svg" alt="">
+      <span>claude command center</span>
+    </a>
+    <nav class="site-nav__links" aria-label="Primary navigation">
+      <a href="/captain/" aria-current="page">Captain</a>
+      <a href="/watchtower/">WatchTower</a>
+      <a href="/receipts/">Receipts</a>
+      <a href="/demo/">Full demo</a>
+      <a class="nav-github" href="https://github.com/amirfish1/claude-command-center">GitHub</a>
+    </nav>
+  </div>
+</header>
+
+<main>
+  <section class="hero" style="border-top:0">
+    <div class="wrap hero__content">
+      <p class="eyebrow">CCC Captain &middot; powered by WatchTower</p>
+      <h1>Give one agent a goal. WatchTower gives it a crew.</h1>
+      <p class="lede">Stay in Claude or Codex. Captain turns your request into durable jobs, sends each one to the right coding-agent context, waits for verification, and returns the proof.</p>
+      <div class="actions">
+        <a class="button button--primary" href="#walkthrough">Watch the 45-second run</a>
+        <a class="button" href="/watchtower/">See the executable layer</a>
+      </div>
+      <p class="microcopy">No new chat surface. No model picker. Start where you already work.</p>
+    </div>
+  </section>
+
+  <section id="walkthrough">
+    <div class="wrap">
+      <div class="section-heading">
+        <p class="eyebrow">One goal in. A verified result out.</p>
+        <h2>The work becomes visible only after you delegate it.</h2>
+        <p>The terminal remains the control surface. Captain reveals the jobs, contexts, dependencies, and evidence behind the request.</p>
+      </div>
+
+      <div class="demo-shell" aria-label="Recorded CCC Captain walkthrough">
+        <div class="demo-shell__top">
+          <span>CCC Captain &middot; demo repository</span>
+          <span class="demo-shell__status" id="captainStatus" aria-live="polite">Loading walkthrough</span>
+        </div>
+        <div class="demo-workspace">
+          <div class="app-rail" aria-label="CCC apps">
+            <span class="app-rail__item app-rail__item--active" title="Captain">C</span>
+            <span class="app-rail__item" title="Fleet">F</span>
+            <span class="app-rail__item" title="Queues">Q</span>
+            <span class="app-rail__item" title="Throughput">T</span>
+            <span class="app-rail__item" title="Insights">I</span>
+            <span class="app-rail__item app-rail__item--bottom" title="Settings">&middot;</span>
+          </div>
+
+          <div class="captain-terminal">
+            <div class="pane-label">Claude Code &middot; existing session</div>
+            <div class="goal-line">Ship the mobile navigation fix. Reuse context, verify it visually, and bring me proof.</div>
+            <div class="terminal-log" aria-label="Agent activity">
+              <div class="terminal-log__row" data-terminal-event="PLAN_SHAPED">shaping the goal into bounded jobs</div>
+              <div class="terminal-log__row" data-terminal-event="JOB_FILED">filing durable WatchTower work</div>
+              <div class="terminal-log__row" data-terminal-event="CONTEXT_REUSED">reusing the session that knows the navigation</div>
+              <div class="terminal-log__row" data-terminal-event="WORKER_SPAWNED">starting an independent verification lane</div>
+              <div class="terminal-log__row" data-terminal-event="RECEIPT_RETURNED">returning proof to this session</div>
+            </div>
+          </div>
+
+          <div class="captain-operation">
+            <div class="operation-heading">
+              <div>
+                <div class="pane-label">Captain &middot; live operation</div>
+                <h3>Mobile navigation</h3>
+              </div>
+              <span class="operation-chip">durable</span>
+            </div>
+            <ol class="event-list" id="captainEvents">
+              <li class="event-item" data-demo-event="GOAL_RECEIVED"><strong>Goal received</strong><span>One bounded outcome entered in the existing session.</span></li>
+              <li class="event-item" data-demo-event="PLAN_SHAPED"><strong>Plan shaped</strong><span>Three jobs and one dependency identified.</span></li>
+              <li class="event-item" data-demo-event="JOB_FILED"><strong>Implementation filed</strong><span>The responsive navigation fix becomes durable work.</span></li>
+              <li class="event-item" data-demo-event="JOB_FILED"><strong>Verification filed</strong><span>Desktop and mobile behavior get a separate owner.</span></li>
+              <li class="event-item" data-demo-event="CONTEXT_REUSED"><strong>Warm context reused</strong><span>The navigation session already knows the affected files.</span></li>
+              <li class="event-item" data-demo-event="WORKER_SPAWNED"><strong>Verification lane started</strong><span>A separate worker owns browser evidence.</span></li>
+              <li class="event-item" data-demo-event="DEPENDENCY_WAIT"><strong>Review waits</strong><span>The dependent job does not race implementation.</span></li>
+              <li class="event-item" data-demo-event="VERIFICATION_STARTED"><strong>Verification running</strong><span>Tests and responsive browser checks are in progress.</span></li>
+              <li class="event-item" data-demo-event="JOB_RESOLVED"><strong>Jobs resolved</strong><span>Implementation, verification, and review completed.</span></li>
+              <li class="event-item" data-demo-event="RECEIPT_RETURNED"><strong>Receipt returned</strong><span>The initiating session receives the evidence.</span></li>
+            </ol>
+            <div class="demo-receipt" id="captainReceipt">
+              <strong>✓ Receipt returned</strong>
+              Resolution summary &middot; commit proof &middot; tests &middot; responsive screenshots
+            </div>
+          </div>
+        </div>
+        <div class="demo-controls" aria-label="Captain demo controls">
+          <button class="button button--small button--primary" id="captainPlay" type="button" aria-pressed="false" disabled>Play</button>
+          <button class="button button--small" id="captainReplay" type="button" disabled>Replay</button>
+          <div class="progress-track" role="progressbar" aria-label="Walkthrough progress" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0"><span class="progress-track__fill" id="captainProgress"></span></div>
+          <span class="demo-time" id="captainTime">0s / 45s</span>
+        </div>
+      </div>
+      <p class="truth-label">Recorded walkthrough. Demo repository data. No models run in your browser.</p>
+    </div>
+  </section>
+
+  <section>
+    <div class="wrap">
+      <div class="section-heading section-heading--center">
+        <p class="eyebrow">The completion loop</p>
+        <h2>Activity is not the outcome.</h2>
+        <p>Captain is built around the work returning to the initiating agent with enough evidence to trust it.</p>
+      </div>
+      <div class="card-grid">
+        <article class="card"><span class="card__number">01 &middot; Shape</span><h3>Turn intent into durable work</h3><p>Jobs remain visible through restarts, dependencies, and handoffs. They are not buried inside one transcript.</p></article>
+        <article class="card"><span class="card__number">02 &middot; Route</span><h3>Use context before creating more</h3><p>Reuse the session that already understands the code when it is the right home. Spawn a worker when independence matters.</p></article>
+        <article class="card"><span class="card__number">03 &middot; Prove</span><h3>Return evidence, not confidence</h3><p>Resolve with a summary plus commit or no-code proof, and the tests or screenshots the job requires.</p></article>
+      </div>
+    </div>
+  </section>
+
+  <section>
+    <div class="wrap split">
+      <div class="section-heading">
+        <p class="eyebrow">Not another place to chat</p>
+        <h2>The agent is still the interface.</h2>
+        <p>Your Claude or Codex session operates WatchTower through skills and the <code>wt</code> CLI. CCC is where invisible execution becomes inspectable. Open it to intervene, not to copy and paste the conversation.</p>
+        <div class="actions"><a class="button" href="/watchtower/">Explore the CLI and skills</a></div>
+      </div>
+      <div class="stack">
+        <div class="callout"><h3>WatchTower is the durable runtime</h3><p>Queues, workers, dependencies, messages, waits, learnings, and resolutions.</p></div>
+        <div class="callout"><h3>CCC Captain is the control plane</h3><p>Shape the request, see the crew, inspect evidence, and intervene when judgment is needed.</p></div>
+      </div>
+    </div>
+  </section>
+
+  <section class="cta-band">
+    <div class="wrap wrap--narrow">
+      <div class="section-heading section-heading--center">
+        <p class="eyebrow">Start with one real job</p>
+        <h2>Give your current agent a durable crew.</h2>
+        <p>Install CCC for the visual control plane, or use WatchTower directly from the terminal.</p>
+      </div>
+      <div class="actions">
+        <a class="button button--primary" href="https://github.com/amirfish1/claude-command-center#install">Install CCC</a>
+        <a class="button" href="https://github.com/amirfish1/watchtower">Install WatchTower</a>
+      </div>
+    </div>
+  </section>
+</main>
+
+<footer class="site-footer">
+  <div class="wrap site-footer__inner">
+    <span>CCC &middot; local, source-available &middot; <span class="js-year">2026</span></span>
+    <nav class="site-footer__links" aria-label="Footer navigation">
+      <a href="/captain/">Captain</a><a href="/watchtower/">WatchTower</a><a href="/receipts/">Receipts</a><a href="/demo/">Demo</a><a href="https://github.com/amirfish1/claude-command-center">GitHub</a>
+    </nav>
+  </div>
+</footer>
+<script src="/agent-operations/site.js" defer></script>
+<script src="./captain.js" defer></script>
+</body>
+</html>

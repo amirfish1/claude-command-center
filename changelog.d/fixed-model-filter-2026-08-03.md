@@ -1,1 +1,0 @@
-- Fixed the All-sessions engine filter so its model buttons remain clickable after archive refreshes.

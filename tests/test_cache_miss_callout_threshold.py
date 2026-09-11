@@ -23,7 +23,7 @@ class TestCacheMissCalloutThreshold(unittest.TestCase):
               return source.slice(start, end);
             };
             eval(pick('function _formatTokensAntigravity', 'function _formatAntigravityTokenChips'));
-            eval(pick('const CACHE_MISS_CALLOUT_MIN_SHARE', 'function _getCtxLimitOverride'));
+            eval(pick('const CACHE_MISS_CALLOUT_MIN_SHARE', '// A running, cross-turn log of cache misses'));
             const cases = JSON.parse(process.argv[1]);
             console.log(JSON.stringify(cases.map(([tIn, tCached]) =>
               _cacheMissCallout(tIn, tCached))));
@@ -49,11 +49,11 @@ class TestCacheMissCalloutThreshold(unittest.TestCase):
         # cached 29k leaves 71% (fires).
         at_bar, over_bar = self._callout([[100_000, 30_000], [100_000, 29_000]])
         self.assertEqual(at_bar, "")
-        self.assertEqual(over_bar, "CACHE MISS — 71.0k input tokens uncached")
+        self.assertEqual(over_bar, "CACHE MISS: 71.0k input tokens uncached")
 
     def test_fully_cold_turn_still_fires(self):
         cold, empty = self._callout([[50_000, 0], [0, 0]])
-        self.assertEqual(cold, "CACHE MISS — 50.0k input tokens uncached")
+        self.assertEqual(cold, "CACHE MISS: 50.0k input tokens uncached")
         self.assertEqual(empty, "")
 
 

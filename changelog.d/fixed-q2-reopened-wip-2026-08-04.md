@@ -1,1 +1,0 @@
-- Fixed reopened queue tickets appearing as in progress when their old worker was still live.

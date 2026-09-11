@@ -1,0 +1,1 @@
+- Back off private Codex app-server retries while another Codex process owns its state store.

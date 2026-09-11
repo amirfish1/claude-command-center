@@ -1,26 +1,40 @@
 # Copyright (c) 2026 Amir Fish. All rights reserved.
 # SPDX-License-Identifier: LicenseRef-CCC-Software-License
-"""Devin (Cognition) cloud session ingestion (read-only).
+"""Devin (Cognition) engine integration — cloud API + local CLI.
 
-Devin is CCC's first cloud/API-based engine: there is no local session store,
-so sessions are listed via Devin's REST API. This uses the v1 API
-(https://api.devin.ai/v1) authenticated with a personal API key from the
-DEVIN_API_KEY env var (CCC_DEVIN_API_KEY accepted as a fallback). v1 is
-deprecated upstream but remains the only API personal keys can call; v3
-(enterprise org-id + service-user RBAC) support can be added later.
+Two backends share this module:
 
-Listing + transcript view only; no spawn / resume / steering. Everything here
-degrades to empty results on a missing key, network failure, or an
-unrecognized payload shape — the API key is never logged. Names still living
-in server.py are reached via `_core` at call time."""
+1. **Cloud API** (read-only): sessions listed via Devin's REST API (v1),
+   authenticated with a personal API key from DEVIN_API_KEY. Listing +
+   transcript view only; no spawn/resume/steering. Session IDs use the
+   ``devin-`` prefix.
+
+2. **Local CLI** (full parity): the ``devin`` terminal CLI stores sessions in
+   a SQLite DB at ``~/.local/share/devin/cli/sessions.db``. CCC spawns it
+   headless via ``devin -p "prompt"`` (one-shot, like gemini/cursor), resumes
+   via ``devin --resume <id> -p "text"``, and reads transcripts from the DB.
+   Session IDs use the ``devincli-`` prefix to avoid collision with cloud
+   sessions.
+
+Everything degrades to empty results on a missing key, missing binary, network
+failure, or an unrecognized payload shape. Names still living in server.py are
+reached via ``_core`` at call time."""
 
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import datetime, timezone
+import collections
 import json
 import os
+import re
+import shlex
+import shutil
+import sqlite3
+import subprocess
+import threading
 import time
 import urllib.request
+from pathlib import Path
 
 from ccc_server import core as _core
 
@@ -32,12 +46,102 @@ DEVIN_SESSION_PREFIX = "devin-"
 DEVIN_SESSIONS_CACHE_TTL_S = 60
 DEVIN_DETAIL_ACTIVE_TTL_S = 30
 DEVIN_DETAIL_DONE_TTL_S = 7 * 24 * 3600
+DEVIN_MODEL_LIST_TIMEOUT_S = 15
+DEVIN_MODEL_LIST_TTL_S = 300
+_DEVIN_MODEL_LIST_CACHE = {"ts": 0.0, "data": None, "lock": threading.Lock()}
 # A session counts as live while Devin reports it actively working.
 _DEVIN_ACTIVE_STATUSES = frozenset({
     "working", "running", "blocked", "pending", "queued", "in_progress",
     "resumed", "claimed",
 })
 
+# ---------------------------------------------------------------------------
+# Local CLI backend
+# ---------------------------------------------------------------------------
+# The Devin CLI (~/.local/bin/devin) stores sessions in a SQLite DB. CCC
+# spawns it headless via `devin -p "prompt"` (one-shot, like gemini/cursor)
+# and reads transcripts from the DB. Session IDs use the "devincli-" prefix
+# to avoid collision with cloud "devin-" sessions.
+
+DEVIN_CLI_SESSION_PREFIX = "devincli-"
+DEVIN_CLI_HOME = Path.home() / ".local" / "share" / "devin" / "cli"
+DEVIN_CLI_SESSIONS_DB = DEVIN_CLI_HOME / "sessions.db"
+DEVIN_CLI_LOCKS_DIR = DEVIN_CLI_HOME / "session_locks"
+_DEVIN_CLI_ID_CACHE = {"key": None, "ids": set(), "mtime": 0}
+
+# In-memory incremental parse cache for local CLI sessions. Devin CLI stores
+# every turn (including context rebuilds) in message_nodes, so a long session
+# can have thousands of rows. Re-parsing the whole table on every SSE poll is
+# O(n) and visibly slow. The cache stores the already-parsed events and a
+# (role, content) dedup set so subsequent calls read only newly appended rows.
+# Key: raw Devin CLI session id. Bounded and LRU-evicted by access time.
+_DEVIN_CLI_PARSE_CACHE = {}
+_DEVIN_CLI_PARSE_CACHE_LOCK = threading.Lock()
+_DEVIN_CLI_PARSE_CACHE_MAX = 64
+
+# In-memory session-list cache for the local CLI backend. Opening the Devin
+# CLI sessions DB can take multiple seconds when the DB is large and the WAL
+# is huge, so we avoid reconnecting on every sidebar refresh/poll.
+#
+# Two guards against rebuild storms (observed: 1.5-7.7 s rebuilds every 2-5 s
+# against an 8.6 GB sessions.db, with all other sidebar polls parked behind
+# the rebuild lock):
+#   1. The cache is keyed per parameter variant — the dashboard sidebar polls
+#      with repo_only=True while the archive overlay polls repo_only=False,
+#      and a single-slot cache thrashed between the two on every call.
+#   2. A variant younger than _DEVIN_CLI_LIST_TTL_SEC is served without
+#      re-statting the DB at all — a live Devin CLI touches its WAL/SHM every
+#      few seconds, so pure mtime invalidation rebuilt almost every poll.
+# Explicit invalidation (entry key set to None, e.g. after a background
+# row-fields completion) bypasses the TTL so lifecycle changes still land on
+# the next poll. CCC_DEVIN_CLI_LIST_TTL_SEC=0 restores strict freshness.
+_DEVIN_CLI_LIST_CACHE = {}  # params_key -> {"key": full_key|None, "rows": list, "ts": float}
+_DEVIN_CLI_LIST_CACHE_LOCK = threading.Lock()
+_DEVIN_CLI_LIST_CACHE_MAX = 16
+try:
+    _DEVIN_CLI_LIST_TTL_SEC = max(
+        0.0, float(os.environ.get("CCC_DEVIN_CLI_LIST_TTL_SEC", "15"))
+    )
+except ValueError:
+    _DEVIN_CLI_LIST_TTL_SEC = 15.0
+# Serialises list rebuilds so N concurrent sidebar polls after one DB write
+# do one rebuild, not N.
+_DEVIN_CLI_LIST_REBUILD_LOCK = threading.Lock()
+# Per-session derived fields (first message, latest model/text/tokens, ship
+# flags, subagent meta) memoized by a per-session version tuple. sessions.db
+# stores full turn content inline (observed: 3.7 GB across ~33k rows), so
+# any whole-table json_extract scan costs tens of seconds — and the list
+# cache key changes on every DB write. Only sessions whose version changed
+# are re-queried, and those with bounded head/tail walks. Persisted to disk
+# so a restart re-queries nothing when the DB is unchanged.
+_DEVIN_CLI_ROW_MEMO = {}
+_DEVIN_CLI_ROW_MEMO_LOCK = threading.Lock()
+_DEVIN_CLI_ROW_MEMO_LOADED = False
+_DEVIN_CLI_ROW_MEMO_VERSION = 1
+# Cold-memo bound for the request path. A fresh install, a deleted memo
+# file, or many sessions changing at once means every session is a miss,
+# and one miss on a huge session (observed: 1.3 GB of message_nodes) is
+# 5-10 s. The list request computes misses synchronously, most recently
+# active first, only until this budget is spent; the rest get placeholder
+# fields and a single background thread fills them in.
+_DEVIN_CLI_COLD_BUILD_BUDGET_S = 1.5
+# Background finisher state, guarded by _DEVIN_CLI_ROW_MEMO_BG_LOCK:
+#   pending: {raw_id: ver} in priority order, still to compute (the entry
+#            being computed right now stays in here until stamped)
+#   thread:  the one live worker, or None
+_DEVIN_CLI_ROW_MEMO_BG = {"pending": {}, "thread": None}
+_DEVIN_CLI_ROW_MEMO_BG_LOCK = threading.Lock()
+# Latest-assistant tail walk cap: a session's tail is normally a handful of
+# tool rows then an assistant row; the cap only bounds a pathological run
+# of tool-only rows.
+_DEVIN_CLI_TAIL_WALK_MAX_ROWS = 400
+# Real PR number from a `gh pr create` (or PR URL) mention — the LIKE-based
+# has_pr flag below is a cheap existence check that can false-positive on any
+# message merely containing the words "gh"/"pr"/"create"; only a number match
+# here is trusted enough to become tail_pr_number (CCC-991: a shared
+# placeholder number collided every "has_pr" session onto one dedup key,
+# silently dropping the rest from the sidebar).
+_DEVIN_CLI_PR_NUMBER_RE = re.compile(r"(?:/pull/|\bpr\s*#)(\d+)", re.IGNORECASE)
 
 def _devin_api_key():
     """Personal Devin API key from the environment, or None when unset."""
@@ -264,6 +368,75 @@ def _is_devin_session(session_id):
     return isinstance(session_id, str) and session_id.startswith(DEVIN_SESSION_PREFIX)
 
 
+def _devin_cloud_repo_folder(s, title, first_message, repo_name_map, pinned=None):
+    """Best-effort repo folder for a Devin cloud session.
+
+    Cloud sessions carry no local cwd. We infer a project from:
+      1. an explicit repo pin (highest priority),
+      2. a linked GitHub PR URL (parsed to owner/repo),
+      3. the session title / first user message matching a known repo name.
+
+    Returns (folder_path, folder_label, folder_label_chip, pinned_repo)."""
+    if pinned:
+        folder_path = str(pinned)
+        return (
+            folder_path,
+            _core._resolve_dir_case(folder_path) or Path(folder_path).name,
+            "",
+            True,
+        )
+
+    matched_path = None
+    matched_name = ""
+
+    pr_url = str((s.get("pull_request") or {}).get("url") or "").strip()
+    if pr_url:
+        m = re.search(r"github\.com/([^/]+)/([^/]+)/pull/\d+", pr_url)
+        if m:
+            repo_name = m.group(2)
+            matched_path = repo_name_map.get(repo_name)
+            if matched_path:
+                matched_name = repo_name
+
+    if not matched_path:
+        text = f"{title or ''} {first_message or ''}".strip().lower()
+        if text:
+            # Longest repo-name first so multi-word names win over substrings.
+            for name, path in sorted(
+                repo_name_map.items(), key=lambda kv: len(kv[0]), reverse=True
+            ):
+                if re.search(r"\b" + re.escape(name.lower()) + r"\b", text):
+                    matched_path = path
+                    matched_name = name
+                    break
+
+        if not matched_path:
+            # Prefix match: title words like "STRAMP" can map to "stramp-platform".
+            words = re.findall(r"[a-z0-9]+(?:[._+\-][a-z0-9]+)*", text)
+            for word in words:
+                if len(word) < 3:
+                    continue
+                for name, path in sorted(
+                    repo_name_map.items(), key=lambda kv: len(kv[0]), reverse=True
+                ):
+                    name_lower = name.lower()
+                    if name_lower.startswith(word):
+                        matched_path = path
+                        matched_name = name
+                        break
+                if matched_path:
+                    break
+
+    if matched_path:
+        return (
+            matched_path,
+            _core._resolve_dir_case(matched_path) or Path(matched_path).name,
+            "",
+            False,
+        )
+    return "", "Devin", "Devin", False
+
+
 def find_devin_conversations(
     repo_path=None,
     include_old=False,
@@ -273,9 +446,13 @@ def find_devin_conversations(
 ):
     """Discover Devin cloud sessions via the v1 API (DEVIN_API_KEY).
 
-    Devin sessions have no local cwd, so they are repo-unbound: repo_only is
-    accepted for signature parity with the other adapters but never filters
-    rows out. No API key (or any API failure) → []."""
+    Cloud sessions carry no local cwd, so they are not naturally repo-bound. We
+    try to put them in the right project folder by:
+      1. an explicit repo pin,
+      2. a linked GitHub PR URL,
+      3. the session title matching a known repo name.
+    Anything we can't place stays in a "Devin" engine bucket. No API key (or
+    any API failure) → []."""
     if not _devin_api_key():
         return []
     sessions = _devin_list_sessions()
@@ -297,6 +474,26 @@ def find_devin_conversations(
         last_interactions = _core._load_last_interactions()
     except Exception:
         last_interactions = {}
+    try:
+        repo_pins = _core._load_repo_pins()
+    except Exception:
+        repo_pins = {}
+
+    if repo_only:
+        try:
+            repo_path = _core.resolve_repo_path(repo_path)
+        except Exception:
+            return []
+
+    try:
+        known_repos = list(_core._load_recent_repos()) + list(_core._load_custom_repos())
+    except Exception:
+        known_repos = []
+    repo_name_map = {}
+    for p in known_repos:
+        name = str(Path(p).name)
+        if name and name not in repo_name_map:
+            repo_name_map[name] = p
 
     cutoff = _core._session_scan_cutoff_ts(include_old)
     max_rows = _core._session_scan_file_limit(include_old)
@@ -311,14 +508,9 @@ def find_devin_conversations(
         raw_id = str(s.get("session_id") or s.get("id") or "").strip()
         if not raw_id:
             continue
-        sid = DEVIN_SESSION_PREFIX + raw_id
-        created = _devin_epoch(s.get("created_at"))
-        modified = _devin_epoch(s.get("updated_at")) or created
-        freshness = max(modified, last_interactions.get(sid) or 0)
-        if not include_old and cutoff > 0 and freshness < cutoff:
-            continue
-        if not include_old and max_rows > 0 and len(out) >= max_rows:
-            continue
+        # The v1 API already returns ids with the "devin-" prefix; only add
+        # it when absent so we never produce "devin-devin-...".
+        sid = raw_id if raw_id.startswith(DEVIN_SESSION_PREFIX) else DEVIN_SESSION_PREFIX + raw_id
         title = _core._strip_ccc_session_state_instruction(
             str(s.get("title") or "")
         ).strip()
@@ -331,14 +523,40 @@ def find_devin_conversations(
                     first_message = text.strip()
                     break
         first_message = _core._strip_ccc_session_state_instruction(first_message).strip()
+        # Web URLs use the id without the "devin-" prefix.
+        url_slug = raw_id[len(DEVIN_SESSION_PREFIX):] if raw_id.startswith(DEVIN_SESSION_PREFIX) else raw_id
         display_name = (
             name_overrides.get(sid)
             or _core._truncate_session_name(title)
             or (first_message[:80] if first_message else None)
-            or f"Devin session {raw_id[:8]}"
+            or f"Devin session {url_slug[:8]}"
         )
         status = _devin_status(s)
         is_live = status in _DEVIN_ACTIVE_STATUSES
+        pinned = repo_pins.get(sid)
+        folder_path, folder_label, folder_label_chip, pinned_repo = _devin_cloud_repo_folder(
+            s, title, first_message, repo_name_map, pinned=pinned
+        )
+        if repo_only:
+            if pinned:
+                if pinned != repo_path:
+                    continue
+            elif not folder_path:
+                continue
+            else:
+                try:
+                    if Path(folder_path).resolve() != Path(repo_path).resolve():
+                        continue
+                except OSError:
+                    if folder_path != repo_path:
+                        continue
+        created = _devin_epoch(s.get("created_at"))
+        modified = _devin_epoch(s.get("updated_at")) or created
+        freshness = max(modified, last_interactions.get(sid) or 0)
+        if not include_old and cutoff > 0 and freshness < cutoff:
+            continue
+        if not include_old and max_rows > 0 and len(out) >= max_rows:
+            continue
         out.append({
             "id": sid,
             "session_id": sid,
@@ -357,8 +575,9 @@ def find_devin_conversations(
             "modified_human": time.strftime("%Y-%m-%d %H:%M", time.localtime(modified)) if modified else "",
             "mtime": modified,
             "jsonl_path": "",
-            "folder_label": "Devin",
-            "folder_path": "",
+            "folder_label": folder_label,
+            "folder_path": folder_path,
+            "folder_label_chip": folder_label_chip,
             "worktree_label": None,
             "session_cwd": None,
             "session_cwd_exists": False,
@@ -379,13 +598,13 @@ def find_devin_conversations(
             "last_assistant_text": "",
             "tail_issue_number": None,
             "tail_pr_number": None,
-            "tail_pr_url": None,
+            "tail_pr_url": str((s.get("pull_request") or {}).get("url") or "") or None,
             "pr_state": None,
             "session_state": None,
             "archived": sid in archived_set,
             "trashed": sid in trashed_set,
             "verified": sid in verified_set,
-            "pinned_repo": False,
+            "pinned_repo": pinned_repo,
             "last_interacted": last_interactions.get(sid),
             "is_live": is_live,
             "spawn_pid": None,
@@ -393,9 +612,10 @@ def find_devin_conversations(
             "needs_approval_message": "",
             "model": str(s.get("model") or ""),
             "reasoning_effort": "",
-            # Cloud session link (https://app.devin.ai/sessions/...) — additive
-            # field; no other engine exposes one yet.
-            "session_url": str(s.get("url") or ""),
+            # Cloud session link — the list payload has no url field, so
+            # construct the app.devin.ai URL (id without the devin- prefix).
+            # Additive field; no other engine exposes one yet.
+            "session_url": str(s.get("url") or f"https://app.devin.ai/sessions/{url_slug}"),
         })
     out.sort(key=lambda x: x.get("last_interacted") or x.get("modified") or 0, reverse=True)
     return out
@@ -409,10 +629,9 @@ def _parse_devin_conversation(session_id, after_line=0):
     if not _devin_api_key():
         return {"events": [], "last_line": 0}
     raw_id = str(session_id or "")
-    if raw_id.startswith(DEVIN_SESSION_PREFIX):
-        raw_id = raw_id[len(DEVIN_SESSION_PREFIX):]
     if not raw_id:
         return {"events": [], "last_line": 0}
+    # The detail endpoint accepts the full "devin-..." id (verified live).
     detail = _devin_session_detail(raw_id)
     if not isinstance(detail, dict):
         return {"events": [], "last_line": 0}
@@ -445,3 +664,2086 @@ def _parse_devin_conversation(session_id, after_line=0):
     else:
         visible = events
     return {"events": visible, "last_line": line}
+
+
+# ---------------------------------------------------------------------------
+# Local CLI backend — binary resolution, session discovery, transcript parse
+# ---------------------------------------------------------------------------
+
+def _resolve_devin_bin():
+    """Locate a usable Devin CLI binary.
+
+    Priority order mirrors the other engines:
+      1. $CCC_DEVIN_BIN when set and executable.
+      2. ``shutil.which("devin")``.
+      3. ~/.local/bin/devin (common user-install location).
+    """
+    env_bin = os.environ.get("CCC_DEVIN_BIN")
+    if env_bin:
+        expanded = os.path.expanduser(env_bin)
+        if os.path.isfile(expanded) and os.access(expanded, os.X_OK):
+            return {"available": True, "bin": expanded, "source": "env"}
+        return {
+            "available": False,
+            "bin": None,
+            "code": "devin_unavailable",
+            "reason": f"CCC_DEVIN_BIN is set to {env_bin!r} but it isn't an executable file",
+        }
+    which_bin = shutil.which("devin")
+    if which_bin:
+        return {"available": True, "bin": which_bin, "source": "path"}
+    local_bin = Path.home() / ".local" / "bin" / "devin"
+    if local_bin.is_file() and os.access(local_bin, os.X_OK):
+        return {"available": True, "bin": str(local_bin), "source": "candidate"}
+    return {
+        "available": False,
+        "bin": None,
+        "code": "devin_unavailable",
+        "reason": "Devin CLI not found. Install Devin CLI or set CCC_DEVIN_BIN.",
+    }
+
+
+def _devin_cli_db_path():
+    """Path to the sessions DB, overridable for tests via CCC_DEVIN_DB."""
+    override = os.environ.get("CCC_DEVIN_DB")
+    if override:
+        return Path(override).expanduser()
+    return DEVIN_CLI_SESSIONS_DB
+
+
+def _devin_cli_connect():
+    """Open a read-only connection to the Devin CLI sessions DB, or None."""
+    path = _devin_cli_db_path()
+    try:
+        if not path.is_file():
+            return None
+    except OSError:
+        return None
+    try:
+        # uri=True + mode=ro prevents creating the DB if it vanished between
+        # the is_file check and the connect.
+        con = sqlite3.connect(
+            f"file:{path}?mode=ro", uri=True, timeout=3,
+            detect_types=sqlite3.PARSE_DECLTYPES,
+        )
+        con.row_factory = sqlite3.Row
+        return con
+    except sqlite3.Error:
+        return None
+
+
+def _devin_cli_session_ids():
+    """Cached set of raw session IDs from the Devin CLI SQLite DB.
+
+    Cached by DB file mtime so repeated detection probes stay cheap. Returns
+    an empty set when the DB is missing or unreadable — never raises.
+    """
+    path = _devin_cli_db_path()
+    try:
+        mtime = path.stat().st_mtime
+    except OSError:
+        mtime = 0
+    cache = _DEVIN_CLI_ID_CACHE
+    if cache.get("key") == str(path) and cache.get("mtime") == mtime:
+        return set(cache.get("ids") or set())
+    ids = set()
+    con = _devin_cli_connect()
+    if con is not None:
+        try:
+            for row in con.execute("SELECT id FROM sessions"):
+                sid = row["id"]
+                if sid:
+                    ids.add(str(sid))
+        except sqlite3.Error:
+            pass
+        finally:
+            con.close()
+    cache["key"] = str(path)
+    cache["mtime"] = mtime
+    cache["ids"] = set(ids)
+    return ids
+
+
+def _is_devin_cli_session(session_id):
+    """Prefix probe for local CLI sessions — never touches the DB."""
+    return (
+        isinstance(session_id, str)
+        and session_id.startswith(DEVIN_CLI_SESSION_PREFIX)
+    )
+
+
+def _devin_cli_raw_id(session_id):
+    """Strip the devincli- prefix to get the raw Devin CLI session ID."""
+    if session_id and session_id.startswith(DEVIN_CLI_SESSION_PREFIX):
+        return session_id[len(DEVIN_CLI_SESSION_PREFIX):]
+    return str(session_id or "")
+
+
+def _devin_cli_lock_pid(raw_id):
+    """PID recorded in ``session_locks/<id>.lock``, or None."""
+    if not raw_id:
+        return None
+    lock = DEVIN_CLI_LOCKS_DIR / f"{raw_id}.lock"
+    try:
+        text = lock.read_text(encoding="utf-8").strip()
+    except OSError:
+        return None
+    if not text:
+        return None
+    token = text.split()[0]
+    try:
+        pid = int(token)
+    except ValueError:
+        return None
+    return pid if pid > 0 else None
+
+
+def _devin_cli_pid_alive(pid):
+    """True when ``os.kill(pid, 0)`` succeeds."""
+    try:
+        os.kill(int(pid), 0)
+        return True
+    except (OSError, ProcessLookupError, ValueError, TypeError):
+        return False
+
+
+def _devin_cli_session_live(raw_id):
+    """True when the session lock's recorded pid is still alive.
+
+    A leftover lock file after the CLI exits is not liveness — every Devin
+    CLI row was showing as live because locks were never reaped.
+    """
+    pid = _devin_cli_lock_pid(raw_id)
+    if not pid:
+        return False
+    return _devin_cli_pid_alive(pid)
+
+
+def _devin_cli_raw_id_for_pid(pid):
+    """Raw Devin CLI session id whose lock file holds ``pid``, or a child of it.
+
+    CCC's spawn pid is the ``devin`` wrapper. The CLI records the ACP child
+    pid in the lock file, so a direct pid match can miss.
+    """
+    try:
+        want = int(pid)
+    except (TypeError, ValueError):
+        return None
+    if want <= 0:
+        return None
+    lock_pids = {}
+    try:
+        for p in DEVIN_CLI_LOCKS_DIR.iterdir():
+            if p.suffix != ".lock" or len(p.name) <= 5:
+                continue
+            raw_id = p.name[:-5]
+            lock_pid = _devin_cli_lock_pid(raw_id)
+            if lock_pid:
+                lock_pids[lock_pid] = raw_id
+    except OSError:
+        return None
+    if want in lock_pids:
+        return lock_pids[want]
+    if not lock_pids:
+        return None
+    try:
+        proc = subprocess.run(
+            ["ps", "-ax", "-o", "pid=,ppid="],
+            capture_output=True, text=True, timeout=2,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+    if proc.returncode != 0:
+        return None
+    for line in proc.stdout.splitlines():
+        parts = line.split()
+        if len(parts) < 2:
+            continue
+        try:
+            child_pid, ppid = int(parts[0]), int(parts[1])
+        except ValueError:
+            continue
+        if ppid == want and child_pid in lock_pids:
+            return lock_pids[child_pid]
+    return None
+
+
+def _devin_spawn_pid_by_session_id():
+    """Map ``devincli-*`` session ids to the CCC spawn pid that owns them.
+
+    Mirrors ``_gemini_spawn_pid_by_session_id`` / ``_cursor_spawn_pid_by_session_id``
+    so the sidebar placeholder can swap onto the durable row. Resolves the
+    native id from the CLI DB / lock file when the spawn registry still has
+    ``session_id: null`` (Devin does not print its id on stdout).
+    """
+    out = {}
+    entries = []
+    seen_pids = set()
+    for s in list(getattr(_core, "_spawned_sessions", []) or []):
+        if not isinstance(s, dict):
+            continue
+        if str(s.get("engine") or "").lower() != "devin":
+            continue
+        entries.append(s)
+        if s.get("pid") is not None:
+            seen_pids.add(s.get("pid"))
+    try:
+        for s in _core._load_spawn_registry():
+            if not isinstance(s, dict):
+                continue
+            if str(s.get("engine") or "").lower() != "devin":
+                continue
+            if s.get("pid") in seen_pids:
+                continue
+            entries.append(s)
+    except Exception:
+        pass
+    for s in entries:
+        sid = s.get("session_id") or s.get("resumed_sid")
+        if not sid:
+            try:
+                sid = _core._devin_cli_session_id_for_spawn_entry(s)
+            except Exception:
+                sid = None
+        if not sid:
+            continue
+        if not s.get("session_id"):
+            s["session_id"] = sid
+            try:
+                _core._update_spawn_session_id_in_registry(s.get("pid"), sid)
+            except Exception:
+                pass
+        if sid in out:
+            continue
+        alive = False
+        try:
+            alive = _core._poll_spawn_entry(s) is None
+        except Exception:
+            alive = False
+        if not alive:
+            alive = _devin_cli_session_live(_devin_cli_raw_id(sid))
+        out[sid] = {
+            "pid": s.get("pid"),
+            "alive": alive,
+            "log": s.get("log") or "",
+            "cwd": s.get("cwd") or "",
+            "repo_path": s.get("repo_path") or "",
+        }
+    return out
+
+
+def _devin_cli_cache_key():
+    """(mtime_ns, size) across the sessions DB + its WAL/SHM sidecars.
+
+    Used as a cache key for the parse cache and the pre-serialized response
+    bytes cache — same role as ``_hermes_db_cache_key`` for Hermes. Without
+    this, Devin CLI sessions return ``(0, 0)`` from
+    ``_conv_parse_jsonl_mtime`` and every cache layer bails out, so the
+    SSE stream falls through to the file-based path (which 404s) and the
+    conversation text never refreshes while a terminal writes in parallel.
+    """
+    mtime_ns = 0
+    size = 0
+    db_path = _devin_cli_db_path()
+    for p in (db_path,
+              Path(str(db_path) + "-wal"),
+              Path(str(db_path) + "-shm")):
+        try:
+            st = p.stat()
+        except OSError:
+            continue
+        mtime_ns = max(mtime_ns, st.st_mtime_ns)
+        size += st.st_size
+    return (mtime_ns, size)
+
+
+def _devin_cli_lock_set():
+    """Set of raw session IDs that currently hold a Devin CLI lock file.
+
+    Enumerating the lock directory once is cheaper than ``is_file()`` per row
+    and also gives us a stable cache-key component for the session list."""
+    try:
+        return frozenset(
+            p.name[:-5]
+            for p in DEVIN_CLI_LOCKS_DIR.iterdir()
+            if p.suffix == ".lock" and len(p.name) > 5
+        )
+    except OSError:
+        return frozenset()
+
+
+def _devin_cli_list_cache_key(repo_path, include_old, repo_only, limit):
+    """Composite cache key for ``find_devin_cli_conversations``.
+
+    Covers every input that can change the returned rows without touching the
+    SQLite DB: the DB state itself, running-session lock files, and CCC-side
+    lifecycle/name/verification/pin side-car files."""
+    parts = [_devin_cli_cache_key(), _devin_cli_lock_set()]
+    for f in (
+        _core.SESSION_NAMES_FILE,
+        _core.ARCHIVED_CONVERSATIONS_FILE,
+        _core.TRASHED_CONVERSATIONS_FILE,
+        _core.VERIFIED_CONVERSATIONS_FILE,
+        _core.LAST_INTERACTIONS_FILE,
+        _core.PINNED_CONVERSATIONS_FILE,
+    ):
+        try:
+            parts.append(f.stat().st_mtime_ns)
+        except OSError:
+            parts.append(0)
+    parts.append((repo_path, bool(include_old), bool(repo_only), limit))
+    return tuple(parts)
+
+
+def _devin_cli_profile_log(label, duration_s, detail=""):
+    """Append a timing sample to the Devin CLI diagnostic profile log.
+
+    Log lives in ``<COMMAND_CENTER_STATE_DIR>/devin_cli_profile.log`` so the
+    user and agent can inspect it after a slow load. Writes are best-effort;
+    profiling never raises."""
+    try:
+        log_path = _core.COMMAND_CENTER_STATE_DIR / "devin_cli_profile.log"
+        log_path.parent.mkdir(parents=True, exist_ok=True)
+        with log_path.open("a", encoding="utf-8") as f:
+            ts = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+            f.write(f"{ts} {label} {duration_s:.6f}s {detail}\n")
+    except Exception:
+        pass
+
+
+def _devin_cli_first_prompts_from_history(con, raw_ids):
+    """Batch lookup of the first non-shell user prompt per session.
+
+    Replaces the per-session prompt_history query that made session-list
+    refresh O(number_of_sessions). Returns {raw_id: content}."""
+    if not raw_ids:
+        return {}
+    placeholders = ",".join("?" * len(raw_ids))
+    first_prompts = {}
+    start = time.perf_counter()
+    try:
+        query = (
+            f"SELECT session_id, content, MIN(timestamp) AS ts "
+            f"FROM prompt_history WHERE session_id IN ({placeholders}) "
+            f"AND is_shell = 0 GROUP BY session_id"
+        )
+        for row in con.execute(query, raw_ids):
+            sid = str(row["session_id"] or "").strip()
+            if sid:
+                first_prompts[sid] = str(row["content"] or "").strip()
+    except sqlite3.Error:
+        pass
+    _devin_cli_profile_log(
+        "first_prompts_from_history",
+        time.perf_counter() - start,
+        f"raw_ids={len(raw_ids)} found={len(first_prompts)}",
+    )
+    return first_prompts
+
+
+def _devin_cli_first_messages_from_nodes(con, raw_ids):
+    """Fallback batch parse of the earliest user input per session.
+
+    Imported/resumed sessions can have transcript turns in message_nodes but
+    no prompt_history row. Parses in node_id order and stops at the first user
+    message marked as actual user input for each session.
+    Returns {raw_id: content}."""
+    if not raw_ids:
+        return {}
+    placeholders = ",".join("?" * len(raw_ids))
+    first_messages = {}
+    rows_scanned = 0
+    start = time.perf_counter()
+    try:
+        query = (
+            f"SELECT session_id, chat_message FROM message_nodes "
+            f"WHERE session_id IN ({placeholders}) ORDER BY session_id, node_id"
+        )
+        for row in con.execute(query, raw_ids):
+            rows_scanned += 1
+            sid = str(row["session_id"] or "").strip()
+            if not sid or sid in first_messages:
+                continue
+            try:
+                msg = json.loads(row["chat_message"])
+            except (ValueError, TypeError):
+                continue
+            if not isinstance(msg, dict):
+                continue
+            if str(msg.get("role") or "").strip().lower() != "user":
+                continue
+            meta = msg.get("metadata") or {}
+            if not meta.get("is_user_input"):
+                continue
+            text = str(msg.get("content") or "").strip()
+            if text:
+                first_messages[sid] = text
+    except sqlite3.Error:
+        pass
+    _devin_cli_profile_log(
+        "first_messages_from_nodes",
+        time.perf_counter() - start,
+        f"raw_ids={len(raw_ids)} rows_scanned={rows_scanned} found={len(first_messages)}",
+    )
+    return first_messages
+
+
+def _devin_cli_subagent_meta_for_raw_ids(con, raw_ids):
+    """Subagent counts + recent list from the ``tool_call_state`` table.
+
+    Devin stores ``run_subagent`` tool calls in ``tool_call_state``.
+    The update row tells us whether the subagent is still running."""
+    if not raw_ids or con is None:
+        return {}
+    placeholders = ",".join("?" * len(raw_ids))
+    by_sid = {}
+    qstart = time.perf_counter()
+    try:
+        query = (
+            "SELECT session_id, tool_call_json, tool_call_update_json "
+            "FROM tool_call_state "
+            "WHERE session_id IN ({}) "
+            "  AND json_extract(tool_call_json, '$._meta.\"cognition.ai/inferenceToolName\"') = 'run_subagent' "
+            "ORDER BY session_id, rowid"
+        ).format(placeholders)
+        for row in con.execute(query, raw_ids):
+            sid = str(row["session_id"] or "").strip()
+            try:
+                call = json.loads(row["tool_call_json"] or "{}")
+                update = json.loads(row["tool_call_update_json"] or "{}")
+            except (ValueError, TypeError):
+                continue
+            if not isinstance(call, dict):
+                continue
+            raw = call.get("rawInput") or {}
+            title = (
+                str(raw.get("title") or "").strip()
+                or str(call.get("title") or "").strip()
+                or str(raw.get("task") or "").strip()
+            )[:80]
+            subagent_type = str(raw.get("profile") or "").strip()[:40]
+            status = str(update.get("status") or "").strip().lower()
+            if status == "completed":
+                status = "done"
+            elif status == "failed":
+                status = "failed"
+            else:
+                status = "in-flight"
+            entry = {
+                "description": title or "(unnamed subagent)",
+                "subagent_type": subagent_type,
+                "status": status,
+            }
+            by_sid.setdefault(sid, []).append(entry)
+    except sqlite3.Error:
+        pass
+    _devin_cli_profile_log(
+        "subagent_meta_for_raw_ids",
+        time.perf_counter() - qstart,
+        f"raw_ids={len(raw_ids)} sids_with_subagents={len(by_sid)}",
+    )
+    out = {}
+    for sid, entries in by_sid.items():
+        out[sid] = {
+            "subagent_count": len(entries),
+            "subagent_in_flight_count": sum(
+                1 for e in entries if e.get("status") == "in-flight"
+            ),
+            "subagent_recent": entries[-8:],
+        }
+    return out
+
+
+def _devin_cli_row_memo_path():
+    """Memo file for the per-session list fields.
+
+    Lives in the CCC state dir for the real DB. When ``CCC_DEVIN_DB`` points
+    at another DB (test fixtures), the memo sits beside that DB instead: the
+    entries describe one specific DB, and a fixture run must never clobber
+    the real memo (observed: two 1-row test fixtures overwrote the 45-row
+    production memo, and the next dashboard build went fully cold)."""
+    if os.environ.get("CCC_DEVIN_DB"):
+        db = _devin_cli_db_path()
+        return Path(str(db) + ".ccc-row-memo.json")
+    return _core.COMMAND_CENTER_STATE_DIR / "devin_cli_row_memo.json"
+
+
+def _devin_cli_row_memo_load_locked():
+    """Load the persisted per-session memo once per process (lock held)."""
+    global _DEVIN_CLI_ROW_MEMO_LOADED
+    if _DEVIN_CLI_ROW_MEMO_LOADED:
+        return
+    _DEVIN_CLI_ROW_MEMO_LOADED = True
+    try:
+        with _devin_cli_row_memo_path().open("r", encoding="utf-8") as f:
+            payload = json.load(f)
+    except (OSError, ValueError):
+        return
+    if not isinstance(payload, dict) or payload.get("v") != _DEVIN_CLI_ROW_MEMO_VERSION:
+        return
+    rows = payload.get("rows")
+    if isinstance(rows, dict):
+        for raw_id, entry in rows.items():
+            if isinstance(entry, dict) and isinstance(entry.get("ver"), list):
+                _DEVIN_CLI_ROW_MEMO[str(raw_id)] = entry
+
+
+def _devin_cli_row_memo_save_locked():
+    """Best-effort atomic write of the memo (lock held). Never raises."""
+    try:
+        path = _devin_cli_row_memo_path()
+        path.parent.mkdir(parents=True, exist_ok=True)
+        tmp = path.with_suffix(path.suffix + ".tmp")
+        with tmp.open("w", encoding="utf-8") as f:
+            json.dump({"v": _DEVIN_CLI_ROW_MEMO_VERSION, "rows": _DEVIN_CLI_ROW_MEMO}, f)
+        os.replace(tmp, path)
+    except Exception:
+        pass
+
+
+def _devin_cli_session_versions(con, raw_ids):
+    """{raw_id: [max_row_id, row_count, max_created_at]} from message_nodes.
+
+    A covering-index GROUP BY (idx_message_nodes_session carries the rowid),
+    so it never reads the chat_message blobs — ~50 ms across a 3.7 GB DB.
+    ``max_created_at`` doubles as the row's freshness signal: sessions.
+    last_activity_at can lag the newest message row (observed: 1 of 42
+    sessions had message rows newer than it), so the caller takes
+    max(last_activity_at, max_created_at) instead of trusting the column
+    alone (CCC-992: a row read "3h" for a session active 46 min ago)."""
+    if not raw_ids or con is None:
+        return {}
+    out = {}
+    placeholders = ",".join("?" * len(raw_ids))
+    try:
+        for row in con.execute(
+            "SELECT session_id, MAX(row_id), COUNT(*), MAX(created_at) "
+            "FROM message_nodes WHERE session_id IN ({}) GROUP BY session_id".format(
+                placeholders
+            ),
+            raw_ids,
+        ):
+            out[str(row[0] or "").strip()] = [
+                int(row[1] or 0), int(row[2] or 0), row[3],
+            ]
+    except sqlite3.Error:
+        pass
+    return out
+
+
+def _devin_cli_row_fields_for_session(con, raw_id, prev):
+    """Recompute the derived list fields for ONE changed session.
+
+    Every query here is scoped to ``session_id = ?`` and bounded:
+      - first message: prompt_history, else a head walk over rows not yet
+        scanned (``row_id > first_scanned_row_id``) — immutable once found.
+      - latest model / text / context tokens: one lazy tail walk
+        (``ORDER BY row_id DESC``), stops at the first assistant row.
+      - ship flags: incremental LIKE scan over ``row_id > ship_row_id``,
+        OR-ed into the previous flags.
+      - subagent meta: the per-session tool_call_state query.
+    ``prev`` is the previous memo entry (or {}); the result is the new one
+    minus ``ver``, which the caller stamps."""
+    prev = prev if isinstance(prev, dict) else {}
+    out = {
+        "first_message": str(prev.get("first_message") or ""),
+        "first_scanned_row_id": int(prev.get("first_scanned_row_id") or 0),
+        "model": "",
+        "last_assistant_text": "",
+        "latest_input_tokens": 0,
+        "ship": dict(prev.get("ship") or {}),
+        "ship_row_id": int(prev.get("ship_row_id") or 0),
+        "subagent": None,
+    }
+    qstart = time.perf_counter()
+
+    # --- first message (immutable once found) ---
+    if not out["first_message"]:
+        hist = _devin_cli_first_prompts_from_history(con, [raw_id])
+        text = str(hist.get(raw_id) or "").strip()
+        if text:
+            out["first_message"] = text
+    if not out["first_message"]:
+        try:
+            cur = con.execute(
+                "SELECT row_id, chat_message FROM message_nodes "
+                "WHERE session_id = ? AND row_id > ? ORDER BY row_id ASC",
+                (raw_id, out["first_scanned_row_id"]),
+            )
+            for row in cur:
+                out["first_scanned_row_id"] = max(out["first_scanned_row_id"], int(row[0] or 0))
+                try:
+                    msg = json.loads(row[1])
+                except (ValueError, TypeError):
+                    continue
+                if not isinstance(msg, dict):
+                    continue
+                if str(msg.get("role") or "").strip().lower() != "user":
+                    continue
+                if not (msg.get("metadata") or {}).get("is_user_input"):
+                    continue
+                text = str(msg.get("content") or "").strip()
+                if text:
+                    out["first_message"] = text
+                    break
+        except sqlite3.Error:
+            pass
+
+    # --- latest assistant row: model, text, context window ---
+    max_row_id = 0
+    try:
+        cur = con.execute(
+            "SELECT row_id, chat_message FROM message_nodes WHERE session_id = ? "
+            "ORDER BY row_id DESC LIMIT ?",
+            (raw_id, _DEVIN_CLI_TAIL_WALK_MAX_ROWS),
+        )
+        for row in cur:
+            max_row_id = max(max_row_id, int(row[0] or 0))
+            try:
+                msg = json.loads(row[1])
+            except (ValueError, TypeError):
+                continue
+            if not isinstance(msg, dict) or str(msg.get("role") or "").lower() != "assistant":
+                continue
+            meta = msg.get("metadata") or {}
+            if not isinstance(meta, dict):
+                meta = {}
+            gm = meta.get("generation_model")
+            if gm:
+                out["model"] = str(gm)
+            out["last_assistant_text"] = str(msg.get("content") or "").strip()[:2000]
+            metrics = meta.get("metrics") or {}
+            if isinstance(metrics, dict):
+                try:
+                    window = (
+                        int(metrics.get("input_tokens") or 0)
+                        + int(metrics.get("cache_read_tokens") or 0)
+                        + int(metrics.get("cache_creation_tokens") or 0)
+                    )
+                except (TypeError, ValueError):
+                    window = 0
+                if window:
+                    out["latest_input_tokens"] = window
+            break
+    except sqlite3.Error:
+        pass
+
+    # --- ship flags, incremental over rows not yet scanned ---
+    ship_scan_start = out["ship_row_id"]
+    try:
+        row = con.execute(
+            "SELECT MAX(row_id),"
+            "  MAX(CASE WHEN chat_message LIKE '%git%commit%' THEN 1 ELSE 0 END),"
+            "  MAX(CASE WHEN chat_message LIKE '%git%push%' THEN 1 ELSE 0 END),"
+            "  MAX(CASE WHEN chat_message LIKE '%gh%pr%create%' THEN 1 ELSE 0 END)"
+            " FROM message_nodes"
+            " WHERE session_id = ? AND row_id > ?"
+            "   AND (json_extract(chat_message, '$.role') = 'assistant' OR"
+            "        json_extract(chat_message, '$.role') = 'tool')",
+            (raw_id, out["ship_row_id"]),
+        ).fetchone()
+        if row is not None:
+            ship = out["ship"]
+            ship["has_commit"] = bool(ship.get("has_commit")) or bool(row[1])
+            ship["has_push"] = bool(ship.get("has_push")) or bool(row[2])
+            ship["has_pr"] = bool(ship.get("has_pr")) or bool(row[3])
+            out["ship_row_id"] = max(out["ship_row_id"], int(row[0] or 0), max_row_id)
+    except sqlite3.Error:
+        pass
+
+    # --- real PR number, same incremental range as the flags above ---
+    # has_pr above is a coarse existence check; only a number match here is
+    # trusted enough to become tail_pr_number (see _DEVIN_CLI_PR_NUMBER_RE).
+    if out["ship"].get("has_pr") and not out["ship"].get("pr_number"):
+        try:
+            for text_row in con.execute(
+                "SELECT chat_message FROM message_nodes"
+                " WHERE session_id = ? AND row_id > ? AND row_id <= ?"
+                "   AND (json_extract(chat_message, '$.role') = 'assistant' OR"
+                "        json_extract(chat_message, '$.role') = 'tool')"
+                "   AND chat_message LIKE '%gh%pr%create%'",
+                (raw_id, ship_scan_start, out["ship_row_id"]),
+            ):
+                m = _DEVIN_CLI_PR_NUMBER_RE.search(str(text_row[0] or ""))
+                if m:
+                    out["ship"]["pr_number"] = int(m.group(1))
+                    break
+        except sqlite3.Error:
+            pass
+
+    # --- subagents ---
+    out["subagent"] = _devin_cli_subagent_meta_for_raw_ids(con, [raw_id]).get(raw_id)
+
+    _devin_cli_profile_log(
+        "row_fields_for_session",
+        time.perf_counter() - qstart,
+        f"sid={raw_id}",
+    )
+    return out
+
+
+def _devin_cli_row_fields_placeholder(prev):
+    """Fields for a session whose recompute was deferred to the background.
+
+    Same keys as a real ``_devin_cli_row_fields_for_session`` result, so the
+    caller needs no special case. When a stale memo entry exists its values
+    are reused (last poll already showed them; blanking them would make the
+    row flicker back to "Devin session <id>"), otherwise everything is
+    empty. Never stored in the memo: ``deferred`` marks it as incomplete."""
+    if isinstance(prev, dict) and isinstance(prev.get("ver"), list):
+        out = dict(prev)
+    else:
+        out = {
+            "first_message": "",
+            "first_scanned_row_id": 0,
+            "model": "",
+            "last_assistant_text": "",
+            "latest_input_tokens": 0,
+            "ship": {},
+            "ship_row_id": 0,
+            "subagent": None,
+            "ver": None,
+        }
+    out["deferred"] = True
+    return out
+
+
+def _devin_cli_row_fields_memoized(con, rows):
+    """{raw_id: fields} for every row, re-querying only changed sessions.
+
+    Version = [sessions.last_activity_at, max(message_nodes.row_id), count].
+    last_activity_at alone is not enough (observed: 1 of 42 sessions had
+    message rows newer than it), hence the message_nodes pair.
+
+    Misses are computed synchronously, most recently active first, only
+    while ``_DEVIN_CLI_COLD_BUILD_BUDGET_S`` lasts; the remainder (and any
+    session the background finisher already owns) get placeholder fields
+    and are queued for ``_devin_cli_row_memo_background``."""
+    if not rows:
+        return {}
+    # The caller selects ORDER BY last_activity_at DESC; sort again so the
+    # budget priority does not depend on that.
+    def _activity(r):
+        try:
+            return float(r.get("_last_activity_raw") or 0)
+        except (TypeError, ValueError):
+            return 0.0
+    ordered = sorted(rows, key=_activity, reverse=True)
+    raw_ids = [r["_raw_id"] for r in rows]
+    versions = _devin_cli_session_versions(con, raw_ids)
+    out = {}
+    hits = 0
+    misses = 0
+    deferred = []
+    dirty = False
+    budget = _DEVIN_CLI_COLD_BUILD_BUDGET_S
+    start = time.perf_counter()
+    with _DEVIN_CLI_ROW_MEMO_LOCK:
+        _devin_cli_row_memo_load_locked()
+        with _DEVIN_CLI_ROW_MEMO_BG_LOCK:
+            in_flight = dict(_DEVIN_CLI_ROW_MEMO_BG["pending"])
+        for r in ordered:
+            raw_id = r["_raw_id"]
+            mv = versions.get(raw_id) or [0, 0]
+            ver = [r.get("_last_activity_raw"), mv[0], mv[1]]
+            prev = _DEVIN_CLI_ROW_MEMO.get(raw_id)
+            if isinstance(prev, dict) and prev.get("ver") == ver:
+                out[raw_id] = prev
+                hits += 1
+                continue
+            misses += 1
+            over_budget = (time.perf_counter() - start) >= budget
+            if raw_id in in_flight or over_budget:
+                out[raw_id] = _devin_cli_row_fields_placeholder(prev)
+                deferred.append((raw_id, ver))
+                continue
+            fields = _devin_cli_row_fields_for_session(con, raw_id, prev)
+            fields["ver"] = ver
+            _DEVIN_CLI_ROW_MEMO[raw_id] = fields
+            out[raw_id] = fields
+            dirty = True
+        # Drop sessions that no longer exist so the file doesn't grow forever.
+        live = set(raw_ids)
+        stale = [k for k in _DEVIN_CLI_ROW_MEMO if k not in live]
+        if stale and len(_DEVIN_CLI_ROW_MEMO) > 4 * max(1, len(live)):
+            for k in stale:
+                _DEVIN_CLI_ROW_MEMO.pop(k, None)
+            dirty = True
+        if dirty:
+            _devin_cli_row_memo_save_locked()
+        if deferred:
+            _devin_cli_row_memo_background_schedule(deferred)
+    # latest_msg_at isn't part of the cache fingerprint (`ver`), so stamp it
+    # fresh on every call regardless of hit/miss/deferred — cheap, already
+    # queried above for all raw_ids.
+    for raw_id, entry in out.items():
+        if isinstance(entry, dict):
+            entry["latest_msg_at"] = (versions.get(raw_id) or [0, 0, None])[2]
+    _devin_cli_profile_log(
+        "row_fields_memoized",
+        time.perf_counter() - start,
+        f"hits={hits} misses={misses} deferred={len(deferred)}",
+    )
+    return out
+
+
+def _devin_cli_row_memo_background_schedule(deferred):
+    """Queue (raw_id, ver) pairs for the background finisher; start it if
+    idle. One worker at a time: a second list rebuild while it runs only
+    refreshes the pending versions."""
+    with _DEVIN_CLI_ROW_MEMO_BG_LOCK:
+        bg = _DEVIN_CLI_ROW_MEMO_BG
+        for raw_id, ver in deferred:
+            bg["pending"][raw_id] = ver
+        t = bg.get("thread")
+        if t is not None and t.is_alive():
+            return
+        t = threading.Thread(
+            target=_devin_cli_row_memo_background,
+            name="devin-row-memo",
+            daemon=True,
+        )
+        bg["thread"] = t
+        t.start()
+
+
+def _devin_cli_row_memo_background():
+    """Finish deferred per-session fields off the request path.
+
+    Own read-only connection; drains ``pending`` in order, stamping each
+    result into the memo under the memo lock, saving the memo, and dropping
+    the list cache key so the next poll rebuilds with the filled fields (a
+    cheap rebuild: everything else is a memo hit and the sessions still
+    pending here stay deferred rather than being recomputed). Never raises."""
+    bg = _DEVIN_CLI_ROW_MEMO_BG
+    done = 0
+    started = time.perf_counter()
+    con = None
+    try:
+        con = _devin_cli_connect()
+        while True:
+            with _DEVIN_CLI_ROW_MEMO_BG_LOCK:
+                if con is None or not bg["pending"]:
+                    bg["pending"].clear()
+                    bg["thread"] = None
+                    break
+                raw_id = next(iter(bg["pending"]))
+                ver = bg["pending"][raw_id]
+            try:
+                with _DEVIN_CLI_ROW_MEMO_LOCK:
+                    prev = _DEVIN_CLI_ROW_MEMO.get(raw_id)
+                if isinstance(prev, dict) and prev.get("ver") == ver:
+                    fields = None  # a foreground call got there first
+                else:
+                    fields = _devin_cli_row_fields_for_session(con, raw_id, prev)
+                    fields["ver"] = ver
+                with _DEVIN_CLI_ROW_MEMO_LOCK:
+                    if fields is not None and _DEVIN_CLI_ROW_MEMO.get(raw_id) is prev:
+                        _DEVIN_CLI_ROW_MEMO[raw_id] = fields
+                        _devin_cli_row_memo_save_locked()
+                        done += 1
+                with _DEVIN_CLI_ROW_MEMO_BG_LOCK:
+                    # A newer version queued meanwhile stays for another pass.
+                    if bg["pending"].get(raw_id) == ver:
+                        bg["pending"].pop(raw_id, None)
+                with _DEVIN_CLI_LIST_CACHE_LOCK:
+                    # Background row-fields completion changed derived data:
+                    # force every cached variant to rebuild on its next call
+                    # (a None key bypasses the TTL grace window).
+                    for _entry in _DEVIN_CLI_LIST_CACHE.values():
+                        _entry["key"] = None
+                        _entry["ts"] = 0.0
+            except Exception:
+                with _DEVIN_CLI_ROW_MEMO_BG_LOCK:
+                    bg["pending"].pop(raw_id, None)
+    except Exception:
+        pass
+    finally:
+        with _DEVIN_CLI_ROW_MEMO_BG_LOCK:
+            if bg.get("thread") is threading.current_thread():
+                bg["thread"] = None
+                bg["pending"].clear()
+        try:
+            if con is not None:
+                con.close()
+        except Exception:
+            pass
+        _devin_cli_profile_log(
+            "row_fields_background",
+            time.perf_counter() - started,
+            f"sessions={done}",
+        )
+
+
+def _devin_cli_row_memo_background_join(timeout=None):
+    """Wait for the background finisher to drain (tests). True when idle."""
+    deadline = None if timeout is None else time.monotonic() + timeout
+    while True:
+        with _DEVIN_CLI_ROW_MEMO_BG_LOCK:
+            t = _DEVIN_CLI_ROW_MEMO_BG.get("thread")
+            pending = bool(_DEVIN_CLI_ROW_MEMO_BG["pending"])
+        if t is None or not t.is_alive():
+            if not pending:
+                return True
+        remaining = None if deadline is None else deadline - time.monotonic()
+        if remaining is not None and remaining <= 0:
+            return False
+        if t is not None and t.is_alive():
+            t.join(remaining if remaining is None else min(remaining, 0.5))
+        else:
+            time.sleep(0.01)
+
+
+def _devin_model_list_json():
+    """Run ``devin models list --format json`` and cache the parsed result.
+
+    The cache is process-local, bounded, and degrades to an empty catalog when
+    the binary is missing or the command fails."""
+    now = time.monotonic()
+    with _DEVIN_MODEL_LIST_CACHE["lock"]:
+        cached = _DEVIN_MODEL_LIST_CACHE["data"]
+        if cached is not None and now - _DEVIN_MODEL_LIST_CACHE["ts"] < DEVIN_MODEL_LIST_TTL_S:
+            return cached
+    resolved = _resolve_devin_bin()
+    if not resolved.get("available"):
+        return {"families": [], "uid_to_family": {}, "family_to_uids": {}}
+    try:
+        proc = subprocess.run(
+            [resolved["bin"], "models", "list", "--format", "json"],
+            capture_output=True,
+            text=True,
+            timeout=DEVIN_MODEL_LIST_TIMEOUT_S,
+        )
+        if proc.returncode != 0:
+            return {"families": [], "uid_to_family": {}, "family_to_uids": {}}
+        data = json.loads(proc.stdout)
+    except (subprocess.TimeoutExpired, OSError, ValueError, TypeError):
+        return {"families": [], "uid_to_family": {}, "family_to_uids": {}}
+    families = data.get("families") or []
+    uid_to_family = {}
+    family_to_uids = {}
+    for fam in families:
+        family_uid = fam.get("family_uid") or fam.get("slug")
+        if not family_uid:
+            continue
+        family_to_uids[family_uid] = []
+        for alias in fam.get("aliases") or []:
+            uid_to_family[str(alias).strip().lower()] = family_uid
+        for variant in fam.get("variants") or []:
+            model_uid = str(variant.get("model_uid") or "").strip().lower()
+            if not model_uid:
+                continue
+            uid_to_family[model_uid] = family_uid
+            family_to_uids[family_uid].append(model_uid)
+    result = {
+        "families": families,
+        "uid_to_family": uid_to_family,
+        "family_to_uids": family_to_uids,
+    }
+    with _DEVIN_MODEL_LIST_CACHE["lock"]:
+        _DEVIN_MODEL_LIST_CACHE["ts"] = now
+        _DEVIN_MODEL_LIST_CACHE["data"] = result
+    return result
+
+
+def _devin_family_levels():
+    """Map family_uid -> {effort_level: model_uid} using the live Devin catalog.
+
+    Effort levels are encoded in the model uid (``claude-opus-5-max``,
+    ``gpt-5-6-sol-low``, etc.). The base variant of a family is also assigned
+    an effort from its label when the label is unambiguous (e.g. ``SWE-1.7 Max``
+    means the base variant is the ``max`` effort)."""
+    data = _devin_model_list_json()
+    families = data.get("families") or []
+    known = {"low", "medium", "high", "xhigh", "max", "none", "minimal"}
+    levels = {}
+    for fam in families:
+        family_uid = fam.get("family_uid") or fam.get("slug")
+        if not family_uid:
+            continue
+        norm_family = str(family_uid).lower().replace(".", "-")
+        fam_levels = {}
+        for variant in fam.get("variants") or []:
+            model_uid = str(variant.get("model_uid") or "").strip().lower()
+            if not model_uid:
+                continue
+            tokens = model_uid.split("-")
+            flags = set()
+            while tokens and tokens[-1] in ("fast", "priority"):
+                flags.add(tokens.pop())
+            level = ""
+            if tokens and tokens[-1] in known:
+                level = tokens.pop()
+            base = "-".join(tokens)
+            if not level and base == norm_family:
+                label = str(variant.get("label") or "").lower()
+                words = re.split(r"[\s\-]+", label)
+                for w in reversed(words):
+                    if w in known:
+                        level = w
+                        break
+            if not level or flags:
+                continue
+            fam_levels[level] = model_uid
+        levels[family_uid] = fam_levels
+    return levels
+
+
+def _devin_resolve_model(model, effort=None):
+    """Translate a Devin model + reasoning effort into a concrete model uid.
+
+    Devin does not have a separate ``--effort`` flag; the effort is part of the
+    model name. CCC exposes the same effort ladder as Claude, and this helper
+    resolves it to the right Devin model uid. If the effort cannot be satisfied
+    (e.g. ``adaptive`` has no levels), the original model is returned so the
+    spawn still succeeds with the family's default."""
+    model = _core._clean_spawn_default_model(model) or ""
+    if not model:
+        return ""
+    effort = (effort or "").strip().lower()
+    if not effort:
+        return model
+    data = _devin_model_list_json()
+    uid_to_family = data.get("uid_to_family") or {}
+    family_to_uids = data.get("family_to_uids") or {}
+    family = uid_to_family.get(model)
+    if not family:
+        if model in family_to_uids:
+            family = model
+        else:
+            return model
+    levels = _devin_family_levels()
+    chosen = levels.get(family, {}).get(effort)
+    if chosen:
+        return chosen
+    return model
+
+
+def _devin_model_catalog_records(allowed_families=None):
+    """Return Devin model catalog records for the engine picker.
+
+    The catalog is built from ``devin models list --format json``. To keep the
+    picker usable, fast/priority variants are omitted; users can still type them
+    as custom models because ``_ENGINE_SUPPORTS_CUSTOM_MODELS["devin"]`` is
+    True."""
+    data = _devin_model_list_json()
+    families = data.get("families") or []
+    if allowed_families is None:
+        allowed_families = set(data.get("family_to_uids", {}).keys())
+    else:
+        allowed_families = set(allowed_families or ())
+    records = []
+    for fam in families:
+        family_uid = fam.get("family_uid") or fam.get("slug")
+        if family_uid not in allowed_families:
+            continue
+        for variant in fam.get("variants") or []:
+            model_uid = str(variant.get("model_uid") or "").strip()
+            if not model_uid:
+                continue
+            if re.search(r"-(fast|priority)$", model_uid, re.I):
+                continue
+            cost_tier = str(variant.get("cost_tier") or "").strip()
+            is_free = cost_tier.lower() == "free"
+            records.append({
+                "id": model_uid,
+                "label": str(variant.get("label") or model_uid),
+                "source": "devin-cli",
+                "oneM": (variant.get("max_context_tokens") or 0) >= 1_000_000,
+                "max_context_tokens": variant.get("max_context_tokens"),
+                "max_output_tokens": variant.get("max_output_tokens"),
+                "cost_tier": cost_tier,
+                "cost_summary": variant.get("cost_summary"),
+                "entitlement": "free" if is_free else None,
+                "entitlement_summary": "Free for this Devin account" if is_free else None,
+                "entitlement_source": "devin-cli" if is_free else None,
+            })
+    return records
+
+
+def _devin_cli_list_params_key(repo_path, include_old, repo_only, limit):
+    return (
+        str(_devin_cli_db_path()),
+        repo_path,
+        bool(include_old),
+        bool(repo_only),
+        limit,
+    )
+
+
+def _devin_cli_cached_rows(params_key, *, ttl_only=True):
+    """Return a copy of cached rows for ``params_key``, or None.
+
+    ``ttl_only=True`` (default) requires a live cache key inside the TTL
+    window. ``ttl_only=False`` returns whatever rows are stored, including
+    expired or invalidated entries — used by stale-ok callers that must not
+    wait on a rebuild.
+    """
+    now = time.time()
+    with _DEVIN_CLI_LIST_CACHE_LOCK:
+        entry = _DEVIN_CLI_LIST_CACHE.get(params_key)
+        if entry is None or entry.get("rows") is None:
+            return None
+        if ttl_only:
+            if entry.get("key") is None:
+                return None
+            if (now - float(entry.get("ts") or 0)) >= _DEVIN_CLI_LIST_TTL_SEC:
+                return None
+        return list(entry["rows"])
+
+
+def find_devin_cli_conversations(
+    repo_path=None,
+    include_old=False,
+    repo_only=False,
+    progress=None,
+    limit=None,
+    stale_ok=False,
+):
+    """Discover local Devin CLI sessions from the SQLite DB.
+
+    Serialised: after one DB write, every concurrent sidebar poll would
+    otherwise rebuild in parallel; under the lock the first rebuilds and the
+    rest hit the refreshed cache. See ``_find_devin_cli_conversations_locked``.
+
+    Cache hits (TTL window) never take the rebuild lock — otherwise a 30-60s
+    rebuild against a multi-GB sessions.db parks every /list poll and the
+    browser's HTTP/1.1 slots, so cheap POSTs like trash wait tens of seconds
+    in the client queue.
+
+    ``stale_ok=True`` (the /list overlay): never wait on the rebuild lock.
+    Serve cached/stale rows, or [] if a rebuild is already in flight and
+    there is nothing cached.
+    """
+    params_key = _devin_cli_list_params_key(
+        repo_path, include_old, repo_only, limit,
+    )
+    start = time.perf_counter()
+    hit = _devin_cli_cached_rows(params_key, ttl_only=True)
+    if hit is not None:
+        _devin_cli_profile_log(
+            "find_devin_cli_conversations",
+            time.perf_counter() - start,
+            f"rows={len(hit)} repo_only={repo_only} cached-ttl",
+        )
+        return hit
+    if stale_ok:
+        # Prefer any cached rows — even expired — over a 30-60s rebuild.
+        # The /list overlay is a gap-filler; freshness comes from the
+        # detached archive build, not from blocking the sidebar poll.
+        stale = _devin_cli_cached_rows(params_key, ttl_only=False)
+        if stale is not None:
+            _devin_cli_profile_log(
+                "find_devin_cli_conversations",
+                time.perf_counter() - start,
+                f"rows={len(stale)} repo_only={repo_only} stale-ok",
+            )
+            return stale
+        acquired = _DEVIN_CLI_LIST_REBUILD_LOCK.acquire(blocking=False)
+        if not acquired:
+            _devin_cli_profile_log(
+                "find_devin_cli_conversations",
+                time.perf_counter() - start,
+                f"rows=0 repo_only={repo_only} stale-ok-busy",
+            )
+            return []
+        try:
+            return _find_devin_cli_conversations_locked(
+                repo_path=repo_path,
+                include_old=include_old,
+                repo_only=repo_only,
+                progress=progress,
+                limit=limit,
+            )
+        finally:
+            _DEVIN_CLI_LIST_REBUILD_LOCK.release()
+    with _DEVIN_CLI_LIST_REBUILD_LOCK:
+        return _find_devin_cli_conversations_locked(
+            repo_path=repo_path,
+            include_old=include_old,
+            repo_only=repo_only,
+            progress=progress,
+            limit=limit,
+        )
+
+
+def _find_devin_cli_conversations_locked(
+    repo_path=None,
+    include_old=False,
+    repo_only=False,
+    progress=None,
+    limit=None,
+):
+    """Discover local Devin CLI sessions from the SQLite DB.
+
+    Sessions are repo-scoped (each has a working_directory). When repo_path is
+    given, only sessions in that repo (or a subdirectory of it) are returned.
+    No DB (or any API failure) → [].
+
+    The result is cached in memory: opening the Devin CLI sessions DB can take
+    multiple seconds when the DB is large, so we avoid reconnecting on every
+    sidebar refresh. The cache invalidates when the DB/WAL/SHM, lock files, or
+    CCC lifecycle side-car files change."""
+    start = time.perf_counter()
+    params_key = _devin_cli_list_params_key(
+        repo_path, include_old, repo_only, limit,
+    )
+    now = time.time()
+    with _DEVIN_CLI_LIST_CACHE_LOCK:
+        entry = _DEVIN_CLI_LIST_CACHE.get(params_key)
+        if (
+            entry is not None
+            and entry.get("key") is not None
+            and entry.get("rows") is not None
+            and (now - float(entry.get("ts") or 0)) < _DEVIN_CLI_LIST_TTL_SEC
+        ):
+            rows = entry["rows"]
+            elapsed = time.perf_counter() - start
+            _devin_cli_profile_log(
+                "find_devin_cli_conversations",
+                elapsed,
+                f"rows={len(rows)} repo_only={repo_only} cached-ttl",
+            )
+            return list(rows)
+    cache_key = _devin_cli_list_cache_key(repo_path, include_old, repo_only, limit)
+    with _DEVIN_CLI_LIST_CACHE_LOCK:
+        entry = _DEVIN_CLI_LIST_CACHE.get(params_key)
+        if (
+            entry is not None
+            and entry.get("key") == cache_key
+            and entry.get("rows") is not None
+        ):
+            # Corpus unchanged: serve without rebuilding and extend the
+            # freshness window, so a quiet DB never pays a rebuild.
+            entry["ts"] = now
+            rows = entry["rows"]
+            elapsed = time.perf_counter() - start
+            _devin_cli_profile_log(
+                "find_devin_cli_conversations",
+                elapsed,
+                f"rows={len(rows)} repo_only={repo_only} cached",
+            )
+            return list(rows)
+
+    try:
+        name_overrides = _core._load_session_name_overrides()
+    except Exception:
+        name_overrides = {}
+    try:
+        archived_set, trashed_set = _core._load_conversation_lifecycle_sets()
+    except Exception:
+        archived_set, trashed_set = set(), set()
+    try:
+        verified_set = set(_core._load_verified_conversations())
+    except Exception:
+        verified_set = set()
+    try:
+        last_interactions = _core._load_last_interactions()
+    except Exception:
+        last_interactions = {}
+    try:
+        repo_pins = _core._load_repo_pins()
+    except Exception:
+        repo_pins = {}
+
+    con = _devin_cli_connect()
+    if con is None:
+        _devin_cli_profile_log("find_devin_cli_conversations", 0, "no_db")
+        return []
+
+    cutoff = _core._session_scan_cutoff_ts(include_old)
+    max_rows = _core._session_scan_file_limit(include_old)
+
+    resolved_repo_path = None
+    repo_path_obj = None
+    git_top_cache = {}
+    if repo_only:
+        try:
+            resolved_repo_path = _core.resolve_repo_path(repo_path)
+            repo_path_obj = Path(resolved_repo_path)
+        except Exception:
+            con.close()
+            return []
+
+    rows = []
+    try:
+        spawn_by_sid = _devin_spawn_pid_by_session_id()
+        query = (
+            "SELECT id, working_directory, backend_type, model, agent_mode, "
+            "created_at, last_activity_at, title, main_chain_id "
+            "FROM sessions ORDER BY last_activity_at DESC"
+        )
+        qstart = time.perf_counter()
+        total_sessions_scanned = 0
+        for row in con.execute(query):
+            total_sessions_scanned += 1
+            raw_id = str(row["id"] or "").strip()
+            if not raw_id:
+                continue
+            working_dir = str(row["working_directory"] or "").strip()
+            sid = DEVIN_CLI_SESSION_PREFIX + raw_id
+            pinned = repo_pins.get(sid)
+            pinned_repo = False
+            if repo_only:
+                if pinned and pinned != resolved_repo_path:
+                    continue
+                if pinned == resolved_repo_path:
+                    pinned_repo = True
+                elif not _core._codex_cwd_matches_repo(
+                    working_dir, resolved_repo_path, git_top_cache
+                ):
+                    continue
+
+            created = float(row["created_at"] or 0)
+            modified = float(row["last_activity_at"] or 0) or created
+            freshness = max(modified, last_interactions.get(sid) or 0)
+            if not include_old and cutoff > 0 and freshness < cutoff:
+                continue
+            if not include_old and max_rows > 0 and len(rows) >= max_rows:
+                continue
+            title = _core._strip_ccc_session_state_instruction(
+                str(row["title"] or "")
+            ).strip()
+            model = str(row["model"] or "")
+            # first_message/display_name are filled in after the loop via one
+            # batched prompt_history query (plus a message_nodes fallback).
+            first_message = ""
+            display_name = ""
+            spawn_info = spawn_by_sid.get(sid) or {}
+            is_live = _devin_cli_session_live(raw_id) or bool(spawn_info.get("alive"))
+
+            # Resolve the session's folder the same way other CLI engines do:
+            # honor a repo pin, walk up to the git root for the label, and split
+            # out a sibling worktree suffix so the UI badge renders correctly.
+            session_cwd = pinned or working_dir or None
+            folder_path = pinned or working_dir or ""
+            git_root = ""
+            if folder_path:
+                try:
+                    git_root = _core._find_git_root(folder_path) or ""
+                except Exception:
+                    git_root = ""
+            if git_root:
+                folder_path = git_root
+                folder_label = _core._resolve_dir_case(git_root) or Path(git_root).name
+            elif folder_path:
+                folder_label = _core._resolve_dir_case(folder_path) or Path(folder_path).name
+            else:
+                folder_label = "Devin"
+            worktree_label = None
+            wt_idx = folder_label.find("-wt-")
+            if wt_idx > 0:
+                worktree_label = folder_label[wt_idx + 4:]
+                folder_label = folder_label[:wt_idx]
+            folder_label_chip = "Devin" if not folder_path else ""
+
+            # Check if the working directory exists.
+            wd_exists = False
+            if session_cwd:
+                try:
+                    wd_exists = Path(session_cwd).is_dir()
+                except OSError:
+                    pass
+            rows.append({
+                "_raw_id": raw_id,
+                "_title": title,
+                "_last_activity_raw": row["last_activity_at"],
+                "id": sid,
+                "session_id": sid,
+                "source": "devin-cli",
+                "engine": "devin",
+                "timestamp": "",
+                "branch": "",
+                "git_branch": "",
+                "first_message": first_message[:200],
+                "display_name": display_name,
+                "ai_title": title or None,
+                "name_overridden": bool(name_overrides.get(sid)),
+                "last_prompt": first_message[:200],
+                "size": 0,
+                "modified": modified,
+                "modified_human": time.strftime(
+                    "%Y-%m-%d %H:%M", time.localtime(modified)
+                ) if modified else "",
+                "mtime": modified,
+                "jsonl_path": "",
+                "folder_label": folder_label,
+                "folder_path": folder_path,
+                "folder_label_chip": folder_label_chip,
+                "worktree_label": worktree_label,
+                "session_cwd": session_cwd,
+                "session_cwd_exists": wd_exists,
+                "session_cwd_is_worktree": False,
+                "worktree_dirty": False,
+                "effective_branch": None,
+                "effective_kind": None,
+                "has_edit": False,
+                "has_commit": False,
+                "has_push": False,
+                "last_edit_pos": 0,
+                "last_commit_pos": 0,
+                "last_push_pos": 0,
+                "last_event_type": None,
+                "pending_tool": None,
+                "pending_file": None,
+                "pending_tool_ts": 0,
+                "last_assistant_text": "",
+                "tail_issue_number": None,
+                "tail_pr_number": None,
+                "tail_pr_url": None,
+                "pr_state": None,
+                "session_state": None,
+                "archived": sid in archived_set,
+                "trashed": sid in trashed_set,
+                "verified": sid in verified_set,
+                "pinned_repo": pinned_repo,
+                "last_interacted": last_interactions.get(sid),
+                "is_live": is_live,
+                "spawn_pid": spawn_info.get("pid"),
+                "needs_approval": False,
+                "needs_approval_message": "",
+                "model": model,
+                "reasoning_effort": "",
+                "session_url": None,
+                "subagent_count": 0,
+                "subagent_in_flight_count": 0,
+                "subagent_recent": [],
+                "latest_input_tokens": 0,
+                "context_limit": DEVIN_CLI_CONTEXT_LIMIT,
+            })
+        qelapsed = time.perf_counter() - qstart
+        _devin_cli_profile_log(
+            "find_devin_cli_sessions_query",
+            qelapsed,
+            f"scanned={total_sessions_scanned} kept={len(rows)}",
+        )
+
+        fmstart = time.perf_counter()
+        if rows:
+            fields_by_id = _devin_cli_row_fields_memoized(con, rows)
+            for r in rows:
+                raw_id = r.pop("_raw_id", "")
+                title = r.pop("_title", "")
+                r.pop("_last_activity_raw", None)
+                sid = r["session_id"]
+                fields = fields_by_id.get(raw_id) or {}
+                latest_msg_at = _devin_epoch(fields.get("latest_msg_at"))
+                if latest_msg_at > r["modified"]:
+                    r["modified"] = latest_msg_at
+                    r["mtime"] = latest_msg_at
+                    r["modified_human"] = time.strftime(
+                        "%Y-%m-%d %H:%M", time.localtime(latest_msg_at)
+                    )
+                if fields.get("latest_input_tokens"):
+                    r["latest_input_tokens"] = int(fields["latest_input_tokens"])
+                first_message = _core._strip_ccc_session_state_instruction(
+                    str(fields.get("first_message") or "")
+                ).strip()
+                display_name = (
+                    name_overrides.get(sid)
+                    or _core._truncate_session_name(title)
+                    or (first_message[:80] if first_message else None)
+                    or f"Devin session {raw_id[:12]}"
+                )
+                r["first_message"] = first_message[:200]
+                r["display_name"] = display_name
+                r["last_prompt"] = first_message[:200]
+                r["last_assistant_text"] = (
+                    _core._strip_ccc_session_state_instruction(
+                        str(fields.get("last_assistant_text") or "")
+                    ).strip()[:2000]
+                )
+                flags = fields.get("ship") or {}
+                r["has_commit"] = bool(flags.get("has_commit"))
+                r["has_push"] = bool(flags.get("has_push"))
+                r["has_pr"] = bool(flags.get("has_pr"))
+                if r["has_commit"]:
+                    r["last_commit_pos"] = 1
+                if r["has_push"]:
+                    r["last_push_pos"] = 1
+                pr_number = flags.get("pr_number")
+                if pr_number:
+                    r["tail_pr_number"] = int(pr_number)
+                if not r.get("model"):
+                    r["model"] = str(fields.get("model") or "")
+                sm = fields.get("subagent")
+                if sm:
+                    r["subagent_count"] = sm["subagent_count"]
+                    r["subagent_in_flight_count"] = sm["subagent_in_flight_count"]
+                    r["subagent_recent"] = sm["subagent_recent"]
+        _devin_cli_profile_log(
+            "find_devin_cli_row_fields",
+            time.perf_counter() - fmstart,
+            f"rows={len(rows)}",
+        )
+    except sqlite3.Error:
+        pass
+    finally:
+        con.close()
+    rows.sort(
+        key=lambda x: x.get("last_interacted") or x.get("modified") or 0,
+        reverse=True,
+    )
+    if limit and limit > 0:
+        rows = rows[:int(limit)]
+    with _DEVIN_CLI_LIST_CACHE_LOCK:
+        if len(_DEVIN_CLI_LIST_CACHE) >= _DEVIN_CLI_LIST_CACHE_MAX:
+            oldest = min(
+                _DEVIN_CLI_LIST_CACHE,
+                key=lambda k: float(_DEVIN_CLI_LIST_CACHE[k].get("ts") or 0),
+            )
+            _DEVIN_CLI_LIST_CACHE.pop(oldest, None)
+        _DEVIN_CLI_LIST_CACHE[params_key] = {
+            "key": cache_key,
+            "rows": rows,
+            "ts": time.time(),
+        }
+    elapsed = time.perf_counter() - start
+    _devin_cli_profile_log(
+        "find_devin_cli_conversations",
+        elapsed,
+        f"rows={len(rows)} repo_only={repo_only}",
+    )
+    return rows
+
+
+def _devin_cli_parse_message_row(chat_message, created_at, seen):
+    """Parse one message_nodes row into (role, text, ts_str) or None.
+
+    Reuses the existing dedup ``seen`` set so incremental parses stay
+    consistent with a full parse. Unknown / skipped shapes return None."""
+    try:
+        msg = json.loads(chat_message)
+    except (ValueError, TypeError):
+        return None
+    if not isinstance(msg, dict):
+        return None
+    role = str(msg.get("role") or "").strip().lower()
+    if role not in ("user", "assistant"):
+        return None
+    text = str(msg.get("content") or "").strip()
+    if not text:
+        return None
+    # Skip system-injected user messages (context rebuilds) — only keep
+    # actual user input. Assistant messages have no is_user_input flag.
+    if role == "user":
+        meta = msg.get("metadata") or {}
+        if not meta.get("is_user_input"):
+            return None
+    dedup_key = (role, text)
+    if dedup_key in seen:
+        return None
+    seen.add(dedup_key)
+    ts_raw = msg.get("metadata", {}).get("created_at") or created_at
+    ts = _devin_epoch(ts_raw)
+    ts_str = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(ts)) if ts else ""
+    return role, text, ts_str
+
+
+def _parse_devin_cli_conversation(session_id, after_line=0):
+    """Build a CCC transcript event list from a Devin CLI session's messages.
+
+    Reads user and assistant messages from the message_nodes table, deduped
+    by content (the CLI rebuilds context each turn, producing duplicates).
+    Uses an in-memory incremental cache so only newly appended SQLite rows
+    are parsed on subsequent calls — long sessions no longer re-parse the
+    entire message_nodes table on every SSE poll.
+    line = number of messages consumed, matching the other adapters'
+    after_line semantics. Unknown shapes are skipped, never fatal."""
+    start = time.perf_counter()
+    raw_id = _devin_cli_raw_id(session_id)
+    if not raw_id:
+        _devin_cli_profile_log("parse_devin_cli_conversation", 0, "no_raw_id")
+        return {"events": [], "last_line": 0}
+    con = _devin_cli_connect()
+    if con is None:
+        _devin_cli_profile_log("parse_devin_cli_conversation", 0, "no_db")
+        return {"events": [], "last_line": 0}
+    events = []
+    line = 0
+    seen = set()
+    max_row_id = 0
+    db_key = _devin_cli_cache_key()
+    was_incremental = False
+
+    def _append_rows(rows):
+        nonlocal line, max_row_id
+        for row in rows:
+            parsed = _devin_cli_parse_message_row(
+                row["chat_message"], row["created_at"], seen
+            )
+            if parsed is None:
+                continue
+            role, text, ts_str = parsed
+            line += 1
+            max_row_id = max(max_row_id, row["row_id"])
+            if role == "user":
+                events.append({
+                    "line": line, "ts": ts_str, "type": "user_text",
+                    "text": text, "images": [],
+                })
+            else:
+                events.append({
+                    "line": line, "ts": ts_str, "type": "assistant",
+                    "message_id": f"devincli-{line}",
+                    "blocks": [{"kind": "text", "text": text}],
+                })
+
+    try:
+        # Try to resume from the incremental cache. row_id is append-only on
+        # normal SQLite tables, so MAX(row_id) is a cheap per-session marker.
+        with _DEVIN_CLI_PARSE_CACHE_LOCK:
+            cached = _DEVIN_CLI_PARSE_CACHE.get(raw_id)
+
+        incremental = False
+        if cached and cached.get("max_row_id"):
+            row = con.execute(
+                "SELECT MAX(row_id) FROM message_nodes WHERE session_id = ?",
+                (raw_id,),
+            ).fetchone()
+            current_max_row_id = row[0] or 0
+            if current_max_row_id >= cached["max_row_id"]:
+                verify = con.execute(
+                    "SELECT 1 FROM message_nodes "
+                    "WHERE session_id = ? AND row_id = ?",
+                    (raw_id, cached["max_row_id"]),
+                ).fetchone()
+                if verify:
+                    events = list(cached["events"])
+                    seen = set(cached["seen"])
+                    line = cached["last_line"]
+                    max_row_id = cached["max_row_id"]
+                    incremental = True
+                    was_incremental = True
+
+        if incremental:
+            rows = con.execute(
+                "SELECT row_id, chat_message, created_at FROM message_nodes "
+                "WHERE session_id = ? AND row_id > ? ORDER BY row_id",
+                (raw_id, max_row_id),
+            )
+        else:
+            rows = con.execute(
+                "SELECT row_id, chat_message, created_at FROM message_nodes "
+                "WHERE session_id = ? ORDER BY row_id",
+                (raw_id,),
+            )
+        _append_rows(rows)
+
+        with _DEVIN_CLI_PARSE_CACHE_LOCK:
+            _DEVIN_CLI_PARSE_CACHE[raw_id] = {
+                "events": events,
+                "seen": seen,
+                "last_line": line,
+                "max_row_id": max_row_id,
+                "db_key": db_key,
+                "accessed": time.time(),
+            }
+            if len(_DEVIN_CLI_PARSE_CACHE) > _DEVIN_CLI_PARSE_CACHE_MAX:
+                oldest = min(
+                    _DEVIN_CLI_PARSE_CACHE.items(),
+                    key=lambda kv: kv[1].get("accessed", 0),
+                )[0]
+                _DEVIN_CLI_PARSE_CACHE.pop(oldest, None)
+    except sqlite3.Error:
+        # Fallback when row_id isn't available or the incremental probe fails:
+        # do a simple full parse ordered by node_id. Clears the stale cache.
+        events = []
+        line = 0
+        seen = set()
+        max_row_id = 0
+        try:
+            for row in con.execute(
+                "SELECT chat_message, created_at FROM message_nodes "
+                "WHERE session_id = ? ORDER BY node_id",
+                (raw_id,),
+            ):
+                parsed = _devin_cli_parse_message_row(
+                    row["chat_message"], row["created_at"], seen
+                )
+                if parsed is None:
+                    continue
+                role, text, ts_str = parsed
+                line += 1
+                if role == "user":
+                    events.append({
+                        "line": line, "ts": ts_str, "type": "user_text",
+                        "text": text, "images": [],
+                    })
+                else:
+                    events.append({
+                        "line": line, "ts": ts_str, "type": "assistant",
+                        "message_id": f"devincli-{line}",
+                        "blocks": [{"kind": "text", "text": text}],
+                    })
+            with _DEVIN_CLI_PARSE_CACHE_LOCK:
+                _DEVIN_CLI_PARSE_CACHE.pop(raw_id, None)
+        except sqlite3.Error:
+            pass
+    finally:
+        con.close()
+    if after_line and after_line > 0:
+        visible = [e for e in events if e["line"] > after_line]
+    else:
+        visible = events
+    elapsed = time.perf_counter() - start
+    _devin_cli_profile_log(
+        "parse_devin_cli_conversation",
+        elapsed,
+        f"sid={raw_id} incremental={was_incremental} events={len(events)} "
+        f"last_line={line} after_line={after_line}",
+    )
+    return {"events": visible, "last_line": line}
+
+
+DEVIN_CLI_CONTEXT_LIMIT = 200_000
+
+# How many of a session's most-recent message_nodes rows to pull looking for
+# the latest assistant turn with usable metrics. Assistant/user/tool-result
+# rows interleave, so 1 is not always enough (a dangling tool call or a
+# not-yet-answered user turn can be the literal last row); 8 comfortably
+# covers a normal turn's node count without pulling meaningful data volume.
+def _extract_devin_cli_usage(session_id):
+    """Token usage for a Devin CLI session, read from the SQLite DB.
+
+    Assistant messages carry ``metadata.metrics`` with input/output/cache
+    token counts. We sum across all assistant turns and track the peak
+    input window — same shape as ``_extract_gemini_usage`` etc.
+    """
+    empty = {
+        "latest_input_tokens": 0,
+        "peak_input_tokens": 0,
+        "total_output_tokens": 0,
+        "total_input_tokens": 0,
+        "total_cache_creation_tokens": 0,
+        "total_cache_read_tokens": 0,
+        "model": "",
+        "context_limit": DEVIN_CLI_CONTEXT_LIMIT,
+        "cost_usd": 0.0,
+        "cost_breakdown_usd": {"input": 0.0, "cache_creation": 0.0,
+                               "cache_read": 0.0, "output": 0.0},
+    }
+    raw_id = _devin_cli_raw_id(session_id)
+    if not raw_id:
+        return empty
+    con = _devin_cli_connect()
+    if con is None:
+        return empty
+    latest = 0
+    peak = 0
+    total_in = 0
+    total_out = 0
+    total_cache_read = 0
+    total_cache_creation = 0
+    model = ""
+    # Per-turn tail for the status-rail column graph — one entry per
+    # assistant message with metrics, same raw-count shape Claude's
+    # turn_series uses.
+    turn_series = collections.deque(maxlen=_core.USAGE_TURN_SERIES_MAX)
+    try:
+        for row in con.execute(
+            "SELECT chat_message FROM message_nodes "
+            "WHERE session_id = ? ORDER BY node_id",
+            (raw_id,),
+        ):
+            try:
+                msg = json.loads(row["chat_message"])
+            except (ValueError, TypeError):
+                continue
+            if not isinstance(msg, dict):
+                continue
+            if str(msg.get("role") or "").lower() != "assistant":
+                continue
+            meta = msg.get("metadata") or {}
+            metrics = meta.get("metrics") or {}
+            if not isinstance(metrics, dict):
+                continue
+            in_tok = int(metrics.get("input_tokens") or 0)
+            out_tok = int(metrics.get("output_tokens") or 0)
+            cache_read = int(metrics.get("cache_read_tokens") or 0)
+            cache_creation = int(metrics.get("cache_creation_tokens") or 0)
+            # The context window is non-cached input + cached read + newly
+            # created cached prefix. input_tokens alone is the non-cached
+            # portion, so the live/peak bars must add cache to match the
+            # model's real window.
+            window = in_tok + cache_read + cache_creation
+            if window:
+                latest = window
+                peak = max(peak, window)
+            total_in += in_tok
+            total_out += out_tok
+            total_cache_read += cache_read
+            total_cache_creation += cache_creation
+            gm = meta.get("generation_model")
+            if gm:
+                model = gm
+            if window or out_tok:
+                turn_epoch = _devin_epoch(meta.get("created_at"))
+                turn_ts = (
+                    time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(turn_epoch))
+                    if turn_epoch else ""
+                )
+                turn_series.append({
+                    "ts": turn_ts,
+                    "tokens_in": window,
+                    "tokens_cached": cache_read,
+                    "tokens_out": out_tok,
+                })
+    except sqlite3.Error:
+        pass
+    finally:
+        con.close()
+    return {
+        **empty,
+        "latest_input_tokens": latest,
+        "peak_input_tokens": peak,
+        "total_output_tokens": total_out,
+        "total_input_tokens": total_in,
+        "total_cache_read_tokens": total_cache_read,
+        "total_cache_creation_tokens": total_cache_creation,
+        "model": model,
+        "override": _core._get_session_override(session_id),
+        "turn_series": list(turn_series),
+    }
+
+
+# Regexes for the session-activity strip. Keep them in sync with the
+# timeline patterns in ccc_server/morning_launch.py where possible.
+_DEVIN_CLI_COMMIT_RE = re.compile(r"\bgit\s+(?:-\w+\s+\S+\s+)*commit\b")
+_DEVIN_CLI_COMMIT_MSG_RE = re.compile(r"-m\s+['\"]([^'\"]{1,200})['\"]")
+_DEVIN_CLI_PUSH_RE = re.compile(r"\bgit\s+(?:-\w+\s+\S+\s+)*push\b")
+_DEVIN_CLI_PR_CREATE_RE = re.compile(r"\bgh\s+pr\s+create\b")
+_DEVIN_CLI_PR_TITLE_RE = re.compile(r"--title\s+['\"]([^'\"]{1,200})['\"]")
+_DEVIN_CLI_COMMIT_RESULT_RE = re.compile(
+    r"\[[^\]]+\s+([0-9a-f]{7,40})\]\s*(.+)"
+)
+_DEVIN_CLI_COMMIT_LINE_RE = re.compile(
+    r"^\s*Commit:\s+([0-9a-f]{7,40})\s*[-—]\s*(.+)$", re.MULTILINE
+)
+
+
+def _extract_devin_cli_timeline(session_id):
+    """Build a commit/push/PR activity strip from a Devin CLI session.
+
+    Reads the message_nodes table, counting assistant messages as turns and
+    matching git commands/output. Returns the same shape as
+    `extract_session_timeline`.
+    """
+    raw_id = _devin_cli_raw_id(session_id)
+    if not raw_id:
+        return {"events": [], "total_turns": 0}
+    con = _devin_cli_connect()
+    if con is None:
+        return {"events": [], "total_turns": 0}
+
+    events = []
+    seen = set()
+    turn = 0
+
+    def add_event(kind, subject, text, sha=None, pr_number=None):
+        if turn == 0:
+            return
+        key = (kind, sha, subject)
+        if key in seen:
+            return
+        seen.add(key)
+        lower = text.lower()
+        success = None
+        if "fatal:" in lower or "error:" in lower or "exited with code" in lower and "code 0" not in lower:
+            success = False
+        elif kind in ("commit", "push"):
+            success = True
+        event = {
+            "kind": kind,
+            "turn": turn,
+            "ts": ts,
+            "subject": subject,
+            "success": success,
+        }
+        if sha:
+            event["sha"] = sha
+        if pr_number:
+            event["pr_number"] = pr_number
+        events.append(event)
+
+    try:
+        for row in con.execute(
+            "SELECT chat_message, created_at FROM message_nodes "
+            "WHERE session_id = ? ORDER BY node_id",
+            (raw_id,),
+        ):
+            try:
+                msg = json.loads(row["chat_message"])
+            except (ValueError, TypeError):
+                continue
+            if not isinstance(msg, dict):
+                continue
+            role = str(msg.get("role") or "").lower()
+            if role == "assistant":
+                turn += 1
+            if role not in ("assistant", "tool"):
+                continue
+
+            created = row["created_at"]
+            if created:
+                ts = (
+                    datetime.fromtimestamp(float(created), tz=timezone.utc)
+                    .isoformat()
+                )
+            else:
+                ts = ""
+
+            content = msg.get("content")
+            if not isinstance(content, str) or not content:
+                continue
+
+            # Commit commands and output lines.
+            for m in _DEVIN_CLI_COMMIT_LINE_RE.finditer(content):
+                add_event("commit", m.group(2).strip(), content, sha=m.group(1))
+            for m in _DEVIN_CLI_COMMIT_RESULT_RE.finditer(content):
+                add_event("commit", m.group(2).strip(), content, sha=m.group(1))
+            if _DEVIN_CLI_COMMIT_RE.search(content):
+                subject = ""
+                m = _DEVIN_CLI_COMMIT_MSG_RE.search(content)
+                if m:
+                    subject = m.group(1)
+                add_event("commit", subject, content)
+            if _DEVIN_CLI_PUSH_RE.search(content):
+                add_event("push", "", content)
+            if _DEVIN_CLI_PR_CREATE_RE.search(content):
+                subject = ""
+                m = _DEVIN_CLI_PR_TITLE_RE.search(content)
+                if m:
+                    subject = m.group(1)
+                add_event("pr", subject, content)
+    except sqlite3.Error:
+        pass
+    finally:
+        con.close()
+
+    return {"events": events, "total_turns": turn}
+
+
+def _extract_files_from_devin_cli_conversation(session_id):
+    """Extract file-like paths from a Devin CLI transcript for the Files panel.
+
+    Walks message_nodes and runs the same path/URL extraction used for
+    JSONL sessions, then groups by file category.
+    """
+    raw_id = _devin_cli_raw_id(session_id)
+    if not raw_id:
+        return {"count": 0, "truncated": False, "groups": {}}
+    con = _devin_cli_connect()
+    if con is None:
+        return {"count": 0, "truncated": False, "groups": {}}
+
+    seen = {}
+    truncated = False
+    line = 0
+    try:
+        for row in con.execute(
+            "SELECT chat_message FROM message_nodes "
+            "WHERE session_id = ? ORDER BY node_id",
+            (raw_id,),
+        ):
+            line += 1
+            try:
+                msg = json.loads(row["chat_message"])
+            except (ValueError, TypeError):
+                continue
+            if not isinstance(msg, dict):
+                continue
+            role = str(msg.get("role") or "").lower()
+            if role == "system":
+                continue
+            content = msg.get("content")
+            if not isinstance(content, str) or not content:
+                continue
+            for target, kind in _core._ffc_iter_targets(content):
+                # Drop skill definition files injected into the system context.
+                if (
+                    ("/.claude/skills/" in target
+                     or "/.config/devin/skills/" in target
+                     or "/.agents/skills/" in target)
+                    and target.rsplit("/", 1)[-1] == "SKILL.md"
+                ):
+                    continue
+                truncated = _core._ffc_consider_file_target(
+                    seen, target, kind, line, truncated
+                )
+    except sqlite3.Error:
+        pass
+    finally:
+        con.close()
+
+    groups = {}
+    for row in seen.values():
+        cat = row["category"]
+        groups.setdefault(cat, []).append(row)
+    for rows in groups.values():
+        rows.sort(key=lambda r: r["first_line"])
+
+    return {"count": len(seen), "truncated": truncated, "groups": groups}
+
+
+def _devin_cli_session_detail(session_id):
+    """Lightweight drill-in for /api/session/<id> for a Devin CLI session.
+
+    Returns the same shape as `compute_session_detail`: state, last assistant
+    text, and the last few turns from the SQLite transcript.
+    """
+    raw_id = _devin_cli_raw_id(session_id)
+    if not raw_id:
+        return {"ok": False, "error": "session not found", "session_id": session_id}, 404
+
+    parsed = _parse_devin_cli_conversation(session_id)
+    events = parsed.get("events", [])
+    last_assistant_text = ""
+    turns = []
+    for ev in reversed(events):
+        if ev.get("type") == "assistant" and not last_assistant_text:
+            blocks = ev.get("blocks")
+            if isinstance(blocks, list) and blocks and isinstance(blocks[0], dict):
+                last_assistant_text = blocks[0].get("text", "")
+            else:
+                last_assistant_text = ev.get("text", "")
+        turns.insert(0, ev)
+        if len(turns) >= 3:
+            break
+    turns = turns[:3][::-1] if turns else []
+
+    con = _devin_cli_connect()
+    mtime = None
+    cwd = ""
+    if con:
+        try:
+            row = con.execute(
+                "SELECT working_directory, last_activity_at FROM sessions "
+                "WHERE id = ?",
+                (raw_id,),
+            ).fetchone()
+            if row:
+                cwd = row["working_directory"] or ""
+                mtime = row["last_activity_at"]
+        finally:
+            con.close()
+
+    row = {
+        "session_id": session_id,
+        "last_assistant_text": last_assistant_text,
+        "is_live": _devin_cli_session_live(raw_id),
+    }
+    return {
+        "ok": True,
+        "session_id": session_id,
+        "state": _core._stamp_session_state(row),
+        "ended_blocked": _core._session_ended_blocked(row),
+        "is_live": row["is_live"],
+        "mtime": mtime,
+        "folder_label": _core._slug_to_label(Path(cwd).name) if cwd else None,
+        "sidecar_in_flight": False,
+        "question_text": "",
+        "soft_block": None,
+        "last_assistant_text": (last_assistant_text or "")[:2000],
+        "turns": turns,
+    }, 200

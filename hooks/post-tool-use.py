@@ -12,6 +12,22 @@ SECRET_RE = re.compile(
     r"(?i)\b(?:sk-[a-z0-9_-]{16,}|gsk_[a-z0-9_-]{16,}|xox[abprs]-[a-z0-9-]{16,})\b"
 )
 
+# A long-running, unattended tool-call loop (agentic tasks that go hours
+# without a Stop event) otherwise stays untitled the whole time -- request_auto_title
+# only ever fired from stop.py's Stop-hook call. Fire it once mid-turn too, after
+# this many tool calls, reusing the exact same request path (see stop.py's
+# request_auto_title / server.py's _auto_title_needed + _auto_title_marker_path,
+# which already make the actual title-writing idempotent server-side). This is an
+# ADDITIONAL earlier fire -- the Stop-time call still happens normally afterward.
+MID_TURN_AUTO_TITLE_THRESHOLD = 25
+
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+try:
+    from stop import request_auto_title
+except ImportError:
+    def request_auto_title(*_a, **_k):
+        pass
+
 
 def prompt_fragment(text, max_len=240):
     if not isinstance(text, str):
@@ -188,6 +204,33 @@ def main():
             pass
 
         has_writes = os.path.exists(writes_flag)
+
+        # Mid-turn auto-title: count tool calls for this session (persisted
+        # across per-invocation hook processes via a sidecar counter file,
+        # same directory/pattern as the writes_flag above) and fire the
+        # titler once, the first time the count crosses the threshold. The
+        # `_midtitle_fired` marker makes this a once-per-session local
+        # attempt; server.py's own O_CREAT|O_EXCL marker claim is the real
+        # idempotency guard, this just avoids spamming the endpoint on every
+        # tool call past the threshold.
+        if tool_name:
+            toolcount_path = os.path.join(LIVE_STATE_DIR, f"{session_id}_toolcount")
+            fired_path = os.path.join(LIVE_STATE_DIR, f"{session_id}_midtitle_fired")
+            try:
+                try:
+                    with open(toolcount_path) as f:
+                        tool_count = int((f.read() or "0").strip() or "0")
+                except (OSError, ValueError):
+                    tool_count = 0
+                tool_count += 1
+                with open(toolcount_path, "w") as f:
+                    f.write(str(tool_count))
+                if tool_count >= MID_TURN_AUTO_TITLE_THRESHOLD and not os.path.exists(fired_path):
+                    with open(fired_path, "w") as f:
+                        f.write("1")
+                    request_auto_title(session_id)
+            except Exception:
+                pass  # best-effort; never block the tool-call flow
 
         # Extract a meaningful file/command reference
         file_ref = tool_input.get("file_path") or ""

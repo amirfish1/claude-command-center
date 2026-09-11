@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="theme-color" content="#0b0f14">
-<title>CCC — Productivity</title>
+<title>CCC: Productivity</title>
 <style>
   :root {
     color-scheme: dark;
@@ -205,7 +205,7 @@
   <section class="intro">
     <div>
       <h2>What did I actually ship?</h2>
-      <p>Delivered features and fixes are the outcome. Commits, lines, turns, tokens, time, and agent parallelism are supporting evidence—not a single synthetic productivity score.</p>
+      <p>Delivered features and fixes are the outcome. Commits, lines, turns, tokens, time, and agent parallelism are supporting evidence, not a single synthetic productivity score.</p>
     </div>
     <div class="date-range" id="dateRange">Loading range…</div>
   </section>
@@ -360,14 +360,14 @@
       ['Commits pushed', compact(summary.commits), 'Authored commits now on remote refs', ''],
       ['Lines changed', compact(summary.lines_changed), compact(summary.lines_added) + ' added · ' + compact(summary.lines_deleted) + ' deleted', ''],
       ['Observed work', duration(summary.observed_work_seconds), compact(summary.human_prompts) + ' human prompt events', 'time'],
-      ['Computer active', presenceAvailable ? duration(presenceMinutes * 60) : '—', presenceAvailable ? 'Sampled while CCC was running' : (presence.sampler_available === false ? 'Presence sampling unavailable' : 'Presence sampling has no history yet'), 'time'],
-      ['45-minute hours', presenceAvailable ? compact(summary.focus_hours) : '—', presenceAvailable ? 'Clock hours with ≥45 active sampled minutes' : 'Requires computer-presence samples', 'time'],
+      ['Computer active', presenceAvailable ? duration(presenceMinutes * 60) : '-', presenceAvailable ? 'Sampled while CCC was running' : (presence.sampler_available === false ? 'Presence sampling unavailable' : 'Presence sampling has no history yet'), 'time'],
+      ['45-minute hours', presenceAvailable ? compact(summary.focus_hours) : '-', presenceAvailable ? 'Clock hours with ≥45 active sampled minutes' : 'Requires computer-presence samples', 'time'],
       ['Agent gross time', duration(summary.agent_gross_seconds), 'Sum of every agent turn', 'agent'],
       ['Agent net time', duration(summary.agent_net_seconds), 'Overlapping agents counted once', 'agent'],
       ['Parallel agent time', duration(summary.agent_parallel_seconds), 'Gross minus net runtime', 'agent'],
       ['Assistant turns', compact(summary.turns), 'Normalized Claude + Codex turns', ''],
       ['Tokens', compact(summary.tokens), 'Raw context + output tokens', ''],
-      ['WatchTower', watchtower.available === false ? '—' : compact(summary.watchtower_closed) + ' closed', watchtower.available === false ? 'Unavailable for this snapshot' : compact(summary.watchtower_opened) + ' opened', ''],
+      ['WatchTower', watchtower.available === false ? '-' : compact(summary.watchtower_closed) + ' closed', watchtower.available === false ? 'Unavailable for this snapshot' : compact(summary.watchtower_opened) + ' opened', ''],
       ['Active projects', compact(summary.active_projects), 'Projects with measured work', ''],
     ];
     document.getElementById('summaryCards').innerHTML = cards.map(function (row) { return card(row[0], row[1], row[2], row[3]); }).join('');
@@ -434,9 +434,9 @@
     rows = Array.isArray(rows) ? rows.slice().reverse() : [];
     body.innerHTML = rows.map(function (row) {
       const presenceAvailable = Number(row.presence_samples) > 0;
-      const computer = presenceAvailable ? duration((Number(row.computer_active_minutes) || 0) * 60) : '—';
-      const focus = presenceAvailable ? compact(row.focus_hours) : '—';
-      const watchtowerCounts = watchtower.available === false ? '—' : compact(row.watchtower_opened) + ' / ' + compact(row.watchtower_closed);
+      const computer = presenceAvailable ? duration((Number(row.computer_active_minutes) || 0) * 60) : '-';
+      const focus = presenceAvailable ? compact(row.focus_hours) : '-';
+      const watchtowerCounts = watchtower.available === false ? '-' : compact(row.watchtower_opened) + ' / ' + compact(row.watchtower_closed);
       return '<tr><td><strong>' + escapeHtml(shortDate(row.date)) + '</strong></td><td>' + compact(row.features) + '</td><td>' + compact(row.fixes) +
         '</td><td>' + compact(row.commits) + '</td><td>' + compact(row.lines_changed) + '</td><td>' + compact(row.turns) + '</td><td>' + compact(row.tokens) +
         '</td><td>' + duration(row.observed_work_seconds) + '</td><td>' + computer + '</td><td>' + focus + '</td>' +
@@ -457,9 +457,9 @@
       [compact(coverage.repositories), 'repositories discovered'],
       [compact(coverage.git_repositories_scanned), 'Git histories scanned'],
       [compact(coverage.transcripts_parsed) + '/' + compact(coverage.conversations_considered), 'transcripts parsed'],
-      [watchtower.available === false ? '—' : compact(watchtower.items), watchtower.available === false ? 'WatchTower unavailable' : 'WatchTower items'],
-      [presence.sampler_available === false ? '—' : compact(presence.sample_minutes), presence.sampler_available === false ? 'Presence sampling unavailable' : 'presence sample minutes'],
-      [presence.coverage_pct ? presence.coverage_pct + '%' : '—', 'presence continuity'],
+      [watchtower.available === false ? '-' : compact(watchtower.items), watchtower.available === false ? 'WatchTower unavailable' : 'WatchTower items'],
+      [presence.sampler_available === false ? '-' : compact(presence.sample_minutes), presence.sampler_available === false ? 'Presence sampling unavailable' : 'presence sample minutes'],
+      [presence.coverage_pct ? presence.coverage_pct + '%' : '-', 'presence continuity'],
     ];
     document.getElementById('coverageBody').innerHTML =
       '<div class="coverage-stats">' + stats.map(function (row) { return '<div class="coverage-stat"><strong>' + escapeHtml(row[0]) + '</strong><span>' + escapeHtml(row[1]) + '</span></div>'; }).join('') + '</div>' +

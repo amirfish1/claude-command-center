@@ -1,0 +1,1 @@
+- Dynamically update model and reasoning-effort options when switching worker engines in Queue Configuration, support all 14 orchestrator engines, and toggle custom model input according to engine capabilities.

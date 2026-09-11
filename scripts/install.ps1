@@ -62,6 +62,14 @@ function Sync-Repo {
     if (Test-Path -LiteralPath (Join-Path $InstallDir ".git")) {
         Write-Output "install: updating existing checkout at $InstallDir"
         git -C $InstallDir pull --ff-only
+        if ($LASTEXITCODE -ne 0) {
+            # History no longer fast-forwards (e.g. an upstream rewrite) or the
+            # checkout is otherwise broken. Reclone fresh rather than leave the
+            # user stuck on a stale or broken checkout.
+            Write-Output "install: existing checkout at $InstallDir could not fast-forward; recloning fresh"
+            Remove-Item -LiteralPath $InstallDir -Recurse -Force
+            git clone $RepoUrl $InstallDir
+        }
     } else {
         Write-Output "install: cloning $RepoUrl to $InstallDir"
         New-Item -ItemType Directory -Force -Path (Split-Path -Parent $InstallDir) | Out-Null

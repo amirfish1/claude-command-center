@@ -132,6 +132,7 @@
               var queueData = await queueResponse.json().catch(function () { return {}; });
               if (!queueResponse.ok || !queueData.ok) throw new Error((queueData && queueData.error) || 'Could not file ticket');
               showNote('Filed as ' + ((queueData.item && queueData.item.ref) || 'ticket'));
+              if (typeof window.q2Refresh === 'function') window.q2Refresh();
             } catch (queueErr) {
               showNote('Annotation saved, but could not file a ticket: ' + ((queueErr && queueErr.message) || 'unknown error'));
             }

@@ -1,1 +1,0 @@
-- Kept session token and cost values stable while refreshing, and stopped usage scans for hidden conversations and browser tabs.

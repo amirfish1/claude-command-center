@@ -51,6 +51,12 @@ single HTTPS endpoint:
 | `active_seconds_today`   | int    | `5430`                             | sum of dashboard-tab-visible time today (rounded to 30s ticks); capped at 86400                 |
 | `total_sessions_managed` | int    | `287`                              | lifetime count of `*.jsonl` files ever seen under `~/.claude/projects/`; capped at 10000000     |
 
+One optional field may also be present:
+
+| field | type | example | notes                                                                     |
+|-------|------|---------|---------------------------------------------------------------------------|
+| `dev` | bool | `true`  | only when `CCC_TELEMETRY_DEV_MODE=1`; marks the row "not-a-real-user"     |
+
 The HTTP request also carries:
 - `User-Agent: claude-command-center/<version> (telemetry)`.
 - `Content-Type: application/json`.
@@ -61,8 +67,8 @@ separate, smaller, anonymous open beacon.
 ## Anonymous open beacon
 
 Schema v2 introduced one additional endpoint — `POST /v1/open` — that
-fires **once per server boot**, with the following 3-field body and
-**nothing else**:
+fires **at most once per UTC day** while the server is running, with the
+following 3-field body and **nothing else**:
 
 ```json
 {
@@ -74,10 +80,19 @@ fires **once per server boot**, with the following 3-field body and
 
 This beacon is **not** gated on the opt-in switch because it carries
 **no `install_id`, no identifier of any kind**, and no engine list.
-The aggregate it produces is "how many distinct CCC server boots
-happened on a given UTC day"; an individual boot cannot be linked back
-to anything else the same machine sends or to any prior boot from the
-same machine.
+The aggregate it produces is "how many CCC installs ran on a given UTC
+day"; an individual beacon cannot be linked back to anything else the
+same machine sends or to any beacon from the same machine on another day.
+
+**Why daily and not per-boot.** Until 2026-08-12 this beacon fired once per
+server boot. That measured restarts, not usage: an install left running
+under launchd for a week sent zero beacons, while one restart-heavy
+machine sent dozens — so the anonymous count could sit *below* the
+opt-in count, which is nonsense for a superset. A once-per-UTC-day gate
+(a local `telemetry-last-open` date file in the state dir) makes the
+count mean "installs that ran today" and sends strictly *fewer* bytes
+from restart-heavy machines than the old behavior did. The wire payload
+is unchanged: same three fields, no identifier.
 
 It is still gated on the `CCC_TELEMETRY_DISABLED` env var — that single
 switch is the user's guarantee that no bytes leave the host from this
@@ -89,24 +104,25 @@ to disk. Because the secret rotates every UTC day, the same IP on two
 different days produces two different hashes — so we (the maintainer)
 **cannot link the same machine across days even with our own salt**.
 What we *can* do is `COUNT(DISTINCT ip_hash)` per UTC day to answer
-"is today's boot count from 1 machine restarting 18 times, or 18
-machines restarting once each." That's the only signal the hash
-provides; everything else is still aggregate.
+"did today's beacons come from 18 machines, or from 1 machine behind a
+changing address." That's the only signal the hash provides; everything
+else is still aggregate.
 
 If you are uneasy about the hashed IP despite it being daily-rotated
 and un-reversible without the server secret, the same env var still
 kills the beacon entirely.
 
 **Maintainer dev-mode flag.** If `CCC_TELEMETRY_DEV_MODE=1` is set,
-the beacon adds a `dev: true` field that the worker persists as an
-`is_dev=1` marker on the row. Public stats then filter these rows
-out so the maintainer's own frequent restarts do not inflate the
-boot / distinct-IP counts on the public page. The flag adds no
-identity — it only says "not-a-real-user, exclude from the totals."
+**both** the beacon and the opt-in daily ping add a `dev: true` field
+that the worker persists as an `is_dev=1` marker on the row. The public
+stats page then reports every user count twice, with and without those
+rows, so the maintainer's own machine is never silently counted as a
+user. The flag adds no identity — it only says "not-a-real-user, keep
+me out of the user totals."
 
 If you are uneasy about the beacon despite it carrying no identity,
 set `CCC_TELEMETRY_DISABLED=1` before launching `server.py` / the
-`.app` / `./run.sh`; it kills both the daily ping and the boot beacon.
+`.app` / `./run.sh`; it kills both the daily ping and the daily beacon.
 
 ## Landing-page download clicks
 
@@ -223,7 +239,7 @@ All under `~/.config/claude-command-center/` (mode `0700`):
 ## Endpoints
 
 - Daily opt-in ping: `POST https://telemetry.claude-command-center.workers.dev/v1/ping`.
-- Anonymous open beacon (once per boot, no identity): `POST https://telemetry.claude-command-center.workers.dev/v1/open`.
+- Anonymous open beacon (at most once per UTC day, no identity): `POST https://telemetry.claude-command-center.workers.dev/v1/open`.
 - Landing-page download click (empty body, no identity): `POST https://telemetry.claude-command-center.workers.dev/v1/download`.
 - Override: set `CCC_TELEMETRY_ENDPOINT=<url>`. The override is applied
   to **both** endpoints (`/v1/ping` is replaced with `/v1/open` for the
