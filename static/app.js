@@ -10519,6 +10519,14 @@
     const pending = { text, sid, paneId: paneId || activePaneId(), conversationId: currentConversation,
       element: null, list: null, entry: null };
     const $view = getConvViewForPane(paneId) || getConvView();
+    const inlinePane = $view && $view.closest('.conv-pane');
+    const nativeMessageId = inlinePane && window.CCCCodexClient
+      && window.CCCCodexClient.appendInlinePendingUserMessage?.(inlinePane, text);
+    if (nativeMessageId) {
+      pending.nativeMessageId = nativeMessageId;
+      if (sid) markSessionSending(sid);
+      return pending;
+    }
     if ($view) {
       const pendingDiv = document.createElement('div');
       const pendingSteerHtml = userMessageSteerHtml(text, null, null);
@@ -10599,6 +10607,10 @@
 
   function removePendingSendEcho(pending) {
     if (!pending) return;
+    if (pending.nativeMessageId) {
+      const pane = convPaneElById(pending.paneId || activePaneId());
+      window.CCCCodexClient?.removeInlinePendingUserMessage?.(pane, pending.nativeMessageId);
+    }
     if (pending.element && pending.element.parentNode) {
       pending.element.parentNode.removeChild(pending.element);
     }

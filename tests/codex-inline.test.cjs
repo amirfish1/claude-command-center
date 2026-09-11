@@ -26,6 +26,31 @@ test('native content occupies the existing transcript grid area with the origina
  assert.equal(result.parent,true);assert.equal(result.composer,true);assert.equal(result.draft,'Draft stays here');assert.equal(result.rail,true);assert.notEqual(result.railDisplay,'none');assert.equal(result.newComposer,0);assert.equal(result.brand,false);assert.match(result.slot,/conv/);assert.equal(result.roots,0);
  }finally{await page.close()}
 });
+test('an inline pending user message stays before the completed native response',async()=>{
+ const page=await fixture();try{
+  const result=await page.evaluate(async()=>{
+   const pane=document.querySelector('.conv-pane');
+   await window.CCCCodexClient.attachInline({paneEl:pane,viewEl:pane.querySelector('.conversations-view'),threadId:'one',repoPath:'/repo'});
+   window.CCCCodexClient.appendInlinePendingUserMessage(pane,'I need an option around $200.');
+   return Array.from(pane.querySelectorAll('.codex-client-message')).map(row=>({
+    user:row.classList.contains('is-user'),text:row.textContent.trim()
+   }));
+  });
+  assert.deepEqual(result,[
+   {user:true,text:'I need an option around $200.'},
+   {user:false,text:'AnswerNative answer'},
+  ]);
+ }finally{await page.close()}
+});
+test('the shared composer delegates an inline Codex echo to the native turn',()=>{
+ const app=fs.readFileSync('static/app.js','utf8');
+ const start=app.indexOf('  function appendPendingSendEcho(');
+ const end=app.indexOf('\n  function removePendingSendEcho(',start);
+ assert.ok(start>=0&&end>start,'pending-send helper found');
+ const helper=app.slice(start,end);
+ assert.match(helper,/appendInlinePendingUserMessage\?\.\(inlinePane, text\)/);
+ assert.match(helper,/if \(nativeMessageId\)/);
+});
 test('split panes retain independent native clients and selection clears only its own transcript',async()=>{
  const page=await fixture();try{
  const result=await page.evaluate(async()=>{

@@ -31,6 +31,7 @@
     activeRead: null, readRefreshTimer: null, readRefreshInFlight: false, readRefreshQueued: false,
     renderScheduled: false, visibilityHandler: null, composerSync: null, previousDisplay: new Map(),
     mediaController: null, mediaCleanup: Promise.resolve(), mediaCleanupBlocked: false,
+    inlinePendingUserMessages: [],
   };
 
   function el(tag, className, text) {
@@ -1024,8 +1025,17 @@
     }
     const turns = state.thread && Array.isArray(state.thread.turns) ? state.thread.turns : [];
     if (!turns.length) host.append(el('div', 'codex-client-empty', state.connected ? 'Start the conversation below.' : 'Connecting to this task…'));
-    turns.forEach(turn => {
+    turns.forEach((turn, turnIndex) => {
       const section = el('section', 'codex-client-turn'); section.dataset.turnId = turn.id || '';
+      // The shared CCC composer can receive a follow-up before Codex's next
+      // thread snapshot arrives. Keep that optimistic user message inside the
+      // newest native turn, ahead of its answer, rather than as a sibling
+      // below the complete transcript.
+      if (state.context?.inline && turnIndex === turns.length - 1) {
+        state.inlinePendingUserMessages.forEach(message => {
+          section.append(renderItem({type:'userMessage', id:message.id, text:message.text}));
+        });
+      }
       (turn.items || []).forEach(item => {
         const node = renderItem(item);
         if (openKeys.has(node.dataset.itemKey)) { if (node.matches('details')) node.open = true; else node.classList.add('open'); }
@@ -1037,6 +1047,13 @@
       if (state.context?.inline && typeof window.CCCCodexGroupSteps === 'function') window.CCCCodexGroupSteps(section);
       host.append(section);
     });
+    if (!turns.length && state.context?.inline && state.inlinePendingUserMessages.length) {
+      const section = el('section', 'codex-client-turn');
+      state.inlinePendingUserMessages.forEach(message => {
+        section.append(renderItem({type:'userMessage', id:message.id, text:message.text}));
+      });
+      host.append(section);
+    }
     if (state.activity.length && !state.context?.inline) {
       const recent = el('details', 'codex-client-event-log'); recent.append(el('summary', '', 'Recent activity'));
       state.activity.slice(-12).forEach(event => recent.append(
@@ -1477,7 +1494,14 @@
     state.generation = data.generation !== undefined ? data.generation : state.generation;
     state.eventCursor = data.cursor !== undefined ? data.cursor : state.eventCursor;
     state.connected = !!data.connected;
-    if (data.thread !== undefined) state.thread = data.thread;
+    if (data.thread !== undefined) {
+      state.thread = data.thread;
+      const nativeUserTexts = new Set();
+      (state.thread?.turns || []).forEach(turn => (turn.items || []).forEach(item => {
+        if (/^user_?message$/i.test(itemKind(item))) nativeUserTexts.add(textFrom(item).trim());
+      }));
+      state.inlinePendingUserMessages = state.inlinePendingUserMessages.filter(message => !nativeUserTexts.has(message.text));
+    }
     if (Array.isArray(data.requests)) state.requests = data.requests;
     if (includeHistoryCursor) state.historyCursor = data.next_cursor || null;
     updateChrome(); renderTurns(); renderRequests(); state.composerSync?.();
@@ -1646,7 +1670,7 @@
     context = Object.assign({}, typeof window.CCCCodexClientContext === 'function' ? window.CCCCodexClientContext() : {}, context || {});
     if (!context.threadId || !context.repoPath) throw new Error('Open a Codex conversation with a known repository first.');
     state.closed = false; state.context = context; state.requestToken++; state.schemas = new Map();
-    state.thread = null; state.requests = []; state.generation = null; state.eventCursor = null; state.historyCursor = null; state.activity = []; state.pollFailures = 0;
+    state.thread = null; state.requests = []; state.generation = null; state.eventCursor = null; state.historyCursor = null; state.activity = []; state.pollFailures = 0; state.inlinePendingUserMessages = [];
     state.didInitialRender = false;
     state.root = mount(context);
     state.visibilityHandler = () => { if (document.hidden && !mediaActive()) { state.pollAbort?.abort(); window.clearTimeout(state.pollTimer); } else { loadState().catch(() => {}); schedulePoll(0); } };
@@ -1682,7 +1706,7 @@
     state.context?.paneEl?.classList.remove('codex-client-open');
     state.previousDisplay.forEach((display, node) => { if (node && node.isConnected) node.style.display = display; });
     state.previousDisplay.clear(); state.root = null; state.context = null; state.generationPromise = null;
-    state.composerSync = null; state.composerOptionsSync = null; state.composerModels = []; state.composerAttachment = null;
+    state.composerSync = null; state.composerOptionsSync = null; state.composerModels = []; state.composerAttachment = null; state.inlinePendingUserMessages = [];
     state.activeRead = null; state.readRefreshInFlight = false; state.readRefreshQueued = false;
     state.activeSurface = 'conversation'; state.activeGroup = ''; state.query = ''; state.toolsOpen = false;
     state.mutationLocks.clear(); state.responseLocks.clear();
@@ -1759,9 +1783,26 @@
     } catch (error) { showError('Media controls could not start: ' + conciseError(error)); }
   }
 
+  function appendInlinePendingUserMessage(text) {
+    const value = String(text || '').trim();
+    if (!state.context?.inline || !value) return '';
+    const message = {id:'pending-user-' + uuid(), text:value};
+    state.inlinePendingUserMessages.push(message);
+    renderTurns();
+    return message.id;
+  }
+
+  function removeInlinePendingUserMessage(id) {
+    const index = state.inlinePendingUserMessages.findIndex(message => message.id === id);
+    if (index < 0) return false;
+    state.inlinePendingUserMessages.splice(index, 1);
+    renderTurns();
+    return true;
+  }
+
   return {
     open, close, handleEvents,
-    __testing: { createForm, shapePendingResponse, renderItem, runOperation, executeAction, pollNow, loadEarlier, state },
+    __testing: { createForm, shapePendingResponse, renderItem, runOperation, executeAction, pollNow, loadEarlier, state, appendInlinePendingUserMessage, removeInlinePendingUserMessage },
   };
   }
 
@@ -1809,6 +1850,12 @@
     const entry = entryFor(pane);
     return !!(entry && (entry.pending || entry.client.__testing.state.root?.isConnected));
   }
+  function appendInlinePendingUserMessage(pane, text) {
+    return entryFor(pane)?.client.__testing.appendInlinePendingUserMessage(text) || '';
+  }
+  function removeInlinePendingUserMessage(pane, id) {
+    return !!entryFor(pane)?.client.__testing.removeInlinePendingUserMessage(id);
+  }
   window.addEventListener('ccc:conversation-selected', event => {
     const selected = event.detail || {};
     for (const [pane,entry] of inlineClients) {
@@ -1830,6 +1877,7 @@
     return {ok:true, via:'codex-inline'};
   }
   window.CCCCodexClient = {...defaultClient, attachInline, isInlineActive, interruptInline,
+    appendInlinePendingUserMessage, removeInlinePendingUserMessage,
     inlineState: pane => entryFor(pane)?.client.__testing.state};
   // Engine discovery can finish after either script loading or first paint.
   // Watch only pane identity classes, not the transcript's token mutations.
