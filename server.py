@@ -21237,6 +21237,42 @@ def conversation_transcript_path(conversation_id, repo_path=None):
     if not session_id:
         return ""
     try:
+        # Kimi's rendered conversation is backed by CCC's ACP transcript,
+        # not the CLI wire log that the session list may have discovered.
+        # Return that same persisted source so the session-ID copy affordance
+        # remains useful for live ACP sessions too.
+        engine = _detect_session_engine(session_id)
+        if engine == "kimi":
+            path = _acp_transcript_path("kimi", session_id)
+            return str(path) if path and path.is_file() else ""
+        if engine == "grok":
+            path = _grok_conversation_source(session_id)
+            return str(path) if path and path.is_file() else ""
+        if engine == "devin":
+            path = (
+                _devin_cli_db_path()
+                if _is_devin_cli_session(session_id)
+                else _devin_detail_cache_path(session_id)
+            )
+            return str(path) if path and path.is_file() else ""
+        if engine == "gemini":
+            path = _resolve_gemini_chat_path(session_id)
+            return str(path) if path and path.is_file() else ""
+        if engine == "aider":
+            path = _aider_session_path(session_id)
+            return str(path) if path and path.is_file() else ""
+        if engine == "copilot":
+            path = _copilot_events_path(session_id)
+            return str(path) if path and path.is_file() else ""
+        if engine == "copilotchat":
+            path = _copilotchat_session_file(session_id)
+            return str(path) if path and path.is_file() else ""
+        if engine == "hermes":
+            path = _hermes_db_for_session(session_id)
+            return str(path) if path and path.is_file() else ""
+        if engine in ("kilo", "opencode"):
+            path = _kilo_db_path() if engine == "kilo" else _opencode_db_path()
+            return str(path) if path and path.is_file() else ""
         path, _parser = _resolve_conversation_reader(session_id, repo_path=repo_path)
     except Exception:
         return ""

@@ -47,6 +47,79 @@ class TestConversationTranscriptPath(unittest.TestCase):
                     server.conversation_transcript_path("session-id"), str(expected)
                 )
 
+    def test_resolves_kimi_acp_transcript_for_copy_affordance(self):
+        """Kimi's live ACP view must copy its own persisted transcript path."""
+        server = importlib.import_module("server")
+        with tempfile.TemporaryDirectory() as tmpdir:
+            expected = pathlib.Path(tmpdir) / "kimi-acp.jsonl"
+            expected.touch()
+            with (
+                mock.patch.object(server, "_detect_session_engine", return_value="kimi"),
+                mock.patch.object(server, "_acp_transcript_path", return_value=expected),
+            ):
+                self.assertEqual(
+                    server.conversation_transcript_path("session-kimi"), str(expected)
+                )
+
+    def test_resolves_grok_transcript_for_copy_affordance(self):
+        """Grok's viewer source is a store file or ACP transcript, not Claude JSONL."""
+        server = importlib.import_module("server")
+        with tempfile.TemporaryDirectory() as tmpdir:
+            expected = pathlib.Path(tmpdir) / "grok-updates.jsonl"
+            expected.touch()
+            with (
+                mock.patch.object(server, "_detect_session_engine", return_value="grok"),
+                mock.patch.object(server, "_grok_conversation_source", return_value=expected),
+            ):
+                self.assertEqual(
+                    server.conversation_transcript_path("session-grok"), str(expected)
+                )
+
+    def test_resolves_devin_cli_database_for_copy_affordance(self):
+        """Devin CLI transcripts live in its sessions database, not a JSONL file."""
+        server = importlib.import_module("server")
+        with tempfile.TemporaryDirectory() as tmpdir:
+            expected = pathlib.Path(tmpdir) / "sessions.db"
+            expected.touch()
+            with (
+                mock.patch.object(server, "_detect_session_engine", return_value="devin"),
+                mock.patch.object(server, "_is_devin_cli_session", return_value=True),
+                mock.patch.object(server, "_devin_cli_db_path", return_value=expected),
+            ):
+                self.assertEqual(
+                    server.conversation_transcript_path("devincli-session"), str(expected)
+                )
+
+    def test_resolves_devin_cloud_cache_for_copy_affordance(self):
+        """A cached Devin cloud session detail is the local transcript source."""
+        server = importlib.import_module("server")
+        with tempfile.TemporaryDirectory() as tmpdir:
+            expected = pathlib.Path(tmpdir) / "devin-session.json"
+            expected.touch()
+            with (
+                mock.patch.object(server, "_detect_session_engine", return_value="devin"),
+                mock.patch.object(server, "_is_devin_cli_session", return_value=False),
+                mock.patch.object(server, "_devin_detail_cache_path", return_value=expected),
+            ):
+                self.assertEqual(
+                    server.conversation_transcript_path("devin-cloud-session"), str(expected)
+                )
+
+    def test_resolves_database_backed_engine_transcript_paths_for_copy(self):
+        """Store-backed engines expose the exact local artifact CCC reads."""
+        server = importlib.import_module("server")
+        with tempfile.TemporaryDirectory() as tmpdir:
+            expected = pathlib.Path(tmpdir) / "engine.db"
+            expected.touch()
+            for engine, resolver in (("kilo", "_kilo_db_path"), ("opencode", "_opencode_db_path")):
+                with (
+                    mock.patch.object(server, "_detect_session_engine", return_value=engine),
+                    mock.patch.object(server, resolver, return_value=expected),
+                ):
+                    self.assertEqual(
+                        server.conversation_transcript_path(f"{engine}-session"), str(expected)
+                    )
+
 
 class TestSpawnStreamBackoff(unittest.TestCase):
     def test_idle_backoff_caps_before_exponentiation_can_overflow(self):

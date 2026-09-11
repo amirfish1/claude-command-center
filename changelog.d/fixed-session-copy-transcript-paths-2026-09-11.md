@@ -1,0 +1,1 @@
+- Session ID copies now include the resolved transcript source for Kimi, Grok, Devin, and other local engines.
