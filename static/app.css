@@ -6961,15 +6961,17 @@
   .conv-item:hover:not(.active) .conv-hover-meta-row .conv-session-origin-chip.is-parent,
   .conv-item:hover:not(.active) .conv-hover-meta-row .conv-session-origin-chip.is-successor,
   .conv-item:hover:not(.active) .conv-hover-meta-row .conv-session-origin-chip.is-grandparent { display: inline-flex; }
-  /* CCC-865: CCC-864 kept the origin chip visible on hover but the row
-     around it still switched to the absolute single-line overlay above,
-     collapsing the normal two-row layout back to one line under the
-     cursor. Rows with a parent/grandparent chip should stay in normal
-     flow on hover instead, same treatment as the current-sessions
-     exception below (CCC-843). */
-  .conv-item:hover:not(.active) .conv-hover-meta-row:has(.conv-session-origin-chip.is-parent),
-  .conv-item:hover:not(.active) .conv-hover-meta-row:has(.conv-session-origin-chip.is-successor),
-  .conv-item:hover:not(.active) .conv-hover-meta-row:has(.conv-session-origin-chip.is-grandparent) {
+  /* CCC-865 (narrowed): only the successor chip is already visible at rest
+     (see the :not(:hover) rule below), so keeping it in normal flow on
+     hover is a no-op — no reflow, nothing to fix. Parent/grandparent chips
+     used to get this same normal-flow treatment, but those rows show
+     NOTHING at rest, so "normal flow on hover" meant the row visibly grew
+     a second line every time the cursor passed over it — the row-height
+     jump reported against the sidebar list. They now fall through to the
+     general absolute-overlay hover rule above instead (which already
+     reveals the parent/grandparent chip via the child-visibility rule
+     above it, just without pushing layout). */
+  .conv-item:hover:not(.active) .conv-hover-meta-row:has(.conv-session-origin-chip.is-successor) {
     position: static;
     right: auto;
     top: auto;
