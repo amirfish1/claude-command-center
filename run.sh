@@ -563,7 +563,7 @@ ensure_watchtower() {
   # fresh `brew upgrade`/Sparkle/`git pull` install pick up WatchTower right
   # away instead of waiting out the rest of today's rate-limit window — see
   # wt_ccc_version_changed in install-watchtower.sh, which owns this marker.
-  if "$PYTHON" -c 'import watchtower' >/dev/null 2>&1; then
+  if "$PYTHON" -c 'import watchtower.queue' >/dev/null 2>&1; then
     local marker="$HOME/.claude/command-center/watchtower-last-check"
     local version_marker="$HOME/.claude/command-center/watchtower-last-ccc-version"
     if [ -f "$marker" ] && [ -n "$(find "$marker" -mtime -1 2>/dev/null)" ] \
@@ -668,18 +668,7 @@ worker = data.get("worker") if isinstance(data.get("worker"), dict) else {}
 sv = "absent" if "server_version" not in worker else (worker.get("server_version") or "")
 sh = worker.get("server_content_hash") or ""
 print(sv, sh, end=" ")
-' 2>/dev/null; "$PYTHON" -c '
-import hashlib, pathlib, re, sys
-try:
-    p = pathlib.Path(sys.argv[1]).resolve()
-    text = p.read_text(encoding="utf-8")
-    m = re.search(r"^__version__\s*=\s*\"([^\"]+)\"", text, re.M)
-    version = m.group(1) if m else ""
-    h = hashlib.sha256(text.encode("utf-8")).hexdigest()[:16]
-    print(version + " " + h, end="")
-except Exception:
-    print(" ", end="")
-' "$HERE/server.py")
+' 2>/dev/null; "$PYTHON" "$HERE/ccc_server/content_hash.py" "$HERE")
 EOF
       worker_stale_version=0
       worker_stale_hash=0

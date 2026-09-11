@@ -633,7 +633,16 @@ def _run_engine_updates_once():
 def _engine_maintenance_once():
     catalog_status = _core._refresh_claude_model_catalog()
     update_status = _core._run_engine_updates_once()
-    return {"updates": update_status, "catalog": catalog_status}
+    # Continuous backstop for run.sh's one-shot boot-time worker-compat check
+    # (see server._worker_compat_maintenance_check): retires an idle worker
+    # still running stale/incompatible code, on this same hourly cadence,
+    # instead of waiting for the next full dashboard restart to catch it idle.
+    worker_compat_status = _core._worker_compat_maintenance_check()
+    return {
+        "updates": update_status,
+        "catalog": catalog_status,
+        "worker_compat": worker_compat_status,
+    }
 
 
 def _start_engine_update_pass():
@@ -2120,9 +2129,11 @@ def resume_session_hermes(session_id, text):
         if s.get("engine") == "hermes" and s.get("resumed_sid") == session_id:
             try:
                 if _core._poll_spawn_entry(s) is None:
-                    with _core._pending_resume_lock:
-                        _core._pending_resume_queue.setdefault(session_id, []).append(text)
-                    _core._save_pending_inputs()
+                    queued = _core._apply_pending_input_operations(session_id, [{
+                        "field": "resume", "action": "append_tail", "value": text,
+                    }])
+                    if not queued.get("ok"):
+                        return {"ok": False, "error": "failed to persist queued Hermes input"}
                     return {
                         "ok": True,
                         "queued": True,

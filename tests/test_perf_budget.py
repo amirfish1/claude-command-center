@@ -211,19 +211,28 @@ def test_archive_list_source_avoids_copying_full_snapshot(monkeypatch):
         return expected, True, 7
 
     monkeypatch.setattr(server, "_archive_serve_rows_versioned", serve)
+    monkeypatch.setattr(server, "_archive_list_body_ver", lambda key, rows, extra: 7)
+    # The in-memory overlays (ACP, Devin CLI) legitimately append rows when
+    # this machine has live sessions; keep the copy assertion about the
+    # snapshot itself, not about the host's session state.
+    monkeypatch.setattr(server, "_archive_overlay_acp_sessions", lambda rows: [])
+    monkeypatch.setattr(server, "_archive_overlay_devin_cli_sessions", lambda rows, now=None: [])
+    monkeypatch.setattr(server, "_archive_overlay_wt_worker_sessions", lambda rows: [])
     options = {"include_prs": False}
 
-    rows, from_cache = server._archive_list_source_rows_cached(options)
+    rows, from_cache, body_ver = server._archive_list_source_rows_cached(options)
 
     assert rows is expected
     assert from_cache is True
-    fresh_rows, fresh_from_cache = server._archive_list_source_rows_cached(
+    assert body_ver == 7
+    fresh_rows, fresh_from_cache, fresh_body_ver = server._archive_list_source_rows_cached(
         options,
         force_refresh=True,
     )
 
     assert fresh_rows is expected
     assert fresh_from_cache is True
+    assert fresh_body_ver == 7
     assert calls == [(
         server._archive_response_cache_key(**options),
         options,
@@ -245,7 +254,7 @@ def test_archive_list_http_route_projects_cached_rows(monkeypatch):
             "session_id": "trashed-row", "engine": "claude", "mtime": 2_000_000,
             "archived": True, "trashed": True, "all_lane_override": "messages",
             "last_assistant_text": "not returned",
-        }], True),
+        }], True, 7),
     )
     httpd = server.http.server.ThreadingHTTPServer(("127.0.0.1", 0), server.CommandCenterHandler)
     thread = threading.Thread(target=httpd.serve_forever, daemon=True)
@@ -3067,7 +3076,7 @@ def test_system_services_no_subprocess_on_warm_cache(monkeypatch):
 
     assert payload["ok"] is True
     assert {row["id"] for row in payload["services"]} == {
-        "dashboard", "worker", "watchtower", "app_server"
+        "dashboard", "worker", "watchtower", "app_server", "kimi_kap"
     }
     assert health_calls == [], (
         "build_system_services called build_system_health — that runs a ps+lsof "
@@ -3213,3 +3222,34 @@ def test_system_services_does_not_probe_watchtower_api_synchronously(monkeypatch
 
     server._watchtower_forget_api_probe()
     server._system_services_cache = {"ts": 0.0, "payload": None}
+
+
+def test_trash_conversation_execution_time_under_100ms(tmp_path, monkeypatch):
+    """Trashing a conversation must complete in <100ms."""
+    server._session_graph.load()
+    sid = "test-sid-perf-" + uuid.uuid4().hex[:8]
+
+    # Run through the backend trash flow
+    t0 = time.perf_counter()
+    res = server._set_conversation_trashed(sid, True)
+    cascaded = res.get("cascaded") or []
+    mutated = {sid, *cascaded}
+    server._restamp_archive_serve_cache_after_mutation(
+        archived_set=mutated,
+        trashed_set=mutated,
+        mutated_sids=mutated,
+    )
+    duration_ms = (time.perf_counter() - t0) * 1000
+    assert duration_ms < 100.0, f"Trashing session took {duration_ms:.2f}ms, expected <100ms"
+
+    # Clean up
+    server._set_conversation_trashed(sid, False)
+
+
+def test_ui_trash_is_optimistic():
+    """UI conv-trash-btn click handler must optimistically update before awaiting network."""
+    app_js = (Path(__file__).parent.parent / "static" / "app.js").read_text(encoding="utf-8")
+    assert "item.style.display = 'none'" in app_js, "Trash button must hide row immediately"
+    assert "setOptimisticOverride(sessionId, { archived: targetArchived, trashed: wantTrashed })" in app_js
+    assert "requestAnimationFrame(() => {" in app_js, "Sidebar re-render must be scheduled without blocking frame"
+

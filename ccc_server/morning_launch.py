@@ -8,7 +8,9 @@ in server.py are reached via `_core` at call time."""
 
 from __future__ import annotations
 
+from datetime import datetime, timezone
 from pathlib import Path
+import collections
 import json
 import math
 import os
@@ -19,6 +21,12 @@ import threading
 import time
 
 from ccc_server import core as _core
+from ccc_server import github_quota as _github_quota
+
+# How many trailing assistant turns /usage ships for the status-rail
+# per-turn token graph. Older turns are noise in the rail; the full history
+# stays in the transcript.
+USAGE_TURN_SERIES_MAX = 30
 
 # ---------------------------------------------------------------------------
 # Morning launch — spawn-or-resume for a strategy's Claude session.
@@ -1079,52 +1087,43 @@ def _worktree_is_dirty(path):
         return False
 
 
-_OPEN_PRS_CACHE = {}  # repo_top -> (ts, list[dict])
-_OPEN_PRS_TTL = 30.0
+_OPEN_PRS_CACHE = {}  # legacy alias; the live cache is ccc_server/github_quota.py
 
 
 def _open_prs_cached(repo_top):
-    """Return open PRs for a repo via `gh pr list`, cached for 30s.
+    """Return open PRs for a repo, served from the shared GraphQL-aware cache.
 
-    Each entry includes PR metadata plus status checks. Empty list on
-    any failure (no `gh`, no GitHub remote, no auth, network blip) — the
-    worktrees modal must keep working without GitHub access.
+    `gh pr list` with `statusCheckRollup` is the most expensive GraphQL call
+    CCC makes (2.9 points, measured -- lane W6-1). It used to live behind a
+    30s memory-only cache here AND a second one in ccc_server/fleet.py, with
+    no single-flight, so the worktrees modal and a fleet scan each paid full
+    price and concurrent requests multiplied it. Both now share
+    github_quota.open_prs: one TTL (CCC_GH_PR_TTL_S, default 300s), one
+    in-flight fetch per repo.
+
+    Empty list on any failure (no `gh`, no GitHub remote, no auth, network
+    blip) -- the worktrees modal must keep working without GitHub access.
     """
     if not repo_top:
         return []
-    now = time.time()
-    cached = _core._OPEN_PRS_CACHE.get(repo_top)
-    if cached and now - cached[0] < _OPEN_PRS_TTL:
-        return cached[1]
-    prs = []
-    try:
-        r = subprocess.run(
-            ["gh", "pr", "list", "--state", "open", "--limit", "100",
-             "--json", "number,title,headRefName,isDraft,url,updatedAt,createdAt,statusCheckRollup,mergeable,reviewDecision"],
-            cwd=repo_top, capture_output=True, text=True, timeout=8,
-        )
-        if r.returncode == 0 and r.stdout.strip():
-            data = json.loads(r.stdout)
-            if isinstance(data, list):
-                prs = [
-                    {
-                        "number": int(p.get("number") or 0),
-                        "title": p.get("title") or "",
-                        "headRefName": p.get("headRefName") or "",
-                        "isDraft": bool(p.get("isDraft")),
-                        "url": p.get("url") or "",
-                        "updatedAt": p.get("updatedAt") or "",
-                        "createdAt": p.get("createdAt") or "",
-                        "statusCheckRollup": p.get("statusCheckRollup") or [],
-                        "mergeable": p.get("mergeable") or "",
-                        "reviewDecision": p.get("reviewDecision") or "",
-                    }
-                    for p in data if p.get("number")
-                ]
-    except (subprocess.SubprocessError, OSError, ValueError):
-        prs = []
-    _core._OPEN_PRS_CACHE[repo_top] = (now, prs)
-    return prs
+    prs, _error = _github_quota.open_prs(repo_top, checks=True, timeout=8)
+    out = []
+    for p in prs:
+        if not p.get("number"):
+            continue
+        out.append({
+            "number": int(p.get("number") or 0),
+            "title": p.get("title") or "",
+            "headRefName": p.get("headRefName") or "",
+            "isDraft": bool(p.get("isDraft")),
+            "url": p.get("url") or "",
+            "updatedAt": p.get("updatedAt") or "",
+            "createdAt": p.get("createdAt") or "",
+            "statusCheckRollup": p.get("statusCheckRollup") or [],
+            "mergeable": p.get("mergeable") or "",
+            "reviewDecision": p.get("reviewDecision") or "",
+        })
+    return out
 
 
 # path -> (last_session_event_ts, dirty, polled_at). The sidebar list
@@ -1713,6 +1712,9 @@ def extract_session_timeline(session_id):
 # checked 2026-07. If rates change, edit here. Rates are
 # (input_per_mtok, cache_write, cache_read, output_per_mtok).
 _MODEL_RATES = {
+    # Fable 5.1 retains Fable's input/output rates but discounts cache hits
+    # below both Fable 5 and Opus 5 (Anthropic pricing, 2026-09).
+    "claude-fable-5-1": (10.00, 12.50, 0.25, 50.00),
     "claude-fable-5": (10.00, 12.50, 1.00, 50.00),
     "claude-sonnet-5": (2.00, 2.50, 0.20, 10.00),
     "claude-opus-5": (5.00, 6.25, 0.50, 25.00),
@@ -1723,6 +1725,8 @@ _MODEL_RATES = {
     "claude-sonnet-4-5-20250514": (3.00, 3.75, 0.30, 15.00),
     "claude-sonnet-4-20250514": (3.00, 3.75, 0.30, 15.00),
     "claude-haiku-4-5-20251001": (1.00, 1.25, 0.10, 5.00),
+    # https://developers.openai.com/api/docs/models/gpt-6-astra (2026-09).
+    "gpt-6-astra": (10.00, 0.00, 1.00, 50.00),
     "gpt-5.5": (5.00, 0.00, 0.50, 30.00),
     # GPT-5.6 cache writes are 1.25x input and cache reads are 10% of input.
     # https://openai.com/index/gpt-5-6/ (checked 2026-08)
@@ -1784,7 +1788,7 @@ def _rates_for_model_known(model):
 
 _SESSION_COST_FALLBACK_MODELS = {
     "claude": "claude-sonnet-4-6",
-    "codex": "gpt-5.5",
+    "codex": "gpt-5.6-terra",
     "kimi": "kimi-code/k3",
 }
 
@@ -2145,6 +2149,10 @@ def _extract_kimi_usage(session_id):
         "cost_breakdown_usd": {"input": 0.0, "cache_creation": 0.0,
                                "cache_read": 0.0, "output": 0.0},
     }
+    # Per-turn tail for the status-rail column graph — same shape as Claude's
+    # turn_series (raw counts; the client applies the cache-read discount).
+    # Kimi's `usage.record` events are per-LLM-call, so one entry per bar.
+    turn_series = collections.deque(maxlen=USAGE_TURN_SERIES_MAX)
     try:
         session_dir = (_core._kimi_session_index().get(session_id) or {}).get("session_dir") or ""
         wire = Path(session_dir) / "agents" / "main" / "wire.jsonl" if session_dir else None
@@ -2168,12 +2176,30 @@ def _extract_kimi_usage(session_id):
                     result["peak_input_tokens"] = max(result["peak_input_tokens"], count)
                 elif etype == "usage.record":
                     usage = ev.get("usage") or {}
-                    result["total_input_tokens"] += int(usage.get("inputOther") or 0)
-                    result["total_cache_read_tokens"] += int(usage.get("inputCacheRead") or 0)
-                    result["total_cache_creation_tokens"] += int(usage.get("inputCacheCreation") or 0)
-                    result["total_output_tokens"] += int(usage.get("output") or 0)
+                    fresh = int(usage.get("inputOther") or 0)
+                    cached = int(usage.get("inputCacheRead") or 0)
+                    created = int(usage.get("inputCacheCreation") or 0)
+                    output = int(usage.get("output") or 0)
+                    result["total_input_tokens"] += fresh
+                    result["total_cache_read_tokens"] += cached
+                    result["total_cache_creation_tokens"] += created
+                    result["total_output_tokens"] += output
                     if not result["model"]:
                         result["model"] = str(ev.get("model") or "")
+                    window = fresh + cached + created
+                    if window or output:
+                        ts = ""
+                        ms = ev.get("time")
+                        if isinstance(ms, (int, float)) and ms > 0:
+                            ts = datetime.fromtimestamp(
+                                ms / 1000, tz=timezone.utc
+                            ).isoformat().replace("+00:00", "Z")
+                        turn_series.append({
+                            "ts": ts,
+                            "tokens_in": window,
+                            "tokens_cached": cached,
+                            "tokens_out": output,
+                        })
                 elif etype == "context.append_loop_event":
                     loop = ev.get("event") or {}
                     if loop.get("type") == "step.end" and isinstance(loop.get("usage"), dict):
@@ -2193,6 +2219,7 @@ def _extract_kimi_usage(session_id):
                 result["peak_input_tokens"], result["latest_input_tokens"])
     except OSError:
         pass
+    result["turn_series"] = list(turn_series)
     result.update(_session_usage_cost("kimi", result.get("model"), result))
     return result
 
@@ -2300,6 +2327,11 @@ def extract_session_usage(session_id):
     # Claude Code builds also include `postTokens`; use that as the live value
     # until the next assistant turn writes a normal `usage` block.
     compact_count = 0
+    # Per-turn tail for the status-rail column graph: one entry per billed
+    # assistant message (same message.id dedupe as the totals above), newest
+    # last. Raw counts only — the client applies the same cache-read discount
+    # it uses for the per-turn chip, so a bar equals the chip's number.
+    turn_series = collections.deque(maxlen=USAGE_TURN_SERIES_MAX)
     try:
         with open(jsonl, "r") as f:
             for line in f:
@@ -2386,6 +2418,13 @@ def extract_session_usage(session_id):
                     total_cr += tcr
                 if isinstance(tout, int):
                     total_out += tout
+                if window or tout:
+                    turn_series.append({
+                        "ts": ev.get("timestamp") or "",
+                        "tokens_in": window,
+                        "tokens_cached": tcr if isinstance(tcr, int) else 0,
+                        "tokens_out": tout if isinstance(tout, int) else 0,
+                    })
     except OSError:
         return _with_token_optimizer_quality({**empty, "model": model}, session_id)
 
@@ -2436,6 +2475,7 @@ def extract_session_usage(session_id):
         "live_context_source": "/context" if live_context else "",
         "engine": "claude",
         "override": override,
+        "turn_series": list(turn_series),
         "cost_usd": round(cost_total, 4),
         "cost_breakdown_usd": {
             "input": round(cost_in, 4),

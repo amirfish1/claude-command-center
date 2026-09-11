@@ -838,7 +838,11 @@ def test_inject_owned_mid_turn_transcript_growth_never_retires(
          mock.patch.object(server_mod, "resume_session_headless") as resume:
         result = server_mod._inject_text_into_session(sid, "follow up")
 
-    assert result == {"ok": True, "pid": entry["pid"], "via": "spawn-fifo"}
+    # Subset, not equality: inject results now also carry the CCC-1000 result
+    # contract. The claim under test is the transport and owning pid.
+    assert result.items() >= {
+        "ok": True, "pid": entry["pid"], "via": "spawn-fifo",
+    }.items()
     write.assert_called_once_with(entry, "follow up")
     stale.assert_not_called()
     retire.assert_not_called()
@@ -951,7 +955,10 @@ def test_control_plane_inject_forwards_explicit_queue_flag(server_mod):
             sid, "wait until next turn", force_queue=True
         )
 
-    assert result == {"ok": True, "queued": True}
+    # Subset, not equality: every inject result now also carries the CCC-1000
+    # result contract (contract/requested/effect/aborted/landed/transport).
+    # What this test is about is the queue flag being forwarded.
+    assert result.items() >= {"ok": True, "queued": True}.items()
     args = routed.call_args.args
     assert args[:2] == ("claude", "inject")
     assert args[2]["force_queue"] is True
@@ -974,7 +981,10 @@ def test_federated_inject_forwards_explicit_queue_flag(server_mod):
             force_queue=True,
         )
 
-    assert result == {"ok": True, "queued": True}
+    # Subset, not equality: every inject result now also carries the CCC-1000
+    # result contract (contract/requested/effect/aborted/landed/transport).
+    # What this test is about is the queue flag being forwarded.
+    assert result.items() >= {"ok": True, "queued": True}.items()
     proxy.assert_called_once_with("peer-node", "inject", {
         "session_id": sid,
         "text": "wait until next turn",

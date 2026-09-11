@@ -1,0 +1,1 @@
+- Preserve complete activity-log event names and multiline details while continuing to read older log records.

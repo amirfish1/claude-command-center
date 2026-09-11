@@ -150,6 +150,11 @@ class TestClassifyAttentionSessionCases(unittest.TestCase):
         self.assertEqual(item["priority"], 1)
         self.assertIn("Codex", item["where"])
         self.assertIn("Wake Codex", item["next_step"])
+        # The ticking age must be split out so the dashboard can patch it in
+        # place instead of rebuilding the whole conversation list every minute.
+        self.assertEqual(item["stale_tool_age_s"], 3700)
+        self.assertIn("{{stale_age}}", item["next_step"])
+        self.assertNotIn("for about", item["next_step"])
 
     def test_live_sidecar_waiting_is_priority_2(self):
         row = _session_row(is_live=True, sidecar_status="waiting")

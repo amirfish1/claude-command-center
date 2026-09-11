@@ -16,6 +16,7 @@ shaped like the GitHub backend's output (`github_repo` stamped on every row).
 import importlib
 import sys
 import time
+from unittest import mock
 
 
 def _load_server():
@@ -168,6 +169,93 @@ def test_watcher_starts_on_subscribe_and_retires_when_idle():
         time.sleep(0.05)
     assert qe._gh_watch["subscribers"] == 0
     assert qe._gh_watch["thread"] is None, "poller must not outlive its subscribers"
+
+
+def test_list_items_cached_fresh_bypasses_ttl_and_requests_fresh_kwarg():
+    """The queue panel's manual Refresh button (CCC visibility fixes): fresh=True
+    must skip the memo entirely and ask the engine for a real fetch, not the
+    stale-while-revalidate background thread."""
+    server = _load_server()
+    qe = sys.modules["ccc_server.queue_events"]
+    stub = _install_stub(server, _StubQueue([_gh_row("D-1")]))
+
+    qe._ux_fixes_list_cache.clear()
+    qe._ux_fixes_list_items_cached(None, None)
+    assert stub.fresh_calls == 0, "normal reads must not spend fresh= quota"
+
+    stub.rows.append(_gh_row("D-2"))
+    items = qe._ux_fixes_list_items_cached(None, None, fresh=True)
+    assert stub.fresh_calls == 1
+    assert {r["ref"] for r in items} == {"D-1", "D-2"}
+    entry = qe._ux_fixes_list_cache.get(("", ""))
+    assert entry is not None and time.time() - entry["ts"] < 5, (
+        "fresh=True must also rewrite the memo so subsequent polls see it"
+    )
+
+
+def test_list_items_cached_fresh_falls_back_without_fresh_kwarg():
+    server = _load_server()
+    qe = sys.modules["ccc_server.queue_events"]
+    legacy = _install_stub(server, _LegacyQueue([_LOCAL_ROW]))
+
+    qe._ux_fixes_list_cache.clear()
+    items = qe._ux_fixes_list_items_cached(None, None, fresh=True)
+    assert legacy.calls == 1, "must retry without the unsupported keyword"
+    assert {r["ref"] for r in items} == {"LOCAL-1"}
+
+
+def test_synced_at_reflects_the_serving_cache_entry():
+    server = _load_server()
+    qe = sys.modules["ccc_server.queue_events"]
+    _install_stub(server, _StubQueue([_gh_row("D-1")]))
+
+    qe._ux_fixes_list_cache.clear()
+    assert qe._ux_fixes_list_synced_at(None, None) is None, "nothing fetched yet"
+
+    qe._ux_fixes_list_items_cached(None, None)
+    synced = qe._ux_fixes_list_synced_at(None, None)
+    assert synced is not None and time.time() - synced < 5
+
+
+def test_github_sync_status_reports_rate_limit_state():
+    """Backs the queue panel's degraded-sync notice (CCC visibility fixes)."""
+    server = _load_server()
+    qe = sys.modules["ccc_server.queue_events"]
+
+    with mock.patch.object(qe, "github_rate_limited", return_value={
+        "rate_limited": True, "backoff_seconds": 42, "last_remaining": 0,
+    }):
+        status = qe._github_sync_status()
+    assert status["rate_limited"] is True
+    assert status["backoff_seconds"] == 42
+    assert status["retry_at"] is not None and status["retry_at"] > time.time()
+
+    with mock.patch.object(qe, "github_rate_limited", return_value={
+        "rate_limited": False, "backoff_seconds": 0, "last_remaining": 4800,
+    }):
+        status = qe._github_sync_status()
+    assert status["rate_limited"] is False
+    assert status["retry_at"] is None
+
+
+def test_compute_queues_health_carries_backend_and_github_repo_from_config():
+    """A queue's GH badge must survive a cold item cache (e.g. a GraphQL
+    quota outage): the config is the source of truth, not cached items."""
+    server = _load_server()
+    qe = sys.modules["ccc_server.queue_events"]
+    config = {
+        "BECKY-DESIGN": {
+            "auto_drain": True, "backend": "github",
+            "github_repo": "amirfish1/BYM-Finie", "repo_path": "/tmp/BYM",
+        },
+        "LOCAL": {"auto_drain": False, "repo_path": "/tmp/local"},
+    }
+    with mock.patch.object(server, "_wt_read_config", return_value=config):
+        rows = {r["queue"]: r for r in qe.compute_queues_health(health=[], wt_workers=[], items=[])}
+    assert rows["BECKY-DESIGN"]["backend"] == "github"
+    assert rows["BECKY-DESIGN"]["github_repo"] == "amirfish1/BYM-Finie"
+    assert rows["LOCAL"]["backend"] == ""
+    assert rows["LOCAL"]["github_repo"] == ""
 
 
 def test_sse_folds_remote_version_into_change_detection():

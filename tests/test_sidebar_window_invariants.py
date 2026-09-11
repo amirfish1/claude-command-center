@@ -133,3 +133,51 @@ def test_sidebar_uses_additive_list_endpoint_and_search_widens_history(app_js):
     assert "let archiveDataWindow = null;" in app_js
     assert "function _refreshArchiveWindow(value)" in app_js
     assert "refreshArchiveData({ staleOk: true, window: 'all' })" in app_js
+
+
+def _src_between(app_js, start_needle, end_needle):
+    start = app_js.index(start_needle)
+    end = app_js.index(end_needle, start + 1)
+    return app_js[start:end]
+
+
+def test_failed_conversations_list_fetch_does_not_return_empty_array(app_js):
+    """Abort/timeout/HTTP failure of /api/conversations/list must not look
+    like a successful empty archive.
+
+    Observed in service.out.log: AbortError → loadArchiveAll returned [] →
+    refreshArchiveData merged 0 rows → sidebar flashed "No conversations in
+    the last day" every few minutes. A failed poll has to return null so
+    the last good snapshot stays on screen.
+    """
+    src = _src_between(app_js, "async function loadArchiveAll", "async function loadCrossRepoIssues")
+    not_ok = re.search(r"if \(!r\.ok\) \{(?P<body>.*?)return (?P<ret>[^;]+);", src, re.S)
+    assert not_ok, "could not locate loadArchiveAll() HTTP not-ok return"
+    assert not_ok.group("ret").strip() == "null", (
+        "HTTP not-ok must return null (keep previous sidebar), not %s"
+        % not_ok.group("ret").strip()
+    )
+    caught = re.search(r"catch \(e\) \{(?P<body>.*?)return (?P<ret>[^;]+);", src, re.S)
+    assert caught, "could not locate loadArchiveAll() catch return"
+    assert caught.group("ret").strip() == "null", (
+        "fetch abort/throw must return null (keep previous sidebar), not %s"
+        % caught.group("ret").strip()
+    )
+
+
+def test_refresh_archive_data_keeps_previous_rows_on_failed_fetch(app_js):
+    """refreshArchiveData must not assign archiveData from a failed/empty
+    poll when a previous snapshot exists. That assignment is what paints
+    the empty-window placeholder over a live sidebar.
+    """
+    src = _src_between(app_js, "async function refreshArchiveData", "async function refreshGhIssuesSection")
+    assert "if (!Array.isArray(convs))" in src, (
+        "refreshArchiveData must bail out when loadArchiveAll fails (null)"
+    )
+    assert "keeping previous" in src, (
+        "refreshArchiveData must log that it kept the previous snapshot"
+    )
+    assert re.search(
+        r"if \(!convs\.length && Array\.isArray\(archiveData\) && archiveData\.length\)",
+        src,
+    ), "refreshArchiveData must refuse to replace a populated list with []"

@@ -1,0 +1,1 @@
+- Make activity logs easier to scan with labelled severity colours, plain-language summaries, grouped repeat counts, expandable original records, shorter timestamps, and a warnings/errors filter. Preserve expanded entries and reading position during refresh.

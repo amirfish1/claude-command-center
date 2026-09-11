@@ -117,29 +117,13 @@ def test_q2_worker_card_stops_spinning_the_warm_idle_tier():
         assert f".q2-dg-worker.is-idle-{tier} .q2-dg-spin" in animated_tiers
 
 
-def test_rhs_status_strip_distinguishes_idle_from_working():
-    """The RHS 'Auto: <queue>' status strip's per-worker dot used to render
-    the same fast pulse for a worker that's idle (nothing claimed) as one
-    genuinely attached to a ticket. It must now only use the fast pulse when
-    a real claim is matched, and fall back to a slower, distinctly styled
-    indicator otherwise."""
+def test_rhs_status_strip_no_longer_duplicates_per_worker_rows():
+    """The compact queueStatusStrip used to render one row per live worker
+    (idle/working dot + claimed ticket), which just repeated what the
+    WORKING NOW strip already shows above it and pushed the ticket list
+    further down (CCC-1019). It now renders only the queue-level facts
+    (depth/age/live/drain/claim-types), no per-worker rows."""
     js = (PROJECT_ROOT / "static" / "app.js").read_text(encoding="utf-8")
     strip_fn = js.split("function _renderQueueStatusStrip(")[1].split("\n  function ", 1)[0]
-    assert "const idleCls = on ? '' : ' is-idle';" in strip_fn
-    assert 'class="fq-status-spin\' + idleCls' in strip_fn
-
-    css = (PROJECT_ROOT / "static" / "app.css").read_text(encoding="utf-8")
-    assert ".fq-status-spin.is-idle" in css
-    idle_rule = css.split(".fq-status-spin.is-idle {", 1)[1].split("}", 1)[0]
-    assert "var(--green" in idle_rule
-    sleepy_duration = float(
-        css.split(".fq-status-spin.is-idle {", 1)[1]
-        .split("animation: fq-status-pulse-sleepy ", 1)[1]
-        .split("s ", 1)[0]
-    )
-    working_duration = float(
-        css.split(".fq-status-spin {", 1)[1]
-        .split("animation: fq-status-pulse ", 1)[1]
-        .split("s ", 1)[0]
-    )
-    assert sleepy_duration > working_duration * 2
+    assert "fq-status-worker" not in strip_fn
+    assert "$el.innerHTML = watchHtml;" in strip_fn

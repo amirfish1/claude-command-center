@@ -26,6 +26,8 @@ WT_SCRIPT = PROJECT_ROOT / "scripts" / "install-watchtower.sh"
 RUN_SCRIPT = PROJECT_ROOT / "run.sh"
 INSTALL_SCRIPT = PROJECT_ROOT / "scripts" / "install.sh"
 README = PROJECT_ROOT / "README.md"
+CI_WORKFLOW = PROJECT_ROOT / ".github" / "workflows" / "ci.yml"
+CI_WATCHTOWER_REF = "221260bbc5d31ae57eeacde542154c1c9ad5f3c6"
 
 
 FAKE_PYTHON = r"""#!/usr/bin/env bash
@@ -41,19 +43,31 @@ if [ "$1" = "-c" ]; then
       printf '%s\n' "${WT_FAKE_ROOT:-}"
       exit 0
       ;;
-    *"import watchtower"*)
+    *"import watchtower.queue"*)
       if [ -f "$WT_FAKE_INSTALLED" ]; then exit 0; fi
+      if [ -f "$WT_FAKE_SITE_PACKAGES/ccc-watchtower.pth" ]; then
+        source_dir="$(head -n 1 "$WT_FAKE_SITE_PACKAGES/ccc-watchtower.pth")"
+        if [ -f "$source_dir/watchtower/queue.py" ]; then exit 0; fi
+      fi
+      exit 1
+      ;;
+    *"import watchtower"*)
+      if [ -f "$WT_FAKE_INSTALLED" ] || [ "${WT_FAKE_PARTIAL_PACKAGE:-0}" = "1" ]; then exit 0; fi
       exit 1
       ;;
     *"version_info"*)
       exit "${WT_FAKE_VERSION_RC:-0}"
       ;;
-    *"sys.prefix"*)
-      printf '%s\n' "${WT_FAKE_IN_VENV:-0}"
-      exit 0
-      ;;
     *"platform.python_version"*)
       printf '%s\n' "${WT_FAKE_VERSION:-3.9.6}"
+      exit 0
+      ;;
+    *"getusersitepackages"*)
+      printf '%s\n' "$WT_FAKE_SITE_PACKAGES"
+      exit 0
+      ;;
+    *"sys.prefix"*)
+      printf '%s\n' "${WT_FAKE_IN_VENV:-0}"
       exit 0
       ;;
     *"sysconfig"*)
@@ -86,6 +100,10 @@ FAKE_GIT = r"""#!/usr/bin/env bash
 log() { printf '%s\n' "$*" >> "$WT_FAKE_LOG"; }
 log "git $*"
 case "$*" in
+  *"rev-parse HEAD"*)
+    printf '%s\n' "${WT_FAKE_GIT_HEAD:-${WATCHTOWER_REF:-}}"
+    exit 0
+    ;;
   *"rev-list"*)
     printf '%s\n' "${WT_FAKE_BEHIND:-0}"
     exit 0
@@ -97,7 +115,10 @@ case "$*" in
     if [ "${WT_FAKE_GIT_CLONE_RC:-0}" != "0" ]; then exit 1; fi
     dest="${!#}"
     mkdir -p "$dest/.git"
+    mkdir -p "$dest/watchtower"
     : > "$dest/pyproject.toml"
+    : > "$dest/watchtower/__init__.py"
+    : > "$dest/watchtower/queue.py"
     exit 0
     ;;
 esac
@@ -122,6 +143,7 @@ class WatchtowerInstallHarness(unittest.TestCase):
         self.bin.mkdir()
         self.log = self.root / "calls.log"
         self.installed_marker = self.root / "installed"
+        self.site_packages = self.root / "site-packages"
         for name, body in (
             ("python3", FAKE_PYTHON),
             ("git", FAKE_GIT),
@@ -136,6 +158,9 @@ class WatchtowerInstallHarness(unittest.TestCase):
         path = Path(path)
         path.mkdir(parents=True, exist_ok=True)
         (path / "pyproject.toml").write_text("[project]\nname = 'watchtower'\n")
+        (path / "watchtower").mkdir(exist_ok=True)
+        (path / "watchtower" / "__init__.py").write_text("")
+        (path / "watchtower" / "queue.py").write_text("")
         if git:
             (path / ".git").mkdir(exist_ok=True)
         return path
@@ -145,14 +170,16 @@ class WatchtowerInstallHarness(unittest.TestCase):
         self.installed_marker.write_text("")
         return str(root)
 
-    def run_script(self, env_extra=None, installed_root=None):
+    def run_script(self, env_extra=None, installed_root=None, expected_returncode=0):
         env = {
             "PATH": f"{self.bin}:{os.environ.get('PATH', '')}",
             "HOME": str(self.home),
             "WT_FAKE_LOG": str(self.log),
             "WT_FAKE_INSTALLED": str(self.installed_marker),
+            "WT_FAKE_SITE_PACKAGES": str(self.site_packages),
             "WT_FAKE_ROOT": installed_root or "",
             "CCC_PYTHON": "python3",
+            "CCC_WATCHTOWER_COMMAND_TIMEOUT": "1",
         }
         if env_extra:
             env.update({k: str(v) for k, v in env_extra.items()})
@@ -164,8 +191,8 @@ class WatchtowerInstallHarness(unittest.TestCase):
         )
         self.assertEqual(
             result.returncode,
-            0,
-            "the installer must never be fatal — CCC has to start regardless\n"
+            expected_returncode,
+            "unexpected installer exit status\n"
             f"STDOUT:\n{result.stdout}\nSTDERR:\n{result.stderr}",
         )
         return result
@@ -180,6 +207,11 @@ class WatchtowerInstallHarness(unittest.TestCase):
 
 
 class TestStatics(unittest.TestCase):
+    def test_network_timeout_is_configurable_for_isolated_tests(self):
+        body = WT_SCRIPT.read_text()
+        self.assertIn("CCC_WATCHTOWER_COMMAND_TIMEOUT", body)
+        self.assertIn('WT_COMMAND_TIMEOUT="${CCC_WATCHTOWER_COMMAND_TIMEOUT:-20}"', body)
+
     def test_script_exists_and_is_executable(self):
         self.assertTrue(WT_SCRIPT.is_file(), "scripts/install-watchtower.sh must exist")
         self.assertTrue(
@@ -215,6 +247,27 @@ class TestStatics(unittest.TestCase):
 
 
 class TestAlreadyInstalled(WatchtowerInstallHarness):
+    def test_pinned_mode_rejects_importable_package_at_wrong_commit(self):
+        managed = self.make_checkout(self.home / ".ccc" / "watchtower")
+
+        result = self.run_script(
+            installed_root=self.set_installed(managed),
+            env_extra={
+                "WATCHTOWER_REF": CI_WATCHTOWER_REF,
+                "WT_FAKE_GIT_HEAD": "0" * 40,
+            },
+            expected_returncode=1,
+        )
+
+        self.assertIn("does not match pinned commit", result.stdout)
+        self.assertEqual(self.pip_targets(), [])
+
+    def test_partial_package_without_queue_is_not_treated_as_installed(self):
+        result = self.run_script(env_extra={"WT_FAKE_PARTIAL_PACKAGE": "1"})
+
+        self.assertTrue(any("clone" in call for call in self.calls()))
+        self.assertIn("watchtower.queue is now available", result.stdout)
+
     def test_dev_checkout_is_never_pulled(self):
         """A dev checkout is a working tree: report, don't touch."""
         dev = self.make_checkout(self.root / "dev-watchtower")
@@ -335,6 +388,66 @@ class TestInstallChain(WatchtowerInstallHarness):
         self.assertIn("--depth 1", clones[0])
         self.assertIn(f"-e {self.home / '.ccc' / 'watchtower'}", self.pip_targets()[0])
 
+    def test_explicit_ref_is_checked_out_immutably(self):
+        self.run_script(env_extra={"WATCHTOWER_REF": CI_WATCHTOWER_REF})
+
+        calls = self.calls()
+        clone = next(call for call in calls if " clone " in f" {call} ")
+        self.assertNotIn("--depth 1", clone)
+        self.assertTrue(any(
+            "checkout --detach" in call and CI_WATCHTOWER_REF in call
+            for call in calls
+        ), calls)
+
+    def test_pinned_clone_failure_never_uses_mutable_fallbacks(self):
+        result = self.run_script(
+            env_extra={
+                "WATCHTOWER_REF": CI_WATCHTOWER_REF,
+                "WT_FAKE_GIT_CLONE_RC": "1",
+            },
+            expected_returncode=1,
+        )
+
+        self.assertIn("could not install pinned WatchTower commit", result.stdout)
+        self.assertFalse(any("main.tar.gz" in p for p in self.pip_targets()))
+        self.assertFalse(any("watchtower-cli" in p for p in self.pip_targets()))
+
+    def test_source_tree_is_activated_when_pip_is_unavailable(self):
+        """Minimal Python installs may have no pip, but WatchTower has no
+        runtime dependencies. A .pth activation must make the cloned source
+        importable before CCC starts."""
+        dev = self.make_checkout(self.root / "dev-watchtower")
+
+        result = self.run_script(env_extra={
+            "WATCHTOWER_DIR": str(dev),
+            "WT_FAKE_PIP_FAIL": "dev-watchtower",
+        })
+
+        pth = self.site_packages / "ccc-watchtower.pth"
+        self.assertTrue(
+            pth.is_file(),
+            "source fallback must create a .pth file\n"
+            f"stdout={result.stdout}\ncalls={self.calls()}",
+        )
+        self.assertEqual(pth.read_text().strip(), str(dev.resolve()))
+        self.assertIn("watchtower.queue is now available", result.stdout)
+        self.assertFalse(any("main.tar.gz" in p for p in self.pip_targets()))
+
+    def test_managed_clone_is_activated_when_pip_is_unavailable(self):
+        managed = self.home / ".ccc" / "watchtower"
+
+        result = self.run_script(env_extra={
+            "WT_FAKE_PIP_FAIL": str(managed),
+        })
+
+        clones = [call for call in self.calls() if "clone" in call]
+        self.assertEqual(len(clones), 1, clones)
+        pth = self.site_packages / "ccc-watchtower.pth"
+        self.assertTrue(pth.is_file())
+        self.assertEqual(pth.read_text().strip(), str(managed.resolve()))
+        self.assertIn("watchtower.queue is now available", result.stdout)
+        self.assertFalse(any("main.tar.gz" in p for p in self.pip_targets()))
+
     def test_pypi_is_the_last_resort_after_clone_and_tarball(self):
         result = self.run_script(
             env_extra={
@@ -354,29 +467,29 @@ class TestInstallChain(WatchtowerInstallHarness):
         self.assertGreater(first_pypi, last_tarball, pips)
         self.assertIn("last resort", result.stdout)
 
-    def test_python_below_311_skips_with_a_reason_and_no_pip(self):
+    def test_python_below_39_skips_with_a_reason_and_no_pip(self):
         result = self.run_script(
-            env_extra={"WT_FAKE_VERSION_RC": "1", "WT_FAKE_VERSION": "3.9.6"}
+            env_extra={"WT_FAKE_VERSION_RC": "1", "WT_FAKE_VERSION": "3.8.20"}
         )
-        self.assertIn("3.9.6", result.stdout)
-        self.assertIn("3.11 minimum", result.stdout)
+        self.assertIn("3.8.20", result.stdout)
+        self.assertIn("3.9 minimum", result.stdout)
         self.assertEqual(self.pip_targets(), [])
 
-    def test_python_below_311_says_it_once_a_day_not_once_a_launch(self):
-        """The 3.11 notice is unactionable and CCC restarts often.
+    def test_python_below_39_says_it_once_a_day_not_once_a_launch(self):
+        """The 3.9 notice is unactionable and CCC restarts often.
 
         run.sh calls this script on every launch and the import probe can never
         succeed on an old interpreter, so without a back-off the same two lines
         print on every single start until the user upgrades Python — which is
         how a real notice becomes noise people stop reading.
         """
-        env = {"WT_FAKE_VERSION_RC": "1", "WT_FAKE_VERSION": "3.10.14"}
+        env = {"WT_FAKE_VERSION_RC": "1", "WT_FAKE_VERSION": "3.8.20"}
         first = self.run_script(env_extra=env)
-        self.assertIn("3.11 minimum", first.stdout)
+        self.assertIn("3.9 minimum", first.stdout)
 
         second = self.run_script(env_extra=env)
         self.assertNotIn(
-            "3.11 minimum",
+            "3.9 minimum",
             second.stdout,
             "the Python-floor notice must back off like every other dead end",
         )
@@ -385,7 +498,7 @@ class TestInstallChain(WatchtowerInstallHarness):
         # An explicit install (or the in-app updater) is the user asking right
         # now, so it must still get the reason instead of a silent no-op.
         forced = self.run_script(env_extra=dict(env, CCC_WATCHTOWER_FORCE="1"))
-        self.assertIn("3.11 minimum", forced.stdout)
+        self.assertIn("3.9 minimum", forced.stdout)
 
     def test_total_failure_warns_loudly_and_backs_off_for_a_day(self):
         env = {
@@ -409,8 +522,9 @@ class TestInstallChain(WatchtowerInstallHarness):
             "a failed install must not be retried on the next launch",
         )
 
-    def test_pip_exiting_zero_without_a_working_import_counts_as_failure(self):
-        """pip can 'succeed' into an interpreter CCC never imports from."""
+    def test_pip_exiting_zero_without_import_recovers_via_source_path(self):
+        """pip can 'succeed' into the wrong interpreter; the verified source
+        activation remains the recovery path."""
         dev = self.make_checkout(self.root / "dev-watchtower")
         result = self.run_script(
             env_extra={
@@ -419,7 +533,9 @@ class TestInstallChain(WatchtowerInstallHarness):
                 "WT_FAKE_PIP_MAKES_IMPORTABLE": "0",
             }
         )
-        self.assertIn("could not install WatchTower", result.stdout)
+        self.assertIn("watchtower.queue is now available", result.stdout)
+        pth = self.site_packages / "ccc-watchtower.pth"
+        self.assertEqual(pth.read_text().strip(), str(dev.resolve()))
 
 
 class TestWiring(unittest.TestCase):
@@ -429,7 +545,7 @@ class TestWiring(unittest.TestCase):
         body = RUN_SCRIPT.read_text()
         self.assertIn('bash "$script"', body)
         self.assertIn("scripts/install-watchtower.sh", body)
-        self.assertIn("import watchtower", body)
+        self.assertIn("import watchtower.queue", body)
         self.assertNotIn(
             "pip install",
             body,
@@ -444,6 +560,32 @@ class TestWiring(unittest.TestCase):
             body,
             "scripts/install.sh must not carry its own copy of the install chain",
         )
+
+    def test_ci_bootstraps_watchtower_before_importing_server(self):
+        body = CI_WORKFLOW.read_text()
+        command = (
+            f"WATCHTOWER_REF={CI_WATCHTOWER_REF} "
+            "CCC_PYTHON=python CCC_SKIP_WATCHTOWER_DAEMON=1 "
+            "CCC_WATCHTOWER_FORCE=1 bash scripts/install-watchtower.sh"
+        )
+        targets = {
+            "unittest": ("python -m pytest -q --tb=no tests/", "smoke"),
+            "smoke": ("python server.py > /tmp/server.log", "python39-smoke"),
+            "python39-smoke": (
+                "python -c 'import server; print(server.__version__)'",
+                "telemetry-worker",
+            ),
+        }
+        for job, (target, next_job) in targets.items():
+            start = body.index(f"  {job}:")
+            end = body.index(f"\n  {next_job}:", start)
+            block = body[start:end]
+            self.assertIn(command, block, f"{job} must pin and bootstrap WatchTower")
+            self.assertLess(
+                block.index(command),
+                block.index(target),
+                f"{job} must bootstrap before importing or starting server.py",
+            )
 
     def test_readme_no_longer_claims_installed_by_default(self):
         self.assertNotIn("installed by default as CCC's queue engine", README.read_text())

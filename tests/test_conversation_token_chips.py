@@ -5,6 +5,14 @@ import json
 import server
 
 
+def _write_jsonl(path, rows):
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(
+        "".join(json.dumps(row) + "\n" for row in rows),
+        encoding="utf-8",
+    )
+
+
 def test_codex_usage_written_after_message_enriches_that_assistant_turn(tmp_path, monkeypatch):
     """Codex emits token_count after its agent_message, not before it."""
     rollout = tmp_path / "rollout.jsonl"
@@ -89,3 +97,239 @@ def test_kimi_turn_usage_sums_wire_steps_since_the_prompt_boundary(tmp_path):
         "cache_creation_input_tokens": 20,
         "output_tokens": 25,
     }
+
+
+def test_kimi_wire_prompt_usages_group_steps_and_prefer_durable_records(tmp_path):
+    wire = tmp_path / "wire.jsonl"
+    _write_jsonl(wire, [
+        {"type": "turn.prompt", "input": [{"type": "text", "text": "first"}]},
+        {"type": "context.append_message", "message": {
+            "role": "user", "origin": {"kind": "user"},
+            "content": [{"type": "text", "text": "first"}],
+        }},
+        {"type": "context.append_loop_event", "event": {
+            "type": "step.end", "finishReason": "tool_use", "usage": {
+                "inputOther": 100, "inputCacheRead": 80,
+                "inputCacheCreation": 20, "output": 10,
+            },
+        }},
+        {"type": "usage.record", "usageScope": "turn", "usage": {
+            "inputOther": 100, "inputCacheRead": 80,
+            "inputCacheCreation": 20, "output": 10,
+        }},
+        {"type": "context.append_loop_event", "event": {
+            "type": "step.end", "finishReason": "end_turn", "usage": {
+                "inputOther": 120, "inputCacheRead": 90,
+                "inputCacheCreation": 0, "output": 15,
+            },
+        }},
+        {"type": "usage.record", "usageScope": "turn", "usage": {
+            "inputOther": 120, "inputCacheRead": 90,
+            "inputCacheCreation": 0, "output": 15,
+        }},
+        {"type": "usage.record", "usageScope": "session", "usage": {
+            "inputOther": 9999, "inputCacheRead": 9999,
+            "inputCacheCreation": 9999, "output": 9999,
+        }},
+        {"type": "context.append_message", "message": {
+            "role": "user", "origin": {"kind": "injection"},
+            "content": [{"type": "text", "text": "control"}],
+        }},
+        {"type": "turn.prompt", "input": [{"type": "text", "text": "second"}]},
+        {"type": "context.append_message", "message": {
+            "role": "user", "origin": {"kind": "user"},
+            "content": [{"type": "text", "text": "second"}],
+        }},
+        {"type": "context.append_loop_event", "event": {
+            "type": "step.end", "finishReason": "end_turn", "usage": {
+                "inputOther": 7, "inputCacheRead": 11,
+                "inputCacheCreation": 13, "output": 17,
+            },
+        }},
+    ])
+    with wire.open("a", encoding="utf-8") as handle:
+        handle.write("{malformed\n")
+
+    assert server._kimi_wire_prompt_usages(wire) == [
+        {
+            "input_tokens": 220,
+            "cache_read_input_tokens": 170,
+            "cache_creation_input_tokens": 20,
+            "output_tokens": 25,
+        },
+        {
+            "input_tokens": 7,
+            "cache_read_input_tokens": 11,
+            "cache_creation_input_tokens": 13,
+            "output_tokens": 17,
+        },
+    ]
+
+
+def test_kimi_wire_prompt_usages_ignores_valid_json_malformed_shapes(tmp_path):
+    wire = tmp_path / "wire.jsonl"
+    _write_jsonl(wire, [
+        {"type": "turn.prompt"},
+        "not a wire record",
+        {"type": "context.append_message", "message": "not a message"},
+        {"type": "context.append_message", "message": {
+            "role": "user", "origin": "not an origin",
+        }},
+        {"type": "context.append_loop_event", "event": "not an event"},
+        {"type": "context.append_loop_event", "event": {
+            "type": "step.end", "usage": {
+                "inputOther": 4, "inputCacheRead": 3,
+                "inputCacheCreation": 2, "output": 1,
+            },
+        }},
+    ])
+
+    assert server._kimi_wire_prompt_usages(wire) == [{
+        "input_tokens": 4,
+        "cache_read_input_tokens": 3,
+        "cache_creation_input_tokens": 2,
+        "output_tokens": 1,
+    }]
+
+
+def test_kimi_wire_prompt_usages_uses_fallback_after_incomplete_durable_usage(tmp_path):
+    wire = tmp_path / "wire.jsonl"
+    _write_jsonl(wire, [
+        {"type": "turn.prompt"},
+        {"type": "usage.record", "usageScope": "turn", "usage": {
+            "unrecognized": 99,
+        }},
+        {"type": "context.append_loop_event", "event": {
+            "type": "step.end", "usage": {
+                "inputOther": 40, "inputCacheRead": 30,
+                "inputCacheCreation": 20, "output": 10,
+            },
+        }},
+    ])
+
+    assert server._kimi_wire_prompt_usages(wire) == [{
+        "input_tokens": 40,
+        "cache_read_input_tokens": 30,
+        "cache_creation_input_tokens": 20,
+        "output_tokens": 10,
+    }]
+
+
+def test_kimi_transcript_read_enriches_final_replies_before_after_line_filter(
+    tmp_path, monkeypatch,
+):
+    harness, sid = "kimi", "session-replay-token-chip"
+    transcript_root = tmp_path / "transcripts"
+    transcript = transcript_root / harness / f"{sid}.jsonl"
+    wire = tmp_path / "wire.jsonl"
+    _write_jsonl(transcript, [
+        {"line": 1, "type": "user_text", "text": "first"},
+        {"line": 2, "type": "assistant", "blocks": [
+            {"kind": "tool_use", "name": "Read", "id": "tool-1"},
+        ]},
+        {"line": 3, "type": "assistant", "blocks": [
+            {"kind": "text", "text": "first reply"},
+        ]},
+        {"line": 4, "type": "user_text", "text": "second"},
+        {"line": 5, "type": "assistant", "blocks": [
+            {"kind": "text", "text": "second reply"},
+        ]},
+    ])
+    _write_jsonl(wire, [
+        {"type": "turn.prompt"},
+        {"type": "context.append_message", "message": {
+            "role": "user", "origin": {"kind": "user"},
+        }},
+        {"type": "usage.record", "usageScope": "turn", "usage": {
+            "inputOther": 120, "inputCacheRead": 80,
+            "inputCacheCreation": 20, "output": 15,
+        }},
+        {"type": "turn.prompt"},
+        {"type": "context.append_message", "message": {
+            "role": "user", "origin": {"kind": "user"},
+        }},
+        {"type": "usage.record", "usageScope": "turn", "usage": {
+            "inputOther": 10, "inputCacheRead": 30,
+            "inputCacheCreation": 0, "output": 5,
+        }},
+    ])
+    monkeypatch.setattr(server, "_ACP_TRANSCRIPT_DIR", transcript_root)
+    monkeypatch.setattr(server, "_acp_wire_path", lambda _harness, _sid: wire)
+
+    events = server._acp_transcript_events_after(harness, sid, 0)
+    by_line = {event["line"]: event for event in events}
+
+    assert "tokens_in" not in by_line[2]
+    assert by_line[3]["tokens_in"] == 220
+    assert by_line[3]["tokens_cached"] == 80
+    assert by_line[3]["tokens_out"] == 15
+    assert by_line[5]["tokens_in"] == 40
+    assert by_line[5]["tokens_cached"] == 30
+    assert by_line[5]["tokens_out"] == 5
+
+    partial = server._acp_transcript_events_after(harness, sid, 3)
+    assert [event["line"] for event in partial] == [4, 5]
+    assert partial[-1]["tokens_in"] == 40
+    assert partial[-1]["tokens_cached"] == 30
+    assert partial[-1]["tokens_out"] == 5
+
+
+def test_kimi_transcript_read_preserves_existing_live_token_fields(tmp_path, monkeypatch):
+    harness, sid = "kimi", "session-live-token-chip"
+    transcript_root = tmp_path / "transcripts"
+    transcript = transcript_root / harness / f"{sid}.jsonl"
+    wire = tmp_path / "wire.jsonl"
+    existing_usage = {
+        "input_tokens": 7,
+        "cache_read_input_tokens": 11,
+        "cache_creation_input_tokens": 13,
+        "output_tokens": 17,
+    }
+    _write_jsonl(transcript, [
+        {"line": 1, "type": "user_text", "text": "hello"},
+        {
+            "line": 2,
+            "type": "assistant",
+            "blocks": [{"kind": "text", "text": "hello back"}],
+            "tokens_in": 31,
+            "tokens_cached": 11,
+            "tokens_out": 17,
+            "token_usage": existing_usage,
+        },
+    ])
+    _write_jsonl(wire, [
+        {"type": "turn.prompt"},
+        {"type": "context.append_message", "message": {
+            "role": "user", "origin": {"kind": "user"},
+        }},
+        {"type": "usage.record", "usageScope": "turn", "usage": {
+            "inputOther": 999, "inputCacheRead": 888,
+            "inputCacheCreation": 777, "output": 666,
+        }},
+    ])
+    monkeypatch.setattr(server, "_ACP_TRANSCRIPT_DIR", transcript_root)
+    monkeypatch.setattr(server, "_acp_wire_path", lambda _harness, _sid: wire)
+
+    assistant = server._acp_transcript_events_after(harness, sid, 0)[-1]
+
+    assert assistant["tokens_in"] == 31
+    assert assistant["tokens_cached"] == 11
+    assert assistant["tokens_out"] == 17
+    assert assistant["token_usage"] == existing_usage
+
+
+def test_kimi_transcript_read_survives_missing_wire(tmp_path, monkeypatch):
+    harness, sid = "kimi", "session-missing-wire"
+    transcript_root = tmp_path / "transcripts"
+    transcript = transcript_root / harness / f"{sid}.jsonl"
+    expected = [
+        {"line": 1, "type": "user_text", "text": "hello"},
+        {"line": 2, "type": "assistant", "blocks": [
+            {"kind": "text", "text": "hello back"},
+        ]},
+    ]
+    _write_jsonl(transcript, expected)
+    monkeypatch.setattr(server, "_ACP_TRANSCRIPT_DIR", transcript_root)
+    monkeypatch.setattr(server, "_acp_wire_path", lambda _harness, _sid: None)
+
+    assert server._acp_transcript_events_after(harness, sid, 0) == expected

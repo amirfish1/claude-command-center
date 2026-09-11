@@ -449,6 +449,125 @@ class TestWorkerServiceDefinition(unittest.TestCase):
             self.assertFalse(sock.exists(), "stale socket must be cleared")
 
 
+class TestWorkerCompatMaintenanceSelfHeal(unittest.TestCase):
+    """Continuous backstop for run.sh's one-shot boot-time compat check.
+
+    run.sh only re-checks worker compatibility once, at dashboard startup; a
+    worker that is busy at that instant and idle later keeps running stale
+    code until an unrelated restart happens to catch it idle. These tests
+    cover the periodic re-check (server._worker_compat_maintenance_check,
+    wired into the hourly Maintenance tick) that closes that gap.
+    """
+
+    def _fake_request(self, health):
+        def request(method, params=None, *, engine_timeout=False):
+            if method == "health":
+                return dict(health)
+            if method == "engine.adopt":
+                return {"ok": True, "available": True, "adopted": 0}
+            if method == "drain.set":
+                return {"ok": True, "queued": 0, "replayed": 0}
+            if method == "work.reconcile":
+                return {"ok": True, "reconciled": 0}
+            return {"ok": False, "available": False}
+        return request
+
+    def test_idle_incompatible_worker_is_retired(self):
+        import server
+
+        health = {
+            "ok": True, "active": 0, "queued": 0, "uncertain": 0,
+            "worker": {"pid": 4321, "capabilities": []},
+        }
+        with mock.patch.object(
+            server, "_control_plane_request", side_effect=self._fake_request(health),
+        ), mock.patch.object(
+            server, "_restart_worker_process",
+            return_value={"restarted": True, "via": "respawn"},
+        ) as restart_mock, mock.patch.object(
+            server, "_wait_worker_healthy", return_value=True,
+        ):
+            snapshot = server._worker_compat_maintenance_check()
+
+        restart_mock.assert_called_once()
+        self.assertFalse(snapshot["ok"])
+        self.assertTrue(snapshot["idle"])
+        cached = server._get_worker_compat_cache()
+        self.assertEqual(cached["capabilities"], [])
+
+    def test_busy_incompatible_worker_is_left_alone(self):
+        """Never roll an older worker with unresolved work."""
+        import server
+
+        health = {
+            "ok": True, "active": 1, "queued": 0, "uncertain": 0,
+            "worker": {"pid": 4321, "capabilities": []},
+        }
+        with mock.patch.object(
+            server, "_control_plane_request", side_effect=self._fake_request(health),
+        ), mock.patch.object(
+            server, "_restart_worker_process",
+        ) as restart_mock:
+            snapshot = server._worker_compat_maintenance_check()
+
+        restart_mock.assert_not_called()
+        self.assertFalse(snapshot["ok"])
+        self.assertFalse(snapshot["idle"])
+
+    def test_idle_compatible_worker_is_left_alone(self):
+        import server
+
+        health = {
+            "ok": True, "active": 0, "queued": 0, "uncertain": 0,
+            "worker": {"pid": 4321, "capabilities": ["engine-execution-v1"]},
+        }
+        with mock.patch.object(
+            server, "_control_plane_request", side_effect=self._fake_request(health),
+        ), mock.patch.object(
+            server, "_restart_worker_process",
+        ) as restart_mock:
+            snapshot = server._worker_compat_maintenance_check()
+
+        restart_mock.assert_not_called()
+        self.assertTrue(snapshot["ok"])
+
+    def test_unreachable_worker_is_left_alone(self):
+        """A wholly unavailable worker is a different problem (see
+        _start_control_plane_worker) -- this check only handles the
+        reachable-but-stale case."""
+        import server
+
+        health = {"ok": False, "available": False}
+        with mock.patch.object(
+            server, "_control_plane_request", side_effect=self._fake_request(health),
+        ), mock.patch.object(
+            server, "_restart_worker_process",
+        ) as restart_mock:
+            snapshot = server._worker_compat_maintenance_check()
+
+        restart_mock.assert_not_called()
+        self.assertFalse(snapshot["ok"])
+        self.assertFalse(snapshot["reachable"])
+
+    def test_health_endpoint_surfaces_cached_worker_compat(self):
+        import server
+
+        server._set_worker_compat_cache({
+            "ok": False, "reachable": True, "idle": True, "pid": 999,
+            "worker_server_version": "5.0.0", "repo_version": "5.27.3",
+            "capabilities": [],
+        })
+        self.addCleanup(server._set_worker_compat_cache, {
+            "ok": True, "reachable": None, "idle": None, "pid": None,
+            "worker_server_version": None, "repo_version": None,
+            "capabilities": [],
+        })
+        health = server.build_ccc_health()
+        self.assertIn("worker_compat", health)
+        self.assertFalse(health["worker_compat"]["ok"])
+        self.assertEqual(health["worker_compat"]["capabilities"], [])
+
+
 class TestWatchTowerServiceControl(unittest.TestCase):
     def test_status_verifies_daemon_and_discovers_custom_api_port(self):
         import server
@@ -620,6 +739,10 @@ class TestEngineHost(unittest.TestCase):
         def _spawn_entry_active_tool_child(_entry):
             return None
 
+        @staticmethod
+        def _tool_child_blocks_inject(_entry):
+            return False
+
         def _reattach_spawned_orphans(self, **_kwargs):
             self.reattach_calls += 1
             self._spawned_sessions.append({"pid": 42, "engine": "claude"})
@@ -716,6 +839,19 @@ class TestEngineHost(unittest.TestCase):
         self.assertTrue(response["ok"])
         self.assertEqual(len(self.fake.inject_calls), 1)
         self.assertTrue(self.fake.inject_calls[0][2]["force_queue"])
+
+    def test_claude_inject_forwards_work_idempotency_key(self):
+        self.host.execute({
+            "engine": "claude",
+            "operation": "inject",
+            "idempotency_key": "composer-inject-key",
+            "args": {"session_id": "session-claude", "text": "continue"},
+        })
+
+        self.assertEqual(
+            self.fake.inject_calls[0][2]["idempotency_key"],
+            "composer-inject-key",
+        )
 
     def test_claude_input_state_exposes_worker_owned_busy_spawn(self):
         response = self.host.query({

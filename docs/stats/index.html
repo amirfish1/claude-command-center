@@ -367,6 +367,7 @@ function renderOverview(d) {
 function renderOptIn(d) {
   const t = d.totals || {};
   const pings = d.pings_by_day || [];
+  const pings90 = fillDailyRows(pings, 90, ["active_installs", "active_installs_all"]);
   const versions = d.versions || [];
   const platforms = d.platforms || [];
   const sessionsTodayAll = d.sessions_today_per_install || [];
@@ -411,8 +412,8 @@ function renderOptIn(d) {
       </div>
 
       <div class="card wide">
-        <h2>Active installs over time (last 30 days)</h2>
-        ${timelineChart(pings, "active_installs", { stroke: "#4ade80", fill: "rgba(74,222,128,0.18)" })}
+        <h2>Active installs by day (last 3 months)</h2>
+        ${timelineChart(pings90, "active_installs", { stroke: "#4ade80", fill: "rgba(74,222,128,0.18)" })}
         <details style="margin-top:10px">
           <summary class="muted" style="cursor:pointer">exact daily numbers</summary>
           <div style="margin-top:10px">${dayBars(pings, "active_installs")}</div>
@@ -464,6 +465,7 @@ function renderOptIn(d) {
 function renderBeacon(d) {
   const t = d.totals || {};
   const opens = d.opens_by_day || [];
+  const opens90 = fillDailyRows(opens, 90, ["boots", "distinct_ips", "boots_all", "distinct_ips_all"]);
   const opensToday = opens[0] && opens[0].boots || 0;
   const ipsToday = opens[0] && (opens[0].distinct_ips ?? 0);
   const opens7 = sumBuckets(opens.slice(0, 7), "boots");
@@ -498,14 +500,14 @@ function renderBeacon(d) {
       </div>
 
       <div class="card wide">
-        <h2>Distinct IPs over time (last 30 days)</h2>
-        ${timelineChart(opens, "distinct_ips", { stroke: "#ffd266", fill: "rgba(255,210,102,0.18)" })}
+        <h2>Distinct IPs by day (last 3 months)</h2>
+        ${timelineChart(opens90, "distinct_ips", { stroke: "#ffd266", fill: "rgba(255,210,102,0.18)" })}
         <p class="muted">This is the closest thing here to a daily-active-installs line. It undercounts installs behind one shared address, and before 2026-08-12 it only saw machines that happened to restart that day. Empty days mean no beacon fired (rows captured before 2026-06-08 had no ip_hash column yet).</p>
       </div>
 
       <div class="card wide">
-        <h2>Total beacons over time (last 30 days)</h2>
-        ${timelineChart(opens, "boots", { stroke: "#2563eb", fill: "rgba(37,99,235,0.18)" })}
+        <h2>Total beacons by day (last 3 months)</h2>
+        ${timelineChart(opens90, "boots", { stroke: "#2563eb", fill: "rgba(37,99,235,0.18)" })}
         <details style="margin-top:10px">
           <summary class="muted" style="cursor:pointer">exact daily numbers</summary>
           <div style="margin-top:10px">
@@ -532,6 +534,7 @@ function renderBeacon(d) {
 
 function renderDownloads(d) {
   const rows = d.downloads_by_day || [];
+  const rows90 = fillDailyRows(rows, 90, ["download_clicks"]);
   const today = rows[0] && rows[0].download_clicks || 0;
   const last30 = sumBuckets(rows.slice(0, 30), "download_clicks");
   return `
@@ -557,8 +560,8 @@ function renderDownloads(d) {
         <div class="stat-sub">repeated clicks included</div>
       </div>
       <div class="card wide">
-        <h2>Site download clicks over time</h2>
-        ${timelineChart(rows, "download_clicks", { stroke: "#ffd266", fill: "rgba(255,210,102,0.18)" })}
+        <h2>Site download clicks by day (last 3 months)</h2>
+        ${timelineChart(rows90, "download_clicks", { stroke: "#ffd266", fill: "rgba(255,210,102,0.18)" })}
         <div style="margin-top:10px">${dayBars(rows, "download_clicks")}</div>
       </div>
       <div class="card wide muted">Updated ${escapeHtml(d.generated_at)}. Cached at the edge for 5 minutes.</div>
@@ -583,6 +586,20 @@ function dayBars(rows, key) {
       </tbody>
     </table>
   `;
+}
+
+function fillDailyRows(rows, count, keys) {
+  const byDay = new Map(rows.map(row => [row.day, row]));
+  const result = [];
+  const now = new Date();
+  const today = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate()));
+  for (let offset = 0; offset < count; offset++) {
+    const date = new Date(today);
+    date.setUTCDate(today.getUTCDate() - offset);
+    const day = date.toISOString().slice(0, 10);
+    result.push(byDay.get(day) || Object.fromEntries([["day", day], ...keys.map(key => [key, 0])]));
+  }
+  return result;
 }
 
 // Inline SVG timeline chart. rows = [{day, <key>}, ...] in DESCENDING

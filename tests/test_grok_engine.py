@@ -153,6 +153,7 @@ def test_variant_a_finder_returns_row(monkeypatch, tmp_path):
     assert row["modified"] > 0
     assert row["modified_human"]
     assert row["jsonl_path"].endswith("updates.jsonl")
+    assert row["parent_session_id"] == ""
 
 
 def test_variant_a_transcript_from_updates_jsonl(monkeypatch, tmp_path):
@@ -287,6 +288,90 @@ def test_is_grok_session(monkeypatch, tmp_path):
     assert server._detect_session_engine_uncached(SID_A) == "grok"
     assert server._detect_session_engine_uncached(SID_B) == "grok"
     assert server._detect_session_engine_uncached("deadbeef-0000-0000-0000-000000000000") == "claude"
+
+
+CHILD_SID = "01999999-ffff-7bbb-8ccc-eeeeeeeeeeee"
+GRANDCHILD_SID = "01999999-aaaa-7bbb-8ccc-ffffffffffff"
+
+
+def _add_grok_subagent(home, parent_sid, child_sid, description="du worktree heavy dirs"):
+    bucket = home / "sessions" / FAKE_CWD_ENCODED
+    child_dir = bucket / child_sid
+    child_dir.mkdir(parents=True, exist_ok=True)
+    (child_dir / "summary.json").write_text(
+        json.dumps({
+            "title": description,
+            "createdAt": "2026-07-20T09:10:00Z",
+            "updatedAt": "2026-07-20T09:11:00Z",
+        }),
+        encoding="utf-8",
+    )
+    meta_dir = bucket / parent_sid / "subagents" / child_sid
+    meta_dir.mkdir(parents=True, exist_ok=True)
+    (meta_dir / "meta.json").write_text(
+        json.dumps({
+            "subagent_id": child_sid,
+            "parent_session_id": parent_sid,
+            "child_session_id": child_sid,
+            "subagent_type": "general-purpose",
+            "description": description,
+        }),
+        encoding="utf-8",
+    )
+
+
+def test_variant_a_subagent_sets_listing_parent(monkeypatch, tmp_path):
+    home = _make_variant_a_home(tmp_path)
+    _add_grok_subagent(home, SID_A, CHILD_SID)
+    monkeypatch.setenv("GROK_HOME", str(home))
+
+    rows = server.find_grok_conversations(repo_only=False, include_old=True)
+    by_id = {r["session_id"]: r for r in rows}
+    assert set(by_id) == {SID_A, CHILD_SID}
+    assert by_id[SID_A]["parent_session_id"] == ""
+    assert by_id[CHILD_SID]["parent_session_id"] == SID_A
+    assert by_id[CHILD_SID]["display_name"] == "du worktree heavy dirs"
+
+
+def test_grok_subagent_graph_edge_and_family_tree(monkeypatch, tmp_path):
+    home = _make_variant_a_home(tmp_path)
+    _add_grok_subagent(home, SID_A, CHILD_SID)
+    _add_grok_subagent(home, CHILD_SID, GRANDCHILD_SID, description="nested probe")
+    monkeypatch.setenv("GROK_HOME", str(home))
+    graph = server._SessionGraph(tmp_path / "session-graph.json")
+    monkeypatch.setattr(server, "_session_graph", graph)
+
+    added = server._session_graph_ingest_grok_subagents()
+    assert added == 2
+    assert graph.parent_of(CHILD_SID) == SID_A
+    assert graph.parent_of(GRANDCHILD_SID) == CHILD_SID
+    meta = graph.edge_meta(CHILD_SID)
+    assert meta["source"] == "grok-subagent"
+    assert meta["engine"] == "grok"
+    assert meta["resumable"] is True
+    assert meta["name"] == "du worktree heavy dirs"
+    assert server._session_graph_ingest_grok_subagents() == 0
+
+    tree = server._session_graph_family_tree(GRANDCHILD_SID)
+    assert tree["session_id"] == SID_A
+    assert [c["session_id"] for c in tree["children"]] == [CHILD_SID]
+    assert [c["session_id"] for c in tree["children"][0]["children"]] == [GRANDCHILD_SID]
+
+
+def test_grok_subagent_skips_path_shaped_ids(monkeypatch, tmp_path):
+    home = _make_variant_a_home(tmp_path)
+    meta_dir = home / "sessions" / FAKE_CWD_ENCODED / SID_A / "subagents" / "not-a-sid"
+    meta_dir.mkdir(parents=True)
+    (meta_dir / "meta.json").write_text(
+        json.dumps({
+            "subagent_id": "../escape",
+            "parent_session_id": SID_A,
+            "child_session_id": "../escape",
+        }),
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("GROK_HOME", str(home))
+    assert server._grok_subagent_parent_map() == {}
 
 
 def _wrap_rpc(update, timestamp="2026-07-20T09:00:05Z"):

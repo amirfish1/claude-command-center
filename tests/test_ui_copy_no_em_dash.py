@@ -15,7 +15,6 @@ ROOT = Path(__file__).resolve().parents[1]
 STATIC_FILES = (
     "static/app.js",
     "static/throughput.html",
-    "static/coo-board.html",
     "static/productivity.html",
     "static/throughput-daily.html",
     "static/index.html",

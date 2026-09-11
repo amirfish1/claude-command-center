@@ -5,6 +5,14 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Queues</title>
   <link rel="stylesheet" href="/static/q2.css">
+  <link rel="stylesheet" href="/static/ticket-prose.css">
+  <script>
+    // When the dashboard hosts this page in #cccCoreAppFrame the parent
+    // already has the rail and the Sessions/Queues bar. Mark framed so
+    // CSS can hide the duplicates before first paint.
+    try { if (window.self !== window.top) document.documentElement.classList.add('ccc-framed'); }
+    catch (e) {}
+  </script>
 </head>
 <body>
   <header class="q2-topbar">
@@ -53,7 +61,6 @@
       <!-- Queue attendant for this queue: manually triggered, cleans the
            queue (closes verified-resolved bugs, answers what it can, asks
            at most one question at a time) rather than just summarizing it.
-           See docs/superpowers/specs/2026-08-13-q2-queue-attendant-design.md.
            Hidden in all-queues view or with no queue selected. -->
       <section class="q2-brief" id="q2Brief" aria-label="Queue attendant" hidden></section>
       <div class="q2-resizer q2-resizer-h" data-q2-resize-v="brief" role="separator" aria-orientation="horizontal"
@@ -84,10 +91,26 @@
     </section>
   </main>
 
+  <!-- Phone Sessions/Queues switcher. Same chrome as the dashboard's
+       #mobileBottomNav (Advanced). The Applications rail that normally
+       does this job is hidden below 700px, so this is the way back to
+       Sessions. Hidden on desktop via CSS. -->
+  <nav class="q2-mobile-bottom-nav" id="q2MobileBottomNav" aria-label="Main">
+    <a href="/" class="q2-mobile-nav-btn" data-mobile-nav="sessions" aria-label="Sessions">
+      <span class="q2-mobile-nav-icon" aria-hidden="true">&#128172;</span>
+      <span class="q2-mobile-nav-label">Sessions</span>
+    </a>
+    <a href="/q2.html" class="q2-mobile-nav-btn is-active" data-mobile-nav="queues" aria-current="page" aria-label="Queues">
+      <span class="q2-mobile-nav-icon" aria-hidden="true">&#128203;</span>
+      <span class="q2-mobile-nav-label">Queues</span>
+    </a>
+  </nav>
+
   <!-- Modal host: ticket composer and queue configuration both render here. -->
   <div class="q2-modal-host" id="q2Modal" hidden></div>
 
   <script src="/static/q2-worker-idle.js"></script>
+  <script src="/static/ticket-prose.js"></script>
   <script src="/static/q2.js"></script>
   <script src="/static/q2-annotation.js"></script>
   <script>

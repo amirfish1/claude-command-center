@@ -1497,6 +1497,12 @@
     let lastRender = null;   // {turns, summary, isAggregate, bucketMode} for resize redraws
     let weeklyData = null;   // populated by loadWeeklyUsage(); used by drawChart() overlay
     let weeklyDataLoaded = false;
+    let latestLiveCodexWeeklyQuota = null;
+    let liveWeeklyUsagePollInFlight = null;
+    let liveWeeklyUsagePollTimer = null;
+    let liveWeeklyUsageExpiryTimer = null;
+    const LIVE_WEEKLY_USAGE_POLL_MS = 60 * 1000;
+    const LIVE_WEEKLY_USAGE_MAX_AGE_MS = 2 * LIVE_WEEKLY_USAGE_POLL_MS;
     let resetEvents = [];    // populated by loadResetEvents(); rendered as chart markers
     let chartWeekOffset = 0; // 0=current billing period, -1=previous, etc.
     const CHART_ZOOM_HOURS = 48;
@@ -1730,6 +1736,96 @@
       return out;
     }
 
+    // `/api/usage/current` is a cheap account snapshot, unlike the transcript
+    // scan behind `/api/weekly_usage`. Keep its Codex reading separate from the
+    // cached throughput bootstrap so an older bootstrap cannot repaint it.
+    function liveCodexWeeklyQuota(payload) {
+      const codex = payload && payload.codex;
+      const weekly = codex && codex.weekly;
+      const pace = codex && codex.pace;
+      const pct = Number(weekly && weekly.pct);
+      const resetAt = weekly && weekly.resets_at;
+      if (!payload || !payload.ok || !codex || codex.stale ||
+          !weekly || weekly.pct == null || !Number.isFinite(pct) || !resetAt ||
+          !Number.isFinite(Date.parse(resetAt)) || Date.parse(resetAt) <= Date.now()) return null;
+      return {
+        ok: true,
+        weekly_pct: pct,
+        weekly_resets_at: resetAt,
+        week_start: pace && pace.week_start,
+        projected_pct: pace && pace.projected_pct,
+        session: codex.session,
+        plan_type: codex.plan_type,
+        fetched_at: payload.fetched_at || codex.snapshot_ts,
+        observed_at: Date.now(),
+        stale: false,
+      };
+    }
+
+    function overlayLiveCodexWeeklyQuota(weekly, quota) {
+      if (!quota || Date.now() - Number(quota.observed_at || 0) > LIVE_WEEKLY_USAGE_MAX_AGE_MS) return weekly;
+      const base = weekly && typeof weekly === 'object' ? weekly : {};
+      const baseFetchedAt = Date.parse(base.codex && base.codex.fetched_at || '');
+      const liveFetchedAt = Date.parse(quota.fetched_at || '');
+      if (Number.isFinite(baseFetchedAt) && Number.isFinite(liveFetchedAt) && baseFetchedAt >= liveFetchedAt) {
+        return base;
+      }
+      return { ...base, codex: { ...(base.codex || {}), ...quota } };
+    }
+
+    function scheduleLiveCodexQuotaExpiry(quota) {
+      clearTimeout(liveWeeklyUsageExpiryTimer);
+      if (!quota) return;
+      liveWeeklyUsageExpiryTimer = setTimeout(() => {
+        if (!latestLiveCodexWeeklyQuota ||
+            Date.now() - Number(latestLiveCodexWeeklyQuota.observed_at || 0) <= LIVE_WEEKLY_USAGE_MAX_AGE_MS ||
+            !weeklyData || !weeklyData.codex) return;
+        weeklyData = { ...weeklyData, codex: { ...weeklyData.codex, stale: true } };
+        renderWeeklyUsage(weeklyData);
+      }, LIVE_WEEKLY_USAGE_MAX_AGE_MS + 50);
+    }
+
+    function applyLiveCodexWeeklyQuota(quota) {
+      if (!quota) return false;
+      latestLiveCodexWeeklyQuota = quota;
+      scheduleLiveCodexQuotaExpiry(quota);
+      if (!weeklyData) return true;
+      weeklyData = stabilizeWeeklyQuota(overlayLiveCodexWeeklyQuota(weeklyData, quota));
+      weeklyDataLoaded = true;
+      renderWeeklyUsage(weeklyData);
+      if (lastRender && lastRender.session && lastRender.data) {
+        renderDashboard(lastRender.session, lastRender.data);
+      }
+      return true;
+    }
+
+    async function loadLiveWeeklyUsage() {
+      if (liveWeeklyUsagePollInFlight) return liveWeeklyUsagePollInFlight;
+      liveWeeklyUsagePollInFlight = (async () => {
+        try {
+          const response = await fetch('/api/usage/current', { cache: 'no-store' });
+          if (!response.ok) return false;
+          return applyLiveCodexWeeklyQuota(liveCodexWeeklyQuota(await response.json()));
+        } catch (_error) {
+          // Keep the last known live quota during a transient account fetch error.
+          return false;
+        } finally {
+          liveWeeklyUsagePollInFlight = null;
+        }
+      })();
+      return liveWeeklyUsagePollInFlight;
+    }
+
+    function startLiveWeeklyUsagePolling() {
+      if (liveWeeklyUsagePollTimer) return;
+      const pollWhileVisible = () => {
+        if (!document.hidden) void loadLiveWeeklyUsage();
+      };
+      void loadLiveWeeklyUsage();
+      liveWeeklyUsagePollTimer = setInterval(pollWhileVisible, LIVE_WEEKLY_USAGE_POLL_MS);
+      document.addEventListener('visibilitychange', pollWhileVisible);
+    }
+
     function readActiveThroughputBootstrap(sessionId, engine) {
       if (engine !== 'combined') return readThroughputBootstrap(sessionId, engine);
       return composeCombinedBootstrap(
@@ -1791,7 +1887,9 @@
       if (!validateThroughputBootstrap(model, session.session_id, activeThroughputEngine)) return false;
       visibleBootstrap = model;
       activeSessionId = session.session_id;
-      weeklyData = stabilizeWeeklyQuota(model.weekly);
+      weeklyData = stabilizeWeeklyQuota(overlayLiveCodexWeeklyQuota(
+        model.weekly, latestLiveCodexWeeklyQuota
+      ));
       weeklyDataLoaded = true;
       resetEvents = model.reset_events;
       renderWeeklyUsage(weeklyData);
@@ -1944,6 +2042,7 @@
       toggleSidebar(localStorage.getItem('ccc-throughput-sidebar-collapsed') !== '0');
       const cached = readActiveThroughputBootstrap(session.session_id, activeThroughputEngine);
       if (!applyThroughputBootstrap(cached, 'browser')) showFirstSnapshotShell(session);
+      startLiveWeeklyUsagePolling();
       queueMicrotask(() => loadServerBootstrapThenRefresh(session));
     }
 
@@ -5373,7 +5472,9 @@
 
     // ── Entry, escape, and invalidation ────────────────────────────────────
     window.enterTputZoom = function (row) {
-      const slotMs = keyToMs(row && row.hour);
+      // Chart slots are UTC keys; only the raw summary rows use local time.
+      // Match the chart's timestamp parsing so the clicked hour stays in view.
+      const slotMs = chartRowTimeMs(row);
       if (slotMs == null) return;
       // 12h window: 4h of context before the clicked 3h slot, 5h after.
       let startMs = slotMs - 4 * 3600e3;

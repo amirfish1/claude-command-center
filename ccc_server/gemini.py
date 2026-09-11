@@ -18,6 +18,7 @@ from ccc_server.antigravity import (
 )
 from datetime import datetime
 from pathlib import Path
+import collections
 import json
 import os
 import re
@@ -66,12 +67,16 @@ _antigravity_cli_settings_lock = threading.Lock()
 
 
 _ANTIGRAVITY_MODEL_LABELS = {
-    "gemini-3-5-pro-high": "Gemini 3.5 Pro (High)",
-    "gemini-3-5-pro-medium": "Gemini 3.5 Pro (Medium)",
-    "gemini-3-5-pro-low": "Gemini 3.5 Pro (Low)",
-    "gemini-3-5-pro": "Gemini 3.5 Pro (High)",
-    "gemini-3-5-flash-high": "Gemini 3.5 Flash (High)",
-    "gemini-3-5-flash-medium": "Gemini 3.5 Flash (Medium)",
+    "gemini-3-8-flash-high": "Gemini 3.8 Flash (High)",
+    "gemini-3-8-flash-medium": "Gemini 3.8 Flash (Medium)",
+    "gemini-3-8-flash-low": "Gemini 3.8 Flash (Low)",
+    "gemini-3-8-flash": "Gemini 3.8 Flash (High)",
+    "gemini-3-7-flash-high": "Gemini 3.7 Flash (High)",
+    "gemini-3-7-flash-medium": "Gemini 3.7 Flash (Medium)",
+    "gemini-3-7-flash-low": "Gemini 3.7 Flash (Low)",
+    "gemini-3-6-flash-high": "Gemini 3.6 Flash (High)",
+    "gemini-3-6-flash-medium": "Gemini 3.6 Flash (Medium)",
+    "gemini-3-6-flash-low": "Gemini 3.6 Flash (Low)",
     "gemini-3-1-pro-high": "Gemini 3.1 Pro (High)",
     "gemini-3-1-pro-low": "Gemini 3.1 Pro (Low)",
     "gemini-3-1-pro": "Gemini 3.1 Pro (High)",
@@ -1495,6 +1500,9 @@ def _extract_gemini_usage(session_id):
     total_cached = 0
     total_out = 0
     model = ""
+    # Per-turn tail for the status-rail column graph — one entry per Gemini
+    # reply that carried usage, same raw-count shape Claude's turn_series uses.
+    turn_series = collections.deque(maxlen=_core.USAGE_TURN_SERIES_MAX)
     for msg in data.get("messages") or []:
         if not isinstance(msg, dict) or msg.get("type") != "gemini":
             continue
@@ -1509,7 +1517,15 @@ def _extract_gemini_usage(session_id):
             peak = max(peak, window)
         total_cached += usage["cached_input_tokens"]
         total_in += max(usage["input_tokens"] - usage["cached_input_tokens"], 0)
-        total_out += usage["output_tokens"] + usage["reasoning_output_tokens"] + usage.get("tool_tokens", 0)
+        turn_out = usage["output_tokens"] + usage["reasoning_output_tokens"] + usage.get("tool_tokens", 0)
+        total_out += turn_out
+        if window or turn_out:
+            turn_series.append({
+                "ts": msg.get("timestamp") or "",
+                "tokens_in": window,
+                "tokens_cached": usage["cached_input_tokens"],
+                "tokens_out": turn_out,
+            })
     return {
         **empty,
         "latest_input_tokens": latest,
@@ -1519,6 +1535,7 @@ def _extract_gemini_usage(session_id):
         "total_cache_read_tokens": total_cached,
         "model": model,
         "override": _core._get_session_override(session_id),
+        "turn_series": list(turn_series),
     }
 
 

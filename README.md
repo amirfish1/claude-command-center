@@ -13,7 +13,7 @@ One local dashboard that attaches to every **Claude Code**, **Codex**, **Cursor*
 
 > 📢 Shipping fast. **Watch → Releases** (top-right) to get pinged on new versions without the noise.
 
-![Claude Command Center demo](docs/images/demo.png)
+![CCC v5.29 showing the session fleet, an active agent conversation, one-tap orchestration controls, and a live lane map](docs/images/ccc-v5-29-orchestration-final.png)
 
 Install with curl:
 
@@ -100,24 +100,24 @@ Group chats keep two sessions on one goal in sync — post once and every partic
 <tr>
 <td width="50%" valign="middle">
 
-### Issue → session → verify
+### Durable queues, one inbox
 
-Start a session from a GitHub issue in one click; verifying closes the issue with a commit-SHA comment. The whole pipeline lives on the board.
+File work into named [WatchTower](https://github.com/amirfish1/watchtower) queues instead of remembering what to ask which session. Tickets survive closed sessions, workers drain them in parallel, and the queue inbox shows what needs you.
 
 </td>
 <td width="50%">
-  <img src="docs/images/feature-wall/issue-to-session.gif" alt="Starting a session from a GitHub issue in CCC" width="100%" />
+  <img src="docs/images/feature-wall/queues.gif" alt="CCC's queue inbox — the all-queues picker and a ticket waiting on a decision" width="100%" />
 </td>
 </tr>
 <tr>
 <td width="50%">
-  <img src="docs/images/feature-wall/attention.gif" alt="The CCC card that needs your approval, flagged in the Waiting column" width="100%" />
+  <img src="docs/images/feature-wall/queue-workers.gif" alt="WatchTower workers draining CCC queues, with per-queue health and live worker rows" width="100%" />
 </td>
 <td width="50%" valign="middle">
 
-### Tells you which session needs you
+### Workers that specialize over time
 
-Approvals, questions, and blocked ends are read straight from the transcript and surfaced as a needs-you signal — scan one column instead of nine terminals.
+Each worker reads its queue's shared learnings file before it starts and writes back when it ends, so a queue handling the same kind of ticket for months keeps getting faster, not just busier.
 
 </td>
 </tr>
@@ -137,7 +137,7 @@ The whole fleet on your phone — monitor sessions, answer agents, and steer fro
 
 **Also in the box:**
 
-- **Durable queues with workers that specialize over time** — [WatchTower](https://github.com/amirfish1/watchtower) queues carry a shared learnings file each worker reads before and writes after; an all-queues inbox, per-queue AI status briefs, and one-click "create a queue for this session" included.
+- **More queue tooling** — per-queue AI status briefs, GitHub-backed queues synced from issues, and one-click "create a queue for this session".
 - **Answer permission prompts from the dashboard** — Claude Code's approve/deny prompts surface inline; CCC never interrupts a possibly-mid-turn session without your Approve.
 - **Board view (kanban, optional)** — drag-drop columns derived from session state, with rubber-band multi-select. The list is the primary surface; the board is an opt-in lens.
 - **System status** — a health modal over the whole fleet: restart-all, spawned-process cleanup, delivery receipts.
@@ -217,6 +217,8 @@ The whole point is the first row: the moment you touch a terminal, a tool that o
 
 ## Recent
 
+- **2026-08-28**: **v5.29.0**. A follow-up for people running a real fleet: Simple Mode gives your phone a plain-language Home screen, the new orchestration rail lets you Delegate, Verify, or Critique and then watch the lanes work, and the model catalog now shows live Codex pricing and limits alongside the other engines. Recent-work search now scans local Claude, Codex, Kimi, Gemini, and Cursor transcripts directly. The sidebar also gets its overdue polish pass: readable row styles, wrapping, a clear selected state, and correct icon alignment.
+
 - **2026-08-10**: **v5.21.0**. **A mobile and reliability release.** The phone dashboard got a full responsiveness pass — conversations open ~6× faster (2476ms → 395ms), the sidebar scrolls as one surface instead of trapping your finger in three panels, the new-session composer stops pushing its send button off-screen, and the list chrome condenses so far more sessions fit on a phone screen. On reliability: CCC no longer interrupts a possibly-mid-turn session on its own (automatic interrupt paths now file an approval ask), a global delivery-health banner surfaces lost WatchTower receipts, Kimi/Devin queues stopped wedging after mid-turn crashes, and trashed sessions stopped resurrecting for a few minutes after the click. Plus a cache-adjusted token headline in the status rail, a connection-type chip in the metadata rail, 1D/2D/7D cache-adjusted session ranking in the throughput sidebar, and a Kimi quota line in the combined throughput chart.
 - **2026-08-07**: **v5.20.0**. **Devin joins as the eighth engine**, now fully spawnable via its local CLI (`devin -p`) with headless spawn, resume, and transcript ingestion from its SQLite store — cloud API sessions stay read-only. Plus a per-repository new-session button in the sidebar, a private queue/worker diagnostic Q2 can send in one click, and a broad reasoning-effort picker rollout across every composer surface.
 - **2026-07-20**: **v5.9.0**. **Kimi Code joins as the sixth engine** (spawn, steer, live token streaming, guided setup in Settings). Plus a FIRST FLIGHT onboarding tour, a searchable full settings modal (Cmd/Ctrl+,), a cost-aware cold-session composer that offers ranked cheaper routes instead of a blind expensive resume, a 12-skill orchestration pack, plan-to-fleet queue import, and a perf pass that gets new sessions into the list in seconds.
@@ -284,6 +286,42 @@ Open Log, and Quit actions. CCC does not automate Terminal or request macOS
 Automation access. Download the [latest release](https://github.com/amirfish1/claude-command-center/releases/latest).
 
 If you'd rather clone first and run the script directly, pass the channel as a flag instead: `./scripts/install.sh --from=readme`.
+
+### The `ccc` CLI
+
+Once CCC is running, the repo-root `ccc` script answers "what sessions exist
+and what are they doing" in one command — no dashboard needed:
+
+```bash
+ccc sessions              # live census: state, age, engine, repo, name
+ccc list-sessions --since 5h   # only sessions active in the window
+ccc sessions --json       # machine-readable census
+
+ccc models                # every engine's models, effort ladders, cost,
+                          # release dates where the id carries one
+ccc quota                 # weekly quota left per engine + when it resets
+ccc doctor                # per-engine CLI/auth/BYOK health, dry-run only
+ccc spawn "fix the flaky login test" --engine claude --model opus-5
+ccc spawn "drain the queue" --report-to <your-session-id>   # reports back
+
+ccc send queue-drain "also update the changelog"   # fire-and-forget
+ccc send <session-id> "stop, wrong branch" --steer # interrupt the turn
+ccc ask queue-drain "what's your status?"          # block for the reply
+```
+
+It finds the server via `~/.claude/command-center/port.txt` (override with
+`--server` or `$CCC_SERVER`) and shows every live session — including spawned
+children (indented under their parent) and sessions the dashboard has no
+conversation row for. `ccc spawn` is the orchestration entry point: it posts
+to `/api/sessions/spawn` scoped to your current directory (override with
+`--cwd`), and `ccc models` lists the live per-engine model catalog so agents
+never have to guess a `--model` id. `ccc send` and `ccc ask` message any
+running session — fire-and-forget or blocking for the reply — addressed by
+session id, a unique id prefix, or a unique fragment of the name shown in
+`ccc sessions`. The installer links it to
+`~/.local/bin/ccc`; from a checkout you can also run `./ccc`. With no
+subcommand, `ccc` passes through to `run.sh` (the same launching behaviour
+as the Homebrew `ccc`).
 
 ### WatchTower comes with it
 
@@ -460,6 +498,15 @@ the UI uses for the kanban.
   sessions" triage band (last 5h), so structure and live activity stay
   side by side.
 
+## Codex workspace
+
+Open a Codex conversation and choose **Workspace** for a readable conversation,
+inline approvals, terminal tools, and categorized app-server actions. Capability
+availability follows the installed Codex version and connected host. Live actions
+require CCC's app-server bridge; a desktop app may not expose an attachable endpoint.
+See the [Codex workspace guide](docs/codex-workspace.md) for setup boundaries,
+preview features, queue ownership, and verification coverage.
+
 ## Engine support
 
 CCC was built around Claude Code first; Codex, Cursor, Antigravity, Kilo Code, Kimi Code, OpenCode, and Devin support followed. Spawn-from-dashboard works for all eight. The rest varies:
@@ -467,7 +514,7 @@ CCC was built around Claude Code first; Codex, Cursor, Antigravity, Kilo Code, K
 | Engine        | Spawn (headless from UI) | Resume (terminal inject / headless resume) | Transcript ingestion | Per-session model + reasoning-effort picker |
 |---------------|--------------------------|--------------------------------------------|----------------------|--------------------------|
 | Claude Code   | yes                      | yes (both)                                 | yes — first-class JSONL (`~/.claude/projects/*.jsonl`) | yes — UI picker, incl. 1M-context toggle; effort `low` `medium` `high` `xhigh` `max` |
-| Codex         | yes                      | yes (both)                                 | partial — Codex JSONL parsed, broader parity tracked in [#57](https://github.com/amirfish1/claude-command-center/issues/57) | yes — UI picker via per-session override; default from `CCC_CODEX_MODEL`; effort `low` `medium` `high` `xhigh` (no `max`) |
+| Codex         | yes                      | yes (both)                                 | yes — JSONL ingestion plus native app-server workspace when connected | yes — UI picker via per-session override; default from `CCC_CODEX_MODEL`; effort `low` `medium` `high` `xhigh` (no `max`) |
 | Cursor        | yes — headless via `cursor-agent` | yes — follow-ups route through `cursor-agent --resume` | partial — Cursor agent transcripts parsed from `~/.cursor/projects/` | model only — UI/default picker, default from `CCC_CURSOR_MODEL`; no effort ladder |
 | Antigravity   | yes — headless via `agy` print mode | yes — follow-ups route through AGY CLI or the running app's language-server RPC | yes — JSONL transcripts from `~/.gemini/antigravity/brain/` | model auto-detected from transcript metadata; no effort ladder |
 | Kilo Code     | yes — headless via `kilo run --auto` | no — fire-and-forget headless run, no resume wiring yet | yes — reads Kilo's SQLite store (`~/.local/share/kilo/kilo.db`); externally-launched sessions appear on the board | model only — UI/default picker, default from `CCC_KILO_MODEL`; no effort ladder |
@@ -487,6 +534,48 @@ their transcripts, but can't be spawned or steered from the dashboard yet.
 **Note on Cursor IDE integration:** While CCC spawns Cursor agents headlessly via the CLI, the Desktop IDE manages UI state internally using a highly-nested, proprietary Protobuf Merkle tree in `store.db`. Full "two-way chat sync" into the IDE is unsupported due to the extreme risk of workspace corruption. Instead, CCC performs a **metadata integration**: CLI sessions are injected into the IDE sidebar as bookmarks (with correct titles and timestamps) so you don't lose track of them, but they cannot be interacted with natively inside the IDE window. Use the CCC dashboard for full history.
 
 If you'd like to see an engine bumped from "partial" to first-class, open an issue — it's mostly adapter work, the ingestion layer is engine-agnostic.
+
+## Bring your own key (BYOK)
+
+Paste provider API keys once in **Settings → Engines** and route spawns
+through them instead of whatever local CLI auth an engine already has.
+Keys are stored per **profile** (name them however you like — `work`,
+`personal`, `client-x`) so different projects can use different keys.
+
+- **Storage**: the macOS Keychain (`security`, service `ccc-byok`) when
+  available; a stdlib-only encrypted local file
+  (`~/.claude/command-center/byok/profiles.enc.json`, HMAC-SHA256
+  counter-mode stream cipher, machine-bound key) on other platforms. Keys
+  are never written to disk in plaintext and never appear in the repo.
+- **Supported providers**: Anthropic, OpenAI, OpenRouter, TokenRouter, xAI,
+  Moonshot, Google.
+- **Routing OpenRouter/TokenRouter models**: OpenCode accepts model ids in
+  `<provider>/<vendor>/<model>` form natively (e.g.
+  `openrouter/anthropic/claude-sonnet-5`), so pointing a spawn at one of
+  these ids and picking a profile with an `openrouter` key configured is
+  all "virtual engine" routing needs — no separate engine to select.
+- **Per-spawn profile**: the `/api/sessions/spawn` payload accepts
+  `"key_profile": "<name>"`. When a spawn uses an `openrouter/`- or
+  `tokenrouter/`-prefixed model and no profile is given, CCC falls back to
+  a profile named `default`.
+- **Cost visibility**: `GET /api/engines/models` marks BYOK-backed models
+  with indicative per-token cost, and BYOK spawns log tokens/cost to a
+  local ledger surfaced at `GET /api/byok/usage?days=30` and in the
+  Settings panel's spend summary.
+- **Current scope**: env injection is wired for **OpenCode, Droid, and
+  Aider** spawns today (`BYOK_DIRECT_ENV_ENGINES` in `ccc_server/byok.py`).
+  Kilo and Hermes are listed for when their spawn paths support it — adding
+  one is a one-line change to the spawn dispatcher. Pi has an adapter
+  (`ccc_server/pi.py`) that resolves the `pi` CLI but always reports
+  "not yet wired" — no verified `pi exec` invocation contract exists yet.
+  `GET /api/engines/models` and `ccc models` mark every BYOK-ready engine.
+- **Health check**: `ccc doctor` (or `GET /api/engines/doctor`) reports,
+  per engine, whether the CLI is present, whether it's logged in (where a
+  probe exists), whether a BYOK profile is configured, and a dry-run smoke
+  check that only confirms the CLI binary resolves — no subprocess is
+  launched and no tokens are spent.
+
+![Settings → Engines: BYOK panel with an add-key form, profile list, and a 30-day spend summary](docs/images/byok-settings.png)
 
 ## Features
 
@@ -536,6 +625,96 @@ If you'd like to see an engine bumped from "partial" to first-class, open an iss
 - **AI-assisted titles**: click ✨ on any card to regenerate its title
   via `claude -p` (Haiku by default). Used for cleaning up auto-generated
   session slugs.
+
+## Decision Inbox
+
+Stalled work should not become your problem again. Once an hour CCC scans
+for what is stuck, does the thinking with a cheap analyst, and leaves you a
+three-option card. You click one; CCC spawns or steers the follow-through.
+
+Sources scanned each run:
+
+- **Strategy board** (optional): a markdown table with `Task | Status | ETA`
+  columns. Rows marked *Blocked*, or *Open* with an ETA in the past, become
+  candidates. Point the scanner at your file in the config below.
+- **WatchTower queues**: queues that are stuck with open tickets older than
+  `wt_age_days` (one `wt status --json` per run, one `wt ls` per surfaced
+  queue).
+- **Idle sessions**: live sessions idle for more than `idle_hours` whose last
+  task is unfinished (a pending tool, an open goal, a working state).
+
+The **token governor** runs in the same pass over live sessions only and
+flags the ones burning tokens for nothing: the same tool error repeated
+three times, no file edits for 45 minutes while still working, or context at
+85% with no compaction. Each finding gets one-click **Nudge** (steer a reset
+instruction in), **Pause** (interrupt the turn), or **Kill**.
+
+Anti-spam: at most five new cards per run, and a source that already has an
+open card, or was decided or dismissed in the last week, is skipped.
+
+![Decision Inbox: a token-governor strip flags a session at 98% context with Nudge/Pause/Kill, above three-option decision cards for stalled WatchTower queues and board items, one option recommended](docs/images/decision-inbox.png)
+
+Open it from the **Decisions** icon in the app rail or at
+`/decision-inbox.html`. Configure in
+`~/.claude/command-center/decision-inbox.json`:
+
+```json
+{
+  "strategy_board": "~/notes/Strategy Board.md",
+  "interval_s": 3600,
+  "max_cards_per_run": 5,
+  "idle_hours": 2,
+  "wt_age_days": 3,
+  "model": "claude-sonnet-5",
+  "spawn_cwd": "~/projects"
+}
+```
+
+External producers (a digest job, a monitor, a cron) can file their own
+cards: `POST /api/decision-inbox` (alias `/api/decision-inbox/cards`) with
+`{"source": "digest", "source_id": "studio-a:no-sessions", "title": "...",
+"detail": "...", "severity": "warn", "options": [...]}`. The reply is
+`{ok, card_id, deduped}`. Cards dedupe by `source:source_id`, so a producer
+that fires every run holds one open card that counts repeats. Omit
+`options` to get the default trio: acknowledge, spawn an investigator, or
+snooze for 24 hours.
+
+Set `CCC_DECISION_INBOX_DISABLED=1` to keep the loop off entirely. Cards and
+run history live in `~/.claude/command-center/decision-inbox/`. API:
+`GET /api/decision-inbox`, `POST /api/decision-inbox/{run,decide,dismiss,governor}`.
+
+## Kimi Knowledge Bridge
+
+Kimi Code sessions can become searchable in [Total Recall](https://github.com/alexgreensh/total-recall)
+without copying them into another agent's session format or writing Total
+Recall's database. CCC exports one privacy-filtered Markdown brief for each
+Kimi session, then connects that folder through Total Recall's dashboard API.
+
+From a CCC checkout, export the current Kimi sessions:
+
+```bash
+python3 scripts/kimi-recall-bridge.py sync
+```
+
+Connect the generated folder to Total Recall once (this runs the supported
+`total-recall ingest <folder>` command):
+
+```bash
+python3 scripts/kimi-recall-bridge.py connect
+```
+
+To keep it current on macOS, explicitly install the opt-in five-minute
+LaunchAgent:
+
+```bash
+python3 scripts/kimi-recall-bridge.py install-launchd
+```
+
+The bridge writes to `~/.ccc/total-recall/kimi-code` by default. It retains
+Kimi's session ID, project, model, and timestamps, but intentionally excludes
+system prompts, thinking blocks, and tool input/output. These are knowledge
+documents rather than native Total Recall session rows; native Kimi ingestion
+is tracked upstream in [Total Recall issue #18](https://github.com/alexgreensh/total-recall/issues/18).
 
 ## Orchestration skill
 
@@ -691,7 +870,7 @@ For more depth: [`docs/architecture.md`](docs/architecture.md),
 | `CCC_KILO_BIN` | *(auto)* | Absolute path to the Kilo Code CLI (`kilo`) if it is not on the service PATH. |
 | `CCC_KILO_MODEL` | `kilo/stepfun/step-3.7-flash:free` | Default model for Kilo spawns when no dashboard or API model override is set. |
 | `CCC_OPENCODE_BIN` | *(auto)* | Absolute path to the OpenCode CLI (`opencode`) if it is not on the service PATH. |
-| `CCC_OPENCODE_MODEL` | `anthropic/claude-sonnet-4-5` | Default model for OpenCode spawns when no dashboard or API model override is set. |
+| `CCC_OPENCODE_MODEL` | `openrouter/anthropic/claude-sonnet-4.5` | Default model for OpenCode spawns when no dashboard or API model override is set. |
 | `DEVIN_API_KEY` | *(unset)* | Personal Devin API key (from app.devin.ai settings). When set, your Devin cloud sessions appear on the board and in the archive (read-only). `CCC_DEVIN_API_KEY` is accepted as a fallback. |
 | `CCC_WORKER_SOCKET` | `~/.claude/command-center/worker.sock` | Local Unix socket used between the restartable dashboard and persistent execution worker. |
 | `CCC_WORK_LEDGER` | `~/.claude/command-center/control-plane.sqlite3` | Durable SQLite work graph, idempotency, lease, and recovery ledger. |

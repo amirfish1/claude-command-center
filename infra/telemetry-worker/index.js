@@ -265,19 +265,19 @@ async function handleStats(_request, env) {
       `  COUNT(DISTINCT CASE WHEN ${NODEV} THEN ip_hash END) AS distinct_ips, ` +
       "  COUNT(*) AS boots_all, " +
       "  COUNT(DISTINCT ip_hash) AS distinct_ips_all " +
-      "FROM opens GROUP BY day ORDER BY day DESC LIMIT 30"
+      "FROM opens GROUP BY day ORDER BY day DESC LIMIT 90"
     ).all()).results;
 
     const pingsByDay = (await env.DB.prepare(
       "SELECT substr(received_at, 1, 10) AS day, " +
       "  COUNT(DISTINCT install_id) AS active_installs_all, " +
       `  COUNT(DISTINCT CASE WHEN ${NODEV} THEN install_id END) AS active_installs ` +
-      `FROM pings WHERE ${REAL} GROUP BY day ORDER BY day DESC LIMIT 30`
+      `FROM pings WHERE ${REAL} GROUP BY day ORDER BY day DESC LIMIT 90`
     ).all()).results;
 
     const downloadsByDay = (await env.DB.prepare(
       "SELECT substr(received_at, 1, 10) AS day, COUNT(*) AS download_clicks " +
-      "FROM downloads GROUP BY day ORDER BY day DESC LIMIT 30"
+      "FROM downloads GROUP BY day ORDER BY day DESC LIMIT 90"
     ).all()).results;
 
     const versions = (await env.DB.prepare(

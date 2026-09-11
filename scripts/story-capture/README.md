@@ -89,6 +89,8 @@ preference, e.g. list -> board view).
   card, telemetry bar.
 - `board.json` — clean + kanban board view (`ccc-session-view: board`),
   sidebar widened to 1020px, right utilities rail collapsed.
+- `queues.json` / `queue-workers.json` — sidebar Queues tab scoped to All
+  queues; `queue-workers` adds the full multi-queue health list.
 
 Useful extra keys: `ccc-sidebar-width`, `ccc-status-rail-collapsed`,
 `ccc-flow-zoom`, `ccc-column-overrides`.
@@ -112,6 +114,21 @@ Useful extra keys: `ccc-sidebar-width`, `ccc-status-rail-collapsed`,
   CLEAN seed pins `ccc-archive-window: 'all'` — keep that key in every seed.
 - FIRST FLIGHT auto-starts on fresh installs; CLEAN also pins
   `ccc-tour-done: '1'`.
+- Queues captures: the sidebar Queues tab needs BOTH `ccc-separate-tabs: on`
+  (Issues/Queues collapse into Coding/Workers by default, CCC-778) and
+  `ccc-sidebar-tab: queues`; the queue panel's own data comes from
+  `queue/status.json` + `queue/list.json` (+ `wt/workers.json`,
+  `watchtower/alerts.json` to keep the alert strip hidden).
+- The queue picker switches to its mobile (two-line) treatment when the
+  panel is ≤ 620px wide — seed `ccc-sidebar-width` ≥ 700 for the desktop
+  picker. The full multi-queue health list is opt-in
+  (`ccc-queue-rhs-list: on`); the compact per-queue status strip (Learnings /
+  Log / worker plan chip) renders only when that pref is OFF and a single
+  queue is scoped. Switching between the two mid-flow is a `reloadWith`
+  scene cut — the toggle lives in Settings, not on the panel.
+- The Learnings button GETs `/api/queue/learnings` but then loads the file
+  with a POST (`/api/read-file`) — in demo mode that stubs to `{ok:true}`
+  with no content and pops the read-only banner. Hover it; don't click.
 - The sidebar reads `/api/conversations/list` (projected fields), not
   `/all`. `docs/demo/api/conversations/list.json` is generated from
   `all.json` through server.py's `_ARCHIVE_LIST_FIELDS` allowlist —

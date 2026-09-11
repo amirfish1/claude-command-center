@@ -157,9 +157,18 @@ degrades instead of wedging. Don't rely on it: it's a backstop, not a licence.)
 
 ## Testing
 
-`tests/test_smoke.py` imports `server.py` and checks nothing explodes. CI is minimal by design. If you add a feature, a smoke-level assertion is nice-to-have but not required — the bar is "doesn't break the import."
+### Fast Local Unit Tests vs. CI Smoke Suite
+- **Local Machine**: Always run **fast, targeted unit tests** for the specific module you are touching (e.g. `python3 -m pytest tests/test_<feature>.py`). Targeted tests finish in < 1s with minimal memory and zero disk lockups.
+- **Heavy End-to-End Suites (`tests/test_smoke.py`)**: Do **not** run full `tests/test_smoke.py` in the background during local development. It consumes > 4GB RAM, spawns multiple subprocesses and mock servers, and chokes local disk I/O, freezing the local Command Center server.
+- **GitHub Actions CI**: Full multi-OS compile checks (`py-compile`), the complete unit test suite (`unittest`), and the end-to-end server smoke tests (`smoke`) run automatically on GitHub Actions runners in isolated cloud VMs on every push and PR.
 
-Don't mock external systems (`gh`, `claude`, `pkood`) in the smoke test. The smoke test is about import-time correctness, not behavior.
+Don't mock external systems (`gh`, `claude`, `pkood`) in unit tests. Keep tests focused on fast import-time correctness and specific module invariants.
+
+Running the suite locally with stdlib `python3 -m unittest discover` (Python 3.12+) floods the output with thousands of `ResourceWarning: unclosed database` lines — the test suite reloads `server.py`/`ccc_server` modules many times per run, and each reload drops the previous module's cached sqlite3 connections without closing them. `unittest.main()`'s `TestProgram` defaults to `warnings='default'` whenever `sys.warnoptions` is empty, and that `simplefilter('default')` call wipes any `warnings.filterwarnings()` set inside the test package before the run starts — so filtering from Python code doesn't stick. Set `sys.warnoptions` yourself via the environment instead, which suppresses the flood without hiding real assertion failures:
+
+```bash
+PYTHONWARNINGS="ignore::ResourceWarning" python3 -m unittest discover
+```
 
 ### Browser / UI verification
 
@@ -257,18 +266,20 @@ Depends entirely on what you touched. Most changes ship the moment you `git push
 
 If you're unsure, default to pushing then checking the table — `git push` is reversible (`git revert`); a half-shipped release is harder to clean up.
 
+**Note:** the `hunch_*` names below are MCP tools, not shell commands. In Codex sessions they appear as `mcp__hunch__*`; there is no `hunch_context` CLI — never invoke them via the shell.
+
 <!-- HUNCH:START — auto-generated, do not edit by hand -->
 ## 🧠 Hunch (Engineering Memory)
 
-This repo has **Hunch** — a curated graph of *why* the code is the way it is (decisions, bug history, invariants). It currently holds **0 decisions, 0 bugs, 0 constraints, 12 components, 0 policies**.
+This repo has **Hunch** — a curated graph of *why* the code is the way it is (decisions, bug history, invariants). It currently holds **36 decisions, 0 bugs, 8 constraints, 12 components, 0 policies, 8 open findings**.
 
 **Consult Hunch via the `hunch_*` MCP tools — pick by MOMENT, not from memory:**
 
 **Orient (session/task start):**
-- `hunch_context(target_or_task)` — the minimal relevant slice for what you're about to do; a task phrase falls back to the closest graph matches. **Call FIRST.**
+- `hunch_context(target)` — the minimal relevant slice for what you're about to do; a task phrase falls back to the closest graph matches. **Call FIRST.**
 - `hunch_structure(target?)` — the indexed shape of the repo/dir/file/symbol — orient from the graph, not grep rounds.
 - `hunch_runbook(task)` — the proven steps for a recurring task, before re-deriving them.
-- `hunch_escalations()` — the decisions only the HUMAN can make (topic conflicts, candidate/proposed rules, repaired rules needing a re-prove). Normally empty; when it isn't, ASK the user inline — an entry is a question, never an approval.
+- `hunch_escalations()` — the decisions only the HUMAN can make (including one exact imported ADR at a time, topic conflicts, and policy calls). Normally empty; when it isn't, ASK the user inline — an entry is a question, silence is never approval. Apply an ADR answer only through `hunch_review_imported_adr` with its printed source and review hashes.
 - `hunch now` (CLI) — recent decisions + the live roadmap; `hunch log` — the memory-move timeline (every capture/adopt/supersede/prune/repair, each revertable).
 
 **Before designing / choosing an approach:**
@@ -296,6 +307,16 @@ This repo has **Hunch** — a curated graph of *why* the code is the way it is (
 - `hunch_record_correction(...)` — a human correction becomes an ENFORCED rule (Never Twice), not a one-session memory.
 - `hunch_record_finding(...)` — an OBSERVATION with no code change (an audit that found a gap, a measured number, an incident) becomes durable memory anchored to a date + evidence; `/audit` runs the ritual.
 - `hunch_timeline(target)` — decision history when investigating how something evolved.
+
+### ⛔ Top invariants (do not break)
+- **[warning]** Never spawn a subprocess per row and never do O(all sessions/conversations) work uncached on a path that scans ~/.claude/projects or session state; gate by candidacy (recent-mtime window), cache by (mtime, size) persisted to disk, batch subprocess calls into one _(scope: ccc_server/ask.py; con_0496274e58)_
+- **[warning]** server.py changes require restarting BOTH the dashboard (com.github.claude-command-center) AND the worker (com.github.claude-command-center.worker), never just the dashboard _(scope: server.py; con_2cc63a5abf)_
+- **[warning]** When bounding a headless `claude -p` subprocess to a read-only toolset, `--allowedTools` alone does NOT restrict the toolset — you must also pass `--disallowedTools` to actually block Bash/Write/Edit/etc; `--allowedTools "Read,Grep,Glob"` combined with `--permission-mode dontAsk` still let the model run Bash successfully in a direct empirical test _(scope: **; con_418e0377d4)_
+- **[warning]** Never spawn a subprocess per row and never do O(all sessions/conversations) work uncached on a path that scans ~/.claude/projects or session state; gate by candidacy, cache by (mtime, size), batch subprocess calls _(scope: server.py; con_627861dec9)_
+- **[warning]** Never git add -A, git add ., or git commit -a in this repo; stage by explicit path and commit with git commit --only, and for partial-file staging (git apply --cached / git add -p) commit immediately after with no other commands in between _(scope: **; con_9ff65026e6)_
+- **[warning]** Never `git add -A`, `git add .`, or `git commit -a` in this repo; stage by explicit path and commit with `git commit --only <paths>` _(scope: **; con_db5f0fc0be)_
+- **[warning]** Never add a manual refresh button to fix UI staleness in CCC; fix the staleness at its source with auto-refresh instead _(scope: **; con_e3a02ac292)_
+- **[advisory]** Fix broken infra/tooling (a script, a launchd job, a missing dependency) the same turn you find it — don't ask the user first and don't just report it _(scope: **; con_cc564ad105)_
 
 _Hunch updates itself from commits and test failures. Records carry provenance + confidence; treat low-confidence items as advisory._
 <!-- HUNCH:END -->

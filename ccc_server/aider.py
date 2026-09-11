@@ -152,7 +152,7 @@ def _aider_finish_turn(entry, transcript_path):
         _aider_append(transcript_path, _aider_result_event(session_id, exit_code))
 
 
-def _aider_start_turn(session_id, text, *, cwd, repo_path, name, model="", parent_session_id=None):
+def _aider_start_turn(session_id, text, *, cwd, repo_path, name, model="", parent_session_id=None, env=None):
     resolved = _resolve_aider_bin()
     if not resolved["available"]:
         return {"ok": False, "error": resolved["reason"], "code": resolved.get("code")}
@@ -167,10 +167,14 @@ def _aider_start_turn(session_id, text, *, cwd, repo_path, name, model="", paren
     if model:
         cmd.extend(["--model", model])
     log_fh = open(log_path, "w", encoding="utf-8")
+    # `env`, when given, is merged over the inherited process environment --
+    # used by the BYOK layer (ccc_server/byok.py) to hand Aider a provider
+    # API key for this one spawn without touching global state.
+    popen_env = {**os.environ, **env} if env else None
     try:
         proc = subprocess.Popen(
             cmd, stdin=subprocess.DEVNULL, stdout=log_fh, stderr=subprocess.STDOUT,
-            cwd=cwd, start_new_session=True,
+            cwd=cwd, start_new_session=True, env=popen_env,
         )
     except (FileNotFoundError, OSError) as exc:
         log_fh.close()
@@ -198,8 +202,12 @@ def _aider_start_turn(session_id, text, *, cwd, repo_path, name, model="", paren
     )
 
 
-def spawn_session_aider(prompt, name=None, cwd=None, repo_path=None, worktree=False, model=None, parent_session_id=None):
-    """Start an Aider one-shot run with a CCC-owned durable session UUID."""
+def spawn_session_aider(prompt, name=None, cwd=None, repo_path=None, worktree=False, model=None, parent_session_id=None, env=None):
+    """Start an Aider one-shot run with a CCC-owned durable session UUID.
+
+    ``env``, when given, is merged over the inherited process environment --
+    used by the BYOK layer to hand this one spawn a provider API key.
+    """
     prompt = _core._strip_ccc_session_state_instruction(prompt)
     if not prompt:
         return {"ok": False, "error": "missing prompt"}
@@ -227,7 +235,7 @@ def spawn_session_aider(prompt, name=None, cwd=None, repo_path=None, worktree=Fa
         _aider_append(transcript_path, _aider_user_event(session_id, prompt))
     result = _aider_start_turn(
         session_id, prompt, cwd=spawn_cwd, repo_path=ctx["repo_path"], name=session_name,
-        model=model_to_use, parent_session_id=parent_session_id,
+        model=model_to_use, parent_session_id=parent_session_id, env=env,
     )
     if result.get("ok") and worktree_path:
         result["worktree_path"] = worktree_path

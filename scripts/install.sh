@@ -312,6 +312,33 @@ install_watchtower() {
 }
 
 # ---------------------------------------------------------------------------
+# ccc CLI: symlink the repo-root client onto PATH so `ccc sessions` works
+# from anywhere. Convenience only — never fatal.
+# ---------------------------------------------------------------------------
+link_ccc_cli() {
+  local bin_dir="$HOME/.local/bin"
+  local target="$INSTALL_DIR/ccc"
+  local link="$bin_dir/ccc"
+  if [ ! -f "$target" ]; then
+    return 0
+  fi
+  chmod +x "$target" 2>/dev/null || true
+  mkdir -p "$bin_dir" 2>/dev/null || true
+  if [ -L "$link" ] && [ "$(readlink "$link")" = "$target" ]; then
+    return 0
+  fi
+  if ln -sfn "$target" "$link" 2>/dev/null; then
+    printf 'install: ccc CLI linked at %s\n' "$link"
+    case ":$PATH:" in
+      *":$bin_dir:"*) ;;
+      *) printf 'install: note: %s is not on PATH — add it to use `ccc` from anywhere\n' "$bin_dir" ;;
+    esac
+  else
+    printf 'install: could not link ccc CLI — run it as %s\n' "$target"
+  fi
+}
+
+# ---------------------------------------------------------------------------
 # main
 # ---------------------------------------------------------------------------
 main() {
@@ -327,6 +354,7 @@ main() {
 
   sync_repo
   install_watchtower  # WT-26: bundle WT as CCC's queue engine
+  link_ccc_cli        # put `ccc` on PATH
   launch_server
 }
 

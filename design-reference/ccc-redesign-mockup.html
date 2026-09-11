@@ -1,0 +1,307 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>CCC — Human-oriented redesign</title>
+<style>
+  :root{
+    --bg: #0c0e11;
+    --panel: #14171b;
+    --panel-2: #1a1e23;
+    --border: #262b32;
+    --text: #e7e9ec;
+    --muted: #868d99;
+    --muted-2: #565c66;
+    --working: #35c98c;
+    --working-dim: rgba(53,201,140,0.12);
+    --idle: #5a6270;
+    --stuck: #e0a23e;
+    --accent: #5b8def;
+    --accent-dim: rgba(91,141,239,0.14);
+    --mono: 'SF Mono', SFMono-Regular, Consolas, 'Liberation Mono', Menlo, monospace;
+    --sans: -apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif;
+  }
+  *{box-sizing:border-box;}
+  body{
+    margin:0; padding:40px 20px 80px;
+    background:var(--bg); color:var(--text);
+    font-family:var(--sans);
+    -webkit-font-smoothing:antialiased;
+  }
+  .wrap{max-width:720px; margin:0 auto;}
+  .masthead{margin-bottom:48px;}
+  .masthead h1{font-size:22px; font-weight:650; margin:0 0 8px; letter-spacing:-0.01em;}
+  .masthead p{color:var(--muted); font-size:14px; line-height:1.6; margin:0; max-width:560px;}
+
+  .section{margin-bottom:56px;}
+  .section-head{display:flex; align-items:baseline; gap:10px; margin-bottom:16px;}
+  .section-num{font-family:var(--mono); font-size:12px; color:var(--muted-2);}
+  .section-title{font-size:15px; font-weight:600;}
+
+  .pair{display:grid; grid-template-columns:1fr; gap:12px;}
+  @media(min-width:640px){ .pair{grid-template-columns:1fr 1fr;} }
+
+  .col-label{font-size:11px; text-transform:uppercase; letter-spacing:0.06em; color:var(--muted-2); margin-bottom:8px; font-weight:600;}
+  .col-label.after{color:var(--working);}
+
+  .card{
+    background:var(--panel); border:1px solid var(--border); border-radius:10px;
+    padding:14px; position:relative; overflow:hidden;
+  }
+  .card.before{opacity:0.82;}
+
+  /* ---------- Section 1: status ---------- */
+  .badge-row{display:flex; flex-wrap:wrap; gap:5px; margin-bottom:10px;}
+  .chip{
+    font-size:10.5px; padding:2px 7px; border-radius:5px; background:var(--panel-2);
+    border:1px solid var(--border); color:var(--muted); white-space:nowrap;
+  }
+  .before-title{font-size:13px; font-weight:500; margin-bottom:6px;}
+  .before-meta{font-size:11px; color:var(--muted-2); font-family:var(--mono);}
+
+  .after-status{
+    display:flex; align-items:center; gap:7px; margin-bottom:12px;
+  }
+  .dot{width:8px; height:8px; border-radius:50%; background:var(--working); flex-shrink:0;}
+  .dot.pulse{animation:pulse 1.8s ease-in-out infinite;}
+  @keyframes pulse{
+    0%,100%{box-shadow:0 0 0 0 var(--working-dim);}
+    50%{box-shadow:0 0 0 5px var(--working-dim);}
+  }
+  .status-word{font-size:13px; font-weight:650; color:var(--working);}
+  .status-detail{font-size:12px; color:var(--muted); margin-left:2px;}
+  .after-title{font-size:13px; font-weight:500; margin-bottom:10px;}
+  .details-toggle{
+    font-size:11px; color:var(--accent); cursor:pointer; user-select:none;
+    display:inline-flex; align-items:center; gap:4px; margin-top:2px;
+  }
+  .details-toggle .arrow{transition:transform 0.15s ease; font-size:9px;}
+  .details-toggle.open .arrow{transform:rotate(90deg);}
+  .details-panel{
+    display:none; margin-top:10px; padding-top:10px; border-top:1px solid var(--border);
+    font-family:var(--mono); font-size:10.5px; color:var(--muted-2); line-height:1.8;
+  }
+  .details-panel.open{display:block;}
+
+  /* ---------- Section 2: session id ---------- */
+  .topbar-mock{
+    display:flex; gap:6px; align-items:center; flex-wrap:wrap; padding:8px 10px;
+    background:var(--panel-2); border-radius:8px; font-size:11px;
+  }
+  .tb-btn{padding:3px 7px; border-radius:5px; background:var(--panel); color:var(--muted); border:1px solid var(--border); font-size:10.5px; white-space:nowrap;}
+  .tb-sid{
+    font-family:var(--mono); font-size:10.5px; color:var(--muted-2); opacity:0.6;
+    margin-left:2px; cursor:pointer;
+  }
+
+  .id-chip-wrap{display:flex; align-items:center; justify-content:space-between; gap:10px;}
+  .id-chip{
+    display:inline-flex; align-items:center; gap:8px; padding:6px 10px;
+    background:var(--panel-2); border:1px solid var(--border); border-radius:8px;
+  }
+  .id-chip .label{font-size:10.5px; color:var(--muted); font-weight:600;}
+  .id-chip .value{font-family:var(--mono); font-size:12px; color:var(--text);}
+  .copy-btn{
+    display:inline-flex; align-items:center; gap:5px; padding:5px 9px; border-radius:6px;
+    background:var(--accent-dim); color:var(--accent); border:1px solid transparent;
+    font-size:11px; font-weight:600; cursor:pointer; font-family:var(--sans);
+  }
+  .copy-btn:hover{background:rgba(91,141,239,0.22);}
+  .copy-btn.copied{background:var(--working-dim); color:var(--working);}
+  .toast{
+    position:fixed; bottom:28px; left:50%; transform:translateX(-50%) translateY(20px);
+    background:var(--panel-2); border:1px solid var(--border); color:var(--text);
+    padding:9px 16px; border-radius:8px; font-size:12.5px; opacity:0;
+    transition:all 0.25s ease; pointer-events:none; box-shadow:0 8px 24px rgba(0,0,0,0.4);
+  }
+  .toast.show{opacity:1; transform:translateX(-50%) translateY(0);}
+
+  /* ---------- Section 3: view modes ---------- */
+  .seg-mock{display:flex; gap:4px; background:var(--panel-2); padding:3px; border-radius:8px; width:fit-content; margin-bottom:8px;}
+  .seg-mock button{
+    background:transparent; border:none; color:var(--muted); font-size:11px; padding:4px 10px;
+    border-radius:6px; font-family:var(--sans);
+  }
+  .seg-mock button[aria-pressed="true"]{background:var(--panel); color:var(--text);}
+
+  .view-options{display:flex; flex-direction:column; gap:8px;}
+  .view-opt{
+    display:flex; align-items:flex-start; gap:10px; padding:10px 12px; border-radius:8px;
+    border:1px solid var(--border); cursor:pointer; background:var(--panel-2);
+  }
+  .view-opt.selected{border-color:var(--accent); background:var(--accent-dim);}
+  .view-opt .radio{
+    width:14px; height:14px; border-radius:50%; border:1.5px solid var(--muted-2);
+    margin-top:2px; flex-shrink:0; position:relative;
+  }
+  .view-opt.selected .radio{border-color:var(--accent);}
+  .view-opt.selected .radio::after{
+    content:''; position:absolute; inset:2.5px; border-radius:50%; background:var(--accent);
+  }
+  .view-opt .vo-name{font-size:13px; font-weight:600; margin-bottom:2px;}
+  .view-opt .vo-desc{font-size:11.5px; color:var(--muted); line-height:1.5;}
+  .view-opt .vo-cost{font-size:10px; color:var(--muted-2); margin-top:3px;}
+
+  .principles{
+    margin-top:60px; padding-top:32px; border-top:1px solid var(--border);
+  }
+  .principles h2{font-size:14px; font-weight:650; margin:0 0 14px;}
+  .principles ol{margin:0; padding-left:20px; color:var(--muted); font-size:12.5px; line-height:1.9;}
+  .principles li b{color:var(--text); font-weight:600;}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <div class="masthead">
+    <h1>CCC, redesigned for a human</h1>
+    <p>Three concrete changes to the actual dashboard — one dominant status signal, a real copy affordance for session IDs, and plain-language names for view modes. Everything below is live; click things.</p>
+  </div>
+
+  <!-- SECTION 1 -->
+  <div class="section">
+    <div class="section-head">
+      <span class="section-num">01</span>
+      <span class="section-title">Is the agent working?</span>
+    </div>
+    <div class="pair">
+      <div>
+        <div class="col-label">Before</div>
+        <div class="card before">
+          <div class="badge-row">
+            <span class="chip">GH #194</span>
+            <span class="chip">Desktop</span>
+            <span class="chip">no edits</span>
+          </div>
+          <div class="before-title">Fix the auth redirect loop</div>
+          <div class="before-meta">sidecar_status: active · pending_tool: Edit · age 12s</div>
+        </div>
+      </div>
+      <div>
+        <div class="col-label after">After</div>
+        <div class="card">
+          <div class="after-status">
+            <span class="dot pulse"></span>
+            <span class="status-word">Working</span>
+            <span class="status-detail">— editing auth.py</span>
+          </div>
+          <div class="after-title">Fix the auth redirect loop</div>
+          <div class="details-toggle" onclick="this.classList.toggle('open'); this.nextElementSibling.classList.toggle('open')">
+            <span class="arrow">▶</span> Details
+          </div>
+          <div class="details-panel">
+            linked: GH #194 &middot; engine: Claude Code &middot; tool: Edit &middot; running 12s
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- SECTION 2 -->
+  <div class="section">
+    <div class="section-head">
+      <span class="section-num">02</span>
+      <span class="section-title">Finding &amp; copying the session ID</span>
+    </div>
+    <div class="pair">
+      <div>
+        <div class="col-label">Before</div>
+        <div class="card before">
+          <div class="topbar-mock">
+            <span class="tb-btn">✎ Annotate</span>
+            <span class="tb-btn">Screen</span>
+            <span class="tb-btn">🎋 Worktrees</span>
+            <span class="tb-btn">📊 Stats</span>
+            <span class="tb-btn">⌘ Terminal</span>
+            <span class="tb-sid">a1b2c3d4-e5f6</span>
+          </div>
+        </div>
+      </div>
+      <div>
+        <div class="col-label after">After</div>
+        <div class="card">
+          <div class="id-chip-wrap">
+            <div class="id-chip">
+              <span class="label">Session</span>
+              <span class="value">a1b2c3d4</span>
+            </div>
+            <button class="copy-btn" id="copyBtn" onclick="copySid()">⧉ Copy</button>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- SECTION 3 -->
+  <div class="section">
+    <div class="section-head">
+      <span class="section-num">03</span>
+      <span class="section-title">The three view modes</span>
+    </div>
+    <div class="pair">
+      <div>
+        <div class="col-label">Before</div>
+        <div class="card before" style="padding-top:22px; padding-bottom:22px;">
+          <div class="seg-mock">
+            <button aria-pressed="true">Off</button>
+            <button>Present</button>
+            <button>Mode 3</button>
+          </div>
+          <div class="before-meta">(no explanation of what "Mode 3" does)</div>
+        </div>
+      </div>
+      <div>
+        <div class="col-label after">After</div>
+        <div class="card">
+          <div class="view-options" id="viewOpts">
+            <div class="view-opt selected" data-i="0" onclick="pickView(0)">
+              <span class="radio"></span>
+              <div><div class="vo-name">Chat</div><div class="vo-desc">The normal back-and-forth transcript.</div></div>
+            </div>
+            <div class="view-opt" data-i="1" onclick="pickView(1)">
+              <span class="radio"></span>
+              <div><div class="vo-name">Slides</div><div class="vo-desc">Turns each answer into a slide as it arrives. Instant, no extra cost.</div><div class="vo-cost">Free — runs in your browser</div></div>
+            </div>
+            <div class="view-opt" data-i="2" onclick="pickView(2)">
+              <span class="radio"></span>
+              <div><div class="vo-name">Slides, designed by the agent</div><div class="vo-desc">Asks the working agent to lay out a proper slide deck alongside its answer.</div><div class="vo-cost">Uses extra tokens each turn</div></div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="principles">
+    <h2>The four rules behind these changes</h2>
+    <ol>
+      <li><b>One dominant signal per card.</b> Working/idle gets the eye first; everything else (issue links, engine, cost tier) is quiet metadata below it.</li>
+      <li><b>Progressive disclosure.</b> Engineering plumbing (sidecar status, tool names, stale-call detection) still exists — it just lives behind a "Details" toggle instead of on the default surface.</li>
+      <li><b>Plain-language names.</b> No "Mode 3." Every control is named for what it does, in words a non-engineer would use, with a one-line description instead of a tooltip you have to hover to find.</li>
+      <li><b>Real affordances for real data.</b> If something's meant to be copied (a session ID), it gets a label, legible contrast, and an actual button — not a transparent span you find by accident.</li>
+    </ol>
+  </div>
+
+</div>
+
+<div class="toast" id="toast">Copied session ID</div>
+
+<script>
+function copySid(){
+  const btn = document.getElementById('copyBtn');
+  navigator.clipboard && navigator.clipboard.writeText('a1b2c3d4-e5f6-7890-abcd-ef1234567890').catch(()=>{});
+  btn.textContent = '✓ Copied';
+  btn.classList.add('copied');
+  const toast = document.getElementById('toast');
+  toast.classList.add('show');
+  setTimeout(()=>{ toast.classList.remove('show'); }, 1800);
+  setTimeout(()=>{ btn.textContent = '⧉ Copy'; btn.classList.remove('copied'); }, 1800);
+}
+function pickView(i){
+  document.querySelectorAll('#viewOpts .view-opt').forEach(el=>el.classList.remove('selected'));
+  document.querySelector('#viewOpts .view-opt[data-i="'+i+'"]').classList.add('selected');
+}
+</script>
+</body>
+</html>

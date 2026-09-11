@@ -1,0 +1,1 @@
+- Show queued steering messages in a separate panel above the composer, with wrapping text and separate controls. Prevent duplicate pending bubbles across refreshes, preserve repeated sends, and keep failed steers available to retry.

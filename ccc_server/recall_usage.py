@@ -24,6 +24,7 @@ import urllib.request
 import uuid
 
 from ccc_server import core as _core
+from ccc_server.quota_calibration import quota_cost_calibration
 
 # ---------------------------------------------------------------------------
 # Total Recall search — optional session-level augmentation for the sidebar
@@ -998,9 +999,22 @@ def _usage_snapshot_epoch(snapshot):
     return dt.timestamp()
 
 
+_native_usage_snapshots_memo = {"path": None, "signature": None, "snapshots": None}
+
+
 def _read_native_usage_snapshots_unlocked():
+    path = _core._USAGE_SNAPSHOTS_FILE
     try:
-        with _core._USAGE_SNAPSHOTS_FILE.open("r", encoding="utf-8") as f:
+        stat = path.stat()
+    except OSError:
+        return []
+    signature = (stat.st_mtime_ns, stat.st_size)
+    path_str = str(path)
+    cached = _native_usage_snapshots_memo
+    if cached["path"] == path_str and cached["signature"] == signature:
+        return list(cached["snapshots"] or [])
+    try:
+        with path.open("r", encoding="utf-8") as f:
             lines = f.readlines()
     except OSError:
         return []
@@ -1015,7 +1029,12 @@ def _read_native_usage_snapshots_unlocked():
             continue
         if isinstance(item, dict):
             snapshots.append(item)
-    return snapshots
+    _native_usage_snapshots_memo.update({
+        "path": path_str,
+        "signature": signature,
+        "snapshots": snapshots,
+    })
+    return list(snapshots)
 
 
 def _write_native_usage_snapshots_unlocked(snapshots):
@@ -1498,6 +1517,10 @@ def usage_current_payload(now_epoch=None):
             "from_cache": bool((kimi or {}).get("from_cache")),
             "stale": kimi_stale,
         },
+        "quota_cost_calibration": quota_cost_calibration(
+            _core._USAGE_SNAPSHOTS_FILE, _core._THROUGHPUT_DISK_CACHE_DIR,
+            now=now_epoch,
+        ),
         "calibration": {
             "pct_per_token": (cal or {}).get("pct_per_token"),
             "calibrated_at": (cal or {}).get("calibrated_at"),
@@ -1556,4 +1579,3 @@ def _start_plan_usage_poller():
         name="ccc-plan-usage-poller",
     ).start()
     return True
-

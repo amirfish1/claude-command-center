@@ -2,11 +2,12 @@
 
 from __future__ import annotations
 
-import hashlib
 import os
 import threading
 import time
 from pathlib import Path
+
+from ccc_server.content_hash import compute as _compute_ccc_content_hash
 
 
 # A worker restart re-adopts every live transport within seconds, so an
@@ -54,14 +55,14 @@ class EngineHost:
                 os.environ["CCC_WORKER_PROCESS"] = "1"
                 import server
                 self._module = server
-                # Capture a fingerprint of the server.py this process actually
-                # loaded.  run.sh compares it to the file on disk so code changes
-                # that do not bump __version__ still trigger a worker restart.
+                # Capture a fingerprint of the server.py + ccc_server/*.py
+                # this process actually loaded (see content_hash.py for why
+                # both matter, not just server.py). run.sh compares it to
+                # the files on disk so code changes that do not bump
+                # __version__ still trigger a worker restart.
                 try:
-                    server_path = Path(server.__file__).resolve()
-                    server._ccc_content_hash = hashlib.sha256(
-                        server_path.read_bytes()
-                    ).hexdigest()[:16]
+                    repo_root = Path(server.__file__).resolve().parent
+                    _, server._ccc_content_hash = _compute_ccc_content_hash(repo_root)
                 except Exception:
                     server._ccc_content_hash = None
                 # server.main() installs this for the dashboard process, but
@@ -329,6 +330,11 @@ class EngineHost:
         try:
             call_args = dict(args)
             call_args.pop("_work_result_baseline", None)
+            # The durable work record, rather than the untrusted request args,
+            # owns replay identity. Forward it into inject so worker delivery
+            # has the same key the dashboard submitted.
+            if engine == "claude" and operation == "inject":
+                call_args["idempotency_key"] = str(item.get("idempotency_key") or "")
             result = self._call(engine, operation, call_args)
         except Exception as exc:
             failed = self.ledger.transition(
@@ -501,6 +507,9 @@ class EngineHost:
                     ]
                 return {"ok": True, "deltas": deltas}
         if engine == "codex":
+            if operation == "client":
+                from ccc_server.codex_client import codex_client_dispatch
+                return codex_client_dispatch(args.get("action"), args.get("data") or {})
             if operation == "availability":
                 info = legacy._resolve_codex_bin()
                 info["model"] = legacy._spawn_model_for_engine("codex")
@@ -522,6 +531,15 @@ class EngineHost:
                     args.get("text") or "",
                     steer=bool(args.get("steer")),
                     _from_queue=bool(args.get("from_queue")),
+                    preserve_queued_steer=bool(
+                        args.get("preserve_queued_steer")
+                    ),
+                    queued_steer_transaction_protocol=int(
+                        args.get("queued_steer_transaction_protocol") or 0
+                    ),
+                    queued_delivery_transaction_protocol=int(
+                        args.get("queued_delivery_transaction_protocol") or 0
+                    ),
                 )
             if operation == "approval":
                 return legacy._codex_app_server_resolve_approval(
@@ -598,6 +616,9 @@ class EngineHost:
                     skip_wt=bool(args.get("skip_wt")),
                     preserve_queued_steer=bool(args.get("preserve_queued_steer")),
                     force_queue=bool(args.get("force_queue")),
+                    source=args.get("source") or "api",
+                    peer_sender_sid=args.get("peer_sender_sid"),
+                    idempotency_key=args.get("idempotency_key"),
                 )
             if operation == "interrupt":
                 return legacy._interrupt_claude_headless_local(
@@ -627,6 +648,7 @@ class EngineHost:
                     args.get("text") or "",
                     timeout_ms=int(args.get("timeout_ms") or 30000),
                     cwd=args.get("cwd"),
+                    peer_sender_sid=args.get("peer_sender_sid"),
                 )
             if operation == "compact":
                 return legacy.compact_session_context(
@@ -643,6 +665,8 @@ class EngineHost:
                 )
             if operation == "auto_handover_fire":
                 return legacy._fire_auto_handover_local(args.get("session_id"))
+        if engine == "droid" and operation == "spawn":
+            return legacy.spawn_session_droid(**args)
         raise ValueError(f"unsupported worker engine operation: {engine}.{operation}")
 
     def _track_async(self, work_id, engine, operation, args, result):

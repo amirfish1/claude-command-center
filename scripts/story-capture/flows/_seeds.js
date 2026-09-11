@@ -34,4 +34,24 @@ const LIST = {
   'ccc-status-rail-collapsed': '1',
 };
 
-module.exports = { CLEAN, BOARD, LIST };
+// Sidebar Queues tab as the whole inbox (WatchTower queues): separate
+// Issues/Queues tabs on (CCC-778's collapse is the default), the queue panel
+// mounted in the sidebar, scope pinned to All queues. Sidebar > 620px keeps
+// the queue picker in its desktop (non-fq-mobile) treatment.
+const QUEUES = {
+  ...CLEAN,
+  'ccc-separate-tabs': 'on',
+  'ccc-sidebar-tab': 'queues',
+  'ccc-uxq-selected-scope': '{"__queue_global__":"ALL"}',
+  'ccc-sidebar-width': '700',
+  'ccc-status-rail-collapsed': '1',
+};
+
+// QUEUES + the multi-queue health list (CCC-781's compact single-queue strip
+// is the default; the full per-queue list with worker rows is opt-in).
+const QUEUE_WORKERS = {
+  ...QUEUES,
+  'ccc-queue-rhs-list': 'on',
+};
+
+module.exports = { CLEAN, BOARD, LIST, QUEUES, QUEUE_WORKERS };

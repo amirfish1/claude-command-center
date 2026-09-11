@@ -9,6 +9,7 @@ import ast
 import fcntl
 import json
 import os
+import re
 import pathlib
 import shutil
 import sqlite3
@@ -29,6 +30,39 @@ from unittest import mock
 
 PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, PROJECT_ROOT)
+
+
+class TestConversationTranscriptPath(unittest.TestCase):
+    def test_resolves_the_reader_path_for_a_session(self):
+        """The copy affordance needs the concrete transcript path, even when
+        a live/deep-link row did not include it in the session list."""
+        server = importlib.import_module("server")
+        with tempfile.TemporaryDirectory() as tmpdir:
+            expected = pathlib.Path(tmpdir) / "ccc-transcript.jsonl"
+            expected.touch()
+            with mock.patch.object(
+                server, "_resolve_conversation_reader", return_value=(expected, object())
+            ):
+                self.assertEqual(
+                    server.conversation_transcript_path("session-id"), str(expected)
+                )
+
+
+class TestSpawnStreamBackoff(unittest.TestCase):
+    def test_idle_backoff_caps_before_exponentiation_can_overflow(self):
+        """An indefinitely quiet spawn stream must retain its capped cadence."""
+        server = importlib.import_module("server")
+        self.assertEqual(server._spawn_stream_idle_sleep_s(10_000), 0.25)
+
+
+class TestKimiRecallBridge(unittest.TestCase):
+    def test_kimi_recall_bridge_is_documented(self):
+        root = pathlib.Path(PROJECT_ROOT)
+        self.assertTrue((root / "scripts" / "kimi-recall-bridge.py").is_file())
+        self.assertIn(
+            "## Kimi Knowledge Bridge",
+            (root / "README.md").read_text(encoding="utf-8"),
+        )
 
 
 class TestWebuiPaneRegressionGuards(unittest.TestCase):
@@ -53,6 +87,63 @@ class TestWebuiPaneRegressionGuards(unittest.TestCase):
         self.assertIn("conv-item-completion-glow", app_css)
         self.assertIn("animation: conv-completion-glow", app_css)
 
+    def test_activity_log_colours_outcomes_and_explains_safety_blocks(self):
+        """Activity entries distinguish success, failure, and safe fallbacks."""
+        app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
+        app_css = pathlib.Path(PROJECT_ROOT, "static", "app.css").read_text(encoding="utf-8")
+
+        self.assertIn("BEAT: 'is-good'", app_js)
+        self.assertIn("SHARED_STATE_BLOCK: 'is-warn'", app_js)
+        self.assertIn("Safety safeguard: private app-server not started", app_js)
+        self.assertIn("activity-log-row ' + cls", app_js)
+        self.assertIn(".activity-log-row.is-good .activity-log-detail", app_css)
+        self.assertIn(".activity-log-row.is-bad .activity-log-detail", app_css)
+
+    def test_composer_actions_wrap_inside_narrow_conversation_panes(self):
+        """A vertical split must not let the action toolbar escape its pane."""
+        app_css = pathlib.Path(PROJECT_ROOT, "static", "app.css").read_text(encoding="utf-8")
+
+        self.assertRegex(
+            app_css,
+            r"\.conv-input-row-bottom\s*\{[^}]*min-width:\s*0;[^}]*flex-wrap:\s*wrap;",
+        )
+        self.assertRegex(
+            app_css,
+            r"\.conv-input-buttons\s*\{[^}]*min-width:\s*0;[^}]*flex-wrap:\s*wrap;",
+        )
+
+    def test_desktop_pane_header_reserves_half_its_space_for_session_title(self):
+        """The latest prompt must not squeeze the session identity out of view."""
+        app_css = pathlib.Path(PROJECT_ROOT, "static", "app.css").read_text(encoding="utf-8")
+
+        titlebar_css = app_css[
+            app_css.index(".conv-pane-titlebar {"):
+            app_css.index(".conv-pane-popout {", app_css.index(".conv-pane-titlebar {"))
+        ]
+        last_message_css = app_css[
+            app_css.index(".conv-pane-last-user-message {"):
+            app_css.index(".conv-pane-titlebar {", app_css.index(".conv-pane-last-user-message {"))
+        ]
+        self.assertIn("flex: 1 1 50%;", titlebar_css)
+        self.assertIn("flex: 0 1 50%;", last_message_css)
+
+    def test_narrow_split_panes_keep_their_session_title_headers(self):
+        """The single-pane mobile hide rule must not win in a split layout."""
+        app_css = pathlib.Path(PROJECT_ROOT, "static", "app.css").read_text(encoding="utf-8")
+
+        split_header_css = app_css[
+            app_css.index("body.conversation-popout .conv-pane > .conv-pane-header,"):
+            app_css.index("/* Toolbar breadcrumb", app_css.index("body.conversation-popout .conv-pane > .conv-pane-header,"))
+        ]
+        self.assertIn(
+            'body:not(.conversation-popout) .conv-split[data-orientation="vertical"] .conv-pane.has-last-user-message > .conv-pane-header',
+            split_header_css,
+        )
+        self.assertIn(
+            'body:not(.conversation-popout) .conv-split[data-orientation="horizontal"] .conv-pane.has-last-user-message > .conv-pane-header',
+            split_header_css,
+        )
+
     def test_pane_header_secondary_actions_use_overflow_menu(self):
         """Split-pane chrome stays compact without losing recording controls."""
         index_html = pathlib.Path(PROJECT_ROOT, "static", "index.html").read_text(encoding="utf-8")
@@ -61,7 +152,7 @@ class TestWebuiPaneRegressionGuards(unittest.TestCase):
 
         self.assertIn('data-role="pane-more"', pane_header)
         self.assertIn('data-role="pane-more-menu"', pane_header)
-        self.assertIn('data-role="pane-annotate" aria-label="Annotate visible page"', pane_header)
+        self.assertIn('data-role="pane-annotate" data-debug-hide aria-label="Annotate visible page"', pane_header)
         self.assertNotIn('&#9998; Annotate</button>', pane_header)
         self.assertIn("btn.closest('.conv-pane-more[open]')", app_js)
         self.assertIn("menu.removeAttribute('open')", app_js)
@@ -267,7 +358,7 @@ class TestServerImports(unittest.TestCase):
             2,
             "Every archive-row shaping branch must preserve thread provenance.",
         )
-        self.assertIn("const sessionProvenanceChipHtml = _sessionProvenanceChipHtml(c);", app_js)
+        self.assertIn(": _sessionProvenanceChipHtml(c);", app_js)
         self.assertIn("+ sessionProvenanceChipHtml", app_js)
         self.assertIn(".conv-session-origin-chip {", app_css)
 
@@ -407,6 +498,7 @@ class TestServerImports(unittest.TestCase):
 
         # route/dispatch wiring
         server_py = pathlib.Path(PROJECT_ROOT, "server.py").read_text(encoding="utf-8")
+        engines_py = pathlib.Path(PROJECT_ROOT, "ccc_server", "engines.py").read_text(encoding="utf-8")
         self.assertIn('_adopt_ccc_module("devin")', server_py)
         self.assertIn("if _is_devin_session(session_id):", server_py)
         self.assertIn("if _is_devin_cli_session(session_id):", server_py)
@@ -414,8 +506,8 @@ class TestServerImports(unittest.TestCase):
         self.assertIn("find_devin_cli_conversations(", server_py)
         self.assertIn("result = _parse_devin_conversation(conversation_id", server_py)
         self.assertIn("_parse_devin_cli_conversation(conversation_id", server_py)
-        self.assertIn("def spawn_session_devin(", server_py)
-        self.assertIn("def resume_session_devin(", server_py)
+        self.assertIn("def spawn_session_devin(", engines_py)
+        self.assertIn("def resume_session_devin(", engines_py)
         self.assertIn('"/api/sessions/spawn-devin/availability"', server_py)
 
         app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
@@ -527,6 +619,7 @@ class TestServerImports(unittest.TestCase):
             try:
                 with mock.patch.object(server, "session_live_status", return_value={"live": False}), \
                      mock.patch.object(server, "_control_plane_engine_call", return_value=None), \
+                     mock.patch.object(server, "_inject_budget_check", return_value=None), \
                      mock.patch.object(server, "resume_session_headless", return_value={"ok": True}) as resume:
                     result = server._inject_text_into_session(agent_sid, "follow up")
                 self.assertTrue(result["ok"])
@@ -597,6 +690,35 @@ class TestServerImports(unittest.TestCase):
             finally:
                 server._USAGE_SNAPSHOTS_FILE = old_snapshot_file
                 server._WEEKLY_PCT_FILE = old_legacy_file
+
+    def test_native_usage_snapshot_reader_reuses_unchanged_file_and_invalidates_on_write(self):
+        """Usage-current can reuse parsed snapshot history until its file changes."""
+        for mod in ("server", "morning", "morning_store"):
+            sys.modules.pop(mod, None)
+        server = importlib.import_module("server")
+
+        with tempfile.TemporaryDirectory() as tmp:
+            snapshots_file = pathlib.Path(tmp) / "usage-snapshots.jsonl"
+            snapshots_file.write_text(
+                json.dumps({"ts": "2026-07-02T16:00:00Z", "source": "native"}) + "\n",
+                encoding="utf-8",
+            )
+            old_snapshot_file = server._USAGE_SNAPSHOTS_FILE
+            try:
+                server._USAGE_SNAPSHOTS_FILE = snapshots_file
+                with mock.patch("ccc_server.recall_usage.json.loads", wraps=json.loads) as loads:
+                    self.assertEqual(len(server._read_native_usage_snapshots_unlocked()), 1)
+                    self.assertEqual(len(server._read_native_usage_snapshots_unlocked()), 1)
+                    self.assertEqual(loads.call_count, 1)
+
+                    snapshots_file.write_text(
+                        json.dumps({"ts": "2026-07-02T16:05:00Z", "source": "native"}) + "\n",
+                        encoding="utf-8",
+                    )
+                    self.assertEqual(len(server._read_native_usage_snapshots_unlocked()), 1)
+                    self.assertEqual(loads.call_count, 2)
+            finally:
+                server._USAGE_SNAPSHOTS_FILE = old_snapshot_file
 
     def test_watchtower_worker_titles_replace_raw_codex_drain_prompt(self):
         """Live WT worker rows should show the active ticket, not the drain prompt."""
@@ -1173,7 +1295,7 @@ class TestServerImports(unittest.TestCase):
         self.assertIn("const repoPath = nodeId.indexOf('repo:') === 0 ? nodeId.slice(5) : '';", app_js)
         self.assertIn("_folderGroupHeaderHtml('inprogress', title, _count, hue, '', nodeId, attrs, repoPath, archiveObjectId, inlineMetaHtml, ordinal)", app_js)
         self.assertIn("const archivedRepoPath = root.folder_path || '';", app_js)
-        self.assertIn("_folderGroupHeaderHtml('archived', folder, count, hue, orphan, collapseKey, '', archivedRepoPath)", app_js)
+        self.assertIn("_folderGroupHeaderHtml('archived', folder, countWithLiveBadge, hue, orphan, collapseKey, '', archivedRepoPath)", app_js)
         self.assertIn("if (!_isShipRepoPath(repo)) return;", app_js)
         self.assertIn("/api/repo/ship/continue", app_js)
         self.assertIn("ship-waiting-summary", app_js)
@@ -1311,6 +1433,30 @@ class TestServerImports(unittest.TestCase):
         self.assertIn("function _confirmQuitApp", app_js)
         self.assertIn("Sessions stay on disk", app_js)
         self.assertIn("Hard kill is not offered", app_js)
+
+    def test_system_processes_tab_and_endpoints(self):
+        """Processes tab in System status dialog audits killness scores and wires /api/system/processes."""
+        index_html = pathlib.Path(PROJECT_ROOT, "static", "index.html").read_text(encoding="utf-8")
+        app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
+        app_css = pathlib.Path(PROJECT_ROOT, "static", "app.css").read_text(encoding="utf-8")
+
+        self.assertIn('id="sysTabBtnProcesses"', index_html)
+        self.assertIn('id="sysTabContentProcesses"', index_html)
+        self.assertIn('id="sysProcBody"', index_html)
+        self.assertIn("/api/system/processes", app_js)
+        self.assertIn("/api/system/processes/kill", app_js)
+        self.assertIn(".sys-proc-card", app_css)
+
+        import server
+        data = server.build_system_processes()
+        self.assertIn("processes", data)
+        self.assertIn("total_count", data)
+        self.assertIn("high_risk_count", data)
+        self.assertIsInstance(data["processes"], list)
+
+        kill_res = server.system_process_kill([1, os.getpid()])
+        self.assertIn(1, kill_res["blocked"])
+        self.assertIn(os.getpid(), kill_res["blocked"])
 
     def test_total_recall_search_ui_wires_sidebar_augmentation(self):
         """Conversation search calls the Recall session endpoint and labels
@@ -1509,13 +1655,13 @@ class TestServerImports(unittest.TestCase):
         self.assertIn("spawn-cwd-chip-group-label", app_js)
         self.assertIn("Production", app_js)
         self.assertIn("Dev & test", app_js)
-        self.assertIn("id=\"nsRepoSuggestions\"", app_js)
-        self.assertIn("function renderNewSessionRepoSuggestions", app_js)
+        self.assertIn('id="spawnCwdQuickChips"', index_html)
+        self.assertIn("function renderSpawnCwdQuickChips()", app_js)
         self.assertIn("for (const opt of (spawnCwdOptions || []))", app_js)
         self.assertIn("Show all folder suggestions", index_html)
         self.assertIn(".spawn-cwd-chip-label", app_css)
         self.assertIn(".spawn-cwd-chip-group-label", app_css)
-        self.assertIn(".ns-repo-suggestions", app_css)
+        self.assertNotIn("id=\"nsRepoSuggestions\"", app_js)
 
     def test_new_session_stage_demotes_center_card_and_expands_composer(self):
         """New-session mode should make the bottom composer primary and keep
@@ -1559,8 +1705,9 @@ class TestServerImports(unittest.TestCase):
         self.assertIn("if (!row || row.pending_spawn) continue;", reconcile_block)
         self.assertIn("if (!sid || /^spawning-/.test(String(sid))) continue;", reconcile_block)
 
-    def test_new_session_object_picker_is_inline_and_folder_scoped(self):
-        """New-session object choice should be selectable inline and remembered per folder."""
+    def test_new_session_object_picker_is_hidden_but_assignment_state_remains(self):
+        """The duplicate inline OBJECT picker is hidden, while the existing
+        post-spawn assignment plumbing remains available to other flows."""
         app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
         app_css = pathlib.Path(PROJECT_ROOT, "static", "app.css").read_text(encoding="utf-8")
 
@@ -1572,9 +1719,12 @@ class TestServerImports(unittest.TestCase):
         self.assertIn("function renderNewSessionObjectMenu(query)", app_js)
         self.assertIn("function wireNewSessionObjectPicker()", app_js)
         self.assertIn("function focusNewSessionComposer()", app_js)
-        self.assertIn('id="newSessionObjectPicker"', app_js)
-        self.assertIn('data-role="new-session-object-create"', app_js)
-        self.assertIn("focusNewSessionComposer();", app_js)
+        render_start = app_js.index("function renderNewSessionObjectContext()")
+        render_end = app_js.index("function loadPendingNewSessionObjectAssignments()", render_start)
+        render_block = app_js[render_start:render_end]
+        self.assertNotIn('id="newSessionObjectPicker"', render_block)
+        self.assertIn("wrap.innerHTML = '';", render_block)
+        self.assertIn("wrap.style.display = 'none';", render_block)
         self.assertIn("assignSpawnedSessionToDefaultObject(data);", app_js)
         self.assertIn("const obj = getNewSessionSelectedObject();", app_js)
         self.assertIn(".nso-combo", app_css)
@@ -1613,24 +1763,35 @@ class TestServerImports(unittest.TestCase):
         self.assertNotIn("await promptModal", handler)
 
     def test_sidebar_tabs_start_with_active_and_all(self):
-        """The high-traffic Active and All tabs should be first."""
+        """The high-traffic Active tab is always first. In the default
+        (non-separate-tabs) layout, Coding/Workers follow it directly, with
+        the leftover Other (née All) tab last. In the legacy separate-tabs
+        layout, Issues/Queues follow Active, with Other last."""
         app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
-        tab_block = app_js[app_js.index("const _tabDefs = ["):app_js.index("const _tabBarHtml", app_js.index("const _tabDefs = ["))]
+        tab_block = app_js[app_js.index("const _tabDefs = "):app_js.index("const _tabBarHtml", app_js.index("const _tabDefs = "))]
 
+        self.assertIn("const _otherTabDef = ['archived', 'Other', _otherTabCount];", app_js)
         active_pos = tab_block.index("['inprogress', 'Active'")
-        self.assertIn("['archived', 'All'", tab_block)
-        all_pos = tab_block.index("['archived', 'All'")
+
         issues_pos = tab_block.index("['issues', 'Issues'")
         queues_pos = tab_block.index("['queues', 'Queues'")
-        self.assertLess(active_pos, all_pos)
-        self.assertLess(all_pos, issues_pos)
+        self.assertLess(active_pos, issues_pos)
         self.assertLess(issues_pos, queues_pos)
+
+        coding_pos = tab_block.index("['coding', 'Coding'")
+        workers_pos = tab_block.index("['workers', 'Workers'")
+        self.assertLess(active_pos, coding_pos)
+        self.assertLess(coding_pos, workers_pos)
+
+        # The Other tab (leftover Hermes messages + group chats) is appended
+        # last in both layouts, only when there's something to show in it.
+        self.assertIn("...(_otherTabCount > 0 ? [_otherTabDef] : []),", tab_block)
 
     def test_sidebar_all_tab_contains_active_and_archived_sessions(self):
         """The All tab should replay every session, not only archived rows."""
         app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
 
-        self.assertIn("const _allTabConvs = ", app_js)
+        self.assertIn("let _allTabConvs = ", app_js)
         # All shows active and archived rows in its main flow. Only rows with
         # the explicit trashed state belong in the bottom Trash bucket; pin and
         # lane placement never change lifecycle membership.
@@ -1640,7 +1801,7 @@ class TestServerImports(unittest.TestCase):
         self.assertIn("_openAskConvs,", all_block)
         self.assertIn("_readyToMergeConvs,", all_block)
         self.assertIn("_mainArchivedConvs,", all_block)
-        self.assertIn("const _allTabConvs = _allTabUnfilteredConvs.filter(", all_block)
+        self.assertIn("let _allTabConvs = _allTabUnfilteredConvs.filter(", all_block)
         self.assertIn("const _trashConvs = _archivedConvs.filter(c => !!c.trashed);", app_js)
         self.assertIn("const _mainArchivedConvs = _archivedConvs.filter(c => !c.trashed);", app_js)
         self.assertIn("const _arcHasFolderChips = _allTabMainConvs.concat(_allTabTrashConvs).some(c => c.folder_label_chip);", app_js)
@@ -1654,7 +1815,11 @@ class TestServerImports(unittest.TestCase):
         self.assertNotIn("conv-archived-label", archived_markup)
         self.assertIn('data-role="archived-tools"', archived_markup)
         self.assertIn('<div class="conv-archived-list">', archived_markup)
-        self.assertIn("_sidebarTab === 'archived' ? (_forceOpen(_archivedHtml, 'conv-archived-section') || _tabEmpty('sessions'))", app_js)
+        self.assertIn(
+            "(_sidebarTab === 'archived' || _sidebarTab === 'coding' || _sidebarTab === 'workers') "
+            "? (_forceOpen(_archivedHtml, 'conv-archived-section') || _tabEmpty('sessions'))",
+            app_js,
+        )
 
     def test_archived_sessions_have_visible_restore_action(self):
         """Archived session rows should have an explicit restore path back to Active."""
@@ -1692,11 +1857,12 @@ class TestServerImports(unittest.TestCase):
         self.assertNotIn("const currentlyArchived =", app_js)
 
     def test_sidebar_all_tab_splits_hermes_workers_from_messages(self):
-        """When Hermes rows exist, All should expose Coding, Workers, and
-        Messages, and Group chats lanes so plain WhatsApp/router conversations
-        and cross-repo chats do not bury agentic Hermes work."""
+        """Coding and Workers now live as their own top-level sidebar tabs
+        (CCC-778/CCC-851), each pre-filtered from the shared All/Other lane
+        classifier, so plain WhatsApp/router conversations and cross-repo
+        chats do not bury agentic Hermes work under one combined tab. The
+        leftover Other tab keeps Hermes messages + group chats together."""
         app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
-        app_css = pathlib.Path(PROJECT_ROOT, "static", "app.css").read_text(encoding="utf-8")
 
         self.assertIn("const _isHermesWorkerRow = (c) => _isHermesAllRow(c)", app_js)
         self.assertIn("Number(c.hermes_tool_calls || 0) > 0 || !!String(c.hermes_profile || '').trim()", app_js)
@@ -1707,26 +1873,22 @@ class TestServerImports(unittest.TestCase):
         self.assertIn("const _allTabLaneFor = (c, seen = new Set()) =>", app_js)
         self.assertIn("const _allTabCodingConvs = _allTabConvs.filter(c => _allTabLaneFor(c) === 'coding');", app_js)
         self.assertIn("const _allTabWorkerConvs = _allTabConvs.filter(c => _allTabLaneFor(c) === 'workers');", app_js)
-        self.assertIn("const _allTabGroupChatView = _savedAllTabView === 'group-chats' ? 'group-chats' : _savedAllTabView;", app_js)
-        self.assertIn('data-all-hermes-tab="group-chats"', app_js)
-        self.assertIn("'Group chats<span class=\"conv-tab-count\">'", app_js)
+        self.assertIn("const _allTabHermesMessageConvs = _allTabConvs.filter(c => _allTabLaneFor(c) === 'messages');", app_js)
+        # CCC-778: the top-level Coding/Workers tabs are the All/Other lane
+        # pre-filtered by sidebar tab; CCC-851: Other always shows the
+        # leftover lanes (messages + group chats) together, no nested
+        # sub-tab switcher needed anymore.
+        self.assertIn(
+            "const _topLevelLaneOverride = _sidebarTab === 'coding' ? 'coding' : _sidebarTab === 'workers' ? 'workers' : null;",
+            app_js,
+        )
+        self.assertIn("const _allTabView = _topLevelLaneOverride || 'other';", app_js)
         self.assertIn("const _allTabGroupChatCount = _allTabGroupChatItems.length + _archivedGroupChatsForRender.length;", app_js)
-        self.assertIn("const _trashHtmlForAllTabView = _allTabView === 'group-chats' ? '' : _trashHtml;", app_js)
-        self.assertIn("const _savedAllTabView = (() => {", app_js)
-        self.assertIn("const _allTabUnfilteredLanes = new Set(", app_js)
-        self.assertIn("|| _allTabUnfilteredLanes.has('workers')", app_js)
-        self.assertIn("|| _allTabUnfilteredLanes.has('messages')", app_js)
-        self.assertIn("const _allTabHasHermesSplit = (", app_js)
-        self.assertIn("|| _savedAllTabView !== 'coding'\n    );", app_js)
-        self.assertIn("data-role=\"all-hermes-tabs\"", app_js)
-        self.assertIn("data-all-hermes-tab=\"coding\"", app_js)
-        self.assertIn("data-all-hermes-tab=\"workers\"", app_js)
-        self.assertIn("data-all-hermes-tab=\"messages\"", app_js)
-        self.assertIn("data-all-hermes-tab=\"group-chats\"", app_js)
-        self.assertIn("localStorage.setItem('ccc-all-hermes-tab', value)", app_js)
-        self.assertIn("/all-lane", app_js)
-        self.assertIn(".conv-all-hermes-tabs", app_css)
-        self.assertIn(".conv-all-hermes-tab.is-drop-target", app_css)
+        self.assertIn("const _otherTabCount = _allTabGroupChatCount + _allTabHermesMessageConvs.length;", app_js)
+        self.assertIn("const _otherTabDef = ['archived', 'Other', _otherTabCount];", app_js)
+        self.assertIn("['coding', 'Coding', _allTabCodingConvs.length]", app_js)
+        self.assertIn("['workers', 'Workers', _allTabWorkerConvs.length]", app_js)
+        self.assertIn("/api/conversations/all-lane", app_js)
 
     def test_all_view_nests_subagents_and_inherits_parent_lane(self):
         app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
@@ -1777,30 +1939,20 @@ class TestServerImports(unittest.TestCase):
         self.assertNotIn("state === 'idle'", active_classifier)
         self.assertIn("_subagentRowIsRecentBlocked(c) || c.needs_approval", app_js)
         self.assertIn('data-role="subagent-cluster-toggle"', app_js)
-        self.assertIn("const _clusterNoun = _clusterTotal === 1 ? 'agent' : 'agents';", app_js)
+        self.assertIn("const _clusterNoun = _clusterTotal === 1 ? 'lane' : 'lanes';", app_js)
         row_action_selector = app_js[
             app_js.index("const CONVERSATION_ROW_ACTION_SELECTOR = ["):
             app_js.index("].join(',');", app_js.index("const CONVERSATION_ROW_ACTION_SELECTOR = ["))
         ]
         self.assertIn("'[data-role=\"subagent-cluster-toggle\"]'", row_action_selector)
-        self.assertIn("subagentCompact: true", app_js)
-        self.assertIn('class="conv-subagent-completed"', app_js)
-        self.assertIn("data-subagent-chip-sid", app_js)
+        self.assertIn("const isCollapsible = total > 0;", app_js)
         self.assertIn("$convList._subagentClusterToggleWired", app_js)
-        self.assertIn("$convList._subagentChipWired", app_js)
-        self.assertIn(".conv-item.is-subagent-compact", app_css)
-        self.assertIn(".conv-subagent-completed-chip", app_css)
-        compact_css = app_css[
-            app_css.index(".conv-item.is-subagent-compact {"):
-            app_css.index(".conv-item.is-subagent-bridge", app_css.index(".conv-item.is-subagent-compact {"))
-        ]
-        self.assertIn(".conv-qc-badge", compact_css)
+        self.assertIn(".conv-subagent-collapse-footer", app_css)
         toggle_css = app_css[
             app_css.index(".conv-subagent-cluster-toggle {"):
             app_css.index(".conv-subagent-cluster-toggle:hover", app_css.index(".conv-subagent-cluster-toggle {"))
         ]
         self.assertIn("flex: 0 0 auto;", toggle_css)
-        self.assertIn("min-width: 58px;", toggle_css)
 
     def test_blocked_subagents_stay_with_visible_active_parent_clusters(self):
         app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
@@ -2039,19 +2191,6 @@ class TestServerImports(unittest.TestCase):
         self.assertIn("else if (ev.key === 'Escape')", block)
         self.assertIn("restoreObjectTitleChip(finalTitle);", fn_body)
         self.assertNotIn("renderArchiveList(document.getElementById('convSearch')?.value || '');", fn_body)
-
-    def test_coo_tracking_checkboxes_are_coo_mode_only(self):
-        """The per-row COO tracking checkbox should stay hidden unless the
-        user has opened/enabled COO mode."""
-        app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
-        coo_button_js = pathlib.Path(PROJECT_ROOT, "static", "coo-button.js").read_text(encoding="utf-8")
-
-        self.assertIn("const COO_MODE_KEY = 'ccc-coo-mode';", app_js)
-        self.assertIn("function isCooModeOn()", app_js)
-        self.assertIn("const cooTrackHtml = isCooModeOn()", app_js)
-        self.assertIn('localStorage.setItem("ccc-coo-mode", "1")', coo_button_js)
-        self.assertIn('window.dispatchEvent(new Event("ccc-coo-mode-changed"))', coo_button_js)
-        self.assertIn("window.addEventListener('ccc-coo-mode-changed'", app_js)
 
     def test_by_object_headers_have_named_collapse_control(self):
         """Object groups should expose a visible, accessible collapse/expand
@@ -2408,8 +2547,9 @@ class TestServerImports(unittest.TestCase):
         # Server-driven warm of BOTH caches with a single sig-gated re-render.
         self.assertIn("async function _fetchWtWorkers()", app_js)
         self.assertIn("await Promise.all([_fetchUxqHealth(), _fetchWtWorkers()]);", app_js)
-        # Section header renamed to Triggered Workers.
-        self.assertIn("+ 'Triggered Workers'", app_js)
+        # Section header renamed to Triggered Workers (routed through
+        # simpleLabel() so Simple mode can relabel it to plain language).
+        self.assertIn("escapeHtml(simpleLabel('Triggered Workers'))", app_js)
         self.assertIn('data-role="evergreen-agents-header"', app_js)
         self.assertIn('data-role="evergreen-agents-scroll"', app_js)
         self.assertIn(
@@ -2506,11 +2646,19 @@ class TestServerImports(unittest.TestCase):
         self.assertIn("const _currentSessions = _ipSearchActive\n        ? _currentSessionLineage.rows\n        : _currentSessionLineage.rows", app_js)
 
     def test_current_sessions_respect_inprogress_window_filter(self):
-        """Current sessions should use the same 1d/7d/All window as by-objects."""
+        """Current sessions should use the same 8h/1d/7d/All window as by-objects."""
         app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
 
-        self.assertIn("const _currentSessionsWindowS = _ipWindowDays ? (_ipWindowDays * 24 * 3600) : null;", app_js)
-        self.assertIn("const _currentSessionsWindowLabel = _ipWindow === 'all' ? 'all' : (_ipWindow === '7d' ? 'last 7d' : 'last 1d');", app_js)
+        self.assertIn(
+            "const _currentSessionsWindowS = _ipWindow === '7d' ? 7 * 24 * 3600\n"
+            "        : (_ipWindow === '1d' ? 24 * 3600 : (_ipWindow === '8h' ? 8 * 3600 : null));",
+            app_js,
+        )
+        self.assertIn(
+            "const _currentSessionsWindowLabel = _ipWindow === 'all' ? 'all'\n"
+            "        : (_ipWindow === '7d' ? 'last 7d' : (_ipWindow === '1d' ? 'last 1d' : 'last 8h'));",
+            app_js,
+        )
         self.assertIn("if (!_currentSessionsWindowS) return true;", app_js)
         self.assertIn("return _sessionTs(c) >= _nowS - _currentSessionsWindowS;", app_js)
         self.assertIn("'<span class=\"conv-objects-section-sub\">' + _currentSessionsWindowLabel + '</span>'", app_js)
@@ -2645,8 +2793,12 @@ class TestServerImports(unittest.TestCase):
         self.assertIn("childrenByParent.get(pid) || childrenByParent.set(pid, []).get(pid)", app_js)
         self.assertIn("const _currentSessionRows = _ipSearchActive", app_js)
         self.assertIn("const _curShown = _currentSessionRows;", app_js)
-        self.assertIn("html: _renderSubagentCluster(cl, { lifecycleContext: 'active', suppressFolderChip: false, quietTitleChrome: true }),", app_js)
-        self.assertIn("? _currentSessionsByObjectGroupsHtml(_curShown)", app_js)
+        grouped_start = app_js.index("function _currentSessionsByObjectGroupsHtml(items)")
+        grouped_end = app_js.index("// Whole-section accordion collapse", grouped_start)
+        grouped_block = app_js[grouped_start:grouped_end]
+        self.assertGreaterEqual(grouped_block.count("quietTitleChrome: true"), 3)
+        self.assertIn("_renderSubagentCluster(cluster, {", grouped_block)
+        self.assertIn("? _currentSessionsByObjectGroupsHtml(_curShown) + _gcTrailingHtml", app_js)
         self.assertIn(": _currentSessionsFlatRowsWithSeparators(_curShown, _gcItems);", app_js)
         self.assertIn("const currentChildRowClass = currentChildDepth > 0 ? ' is-current-child-row' : '';", app_js)
         self.assertIn("const currentChildStyle = currentChildDepth > 0", app_js)
@@ -2768,12 +2920,12 @@ class TestServerImports(unittest.TestCase):
         session_css = app_css[app_css.index(".conv-project-tree .conv-item {"):app_css.index(".conv-project-tree .conv-item .conv-title-row", app_css.index(".conv-project-tree .conv-item {"))]
         grouped_session_css = app_css[
             app_css.index(".conv-folder-group[data-object-drop-zone] > .conv-item.is-grouped-row {"):
-            app_css.index(".conv-folder-group:not(.collapsed) .conv-item.is-grouped-row::before", app_css.index(".conv-folder-group[data-object-drop-zone] > .conv-item.is-grouped-row {"))
+            app_css.index(".conv-folder-group .conv-item.is-grouped-row .conv-meta-inline {", app_css.index(".conv-folder-group[data-object-drop-zone] > .conv-item.is-grouped-row {"))
         ]
         draft_css = app_css[app_css.index(".conv-project-tree .conv-draft-row {"):app_css.index(".conv-item .conv-ux-fix-progress", app_css.index(".conv-project-tree .conv-draft-row {"))]
         self.assertIn("padding: 0 8px;", header_css)
         self.assertIn("padding: 0 8px;", session_css)
-        self.assertIn("padding-left: 29px;", grouped_session_css)
+        self.assertIn("padding-left: var(--conv-content-left);", grouped_session_css)
         self.assertIn("display: flex;", draft_css)
         self.assertIn("align-items: center;", draft_css)
         self.assertIn("margin: 0 0 0 18px;", draft_css)
@@ -2878,7 +3030,6 @@ class TestServerImports(unittest.TestCase):
 
         self.assertIn("const summaryActionBtn = _hasSummaryDetails", app_js)
         self.assertIn("wakeBtn + summaryActionBtn + mergeBtn", app_js)
-        self.assertNotIn("+ summaryToggleHtml\n            + cooTrackHtml", app_js)
         self.assertIn(".conv-row-actions .conv-summary-toggle", app_css)
         self.assertIn("width: 20px;", app_css[app_css.index(".conv-row-actions .conv-summary-toggle"):])
 
@@ -2986,21 +3137,18 @@ class TestServerImports(unittest.TestCase):
         self.assertIn(".conv-current-sessions-scroll:not(.is-search-results) .conv-item .conv-hover-meta-row .conv-object-chip,", app_css)
         self.assertIn(".conv-item.active .conv-hover-meta-row .conv-object-chip,", app_css)
 
-    def test_sidebar_add_to_object_lives_in_rail_not_per_row_chip(self):
-        """CCC-467: the per-row "+" add-to-object chip is gone; assigning an
-        object now happens from the RHS status rail for the selected session,
-        via #statusRailAddObjectBtn. The underlying picker + assignment logic
-        is unchanged."""
+    def test_sidebar_add_to_object_is_not_in_rows_or_status_rail(self):
+        """The duplicate per-row and RHS-rail object controls are both gone;
+        object assignment remains available through the Flow workspace."""
         app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
         index_html = pathlib.Path(PROJECT_ROOT, "static", "index.html").read_text(encoding="utf-8")
 
         # Per-row empty "+" chip is dropped.
         self.assertNotIn('class="conv-object-chip is-empty"', app_js)
-        # Assign affordance moved to the rail head, wired to the same picker.
-        self.assertIn('id="statusRailAddObjectBtn"', index_html)
-        self.assertIn("const $statusRailAddObjectBtn = document.getElementById('statusRailAddObjectBtn');", app_js)
-        self.assertIn("_flowOpenObjectAssignPicker(sid, title);", app_js)
-        # Picker + assignment logic still present.
+        # The later rail cleanup removed that duplicate affordance too.
+        self.assertNotIn('id="statusRailAddObjectBtn"', index_html)
+        self.assertNotIn("const $statusRailAddObjectBtn", app_js)
+        # Flow's assignment picker + persistence logic still exist.
         self.assertIn("function _flowOpenObjectAssignPicker(sessionId, sessionTitle)", app_js)
         self.assertIn("flowNodeParents[flowNodeKey('session', sessionId)] = flowNodeKey('object', objectId);", app_js)
 
@@ -3023,7 +3171,7 @@ class TestServerImports(unittest.TestCase):
         app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
 
         self.assertIn("const quietTitleChrome = !!opts.quietTitleChrome;", app_js)
-        self.assertIn("if (titleSource === 'ai' && !quietTitleChrome) title = '✨ ' + title;", app_js)
+        self.assertNotIn("titleSource === 'ai' && !quietTitleChrome", app_js)
         self.assertIn("if (c.name_overridden && !quietTitleChrome) titleClass = 'user-renamed';", app_js)
         self.assertIn("html: _renderSubagentCluster(cl, { lifecycleContext: 'active', suppressFolderChip: false, quietTitleChrome: true }),", app_js)
         self.assertIn("? _currentSessionsByObjectGroupsHtml(_curShown)", app_js)
@@ -3049,15 +3197,6 @@ class TestServerImports(unittest.TestCase):
         # button; the invariant is still "no absolute overlay".
         self.assertIn(".status-rail-close {\n    flex: 0 0 auto;", app_css)
         self.assertNotIn(".status-rail-close {\n    position: absolute;", app_css)
-
-    def test_coo_status_pill_names_its_source(self):
-        """The COO activity badge should explain what creates the status."""
-        app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
-
-        self.assertIn("escapeHtml('COO · ' + _cs)", app_js)
-        self.assertIn("<span class=\"coo-status-age\">", app_js)
-        self.assertIn("COO status from Command Center's COO tracker", app_js)
-        self.assertIn("aria-label=\"' + escapeAttr(_cooStatusTip) + '\"", app_js)
 
     def test_stale_sidecar_does_not_count_as_live(self):
         """A Claude liveness sidecar only counts while fresh. The hooks never
@@ -3327,9 +3466,9 @@ class TestServerImports(unittest.TestCase):
             server.SPAWN_DEFAULTS_FILE = pathlib.Path(td) / "spawn-defaults.json"
             try:
                 with mock.patch.dict(os.environ, {}, clear=True):
-                    self.assertEqual(server._spawn_fallback_model_for_engine("codex"), "gpt-5.5")
+                    self.assertEqual(server._spawn_fallback_model_for_engine("codex"), "gpt-5.6-terra")
                     defaults = server._load_spawn_defaults()
-                    self.assertEqual(defaults["models"]["codex"], "gpt-5.5")
+                    self.assertEqual(defaults["models"]["codex"], "gpt-5.6-terra")
 
                     server.SPAWN_DEFAULTS_FILE.write_text(json.dumps({
                         "engine": "codex",
@@ -3393,6 +3532,7 @@ class TestServerImports(unittest.TestCase):
 
         codex_ids = payload["engines"]["codex"]
         self.assertEqual(codex_ids, [
+            "gpt-6-astra",
             "gpt-5.5",
             "gpt-5.6-sol",
             "gpt-5.6-terra",
@@ -3406,7 +3546,7 @@ class TestServerImports(unittest.TestCase):
         self.assertEqual(payload["enforced"], [])
         self.assertFalse(payload["catalog"]["codex"]["supports_custom"])
         labels = [m["label"] for m in payload["catalog"]["codex"]["models"]]
-        self.assertEqual(labels[:4], ["5.5", "5.6 Sol", "5.6 Terra", "5.6 Luna"])
+        self.assertEqual(labels[:5], ["6 Astra", "5.5", "5.6 Sol", "5.6 Terra", "5.6 Luna"])
         mini = next(m for m in payload["catalog"]["codex"]["models"] if m["id"] == "gpt-5.4-mini")
         self.assertIn("codex-cache", mini["sources"])
         self.assertEqual(mini["reasoning_efforts"], ["low"])
@@ -3434,6 +3574,22 @@ class TestServerImports(unittest.TestCase):
         )
         self.assertEqual([row["oneM"] for row in records], [True, True, True, False])
         self.assertTrue(all(row["source"] == "anthropic-models-overview" for row in records))
+
+        # The live page retitled the section to "## Compare models" and turned
+        # row labels into markdown links — both must still parse.
+        overview_v2 = """
+## Compare models
+
+| Feature | Claude Fable 5.1 | Claude Haiku 4.5 |
+|:--|:--|:--|
+| **Claude API alias** | `claude-fable-5-1` | `claude-haiku-4-5` |
+| [Context window](https://platform.claude.com/docs/x) | 1M tokens | 200K tokens |
+
+## Legacy models
+"""
+        records_v2 = server._parse_anthropic_model_overview(overview_v2)
+        self.assertEqual([row["id"] for row in records_v2], ["fable-5-1", "haiku-4-5"])
+        self.assertEqual([row["oneM"] for row in records_v2], [True, False])
 
     def test_claude_model_catalog_refresh_persists_authoritative_cache(self):
         for mod in ("server", "morning", "morning_store"):
@@ -3731,11 +3887,43 @@ class TestServerImports(unittest.TestCase):
             sys.modules.pop(mod, None)
         server = importlib.import_module("server")
 
+        self.assertEqual(server._validate_codex_model("gpt-5.6-terra"), ("gpt-5.6-terra", None))
         self.assertEqual(server._validate_codex_model("gpt-5.6-luna"), ("gpt-5.6-luna", None))
         self.assertEqual(server._validate_codex_model("gpt-5.5-codex"), ("gpt-5.5", None))
         model, error = server._validate_codex_model("gpt-5.6-preview")
         self.assertEqual(model, "gpt-5.6-preview")
         self.assertIn("unsupported codex model", error)
+
+    def test_devin_model_catalog_preserves_cost_limits_and_plan_benefits(self):
+        for mod in ("server", "morning", "morning_store"):
+            sys.modules.pop(mod, None)
+        server = importlib.import_module("server")
+        models = {
+            "families": [{
+                "family_uid": "glm-5.2",
+                "variants": [{
+                    "model_uid": "glm-5-2-max",
+                    "label": "GLM-5.2 Max",
+                    "max_context_tokens": 1_000_000,
+                    "max_output_tokens": 128_000,
+                    "cost_tier": "Free",
+                    "cost_summary": None,
+                }],
+            }],
+        }
+
+        devin_module = importlib.import_module("ccc_server.devin")
+        with mock.patch.object(devin_module, "_devin_model_list_json", return_value=models):
+            rows = server._devin_model_catalog_records(["glm-5.2"])
+
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0]["max_context_tokens"], 1_000_000)
+        self.assertEqual(rows[0]["max_output_tokens"], 128_000)
+        self.assertEqual(rows[0]["cost_tier"], "Free")
+        self.assertIsNone(rows[0]["cost_summary"])
+        self.assertEqual(rows[0]["entitlement"], "free")
+        self.assertEqual(rows[0]["entitlement_summary"], "Free for this Devin account")
+        self.assertEqual(rows[0]["entitlement_source"], "devin-cli")
 
     def test_static_model_picker_uses_server_catalog_and_codex_allowlist(self):
         app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text()
@@ -3745,6 +3933,7 @@ class TestServerImports(unittest.TestCase):
         self.assertIn("_gated('modelCatalog', loadEngineModelCatalog)", app_js)
         self.assertIn("setInterval(refreshEngineModelCatalog", app_js)
         self.assertIn("function _modelAllowedForEngine", app_js)
+        self.assertIn("gpt-6-astra", app_js)
         self.assertIn("gpt-5.6-sol", app_js)
         self.assertIn("gpt-5.6-terra", app_js)
         self.assertIn("gpt-5.6-luna", app_js)
@@ -3752,6 +3941,9 @@ class TestServerImports(unittest.TestCase):
         self.assertIn("_modelUnavailableReason", app_js)
         self.assertIn("if (_engineSupportsCustomModel(engine))", app_js)
         self.assertIn("ENGINE_SUPPORTS_CUSTOM_MODEL[engine] = info.supports_custom", app_js)
+        self.assertIn("opt.max_context_tokens", app_js)
+        self.assertIn("opt.cost_summary", app_js)
+        self.assertIn("mp-entitlement free", app_js)
 
     def test_engine_settings_exposes_automatic_updates(self):
         app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text()
@@ -3991,7 +4183,13 @@ class TestServerImports(unittest.TestCase):
         self.assertIn("😀", kept)
         # _inject_text_into_session uses the same strip so a missed
         # entry point still can't leak a surrogate to the API.
-        self.assertIn("_strip_lone_surrogates", inspect.getsource(server._inject_text_into_session))
+        # The router, not the wrapper: since CCC-1000 Phase 1
+        # _inject_text_into_session only stamps the result contract and
+        # delegates, so the sanitizer lives one level down.
+        self.assertIn(
+            "_strip_lone_surrogates",
+            inspect.getsource(server._inject_text_into_session_router),
+        )
 
     def test_annotation_notes_render_screenshots(self):
         app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
@@ -4262,7 +4460,7 @@ class TestServerImports(unittest.TestCase):
 
         self.assertIn("async function _fetchUxqItems(allowStale)", items_fetch)
         self.assertIn("allowStale && _uxqItemsCache.ts", items_fetch)
-        self.assertIn("async function _fetchUxqHealth(allowStale)", health_fetch)
+        self.assertIn("async function _fetchUxqHealth(allowStale, force)", health_fetch)
         self.assertIn("allowStale && _uxqHealthCache.ts", health_fetch)
         self.assertIn("$scope.addEventListener('change', async () =>", scope_handler)
         self.assertIn("$sel.disabled = !!isLoading;", loading_helper)
@@ -4495,6 +4693,151 @@ class TestServerImports(unittest.TestCase):
         self.assertNotIn("mobile-show-main .conv-split[data-orientation=\"\"] .conv-pane > .conv-pane-header", app_css)
         self.assertNotIn("_captureRailEl(document.getElementById('mobileBackBtn'))", app_js)
 
+    def test_non_programmer_mobile_mode_matches_mobile_breakpoint(self):
+        """The simplified mobile chrome must activate anywhere the app is in
+        single-column mobile layout, including tablets and phone landscape."""
+        app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
+        app_css = pathlib.Path(PROJECT_ROOT, "static", "app.css").read_text(encoding="utf-8")
+        index_html = pathlib.Path(PROJECT_ROOT, "static", "index.html").read_text(encoding="utf-8")
+
+        self.assertIn("const _mobileRedesignMQ = window.matchMedia('(max-width: 1200px)')", app_js)
+        self.assertNotIn("const _mobileRedesignMQ = window.matchMedia('(max-width: 768px)')", app_js)
+        # Simple mode is opt-in (localStorage 'ccc-ui-mode'); unset always
+        # defaults to advanced so a narrow window never flips chrome alone.
+        self.assertIn("function isSimpleMode() { return getUiMode() === 'simple'; }", app_js)
+        self.assertIn("body.has-mobile-bottom-nav .mobile-bottom-nav", app_css)
+        self.assertIn('id="mobileSimpleHeader"', index_html)
+        self.assertIn("Start a task", index_html)
+
+    def test_advanced_mobile_bottom_nav_includes_ask(self):
+        """Advanced (non-simple) mobile reuses #mobileBottomNav for Coding /
+        Workers / Queues (sidebar list) / Ask. The in-list
+        tab bar is hidden; Simple mode still has Home/Tasks/Helpers/More."""
+        index_html = pathlib.Path(PROJECT_ROOT, "static", "index.html").read_text(encoding="utf-8")
+        app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
+        app_css = pathlib.Path(PROJECT_ROOT, "static", "app.css").read_text(encoding="utf-8")
+        q2_html = pathlib.Path(PROJECT_ROOT, "static", "q2.html").read_text(encoding="utf-8")
+        q2_css = pathlib.Path(PROJECT_ROOT, "static", "q2.css").read_text(encoding="utf-8")
+
+        self.assertEqual(index_html.count('id="mobileBottomNav"'), 1)
+        self.assertIn('data-mobile-nav="coding"', index_html)
+        self.assertIn('data-mobile-nav="workers"', index_html)
+        self.assertIn('data-mobile-nav="queues"', index_html)
+        self.assertIn('data-mobile-nav="ask"', index_html)
+        self.assertNotIn('data-mobile-nav="q2"', index_html)
+        self.assertNotIn('data-mobile-nav="sessions"', index_html)
+        self.assertIn('data-nav-chrome="advanced"', index_html)
+        self.assertIn('data-nav-chrome="simple"', index_html)
+        self.assertIn("frame.src = '/q2.html'", app_js)
+        self.assertIn("function cccSwitchCoreApp(", app_js)
+        self.assertIn("body.has-mobile-bottom-nav .mobile-bottom-nav", app_css)
+        self.assertIn(
+            'body.has-mobile-bottom-nav:not(.ccc-simple-mode) .mobile-nav-btn[data-nav-chrome="simple"]',
+            app_css,
+        )
+        self.assertIn(
+            'body.has-mobile-bottom-nav:not(.ccc-simple-mode) #convList > .conv-tab-bar',
+            app_css,
+        )
+        self.assertIn(
+            'body.has-mobile-bottom-nav:not(.ccc-simple-mode) #convList .conv-archived-section > .conv-archived-tools',
+            app_css,
+        )
+        self.assertIn("overflow-x: clip;", app_css)
+        self.assertIn("overscroll-behavior-x: none;", app_css)
+        self.assertIn("touch-action: pan-y;", app_css)
+        self.assertIn("listEl.scrollLeft = 0", pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8"))
+        self.assertIn('id="q2MobileBottomNav"', q2_html)
+        self.assertIn('href="/q2.html"', q2_html)
+        self.assertIn(".q2-mobile-bottom-nav", q2_css)
+        self.assertIn('id="convPtr"', index_html)
+        self.assertIn("function wireMobileListPullToRefresh(", app_js)
+        self.assertIn("refreshConversationList()", app_js)
+        self.assertIn(".conv-ptr", app_css)
+
+    def test_sessions_queues_switch_keeps_the_session_list_mounted(self):
+        """Sessions ↔ Queues must not navigate away from index.html: a full
+        load re-parses every transcript. The dashboard hosts q2 in
+        #cccCoreAppFrame; the rail intercepts those two ids only."""
+        index_html = pathlib.Path(PROJECT_ROOT, "static", "index.html").read_text(encoding="utf-8")
+        app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
+        app_css = pathlib.Path(PROJECT_ROOT, "static", "app.css").read_text(encoding="utf-8")
+        rail = pathlib.Path(PROJECT_ROOT, "static", "app-rail.js").read_text(encoding="utf-8")
+        q2_html = pathlib.Path(PROJECT_ROOT, "static", "q2.html").read_text(encoding="utf-8")
+        q2_css = pathlib.Path(PROJECT_ROOT, "static", "q2.css").read_text(encoding="utf-8")
+
+        self.assertIn('id="cccCoreAppFrame"', index_html)
+        self.assertIn("function cccSwitchCoreApp(", app_js)
+        self.assertIn("frame.src = '/q2.html'", app_js)
+        self.assertIn("window.cccSwitchCoreApp = cccSwitchCoreApp", app_js)
+        self.assertIn('id !== "sessions" && id !== "queues"', rail)
+        self.assertIn("window.cccSwitchCoreApp", rail)
+        self.assertIn(".ccc-core-app-frame", app_css)
+        self.assertIn("ccc-framed", q2_html)
+        self.assertIn("html.ccc-framed .q2-mobile-bottom-nav", q2_css)
+
+    def test_mobile_boot_restore_stays_on_session_list(self):
+        """A phone cold-open must not slide the last conversation over the
+        list (that hid the Sessions/Queues nav). Boot restore still loads
+        the pane; only the overlay is skipped. Simple Home uses the same
+        depth counter."""
+        app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
+        self.assertIn("const _isBootRestore = typeof _qfBootRestoreDepth !== 'undefined'", app_js)
+        self.assertIn("if (!_isBootRestore) mobileShowForCurrentMode();", app_js)
+        self.assertNotIn("_isBootRestoreInSimpleMode", app_js)
+
+    def test_simple_home_lives_in_sidebar_layer(self):
+        """Simple Home (grandma-test landing screen) must render inside the
+        sidebar, not .main: at the <=1200px breakpoint .main is fixed
+        off-canvas until body.mobile-show-main, so a home screen in .main is
+        unreachable. All its visibility rules must also be gated on
+        ccc-mobile-redesign so a stored simple-mode pref never blanks the
+        desktop dashboard."""
+        app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
+        app_css = pathlib.Path(PROJECT_ROOT, "static", "app.css").read_text(encoding="utf-8")
+        index_html = pathlib.Path(PROJECT_ROOT, "static", "index.html").read_text(encoding="utf-8")
+
+        sidebar_pos = index_html.index('<div class="sidebar">')
+        home_pos = index_html.index('id="simpleHome"')
+        conv_split_pos = index_html.index('id="convSplit"')
+        self.assertLess(sidebar_pos, home_pos)
+        self.assertLess(home_pos, conv_split_pos)
+        self.assertIn('id="simpleComposerInput"', index_html)
+        self.assertIn('id="simpleBackHomeBtn"', index_html)
+        self.assertIn(
+            "body.ccc-mobile-redesign.ccc-simple-mode.ccc-simple-home-open #simpleHome",
+            app_css)
+        self.assertIn("document.body.classList.remove('mobile-show-main')", app_js)
+
+    def test_simple_depth_screens_have_dom_hooks(self):
+        """Simple-mode depth 2/3 (grandma test: every screen within 3 taps of
+        home must be simple): the depth-2 conversation view toggles
+        body.ccc-simple-conv-open with a plain-language title, and the
+        depth-3 full-screen surfaces (history/search, automations + detail,
+        settings) exist in the sidebar layer with their CSS gates. The
+        What's New modal must be suppressed in Simple mode."""
+        app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
+        app_css = pathlib.Path(PROJECT_ROOT, "static", "app.css").read_text(encoding="utf-8")
+        index_html = pathlib.Path(PROJECT_ROOT, "static", "index.html").read_text(encoding="utf-8")
+
+        # Depth 3 containers live in the sidebar layer (same as #simpleHome).
+        for hook in ('id="simpleHistory"', 'id="simpleHistorySearch"',
+                     'id="simpleAutomations"', 'id="simpleAutomationDetail"',
+                     'id="simpleSettings"', 'id="simpleAdvancedBtn"',
+                     'data-simple-theme="dark"'):
+            self.assertIn(hook, index_html)
+        # Depth 2: plain title + labeled Send button.
+        self.assertIn('id="simpleConvTitle"', index_html)
+        self.assertIn('class="send-btn-label"', index_html)
+        # View-state machinery + CSS gates.
+        self.assertIn("ccc-simple-conv-open", app_js)
+        self.assertIn("ccc-simple-screen-open", app_js)
+        self.assertIn("body.ccc-mobile-redesign.ccc-simple-mode.ccc-simple-conv-open #statusRail", app_css)
+        self.assertIn("body.ccc-mobile-redesign.ccc-simple-mode.ccc-simple-screen-open #convSplit", app_css)
+        # What's New suppression in Simple mode.
+        self.assertIn("isSimpleMode()) {", app_js)
+        self.assertIn("ccc-last-seen-version', whatsNewVersion", app_js)
+
     def test_mobile_back_button_stays_in_stable_toolbar(self):
         """Dynamic task-tab rendering must never own the only mobile exit."""
         index_html = pathlib.Path(PROJECT_ROOT, "static", "index.html").read_text(encoding="utf-8")
@@ -4511,6 +4854,35 @@ class TestServerImports(unittest.TestCase):
         self.assertNotIn(".conv-tab-strip.has-mobile-back", app_css)
         self.assertIn("#convToolbar .font-size-controls { display: none !important; }", app_css)
         self.assertIn("order: -100;", app_css)
+
+    def test_mobile_attach_button_can_reach_files_and_photos(self):
+        """Phones have no drag-drop and only a marginal clipboard path, so the
+        composer's file input is the ONLY way to attach from a device. An
+        `accept` or `capture` attribute on it silently breaks that: `capture`
+        forces the camera, and a narrow `accept` blocks PDFs/logs entirely."""
+        index_html = pathlib.Path(PROJECT_ROOT, "static", "index.html").read_text(encoding="utf-8")
+        app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
+        app_css = pathlib.Path(PROJECT_ROOT, "static", "app.css").read_text(encoding="utf-8")
+
+        # The picker exists and is wired to a visible button.
+        self.assertIn('<input type="file" id="convAttachInput" multiple', index_html)
+        self.assertIn('id="convAttachBtn"', index_html)
+        self.assertIn("attachFilePickerButton(", app_js)
+
+        # The picker must stay unrestricted — this is the whole feature.
+        picker = re.search(r"<input type=\"file\" id=\"convAttachInput\"[^>]*>", index_html)
+        self.assertIsNotNone(picker, "convAttachInput markup not found")
+        self.assertNotIn("accept=", picker.group(0))
+        self.assertNotIn("capture", picker.group(0))
+
+        # Non-images must route to the type-agnostic attachment endpoint, and
+        # images to the pasted-image one so they still render inline.
+        self.assertIn("uploadFilesToComposer", app_js)
+        self.assertIn("uploadManagedAttachment(file)", app_js)
+        self.assertIn("_addAttachmentChip", app_js)
+
+        # Touch tap target: >=40px on the mobile breakpoint.
+        self.assertIn(".attach-btn", app_css)
 
     def test_mobile_conversation_follows_visual_viewport(self):
         """The fixed conversation pane must remain inside the viewport after
@@ -4983,8 +5355,10 @@ class TestServerImports(unittest.TestCase):
         self.assertNotIn("field-sizing: content", app_css)
         self.assertNotIn("_hasFieldSizing", app_js)
         self.assertIn("function _autosizeConvInput()", app_js)
-        self.assertIn("$convInput.style.height = 'auto';", app_js)
-        self.assertIn("$convInput.style.height = Math.min($convInput.scrollHeight, max) + 'px';", app_js)
+        self.assertIn("function _autosizeTextareaLike(el, barEl)", app_js)
+        self.assertIn("el.style.height = 'auto';", app_js)
+        self.assertIn("el.style.height = Math.min(el.scrollHeight, max) + 'px';", app_js)
+        self.assertIn("_autosizeTextareaLike($convInput, $convInputBar);", app_js)
         input_css = app_css[
             app_css.index(".conv-input-bar input,"):
             app_css.index("/* Keep composer sizing in JS.", app_css.index(".conv-input-bar input,"))
@@ -5107,16 +5481,18 @@ class TestServerImports(unittest.TestCase):
         app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
         self.assertIn("const CODEX_SLASH_FALLBACK_COMMANDS = [", app_js)
         self.assertIn("{ name: '/compact', description: 'Summarize the visible conversation to free tokens' }", app_js)
-        self.assertIn("return source === 'codex' ? CODEX_SLASH_FALLBACK_COMMANDS : SLASH_FALLBACK_COMMANDS;", app_js)
+        self.assertIn("if (source === 'codex') return CODEX_SLASH_FALLBACK_COMMANDS;", app_js)
         self.assertIn("compactCommand && isCompactionCapableSource(currentSession.source)", app_js)
         self.assertNotIn("Codex sessions do not use Claude slash commands", app_js)
         self.assertIn("const failurePrefix = compactCommand ? '/compact failed'", app_js)
 
     def test_kimi_sessions_do_not_offer_unsupported_slash_commands(self):
-        """Kimi ACP has no slash-command protocol, so its composer must not
-        offer Claude's fallback commands as though they were executable."""
+        """Kimi/Grok now expose their own ACP-reported slash-command catalog
+        (fetched per-session), so the composer must not fall back to Claude's
+        command list for them -- that would show commands like /context that
+        don't exist for those engines."""
         app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
-        self.assertIn("if (source === 'kimi') return 'Slash commands are not wired for Kimi sessions';", app_js)
+        self.assertIn("if (source === 'kimi' || source === 'grok') return [];", app_js)
         self.assertIn("(engine === 'claude' || engine === 'codex')", app_js)
 
     def test_slash_command_picker_selects_on_press(self):
@@ -5215,30 +5591,33 @@ class TestServerImports(unittest.TestCase):
         )
 
     def test_right_rail_uses_metadata_files_and_queue_tabs(self):
-        """The right rail keeps activity in Metadata, with Files and Queue as
-        their own utility panes."""
+        """The right rail leads with Orchestration, keeps activity (and the
+        Files panel, docked at the bottom) in Metadata, and Queue as its own
+        utility pane."""
         index_html = pathlib.Path(PROJECT_ROOT, "static", "index.html").read_text(encoding="utf-8")
         app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
         app_css = pathlib.Path(PROJECT_ROOT, "static", "app.css").read_text(encoding="utf-8")
         self.assertIn('<div class="status-rail-title" id="statusRailTitle">Session Utilities</div>', index_html)
+        self.assertIn('data-rail-tab="orchestration"', index_html)
         self.assertIn('data-rail-tab="metadata"', index_html)
-        self.assertIn('data-rail-tab="files"', index_html)
         self.assertIn('data-rail-tab="queue"', index_html)
+        self.assertNotIn('data-rail-tab="files"', index_html)
         self.assertNotIn('data-rail-tab="activity"', index_html)
         self.assertIn('id="statusRailTopbar"', index_html)
         self.assertIn('id="statusRailAnnotateBtn"', index_html)
         self.assertLess(index_html.index('id="statusRailAnnotateBtn"'), index_html.index('id="statusRailCloseBtn"'))
-        self.assertLess(index_html.index('data-rail-tab="metadata"'), index_html.index('data-rail-tab="files"'))
-        self.assertLess(index_html.index('data-rail-tab="files"'), index_html.index('data-rail-tab="queue"'))
+        self.assertLess(index_html.index('data-rail-tab="orchestration"'), index_html.index('data-rail-tab="metadata"'))
+        self.assertLess(index_html.index('data-rail-tab="metadata"'), index_html.index('data-rail-tab="queue"'))
+        self.assertIn('id="statusRailOrchestrationPane"', index_html)
         self.assertIn('id="statusRailMetadataPane"', index_html)
-        self.assertIn('id="statusRailFilesPane"', index_html)
         self.assertIn('id="statusRailQueuePane"', index_html)
         self.assertNotIn('id="statusRailActivityPane"', index_html)
-        metadata_block = index_html[index_html.index('id="statusRailMetadataPane"'):index_html.index('id="statusRailFilesPane"')]
-        files_block = index_html[index_html.index('id="statusRailFilesPane"'):index_html.index('id="statusRailQueuePane"')]
-        self.assertNotIn('id="filesPanel"', metadata_block)
+        self.assertNotIn('id="statusRailFilesPane"', index_html)
+        metadata_block = index_html[index_html.index('id="statusRailMetadataPane"'):index_html.index('id="statusRailQueuePane"')]
         self.assertIn('id="subagentsPanel"', metadata_block)
-        self.assertIn('id="filesPanel"', files_block)
+        # Files is docked at the bottom of Metadata, not a tab of its own.
+        self.assertIn('id="filesPanel"', metadata_block)
+        self.assertLess(metadata_block.index('id="subagentsPanel"'), metadata_block.index('id="filesPanel"'))
         self.assertNotIn('id="filesViewToggle"', index_html)
         self.assertIn("function setStatusRailTab(tab)", app_js)
         self.assertIn("rail.querySelector('#statusRailMetadataPane')", app_js)
@@ -5248,7 +5627,7 @@ class TestServerImports(unittest.TestCase):
         # asserted against index.html above.
         self.assertIn("rail.querySelector('#statusRailQueuePane')", app_js)
         self.assertNotIn("rail.querySelector('#statusRailActivityPane')", app_js)
-        self.assertIn("const next = (tab === 'files' || tab === 'queue') ? tab : 'metadata';", app_js)
+        self.assertIn("const next = (tab === 'queue' || tab === 'orchestration') ? tab : 'metadata';", app_js)
         self.assertIn("const $statusRailAnnotateBtn = document.getElementById('statusRailAnnotateBtn');", app_js)
         self.assertIn("$statusRailAnnotateBtn.addEventListener('click', annStart);", app_js)
         self.assertNotIn("getElementById('filesViewToggle')", app_js)
@@ -5275,6 +5654,21 @@ class TestServerImports(unittest.TestCase):
         self.assertIn("overflow-y: auto;", activity_css)
         self.assertNotIn("overflow-y: visible;", activity_css)
         self.assertNotIn("flex: 0 0 auto;", activity_css)
+
+    def test_orchestration_lane_map_lands_rows_absent_from_live_snapshot(self):
+        """A cached archive row must not leave an ended child as working.
+
+        The live-activity feed contains every live session and deliberately
+        omits ended sessions, so the lane map needs to treat an old absent row
+        as landed after the first successful feed refresh.
+        """
+        app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
+        self.assertIn("let _liveSessionsActivityFetchedAt = 0;", app_js)
+        self.assertIn("_liveSessionsActivityFetchedAt = Date.now();", app_js)
+        self.assertIn("function orchLiveActivityForLane(row, born)", app_js)
+        self.assertIn("if (Object.prototype.hasOwnProperty.call(sessions, sid)) return sessions[sid];", app_js)
+        self.assertIn("return { is_live: false, state: 'ended' };", app_js)
+        self.assertIn("const fresh = orchLiveActivityForLane(row, born);", app_js)
 
     def test_queue_first_board_is_removed(self):
         """The retired Queue-first board must not remain reachable in the app."""
@@ -5315,15 +5709,31 @@ class TestServerImports(unittest.TestCase):
         self.assertNotIn('id="statusPosToggle"', index_html)
         self.assertNotIn("#statusPosToggle", app_css)
         self.assertIn(
-            "const inRail = document.body.classList.contains('status-pos-right') && !isMobile();",
+            "const inRail = document.body.classList.contains('status-pos-right')\n"
+            "      && (!isMobile() || document.body.classList.contains('popout-rail-forced'));",
             app_js,
         )
-        self.assertIn("_applyStatusRailLayout();", app_js[app_js.index("function handleMobileBreakpointChange()"):app_js.index("const $cpMobileBackBtn")])
+        self.assertIn(
+            "if (typeof _applyStatusRailLayout === 'function') _applyStatusRailLayout();",
+            app_js[app_js.index("function handleMobileBreakpointChange()"):app_js.index("const $cpMobileBackBtn")],
+        )
         mobile_rail_css = app_css[app_css.rindex("/* The desktop status rail becomes the top status layout on mobile."):]
-        self.assertIn("body.status-pos-right .conv-pane:has(> .status-rail)", mobile_rail_css)
-        self.assertIn("body.status-pos-right.status-rail-collapsed .conv-pane:has(> .status-rail)", mobile_rail_css)
+        # CCC-831: a narrow popout window can force the rail back open even
+        # under the mobile breakpoint, so every mobile-collapse selector now
+        # carries a :not(.popout-rail-forced) escape hatch.
+        # The rail anchor is the JS-maintained .has-status-rail flag class,
+        # not :has(> .status-rail): a :has() anchor on every pane made each
+        # forced layout read re-style the whole sidebar (session open perf).
+        self.assertIn("body.status-pos-right:not(.popout-rail-forced) .conv-pane.has-status-rail", mobile_rail_css)
+        self.assertIn(
+            "body.status-pos-right.status-rail-collapsed:not(.popout-rail-forced) .conv-pane.has-status-rail",
+            mobile_rail_css,
+        )
         self.assertIn("grid-template-columns: minmax(0, 1fr);", mobile_rail_css)
-        self.assertIn("body.status-pos-right .conv-pane:has(> .status-rail) > .status-rail", mobile_rail_css)
+        self.assertIn(
+            "body.status-pos-right:not(.popout-rail-forced) .conv-pane.has-status-rail > .status-rail",
+            mobile_rail_css,
+        )
         self.assertIn("display: none;", mobile_rail_css)
 
     def test_queue_rows_open_item_detail_modal(self):
@@ -5622,8 +6032,6 @@ class TestServerImports(unittest.TestCase):
 
         self.assertIn("_moveToHome('todayToggleBtn',    $settingsSlot);", app_js)
         self.assertIn("_moveToHome('annotationNotesBtn', $settingsSlot);", app_js)
-        self.assertIn("_moveToHome('cooPopButton',      $settingsSlot);", app_js)
-        self.assertIn("cooMoveObserver.observe(document.body, { childList: true, subtree: true });", app_js)
         self.assertNotIn("_captureRailEl(document.getElementById('cccBreadcrumb'));", app_js)
         self.assertIn("_captureRailEl(document.getElementById('convStatus'));", app_js)
         self.assertIn("_captureRailEl(document.getElementById('topbarTtsControl'));", app_js)
@@ -5829,7 +6237,13 @@ class TestServerImports(unittest.TestCase):
         self.assertIn("nodes.forEach(node => { if (node !== keep) node.remove(); });", app_js)
         self.assertIn("let _doneInline = getSingleLiveToolInline($view);", app_js)
         self.assertIn("let inline = getSingleLiveToolInline($view);", app_js)
-        self.assertIn("inline !== $view.lastElementChild", app_js)
+        # The bare "reanchor to last child" check was replaced by a smarter
+        # helper that only moves the inline indicator when genuinely new
+        # committed content landed after it (not just another transient
+        # stream/live node) -- see _reanchorToTailUnlessOnlyTransientBetween.
+        self.assertIn("function _reanchorToTailUnlessOnlyTransientBetween($view, el) {", app_js)
+        self.assertIn("if (!el || el.parentNode !== $view || el === $view.lastElementChild) return;", app_js)
+        self.assertIn("_reanchorToTailUnlessOnlyTransientBetween($view, inline);", app_js)
 
     def test_codex_wake_status_does_not_stack_with_generating(self):
         """Codex wake rows own their progress UI and should not stack with Generating."""
@@ -5913,7 +6327,7 @@ class TestServerImports(unittest.TestCase):
             app_js.index("async function postCompactSession(sessionId, terminalApp)"):
             app_js.index("// Engines whose /compact", app_js.index("async function postCompactSession(sessionId, terminalApp)"))
         ]
-        self.assertIn("const COMPACT_REQUEST_TIMEOUT_MS = 4 * 60 * 1000;", compact_post)
+        self.assertIn("const COMPACT_REQUEST_TIMEOUT_MS = 6 * 60 * 1000;", compact_post)
         self.assertIn("const controller = typeof AbortController === 'function' ? new AbortController() : null;", compact_post)
         self.assertIn("setTimeout(() => controller.abort(), COMPACT_REQUEST_TIMEOUT_MS)", compact_post)
         self.assertIn("signal: controller ? controller.signal : undefined", compact_post)
@@ -5928,7 +6342,7 @@ class TestServerImports(unittest.TestCase):
         self.assertIn("Wait for the pending message to land in the transcript before compacting.", app_js)
         self.assertIn("if (compactCommand && hasPendingSendEchoBeforeCompact(", app_js)
         self.assertIn("const pendingCompactEcho = hasPendingSendEchoBeforeCompact();", app_js)
-        self.assertIn("activeCompactBtn.title = pendingCompactEcho", app_js)
+        self.assertIn(": (pendingCompactEcho", app_js)
 
     def test_codex_spawn_log_hides_bare_error_marker(self):
         """A lone Codex CLI [error] marker should not open the log with a
@@ -6209,9 +6623,15 @@ class TestServerImports(unittest.TestCase):
 
     def test_steered_compact_interrupts_before_compacting(self):
         """`mode` must be parsed before the /compact early return, or a steered
-        /compact drops the steer and queues behind the turn it should abort."""
+        /compact drops the steer and queues behind the turn it should abort.
+
+        Reads the *router*, not `_inject_text_into_session`: since CCC-1000
+        Phase 1 the latter is a thin wrapper that stamps the result contract and
+        delegates, so slicing from it would scan a function that contains none
+        of the routing logic this test is about.
+        """
         server_py = pathlib.Path(PROJECT_ROOT, "server.py").read_text(encoding="utf-8")
-        fn = server_py[server_py.index("def _inject_text_into_session("):]
+        fn = server_py[server_py.index("def _inject_text_into_session_router("):]
         fn = fn[:fn.index("\ndef ", 10)]
         self.assertLess(
             fn.index('mode = mode_value if mode_value in ("answer", "steer", "send_queue")'),
@@ -6244,7 +6664,7 @@ class TestServerImports(unittest.TestCase):
 
         self.assertIn("function userMessageSteerHtml(text, notification, compactCardHtml)", app_js)
         self.assertIn('data-steer-user-message', app_js)
-        self.assertIn("postInjectInput(sid, text, 'steer')", app_js)
+        self.assertIn("postInjectInput(sid, text, 'steer'", app_js)
         inline_handler = app_js[
             app_js.index("const btn = ev.target.closest('[data-steer-user-message]')"):
             app_js.index("function setCurrentSession", app_js.index("const btn = ev.target.closest('[data-steer-user-message]')"))
@@ -6611,7 +7031,7 @@ class TestServerImports(unittest.TestCase):
         app_css = pathlib.Path(PROJECT_ROOT, "static", "app.css").read_text(encoding="utf-8")
         self.assertIn("function syncQueuedSteerTray", app_js)
         self.assertIn("queued-steer-tray", app_js)
-        self.assertIn("inputBar.insertBefore(tray, inputBar.firstChild)", app_js)
+        self.assertIn("inputBar.parentNode.insertBefore(tray, inputBar)", app_js)
         self.assertIn("el.dataset.queuedSteerServer === 'true'", app_js)
         self.assertIn("el.classList.contains('send-queued')", app_js)
         self.assertIn("data-steer-queued-message", app_js)
@@ -6638,10 +7058,31 @@ class TestServerImports(unittest.TestCase):
             queued_handler.index("if (data && data.queued_preserved)"),
         )
         self.assertIn("if (!data.queued_consumed)", queued_handler)
+        # The tray card is only retired after the server confirms it consumed
+        # the durable copy. It is now retired by advancing the optimistic row
+        # to "delivered" rather than deleting it, so the message never blinks
+        # out of the conversation between the steer and the transcript event.
         self.assertGreater(
-            queued_handler.index("if (row && row._pendingRef) removePendingSendEcho(row._pendingRef)"),
+            queued_handler.index("markPendingSendDelivered(row._pendingRef, data)"),
             queued_handler.index("if (!data.queued_consumed)"),
         )
+        # Every non-delivery outcome hands the card back to the tray, and the
+        # in-flight hold is released BEFORE the revert -- the reverted card is a
+        # queued candidate again, so the in-flight filter would delete it.
+        self.assertIn("revertOptimisticSteerMove(moved, activePaneId())", queued_handler)
+        self.assertLess(
+            queued_handler.index("clearSteerInFlight(sid, [text])"),
+            queued_handler.index("revertOptimisticSteerMove(moved, activePaneId())"),
+        )
+        self.assertEqual(queued_handler.count("giveBack();"), 4)
+        # A steer whose POST is still in flight must not be re-collected from a
+        # refresh that still lists the message as queued (that bounce was the
+        # whole complaint).
+        self.assertIn("markSteerInFlight(sid, [text])", queued_handler)
+        self.assertIn("if (!steerIsInFlight(sessionId, text)) return true;", app_js)
+        self.assertIn(
+            ".filter(el => !el.classList.contains('steering-optimistic'))", app_js)
+        self.assertIn("data-steer-settled", app_js)
         self.assertIn("tray.dataset.conversationId", app_js)
         self.assertIn("replace_queued", app_js)
         self.assertIn("is-queued-steer-duplicate", app_js)
@@ -6649,9 +7090,9 @@ class TestServerImports(unittest.TestCase):
         self.assertIn(".queued-steer-tray .msg-image", app_css)
         self.assertIn(".queued-steer-tray .send-queued-steer {", app_css)
         self.assertIn(".queued-steer-tray .cancel-queued-message", app_css)
-        self.assertIn("position: absolute;", app_css)
-        self.assertIn("top: 6px;", app_css)
-        self.assertIn("right: 8px;", app_css)
+        self.assertIn(".queued-steer-actions > button", app_css)
+        self.assertIn("grid-area: queued", app_css)
+        self.assertIn("actions.append(cancel, steer)", app_js)
         self.assertIn(".queued-steer-tray .event.user_text {", app_css)
         self.assertIn("background: rgba(63, 185, 80, 0.045);", app_css)
 
@@ -6727,9 +7168,22 @@ class TestPrStateResolution(unittest.TestCase):
             sys.modules.pop(mod, None)
         self.server = importlib.import_module("server")
         self.server._PR_STATE_CACHE.clear()
+        # Don't let this suite read or write the real on-disk gh-cache file
+        # (~/.claude/command-center/gh-cache/pr_states.json) — stale entries
+        # from a prior real run (or a leftover test fixture) leak in via the
+        # once-per-process hydrate guard and make lookups appear cached when
+        # they should hit the mocked subprocess.
+        self.server._GH_CACHE_HYDRATED.add("pr_states")
+        self._hydrate_patch = mock.patch.object(self.server, "_hydrate_gh_cache")
+        self._persist_patch = mock.patch.object(self.server, "_persist_gh_cache")
+        self._hydrate_patch.start()
+        self._persist_patch.start()
 
     def tearDown(self):
         self.server._PR_STATE_CACHE.clear()
+        self.server._GH_CACHE_HYDRATED.discard("pr_states")
+        self._hydrate_patch.stop()
+        self._persist_patch.stop()
 
     def test_pr_state_falls_back_to_gh_api(self):
         url = f"https://github.com/octo-org/demo-repo/pull/{25}"
@@ -6754,7 +7208,7 @@ class TestPrStateResolution(unittest.TestCase):
         self.assertEqual(len(calls), 2, "second lookup should hit cache")
         cached = self.server._PR_STATE_CACHE[url]
         self.assertEqual(cached["state"], "MERGED")
-        self.assertEqual(cached["ttl"], self.server._PR_STATE_TTL)
+        self.assertEqual(cached["ttl"], self.server._PR_STATE_MERGED_TTL)
 
     def test_pr_state_failures_use_short_ttl(self):
         url = f"https://github.com/octo-org/demo-repo/pull/{25}"
@@ -7076,6 +7530,35 @@ class TestRepoContextHelpers(unittest.TestCase):
         self.assertNotIn("engine", config["config"])
         self.assertNotIn("model", config["config"])
 
+    def test_queue_config_blank_engine_clears_override_through_wt(self):
+        """CCC-1044: saving "CCC default" (blank engine) in the gear dialog must
+        clear the queue's engine override. The WT write-through used to default
+        a missing engine key back to "claude", so the queue snapped back to
+        claude the moment it was saved as CCC default."""
+        httpd = self.server.http.server.ThreadingHTTPServer(
+            ("127.0.0.1", 0), self.server.CommandCenterHandler,
+        )
+        thread = threading.Thread(target=httpd.serve_forever, daemon=True)
+        thread.start()
+        base = f"http://127.0.0.1:{httpd.server_address[1]}"
+        try:
+            for payload in ({"queue": "ENGQ", "engine": "claude"},
+                            {"queue": "ENGQ", "engine": ""}):
+                request = urllib.request.Request(
+                    base + "/api/queue/config",
+                    data=json.dumps(payload).encode("utf-8"),
+                    headers={"Content-Type": "application/json"}, method="POST",
+                )
+                with urllib.request.urlopen(request, timeout=5) as response:
+                    saved = json.loads(response.read().decode("utf-8"))
+                self.assertTrue(saved["ok"])
+            stored = (self.server._wt_read_config() or {}).get("ENGQ") or {}
+            self.assertFalse(stored.get("engine"))
+        finally:
+            httpd.shutdown()
+            httpd.server_close()
+            thread.join(timeout=5)
+
     def test_queue_config_accepts_kimi_engine_and_model(self):
         config = self.server._queue_config_from_payload({
             "queue": "DEMO_QUEUE",
@@ -7211,12 +7694,17 @@ class TestRepoContextHelpers(unittest.TestCase):
         ledger_path = self.server._wt_worker_sessions_path()
         ledger_path.parent.mkdir(parents=True, exist_ok=True)
         ledger_path.write_text(json.dumps({"session_ids": [worker_sid]}), encoding="utf-8")
-        rows = [{"session_id": worker_sid}, {"session_id": "ordinary-session"}]
+        rows = [
+            {"session_id": worker_sid},
+            {"session_id": "ordinary-session"},
+            {"session_id": worker_sid, "continued_from_session_id": "parent-sid"},
+        ]
 
         self.server._apply_watchtower_worker_display_names(rows)
 
         self.assertTrue(rows[0]["is_watchtower_worker"])
         self.assertNotIn("is_watchtower_worker", rows[1])
+        self.assertNotIn("is_watchtower_worker", rows[2])
 
     def test_queue_drain_api_writes_via_watchtower_config(self):
         """/api/queue/drain delegates to watchtower.config.set_auto_drain when
@@ -8131,7 +8619,12 @@ class TestRepoContextHelpers(unittest.TestCase):
                 sid,
                 "Announced from: Gerry\n\nSTATUS: done",
                 mode="send",
-                source="api",
+                requested_verb="engine_default",
+                contract_fields={},
+                # announced_from wins over "api": it is the more specific
+                # signal and is what makes the send UDS-eligible
+                # (_inject_source_for_request).
+                source="announced_from",
                 wt_origin=False,
                 skip_wt=False,
                 force_terminal=False,
@@ -8183,6 +8676,8 @@ class TestRepoContextHelpers(unittest.TestCase):
                 sid,
                 "Use the selected scope",
                 mode="answer",
+                requested_verb="engine_default",
+                contract_fields={"answers_pending_question": True},
                 source="api",
                 wt_origin=False,
                 skip_wt=False,
@@ -8230,7 +8725,10 @@ class TestRepoContextHelpers(unittest.TestCase):
                 sid,
                 "delivered by wt delegate",
                 mode="send",
-                source="api",
+                requested_verb="engine_default",
+                contract_fields={},
+                # wt_origin maps to source="wt" (_inject_source_for_request).
+                source="wt",
                 wt_origin=True,
                 skip_wt=False,
                 force_terminal=False,
@@ -11227,6 +11725,7 @@ class TestRepoContextHelpers(unittest.TestCase):
                  mock.patch.object(server, "_mark_codex_thread_user_visible", return_value=True), \
                  mock.patch.object(server, "_register_codex_sidebar_project_for_spawn_entry"), \
                  mock.patch.object(server, "_record_spawn_to_registry") as registry, \
+                 mock.patch.object(server, "_wt_register_codex_agent"), \
                  mock.patch.object(server.subprocess, "Popen", side_effect=AssertionError("exec fallback should not run")), \
                  mock.patch.dict(os.environ, {"CCC_CODEX_WAKE_CONFIRM_TIMEOUT": "0.1",
                                               "CCC_CODEX_SPAWN_CONFIRM_TIMEOUT": "0.1"}):
@@ -11269,7 +11768,7 @@ class TestRepoContextHelpers(unittest.TestCase):
         self.assertEqual(start_params["runtimeWorkspaceRoots"], [str(self.repo)])
         self.assertEqual(start_params["approvalPolicy"], "never")
         self.assertEqual(start_params["sandbox"], "danger-full-access")
-        self.assertEqual(start_params["model"], "gpt-5.5")
+        self.assertEqual(start_params["model"], "gpt-6-astra")
         self.assertEqual(start_params["config"]["model_context_window"], 1000000)
 
         # turn/start now runs second (was third, behind the rename).
@@ -11297,7 +11796,7 @@ class TestRepoContextHelpers(unittest.TestCase):
         self.assertEqual(reg_thread["transport"], "managed")
         self.assertEqual(reg_thread["cwd"], str(self.repo))
         self.assertEqual(reg_thread["repo_path"], str(self.repo))
-        self.assertEqual(reg_thread["model"], "gpt-5.5")
+        self.assertEqual(reg_thread["model"], "gpt-6-astra")
         self.assertEqual(reg_thread["title"], "app-spawn")
         self.assertEqual(reg_thread["ccc"]["spawn_id"], result["spawn_id"])
 
@@ -11479,7 +11978,7 @@ class TestRepoContextHelpers(unittest.TestCase):
             server._CODEX_APP_SERVER_FALSE_MISSES = 0
 
     def test_spawn_codex_defaults_to_best_model_and_max_context_arg(self):
-        """Default Codex spawns should prefer 5.5 while requesting max context."""
+        """Default Codex spawns should prefer GPT-6 Astra while requesting max context."""
         server = self.server
         proc = mock.Mock(pid=4244)
         original_spawns = list(server._spawned_sessions)
@@ -11513,7 +12012,7 @@ class TestRepoContextHelpers(unittest.TestCase):
         cmd = popen.call_args.args[0]
         self.assertIn("-c", cmd)
         self.assertEqual(cmd[cmd.index("-c") + 1], "model_context_window=1000000")
-        self.assertEqual(cmd[cmd.index("--model") + 1], "gpt-5.5")
+        self.assertEqual(cmd[cmd.index("--model") + 1], "gpt-6-astra")
 
     def test_resume_codex_attaches_command_center_pasted_images(self):
         """Resumed Codex sessions need the same pasted-image attachment path."""
@@ -13307,6 +13806,7 @@ class TestRepoContextHelpers(unittest.TestCase):
         proc = mock.Mock(pid=4244)
         original_spawns = list(server._spawned_sessions)
         server._spawned_sessions.clear()
+        import ccc_server.engines as engines_mod
         try:
             with mock.patch.object(
                 server,
@@ -13315,6 +13815,7 @@ class TestRepoContextHelpers(unittest.TestCase):
             ), mock.patch.object(server, "_antigravity_cli_conversation_path", return_value=conv), \
                  mock.patch.object(server, "find_session_cwd", return_value=str(self.repo)), \
                  mock.patch.object(server, "_git_toplevel_for_existing_dir", return_value=str(self.repo)), \
+                 mock.patch.object(engines_mod, "_antigravity_live_resume_pid", return_value=None), \
                  mock.patch.object(server.subprocess, "Popen", return_value=proc) as popen, \
                  mock.patch.object(server, "_record_spawn_to_registry"):
                 result = server.resume_session_antigravity(sid, f"look at {image}")
@@ -13543,6 +14044,20 @@ class TestRepoContextHelpers(unittest.TestCase):
         ask_engine.assert_called_once_with(sid, "probe", 1000, "hermes")
         headless.assert_not_called()
 
+    def test_ask_session_routes_grok_to_its_acp_harness(self):
+        """Grok ACP sessions must not fall through to Claude JSONL resume."""
+        server = self.server
+        sid = "01a05b3d-d6e8-7852-a5e1-e78697cd9032"
+        expected = {"ok": True, "text": "coordinator reply", "source": "grok-acp"}
+        with mock.patch.object(server, "_detect_session_engine", return_value="grok"), \
+             mock.patch.object(server, "_acp_ask_and_wait", return_value=expected) as ask_acp, \
+             mock.patch.object(server, "resume_session_headless") as headless:
+            result = server.ask_session_and_wait(sid, "status?", timeout_ms=1000)
+
+        self.assertEqual(result, expected)
+        ask_acp.assert_called_once_with("grok", sid, "status?", 1000)
+        headless.assert_not_called()
+
     def test_ask_session_resolves_fresh_antigravity_session_prefix(self):
         """A copied eight-character spawn ID must not fall back to Claude."""
         server = self.server
@@ -13654,6 +14169,31 @@ class TestRepoContextHelpers(unittest.TestCase):
         self.assertIn("function _captureArchiveListScroll", js)
         self.assertIn("function _restoreArchiveListScroll", js)
         self.assertIn("_lastArchiveRenderFilter = q;", js)
+
+    def test_archive_anchor_restores_after_a_structural_top_insert(self):
+        """A late archive row above the viewport must not shove idle cards.
+
+        A list reset at scrollTop=0 also reads as zero after the replacement,
+        so the restore path needs an explicit render generation instead of
+        treating equal scroll positions as proof that nothing changed.
+        """
+        js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text()
+        self.assertIn("let _convListRenderVersion = 0;", js)
+        self.assertIn("renderVersion: _convListRenderVersion", js)
+        self.assertIn("_convListRenderVersion++;", js)
+        self.assertIn("if (state.renderVersion === _convListRenderVersion) return;", js)
+        self.assertIn("const expectedRenderVersion = _convListRenderVersion;", js)
+        self.assertIn("if (expectedRenderVersion !== _convListRenderVersion) return;", js)
+        self.assertIn("$list.innerHTML = html;\n        _convListRenderVersion++;", js)
+
+    def test_current_session_hover_metadata_stays_single_line(self):
+        """Hovering a Current Sessions card must not make it grow taller."""
+        css = pathlib.Path(PROJECT_ROOT, "static", "app.css").read_text()
+        selector = ".conv-current-sessions-scroll:not(.is-search-results) .conv-item .conv-hover-meta-row"
+        start = css.index(selector)
+        block = css[start:css.index("}", start) + 1]
+        self.assertIn("flex-wrap: nowrap;", block)
+        self.assertIn("overflow: hidden;", block)
 
     def test_files_endpoint_route_registered(self):
         """Smoke check: GET /api/conversations/<id>/files dispatcher
@@ -14535,6 +15075,21 @@ class TestRepoContextHelpers(unittest.TestCase):
         self.assertEqual(snap["writer"], "unknown")
         self.assertTrue(snap["external_active"])
 
+        # CCC-998: an authoritative "active" status with no fresh
+        # last_activity_at/last_event_at is a stale, abandoned turn (the
+        # writer that started it died without ever reporting idle) — must
+        # not be attributed to an active external writer forever.
+        snap = server._codex_thread_writer_snapshot(
+            "sid", now, rollout=old,
+            app_state={
+                "status": "active", "active_turn_id": "t3", "active_writer": "unknown",
+                "last_activity_at": now - 1800,
+            },
+            attached={}, exec_child=False,
+        )
+        self.assertIsNone(snap["writer"])
+        self.assertFalse(snap["external_active"])
+
         # a CCC-spawned `codex exec` child owns the thread → ccc writer
         snap = server._codex_thread_writer_snapshot(
             "sid", now, rollout=recent, app_state={},
@@ -14852,7 +15407,7 @@ class TestModelPicker(unittest.TestCase):
         css = pathlib.Path(PROJECT_ROOT, "static", "app.css").read_text()
         self.assertIn("/api/conversations/[^/]+/files", src)
         self.assertIn("class=\"conv-pin-btn", js)
-        self.assertIn("mergeBtn + startBtn + pinBtn + lifecycleButtons", js)
+        self.assertIn("mergeBtn + startBtn + pinBtn + moveLaneBtn + elevateObjectBtn + attachSubsessionBtn + lifecycleButtons", js)
         self.assertIn("Pinned to top", js)
         self.assertIn("_minPinnedRank", js)
         self.assertNotIn("conv-pinned-section", js)
@@ -14864,7 +15419,7 @@ class TestModelPicker(unittest.TestCase):
         self.assertIn("_restoreConversationListScrollTop($convList, pinScrollTop)", js)
         self.assertNotIn("scrollConversationRowIntoView(convId, data.pinned ? 'start' : 'nearest')", js)
         self.assertIn(".conv-item .conv-pin-btn", css)
-        self.assertIn(".conv-item.is-pinned:not(:hover):not(:focus-within) .conv-row-actions:not(:empty)", css)
+        self.assertIn(".conv-item.is-pinned:not(:hover):not(:focus-within):not(.is-actions-open) .conv-row-actions:not(:empty)", css)
         self.assertIn(".conv-item.is-pinned:not(:hover):not(:focus-within) .conv-pin-btn.is-unpin", css)
         self.assertIn(".conv-item .conv-pin-btn.is-unpin:hover .conv-pin-glyph::before", css)
         self.assertIn(".conv-item .conv-pin-btn.is-unpin:hover .conv-pin-glyph::after", css)
@@ -14876,8 +15431,8 @@ class TestModelPicker(unittest.TestCase):
         import server
         src = pathlib.Path(server.__file__).read_text()
         # Routes registered
-        self.assertIn("/api/session/[a-zA-Z0-9-]+/model", src)
-        self.assertIn("/api/session/[a-zA-Z0-9-]+/model/clear", src)
+        self.assertIn("/api/session/[a-zA-Z0-9_-]+/model", src)
+        self.assertIn("/api/session/[a-zA-Z0-9_-]+/model/clear", src)
         # do_POST gates everything through _check_same_origin first
         post_idx = src.find("def do_POST")
         self.assertGreater(post_idx, 0)
@@ -15174,8 +15729,10 @@ class TestModelPicker(unittest.TestCase):
         # masquerading as current.
         self.assertIn("const liveReasoningEffort = String(u.reasoning_effort || '').trim();", js)
         self.assertIn("const currentReasoningEffort = liveReasoningEffort || ovrReasoningEffort;", js)
-        self.assertIn("const effortInner = showsEffort", js)
-        self.assertIn("wp-model-effort", js)
+        # CCC-823: the pill's visible label is just the model short name; effort
+        # surfaces via the tooltip instead of a dedicated label segment.
+        self.assertIn("const showsEffort = engineSupportsEffort(engine);", js)
+        self.assertIn("'\\nReasoning effort: engine default (CCC has not set one)'", js)
         # The picker opens on the INTENDED level, so a queued switch reads back
         # as the active row instead of inviting the user to pick it twice.
         self.assertIn("const pickerReasoningEffort = ovrReasoningEffort || liveReasoningEffort;", js)
@@ -15190,8 +15747,11 @@ class TestModelPicker(unittest.TestCase):
         server_py = pathlib.Path(PROJECT_ROOT, "server.py").read_text()
 
         self.assertIn("const showsEffort = engineSupportsEffort(engine);", js)
-        self.assertIn("escapeHtml(currentReasoningEffort || 'default')", js)
-        self.assertIn(".conv-input-context .wp-model-effort.is-default", css)
+        # CCC-823: effort no longer renders as its own pill segment; the
+        # tooltip always states a concrete effort or an explicit "engine
+        # default" fallback so a blank never reads as "no effort".
+        self.assertIn("'\\nReasoning effort: ' + currentReasoningEffort", js)
+        self.assertIn("'\\nReasoning effort: engine default (CCC has not set one)'", js)
         # extract_session_usage only sees the picker override, so a session
         # spawned with --effort and never re-picked would report blank.
         self.assertIn("usage[\"reasoning_effort\"] = _conv_row_reasoning_effort(", server_py)
@@ -15200,13 +15760,13 @@ class TestModelPicker(unittest.TestCase):
         """New Codex sessions need an effort picker alongside their model picker."""
         js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text()
         html = pathlib.Path(PROJECT_ROOT, "static", "index.html").read_text()
-        server_py = pathlib.Path(PROJECT_ROOT, "server.py").read_text()
+        engines_py = pathlib.Path(PROJECT_ROOT, "ccc_server", "engines.py").read_text()
 
         self.assertIn('id="convInputEffortSelect"', html)
         self.assertIn('id="spawnDefaultsEffort"', html)
         self.assertIn("const $convInputEffortSelect", js)
         self.assertIn("reasoning_effort: spawnDefaultsState.reasoning_effort", js)
-        self.assertIn("spawnDefaultsDraft.reasoning_effort = $spawnDefaultsEffort.value", js)
+        self.assertIn("spawnDefaultsState.reasoning_effort = $spawnDefaultsEffort.value", js)
         self.assertIn("let spawnEffortChoiceDirty = false;", js)
         self.assertIn("spawnEffortChoiceDirty = true;", js)
         self.assertIn("spawnEffortChoiceDirty = false;\n    syncSpawnEngineDependentUi();", js)
@@ -15218,8 +15778,8 @@ class TestModelPicker(unittest.TestCase):
         self.assertIn("if (engineSupportsEffort(engine) && (effort || o.effortExplicit)) {", js)
         self.assertIn("body.reasoning_effort = effort;", js)
         self.assertIn("effortExplicit: spawnEffortChoiceDirty", js)
-        self.assertIn("def spawn_session_codex(prompt, name=None, cwd=None, repo_path=None, worktree=False, model=None, reasoning_effort=\"\", parent_session_id=None):", server_py)
-        self.assertIn('cmd.extend(["-c", f"model_reasoning_effort={reasoning_effort}"])', server_py)
+        self.assertIn("def spawn_session_codex(prompt, name=None, cwd=None, repo_path=None, worktree=False, model=None, reasoning_effort=\"\", parent_session_id=None):", engines_py)
+        self.assertIn('cmd.extend(["-c", f"model_reasoning_effort={reasoning_effort}"])', engines_py)
 
     def test_context_footer_renders_token_optimizer_quality_score(self):
         js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text()
@@ -15232,7 +15792,7 @@ class TestModelPicker(unittest.TestCase):
         ]
         self.assertIn("const label = (grade ? grade + ' ' : '') + rounded;", footer_quality)
         self.assertNotIn("const label = 'Q ' +", footer_quality)
-        self.assertLess(js.index("qualityPill + '<span class=\"' + cls"), js.index("+ sourceLabel + ' ' + _formatTokens(displayTokens)"))
+        self.assertLess(js.index("qualityPill + '<span class=\"' + cls"), js.index("+ sourceLabelPill + _formatTokens(displayTokens)"))
         self.assertIn(".conv-input-context .wp-quality-pill", css)
 
     def test_server_starts_token_optimizer_index_refresher_in_background(self):
@@ -15328,10 +15888,12 @@ class TestModelPicker(unittest.TestCase):
         self.assertTrue(clipped.endswith("…"))
     def test_codex_rows_keep_a_full_title_for_the_status_rail(self):
         """CCC-566: the rail should not inherit the sidebar's 120-char cap."""
-        server_text = pathlib.Path(PROJECT_ROOT, "server.py").read_text(encoding="utf-8")
+        codex_parse = pathlib.Path(
+            PROJECT_ROOT, "ccc_server", "codex_parse.py"
+        ).read_text(encoding="utf-8")
         app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
 
-        self.assertIn('status_rail_title = title if title and title != first_message else display_name', server_text)
+        self.assertIn('status_rail_title = title if title and title != first_message else display_name', codex_parse)
         self.assertIn("const railTitle = row && row.status_rail_title || title || category || 'Session';", app_js)
         self.assertIn("addParam('status_rail_title', row.status_rail_title || '', 500);", app_js)
 
@@ -15988,6 +16550,7 @@ class TestCodexCompactionRecovery(unittest.TestCase):
             self.server._CODEX_APP_SERVER_EVENT_SEQ = 0
         with self.server._pending_resume_lock:
             self.server._pending_resume_queue.clear()
+            self.server._pending_devin_steers.clear()
         self.server._codex_coord_state_loaded = True
 
     def tearDown(self):
@@ -15997,6 +16560,7 @@ class TestCodexCompactionRecovery(unittest.TestCase):
             self.server._CODEX_APP_SERVER_TURN_THREAD.clear()
         with self.server._pending_resume_lock:
             self.server._pending_resume_queue.clear()
+            self.server._pending_devin_steers.clear()
 
     def _arm_via_notifications(self, sid="sid-recovery", now=None):
         server = self.server
@@ -16564,6 +17128,42 @@ class TestCodexCompactionRecovery(unittest.TestCase):
         source = inspect.getsource(self.server._start_resume_queue_watcher)
         self.assertIn("_run_codex_recovery_watchdog_once()", source)
 
+    def test_declined_silent_turn_with_queued_input_does_not_rearm_every_tick(self):
+        """OPS-749: once an interrupt-ask is declined (e.g. auto-dismissed by
+        the dashboard outside debug mode), the ask is snoozed for
+        _INTERRUPT_ASK_DISMISS_SNOOZE_S — re-arming recovery for the same
+        stalled turn on every 5s watchdog tick just because input is queued
+        produced an armed/declined spam loop with no chance of a different
+        outcome."""
+        sid = "sid-silent-declined-loop"
+        server = self.server
+        with server._CODEX_APP_SERVER_LOCK:
+            server._CODEX_APP_SERVER_THREAD_STATE[sid] = {
+                "thread_id": sid,
+                "status": "active",
+                "active_turn_id": "turn-stalled",
+                "last_activity_at": 100.0,
+            }
+        with server._pending_resume_lock:
+            server._pending_resume_queue[sid] = ["user message queued"]
+        with mock.patch.object(server, "_codex_goals_snapshot", return_value={}), \
+             mock.patch.object(
+                 server, "_file_interrupt_ask",
+                 return_value={"id": "ask-1", "status": "dismissed"},
+             ) as file_ask:
+            first = server._run_codex_recovery_watchdog_once(now=1001.0)
+            second = server._run_codex_recovery_watchdog_once(now=1006.0)
+
+        self.assertEqual(first[0][1].get("suppressed"), "interrupt-declined")
+        # Second tick, seconds later, still has queued input and the same
+        # stalled turn: must not re-arm (empty result set), not re-ask.
+        self.assertEqual(second, [])
+        self.assertEqual(file_ask.call_count, 1)
+        recovery = server._codex_app_server_thread_state(sid)["compaction_recovery"]
+        self.assertEqual(recovery["status"], "suppressed")
+        self.assertEqual(recovery["suppressed_reason"], "interrupt-declined")
+        self.assertEqual(recovery["source_turn_id"], "turn-stalled")
+
 
 class TestPendingInputs(unittest.TestCase):
     def setUp(self):
@@ -16594,7 +17194,7 @@ class TestPendingInputs(unittest.TestCase):
             self.server._pending_terminal_input_queue[sid] = ["hello term"]
 
         # Save to disk
-        self.server._save_pending_inputs()
+        self.server._save_pending_inputs({sid})
         self.assertTrue(self.server.PENDING_INPUTS_FILE.is_file())
 
         # Clear memory queues
@@ -16611,6 +17211,18 @@ class TestPendingInputs(unittest.TestCase):
             self.assertEqual(self.server._pending_resume_queue.get(sid), ["hello resume"])
         with self.server._pending_terminal_input_lock:
             self.assertEqual(self.server._pending_terminal_input_queue.get(sid), ["hello term"])
+
+    def test_load_pending_inputs_dedupes_existing_devin_messages(self):
+        sid = "devincli-old-duplicate-queue"
+        self.server.PENDING_INPUTS_FILE.write_text(json.dumps({
+            "resume_queue": {sid: ["same", "same", "next"]},
+            "terminal_queue": {},
+        }), encoding="utf-8")
+
+        self.server._load_pending_inputs()
+
+        with self.server._pending_resume_lock:
+            self.assertEqual(self.server._pending_resume_queue.get(sid), ["same", "next"])
 
     def test_pending_inputs_watcher_lock_rejects_another_process(self):
         """Only one CCC server may drain a shared durable input queue."""
@@ -16646,22 +17258,59 @@ class TestPendingInputs(unittest.TestCase):
                 ["verifier report", "different message"],
             )
 
+    def test_external_devin_owner_coalesces_steers_without_resuming(self):
+        """A live Devin ACP client is the only writer until it exits."""
+        sid = "devincli-test-external-owner"
+        with mock.patch.object(
+            self.server,
+            "session_live_status",
+            return_value={"live": True, "tty": None},
+        ), mock.patch.object(
+            self.server,
+            "_devin_cli_session_live",
+            return_value=True,
+        ), mock.patch.object(
+            self.server,
+            "_find_live_spawn_entry_for_session",
+            return_value=None,
+        ), mock.patch.object(self.server.threading, "Thread") as thread:
+            first = self.server._inject_text_into_session(
+                sid, "first steer", mode="steer"
+            )
+            latest = self.server._inject_text_into_session(
+                sid, "latest steer", mode="steer"
+            )
+
+        self.assertTrue(first["queued"])
+        self.assertTrue(latest.get("external_devin_owner"))
+        self.assertIsNone(self.server._pending_resume_queue.get(sid))
+        self.assertEqual(self.server._pending_devin_steers.get(sid), "latest steer")
+        thread.assert_not_called()
+
     def test_codex_queue_pump_delivers_and_removes_only_fifo_head(self):
         sid = "sid-fifo"
         with self.server._pending_resume_lock:
             self.server._pending_resume_queue[sid] = ["first", "second"]
+
+        def worker_delivery(*args, **kwargs):
+            with self.server._pending_resume_lock:
+                self.server._pending_resume_queue[sid].pop(0)
+            return {"ok": True, "delivered": True, "queued_consumed": 1}
 
         with mock.patch.object(self.server, "_pending_resume_retry_due", return_value=True), \
              mock.patch.object(self.server, "_resume_queue_engine_busy", return_value=False), \
              mock.patch.object(
                  self.server,
                  "resume_session_codex",
-                 return_value={"ok": True, "accepted": True, "confirmed": True},
+                 side_effect=worker_delivery,
              ) as resume:
             result = self.server._pump_codex_resume_queue(sid)
 
         self.assertTrue(result["delivered"])
-        resume.assert_called_once_with(sid, "first", _from_queue=True)
+        resume.assert_called_once_with(
+            sid, "first", _from_queue=True,
+            queued_delivery_transaction_protocol=1,
+        )
         with self.server._pending_resume_lock:
             self.assertEqual(self.server._pending_resume_queue[sid], ["second"])
 
@@ -16683,7 +17332,9 @@ class TestPendingInputs(unittest.TestCase):
         with self.server._pending_resume_lock:
             self.server._pending_resume_queue[sid] = ["keep"]
 
-        with mock.patch.object(self.server, "_pending_resume_retry_due", return_value=True), \
+        with mock.patch.object(self.server, "_refresh_pending_inputs_for_session", return_value=True), \
+             mock.patch.object(self.server, "_save_pending_inputs", return_value=True), \
+             mock.patch.object(self.server, "_pending_resume_retry_due", return_value=True), \
              mock.patch.object(self.server, "_resume_queue_engine_busy", return_value=False), \
              mock.patch.object(self.server, "resume_session_codex", return_value={"ok": False}):
             self.server._pump_codex_resume_queue(sid)
@@ -16698,12 +17349,17 @@ class TestPendingInputs(unittest.TestCase):
         with self.server._pending_resume_lock:
             self.server._pending_resume_queue[sid] = ["keep until visible"]
 
+        def worker_delivery(*args, **kwargs):
+            with self.server._pending_resume_lock:
+                self.server._pending_resume_queue.pop(sid, None)
+            return {"ok": True, "delivered": True, "queued_consumed": 1}
+
         with mock.patch.object(self.server, "_pending_resume_retry_due", return_value=True), \
              mock.patch.object(self.server, "_resume_queue_engine_busy", return_value=False), \
              mock.patch.object(
                  self.server,
                  "resume_session_codex",
-                 return_value={"ok": True, "accepted": True, "confirmed": False},
+                 side_effect=worker_delivery,
              ):
             result = self.server._pump_codex_resume_queue(sid)
 
@@ -16715,12 +17371,28 @@ class TestPendingInputs(unittest.TestCase):
         sid = "sid-concurrent"
         lock = self.server._codex_queue_pump_lock(sid)
         lock.acquire()
+        result = {}
+        worker = threading.Thread(
+            target=lambda: result.update(
+                self.server._pump_codex_resume_queue(sid)
+            )
+        )
         try:
-            result = self.server._pump_codex_resume_queue(sid)
+            with mock.patch.object(
+                self.server, "_pending_resume_retry_due", return_value=True,
+            ), mock.patch.object(
+                self.server, "_resume_queue_engine_busy", return_value=False,
+            ), mock.patch.object(
+                self.server, "resume_session_codex",
+                return_value={"ok": True, "empty": True},
+            ):
+                worker.start()
+                worker.join(timeout=2)
         finally:
             lock.release()
 
-        self.assertEqual(result["waiting"], "already-pumping")
+        self.assertFalse(worker.is_alive())
+        self.assertTrue(result["empty"])
 
     def test_get_queued_events_for_session(self):
         sid = "test-session-id"
@@ -16807,7 +17479,7 @@ class TestPendingInputs(unittest.TestCase):
             source.index('elif path == "/api/session/compact"')
         ]
         inject_pos = branch.index("_inject_text_into_session(")
-        finalize_pos = branch.index("_finalize_queued_steer_result(sid, queued_text, result)")
+        finalize_pos = branch.index("_finalize_queued_steer_result(sid, text, result)")
 
         self.assertLess(inject_pos, finalize_pos)
         self.assertIn('inject_options["preserve_queued_steer"] = True', branch)
@@ -17310,7 +17982,8 @@ class TestThroughputCacheAdjusted(unittest.TestCase):
         self.assertEqual(summary["total_raw_context_tokens"], 3_000)
         self.assertEqual(summary["total_fresh_input_tokens"], 300)
         self.assertEqual(summary["total_cache_read_tokens"], 2_700)
-        self.assertEqual(summary["total_output_tokens"], 160)
+        # Codex output already includes its 10 reasoning tokens.
+        self.assertEqual(summary["total_output_tokens"], 150)
         self.assertEqual(summary["total_effective_input_tokens"], 570)
         self.assertGreater(summary["cost_usd"], 0)
 
@@ -18397,6 +19070,13 @@ class TestWtWorkerFifoFastPath(unittest.TestCase):
     def setUp(self):
         import server
         self.server = server
+        self._budget_patch = mock.patch.object(
+            self.server, "_inject_budget_check", return_value=None,
+        )
+        self._budget_patch.start()
+
+    def tearDown(self):
+        self._budget_patch.stop()
 
     def _workers_file(self, td, rows):
         path = pathlib.Path(td) / "workers.json"
@@ -18578,7 +19258,7 @@ class TestWtWorkerFifoFastPath(unittest.TestCase):
              mock.patch.object(self.server, "_queue_terminal_input") as queued, \
              mock.patch.object(self.server, "resume_session_headless") as resume:
             result = self.server._inject_text_into_session("sid-live-1", "follow up")
-        self.assertTrue(result["ok"])
+        self.assertTrue(result["ok"], result)
         self.assertEqual(result["via"], "wt-worker-fifo")
         self.assertEqual(result["pid"], 4268)
         write.assert_called_once_with("/fake/wt.fifo", "follow up")
@@ -18603,7 +19283,7 @@ class TestWtWorkerFifoFastPath(unittest.TestCase):
              mock.patch.object(self.server, "_wt_worker_fifo_entry_for_session", return_value=None), \
              mock.patch.object(self.server, "resume_session_headless") as resume:
             result = self.server._inject_text_into_session("sid-unknown", "follow up")
-        self.assertTrue(result.get("foreign_live_writer"))
+        self.assertTrue(result.get("foreign_live_writer"), result)
         resume.assert_not_called()
 
     def test_inject_falls_back_to_hold_when_fifo_write_fails(self):
@@ -18628,7 +19308,7 @@ class TestWtWorkerFifoFastPath(unittest.TestCase):
              mock.patch.object(self.server, "_write_fifo_line_once", return_value=False), \
              mock.patch.object(self.server, "resume_session_headless") as resume:
             result = self.server._inject_text_into_session("sid-live-1", "follow up")
-        self.assertTrue(result.get("foreign_live_writer"))
+        self.assertTrue(result.get("foreign_live_writer"), result)
         resume.assert_not_called()
 
     # ---- wired into the terminal-queue watcher's hold gate ------------
@@ -18922,10 +19602,68 @@ class TestTerminalQueueDrainSafety(unittest.TestCase):
         self.assertIn("_verify_terminal_drain_receipts()", server_py)
 
 
+class TestTerminalQueueHoldTtl(unittest.TestCase):
+    """CCC-1002: a held entry (ask-question/tty-busy/headless-turn/etc) must
+    not retry forever — past _TERMINAL_QUEUE_HOLD_TTL_S the stale head entry
+    is dropped instead of eventually firing into an unrelated later turn."""
+
+    SID = "00000000-0000-4000-8000-000000001002"
+
+    def setUp(self):
+        import server
+        self.server = server
+        self._cleanup_state()
+        self.addCleanup(self._cleanup_state)
+
+    def _cleanup_state(self):
+        self.server._terminal_queue_hold_since.pop(self.SID, None)
+        with self.server._pending_terminal_input_lock:
+            self.server._pending_terminal_input_queue.pop(self.SID, None)
+        self.server._pending_terminal_retry_after.pop(self.SID, None)
+
+    def test_hold_within_ttl_keeps_entry_queued(self):
+        with self.server._pending_terminal_input_lock:
+            self.server._pending_terminal_input_queue[self.SID] = ["/compact"]
+        with mock.patch.object(self.server, "_log_terminal_queue_hold"):
+            self.server._terminal_queue_hold_or_expire(self.SID, "headless_turn")
+        with self.server._pending_terminal_input_lock:
+            self.assertEqual(
+                self.server._pending_terminal_input_queue.get(self.SID), ["/compact"],
+            )
+        self.assertIn(self.SID, self.server._terminal_queue_hold_since)
+
+    def test_hold_past_ttl_drops_stale_head_entry(self):
+        with self.server._pending_terminal_input_lock:
+            self.server._pending_terminal_input_queue[self.SID] = ["/compact", "next"]
+        self.server._terminal_queue_hold_since[self.SID] = (
+            time.time() - self.server._TERMINAL_QUEUE_HOLD_TTL_S - 1
+        )
+        with mock.patch.object(self.server, "_save_pending_inputs"), \
+             mock.patch.object(self.server, "_complete_pending_input_handoff") as complete_mock:
+            self.server._terminal_queue_hold_or_expire(self.SID, "headless_turn")
+        with self.server._pending_terminal_input_lock:
+            self.assertEqual(
+                self.server._pending_terminal_input_queue.get(self.SID), ["next"],
+            )
+        complete_mock.assert_called_once_with("/compact")
+        self.assertNotIn(self.SID, self.server._terminal_queue_hold_since)
+
+    def test_pending_queue_reason_distinct_from_busy_turn_reason(self):
+        """CCC-1002: a message queued only to preserve order behind an
+        earlier queued entry must not claim the live turn is the obstacle —
+        that text drove a user to steer/interrupt an unrelated live turn."""
+        payload = self.server._queue_terminal_input(
+            self.SID, "hello", {"status": "idle"},
+            reason_hint=self.server._TERMINAL_QUEUE_ORDER_REASON,
+        )
+        self.assertEqual(payload["queued_reason"], self.server._TERMINAL_QUEUE_ORDER_REASON)
+        self.assertNotIn("current turn is still running", payload["queued_reason"])
+
+
 class TestAcpGlmHarness(unittest.TestCase):
     """ACP harness #2 (KIMI-FIXES-7): the generic layer must drive a second
     ACP-speaking agent with a registry entry only — no harness-specific code.
-    Live test against glm-acp-agent (Z.AI/Zhipu GLM) when installed: the
+    Opt-in live test against glm-acp-agent (Z.AI/Zhipu GLM): the
     handshake and the structured error/answer surfacing are asserted; turns
     need ZAI_API_KEY and are out of scope here."""
 
@@ -18935,6 +19673,16 @@ class TestAcpGlmHarness(unittest.TestCase):
         for mod in ("server", "morning", "morning_store"):
             sys.modules.pop(mod, None)
         self.server = importlib.import_module("server")
+        # A live handshake must never persist test sessions in the dashboard.
+        tmpdir = tempfile.TemporaryDirectory(prefix="ccc-glm-test-")
+        self.addCleanup(tmpdir.cleanup)
+        for name, value in (
+            ("COMMAND_CENTER_STATE_DIR", pathlib.Path(tmpdir.name)),
+            ("_ACP_TRANSCRIPT_DIR", pathlib.Path(tmpdir.name) / "acp"),
+        ):
+            patcher = mock.patch.object(self.server, name, value)
+            patcher.start()
+            self.addCleanup(patcher.stop)
         self.addCleanup(self._cleanup)
 
     def _cleanup(self):
@@ -18961,6 +19709,8 @@ class TestAcpGlmHarness(unittest.TestCase):
 
     def test_live_handshake_and_session_new_shape(self):
         server = self.server
+        if os.environ.get("CCC_TEST_LIVE_GLM") != "1":
+            self.skipTest("set CCC_TEST_LIVE_GLM=1 to run the live GLM handshake")
         if not shutil.which("glm-acp-agent"):
             self.skipTest("glm-acp-agent not installed")
         conn = server._acp_ensure(self.HARNESS)
@@ -19092,14 +19842,16 @@ class TestAcpKimiEngine(unittest.TestCase):
 
     def test_engine_registration_pins(self):
         server_py = pathlib.Path(PROJECT_ROOT, "server.py").read_text(encoding="utf-8")
+        engines_py = pathlib.Path(PROJECT_ROOT, "ccc_server", "engines.py").read_text(encoding="utf-8")
+        watchtower_msg_py = pathlib.Path(PROJECT_ROOT, "ccc_server", "watchtower_msg.py").read_text(encoding="utf-8")
         self.assertIn('"/api/sessions/spawn-kimi"', server_py)
         self.assertIn('"/api/sessions/spawn-grok"', server_py)
-        self.assertIn("def spawn_session_grok(", server_py)
+        self.assertIn("def spawn_session_grok(", engines_py)
         self.assertIn('"/api/acp/approval"', server_py)
         self.assertIn('if _is_kimi_session(session_id):', server_py)
-        self.assertIn('result = _acp_prompt(', server_py)
-        self.assertIn('result.get("code") == "busy"', server_py)
-        self.assertIn('return _queue_terminal_input(session_id, text, {"status": "running"})', server_py)
+        self.assertIn('result = _core._acp_prompt(', watchtower_msg_py)
+        self.assertIn('result.get("code") == "busy"', watchtower_msg_py)
+        self.assertIn('return _core._queue_terminal_input(session_id, text, {"status": "running"})', watchtower_msg_py)
         app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
         self.assertIn("if (engine === 'kimi') return '/api/sessions/spawn-kimi';", app_js)
 
@@ -19320,6 +20072,55 @@ class TestAcpKimiEngine(unittest.TestCase):
             texts = [e.get("text") for e in (st.get("events") or [])
                      if e.get("type") == "user_text"]
         self.assertNotIn("during", texts)
+
+    def test_wire_tail_yields_to_an_active_kap_pump(self):
+        """A kap pump streaming the session from the daemon folds the same
+        turns the wire tail would; both writing rendered kap-driven turns
+        twice. While the pump is alive the tail stays silent but keeps its
+        cursor moving, so post-pump appends still fold."""
+        server = self.server
+        sid = "session_kap_pump_yield"
+        d = tempfile.mkdtemp(prefix="ccc-wire-yield-")
+        self.addCleanup(shutil.rmtree, d, True)
+        wire = pathlib.Path(d) / "wire.jsonl"
+        wire.write_text("")
+        with server._ACP_LOCK:
+            server._acp_session("kimi", sid, create=True, cwd="/tmp")[
+                "wire_watch"] = True
+        self.addCleanup(
+            lambda: (server._ACP_SESSION_STATE.get("kimi") or {}).pop(sid, None))
+
+        def wire_path(harness, session_id):
+            return wire if session_id == sid else None
+
+        def append_user(text):
+            with wire.open("a") as fh:
+                fh.write(json.dumps({
+                    "type": "context.append_message", "message": {
+                        "role": "user", "origin": {"kind": "user"},
+                        "content": [{"type": "text", "text": text}]}}) + "\n")
+
+        folds = []
+        with mock.patch.object(server, "_acp_wire_path", side_effect=wire_path), \
+             mock.patch.object(server, "_acp_wire_fold",
+                               side_effect=lambda h, s, b: folds.append((s, b))), \
+             mock.patch("ccc_server.kap.kap_pump_active", return_value=True):
+            server._acp_wire_tail_tick()  # first sight seeds the cursor
+            append_user("from TUI")
+            server._acp_wire_tail_tick()  # pump active: silent, not stuck
+            self.assertEqual([f for f in folds if f[0] == sid], [])
+            with server._ACP_LOCK:
+                st = server._acp_session("kimi", sid)
+            self.assertEqual(st["wire_tail"]["offset"], wire.stat().st_size)
+
+        with mock.patch.object(server, "_acp_wire_path", side_effect=wire_path), \
+             mock.patch.object(server, "_acp_wire_fold",
+                               side_effect=lambda h, s, b: folds.append((s, b))), \
+             mock.patch("ccc_server.kap.kap_pump_active", return_value=False):
+            append_user("after pump")
+            server._acp_wire_tail_tick()
+            mine = [f for f in folds if f[0] == sid]
+            self.assertEqual(len(mine), 1)
 
     def test_acp_plan_update_folds_and_dedupes(self):
         """ACP plan updates (kimi TodoList) persist as plan blocks; identical
@@ -19700,6 +20501,52 @@ class TestAutoHandoverOneShot(unittest.TestCase):
                 server._auto_handover_last_checked_at["ts"] = old_checked_ts
 
 
+class TestAutoHandoverMode(unittest.TestCase):
+    """Auto-handover's status-bar toggle now cycles compact/mdfile/both/off
+    (not just on/off) -- the stored flag and the injected instruction both
+    need to carry which mode was picked."""
+
+    def _fresh_server(self, tmp):
+        for mod in ("server", "morning", "morning_store"):
+            sys.modules.pop(mod, None)
+        server = importlib.import_module("server")
+        server.AUTO_HANDOVER_FILE = pathlib.Path(tmp) / "auto-handover.json"
+        return server
+
+    def test_set_auto_handover_defaults_to_mdfile(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            server = self._fresh_server(tmp)
+            sid = "s1"
+            r = server._set_auto_handover(sid, True)
+            self.assertTrue(r["ok"])
+            self.assertEqual(r["mode"], "mdfile")
+            self.assertEqual(server._auto_handover_mode(sid), "mdfile")
+
+    def test_set_auto_handover_stores_compact_and_both(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            server = self._fresh_server(tmp)
+            sid = "s1"
+            for mode in ("compact", "both"):
+                r = server._set_auto_handover(sid, True, mode)
+                self.assertTrue(r["ok"], r)
+                self.assertEqual(server._auto_handover_mode(sid), mode)
+
+    def test_set_auto_handover_rejects_unknown_mode(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            server = self._fresh_server(tmp)
+            r = server._set_auto_handover("s1", True, "bogus")
+            self.assertFalse(r["ok"])
+
+    def test_auto_handover_mode_defaults_when_unset_or_disabled(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            server = self._fresh_server(tmp)
+            self.assertEqual(server._auto_handover_mode("never-armed"), "mdfile")
+            sid = "s1"
+            server._set_auto_handover(sid, True, "compact")
+            server._set_auto_handover(sid, False)
+            self.assertEqual(server._auto_handover_mode(sid), "mdfile")
+
+
 class TestSessionRegistryTruncatedComm(unittest.TestCase):
     """Regression for 2026-08-06: every CCC-spawned session read "not live".
 
@@ -19915,6 +20762,9 @@ def test_apps_open_inside_the_ccc_window():
     assert "ccc-apps-scrim" in rail
     # A framed page must not draw a second rail inside the first.
     assert "window.self !== window.top" in rail
+    # Sessions ↔ Queues keep the dashboard mounted; other apps still navigate.
+    assert 'id !== "sessions" && id !== "queues"' in rail
+    assert "cccSwitchCoreApp" in rail
     # Rail width is a user preference, persisted across reloads.
     assert "ccc-rail-resizer" in rail
     assert "ccc-rail-width" in rail
@@ -19988,3 +20838,114 @@ def test_continued_from_session_id_marker_parsing():
     assert _server._continued_from_session_id_from_text("just a task") == ""
     assert _server._continued_from_session_id_from_text(None) == ""
     assert _server._continued_from_session_id_from_text("") == ""
+
+
+def test_command_targets_other_session():
+    """Verify that _command_targets_other_session correctly handles session matches."""
+    import server as _server
+    target_sid = "1ebdd168-a845-4952-bbc7-c206fab7b2c1"
+    other_sid = "30741fa7-e236-43d1-a88b-c09813293f7c"
+
+    # Target is target_sid
+    assert _server._command_targets_other_session(
+        f"agy --conversation {target_sid}", target_sid, "antigravity"
+    ) is False
+
+    # Target is other_sid
+    assert _server._command_targets_other_session(
+        f"agy --conversation {other_sid}", target_sid, "antigravity"
+    ) is True
+
+    # No target
+    assert _server._command_targets_other_session(
+        "agy", target_sid, "antigravity"
+    ) is False
+
+    # Cursor target is target_sid
+    assert _server._command_targets_other_session(
+        f"cursor-agent --resume {target_sid}", target_sid, "cursor"
+    ) is False
+
+    # Cursor target is other_sid
+    assert _server._command_targets_other_session(
+        f"cursor-agent --resume {other_sid}", target_sid, "cursor"
+    ) is True
+
+
+def test_session_live_status_cwd_match_ignores_other_sessions():
+    """Verify that session_live_status's CWD fallback matching ignores other sessions."""
+    import server as _server
+    from unittest import mock
+
+    target_sid = "1ebdd168-a845-4952-bbc7-c206fab7b2c1"
+    other_sid = "30741fa7-e236-43d1-a88b-c09813293f7c"
+    session_cwd = "/Users/amirfish/Apps/BYM"
+
+    # Mock find_live_antigravity_processes to return a process running in the same CWD,
+    # but targeting other_sid.
+    mock_processes = [{
+        "pid": 56402,
+        "tty": "s000",
+        "cwd": session_cwd,
+        "terminal_app": "Terminal",
+        "command": f"agy --conversation {other_sid}"
+    }]
+
+    with mock.patch.object(_server, "find_live_antigravity_processes", return_value=mock_processes), \
+         mock.patch.object(_server, "_is_antigravity_session", return_value=True), \
+         mock.patch.object(_server, "_antigravity_transcript_path", return_value=None), \
+         mock.patch.object(_server, "_antigravity_cli_conversation_path", return_value=None), \
+         mock.patch.object(_server, "_antigravity_app_conversation_path", return_value=None), \
+         mock.patch.object(_server, "_spawn_registry_has_session", return_value=False), \
+         mock.patch.object(_server, "_live_spawn_registry_entry_for_session", return_value=None):
+
+        res = _server.session_live_status(target_sid, session_cwd)
+        # Should not be live because the process targets other_sid
+        assert res["live"] is False
+
+    # Now mock a process in the same CWD without a target (e.g. manually run 'agy' without args).
+    mock_processes_no_target = [{
+        "pid": 56402,
+        "tty": "s000",
+        "cwd": session_cwd,
+        "terminal_app": "Terminal",
+        "command": "agy"
+    }]
+
+    with mock.patch.object(_server, "find_live_antigravity_processes", return_value=mock_processes_no_target), \
+         mock.patch.object(_server, "_is_antigravity_session", return_value=True), \
+         mock.patch.object(_server, "_antigravity_transcript_path", return_value=None), \
+         mock.patch.object(_server, "_antigravity_cli_conversation_path", return_value=None), \
+         mock.patch.object(_server, "_antigravity_app_conversation_path", return_value=None), \
+         mock.patch.object(_server, "_spawn_registry_has_session", return_value=False), \
+         mock.patch.object(_server, "_live_spawn_registry_entry_for_session", return_value=None):
+
+        res = _server.session_live_status(target_sid, session_cwd)
+        # Should be live because of the CWD fallback (it doesn't target any other session)
+        assert res["live"] is True
+        assert res["pid"] == 56402
+
+
+class TestRegistryEphemeralGuard(unittest.TestCase):
+    def test_register_self_skips_when_ephemeral(self):
+        server = importlib.import_module("server")
+        with tempfile.TemporaryDirectory(prefix="ccc-test-reg-") as tmpdir:
+            reg_file = pathlib.Path(tmpdir) / "registry.json"
+            with mock.patch.object(server, "REGISTRY_FILE", reg_file), \
+                 mock.patch.dict(os.environ, {"CCC_EPHEMERAL": "1"}):
+                server._register_self(8099, "127.0.0.1")
+                self.assertFalse(reg_file.exists())
+
+    def test_register_self_writes_when_not_ephemeral(self):
+        server = importlib.import_module("server")
+        with tempfile.TemporaryDirectory(prefix="ccc-test-reg-") as tmpdir:
+            reg_file = pathlib.Path(tmpdir) / "registry.json"
+            with mock.patch.object(server, "REGISTRY_FILE", reg_file), \
+                 mock.patch.dict(os.environ, {}, clear=False):
+                os.environ.pop("CCC_EPHEMERAL", None)
+                server._register_self(8099, "127.0.0.1")
+                self.assertTrue(reg_file.exists())
+                data = json.loads(reg_file.read_text(encoding="utf-8"))
+                self.assertEqual(len(data), 1)
+                self.assertEqual(data[0]["port"], 8099)
+                self.assertEqual(data[0]["pid"], os.getpid())

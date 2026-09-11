@@ -15,6 +15,19 @@
   var POLL_MS = 5000;
   var CLOSED_CAP = 50;
   var NEW_TICKET_GLOW_MS = 4500;
+  // A poll-driven rebuild lands every 5s regardless of what the user is doing.
+  // renderTickets() replaces the row list wholesale (host.innerHTML = html),
+  // so a poll landing between touchstart and click destroys the row under the
+  // user's finger — the browser has nothing left to deliver the click to, and
+  // the tap is silently swallowed. Same bug class fixed for the conv list in
+  // static/app.js (isConversationListScrollActive) and for draggable rows
+  // (rowDraggableAttr); q2's ticket list had no equivalent guard (CCC-1020).
+  // A short quiet window after any touch on the list is enough: real taps
+  // resolve in well under it, and the next 5s poll catches up regardless.
+  var TICKETS_TOUCH_QUIET_MS = 600;
+  var _ticketsTouchQuietUntil = 0;
+  function isTicketsListTouchActive() { return Date.now() < _ticketsTouchQuietUntil; }
+  function noteTicketsListTouchActivity() { _ticketsTouchQuietUntil = Date.now() + TICKETS_TOUCH_QUIET_MS; }
   // Keep a just-finished ticket in the working list for handoff context, while
   // leaving the all-time closure history behind the explicit control.
   var RECENT_CLOSED_WINDOW_MS = 12 * 60 * 60 * 1000;
@@ -245,7 +258,7 @@
     return (it && it.lane === 'express') ? 0 : 2;
   }
   function unready(it) {
-    return (it && (it.readiness === 'needs-shaping' || it.readiness === 'needs-spec')) ? 1 : 0;
+    return (it && (it.readiness === 'needs-shaping' || it.readiness === 'needs-spec' || it.readiness === 'needs-rationale')) ? 1 : 0;
   }
   function isWaitingToDrain(it) {
     if (statusOf(it) !== 'open') return false;
@@ -266,9 +279,16 @@
   // rows show the human sentence instead of "Fix the following UX issue…".
   function titleOf(item) {
     if (!item) return '';
-    var candidates = [item.note, item.text, item.title];
+    // GitHub-synced tickets: the issue title is the human headline; the body
+    // head (note) is often machine meta (digest markers, "Studio: …" lines).
+    var githubItem = String(item.source || '') === 'github' || !!item.github_repo;
+    var candidates = githubItem
+      ? [item.title, item.note, item.text]
+      : [item.note, item.text, item.title];
     for (var i = 0; i < candidates.length; i++) {
-      var lines = String(candidates[i] || '').split(/\r?\n/);
+      // Machine markers (<!-- digest-finding-id: … -->) must never become the
+      // row/detail title — strip comments before deriving it.
+      var lines = String(candidates[i] || '').replace(/<!--[\s\S]*?-->/g, ' ').split(/\r?\n/);
       var kept = [];
       for (var j = 0; j < lines.length; j++) {
         var line = lines[j].trim();
@@ -329,7 +349,10 @@
       if (String(it.source || '') === 'github' || it.github_repo) b.github++; else b.local++;
       var st = statusOf(it);
       if (st === 'closed') return;
-      if (it.needs_input) b.needsInput++;
+      if (it.needs_input) {
+        if (it.block_kind === 'rationale') b.gated = (b.gated || 0) + 1;
+        b.needsInput++;
+      }
       else if (st === 'in_progress') b.wip++;
       // Waiting = open, unclaimed, and something a worker is actually allowed
       // to pick up. `claimable === false` marks GitHub issues without the
@@ -364,6 +387,10 @@
       ? 'Open and claimable here (this queue drains ' + types.join(' + ') + ')'
       : 'Open and unclaimed';
     return {
+      gated: f.gated
+        ? '<span class="q2-n is-gated" title="Product-gate pitch awaiting human Ack/Nack">'
+          + '<b>' + f.gated + '</b> gated</span>'
+        : '',
       needsInput: f.needsInput
         ? '<span class="q2-n is-blocked" title="Blocked waiting on a human answer">'
           + '<b>' + f.needsInput + '</b> needs input</span>'
@@ -667,15 +694,25 @@
 
   async function loadDetail(ref) {
     if (!ref) { state.detail = null; renderDetail(); return; }
-    renderDetail();  // paint the loading state immediately
+    // Paint the cached list row instantly, then hydrate. The item endpoint
+    // shells to `gh issue view` for GitHub-backed queues, which can take
+    // 10s+ (or die) during GraphQL quota storms — a ticket the list already
+    // holds must never sit behind that wait, and the pane must never stick
+    // on "Loading REF…" when the fetch fails outright.
+    var cached = (state.items || []).find(function (it) {
+      return it && it.ref === ref;
+    }) || null;
+    state.detail = cached;
+    state.detailFailed = false;
+    renderDetail();
     try {
       var data = await getJson('/api/ux-fixes/item?ref=' + encodeURIComponent(ref));
       if (state.ref !== ref) return;  // user moved on while this was in flight
-      state.detail = (data && data.item) || null;
+      if (data && data.item) state.detail = data.item;
     } catch (e) {
       if (state.ref !== ref) return;
-      state.detail = null;
     }
+    state.detailFailed = !state.detail;
     renderDetail();
   }
 
@@ -893,10 +930,13 @@
     });
 
     var allItems = (state.items || []).filter(function (it) { return statusOf(it) !== 'closed'; });
-    var allFacts = { waiting: 0, wip: 0, needsInput: 0 };
+    var allFacts = { waiting: 0, wip: 0, needsInput: 0, gated: 0 };
     allItems.forEach(function (it) {
       var st = statusOf(it);
-      if (st === 'blocked') allFacts.needsInput++;
+      if (st === 'blocked') {
+        if (it.block_kind === 'rationale') allFacts.gated++;
+        allFacts.needsInput++;
+      }
       else if (st === 'in_progress') allFacts.wip++;
       else allFacts.waiting++;
     });
@@ -909,7 +949,7 @@
       + '<span class="q2-qrow-foot"><span class="q2-qrow-bl">'
       + '<span class="q2-all-workers">' + (state.workers || []).length + ' live worker'
       + ((state.workers || []).length === 1 ? '' : 's') + '</span></span>'
-      + '<span class="q2-qrow-br">' + allCounts.needsInput + '</span></span></span></div>';
+      + '<span class="q2-qrow-br">' + allCounts.gated + allCounts.needsInput + '</span></span></span></div>';
 
     host.innerHTML = allRow + ordered.map(function (q) {
       var f = facts[projectKey(q.queue)] || {};
@@ -951,6 +991,7 @@
             ? '<span class="q2-qage" title="Most recent ticket activity in this queue">'
               + esc(agoFromSeconds(q.last_activity_seconds)) + '</span>'
             : '')
+        + c.gated
         + c.needsInput
         + '</span>'
         + '</span>'
@@ -1284,7 +1325,13 @@
   // Mechanics-view fold: one global preference, not per queue -- if the
   // pipeline chrome is in the way, it's in the way on every queue.
   function diagramCollapsed() {
-    try { return localStorage.getItem('q2.diagram.collapsed') === '1'; } catch (_) { return false; }
+    try {
+      var stored = localStorage.getItem('q2.diagram.collapsed');
+      if (stored === '1') return true;
+      if (stored === '0') return false;
+    } catch (_) {}
+    // Unset: phones start folded so the ticket list gets the viewport.
+    try { return window.matchMedia('(max-width: 700px)').matches; } catch (_) { return false; }
   }
   function setDiagramCollapsed(on) {
     try { localStorage.setItem('q2.diagram.collapsed', on ? '1' : '0'); } catch (_) {}
@@ -1808,7 +1855,7 @@
   // reason ("H/M"). The needs-input chip is deliberately omitted here — the
   // status dot on the same row already carries it.
   var TYPE_SHORT = { feature: 'FR', bug: 'BUG' };
-  var READY_SHORT = { 'needs-shaping': 'shape', 'needs-spec': 'spec' };
+  var READY_SHORT = { 'needs-shaping': 'shape', 'needs-spec': 'spec', 'needs-rationale': 'rationale' };
   // Two spellings of "this is fine" live in the store. Both stay silent.
   var READY_OK = { 'ready': 1, 'shovel-ready': 1 };
   // Last touch: the newest of updated / closed / created. Closed rows sort by
@@ -1822,6 +1869,9 @@
 
   function ticketChips(it) {
     var c = [];
+    if (it.needs_input && it.block_kind === 'rationale') {
+      c.push('<span class="q2-tchip is-gated" title="Product-gate pitch awaiting decision">GATE</span>');
+    }
     if (it.type) {
       // Colour carries the TYPE only. Tinting the same chip by priority as
       // well meant a p0 bug and a p0 feature looked identical, which defeats
@@ -1916,9 +1966,18 @@
       + '</button>';
   }
 
-  function renderTickets() {
+  function renderTickets(opts) {
     var host = $('q2Tickets');
     if (!host) return;
+    if (!host._q2TouchWired) {
+      host._q2TouchWired = true;
+      host.addEventListener('touchstart', noteTicketsListTouchActivity, { passive: true });
+    }
+    // Poll-driven calls (no opts.force) back off while a touch is in flight
+    // on the list — see TICKETS_TOUCH_QUIET_MS above. User-initiated calls
+    // (selecting a ticket, toggling closed, searching, ...) pass force:true
+    // and always paint immediately.
+    if (!(opts && opts.force) && isTicketsListTouchActive()) return;
 
     $('q2TicketsTitle').textContent = state.viewAll ? 'All queues' : (state.queue || 'Tickets');
     var closedBtn = $('q2ClosedBtn');
@@ -2124,7 +2183,9 @@
         + (bodyHtml || '') + '</div></div>';
     }
     function text(t, cls) {
-      return t ? '<div class="' + (cls || 'q2-tl-note') + '">' + esc(String(t)) + '</div>' : '';
+      if (!t) return '';
+      var body = window.CCCTicketProse ? window.CCCTicketProse.render(t) : esc(String(t));
+      return '<div class="' + (cls || 'q2-tl-note') + '">' + body + '</div>';
     }
 
     var rows = tl.map(function (ev) {
@@ -2189,6 +2250,42 @@
       + esc(label) + '</button>';
   }
 
+  // Linked conversation (e.g. the Becky thread a digest ticket describes).
+  // The server resolves it through the user's local queue-context providers;
+  // fetched once per ref (renderDetail re-runs every 5s poll) and rendered
+  // from this cache. state-free module locals on purpose: switching tickets
+  // resets them.
+  var convCtx = null; // { ref, status: 'loading'|'done'|'failed', data }
+  function maybeLoadTicketContext(item) {
+    if (!item || !item.ref || !window.CCCTicketProse) return;
+    if (convCtx && convCtx.ref === item.ref) return;
+    convCtx = { ref: item.ref, status: 'loading', data: null };
+    fetch('/api/queue/context?ref=' + encodeURIComponent(item.ref), { cache: 'no-store' })
+      .then(function (r) { return r.json(); })
+      .then(function (d) {
+        if (!convCtx || convCtx.ref !== item.ref) return;
+        convCtx = { ref: item.ref, status: 'done', data: d };
+        renderDetail();
+      })
+      .catch(function () {
+        if (convCtx && convCtx.ref === item.ref) convCtx.status = 'failed';
+      });
+  }
+  function ticketContextHtml(item) {
+    if (!window.CCCTicketProse || !convCtx || convCtx.ref !== item.ref) return '';
+    if (convCtx.status !== 'done') return '';
+    var d = convCtx.data;
+    if (d && d.ok && d.transcript && Array.isArray(d.transcript.turns) && d.transcript.turns.length) {
+      return '<section class="q2-sec"><div class="q2-sec-label">Linked conversation</div>'
+        + window.CCCTicketProse.renderTranscript(d.transcript) + '</section>';
+    }
+    if (d && d.found && d.error) {
+      return '<section class="q2-sec"><div class="q2-sec-label">Linked conversation</div>'
+        + '<div class="tp-conv-status is-error">' + esc(d.error) + '</div></section>';
+    }
+    return '';
+  }
+
   function renderDetail() {
     var host = $('q2Detail');
     if (!host) return;
@@ -2224,14 +2321,19 @@
 
     var item = state.detail;
     if (!item || item.ref !== state.ref) {
-      host.innerHTML = '<div class="q2-empty">Loading ' + esc(state.ref) + '&hellip;</div>';
+      host.innerHTML = state.detailFailed
+        ? '<div class="q2-empty"><div class="q2-empty-title">' + esc(state.ref) + ' unavailable</div>'
+          + 'Not in the cached list and the live fetch failed &mdash; GitHub sync may be rate-limited. Try again in a minute.</div>'
+        : '<div class="q2-empty">Loading ' + esc(state.ref) + '&hellip;</div>';
       return;
     }
 
     var st = statusOf(item);
     var parts = splitFirstSentence(titleOf(item));
-    var prompt = (item.text && item.text.trim()) || '';
+    // _github_body is the full issue body; `text` can be a truncated copy.
+    var prompt = String(item._github_body || item.text || '').trim();
     var showPrompt = !!prompt && prompt !== String(item.note || '').trim();
+    maybeLoadTicketContext(item);
     var sid = sessionOf(item);
     var editCount = (Array.isArray(item.timeline) ? item.timeline : [])
       .filter(function (ev) { return ev && ev.event === 'edit'; }).length;
@@ -2374,8 +2476,12 @@
       + reopenFormHtml
       + (showPrompt
           ? '<section class="q2-sec"><div class="q2-sec-label">Full prompt</div>'
-            + '<pre class="q2-pre">' + esc(prompt) + '</pre></section>'
+            + (window.CCCTicketProse
+                ? window.CCCTicketProse.render(prompt)
+                : '<pre class="q2-pre">' + esc(prompt) + '</pre>')
+            + '</section>'
           : '')
+      + ticketContextHtml(item)
       + resolveActionsHtml
       + '<section class="q2-sec"><div class="q2-sec-label">Activity'
       + (editCount
@@ -2399,11 +2505,21 @@
               // The question is NOT repeated here. The timeline's last "Needs input"
               // event already shows it, immediately above, and printing it twice
               // read as two separate questions.
-              : '<div class="q2-inline q2-inline-answer">'
-                + '<textarea class="q2-input" data-q2-input="answer" rows="2"'
-                + ' placeholder="Answer the agent&hellip;" aria-label="Answer this ticket"></textarea>'
-                + '<div class="q2-actrow"><button type="button" class="q2-btn q2-btn-primary"'
-                + ' data-q2-act="answer">Send answer</button></div></div>')
+              : (item.block_kind === 'rationale'
+                  ? '<div class="q2-inline q2-inline-gate">'
+                    + '<div class="q2-sec-label">Product Gate Decision</div>'
+                    + '<div class="q2-actrow" style="display:flex;gap:8px;">'
+                    + '<button type="button" class="q2-btn q2-btn-primary" data-q2-act="gate_ack">Ack</button>'
+                    + '<button type="button" class="q2-btn" data-q2-act="gate_ack_plus">Ack+</button>'
+                    + '<button type="button" class="q2-btn q2-btn-warn" data-q2-act="gate_nack">Nack</button>'
+                    + '</div>'
+                    + '<div class="q2-dim" style="margin-top:6px;font-size:12px;">Approve or decline this product-gate pitch.</div>'
+                    + '</div>'
+                  : '<div class="q2-inline q2-inline-answer">'
+                    + '<textarea class="q2-input" data-q2-input="answer" rows="2"'
+                    + ' placeholder="Answer the agent&hellip;" aria-label="Answer this ticket"></textarea>'
+                    + '<div class="q2-actrow"><button type="button" class="q2-btn q2-btn-primary"'
+                    + ' data-q2-act="answer">Send answer</button></div></div>'))
           : '')
       // Comment sits after the last activity item, always available: it is a
       // reply to the thread, so it reads as the next entry in it. Not offered
@@ -2445,10 +2561,14 @@
     // innerHTML on every 5s poll reset that scroll to 0 mid-read (CCC-847).
     // Preserve by position since these blocks have no stable id.
     var preScroll = [];
-    top.querySelectorAll('.q2-pre').forEach(function (el) { preScroll.push(el.scrollTop); });
+    top.querySelectorAll('.q2-pre, .tp-body, .tp-conv').forEach(function (el) { preScroll.push(el.scrollTop); });
     top.innerHTML = topHtml;
-    top.querySelectorAll('.q2-pre').forEach(function (el, i) {
+    top.querySelectorAll('.q2-pre, .tp-body, .tp-conv').forEach(function (el, i) {
       if (preScroll[i]) el.scrollTop = preScroll[i];
+      else if (preScroll[i] == null && el.classList.contains('tp-conv')) {
+        // First paint of a transcript: land on the newest messages.
+        el.scrollTop = el.scrollHeight;
+      }
     });
     top.querySelectorAll('[data-q2-input]').forEach(function (el) {
       var k = el.getAttribute('data-q2-input');
@@ -2590,9 +2710,51 @@
     if (!ref) return;
 
     if (act === 'copy') {
-      var text = (state.detail && state.detail.text) || titleOf(state.detail) || '';
+      var text = (state.detail && (state.detail._github_body || state.detail.text)) || titleOf(state.detail) || '';
       try { await navigator.clipboard.writeText(text); note('Prompt copied'); }
       catch (e) { note('Could not copy: ' + e.message); }
+      return;
+    }
+
+    if (act === 'gate_ack') {
+      btn.disabled = true;
+      try {
+        await postJson('/api/ux-fixes/gate-ack', { ref: ref, comment: '' });
+        note('Product gate approved');
+        await loadDetail(ref);
+        await refresh();
+      } catch (e) { note('Failed: ' + e.message); }
+      finally { btn.disabled = false; }
+      return;
+    }
+
+    if (act === 'gate_ack_plus') {
+      var c = prompt('Ack with comment — steering note for the worker:');
+      if (c === null) return;
+      btn.disabled = true;
+      try {
+        await postJson('/api/ux-fixes/gate-ack', { ref: ref, comment: c });
+        note('Product gate approved with comment');
+        await loadDetail(ref);
+        await refresh();
+      } catch (e) { note('Failed: ' + e.message); }
+      finally { btn.disabled = false; }
+      return;
+    }
+
+    if (act === 'gate_nack') {
+      var r = prompt('Nack — WHY is this not being built? (required)');
+      if (!r) return;
+      var close = confirm('OK = icebox (not now).\nCancel then re-Nack with --close in the CLI for "not ever".\n\nIcebox this ticket?');
+      if (!close) return;
+      btn.disabled = true;
+      try {
+        await postJson('/api/ux-fixes/gate-nack', { ref: ref, reason: r, close: false });
+        note('Product gate declined (iceboxed)');
+        await loadDetail(ref);
+        await refresh();
+      } catch (e) { note('Failed: ' + e.message); }
+      finally { btn.disabled = false; }
       return;
     }
 
@@ -2739,7 +2901,7 @@
       state.ref = '';
       state.detail = null;
       rememberSelection();
-      renderTickets();
+      renderTickets({ force: true });
     }
   }
   function modalKey(e) {
@@ -3095,13 +3257,13 @@
     }
   }
 
-  function renderAll() {
+  function renderAll(opts) {
     renderChrome();
     renderQueues();
     renderDiagram();
     renderAttend();
     renderLogBar();
-    renderTickets();
+    renderTickets(opts);
     // The detail pane owns its own fetch; only repaint from cache here so a
     // 5s poll can't flicker the pane the user is reading.
     renderDetail();
@@ -3148,7 +3310,7 @@
     if (search) search.value = '';
     rememberSelection();
     state.log = [];
-    renderAll();
+    renderAll({ force: true });
     showMobileColumn('tickets');
     loadQueueLearnings(name);
     stopAttendPoll();
@@ -3168,7 +3330,7 @@
     state.ref = '';
     state.detail = null;
     rememberSelection();
-    renderTickets();
+    renderTickets({ force: true });
     openDetailModal();
   }
 
@@ -3186,7 +3348,7 @@
     // than leaving an interval running for a band that's now hidden.
     stopAttendPoll();
     rememberSelection();
-    renderAll();
+    renderAll({ force: true });
     showMobileColumn('tickets');
   }
 
@@ -3210,7 +3372,7 @@
     state.editingTitle = false;
     rememberSelection();
     renderQueues();
-    renderTickets();
+    renderTickets({ force: true });
     openDetailModal();
     loadDetail(ref);
   }
@@ -3372,10 +3534,10 @@
     }
     if (e.target.closest('[data-q2-more]')) {
       state.closedCap += CLOSED_CAP;
-      renderTickets();
+      renderTickets({ force: true });
       return;
     }
-    if (e.target.closest('#q2ClosedBtn')) { state.showClosed = !state.showClosed; renderTickets(); return; }
+    if (e.target.closest('#q2ClosedBtn')) { state.showClosed = !state.showClosed; renderTickets({ force: true }); return; }
     if (e.target.closest('#q2EditPromptBtn')) { showQueueLearningsInDetail(); return; }
     if (e.target.closest('#q2ThemeBtn')) { toggleTheme(); return; }
     if (e.target.closest('[data-q2-modal-close]')) { closeModal(); return; }
@@ -3426,7 +3588,7 @@
   if (searchInput) {
     searchInput.addEventListener('input', function () {
       state.search = searchInput.value || '';
-      renderTickets();
+      renderTickets({ force: true });
     });
   }
 
