@@ -118,6 +118,41 @@ def test_registry_write_failure_keeps_native_delete_sync_retryable(tmp_path, mon
         raise AssertionError("registry failure was silently accepted")
 
 
+def test_registry_entry_lookup_does_not_copy_the_full_cached_registry(tmp_path, monkeypatch):
+    """A hot per-session lookup may copy its row, but never every thread."""
+    registry_file = tmp_path / "codex-thread-registry.json"
+    registry_file.write_text("{}")
+    stat = registry_file.stat()
+    cached = {
+        "schema_version": 1,
+        "threads": {
+            "target": {"thread_id": "target", "ccc": {"cwd": "/target"}},
+            **{f"other-{index}": {"thread_id": f"other-{index}", "payload": list(range(200))}
+               for index in range(100)},
+        },
+        "deleted_threads": {},
+    }
+    monkeypatch.setattr(server, "CODEX_THREAD_REGISTRY_FILE", registry_file)
+    monkeypatch.setitem(codex._CODEX_THREAD_REGISTRY_CACHE, "token",
+                        (str(registry_file), stat.st_mtime_ns, stat.st_size))
+    monkeypatch.setitem(codex._CODEX_THREAD_REGISTRY_CACHE, "data", cached)
+    copied = []
+    real_deepcopy = codex.copy.deepcopy
+
+    def track_copy(value):
+        copied.append(value)
+        return real_deepcopy(value)
+
+    monkeypatch.setattr(codex.copy, "deepcopy", track_copy)
+
+    row = server._codex_thread_registry_entry("target")
+
+    assert row == {"thread_id": "target", "ccc": {"cwd": "/target"}}
+    assert cached not in copied, "per-session lookup copied the complete registry"
+    row["ccc"]["cwd"] = "/mutated"
+    assert cached["threads"]["target"]["ccc"]["cwd"] == "/target"
+
+
 def test_ephemeral_lifecycle_never_writes_real_sidecars(monkeypatch):
     with monkeypatch.context() as patch, \
          mock.patch.object(server, "_codex_sync_native_lifecycle") as sync:

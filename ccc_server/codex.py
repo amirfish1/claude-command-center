@@ -414,7 +414,14 @@ def _codex_thread_registry_empty():
     }
 
 
-def _load_codex_thread_registry():
+def _cached_codex_thread_registry_data():
+    """Return the immutable-in-practice cached registry for read-only lookups.
+
+    Callers that mutate the registry must use `_load_codex_thread_registry()`,
+    which receives its own deep copy.  The live-activity poll looks up one
+    thread at a time, so copying the entire registry at every lookup makes its
+    cost grow with both the number of sessions and the number of threads.
+    """
     try:
         st = _core.CODEX_THREAD_REGISTRY_FILE.stat()
         token = (str(_core.CODEX_THREAD_REGISTRY_FILE), st.st_mtime_ns, st.st_size)
@@ -422,14 +429,14 @@ def _load_codex_thread_registry():
         token = (str(_core.CODEX_THREAD_REGISTRY_FILE), None, None)
     if (_CODEX_THREAD_REGISTRY_CACHE["token"] == token
             and isinstance(_CODEX_THREAD_REGISTRY_CACHE["data"], dict)):
-        return copy.deepcopy(_CODEX_THREAD_REGISTRY_CACHE["data"])
+        return _CODEX_THREAD_REGISTRY_CACHE["data"]
     try:
         with _core.CODEX_THREAD_REGISTRY_FILE.open("r", encoding="utf-8") as f:
             data = json.load(f)
     except (OSError, json.JSONDecodeError):
-        return _codex_thread_registry_empty()
+        data = _codex_thread_registry_empty()
     if not isinstance(data, dict):
-        return _codex_thread_registry_empty()
+        data = _codex_thread_registry_empty()
     if not isinstance(data.get("threads"), dict):
         data["threads"] = {}
     if not isinstance(data.get("deleted_threads"), dict):
@@ -439,7 +446,12 @@ def _load_codex_thread_registry():
     data.setdefault("source", "ccc-wt-codex-reconciliation")
     _CODEX_THREAD_REGISTRY_CACHE["token"] = token
     _CODEX_THREAD_REGISTRY_CACHE["data"] = copy.deepcopy(data)
-    return data
+    return _CODEX_THREAD_REGISTRY_CACHE["data"]
+
+
+def _load_codex_thread_registry():
+    """Return a mutable registry copy for lifecycle writes."""
+    return copy.deepcopy(_cached_codex_thread_registry_data())
 
 
 def _save_codex_thread_registry(data):
@@ -581,7 +593,7 @@ def _codex_thread_registry_delete(thread_ids):
 
 def _codex_deleted_thread_ids():
     try:
-        deleted = _load_codex_thread_registry().get("deleted_threads") or {}
+        deleted = _cached_codex_thread_registry_data().get("deleted_threads") or {}
     except Exception:
         return set()
     return {str(sid) for sid in deleted if sid}
@@ -589,11 +601,11 @@ def _codex_deleted_thread_ids():
 
 def _codex_thread_registry_entries():
     try:
-        threads = _load_codex_thread_registry().get("threads") or {}
+        threads = _cached_codex_thread_registry_data().get("threads") or {}
     except Exception:
         return {}
     return {
-        str(sid): dict(rec)
+        str(sid): copy.deepcopy(rec)
         for sid, rec in threads.items()
         if sid and isinstance(rec, dict)
     }
@@ -662,7 +674,14 @@ def _codex_sync_native_lifecycle(method, thread_ids):
 
 
 def _codex_thread_registry_entry(thread_id):
-    return _core._codex_thread_registry_entries().get(str(thread_id or "").strip())
+    sid = str(thread_id or "").strip()
+    if not sid:
+        return None
+    try:
+        record = (_cached_codex_thread_registry_data().get("threads") or {}).get(sid)
+    except Exception:
+        return None
+    return copy.deepcopy(record) if isinstance(record, dict) else None
 
 
 def _codex_thread_registry_spawn_shape(entry):
