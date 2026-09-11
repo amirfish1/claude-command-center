@@ -3560,6 +3560,16 @@
         pane.currentSession.source = 'codex';
         sessionSourceByConv[pane.conversationId] = 'codex';
       }
+      // A pending-send echo appended to the legacy transcript while the
+      // native shell was still connecting gets removed from the DOM the
+      // moment the shell swaps in (it doesn't know about that echo) -- retire
+      // its bookkeeping too, or it sits in _pendingSends forever, silently
+      // blocking /compact ("Wait for the pending message to land...").
+      if (Array.isArray(_pendingSends) && _pendingSends.length) {
+        for (const p of _pendingSends.slice()) {
+          if (p && p.paneId === context.paneId && p.element && !p.element.isConnected) removePendingSendEcho(p);
+        }
+      }
       if (_codexWakePollSid === context.threadId) stopCodexWakeBreakdown(true);
       updateInputBar();
       if (saved === index) _updateLastWrittenLine(paneByPaneId(context.paneId)?.conversationId);

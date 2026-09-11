@@ -1690,8 +1690,14 @@
     }
     if (context.inline) {
       // Native connection confirmed usable: swap the legacy transcript out
-      // for the freshly-rendered native shell now, not before.
-      if (state.savedView) { state.savedView.nodes.forEach(node => node.remove()); state.savedView.nodes = []; }
+      // for the freshly-rendered native shell now, not before. Remove
+      // whatever is currently in the view besides our root -- not just the
+      // nodes captured at mount time -- since a pending-send echo can have
+      // been appended into the legacy view while the connection was loading.
+      if (state.savedView) {
+        Array.from(state.savedView.view.childNodes).forEach(node => { if (node !== state.root) node.remove(); });
+        state.savedView.nodes = [];
+      }
       if (state.root) state.root.style.removeProperty('display');
     }
     mountMedia();
@@ -1861,7 +1867,14 @@
     return !!(entry && (entry.pending || entry.client.__testing.state.root?.isConnected));
   }
   function appendInlinePendingUserMessage(pane, text) {
-    return entryFor(pane)?.client.__testing.appendInlinePendingUserMessage(text) || '';
+    const entry = entryFor(pane);
+    const root = entry?.client.__testing.state.root;
+    // Only claim the native transcript once its shell is actually visible --
+    // while it's still loading (mount() keeps it hidden until the connection
+    // is confirmed) a message appended to it is invisible, so let the caller
+    // fall back to its own visible echo instead of swallowing it silently.
+    if (!root || root.style.display === 'none') return '';
+    return entry.client.__testing.appendInlinePendingUserMessage(text) || '';
   }
   function removeInlinePendingUserMessage(pane, id) {
     return !!entryFor(pane)?.client.__testing.removeInlinePendingUserMessage(id);
