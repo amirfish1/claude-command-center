@@ -744,6 +744,7 @@
   let _sysProcSearch = '';
   let _sysProcData = null;
   let _sysProcShowAll = false;
+  let _sysProcSelected = new Set();
 
   function _pollSystemProcesses(force) {
     if (document.hidden && !force) return;
@@ -770,6 +771,18 @@
     const total = d.total_count || procs.length;
     const high = d.high_risk_count || 0;
     const med = d.medium_risk_count || 0;
+    const selectableByPid = {};
+    procs.forEach(function (p) {
+      if (p.can_kill) selectableByPid[p.pid] = true;
+    });
+    Array.from(_sysProcSelected).forEach(function (pid) {
+      if (!selectableByPid[pid]) _sysProcSelected.delete(pid);
+    });
+    const selectedPids = Array.from(_sysProcSelected);
+    const highKillable = procs.filter(function (p) { return p.can_kill && p.score >= 7.0; }).length;
+    const suspiciousKillable = procs.filter(function (p) {
+      return p.can_kill && p.score >= 4.0 && p.score < 7.0;
+    }).length;
 
     let html = '';
 
@@ -782,11 +795,6 @@
     html += '      </div>';
     html += '    </div>';
     html += '    <div style="display:flex;align-items:center;gap:6px">';
-    if (high > 0) {
-      html += '      <button type="button" class="sh-btn sh-btn-danger" data-reap-high="1" title="Kill all processes scored >= 7.0">';
-      html += '        Kill all high risk (' + high + ')';
-      html += '      </button>';
-    }
     html += '      <button type="button" class="sh-btn" id="sysProcRefreshBtn" title="Refresh processes">Refresh</button>';
     html += '    </div>';
     html += '  </div>';
@@ -804,6 +812,14 @@
     html += filterBtn('suspicious', 'Suspicious (≥4)', med);
     html += filterBtn('orphaned', 'Orphaned (PPID 1)');
     html += filterBtn('deleted_cwd', 'Deleted CWD');
+    html += '    </div>';
+    html += '    <div class="sys-proc-bulk-actions">';
+    if (highKillable) html += '      <button type="button" class="sh-btn" data-select-risk="high">Select high risk (' + highKillable + ')</button>';
+    if (suspiciousKillable) html += '      <button type="button" class="sh-btn" data-select-risk="suspicious">Select suspicious (' + suspiciousKillable + ')</button>';
+    if (selectedPids.length) {
+      html += '      <button type="button" class="sh-btn" data-clear-selection="1">Clear</button>';
+      html += '      <button type="button" class="sh-btn sh-btn-danger" data-kill-selected="1">Kill selected (' + selectedPids.length + ')</button>';
+    }
     html += '    </div>';
     html += '  </div>';
     html += '</div>';
@@ -897,6 +913,8 @@
 
         html += '  <div class="sys-proc-action">';
         if (p.can_kill) {
+          const checked = _sysProcSelected.has(p.pid) ? ' checked' : '';
+          html += '    <label class="sys-proc-select"><input type="checkbox" data-select-pid="' + p.pid + '"' + checked + '> select</label>';
           html += '    <button type="button" class="sh-btn" data-kill-pid="' + p.pid + '">kill</button>';
         } else {
           html += '    <span class="sh-meta" style="font-size:10px;opacity:0.5">protected</span>';
@@ -964,16 +982,36 @@
       });
     });
 
-    const reapHighBtn = body.querySelector('[data-reap-high]');
-    if (reapHighBtn) {
-      reapHighBtn.addEventListener('click', function () {
-        const highPids = [];
-        procs.forEach(function (p) {
-          if (p.score >= 7.0 && p.can_kill) highPids.push(p.pid);
-        });
-        _confirmProcessKill(reapHighBtn, highPids, true);
+    Array.prototype.forEach.call(body.querySelectorAll('[data-select-pid]'), function (checkbox) {
+      checkbox.addEventListener('change', function () {
+        const pid = parseInt(checkbox.getAttribute('data-select-pid'), 10);
+        if (checkbox.checked) _sysProcSelected.add(pid);
+        else _sysProcSelected.delete(pid);
+        _renderSystemProcesses();
       });
-    }
+    });
+
+    Array.prototype.forEach.call(body.querySelectorAll('[data-select-risk]'), function (btn) {
+      btn.addEventListener('click', function () {
+        const risk = btn.getAttribute('data-select-risk');
+        procs.forEach(function (p) {
+          const matches = risk === 'high' ? p.score >= 7.0 : (p.score >= 4.0 && p.score < 7.0);
+          if (p.can_kill && matches) _sysProcSelected.add(p.pid);
+        });
+        _renderSystemProcesses();
+      });
+    });
+
+    const clearSelectionBtn = body.querySelector('[data-clear-selection]');
+    if (clearSelectionBtn) clearSelectionBtn.addEventListener('click', function () {
+      _sysProcSelected.clear();
+      _renderSystemProcesses();
+    });
+
+    const killSelectedBtn = body.querySelector('[data-kill-selected]');
+    if (killSelectedBtn) killSelectedBtn.addEventListener('click', function () {
+      _confirmProcessKill(killSelectedBtn, selectedPids, true);
+    });
 
     const showAllBtn = body.querySelector('#sysProcShowAllBtn');
     if (showAllBtn) {

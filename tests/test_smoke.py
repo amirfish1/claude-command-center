@@ -1608,6 +1608,9 @@ class TestServerImports(unittest.TestCase):
         self.assertIn('id="sysProcBody"', index_html)
         self.assertIn("/api/system/processes", app_js)
         self.assertIn("/api/system/processes/kill", app_js)
+        self.assertIn("data-select-risk", app_js)
+        self.assertIn("data-select-pid", app_js)
+        self.assertIn("data-kill-selected", app_js)
         self.assertIn(".sys-proc-card", app_css)
 
         import server

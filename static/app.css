@@ -11418,6 +11418,12 @@
     gap: 4px;
     flex-wrap: wrap;
   }
+  .sys-proc-bulk-actions {
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 6px;
+  }
   .sys-proc-filter-pill {
     background: transparent;
     border: 1px solid var(--border, rgba(255, 255, 255, 0.1));
@@ -11591,6 +11597,18 @@
     align-items: center;
     align-self: center;
     flex-shrink: 0;
+  }
+  .sys-proc-select {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    color: var(--text-muted);
+    cursor: pointer;
+    font-size: 11px;
+  }
+  .sys-proc-select input {
+    accent-color: var(--accent-color);
+    cursor: pointer;
   }
 
   .sys-section { border: 1px solid var(--border); border-radius: 8px;
