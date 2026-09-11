@@ -18,6 +18,7 @@ import subprocess
 import time
 
 from ccc_server import core as _core
+from ccc_server import dbutil
 
 # ---------------------------------------------------------------------------
 # OpenCode session ingestion (read-only).
@@ -41,23 +42,11 @@ def _opencode_db_path():
         p = Path(env_db).expanduser()
     else:
         p = Path.home() / ".local" / "share" / "opencode" / "opencode.db"
-    try:
-        return p if p.exists() else None
-    except OSError:
-        return None
+    return dbutil.path_if_exists(p)
 
 
 def _opencode_connect():
-    db = _opencode_db_path()
-    if not db:
-        return None
-    try:
-        con = sqlite3.connect(str(db), timeout=0.5)
-        con.execute("PRAGMA query_only=1")
-        con.row_factory = sqlite3.Row
-        return con
-    except sqlite3.Error:
-        return None
+    return dbutil.connect_readonly(_opencode_db_path())
 
 
 def _resolve_opencode_bin():

@@ -16,6 +16,7 @@ import sqlite3
 import time
 
 from ccc_server import core as _core
+from ccc_server import dbutil
 
 # ---------------------------------------------------------------------------
 # Copilot CLI conversation ingestion (read-only).
@@ -40,24 +41,11 @@ def _copilot_home():
 
 
 def _copilot_db_path():
-    p = _copilot_home() / "session-store.db"
-    try:
-        return p if p.exists() else None
-    except OSError:
-        return None
+    return dbutil.path_if_exists(_copilot_home() / "session-store.db")
 
 
 def _copilot_connect():
-    db = _copilot_db_path()
-    if not db:
-        return None
-    try:
-        con = sqlite3.connect(str(db), timeout=0.5)
-        con.execute("PRAGMA query_only=1")
-        con.row_factory = sqlite3.Row
-        return con
-    except sqlite3.Error:
-        return None
+    return dbutil.connect_readonly(_copilot_db_path())
 
 
 def _copilot_epoch(value):

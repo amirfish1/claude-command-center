@@ -17,6 +17,7 @@ import time
 import urllib.request
 
 from ccc_server import core as _core
+from ccc_server import dbutil
 
 # ---------------------------------------------------------------------------
 # Grok CLI conversation ingestion + ACP spawn (xAI Grok Build).
@@ -76,24 +77,11 @@ def _grok_epoch(value):
 
 
 def _grok_db_path():
-    p = _grok_home() / "grok.db"
-    try:
-        return p if p.exists() else None
-    except OSError:
-        return None
+    return dbutil.path_if_exists(_grok_home() / "grok.db")
 
 
 def _grok_db_connect():
-    db = _grok_db_path()
-    if not db:
-        return None
-    try:
-        con = sqlite3.connect(str(db), timeout=0.5)
-        con.execute("PRAGMA query_only=1")
-        con.row_factory = sqlite3.Row
-        return con
-    except sqlite3.Error:
-        return None
+    return dbutil.connect_readonly(_grok_db_path())
 
 
 def _grok_session_dir(session_id):
