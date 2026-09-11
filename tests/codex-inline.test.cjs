@@ -130,6 +130,43 @@ test('racing inline attaches never orphan a dead shell over the transcript',asyn
  }finally{await page.close()}
 });
 
+test('legacy transcript stays visible while the native connection is still loading, no reconnecting flash',async()=>{
+ const page=await browser.newPage();await page.setViewport({width:1400,height:900});
+ await page.setContent('<body class="status-pos-right"><div class="conv-pane has-status-rail is-codex-session" data-pane-id="p1"><header class="conv-pane-header">Existing header</header><div class="conversations-view"><div class="event">Old transcript</div></div><aside class="status-rail">Existing rail</aside><div class="conv-input-bar"><textarea>Draft stays here</textarea><button>Send</button></div></div></body>');
+ await page.addStyleTag({path:path.resolve('static/codex-client.css')});
+ await page.evaluate(()=>{
+  window.__release=null;
+  window.fetch=async(url)=>{
+   const u=String(url);
+   if(u.includes('/catalog'))return{ok:true,json:async()=>({ok:true,methods:[]})};
+   if(u.includes('/history'))return new Promise(resolve=>{window.__release=()=>resolve({ok:true,json:async()=>({ok:true,connected:true,generation:'g',cursor:1,thread:{id:'one',turns:[]},requests:[],events:[]})})});
+   return{ok:true,json:async()=>({ok:true})};
+  };
+ });
+ await page.addScriptTag({path:path.resolve('static/codex-client.js')});
+ try{
+  const mid=await page.evaluate(async()=>{
+   const pane=document.querySelector('.conv-pane');
+   const view=pane.querySelector('.conversations-view');
+   window.__pending=window.CCCCodexClient.attachInline({paneEl:pane,viewEl:view,threadId:'one',repoPath:'/repo',paneId:'p1'});
+   await new Promise(r=>setTimeout(r,20));
+   const shell=view.querySelector('.codex-client-shell');
+   return{transcript:view.textContent.includes('Old transcript'),shellHidden:shell?getComputedStyle(shell).display==='none':null};
+  });
+  assert.equal(mid.transcript,true,'legacy transcript must not be wiped before the native connection is confirmed');
+  assert.equal(mid.shellHidden,true,'native shell must stay hidden until it has confirmed data to show');
+  const after=await page.evaluate(async()=>{
+   window.__release();
+   await window.__pending;
+   const view=document.querySelector('.conversations-view');
+   const shell=view.querySelector('.codex-client-shell');
+   return{transcript:view.textContent.includes('Old transcript'),shellVisible:shell?getComputedStyle(shell).display!=='none':false};
+  });
+  assert.equal(after.transcript,false);
+  assert.equal(after.shellVisible,true);
+ }finally{await page.close()}
+});
+
 // Batch-1 recovery assertions: the inline native renderer reuses the
 // original CCC step renderer (kimi tool rows/groups + thinking blocks)
 // instead of generic Reasoning/Command cards. The real helpers are sliced
