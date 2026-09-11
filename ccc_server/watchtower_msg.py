@@ -2386,16 +2386,23 @@ def _set_session_model(session_id, model, context_1m, reasoning_effort=None, eff
         return {"ok": False, "error": "missing session_id or model"}
     engine = _core._detect_session_engine(session_id)
     override = _core._get_session_override(session_id) or {}
-    # An effort-only picker update re-sends the current model.  When that
-    # model was explicitly policy-confirmed for this session, retain the
-    # confirmation instead of treating the unchanged selection as a new
-    # blocked-model request.
+    # An effort-only picker update re-sends the current model.  Treat an
+    # unchanged model from either CCC's override or Codex's authoritative
+    # thread record as an existing session choice, not as a new blocked-model
+    # request. Native/desktop Codex sessions have no picker override.
+    current_model = str(override.get("model") or "").strip().lower()
+    if not current_model and engine == "codex":
+        try:
+            current_model = str(
+                (_core._codex_thread_row(session_id) or {}).get("model") or ""
+            ).strip().lower()
+        except Exception:
+            current_model = ""
     policy_confirmed = (
         engine == "codex"
         and effort_only
-        and bool(override.get("policy_confirmed"))
-        and str(override.get("model") or "").strip().lower()
-        == str(model or "").strip().lower()
+        and bool(current_model)
+        and current_model == str(model or "").strip().lower()
     )
     if engine == "codex":
         model, model_error = _core._validate_codex_model(

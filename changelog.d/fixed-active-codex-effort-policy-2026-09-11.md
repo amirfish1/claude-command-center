@@ -1,0 +1,1 @@
+- Allow changing reasoning effort for an already-active Codex session whose model is policy-blocked.
