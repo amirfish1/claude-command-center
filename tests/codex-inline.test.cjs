@@ -167,6 +167,53 @@ test('legacy transcript stays visible while the native connection is still loadi
  }finally{await page.close()}
 });
 
+test('a message sent while the native shell is still hidden is not swallowed silently',async()=>{
+ const page=await browser.newPage();await page.setViewport({width:1400,height:900});
+ await page.setContent('<body class="status-pos-right"><div class="conv-pane has-status-rail is-codex-session" data-pane-id="p1"><header class="conv-pane-header">Existing header</header><div class="conversations-view"><div class="event">Old transcript</div></div><aside class="status-rail">Existing rail</aside><div class="conv-input-bar"><textarea>Draft stays here</textarea><button>Send</button></div></div></body>');
+ await page.addStyleTag({path:path.resolve('static/codex-client.css')});
+ await page.evaluate(()=>{
+  window.__release=null;
+  window.fetch=async(url)=>{
+   const u=String(url);
+   if(u.includes('/catalog'))return{ok:true,json:async()=>({ok:true,methods:[]})};
+   if(u.includes('/history'))return new Promise(resolve=>{window.__release=()=>resolve({ok:true,json:async()=>({ok:true,connected:true,generation:'g',cursor:1,thread:{id:'one',turns:[]},requests:[],events:[]})})});
+   return{ok:true,json:async()=>({ok:true})};
+  };
+ });
+ await page.addScriptTag({path:path.resolve('static/codex-client.js')});
+ try{
+  const mid=await page.evaluate(async()=>{
+   const pane=document.querySelector('.conv-pane');
+   const view=pane.querySelector('.conversations-view');
+   window.__pending=window.CCCCodexClient.attachInline({paneEl:pane,viewEl:view,threadId:'one',repoPath:'/repo',paneId:'p1'});
+   await new Promise(r=>setTimeout(r,20));
+   // Simulate the app.js caller: try the native pending echo first, and --
+   // since it must decline while the shell is hidden -- fall back to a
+   // visible legacy DOM echo, exactly like appendPendingSendEcho() does.
+   const nativeId=window.CCCCodexClient.appendInlinePendingUserMessage(pane,'Are you still there?');
+   let legacyEcho=null;
+   if(!nativeId){
+    legacyEcho=document.createElement('div');
+    legacyEcho.className='event user_text pending';
+    legacyEcho.textContent='Are you still there?';
+    view.appendChild(legacyEcho);
+   }
+   return{nativeId,legacyVisible:legacyEcho?legacyEcho.isConnected && getComputedStyle(legacyEcho).display!=='none':false,transcriptShowsIt:view.textContent.includes('Are you still there?')};
+  });
+  assert.equal(mid.nativeId,'','native shell is hidden, must decline so the caller falls back');
+  assert.equal(mid.legacyVisible,true);
+  assert.equal(mid.transcriptShowsIt,true,'the message must be visible immediately, not swallowed for up to a minute');
+  const after=await page.evaluate(async()=>{
+   window.__release();
+   await window.__pending;
+   const view=document.querySelector('.conversations-view');
+   return{legacyEchoRemoved:!view.querySelector('.event.user_text.pending'),shellVisible:getComputedStyle(view.querySelector('.codex-client-shell')).display!=='none'};
+  });
+  assert.equal(after.legacyEchoRemoved,true,'the orphaned legacy echo must be cleaned up once the native shell swaps in, not left as a duplicate');
+  assert.equal(after.shellVisible,true);
+ }finally{await page.close()}
+});
+
 // Batch-1 recovery assertions: the inline native renderer reuses the
 // original CCC step renderer (kimi tool rows/groups + thinking blocks)
 // instead of generic Reasoning/Command cards. The real helpers are sliced
