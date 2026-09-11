@@ -1,0 +1,1 @@
+- Fixed the conversation speaker button for native Codex replies.

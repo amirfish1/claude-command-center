@@ -12388,7 +12388,7 @@
     const view = getConvViewForPane(paneId || activePaneId()) || getConvView();
     if (!view) return null;
     const candidates = Array.from(view.querySelectorAll(
-      '.stream-bubble, .event.assistant:not(.tool-only), .event.user_text:not(.pending), .assistant-text'
+      '.stream-bubble, .event.assistant:not(.tool-only), .event.user_text:not(.pending), .assistant-text, .codex-client-message.is-agent'
     ));
     for (let i = candidates.length - 1; i >= 0; i--) {
       const el = candidates[i];
@@ -12406,6 +12406,13 @@
         if (msg) nodesToExtract = [msg];
       } else if (el.classList.contains('assistant-text')) {
         nodesToExtract = [el];
+      } else if (el.classList.contains('codex-client-message')) {
+        // Native Codex renders its reply body directly under the message row,
+        // alongside a presentational “Answer”/“Working” label. Read the body
+        // only, matching the legacy assistant-row behavior above.
+        nodesToExtract = Array.from(el.children).filter(child =>
+          !child.classList.contains('codex-client-message-phase')
+        );
       }
 
       if (nodesToExtract.length > 0) {

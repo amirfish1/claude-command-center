@@ -5288,6 +5288,21 @@ class TestServerImports(unittest.TestCase):
         self.assertIn("el.classList.contains('not-acknowledged')", app_js)
         self.assertIn("if (isPendingSendEchoElement(el)) continue;", last_msg)
 
+    def test_tts_last_message_reads_native_codex_agent_messages(self):
+        """The shared speaker must find the native Codex inline transcript.
+
+        Native Codex renders agent replies as `.codex-client-message.is-agent`,
+        rather than the legacy `.event.assistant` rows the speaker searches.
+        """
+        app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
+        last_msg = app_js[
+            app_js.index("function lastMessageTtsData(paneId)"):
+            app_js.index("  // TTS playback rate", app_js.index("function lastMessageTtsData(paneId)"))
+        ]
+
+        self.assertIn(".codex-client-message.is-agent", last_msg)
+        self.assertIn("el.classList.contains('codex-client-message')", last_msg)
+
     def test_first_existing_dir_picks_first_real_path(self):
         """Codex / claude rows used to surface a tail-extracted worktree
         cwd that had since been deleted, so Launch built
