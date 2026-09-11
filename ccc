@@ -734,6 +734,8 @@ def cmd_spawn(args):
     payload["cwd"] = args.cwd or os.getcwd()
     if args.worktree:
         payload["worktree"] = True
+    if args.confirm_blocked_model:
+        payload["confirm_blocked_model"] = True
     if args.report_to:
         payload["report_to"] = args.report_to
     elif os.environ.get("CLAUDE_CODE_SESSION_ID"):
@@ -838,6 +840,9 @@ def main(argv=None):
     p.add_argument("--report-to", metavar="SESSION_ID",
                    help="session the spawned one reports back to on completion "
                         "(orchestration; also becomes its parent)")
+    p.add_argument("--confirm-blocked-model", action="store_true",
+                   help="spawn even if --model is on the model-policy blocklist "
+                        "(~/.claude/command-center/model-policy.json)")
     p.add_argument("--json", action="store_true", help="raw spawn result JSON")
     p.set_defaults(func=cmd_spawn)
 
