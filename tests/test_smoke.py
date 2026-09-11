@@ -6043,13 +6043,11 @@ class TestServerImports(unittest.TestCase):
     def test_queue_add_uses_large_composer(self):
         """Adding a queue item should use a multiline composer, not prompt()."""
         app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
-        index_html = pathlib.Path(PROJECT_ROOT, "static", "index.html").read_text(encoding="utf-8")
         app_css = pathlib.Path(PROJECT_ROOT, "static", "app.css").read_text(encoding="utf-8")
 
         self.assertIn("function openQueueTicketComposer()", app_js)
         self.assertIn("const note = await openQueueTicketComposer();", app_js)
         self.assertNotIn("window.prompt('New queue ticket", app_js)
-        self.assertIn('id="filesQueueAdd"', index_html)
         self.assertIn('class="fq-add-row" id="filesQueueAdd"', app_js)
         self.assertGreater(
             app_js.index('class="fq-add-row" id="filesQueueAdd"'),
@@ -6061,6 +6059,27 @@ class TestServerImports(unittest.TestCase):
         self.assertIn(".fq-ticket-textarea", app_css)
         self.assertIn("min-height: 150px;", app_css)
         self.assertIn("resize: vertical;", app_css)
+
+    def test_queue_header_add_opens_queue_manager_not_ticket_composer(self):
+        """The header plus creates a queue; the lower add row creates tickets."""
+        index_html = pathlib.Path(PROJECT_ROOT, "static", "index.html").read_text(encoding="utf-8")
+        app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
+
+        self.assertIn('id="filesQueueCreate"', index_html)
+        self.assertIn('title="Create a new queue"', index_html)
+        self.assertIn('aria-label="Create a new queue"', index_html)
+        self.assertNotIn('id="filesQueueAdd"', index_html)
+        header_handler_start = app_js.index("const $queueCreate = document.getElementById('filesQueueCreate');")
+        header_handler_end = app_js.index("// Plan-to-fleet", header_handler_start)
+        header_handler = app_js[header_handler_start:header_handler_end]
+        self.assertIn("await openQueueManager();", header_handler)
+        self.assertNotIn("_addQueueTicket();", header_handler)
+        list_handler_start = app_js.index("$queueList.addEventListener('click'")
+        list_handler_end = app_js.index("const createSessionQueueBtn", list_handler_start)
+        list_handler = app_js[list_handler_start:list_handler_end]
+        self.assertIn("closest('#filesQueueAdd')", list_handler)
+        self.assertIn("await _addQueueTicket();", list_handler)
+        self.assertNotIn("openQueueManager()", list_handler)
 
     def test_queue_add_renders_a_pending_row_until_watchtower_confirms_it(self):
         """A submitted add stays visible as a spinner row until the canonical item arrives."""

@@ -1,0 +1,1 @@
+- Fixed the Queue header’s + control to open the new-queue form instead of the ticket composer.

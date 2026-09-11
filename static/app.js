@@ -47393,11 +47393,11 @@
     // WORKING NOW row clicks are bound per host by _uxqRenderWorkingNow, not
     // once by id here: the strip lives in the Workers lane now, whose DOM is
     // replaced wholesale on every structural render (CCC-1061).
-    const $queueAdd = document.getElementById('filesQueueAdd');
-    if ($queueAdd) {
-      $queueAdd.addEventListener('click', async (ev) => {
+    const $queueCreate = document.getElementById('filesQueueCreate');
+    if ($queueCreate) {
+      $queueCreate.addEventListener('click', async (ev) => {
         ev.stopPropagation();
-        await _addQueueTicket();
+        await openQueueManager();
       });
     }
     // Plan-to-fleet (W51): the "Import doc" affordance is shown only when the
