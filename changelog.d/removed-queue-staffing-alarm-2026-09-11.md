@@ -1,0 +1,1 @@
+- Removed the persistent red "Queue X has no effective worker / is stuck — no progress in Nm" alarm from the queue status strip; the reconciler owns staffing and the banner only nagged about a self-healing state. Only an invalid worker config still raises an in-panel notice.

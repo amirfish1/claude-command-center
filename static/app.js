@@ -46617,59 +46617,22 @@
     // CCC's Spawn defaults (or the codex/claude PATH fallback), which the
     // tooltip spells out per part. Clicking opens the same gear dialog.
     const planHtml = _uxqWorkerPlanChipHtml(key, q && q.worker_plan);
-    // OPS-938: persistent in-panel alarm when the selected auto-drain queue
-    // is stuck or has no effective worker. NOT a toast — it stays until
-    // health clears, names the exact reason (orphan worker missing session
-    // identity, last spawn failure, invalid worker config), and offers
-    // Retry reconcile + Inspect. Queues merely awaiting human answers
-    // (blocked tickets) or parked (backlog) stay calm — the distinction
-    // between draining work, awaiting-human work, and invalid config is the
-    // whole point.
-    const blockedCount = (items || []).filter(it => it && it.needs_input
-      && String(it.status || '') !== 'closed'
-      && _uxqProjectKey(it.project) === key).length;
-    const effectiveWorkers = q && q.effective_workers != null
-      ? Number(q.effective_workers) || 0
-      : workers.filter(w => String((w && w.session_id) || '').trim()).length;
-    const orphanWorkers = q && q.orphan_workers != null
-      ? Number(q.orphan_workers) || 0
-      : Math.max(0, workers.length - effectiveWorkers);
-    const sinceProgressS = q && q.since_progress_s != null ? Number(q.since_progress_s) : null;
+    // OPS-938 used to render a persistent red "Queue X has no effective
+    // worker / is stuck — no progress in Nm" alarm here whenever an
+    // auto-drain queue had claimable work and no tracked worker. The owner
+    // asked for that banner to never appear again: the reconciler already
+    // owns staffing (it retries on its tick and parks a queue whose workers
+    // keep dying), so the alarm only nagged about a state that self-heals.
+    // Only a genuinely invalid worker config still gets an in-panel notice,
+    // since that one cannot fix itself.
     const configIssue = q ? String(q.config_issue || '') : '';
     const spawnIssue = q ? String(q.spawn_issue || '') : '';
-    const staffingAlarm = !!(q && q.auto_drain
-      && (q.staffing_alarm || q.stuck)
-      && Number(q.claimable || 0) > 0);
     let alarmHtml = '';
-    if (staffingAlarm || configIssue) {
-      let title;
-      if (staffingAlarm && q.stuck) {
-        title = 'Queue ' + key + ' is stuck'
-          + (sinceProgressS != null ? ' — no progress in ' + _uxqFmtAge(sinceProgressS) : '');
-      } else if (staffingAlarm) {
-        title = 'Queue ' + key + ' has no effective worker'
-          + (sinceProgressS != null ? ' — no progress in ' + _uxqFmtAge(sinceProgressS) : '');
-      } else {
-        title = 'Queue ' + key + ' worker config is invalid';
-      }
-      const lines = [];
-      if (staffingAlarm) {
-        const counts = [Number(q.claimable || 0) + ' claimable'];
-        if (Number(q.in_progress || 0)) counts.push(Number(q.in_progress) + ' in progress');
-        if (blockedCount) counts.push(blockedCount + ' awaiting human input');
-        lines.push('Open work: ' + counts.join(' · '));
-        let wLine = 'Workers: ' + effectiveWorkers + ' effective of ' + workers.length + ' tracked';
-        if (orphanWorkers) {
-          wLine += ' — ' + orphanWorkers + ' orphan worker missing session identity (reconciler nudges cannot reach it)';
-        } else if (!workers.length) {
-          wLine += ' — the reconciler has not staffed this queue';
-        }
-        lines.push(wLine);
-      }
+    if (configIssue) {
+      const title = 'Queue ' + key + ' worker config is invalid';
+      const lines = ['Config: ' + configIssue];
       if (spawnIssue) lines.push(spawnIssue.charAt(0).toUpperCase() + spawnIssue.slice(1));
-      if (configIssue) lines.push('Config: ' + configIssue);
-      const severity = staffingAlarm ? 'error' : 'warn';
-      alarmHtml = '<div class="fq-queue-alarm is-' + severity + '" role="alert">'
+      alarmHtml = '<div class="fq-queue-alarm is-warn" role="alert">'
         + '<div class="fq-queue-alarm-title">' + escapeHtml(title) + '</div>'
         + lines.map(l => '<div class="fq-queue-alarm-line">' + escapeHtml(l) + '</div>').join('')
         + '<div class="fq-queue-alarm-actions">'
