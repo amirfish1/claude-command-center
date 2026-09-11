@@ -33,6 +33,45 @@ sys.path.insert(0, PROJECT_ROOT)
 
 
 class TestSpawnWorktreeCreation(unittest.TestCase):
+    def test_cleanup_deletes_the_reserved_branch_without_a_worktree_directory(self):
+        server = importlib.import_module("server")
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = pathlib.Path(tmpdir)
+            candidate = root / "repo-wt" / "slow"
+            commands = []
+
+            def fake_run(args, **kwargs):
+                commands.append(args)
+                return subprocess.CompletedProcess(args, 0)
+
+            with mock.patch.object(server.subprocess, "run", side_effect=fake_run):
+                self.assertEqual(
+                    server._cleanup_failed_spawn_worktree(root / "repo", candidate, "feat/slow"),
+                    "",
+                )
+            self.assertEqual(
+                commands,
+                [
+                    ["git", "-C", str(root / "repo"), "show-ref", "--verify", "--quiet", "refs/heads/feat/slow"],
+                    ["git", "-C", str(root / "repo"), "branch", "-D", "feat/slow"],
+                ],
+            )
+
+    def test_cleanup_reports_a_reserved_branch_that_cannot_be_deleted(self):
+        server = importlib.import_module("server")
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = pathlib.Path(tmpdir)
+            candidate = root / "repo-wt" / "slow"
+
+            def fake_run(args, **kwargs):
+                if "show-ref" in args:
+                    return subprocess.CompletedProcess(args, 0)
+                return subprocess.CompletedProcess(args, 1, stderr="branch is checked out")
+
+            with mock.patch.object(server.subprocess, "run", side_effect=fake_run):
+                note = server._cleanup_failed_spawn_worktree(root / "repo", candidate, "feat/slow")
+            self.assertIn("branch cleanup failed: branch is checked out", note)
+
     def test_cleanup_removes_only_the_reserved_worktree_and_branch(self):
         server = importlib.import_module("server")
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -54,6 +93,7 @@ class TestSpawnWorktreeCreation(unittest.TestCase):
                 commands,
                 [
                     ["git", "-C", str(root / "repo"), "worktree", "remove", "--force", str(candidate)],
+                    ["git", "-C", str(root / "repo"), "show-ref", "--verify", "--quiet", "refs/heads/feat/slow"],
                     ["git", "-C", str(root / "repo"), "branch", "-D", "feat/slow"],
                 ],
             )

@@ -23559,25 +23559,33 @@ def _slugify(text, max_len=40):
 
 def _cleanup_failed_spawn_worktree(toplevel, candidate, branch):
     """Remove the exact worktree/branch reserved for a failed spawn attempt."""
-    if not candidate.exists():
-        return ""
+    if candidate.exists():
+        try:
+            remove = subprocess.run(
+                ["git", "-C", str(toplevel), "worktree", "remove", "--force", str(candidate)],
+                capture_output=True, text=True, timeout=30,
+            )
+        except (OSError, subprocess.SubprocessError) as exc:
+            return f"; cleanup failed: {exc}"
+        if remove.returncode != 0:
+            detail = remove.stderr.strip() or remove.stdout.strip() or str(remove.returncode)
+            return f"; cleanup failed: {detail}"
     try:
-        remove = subprocess.run(
-            ["git", "-C", str(toplevel), "worktree", "remove", "--force", str(candidate)],
-            capture_output=True, text=True, timeout=30,
+        branch_exists = subprocess.run(
+            ["git", "-C", str(toplevel), "show-ref", "--verify", "--quiet", f"refs/heads/{branch}"],
+            capture_output=True, text=True, timeout=10,
         )
-    except (OSError, subprocess.SubprocessError) as exc:
-        return f"; cleanup failed: {exc}"
-    if remove.returncode != 0:
-        detail = remove.stderr.strip() or remove.stdout.strip() or str(remove.returncode)
-        return f"; cleanup failed: {detail}"
-    try:
-        subprocess.run(
+        if branch_exists.returncode != 0:
+            return ""
+        delete = subprocess.run(
             ["git", "-C", str(toplevel), "branch", "-D", branch],
             capture_output=True, text=True, timeout=10,
         )
     except (OSError, subprocess.SubprocessError) as exc:
-        return f"; worktree removed but branch cleanup failed: {exc}"
+        return f"; branch cleanup failed: {exc}"
+    if delete.returncode != 0:
+        detail = delete.stderr.strip() or delete.stdout.strip() or str(delete.returncode)
+        return f"; branch cleanup failed: {detail}"
     return ""
 
 
