@@ -1,0 +1,1 @@
+- Keep all archived-session engine filter options reachable in narrow sidebar rails.

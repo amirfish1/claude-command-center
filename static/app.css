@@ -13989,14 +13989,15 @@
     display: block;
   }
   /* Hover/click opens a popup rather than widening the toolbar and moving
-     the controls under the pointer. Right alignment keeps it within narrow
-     sidebars; the toolbar supplies the stacking layer above session rows. */
+     the controls under the pointer. It opens rightward from its trigger so
+     options remain reachable when the toolbar puts that trigger at the
+     narrow rail's left edge. */
   .conv-archived-engine-options {
     display: inline-flex;
     align-items: stretch;
     position: absolute;
     top: calc(100% + 4px);
-    right: 0;
+    left: 0;
     width: max-content;
     visibility: hidden;
     opacity: 0;
