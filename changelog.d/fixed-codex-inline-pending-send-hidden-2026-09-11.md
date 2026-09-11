@@ -1,0 +1,1 @@
+Fixed a message sent to a busy Codex session not showing above the composer for up to a minute (it was rendering into the native shell while the shell was still hidden, connecting); it now falls back to the same visible "queued" echo Claude sessions use, and no longer strands `/compact` behind an orphaned pending message.

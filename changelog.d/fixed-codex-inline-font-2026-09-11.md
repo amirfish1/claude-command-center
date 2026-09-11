@@ -1,0 +1,1 @@
+Fixed the native inline Codex chat hardcoding the Inter font instead of inheriting the app's chosen UI font, so it visually diverged from the rest of the conversation for anyone on a non-default font theme.
