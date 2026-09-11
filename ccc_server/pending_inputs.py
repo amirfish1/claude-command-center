@@ -4177,6 +4177,7 @@ def _run_codex_compaction_recovery_once(session_id, now=None):
                     "queue_handoff": queue_handoff,
                     "result": interrupted,
                 }
+            pump_after_save = False
             if str(recovery.get("status") or "") not in _core._CODEX_COMPACTION_RECOVERY_TERMINAL:
                 recovery["status"] = "waiting"
                 recovery["reason"] = interrupted.get("error") or "Could not interrupt stalled Codex turn"
@@ -4185,7 +4186,34 @@ def _run_codex_compaction_recovery_once(session_id, now=None):
                     state["status"] = "idle"
                     state.pop("active_turn_id", None)
                     recovery["next_attempt_at"] = now
+                    pump_after_save = has_user_input
+                else:
+                    # turn/interrupt itself keeps erroring (e.g. the process
+                    # behind the turn is gone but the app-server never says
+                    # codex_no_active_turn) — unlike the "recovery turn didn't
+                    # start" path below, this branch never incremented
+                    # attempts, so it retried every _RETRY_S forever and
+                    # active_turn_id/active_writer never cleared, wedging the
+                    # writer gate and queuing every future send permanently
+                    # (OPS-1098-class incident, 2026-09-11).
+                    interrupt_attempts = int(recovery.get("interrupt_attempts") or 0) + 1
+                    recovery["interrupt_attempts"] = interrupt_attempts
+                    if interrupt_attempts >= _core._CODEX_COMPACTION_RECOVERY_MAX_ATTEMPTS:
+                        recovery["status"] = "exhausted"
+                        recovery["reason"] = "Could not interrupt stalled Codex turn after repeated attempts"
+                        state["status"] = "idle"
+                        state.pop("active_turn_id", None)
+                        state.pop("active_writer", None)
+                        _core._codex_coordination_event_unlocked(
+                            state,
+                            _core._codex_recovery_event_kind(recovery, "exhausted"),
+                            detail=recovery["reason"],
+                            now=now,
+                        )
+                        pump_after_save = has_user_input
             _core._save_codex_app_server_state_unlocked()
+        if pump_after_save:
+            _core._schedule_codex_queue_pump(sid)
         return {"ok": False, "interrupted": False, "result": interrupted}
 
     if has_user_input and silent_turn:
