@@ -10708,6 +10708,21 @@
   // a long-running turn doesn't make a safely-parked message look dropped.
   // When the input finally delivers, the normal JSONL dedupe removes the echo.
   function markPendingSendQueued(pending, label, opts) {
+    if (pending && !pending.entry && pending.nativeMessageId) {
+      // The native transcript pins its echo to the top of the running turn,
+      // where a queued message reads as already sent and scrolls out of view.
+      // Once the durable queue lists it, the tray card replaces that echo.
+      // A Codex-owned queue entry is not listed, so its echo stays.
+      const pid = pending.paneId || activePaneId();
+      syncNativeCodexQueuedInputs(pid).catch(() => {}).then(() => {
+        const tray = convPaneElById(pid)?.querySelector('.queued-steer-tray');
+        const want = _normSend(pending.text);
+        const listed = tray && Array.from(tray.querySelectorAll('[data-queued-steer-server="true"] .user-msg'))
+          .some(msg => _normSend(msg.getAttribute('data-raw-text') || msg.textContent) === want);
+        if (listed) removePendingSendEcho(pending);
+      });
+      return;
+    }
     if (!pending || !pending.entry) return;
     if (pending.entry.timer) { clearTimeout(pending.entry.timer); pending.entry.timer = null; }
     pending.entry.queued = true;
@@ -50373,7 +50388,10 @@
     if (!currentConversation) return;
     const id = currentConversation;
     const $view = getConvViewForPane(fetchPaneId) || $conversationsView;
-    if (window.CCCCodexClient?.isInlineActive(convPaneElById(fetchPaneId))) return;
+    if (window.CCCCodexClient?.isInlineActive(convPaneElById(fetchPaneId))) {
+      syncNativeCodexQueuedInputs(fetchPaneId).catch(() => {});
+      return;
+    }
     // Backlog cards (open GH issues + TODO/PARKING/native-task) have no
     // session JSONL — /api/conversations/<id> returns 404. Render the
     // issue body directly from the card's already-loaded fields so the
@@ -55002,6 +55020,63 @@
     if (!$view.querySelector('.event.user_text.pending, .event.user_text.steering-optimistic')) {
       $view.querySelectorAll('.conv-live-tool-inline.optimistic:not(.is-thinking)').forEach(el => el.remove());
     }
+  }
+
+  // Native Codex panes skip the legacy transcript fetch, and that fetch is the
+  // only path that paints durable queued rows. Without this the tray above the
+  // composer never builds, so a message parked behind a running turn shows
+  // only as a "Queued" banner with no text. Read just the in-memory queue and
+  // feed the same tray every other engine uses.
+  const _nativeCodexQueuedSync = new Map(); // paneId -> {promise, again}
+  function syncNativeCodexQueuedInputs(paneId) {
+    const pid = paneId || activePaneId();
+    const slot = _nativeCodexQueuedSync.get(pid) || { promise: null, again: false };
+    _nativeCodexQueuedSync.set(pid, slot);
+    // Coalesce: a caller arriving mid-read waits for a re-read that includes
+    // its own queue write, instead of starting a parallel fetch.
+    if (slot.promise) { slot.again = true; return slot.promise; }
+    slot.promise = _runNativeCodexQueuedSync(pid, slot).finally(() => { slot.promise = null; });
+    return slot.promise;
+  }
+  async function _runNativeCodexQueuedSync(pid, slot) {
+    do {
+      slot.again = false;
+      const pane = paneByPaneId(pid);
+      const convId = pane && pane.conversationId;
+      if (!convId) return;
+      const row = convRowForPane(pid);
+      const sid = sessionIdByConv[convId] || (row && row.session_id) || convId;
+      let data;
+      try {
+        const res = await fetch('/api/session/' + encodeURIComponent(sid) + '/queued-inputs');
+        if (!res.ok) return;
+        data = await res.json();
+      } catch (_) { return; }
+      if (paneByPaneId(pid)?.conversationId !== convId) return;
+      const $view = getConvViewForPane(pid);
+      if (!$view) return;
+      const events = (Array.isArray(data && data.events) ? data.events : [])
+        .filter(ev => ev && ev.pending && ev.text);
+      const tray = convPaneElById(pid)?.querySelector('.queued-steer-tray');
+      const shown = tray ? Array.from(tray.querySelectorAll('[data-queued-steer-server="true"] .user-msg'))
+        .map(msg => msg.getAttribute('data-raw-text') || '') : [];
+      const fresh = events.map(ev => String(ev.text));
+      // Unchanged queue: leave the cards alone so hover and focus survive polls.
+      if (shown.length === fresh.length && shown.every((text, i) => text === fresh[i])) continue;
+      events.forEach(ev => {
+        const div = document.createElement('div');
+        div.className = 'event user_text pending server-queued';
+        div.dataset.queuedSteerServer = 'true';
+        if (ev.queued_reason) div.dataset.queuedReason = String(ev.queued_reason);
+        const epoch = ev.ts ? Date.parse(ev.ts) : NaN;
+        if (!isNaN(epoch)) div.dataset.tsEpoch = String(epoch);
+        const text = String(ev.text);
+        div.innerHTML = '<span class="label">User</span>'
+          + '<div class="user-msg" dir="auto" data-raw-text="' + escapeAttr(text) + '">' + escapeHtml(text) + '</div>';
+        $view.appendChild(div);
+      });
+      syncQueuedSteerTray($view, pid, true);
+    } while (slot.again);
   }
 
   // ── Conversation presentation modes ──────────────────────────────────

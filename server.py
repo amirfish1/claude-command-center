@@ -25460,6 +25460,17 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
             # Workspace info — cwd, branch, worktree?, ahead/behind, co-tenants.
             sid = path.rsplit("/", 2)[-2]
             self.send_json(extract_session_workspace(sid))
+        elif re.match(r"^/api/session/[a-zA-Z0-9_-]+/queued-inputs$", path):
+            # Durable CCC-queued input for one session, shaped as the same
+            # synthetic `pending` user_text events the transcript endpoint
+            # merges in. The native Codex view never fetches that transcript,
+            # so it polls this in-memory read to keep queued messages visible.
+            sid = path.rsplit("/", 2)[-2]
+            self.send_json({
+                "ok": True,
+                "session_id": sid,
+                "events": _get_queued_events_for_session(sid),
+            })
         elif path == "/morning/kanban":
             try:
                 html = (MORNING_STATIC_DIR / "kanban.html").read_text()
