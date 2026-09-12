@@ -2289,6 +2289,10 @@
   // before the request goes out with confirm_blocked_model: true. This is a
   // convenience prompt only -- server.py is the real gate and rejects a
   // blocked model with no confirm flag regardless of what the client sends.
+  // Spawn ids this tab originated (plus a counter for POSTs still in flight).
+  // Read by syncExternalSpawnPlaceholders to tell "someone else spawned this"
+  // from "this is the spawn I just fired and am already showing".
+  const _cccLocalSpawns = { ids: new Set(), inFlight: 0 };
   (function installSpawnProvenanceTag() {
     const realFetch = window.fetch.bind(window);
     function isBlockedModelName(model) {
@@ -2324,7 +2328,24 @@
           opts.body = JSON.stringify(body);
         }
       }
-      return realFetch(input, opts);
+      if (!isSpawn) return realFetch(input, opts);
+      // Remember every spawn THIS tab starts, so the external-spawn poller
+      // below never double-renders a placeholder for our own request. The
+      // in-flight counter covers the window between the POST leaving and its
+      // spawn_id coming back — the server has already written the registry
+      // entry by then, so the poller can see the spawn before we can name it.
+      _cccLocalSpawns.inFlight++;
+      return realFetch(input, opts).then((res) => {
+        try {
+          res.clone().json().then((d) => {
+            const key = String((d && (d.spawn_id || d.pid)) || '');
+            if (key) _cccLocalSpawns.ids.add(key);
+            const sid = String((d && d.session_id) || '');
+            if (sid) _cccLocalSpawns.ids.add(sid);
+          }).catch(() => {}).finally(() => { _cccLocalSpawns.inFlight--; });
+        } catch (_) { _cccLocalSpawns.inFlight--; }
+        return res;
+      }, (err) => { _cccLocalSpawns.inFlight--; throw err; });
     };
   })();
 
@@ -5283,6 +5304,9 @@
       try { _handlePrewarmEvents(data.prewarm_events || []); } catch (_) {}
       // Pending "CCC wants to interrupt this session" approval asks.
       try { _renderInterruptAsks(data.interrupt_asks || []); } catch (_) {}
+      // Sessions spawned outside this tab get the same "spawning…" row a
+      // UI-initiated spawn gets, so `ccc spawn` shows up in seconds.
+      try { syncExternalSpawnPlaceholders(data.recent_spawns || []); } catch (_) {}
       const sessions = (data && data.sessions) || {};
       const liveIds = new Set(Object.keys(sessions));
       for (const [sid, fields] of Object.entries(sessions)) {
@@ -19486,6 +19510,10 @@
     // placeholder→real swap in loadConversationList re-binds the right
     // pane in place — selection follows the spawn end-to-end.
     const selectPending = () => {
+      // An externally-initiated spawn (`ccc spawn`, an agent, a queue lane)
+      // must NOT steal the pane: the user did not ask for this session, they
+      // just need to see it appear. Only spawns this tab started auto-select.
+      if (card.no_auto_select) return;
       if (typeof selectConversation === 'function') selectConversation(id);
     };
     if (card.fast_path) {
@@ -19504,6 +19532,92 @@
     if (!isSpawnLogPlaceholderSource(source)) {
       _watchPendingSpawnRegistration(pid, id);
     }
+  }
+
+  // ── Externally-initiated spawns ────────────────────────────────────────
+  // A spawn fired from this tab gets its placeholder synchronously, from the
+  // click handler. A spawn fired anywhere ELSE — `ccc spawn`, an agent POSTing
+  // /api/sessions/spawn, a WatchTower lane — had no client to do that, so the
+  // new session was invisible until its transcript materialized and a full
+  // archive refresh picked it up. For Codex that is tens of seconds of nothing.
+  //
+  // /api/sessions/live-activity now carries `recent_spawns` (the shared on-disk
+  // spawn registry, windowed). Turn each one CCC did not start here into the
+  // very same placeholder card, minus the auto-select — the user did not ask
+  // for this session, so it must appear without stealing their pane. From
+  // there the existing reconciliation (expected_session_id → real row) owns it.
+  const _externalSpawnSeen = new Map();   // spawn key -> ts first handled
+  const EXTERNAL_SPAWN_MAX_AGE_S = 120;   // older than this: the archive has it
+  const EXTERNAL_SPAWN_MAX_PER_TICK = 4;  // a fan-out must not stall the tab
+  const EXTERNAL_SPAWN_SEEN_TTL_MS = 30 * 60 * 1000;
+
+  function _pruneExternalSpawnSeen() {
+    if (_externalSpawnSeen.size < 200) return;
+    const cutoff = Date.now() - EXTERNAL_SPAWN_SEEN_TTL_MS;
+    for (const [k, ts] of Array.from(_externalSpawnSeen.entries())) {
+      if (ts < cutoff) _externalSpawnSeen.delete(k);
+    }
+  }
+
+  function _sessionRowExists(sid) {
+    if (!sid || !Array.isArray(conversationsData)) return false;
+    return conversationsData.some(c => c && (c.session_id === sid || c.id === sid));
+  }
+
+  function syncExternalSpawnPlaceholders(spawns) {
+    if (!Array.isArray(spawns) || !spawns.length) return 0;
+    if (typeof insertPendingSpawnCard !== 'function') return 0;
+    _pruneExternalSpawnSeen();
+    let added = 0;
+    for (const sp of spawns) {
+      if (added >= EXTERNAL_SPAWN_MAX_PER_TICK) break;
+      if (!sp || typeof sp !== 'object') continue;
+      const key = String(sp.spawn_id || sp.pid || '');
+      if (!key || _externalSpawnSeen.has(key)) continue;
+      const sid = String(sp.session_id || '');
+      // Our own spawn, already placeholdered by the click handler.
+      if (_cccLocalSpawns.ids.has(key) || (sid && _cccLocalSpawns.ids.has(sid))
+          || pendingSpawns.has(key)) {
+        _externalSpawnSeen.set(key, Date.now());
+        continue;
+      }
+      // One of our POSTs is still in flight, so we cannot yet name the spawn
+      // it will return. Leave this row unmarked and re-check next tick rather
+      // than racing our own request into a duplicate placeholder.
+      if (_cccLocalSpawns.inFlight > 0 && Number(sp.age_s || 0) < 15) continue;
+      _externalSpawnSeen.set(key, Date.now());
+      // Already finished, already old, or already a real row: nothing to
+      // preview — the ordinary list refresh is the right surface for these.
+      if (!sp.alive) continue;
+      if (Number(sp.age_s || 0) > EXTERNAL_SPAWN_MAX_AGE_S) continue;
+      if (sid && _sessionRowExists(sid)) continue;
+      if (_sessionRowExists('spawning-' + key)) continue;
+
+      const engine = String(sp.engine || 'claude');
+      const source = (typeof spawnSourceForEngine === 'function')
+        ? spawnSourceForEngine(engine) : engine;
+      const cwd = sp.repo_path || sp.cwd || '';
+      const subject = String(sp.name || sp.command_summary || '').trim()
+        || ('Spawning #' + key);
+      insertPendingSpawnCard(key, subject, source, sp.log || null, {
+        first_message: sp.command_summary || '',
+        repo_path: cwd,
+        folder_path: cwd,
+        spawn_cwd: cwd,
+        cwd: cwd,
+        session_cwd: cwd,
+        session_cwd_exists: !!cwd,
+        model: sp.model || '',
+        reasoning_effort: sp.reasoning_effort || '',
+        parent_session_id: sp.parent_session_id || '',
+        expected_session_id: sid,
+        spawned_via: sp.spawned_via || '',
+        no_auto_select: true,
+        external_spawn: true,
+      });
+      added++;
+    }
+    return added;
   }
 
   // True while the spawn placeholder is still awaiting its real row. Looked

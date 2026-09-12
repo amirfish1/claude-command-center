@@ -91,6 +91,46 @@ def _resolve_server(args_server):
 _CLI_USER_AGENT = "ccc-cli"
 
 
+def _caller_pid_chain(max_depth=16):
+    """This process's PID ancestry, innermost (self) first.
+
+    `ccc spawn` run from inside an agent session should land in that session's
+    lane map, but only Claude Code exports a session id to its shell children
+    (CLAUDE_CODE_SESSION_ID). Codex exports nothing per-conversation, so there
+    is no env to read — the one thing that IS true is that `ccc` is a
+    descendant of whatever process is driving the session. Ship the ancestry
+    and let the server match it against what it already knows (spawn registry
+    pids, ~/.claude/sessions/*.json, the shared Codex app-server).
+
+    One `ps` call, bounded walk, failures are silent: attribution is a nicety,
+    never a reason for a spawn to fail.
+    """
+    try:
+        out = subprocess.run(
+            ["ps", "-A", "-o", "pid=,ppid="],
+            capture_output=True, text=True, timeout=5,
+        ).stdout
+    except (OSError, subprocess.SubprocessError):
+        return []
+    parent_of = {}
+    for line in out.splitlines():
+        parts = line.split()
+        if len(parts) != 2:
+            continue
+        try:
+            parent_of[int(parts[0])] = int(parts[1])
+        except ValueError:
+            continue
+    chain = []
+    pid = os.getpid()
+    seen = set()
+    while pid and pid > 1 and pid not in seen and len(chain) < max_depth:
+        chain.append(pid)
+        seen.add(pid)
+        pid = parent_of.get(pid, 0)
+    return chain
+
+
 def _get_json(base, path, timeout=10):
     req = urllib.request.Request(
         base + path, headers={"Accept": "application/json", "User-Agent": _CLI_USER_AGENT}
@@ -743,6 +783,15 @@ def cmd_spawn(args):
         # (interactive or headless) with no explicit --report-to, so default
         # to that session rather than leaving the spawn's provenance blank.
         payload["report_to"] = os.environ["CLAUDE_CODE_SESSION_ID"]
+    if not payload.get("report_to"):
+        # No env to read (Codex, Gemini, a plain shell). Hand the server this
+        # process's ancestry so it can resolve the calling session itself; it
+        # only sets a parent when the match is unambiguous, and a miss leaves
+        # the spawn exactly as un-attributed as it is today.
+        chain = _caller_pid_chain()
+        if chain:
+            payload["caller_pids"] = chain
+            payload["caller_cwd"] = payload.get("cwd") or os.getcwd()
     try:
         status, result = _post_json(base, "/api/sessions/spawn", payload)
     except OSError as e:  # URLError, plus raw TimeoutError from mid-read stalls

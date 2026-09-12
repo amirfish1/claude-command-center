@@ -11,6 +11,7 @@ import fcntl
 import json
 import os
 import threading
+import time
 
 from ccc_server import core as _core
 
@@ -225,3 +226,99 @@ def _persist_codex_parent_link(thread_id, parent_session_id):
     )
 
 
+
+
+# ---------------------------------------------------------------------------
+# Recent-spawn feed (dashboard "a session is spawning" placeholders)
+# ---------------------------------------------------------------------------
+# A spawn started from the browser gets an instant client-side placeholder row
+# (insertPendingSpawnCard in static/app.js). A spawn started anywhere else —
+# `ccc spawn`, an agent POSTing /api/sessions/spawn, a WatchTower lane — had no
+# such client, so the new session stayed invisible until its transcript
+# materialized and the next full archive refresh picked it up (up to a minute,
+# often more for Codex, which writes nothing for several seconds).
+#
+# This feed closes that gap: the registry already records every spawn from both
+# the dashboard AND the worker, so the dashboard can render the same placeholder
+# for a spawn it did not initiate. Read from DISK (mtime-cached) on purpose —
+# the in-memory `_spawned_sessions` list only ever holds this process's own
+# spawns, which is exactly the blind spot.
+#
+# Perf: no subprocess, no transcript read, no control-plane round trip. The only
+# per-entry work is one os.kill(pid, 0) liveness check, and only for entries
+# inside the (small) recency window — so cost scales with spawns-per-minute,
+# not with the size of the registry or the session corpus.
+
+_SPAWN_FEED_WINDOW_S = 300.0
+_SPAWN_FEED_FIELDS = (
+    "session_id", "resumed_sid", "name", "engine", "model", "reasoning_effort",
+    "cwd", "repo_path", "parent_session_id", "command_summary", "spawned_via",
+    "log",
+)
+
+
+def _spawn_feed_epoch(entry):
+    """Epoch seconds for a registry entry's `spawned_at` stamp, or None.
+
+    `_record_spawn_to_registry` writes `time.strftime("%Y%m%dT%H%M%S")` —
+    local time, no offset — so parse it the same way it was produced.
+    """
+    raw = str((entry or {}).get("spawned_at") or "").strip()
+    if not raw:
+        return None
+    try:
+        return time.mktime(time.strptime(raw, "%Y%m%dT%H%M%S"))
+    except (ValueError, OverflowError):
+        return None
+
+
+def _spawn_feed_recent(window_s=_SPAWN_FEED_WINDOW_S, now=None):
+    """Spawns registered within the last `window_s` seconds, newest first.
+
+    Shape mirrors the fields `/api/sessions/spawned` returns for a registry
+    row so the frontend can reuse the same placeholder-card builder.
+    """
+    now = time.time() if now is None else now
+    out = []
+    for entry in _disk_spawn_entries_cached():
+        if not isinstance(entry, dict) or entry.get("prewarm"):
+            continue
+        started = _spawn_feed_epoch(entry)
+        if started is None or (now - started) > window_s or (started - now) > 60:
+            continue
+        pid = entry.get("pid")
+        alive = False
+        try:
+            alive = bool(pid) and _core._is_pid_alive(int(pid))
+        except (TypeError, ValueError):
+            alive = False
+        row = {k: entry.get(k) or "" for k in _SPAWN_FEED_FIELDS}
+        row["pid"] = pid
+        row["spawn_id"] = str(entry.get("spawn_id") or pid or "")
+        row["spawned_at"] = entry.get("spawned_at") or ""
+        row["spawned_at_epoch"] = started
+        row["age_s"] = max(0.0, now - started)
+        row["alive"] = alive
+        out.append(row)
+    out.sort(key=lambda r: r.get("spawned_at_epoch") or 0, reverse=True)
+    return out
+
+
+def _spawn_registry_change_token():
+    """Cheap "did anything spawn?" signal for the session-status poll.
+
+    Counts the on-disk registry, not just this process's in-memory list.
+    A spawn created by the WORKER (which owns engine execution) never lands
+    in the dashboard's `_spawned_sessions`, so a count taken from that alone
+    could not grow — the client's "refresh the conv list NOW" trigger was
+    dead for every worker-owned spawn, which is most of them.
+    """
+    try:
+        disk = len(_disk_spawn_entries_cached())
+    except Exception:
+        disk = 0
+    try:
+        mem = len(_core._spawned_sessions)
+    except Exception:
+        mem = 0
+    return disk + mem

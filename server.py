@@ -25496,6 +25496,15 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                 payload["interrupt_asks"] = _pending_interrupt_asks()
             except Exception:
                 payload["interrupt_asks"] = []
+            # Spawns started OUTSIDE this browser tab (`ccc spawn`, an agent
+            # POSTing /api/sessions/spawn, a WatchTower lane). The client turns
+            # these into the same "spawning…" placeholder row a UI-initiated
+            # spawn gets, so a CLI-spawned session is visible in seconds
+            # instead of whenever its transcript first materializes.
+            try:
+                payload["recent_spawns"] = _spawn_feed_recent()
+            except Exception:
+                payload["recent_spawns"] = []
             self.send_json(payload)
         elif path == "/api/interrupt-asks":
             # Cheap standalone poll for the interrupt-approval banner: one
@@ -25800,7 +25809,7 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
             # against the last value on each poll; growth triggers an
             # immediate conv-list refresh.
             try:
-                status["spawn_registry_count"] = len(_spawned_sessions)
+                status["spawn_registry_count"] = _spawn_registry_change_token()
             except Exception:
                 status["spawn_registry_count"] = 0
             # Process-presence summary for the conversation top bar. Claude's
@@ -30670,6 +30679,27 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                 payload,
                 report_to=report_to,
             )
+            # Nobody named a parent. If the caller shipped its PID ancestry
+            # (the `ccc` CLI always does), resolve the enclosing agent session
+            # from it so an agent-run `ccc spawn` still lands in that session's
+            # lane map. Only Claude Code exports a session id to its shell
+            # children; this is how Codex/Gemini/plain-shell callers get one.
+            # Best-effort: an unresolvable or ambiguous caller leaves the spawn
+            # un-attributed exactly as before.
+            if not parent_session_id and not parent_session_error:
+                try:
+                    resolved_parent = _resolve_spawn_caller_session_id(
+                        payload.get("caller_pids"),
+                        payload.get("caller_cwd") or payload.get("cwd") or "",
+                    )
+                except Exception:
+                    resolved_parent = ""
+                if resolved_parent:
+                    parent_session_id = resolved_parent
+                    _log_activity(
+                        "spawn", "CALLER_PARENT",
+                        f"resolved parent={resolved_parent} from caller pids",
+                    )
             cwd_raw = payload.get("cwd")
             cwd_input = cwd_raw.strip() if isinstance(cwd_raw, str) else ""
             cwd_resolved = None

@@ -4751,6 +4751,202 @@ def _normalize_spawn_parent_session_id(payload, report_to=None):
     return raw, None
 
 
+# ---------------------------------------------------------------------------
+# Caller attribution for API/CLI spawns
+# ---------------------------------------------------------------------------
+# A spawn started from the dashboard carries its parent explicitly. A spawn
+# started by an AGENT running `ccc spawn` usually cannot: only Claude Code
+# exports a session id to its shell children (CLAUDE_CODE_SESSION_ID), so a
+# Codex/Gemini session's spawns landed with a blank parent and never showed up
+# in the orchestrator's lane map.
+#
+# The `ccc` CLI ships its PID ancestry instead (`caller_pids`, innermost
+# first). Everything below turns that into a session id using state CCC already
+# keeps. Deliberately conservative: every lookup is exact except the Codex
+# app-server fallback, which resolves only when exactly one candidate remains.
+# A miss returns "" and the spawn proceeds un-attributed — the status quo.
+
+# How recently a Codex rollout must have been written to count as "this is the
+# thread that just shelled out". A tool call appends to the rollout as it runs,
+# so the calling thread's file is being written within a second or two of the
+# request; anything older is a different conversation.
+_SPAWN_CALLER_CODEX_WINDOW_S = 30.0
+_SPAWN_CALLER_MAX_PIDS = 24
+_CODEX_ROLLOUT_SID_RE = re.compile(
+    r"^rollout-\d{4}-\d{2}-\d{2}T[\d-]+-([0-9a-fA-F-]{32,40})\.jsonl$"
+)
+
+
+def _clean_caller_pids(raw):
+    """Sanitise a client-supplied PID ancestry into ints, innermost first."""
+    if not isinstance(raw, (list, tuple)):
+        return []
+    out = []
+    for item in raw[:_SPAWN_CALLER_MAX_PIDS]:
+        try:
+            pid = int(item)
+        except (TypeError, ValueError):
+            continue
+        if pid > 1 and pid not in out:
+            out.append(pid)
+    return out
+
+
+def _codex_rollout_cwd(path):
+    """cwd from a rollout's `session_meta` record (its first line)."""
+    try:
+        with open(path, "r", encoding="utf-8", errors="replace") as fh:
+            head = fh.readline()
+    except OSError:
+        return ""
+    try:
+        rec = json.loads(head)
+    except (json.JSONDecodeError, ValueError):
+        return ""
+    payload = rec.get("payload") if isinstance(rec, dict) else None
+    if not isinstance(payload, dict):
+        return ""
+    return str(payload.get("cwd") or "").strip()
+
+
+def _codex_thread_writing_now(caller_cwd, window_s=_SPAWN_CALLER_CODEX_WINDOW_S,
+                              now=None):
+    """The Codex session whose rollout is being appended to right now, or "".
+
+    Every CCC-managed Codex conversation multiplexes through ONE shared
+    app-server process, so PID ancestry can only prove "a Codex thread called
+    this" — never which one. The rollout file can: the thread that is running a
+    tool call is, by definition, the thread writing its transcript. Scoped to
+    today's rollout directory (and yesterday's, for a call that straddles
+    midnight) so this is a listing of a few files, never a corpus scan.
+
+    Returns "" when zero or several threads qualify — an ambiguous guess here
+    would attach a lane to the wrong orchestrator, which is worse than none.
+    """
+    now = time.time() if now is None else now
+    root = Path(os.path.expanduser("~/.codex/sessions"))
+    if not root.is_dir():
+        return ""
+    candidates = []
+    for offset in (0, 86400):
+        day = time.localtime(now - offset)
+        day_dir = root / time.strftime("%Y/%m/%d", day)
+        if not day_dir.is_dir():
+            continue
+        try:
+            entries = list(day_dir.iterdir())
+        except OSError:
+            continue
+        for f in entries:
+            m = _CODEX_ROLLOUT_SID_RE.match(f.name)
+            if not m:
+                continue
+            try:
+                st = f.stat()
+            except OSError:
+                continue
+            if (now - st.st_mtime) > window_s:
+                continue
+            candidates.append((m.group(1), f, st.st_mtime))
+    if not candidates:
+        return ""
+    if len(candidates) > 1 and caller_cwd:
+        want = os.path.normpath(os.path.expanduser(caller_cwd))
+        narrowed = [
+            c for c in candidates
+            if os.path.normpath(_codex_rollout_cwd(c[1]) or "") == want
+        ]
+        if narrowed:
+            candidates = narrowed
+    if len(candidates) != 1:
+        return ""
+    return candidates[0][0]
+
+
+def _resolve_spawn_caller_session_id(caller_pids, caller_cwd=""):
+    """Session id of the agent session that invoked `ccc spawn`, or "".
+
+    Walks the ancestry innermost-first so the NEAREST enclosing session wins
+    (a session that spawned a session that shells out attributes to the inner
+    one). Each source is exact; see the module note above for the one
+    heuristic, which self-disqualifies when ambiguous.
+    """
+    pids = _clean_caller_pids(caller_pids)
+    if not pids:
+        return ""
+    pid_set = set(pids)
+
+    # 1. Claude's own registry (~/.claude/sessions/<pid>.json) — authoritative
+    #    pid -> sessionId, already staleness-filtered against live processes.
+    claude_by_pid = {}
+    try:
+        for sid, meta in (_core._load_session_registry() or {}).items():
+            try:
+                claude_by_pid[int((meta or {}).get("pid"))] = sid
+            except (TypeError, ValueError):
+                continue
+    except Exception:
+        claude_by_pid = {}
+
+    # 2. CCC's own spawn registry — covers every engine CCC launched itself.
+    spawn_by_pid = {}
+    try:
+        for entry in (_core._load_spawn_registry() or []):
+            if not isinstance(entry, dict):
+                continue
+            sid = str(entry.get("session_id") or entry.get("resumed_sid") or "").strip()
+            if not sid:
+                continue
+            try:
+                spawn_by_pid[int(entry.get("pid"))] = sid
+            except (TypeError, ValueError):
+                continue
+    except Exception:
+        spawn_by_pid = {}
+
+    # 3. Live engine CLIs whose resume args name the session (codex exec
+    #    --resume, gemini, cursor, grok). One shared, TTL-memoised ps scan.
+    resume_by_pid = {}
+    codex_pids = set()
+    try:
+        for pid_s, _tty, comm, args in (_core._scan_engine_processes() or []):
+            try:
+                pid = int(pid_s)
+            except (TypeError, ValueError):
+                continue
+            if pid not in pid_set:
+                continue
+            first = (args.split(None, 1)[0] if args else "") or comm
+            if "codex" in os.path.basename(str(first or "")):
+                codex_pids.add(pid)
+            for engine in ("codex", "gemini", "cursor", "grok"):
+                for tok in (args or "").split():
+                    if len(tok) >= 16 and _core._command_targets_engine_session(
+                        args, tok, engine
+                    ):
+                        resume_by_pid.setdefault(pid, tok)
+                        break
+                if pid in resume_by_pid:
+                    break
+    except Exception:
+        pass
+
+    for pid in pids:
+        for table in (claude_by_pid, spawn_by_pid, resume_by_pid):
+            sid = table.get(pid)
+            if sid:
+                return sid
+
+    # 4. Shared Codex app-server: ancestry proves "a Codex process", not which
+    #    conversation. Fall back to the one whose transcript is live right now.
+    if codex_pids:
+        try:
+            return _codex_thread_writing_now(caller_cwd)
+        except Exception:
+            return ""
+    return ""
+
+
 def _parent_session_id_from_return_address_text(text):
     """Recover legacy spawn hierarchy from CCC's report-back footer."""
     if not isinstance(text, str) or "Return address" not in text:
