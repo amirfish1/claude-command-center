@@ -23,6 +23,23 @@ SPAWN = {
 
 
 class WorkerPlanChainTests(unittest.TestCase):
+    def test_invalid_model_names_watchtower_as_the_approval_source(self):
+        """A queue alarm must identify the catalog that rejected its model."""
+        catalog = mock.Mock()
+        catalog.approved_models.return_value = ("gemini-3.7-flash-high",)
+        catalog.is_approved_model.return_value = False
+        plan = {"engine": "antigravity", "model": "gemini-3.8-flash-high"}
+
+        with mock.patch.object(queue_events._core, "_wt_config", catalog):
+            issue = queue_events._queue_worker_config_issue(plan)
+
+        self.assertEqual(
+            issue,
+            "configured model 'gemini-3.8-flash-high' is not approved by "
+            "WatchTower's model catalog for antigravity "
+            "(approved: gemini-3.7-flash-high)",
+        )
+
     def test_queue_engine_override_falls_through_to_shared_model(self):
         # Queue pins claude; worker_model belongs to kimi so it must NOT leak.
         plan = compute_queue_worker_plan({"engine": "claude"}, SPAWN)

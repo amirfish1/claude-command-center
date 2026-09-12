@@ -579,7 +579,8 @@ def _queue_worker_config_issue(plan):
             return None
         if model and not cfg.is_approved_model(engine, model):
             choices = ", ".join(cfg.approved_models(engine))
-            return f"configured model {model!r} is not approved for {engine} (approved: {choices})"
+            return (f"configured model {model!r} is not approved by WatchTower's "
+                    f"model catalog for {engine} (approved: {choices})")
         if effort and not cfg.is_approved_effort(engine, model, effort):
             supported = cfg.approved_efforts(engine, model)
             label = model or f"{engine} default model"
