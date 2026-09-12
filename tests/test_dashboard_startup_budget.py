@@ -143,3 +143,19 @@ def test_archive_readiness_settles_even_for_empty_or_failed_loads():
     marker_start = SOURCE.index("function _markArchiveFirstLoaded()")
     marker_end = SOURCE.index("window.__cccThroughputActivityRows", marker_start)
     assert "_releaseStartupApiReads();" in SOURCE[marker_start:marker_end]
+
+
+def test_merging_spawn_defaults_does_not_refetch_spawn_defaults():
+    # mergeSpawnDefaults() called refreshSpawnEngineValue(), which re-fetches
+    # /api/spawn-defaults and calls mergeSpawnDefaults() again: an unbounded
+    # fetch loop for the life of every open tab. Measured 2026-09-12 with a
+    # single idle headless tab: 599 /api/spawn-defaults requests in 15s
+    # (about 40/s), competing with the archive bootstrap for the GIL-bound
+    # server. Merging may re-render the Settings summary, never re-fetch.
+    merge = _function("function mergeSpawnDefaults(", "// setSpawnDefaultModel/setSpawnEngine only ever mutate")
+    code = "\n".join(
+        line for line in merge.splitlines() if not line.lstrip().startswith("//")
+    )
+    assert "refreshSpawnEngineValue(" not in code
+    assert "loadSpawnDefaults(" not in code
+    assert "renderSpawnDefaultsInline(" in code

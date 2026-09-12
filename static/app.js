@@ -67207,10 +67207,14 @@
     // producing an engine/model pairing that was never actually chosen.
     [$convInputEngineSelect, $kptToolbarEngineSelect]
       .forEach(s => { if (s && s.value !== spawnDefaultsState.engine) s.value = spawnDefaultsState.engine; });
-    // Settings shows engine · model · effort from this same state, so refresh
+    // Settings shows engine · model · effort from this same state, so re-render
     // it here rather than only on the settings-modal open path — a Save (which
     // routes back through here) has to change the summary it just contradicted.
-    if (typeof refreshSpawnEngineValue === 'function') refreshSpawnEngineValue();
+    // Re-render ONLY. The settings-open refresh helper re-fetches
+    // /api/spawn-defaults and lands back here, which was an unbounded fetch
+    // loop (~40 req/s per idle tab, measured 2026-09-12) that starved the
+    // archive bootstrap.
+    if (typeof renderSpawnDefaultsInline === 'function') renderSpawnDefaultsInline();
   }
 
   // setSpawnDefaultModel/setSpawnEngine only ever mutate in-memory +
