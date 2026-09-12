@@ -2052,6 +2052,14 @@ def _find_devin_cli_conversations_locked(
                 "session_id": sid,
                 "source": "devin-cli",
                 "engine": "devin",
+                # True only when THIS session currently has a live `devin
+                # acp` connection attached -- i.e. the experimental Steer
+                # path (CCC_DEVIN_ACP_STEER, see acp.py's
+                # _devin_acp_try_steer) could actually be attempted for it.
+                # False for the overwhelming majority of Devin sessions,
+                # which run the one-shot CLI only; the UI must not show a
+                # Steer affordance for those (it would silently no-op).
+                "devin_acp_ready": bool(_core._devin_acp_session_loaded(raw_id)),
                 "timestamp": "",
                 "branch": "",
                 "git_branch": "",

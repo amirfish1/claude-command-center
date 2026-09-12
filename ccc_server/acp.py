@@ -81,11 +81,41 @@ _ACP_HARNESSES = {
         "home_env": "GROK_HOME",
         "home_default": "~/.grok",
     },
+    # Devin (Cognition) CLI's `devin acp` subcommand runs it as an ACP server
+    # over stdio (docs.devin.ai/cli/reference/commands) -- the same protocol
+    # family as Kimi/Grok above. This registration only lights up the
+    # generic connection-lifecycle machinery (handshake, event/transcript
+    # plumbing, terminal/*); it does NOT change Devin's existing one-shot
+    # `devin -p` / `devin --resume -p` flow in engines.py, which remains the
+    # only path CCC uses to spawn/resume Devin CLI sessions today. See
+    # _devin_acp_try_steer's docstring for the one place this harness is
+    # actually exercised, and why that is opt-in and defensive: nobody has
+    # run `devin acp` against this codebase, so its wire behavior (in
+    # particular whether session/load|resume accepts a session id minted by
+    # the one-shot CLI) is unverified.
+    "devin": {
+        "label": "Devin",
+        "bin_env": "CCC_DEVIN_ACP_BIN",
+        "bin_names": ("devin",),
+        "acp_args": ("acp",),
+        "kill_env": "CCC_DEVIN_ACP",
+    },
 }
 
 # Harnesses whose ACP subprocess lives in the persistent worker (same
 # control-plane hop as Kimi). Dashboard HTTP handlers must route through
 # _control_plane_engine_call so they do not start a second grok/kimi agent.
+#
+# Devin is deliberately NOT here even though it is a registered ACP harness
+# above: kimi/grok are worker-routed because CCC drives them EXCLUSIVELY
+# through ACP (there is no other transport, so every session lives on one
+# connection the worker must own to avoid a second agent process). Devin's
+# canonical transport is still the one-shot CLI, which already runs
+# wherever the request lands (dashboard or worker) with no control-plane
+# hop -- adding Devin here would require worker-side engine.execute/query
+# dispatch support for a "devin" ACP verb set that has never been built or
+# exercised. Keeping it dashboard/worker-local (same posture as "glm")
+# avoids introducing an unverified routing path for an unverified protocol.
 _ACP_WORKER_HARNESSES = frozenset({"kimi", "grok"})
 
 _ACP_LOCK = threading.Condition()
@@ -487,6 +517,103 @@ def _grok_acp_session_loaded(sid):
             return False
         state = _core._acp_session("grok", sid)
         return state is not None and state.get("loaded_conn") == id(conn)
+
+
+def _devin_acp_session_loaded(sid):
+    """True when the devin ACP connection currently has `sid` loaded and alive.
+
+    Mirrors _grok_acp_session_loaded exactly. Exposed so the conversation
+    list can report a truthful per-session "is live steer even attemptable
+    right now" flag to the UI (Devin, unlike Kimi/Grok, has a large
+    population of sessions with NO ACP connection at all -- most Devin
+    sessions run one-shot CLI turns only)."""
+    with _core._ACP_LOCK:
+        conn = _core._ACP_CONNS.get("devin")
+        if conn is None:
+            return False
+        transport = conn.get("transport")
+        if transport is None or not transport.alive():
+            return False
+        state = _core._acp_session("devin", sid)
+        return state is not None and state.get("loaded_conn") == id(conn)
+
+
+def _devin_acp_steer_enabled():
+    """Opt-in gate for the experimental Devin ACP live-steer path.
+
+    Kimi/Grok's ACP wiring has been exercised against their real CLIs.
+    Devin's has not: the `devin` binary is not installed anywhere this
+    integration has been developed or tested, so nothing here has ever
+    completed a live `devin acp` handshake, let alone confirmed that
+    session/load|resume accepts a session id minted by the one-shot CLI
+    (`devin --resume <id> -p ...`) without side effects on that session.
+    Default OFF keeps the feature fully inert (byte-identical behavior to
+    before this harness existed) until an operator with the binary
+    installed opts in with CCC_DEVIN_ACP_STEER=1 to actually exercise it.
+    """
+    return os.environ.get("CCC_DEVIN_ACP_STEER", "0").strip().lower() in ("1", "true", "yes")
+
+
+def _devin_acp_try_steer(session_id, raw_id, cwd, text, *, idempotency_key=None):
+    """Best-effort live steer of a Devin CLI session over `devin acp`.
+
+    Returns None whenever the ACP path was not attempted, or did not reach a
+    conclusive success -- the caller (_inject_text_into_session_router) MUST
+    treat None as "fall back to the existing one-shot durable queue exactly
+    as before this harness existed" (_queue_devin_steer). Only a genuine
+    `ok: True` prompt result is returned, so a partially-working or
+    misbehaving ACP path degrades to today's behavior instead of surfacing
+    a confusing new failure mode to the user.
+
+    Every step here — connecting to `devin acp`, and (inside _acp_prompt's
+    own _acp_ensure_session_loaded call) attaching to an EXISTING
+    devincli- session via session/load or session/resume — is unverified
+    without the real binary (see _devin_acp_steer_enabled). This function is
+    therefore wrapped end to end in a broad except so any surprise (a wire
+    format that doesn't match Kimi/Grok's, a hang that raises on the
+    calling thread, an unexpected exception shape) cannot break the
+    existing queue path it sits in front of.
+    """
+    if not raw_id or not text:
+        return None
+    if not _devin_acp_steer_enabled():
+        return None
+    try:
+        if not _core._acp_harness_enabled("devin"):
+            return None
+        if not _core._acp_resolve_bin("devin").get("available"):
+            return None
+        if cwd:
+            with _core._ACP_LOCK:
+                _core._acp_session("devin", raw_id, create=True, cwd=cwd)
+        result = _core._acp_prompt(
+            "devin", raw_id, text, mode="steer", idempotency_key=idempotency_key,
+        )
+        if result.get("code") == "busy":
+            # Same cancel-then-resend primitive as the generic kimi/grok
+            # steer path in _inject_text_into_session_router: ACP has no
+            # in-place mid-turn steer, but session/cancel interrupts the
+            # active turn so a fresh session/prompt can land immediately.
+            cancel_result = _core._acp_cancel("devin", raw_id)
+            if not cancel_result.get("ok"):
+                return None
+            deadline = time.monotonic() + 5.0
+            while time.monotonic() < deadline:
+                snap = _core._acp_session_snapshot("devin", raw_id) or {}
+                if snap.get("status") != "active":
+                    break
+                time.sleep(0.15)
+            retry_key = f"{idempotency_key}:steer-retry" if idempotency_key else None
+            result = _core._acp_prompt(
+                "devin", raw_id, text, mode="steer", idempotency_key=retry_key,
+            )
+        return result if result.get("ok") else None
+    except Exception as exc:
+        _core._log_activity(
+            "inject", "DEVIN_ACP_ERROR",
+            f"session={session_id} error=\"{exc}\"",
+        )
+        return None
 
 
 _grok_external_writer_cache = {}

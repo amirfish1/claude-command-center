@@ -2083,6 +2083,18 @@ def _inject_text_into_session_router(
         # `devin --resume` cannot attach to it; retrying only duplicates the
         # pending message when the CLI rejects the parallel session start.
         raw_id = _core._devin_cli_raw_id(session_id)
+        if mode == "steer":
+            # Best-effort live steer over `devin acp` (an ACP harness the
+            # same shape as Kimi/Grok's, registered in acp.py). Off by
+            # default and fails closed at every step -- see
+            # _devin_acp_try_steer's docstring for exactly what is and is
+            # not verified. A None result means "not attempted or not
+            # conclusive"; the one-shot queue below is untouched in that case.
+            acp_result = _core._devin_acp_try_steer(
+                session_id, raw_id, cwd, text, idempotency_key=idempotency_key,
+            )
+            if acp_result is not None:
+                return acp_result
         live_spawn = _core._find_live_spawn_entry_for_session(session_id)
         external_owner = (
             _core._devin_cli_session_live(raw_id) and live_spawn is None
