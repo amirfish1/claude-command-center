@@ -7307,7 +7307,8 @@ class TestServerImports(unittest.TestCase):
         self.assertIn(".queued-steer-tray .cancel-queued-message", app_css)
         self.assertIn(".queued-steer-actions > button", app_css)
         self.assertIn("grid-area: queued", app_css)
-        self.assertIn("actions.append(cancel, steer)", app_js)
+        self.assertIn("actions.append(cancel);", app_js)
+        self.assertIn("if (steer) actions.appendChild(steer);", app_js)
         self.assertIn(".queued-steer-tray .event.user_text {", app_css)
         self.assertIn("background: rgba(63, 185, 80, 0.045);", app_css)
 

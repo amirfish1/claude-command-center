@@ -9047,6 +9047,10 @@
       showOpToast('Queued message is missing its session or text.', 'error');
       return;
     }
+    if (!sessionSupportsQueuedSteer(currentSession && currentSession.source)) {
+      showOpToast('Steer is only available for Codex and ACP sessions.', 'error');
+      return;
+    }
     const original = btn.textContent;
     btn.disabled = true;
     btn.textContent = 'Steering…';
@@ -9189,6 +9193,10 @@
     }).filter(Boolean);
     if (!sid || !texts.length) {
       showOpToast('Nothing queued to steer.', 'error');
+      return;
+    }
+    if (!sessionSupportsQueuedSteer(currentSession && currentSession.source)) {
+      showOpToast('Steer all is only available for Codex and ACP sessions.', 'error');
       return;
     }
     const original = btn.textContent;
@@ -10747,12 +10755,22 @@
       div.appendChild(note);
     }
     const msg = pending.entry.queuedLabel;
+    const paneState = paneByPaneId(pid);
+    const queuedSource = (paneState && paneState.currentSession && paneState.currentSession.source)
+      || (typeof sessionSourceByConv !== 'undefined' && sessionSourceByConv[convId])
+      || '';
+    // Default to showing the Steer button when the source is not yet known
+    // (e.g., early test stubs or a pane mid-load). Only hide it for engines
+    // we know do not support queued-row steer.
+    const canSteer = queuedSource ? sessionSupportsQueuedSteer(queuedSource) : true;
     note.innerHTML = '<span class="send-queued-icon">⏳</span>'
       + '<span class="send-queued-text">' + escapeHtml(msg) + '</span>'
       + '<button type="button" class="user-message-copy" data-copy-user-message title="Copy message" aria-label="Copy message">&#128203;</button>'
-      + '<button type="button" class="send-queued-steer" data-steer-queued-message'
-      + ' data-session-id="' + escapeAttr(pending.sid || '') + '"'
-      + ' title="Steer the active Codex turn with this queued message">Steer</button>'
+      + (canSteer
+        ? '<button type="button" class="send-queued-steer" data-steer-queued-message'
+          + ' data-session-id="' + escapeAttr(pending.sid || '') + '"'
+          + ' title="Steer the active turn with this queued message">Steer</button>'
+        : '')
       + '<button type="button" class="send-queued-cancel" data-cancel-queued-message'
       + ' data-session-id="' + escapeAttr(pending.sid || '') + '"'
       + ' title="Cancel - discard this queued message">✕ Cancel</button>';
@@ -31715,6 +31733,14 @@
     if (!liveStatusMatchesOpenConv() || !liveStatus || liveStatus.codexState !== 'working') return false;
     const writer = liveStatus.codexWriter || null;
     return writer !== 'desktop' && writer !== 'external' && writer !== 'unknown';
+  }
+
+  // Queued-row Steer only makes sense for engines that can interrupt/replace
+  // an active turn. Devin (and other queue-only engines) has no such primitive;
+  // showing the button there makes it appear broken when the replacement never
+  // consumes the durable queue entry (CCC-???).
+  function sessionSupportsQueuedSteer(source) {
+    return source === 'codex' || source === 'kimi' || source === 'grok';
   }
 
   function syncUserMessageSteerButtons(root) {
@@ -54813,7 +54839,7 @@
   // turn, so N clicks cost N interruptions and N model calls to say what one
   // turn could have read at once -- which is exactly what Kimi's own Ctrl-S
   // flush avoids.
-  function syncQueuedSteerAllControl(tray, sessionId) {
+  function syncQueuedSteerAllControl(tray, sessionId, canSteerAll) {
     if (!tray) return;
     const cards = queuedSteerCardCount(tray);
     let bar = tray.querySelector('.queued-steer-all-bar');
@@ -54831,7 +54857,7 @@
     const allBtn = bar.querySelector('[data-steer-all-queued]');
     if (allBtn) {
       allBtn.dataset.sessionId = sessionId || allBtn.dataset.sessionId || '';
-      allBtn.hidden = cards < 2;
+      allBtn.hidden = cards < 2 || canSteerAll === false;
       allBtn.textContent = 'Steer all ' + cards;
     }
   }
@@ -54949,6 +54975,13 @@
       inputBar.parentNode.insertBefore(tray, inputBar);
     }
     const trayRows = [...tray.querySelectorAll('.event.user_text'), ...candidates];
+    const queuedSource = (paneState && paneState.currentSession && paneState.currentSession.source)
+      || (typeof sessionSourceByConv !== 'undefined' && sessionSourceByConv[conversationId])
+      || '';
+    // Default to showing the Steer button when the source is not yet known
+    // (e.g., early test stubs or a pane mid-load). Only hide it for engines
+    // we know do not support queued-row steer.
+    const canSteer = queuedSource ? sessionSupportsQueuedSteer(queuedSource) : true;
     [...new Set(trayRows)].forEach(el => {
       let cancel = el.querySelector('[data-cancel-queued-message]');
       if (!cancel) {
@@ -54963,13 +54996,18 @@
         cancel.setAttribute('data-cancel-queued-message', '');
       }
       let steer = el.querySelector('[data-steer-queued-message]');
-      if (!steer) {
-        steer = document.createElement('button');
-        steer.type = 'button';
-        steer.className = 'send-queued-steer';
-        steer.setAttribute('data-steer-queued-message', '');
-        steer.textContent = 'Steer';
-        el.appendChild(steer);
+      if (canSteer) {
+        if (!steer) {
+          steer = document.createElement('button');
+          steer.type = 'button';
+          steer.className = 'send-queued-steer';
+          steer.setAttribute('data-steer-queued-message', '');
+          steer.textContent = 'Steer';
+          el.appendChild(steer);
+        }
+      } else if (steer) {
+        steer.remove();
+        steer = null;
       }
       if (!el.querySelector('[data-copy-user-message]')) {
         const copyBtn = document.createElement('button');
@@ -54979,10 +55017,10 @@
         copyBtn.title = 'Copy message';
         copyBtn.setAttribute('aria-label', 'Copy message');
         copyBtn.innerHTML = '&#128203;';
-        el.insertBefore(copyBtn, steer);
+        el.insertBefore(copyBtn, steer || cancel);
       }
       cancel.dataset.sessionId = sessionId;
-      steer.dataset.sessionId = sessionId;
+      if (steer) steer.dataset.sessionId = sessionId;
       let actions = el.querySelector('.queued-steer-actions');
       if (!actions) {
         actions = document.createElement('div');
@@ -54995,7 +55033,8 @@
         .forEach(button => { if (button !== cancel && button !== steer && button !== copy) button.remove(); });
       cancel.classList.add('cancel-queued-message');
       if (copy) actions.appendChild(copy);
-      actions.append(cancel, steer);
+      actions.append(cancel);
+      if (steer) actions.appendChild(steer);
       actions.hidden = false;
       el.appendChild(actions);
       tray.appendChild(el);
@@ -55019,7 +55058,7 @@
       else el.remove();
     });
     if (!queuedSteerCardCount(tray)) { tray.remove(); return; }
-    syncQueuedSteerAllControl(tray, sessionId);
+    syncQueuedSteerAllControl(tray, sessionId, canSteer);
     // The queue ACK has arrived. Once every local send is represented in the
     // tray, a leftover "Sending…" indicator misstates the delivery state.
     if (!$view.querySelector('.event.user_text.pending, .event.user_text.steering-optimistic')) {

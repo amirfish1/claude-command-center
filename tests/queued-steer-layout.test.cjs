@@ -27,6 +27,7 @@ async function fixture(width=1100,mode='status-pos-right') {
   window.removePendingSendEcho=p=>{removedPending.push(p);p.element.remove();};
   window.markPendingSendQueued=(p,label,opts)=>{p.element.classList.remove('pending');p.element.classList.add('send-queued');p.entry.queued=true;};
   (0,eval)(helpers);
+  window.sessionSupportsQueuedSteer=function(source){return source==='codex'||source==='kimi'||source==='grok';};
   window.makeRow=(text,kind='server',time=Date.now())=>{
    const row=document.createElement('div');row.className='event user_text '+(kind==='server'?'pending server-queued':kind==='local'?'pending':'');
    row.dataset.tsEpoch=String(time);
@@ -95,6 +96,20 @@ test('an authoritative queue snapshot retires a server card that was already del
  const page=await fixture();try{
   const out=await page.evaluate(()=>{makeRow('already delivered','server');sync();syncQueuedSteerTray(getConvView(),'left',true);return {tray:!!document.querySelector('.queued-steer-tray'),rows:getConvView().querySelectorAll('.event.user_text').length};});
   assert.deepEqual(out,{tray:false,rows:0});
+ }finally{await page.close();}
+});
+test('queued Steer button is hidden for Devin',async()=>{
+ const page=await fixture();try{
+  const buttons=await page.evaluate(()=>{sessionSourceByConv={'session-one':'devin'};makeRow('devin queued','server');sync();return [...document.querySelectorAll('.queued-steer-actions button')].map(b=>(b.getAttribute('aria-label')||b.textContent).trim());});
+  assert.ok(!buttons.includes('Steer'));
+  assert.ok(buttons.includes('Copy message') && buttons.includes('Cancel'));
+ }finally{await page.close();}
+});
+test('queued Steer button is shown for Codex',async()=>{
+ const page=await fixture();try{
+  const buttons=await page.evaluate(()=>{sessionSourceByConv={'session-one':'codex'};makeRow('codex queued','server');sync();return [...document.querySelectorAll('.queued-steer-actions button')].map(b=>(b.getAttribute('aria-label')||b.textContent).trim());});
+  assert.ok(buttons.includes('Steer'));
+  assert.ok(buttons.includes('Copy message') && buttons.includes('Cancel'));
  }finally{await page.close();}
 });
 test('conversation rendering treats every fetch response as an authoritative queue snapshot',()=>{
