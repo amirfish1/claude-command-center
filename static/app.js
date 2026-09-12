@@ -64381,13 +64381,32 @@
       refreshLiveSessionsActivity().catch(() => {});
     }
     if (resources.has('archive') && typeof refreshArchiveData === 'function') {
-      if (_archiveRefreshPromise) _archiveRefreshAfterInflight = true;
-      else refreshArchiveData({ staleOk: true }).then(_queueDashboardArchiveRender).catch(() => {});
+      _scheduleDashboardArchiveRefresh();
     }
     if ((resources.has('repo') || resources.has('github'))
         && typeof _hydrateArchiveSideData === 'function') {
       _hydrateArchiveSideData(true).catch(() => {});
     }
+  }
+
+  // Queue and worker events can arrive in a tight burst while a worker is
+  // starting or finishing. The archive endpoint returns a multi-MB payload,
+  // so microtask-level invalidation coalescing alone still lets consecutive
+  // event batches monopolize the dashboard server. Keep the live session
+  // patches immediate, but wait briefly to collapse that burst into one
+  // archive snapshot refresh.
+  const DASHBOARD_ARCHIVE_INVALIDATION_DEBOUNCE_MS = 250;
+  let _dashboardArchiveRefreshTimer = null;
+  function _scheduleDashboardArchiveRefresh() {
+    if (_dashboardArchiveRefreshTimer) return;
+    _dashboardArchiveRefreshTimer = setTimeout(() => {
+      _dashboardArchiveRefreshTimer = null;
+      if (_archiveRefreshPromise) {
+        _archiveRefreshAfterInflight = true;
+        return;
+      }
+      refreshArchiveData({ staleOk: true }).then(_queueDashboardArchiveRender).catch(() => {});
+    }, DASHBOARD_ARCHIVE_INVALIDATION_DEBOUNCE_MS);
   }
 
   function applyDashboardEvent(event) {
