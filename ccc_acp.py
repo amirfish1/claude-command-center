@@ -59,6 +59,31 @@ from acp.schema import (
 logger = logging.getLogger("ccc-acp")
 
 # ---------------------------------------------------------------------------
+# Version — tracked from server.py so the adapter can't drift out of sync
+# ---------------------------------------------------------------------------
+
+
+def _server_version() -> str:
+    """`__version__` declared by the server.py shipped beside this adapter.
+
+    Read rather than imported: server.py is a large module with real import
+    cost and the adapter only needs the string. Same line-prefix read server.py
+    already uses for its own post-pull version check.
+    """
+    try:
+        for line in (Path(__file__).resolve().parent / "server.py").read_text(
+            encoding="utf-8", errors="replace"
+        ).splitlines():
+            if line.startswith('__version__ = "'):
+                return line.split('"')[1]
+    except (OSError, IndexError):
+        pass
+    return "0.0.0"
+
+
+__version__ = _server_version()
+
+# ---------------------------------------------------------------------------
 # Tool-kind mapping — Claude Code tool names → ACP ToolKind literals
 # ---------------------------------------------------------------------------
 
@@ -196,7 +221,7 @@ class CCCACPAgent(Agent):
             agentInfo=Implementation(
                 name="ccc-acp",
                 title="Claude Command Center",
-                version="4.10.0",
+                version=__version__,
             ),
         )
 
@@ -209,7 +234,24 @@ class CCCACPAgent(Agent):
         session_id = uuid.uuid4().hex
         if cwd is None:
             cwd = os.getcwd()
-        cwd = os.path.abspath(cwd)
+        # Security: ACP clients (IDEs) supply the cwd. Per SECURITY.md we note
+        # the experimental adapter accepts client-supplied paths and spawns
+        # Claude with full --dangerously-skip-permissions in them. Clamp to $HOME
+        # by default (power users can opt out via env).
+        #
+        # realpath, not abspath: abspath only collapses ".." lexically, so a
+        # symlink inside $HOME that points outside it (~/escape -> /etc) would
+        # clear the prefix check and then makedirs + the spawned Claude would
+        # operate at the real target. $HOME is resolved the same way so a
+        # symlinked home (/home -> /System/Volumes/Data/home) still matches.
+        cwd = os.path.realpath(cwd)
+        _home = os.path.realpath(str(Path.home()))
+        if not (cwd == _home or cwd.startswith(_home + os.sep)):
+            if not os.environ.get("CCC_ACP_ALLOW_OUTSIDE_HOME"):
+                raise RequestError(
+                    code=-32000,
+                    message="ACP new_session cwd must be under user home (override with CCC_ACP_ALLOW_OUTSIDE_HOME=1). See SECURITY.md for the experimental ACP adapter risk surface.",
+                )
         os.makedirs(cwd, exist_ok=True)
 
         log_fh: Optional[Any] = None
