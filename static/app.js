@@ -16826,18 +16826,17 @@
     if (tasksEl0 && !tasksEl0.innerHTML.trim()) {
       tasksEl0.innerHTML = '<div class="simple-loading"><span class="simple-spinner" aria-hidden="true"></span>Loading your tasks…</div>';
     }
-    let attention = null, sessions = null, archive = null;
+    let attention = null, archive = null;
     try {
       const results = await Promise.all([
         fetch('/api/attention', { cache: 'no-store' }).then(r => r.json()).catch(() => null),
-        fetch('/api/sessions?all=1', { cache: 'no-store' }).then(r => r.json()).catch(() => null),
         loadArchiveAll({ staleOk: true, window: 'all' }).catch(() => null),
       ]);
-      attention = results[0]; sessions = results[1];
+      attention = results[0];
       // loadArchiveAll resolves the conversations array directly (already
       // ETag-cached/deduped against Advanced mode's same in-flight fetch),
       // not a {conversations: [...]} envelope like the raw endpoint.
-      archive = Array.isArray(results[2]) ? { conversations: results[2] } : null;
+      archive = Array.isArray(results[1]) ? { conversations: results[1] } : null;
     } catch (_) { return; }
 
     // Needs you: sessions waiting on the user. (R4's stuck-queue alerts are
@@ -16864,11 +16863,11 @@
     // Each card's own color/badge (_simpleTaskCardHtml) still says whether
     // it's running or finished-and-unseen.
     const tasksEl = document.getElementById('simpleTasks');
-    const sessionRows = (sessions && Array.isArray(sessions.sessions)) ? sessions.sessions : [];
+    const convRows = (archive && Array.isArray(archive.conversations)) ? archive.conversations : [];
+    const sessionRows = convRows;
     const workingRows = sessionRows.filter(_simpleIsWorkingRow);
     const workingIds = {};
     workingRows.forEach(r => { workingIds[String(r.id || r.session_id || '')] = true; });
-    const convRows = (archive && Array.isArray(archive.conversations)) ? archive.conversations : [];
     const finishedRows = convRows.filter(r => r && !workingIds[String(r.id || r.session_id || '')]);
     const merged = workingRows.concat(finishedRows)
       .sort((a, b) => (Number(b.mtime || b.modified) || 0) - (Number(a.mtime || a.modified) || 0))
