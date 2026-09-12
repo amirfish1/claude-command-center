@@ -4248,6 +4248,49 @@
     walk(tree, '');
     return changed;
   }
+  // Origin-marker lookups (CCC-927 / CCC-860 below), indexed ONCE per
+  // conversationsData snapshot. f2EffectiveParentSessionId runs per row per
+  // render, and the lane filters / tree builders call it several times per
+  // row; each call used to scan every row's first_message, i.e. O(rows²)
+  // substring searches -- ~440ms of a ~1.1s archive render at 684 rows
+  // (CPU profile, 2026-09-12). Keyed on array identity + length: every
+  // refresh assigns a fresh array, and in-place reorders keep both.
+  let _f2OriginIndexCache = { rows: null, len: -1, byId: null, successors: null };
+  function _f2OriginIndex() {
+    const rows = (typeof conversationsData !== 'undefined' && Array.isArray(conversationsData))
+      ? conversationsData : [];
+    const cache = _f2OriginIndexCache;
+    if (cache.rows === rows && cache.len === rows.length && cache.byId) return cache;
+    const byId = new Map();
+    // origin sid -> { ts, rid } of the newest row whose first_message names it.
+    const successors = new Map();
+    const originRe = /Origin session id: ([A-Za-z0-9][A-Za-z0-9_.-]{7,127})/g;
+    rows.forEach(r => {
+      const rid = String((r && (r.session_id || r.id)) || '').trim();
+      if (!rid) return;
+      if (!byId.has(rid)) byId.set(rid, r);
+      const fm = r && r.first_message;
+      if (typeof fm !== 'string' || fm.indexOf('Origin session id: ') === -1) return;
+      const ts = Number(r.modified || r.last_interacted || 0) || 0;
+      originRe.lastIndex = 0;
+      let m;
+      while ((m = originRe.exec(fm))) {
+        // The prompt writes "<sid>\n"; tolerate a trailing period from
+        // hand-edited or quoted markers.
+        const token = m[1];
+        const keys = [token];
+        const trimmed = token.replace(/\.+$/, '');
+        if (trimmed && trimmed !== token) keys.push(trimmed);
+        keys.forEach(origin => {
+          if (origin === rid) return;
+          const cur = successors.get(origin);
+          if (!cur || ts >= cur.ts) successors.set(origin, { ts, rid });
+        });
+      }
+    });
+    _f2OriginIndexCache = { rows, len: rows.length, byId, successors };
+    return _f2OriginIndexCache;
+  }
   function f2EffectiveParentSessionId(sessionId, recordedParentId) {
     const sid = String(sessionId || '').trim();
     const parentId = String(recordedParentId || _sidebarFamilyParents.get(sid) || '').trim();
@@ -4280,18 +4323,8 @@
     // loaded rows so it works regardless of which browser recorded it.
     if (!newestContinuation) {
       try {
-        const rows = (typeof conversationsData !== 'undefined' && Array.isArray(conversationsData))
-          ? conversationsData : [];
-        const marker = 'Origin session id: ' + sid;
-        let bestTs = -1;
-        rows.forEach(r => {
-          const rid = String((r && (r.session_id || r.id)) || '').trim();
-          if (!rid || rid === sid) return;
-          const fm = r && r.first_message;
-          if (!fm || fm.indexOf(marker) === -1) return;
-          const ts = Number(r.modified || r.last_interacted || 0) || 0;
-          if (ts >= bestTs) { bestTs = ts; newestContinuation = rid; }
-        });
+        const hit = _f2OriginIndex().successors.get(sid);
+        if (hit) newestContinuation = hit.rid;
       } catch (_) {}
       if (newestContinuation && newestContinuation !== sid) return newestContinuation;
     }
@@ -4309,9 +4342,7 @@
     // never does.
     if (parentId) {
       try {
-        const rows = (typeof conversationsData !== 'undefined' && Array.isArray(conversationsData))
-          ? conversationsData : [];
-        const self = rows.find(r => String((r && (r.session_id || r.id)) || '').trim() === sid);
+        const self = _f2OriginIndex().byId.get(sid);
         const fm = self && self.first_message;
         if (fm && fm.indexOf('Origin session id: ' + parentId) !== -1) return '';
       } catch (_) {}
@@ -9064,7 +9095,7 @@
       showOpToast('Queued message is missing its session or text.', 'error');
       return;
     }
-    if (!sessionSupportsQueuedSteer(currentSession && currentSession.source)) {
+    if (!sessionSupportsQueuedSteer(currentSession && currentSession.source, currentSession && currentSession.acp_steer_ready)) {
       showOpToast('Steer is only available for Codex and ACP sessions.', 'error');
       return;
     }
@@ -9212,7 +9243,7 @@
       showOpToast('Nothing queued to steer.', 'error');
       return;
     }
-    if (!sessionSupportsQueuedSteer(currentSession && currentSession.source)) {
+    if (!sessionSupportsQueuedSteer(currentSession && currentSession.source, currentSession && currentSession.acp_steer_ready)) {
       showOpToast('Steer all is only available for Codex and ACP sessions.', 'error');
       return;
     }
@@ -9278,6 +9309,13 @@
       repoPath: repoPath || null,
       can_headless_resume: source === 'antigravity' ? !!(row && row.can_headless_resume === true) : true,
       can_app_resume: source === 'antigravity' ? !!(row && row.can_app_resume === true) : false,
+      // Per-session signal for the experimental Devin ACP live-steer path
+      // (see ccc_server/acp.py's _devin_acp_try_steer and
+      // ccc_server/devin.py's `devin_acp_ready` row field). False for the
+      // overwhelming majority of Devin sessions, which have no live `devin
+      // acp` connection attached and must keep using the durable one-shot
+      // queue -- see sessionSupportsQueuedSteer.
+      acp_steer_ready: source === 'devin-cli' ? !!(row && row.devin_acp_ready === true) : false,
     };
     // Leaving new-session mode (sid set) drops the .is-new-session class
     // so the spawn-cwd picker hides and the workspace pill returns. The
@@ -10779,7 +10817,8 @@
     // Default to showing the Steer button when the source is not yet known
     // (e.g., early test stubs or a pane mid-load). Only hide it for engines
     // we know do not support queued-row steer.
-    const canSteer = queuedSource ? sessionSupportsQueuedSteer(queuedSource) : true;
+    const queuedAcpReady = paneState && paneState.currentSession && paneState.currentSession.acp_steer_ready;
+    const canSteer = queuedSource ? sessionSupportsQueuedSteer(queuedSource, queuedAcpReady) : true;
     note.innerHTML = '<span class="send-queued-icon">⏳</span>'
       + '<span class="send-queued-text">' + escapeHtml(msg) + '</span>'
       + '<button type="button" class="user-message-copy" data-copy-user-message title="Copy message" aria-label="Copy message">&#128203;</button>'
@@ -31798,8 +31837,22 @@
   // an active turn. Devin (and other queue-only engines) has no such primitive;
   // showing the button there makes it appear broken when the replacement never
   // consumes the durable queue entry (CCC-???).
-  function sessionSupportsQueuedSteer(source) {
-    return source === 'codex' || source === 'kimi' || source === 'grok';
+  //
+  // Devin is a partial exception: an experimental, opt-in live ACP steer
+  // path exists server-side (acp.py's _devin_acp_try_steer) for a Devin CLI
+  // session that currently has a `devin acp` connection attached -- but
+  // that is true for almost none of them (most Devin sessions run the
+  // one-shot CLI only, with no live connection at all). Unlike Kimi/Grok,
+  // whose ACP connection is the ONLY way CCC ever drives them (so the
+  // engine name alone is a truthful signal), a Devin session's eligibility
+  // varies session to session. `acpReady` carries that per-session signal
+  // (conversation row field `devin_acp_ready`, mirrored onto currentSession
+  // as `acp_steer_ready`) so the button never appears for a session where
+  // clicking it could only silently fall back to the durable queue.
+  function sessionSupportsQueuedSteer(source, acpReady) {
+    if (source === 'codex' || source === 'kimi' || source === 'grok') return true;
+    if (source === 'devin-cli') return !!acpReady;
+    return false;
   }
 
   function syncUserMessageSteerButtons(root) {
@@ -41262,7 +41315,13 @@
   // rendered as user_text but aren't something the user wrote.
   // The native Codex transcript marks user turns with its own class, and pins
   // a sticky toolbar over the top of the pane that a jump must clear.
-  const CONV_USER_MESSAGE_SELECTOR = '.event.user_text:not(.task-notification-event), .codex-client-shell.is-inline .codex-client-message.is-user';
+  // Also excludes purely-provisional rows ([data-live-key]): while a
+  // provisional row and its eventual rollout counterpart can briefly coexist
+  // (before _findMatchingProvisionalNode's reconcile pass removes the
+  // provisional one), a jump target must never double-count that message —
+  // and a not-yet-reconciled provisional row can still be replaced or
+  // dropped, so it isn't a stable target to jump to in the first place.
+  const CONV_USER_MESSAGE_SELECTOR = '.event.user_text:not(.task-notification-event):not([data-live-key]), .codex-client-shell.is-inline .codex-client-message.is-user';
   function _convReadingTop(view) {
     const bar = view.querySelector(':scope > .codex-client-shell.is-inline .codex-client-topbar');
     return view.getBoundingClientRect().top + (bar ? bar.offsetHeight : 0);
@@ -55040,7 +55099,8 @@
     // Default to showing the Steer button when the source is not yet known
     // (e.g., early test stubs or a pane mid-load). Only hide it for engines
     // we know do not support queued-row steer.
-    const canSteer = queuedSource ? sessionSupportsQueuedSteer(queuedSource) : true;
+    const queuedAcpReady = paneState && paneState.currentSession && paneState.currentSession.acp_steer_ready;
+    const canSteer = queuedSource ? sessionSupportsQueuedSteer(queuedSource, queuedAcpReady) : true;
     [...new Set(trayRows)].forEach(el => {
       let cancel = el.querySelector('[data-cancel-queued-message]');
       if (!cancel) {
@@ -57492,6 +57552,128 @@
       && ['external_turn_started', 'external_turn_ended', 'ccc_turn_started', 'ccc_turn_completed'].includes(ev.kind);
   }
 
+  // --- Provisional (live) event upsert/reconcile helpers -------------------
+  // Slice 2 of the Codex single-renderer merge (see
+  // CCC-private-docs/plans/2026-09-12-codex-single-renderer-merge.md). Once
+  // Slice 4 wires up a live app-server data source, provisional events (rows
+  // the CLI has already run but the rollout JSONL hasn't caught up to writing
+  // yet, ~15s lag) will be upserted by renderConversationEvents's per-event
+  // loop, keyed by "<turn_id>:<item_id>" (`live_key`) instead of by JSONL
+  // line number. Nothing feeds a live_key-bearing event yet — this is inert
+  // additive plumbing.
+  //
+  // Ordinal bookkeeping: a provisional node records, via `data-turn-ordinal`,
+  // how many CONFIRMED (line-keyed) rows for the same turn had already
+  // landed when it was created — i.e. which slot in the eventual rollout
+  // sequence it corresponds to. Counting confirmed rows only (not other
+  // still-pending provisional siblings) keeps the number stable: it doesn't
+  // change just because a sibling provisional item was created or removed
+  // first. A later rollout row for the same turn recomputes that same count
+  // (itself excluded, since it isn't inserted yet) and looks for a
+  // provisional sibling with a matching ordinal — see the plan's "turn_id +
+  // ordinal within the turn" dedupe rule.
+  function _turnOrdinalBefore(view, turnId) {
+    if (!view || turnId == null) return 0;
+    const esc = (window.CSS && CSS.escape) ? CSS.escape(String(turnId)) : String(turnId);
+    return view.querySelectorAll('.event[data-jsonl-line][data-turn-id="' + esc + '"]').length;
+  }
+
+  function _normalizeEventText(s) {
+    return String(s || '').replace(/\s+/g, ' ').trim();
+  }
+
+  // Anchor for a brand-new provisional row: the last row in `view` that is
+  // (or contains) either a confirmed, line-keyed rollout event OR an
+  // already-present provisional row. Provisional rows always sort after
+  // every confirmed row, per the plan; anchoring off an existing provisional
+  // tail too (not just the last confirmed row) keeps successive provisional
+  // inserts in arrival order instead of piling each new one directly after
+  // the last confirmed row and ahead of ones already waiting there. Returns
+  // null when there is no confirmed or provisional row yet (an empty view)
+  // — the caller appends in that case.
+  function _lastRenderedRowAnchor(view) {
+    const children = view.children;
+    for (let i = children.length - 1; i >= 0; i--) {
+      const child = children[i];
+      const isRow = (el) => el.matches && (el.matches('.event[data-jsonl-line]') || el.matches('.event[data-live-key]'));
+      if (isRow(child)) return child;
+      if (child.querySelector && child.querySelector('.event[data-jsonl-line], .event[data-live-key]')) return child;
+    }
+    return null;
+  }
+
+  // Insert or replace a provisional node built for a `live_key`-bearing
+  // event. `existingNode`, when given, is the prior render's node for the
+  // same live_key (found by the caller via `[data-live-key]`).
+  //
+  // Skips the DOM replace entirely when the newly built node's markup is
+  // byte-identical to what's already there — an *unchanged* upsert (e.g. a
+  // steady-state poll re-sending the same in-progress item) must not tear
+  // down and rebuild the node, which is exactly the image-flicker bug this
+  // merge exists to fix. A *changed* upsert still does a full node swap via
+  // `replaceWith` (in place, no reflow of surrounding rows); there is no
+  // cheaper partial-patch path for arbitrary event content today.
+  function _upsertProvisionalNode(view, newDiv, existingNode) {
+    if (existingNode) {
+      if (existingNode.innerHTML === newDiv.innerHTML) return existingNode;
+      existingNode.replaceWith(newDiv);
+      return newDiv;
+    }
+    const anchor = _lastRenderedRowAnchor(view);
+    if (anchor) view.insertBefore(newDiv, anchor.nextSibling);
+    else view.appendChild(newDiv);
+    return newDiv;
+  }
+
+  // Find the provisional node (if any) that a newly arrived CONFIRMED
+  // (line-keyed) event supersedes, per the plan's dedupe priority order.
+  // `div` is the confirmed event's own (already fully built, not yet
+  // inserted) node — used for the turn-id it carries and for the text
+  // fallback.
+  function _findMatchingProvisionalNode(view, ev, div) {
+    const provisionalNodes = view.querySelectorAll('.event[data-live-key]');
+    if (!provisionalNodes.length) return null;
+    // 1) Tools: rollout call_id equals the live item id. Per the plan's
+    // Slice-1 findings this is effectively dead in practice (app-server item
+    // ids don't equal rollout call_ids), but it's cheap to try first.
+    const callId = ev.tool_use_id || ev.call_id;
+    if (callId) {
+      for (const node of provisionalNodes) {
+        const liveKey = node.dataset.liveKey || '';
+        const itemId = liveKey.slice(liveKey.indexOf(':') + 1);
+        if (itemId && itemId === String(callId)) return node;
+      }
+    }
+    // 2) Turn: turn_id plus ordinal position within the turn.
+    if (ev.turn_id != null) {
+      const turnId = String(ev.turn_id);
+      const ordinal = String(_turnOrdinalBefore(view, turnId));
+      for (const node of provisionalNodes) {
+        if (node.dataset.turnId === turnId && node.dataset.turnOrdinal === ordinal) return node;
+      }
+    }
+    // 3) Fallback: normalized text equality.
+    const text = _normalizeEventText(div.textContent);
+    if (text) {
+      for (const node of provisionalNodes) {
+        if (_normalizeEventText(node.textContent) === text) return node;
+      }
+    }
+    return null;
+  }
+
+  // A `task_complete` rollout row (ev.type === 'result' — see
+  // ccc_server/codex_parse.py) is the authoritative "this turn is done"
+  // signal: any provisional rows still pending for that turn_id are now
+  // stale/superseded, whether or not they individually matched a rollout row.
+  function _removeStaleProvisionalsForTurn(view, turnId) {
+    if (turnId == null) return;
+    const prefix = String(turnId) + ':';
+    view.querySelectorAll('.event[data-live-key]').forEach((node) => {
+      if (String(node.dataset.liveKey || '').startsWith(prefix)) node.remove();
+    });
+  }
+
   function renderConversationEvents(events, paneId, opts) {
     if (!Array.isArray(events)) return true;  // defensive: backlog/unknown responses
     // Do not defer transcript rendering while the composer is focused.
@@ -57596,7 +57778,14 @@
     }
     for (const ev of events) {
       if (isRoutineCodexCoordination(ev)) continue;
-      if (ev.line != null) {
+      // Provisional (live_key) events never carry a real jsonl `line` — they
+      // upsert in place (see _upsertProvisionalNode below) instead of taking
+      // the confirmed-row dedupe-skip a line-keyed event gets.
+      let _existingProvisionalNode = null;
+      if (ev.live_key != null) {
+        const escLiveKey = (window.CSS && CSS.escape) ? CSS.escape(String(ev.live_key)) : String(ev.live_key);
+        _existingProvisionalNode = $view.querySelector('.event[data-live-key="' + escLiveKey + '"]');
+      } else if (ev.line != null) {
         const escLine = (window.CSS && CSS.escape) ? CSS.escape(String(ev.line)) : String(ev.line);
         if ($view.querySelector('.event[data-jsonl-line="' + escLine + '"]')) continue;
       }
@@ -57611,6 +57800,13 @@
         if (ev.queued_reason) div.dataset.queuedReason = String(ev.queued_reason);
       }
       if (ev.line != null) div.dataset.jsonlLine = String(ev.line);
+      if (ev.turn_id != null) div.dataset.turnId = String(ev.turn_id);
+      if (ev.live_key != null) {
+        div.dataset.liveKey = String(ev.live_key);
+        div.dataset.provisional = 'true';
+        div.classList.add('provisional');
+        if (ev.turn_id != null) div.dataset.turnOrdinal = String(_turnOrdinalBefore($view, String(ev.turn_id)));
+      }
       if (_videoClearLine && ev.line != null && Number(ev.line) <= _videoClearLine) {
         div.classList.add('ccc-video-cleared');
       }
@@ -58946,7 +59142,21 @@
         // Any non-tool-only event closes the current group.
         _currentToolGroup = null;
         _currentToolCount = 0;
-        $view.appendChild(div);
+        if (ev.live_key != null) {
+          _upsertProvisionalNode($view, div, _existingProvisionalNode);
+        } else {
+          if (ev.line != null) {
+            // Reconcile: a confirmed rollout row supersedes any provisional
+            // row still standing in for it. A `task_complete` row (ev.type
+            // === 'result') additionally clears every remaining provisional
+            // row for that turn — the turn is over, the rollout is now the
+            // sole authoritative record of it.
+            const _staleProvisional = _findMatchingProvisionalNode($view, ev, div);
+            if (_staleProvisional) _staleProvisional.remove();
+            if (ev.type === 'result' && ev.turn_id != null) _removeStaleProvisionalsForTurn($view, ev.turn_id);
+          }
+          $view.appendChild(div);
+        }
         if (ev.type === 'assistant' && !handedOffStreamingBubble) _convLiveRevealNewText(div, paneId, opts);
       }
     }

@@ -75,7 +75,9 @@ test('the successor is the effective parent of the session it continued from', (
   vm.createContext(ctx);
   vm.runInContext(
     'let _f2ContinuationEdgesCache = { raw: null, edges: {} };'
+      + 'let _f2OriginIndexCache = { rows: null, len: -1, byId: null, successors: null };'
       + extractFunction('_f2ContinuationEdges')
+      + extractFunction('_f2OriginIndex')
       + extractFunction('f2EffectiveParentSessionId')
       + '; this.eff = f2EffectiveParentSessionId;',
     ctx,
@@ -98,4 +100,46 @@ test('the selected-row title no longer carries ⤴ from: chips', () => {
 test('a continuation is not counted as a lane of its origin; the head carries the chain lanes', () => {
   assert.match(app, /if \(!pid \|\| continuationParentId\(row\) === pid\) return;/);
   assert.match(app, /subagentClusterMeta \? 0 : _sessionLaneCountWithAncestors\(c\)/);
+});
+
+test('effective-parent lookups index origin markers once per snapshot, not once per row', () => {
+  // f2EffectiveParentSessionId scanned every row's first_message on every
+  // call, and renders call it several times per row (lane filters, tree
+  // rows, subagent clusters). At 684 rows that was ~440ms of a ~1.1s
+  // archive render (CPU profile, 2026-09-12). The origin-marker scan must
+  // be indexed once per conversationsData snapshot.
+  const n = 600;
+  let reads = 0;
+  const rows = [];
+  for (let i = 0; i < n; i++) {
+    const row = { session_id: `sess-${String(i).padStart(4, '0')}`, modified: i };
+    const fm = i % 2 === 1 ? `Continuing.\nOrigin session id: sess-${String(i - 1).padStart(4, '0')}\nTask: x` : 'plain prompt';
+    Object.defineProperty(row, 'first_message', { enumerable: true, get() { reads += 1; return fm; } });
+    rows.push(row);
+  }
+  const ctx = {
+    conversationsData: rows,
+    localStorage: { getItem() { return null; } },
+    manualSubsessionParentId() { return ''; },
+    _sidebarFamilyParents: new Map(),
+  };
+  vm.createContext(ctx);
+  vm.runInContext(
+    'let _f2ContinuationEdgesCache = { raw: null, edges: {} };'
+      + 'let _f2OriginIndexCache = { rows: null, len: -1, byId: null, successors: null };'
+      + extractFunction('_f2ContinuationEdges')
+      + extractFunction('_f2OriginIndex')
+      + extractFunction('f2EffectiveParentSessionId')
+      + '; this.eff = f2EffectiveParentSessionId;',
+    ctx,
+  );
+  for (let pass = 0; pass < 4; pass++) {
+    for (const row of rows) ctx.eff(row.session_id, '');
+  }
+  // Each origin resolves to the row that continued it; successors stay as-is.
+  assert.equal(ctx.eff('sess-0000', ''), 'sess-0001');
+  assert.equal(ctx.eff('sess-0001', 'sess-0000'), '');
+  assert.equal(ctx.eff('sess-0598', ''), 'sess-0599');
+  // One index build (n reads) plus at most one self-row read per call.
+  assert.ok(reads <= n + 4 * n + 3 * 2, `first_message read ${reads} times for ${n} rows across 4 passes`);
 });
