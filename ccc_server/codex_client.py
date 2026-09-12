@@ -946,7 +946,11 @@ def resume_desktop_conversation(session_id, text, *, cwd, model=None, effort=Non
     try:
         _, state = DESKTOP.snapshot(session_id)
     except (ValueError, OSError) as error:
-        if "no-client-found" in str(error):
+        # Both mean "no desktop is actually there" -- a router that knows of
+        # no client for this thread, or (DesktopClient.connect) a stale
+        # socket file left behind by a Desktop quit. Nothing was sent yet,
+        # so falling through to CCC's own app-server transport is safe.
+        if "no-client-found" in str(error) or "Desktop connection is unavailable" in str(error):
             return None
         return {"ok": False, "via": "codex-desktop", "error": str(error),
                 "uncertain": isinstance(error, (TimeoutError, ConnectionError))}

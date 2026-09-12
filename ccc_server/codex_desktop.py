@@ -142,7 +142,21 @@ class DesktopClient:
             target = endpoint()
             if target is None: raise ValueError("Desktop connection is unavailable")
             sock = socket.socket(socket.AF_UNIX)
-            sock.settimeout(5); sock.connect(str(target)); sock.settimeout(None)
+            sock.settimeout(5)
+            try:
+                sock.connect(str(target))
+            except ConnectionRefusedError:
+                # The socket file survived a Desktop quit that didn't unlink
+                # it; nothing is listening. Remove it so endpoint() stops
+                # reporting a desktop that isn't there, and re-raise as the
+                # same "no desktop" signal callers already fall back on.
+                sock.close()
+                try:
+                    target.unlink()
+                except OSError:
+                    pass
+                raise ValueError("Desktop connection is unavailable") from None
+            sock.settimeout(None)
             with self.lock:
                 self.sock = sock; self.client_id = "initializing-client"
                 self.epoch = uuid.uuid4().hex
