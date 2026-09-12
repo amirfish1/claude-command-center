@@ -31,7 +31,7 @@
     activeRead: null, readRefreshTimer: null, readRefreshInFlight: false, readRefreshQueued: false,
     renderScheduled: false, visibilityHandler: null, composerSync: null, previousDisplay: new Map(),
     mediaController: null, mediaCleanup: Promise.resolve(), mediaCleanupBlocked: false,
-    inlinePendingUserMessages: [],
+    inlinePendingUserMessages: [], imageNodes: new Map(), imagesInRender: new Map(),
   };
 
   function el(tag, className, text) {
@@ -327,7 +327,24 @@
       const raw = item.url || item.imageUrl || item.image_url || item.path;
       const local = typeof raw === 'string' && (/^(?:\/|[A-Za-z]:[\\/])/.test(raw)) && !raw.startsWith('/api/');
       const url = local ? '/api/local-image?path=' + encodeURIComponent(raw) : safeUrl(raw, true);
-      if (url) { const image = el('img'); image.src = url; image.alt = item.alt || item.title || 'Generated image'; image.loading = 'lazy'; image.addEventListener('error', () => image.replaceWith(el('span', 'codex-client-media-unavailable', 'Image is no longer available on this computer.')), {once:true}); body.append(image); }
+      if (url) {
+        // renderTurns rebuilds the whole transcript on every poll. A fresh
+        // <img> has no height until it decodes, so everything below it jumped
+        // for a frame each poll. Reuse the already-loaded node instead.
+        // The same image twice in one render needs its own node.
+        const seen = state.imagesInRender.get(url) || 0;
+        state.imagesInRender.set(url, seen + 1);
+        const key = url + '#' + seen;
+        let image = state.imageNodes.get(key);
+        if (!image || (image.complete && !image.naturalWidth)) {
+          const fresh = el('img'); fresh.src = url; fresh.loading = 'lazy';
+          fresh.addEventListener('error', () => { if (state.imageNodes.get(key) === fresh) state.imageNodes.delete(key); fresh.replaceWith(el('span', 'codex-client-media-unavailable', 'Image is no longer available on this computer.')); }, {once:true});
+          state.imageNodes.set(key, fresh);
+          image = fresh;
+        }
+        image.alt = item.alt || item.title || 'Generated image';
+        body.append(image);
+      }
       if (textFrom(item)) body.append(markdownNode(textFrom(item)));
       const card = detailsCard('media', item, item.title || (/generation/.test(normalized) ? 'Image generation' : 'Image'), body, true);
       card.dataset.mediaItem = item.id || '';
@@ -1020,6 +1037,7 @@
     const openKeys = new Set(Array.from(host.querySelectorAll('[data-item-key]')).filter(node => node.open || node.classList.contains('open')).map(node => node.dataset.itemKey));
     const expandedGroups = new Set(Array.from(host.querySelectorAll('.kimi-tool-group:not(.collapsed) [data-item-key]')).map(node => node.dataset.itemKey));
     host.replaceChildren();
+    state.imagesInRender.clear();
     if (state.historyCursor) {
       const older = el('button', 'codex-client-load-earlier', 'Load earlier messages'); older.type = 'button'; older.addEventListener('click', loadEarlier); host.append(older);
     }
@@ -1673,7 +1691,7 @@
     context = Object.assign({}, typeof window.CCCCodexClientContext === 'function' ? window.CCCCodexClientContext() : {}, context || {});
     if (!context.threadId || !context.repoPath) throw new Error('Open a Codex conversation with a known repository first.');
     state.closed = false; state.context = context; state.requestToken++; state.schemas = new Map();
-    state.thread = null; state.requests = []; state.generation = null; state.eventCursor = null; state.historyCursor = null; state.activity = []; state.pollFailures = 0; state.inlinePendingUserMessages = [];
+    state.thread = null; state.requests = []; state.generation = null; state.eventCursor = null; state.historyCursor = null; state.activity = []; state.pollFailures = 0; state.inlinePendingUserMessages = []; state.imageNodes.clear();
     state.didInitialRender = false;
     state.root = mount(context);
     state.visibilityHandler = () => { if (document.hidden && !mediaActive()) { state.pollAbort?.abort(); window.clearTimeout(state.pollTimer); } else { loadState().catch(() => {}); schedulePoll(0); } };
@@ -1720,7 +1738,7 @@
     state.context?.paneEl?.classList.remove('codex-client-open');
     state.previousDisplay.forEach((display, node) => { if (node && node.isConnected) node.style.display = display; });
     state.previousDisplay.clear(); state.root = null; state.context = null; state.generationPromise = null;
-    state.composerSync = null; state.composerOptionsSync = null; state.composerModels = []; state.composerAttachment = null; state.inlinePendingUserMessages = [];
+    state.composerSync = null; state.composerOptionsSync = null; state.composerModels = []; state.composerAttachment = null; state.inlinePendingUserMessages = []; state.imageNodes.clear();
     state.activeRead = null; state.readRefreshInFlight = false; state.readRefreshQueued = false;
     state.activeSurface = 'conversation'; state.activeGroup = ''; state.query = ''; state.toolsOpen = false;
     state.mutationLocks.clear(); state.responseLocks.clear();
