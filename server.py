@@ -4770,12 +4770,35 @@ def _load_session_overrides():
     return data if isinstance(data, dict) else {}
 
 
+_SESSION_OVERRIDES_WRITE_LOCK = threading.Lock()
+
+
 def _save_session_overrides(overrides):
+    """Write overrides atomically while `_mutate_session_overrides` holds its lock."""
     SESSION_OVERRIDES_FILE.parent.mkdir(parents=True, exist_ok=True)
-    tmp = SESSION_OVERRIDES_FILE.with_suffix(".json.tmp")
-    with open(tmp, "w") as f:
-        json.dump(overrides, f, indent=2, sort_keys=True)
-    tmp.replace(SESSION_OVERRIDES_FILE)
+    tmp = SESSION_OVERRIDES_FILE.with_suffix(f".json.{uuid.uuid4().hex}.tmp")
+    try:
+        with open(tmp, "w") as f:
+            json.dump(overrides, f, indent=2, sort_keys=True)
+        os.replace(tmp, SESSION_OVERRIDES_FILE)
+    finally:
+        tmp.unlink(missing_ok=True)
+
+
+def _mutate_session_overrides(mutator):
+    """Atomically load, mutate, and save overrides across CCC processes."""
+    with _SESSION_OVERRIDES_WRITE_LOCK:
+        SESSION_OVERRIDES_FILE.parent.mkdir(parents=True, exist_ok=True)
+        lock_path = SESSION_OVERRIDES_FILE.with_suffix(".lock")
+        with open(lock_path, "w") as lock_file:
+            fcntl.flock(lock_file, fcntl.LOCK_EX)
+            try:
+                overrides = _load_session_overrides()
+                result = mutator(overrides)
+                _save_session_overrides(overrides)
+                return result
+            finally:
+                fcntl.flock(lock_file, fcntl.LOCK_UN)
 
 
 def _load_auto_handover_flags():
@@ -4999,9 +5022,8 @@ def _set_session_override(
     session_id, model, context_1m, engine, reasoning_effort="", *,
     policy_confirmed=False,
 ):
-    overrides = _load_session_overrides()
     engine = str(engine or "claude")
-    overrides[session_id] = {
+    entry = {
         "model": str(model),
         "context_1m": _model_context_1m_allowed(model, context_1m, engine),
         "engine": engine,
@@ -5012,14 +5034,18 @@ def _set_session_override(
         "policy_confirmed": bool(policy_confirmed),
         "set_at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
     }
-    _save_session_overrides(overrides)
+
+    def mutate(overrides):
+        overrides[session_id] = entry
+
+    _mutate_session_overrides(mutate)
 
 
 def _clear_session_override(session_id):
-    overrides = _load_session_overrides()
-    if session_id in overrides:
-        del overrides[session_id]
-        _save_session_overrides(overrides)
+    def mutate(overrides):
+        overrides.pop(session_id, None)
+
+    _mutate_session_overrides(mutate)
 
 
 def _short_model_alias(model):

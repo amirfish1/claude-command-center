@@ -8,6 +8,7 @@ import inspect
 import ast
 import fcntl
 import json
+import multiprocessing
 import os
 import re
 import pathlib
@@ -30,6 +31,20 @@ from unittest import mock
 
 PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, PROJECT_ROOT)
+
+
+def _hold_session_overrides_mutation(path, session_id, entered, release):
+    """Exercise the process-shared override writer from a forked child."""
+    import server
+
+    server.SESSION_OVERRIDES_FILE = pathlib.Path(path)
+
+    def mutate(overrides):
+        entered.set()
+        release.wait(5)
+        overrides[session_id] = {"model": session_id}
+
+    server._mutate_session_overrides(mutate)
 
 
 class TestSpawnWorktreeCreation(unittest.TestCase):
@@ -15562,6 +15577,53 @@ class TestModelPicker(unittest.TestCase):
                 self.assertIsNone(server._get_session_override("sid-1"))
             finally:
                 server.SESSION_OVERRIDES_FILE = orig
+
+    def test_session_override_mutation_serializes_separate_processes(self):
+        """Parallel spawns keep both override entries instead of sharing a tmp file."""
+        import server
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            path = pathlib.Path(tmpdir) / "session-overrides.json"
+            original = server.SESSION_OVERRIDES_FILE
+            server.SESSION_OVERRIDES_FILE = path
+            context = multiprocessing.get_context("fork")
+            first_entered = context.Event()
+            first_release = context.Event()
+            second_entered = context.Event()
+            second_release = context.Event()
+            first = context.Process(
+                target=_hold_session_overrides_mutation,
+                args=(str(path), "sid-first", first_entered, first_release),
+            )
+            second = context.Process(
+                target=_hold_session_overrides_mutation,
+                args=(str(path), "sid-second", second_entered, second_release),
+            )
+            first.start()
+            self.assertTrue(first_entered.wait(2))
+            second.start()
+            try:
+                self.assertFalse(second_entered.wait(0.3))
+                first_release.set()
+                self.assertTrue(second_entered.wait(2))
+                second_release.set()
+                first.join(3)
+                second.join(3)
+                self.assertEqual(first.exitcode, 0)
+                self.assertEqual(second.exitcode, 0)
+                self.assertEqual(
+                    set(json.loads(path.read_text())), {"sid-first", "sid-second"},
+                )
+            finally:
+                first_release.set()
+                second_release.set()
+                first.join(3)
+                second.join(3)
+                if first.is_alive():
+                    first.terminate()
+                if second.is_alive():
+                    second.terminate()
+                server.SESSION_OVERRIDES_FILE = original
 
     def test_latest_claude_models_are_marked_as_one_m_context_in_model_picker(self):
         """Anthropic's latest Fable, Opus, and Sonnet models support 1M."""
