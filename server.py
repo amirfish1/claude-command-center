@@ -12066,6 +12066,29 @@ def find_all_conversations(
     if projects_root_exists:
         project_dirs = _archive_canonical_project_dirs(projects_root)
 
+    # Pre-count total transcripts for the progress callback. Just iterdir
+    # + name check — no stat, no parse — so it's cheap relative to the cold
+    # scan itself. Skipped for incremental scans (only_jsonl_paths) where the
+    # total is just len(only_jsonl_paths), and when no progress callback is
+    # wired (the common archive-refresh-worker path).
+    _total_transcripts = 0
+    if progress_step is not None:
+        if only_jsonl_paths is not None:
+            _total_transcripts = len(only_jsonl_paths)
+        elif projects_root_exists:
+            for pd in project_dirs:
+                if _is_scratch_project_dir(pd):
+                    continue
+                try:
+                    for _f in pd.iterdir():
+                        if _f.is_file() and _f.name.endswith(".jsonl"):
+                            _total_transcripts += 1
+                except OSError:
+                    continue
+    _parsed_transcripts = 0
+    if _total_transcripts:
+        print(f"  [archive] cold scan: parsing {_total_transcripts} transcripts…")
+
     for project_dir in project_dirs:
         if _only_dirs is not None and str(project_dir) not in _only_dirs:
             continue
@@ -12137,6 +12160,17 @@ def find_all_conversations(
             if session_id in seen_session_ids:
                 continue
             seen_session_ids.add(session_id)
+
+            _parsed_transcripts += 1
+            if (
+                progress_step is not None
+                and _total_transcripts
+                and _parsed_transcripts % 50 == 0
+            ):
+                progress_step(
+                    "transcripts", state="running",
+                    count=_parsed_transcripts, total=_total_transcripts,
+                )
 
             first_message = None
             timestamp = None
