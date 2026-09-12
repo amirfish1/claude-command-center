@@ -31,6 +31,17 @@ def server_mod():
     return server
 
 
+@pytest.fixture(autouse=True)
+def isolate_live_control_plane(monkeypatch):
+    """Keep local headless tests from routing into the running CCC worker.
+
+    Tests that specifically cover control-plane delegation patch the routing
+    predicate themselves. Every other test in this module stages local files
+    and mocks local transports, so a real worker reply would be contamination.
+    """
+    monkeypatch.setenv("CCC_CONTROL_PLANE_ENGINES", "0")
+
+
 def _write_jsonl(path, events):
     path.parent.mkdir(parents=True, exist_ok=True)
     with open(path, "w") as f:
@@ -180,6 +191,7 @@ def test_successful_stream_write_persists_command_uuid(
     assert saved == [{
         "pid": entry["pid"],
         "engine": "claude",
+        "spawned_via": "ui",
         "input_command_uuids": entry["input_command_uuids"],
         "input_accepted_at": entry["input_accepted_at"],
     }]
@@ -485,7 +497,13 @@ def test_ask_routes_claude_to_persistent_worker(server_mod):
     ask.assert_called_once_with(
         "claude",
         "ask",
-        {"session_id": sid, "text": "status?", "timeout_ms": 12_000, "cwd": None},
+        {
+            "session_id": sid,
+            "text": "status?",
+            "timeout_ms": 12_000,
+            "cwd": None,
+            "peer_sender_sid": None,
+        },
         timeout_ms=12_000,
     )
 
@@ -508,7 +526,8 @@ def test_worker_executes_claude_ask_in_its_owned_process(server_mod):
 
     assert result == expected
     server_mod.ask_session_and_wait.assert_called_once_with(
-        "worker-session", "status?", timeout_ms=12_000, cwd="/repo"
+        "worker-session", "status?", timeout_ms=12_000, cwd="/repo",
+        peer_sender_sid=None,
     )
 
 
