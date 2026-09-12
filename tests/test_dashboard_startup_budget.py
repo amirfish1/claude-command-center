@@ -174,3 +174,20 @@ def test_conv_tab_bar_height_is_measured_after_the_render_settles():
     assert "requestAnimationFrame(" in source
     assert "getBoundingClientRect" in source
     assert "_convTabBarHeightLast" in source
+
+
+def test_archive_scroll_restore_skips_layout_reads_for_a_pristine_capture():
+    # _restoreArchiveListScroll ran restore() synchronously right after the
+    # innerHTML swap. restore() reads scrollHeight/clientHeight (and sets
+    # scrollTop), which forces a full layout of the freshly built list before
+    # the browser would have done it anyway. CPU profile 2026-09-12 at 206
+    # rows: 126ms self time in _archiveScrollTopWithinBounds, the largest
+    # remaining JS chunk between list arrival and rows painted. On first boot
+    # the capture is pristine (placeholder at scrollTop 0, no anchor row), so
+    # there is nothing to restore and no reason to touch layout.
+    restore = _function("function _restoreArchiveListScroll", "// Dedupe concurrent /api/conversations/all")
+    assert "function _archiveScrollStateIsPristine(" in SOURCE
+    assert restore.index("_archiveScrollStateIsPristine(state)") < restore.index("restore();")
+    pristine = _function("function _archiveScrollStateIsPristine(", "function _restoreArchiveListScroll")
+    assert "state.top" in pristine
+    assert "anchorValue" in pristine

@@ -65750,8 +65750,18 @@
     });
   }
 
+  // A capture taken at scrollTop 0 with no visible anchor row (the boot
+  // placeholder, an empty list) has nothing to restore. Skipping it matters:
+  // restore() reads scrollHeight/clientHeight and assigns scrollTop, which
+  // forces a full layout of the freshly swapped list right inside the render
+  // task (CPU profile 2026-09-12, 206 rows: 118-302ms per boot).
+  function _archiveScrollStateIsPristine(state) {
+    return !!state && !(Number(state.top) > 0) && !state.anchorValue;
+  }
+
   function _restoreArchiveListScroll(state, $list) {
     if (!state || !$list) return;
+    if (_archiveScrollStateIsPristine(state)) return;
     // The rAF retry below is useful for post-layout sizing, but it belongs to
     // this exact render only. A later archive render gets its own anchor; an
     // older deferred pass must never restore stale scroll state over it.
