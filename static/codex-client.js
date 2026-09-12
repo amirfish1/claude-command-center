@@ -1419,7 +1419,7 @@
       + '<input type="search" data-codex-search aria-label="Search actions" placeholder="Find an action"></div>'
       + '<div data-codex-media-host></div><div class="codex-client-catalog" data-codex-catalog></div></aside></main>'
       + '<aside class="codex-client-result" data-codex-result hidden></aside>'
-      + '<footer class="codex-client-footer"><span data-codex-connection>Connecting…</span><span data-codex-usage></span><label>Message queue <select data-codex-queue-owner><option value="ccc">CCC</option><option value="native">Codex</option></select></label><label><input type="checkbox" data-codex-preview> Preview features</label></footer>';
+      + '<footer class="codex-client-footer"><span data-codex-connection>Connecting…</span><span data-codex-usage></span><label><input type="checkbox" data-codex-preview> Preview features</label></footer>';
     const inline = !!context.inline;
     if (inline) {
       const view = context.viewEl || pane.querySelector('.conversations-view');
@@ -1472,16 +1472,6 @@
       if (view) view.scrollTop = state.activeSurface === 'conversation' ? (state.chatScrollTop || 0) : 0;
     }));
     root.querySelector('[data-codex-search]').addEventListener('input', event => { state.query = event.target.value; renderCatalog(); });
-    root.querySelector('[data-codex-queue-owner]').addEventListener('change', async event => {
-      const select = event.target;
-      select.disabled = true;
-      try {
-        await jsonFetch(API + '/queue-owner', {method:'POST', headers:{'Content-Type':'application/json'},
-          body:JSON.stringify({owner:select.value, context:contextBody(state.context)})});
-        await loadState();
-      } catch (error) { showError(conciseError(error)); await loadState().catch(() => {}); }
-      finally { select.disabled = false; }
-    });
     root.querySelector('[data-codex-preview]').addEventListener('change', async event => {
       event.target.disabled = true;
       try {
@@ -1504,7 +1494,6 @@
       close();
       return;
     }
-    if (data.queue_owner && state.root) state.root.querySelector('[data-codex-queue-owner]').value = data.queue_owner;
     state.generation = data.generation !== undefined ? data.generation : state.generation;
     state.eventCursor = data.cursor !== undefined ? data.cursor : state.eventCursor;
     state.connected = !!data.connected;
@@ -1544,8 +1533,6 @@
     if (token !== state.requestToken || state.closed) return;
     state.catalog = catalog; renderCatalog(); updateChrome();
     if (catalog.connection_note && !state.context?.inline) showNotice(catalog.connection_note);
-    const owner = state.root.querySelector('[data-codex-queue-owner]');
-    if (owner) owner.closest('label').hidden = catalog.connection_kind === 'desktop-ipc';
     await loadComposerModels(token);
   }
 
@@ -1663,7 +1650,6 @@
       } else {
         if (data.generation !== undefined) state.generation = data.generation;
         handleEvents(data.events || []);
-        if (data.queue_owner && state.root) state.root.querySelector('[data-codex-queue-owner]').value = data.queue_owner;
         if (data.cursor !== undefined) state.eventCursor = data.cursor;
         if (Array.isArray(data.requests)) { state.requests = data.requests; renderRequests(); }
         if ((data.events || []).length) await loadState(); else updateChrome();
