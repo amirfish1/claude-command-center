@@ -74,8 +74,73 @@ class _SessionGraph:
         # Agent subagents (agents/<name>/wire.jsonl under the session dir).
         self._kimi_subagents_enriched = set()
         self._dirty = False
+        # (mtime_ns, size) of the file as this process last read or wrote it.
+        # The dashboard and the worker each hold their own copy of this graph
+        # and both persist it, so "the file changed under me" is the normal
+        # case, not an anomaly — see _absorb_disk_edges.
+        self._disk_token = None
 
     # -- persistence ---------------------------------------------------------
+
+    def _current_disk_token(self):
+        try:
+            st = self._path.stat()
+        except OSError:
+            return None
+        return (st.st_mtime_ns, st.st_size)
+
+    def _absorb_disk_edges(self):
+        """Merge edges another process wrote since we last touched the file.
+
+        CCC runs two processes that both own a copy of this graph: the
+        dashboard serves /api/sessions/family, the WORKER owns engine
+        execution and is therefore the one that learns a fresh spawn's session
+        id and records the parent edge. Each loaded the file once at boot and
+        `save()` rewrites it whole, so whoever saved last silently dropped the
+        other's edges — a `ccc spawn` attributed correctly in the registry
+        still came back with an empty family tree.
+
+        Cheap: a stat() guards the read, so an unchanged file costs nothing.
+        Existing in-memory edges win, matching add_edge's first-edge-wins rule.
+
+        Caller must hold self._lock.
+        """
+        token = self._current_disk_token()
+        if token is None or token == self._disk_token:
+            return
+        self._disk_token = token
+        try:
+            data = json.loads(self._path.read_text())
+        except (OSError, json.JSONDecodeError):
+            return
+        if not isinstance(data, dict):
+            return
+        for e in data.get("edges") or []:
+            if not isinstance(e, dict):
+                continue
+            parent = str(e.get("parent") or "").strip()
+            child = str(e.get("child") or "").strip()
+            if not parent or not child or parent == child:
+                continue
+            if child in self._parent_of:
+                continue
+            meta = {
+                "source": str(e.get("source") or "unknown"),
+                "engine": str(e.get("engine") or ""),
+                "resumable": e.get("resumable", True),
+                "name": str(e.get("name") or ""),
+                "model": str(e.get("model") or ""),
+            }
+            self._parent_of[child] = parent
+            self._children_of.setdefault(parent, {})[child] = meta
+            self._edge_meta[child] = meta
+            self._parent_revision += 1
+            self._dirty = True
+
+    def sync_from_disk(self):
+        """Public: pull in edges written by the other CCC process."""
+        with self._lock:
+            self._absorb_disk_edges()
 
     def load(self):
         """Load the graph from disk if it exists and is valid."""
@@ -125,10 +190,15 @@ class _SessionGraph:
             if isinstance(kimi_enriched, list):
                 self._kimi_subagents_enriched = set(kimi_enriched)
             self._dirty = False
+            self._disk_token = self._current_disk_token()
 
     def save(self):
         """Persist the graph to disk if there are unsaved changes."""
         with self._lock:
+            # Never write a view older than the file: the other process may
+            # have added edges since we loaded, and this rewrites the whole
+            # document.
+            self._absorb_disk_edges()
             if not self._dirty:
                 return
             edges = []
@@ -153,6 +223,7 @@ class _SessionGraph:
                 tmp.write_text(json.dumps(data))
                 os.replace(tmp, self._path)
                 self._dirty = False
+                self._disk_token = self._current_disk_token()
             except OSError:
                 pass
 
@@ -669,6 +740,14 @@ def _session_graph_family_tree(sid):
     sid = str(sid or "").strip()
     if not sid:
         return None
+    # The WORKER records the parent edge for a spawn (it is the process that
+    # learns the new session id), so the dashboard's copy of the graph can be
+    # missing the lane the caller is asking about. One stat, then a read only
+    # if the file actually moved.
+    try:
+        _core._session_graph.sync_from_disk()
+    except Exception:
+        pass
     # Lazy enrichment: check the filesystem for Task-tool subagent
     # transcripts (throttled internally, so this is cheap even when the
     # parent already has children — see _CLAUDE_TASK_ENRICH_THROTTLE_S).
@@ -708,6 +787,12 @@ def _session_graph_codex_refresh_loop():
             from ccc_server.external_sessions import discover
             registry = _core._load_session_registry()
             discover(registry, _core._scan_engine_processes())
+        except Exception:
+            pass
+        # Pull in edges the sibling process wrote. Bounds staleness for the
+        # per-row parent lookup, which is far too hot to stat the file itself.
+        try:
+            _core._session_graph.sync_from_disk()
         except Exception:
             pass
         now = time.monotonic()
