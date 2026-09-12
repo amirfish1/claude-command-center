@@ -3993,13 +3993,35 @@ def _system_services_worker_entry():
     }
 
 
-def _wt_claimed_workers():
-    """Every live WatchTower worker, each annotated with the ticket it's
-    currently executing (or None if it's alive but idle/warm between
-    claims). Distinct from workers_live, which just counts "alive" and
-    conflates a worker mid-ticket with one sitting idle 23m with nothing
-    claimed (see the menu-bar busy pulse, which used workers_live for that
-    and lit up wrong)."""
+# claim-id -> {"ref", "title"} for in-progress tickets, memoised by the
+# WatchTower store file's (path, mtime_ns, size). list_items() re-reads and
+# JSON-decodes every queue row (3,208 rows, ~0.19s CPU under the GIL, measured
+# 2026-09-12) and this ran on every /api/system/services rebuild, i.e. every
+# 3s while any tab was open, landing in front of archive list requests.
+# WatchTower bumps the DB mtime on every save even in WAL mode, so the stat
+# key is a sound change signal (same pattern as the queue-events replay cache).
+_WT_CLAIM_MAP_CACHE = {}
+
+
+def _wt_store_stat_key():
+    q = _core._q
+    getter = getattr(q, "store_path", None) or getattr(q, "_resolve_store_path", None)
+    if getter is None:
+        return None
+    try:
+        path = Path(getter())
+        st = path.stat()
+    except Exception:
+        return None
+    return (str(path), st.st_mtime_ns, st.st_size)
+
+
+def _wt_claim_map():
+    key = _wt_store_stat_key()
+    if key is not None:
+        hit = _WT_CLAIM_MAP_CACHE.get("entry")
+        if hit is not None and hit[0] == key:
+            return hit[1]
     try:
         items = _core._q.list_items() or []
     except Exception:
@@ -4008,10 +4030,24 @@ def _wt_claimed_workers():
     for item in items:
         if not isinstance(item, dict) or item.get("status") != "in_progress":
             continue
-        for key in ("claimed_by", "claimed_session_id"):
-            val = item.get(key)
+        slim = {"ref": item.get("ref"), "title": item.get("title")}
+        for k in ("claimed_by", "claimed_session_id"):
+            val = item.get(k)
             if val:
-                claim_to_item[str(val)] = item
+                claim_to_item[str(val)] = slim
+    if key is not None:
+        _WT_CLAIM_MAP_CACHE["entry"] = (key, claim_to_item)
+    return claim_to_item
+
+
+def _wt_claimed_workers():
+    """Every live WatchTower worker, each annotated with the ticket it's
+    currently executing (or None if it's alive but idle/warm between
+    claims). Distinct from workers_live, which just counts "alive" and
+    conflates a worker mid-ticket with one sitting idle 23m with nothing
+    claimed (see the menu-bar busy pulse, which used workers_live for that
+    and lit up wrong)."""
+    claim_to_item = _wt_claim_map()
 
     rows = []
     for worker in _core._wt_read_workers():

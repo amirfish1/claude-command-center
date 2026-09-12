@@ -391,3 +391,50 @@ class WorkerVerbTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class ClaimedWorkersMemoTest(unittest.TestCase):
+    """_wt_claimed_workers() re-read and re-decoded the whole WatchTower queue
+    store (3,208 rows, ~0.19s CPU under the GIL, measured 2026-09-12) on
+    every /api/system/services rebuild, i.e. every 3s while any tab was
+    open. That CPU landed in front of the archive list request and was the
+    main source of its 0.2s -> 1-2s variance. Key the claim map on the
+    store file's (mtime_ns, size) like the queue-events replay cache does;
+    WatchTower bumps the DB mtime on every save even in WAL mode."""
+
+    def test_claim_map_is_read_once_per_store_version(self):
+        import tempfile
+        import time
+        from pathlib import Path
+        from ccc_server import codex
+
+        server = importlib.import_module("server")
+        with tempfile.TemporaryDirectory() as td:
+            store = Path(td) / "queue.db"
+            store.write_text("x")
+            calls = {"n": 0}
+
+            class FakeQ:
+                def store_path(self):
+                    return store
+
+                def list_items(self, *a, **k):
+                    calls["n"] += 1
+                    return [{"status": "in_progress", "claimed_by": "w1",
+                             "ref": "CCC-1", "title": "t"}]
+
+            workers = [{"worker_id": "w1", "session_id": "s1", "queue": "CCC",
+                        "engine": "claude", "idle_seconds": 0}]
+            with mock.patch.object(server, "_q", FakeQ()), \
+                 mock.patch.object(server, "_wt_read_workers", lambda *a, **k: workers):
+                codex._WT_CLAIM_MAP_CACHE.clear()
+                first = codex._wt_claimed_workers()
+                second = codex._wt_claimed_workers()
+                self.assertEqual(calls["n"], 1)
+                self.assertEqual(first[0]["ticket_ref"], "CCC-1")
+                self.assertEqual(second, first)
+                # A store write (mtime bump) invalidates.
+                later = time.time() + 5
+                os.utime(store, (later, later))
+                codex._wt_claimed_workers()
+                self.assertEqual(calls["n"], 2)
