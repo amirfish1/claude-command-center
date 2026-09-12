@@ -37020,6 +37020,8 @@ _adopt_ccc_module("fleet_reco")
 _adopt_ccc_module("fleet_jobs")
 
 def main():
+    # State files, logs and transcripts hold secrets: create everything owner-only.
+    os.umask(0o077)
     import socketserver
     class ThreadedHTTPServer(socketserver.ThreadingMixIn, http.server.HTTPServer):
         allow_reuse_address = True
