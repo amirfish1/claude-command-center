@@ -14662,6 +14662,13 @@
   /* Worker id is the least useful of the three trailing fields at this width;
      queue and elapsed answer "where" and "how long", which is the question. */
   .conv-workers-activity .fq-working-worker { display: none; }
+  /* A ticket reference is the durable identity in this narrow Workers strip;
+     let its natural width win and truncate the title instead. */
+  .conv-workers-activity .fq-working-id {
+    flex: 0 0 auto;
+    overflow: visible;
+    text-overflow: clip;
+  }
   /* Top-3 detailed, the rest brief. The brief tier drops the body, timestamp
      and "Full details" affordance down to a single title line, so ten rows
      cost about what three used to and the session feed below stays reachable.

@@ -1,0 +1,1 @@
+- Keep full Working Now ticket IDs visible in the Workers sidebar.
