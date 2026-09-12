@@ -375,11 +375,14 @@ def _codex_turn_meta_from_event(ev):
         or settings.get("reasoning_effort")
         or ""
     )
+    turn_id = payload.get("turn_id") or ""
     out = {}
     if model:
         out["model"] = str(model)
     if effort:
         out["reasoning_effort"] = str(effort)
+    if turn_id:
+        out["turn_id"] = str(turn_id)
     return out or None
 
 
@@ -390,6 +393,11 @@ def _apply_codex_turn_meta(parsed, codex_turn_meta):
         parsed["model"] = codex_turn_meta.get("model")
     if codex_turn_meta.get("reasoning_effort") and not parsed.get("reasoning_effort"):
         parsed["reasoning_effort"] = codex_turn_meta.get("reasoning_effort")
+    # Additive only: the live app-server overlay (ccc_server/codex_live_events.py)
+    # keys provisional events as "<turn_id>:<item_id>" and needs the same
+    # turn_id on the matching rollout row to dedupe/reconcile against it.
+    if codex_turn_meta.get("turn_id") and not parsed.get("turn_id"):
+        parsed["turn_id"] = codex_turn_meta.get("turn_id")
     return parsed
 
 
@@ -528,7 +536,7 @@ def _parse_codex_event(ev, line_num, token_usage=None, codex_turn_meta=None):
         # token_count: the pre-compact one at the `compacted` record, the
         # post-compact one at the `context_compacted` marker that follows it.
         # `_merge_codex_compact_boundary_events` folds the pair together.
-        return {
+        result = {
             "line": line_num,
             "ts": ts,
             "type": "system",
@@ -544,6 +552,7 @@ def _parse_codex_event(ev, line_num, token_usage=None, codex_turn_meta=None):
                 "duration_ms": 0,
             },
         }
+        return _apply_codex_turn_meta(result, codex_turn_meta)
     if ev_type == "event_msg":
         if ptype == "user_message":
             text = _core._strip_ccc_session_state_instruction(payload.get("message") or "")
@@ -583,7 +592,7 @@ def _parse_codex_event(ev, line_num, token_usage=None, codex_turn_meta=None):
                 result["no_agent_output"] = True
             if token_usage:
                 result["token_usage"] = token_usage
-            return result
+            return _apply_codex_turn_meta(result, codex_turn_meta)
         if ptype == "item_completed":
             # Newer Codex threads (e.g. multi-agent mode) stop emitting the
             # classic "user_message"/"agent_message" event_msg pair entirely
@@ -642,11 +651,12 @@ def _parse_codex_event(ev, line_num, token_usage=None, codex_turn_meta=None):
                 label = agent_path or (agent_thread_id[:8] if agent_thread_id else "sub-agent")
                 verb = {"started": "Spawned sub-agent", "completed": "Sub-agent finished",
                         "failed": "Sub-agent failed"}.get(kind, "Sub-agent " + (kind or "activity"))
-                return {
+                result = {
                     "line": line_num, "ts": ts, "type": "system", "subtype": "codex_subagent",
                     "kind": "subagent_" + (kind or "activity"), "agent_path": agent_path,
                     "agent_thread_id": agent_thread_id, "text": f"{verb}: {label}",
                 }
+                return _apply_codex_turn_meta(result, codex_turn_meta)
             if itype == "CollabAgentToolCall":
                 tool = str(item.get("tool") or "tool").strip()
                 status = str(item.get("status") or "").strip()
@@ -655,10 +665,11 @@ def _parse_codex_event(ev, line_num, token_usage=None, codex_turn_meta=None):
                 text = f"Agent {tool}" + (f" -> {receiver_label}" if receiver_label else "")
                 if status:
                     text += f" ({status})"
-                return {
+                result = {
                     "line": line_num, "ts": ts, "type": "system", "subtype": "codex_subagent",
                     "kind": "collab_" + tool, "tool": tool, "status": status, "text": text,
                 }
+                return _apply_codex_turn_meta(result, codex_turn_meta)
             return None
         return None
     if ev_type != "response_item":
@@ -672,13 +683,14 @@ def _parse_codex_event(ev, line_num, token_usage=None, codex_turn_meta=None):
         text = "\n\n".join(p.strip() for p in parts if p.strip()).strip()
         if not text:
             return None
-        return {
+        result = {
             "line": line_num,
             "ts": ts,
             "type": "assistant",
             "message_id": f"codex-reasoning-{line_num}",
             "blocks": [{"kind": "thinking", "text": text}],
         }
+        return _apply_codex_turn_meta(result, codex_turn_meta)
     if ptype in ("function_call", "custom_tool_call"):
         name = payload.get("name") or "tool"
         is_custom_tool = ptype == "custom_tool_call"
@@ -700,13 +712,14 @@ def _parse_codex_event(ev, line_num, token_usage=None, codex_turn_meta=None):
                             "status": str(item.get("status") or "pending"),
                         })
                 if entries:
-                    return {
+                    result = {
                         "line": line_num,
                         "ts": ts,
                         "type": "assistant",
                         "message_id": f"codex-plan-{line_num}",
                         "blocks": [{"kind": "plan", "entries": entries}],
                     }
+                    return _apply_codex_turn_meta(result, codex_turn_meta)
         # Custom-tool update_plan (JS body). Pure plan calls render as just
         # the plan card; mixed bodies (e.g. Promise.all batching exec_command
         # + update_plan in one call) keep their tool row and get the plan
@@ -716,13 +729,14 @@ def _parse_codex_event(ev, line_num, token_usage=None, codex_turn_meta=None):
             if is_custom_tool and "tools.update_plan" in raw_input else []
         )
         if custom_plan_entries and _core._codex_custom_tool_kind(raw_input, name) == "update_plan":
-            return {
+            result = {
                 "line": line_num,
                 "ts": ts,
                 "type": "assistant",
                 "message_id": f"codex-plan-{line_num}",
                 "blocks": [{"kind": "plan", "entries": custom_plan_entries}],
             }
+            return _apply_codex_turn_meta(result, codex_turn_meta)
         detail = (
             _core._codex_custom_tool_detail(raw_input, name)
             if is_custom_tool else _core._codex_tool_detail(name, args)
@@ -757,13 +771,14 @@ def _parse_codex_event(ev, line_num, token_usage=None, codex_turn_meta=None):
         blocks = [block]
         if custom_plan_entries:
             blocks.insert(0, {"kind": "plan", "entries": custom_plan_entries})
-        return {
+        result = {
             "line": line_num,
             "ts": ts,
             "type": "assistant",
             "message_id": f"codex-tool-{line_num}",
             "blocks": blocks,
         }
+        return _apply_codex_turn_meta(result, codex_turn_meta)
     if ptype in ("function_call_output", "custom_tool_call_output"):
         output = payload.get("output") or ""
         images = []
@@ -800,7 +815,7 @@ def _parse_codex_event(ev, line_num, token_usage=None, codex_turn_meta=None):
         }
         if images:
             result["images"] = images
-        return result
+        return _apply_codex_turn_meta(result, codex_turn_meta)
     return None
 
 

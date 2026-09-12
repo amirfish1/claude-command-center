@@ -892,6 +892,20 @@ def codex_client_dispatch(action, data):
             cursor = max(0, int(data.get("cursor") or 0))
             return {**CODEX_CONVERSATIONS.events_since(cursor, data.get("generation"), tid),
                     "queue_owner": "native" if native_queue_owned(tid) else "ccc", "requests": CODEX_REQUESTS.snapshot(tid)["requests"]}
+        if action == "live-transcript":
+            # The native app-server's own turns/items as a provisional overlay
+            # on top of the rollout-derived transcript (see
+            # ccc_server/codex_live_events.py). Read-only, pure mapping - no
+            # new state here beyond what "state" already reads.
+            from ccc_server.codex_live_events import live_turns_from_snapshot
+            snapshot = CODEX_CONVERSATIONS.snapshot(tid)
+            return {
+                "ok": True,
+                "generation": snapshot.get("generation"),
+                "cursor": snapshot.get("cursor"),
+                "turns": live_turns_from_snapshot(snapshot),
+                "requests": CODEX_REQUESTS.snapshot(tid)["requests"],
+            }
         if action == "respond":
             with _CLIENT_LOCK:
                 transport = _CLIENT_TRANSPORT
