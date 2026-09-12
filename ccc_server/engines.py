@@ -2977,6 +2977,9 @@ def spawn_session_devin(prompt, name=None, cwd=None, repo_path=None, worktree=Fa
     Devin encodes reasoning effort in the model uid (claude-opus-5-max,
     gpt-5-6-sol-low, etc.). ``_devin_resolve_model`` maps the user's
     selected base model + reasoning_effort to the concrete uid.
+
+    If ``worktree=True``, create a fresh git worktree off the launch cwd and
+    run Devin there rather than in the coordinator's linked worktree.
     """
     prompt = _core._strip_ccc_session_state_instruction(prompt)
     resolved = _core._resolve_devin_bin()
@@ -2997,6 +3000,18 @@ def spawn_session_devin(prompt, name=None, cwd=None, repo_path=None, worktree=Fa
     log_dir = _core.repo_log_dir(repo_for_logs)
     log_dir.mkdir(parents=True, exist_ok=True)
     log_path = log_dir / log_filename
+
+    worktree_path = None
+    worktree_branch = None
+    if worktree:
+        try:
+            worktree_path, worktree_branch = _core._create_worktree_for_spawn(
+                spawn_cwd, session_name,
+            )
+            spawn_cwd = worktree_path
+        except RuntimeError as e:
+            return {"ok": False, "error": f"worktree creation failed: {e}"}
+
     cmd = [
         resolved["bin"],
         "--permission-mode", os.environ.get("CCC_DEVIN_PERMISSION_MODE", "dangerous"),
@@ -3006,6 +3021,8 @@ def spawn_session_devin(prompt, name=None, cwd=None, repo_path=None, worktree=Fa
         cmd.extend(["--model", model_to_use])
     cmd.extend(["-p", prompt])
     log_fh = open(log_path, "w")
+    if worktree_path:
+        _core._run_worktree_init_hook(worktree_path, ctx["repo_path"], session_name, log_fh)
     try:
         proc = subprocess.Popen(
             cmd,
@@ -3055,11 +3072,11 @@ def spawn_session_devin(prompt, name=None, cwd=None, repo_path=None, worktree=Fa
         parent_session_id=parent_session_id,
         reasoning_effort=reasoning_effort or "",
     )
-    return _finalize_spawn_response(
-        {"ok": True, "pid": proc.pid, "name": session_name, "log": str(log_path)},
-        entry,
-        ctx,
-    )
+    resp = {"ok": True, "pid": proc.pid, "name": session_name, "log": str(log_path)}
+    if worktree_path:
+        resp["worktree_path"] = worktree_path
+        resp["worktree_branch"] = worktree_branch
+    return _finalize_spawn_response(resp, entry, ctx)
 
 
 # A one-shot `devin --resume -p` can fail at startup several seconds AFTER
