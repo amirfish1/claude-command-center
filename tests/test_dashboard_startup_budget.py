@@ -191,3 +191,22 @@ def test_archive_scroll_restore_skips_layout_reads_for_a_pristine_capture():
     pristine = _function("function _archiveScrollStateIsPristine(", "function _restoreArchiveListScroll")
     assert "state.top" in pristine
     assert "anchorValue" in pristine
+
+
+def test_archive_scroll_capture_skips_layout_reads_when_the_list_has_no_rows():
+    # _captureArchiveListScroll read $list.scrollTop and getBoundingClientRect
+    # before every render, including the first one, when #convList still holds
+    # only the "Loading archive" placeholder. Those reads force a layout of the
+    # whole dirty document right before the innerHTML swap that dirties it
+    # again. CPU profile 2026-09-12 at 193 rows: 93 to 146 ms self time in the
+    # capture, the largest JS chunk left between list arrival and rows painted.
+    # With no anchor candidates in the list there is nothing to capture.
+    capture = _function("function _captureArchiveListScroll", "function _archiveScrollTopWithinBounds")
+    assert "function _archiveListHasScrollAnchors(" in SOURCE
+    guard = capture.index("_archiveListHasScrollAnchors($list)")
+    assert guard < capture.index("$list.scrollTop")
+    assert guard < capture.index("getBoundingClientRect")
+    helper = _function("function _archiveListHasScrollAnchors(", "function _captureArchiveListScroll")
+    assert "querySelector(" in helper
+    assert "getBoundingClientRect" not in helper
+    assert "scrollTop" not in helper

@@ -65721,16 +65721,27 @@
     return out;
   }
 
+  function _archiveListHasScrollAnchors($list) {
+    return !!($list && $list.querySelector('[data-id], [data-gc-id], [data-collapse-key]'));
+  }
+
   function _captureArchiveListScroll(q, $list) {
     if (!$list || _lastArchiveRenderFilter !== q) return null;
     const state = {
       filter: q,
-      top: $list.scrollTop,
+      top: 0,
       renderVersion: _convListRenderVersion,
       anchorAttr: '',
       anchorValue: '',
       anchorOffset: 0,
     };
+    // A list with no anchor candidates (first boot: only the "Loading
+    // archive" placeholder) has nothing to capture. Reading the scroll offset
+    // or row geometry here forces a layout of the whole dirty document
+    // right before the innerHTML swap dirties it again; CPU profile
+    // 2026-09-12 at 193 rows: 93 to 146 ms self time on the boot path.
+    if (!_archiveListHasScrollAnchors($list)) return state;
+    state.top = $list.scrollTop;
     const listRect = $list.getBoundingClientRect();
     for (const row of $list.querySelectorAll('[data-id], [data-gc-id], [data-collapse-key]')) {
       const rect = row.getBoundingClientRect();
