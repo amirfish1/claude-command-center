@@ -5060,8 +5060,15 @@ _codex_desktop_attach_cache = {"ts": 0.0, "rollouts": {}}
 _codex_desktop_attach_lock = threading.Lock()
 _codex_thread_turn_locks = {}
 _codex_thread_turn_locks_lock = threading.Lock()
+_codex_thread_turn_lock_holders = {}
 _codex_external_writer_last = {}
 _codex_external_writer_last_lock = threading.Lock()
+# The RPCs held under this lock (thread/resume, turn/start) carry their own
+# 20s timeout, but a dead app-server socket can leave the call blocked past
+# that budget anyway (CCC-998-adjacent: no staleness cap = wedged forever).
+# Past this cap we abandon the lock object rather than queue new sends behind
+# a holder that will never release it.
+_CODEX_THREAD_TURN_LOCK_STALE_S = 90.0
 
 
 def _codex_thread_turn_lock(thread_id):
@@ -5072,6 +5079,45 @@ def _codex_thread_turn_lock(thread_id):
             lock = threading.Lock()
             _codex_thread_turn_locks[thread_id] = lock
         return lock
+
+
+def _codex_thread_turn_lock_acquire(thread_id):
+    """Acquire the per-thread turn lock, breaking a wedged one past staleness.
+
+    Returns the held lock, or None if a live holder still has it (caller
+    should fall back to the queue, same as before).
+    """
+    with _codex_thread_turn_locks_lock:
+        lock = _codex_thread_turn_locks.get(thread_id)
+        if lock is None:
+            lock = threading.Lock()
+            _codex_thread_turn_locks[thread_id] = lock
+        if lock.acquire(blocking=False):
+            _codex_thread_turn_lock_holders[thread_id] = time.monotonic()
+            return lock
+        held_since = _codex_thread_turn_lock_holders.get(thread_id)
+        stale = held_since is not None and (
+            time.monotonic() - held_since > _CODEX_THREAD_TURN_LOCK_STALE_S
+        )
+        if not stale:
+            return None
+        # The current holder is a thread stuck inside an RPC call that never
+        # returned even past its own timeout. Abandon that lock object; the
+        # stuck thread eventually finishes into a lock nobody else references.
+        fresh = threading.Lock()
+        fresh.acquire()
+        _codex_thread_turn_locks[thread_id] = fresh
+        _codex_thread_turn_lock_holders[thread_id] = time.monotonic()
+        try:
+            _codex_telemetry_append(
+                "codex_turn_lock_stale_break",
+                ok=False,
+                session_id=thread_id,
+                held_s=round(time.monotonic() - held_since, 1),
+            )
+        except Exception:
+            pass
+        return fresh
 
 
 def _codex_desktop_app_server_procs():
@@ -6258,8 +6304,8 @@ def _codex_resume_or_steer_via_app_server(
     if snap.get("external_active"):
         _core._codex_note_external_writer_transition(session_id, snap)
         return _codex_writer_gate_response(session_id, snap, total_start=total_start)
-    lock = _core._codex_thread_turn_lock(session_id)
-    if not lock.acquire(blocking=False):
+    lock = _core._codex_thread_turn_lock_acquire(session_id)
+    if lock is None:
         return _codex_writer_gate_response(
             session_id, {"writer": "ccc", "desktop_attached": snap.get("desktop_attached")},
             total_start=total_start,
