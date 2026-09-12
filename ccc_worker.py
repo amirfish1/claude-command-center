@@ -396,6 +396,8 @@ def serve(path=None):
 
 
 def main(argv=None):
+    # State files, logs and transcripts hold secrets: create everything owner-only.
+    os.umask(0o077)
     parser = argparse.ArgumentParser(description="CCC persistent execution worker")
     parser.add_argument("--socket", help="Unix socket path")
     parser.add_argument(
