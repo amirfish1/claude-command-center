@@ -159,3 +159,18 @@ def test_merging_spawn_defaults_does_not_refetch_spawn_defaults():
     assert "refreshSpawnEngineValue(" not in code
     assert "loadSpawnDefaults(" not in code
     assert "renderSpawnDefaultsInline(" in code
+
+
+def test_conv_tab_bar_height_is_measured_after_the_render_settles():
+    # renderSidebar swapped #convList innerHTML, then immediately measured
+    # the tab bar (getBoundingClientRect) to set --conv-tab-bar-h, forcing
+    # a synchronous layout of the whole list. The very next statements
+    # (_mountSharedQueuePanel, lane activity fills) mutate the DOM again, so
+    # the browser laid the list out a second time before paint. CPU profile
+    # 2026-09-12 at 684 rows: 236ms self time in that forced layout. Measure
+    # in requestAnimationFrame (still before paint) and only touch the
+    # custom property when the height actually changed.
+    source = _function("function _updateConvTabBarHeightVar", "function updateLiveStripOffset")
+    assert "requestAnimationFrame(" in source
+    assert "getBoundingClientRect" in source
+    assert "_convTabBarHeightLast" in source

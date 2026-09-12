@@ -8040,11 +8040,24 @@
   // CCC-994: .conv-inprogress-toolbar sticks at `top: var(--conv-tab-bar-h)`
   // so it settles directly under the also-sticky .conv-tab-bar instead of
   // both pinning to top:0 and the (higher z-index) tab bar hiding it.
+  // Measured in requestAnimationFrame, not synchronously after the innerHTML
+  // swap: measuring there forced a full layout of the freshly rendered list
+  // that the very next DOM writes (_mountSharedQueuePanel, lane activity
+  // fills) invalidated again before paint -- 236ms of self time at 684
+  // rows (CPU profile, 2026-09-12). rAF still runs before the next paint,
+  // and the custom property is only written when the height changed, so an
+  // unchanged tab bar costs no style invalidation at all.
+  let _convTabBarHeightLast = -1;
   function _updateConvTabBarHeightVar($convList) {
     if (!$convList) return;
-    const tabBar = $convList.querySelector(':scope > .conv-tab-bar');
-    const h = tabBar ? Math.ceil(tabBar.getBoundingClientRect().height) : 0;
-    $convList.style.setProperty('--conv-tab-bar-h', h + 'px');
+    requestAnimationFrame(() => {
+      if (!$convList.isConnected) return;
+      const tabBar = $convList.querySelector(':scope > .conv-tab-bar');
+      const h = tabBar ? Math.ceil(tabBar.getBoundingClientRect().height) : 0;
+      if (h === _convTabBarHeightLast && $convList.style.getPropertyValue('--conv-tab-bar-h')) return;
+      _convTabBarHeightLast = h;
+      $convList.style.setProperty('--conv-tab-bar-h', h + 'px');
+    });
   }
 
   function updateLiveStripOffset($view, strip) {
