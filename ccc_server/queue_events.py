@@ -571,7 +571,16 @@ def _queue_worker_config_issue(plan):
         return None
     engine = str((plan or {}).get("engine") or "").strip().lower()
     model = str((plan or {}).get("model") or "").strip()
-    effort = str((plan or {}).get("effort") or "").strip().lower()
+    # Only an explicit per-queue override is validated here, matching `wt
+    # set`'s own guard (_validate_queue_worker_settings): an effort that
+    # merely inherited the fleet-wide worker_reasoning_effort default isn't
+    # a user choice for THIS engine, so it must not be judged against a
+    # model's approved efforts -- kimi and antigravity models take no
+    # explicit effort at all (baked into the model id), so every such queue
+    # would otherwise show a permanent false-positive banner over a default
+    # it never asked for.
+    effort = (str((plan or {}).get("effort") or "").strip().lower()
+              if (plan or {}).get("effort_source") == "queue" else "")
     if not engine:
         return None
     try:
