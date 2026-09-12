@@ -4939,12 +4939,25 @@ def _resolve_spawn_caller_session_id(caller_pids, caller_cwd=""):
 
     # 4. Shared Codex app-server: ancestry proves "a Codex process", not which
     #    conversation. Fall back to the one whose transcript is live right now.
+    resolved = ""
     if codex_pids:
         try:
-            return _codex_thread_writing_now(caller_cwd)
+            resolved = _codex_thread_writing_now(caller_cwd)
         except Exception:
-            return ""
-    return ""
+            resolved = ""
+    # One line per spawn (a rare event), and the only way to tell the three
+    # failure modes apart after the fact: no ancestry shipped, no Codex
+    # ancestor found, or an ambiguous "which thread is writing" narrowing.
+    if not resolved:
+        try:
+            _core._log_activity(
+                "spawn", "CALLER_PARENT_MISS",
+                "pids=%s codex_pids=%s cwd=%s"
+                % (pids[:8], sorted(codex_pids)[:4] if codex_pids else [], caller_cwd),
+            )
+        except Exception:
+            pass
+    return resolved
 
 
 def _parent_session_id_from_return_address_text(text):
