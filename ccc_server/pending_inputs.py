@@ -2566,11 +2566,39 @@ def _queue_kimi_remote_busy_retry(session_id, text, *, front=False):
     return True
 
 
+# Session id -> stat identity of the durable queue file when this process last
+# re-read that session from it. See _refresh_queued_view_if_file_changed.
+_queued_view_file_identity = {}
+_queued_view_file_identity_lock = threading.Lock()
+
+
+def _refresh_queued_view_if_file_changed(session_id):
+    """Re-read one session's queue when another process changed the file.
+
+    The worker is a separate process that consumes queued input (for example a
+    Steer it delivered) straight in the durable file. This process's in-memory
+    copy then kept the delivered message, so the tray showed it as still
+    queued. A stat per read keeps the refresh to real file changes.
+    """
+    try:
+        st = os.stat(_core.PENDING_INPUTS_FILE)
+        identity = (st.st_mtime_ns, st.st_size, st.st_ino)
+    except OSError:
+        identity = None
+    with _queued_view_file_identity_lock:
+        if _queued_view_file_identity.get(session_id) == identity:
+            return
+    if identity is None or _core._refresh_pending_inputs_for_session(session_id):
+        with _queued_view_file_identity_lock:
+            _queued_view_file_identity[session_id] = identity
+
+
 def _get_queued_events_for_session(session_id):
     """Get synthetic events for any queued messages of this session."""
     events = []
     if not session_id:
         return events
+    _refresh_queued_view_if_file_changed(session_id)
     with _core._pending_resume_lock:
         resume_queue = list(_core._pending_resume_queue.get(session_id, []))
     with _core._pending_terminal_input_lock:
