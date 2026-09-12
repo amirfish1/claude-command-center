@@ -4599,38 +4599,72 @@ _SPAWN_MARKER_VALUE_MAX_CHARS = 64
 _SPAWN_MARKER_LANES = frozenset({"workers", "other"})
 
 
+# Decoded marker per file path, keyed on (mtime_ns, size). Markers are
+# written once per spawn and never rewritten, but the loader is called from
+# eight sites, including every /api/conversations/list poll (ACP overlay) and
+# every sessions stamping pass. Measured 2026-09-12 with 715 markers: 283 to
+# 427 ms per call to read and decode them all, on a warm list request that
+# otherwise replays a cached body. One scandir plus a stat per entry now; a
+# file is decoded only when its (mtime_ns, size) changed.
+_SPAWN_MARKER_FILE_CACHE = {}
+
+
+def _decode_spawn_marker_file(path):
+    """Parse one SPAWN_MARKERS_DIR/<sid>.json into its typed marker, or None."""
+    try:
+        data = json.loads(path.read_text())
+    except (OSError, json.JSONDecodeError):
+        return None
+    if not isinstance(data, dict):
+        return None
+    via = str(data.get("spawned_via") or "").strip()[:_SPAWN_MARKER_VALUE_MAX_CHARS]
+    lane = str(data.get("lane") or "").strip().lower()
+    if lane not in _SPAWN_MARKER_LANES:
+        lane = "workers" if via else ""
+    if not lane:
+        return None
+    marker = {"lane": lane}
+    kind = str(data.get("kind") or "").strip()[:_SPAWN_MARKER_VALUE_MAX_CHARS]
+    if kind:
+        marker["kind"] = kind
+    if via:
+        marker["spawned_via"] = via
+    return marker
+
+
 def _load_spawn_markers():
     """Return typed metadata from SPAWN_MARKERS_DIR/<sid>.json files."""
     out = {}
     try:
-        files = list(SPAWN_MARKERS_DIR.iterdir())
+        with os.scandir(SPAWN_MARKERS_DIR) as it:
+            entries = list(it)
     except OSError:
         return out
-    for f in files:
-        if not f.name.endswith(".json") or not f.is_file():
+    seen = set()
+    for entry in entries:
+        name = entry.name
+        if not name.endswith(".json"):
             continue
-        sid = f.name[: -len(".json")].strip()
+        sid = name[: -len(".json")].strip()
         if not sid:
             continue
         try:
-            data = json.loads(f.read_text())
-        except (OSError, json.JSONDecodeError):
+            if not entry.is_file():
+                continue
+            st = entry.stat()
+        except OSError:
             continue
-        if not isinstance(data, dict):
-            continue
-        via = str(data.get("spawned_via") or "").strip()[:_SPAWN_MARKER_VALUE_MAX_CHARS]
-        lane = str(data.get("lane") or "").strip().lower()
-        if lane not in _SPAWN_MARKER_LANES:
-            lane = "workers" if via else ""
-        if not lane:
-            continue
-        marker = {"lane": lane}
-        kind = str(data.get("kind") or "").strip()[:_SPAWN_MARKER_VALUE_MAX_CHARS]
-        if kind:
-            marker["kind"] = kind
-        if via:
-            marker["spawned_via"] = via
-        out[sid] = marker
+        version = (st.st_mtime_ns, st.st_size)
+        seen.add(entry.path)
+        hit = _SPAWN_MARKER_FILE_CACHE.get(entry.path)
+        if hit is None or hit[0] != version:
+            hit = (version, _decode_spawn_marker_file(Path(entry.path)))
+            _SPAWN_MARKER_FILE_CACHE[entry.path] = hit
+        if hit[1]:
+            out[sid] = dict(hit[1])
+    if len(_SPAWN_MARKER_FILE_CACHE) != len(seen):
+        for stale in [k for k in _SPAWN_MARKER_FILE_CACHE if k not in seen]:
+            _SPAWN_MARKER_FILE_CACHE.pop(stale, None)
     return out
 
 

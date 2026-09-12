@@ -133,3 +133,54 @@ def test_archive_overlay_acp_sessions_infers_spawned_via(monkeypatch, tmp_path):
     assert rows[0]["spawned_via"] == "ui"
     assert rows[0]["engine"] == "kimi"
 
+
+
+def test_spawn_markers_are_decoded_once_per_file_version(monkeypatch, tmp_path):
+    # _load_spawn_markers read and json-decoded every SPAWN_MARKERS_DIR file
+    # on every call. Measured 2026-09-12 with 715 markers: 283 to 427 ms per
+    # call, and the lightweight /api/conversations/list path called it on
+    # every poll from every tab (through the ACP overlay) before the body
+    # cache replay. Markers are immutable once written, so decode each file
+    # once per (mtime_ns, size) and rebuild the map from the memo.
+    import os
+
+    marker_dir = tmp_path / "spawn-markers"
+    marker_dir.mkdir()
+    monkeypatch.setattr(server, "SPAWN_MARKERS_DIR", marker_dir)
+    (marker_dir / "aaaa.json").write_text(json.dumps({"spawned_via": "wt", "lane": "workers"}))
+    (marker_dir / "bbbb.json").write_text(json.dumps({"lane": "other", "kind": "assistant"}))
+    (marker_dir / "notes.txt").write_text("ignored")
+
+    decoded = []
+    real = server._decode_spawn_marker_file
+
+    def counting(path):
+        decoded.append(path.name)
+        return real(path)
+
+    monkeypatch.setattr(server, "_decode_spawn_marker_file", counting)
+
+    first = server._load_spawn_markers()
+    assert first == {
+        "aaaa": {"lane": "workers", "spawned_via": "wt"},
+        "bbbb": {"lane": "other", "kind": "assistant"},
+    }
+    assert sorted(decoded) == ["aaaa.json", "bbbb.json"]
+
+    second = server._load_spawn_markers()
+    assert second == first
+    assert len(decoded) == 2, "unchanged files must not be decoded again"
+    second["aaaa"]["lane"] = "mutated"
+    assert server._load_spawn_markers()["aaaa"]["lane"] == "workers"
+
+    target = marker_dir / "bbbb.json"
+    target.write_text(json.dumps({"lane": "workers"}))
+    st = target.stat()
+    os.utime(target, ns=(st.st_atime_ns, st.st_mtime_ns + 5_000_000))
+    third = server._load_spawn_markers()
+    assert third["bbbb"] == {"lane": "workers"}
+    assert len(decoded) == 3
+
+    (marker_dir / "aaaa.json").unlink()
+    assert "aaaa" not in server._load_spawn_markers()
+    assert len(decoded) == 3
