@@ -94,6 +94,31 @@ def test_optional_startup_reads_wait_for_archive_then_use_the_four_slot_pool():
     assert "addEventListener('keydown', _releaseStartupApiReads" in source
 
 
+def test_background_pool_reads_honor_the_startup_deferral():
+    # backgroundApiFetch binds the ORIGINAL window.fetch (before the
+    # startupBudgetedFetch patch), so every status probe routed through the
+    # four-slot pool used to bypass the "hold optional reads until rows
+    # paint" gate entirely. Measured 2026-09-12: ~12 probes (healthcheck,
+    # system/services, queue/list 2MB, attention 2.5s, ...) landed on the
+    # server in the same 400ms as the archive bootstrap fetch, and the
+    # archive request took 1.4-3s instead of ~0.15s. The pool entry point
+    # must consult the same startup gate as window.fetch.
+    start = SOURCE.index("function backgroundApiFetch(")
+    end = SOURCE.index("window.__cccBackgroundApiFetch", start)
+    source = SOURCE[start:end]
+
+    assert "_startupApiReadsReleased" in source
+    assert "_startupCriticalApiRead(input, init)" in source
+    assert "_startupDeferredApiReads.push" in source
+    # The startup gate state must be declared before the archive bootstrap
+    # fetch runs, or the first backgroundApiFetch call hits the TDZ.
+    assert SOURCE.index("let _startupApiReadsReleased") < SOURCE.index(
+        "const _archiveBootstrapFetchPromise"
+    )
+    critical = _function("function _startupCriticalApiRead", "function startupBudgetedFetch")
+    assert "'/api/archive/loading-status'" in critical
+
+
 def test_archive_boot_no_longer_waits_for_selected_repo_sessions():
     start = SOURCE.index("(function wireArchiveMode()")
     end = SOURCE.index("// Periodic archive refresh.", start)

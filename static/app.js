@@ -2390,6 +2390,17 @@
   }
 
   function backgroundApiFetch(input, init) {
+    // Same startup gate as window.fetch. This pool binds the original
+    // fetch, so without this check every boot probe routed here (health,
+    // services, queue/list, attention, ...) bypassed the deferral and
+    // landed on the GIL-bound server alongside the archive bootstrap
+    // request, stretching it from ~150ms to 1.4-3s. _releaseStartupApiReads
+    // flips the flag before replaying the queue, so replays pass through.
+    if (!_startupApiReadsReleased && !_startupCriticalApiRead(input, init)) {
+      return new Promise((resolve, reject) => {
+        _startupDeferredApiReads.push({ input, init, resolve, reject });
+      });
+    }
     const options = Object.assign({}, init || {});
     const controller = new AbortController();
     const upstreamSignal = options.signal;
@@ -2424,6 +2435,14 @@
       _archiveBootstrapWindow = savedWindow;
     }
   } catch (_) {}
+  // Startup gate state. Declared BEFORE the bootstrap fetch below because
+  // backgroundApiFetch consults it on every call (see the gate at the top
+  // of backgroundApiFetch); a `let` further down would hit the TDZ here.
+  const _startupDeferredApiReads = [];
+  const _startupBaseFetch = window.fetch.bind(window);
+  let _startupApiReadsReleased = false;
+  let _startupApiReleaseTimer = null;
+
   const _archiveBootstrapUrl = '/api/conversations/list?window=' + encodeURIComponent(_archiveBootstrapWindow) + '&stale_ok=1';
   const _archiveBootstrapController = new AbortController();
   const _archiveBootstrapTimeout = setTimeout(() => {
@@ -2438,10 +2457,7 @@
   // connection slot ahead of the archive. Hold GET-only status/catalog work
   // until useful rows have painted, then feed it through the same four-slot
   // background pool. Mutations and conversation/session reads always bypass.
-  const _startupDeferredApiReads = [];
-  const _startupBaseFetch = window.fetch.bind(window);
-  let _startupApiReadsReleased = false;
-  let _startupApiReleaseTimer = null;
+  // (State lives above the archive bootstrap fetch; see _startupDeferredApiReads.)
 
   function _startupCriticalApiRead(input, init) {
     const rawUrl = typeof input === 'string' ? input : (input && input.url) || '';
@@ -2453,6 +2469,7 @@
     const criticalPaths = [
       '/api/conversations/list', '/api/conversations', '/api/sessions',
       '/api/config', '/api/features', '/api/loading-status',
+      '/api/archive/loading-status',
       // Deferred like any other background read, these two raced
       // abortBackgroundApiReadsForSpawn(): the first pointerdown anywhere
       // (e.g. clicking New session) released them into the abortable
@@ -15114,7 +15131,25 @@
     // Bare file paths (relative like docs/foo/bar.md, absolute /Users/..., or ~/...)
     s = s.replace(/(^|[\s(])((?:~\/|\/|(?:[\w.\-]+\/)+)[\w.\-/]+\.(?:md|ts|tsx|js|jsx|py|json|yaml|yml|css|html|sql|prisma|sh))\b/g,
       (m, pre, p) => pre + '<a role="button" tabindex="0" class="path-link" data-path="' + p + '">' + p + '</a>');
-    return linkifyCodexInlineVisuals(s);
+    return linkifyWatchtowerTicketRefs(linkifyCodexInlineVisuals(s));
+  }
+
+  // A ticket ref is durable navigation, not merely a status label. Keep the
+  // conversion after normal markdown links so an author's explicit link
+  // remains authoritative instead of becoming a nested anchor.
+  const WATCHTOWER_TICKET_REF_RE = /\b([A-Z][A-Z0-9]*(?:-[A-Z0-9]+)*)-(\d+)\b/g;
+  function linkifyWatchtowerTicketRefs(html) {
+    const anchors = [];
+    const protectedHtml = String(html || '').replace(/<a\b[^>]*>[\s\S]*?<\/a>/gi, match => {
+      const token = '\u0000WTANCHOR' + anchors.length + '\u0000';
+      anchors.push(match);
+      return token;
+    });
+    const linked = protectedHtml.replace(WATCHTOWER_TICKET_REF_RE, (match, queue) =>
+      '<a role="button" tabindex="0" class="watchtower-ticket-link"'
+        + ' data-watchtower-ticket="' + escapeAttr(match) + '"'
+        + ' data-watchtower-queue="' + escapeAttr(queue) + '">' + match + '</a>');
+    return linked.replace(/\u0000WTANCHOR(\d+)\u0000/g, (match, index) => anchors[Number(index)] || match);
   }
 
   function linkifyPath(p) {
@@ -15124,6 +15159,30 @@
     }
     return '<a role="button" tabindex="0" class="path-link" data-path="' + escapeAttr(target) + '">' + escapeHtml(target) + '</a>';
   }
+
+  function watchtowerTicketUrl(ref, baseUrl) {
+    const ticket = String(ref || '').trim();
+    const queue = ticket.replace(/-\d+$/, '');
+    const base = String(baseUrl || 'http://127.0.0.1:8787').replace(/\/+$/, '');
+    return base + '/q/' + encodeURIComponent(queue) + '#' + encodeURIComponent(ticket);
+  }
+
+  document.addEventListener('click', (ev) => {
+    const link = ev.target.closest('a.watchtower-ticket-link');
+    if (!link) return;
+    ev.preventDefault();
+    const ref = link.dataset.watchtowerTicket;
+    if (!ref) return;
+    const target = watchtowerTicketUrl(ref, watchtowerServiceUrl);
+    const tmp = document.createElement('a');
+    tmp.href = target;
+    tmp.target = '_blank';
+    tmp.rel = 'noopener noreferrer';
+    tmp.style.display = 'none';
+    document.body.appendChild(tmp);
+    tmp.click();
+    document.body.removeChild(tmp);
+  });
 
   // Copy button on fenced code blocks. Reads plain text from the <code>
   // element (which survives as the rendered text, with token spans
