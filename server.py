@@ -8623,6 +8623,11 @@ def _spawn_request_reasoning_effort(payload, engine):
     payload = payload if isinstance(payload, dict) else {}
     if "reasoning_effort" in payload or "effort" in payload:
         value = payload.get("reasoning_effort") if "reasoning_effort" in payload else payload.get("effort")
+    elif engine == "devin":
+        # Devin encodes effort in the selected model UID.  Applying the
+        # global default here would rewrite an explicit `...-max` model to
+        # the default's sibling variant (usually `...-high`).
+        value = ""
     else:
         defaults = _load_spawn_defaults()
         value = defaults.get("reasoning_effort") or ""

@@ -72,6 +72,12 @@ def test_claude_spawn_request_resolves_effort_like_codex(tmp_path, monkeypatch):
     assert server._spawn_request_reasoning_effort({"effort": "max"}, "codex") == ""
 
 
+def test_devin_spawn_keeps_an_explicit_model_variant_without_effort():
+    """A global default must not rewrite a Devin model UID ending in -max."""
+    assert server._spawn_request_reasoning_effort({}, "devin") == ""
+    assert server._spawn_request_reasoning_effort({"effort": "high"}, "devin") == "high"
+
+
 def test_cold_claude_spawn_command_carries_the_effort_flag():
     cmd = server._claude_spawn_command(
         "/fake/claude", "claude-opus-5", "demo", "sid-1", {}, effort="max",
