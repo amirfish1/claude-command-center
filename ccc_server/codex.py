@@ -4607,6 +4607,14 @@ def _codex_error_text(response):
     if not isinstance(response, dict):
         return "Codex app-server returned no response"
     err = response.get("error")
+    if isinstance(err, str):
+        # `_codex_app_server_request`'s own short-circuit paths (transport
+        # unavailable, worker routing failure) put a plain string here
+        # instead of a JSON-RPC {code, message} dict. Pass it through rather
+        # than silently discarding it — a caller that only checks this
+        # branch (e.g. `_codex_compact_via_app_server`) would otherwise
+        # report an empty error and the UI would show a blank failure.
+        return err
     if not isinstance(err, dict):
         return ""
     message = str(err.get("message") or "Codex app-server request failed")
@@ -6914,7 +6922,7 @@ def _codex_compact_via_app_server(session_id, cwd=None, model=None):
             "ok": False,
             "via": "codex-compact",
             "code": "codex_compact_unavailable",
-            "error": _codex_error_text(resumed),
+            "error": _codex_error_text(resumed) or "Codex app-server unavailable",
         }
     if resumed.get("ok") is False and "result" not in resumed:
         # `_codex_app_server_request` short-circuit (unavailable / timeout).

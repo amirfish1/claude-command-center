@@ -672,6 +672,15 @@ class WorkLedger:
         }
 
 
+# Defensive cap on ControlPlaneClient's read loop against an unbounded/wedged
+# response -- not a protocol limit, since the worker imposes no size cap on
+# what it sends back. A Codex `thread/resume` reply for a large, long-running
+# thread (hundreds of turns) can legitimately exceed a few MB; 4 MiB was
+# tight enough that every /compact attempt on such a thread failed with a
+# swallowed "response too large" before compaction could even start.
+_MAX_RESPONSE_BYTES = 64 * 1024 * 1024
+
+
 class ControlPlaneClient:
     """One-request-per-connection client for the worker's Unix socket."""
 
@@ -710,7 +719,7 @@ class ControlPlaneClient:
                 if not chunk:
                     break
                 chunks.extend(chunk)
-                if len(chunks) > 4 * 1024 * 1024:
+                if len(chunks) > _MAX_RESPONSE_BYTES:
                     raise ValueError("CCC worker response too large")
         except (OSError, ValueError) as exc:
             return {
