@@ -354,6 +354,8 @@
 .codex-client-toolhead strong { font-size: 12px; }
 .codex-client-toolhead span { color: var(--text-muted, #8b949e); font-size: 10px; }
 .codex-client-toolhead input { width: 100%; height: 32px; border: 1px solid var(--border, #30363d); border-radius: 8px; padding: 0 10px; color: var(--text, #e6edf3); background: var(--bg, #0d1117); font: 11px inherit; outline: 0; }
+.codex-client-toolhead .codex-client-preview-toggle { display: flex; align-items: center; gap: 5px; color: var(--text-muted, #8b949e); font-size: 10px; cursor: pointer; }
+.codex-client-toolhead .codex-client-preview-toggle input { width: auto; height: auto; margin: 0; }
 .codex-client-toolhead input:focus { border-color: color-mix(in srgb, var(--codex-accent) 55%, var(--border, #30363d)); }
 .codex-client-catalog { padding: 10px; }
 .codex-client-action-group + .codex-client-action-group { margin-top: 15px; }

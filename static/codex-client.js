@@ -1438,6 +1438,15 @@
       root.querySelector('[data-surface="conversation"]').textContent = 'Chat';
       root.querySelector('[data-surface="workspace"]').textContent = 'Files & terminal';
       root.querySelector('.codex-client-tabs').setAttribute('aria-label','Codex conversation tools');
+      // No footer inline, matching Claude panes: the pane's top row already
+      // reads "LIVE · CODEX" only while this connection is up, and CCC's own
+      // token pill covers usage. Preview features gates which tools appear,
+      // so it lives with the tools.
+      const footer = root.querySelector('.codex-client-footer');
+      const previewToggle = footer.querySelector('[data-codex-preview]').closest('label');
+      previewToggle.classList.add('codex-client-preview-toggle');
+      root.querySelector('.codex-client-toolhead').append(previewToggle);
+      footer.remove();
       pane.classList.add('has-codex-inline');
     } else {
     pane.classList.add('codex-client-open');
@@ -1516,11 +1525,14 @@
   function updateChrome() {
     if (!state.root) return;
     const connection = state.root.querySelector('[data-codex-connection]');
-    connection.textContent = state.connected ? (state.catalog?.connection_kind === 'desktop-ipc' ? 'Desktop connected' : 'Connected') : 'Reconnecting…';
-    connection.classList.toggle('is-connected', state.connected);
+    if (connection) {
+      connection.textContent = state.connected ? (state.catalog?.connection_kind === 'desktop-ipc' ? 'Desktop connected' : 'Connected') : 'Reconnecting…';
+      connection.classList.toggle('is-connected', state.connected);
+    }
     const preview = state.root.querySelector('[data-codex-preview]');
     if (preview && state.catalog) preview.checked = !!state.catalog.experimental_enabled;
     const usage = state.root.querySelector('[data-codex-usage]');
+    if (!usage) return;
     const turns = state.thread && state.thread.turns || [];
     let tokens = 0;
     turns.forEach(turn => { tokens += Number(turn.usage && (turn.usage.totalTokens || turn.usage.total_tokens) || 0); });
