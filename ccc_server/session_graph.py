@@ -714,10 +714,12 @@ def _session_graph_codex_refresh_loop():
         if now >= next_full_refresh:
             next_full_refresh = now + _session_graph_codex_refresh_interval
             try:
-                for child, parent in _core._codex_spawn_parent_by_child().items():
+                edges = _core._codex_spawn_parent_by_child()
+                names = _core._codex_spawn_edge_names(edges)
+                for child, parent in edges.items():
                     _core._session_graph.add_edge(
                         parent, child, source="codex-native", engine="codex",
-                        name=_core._codex_spawn_edge_name(child) or None,
+                        name=names.get(child) or None,
                     )
                 _core._session_graph.save()
             except Exception:

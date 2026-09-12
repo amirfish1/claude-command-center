@@ -7586,9 +7586,33 @@ def _codex_spawn_edge_name(child_thread_id):
     `id = ?` lookup per child in `_codex_spawn_parent_by_child()`'s output.
     """
     try:
-        return _core._codex_agent_task_label(_core._codex_thread_row(child_thread_id))
+        return _core._codex_spawn_edge_names([child_thread_id]).get(child_thread_id, "")
     except Exception:
         return ""
+
+
+def _codex_spawn_edge_names(child_thread_ids):
+    """Return task labels for spawned children with one indexed thread query.
+
+    The session-graph refresher reads every persisted spawn edge at once. Doing
+    a separate ``_codex_thread_row`` lookup for each child opened and parsed
+    the state DB once per edge, starving live-activity polls on large graphs.
+    """
+    child_ids = sorted({str(sid or "").strip() for sid in child_thread_ids if sid})
+    if not child_ids:
+        return {}
+    placeholders = ",".join("?" for _ in child_ids)
+    try:
+        rows = _core._codex_fetch_threads(
+            f"id IN ({placeholders})", tuple(child_ids),
+        )
+    except Exception:
+        return {}
+    return {
+        str(row.get("id")): _core._codex_agent_task_label(row) or ""
+        for row in rows or ()
+        if isinstance(row, dict) and row.get("id")
+    }
 
 
 def _codex_spawn_parent_by_child():

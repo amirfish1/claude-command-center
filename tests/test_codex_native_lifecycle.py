@@ -92,6 +92,27 @@ def test_deleted_markers_filter_stale_native_spawn_edges(tmp_path, monkeypatch):
     assert server._codex_spawn_parent_by_child() == {"alive-child": "parent"}
 
 
+def test_native_spawn_edge_names_fetches_children_in_one_query(monkeypatch):
+    queries = []
+
+    def fetch_threads(where="", params=(), limit=None):
+        queries.append((where, params, limit))
+        return [
+            {"id": "child-a", "agent_nickname": "Review auth"},
+            {"id": "child-b", "agent_nickname": "Check billing"},
+        ]
+
+    monkeypatch.setattr(server, "_codex_fetch_threads", fetch_threads)
+    monkeypatch.setattr(server, "_codex_agent_task_label",
+                        lambda row: row.get("agent_nickname") or "")
+
+    assert server._codex_spawn_edge_names(["child-a", "child-b"]) == {
+        "child-a": "Review auth",
+        "child-b": "Check billing",
+    }
+    assert queries == [("id IN (?,?)", ("child-a", "child-b"), None)]
+
+
 def test_deleted_marker_filters_only_codex_rows_from_cold_cache(tmp_path, monkeypatch):
     _isolate_lifecycle(tmp_path, monkeypatch)
     server._codex_thread_registry_delete({"same-id"})
