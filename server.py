@@ -16337,6 +16337,15 @@ def _github_owner_login_candidates():
     return owners
 
 
+# _cross_repo_feed_repo_paths asked every known repo for its origin owner with
+# a `git remote get-url origin` subprocess on every /api/issues/all call: 28
+# forks, 0.28 s per call (profiled 2026-09-12), for an answer that only
+# changes when the repo's git config does. Keyed on the config file's
+# (mtime_ns, size); a worktree's `.git` is a file, so fall back to that.
+_GITHUB_REPO_OWNER_MEMO = {}
+_GITHUB_REPO_OWNER_MEMO_TTL = 600.0
+
+
 def _github_repo_owner_for_path(repo_path):
     """Return the GitHub origin owner for a local repo path, or ''."""
     try:
@@ -16345,11 +16354,26 @@ def _github_repo_owner_for_path(repo_path):
         return ""
     if not p.is_dir():
         return ""
+    version = None
+    for marker in (p / ".git" / "config", p / ".git"):
+        try:
+            st = marker.stat()
+        except OSError:
+            continue
+        version = (st.st_mtime_ns, st.st_size)
+        break
+    now = time.time()
+    hit = _GITHUB_REPO_OWNER_MEMO.get(str(p))
+    if hit and hit[0] == version and (now - hit[1]) < _GITHUB_REPO_OWNER_MEMO_TTL:
+        return hit[2]
     rc, out, _ = _git(["remote", "get-url", "origin"], p, timeout=3)
     if rc != 0:
-        return ""
-    parsed = _github_owner_repo_from_url(out.strip())
-    return (parsed[0] if parsed else "") or ""
+        owner = ""
+    else:
+        parsed = _github_owner_repo_from_url(out.strip())
+        owner = (parsed[0] if parsed else "") or ""
+    _GITHUB_REPO_OWNER_MEMO[str(p)] = (version, now, owner)
+    return owner
 
 
 def _push_screenshot_to_branch(local_path, commit_subject):
@@ -35164,7 +35188,32 @@ def _strip_for_question_scan(text):
     return (t or "").strip()
 
 
+# _score_soft_block is a pure function of the row's last assistant text, yet
+# compute_attention_feed re-ran it over every archive row on every
+# /api/attention call, and every open tab polls that endpoint on its sessions
+# refresh cycle. Profiled 2026-09-12 at 3,144 scored rows: 0.75 s of the 0.80 s
+# call, all of it GIL time in front of the archive list request. Keyed on a
+# digest of the text so the memo holds 16-byte keys, not the transcripts.
+_SOFT_BLOCK_SCORE_MEMO = {}
+_SOFT_BLOCK_SCORE_MEMO_MAX = 16384
+
+
 def _score_soft_block(text):
+    """Memoised front for _score_soft_block_uncached; same contract."""
+    if not text:
+        return _score_soft_block_uncached(text)
+    key = hashlib.blake2b(text.encode("utf-8", "surrogatepass"), digest_size=16).digest()
+    hit = _SOFT_BLOCK_SCORE_MEMO.get(key)
+    if hit is None:
+        if len(_SOFT_BLOCK_SCORE_MEMO) >= _SOFT_BLOCK_SCORE_MEMO_MAX:
+            _SOFT_BLOCK_SCORE_MEMO.clear()
+        hit = _score_soft_block_uncached(text)
+        _SOFT_BLOCK_SCORE_MEMO[key] = hit
+    score, reasons, question_text = hit
+    return score, list(reasons), question_text
+
+
+def _score_soft_block_uncached(text):
     """Score how strongly a trailing assistant prose blob is awaiting a human.
 
     Returns (score, reasons, question_text). Transparent + tunable: callers can

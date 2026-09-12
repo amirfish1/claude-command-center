@@ -64,3 +64,38 @@ class CrossRepoFeedTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class GithubRepoOwnerMemoTests(unittest.TestCase):
+    def setUp(self):
+        for mod in ("server", "morning", "morning_store"):
+            sys.modules.pop(mod, None)
+        self.server = importlib.import_module("server")
+
+    def test_owner_lookup_forks_git_once_per_repo_config_version(self):
+        # _cross_repo_feed_repo_paths resolved every known repo's origin owner
+        # with a `git remote get-url origin` subprocess on every
+        # /api/issues/all call: 28 forks, 0.28 s per call (profiled
+        # 2026-09-12), for an answer that only changes when .git/config does.
+        import os
+        import time
+        with tempfile.TemporaryDirectory() as td:
+            repo = pathlib.Path(td) / "repo"
+            (repo / ".git").mkdir(parents=True)
+            cfg = repo / ".git" / "config"
+            cfg.write_text('[remote "origin"]\n\turl = https://github.com/testuser/testrepo.git\n')
+            calls = {"n": 0}
+
+            def fake_git(args, cwd, timeout=10):
+                calls["n"] += 1
+                return 0, "https://github.com/testuser/testrepo.git\n", ""
+
+            with mock.patch.object(self.server, "_git", fake_git):
+                self.server._GITHUB_REPO_OWNER_MEMO.clear()
+                self.assertEqual(self.server._github_repo_owner_for_path(repo), "testuser")
+                self.assertEqual(self.server._github_repo_owner_for_path(str(repo)), "testuser")
+                self.assertEqual(calls["n"], 1)
+                later = time.time() + 5
+                os.utime(cfg, (later, later))
+                self.assertEqual(self.server._github_repo_owner_for_path(repo), "testuser")
+                self.assertEqual(calls["n"], 2)

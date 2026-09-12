@@ -353,3 +353,38 @@ def test_attention_feed_bounds_turn_reads(monkeypatch):
         f"turn reader called {len(reads)}x — the feed turn-enrichment cap "
         "regressed (would read a file tail per attention row)"
     )
+
+
+def test_soft_block_score_is_memoized_per_text(monkeypatch):
+    # compute_attention_feed runs _classify_attention over every archive row
+    # on every /api/attention call, and every open tab polls that endpoint on
+    # its sessions refresh cycle. Profiled 2026-09-12 at 3,144 scored rows:
+    # 0.75 s of the 0.80 s call was _score_soft_block, a pure function of the
+    # row's last assistant text that had not changed since the previous poll.
+    calls = {"n": 0}
+    real = server._score_soft_block_uncached
+
+    def counting(text):
+        calls["n"] += 1
+        return real(text)
+
+    monkeypatch.setattr(server, "_score_soft_block_uncached", counting)
+    server._SOFT_BLOCK_SCORE_MEMO.clear()
+    text = "Two options: (a) keep it, (b) drop it. Which do you prefer?"
+    first = server._score_soft_block(text)
+    second = server._score_soft_block(text)
+    assert calls["n"] == 1
+    assert first == second
+    assert first[0] >= 3
+    # A memo hit must not hand out shared mutable state.
+    first[1].append("mutated")
+    assert "mutated" not in server._score_soft_block(text)[1]
+    server._score_soft_block(text + " Or (c) something else?")
+    assert calls["n"] == 2
+    # The detector path is what the feed calls; same row twice, one score.
+    row = _row(text)
+    server._SOFT_BLOCK_SCORE_MEMO.clear()
+    calls["n"] = 0
+    assert server._detect_soft_block(row)
+    assert server._detect_soft_block(dict(row))
+    assert calls["n"] == 1
