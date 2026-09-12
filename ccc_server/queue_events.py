@@ -2022,10 +2022,16 @@ def resume_session_codex(
     if not resolved["available"]:
         return {"ok": False, "error": resolved["reason"], "code": resolved.get("code")}
     active_resume_entry = None
-    for s in _core._spawned_sessions:
+    for s in list(_core._spawned_sessions):
         if s.get("engine") == "codex" and s.get("resumed_sid") == session_id:
             try:
                 if _core._poll_spawn_entry(s) is None:
+                    if _core._codex_exec_resume_entry_is_stale(s):
+                        _core._retire_unresponsive_spawn_entry(
+                            s, terminate=True, reason="exec_resume_wedged",
+                            caller="resume_session_codex",
+                        )
+                        continue
                     active_resume_entry = s
                     break
             except Exception:

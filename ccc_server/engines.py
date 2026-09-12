@@ -6612,6 +6612,40 @@ def _cleanup_finished_entry(entry):
         entry["log_fh"] = None
 
 
+_CODEX_EXEC_RESUME_STALE_MIN_AGE_S = 600.0
+_CODEX_EXEC_RESUME_STALE_QUIET_S = 600.0
+
+
+def _codex_exec_resume_entry_is_stale(entry):
+    """True once a `codex exec resume` fallback child looks wedged forever.
+
+    Unlike a long-lived headless spawn, this is a one-shot CLI call that talks
+    to a single app-server socket and should finish in seconds to a few
+    minutes. There is no legitimate reason for its log to sit silent for ten
+    minutes straight — that means the app-server it was talking to is gone
+    and the process is blocked on a dead socket for good. Left unchecked this
+    corpse still passes `_poll_spawn_entry` as "running", so every later send
+    to the same thread queues forever behind it (observed: one such hang held
+    a thread wedged for over an hour at 0% CPU).
+    """
+    if not isinstance(entry, dict):
+        return False
+    started_epoch = _spawn_entry_started_epoch(entry)
+    if not started_epoch:
+        return False
+    now = time.time()
+    if (now - started_epoch) < _CODEX_EXEC_RESUME_STALE_MIN_AGE_S:
+        return False
+    log_path = entry.get("log")
+    if not log_path:
+        return False
+    try:
+        mtime = os.stat(log_path).st_mtime
+    except OSError:
+        return False
+    return (now - mtime) >= _CODEX_EXEC_RESUME_STALE_QUIET_S
+
+
 def _retire_unresponsive_spawn_entry(entry, *, terminate=False, reason=None, caller=None):
     """Stop tracking a CCC-owned spawn whose stdin can no longer accept input."""
     if not isinstance(entry, dict):
