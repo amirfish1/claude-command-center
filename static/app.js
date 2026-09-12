@@ -3630,6 +3630,8 @@
         }
       }
       if (_codexWakePollSid === context.threadId) stopCodexWakeBreakdown(true);
+      // Native renders don't scroll, so the Last/Next buttons need a nudge.
+      updateConversationEndAffordance(context.viewEl || getConvViewForPane(context.paneId));
       updateInputBar();
       if (saved === index) _updateLastWrittenLine(paneByPaneId(context.paneId)?.conversationId);
     } finally { splitState.activeIndex = saved; }
@@ -41173,16 +41175,23 @@
   // The most recent user message in a conversation view — the anchor the "Last"
   // affordance jumps to (CCC-292). Excludes task-notification events, which are
   // rendered as user_text but aren't something the user wrote.
+  // The native Codex transcript marks user turns with its own class, and pins
+  // a sticky toolbar over the top of the pane that a jump must clear.
+  const CONV_USER_MESSAGE_SELECTOR = '.event.user_text:not(.task-notification-event), .codex-client-shell.is-inline .codex-client-message.is-user';
+  function _convReadingTop(view) {
+    const bar = view.querySelector(':scope > .codex-client-shell.is-inline .codex-client-topbar');
+    return view.getBoundingClientRect().top + (bar ? bar.offsetHeight : 0);
+  }
   function _prevUserMessageTarget(view) {
     if (!view) return null;
-    const list = view.querySelectorAll('.event.user_text:not(.task-notification-event)');
+    const list = view.querySelectorAll(CONV_USER_MESSAGE_SELECTOR);
     if (!list.length) return null;
     // The next stop when stepping up through the conversation: the latest
     // user message whose start is scrolled above the top of the pane.
     // isLast drives the button label ("Last" vs "Previous") — after jumping
     // to the last message its start sits at the pane top, so the target
     // naturally becomes the message before it (CCC-451).
-    const viewTop = view.getBoundingClientRect().top;
+    const viewTop = _convReadingTop(view);
     for (let i = list.length - 1; i >= 0; i--) {
       if (list[i].getBoundingClientRect().top < viewTop - 8) {
         return { el: list[i], isLast: i === list.length - 1 };
@@ -41193,13 +41202,13 @@
 
   function _nextUserMessageTarget(view) {
     if (!view) return null;
-    const list = view.querySelectorAll('.event.user_text:not(.task-notification-event)');
+    const list = view.querySelectorAll(CONV_USER_MESSAGE_SELECTOR);
     if (!list.length) return null;
     // Forward counterpart of _prevUserMessageTarget: the earliest user message
     // whose start sits below the pane top. The dead zone between the two
     // thresholds (-8..+20; jumps pin a message at +12) keeps the message
     // currently at the top from being its own previous/next target.
-    const viewTop = view.getBoundingClientRect().top;
+    const viewTop = _convReadingTop(view);
     for (let i = 0; i < list.length; i++) {
       if (list[i].getBoundingClientRect().top > viewTop + 20) return list[i];
     }
@@ -41558,9 +41567,8 @@
       const target = _prevUserMessageTarget(v);
       if (!target) return;
       v._pinnedToBottom = false;
-      const viewRect = v.getBoundingClientRect();
       const elRect = target.el.getBoundingClientRect();
-      const top = Math.max(0, v.scrollTop + (elRect.top - viewRect.top) - 12);
+      const top = Math.max(0, v.scrollTop + (elRect.top - _convReadingTop(v)) - 12);
       if (typeof v.scrollTo === 'function') v.scrollTo({ top, behavior: 'smooth' });
       else v.scrollTop = top;
       updateConversationEndAffordance(v);
@@ -41584,9 +41592,8 @@
       const el = _nextUserMessageTarget(v);
       if (!el) return;
       v._pinnedToBottom = false;
-      const viewRect = v.getBoundingClientRect();
       const elRect = el.getBoundingClientRect();
-      const top = Math.max(0, v.scrollTop + (elRect.top - viewRect.top) - 12);
+      const top = Math.max(0, v.scrollTop + (elRect.top - _convReadingTop(v)) - 12);
       if (typeof v.scrollTo === 'function') v.scrollTo({ top, behavior: 'smooth' });
       else v.scrollTop = top;
       updateConversationEndAffordance(v);
