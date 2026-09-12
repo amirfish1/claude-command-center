@@ -10713,14 +10713,12 @@
       // where a queued message reads as already sent and scrolls out of view.
       // Once the durable queue lists it, the tray card replaces that echo.
       // A Codex-owned queue entry is not listed, so its echo stays.
+      // Every queue poll retries the handoff, so a queue write that lands a
+      // beat after this response still retires the echo.
       const pid = pending.paneId || activePaneId();
-      syncNativeCodexQueuedInputs(pid).catch(() => {}).then(() => {
-        const tray = convPaneElById(pid)?.querySelector('.queued-steer-tray');
-        const want = _normSend(pending.text);
-        const listed = tray && Array.from(tray.querySelectorAll('[data-queued-steer-server="true"] .user-msg'))
-          .some(msg => _normSend(msg.getAttribute('data-raw-text') || msg.textContent) === want);
-        if (listed) removePendingSendEcho(pending);
-      });
+      if (!_nativeQueuedEchoes.has(pid)) _nativeQueuedEchoes.set(pid, new Set());
+      _nativeQueuedEchoes.get(pid).add(pending);
+      syncNativeCodexQueuedInputs(pid).catch(() => {});
       return;
     }
     if (!pending || !pending.entry) return;
@@ -55028,6 +55026,24 @@
   // only as a "Queued" banner with no text. Read just the in-memory queue and
   // feed the same tray every other engine uses.
   const _nativeCodexQueuedSync = new Map(); // paneId -> {promise, again}
+  const _nativeQueuedEchoes = new Map(); // paneId -> Set of queued native pending sends
+  // A message is either queued or sent, never both: once the durable queue
+  // lists it, drop its sent-looking transcript echo and the inline "Queued"
+  // banner, and let the tray card alone say it is waiting.
+  function _handOffNativeQueuedEchoes(pid, $view, queuedTexts) {
+    if (!queuedTexts.length) return;
+    $view.querySelectorAll('.conv-live-tool-inline.is-wake-status.is-queued').forEach(n => n.remove());
+    const echoes = _nativeQueuedEchoes.get(pid);
+    if (!echoes) return;
+    const listed = new Set(queuedTexts.map(text => _normSend(text)));
+    const native = window.CCCCodexClient?.inlineState?.(convPaneElById(pid));
+    echoes.forEach(pending => {
+      const alive = !native || (native.inlinePendingUserMessages || []).some(m => m.id === pending.nativeMessageId);
+      if (alive && listed.has(_normSend(pending.text))) removePendingSendEcho(pending);
+      if (!alive || listed.has(_normSend(pending.text))) echoes.delete(pending);
+    });
+    if (!echoes.size) _nativeQueuedEchoes.delete(pid);
+  }
   function syncNativeCodexQueuedInputs(paneId) {
     const pid = paneId || activePaneId();
     const slot = _nativeCodexQueuedSync.get(pid) || { promise: null, again: false };
@@ -55061,6 +55077,7 @@
       const shown = tray ? Array.from(tray.querySelectorAll('[data-queued-steer-server="true"] .user-msg'))
         .map(msg => msg.getAttribute('data-raw-text') || '') : [];
       const fresh = events.map(ev => String(ev.text));
+      _handOffNativeQueuedEchoes(pid, $view, fresh);
       // Unchanged queue: leave the cards alone so hover and focus survive polls.
       if (shown.length === fresh.length && shown.every((text, i) => text === fresh[i])) continue;
       events.forEach(ev => {

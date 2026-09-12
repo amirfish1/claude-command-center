@@ -119,3 +119,28 @@ test('a native echo the CCC queue does not list stays visible', async () => {
   });
   assert.deepEqual(removed, []);
 });
+
+test('an echo whose queue entry shows up a poll later still hands off', async () => {
+  const removed = await fixture(async () => {
+    queue = [];
+    markPendingSendQueued({ text: 'late', paneId: 'main', nativeMessageId: 'native-3' }, 'Queued');
+    await new Promise(resolve => setTimeout(resolve, 20));
+    const early = removedEchoes.slice();
+    queue = ['late'];
+    await syncNativeCodexQueuedInputs('main');
+    return { early, after: removedEchoes };
+  });
+  assert.deepEqual(removed, { early: [], after: ['native-3'] });
+});
+
+test('the inline Queued banner gives way to the tray card', async () => {
+  const banners = await fixture(async () => {
+    const banner = document.createElement('div');
+    banner.className = 'conv-live-tool-inline is-wake-status is-queued';
+    document.querySelector('.conversations-view').append(banner);
+    queue = ['parked'];
+    await syncNativeCodexQueuedInputs('main');
+    return document.querySelectorAll('.is-wake-status').length;
+  });
+  assert.equal(banners, 0);
+});
