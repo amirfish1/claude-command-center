@@ -14947,7 +14947,10 @@
     min-height: 38px; padding: 6px 9px; border-radius: 7px; gap: 6px;
     flex-wrap: nowrap;
   }
-  #queuePanel.fq-mobile .fq-working-id { flex: 0 0 38px; font-size: 11px; }
+  #queuePanel.fq-mobile .fq-working-id {
+    flex: 0 0 auto; font-size: 11px;
+    overflow: visible; text-overflow: clip;
+  }
   #queuePanel.fq-mobile .fq-working-row .fq-working-body {
     display: flex; flex-direction: column; gap: 2px; min-width: 0; flex: 1 1 auto;
   }
