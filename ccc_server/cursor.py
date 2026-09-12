@@ -15,6 +15,7 @@ import os
 import re
 import sqlite3
 import sys
+import threading
 import time
 import urllib.request
 import uuid
@@ -94,27 +95,35 @@ def _cursor_transcript_paths():
     return paths
 
 
+_CURSOR_TRANSCRIPT_INDEX_CACHE = {"root": None, "ts": 0.0, "paths": {}}
+_CURSOR_TRANSCRIPT_INDEX_TTL = 5.0
+_cursor_transcript_index_lock = threading.Lock()
+
+
+def _cursor_transcript_index():
+    """Map Cursor session IDs to transcripts, rebuilding once per short TTL."""
+    root = _core.CURSOR_PROJECTS_ROOT
+    now = time.time()
+    with _cursor_transcript_index_lock:
+        cached = _CURSOR_TRANSCRIPT_INDEX_CACHE
+        if cached["root"] == root and now - cached["ts"] < _CURSOR_TRANSCRIPT_INDEX_TTL:
+            return cached["paths"]
+        paths = {}
+        for path in _cursor_transcript_paths():
+            sid = path.parent.name
+            if sid and sid not in paths:
+                paths[sid] = path
+        cached.update(root=root, ts=now, paths=paths)
+        return paths
+
+
 def _cursor_transcript_path(session_id):
     if not session_id:
         return None
     sid = str(session_id).strip()
-    root = _core.CURSOR_PROJECTS_ROOT
-    if not sid or not root.is_dir():
+    if not sid:
         return None
-    paths = []
-    try:
-        exact = list(root.glob(f"*/agent-transcripts/{sid}/{sid}.jsonl"))
-        fallback = list(root.glob(f"*/agent-transcripts/{sid}/*.jsonl"))
-        paths = [p for p in (exact + fallback) if p.is_file()]
-    except OSError:
-        paths = []
-    if not paths:
-        return None
-    try:
-        paths.sort(key=lambda p: p.stat().st_mtime, reverse=True)
-    except OSError:
-        paths.sort(key=lambda p: str(p), reverse=True)
-    return paths[0]
+    return _cursor_transcript_index().get(sid)
 
 
 def _is_cursor_session(session_id):
@@ -1425,4 +1434,3 @@ def _extract_files_from_cursor_conversation(session_id):
     for rows in groups.values():
         rows.sort(key=lambda r: r["first_line"])
     return {"count": len(seen), "truncated": truncated, "groups": groups}
-
