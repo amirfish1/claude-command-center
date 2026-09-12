@@ -73,6 +73,21 @@ class DevinQueueTests(unittest.TestCase):
         with server._pending_resume_lock:
             self.assertEqual(server._pending_resume_queue.get(sid), ["follow up"])
 
+    def test_ask_routes_devin_cli_to_devin_resume(self):
+        """A synchronous ask must not launch a Claude resume for a Devin ID."""
+        server = importlib.import_module("server")
+        expected = {"ok": True, "text": "Devin reply", "source": "devin-resume"}
+        with mock.patch.object(server, "_detect_session_engine", return_value="devin"), \
+             mock.patch.object(server, "ask_engine_session_and_wait", return_value=expected) as ask, \
+             mock.patch.object(server, "resume_session_headless") as claude_resume:
+            result = server.ask_session_and_wait("devincli-routing-test", "follow up")
+
+        self.assertEqual(result, expected)
+        ask.assert_called_once_with(
+            "devincli-routing-test", "follow up", 30000, "devin",
+        )
+        claude_resume.assert_not_called()
+
     def test_devin_resume_watchdog_requeues_startup_failure(self):
         """A devin resume that dies at startup requeues the follow-up (OPS-807).
 

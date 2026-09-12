@@ -3592,7 +3592,7 @@ def ask_engine_session_and_wait(session_id, text, timeout_ms, engine):
 def ask_session_and_wait(session_id, text, timeout_ms=30000, cwd=None, peer_sender_sid=None):
     """Synchronously inject `text` into a session and wait for its reply.
 
-    Non-claude engines route first: codex/gemini/antigravity/hermes/opencode
+    Non-claude engines route first: codex/gemini/antigravity/hermes/opencode/devin
     go to ask_engine_session_and_wait (engine resume + stream tail); Kimi and
     Grok go to _acp_ask_and_wait (ACP session/prompt, blocks for the turn-end
     response).
@@ -3646,7 +3646,7 @@ def ask_session_and_wait(session_id, text, timeout_ms=30000, cwd=None, peer_send
         )
         if routed is not None:
             return routed
-    if engine in ("codex", "gemini", "antigravity", "hermes", "opencode"):
+    if engine in ("codex", "gemini", "antigravity", "hermes", "opencode", "devin"):
         return _core.ask_engine_session_and_wait(session_id, text, timeout_ms, engine)
     if engine in ("kimi", "grok"):
         return _core._acp_ask_and_wait(engine, session_id, text, timeout_ms)
