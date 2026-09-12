@@ -19183,8 +19183,17 @@
       return !!row.session_id
         && String(row.session_id) === String(placeholder.expected_session_id);
     }
-    if (row.session_id && placeholder.expected_session_id
-        && String(row.session_id) === String(placeholder.expected_session_id)) return true;
+    // A known target session id makes every heuristic below not just
+    // unnecessary but harmful: the prompt/cwd/recency fallback happily binds
+    // a brand-new placeholder to an OLDER session that ran the same prompt in
+    // the same repo (agent fan-outs and `ccc spawn` retries do this all the
+    // time), which deletes the placeholder seconds after it appears and hides
+    // the session that actually just started. Exact id, or its own spawn pid.
+    if (placeholder.expected_session_id) {
+      if (row.session_id
+          && String(row.session_id) === String(placeholder.expected_session_id)) return true;
+      return !!(row.spawn_pid && String(row.spawn_pid) === String(pid));
+    }
     if (row.spawn_pid && String(row.spawn_pid) === String(pid)) return true;
 
     const prompt = normalizePendingPrompt(placeholder.first_message || placeholder.display_name);
@@ -19225,6 +19234,10 @@
       }
       delete columnOverrides[placeholderId];
       delete columnOverrides[defaultPlaceholderId];
+      try {
+        _clientLog('[EXT-SPAWN] reconciled ' + placeholderId + ' -> '
+          + (resolvedSid || '?') + (placeholder.external_spawn ? ' (external)' : ''));
+      } catch (_) {}
       pendingSpawns.delete(pid);
     }
     return selectionSwap;
@@ -19616,6 +19629,10 @@
         external_spawn: true,
       });
       added++;
+      try {
+        _clientLog('[EXT-SPAWN] placeholder key=' + key + ' sid=' + (sid || '-')
+          + ' engine=' + engine + ' age=' + Math.round(Number(sp.age_s || 0)) + 's');
+      } catch (_) {}
     }
     return added;
   }
@@ -19854,6 +19871,11 @@
           }
           delete columnOverrides[placeholderId];
           delete columnOverrides[defaultPlaceholderId];
+          try {
+            _clientLog('[EXT-SPAWN] live-handoff ' + placeholderId + ' -> '
+              + ((realCard && realCard.session_id) || '?')
+              + ' inArchive=' + _hasSid(archiveData, (realCard && realCard.session_id) || ''));
+          } catch (_) {}
           pendingSpawns.delete(pid);
         }
       }
@@ -65931,6 +65953,7 @@
           inArchiveRows: _hasSid(ctx && ctx.archiveRows, sid),
           inWindowed: _hasSid(ctx && ctx.windowed, sid),
           inRowsForRender: _hasSid(ctx && ctx.rowsForRender, sid),
+          inPending: Array.from(pendingSpawns.values()).some(c => c && c.id === sid),
         };
         _clientLog('[ROW-FLICKER] disappeared sid=' + sid
           + ' lastSeenAgo=' + Math.round((now - lastSeen) / 1000) + 's'
