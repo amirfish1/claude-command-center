@@ -11135,9 +11135,40 @@ def _census_identity_map():
 
 
 _CENSUS_PROBE_CACHE = {}  # sid -> ((mtime_ns, size), probe result) — keyed like _conv_head_cache
+_CENSUS_TRANSCRIPT_PATHS_CACHE = {"key": None, "ts": 0.0, "paths": {}}
+_CENSUS_TRANSCRIPT_PATHS_TTL = 5.0
 
 
-def _census_probe_transcript(sid):
+def _census_transcript_paths(session_ids):
+    """Find transcript paths for many census rows in one project-directory pass."""
+    wanted = {str(sid or "").strip() for sid in session_ids if sid}
+    if not wanted:
+        return {}
+    root = Path(_SYS_PROJECTS_DIR)
+    key = (str(root), tuple(sorted(wanted)))
+    cached = _CENSUS_TRANSCRIPT_PATHS_CACHE
+    now = time.monotonic()
+    if cached["key"] == key and now - cached["ts"] < _CENSUS_TRANSCRIPT_PATHS_TTL:
+        return dict(cached["paths"])
+    found = {}
+    try:
+        projects = list(root.iterdir())
+    except OSError:
+        return found
+    for project in projects:
+        if not project.is_dir():
+            continue
+        for sid in wanted - found.keys():
+            candidate = project / f"{sid}.jsonl"
+            if candidate.is_file():
+                found[sid] = candidate
+        if len(found) == len(wanted):
+            break
+    _CENSUS_TRANSCRIPT_PATHS_CACHE.update(key=key, ts=now, paths=dict(found))
+    return found
+
+
+def _census_probe_transcript(sid, transcript_path=None):
     """Identity for a census-rowless live session, from its transcript head.
 
     Two populations land here: CCC's own generated helpers (auto-title bots —
@@ -11153,13 +11184,7 @@ def _census_probe_transcript(sid):
     transcript scan (con_0496274e58).
     Returns {is_helper, first_message, cwd, model} or None (no transcript)."""
     try:
-        projects = Path(_SYS_PROJECTS_DIR)
-        cand = None
-        for proj in projects.iterdir():
-            p = proj / f"{sid}.jsonl"
-            if p.is_file():
-                cand = p
-                break
+        cand = Path(transcript_path) if transcript_path else _census_transcript_paths([sid]).get(sid)
         if cand is None:
             return None
         st = cand.stat()
@@ -11299,6 +11324,12 @@ def build_session_census(since_s=None):
         identity = _census_identity_map()
     except Exception:
         identity = {}
+    try:
+        transcript_paths = _census_transcript_paths(
+            sid for sid in activity if not identity.get(sid)
+        )
+    except Exception:
+        transcript_paths = {}
     now = time.time()
     try:
         spawn_markers = _load_spawn_markers()
@@ -11325,7 +11356,7 @@ def build_session_census(since_s=None):
         ident = identity.get(sid) or {}
         helper = False
         if not ident:
-            probe = _census_probe_transcript(sid)
+            probe = _census_probe_transcript(sid, transcript_paths.get(sid))
             if probe:
                 if probe.get("is_helper"):
                     helper = True

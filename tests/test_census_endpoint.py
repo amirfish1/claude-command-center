@@ -13,6 +13,7 @@ import pathlib
 import tempfile
 import time
 import unittest
+from unittest import mock
 
 server = importlib.import_module("server")
 
@@ -253,6 +254,29 @@ class TestCensusHelperProbe(unittest.TestCase):
     def _write_transcript(self, sid, prompt):
         ev = {"type": "user", "message": {"role": "user", "content": prompt}}
         (self.proj / f"{sid}.jsonl").write_text(json.dumps(ev) + "\n")
+
+    def test_batch_transcript_lookup_scans_projects_once_for_many_sessions(self):
+        other = pathlib.Path(self._tmp.name) / "-other"
+        other.mkdir()
+        self._write_transcript("sid-a", "First task")
+        (other / "sid-b.jsonl").write_text(json.dumps({"type": "user"}) + "\n")
+        root = pathlib.Path(self._tmp.name)
+        original_iterdir = pathlib.Path.iterdir
+        root_scans = []
+
+        def counting_iterdir(path):
+            if path == root:
+                root_scans.append(path)
+            return original_iterdir(path)
+
+        with mock.patch.object(pathlib.Path, "iterdir", counting_iterdir):
+            found = server._census_transcript_paths(["sid-a", "sid-b"])
+
+        self.assertEqual(found, {
+            "sid-a": self.proj / "sid-a.jsonl",
+            "sid-b": other / "sid-b.jsonl",
+        })
+        self.assertEqual(root_scans, [root])
 
     def test_title_bot_classified_as_helper(self):
         self._write_transcript(
