@@ -4809,6 +4809,37 @@ def _codex_rollout_cwd(path):
     return str(payload.get("cwd") or "").strip()
 
 
+def _codex_thread_id_from_spawn_log(log_path, max_lines=200):
+    """Codex thread id from the head of a CCC spawn log, or "".
+
+    Codex mints its thread id at runtime, so a freshly spawned Codex session
+    sits in the spawn registry with an empty `session_id` until the registry
+    poller backfills it from this same log. A child spawned by that session in
+    the meantime would otherwise have no resolvable parent. Bounded to the head
+    of the file: `thread.started` is one of the first events of the stream.
+    """
+    if not log_path:
+        return ""
+    try:
+        with open(log_path, "r", encoding="utf-8", errors="replace") as fh:
+            for _ in range(max_lines):
+                line = fh.readline()
+                if not line:
+                    break
+                line = line.strip()
+                if not line.startswith("{"):
+                    continue
+                try:
+                    ev = json.loads(line)
+                except (json.JSONDecodeError, ValueError):
+                    continue
+                if ev.get("type") == "thread.started" and ev.get("thread_id"):
+                    return str(ev["thread_id"])
+    except OSError:
+        return ""
+    return ""
+
+
 def _codex_thread_writing_now(caller_cwd, window_s=_SPAWN_CALLER_CODEX_WINDOW_S,
                               now=None):
     """The Codex session whose rollout is being appended to right now, or "".
@@ -4890,19 +4921,25 @@ def _resolve_spawn_caller_session_id(caller_pids, caller_cwd=""):
 
     # 2. CCC's own spawn registry — covers every engine CCC launched itself.
     spawn_by_pid = {}
+    # Entries CCC started but whose session id has not been backfilled yet
+    # (Codex). Read from their log only if such a pid is actually an ancestor.
+    pending_log_by_pid = {}
     try:
         for entry in (_core._load_spawn_registry() or []):
             if not isinstance(entry, dict):
                 continue
-            sid = str(entry.get("session_id") or entry.get("resumed_sid") or "").strip()
-            if not sid:
-                continue
             try:
-                spawn_by_pid[int(entry.get("pid"))] = sid
+                entry_pid = int(entry.get("pid"))
             except (TypeError, ValueError):
                 continue
+            sid = str(entry.get("session_id") or entry.get("resumed_sid") or "").strip()
+            if sid:
+                spawn_by_pid[entry_pid] = sid
+            elif entry_pid in pid_set and entry.get("log"):
+                pending_log_by_pid[entry_pid] = entry.get("log")
     except Exception:
         spawn_by_pid = {}
+        pending_log_by_pid = {}
 
     # 3. Live engine CLIs whose resume args name the session (codex exec
     #    --resume, gemini, cursor, grok). One shared, TTL-memoised ps scan.
@@ -4934,6 +4971,10 @@ def _resolve_spawn_caller_session_id(caller_pids, caller_cwd=""):
     for pid in pids:
         for table in (claude_by_pid, spawn_by_pid, resume_by_pid):
             sid = table.get(pid)
+            if sid:
+                return sid
+        if pid in pending_log_by_pid:
+            sid = _codex_thread_id_from_spawn_log(pending_log_by_pid[pid])
             if sid:
                 return sid
 
