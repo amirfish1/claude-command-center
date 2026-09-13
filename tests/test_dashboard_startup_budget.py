@@ -87,7 +87,8 @@ def test_optional_startup_reads_wait_for_archive_then_use_the_four_slot_pool():
     assert "const _startupDeferredApiReads = []" in SOURCE
     assert "function _releaseStartupApiReads()" in source
     assert "_startupDeferredApiReads.push" in source
-    assert "backgroundApiFetch(task.input, task.init)" in source
+    assert "send(task.input, task.init)" in source
+    assert "_startupReplaysDirect(task.input, task.init) ? _startupBaseFetch : backgroundApiFetch" in source
     assert "'/api/conversations/list'" in source
     assert "window.fetch = startupBudgetedFetch" in source
     assert "addEventListener('pointerdown', _releaseStartupApiReads" in source

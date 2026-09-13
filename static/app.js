@@ -2459,30 +2459,47 @@
   // background pool. Mutations and conversation/session reads always bypass.
   // (State lives above the archive bootstrap fetch; see _startupDeferredApiReads.)
 
-  function _startupCriticalApiRead(input, init) {
+  // Best-effort beacons the client fires during boot. They are POSTs, so
+  // the method check below would wave them through; each one still costs
+  // a server thread and a GIL slice next to the archive list build.
+  const _startupDeferrableBeacons = ['/api/telemetry/heartbeat', '/api/client-log'];
+  // Composer catalogs. Deferred like any other background read, these two
+  // raced abortBackgroundApiReadsForSpawn(): the first pointerdown anywhere
+  // (e.g. clicking New session) released them into the abortable
+  // backgroundApiFetch pool, then that same click's `click` handler
+  // aborted the pool before the response came back. loadSpawnDefaults()
+  // swallowed the AbortError and latched _spawnDefaultsLoaded=true with
+  // the model default still empty, so the composer fell back to
+  // MODEL_OPTIONS_BY_ENGINE[engine][0] (fable-5, the priciest tier) for
+  // the rest of the tab's life. They now wait for the rows like everything
+  // else but replay through the plain fetch, outside the abortable pool.
+  const _startupDirectReplayPaths = ['/api/spawn-defaults', '/api/model-picker/picks'];
+  function _startupApiPath(input, init) {
     const rawUrl = typeof input === 'string' ? input : (input && input.url) || '';
     const method = String((init && init.method) || (input && input.method) || 'GET').toUpperCase();
-    if (method !== 'GET') return true;
     let parsed;
-    try { parsed = new URL(rawUrl, window.location.origin); } catch (_) { return true; }
-    if (parsed.origin !== window.location.origin || !parsed.pathname.startsWith('/api/')) return true;
+    try { parsed = new URL(rawUrl, window.location.origin); } catch (_) { return null; }
+    if (parsed.origin !== window.location.origin || !parsed.pathname.startsWith('/api/')) return null;
+    return { method, pathname: parsed.pathname };
+  }
+  function _startupPathMatches(pathname, prefixes) {
+    return prefixes.some(prefix => pathname === prefix || pathname.startsWith(prefix + '/'));
+  }
+  function _startupCriticalApiRead(input, init) {
+    const req = _startupApiPath(input, init);
+    if (!req) return true;
+    if (req.method !== 'GET') return !_startupPathMatches(req.pathname, _startupDeferrableBeacons);
     const criticalPaths = [
       '/api/conversations/list', '/api/conversations', '/api/sessions',
       '/api/config', '/api/features', '/api/loading-status',
       '/api/archive/loading-status',
-      // Deferred like any other background read, these two raced
-      // abortBackgroundApiReadsForSpawn(): the first pointerdown anywhere
-      // (e.g. clicking New session) released them into the abortable
-      // backgroundApiFetch pool, then that same click's `click` handler
-      // aborted the pool before the response came back. loadSpawnDefaults()
-      // swallowed the AbortError and latched _spawnDefaultsLoaded=true with
-      // the model default still empty, so the composer fell back to
-      // MODEL_OPTIONS_BY_ENGINE[engine][0] (fable-5, the priciest tier) for
-      // the rest of the tab's life. Keeping them off the deferred queue lets
-      // them fetch immediately at load instead of racing the first click.
-      '/api/spawn-defaults', '/api/model-picker/picks',
     ];
-    return criticalPaths.some(prefix => parsed.pathname === prefix || parsed.pathname.startsWith(prefix + '/'));
+    return _startupPathMatches(req.pathname, criticalPaths);
+  }
+  function _startupReplaysDirect(input, init) {
+    const req = _startupApiPath(input, init);
+    if (!req) return true;
+    return req.method !== 'GET' || _startupPathMatches(req.pathname, _startupDirectReplayPaths);
   }
 
   function startupBudgetedFetch(input, init) {
@@ -2500,7 +2517,8 @@
     clearTimeout(_startupApiReleaseTimer);
     const queued = _startupDeferredApiReads.splice(0);
     queued.forEach(task => {
-      backgroundApiFetch(task.input, task.init).then(task.resolve, task.reject);
+      const send = _startupReplaysDirect(task.input, task.init) ? _startupBaseFetch : backgroundApiFetch;
+      send(task.input, task.init).then(task.resolve, task.reject);
     });
   }
 
