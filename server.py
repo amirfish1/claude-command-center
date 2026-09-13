@@ -24184,6 +24184,10 @@ def _spawn_stream_idle_sleep_s(consecutive_empty):
     return min(0.05 * (1.3 ** exponent), 0.25)
 
 
+# gzip bodies of static assets, keyed by (path, mtime_ns, size). Bounded.
+_STATIC_GZIP_CACHE = {}
+
+
 class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
     def _is_morning_path(self, path):
         """True if the request targets the (opt-in) Morning sub-feature."""
@@ -26452,22 +26456,7 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
             if not resolved.is_file():
                 self.send_json({"error": f"not found: {path}"}, 404)
             else:
-                try:
-                    body = resolved.read_bytes()
-                except OSError as e:
-                    self.send_json({"error": str(e)}, 500)
-                    return
-                ct = static_ct_map[ext]
-                body, enc = self._maybe_gzip(body, ct)
-                self.send_response(200)
-                self.send_header("Content-Type", ct)
-                self.send_header("Cache-Control", "no-store, must-revalidate")
-                self.send_header("Content-Length", str(len(body)))
-                if enc:
-                    self.send_header("Content-Encoding", enc)
-                    self.send_header("Vary", "Accept-Encoding")
-                self.end_headers()
-                self.wfile.write(body)
+                self._send_static_asset(resolved, static_ct_map[ext], parsed.query)
         elif path == "/throughput.html" or path == "/throughput":
             try:
                 body = (STATIC_DIR / "throughput.html").read_bytes()
@@ -34941,6 +34930,59 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
             return gzip.compress(body, compresslevel=5), "gzip"
         except Exception:
             return body, None
+
+    def _send_static_asset(self, resolved, ct, query=""):
+        """Serve one allow-listed static file with an ETag.
+
+        index.html stamps asset URLs with the file mtime (_static_asset_url),
+        so a stamped URL can be cached for a year: any edit changes the URL.
+        A bare URL revalidates on every load and gets a 304 when unchanged.
+        `no-store` used to force the 3.9 MB app.js down the wire, through
+        gzip and through a full parse on every boot, and it also disables
+        the browser's compiled-code cache for the script.
+        """
+        try:
+            st = resolved.stat()
+        except OSError as e:
+            self.send_json({"error": str(e)}, 500)
+            return
+        stamp = str(int(st.st_mtime))
+        etag = f'"{stamp}-{st.st_size}"'
+        stamped = stamp in urllib.parse.parse_qs(query or "").get("v", [])
+        cache_control = "private, max-age=31536000, immutable" if stamped else "private, no-cache"
+        inm = self.headers.get("If-None-Match", "") or ""
+        if etag in [tag.strip() for tag in inm.split(",")]:
+            self.send_response(304)
+            self.send_header("ETag", etag)
+            self.send_header("Cache-Control", cache_control)
+            self.end_headers()
+            return
+        try:
+            body = resolved.read_bytes()
+        except OSError as e:
+            self.send_json({"error": str(e)}, 500)
+            return
+        key = (str(resolved), st.st_mtime_ns, st.st_size)
+        cached = _STATIC_GZIP_CACHE.get(key)
+        accepts_gzip = "gzip" in (self.headers.get("Accept-Encoding", "") or "").lower()
+        if cached is not None and accepts_gzip:
+            body, enc = cached, "gzip"
+        else:
+            body, enc = self._maybe_gzip(body, ct)
+            if enc:
+                if len(_STATIC_GZIP_CACHE) >= 32:
+                    _STATIC_GZIP_CACHE.clear()
+                _STATIC_GZIP_CACHE[key] = body
+        self.send_response(200)
+        self.send_header("Content-Type", ct)
+        self.send_header("Cache-Control", cache_control)
+        self.send_header("ETag", etag)
+        self.send_header("Content-Length", str(len(body)))
+        if enc:
+            self.send_header("Content-Encoding", enc)
+            self.send_header("Vary", "Accept-Encoding")
+        self.end_headers()
+        self.wfile.write(body)
 
     def send_html(self, content):
         # There is no server-wide repo. Keep the attribute for older JS paths,
