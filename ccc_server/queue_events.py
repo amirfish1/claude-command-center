@@ -579,7 +579,8 @@ def _queue_worker_config_issue(plan):
             return None
         if model and not cfg.is_approved_model(engine, model):
             choices = ", ".join(cfg.approved_models(engine))
-            return f"configured model {model!r} is not approved for {engine} (approved: {choices})"
+            return (f"configured model {model!r} is not approved by WatchTower's "
+                    f"model catalog for {engine} (approved: {choices})")
         if effort and not cfg.is_approved_effort(engine, model, effort):
             supported = cfg.approved_efforts(engine, model)
             label = model or f"{engine} default model"
@@ -2022,10 +2023,16 @@ def resume_session_codex(
     if not resolved["available"]:
         return {"ok": False, "error": resolved["reason"], "code": resolved.get("code")}
     active_resume_entry = None
-    for s in _core._spawned_sessions:
+    for s in list(_core._spawned_sessions):
         if s.get("engine") == "codex" and s.get("resumed_sid") == session_id:
             try:
                 if _core._poll_spawn_entry(s) is None:
+                    if _core._codex_exec_resume_entry_is_stale(s):
+                        _core._retire_unresponsive_spawn_entry(
+                            s, terminate=True, reason="exec_resume_wedged",
+                            caller="resume_session_codex",
+                        )
+                        continue
                     active_resume_entry = s
                     break
             except Exception:
@@ -2052,7 +2059,15 @@ def resume_session_codex(
     reasoning_effort = (override or {}).get("reasoning_effort") or ""
     model = override_model or os.environ.get("CCC_CODEX_MODEL") or row.get("model") or _core._spawn_fallback_model_for_engine("codex")
     if override_model:
-        model, model_error = _core._validate_codex_model(model, require_available=True)
+        # A session that began on a policy-blocked model only got here after
+        # the user confirmed that one explicit choice. Keep that confirmation
+        # with the override, rather than rejecting the same model on every
+        # later wake.
+        model, model_error = _core._validate_codex_model(
+            model,
+            require_available=True,
+            confirm_blocked=bool((override or {}).get("policy_confirmed")),
+        )
         if model_error:
             return {
                 "ok": False,
@@ -2075,6 +2090,13 @@ def resume_session_codex(
         "codex_wake_attempt", sid=session_id,
         cwd=cwd, model=model, effort=reasoning_effort, steer=bool(steer),
     )
+    from ccc_server.codex_client import resume_desktop_conversation
+    desktop_result = resume_desktop_conversation(
+        session_id, text, cwd=cwd, model=model, effort=reasoning_effort,
+        image_paths=image_paths, steer=steer, action_id=idempotency_key,
+    )
+    if desktop_result is not None and desktop_result.get("fallback") != "queue":
+        return desktop_result
     if steer:
         return _core._codex_steer_via_app_server(
             session_id,
@@ -2083,7 +2105,7 @@ def resume_session_codex(
             model=model,
             image_paths=image_paths,
         )
-    app_result = _core._codex_resume_or_steer_via_app_server(
+    app_result = desktop_result if desktop_result is not None else _core._codex_resume_or_steer_via_app_server(
         session_id,
         text,
         cwd=cwd,

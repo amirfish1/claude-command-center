@@ -2977,6 +2977,9 @@ def spawn_session_devin(prompt, name=None, cwd=None, repo_path=None, worktree=Fa
     Devin encodes reasoning effort in the model uid (claude-opus-5-max,
     gpt-5-6-sol-low, etc.). ``_devin_resolve_model`` maps the user's
     selected base model + reasoning_effort to the concrete uid.
+
+    If ``worktree=True``, create a fresh git worktree off the launch cwd and
+    run Devin there rather than in the coordinator's linked worktree.
     """
     prompt = _core._strip_ccc_session_state_instruction(prompt)
     resolved = _core._resolve_devin_bin()
@@ -2997,6 +3000,18 @@ def spawn_session_devin(prompt, name=None, cwd=None, repo_path=None, worktree=Fa
     log_dir = _core.repo_log_dir(repo_for_logs)
     log_dir.mkdir(parents=True, exist_ok=True)
     log_path = log_dir / log_filename
+
+    worktree_path = None
+    worktree_branch = None
+    if worktree:
+        try:
+            worktree_path, worktree_branch = _core._create_worktree_for_spawn(
+                spawn_cwd, session_name,
+            )
+            spawn_cwd = worktree_path
+        except RuntimeError as e:
+            return {"ok": False, "error": f"worktree creation failed: {e}"}
+
     cmd = [
         resolved["bin"],
         "--permission-mode", os.environ.get("CCC_DEVIN_PERMISSION_MODE", "dangerous"),
@@ -3006,6 +3021,8 @@ def spawn_session_devin(prompt, name=None, cwd=None, repo_path=None, worktree=Fa
         cmd.extend(["--model", model_to_use])
     cmd.extend(["-p", prompt])
     log_fh = open(log_path, "w")
+    if worktree_path:
+        _core._run_worktree_init_hook(worktree_path, ctx["repo_path"], session_name, log_fh)
     try:
         proc = subprocess.Popen(
             cmd,
@@ -3055,11 +3072,11 @@ def spawn_session_devin(prompt, name=None, cwd=None, repo_path=None, worktree=Fa
         parent_session_id=parent_session_id,
         reasoning_effort=reasoning_effort or "",
     )
-    return _finalize_spawn_response(
-        {"ok": True, "pid": proc.pid, "name": session_name, "log": str(log_path)},
-        entry,
-        ctx,
-    )
+    resp = {"ok": True, "pid": proc.pid, "name": session_name, "log": str(log_path)}
+    if worktree_path:
+        resp["worktree_path"] = worktree_path
+        resp["worktree_branch"] = worktree_branch
+    return _finalize_spawn_response(resp, entry, ctx)
 
 
 # A one-shot `devin --resume -p` can fail at startup several seconds AFTER
@@ -4749,6 +4766,256 @@ def _normalize_spawn_parent_session_id(payload, report_to=None):
             "(8-128 chars, letters/digits/_.- only)"
         )
     return raw, None
+
+
+# ---------------------------------------------------------------------------
+# Caller attribution for API/CLI spawns
+# ---------------------------------------------------------------------------
+# A spawn started from the dashboard carries its parent explicitly. A spawn
+# started by an AGENT running `ccc spawn` usually cannot: only Claude Code
+# exports a session id to its shell children (CLAUDE_CODE_SESSION_ID), so a
+# Codex/Gemini session's spawns landed with a blank parent and never showed up
+# in the orchestrator's lane map.
+#
+# The `ccc` CLI ships its PID ancestry instead (`caller_pids`, innermost
+# first). Everything below turns that into a session id using state CCC already
+# keeps. Deliberately conservative: every lookup is exact except the Codex
+# app-server fallback, which resolves only when exactly one candidate remains.
+# A miss returns "" and the spawn proceeds un-attributed — the status quo.
+
+# How recently a Codex rollout must have been written to count as "this is the
+# thread that just shelled out". A tool call appends to the rollout as it runs,
+# so the calling thread's file is being written within a second or two of the
+# request; anything older is a different conversation.
+_SPAWN_CALLER_CODEX_WINDOW_S = 30.0
+_SPAWN_CALLER_MAX_PIDS = 24
+_CODEX_ROLLOUT_SID_RE = re.compile(
+    r"^rollout-\d{4}-\d{2}-\d{2}T[\d-]+-([0-9a-fA-F-]{32,40})\.jsonl$"
+)
+
+
+def _clean_caller_pids(raw):
+    """Sanitise a client-supplied PID ancestry into ints, innermost first."""
+    if not isinstance(raw, (list, tuple)):
+        return []
+    out = []
+    for item in raw[:_SPAWN_CALLER_MAX_PIDS]:
+        try:
+            pid = int(item)
+        except (TypeError, ValueError):
+            continue
+        if pid > 1 and pid not in out:
+            out.append(pid)
+    return out
+
+
+def _codex_rollout_cwd(path):
+    """cwd from a rollout's `session_meta` record (its first line)."""
+    try:
+        with open(path, "r", encoding="utf-8", errors="replace") as fh:
+            head = fh.readline()
+    except OSError:
+        return ""
+    try:
+        rec = json.loads(head)
+    except (json.JSONDecodeError, ValueError):
+        return ""
+    payload = rec.get("payload") if isinstance(rec, dict) else None
+    if not isinstance(payload, dict):
+        return ""
+    return str(payload.get("cwd") or "").strip()
+
+
+def _codex_thread_id_from_spawn_log(log_path, max_lines=200):
+    """Codex thread id from the head of a CCC spawn log, or "".
+
+    Codex mints its thread id at runtime, so a freshly spawned Codex session
+    sits in the spawn registry with an empty `session_id` until the registry
+    poller backfills it from this same log. A child spawned by that session in
+    the meantime would otherwise have no resolvable parent. Bounded to the head
+    of the file: `thread.started` is one of the first events of the stream.
+    """
+    if not log_path:
+        return ""
+    try:
+        with open(log_path, "r", encoding="utf-8", errors="replace") as fh:
+            for _ in range(max_lines):
+                line = fh.readline()
+                if not line:
+                    break
+                line = line.strip()
+                if not line.startswith("{"):
+                    continue
+                try:
+                    ev = json.loads(line)
+                except (json.JSONDecodeError, ValueError):
+                    continue
+                if ev.get("type") == "thread.started" and ev.get("thread_id"):
+                    return str(ev["thread_id"])
+    except OSError:
+        return ""
+    return ""
+
+
+def _codex_thread_writing_now(caller_cwd, window_s=_SPAWN_CALLER_CODEX_WINDOW_S,
+                              now=None):
+    """The Codex session whose rollout is being appended to right now, or "".
+
+    Every CCC-managed Codex conversation multiplexes through ONE shared
+    app-server process, so PID ancestry can only prove "a Codex thread called
+    this" — never which one. The rollout file can: the thread that is running a
+    tool call is, by definition, the thread writing its transcript. Scoped to
+    today's rollout directory (and yesterday's, for a call that straddles
+    midnight) so this is a listing of a few files, never a corpus scan.
+
+    Returns "" when zero or several threads qualify — an ambiguous guess here
+    would attach a lane to the wrong orchestrator, which is worse than none.
+    """
+    now = time.time() if now is None else now
+    root = Path(os.path.expanduser("~/.codex/sessions"))
+    if not root.is_dir():
+        return ""
+    candidates = []
+    for offset in (0, 86400):
+        day = time.localtime(now - offset)
+        day_dir = root / time.strftime("%Y/%m/%d", day)
+        if not day_dir.is_dir():
+            continue
+        try:
+            entries = list(day_dir.iterdir())
+        except OSError:
+            continue
+        for f in entries:
+            m = _CODEX_ROLLOUT_SID_RE.match(f.name)
+            if not m:
+                continue
+            try:
+                st = f.stat()
+            except OSError:
+                continue
+            if (now - st.st_mtime) > window_s:
+                continue
+            candidates.append((m.group(1), f, st.st_mtime))
+    if not candidates:
+        return ""
+    if len(candidates) > 1 and caller_cwd:
+        want = os.path.normpath(os.path.expanduser(caller_cwd))
+        narrowed = [
+            c for c in candidates
+            if os.path.normpath(_codex_rollout_cwd(c[1]) or "") == want
+        ]
+        if narrowed:
+            candidates = narrowed
+    if len(candidates) != 1:
+        return ""
+    return candidates[0][0]
+
+
+def _resolve_spawn_caller_session_id(caller_pids, caller_cwd=""):
+    """Session id of the agent session that invoked `ccc spawn`, or "".
+
+    Walks the ancestry innermost-first so the NEAREST enclosing session wins
+    (a session that spawned a session that shells out attributes to the inner
+    one). Each source is exact; see the module note above for the one
+    heuristic, which self-disqualifies when ambiguous.
+    """
+    pids = _clean_caller_pids(caller_pids)
+    if not pids:
+        return ""
+    pid_set = set(pids)
+
+    # 1. Claude's own registry (~/.claude/sessions/<pid>.json) — authoritative
+    #    pid -> sessionId, already staleness-filtered against live processes.
+    claude_by_pid = {}
+    try:
+        for sid, meta in (_core._load_session_registry() or {}).items():
+            try:
+                claude_by_pid[int((meta or {}).get("pid"))] = sid
+            except (TypeError, ValueError):
+                continue
+    except Exception:
+        claude_by_pid = {}
+
+    # 2. CCC's own spawn registry — covers every engine CCC launched itself.
+    spawn_by_pid = {}
+    # Entries CCC started but whose session id has not been backfilled yet
+    # (Codex). Read from their log only if such a pid is actually an ancestor.
+    pending_log_by_pid = {}
+    try:
+        for entry in (_core._load_spawn_registry() or []):
+            if not isinstance(entry, dict):
+                continue
+            try:
+                entry_pid = int(entry.get("pid"))
+            except (TypeError, ValueError):
+                continue
+            sid = str(entry.get("session_id") or entry.get("resumed_sid") or "").strip()
+            if sid:
+                spawn_by_pid[entry_pid] = sid
+            elif entry_pid in pid_set and entry.get("log"):
+                pending_log_by_pid[entry_pid] = entry.get("log")
+    except Exception:
+        spawn_by_pid = {}
+        pending_log_by_pid = {}
+
+    # 3. Live engine CLIs whose resume args name the session (codex exec
+    #    --resume, gemini, cursor, grok). One shared, TTL-memoised ps scan.
+    resume_by_pid = {}
+    codex_pids = set()
+    try:
+        for pid_s, _tty, comm, args in (_core._scan_engine_processes() or []):
+            try:
+                pid = int(pid_s)
+            except (TypeError, ValueError):
+                continue
+            if pid not in pid_set:
+                continue
+            first = (args.split(None, 1)[0] if args else "") or comm
+            if "codex" in os.path.basename(str(first or "")):
+                codex_pids.add(pid)
+            for engine in ("codex", "gemini", "cursor", "grok"):
+                for tok in (args or "").split():
+                    if len(tok) >= 16 and _core._command_targets_engine_session(
+                        args, tok, engine
+                    ):
+                        resume_by_pid.setdefault(pid, tok)
+                        break
+                if pid in resume_by_pid:
+                    break
+    except Exception:
+        pass
+
+    for pid in pids:
+        for table in (claude_by_pid, spawn_by_pid, resume_by_pid):
+            sid = table.get(pid)
+            if sid:
+                return sid
+        if pid in pending_log_by_pid:
+            sid = _codex_thread_id_from_spawn_log(pending_log_by_pid[pid])
+            if sid:
+                return sid
+
+    # 4. Shared Codex app-server: ancestry proves "a Codex process", not which
+    #    conversation. Fall back to the one whose transcript is live right now.
+    resolved = ""
+    if codex_pids:
+        try:
+            resolved = _codex_thread_writing_now(caller_cwd)
+        except Exception:
+            resolved = ""
+    # One line per spawn (a rare event), and the only way to tell the three
+    # failure modes apart after the fact: no ancestry shipped, no Codex
+    # ancestor found, or an ambiguous "which thread is writing" narrowing.
+    if not resolved:
+        try:
+            _core._log_activity(
+                "spawn", "CALLER_PARENT_MISS",
+                "pids=%s codex_pids=%s cwd=%s"
+                % (pids[:8], sorted(codex_pids)[:4] if codex_pids else [], caller_cwd),
+            )
+        except Exception:
+            pass
+    return resolved
 
 
 def _parent_session_id_from_return_address_text(text):
@@ -6610,6 +6877,40 @@ def _cleanup_finished_entry(entry):
         except OSError:
             pass
         entry["log_fh"] = None
+
+
+_CODEX_EXEC_RESUME_STALE_MIN_AGE_S = 600.0
+_CODEX_EXEC_RESUME_STALE_QUIET_S = 600.0
+
+
+def _codex_exec_resume_entry_is_stale(entry):
+    """True once a `codex exec resume` fallback child looks wedged forever.
+
+    Unlike a long-lived headless spawn, this is a one-shot CLI call that talks
+    to a single app-server socket and should finish in seconds to a few
+    minutes. There is no legitimate reason for its log to sit silent for ten
+    minutes straight — that means the app-server it was talking to is gone
+    and the process is blocked on a dead socket for good. Left unchecked this
+    corpse still passes `_poll_spawn_entry` as "running", so every later send
+    to the same thread queues forever behind it (observed: one such hang held
+    a thread wedged for over an hour at 0% CPU).
+    """
+    if not isinstance(entry, dict):
+        return False
+    started_epoch = _spawn_entry_started_epoch(entry)
+    if not started_epoch:
+        return False
+    now = time.time()
+    if (now - started_epoch) < _CODEX_EXEC_RESUME_STALE_MIN_AGE_S:
+        return False
+    log_path = entry.get("log")
+    if not log_path:
+        return False
+    try:
+        mtime = os.stat(log_path).st_mtime
+    except OSError:
+        return False
+    return (now - mtime) >= _CODEX_EXEC_RESUME_STALE_QUIET_S
 
 
 def _retire_unresponsive_spawn_entry(entry, *, terminate=False, reason=None, caller=None):

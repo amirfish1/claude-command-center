@@ -1,0 +1,1 @@
+First-run composer / engine / send steps now open New session and show the live input bar. Previously a first visit with no session kept the composer hidden, so those steps silently fell back to the New session button.

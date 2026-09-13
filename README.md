@@ -498,13 +498,13 @@ the UI uses for the kanban.
   sessions" triage band (last 5h), so structure and live activity stay
   side by side.
 
-## Codex workspace
+## Codex conversations
 
-Open a Codex conversation and choose **Workspace** for a readable conversation,
-inline approvals, terminal tools, and categorized app-server actions. Capability
-availability follows the installed Codex version and connected host. Live actions
-require CCC's app-server bridge; a desktop app may not expose an attachable endpoint.
-See the [Codex workspace guide](docs/codex-workspace.md) for setup boundaries,
+Codex conversations use the existing CCC pane and composer, with a richer native
+transcript, inline approvals, and integrated tools. Capability availability
+follows the installed Codex version and connected host. Existing desktop-owned
+tasks connect through their desktop owner when available.
+See the [Codex conversation guide](docs/codex-workspace.md) for connection limits,
 preview features, queue ownership, and verification coverage.
 
 ## Engine support

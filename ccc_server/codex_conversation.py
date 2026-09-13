@@ -185,7 +185,10 @@ class CodexConversationStore:
         """Merge a read taken after before_seq without overwriting newer events."""
         if not isinstance(thread, dict) or not isinstance(thread.get("id"), str) or not 1 <= len(thread["id"]) <= 256:
             raise ValueError("Thread snapshot requires an id")
-        bounded, clipped = self._bounded(thread)
+        bounded, clipped = self._bounded({k: v for k, v in thread.items() if k != "turns"})
+        history = thread.get("turns") or []
+        if not isinstance(history, list): raise ValueError("Thread turns must be a list")
+        clipped |= len(history) > self._max_turns
         with self._lock:
             if generation is not None and generation != self._generation:
                 return False
@@ -197,7 +200,7 @@ class CodexConversationStore:
             self._metadata(target, target, {k: v for k, v in bounded.items() if k != "turns"},
                            before_seq, before_seq=before_seq)
             history_order = []
-            for raw in bounded.get("turns") or []:
+            for raw in history[-self._max_turns:]:
                 if not isinstance(raw, dict) or not isinstance(raw.get("id"), str) or not 1 <= len(raw["id"]) <= 256:
                     continue
                 turn_id = raw["id"]
@@ -205,15 +208,20 @@ class CodexConversationStore:
                 turn = self._turn(target, turn_id)
                 # Events observed while the read was in flight win over a
                 # snapshot's older turn lifecycle as well as its older text.
-                self._metadata(target, turn, {k: v for k, v in raw.items() if k != "items"},
-                               before_seq, before_seq=before_seq)
-                for item in raw.get("items") or []:
+                turn_meta, clipped = self._bounded({k: v for k, v in raw.items() if k != "items"})
+                target["truncated"] |= clipped
+                self._metadata(target, turn, turn_meta, before_seq, before_seq=before_seq)
+                raw_items = raw.get("items") or []
+                if not isinstance(raw_items, list): continue
+                target["truncated"] |= len(raw_items) > self._max_items
+                for item in raw_items[-self._max_items:]:
                     if not isinstance(item, dict):
                         continue
                     existing = turn["items"].get(item.get("id"))
                     if existing is None or existing["seq"] <= before_seq:
                         self._put_item(target, turn, item, complete=raw.get("status") in
                                        ("completed", "failed", "interrupted"), seq=before_seq)
+                self._trim(target)
             ordered = [key for key in history_order if key in target["turns"]]
             ordered += [key for key in target["turns"] if key not in ordered]
             target["turns"] = OrderedDict((key, target["turns"][key]) for key in ordered)

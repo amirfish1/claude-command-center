@@ -4770,12 +4770,35 @@ def _load_session_overrides():
     return data if isinstance(data, dict) else {}
 
 
+_SESSION_OVERRIDES_WRITE_LOCK = threading.Lock()
+
+
 def _save_session_overrides(overrides):
+    """Write overrides atomically while `_mutate_session_overrides` holds its lock."""
     SESSION_OVERRIDES_FILE.parent.mkdir(parents=True, exist_ok=True)
-    tmp = SESSION_OVERRIDES_FILE.with_suffix(".json.tmp")
-    with open(tmp, "w") as f:
-        json.dump(overrides, f, indent=2, sort_keys=True)
-    tmp.replace(SESSION_OVERRIDES_FILE)
+    tmp = SESSION_OVERRIDES_FILE.with_suffix(f".json.{uuid.uuid4().hex}.tmp")
+    try:
+        with open(tmp, "w") as f:
+            json.dump(overrides, f, indent=2, sort_keys=True)
+        os.replace(tmp, SESSION_OVERRIDES_FILE)
+    finally:
+        tmp.unlink(missing_ok=True)
+
+
+def _mutate_session_overrides(mutator):
+    """Atomically load, mutate, and save overrides across CCC processes."""
+    with _SESSION_OVERRIDES_WRITE_LOCK:
+        SESSION_OVERRIDES_FILE.parent.mkdir(parents=True, exist_ok=True)
+        lock_path = SESSION_OVERRIDES_FILE.with_suffix(".lock")
+        with open(lock_path, "w") as lock_file:
+            fcntl.flock(lock_file, fcntl.LOCK_EX)
+            try:
+                overrides = _load_session_overrides()
+                result = mutator(overrides)
+                _save_session_overrides(overrides)
+                return result
+            finally:
+                fcntl.flock(lock_file, fcntl.LOCK_UN)
 
 
 def _load_auto_handover_flags():
@@ -4995,24 +5018,34 @@ CODEX_REASONING_EFFORTS = {"", "low", "medium", "high", "xhigh"}
 CLAUDE_REASONING_EFFORTS = {"", "low", "medium", "high", "xhigh", "max"}
 
 
-def _set_session_override(session_id, model, context_1m, engine, reasoning_effort=""):
-    overrides = _load_session_overrides()
+def _set_session_override(
+    session_id, model, context_1m, engine, reasoning_effort="", *,
+    policy_confirmed=False,
+):
     engine = str(engine or "claude")
-    overrides[session_id] = {
+    entry = {
         "model": str(model),
         "context_1m": _model_context_1m_allowed(model, context_1m, engine),
         "engine": engine,
         "reasoning_effort": str(reasoning_effort or ""),
+        # A blocked model can only reach a spawn after the user explicitly
+        # confirms the policy warning. Preserve that receipt with this
+        # session's chosen model so a later resume does not ask again.
+        "policy_confirmed": bool(policy_confirmed),
         "set_at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
     }
-    _save_session_overrides(overrides)
+
+    def mutate(overrides):
+        overrides[session_id] = entry
+
+    _mutate_session_overrides(mutate)
 
 
 def _clear_session_override(session_id):
-    overrides = _load_session_overrides()
-    if session_id in overrides:
-        del overrides[session_id]
-        _save_session_overrides(overrides)
+    def mutate(overrides):
+        overrides.pop(session_id, None)
+
+    _mutate_session_overrides(mutate)
 
 
 def _short_model_alias(model):
@@ -8590,6 +8623,11 @@ def _spawn_request_reasoning_effort(payload, engine):
     payload = payload if isinstance(payload, dict) else {}
     if "reasoning_effort" in payload or "effort" in payload:
         value = payload.get("reasoning_effort") if "reasoning_effort" in payload else payload.get("effort")
+    elif engine == "devin":
+        # Devin encodes effort in the selected model UID.  Applying the
+        # global default here would rewrite an explicit `...-max` model to
+        # the default's sibling variant (usually `...-high`).
+        value = ""
     else:
         defaults = _load_spawn_defaults()
         value = defaults.get("reasoning_effort") or ""
@@ -11128,9 +11166,40 @@ def _census_identity_map():
 
 
 _CENSUS_PROBE_CACHE = {}  # sid -> ((mtime_ns, size), probe result) — keyed like _conv_head_cache
+_CENSUS_TRANSCRIPT_PATHS_CACHE = {"key": None, "ts": 0.0, "paths": {}}
+_CENSUS_TRANSCRIPT_PATHS_TTL = 5.0
 
 
-def _census_probe_transcript(sid):
+def _census_transcript_paths(session_ids):
+    """Find transcript paths for many census rows in one project-directory pass."""
+    wanted = {str(sid or "").strip() for sid in session_ids if sid}
+    if not wanted:
+        return {}
+    root = Path(_SYS_PROJECTS_DIR)
+    key = (str(root), tuple(sorted(wanted)))
+    cached = _CENSUS_TRANSCRIPT_PATHS_CACHE
+    now = time.monotonic()
+    if cached["key"] == key and now - cached["ts"] < _CENSUS_TRANSCRIPT_PATHS_TTL:
+        return dict(cached["paths"])
+    found = {}
+    try:
+        projects = list(root.iterdir())
+    except OSError:
+        return found
+    for project in projects:
+        if not project.is_dir():
+            continue
+        for sid in wanted - found.keys():
+            candidate = project / f"{sid}.jsonl"
+            if candidate.is_file():
+                found[sid] = candidate
+        if len(found) == len(wanted):
+            break
+    _CENSUS_TRANSCRIPT_PATHS_CACHE.update(key=key, ts=now, paths=dict(found))
+    return found
+
+
+def _census_probe_transcript(sid, transcript_path=None):
     """Identity for a census-rowless live session, from its transcript head.
 
     Two populations land here: CCC's own generated helpers (auto-title bots —
@@ -11146,13 +11215,7 @@ def _census_probe_transcript(sid):
     transcript scan (con_0496274e58).
     Returns {is_helper, first_message, cwd, model} or None (no transcript)."""
     try:
-        projects = Path(_SYS_PROJECTS_DIR)
-        cand = None
-        for proj in projects.iterdir():
-            p = proj / f"{sid}.jsonl"
-            if p.is_file():
-                cand = p
-                break
+        cand = Path(transcript_path) if transcript_path else _census_transcript_paths([sid]).get(sid)
         if cand is None:
             return None
         st = cand.stat()
@@ -11292,6 +11355,12 @@ def build_session_census(since_s=None):
         identity = _census_identity_map()
     except Exception:
         identity = {}
+    try:
+        transcript_paths = _census_transcript_paths(
+            sid for sid in activity if not identity.get(sid)
+        )
+    except Exception:
+        transcript_paths = {}
     now = time.time()
     try:
         spawn_markers = _load_spawn_markers()
@@ -11318,7 +11387,7 @@ def build_session_census(since_s=None):
         ident = identity.get(sid) or {}
         helper = False
         if not ident:
-            probe = _census_probe_transcript(sid)
+            probe = _census_probe_transcript(sid, transcript_paths.get(sid))
             if probe:
                 if probe.get("is_helper"):
                     helper = True
@@ -11876,42 +11945,6 @@ def _live_registry_conversation_row(
     return row
 
 
-# ── Parallel transcript prewarm ────────────────────────────────────────────
-# A cold archive scan (no _conv_meta_cache on disk: first ever run, or any
-# _CONV_META_SCHEMA_VERSION bump, which drops the whole file) re-parses every
-# transcript serially. On a real corpus that measured 147s for 6148 files /
-# 6.9 GB, and the sidebar sits on "Loading archive…" for all of it.
-#
-# _extract_tail_meta is a pure path -> dict function, which makes it a clean
-# process-pool boundary. Threads would not help: the work is json.loads and
-# regex, neither of which releases the GIL. Workers import server without ever
-# running main(), so _INTERRUPT_EVENTS_ENABLED stays False there and the parse
-# has no emission side effect -- the parent re-emits from the cached meta when
-# it later hits the cache (see _emit_interrupts_from_meta).
-#
-# Only cold files go to the pool. A warm cache means zero misses, no pool, and
-# no cost, which is the common case.
-_TAIL_META_PREWARM_MIN = 64  # below this the pool costs more than it saves
-
-
-def _tail_meta_prewarm_workers():
-    if os.environ.get("CCC_ARCHIVE_PARALLEL", "1") in ("0", "false", "no"):
-        return 0
-    try:
-        cpus = os.cpu_count() or 2
-    except Exception:
-        cpus = 2
-    return max(0, min(8, cpus - 2))
-
-
-def _tail_meta_prewarm_one(path_str):
-    """Pool worker: parse one transcript, hand its meta back to the parent."""
-    try:
-        return path_str, _extract_tail_meta(Path(path_str))
-    except Exception:
-        return path_str, None
-
-
 def _conv_meta_cache_is_cold(path, stat_result=None):
     """True when _extract_tail_meta would have to re-parse this file."""
     try:
@@ -11920,86 +11953,6 @@ def _conv_meta_cache_is_cold(path, stat_result=None):
         return False
     cached = _conv_meta_cache.get(str(path))
     return not (cached and cached.get("cache_key") == (st.st_mtime_ns, st.st_size))
-
-
-def _prewarm_conv_meta_parallel(cold_paths, progress_step=None):
-    """Fill _conv_meta_cache for `cold_paths` across a process pool.
-
-    Best-effort: any failure falls back to leaving the cache cold, and the
-    serial walk re-parses exactly as it did before. Returns how many entries
-    were filled.
-    """
-    workers = _tail_meta_prewarm_workers()
-    if workers < 2 or len(cold_paths) < _TAIL_META_PREWARM_MIN:
-        return 0
-    filled = 0
-    try:
-        import concurrent.futures as _futures
-        path_strs = [str(p) for p in cold_paths]
-        if progress_step:
-            progress_step(
-                "transcripts", state="running", count=0, total=len(path_strs),
-                detail=f"Parsing {len(path_strs)} transcripts across {workers} workers.",
-            )
-        with _futures.ProcessPoolExecutor(max_workers=workers) as pool:
-            # chunksize=1 on purpose: transcripts range from a few KB to
-            # ~90 MB, so any batching hands one worker a run of giants while
-            # the rest idle. Per-item dispatch costs nothing next to a parse.
-            for path_str, meta in pool.map(_tail_meta_prewarm_one, path_strs, chunksize=1):
-                if not isinstance(meta, dict) or not meta:
-                    continue
-                with _conv_meta_cache_lock:
-                    _conv_meta_cache[path_str] = meta
-                filled += 1
-                if progress_step and filled % 200 == 0:
-                    progress_step(
-                        "transcripts", state="running",
-                        count=filled, total=len(path_strs),
-                    )
-    except Exception:
-        # Pool unavailable (sandbox, fork restriction, spawn failure) or a
-        # worker died. The serial walk below still produces correct rows.
-        return filled
-    return filled
-
-
-def _prewarm_claude_transcripts(projects_root, progress_step=None):
-    """Collect cold Claude transcripts under projects_root and prewarm them."""
-    if _tail_meta_prewarm_workers() < 2:
-        return 0
-    cold = []
-    try:
-        for project_dir in projects_root.iterdir():
-            if not project_dir.is_dir():
-                continue
-            if _is_scratch_project_dir(project_dir):
-                continue
-            try:
-                entries = list(project_dir.iterdir())
-            except OSError:
-                continue
-            for f in entries:
-                if not f.name.endswith(".jsonl"):
-                    continue
-                try:
-                    st = f.stat()
-                except OSError:
-                    continue
-                if not stat.S_ISREG(st.st_mode):
-                    continue
-                if _conv_meta_cache_is_cold(f, st):
-                    cold.append((st.st_size, f))
-    except OSError:
-        return 0
-    if len(cold) < _TAIL_META_PREWARM_MIN:
-        return 0
-    # Biggest first: the pool drains the long files while short ones fill the
-    # gaps behind them, instead of ending on one ~90 MB straggler with seven
-    # idle workers. Sizes come from the stat already taken above.
-    cold.sort(key=lambda pair: pair[0], reverse=True)
-    return _prewarm_conv_meta_parallel(
-        [f for _, f in cold], progress_step=progress_step,
-    )
 
 
 def find_all_conversations(
@@ -12040,16 +11993,6 @@ def find_all_conversations(
         _only_dirs = {os.path.dirname(p) for p in only_jsonl_paths}
     projects_root = Path.home() / ".claude" / "projects"
     projects_root_exists = projects_root.is_dir()
-
-    # Cold-scan fast path: parse every uncached transcript across a process
-    # pool before the serial walk below asks for them one at a time. On a warm
-    # cache this finds nothing cold and returns immediately. Skipped for
-    # incremental scans, which are a handful of files by construction.
-    if projects_root_exists and only_jsonl_paths is None:
-        try:
-            _prewarm_claude_transcripts(projects_root, progress_step=progress_step)
-        except Exception:
-            pass
 
     # Build slug → repo_path map for label resolution.
     known_by_slug = {}
@@ -21237,6 +21180,42 @@ def conversation_transcript_path(conversation_id, repo_path=None):
     if not session_id:
         return ""
     try:
+        # Kimi's rendered conversation is backed by CCC's ACP transcript,
+        # not the CLI wire log that the session list may have discovered.
+        # Return that same persisted source so the session-ID copy affordance
+        # remains useful for live ACP sessions too.
+        engine = _detect_session_engine(session_id)
+        if engine == "kimi":
+            path = _acp_transcript_path("kimi", session_id)
+            return str(path) if path and path.is_file() else ""
+        if engine == "grok":
+            path = _grok_conversation_source(session_id)
+            return str(path) if path and path.is_file() else ""
+        if engine == "devin":
+            path = (
+                _devin_cli_db_path()
+                if _is_devin_cli_session(session_id)
+                else _devin_detail_cache_path(session_id)
+            )
+            return str(path) if path and path.is_file() else ""
+        if engine == "gemini":
+            path = _resolve_gemini_chat_path(session_id)
+            return str(path) if path and path.is_file() else ""
+        if engine == "aider":
+            path = _aider_session_path(session_id)
+            return str(path) if path and path.is_file() else ""
+        if engine == "copilot":
+            path = _copilot_events_path(session_id)
+            return str(path) if path and path.is_file() else ""
+        if engine == "copilotchat":
+            path = _copilotchat_session_file(session_id)
+            return str(path) if path and path.is_file() else ""
+        if engine == "hermes":
+            path = _hermes_db_for_session(session_id)
+            return str(path) if path and path.is_file() else ""
+        if engine in ("kilo", "opencode"):
+            path = _kilo_db_path() if engine == "kilo" else _opencode_db_path()
+            return str(path) if path and path.is_file() else ""
         path, _parser = _resolve_conversation_reader(session_id, repo_path=repo_path)
     except Exception:
         return ""
@@ -21498,6 +21477,34 @@ def _parse_conversation_windowed(conversation_id, filepath, tail, before, parser
     return result
 
 
+def _window_parsed_conversation_events(result, tail=None, before=None):
+    """Apply the conversation tail/paging contract to an already parsed source.
+
+    Some engines build structured events from stores that cannot use the
+    line-by-line JSONL reader above.  They still need the same bounded first
+    paint: keep the requested tail of logical transcript lines and report the
+    first visible line so the client can page older history on demand.
+    """
+    all_events = list(result.get("events") or [])
+    last_line = int(result.get("last_line") or 0)
+    window = int(tail or _CONV_TAIL_DEFAULT)
+    if before is not None:
+        candidates = [
+            event for event in all_events
+            if int(event.get("line") or 0) < before
+        ]
+    else:
+        candidates = all_events
+    events = candidates[-window:]
+    first_line = int(events[0].get("line") or 0) if events else 0
+    return {
+        "events": events,
+        "last_line": last_line,
+        "first_line": first_line,
+        "truncated_before": bool(first_line > 1 and len(candidates) > len(events)),
+    }
+
+
 def parse_conversation(conversation_id, after_line=0, repo_path=None, use_cache=True,
                        tail=None, before=None):
     """Parse a conversation JSONL file into structured events.
@@ -21507,8 +21514,9 @@ def parse_conversation(conversation_id, after_line=0, repo_path=None, use_cache=
     guaranteed re-parse.
 
     `tail`/`before` request a windowed parse (last N lines / the window before
-    a line) instead of the whole file — see _parse_conversation_windowed. Only
-    honored for claude transcripts (stateless parser); other engines full-parse.
+    a line) instead of the whole file — see _parse_conversation_windowed.
+    Engines whose source formats require a full parse apply the same window to
+    their resulting structured event stream before returning it.
     """
     windowed = bool(tail) or (before is not None)
     if use_cache and not windowed:
@@ -21575,13 +21583,27 @@ def parse_conversation(conversation_id, after_line=0, repo_path=None, use_cache=
         if src == _acp_transcript_path("grok", conversation_id):
             events = _acp_transcript_events_after("grok", conversation_id, after_line)
             last_line = _acp_transcript_last_line("grok", conversation_id)
-            events = _merge_synthetic_conversation_events(list(events), _get_queued_events_for_session(conversation_id))
-            return {"events": events, "last_line": last_line}
+            result = {"events": events, "last_line": last_line}
+            if windowed:
+                result = _window_parsed_conversation_events(result, tail=tail, before=before)
+            if before is None:
+                result["events"] = _merge_synthetic_conversation_events(
+                    list(result.get("events") or []),
+                    _get_queued_events_for_session(conversation_id),
+                )
+            return result
         result = _parse_grok_conversation(conversation_id, after_line=after_line)
-        _conv_parse_cache_put(conversation_id, after_line, repo_path, result)
+        if windowed:
+            result = _window_parsed_conversation_events(result, tail=tail, before=before)
+        else:
+            _conv_parse_cache_put(conversation_id, after_line, repo_path, result)
         events_copy = list(result.get("events") or [])
-        events_copy = _merge_synthetic_conversation_events(events_copy, _get_queued_events_for_session(conversation_id))
-        return {"events": events_copy, "last_line": result.get("last_line", 0)}
+        if before is None:
+            events_copy = _merge_synthetic_conversation_events(
+                events_copy, _get_queued_events_for_session(conversation_id)
+            )
+        result["events"] = events_copy
+        return result
     if engine == "copilot":
         result = _parse_copilot_conversation(conversation_id, after_line=after_line)
         _conv_parse_cache_put(conversation_id, after_line, repo_path, result)
@@ -23471,6 +23493,38 @@ def _slugify(text, max_len=40):
     return slug[:max_len].rstrip("-")
 
 
+def _cleanup_failed_spawn_worktree(toplevel, candidate, branch):
+    """Remove the exact worktree/branch reserved for a failed spawn attempt."""
+    if candidate.exists():
+        try:
+            remove = subprocess.run(
+                ["git", "-C", str(toplevel), "worktree", "remove", "--force", str(candidate)],
+                capture_output=True, text=True, timeout=30,
+            )
+        except (OSError, subprocess.SubprocessError) as exc:
+            return f"; cleanup failed: {exc}"
+        if remove.returncode != 0:
+            detail = remove.stderr.strip() or remove.stdout.strip() or str(remove.returncode)
+            return f"; cleanup failed: {detail}"
+    try:
+        branch_exists = subprocess.run(
+            ["git", "-C", str(toplevel), "show-ref", "--verify", "--quiet", f"refs/heads/{branch}"],
+            capture_output=True, text=True, timeout=10,
+        )
+        if branch_exists.returncode != 0:
+            return ""
+        delete = subprocess.run(
+            ["git", "-C", str(toplevel), "branch", "-D", branch],
+            capture_output=True, text=True, timeout=10,
+        )
+    except (OSError, subprocess.SubprocessError) as exc:
+        return f"; branch cleanup failed: {exc}"
+    if delete.returncode != 0:
+        detail = delete.stderr.strip() or delete.stdout.strip() or str(delete.returncode)
+        return f"; branch cleanup failed: {detail}"
+    return ""
+
+
 def _create_worktree_for_spawn(source_cwd, slug):
     """Create `<source-parent>/<source-name>-wt/<slug>/` as a git worktree
     on a fresh `feat/<slug>` branch off `source_cwd`'s current HEAD, and
@@ -23535,12 +23589,21 @@ def _create_worktree_for_spawn(source_cwd, slug):
                 branch = cand_branch
                 break
             branch_suffix += 1
-    add = subprocess.run(
-        ["git", "-C", str(toplevel), "worktree", "add", str(candidate), "-b", branch],
-        capture_output=True, text=True, timeout=15,
-    )
+    try:
+        add = subprocess.run(
+            ["git", "-C", str(toplevel), "worktree", "add", str(candidate), "-b", branch],
+            capture_output=True, text=True, timeout=60,
+        )
+    except subprocess.TimeoutExpired as exc:
+        cleanup_note = _cleanup_failed_spawn_worktree(toplevel, candidate, branch)
+        raise RuntimeError(
+            f"git worktree add timed out after {exc.timeout} seconds{cleanup_note}"
+        ) from exc
     if add.returncode != 0:
-        raise RuntimeError(f"git worktree add failed: {add.stderr.strip() or add.stdout.strip()}")
+        cleanup_note = _cleanup_failed_spawn_worktree(toplevel, candidate, branch)
+        raise RuntimeError(
+            f"git worktree add failed: {add.stderr.strip() or add.stdout.strip()}{cleanup_note}"
+        )
     return str(candidate), branch
 
 
@@ -23983,7 +24046,7 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
         if path.startswith("/api/codex/client/"):
             from ccc_server.codex_client import codex_client_call
             action = path.rsplit("/", 1)[-1]
-            if action not in ("catalog", "schema", "history", "state", "events"):
+            if action not in ("catalog", "schema", "history", "state", "events", "live-transcript"):
                 self.send_json({"ok": False, "error": "Unknown Codex view"}, 404)
                 return
             query = urllib.parse.parse_qs(parsed.query)
@@ -25271,6 +25334,17 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
             # Workspace info — cwd, branch, worktree?, ahead/behind, co-tenants.
             sid = path.rsplit("/", 2)[-2]
             self.send_json(extract_session_workspace(sid))
+        elif re.match(r"^/api/session/[a-zA-Z0-9_-]+/queued-inputs$", path):
+            # Durable CCC-queued input for one session, shaped as the same
+            # synthetic `pending` user_text events the transcript endpoint
+            # merges in. The native Codex view never fetches that transcript,
+            # so it polls this in-memory read to keep queued messages visible.
+            sid = path.rsplit("/", 2)[-2]
+            self.send_json({
+                "ok": True,
+                "session_id": sid,
+                "events": _get_queued_events_for_session(sid),
+            })
         elif path == "/morning/kanban":
             try:
                 html = (MORNING_STATIC_DIR / "kanban.html").read_text()
@@ -25307,6 +25381,15 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                 payload["interrupt_asks"] = _pending_interrupt_asks()
             except Exception:
                 payload["interrupt_asks"] = []
+            # Spawns started OUTSIDE this browser tab (`ccc spawn`, an agent
+            # POSTing /api/sessions/spawn, a WatchTower lane). The client turns
+            # these into the same "spawning…" placeholder row a UI-initiated
+            # spawn gets, so a CLI-spawned session is visible in seconds
+            # instead of whenever its transcript first materializes.
+            try:
+                payload["recent_spawns"] = _spawn_feed_recent()
+            except Exception:
+                payload["recent_spawns"] = []
             self.send_json(payload)
         elif path == "/api/interrupt-asks":
             # Cheap standalone poll for the interrupt-approval banner: one
@@ -25611,7 +25694,7 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
             # against the last value on each poll; growth triggers an
             # immediate conv-list refresh.
             try:
-                status["spawn_registry_count"] = len(_spawned_sessions)
+                status["spawn_registry_count"] = _spawn_registry_change_token()
             except Exception:
                 status["spawn_registry_count"] = 0
             # Process-presence summary for the conversation top bar. Claude's
@@ -30481,6 +30564,27 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                 payload,
                 report_to=report_to,
             )
+            # Nobody named a parent. If the caller shipped its PID ancestry
+            # (the `ccc` CLI always does), resolve the enclosing agent session
+            # from it so an agent-run `ccc spawn` still lands in that session's
+            # lane map. Only Claude Code exports a session id to its shell
+            # children; this is how Codex/Gemini/plain-shell callers get one.
+            # Best-effort: an unresolvable or ambiguous caller leaves the spawn
+            # un-attributed exactly as before.
+            if not parent_session_id and not parent_session_error:
+                try:
+                    resolved_parent = _resolve_spawn_caller_session_id(
+                        payload.get("caller_pids"),
+                        payload.get("caller_cwd") or payload.get("cwd") or "",
+                    )
+                except Exception:
+                    resolved_parent = ""
+                if resolved_parent:
+                    parent_session_id = resolved_parent
+                    _log_activity(
+                        "spawn", "CALLER_PARENT",
+                        f"resolved parent={resolved_parent} from caller pids",
+                    )
             cwd_raw = payload.get("cwd")
             cwd_input = cwd_raw.strip() if isinstance(cwd_raw, str) else ""
             cwd_resolved = None
@@ -33293,6 +33397,8 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                         inject_options["allow_duplicate"] = True
                     if replace_queued:
                         inject_options["preserve_queued_steer"] = True
+                    if replace_queued_texts:
+                        inject_options["queued_steer_batch"] = True
                     if payload.get("idempotency_key"):
                         inject_options["idempotency_key"] = payload.get(
                             "idempotency_key"

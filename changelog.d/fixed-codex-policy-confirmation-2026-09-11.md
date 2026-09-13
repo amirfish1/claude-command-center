@@ -1,0 +1,1 @@
+- Preserve a user's confirmed blocked-model choice when resuming the same Codex session.

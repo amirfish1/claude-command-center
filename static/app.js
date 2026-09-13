@@ -744,6 +744,7 @@
   let _sysProcSearch = '';
   let _sysProcData = null;
   let _sysProcShowAll = false;
+  let _sysProcSelected = new Set();
 
   function _pollSystemProcesses(force) {
     if (document.hidden && !force) return;
@@ -770,6 +771,18 @@
     const total = d.total_count || procs.length;
     const high = d.high_risk_count || 0;
     const med = d.medium_risk_count || 0;
+    const selectableByPid = {};
+    procs.forEach(function (p) {
+      if (p.can_kill) selectableByPid[p.pid] = true;
+    });
+    Array.from(_sysProcSelected).forEach(function (pid) {
+      if (!selectableByPid[pid]) _sysProcSelected.delete(pid);
+    });
+    const selectedPids = Array.from(_sysProcSelected);
+    const highKillable = procs.filter(function (p) { return p.can_kill && p.score >= 7.0; }).length;
+    const suspiciousKillable = procs.filter(function (p) {
+      return p.can_kill && p.score >= 4.0 && p.score < 7.0;
+    }).length;
 
     let html = '';
 
@@ -782,11 +795,6 @@
     html += '      </div>';
     html += '    </div>';
     html += '    <div style="display:flex;align-items:center;gap:6px">';
-    if (high > 0) {
-      html += '      <button type="button" class="sh-btn sh-btn-danger" data-reap-high="1" title="Kill all processes scored >= 7.0">';
-      html += '        Kill all high risk (' + high + ')';
-      html += '      </button>';
-    }
     html += '      <button type="button" class="sh-btn" id="sysProcRefreshBtn" title="Refresh processes">Refresh</button>';
     html += '    </div>';
     html += '  </div>';
@@ -804,6 +812,14 @@
     html += filterBtn('suspicious', 'Suspicious (≥4)', med);
     html += filterBtn('orphaned', 'Orphaned (PPID 1)');
     html += filterBtn('deleted_cwd', 'Deleted CWD');
+    html += '    </div>';
+    html += '    <div class="sys-proc-bulk-actions">';
+    if (highKillable) html += '      <button type="button" class="sh-btn" data-select-risk="high">Select high risk (' + highKillable + ')</button>';
+    if (suspiciousKillable) html += '      <button type="button" class="sh-btn" data-select-risk="suspicious">Select suspicious (' + suspiciousKillable + ')</button>';
+    if (selectedPids.length) {
+      html += '      <button type="button" class="sh-btn" data-clear-selection="1">Clear</button>';
+      html += '      <button type="button" class="sh-btn sh-btn-danger" data-kill-selected="1">Kill selected (' + selectedPids.length + ')</button>';
+    }
     html += '    </div>';
     html += '  </div>';
     html += '</div>';
@@ -897,6 +913,8 @@
 
         html += '  <div class="sys-proc-action">';
         if (p.can_kill) {
+          const checked = _sysProcSelected.has(p.pid) ? ' checked' : '';
+          html += '    <label class="sys-proc-select"><input type="checkbox" data-select-pid="' + p.pid + '"' + checked + '> select</label>';
           html += '    <button type="button" class="sh-btn" data-kill-pid="' + p.pid + '">kill</button>';
         } else {
           html += '    <span class="sh-meta" style="font-size:10px;opacity:0.5">protected</span>';
@@ -964,16 +982,36 @@
       });
     });
 
-    const reapHighBtn = body.querySelector('[data-reap-high]');
-    if (reapHighBtn) {
-      reapHighBtn.addEventListener('click', function () {
-        const highPids = [];
-        procs.forEach(function (p) {
-          if (p.score >= 7.0 && p.can_kill) highPids.push(p.pid);
-        });
-        _confirmProcessKill(reapHighBtn, highPids, true);
+    Array.prototype.forEach.call(body.querySelectorAll('[data-select-pid]'), function (checkbox) {
+      checkbox.addEventListener('change', function () {
+        const pid = parseInt(checkbox.getAttribute('data-select-pid'), 10);
+        if (checkbox.checked) _sysProcSelected.add(pid);
+        else _sysProcSelected.delete(pid);
+        _renderSystemProcesses();
       });
-    }
+    });
+
+    Array.prototype.forEach.call(body.querySelectorAll('[data-select-risk]'), function (btn) {
+      btn.addEventListener('click', function () {
+        const risk = btn.getAttribute('data-select-risk');
+        procs.forEach(function (p) {
+          const matches = risk === 'high' ? p.score >= 7.0 : (p.score >= 4.0 && p.score < 7.0);
+          if (p.can_kill && matches) _sysProcSelected.add(p.pid);
+        });
+        _renderSystemProcesses();
+      });
+    });
+
+    const clearSelectionBtn = body.querySelector('[data-clear-selection]');
+    if (clearSelectionBtn) clearSelectionBtn.addEventListener('click', function () {
+      _sysProcSelected.clear();
+      _renderSystemProcesses();
+    });
+
+    const killSelectedBtn = body.querySelector('[data-kill-selected]');
+    if (killSelectedBtn) killSelectedBtn.addEventListener('click', function () {
+      _confirmProcessKill(killSelectedBtn, selectedPids, true);
+    });
 
     const showAllBtn = body.querySelector('#sysProcShowAllBtn');
     if (showAllBtn) {
@@ -2251,6 +2289,10 @@
   // before the request goes out with confirm_blocked_model: true. This is a
   // convenience prompt only -- server.py is the real gate and rejects a
   // blocked model with no confirm flag regardless of what the client sends.
+  // Spawn ids this tab originated (plus a counter for POSTs still in flight).
+  // Read by syncExternalSpawnPlaceholders to tell "someone else spawned this"
+  // from "this is the spawn I just fired and am already showing".
+  const _cccLocalSpawns = { ids: new Set(), inFlight: 0 };
   (function installSpawnProvenanceTag() {
     const realFetch = window.fetch.bind(window);
     function isBlockedModelName(model) {
@@ -2286,7 +2328,24 @@
           opts.body = JSON.stringify(body);
         }
       }
-      return realFetch(input, opts);
+      if (!isSpawn) return realFetch(input, opts);
+      // Remember every spawn THIS tab starts, so the external-spawn poller
+      // below never double-renders a placeholder for our own request. The
+      // in-flight counter covers the window between the POST leaving and its
+      // spawn_id coming back — the server has already written the registry
+      // entry by then, so the poller can see the spawn before we can name it.
+      _cccLocalSpawns.inFlight++;
+      return realFetch(input, opts).then((res) => {
+        try {
+          res.clone().json().then((d) => {
+            const key = String((d && (d.spawn_id || d.pid)) || '');
+            if (key) _cccLocalSpawns.ids.add(key);
+            const sid = String((d && d.session_id) || '');
+            if (sid) _cccLocalSpawns.ids.add(sid);
+          }).catch(() => {}).finally(() => { _cccLocalSpawns.inFlight--; });
+        } catch (_) { _cccLocalSpawns.inFlight--; }
+        return res;
+      }, (err) => { _cccLocalSpawns.inFlight--; throw err; });
     };
   })();
 
@@ -3511,15 +3570,81 @@
       paneEl: paneEl || convPaneElById(paneId),
       paneId,
       threadId: sessionIdByConv[conversationId] || row && row.session_id || conversationId,
-      repoPath: rowRepoPath(row) || activeConvRepoPath(),
+      repoPath: rowRepoPath(row) || sessionCwdByConv[conversationId] || pane?.currentSession?.cwd || _workspaceDataByPane[paneId]?.cwd || activeConvRepoPath(),
       environmentId: row && (row.environment_id || row.environmentId) || '',
       title: row && (row.custom_title || row.title || row.name) || 'Codex task',
     };
   };
   window.CCCCodexMarkdown = function (text) { return renderMarkdown(String(text || '')); };
-  window.CCCCodexClientLifecycle = function () {
+  window.CCCCodexStepNode = function (item) {
+    const type = String(item.type || '').toLowerCase();
+    const holder = document.createElement('div');
+    const strings = value => typeof value === 'string' ? value : Array.isArray(value) ? value.map(strings).filter(Boolean).join('\n\n') : value?.text || '';
+    if (type === 'reasoning') {
+      const text = strings(item.summary) || strings(item.content);
+      if (!text.trim()) { holder.className = 'kimi-marker'; holder.hidden = true; return holder; }
+      holder.innerHTML = _kimiThinkingHtml(text, true);
+      return holder.firstElementChild;
+    }
+    let block;
+    if (type === 'commandexecution') {
+      const command = Array.isArray(item.command) ? item.command.join(' ') : String(item.command || '');
+      block = {id:item.id,name:'Bash',command,input:{command},output_preview:String(item.aggregatedOutput || '')};
+      const actions = item.commandActions || [];
+      if (actions.length === 1 && actions[0].type === 'read') {
+        block.name = 'Read'; block.input = {path:actions[0].path || actions[0].name};
+      } else if (actions.length === 1 && actions[0].type === 'search') {
+        block.name = 'Grep'; block.input = {pattern:actions[0].query, path:actions[0].path};
+      }
+    } else if (type === 'mcptoolcall' || type === 'dynamictoolcall') {
+      block = {id:item.id,name:item.tool || item.toolName || item.name || 'Tool',input:item.arguments || item.input,
+        output_preview:strings(item.result?.content || item.result || item.output)};
+    } else if (type === 'websearch') {
+      block = {id:item.id,name:'WebSearch',input:{query:item.query || item.action?.query || ''}};
+    } else return null;
+    block.tool_status = item.status === 'inProgress' ? 'running' : /failed|error/i.test(item.status || '') ? 'failed' : 'completed';
+    holder.innerHTML = _kimiToolRowHtml(block);
+    return holder.firstElementChild;
+  };
+  window.CCCCodexGroupSteps = function (section) { _kimiRegroupTools(section); };
+
+  window.CCCCodexInlineStateChanged = function (context) {
+    const index = paneIndexByPaneId(context.paneId);
+    if (index < 0) return;
+    const saved = splitState.activeIndex;
+    splitState.activeIndex = index;
+    try {
+      const pane = paneByPaneId(context.paneId);
+      if (pane?.currentSession && window.CCCCodexClient?.inlineState(context.paneEl)?.connected) {
+        pane.currentSession.source = 'codex';
+        sessionSourceByConv[pane.conversationId] = 'codex';
+      }
+      // A pending-send echo appended to the legacy transcript while the
+      // native shell was still connecting gets removed from the DOM the
+      // moment the shell swaps in (it doesn't know about that echo) -- retire
+      // its bookkeeping too, or it sits in _pendingSends forever, silently
+      // blocking /compact ("Wait for the pending message to land...").
+      if (Array.isArray(_pendingSends) && _pendingSends.length) {
+        for (const p of _pendingSends.slice()) {
+          if (p && p.paneId === context.paneId && p.element && !p.element.isConnected) removePendingSendEcho(p);
+        }
+      }
+      if (_codexWakePollSid === context.threadId) stopCodexWakeBreakdown(true);
+      // Native renders don't scroll, so the Last/Next buttons need a nudge.
+      updateConversationEndAffordance(context.viewEl || getConvViewForPane(context.paneId));
+      updateInputBar();
+      if (saved === index) _updateLastWrittenLine(paneByPaneId(context.paneId)?.conversationId);
+    } finally { splitState.activeIndex = saved; }
+  };
+  window.CCCCodexClientLifecycle = function (detail) {
     scheduleDashboardInvalidation('archive');
     scheduleDashboardInvalidation('sessions');
+    if (detail?.inline && detail.paneId && ['thread/start','thread/fork'].includes(detail.method)) {
+      sessionSourceByConv[detail.threadId] = 'codex';
+      sessionIdByConv[detail.threadId] = detail.threadId;
+      if (detail.thread?.cwd) sessionCwdByConv[detail.threadId] = detail.thread.cwd;
+      Promise.resolve(refreshArchiveData({staleOk:false})).catch(()=>{}).then(()=>selectConversation(detail.threadId,detail.paneId));
+    }
   };
   window.addEventListener('ccc:codex-media-cleanup-error', event => {
     showOpToast(event.detail && event.detail.message || 'Codex media cleanup could not be confirmed.', 'error');
@@ -5181,6 +5306,9 @@
       try { _handlePrewarmEvents(data.prewarm_events || []); } catch (_) {}
       // Pending "CCC wants to interrupt this session" approval asks.
       try { _renderInterruptAsks(data.interrupt_asks || []); } catch (_) {}
+      // Sessions spawned outside this tab get the same "spawning…" row a
+      // UI-initiated spawn gets, so `ccc spawn` shows up in seconds.
+      try { syncExternalSpawnPlaceholders(data.recent_spawns || []); } catch (_) {}
       const sessions = (data && data.sessions) || {};
       const liveIds = new Set(Object.keys(sessions));
       for (const [sid, fields] of Object.entries(sessions)) {
@@ -7013,13 +7141,15 @@
     button.disabled = true;
     button.textContent = 'Cancelling…';
     try {
-      const res = await fetch('/api/inject-esc', {
+      const inlinePane = $view?.closest('.conv-pane');
+      const nativeInline = window.CCCCodexClient?.isInlineActive(inlinePane);
+      const res = nativeInline ? null : await fetch('/api/inject-esc', {
         method: 'POST',
         headers: {'Content-Type': 'application/json'},
         body: JSON.stringify({ session_id: sid }),
       });
-      const data = await res.json().catch(() => ({}));
-      if (res.ok && data.ok) {
+      const data = nativeInline ? await window.CCCCodexClient.interruptInline(inlinePane) : await res.json().catch(() => ({}));
+      if ((!res || res.ok) && data.ok) {
         const card = $view && $view.querySelector('.conv-live-tool-inline.optimistic');
         if (card) {
           card.classList.add('is-cancelling');
@@ -7029,7 +7159,7 @@
         if (data.note && typeof showOpToast === 'function') showOpToast(data.note, 'info');
         return;
       }
-      throw new Error(data.error || ('HTTP ' + res.status));
+      throw new Error(data.error || ('HTTP ' + res?.status));
     } catch (err) {
       button.disabled = false;
       button.textContent = 'Cancel';
@@ -7218,6 +7348,10 @@
     if (!$view || !data) return false;
     const via = String(data.via || '');
     const stage = String(data.stage || '');
+    if (data.ok && via === 'codex-desktop' && data.confirmed) {
+      if (_codexWakePollSid === (data.session_id || currentSession?.id)) stopCodexWakeBreakdown(true);
+      return true;
+    }
     // A normal Codex wake is represented by the compact progress line below.
     // Do not add a second yellow resume banner above it.
     if (data.ok && via === 'codex-app-turn') {
@@ -8913,6 +9047,10 @@
       showOpToast('Queued message is missing its session or text.', 'error');
       return;
     }
+    if (!sessionSupportsQueuedSteer(currentSession && currentSession.source)) {
+      showOpToast('Steer is only available for Codex and ACP sessions.', 'error');
+      return;
+    }
     const original = btn.textContent;
     btn.disabled = true;
     btn.textContent = 'Steering…';
@@ -9055,6 +9193,10 @@
     }).filter(Boolean);
     if (!sid || !texts.length) {
       showOpToast('Nothing queued to steer.', 'error');
+      return;
+    }
+    if (!sessionSupportsQueuedSteer(currentSession && currentSession.source)) {
+      showOpToast('Steer all is only available for Codex and ACP sessions.', 'error');
       return;
     }
     const original = btn.textContent;
@@ -9800,6 +9942,7 @@
     const activeEffortSelect = activeInputControls.effortSelect;
     const isPkood = currentSession.source === 'pkood';
     const isCodex = currentSession.source === 'codex';
+    const nativeCodex = isCodex && window.CCCCodexClient?.inlineState(convPaneElById(activePaneId()));
     const isGemini = currentSession.source === 'gemini';
     const isCursor = currentSession.source === 'cursor';
     const isAntigravity = currentSession.source === 'antigravity';
@@ -9866,7 +10009,7 @@
         if (activeInput) activeInput.placeholder = 'Send to pkood agent...';
       } else if (isCodex) {
         activeInputControls.ttyLabel.textContent = live ? (liveStatus.tty || 'codex') : 'codex';
-        if (activeInput) activeInput.placeholder = live ? 'Send to Codex terminal...' : 'Resume Codex and send...';
+        if (activeInput) activeInput.placeholder = nativeCodex?.connected ? 'Message Codex…' : (live ? 'Send to Codex terminal...' : 'Resume Codex and send...');
       } else if (isGemini) {
         activeInputControls.ttyLabel.textContent = live ? (liveStatus.tty || 'gemini') : 'gemini';
         if (activeInput) activeInput.placeholder = live ? 'Send to Gemini terminal...' : 'Resume Gemini and send...';
@@ -10023,7 +10166,7 @@
       // Codex app-server sessions signal liveness via codexState='working',
       // not liveStatus.live (which stays false for pool-model Codex.app runs).
       if (activeEscBtn) {
-        const codexWorking = isCodex && liveStatusMatchesOpenConv() && liveStatus.codexState === 'working';
+        const codexWorking = nativeCodex?.connected ? nativeCodex.thread?.turns?.some(turn => turn.status === 'inProgress') : (isCodex && liveStatusMatchesOpenConv() && liveStatus.codexState === 'working');
         const canEsc = hasSession && !isPkood && !isNewSession && !isBacklogIssue && (!!liveStatus.live || codexWorking);
         activeEscBtn.style.display = canEsc ? '' : 'none';
       }
@@ -10458,6 +10601,14 @@
     const pending = { text, sid, paneId: paneId || activePaneId(), conversationId: currentConversation,
       element: null, list: null, entry: null };
     const $view = getConvViewForPane(paneId) || getConvView();
+    const inlinePane = $view && $view.closest('.conv-pane');
+    const nativeMessageId = inlinePane && window.CCCCodexClient
+      && window.CCCCodexClient.appendInlinePendingUserMessage?.(inlinePane, text);
+    if (nativeMessageId) {
+      pending.nativeMessageId = nativeMessageId;
+      if (sid) markSessionSending(sid);
+      return pending;
+    }
     if ($view) {
       const pendingDiv = document.createElement('div');
       const pendingSteerHtml = userMessageSteerHtml(text, null, null);
@@ -10538,6 +10689,10 @@
 
   function removePendingSendEcho(pending) {
     if (!pending) return;
+    if (pending.nativeMessageId) {
+      const pane = convPaneElById(pending.paneId || activePaneId());
+      window.CCCCodexClient?.removeInlinePendingUserMessage?.(pane, pending.nativeMessageId);
+    }
     if (pending.element && pending.element.parentNode) {
       pending.element.parentNode.removeChild(pending.element);
     }
@@ -10563,6 +10718,19 @@
   // a long-running turn doesn't make a safely-parked message look dropped.
   // When the input finally delivers, the normal JSONL dedupe removes the echo.
   function markPendingSendQueued(pending, label, opts) {
+    if (pending && !pending.entry && pending.nativeMessageId) {
+      // The native transcript pins its echo to the top of the running turn,
+      // where a queued message reads as already sent and scrolls out of view.
+      // Once the durable queue lists it, the tray card replaces that echo.
+      // A Codex-owned queue entry is not listed, so its echo stays.
+      // Every queue poll retries the handoff, so a queue write that lands a
+      // beat after this response still retires the echo.
+      const pid = pending.paneId || activePaneId();
+      if (!_nativeQueuedEchoes.has(pid)) _nativeQueuedEchoes.set(pid, new Set());
+      _nativeQueuedEchoes.get(pid).add(pending);
+      syncNativeCodexQueuedInputs(pid).catch(() => {});
+      return;
+    }
     if (!pending || !pending.entry) return;
     if (pending.entry.timer) { clearTimeout(pending.entry.timer); pending.entry.timer = null; }
     pending.entry.queued = true;
@@ -10587,12 +10755,22 @@
       div.appendChild(note);
     }
     const msg = pending.entry.queuedLabel;
+    const paneState = paneByPaneId(pid);
+    const queuedSource = (paneState && paneState.currentSession && paneState.currentSession.source)
+      || (typeof sessionSourceByConv !== 'undefined' && sessionSourceByConv[convId])
+      || '';
+    // Default to showing the Steer button when the source is not yet known
+    // (e.g., early test stubs or a pane mid-load). Only hide it for engines
+    // we know do not support queued-row steer.
+    const canSteer = queuedSource ? sessionSupportsQueuedSteer(queuedSource) : true;
     note.innerHTML = '<span class="send-queued-icon">⏳</span>'
       + '<span class="send-queued-text">' + escapeHtml(msg) + '</span>'
       + '<button type="button" class="user-message-copy" data-copy-user-message title="Copy message" aria-label="Copy message">&#128203;</button>'
-      + '<button type="button" class="send-queued-steer" data-steer-queued-message'
-      + ' data-session-id="' + escapeAttr(pending.sid || '') + '"'
-      + ' title="Steer the active Codex turn with this queued message">Steer</button>'
+      + (canSteer
+        ? '<button type="button" class="send-queued-steer" data-steer-queued-message'
+          + ' data-session-id="' + escapeAttr(pending.sid || '') + '"'
+          + ' title="Steer the active turn with this queued message">Steer</button>'
+        : '')
       + '<button type="button" class="send-queued-cancel" data-cancel-queued-message'
       + ' data-session-id="' + escapeAttr(pending.sid || '') + '"'
       + ' title="Cancel - discard this queued message">✕ Cancel</button>';
@@ -11234,7 +11412,7 @@
     // explicit inline feedback.
     if (!compactCommand && !clearCommand && looksDormantNoProcess()) {
       const $wv = getConvViewForPane(paneId || activePaneId()) || getConvView();
-      if (currentSession.source === 'codex') {
+      if (currentSession.source === 'codex' && !window.CCCCodexClient?.isInlineActive($wv.closest('.conv-pane'))) {
         startCodexWakeBreakdown($wv, sid);
       }
     }
@@ -11453,6 +11631,12 @@
           try { refreshLiveStatus(); } catch (_) {}
           setTimeout(refreshConversationList, 1500);
           setTimeout(refreshConversationList, 3500);
+        } else if (data.via === 'codex-desktop' && data.confirmed) {
+          removePendingSendEcho(pendingSend);
+          clearOptimisticAgentIndicator(getConvViewForPane(paneId || activePaneId()) || getConvView());
+          showOpToast('Sent to Codex.');
+          refreshLiveStatus();
+          setTimeout(refreshConversationList, 1500);
         } else if (data.via === 'codex-app-turn') {
           showOpToast('Codex follow-up started.');
           setTimeout(refreshConversationList, 1500);
@@ -12321,7 +12505,7 @@
     const view = getConvViewForPane(paneId || activePaneId()) || getConvView();
     if (!view) return null;
     const candidates = Array.from(view.querySelectorAll(
-      '.stream-bubble, .event.assistant:not(.tool-only), .event.user_text:not(.pending), .assistant-text'
+      '.stream-bubble, .event.assistant:not(.tool-only), .event.user_text:not(.pending), .assistant-text, .codex-client-message.is-agent'
     ));
     for (let i = candidates.length - 1; i >= 0; i--) {
       const el = candidates[i];
@@ -12339,6 +12523,13 @@
         if (msg) nodesToExtract = [msg];
       } else if (el.classList.contains('assistant-text')) {
         nodesToExtract = [el];
+      } else if (el.classList.contains('codex-client-message')) {
+        // Native Codex renders its reply body directly under the message row,
+        // alongside a presentational “Answer”/“Working” label. Read the body
+        // only, matching the legacy assistant-row behavior above.
+        nodesToExtract = Array.from(el.children).filter(child =>
+          !child.classList.contains('codex-client-message-phase')
+        );
       }
 
       if (nodesToExtract.length > 0) {
@@ -12858,21 +13049,24 @@
     $convEscBtn.classList.remove('sent', 'failed');
     const orig = $convEscBtn.textContent;
     try {
-      const res = await fetch('/api/inject-esc', {
+      const inlinePane = convPaneElById(activePaneId());
+      const nativeInline = window.CCCCodexClient?.isInlineActive(inlinePane);
+      const res = nativeInline ? null : await fetch('/api/inject-esc', {
         method: 'POST',
         headers: {'Content-Type': 'application/json'},
         body: JSON.stringify({ session_id: currentSession.id }),
       });
       let data = {};
-      try { data = await res.json(); } catch (_) {}
-      if (res.ok && data.ok) {
+      if (nativeInline) data = await window.CCCCodexClient.interruptInline(inlinePane);
+      else try { data = await res.json(); } catch (_) {}
+      if ((!res || res.ok) && data.ok) {
         $convEscBtn.classList.add('sent');
         $convEscBtn.textContent = data.via === 'spawn-sigint' ? 'Killed' : 'Esc ✓';
         if (data.note) showOpToast(data.note, 'info');
       } else {
         $convEscBtn.classList.add('failed');
         $convEscBtn.textContent = 'Esc ✗';
-        showOpToast('Interrupt failed: ' + (data.error || ('HTTP ' + res.status)), 'error');
+        showOpToast('Interrupt failed: ' + (data.error || ('HTTP ' + res?.status)), 'error');
       }
     } catch (err) {
       $convEscBtn.classList.add('failed');
@@ -14146,165 +14340,6 @@
     if (typeof compactCurrentSession === 'function') compactCurrentSession();
   });
 
-  // CCC-863: unattended usage/rate-limit auto-resume countdown. When a
-  // session's row carries `usage_limit_resume_at` (set server-side by the
-  // usage-limit watcher after it detects a "STOPPED - NO TOKENS REMAINING"
-  // class of stop for claude/codex/kimi), show a live "RESUMING IN
-  // HH:MM:SS" banner above that session's composer. No manual "Resume"
-  // button by design -- the server sends the literal "continue" itself the
-  // moment the countdown reaches zero. Self-contained polling (does not
-  // hook into every row-render call site) so it works across every open
-  // pane regardless of which refresh path last touched conversationsData.
-  function _usageLimitFormatCountdown(seconds) {
-    const s = Math.max(0, Math.round(seconds));
-    const h = Math.floor(s / 3600);
-    const m = Math.floor((s % 3600) / 60);
-    const sec = s % 60;
-    return String(h).padStart(2, '0') + ':' + String(m).padStart(2, '0') + ':' + String(sec).padStart(2, '0');
-  }
-  function _usageLimitRowForSession(sid) {
-    if (!sid) return null;
-    if (Array.isArray(conversationsData)) {
-      const r = conversationsData.find((c) => c.session_id === sid || c.id === sid);
-      if (r) return r;
-    }
-    if (typeof archiveData !== 'undefined' && Array.isArray(archiveData)) {
-      return archiveData.find((c) => c.session_id === sid || c.id === sid) || null;
-    }
-    return null;
-  }
-  const _usageLimitSuppressedSids = new Set();
-  const _usageLimitCancelErrors = new Set();
-  function _usageLimitRowsForSession(sid) {
-    const rows = [];
-    const addMatches = (source) => {
-      if (!Array.isArray(source)) return;
-      source.forEach((row) => {
-        if (!row || (row.session_id !== sid && row.id !== sid)) return;
-        if (!rows.includes(row)) rows.push(row);
-      });
-    };
-    if (typeof conversationsData !== 'undefined') addMatches(conversationsData);
-    if (typeof archiveData !== 'undefined') addMatches(archiveData);
-    return rows;
-  }
-  function _usageLimitSuppressSession(sid) {
-    if (!sid) return;
-    _usageLimitSuppressedSids.add(sid);
-    _usageLimitCancelErrors.delete(sid);
-    _usageLimitRowsForSession(sid).forEach((row) => {
-      delete row.usage_limit_resume_at;
-    });
-    document.querySelectorAll('.usage-limit-resume-banner').forEach((banner) => {
-      if (banner.dataset.sid === sid) banner.remove();
-    });
-  }
-  function _usageLimitRollbackSuppression(sid, resumeAt) {
-    if (!sid) return;
-    _usageLimitSuppressedSids.delete(sid);
-    _usageLimitCancelErrors.add(sid);
-    if (Number.isFinite(resumeAt)) {
-      _usageLimitRowsForSession(sid).forEach((row) => {
-        row.usage_limit_resume_at = resumeAt;
-      });
-    }
-    syncUsageLimitCountdowns();
-  }
-  async function _cancelUsageLimitAutoResume(sid, resumeAt) {
-    _usageLimitSuppressSession(sid);
-    try {
-      const response = await fetch('/api/usage-limit/cancel', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ session_id: sid }),
-      });
-      let payload = null;
-      try { payload = await response.json(); } catch (_) { /* handled below */ }
-      if (!response.ok || !payload || !payload.ok) {
-        throw new Error((payload && payload.error) || ('HTTP ' + response.status));
-      }
-      return true;
-    } catch (_) {
-      _usageLimitRollbackSuppression(sid, resumeAt);
-      return false;
-    }
-  }
-  function syncUsageLimitCountdowns() {
-    try {
-      document.querySelectorAll('.conv-pane[data-pane-id]').forEach((pane) => {
-        const paneId = pane.dataset.paneId;
-        let sid = null;
-        if (paneId && typeof paneByPaneId === 'function') {
-          const st = paneByPaneId(paneId);
-          sid = st && st.conversationId;
-        }
-        if (!sid && currentSession) sid = currentSession.id;
-        const inputBar = pane.querySelector('.conv-input-bar');
-        if (!inputBar) return;
-        let banner = inputBar.querySelector('.usage-limit-resume-banner');
-        if (!sid || _usageLimitSuppressedSids.has(sid)) {
-          if (banner) banner.remove();
-          return;
-        }
-        const row = _usageLimitRowForSession(sid);
-        const resumeAt = row && typeof row.usage_limit_resume_at === 'number'
-          ? row.usage_limit_resume_at : null;
-        // Defensive staleness cutoff (independent of the server's own):
-        // never let a countdown sit frozen past zero forever client-side.
-        const stale = resumeAt && (resumeAt * 1000 <= Date.now() - 5 * 60 * 1000);
-        if (!resumeAt || stale) {
-          if (banner) banner.remove();
-          return;
-        }
-        if (!banner) {
-          banner = document.createElement('div');
-          banner.className = 'usage-limit-resume-banner';
-          banner.setAttribute('role', 'status');
-          inputBar.prepend(banner);
-        }
-        const cancelError = _usageLimitCancelErrors.has(sid);
-        banner.classList.toggle('is-cancel-error', cancelError);
-        banner.dataset.cancelError = cancelError ? '1' : '0';
-        banner.innerHTML = cancelError
-          ? '<span class="usage-limit-resume-text">AUTO-RESUME STILL ENABLED</span>'
-            + '<button type="button" class="usage-limit-resume-cancel" title="Retry disabling auto-resume" aria-label="Retry disabling auto-resume">Retry</button>'
-          : '<span class="usage-limit-resume-text"></span>'
-            + '<button type="button" class="usage-limit-resume-cancel" title="Permanently disable auto-resume" aria-label="Permanently disable auto-resume">&times;</button>';
-        banner.dataset.resumeAt = String(resumeAt);
-        banner.dataset.sid = sid;
-      });
-    } catch (e) { /* best-effort UI only */ }
-  }
-  function _tickUsageLimitCountdowns() {
-    document.querySelectorAll('.usage-limit-resume-banner').forEach((banner) => {
-      if (banner.dataset.cancelError === '1') return;
-      const resumeAt = parseFloat(banner.dataset.resumeAt || '0');
-      if (!resumeAt) { banner.remove(); return; }
-      const remaining = resumeAt - Date.now() / 1000;
-      const textEl = banner.querySelector('.usage-limit-resume-text');
-      const text = remaining > 0
-        ? 'RESUMING IN ' + _usageLimitFormatCountdown(remaining)
-        : 'Resuming…';
-      if (textEl) textEl.textContent = text;
-      else banner.textContent = text;
-    });
-  }
-  document.addEventListener('click', async (ev) => {
-    const btn = ev.target && ev.target.closest && ev.target.closest('.usage-limit-resume-cancel');
-    if (!btn) return;
-    ev.preventDefault();
-    const banner = btn.closest('.usage-limit-resume-banner');
-    const sid = banner && banner.dataset.sid;
-    if (!sid) return;
-    const resumeAt = parseFloat(banner.dataset.resumeAt || '0');
-    await _cancelUsageLimitAutoResume(
-      sid,
-      Number.isFinite(resumeAt) ? resumeAt : null,
-    );
-  });
-  setInterval(syncUsageLimitCountdowns, 5000);
-  setInterval(_tickUsageLimitCountdowns, 1000);
-
   // Delegated toggle for compact-resume cards — one listener handles
   // every card past, present, and future without per-render wiring.
   document.addEventListener('click', (ev) => {
@@ -15297,10 +15332,14 @@
   // The sidebar list is rebuilt wholesale on archive refreshes. Delegate this
   // control from the stable list container so a redraw cannot leave the model
   // filter's newly-rendered buttons without their click behavior.
+  function _setArchiveEngineFilterOpen(wrap, open) {
+    wrap?.closest('.conv-archived-tools-right')?.classList.toggle('has-engine-filter-open', !!open);
+  }
   function _closeArchiveEngineFilters() {
     $convList?.querySelectorAll('.conv-archived-engine-filter').forEach(wrap => {
       clearTimeout(wrap._archiveEngineCollapseTimer);
       wrap.classList.remove('is-expanded');
+      _setArchiveEngineFilterOpen(wrap, false);
       wrap.querySelector('[data-archive-engine-trigger]')?.setAttribute('aria-expanded', 'false');
     });
   }
@@ -15318,10 +15357,12 @@
       }
       clearTimeout(wrap._archiveEngineCollapseTimer);
       const expanded = wrap.classList.toggle('is-expanded');
+      _setArchiveEngineFilterOpen(wrap, expanded);
       trigger.setAttribute('aria-expanded', expanded ? 'true' : 'false');
       if (expanded) {
         wrap._archiveEngineCollapseTimer = setTimeout(() => {
           wrap.classList.remove('is-expanded');
+          _setArchiveEngineFilterOpen(wrap, false);
           trigger.setAttribute('aria-expanded', 'false');
         }, 2000);
       }
@@ -15356,6 +15397,7 @@
       clearTimeout(wrap._archiveEngineCollapseTimer);
       if (!wrap.classList.contains('is-expanded')) {
         wrap.classList.add('is-expanded');
+        _setArchiveEngineFilterOpen(wrap, true);
         trigger.setAttribute('aria-expanded', 'true');
       }
       return;
@@ -15366,6 +15408,7 @@
     clearTimeout(wrap._archiveEngineCollapseTimer);
     wrap._archiveEngineCollapseTimer = setTimeout(() => {
       wrap.classList.remove('is-expanded');
+      _setArchiveEngineFilterOpen(wrap, false);
       trigger.setAttribute('aria-expanded', 'false');
     }, 2000);
   }
@@ -16840,18 +16883,17 @@
     if (tasksEl0 && !tasksEl0.innerHTML.trim()) {
       tasksEl0.innerHTML = '<div class="simple-loading"><span class="simple-spinner" aria-hidden="true"></span>Loading your tasks…</div>';
     }
-    let attention = null, sessions = null, archive = null;
+    let attention = null, archive = null;
     try {
       const results = await Promise.all([
         fetch('/api/attention', { cache: 'no-store' }).then(r => r.json()).catch(() => null),
-        fetch('/api/sessions?all=1', { cache: 'no-store' }).then(r => r.json()).catch(() => null),
         loadArchiveAll({ staleOk: true, window: 'all' }).catch(() => null),
       ]);
-      attention = results[0]; sessions = results[1];
+      attention = results[0];
       // loadArchiveAll resolves the conversations array directly (already
       // ETag-cached/deduped against Advanced mode's same in-flight fetch),
       // not a {conversations: [...]} envelope like the raw endpoint.
-      archive = Array.isArray(results[2]) ? { conversations: results[2] } : null;
+      archive = Array.isArray(results[1]) ? { conversations: results[1] } : null;
     } catch (_) { return; }
 
     // Needs you: sessions waiting on the user. (R4's stuck-queue alerts are
@@ -16878,11 +16920,11 @@
     // Each card's own color/badge (_simpleTaskCardHtml) still says whether
     // it's running or finished-and-unseen.
     const tasksEl = document.getElementById('simpleTasks');
-    const sessionRows = (sessions && Array.isArray(sessions.sessions)) ? sessions.sessions : [];
+    const convRows = (archive && Array.isArray(archive.conversations)) ? archive.conversations : [];
+    const sessionRows = convRows;
     const workingRows = sessionRows.filter(_simpleIsWorkingRow);
     const workingIds = {};
     workingRows.forEach(r => { workingIds[String(r.id || r.session_id || '')] = true; });
-    const convRows = (archive && Array.isArray(archive.conversations)) ? archive.conversations : [];
     const finishedRows = convRows.filter(r => r && !workingIds[String(r.id || r.session_id || '')]);
     const merged = workingRows.concat(finishedRows)
       .sort((a, b) => (Number(b.mtime || b.modified) || 0) - (Number(a.mtime || a.modified) || 0))
@@ -19174,8 +19216,17 @@
       return !!row.session_id
         && String(row.session_id) === String(placeholder.expected_session_id);
     }
-    if (row.session_id && placeholder.expected_session_id
-        && String(row.session_id) === String(placeholder.expected_session_id)) return true;
+    // A known target session id makes every heuristic below not just
+    // unnecessary but harmful: the prompt/cwd/recency fallback happily binds
+    // a brand-new placeholder to an OLDER session that ran the same prompt in
+    // the same repo (agent fan-outs and `ccc spawn` retries do this all the
+    // time), which deletes the placeholder seconds after it appears and hides
+    // the session that actually just started. Exact id, or its own spawn pid.
+    if (placeholder.expected_session_id) {
+      if (row.session_id
+          && String(row.session_id) === String(placeholder.expected_session_id)) return true;
+      return !!(row.spawn_pid && String(row.spawn_pid) === String(pid));
+    }
     if (row.spawn_pid && String(row.spawn_pid) === String(pid)) return true;
 
     const prompt = normalizePendingPrompt(placeholder.first_message || placeholder.display_name);
@@ -19216,6 +19267,10 @@
       }
       delete columnOverrides[placeholderId];
       delete columnOverrides[defaultPlaceholderId];
+      try {
+        _clientLog('[EXT-SPAWN] reconciled ' + placeholderId + ' -> '
+          + (resolvedSid || '?') + (placeholder.external_spawn ? ' (external)' : ''));
+      } catch (_) {}
       pendingSpawns.delete(pid);
     }
     return selectionSwap;
@@ -19501,6 +19556,10 @@
     // placeholder→real swap in loadConversationList re-binds the right
     // pane in place — selection follows the spawn end-to-end.
     const selectPending = () => {
+      // An externally-initiated spawn (`ccc spawn`, an agent, a queue lane)
+      // must NOT steal the pane: the user did not ask for this session, they
+      // just need to see it appear. Only spawns this tab started auto-select.
+      if (card.no_auto_select) return;
       if (typeof selectConversation === 'function') selectConversation(id);
     };
     if (card.fast_path) {
@@ -19519,6 +19578,96 @@
     if (!isSpawnLogPlaceholderSource(source)) {
       _watchPendingSpawnRegistration(pid, id);
     }
+  }
+
+  // ── Externally-initiated spawns ────────────────────────────────────────
+  // A spawn fired from this tab gets its placeholder synchronously, from the
+  // click handler. A spawn fired anywhere ELSE — `ccc spawn`, an agent POSTing
+  // /api/sessions/spawn, a WatchTower lane — had no client to do that, so the
+  // new session was invisible until its transcript materialized and a full
+  // archive refresh picked it up. For Codex that is tens of seconds of nothing.
+  //
+  // /api/sessions/live-activity now carries `recent_spawns` (the shared on-disk
+  // spawn registry, windowed). Turn each one CCC did not start here into the
+  // very same placeholder card, minus the auto-select — the user did not ask
+  // for this session, so it must appear without stealing their pane. From
+  // there the existing reconciliation (expected_session_id → real row) owns it.
+  const _externalSpawnSeen = new Map();   // spawn key -> ts first handled
+  const EXTERNAL_SPAWN_MAX_AGE_S = 120;   // older than this: the archive has it
+  const EXTERNAL_SPAWN_MAX_PER_TICK = 4;  // a fan-out must not stall the tab
+  const EXTERNAL_SPAWN_SEEN_TTL_MS = 30 * 60 * 1000;
+
+  function _pruneExternalSpawnSeen() {
+    if (_externalSpawnSeen.size < 200) return;
+    const cutoff = Date.now() - EXTERNAL_SPAWN_SEEN_TTL_MS;
+    for (const [k, ts] of Array.from(_externalSpawnSeen.entries())) {
+      if (ts < cutoff) _externalSpawnSeen.delete(k);
+    }
+  }
+
+  function _sessionRowExists(sid) {
+    if (!sid || !Array.isArray(conversationsData)) return false;
+    return conversationsData.some(c => c && (c.session_id === sid || c.id === sid));
+  }
+
+  function syncExternalSpawnPlaceholders(spawns) {
+    if (!Array.isArray(spawns) || !spawns.length) return 0;
+    if (typeof insertPendingSpawnCard !== 'function') return 0;
+    _pruneExternalSpawnSeen();
+    let added = 0;
+    for (const sp of spawns) {
+      if (added >= EXTERNAL_SPAWN_MAX_PER_TICK) break;
+      if (!sp || typeof sp !== 'object') continue;
+      const key = String(sp.spawn_id || sp.pid || '');
+      if (!key || _externalSpawnSeen.has(key)) continue;
+      const sid = String(sp.session_id || '');
+      // Our own spawn, already placeholdered by the click handler.
+      if (_cccLocalSpawns.ids.has(key) || (sid && _cccLocalSpawns.ids.has(sid))
+          || pendingSpawns.has(key)) {
+        _externalSpawnSeen.set(key, Date.now());
+        continue;
+      }
+      // One of our POSTs is still in flight, so we cannot yet name the spawn
+      // it will return. Leave this row unmarked and re-check next tick rather
+      // than racing our own request into a duplicate placeholder.
+      if (_cccLocalSpawns.inFlight > 0 && Number(sp.age_s || 0) < 15) continue;
+      _externalSpawnSeen.set(key, Date.now());
+      // Already finished, already old, or already a real row: nothing to
+      // preview — the ordinary list refresh is the right surface for these.
+      if (!sp.alive) continue;
+      if (Number(sp.age_s || 0) > EXTERNAL_SPAWN_MAX_AGE_S) continue;
+      if (sid && _sessionRowExists(sid)) continue;
+      if (_sessionRowExists('spawning-' + key)) continue;
+
+      const engine = String(sp.engine || 'claude');
+      const source = (typeof spawnSourceForEngine === 'function')
+        ? spawnSourceForEngine(engine) : engine;
+      const cwd = sp.repo_path || sp.cwd || '';
+      const subject = String(sp.name || sp.command_summary || '').trim()
+        || ('Spawning #' + key);
+      insertPendingSpawnCard(key, subject, source, sp.log || null, {
+        first_message: sp.command_summary || '',
+        repo_path: cwd,
+        folder_path: cwd,
+        spawn_cwd: cwd,
+        cwd: cwd,
+        session_cwd: cwd,
+        session_cwd_exists: !!cwd,
+        model: sp.model || '',
+        reasoning_effort: sp.reasoning_effort || '',
+        parent_session_id: sp.parent_session_id || '',
+        expected_session_id: sid,
+        spawned_via: sp.spawned_via || '',
+        no_auto_select: true,
+        external_spawn: true,
+      });
+      added++;
+      try {
+        _clientLog('[EXT-SPAWN] placeholder key=' + key + ' sid=' + (sid || '-')
+          + ' engine=' + engine + ' age=' + Math.round(Number(sp.age_s || 0)) + 's');
+      } catch (_) {}
+    }
+    return added;
   }
 
   // True while the spawn placeholder is still awaiting its real row. Looked
@@ -19755,6 +19904,11 @@
           }
           delete columnOverrides[placeholderId];
           delete columnOverrides[defaultPlaceholderId];
+          try {
+            _clientLog('[EXT-SPAWN] live-handoff ' + placeholderId + ' -> '
+              + ((realCard && realCard.session_id) || '?')
+              + ' inArchive=' + _hasSid(archiveData, (realCard && realCard.session_id) || ''));
+          } catch (_) {}
           pendingSpawns.delete(pid);
         }
       }
@@ -20306,7 +20460,16 @@
     if (!el) return;
     const row = (conversationsData || []).find(x => x.id === sid)
       || (Array.isArray(archiveData) ? archiveData.find(x => (x.id || x.session_id) === sid) : null);
-    const ts = row ? Number(row.modified || row.mtime || 0) : 0;
+    const native = window.CCCCodexClient?.inlineState(convPaneElById(activePaneId()));
+    const matches = native?.connected && native.context?.threadId === (sessionIdByConv[sid] || sid);
+    const updated = matches ? Number(native.thread?.updatedAt || 0) : 0;
+    const nativeTime = updated > 1e11 ? updated / 1000 : updated;
+    if (matches) {
+      _lastWrittenState = {sid, ts:nativeTime};
+      el.textContent = 'LIVE · CODEX';
+      return;
+    }
+    const ts = Math.max(row ? Number(row.modified || row.mtime || 0) : 0, nativeTime);
     if (!sid || !ts) {
       _lastWrittenState = null;
       el.textContent = '';
@@ -26184,6 +26347,10 @@
       toggleConversationRowSelection(el);
       return true;
     }
+    // A normal click on the row already shown in this pane has nothing to
+    // select. In particular, do not re-run selectConversation(): it resets
+    // the active reader and restarts its streams.
+    if (paneByPaneId(activePaneId())?.conversationId === el.dataset.id) return true;
     if (selectedListIds.size > 0) {
       clearSelectedConversationRows();
     }
@@ -31568,6 +31735,14 @@
     return writer !== 'desktop' && writer !== 'external' && writer !== 'unknown';
   }
 
+  // Queued-row Steer only makes sense for engines that can interrupt/replace
+  // an active turn. Devin (and other queue-only engines) has no such primitive;
+  // showing the button there makes it appear broken when the replacement never
+  // consumes the durable queue entry (CCC-???).
+  function sessionSupportsQueuedSteer(source) {
+    return source === 'codex' || source === 'kimi' || source === 'grok';
+  }
+
   function syncUserMessageSteerButtons(root) {
     const steerable = codexTurnSteerable();
     const title = steerable
@@ -33981,7 +34156,7 @@
         const pctLabel = ctxPct.pct + '%';
         const showCost = _rowBadgeShowsCost() && costKnown;
         const badgeLabel = showCost ? costLabel : pctLabel;
-        const tip = (costKnown ? costLabel + ' allocated subscription cost · ' : '') + ctxPct.source + ' ' + ctxPct.displayTokens.toLocaleString() + ' / ' + ctxPct.limit.toLocaleString() + ' tokens (' + ctxPct.pct + '%) - click to run /compact';
+        const tip = (costKnown ? costLabel + ' estimated subscription cost · ' : '') + ctxPct.source + ' ' + ctxPct.displayTokens.toLocaleString() + ' / ' + ctxPct.limit.toLocaleString() + ' tokens (' + ctxPct.pct + '%) - click to run /compact';
         const pctLevel = ctxPct.pct > 60 ? ' is-danger' : (ctxPct.pct > 30 ? ' is-warn' : '');
         // data-pct stays the context %, not the label — the /compact confirm
         // dialog and the warn/danger threshold classing both key off it.
@@ -37173,8 +37348,11 @@
           + '</details>'
           + '</div>';
       }
+      const _arcToolsLeft = _arcExpandAllToggle
+        ? '<span class="conv-archived-tools-left">' + _arcExpandAllToggle + '</span>'
+        : '';
       const _arcTools = '<div class="conv-archived-tools" data-role="archived-tools">'
-          + '<span class="conv-archived-tools-left">' + _arcExpandAllToggle + '</span>'
+          + _arcToolsLeft
           + '<span class="conv-archived-tools-right">' + _arcWindowToggle + _arcEngineToggle + _arcGroupingToggle
             + (_arcHasDensity ? _arcDenseToggle : _arcWrapToggle + _arcDetailsToggle) + '</span>'
           + '</div>';
@@ -37215,7 +37393,8 @@
       ];
     const _tabBarHtml = '<div class="conv-tab-bar" data-role="conv-tab-bar">'
       + _tabDefs.map(([k, label, n]) =>
-        '<button type="button" class="conv-tab' + (k === _sidebarTab ? ' is-active' : '') + '" data-conv-tab="' + k + '">'
+        '<button type="button" class="conv-tab' + (k === _sidebarTab ? ' is-active' : '') + '" data-conv-tab="' + k + '"'
+        + (k === 'workers' ? ' data-tour="workers"' : '') + '>'
         + escapeHtml(simpleLabel(label))
         + (n ? '<span class="conv-tab-count">' + n + '</span>' : '')
         + '</button>').join('')
@@ -41028,16 +41207,23 @@
   // The most recent user message in a conversation view — the anchor the "Last"
   // affordance jumps to (CCC-292). Excludes task-notification events, which are
   // rendered as user_text but aren't something the user wrote.
+  // The native Codex transcript marks user turns with its own class, and pins
+  // a sticky toolbar over the top of the pane that a jump must clear.
+  const CONV_USER_MESSAGE_SELECTOR = '.event.user_text:not(.task-notification-event), .codex-client-shell.is-inline .codex-client-message.is-user';
+  function _convReadingTop(view) {
+    const bar = view.querySelector(':scope > .codex-client-shell.is-inline .codex-client-topbar');
+    return view.getBoundingClientRect().top + (bar ? bar.offsetHeight : 0);
+  }
   function _prevUserMessageTarget(view) {
     if (!view) return null;
-    const list = view.querySelectorAll('.event.user_text:not(.task-notification-event)');
+    const list = view.querySelectorAll(CONV_USER_MESSAGE_SELECTOR);
     if (!list.length) return null;
     // The next stop when stepping up through the conversation: the latest
     // user message whose start is scrolled above the top of the pane.
     // isLast drives the button label ("Last" vs "Previous") — after jumping
     // to the last message its start sits at the pane top, so the target
     // naturally becomes the message before it (CCC-451).
-    const viewTop = view.getBoundingClientRect().top;
+    const viewTop = _convReadingTop(view);
     for (let i = list.length - 1; i >= 0; i--) {
       if (list[i].getBoundingClientRect().top < viewTop - 8) {
         return { el: list[i], isLast: i === list.length - 1 };
@@ -41048,13 +41234,13 @@
 
   function _nextUserMessageTarget(view) {
     if (!view) return null;
-    const list = view.querySelectorAll('.event.user_text:not(.task-notification-event)');
+    const list = view.querySelectorAll(CONV_USER_MESSAGE_SELECTOR);
     if (!list.length) return null;
     // Forward counterpart of _prevUserMessageTarget: the earliest user message
     // whose start sits below the pane top. The dead zone between the two
     // thresholds (-8..+20; jumps pin a message at +12) keeps the message
     // currently at the top from being its own previous/next target.
-    const viewTop = view.getBoundingClientRect().top;
+    const viewTop = _convReadingTop(view);
     for (let i = 0; i < list.length; i++) {
       if (list[i].getBoundingClientRect().top > viewTop + 20) return list[i];
     }
@@ -41413,9 +41599,8 @@
       const target = _prevUserMessageTarget(v);
       if (!target) return;
       v._pinnedToBottom = false;
-      const viewRect = v.getBoundingClientRect();
       const elRect = target.el.getBoundingClientRect();
-      const top = Math.max(0, v.scrollTop + (elRect.top - viewRect.top) - 12);
+      const top = Math.max(0, v.scrollTop + (elRect.top - _convReadingTop(v)) - 12);
       if (typeof v.scrollTo === 'function') v.scrollTo({ top, behavior: 'smooth' });
       else v.scrollTop = top;
       updateConversationEndAffordance(v);
@@ -41439,9 +41624,8 @@
       const el = _nextUserMessageTarget(v);
       if (!el) return;
       v._pinnedToBottom = false;
-      const viewRect = v.getBoundingClientRect();
       const elRect = el.getBoundingClientRect();
-      const top = Math.max(0, v.scrollTop + (elRect.top - viewRect.top) - 12);
+      const top = Math.max(0, v.scrollTop + (elRect.top - _convReadingTop(v)) - 12);
       if (typeof v.scrollTo === 'function') v.scrollTo({ top, behavior: 'smooth' });
       else v.scrollTop = top;
       updateConversationEndAffordance(v);
@@ -44968,6 +45152,8 @@
         + ' aria-label="Open full details for ' + escapeAttr(ref + ': ' + title) + '">'
         + '<span class="fq-recent-title"><span class="fq-recent-ref">' + escapeHtml(ref) + '</span> ' + escapeHtml(title) + '</span>'
         + '<span class="fq-recent-meta"><span class="fq-recent-state' + (row.resolved ? ' is-resolved' : '') + '">' + escapeHtml(state) + '</span>'
+        + (row.resolved ? '<time class="fq-recent-resolved" datetime="' + escapeAttr(item.closed_at || row.at) + '" title="Resolved: ' + escapeAttr(new Date(item.closed_at || row.at).toLocaleString()) + '">'
+          + escapeHtml('resolved ' + _uxqRelTime(item.closed_at || row.at)) + '</time>' : '')
         + '<span>' + escapeHtml(row.worker || 'Worker not recorded') + '</span></span>'
         // Relative and absolute are separate spans so the narrow Workers lane
         // can drop the absolute stamp (still in the tooltip) without losing
@@ -46539,59 +46725,22 @@
     // CCC's Spawn defaults (or the codex/claude PATH fallback), which the
     // tooltip spells out per part. Clicking opens the same gear dialog.
     const planHtml = _uxqWorkerPlanChipHtml(key, q && q.worker_plan);
-    // OPS-938: persistent in-panel alarm when the selected auto-drain queue
-    // is stuck or has no effective worker. NOT a toast — it stays until
-    // health clears, names the exact reason (orphan worker missing session
-    // identity, last spawn failure, invalid worker config), and offers
-    // Retry reconcile + Inspect. Queues merely awaiting human answers
-    // (blocked tickets) or parked (backlog) stay calm — the distinction
-    // between draining work, awaiting-human work, and invalid config is the
-    // whole point.
-    const blockedCount = (items || []).filter(it => it && it.needs_input
-      && String(it.status || '') !== 'closed'
-      && _uxqProjectKey(it.project) === key).length;
-    const effectiveWorkers = q && q.effective_workers != null
-      ? Number(q.effective_workers) || 0
-      : workers.filter(w => String((w && w.session_id) || '').trim()).length;
-    const orphanWorkers = q && q.orphan_workers != null
-      ? Number(q.orphan_workers) || 0
-      : Math.max(0, workers.length - effectiveWorkers);
-    const sinceProgressS = q && q.since_progress_s != null ? Number(q.since_progress_s) : null;
+    // OPS-938 used to render a persistent red "Queue X has no effective
+    // worker / is stuck — no progress in Nm" alarm here whenever an
+    // auto-drain queue had claimable work and no tracked worker. The owner
+    // asked for that banner to never appear again: the reconciler already
+    // owns staffing (it retries on its tick and parks a queue whose workers
+    // keep dying), so the alarm only nagged about a state that self-heals.
+    // Only a genuinely invalid worker config still gets an in-panel notice,
+    // since that one cannot fix itself.
     const configIssue = q ? String(q.config_issue || '') : '';
     const spawnIssue = q ? String(q.spawn_issue || '') : '';
-    const staffingAlarm = !!(q && q.auto_drain
-      && (q.staffing_alarm || q.stuck)
-      && Number(q.claimable || 0) > 0);
     let alarmHtml = '';
-    if (staffingAlarm || configIssue) {
-      let title;
-      if (staffingAlarm && q.stuck) {
-        title = 'Queue ' + key + ' is stuck'
-          + (sinceProgressS != null ? ' — no progress in ' + _uxqFmtAge(sinceProgressS) : '');
-      } else if (staffingAlarm) {
-        title = 'Queue ' + key + ' has no effective worker'
-          + (sinceProgressS != null ? ' — no progress in ' + _uxqFmtAge(sinceProgressS) : '');
-      } else {
-        title = 'Queue ' + key + ' worker config is invalid';
-      }
-      const lines = [];
-      if (staffingAlarm) {
-        const counts = [Number(q.claimable || 0) + ' claimable'];
-        if (Number(q.in_progress || 0)) counts.push(Number(q.in_progress) + ' in progress');
-        if (blockedCount) counts.push(blockedCount + ' awaiting human input');
-        lines.push('Open work: ' + counts.join(' · '));
-        let wLine = 'Workers: ' + effectiveWorkers + ' effective of ' + workers.length + ' tracked';
-        if (orphanWorkers) {
-          wLine += ' — ' + orphanWorkers + ' orphan worker missing session identity (reconciler nudges cannot reach it)';
-        } else if (!workers.length) {
-          wLine += ' — the reconciler has not staffed this queue';
-        }
-        lines.push(wLine);
-      }
+    if (configIssue) {
+      const title = 'Queue ' + key + ' worker config is invalid';
+      const lines = ['Config: ' + configIssue];
       if (spawnIssue) lines.push(spawnIssue.charAt(0).toUpperCase() + spawnIssue.slice(1));
-      if (configIssue) lines.push('Config: ' + configIssue);
-      const severity = staffingAlarm ? 'error' : 'warn';
-      alarmHtml = '<div class="fq-queue-alarm is-' + severity + '" role="alert">'
+      alarmHtml = '<div class="fq-queue-alarm is-warn" role="alert">'
         + '<div class="fq-queue-alarm-title">' + escapeHtml(title) + '</div>'
         + lines.map(l => '<div class="fq-queue-alarm-line">' + escapeHtml(l) + '</div>').join('')
         + '<div class="fq-queue-alarm-actions">'
@@ -47504,11 +47653,11 @@
     // WORKING NOW row clicks are bound per host by _uxqRenderWorkingNow, not
     // once by id here: the strip lives in the Workers lane now, whose DOM is
     // replaced wholesale on every structural render (CCC-1061).
-    const $queueAdd = document.getElementById('filesQueueAdd');
-    if ($queueAdd) {
-      $queueAdd.addEventListener('click', async (ev) => {
+    const $queueCreate = document.getElementById('filesQueueCreate');
+    if ($queueCreate) {
+      $queueCreate.addEventListener('click', async (ev) => {
         ev.stopPropagation();
-        await _addQueueTicket();
+        await openQueueManager();
       });
     }
     // Plan-to-fleet (W51): the "Import doc" affordance is shown only when the
@@ -50276,6 +50425,10 @@
     if (!currentConversation) return;
     const id = currentConversation;
     const $view = getConvViewForPane(fetchPaneId) || $conversationsView;
+    if (window.CCCCodexClient?.isInlineActive(convPaneElById(fetchPaneId))) {
+      syncNativeCodexQueuedInputs(fetchPaneId).catch(() => {});
+      return;
+    }
     // Backlog cards (open GH issues + TODO/PARKING/native-task) have no
     // session JSONL — /api/conversations/<id> returns 404. Render the
     // issue body directly from the card's already-loaded fields so the
@@ -50527,6 +50680,13 @@
       if (data.events && data.events.length > 0) {
         const sid = (conversationsData.find(x => x.id === id) || {}).session_id || id;
         fetchSessionUsage(sid);
+      }
+      if (data.engine === 'codex' && window.CCCCodexClient) {
+        const paneEl = convPaneElById(fetchPaneId);
+        const context = window.CCCCodexClientContext(paneEl);
+        if (paneByPaneId(fetchPaneId)?.conversationId === id) {
+          await window.CCCCodexClient.attachInline({...context, paneEl, viewEl:$view});
+        }
       }
     } catch (err) {
       if (convLastLine === 0) {
@@ -50964,6 +51124,11 @@
       if (_workspaceSessionIdByPane[pid] !== sid) return;
       _workspaceDataByPane[pid] = data;
       renderSessionWorkspaceIntoSticky(pid);
+      const nativePane = convPaneElById(pid);
+      if (data.cwd && nativePane?.classList.contains('is-codex-session') && window.CCCCodexClient) {
+        const view = getConvViewForPane(pid);
+        if (view?.querySelector('.event')) window.CCCCodexClient.attachInline({...window.CCCCodexClientContext(nativePane),paneEl:nativePane,viewEl:view});
+      }
     } catch (_) {}
   }
 
@@ -51679,25 +51844,36 @@
     const engine = railQuotaEngine(usage);
     if (!engine) return { state: 'unavailable', reason: 'Unknown engine' };
     if (calibration == null) return { state: 'calibrating', engine };
-    if (calibration.available !== true) {
-      return { state: 'unavailable', engine, reason: calibration.reason || 'Calibration unavailable' };
-    }
     const apiCost = Number(fullSessionApiCost);
-    const rate = Number(calibration.pct_per_usd);
     const plan = Number(monthlyPlanUsd);
     if (fullSessionApiCost == null || !Number.isFinite(apiCost) || apiCost < 0) {
       return { state: 'unavailable', engine, reason: 'API cost unavailable' };
     }
-    if (calibration.pct_per_usd == null || !Number.isFinite(rate) || rate < 0) {
-      return { state: 'unavailable', engine, reason: 'Calibration unavailable' };
-    }
     if (monthlyPlanUsd == null || !Number.isFinite(plan) || plan <= 0) {
       return { state: 'unavailable', engine, reason: 'Monthly plan unavailable' };
     }
+    let rate = Number(calibration.pct_per_usd);
+    let provisional = false;
+    if (calibration.available !== true || calibration.pct_per_usd == null || !Number.isFinite(rate) || rate < 0) {
+      // The strict 2-clean-day gate (calibrate_days) hasn't cleared yet for
+      // this engine, but the same daily-observation pass already computed a
+      // same-formula rate from whatever partial data it has (e.g. Codex with
+      // only 1 matched day instead of 2 required). A provisional number from
+      // real observed data beats withholding one entirely while the second
+      // clean day accumulates.
+      const sampledCost = Number(calibration.sampled_cost_usd);
+      const sampledPct = Number(calibration.sampled_pct);
+      if (sampledCost > 0 && sampledPct > 0) {
+        rate = sampledPct / sampledCost;
+        provisional = true;
+      } else {
+        return { state: 'unavailable', engine, reason: calibration.reason || 'Calibration unavailable' };
+      }
+    }
     const contributionPct = apiCost * rate;
     return {
-      state: 'ready', engine, apiCost, contributionPct, monthlyPlanUsd: plan,
-      allocatedCost: contributionPct / 100 * plan / 30 * 7,
+      state: provisional ? 'provisional' : 'ready', engine, apiCost, contributionPct, rate,
+      monthlyPlanUsd: plan, allocatedCost: contributionPct / 100 * plan / 30 * 7,
     };
   }
   // RAIL_QUOTA_COST_END
@@ -51719,17 +51895,18 @@
   // Row-level analogue of railQuotaCostPresentation: converts a raw
   // API-list-price $ estimate into "cost out of my subscription" for the
   // conv-list cost badges, using the same calibration data as the composer's
-  // usage rail. Returns null when the API cost, engine, or calibration isn't
-  // available -- callers fall back to the context-% badge rather than show a
-  // raw API number the user never asked to see (they pay a flat subscription,
-  // not per-token).
+  // usage rail. Returns null when the API cost or engine isn't available --
+  // callers fall back to the context-% badge rather than show a raw API
+  // number the user never asked to see (they pay a flat subscription, not
+  // per-token).
   function _rowSubscriptionCostUsd(apiCostUsd, engine) {
     const eng = railQuotaEngine({ engine });
     if (!eng || apiCostUsd == null) return null;
     const calibration = _quotaCostCalibration ? _quotaCostCalibration[eng] : null;
     const monthlyPlanUsd = eng === 'claude' ? _monthlyClaudePlanUsd() : _monthlyCodexPlanUsd();
     const presentation = railQuotaCostPresentation({ engine: eng }, apiCostUsd, calibration, monthlyPlanUsd);
-    return presentation.state === 'ready' ? presentation.allocatedCost : null;
+    return presentation.state === 'ready' || presentation.state === 'provisional'
+      ? presentation.allocatedCost : null;
   }
 
   function _refreshWeeklyClaudeUsage() {
@@ -51973,18 +52150,23 @@
         + '<div class="rail-usage-heading"><span>Estimated weekly quota</span><strong>Calibrating</strong></div>'
         + '<div>Historical engine calibration is loading.</div></div></div>';
     }
-    if (presentation.state !== 'ready') {
+    if (presentation.state !== 'ready' && presentation.state !== 'provisional') {
       return '<div class="rail-usage-breakdown rail-quota-cost"><div class="rail-usage-row">'
         + '<div class="rail-usage-heading"><span>Estimated weekly quota</span><strong>Unavailable</strong></div>'
         + '<div>' + escapeHtml(presentation.reason || 'Calibration unavailable') + '</div></div></div>';
     }
-    const rate = Number(calibration.pct_per_usd);
+    const isProvisional = presentation.state === 'provisional';
+    const rate = Number(presentation.rate);
     const sampleDays = Number(calibration.sample_days) || 0;
     const sampledCost = Number(calibration.sampled_cost_usd);
     const sampledPct = Number(calibration.sampled_pct);
     const contribution = presentation.contributionPct.toFixed(2) + '%';
+    const costLabel = isProvisional ? 'Estimated subscription cost' : 'Allocated subscription cost';
     const allocated = '$' + presentation.allocatedCost.toFixed(2);
-    const title = 'Historical rate: ' + rate.toFixed(4) + '% per $1 API list price. '
+    const title = (isProvisional
+        ? 'Provisional rate (calibration not yet confirmed — ' + sampleDays + ' of 2+ clean days banked): '
+        : 'Historical rate: ')
+      + rate.toFixed(4) + '% per $1 API list price. '
       + 'Sample: ' + sampleDays + ' days, $' + (Number.isFinite(sampledCost) ? sampledCost.toFixed(4) : 'Unavailable')
       + ' API cost, ' + (Number.isFinite(sampledPct) ? sampledPct.toFixed(4) : 'Unavailable') + '% observed. '
       + 'Formula: $' + presentation.apiCost.toFixed(4) + ' × ' + rate.toFixed(4) + '% per $1 = '
@@ -51994,7 +52176,7 @@
     return '<div class="rail-usage-breakdown rail-quota-cost" title="' + escapeAttr(title) + '">'
       + '<div class="rail-usage-row"><div class="rail-usage-heading"><span>Estimated weekly quota</span><strong>'
       + contribution + '</strong></div><div>' + rate.toFixed(4) + '% per $1 API list price</div></div>'
-      + '<div class="rail-usage-row"><div class="rail-usage-heading"><span>Allocated subscription cost</span><strong>'
+      + '<div class="rail-usage-row"><div class="rail-usage-heading"><span>' + costLabel + '</span><strong>'
       + allocated + '</strong></div><div>$' + presentation.monthlyPlanUsd.toFixed(2) + ' monthly plan</div></div>'
       + '<div class="rail-quota-formula">' + escapeHtml(title) + '</div></div>';
   }
@@ -52002,8 +52184,9 @@
   // RAIL_COST_HEADLINE_START
   function railCostHeadline(quota, apiCost) {
     return {
-      headline: quota.state === 'ready'
-        ? '$' + quota.allocatedCost.toFixed(2) + ' (' + quota.contributionPct.toFixed(1) + '%)'
+      headline: quota.state === 'ready' || quota.state === 'provisional'
+        ? (quota.state === 'provisional' ? '~' : '') + '$' + quota.allocatedCost.toFixed(2)
+          + ' (' + quota.contributionPct.toFixed(1) + '%)'
         : quota.state === 'calibrating' ? 'Calibrating…' : 'Unavailable',
       apiLabel: apiCost == null ? 'API list-price unavailable'
         : '$' + apiCost.toFixed(2) + ' API list-price equivalent',
@@ -52611,7 +52794,7 @@
       const sidebarPct = (hasLiveContext && livePct) ? livePct : calcPct;
       const sidebarSubCost = _rowSubscriptionCostUsd(cost, u.engine);
       const _showCost = _rowBadgeShowsCost() && sidebarSubCost != null;
-      const sidebarTip = (_showCost ? _formatRowCostUsd(sidebarSubCost) + ' allocated subscription cost · ' : '')
+      const sidebarTip = (_showCost ? _formatRowCostUsd(sidebarSubCost) + ' estimated subscription cost · ' : '')
         + sourceLabel + ' ' + displayTokens.toLocaleString() + ' / ' + limit.toLocaleString() + ' tokens (' + sidebarPct + '%) - click to run /compact';
       document.querySelectorAll('.conv-item[data-session-id="' + CSS.escape(_sidebarSid) + '"] [data-role="conv-pct-compact"]').forEach(el => {
         if (el.dataset.pct !== String(sidebarPct)) el.dataset.pct = String(sidebarPct);
@@ -53462,7 +53645,7 @@
     }
     pop.querySelectorAll('.mp-reasoning-row[data-reasoning]').forEach((row) => {
       row.addEventListener('click', () => {
-        applyModel(currentModel, currentIs1M, row.dataset.reasoning, engine === 'claude');
+        applyModel(currentModel, currentIs1M, row.dataset.reasoning, engine === 'claude' || engine === 'codex');
       });
     });
     const otherInput = pop.querySelector('[data-mp-other-input]');
@@ -54662,7 +54845,7 @@
   // turn, so N clicks cost N interruptions and N model calls to say what one
   // turn could have read at once -- which is exactly what Kimi's own Ctrl-S
   // flush avoids.
-  function syncQueuedSteerAllControl(tray, sessionId) {
+  function syncQueuedSteerAllControl(tray, sessionId, canSteerAll) {
     if (!tray) return;
     const cards = queuedSteerCardCount(tray);
     let bar = tray.querySelector('.queued-steer-all-bar');
@@ -54680,7 +54863,7 @@
     const allBtn = bar.querySelector('[data-steer-all-queued]');
     if (allBtn) {
       allBtn.dataset.sessionId = sessionId || allBtn.dataset.sessionId || '';
-      allBtn.hidden = cards < 2;
+      allBtn.hidden = cards < 2 || canSteerAll === false;
       allBtn.textContent = 'Steer all ' + cards;
     }
   }
@@ -54798,6 +54981,13 @@
       inputBar.parentNode.insertBefore(tray, inputBar);
     }
     const trayRows = [...tray.querySelectorAll('.event.user_text'), ...candidates];
+    const queuedSource = (paneState && paneState.currentSession && paneState.currentSession.source)
+      || (typeof sessionSourceByConv !== 'undefined' && sessionSourceByConv[conversationId])
+      || '';
+    // Default to showing the Steer button when the source is not yet known
+    // (e.g., early test stubs or a pane mid-load). Only hide it for engines
+    // we know do not support queued-row steer.
+    const canSteer = queuedSource ? sessionSupportsQueuedSteer(queuedSource) : true;
     [...new Set(trayRows)].forEach(el => {
       let cancel = el.querySelector('[data-cancel-queued-message]');
       if (!cancel) {
@@ -54812,13 +55002,18 @@
         cancel.setAttribute('data-cancel-queued-message', '');
       }
       let steer = el.querySelector('[data-steer-queued-message]');
-      if (!steer) {
-        steer = document.createElement('button');
-        steer.type = 'button';
-        steer.className = 'send-queued-steer';
-        steer.setAttribute('data-steer-queued-message', '');
-        steer.textContent = 'Steer';
-        el.appendChild(steer);
+      if (canSteer) {
+        if (!steer) {
+          steer = document.createElement('button');
+          steer.type = 'button';
+          steer.className = 'send-queued-steer';
+          steer.setAttribute('data-steer-queued-message', '');
+          steer.textContent = 'Steer';
+          el.appendChild(steer);
+        }
+      } else if (steer) {
+        steer.remove();
+        steer = null;
       }
       if (!el.querySelector('[data-copy-user-message]')) {
         const copyBtn = document.createElement('button');
@@ -54828,10 +55023,10 @@
         copyBtn.title = 'Copy message';
         copyBtn.setAttribute('aria-label', 'Copy message');
         copyBtn.innerHTML = '&#128203;';
-        el.insertBefore(copyBtn, steer);
+        el.insertBefore(copyBtn, steer || cancel);
       }
       cancel.dataset.sessionId = sessionId;
-      steer.dataset.sessionId = sessionId;
+      if (steer) steer.dataset.sessionId = sessionId;
       let actions = el.querySelector('.queued-steer-actions');
       if (!actions) {
         actions = document.createElement('div');
@@ -54844,7 +55039,8 @@
         .forEach(button => { if (button !== cancel && button !== steer && button !== copy) button.remove(); });
       cancel.classList.add('cancel-queued-message');
       if (copy) actions.appendChild(copy);
-      actions.append(cancel, steer);
+      actions.append(cancel);
+      if (steer) actions.appendChild(steer);
       actions.hidden = false;
       el.appendChild(actions);
       tray.appendChild(el);
@@ -54868,12 +55064,88 @@
       else el.remove();
     });
     if (!queuedSteerCardCount(tray)) { tray.remove(); return; }
-    syncQueuedSteerAllControl(tray, sessionId);
+    syncQueuedSteerAllControl(tray, sessionId, canSteer);
     // The queue ACK has arrived. Once every local send is represented in the
     // tray, a leftover "Sending…" indicator misstates the delivery state.
     if (!$view.querySelector('.event.user_text.pending, .event.user_text.steering-optimistic')) {
       $view.querySelectorAll('.conv-live-tool-inline.optimistic:not(.is-thinking)').forEach(el => el.remove());
     }
+  }
+
+  // Native Codex panes skip the legacy transcript fetch, and that fetch is the
+  // only path that paints durable queued rows. Without this the tray above the
+  // composer never builds, so a message parked behind a running turn shows
+  // only as a "Queued" banner with no text. Read just the in-memory queue and
+  // feed the same tray every other engine uses.
+  const _nativeCodexQueuedSync = new Map(); // paneId -> {promise, again}
+  const _nativeQueuedEchoes = new Map(); // paneId -> Set of queued native pending sends
+  // A message is either queued or sent, never both: once the durable queue
+  // lists it, drop its sent-looking transcript echo and the inline "Queued"
+  // banner, and let the tray card alone say it is waiting.
+  function _handOffNativeQueuedEchoes(pid, $view, queuedTexts) {
+    if (!queuedTexts.length) return;
+    $view.querySelectorAll('.conv-live-tool-inline.is-wake-status.is-queued').forEach(n => n.remove());
+    const echoes = _nativeQueuedEchoes.get(pid);
+    if (!echoes) return;
+    const listed = new Set(queuedTexts.map(text => _normSend(text)));
+    const native = window.CCCCodexClient?.inlineState?.(convPaneElById(pid));
+    echoes.forEach(pending => {
+      const alive = !native || (native.inlinePendingUserMessages || []).some(m => m.id === pending.nativeMessageId);
+      if (alive && listed.has(_normSend(pending.text))) removePendingSendEcho(pending);
+      if (!alive || listed.has(_normSend(pending.text))) echoes.delete(pending);
+    });
+    if (!echoes.size) _nativeQueuedEchoes.delete(pid);
+  }
+  function syncNativeCodexQueuedInputs(paneId) {
+    const pid = paneId || activePaneId();
+    const slot = _nativeCodexQueuedSync.get(pid) || { promise: null, again: false };
+    _nativeCodexQueuedSync.set(pid, slot);
+    // Coalesce: a caller arriving mid-read waits for a re-read that includes
+    // its own queue write, instead of starting a parallel fetch.
+    if (slot.promise) { slot.again = true; return slot.promise; }
+    slot.promise = _runNativeCodexQueuedSync(pid, slot).finally(() => { slot.promise = null; });
+    return slot.promise;
+  }
+  async function _runNativeCodexQueuedSync(pid, slot) {
+    do {
+      slot.again = false;
+      const pane = paneByPaneId(pid);
+      const convId = pane && pane.conversationId;
+      if (!convId) return;
+      const row = convRowForPane(pid);
+      const sid = sessionIdByConv[convId] || (row && row.session_id) || convId;
+      let data;
+      try {
+        const res = await fetch('/api/session/' + encodeURIComponent(sid) + '/queued-inputs');
+        if (!res.ok) return;
+        data = await res.json();
+      } catch (_) { return; }
+      if (paneByPaneId(pid)?.conversationId !== convId) return;
+      const $view = getConvViewForPane(pid);
+      if (!$view) return;
+      const events = (Array.isArray(data && data.events) ? data.events : [])
+        .filter(ev => ev && ev.pending && ev.text);
+      const tray = convPaneElById(pid)?.querySelector('.queued-steer-tray');
+      const shown = tray ? Array.from(tray.querySelectorAll('[data-queued-steer-server="true"] .user-msg'))
+        .map(msg => msg.getAttribute('data-raw-text') || '') : [];
+      const fresh = events.map(ev => String(ev.text));
+      _handOffNativeQueuedEchoes(pid, $view, fresh);
+      // Unchanged queue: leave the cards alone so hover and focus survive polls.
+      if (shown.length === fresh.length && shown.every((text, i) => text === fresh[i])) continue;
+      events.forEach(ev => {
+        const div = document.createElement('div');
+        div.className = 'event user_text pending server-queued';
+        div.dataset.queuedSteerServer = 'true';
+        if (ev.queued_reason) div.dataset.queuedReason = String(ev.queued_reason);
+        const epoch = ev.ts ? Date.parse(ev.ts) : NaN;
+        if (!isNaN(epoch)) div.dataset.tsEpoch = String(epoch);
+        const text = String(ev.text);
+        div.innerHTML = '<span class="label">User</span>'
+          + '<div class="user-msg" dir="auto" data-raw-text="' + escapeAttr(text) + '">' + escapeHtml(text) + '</div>';
+        $view.appendChild(div);
+      });
+      syncQueuedSteerTray($view, pid, true);
+    } while (slot.again);
   }
 
   // ── Conversation presentation modes ──────────────────────────────────
@@ -57181,6 +57453,7 @@
       pane.firstUserMsgRendered = true;
     }
     const $view = getConvViewForPane(paneId) || $conversationsView;
+    if (window.CCCCodexClient?.isInlineActive(convPaneElById(paneId))) return true;
     // Webui panes (kimi + codex) render kimi-web style: merged turns,
     // right-aligned user bubbles, ToolGroup cards. Gated here so the Claude
     // path below stays byte-for-byte the shared legacy renderer.
@@ -58850,6 +59123,13 @@
     } catch (_) {
       // Best-effort re-apply of stored annotations — never blocks rendering.
     }
+    if (_codexPane && window.CCCCodexClient) {
+      queueMicrotask(() => {
+        if (paneByPaneId(paneId)?.conversationId !== renderedConversationId) return;
+        const paneEl = convPaneElById(paneId);
+        window.CCCCodexClient.attachInline({...window.CCCCodexClientContext(paneEl),paneEl,viewEl:$view});
+      });
+    }
     return true;
   }
 
@@ -60025,6 +60305,7 @@
       if (pb.id === 'critique') meta = 'Reviewers: ' + critics.map(c => c.label).join(' + ');
       const title = 'Click to draft into the composer. Shift-click to send now.';
       let html = '<button type="button" class="orch-playbook orch-playbook-' + pb.id + (pb.optional ? ' is-optional' : '') + (pb.draft ? ' is-draft' : '') + '" data-orch-playbook="' + pb.id + '"'
+        + (pb.id === 'delegate' ? ' data-tour="delegate"' : '')
         + ' title="' + escapeAttr(title) + '">'
         + '<span class="orch-playbook-arrow" aria-hidden="true">' + (pb.draft ? '&#9998;' : '&#8592;') + '</span>'
         + '<span class="orch-playbook-body">'
@@ -60410,24 +60691,52 @@
     out.sort((a, b) => (a.depth - b.depth) || (b.mtime - a.mtime));
     return out;
   }
+  // Manual sidebar links are explicit user assertions for sessions that did
+  // not originate through CCC's spawn API. The lane map needs to honor them
+  // too; otherwise an attached child is visible in the sidebar but silently
+  // disappears from the parent's orchestration view.
+  function orchAppendManualLanes(parentSid, lanes) {
+    const rows = conversationsData || [];
+    const byId = new Map();
+    rows.forEach(row => { if (row && row.session_id) byId.set(row.session_id, row); });
+    const spawnById = new Map();
+    (_orchSpawnedRegistry || []).forEach(spawn => {
+      if (spawn && spawn.session_id) spawnById.set(spawn.session_id, spawn);
+    });
+    const seen = new Set((lanes || []).map(lane => lane.id));
+    rows.forEach(row => {
+      const id = String((row && row.session_id) || '');
+      if (!id || seen.has(id) || manualSubsessionParentId(id) !== parentSid) return;
+      const lane = orchLane(row, spawnById.get(id) || null);
+      lane.depth = 0;
+      lane.isTaskSubagent = false;
+      lane.source = 'manual-subsession';
+      seen.add(id);
+      lanes.push(lane);
+    });
+    lanes.sort((a, b) => ((a.depth || 0) - (b.depth || 0)) || (b.mtime - a.mtime));
+    return lanes;
+  }
   function orchCollectLanes(sid) {
     if (_orchSim) return _orchSim.lanes.slice();
     if (!sid) return [];
-    // Primary path: use the family tree from the unified SessionGraph if
-    // it's available for this root. This gives us multi-depth descendants
-    // and Claude Task-tool subagents that the flat lookup can't see.
-    if (_orchFamilyTree && _orchFamilyTreeSid === sid) {
-      const treeLanes = orchFlattenTree(_orchFamilyTree, sid);
-      if (treeLanes.length) return treeLanes;
-    }
-    // Fallback: original flat collection (direct children only).
+    // Start with the unified SessionGraph when available: it contributes
+    // multi-depth descendants and non-resumable Task-tool subagents. It is
+    // not a replacement for the live direct-child sources, though. Family
+    // indexing can lag a fresh spawn, so returning early here previously hid
+    // a child the conversation list already knew about.
+    const treeLanes = (_orchFamilyTree && _orchFamilyTreeSid === sid)
+      ? orchFlattenTree(_orchFamilyTree, sid)
+      : [];
+    const lanes = treeLanes.slice();
+    // Merge direct children from rows, the spawned registry, and the lane
+    // meta cache. `seen` preserves the richer tree record when sources agree.
     const rows = conversationsData || [];
     const byId = new Map();
     rows.forEach(r => { if (r && r.session_id) byId.set(r.session_id, r); });
     const spawnById = new Map();
     (_orchSpawnedRegistry || []).forEach(sp => { if (sp && sp.session_id) spawnById.set(sp.session_id, sp); });
-    const seen = new Set();
-    const lanes = [];
+    const seen = new Set(lanes.map(lane => lane.id));
     rows.forEach(r => {
       const pid = String((r && (r.parent_session_id || r.hermes_parent_session_id)) || '');
       if (pid !== sid || !r.session_id || seen.has(r.session_id)) return;
@@ -60450,7 +60759,7 @@
     });
     // Newest first inside each band so a fresh lane enters on the left.
     lanes.sort((a, b) => b.mtime - a.mtime);
-    return lanes;
+    return orchAppendManualLanes(sid, lanes);
   }
   // Two sources: /api/sessions/spawned is the live-ish window (recent
   // runs, carries running/status) and /api/sessions/children is the full
@@ -64352,13 +64661,32 @@
       refreshLiveSessionsActivity().catch(() => {});
     }
     if (resources.has('archive') && typeof refreshArchiveData === 'function') {
-      if (_archiveRefreshPromise) _archiveRefreshAfterInflight = true;
-      else refreshArchiveData({ staleOk: true }).then(_queueDashboardArchiveRender).catch(() => {});
+      _scheduleDashboardArchiveRefresh();
     }
     if ((resources.has('repo') || resources.has('github'))
         && typeof _hydrateArchiveSideData === 'function') {
       _hydrateArchiveSideData(true).catch(() => {});
     }
+  }
+
+  // Queue and worker events can arrive in a tight burst while a worker is
+  // starting or finishing. The archive endpoint returns a multi-MB payload,
+  // so microtask-level invalidation coalescing alone still lets consecutive
+  // event batches monopolize the dashboard server. Keep the live session
+  // patches immediate, but wait briefly to collapse that burst into one
+  // archive snapshot refresh.
+  const DASHBOARD_ARCHIVE_INVALIDATION_DEBOUNCE_MS = 250;
+  let _dashboardArchiveRefreshTimer = null;
+  function _scheduleDashboardArchiveRefresh() {
+    if (_dashboardArchiveRefreshTimer) return;
+    _dashboardArchiveRefreshTimer = setTimeout(() => {
+      _dashboardArchiveRefreshTimer = null;
+      if (_archiveRefreshPromise) {
+        _archiveRefreshAfterInflight = true;
+        return;
+      }
+      refreshArchiveData({ staleOk: true }).then(_queueDashboardArchiveRender).catch(() => {});
+    }, DASHBOARD_ARCHIVE_INVALIDATION_DEBOUNCE_MS);
   }
 
   function applyDashboardEvent(event) {
@@ -65769,6 +66097,7 @@
           inArchiveRows: _hasSid(ctx && ctx.archiveRows, sid),
           inWindowed: _hasSid(ctx && ctx.windowed, sid),
           inRowsForRender: _hasSid(ctx && ctx.rowsForRender, sid),
+          inPending: Array.from(pendingSpawns.values()).some(c => c && c.id === sid),
         };
         _clientLog('[ROW-FLICKER] disappeared sid=' + sid
           + ' lastSeenAgo=' + Math.round((now - lastSeen) / 1000) + 's'
@@ -71563,8 +71892,17 @@
     }
     if (uxQueueNowBtn) {
       uxQueueNowBtn.addEventListener('click', async () => {
+        // Persisting can include a screenshot upload. A Queue click must
+        // acknowledge immediately and become single-shot before that await,
+        // otherwise the unchanged button invites a confusing second click.
+        uxQueueNowBtn.disabled = true;
+        uxQueueNowBtn.textContent = 'Saving…';
         const ann = await persistAnnotation('Saving…');
-        if (!ann) return;
+        if (!ann) {
+          uxQueueNowBtn.disabled = false;
+          uxQueueNowBtn.textContent = 'Queue';
+          return;
+        }
         // "Queue" (1-click, CCC-179): enqueue immediately with the default
         // prompt — no preview. annOpenUxFixesQueue closes the editor itself.
         annOpenUxFixesQueue(ann, annStop, errEl, null);
@@ -72775,13 +73113,10 @@
     closeSettingsModal();
     try {
       await fetch('/api/onboarding/reset', { method: 'POST' });
-      const res = await fetch('/api/onboarding/status');
-      const data = await res.json();
-      showOnboarding(data);
     } catch (err) {
-      console.error('Failed to trigger onboarding:', err);
-      showOpToast('Failed to trigger onboarding.', 'error');
+      console.error('Failed to reset onboarding:', err);
     }
+    loadFirstFlightTour(true);
   });
   // ── Car Mode (hands-free voice operator) ──────────────────────────────
   // Explainer + cost + optional key setup + start/stop. Status/keys go through
@@ -77832,16 +78167,10 @@
   }
 
   async function checkOnboarding() {
-    try {
-      const res = await fetch('/api/onboarding/status');
-      if (!res.ok) return;
-      const data = await res.json();
-      if (data && data.clis && !data.completed) {
-        showOnboarding(data);
-      }
-    } catch (e) {
-      console.error('Failed to check onboarding status:', e);
-    }
+    // First-run is the First Flight guide (tour.js). Auto-opening this
+    // wizard stacked a second modal in front of that guide. Settings
+    // "Run onboarding" force-starts the same unified walkthrough.
+    return;
   }
 
   function showOnboarding(statusData) {
@@ -78270,7 +78599,7 @@
     // be panned out of the visible frame and block invisibly). The Settings
     // "Take the tour" button (force=true) still works everywhere.
     if (window.matchMedia && window.matchMedia('(max-width: 1200px)').matches) return;
-    // Defer while any modal (e.g. the login onboarding wizard) is open.
+    // Defer while any modal is open so the guide is not covered.
     if (document.querySelector('.upd-overlay.open')) {
       if ((attempt || 0) < 50) setTimeout(() => maybeStartFirstFlight((attempt || 0) + 1), 4000);
       return;

@@ -1,0 +1,1 @@
+Removed the parallel transcript prewarm that re-parsed the entire corpus every 5 minutes without persisting its results, causing sustained ~85% CPU on the archive refresh worker. The serial path already persists the meta cache correctly.

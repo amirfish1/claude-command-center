@@ -8,6 +8,7 @@ import inspect
 import ast
 import fcntl
 import json
+import multiprocessing
 import os
 import re
 import pathlib
@@ -32,6 +33,110 @@ PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, PROJECT_ROOT)
 
 
+def _hold_session_overrides_mutation(path, session_id, entered, release):
+    """Exercise the process-shared override writer from a forked child."""
+    import server
+
+    server.SESSION_OVERRIDES_FILE = pathlib.Path(path)
+
+    def mutate(overrides):
+        entered.set()
+        release.wait(5)
+        overrides[session_id] = {"model": session_id}
+
+    server._mutate_session_overrides(mutate)
+
+
+class TestSpawnWorktreeCreation(unittest.TestCase):
+    def test_cleanup_deletes_the_reserved_branch_without_a_worktree_directory(self):
+        server = importlib.import_module("server")
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = pathlib.Path(tmpdir)
+            candidate = root / "repo-wt" / "slow"
+            commands = []
+
+            def fake_run(args, **kwargs):
+                commands.append(args)
+                return subprocess.CompletedProcess(args, 0)
+
+            with mock.patch.object(server.subprocess, "run", side_effect=fake_run):
+                self.assertEqual(
+                    server._cleanup_failed_spawn_worktree(root / "repo", candidate, "feat/slow"),
+                    "",
+                )
+            self.assertEqual(
+                commands,
+                [
+                    ["git", "-C", str(root / "repo"), "show-ref", "--verify", "--quiet", "refs/heads/feat/slow"],
+                    ["git", "-C", str(root / "repo"), "branch", "-D", "feat/slow"],
+                ],
+            )
+
+    def test_cleanup_reports_a_reserved_branch_that_cannot_be_deleted(self):
+        server = importlib.import_module("server")
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = pathlib.Path(tmpdir)
+            candidate = root / "repo-wt" / "slow"
+
+            def fake_run(args, **kwargs):
+                if "show-ref" in args:
+                    return subprocess.CompletedProcess(args, 0)
+                return subprocess.CompletedProcess(args, 1, stderr="branch is checked out")
+
+            with mock.patch.object(server.subprocess, "run", side_effect=fake_run):
+                note = server._cleanup_failed_spawn_worktree(root / "repo", candidate, "feat/slow")
+            self.assertIn("branch cleanup failed: branch is checked out", note)
+
+    def test_cleanup_removes_only_the_reserved_worktree_and_branch(self):
+        server = importlib.import_module("server")
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = pathlib.Path(tmpdir)
+            candidate = root / "repo-wt" / "slow"
+            candidate.mkdir(parents=True)
+            commands = []
+
+            def fake_run(args, **kwargs):
+                commands.append(args)
+                return subprocess.CompletedProcess(args, 0)
+
+            with mock.patch.object(server.subprocess, "run", side_effect=fake_run):
+                self.assertEqual(
+                    server._cleanup_failed_spawn_worktree(root / "repo", candidate, "feat/slow"),
+                    "",
+                )
+            self.assertEqual(
+                commands,
+                [
+                    ["git", "-C", str(root / "repo"), "worktree", "remove", "--force", str(candidate)],
+                    ["git", "-C", str(root / "repo"), "show-ref", "--verify", "--quiet", "refs/heads/feat/slow"],
+                    ["git", "-C", str(root / "repo"), "branch", "-D", "feat/slow"],
+                ],
+            )
+
+    def test_worktree_add_timeout_is_reported_as_a_spawn_error(self):
+        """A slow checkout must not escape as an unhandled subprocess error."""
+        server = importlib.import_module("server")
+        with tempfile.TemporaryDirectory() as tmpdir:
+            repo = pathlib.Path(tmpdir) / "repo"
+            repo.mkdir()
+            timeouts = []
+
+            def fake_run(args, **kwargs):
+                if args[-2:] == ["rev-parse", "--show-toplevel"]:
+                    return subprocess.CompletedProcess(args, 0, stdout=str(repo) + "\n")
+                if "rev-parse" in args and "--verify" in args:
+                    return subprocess.CompletedProcess(args, 1)
+                if "worktree" in args and "add" in args:
+                    timeouts.append(kwargs["timeout"])
+                    raise subprocess.TimeoutExpired(args, kwargs["timeout"])
+                return subprocess.CompletedProcess(args, 0)
+
+            with mock.patch.object(server.subprocess, "run", side_effect=fake_run):
+                with self.assertRaisesRegex(RuntimeError, "timed out"):
+                    server._create_worktree_for_spawn(str(repo), "slow")
+            self.assertEqual(timeouts, [60])
+
+
 class TestConversationTranscriptPath(unittest.TestCase):
     def test_resolves_the_reader_path_for_a_session(self):
         """The copy affordance needs the concrete transcript path, even when
@@ -46,6 +151,79 @@ class TestConversationTranscriptPath(unittest.TestCase):
                 self.assertEqual(
                     server.conversation_transcript_path("session-id"), str(expected)
                 )
+
+    def test_resolves_kimi_acp_transcript_for_copy_affordance(self):
+        """Kimi's live ACP view must copy its own persisted transcript path."""
+        server = importlib.import_module("server")
+        with tempfile.TemporaryDirectory() as tmpdir:
+            expected = pathlib.Path(tmpdir) / "kimi-acp.jsonl"
+            expected.touch()
+            with (
+                mock.patch.object(server, "_detect_session_engine", return_value="kimi"),
+                mock.patch.object(server, "_acp_transcript_path", return_value=expected),
+            ):
+                self.assertEqual(
+                    server.conversation_transcript_path("session-kimi"), str(expected)
+                )
+
+    def test_resolves_grok_transcript_for_copy_affordance(self):
+        """Grok's viewer source is a store file or ACP transcript, not Claude JSONL."""
+        server = importlib.import_module("server")
+        with tempfile.TemporaryDirectory() as tmpdir:
+            expected = pathlib.Path(tmpdir) / "grok-updates.jsonl"
+            expected.touch()
+            with (
+                mock.patch.object(server, "_detect_session_engine", return_value="grok"),
+                mock.patch.object(server, "_grok_conversation_source", return_value=expected),
+            ):
+                self.assertEqual(
+                    server.conversation_transcript_path("session-grok"), str(expected)
+                )
+
+    def test_resolves_devin_cli_database_for_copy_affordance(self):
+        """Devin CLI transcripts live in its sessions database, not a JSONL file."""
+        server = importlib.import_module("server")
+        with tempfile.TemporaryDirectory() as tmpdir:
+            expected = pathlib.Path(tmpdir) / "sessions.db"
+            expected.touch()
+            with (
+                mock.patch.object(server, "_detect_session_engine", return_value="devin"),
+                mock.patch.object(server, "_is_devin_cli_session", return_value=True),
+                mock.patch.object(server, "_devin_cli_db_path", return_value=expected),
+            ):
+                self.assertEqual(
+                    server.conversation_transcript_path("devincli-session"), str(expected)
+                )
+
+    def test_resolves_devin_cloud_cache_for_copy_affordance(self):
+        """A cached Devin cloud session detail is the local transcript source."""
+        server = importlib.import_module("server")
+        with tempfile.TemporaryDirectory() as tmpdir:
+            expected = pathlib.Path(tmpdir) / "devin-session.json"
+            expected.touch()
+            with (
+                mock.patch.object(server, "_detect_session_engine", return_value="devin"),
+                mock.patch.object(server, "_is_devin_cli_session", return_value=False),
+                mock.patch.object(server, "_devin_detail_cache_path", return_value=expected),
+            ):
+                self.assertEqual(
+                    server.conversation_transcript_path("devin-cloud-session"), str(expected)
+                )
+
+    def test_resolves_database_backed_engine_transcript_paths_for_copy(self):
+        """Store-backed engines expose the exact local artifact CCC reads."""
+        server = importlib.import_module("server")
+        with tempfile.TemporaryDirectory() as tmpdir:
+            expected = pathlib.Path(tmpdir) / "engine.db"
+            expected.touch()
+            for engine, resolver in (("kilo", "_kilo_db_path"), ("opencode", "_opencode_db_path")):
+                with (
+                    mock.patch.object(server, "_detect_session_engine", return_value=engine),
+                    mock.patch.object(server, resolver, return_value=expected),
+                ):
+                    self.assertEqual(
+                        server.conversation_transcript_path(f"{engine}-session"), str(expected)
+                    )
 
 
 class TestSpawnStreamBackoff(unittest.TestCase):
@@ -832,67 +1010,6 @@ class TestServerImports(unittest.TestCase):
             "find_all_conversations must apply the WT display-name overlay before returning",
         )
 
-    def test_parallel_tail_meta_prewarm_matches_serial_and_can_be_disabled(self):
-        """The cold-scan process pool must produce byte-identical meta.
-
-        A cold archive scan (first run, or any _CONV_META_SCHEMA_VERSION bump
-        that drops the disk cache) re-parses every transcript. The pool is
-        only safe if a pooled parse is indistinguishable from a serial one,
-        and only acceptable if it can be turned off in one env var.
-        """
-        for mod in ("server", "morning", "morning_store"):
-            sys.modules.pop(mod, None)
-        server = importlib.import_module("server")
-
-        with tempfile.TemporaryDirectory() as tmp:
-            root = pathlib.Path(tmp)
-            paths = []
-            for i in range(4):
-                p = root / f"sess{i}.jsonl"
-                p.write_text(
-                    '{"type":"user","timestamp":"2026-01-0%dT00:00:00Z",'
-                    '"message":{"role":"user","content":"hi %d"}}\n' % (i + 1, i)
-                    + '{"type":"custom-title","customTitle":"title-%d"}\n' % i
-                )
-                paths.append(p)
-
-            serial = {}
-            for p in paths:
-                serial[str(p)] = server._extract_tail_meta(p)
-                server._conv_meta_cache.pop(str(p), None)
-
-            # Below _TAIL_META_PREWARM_MIN the pool is deliberately skipped —
-            # spinning up workers for a handful of files is a loss.
-            self.assertEqual(
-                server._prewarm_conv_meta_parallel(paths), 0,
-                "tiny batches must not pay for a process pool",
-            )
-
-            old_min = server._TAIL_META_PREWARM_MIN
-            server._TAIL_META_PREWARM_MIN = 1
-            old_env = os.environ.get("CCC_ARCHIVE_PARALLEL")
-            try:
-                filled = server._prewarm_conv_meta_parallel(paths)
-                self.assertEqual(filled, len(paths))
-                for p in paths:
-                    self.assertEqual(
-                        server._conv_meta_cache.get(str(p)), serial[str(p)],
-                        f"pooled meta differs from serial for {p.name}",
-                    )
-                # Kill switch: one env var puts the cold scan back on the
-                # serial path without a code change.
-                os.environ["CCC_ARCHIVE_PARALLEL"] = "0"
-                self.assertEqual(server._tail_meta_prewarm_workers(), 0)
-                self.assertEqual(server._prewarm_conv_meta_parallel(paths), 0)
-            finally:
-                server._TAIL_META_PREWARM_MIN = old_min
-                if old_env is None:
-                    os.environ.pop("CCC_ARCHIVE_PARALLEL", None)
-                else:
-                    os.environ["CCC_ARCHIVE_PARALLEL"] = old_env
-                for p in paths:
-                    server._conv_meta_cache.pop(str(p), None)
-
     def test_wt_display_items_cache_avoids_repeat_queue_fetches(self):
         """The display overlay's ticket source must not hit `gh` per rebuild.
 
@@ -1445,6 +1562,9 @@ class TestServerImports(unittest.TestCase):
         self.assertIn('id="sysProcBody"', index_html)
         self.assertIn("/api/system/processes", app_js)
         self.assertIn("/api/system/processes/kill", app_js)
+        self.assertIn("data-select-risk", app_js)
+        self.assertIn("data-select-pid", app_js)
+        self.assertIn("data-kill-selected", app_js)
         self.assertIn(".sys-proc-card", app_css)
 
         import server
@@ -5215,6 +5335,21 @@ class TestServerImports(unittest.TestCase):
         self.assertIn("el.classList.contains('not-acknowledged')", app_js)
         self.assertIn("if (isPendingSendEchoElement(el)) continue;", last_msg)
 
+    def test_tts_last_message_reads_native_codex_agent_messages(self):
+        """The shared speaker must find the native Codex inline transcript.
+
+        Native Codex renders agent replies as `.codex-client-message.is-agent`,
+        rather than the legacy `.event.assistant` rows the speaker searches.
+        """
+        app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
+        last_msg = app_js[
+            app_js.index("function lastMessageTtsData(paneId)"):
+            app_js.index("  // TTS playback rate", app_js.index("function lastMessageTtsData(paneId)"))
+        ]
+
+        self.assertIn(".codex-client-message.is-agent", last_msg)
+        self.assertIn("el.classList.contains('codex-client-message')", last_msg)
+
     def test_first_existing_dir_picks_first_real_path(self):
         """Codex / claude rows used to surface a tail-extracted worktree
         cwd that had since been deleted, so Launch built
@@ -5955,13 +6090,11 @@ class TestServerImports(unittest.TestCase):
     def test_queue_add_uses_large_composer(self):
         """Adding a queue item should use a multiline composer, not prompt()."""
         app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
-        index_html = pathlib.Path(PROJECT_ROOT, "static", "index.html").read_text(encoding="utf-8")
         app_css = pathlib.Path(PROJECT_ROOT, "static", "app.css").read_text(encoding="utf-8")
 
         self.assertIn("function openQueueTicketComposer()", app_js)
         self.assertIn("const note = await openQueueTicketComposer();", app_js)
         self.assertNotIn("window.prompt('New queue ticket", app_js)
-        self.assertIn('id="filesQueueAdd"', index_html)
         self.assertIn('class="fq-add-row" id="filesQueueAdd"', app_js)
         self.assertGreater(
             app_js.index('class="fq-add-row" id="filesQueueAdd"'),
@@ -5973,6 +6106,27 @@ class TestServerImports(unittest.TestCase):
         self.assertIn(".fq-ticket-textarea", app_css)
         self.assertIn("min-height: 150px;", app_css)
         self.assertIn("resize: vertical;", app_css)
+
+    def test_queue_header_add_opens_queue_manager_not_ticket_composer(self):
+        """The header plus creates a queue; the lower add row creates tickets."""
+        index_html = pathlib.Path(PROJECT_ROOT, "static", "index.html").read_text(encoding="utf-8")
+        app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
+
+        self.assertIn('id="filesQueueCreate"', index_html)
+        self.assertIn('title="Create a new queue"', index_html)
+        self.assertIn('aria-label="Create a new queue"', index_html)
+        self.assertNotIn('id="filesQueueAdd"', index_html)
+        header_handler_start = app_js.index("const $queueCreate = document.getElementById('filesQueueCreate');")
+        header_handler_end = app_js.index("// Plan-to-fleet", header_handler_start)
+        header_handler = app_js[header_handler_start:header_handler_end]
+        self.assertIn("await openQueueManager();", header_handler)
+        self.assertNotIn("_addQueueTicket();", header_handler)
+        list_handler_start = app_js.index("$queueList.addEventListener('click'")
+        list_handler_end = app_js.index("const createSessionQueueBtn", list_handler_start)
+        list_handler = app_js[list_handler_start:list_handler_end]
+        self.assertIn("closest('#filesQueueAdd')", list_handler)
+        self.assertIn("await _addQueueTicket();", list_handler)
+        self.assertNotIn("openQueueManager()", list_handler)
 
     def test_queue_add_renders_a_pending_row_until_watchtower_confirms_it(self):
         """A submitted add stays visible as a spinner row until the canonical item arrives."""
@@ -7092,7 +7246,8 @@ class TestServerImports(unittest.TestCase):
         self.assertIn(".queued-steer-tray .cancel-queued-message", app_css)
         self.assertIn(".queued-steer-actions > button", app_css)
         self.assertIn("grid-area: queued", app_css)
-        self.assertIn("actions.append(cancel, steer)", app_js)
+        self.assertIn("actions.append(cancel);", app_js)
+        self.assertIn("if (steer) actions.appendChild(steer);", app_js)
         self.assertIn(".queued-steer-tray .event.user_text {", app_css)
         self.assertIn("background: rgba(63, 185, 80, 0.045);", app_css)
 
@@ -12107,6 +12262,53 @@ class TestRepoContextHelpers(unittest.TestCase):
         self.assertEqual(popen.call_args.kwargs["cwd"], str(self.repo))
         record.assert_called_once()
 
+    def test_spawn_devin_runs_in_created_worktree(self):
+        """A Devin --worktree spawn must not inherit the coordinator cwd."""
+        server = self.server
+        proc = mock.Mock(pid=4248)
+        proc.poll.return_value = None
+        isolated = self.repo.parent / "devin-isolated"
+        original_spawns = list(server._spawned_sessions)
+        server._spawned_sessions.clear()
+        try:
+            with mock.patch.object(
+                server,
+                "_resolve_devin_bin",
+                return_value={"available": True, "bin": "/usr/bin/devin-test"},
+            ), mock.patch.object(
+                server,
+                "_create_worktree_for_spawn",
+                return_value=(str(isolated), "feat/devin-worktree"),
+            ) as create_worktree, mock.patch.object(
+                server,
+                "_run_worktree_init_hook",
+            ) as init_hook, mock.patch.object(
+                server.subprocess,
+                "Popen",
+                return_value=proc,
+            ) as popen, mock.patch.object(server, "_record_spawn_to_registry"):
+                result = server.spawn_session_devin(
+                    "work in isolation",
+                    name="Devin worktree",
+                    repo_path=str(self.repo),
+                    worktree=True,
+                )
+        finally:
+            for entry in server._spawned_sessions:
+                fh = entry.get("log_fh")
+                if fh:
+                    fh.close()
+            server._spawned_sessions.clear()
+            server._spawned_sessions.extend(original_spawns)
+
+        self.assertTrue(result["ok"])
+        self.assertEqual(result["worktree_path"], str(isolated))
+        self.assertEqual(result["worktree_branch"], "feat/devin-worktree")
+        create_worktree.assert_called_once_with(str(self.repo), "devin-worktree")
+        self.assertEqual(popen.call_args.kwargs["cwd"], str(isolated))
+        init_hook.assert_called_once()
+        self.assertEqual(init_hook.call_args.args[:3], (str(isolated), str(self.repo), "devin-worktree"))
+
     def test_resume_cursor_queues_when_resume_already_running(self):
         server = self.server
         sid = "00000000-0000-4000-8000-000000000004"
@@ -15352,10 +15554,63 @@ class TestModelPicker(unittest.TestCase):
                 self.assertEqual(got["model"], "claude-sonnet-4-6")
                 self.assertFalse(got["context_1m"])
                 self.assertEqual(got["engine"], "claude")
+                server._set_session_override(
+                    "sid-1", "gpt-6-astra", False, "codex",
+                    policy_confirmed=True,
+                )
+                got = server._get_session_override("sid-1")
+                self.assertTrue(got["policy_confirmed"])
                 server._clear_session_override("sid-1")
                 self.assertIsNone(server._get_session_override("sid-1"))
             finally:
                 server.SESSION_OVERRIDES_FILE = orig
+
+    def test_session_override_mutation_serializes_separate_processes(self):
+        """Parallel spawns keep both override entries instead of sharing a tmp file."""
+        import server
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            path = pathlib.Path(tmpdir) / "session-overrides.json"
+            original = server.SESSION_OVERRIDES_FILE
+            server.SESSION_OVERRIDES_FILE = path
+            context = multiprocessing.get_context("fork")
+            first_entered = context.Event()
+            first_release = context.Event()
+            second_entered = context.Event()
+            second_release = context.Event()
+            first = context.Process(
+                target=_hold_session_overrides_mutation,
+                args=(str(path), "sid-first", first_entered, first_release),
+            )
+            second = context.Process(
+                target=_hold_session_overrides_mutation,
+                args=(str(path), "sid-second", second_entered, second_release),
+            )
+            first.start()
+            self.assertTrue(first_entered.wait(2))
+            second.start()
+            try:
+                self.assertFalse(second_entered.wait(0.3))
+                first_release.set()
+                self.assertTrue(second_entered.wait(2))
+                second_release.set()
+                first.join(3)
+                second.join(3)
+                self.assertEqual(first.exitcode, 0)
+                self.assertEqual(second.exitcode, 0)
+                self.assertEqual(
+                    set(json.loads(path.read_text())), {"sid-first", "sid-second"},
+                )
+            finally:
+                first_release.set()
+                second_release.set()
+                first.join(3)
+                second.join(3)
+                if first.is_alive():
+                    first.terminate()
+                if second.is_alive():
+                    second.terminate()
+                server.SESSION_OVERRIDES_FILE = original
 
     def test_latest_claude_models_are_marked_as_one_m_context_in_model_picker(self):
         """Anthropic's latest Fable, Opus, and Sonnet models support 1M."""

@@ -47,6 +47,15 @@ def test_archive_base_refresh_does_not_eagerly_request_pr_enrichment():
     assert "refreshLiveSessionsActivity().then" in source
 
 
+def test_simple_home_reuses_archive_rows_instead_of_requesting_full_sessions():
+    source = _function(
+        "async function _simpleHomeRefresh()", "// R4: stuck helper-queue alerts"
+    )
+
+    assert "'/api/sessions?all=1'" not in source
+    assert "const sessionRows = convRows;" in source
+
+
 def test_engine_availability_waits_for_first_sessions_and_idle_time():
     start = SOURCE.index("async function refreshEngineAvailability()")
     source = SOURCE[start:SOURCE.index("// Hide-descriptions toggle", start)]

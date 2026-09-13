@@ -184,3 +184,12 @@ class TestQueueHeaderLayout(unittest.TestCase):
         ]
 
         self.assertIn('flex-wrap: nowrap', mobile_header)
+
+    def test_brief_resolved_rows_keep_a_relative_resolution_time(self):
+        app_js = (PROJECT_ROOT / "static" / "app.js").read_text(encoding="utf-8")
+        app_css = (PROJECT_ROOT / "static" / "app.css").read_text(encoding="utf-8")
+
+        self.assertIn("fq-recent-resolved", app_js)
+        self.assertIn("item.closed_at || row.at", app_js)
+        self.assertIn("'resolved ' + _uxqRelTime(item.closed_at || row.at)", app_js)
+        self.assertIn(".fq-recent-row.is-brief .fq-recent-resolved", app_css)

@@ -1,0 +1,1 @@
+Fixed a regression where opening a Codex session always flashed an empty "Reconnecting…" shell over the already-loaded conversation; the legacy transcript now stays visible until the native connection is confirmed.

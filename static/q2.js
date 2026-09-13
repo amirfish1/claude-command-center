@@ -2814,6 +2814,12 @@
     btn.classList.add('is-pending');
     var prevLabel = btn.textContent;
     btn.textContent = plan[4];
+    // Delivery can wait on the worker transport. Clear an answer immediately
+    // so the UI acknowledges the click without making success look slower than
+    // the network path, while retaining it to restore after a failed request.
+    var box = document.querySelector('[data-q2-input="' + act + '"]');
+    var submittedText = box ? box.value : '';
+    if (box) box.value = '';
     try {
       var sent = await postJson(plan[0], plan[1]);
       // GitHub-backed tickets: the server relays text only — pasted-image
@@ -2822,14 +2828,13 @@
         ? plan[3] + ' — images not supported for GitHub-backed tickets, text sent without them'
         : plan[3]);
       state.arm = '';
-      var box = document.querySelector('[data-q2-input="' + act + '"]');
-      if (box) box.value = '';
       // Re-fetch rather than patching local state, so what is on screen is
       // what the store actually holds. Deliberately NOT clearing state.detail
       // first: that would flash the "Loading" state and tear down the iframe.
       await loadDetail(ref);
       await refresh();
     } catch (e) {
+      if (box && !box.value) box.value = submittedText;
       note('Failed: ' + e.message);
       btn.textContent = prevLabel;
     } finally {

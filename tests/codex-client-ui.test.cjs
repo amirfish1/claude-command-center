@@ -194,7 +194,7 @@ test('a mutation is single-flight and close cleans up before reopening', async (
       window.CCCCodexClient.close();
       return { mutations, duplicateSkipped: values[1]?.skipped === true, shells: document.querySelectorAll('.codex-client-shell').length };
     });
-    assert.deepEqual(result, { mutations: 1, duplicateSkipped: true, shells: 0 });
+    assert.deepEqual(result, { mutations: 1, duplicateSkipped: true, shells: 1 });
   } finally { await page.close(); }
 });
 
@@ -387,7 +387,7 @@ test('loading earlier history preserves the visible transcript position', async 
   } finally { await page.close(); }
 });
 
-test('reopening starts cleanly on Conversation with one launcher and one shell', async () => {
+test('reopening a client retains one shell without adding a separate workspace launcher', async () => {
   const page = await barePage();
   try {
     const result = await page.evaluate(async () => {
@@ -410,7 +410,7 @@ test('reopening starts cleanly on Conversation with one launcher and one shell',
         launchers: document.querySelectorAll('[data-codex-workspace-launch]').length,
       };
     });
-    assert.deepEqual(result, { current: 'conversation', surface: 'conversation', conversationHidden: false, shells: 1, launchers: 1 });
+    assert.deepEqual(result, { current: 'conversation', surface: 'conversation', conversationHidden: false, shells: 1, launchers: 0 });
   } finally { await page.close(); }
 });
 
@@ -968,4 +968,12 @@ test('a nullable ref preserves the referenced union variants and serialization',
     await page.waitForFunction(() => window.__reads.length === 1);
     assert.deepEqual(await page.evaluate(() => window.__reads[0].params), { cwd: ['/tmp/repo'] });
   } finally { await page.close(); }
+});
+
+test('loading the renderer does not add a separate workspace entry point', async () => {
+  const page = await barePage();
+  try {
+    await page.evaluate(()=>document.body.insertAdjacentHTML('afterbegin','<div id="cccBreadcrumb"></div>'));
+    assert.equal(await page.$$eval('[data-codex-workspace-launch],[data-codex-toolbar-launch]',nodes=>nodes.length),0);
+  } finally {await page.close();}
 });

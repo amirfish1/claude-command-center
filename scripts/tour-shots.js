@@ -71,17 +71,12 @@ async function driveTour(page, pathChoice, width, height, tag, results) {
   };
 
   await shot('01-welcome');
-  await page.keyboard.press('Enter'); await sleep(500);
-  await shot('02-fork');
-  await page.keyboard.press(pathChoice); await sleep(800);
-  for (let i = 1; i <= 6; i++) {
+  for (let i = 1; i <= 24; i++) {
     if (!(await tourActive(page))) break;
-    await shot(`0${i + 2}-step${i}`);
-    await page.keyboard.press('ArrowRight'); await sleep(650);
-  }
-  if (await tourActive(page)) {
-    await shot('09-finale');
-    await page.keyboard.press('Enter'); await sleep(500);
+    await page.keyboard.press('ArrowRight'); await sleep(400);
+    if (!(await tourActive(page))) break;
+    const n = String(i + 1).padStart(2, '0');
+    await shot(`${n}-step${i}`);
   }
   const still = await tourActive(page);
   const flag = await page.evaluate(() => {

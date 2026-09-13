@@ -1,0 +1,1 @@
+Sessions started outside the dashboard (`ccc spawn`, an agent, a queue lane) now appear in the conversation list the moment they start, with the same "spawning…" placeholder a session started from the UI gets — and without stealing the pane you are working in.

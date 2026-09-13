@@ -1115,23 +1115,29 @@ def _inject_blocked_recent_entries(limit=20):
 # queue had just drained, 9s apart).
 #
 # Deliberately narrow -- three exemptions, each load-bearing:
-#   * a caller-supplied idempotency_key means that caller already owns its
-#     replay semantics (the dashboard composer stamps one on every send, and
-#     the Codex steer path deliberately re-sends under a fresh key). Guessing
-#     for them here would break protocols that are already correct.
+#   * a caller-supplied idempotency_key identifies one logical send. Matching
+#     keys converge on one delivery; fresh keys remain distinct so an explicit
+#     repeat can still land.
 #   * only text that actually reached the session is remembered, so a real
 #     retry after a real failure still lands.
 #   * never the terminal-queue drain: that call *completes* an earlier attempt
 #     which is already in the window, so suppressing it would strand the
 #     queued message forever.
 _INJECT_DEDUPE_WINDOW_S = 300
+# A duplicate must never wait forever for an owner whose transport wedged.
+# Callers can retry this explicit, non-delivered result after the owner clears.
+_INJECT_DEDUPE_WAIT_S = 5.0
 
 _inject_dedupe_lock = threading.Lock()
-# {session_id: {text_key: last_seen_ts}} -- in-process on purpose. Every inject
-# (HTTP endpoint, queue-watcher thread, fleet CLI, wt's delegate POST) funnels
-# through this one server process, and forgetting the window on restart costs
-# one duplicate, never a lost message.
+# {session_id: {dedupe_key: last_seen_ts}} -- in-process on purpose. Every
+# inject (HTTP endpoint, queue-watcher thread, fleet CLI, wt's delegate POST)
+# funnels through this one server process, and forgetting the window on restart
+# costs one duplicate, never a lost message.
 _inject_dedupe_recent = {}
+# {(session_id, dedupe_key): Event}. A caller that is already routing a send
+# owns this reservation; concurrent replays wait for its real outcome instead
+# of racing a second write into the same FIFO.
+_inject_dedupe_inflight = {}
 
 
 def _inject_dedupe_window_s():
@@ -1159,7 +1165,45 @@ def _inject_dedupe_prune(now, window_s):
             recent.pop(sid, None)
 
 
-def _inject_dedupe_record(session_id, text, now=None):
+def _inject_dedupe_key(text, idempotency_key=None):
+    """Keep keyed replays separate from distinct, same-text composer sends."""
+    if idempotency_key:
+        return "idempotency:" + str(idempotency_key)
+    return "text:" + _core._inject_budget_text_key(text)
+
+
+def _inject_dedupe_eligible(
+    session_id, text, *, from_terminal_queue=False, allow_duplicate=False,
+):
+    return bool(session_id and text) and not (
+        _inject_dedupe_window_s() <= 0
+        or allow_duplicate
+        or from_terminal_queue
+    )
+
+
+def _inject_dedupe_result(sid, source, window_s, age_s):
+    return {
+        "ok": True,
+        "deduped": True,
+        "code": "duplicate_suppressed",
+        "via": "duplicate-suppressed",
+        "effect": "duplicate",
+        "landed": "already_delivered",
+        "queued": False,
+        "session_id": sid,
+        "source": source,
+        "window_s": window_s,
+        "age_s": round(age_s, 3),
+        "message": (
+            f"An equivalent delivery already reached this session {int(age_s)}s ago; "
+            f"suppressed as a duplicate (window {int(window_s)}s). Pass "
+            "allow_duplicate to send it again."
+        ),
+    }
+
+
+def _inject_dedupe_record(session_id, text, idempotency_key=None, now=None):
     """Remember that `text` reached `session_id`.
 
     Keyed on the session id exactly as the caller passed it -- the router
@@ -1171,7 +1215,7 @@ def _inject_dedupe_record(session_id, text, now=None):
     if window_s <= 0 or not session_id or not text:
         return
     now_ts = time.time() if now is None else float(now)
-    key = _core._inject_budget_text_key(text)
+    key = _inject_dedupe_key(text, idempotency_key)
     with _core._inject_dedupe_lock:
         _core._inject_dedupe_prune(now_ts, window_s)
         _core._inject_dedupe_recent.setdefault(str(session_id), {})[key] = now_ts
@@ -1197,7 +1241,6 @@ def _inject_duplicate_check(
     if (
         window_s <= 0
         or allow_duplicate
-        or idempotency_key
         or from_terminal_queue
         or not session_id
         or not text
@@ -1205,7 +1248,7 @@ def _inject_duplicate_check(
         return None
     now_ts = time.time() if now is None else float(now)
     sid = str(session_id)
-    key = _core._inject_budget_text_key(text)
+    key = _inject_dedupe_key(text, idempotency_key)
     with _core._inject_dedupe_lock:
         _core._inject_dedupe_prune(now_ts, window_s)
         seen = _core._inject_dedupe_recent.get(sid)
@@ -1214,24 +1257,50 @@ def _inject_duplicate_check(
             return None
         seen[key] = now_ts
     age = now_ts - last
-    return {
-        "ok": True,
-        "deduped": True,
-        "code": "duplicate_suppressed",
-        "via": "duplicate-suppressed",
-        "effect": "duplicate",
-        "landed": "already_delivered",
-        "queued": False,
-        "session_id": sid,
-        "source": source,
-        "window_s": window_s,
-        "age_s": round(age, 3),
-        "message": (
-            f"Identical text already delivered to this session {int(age)}s ago; "
-            f"suppressed as a duplicate (window {int(window_s)}s). Pass "
-            "allow_duplicate to send it again."
-        ),
-    }
+    return _inject_dedupe_result(sid, source, window_s, age)
+
+
+def _inject_dedupe_acquire(
+    session_id, text, *, source="api", idempotency_key=None,
+    from_terminal_queue=False, allow_duplicate=False,
+):
+    """Atomically claim a delivery, find a prior result, or join its owner."""
+    if not _inject_dedupe_eligible(
+        session_id, text,
+        from_terminal_queue=from_terminal_queue,
+        allow_duplicate=allow_duplicate,
+    ):
+        return None, None, False
+    window_s = _inject_dedupe_window_s()
+    now_ts = time.time()
+    sid = str(session_id)
+    key = _inject_dedupe_key(text, idempotency_key)
+    inflight_key = (sid, key)
+    with _core._inject_dedupe_lock:
+        _core._inject_dedupe_prune(now_ts, window_s)
+        seen = _core._inject_dedupe_recent.get(sid)
+        last = seen.get(key) if isinstance(seen, dict) else None
+        if last is not None:
+            seen[key] = now_ts
+            return (
+                _inject_dedupe_result(sid, source, window_s, now_ts - last),
+                None,
+                False,
+            )
+        pending = _core._inject_dedupe_inflight.get(inflight_key)
+        if pending is not None:
+            return None, pending, False
+        _core._inject_dedupe_inflight[inflight_key] = threading.Event()
+    return None, None, True
+
+
+def _inject_dedupe_release(session_id, text, idempotency_key=None):
+    """Wake replays after the owner has recorded success or rolled back."""
+    key = _inject_dedupe_key(text, idempotency_key)
+    with _core._inject_dedupe_lock:
+        pending = _core._inject_dedupe_inflight.pop((str(session_id), key), None)
+        if pending is not None:
+            pending.set()
 
 
 # --- CCC-1000 Phase 1: the inject result contract ---------------------------
@@ -1352,6 +1421,39 @@ def _annotate_inject_result(result, *, requested, force_queue=False, fields=None
     return result
 
 
+def _log_inject_result(
+    session_id, text, *, mode, source, idempotency_key, wt_origin, result,
+):
+    """Log an inject only after its router result establishes the outcome."""
+    if not isinstance(result, dict) or result.get("blocked"):
+        # Circuit-breaker refusals log their own BLOCKED row at the point the
+        # gate decides to hold the message; do not duplicate it here.
+        return
+    if result.get("via") in ("worker", "uds"):
+        # The control-plane worker and the UDS adapter each own a downstream
+        # delivery record. Emitting an outer INJECT would count the same
+        # accepted message twice.
+        return
+    detail = (
+        f"session={session_id} mode={mode} source={source} "
+        f"idem={idempotency_key or '-'} wt_origin={wt_origin} "
+    )
+    if result.get("ok"):
+        _core._log_activity(
+            "inject", "INJECT",
+            f"{detail}via={result.get('via') or '-'} "
+            f"queued={bool(result.get('queued'))} "
+            f"text=\"{_core._activity_log_preview(text)}\"",
+        )
+        return
+    _core._log_activity(
+        "inject", "INJECT_REJECT",
+        f"{detail}code={result.get('code') or '-'} "
+        f"error=\"{_core._activity_log_preview(str(result.get('error') or 'delivery failed'))}\" "
+        f"text=\"{_core._activity_log_preview(text)}\"",
+    )
+
+
 def _inject_text_into_session(session_id, text, **kwargs):
     """Route `text` to a session, then stamp the CCC-1000 result contract.
 
@@ -1371,13 +1473,43 @@ def _inject_text_into_session(session_id, text, **kwargs):
     # short-circuit answers in milliseconds -- a sender that timed out waiting
     # for the first delivery must not time out on the reply that tells it to
     # stop retrying.
-    duplicate = _core._inject_duplicate_check(
-        session_id, text,
-        source=str(kwargs.get("source", "api")),
-        idempotency_key=kwargs.get("idempotency_key"),
-        from_terminal_queue=bool(kwargs.get("_from_terminal_queue", False)),
-        allow_duplicate=allow_duplicate,
-    )
+    dedupe_owner = False
+    while True:
+        duplicate, pending, dedupe_owner = _core._inject_dedupe_acquire(
+            session_id, text,
+            source=str(kwargs.get("source", "api")),
+            idempotency_key=kwargs.get("idempotency_key"),
+            from_terminal_queue=bool(kwargs.get("_from_terminal_queue", False)),
+            allow_duplicate=allow_duplicate,
+        )
+        if duplicate is not None or pending is None:
+            break
+        # Do not report success until the owner really delivers. If it fails,
+        # acquire again so this replay becomes the retry instead of losing text.
+        if pending.wait(timeout=_core._INJECT_DEDUPE_WAIT_S):
+            continue
+        timeout_result = _annotate_inject_result(
+            {
+                "ok": False,
+                "code": "delivery_in_progress",
+                "error": "an identical delivery is still in progress",
+                "via": "duplicate-inflight",
+                "effect": "none",
+                "landed": "none",
+                "queued": False,
+            },
+            requested=requested,
+            fields=fields,
+        )
+        _core._log_inject_result(
+            session_id, text,
+            mode=mode,
+            source=str(kwargs.get("source", "api")),
+            idempotency_key=kwargs.get("idempotency_key"),
+            wt_origin=bool(kwargs.get("wt_origin")),
+            result=timeout_result,
+        )
+        return timeout_result
     if duplicate is not None:
         _core._log_activity(
             "inject", "DEDUPE",
@@ -1388,16 +1520,37 @@ def _inject_text_into_session(session_id, text, **kwargs):
         return _annotate_inject_result(
             duplicate, requested=requested, fields=fields,
         )
-    result = _annotate_inject_result(
-        _core._inject_text_into_session_router(session_id, text, **kwargs),
-        requested=requested,
-        force_queue=bool(kwargs.get("force_queue", False)),
-        fields=fields,
-    )
+    try:
+        result = _annotate_inject_result(
+            _core._inject_text_into_session_router(session_id, text, **kwargs),
+            requested=requested,
+            force_queue=bool(kwargs.get("force_queue", False)),
+            fields=fields,
+        )
+    except BaseException:
+        if dedupe_owner:
+            _core._inject_dedupe_release(
+                session_id, text, kwargs.get("idempotency_key"),
+            )
+        raise
     # Queued counts as reaching the session: CCC owns the text from here and
     # the drain (exempt from the check above) delivers it exactly once.
     if isinstance(result, dict) and result.get("ok"):
-        _core._inject_dedupe_record(session_id, text)
+        _core._inject_dedupe_record(
+            session_id, text, kwargs.get("idempotency_key"),
+        )
+    if dedupe_owner:
+        _core._inject_dedupe_release(
+            session_id, text, kwargs.get("idempotency_key"),
+        )
+    _core._log_inject_result(
+        session_id, text,
+        mode=mode,
+        source=str(kwargs.get("source", "api")),
+        idempotency_key=kwargs.get("idempotency_key"),
+        wt_origin=bool(kwargs.get("wt_origin")),
+        result=result,
+    )
     return result
 
 
@@ -1416,6 +1569,7 @@ def _inject_text_into_session_router(
     force_headless=False,
     force_queue=False,
     peer_sender_sid=None,
+    queued_steer_batch=False,
 ):
     """Route `text` to a session using the same fall-through as /api/inject-input:
     terminal-control AppleScript when there's a TTY, FIFO write to a live spawn,
@@ -1455,19 +1609,6 @@ def _inject_text_into_session_router(
     # before engine detection so a Kimi nudge cannot fall through to a Claude
     # resume and fail with an unrelated ``repo_required`` error.
     session_id = _core._canonical_kimi_session_id(session_id)
-    # Circuit breaker. A refusal logs its own BLOCKED event below; successful
-    # local delivery logs INJECT after the worker-handoff decision. See the
-    # _inject_budget_* block for why the counter is a file and why a trip
-    # returns `blocked` and not just `ok:false`.
-    _blocked = _core._inject_budget_check(session_id, text, source)
-    if _blocked is not None:
-        _core._log_activity(
-            "inject", "BLOCKED",
-            f"session={session_id} source={source} reason={_blocked['reason']} "
-            f"count={_blocked['count']}/{_blocked['limit']} "
-            f"text=\"{_core._activity_log_preview(text)}\"",
-        )
-        return _blocked
     is_codex = _core._is_codex_session(session_id)
     compact_command = bool(_core._COMPACT_TRIGGER_RE.match(text))
     clear_command = bool(_core._CLEAR_TRIGGER_RE.match(text))
@@ -1544,16 +1685,18 @@ def _inject_text_into_session_router(
         )
         if routed is not None:
             return routed
-    # The worker owns a routed Claude inject and emits its activity row. Log
-    # only local delivery attempts, so one logical composer send has one
-    # INJECT row instead of a dashboard handoff row plus the worker delivery.
-    # idempotency_key distinguishes separate user actions at the log surface.
-    _core._log_activity(
-        "inject", "INJECT",
-        f"session={session_id} mode={mode} source={source} "
-        f"idem={idempotency_key or '-'} wt_origin={wt_origin} "
-        f"text=\"{_core._activity_log_preview(text)}\"",
-    )
+    # Circuit breaker. The worker owns a routed Claude inject, so meter only
+    # after that hand-off declines; otherwise both dashboard and worker record
+    # the one logical attempt. A refusal logs its own BLOCKED event below.
+    _blocked = _core._inject_budget_check(session_id, text, source)
+    if _blocked is not None:
+        _core._log_activity(
+            "inject", "BLOCKED",
+            f"session={session_id} source={source} reason={_blocked['reason']} "
+            f"count={_blocked['count']}/{_blocked['limit']} "
+            f"text=\"{_core._activity_log_preview(text)}\"",
+        )
+        return _blocked
     # Native Claude peer socket for agent-to-agent relays. Sits AFTER the
     # worker hand-off above and ahead of every legacy transport below: a
     # headless target that just handed off already sent once (the worker's
@@ -1649,6 +1792,16 @@ def _inject_text_into_session_router(
         if idempotency_key:
             steer_kwargs["idempotency_key"] = idempotency_key
         steer_kwargs["preserve_queued_steer"] = bool(preserve_queued_steer)
+        if queued_steer_batch:
+            # Steer-all delivers every queued original as one concatenated
+            # prompt. The claim-before-delivery transaction can only match a
+            # SINGLE queue entry's exact text, so against the concatenation
+            # it always misses and reports "queued_message_missing" even
+            # though every original is still queued. Batch consumption is
+            # handled afterward by _finalize_queued_steer_batch_result, which
+            # matches each original by its own text -- skip straight to plain
+            # delivery instead of the single-item transaction.
+            steer_kwargs["queued_steer_transaction_protocol"] = 0
         steer_result = _core.resume_session_codex(
             session_id, text, **steer_kwargs
         )
@@ -2243,8 +2396,29 @@ def _set_session_model(session_id, model, context_1m, reasoning_effort=None, eff
     if not session_id or not model:
         return {"ok": False, "error": "missing session_id or model"}
     engine = _core._detect_session_engine(session_id)
+    override = _core._get_session_override(session_id) or {}
+    # An effort-only picker update re-sends the current model.  Treat an
+    # unchanged model from either CCC's override or Codex's authoritative
+    # thread record as an existing session choice, not as a new blocked-model
+    # request. Native/desktop Codex sessions have no picker override.
+    current_model = str(override.get("model") or "").strip().lower()
+    if not current_model and engine == "codex":
+        try:
+            current_model = str(
+                (_core._codex_thread_row(session_id) or {}).get("model") or ""
+            ).strip().lower()
+        except Exception:
+            current_model = ""
+    policy_confirmed = (
+        engine == "codex"
+        and effort_only
+        and bool(current_model)
+        and current_model == str(model or "").strip().lower()
+    )
     if engine == "codex":
-        model, model_error = _core._validate_codex_model(model, require_available=True)
+        model, model_error = _core._validate_codex_model(
+            model, require_available=True, confirm_blocked=policy_confirmed,
+        )
         if model_error:
             return {
                 "ok": False,
@@ -2285,7 +2459,15 @@ def _set_session_model(session_id, model, context_1m, reasoning_effort=None, eff
             "applied": "live",
             "via": "kimi-acp-config",
         }
-    _core._set_session_override(session_id, model, context_1m, engine, reasoning_effort)
+    if policy_confirmed:
+        _core._set_session_override(
+            session_id, model, context_1m, engine, reasoning_effort,
+            policy_confirmed=True,
+        )
+    else:
+        _core._set_session_override(
+            session_id, model, context_1m, engine, reasoning_effort,
+        )
     payload = {
         "ok": True,
         "model": model,
@@ -3410,7 +3592,7 @@ def ask_engine_session_and_wait(session_id, text, timeout_ms, engine):
 def ask_session_and_wait(session_id, text, timeout_ms=30000, cwd=None, peer_sender_sid=None):
     """Synchronously inject `text` into a session and wait for its reply.
 
-    Non-claude engines route first: codex/gemini/antigravity/hermes/opencode
+    Non-claude engines route first: codex/gemini/antigravity/hermes/opencode/devin
     go to ask_engine_session_and_wait (engine resume + stream tail); Kimi and
     Grok go to _acp_ask_and_wait (ACP session/prompt, blocks for the turn-end
     response).
@@ -3464,7 +3646,7 @@ def ask_session_and_wait(session_id, text, timeout_ms=30000, cwd=None, peer_send
         )
         if routed is not None:
             return routed
-    if engine in ("codex", "gemini", "antigravity", "hermes", "opencode"):
+    if engine in ("codex", "gemini", "antigravity", "hermes", "opencode", "devin"):
         return _core.ask_engine_session_and_wait(session_id, text, timeout_ms, engine)
     if engine in ("kimi", "grok"):
         return _core._acp_ask_and_wait(engine, session_id, text, timeout_ms)

@@ -29,6 +29,7 @@
 }
 
 .codex-client-shell {
+  position: relative;
   --codex-panel: color-mix(in srgb, var(--surface, #16191f) 92%, transparent);
   --codex-soft: color-mix(in srgb, var(--text, #e6edf3) 5%, transparent);
   --codex-soft-strong: color-mix(in srgb, var(--text, #e6edf3) 9%, transparent);
@@ -43,7 +44,7 @@
   background:
     radial-gradient(circle at 14% -8%, color-mix(in srgb, var(--codex-accent) 10%, transparent), transparent 33%),
     var(--bg, #0d1117);
-  font-family: Inter, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  font-family: var(--font-ui, Inter, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif);
   overflow: hidden;
 }
 
@@ -353,6 +354,8 @@
 .codex-client-toolhead strong { font-size: 12px; }
 .codex-client-toolhead span { color: var(--text-muted, #8b949e); font-size: 10px; }
 .codex-client-toolhead input { width: 100%; height: 32px; border: 1px solid var(--border, #30363d); border-radius: 8px; padding: 0 10px; color: var(--text, #e6edf3); background: var(--bg, #0d1117); font: 11px inherit; outline: 0; }
+.codex-client-toolhead .codex-client-preview-toggle { display: flex; align-items: center; gap: 5px; color: var(--text-muted, #8b949e); font-size: 10px; cursor: pointer; }
+.codex-client-toolhead .codex-client-preview-toggle input { width: auto; height: auto; margin: 0; }
 .codex-client-toolhead input:focus { border-color: color-mix(in srgb, var(--codex-accent) 55%, var(--border, #30363d)); }
 .codex-client-catalog { padding: 10px; }
 .codex-client-action-group + .codex-client-action-group { margin-top: 15px; }
@@ -456,3 +459,37 @@ textarea.codex-schema-input { min-height: 82px; resize: vertical; }
 [data-codex-media-host] { padding: 12px; }
 .codex-client-footer { flex-wrap: wrap; }
 .codex-client-footer select { font: inherit; color: var(--text); background: var(--bg); border: 1px solid var(--border); border-radius: 4px; }
+
+/* The Codex renderer occupies CCC's existing transcript slot. Pane grid,
+   status rail, header, and composer remain owned by the conversation UI. */
+.conversations-view > .codex-client-shell.is-inline {
+  display: block;
+  width: 100%;
+  height: auto;
+  min-height: 100%;
+  overflow: visible;
+  background: transparent;
+}
+.codex-client-shell.is-inline .codex-client-topbar {
+  display: flex;
+  justify-content: flex-end;
+  min-height: 32px;
+  padding: 4px 12px;
+  background: var(--bg);
+  position: sticky;
+  top: 0;
+  z-index: 3;
+}
+.codex-client-shell.is-inline .codex-client-main,
+.codex-client-shell.is-inline .codex-client-conversation,
+.codex-client-shell.is-inline .codex-client-transcript {
+  display: block;
+  height: auto;
+  min-height: 0;
+  overflow: visible;
+}
+.codex-client-shell.is-inline .codex-client-conversation[hidden] { display: none; }
+.codex-client-shell.is-inline.is-tools-collapsed[data-surface="conversation"] .codex-client-tools { display: none; }
+.codex-client-shell.is-inline .codex-client-tools { border: 0; }
+.codex-client-shell.is-inline .codex-client-notices { position: sticky; width: auto; margin: 0 12px; top: 36px; right: auto; }
+.codex-client-shell.is-inline .codex-client-footer { justify-content: flex-end; }

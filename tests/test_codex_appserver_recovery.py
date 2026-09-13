@@ -8,6 +8,7 @@ refused because CCC's own dashboard held a read handle on the shared state DB.
 
 import os
 import pathlib
+import threading
 import unittest
 from unittest import mock
 
@@ -94,15 +95,97 @@ class TestSharedStateConflictCooldownTest(unittest.TestCase):
         with mock.patch.object(codex._core, "_CODEX_APP_SERVER_TRANSPORT", None), \
              mock.patch.object(codex._core, "_CODEX_APP_SERVER_INITIALIZED", False), \
              mock.patch.object(codex._core, "_CODEX_APP_SERVER_INITIALIZING", False), \
-             mock.patch.object(codex, "_codex_managed_app_server_enabled", return_value=False), \
+             mock.patch.object(codex._core, "_codex_managed_app_server_enabled", return_value=False), \
              mock.patch.object(codex._core, "_codex_shared_state_conflict", return_value=conflict) as check, \
              mock.patch.object(codex._core, "_log_activity") as log_activity, \
-             mock.patch.object(codex.time, "time", return_value=1000.0):
+            mock.patch.object(codex.time, "time", return_value=1000.0):
             self.assertIsNone(codex._ensure_codex_app_server())
             self.assertIsNone(codex._ensure_codex_app_server())
+            self.assertFalse(codex._core._CODEX_APP_SERVER_INITIALIZING)
 
         self.assertEqual(check.call_count, 1)
         self.assertEqual(log_activity.call_count, 1)
+
+    def test_cooldown_return_wakes_initialization_waiter(self):
+        """A cooldown must release callers that arrived behind its flag."""
+        paused_at_cooldown = threading.Event()
+        release_cooldown = threading.Event()
+        waiter_blocked = threading.Event()
+        waiter_released = threading.Event()
+        results = []
+        lock = codex._core._CODEX_APP_SERVER_LOCK
+        original_wait = lock.wait
+        original_notify_all = lock.notify_all
+
+        def controlled_socket_path():
+            paused_at_cooldown.set()
+            release_cooldown.wait(2)
+            return mock.Mock()
+
+        def mark_wait(timeout=None):
+            waiter_blocked.set()
+            result = original_wait(10)
+            waiter_released.set()
+            return result
+
+        with mock.patch.object(codex._core, "_CODEX_APP_SERVER_TRANSPORT", None), \
+             mock.patch.object(codex._core, "_CODEX_APP_SERVER_INITIALIZED", False), \
+             mock.patch.object(codex._core, "_CODEX_APP_SERVER_INITIALIZING", False), \
+             mock.patch.object(codex._core, "_codex_managed_app_server_socket_path", side_effect=controlled_socket_path), \
+             mock.patch.object(codex._core, "_codex_managed_app_server_enabled", return_value=False), \
+             mock.patch.object(codex.time, "time", return_value=1000.0), \
+             mock.patch.object(lock, "wait", side_effect=mark_wait), \
+             mock.patch.object(lock, "notify_all", wraps=original_notify_all) as notify_all:
+            codex._CODEX_SHARED_STATE_BLOCK_RETRY_UNTIL = 1030.0
+            initializer = threading.Thread(
+                target=lambda: results.append(codex._ensure_codex_app_server()),
+            )
+            initializer.start()
+            self.assertTrue(paused_at_cooldown.wait(1))
+
+            waiter = threading.Thread(
+                target=lambda: results.append(codex._ensure_codex_app_server()),
+            )
+            waiter.start()
+            self.assertTrue(waiter_blocked.wait(1))
+
+            try:
+                release_cooldown.set()
+                self.assertTrue(waiter_released.wait(1))
+                self.assertGreaterEqual(notify_all.call_count, 1)
+            finally:
+                with lock:
+                    original_notify_all()
+            initializer.join(2)
+            waiter.join(2)
+
+        self.assertFalse(initializer.is_alive())
+        self.assertFalse(waiter.is_alive())
+        self.assertEqual(results, [None, None])
+        self.assertFalse(codex._core._CODEX_APP_SERVER_INITIALIZING)
+
+
+class StaleAppServerInitializationTest(unittest.TestCase):
+    """An initializer that loses its transport must not strand all callers."""
+
+    def test_stale_initialization_returns_unavailable_instead_of_waiting_forever(self):
+        import server  # noqa: F401  (registers the _core namespace)
+        transport = mock.Mock()
+        transport.alive.return_value = False
+
+        with mock.patch.object(codex._core, "_CODEX_APP_SERVER_TRANSPORT", transport), \
+             mock.patch.object(codex._core, "_CODEX_APP_SERVER_PROC", mock.Mock()), \
+             mock.patch.object(codex._core, "_CODEX_APP_SERVER_INITIALIZED", False), \
+             mock.patch.object(codex._core, "_CODEX_APP_SERVER_INITIALIZING", True), \
+             mock.patch.object(codex, "_CODEX_APP_SERVER_INITIALIZING_WAIT_S", 0), \
+             mock.patch.object(codex, "_codex_managed_app_server_enabled", return_value=False), \
+             mock.patch.object(codex._core, "_log_activity") as log_activity:
+            self.assertIsNone(codex._ensure_codex_app_server(allow_stdio=False))
+            self.assertTrue(codex._core._CODEX_APP_SERVER_INITIALIZING)
+            self.assertFalse(codex._core._CODEX_APP_SERVER_INITIALIZED)
+
+        transport.close.assert_not_called()
+        self.assertTrue(any(call.args[1] == "INIT_STALE" for call in log_activity.call_args_list))
 
 
 class StaleAppServerInitializationTest(unittest.TestCase):

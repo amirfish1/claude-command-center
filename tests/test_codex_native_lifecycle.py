@@ -92,6 +92,27 @@ def test_deleted_markers_filter_stale_native_spawn_edges(tmp_path, monkeypatch):
     assert server._codex_spawn_parent_by_child() == {"alive-child": "parent"}
 
 
+def test_native_spawn_edge_names_fetches_children_in_one_query(monkeypatch):
+    queries = []
+
+    def fetch_threads(where="", params=(), limit=None):
+        queries.append((where, params, limit))
+        return [
+            {"id": "child-a", "agent_nickname": "Review auth"},
+            {"id": "child-b", "agent_nickname": "Check billing"},
+        ]
+
+    monkeypatch.setattr(server, "_codex_fetch_threads", fetch_threads)
+    monkeypatch.setattr(server, "_codex_agent_task_label",
+                        lambda row: row.get("agent_nickname") or "")
+
+    assert server._codex_spawn_edge_names(["child-a", "child-b"]) == {
+        "child-a": "Review auth",
+        "child-b": "Check billing",
+    }
+    assert queries == [("id IN (?,?)", ("child-a", "child-b"), None)]
+
+
 def test_deleted_marker_filters_only_codex_rows_from_cold_cache(tmp_path, monkeypatch):
     _isolate_lifecycle(tmp_path, monkeypatch)
     server._codex_thread_registry_delete({"same-id"})
@@ -116,6 +137,41 @@ def test_registry_write_failure_keeps_native_delete_sync_retryable(tmp_path, mon
         assert "registry" in str(error).lower()
     else:
         raise AssertionError("registry failure was silently accepted")
+
+
+def test_registry_entry_lookup_does_not_copy_the_full_cached_registry(tmp_path, monkeypatch):
+    """A hot per-session lookup may copy its row, but never every thread."""
+    registry_file = tmp_path / "codex-thread-registry.json"
+    registry_file.write_text("{}")
+    stat = registry_file.stat()
+    cached = {
+        "schema_version": 1,
+        "threads": {
+            "target": {"thread_id": "target", "ccc": {"cwd": "/target"}},
+            **{f"other-{index}": {"thread_id": f"other-{index}", "payload": list(range(200))}
+               for index in range(100)},
+        },
+        "deleted_threads": {},
+    }
+    monkeypatch.setattr(server, "CODEX_THREAD_REGISTRY_FILE", registry_file)
+    monkeypatch.setitem(codex._CODEX_THREAD_REGISTRY_CACHE, "token",
+                        (str(registry_file), stat.st_mtime_ns, stat.st_size))
+    monkeypatch.setitem(codex._CODEX_THREAD_REGISTRY_CACHE, "data", cached)
+    copied = []
+    real_deepcopy = codex.copy.deepcopy
+
+    def track_copy(value):
+        copied.append(value)
+        return real_deepcopy(value)
+
+    monkeypatch.setattr(codex.copy, "deepcopy", track_copy)
+
+    row = server._codex_thread_registry_entry("target")
+
+    assert row == {"thread_id": "target", "ccc": {"cwd": "/target"}}
+    assert cached not in copied, "per-session lookup copied the complete registry"
+    row["ccc"]["cwd"] = "/mutated"
+    assert cached["threads"]["target"]["ccc"]["cwd"] == "/target"
 
 
 def test_ephemeral_lifecycle_never_writes_real_sidecars(monkeypatch):

@@ -1,0 +1,1 @@
+- Coalesce bursty dashboard event refreshes so archive loads no longer monopolize the dashboard server.

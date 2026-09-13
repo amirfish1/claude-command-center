@@ -1,0 +1,60 @@
+<!doctype html>
+<html><head>
+<meta charset="utf-8">
+<link rel="stylesheet" href="_shared.css">
+<style>
+  .wrap { display: flex; flex-direction: column; height: 100%; }
+  h1 { font-size: 46px; }
+  .gov {
+    display: flex; align-items: center; gap: 18px;
+    background: var(--panel); border: 1px solid var(--accent);
+    border-radius: 14px; padding: 16px 20px; margin: 8px 0 18px;
+    font-size: 22px;
+  }
+  .pill {
+    font-size: 16px; letter-spacing: 0.04em; text-transform: uppercase;
+    font-weight: 700; color: var(--accent);
+    border: 1px solid var(--accent); border-radius: 999px; padding: 4px 10px;
+  }
+  .btns { margin-left: auto; display: flex; gap: 10px; }
+  .btns span {
+    background: #21262d; border: 1px solid var(--line); border-radius: 8px;
+    padding: 8px 14px; font-size: 18px; font-weight: 600;
+  }
+  .opts { display: grid; grid-template-columns: 1.2fr 1fr 1fr; gap: 16px; }
+  .opt {
+    background: var(--panel); border: 1px solid var(--line);
+    border-radius: 14px; padding: 18px 20px;
+  }
+  .opt.rec { border-color: var(--blue); }
+  .opt h3 { font-size: 22px; margin: 0 0 8px; }
+  .opt p { font-size: 18px; color: var(--muted); margin: 0; }
+  .rec-label { font-size: 14px; letter-spacing: 0.12em; text-transform: uppercase; color: var(--blue); font-weight: 700; margin-bottom: 6px; }
+</style>
+</head>
+<body class="canvas h">
+  <div class="wrap">
+    <div class="eyebrow">Decision Inbox</div>
+    <h1>Stalled work, three options, one click.</h1>
+    <div class="gov">
+      <span class="pill">Token governor</span>
+      <span>Session at 85% context, no compact</span>
+      <div class="btns"><span>Nudge</span><span>Pause</span><span>Kill</span></div>
+    </div>
+    <div class="opts">
+      <div class="opt rec">
+        <div class="rec-label">Recommended</div>
+        <h3>Spawn a worker on BUGS-104</h3>
+        <p>Three-option card. CCC spawns or steers the follow-through.</p>
+      </div>
+      <div class="opt">
+        <h3>Snooze the strategy board row</h3>
+        <p>Blocked rows and past-due ETAs become candidates.</p>
+      </div>
+      <div class="opt">
+        <h3>Leave the idle session</h3>
+        <p>Idle sessions with an unfinished task surface here.</p>
+      </div>
+    </div>
+  </div>
+</body></html>

@@ -491,7 +491,7 @@
        /view/<app> pages. See static/app-rail.js. -->
   <script src="/static/app-rail.js" defer></script>
 
-  <div class="sidebar">
+  <div class="sidebar" data-tour="lhs">
     <!-- Simple-mode slim header (body.ccc-mobile-redesign.ccc-simple-mode
          only). One clean bar — brand left, search + "+" right — replacing
          the two stacked dashboard headers (brand/version/WatchTower/meta
@@ -1229,7 +1229,7 @@
              status) at the top, and (when toggled) the sticky-header's
              Original ask + Session activity below them. Buttons are moved
              in by JS at boot from `.ccc-topbar`. -->
-        <aside class="status-rail" id="statusRail" aria-label="Session status rail">
+        <aside class="status-rail" id="statusRail" data-tour="status-rail" aria-label="Session status rail">
           <div class="status-rail-resizer" id="statusRailResizer" role="separator" aria-orientation="vertical" aria-label="Resize status rail" aria-controls="statusRail" tabindex="0" title="Drag to resize the status rail; drag to the right edge to hide it"></div>
           <div class="status-rail-topbar" id="statusRailTopbar">
             <!-- CCC-454: Verbose transcript toggle — keeps tool calls, command
@@ -1251,9 +1251,9 @@
                    session, plus a live lane map of the sessions it spawns.
                    Files no longer has its own tab -- the files panel is docked
                    at the bottom of the Metadata pane. -->
-              <button class="status-rail-tab is-active" type="button" role="tab" aria-selected="true" aria-controls="statusRailOrchestrationPane" data-rail-tab="orchestration">Orchestration</button>
+              <button class="status-rail-tab is-active" type="button" role="tab" aria-selected="true" aria-controls="statusRailOrchestrationPane" data-rail-tab="orchestration" data-tour="orchestration">Orchestration</button>
               <button class="status-rail-tab" type="button" role="tab" aria-selected="false" aria-controls="statusRailMetadataPane" data-rail-tab="metadata">Metadata</button>
-              <button class="status-rail-tab" type="button" role="tab" aria-selected="false" aria-controls="statusRailQueuePane" data-rail-tab="queue">Queue</button>
+              <button class="status-rail-tab" type="button" role="tab" aria-selected="false" aria-controls="statusRailQueuePane" data-rail-tab="queue" data-tour="queue">Queue</button>
               <button class="status-rail-tab" type="button" role="tab" aria-selected="false" aria-controls="statusRailAskPane" data-rail-tab="ask">Ask</button>
               <button class="status-rail-tab" type="button" role="tab" aria-selected="false" aria-controls="statusRailLogPane" data-rail-tab="log">Log</button>
             </div>
@@ -1367,7 +1367,7 @@
                     <span class="files-title-label fq-field-label">Queue</span>
                     <div class="fq-trigger" id="queueScopeTrigger" role="button" tabindex="0" aria-haspopup="listbox" aria-expanded="false" aria-label="Queue scope for this session" title="Which queue this session shows"></div>
                     <span class="fq-scope-busy" id="queueScopeBusy" role="status" aria-label="Loading selected queue"></span>
-                    <button class="files-queue-add" id="filesQueueAdd" type="button" title="Add a ticket to this queue" aria-label="Add a queue item">&#43;</button>
+                    <button class="files-queue-add" id="filesQueueCreate" type="button" title="Create a new queue" aria-label="Create a new queue">&#43;</button>
                     <div class="fq-more-wrap">
                       <button class="fq-more-btn" id="queueMoreBtn" type="button" title="More queue actions" aria-label="More queue actions" aria-haspopup="menu" aria-expanded="false">&hellip;</button>
                       <div class="fq-more-menu" id="queueMoreMenu" role="menu" aria-hidden="true">
@@ -2991,7 +2991,7 @@
             <div class="settings-row" data-keywords="run onboarding setup first run replay">
               <div class="settings-row-main">
                 <div class="settings-row-label">Run onboarding</div>
-                <div class="settings-row-desc">Replay the first-run setup flow.</div>
+                <div class="settings-row-desc">Replay the first-run guide: CLIs, conversations, LHS, RHS, queue, workers, Delegation.</div>
               </div>
               <div class="settings-row-control">
                 <button type="button" class="settings-action-btn" id="runOnboardingBtn">Run</button>
@@ -3001,7 +3001,7 @@
             <div class="settings-row" data-keywords="take the tour guided tour spotlight">
               <div class="settings-row-main">
                 <div class="settings-row-label">Take the tour</div>
-                <div class="settings-row-desc">Replay the guided tour of the dashboard.</div>
+                <div class="settings-row-desc">Replay the same first-run guide as Run onboarding.</div>
               </div>
               <div class="settings-row-control">
                 <button type="button" class="settings-action-btn" id="takeTourBtn">Start</button>

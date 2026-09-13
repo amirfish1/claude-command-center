@@ -155,6 +155,36 @@ def test_missing_session_id_is_not_metered(ledger):
     assert server._inject_budget_check("", "continue", "api") is None
 
 
+def test_worker_routed_inject_is_only_metered_by_the_worker(monkeypatch):
+    """The dashboard hand-off must not consume a second budget event."""
+    calls = []
+    monkeypatch.setattr(
+        server, "_inject_budget_check", lambda *args: calls.append(args) or None,
+    )
+    monkeypatch.setattr(server, "_federation_resolve_target", lambda sid: (sid, None))
+    monkeypatch.setattr(server, "_claude_subagent_parent_session_id", lambda sid: None)
+    monkeypatch.setattr(server, "_canonical_kimi_session_id", lambda sid: sid)
+    monkeypatch.setattr(server, "_is_codex_session", lambda sid: False)
+    monkeypatch.setattr(server, "find_session_cwd", lambda sid: None)
+    monkeypatch.setattr(server, "session_live_status", lambda sid, cwd: {"live": False})
+    monkeypatch.setattr(server, "_is_cursor_session", lambda sid: False)
+    monkeypatch.setattr(server, "_is_hermes_session", lambda sid: False)
+    monkeypatch.setattr(server, "_is_kimi_session", lambda sid: False)
+    monkeypatch.setattr(server, "_session_acp_harness", lambda sid: "")
+    monkeypatch.setattr(server, "_is_opencode_session", lambda sid: False)
+    monkeypatch.setattr(server, "_is_devin_cli_session", lambda sid: False)
+    monkeypatch.setattr(server, "_is_gemini_session", lambda sid: False)
+    monkeypatch.setattr(server, "_is_antigravity_session", lambda sid: False)
+    monkeypatch.setattr(
+        server, "_control_plane_engine_call", lambda *args, **kwargs: {"ok": True, "via": "worker"},
+    )
+
+    result = server._inject_text_into_session_router("sid", "continue")
+
+    assert result["ok"] is True
+    assert calls == []
+
+
 # ── The held bucket ──────────────────────────────────────────────────────────
 
 def test_trip_lands_in_the_held_bucket_for_the_human(ledger):

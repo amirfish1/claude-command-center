@@ -541,6 +541,33 @@ def test_liveness_uses_memoized_engine_classifier(monkeypatch):
     assert server._archive_session_is_live_uncached(sid)
     assert probe_calls == [], "liveness bypassed the memoized engine classifier"
 
+
+def test_cursor_transcript_lookup_shares_one_index_for_many_candidates(monkeypatch, tmp_path):
+    """Cold engine detection must not repeat Cursor's global glob per sid."""
+    from ccc_server import cursor
+
+    root = tmp_path / "cursor-projects"
+    for sid in ("cursor-a", "cursor-b"):
+        path = root / "project" / "agent-transcripts" / sid / f"{sid}.jsonl"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text("{}\n")
+    monkeypatch.setattr(cursor._core, "CURSOR_PROJECTS_ROOT", root)
+    calls = []
+
+    original_glob = Path.glob
+
+    def count_glob(path, pattern):
+        if path == root:
+            calls.append(pattern)
+        return original_glob(path, pattern)
+
+    monkeypatch.setattr(Path, "glob", count_glob)
+
+    assert cursor._cursor_transcript_path("cursor-a").name == "cursor-a.jsonl"
+    assert cursor._cursor_transcript_path("cursor-b").name == "cursor-b.jsonl"
+    assert len(calls) == 1
+
+
 def test_reattached_zombie_checks_share_one_process_state_scan(monkeypatch):
     """N reattached children require one bulk `ps`, never one fork per PID."""
     calls = []
@@ -3252,4 +3279,3 @@ def test_ui_trash_is_optimistic():
     assert "item.style.display = 'none'" in app_js, "Trash button must hide row immediately"
     assert "setOptimisticOverride(sessionId, { archived: targetArchived, trashed: wantTrashed })" in app_js
     assert "requestAnimationFrame(() => {" in app_js, "Sidebar re-render must be scheduled without blocking frame"
-

@@ -1,0 +1,1 @@
+- Keep the Codex workspace entry point visible in the toolbar when the responsive layout hides the conversation header.

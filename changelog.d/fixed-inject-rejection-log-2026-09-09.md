@@ -1,0 +1,1 @@
+- Distinguish rejected session injections from successful deliveries in the activity log.

@@ -1,0 +1,1 @@
+- Simple Home reuses its archive feed for task cards, avoiding a duplicate full-session load that could stall the dashboard.

@@ -414,7 +414,14 @@ def _codex_thread_registry_empty():
     }
 
 
-def _load_codex_thread_registry():
+def _cached_codex_thread_registry_data():
+    """Return the immutable-in-practice cached registry for read-only lookups.
+
+    Callers that mutate the registry must use `_load_codex_thread_registry()`,
+    which receives its own deep copy.  The live-activity poll looks up one
+    thread at a time, so copying the entire registry at every lookup makes its
+    cost grow with both the number of sessions and the number of threads.
+    """
     try:
         st = _core.CODEX_THREAD_REGISTRY_FILE.stat()
         token = (str(_core.CODEX_THREAD_REGISTRY_FILE), st.st_mtime_ns, st.st_size)
@@ -422,14 +429,14 @@ def _load_codex_thread_registry():
         token = (str(_core.CODEX_THREAD_REGISTRY_FILE), None, None)
     if (_CODEX_THREAD_REGISTRY_CACHE["token"] == token
             and isinstance(_CODEX_THREAD_REGISTRY_CACHE["data"], dict)):
-        return copy.deepcopy(_CODEX_THREAD_REGISTRY_CACHE["data"])
+        return _CODEX_THREAD_REGISTRY_CACHE["data"]
     try:
         with _core.CODEX_THREAD_REGISTRY_FILE.open("r", encoding="utf-8") as f:
             data = json.load(f)
     except (OSError, json.JSONDecodeError):
-        return _codex_thread_registry_empty()
+        data = _codex_thread_registry_empty()
     if not isinstance(data, dict):
-        return _codex_thread_registry_empty()
+        data = _codex_thread_registry_empty()
     if not isinstance(data.get("threads"), dict):
         data["threads"] = {}
     if not isinstance(data.get("deleted_threads"), dict):
@@ -439,7 +446,12 @@ def _load_codex_thread_registry():
     data.setdefault("source", "ccc-wt-codex-reconciliation")
     _CODEX_THREAD_REGISTRY_CACHE["token"] = token
     _CODEX_THREAD_REGISTRY_CACHE["data"] = copy.deepcopy(data)
-    return data
+    return _CODEX_THREAD_REGISTRY_CACHE["data"]
+
+
+def _load_codex_thread_registry():
+    """Return a mutable registry copy for lifecycle writes."""
+    return copy.deepcopy(_cached_codex_thread_registry_data())
 
 
 def _save_codex_thread_registry(data):
@@ -581,7 +593,7 @@ def _codex_thread_registry_delete(thread_ids):
 
 def _codex_deleted_thread_ids():
     try:
-        deleted = _load_codex_thread_registry().get("deleted_threads") or {}
+        deleted = _cached_codex_thread_registry_data().get("deleted_threads") or {}
     except Exception:
         return set()
     return {str(sid) for sid in deleted if sid}
@@ -589,11 +601,11 @@ def _codex_deleted_thread_ids():
 
 def _codex_thread_registry_entries():
     try:
-        threads = _load_codex_thread_registry().get("threads") or {}
+        threads = _cached_codex_thread_registry_data().get("threads") or {}
     except Exception:
         return {}
     return {
-        str(sid): dict(rec)
+        str(sid): copy.deepcopy(rec)
         for sid, rec in threads.items()
         if sid and isinstance(rec, dict)
     }
@@ -662,7 +674,14 @@ def _codex_sync_native_lifecycle(method, thread_ids):
 
 
 def _codex_thread_registry_entry(thread_id):
-    return _core._codex_thread_registry_entries().get(str(thread_id or "").strip())
+    sid = str(thread_id or "").strip()
+    if not sid:
+        return None
+    try:
+        record = (_cached_codex_thread_registry_data().get("threads") or {}).get(sid)
+    except Exception:
+        return None
+    return copy.deepcopy(record) if isinstance(record, dict) else None
 
 
 def _codex_thread_registry_spawn_shape(entry):
@@ -3589,6 +3608,9 @@ def _ensure_codex_app_server(*, allow_stdio=True):
         and time.time() < _CODEX_SHARED_STATE_BLOCK_RETRY_UNTIL
         and not (_core._codex_managed_app_server_enabled() and managed_path.exists())
     ):
+        with _core._CODEX_APP_SERVER_LOCK:
+            _core._CODEX_APP_SERVER_INITIALIZING = False
+            _core._CODEX_APP_SERVER_LOCK.notify_all()
         return None
     candidates = []
     if _core._codex_managed_app_server_enabled() and managed_path.exists():
@@ -4585,6 +4607,14 @@ def _codex_error_text(response):
     if not isinstance(response, dict):
         return "Codex app-server returned no response"
     err = response.get("error")
+    if isinstance(err, str):
+        # `_codex_app_server_request`'s own short-circuit paths (transport
+        # unavailable, worker routing failure) put a plain string here
+        # instead of a JSON-RPC {code, message} dict. Pass it through rather
+        # than silently discarding it — a caller that only checks this
+        # branch (e.g. `_codex_compact_via_app_server`) would otherwise
+        # report an empty error and the UI would show a blank failure.
+        return err
     if not isinstance(err, dict):
         return ""
     message = str(err.get("message") or "Codex app-server request failed")
@@ -5038,8 +5068,15 @@ _codex_desktop_attach_cache = {"ts": 0.0, "rollouts": {}}
 _codex_desktop_attach_lock = threading.Lock()
 _codex_thread_turn_locks = {}
 _codex_thread_turn_locks_lock = threading.Lock()
+_codex_thread_turn_lock_holders = {}
 _codex_external_writer_last = {}
 _codex_external_writer_last_lock = threading.Lock()
+# The RPCs held under this lock (thread/resume, turn/start) carry their own
+# 20s timeout, but a dead app-server socket can leave the call blocked past
+# that budget anyway (CCC-998-adjacent: no staleness cap = wedged forever).
+# Past this cap we abandon the lock object rather than queue new sends behind
+# a holder that will never release it.
+_CODEX_THREAD_TURN_LOCK_STALE_S = 90.0
 
 
 def _codex_thread_turn_lock(thread_id):
@@ -5050,6 +5087,45 @@ def _codex_thread_turn_lock(thread_id):
             lock = threading.Lock()
             _codex_thread_turn_locks[thread_id] = lock
         return lock
+
+
+def _codex_thread_turn_lock_acquire(thread_id):
+    """Acquire the per-thread turn lock, breaking a wedged one past staleness.
+
+    Returns the held lock, or None if a live holder still has it (caller
+    should fall back to the queue, same as before).
+    """
+    with _codex_thread_turn_locks_lock:
+        lock = _codex_thread_turn_locks.get(thread_id)
+        if lock is None:
+            lock = threading.Lock()
+            _codex_thread_turn_locks[thread_id] = lock
+        if lock.acquire(blocking=False):
+            _codex_thread_turn_lock_holders[thread_id] = time.monotonic()
+            return lock
+        held_since = _codex_thread_turn_lock_holders.get(thread_id)
+        stale = held_since is not None and (
+            time.monotonic() - held_since > _CODEX_THREAD_TURN_LOCK_STALE_S
+        )
+        if not stale:
+            return None
+        # The current holder is a thread stuck inside an RPC call that never
+        # returned even past its own timeout. Abandon that lock object; the
+        # stuck thread eventually finishes into a lock nobody else references.
+        fresh = threading.Lock()
+        fresh.acquire()
+        _codex_thread_turn_locks[thread_id] = fresh
+        _codex_thread_turn_lock_holders[thread_id] = time.monotonic()
+        try:
+            _codex_telemetry_append(
+                "codex_turn_lock_stale_break",
+                ok=False,
+                session_id=thread_id,
+                held_s=round(time.monotonic() - held_since, 1),
+            )
+        except Exception:
+            pass
+        return fresh
 
 
 def _codex_desktop_app_server_procs():
@@ -6175,7 +6251,10 @@ def _codex_spawn_via_app_server(
             "worktree_branch": worktree_branch or "",
         },
     )
-    _core._set_session_override(thread_id, model_to_use, False, "codex", reasoning_effort)
+    _core._set_session_override(
+        thread_id, model_to_use, False, "codex", reasoning_effort,
+        policy_confirmed=_core._model_policy_blocks(model_to_use),
+    )
     resp = {
         "ok": True,
         "pid": spawn_id,
@@ -6233,8 +6312,8 @@ def _codex_resume_or_steer_via_app_server(
     if snap.get("external_active"):
         _core._codex_note_external_writer_transition(session_id, snap)
         return _codex_writer_gate_response(session_id, snap, total_start=total_start)
-    lock = _core._codex_thread_turn_lock(session_id)
-    if not lock.acquire(blocking=False):
+    lock = _core._codex_thread_turn_lock_acquire(session_id)
+    if lock is None:
         return _codex_writer_gate_response(
             session_id, {"writer": "ccc", "desktop_attached": snap.get("desktop_attached")},
             total_start=total_start,
@@ -6843,7 +6922,7 @@ def _codex_compact_via_app_server(session_id, cwd=None, model=None):
             "ok": False,
             "via": "codex-compact",
             "code": "codex_compact_unavailable",
-            "error": _codex_error_text(resumed),
+            "error": _codex_error_text(resumed) or "Codex app-server unavailable",
         }
     if resumed.get("ok") is False and "result" not in resumed:
         # `_codex_app_server_request` short-circuit (unavailable / timeout).
@@ -7515,9 +7594,33 @@ def _codex_spawn_edge_name(child_thread_id):
     `id = ?` lookup per child in `_codex_spawn_parent_by_child()`'s output.
     """
     try:
-        return _core._codex_agent_task_label(_core._codex_thread_row(child_thread_id))
+        return _core._codex_spawn_edge_names([child_thread_id]).get(child_thread_id, "")
     except Exception:
         return ""
+
+
+def _codex_spawn_edge_names(child_thread_ids):
+    """Return task labels for spawned children with one indexed thread query.
+
+    The session-graph refresher reads every persisted spawn edge at once. Doing
+    a separate ``_codex_thread_row`` lookup for each child opened and parsed
+    the state DB once per edge, starving live-activity polls on large graphs.
+    """
+    child_ids = sorted({str(sid or "").strip() for sid in child_thread_ids if sid})
+    if not child_ids:
+        return {}
+    placeholders = ",".join("?" for _ in child_ids)
+    try:
+        rows = _core._codex_fetch_threads(
+            f"id IN ({placeholders})", tuple(child_ids),
+        )
+    except Exception:
+        return {}
+    return {
+        str(row.get("id")): _core._codex_agent_task_label(row) or ""
+        for row in rows or ()
+        if isinstance(row, dict) and row.get("id")
+    }
 
 
 def _codex_spawn_parent_by_child():

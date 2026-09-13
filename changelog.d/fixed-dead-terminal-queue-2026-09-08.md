@@ -1,0 +1,1 @@
+- Stop terminal-input retries for recently exited Claude sessions and report them as undeliverable.

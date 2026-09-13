@@ -2566,11 +2566,39 @@ def _queue_kimi_remote_busy_retry(session_id, text, *, front=False):
     return True
 
 
+# Session id -> stat identity of the durable queue file when this process last
+# re-read that session from it. See _refresh_queued_view_if_file_changed.
+_queued_view_file_identity = {}
+_queued_view_file_identity_lock = threading.Lock()
+
+
+def _refresh_queued_view_if_file_changed(session_id):
+    """Re-read one session's queue when another process changed the file.
+
+    The worker is a separate process that consumes queued input (for example a
+    Steer it delivered) straight in the durable file. This process's in-memory
+    copy then kept the delivered message, so the tray showed it as still
+    queued. A stat per read keeps the refresh to real file changes.
+    """
+    try:
+        st = os.stat(_core.PENDING_INPUTS_FILE)
+        identity = (st.st_mtime_ns, st.st_size, st.st_ino)
+    except OSError:
+        identity = None
+    with _queued_view_file_identity_lock:
+        if _queued_view_file_identity.get(session_id) == identity:
+            return
+    if identity is None or _core._refresh_pending_inputs_for_session(session_id):
+        with _queued_view_file_identity_lock:
+            _queued_view_file_identity[session_id] = identity
+
+
 def _get_queued_events_for_session(session_id):
     """Get synthetic events for any queued messages of this session."""
     events = []
     if not session_id:
         return events
+    _refresh_queued_view_if_file_changed(session_id)
     with _core._pending_resume_lock:
         resume_queue = list(_core._pending_resume_queue.get(session_id, []))
     with _core._pending_terminal_input_lock:
@@ -4177,6 +4205,7 @@ def _run_codex_compaction_recovery_once(session_id, now=None):
                     "queue_handoff": queue_handoff,
                     "result": interrupted,
                 }
+            pump_after_save = False
             if str(recovery.get("status") or "") not in _core._CODEX_COMPACTION_RECOVERY_TERMINAL:
                 recovery["status"] = "waiting"
                 recovery["reason"] = interrupted.get("error") or "Could not interrupt stalled Codex turn"
@@ -4185,7 +4214,34 @@ def _run_codex_compaction_recovery_once(session_id, now=None):
                     state["status"] = "idle"
                     state.pop("active_turn_id", None)
                     recovery["next_attempt_at"] = now
+                    pump_after_save = has_user_input
+                else:
+                    # turn/interrupt itself keeps erroring (e.g. the process
+                    # behind the turn is gone but the app-server never says
+                    # codex_no_active_turn) — unlike the "recovery turn didn't
+                    # start" path below, this branch never incremented
+                    # attempts, so it retried every _RETRY_S forever and
+                    # active_turn_id/active_writer never cleared, wedging the
+                    # writer gate and queuing every future send permanently
+                    # (OPS-1098-class incident, 2026-09-11).
+                    interrupt_attempts = int(recovery.get("interrupt_attempts") or 0) + 1
+                    recovery["interrupt_attempts"] = interrupt_attempts
+                    if interrupt_attempts >= _core._CODEX_COMPACTION_RECOVERY_MAX_ATTEMPTS:
+                        recovery["status"] = "exhausted"
+                        recovery["reason"] = "Could not interrupt stalled Codex turn after repeated attempts"
+                        state["status"] = "idle"
+                        state.pop("active_turn_id", None)
+                        state.pop("active_writer", None)
+                        _core._codex_coordination_event_unlocked(
+                            state,
+                            _core._codex_recovery_event_kind(recovery, "exhausted"),
+                            detail=recovery["reason"],
+                            now=now,
+                        )
+                        pump_after_save = has_user_input
             _core._save_codex_app_server_state_unlocked()
+        if pump_after_save:
+            _core._schedule_codex_queue_pump(sid)
         return {"ok": False, "interrupted": False, "result": interrupted}
 
     if has_user_input and silent_turn:
@@ -4725,6 +4781,34 @@ def _terminal_queue_clear_hold(sid):
     _core._terminal_queue_hold_since.pop(sid, None)
 
 
+def _drop_dead_terminal_queue(sid, *, code):
+    """Discard terminal input when there is no remaining delivery target.
+
+    A fresh Claude hook sidecar says a session was recently alive, not that a
+    one-shot process still has a tty, FIFO, or worker channel.  Terminal input
+    cannot revive that process safely, so make the terminal outcome durable
+    and visible instead of re-parking it for another failed inject.
+    """
+    transaction = _core._apply_pending_input_operations(sid, [{
+        "field": "terminal", "action": "clear",
+    }])
+    dropped = list((transaction.get("value") or [[]])[0] or [])
+    _core._pending_terminal_retry_after.pop(sid, None)
+    _core._clear_foreign_writer_hold(sid)
+    _terminal_queue_clear_hold(sid)
+    for dropped_text in dropped:
+        _core._complete_pending_input_handoff(dropped_text)
+        try:
+            _core._log_activity(
+                "inject", "Q_DROP",
+                f"session={sid} code={code} text={str(dropped_text)[:40]!r} "
+                "— no live delivery target; dropped as undeliverable",
+            )
+        except Exception:
+            pass
+    return dropped
+
+
 def _terminal_queue_hold_or_expire(sid, reason):
     """Record another tick of holding `sid`'s head entry, or — once held past
     `_TERMINAL_QUEUE_HOLD_TTL_S` — drop that stale entry instead. Either way
@@ -5153,25 +5237,10 @@ def _start_resume_queue_watcher() -> None:
                     # that closed weeks ago (observed: a 26-day-dead sid with 13
                     # stuck items). Drop the queue and skip the probe entirely.
                     # The memoized _archive_session_is_live is ~free and is a
-                    # strict superset of "injectable", so no live session is lost.
+                    # broad candidacy check, so it avoids expensive process
+                    # probes for unquestionably old sessions.
                     if not _core._archive_session_is_live(sid):
-                        transaction = _core._apply_pending_input_operations(sid, [{
-                            "field": "terminal", "action": "clear",
-                        }])
-                        dropped = ((transaction.get("value") or [[]])[0])
-                        if dropped:
-                            # Loud, not silent (CCC-455): this is the one place
-                            # queued user text is deliberately discarded.
-                            print(
-                                f"[terminal-queue] dropping {len(dropped)} queued "
-                                f"input(s) for dead session {sid}: "
-                                + "; ".join(repr(t[:80]) for t in dropped),
-                                flush=True,
-                            )
-                            for dropped_text in dropped:
-                                _core._complete_pending_input_handoff(dropped_text)
-                        _core._clear_foreign_writer_hold(sid)
-                        _terminal_queue_clear_hold(sid)
+                        _core._drop_dead_terminal_queue(sid, code="dead_session")
                         continue
                     # Backoff gate (CCC-455): a sid whose last drain attempt
                     # failed or re-parked waits out its retry window before we
@@ -5195,6 +5264,24 @@ def _start_resume_queue_watcher() -> None:
                     # the request file is gone and the queue drains — a plain
                     # transcript scan here would deadlock forever.
                     status = _core.session_live_status(sid, _core.find_session_cwd(sid))
+                    # `_archive_session_is_live` above admits fresh hook
+                    # sidecars. That is intentionally broad for candidacy, but
+                    # a just-exited `claude -p` leaves one fresh for 30 minutes:
+                    # it has no process and no channel to receive a queued
+                    # message. Require a real delivery target before popping
+                    # the head, while retaining known worker/spawn channels
+                    # whose registry status can momentarily lag.
+                    if not status.get("live"):
+                        live_spawn = _core._find_live_spawn_entry_for_session(sid)
+                        wt_fifo = _core._wt_worker_fifo_entry_for_session(sid)
+                        engine_worker = _worker_owned_claude_input_state(sid)
+                        if (
+                            live_spawn is None
+                            and wt_fifo is None
+                            and not engine_worker.get("owned")
+                        ):
+                            _core._drop_dead_terminal_queue(sid, code="dead_target")
+                            continue
                     if _core._ask_question_blocking_inject(sid, status):
                         _core._terminal_queue_hold_or_expire(sid, "ask_question_blocking")
                         continue

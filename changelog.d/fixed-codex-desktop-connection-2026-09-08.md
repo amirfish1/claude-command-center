@@ -1,0 +1,1 @@
+- Connect the Codex conversation workspace to an existing desktop-owned task through its versioned follower interface. Show live history and route supported conversation controls and approvals to the current owner without starting another app-server writer. Clearly distinguish desktop-supported actions from operations requiring a direct app-server connection.

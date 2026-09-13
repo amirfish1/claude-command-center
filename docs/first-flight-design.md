@@ -1,58 +1,66 @@
-# FIRST FLIGHT: CCC out-of-box tour (W74)
+# FIRST FLIGHT: CCC first-run guide
 
-Design note for the onboarding tour. Ship target: single-file-app friendly,
-zero dependencies, lazy until triggered.
+Design note for the onboarding walkthrough. Ship target: single-file-app
+friendly, zero dependencies, lazy until triggered.
 
 ## Architecture
 
-- `static/tour.js`: the whole tour engine + step definitions + styles
+- `static/tour.js`: the guide engine + step definitions + styles
   (injected `<style>` tag). Not loaded on normal boots; fetched from
-  `/static/tour.js` only when the tour actually runs.
+  `/static/tour.js` only when the guide actually runs.
 - Bootstrap in `app.js` (end of main IIFE): 2.5s after load, if
   `localStorage` has no `ccc-tour-done` flag and no `.upd-overlay.open`
-  modal is up (the login onboarding wizard owns true first boot), inject
-  the script tag. While a modal is open it retries every 4s (max 50), so
-  the tour fires right after the wizard closes. Settings gains a
-  "Take the tour" row (`#takeTourBtn`) that force-starts the same script.
-- First-run detection: absence of `ccc-tour-done` key in localStorage.
-  Tour completion or skip sets it (value: `done` or `skipped` + path).
+  modal is up, inject the script tag. Settings "Take the tour" and
+  "Run onboarding" both force-start the same script.
+- First-run detection: absence of `ccc-tour-done` in localStorage.
+  Completion or skip sets it. Users who already finished the old tour
+  are not forced to retake it.
+- Auto-start is suppressed at viewport widths ≤1200px. Settings replay
+  still works everywhere.
+
+## One linear story
+
+Welcome → CLI setup (install / log in / re-detect) → LHS → reviewing
+existing conversations → status → transcript → search → creating first
+conversation → composer → engine picker → send → Settings → Workers →
+RHS → Queue → first queue → Orchestration → Delegation → health →
+finale.
+
+CLI setup is an action step against `/api/onboarding/status`,
+`/api/onboarding/install-terminal`, and `/api/onboarding/login-terminal`.
+It is not a decorative chip row. A fixture payload can be injected so
+tests do not need a real CLI binary.
 
 ## Spotlight engine
 
 - One fixed-position "cutout" div using the box-shadow trick:
-  `box-shadow: 0 0 0 200vmax rgba(...)` positioned over the anchor rect,
-  border-radius matched, pointer-events blocked around it.
-- Anchors are `data-tour="<name>"` attributes on real DOM elements, all on
-  static markup in index.html: session-list, new-session, watchtower,
-  search, group-chat, settings, spawn-bar. Dynamic rows are matched by
-  class (`#convList .conv-item`). A step's `anchor` may be an array of
-  selectors; the first visible match wins (the multi-engine spawn step
-  falls back from the composer bar, hidden on fresh installs, to the New
-  session button).
-- Tooltip card positioned by available viewport space (below > above >
-  side); at narrow widths (<= 480px) it becomes a bottom sheet.
-- Controls: Back / Next / Skip, progress dots, keyboard: ArrowRight/Enter
-  next, ArrowLeft back, Escape skip. Reposition on resize/scroll while
-  active only.
-- Resilience: anchor missing at step time -> step silently skipped in the
-  travel direction. List view is the hero; the tour never anchors on Flow.
-
-## Two flight paths
-
-Welcome card -> one-question fork ("New to agent fleets?" vs "Running
-multiple engines already?") -> path-specific spotlight steps -> finale card
-with 3 concrete "try this now" suggestions personalized by fork choice.
+  `box-shadow: 0 0 0 200vmax rgba(...)` positioned over the anchor rect.
+- Anchors are real dashboard ids/selectors: `#convList`, `#sidebarNewBtn`,
+  `#convSearch`, `#settingsBtn`, `[data-conv-tab="workers"]`,
+  `#statusRail`, `[data-rail-tab="queue"]`,
+  `[data-orch-playbook="delegate"]`, `#convInputBar`.
+- Before a step whose target lives behind a tab or collapsed chrome, the
+  guide reveals that surface (Workers tab, Queue rail pane, Delegate
+  playbook) and only then spotlights. Missing anchors are skipped only
+  as a last resort.
+- Tooltip card positioned by available viewport space; at narrow widths
+  (≤ 520px) it becomes a bottom sheet.
+- Controls: Back / Next / Skip, `N / total` progress, keyboard:
+  ArrowRight/Enter next, ArrowLeft back, Escape skip.
 
 ## Empty-state strategy
 
-Fresh install has zero sessions. If the session list is empty when the tour
-needs it, the tour injects a few sample cards (marked `data-tour-sample`)
-into the list container and removes them at tour end. While the tour is
-active, list re-render is paused via a tour-active flag checked in the
-render path, so polling does not wipe the samples mid-step.
+Fresh install has zero sessions. If the session list is empty when a
+review step needs rows, the guide injects sample cards (marked
+`data-tour-sample`) and removes them at end. Samples teach review; they
+do not replace the creating-first-conversation step on New session /
+composer. While the guide is active, list re-render is paused via
+`window.__cccTourActive`.
 
 ## Perf
 
-- No server changes on hot paths; tour is frontend-only.
-- tour.js is fetched only when the tour actually runs.
-- No timers/listeners registered when the tour is not active.
+- No server changes on hot paths; the guide is frontend-only.
+- `tour.js` is fetched only when the guide actually runs.
+- Engine detect is not re-probed on every dashboard poll; the CLI step
+  fetches `/api/onboarding/status` when shown, and again on Re-detect.
+- No timers/listeners registered when the guide is not active.

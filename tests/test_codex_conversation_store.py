@@ -177,3 +177,17 @@ class ConversationStoreTests(unittest.TestCase):
         self.assertEqual(self.store.snapshot("task")["thread"]["turns"], [])
         self.assertNotIn("late secret", str(self.store.events_since(0, "first", "task")))
         self.assertNotIn("old secret", str(self.store.snapshot("task")))
+
+
+def test_large_old_turn_cannot_clip_the_current_turn_from_hydration():
+    store = conversation.CodexConversationStore()
+    store.connect('desktop-generation')
+    store.hydrate({'id':'task','turns':[
+        {'id':'old','status':'completed','items':[
+            {'id':str(i),'type':'commandExecution','aggregatedOutput':'x'*65536} for i in range(6)]},
+        {'id':'current','status':'inProgress','items':[{'id':'latest','type':'agentMessage','text':'Current work'}]},
+    ]},0)
+    snapshot=store.snapshot('task')['thread']
+    current=next(turn for turn in snapshot['turns'] if turn['id']=='current')
+    assert current['status']=='inProgress'
+    assert current['items'][0]['text']=='Current work'

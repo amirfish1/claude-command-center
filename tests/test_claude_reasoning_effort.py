@@ -27,6 +27,16 @@ def test_claude_picker_uses_effort_only_requests_and_resume_flag():
     assert 'cmd.extend(["--effort", effort])' in server_py
 
 
+def test_codex_picker_marks_reasoning_updates_as_effort_only():
+    app_js = Path("static/app.js").read_text(encoding="utf-8")
+    handler = app_js[
+        app_js.index("pop.querySelectorAll('.mp-reasoning-row[data-reasoning]')"):
+        app_js.index("const otherInput =", app_js.index("pop.querySelectorAll('.mp-reasoning-row[data-reasoning]')"))
+    ]
+
+    assert "engine === 'claude' || engine === 'codex'" in handler
+
+
 def test_effort_ladder_is_per_engine():
     assert "max" in server._engine_reasoning_efforts("claude")
     assert "max" not in server._engine_reasoning_efforts("codex")
@@ -60,6 +70,12 @@ def test_claude_spawn_request_resolves_effort_like_codex(tmp_path, monkeypatch):
     # Codex has no "max"; the spawn falls back to the CLI default rather than
     # sending a level the engine would reject.
     assert server._spawn_request_reasoning_effort({"effort": "max"}, "codex") == ""
+
+
+def test_devin_spawn_keeps_an_explicit_model_variant_without_effort():
+    """A global default must not rewrite a Devin model UID ending in -max."""
+    assert server._spawn_request_reasoning_effort({}, "devin") == ""
+    assert server._spawn_request_reasoning_effort({"effort": "high"}, "devin") == "high"
 
 
 def test_cold_claude_spawn_command_carries_the_effort_flag():

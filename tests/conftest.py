@@ -37,6 +37,9 @@ def _reset_inject_dedupe_window():
         recent = getattr(mod, "_inject_dedupe_recent", None)
         if isinstance(recent, dict):
             recent.clear()
+        inflight = getattr(mod, "_inject_dedupe_inflight", None)
+        if isinstance(inflight, dict):
+            inflight.clear()
     _reset()
     yield
     _reset()

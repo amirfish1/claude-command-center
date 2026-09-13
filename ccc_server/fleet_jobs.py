@@ -1011,17 +1011,12 @@ def _handoff_import_payload(data, peer):
 
 
 def _handoff_apply_session_overrides(session_id, overrides):
-    try:
-        current = _core._load_session_overrides()
-    except Exception:
-        current = {}
-    entry = current.get(session_id) or {}
-    entry.update({k: v for k, v in overrides.items() if v is not None})
-    current[session_id] = entry
-    _core.COMMAND_CENTER_STATE_DIR.mkdir(parents=True, exist_ok=True)
-    tmp = _core.SESSION_OVERRIDES_FILE.with_suffix(".json.tmp")
-    tmp.write_text(json.dumps(current, indent=2))
-    tmp.replace(_core.SESSION_OVERRIDES_FILE)
+    def mutate(current):
+        entry = current.get(session_id) or {}
+        entry.update({k: v for k, v in overrides.items() if v is not None})
+        current[session_id] = entry
+
+    _core._mutate_session_overrides(mutate)
 
 
 def _handoff_lease_guard(session_id):
@@ -2324,4 +2319,3 @@ def _telemetry_loop():
             time.sleep(_TELEMETRY_CHECK_INTERVAL_S)
         except Exception:
             return
-

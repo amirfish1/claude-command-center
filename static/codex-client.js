@@ -2,6 +2,8 @@
 (function () {
   'use strict';
 
+  function createClient() {
+
   const API = '/api/codex/client';
   const POLL_BASE_MS = 900;
   const POLL_MAX_MS = 12000;
@@ -29,6 +31,7 @@
     activeRead: null, readRefreshTimer: null, readRefreshInFlight: false, readRefreshQueued: false,
     renderScheduled: false, visibilityHandler: null, composerSync: null, previousDisplay: new Map(),
     mediaController: null, mediaCleanup: Promise.resolve(), mediaCleanupBlocked: false,
+    inlinePendingUserMessages: [], imageNodes: new Map(), imagesInRender: new Map(),
   };
 
   function el(tag, className, text) {
@@ -261,9 +264,16 @@
     item = item && typeof item === 'object' ? item : { type: 'unknown', value: item };
     const kind = itemKind(item);
     const normalized = kind.toLowerCase();
+    if (state.context?.inline && typeof window.CCCCodexStepNode === 'function') {
+      const step = window.CCCCodexStepNode(item);
+      if (step) { step.dataset.itemKey = String(item.id || kind); return step; }
+    }
     if (normalized === 'usermessage' || normalized === 'user_message') {
       const row = el('article', 'codex-client-item codex-client-message is-user');
       row.append(markdownNode(textFrom(item)));
+      for (const part of Array.isArray(item.content) ? item.content : []) {
+        if (/image/i.test(part?.type || '')) row.append(renderItem({...part, type:'imageView', id:(item.id || 'user')+'-image'}));
+      }
       return row;
     }
     if (normalized === 'agentmessage' || normalized === 'agent_message' || normalized === 'assistantmessage') {
@@ -300,7 +310,7 @@
       const output = textFrom(item.output || item.aggregatedOutput || item.result);
       if (output) { const pre = el('pre', 'codex-client-output', output); body.append(pre); }
       body.append(keyValueView(item, ['type', 'kind', 'command', 'cmd', 'input', 'output', 'aggregatedOutput', 'result']));
-      const card = detailsCard('command', item, item.title || 'Command', body, item.status === 'inProgress');
+      const card = detailsCard('command', item, item.title || 'Command', body, false);
       card.dataset.terminalItem = item.id || '';
       return card;
     }
@@ -310,12 +320,31 @@
       appendFileChanges(body, changes);
       const diff = item.diff || item.patch;
       if (diff) body.append(diffNode(diff));
-      return detailsCard('file-change', item, item.title || 'File changes', body, true);
+      return detailsCard('file-change', item, item.title || 'File changes', body, false);
     }
     if (/imageview|imagegeneration|image|media/.test(normalized)) {
       const body = el('div', 'codex-client-card-body codex-client-media');
-      const url = safeUrl(item.url || item.imageUrl || item.image_url || item.path, true);
-      if (url) { const image = el('img'); image.src = url; image.alt = item.alt || item.title || 'Generated image'; image.loading = 'lazy'; body.append(image); }
+      const raw = item.url || item.imageUrl || item.image_url || item.path;
+      const local = typeof raw === 'string' && (/^(?:\/|[A-Za-z]:[\\/])/.test(raw)) && !raw.startsWith('/api/');
+      const url = local ? '/api/local-image?path=' + encodeURIComponent(raw) : safeUrl(raw, true);
+      if (url) {
+        // renderTurns rebuilds the whole transcript on every poll. A fresh
+        // <img> has no height until it decodes, so everything below it jumped
+        // for a frame each poll. Reuse the already-loaded node instead.
+        // The same image twice in one render needs its own node.
+        const seen = state.imagesInRender.get(url) || 0;
+        state.imagesInRender.set(url, seen + 1);
+        const key = url + '#' + seen;
+        let image = state.imageNodes.get(key);
+        if (!image || (image.complete && !image.naturalWidth)) {
+          const fresh = el('img'); fresh.src = url; fresh.loading = 'lazy';
+          fresh.addEventListener('error', () => { if (state.imageNodes.get(key) === fresh) state.imageNodes.delete(key); fresh.replaceWith(el('span', 'codex-client-media-unavailable', 'Image is no longer available on this computer.')); }, {once:true});
+          state.imageNodes.set(key, fresh);
+          image = fresh;
+        }
+        image.alt = item.alt || item.title || 'Generated image';
+        body.append(image);
+      }
       if (textFrom(item)) body.append(markdownNode(textFrom(item)));
       const card = detailsCard('media', item, item.title || (/generation/.test(normalized) ? 'Image generation' : 'Image'), body, true);
       card.dataset.mediaItem = item.id || '';
@@ -894,6 +923,8 @@
   function emitThreadLifecycle(method, params, thread) {
     const detail = {
       method,
+      paneId: state.context?.paneId,
+      inline: !!state.context?.inline,
       threadId: thread && thread.id || params && params.threadId || state.context && state.context.threadId || '',
       previousThreadId: state.context && state.context.threadId || '',
       thread: thread || null,
@@ -912,6 +943,10 @@
       if (!thread) return false;
       const prior = Object.assign({}, state.context);
       emitThreadLifecycle(method, params, thread);
+      if (prior.inline && typeof window.CCCCodexClientLifecycle === 'function') {
+        await close();
+        return true;
+      }
       await open(Object.assign(prior, {
         threadId: thread.id,
         repoPath: thread.cwd || thread.repoPath || prior.repoPath,
@@ -997,33 +1032,55 @@
   function renderTurns() {
     const host = state.root && state.root.querySelector('[data-codex-transcript]');
     if (!host) return;
-    const nearBottom = host.scrollHeight - host.scrollTop - host.clientHeight < 100;
-    const openKeys = new Set(Array.from(host.querySelectorAll('details[open][data-item-key]')).map(node => node.dataset.itemKey));
+    const scrollHost = state.context?.inline ? host.closest('.conversations-view') : host;
+    const nearBottom = !state.didInitialRender || scrollHost.scrollHeight - scrollHost.scrollTop - scrollHost.clientHeight < 100;
+    const openKeys = new Set(Array.from(host.querySelectorAll('[data-item-key]')).filter(node => node.open || node.classList.contains('open')).map(node => node.dataset.itemKey));
+    const expandedGroups = new Set(Array.from(host.querySelectorAll('.kimi-tool-group:not(.collapsed) [data-item-key]')).map(node => node.dataset.itemKey));
     host.replaceChildren();
+    state.imagesInRender.clear();
     if (state.historyCursor) {
       const older = el('button', 'codex-client-load-earlier', 'Load earlier messages'); older.type = 'button'; older.addEventListener('click', loadEarlier); host.append(older);
     }
     const turns = state.thread && Array.isArray(state.thread.turns) ? state.thread.turns : [];
     if (!turns.length) host.append(el('div', 'codex-client-empty', state.connected ? 'Start the conversation below.' : 'Connecting to this task…'));
-    turns.forEach(turn => {
+    turns.forEach((turn, turnIndex) => {
       const section = el('section', 'codex-client-turn'); section.dataset.turnId = turn.id || '';
+      // The shared CCC composer can receive a follow-up before Codex's next
+      // thread snapshot arrives. Keep that optimistic user message inside the
+      // newest native turn, ahead of its answer, rather than as a sibling
+      // below the complete transcript.
+      if (state.context?.inline && turnIndex === turns.length - 1) {
+        state.inlinePendingUserMessages.forEach(message => {
+          section.append(renderItem({type:'userMessage', id:message.id, text:message.text}));
+        });
+      }
       (turn.items || []).forEach(item => {
         const node = renderItem(item);
-        if (node.matches('details') && openKeys.has(node.dataset.itemKey)) node.open = true;
+        if (openKeys.has(node.dataset.itemKey)) { if (node.matches('details')) node.open = true; else node.classList.add('open'); }
+        if (expandedGroups.has(node.dataset.itemKey)) node.dataset.kimiCollapsed = '0';
         section.append(node);
       });
       if (turn.plan && !(turn.items || []).some(item => itemKind(item).toLowerCase() === 'plan')) section.append(renderItem({ type: 'plan', id: (turn.id || '') + '-plan', plan: turn.plan }));
       if (turn.diff && !(turn.items || []).some(item => /diff|filechange/i.test(itemKind(item)))) section.append(renderItem({ type: 'diff', id: (turn.id || '') + '-diff', diff: turn.diff }));
+      if (state.context?.inline && typeof window.CCCCodexGroupSteps === 'function') window.CCCCodexGroupSteps(section);
       host.append(section);
     });
-    if (state.activity.length) {
+    if (!turns.length && state.context?.inline && state.inlinePendingUserMessages.length) {
+      const section = el('section', 'codex-client-turn');
+      state.inlinePendingUserMessages.forEach(message => {
+        section.append(renderItem({type:'userMessage', id:message.id, text:message.text}));
+      });
+      host.append(section);
+    }
+    if (state.activity.length && !state.context?.inline) {
       const recent = el('details', 'codex-client-event-log'); recent.append(el('summary', '', 'Recent activity'));
       state.activity.slice(-12).forEach(event => recent.append(
         el('div', '', pretty(event.method) + (event.truncated ? ' · More detail available in task state' : ''))
       ));
       host.append(recent);
     }
-    if (nearBottom) host.scrollTop = host.scrollHeight;
+    if (nearBottom) scrollHost.scrollTop = scrollHost.scrollHeight;
+    state.didInitialRender = true;
   }
 
   function questionEntries(params) {
@@ -1236,6 +1293,7 @@
   }
 
   function wireComposer(root) {
+    let sending = false;
     const form = root.querySelector('[data-codex-composer]');
     const input = form.querySelector('textarea');
     const interrupt = form.querySelector('[data-codex-interrupt]');
@@ -1299,6 +1357,13 @@
     const sync = () => {
       const running = runningTurn();
       form.querySelector('[data-codex-send-label]').textContent = running ? 'Steer' : 'Send';
+      const desktopBusy = !!running && state.catalog?.connection_kind === 'desktop-ipc';
+      if (state.catalog?.connection_kind === 'desktop-ipc') {
+        const submit = form.querySelector('[type=submit]');
+        submit.disabled = desktopBusy || sending;
+        submit.title = desktopBusy ? 'Wait for the desktop turn to finish, or stop it first.' : '';
+        if (desktopBusy) form.querySelector('[data-codex-send-label]').textContent = 'Working';
+      }
       interrupt.hidden = !running;
       modelSelect.disabled = !!running;
       effortSelect.disabled = !!running;
@@ -1311,10 +1376,10 @@
       if (state.composerAttachment && selectedModel && Array.isArray(selectedModel.inputModalities) && !selectedModel.inputModalities.includes('image')) {
         showError('The selected model does not accept images.'); return;
       }
-      const button = form.querySelector('[type=submit]'); button.disabled = true;
+      const button = form.querySelector('[type=submit]'); sending = true; button.disabled = true;
       try { await sendComposer(text, state.composerAttachment); input.value = ''; clearAttachment(); }
       catch (error) { showError(conciseError(error)); }
-      finally { button.disabled = false; sync(); }
+      finally { sending = false; button.disabled = false; sync(); }
     });
     input.addEventListener('keydown', event => { if (event.key === 'Enter' && !event.shiftKey && !event.isComposing) { event.preventDefault(); form.requestSubmit(); } });
     interrupt.addEventListener('click', async () => {
@@ -1372,7 +1437,36 @@
       + '<input type="search" data-codex-search aria-label="Search actions" placeholder="Find an action"></div>'
       + '<div data-codex-media-host></div><div class="codex-client-catalog" data-codex-catalog></div></aside></main>'
       + '<aside class="codex-client-result" data-codex-result hidden></aside>'
-      + '<footer class="codex-client-footer"><span data-codex-connection>Connecting…</span><span data-codex-usage></span><label>Message queue <select data-codex-queue-owner><option value="ccc">CCC</option><option value="native">Codex</option></select></label><label><input type="checkbox" data-codex-preview> Preview features</label></footer>';
+      + '<footer class="codex-client-footer"><span data-codex-connection>Connecting…</span><span data-codex-usage></span><label><input type="checkbox" data-codex-preview> Preview features</label></footer>';
+    const inline = !!context.inline;
+    if (inline) {
+      const view = context.viewEl || pane.querySelector('.conversations-view');
+      if (!view) throw new Error('Conversation view is unavailable');
+      state.savedView = {view, nodes:Array.from(view.childNodes)};
+      // Keep the legacy transcript on screen (append, don't replace) until
+      // loadCatalog/loadHistory below confirm the native connection is
+      // actually usable -- otherwise every selection flashes an empty
+      // "Connecting..." shell over already-loaded conversation content.
+      root.style.display = 'none';
+      view.appendChild(root);
+      root.classList.add('is-inline');
+      root.querySelector('.codex-client-title').remove();
+      root.querySelector('[data-codex-close]').remove();
+      root.querySelector('[data-codex-composer]').remove();
+      root.querySelector('[data-surface="conversation"]').textContent = 'Chat';
+      root.querySelector('[data-surface="workspace"]').textContent = 'Files & terminal';
+      root.querySelector('.codex-client-tabs').setAttribute('aria-label','Codex conversation tools');
+      // No footer inline, matching Claude panes: the pane's top row already
+      // reads "LIVE · CODEX" only while this connection is up, and CCC's own
+      // token pill covers usage. Preview features gates which tools appear,
+      // so it lives with the tools.
+      const footer = root.querySelector('.codex-client-footer');
+      const previewToggle = footer.querySelector('[data-codex-preview]').closest('label');
+      previewToggle.classList.add('codex-client-preview-toggle');
+      root.querySelector('.codex-client-toolhead').append(previewToggle);
+      footer.remove();
+      pane.classList.add('has-codex-inline');
+    } else {
     pane.classList.add('codex-client-open');
     Array.from(pane.children).forEach(child => {
       if (child === root || child.matches('.conv-pane-header')) return;
@@ -1380,28 +1474,22 @@
       child.style.display = 'none';
     });
     pane.append(root);
-    root.querySelector('[data-codex-context]').textContent = (context.title || 'Selected task') + (context.repoPath ? ' · ' + context.repoPath.split('/').filter(Boolean).pop() : '');
-    root.querySelector('[data-codex-close]').addEventListener('click', close);
+    }
+    if (!inline) root.querySelector('[data-codex-context]').textContent = (context.title || 'Selected task') + (context.repoPath ? ' · ' + context.repoPath.split('/').filter(Boolean).pop() : '');
+    root.querySelector('[data-codex-close]')?.addEventListener('click', close);
     root.querySelector('[data-codex-tools-toggle]').addEventListener('click', () => { state.toolsOpen = !state.toolsOpen; syncToolsToggle(); });
     root.querySelectorAll('[data-surface]').forEach(button => button.addEventListener('click', () => {
+      const view = state.context?.inline && root.closest('.conversations-view');
+      if (view && state.activeSurface === 'conversation') state.chatScrollTop = view.scrollTop;
       state.activeSurface = button.dataset.surface;
       root.dataset.surface = state.activeSurface;
       root.querySelectorAll('[data-surface]').forEach(other => other.setAttribute('aria-current', String(other === button ? 'page' : 'false')));
       root.querySelector('[data-codex-tool-title]').textContent = pretty(state.activeSurface) + ' tools';
       root.querySelector('[data-codex-conversation]').hidden = state.activeSurface !== 'conversation';
       renderCatalog(); syncToolsToggle();
+      if (view) view.scrollTop = state.activeSurface === 'conversation' ? (state.chatScrollTop || 0) : 0;
     }));
     root.querySelector('[data-codex-search]').addEventListener('input', event => { state.query = event.target.value; renderCatalog(); });
-    root.querySelector('[data-codex-queue-owner]').addEventListener('change', async event => {
-      const select = event.target;
-      select.disabled = true;
-      try {
-        await jsonFetch(API + '/queue-owner', {method:'POST', headers:{'Content-Type':'application/json'},
-          body:JSON.stringify({owner:select.value, context:contextBody(state.context)})});
-        await loadState();
-      } catch (error) { showError(conciseError(error)); await loadState().catch(() => {}); }
-      finally { select.disabled = false; }
-    });
     root.querySelector('[data-codex-preview]').addEventListener('change', async event => {
       event.target.disabled = true;
       try {
@@ -1411,7 +1499,7 @@
       } catch (error) { event.target.checked = !event.target.checked; showError(conciseError(error)); }
       finally { event.target.disabled = false; }
     });
-    wireComposer(root);
+    if (!inline) wireComposer(root);
     return root;
   }
 
@@ -1424,24 +1512,34 @@
       close();
       return;
     }
-    if (data.queue_owner && state.root) state.root.querySelector('[data-codex-queue-owner]').value = data.queue_owner;
     state.generation = data.generation !== undefined ? data.generation : state.generation;
     state.eventCursor = data.cursor !== undefined ? data.cursor : state.eventCursor;
     state.connected = !!data.connected;
-    if (data.thread !== undefined) state.thread = data.thread;
+    if (data.thread !== undefined) {
+      state.thread = data.thread;
+      const nativeUserTexts = new Set();
+      (state.thread?.turns || []).forEach(turn => (turn.items || []).forEach(item => {
+        if (/^user_?message$/i.test(itemKind(item))) nativeUserTexts.add(textFrom(item).trim());
+      }));
+      state.inlinePendingUserMessages = state.inlinePendingUserMessages.filter(message => !nativeUserTexts.has(message.text));
+    }
     if (Array.isArray(data.requests)) state.requests = data.requests;
     if (includeHistoryCursor) state.historyCursor = data.next_cursor || null;
     updateChrome(); renderTurns(); renderRequests(); state.composerSync?.();
+    if (state.context?.inline && typeof window.CCCCodexInlineStateChanged === 'function') window.CCCCodexInlineStateChanged(state.context);
   }
 
   function updateChrome() {
     if (!state.root) return;
     const connection = state.root.querySelector('[data-codex-connection]');
-    connection.textContent = state.connected ? 'Connected' : 'Reconnecting…';
-    connection.classList.toggle('is-connected', state.connected);
+    if (connection) {
+      connection.textContent = state.connected ? (state.catalog?.connection_kind === 'desktop-ipc' ? 'Desktop connected' : 'Connected') : 'Reconnecting…';
+      connection.classList.toggle('is-connected', state.connected);
+    }
     const preview = state.root.querySelector('[data-codex-preview]');
     if (preview && state.catalog) preview.checked = !!state.catalog.experimental_enabled;
     const usage = state.root.querySelector('[data-codex-usage]');
+    if (!usage) return;
     const turns = state.thread && state.thread.turns || [];
     let tokens = 0;
     turns.forEach(turn => { tokens += Number(turn.usage && (turn.usage.totalTokens || turn.usage.total_tokens) || 0); });
@@ -1451,11 +1549,13 @@
   async function loadCatalog(token) {
     const catalog = await jsonFetch(API + '/catalog');
     if (token !== state.requestToken || state.closed) return;
-    state.catalog = catalog; renderCatalog(); updateChrome(); await loadComposerModels(token);
+    state.catalog = catalog; renderCatalog(); updateChrome();
+    if (catalog.connection_note && !state.context?.inline) showNotice(catalog.connection_note);
+    await loadComposerModels(token);
   }
 
   async function loadHistory(token, cursor) {
-    const transcript = cursor && state.root && state.root.querySelector('[data-codex-transcript]');
+    const transcript = cursor && state.root && (state.context?.inline ? state.root.closest('.conversations-view') : state.root.querySelector('[data-codex-transcript]'));
     const anchor = transcript ? { top: transcript.scrollTop, height: transcript.scrollHeight } : null;
     const params = new URLSearchParams({ thread_id: state.context.threadId, repo_path: state.context.repoPath });
     if (cursor) params.set('cursor', cursor);
@@ -1568,7 +1668,6 @@
       } else {
         if (data.generation !== undefined) state.generation = data.generation;
         handleEvents(data.events || []);
-        if (data.queue_owner && state.root) state.root.querySelector('[data-codex-queue-owner]').value = data.queue_owner;
         if (data.cursor !== undefined) state.eventCursor = data.cursor;
         if (Array.isArray(data.requests)) { state.requests = data.requests; renderRequests(); }
         if ((data.events || []).length) await loadState(); else updateChrome();
@@ -1592,7 +1691,8 @@
     context = Object.assign({}, typeof window.CCCCodexClientContext === 'function' ? window.CCCCodexClientContext() : {}, context || {});
     if (!context.threadId || !context.repoPath) throw new Error('Open a Codex conversation with a known repository first.');
     state.closed = false; state.context = context; state.requestToken++; state.schemas = new Map();
-    state.thread = null; state.requests = []; state.generation = null; state.eventCursor = null; state.historyCursor = null; state.activity = []; state.pollFailures = 0;
+    state.thread = null; state.requests = []; state.generation = null; state.eventCursor = null; state.historyCursor = null; state.activity = []; state.pollFailures = 0; state.inlinePendingUserMessages = []; state.imageNodes.clear();
+    state.didInitialRender = false;
     state.root = mount(context);
     state.visibilityHandler = () => { if (document.hidden && !mediaActive()) { state.pollAbort?.abort(); window.clearTimeout(state.pollTimer); } else { loadState().catch(() => {}); schedulePoll(0); } };
     document.addEventListener('visibilitychange', state.visibilityHandler);
@@ -1600,6 +1700,22 @@
     const results = await Promise.allSettled([loadCatalog(token), loadHistory(token, null)]);
     if (state.closed || token !== state.requestToken) return;
     results.forEach(result => { if (result.status === 'rejected') showError(conciseError(result.reason)); });
+    if (context.inline && !state.connected) {
+      await close();
+      throw new Error('Native conversation connection is unavailable');
+    }
+    if (context.inline) {
+      // Native connection confirmed usable: swap the legacy transcript out
+      // for the freshly-rendered native shell now, not before. Remove
+      // whatever is currently in the view besides our root -- not just the
+      // nodes captured at mount time -- since a pending-send echo can have
+      // been appended into the legacy view while the connection was loading.
+      if (state.savedView) {
+        Array.from(state.savedView.view.childNodes).forEach(node => { if (node !== state.root) node.remove(); });
+        state.savedView.nodes = [];
+      }
+      if (state.root) state.root.style.removeProperty('display');
+    }
     mountMedia();
     schedulePoll(0);
     return state.root;
@@ -1613,11 +1729,16 @@
     state.pollAbort?.abort(); state.pollAbort = null; state.pollInFlight = false;
     if (state.visibilityHandler) document.removeEventListener('visibilitychange', state.visibilityHandler);
     state.visibilityHandler = null;
-    document.querySelectorAll('.codex-client-shell').forEach(node => node.remove());
-    document.querySelectorAll('.codex-client-open').forEach(pane => pane.classList.remove('codex-client-open'));
+    if (state.context?.inline && state.savedView) {
+      const {view,nodes} = state.savedView;
+      if (state.root?.parentElement === view) view.replaceChildren(...nodes);
+      state.context.paneEl?.classList.remove('has-codex-inline');
+    } else state.root?.remove();
+    state.savedView = null;
+    state.context?.paneEl?.classList.remove('codex-client-open');
     state.previousDisplay.forEach((display, node) => { if (node && node.isConnected) node.style.display = display; });
     state.previousDisplay.clear(); state.root = null; state.context = null; state.generationPromise = null;
-    state.composerSync = null; state.composerOptionsSync = null; state.composerModels = []; state.composerAttachment = null;
+    state.composerSync = null; state.composerOptionsSync = null; state.composerModels = []; state.composerAttachment = null; state.inlinePendingUserMessages = []; state.imageNodes.clear();
     state.activeRead = null; state.readRefreshInFlight = false; state.readRefreshQueued = false;
     state.activeSurface = 'conversation'; state.activeGroup = ''; state.query = ''; state.toolsOpen = false;
     state.mutationLocks.clear(); state.responseLocks.clear();
@@ -1694,38 +1815,127 @@
     } catch (error) { showError('Media controls could not start: ' + conciseError(error)); }
   }
 
-  function ensureLaunchers() {
-    document.querySelectorAll('.conv-pane').forEach(pane => {
-      let button = pane.querySelector('[data-codex-workspace-launch]');
-      if (!pane.classList.contains('is-codex-session')) { button?.remove(); return; }
-      if (button) return;
-      const actions = pane.querySelector('.conv-pane-actions'); if (!actions) return;
-      button = el('button', 'conv-pane-action codex-client-launch', 'Workspace'); button.type = 'button'; button.dataset.codexWorkspaceLaunch = 'true'; button.title = 'Open the full Codex workspace';
-      button.addEventListener('click', () => {
-        const bridge = typeof window.CCCCodexClientContext === 'function' ? window.CCCCodexClientContext(pane) : { paneEl: pane };
-        open(Object.assign({}, bridge, { paneEl: pane })).catch(error => {
-          if (typeof window.showOpToast === 'function') window.showOpToast(conciseError(error), 'error');
-          else window.alert(conciseError(error));
-        });
-      });
-      actions.prepend(button);
-    });
+  function appendInlinePendingUserMessage(text) {
+    const value = String(text || '').trim();
+    if (!state.context?.inline || !value) return '';
+    const message = {id:'pending-user-' + uuid(), text:value};
+    state.inlinePendingUserMessages.push(message);
+    renderTurns();
+    return message.id;
   }
 
-  window.addEventListener('ccc:conversation-selected', event => {
-    if (state.closed || !state.context) return;
-    const selected = event.detail || {};
-    const samePane = selected.paneEl === state.context.paneEl ||
-      selected.paneId && selected.paneId === state.context.paneId;
-    if (samePane && selected.threadId !== state.context.threadId) close();
-  });
+  function removeInlinePendingUserMessage(id) {
+    const index = state.inlinePendingUserMessages.findIndex(message => message.id === id);
+    if (index < 0) return false;
+    state.inlinePendingUserMessages.splice(index, 1);
+    renderTurns();
+    return true;
+  }
 
-  const observer = new MutationObserver(ensureLaunchers);
-  const begin = () => { ensureLaunchers(); observer.observe(document.body, { subtree: true, childList: true, attributes: true, attributeFilter: ['class'] }); };
-  if (document.body) begin(); else document.addEventListener('DOMContentLoaded', begin, { once: true });
-
-  window.CCCCodexClient = {
+  return {
     open, close, handleEvents,
-    __testing: { createForm, shapePendingResponse, renderItem, runOperation, executeAction, pollNow, loadEarlier, state },
+    __testing: { createForm, shapePendingResponse, renderItem, runOperation, executeAction, pollNow, loadEarlier, state, appendInlinePendingUserMessage, removeInlinePendingUserMessage },
   };
+  }
+
+  const defaultClient = createClient();
+  const inlineClients = new Map();
+  const retiredCleanup = new Map();
+  function retire(entry) {
+    const cleanup = Promise.all([retiredCleanup.get(entry.threadId), entry.client.close()]).then(()=>undefined);
+    retiredCleanup.set(entry.threadId,cleanup);
+    cleanup.then(()=>{if(retiredCleanup.get(entry.threadId)===cleanup)retiredCleanup.delete(entry.threadId);},()=>{});
+    return cleanup;
+  }
+  function entryFor(pane) { return inlineClients.get(pane); }
+  async function attachInline(context) {
+    const pane = context.paneEl;
+    if (!pane || !context.threadId || !context.repoPath) return false;
+    let entry = entryFor(pane);
+    if (entry && entry.threadId === context.threadId && entry.client.__testing.state.root?.isConnected) return true;
+    if (entry?.pending && entry.threadId === context.threadId) return entry.pending;
+    if (entry && entry.threadId === context.threadId && entry.retryAfter > Date.now()) return false;
+    // Claim the pane synchronously, before the first await: two attachInline
+    // calls racing past `await retire(...)` would otherwise mount two shells,
+    // and the loser's close() restores a savedView that already contains the
+    // winner's shell — orphaning a dead shell over the legacy transcript.
+    const previous = entry;
+    entry = {threadId:context.threadId, client:createClient(), pending:null, retryAfter:0};
+    inlineClients.set(pane,entry);
+    entry.pending = (async () => {
+      try {
+        if (previous) await retire(previous);
+        if (retiredCleanup.has(context.threadId)) await retiredCleanup.get(context.threadId);
+      } catch (_) { return false; }
+      if (retiredCleanup.size >= 128) return false;
+      try {
+        await entry.client.open({...context,inline:true});
+        return true;
+      } catch (_) {
+        entry.retryAfter = Date.now()+15000;
+        return false;
+      }
+    })().finally(()=>{entry.pending=null;});
+    return entry.pending;
+  }
+  function isInlineActive(pane) {
+    const entry = entryFor(pane);
+    return !!(entry && (entry.pending || entry.client.__testing.state.root?.isConnected));
+  }
+  function appendInlinePendingUserMessage(pane, text) {
+    const entry = entryFor(pane);
+    const root = entry?.client.__testing.state.root;
+    // Only claim the native transcript once its shell is actually visible --
+    // while it's still loading (mount() keeps it hidden until the connection
+    // is confirmed) a message appended to it is invisible, so let the caller
+    // fall back to its own visible echo instead of swallowing it silently.
+    if (!root || root.style.display === 'none') return '';
+    return entry.client.__testing.appendInlinePendingUserMessage(text) || '';
+  }
+  function removeInlinePendingUserMessage(pane, id) {
+    return !!entryFor(pane)?.client.__testing.removeInlinePendingUserMessage(id);
+  }
+  window.addEventListener('ccc:conversation-selected', event => {
+    const selected = event.detail || {};
+    for (const [pane,entry] of inlineClients) {
+      if (!pane.isConnected || pane === selected.paneEl && selected.threadId !== entry.threadId) {
+        retire(entry); inlineClients.delete(pane);
+      }
+    }
+    const context = defaultClient.__testing.state.context;
+    if (context && (selected.paneEl === context.paneEl || selected.paneId && selected.paneId === context.paneId)
+        && selected.threadId !== context.threadId) defaultClient.close();
+  });
+  async function interruptInline(pane) {
+    const client = entryFor(pane)?.client;
+    const current = client?.__testing.state;
+    if (!current?.connected) throw new Error('Codex is not connected');
+    const turn = current.thread?.turns?.slice().reverse().find(t => t.status === 'inProgress');
+    if (!turn) return {ok:true, note:'Codex has no active turn.'};
+    await client.__testing.runOperation('turn/interrupt', {threadId:current.context.threadId,turnId:turn.id});
+    return {ok:true, via:'codex-inline'};
+  }
+  window.CCCCodexClient = {...defaultClient, attachInline, isInlineActive, interruptInline,
+    appendInlinePendingUserMessage, removeInlinePendingUserMessage,
+    inlineState: pane => entryFor(pane)?.client.__testing.state};
+  // Engine discovery can finish after either script loading or first paint.
+  // Watch only pane identity classes, not the transcript's token mutations.
+  const watchedPanes = new WeakSet();
+  function upgradePaintedPane(pane) {
+    if (!pane.classList.contains('is-codex-session') || typeof window.CCCCodexClientContext !== 'function') return;
+    const view = pane.querySelector('.conversations-view');
+    if (view?.querySelector('.event')) attachInline({...window.CCCCodexClientContext(pane),paneEl:pane,viewEl:view});
+  }
+  function watchPanes() {
+    for (const pane of document.querySelectorAll('.conv-pane')) {
+      if (!watchedPanes.has(pane)) {
+        watchedPanes.add(pane);
+        new MutationObserver(()=>upgradePaintedPane(pane)).observe(pane,{attributes:true,attributeFilter:['class']});
+      }
+      upgradePaintedPane(pane);
+    }
+  }
+  queueMicrotask(watchPanes);
+  const split = document.getElementById('convSplit');
+  if (split) new MutationObserver(watchPanes).observe(split,{childList:true});
 })();

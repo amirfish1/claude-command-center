@@ -1,0 +1,1 @@
+- Added bulk risk-band selection and confirmed kill actions to the System status process audit.

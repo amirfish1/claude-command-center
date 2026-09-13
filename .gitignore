@@ -148,6 +148,11 @@ throughput_*.png
 
 # Product-story proof videos ship with the GitHub Pages site (exception to *.mp4)
 !docs/product-story/assets/video/*.mp4
+# Introduction master (video-claw cache stays ignored)
+docs/intro-video/video_build/
+docs/intro-video/**/__pycache__/
+!docs/intro-video/out/*.mp4
+!docs/intro-video/assets/*.mp4
 static/reddit/
 
 # Hunch local index cache (was accidentally committed once at 47MB — never again)

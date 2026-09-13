@@ -6961,15 +6961,17 @@
   .conv-item:hover:not(.active) .conv-hover-meta-row .conv-session-origin-chip.is-parent,
   .conv-item:hover:not(.active) .conv-hover-meta-row .conv-session-origin-chip.is-successor,
   .conv-item:hover:not(.active) .conv-hover-meta-row .conv-session-origin-chip.is-grandparent { display: inline-flex; }
-  /* CCC-865: CCC-864 kept the origin chip visible on hover but the row
-     around it still switched to the absolute single-line overlay above,
-     collapsing the normal two-row layout back to one line under the
-     cursor. Rows with a parent/grandparent chip should stay in normal
-     flow on hover instead, same treatment as the current-sessions
-     exception below (CCC-843). */
-  .conv-item:hover:not(.active) .conv-hover-meta-row:has(.conv-session-origin-chip.is-parent),
-  .conv-item:hover:not(.active) .conv-hover-meta-row:has(.conv-session-origin-chip.is-successor),
-  .conv-item:hover:not(.active) .conv-hover-meta-row:has(.conv-session-origin-chip.is-grandparent) {
+  /* CCC-865 (narrowed): only the successor chip is already visible at rest
+     (see the :not(:hover) rule below), so keeping it in normal flow on
+     hover is a no-op — no reflow, nothing to fix. Parent/grandparent chips
+     used to get this same normal-flow treatment, but those rows show
+     NOTHING at rest, so "normal flow on hover" meant the row visibly grew
+     a second line every time the cursor passed over it — the row-height
+     jump reported against the sidebar list. They now fall through to the
+     general absolute-overlay hover rule above instead (which already
+     reveals the parent/grandparent chip via the child-visibility rule
+     above it, just without pushing layout). */
+  .conv-item:hover:not(.active) .conv-hover-meta-row:has(.conv-session-origin-chip.is-successor) {
     position: static;
     right: auto;
     top: auto;
@@ -7590,12 +7592,17 @@
   #convList .conv-archived-tools-right {
     display: flex;
     align-items: center;
-    justify-content: flex-end;
+    justify-content: space-between;
     flex: 1 1 0;
     min-width: 0;
     gap: 6px;
+    /* Use the toolbar width before adding a line, so every filter remains
+       reachable without a hidden horizontal scroll area. */
     flex-wrap: wrap;
+    overflow: visible;
   }
+  /* Keep the engine popup outside the toolbar while it is open. */
+  #convList .conv-archived-tools-right.has-engine-filter-open { overflow: visible; }
   #convList .conv-archived-tools-right > * {
     flex: 0 0 auto;
     white-space: nowrap;
@@ -9587,51 +9594,6 @@
     to { transform: rotate(360deg); }
   }
 
-  /* CCC-863: unattended usage-limit auto-resume countdown, shown above the
-     composer while a stopped session waits out its quota reset. No manual
-     resume control by design -- the server sends "continue" itself. */
-  .usage-limit-resume-banner {
-    margin: 0 0 8px;
-    padding: 6px 8px 6px 12px;
-    border: 1px dashed color-mix(in srgb, var(--warning, #d9822b) 55%, var(--border) 45%);
-    border-radius: 8px;
-    background: color-mix(in srgb, var(--warning, #d9822b) 10%, var(--surface) 90%);
-    font-size: 12px; font-weight: 600; letter-spacing: 0.02em;
-    font-variant-numeric: tabular-nums;
-    color: var(--text);
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    gap: 8px;
-  }
-  .usage-limit-resume-banner.is-cancel-error {
-    border-style: solid;
-    border-color: color-mix(in srgb, var(--danger, #f85149) 65%, var(--border) 35%);
-    background: color-mix(in srgb, var(--danger, #f85149) 10%, var(--surface) 90%);
-  }
-
-  .usage-limit-resume-cancel {
-    flex: 0 0 auto;
-    border: none;
-    background: transparent;
-    color: var(--text-secondary, var(--text));
-    font-size: 15px;
-    line-height: 1;
-    cursor: pointer;
-    padding: 2px 4px;
-    border-radius: 4px;
-    opacity: 0.7;
-    white-space: nowrap;
-  }
-  .usage-limit-resume-banner.is-cancel-error .usage-limit-resume-cancel {
-    font-size: 11px;
-    font-weight: 700;
-  }
-  .usage-limit-resume-cancel:hover {
-    opacity: 1;
-    background: color-mix(in srgb, var(--warning, #d9822b) 20%, transparent);
-  }
-
   .conv-input-bar .tts-btn.speaking.paused {
     /* Paused but still active — calmer color so the button reads as
        "click to resume" instead of "still speaking". */
@@ -11456,6 +11418,12 @@
     gap: 4px;
     flex-wrap: wrap;
   }
+  .sys-proc-bulk-actions {
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 6px;
+  }
   .sys-proc-filter-pill {
     background: transparent;
     border: 1px solid var(--border, rgba(255, 255, 255, 0.1));
@@ -11629,6 +11597,18 @@
     align-items: center;
     align-self: center;
     flex-shrink: 0;
+  }
+  .sys-proc-select {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    color: var(--text-muted);
+    cursor: pointer;
+    font-size: 11px;
+  }
+  .sys-proc-select input {
+    accent-color: var(--accent-color);
+    cursor: pointer;
   }
 
   .sys-section { border: 1px solid var(--border); border-radius: 8px;
@@ -13984,14 +13964,15 @@
     display: block;
   }
   /* Hover/click opens a popup rather than widening the toolbar and moving
-     the controls under the pointer. Right alignment keeps it within narrow
-     sidebars; the toolbar supplies the stacking layer above session rows. */
+     the controls under the pointer. It opens rightward from its trigger so
+     options remain reachable when the toolbar puts that trigger at the
+     narrow rail's left edge. */
   .conv-archived-engine-options {
     display: inline-flex;
     align-items: stretch;
     position: absolute;
     top: calc(100% + 4px);
-    right: 0;
+    left: 0;
     width: max-content;
     visibility: hidden;
     opacity: 0;
@@ -14624,6 +14605,7 @@
   .fq-recent-meta { display: flex; flex-wrap: wrap; gap: 4px 10px; color: #8b949e; font-size: 10.5px; overflow-wrap: anywhere; }
   .fq-recent-state { color: #d29922; }
   .fq-recent-state.is-resolved { color: #39d2c0; }
+  .fq-recent-resolved { display: none; color: #8b949e; white-space: nowrap; }
   .fq-recent-time { color: #8b949e; font-size: 10px; overflow-wrap: anywhere; }
   .fq-recent-summary { color: #b1bac4; font-size: 11px; white-space: pre-line; overflow-wrap: anywhere;
     display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; overflow: hidden; }
@@ -14699,6 +14681,7 @@
     flex: 0 0 auto; gap: 0; font-size: 10px; flex-wrap: nowrap;
   }
   .fq-recent-row.is-brief .fq-recent-meta > span:not(.fq-recent-state) { display: none; }
+  .fq-recent-row.is-brief .fq-recent-resolved { display: inline; }
   /* One hairline marks where the detailed tier ends, so the size change reads
      as a deliberate tier and not as rows that failed to load. */
   .fq-recent-row.is-detailed + .fq-recent-row.is-brief {

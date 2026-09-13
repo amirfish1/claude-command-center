@@ -66,3 +66,26 @@ def test_archive_engine_filter_has_compact_accessible_icon_styles():
     assert ".conv-archived-engine-btn" in app_css
     assert ".conv-archived-engine-btn .conv-session-svg" in app_css
     assert ".conv-archived-engine-btn.is-active" in app_css
+
+
+def test_archive_engine_filter_options_open_right_from_trigger_in_narrow_rail():
+    app_css = _source(APP_CSS)
+    options_start = app_css.index(".conv-archived-engine-options {")
+    options_end = app_css.index(".conv-archived-engine-filter.is-expanded", options_start)
+    options_css = app_css[options_start:options_end]
+
+    # The All-view toolbar can place this control near the rail's left edge.
+    # Anchoring the popup's right edge there puts its first engine choices
+    # outside the viewport; anchor its left edge to the trigger instead.
+    assert "left: 0;" in options_css
+    assert "right: 0;" not in options_css
+
+
+def test_archive_engine_picker_releases_toolbar_overflow_while_open():
+    """The popup must escape the horizontally scrolling archived toolbar."""
+    app_js = _source(APP_JS)
+    app_css = _source(APP_CSS)
+
+    assert "has-engine-filter-open" in app_js
+    assert "#convList .conv-archived-tools-right.has-engine-filter-open {" in app_css
+    assert "overflow: visible;" in app_css
