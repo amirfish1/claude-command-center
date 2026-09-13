@@ -514,6 +514,36 @@ def _grok_session_dir_info(session_dir, cwd):
     }
 
 
+# session_dir -> (version, info-or-None). find_all_sessions runs this scan on
+# every sessions-snapshot refresh (every ~2 s while tabs poll) and
+# _grok_session_dir_info reads summary.json plus the first 200 transcript
+# lines per dir: 0.8 to 0.9 s per call at 112 sessions, all of it repeat
+# work. Mine once per (mtime_ns, size) of the files that feed the row.
+_GROK_DIR_INFO_CACHE = {}
+_GROK_DIR_INFO_FILES = ("summary.json", "updates.jsonl", "chat_history.jsonl")
+
+
+def _grok_session_dir_version(session_dir):
+    parts = []
+    for name in _GROK_DIR_INFO_FILES:
+        try:
+            st = (session_dir / name).stat()
+            parts.append((st.st_mtime_ns, st.st_size))
+        except OSError:
+            parts.append(None)
+    return tuple(parts)
+
+
+def _grok_session_dir_info_cached(session_dir, cwd):
+    key = str(session_dir)
+    version = (_grok_session_dir_version(session_dir), cwd)
+    hit = _GROK_DIR_INFO_CACHE.get(key)
+    if hit is None or hit[0] != version:
+        hit = (version, _grok_session_dir_info(session_dir, cwd))
+        _GROK_DIR_INFO_CACHE[key] = hit
+    return dict(hit[1]) if hit[1] else None
+
+
 def _grok_sessions_from_dirs(limit=None):
     """Variant-A listing: scan sessions/<cwd-bucket>/<sid>/ dirs under
     GROK_HOME. Missing store → []."""
@@ -524,6 +554,7 @@ def _grok_sessions_from_dirs(limit=None):
         return []
     parent_map = _grok_subagent_parent_map()
     out = []
+    seen = set()
     for bucket in buckets:
         try:
             if not bucket.is_dir():
@@ -538,13 +569,17 @@ def _grok_sessions_from_dirs(limit=None):
                     continue
             except OSError:
                 continue
-            info = _grok_session_dir_info(d, cwd)
+            seen.add(str(d))
+            info = _grok_session_dir_info_cached(d, cwd)
             if not info:
                 continue
             link = parent_map.get(info["id"]) or {}
             info["parent_session_id"] = str(link.get("parent") or "")
             info["subagent_name"] = str(link.get("name") or "")
             out.append(info)
+    if len(_GROK_DIR_INFO_CACHE) != len(seen):
+        for stale in [k for k in _GROK_DIR_INFO_CACHE if k not in seen]:
+            _GROK_DIR_INFO_CACHE.pop(stale, None)
     out.sort(key=lambda s: s.get("updated") or 0, reverse=True)
     if limit and limit > 0:
         out = out[: int(limit)]
