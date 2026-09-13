@@ -35,13 +35,15 @@ def test_ticket_detail_emphasizes_only_the_first_sentence_of_a_long_note():
 
 
 def test_ticket_detail_offers_the_existing_queued_run_action_for_open_tickets():
-    """The detail modal must offer the same safe request/cancel action as a row."""
+    """The detail modal gates Run now with its own claim metadata."""
     app_js = (ROOT / "static" / "app.js").read_text(encoding="utf-8")
     start = app_js.index("function _uxqOpenItemModal(item)")
     end = app_js.index("function _renderQueuePanel", start)
     modal = app_js[start:end]
 
-    assert "const canRequestRun = status === 'open' && !_isStaleClaim(item);" in modal
+    assert "const hasActiveClaim = !!(item.claimed_by || item.claimed_at);" in modal
+    assert "const canRequestRun = status === 'open' && !hasActiveClaim;" in modal
+    assert "_isStaleClaim(item)" not in modal
     assert "data-ux-run" in modal
     assert "Run now" in modal
     assert "Cancel queued run" in modal

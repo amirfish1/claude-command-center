@@ -45500,7 +45500,8 @@
     const status = item.status === 'closed' ? 'closed' : (item.needs_input ? 'blocked' : (item.status || 'open'));
     // Match the compact Queue row: request work only for an unclaimed open
     // ticket. A queued request stays reversible until WatchTower claims it.
-    const canRequestRun = status === 'open' && !_isStaleClaim(item);
+    const hasActiveClaim = !!(item.claimed_by || item.claimed_at);
+    const canRequestRun = status === 'open' && !hasActiveClaim;
     const runQueued = canRequestRun && !!item.run_requested;
     const runBusy = _uxqRunBusyRefs.has(ref);
     const timeline = Array.isArray(item.timeline) ? item.timeline : [];

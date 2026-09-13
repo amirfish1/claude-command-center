@@ -1,0 +1,1 @@
+- Fixed queue ticket-detail dialogs crashing when determining whether to show Run now.
