@@ -66150,6 +66150,18 @@
       + ' pause=' + (typeof shouldPauseSidebarRender === 'function' ? shouldPauseSidebarRender() : '?')
       + ' conv=' + String(window.currentConversation || ''));
   }, 60 * 1000);
+  // Last rows render done by the stuck-render recovery: which archiveData
+  // snapshot and which query. On a normal boot the recovery piggybacks on the
+  // in-flight first fetch and paints the rows before setArchiveMode's own
+  // continuation runs, so setArchiveMode can skip its identical render
+  // instead of forcing layout and rebuilding the HTML before the first paint.
+  let _archiveRecoveryRendered = null;
+  function _archiveRecoveryRenderCovers(query) {
+    const q = (query || '').trim().toLowerCase();
+    const rec = _archiveRecoveryRendered;
+    return !!(rec && rec.data === archiveData && rec.query === q
+      && _convListRenderSig && _lastArchiveRenderFilter === q);
+  }
   function _recoverArchiveRenderIfStuck() {
     if (!_archiveListStillShowsLoader()) {
       _archiveStuckRetryCount = 0;
@@ -66162,6 +66174,7 @@
       // which is precisely how a fully-loaded archive stays on the placeholder
       // forever. Recovery is not a periodic re-render; it must paint.
       renderArchiveList(_archiveQuery(), { force: true });
+      _archiveRecoveryRendered = { data: archiveData, query: _archiveQuery().trim().toLowerCase() };
       return Promise.resolve();
     }
     _clientLog('[ARCHIVE-DIAG] recoverIfStuck: loader showing, archiveLoaded=' + archiveLoaded
@@ -66183,6 +66196,7 @@
       archiveLoaded = true;
       _archiveStuckRetryCount = 0;
       renderArchiveList(_archiveQuery(), { force: true });
+      _archiveRecoveryRendered = { data: archiveData, query: _archiveQuery().trim().toLowerCase() };
     }).finally(() => {
       _archiveStuckRenderRecoveryPromise = null;
       // One-shot recovery used to give up here: if the fetch failed (or, before
@@ -67001,7 +67015,12 @@
       // reaches the screen instead of being trapped behind archive shaping.
       await new Promise(resolve => setTimeout(resolve, 0));
     }
-    renderArchiveList(document.getElementById('convSearch')?.value || '');
+    const bootQuery = document.getElementById('convSearch')?.value || '';
+    // The stuck-render recovery usually paints these exact rows first (it
+    // piggybacks on the same fetch). Rendering them again here forces layout
+    // and rebuilds the HTML in the same task, before the first paint.
+    if (_archiveRecoveryRenderCovers(bootQuery)) return;
+    renderArchiveList(bootQuery);
   }
 
   (function wireArchiveMode() {

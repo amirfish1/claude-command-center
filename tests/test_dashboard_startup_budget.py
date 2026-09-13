@@ -210,3 +210,28 @@ def test_archive_scroll_capture_skips_layout_reads_when_the_list_has_no_rows():
     assert "querySelector(" in helper
     assert "getBoundingClientRect" not in helper
     assert "scrollTop" not in helper
+
+
+def test_boot_skips_the_second_full_render_when_recovery_already_painted_the_rows():
+    # On every boot the loading-status poll runs _recoverArchiveRenderIfStuck
+    # while the first list fetch is still in flight; it piggybacks on that
+    # fetch and renders the rows (force). setArchiveMode continues off the
+    # same promise and rendered the same archiveData with the same query
+    # again, in the same task, before the browser could paint: the scroll
+    # capture forced a layout over the fresh rows, the HTML was rebuilt, and
+    # the structural signature then discarded it. Render tracer 2026-09-12 at
+    # 189 rows: 255 to 314 ms between the first write and first paint. When
+    # the recovery render already covers this data and query, skip it.
+    mode = _function("async function setArchiveMode()", "(function wireArchiveMode()")
+    assert "_archiveRecoveryRenderCovers(" in mode
+    assert mode.index("_archiveRecoveryRenderCovers(") < mode.rindex("renderArchiveList(")
+    recovery = _function("function _recoverArchiveRenderIfStuck()", "function _scheduleArchiveStaleRetry()")
+    forced = "renderArchiveList(_archiveQuery(), { force: true });"
+    stamp = "_archiveRecoveryRendered = "
+    assert recovery.count(forced) == 2
+    assert recovery.count(stamp) == 2
+    assert recovery.rindex(forced) < recovery.rindex(stamp)
+    covers = _function("function _archiveRecoveryRenderCovers(", "function _recoverArchiveRenderIfStuck()")
+    assert "rec.data === archiveData" in covers
+    assert "_convListRenderSig" in covers
+    assert "_lastArchiveRenderFilter" in covers
