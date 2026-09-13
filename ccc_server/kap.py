@@ -991,6 +991,9 @@ def kap_pump_active(sid):
     return bool(pump and pump.get("thread") and pump["thread"].is_alive())
 
 
+_KAP_PUMP_REBIND_CHECK_S = 5.0
+
+
 def _kap_pump(sid, cwd, idle_grace=3.0, max_run=1800.0):
     """Stream `sid` until its queue drains, writing mapped events into CCC.
 
@@ -999,6 +1002,18 @@ def _kap_pump(sid, cwd, idle_grace=3.0, max_run=1800.0):
     every frame. The pump outlives an individual turn and exits only once the
     server reports nothing active and nothing queued -- otherwise it would tear
     down between two queued prompts and lose the second turn's stream.
+
+    kap_prompt() rebinds to `local` before it submits, but that only guards
+    the start of a turn: a second attacher (a human running `kimi` directly
+    in a terminal against the same sid) can flip the binding to `acp:<sid>`
+    mid-turn, silently stripping Bash/Read/Write/Edit/Grep for the rest of
+    the run (agent-core-v2's runtimeAllows gate) -- observed live, 2026-09-13,
+    a turn that flailed through ~2 minutes of coordination-only tool calls
+    before the model noticed it had lost its hands and gave up. The pump is
+    already polling this session every few seconds while a turn is live, so
+    it re-asserts `local` on that same cadence instead of only pre-submit --
+    closing the window from "however long the turn lasts" to one check
+    interval.
     """
     mapper = KapTranscriptMapper()
     ws = None
@@ -1006,6 +1021,7 @@ def _kap_pump(sid, cwd, idle_grace=3.0, max_run=1800.0):
         ws = kap_open_stream(sid)
         deadline = time.time() + max_run
         idle_since = None
+        last_rebind_check = 0.0
         while time.time() < deadline:
             frame = ws.recv_json(timeout=30.0)
             if frame is None:
@@ -1015,6 +1031,24 @@ def _kap_pump(sid, cwd, idle_grace=3.0, max_run=1800.0):
                 kap_emit_to_ccc(sid, events, cwd=cwd)
             if mapper.busy:
                 idle_since = None
+                now = time.time()
+                if now - last_rebind_check >= _KAP_PUMP_REBIND_CHECK_S:
+                    last_rebind_check = now
+                    try:
+                        binding = kap_runtime_binding(sid)
+                        if binding.get("runtime_id") not in (None, "local"):
+                            kap_bind_runtime_local(sid)
+                            kap_emit_to_ccc(sid, [{
+                                "type": "result", "subtype": "info",
+                                "error": (
+                                    "kap: runtime was rebound away from "
+                                    "local mid-turn (likely a second "
+                                    "terminal/CLI attach) -- rebound back "
+                                    "so tools keep working"
+                                ),
+                            }], cwd=cwd)
+                    except (KapUnavailable, KapError, OSError, ValueError):
+                        pass
                 continue
             # Not busy. Give the server a grace window to pick the next queued
             # prompt up before concluding the queue is really empty.
