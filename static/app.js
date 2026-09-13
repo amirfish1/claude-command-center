@@ -113,7 +113,7 @@
     cccHealth:      { ms: 5000,  label: 'health',  surface: 'Sidebar - bottom-left CCC health bar',         desc: 'CCC self-health: server CPU%, live-activity build latency, recent errors.' },
     stuckSessions:  { ms: 60000, label: 'stuck',   surface: 'Sidebar - bottom-left stuck-session count',    desc: 'Recent Codex sessions currently labeled Stuck by the stale-transcript heuristic.' },
     modelCatalog:   { ms: 3600000, label: 'models', surface: 'Model picker - engine catalogs',               desc: 'Refresh exact engine model choices from the server-owned catalog.' },
-    codexLiveOverlay:{ ms: null,  label: 'codex-live', surface: 'Open conversation pane - Codex live overlay', desc: 'Live app-server overlay poll (static/codex-live-source.js, flag-gated by localStorage.cccCodexLiveOverlay; only while a turn is running or a request is pending).' },
+    codexLiveOverlay:{ ms: null,  label: 'codex-live', surface: 'Open conversation pane - Codex live overlay', desc: 'Live app-server overlay poll (static/codex-live-source.js; only while a turn is running or a request is pending).' },
   };
   // Per-trigger runtime stats for the strip: last-fired epoch + total ticks.
   const _pollerStats = {};
@@ -3082,9 +3082,9 @@
   let sessionCwdExistsByConv = {}; // {convId: bool}
   let sessionSourceByConv = {}; // {convId: 'interactive'|'pkood'|'task'}
   let sessionSpawnPidByConv = {}; // {convId: pid of claude we spawned (stdin inject)}
-  // Explicit bridge for the full Codex workspace. The browser client stays in
-  // its own module while this closure remains the authority for split-pane
-  // selection, native session ids, and repository scope.
+  // Bridge for static/codex-live-source.js: that module stays in its own
+  // file while this closure remains the authority for split-pane selection,
+  // native session ids, and repository scope.
   window.CCCCodexClientContext = function (paneEl) {
     const paneId = (paneEl && paneEl.dataset && paneEl.dataset.paneId) || activePaneId();
     const pane = paneByPaneId(paneId);
@@ -3099,77 +3099,6 @@
       title: row && (row.custom_title || row.title || row.name) || 'Codex task',
     };
   };
-  window.CCCCodexMarkdown = function (text) { return renderMarkdown(String(text || '')); };
-  window.CCCCodexStepNode = function (item) {
-    const type = String(item.type || '').toLowerCase();
-    const holder = document.createElement('div');
-    const strings = value => typeof value === 'string' ? value : Array.isArray(value) ? value.map(strings).filter(Boolean).join('\n\n') : value?.text || '';
-    if (type === 'reasoning') {
-      const text = strings(item.summary) || strings(item.content);
-      if (!text.trim()) { holder.className = 'kimi-marker'; holder.hidden = true; return holder; }
-      holder.innerHTML = _kimiThinkingHtml(text, true);
-      return holder.firstElementChild;
-    }
-    let block;
-    if (type === 'commandexecution') {
-      const command = Array.isArray(item.command) ? item.command.join(' ') : String(item.command || '');
-      block = {id:item.id,name:'Bash',command,input:{command},output_preview:String(item.aggregatedOutput || '')};
-      const actions = item.commandActions || [];
-      if (actions.length === 1 && actions[0].type === 'read') {
-        block.name = 'Read'; block.input = {path:actions[0].path || actions[0].name};
-      } else if (actions.length === 1 && actions[0].type === 'search') {
-        block.name = 'Grep'; block.input = {pattern:actions[0].query, path:actions[0].path};
-      }
-    } else if (type === 'mcptoolcall' || type === 'dynamictoolcall') {
-      block = {id:item.id,name:item.tool || item.toolName || item.name || 'Tool',input:item.arguments || item.input,
-        output_preview:strings(item.result?.content || item.result || item.output)};
-    } else if (type === 'websearch') {
-      block = {id:item.id,name:'WebSearch',input:{query:item.query || item.action?.query || ''}};
-    } else return null;
-    block.tool_status = item.status === 'inProgress' ? 'running' : /failed|error/i.test(item.status || '') ? 'failed' : 'completed';
-    holder.innerHTML = _kimiToolRowHtml(block);
-    return holder.firstElementChild;
-  };
-  window.CCCCodexGroupSteps = function (section) { _kimiRegroupTools(section); };
-
-  window.CCCCodexInlineStateChanged = function (context) {
-    const index = paneIndexByPaneId(context.paneId);
-    if (index < 0) return;
-    const saved = splitState.activeIndex;
-    splitState.activeIndex = index;
-    try {
-      const pane = paneByPaneId(context.paneId);
-      if (pane?.currentSession && window.CCCCodexClient?.inlineState(context.paneEl)?.connected) {
-        pane.currentSession.source = 'codex';
-        sessionSourceByConv[pane.conversationId] = 'codex';
-      }
-      // A pending-send echo appended to the legacy transcript while the
-      // native shell was still connecting gets removed from the DOM the
-      // moment the shell swaps in (it doesn't know about that echo) -- retire
-      // its bookkeeping too, or it sits in _pendingSends forever, silently
-      // blocking /compact ("Wait for the pending message to land...").
-      if (Array.isArray(_pendingSends) && _pendingSends.length) {
-        for (const p of _pendingSends.slice()) {
-          if (p && p.paneId === context.paneId && p.element && !p.element.isConnected) removePendingSendEcho(p);
-        }
-      }
-      if (_codexWakePollSid === context.threadId) stopCodexWakeBreakdown(true);
-      // Native renders don't scroll, so the Last/Next buttons need a nudge.
-      updateConversationEndAffordance(context.viewEl || getConvViewForPane(context.paneId));
-      updateInputBar();
-      if (saved === index) _updateLastWrittenLine(paneByPaneId(context.paneId)?.conversationId);
-    } finally { splitState.activeIndex = saved; }
-  };
-  window.CCCCodexClientLifecycle = function (detail) {
-    scheduleDashboardInvalidation('archive');
-    scheduleDashboardInvalidation('sessions');
-    if (detail?.inline && detail.paneId && ['thread/start','thread/fork'].includes(detail.method)) {
-      sessionSourceByConv[detail.threadId] = 'codex';
-      sessionIdByConv[detail.threadId] = detail.threadId;
-      if (detail.thread?.cwd) sessionCwdByConv[detail.threadId] = detail.thread.cwd;
-      Promise.resolve(refreshArchiveData({staleOk:false})).catch(()=>{}).then(()=>selectConversation(detail.threadId,detail.paneId));
-    }
-  };
   // Bridge for static/codex-live-source.js (Slice 4 of the codex-single-
   // renderer-merge plan): the only way that separate module can reach the
   // private renderConversationEvents/upsert machinery Slice 2 built. Feeds
@@ -3180,9 +3109,6 @@
   window.CCCCodexRenderLiveEvents = function (paneId, events) {
     return renderConversationEvents(events, paneId, {});
   };
-  window.addEventListener('ccc:codex-media-cleanup-error', event => {
-    showOpToast(event.detail && event.detail.message || 'Codex media cleanup could not be confirmed.', 'error');
-  });
   // Currently-focused session and its live-process state (per-pane, shimmed via window.currentSession)
   let liveStatus = { forSessionId: null, live: false, pid: null, tty: null, terminalApp: null, sidecarTool: null, sidecarFile: null, sidecarStatus: null, sidecarTs: 0, sidecarInFlight: false, staleToolCall: false, staleToolAgeS: 0, needsApproval: false, needsApprovalMessage: '', acpPendingPermission: null, questionWaiting: false, questionText: '', questionHeader: '', questionPreamble: '', questionOptions: [], questionOptionDetails: [], codexAppServer: false, codexAppServerTransport: null, codexManagedAppServer: false, codexAppServerEventSeq: 0, codexAppServerLastActivityAt: 0, codexAppServerLastItemId: '' };
   let liveStatusTimer = null;
@@ -6708,15 +6634,13 @@
     button.disabled = true;
     button.textContent = 'Cancelling…';
     try {
-      const inlinePane = $view?.closest('.conv-pane');
-      const nativeInline = window.CCCCodexClient?.isInlineActive(inlinePane);
-      const res = nativeInline ? null : await fetch('/api/inject-esc', {
+      const res = await fetch('/api/inject-esc', {
         method: 'POST',
         headers: {'Content-Type': 'application/json'},
         body: JSON.stringify({ session_id: sid }),
       });
-      const data = nativeInline ? await window.CCCCodexClient.interruptInline(inlinePane) : await res.json().catch(() => ({}));
-      if ((!res || res.ok) && data.ok) {
+      const data = await res.json().catch(() => ({}));
+      if (res.ok && data.ok) {
         const card = $view && $view.querySelector('.conv-live-tool-inline.optimistic');
         if (card) {
           card.classList.add('is-cancelling');
@@ -9599,7 +9523,6 @@
     const activeEffortSelect = activeInputControls.effortSelect;
     const isPkood = currentSession.source === 'pkood';
     const isCodex = currentSession.source === 'codex';
-    const nativeCodex = isCodex && window.CCCCodexClient?.inlineState(convPaneElById(activePaneId()));
     const isGemini = currentSession.source === 'gemini';
     const isCursor = currentSession.source === 'cursor';
     const isAntigravity = currentSession.source === 'antigravity';
@@ -9666,7 +9589,7 @@
         if (activeInput) activeInput.placeholder = 'Send to pkood agent...';
       } else if (isCodex) {
         activeInputControls.ttyLabel.textContent = live ? (liveStatus.tty || 'codex') : 'codex';
-        if (activeInput) activeInput.placeholder = nativeCodex?.connected ? 'Message Codex…' : (live ? 'Send to Codex terminal...' : 'Resume Codex and send...');
+        if (activeInput) activeInput.placeholder = live ? 'Send to Codex terminal...' : 'Resume Codex and send...';
       } else if (isGemini) {
         activeInputControls.ttyLabel.textContent = live ? (liveStatus.tty || 'gemini') : 'gemini';
         if (activeInput) activeInput.placeholder = live ? 'Send to Gemini terminal...' : 'Resume Gemini and send...';
@@ -9823,7 +9746,7 @@
       // Codex app-server sessions signal liveness via codexState='working',
       // not liveStatus.live (which stays false for pool-model Codex.app runs).
       if (activeEscBtn) {
-        const codexWorking = nativeCodex?.connected ? nativeCodex.thread?.turns?.some(turn => turn.status === 'inProgress') : (isCodex && liveStatusMatchesOpenConv() && liveStatus.codexState === 'working');
+        const codexWorking = isCodex && liveStatusMatchesOpenConv() && liveStatus.codexState === 'working';
         const canEsc = hasSession && !isPkood && !isNewSession && !isBacklogIssue && (!!liveStatus.live || codexWorking);
         activeEscBtn.style.display = canEsc ? '' : 'none';
       }
@@ -10258,14 +10181,6 @@
     const pending = { text, sid, paneId: paneId || activePaneId(), conversationId: currentConversation,
       element: null, list: null, entry: null };
     const $view = getConvViewForPane(paneId) || getConvView();
-    const inlinePane = $view && $view.closest('.conv-pane');
-    const nativeMessageId = inlinePane && window.CCCCodexClient
-      && window.CCCCodexClient.appendInlinePendingUserMessage?.(inlinePane, text);
-    if (nativeMessageId) {
-      pending.nativeMessageId = nativeMessageId;
-      if (sid) markSessionSending(sid);
-      return pending;
-    }
     if ($view) {
       const pendingDiv = document.createElement('div');
       const pendingSteerHtml = userMessageSteerHtml(text, null, null);
@@ -10346,10 +10261,6 @@
 
   function removePendingSendEcho(pending) {
     if (!pending) return;
-    if (pending.nativeMessageId) {
-      const pane = convPaneElById(pending.paneId || activePaneId());
-      window.CCCCodexClient?.removeInlinePendingUserMessage?.(pane, pending.nativeMessageId);
-    }
     if (pending.element && pending.element.parentNode) {
       pending.element.parentNode.removeChild(pending.element);
     }
@@ -10375,19 +10286,6 @@
   // a long-running turn doesn't make a safely-parked message look dropped.
   // When the input finally delivers, the normal JSONL dedupe removes the echo.
   function markPendingSendQueued(pending, label, opts) {
-    if (pending && !pending.entry && pending.nativeMessageId) {
-      // The native transcript pins its echo to the top of the running turn,
-      // where a queued message reads as already sent and scrolls out of view.
-      // Once the durable queue lists it, the tray card replaces that echo.
-      // A Codex-owned queue entry is not listed, so its echo stays.
-      // Every queue poll retries the handoff, so a queue write that lands a
-      // beat after this response still retires the echo.
-      const pid = pending.paneId || activePaneId();
-      if (!_nativeQueuedEchoes.has(pid)) _nativeQueuedEchoes.set(pid, new Set());
-      _nativeQueuedEchoes.get(pid).add(pending);
-      syncNativeCodexQueuedInputs(pid).catch(() => {});
-      return;
-    }
     if (!pending || !pending.entry) return;
     if (pending.entry.timer) { clearTimeout(pending.entry.timer); pending.entry.timer = null; }
     pending.entry.queued = true;
@@ -11070,7 +10968,7 @@
     // explicit inline feedback.
     if (!compactCommand && !clearCommand && looksDormantNoProcess()) {
       const $wv = getConvViewForPane(paneId || activePaneId()) || getConvView();
-      if (currentSession.source === 'codex' && !window.CCCCodexClient?.isInlineActive($wv.closest('.conv-pane'))) {
+      if (currentSession.source === 'codex') {
         startCodexWakeBreakdown($wv, sid);
       }
     }
@@ -12163,7 +12061,7 @@
     const view = getConvViewForPane(paneId || activePaneId()) || getConvView();
     if (!view) return null;
     const candidates = Array.from(view.querySelectorAll(
-      '.stream-bubble, .event.assistant:not(.tool-only), .event.user_text:not(.pending), .assistant-text, .codex-client-message.is-agent'
+      '.stream-bubble, .event.assistant:not(.tool-only), .event.user_text:not(.pending), .assistant-text'
     ));
     for (let i = candidates.length - 1; i >= 0; i--) {
       const el = candidates[i];
@@ -12181,13 +12079,6 @@
         if (msg) nodesToExtract = [msg];
       } else if (el.classList.contains('assistant-text')) {
         nodesToExtract = [el];
-      } else if (el.classList.contains('codex-client-message')) {
-        // Native Codex renders its reply body directly under the message row,
-        // alongside a presentational “Answer”/“Working” label. Read the body
-        // only, matching the legacy assistant-row behavior above.
-        nodesToExtract = Array.from(el.children).filter(child =>
-          !child.classList.contains('codex-client-message-phase')
-        );
       }
 
       if (nodesToExtract.length > 0) {
@@ -12707,17 +12598,14 @@
     $convEscBtn.classList.remove('sent', 'failed');
     const orig = $convEscBtn.textContent;
     try {
-      const inlinePane = convPaneElById(activePaneId());
-      const nativeInline = window.CCCCodexClient?.isInlineActive(inlinePane);
-      const res = nativeInline ? null : await fetch('/api/inject-esc', {
+      const res = await fetch('/api/inject-esc', {
         method: 'POST',
         headers: {'Content-Type': 'application/json'},
         body: JSON.stringify({ session_id: currentSession.id }),
       });
       let data = {};
-      if (nativeInline) data = await window.CCCCodexClient.interruptInline(inlinePane);
-      else try { data = await res.json(); } catch (_) {}
-      if ((!res || res.ok) && data.ok) {
+      try { data = await res.json(); } catch (_) {}
+      if (res.ok && data.ok) {
         $convEscBtn.classList.add('sent');
         $convEscBtn.textContent = data.via === 'spawn-sigint' ? 'Killed' : 'Esc ✓';
         if (data.note) showOpToast(data.note, 'info');
@@ -20164,16 +20052,7 @@
     if (!el) return;
     const row = (conversationsData || []).find(x => x.id === sid)
       || (Array.isArray(archiveData) ? archiveData.find(x => (x.id || x.session_id) === sid) : null);
-    const native = window.CCCCodexClient?.inlineState(convPaneElById(activePaneId()));
-    const matches = native?.connected && native.context?.threadId === (sessionIdByConv[sid] || sid);
-    const updated = matches ? Number(native.thread?.updatedAt || 0) : 0;
-    const nativeTime = updated > 1e11 ? updated / 1000 : updated;
-    if (matches) {
-      _lastWrittenState = {sid, ts:nativeTime};
-      el.textContent = 'LIVE · CODEX';
-      return;
-    }
-    const ts = Math.max(row ? Number(row.modified || row.mtime || 0) : 0, nativeTime);
+    const ts = row ? Number(row.modified || row.mtime || 0) : 0;
     if (!sid || !ts) {
       _lastWrittenState = null;
       el.textContent = '';
@@ -40927,10 +40806,9 @@
   // provisional one), a jump target must never double-count that message —
   // and a not-yet-reconciled provisional row can still be replaced or
   // dropped, so it isn't a stable target to jump to in the first place.
-  const CONV_USER_MESSAGE_SELECTOR = '.event.user_text:not(.task-notification-event):not([data-live-key]), .codex-client-shell.is-inline .codex-client-message.is-user';
+  const CONV_USER_MESSAGE_SELECTOR = '.event.user_text:not(.task-notification-event):not([data-live-key])';
   function _convReadingTop(view) {
-    const bar = view.querySelector(':scope > .codex-client-shell.is-inline .codex-client-topbar');
-    return view.getBoundingClientRect().top + (bar ? bar.offsetHeight : 0);
+    return view.getBoundingClientRect().top;
   }
   function _prevUserMessageTarget(view) {
     if (!view) return null;
@@ -50226,10 +50104,6 @@
     if (!currentConversation) return;
     const id = currentConversation;
     const $view = getConvViewForPane(fetchPaneId) || $conversationsView;
-    if (window.CCCCodexClient?.isInlineActive(convPaneElById(fetchPaneId))) {
-      syncNativeCodexQueuedInputs(fetchPaneId).catch(() => {});
-      return;
-    }
     // Backlog cards (open GH issues + TODO/PARKING/native-task) have no
     // session JSONL — /api/conversations/<id> returns 404. Render the
     // issue body directly from the card's already-loaded fields so the
@@ -50481,13 +50355,6 @@
       if (data.events && data.events.length > 0) {
         const sid = (conversationsData.find(x => x.id === id) || {}).session_id || id;
         fetchSessionUsage(sid);
-      }
-      if (data.engine === 'codex' && window.CCCCodexClient) {
-        const paneEl = convPaneElById(fetchPaneId);
-        const context = window.CCCCodexClientContext(paneEl);
-        if (paneByPaneId(fetchPaneId)?.conversationId === id) {
-          await window.CCCCodexClient.attachInline({...context, paneEl, viewEl:$view});
-        }
       }
     } catch (err) {
       if (convLastLine === 0) {
@@ -50926,9 +50793,9 @@
       _workspaceDataByPane[pid] = data;
       renderSessionWorkspaceIntoSticky(pid);
       const nativePane = convPaneElById(pid);
-      if (data.cwd && nativePane?.classList.contains('is-codex-session') && window.CCCCodexClient) {
+      if (data.cwd && nativePane?.classList.contains('is-codex-session')) {
         const view = getConvViewForPane(pid);
-        if (view?.querySelector('.event')) window.CCCCodexClient.attachInline({...window.CCCCodexClientContext(nativePane),paneEl:nativePane,viewEl:view});
+        if (view?.querySelector('.event')) window.CCCCodexLiveSource?.start(nativePane);
       }
     } catch (_) {}
   }
@@ -54872,82 +54739,6 @@
     }
   }
 
-  // Native Codex panes skip the legacy transcript fetch, and that fetch is the
-  // only path that paints durable queued rows. Without this the tray above the
-  // composer never builds, so a message parked behind a running turn shows
-  // only as a "Queued" banner with no text. Read just the in-memory queue and
-  // feed the same tray every other engine uses.
-  const _nativeCodexQueuedSync = new Map(); // paneId -> {promise, again}
-  const _nativeQueuedEchoes = new Map(); // paneId -> Set of queued native pending sends
-  // A message is either queued or sent, never both: once the durable queue
-  // lists it, drop its sent-looking transcript echo and the inline "Queued"
-  // banner, and let the tray card alone say it is waiting.
-  function _handOffNativeQueuedEchoes(pid, $view, queuedTexts) {
-    if (!queuedTexts.length) return;
-    $view.querySelectorAll('.conv-live-tool-inline.is-wake-status.is-queued').forEach(n => n.remove());
-    const echoes = _nativeQueuedEchoes.get(pid);
-    if (!echoes) return;
-    const listed = new Set(queuedTexts.map(text => _normSend(text)));
-    const native = window.CCCCodexClient?.inlineState?.(convPaneElById(pid));
-    echoes.forEach(pending => {
-      const alive = !native || (native.inlinePendingUserMessages || []).some(m => m.id === pending.nativeMessageId);
-      if (alive && listed.has(_normSend(pending.text))) removePendingSendEcho(pending);
-      if (!alive || listed.has(_normSend(pending.text))) echoes.delete(pending);
-    });
-    if (!echoes.size) _nativeQueuedEchoes.delete(pid);
-  }
-  function syncNativeCodexQueuedInputs(paneId) {
-    const pid = paneId || activePaneId();
-    const slot = _nativeCodexQueuedSync.get(pid) || { promise: null, again: false };
-    _nativeCodexQueuedSync.set(pid, slot);
-    // Coalesce: a caller arriving mid-read waits for a re-read that includes
-    // its own queue write, instead of starting a parallel fetch.
-    if (slot.promise) { slot.again = true; return slot.promise; }
-    slot.promise = _runNativeCodexQueuedSync(pid, slot).finally(() => { slot.promise = null; });
-    return slot.promise;
-  }
-  async function _runNativeCodexQueuedSync(pid, slot) {
-    do {
-      slot.again = false;
-      const pane = paneByPaneId(pid);
-      const convId = pane && pane.conversationId;
-      if (!convId) return;
-      const row = convRowForPane(pid);
-      const sid = sessionIdByConv[convId] || (row && row.session_id) || convId;
-      let data;
-      try {
-        const res = await fetch('/api/session/' + encodeURIComponent(sid) + '/queued-inputs');
-        if (!res.ok) return;
-        data = await res.json();
-      } catch (_) { return; }
-      if (paneByPaneId(pid)?.conversationId !== convId) return;
-      const $view = getConvViewForPane(pid);
-      if (!$view) return;
-      const events = (Array.isArray(data && data.events) ? data.events : [])
-        .filter(ev => ev && ev.pending && ev.text);
-      const tray = convPaneElById(pid)?.querySelector('.queued-steer-tray');
-      const shown = tray ? Array.from(tray.querySelectorAll('[data-queued-steer-server="true"] .user-msg'))
-        .map(msg => msg.getAttribute('data-raw-text') || '') : [];
-      const fresh = events.map(ev => String(ev.text));
-      _handOffNativeQueuedEchoes(pid, $view, fresh);
-      // Unchanged queue: leave the cards alone so hover and focus survive polls.
-      if (shown.length === fresh.length && shown.every((text, i) => text === fresh[i])) continue;
-      events.forEach(ev => {
-        const div = document.createElement('div');
-        div.className = 'event user_text pending server-queued';
-        div.dataset.queuedSteerServer = 'true';
-        if (ev.queued_reason) div.dataset.queuedReason = String(ev.queued_reason);
-        const epoch = ev.ts ? Date.parse(ev.ts) : NaN;
-        if (!isNaN(epoch)) div.dataset.tsEpoch = String(epoch);
-        const text = String(ev.text);
-        div.innerHTML = '<span class="label">User</span>'
-          + '<div class="user-msg" dir="auto" data-raw-text="' + escapeAttr(text) + '">' + escapeHtml(text) + '</div>';
-        $view.appendChild(div);
-      });
-      syncQueuedSteerTray($view, pid, true);
-    } while (slot.again);
-  }
-
   // ── Conversation presentation modes ──────────────────────────────────
   // Present is a derived local view over transcript DOM. Mode 3 uses the same
   // stage/navigation but consumes a safe slide artifact authored by the
@@ -57589,7 +57380,6 @@
       pane.firstUserMsgRendered = true;
     }
     const $view = getConvViewForPane(paneId) || $conversationsView;
-    if (window.CCCCodexClient?.isInlineActive(convPaneElById(paneId))) return true;
     // Webui panes (kimi + codex) render kimi-web style: merged turns,
     // right-aligned user bubbles, ToolGroup cards. Gated here so the Claude
     // path below stays byte-for-byte the shared legacy renderer.
@@ -59328,18 +59118,14 @@
     } catch (_) {
       // Best-effort re-apply of stored annotations — never blocks rendering.
     }
-    if (_codexPane && window.CCCCodexClient) {
+    if (_codexPane) {
       queueMicrotask(() => {
         if (paneByPaneId(paneId)?.conversationId !== renderedConversationId) return;
         const paneEl = convPaneElById(paneId);
-        // Slice 4 (codex-single-renderer-merge): behind the flag, poll the
-        // live app-server overlay instead of attaching the native inline
-        // view (attachInline no-ops for it anyway -- see codex-client.js).
         // This is the main trigger point: it fires on every rollout render
         // for a Codex pane (initial open and every poll tick alike), which
         // is exactly the cadence a freshly-started or resumed turn needs.
-        if (window.CCCCodexLiveSource?.enabled()) window.CCCCodexLiveSource.start(paneEl);
-        window.CCCCodexClient.attachInline({...window.CCCCodexClientContext(paneEl),paneEl,viewEl:$view});
+        window.CCCCodexLiveSource?.start(paneEl);
       });
     }
     return true;

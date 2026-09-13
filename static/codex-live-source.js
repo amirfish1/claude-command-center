@@ -2,19 +2,16 @@
 (function () {
   'use strict';
 
-  // Slices 4-5 of the codex-single-renderer-merge plan (see
-  // CCC-private-docs/plans/2026-09-12-codex-single-renderer-merge.md).
+  // Slices 1-6 of the codex-single-renderer-merge plan (see
+  // CCC-private-docs/plans/2026-09-12-codex-single-renderer-merge.md). Slice 6
+  // deleted the native inline renderer (static/codex-client.js) entirely, so
+  // this module is now the only way a Codex pane gets live (in-progress-turn)
+  // data -- there is no flag and no opt-out.
   //
-  // Slice 5: ON by default. localStorage.cccCodexLiveOverlay === '0' is the
-  // explicit opt-out / emergency rollback -- with it set, this module never
-  // fetches anything and static/codex-client.js's attachInline runs exactly
-  // as it did before Slice 4 (the pre-merge native inline view). Any other
-  // value, or the key being absent entirely, means the overlay is on.
-  //
-  // What this does when the flag is on: poll the `live-transcript` action
-  // added in Slice 1 (ccc_server/codex_client.py's codex_client_dispatch,
-  // mapped by ccc_server/codex_live_events.py) for one Codex pane's active
-  // thread, and feed the resulting provisional events into the SAME shared
+  // What this does: poll the `live-transcript` action added in Slice 1
+  // (ccc_server/codex_client.py's codex_client_dispatch, mapped by
+  // ccc_server/codex_live_events.py) for one Codex pane's active thread, and
+  // feed the resulting provisional events into the SAME shared
   // renderConversationEvents() the rollout JSONL already draws with -- via
   // the `data-live-key` upsert/reconcile path Slice 2 built (app.js's
   // _upsertProvisionalNode/_findMatchingProvisionalNode, invoked from
@@ -22,13 +19,9 @@
   // anything itself; it only fetches and hands events to
   // window.CCCCodexRenderLiveEvents (a thin app.js export added for this).
   //
-  // Lifecycle: static/codex-client.js's attachInline is the thing that
-  // decides WHEN a pane looks at a Codex thread (pane paint, engine
-  // detection, workspace fetch, conversation-selected). Rather than duplicate
-  // that wiring with a second DOM watcher, this module exposes start()/stop()
-  // and codex-client.js + app.js call start() at the same points they used to
-  // call attachInline unconditionally (see codex-client.js's
-  // upgradePaintedPane and app.js's renderConversationEvents trailing Codex
+  // Lifecycle: app.js calls start() at every point that decides a pane is
+  // looking at a Codex thread (pane paint, engine detection, workspace fetch,
+  // conversation-selected, and renderConversationEvents's trailing Codex
   // hook). start() is idempotent and cheap to call repeatedly.
   //
   // Cursors (per the plan's "2. Data path"): the rollout keeps convLastLine
@@ -44,7 +37,6 @@
   // then turn_id+ordinal, then normalized text) decides whether a rollout row
   // has already superseded a given provisional node.
 
-  const FLAG_KEY = 'cccCodexLiveOverlay';
   const POLLER_NAME = 'codexLiveOverlay';
   const MAX_FAILURE_BACKOFF_STEPS = 4;
 
@@ -53,13 +45,6 @@
   // set in production.
   function pollBaseMs() { return Number(window.__CCC_TEST_LIVE_POLL_MS) || 900; }
   function pollMaxMs() { return Number(window.__CCC_TEST_LIVE_POLL_MAX_MS) || 6000; }
-
-  function overlayEnabled() {
-    // Slice 5: default on. '0' is the only explicit opt-out; a localStorage
-    // read failure (e.g. a locked-down browser context) also falls back to
-    // the new default rather than the old off-by-default behavior.
-    try { return localStorage.getItem(FLAG_KEY) !== '0'; } catch (_) { return true; }
-  }
 
   function pollerOff() {
     return !!(window.__pollersOff && window.__pollersOff[POLLER_NAME]);
@@ -183,7 +168,7 @@
     window.clearTimeout(entry.timer);
     entry.timer = null;
     if (!panes.has(entry.paneEl)) return;
-    if (!overlayEnabled() || pollerOff()) { stop(entry.paneEl); return; }
+    if (pollerOff()) { stop(entry.paneEl); return; }
     if (!entry.active) return; // idle: nothing running, nothing pending. A later start() resumes it.
     const backoffSteps = Math.min(entry.failures || 0, MAX_FAILURE_BACKOFF_STEPS);
     const delay = Math.min(pollMaxMs(), pollBaseMs() * Math.pow(2, backoffSteps));
@@ -193,11 +178,11 @@
   }
 
   // Start (or resume) polling for one Codex pane. Safe to call repeatedly --
-  // callers invoke this at every point that used to call attachInline
-  // unconditionally (pane paint, rollout re-render, workspace fetch); a pane
-  // already being actively polled is a cheap no-op.
+  // callers invoke this at every point a pane might be looking at a Codex
+  // thread (pane paint, rollout re-render, workspace fetch); a pane already
+  // being actively polled is a cheap no-op.
   function start(paneEl) {
-    if (!overlayEnabled() || pollerOff() || !paneEl) return;
+    if (pollerOff() || !paneEl) return;
     const context = contextFor(paneEl);
     if (!context) return;
     let entry = panes.get(paneEl);
@@ -222,9 +207,8 @@
     }
   }
 
-  // Mirrors codex-client.js's own retire-on-select listener: a pane whose
-  // thread changed stops polling for the OLD thread immediately instead of
-  // waiting for the next poll tick to notice.
+  // A pane whose thread changed stops polling for the OLD thread immediately
+  // instead of waiting for the next poll tick to notice.
   window.addEventListener('ccc:conversation-selected', (event) => {
     const detail = event.detail || {};
     const entry = detail.paneEl && panes.get(detail.paneEl);
@@ -232,7 +216,6 @@
   });
 
   window.CCCCodexLiveSource = {
-    enabled: overlayEnabled,
     start,
     stop,
     __testing: { flattenTurns, isTurnActive, clearProvisional, applySnapshot, fetchLiveTranscript, panes },

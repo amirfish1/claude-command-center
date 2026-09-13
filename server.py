@@ -24360,7 +24360,12 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
         if path.startswith("/api/codex/client/"):
             from ccc_server.codex_client import codex_client_call
             action = path.rsplit("/", 1)[-1]
-            if action not in ("catalog", "schema", "history", "state", "events", "live-transcript"):
+            # Slice 6 of the codex-single-renderer-merge deleted the native
+            # inline renderer (static/codex-client.js), which was the only
+            # caller of catalog/schema/history/state/events. live-transcript
+            # is the one action the live overlay (static/codex-live-source.js)
+            # still polls.
+            if action not in ("live-transcript",):
                 self.send_json({"ok": False, "error": "Unknown Codex view"}, 404)
                 return
             query = urllib.parse.parse_qs(parsed.query)
@@ -27741,7 +27746,13 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
         if path.startswith("/api/codex/client/"):
             from ccc_server.codex_client import codex_client_call
             action = path.rsplit("/", 1)[-1]
-            if action not in ("operation", "respond", "preferences", "queue-owner"):
+            # Slice 6 of the codex-single-renderer-merge deleted the native
+            # inline renderer (static/codex-client.js), which was the only
+            # caller of operation/preferences. respond still answers the
+            # shared codex_request card; queue-owner backs the still-live
+            # native-vs-CCC queue ownership feature (unrelated to the
+            # deleted UI).
+            if action not in ("respond", "queue-owner"):
                 self.send_json({"ok": False, "error": "Unknown Codex action"}, 404)
                 return
             try:
