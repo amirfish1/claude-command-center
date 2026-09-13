@@ -13492,8 +13492,10 @@ def _archive_corpus_signature_parts():
         # and removes it at exit, so the lock dir's mtime is the add/remove
         # signal. Without this a freshly spawned Devin CLI session only
         # landed in the sidebar when some OTHER engine's corpus happened to
-        # change.
+        # change. Both homes: the desktop app's cli-next/ store creates and
+        # reaps lock files the same way.
         DEVIN_CLI_LOCKS_DIR,
+        DEVIN_CLI_NEXT_LOCKS_DIR,
     ]:
         try:
             mt = os.stat(extra).st_mtime_ns
@@ -14057,7 +14059,7 @@ def _archive_overlay_devin_cli_sessions(rows, now=None):
     the cached snapshot. Rows come from the same producer that feeds the
     archive build, so their shape is identical."""
     try:
-        if not _devin_cli_db_path().is_file():
+        if not any(p.is_file() for p in _devin_cli_db_paths()):
             return []
     except OSError:
         return []
@@ -21350,7 +21352,7 @@ def conversation_transcript_path(conversation_id, repo_path=None):
             return str(path) if path and path.is_file() else ""
         if engine == "devin":
             path = (
-                _devin_cli_db_path()
+                _devin_cli_db_path_for_raw_id(_devin_cli_raw_id(session_id))
                 if _is_devin_cli_session(session_id)
                 else _devin_detail_cache_path(session_id)
             )

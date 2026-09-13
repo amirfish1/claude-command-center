@@ -3,6 +3,7 @@
 import importlib
 import json
 import os
+import shutil
 import sqlite3
 import tempfile
 import threading
@@ -590,6 +591,20 @@ class DevinListPerfTests(unittest.TestCase):
                 os.environ.__setitem__("CCC_DEVIN_DB", prev_db)
                 if prev_db is not None
                 else os.environ.pop("CCC_DEVIN_DB", None)
+            )
+        )
+        # Point the second (Devin desktop app) home at a path that doesn't
+        # exist rather than leaving it unset: unset falls through to the
+        # real ~/.local/share/devin/cli-next/sessions.db on a dev machine
+        # that has the desktop app installed, silently merging real
+        # sessions into what must be an isolated fixture.
+        prev_next_db = os.environ.get("CCC_DEVIN_NEXT_DB")
+        os.environ["CCC_DEVIN_NEXT_DB"] = os.path.join(tmpdir, "cli-next-sessions.db")
+        self.addCleanup(
+            lambda: (
+                os.environ.__setitem__("CCC_DEVIN_NEXT_DB", prev_next_db)
+                if prev_next_db is not None
+                else os.environ.pop("CCC_DEVIN_NEXT_DB", None)
             )
         )
         patches = [
@@ -1372,6 +1387,115 @@ class DevinSpawnIdentityTests(unittest.TestCase):
         # Message stays queued until the proof-of-delivery watchdog removes it.
         self.assertEqual(queue.get(sid), [text])
         save.assert_not_called()
+
+
+class DevinCliNextHomeTests(unittest.TestCase):
+    """The Devin desktop app ("Devin - Next") writes its own sessions.db at
+    a sibling path (``cli-next/`` instead of ``cli/``) with an identical
+    schema. Discovery must merge both homes, not just the original CLI's.
+    """
+
+    SCHEMA = """
+        CREATE TABLE sessions (
+            id TEXT PRIMARY KEY,
+            working_directory TEXT,
+            backend_type TEXT,
+            model TEXT,
+            agent_mode TEXT,
+            created_at REAL,
+            last_activity_at REAL,
+            title TEXT,
+            main_chain_id TEXT
+        );
+        CREATE TABLE prompt_history (
+            session_id TEXT,
+            content TEXT,
+            timestamp REAL,
+            is_shell INTEGER
+        );
+    """
+
+    def _make_db(self, path, raw_id, cwd, when):
+        con = sqlite3.connect(path)
+        con.executescript(self.SCHEMA)
+        con.execute(
+            "INSERT INTO sessions VALUES (?, ?, '', '', '', ?, ?, NULL, NULL)",
+            (raw_id, cwd, when, when),
+        )
+        con.commit()
+        con.close()
+
+    def setUp(self):
+        self.server = importlib.import_module("server")
+        self.devin_mod = importlib.import_module("ccc_server.devin")
+        self.tmpdir = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, self.tmpdir, True)
+
+        self.primary_db = os.path.join(self.tmpdir, "primary-sessions.db")
+        self.next_db = os.path.join(self.tmpdir, "next-sessions.db")
+        now = time.time()
+        self._make_db(self.primary_db, "orig-cli-session", "/tmp/ccc", now)
+        self._make_db(self.next_db, "desktop-app-session", "/tmp/ccc", now - 1)
+
+        env_patch = mock.patch.dict(
+            os.environ,
+            {"CCC_DEVIN_DB": self.primary_db, "CCC_DEVIN_NEXT_DB": self.next_db},
+        )
+        env_patch.start()
+        self.addCleanup(env_patch.stop)
+
+        for p in (
+            mock.patch.object(self.devin_mod, "_DEVIN_CLI_LIST_CACHE", {}),
+            mock.patch.object(self.devin_mod, "_DEVIN_CLI_ID_CACHE", {}),
+            mock.patch.object(self.devin_mod, "_DEVIN_CLI_ROW_MEMO", {}),
+            mock.patch.object(self.devin_mod, "_DEVIN_CLI_ROW_MEMO_LOADED", False),
+            mock.patch.object(
+                self.devin_mod,
+                "_devin_cli_row_memo_path",
+                lambda: self.devin_mod.Path(os.path.join(self.tmpdir, "row_memo.json")),
+            ),
+            mock.patch.object(
+                self.devin_mod, "_DEVIN_CLI_ROW_MEMO_BG", {"pending": {}, "thread": None}
+            ),
+            mock.patch.object(self.server, "_spawned_sessions", []),
+        ):
+            p.start()
+            self.addCleanup(p.stop)
+        self.addCleanup(self.devin_mod._devin_cli_row_memo_background_join, 10)
+
+    def test_find_devin_cli_conversations_merges_both_homes(self):
+        """Sessions from the original cli/ store and the desktop app's
+        cli-next/ store both appear in one discovery call."""
+        rows = self.server.find_devin_cli_conversations("/tmp/ccc", include_old=True)
+        ids = {r["id"] for r in rows}
+        self.assertIn("devincli-orig-cli-session", ids)
+        self.assertIn("devincli-desktop-app-session", ids)
+        self.assertEqual(len(rows), 2)
+
+    def test_devin_cli_session_ids_union_across_homes(self):
+        """The cached raw-id set spans every home, used for O(1) home lookup."""
+        ids = self.devin_mod._devin_cli_session_ids()
+        self.assertIn("orig-cli-session", ids)
+        self.assertIn("desktop-app-session", ids)
+
+    def test_db_path_for_raw_id_resolves_correct_home(self):
+        """A raw id that only exists in cli-next/ resolves to that DB path,
+        via cached id-set membership (no fresh DB hit)."""
+        self.devin_mod._devin_cli_session_ids()  # warm both homes' id caches
+        resolved = self.devin_mod._devin_cli_db_path_for_raw_id("desktop-app-session")
+        self.assertEqual(str(resolved), self.next_db)
+        resolved_primary = self.devin_mod._devin_cli_db_path_for_raw_id("orig-cli-session")
+        self.assertEqual(str(resolved_primary), self.primary_db)
+
+    def test_missing_next_home_still_serves_primary(self):
+        """If cli-next/ doesn't exist at all (no desktop app installed),
+        discovery still returns the primary home's sessions."""
+        os.unlink(self.next_db)
+        with mock.patch.object(self.devin_mod, "_DEVIN_CLI_LIST_CACHE", {}), \
+             mock.patch.object(self.devin_mod, "_DEVIN_CLI_ID_CACHE", {}):
+            rows = self.server.find_devin_cli_conversations("/tmp/ccc", include_old=True)
+        ids = {r["id"] for r in rows}
+        self.assertEqual(ids, {"devincli-orig-cli-session"})
 
 
 if __name__ == "__main__":

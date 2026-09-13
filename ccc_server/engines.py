@@ -3469,9 +3469,13 @@ def resume_session_devin(session_id, text, _delivery_slot="resume"):
 
 
 def _devin_cli_session_cwd(raw_id):
-    """Look up the working_directory for a Devin CLI session from the DB."""
+    """Look up the working_directory for a Devin CLI session from the DB.
+
+    ``raw_id`` may belong to either Devin CLI home (the original `cli/` store
+    or the desktop app's `cli-next/` store), so resolve the connection per id
+    rather than assuming the primary home."""
     try:
-        con = _core._devin_cli_connect()
+        con = _core._devin_cli_connect_for_raw_id(raw_id)
         if con is None:
             return None
         try:

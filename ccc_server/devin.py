@@ -67,7 +67,25 @@ DEVIN_CLI_SESSION_PREFIX = "devincli-"
 DEVIN_CLI_HOME = Path.home() / ".local" / "share" / "devin" / "cli"
 DEVIN_CLI_SESSIONS_DB = DEVIN_CLI_HOME / "sessions.db"
 DEVIN_CLI_LOCKS_DIR = DEVIN_CLI_HOME / "session_locks"
-_DEVIN_CLI_ID_CACHE = {"key": None, "ids": set(), "mtime": 0}
+# The separate "Devin - Next" desktop app (an Electron IDE) bundles its own
+# `devin-next` binary and writes to a sibling store with the identical
+# schema. CCC never spawns into this store (spawn/resume always resolve the
+# original `devin` binary), but sessions started in the desktop app must
+# still show up everywhere CCC discovers/reads/caches Devin CLI sessions —
+# hence DEVIN_CLI_HOMES below and the per-home helpers that fan out over it.
+DEVIN_CLI_HOME_NEXT = Path.home() / ".local" / "share" / "devin" / "cli-next"
+DEVIN_CLI_NEXT_SESSIONS_DB = DEVIN_CLI_HOME_NEXT / "sessions.db"
+DEVIN_CLI_NEXT_LOCKS_DIR = DEVIN_CLI_HOME_NEXT / "session_locks"
+# Ordered: original CLI home first, desktop-app home second. Kept for
+# documentation/inspection; call _devin_cli_db_paths() / _devin_cli_locks_dirs()
+# for the live, override-aware, monkeypatch-friendly paths.
+DEVIN_CLI_HOMES = [DEVIN_CLI_HOME, DEVIN_CLI_HOME_NEXT]
+# Raw session IDs are UUID-like and independently generated per home, so a
+# cross-home collision is not realistically expected; nothing here namespaces
+# them. Any lookup that only has a raw_id (no home context) resolves the home
+# by probing each home's cached id-set (see _devin_cli_db_path_for_raw_id) —
+# never a fresh DB hit just to disambiguate.
+_DEVIN_CLI_ID_CACHE = {}  # str(db_path) -> {"mtime": float, "ids": set}
 
 # In-memory incremental parse cache for local CLI sessions. Devin CLI stores
 # every turn (including context rebuilds) in message_nodes, so a long session
@@ -704,16 +722,44 @@ def _resolve_devin_bin():
 
 
 def _devin_cli_db_path():
-    """Path to the sessions DB, overridable for tests via CCC_DEVIN_DB."""
+    """Path to the primary (original `cli/`) sessions DB, overridable for
+    tests via CCC_DEVIN_DB. Kept as the single-arg default everywhere for
+    backward compat; use _devin_cli_db_paths() to reach every home."""
     override = os.environ.get("CCC_DEVIN_DB")
     if override:
         return Path(override).expanduser()
     return DEVIN_CLI_SESSIONS_DB
 
 
-def _devin_cli_connect():
-    """Open a read-only connection to the Devin CLI sessions DB, or None."""
-    path = _devin_cli_db_path()
+def _devin_cli_next_db_path():
+    """Path to the Devin desktop app's (`cli-next/`) sessions DB, overridable
+    via CCC_DEVIN_NEXT_DB (mirrors CCC_DEVIN_DB for the primary home)."""
+    override = os.environ.get("CCC_DEVIN_NEXT_DB")
+    if override:
+        return Path(override).expanduser()
+    return DEVIN_CLI_NEXT_SESSIONS_DB
+
+
+def _devin_cli_db_paths():
+    """Ordered sessions-DB path for every Devin CLI home: original `cli/`
+    first, the desktop app's `cli-next/` second. Every discovery/merge
+    function fans out over this instead of the single-home path."""
+    return [_devin_cli_db_path(), _devin_cli_next_db_path()]
+
+
+def _devin_cli_locks_dirs():
+    """Ordered session_locks dir for every Devin CLI home."""
+    return [DEVIN_CLI_LOCKS_DIR, DEVIN_CLI_NEXT_LOCKS_DIR]
+
+
+def _devin_cli_connect(path=None):
+    """Open a read-only connection to a Devin CLI sessions DB, or None.
+
+    ``path`` defaults to the primary (original `cli/`) home so the many
+    call sites that don't yet know which home a session lives in keep their
+    existing zero-arg behavior unchanged."""
+    if path is None:
+        path = _devin_cli_db_path()
     try:
         if not path.is_file():
             return None
@@ -732,22 +778,22 @@ def _devin_cli_connect():
         return None
 
 
-def _devin_cli_session_ids():
-    """Cached set of raw session IDs from the Devin CLI SQLite DB.
+def _devin_cli_ids_for_path(path):
+    """Cached set of raw session IDs from ONE Devin CLI SQLite DB.
 
     Cached by DB file mtime so repeated detection probes stay cheap. Returns
     an empty set when the DB is missing or unreadable — never raises.
     """
-    path = _devin_cli_db_path()
+    key = str(path)
     try:
         mtime = path.stat().st_mtime
     except OSError:
         mtime = 0
-    cache = _DEVIN_CLI_ID_CACHE
-    if cache.get("key") == str(path) and cache.get("mtime") == mtime:
+    cache = _DEVIN_CLI_ID_CACHE.get(key)
+    if cache is not None and cache.get("mtime") == mtime:
         return set(cache.get("ids") or set())
     ids = set()
-    con = _devin_cli_connect()
+    con = _devin_cli_connect(path)
     if con is not None:
         try:
             for row in con.execute("SELECT id FROM sessions"):
@@ -758,10 +804,36 @@ def _devin_cli_session_ids():
             pass
         finally:
             con.close()
-    cache["key"] = str(path)
-    cache["mtime"] = mtime
-    cache["ids"] = set(ids)
+    _DEVIN_CLI_ID_CACHE[key] = {"mtime": mtime, "ids": set(ids)}
     return ids
+
+
+def _devin_cli_session_ids():
+    """Cached union of raw session IDs across every Devin CLI home (the
+    original `cli/` store and the desktop app's `cli-next/` store).
+    Never raises."""
+    ids = set()
+    for path in _devin_cli_db_paths():
+        ids |= _devin_cli_ids_for_path(path)
+    return ids
+
+
+def _devin_cli_db_path_for_raw_id(raw_id):
+    """Which home's sessions DB ``raw_id`` lives in.
+
+    Probes each home's cached id-set membership (never a fresh DB hit just
+    to disambiguate) in home order: original `cli/` first, then the desktop
+    app's `cli-next/`. Falls back to the primary home when the id isn't in
+    either cached set yet (e.g. a session that only just appeared)."""
+    for path in _devin_cli_db_paths():
+        if raw_id in _devin_cli_ids_for_path(path):
+            return path
+    return _devin_cli_db_path()
+
+
+def _devin_cli_connect_for_raw_id(raw_id):
+    """Read-only connection to whichever home's DB contains ``raw_id``."""
+    return _devin_cli_connect(_devin_cli_db_path_for_raw_id(raw_id))
 
 
 def _is_devin_cli_session(session_id):
@@ -780,22 +852,29 @@ def _devin_cli_raw_id(session_id):
 
 
 def _devin_cli_lock_pid(raw_id):
-    """PID recorded in ``session_locks/<id>.lock``, or None."""
+    """PID recorded in ``session_locks/<id>.lock``, or None.
+
+    Checks every home's locks dir (original `cli/` first, then the desktop
+    app's `cli-next/`) since either one could hold the live lock for this id.
+    """
     if not raw_id:
         return None
-    lock = DEVIN_CLI_LOCKS_DIR / f"{raw_id}.lock"
-    try:
-        text = lock.read_text(encoding="utf-8").strip()
-    except OSError:
-        return None
-    if not text:
-        return None
-    token = text.split()[0]
-    try:
-        pid = int(token)
-    except ValueError:
-        return None
-    return pid if pid > 0 else None
+    for locks_dir in _devin_cli_locks_dirs():
+        lock = locks_dir / f"{raw_id}.lock"
+        try:
+            text = lock.read_text(encoding="utf-8").strip()
+        except OSError:
+            continue
+        if not text:
+            continue
+        token = text.split()[0]
+        try:
+            pid = int(token)
+        except ValueError:
+            continue
+        if pid > 0:
+            return pid
+    return None
 
 
 def _devin_cli_pid_alive(pid):
@@ -832,16 +911,18 @@ def _devin_cli_raw_id_for_pid(pid):
     if want <= 0:
         return None
     lock_pids = {}
-    try:
-        for p in DEVIN_CLI_LOCKS_DIR.iterdir():
+    for locks_dir in _devin_cli_locks_dirs():
+        try:
+            entries = list(locks_dir.iterdir())
+        except OSError:
+            continue
+        for p in entries:
             if p.suffix != ".lock" or len(p.name) <= 5:
                 continue
             raw_id = p.name[:-5]
             lock_pid = _devin_cli_lock_pid(raw_id)
             if lock_pid:
                 lock_pids[lock_pid] = raw_id
-    except OSError:
-        return None
     if want in lock_pids:
         return lock_pids[want]
     if not lock_pids:
@@ -933,7 +1014,8 @@ def _devin_spawn_pid_by_session_id():
 
 
 def _devin_cli_cache_key():
-    """(mtime_ns, size) across the sessions DB + its WAL/SHM sidecars.
+    """(mtime_ns, size) combined across every Devin CLI home's sessions DB +
+    its WAL/SHM sidecars (original `cli/` and the desktop app's `cli-next/`).
 
     Used as a cache key for the parse cache and the pre-serialized response
     bytes cache — same role as ``_hermes_db_cache_key`` for Hermes. Without
@@ -941,35 +1023,40 @@ def _devin_cli_cache_key():
     ``_conv_parse_jsonl_mtime`` and every cache layer bails out, so the
     SSE stream falls through to the file-based path (which 404s) and the
     conversation text never refreshes while a terminal writes in parallel.
+    A write to EITHER home changes this key, so a session in either store
+    stays live-updating.
     """
     mtime_ns = 0
     size = 0
-    db_path = _devin_cli_db_path()
-    for p in (db_path,
-              Path(str(db_path) + "-wal"),
-              Path(str(db_path) + "-shm")):
-        try:
-            st = p.stat()
-        except OSError:
-            continue
-        mtime_ns = max(mtime_ns, st.st_mtime_ns)
-        size += st.st_size
+    for db_path in _devin_cli_db_paths():
+        for p in (db_path,
+                  Path(str(db_path) + "-wal"),
+                  Path(str(db_path) + "-shm")):
+            try:
+                st = p.stat()
+            except OSError:
+                continue
+            mtime_ns = max(mtime_ns, st.st_mtime_ns)
+            size += st.st_size
     return (mtime_ns, size)
 
 
 def _devin_cli_lock_set():
-    """Set of raw session IDs that currently hold a Devin CLI lock file.
-
-    Enumerating the lock directory once is cheaper than ``is_file()`` per row
-    and also gives us a stable cache-key component for the session list."""
-    try:
-        return frozenset(
-            p.name[:-5]
-            for p in DEVIN_CLI_LOCKS_DIR.iterdir()
-            if p.suffix == ".lock" and len(p.name) > 5
-        )
-    except OSError:
-        return frozenset()
+    """Set of raw session IDs that currently hold a Devin CLI lock file, in
+    any home's lock dir. Enumerating the lock directories once is cheaper
+    than ``is_file()`` per row and also gives us a stable cache-key
+    component for the session list."""
+    ids = set()
+    for locks_dir in _devin_cli_locks_dirs():
+        try:
+            ids.update(
+                p.name[:-5]
+                for p in locks_dir.iterdir()
+                if p.suffix == ".lock" and len(p.name) > 5
+            )
+        except OSError:
+            continue
+    return frozenset(ids)
 
 
 def _devin_cli_list_cache_key(repo_path, include_old, repo_only, limit):
@@ -1157,13 +1244,16 @@ def _devin_cli_subagent_meta_for_raw_ids(con, raw_ids):
 def _devin_cli_row_memo_path():
     """Memo file for the per-session list fields.
 
-    Lives in the CCC state dir for the real DB. When ``CCC_DEVIN_DB`` points
-    at another DB (test fixtures), the memo sits beside that DB instead: the
-    entries describe one specific DB, and a fixture run must never clobber
-    the real memo (observed: two 1-row test fixtures overwrote the 45-row
-    production memo, and the next dashboard build went fully cold)."""
-    if os.environ.get("CCC_DEVIN_DB"):
-        db = _devin_cli_db_path()
+    Lives in the CCC state dir for the real DB. When ``CCC_DEVIN_DB`` or
+    ``CCC_DEVIN_NEXT_DB`` points at another DB (test fixtures), the memo sits
+    beside that DB instead: the entries describe specific DBs, and a fixture
+    run must never clobber the real memo (observed: two 1-row test fixtures
+    overwrote the 45-row production memo, and the next dashboard build went
+    fully cold). The memo dict itself stays flat (keyed by raw_id) regardless
+    of which home a session lives in, so one file safely covers both."""
+    override = os.environ.get("CCC_DEVIN_DB") or os.environ.get("CCC_DEVIN_NEXT_DB")
+    if override:
+        db = Path(override).expanduser()
         return Path(str(db) + ".ccc-row-memo.json")
     return _core.COMMAND_CENTER_STATE_DIR / "devin_cli_row_memo.json"
 
@@ -1408,12 +1498,17 @@ def _devin_cli_row_fields_placeholder(prev):
     return out
 
 
-def _devin_cli_row_fields_memoized(con, rows):
+def _devin_cli_row_fields_memoized(raw_id_to_con, rows):
     """{raw_id: fields} for every row, re-querying only changed sessions.
 
     Version = [sessions.last_activity_at, max(message_nodes.row_id), count].
     last_activity_at alone is not enough (observed: 1 of 42 sessions had
     message rows newer than it), hence the message_nodes pair.
+
+    ``raw_id_to_con`` maps each row's raw id to the already-open connection
+    for whichever home it lives in — cli/ and cli-next/ are two independent
+    SQLite DBs, so a version/field query for a given raw id must run against
+    its own home's connection, not a single shared one.
 
     Misses are computed synchronously, most recently active first, only
     while ``_DEVIN_CLI_COLD_BUILD_BUDGET_S`` lasts; the remainder (and any
@@ -1430,7 +1525,15 @@ def _devin_cli_row_fields_memoized(con, rows):
             return 0.0
     ordered = sorted(rows, key=_activity, reverse=True)
     raw_ids = [r["_raw_id"] for r in rows]
-    versions = _devin_cli_session_versions(con, raw_ids)
+    # One session-versions query per distinct (home) connection, not per row.
+    versions = {}
+    distinct_cons = []
+    for con in raw_id_to_con.values():
+        if not any(con is c for c in distinct_cons):
+            distinct_cons.append(con)
+    for con in distinct_cons:
+        ids_for_con = [rid for rid in raw_ids if raw_id_to_con.get(rid) is con]
+        versions.update(_devin_cli_session_versions(con, ids_for_con))
     out = {}
     hits = 0
     misses = 0
@@ -1457,7 +1560,9 @@ def _devin_cli_row_fields_memoized(con, rows):
                 out[raw_id] = _devin_cli_row_fields_placeholder(prev)
                 deferred.append((raw_id, ver))
                 continue
-            fields = _devin_cli_row_fields_for_session(con, raw_id, prev)
+            fields = _devin_cli_row_fields_for_session(
+                raw_id_to_con[raw_id], raw_id, prev
+            )
             fields["ver"] = ver
             _DEVIN_CLI_ROW_MEMO[raw_id] = fields
             out[raw_id] = fields
@@ -1510,25 +1615,40 @@ def _devin_cli_row_memo_background_schedule(deferred):
 def _devin_cli_row_memo_background():
     """Finish deferred per-session fields off the request path.
 
-    Own read-only connection; drains ``pending`` in order, stamping each
-    result into the memo under the memo lock, saving the memo, and dropping
-    the list cache key so the next poll rebuilds with the filled fields (a
-    cheap rebuild: everything else is a memo hit and the sessions still
-    pending here stay deferred rather than being recomputed). Never raises."""
+    Lazily opens one read-only connection per home (at most two: `cli/` and
+    `cli-next/`) since a pending raw_id can belong to either; each is
+    resolved via the cached id-set (never a fresh DB hit). Drains ``pending``
+    in order, stamping each result into the memo under the memo lock, saving
+    the memo, and dropping the list cache key so the next poll rebuilds with
+    the filled fields (a cheap rebuild: everything else is a memo hit and the
+    sessions still pending here stay deferred rather than being recomputed).
+    Never raises."""
     bg = _DEVIN_CLI_ROW_MEMO_BG
     done = 0
     started = time.perf_counter()
-    con = None
+    cons = {}  # str(db_path) -> connection or None (probed once)
+
+    def _con_for(raw_id):
+        db_path = _devin_cli_db_path_for_raw_id(raw_id)
+        key = str(db_path)
+        if key not in cons:
+            cons[key] = _devin_cli_connect(db_path)
+        return cons[key]
+
     try:
-        con = _devin_cli_connect()
         while True:
             with _DEVIN_CLI_ROW_MEMO_BG_LOCK:
-                if con is None or not bg["pending"]:
+                if not bg["pending"]:
                     bg["pending"].clear()
                     bg["thread"] = None
                     break
                 raw_id = next(iter(bg["pending"]))
                 ver = bg["pending"][raw_id]
+            con = _con_for(raw_id)
+            if con is None:
+                with _DEVIN_CLI_ROW_MEMO_BG_LOCK:
+                    bg["pending"].pop(raw_id, None)
+                continue
             try:
                 with _DEVIN_CLI_ROW_MEMO_LOCK:
                     prev = _DEVIN_CLI_ROW_MEMO.get(raw_id)
@@ -1563,11 +1683,12 @@ def _devin_cli_row_memo_background():
             if bg.get("thread") is threading.current_thread():
                 bg["thread"] = None
                 bg["pending"].clear()
-        try:
-            if con is not None:
-                con.close()
-        except Exception:
-            pass
+        for con in cons.values():
+            try:
+                if con is not None:
+                    con.close()
+            except Exception:
+                pass
         _devin_cli_profile_log(
             "row_fields_background",
             time.perf_counter() - started,
@@ -1764,6 +1885,7 @@ def _devin_model_catalog_records(allowed_families=None):
 def _devin_cli_list_params_key(repo_path, include_old, repo_only, limit):
     return (
         str(_devin_cli_db_path()),
+        str(_devin_cli_next_db_path()),
         repo_path,
         bool(include_old),
         bool(repo_only),
@@ -1946,8 +2068,11 @@ def _find_devin_cli_conversations_locked(
     except Exception:
         repo_pins = {}
 
-    con = _devin_cli_connect()
-    if con is None:
+    # Connect to every Devin CLI home (original `cli/` and the desktop app's
+    # `cli-next/`). Missing/unreadable homes are skipped, not fatal — only
+    # when EVERY home fails to connect does discovery come up empty.
+    cons = [c for c in (_devin_cli_connect(p) for p in _devin_cli_db_paths()) if c is not None]
+    if not cons:
         _devin_cli_profile_log("find_devin_cli_conversations", 0, "no_db")
         return []
 
@@ -1962,10 +2087,12 @@ def _find_devin_cli_conversations_locked(
             resolved_repo_path = _core.resolve_repo_path(repo_path)
             repo_path_obj = Path(resolved_repo_path)
         except Exception:
-            con.close()
+            for con in cons:
+                con.close()
             return []
 
     rows = []
+    raw_id_to_con = {}
     try:
         spawn_by_sid = _devin_spawn_pid_by_session_id()
         query = (
@@ -1975,10 +2102,16 @@ def _find_devin_cli_conversations_locked(
         )
         qstart = time.perf_counter()
         total_sessions_scanned = 0
-        for row in con.execute(query):
+        for con in cons:
+          for row in con.execute(query):
             total_sessions_scanned += 1
             raw_id = str(row["id"] or "").strip()
             if not raw_id:
+                continue
+            # Ids are UUID-like and independently generated per home, so a
+            # cross-home collision is not expected in practice; the first
+            # home to report an id wins if one ever occurred.
+            if raw_id in raw_id_to_con:
                 continue
             working_dir = str(row["working_directory"] or "").strip()
             sid = DEVIN_CLI_SESSION_PREFIX + raw_id
@@ -2044,6 +2177,7 @@ def _find_devin_cli_conversations_locked(
                     wd_exists = Path(session_cwd).is_dir()
                 except OSError:
                     pass
+            raw_id_to_con[raw_id] = con
             rows.append({
                 "_raw_id": raw_id,
                 "_title": title,
@@ -2128,7 +2262,7 @@ def _find_devin_cli_conversations_locked(
 
         fmstart = time.perf_counter()
         if rows:
-            fields_by_id = _devin_cli_row_fields_memoized(con, rows)
+            fields_by_id = _devin_cli_row_fields_memoized(raw_id_to_con, rows)
             for r in rows:
                 raw_id = r.pop("_raw_id", "")
                 title = r.pop("_title", "")
@@ -2187,7 +2321,8 @@ def _find_devin_cli_conversations_locked(
     except sqlite3.Error:
         pass
     finally:
-        con.close()
+        for con in cons:
+            con.close()
     rows.sort(
         key=lambda x: x.get("last_interacted") or x.get("modified") or 0,
         reverse=True,
@@ -2263,7 +2398,7 @@ def _parse_devin_cli_conversation(session_id, after_line=0):
     if not raw_id:
         _devin_cli_profile_log("parse_devin_cli_conversation", 0, "no_raw_id")
         return {"events": [], "last_line": 0}
-    con = _devin_cli_connect()
+    con = _devin_cli_connect_for_raw_id(raw_id)
     if con is None:
         _devin_cli_profile_log("parse_devin_cli_conversation", 0, "no_db")
         return {"events": [], "last_line": 0}
@@ -2434,7 +2569,7 @@ def _extract_devin_cli_usage(session_id):
     raw_id = _devin_cli_raw_id(session_id)
     if not raw_id:
         return empty
-    con = _devin_cli_connect()
+    con = _devin_cli_connect_for_raw_id(raw_id)
     if con is None:
         return empty
     latest = 0
@@ -2540,7 +2675,7 @@ def _extract_devin_cli_timeline(session_id):
     raw_id = _devin_cli_raw_id(session_id)
     if not raw_id:
         return {"events": [], "total_turns": 0}
-    con = _devin_cli_connect()
+    con = _devin_cli_connect_for_raw_id(raw_id)
     if con is None:
         return {"events": [], "total_turns": 0}
 
@@ -2651,11 +2786,11 @@ def _extract_files_from_devin_cli_conversation(session_id):
     raw_id = _devin_cli_raw_id(session_id)
     if not raw_id:
         return {"count": 0, "truncated": False, "groups": {}}
-    con = _devin_cli_connect()
+    con = _devin_cli_connect_for_raw_id(raw_id)
     if con is None:
         return {"count": 0, "truncated": False, "groups": {}}
 
-    key = (str(_devin_cli_db_path()), raw_id)
+    key = (str(_devin_cli_db_path_for_raw_id(raw_id)), raw_id)
     with _DEVIN_FFC_LOCK:
         ent = _DEVIN_FFC_CACHE.get(key)
     if ent is None:
@@ -2744,7 +2879,7 @@ def _devin_cli_session_detail(session_id):
             break
     turns = turns[:3][::-1] if turns else []
 
-    con = _devin_cli_connect()
+    con = _devin_cli_connect_for_raw_id(raw_id)
     mtime = None
     cwd = ""
     if con:
