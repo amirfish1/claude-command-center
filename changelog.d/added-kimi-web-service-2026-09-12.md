@@ -1,0 +1,1 @@
+`--install-service` now also installs `kimi web` as a supervised launchd/systemd agent when a `kimi` CLI is found on PATH, so Kimi's kap connector (`ccc_server/kap.py`) has a daemon to route through instead of silently staying on the ACP fallback.
