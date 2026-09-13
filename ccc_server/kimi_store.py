@@ -78,16 +78,47 @@ def _canonical_kimi_session_id(session_id):
     return canonical if canonical in _core._kimi_session_index() else sid
 
 
-def _kimi_state_meta(session_dir):
-    """Read <sessionDir>/state.json. Defensive: any failure -> {}."""
-    if not session_dir:
-        return {}
+# path -> ((mtime_ns, size), value). find_kimi_conversations runs inside every
+# sessions-snapshot refresh and read state.json plus the wire.jsonl head for
+# every indexed session each time (~700 file reads, 0.5 s per refresh under
+# the GIL). Read once per file version; hand out copies because callers
+# mutate rows. Entries for files that vanished are dropped on the next miss.
+_KIMI_LISTING_FILE_CACHE = {}
+_KIMI_LISTING_FILE_CACHE_MAX = 8192
+
+
+def _kimi_file_memo(path, loader):
+    key = str(path)
     try:
-        with (Path(session_dir) / "state.json").open() as f:
+        st = path.stat()
+        version = (st.st_mtime_ns, st.st_size)
+    except OSError:
+        _KIMI_LISTING_FILE_CACHE.pop(key, None)
+        return None
+    hit = _KIMI_LISTING_FILE_CACHE.get(key)
+    if hit is None or hit[0] != version:
+        if len(_KIMI_LISTING_FILE_CACHE) >= _KIMI_LISTING_FILE_CACHE_MAX:
+            _KIMI_LISTING_FILE_CACHE.clear()
+        hit = (version, loader(path))
+        _KIMI_LISTING_FILE_CACHE[key] = hit
+    return hit[1]
+
+
+def _kimi_state_meta_uncached(path):
+    try:
+        with path.open() as f:
             data = json.load(f)
     except (OSError, ValueError):
         return {}
     return data if isinstance(data, dict) else {}
+
+
+def _kimi_state_meta(session_dir):
+    """Read <sessionDir>/state.json. Defensive: any failure -> {}."""
+    if not session_dir:
+        return {}
+    data = _kimi_file_memo(Path(session_dir) / "state.json", _kimi_state_meta_uncached)
+    return dict(data) if data else {}
 
 
 def _kimi_wire_head(session_dir):
@@ -100,8 +131,14 @@ def _kimi_wire_head(session_dir):
     """
     wire = Path(session_dir) / "agents" / "main" / "wire.jsonl" if session_dir else None
     info = {"first_prompt": "", "wire_path": str(wire) if wire else "", "model": ""}
-    if wire is None or not wire.is_file():
+    if wire is None:
         return info
+    cached = _kimi_file_memo(wire, _kimi_wire_head_uncached)
+    return dict(cached) if cached else info
+
+
+def _kimi_wire_head_uncached(wire):
+    info = {"first_prompt": "", "wire_path": str(wire), "model": ""}
     try:
         with wire.open() as f:
             for i, line in enumerate(f):
