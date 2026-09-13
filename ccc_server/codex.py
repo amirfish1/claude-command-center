@@ -84,6 +84,15 @@ _CODEX_APP_SERVER_LIVENESS_MISS_THRESHOLD = 2
 _CODEX_APP_SERVER_INITIALIZING_WAIT_S = 15.0
 _CODEX_SHARED_STATE_BLOCK_RETRY_S = 30.0
 _CODEX_SHARED_STATE_BLOCK_RETRY_UNTIL = 0.0
+# OpenAI's own codex-rs hit this same shared-sqlite conflict class (Desktop vs.
+# an IDE extension, github.com/openai/codex#30105) and mitigated it with a WAL
+# busy_timeout rather than a hard refuse -- a momentary second holder (a
+# browser extension's app-server touching the file for one poll) resolves
+# itself within a few seconds instead of needing the user to go kill it.
+# Mirror that here: retry the holder check for a few seconds before treating
+# it as the durable, "go quit the other process" conflict.
+_CODEX_SHARED_STATE_CONFLICT_RETRY_BUDGET_S = 5.0
+_CODEX_SHARED_STATE_CONFLICT_POLL_S = 0.5
 _CODEX_APP_SERVER_INFLIGHT_LOCK = threading.Lock()
 # `thread/list` is a GLOBAL call -- one reply carries every thread the
 # app-server knows -- so it must be throttled globally too. It used to be
@@ -888,16 +897,18 @@ def _codex_filter_own_ccc_holders(holders):
 
 
 
-def _codex_shared_state_db_holders(now=None):
+def _codex_shared_state_db_holders(now=None, force=False):
     """Processes other than CCC's own app-server that hold the shared state DBs.
 
     Returns a list of {pid, command, file} dicts. The result is TTL-cached
     because the callers are spawn/resume operations and the underlying lsof
-    fork is expensive.
+    fork is expensive. Pass force=True to bypass the cache and take a fresh
+    sample -- used by the retry-before-block window, where a stale cache
+    entry would make every retry see the same first snapshot.
     """
     now = time.time() if now is None else float(now)
     with _CODEX_SHARED_STATE_HOLDER_LOCK:
-        if now - _CODEX_SHARED_STATE_HOLDER_CACHE["ts"] < _CODEX_SHARED_STATE_HOLDER_TTL_S:
+        if not force and now - _CODEX_SHARED_STATE_HOLDER_CACHE["ts"] < _CODEX_SHARED_STATE_HOLDER_TTL_S:
             cached = _CODEX_SHARED_STATE_HOLDER_CACHE["holders"]
             return list(cached) if cached is not None else []
         _CODEX_SHARED_STATE_HOLDER_CACHE["ts"] = now
@@ -965,9 +976,9 @@ def _codex_shared_state_db_holders(now=None):
     return unique
 
 
-def _codex_shared_state_conflict(now=None):
+def _codex_shared_state_conflict(now=None, force=False):
     """Return a human-readable conflict summary if another Codex writer holds the shared DBs."""
-    holders = _core._codex_shared_state_db_holders(now)
+    holders = _core._codex_shared_state_db_holders(now, force=force)
     if not holders:
         return None
     pids = ",".join(str(h["pid"]) for h in holders)
@@ -993,6 +1004,34 @@ def _codex_app_server_stdio_safe_to_spawn(now=None):
     app-server risks cross-posting input between sessions.
     """
     return _core._codex_shared_state_conflict(now) is None
+
+
+def _codex_wait_for_shared_state_clear(timeout_s=None, poll_interval_s=None):
+    """Retry the shared-state holder check briefly before calling it a conflict.
+
+    A momentary second holder -- a browser extension's app-server touching
+    ~/.codex/state_5.sqlite for one poll, a terminal `codex` command that ran
+    and exited -- clears on its own within a couple seconds. Blocking CCC's
+    own spawn on the very first lsof sample turns that into a hard "quit the
+    other Codex process" error for something that was never actually a
+    sustained conflict. Poll for a short, bounded window instead; a conflict
+    that is still present at the end of it is durable and should block.
+
+    Uses time.monotonic() rather than time.time() for the retry deadline:
+    callers elsewhere in this module freeze time.time() to a fixed value in
+    tests (for the unrelated _CODEX_SHARED_STATE_BLOCK_RETRY_UNTIL cooldown),
+    which would make a time.time()-based deadline here never elapse.
+    """
+    if timeout_s is None:
+        timeout_s = _CODEX_SHARED_STATE_CONFLICT_RETRY_BUDGET_S
+    if poll_interval_s is None:
+        poll_interval_s = _CODEX_SHARED_STATE_CONFLICT_POLL_S
+    deadline = time.monotonic() + max(0.0, float(timeout_s))
+    conflict = _core._codex_shared_state_conflict(force=True)
+    while conflict is not None and time.monotonic() < deadline:
+        time.sleep(poll_interval_s)
+        conflict = _core._codex_shared_state_conflict(force=True)
+    return conflict
 
 
 class _CodexAppServerTransport:
@@ -3651,7 +3690,7 @@ def _ensure_codex_app_server(*, allow_stdio=True):
         else:
             candidates.append(("managed-unix", managed_path))
     if allow_stdio:
-        conflict = _core._codex_shared_state_conflict()
+        conflict = _core._codex_wait_for_shared_state_clear()
         if conflict is None:
             candidates.append(("stdio", None))
         else:

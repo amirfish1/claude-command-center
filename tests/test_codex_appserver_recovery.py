@@ -91,6 +91,9 @@ class TestSharedStateConflictCooldownTest(unittest.TestCase):
         self.addCleanup(setattr, codex, "_CODEX_SHARED_STATE_BLOCK_RETRY_UNTIL", self.previous)
 
     def test_conflict_suppresses_stdio_retry_until_cooldown_expires(self):
+        # A real conflict is retried for a short budget (busy_timeout-style,
+        # see _codex_wait_for_shared_state_clear) before it counts as durable
+        # -- shrink that budget so this still runs in well under a second.
         conflict = {"summary": "pids=9 commands=codex"}
         with mock.patch.object(codex._core, "_CODEX_APP_SERVER_TRANSPORT", None), \
              mock.patch.object(codex._core, "_CODEX_APP_SERVER_INITIALIZED", False), \
@@ -98,12 +101,19 @@ class TestSharedStateConflictCooldownTest(unittest.TestCase):
              mock.patch.object(codex._core, "_codex_managed_app_server_enabled", return_value=False), \
              mock.patch.object(codex._core, "_codex_shared_state_conflict", return_value=conflict) as check, \
              mock.patch.object(codex._core, "_log_activity") as log_activity, \
+             mock.patch.object(codex, "_CODEX_SHARED_STATE_CONFLICT_RETRY_BUDGET_S", 0.03), \
+             mock.patch.object(codex, "_CODEX_SHARED_STATE_CONFLICT_POLL_S", 0.01), \
             mock.patch.object(codex.time, "time", return_value=1000.0):
             self.assertIsNone(codex._ensure_codex_app_server())
+            first_call_count = check.call_count
             self.assertIsNone(codex._ensure_codex_app_server())
             self.assertFalse(codex._core._CODEX_APP_SERVER_INITIALIZING)
 
-        self.assertEqual(check.call_count, 1)
+        # First call retries within its budget (busy_timeout-style) before
+        # giving up; the second call is short-circuited entirely by the
+        # cooldown gate and must not retry (or even re-check) at all.
+        self.assertGreaterEqual(first_call_count, 1)
+        self.assertEqual(check.call_count, first_call_count)
         self.assertEqual(log_activity.call_count, 1)
 
     def test_cooldown_return_wakes_initialization_waiter(self):
