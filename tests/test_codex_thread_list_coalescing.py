@@ -35,6 +35,7 @@ class ThreadListCoalescingTests(unittest.TestCase):
         # Each test starts from a cold global throttle.
         server._CODEX_THREAD_LIST_LAST_AT = 0.0
         server._CODEX_THREAD_LIST_INFLIGHT = False
+        server._CODEX_THREAD_LIST_BACKGROUND_REFRESH_INFLIGHT = False
         self._state_patch = mock.patch.dict(
             server._CODEX_APP_SERVER_THREAD_STATE, {}, clear=True,
         )
@@ -103,6 +104,34 @@ class ThreadListCoalescingTests(unittest.TestCase):
             "the second poller queued its own thread/list behind the first "
             "instead of reusing the in-flight call",
         )
+
+    def test_background_refresh_returns_before_a_slow_thread_list_reply(self):
+        """Status polls schedule a refresh instead of waiting on the RPC."""
+        server = self.server
+        started = threading.Event()
+        released = threading.Event()
+        finished = threading.Event()
+
+        def slow_request(method, params, timeout=None, **kwargs):
+            started.set()
+            released.wait(5)
+            finished.set()
+            return self._reply(["thread-a"])
+
+        with mock.patch.object(server, "_codex_app_server_request", slow_request), \
+             mock.patch.object(server, "_save_codex_app_server_state_unlocked"):
+            started_at = time.monotonic()
+            self.assertTrue(
+                server._schedule_codex_app_server_thread_status_refresh("thread-a")
+            )
+            elapsed = time.monotonic() - started_at
+            self.assertLess(
+                elapsed, 0.1,
+                "a status poll must not wait for a slow thread/list reply",
+            )
+            self.assertTrue(started.wait(1), "background refresh did not start")
+            released.set()
+            self.assertTrue(finished.wait(1), "background refresh did not finish")
 
     def test_stale_window_still_refreshes(self):
         """Coalescing must not freeze the data -- past max_age we call again."""

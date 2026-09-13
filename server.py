@@ -23976,6 +23976,7 @@ _CODEX_APP_SERVER_LAST_LIVE_CHECK = 0.0
 _CODEX_APP_SERVER_INFLIGHT = 0
 _CODEX_THREAD_LIST_LAST_AT = 0.0
 _CODEX_THREAD_LIST_INFLIGHT = False
+_CODEX_THREAD_LIST_BACKGROUND_REFRESH_INFLIGHT = False
 _SPAWN_TIMELINE_FILE = COMMAND_CENTER_STATE_DIR / "spawn-timeline.json"
 _SPAWN_TIMELINE_FILE_SIG = None
 _CODEX_APP_SERVER_FALSE_MISSES = 0
@@ -25768,7 +25769,7 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
             notif = None if (is_codex_status or is_acp_status or is_gemini_status or is_antigravity_status or is_hermes_status) else (_read_notification_state(sid) if sid else None)
             if is_codex_status:
                 _schedule_codex_managed_app_server_warmup()
-                _codex_app_server_refresh_thread_status(sid)
+                _schedule_codex_app_server_thread_status_refresh(sid)
                 path = _resolve_codex_rollout_path(sid)
                 tail = _extract_codex_tail_meta(path) if path else {}
                 status["pending_tool"] = tail.get("pending_tool") if tail else None

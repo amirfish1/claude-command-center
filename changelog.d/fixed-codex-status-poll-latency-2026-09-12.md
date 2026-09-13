@@ -1,0 +1,1 @@
+- Codex session-status polls no longer wait on a thread-list refresh.

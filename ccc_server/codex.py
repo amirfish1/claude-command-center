@@ -3261,6 +3261,35 @@ def _codex_app_server_refresh_thread_status(session_id, *, max_age=2.0):
     return changed
 
 
+def _schedule_codex_app_server_thread_status_refresh(session_id, *, max_age=2.0):
+    """Refresh thread status off a polling request path, at most once at a time."""
+    if not session_id:
+        return False
+    with _CODEX_THREAD_LIST_COND:
+        if _core._CODEX_THREAD_LIST_BACKGROUND_REFRESH_INFLIGHT:
+            return False
+        _core._CODEX_THREAD_LIST_BACKGROUND_REFRESH_INFLIGHT = True
+
+    def _refresh():
+        try:
+            _codex_app_server_refresh_thread_status(session_id, max_age=max_age)
+        finally:
+            with _CODEX_THREAD_LIST_COND:
+                _core._CODEX_THREAD_LIST_BACKGROUND_REFRESH_INFLIGHT = False
+
+    try:
+        threading.Thread(
+            target=_refresh,
+            daemon=True,
+            name="codex-thread-list-refresh",
+        ).start()
+    except Exception:
+        with _CODEX_THREAD_LIST_COND:
+            _core._CODEX_THREAD_LIST_BACKGROUND_REFRESH_INFLIGHT = False
+        return False
+    return True
+
+
 def _codex_app_server_thread_is_known(session_id):
     """Did the last `thread/list` refresh carry this thread?
 
