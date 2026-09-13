@@ -22868,15 +22868,87 @@ def _latest_ask_user_question_payload_for_session(session_id, header="", questio
     return latest
 
 
-def _extract_files_from_conversation(conversation_id):
-    """Walk the JSONL once and return a grouped, de-duped, capped
-    payload of file-like artifacts mentioned anywhere in the
-    conversation — tool_use inputs, assistant/user text, tool_results.
-    Categorization is by extension whitelist (FILE_CATEGORIES);
-    everything else (code, scripts, unknown extensions) is dropped.
-    Returns {"count": int, "truncated": bool, "groups": {cat: [row…]}}.
+# Resumable state for /api/conversations/<id>/files. The Files pill refetches
+# on every SSE tick of the open conversation, and a full walk of a big
+# transcript held the interpreter for 0.5-2 s each time (measured 2026-09-12),
+# landing in front of every click's tail fetch. Transcripts are append-only,
+# so resume from the byte offset after the last complete line; a shrink,
+# inode change, or a touch without growth means "rewritten" and restarts.
+_FFC_INCR_CACHE = {}
+_FFC_INCR_LOCK = threading.Lock()
+_FFC_INCR_MAX = 64
 
-    Cheap to call: single linear pass, no I/O beyond the JSONL read.
+
+def _ffc_payload(seen, truncated):
+    # Group + sort by first_line ascending within each category.
+    groups = {}
+    for row in seen.values():
+        groups.setdefault(row["category"], []).append(row)
+    for rows in groups.values():
+        rows.sort(key=lambda r: r["first_line"])
+    return {"count": len(seen), "truncated": truncated, "groups": groups}
+
+
+def _ffc_scan_event(ev, line_num, seen, truncated):
+    """Feed every file-like target in one transcript event into ``seen``."""
+    def consider(target, kind):
+        nonlocal truncated
+        truncated = _ffc_consider_file_target(seen, target, kind, line_num, truncated)
+
+    msg = ev.get("message") if isinstance(ev, dict) else None
+    if not isinstance(msg, dict):
+        return truncated
+    content = msg.get("content")
+    if isinstance(content, str):
+        for target, kind in _ffc_iter_targets(content):
+            consider(target, kind)
+        return truncated
+    if not isinstance(content, list):
+        return truncated
+    for block in content:
+        if not isinstance(block, dict):
+            continue
+        btype = block.get("type")
+        if btype == "text":
+            for target, kind in _ffc_iter_targets(block.get("text", "")):
+                consider(target, kind)
+        elif btype == "tool_use":
+            # Direct fields first (so file_path with an exotic
+            # character the path-regex misses still lands).
+            inp = block.get("input")
+            if isinstance(inp, dict):
+                for fld in ("file_path", "notebook_path", "path"):
+                    v = inp.get(fld)
+                    if isinstance(v, str) and v.startswith("/"):
+                        consider(v, "path")
+            # Then deep scan every nested string.
+            for s in _ffc_flatten_strings(inp):
+                for target, kind in _ffc_iter_targets(s):
+                    consider(target, kind)
+        elif btype == "tool_result":
+            rc = block.get("content")
+            texts = []
+            if isinstance(rc, str):
+                texts.append(rc)
+            elif isinstance(rc, list):
+                for sub in rc:
+                    if isinstance(sub, dict) and sub.get("type") == "text":
+                        texts.append(sub.get("text", ""))
+            for t in texts:
+                for target, kind in _ffc_iter_targets(t):
+                    consider(target, kind)
+    return truncated
+
+
+def _extract_files_from_conversation(conversation_id):
+    """Return a grouped, de-duped, capped payload of file-like artifacts
+    mentioned anywhere in the conversation — tool_use inputs, assistant/user
+    text, tool_results. Categorization is by extension whitelist
+    (FILE_CATEGORIES); everything else (code, scripts, unknown extensions)
+    is dropped. Returns {"count": int, "truncated": bool, "groups": {cat: [row…]}}.
+
+    Incremental: the JSONL is walked once, then only the lines appended since
+    the previous call (see _FFC_INCR_CACHE). An unchanged file costs one stat.
     """
     if _is_gemini_session(conversation_id):
         return _extract_files_from_gemini_conversation(conversation_id)
@@ -22892,81 +22964,57 @@ def _extract_files_from_conversation(conversation_id):
         return _extract_files_from_devin_cli_conversation(conversation_id)
 
     filepath = _resolve_conversation_path(conversation_id)
-    seen = {}  # target -> {label, target, kind, category, first_line}
-    line_num = 0
-    truncated = False
-
-    def consider(target, kind, line):
-        nonlocal truncated
-        truncated = _ffc_consider_file_target(seen, target, kind, line, truncated)
-
     try:
-        with open(filepath, "r") as f:
-            for line in f:
+        st = os.stat(filepath)
+    except OSError:
+        return {"count": 0, "truncated": False, "groups": {}}
+    key = str(conversation_id)
+    with _FFC_INCR_LOCK:
+        ent = _FFC_INCR_CACHE.get(key)
+    if (ent is not None and ent["path"] == str(filepath) and ent["ino"] == st.st_ino
+            and st.st_size >= ent["offset"]):
+        if ent["size"] == st.st_size and ent["mtime_ns"] == st.st_mtime_ns:
+            return _ffc_payload(ent["seen"], ent["truncated"])
+        if st.st_size == ent["offset"] and ent["mtime_ns"] != st.st_mtime_ns:
+            ent = None  # touched without growing: assume rewritten in place
+    else:
+        ent = None
+    if ent is None:
+        ent = {"path": str(filepath), "ino": st.st_ino, "offset": 0,
+               "line_num": 0, "seen": {}, "truncated": False}
+    seen = ent["seen"]
+    truncated = ent["truncated"]
+    line_num = ent["line_num"]
+    offset = ent["offset"]
+    try:
+        with open(filepath, "rb") as f:
+            f.seek(offset)
+            while True:
+                raw = f.readline()
+                if not raw:
+                    break
+                if not raw.endswith(b"\n"):
+                    break  # partial trailing line: the next call resumes here
+                offset += len(raw)
                 line_num += 1
-                line = line.strip()
+                line = raw.strip()
                 if not line:
                     continue
                 try:
                     ev = json.loads(line)
-                except json.JSONDecodeError:
+                except ValueError:
                     continue
-
-                msg = ev.get("message")
-                if not isinstance(msg, dict):
-                    continue
-                content = msg.get("content")
-                if isinstance(content, str):
-                    for target, kind in _ffc_iter_targets(content):
-                        consider(target, kind, line_num)
-                    continue
-                if not isinstance(content, list):
-                    continue
-
-                for block in content:
-                    if not isinstance(block, dict):
-                        continue
-                    btype = block.get("type")
-                    if btype == "text":
-                        for target, kind in _ffc_iter_targets(block.get("text", "")):
-                            consider(target, kind, line_num)
-                    elif btype == "tool_use":
-                        # Direct fields first (so file_path with an exotic
-                        # character the path-regex misses still lands).
-                        inp = block.get("input")
-                        if isinstance(inp, dict):
-                            for fld in ("file_path", "notebook_path", "path"):
-                                v = inp.get(fld)
-                                if isinstance(v, str) and v.startswith("/"):
-                                    consider(v, "path", line_num)
-                        # Then deep scan every nested string.
-                        for s in _ffc_flatten_strings(inp):
-                            for target, kind in _ffc_iter_targets(s):
-                                consider(target, kind, line_num)
-                    elif btype == "tool_result":
-                        rc = block.get("content")
-                        texts = []
-                        if isinstance(rc, str):
-                            texts.append(rc)
-                        elif isinstance(rc, list):
-                            for sub in rc:
-                                if isinstance(sub, dict) and sub.get("type") == "text":
-                                    texts.append(sub.get("text", ""))
-                        for t in texts:
-                            for target, kind in _ffc_iter_targets(t):
-                                consider(target, kind, line_num)
+                truncated = _ffc_scan_event(ev, line_num, seen, truncated)
     except FileNotFoundError:
         return {"count": 0, "truncated": False, "groups": {}}
-
-    # Group + sort by first_line ascending within each category.
-    groups = {}
-    for row in seen.values():
-        cat = row["category"]
-        groups.setdefault(cat, []).append(row)
-    for rows in groups.values():
-        rows.sort(key=lambda r: r["first_line"])
-
-    return {"count": len(seen), "truncated": truncated, "groups": groups}
+    ent.update({"offset": offset, "line_num": line_num, "truncated": truncated,
+                "size": st.st_size, "mtime_ns": st.st_mtime_ns})
+    with _FFC_INCR_LOCK:
+        _FFC_INCR_CACHE.pop(key, None)
+        while len(_FFC_INCR_CACHE) >= _FFC_INCR_MAX:
+            _FFC_INCR_CACHE.pop(next(iter(_FFC_INCR_CACHE)))
+        _FFC_INCR_CACHE[key] = ent
+    return _ffc_payload(seen, truncated)
 
 
 def _extract_files_from_codex_conversation(thread_id):

@@ -160,3 +160,188 @@ class TestExtractor(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class _CountingJson:
+    """json module proxy that counts loads() calls (call-count invariant,
+    same spirit as tests/test_perf_budget.py)."""
+
+    def __init__(self, real):
+        self._real = real
+        self.loads_calls = 0
+
+    def loads(self, *a, **k):
+        self.loads_calls += 1
+        return self._real.loads(*a, **k)
+
+    def __getattr__(self, name):
+        return getattr(self._real, name)
+
+
+class TestExtractorIncremental(unittest.TestCase):
+    """/api/conversations/<id>/files is refetched on every SSE tick of the
+    open conversation. Re-walking the whole transcript each time held the
+    interpreter for seconds on big sessions (measured 2026-09-12: 0.5-2 s
+    JSONL, 8-15 s Devin). The extractor must resume from where it stopped."""
+
+    def setUp(self):
+        import shutil
+        import tempfile
+        for mod in ("server", "morning", "morning_store"):
+            sys.modules.pop(mod, None)
+        self.server = importlib.import_module("server")
+        self.tmp = Path(tempfile.mkdtemp())
+        self.path = self.tmp / "conv.jsonl"
+        shutil.copy(REPO / "tests" / "fixtures" / "files-extraction.jsonl", self.path)
+        self._orig_resolve = self.server._resolve_conversation_path
+        self.server._resolve_conversation_path = lambda cid, repo_path=None: self.path
+        self.cj = _CountingJson(self.server.json)
+        self._orig_json = self.server.json
+        self.server.json = self.cj
+
+    def tearDown(self):
+        self.server._resolve_conversation_path = self._orig_resolve
+        self.server.json = self._orig_json
+        import shutil
+        shutil.rmtree(self.tmp, ignore_errors=True)
+
+    def _append(self, text):
+        with open(self.path, "a") as fh:
+            fh.write(text)
+
+    def _line(self, text):
+        return self._orig_json.dumps({"message": {"role": "user", "content": text}}) + "\n"
+
+    def test_unchanged_file_decodes_nothing_on_second_call(self):
+        first = self.server._extract_files_from_conversation("c1")
+        self.assertGreater(self.cj.loads_calls, 0)
+        self.cj.loads_calls = 0
+        second = self.server._extract_files_from_conversation("c1")
+        self.assertEqual(self.cj.loads_calls, 0)
+        self.assertEqual(first, second)
+
+    def test_appended_line_decodes_only_the_new_line(self):
+        self.server._extract_files_from_conversation("c1")
+        self.cj.loads_calls = 0
+        self._append(self._line("see /Users/testuser/Desktop/new-file.pdf"))
+        result = self.server._extract_files_from_conversation("c1")
+        self.assertEqual(self.cj.loads_calls, 1)
+        pdfs = {r["target"]: r for r in result["groups"].get("pdfs", [])}
+        self.assertIn("/Users/testuser/Desktop/new-file.pdf", pdfs)
+        self.assertEqual(pdfs["/Users/testuser/Desktop/new-file.pdf"]["first_line"], 6)
+        # Earlier rows survive the incremental pass.
+        self.assertIn("/Users/testuser/Apps/foo/notes.pdf", pdfs)
+        self.assertEqual(result["count"], 8)
+
+    def test_partial_trailing_line_is_not_consumed_until_complete(self):
+        self.server._extract_files_from_conversation("c1")
+        full = self._line("see /Users/testuser/Desktop/half.pdf")
+        self._append(full[:20])
+        self.cj.loads_calls = 0
+        mid = self.server._extract_files_from_conversation("c1")
+        self.assertEqual(self.cj.loads_calls, 0)
+        self.assertEqual(mid["count"], 7)
+        self._append(full[20:])
+        result = self.server._extract_files_from_conversation("c1")
+        self.assertEqual(self.cj.loads_calls, 1)
+        pdfs = {r["target"]: r for r in result["groups"].get("pdfs", [])}
+        self.assertEqual(pdfs["/Users/testuser/Desktop/half.pdf"]["first_line"], 6)
+
+    def test_rewritten_shorter_file_reparses_from_scratch(self):
+        self.server._extract_files_from_conversation("c1")
+        self.path.write_text(self._line("only /Users/testuser/Desktop/solo.png"))
+        result = self.server._extract_files_from_conversation("c1")
+        self.assertEqual(result["count"], 1)
+        self.assertEqual(
+            [r["target"] for r in result["groups"]["images"]],
+            ["/Users/testuser/Desktop/solo.png"],
+        )
+
+
+class TestDevinExtractorIncremental(unittest.TestCase):
+    SCHEMA = """
+        CREATE TABLE sessions (
+            id TEXT PRIMARY KEY,
+            working_directory TEXT,
+            created_at REAL,
+            last_activity_at REAL
+        );
+        CREATE TABLE message_nodes (
+            row_id INTEGER PRIMARY KEY AUTOINCREMENT,
+            session_id TEXT NOT NULL,
+            node_id INTEGER NOT NULL,
+            chat_message TEXT NOT NULL,
+            created_at INTEGER NOT NULL,
+            UNIQUE(session_id, node_id)
+        );
+    """
+
+    def setUp(self):
+        import os
+        import sqlite3
+        import tempfile
+        for mod in ("server", "morning", "morning_store"):
+            sys.modules.pop(mod, None)
+        self.server = importlib.import_module("server")
+        import ccc_server.devin as devin_mod
+        self.devin = devin_mod
+        self.tmp = tempfile.mkdtemp()
+        self.db = os.path.join(self.tmp, "sessions.db")
+        con = sqlite3.connect(self.db)
+        con.executescript(self.SCHEMA)
+        con.execute(
+            "INSERT INTO sessions (id, working_directory, created_at, last_activity_at) "
+            "VALUES (?, ?, ?, ?)", ("alpha-one", "/tmp/x", 1.0, 1.0))
+        for i in range(1, 4):
+            con.execute(
+                "INSERT INTO message_nodes (session_id, node_id, chat_message, created_at) "
+                "VALUES (?, ?, ?, ?)",
+                ("alpha-one", i,
+                 self._msg("user", f"open /Users/testuser/Desktop/doc{i}.pdf"), i))
+        con.commit()
+        con.close()
+        prev = os.environ.get("CCC_DEVIN_DB")
+        os.environ["CCC_DEVIN_DB"] = self.db
+        self.addCleanup(lambda: (os.environ.__setitem__("CCC_DEVIN_DB", prev)
+                                 if prev is not None
+                                 else os.environ.pop("CCC_DEVIN_DB", None)))
+        self._orig_json = devin_mod.json
+        self.cj = _CountingJson(devin_mod.json)
+        devin_mod.json = self.cj
+
+    def tearDown(self):
+        import shutil
+        self.devin.json = self._orig_json
+        shutil.rmtree(self.tmp, ignore_errors=True)
+
+    def _msg(self, role, content):
+        import json
+        return json.dumps({"role": role, "content": content, "metadata": {}})
+
+    def _add_row(self, node_id, content):
+        import sqlite3
+        con = sqlite3.connect(self.db)
+        con.execute(
+            "INSERT INTO message_nodes (session_id, node_id, chat_message, created_at) "
+            "VALUES (?, ?, ?, ?)", ("alpha-one", node_id, self._msg("user", content), node_id))
+        con.commit()
+        con.close()
+
+    def test_unchanged_session_decodes_nothing_on_second_call(self):
+        first = self.devin._extract_files_from_devin_cli_conversation("devincli-alpha-one")
+        self.assertEqual(first["count"], 3)
+        self.cj.loads_calls = 0
+        second = self.devin._extract_files_from_devin_cli_conversation("devincli-alpha-one")
+        self.assertEqual(self.cj.loads_calls, 0)
+        self.assertEqual(first, second)
+
+    def test_new_row_decodes_only_the_new_row(self):
+        self.devin._extract_files_from_devin_cli_conversation("devincli-alpha-one")
+        self._add_row(4, "and /Users/testuser/Desktop/doc4.pdf")
+        self.cj.loads_calls = 0
+        result = self.devin._extract_files_from_devin_cli_conversation("devincli-alpha-one")
+        self.assertEqual(self.cj.loads_calls, 1)
+        self.assertEqual(result["count"], 4)
+        pdfs = {r["target"]: r for r in result["groups"]["pdfs"]}
+        self.assertEqual(pdfs["/Users/testuser/Desktop/doc4.pdf"]["first_line"], 4)
+        self.assertEqual(pdfs["/Users/testuser/Desktop/doc1.pdf"]["first_line"], 1)

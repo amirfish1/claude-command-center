@@ -2632,11 +2632,21 @@ def _extract_devin_cli_timeline(session_id):
     return {"events": events, "total_turns": turn}
 
 
+# Resumable Files-pill state per Devin session: {(db_path, raw_id): entry}.
+# The pill refetches on every SSE tick and a whale session (700 MB-1.3 GB of
+# chat_message JSON) took 8-15 s per full re-scan (measured 2026-09-12), so
+# only rows past the last seen row_id are decoded on later calls.
+_DEVIN_FFC_CACHE = {}
+_DEVIN_FFC_LOCK = threading.Lock()
+_DEVIN_FFC_MAX = 32
+
+
 def _extract_files_from_devin_cli_conversation(session_id):
     """Extract file-like paths from a Devin CLI transcript for the Files panel.
 
-    Walks message_nodes and runs the same path/URL extraction used for
-    JSONL sessions, then groups by file category.
+    Walks message_nodes (incrementally: only rows newer than the previous
+    call) and runs the same path/URL extraction used for JSONL sessions,
+    then groups by file category.
     """
     raw_id = _devin_cli_raw_id(session_id)
     if not raw_id:
@@ -2645,16 +2655,23 @@ def _extract_files_from_devin_cli_conversation(session_id):
     if con is None:
         return {"count": 0, "truncated": False, "groups": {}}
 
-    seen = {}
-    truncated = False
-    line = 0
+    key = (str(_devin_cli_db_path()), raw_id)
+    with _DEVIN_FFC_LOCK:
+        ent = _DEVIN_FFC_CACHE.get(key)
+    if ent is None:
+        ent = {"max_row": 0, "line": 0, "seen": {}, "truncated": False}
+    seen = ent["seen"]
+    truncated = ent["truncated"]
+    line = ent["line"]
+    max_row = ent["max_row"]
     try:
         for row in con.execute(
-            "SELECT chat_message FROM message_nodes "
-            "WHERE session_id = ? ORDER BY node_id",
-            (raw_id,),
+            "SELECT row_id, chat_message FROM message_nodes "
+            "WHERE session_id = ? AND row_id > ? ORDER BY row_id",
+            (raw_id, max_row),
         ):
             line += 1
+            max_row = max(max_row, int(row["row_id"] or 0))
             try:
                 msg = json.loads(row["chat_message"])
             except (ValueError, TypeError):
@@ -2683,6 +2700,13 @@ def _extract_files_from_devin_cli_conversation(session_id):
         pass
     finally:
         con.close()
+
+    ent.update({"max_row": max_row, "line": line, "truncated": truncated})
+    with _DEVIN_FFC_LOCK:
+        _DEVIN_FFC_CACHE.pop(key, None)
+        while len(_DEVIN_FFC_CACHE) >= _DEVIN_FFC_MAX:
+            _DEVIN_FFC_CACHE.pop(next(iter(_DEVIN_FFC_CACHE)))
+        _DEVIN_FFC_CACHE[key] = ent
 
     groups = {}
     for row in seen.values():
