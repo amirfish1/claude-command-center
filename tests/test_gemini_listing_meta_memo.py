@@ -4,6 +4,7 @@ sessionId and lastUpdated. Decode once per file version."""
 import json
 import os
 
+import server  # noqa: F401  (registers the core module gemini binds to)
 from ccc_server import gemini
 
 
