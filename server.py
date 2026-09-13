@@ -6319,9 +6319,16 @@ def _discover_repo_paths_from_projects():
 # path funnels through -- for 1.6s of pure repeat work. The answer only moves
 # when a repo is added or removed, so a few seconds of staleness is invisible
 # while the repeat cost is not.
+# The walk is ~40 ms in an idle process but hundreds of syscalls, each a GIL
+# round-trip; under a busy dashboard one rebuild stretched to 3 to 6 s in
+# stack samples, with two request threads rebuilding at once because every
+# expired caller walked independently. So: one rebuild at a time, callers
+# that find an expired list keep serving it while the walker runs, and the
+# memo lives 30 s (adding/removing a repo invalidates explicitly).
 _KNOWN_REPO_PATHS_CACHE = {"at": 0.0, "paths": None}
-_KNOWN_REPO_PATHS_TTL_S = 5.0
+_KNOWN_REPO_PATHS_TTL_S = 30.0
 _KNOWN_REPO_PATHS_LOCK = threading.Lock()
+_KNOWN_REPO_PATHS_REBUILD_LOCK = threading.Lock()
 
 
 def _invalidate_known_repo_paths():
@@ -6331,17 +6338,37 @@ def _invalidate_known_repo_paths():
         _KNOWN_REPO_PATHS_CACHE["paths"] = None
 
 
-def _known_repo_paths():
-    now = time.time()
+def _known_repo_paths_memo_hit():
     with _KNOWN_REPO_PATHS_LOCK:
         hit = _KNOWN_REPO_PATHS_CACHE["paths"]
-        if hit is not None and now - _KNOWN_REPO_PATHS_CACHE["at"] < _KNOWN_REPO_PATHS_TTL_S:
+        fresh = hit is not None and time.time() - _KNOWN_REPO_PATHS_CACHE["at"] < _KNOWN_REPO_PATHS_TTL_S
+        return hit, fresh
+
+
+def _known_repo_paths():
+    hit, fresh = _known_repo_paths_memo_hit()
+    if fresh:
+        return list(hit)
+    if hit is not None:
+        # Expired but present: only one thread rebuilds, the rest serve the
+        # last list instead of queueing behind the walk.
+        if not _KNOWN_REPO_PATHS_REBUILD_LOCK.acquire(blocking=False):
             return list(hit)
-    out = _known_repo_paths_uncached()
-    with _KNOWN_REPO_PATHS_LOCK:
-        _KNOWN_REPO_PATHS_CACHE["at"] = time.time()
-        _KNOWN_REPO_PATHS_CACHE["paths"] = out
-    return list(out)
+    else:
+        # Nothing cached yet (startup or explicit invalidation): wait for the
+        # one rebuild rather than each caller walking the disk.
+        _KNOWN_REPO_PATHS_REBUILD_LOCK.acquire()
+    try:
+        hit, fresh = _known_repo_paths_memo_hit()
+        if fresh:
+            return list(hit)
+        out = _known_repo_paths_uncached()
+        with _KNOWN_REPO_PATHS_LOCK:
+            _KNOWN_REPO_PATHS_CACHE["at"] = time.time()
+            _KNOWN_REPO_PATHS_CACHE["paths"] = out
+        return list(out)
+    finally:
+        _KNOWN_REPO_PATHS_REBUILD_LOCK.release()
 
 
 def _known_repo_paths_uncached():
