@@ -345,3 +345,54 @@ class TestDevinExtractorIncremental(unittest.TestCase):
         pdfs = {r["target"]: r for r in result["groups"]["pdfs"]}
         self.assertEqual(pdfs["/Users/testuser/Desktop/doc4.pdf"]["first_line"], 4)
         self.assertEqual(pdfs["/Users/testuser/Desktop/doc1.pdf"]["first_line"], 1)
+
+
+class TestCodexExtractorIncremental(unittest.TestCase):
+    """Codex rollouts are append-only JSONL too; the Files pill on an open
+    Codex session re-walked the whole rollout every SSE tick (0.7-1.0 s per
+    call in the 2026-09-12 service log)."""
+
+    def setUp(self):
+        import shutil
+        import tempfile
+        for mod in ("server", "morning", "morning_store"):
+            sys.modules.pop(mod, None)
+        self.server = importlib.import_module("server")
+        self.tmp = Path(tempfile.mkdtemp())
+        self.path = self.tmp / "rollout.jsonl"
+        self._orig_json = self.server.json
+        self.path.write_text(
+            self._line("see /Users/testuser/Desktop/a.pdf")
+            + self._line("and /Users/testuser/Desktop/b.pdf"))
+        self._orig_resolve = self.server._resolve_codex_rollout_path
+        self.server._resolve_codex_rollout_path = lambda tid: self.path
+        self.cj = _CountingJson(self.server.json)
+        self.server.json = self.cj
+        self.addCleanup(lambda: shutil.rmtree(self.tmp, ignore_errors=True))
+
+    def tearDown(self):
+        self.server._resolve_codex_rollout_path = self._orig_resolve
+        self.server.json = self._orig_json
+
+    def _line(self, text):
+        return self._orig_json.dumps(
+            {"type": "event_msg", "payload": {"type": "agent_message", "message": text}}) + "\n"
+
+    def test_unchanged_rollout_decodes_nothing_on_second_call(self):
+        first = self.server._extract_files_from_codex_conversation("t1")
+        self.assertEqual(first["count"], 2)
+        self.cj.loads_calls = 0
+        second = self.server._extract_files_from_codex_conversation("t1")
+        self.assertEqual(self.cj.loads_calls, 0)
+        self.assertEqual(first, second)
+
+    def test_appended_rollout_line_decodes_only_the_new_line(self):
+        self.server._extract_files_from_codex_conversation("t1")
+        with open(self.path, "a") as fh:
+            fh.write(self._line("plus /Users/testuser/Desktop/c.pdf"))
+        self.cj.loads_calls = 0
+        result = self.server._extract_files_from_codex_conversation("t1")
+        self.assertEqual(self.cj.loads_calls, 1)
+        pdfs = {r["target"]: r for r in result["groups"]["pdfs"]}
+        self.assertEqual(pdfs["/Users/testuser/Desktop/c.pdf"]["first_line"], 3)
+        self.assertEqual(result["count"], 3)
