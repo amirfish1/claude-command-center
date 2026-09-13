@@ -5170,6 +5170,12 @@ _CODEX_COORD_EVENTS_MAX = 40
 _CODEX_COORD_EVENTS_TAIL = 8
 _codex_desktop_attach_cache = {"ts": 0.0, "rollouts": {}}
 _codex_desktop_attach_lock = threading.Lock()
+# Last observed (mtime_ns, sampled_at) per thread, used to tell a rollout that
+# is still growing (real external writer) apart from one that is merely
+# recent (a turn that already ended) without waiting out the full
+# _CODEX_EXTERNAL_WRITER_WINDOW_S on every cold wake.
+_codex_writer_rollout_sample = {}
+_codex_writer_rollout_sample_lock = threading.Lock()
 _codex_thread_turn_locks = {}
 _codex_thread_turn_locks_lock = threading.Lock()
 _codex_thread_turn_lock_holders = {}
@@ -5411,8 +5417,24 @@ def _codex_thread_writer_snapshot(session_id, now=None, *, rollout=None,
             snap["writer"] = "desktop" if snap["desktop_attached"] else "unknown"
             return snap
     if mtime_recent and not ccc_recent:
-        snap["external_active"] = True
-        snap["writer"] = "desktop" if snap["desktop_attached"] else "unknown"
+        moved = True
+        try:
+            mtime_ns = int((rollout or {}).get("mtime_ns") or 0)
+        except (TypeError, ValueError):
+            mtime_ns = 0
+        if mtime_ns:
+            with _codex_writer_rollout_sample_lock:
+                prior = _codex_writer_rollout_sample.get(session_id)
+                _codex_writer_rollout_sample[session_id] = (mtime_ns, now)
+            if prior is not None:
+                prior_mtime_ns, prior_at = prior
+                # Require a real gap between samples so back-to-back calls in
+                # the same instant don't read as "unchanged" by coincidence.
+                if mtime_ns == prior_mtime_ns and (now - prior_at) >= 1.0:
+                    moved = False
+        if moved:
+            snap["external_active"] = True
+            snap["writer"] = "desktop" if snap["desktop_attached"] else "unknown"
     return snap
 
 
