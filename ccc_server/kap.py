@@ -611,6 +611,16 @@ class KapTranscriptMapper:
         self.order = []
         self.user_frames = set()
         self.turn_id = None
+        # kap-server's turn.upsert frames have never been observed to carry a
+        # real turnId (it's always falsy), so self.turn_id stays None and
+        # every flush fell back to the literal string "0" -- every turn in a
+        # session shared one message_id ("kap-kimi-0"). The frontend keys
+        # streaming-bubble handoff and dedup on message_id
+        # (static/app.js's ensureStreamingBubble), so from the second turn on
+        # it saw the id already "handed off" and silently suppressed the live
+        # bubble for the rest of the session. Count flushes ourselves so each
+        # turn gets a distinct id even when the wire never supplies one.
+        self._turn_seq = 0
         self.turn_state = None
         self.emitted_turns = set()
         self.prompts = {}
@@ -653,9 +663,10 @@ class KapTranscriptMapper:
         out = []
         blocks = self.blocks()
         if blocks:
+            self._turn_seq += 1
             out.append({
                 "type": "assistant",
-                "message_id": "%s-%s" % (self.prefix, self.turn_id or "0"),
+                "message_id": "%s-%s" % (self.prefix, self.turn_id or self._turn_seq),
                 "blocks": blocks,
             })
         result = {"type": "result", "subtype": subtype}
