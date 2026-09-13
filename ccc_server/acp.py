@@ -442,6 +442,26 @@ def _acp_ts():
     return datetime.fromtimestamp(time.time(), timezone.utc).isoformat().replace("+00:00", "Z")
 
 
+def _acp_resume_next_line(harness, sid):
+    """Best-effort next_line for state that has no reliable prior value.
+
+    A session's transcript file can already hold real content from before
+    this process started -- a previous CCC run, a restart mid-session --
+    even though there is no in-memory state and no (or a stale) persisted
+    snapshot entry for it yet. Starting next_line at 1 in that case reissues
+    line numbers that already exist on disk; the client's per-line dedup in
+    static/app.js then treats the new event as "already rendered" and drops
+    it silently, so a restart mid-conversation could make new replies vanish
+    from the UI while landing fine in the transcript file. Count the file
+    instead of assuming.
+    """
+    try:
+        with _core._acp_transcript_path(harness, sid).open() as f:
+            return sum(1 for _ in f) + 1
+    except OSError:
+        return 1
+
+
 def _acp_new_session_state(harness, sid, cwd=""):
     return {
         "sid": sid,
@@ -451,7 +471,7 @@ def _acp_new_session_state(harness, sid, cwd=""):
         "created_at": time.time(),
         "updated_at": time.time(),
         "turn_seq": 0,
-        "next_line": 1,
+        "next_line": _acp_resume_next_line(harness, sid),
         "active_turn": None,         # {"req_id","msg_id","text","thought","tools","started_at"}
         "replay": None,              # {"kind","text"} while session/load replays history
         "events": collections.deque(maxlen=_ACP_EVENT_MAX),
@@ -717,13 +737,11 @@ def _acp_load_state(harness):
         state["turn_seq"] = int(meta.get("turn_seq") or 0)
         state["model"] = meta.get("model")
         state["updated_at"] = float(meta.get("updated_at") or 0)
-        next_line = int(meta.get("next_line") or 1)
-        if next_line <= 1:
-            try:
-                with _core._acp_transcript_path(harness, sid).open() as f:
-                    next_line = sum(1 for _ in f) + 1
-            except OSError:
-                next_line = 1
+        # The persisted value can be stale (last save predates the session's
+        # most recent activity, or the sid was never captured in a save at
+        # all -- see _acp_resume_next_line), so never trust it below what the
+        # transcript file actually holds.
+        next_line = max(int(meta.get("next_line") or 1), _acp_resume_next_line(harness, sid))
         state["next_line"] = max(1, next_line)
 
 
