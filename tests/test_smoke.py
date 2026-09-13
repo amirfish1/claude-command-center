@@ -4045,6 +4045,15 @@ class TestServerImports(unittest.TestCase):
         self.assertEqual(rows[0]["entitlement_summary"], "Free for this Devin account")
         self.assertEqual(rows[0]["entitlement_source"], "devin-cli")
 
+    def test_devin_curated_models_include_swe_2(self):
+        for mod in ("server", "morning", "morning_store"):
+            sys.modules.pop(mod, None)
+        server = importlib.import_module("server")
+
+        curated = {row["id"] for row in server._ENGINE_CURATED_MODELS["devin"]}
+
+        self.assertIn("swe-2", curated)
+
     def test_static_model_picker_uses_server_catalog_and_codex_allowlist(self):
         app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text()
 

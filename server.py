@@ -7219,6 +7219,7 @@ _ENGINE_CURATED_MODELS = {
         {"id": "glm-5.2", "label": "GLM-5.2"},
         {"id": "kimi-k3", "label": "Kimi K3"},
         {"id": "swe-1.7", "label": "SWE-1.7"},
+        {"id": "swe-2", "label": "SWE-2"},
     ),
     "gemini": (
         {"id": "gemini-3.5-pro", "label": "Gemini 3.5 Pro"},
