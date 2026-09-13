@@ -567,6 +567,37 @@ def _load_gemini_chat(path):
     return data if isinstance(data, dict) else None
 
 
+# path -> ((mtime_ns, size), {"sessionId", "lastUpdated"}). The listing loop
+# in find_gemini_conversations runs inside every sessions-snapshot refresh
+# and only needs those two fields, yet re-read and JSON-decoded every chat
+# file each time (113 files, 0.2 s per refresh under the GIL). Decode once
+# per file version; hand out copies.
+_GEMINI_LISTING_META_CACHE = {}
+_GEMINI_LISTING_META_CACHE_MAX = 8192
+
+
+def _gemini_chat_listing_meta(path):
+    p = Path(path)
+    key = str(p)
+    try:
+        st = p.stat()
+        version = (st.st_mtime_ns, st.st_size)
+    except OSError:
+        _GEMINI_LISTING_META_CACHE.pop(key, None)
+        return None
+    hit = _GEMINI_LISTING_META_CACHE.get(key)
+    if hit is None or hit[0] != version:
+        data = _load_gemini_chat(p)
+        meta = None
+        if isinstance(data, dict):
+            meta = {"sessionId": data.get("sessionId") or "", "lastUpdated": data.get("lastUpdated")}
+        if len(_GEMINI_LISTING_META_CACHE) >= _GEMINI_LISTING_META_CACHE_MAX:
+            _GEMINI_LISTING_META_CACHE.clear()
+        hit = (version, meta)
+        _GEMINI_LISTING_META_CACHE[key] = hit
+    return dict(hit[1]) if hit[1] else None
+
+
 # path -> (mtime, sessionId). Resolving a gemini session used to re-read and
 # JSON-parse EVERY chat file on disk, once per caller — the dominant cost of
 # group-chat opens (per participant) and a big chunk of live-activity polls.
@@ -1092,7 +1123,7 @@ def find_gemini_conversations(
     for path in paths:
         if limit and scanned >= int(limit):
             break
-        data = _load_gemini_chat(path)
+        data = _gemini_chat_listing_meta(path)
         if not data:
             continue
         sid = data.get("sessionId") or ""
