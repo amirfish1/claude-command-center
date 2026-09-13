@@ -21517,6 +21517,92 @@ _WINDOW_PARSE_MEMO_MAX_FILES = 24
 _WINDOW_PARSE_SKIP = object()
 
 
+# Newline counts per transcript, keyed by path: (inode, size, newlines). A
+# transcript only grows, so a later call counts newlines in the appended bytes
+# only (bytes.count, C speed); a shrink or inode change recounts from zero.
+_LINE_COUNT_CACHE = {}
+_LINE_COUNT_LOCK = threading.Lock()
+_LINE_COUNT_CACHE_MAX = 512
+_TAIL_READ_CHUNK = 256 * 1024
+
+
+def _count_newlines(f, start, end):
+    f.seek(start)
+    remaining = end - start
+    n = 0
+    while remaining > 0:
+        chunk = f.read(min(1 << 20, remaining))
+        if not chunk:
+            break
+        n += chunk.count(b"\n")
+        remaining -= len(chunk)
+    return n
+
+
+def _read_tail_lines(filepath, n):
+    """(total_lines, [(line_no, text), ...]) for the last ``n`` lines of a file.
+
+    ``total_lines`` matches ``sum(1 for _ in open(path))``: a trailing partial
+    line (writer mid-append) counts as a line, exactly like text iteration.
+    Returns None when the file is missing.
+    """
+    try:
+        f = open(filepath, "rb")
+    except (FileNotFoundError, IsADirectoryError, NotADirectoryError):
+        return None
+    with f:
+        st = os.fstat(f.fileno())
+        size = st.st_size
+        key = str(filepath)
+        with _LINE_COUNT_LOCK:
+            ent = _LINE_COUNT_CACHE.get(key)
+        if ent is not None and ent[0] == st.st_ino and size >= ent[1]:
+            newlines = ent[2] + (_count_newlines(f, ent[1], size) if size > ent[1] else 0)
+        else:
+            newlines = _count_newlines(f, 0, size)
+        with _LINE_COUNT_LOCK:
+            _LINE_COUNT_CACHE.pop(key, None)
+            while len(_LINE_COUNT_CACHE) >= _LINE_COUNT_CACHE_MAX:
+                _LINE_COUNT_CACHE.pop(next(iter(_LINE_COUNT_CACHE)))
+            _LINE_COUNT_CACHE[key] = (st.st_ino, size, newlines)
+        if size == 0:
+            return 0, []
+        f.seek(size - 1)
+        ends_with_newline = f.read(1) == b"\n"
+        total = newlines + (0 if ends_with_newline else 1)
+        if n <= 0:
+            return total, []
+        # Read backwards until the suffix holds n complete lines: n+1 newlines
+        # (the one closing the line before the window) or the file start.
+        need = n + 1
+        pos = size
+        chunks = []
+        seen = 0
+        while pos > 0 and seen < need:
+            step = min(_TAIL_READ_CHUNK, pos)
+            pos -= step
+            f.seek(pos)
+            chunk = f.read(step)
+            chunks.append(chunk)
+            seen += chunk.count(b"\n")
+        data = b"".join(reversed(chunks))
+        if pos > 0:
+            cut = data.find(b"\n")
+            data = data[cut + 1:] if cut >= 0 else b""
+        parts = data.split(b"\n")
+        if ends_with_newline:
+            parts.pop()  # the empty piece after the final newline
+        parts = parts[-n:]
+        first_no = total - len(parts) + 1
+        out = []
+        for i, raw in enumerate(parts):
+            text = raw.decode("utf-8", errors="replace")
+            if ends_with_newline or i < len(parts) - 1:
+                text += "\n"
+            out.append((first_no + i, text))
+        return total, out
+
+
 def _parse_conversation_windowed(conversation_id, filepath, tail, before, parser=None):
     """Parse only a window of a conversation JSONL instead of the whole file.
 
@@ -21539,16 +21625,27 @@ def _parse_conversation_windowed(conversation_id, filepath, tail, before, parser
     window = tail if tail else _CONV_TAIL_DEFAULT
     buf = collections.deque(maxlen=window)
     total = 0
-    try:
-        with open(filepath, "r") as f:
-            for line in f:
-                total += 1
-                if before is not None and total >= before:
-                    # still need to keep counting for last_line
-                    continue
-                buf.append((total, line))
-    except FileNotFoundError:
-        return {"events": [], "last_line": 0, "first_line": 0, "truncated_before": False}
+    if before is None:
+        # Click path: the last N lines come from the end of the file and the
+        # absolute numbering from an incremental newline count. Iterating a
+        # 15 MB transcript in Python to keep 120 lines cost 80-875 ms; this is
+        # a few ms.
+        loaded = _read_tail_lines(filepath, window)
+        if loaded is None:
+            return {"events": [], "last_line": 0, "first_line": 0, "truncated_before": False}
+        total, tail_lines = loaded
+        buf.extend(tail_lines)
+    else:
+        try:
+            with open(filepath, "r") as f:
+                for line in f:
+                    total += 1
+                    if total >= before:
+                        # still need to keep counting for last_line
+                        continue
+                    buf.append((total, line))
+        except FileNotFoundError:
+            return {"events": [], "last_line": 0, "first_line": 0, "truncated_before": False}
 
     events = []
     codex_token_usage = None
