@@ -26168,6 +26168,16 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                             mt = (url[5:].split(";", 1)[0] if url.startswith("data:") else "") or "image/png"
                             imgs.append({"kind": "base64", "media_type": mt,
                                          "data": url.split("base64,", 1)[1]})
+                # Codex: response_item/image_generation_call.payload.result is
+                # the raw base64 PNG the image-gen tool produced (no "data:"
+                # prefix, unlike input_image) — see codex_parse.py's
+                # image_generation_call branch, which emits the same
+                # (line, idx=0) lazy ref instead of inlining it.
+                if isinstance(payload, dict) and payload.get("type") == "image_generation_call":
+                    result_b64 = payload.get("result")
+                    if isinstance(result_b64, str) and result_b64:
+                        imgs.append({"kind": "base64", "media_type": "image/png",
+                                     "data": result_b64})
             if idx >= len(imgs):
                 self.send_json({"error": "not found"}, 404)
                 return

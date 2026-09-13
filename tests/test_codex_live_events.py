@@ -111,6 +111,34 @@ class MapItemTests(unittest.TestCase):
     def test_unknown_item_type_is_ignored(self):
         self.assertEqual(live_events._map_item("turn-1", {"type": "SomethingNew", "id": "x"}), [])
 
+    def test_image_generation_item_maps_to_tool_use(self):
+        # Slice 3 (codex-single-renderer-merge): the store's own item shape
+        # for imageGeneration is unverified (no observed live snapshot at
+        # slice-3 time), so this deliberately stays a plain tool_use row - no
+        # image bytes - rather than guessing at an image-carrying shape.
+        events = live_events._map_item("turn-1", {
+            "type": "imageGeneration", "id": "img-1", "prompt": "a red bicycle",
+        })
+        self.assertEqual(len(events), 1)
+        block = events[0]["blocks"][0]
+        self.assertEqual(block["kind"], "tool_use")
+        self.assertEqual(block["name"], "image_gen")
+        self.assertEqual(block["detail"], "a red bicycle")
+        self._assert_live_fields(events[0], "turn-1", "img-1")
+
+    def test_image_generation_item_without_prompt_falls_back_to_generic_detail(self):
+        events = live_events._map_item("turn-1", {"type": "imageGeneration", "id": "img-2"})
+        self.assertEqual(events[0]["blocks"][0]["detail"], "Image")
+
+    def test_image_view_item_maps_to_view_image_tool_use(self):
+        events = live_events._map_item("turn-1", {
+            "type": "imageView", "id": "img-3", "description": "screenshot.png",
+        })
+        self.assertEqual(len(events), 1)
+        block = events[0]["blocks"][0]
+        self.assertEqual(block["name"], "view_image")
+        self.assertEqual(block["detail"], "screenshot.png")
+
     def test_item_without_id_is_ignored(self):
         self.assertEqual(live_events._map_item("turn-1", {"type": "agentMessage", "text": "hi"}), [])
 

@@ -245,6 +245,20 @@ def _map_item(turn_id, item):
     if itype == "webSearch":
         query = item.get("query") or item.get("text") or _item_text(item)
         return _map_tool_item(turn_id, item, "web_search", query or "web_search")
+    if itype in ("imageGeneration", "imageView"):
+        # Slice 3 (codex-single-renderer-merge): a matching rollout row for
+        # this item eventually arrives as codex_parse.py's `kind:
+        # 'image_generation'` block, complete with a lazy (line, idx) image
+        # ref. There is no rollout `line` yet for a live app-server item, and
+        # this store's own item shape for imageGeneration/imageView is
+        # unverified (no observed snapshot carrying one at slice-3 time - see
+        # the plan's "Desktop IPC mode" risk), so this deliberately stays a
+        # plain tool_use row (prompt/path as detail, no image bytes) rather
+        # than guessing at an image-carrying shape. Slice 4 should upgrade
+        # this once a real snapshot is observed.
+        prompt = item.get("prompt") or item.get("description") or item.get("revisedPrompt") or _item_text(item)
+        tool_name = "image_gen" if itype == "imageGeneration" else "view_image"
+        return _map_tool_item(turn_id, item, tool_name, prompt or "Image")
     return []
 
 

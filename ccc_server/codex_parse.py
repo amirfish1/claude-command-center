@@ -691,6 +691,46 @@ def _parse_codex_event(ev, line_num, token_usage=None, codex_turn_meta=None):
             "blocks": [{"kind": "thinking", "text": text}],
         }
         return _apply_codex_turn_meta(result, codex_turn_meta)
+    if ptype == "image_generation_call":
+        # Codex's image-generation tool persists TWO records for the same
+        # image: an `event_msg/image_generation_end` (carries `saved_path`,
+        # a local file the CLI wrote to disk) and this `response_item/
+        # image_generation_call` (carries `metadata.turn_id`, matching the
+        # dual-emission pattern `item_completed` already documents above).
+        # Only this one is handled, for the same reason: rendering both
+        # would double the card. The base64 `result` field is Codex's raw
+        # PNG bytes (no "data:" prefix, unlike `input_image`'s data URL) and
+        # can run 1-2 MB — inlining it would balloon the parse payload the
+        # same way function_call_output's input_image already guards
+        # against, so it goes out as a (line, idx) lazy ref for
+        # /api/conv-image to re-extract on demand.
+        call_id = str(payload.get("id") or "").strip()
+        prompt = str(payload.get("revised_prompt") or "").strip()
+        if len(prompt) > 600:
+            prompt = prompt[:600] + "..."
+        status = str(payload.get("status") or "completed").strip() or "completed"
+        block = {
+            "kind": "image_generation",
+            "id": call_id,
+            "prompt": prompt,
+            "status": status,
+        }
+        images = []
+        result_b64 = payload.get("result")
+        if isinstance(result_b64, str) and result_b64:
+            images.append({"kind": "base64", "media_type": "image/png",
+                           "line": line_num, "idx": 0})
+            block["image_idx"] = 0
+        result = {
+            "line": line_num,
+            "ts": ts,
+            "type": "assistant",
+            "message_id": f"codex-image-gen-{line_num}",
+            "blocks": [block],
+        }
+        if images:
+            result["images"] = images
+        return _apply_codex_turn_meta(result, codex_turn_meta)
     if ptype in ("function_call", "custom_tool_call"):
         name = payload.get("name") or "tool"
         is_custom_tool = ptype == "custom_tool_call"

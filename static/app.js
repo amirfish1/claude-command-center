@@ -7935,6 +7935,68 @@
     }
   });
 
+  // Codex single-renderer merge, slice 3: the inline `codex_request` card
+  // (approval/question/permission/elicitation). Answers route through the
+  // same generic RPC-result registry the native app-server pane's own
+  // `respond()` uses (static/codex-client.js), not the simpler
+  // `/api/codex/approval` endpoint the live strip's approve/decline buttons
+  // call — the plan calls for one answer path, not two.
+  document.addEventListener('click', async (ev) => {
+    const card = ev.target && ev.target.closest && ev.target.closest('.codex-request-card');
+    if (!card) return;
+    const optBtn = ev.target.closest('.codex-request-opt');
+    const actionBtn = ev.target.closest('.codex-request-btn[data-decision]');
+    if (!optBtn && !actionBtn) return;
+    ev.preventDefault();
+    if (card.classList.contains('is-resolved') || card.classList.contains('is-submitting')) return;
+    const method = card.getAttribute('data-request-method') || '';
+    const key = card.getAttribute('data-request-key') || '';
+    const generationRaw = card.getAttribute('data-request-generation');
+    const generation = generationRaw ? Number(generationRaw) : undefined;
+    const threadId = card.getAttribute('data-thread-id') || '';
+    let decision;
+    const extra = {};
+    if (optBtn) {
+      decision = 'send-answer';
+      const qid = optBtn.getAttribute('data-question-id') || '0';
+      extra.answers = {};
+      extra.answers[qid] = optBtn.getAttribute('data-answer') || '';
+    } else {
+      decision = actionBtn.getAttribute('data-decision') || 'cancel';
+      if (decision === 'send-answer') {
+        const input = card.querySelector('.codex-request-free-text');
+        const qid = (input && input.getAttribute('data-question-id')) || '0';
+        extra.answers = {};
+        extra.answers[qid] = (input && input.value) || '';
+      } else if (decision === 'allow-selected') {
+        extra.permissions = {};
+        card.querySelectorAll('.codex-request-perm input[type="checkbox"]').forEach((cb) => {
+          extra.permissions[cb.getAttribute('data-perm-key')] = !!cb.checked;
+        });
+      }
+    }
+    const result = _codexRequestResultForDecision(method, decision, extra);
+    card.classList.add('is-submitting');
+    try {
+      const res = await fetch('/api/codex/client/respond', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ key, generation, result, context: { thread_id: threadId } }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (data && data.ok !== false) {
+        card.classList.add('is-resolved');
+        showOpToast('Response sent.');
+      } else {
+        showOpToast('Could not send response: ' + ((data && data.error) || 'unknown'), 'error');
+      }
+    } catch (e) {
+      showOpToast('Could not send response: ' + ((e && e.message) || e), 'error');
+    } finally {
+      card.classList.remove('is-submitting');
+    }
+  });
+
   // "Wake up" / "Push input" button inside the live tool strip (Working... / Generating... / in-flight tool > 60s).
   // Uses delegation because the button is inside innerHTML-replaced content.
   document.addEventListener('click', async (ev) => {
@@ -8295,7 +8357,15 @@
       && ((liveStatus.sidecarStatus === 'active' && ageSec < 120) || codexStateWorking
         || (_webuiBusy && !(_streamingBubble && _streamingBubble.parentNode === $view)));
     const hasWakeProgress = !!$view.querySelector('.conv-live-tool-inline.optimistic, .conv-live-tool-inline.is-wake-status, .conv-live-tool-inline.wake-breakdown');
-    const shouldShow = needsApproval
+    // Codex single-renderer merge, slice 3: a `codex_request` card renders
+    // this same approval inline in the transcript. Two approval UIs for one
+    // request is the plan's documented "Two approval UIs" risk (value M,
+    // confidence H) — mitigate by hiding the strip's approve/decline once
+    // the card exists, rather than showing both.
+    const _approvalItemForCard = needsApproval ? (liveStatusMatchesOpenConv() ? liveStatus.codexAppServerActiveItem : null) : null;
+    const _approvalRequestId = _approvalItemForCard && _approvalItemForCard.request_id;
+    const _approvalCardShowing = !!(_approvalRequestId && _codexRequestCardShowing($view, _approvalRequestId));
+    const shouldShow = (needsApproval && !_approvalCardShowing)
       || (liveStatus.live && tool && liveStatus.sidecarStatus === 'active'
       && (ageSec < 300 || isQuestion) && !_headlessQuestion)
       || isGenerating;
@@ -8305,7 +8375,7 @@
       _liveStripShown = false;
       return;
     }
-    if (needsApproval) {
+    if (needsApproval && !_approvalCardShowing) {
       if (!inline) {
         inline = document.createElement('div');
         inline.className = 'conv-live-tool-inline';
@@ -56912,6 +56982,220 @@
     return '<div class="stream-block-plan plan-card">' + rows.join('') + '</div>';
   }
 
+  // Codex single-renderer merge, slice 3 (CCC-private-docs plan
+  // 2026-09-12-codex-single-renderer-merge.md): the native app-server pane
+  // (static/codex-client.js) renders a turn-level diff, generated images and
+  // pending approval/question/permission/elicitation requests that the
+  // shared transcript renderer only partially covered. These three helpers
+  // plus `_codexRequestCardHtml` below port that coverage into
+  // `renderConversationEvents`'s block/event switch. Pure additive: nothing
+  // feeds these kinds live data yet (that's slice 4) — they only render
+  // correctly once test/rollout data reaches them.
+
+  // Unified-diff line coloring shared by the turn-diff block and (future)
+  // any other unified-diff surface. Mirrors codex-client.js's diffNode.
+  function _diffLinesHtml(diffText) {
+    return String(diffText || '').split('\n').map(line => {
+      const cls = line.startsWith('@@') ? ' diff-hunk'
+        : (line.startsWith('+') && !line.startsWith('+++')) ? ' diff-add'
+        : (line.startsWith('-') && !line.startsWith('---')) ? ' diff-delete' : '';
+      return '<span class="diff-line' + cls + '">' + escapeHtml(line) + '</span>';
+    }).join('\n');
+  }
+
+  // `kind: 'diff'` block: a turn-level diff, as opposed to the existing
+  // per-apply_patch tool-call rows. Accepts either a `files` list (path +
+  // per-file diff, matching native's `turn.diff`/`item.changes` shape) or a
+  // single raw unified-diff string under `diff`/`patch`.
+  function _turnDiffBlockHtml(b) {
+    const files = Array.isArray(b && b.files) ? b.files : null;
+    let body = '';
+    if (files && files.length) {
+      body = files.map(file => {
+        if (!file || typeof file !== 'object') return '';
+        const filePath = String(file.path || file.filePath || file.file_path || 'Change');
+        const fileDiff = file.diff || file.unified_diff || file.patch;
+        const kind = file.kind || file.type || file.status;
+        const kindHtml = kind ? '<span class="turn-diff-file-badge">' + escapeHtml(String(kind)) + '</span>' : '';
+        return '<div class="turn-diff-file">'
+          + '<div class="turn-diff-file-head"><strong>' + escapeHtml(filePath) + '</strong>' + kindHtml + '</div>'
+          + (fileDiff ? '<pre class="turn-diff">' + _diffLinesHtml(fileDiff) + '</pre>' : '')
+          + '</div>';
+      }).join('');
+    } else {
+      const rawDiff = b && (b.diff || b.patch);
+      if (rawDiff) body = '<pre class="turn-diff">' + _diffLinesHtml(rawDiff) + '</pre>';
+    }
+    if (!body) return '';
+    return '<div class="stream-block-diff turn-diff-card"><div class="turn-diff-card-head">Turn diff</div>' + body + '</div>';
+  }
+
+  // `kind: 'image_generation'` block: Codex's image-generation tool call.
+  // codex_parse.py emits the base64 result as a lazy (line, idx) ref (same
+  // scheme pasted/input images already use) rather than inlining it, so the
+  // <img> src is built the same way renderImageDescriptors already does for
+  // ev.images — reuse it directly with a synthetic one-entry descriptor.
+  function _imageGenerationBlockHtml(b, ev) {
+    if (!b) return '';
+    const prompt = String(b.prompt || '').trim();
+    const status = String(b.status || '').toLowerCase();
+    const statusHtml = status && status !== 'completed'
+      ? '<span class="image-gen-status">' + escapeHtml(status) + '</span>' : '';
+    let mediaHtml = '';
+    if (b.image_idx != null && ev && ev.line != null) {
+      mediaHtml = renderImageDescriptors([{ kind: 'base64', line: ev.line, idx: b.image_idx }]);
+    }
+    return '<div class="stream-block-image-gen image-gen-card">'
+      + '<div class="image-gen-card-head"><span class="image-gen-icon" aria-hidden="true">◫</span> Generated image' + statusHtml + '</div>'
+      + (prompt ? '<div class="image-gen-prompt">' + escapeHtml(prompt) + '</div>' : '')
+      + (mediaHtml ? '<div class="image-gen-media">' + mediaHtml + '</div>' : '')
+      + '</div>';
+  }
+
+  // `codex_request` pending event: a shared inline card for an
+  // approval/question/permission/elicitation request, mirroring what
+  // codex-client.js's renderPendingRequest shows in the native pane. Answers
+  // still route through the same server action (`/api/codex/client/respond`)
+  // the native pane and the live-strip approve/decline buttons already use.
+  // Elicitation deliberately skips the native pane's dynamic JSON-schema form
+  // builder (createForm, ~300 lines in codex-client.js) — out of scope for
+  // this slice; a link + accept/decline/cancel covers the common
+  // "finish this in your browser" case.
+  function _codexRequestBodyHtml(ev) {
+    const method = String((ev && ev.method) || '');
+    const params = (ev && ev.params) || {};
+    const isApproval = /approval|requestApproval/i.test(method);
+    const isQuestion = /requestUserInput/i.test(method);
+    const isElicitation = /elicitation/i.test(method);
+    const isPermission = /permission/i.test(method) && !isApproval;
+    let title = 'Codex has a question';
+    if (isApproval) title = 'Approval needed';
+    else if (isPermission) title = 'Permission requested';
+    else if (isElicitation) title = 'More information needed';
+    const reason = params.reason || params.message || params.description || '';
+    let body = reason ? '<div class="codex-request-reason">' + escapeHtml(String(reason)) + '</div>' : '';
+    if (isApproval) {
+      const command = params.command || params.cmd;
+      if (command) {
+        body += '<pre class="codex-request-command">'
+          + escapeHtml(Array.isArray(command) ? command.join(' ') : String(command)) + '</pre>';
+      }
+      if (params.cwd) {
+        body += '<div class="codex-request-row"><strong>Workspace</strong><span>' + escapeHtml(String(params.cwd)) + '</span></div>';
+      }
+      body += '<div class="codex-request-actions">'
+        + '<button type="button" class="codex-request-btn is-primary" data-decision="accept">Approve</button>'
+        + '<button type="button" class="codex-request-btn" data-decision="acceptForSession">Approve session</button>'
+        + '<button type="button" class="codex-request-btn is-negative" data-decision="decline">Deny</button>'
+        + '<button type="button" class="codex-request-btn is-negative" data-decision="cancel">Cancel</button>'
+        + '</div>';
+    } else if (isQuestion) {
+      const questionsRaw = params.questions || params.items || params.question || [];
+      const questions = Array.isArray(questionsRaw) ? questionsRaw : [questionsRaw];
+      let lastQid = '0';
+      questions.forEach((q, qi) => {
+        if (!q || typeof q !== 'object') return;
+        const qid = String(q.id || q.questionId || qi);
+        lastQid = qid;
+        const header = q.header ? '<div class="codex-request-q-header">' + escapeHtml(String(q.header)) + '</div>' : '';
+        const text = q.question ? '<div class="codex-request-q-text">' + escapeHtml(String(q.question)) + '</div>' : '';
+        const options = Array.isArray(q.options || q.choices) ? (q.options || q.choices) : [];
+        const optsHtml = options.length
+          ? '<div class="codex-request-q-options">' + options.map(o => {
+              const isObj = o && typeof o === 'object';
+              const value = isObj ? (o.value || o.label || o.id || '') : o;
+              const label = isObj ? (o.label || o.value || '') : o;
+              return '<button type="button" class="codex-request-btn codex-request-opt"'
+                + ' data-question-id="' + escapeAttr(qid) + '"'
+                + ' data-answer="' + escapeAttr(String(value)) + '">' + escapeHtml(String(label)) + '</button>';
+            }).join('') + '</div>'
+          : '';
+        body += '<div class="codex-request-question">' + header + text + optsHtml + '</div>';
+      });
+      body += '<div class="codex-request-actions">'
+        + '<input type="text" class="codex-request-free-text" data-question-id="' + escapeAttr(lastQid) + '" placeholder="Type an answer">'
+        + '<button type="button" class="codex-request-btn is-primary" data-decision="send-answer">Send</button>'
+        + '<button type="button" class="codex-request-btn is-negative" data-decision="cancel">Cancel</button>'
+        + '</div>';
+    } else if (isPermission) {
+      const requested = params.permissions || {};
+      body += '<div class="codex-request-permissions">' + Object.keys(requested).map(key =>
+        '<label class="codex-request-perm"><input type="checkbox" checked data-perm-key="' + escapeAttr(key) + '"> ' + escapeHtml(key) + '</label>'
+      ).join('') + '</div>';
+      body += '<div class="codex-request-actions">'
+        + '<button type="button" class="codex-request-btn is-primary" data-decision="allow-selected">Allow selected</button>'
+        + '<button type="button" class="codex-request-btn is-negative" data-decision="decline">Decline</button>'
+        + '</div>';
+    } else if (isElicitation) {
+      const url = params.url;
+      const link = url
+        ? '<a class="codex-request-link" href="' + escapeAttr(String(url)) + '" target="_blank" rel="noopener noreferrer">Open secure sign-in</a>'
+        : '';
+      body += link + '<div class="codex-request-actions">'
+        + '<button type="button" class="codex-request-btn is-negative" data-decision="cancel">Cancel</button>'
+        + '<button type="button" class="codex-request-btn is-negative" data-decision="decline">Decline</button>'
+        + '<button type="button" class="codex-request-btn is-primary" data-decision="accept">' + (url ? 'I completed it' : 'Continue') + '</button>'
+        + '</div>';
+    } else {
+      const rawDecisions = params.availableDecisions || params.decisions || ['accept', 'decline', 'cancel'];
+      const decisions = Array.isArray(rawDecisions) ? rawDecisions : Object.keys(rawDecisions);
+      body += '<div class="codex-request-actions">' + decisions.map(d => {
+        const decision = (d && typeof d === 'object') ? Object.keys(d)[0] : d;
+        if (!decision) return '';
+        const cls = /accept|approve/i.test(decision) ? ' is-primary' : ' is-negative';
+        return '<button type="button" class="codex-request-btn' + cls + '" data-decision="' + escapeAttr(String(decision)) + '">' + escapeHtml(String(decision)) + '</button>';
+      }).join('') + '</div>';
+    }
+    return { title, body };
+  }
+
+  function _codexRequestCardHtml(ev, threadId) {
+    const fields = _codexRequestBodyHtml(ev);
+    const requestId = String((ev && (ev.request_id || ev.key)) || '');
+    return '<div class="codex-request-card"'
+      + ' data-request-key="' + escapeAttr(String((ev && ev.key) || '')) + '"'
+      + ' data-request-id="' + escapeAttr(requestId) + '"'
+      + ' data-request-method="' + escapeAttr(String((ev && ev.method) || '')) + '"'
+      + ' data-thread-id="' + escapeAttr(String(threadId || '')) + '"'
+      + ' data-request-generation="' + escapeAttr(String(ev && ev.generation != null ? ev.generation : '')) + '">'
+      + '<div class="codex-request-title">' + escapeHtml(fields.title) + '</div>'
+      + fields.body
+      + '</div>';
+  }
+
+  // Shapes a codex_request card's `result` payload the same way
+  // codex-client.js's shapePendingResponse does, for the subset of methods
+  // the card above renders. `decision` is the clicked button's semantic
+  // action (not necessarily codex's wire-level "decision" field name).
+  function _codexRequestResultForDecision(method, decision, extra) {
+    method = String(method || '');
+    extra = extra || {};
+    if (/requestUserInput/i.test(method)) {
+      if (decision === 'cancel') return { answers: {} };
+      return { answers: extra.answers || {} };
+    }
+    if (/permission/i.test(method) && !/approval|requestApproval/i.test(method)) {
+      if (decision === 'decline' || decision === 'cancel') return { permissions: {}, scope: 'turn' };
+      return { permissions: extra.permissions || {}, scope: 'turn' };
+    }
+    if (/elicitation/i.test(method)) {
+      return { action: decision === 'accept' ? 'accept' : (decision === 'cancel' ? 'cancel' : 'decline') };
+    }
+    return { decision: decision || 'cancel' };
+  }
+
+  // A pending request answered from its inline `codex_request` card must not
+  // also show the live-strip's own approve/decline buttons for the SAME
+  // request (plan risk: "Two approval UIs" — value M, confidence H;
+  // mitigation: hide the strip when a card exists). Cards render inside the
+  // pane's `.conversations-view`; a resolved card no longer counts.
+  function _codexRequestCardShowing($view, requestId) {
+    if (!$view || !requestId) return false;
+    const escId = (window.CSS && CSS.escape) ? CSS.escape(String(requestId)) : String(requestId);
+    const card = $view.querySelector('.codex-request-card[data-request-id="' + escId + '"]');
+    return !!(card && !card.classList.contains('is-resolved'));
+  }
+
   // ────────────────────────────────────────────────────────────────────────
   // Web-UI pane conversation rendering (kimi-web parity). Everything below is
   // gated on `.conv-pane.is-webui-session` — set for kimi + codex panes; the
@@ -58663,6 +58947,18 @@
                 _kimiHolder.innerHTML = planHtml;
                 if (_kimiHolder.firstElementChild) kimiBlockEls.push(_kimiHolder.firstElementChild);
               }
+            } else if (b.kind === 'diff') {
+              const diffHtml = _turnDiffBlockHtml(b);
+              if (diffHtml) {
+                _kimiHolder.innerHTML = diffHtml;
+                if (_kimiHolder.firstElementChild) kimiBlockEls.push(_kimiHolder.firstElementChild);
+              }
+            } else if (b.kind === 'image_generation') {
+              const imgGenHtml = _imageGenerationBlockHtml(b, ev);
+              if (imgGenHtml) {
+                _kimiHolder.innerHTML = imgGenHtml;
+                if (_kimiHolder.firstElementChild) kimiBlockEls.push(_kimiHolder.firstElementChild);
+              }
             }
           }
           const _kimiAnswerText = kimiAnswerParts.join('\n\n').trim();
@@ -58857,6 +59153,18 @@
             const planHtml = _planEntriesHtml(b.entries);
             if (planHtml) {
               blockParts.push(planHtml);
+              hasNonTool = true;
+            }
+          } else if (b.kind === 'diff') {
+            const diffHtml = _turnDiffBlockHtml(b);
+            if (diffHtml) {
+              blockParts.push(diffHtml);
+              hasNonTool = true;
+            }
+          } else if (b.kind === 'image_generation') {
+            const imgGenHtml = _imageGenerationBlockHtml(b, ev);
+            if (imgGenHtml) {
+              blockParts.push(imgGenHtml);
               hasNonTool = true;
             }
           } else if (b.kind === 'thinking') {
@@ -59146,6 +59454,16 @@
           }
         }
         continue;
+      } else if (ev.type === 'codex_request') {
+        // Codex single-renderer merge, slice 3: a pending approval/question/
+        // permission/elicitation request, rendered inline instead of only in
+        // the live strip. Falls through to the shared non-tool-only append
+        // logic below like any other event `div`. Answers route through the
+        // same `/api/codex/client/respond` RPC action the native app-server
+        // pane already uses (see the delegated click handler near the other
+        // `.ask-user-option-pick`/`.acp-perm-opt` handlers).
+        div.classList.add('codex-request-event');
+        div.innerHTML = _codexRequestCardHtml(ev, renderedConversationId);
       }
 
       if (ev.type === 'assistant') {

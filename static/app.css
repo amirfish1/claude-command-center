@@ -1791,6 +1791,82 @@
   .plan-row.is-done { color: var(--text-muted); text-decoration: line-through; }
   .plan-row.is-active .plan-glyph { color: var(--green); }
 
+  /* Codex single-renderer merge, slice 3: turn-level diff block (kind:'diff'),
+     distinct from the existing per-apply_patch tool-call rows. */
+  .turn-diff-card {
+    font-size: 12px; margin: 4px 0; padding: 6px 10px;
+    border: 1px solid var(--border); border-radius: 6px;
+    background: rgba(139,148,158,0.06); max-width: 720px;
+  }
+  .turn-diff-card-head { font-weight: 600; color: var(--text-muted); margin-bottom: 4px; }
+  .turn-diff-file { margin: 4px 0; }
+  .turn-diff-file-head { display: flex; align-items: center; gap: 6px; font-family: var(--font-mono, monospace); font-size: 11.5px; }
+  .turn-diff-file-badge {
+    font-size: 10px; text-transform: uppercase; color: var(--text-muted);
+    border: 1px solid var(--border); border-radius: 4px; padding: 0 4px;
+  }
+  pre.turn-diff {
+    margin: 4px 0 0; padding: 6px 8px; overflow-x: auto; max-height: 320px; overflow-y: auto;
+    background: rgba(0,0,0,0.15); border-radius: 4px;
+    font-family: var(--font-mono, monospace); font-size: 11.5px; line-height: 1.4;
+  }
+  pre.turn-diff .diff-line { display: block; white-space: pre; }
+  pre.turn-diff .diff-hunk { color: var(--text-muted); }
+  pre.turn-diff .diff-add { color: var(--green); background: rgba(63,185,80,0.08); }
+  pre.turn-diff .diff-delete { color: var(--red, #f85149); background: rgba(248,81,73,0.08); }
+
+  /* Generated-image block (kind:'image_generation'). */
+  .image-gen-card {
+    font-size: 12px; margin: 4px 0; padding: 6px 10px;
+    border: 1px solid var(--border); border-radius: 6px;
+    background: rgba(139,148,158,0.06); max-width: 640px;
+  }
+  .image-gen-card-head { font-weight: 600; color: var(--text-muted); display: flex; align-items: center; gap: 6px; }
+  .image-gen-status { font-size: 10px; text-transform: uppercase; color: var(--text-muted); }
+  .image-gen-prompt { margin-top: 4px; color: var(--text); white-space: pre-wrap; }
+  .image-gen-media { margin-top: 6px; }
+  .image-gen-media img { max-width: 100%; border-radius: 6px; display: block; }
+
+  /* Inline `codex_request` card: approval/question/permission/elicitation,
+     rendered in the transcript instead of only in the live strip. */
+  .codex-request-card {
+    font-size: 12px; margin: 6px 0; padding: 8px 12px;
+    border: 1px solid var(--border); border-radius: 8px;
+    background: rgba(210,153,34,0.08); max-width: 640px;
+  }
+  .codex-request-card.is-resolved { opacity: 0.55; }
+  .codex-request-card.is-submitting { pointer-events: none; opacity: 0.75; }
+  .codex-request-title { font-weight: 600; margin-bottom: 4px; }
+  .codex-request-reason { color: var(--text-muted); margin-bottom: 6px; white-space: pre-wrap; }
+  .codex-request-command {
+    margin: 4px 0; padding: 6px 8px; overflow-x: auto;
+    background: rgba(0,0,0,0.15); border-radius: 4px;
+    font-family: var(--font-mono, monospace); font-size: 11.5px;
+  }
+  .codex-request-row { display: flex; gap: 6px; margin: 2px 0; }
+  .codex-request-row strong { color: var(--text-muted); font-weight: 500; }
+  .codex-request-question { margin: 4px 0; }
+  .codex-request-q-header { font-weight: 600; }
+  .codex-request-q-text { color: var(--text); margin: 2px 0; }
+  .codex-request-q-options { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 4px; }
+  .codex-request-permissions { display: flex; flex-direction: column; gap: 4px; margin: 4px 0; }
+  .codex-request-perm { display: flex; align-items: center; gap: 6px; }
+  .codex-request-link { display: inline-block; margin: 4px 0; }
+  .codex-request-actions { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 6px; align-items: center; }
+  .codex-request-free-text {
+    flex: 1 1 auto; min-width: 120px; padding: 3px 6px;
+    border: 1px solid var(--border); border-radius: 4px;
+    background: var(--bg); color: var(--text); font-size: 12px;
+  }
+  .codex-request-btn {
+    padding: 3px 10px; border-radius: 6px; border: 1px solid var(--border);
+    background: var(--bg-secondary, transparent); color: var(--text);
+    font-size: 12px; cursor: pointer;
+  }
+  .codex-request-btn:hover { border-color: var(--text-muted); }
+  .codex-request-btn.is-primary { border-color: var(--green); color: var(--green); }
+  .codex-request-btn.is-negative { border-color: var(--red, #f85149); color: var(--red, #f85149); }
+
   /* ── Web-UI conversation parity, scoped to webui panes (kimi + codex) ────
      Palette + layout mirror apps/kimi-web (ChatPane.vue dark theme, style.css
      tokens). Everything is gated on .conv-pane.is-webui-session so Claude and
