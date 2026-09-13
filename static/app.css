@@ -1161,7 +1161,20 @@
     white-space: pre-wrap;
     overflow-wrap: anywhere;
   }
-  .queued-steer-tray .send-queued-note { flex-wrap: wrap; }
+  /* One row: icon, truncating reason text, then the action buttons — not a
+     text row stacked over a button row. Full reason is on the title tooltip. */
+  .queued-steer-tray .send-queued-note {
+    flex-wrap: nowrap;
+  }
+  .queued-steer-tray .send-queued-text {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .queued-steer-tray .send-queued-note .queued-steer-actions {
+    margin-top: 0;
+  }
   .conversations-view .event.user_text.is-queued-steer-duplicate { display: none; }
   /* One action for the whole tray: every queued message delivered as a single
      turn, instead of one interrupt-and-resend round per message. */

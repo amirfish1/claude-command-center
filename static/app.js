@@ -6799,22 +6799,21 @@
     if (!$view) return;
     const optimistic = $view.querySelector('.conv-live-tool-inline.optimistic');
     const breakdown = $view.querySelector('.conv-live-tool-inline.wake-breakdown');
-    if (optimistic && breakdown && breakdown.previousElementSibling !== optimistic) {
-      optimistic.parentNode.insertBefore(breakdown, optimistic.nextSibling);
+    if (!breakdown) return;
+    if (optimistic) {
+      if (breakdown.previousElementSibling !== optimistic) {
+        optimistic.parentNode.insertBefore(breakdown, optimistic.nextSibling);
+      }
+      return;
     }
-  }
-  // Transient status (queued / resuming). Not dismissible — it clears when
-  // activity streams in or a re-render swaps in the durable transcript.
-  function renderInlineWakeStatus($view, kind, message) {
-    if (!$view) return;
-    _removePriorWakeStatus($view);
-    const el = document.createElement('div');
-    el.className = 'conv-live-tool-inline is-wake-status is-' + kind;
-    el.innerHTML = '<span class="cl-pulse"></span>'
-      + '<span class="cl-tool"></span>';
-    el.querySelector('.cl-tool').textContent = message;
-    $view.appendChild(el);
-    scrollConversationToEnd($view);
+    // No optimistic pill to anchor next to (already resolved into the card
+    // itself). Once the user's own message lands as a durable transcript row
+    // it re-renders at $view's true tail, which otherwise left this card
+    // stranded above it — a jarring reorder mid-render. Reclaim the tail on
+    // every poll tick so the card stays pinned below the newest content.
+    if (breakdown !== $view.lastElementChild) {
+      $view.appendChild(breakdown);
+    }
   }
   // Persistent, dismissible inline resume-failure banner — the headline fix.
   // Turns the silent Codex failure into a visible message with the real reason
@@ -6850,12 +6849,13 @@
       startCodexWakeBreakdown($view, wakeSid);
       return true;
     }
-    // Durable queue (thread busy): show the real reason inline. The cwd-missing
-    // queue has its own richer handling upstream — leave it alone.
+    // Durable queue (thread busy): the queued-steer tray card above the
+    // composer already says "Queued - <reason>" on the message itself, so a
+    // second yellow banner here was the same fact twice. Just drop the
+    // optimistic "Sending…" indicator and let the tray speak for itself.
+    // The cwd-missing queue has its own richer handling upstream — leave it.
     if ((data.queued || data.fallback === 'queue') && !data.cwd_missing) {
       clearOptimisticAgentIndicator($view);
-      const reason = data.queued_reason || data.error || 'the session is busy';
-      renderInlineWakeStatus($view, 'queued', '⏳ Queued: ' + reason);
       return true;
     }
     // Hard failure: persistent, dismissible inline error with the real reason
@@ -10310,6 +10310,7 @@
       div.appendChild(note);
     }
     const msg = pending.entry.queuedLabel;
+    note.title = msg;
     const paneState = paneByPaneId(pid);
     const queuedSource = (paneState && paneState.currentSession && paneState.currentSession.source)
       || (typeof sessionSourceByConv !== 'undefined' && sessionSourceByConv[convId])
@@ -54709,7 +54710,12 @@
       actions.append(cancel);
       if (steer) actions.appendChild(steer);
       actions.hidden = false;
-      el.appendChild(actions);
+      // Nest the action buttons inside the queued-reason note instead of
+      // appending them as a second block-level row below it — the note's
+      // own flex row (icon, text, ...actions) then reads as one compact
+      // line instead of a text row stacked over a button row.
+      const queuedNote = el.querySelector('.send-queued-note');
+      (queuedNote || el).appendChild(actions);
       tray.appendChild(el);
     });
     if (!queuedSteerCardCount(tray)) { tray.remove(); return; }
