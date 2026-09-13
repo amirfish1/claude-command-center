@@ -12,6 +12,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 import json
 import os
+import re
 import sqlite3
 import time
 import urllib.request
@@ -159,15 +160,30 @@ def grok_session_cwd(session_id):
         con.close()
 
 
-def _extract_grok_usage(session_id):
-    """Usage stats for a Grok session — model + reasoning effort only.
+def _grok_json_file(path):
+    """Parse a small JSON file in a session dir; {} on any failure."""
+    try:
+        data = json.loads(path.read_text(encoding="utf-8", errors="replace"))
+    except (OSError, json.JSONDecodeError, UnicodeError, ValueError):
+        return {}
+    return data if isinstance(data, dict) else {}
 
-    Grok's local session store (variant-A summary.json / variant-B db row)
-    doesn't record per-turn token usage the way kimi's wire.jsonl does, so
-    token counts stay at 0 (same "unknown" shape cursor's usage uses).
-    Without a model/engine here the conv-pane model pill has nothing to
-    render and disappears entirely — the pill's `if (displayModel)` guard
-    in app.js silently no-ops on an empty model (CCC-879).
+
+# Grok Build reports cost in "ticks": 1e10 costUsdTicks = $1 (documented on
+# PromptUsage in xai-grok-shell/src/extensions/notification.rs).
+_GROK_COST_TICKS_PER_USD = 1e10
+
+
+def _extract_grok_usage(session_id):
+    """Usage stats for a Grok session.
+
+    Variant-A session dirs carry two sidecars the TUI's status bar reads
+    (xai-grok-pager status_blocks.rs): ``usage.json`` — cumulative
+    input/output/cache/reasoning tokens, per-turn rows, modelCalls and
+    ``costUsdTicks`` (scrubbed/absent when billing was incomplete) — and
+    ``signals.json`` — ``contextTokensUsed``/``contextWindowTokens`` for
+    the context gauge. ``summary.json`` still supplies model + reasoning
+    effort; the variant-B db fallback only gives the model.
     """
     override = _core._get_session_override(session_id)
     result = {
@@ -191,14 +207,48 @@ def _extract_grok_usage(session_id):
         return result
     session_dir = _grok_session_dir(sid)
     if session_dir is not None:
+        summary = _grok_json_file(session_dir / "summary.json")
+        result["model"] = str(summary.get("current_model_id") or "")
+        if not result["reasoning_effort"]:
+            result["reasoning_effort"] = str(summary.get("reasoning_effort") or "")
+        usage = _grok_json_file(session_dir / "usage.json")
+        totals = usage.get("session") if isinstance(usage.get("session"), dict) else {}
+        turns = [t for t in usage.get("turns") or [] if isinstance(t, dict)]
+        def _u(d, key):
+            try:
+                return int(d.get(key) or 0)
+            except (TypeError, ValueError):
+                return 0
+        result["total_input_tokens"] = _u(totals, "inputTokens")
+        result["total_output_tokens"] = _u(totals, "outputTokens")
+        result["total_cache_read_tokens"] = _u(totals, "cachedReadTokens")
+        result["total_cache_creation_tokens"] = _u(totals, "cacheCreationTokens")
+        if turns:
+            per_turn = [_u(t, "inputTokens") for t in turns]
+            result["latest_input_tokens"] = per_turn[-1]
+            result["peak_input_tokens"] = max(per_turn)
+        ticks = totals.get("costUsdTicks")
+        if isinstance(ticks, (int, float)) and ticks > 0:
+            result["cost_usd"] = ticks / _GROK_COST_TICKS_PER_USD
+        signals = _grok_json_file(session_dir / "signals.json")
         try:
-            summary = json.loads((session_dir / "summary.json").read_text())
-            result["model"] = str(summary.get("current_model_id") or "")
-            if not result["reasoning_effort"]:
-                result["reasoning_effort"] = str(summary.get("reasoning_effort") or "")
-            return result
-        except (OSError, ValueError, json.JSONDecodeError):
+            result["context_limit"] = int(signals.get("contextWindowTokens") or 0)
+        except (TypeError, ValueError):
             pass
+        try:
+            used = int(signals.get("contextTokensUsed") or 0)
+            # Current window occupancy beats last-turn input sum for the
+            # context gauge (turn input sums count the whole prompt incl.
+            # cache reads — they can exceed the window).
+            if used:
+                result["latest_input_tokens"] = used
+        except (TypeError, ValueError):
+            pass
+        if not result["model"]:
+            result["model"] = str(
+                totals.get("primaryModelId") or signals.get("primaryModelId") or ""
+            )
+        return result
     con = _grok_db_connect()
     if con is None:
         return result
@@ -452,12 +502,29 @@ def _grok_session_dir_info(session_dir, cwd):
     jsonl = _grok_session_jsonl(session_dir)
     if jsonl is None and not summary:
         return None
+    signals = {}
+    sig_p = session_dir / "signals.json"
+    try:
+        if sig_p.is_file():
+            data = json.loads(sig_p.read_text(encoding="utf-8", errors="replace"))
+            if isinstance(data, dict):
+                signals = data
+    except (OSError, json.JSONDecodeError):
+        signals = {}
+    # Grok Build writes the display title as generated_title /
+    # session_summary (session_summary is the field the TUI's roster shows);
+    # `title`/`name` are the older spellings.
     title = str(
-        summary.get("title") or summary.get("summary") or summary.get("name") or ""
+        summary.get("title") or summary.get("generated_title")
+        or summary.get("session_summary") or summary.get("summary")
+        or summary.get("name") or ""
     ).strip()
     model = str(
-        summary.get("model") or summary.get("modelId") or summary.get("model_id") or ""
+        summary.get("current_model_id") or summary.get("model")
+        or summary.get("modelId") or summary.get("model_id") or ""
     ).strip()
+    git_branch = str(summary.get("head_branch") or "").strip()
+    reasoning_effort = str(summary.get("reasoning_effort") or "").strip()
     created = _grok_epoch(
         summary.get("createdAt") or summary.get("created_at")
         or summary.get("created") or summary.get("startedAt")
@@ -487,11 +554,31 @@ def _grok_session_dir_info(session_dir, cwd):
         created = updated
     if not updated:
         updated = created
+    if not cwd:
+        info = summary.get("info")
+        cwd = str(
+            (info or {}).get("cwd") if isinstance(info, dict) else ""
+        ).strip() or str(summary.get("git_root_dir") or "").strip().rstrip("/")
+    tools_used = signals.get("toolsUsed")
+    tools_used = {str(t).lower() for t in tools_used} if isinstance(tools_used, list) else set()
+    has_edit = bool(tools_used & {
+        "search_replace", "write_file", "edit", "multiedit", "write", "patch",
+    })
+    try:
+        has_commit = int(signals.get("gitCommitCount") or 0) > 0
+        has_push = int(signals.get("prCreatedCount") or 0) > 0
+    except (TypeError, ValueError):
+        has_commit = has_push = False
     return {
         "id": session_dir.name,
         "cwd": cwd,
         "title": title,
         "model": model,
+        "git_branch": git_branch,
+        "reasoning_effort": reasoning_effort,
+        "has_edit": has_edit,
+        "has_commit": has_commit,
+        "has_push": has_push,
         "created": created,
         "updated": updated,
         "archived": False,
@@ -508,7 +595,8 @@ def _grok_session_dir_info(session_dir, cwd):
 # lines per dir: 0.8 to 0.9 s per call at 112 sessions, all of it repeat
 # work. Mine once per (mtime_ns, size) of the files that feed the row.
 _GROK_DIR_INFO_CACHE = {}
-_GROK_DIR_INFO_FILES = ("summary.json", "updates.jsonl", "chat_history.jsonl")
+_GROK_DIR_INFO_FILES = ("summary.json", "updates.jsonl", "chat_history.jsonl",
+                        "signals.json")
 
 
 def _grok_session_dir_version(session_dir):
@@ -803,7 +891,7 @@ def find_grok_conversations(
             "engine": "grok",
             "timestamp": "",
             "branch": "",
-            "git_branch": "",
+            "git_branch": s.get("git_branch") or "",
             "first_message": first_message[:200],
             "display_name": display_name,
             "ai_title": title or None,
@@ -828,9 +916,9 @@ def find_grok_conversations(
             ),
             "effective_branch": None,
             "effective_kind": None,
-            "has_edit": False,
-            "has_commit": False,
-            "has_push": False,
+            "has_edit": bool(s.get("has_edit")),
+            "has_commit": bool(s.get("has_commit")),
+            "has_push": bool(s.get("has_push")),
             "last_edit_pos": 0,
             "last_commit_pos": 0,
             "last_push_pos": 0,
@@ -854,7 +942,7 @@ def find_grok_conversations(
             "needs_approval": False,
             "needs_approval_message": "",
             "model": s.get("model") or "",
-            "reasoning_effort": "",
+            "reasoning_effort": s.get("reasoning_effort") or "",
             "parent_session_id": s.get("parent_session_id") or "",
         })
     out.sort(key=lambda x: x.get("last_interacted") or x.get("modified") or 0, reverse=True)
@@ -881,7 +969,9 @@ def _grok_tool_args_detail(args):
     if not isinstance(args, dict):
         s = str(args).strip()
         return (s[:200], s if " " in s or "\n" in s else None)
-    for key in ("command", "query", "target_file", "path", "file_path", "description"):
+    for key in ("command", "query", "target_file", "target_directory",
+                "path", "file_path", "pattern", "url", "prompt",
+                "description"):
         if args.get(key):
             val = str(args[key]).strip()
             return (val[:200], val if key == "command" else None)
@@ -894,6 +984,330 @@ def _grok_tool_args_detail(args):
     return ("", None)
 
 
+def _grok_tool_meta(ev):
+    """The ``_meta["x.ai/tool"]`` dict on a Grok tool_call (name, kind,
+    label, namespace, read_only) or {} — Grok Build stamps it so clients can
+    show a friendly label instead of the raw function name."""
+    meta = ev.get("_meta")
+    if not isinstance(meta, dict):
+        return {}
+    tool = meta.get("x.ai/tool")
+    return tool if isinstance(tool, dict) else {}
+
+
+# ACP tool ``kind`` → the Claude-style display name the client's grouping
+# and summaries already understand (mirrors the live ACP path's
+# _acp_tool_name). Grok Build kinds: read/edit/delete/move/search/execute/
+# fetch/think/other/switch_mode.
+_GROK_TOOL_KIND_NAMES = {
+    "read": "Read",
+    "delete": "Edit",
+    "move": "Edit",
+    "search": "Grep",
+    "execute": "Bash",
+    "fetch": "WebFetch",
+}
+
+# Spellings Grok uses for its shell tool when the ``kind`` field is absent
+# (mirrors is_execute_tool_function_name in xai-grok-pager's acp/tracker.rs).
+_GROK_EXECUTE_TOOL_NAMES = frozenset({
+    "run_terminal_command", "run_terminal_cmd", "bash", "shell",
+    "execute", "run_command", "terminal", "run_shell", "run_bash",
+})
+
+# Raw Grok Build function names (chat_history.jsonl rows and older
+# updates.jsonl lines carry no ACP ``kind``/``_meta``) → Claude-style names.
+_GROK_FUNCTION_NAME_MAP = {
+    "read_file": "Read", "view_image": "Read", "list_dir": "Read",
+    "search_replace": "Edit", "edit_file": "Edit", "apply_patch": "Edit",
+    "write_file": "Write", "multi_edit": "MultiEdit",
+    "grep": "Grep", "glob": "Grep", "search_files": "Grep",
+    "web_search": "WebSearch", "x_search": "WebSearch",
+    "web_fetch": "WebFetch", "fetch_url": "WebFetch",
+}
+
+# Tool calls the TUI never puts in scrollback — they drive its todo/tasks/
+# goal panes instead. Mirrors the is_*_tool family in xai-grok-pager's
+# acp/tracker.rs (all historical spellings included so replayed sessions
+# from older builds stay clean).
+_GROK_PLUMBING_TITLES = frozenset({
+    # todo pane
+    "todo_write", "todowrite", "updating plan",
+    # subagent spawn — the subagent_spawned update carries the row
+    "task", "spawn_subagent",
+    # goal tracker
+    "update_goal", "workflow",
+    # background-task plumbing
+    "get_command_or_subagent_output", "kill_command_or_subagent",
+    "wait_commands_or_subagents",
+    "get_task_output", "kill_task", "wait_tasks",
+    "get_task_or_subagent_output", "kill_task_or_subagent",
+    "wait_tasks_or_subagents",
+    "awaitshell", "await",
+})
+_GROK_PLUMBING_PREFIXES = (
+    "await:", "sleep ", "wait tasks:", "kill task:", "goal:", "scheduler_",
+)
+_GROK_PLUMBING_VARIANTS = frozenset({
+    "todowrite", "task", "updategoal", "workflowsignal",
+    "taskoutput", "killtask", "waittasks",
+})
+
+
+def _grok_tool_is_plumbing(title, kind, raw_input):
+    """True for Grok Build internal plumbing tools the TUI keeps out of
+    scrollback (they drive the todo/tasks/goal panes and subagent blocks
+    instead). Mirrors xai-grok-pager acp/tracker.rs is_*_tool checks."""
+    title_l = str(title or "").strip()
+    inp = raw_input if isinstance(raw_input, dict) else {}
+    variant = inp.get("variant")
+    variant_l = variant.lower() if isinstance(variant, str) else ""
+    if variant_l in _GROK_PLUMBING_VARIANTS or variant_l.startswith("scheduler"):
+        return True
+    if variant_l == "workflow" or title_l.lower() == "workflow":
+        # validate_only calls stay visible — they don't mutate anything.
+        validate_only = (
+            title_l.startswith("Validating workflow")
+            or bool(inp.get("validate_only"))
+        )
+        return not validate_only
+    if title_l.lower() in _GROK_PLUMBING_TITLES:
+        return True
+    if title_l.lower().startswith(_GROK_PLUMBING_PREFIXES):
+        return True
+    # A bash call with is_background=true defers to the bg-task surface;
+    # the task_backgrounded update is the row that should exist.
+    looks_execute = (
+        str(kind or "").lower() == "execute"
+        or title_l.lower() in _GROK_EXECUTE_TOOL_NAMES
+    )
+    if looks_execute and (inp.get("is_background") is True
+                          or inp.get("background") is True):
+        return True
+    return False
+
+
+def _grok_tool_display_name(title, kind, meta):
+    """Stable display name for a Grok tool call: ACP ``kind`` → Claude-style
+    name first (client grouping/summaries key on these), then the x.ai meta
+    label ("Read"), then the raw title."""
+    k = str(kind or "").lower()
+    t = str(title or "").strip()
+    if k == "edit":
+        return "Write" if t.lower().startswith("write") else "Edit"
+    if k == "execute" or (not k and t.lower() in _GROK_EXECUTE_TOOL_NAMES):
+        return "Bash"
+    mapped = _GROK_TOOL_KIND_NAMES.get(k)
+    if mapped:
+        return mapped
+    mapped = _GROK_FUNCTION_NAME_MAP.get(t.lower())
+    if mapped:
+        return mapped
+    label = str((meta or {}).get("label") or "").strip()
+    if label:
+        return label
+    # No stable category resolved — callers keep the raw title (create) or
+    # the existing name (update); never promote a humanized update title
+    # like "Read `/x`" into the name slot.
+    return ""
+
+
+def _grok_title_detail(name, title):
+    """Humanized detail from an update's display title ("Read `/x/y`" →
+    "/x/y" when the row already says "Read")."""
+    t = str(title or "").strip().replace("`", "")
+    if not t:
+        return ""
+    if name and t.lower().startswith(name.lower() + " "):
+        t = t[len(name) + 1:].strip()
+    return t[:200]
+
+
+def _grok_tool_content_diff(ev):
+    """First {type:'diff', path, oldText, newText} content block on a tool
+    call/update — ACP edit calls carry the change inline (same shape the
+    live ACP path extracts via _acp_tool_content_diff)."""
+    for c in ev.get("content") or []:
+        if isinstance(c, dict) and c.get("type") == "diff":
+            old = c.get("oldText")
+            new = c.get("newText")
+            return {
+                "path": str(c.get("path") or ""),
+                "oldText": old if isinstance(old, str) else "",
+                "newText": new if isinstance(new, str) else "",
+            }
+    return None
+
+
+def _grok_new_tool_block(ev):
+    """(block, merge_state) for a Grok tool_call — or (None, None) when the
+    call is internal plumbing the TUI suppresses. ``merge_state`` holds the
+    fields a later tool_call_update can override (title, kind, meta,
+    rawInput); the wire block itself stays clean."""
+    title = str(
+        ev.get("title") or ev.get("name") or ev.get("toolName") or ""
+    ).strip()
+    kind = str(ev.get("kind") or "")
+    meta = _grok_tool_meta(ev)
+    raw_input = (
+        ev.get("rawInput") or ev.get("input") or ev.get("arguments") or {}
+    )
+    if not isinstance(raw_input, dict):
+        raw_input = {}
+    if _grok_tool_is_plumbing(title, kind or meta.get("kind"), raw_input):
+        return None, None
+    name = _grok_tool_display_name(title, kind, meta) or title or "tool"
+    detail, command = _grok_tool_args_detail(raw_input)
+    if not detail:
+        detail = _grok_title_detail(name, title)
+    block = {
+        "kind": "tool_use",
+        "name": name,
+        "detail": detail,
+        "id": str(ev.get("toolCallId") or ev.get("id") or ""),
+        "command": command,
+        "command_kind": None,
+    }
+    status = str(ev.get("status") or "").lower()
+    if status in ("completed", "failed"):
+        block["tool_status"] = status
+    if raw_input:
+        block["has_input"] = True
+        block["input"] = _core._tool_input_payload(raw_input)
+    diff = _grok_tool_content_diff(ev)
+    if diff and name in ("Edit", "Write"):
+        block["edit_input"] = {
+            "old_string": diff["oldText"], "new_string": diff["newText"],
+        }
+    state = {"title": title, "kind": kind, "meta": meta, "raw_input": raw_input}
+    return block, state
+
+
+def _grok_apply_tool_update(state, block, ev):
+    """Fold one tool_call_update into an emitted tool_use block (the TUI's
+    merge_tool_call_update: update fields win over the create's)."""
+    title = str(ev.get("title") or "").strip()
+    kind = str(ev.get("kind") or "")
+    if title:
+        state["title"] = title
+    if kind:
+        state["kind"] = kind
+    raw_input = ev.get("rawInput") or ev.get("input")
+    if isinstance(raw_input, dict) and raw_input:
+        state["raw_input"] = raw_input
+    meta = _grok_tool_meta(ev) or state.get("meta") or {}
+    status = str(ev.get("status") or "").lower()
+    if status in ("completed", "failed"):
+        block["tool_status"] = status
+    name = _grok_tool_display_name(state["title"], state["kind"], meta)
+    if name:
+        block["name"] = name
+    detail, command = _grok_tool_args_detail(state["raw_input"])
+    if not detail:
+        detail = _grok_title_detail(block["name"], state["title"])
+    if detail:
+        block["detail"] = detail
+    if command:
+        block["command"] = command
+    if state["raw_input"]:
+        block["has_input"] = True
+        block["input"] = _core._tool_input_payload(state["raw_input"])
+    diff = _grok_tool_content_diff(ev)
+    if diff and block["name"] in ("Edit", "Write"):
+        block["edit_input"] = {
+            "old_string": diff["oldText"], "new_string": diff["newText"],
+        }
+
+
+def _grok_failed_hook_lines(ev):
+    """One scrollback line per FAILED hook run — successes leave no trace,
+    matching the TUI (xai-grok-pager failed_hook_line: "{event} hook ({name})
+    failed, ignored: {error}"). `blocked` runs are denies the shell already
+    annotates; skipped runs render nothing."""
+    event_name = str(ev.get("event_name") or "").strip()
+    lines = []
+    for run in ev.get("runs") or []:
+        if not isinstance(run, dict):
+            continue
+        status = run.get("status")
+        if not isinstance(status, dict):
+            continue
+        if str(status.get("status") or "").lower() != "failed" or status.get("blocked"):
+            continue
+        name = str(run.get("name") or "").strip()
+        short = name.split(":")[-1].split("[")[0].strip() if name else ""
+        subject = f"{event_name} hook ({short})" if short else f"{event_name} hook"
+        err = str(status.get("error") or "").splitlines()[0].strip() if status.get("error") else ""
+        lines.append(f"{subject} failed, ignored" + (f": {err}" if err else ""))
+    return lines
+
+
+_ANSI_CSI_RE = re.compile(r"\x1b\[[0-9;?<>=]*[a-zA-Z]")
+_ANSI_OSC_RE = re.compile(r"\x1b\][^\x07\x1b]*(\x07|\x1b\\)")
+
+
+def _grok_decode_bytes(val):
+    """Decode a Grok byte-array output field ([84, 114, ...] → text),
+    stripping ANSI escapes — CLI tools colorize their stdout and CCC renders
+    tool output as plain text."""
+    if not (isinstance(val, list) and val):
+        return ""
+    if not all(isinstance(b, int) for b in val[:64]):
+        return ""
+    try:
+        text = bytes(val).decode("utf-8", "replace")
+    except (ValueError, OverflowError):
+        return ""
+    return _ANSI_OSC_RE.sub("", _ANSI_CSI_RE.sub("", text))
+
+
+def _grok_raw_output_text(raw):
+    """(text, is_error) for a Grok `rawOutput` envelope — the typed payloads
+    look like {"type":"Bash","output":[bytes],"exit_code":0} or
+    {"type":"ReadFile","FileContent":{"content":"..."}}. Unknown shapes fall
+    back to compact JSON."""
+    if isinstance(raw, str):
+        return _ANSI_OSC_RE.sub("", _ANSI_CSI_RE.sub("", raw)), False
+    if isinstance(raw, list):
+        return _grok_decode_bytes(raw), False
+    if not isinstance(raw, dict):
+        return "", False
+    is_error = False
+    ec = raw.get("exit_code")
+    if isinstance(ec, int) and ec != 0:
+        is_error = True
+    # Flat output fields first — {"type":"Bash","output":[bytes],...} keeps
+    # them at the top level, next to scalar metadata like command/exit_code.
+    for k in ("output", "stdout", "stderr"):
+        text = _grok_decode_bytes(raw.get(k))
+        if text.strip():
+            return text, is_error
+    # Typed variant payload: the sibling key of "type" (FileContent,
+    # FileNotFound, EditsApplied, TodosUpdated, ...). Dicts carry fields;
+    # bare strings are error messages.
+    scalars = {"type", "command", "description", "current_dir", "workdir",
+               "exit_code", "file_matches", "match_count", "output",
+               "stdout", "stderr"}
+    payload = None
+    for k, v in raw.items():
+        if k not in scalars:
+            payload = v
+            break
+    if isinstance(payload, str):
+        return payload, True
+    if isinstance(payload, dict):
+        for k in ("content", "summary_for_prompt", "text", "message"):
+            if isinstance(payload.get(k), str) and payload[k].strip():
+                return payload[k], is_error
+        for k in ("output", "stdout", "stderr"):
+            text = _grok_decode_bytes(payload.get(k))
+            if text.strip():
+                return text, is_error
+        if {"old_string", "new_string"} <= set(payload):
+            return "(edit applied)", is_error
+    return "", is_error
+
+
 def _grok_tool_result_text(ev):
     """(text, is_error) for a Grok tool_call_update event."""
     status = str(ev.get("status") or "").lower()
@@ -901,7 +1315,14 @@ def _grok_tool_result_text(ev):
     error_text = _grok_content_text(ev.get("error"))
     if error_text:
         return error_text[:1600], True
-    for key in ("rawOutput", "output", "result", "content"):
+    raw = ev.get("rawOutput")
+    if raw is not None:
+        text, raw_err = _grok_raw_output_text(raw)
+        if text:
+            return text[:1600], is_error or raw_err
+        if raw_err:
+            return "Tool call failed", True
+    for key in ("output", "result", "content"):
         val = ev.get(key)
         if val is None:
             continue
@@ -924,38 +1345,72 @@ def _grok_tool_result_text(ev):
     return "", False
 
 
-def _grok_hook_summary(ev):
-    """Compact human-readable summary of a Grok hook_execution event."""
-    event_name = str(ev.get("event_name") or "").strip()
-    tool_name = str(ev.get("tool_name") or "").strip()
-    runs = ev.get("runs") or []
-    ok = 0
-    failed = 0
-    failed_names = []
-    for run in runs:
-        if not isinstance(run, dict):
+def _grok_duration_s(ms):
+    """'1m 15s'-style duration from milliseconds, '' when absent/invalid."""
+    try:
+        s = int(float(ms) / 1000.0)
+    except (TypeError, ValueError):
+        return ""
+    if s <= 0:
+        return ""
+    if s < 60:
+        return f"{s}s"
+    return f"{s // 60}m {s % 60}s"
+
+
+def _grok_plan_entries(ev):
+    """Normalized plan entries from a Grok `plan` update (whole-list
+    replace, last-wins — same wire shape as ACP plan snapshots)."""
+    entries = ev.get("entries")
+    if not isinstance(entries, list):
+        return []
+    norm = []
+    for e in entries:
+        if not isinstance(e, dict):
             continue
-        status = run.get("status")
-        if isinstance(status, dict):
-            status = status.get("status")
-        name = str(run.get("name") or "").strip()
-        if str(status or "").lower() in ("success", "ok"):
-            ok += 1
-        else:
-            failed += 1
-            short = name.split(":")[-1].split("[")[0] if name else ""
-            if short and short not in failed_names:
-                failed_names.append(short)
-    parts = []
-    if event_name:
-        parts.append(event_name)
-    if tool_name:
-        parts.append(tool_name)
-    if ok or failed:
-        parts.append(f"{ok} ok, {failed} failed")
-    if failed_names:
-        parts.append("failed: " + ", ".join(failed_names[:3]))
-    return " · ".join(parts)
+        content = str(e.get("content") or "").strip()
+        if not content:
+            continue
+        norm.append({
+            "content": content[:300],
+            "status": str(e.get("status") or "pending"),
+            "priority": str(e.get("priority") or ""),
+        })
+    return norm
+
+
+def _grok_subagent_text(ev, finished=False):
+    """One-line summary for subagent_spawned / subagent_finished."""
+    if not finished:
+        desc = str(ev.get("description") or "").strip()
+        stype = str(ev.get("subagent_type") or "").strip()
+        model = str(ev.get("model") or "").strip()
+        tail = ", ".join(p for p in (stype, model) if p)
+        return f"Subagent spawned: {desc or 'subagent'}" + (f" ({tail})" if tail else "")
+    status = str(ev.get("status") or "finished").strip()
+    stats = []
+    try:
+        n = int(ev.get("tool_calls") or 0)
+        if n:
+            stats.append(f"{n} tool call{'s' if n != 1 else ''}")
+    except (TypeError, ValueError):
+        pass
+    try:
+        n = int(ev.get("turns") or 0)
+        if n:
+            stats.append(f"{n} turn{'s' if n != 1 else ''}")
+    except (TypeError, ValueError):
+        pass
+    dur = _grok_duration_s(ev.get("duration_ms"))
+    if dur:
+        stats.append(dur)
+    err = str(ev.get("error") or "").strip()
+    text = f"Subagent {status}"
+    if stats:
+        text += " — " + ", ".join(stats)
+    if err:
+        text += f": {err[:160]}"
+    return text
 
 
 def _parse_grok_updates_file(path):
@@ -963,12 +1418,48 @@ def _parse_grok_updates_file(path):
     session-update stream). Defensive by design: unknown update kinds are
     skipped and a malformed line never aborts the parse.
 
-    Newer Grok Build wraps each line in a JSON-RPC envelope and interleaves
-    `agent_thought_chunk`, `hook_execution`, `image_dropped`, and
-    `retry_state` updates alongside tool calls; all of these are surfaced so
-    the conversation view matches the terminal."""
+    Rendering mirrors the Grok Build TUI (xai-org/grok-build,
+    xai-grok-pager's acp/tracker.rs + acp_handler/session_notification.rs):
+
+    * tool_call + tool_call_update merge into ONE row per toolCallId — the
+      update's humanized title ("Read `/path`") and terminal status fold
+      into the emitted block; the completing update also emits a
+      tool_result so output folds under the row and live tails still land.
+    * Internal plumbing tools (todo/task/goal/scheduler/workflow/bg) never
+      hit scrollback — the TUI routes them to dedicated panes.
+    * hook_execution renders ONLY failed runs ("… failed, ignored: err");
+      a batch of green hooks is spinner state, not transcript.
+    * plan updates render as plan cards (deduped — the wire is last-wins),
+      subagent/task/compaction lifecycle as compact system rows.
+    * turn_completed carries token/cost usage — it feeds usage.json and
+      _extract_grok_usage, not the transcript.
+    """
     events = []
     line = 0
+    tools = {}          # toolCallId -> {"event": dict, "suppressed": bool}
+    orphan_updates = {}  # toolCallId -> [update dicts] seen before create
+    prompt_index = {}    # prompt_id -> ordinal (for rewind markers)
+    prev_plan_key = None
+    prev_goal_key = None
+
+    def _pidx(ev):
+        pid = ev.get("prompt_id") or ev.get("promptId")
+        if not pid:
+            return None
+        pid = str(pid)
+        if pid not in prompt_index:
+            prompt_index[pid] = len(prompt_index)
+        return prompt_index[pid]
+
+    def _emit(ev_dict, ts, pidx=None):
+        nonlocal line
+        line += 1
+        ev_dict["line"] = line
+        ev_dict["ts"] = ts
+        if pidx is not None:
+            ev_dict["_pidx"] = pidx
+        events.append(ev_dict)
+
     try:
         with open(path, "r", encoding="utf-8", errors="replace") as f:
             for raw in f:
@@ -992,35 +1483,29 @@ def _parse_grok_updates_file(path):
                         ev["timestamp"] = ts_top
                 kind = str(ev.get("sessionUpdate") or "").lower()
                 ts = _grok_event_ts(ev)
+                pidx = _pidx(ev)
                 if "user" in kind:
                     text = _grok_content_text(ev.get("content")).strip()
                     if not text:
                         continue
-                    line += 1
-                    events.append({
-                        "line": line, "ts": ts, "type": "user_text",
-                        "text": text, "images": [],
-                    })
+                    _emit({
+                        "type": "user_text", "text": text, "images": [],
+                    }, ts, pidx)
                 elif "thought" in kind:
                     text = _grok_content_text(ev.get("content")).strip()
                     if not text:
                         continue
-                    line += 1
-                    events.append({
-                        "line": line, "ts": ts, "type": "assistant",
-                        "message_id": f"grok-{line}",
+                    _emit({
+                        "type": "assistant", "message_id": f"grok-{line + 1}",
                         "blocks": [{"kind": "thinking", "text": text}],
-                    })
+                    }, ts, pidx)
                 elif "hook" in kind and "execution" in kind:
-                    summary = _grok_hook_summary(ev)
-                    if not summary:
-                        continue
-                    line += 1
-                    events.append({
-                        "line": line, "ts": ts, "type": "system",
-                        "subtype": "grok_hook_execution",
-                        "text": summary,
-                    })
+                    # TUI: one line per failed run, nothing for all-green.
+                    for fail_line in _grok_failed_hook_lines(ev):
+                        _emit({
+                            "type": "system", "subtype": "grok_hook_execution",
+                            "text": fail_line,
+                        }, ts, pidx)
                 elif kind == "image_dropped":
                     notes = ev.get("notes") or []
                     if isinstance(notes, str):
@@ -1028,12 +1513,10 @@ def _parse_grok_updates_file(path):
                     note_text = " ".join(str(n) for n in notes if n).strip()
                     if not note_text:
                         continue
-                    line += 1
-                    events.append({
-                        "line": line, "ts": ts, "type": "system",
-                        "subtype": "grok_note",
+                    _emit({
+                        "type": "system", "subtype": "grok_note",
                         "text": note_text,
-                    })
+                    }, ts, pidx)
                 elif kind == "retry_state":
                     reason = str(ev.get("reason") or "").strip()
                     if not reason:
@@ -1043,62 +1526,286 @@ def _parse_grok_updates_file(path):
                     label = "Retrying"
                     if attempt is not None and max_retries is not None:
                         label += f" ({attempt}/{max_retries})"
-                    line += 1
-                    events.append({
-                        "line": line, "ts": ts, "type": "system",
-                        "subtype": "grok_retry",
+                    _emit({
+                        "type": "system", "subtype": "grok_retry",
                         "text": f"{label}: {reason}",
-                    })
-                elif "tool" in kind and (
-                    "result" in kind or "update" in kind
-                    or "complete" in kind or "finish" in kind
-                ):
+                    }, ts, pidx)
+                elif kind == "plan":
+                    norm = _grok_plan_entries(ev)
+                    if not norm:
+                        continue
+                    key = json.dumps(norm, sort_keys=True)
+                    if key == prev_plan_key:
+                        continue
+                    prev_plan_key = key
+                    _emit({
+                        "type": "assistant", "message_id": f"grok-{line + 1}",
+                        "blocks": [{"kind": "plan", "entries": norm}],
+                    }, ts, pidx)
+                elif kind == "tool_call_update":
+                    tid = str(ev.get("toolCallId") or ev.get("id") or "")
+                    if not tid:
+                        continue
+                    tool = tools.get(tid)
+                    if tool is None:
+                        # Update before its create — stash for the merge the
+                        # TUI performs when the late tool_call lands.
+                        orphan_updates.setdefault(tid, []).append(ev)
+                        continue
+                    if tool.get("suppressed"):
+                        continue
+                    _grok_apply_tool_update(tool["state"], tool["block"], ev)
+                    status = str(ev.get("status") or "").lower()
+                    if status not in ("completed", "failed"):
+                        continue
                     result_text, is_error = _grok_tool_result_text(ev)
+                    if status == "failed":
+                        is_error = True
                     if not result_text and not is_error:
                         continue
-                    line += 1
-                    events.append({
-                        "line": line, "ts": ts, "type": "tool_result",
+                    _emit({
+                        "type": "tool_result",
                         "text": str(result_text)[:1600],
-                        "tool_use_id": str(
-                            ev.get("toolCallId") or ev.get("id") or ""
-                        ),
+                        "tool_use_id": tid,
                         "is_error": is_error,
-                    })
-                elif "tool" in kind:
-                    name = str(
-                        ev.get("title") or ev.get("name")
-                        or ev.get("toolName") or ev.get("kind") or ""
-                    )
-                    args = ev.get("rawInput") or ev.get("input") or ev.get("arguments") or {}
-                    detail, command = _grok_tool_args_detail(args)
-                    line += 1
-                    events.append({
-                        "line": line, "ts": ts, "type": "assistant",
-                        "message_id": f"grok-{line}",
-                        "blocks": [{
-                            "kind": "tool_use",
-                            "name": name,
-                            "detail": detail,
-                            "id": str(ev.get("toolCallId") or ev.get("id") or ""),
-                            "command": command,
-                            "command_kind": None,
-                        }],
-                    })
+                    }, ts, pidx)
+                elif kind == "tool_call":
+                    tid = str(ev.get("toolCallId") or ev.get("id") or "")
+                    block, state = _grok_new_tool_block(ev)
+                    if block is None:
+                        if tid:
+                            tools[tid] = {"suppressed": True}
+                        continue
+                    for orphan in orphan_updates.pop(tid, []):
+                        _grok_apply_tool_update(state, block, orphan)
+                    ev_dict = {
+                        "type": "assistant", "message_id": f"grok-{line + 1}",
+                        "blocks": [block],
+                    }
+                    _emit(ev_dict, ts, pidx)
+                    if tid:
+                        tools[tid] = {
+                            "event": ev_dict, "block": block, "state": state,
+                        }
+                elif kind == "subagent_spawned":
+                    _emit({
+                        "type": "system", "subtype": "grok_subagent",
+                        "text": _grok_subagent_text(ev),
+                    }, ts, pidx)
+                elif kind == "subagent_finished":
+                    _emit({
+                        "type": "system", "subtype": "grok_subagent",
+                        "text": _grok_subagent_text(ev, finished=True),
+                    }, ts, pidx)
+                elif kind == "task_backgrounded":
+                    desc = str(ev.get("description") or "").strip()
+                    cmd = str(ev.get("command") or "").splitlines()[0].strip()
+                    detail = desc or cmd
+                    _emit({
+                        "type": "system", "subtype": "grok_task",
+                        "text": "Backgrounded"
+                        + (f": {detail[:160]}" if detail else " command"),
+                    }, ts, pidx)
+                elif kind == "task_completed":
+                    snap = ev.get("task_snapshot")
+                    snap = snap if isinstance(snap, dict) else {}
+                    desc = str(
+                        snap.get("description") or snap.get("command") or ""
+                    ).splitlines()[0].strip()
+                    _emit({
+                        "type": "system", "subtype": "grok_task",
+                        "text": "Task completed"
+                        + (f": {desc[:160]}" if desc else ""),
+                    }, ts, pidx)
+                elif kind == "background_tasks":
+                    tasks = ev.get("tasks")
+                    n = len(tasks) if isinstance(tasks, list) else 0
+                    if not n:
+                        continue
+                    _emit({
+                        "type": "system", "subtype": "grok_task",
+                        "text": f"{n} background task{'s' if n != 1 else ''} running",
+                    }, ts, pidx)
+                elif kind == "session_recap":
+                    summary = str(ev.get("summary") or "").strip()
+                    if not summary:
+                        continue
+                    _emit({
+                        "type": "system", "subtype": "grok_recap",
+                        "text": summary[:400],
+                    }, ts, pidx)
+                elif kind == "current_mode_update":
+                    mode = str(ev.get("currentModeId") or "").strip()
+                    if not mode:
+                        continue
+                    _emit({
+                        "type": "system", "subtype": "grok_mode",
+                        "text": f"Mode: {mode}",
+                    }, ts, pidx)
+                elif kind == "goal_updated":
+                    objective = str(ev.get("objective") or "").strip()
+                    if not objective:
+                        continue
+                    key = json.dumps([
+                        objective,
+                        ev.get("status"), ev.get("phase"),
+                        ev.get("completed_deliverables"),
+                        ev.get("total_deliverables"),
+                    ])
+                    if key == prev_goal_key:
+                        continue
+                    prev_goal_key = key
+                    status = str(ev.get("status") or "").strip()
+                    phase = str(ev.get("phase") or "").strip()
+                    label = " · ".join(p for p in (status, phase) if p)
+                    _emit({
+                        "type": "system", "subtype": "grok_goal",
+                        "text": f"Goal{(' ' + label) if label else ''}: {objective[:160]}",
+                    }, ts, pidx)
+                elif kind == "model_auto_switched":
+                    prev = str(ev.get("previous_model_id") or "").strip()
+                    new = str(ev.get("new_model_id") or "").strip()
+                    reason = str(ev.get("reason") or "").strip()
+                    _emit({
+                        "type": "system", "subtype": "grok_mode",
+                        "text": f"Model switched: {prev or '?'} → {new or '?'}"
+                        + (f" ({reason[:120]})" if reason else ""),
+                    }, ts, pidx)
+                elif kind == "turn_completed":
+                    # Usage lives in usage.json (fed to _extract_grok_usage);
+                    # the transcript only marks abnormal turn ends, like the
+                    # TUI's stop_cancelled marker.
+                    stop = str(ev.get("stop_reason") or "").strip().lower()
+                    if stop and stop not in ("end_turn", "stop", "stop_sequence",
+                                             "completed", "success"):
+                        dur = _grok_duration_s(ev.get("elapsed_ms"))
+                        _emit({
+                            "type": "system", "subtype": "grok_turn_end",
+                            "text": f"Turn {stop}" + (f" after {dur}" if dur else ""),
+                        }, ts, pidx)
+                elif kind == "auto_compact_started":
+                    pct = ev.get("percentage")
+                    reason = str(ev.get("reason") or "").strip()
+                    _emit({
+                        "type": "system", "subtype": "grok_compact",
+                        "text": "Compacting context"
+                        + (f" ({pct}% full)" if pct is not None else "")
+                        + (f" — {reason[:120]}" if reason else ""),
+                    }, ts, pidx)
+                elif kind == "auto_compact_completed":
+                    before = ev.get("tokens_before")
+                    after = ev.get("tokens_after")
+                    span = ""
+                    if before is not None and after is not None:
+                        span = f" ({before}→{after} tokens)"
+                    _emit({
+                        "type": "system", "subtype": "grok_compact",
+                        "text": f"Context compacted{span}",
+                    }, ts, pidx)
+                elif kind == "auto_compact_failed":
+                    err = str(ev.get("error") or "").strip()
+                    _emit({
+                        "type": "system", "subtype": "grok_compact",
+                        "text": "Context compaction failed"
+                        + (f": {err[:160]}" if err else ""),
+                    }, ts, pidx)
+                elif kind == "compaction_checkpoint":
+                    _emit({
+                        "type": "system", "subtype": "grok_compact",
+                        "text": "Context compacted",
+                    }, ts, pidx)
+                elif kind == "auto_recovery_started":
+                    attempt = ev.get("attempt")
+                    maxr = ev.get("max_retries")
+                    err = str(ev.get("error") or "").strip()
+                    label = "Auto-recovery"
+                    if attempt is not None and maxr is not None:
+                        label += f" ({attempt}/{maxr})"
+                    _emit({
+                        "type": "system", "subtype": "grok_retry",
+                        "text": label + (f": {err[:160]}" if err else ""),
+                    }, ts, pidx)
+                elif kind == "auto_recovery_exhausted":
+                    err = str(ev.get("error") or "").strip()
+                    _emit({
+                        "type": "system", "subtype": "grok_retry",
+                        "text": "Auto-recovery exhausted"
+                        + (f": {err[:160]}" if err else ""),
+                    }, ts, pidx)
+                elif kind == "scheduled_task_created":
+                    sched = str(ev.get("human_schedule") or "").strip()
+                    prompt = str(ev.get("prompt") or "").strip()
+                    _emit({
+                        "type": "system", "subtype": "grok_task",
+                        "text": "Scheduled task"
+                        + (f" ({sched})" if sched else "")
+                        + (f": {prompt[:120]}" if prompt else ""),
+                    }, ts, pidx)
+                elif kind == "scheduled_task_fired":
+                    prompt = str(ev.get("prompt") or "").strip()
+                    _emit({
+                        "type": "system", "subtype": "grok_task",
+                        "text": "Scheduled task fired"
+                        + (f": {prompt[:120]}" if prompt else ""),
+                    }, ts, pidx)
+                elif kind == "scheduled_task_deleted":
+                    _emit({
+                        "type": "system", "subtype": "grok_task",
+                        "text": "Scheduled task removed",
+                    }, ts, pidx)
+                elif kind == "rewind_marker":
+                    # updates.jsonl is append-only: rewinds branch the
+                    # timeline — drop events past target_prompt_index (the
+                    # TUI's replay does the same) and mark the boundary.
+                    try:
+                        target = int(ev.get("target_prompt_index"))
+                    except (TypeError, ValueError):
+                        continue
+                    kept = [
+                        e for e in events
+                        if e.get("_pidx") is None or e["_pidx"] <= target
+                    ]
+                    if len(kept) != len(events):
+                        kept_ids = {id(e) for e in kept}
+                        for t in tools.values():
+                            tev = t.get("event")
+                            if tev is not None and id(tev) not in kept_ids:
+                                t["suppressed"] = True
+                        events[:] = kept
+                        for pid in [p for p, i in prompt_index.items() if i > target]:
+                            prompt_index.pop(pid, None)
+                    _emit({
+                        "type": "system", "subtype": "grok_rewind",
+                        "text": f"Session rewound to prompt {target}",
+                    }, ts, pidx)
+                elif kind == "diff_review":
+                    content = ev.get("content")
+                    n = len(content) if isinstance(content, list) else 0
+                    _emit({
+                        "type": "system", "subtype": "grok_review",
+                        "text": f"Diff review requested ({n} file{'s' if n != 1 else ''})",
+                    }, ts, pidx)
                 elif "agent" in kind or "assistant" in kind or "message" in kind:
                     text = _grok_content_text(ev.get("content")).strip()
                     if not text:
                         continue
-                    line += 1
-                    events.append({
-                        "line": line, "ts": ts, "type": "assistant",
-                        "message_id": f"grok-{line}",
+                    _emit({
+                        "type": "assistant", "message_id": f"grok-{line + 1}",
                         "blocks": [{"kind": "text", "text": text}],
-                    })
-                # turn_completed, plan updates, usage signals, and unknown future
-                # kinds carry no useful transcript text on their own — skip.
+                    }, ts, pidx)
+                # Persist-only / status-plane kinds intentionally skipped:
+                # hook_run_started and hook batches' successes are spinner
+                # state; subagent_progress is rate-limited; session_status,
+                # last_turn_summary, usage_update, session_info_update,
+                # available_commands_update, config_option_update feed the
+                # status bar; memory_*, hooks_changed, plugins_changed,
+                # feedback_request, relay_sync_status, monitor_event,
+                # session_recap_unavailable, auto_compact_cancelled and any
+                # unknown future kinds carry no transcript text of their own.
     except OSError:
         pass
+    for e in events:
+        e.pop("_pidx", None)
     return events, line
 
 
@@ -1159,22 +1866,19 @@ def _parse_grok_chat_history_file(path):
                     for tc in tool_calls:
                         if not isinstance(tc, dict):
                             continue
-                        name = str(tc.get("name") or "").strip()
                         args = tc.get("arguments") or tc.get("input") or {}
                         if isinstance(args, str):
                             try:
                                 args = json.loads(args)
                             except json.JSONDecodeError:
                                 args = {"arguments": args}
-                        detail, command = _grok_tool_args_detail(args)
-                        blocks.append({
-                            "kind": "tool_use",
-                            "name": name,
-                            "detail": detail,
-                            "id": str(tc.get("id") or ""),
-                            "command": command,
-                            "command_kind": None,
+                        block, _state = _grok_new_tool_block({
+                            "title": str(tc.get("name") or "").strip(),
+                            "rawInput": args,
+                            "toolCallId": str(tc.get("id") or ""),
                         })
+                        if block is not None:
+                            blocks.append(block)
                     if not blocks:
                         continue
                     line += 1

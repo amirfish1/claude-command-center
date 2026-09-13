@@ -167,9 +167,13 @@ def test_variant_a_transcript_from_updates_jsonl(monkeypatch, tmp_path):
     assert events[0]["text"] == "route the plasma relay"
     tool_block = events[1]["blocks"][0]
     assert tool_block["kind"] == "tool_use"
-    assert tool_block["name"] == "run_shell"
+    # ACP kind/name maps onto Claude-style display names: run_shell is a
+    # shell call -> "Bash" (xai-grok-pager renders the same verb).
+    assert tool_block["name"] == "Bash"
     assert tool_block["detail"] == "ls fake"
     assert tool_block["command"] == "ls fake"
+    # The completed tool_call_update merged into the emitted block.
+    assert tool_block["tool_status"] == "completed"
     assert events[2]["text"] == "fake.txt"
     assert events[2]["is_error"] is False
     assert events[3]["blocks"][0]["text"] == "Relay routed."
@@ -472,11 +476,10 @@ def test_variant_a_transcript_from_updates_jsonl_rpc_envelope(monkeypatch, tmp_p
     events = result["events"]
     types = [e["type"] for e in events]
     assert types == [
-        "system",       # session_start hook summary
+        "system",       # session_start hook FAILURE line (failures only)
         "user_text",
         "assistant",    # thinking
         "assistant",    # tool_call run_shell
-        "system",       # pre_tool_use hook summary
         "tool_result",
         "system",       # image_dropped
         "system",       # retry_state
@@ -484,17 +487,19 @@ def test_variant_a_transcript_from_updates_jsonl_rpc_envelope(monkeypatch, tmp_p
     ]
     assert events[0]["subtype"] == "grok_hook_execution"
     assert "session_start" in events[0]["text"]
-    assert "1 ok, 1 failed" in events[0]["text"]
+    # TUI-parity: only the failed run gets a line; the successful run and
+    # the all-success pre_tool_use batch produce no scrollback.
+    assert "failed, ignored" in events[0]["text"]
+    assert "not found" in events[0]["text"]
+    assert not any("pre_tool_use" in str(e.get("text")) for e in events)
     assert events[2]["blocks"][0]["kind"] == "thinking"
     assert "plasma relay" in events[2]["blocks"][0]["text"]
-    assert events[3]["blocks"][0]["name"] == "run_shell"
-    assert events[4]["subtype"] == "grok_hook_execution"
-    assert "pre_tool_use" in events[4]["text"]
-    assert events[5]["text"] == "fake.txt"
-    assert events[6]["subtype"] == "grok_note"
-    assert "image" in events[6]["text"]
-    assert events[7]["subtype"] == "grok_retry"
-    assert "Retrying (1/5)" in events[7]["text"]
+    assert events[3]["blocks"][0]["name"] == "Bash"
+    assert events[4]["text"] == "fake.txt"
+    assert events[5]["subtype"] == "grok_note"
+    assert "image" in events[5]["text"]
+    assert events[6]["subtype"] == "grok_retry"
+    assert "Retrying (1/5)" in events[6]["text"]
     assert all(e["ts"] for e in events)
 
 
@@ -537,7 +542,7 @@ def test_variant_a_chat_history_with_type_and_tool_calls(monkeypatch, tmp_path):
     assert events[1]["blocks"][0]["kind"] == "thinking"
     assert events[2]["blocks"][0]["kind"] == "text"
     assert events[2]["blocks"][1]["kind"] == "tool_use"
-    assert events[2]["blocks"][1]["name"] == "run_shell"
+    assert events[2]["blocks"][1]["name"] == "Bash"
     assert events[2]["blocks"][1]["detail"] == "ping fake-array"
     assert events[3]["text"] == "pong"
     assert events[3]["tool_use_id"] == "tc-1"

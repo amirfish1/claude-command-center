@@ -58025,10 +58025,11 @@
           div.innerHTML = '<span class="ccoord-icon" aria-hidden="true">' + _icon + '</span>'
             + '<span class="ccoord-text">' + escapeHtml(ev.text || '') + '</span>'
             + tsSpan(ev.ts);
-        } else if (ev.subtype === 'grok_hook_execution' || ev.subtype === 'grok_note' || ev.subtype === 'grok_retry') {
-          // Grok ACP status updates (hook runs, image-dropped notes, retries)
-          // are meta, not model text — render as a compact Grok row so the
-          // conversation view shows the same lifecycle the terminal does.
+        } else if (String(ev.subtype || '').indexOf('grok_') === 0) {
+          // Grok ACP status updates (failed hook runs, image-dropped notes,
+          // retries, plan/task/subagent/compaction lifecycle) are meta, not
+          // model text — render as a compact Grok row so the conversation
+          // view shows the same lifecycle the terminal does.
           const _grokText = String(ev.text || '').trim();
           div.classList.add('system-compact', 'system-grok');
           div.innerHTML = '<span class="label">Grok</span>'
