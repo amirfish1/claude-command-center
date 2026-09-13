@@ -64904,6 +64904,15 @@
     });
   }
 
+  // Session patches for ids the archive list never contains (headless runs,
+  // subagents, titler/summariser sessions: they go idle then ended within
+  // minutes) used to invalidate the archive on EVERY state change, in every
+  // open tab. With 40+ tabs that was most of the list traffic. Refetch at most
+  // once per unknown live id per archive window, and never for "ended": there
+  // is nothing to add. Reset when the window changes or a forced refresh lands.
+  let _archiveUnknownPatchIds = new Set();
+  function _resetArchiveUnknownPatchIds() { _archiveUnknownPatchIds = new Set(); }
+
   function _applyDashboardSessionPatch(event) {
     const id = String(event.entity && event.entity.id || '');
     if (!id || !event.patch || typeof event.patch !== 'object') return;
@@ -64926,8 +64935,15 @@
     }) : rows;
     archiveData = patchRows(archiveData);
     conversationsData = patchRows(conversationsData);
-    if (known) _queueDashboardArchiveRender();
-    else scheduleDashboardInvalidation('archive', id);
+    if (known) {
+      _archiveUnknownPatchIds.delete(id);
+      _queueDashboardArchiveRender();
+      return;
+    }
+    if (normalizedPatch.is_live === false) return;
+    if (_archiveUnknownPatchIds.has(id)) return;
+    _archiveUnknownPatchIds.add(id);
+    scheduleDashboardInvalidation('archive', id);
   }
 
   function scheduleDashboardInvalidation(resource, id) {
@@ -66318,6 +66334,7 @@
         _mergeArchivePrSnapshot(convs, archiveData)
       );
       _mergeIntoMasterRows(archiveData);
+      if (opts.force || requestedWindow !== archiveDataWindow) _resetArchiveUnknownPatchIds();
       archiveDataWindow = requestedWindow;
         archiveLoaded = true;
         _clientLog('[ARCHIVE-DIAG] refreshArchiveData merged ' + (Array.isArray(archiveData) ? archiveData.length : -1) + ' rows, archiveLoaded=true');
