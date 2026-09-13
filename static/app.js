@@ -4086,10 +4086,12 @@
     if (_tokenSitterCheckpointCache.has(sid)) return _tokenSitterCheckpointCache.get(sid);
     let exists = false;
     try {
-      const res = await fetch('/api/session/' + encodeURIComponent(sid) + '/token-sitter-checkpoint', { cache: 'no-store' });
+      const res = await fetch('/api/session/' + encodeURIComponent(sid) + '/token-sitter-checkpoint', { cache: 'no-store', signal: convScopeSignal() });
       const data = await res.json().catch(() => ({}));
       exists = !!(res.ok && data && data.exists);
-    } catch (_) {}
+    } catch (e) {
+      if (e && e.name === 'AbortError') return false;  // conversation switched; do not cache
+    }
     _tokenSitterCheckpointCache.set(sid, exists);
     return exists;
   }
@@ -5573,7 +5575,7 @@
         session_id: currentSession.id,
         cwd: currentSession.cwd || '',
       });
-      const res = await fetch('/api/session-status?' + params.toString());
+      const res = await fetch('/api/session-status?' + params.toString(), { signal: convScopeSignal() });
       const data = await res.json();
       liveStatus = {
         forSessionId: _fetchedFor,
@@ -8925,7 +8927,7 @@
     // though its transcript is already on disk. Ask the server's resolver for
     // the concrete engine-specific path instead of guessing it in the UI.
     if (sid && !resolvedTranscriptPath) {
-      fetch('/api/conversations/' + encodeURIComponent(sid) + '/transcript-path')
+      fetch('/api/conversations/' + encodeURIComponent(sid) + '/transcript-path', { signal: convScopeSignal() })
         .then(res => res.ok ? res.json() : null)
         .then(data => {
           const path = data && String(data.transcript_path || '').trim();
@@ -41169,7 +41171,7 @@
       const params = new URLSearchParams({
         session_id: sid, cwd: (currentSession && currentSession.cwd) || '',
       });
-      const res = await fetch('/api/session-status?' + params.toString(), { cache: 'no-store' });
+      const res = await fetch('/api/session-status?' + params.toString(), { cache: 'no-store', signal: convScopeSignal() });
       const data = await res.json();
       if (data) {
         fresh = !!(data.live || data.sidecar_in_flight || data.question_waiting
@@ -42484,6 +42486,14 @@
     // via _takePrefetchedConversationTail, so the server round-trip overlaps
     // the prep instead of starting after it. Hermes sessions skip the
     // prefetch path in fetchConversationEvents, so don't warm those.
+    if (id && pane.conversationId !== id) {
+      // Free the old row's connection slots first (see convScopeSignal): the
+      // old stream, spawn-stream and scoped polls otherwise hold Chrome's six
+      // per-host connections and the tail fetch below waits for one.
+      try { abortConvScopedRequests(); } catch (_) {}
+      try { stopConvStream(paneId); } catch (_) {}
+      try { if (spawnEventSource) spawnEventSource.close(); } catch (_) {}
+    }
     if (id && pane.conversationId !== id && typeof _prefetchConversationTail === 'function') {
       try {
         if ((sessionSourceByConv[id] || '') !== 'hermes') _prefetchConversationTail(id);
@@ -43032,7 +43042,7 @@
     if (pending) return pending;
     const run = (async () => {
       try {
-        const r = await fetch('/api/conversations/' + encodeURIComponent(convId) + '/files');
+        const r = await fetch('/api/conversations/' + encodeURIComponent(convId) + '/files', { signal: convScopeSignal() });
         if (!r.ok) {
           _ffcCache.set(convId, {count: 0, truncated: false, groups: {}});
           return _ffcCache.get(convId);
@@ -43041,6 +43051,8 @@
         _ffcCache.set(convId, data);
         return data;
       } catch (e) {
+        // Conversation switched underneath the walk: nothing to cache.
+        if (e && e.name === 'AbortError') return null;
         // Network / parse failure — silent. Pill just stays hidden.
         _ffcCache.set(convId, {count: 0, truncated: false, groups: {}});
         return _ffcCache.get(convId);
@@ -48504,7 +48516,7 @@
       info = { has_log: true, alive: true };
     } else {
       try {
-        const res = await fetch('/api/session/' + encodeURIComponent(sid) + '/spawn-info');
+        const res = await fetch('/api/session/' + encodeURIComponent(sid) + '/spawn-info', { signal: convScopeSignal() });
         info = await res.json();
       } catch (_) { return; }
     }
@@ -49695,6 +49707,24 @@
   const _convPrefetched = new Set();
   const _convPrefetchTimers = new Map();
   const _convTailPrefetches = new Map();
+  // One AbortController per open conversation. Requests that only matter
+  // while that conversation is open (status poll, spawn info, family tree,
+  // files pill, ...) join it via convScopeSignal(), and a click on another
+  // row aborts them all before the new tail fetch goes out. Chrome allows
+  // six connections per host: a switch used to leave the old row's stream,
+  // spawn-stream and up to seven polls in flight, so the click's tail fetch
+  // queued behind them (672 ms browser stall measured 2026-09-12 while the
+  // server answered the same request in 9 ms).
+  let _convScopeCtrl = null;
+  function convScopeSignal() {
+    if (!_convScopeCtrl) _convScopeCtrl = new AbortController();
+    return _convScopeCtrl.signal;
+  }
+  function abortConvScopedRequests() {
+    const ctrl = _convScopeCtrl;
+    _convScopeCtrl = null;
+    if (ctrl) { try { ctrl.abort(); } catch (_) {} }
+  }
   const CONV_TAIL_PREFETCH_MAX = 4;
   const CONV_TAIL_PREFETCH_TTL_MS = 30000;
   function _prefetchConversationTail(id) {
@@ -50111,7 +50141,7 @@
     let data = null;
     try {
       const r = await fetch('/api/session/spawn-timeline?session_id=' + encodeURIComponent(sid),
-        { cache: 'no-store' });
+        { cache: 'no-store', signal: convScopeSignal() });
       data = await r.json();
     } catch (_) { return; }
     if (!data || !data.ok || !data.timeline) return;
@@ -60934,9 +60964,9 @@
     _orchRegistryInFlight = true;
     try {
       const [r1, r2, r3] = await Promise.all([
-        fetch('/api/sessions/spawned'),
-        rootSid ? fetch('/api/sessions/children?parent=' + encodeURIComponent(rootSid)) : Promise.resolve(null),
-        rootSid ? fetch('/api/sessions/family?sid=' + encodeURIComponent(rootSid)) : Promise.resolve(null),
+        fetch('/api/sessions/spawned', { signal: convScopeSignal() }),
+        rootSid ? fetch('/api/sessions/children?parent=' + encodeURIComponent(rootSid), { signal: convScopeSignal() }) : Promise.resolve(null),
+        rootSid ? fetch('/api/sessions/family?sid=' + encodeURIComponent(rootSid), { signal: convScopeSignal() }) : Promise.resolve(null),
       ]);
       const live = r1 && r1.ok ? await r1.json() : [];
       let kids = [];
