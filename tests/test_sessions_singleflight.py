@@ -156,3 +156,28 @@ def test_sessions_singleflight_coalesces_concurrent_scans(monkeypatch, tmp_path)
     with server._SESSIONS_SINGLEFLIGHT_LOCK:
         server._SESSIONS_SINGLEFLIGHT.clear()
         server._SESSIONS_RESPONSE_CACHE.clear()
+
+
+def test_attention_items_reuse_the_sessions_snapshot(monkeypatch, isolated_sessions_cache):
+    # compute_attention_items called find_all_sessions directly: a full repo
+    # corpus walk (stat/isfile/realpath per session) on every /api/attention
+    # poll from every tab with a repo selected, uncached and outside the
+    # single-flight. Stack samples 2026-09-12 under load: 8.5 s per call,
+    # holding the GIL in front of the archive list. Serve the same snapshot
+    # the sessions endpoint serves and let the TTL schedule one refresh.
+    key = ("/tmp/repo", True)
+    calls = []
+
+    def scan(repo_path, progress=None, include_old=True):
+        calls.append((repo_path, include_old, progress))
+        return [{"id": "s1", "modified": time.time()}]
+
+    monkeypatch.setattr(server, "find_all_sessions", scan)
+    monkeypatch.setattr(server, "_classify_attention", lambda c: {"kind": "x", "priority": 1, "id": c["id"]})
+    first = server.compute_attention_items(key[0])
+    second = server.compute_attention_items(key[0])
+    third = server.compute_attention_items(key[0], include_all=True)
+    assert calls == [(key[0], True, None)], "one cold walk, no progress UI, then the snapshot"
+    assert [i["id"] for i in first["items"]] == ["s1"]
+    assert first["items"] == second["items"] == third["items"]
+    assert key in server._SESSIONS_RESPONSE_CACHE

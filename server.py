@@ -35667,7 +35667,13 @@ def compute_attention_items(repo_path, include_all=False):
     """
     repo_path = resolve_repo_path(repo_path)
     try:
-        convs = find_all_sessions(repo_path) or []
+        # Same snapshot /api/sessions serves: a warm caller never waits for a
+        # corpus walk, the TTL schedules one single-flight refresh per repo.
+        # Calling find_all_sessions directly here ran the full walk (a stat,
+        # isfile and realpath per session) on every /api/attention poll from
+        # every tab with a repo selected; stack samples 2026-09-12 under load
+        # put one call at 8.5 s, holding the GIL in front of the archive list.
+        convs = _load_sessions_singleflight(repo_path, include_old=True, progress=False) or []
     except Exception:
         convs = []
     now = time.time()
