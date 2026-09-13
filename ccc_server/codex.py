@@ -9694,15 +9694,44 @@ def _codex_spawn_pid_by_thread_id():
     return out
 
 
+# raw path string -> resolved Path. Every engine scan calls the matcher once
+# per candidate session (~4,000 calls per sessions-snapshot refresh) and each
+# call resolved both cwd and repo root through realpath: 0.4 s of repeat
+# syscalls per refresh. Bounded (cleared when full) and dropped every
+# _CODEX_PATH_RESOLVE_MEMO_TTL_S so a re-pointed symlink is picked up.
+_CODEX_PATH_RESOLVE_MEMO = {}
+_CODEX_PATH_RESOLVE_MEMO_MAX = 8192
+_CODEX_PATH_RESOLVE_MEMO_TTL_S = 300.0
+_CODEX_PATH_RESOLVE_MEMO_AT = [0.0]
+
+
+def _codex_resolve_path_uncached(raw):
+    try:
+        return Path(raw).expanduser().resolve()
+    except (OSError, RuntimeError, ValueError):
+        return Path(raw)
+
+
+def _codex_resolve_path(raw):
+    key = str(raw)
+    now = time.time()
+    if now - _CODEX_PATH_RESOLVE_MEMO_AT[0] > _CODEX_PATH_RESOLVE_MEMO_TTL_S:
+        _CODEX_PATH_RESOLVE_MEMO.clear()
+        _CODEX_PATH_RESOLVE_MEMO_AT[0] = now
+    hit = _CODEX_PATH_RESOLVE_MEMO.get(key)
+    if hit is None:
+        hit = _codex_resolve_path_uncached(key)
+        if len(_CODEX_PATH_RESOLVE_MEMO) >= _CODEX_PATH_RESOLVE_MEMO_MAX:
+            _CODEX_PATH_RESOLVE_MEMO.clear()
+        _CODEX_PATH_RESOLVE_MEMO[key] = hit
+    return hit
+
+
 def _codex_cwd_matches_repo(cwd, repo_path, git_top_cache):
     if not cwd:
         return False
-    try:
-        p = Path(cwd).expanduser().resolve()
-        root = Path(repo_path).expanduser().resolve()
-    except (OSError, RuntimeError, ValueError):
-        p = Path(str(cwd))
-        root = Path(str(repo_path))
+    p = _codex_resolve_path(cwd)
+    root = _codex_resolve_path(repo_path)
     try:
         if p == root or root in p.parents:
             return True
