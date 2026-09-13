@@ -52579,6 +52579,7 @@
       { id: 'glm-5.2',         label: 'GLM 5.2' },
       { id: 'kimi-k3',         label: 'Kimi K3' },
       { id: 'swe-1.7',         label: 'SWE-1.7' },
+      { id: 'swe-2',           label: 'SWE-2' },
     ],
     grok: [
       { id: 'grok-4.6', label: 'Grok 4.6' },
