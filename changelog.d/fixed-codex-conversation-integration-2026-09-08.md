@@ -1,1 +1,0 @@
-- Integrate the native Codex transcript directly into the existing conversation pane, retaining its header, draft, composer, model controls, queue, and status rail. Remove the separate workspace entry point, route ordinary desktop-owned follow-ups through the desktop connection without fallback resends, and serve local transcript images correctly.

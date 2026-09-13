@@ -1,1 +1,0 @@
-- Add Devin's free SWE-2 model family to the curated model picker.

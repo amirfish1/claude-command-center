@@ -1,1 +1,0 @@
-A session an agent spawns with the `ccc` CLI is now attributed to the session that spawned it, so it shows up in that session's lane map instead of appearing as an orphan. Works for Claude and Codex parents, including while a Codex session's own thread id is still being minted.

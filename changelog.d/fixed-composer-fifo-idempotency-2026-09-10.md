@@ -1,1 +1,0 @@
-- Prevent duplicate delivery when a composer send and its worker replay share an idempotency key.

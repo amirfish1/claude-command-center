@@ -1,1 +1,0 @@
-- Fixed the archived-session engine picker so its options are visible when opened.

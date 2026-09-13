@@ -1,1 +1,0 @@
-Keep the conversation-list filter toolbar visible while scrolling. Engine choices now open in a popup, and the expand/collapse slot keeps a fixed width so controls no longer jump between rows during interaction.

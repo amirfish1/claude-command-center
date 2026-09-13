@@ -1,1 +1,0 @@
-- Keep activity and resume diagnostic logs from direct unittest runs out of the live dashboard's logs.

@@ -1,1 +1,0 @@
-- Fixed queued Codex steering so completion races retry once, delivered cards clear automatically, and already-delivered cards no longer show a false Cancel error.

@@ -1,1 +1,0 @@
-- Correct Kimi session idle ages after recent activity.

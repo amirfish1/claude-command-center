@@ -1,1 +1,0 @@
-- Clear a submitted WatchTower ticket answer immediately while its delivery completes.

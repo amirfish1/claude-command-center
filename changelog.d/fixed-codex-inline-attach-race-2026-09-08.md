@@ -1,1 +1,0 @@
-Fixed a Codex conversation pane going blank when Codex Desktop is offline: two racing inline-attach retries could orphan a dead native shell over the transcript. Attach attempts are now serialized per pane, and a failed attach leaves the legacy transcript untouched.

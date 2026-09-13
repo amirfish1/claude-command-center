@@ -1,1 +1,0 @@
-- Show complete ticket references in compact Working Now rows.

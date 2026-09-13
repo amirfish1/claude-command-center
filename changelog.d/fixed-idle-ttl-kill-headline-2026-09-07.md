@@ -1,1 +1,0 @@
-- Make idle-TTL termination log entries lead with their CCC origin and reason.

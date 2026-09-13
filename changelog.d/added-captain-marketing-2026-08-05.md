@@ -1,1 +1,0 @@
-- Added Captain, WatchTower, and agent-receipt guides with a deterministic walkthrough of one goal becoming durable, verified work.

@@ -1,1 +1,0 @@
-- Preserve a confirmed Codex blocked-model choice when changing only its reasoning effort.

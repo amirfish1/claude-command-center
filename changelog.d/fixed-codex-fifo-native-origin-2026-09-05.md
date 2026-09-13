@@ -1,1 +1,0 @@
-- Fixed queued Codex messages waiting forever after a turn finishes when multiple messages are pending; automatic delivery now preserves FIFO order without requeueing the claimed message behind its own tail.

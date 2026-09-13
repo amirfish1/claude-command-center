@@ -1,1 +1,0 @@
-- Keep throughput chart drill-downs aligned with the clicked bar's local hour by interpreting chart timestamps consistently as UTC.

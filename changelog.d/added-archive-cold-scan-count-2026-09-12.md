@@ -1,1 +1,0 @@
-The archive loading state now shows a live transcript count ("Parsing 5000 of 10317…") during cold scans, polled every 50 files. The existing progress_step plumbing flows through to the archive loading-status UI; only the emit cadence was missing. A server log line also prints the total at the start of a cold scan for headless visibility.

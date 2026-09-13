@@ -1,1 +1,0 @@
-Show newly registered WatchTower worker sessions in the conversation list before their transcripts enter the archive. Queue events refresh the list immediately, and the real session row replaces the temporary row without duplicates.

@@ -1,1 +1,0 @@
-Lead session cost cards with allocated subscription cost and estimated weekly quota, show API list-price equivalent below, and reveal detailed token counts, rates, formulas, and turn history on hover or keyboard focus.

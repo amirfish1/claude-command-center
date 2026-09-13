@@ -1,1 +1,0 @@
-Preserve Codex lifetime tokens and cost across cumulative-counter restarts. Count repeated usage notifications once, avoid adding reasoning output twice, and price each segment using its recorded model.

@@ -1,1 +1,0 @@
-- Fixed the orchestration lane map leaving finished child sessions marked as working.

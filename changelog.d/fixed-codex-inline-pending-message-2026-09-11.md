@@ -1,1 +1,0 @@
-- Keep pending Codex follow-up messages above their completed native response.

@@ -1,1 +1,0 @@
-Fixed Codex Desktop conversations rendering repetitive generic Reasoning/Command cards: the inline native view again uses the original CCC step rows (real commands, file paths, search queries, output previews, grouped tool runs, collapsible thinking), and a conversation selected before engine identification finishes now upgrades to the native view automatically.

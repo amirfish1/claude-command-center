@@ -1,1 +1,0 @@
-- Allow active Codex sessions on policy-confirmed models to change reasoning effort without re-triggering the model policy block.

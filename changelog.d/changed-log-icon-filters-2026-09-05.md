@@ -1,1 +1,0 @@
-- Use compact heart and arrow toggles for heartbeat and routine inject activity in Log; delivery failures, blocked attempts, and unconfirmed outcomes remain visible when routine traffic is hidden.

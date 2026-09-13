@@ -7,18 +7,161 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [5.33.0] - 2026-09-13
+
+### Added
+- The archive loading state now shows a live transcript count ("Parsing 5000 of 10317…") during cold scans, polled every 50 files. The existing progress_step plumbing flows through to the archive loading-status UI; only the emit cadence was missing. A server log line also prints the total at the start of a cold scan for headless visibility.
+- Added Captain, WatchTower, and agent-receipt guides with a deterministic walkthrough of one goal becoming durable, verified work.
+- Sessions started outside the dashboard (`ccc spawn`, an agent, a queue lane) now appear in the conversation list the moment they start, with the same "spawning…" placeholder a session started from the UI gets — and without stealing the pane you are working in.
+- Add a Codex workspace with readable conversations, collapsed tool details, diffs, approvals, schema-driven workspace/settings actions, terminal streaming, and gated realtime media. Discover capabilities from the installed app-server version and keep native and CCC message queues under explicit ownership. Live actions require an available app-server bridge; see the Codex workspace guide for compatibility and connection limits.
+- Add Devin's free SWE-2 model family to the curated model picker.
+- Automatically discover parent relationships for externally launched headless Claude sessions using live process ancestry and Codex task identity, without hooks or launcher changes. Confirmed relationships appear in the session hierarchy and Activity Log and survive restarts; ambiguous or missed short-lived launches remain unlinked.
+- **CCC introduction video** at `docs/intro-video/out/ccc-introduction.mp4`: a 6.5-minute narrated walkthrough of the public feature set, bound transcript, and local player.
+- `--install-service` now also installs `kimi web` as a supervised launchd/systemd agent when a `kimi` CLI is found on PATH, so Kimi's kap connector (`ccc_server/kap.py`) has a daemon to route through instead of silently staying on the ACP fallback.
+- Added a machine-wide model policy deny-list: `~/.claude/command-center/model-policy.json` (`{"blocked_models": ["gpt-6-astra"]}`, unioned with `CCC_BLOCKED_MODELS`). Blocked models disappear from every picker, explicit spawn/resume/model-switch requests are rejected with a clear policy error, and inherited defaults (spawn defaults, `CCC_CODEX_MODEL`, a queue wake's recorded model) fall back to the first allowed curated model instead of failing. The queue editor refuses to pin a blocked model before writing anything. WatchTower reads the same file so queue workers honor it too.
+- Added bulk risk-band selection and confirmed kill actions to the System status process audit.
+- Added an expand/collapse-all control to the status rail activity log.
+- Show a compact resolution time on recently worked closed tickets in the Workers lane.
+- Estimate each Claude and Codex session's weekly quota contribution from historical API-cost-to-quota observations, and show its allocated subscription cost using configurable monthly plan prices. Keep full-session scope across weekly resets and distinguish estimates from actual billing.
+- Added a Cancel control to in-progress Thinking cards so an active turn can be interrupted directly from its status row.
+- Make conversation time-window toggles (Now, 1d, 7d, All) respond immediately (<1ms) via in-memory filtering and immediate tab feedback, and surface the quick trash button alongside the 2-dot kebab menu and session UUID on row hover.
+- **Dense mode on the Workers tab.** The Workers list repeated itself more than any other lane: a wrapped two-line title per session, a prose "4 recorded tickets" label sitting next to the chips that already said it, and a card border around each row — ten workers filled a whole pane. Dense (Workers-only toggle, on by default) forces single-line titles over the global Wrap preference, replaces the prose count with the ticket chips plus a new `+N` overflow chip, and tightens row padding. It is display only: no row is filtered, and turning Dense off restores the card list exactly.
+
 ### Changed
+- Brighten Ask with a sky-blue and mint background.
+- Let native Codex final answers use the full conversation width, with a subtle divider instead of a padded card.
+- Codex conversations now render through the same shared transcript view as every other engine (Claude Code, Kimi, Grok, Devin), with an always-on live overlay merging in-progress turns, tool calls, diffs, images, and approval requests as they happen. The separate native inline view and its Files & terminal / Settings / Tools tabs are gone — there is no drawer to open, nothing to switch on, and no opt-out flag.
 - `/compact` now runs as one explainable, self-narrating card instead of a generic "Thinking" pill and a scatter of out-of-order rows. Typing `/compact` mounts the card immediately (sub-second, before any engine round trip), names the three stages as they pass — handing the transcript over → writing the summary → rebuilding the context window — shows how much context is being compacted, an estimated progress bar that never claims to be finished, a live elapsed clock, and where the pre-compact transcript backup lives. On completion it lands on the payoff: `112k → 16k tokens · 96k freed (−86%) · took 0:31`, using the engine's own measured before/after off the `compact_boundary` rather than a client estimate. Claude Code writes the compaction's rows to the transcript out of order (boundary, then summary, then the `/compact` command marker), which is why the resume summary kept appearing *above* the command that caused it; the card now absorbs all of those into itself — the summary renders inside it, collapsed, and the duplicate plumbing rows are hidden. Sessions compacted earlier get the same single card on reload, so history reads the same way live compactions do. A failed or stalled compaction says so plainly and offers a retry instead of silently reverting to a spinner. The context pill in the status bar now refreshes as soon as the compaction lands, so it can't sit on the pre-compact number while the card reports the new one, and the corner success toast is suppressed when the card is already on screen saying the same thing.
+- Lead session cost cards with allocated subscription cost and estimated weekly quota, show API list-price equivalent below, and reveal detailed token counts, rates, formulas, and turn history on hover or keyboard focus.
+- Keep one stable model chip per model, make Ask the fourth mobile destination, show prominent source/session links on a warmer Ask surface, hide healthy heartbeat noise by default, and expose recent queue work and worker ticket histories.
+- First-run is now one skippable ~20-step guide (CLIs, conversations, LHS/RHS, queue, workers, Delegation) instead of a 3-step wizard plus a 6-step look-tour. Missing CLIs can be installed or logged in from the guide; Queue, Workers, and Delegate are opened on the live dashboard before they are coached. Settings "Run onboarding" and "Take the tour" both replay it.
+- Use compact heart and arrow toggles for heartbeat and routine inject activity in Log; delivery failures, blocked attempts, and unconfirmed outcomes remain visible when routine traffic is hidden.
+- Queue staffing alarms now name their actions plainly: spawning a worker or opening the queue activity log.
+- Sort the queue dropdown by latest ticket activity, with one entry per queue and the same ordering in search results. Queues without activity appear last.
+- Make activity logs easier to scan with labelled severity colours, plain-language summaries, grouped repeat counts, expandable original records, shorter timestamps, and a warnings/errors filter. Preserve expanded entries and reading position during refresh.
+- Show full-session input, cached input, and output with per-million-token rates and a total API list-price equivalent. Include cache-write tokens once within noncached input and explain their rate.
+- Coding and Workers now each have an independent Compact / Cozy / Detailed display setting. Compact uses single-line titles, Cozy wraps titles without details, and Detailed wraps titles with session details. This replaces their separate Wrap and Details controls and preserves prior preferences through migration.
+- `watchtower.queue` is now a hard, unconditional dependency of CCC's queue system (ticket lifecycle: claim/close/edit/answer/comment/reopen). Removed the standalone `ux_fixes_queue.py` stdlib fallback that let CCC's queue features work without WatchTower installed — it had gone stale since WatchTower's own storage migrated from JSON to SQLite and was never updated, a latent risk of silent data divergence if watchtower ever became unimportable. If `watchtower.queue` can't be imported, CCC now fails loudly at startup with a clear error instead of silently falling back to a frozen JSON store.
+- The Workers tab stops repeating itself. Every change here is display-only — no session is filtered out at any density.
+
+- **Compact is a fixed-column table.** Each row is `status | title | tickets | context % | age`, laid out on a grid so the right-hand columns line up down the whole list instead of floating to wherever each row's content leaves them. One line per session, hairline separators, no card chrome. Cozy restores the padding and Detailed brings back the outcome card — the layout is Compact-only.
+- **A continuation chain says how deep it is.** A chain renders as one row and the `⤴ from:` chip only ever names the immediate predecessor, so the row said nothing about the legs behind it. The head now carries `↱ N legs`.
+- **`no tickets` where the chips would be.** In a fixed-column table a blank cell reads as "not loaded yet" rather than "this worker closed nothing". It appears only in the table, and only when some worker in view actually has tickets — on a list where nothing is attributed it would be one more string repeated on every row, which is the noise this tab came here to lose.
+- **A repeating column is stated once, above the list.** When most workers in view run the same engine and/or the same cost tier, that glyph carries no per-row information — a fleet of Codex workers stamps the same mark on all N rows. A strip above the list now states the shared value once ("all 41 workers: Codex · Low–$$$"), and every row that matches it drops the glyph. **A worker that differs keeps its own**, so the column stops repeating and starts showing exactly the exceptions; the strip counts them. The tier range names both ends, so a mixed fleet is never made to look like one flat price. The working/idle dot never folds — that is exactly what differs between rows.
+- **One density control instead of two.** Workers carried a binary Dense pill *and* a Details pill that between them expressed a single axis twice, so neither told you where you were. They are replaced by Compact / Cozy / Detailed. Anyone who had switched Dense off lands on Cozy — that meant "give me the row back", not "and show me outcome cards too".
+- **Ticket chip runs print their project once.** A worker that drained OPS-996, -995 and -994 printed "OPS" three times where once is enough; consecutive chips from the same project now read `OPS-996 -995 -994`. The full ref stays the click target and leads the tooltip, and the expanded list still gives every ticket its whole ref.
+- **A folded repeat group summarises what it hides.** The header reported only its newest row's age, so four spawns reaching back five hours read as one session from an hour ago. It now shows the range: `×4 · 3–12% · 1h–5h`.
+
+Density classes are also re-applied on every render. They were set once at startup, so leaving Workers for Coding used to drag the dense layout along with it.
+
+Follow-ups from using the built tab:
+
+- **Compact now actually applies.** The row-spacing, row-delineation and rowstyle presets all set padding, margin, background and border with `!important`, so the table's own rules never took effect and the tab still rendered 50px rounded cards with 16px titles. Compact is a deliberate override of those presets, so it declares `!important` too — measured on the same markup, 50px/8px-radius/16px-font became 23px/0/13px.
+- **Workers say whether they are live, in the Queues tab's language.** The signal already existed but was drawn as a 4px hollow-vs-filled ring nobody could read. A live row now gets the WORKING NOW strip's dot — same size, same pulse — and the header leads with the count: `3 working now · all 21 workers: …`. It counts what the Queues strip counts (mid-turn execution, not process liveness), so a number that agrees across the two tabs means the same thing in both.
+- **A worker appears before its engine session does.** A WatchTower worker is a process first and a session second, and this lane is built from transcripts — so for the first 30–60 seconds of a worker's life the one tab that exists to show workers was the one place that could not. It now synthesises a row from the same worker record the Queues strip reads, matched on session id so the real row takes over silently when it lands. Clicking opens the queue, since there is no session to select yet.
+- **Sub-sessions keep the table's columns.** A child row indents itself 14px per nesting level by moving the icon offset that the content offset is calculated from, which put its glyph, title and meta cell out of line with every other row. Compact states the nesting with a `↳` in the title cell instead, which costs no alignment.
+- **Less repeated chrome.** The `🧵` badge the server prefixes to a worker's title marked every row in a lane where every row is a worker — and appeared to vanish on its own, because the prefixed spawn name paints first and an ai-title without it lands seconds later. It is stripped in this lane only. The queue-progress chip is gone from the table: it printed the ticket ref the chips column already carries one cell away. And the truncated-title hover tooltip is gone everywhere — it re-printed the same clipped string it was hovering, because the tip has its own max-width and ellipsis, while covering the row beneath it.
+- **The gutter between the status dot and the title.** 66px separated them and 22px of that was carrying nothing on any row — a dedicated track for the needs-you dot plus two gaps around a chevron track that is empty on nearly every row. Those now share one collapsible track. The rest is the exception gutter, and it sizes to what actually renders in it.
+
+### Removed
+- Removed the advanced Codex message-queue owner switch from the conversation footer; CCC continues to protect queued-message delivery by default.
+- Removed the Model Advisor feature (fleet model-drift scan, the "N drift" footer pill, and the inline switch-model nudge above the composer). It's gone from the backend (`model_advisor.py`, `/api/model-advisor*` routes) and the UI.
+- Removed the persistent red "Queue X has no effective worker / is stuck — no progress in Nm" alarm from the queue status strip; the reconciler owns staffing and the banner only nagged about a self-healing state. Only an invalid worker config still raises an in-panel notice.
+- Remove the composer’s usage-limit auto-resume countdown banner.
 
 ### Fixed
+- Allow changing reasoning effort for an already-active Codex session whose model is policy-blocked.
+- Preserve complete activity-log event names and multiline details while continuing to read older log records.
+- A session an agent spawns with the `ccc` CLI is now attributed to the session that spawned it, so it shows up in that session's lane map instead of appearing as an orphan. Works for Claude and Codex parents, including while a Codex session's own thread id is still being minted.
+- Fixed the archived-session engine picker so its options are visible when opened.
+- Keep all archived-session engine filter options reachable in narrow sidebar rails.
+- Coalesce bursty dashboard event refreshes so archive loads no longer monopolize the dashboard server.
+- Removed the parallel transcript prewarm that re-parsed the entire corpus every 5 minutes without persisting its results, causing sustained ~85% CPU on the archive refresh worker. The serial path already persists the meta cache correctly.
+- Archived-session filters now use the full toolbar and wrap instead of scrolling horizontally.
+- Kept archived-session controls on one horizontally scrollable row instead of wrapping display options below the filters.
+- Fixed automatic titles for image-first prompts so the title model does not try to read the local image.
+- Clear stalled Codex app-server initialization state during shared-state cooldowns so later calls can retry.
+- Integrate the native Codex transcript directly into the existing conversation pane, retaining its header, draft, composer, model controls, queue, and status rail. Remove the separate workspace entry point, route ordinary desktop-owned follow-ups through the desktop connection without fallback resends, and serve local transcript images correctly.
+- Keep routine Codex turn activity out of conversation history and show progress in one live status line, with Thinking, Writing, or Planning labels when available. Delivery and recovery notices remain visible.
+- Connect the Codex conversation workspace to an existing desktop-owned task through its versioned follower interface. Show live history and route supported conversation controls and approvals to the current owner without starting another app-server writer. Clearly distinguish desktop-supported actions from operations requiring a direct app-server connection.
+- Fixed Steer on Codex Desktop conversations: CCC now steers the desktop's active turn through the owning desktop window, so a queued Steer no longer flashes into the transcript and bounces back into the queue. The queued entry is consumed only on confirmed delivery; a turn that already ended preserves the queue and wakes the normal pump, and an uncertain outcome (timeout, owner change) is surfaced with its actual cause instead of being retried or rerouted through another transport.
+- Allow active Codex sessions on policy-confirmed models to change reasoning effort without re-triggering the model policy block.
+- Preserve a confirmed Codex blocked-model choice when changing only its reasoning effort.
+- Fixed queued Codex messages waiting forever after a turn finishes when multiple messages are pending; automatic delivery now preserves FIFO order without requeueing the claimed message behind its own tail.
+- Fixed a Codex conversation pane going blank when Codex Desktop is offline: two racing inline-attach retries could orphan a dead native shell over the transcript. Attach attempts are now serialized per pane, and a failed attach leaves the legacy transcript untouched.
+- Fixed the native inline Codex chat hardcoding the Inter font instead of inheriting the app's chosen UI font, so it visually diverged from the rest of the conversation for anyone on a non-default font theme.
+- Keep pending Codex follow-up messages above their completed native response.
+- Fixed a message sent to a busy Codex session not showing above the composer for up to a minute (it was rendering into the native shell while the shell was still hidden, connecting); it now falls back to the same visible "queued" echo Claude sessions use, and no longer strands `/compact` behind an orphaned pending message.
+- Fixed a regression where opening a Codex session always flashed an empty "Reconnecting…" shell over the already-loaded conversation; the legacy transcript now stays visible until the native connection is confirmed.
+- Fixed Codex Desktop conversations rendering repetitive generic Reasoning/Command cards: the inline native view again uses the original CCC step rows (real commands, file paths, search queries, output previews, grouped tool runs, collapsible thinking), and a conversation selected before engine identification finishes now upgrades to the native view automatically.
+- Preserve Codex lifetime tokens and cost across cumulative-counter restarts. Count repeated usage notifications once, avoid adding reasoning output twice, and price each segment using its recorded model.
+- Preserve a user's confirmed blocked-model choice when resuming the same Codex session.
+- Codex resumes no longer hang indefinitely. CCC's own dashboard and worker are
+no longer mistaken for a foreign Codex writer holding the shared state DB (they
+were blocking each other's app-server), a managed daemon that fails `initialize`
+twice is skipped for 60s instead of costing 10s on every retry, and a wake that
+makes no progress for 60s now reports the actual blocker instead of spinning on
+"Thinking…".
+- Back off private Codex app-server retries while another Codex process owns its state store.
+- Codex session-status polls no longer wait on a thread-list refresh.
+- Fixed "Steer all" on a Codex session always failing with "queued message no longer exists" even when every queued message was still there — the pre-delivery claim step tried to match the single concatenated prompt against the queue, which can never match a batch of originals. Steer-all now skips that single-item transaction and relies on the existing post-delivery batch consumption instead.
+- Fixed queued Codex steering so completion races retry once, delivered cards clear automatically, and already-delivered cards no longer show a false Cancel error.
+- Fixed the conversation speaker button for native Codex replies.
+- Keep the Codex workspace entry point visible in the toolbar when the responsive layout hides the conversation header.
+- Coding's Compact mode now uses the same tight table-style rows as Workers, instead of keeping the tall card layout. Cozy and Detailed retain their wrapped card layouts.
 - A `/compact` that takes too long is no longer reported as a failure. Verified on a real session: the engine returned "timed out" while the `compact_boundary` and summary landed on disk seconds later, so CCC showed "Compaction didn't run" beside a second card describing the successful compaction. Timeout-shaped errors now keep the card watching (matching how `code: 'compact_timeout'` was already handled), and if a summary turns up after a run was called failed, the card corrects itself. Long Opus/Fable compactions routinely exceed the wait window, so this was the common case, not the edge case.
-
-### Fixed
+- Prevent duplicate delivery when a composer send and its worker replay share an idempotency key.
+- Stop terminal-input retries for recently exited Claude sessions and report them as undeliverable.
+- Keep the session title visible in desktop and narrow split-pane conversation headers.
+- Fixed queued-row Steer button appearing for Devin sessions, where it could not consume the durable queue entry and looked broken. Steer is now only offered for engines that support it (Codex and ACP sessions); other queued messages keep Copy and Cancel.
+- Close the engine picker immediately on outside clicks. The collapsed trigger shows the selected engine in its own color, and clicking it clears the filter.
+- Corrected Claude Fable 5.1 cache-read pricing in session cost estimates and clarified the status-rail comparison with Opus 5.
+- Correct Fable 5.1 cache-read weighting in session charts and turn tooltips, and show exact full-session token totals with cache reads and writes separated.
+- First-run composer / engine / send steps now open New session and show the live input bar. Previously a first visit with no session kept the composer hidden, so those steps silently fell back to the New session button.
+- Speed up opening long Grok conversations by loading only the recent transcript window first.
+- Make idle-TTL termination log entries lead with their CCC origin and reason.
+- Distinguish rejected session injections from successful deliveries in the activity log.
+- Introduction video no longer shows or describes a kanban board. Fleet, attention, and spawn scenes use the list view.
+- Correct Kimi session idle ages after recent activity.
+- Fixed Lane Map so current direct child sessions remain visible when family data is incomplete.
+- Refresh the Codex weekly quota meter from live account usage automatically, keeping older cached throughput snapshots from replacing the current reading.
+- Show manually attached sub-sessions in their parent's orchestration lane map.
+- Keep the parent session's lanes count and collapse chevron visible when the conversation list is narrowed.
+- Fixed the orchestration lane map leaving finished child sessions marked as working.
+- Parent session rows use known family links to group child sessions under a collapse chevron. Collapsed groups stay hidden across list refreshes, including when a child needs attention.
+- Dynamically update model and reasoning-effort options when switching worker engines in Queue Configuration, support all 14 orchestrator engines, and toggle custom model input according to engine capabilities.
+- Keep the mobile Queue scope picker, add action, and more menu on one header row.
+- Fixed the Queue header’s + control to open the new-queue form instead of the ticket composer.
+- Fixed queued Codex Steer actions being mistaken for duplicate retries of the original Send.
+- Clicking the already-open conversation row no longer reloads its reader.
+- Session ID copies now include the resolved transcript source for Kimi, Grok, Devin, and other local engines.
+- Simple Home reuses its archive feed for task cards, avoiding a duplicate full-session load that could stall the dashboard.
+- Successful agent launches now combine their request and start records into one activity-log entry while retaining the request details.
+- Keep the conversation-list filter toolbar visible while scrolling. Engine choices now open in a popup, and the expand/collapse slot keeps a fixed width so controls no longer jump between rows during interaction.
+- Avoid filing a new performance ticket for a recovered incident whose stale 24-hour outliers remain in telemetry.
 - Steer on Kimi/Grok (ACP) sessions now actually delivers instead of falling through to the durable queue. The interrupt was already working — Steer cancelled the active turn, then resent the message reusing the *same* idempotency key as the pre-cancel attempt. That attempt is recorded in the worker's WorkLedger as `failed` ("turn already in progress"), so `submit()` deduped the resend straight back to the failed row and no prompt was ever sent; the message sat in the queue until the interrupted turn ended on its own. The post-cancel resend now derives its own key.
 - Steer on an **idle Codex thread** now falls back to a plain send instead of reporting "No running Codex turn to steer". Same root cause: the failed steer attempt burned the caller's idempotency key, so the fallback `turn/start` was deduped back to that failure.
+- Show queued steering messages in a separate panel above the composer, with wrapping text and separate controls. Prevent duplicate pending bubbles across refreshes, preserve repeated sends, and keep failed steers available to retry.
+- Moved the queue sub-queue filter beside the dropdown chevron so it no longer interrupts the main trigger click target.
+- Keep throughput chart drill-downs aligned with the clicked bar's local hour by interpreting chart timestamps consistently as UTC.
+- Clear a submitted WatchTower ticket answer immediately while its delivery completes.
+- Sending an item to trash from the conversation list is now optimistic and updates the UI in <10 ms, with cached lifecycle sidecars and O(1) path lookups keeping the backend endpoint under 50 ms.
+- Keep activity and resume diagnostic logs from direct unittest runs out of the live dashboard's logs.
+- Show the lanes disclosure on parent sessions before they are selected by including known family links in the normal conversation list. Newly discovered links also invalidate the cached list response.
+- Speed up repeated usage API reads by caching unchanged snapshot history.
+- Clarified Queue warnings to identify WatchTower's model catalog as the approval source.
+- Avoid duplicate activity-log rows when the worker owns a Claude inject.
+- Show newly registered WatchTower worker sessions in the conversation list before their transcripts enter the archive. Queue events refresh the list immediately, and the real session row replaces the temporary row without duplicates.
+- Fixed the Workers tab's Dense toggle, which flipped its stored setting but left
+the list unchanged: the class was set on a wrapper that later render passes
+rebuilt without it, so none of the dense styling ever applied.
+- Three sources of repetition on the Workers tab now collapse instead of stacking up.
 
-### Changed
-- `watchtower.queue` is now a hard, unconditional dependency of CCC's queue system (ticket lifecycle: claim/close/edit/answer/comment/reopen). Removed the standalone `ux_fixes_queue.py` stdlib fallback that let CCC's queue features work without WatchTower installed — it had gone stale since WatchTower's own storage migrated from JSON to SQLite and was never updated, a latent risk of silent data divergence if watchtower ever became unimportable. If `watchtower.queue` can't be imported, CCC now fails loudly at startup with a clear error instead of silently falling back to a frozen JSON store.
+- Repeated spawns of the same task group again. `_repeatGroupTitleKey` keyed titles of 48 characters or less on their full text but longer ones on a 32-character prefix, so a title could never group with its own longer variant — and queue workers spawn in exactly that shape ("Drain the CCC WatchTower queue" vs "Drain the CCC WatchTower queue and keep it empty. Work in the git repo at ..."), which is why one recurring drain listed as four separate rows. The key is now a fixed count of leading content words, with list glyphs and filler words dropped so "Drain CCC queue" and "Drain the CCC queue" agree.
+- A ticket ref is no longer printed twice. Rows that reach the Workers lane without qualifying for the stable "<QUEUE> worker · <id>" identity showed "OPS#996:" in the title *and* an OPS-996 chip underneath; the prefix is dropped when a chip is there to carry it.
+- A continued session is no longer named after CCC's own handoff preamble. An auto-resume row could reach the sidebar still titled "You are continuing a task from an earlier Codex session, which ran long..."; it now inherits its parent's title and lets the ⤴ badge carry the "continues" meaning.
+- Keep full Working Now ticket IDs visible in the Workers sidebar.
+- Show complete ticket references in compact Working Now rows.
 
 ## [5.32.0] - 2026-09-04
 
@@ -3055,7 +3198,8 @@ Initial public release.
 - `/api/repo/switch` validates targets against the picker allow-list.
 - See [`SECURITY.md`](SECURITY.md) for the full threat model.
 
-[Unreleased]: https://github.com/amirfish1/claude-command-center/compare/v5.32.0...HEAD
+[Unreleased]: https://github.com/amirfish1/claude-command-center/compare/v5.33.0...HEAD
+[5.33.0]: https://github.com/amirfish1/claude-command-center/releases/tag/v5.33.0
 [5.32.0]: https://github.com/amirfish1/claude-command-center/releases/tag/v5.32.0
 [5.31.0]: https://github.com/amirfish1/claude-command-center/releases/tag/v5.31.0
 [5.30.0]: https://github.com/amirfish1/claude-command-center/releases/tag/v5.30.0

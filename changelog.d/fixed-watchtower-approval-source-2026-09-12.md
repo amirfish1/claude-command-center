@@ -1,1 +1,0 @@
-- Clarified Queue warnings to identify WatchTower's model catalog as the approval source.

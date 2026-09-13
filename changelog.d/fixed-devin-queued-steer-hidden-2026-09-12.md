@@ -1,1 +1,0 @@
-Fixed queued-row Steer button appearing for Devin sessions, where it could not consume the durable queue entry and looked broken. Steer is now only offered for engines that support it (Codex and ACP sessions); other queued messages keep Copy and Cancel.
