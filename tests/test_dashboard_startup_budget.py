@@ -243,3 +243,21 @@ def test_index_html_requests_features_once_at_boot():
 
     assert html.count("fetch('/api/features')") == 1
     assert "const featuresJson = fetch('/api/features').then(r => r.json())" in html
+
+
+def test_reader_only_popouts_skip_dashboard_stream_heartbeat_and_subagent_status_poll():
+    # Subagent transcript lanes embed the whole app as a reader-only popout
+    # iframe (dozens per Mac-app window). Each one used to hold a dashboard
+    # SSE stream, post a 60s heartbeat and poll /api/session-status every 5s
+    # for a compound "<sid>:agent-<task>" id the server cannot resolve. WebKit
+    # caps 6 connections per host, so those streams starved the main window's
+    # archive list fetch.
+    assert "if (!READER_ONLY_POPOUT) connectDashboardEvents();" in SOURCE
+
+    heartbeat = _function("// Slow heartbeat:", "// Last rows render done by the stuck-render recovery")
+    assert "if (!READER_ONLY_POPOUT) setInterval(() => {" in heartbeat
+    assert "'[ARCHIVE-DIAG] alive hidden='" in heartbeat
+
+    pills = _function("function _popoutProcPills()", "if (CONV_POPOUT_MODE) { try { _popoutProcPills(); }")
+    assert "if (String(CONV_POPOUT_TARGET).includes(':agent-')) return;" in pills
+    assert "if (document.hidden) return;" in pills

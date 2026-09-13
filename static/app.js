@@ -19010,10 +19010,15 @@
   // cheap poll for the one popped-out session; claude-like sources only.
   function _popoutProcPills() {
     if (!CONV_POPOUT_MODE || !CONV_POPOUT_TARGET) return;
+    // Subagent transcript lanes target "<sid>:agent-<task>": the server cannot
+    // resolve that id, so the pills would always read off. Dozens of lanes
+    // polling every 5s for nothing was a measurable server load.
+    if (String(CONV_POPOUT_TARGET).includes(':agent-')) return;
     const sid = popoutParam('session_id') || CONV_POPOUT_TARGET;
     const cwd = popoutParam('cwd') || CONV_POPOUT_REPO_PATH || '';
     const src = popoutParam('source') || 'interactive';
     const tick = async () => {
+      if (document.hidden) return;
       const slot = document.querySelector('[data-role="pane-proc"]');
       if (!slot) return;
       if (src === 'backlog' || src === 'pkood' || !sid) { slot.innerHTML = ''; return; }
@@ -65442,7 +65447,10 @@
     };
   }
 
-  connectDashboardEvents();
+  // Reader-only popouts (conversation / group-chat windows and the subagent
+  // transcript iframes) have no sidebar to invalidate. Each stream would hold
+  // one of WebKit's 6 per-host connections and starve the main window.
+  if (!READER_ONLY_POPOUT) connectDashboardEvents();
   window.__cccDashboardEvents = { apply: applyDashboardEvent, schedule: scheduleDashboardInvalidation };
   // ── End unified dashboard events ──────────────────────────────────────
 
@@ -66494,7 +66502,8 @@
   // Slow heartbeat: proves which page instances are alive and in what archive
   // state. A wedged webview goes silent; comparing ids across windows tells a
   // healthy boot's trace apart from a corpse that can no longer even post.
-  setInterval(() => {
+  // Dashboard pages only: dozens of subagent iframes posting it is noise.
+  if (!READER_ONLY_POPOUT) setInterval(() => {
     _clientLog('[ARCHIVE-DIAG] alive hidden=' + document.hidden
       + ' archiveLoaded=' + archiveLoaded
       + ' rows=' + (Array.isArray(archiveData) ? archiveData.length : -1)
