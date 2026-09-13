@@ -236,3 +236,10 @@ def test_boot_skips_the_second_full_render_when_recovery_already_painted_the_row
     assert "rec.data === archiveData" in covers
     assert "_convListRenderSig" in covers
     assert "_lastArchiveRenderFilter" in covers
+
+
+def test_index_html_requests_features_once_at_boot():
+    html = (ROOT / "static" / "index.html").read_text(encoding="utf-8")
+
+    assert html.count("fetch('/api/features')") == 1
+    assert "const featuresJson = fetch('/api/features').then(r => r.json())" in html

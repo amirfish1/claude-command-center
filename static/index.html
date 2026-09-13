@@ -98,9 +98,12 @@
     window.__CCC_CONVERSATION_POPOUT__ = params.get('ccc_popout') === 'conversation'
       || params.get('popout') === 'conversation';
     if (window.__CCC_CONVERSATION_POPOUT__) return;
+    // One request for both consumers below; the boot already competes
+    // with the archive list for the browser's six connection slots.
+    const featuresJson = fetch('/api/features').then(r => r.json());
     // Settings-menu dashboard launchers for optional plugins. Each link is
     // hidden by default in the HTML; reveal only when installed.
-    fetch('/api/features').then(r => r.json()).then(f => {
+    featuresJson.then(f => {
       if (!f) return;
       const show = (id, on) => {
         const el = document.getElementById(id);
@@ -125,7 +128,7 @@
       window.matchMedia('(display-mode: minimal-ui)').matches ||
       window.navigator.standalone === true;  // legacy iOS Safari flag
     if (isStandalone) return;
-    fetch('/api/features').then(r => r.json()).then(f => {
+    featuresJson.then(f => {
       if (!f || !f.morning) return;
       document.body.classList.add('has-side-nav');  // CSS shifts topbar 52px right
       const s = document.createElement('script');
