@@ -473,7 +473,7 @@
     <div class="brand">
       <span class="dot"></span>
       <span>claude command center</span>
-      <span class="version">v5.29</span>
+      <span class="version">v5.33</span>
     </div>
     <nav class="nav-links">
       <a class="captain-link" href="/captain/">Captain</a>
@@ -490,7 +490,7 @@
   <section class="hero" style="border-top: 0;">
     <div class="wrap hero-inner">
       <div class="eyebrow fade-target">
-        <span class="badge">v5.29</span>
+        <span class="badge">v5.33</span>
         <span>Local &middot; Open source &middot; MIT &middot; For developers running many coding agents</span>
       </div>
       <h1 class="hero-title fade-target">
@@ -506,10 +506,10 @@
       </p>
 
       <div class="cta-row fade-target">
-        <a class="btn btn-primary download-cta" id="downloadCta" href="https://github.com/amirfish1/claude-command-center/releases/tag/v5.29.0">GET CCC</a>
+        <a class="btn btn-primary download-cta" id="downloadCta" href="https://github.com/amirfish1/claude-command-center/releases/latest">GET CCC</a>
       </div>
       <p class="download-meta fade-target">
-        v5.29.0 source and Homebrew release &middot;
+        v5.33.0 source and Homebrew release &middot;
         <a href="#install">Homebrew, Linux, and Windows</a> &middot;
         <a href="https://github.com/amirfish1/claude-command-center/blob/main/docs/telemetry.md#landing-page-download-clicks">anonymous click count</a>
       </p>
@@ -525,7 +525,7 @@
           <span class="live"><span class="pulse"></span>3 sessions live &middot; 12 total</span>
         </div>
         <div class="demo-body">
-          <img class="frame-fallback" src="./images/ccc-v5-29-orchestration-final.png" alt="CCC v5.29 showing the session fleet, an active agent conversation, one-tap orchestration controls, and a live lane map" onerror="this.onerror=null; this.src='./images/demo.png';">
+          <img class="frame-fallback" src="./images/ccc-v5-33-hero.png" alt="CCC v5.33 showing the session fleet in the compact list, an active agent conversation, and the composer" onerror="this.onerror=null; this.src='./images/demo.png';">
           <video class="frame-video" poster="./product-story/assets/video/posters/V-01.png" muted loop playsinline preload="none" hidden aria-label="CCC fleet scan: the board, the kanban, and engine badges across live and waiting sessions">
             <source src="./product-story/assets/video/V-01-fleet-scan.mp4" type="video/mp4">
           </video>
@@ -586,11 +586,11 @@
     <div class="wrap chapter-grid">
       <div class="chapter-copy fade-target">
         <div class="chapter-eyebrow">01 &middot; See everything</div>
-        <h2 class="chapter-title" id="f1-title">Nine terminals, seven engines, one board.</h2>
+        <h2 class="chapter-title" id="f1-title">Nine terminals, eight engines, one board.</h2>
         <p class="chapter-promise">Every coding-agent session on your machine, on one local board, however you launched it.</p>
         <ul class="chapter-highlights">
-          <li><span class="hl-pain">Resume a session by hand</span> <span class="hl-out">and it still appears. CCC reads each engine's on-disk state as truth, so it sees sessions it never spawned.</span></li>
-          <li><span class="hl-pain">One board for seven engines.</span> <span class="hl-out">Claude Code is first-class; Codex, Cursor, Antigravity, Kilo Code, Kimi Code, and OpenCode spawn and ingest with documented gaps.</span></li>
+          <li><span class="hl-pain">Resume a session by hand</span> <span class="hl-out">and it still appears. CCC reads each engine's on-disk state as truth, so it sees sessions it never spawned — and since v5.33, headless sessions launched outside the dashboard attach to their parent session automatically.</span></li>
+          <li><span class="hl-pain">One board for eight engines.</span> <span class="hl-out">Claude Code is first-class; Codex, Cursor, Antigravity, Kilo Code, Kimi Code, OpenCode, and Devin spawn and ingest with documented gaps.</span></li>
           <li><span class="hl-pain">Close the dashboard</span> <span class="hl-out">and sessions keep running. Reopen tomorrow and everything reattaches.</span></li>
           <li><span class="hl-pain">Forgotten work resurfaces.</span> <span class="hl-out">Dormant and archived sessions stay in the inventory with time-gap markers, so nothing is silently lost.</span></li>
         </ul>
@@ -601,7 +601,7 @@
               <tr><td>Nine terminal tabs, no idea which session is which.</td><td>One local board listing every coding-agent session on the machine.</td></tr>
               <tr><td>You resume a session by hand and your dashboard goes blind.</td><td>CCC reads each engine's on-disk state as truth; hand-launched and hand-resumed sessions appear automatically.</td></tr>
               <tr><td>Old sessions pile up invisibly; you rediscover forgotten work weeks later.</td><td>Full inventory including dormant and archived sessions, with time-gap markers.</td></tr>
-              <tr><td>Work split across Claude Code, Codex, Cursor, Antigravity, and Kilo Code.</td><td>One board across engines. Claude Code is first-class; the other four spawn and ingest with documented gaps.</td></tr>
+              <tr><td>Work split across Claude Code, Codex, Cursor, Antigravity, Kilo Code, Kimi Code, OpenCode, and Devin.</td><td>One board across engines. Claude Code is first-class; the other seven spawn and ingest with documented gaps.</td></tr>
               <tr><td>Closing the dashboard feels dangerous, so a tab stays open forever.</td><td>Sessions run independently; close the board, reopen tomorrow, everything reattaches.</td></tr>
             </table>
           </div>
@@ -851,7 +851,7 @@
           <thead>
             <tr>
               <th></th>
-              <th class="us">CCC v5.29</th>
+              <th class="us">CCC v5.33</th>
               <th>claude-squad</th>
               <th>Conductor</th>
               <th>Sculptor</th>
@@ -867,7 +867,7 @@
             </tr>
             <tr>
               <td>Multi-engine dashboard</td>
-              <td class="yes">&#10003; seven engines, Claude Code first-class</td>
+              <td class="yes">&#10003; eight engines, Claude Code first-class</td>
               <td class="partial">Claude + Codex</td>
               <td class="partial">Claude + Codex</td>
               <td class="partial">Claude + Codex</td>
@@ -1008,8 +1008,8 @@ ccc ask queue-drain "what's your status?"   <span class="comment"># blocks for t
   <section class="whats-new-strip" id="whats-new" style="padding: 0;">
     <div class="wrap">
       <div class="wn-inner fade-target">
-        <span class="ver">v5.29.0</span>
-        <span>2026-08-28 &middot; Simple Mode for the whole fleet, visible multi-agent orchestration, live model intelligence, and direct recent-work search.</span>
+        <span class="ver">v5.33.0</span>
+        <span>2026-09-13 &middot; One transcript renderer for every engine (Codex joins the shared live view), a real table for the Workers tab, per-session cost &amp; weekly-quota cards, `/compact` as a narrated card, and a machine-wide model deny-list — plus Devin's free SWE-2.</span>
         <a href="https://github.com/amirfish1/claude-command-center/blob/main/CHANGELOG.md">Full changelog &rarr;</a>
       </div>
     </div>

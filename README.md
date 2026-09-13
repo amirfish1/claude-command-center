@@ -151,7 +151,11 @@ The whole fleet on your phone — monitor sessions, answer agents, and steer fro
 - **Auto-fix deploys** — polls Vercel, spawns a `/fix-deploy` session on new production errors.
 - **AI-assisted titles** — regenerate a card's title via `claude -p` (Haiku by default).
 - **Orchestration skill + 12-skill pack** — one Claude session can spawn, inject into, and synchronously ask sibling sessions over plain HTTP.
-- **Usage tracking** — your pace against plan limits, per engine, with cache-adjusted token rankings, before you hit the wall.
+- **Usage tracking** — your pace against plan limits, per engine, with cache-adjusted token rankings, before you hit the wall. Per-session **cost cards** estimate weekly-quota contribution and show allocated subscription dollars next to the API list-price equivalent.
+- **Model deny-list** — `~/.claude/command-center/model-policy.json` blocks models across every picker, spawn path, and queue; WatchTower workers honor it too.
+- **`/compact` as a card** — one self-narrating card with stage names, a live clock, and the tokens-freed payoff, instead of a spinner that could report a slow compaction as failed.
+- **Workers tab** — Compact/Cozy/Detailed densities, a fixed-column grid, a WORKING NOW strip, and worker rows that appear before the engine session exists.
+- **Self-attaching agents** — headless sessions launched outside CCC discover their parent session via process ancestry; `ccc spawn` and queue lanes appear in the list the moment they start.
 
 All captures use seeded demo data.
 
@@ -167,7 +171,7 @@ See the [engine support matrix](#engine-support) below for what each engine does
 
 **Sessions that exchange context on their own.** Two sessions on one goal stay in sync through group chats and a sibling-ask API, instead of you reading one agent's output off one screen and retyping it into the other. Post once and every participant is pinged; ask a sibling synchronously when you need an answer right now; hand a problem to a fresh spawned session that reports back when it finishes.
 
-**Workers that specialize over time.** Each worker reads its queue's shared learnings file before it starts and writes back to it when it ends, so a queue handling the same kind of ticket for months keeps getting faster and more accurate, not just busier. Ships via [WatchTower](https://github.com/amirfish1/watchtower), which CCC installs on first launch as its queue engine — Python 3.11+, and CCC still starts (on a reduced built-in queue) if the install doesn't take.
+**Workers that specialize over time.** Each worker reads its queue's shared learnings file before it starts and writes back to it when it ends, so a queue handling the same kind of ticket for months keeps getting faster and more accurate, not just busier. Ships via [WatchTower](https://github.com/amirfish1/watchtower), which CCC installs on first launch as its queue engine — Python 3.9+. WatchTower is a hard dependency: if it can't be installed, CCC fails loudly at startup with a clear error rather than silently running a stale queue.
 
 **Find anything, from any session.** The problem you solved two weeks ago in some other session, found in seconds instead of solved again: full-text search across your session history, built in, zero setup, with an optional deeper semantic mode for when you can't remember the words you used. Covers Claude Code and Codex today.
 
@@ -216,6 +220,8 @@ Competitor cells reflect a survey of 20+ tools in this space (April–August 202
 The whole point is the first row: the moment you touch a terminal, a tool that owns execution goes blind. CCC reads the state the engines already write, so it never does. Deeper dives: [vs claude-squad / Conductor / Sculptor](docs/index.html), [vs heavyweight IDEs](docs/vs-heavyweight-ides.html).
 
 ## Recent
+
+- **2026-09-13**: **v5.33.0**. Codex conversations now render through the same live transcript view as every other engine — tool calls, diffs, images, and approval requests stream inline, and the separate native view is gone entirely. The Workers tab becomes a real table: Compact/Cozy/Detailed densities, a fixed-column grid, a WORKING NOW strip, and worker rows that appear the moment a worker spawns — before its engine session exists. Sessions now show what they actually cost: a weekly-quota estimate plus allocated subscription dollars next to the API list-price equivalent. `/compact` runs as one self-narrating card (stages, live clock, `112k → 16k tokens · −86%`) instead of a spinner that could report a slow compaction as a failure. A machine-wide model deny-list (`~/.claude/command-center/model-policy.json`) blocks models across every picker, spawn path, and queue — WatchTower workers honor it too — and Devin's free SWE-2 family joins the model picker. Plus: externally-launched headless sessions auto-attach to their parent session, `ccc spawn` sessions appear in the list the moment they start, a 21-step first-run guide, `kimi web` as a supervised service, and ~70 fixes.
 
 - **2026-08-28**: **v5.29.0**. A follow-up for people running a real fleet: Simple Mode gives your phone a plain-language Home screen, the new orchestration rail lets you Delegate, Verify, or Critique and then watch the lanes work, and the model catalog now shows live Codex pricing and limits alongside the other engines. Recent-work search now scans local Claude, Codex, Kimi, Gemini, and Cursor transcripts directly. The sidebar also gets its overdue polish pass: readable row styles, wrapping, a clear selected state, and correct icon alignment.
 
@@ -500,9 +506,11 @@ the UI uses for the kanban.
 
 ## Codex conversations
 
-Codex conversations use the existing CCC pane and composer, with a richer native
-transcript, inline approvals, and integrated tools. Capability availability
-follows the installed Codex version and connected host. Existing desktop-owned
+Codex conversations render through the same shared transcript view as every
+other engine — one pane, one composer, one renderer. A live overlay merges
+in-progress turns into the transcript as they happen: tool calls, diffs,
+images, and approval requests stream inline. Capability availability follows
+the installed Codex version and connected host. Existing desktop-owned
 tasks connect through their desktop owner when available.
 See the [Codex conversation guide](docs/codex-workspace.md) for connection limits,
 preview features, queue ownership, and verification coverage.
@@ -514,7 +522,7 @@ CCC was built around Claude Code first; Codex, Cursor, Antigravity, Kilo Code, K
 | Engine        | Spawn (headless from UI) | Resume (terminal inject / headless resume) | Transcript ingestion | Per-session model + reasoning-effort picker |
 |---------------|--------------------------|--------------------------------------------|----------------------|--------------------------|
 | Claude Code   | yes                      | yes (both)                                 | yes — first-class JSONL (`~/.claude/projects/*.jsonl`) | yes — UI picker, incl. 1M-context toggle; effort `low` `medium` `high` `xhigh` `max` |
-| Codex         | yes                      | yes (both)                                 | yes — JSONL ingestion plus native app-server workspace when connected | yes — UI picker via per-session override; default from `CCC_CODEX_MODEL`; effort `low` `medium` `high` `xhigh` (no `max`) |
+| Codex         | yes                      | yes (both)                                 | yes — JSONL ingestion; when the app-server bridge is connected, live turns stream into the shared transcript view (tools, diffs, approvals) | yes — UI picker via per-session override; default from `CCC_CODEX_MODEL`; effort `low` `medium` `high` `xhigh` (no `max`) |
 | Cursor        | yes — headless via `cursor-agent` | yes — follow-ups route through `cursor-agent --resume` | partial — Cursor agent transcripts parsed from `~/.cursor/projects/` | model only — UI/default picker, default from `CCC_CURSOR_MODEL`; no effort ladder |
 | Antigravity   | yes — headless via `agy` print mode | yes — follow-ups route through AGY CLI or the running app's language-server RPC | yes — JSONL transcripts from `~/.gemini/antigravity/brain/` | model auto-detected from transcript metadata; no effort ladder |
 | Kilo Code     | yes — headless via `kilo run --auto` | no — fire-and-forget headless run, no resume wiring yet | yes — reads Kilo's SQLite store (`~/.local/share/kilo/kilo.db`); externally-launched sessions appear on the board | model only — UI/default picker, default from `CCC_KILO_MODEL`; no effort ladder |
