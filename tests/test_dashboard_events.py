@@ -294,7 +294,7 @@ def test_queue_signature_includes_sqlite_wal_and_config_files():
 
     source = inspect.getsource(server._dashboard_queue_signature)
     assert 'store_path + "-wal"' in source
-    assert 'store_path + "-shm"' in source
+    assert 'store_path + "-shm"' not in source, "the -shm index tracks readers, not content"
     assert "_wt_config_path()" in source
 
 
@@ -311,3 +311,33 @@ def test_long_lived_event_stream_is_not_reported_as_a_slow_request():
 
     source = inspect.getsource(server.CommandCenterHandler.handle_one_request)
     assert 'if _p not in ("/api/events", "/api/sessions/events", "/api/queue/events")' in source
+
+
+def test_queue_signature_ignores_sqlite_sidecars_created_by_readers(monkeypatch, tmp_path):
+    """A short-lived sqlite connection (any `wt` CLI read, the worker, our own
+    list read) creates a 0-byte -wal and a 32 KB -shm on open and deletes both
+    on close. Neither means the queue changed, yet each appearance and
+    disappearance flipped the watch signature and pushed a queue invalidation
+    to every dashboard, which the client escalates into a full archive
+    refetch. Only a WAL with committed frames (size > 0) is a content change."""
+    import server
+
+    store = tmp_path / "queue.db"
+    store.write_bytes(b"x" * 64)
+    monkeypatch.setattr(server, "_queue_store_path", lambda: store)
+    monkeypatch.setattr(server, "_wt_config_path", lambda: tmp_path / "queue-config.json")
+    monkeypatch.setattr(server, "_wt_workers_path", lambda: tmp_path / "workers.json")
+    monkeypatch.setattr(server, "gh_queue_version", lambda: 0)
+
+    quiet = server._dashboard_queue_signature()
+
+    (tmp_path / "queue.db-wal").write_bytes(b"")
+    (tmp_path / "queue.db-shm").write_bytes(b"\0" * 32768)
+    assert server._dashboard_queue_signature() == quiet, "reader-created sidecars are not a change"
+
+    (tmp_path / "queue.db-shm").unlink()
+    (tmp_path / "queue.db-wal").unlink()
+    assert server._dashboard_queue_signature() == quiet, "sidecar removal is not a change"
+
+    (tmp_path / "queue.db-wal").write_bytes(b"frame" * 100)
+    assert server._dashboard_queue_signature() != quiet, "committed WAL frames are a change"

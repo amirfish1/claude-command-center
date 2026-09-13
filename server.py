@@ -210,11 +210,21 @@ def _dashboard_queue_signature():
         remote_version = gh_queue_version()
     except Exception:
         remote_version = 0
+    def _wal_signature(target):
+        # A sqlite reader creates a 0-byte -wal (plus a -shm index) on open
+        # and deletes both on close, so their presence and mtimes track other
+        # processes' reads, not the queue's content. Only a WAL holding
+        # committed frames (size > 0) means the store changed; the -shm never
+        # does.
+        sig = _stat_signature(target)
+        if sig is None or sig[1] == 0:
+            return None
+        return sig
+
     store_path = str(_queue_store_path())
     return (
         _stat_signature(store_path),
-        _stat_signature(store_path + "-wal"),
-        _stat_signature(store_path + "-shm"),
+        _wal_signature(store_path + "-wal"),
         _stat_signature(str(_wt_config_path())),
         _stat_signature(str(_wt_workers_path())),
         remote_version,
