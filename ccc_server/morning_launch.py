@@ -1132,11 +1132,14 @@ def _open_prs_cached(repo_top):
 #   * Hard floor: never shell out twice for the same path inside 5s.
 #     Multiple sessions sharing a worktree dedupe inside one response,
 #     and active paths still cap at one shellout per poll.
-#   * Soft TTL: between 5s and 30s, only shell out if the session's
-#     last meaningful event has advanced — the user's "if no update,
-#     don't re-poll" rule. Past 30s we re-poll regardless to catch
-#     commits that happen outside the agent (manual commit in another
-#     shell).
+#   * Soft TTL: between 5s and 30s, only shell out if a session's last
+#     meaningful event landed AFTER the last probe — the user's "if no
+#     update, don't re-poll" rule. Many sessions share one path (the main
+#     clone) with different timestamps, so this is a comparison against
+#     the probe time, not an equality check against whichever session's
+#     timestamp happened to be cached (that re-forked shared paths every
+#     5 s forever). Past 30s we re-poll regardless to catch commits that
+#     happen outside the agent (manual commit in another shell).
 _WORKTREE_DIRTY_CACHE = {}
 _WORKTREE_DIRTY_FLOOR = 5.0
 _WORKTREE_DIRTY_TTL = 30.0
@@ -1148,11 +1151,11 @@ def _worktree_dirty_cached(path, event_ts):
     now = time.time()
     hit = _WORKTREE_DIRTY_CACHE.get(path)
     if hit is not None:
-        cached_event_ts, cached_dirty, polled_at = hit
+        _cached_event_ts, cached_dirty, polled_at = hit
         age = now - polled_at
         if age < _WORKTREE_DIRTY_FLOOR:
             return cached_dirty
-        if age < _WORKTREE_DIRTY_TTL and cached_event_ts == event_ts:
+        if age < _WORKTREE_DIRTY_TTL and (event_ts or 0) <= polled_at:
             return cached_dirty
     dirty = _worktree_is_dirty(path)
     _WORKTREE_DIRTY_CACHE[path] = (event_ts, dirty, now)
