@@ -1059,494 +1059,6 @@
     });
   }
 
-  // ---- Model Advisor panel -------------------------------------------------
-  // Full-screen overlay opened from the footer. Reads the cached advisor report
-  // shows live model-drift recommendations (downgrade an Opus session gone
-  // mechanical, upgrade a cheap session doing hard reasoning, or spawn a worker
-  // on a plan->execute drift) plus the savings monitor: what was recommended,
-  // applied vs ignored, and dollars saved / left on the table. Apply routes
-  // through the existing per-session /model override so the switch lands live.
-  let _maTimer = null;
-  let _maLast = null;
-  let _maTimeframe = '7d';
-  let _maTab = 'scanned';
-  const _maModels = { opus: 'Opus', sonnet: 'Sonnet', haiku: 'Haiku', fable: 'Fable' };
-  const _ADVISOR_DEBOUNCE_MS = 30000;
-  const _ADVISOR_REFRESH_MIN_MS = 300000;
-  const _ADVISOR_SUBSTANTIAL_BYTES = 32768;
-  let _advisorSessionSnapshot = null;
-  let _advisorRefreshTimer = null;
-  let _advisorLastRefreshRequest = 0;
-  function _maEsc(s) { return _shEsc(s); }
-  function _maTok(n) {
-    if (!n || n <= 0) return '-';
-    if (n >= 1e6) return (n / 1e6).toFixed(1) + 'm';
-    if (n >= 1e3) return Math.round(n / 1e3) + 'k';
-    return String(Math.round(n));
-  }
-  function _maActionLabel(a) {
-    return a === 'upgrade' ? 'Upgrade' : a === 'spawn_worker' ? 'Spawn worker' : 'Downgrade';
-  }
-  function _maActionClass(a) {
-    return a === 'upgrade' ? 'ma-up' : a === 'spawn_worker' ? 'ma-spawn' : 'ma-down';
-  }
-  function _ensureModelAdvisorModal() {
-    if (!document.getElementById('__maStyle')) {
-      const st = document.createElement('style');
-      st.id = '__maStyle';
-      st.textContent =
-        '#maOverlay{position:fixed;inset:0;z-index:9999;display:none;}' +
-        '#maOverlay.open{display:block;}' +
-        '#maBackdrop{position:absolute;inset:0;background:rgba(0,0,0,.5);}' +
-        '#maPanel{position:absolute;top:50%;left:50%;transform:translate(-50%,-50%);' +
-        'width:min(820px,94vw);max-height:90vh;overflow:auto;background:var(--bg-secondary,#161b22);' +
-        'color:var(--text-primary,#e6edf3);border:1px solid var(--border-color,#30363d);border-radius:14px;' +
-        'box-shadow:0 24px 80px rgba(0,0,0,.7);font:13px/1.5 -apple-system,BlinkMacSystemFont,"Segoe UI",system-ui,sans-serif;}' +
-        '#maPanel h2{margin:0;font-size:15px;font-weight:700;letter-spacing:-.01em;}' +
-        '.ma-head{display:flex;align-items:center;justify-content:space-between;padding:14px 18px;' +
-        'border-bottom:1px solid var(--border-color,#30363d);position:sticky;top:0;' +
-        'background:var(--bg-secondary,#161b22);backdrop-filter:blur(8px);}' +
-        '.ma-close{cursor:pointer;border:0;background:transparent;color:var(--text-muted,#8b949e);' +
-        'font-size:20px;line-height:1;padding:2px 7px;border-radius:6px;}' +
-        '.ma-close:hover{background:var(--hover-bg,rgba(127,127,127,.16));color:inherit;}' +
-        '.ma-body{padding:16px 18px;display:flex;flex-direction:column;gap:18px;}' +
-        '.ma-sec-title{font-size:11px;font-weight:600;letter-spacing:.06em;text-transform:uppercase;' +
-        'color:var(--text-muted,#8b949e);margin-bottom:10px;display:flex;align-items:center;gap:8px;}' +
-        '.ma-sec-title::after{content:"";flex:1;height:1px;background:var(--border-color,#30363d);}' +
-        '.ma-cards{display:flex;gap:10px;flex-wrap:wrap;}' +
-        '.ma-stat{flex:1 1 130px;background:var(--bg-primary,#1c2128);border:1px solid var(--border-color,#30363d);' +
-        'border-radius:10px;padding:12px 14px;border-left-width:3px;}' +
-        '.ma-stat-lbl{font-size:11px;font-weight:500;opacity:.55;text-transform:capitalize;letter-spacing:.01em;}' +
-        '.ma-stat b{display:block;font-size:22px;font-weight:700;margin-top:5px;' +
-        'font-family:ui-monospace,SFMono-Regular,Menlo,monospace;letter-spacing:-.02em;}' +
-        '.ma-stat-sub{font-size:10px;opacity:.4;margin-top:2px;}' +
-        '.ma-stat-green{border-left-color:#3fb950;} .ma-stat-green b{color:#3fb950;}' +
-        '.ma-stat-amber{border-left-color:#d29922;} .ma-stat-amber b{color:#d29922;}' +
-        '.ma-stat-blue{border-left-color:#58a6ff;} .ma-stat-blue b{color:#58a6ff;}' +
-        '.ma-stat-neutral{border-left-color:var(--border-color,#30363d);}' +
-        '.ma-tf{display:flex;gap:5px;}' +
-        '.ma-tf-btn{cursor:pointer;border:1px solid var(--border-color,#30363d);background:transparent;' +
-        'color:var(--text-muted,#8b949e);font:12px/1 -apple-system,system-ui,sans-serif;padding:4px 11px;border-radius:6px;}' +
-        '.ma-tf-btn.active{background:rgba(127,127,127,.18);color:var(--text-primary,#e6edf3);' +
-        'border-color:rgba(127,127,127,.4);font-weight:600;}' +
-        '.ma-tf-btn:hover{background:var(--hover-bg,rgba(127,127,127,.12));}' +
-        '.ma-rec{display:flex;align-items:flex-start;gap:10px;padding:10px 12px;' +
-        'background:var(--bg-primary,#1c2128);border:1px solid var(--border-color,#30363d);' +
-        'border-radius:9px;margin-top:8px;}' +
-        '.ma-rec-main{min-width:0;flex:1 1 auto;}' +
-        '.ma-rec-title{font-weight:600;font-size:13px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}' +
-        '.ma-rec-reason{color:var(--text-muted,#8b949e);font-size:12px;margin-top:3px;}' +
-        '.ma-badge{font-size:11px;padding:2px 8px;border-radius:5px;white-space:nowrap;font-weight:500;}' +
-        '.ma-down{background:rgba(63,185,80,.14);color:#3fb950;}' +
-        '.ma-up{background:rgba(210,153,34,.14);color:#d29922;}' +
-        '.ma-spawn{background:rgba(88,166,255,.14);color:#58a6ff;}' +
-        '.ma-conf{font-size:11px;color:var(--text-muted,#8b949e);margin-left:6px;}' +
-        '.ma-acts{display:flex;flex-direction:column;gap:5px;flex-shrink:0;}' +
-        '.ma-btn{cursor:pointer;border:1px solid var(--border-color,#30363d);background:transparent;color:inherit;' +
-        'font:600 12px/1 -apple-system,system-ui,sans-serif;padding:5px 12px;border-radius:7px;white-space:nowrap;}' +
-        '.ma-btn:hover{background:var(--hover-bg,rgba(127,127,127,.14));}' +
-        '.ma-btn-go{border-color:#2ea043;color:#3fb950;} .ma-btn-go:hover{background:rgba(63,185,80,.12);}' +
-        '.ma-log-row{display:flex;align-items:center;gap:9px;padding:6px 4px;font-size:12px;' +
-        'border-bottom:1px solid rgba(127,127,127,.08);}' +
-        '.ma-log-row:last-child{border-bottom:0;}' +
-        '.ma-log-row .ma-spacer{flex:1 1 auto;}' +
-        '.ma-st{font-size:10px;font-weight:600;text-transform:uppercase;letter-spacing:.05em;padding:2px 7px;border-radius:4px;}' +
-        '.ma-st-applied{background:rgba(63,185,80,.14);color:#3fb950;}' +
-        '.ma-st-dismissed{background:rgba(248,81,73,.10);color:#f85149;}' +
-        '.ma-st-expired{background:rgba(127,127,127,.10);color:var(--text-muted,#8b949e);}' +
-        '.ma-empty{padding:20px 4px;text-align:center;color:var(--text-muted,#8b949e);font-size:13px;}' +
-        '.ma-empty-ok{color:#3fb950;font-size:15px;margin-bottom:6px;}' +
-        '.ma-empty-hint{font-size:11px;opacity:.6;margin-top:4px;}' +
-        '.ma-tabs{display:flex;gap:0;border-bottom:1px solid var(--border-color,#30363d);margin-bottom:14px;}' +
-        '.ma-tab{cursor:pointer;padding:7px 14px;font-size:12px;font-weight:500;border:0;background:transparent;' +
-        'color:var(--text-muted,#8b949e);border-bottom:2px solid transparent;margin-bottom:-1px;}' +
-        '.ma-tab.active{color:var(--text-primary,#e6edf3);border-bottom-color:#58a6ff;}' +
-        '.ma-tab:hover{color:var(--text-primary,#e6edf3);}' +
-        '.ma-scan-table{width:100%;border-collapse:collapse;font-size:12px;}' +
-        '.ma-scan-table th{text-align:left;padding:4px 8px;font-size:10px;font-weight:600;letter-spacing:.06em;' +
-        'text-transform:uppercase;color:var(--text-muted,#8b949e);border-bottom:1px solid var(--border-color,#30363d);}' +
-        '.ma-scan-table td{padding:6px 8px;border-bottom:1px solid rgba(127,127,127,.07);vertical-align:top;}' +
-        '.ma-scan-table tr:last-child td{border-bottom:0;}' +
-        '.ma-scan-table tr:hover td{background:rgba(127,127,127,.05);}' +
-        '.ma-score-bar{display:inline-block;width:40px;height:5px;border-radius:3px;vertical-align:middle;' +
-        'background:linear-gradient(90deg,#3fb950,#d29922,#f85149);position:relative;margin-right:5px;}' +
-        '.ma-score-dot{position:absolute;top:-2px;width:9px;height:9px;border-radius:50%;' +
-        'border:2px solid var(--bg-secondary,#161b22);background:currentColor;}' +
-        '.ma-sig{display:inline-block;padding:1px 5px;border-radius:3px;font-size:10px;margin:1px;' +
-        'background:rgba(127,127,127,.12);color:var(--text-muted,#8b949e);}' +
-        '.ma-sig-hot{background:rgba(248,81,73,.12);color:#f85149;}' +
-        '.ma-verdict-ok{color:#3fb950;font-weight:500;}' +
-        '.ma-verdict-gray{color:var(--text-muted,#8b949e);}' +
-        '.ma-verdict-drift{color:#d29922;font-weight:500;}';
-      document.head.appendChild(st);
-    }
-    let ov = document.getElementById('maOverlay');
-    if (ov) return ov;
-    ov = document.createElement('div');
-    ov.id = 'maOverlay';
-    ov.innerHTML =
-      '<div id="maBackdrop"></div>' +
-      '<div id="maPanel" role="dialog" aria-modal="true" aria-label="Model Advisor">' +
-        '<div class="ma-head"><h2>Model Advisor</h2>' +
-        '<span id="maLastChecked" style="font-size:11px;opacity:.45;margin-right:auto;margin-left:10px;"></span>' +
-        '<button class="ma-close" aria-label="Close">&times;</button></div>' +
-        '<div class="ma-body" id="maBody"><div style="opacity:.6">Loading…</div></div>' +
-      '</div>';
-    document.body.appendChild(ov);
-    ov.querySelector('#maBackdrop').addEventListener('click', _closeModelAdvisor);
-    ov.querySelector('.ma-close').addEventListener('click', _closeModelAdvisor);
-    document.addEventListener('keydown', function (e) {
-      if (e.key === 'Escape' && ov.classList.contains('open')) _closeModelAdvisor();
-    });
-    return ov;
-  }
-  function _openModelAdvisor() {
-    const ov = _ensureModelAdvisorModal();
-    ov.classList.add('open');
-    _pollModelAdvisor('force');
-    if (_maTimer) clearInterval(_maTimer);
-    _maTimer = setInterval(_pollModelAdvisor, 5000);
-  }
-  function _closeModelAdvisor() {
-    const ov = document.getElementById('maOverlay');
-    if (ov) ov.classList.remove('open');
-    if (_maTimer) { clearInterval(_maTimer); _maTimer = null; }
-  }
-  let _maLastScan = 0;
-  let _maPollPromise = null;
-  function _pollModelAdvisor(fresh) {
-    if (document.hidden) return;
-    if (_maPollPromise) return _maPollPromise;
-    const url = fresh ? '/api/model-advisor?fresh=' + encodeURIComponent(fresh) : '/api/model-advisor';
-    _maPollPromise = fetch(url, { cache: 'no-store' })
-      .then(function (r) { return r.ok ? r.json() : null; })
-      .then(function (d) {
-        if (d) {
-          _maLast = d; _maLastScan = Date.now();
-          _renderModelAdvisor(d); _updateAdvisorPill(d);
-          const lc = document.getElementById('maLastChecked');
-          if (lc) lc.textContent = d.scanned_at ? 'scanned at ' + d.scanned_at : 'checked just now';
-        }
-      })
-      .catch(function () {})
-      .finally(function () { _maPollPromise = null; });
-    return _maPollPromise;
-  }
-  function _advisorSessionState(row) {
-    return {
-      live: !!row.is_live,
-      model: String(row.current_model || row.model || row.model_name || ''),
-      size: Number(row.size || 0),
-    };
-  }
-  function _requestScheduledAdvisorRefresh() {
-    _advisorRefreshTimer = null;
-    if (document.hidden) return;
-    _advisorLastRefreshRequest = Date.now();
-    _pollModelAdvisor('1');
-  }
-  function _scheduleAdvisorRefresh() {
-    if (_advisorRefreshTimer) clearTimeout(_advisorRefreshTimer);
-    const sinceLast = Date.now() - _advisorLastRefreshRequest;
-    const delay = Math.max(_ADVISOR_DEBOUNCE_MS, _ADVISOR_REFRESH_MIN_MS - sinceLast);
-    _advisorRefreshTimer = setTimeout(_requestScheduledAdvisorRefresh, delay);
-  }
-  function _observeAdvisorSessionChanges(rows) {
-    const next = {};
-    (Array.isArray(rows) ? rows : []).forEach(function (row) {
-      const sid = row && row.session_id;
-      if (sid && !String(sid).startsWith('spawning-')) next[sid] = _advisorSessionState(row);
-    });
-    if (_advisorSessionSnapshot === null) {
-      _advisorSessionSnapshot = next;
-      if (Object.keys(next).length) _scheduleAdvisorRefresh();
-      return;
-    }
-    let qualifies = false;
-    const ids = new Set(Object.keys(_advisorSessionSnapshot).concat(Object.keys(next)));
-    ids.forEach(function (sid) {
-      const before = _advisorSessionSnapshot[sid];
-      const after = next[sid];
-      if (!before || !after) { qualifies = true; return; }
-      if (before.live !== after.live || before.model !== after.model) qualifies = true;
-      if (after.size - before.size >= _ADVISOR_SUBSTANTIAL_BYTES) qualifies = true;
-    });
-    _advisorSessionSnapshot = next;
-    if (qualifies) _scheduleAdvisorRefresh();
-  }
-  function _maApply(recId, sid, model) {
-    fetch('/api/model-advisor/apply', {
-      method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ rec_id: recId, session_id: sid, model: model }),
-    }).then(function (r) { return r.json(); })
-      .then(function (d) {
-        if (d && !d.ok && typeof showOpToast === 'function') showOpToast('Switch failed: ' + (d.error || 'unknown'), 'error');
-        else if (typeof showOpToast === 'function') showOpToast('Queued ' + (_maModels[model] || model) + ' - applies on next turn', 'success');
-        // If the switched session is the one open in the reader, re-pull its
-        // usage so the footer model pill flips to "<model> → next" immediately
-        // instead of waiting for the next poll. The switch is queued server-side
-        // (the /model inject lands on the session's next turn), so the chip is
-        // the honest live state.
-        if (sid && typeof _usageSessionIdByPane !== 'undefined'
-            && Object.values(_usageSessionIdByPane).includes(sid)
-            && typeof fetchSessionUsage === 'function') {
-          fetchSessionUsage(sid);
-        }
-        _pollModelAdvisor();
-      })
-      .catch(function () { _pollModelAdvisor(); });
-  }
-  function _maDismiss(recId) {
-    fetch('/api/model-advisor/dismiss', {
-      method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ rec_id: recId }),
-    }).then(function () { _pollModelAdvisor(); }).catch(function () { _pollModelAdvisor(); });
-  }
-  function _renderModelAdvisor(d) {
-    const body = document.getElementById('maBody');
-    if (!body) return;
-    const live = d.live || [];
-
-    // Filter log by timeframe, exclude pending (those live in the Live section).
-    // Field name in the log is "ts" (not "logged_at").
-    const allLog = (d.log || []).filter(function (e) { return e.status !== 'pending'; });
-    const cutMs = _maTimeframe === '24h' ? 86400000 : _maTimeframe === '7d' ? 604800000 : 0;
-    const now = Date.now();
-    const filteredLog = cutMs ? allLog.filter(function (e) {
-      const t = e.ts || e.logged_at;
-      return t && (now - new Date(t).getTime()) <= cutMs;
-    }) : allLog;
-    const appliedLog = filteredLog.filter(function (e) { return e.status === 'applied'; });
-    const savedTok = appliedLog.reduce(function (sum, e) {
-      return sum + Math.max(0, (e.current_out_tokens || 0) - (e.baseline_out_tokens || 0));
-    }, 0);
-
-    let html = '';
-
-    // Timeframe selector — "All" shows total count so user knows scope.
-    const totalCount = allLog.length;
-    html += '<div class="ma-tf">';
-    [['24h', 'Last 24h'], ['7d', 'Last 7 days'], ['all', 'All (' + totalCount + ')']].forEach(function (p) {
-      html += '<button class="ma-tf-btn' + (_maTimeframe === p[0] ? ' active' : '') +
-              '" data-tf="' + p[0] + '">' + p[1] + '</button>';
-    });
-    html += '</div>';
-
-    // Summary cards — no $ amounts, tokens instead.
-    html += '<div class="ma-cards">';
-    html += '<div class="ma-stat ma-stat-green">' +
-            '<div class="ma-stat-lbl">Applied</div>' +
-            '<b>' + appliedLog.length + '</b>' +
-            '<div class="ma-stat-sub">switches this window</div></div>';
-    html += '<div class="ma-stat ' + (live.length ? 'ma-stat-amber' : 'ma-stat-neutral') + '">' +
-            '<div class="ma-stat-lbl">Live now</div>' +
-            '<b>' + live.length + '</b>' +
-            '<div class="ma-stat-sub">' + (live.length ? 'need attention' : 'all good') + '</div></div>';
-    html += '<div class="ma-stat ma-stat-blue">' +
-            '<div class="ma-stat-lbl">Output on Sonnet</div>' +
-            '<b>' + (savedTok > 0 ? _maTok(savedTok) : '-') + '</b>' +
-            '<div class="ma-stat-sub">tokens on cheaper model</div></div>';
-    html += '</div>';
-
-    // Live recommendations with actions.
-    html += '<div><div class="ma-sec-title">Live recommendations</div>';
-    if (!live.length) {
-      html += '<div class="ma-empty"><div class="ma-empty-ok">✓</div>' +
-              'All live sessions are on the right model.' +
-              '<div class="ma-empty-hint">The advisor checks after meaningful session changes.</div></div>';
-    } else {
-      live.forEach(function (r) {
-        const from = formatModelEffort(_maModels[r.current_model] || r.current_model || '?', r.reasoning_effort);
-        const to = _maModels[r.to_model] || r.to_model;
-        html += '<div class="ma-rec">';
-        html += '<div class="ma-rec-main">';
-        html += '<div class="ma-rec-title">' + _maEsc(r.name || (r.session_id || '').slice(0, 8)) +
-                ' <span class="ma-badge ' + _maActionClass(r.action) + '">' + _maActionLabel(r.action) +
-                ' ' + _maEsc(from) + ' → ' + _maEsc(to) + '</span>' +
-                '<span class="ma-conf">' + _maEsc(r.confidence || '') + ' · score ' + (r.score == null ? '?' : r.score) + '</span></div>';
-        html += '<div class="ma-rec-reason">' + _maEsc(r.reason || '') + '</div>';
-        html += '</div>';
-        html += '<div class="ma-acts">';
-        html += '<button class="ma-btn ma-btn-go" data-ma-apply="1" data-rec="' + _maEsc(r.id || '') +
-                '" data-sid="' + _maEsc(r.session_id || '') + '" data-model="' + _maEsc(r.to_model) + '">Switch now</button>';
-        html += '<button class="ma-btn" data-ma-dismiss="1" data-rec="' + _maEsc(r.id || '') + '">Dismiss</button>';
-        html += '</div></div>';
-      });
-    }
-    html += '</div>';
-
-    // Tabs: Sessions Scanned / Recent Activity
-    const scanned = d.scanned || [];
-    html += '<div>';
-    const scannedAt = d.scanned_at ? ' · ' + d.scanned_at : '';
-    html += '<div class="ma-tabs">' +
-            '<button class="ma-tab' + (_maTab === 'scanned' ? ' active' : '') + '" data-ma-tab="scanned">Sessions scanned (' + scanned.length + ')' + _maEsc(scannedAt) + '</button>' +
-            '<button class="ma-tab' + (_maTab === 'activity' ? ' active' : '') + '" data-ma-tab="activity">Recent activity</button>' +
-            '</div>';
-
-    if (_maTab === 'scanned') {
-      const scanHours = d.scan_window_hours || 2;
-      if (!scanned.length) {
-        html += '<div class="ma-empty">No sessions active in the last ' + scanHours + 'h.' +
-                '<div class="ma-empty-hint">Pure heuristic - no model calls.</div></div>';
-      } else {
-        html += '<table class="ma-scan-table"><thead><tr>' +
-                '<th>Session</th><th>Model</th><th>Score</th><th>Signals</th><th>Verdict</th>' +
-                '</tr></thead><tbody>';
-        scanned.forEach(function (s) {
-          const score = s.score == null ? 50 : s.score;
-          const scoreColor = score <= 32 ? '#3fb950' : score >= 72 ? '#f85149' : '#d29922';
-          const dotPct = Math.round(score / 100 * 100);
-          const f = s.features || {};
-          const signals = [];
-          if (f.exec_tools > 0) signals.push(['exec×' + f.exec_tools, f.exec_tools >= 3]);
-          if (f.reasoning_tools > 0) signals.push(['reason×' + f.reasoning_tools, false]);
-          if (f.open_ended > 0) signals.push(['open×' + f.open_ended, false]);
-          if (f.imperative > 0) signals.push(['cmd×' + f.imperative, f.imperative >= 3]);
-          if (f.planning_prose > 0) signals.push(['plan×' + f.planning_prose, false]);
-          if (f.autonomy > 0) signals.push(['auto ' + f.autonomy + 'x', f.autonomy >= 3]);
-          const sigsHtml = signals.map(function (p) {
-            return '<span class="ma-sig' + (p[1] ? ' ma-sig-hot' : '') + '">' + _maEsc(p[0]) + '</span>';
-          }).join('');
-          let verdict = '<span class="ma-verdict-ok">✓ ok</span>';
-          if (s.rec) {
-            const lbl = s.rec.action === 'downgrade' ? '⬇ downgrade' :
-                        s.rec.action === 'upgrade' ? '⬆ upgrade' : '◆ spawn';
-            verdict = '<span class="ma-verdict-drift">' + _maEsc(lbl) + ' → ' + _maEsc(s.rec.to_model) + '</span>';
-          } else if (score > 32 && score < 72) {
-            verdict = '<span class="ma-verdict-gray">~ gray zone</span>';
-          }
-          html += '<tr>' +
-            '<td style="max-width:180px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="' + _maEsc(s.name || s.session_id) + '">' +
-            _maEsc((s.name || s.session_id || '').slice(0, 32)) + '</td>' +
-            '<td><span class="ma-badge ' + (s.current_model === 'opus' ? 'ma-up' : s.current_model === 'sonnet' ? 'ma-down' : '') + '">' +
-            _maEsc(formatModelEffort(_maModels[s.current_model] || s.current_model || '?', s.reasoning_effort)) + '</span></td>' +
-            '<td style="white-space:nowrap;">' +
-            '<span class="ma-score-bar"><span class="ma-score-dot" style="left:' + dotPct + '%;color:' + scoreColor + ';"></span></span>' +
-            '<span style="color:' + scoreColor + ';font-size:11px;font-family:ui-monospace,Menlo,monospace;">' + Math.round(score) + '</span>' +
-            '<span style="font-size:10px;opacity:.5;margin-left:4px;">' + _maEsc(s.phase || '') + '</span></td>' +
-            '<td>' + (sigsHtml || '<span style="opacity:.35">-</span>') + '</td>' +
-            '<td>' + verdict + '</td>' +
-            '</tr>';
-        });
-        html += '</tbody></table>';
-        html += '<div style="font-size:10px;opacity:.35;margin-top:8px;text-align:right;">Sessions active in last ' + scanHours + 'h · pure heuristic · no model calls</div>';
-      }
-    } else {
-      // Recent activity tab
-      if (!filteredLog.length) {
-        html += '<div class="ma-empty">No switches in this window.' +
-                '<div class="ma-empty-hint">Applied and dismissed recommendations appear here.</div></div>';
-      } else {
-        filteredLog.slice(0, 30).forEach(function (e) {
-          const from = _maModels[e.from_model] || e.from_model;
-          const to = _maModels[e.to_model] || e.to_model;
-          const tokDelta = Math.max(0, (e.current_out_tokens || 0) - (e.baseline_out_tokens || 0));
-          const tokStr = e.status === 'applied' && tokDelta >= 1000 ? ' · ' + _maTok(tokDelta) + ' tokens' : '';
-          html += '<div class="ma-log-row"><span class="ma-st ma-st-' + _maEsc(e.status) + '">' + _maEsc(e.status) + '</span>' +
-                  '<span>' + _maEsc(e.name || (e.session_id || '').slice(0, 8)) + '</span>' +
-                  '<span style="opacity:.6">' + _maEsc(from) + ' → ' + _maEsc(to) + tokStr + '</span>' +
-                  '<span class="ma-spacer"></span></div>';
-        });
-      }
-    }
-    html += '</div>';
-
-    body.innerHTML = html;
-    body.querySelectorAll('[data-ma-tab]').forEach(function (b) {
-      b.addEventListener('click', function () { _maTab = b.dataset.maTab; _renderModelAdvisor(d); });
-    });
-    body.querySelectorAll('[data-tf]').forEach(function (b) {
-      b.addEventListener('click', function () { _maTimeframe = b.dataset.tf; _renderModelAdvisor(d); });
-    });
-    body.querySelectorAll('[data-ma-apply]').forEach(function (b) {
-      b.addEventListener('click', function () { _maApply(b.dataset.rec, b.dataset.sid, b.dataset.model); });
-    });
-    body.querySelectorAll('[data-ma-dismiss]').forEach(function (b) {
-      b.addEventListener('click', function () { _maDismiss(b.dataset.rec); });
-    });
-  }
-  function _updateAdvisorPill(d) {
-    // Stash recommendations by session id so the in-conversation nudge can look
-    // up the open session without its own fetch.
-    const bySid = {};
-    (d.live || []).forEach(function (r) { if (r.session_id) bySid[r.session_id] = r; });
-    window.__advisorBySid = bySid;
-    const pill = document.getElementById('cccAdvisorPill');
-    if (pill) {
-      const n = (d.live || []).length;
-      pill.querySelector('.ccc-adv-val').textContent = n ? (n + ' drift') : 'models ok';
-      pill.classList.toggle('ccc-adv-hot', n > 0);
-    }
-    _renderInlineAdvisorNudge();
-  }
-  // Per-session nudge above the composer: when the OPEN conversation is on the
-  // wrong model, surface the recommendation right where the user is looking,
-  // with a one-tap switch that targets THIS session (no ambiguity about which
-  // session the global pill would switch). Dismissable per recommendation.
-  function _renderInlineAdvisorNudge() {
-    const bar = document.getElementById('convInputBar');
-    let nudge = document.getElementById('maInlineNudge');
-    // The nudge sits above the ACTIVE pane's composer — use that pane's session.
-    // Read straight off the pane's conversationId (set synchronously by
-    // selectConversation) rather than _usageSessionIdByPane, which defers its
-    // update while the composer has focus (CCC-512) — a stale mapping meant
-    // the nudge could keep showing a PREVIOUS (Claude) session's recommendation
-    // after switching to a non-Claude engine pane (Codex, cursor, ...) that the
-    // advisor never scores.
-    let sid = null;
-    if (typeof activePaneId === 'function' && typeof paneByPaneId === 'function') {
-      const pane = paneByPaneId(activePaneId());
-      const convId = pane && pane.conversationId;
-      sid = (convId && typeof sessionIdByConv !== 'undefined' && sessionIdByConv[convId]) || null;
-    }
-    if (!sid && typeof _usageSessionIdByPane !== 'undefined' && typeof activePaneId === 'function') {
-      sid = _usageSessionIdByPane[activePaneId()] || null;
-    }
-    const rec = sid && window.__advisorBySid ? window.__advisorBySid[sid] : null;
-    if (!bar || !rec) { if (nudge) nudge.remove(); return; }
-    if (!document.getElementById('__maNudgeStyle')) {
-      const st = document.createElement('style');
-      st.id = '__maNudgeStyle';
-      st.textContent =
-        '#maInlineNudge{display:flex;align-items:center;gap:9px;margin:0 0 6px;padding:6px 10px;' +
-        'border:1px solid var(--border-color,#30363d);border-radius:8px;font:12px/1.4 ui-monospace,Menlo,monospace;' +
-        'background:var(--hover-bg,rgba(127,127,127,.08));}' +
-        '#maInlineNudge.ma-n-up{border-color:#d29922;} #maInlineNudge.ma-n-spawn{border-color:#58a6ff;}' +
-        '#maInlineNudge .ma-n-ico{flex:0 0 auto;}' +
-        '#maInlineNudge .ma-n-text{flex:1 1 auto;min-width:0;}' +
-        '#maInlineNudge .ma-n-text b{font-weight:600;}' +
-        '#maInlineNudge .ma-n-reason{opacity:.6;}' +
-        '#maInlineNudge button{cursor:pointer;border:1px solid var(--border-color,#30363d);background:transparent;' +
-        'color:inherit;font:600 11px/1 ui-monospace,Menlo,monospace;padding:5px 10px;border-radius:6px;white-space:nowrap;}' +
-        '#maInlineNudge .ma-n-go{border-color:#2ea043;color:#3fb950;} #maInlineNudge .ma-n-go:hover{background:rgba(63,185,80,.14);}' +
-        '#maInlineNudge .ma-n-x{opacity:.6;padding:5px 8px;} #maInlineNudge .ma-n-x:hover{opacity:1;}';
-      document.head.appendChild(st);
-    }
-    if (!nudge) {
-      nudge = document.createElement('div');
-      nudge.id = 'maInlineNudge';
-      bar.parentNode.insertBefore(nudge, bar);
-    }
-    nudge.className = rec.action === 'upgrade' ? 'ma-n-up' : rec.action === 'spawn_worker' ? 'ma-n-spawn' : '';
-    const to = _maModels[rec.to_model] || rec.to_model;
-    const verb = rec.action === 'upgrade' ? 'needs more muscle'
-               : rec.action === 'spawn_worker' ? 'is executing - offload to a' : 'looks';
-    const lead = rec.action === 'upgrade' ? ('This session ' + verb + ' - bump to ')
-               : rec.action === 'spawn_worker' ? ('This session ' + verb + ' ')
-               : ('This session ' + verb + ' ' + to + '-grade');
-    const ico = rec.action === 'upgrade' ? '⬆' : rec.action === 'spawn_worker' ? '◆' : '⬇';
-    nudge.innerHTML =
-      '<span class="ma-n-ico">' + ico + '</span>' +
-      '<span class="ma-n-text"><b>' + _maEsc(lead) + (rec.action === 'spawn_worker' ? (_maEsc(to) + ' worker') : '') +
-      '.</b> <span class="ma-n-reason">' + _maEsc(rec.reason || '') + '</span></span>' +
-      '<button class="ma-n-go" data-n-apply="1">' +
-      (rec.action === 'upgrade' ? 'Upgrade to ' : 'Switch to ') + _maEsc(to) + '</button>' +
-      '<button class="ma-n-x" data-n-dismiss="1" aria-label="Dismiss">&times;</button>';
-    nudge.querySelector('[data-n-apply]').onclick = function () { _maApply(rec.id, sid, rec.to_model); };
-    nudge.querySelector('[data-n-dismiss]').onclick = function () { _maDismiss(rec.id); nudge.remove(); };
-  }
-
   function _initPollerStrip() {
     const footer = document.querySelector('.sidebar-footer');
     if (!footer) { setTimeout(_initPollerStrip, 400); return; }
@@ -1600,7 +1112,7 @@
         '#pollerWrap::-webkit-scrollbar{display:none;}' +
         '#cccHealth{gap:4px;font-size:9px;}' +
         '#pollerToggle,#cccSoundToggle{font-size:9px !important;padding:1px 4px !important;}' +
-        '#cccAdvisorPill,#cccProductivityPill,#cccSystemPill,#cccThroughputPill,#cccFleetPill{' +
+        '#cccProductivityPill,#cccSystemPill,#cccThroughputPill,#cccFleetPill{' +
         'font-size:10px !important;padding:2px 6px !important;gap:3px !important;}}';
       document.head.appendChild(st);
     }
@@ -1694,30 +1206,6 @@
     });
     wrap.appendChild(needsYouPill);
     wrap.appendChild(soundToggle);
-    // Model Advisor pill: opens the drift/savings monitor; badge shows how many
-    // live sessions are on the wrong model right now.
-    const advPill = document.createElement('div');
-    advPill.id = 'cccAdvisorPill';
-    advPill.title = 'Model Advisor - sessions drifting onto the wrong model (too strong or too weak), and tokens saved. Click to open.';
-    advPill.style.cssText = 'display:flex;align-items:center;gap:5px;flex:0 0 auto;cursor:pointer;' +
-      'font:600 11px/1 ui-monospace,Menlo,monospace;padding:3px 8px;border-radius:6px;' +
-      'border:1px solid var(--border-color,#30363d);opacity:.8;';
-    advPill.innerHTML = '<span class="ccc-adv-dot" style="width:6px;height:6px;border-radius:50%;background:#7d8590;"></span>' +
-      '<span class="ccc-adv-val">models</span>';
-    advPill.addEventListener('click', _openModelAdvisor);
-    advPill.addEventListener('mouseenter', function () { advPill.style.opacity = '1'; });
-    advPill.addEventListener('mouseleave', function () { advPill.style.opacity = '.8'; });
-    if (!document.getElementById('__advPillStyle')) {
-      const aps = document.createElement('style');
-      aps.id = '__advPillStyle';
-      aps.textContent = '#cccAdvisorPill.ccc-adv-hot{border-color:#d29922;opacity:1;}' +
-        '#cccAdvisorPill.ccc-adv-hot .ccc-adv-dot{background:#d29922;}' +
-        '#cccAdvisorPill.ccc-adv-hot .ccc-adv-val{color:#d29922;}';
-      document.head.appendChild(aps);
-    }
-    wrap.appendChild(advPill);
-    // Keep a neutral cached state until a meaningful session change schedules
-    // a refresh, or the user opens the advisor for a forced fresh report.
     // Productivity is deliberately separate from token Throughput: it opens a
     // project/day outcome dashboard and performs no background polling here.
     const productivityPill = document.createElement('div');
@@ -20123,7 +19611,6 @@
       // Keep still-pending placeholders on top until they materialize.
       const placeholders = Array.from(pendingSpawns.values());
       conversationsData = [...placeholders, ...fresh];
-      _observeAdvisorSessionChanges(fresh);
       reconcilePendingNewSessionObjectAssignments();
       clearInputDraftKeyCache();
       // Re-apply any in-flight archive/verify overrides so an /api/sessions
@@ -43529,6 +43016,10 @@
   // count is > 0. Click → openFfcModal (Task 8).
   // ----------------------------------------------------------------
   const _ffcCache = new Map(); // conversation_id -> {count, truncated, groups}
+  // conversation_id -> pending fetch. Every SSE tick invalidates the cache
+  // and re-renders, so two ticks in flight used to fire two identical
+  // /files requests at once; the second now rides on the first.
+  const _ffcInFlight = new Map();
 
   async function ffcFetch(convId) {
     if (!convId || convId === '__new__' || convId.startsWith('backlog-') || convId.startsWith('pkood-') || convId.startsWith('issue-')) {
@@ -43537,20 +43028,28 @@
     if (_ffcCache.has(convId)) {
       return _ffcCache.get(convId);
     }
-    try {
-      const r = await fetch('/api/conversations/' + encodeURIComponent(convId) + '/files');
-      if (!r.ok) {
+    const pending = _ffcInFlight.get(convId);
+    if (pending) return pending;
+    const run = (async () => {
+      try {
+        const r = await fetch('/api/conversations/' + encodeURIComponent(convId) + '/files');
+        if (!r.ok) {
+          _ffcCache.set(convId, {count: 0, truncated: false, groups: {}});
+          return _ffcCache.get(convId);
+        }
+        const data = await r.json();
+        _ffcCache.set(convId, data);
+        return data;
+      } catch (e) {
+        // Network / parse failure — silent. Pill just stays hidden.
         _ffcCache.set(convId, {count: 0, truncated: false, groups: {}});
         return _ffcCache.get(convId);
+      } finally {
+        _ffcInFlight.delete(convId);
       }
-      const data = await r.json();
-      _ffcCache.set(convId, data);
-      return data;
-    } catch (e) {
-      // Network / parse failure — silent. Pill just stays hidden.
-      _ffcCache.set(convId, {count: 0, truncated: false, groups: {}});
-      return _ffcCache.get(convId);
-    }
+    })();
+    _ffcInFlight.set(convId, run);
+    return run;
   }
 
   function ffcInvalidate(convId) {
@@ -53087,8 +52586,6 @@
         if (ph) ph.addEventListener('click', (e) => { e.preventDefault(); e.stopPropagation(); cycleAutoHandoverModeForPane(pane.id, _usageSessionIdByPane[pane.id]); });
       });
     }
-    // Keep the per-session advisor nudge in sync with whatever session is open.
-    if (typeof _renderInlineAdvisorNudge === 'function') _renderInlineAdvisorNudge();
   }
 
   // Bootstrap per-engine model lists. /api/engines/models hydrates these from
