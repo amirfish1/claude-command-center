@@ -6412,6 +6412,33 @@ def _known_repo_paths_uncached():
 _REPO_SIGNALS_CACHE = {"paths": (), "data": None, "ts": 0.0}
 _REPO_SIGNALS_TTL = 30  # seconds
 
+# The per-transcript stats aggregates (_STATS_FILE_CACHE) are rebuilt by the
+# repo-list signal walk every _REPO_SIGNALS_TTL, but only /api/stats (an
+# overlay nobody opens) persisted them, so the on-disk copy went stale for
+# weeks and every restart cold-parsed thousands of transcripts on the first
+# /api/repo/list. Persist from this path too: rate-limited, on a daemon
+# thread, and _save_stats_file_cache no-ops when nothing is dirty.
+_STATS_CACHE_PERSIST_INTERVAL_S = 300.0
+_STATS_CACHE_PERSIST_LAST = [0.0]
+_STATS_CACHE_PERSIST_THREAD = None
+
+
+def _maybe_persist_stats_cache(now=None):
+    """Start one background save of the stats file cache if the last one was
+    more than _STATS_CACHE_PERSIST_INTERVAL_S ago. Returns True when started."""
+    global _STATS_CACHE_PERSIST_THREAD
+    now = time.time() if now is None else now
+    if now - _STATS_CACHE_PERSIST_LAST[0] < _STATS_CACHE_PERSIST_INTERVAL_S:
+        return False
+    prev = _STATS_CACHE_PERSIST_THREAD
+    if prev is not None and prev.is_alive():
+        return False
+    _STATS_CACHE_PERSIST_LAST[0] = now
+    t = threading.Thread(target=_save_stats_file_cache, name="stats-cache-persist", daemon=True)
+    _STATS_CACHE_PERSIST_THREAD = t
+    t.start()
+    return True
+
 _DEV_TEST_NAME_SEGMENTS = frozenset({
     "ccc-voice", "draft", "experiment", "experiments", "fixture", "fixtures",
     "playground", "sandbox", "scratch", "spec", "specs", "temp", "test",
@@ -6579,7 +6606,13 @@ def _compute_repo_usage_signals(repo_paths):
                             if session_id:
                                 repo["signals"]["d7"]["sessions"].add(session_id)
 
-    return _finalize()
+    out = _finalize()
+    # Outside _STATS_CACHE_LOCK: the save takes it.
+    try:
+        _maybe_persist_stats_cache(now)
+    except Exception:
+        pass
+    return out
 
 
 def _git_toplevel_for_existing_dir(path):
