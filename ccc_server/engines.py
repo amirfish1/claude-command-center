@@ -1020,6 +1020,37 @@ def _antigravity_spawn_pid_by_session_id():
     return out
 
 
+# str(dir) -> (dir mtime_ns, [matching paths]). This runs inside every
+# sessions-snapshot refresh (gemini and antigravity scans) and globbed every
+# known repo's log dir, one of which holds 21,000 entries, up to three times
+# per call (cwd, recent and custom repo lists overlap): 0.2 to 0.4 s per
+# refresh. A directory's mtime moves whenever an entry is added or removed,
+# which is exactly what a glob can observe, so glob once per dir version.
+_ANTIGRAVITY_LOG_DIR_CACHE = {}
+_ANTIGRAVITY_REPO_LOG_PATTERNS = ("spawn-antigravity-*.log.agy.log", "resume-antigravity-*.log.agy.log")
+
+
+def _antigravity_glob_dir_uncached(directory, patterns):
+    out = []
+    for pattern in patterns:
+        out.extend(directory.glob(pattern))
+    return out
+
+
+def _antigravity_glob_dir(directory, patterns):
+    key = str(directory)
+    try:
+        version = directory.stat().st_mtime_ns
+    except OSError:
+        _ANTIGRAVITY_LOG_DIR_CACHE.pop(key, None)
+        return []
+    hit = _ANTIGRAVITY_LOG_DIR_CACHE.get(key)
+    if hit is None or hit[0] != version:
+        hit = (version, list(_antigravity_glob_dir_uncached(directory, patterns)))
+        _ANTIGRAVITY_LOG_DIR_CACHE[key] = hit
+    return list(hit[1])
+
+
 def _antigravity_cli_log_paths(repo_path=None):
     paths = []
     seen = set()
@@ -1038,18 +1069,21 @@ def _antigravity_cli_log_paths(repo_path=None):
         repo_log_roots.append(str(Path.cwd()))
         repo_log_roots.extend(_core._load_recent_repos())
         repo_log_roots.extend(_core._load_custom_repos())
+    seen_log_dirs = set()
     for root_path in repo_log_roots:
         try:
             log_dir = _core.repo_log_dir(root_path)
-            for pattern in ("spawn-antigravity-*.log.agy.log", "resume-antigravity-*.log.agy.log"):
-                for path in log_dir.glob(pattern):
-                    add_path(path)
+            if str(log_dir) in seen_log_dirs:
+                continue
+            seen_log_dirs.add(str(log_dir))
+            for path in _antigravity_glob_dir(log_dir, _ANTIGRAVITY_REPO_LOG_PATTERNS):
+                add_path(path)
         except OSError:
             pass
     cli_log_dir = _core.ANTIGRAVITY_CLI_HOME / "log"
     if cli_log_dir.is_dir():
         try:
-            for path in cli_log_dir.glob("*.log"):
+            for path in _antigravity_glob_dir(cli_log_dir, ("*.log",)):
                 add_path(path)
         except OSError:
             pass
