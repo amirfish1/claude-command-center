@@ -34,12 +34,21 @@ PLIST_LABEL="com.github.claude-command-center"
 PLIST_PATH="$HOME/Library/LaunchAgents/${PLIST_LABEL}.plist"
 WORKER_PLIST_LABEL="com.github.claude-command-center.worker"
 WORKER_PLIST_PATH="$HOME/Library/LaunchAgents/${WORKER_PLIST_LABEL}.plist"
+# Optional: only installed when a `kimi` CLI is found on PATH at install time.
+# This is Kimi's own daemon (`kimi web`), not CCC code — CCC's kap transport
+# (ccc_server/kap.py) adopts whatever live instance it finds registered under
+# ~/.kimi-code/server/instances/, so keeping it running is what lets that
+# transport engage instead of silently falling back to the ACP path.
+KIMI_WEB_PLIST_LABEL="com.github.claude-command-center.kimi-web"
+KIMI_WEB_PLIST_PATH="$HOME/Library/LaunchAgents/${KIMI_WEB_PLIST_LABEL}.plist"
 SERVICE_LOG_DIR="$HOME/.claude/command-center/logs"
 # Linux (systemd user service) equivalents of the launchd agent above.
 SYSTEMD_UNIT_NAME="ccc.service"
 SYSTEMD_UNIT_PATH="${XDG_CONFIG_HOME:-$HOME/.config}/systemd/user/${SYSTEMD_UNIT_NAME}"
 WORKER_SYSTEMD_UNIT_NAME="ccc-worker.service"
 WORKER_SYSTEMD_UNIT_PATH="${XDG_CONFIG_HOME:-$HOME/.config}/systemd/user/${WORKER_SYSTEMD_UNIT_NAME}"
+KIMI_WEB_SYSTEMD_UNIT_NAME="ccc-kimi-web.service"
+KIMI_WEB_SYSTEMD_UNIT_PATH="${XDG_CONFIG_HOME:-$HOME/.config}/systemd/user/${KIMI_WEB_SYSTEMD_UNIT_NAME}"
 
 is_port_bound() {
   (echo > "/dev/tcp/127.0.0.1/$1") >/dev/null 2>&1
@@ -55,6 +64,10 @@ service_target() {
 
 worker_service_target() {
   echo "$(service_domain)/$WORKER_PLIST_LABEL"
+}
+
+kimi_web_service_target() {
+  echo "$(service_domain)/$KIMI_WEB_PLIST_LABEL"
 }
 
 xml_escape() {
@@ -133,6 +146,29 @@ unload_worker_service() {
       || true
   fi
   launchctl unload "$WORKER_PLIST_PATH" >/dev/null 2>&1 || true
+}
+
+load_kimi_web_service() {
+  # Same rule as the worker: a CCC dashboard reinstall must not bounce an
+  # already-running kimi-web daemon and drop whatever session it's serving.
+  if launchctl print "$(kimi_web_service_target)" >/dev/null 2>&1; then
+    return
+  fi
+  if launchctl_supports_bootstrap; then
+    launchctl bootstrap "$(service_domain)" "$KIMI_WEB_PLIST_PATH"
+    launchctl enable "$(kimi_web_service_target)" >/dev/null 2>&1 || true
+  else
+    launchctl load "$KIMI_WEB_PLIST_PATH"
+  fi
+}
+
+unload_kimi_web_service() {
+  if launchctl_supports_bootstrap; then
+    launchctl bootout "$(kimi_web_service_target)" >/dev/null 2>&1 \
+      || launchctl bootout "$(service_domain)" "$KIMI_WEB_PLIST_PATH" >/dev/null 2>&1 \
+      || true
+  fi
+  launchctl unload "$KIMI_WEB_PLIST_PATH" >/dev/null 2>&1 || true
 }
 
 write_plist() {
@@ -226,6 +262,49 @@ EOF
   fi
 }
 
+# Resolves the `kimi` CLI once at install time and bakes the full path into
+# the plist, same reason the worker plist bakes a resolved python3: a launchd
+# job's PATH is minimal and must not depend on inheriting this shell's PATH.
+# Returns 1 (writes nothing) when kimi isn't installed — the caller treats
+# that as "skip, not an error", since most CCC installs won't have Kimi.
+write_kimi_web_plist() {
+  local kimi_bin
+  kimi_bin="$(command -v kimi 2>/dev/null || true)"
+  if [ -z "$kimi_bin" ]; then
+    return 1
+  fi
+  mkdir -p "$(dirname "$KIMI_WEB_PLIST_PATH")" "$SERVICE_LOG_DIR"
+  cat > "$KIMI_WEB_PLIST_PATH" <<EOF
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>$KIMI_WEB_PLIST_LABEL</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>$kimi_bin</string>
+    <string>web</string>
+  </array>
+  <key>RunAtLoad</key>
+  <true/>
+  <key>KeepAlive</key>
+  <true/>
+  <key>ThrottleInterval</key>
+  <integer>10</integer>
+  <key>StandardOutPath</key>
+  <string>$SERVICE_LOG_DIR/kimi-web.out.log</string>
+  <key>StandardErrorPath</key>
+  <string>$SERVICE_LOG_DIR/kimi-web.err.log</string>
+</dict>
+</plist>
+EOF
+  if command -v plutil >/dev/null 2>&1; then
+    plutil -lint "$KIMI_WEB_PLIST_PATH" >/dev/null
+  fi
+  return 0
+}
+
 # ── Linux: systemd user service ─────────────────────────────────────────────
 systemd_available() {
   command -v systemctl >/dev/null 2>&1
@@ -287,6 +366,33 @@ WantedBy=default.target
 EOF
 }
 
+# Same gate as write_kimi_web_plist: skip (return 1) rather than error when
+# the `kimi` CLI isn't on PATH.
+write_kimi_web_systemd_unit() {
+  local kimi_bin
+  kimi_bin="$(command -v kimi 2>/dev/null || true)"
+  if [ -z "$kimi_bin" ]; then
+    return 1
+  fi
+  mkdir -p "$(dirname "$KIMI_WEB_SYSTEMD_UNIT_PATH")" "$SERVICE_LOG_DIR"
+  cat > "$KIMI_WEB_SYSTEMD_UNIT_PATH" <<EOF
+[Unit]
+Description=Kimi Code kap-server (web) daemon, adopted by CCC's kap transport
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+ExecStart=$kimi_bin web
+Restart=on-failure
+RestartSec=10
+
+[Install]
+WantedBy=default.target
+EOF
+  return 0
+}
+
 install_service_linux() {
   if ! systemd_available; then
     cat >&2 <<EOF
@@ -321,6 +427,12 @@ EOF
   systemctl --user enable --now "$WORKER_SYSTEMD_UNIT_NAME"
   systemctl --user enable --now "$SYSTEMD_UNIT_NAME"
 
+  if write_kimi_web_systemd_unit; then
+    echo "  kimi  : $KIMI_WEB_SYSTEMD_UNIT_PATH (kimi CLI found — enabling kap connector daemon)"
+    systemctl --user daemon-reload
+    systemctl --user enable --now "$KIMI_WEB_SYSTEMD_UNIT_NAME" >/dev/null 2>&1 || true
+  fi
+
   for _ in 1 2 3 4 5; do
     sleep 0.5
     if is_port_bound "$target_port"; then
@@ -353,7 +465,8 @@ uninstall_service_linux() {
   echo "→ Removing CCC systemd user service"
   systemctl --user disable --now "$SYSTEMD_UNIT_NAME" >/dev/null 2>&1 || true
   systemctl --user disable --now "$WORKER_SYSTEMD_UNIT_NAME" >/dev/null 2>&1 || true
-  rm -f "$SYSTEMD_UNIT_PATH" "$WORKER_SYSTEMD_UNIT_PATH"
+  systemctl --user disable --now "$KIMI_WEB_SYSTEMD_UNIT_NAME" >/dev/null 2>&1 || true
+  rm -f "$SYSTEMD_UNIT_PATH" "$WORKER_SYSTEMD_UNIT_PATH" "$KIMI_WEB_SYSTEMD_UNIT_PATH"
   systemctl --user daemon-reload >/dev/null 2>&1 || true
   echo "✓ Service removed."
 }
@@ -376,6 +489,16 @@ service_status_linux() {
     echo "  worker active: yes"
   else
     echo "  worker active: no"
+  fi
+  if [ -f "$KIMI_WEB_SYSTEMD_UNIT_PATH" ]; then
+    echo "  kimi-web unit : $KIMI_WEB_SYSTEMD_UNIT_PATH"
+    if systemd_available && systemctl --user is-active "$KIMI_WEB_SYSTEMD_UNIT_NAME" >/dev/null 2>&1; then
+      echo "  kimi-web active: yes"
+    else
+      echo "  kimi-web active: no"
+    fi
+  else
+    echo "  kimi-web unit : not installed (kimi CLI not found at install time)"
   fi
 }
 
@@ -414,6 +537,11 @@ EOF
   load_worker_service
   load_service
 
+  if write_kimi_web_plist; then
+    echo "  kimi  : $KIMI_WEB_PLIST_PATH (kimi CLI found — enabling kap connector daemon)"
+    load_kimi_web_service
+  fi
+
   for _ in 1 2 3 4 5; do
     sleep 0.5
     if is_port_bound "$target_port"; then
@@ -440,10 +568,11 @@ uninstall_service() {
   echo "→ Removing CCC launchd agent"
   unload_service
   unload_worker_service
+  unload_kimi_web_service
   if launchctl_supports_bootstrap; then
     launchctl disable "$(service_target)" >/dev/null 2>&1 || true
   fi
-  rm -f "$PLIST_PATH" "$WORKER_PLIST_PATH"
+  rm -f "$PLIST_PATH" "$WORKER_PLIST_PATH" "$KIMI_WEB_PLIST_PATH"
   echo "✓ Service removed."
 }
 
@@ -473,6 +602,17 @@ service_status() {
   else
     echo "  worker loaded: no"
   fi
+
+  if [ -f "$KIMI_WEB_PLIST_PATH" ]; then
+    echo "  kimi-web plist: $KIMI_WEB_PLIST_PATH"
+    if launchctl print "$(kimi_web_service_target)" >/dev/null 2>&1; then
+      echo "  kimi-web loaded: yes"
+    else
+      echo "  kimi-web loaded: no"
+    fi
+  else
+    echo "  kimi-web plist: not installed (kimi CLI not found at install time)"
+  fi
 }
 
 case "${1:-}" in
@@ -491,7 +631,11 @@ Usage: ./run.sh [OPTION]
 
   (no args)            Run CCC in the foreground
   --install-service    Install as a background service that starts at login
-                       (launchd on macOS, systemd user service on Linux)
+                       (launchd on macOS, systemd user service on Linux).
+                       If a `kimi` CLI is found on PATH, also installs a
+                       supervised `kimi web` daemon so CCC's kap transport
+                       (ccc_server/kap.py) has something to adopt instead
+                       of silently falling back to the ACP path.
   --uninstall-service  Remove the background service
   --service-status     Show service install/load status
   --app [...]          Open the dashboard in a chromeless app window.
