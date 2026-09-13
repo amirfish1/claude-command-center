@@ -113,6 +113,7 @@
     cccHealth:      { ms: 5000,  label: 'health',  surface: 'Sidebar - bottom-left CCC health bar',         desc: 'CCC self-health: server CPU%, live-activity build latency, recent errors.' },
     stuckSessions:  { ms: 60000, label: 'stuck',   surface: 'Sidebar - bottom-left stuck-session count',    desc: 'Recent Codex sessions currently labeled Stuck by the stale-transcript heuristic.' },
     modelCatalog:   { ms: 3600000, label: 'models', surface: 'Model picker - engine catalogs',               desc: 'Refresh exact engine model choices from the server-owned catalog.' },
+    codexLiveOverlay:{ ms: null,  label: 'codex-live', surface: 'Open conversation pane - Codex live overlay', desc: 'Live app-server overlay poll (static/codex-live-source.js, flag-gated by localStorage.cccCodexLiveOverlay; only while a turn is running or a request is pending).' },
   };
   // Per-trigger runtime stats for the strip: last-fired epoch + total ticks.
   const _pollerStats = {};
@@ -3168,6 +3169,16 @@
       if (detail.thread?.cwd) sessionCwdByConv[detail.threadId] = detail.thread.cwd;
       Promise.resolve(refreshArchiveData({staleOk:false})).catch(()=>{}).then(()=>selectConversation(detail.threadId,detail.paneId));
     }
+  };
+  // Bridge for static/codex-live-source.js (Slice 4 of the codex-single-
+  // renderer-merge plan): the only way that separate module can reach the
+  // private renderConversationEvents/upsert machinery Slice 2 built. Feeds
+  // a flat list of provisional (live_key-bearing) events through the exact
+  // same per-event loop the rollout poller uses -- renderConversationEvents
+  // is a hoisted function declaration in this same closure, so this works
+  // even though it's defined far below.
+  window.CCCCodexRenderLiveEvents = function (paneId, events) {
+    return renderConversationEvents(events, paneId, {});
   };
   window.addEventListener('ccc:codex-media-cleanup-error', event => {
     showOpToast(event.detail && event.detail.message || 'Codex media cleanup could not be confirmed.', 'error');
@@ -57610,6 +57621,13 @@
     if (!(opts && opts.initialLoad) && typeof resetTtsOnNewTurn === 'function') {
       for (const ev of events) {
         if (ev.type !== 'assistant' && ev.type !== 'result') continue;
+        // Provisional (live_key) rows have no jsonl line, so the "already
+        // rendered?" check below can't recognize a steady-state re-poll of
+        // the same in-progress item as already-seen -- every overlay tick
+        // would otherwise look like a brand-new turn and keep cutting off
+        // playback. The eventual line-keyed rollout row for the same turn
+        // still triggers a proper rearm once it's written.
+        if (ev.live_key != null) continue;
         if (ev.line != null) {
           const escLineCheck = (window.CSS && CSS.escape) ? CSS.escape(String(ev.line)) : String(ev.line);
           if ($view.querySelector('.event[data-jsonl-line="' + escLineCheck + '"]')) continue;
@@ -59314,6 +59332,13 @@
       queueMicrotask(() => {
         if (paneByPaneId(paneId)?.conversationId !== renderedConversationId) return;
         const paneEl = convPaneElById(paneId);
+        // Slice 4 (codex-single-renderer-merge): behind the flag, poll the
+        // live app-server overlay instead of attaching the native inline
+        // view (attachInline no-ops for it anyway -- see codex-client.js).
+        // This is the main trigger point: it fires on every rollout render
+        // for a Codex pane (initial open and every poll tick alike), which
+        // is exactly the cadence a freshly-started or resumed turn needs.
+        if (window.CCCCodexLiveSource?.enabled()) window.CCCCodexLiveSource.start(paneEl);
         window.CCCCodexClient.attachInline({...window.CCCCodexClientContext(paneEl),paneEl,viewEl:$view});
       });
     }

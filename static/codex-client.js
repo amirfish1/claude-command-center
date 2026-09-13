@@ -1851,6 +1851,13 @@
   async function attachInline(context) {
     const pane = context.paneEl;
     if (!pane || !context.threadId || !context.repoPath) return false;
+    // Slice 4 of the codex-single-renderer-merge plan: behind
+    // localStorage.cccCodexLiveOverlay, static/codex-live-source.js drives
+    // the shared transcript renderer instead of this native inline view.
+    // Checked here (not just at each call site) so every path that can
+    // trigger an attach -- pane paint, engine detection, workspace fetch,
+    // the shared renderer's own trailing hook -- is covered by one gate.
+    if (window.CCCCodexLiveSource?.enabled()) return false;
     let entry = entryFor(pane);
     if (entry && entry.threadId === context.threadId && entry.client.__testing.state.root?.isConnected) return true;
     if (entry?.pending && entry.threadId === context.threadId) return entry.pending;
@@ -1924,7 +1931,12 @@
   function upgradePaintedPane(pane) {
     if (!pane.classList.contains('is-codex-session') || typeof window.CCCCodexClientContext !== 'function') return;
     const view = pane.querySelector('.conversations-view');
-    if (view?.querySelector('.event')) attachInline({...window.CCCCodexClientContext(pane),paneEl:pane,viewEl:view});
+    if (!view?.querySelector('.event')) return;
+    // Live-overlay flag on: the shared renderer already drew this pane's
+    // rollout transcript, so start polling the live source instead of the
+    // native inline view (attachInline no-ops for it anyway -- see above).
+    if (window.CCCCodexLiveSource?.enabled()) { window.CCCCodexLiveSource.start(pane); return; }
+    attachInline({...window.CCCCodexClientContext(pane),paneEl:pane,viewEl:view});
   }
   function watchPanes() {
     for (const pane of document.querySelectorAll('.conv-pane')) {
