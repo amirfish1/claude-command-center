@@ -1851,9 +1851,11 @@
   async function attachInline(context) {
     const pane = context.paneEl;
     if (!pane || !context.threadId || !context.repoPath) return false;
-    // Slice 4 of the codex-single-renderer-merge plan: behind
-    // localStorage.cccCodexLiveOverlay, static/codex-live-source.js drives
-    // the shared transcript renderer instead of this native inline view.
+    // Codex single-renderer merge: behind localStorage.cccCodexLiveOverlay,
+    // static/codex-live-source.js drives the shared transcript renderer
+    // instead of this native inline view. Slice 5 flips the flag's default
+    // to on, so this now returns false for every pane unless the pane (or
+    // browser) has explicitly set the flag to '0' as an emergency rollback.
     // Checked here (not just at each call site) so every path that can
     // trigger an attach -- pane paint, engine detection, workspace fetch,
     // the shared renderer's own trailing hook -- is covered by one gate.

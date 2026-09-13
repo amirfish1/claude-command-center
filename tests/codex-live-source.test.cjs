@@ -1,15 +1,21 @@
-// Slice 4 of the Codex single-renderer merge (see
+// Slices 4-5 of the Codex single-renderer merge (see
 // CCC-private-docs/plans/2026-09-12-codex-single-renderer-merge.md): the
 // live source behind localStorage.cccCodexLiveOverlay. Slices 1-3 built the
 // server action, the data mapper, and the provisional-event upsert/renderer
-// plumbing in app.js -- all inert until this slice wires them together.
+// plumbing in app.js; Slice 4 wired them together behind an off-by-default
+// flag; Slice 5 flips the flag's default to on, with '0' as the explicit
+// opt-out / emergency rollback.
 //
 // Covers:
-//   - flag off: static/codex-client.js's attachInline runs exactly as it did
-//     before this slice (default path unchanged).
-//   - flag on: attachInline is skipped, and static/codex-live-source.js
-//     polls the `live-transcript` action, flattens {turns:[...]} into one
-//     ordered events array, and hands it to a render hook.
+//   - default (flag absent): the overlay is enabled and polls, exactly like
+//     an explicit '1' -- this is Slice 5's behavior flip.
+//   - explicit opt-out ('0'): static/codex-client.js's attachInline runs
+//     exactly as it did before Slice 4 (the pre-merge native inline view),
+//     and the overlay never fetches anything.
+//   - flag on (default or explicit '1'): attachInline is skipped, and
+//     static/codex-live-source.js polls the `live-transcript` action,
+//     flattens {turns:[...]} into one ordered events array, and hands it to
+//     a render hook.
 //   - polling stops once the last turn is not in progress and no requests
 //     are pending; a later start() call resumes it.
 //   - a generation change clears only the provisional (data-live-key) rows,
@@ -69,10 +75,35 @@ async function stubLocalStorage(page, flagValue) {
   }, flagValue);
 }
 
-test('flag off: CCCCodexLiveSource.start() never fetches', async () => {
+test('default (flag absent): CCCCodexLiveSource is enabled, matching an explicit "1"', async () => {
   await withPage(async (page) => {
     await page.setContent('<div class="conv-pane is-codex-session" data-pane-id="p1"><div class="conversations-view"></div></div>');
     await stubLocalStorage(page, undefined);
+    await page.evaluate(() => {
+      window.__fetchUrls = [];
+      window.CCCCodexClientContext = () => ({ paneId: 'p1', threadId: 'thread-1', repoPath: '/repo' });
+      window.CCCCodexRenderLiveEvents = () => {};
+      window.fetch = (url) => {
+        window.__fetchUrls.push(String(url));
+        return Promise.resolve({ ok: true, json: async () => ({ ok: true, generation: 'g1', cursor: 1, turns: [], requests: [] }) });
+      };
+    });
+    await page.addScriptTag({ content: LIVE_SOURCE_JS });
+    const result = await page.evaluate(async () => {
+      const pane = document.querySelector('.conv-pane');
+      window.CCCCodexLiveSource.start(pane);
+      await new Promise((resolve) => setTimeout(resolve, 50));
+      return { enabled: window.CCCCodexLiveSource.enabled(), fetches: window.__fetchUrls.length };
+    });
+    assert.equal(result.enabled, true);
+    assert.ok(result.fetches >= 1, 'the default-on overlay should poll with no flag set at all');
+  });
+});
+
+test('explicit opt-out ("0"): CCCCodexLiveSource.start() never fetches', async () => {
+  await withPage(async (page) => {
+    await page.setContent('<div class="conv-pane is-codex-session" data-pane-id="p1"><div class="conversations-view"></div></div>');
+    await stubLocalStorage(page, '0');
     await page.evaluate(() => {
       window.__fetches = [];
       window.fetch = (url) => { window.__fetches.push(String(url)); return Promise.reject(new Error('should not fetch')); };
@@ -203,11 +234,11 @@ test('applySnapshot reports active=true while a turn is inProgress or a request 
   });
 });
 
-test('attachInline: flag off attaches the native inline view exactly as before this slice', async () => {
+test('attachInline: explicit opt-out ("0") attaches the native inline view exactly as before Slice 4', async () => {
   await withPage(async (page) => {
     await page.setViewport({ width: 1200, height: 800 });
     await page.setContent('<div class="conv-pane is-codex-session" data-pane-id="p1"><div class="conversations-view"><div class="event">Old</div></div><div class="conv-input-bar"><textarea></textarea></div></div>');
-    await stubLocalStorage(page, undefined);
+    await stubLocalStorage(page, '0');
     await page.evaluate(() => {
       window.fetch = async (url) => ({
         ok: true,
@@ -227,13 +258,32 @@ test('attachInline: flag off attaches the native inline view exactly as before t
   });
 });
 
-test('attachInline: flag on skips the native inline view entirely', async () => {
+test('attachInline: flag on (explicit "1") skips the native inline view entirely', async () => {
   await withPage(async (page) => {
     await page.setViewport({ width: 1200, height: 800 });
     await page.setContent('<div class="conv-pane is-codex-session" data-pane-id="p1"><div class="conversations-view"><div class="event">Old</div></div><div class="conv-input-bar"><textarea></textarea></div></div>');
     await stubLocalStorage(page, '1');
     await page.evaluate(() => {
       window.fetch = async () => { throw new Error('attachInline must not fetch when the live overlay flag is on'); };
+    });
+    await page.addScriptTag({ content: LIVE_SOURCE_JS });
+    await page.addScriptTag({ content: CODEX_CLIENT_JS });
+    const attached = await page.evaluate(async () => {
+      const pane = document.querySelector('.conv-pane');
+      const ok = await window.CCCCodexClient.attachInline({ paneEl: pane, viewEl: pane.querySelector('.conversations-view'), threadId: 'one', repoPath: '/repo' });
+      return { ok, shell: !!pane.querySelector('.codex-client-shell') };
+    });
+    assert.deepEqual(attached, { ok: false, shell: false });
+  });
+});
+
+test('attachInline: default (flag absent) skips the native inline view, matching Slice 5\'s default-on behavior', async () => {
+  await withPage(async (page) => {
+    await page.setViewport({ width: 1200, height: 800 });
+    await page.setContent('<div class="conv-pane is-codex-session" data-pane-id="p1"><div class="conversations-view"><div class="event">Old</div></div><div class="conv-input-bar"><textarea></textarea></div></div>');
+    await stubLocalStorage(page, undefined);
+    await page.evaluate(() => {
+      window.fetch = async () => { throw new Error('attachInline must not fetch when the live overlay is on by default'); };
     });
     await page.addScriptTag({ content: LIVE_SOURCE_JS });
     await page.addScriptTag({ content: CODEX_CLIENT_JS });

@@ -2,12 +2,14 @@
 (function () {
   'use strict';
 
-  // Slice 4 of the codex-single-renderer-merge plan (see
+  // Slices 4-5 of the codex-single-renderer-merge plan (see
   // CCC-private-docs/plans/2026-09-12-codex-single-renderer-merge.md).
   //
-  // Behind localStorage.cccCodexLiveOverlay ('1' to enable). OFF by default --
-  // when the flag is absent/false this module never fetches anything and
-  // static/codex-client.js's attachInline runs exactly as it does today.
+  // Slice 5: ON by default. localStorage.cccCodexLiveOverlay === '0' is the
+  // explicit opt-out / emergency rollback -- with it set, this module never
+  // fetches anything and static/codex-client.js's attachInline runs exactly
+  // as it did before Slice 4 (the pre-merge native inline view). Any other
+  // value, or the key being absent entirely, means the overlay is on.
   //
   // What this does when the flag is on: poll the `live-transcript` action
   // added in Slice 1 (ccc_server/codex_client.py's codex_client_dispatch,
@@ -53,7 +55,10 @@
   function pollMaxMs() { return Number(window.__CCC_TEST_LIVE_POLL_MAX_MS) || 6000; }
 
   function overlayEnabled() {
-    try { return localStorage.getItem(FLAG_KEY) === '1'; } catch (_) { return false; }
+    // Slice 5: default on. '0' is the only explicit opt-out; a localStorage
+    // read failure (e.g. a locked-down browser context) also falls back to
+    // the new default rather than the old off-by-default behavior.
+    try { return localStorage.getItem(FLAG_KEY) !== '0'; } catch (_) { return true; }
   }
 
   function pollerOff() {
