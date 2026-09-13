@@ -1,0 +1,1 @@
+- Avoid filing a new performance ticket for a recovered incident whose stale 24-hour outliers remain in telemetry.

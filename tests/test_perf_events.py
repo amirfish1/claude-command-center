@@ -221,6 +221,20 @@ class TestPerfTicketCheckOnce(PerfEventsTestBase):
         result = pe.perf_ticket_check_once(now=time.time())
         self.assertEqual(result, "ok")
 
+    def test_stale_breach_does_not_file_a_new_ticket(self):
+        now = time.time()
+        threshold = pe.CONV_OPEN_MS
+        path = self.events_path()
+        _append_raw(path, _row("conv_open", threshold * 3, now - 7200, threshold))
+        _append_raw(path, _row("conv_open", threshold * 2, now - 7100, threshold))
+        fake = FakeWt()
+        pe._WT_RUNNER = fake
+
+        result = pe.perf_ticket_check_once(now=now)
+
+        self.assertEqual(result, "ok")
+        self.assertFalse(any(call[0] == "add" for call in fake.calls))
+
     def test_files_ticket_then_dedupes_same_day(self):
         now = time.time()
         self._seed_breach(now)

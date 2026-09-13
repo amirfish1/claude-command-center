@@ -509,10 +509,20 @@ def perf_ticket_check_once(now=None):
     never raises (the daemon loop would otherwise die on the first bug)."""
     now = time.time() if now is None else now
     try:
-        events = read_events(now - 24 * 3600)
-        pattern = evaluate_breach_pattern(events)
-        if pattern is None:
+        # The 24-hour window supplies useful ticket context, but must not
+        # resurrect an already-recovered incident after its old outliers keep
+        # the aggregate above threshold. A ticket is actionable only when a
+        # qualifying pattern is still present in the last hour.
+        recent_pattern = evaluate_breach_pattern(read_events(now - _PERF_TICKET_RECENCY_S))
+        if recent_pattern is None:
             return "ok"
+
+        events = read_events(now - 24 * 3600)
+        rows = [event for event in events if event.get("kind") == recent_pattern["kind"]]
+        if not rows:
+            return "ok"
+        pattern = {"kind": recent_pattern["kind"], **_kind_stats(rows)}
+        pattern.pop("breaches", None)
 
         state = _load_ticket_state()
         state = refresh_ticket_status(state)
@@ -572,6 +582,7 @@ def perf_ticket_check_once(now=None):
 
 
 _PERF_TICKET_INITIAL_DELAY_S = 120
+_PERF_TICKET_RECENCY_S = 60 * 60
 
 
 def _perf_ticket_interval_s():
