@@ -12262,6 +12262,53 @@ class TestRepoContextHelpers(unittest.TestCase):
         self.assertEqual(popen.call_args.kwargs["cwd"], str(self.repo))
         record.assert_called_once()
 
+    def test_spawn_devin_runs_in_created_worktree(self):
+        """A Devin --worktree spawn must not inherit the coordinator cwd."""
+        server = self.server
+        proc = mock.Mock(pid=4248)
+        proc.poll.return_value = None
+        isolated = self.repo.parent / "devin-isolated"
+        original_spawns = list(server._spawned_sessions)
+        server._spawned_sessions.clear()
+        try:
+            with mock.patch.object(
+                server,
+                "_resolve_devin_bin",
+                return_value={"available": True, "bin": "/usr/bin/devin-test"},
+            ), mock.patch.object(
+                server,
+                "_create_worktree_for_spawn",
+                return_value=(str(isolated), "feat/devin-worktree"),
+            ) as create_worktree, mock.patch.object(
+                server,
+                "_run_worktree_init_hook",
+            ) as init_hook, mock.patch.object(
+                server.subprocess,
+                "Popen",
+                return_value=proc,
+            ) as popen, mock.patch.object(server, "_record_spawn_to_registry"):
+                result = server.spawn_session_devin(
+                    "work in isolation",
+                    name="Devin worktree",
+                    repo_path=str(self.repo),
+                    worktree=True,
+                )
+        finally:
+            for entry in server._spawned_sessions:
+                fh = entry.get("log_fh")
+                if fh:
+                    fh.close()
+            server._spawned_sessions.clear()
+            server._spawned_sessions.extend(original_spawns)
+
+        self.assertTrue(result["ok"])
+        self.assertEqual(result["worktree_path"], str(isolated))
+        self.assertEqual(result["worktree_branch"], "feat/devin-worktree")
+        create_worktree.assert_called_once_with(str(self.repo), "devin-worktree")
+        self.assertEqual(popen.call_args.kwargs["cwd"], str(isolated))
+        init_hook.assert_called_once()
+        self.assertEqual(init_hook.call_args.args[:3], (str(isolated), str(self.repo), "devin-worktree"))
+
     def test_resume_cursor_queues_when_resume_already_running(self):
         server = self.server
         sid = "00000000-0000-4000-8000-000000000004"

@@ -22,6 +22,7 @@ import threading
 import time
 
 from ccc_server import core as _core
+from ccc_server import dbutil
 
 # ---------------------------------------------------------------------------
 # Hermes conversation ingestion (read-only).
@@ -282,15 +283,7 @@ def _hermes_pending_entries():
 def _hermes_connect(db=None):
     if db is None:
         db = _hermes_db_path()
-    if not db:
-        return None
-    try:
-        con = sqlite3.connect(str(db), timeout=0.5)
-        con.execute("PRAGMA query_only=1")
-        con.row_factory = sqlite3.Row
-        return con
-    except sqlite3.Error:
-        return None
+    return dbutil.connect_readonly(db)
 
 
 def _hermes_db_for_session(session_id):
