@@ -6,9 +6,20 @@ next and make direct-scan assertions flaky. Reset them before every test. We
 reach for whatever `server` module is currently imported, since the suite
 re-imports it (`_fresh_server`) to pick up per-test env.
 """
+import os
 import sys
+import tempfile
 
 import pytest
+
+# Keep every test process away from the user's real conv-meta cache: server.py
+# loads it at import and any _save_conv_meta_cache() from a test would write
+# fixture entries (or a cleared cache) back over it. Set before any test
+# module imports server; a real override in the environment wins.
+os.environ.setdefault(
+    "CCC_CONV_META_CACHE_FILE",
+    os.path.join(tempfile.mkdtemp(prefix="ccc-test-meta-"), "conv_meta_cache.json"),
+)
 
 
 @pytest.fixture(autouse=True)

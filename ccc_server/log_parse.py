@@ -592,9 +592,13 @@ _conv_head5_cache = {}
 # will visibly stall on the first conversation list render (~1.8GB corpus,
 # "API stalls for a minute or more" per the cache's own comment above).
 _CONV_META_COMPAT_SCHEMA_VERSIONS = {17}
-_CONV_META_CACHE_FILE = (
-    Path.home() / ".claude" / "command-center" / "conv_meta_cache.json"
-)
+# CCC_CONV_META_CACHE_FILE redirects the file (the test suite points it at a
+# tmp dir: a test process holds the user's real cache in memory from import
+# time, and a save from a test wrote fixture entries over it, 2026-09-12).
+_CONV_META_CACHE_FILE = Path(
+    os.environ.get("CCC_CONV_META_CACHE_FILE")
+    or (Path.home() / ".claude" / "command-center" / "conv_meta_cache.json")
+).expanduser()
 
 
 def _load_cwd_relocation_cache():
