@@ -32,3 +32,18 @@ def test_ticket_detail_emphasizes_only_the_first_sentence_of_a_long_note():
     assert ".uxq-td-title-rest" in app_css
     assert "max-height: 180px" in app_css
     assert "overflow-y: auto" in app_css
+
+
+def test_ticket_detail_offers_the_existing_queued_run_action_for_open_tickets():
+    """The detail modal must offer the same safe request/cancel action as a row."""
+    app_js = (ROOT / "static" / "app.js").read_text(encoding="utf-8")
+    start = app_js.index("function _uxqOpenItemModal(item)")
+    end = app_js.index("function _renderQueuePanel", start)
+    modal = app_js[start:end]
+
+    assert "const canRequestRun = status === 'open' && !_isStaleClaim(item);" in modal
+    assert "data-ux-run" in modal
+    assert "Run now" in modal
+    assert "Cancel queued run" in modal
+    assert "'/api/ux-fixes/run'" in modal
+    assert "JSON.stringify({ ref, cancel })" in modal

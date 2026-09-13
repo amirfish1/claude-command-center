@@ -45498,6 +45498,11 @@
     // Closed wins: the GitHub backend historically never cleared needs_input
     // on close, so a closed-but-once-blocked ticket must not read as blocked.
     const status = item.status === 'closed' ? 'closed' : (item.needs_input ? 'blocked' : (item.status || 'open'));
+    // Match the compact Queue row: request work only for an unclaimed open
+    // ticket. A queued request stays reversible until WatchTower claims it.
+    const canRequestRun = status === 'open' && !_isStaleClaim(item);
+    const runQueued = canRequestRun && !!item.run_requested;
+    const runBusy = _uxqRunBusyRefs.has(ref);
     const timeline = Array.isArray(item.timeline) ? item.timeline : [];
 
     // Sidebar property row helpers
@@ -45881,6 +45886,11 @@
       +     (item.updated_at && item.updated_at !== item.created_at ? ' · <span title="' + escapeAttr(item.updated_at) + '">updated ' + escapeHtml(_uxqRelTime(item.updated_at)) + '</span>' : '')
       +   '</div>'
       +   '<div class="uxq-td-footer-btns">'
+      +     (canRequestRun
+        ? '<button type="button" class="ann-btn ann-primary uxq-td-run" data-ux-run data-run-cancel="' + (runQueued ? '1' : '0') + '"'
+          + (runBusy ? ' disabled aria-busy="true"' : '') + '>'
+          + (runQueued ? 'Cancel queued run' : '▶ Run now') + '</button>'
+        : '')
       +     '<button type="button" class="ann-btn" data-ux-copy>Copy prompt</button>'
       +   '</div>'
       + '</div>'
@@ -45979,6 +45989,45 @@
       copyBtn.addEventListener('click', async () => {
         try { await navigator.clipboard.writeText(promptText); showOpToast('Copied', 'success'); }
         catch (_) {}
+      });
+    }
+
+    // Keep the ticket-detail action on the same persisted, reconciler-owned
+    // path as the Queue-row play control. CCC queues (or cancels) work; it
+    // never spawns a worker itself.
+    const runBtn = modal.querySelector('[data-ux-run]');
+    if (runBtn) {
+      runBtn.addEventListener('click', async () => {
+        if (_uxqRunBusyRefs.has(ref)) return;
+        const cancel = runBtn.getAttribute('data-run-cancel') === '1';
+        const verb = cancel ? 'Cancel' : 'Run';
+        _uxqRunBusyRefs.add(ref);
+        runBtn.disabled = true;
+        try {
+          const res = await fetch('/api/ux-fixes/run', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ ref, cancel }),
+          });
+          const data = await res.json().catch(() => ({}));
+          if (res.ok && data.ok) {
+            if (data.warning) showOpToast(data.warning, 'error');
+            else showOpToast(cancel ? ('Cancelled the queued run for ' + ref)
+              : ('Queued ' + ref + ' to run'));
+            _uxqItemsCache.ts = 0;
+            _uxqHealthCache.ts = 0;
+            _renderQueuePanel();
+            runBtn.setAttribute('data-run-cancel', cancel ? '0' : '1');
+            runBtn.textContent = cancel ? '▶ Run now' : 'Cancel queued run';
+          } else {
+            showOpToast(verb + ' failed: ' + (data.error || res.status), 'error');
+          }
+        } catch (e) {
+          showOpToast(verb + ' failed: ' + e, 'error');
+        } finally {
+          _uxqRunBusyRefs.delete(ref);
+          runBtn.disabled = false;
+        }
       });
     }
 
