@@ -1,0 +1,1 @@
+- Let native Codex final answers use the full conversation width, with a subtle divider instead of a padded card.

@@ -1,0 +1,1 @@
+- Added an expand/collapse-all control to the status rail activity log.
