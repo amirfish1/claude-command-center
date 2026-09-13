@@ -93,11 +93,6 @@ def _adopt_ccc_module(name):
     return mod
 
 
-# Model-drift advisor (stdlib-only, no back-reference to this module). Lives
-# next to server.py; recommends cheaper/stronger models per live session. See
-# /api/model-advisor and model_advisor.py.
-import model_advisor
-
 # CCC federation (stdlib-only sibling module): stable node identity, paired
 # peers, and the transport for calling a peer CCC on its own loopback.
 import federation
@@ -19617,7 +19612,6 @@ _adopt_ccc_module("log_parse")
 # Test-patched globals kept here; ccc_server/session_graph.py reads them via _core.
 _SESSION_ISSUES_CACHE = None
 _issue_titles_overrides_cache = None
-_model_advisor_report_cache = model_advisor.AdvisorReportCache(min_refresh_seconds=300)
 
 _adopt_ccc_module("session_graph")
 _adopt_ccc_module("cross_repo_issues")
@@ -25619,12 +25613,6 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
             # reports the same stale-transcript heuristic as the row badge; it is
             # not a claim that every labeled thread owns a live hung process.
             self.send_json(build_codex_stuck_summary())
-        elif path == "/api/model-advisor":
-            # Fleet model-drift report: live recommendations (downgrade /
-            # upgrade / spawn-worker) + the savings monitor log. Reuses the
-            # gated live-session set, so no extra full scan.
-            qs = urllib.parse.parse_qs(parsed.query)
-            self.send_json(get_model_advisor_report(qs.get("fresh", [""])[0]))
         elif path == "/api/events":
             # Unified, replayable dashboard state stream.  Existing narrower
             # SSE routes stay available during the compatibility rollout.
@@ -33710,37 +33698,6 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                     self.send_json(result)
                 else:
                     self.send_json(result, 404 if "no pending" in result.get("error", "") else 400)
-        elif path == "/api/model-advisor/apply":
-            length = int(self.headers.get("Content-Length", "0"))
-            body = self.rfile.read(length) if length > 0 else b""
-            try:
-                payload = json.loads(body) if body else {}
-            except json.JSONDecodeError:
-                payload = {}
-            sid = (payload.get("session_id") or "").strip()
-            model = (payload.get("model") or "").strip()
-            rec_id = (payload.get("rec_id") or "").strip() or None
-            context_1m = bool(payload.get("context_1m", False))
-            if not sid or not model:
-                self.send_json({"ok": False, "error": "session_id and model required"}, 400)
-            else:
-                _record_interaction(sid)
-                self.send_json(
-                    apply_model_advisor_recommendation(rec_id, sid, model, context_1m)
-                )
-        elif path == "/api/model-advisor/dismiss":
-            length = int(self.headers.get("Content-Length", "0"))
-            body = self.rfile.read(length) if length > 0 else b""
-            try:
-                payload = json.loads(body) if body else {}
-            except json.JSONDecodeError:
-                payload = {}
-            rec_id = (payload.get("rec_id") or "").strip()
-            if not rec_id:
-                self.send_json({"ok": False, "error": "rec_id required"}, 400)
-            else:
-                entry = model_advisor.mark(MODEL_ADVISOR_LOG_FILE, rec_id, "dismissed")
-                self.send_json({"ok": bool(entry), "entry": entry})
         elif re.match(r"^/api/session/[a-zA-Z0-9_-]+/model/clear$", path):
             sid = path.split("/")[3]
             _clear_session_override(sid)
