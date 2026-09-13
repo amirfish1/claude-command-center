@@ -1,0 +1,1 @@
+- Removed the Model Advisor feature (fleet model-drift scan, the "N drift" footer pill, and the inline switch-model nudge above the composer). It's gone from the backend (`model_advisor.py`, `/api/model-advisor*` routes) and the UI.
