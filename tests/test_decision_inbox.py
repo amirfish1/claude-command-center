@@ -586,5 +586,52 @@ class SupersedeRecurring(unittest.TestCase):
         self.assertNotIn(old_source, di.blocked_source_ids(cards, now=NOW + 7200, dedupe_days=7))
 
 
+class GovernorMute(unittest.TestCase):
+    """governor_muted_sources kinds never file cards; other kinds still do."""
+
+    def _rows(self):
+        return [_row(f"m{i}", live_context_percent=95, mtime=NOW - 10 * H) for i in range(2)]
+
+    def _run(self, cards, cfg):
+        return di.run_once(cards=cards, now=NOW, rows=self._rows(), live_ids={"m0", "m1"},
+                           wt_runner=lambda a: None, board_text="", persist=False, cfg=cfg)
+
+    def test_muted_kind_files_no_card_and_is_counted(self):
+        cards = {}
+        rec = self._run(cards, _cfg(governor_muted_sources=["context_high"]))
+        self.assertEqual(rec["created"], [])
+        self.assertEqual(rec["skipped_muted"], 2)
+        self.assertEqual(rec["sources"]["governor"], 2)  # still detected, just muted
+        self.assertEqual(cards, {})
+
+    def test_other_kinds_still_file_when_another_kind_is_muted(self):
+        cards = {}
+        rec = self._run(cards, _cfg(governor_muted_sources=["no_edits"]))
+        self.assertEqual(len(rec["created"]), 2)
+        self.assertEqual(rec["skipped_muted"], 0)
+        self.assertTrue(all(c["kind"] == "governor" for c in cards.values()))
+
+    def test_default_config_mutes_nothing(self):
+        self.assertEqual(di.DEFAULT_CONFIG["governor_muted_sources"], [])
+        cards = {}
+        rec = self._run(cards, _cfg())
+        self.assertEqual(len(rec["created"]), 2)
+
+
+class QueueGithubRepos(unittest.TestCase):
+    def test_only_github_backed_queues_are_exposed(self):
+        conf = {"BECKY": {"github_repo": "example/repo", "backend": "github"},
+                "CHUCK": {"backend": "local"},
+                "BROKEN": "not-a-dict",
+                "EMPTY": {}}
+        repos = di.queue_github_repos(reader=lambda: conf)
+        self.assertEqual(repos, {"BECKY": "example/repo"})
+
+    def test_reader_failure_yields_empty_map(self):
+        def boom():
+            raise OSError("gone")
+        self.assertEqual(di.queue_github_repos(reader=boom), {})
+
+
 if __name__ == "__main__":
     unittest.main()

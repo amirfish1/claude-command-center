@@ -40,6 +40,8 @@
   .tag.sev-warn { color: var(--warn); border-color: #6b4a14; }
   .tag.sev-critical { color: var(--bad); border-color: #6b2222; }
   .tag.money { font-weight: 700; }
+  .tag.ref { color: var(--accent); border-color: #1f5f7a; text-decoration: none; }
+  a.tag.ref:hover { border-color: var(--accent); background: #123c50; }
   .tag.count { color: var(--ink); }
   .monitoring summary { font-size: 13px; text-transform: uppercase; letter-spacing: 0.08em;
                         color: var(--dim); margin: 28px 0 10px; cursor: pointer; user-select: none; }
@@ -102,7 +104,7 @@
 <script>
 (function () {
   "use strict";
-  var state = { cards: [], governor: [], busy: {} };
+  var state = { cards: [], governor: [], queueRepos: {}, busy: {} };
   var $ = function (id) { return document.getElementById(id); };
 
   function esc(s) {
@@ -133,6 +135,33 @@
     return { spawn: "Spawn session", inject: "Steer session", pause: "Pause", kill: "Kill", human: "I'll do it", snooze: "Snooze" }[k] || k;
   }
 
+  var REF_RE = /\b[A-Z][A-Z0-9]*(?:-[A-Z0-9]+)*-\d+\b|\bBECKY(?:-DESIGN|-TEACH)?#\d+\b/g;
+
+  function cardRefs(c) {
+    var text = String(c.title || "") + " " + String(c.context || "") + " " + String(c.source_id || "");
+    var seen = {}, out = [], m;
+    REF_RE.lastIndex = 0;
+    while ((m = REF_RE.exec(text))) {
+      var ref = m[0].replace("#", "-").toUpperCase();
+      if (seen[ref]) continue;
+      seen[ref] = 1; out.push(ref);
+      if (out.length >= 6) break;
+    }
+    return out;
+  }
+
+  function refPills(c) {
+    return cardRefs(c).map(function (r) {
+      var cut = r.lastIndexOf("-");
+      var queue = r.slice(0, cut), num = r.slice(cut + 1);
+      var repo = state.queueRepos[queue];
+      return repo
+        ? '<a class="tag ref" href="https://github.com/' + esc(repo) + "/issues/" + esc(num) +
+          '" target="_blank" rel="noopener" title="Open issue">' + esc(r) + "</a>"
+        : '<span class="tag ref">' + esc(r) + "</span>";
+    }).join("");
+  }
+
   function renderCard(c) {
     var closed = c.status !== "open";
     var opts = (c.options || []).map(function (o, i) {
@@ -157,6 +186,7 @@
     var money = (String(c.title || "") + " " + String(c.context || "")).match(/\$\s?\d[\d,]*(?:\.\d+)?/);
     return '<div class="card' + (closed ? " closed" : "") + '" id="card-' + esc(c.id) + '">' +
       '<div class="top"><span class="title">' + esc(c.title) + '</span>' +
+      refPills(c) +
       (money ? '<span class="tag sev-critical money" title="mentions money">' + esc(money[0].replace(/\s+/g, "")) + "</span>" : "") +
       (c.severity && c.severity !== "info" ? '<span class="tag sev-' + esc(c.severity) + '">' + esc(c.severity) + "</span>" : "") +
       (c.seen_count > 1 ? '<span class="tag">seen ' + esc(c.seen_count) + "x</span>" : "") +
@@ -168,7 +198,7 @@
       (srcLine ? '<details><summary>source</summary><pre>' + esc(srcLine) + "</pre></details>" : "") +
       '<span class="grow"></span>' +
       (dres ? '<span class="result' + (dres.ok ? "" : " bad") + '">' + esc(dres.effect || "") + (dres.session_id ? " · " + esc(String(dres.session_id).slice(0, 8)) : "") + (dres.error ? " · " + esc(dres.error) : "") + "</span>" : "") +
-      (closed ? "" : '<button class="ghost" data-dismiss="' + esc(c.id) + '">Dismiss</button>') +
+      (closed ? "" : '<button class="ghost" data-dismiss="' + esc(c.id) + '">Close</button>') +
       "</div></div>";
   }
 
@@ -192,6 +222,7 @@
   function render(data) {
     state.cards = data.cards || [];
     state.governor = (data.governor && data.governor.findings) || [];
+    state.queueRepos = data.queue_repos || {};
     var open = state.cards.filter(function (c) { return c.status === "open"; });
     var closed = state.cards.filter(function (c) { return c.status !== "open"; }).slice(0, 12);
     var decisions = open.filter(function (c) { return DECISION_KINDS[c.kind]; });
@@ -231,7 +262,14 @@
     } else if (b.dataset.dismiss) {
       b.disabled = true;
       var d = await post("/api/decision-inbox/dismiss", { card_id: b.dataset.dismiss });
-      toast(d.ok ? "Dismissed" : "Failed: " + (d.error || "?"), !d.ok);
+      if (d.ok) {
+        var gone = document.getElementById("card-" + b.dataset.dismiss);
+        if (gone) gone.remove();
+        toast("Closed");
+      } else {
+        toast("Failed: " + (d.error || "?"), true);
+        b.disabled = false;
+      }
       load();
     } else if (b.dataset.gov) {
       if (b.dataset.gov === "kill" && !confirm("Kill this session's process?")) return;

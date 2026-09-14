@@ -92,6 +92,9 @@ DEFAULT_CONFIG = {
     # Moment-in-time nudge cards (governor findings, idle-session alerts)
     # auto-expire this long after creation. 0 disables expiry.
     "governor_card_ttl_s": 12 * 3600,
+    # Governor finding kinds (context_high, no_edits, repeated_errors) that
+    # never file a card -- the owner has decided there is no action to take.
+    "governor_muted_sources": [],
     # Ignore board rows / sessions whose text matches (case-insensitive).
     "ignore_patterns": [],
 }
@@ -908,7 +911,8 @@ def run_once(*, cfg=None, now=None, rows=None, live_ids=None, cards=None,
     expired = expire_ephemeral_cards(cards, now=now, ttl_s=cfg.get("governor_card_ttl_s"))
     blocked = blocked_source_ids(cards, now=now, dedupe_days=cfg.get("dedupe_days"))
     record = {"run_id": run_id, "started_at": _di_iso(now), "sources": {}, "created": [],
-              "expired": expired, "skipped_dedupe": 0, "skipped_cap": 0, "errors": []}
+              "expired": expired, "skipped_dedupe": 0, "skipped_cap": 0,
+              "skipped_muted": 0, "errors": []}
 
     # Governor first: cheap, and a burning session outranks a stale board row.
     try:
@@ -951,7 +955,11 @@ def run_once(*, cfg=None, now=None, rows=None, live_ids=None, cards=None,
         blocked.add(source_id)
         return True
 
+    muted = {str(k) for k in (cfg.get("governor_muted_sources") or [])}
     for f in findings:
+        if f["kind"] in muted:
+            record["skipped_muted"] += 1
+            continue
         source_id = f"governor:{f['session_id']}:{f['kind']}"
         if _admit(source_id):
             new_cards.append(governor_card(f, now=now, run_id=run_id))
@@ -1041,6 +1049,25 @@ def decision_inbox_loop(initial_delay_s=120):
             return
 
 
+def queue_github_repos(reader=None):
+    """{QUEUE: "owner/repo"} for WatchTower queues configured as
+    GitHub-backed, read from the user's own watchtower queue config (never
+    hardcoded here -- the mapping is machine-local state). The inbox UI
+    links ticket-ref pills to issues only for these queues."""
+    read = reader or _core._wt_read_config
+    try:
+        conf = read() or {}
+    except Exception:
+        return {}
+    out = {}
+    for name, c in conf.items():
+        if isinstance(c, dict) and c.get("github_repo"):
+            q = str(name).strip().upper()
+            if q:
+                out[q] = str(c["github_repo"])
+    return out
+
+
 def decision_inbox_api_payload(*, cards=None, cfg=None):
     cfg = cfg or load_config()
     cards = load_cards() if cards is None else cards
@@ -1053,6 +1080,7 @@ def decision_inbox_api_payload(*, cards=None, cfg=None):
         "cards": ordered[:200],
         "open_count": sum(1 for c in ordered if c.get("status") == "open"),
         "governor": {"findings": findings, "at": findings_at},
+        "queue_repos": queue_github_repos(),
         "last_run": last_run(),
         "running_since": _running["since"],
         "config": {
@@ -1061,6 +1089,7 @@ def decision_inbox_api_payload(*, cards=None, cfg=None):
             "strategy_board": bool(cfg.get("strategy_board")),
             "max_cards_per_run": cfg.get("max_cards_per_run"),
             "governor_card_ttl_s": cfg.get("governor_card_ttl_s"),
+            "governor_muted_sources": cfg.get("governor_muted_sources"),
             "model": cfg.get("model"),
             "config_path": str(config_path()),
         },
