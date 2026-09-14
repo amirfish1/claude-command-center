@@ -17669,8 +17669,20 @@
         decided = true;
         committed = dx > 0 && Math.abs(dx) > Math.abs(dy) * RATIO;
         if (!committed) { active = false; currentRow = null; return; }
+        // The pointer-tap listener is intentionally separate so list scrolling
+        // stays cheap.  Cancel its pending tap here as soon as this gesture is
+        // known to be a swipe; otherwise Safari can deliver a pointerup after
+        // touchend and open the row we just acted on.
+        cancelMobileConversationRowTap();
+        noteMobileConversationRowSwipe(currentRow);
+        const swipeAction = _swipeActionButtonForRow(currentRow);
+        currentRow.dataset.swipeActionLabel = (swipeAction && swipeAction.getAttribute('aria-label')) || 'Move to Trash';
+        currentRow.classList.add('is-swipe-committed');
       }
-      if (committed && e.cancelable) e.preventDefault();
+      if (committed) {
+        currentRow.style.setProperty('--conv-row-swipe-offset', Math.min(Math.max(dx, 0), THRESH) + 'px');
+        if (e.cancelable) e.preventDefault();
+      }
     }, { passive: false });
     const end = (e) => {
       if (!active || !committed || !currentRow) return;
@@ -17683,7 +17695,15 @@
         const btn = _swipeActionButtonForRow(currentRow);
         if (btn && !btn.disabled) {
           btn.classList.add('is-swiped');
-          setTimeout(() => { if (btn) btn.classList.remove('is-swiped'); }, 300);
+          const swipedRow = currentRow;
+          setTimeout(() => {
+            if (btn) btn.classList.remove('is-swiped');
+            if (swipedRow) {
+              swipedRow.classList.remove('is-swipe-committed');
+              swipedRow.style.removeProperty('--conv-row-swipe-offset');
+              delete swipedRow.dataset.swipeActionLabel;
+            }
+          }, 300);
           btn.click();
         }
       }
@@ -25911,6 +25931,8 @@
   let _mobileRowTap = null;
   let _lastMobileRowOpenId = '';
   let _lastMobileRowOpenAt = 0;
+  let _lastMobileRowSwipeId = '';
+  let _lastMobileRowSwipeAt = 0;
 
   function conversationRowTapIsBlocked(target, opts) {
     if (!target || !target.closest) return false;
@@ -25920,7 +25942,16 @@
   }
 
   function shouldSuppressSyntheticRowClick(id) {
-    return !!id && id === _lastMobileRowOpenId && Date.now() - _lastMobileRowOpenAt < 700;
+    return !!id && (
+      (id === _lastMobileRowOpenId && Date.now() - _lastMobileRowOpenAt < 700)
+      || (id === _lastMobileRowSwipeId && Date.now() - _lastMobileRowSwipeAt < 700)
+    );
+  }
+
+  function noteMobileConversationRowSwipe(row) {
+    if (!row || !row.dataset || !row.dataset.id) return;
+    _lastMobileRowSwipeId = row.dataset.id;
+    _lastMobileRowSwipeAt = Date.now();
   }
 
   function activateConversationRowFromTap(el, ev, opts) {

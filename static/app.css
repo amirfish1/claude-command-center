@@ -15955,8 +15955,36 @@
       margin-bottom: 6px !important;
       position: relative;
       touch-action: pan-y;
-      transition: background-color 0.08s ease;
+      transition: transform 0.12s ease, background-color 0.08s ease;
       -webkit-tap-highlight-color: rgba(188, 140, 255, 0.15);
+    }
+    /* A rightward lifecycle swipe must be visible before its action removes
+       the row.  The offset follows the finger, then springs home if the
+       request leaves the row in place. */
+    .conv-item.is-swipe-committed {
+      transform: translateX(var(--conv-row-swipe-offset, 12px));
+      background-color: color-mix(in srgb, var(--red) 16%, var(--surface-2)) !important;
+      box-shadow: -80px 0 0 var(--red);
+    }
+    .conv-item.is-swipe-committed::before {
+      content: attr(data-swipe-action-label);
+      position: absolute;
+      z-index: 1;
+      top: 0;
+      right: calc(100% + 8px);
+      bottom: 0;
+      width: 72px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 4px;
+      border-radius: 6px;
+      background: var(--red);
+      color: #fff;
+      font-size: 10px;
+      font-weight: 700;
+      line-height: 1.1;
+      text-align: center;
     }
     .compact-rows .conv-item {
       padding-top: 8px !important;
