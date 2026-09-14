@@ -189,7 +189,7 @@ class TestConversationTranscriptPath(unittest.TestCase):
             with (
                 mock.patch.object(server, "_detect_session_engine", return_value="devin"),
                 mock.patch.object(server, "_is_devin_cli_session", return_value=True),
-                mock.patch.object(server, "_devin_cli_db_path", return_value=expected),
+                mock.patch.object(server, "_devin_cli_db_path_for_raw_id", return_value=expected),
             ):
                 self.assertEqual(
                     server.conversation_transcript_path("devincli-session"), str(expected)
