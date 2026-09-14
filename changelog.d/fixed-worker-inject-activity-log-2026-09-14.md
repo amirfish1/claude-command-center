@@ -1,0 +1,1 @@
+- Prevent duplicate activity-log rows for worker-owned Claude FIFO injections.

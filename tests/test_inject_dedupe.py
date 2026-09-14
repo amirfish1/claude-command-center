@@ -362,6 +362,33 @@ def test_worker_owned_inject_does_not_log_a_dashboard_attempt(monkeypatch):
     log_activity.assert_not_called()
 
 
+def test_worker_owned_transport_result_logs_only_in_the_worker(window, monkeypatch):
+    """The dashboard must not re-log the worker's concrete FIFO result."""
+    with mock.patch.object(server, "find_session_cwd", return_value=None), \
+         mock.patch.object(server, "session_live_status", return_value={}), \
+         mock.patch.object(server, "_is_real_tty", return_value=False), \
+         mock.patch.object(server, "_is_codex_session", return_value=False), \
+         mock.patch.object(server, "_is_kimi_session", return_value=False), \
+         mock.patch.object(server, "_session_acp_harness", return_value=""), \
+         mock.patch.object(server, "_is_cursor_session", return_value=False), \
+         mock.patch.object(server, "_is_hermes_session", return_value=False), \
+         mock.patch.object(server, "_is_opencode_session", return_value=False), \
+         mock.patch.object(server, "_is_devin_cli_session", return_value=False), \
+         mock.patch.object(server, "_is_gemini_session", return_value=False), \
+         mock.patch.object(server, "_is_antigravity_session", return_value=False), \
+         mock.patch.object(
+             server, "_control_plane_engine_call",
+             return_value={"ok": True, "via": "spawn-fifo"},
+         ), \
+         mock.patch.object(server, "_log_activity") as log_activity:
+        result = server._inject_text_into_session(
+            "sid", "body", idempotency_key="inject:key",
+        )
+
+    assert result["via"] == "spawn-fifo"
+    log_activity.assert_not_called()
+
+
 # ── The window itself ────────────────────────────────────────────────────────
 
 def test_every_suppression_refreshes_the_window(window):

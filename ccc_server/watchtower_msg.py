@@ -1527,6 +1527,7 @@ def _inject_text_into_session(session_id, text, **kwargs):
             force_queue=bool(kwargs.get("force_queue", False)),
             fields=fields,
         )
+        log_owned_by_worker = bool(result.pop("_log_owned_by_worker", False))
     except BaseException:
         if dedupe_owner:
             _core._inject_dedupe_release(
@@ -1543,14 +1544,15 @@ def _inject_text_into_session(session_id, text, **kwargs):
         _core._inject_dedupe_release(
             session_id, text, kwargs.get("idempotency_key"),
         )
-    _core._log_inject_result(
-        session_id, text,
-        mode=mode,
-        source=str(kwargs.get("source", "api")),
-        idempotency_key=kwargs.get("idempotency_key"),
-        wt_origin=bool(kwargs.get("wt_origin")),
-        result=result,
-    )
+    if not log_owned_by_worker:
+        _core._log_inject_result(
+            session_id, text,
+            mode=mode,
+            source=str(kwargs.get("source", "api")),
+            idempotency_key=kwargs.get("idempotency_key"),
+            wt_origin=bool(kwargs.get("wt_origin")),
+            result=result,
+        )
     return result
 
 
@@ -1684,6 +1686,12 @@ def _inject_text_into_session_router(
             idempotency_key=idempotency_key,
         )
         if routed is not None:
+            # The worker's full injection wrapper owns the activity row. Keep
+            # its concrete transport for callers while marking this dashboard
+            # wrapper as a non-logging handoff.
+            if isinstance(routed, dict):
+                routed = dict(routed)
+                routed["_log_owned_by_worker"] = True
             return routed
     # Circuit breaker. The worker owns a routed Claude inject, so meter only
     # after that hand-off declines; otherwise both dashboard and worker record
