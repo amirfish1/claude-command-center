@@ -89,12 +89,20 @@ DEFAULT_CONFIG = {
     "spawn_cwd": "",
     # Skip a source id that was decided/dismissed within this window.
     "dedupe_days": 7.0,
+    # Moment-in-time nudge cards (governor findings, idle-session alerts)
+    # auto-expire this long after creation. 0 disables expiry.
+    "governor_card_ttl_s": 12 * 3600,
     # Ignore board rows / sessions whose text matches (case-insensitive).
     "ignore_patterns": [],
 }
 
 # Hosts that count as "the owner asked to stop watching this".
 CLOSED_STATUSES = ("decided", "dismissed")
+
+# Kinds whose cards are moment-in-time nudges: a governor finding or an
+# idle-session alert is only meaningful when fresh, so open ones auto-expire
+# (see expire_ephemeral_cards) instead of burying real decisions.
+EPHEMERAL_KINDS = ("governor", "session")
 
 _EDIT_TOOLS = frozenset({"Edit", "Write", "MultiEdit", "NotebookEdit"})
 _BOARD_BLOCKED_RE = re.compile(r"blocked", re.IGNORECASE)
@@ -856,6 +864,32 @@ def blocked_source_ids(cards, *, now, dedupe_days):
     return blocked
 
 
+def expire_ephemeral_cards(cards, *, now, ttl_s):
+    """Close open nudge cards (governor findings, idle-session alerts) older
+    than the TTL. Status "expired" is deliberately NOT in CLOSED_STATUSES:
+    an auto-expiry is not the owner saying "stop watching this", so it never
+    blocks a fresh alert for the same source id. Returns what was expired."""
+    try:
+        ttl = float(ttl_s)
+    except (TypeError, ValueError):
+        ttl = 0.0
+    if ttl <= 0:
+        return []
+    expired = []
+    for c in cards.values():
+        if not isinstance(c, dict):
+            continue
+        if c.get("status") != "open" or c.get("kind") not in EPHEMERAL_KINDS:
+            continue
+        created = _di_parse_iso(c.get("created_at")) or 0
+        if created and (now - created) >= ttl:
+            c["status"] = "expired"
+            c["updated_at"] = _di_iso(now)
+            expired.append({"id": c.get("id"), "source_id": c.get("source_id"),
+                            "title": c.get("title")})
+    return expired
+
+
 def run_once(*, cfg=None, now=None, rows=None, live_ids=None, cards=None,
              analyst=None, wt_runner=None, board_text=None, board_mtime=None,
              persist=True):
@@ -871,9 +905,10 @@ def run_once(*, cfg=None, now=None, rows=None, live_ids=None, cards=None,
     if live_ids is None:
         live_ids = _server_live_ids()
     max_new = int(cfg.get("max_cards_per_run") or 5)
+    expired = expire_ephemeral_cards(cards, now=now, ttl_s=cfg.get("governor_card_ttl_s"))
     blocked = blocked_source_ids(cards, now=now, dedupe_days=cfg.get("dedupe_days"))
     record = {"run_id": run_id, "started_at": _di_iso(now), "sources": {}, "created": [],
-              "skipped_dedupe": 0, "skipped_cap": 0, "errors": []}
+              "expired": expired, "skipped_dedupe": 0, "skipped_cap": 0, "errors": []}
 
     # Governor first: cheap, and a burning session outranks a stale board row.
     try:
@@ -1025,6 +1060,7 @@ def decision_inbox_api_payload(*, cards=None, cfg=None):
             "interval_s": cfg.get("interval_s"),
             "strategy_board": bool(cfg.get("strategy_board")),
             "max_cards_per_run": cfg.get("max_cards_per_run"),
+            "governor_card_ttl_s": cfg.get("governor_card_ttl_s"),
             "model": cfg.get("model"),
             "config_path": str(config_path()),
         },
@@ -1167,6 +1203,17 @@ def decision_inbox_governor_act(session_id, action, *, reason="", **hooks):
 SEVERITIES = ("info", "warn", "critical")
 SNOOZE_DEFAULT_S = 24 * 3600
 _SOURCE_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,39}$")
+
+# Recurring producers stamp each firing with a trailing date
+# (``daily-checkin:daily-checkin:2026-09-14``); the family is the id without
+# it, so a new firing can supersede the previous open card instead of
+# stacking a near-duplicate every day.
+_FAMILY_INSTANCE_RE = re.compile(r"^(.+):\d{4}-\d{2}-\d{2}$")
+
+
+def source_family(source_id):
+    m = _FAMILY_INSTANCE_RE.match(str(source_id or ""))
+    return m.group(1) if m else None
 
 
 def _qualified_source_id(source, source_id):
@@ -1343,6 +1390,22 @@ def decision_inbox_ingest(payload, *, cards=None, now=None, persist=True, cfg=No
         "analyst": None,
     }
     cards[card["id"]] = card
+    superseded = []
+    family = source_family(qualified)
+    if family:
+        for c in cards.values():
+            if not isinstance(c, dict) or c.get("id") == card["id"]:
+                continue
+            if c.get("status") != "open" or source_family(c.get("source_id")) != family:
+                continue
+            # Same recurring producer, previous firing: close it. Status
+            # "superseded" stays out of CLOSED_STATUSES so it never feeds
+            # the owner-decision dedupe window.
+            c["status"] = "superseded"
+            c["superseded_by"] = card["id"]
+            c["updated_at"] = _di_iso(now)
+            superseded.append(c.get("id"))
     if persist:
         save_cards(cards)
-    return {"ok": True, "card_id": card["id"], "deduped": False, "status": "open"}
+    return {"ok": True, "card_id": card["id"], "deduped": False, "status": "open",
+            "superseded": superseded}

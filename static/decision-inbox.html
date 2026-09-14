@@ -39,6 +39,11 @@
   .tag.external { color: #9fe0b8; border-color: #235c3a; }
   .tag.sev-warn { color: var(--warn); border-color: #6b4a14; }
   .tag.sev-critical { color: var(--bad); border-color: #6b2222; }
+  .tag.money { font-weight: 700; }
+  .tag.count { color: var(--ink); }
+  .monitoring summary { font-size: 13px; text-transform: uppercase; letter-spacing: 0.08em;
+                        color: var(--dim); margin: 28px 0 10px; cursor: pointer; user-select: none; }
+  .monitoring summary:hover { color: var(--mute); }
   .tag.status { color: var(--ok); border-color: #1e5a30; }
   .opts { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 10px; }
   .opt { border: 1px solid var(--line); border-radius: 10px; padding: 12px 14px; display: flex; flex-direction: column; gap: 6px; background: #11151b; }
@@ -81,8 +86,13 @@
   <h2>Token governor</h2>
   <div class="gov" id="governor"><div class="empty">No live session looks stuck or wasteful.</div></div>
 
-  <h2>Decisions</h2>
+  <h2>Needs your decision</h2>
   <div id="cards"><div class="empty">Nothing waiting. Sababa.</div></div>
+
+  <details class="monitoring" id="monitoringWrap">
+    <summary>Monitoring <span class="tag count" id="monitoringCount">0</span></summary>
+    <div id="monitoring"></div>
+  </details>
 
   <h2>Recently closed</h2>
   <div id="closed"><div class="empty">Nothing yet.</div></div>
@@ -144,8 +154,10 @@
     var analyst = c.analyst ? (c.analyst.error ? "analyst failed (" + esc(c.analyst.error) + "), generic options" :
       esc(c.analyst.model || "") + " · " + (c.analyst.duration_s || 0) + "s") : "governor";
     var dres = c.decided && c.decided.result;
+    var money = (String(c.title || "") + " " + String(c.context || "")).match(/\$\s?\d[\d,]*(?:\.\d+)?/);
     return '<div class="card' + (closed ? " closed" : "") + '" id="card-' + esc(c.id) + '">' +
       '<div class="top"><span class="title">' + esc(c.title) + '</span>' +
+      (money ? '<span class="tag sev-critical money" title="mentions money">' + esc(money[0].replace(/\s+/g, "")) + "</span>" : "") +
       (c.severity && c.severity !== "info" ? '<span class="tag sev-' + esc(c.severity) + '">' + esc(c.severity) + "</span>" : "") +
       (c.seen_count > 1 ? '<span class="tag">seen ' + esc(c.seen_count) + "x</span>" : "") +
       '<span class="tag ' + esc(c.kind) + '">' + esc(c.kind) + "</span>" +
@@ -175,13 +187,20 @@
     }).join("");
   }
 
+  var DECISION_KINDS = { external: 1, wt: 1, board: 1 };
+
   function render(data) {
     state.cards = data.cards || [];
     state.governor = (data.governor && data.governor.findings) || [];
     var open = state.cards.filter(function (c) { return c.status === "open"; });
     var closed = state.cards.filter(function (c) { return c.status !== "open"; }).slice(0, 12);
+    var decisions = open.filter(function (c) { return DECISION_KINDS[c.kind]; });
+    var monitoring = open.filter(function (c) { return !DECISION_KINDS[c.kind]; });
     $("openCount").textContent = open.length + " open";
-    $("cards").innerHTML = open.length ? open.map(renderCard).join("") : '<div class="empty">Nothing waiting. Sababa.</div>';
+    $("cards").innerHTML = decisions.length ? decisions.map(renderCard).join("") : '<div class="empty">Nothing waiting. Sababa.</div>';
+    $("monitoringWrap").style.display = monitoring.length ? "" : "none";
+    $("monitoringCount").textContent = monitoring.length;
+    $("monitoring").innerHTML = monitoring.map(renderCard).join("");
     $("closed").innerHTML = closed.length ? closed.map(renderCard).join("") : '<div class="empty">Nothing yet.</div>';
     renderGovernor(state.governor);
     var lr = data.last_run;

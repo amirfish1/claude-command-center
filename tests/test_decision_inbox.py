@@ -484,5 +484,107 @@ class ExternalIngest(unittest.TestCase):
         self.assertEqual(cards[res["card_id"]]["source_id"], "external:thing-1")
 
 
+class EphemeralExpiry(unittest.TestCase):
+    """Moment-in-time nudge cards auto-expire; real decision cards never do."""
+
+    def _open(self, cid, kind, age_h, source_id=None):
+        return {"id": cid, "kind": kind, "status": "open", "title": cid,
+                "source_id": source_id or f"{kind}:{cid}",
+                "created_at": di._di_iso(NOW - age_h * H),
+                "updated_at": di._di_iso(NOW - age_h * H)}
+
+    def test_old_governor_and_session_cards_expire_newer_and_decision_kinds_do_not(self):
+        cards = {c["id"]: c for c in [
+            self._open("g_old", "governor", 30),
+            self._open("s_old", "session", 13),
+            self._open("g_new", "governor", 2),
+            self._open("b_old", "board", 500),      # decision cards never expire
+            self._open("w_old", "wt", 500),
+            self._open("x_old", "external", 500),
+        ]}
+        cards["g_dec"] = dict(self._open("g_dec", "governor", 30), status="decided")
+        expired = di.expire_ephemeral_cards(cards, now=NOW, ttl_s=12 * H)
+        self.assertEqual(sorted(e["id"] for e in expired), ["g_old", "s_old"])
+        self.assertEqual(cards["g_old"]["status"], "expired")
+        self.assertEqual(cards["s_old"]["status"], "expired")
+        for cid in ("g_new", "b_old", "w_old", "x_old"):
+            self.assertEqual(cards[cid]["status"], "open", cid)
+        self.assertEqual(cards["g_dec"]["status"], "decided")
+
+    def test_expiry_disabled_with_zero_ttl(self):
+        cards = {"g": self._open("g", "governor", 999)}
+        self.assertEqual(di.expire_ephemeral_cards(cards, now=NOW, ttl_s=0), [])
+        self.assertEqual(cards["g"]["status"], "open")
+
+    def test_expired_source_id_is_not_dedupe_blocked(self):
+        # An auto-expiry is not an owner decision: a fresh alert for the same
+        # source id must still file.
+        cards = {"g": dict(self._open("g", "governor", 30), status="expired")}
+        self.assertNotIn("governor:g", di.blocked_source_ids(cards, now=NOW, dedupe_days=7))
+
+    def test_run_once_logs_expired_in_the_run_record(self):
+        cards = {"g": self._open("g", "governor", 30)}
+        rec = di.run_once(cards=cards, now=NOW, rows=[], live_ids=set(),
+                          wt_runner=lambda a: None, board_text="", persist=False,
+                          cfg=_cfg(governor_card_ttl_s=12 * H))
+        self.assertEqual([e["id"] for e in rec["expired"]], ["g"])
+        self.assertEqual(cards["g"]["status"], "expired")
+
+
+class SupersedeRecurring(unittest.TestCase):
+    """A recurring producer's new firing retires its previous open card."""
+
+    def _checkin(self, day):
+        return {"source_id": f"daily-checkin:daily-checkin:{day}",
+                "title": f"Daily check-in: items for {day}", "context": "review with Mazkir"}
+
+    def test_source_family_strips_a_trailing_iso_date(self):
+        self.assertEqual(di.source_family("daily-checkin:daily-checkin:2026-09-14"),
+                         "daily-checkin:daily-checkin")
+        self.assertIsNone(di.source_family("digest:studio-a:no-sessions"))
+        self.assertIsNone(di.source_family("governor:s1:no_edits"))
+        self.assertIsNone(di.source_family(None))
+
+    def test_new_firing_supersedes_the_previous_open_card(self):
+        cards = {}
+        first = di.decision_inbox_ingest(self._checkin("2026-09-13"), cards=cards, now=NOW, persist=False)
+        second = di.decision_inbox_ingest(self._checkin("2026-09-14"), cards=cards, now=NOW + 3600, persist=False)
+        self.assertFalse(second["deduped"])
+        self.assertEqual(second["superseded"], [first["card_id"]])
+        old = cards[first["card_id"]]
+        self.assertEqual(old["status"], "superseded")
+        self.assertEqual(old["superseded_by"], second["card_id"])
+        self.assertEqual(cards[second["card_id"]]["status"], "open")
+
+    def test_supersede_does_not_touch_other_families_or_kinds(self):
+        cards = {}
+        other = di.decision_inbox_ingest(ExternalIngest.PRODUCER, cards=cards, now=NOW, persist=False)
+        gov = {"id": "g1", "kind": "governor", "status": "open",
+               "source_id": "governor:s1:no_edits",
+               "created_at": di._di_iso(NOW), "updated_at": di._di_iso(NOW)}
+        cards["g1"] = gov
+        res = di.decision_inbox_ingest(self._checkin("2026-09-14"), cards=cards, now=NOW, persist=False)
+        self.assertEqual(res["superseded"], [])
+        self.assertEqual(cards[other["card_id"]]["status"], "open")
+        self.assertEqual(gov["status"], "open")
+
+    def test_dedupe_still_wins_over_supersede(self):
+        # Same source id re-filed while open: dedupe bumps seen_count, no new
+        # card, no supersede bookkeeping.
+        cards = {}
+        first = di.decision_inbox_ingest(self._checkin("2026-09-14"), cards=cards, now=NOW, persist=False)
+        again = di.decision_inbox_ingest(self._checkin("2026-09-14"), cards=cards, now=NOW + 60, persist=False)
+        self.assertTrue(again["deduped"])
+        self.assertEqual(again["card_id"], first["card_id"])
+        self.assertEqual(cards[first["card_id"]]["status"], "open")
+
+    def test_superseded_card_does_not_block_refile_of_its_source_id(self):
+        cards = {}
+        first = di.decision_inbox_ingest(self._checkin("2026-09-13"), cards=cards, now=NOW, persist=False)
+        di.decision_inbox_ingest(self._checkin("2026-09-14"), cards=cards, now=NOW + 3600, persist=False)
+        old_source = cards[first["card_id"]]["source_id"]
+        self.assertNotIn(old_source, di.blocked_source_ids(cards, now=NOW + 7200, dedupe_days=7))
+
+
 if __name__ == "__main__":
     unittest.main()
