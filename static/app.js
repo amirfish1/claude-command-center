@@ -51939,7 +51939,9 @@
     const summary = railCostHeadline(quotaPresentation, breakdown.totalCost);
     el.innerHTML = '<div class="rail-tokens-value rail-cost-headline">' + summary.headline + '</div>'
       + '<div class="rail-usage-caption rail-api-price">' + summary.apiLabel + '</div>'
-      + '<div class="rail-cost-details" role="group" aria-label="Session cost details">'
+      + '<button type="button" class="rail-cost-details-toggle" id="railCostDetailsToggle"'
+      + ' aria-controls="railCostDetails" aria-expanded="false">Show details</button>'
+      + '<div class="rail-cost-details" id="railCostDetails" role="group" aria-label="Session cost details">'
       + '<div class="rail-usage-caption">Full session'
       + (modelName ? ' · ' + escapeHtml(modelName) : '') + '</div>'
       + railUsageBreakdownHtml(breakdown)
@@ -51947,9 +51949,15 @@
         ? _quotaCostCalibration[quotaEngine] || {} : {})
       + _railTurnGraphHtml(u && u.turn_series, u && u.model)
       + '</div>';
-    el.tabIndex = 0;
-    el.setAttribute('aria-label', 'Allocated subscription cost and estimated weekly quota: '
-      + summary.headline + '. ' + summary.apiLabel + '. Focus for calculation details.');
+    const detailsToggle = document.getElementById('railCostDetailsToggle');
+    if (detailsToggle) detailsToggle.addEventListener('click', () => {
+      const expanded = detailsToggle.getAttribute('aria-expanded') !== 'true';
+      detailsToggle.setAttribute('aria-expanded', String(expanded));
+      detailsToggle.textContent = expanded ? 'Hide details' : 'Show details';
+      el.classList.toggle('is-expanded', expanded);
+    });
+    el.removeAttribute('tabindex');
+    el.removeAttribute('aria-label');
     el.removeAttribute('title');
     el.hidden = false;
     _refreshQuotaCostCalibration();
