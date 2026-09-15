@@ -273,5 +273,21 @@ class LayoutIO(unittest.TestCase):
             self.assertTrue(str(p).endswith("canvas-layout.json"))
 
 
+class LayoutBodyCap(unittest.TestCase):
+    def test_cap_constant_and_handler_wiring(self):
+        # The POST handler must reject over-cap bodies 413 before reading —
+        # the cap lives here so the test can pin both the value and the wire.
+        self.assertEqual(pc.MAX_LAYOUT_BODY_BYTES, 1024 * 1024)
+        import pathlib
+        src = (pathlib.Path(__file__).parent.parent / "server.py").read_text(encoding="utf-8")
+        # Anchor on the POST handler's 413 message (the GET shares the path).
+        handler_at = src.index("layout body is missing or too large")
+        window = src[max(0, handler_at - 800):handler_at + 800]
+        self.assertIn("MAX_LAYOUT_BODY_BYTES", window)
+        self.assertIn("413", window)
+        # The 413 check comes before the read.
+        self.assertLess(window.index("413"), window.index("self.rfile.read"))
+
+
 if __name__ == "__main__":
     unittest.main()

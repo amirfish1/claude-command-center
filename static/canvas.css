@@ -390,12 +390,21 @@ body {
 
 /* ── phase-2 fun: edges, breathe, celebrate, coach ───────────────────── */
 
-/* Live queues with fresh activity breathe — opacity-only glow via the
-   top accent thread's sibling glow layer. */
-.pc-node.is-live { animation: pc-breathe 3.6s ease-in-out infinite; }
-@keyframes pc-breathe {
-  0%, 100% { box-shadow: var(--shadow-1), 0 0 14px rgba(63, 185, 80, 0.06); }
-  50% { box-shadow: var(--shadow-1), 0 0 30px rgba(63, 185, 80, 0.22); }
+/* Live queues with fresh activity breathe — an opacity-only glow layer
+   (no box-shadow paint per frame). */
+.pc-node::before {
+  content: '';
+  position: absolute;
+  inset: -1px;
+  border-radius: var(--radius);
+  box-shadow: 0 0 30px rgba(63, 185, 80, 0.28);
+  opacity: 0;
+  pointer-events: none;
+}
+.pc-node.is-live::before { animation: pc-breathe-glow 3.6s ease-in-out infinite; }
+@keyframes pc-breathe-glow {
+  0%, 100% { opacity: 0.12; }
+  50% { opacity: 0.9; }
 }
 
 /* Valid edge target: green glow. Invalid: red shake. */
@@ -1012,9 +1021,10 @@ body {
   .pc-edge-flow { animation: none; }
   .pc-status::after { animation: none !important; }
   .pc-node.pc-enter, .pc-stage.pc-enter { animation: none; }
-  .pc-node.is-live { animation: none; }
+  .pc-node.is-live::before { animation: none; }
   .pc-node.is-edge-invalid { animation: none; }
   .pc-ghost-edge { animation: none; }
+  .pc-coach { animation: none; }
   .pc-edge-spark { display: none; }
   .pc-node, .pc-lib-item, .pc-template, .pc-btn { transition: none; }
   .pc-node:hover { transform: none; }

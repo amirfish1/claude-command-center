@@ -33060,9 +33060,14 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
             # endpoint — it touches canvas-layout.json and nothing else;
             # queue-config and wt are never written from the canvas.
             # Validation is hard (structure, caps, clamps): an invalid
-            # document is rejected whole, never partially applied.
+            # document is rejected whole, never partially applied. The body
+            # is capped before reading — a layout is positions and a few
+            # hundred designed nodes; 1 MB is generous.
             length = int(self.headers.get("Content-Length", "0"))
-            body = self.rfile.read(length) if length > 0 else b""
+            if not 0 < length <= MAX_LAYOUT_BODY_BYTES:
+                self.send_json({"ok": False, "error": "layout body is missing or too large"}, 413)
+                return
+            body = self.rfile.read(length)
             try:
                 payload = json.loads(body) if body else {}
             except json.JSONDecodeError:

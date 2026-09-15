@@ -31,6 +31,11 @@ from ccc_server import core as _core
 LAYOUT_FILE_NAME = "canvas-layout.json"
 LAYOUT_VERSION = 1
 
+# Request-body cap for POST /api/canvas/layout (server.py reads it before
+# touching the socket). A layout is positions plus a few hundred designed
+# nodes; 1 MB is generous, and anything bigger is rejected 413 unread.
+MAX_LAYOUT_BODY_BYTES = 1024 * 1024
+
 # Validation bounds for the layout document. Generous on purpose — the
 # canvas is infinite — but capped so a corrupt or hostile POST cannot grow
 # the file without bound or park a node at 1e300.
@@ -213,14 +218,16 @@ def _decision_inbox_open_cards():
     """Open decision-card count for the gate node, when cheaply available.
 
     decision_inbox_api_payload() is a cache read (a poll never triggers a
-    scan), so this adds no scan and no analyst call. Any failure → None:
-    the gate node renders without a count rather than failing the payload.
+    scan) and carries the authoritative open_count — cards track a status
+    field, not a closed flag, so counting here would drift from the inbox's
+    own number. Any failure → None: the gate renders countless, not wrong.
     """
     try:
         payload = _core.decision_inbox_api_payload()
-        cards = payload.get("cards") if isinstance(payload, dict) else None
-        if isinstance(cards, list):
-            return sum(1 for c in cards if isinstance(c, dict) and not c.get("closed"))
+        if isinstance(payload, dict):
+            count = payload.get("open_count")
+            if isinstance(count, int) and not isinstance(count, bool):
+                return count
     except Exception:
         pass
     return None

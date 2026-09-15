@@ -253,6 +253,7 @@
     renderEdges();
     refreshEmptyState();
     drawMinimap();
+    maybeCelebrate(); // undo/redo of the completing edge re-arms the shimmer
   }
   function undo() {
     if (!history.undo.length) { toast("Nothing to undo"); return; }
@@ -472,7 +473,13 @@
   }
 
   function renderEdges() {
-    edgesSvg.textContent = "";
+    // Keep the in-progress edge-draw group: a mid-draw re-render (the 30s
+    // refresh, ⌘Z, Delete) must not detach the line under the cursor.
+    var pending = null;
+    Array.from(edgesSvg.childNodes).forEach(function (child) {
+      if (child.classList && child.classList.contains("is-pending")) pending = child;
+      else edgesSvg.removeChild(child);
+    });
     edges.forEach(function (e) {
       var d = edgePathD(e);
       if (!d) return;
@@ -482,6 +489,10 @@
       if (e.kind === "user" && srcNode) {
         g.classList.add("is-cat-" + categoryOf(srcNode));
       }
+      g.appendChild(svgEl("path", { "class": "pc-edge-line", d: d }));
+      if (!reducedMotion) g.appendChild(svgEl("path", { "class": "pc-edge-flow", d: d }));
+      // The fat invisible hit path goes LAST: the visible line/flow paint
+      // under it, so their center pixels are not a dead hover/click zone.
       var hit = svgEl("path", { "class": "pc-edge-hit", d: d });
       hit.addEventListener("pointerdown", function (ev) {
         ev.stopPropagation();
@@ -491,12 +502,10 @@
       hit.addEventListener("mousemove", function (ev) { moveEdgeTip(ev); });
       hit.addEventListener("mouseleave", hideEdgeTip);
       g.appendChild(hit);
-      g.appendChild(svgEl("path", { "class": "pc-edge-line", d: d }));
-      if (!reducedMotion) g.appendChild(svgEl("path", { "class": "pc-edge-flow", d: d }));
       if (selection && selection.type === "edge" && selection.id === e.id) {
         g.classList.add("is-selected");
       }
-      edgesSvg.appendChild(g);
+      edgesSvg.insertBefore(g, pending); // the in-progress draw rides on top
     });
   }
 
@@ -662,10 +671,10 @@
     var pattern = patternSection(comp);
     if (pattern) inspectorBody.appendChild(pattern);
 
-    if (comp.files && comp.files.what) {
+    if ((comp.files && comp.files.what) || comp.consumes) {
       var es = section("Edge contract");
-      es.appendChild(kv("Files", comp.files.what));
-      if (comp.files.label) es.appendChild(kv("Label", comp.files.label));
+      if (comp.files && comp.files.what) es.appendChild(kv("Files", comp.files.what));
+      if (comp.files && comp.files.label) es.appendChild(kv("Label", comp.files.label));
       if (comp.consumes) es.appendChild(kv("Consumes", comp.consumes));
       inspectorBody.appendChild(es);
     }
@@ -815,6 +824,37 @@
     if (edgeDraw) updateEdgeDraw(e);
     if (paletteDrag) updatePaletteDrag(e);
   });
+  // pointercancel = aborted gesture (OS interrupt, touch→scroll steal):
+  // clean up WITHOUT committing — no node move history, no edge, no node.
+  function cancelInteractions() {
+    if (dragState) {
+      var n = nodes.get(dragState.id);
+      if (n) {
+        n.el.classList.remove("is-dragging");
+        if (dragState.moved) { // snap back to the pre-drag slot
+          n.x = dragState.startX; n.y = dragState.startY;
+          placeNodeEl(n);
+          renderEdges();
+          drawMinimap();
+        }
+      }
+      dragState = null;
+    }
+    if (edgeDraw) {
+      if (edgeDraw.tempG.parentNode) edgeDraw.tempG.parentNode.removeChild(edgeDraw.tempG);
+      edgeDraw = null;
+      nodes.forEach(function (nd) {
+        nd.el.classList.remove("is-edge-target");
+        nd.el.classList.remove("is-edge-invalid");
+      });
+    }
+    if (paletteDrag) {
+      paletteDrag.ghost.remove();
+      paletteDrag = null;
+    }
+    preDragSnapshot = null;
+  }
+  document.addEventListener("pointercancel", cancelInteractions);
   document.addEventListener("pointerup", function (e) {
     if (dragState) {
       var n = nodes.get(dragState.id);
@@ -887,8 +927,12 @@
       n.el.classList.remove("is-edge-invalid");
     });
     var end = w;
+    edgeDraw.reason = null;
     if (tn) {
-      valid = valid && !edgeExists(s.id, tn.id);
+      var dup = edgeExists(s.id, tn.id);
+      valid = valid && !dup;
+      if (dup) edgeDraw.reason = "duplicate";
+      else if (!valid) edgeDraw.reason = "invalid";
       tn.el.classList.add(valid ? "is-edge-target" : "is-edge-invalid");
       edgeDraw.target = valid ? tn.id : null;
       if (valid) {
@@ -923,15 +967,15 @@
     var s = nodes.get(draw.source);
     var tn = draw.target ? nodes.get(draw.target) : null;
     if (!s || !tn) {
-      var over = edgeTargetUnder(e.clientX, e.clientY);
-      if (over) {
-        // Dropped on something it can't feed — say why, briefly.
+      if (draw.reason === "duplicate") {
+        toast("Those two are already connected");
+      } else if (draw.reason === "invalid") {
+        var over = edgeTargetUnder(e.clientX, e.clientY);
         toast("That connection doesn't make sense — " +
-              (REG.portsFor(compOf(over)).inp ? "contract mismatch" : kindNameOf(over) + " takes no input"));
+              (over && !REG.portsFor(compOf(over)).inp ? kindNameOf(over) + " takes no input" : "contract mismatch"));
       }
       return;
     }
-    if (edgeExists(s.id, tn.id)) { toast("Those two are already connected"); return; }
     pushHistory();
     var id = "user:" + s.id + "->" + tn.id;
     // The filing contract comes from the source component's registry entry.
@@ -1289,6 +1333,7 @@
       card.type = "button";
       card.appendChild(el("div", "pc-template-name", "✦ " + t.name));
       card.appendChild(templatePreviewSvg(t));
+      card.appendChild(el("div", "pc-template-flow", t.flow));
       card.appendChild(el("div", "pc-template-desc", t.desc));
       card.addEventListener("click", function () { applyTemplate(t); });
       tlist.appendChild(card);
@@ -1365,21 +1410,26 @@
   function materializationPreview(cluster) {
     /* Only workers become queue-config entries. Sources are scheduled
      * producers, gates/sinks/utilities are conventions and plumbing — all
-     * surfaced as notes, never as queue entries. */
+     * surfaced as notes, never as queue entries. Config comes from the LIVE
+     * placed nodes (the user may have edited the sketch in the inspector),
+     * falling back to the component's placeholder defaults. */
     var entries = {};
     var others = [];
     cluster.template.nodes.forEach(function (spec) {
       var comp = COMP_BY_ID[spec.comp] || { cat: "workers" };
       if (spec.comp === "decision-inbox") return; // already exists
-      var name = slugQueueName(spec.label);
+      var liveNode = cluster.keyToId && nodes.get(cluster.keyToId[spec.key]);
+      var name = slugQueueName((liveNode && liveNode.label) || spec.label);
       if (comp.cat !== "workers") { others.push({ name: name, comp: comp }); return; }
       var c = {};
       (comp.config || []).forEach(function (f) { if (f.ph) c[f.key] = f.ph; });
+      var live = (liveNode && liveNode.config) || {};
+      Object.keys(live).forEach(function (k) { c[k] = live[k]; });
       var entry = { auto_drain: true, repo_path: "/path/to/repo" };
-      if (c.engine) entry.engine = c.engine;
-      if (c.model) entry.model = c.model;
-      if (c.effort) entry.effort = c.effort;
-      entry.desired_workers = c.desired_workers || 1;
+      if (c.engine) entry.engine = String(c.engine);
+      if (c.model) entry.model = String(c.model);
+      if (c.effort) entry.effort = String(c.effort);
+      entry.desired_workers = parseInt(c.desired_workers, 10) || 1;
       entries[name] = entry;
     });
     return { entries: entries, others: others };
@@ -1393,7 +1443,7 @@
 
     var note = el("p", "pc-modal-note");
     note.innerHTML = "This is exactly what would bring the design to life. " +
-      "<b>v1 never writes it for you.</b> The WatchTower daemon reads " +
+      "<b>The canvas never writes it for you.</b> The WatchTower daemon reads " +
       "queue-config.json live — paste these entries there and it reconciles within a minute.";
     body.appendChild(note);
 
@@ -1740,6 +1790,7 @@
         if (doc.viewport && typeof doc.viewport.x === "number") {
           view.x = doc.viewport.x; view.y = doc.viewport.y; view.zoom = doc.viewport.zoom || 1;
           clampView();
+          viewportSaved = true;
         }
         (doc.edges || []).forEach(function (e) {
           if (e && e.source && e.target) {
@@ -1768,6 +1819,7 @@
       .catch(function () { /* offline: start from an empty layout */ });
   }
   var savedPositions = {};
+  var viewportSaved = false; // the layout carried a real viewport — honor it
 
   function applySavedPositions() {
     nodes.forEach(function (n) {
@@ -1888,11 +1940,10 @@
     return fetchState();
   }).then(function () {
     applySavedPositions();
-    // First paint: honor a saved viewport; otherwise frame the ACTIVE fleet
-    // at a legible zoom — Fit (F) still shows the whole wall on demand.
-    var hasSavedViewport = savedPositions && Object.keys(savedPositions).length &&
-                           view && (view.x !== 0 || view.y !== 0 || view.zoom !== 1);
-    if (!hasSavedViewport && nodes.size) frameInitialView(); else applyView();
+    // First paint: honor a saved viewport (even {0,0,1} — the user put it
+    // there); otherwise frame the ACTIVE fleet at a legible zoom — Fit (F)
+    // still shows the whole wall on demand.
+    if (!viewportSaved && nodes.size) frameInitialView(); else applyView();
     refreshEmptyState();
     if (nodes.size && !reducedMotion) {
       var i = 0;

@@ -6,9 +6,18 @@ const { findChromePath } = require('./puppeteer-browser-config.js');
 const fs = require('fs');
 const os = require('os');
 const LAYOUT = os.homedir() + '/.claude/command-center/canvas-layout.json';
+const LAYOUT_BAK = LAYOUT + '.probe-backup';
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 (async () => {
+  // The probe needs first-run state, but the user's real layout is sacred:
+  // back it up, restore it in finally no matter how the probe ends.
+  let hadLayout = false;
+  try {
+    fs.renameSync(LAYOUT, LAYOUT_BAK);
+    hadLayout = true;
+  } catch (_) {}
+  try {
   const browser = await puppeteer.launch({
     headless: 'shell',
     executablePath: findChromePath(),
@@ -95,4 +104,10 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
   }
   console.log('pageerrors:', JSON.stringify(errors));
   await browser.close();
+  } finally {
+    try { fs.unlinkSync(LAYOUT); } catch (_) {}
+    if (hadLayout) {
+      try { fs.renameSync(LAYOUT_BAK, LAYOUT); console.log('layout restored'); } catch (_) {}
+    }
+  }
 })().catch((e) => { console.error(e); process.exit(1); });
