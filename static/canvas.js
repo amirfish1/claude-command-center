@@ -28,73 +28,43 @@
 
   var GATE_ID = "gate:decision-inbox";
 
-  var ARCH = {
-    planner:  { letter: "P", name: "Planner",  desc: "Design-only worker queue. Deliverable is a spec; ends at a human gate." },
-    executor: { letter: "E", name: "Executor", desc: "Claim-based drain queue. Engine + model per queue, reconciled staffing." },
-    reviewer: { letter: "R", name: "Visual reviewer", desc: "Independent lane: drives a real browser, verdicts VERIFIED / WRONG-STATE." },
-    stream:   { letter: "S", name: "Stream filer", desc: "Scheduled producer. Turns signals into deduped tickets." },
-    gate:     { letter: "H", name: "Human gate", desc: "Option cards parked for a human. The Decision Inbox." }
-  };
+  /* The component ecosystem is data-driven: static/canvas-components.js
+   * (registry + categories + port rules) and static/canvas-templates.js
+   * (gallery graphs) attach these globals. canvas.js only renders them. */
+  var REG = window.CCC_CANVAS_COMPONENTS;
+  var CATS = REG.CATEGORIES;
+  var COMPONENTS = REG.COMPONENT_REGISTRY;
+  var COMP_BY_ID = REG.BY_ID;
+  var ARCH_COMP = REG.ARCHETYPE_COMPONENT;
+  var ARCH_CAT = REG.ARCHETYPE_CATEGORY;
+  var ARCH_LETTER = REG.ARCHETYPE_LETTER;
+  var ARCH_NAME = REG.ARCHETYPE_NAME;
+  var TEMPLATES = window.CCC_CANVAS_TEMPLATES.TEMPLATES;
 
-  var TEMPLATES = [
-    {
-      id: "feature-factory",
-      name: "Feature factory",
-      desc: "Design → build → independent visual review → human sign-off.",
-      flow: "planner → executor → reviewer → gate",
-      nodes: [
-        { key: "planner",  archetype: "planner",  label: "DESIGN",        x: 0,   y: 40,
-          config: { engine: "claude", model: "claude-opus-5", effort: "high", desired_workers: 1, auto_drain: true } },
-        { key: "executor", archetype: "executor", label: "BUILD",         x: 330, y: 40,
-          config: { engine: "claude", model: "claude-sonnet-5", effort: "high", desired_workers: 2, auto_drain: true } },
-        { key: "reviewer", archetype: "reviewer", label: "VERIFY",        x: 660, y: 40,
-          config: { engine: "claude", model: "claude-sonnet-5", desired_workers: 1, auto_drain: true } },
-        { key: "gate",     archetype: "gate",     label: "HUMAN GATE",    x: 990, y: 40, config: {} }
-      ],
-      edges: [
-        { from: "planner", to: "executor", label: "files builds to" },
-        { from: "executor", to: "reviewer", label: "requests verification" },
-        { from: "reviewer", to: "gate", label: "VERIFIED / WRONG-STATE" },
-        { from: "planner", to: "gate", label: "design sign-off" }
-      ]
-    },
-    {
-      id: "posthog-watchdog",
-      name: "PostHog watchdog",
-      desc: "Session signals become deduped tickets; hard cases park for a human.",
-      flow: "stream → executor → gate",
-      nodes: [
-        { key: "stream",   archetype: "stream",   label: "SESSION WATCH", x: 0,   y: 40, config: {} },
-        { key: "executor", archetype: "executor", label: "TRIAGE",        x: 330, y: 40,
-          config: { engine: "claude", model: "claude-sonnet-5", desired_workers: 1, auto_drain: true } },
-        { key: "gate",     archetype: "gate",     label: "HUMAN GATE",    x: 660, y: 40, config: {} }
-      ],
-      edges: [
-        { from: "stream", to: "executor", label: "files deduped issues" },
-        { from: "executor", to: "gate", label: "hard cases" }
-      ]
-    },
-    {
-      id: "quality-loop",
-      name: "The quality loop",
-      desc: "An auditor sweep grades quiet conversations; bad grades become fixes; systemic ones escalate to a planner.",
-      flow: "stream → executor → planner → gate",
-      nodes: [
-        { key: "stream",   archetype: "stream",   label: "AUDIT SWEEP",   x: 0,   y: 40, config: {} },
-        { key: "executor", archetype: "executor", label: "FIX",           x: 330, y: 40,
-          config: { engine: "claude", model: "claude-sonnet-5", desired_workers: 2, auto_drain: true } },
-        { key: "planner",  archetype: "planner",  label: "REDESIGN",      x: 330, y: 260,
-          config: { engine: "claude", model: "claude-opus-5", effort: "high", desired_workers: 1, auto_drain: true } },
-        { key: "gate",     archetype: "gate",     label: "HUMAN GATE",    x: 660, y: 150, config: {} }
-      ],
-      edges: [
-        { from: "stream", to: "executor", label: "files graded failures" },
-        { from: "executor", to: "planner", label: "systemic issues" },
-        { from: "planner", to: "gate", label: "redesign sign-off" },
-        { from: "executor", to: "gate", label: "hard cases" }
-      ]
+  function compOf(n) {
+    /* The registry entry for a designed node, or a {cat} shim for runtime. */
+    if (n.kind === "designed" && n.component && COMP_BY_ID[n.component]) {
+      return COMP_BY_ID[n.component];
     }
-  ];
+    return { cat: categoryOf(n) };
+  }
+  function categoryOf(n) {
+    if (n.kind === "designed" && n.category && CATS[n.category]) return n.category;
+    if (n.kind === "designed" && n.component && COMP_BY_ID[n.component]) return COMP_BY_ID[n.component].cat;
+    return ARCH_CAT[n.archetype] || "workers";
+  }
+  function letterOf(n) {
+    var c = compOf(n);
+    if (c.letter) return c.letter;
+    return ARCH_LETTER[n.archetype] || "E";
+  }
+  function kindNameOf(n) {
+    var c = compOf(n);
+    if (c.name) return c.name;
+    return ARCH_NAME[n.archetype] || n.archetype;
+  }
+
+  /* TEMPLATES come from static/canvas-templates.js (bound above). */
 
   /* ── dom helpers ───────────────────────────────────────────────────── */
 
@@ -233,6 +203,7 @@
       positions[n.id] = { x: n.x, y: n.y };
       if (n.kind === "designed") {
         designed.push({ id: n.id, archetype: n.archetype, label: n.label,
+                        component: n.component, category: n.category,
                         config: n.config || {}, x: n.x, y: n.y });
       }
     });
@@ -260,10 +231,12 @@
       var n = nodes.get(d.id);
       if (!n) {
         n = { id: d.id, kind: "designed", archetype: d.archetype,
+              component: d.component || null, category: d.category || null,
               label: d.label, config: d.config || {}, x: d.x, y: d.y };
         addNodeEl(n);
       }
       n.archetype = d.archetype; n.label = d.label; n.config = d.config || {};
+      n.component = d.component || null; n.category = d.category || null;
       n.x = d.x; n.y = d.y;
       placeNodeEl(n);
       fillNodeEl(n);
@@ -337,16 +310,21 @@
     var elNode = el("div", "pc-node");
     elNode.dataset.id = n.id;
     elNode.dataset.archetype = n.archetype;
+    elNode.dataset.category = categoryOf(n);
     if (n.kind === "designed") elNode.classList.add("is-designed");
     elNode.style.width = NODE_W + "px";
     n.el = elNode;
     fillNodeEl(n);
 
-    // Ports.
+    // Ports — visibility follows the component's port rules (sources emit
+    // only, sinks/gates terminate, workers/utilities flow through).
+    var ports = REG.portsFor(compOf(n));
     var portIn = el("div", "pc-port pc-port-in");
     portIn.title = "Connect into " + n.label;
+    if (!ports.inp) portIn.classList.add("pc-port-off");
     var portOut = el("div", "pc-port pc-port-out");
     portOut.title = "Connect out of " + n.label;
+    if (!ports.out) portOut.classList.add("pc-port-off");
     elNode.appendChild(portIn);
     elNode.appendChild(portOut);
 
@@ -360,6 +338,13 @@
   function fillNodeEl(n) {
     var health = healthOf(n);
     n.el.dataset.health = health.tone;
+    n.el.dataset.category = categoryOf(n);
+    // Live queues with fresh activity breathe (transform/opacity only).
+    var d0 = n.data || {};
+    var isLive = n.kind === "queue" &&
+      ((d0.in_progress || 0) > 0 || (d0.workers || 0) > 0 ||
+       (d0.last_activity_seconds != null && d0.last_activity_seconds < 900));
+    n.el.classList.toggle("is-live", isLive && !reducedMotion);
     // Keep ports (last children) — rebuild only the content before them.
     while (n.el.firstChild && !n.el.firstChild.classList.contains("pc-port")) {
       n.el.removeChild(n.el.firstChild);
@@ -368,12 +353,12 @@
     var frag = document.createDocumentFragment();
 
     var head = el("div", "pc-node-head");
-    head.appendChild(el("span", "pc-node-icon", (ARCH[n.archetype] || ARCH.executor).letter));
+    head.appendChild(el("span", "pc-node-icon", letterOf(n)));
     var title = el("div", "pc-node-title");
     var nameEl = el("div", "pc-node-name", n.label);
     nameEl.title = n.label;
     title.appendChild(nameEl);
-    title.appendChild(el("div", "pc-node-arch", (ARCH[n.archetype] || {}).name || n.archetype));
+    title.appendChild(el("div", "pc-node-arch", kindNameOf(n)));
     head.appendChild(title);
     head.appendChild(el("span", "pc-status"));
     frag.appendChild(head);
@@ -385,6 +370,12 @@
       var badges = el("div", "pc-badge-row");
       var c = n.config || {};
       if (c.engine) badges.appendChild(el("span", "pc-badge", c.engine + (c.model ? " · " + shortModel(c.model) : "")));
+      else {
+        // Non-worker components: show up to two sketch values as chips.
+        Object.keys(c).slice(0, 2).forEach(function (k) {
+          if (c[k] && typeof c[k] === "string") badges.appendChild(el("span", "pc-badge pc-badge-dim", c[k]));
+        });
+      }
       if (c.desired_workers) badges.appendChild(el("span", "pc-badge pc-badge-dim", c.desired_workers + (c.desired_workers === 1 ? " worker" : " workers")));
       if (badges.childNodes.length) body.appendChild(badges);
     } else if (n.kind === "gate") {
@@ -448,6 +439,7 @@
     Array.from(edges.values()).forEach(function (e) {
       if (e.source === id || e.target === id) edges.delete(e.id);
     });
+    maybeCelebrate(); // re-evaluates; resets the chip signature if the path broke
   }
 
   /* ── edges ─────────────────────────────────────────────────────────── */
@@ -484,7 +476,12 @@
     edges.forEach(function (e) {
       var d = edgePathD(e);
       if (!d) return;
+      var srcNode = nodes.get(e.source);
       var g = svgEl("g", { "class": "pc-edge-group is-" + e.kind, "data-edge": e.id });
+      // User edges inherit the source component's category hue.
+      if (e.kind === "user" && srcNode) {
+        g.classList.add("is-cat-" + categoryOf(srcNode));
+      }
       var hit = svgEl("path", { "class": "pc-edge-hit", d: d });
       hit.addEventListener("pointerdown", function (ev) {
         ev.stopPropagation();
@@ -570,15 +567,29 @@
     return s;
   }
 
+  function patternSection(comp) {
+    /* "Pattern:" — the proven real-world implementation this component is
+     * modeled on, so a designed graph teaches the working fleet. */
+    if (!comp || !comp.anchor) return null;
+    var ps = section("Pattern");
+    var pat = el("div", "pc-insp-pattern");
+    pat.appendChild(el("div", "pc-insp-pattern-text", comp.pattern));
+    var anc = el("div", "pc-insp-anchor", "⚓ " + comp.anchor);
+    pat.appendChild(anc);
+    ps.appendChild(pat);
+    return ps;
+  }
+
   function renderInspector(n) {
     inspectorHead.textContent = "Inspector";
     inspectorBody.textContent = "";
+    var cat = categoryOf(n);
     var title = el("div", "pc-insp-title");
-    title.appendChild(el("span", "pc-node-icon", (ARCH[n.archetype] || ARCH.executor).letter));
-    title.firstChild.style.background = "var(--arch-" + n.archetype + ", var(--accent))";
+    title.appendChild(el("span", "pc-node-icon", letterOf(n)));
+    title.firstChild.style.background = CATS[cat].hue;
     var tt = el("div");
     tt.appendChild(el("div", "pc-insp-name", n.label));
-    tt.appendChild(el("div", "pc-insp-sub", ((ARCH[n.archetype] || {}).name || n.archetype) +
+    tt.appendChild(el("div", "pc-insp-sub", kindNameOf(n) +
       (n.kind === "designed" ? " · design intent" : n.kind === "gate" ? " · human gate" : " · live queue")));
     title.appendChild(tt);
     inspectorBody.appendChild(title);
@@ -634,6 +645,9 @@
     }
     inspectorBody.appendChild(cfg);
 
+    var pattern = patternSection(COMP_BY_ID[ARCH_COMP[n.archetype]]);
+    if (pattern) inspectorBody.appendChild(pattern);
+
     var links = el("div", "pc-insp-links");
     var q = el("a", null, "Open in Queues ↗");
     q.href = "/q2.html";
@@ -643,10 +657,22 @@
 
   function renderDesignedInspector(n) {
     var c = n.config || {};
+    var comp = compOf(n);
 
-    var fs = section("Design intent");
+    var pattern = patternSection(comp);
+    if (pattern) inspectorBody.appendChild(pattern);
+
+    if (comp.files && comp.files.what) {
+      var es = section("Edge contract");
+      es.appendChild(kv("Files", comp.files.what));
+      if (comp.files.label) es.appendChild(kv("Label", comp.files.label));
+      if (comp.consumes) es.appendChild(kv("Consumes", comp.consumes));
+      inspectorBody.appendChild(es);
+    }
+
+    var fs = section("Config sketch");
     var fLabel = el("div", "pc-field");
-    var lLab = el("label", null, "Queue name");
+    var lLab = el("label", null, "Name");
     var lIn = el("input");
     lIn.type = "text";
     lIn.value = n.label;
@@ -660,51 +686,37 @@
     fLabel.appendChild(lLab); fLabel.appendChild(lIn);
     fs.appendChild(fLabel);
 
-    function field(labelText, key, placeholder) {
+    (comp.config || []).forEach(function (spec) {
       var f = el("div", "pc-field");
-      var lab = el("label", null, labelText);
+      var lab = el("label", null, spec.label);
       var inp = el("input");
-      inp.type = "text";
-      inp.placeholder = placeholder || "";
-      inp.value = c[key] || "";
+      inp.type = spec.type === "number" ? "number" : "text";
+      if (spec.type === "number") { inp.min = "1"; inp.max = "32"; }
+      inp.placeholder = spec.ph || "";
+      inp.value = c[spec.key] != null ? c[spec.key] : "";
       inp.addEventListener("change", function () {
         pushHistory();
         var v = inp.value.trim();
-        if (v) c[key] = v; else delete c[key];
+        if (spec.type === "number") {
+          var num = Math.max(1, Math.min(32, parseInt(v, 10) || 0));
+          if (num) c[spec.key] = num; else delete c[spec.key];
+          inp.value = c[spec.key] != null ? c[spec.key] : "";
+        } else {
+          if (v) c[spec.key] = v; else delete c[spec.key];
+        }
         n.config = c;
         fillNodeEl(n);
         scheduleSave();
       });
       f.appendChild(lab); f.appendChild(inp);
-      return f;
-    }
-    if (n.archetype !== "stream" && n.archetype !== "gate") {
-      fs.appendChild(field("Engine", "engine", "claude"));
-      fs.appendChild(field("Model", "model", "claude-sonnet-5"));
-      fs.appendChild(field("Effort", "effort", "high"));
-      var wf = el("div", "pc-field");
-      var wLab = el("label", null, "Desired workers");
-      var wIn = el("input");
-      wIn.type = "number"; wIn.min = "1"; wIn.max = "8";
-      wIn.value = c.desired_workers || 1;
-      wIn.addEventListener("change", function () {
-        pushHistory();
-        c.desired_workers = Math.max(1, Math.min(8, parseInt(wIn.value, 10) || 1));
-        wIn.value = c.desired_workers;
-        n.config = c;
-        fillNodeEl(n);
-        scheduleSave();
-      });
-      wf.appendChild(wLab); wf.appendChild(wIn);
-      fs.appendChild(wf);
-    }
+      fs.appendChild(f);
+    });
     inspectorBody.appendChild(fs);
 
-    if (n.archetype === "stream") {
-      var sn = el("div", "pc-insp-note",
-        "Stream filers are scheduled producers (launchd, cron) that file deduped tickets into a queue. They live outside queue-config — materializing one means scheduling the producer yourself.");
-      inspectorBody.appendChild(sn);
-    }
+    var note = el("div", "pc-insp-note",
+      "A sketch, not a write: nothing here touches queue-config, wt, or any schedule. " +
+      "Materialization stays a preview you apply yourself.");
+    inspectorBody.appendChild(note);
 
     var actions = el("div", "pc-insp-links");
     var del = el("button", "pc-btn pc-btn-danger", "Delete node");
@@ -845,75 +857,217 @@
   function startEdgeDraw(e, n) {
     e.stopPropagation();
     e.preventDefault();
+    if (!REG.portsFor(compOf(n)).out) {
+      toast(kindNameOf(n) + " is a terminal — nothing flows out of it");
+      return;
+    }
     var tempG = svgEl("g", { "class": "pc-edge-group is-pending" });
     tempG.appendChild(svgEl("path", { "class": "pc-edge-line", d: "M0 0" }));
     edgesSvg.appendChild(tempG);
-    edgeDraw = { source: n.id, tempG: tempG };
+    edgeDraw = { source: n.id, tempG: tempG, target: null };
+  }
+  function edgeTargetUnder(x, y) {
+    var over = document.elementFromPoint(x, y);
+    var overNode = over && over.closest ? over.closest(".pc-node") : null;
+    if (!overNode) return null;
+    var id = overNode.dataset.id;
+    if (!id || id === edgeDraw.source) return null;
+    return nodes.get(id) || null;
   }
   function updateEdgeDraw(e) {
     var s = nodes.get(edgeDraw.source);
     if (!s) return;
     var w = toWorld(e.clientX, e.clientY);
+    // Magnetic snap: a valid target within range pulls the endpoint onto its
+    // in-port and glows; an invalid one shakes red.
+    var tn = edgeTargetUnder(e.clientX, e.clientY);
+    var valid = tn ? REG.canConnect(compOf(s), compOf(tn)) : false;
+    nodes.forEach(function (n) {
+      n.el.classList.remove("is-edge-target");
+      n.el.classList.remove("is-edge-invalid");
+    });
+    var end = w;
+    if (tn) {
+      valid = valid && !edgeExists(s.id, tn.id);
+      tn.el.classList.add(valid ? "is-edge-target" : "is-edge-invalid");
+      edgeDraw.target = valid ? tn.id : null;
+      if (valid) {
+        var th = tn.el ? tn.el.offsetHeight : 110;
+        end = { x: tn.x, y: tn.y + th / 2 };
+      }
+    } else {
+      edgeDraw.target = null;
+    }
     var fake = { source: edgeDraw.source, target: "__cursor__" };
-    nodes.set("__cursor__", { id: "__cursor__", x: w.x, y: w.y - 1, el: null });
+    nodes.set("__cursor__", { id: "__cursor__", x: end.x, y: end.y - 1, el: null });
     var d = edgePathD(fake);
     nodes.delete("__cursor__");
     if (d) edgeDraw.tempG.firstChild.setAttribute("d", d);
-    // Highlight the hovered drop target.
-    nodes.forEach(function (n) { n.el.classList.remove("is-edge-target"); });
-    var over = document.elementFromPoint(e.clientX, e.clientY);
-    var overNode = over && over.closest ? over.closest(".pc-node") : null;
-    if (overNode && overNode.dataset.id !== edgeDraw.source) {
-      var tn = nodes.get(overNode.dataset.id);
-      if (tn && tn.archetype !== "stream") tn.el.classList.add("is-edge-target");
-    }
+    edgeDraw.tempG.classList.toggle("is-invalid", !!(tn && !valid));
+  }
+  function edgeExists(sourceId, targetId) {
+    var dup = false;
+    edges.forEach(function (ed) {
+      if (ed.source === sourceId && ed.target === targetId) dup = true;
+    });
+    return dup;
   }
   function finishEdgeDraw(e) {
     var draw = edgeDraw;
     edgeDraw = null;
     if (draw.tempG.parentNode) draw.tempG.parentNode.removeChild(draw.tempG);
-    nodes.forEach(function (n) { n.el.classList.remove("is-edge-target"); });
-    var over = document.elementFromPoint(e.clientX, e.clientY);
-    var overNode = over && over.closest ? over.closest(".pc-node") : null;
-    if (!overNode) return;
-    var targetId = overNode.dataset.id;
-    if (!targetId || targetId === draw.source) return;
-    var tn = nodes.get(targetId);
-    if (!tn || tn.archetype === "stream") return;
-    // Dedupe: same pair already connected.
-    var dup = false;
-    edges.forEach(function (ed) {
-      if (ed.source === draw.source && ed.target === targetId) dup = true;
+    nodes.forEach(function (n) {
+      n.el.classList.remove("is-edge-target");
+      n.el.classList.remove("is-edge-invalid");
     });
-    if (dup) { toast("Those two are already connected"); return; }
+    var s = nodes.get(draw.source);
+    var tn = draw.target ? nodes.get(draw.target) : null;
+    if (!s || !tn) {
+      var over = edgeTargetUnder(e.clientX, e.clientY);
+      if (over) {
+        // Dropped on something it can't feed — say why, briefly.
+        toast("That connection doesn't make sense — " +
+              (REG.portsFor(compOf(over)).inp ? "contract mismatch" : kindNameOf(over) + " takes no input"));
+      }
+      return;
+    }
+    if (edgeExists(s.id, tn.id)) { toast("Those two are already connected"); return; }
     pushHistory();
-    var id = "user:" + draw.source + "->" + targetId;
-    edges.set(id, { id: id, source: draw.source, target: targetId, kind: "user", label: "files to" });
+    var id = "user:" + s.id + "->" + tn.id;
+    // The filing contract comes from the source component's registry entry.
+    var sc = compOf(s);
+    var edge = { id: id, source: s.id, target: tn.id, kind: "user",
+                 label: sc.files ? "files " + sc.files.what : "files to" };
+    if (sc.files && sc.files.label) edge.filing_label = sc.files.label;
+    edges.set(id, edge);
     renderEdges();
+    pulseEdge(id);
     scheduleSave();
-    toast("Connected — edit the filing contract in a later step");
+    maybeCelebrate();
+    dismissCoach(true);
+  }
+  // A one-shot pulse traveling the freshly connected edge.
+  function pulseEdge(edgeId) {
+    if (reducedMotion) return;
+    var e = edges.get(edgeId);
+    var d = e && edgePathD(e);
+    if (!d) return;
+    var p = svgEl("path", { "class": "pc-edge-spark", d: d });
+    edgesSvg.appendChild(p);
+    setTimeout(function () { if (p.parentNode) p.parentNode.removeChild(p); }, 1400);
+  }
+
+  /* ── pipeline validation + celebration ─────────────────────────────── */
+
+  // A designed graph is COMPLETE when a root (a designed node no user edge
+  // points into — a source, or the first worker in line) reaches a terminal
+  // (no-out-port: gate or sink) through user edges. Returns the path edges.
+  var celebrateSig = "";
+  function completePath() {
+    var adj = {};
+    var hasIncoming = {};
+    edges.forEach(function (e) {
+      if (e.kind !== "user") return;
+      (adj[e.source] = adj[e.source] || []).push(e);
+      hasIncoming[e.target] = true;
+    });
+    var starts = [], terminals = {};
+    nodes.forEach(function (n) {
+      if (n.kind !== "designed") return;
+      if (!hasIncoming[n.id]) starts.push(n.id);
+      if (!REG.portsFor(compOf(n)).out) terminals[n.id] = true;
+    });
+    if (!starts.length || !Object.keys(terminals).length) return null;
+    // BFS keeping the edge trail.
+    var queue = starts.map(function (id) { return { id: id, trail: [] }; });
+    var seen = {};
+    while (queue.length) {
+      var cur = queue.shift();
+      if (terminals[cur.id] && cur.trail.length) return cur.trail;
+      if (seen[cur.id]) continue;
+      seen[cur.id] = true;
+      (adj[cur.id] || []).forEach(function (e) {
+        queue.push({ id: e.target, trail: cur.trail.concat(e.id) });
+      });
+    }
+    return null;
+  }
+  function maybeCelebrate(force) {
+    var trail = completePath();
+    var sig = trail ? trail.join("|") : "";
+    if (!trail || (!force && sig === celebrateSig)) {
+      if (!trail) celebrateSig = "";
+      return;
+    }
+    celebrateSig = sig;
+    if (reducedMotion) { toast("Pipeline complete ✓"); return; }
+    // Shimmer along the path, edge by edge, then the chip.
+    trail.forEach(function (edgeId, i) {
+      setTimeout(function () { pulseEdge(edgeId); }, i * 180);
+    });
+    setTimeout(function () {
+      var chip = $("pcComplete");
+      chip.hidden = false;
+      chip.classList.add("is-visible");
+      setTimeout(function () {
+        chip.classList.remove("is-visible");
+        setTimeout(function () { chip.hidden = true; }, 400);
+      }, 3200);
+    }, trail.length * 180 + 150);
+  }
+
+  /* ── first-placement coach mark ────────────────────────────────────── */
+
+  var coachEl = null;
+  function maybeCoach(n) {
+    try { if (localStorage.getItem("ccc-canvas-coached")) return; } catch (err) { return; }
+    if (coachEl) return;
+    coachEl = el("div", "pc-coach");
+    coachEl.innerHTML = "<b>nice — now connect it to something</b>" +
+      "<span>drag from the dot on its right edge into another node</span>";
+    coachEl.addEventListener("click", function () { dismissCoach(false); });
+    stage.appendChild(coachEl);
+    positionCoach(n);
+    setTimeout(function () { dismissCoach(false); }, 14000);
+  }
+  function positionCoach(n) {
+    if (!coachEl) return;
+    var sx = (n.x + NODE_W) * view.zoom + view.x;
+    var sy = n.y * view.zoom + view.y;
+    coachEl.style.left = Math.min(stage.clientWidth - 260, Math.max(10, sx + 16)) + "px";
+    coachEl.style.top = Math.max(10, sy - 8) + "px";
+  }
+  function dismissCoach(permanent) {
+    if (!coachEl) return;
+    coachEl.remove();
+    coachEl = null;
+    if (permanent) {
+      try { localStorage.setItem("ccc-canvas-coached", "1"); } catch (err) {}
+    }
   }
 
   /* ── interactions: palette drag ────────────────────────────────────── */
 
-  var paletteDrag = null; // {archetype, ghost}
+  var paletteDrag = null; // {compId, ghost}
 
-  function startPaletteDrag(e, archetype) {
+  function startPaletteDrag(e, compId) {
     e.preventDefault();
+    var comp = COMP_BY_ID[compId];
+    if (!comp) return;
     var ghost = el("div", "pc-ghost");
     var card = el("div", "pc-node is-designed");
-    card.dataset.archetype = archetype;
+    card.dataset.category = comp.cat;
     card.style.width = NODE_W + "px";
     var head = el("div", "pc-node-head");
-    head.appendChild(el("span", "pc-node-icon", ARCH[archetype].letter));
+    head.appendChild(el("span", "pc-node-icon", comp.letter));
     var t = el("div", "pc-node-title");
-    t.appendChild(el("div", "pc-node-name", ARCH[archetype].name));
+    t.appendChild(el("div", "pc-node-name", comp.name));
     t.appendChild(el("div", "pc-node-arch", "drag onto canvas"));
     head.appendChild(t);
     card.appendChild(head);
     ghost.appendChild(card);
     document.body.appendChild(ghost);
-    paletteDrag = { archetype: archetype, ghost: ghost };
+    paletteDrag = { compId: compId, ghost: ghost };
     updatePaletteDrag(e);
   }
   function updatePaletteDrag(e) {
@@ -949,43 +1103,55 @@
     if (e.clientX < r.left || e.clientX > r.right || e.clientY < r.top || e.clientY > r.bottom) return;
     var w = toWorld(e.clientX, e.clientY);
     var spot = resolveDropCollision(w.x - NODE_W / 2, w.y - 30);
-    addDesignedNode(drag.archetype, null, spot.x, spot.y);
+    addDesignedNode(drag.compId, null, spot.x, spot.y);
   }
 
-  function addDesignedNode(archetype, label, x, y, config) {
+  function addDesignedNode(compId, label, x, y, config) {
     pushHistory();
-    designedSeq += 1;
-    var id = "designed:" + Date.now().toString(36) + designedSeq;
-    var n = {
-      id: id, kind: "designed", archetype: archetype,
-      label: label || defaultDesignedLabel(archetype),
-      config: config || defaultDesignedConfig(archetype),
-      x: Math.round(x / SNAP) * SNAP,
-      y: Math.round(y / SNAP) * SNAP
-    };
-    nodes.set(id, n);
+    var n = makeDesignedNode(compId, label, x, y, config);
     addNodeEl(n);
     if (!reducedMotion) n.el.classList.add("pc-enter");
-    selectNode(id);
+    selectNode(n.id);
     renderEdges();
     refreshEmptyState();
     scheduleSave();
     drawMinimap();
+    maybeCoach(n);
+    maybeCelebrate();
     return n;
   }
-  function defaultDesignedLabel(archetype) {
-    var base = { planner: "PLANNER", executor: "EXECUTOR", reviewer: "REVIEWER", stream: "STREAM", gate: "HUMAN GATE" }[archetype] || "NODE";
+  function makeDesignedNode(compId, label, x, y, config) {
+    designedSeq += 1;
+    var comp = COMP_BY_ID[compId] || { cat: "workers", name: "Worker", letter: "E" };
+    var n = {
+      id: "designed:" + Date.now().toString(36) + designedSeq,
+      kind: "designed",
+      component: compId,
+      category: comp.cat,
+      // Keep archetype for backward compatibility with older layouts.
+      archetype: { sources: "stream", gates: "gate", workers: "executor", sinks: "executor", utilities: "executor" }[comp.cat],
+      label: label || defaultDesignedLabel(comp),
+      config: config || defaultDesignedConfig(comp),
+      x: Math.round(x / SNAP) * SNAP,
+      y: Math.round(y / SNAP) * SNAP
+    };
+    nodes.set(n.id, n);
+    return n;
+  }
+  function defaultDesignedLabel(comp) {
+    var base = (comp.name || "NODE").toUpperCase().replace(/[^A-Z0-9 ⚑]+/g, "").trim() || "NODE";
     var taken = {};
     nodes.forEach(function (n) { taken[n.label] = true; });
     if (!taken[base]) return base;
     for (var i = 2; i < 50; i++) if (!taken[base + " " + i]) return base + " " + i;
     return base + " " + Date.now() % 100;
   }
-  function defaultDesignedConfig(archetype) {
-    if (archetype === "planner") return { engine: "claude", model: "claude-opus-5", effort: "high", desired_workers: 1, auto_drain: true };
-    if (archetype === "executor") return { engine: "claude", model: "claude-sonnet-5", effort: "high", desired_workers: 1, auto_drain: true };
-    if (archetype === "reviewer") return { engine: "claude", model: "claude-sonnet-5", desired_workers: 1, auto_drain: true };
-    return {};
+  function defaultDesignedConfig(comp) {
+    var c = {};
+    (comp.config || []).forEach(function (spec) {
+      if (spec.ph) c[spec.key] = spec.type === "number" ? (parseInt(spec.ph, 10) || 1) : spec.ph;
+    });
+    return c;
   }
 
   /* ── library + templates ───────────────────────────────────────────── */
@@ -997,19 +1163,123 @@
     library.classList.toggle("has-more", moreBelow);
   }
 
-  function buildLibrary() {
+  /* Match: substring anywhere wins; word-initials ("phw" → PostHog watcher)
+     as a fallback. Plain subsequence was too loose — "post" matched 21 of
+     33 components and the search felt broken. */
+  function fuzzyMatch(hay, needle) {
+    hay = hay.toLowerCase();
+    needle = needle.toLowerCase().trim();
+    if (!needle) return true;
+    if (hay.indexOf(needle) !== -1) return true;
+    var initials = hay.split(/[^a-z0-9]+/).filter(Boolean).map(function (w) { return w[0]; }).join("");
+    return initials.indexOf(needle) !== -1;
+  }
+
+  var searchIdx = -1;
+  function renderLibraryItems() {
     var list = $("pcLibraryList");
+    var query = $("pcLibSearch").value;
     list.textContent = "";
-    ["planner", "executor", "reviewer", "stream", "gate"].forEach(function (archetype) {
-      var item = el("div", "pc-lib-item");
-      item.dataset.archetype = archetype;
-      item.appendChild(el("span", "pc-node-icon", ARCH[archetype].letter));
-      var txt = el("div");
-      txt.appendChild(el("div", "pc-lib-name", ARCH[archetype].name));
-      txt.appendChild(el("div", "pc-lib-desc", ARCH[archetype].desc));
-      item.appendChild(txt);
-      item.addEventListener("pointerdown", function (e) { startPaletteDrag(e, archetype); });
-      list.appendChild(item);
+    searchIdx = -1;
+    var anyVisible = false;
+    ["sources", "workers", "gates", "sinks", "utilities"].forEach(function (cat) {
+      var comps = COMPONENTS.filter(function (c) {
+        return c.cat === cat &&
+          fuzzyMatch(c.name + " " + c.desc + " " + c.cat + " " + (c.anchor || ""), query);
+      });
+      if (!comps.length) return;
+      var head = el("div", "pc-lib-cat", CATS[cat].name);
+      head.dataset.category = cat;
+      list.appendChild(head);
+      comps.forEach(function (comp) {
+        anyVisible = true;
+        var item = el("div", "pc-lib-item");
+        item.dataset.component = comp.id;
+        item.dataset.category = comp.cat;
+        item.tabIndex = -1;
+        item.appendChild(el("span", "pc-node-icon", comp.letter));
+        var txt = el("div");
+        txt.appendChild(el("div", "pc-lib-name", comp.name));
+        txt.appendChild(el("div", "pc-lib-desc", comp.desc));
+        item.appendChild(txt);
+        item.addEventListener("pointerdown", function (e) {
+          if (e.button === 0) startPaletteDrag(e, comp.id);
+        });
+        list.appendChild(item);
+      });
+    });
+    if (!anyVisible) {
+      list.appendChild(el("div", "pc-lib-none", "No components match “" + query.trim() + "”."));
+    }
+    updateLibraryFade();
+  }
+
+  function visibleLibItems() {
+    return Array.from(library.querySelectorAll(".pc-lib-item"));
+  }
+  function moveSearchHighlight(delta) {
+    var items = visibleLibItems();
+    if (!items.length) return;
+    searchIdx = (searchIdx + delta + items.length) % items.length;
+    items.forEach(function (it, i) { it.classList.toggle("is-search-hit", i === searchIdx); });
+    items[searchIdx].scrollIntoView({ block: "nearest" });
+  }
+  function placeSearchHighlight() {
+    var items = visibleLibItems();
+    var item = items[searchIdx >= 0 ? searchIdx : 0];
+    if (!item) return;
+    var r = stage.getBoundingClientRect();
+    var center = toWorld(r.left + r.width / 2, r.top + r.height / 2);
+    var spot = resolveDropCollision(center.x - NODE_W / 2, center.y - 60);
+    addDesignedNode(item.dataset.component, null, spot.x, spot.y);
+    $("pcLibSearch").value = "";
+    renderLibraryItems();
+  }
+
+  function templatePreviewSvg(t) {
+    /* Mini-graph: category-colored dots + contract lines, scaled to fit. */
+    var minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity;
+    t.nodes.forEach(function (n) {
+      minX = Math.min(minX, n.x); maxX = Math.max(maxX, n.x);
+      minY = Math.min(minY, n.y); maxY = Math.max(maxY, n.y);
+    });
+    var W = 208, H = 46, pad = 7;
+    var sx = (W - pad * 2) / Math.max(1, maxX - minX);
+    var sy = (H - pad * 2) / Math.max(1, maxY - minY);
+    var s = Math.min(sx, sy, 0.19);
+    function px(x) { return pad + (x - minX) * s; }
+    function py(y) { return pad + (y - minY) * s; }
+    var CAT_HEX = { sources: "#7ee0a3", workers: "#58a6ff", gates: "#ffb340", sinks: "#bc8cff", utilities: "#39d2c0" };
+    var svg = svgEl("svg", { "class": "pc-template-graph", viewBox: "0 0 " + W + " " + H });
+    t.edges.forEach(function (e) {
+      var a = t.nodes.find(function (n) { return n.key === e.from; });
+      var b = t.nodes.find(function (n) { return n.key === e.to; });
+      if (!a || !b) return;
+      svg.appendChild(svgEl("line", {
+        x1: px(a.x), y1: py(a.y), x2: px(b.x), y2: py(b.y),
+        "class": "pc-template-graph-edge"
+      }));
+    });
+    t.nodes.forEach(function (n) {
+      var comp = COMP_BY_ID[n.comp] || { cat: "workers" };
+      svg.appendChild(svgEl("rect", {
+        x: px(n.x) - 4, y: py(n.y) - 4, width: 8, height: 8, rx: 2.5,
+        fill: CAT_HEX[comp.cat] || "#58a6ff"
+      }));
+    });
+    return svg;
+  }
+
+  function buildLibrary() {
+    renderLibraryItems();
+    var search = $("pcLibSearch");
+    search.addEventListener("input", renderLibraryItems);
+    search.addEventListener("keydown", function (e) {
+      if (e.key === "ArrowDown") { e.preventDefault(); moveSearchHighlight(1); }
+      else if (e.key === "ArrowUp") { e.preventDefault(); moveSearchHighlight(-1); }
+      else if (e.key === "Enter") { e.preventDefault(); placeSearchHighlight(); }
+      else if (e.key === "Escape") { search.value = ""; renderLibraryItems(); search.blur(); }
+      e.stopPropagation();
     });
 
     var tlist = $("pcTemplateList");
@@ -1017,10 +1287,9 @@
     TEMPLATES.forEach(function (t) {
       var card = el("button", "pc-template");
       card.type = "button";
-      var name = el("div", "pc-template-name", "✦ " + t.name);
-      card.appendChild(name);
+      card.appendChild(el("div", "pc-template-name", "✦ " + t.name));
+      card.appendChild(templatePreviewSvg(t));
       card.appendChild(el("div", "pc-template-desc", t.desc));
-      card.appendChild(el("div", "pc-template-flow", t.flow));
       card.addEventListener("click", function () { applyTemplate(t); });
       tlist.appendChild(card);
     });
@@ -1060,7 +1329,9 @@
     }
     var keyToId = {};
     t.nodes.forEach(function (spec) {
-      var n = addDesignedNodeQuiet(spec.archetype, spec.label, spec.x + offX, spec.y + offY, spec.config);
+      var n = makeDesignedNode(spec.comp, spec.label, spec.x + offX, spec.y + offY, null);
+      addNodeEl(n);
+      if (!reducedMotion) n.el.classList.add("pc-enter");
       keyToId[spec.key] = n.id;
     });
     t.edges.forEach(function (e) {
@@ -1073,24 +1344,10 @@
     scheduleSave();
     drawMinimap();
     fitView();
+    maybeCelebrate(true);
     banner.hidden = false;
     $("pcBannerText").textContent = "“" + t.name + "” laid out as design nodes — nothing real yet.";
     showHint("Drag nodes to arrange · <kbd>Delete</kbd> removes · <kbd>⌘Z</kbd> undoes", 6500);
-  }
-  function addDesignedNodeQuiet(archetype, label, x, y, config) {
-    designedSeq += 1;
-    var id = "designed:" + Date.now().toString(36) + designedSeq;
-    var n = {
-      id: id, kind: "designed", archetype: archetype,
-      label: label || defaultDesignedLabel(archetype),
-      config: JSON.parse(JSON.stringify(config || defaultDesignedConfig(archetype))),
-      x: Math.round(x / SNAP) * SNAP,
-      y: Math.round(y / SNAP) * SNAP
-    };
-    nodes.set(id, n);
-    addNodeEl(n);
-    if (!reducedMotion) n.el.classList.add("pc-enter");
-    return n;
   }
 
   $("pcBannerDismiss").addEventListener("click", function () { banner.hidden = true; });
@@ -1106,21 +1363,26 @@
   }
 
   function materializationPreview(cluster) {
+    /* Only workers become queue-config entries. Sources are scheduled
+     * producers, gates/sinks/utilities are conventions and plumbing — all
+     * surfaced as notes, never as queue entries. */
     var entries = {};
-    var streams = [];
+    var others = [];
     cluster.template.nodes.forEach(function (spec) {
-      if (spec.archetype === "gate") return; // the Decision Inbox already exists
+      var comp = COMP_BY_ID[spec.comp] || { cat: "workers" };
+      if (spec.comp === "decision-inbox") return; // already exists
       var name = slugQueueName(spec.label);
-      if (spec.archetype === "stream") { streams.push(name); return; }
-      var c = spec.config || {};
-      var entry = { auto_drain: c.auto_drain !== false, repo_path: "/path/to/repo" };
+      if (comp.cat !== "workers") { others.push({ name: name, comp: comp }); return; }
+      var c = {};
+      (comp.config || []).forEach(function (f) { if (f.ph) c[f.key] = f.ph; });
+      var entry = { auto_drain: true, repo_path: "/path/to/repo" };
       if (c.engine) entry.engine = c.engine;
       if (c.model) entry.model = c.model;
       if (c.effort) entry.effort = c.effort;
       entry.desired_workers = c.desired_workers || 1;
       entries[name] = entry;
     });
-    return { entries: entries, streams: streams };
+    return { entries: entries, others: others };
   }
 
   function openMaterializeModal(cluster) {
@@ -1142,16 +1404,22 @@
     Object.keys(prev.entries).forEach(function (name) {
       cmds.push("wt ls -q " + name + "        # verify the queue registered");
     });
-    if (prev.streams.length) {
-      body.appendChild(el("h3", null, "Stream filers — scheduled producers (no queue entry):"));
+    if (prev.others.length) {
+      body.appendChild(el("h3", null, "Not queue entries — bring these to life yourself:"));
       body.appendChild(el("pre", null,
-        prev.streams.map(function (s) {
-          return "# " + s + ": schedule the producer yourself (launchd/cron).\n" +
-                 "# It files deduped tickets into its target queue on a cadence.";
+        prev.others.map(function (o) {
+          var hints = {
+            sources: "schedule the producer (launchd/cron/webhook) — it files into a queue on its cadence",
+            gates: "a human checkpoint — park work with wt block / needs_input, or decide it in the Decision Inbox",
+            sinks: "an output — it happens when the filing lands (label, email, text, page, commit, deploy)",
+            utilities: "plumbing inside the producer/worker, not a queue — see its Pattern in the inspector"
+          };
+          return "# " + o.name + " (" + o.comp.name + ")\n#   " +
+                 (hints[o.comp.cat] || hints.utilities) + "\n#   pattern: " + o.comp.anchor;
         }).join("\n\n")));
     }
     body.appendChild(el("h3", null, "Then verify:"));
-    body.appendChild(el("pre", null, cmds.join("\n") +
+    body.appendChild(el("pre", null, (cmds.join("\n") || "# (no worker queues in this design)") +
       "\n\n# Filing conventions the design implies:" +
       cluster.template.edges.map(function (e) {
         var from = slugQueueName((cluster.template.nodes.find(function (n) { return n.key === e.from; }) || {}).label);
@@ -1274,6 +1542,7 @@
     $("pcModeRuntime").setAttribute("aria-selected", mode === "runtime" ? "true" : "false");
     $("pcModeDesign").setAttribute("aria-selected", mode === "design" ? "true" : "false");
     library.hidden = mode !== "design";
+    refreshGhostHint();
     if (mode === "design") {
       showHint("Drag a component onto the canvas — or lay out a template in one click", 7000);
       requestAnimationFrame(updateLibraryFade);
@@ -1286,6 +1555,14 @@
 
   function refreshEmptyState() {
     emptyState.hidden = nodes.size > 0;
+    refreshGhostHint();
+  }
+  function refreshGhostHint() {
+    var ghost = $("pcGhostHint");
+    if (!ghost) return;
+    var anyDesigned = false;
+    nodes.forEach(function (n) { if (n.kind === "designed") anyDesigned = true; });
+    ghost.hidden = !(mode === "design" && !anyDesigned && nodes.size > 0);
   }
 
   /* ── data: runtime state ───────────────────────────────────────────── */
@@ -1425,7 +1702,9 @@
     nodes.forEach(function (n) {
       var entry = { x: n.x, y: n.y, kind: n.kind };
       if (n.kind === "designed") {
-        entry.archetype = n.archetype;
+        if (n.component) entry.component = n.component;
+        if (n.category) entry.category = n.category;
+        if (n.archetype) entry.archetype = n.archetype;
         entry.label = n.label;
         if (n.config && Object.keys(n.config).length) entry.config = n.config;
       }
@@ -1472,8 +1751,11 @@
         // Designed nodes come from the layout itself (they have no truth).
         Object.keys(doc.nodes || {}).forEach(function (id) {
           var p = doc.nodes[id];
-          if (p && p.kind === "designed" && p.archetype) {
-            var n = { id: id, kind: "designed", archetype: p.archetype,
+          if (p && p.kind === "designed" && (p.component || p.archetype)) {
+            var n = { id: id, kind: "designed",
+                      component: p.component || null,
+                      category: p.category || null,
+                      archetype: p.archetype || "executor",
                       label: p.label || "NODE", config: p.config || {},
                       x: p.x || 0, y: p.y || 0 };
             nodes.set(id, n);
@@ -1528,6 +1810,7 @@
           clearSelection();
           renderEdges();
           scheduleSave();
+          maybeCelebrate();
           toast("Edge removed");
         } else {
           toast("Convention edges come from the fleet — they can't be deleted here");

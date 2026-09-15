@@ -28,7 +28,13 @@
   --shadow-1: 0 2px 10px rgba(0, 0, 0, 0.35);
   --shadow-2: 0 14px 44px rgba(0, 0, 0, 0.5);
   --radius: 14px;
-  /* Archetype hues. */
+  /* Category hues — consistent across library, nodes, edges, minimap. */
+  --cat-sources: var(--mint);
+  --cat-workers: var(--accent);
+  --cat-gates: var(--amber);
+  --cat-sinks: var(--purple);
+  --cat-utilities: var(--cyan);
+  /* Archetype hues (legacy aliases). */
   --arch-planner: var(--purple);
   --arch-executor: var(--accent);
   --arch-reviewer: var(--cyan);
@@ -220,7 +226,7 @@ body {
   box-shadow: var(--shadow-1);
   cursor: grab;
   user-select: none;
-  transition: border-color 0.14s, box-shadow 0.14s, opacity 0.2s;
+  transition: border-color 0.14s, box-shadow 0.14s, opacity 0.2s, transform 0.14s;
 }
 .pc-node:hover {
   border-color: #3b4756;
@@ -247,11 +253,26 @@ body {
   flex-shrink: 0;
   color: #0b0e13;
 }
-.pc-node[data-archetype="planner"] .pc-node-icon { background: var(--arch-planner); }
-.pc-node[data-archetype="executor"] .pc-node-icon { background: var(--arch-executor); }
-.pc-node[data-archetype="reviewer"] .pc-node-icon { background: var(--arch-reviewer); }
-.pc-node[data-archetype="stream"] .pc-node-icon { background: var(--arch-stream); }
-.pc-node[data-archetype="gate"] .pc-node-icon { background: var(--arch-gate); }
+.pc-node[data-category="sources"] .pc-node-icon { background: var(--cat-sources); }
+.pc-node[data-category="workers"] .pc-node-icon { background: var(--cat-workers); }
+.pc-node[data-category="gates"] .pc-node-icon { background: var(--cat-gates); }
+.pc-node[data-category="sinks"] .pc-node-icon { background: var(--cat-sinks); }
+.pc-node[data-category="utilities"] .pc-node-icon { background: var(--cat-utilities); }
+/* Category accent thread along the node's top edge. */
+.pc-node::after {
+  content: '';
+  position: absolute;
+  top: 0; left: 14px; right: 14px;
+  height: 2px;
+  border-radius: 0 0 2px 2px;
+  opacity: 0.55;
+  pointer-events: none;
+}
+.pc-node[data-category="sources"]::after { background: var(--cat-sources); }
+.pc-node[data-category="workers"]::after { background: var(--cat-workers); }
+.pc-node[data-category="gates"]::after { background: var(--cat-gates); }
+.pc-node[data-category="sinks"]::after { background: var(--cat-sinks); }
+.pc-node[data-category="utilities"]::after { background: var(--cat-utilities); }
 .pc-node-title { min-width: 0; flex: 1; }
 .pc-node-name {
   font-size: 13px; font-weight: 700; letter-spacing: 0.01em;
@@ -365,8 +386,149 @@ body {
 .pc-port:hover { border-color: var(--accent); background: var(--accent); transform: translateY(-50%) scale(1.25); }
 .pc-port-in { left: -6px; }
 .pc-port-out { right: -6px; }
-.pc-node[data-archetype="stream"] .pc-port-in,
-.pc-node[data-archetype="gate"] .pc-port-out { display: none; }
+.pc-port.pc-port-off { display: none; }
+
+/* ── phase-2 fun: edges, breathe, celebrate, coach ───────────────────── */
+
+/* Live queues with fresh activity breathe — opacity-only glow via the
+   top accent thread's sibling glow layer. */
+.pc-node.is-live { animation: pc-breathe 3.6s ease-in-out infinite; }
+@keyframes pc-breathe {
+  0%, 100% { box-shadow: var(--shadow-1), 0 0 14px rgba(63, 185, 80, 0.06); }
+  50% { box-shadow: var(--shadow-1), 0 0 30px rgba(63, 185, 80, 0.22); }
+}
+
+/* Valid edge target: green glow. Invalid: red shake. */
+.pc-node.is-edge-target { border-color: var(--green) !important; box-shadow: 0 0 0 2px var(--green), 0 0 26px rgba(63, 185, 80, 0.3) !important; }
+.pc-node.is-edge-invalid { border-color: var(--red) !important; animation: pc-shake 0.32s ease-in-out; }
+@keyframes pc-shake {
+  0%, 100% { transform: translateX(0); }
+  25% { transform: translateX(-4px); }
+  50% { transform: translateX(4px); }
+  75% { transform: translateX(-3px); }
+}
+
+/* Pending edge while drawing. */
+.pc-edge-group.is-pending.is-invalid .pc-edge-line { stroke: var(--red); }
+
+/* The success spark traveling a freshly connected edge, and the
+   pipeline-complete shimmer (same element, re-used per edge). */
+.pc-edge-spark {
+  fill: none;
+  stroke: #bfe3ff;
+  stroke-width: 2.4;
+  stroke-linecap: round;
+  stroke-dasharray: 26 220;
+  animation: pc-spark 1.3s ease-in-out forwards;
+  filter: drop-shadow(0 0 6px rgba(88, 166, 255, 0.9));
+  pointer-events: none;
+}
+@keyframes pc-spark {
+  0% { stroke-dashoffset: 246; opacity: 1; }
+  80% { opacity: 1; }
+  100% { stroke-dashoffset: 0; opacity: 0; }
+}
+
+/* User edges inherit the source component's category hue. */
+.pc-edge-group.is-user.is-cat-sources .pc-edge-line { stroke: rgba(126, 224, 163, 0.5); }
+.pc-edge-group.is-user.is-cat-sources .pc-edge-flow { stroke: var(--cat-sources); }
+.pc-edge-group.is-user.is-cat-workers .pc-edge-line { stroke: rgba(88, 166, 255, 0.5); }
+.pc-edge-group.is-user.is-cat-workers .pc-edge-flow { stroke: var(--cat-workers); }
+.pc-edge-group.is-user.is-cat-gates .pc-edge-line { stroke: rgba(255, 179, 64, 0.5); }
+.pc-edge-group.is-user.is-cat-gates .pc-edge-flow { stroke: var(--cat-gates); }
+.pc-edge-group.is-user.is-cat-sinks .pc-edge-line { stroke: rgba(188, 140, 255, 0.5); }
+.pc-edge-group.is-user.is-cat-sinks .pc-edge-flow { stroke: var(--cat-sinks); }
+.pc-edge-group.is-user.is-cat-utilities .pc-edge-line { stroke: rgba(57, 210, 192, 0.5); }
+.pc-edge-group.is-user.is-cat-utilities .pc-edge-flow { stroke: var(--cat-utilities); }
+
+/* Pipeline-complete chip. */
+.pc-complete {
+  position: absolute;
+  top: 112px; left: 50%;
+  transform: translateX(-50%) translateY(-6px);
+  z-index: 36;
+  display: flex; align-items: center; gap: 8px;
+  background: linear-gradient(180deg, #153423, #102a1c);
+  border: 1px solid #2a6b45;
+  color: #8fe3ae;
+  font-size: 12.5px; font-weight: 700;
+  border-radius: 999px;
+  padding: 8px 18px;
+  box-shadow: 0 10px 34px rgba(63, 185, 80, 0.25);
+  opacity: 0;
+  transition: opacity 0.3s, transform 0.3s;
+  pointer-events: none;
+}
+.pc-complete.is-visible { opacity: 1; transform: translateX(-50%) translateY(0); }
+.pc-complete[hidden] { display: none; }
+.pc-complete-check {
+  width: 18px; height: 18px;
+  border-radius: 50%;
+  background: var(--green);
+  color: #06130b;
+  display: grid; place-items: center;
+  font-size: 11px; font-weight: 900;
+}
+
+/* First-placement coach mark. */
+.pc-coach {
+  position: absolute;
+  z-index: 38;
+  max-width: 250px;
+  background: #1a2230;
+  border: 1px solid #2d4560;
+  border-radius: 12px;
+  padding: 10px 14px;
+  box-shadow: var(--shadow-2);
+  font-size: 12px;
+  cursor: pointer;
+  animation: pc-coach-in 0.35s cubic-bezier(0.2, 0.9, 0.3, 1.2) backwards;
+}
+.pc-coach b { display: block; color: var(--text); margin-bottom: 3px; }
+.pc-coach span { color: var(--text-muted); font-size: 11.5px; }
+@keyframes pc-coach-in {
+  from { opacity: 0; transform: translateY(8px) scale(0.92); }
+  to { opacity: 1; transform: translateY(0) scale(1); }
+}
+
+/* Ghost-graph hint on a blank design canvas. */
+.pc-ghost-hint {
+  position: absolute;
+  left: 50%; top: 42%;
+  transform: translate(-50%, -50%);
+  z-index: 18;
+  display: flex; flex-direction: column; align-items: center; gap: 14px;
+  pointer-events: none;
+  opacity: 0.85;
+}
+.pc-ghost-hint[hidden] { display: none; }
+.pc-ghost-node {
+  fill: none;
+  stroke: #3d4a5c;
+  stroke-width: 1.5;
+  stroke-dasharray: 5 4;
+}
+.pc-ghost-n1 { stroke: #4a5f8a; }
+.pc-ghost-n2 { stroke: #4a5f8a; }
+.pc-ghost-n3 { stroke: #6b5a2e; }
+.pc-ghost-edge {
+  stroke: #3d4a5c;
+  stroke-width: 1.5;
+  stroke-dasharray: 4 5;
+  animation: pc-ghost-flow 1.6s linear infinite;
+}
+@keyframes pc-ghost-flow { to { stroke-dashoffset: -9; } }
+.pc-ghost-text {
+  text-align: center;
+  background: rgba(10, 13, 18, 0.82);
+  border: 1px solid var(--border-soft);
+  border-radius: 12px;
+  padding: 10px 18px;
+  backdrop-filter: blur(8px);
+  -webkit-backdrop-filter: blur(8px);
+}
+.pc-ghost-text b { display: block; font-size: 13.5px; color: var(--text); margin-bottom: 4px; }
+.pc-ghost-text span { font-size: 12px; color: var(--text-dim); }
 
 /* ── library / left panel ────────────────────────────────────────────── */
 .pc-panel {
@@ -406,6 +568,59 @@ body {
   align-content: start;
 }
 .pc-panel-grid { display: grid; gap: 8px; }
+/* Component search. */
+.pc-lib-search-wrap {
+  padding: 9px 10px 7px;
+  border-bottom: 1px solid var(--border-soft);
+  flex-shrink: 0;
+}
+.pc-lib-search {
+  width: 100%;
+  font: 12px var(--font-ui);
+  color: var(--text);
+  background: var(--panel-2);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 7px 10px;
+  outline: none;
+}
+.pc-lib-search:focus { border-color: var(--accent); }
+.pc-lib-search::-webkit-search-cancel-button { cursor: pointer; }
+.pc-lib-cat {
+  font-size: 10px; font-weight: 700;
+  text-transform: uppercase; letter-spacing: 0.09em;
+  padding: 8px 4px 2px;
+}
+.pc-lib-cat[data-category="sources"] { color: var(--cat-sources); }
+.pc-lib-cat[data-category="workers"] { color: var(--cat-workers); }
+.pc-lib-cat[data-category="gates"] { color: var(--cat-gates); }
+.pc-lib-cat[data-category="sinks"] { color: var(--cat-sinks); }
+.pc-lib-cat[data-category="utilities"] { color: var(--cat-utilities); }
+.pc-lib-none { font-size: 11.5px; color: var(--text-dim); padding: 10px 6px; }
+.pc-lib-item.is-search-hit { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent); }
+/* Template mini-graph preview. */
+.pc-template-graph {
+  display: block;
+  width: 100%;
+  height: 46px;
+  margin: 7px 0 2px;
+  background: rgba(11, 14, 19, 0.55);
+  border: 1px solid var(--border-soft);
+  border-radius: 8px;
+}
+.pc-template-graph-edge { stroke: #3a4452; stroke-width: 1.2; }
+/* Inspector pattern block. */
+.pc-insp-pattern { display: grid; gap: 6px; }
+.pc-insp-pattern-text { font-size: 12px; color: var(--text-muted); line-height: 1.5; }
+.pc-insp-anchor {
+  font: 600 10.5px var(--font-mono);
+  color: var(--cyan);
+  background: rgba(57, 210, 192, 0.07);
+  border: 1px solid rgba(57, 210, 192, 0.25);
+  border-radius: 7px;
+  padding: 4px 8px;
+  word-break: break-all;
+}
 /* Bottom fade = "there is more below" cue, toggled from JS only while the
    scroll region actually has hidden content below the fold. */
 .pc-scroll-fade {
@@ -437,11 +652,11 @@ body {
 }
 .pc-lib-item:active { cursor: grabbing; }
 .pc-lib-item .pc-node-icon { width: 28px; height: 28px; font-size: 12px; flex-shrink: 0; }
-.pc-lib-item[data-archetype="planner"] .pc-node-icon { background: var(--arch-planner); }
-.pc-lib-item[data-archetype="executor"] .pc-node-icon { background: var(--arch-executor); }
-.pc-lib-item[data-archetype="reviewer"] .pc-node-icon { background: var(--arch-reviewer); }
-.pc-lib-item[data-archetype="stream"] .pc-node-icon { background: var(--arch-stream); }
-.pc-lib-item[data-archetype="gate"] .pc-node-icon { background: var(--arch-gate); }
+.pc-lib-item[data-category="sources"] .pc-node-icon { background: var(--cat-sources); }
+.pc-lib-item[data-category="workers"] .pc-node-icon { background: var(--cat-workers); }
+.pc-lib-item[data-category="gates"] .pc-node-icon { background: var(--cat-gates); }
+.pc-lib-item[data-category="sinks"] .pc-node-icon { background: var(--cat-sinks); }
+.pc-lib-item[data-category="utilities"] .pc-node-icon { background: var(--cat-utilities); }
 .pc-lib-name { font-weight: 700; font-size: 12px; }
 .pc-lib-desc { font-size: 10.5px; color: var(--text-dim); margin-top: 2px; line-height: 1.35; }
 
@@ -771,9 +986,15 @@ body {
   position: fixed;
   z-index: 300;
   pointer-events: none;
-  opacity: 0.85;
-  transform: translate(-50%, -50%) scale(0.92);
+  opacity: 0.9;
+  transform: translate(-50%, -50%) rotate(2.5deg) scale(0.95);
+  filter: drop-shadow(0 18px 30px rgba(0, 0, 0, 0.55));
 }
+
+/* Hover lift (transform only, stays 60fps). */
+.pc-node { will-change: transform; }
+.pc-node:hover { transform: translateY(-2px); }
+.pc-node.is-dragging:hover { transform: none; }
 
 /* ── entrance animation ──────────────────────────────────────────────── */
 .pc-node.pc-enter { animation: pc-node-in 0.45s cubic-bezier(0.2, 0.9, 0.3, 1.2) backwards; }
@@ -791,7 +1012,12 @@ body {
   .pc-edge-flow { animation: none; }
   .pc-status::after { animation: none !important; }
   .pc-node.pc-enter, .pc-stage.pc-enter { animation: none; }
+  .pc-node.is-live { animation: none; }
+  .pc-node.is-edge-invalid { animation: none; }
+  .pc-ghost-edge { animation: none; }
+  .pc-edge-spark { display: none; }
   .pc-node, .pc-lib-item, .pc-template, .pc-btn { transition: none; }
+  .pc-node:hover { transform: none; }
 }
 
 /* Narrow windows: panels become overlays, minimap shrinks. */

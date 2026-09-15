@@ -155,9 +155,11 @@ class LayoutValidation(unittest.TestCase):
             "nodes": {
                 "queue:BECKY": {"x": 100, "y": -40.5},
                 "designed:abc": {"x": 0, "y": 0, "kind": "designed",
+                                 "component": "planner", "category": "workers",
                                  "archetype": "planner", "label": "My planner",
                                  "config": {"engine": "claude", "model": "claude-opus-5",
-                                            "desired_workers": 2, "junk": "dropped"}},
+                                            "cadence": "*/15 * * * *",
+                                            "desired_workers": 2}},
             },
             "edges": [{"source": "designed:abc", "target": "queue:BECKY",
                        "label": "files builds to"}],
@@ -168,10 +170,22 @@ class LayoutValidation(unittest.TestCase):
         self.assertEqual(clean["nodes"]["queue:BECKY"], {"x": 100.0, "y": -40.5})
         designed = clean["nodes"]["designed:abc"]
         self.assertEqual(designed["archetype"], "planner")
+        self.assertEqual(designed["component"], "planner")
+        self.assertEqual(designed["category"], "workers")
         self.assertEqual(designed["config"]["engine"], "claude")
-        self.assertNotIn("junk", designed["config"])
+        # Generic sketch keys pass through (they are design data, never real).
+        self.assertEqual(designed["config"]["cadence"], "*/15 * * * *")
         self.assertEqual(clean["edges"][0]["id"], "user:designed:abc->queue:BECKY")
         self.assertEqual(clean["viewport"]["zoom"], 1.5)
+
+    def test_unknown_category_dropped_and_config_capped(self):
+        doc = {"nodes": {"d": {"x": 0, "y": 0, "kind": "designed",
+                               "category": "nonsense",
+                               "config": {f"k{i}": "v" for i in range(40)} }},
+               "edges": []}
+        clean, _ = pc.validate_layout(doc)
+        self.assertNotIn("category", clean["nodes"]["d"])
+        self.assertEqual(len(clean["nodes"]["d"]["config"]), 16)
 
     def test_rejects_non_object(self):
         self.assertEqual(pc.validate_layout([1, 2])[0], None)

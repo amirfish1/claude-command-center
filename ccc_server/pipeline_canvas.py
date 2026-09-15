@@ -45,6 +45,9 @@ ZOOM_MAX = 3.0
 
 # The five first-class archetypes (see the spec's archetype contract).
 ARCHETYPES = ("planner", "executor", "reviewer", "stream", "gate")
+# Component-library categories (spec: component taxonomy). Designed nodes
+# carry one of these; runtime nodes map their archetype onto the same set.
+CATEGORIES = ("sources", "workers", "gates", "sinks", "utilities")
 
 # Runtime classification hints. queue-config.json has no `kind` field, so a
 # runtime node's archetype is a presentation hint derived from the queue
@@ -345,23 +348,38 @@ def validate_layout(payload):
         arch = _clean_text(pos.get("archetype"), 20)
         if arch in ARCHETYPES:
             entry["archetype"] = arch
+        comp = _clean_text(pos.get("component"), 60)
+        if comp:
+            entry["component"] = comp
+        cat = _clean_text(pos.get("category"), 20)
+        if cat in CATEGORIES:
+            entry["category"] = cat
         label = _clean_text(pos.get("label"), MAX_LABEL)
         if label:
             entry["label"] = label
-        # Designed nodes may sketch config intent (engine/model/effort/
-        # desired_workers). It is design data, never written anywhere real.
+        # Designed nodes may sketch config intent (engine/model/cadence/
+        # whatever the component's inspector exposes). It is design data,
+        # never written anywhere real. Keys and values are capped strings;
+        # desired_workers/auto_drain keep their typed coercion.
         conf = pos.get("config")
         if isinstance(conf, dict):
             clean_conf = {}
-            for key in ("engine", "model", "effort", "repo_path", "github_repo"):
-                val = _clean_text(conf.get(key), MAX_LABEL)
-                if val:
+            for key, val in conf.items():
+                if len(clean_conf) >= 16:
+                    break
+                key = _clean_text(key, 40)
+                if not key:
+                    continue
+                if key == "desired_workers" and isinstance(val, int) \
+                        and not isinstance(val, bool) and 1 <= val <= 32:
                     clean_conf[key] = val
-            dw = conf.get("desired_workers")
-            if isinstance(dw, int) and not isinstance(dw, bool) and 1 <= dw <= 32:
-                clean_conf["desired_workers"] = dw
-            if conf.get("auto_drain") is True:
-                clean_conf["auto_drain"] = True
+                    continue
+                if key == "auto_drain" and val is True:
+                    clean_conf[key] = True
+                    continue
+                text = _clean_text(val, MAX_LABEL)
+                if text:
+                    clean_conf[key] = text
             if clean_conf:
                 entry["config"] = clean_conf
         if entry.get("kind") == "designed":

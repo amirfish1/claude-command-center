@@ -101,6 +101,55 @@ nodes. **Preview materialization** renders the exact `queue-config.json`
 entries and `wt` commands that would create the queues — as a read-only
 preview. There is no apply in v1.
 
+## Component taxonomy (phase 2)
+
+The library is **data-driven from a registry**
+(`static/canvas-components.js`, UMD so node tests can require it). Adding
+a component is a one-line entry — library cards, node chrome, inspector
+fields, port rules, and edge contracts all render from the data:
+
+```
+{ id, name, cat, letter, desc,           // identity + presentation
+  anchor, pattern,                        // the proven real implementation
+                                          // ("Pattern:" in the inspector)
+  files: {what, label?}, consumes,        // edge contract out / in
+  config: [{key, label, ph?, type?}],     // inspector sketch fields
+  ports?: {inp, out} }                    // optional override of the
+                                          // category default
+```
+
+Five categories, color-coded consistently across library, nodes, edges,
+and minimap: **sources** (scheduled/event producers — PostHog watcher,
+auditor sweep, ops digest, email parsers, webhooks, annotate widget,
+scheduler), **workers** (claim-based consumers — planner, deep-design,
+quick fixer, product builder, visual verifier, code reviewer, replay
+simulator, DB investigator, docs writer, TDD worker), **gates** (human or
+adversarial review — Decision Inbox, product_gate, wt block, senior
+reviewer, closure verifier), **sinks** (outputs — GitHub issue, email
+digest, SMS notify, status page, commit/PR, deploy), **utilities**
+(inline plumbing — deduplicator, budget guard, rate limiter, queue
+memory). Port rules are categorical (sources emit, sinks/gates terminate,
+workers/utilities flow through) with per-component overrides for gates
+that file (senior reviewer, closure verifier, product_gate).
+
+Templates (`static/canvas-templates.js`) are graphs over registry ids —
+nodes reference components by id, edges carry contract labels; the
+registry test (`tests/canvas-component-registry.test.cjs`) validates every
+template (components exist, edges are port-legal, every node reachable
+from a root, terminal node or an intentional loop). Gallery: Feature
+factory, PostHog watchdog, The quality loop, Payment watchdog, PR
+gauntlet, Self-healing ops (intentional verifier→fixer loop), Research →
+Spec → Build.
+
+Runtime queue nodes keep their name-derived archetype hint, mapped onto
+the same category palette (`ARCHETYPE_CATEGORY`) and onto registry
+components for the inspector's Pattern section (`ARCHETYPE_COMPONENT`).
+
+The canvas still owns nothing but the view document. Designed-node
+component/category and generic config-sketch keys persist through
+`canvas-layout.json` (server-validated: capped keys/values, typed
+coercion only for `desired_workers`/`auto_drain`).
+
 ## What v1 explicitly does NOT do
 
 - **No mutations.** No ticket ops, no queue-config writes, no `wt`
