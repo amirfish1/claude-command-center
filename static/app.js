@@ -35618,14 +35618,14 @@
           try { return JSON.parse(localStorage.getItem('ccc-objects-order') || '{}'); } catch (_) { return {}; }
         })();
         const _seededObjNodes = new Set(groups.map(g => g.key));
+        // Any incoming link counts as ownership — sessions, tasks, nested
+        // objects, AND repos (legacy keys may be bare uuids or repo: paths).
+        // Matches _dedupeEmptyObjects' childCount and the project tree's
+        // hasChildObjects treatment, so an object that owns only repos is
+        // never labeled "Empty" here while its tree shows children.
         const _ownedObjNodes = new Set();
-        for (const [childNode, parentNode] of Object.entries(flowNodeParents || {})) {
-          if (!parentNode || parentNode.indexOf('object:') !== 0) continue;
-          if (childNode.indexOf('session:') === 0
-            || childNode.indexOf('draft-session:') === 0
-            || childNode.indexOf('object:') === 0) {
-            _ownedObjNodes.add(parentNode);
-          }
+        for (const parentNode of Object.values(flowNodeParents || {})) {
+          if (parentNode && parentNode.indexOf('object:') === 0) _ownedObjNodes.add(parentNode);
         }
         const _emptyObjGroups = [];
         for (const obj of (flowCustomObjects || [])) {
