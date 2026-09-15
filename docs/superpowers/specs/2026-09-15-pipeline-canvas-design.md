@@ -64,12 +64,14 @@ executor). The config file stays the only truth; the hint never writes back.
 
 ## API
 
-- `GET /api/canvas/state` → `{ok, generated_at, nodes, edges, gate}`.
+- `GET /api/canvas/state` → `{ok, generated_at, nodes, edges}`.
   `nodes` merges config entries with health rows (a configured-but-idle
   queue still renders; a queue with tickets but no config renders as
-  unconfigured). `edges` are the derived conventions. Cache-friendly:
-  composed from the already-memoized health payload; a poll never spawns,
-  never shells out per queue.
+  unconfigured). The human gate travels as a node with `kind: "gate"`
+  (always present, carrying `open_cards` when cheaply available) — one
+  uniform node list instead of a special top-level shape. `edges` are the
+  derived conventions. Cache-friendly: composed from the already-memoized
+  health payload; a poll never spawns, never shells out per queue.
 - `GET /api/canvas/layout` → the validated view-state document (defaults
   when absent/corrupt).
 - `POST /api/canvas/layout` → validate + atomic replace. Validated hard:

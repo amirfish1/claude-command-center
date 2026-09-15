@@ -156,6 +156,7 @@ def _queue_node(name, conf, health_row):
     engine = str(conf.get("engine") or plan.get("engine") or "").strip()
     model = str(conf.get("model") or plan.get("model") or "").strip()
     effort = str(conf.get("effort") or plan.get("effort") or "").strip()
+    desired = _int_or_none(conf.get("desired_workers")) or _int_or_none(hr.get("desired_workers"))
     node = {
         "id": f"queue:{q}",
         "kind": "queue",
@@ -166,8 +167,12 @@ def _queue_node(name, conf, health_row):
         "model": model,
         "effort": effort,
         "engine_source": str(plan.get("engine_source") or ("queue" if conf.get("engine") else "")),
+        # Same honesty as engine_source: a value the queue itself pinned vs a
+        # resolved default must not read as a deliberate choice.
+        "effort_source": str(plan.get("effort_source") or ("queue" if conf.get("effort") else "engine_default")),
         "auto_drain": bool(conf.get("auto_drain", hr.get("auto_drain", False))),
-        "desired_workers": _int_or_none(conf.get("desired_workers")) or _int_or_none(hr.get("desired_workers")) or 1,
+        "desired_workers": desired or 1,
+        "desired_workers_source": "queue" if desired else "default",
         "backend": str(conf.get("backend") or hr.get("backend") or "").strip(),
         "repo_path": str(conf.get("repo_path") or hr.get("repo_path") or "").strip(),
         "github_repo": str(conf.get("github_repo") or hr.get("github_repo") or "").strip(),

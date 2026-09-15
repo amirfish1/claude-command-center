@@ -460,8 +460,21 @@
     var th = t.el ? t.el.offsetHeight : 110;
     var x1 = s.x + NODE_W, y1 = s.y + sh / 2;
     var x2 = t.x, y2 = t.y + th / 2;
+    var gapX = x2 - x1;
+    var spanY = Math.abs(y2 - y1);
+    // Long-haul edges (spanning several columns or rows, target ahead) take a
+    // raised arc that lifts over the grid instead of slicing through it —
+    // reads as a deliberate flyover, not a routing bug. The lift is capped so
+    // the arc clears the top row without leaving the neighbourhood.
+    if (gapX > 520 || (gapX > 140 && spanY > 420)) {
+      var lift = Math.min(260, 80 + Math.abs(gapX) * 0.10);
+      var cy = Math.min(y1, y2) - lift;
+      var dxA = Math.max(140, Math.abs(gapX) * 0.30);
+      return "M " + x1 + " " + y1 +
+             " C " + (x1 + dxA) + " " + cy + ", " + (x2 - dxA) + " " + cy + ", " + x2 + " " + y2;
+    }
     // If the target sits behind the source, route with wider handles.
-    var dx = Math.max(60, Math.abs(x2 - x1) * 0.45);
+    var dx = Math.max(60, Math.abs(gapX) * 0.45);
     return "M " + x1 + " " + y1 +
            " C " + (x1 + dx) + " " + y1 + ", " + (x2 - dx) + " " + y2 + ", " + x2 + " " + y2;
   }
@@ -605,9 +618,12 @@
     var cfg = section("Queue config (truth)");
     cfg.appendChild(kv("Engine", d.engine || "—"));
     cfg.appendChild(kv("Model", d.model || "engine default"));
-    cfg.appendChild(kv("Effort", d.effort || "engine default"));
+    cfg.appendChild(kv("Effort",
+      d.effort ? d.effort + (d.effort_source && d.effort_source !== "queue" ? " (default)" : "") : "engine default"));
     cfg.appendChild(kv("Auto drain", d.auto_drain ? "on" : "off", d.auto_drain ? "pc-v-good" : "pc-v-warn"));
-    cfg.appendChild(kv("Desired workers", String(d.desired_workers != null ? d.desired_workers : 1)));
+    cfg.appendChild(kv("Desired workers",
+      String(d.desired_workers != null ? d.desired_workers : 1) +
+      (d.desired_workers_source === "default" ? " (default)" : "")));
     if (d.backend) cfg.appendChild(kv("Backend", d.backend));
     if (d.github_repo) cfg.appendChild(kv("GitHub repo", d.github_repo));
     if (d.repo_path) cfg.appendChild(kv("Repo path", d.repo_path));
@@ -904,6 +920,27 @@
     paletteDrag.ghost.style.left = e.clientX + "px";
     paletteDrag.ghost.style.top = e.clientY + "px";
   }
+  // Nearest free grid slot: a drop that lands on an existing node cascades
+  // right, then down, until it finds open space.
+  function resolveDropCollision(x, y) {
+    function overlaps(px, py) {
+      var hit = false;
+      nodes.forEach(function (n) {
+        var nh = n.el ? n.el.offsetHeight : 110;
+        if (px < n.x + NODE_W + 12 && px + NODE_W + 12 > n.x &&
+            py < n.y + nh + 12 && py + nh + 12 > n.y) hit = true;
+      });
+      return hit;
+    }
+    var px = Math.round(x / SNAP) * SNAP;
+    var py = Math.round(y / SNAP) * SNAP;
+    for (var i = 0; i < 80 && overlaps(px, py); i++) {
+      px += NODE_W + 36;
+      if (i % 6 === 5) { px = Math.round(x / SNAP) * SNAP; py += 150; }
+    }
+    return { x: px, y: py };
+  }
+
   function finishPaletteDrag(e) {
     var drag = paletteDrag;
     paletteDrag = null;
@@ -911,7 +948,8 @@
     var r = stage.getBoundingClientRect();
     if (e.clientX < r.left || e.clientX > r.right || e.clientY < r.top || e.clientY > r.bottom) return;
     var w = toWorld(e.clientX, e.clientY);
-    addDesignedNode(drag.archetype, null, w.x - NODE_W / 2, w.y - 30);
+    var spot = resolveDropCollision(w.x - NODE_W / 2, w.y - 30);
+    addDesignedNode(drag.archetype, null, spot.x, spot.y);
   }
 
   function addDesignedNode(archetype, label, x, y, config) {
@@ -952,6 +990,13 @@
 
   /* ── library + templates ───────────────────────────────────────────── */
 
+  function updateLibraryFade() {
+    var sc = $("pcLibraryScroll");
+    if (!sc || library.hidden) return;
+    var moreBelow = sc.scrollHeight - sc.clientHeight - sc.scrollTop > 4;
+    library.classList.toggle("has-more", moreBelow);
+  }
+
   function buildLibrary() {
     var list = $("pcLibraryList");
     list.textContent = "";
@@ -979,6 +1024,10 @@
       card.addEventListener("click", function () { applyTemplate(t); });
       tlist.appendChild(card);
     });
+
+    var sc = $("pcLibraryScroll");
+    sc.addEventListener("scroll", updateLibraryFade);
+    window.addEventListener("resize", updateLibraryFade);
   }
 
   var lastTemplate = null;
@@ -1210,7 +1259,7 @@
   }
   minimapCanvas.addEventListener("pointerdown", function (e) {
     minimapDrag = true;
-    minimapCanvas.setPointerCapture(e.pointerId);
+    try { minimapCanvas.setPointerCapture(e.pointerId); } catch (err) {}
     minimapJump(e);
   });
   minimapCanvas.addEventListener("pointermove", function (e) { if (minimapDrag) minimapJump(e); });
@@ -1227,6 +1276,7 @@
     library.hidden = mode !== "design";
     if (mode === "design") {
       showHint("Drag a component onto the canvas — or lay out a template in one click", 7000);
+      requestAnimationFrame(updateLibraryFade);
     }
   }
   $("pcModeRuntime").addEventListener("click", function () { setMode("runtime"); });
@@ -1516,6 +1566,37 @@
 
   /* ── boot ──────────────────────────────────────────────────────────── */
 
+  // First impression: a LEGIBLE view of the active fleet — queues with open
+  // work, running tickets, live workers, or alarms, plus the gate — framed at
+  // 60–100% zoom. The full quiet fleet is one Fit away. Falls back to the
+  // whole-fleet fit when nothing is active (or the active set IS the fleet).
+  function frameInitialView() {
+    var active = [];
+    nodes.forEach(function (n) {
+      if (n.kind === "gate") { active.push(n); return; }
+      if (n.kind !== "queue") return;
+      var d = n.data || {};
+      if ((d.depth || 0) > 0 || (d.in_progress || 0) > 0 || (d.workers || 0) > 0 ||
+          d.stuck || d.staffing_alarm) active.push(n);
+    });
+    if (!active.length || active.length >= nodes.size) { fitView(); return; }
+    var minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+    active.forEach(function (n) {
+      var h = n.el ? n.el.offsetHeight : 110;
+      minX = Math.min(minX, n.x); minY = Math.min(minY, n.y);
+      maxX = Math.max(maxX, n.x + NODE_W); maxY = Math.max(maxY, n.y + h);
+    });
+    var r = stage.getBoundingClientRect();
+    var pad = 110;
+    var zw = (r.width - pad * 2) / Math.max(1, maxX - minX);
+    var zh = (r.height - pad * 2) / Math.max(1, maxY - minY);
+    view.zoom = Math.min(1.0, Math.max(0.7, Math.min(zw, zh)));
+    view.x = r.width / 2 - (minX + maxX) / 2 * view.zoom;
+    view.y = r.height / 2 - (minY + maxY) / 2 * view.zoom;
+    clampView();
+    applyView();
+  }
+
   buildLibrary();
   refreshEmptyState();
   if (!reducedMotion) stage.classList.add("pc-enter");
@@ -1524,10 +1605,11 @@
     return fetchState();
   }).then(function () {
     applySavedPositions();
-    // First paint: honor a saved viewport; otherwise frame the fleet.
+    // First paint: honor a saved viewport; otherwise frame the ACTIVE fleet
+    // at a legible zoom — Fit (F) still shows the whole wall on demand.
     var hasSavedViewport = savedPositions && Object.keys(savedPositions).length &&
                            view && (view.x !== 0 || view.y !== 0 || view.zoom !== 1);
-    if (!hasSavedViewport && nodes.size) fitView(); else applyView();
+    if (!hasSavedViewport && nodes.size) frameInitialView(); else applyView();
     refreshEmptyState();
     if (nodes.size && !reducedMotion) {
       var i = 0;

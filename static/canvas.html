@@ -57,9 +57,12 @@
     <!-- Authoring panel (Design mode). -->
     <section class="pc-panel pc-library" id="pcLibrary" hidden aria-label="Component library">
       <div class="pc-panel-head">Components</div>
-      <div class="pc-panel-scroll" id="pcLibraryList"></div>
-      <div class="pc-templates-head">Templates</div>
-      <div class="pc-panel-scroll" id="pcTemplateList"></div>
+      <div class="pc-panel-scroll pc-library-scroll" id="pcLibraryScroll">
+        <div class="pc-panel-grid" id="pcLibraryList"></div>
+        <div class="pc-templates-head">Templates</div>
+        <div class="pc-panel-grid" id="pcTemplateList"></div>
+      </div>
+      <div class="pc-scroll-fade" aria-hidden="true"></div>
     </section>
 
     <!-- Node inspector. -->

@@ -105,7 +105,20 @@ class CanvasState(unittest.TestCase):
         design = nodes["queue:BECKY-DESIGN"]
         self.assertEqual(design["archetype"], "planner")
         self.assertEqual(design["desired_workers"], 2)
+        self.assertEqual(design["desired_workers_source"], "queue")
         self.assertIsNone(design["depth"])             # idle queue: no invented counts
+
+    def test_fallback_values_carry_default_source_flags(self):
+        # FLEET-VERIFY pins no effort/model/desired_workers in the fixture:
+        # the payload must say so rather than read as a deliberate choice.
+        st = pc.canvas_state(configs=_configs(), health_rows=_health())
+        nodes = {n["id"]: n for n in st["nodes"]}
+        fv = nodes["queue:FLEET-VERIFY"]
+        self.assertEqual(fv["desired_workers"], 1)
+        self.assertEqual(fv["desired_workers_source"], "default")
+        self.assertEqual(fv["effort_source"], "engine_default")
+        becky = nodes["queue:BECKY"]
+        self.assertEqual(becky["effort_source"], "engine_default")  # config has no effort
 
     def test_health_only_queue_renders_unconfigured(self):
         st = pc.canvas_state(configs=_configs(), health_rows=_health())
