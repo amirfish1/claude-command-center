@@ -1289,11 +1289,13 @@
       placeNodeEl(n);
     });
     gridSlotsUsed += regular.length;
-    // Gate: its own column right of everything placed so far, top row.
+    // Gate: its own column right of everything placed so far, lifted ABOVE
+    // the top row — the human sits above the machine fleet, and the
+    // sign-off edges route over the grid instead of through it.
     gates.forEach(function (n, i) {
       var col = Math.max(1, Math.ceil(gridSlotsUsed / LAYOUT_ROWS)) + i;
       n.x = LAYOUT_ORIGIN.x + col * LAYOUT_COL_W;
-      n.y = LAYOUT_ORIGIN.y;
+      n.y = LAYOUT_ORIGIN.y - LAYOUT_ROW_H - 40;
       n._grid = true;
       placeNodeEl(n);
     });
