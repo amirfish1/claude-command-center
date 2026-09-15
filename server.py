@@ -18224,6 +18224,12 @@ def _resolve_apps(include_disabled=False):
     apps.append({"id": "spawn-ledger", "label": "Spawn Ledger",
                  "icon": "\N{BAR CHART}", "url": "/spawn-ledger",
                  "builtin": False})
+    # Pipeline Canvas: the fleet-topology node graph over WatchTower truth
+    # (spec: 2026-09-15-pipeline-canvas-design.md). Not core navigation —
+    # switchable from the Applications page like the other satellites.
+    apps.append({"id": "pipeline-canvas", "label": "Canvas",
+                 "icon": "\N{OCTAGONAL STAR}", "url": "/canvas.html",
+                 "builtin": False})
     manifest_apps = _custom_links_config()[2]
     apps.extend(manifest_apps)
     # An id already declared in the manifest wins: that is how a user renames,
@@ -24140,6 +24146,11 @@ _adopt_ccc_module("perf_events")
 _adopt_ccc_module("decision_inbox")
 _adopt_ccc_module("spawn_ledger")
 
+# Pipeline Canvas — read-only fleet topology (/api/canvas/state) plus the
+# canvas view-state document (/api/canvas/layout). See
+# docs/superpowers/specs/2026-09-15-pipeline-canvas-design.md.
+_adopt_ccc_module("pipeline_canvas")
+
 # ---------------------------------------------------------------------------
 # HTTP handler
 # ---------------------------------------------------------------------------
@@ -25226,6 +25237,22 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
         elif path == "/api/spawn-ledger":
             # Read-only scorecard for the external spawned-session grade ledger.
             self.send_json(spawn_ledger_payload())
+        elif path == "/api/canvas/state":
+            # Pipeline Canvas runtime truth: every configured/active queue as
+            # a node (config + live health) plus derived convention edges and
+            # the Decision Inbox gate node. Composed from the memoized health
+            # rollup — a poll never spawns and never shells out per queue.
+            try:
+                self.send_json(canvas_state())
+            except Exception as e:
+                self.send_json({"ok": False, "error": str(e)}, 500)
+        elif path == "/api/canvas/layout":
+            # The canvas's only owned state: node positions, viewport,
+            # designed nodes, user-drawn edges. Defaults when absent/corrupt.
+            try:
+                self.send_json({"ok": True, "layout": load_layout()})
+            except Exception as e:
+                self.send_json({"ok": False, "error": str(e)}, 500)
         elif path == "/api/perf/summary":
             # Rolled-up client perf beacons (archive load / conversation
             # open) over a trailing window, plus the self-filed-ticket
@@ -26774,6 +26801,25 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                 body = (STATIC_DIR / "q2.html").read_bytes()
             except OSError as e:
                 self.send_json({"error": "q2.html missing", "detail": str(e)}, 500)
+                return
+            body, enc = self._maybe_gzip(body, "text/html; charset=utf-8")
+            self.send_response(200)
+            self.send_header("Content-Type", "text/html; charset=utf-8")
+            self.send_header("Cache-Control", "no-store, must-revalidate")
+            self.send_header("Content-Length", str(len(body)))
+            if enc:
+                self.send_header("Content-Encoding", enc)
+                self.send_header("Vary", "Accept-Encoding")
+            self.end_headers()
+            self.wfile.write(body)
+        elif path == "/canvas.html":
+            # Pipeline Canvas — the fleet-topology node graph. Same
+            # narrow-route pattern as /q2.html: self-contained page, no
+            # app.js/app.css, so it cannot affect the main dashboard.
+            try:
+                body = (STATIC_DIR / "canvas.html").read_bytes()
+            except OSError as e:
+                self.send_json({"error": "canvas.html missing", "detail": str(e)}, 500)
                 return
             body, enc = self._maybe_gzip(body, "text/html; charset=utf-8")
             self.send_response(200)
@@ -33008,6 +33054,30 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                 self.send_json(decision_inbox_governor_act(
                     str(payload.get("session_id") or ""), payload.get("action"),
                     reason=str(payload.get("reason") or "")[:300]))
+        elif path == "/api/canvas/layout":
+            # Save the canvas view-state document (positions, viewport,
+            # designed nodes, user edges). This is the canvas's ONLY write
+            # endpoint — it touches canvas-layout.json and nothing else;
+            # queue-config and wt are never written from the canvas.
+            # Validation is hard (structure, caps, clamps): an invalid
+            # document is rejected whole, never partially applied.
+            length = int(self.headers.get("Content-Length", "0"))
+            body = self.rfile.read(length) if length > 0 else b""
+            try:
+                payload = json.loads(body) if body else {}
+            except json.JSONDecodeError:
+                payload = None
+            if payload is None:
+                self.send_json({"ok": False, "error": "body must be valid JSON"}, 400)
+            else:
+                doc, err = validate_layout(payload.get("layout") if isinstance(payload, dict) else None)
+                if doc is None:
+                    self.send_json({"ok": False, "error": err or "invalid layout"}, 400)
+                else:
+                    try:
+                        self.send_json(save_layout(doc))
+                    except OSError as e:
+                        self.send_json({"ok": False, "error": str(e)}, 500)
         elif path in ("/api/system-processes/kill", "/api/system/processes/kill"):
             length = int(self.headers.get("Content-Length", "0"))
             body = self.rfile.read(length) if length > 0 else b""
