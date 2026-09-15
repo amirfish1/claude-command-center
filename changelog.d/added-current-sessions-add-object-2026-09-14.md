@@ -1,0 +1,1 @@
+- Added a "+ object" button to the Current sessions header: it creates an empty Flow object at the top of the by-objects Current sessions list (with inline rename) so sessions can be dragged straight into it.

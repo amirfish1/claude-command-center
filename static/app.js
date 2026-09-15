@@ -35604,6 +35604,30 @@
           const title = (grp && grp.node && !grp.archived) ? (grp.title || 'Object') : 'Unclassified';
           addGroup(key, title).cards.push(card);
         });
+        // The session pass above only creates groups for objects that own a
+        // session in this window. Seed every other live custom object as an
+        // empty group on top — a fresh "+ object" target must be visible to
+        // drag sessions into. Order: saved rank first (rankNewObjectFirst
+        // gives a just-created object rank 0), then newest created.
+        const _emptyObjRanks = (() => {
+          try { return JSON.parse(localStorage.getItem('ccc-objects-order') || '{}'); } catch (_) { return {}; }
+        })();
+        const _seededObjNodes = new Set(groups.map(g => g.key));
+        const _emptyObjGroups = [];
+        for (const obj of (flowCustomObjects || [])) {
+          if (!obj || !obj.id || isArchivedFlowObjectId(obj.id)) continue;
+          const node = flowNodeKey('object', obj.id);
+          if (_seededObjNodes.has(node)) continue;
+          _emptyObjGroups.push({
+            key: node,
+            title: obj.title || 'Object',
+            cards: [],
+            _rank: Number.isFinite(_emptyObjRanks[node]) ? _emptyObjRanks[node] : Infinity,
+            _created: obj.created_at || 0,
+          });
+        }
+        _emptyObjGroups.sort((a, b) => (a._rank - b._rank) || (b._created - a._created));
+        groups.unshift(..._emptyObjGroups);
         return groups.map(group => {
           const nestedRows = _currentSessionsTreeRows(group.cards);
           const nestedClusters = _subagentRowsToClusters(nestedRows);
@@ -35654,13 +35678,22 @@
           const collapseKey = 'ccc-current-object-group-collapsed:' + group.key;
           let collapsed = false;
           try { collapsed = localStorage.getItem(collapseKey) === '1'; } catch (_) {}
+          // Custom-object groups carry the object id on the title so the
+          // "+ object" flow can open the inline rename on the new group.
+          const _grpObjId = group.key.indexOf('object:') === 0 ? group.key.slice(7) : '';
+          const _titleAttrs = _grpObjId
+            ? ' data-role="object-title" data-object-id="' + escapeAttr(_grpObjId) + '"'
+            : '';
+          const _emptyHint = _grpObjId && !group.cards.length
+            ? '<div class="conv-object-empty-hint">Empty - drag sessions here.</div>'
+            : '';
           return '<div class="conv-current-object-group' + (collapsed ? ' is-collapsed' : '') + '" data-current-object-group="' + escapeAttr(group.key) + '" data-object-drop-zone="' + escapeAttr(group.key) + '">'
             + '<div class="conv-current-object-heading" data-role="current-object-group-toggle" role="button" tabindex="0" aria-expanded="' + String(!collapsed) + '" title="Collapse or expand object group">'
             +   '<span class="conv-section-collapse-chevron" aria-hidden="true">' + (collapsed ? '&#9656;' : '&#9662;') + '</span>'
-            +   '<span class="conv-current-object-title">' + escapeHtml(group.title) + '</span>'
+            +   '<span class="conv-current-object-title"' + _titleAttrs + '>' + escapeHtml(group.title) + '</span>'
             +   '<span class="conv-current-object-count">' + group.cards.length + '</span>'
             + '</div>'
-            + '<div data-role="current-object-group-rows"' + (collapsed ? ' hidden' : '') + '>' + rowsHtml + '</div>'
+            + '<div data-role="current-object-group-rows"' + (collapsed ? ' hidden' : '') + '>' + rowsHtml + _emptyHint + '</div>'
             + '</div>';
         }).join('');
       }
@@ -35756,6 +35789,10 @@
           + ' title="Collapse / expand Current sessions">'
           + '<span class="conv-section-collapse-chevron" data-role="current-sessions-collapse" aria-hidden="true">' + _currentSessionsChevron + '</span>'
           + _currentSessionsLabel + _currentSessionsSub
+          + '<span class="conv-grouping-toggle conv-add-object" data-role="cur-add-object"'
+          + ' title="Create a new Flow object - appears as an empty group you can drag sessions into">'
+          + '<span class="grouping-opt">+ object</span>'
+          + '</span>'
           + '</div>';
         _currentSessionsHtml = _currentSessionsRowsHtml;
       }
@@ -37841,7 +37878,7 @@
         // The grouping toggle (project / time) lives inside this header
         // button — its own listener stops propagation, but be defensive.
         if (ev.target.closest('[data-role="objects-expand-all"]')) return;
-        if (ev.target.closest('[data-role="grouping-toggle"], [data-role="current-sessions-mode-toggle"], [data-role="window-toggle"], [data-role="ip-add-object"], [data-role="nya-details-toggle"]')) return;
+        if (ev.target.closest('[data-role="grouping-toggle"], [data-role="current-sessions-mode-toggle"], [data-role="window-toggle"], [data-role="ip-add-object"], [data-role="cur-add-object"], [data-role="nya-details-toggle"]')) return;
         ev.stopPropagation();
         const section = $inProgressToggle.closest('[data-role="inprogress-section"]');
         if (!section) return;
@@ -38009,6 +38046,23 @@
         try { localStorage.setItem('ccc-inprogress-collapsed', '0'); } catch (_) {}
         renderArchiveList(document.getElementById('convSearch')?.value || '');
         const title = $convList.querySelector('[data-role="object-title"][data-object-id="' + id + '"]');
+        startInlineObjectRename(title);
+      });
+    }
+    // "+ object" in the Current sessions header: same draft object, but
+    // surfaced in the Current sessions by-objects list — flip the mode so
+    // the new empty group is visible on top, then open its inline rename.
+    const $curAddObject = $convList.querySelector('[data-role="cur-add-object"]');
+    if ($curAddObject) {
+      $curAddObject.addEventListener('click', (ev) => {
+        ev.preventDefault();
+        ev.stopPropagation();
+        const id = createDraftFlowCustomObject();
+        if (!id) return;
+        try { localStorage.setItem('ccc-current-sessions-mode', 'objects'); } catch (_) {}
+        try { localStorage.setItem('ccc-current-sessions-collapsed', '0'); } catch (_) {}
+        renderArchiveList(document.getElementById('convSearch')?.value || '');
+        const title = $convList.querySelector('[data-role="current-object-group-toggle"] [data-role="object-title"][data-object-id="' + id + '"]');
         startInlineObjectRename(title);
       });
     }
@@ -38614,7 +38668,7 @@
     // behave identically (CCC-397) — click folds the section's scroll
     // sibling in place, no re-render, no scroll jump.
     const _SECTION_ACCORDIONS = [
-      { role: 'current-sessions-header', chevron: 'current-sessions-collapse', key: 'ccc-current-sessions-collapsed', ignore: [] },
+      { role: 'current-sessions-header', chevron: 'current-sessions-collapse', key: 'ccc-current-sessions-collapsed', ignore: ['cur-add-object'] },
       { role: 'project-tree-header', chevron: 'project-tree-collapse', key: 'ccc-project-tree-collapsed', ignore: ['ip-add-object'] },
       { role: 'evergreen-agents-header', chevron: 'evergreen-agents-collapse', key: 'ccc-evergreen-agents-collapsed', ignore: ['evergreen-log-btn'] },
     ];
