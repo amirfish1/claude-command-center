@@ -35605,19 +35605,34 @@
           addGroup(key, title).cards.push(card);
         });
         // The session pass above only creates groups for objects that own a
-        // session in this window. Seed every other live custom object as an
-        // empty group on top — a fresh "+ object" target must be visible to
-        // drag sessions into. Order: saved rank first (rankNewObjectFirst
-        // gives a just-created object rank 0), then newest created.
+        // session in this window. Seed live custom objects that own NOTHING
+        // as empty groups on top — a fresh "+ object" target must be visible
+        // to drag sessions into. Ownership is read straight from
+        // flowNodeParents (session/task/child-object links), NOT from the
+        // windowed session rows: an object whose sessions are merely old,
+        // archived, or past the render row cap is not empty, and labeling it
+        // "Empty - drag sessions here" would be a lie by omission. Order:
+        // saved rank first (rankNewObjectFirst gives a just-created object
+        // rank 0), then newest created.
         const _emptyObjRanks = (() => {
           try { return JSON.parse(localStorage.getItem('ccc-objects-order') || '{}'); } catch (_) { return {}; }
         })();
         const _seededObjNodes = new Set(groups.map(g => g.key));
+        const _ownedObjNodes = new Set();
+        for (const [childNode, parentNode] of Object.entries(flowNodeParents || {})) {
+          if (!parentNode || parentNode.indexOf('object:') !== 0) continue;
+          if (childNode.indexOf('session:') === 0
+            || childNode.indexOf('draft-session:') === 0
+            || childNode.indexOf('object:') === 0) {
+            _ownedObjNodes.add(parentNode);
+          }
+        }
         const _emptyObjGroups = [];
         for (const obj of (flowCustomObjects || [])) {
           if (!obj || !obj.id || isArchivedFlowObjectId(obj.id)) continue;
           const node = flowNodeKey('object', obj.id);
           if (_seededObjNodes.has(node)) continue;
+          if (_ownedObjNodes.has(node)) continue;
           _emptyObjGroups.push({
             key: node,
             title: obj.title || 'Object',
