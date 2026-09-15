@@ -64,6 +64,7 @@ class ConventionEdges(unittest.TestCase):
         self.assertEqual(conv[0]["source"], "queue:BECKY-DESIGN")
         self.assertEqual(conv[0]["target"], "queue:BECKY")
         self.assertIn("BECKY", conv[0]["contract"])
+        self.assertEqual(conv[0]["filing_label"], "watchtower:BECKY")
 
     def test_planner_without_base_has_no_convention_edge(self):
         edges = pc.derive_convention_edges(["ORPHAN-DESIGN"], {"ORPHAN-DESIGN": {}})

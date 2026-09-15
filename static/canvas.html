@@ -1,0 +1,118 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="dark">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Pipeline Canvas</title>
+  <link rel="stylesheet" href="/static/canvas.css">
+  <script>
+    // Framed inside the dashboard? The parent already has the rail.
+    try { if (window.self !== window.top) document.documentElement.classList.add('ccc-framed'); }
+    catch (e) {}
+  </script>
+</head>
+<body>
+  <header class="pc-topbar">
+    <script src="/static/app-rail.js" defer></script>
+    <span class="pc-brand">
+      <span class="pc-brand-mark">◇</span>
+      Pipeline Canvas
+      <span class="pc-brand-sub">fleet topology, as it actually is</span>
+    </span>
+    <div class="pc-modes" role="tablist" aria-label="Canvas mode">
+      <button type="button" id="pcModeRuntime" class="is-active" role="tab" aria-selected="true">Runtime</button>
+      <button type="button" id="pcModeDesign" role="tab" aria-selected="false">Design</button>
+    </div>
+    <span class="pc-spacer"></span>
+    <span class="pc-sync" id="pcSync" role="status">
+      <span class="pc-sync-dot"></span>
+      <span id="pcSyncText">connecting…</span>
+    </span>
+  </header>
+
+  <main class="pc-stage" id="pcStage" tabindex="0" aria-label="Pipeline canvas">
+    <div class="pc-world" id="pcWorld">
+      <svg class="pc-edges" id="pcEdges" aria-hidden="true"></svg>
+      <!-- nodes render here -->
+    </div>
+
+    <!-- Empty state: the teaching overlay. -->
+    <div class="pc-empty" id="pcEmpty" hidden>
+      <div class="pc-empty-card">
+        <div class="pc-empty-glyph">◇</div>
+        <div class="pc-empty-title">A blank fleet, ready to be drawn</div>
+        <p class="pc-empty-sub">
+          No queues are configured yet — so the runtime canvas is empty.
+          Flip to <b>Design</b> and drag a <b>Planner</b> onto the canvas,
+          connect it to an <b>Executor</b>, park a <b>Human Gate</b> at the end.
+          When the design is right, preview exactly what would be created.
+          <br><br>
+          <kbd>space</kbd> + drag to pan &nbsp;·&nbsp; scroll to zoom &nbsp;·&nbsp; <kbd>F</kbd> to fit
+        </p>
+      </div>
+    </div>
+
+    <div class="pc-hint" id="pcHint"></div>
+
+    <!-- Authoring panel (Design mode). -->
+    <section class="pc-panel pc-library" id="pcLibrary" hidden aria-label="Component library">
+      <div class="pc-panel-head">Components</div>
+      <div class="pc-panel-scroll" id="pcLibraryList"></div>
+      <div class="pc-templates-head">Templates</div>
+      <div class="pc-panel-scroll" id="pcTemplateList"></div>
+    </section>
+
+    <!-- Node inspector. -->
+    <section class="pc-panel pc-inspector" id="pcInspector" hidden aria-label="Node inspector">
+      <div class="pc-panel-head" id="pcInspectorHead">Inspector</div>
+      <div class="pc-insp-scroll" id="pcInspectorBody"></div>
+    </section>
+
+    <!-- Template materialization banner. -->
+    <div class="pc-banner" id="pcBanner" hidden>
+      <span class="pc-banner-dot"></span>
+      <span id="pcBannerText">Template laid out as design nodes.</span>
+      <button type="button" class="pc-btn pc-btn-primary" id="pcBannerPreview">Preview materialization</button>
+      <button type="button" class="pc-btn" id="pcBannerDismiss">Dismiss</button>
+    </div>
+
+    <!-- Materialization preview modal. -->
+    <div class="pc-scrim" id="pcModalScrim" hidden>
+      <div class="pc-modal" role="dialog" aria-modal="true" aria-labelledby="pcModalTitle">
+        <div class="pc-modal-head">
+          <span class="pc-modal-title" id="pcModalTitle">Preview materialization</span>
+          <button type="button" class="pc-modal-close" id="pcModalClose" aria-label="Close">×</button>
+        </div>
+        <div class="pc-modal-body" id="pcModalBody"></div>
+        <div class="pc-modal-foot">
+          <span class="grow">v1 is read-only — nothing here has been applied.</span>
+          <button type="button" class="pc-btn" id="pcModalCopy">Copy to clipboard</button>
+          <button type="button" class="pc-btn" id="pcModalApply" disabled
+                  title="Materialization is preview-only in v1. The daemon reads queue-config.json live — apply these entries yourself when ready.">
+            Apply (disabled in v1)
+          </button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Zoom controls. -->
+    <div class="pc-zoom" role="toolbar" aria-label="Zoom">
+      <button type="button" id="pcZoomOut" title="Zoom out (−)">−</button>
+      <span class="pc-zoom-level" id="pcZoomLevel" title="Reset to 100%">100%</span>
+      <button type="button" id="pcZoomIn" title="Zoom in (+)">+</button>
+      <button type="button" class="pc-zoom-fit" id="pcZoomFit" title="Fit to view (F)">Fit</button>
+    </div>
+
+    <!-- Minimap. -->
+    <div class="pc-minimap" id="pcMinimap" title="Minimap — click or drag to navigate">
+      <canvas id="pcMinimapCanvas"></canvas>
+    </div>
+
+    <div class="pc-edge-tip" id="pcEdgeTip"></div>
+  </main>
+
+  <div class="pc-toast" id="pcToast"></div>
+
+  <script src="/static/canvas.js"></script>
+</body>
+</html>

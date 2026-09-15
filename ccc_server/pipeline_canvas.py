@@ -114,6 +114,7 @@ def derive_convention_edges(queue_names, configs=None):
                     "kind": "convention",
                     "label": "files builds to",
                     "contract": f"completed designs become build tickets on {base}",
+                    "filing_label": f"watchtower:{base}",
                 })
             edges.append({
                 "id": f"gate:{q}->DECISIONS",
