@@ -40381,7 +40381,6 @@
     async function commit(save) {
       if (finished) return;
       finished = true;
-      _renameInProgress = false;  // clear before our own re-render below
       if (previousDraggable === null) item.removeAttribute('draggable');
       else item.setAttribute('draggable', previousDraggable);
       if (save) {
@@ -40471,6 +40470,10 @@
       if (save && input.value.trim()) titleEl.textContent = input.value.trim();
       if (input.parentNode) input.replaceWith(titleEl);
       if (editBtn) editBtn.style.display = '';
+      // Keep the guard up while the asynchronous rename is saving. An
+      // already-running archive refresh may otherwise redraw this row with
+      // its stale title before the saved title has been applied to the cache.
+      _renameInProgress = false;
       // Re-render with force: the rename input itself is a text input,
       // and on blur focus may have moved to the search box (also a text
       // input). Either case trips shouldPauseSidebarRender, which would
