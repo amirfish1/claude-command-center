@@ -18228,7 +18228,7 @@ def _resolve_apps(include_disabled=False):
     # (spec: 2026-09-15-pipeline-canvas-design.md). Not core navigation —
     # switchable from the Applications page like the other satellites.
     apps.append({"id": "pipeline-canvas", "label": "Canvas",
-                 "icon": "\N{OCTAGONAL STAR}", "url": "/canvas.html",
+                 "icon": "\N{BLACK FOUR POINTED STAR}", "url": "/canvas.html",
                  "builtin": False})
     manifest_apps = _custom_links_config()[2]
     apps.extend(manifest_apps)
