@@ -33,6 +33,43 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
     await page.goto('http://127.0.0.1:8090/canvas.html', { waitUntil: 'networkidle2', timeout: 30000 });
     await sleep(2200);
 
+    // Activity filter (runtime view): default ON → 11 of 41 queues + gate.
+    const filterDefault = await page.evaluate(() => {
+      const vis = (sel) => Array.from(document.querySelectorAll(sel))
+        .filter((n) => !n.classList.contains('is-filtered-out'));
+      return {
+        visibleQueueNodes: vis('.pc-node').filter((n) => n.dataset.id.startsWith('queue:')).length,
+        visibleGateNodes: vis('.pc-node').filter((n) => n.dataset.id.startsWith('gate:')).length,
+        count: document.getElementById('pcActivityCount').textContent,
+        toggle: document.getElementById('pcActivityToggle').textContent.trim(),
+      };
+    });
+    console.log(vp.tag, 'filter default:', JSON.stringify(filterDefault));
+    await page.screenshot({ path: 'out/canvas-polish/phase2/' + vp.tag + '-filter-on.png' });
+
+    // Toggle to All → 41 queues.
+    await page.click('#pcActivityToggle');
+    await sleep(500);
+    const filterAll = await page.evaluate(() => ({
+      visibleQueueNodes: Array.from(document.querySelectorAll('.pc-node'))
+        .filter((n) => n.dataset.id.startsWith('queue:') && !n.classList.contains('is-filtered-out')).length,
+      count: document.getElementById('pcActivityCount').textContent,
+      toggle: document.getElementById('pcActivityToggle').textContent.trim(),
+    }));
+    console.log(vp.tag, 'filter all:', JSON.stringify(filterAll));
+    await page.screenshot({ path: 'out/canvas-polish/phase2/' + vp.tag + '-filter-all.png' });
+
+    // Toggle back → 11 again. Clean up stored choice: default must stay ON.
+    await page.click('#pcActivityToggle');
+    await sleep(500);
+    const filterBack = await page.evaluate(() => {
+      const n = Array.from(document.querySelectorAll('.pc-node'))
+        .filter((x) => x.dataset.id.startsWith('queue:') && !x.classList.contains('is-filtered-out')).length;
+      localStorage.removeItem('ccc-canvas-activity-filter');
+      return { visibleQueueNodes: n, count: document.getElementById('pcActivityCount').textContent };
+    });
+    console.log(vp.tag, 'filter back:', JSON.stringify(filterBack));
+
     // Design mode: library with all categories.
     await page.click('#pcModeDesign');
     await sleep(500);

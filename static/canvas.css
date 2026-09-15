@@ -121,6 +121,28 @@ body {
 }
 
 .pc-topbar .pc-spacer { flex: 1; }
+
+/* Runtime activity filter: chip + quiet visible/total count. */
+.pc-activity { display: flex; align-items: center; gap: 8px; }
+.pc-activity[hidden] { display: none; }
+.pc-activity-toggle {
+  font: 600 11.5px var(--font-ui);
+  color: var(--green);
+  background: rgba(63, 185, 80, 0.08);
+  border: 1px solid rgba(63, 185, 80, 0.35);
+  border-radius: 999px;
+  padding: 4px 12px;
+  cursor: pointer;
+  transition: border-color 0.12s, color 0.12s, background 0.12s;
+}
+.pc-activity-toggle:hover { border-color: var(--green); background: rgba(63, 185, 80, 0.15); }
+.pc-activity-toggle.is-off {
+  color: var(--text-muted);
+  background: var(--panel-2);
+  border-color: var(--border-soft);
+}
+.pc-activity-toggle.is-off:hover { color: var(--text); border-color: var(--accent); }
+.pc-activity-count { font-size: 11px; color: var(--text-dim); white-space: nowrap; }
 .pc-sync {
   display: flex; align-items: center; gap: 7px;
   font-size: 11px; color: var(--text-dim);
@@ -237,6 +259,7 @@ body {
   box-shadow: 0 0 0 1px var(--accent), 0 10px 34px rgba(88, 166, 255, 0.14);
 }
 .pc-node.is-dragging { cursor: grabbing; box-shadow: var(--shadow-2); z-index: 5; }
+.pc-node.is-filtered-out { display: none; }
 .pc-node.is-edge-target { border-color: var(--accent); box-shadow: 0 0 0 2px var(--accent); }
 
 .pc-node-head {

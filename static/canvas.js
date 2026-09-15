@@ -125,6 +125,58 @@
   var hintTimer = null;
   var designedSeq = 0;
 
+  /* Runtime activity filter: show only queues with ticket/worker activity
+   * in the last 7 days. Default ON; the toggle persists in localStorage.
+   * Gate nodes are always visible; design nodes are never affected. */
+  var ACTIVITY_WINDOW_S = 7 * 86400;
+  var ACTIVITY_LS_KEY = "ccc-canvas-activity-filter";
+  var activityFilterOn = true;
+  try { activityFilterOn = localStorage.getItem(ACTIVITY_LS_KEY) !== "0"; } catch (e) {}
+
+  function activityVisible(n) {
+    if (n.kind !== "queue") return true; // gates + designed nodes always show
+    var d = n.data || {};
+    return d.last_activity_seconds != null && d.last_activity_seconds <= ACTIVITY_WINDOW_S;
+  }
+  function visibleNodes() {
+    var out = [];
+    nodes.forEach(function (n) {
+      if (!activityFilterOn || activityVisible(n)) out.push(n);
+    });
+    return out;
+  }
+  function applyVisibility() {
+    var visible = 0, total = 0;
+    nodes.forEach(function (n) {
+      if (n.kind === "queue") {
+        total += 1;
+        var show = !activityFilterOn || activityVisible(n);
+        if (show) visible += 1;
+        n.filteredOut = !show;
+        n.el.classList.toggle("is-filtered-out", !show);
+      } else {
+        n.filteredOut = false;
+      }
+    });
+    // A filtered-out node must not stay selected.
+    if (selection && selection.type === "node") {
+      var sel = nodes.get(selection.id);
+      if (sel && sel.filteredOut) clearSelection();
+    }
+    var toggle = $("pcActivityToggle");
+    var count = $("pcActivityCount");
+    toggle.classList.toggle("is-off", !activityFilterOn);
+    toggle.textContent = activityFilterOn ? "Active · 7d" : "All queues";
+    toggle.title = activityFilterOn
+      ? "Showing only queues with activity in the last 7 days — click to show all"
+      : "Showing every queue — click to filter to the last 7 days";
+    count.textContent = activityFilterOn
+      ? visible + " of " + total + " queues"
+      : total + " queues";
+    renderEdges();
+    drawMinimap();
+  }
+
   /* ── toast / hint ──────────────────────────────────────────────────── */
 
   var toastTimer = null;
@@ -175,9 +227,10 @@
     zoomAt(r.left + r.width / 2, r.top + r.height / 2, factor);
   }
   function fitView() {
-    if (!nodes.size) return;
+    var set = visibleNodes();
+    if (!set.length) return;
     var minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
-    nodes.forEach(function (n) {
+    set.forEach(function (n) {
       var h = n.el ? n.el.offsetHeight : 110;
       minX = Math.min(minX, n.x); minY = Math.min(minY, n.y);
       maxX = Math.max(maxX, n.x + NODE_W); maxY = Math.max(maxY, n.y + h);
@@ -481,6 +534,9 @@
       else edgesSvg.removeChild(child);
     });
     edges.forEach(function (e) {
+      // Edges render only when both endpoints are visible.
+      var sn = nodes.get(e.source), tn2 = nodes.get(e.target);
+      if ((sn && sn.filteredOut) || (tn2 && tn2.filteredOut)) return;
       var d = edgePathD(e);
       if (!d) return;
       var srcNode = nodes.get(e.source);
@@ -1508,10 +1564,11 @@
     var ctx = minimapCanvas.getContext("2d");
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
     ctx.clearRect(0, 0, w, h);
-    if (!nodes.size) return;
+    var visSet = visibleNodes();
+    if (!visSet.length) return;
 
     var minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
-    nodes.forEach(function (n) {
+    visSet.forEach(function (n) {
       var nh = n.el ? n.el.offsetHeight : 110;
       minX = Math.min(minX, n.x); minY = Math.min(minY, n.y);
       maxX = Math.max(maxX, n.x + NODE_W); maxY = Math.max(maxY, n.y + nh);
@@ -1534,7 +1591,7 @@
     ctx.lineWidth = 1;
     edges.forEach(function (e) {
       var s = nodes.get(e.source), t = nodes.get(e.target);
-      if (!s || !t) return;
+      if (!s || !t || s.filteredOut || t.filteredOut) return;
       ctx.beginPath();
       ctx.moveTo(s.x * scale + ox + NODE_W * scale, (s.y + 55) * scale + oy);
       ctx.lineTo(t.x * scale + ox, (t.y + 55) * scale + oy);
@@ -1543,7 +1600,7 @@
 
     var colors = { ok: "#3fb950", bad: "#f85149", warn: "#d29922", parked: "#ffb340",
                    gate: "#ffb340", muted: "#4a5462", draft: "#7a6a9e" };
-    nodes.forEach(function (n) {
+    visSet.forEach(function (n) {
       var tone = healthOf(n).tone;
       var nh = n.el ? n.el.offsetHeight : 110;
       ctx.fillStyle = colors[tone] || colors.muted;
@@ -1592,6 +1649,7 @@
     $("pcModeRuntime").setAttribute("aria-selected", mode === "runtime" ? "true" : "false");
     $("pcModeDesign").setAttribute("aria-selected", mode === "design" ? "true" : "false");
     library.hidden = mode !== "design";
+    $("pcActivity").hidden = mode !== "runtime"; // the filter is runtime-only
     refreshGhostHint();
     if (mode === "design") {
       showHint("Drag a component onto the canvas — or lay out a template in one click", 7000);
@@ -1600,6 +1658,14 @@
   }
   $("pcModeRuntime").addEventListener("click", function () { setMode("runtime"); });
   $("pcModeDesign").addEventListener("click", function () { setMode("design"); });
+
+  $("pcActivityToggle").addEventListener("click", function () {
+    activityFilterOn = !activityFilterOn;
+    try { localStorage.setItem(ACTIVITY_LS_KEY, activityFilterOn ? "1" : "0"); } catch (e) {}
+    applyVisibility();
+    fitView(); // reframe on the new visible set
+    toast(activityFilterOn ? "Showing queues active in the last 7 days" : "Showing all queues");
+  });
 
   /* ── empty state ───────────────────────────────────────────────────── */
 
@@ -1724,12 +1790,11 @@
     (payload.edges || []).forEach(function (e) {
       edges.set(e.id, e);
     });
-    renderEdges();
+    applyVisibility(); // also re-renders edges + minimap on the visible set
     refreshEmptyState();
-    drawMinimap();
     if (selection && selection.type === "node") {
       var sel = nodes.get(selection.id);
-      if (sel && sel.kind === "queue") renderInspector(sel);
+      if (sel && sel.kind === "queue" && !sel.filteredOut) renderInspector(sel);
     }
   }
 
@@ -1907,14 +1972,15 @@
   // whole-fleet fit when nothing is active (or the active set IS the fleet).
   function frameInitialView() {
     var active = [];
-    nodes.forEach(function (n) {
+    var visible = visibleNodes();
+    visible.forEach(function (n) {
       if (n.kind === "gate") { active.push(n); return; }
       if (n.kind !== "queue") return;
       var d = n.data || {};
       if ((d.depth || 0) > 0 || (d.in_progress || 0) > 0 || (d.workers || 0) > 0 ||
           d.stuck || d.staffing_alarm) active.push(n);
     });
-    if (!active.length || active.length >= nodes.size) { fitView(); return; }
+    if (!active.length || active.length >= visible.length) { fitView(); return; }
     var minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
     active.forEach(function (n) {
       var h = n.el ? n.el.offsetHeight : 110;

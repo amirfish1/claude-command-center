@@ -23,6 +23,13 @@
       <button type="button" id="pcModeRuntime" class="is-active" role="tab" aria-selected="true">Runtime</button>
       <button type="button" id="pcModeDesign" role="tab" aria-selected="false">Design</button>
     </div>
+    <span class="pc-activity" id="pcActivity">
+      <button type="button" class="pc-activity-toggle" id="pcActivityToggle"
+              title="Show only queues with ticket/worker activity in the last 7 days — click to show all">
+        Active · 7d
+      </button>
+      <span class="pc-activity-count" id="pcActivityCount" title="Visible queues of total runtime queues"></span>
+    </span>
     <span class="pc-spacer"></span>
     <span class="pc-sync" id="pcSync" role="status">
       <span class="pc-sync-dot"></span>
