@@ -2921,6 +2921,13 @@ def session_live_status(session_id, session_cwd):
     if not session_id:
         return result
 
+    if _core._is_hermes_session(session_id):
+        result.update(_core._hermes_active_session_status(session_id))
+        result["session_id"] = session_id
+        if result.get("live") and not result.get("cwd"):
+            result["cwd"] = session_cwd
+        return result
+
     if _core._is_kimi_session(session_id):
         # The open-pane status poll is also the freshness source for the
         # cold-session composer. Kimi returns early for both KAP and ACP, so
