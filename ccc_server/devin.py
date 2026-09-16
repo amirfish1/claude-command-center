@@ -2093,6 +2093,14 @@ def _find_devin_cli_conversations_locked(
 
     rows = []
     raw_id_to_con = {}
+    # One probe for the whole scan: whether the experimental Devin ACP steer
+    # path (CCC_DEVIN_ACP_STEER) could be attempted at all. Not per-session —
+    # the `devin acp` connection is attached lazily by the first steer, so a
+    # per-session "is it loaded yet" gate could never turn true for anyone.
+    try:
+        devin_steer_capable = bool(_core._devin_acp_steer_capable())
+    except Exception:
+        devin_steer_capable = False
     try:
         spawn_by_sid = _devin_spawn_pid_by_session_id()
         query = (
@@ -2186,14 +2194,15 @@ def _find_devin_cli_conversations_locked(
                 "session_id": sid,
                 "source": "devin-cli",
                 "engine": "devin",
-                # True only when THIS session currently has a live `devin
-                # acp` connection attached -- i.e. the experimental Steer
-                # path (CCC_DEVIN_ACP_STEER, see acp.py's
-                # _devin_acp_try_steer) could actually be attempted for it.
-                # False for the overwhelming majority of Devin sessions,
-                # which run the one-shot CLI only; the UI must not show a
-                # Steer affordance for those (it would silently no-op).
-                "devin_acp_ready": bool(_core._devin_acp_session_loaded(raw_id)),
+                # True when the experimental Steer path
+                # (CCC_DEVIN_ACP_STEER, see acp.py's _devin_acp_try_steer)
+                # could actually be attempted: the opt-in is on and the
+                # `devin` binary resolves. The `devin acp` connection is
+                # attached lazily by the first steer click, so a session
+                # that has never been steered is still "ready" — and a
+                # session whose attach fails degrades to the durable queue
+                # server-side rather than silently no-oping.
+                "devin_acp_ready": devin_steer_capable,
                 "timestamp": "",
                 "branch": "",
                 "git_branch": "",

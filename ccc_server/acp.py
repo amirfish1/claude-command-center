@@ -574,6 +574,25 @@ def _devin_acp_steer_enabled():
     return os.environ.get("CCC_DEVIN_ACP_STEER", "0").strip().lower() in ("1", "true", "yes")
 
 
+def _devin_acp_steer_capable():
+    """True when a Devin ACP steer could be ATTEMPTED at all right now.
+
+    Deliberately broader than _devin_acp_session_loaded: the `devin acp`
+    connection is created lazily by the first steer itself
+    (_devin_acp_try_steer -> _acp_prompt -> _acp_ensure_session_loaded),
+    and nothing else in CCC ever attaches one — so gating the UI on an
+    already-loaded connection could never open for any session. This
+    checks only the environment: opt-in flag on, harness not disabled,
+    `devin` binary resolvable. A session that then fails session/load
+    still degrades to the durable queue inside _devin_acp_try_steer.
+    """
+    if not _devin_acp_steer_enabled():
+        return False
+    if not _core._acp_harness_enabled("devin"):
+        return False
+    return bool(_core._acp_resolve_bin("devin").get("available"))
+
+
 def _devin_acp_try_steer(session_id, raw_id, cwd, text, *, idempotency_key=None):
     """Best-effort live steer of a Devin CLI session over `devin acp`.
 
@@ -596,13 +615,9 @@ def _devin_acp_try_steer(session_id, raw_id, cwd, text, *, idempotency_key=None)
     """
     if not raw_id or not text:
         return None
-    if not _devin_acp_steer_enabled():
+    if not _devin_acp_steer_capable():
         return None
     try:
-        if not _core._acp_harness_enabled("devin"):
-            return None
-        if not _core._acp_resolve_bin("devin").get("available"):
-            return None
         if cwd:
             with _core._ACP_LOCK:
                 _core._acp_session("devin", raw_id, create=True, cwd=cwd)

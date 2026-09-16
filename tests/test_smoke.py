@@ -6700,7 +6700,7 @@ class TestServerImports(unittest.TestCase):
         self.assertIn("sendToTerminal('p1', 'steer')", app_js)
         self.assertIn("mode: injectMode", app_js)
         self.assertIn("function codexTurnSteerable()", app_js)
-        self.assertIn("(isCodex && codexTurnSteerable()) || isKimi || claudeSteerable", app_js)
+        self.assertIn("(isCodex && codexTurnSteerable()) || isKimi || devinSteerable || claudeSteerable", app_js)
         self.assertIn("function codexSteerUnavailable(data)", app_js)
         self.assertNotIn("if (injectMode === 'send' && currentSession.source === 'codex' && codexTurnSteerable())", app_js)
         send_handler = app_js[

@@ -8835,12 +8835,11 @@
       repoPath: repoPath || null,
       can_headless_resume: source === 'antigravity' ? !!(row && row.can_headless_resume === true) : true,
       can_app_resume: source === 'antigravity' ? !!(row && row.can_app_resume === true) : false,
-      // Per-session signal for the experimental Devin ACP live-steer path
-      // (see ccc_server/acp.py's _devin_acp_try_steer and
-      // ccc_server/devin.py's `devin_acp_ready` row field). False for the
-      // overwhelming majority of Devin sessions, which have no live `devin
-      // acp` connection attached and must keep using the durable one-shot
-      // queue -- see sessionSupportsQueuedSteer.
+      // Signal for the experimental Devin ACP live-steer path (see
+      // ccc_server/acp.py's _devin_acp_steer_capable and
+      // ccc_server/devin.py's `devin_acp_ready` row field): "could a steer
+      // be attempted" — opt-in flag on and `devin` binary resolvable. The
+      // ACP connection itself is attached lazily by the first steer.
       acp_steer_ready: source === 'devin-cli' ? !!(row && row.devin_acp_ready === true) : false,
     };
     // Leaving new-session mode (sid set) drops the .is-new-session class
@@ -9681,11 +9680,16 @@
         // wedged on a long tool child never hits the boundary where queued
         // input lands.
         const isClaudeHeadless = !isCodex && !isKimi && !isCursor && !isHermes
-          && !isPkood && !isGemini && !isAntigravity
+          && !isPkood && !isGemini && !isAntigravity && !isDevinCli
           && !!liveStatus.live && !!liveStatus.headlessPresent && !liveStatus.tty;
         const claudeSteerable = isClaudeHeadless && !!liveStatus.sidecarInFlight;
+        // Devin CLI steers over an opt-in `devin acp` ACP connection that the
+        // first steer attaches lazily — the row field devin_acp_ready mirrors
+        // server-side "could attempt" (flag on + binary resolves), not "a
+        // connection is already up" (nothing else ever creates one).
+        const devinSteerable = isDevinCli && currentSession.acp_steer_ready === true;
         const canSteer = canSend && hasSession && !isNewSession && !isBacklogIssue
-          && ((isCodex && codexTurnSteerable()) || isKimi || claudeSteerable);
+          && ((isCodex && codexTurnSteerable()) || isKimi || devinSteerable || claudeSteerable);
         activeSteerBtn.classList.toggle('visible', canSteer);
         activeSteerBtn.disabled = !canSteer;
         activeSteerBtn.title = canSteer
@@ -9693,14 +9697,18 @@
               ? 'Steer running Kimi turn now'
               : (isCodex
                   ? 'Steer running Codex turn now'
-                  : 'Interrupt the running tool and send this now'))
+                  : (isDevinCli
+                      ? 'Steer this Devin session (attaches a live devin acp connection on first use)'
+                      : 'Interrupt the running tool and send this now')))
           : (isCodex
               ? 'No running Codex turn can be steered from CCC; use Send to resume or follow up'
               : (isKimi
                   ? 'Steer is available while a Kimi turn is running'
-                  : (isClaudeHeadless
-                      ? 'Steer is available while a tool is running'
-                      : 'Steer needs a live headless, Codex, or Kimi session')));
+                  : (isDevinCli
+                      ? 'Devin steer needs CCC_DEVIN_ACP_STEER=1 and the devin binary on PATH'
+                      : (isClaudeHeadless
+                          ? 'Steer is available while a tool is running'
+                          : 'Steer needs a live headless, Codex, Kimi, or Devin session'))));
       }
       // Compact button — only for compaction-capable open sessions (Claude
       // AND Codex). cursor/gemini/antigravity/kimi return
@@ -10914,10 +10922,12 @@
     if (injectMode === 'steer'
         && currentSession.source !== 'codex'
         && currentSession.source !== 'kimi'
+        && !(currentSession.source === 'devin-cli' && currentSession.acp_steer_ready === true)
         && !(liveStatus.live && liveStatus.headlessPresent && !liveStatus.tty)) {
-      // Claude headless steers via the FIFO interrupt control request; every
-      // other non-Codex/Kimi surface still has no interrupt channel.
-      showOpToast('Steer needs a live headless, Codex, or Kimi session.', 'error');
+      // Claude headless steers via the FIFO interrupt control request; Devin
+      // CLI steers over its opt-in `devin acp` connection; every other
+      // non-Codex/Kimi surface still has no interrupt channel.
+      showOpToast('Steer needs a live headless, Codex, Kimi, or steer-ready Devin session.', 'error');
       return;
     }
     const compactCommand = /^\/compact(?:\s|$)/i.test(text);
@@ -31356,16 +31366,15 @@
   // consumes the durable queue entry (CCC-???).
   //
   // Devin is a partial exception: an experimental, opt-in live ACP steer
-  // path exists server-side (acp.py's _devin_acp_try_steer) for a Devin CLI
-  // session that currently has a `devin acp` connection attached -- but
-  // that is true for almost none of them (most Devin sessions run the
-  // one-shot CLI only, with no live connection at all). Unlike Kimi/Grok,
-  // whose ACP connection is the ONLY way CCC ever drives them (so the
-  // engine name alone is a truthful signal), a Devin session's eligibility
-  // varies session to session. `acpReady` carries that per-session signal
-  // (conversation row field `devin_acp_ready`, mirrored onto currentSession
-  // as `acp_steer_ready`) so the button never appears for a session where
-  // clicking it could only silently fall back to the durable queue.
+  // path exists server-side (acp.py's _devin_acp_try_steer), gated on
+  // CCC_DEVIN_ACP_STEER. Unlike Kimi/Grok, whose ACP connection is the ONLY
+  // way CCC ever drives them (so the engine name alone is a truthful
+  // signal), Devin's canonical transport is the one-shot CLI and the ACP
+  // path only exists when the opt-in is on and the `devin` binary
+  // resolves. `acpReady` carries that signal (conversation row field
+  // `devin_acp_ready`, mirrored onto currentSession as `acp_steer_ready`);
+  // the `devin acp` connection itself is attached lazily by the first
+  // steer, and a failed attach degrades to the durable queue server-side.
   function sessionSupportsQueuedSteer(source, acpReady) {
     if (source === 'codex' || source === 'kimi' || source === 'grok') return true;
     if (source === 'devin-cli') return !!acpReady;

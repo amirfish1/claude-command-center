@@ -61,6 +61,48 @@ def test_devin_acp_steer_stays_disabled_for_falsy_values(monkeypatch, value):
 
 
 # ---------------------------------------------------------------------------
+# _devin_acp_steer_capable -- the "could a steer be attempted" UI signal
+# ---------------------------------------------------------------------------
+
+def test_devin_acp_steer_capable_disabled_by_default(monkeypatch):
+    """With the opt-in flag off the row field must stay false — no Steer
+    affordance, and _devin_acp_try_steer would decline anyway."""
+    server = _server()
+    monkeypatch.delenv("CCC_DEVIN_ACP_STEER", raising=False)
+    with mock.patch.object(server, "_acp_resolve_bin") as resolve_bin:
+        assert server._devin_acp_steer_capable() is False
+    resolve_bin.assert_not_called()
+
+
+def test_devin_acp_steer_capable_true_when_enabled_and_bin_resolves(monkeypatch):
+    """No existing connection is required — the first steer attaches it
+    lazily, so capability must not depend on _devin_acp_session_loaded."""
+    server = _server()
+    monkeypatch.setenv("CCC_DEVIN_ACP_STEER", "1")
+    with mock.patch.object(server, "_acp_harness_enabled", return_value=True), \
+         mock.patch.object(server, "_acp_resolve_bin", return_value={"available": True, "bin": "/usr/bin/devin"}), \
+         mock.patch.object(server, "_devin_acp_session_loaded", return_value=False):
+        assert server._devin_acp_steer_capable() is True
+
+
+def test_devin_acp_steer_capable_false_when_harness_disabled(monkeypatch):
+    server = _server()
+    monkeypatch.setenv("CCC_DEVIN_ACP_STEER", "1")
+    with mock.patch.object(server, "_acp_harness_enabled", return_value=False), \
+         mock.patch.object(server, "_acp_resolve_bin") as resolve_bin:
+        assert server._devin_acp_steer_capable() is False
+    resolve_bin.assert_not_called()
+
+
+def test_devin_acp_steer_capable_false_when_bin_unavailable(monkeypatch):
+    server = _server()
+    monkeypatch.setenv("CCC_DEVIN_ACP_STEER", "1")
+    with mock.patch.object(server, "_acp_harness_enabled", return_value=True), \
+         mock.patch.object(server, "_acp_resolve_bin", return_value={"available": False}):
+        assert server._devin_acp_steer_capable() is False
+
+
+# ---------------------------------------------------------------------------
 # _devin_acp_try_steer -- fail-closed behavior
 # ---------------------------------------------------------------------------
 
