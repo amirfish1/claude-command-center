@@ -91,7 +91,7 @@ class ConventionEdges(unittest.TestCase):
 class CanvasState(unittest.TestCase):
     def test_nodes_merge_config_and_health(self):
         st = pc.canvas_state(configs=_configs(), health_rows=_health(),
-                             now=1_790_000_000)
+                             now=1_790_000_000, sources=[])
         self.assertTrue(st["ok"])
         nodes = {n["id"]: n for n in st["nodes"]}
         becky = nodes["queue:BECKY"]
@@ -111,7 +111,7 @@ class CanvasState(unittest.TestCase):
     def test_fallback_values_carry_default_source_flags(self):
         # FLEET-VERIFY pins no effort/model/desired_workers in the fixture:
         # the payload must say so rather than read as a deliberate choice.
-        st = pc.canvas_state(configs=_configs(), health_rows=_health())
+        st = pc.canvas_state(configs=_configs(), health_rows=_health(), sources=[])
         nodes = {n["id"]: n for n in st["nodes"]}
         fv = nodes["queue:FLEET-VERIFY"]
         self.assertEqual(fv["desired_workers"], 1)
@@ -121,28 +121,28 @@ class CanvasState(unittest.TestCase):
         self.assertEqual(becky["effort_source"], "engine_default")  # config has no effort
 
     def test_health_only_queue_renders_unconfigured(self):
-        st = pc.canvas_state(configs=_configs(), health_rows=_health())
+        st = pc.canvas_state(configs=_configs(), health_rows=_health(), sources=[])
         nodes = {n["id"]: n for n in st["nodes"]}
         ghost = nodes["queue:GHOST"]
         self.assertFalse(ghost["configured"])
         self.assertEqual(ghost["depth"], 2)
 
     def test_gate_node_is_always_present(self):
-        st = pc.canvas_state(configs={}, health_rows=[])
+        st = pc.canvas_state(configs={}, health_rows=[], sources=[])
         gate = [n for n in st["nodes"] if n["kind"] == "gate"]
         self.assertEqual(len(gate), 1)
         self.assertEqual(gate[0]["id"], pc.GATE_NODE_ID)
         self.assertEqual(gate[0]["url"], "/decision-inbox.html")
 
     def test_edges_come_along(self):
-        st = pc.canvas_state(configs=_configs(), health_rows=_health())
+        st = pc.canvas_state(configs=_configs(), health_rows=_health(), sources=[])
         kinds = {(e["source"], e["kind"]) for e in st["edges"]}
         self.assertIn(("queue:BECKY-DESIGN", "convention"), kinds)
         self.assertIn(("queue:BECKY-DESIGN", "gate"), kinds)
         self.assertIn(("queue:BECKY", "gate"), kinds)
 
     def test_empty_fleet_still_ok(self):
-        st = pc.canvas_state(configs={}, health_rows=[])
+        st = pc.canvas_state(configs={}, health_rows=[], sources=[])
         self.assertTrue(st["ok"])
         self.assertEqual(st["edges"], [])
         self.assertEqual(len(st["nodes"]), 1)  # just the gate
@@ -271,6 +271,83 @@ class LayoutIO(unittest.TestCase):
         with tempfile.TemporaryDirectory() as td:
             p = pc.layout_path(pathlib.Path(td) / "canvas-layout.json")
             self.assertTrue(str(p).endswith("canvas-layout.json"))
+
+
+class CanvasSources(unittest.TestCase):
+    """Runtime source nodes: the local timers/crons that file into queues."""
+
+    def _sources(self):
+        return [
+            {"component": "posthog-watcher", "name": "Session watcher",
+             "schedule": "daily 08:15 UTC", "files_to": "ALPHA",
+             "contract": "session findings become ALPHA tickets"},
+            {"component": "auditor-sweep", "name": "Grade sweep",
+             "schedule": "*/15 * * * *", "files_to": "ALPHA",
+             "contract": "bad grades become ALPHA issues"},
+            {"component": "scheduler", "name": "Teach pipeline",
+             "schedule": "daily", "files_to": "DANGLING"},
+        ]
+
+    def test_sources_become_nodes_and_edges(self):
+        st = pc.canvas_state(configs={"ALPHA": {"engine": "claude"}},
+                             health_rows=[], sources=self._sources())
+        src = [n for n in st["nodes"] if n["kind"] == "source"]
+        # The DANGLING entry is skipped whole — no node, no edge.
+        self.assertEqual(len(src), 2)
+        by_name = {n["name"]: n for n in src}
+        self.assertEqual(by_name["Session watcher"]["component"], "posthog-watcher")
+        self.assertEqual(by_name["Session watcher"]["schedule"], "daily 08:15 UTC")
+        self.assertEqual(by_name["Session watcher"]["files_to"], "ALPHA")
+        self.assertEqual(by_name["Session watcher"]["archetype"], "stream")
+        edges = [e for e in st["edges"] if e["kind"] == "source"]
+        self.assertEqual(len(edges), 2)
+        self.assertEqual({e["target"] for e in edges}, {"queue:ALPHA"})
+        self.assertEqual(edges[0]["contract"], "session findings become ALPHA tickets")
+        self.assertTrue(all(e["source"].startswith("source:") for e in edges))
+
+    def test_missing_file_means_no_source_nodes(self):
+        with tempfile.TemporaryDirectory() as td:
+            missing = pathlib.Path(td) / "nope.json"
+            self.assertEqual(pc.read_canvas_sources(missing), [])
+        st = pc.canvas_state(configs={"ALPHA": {}}, health_rows=[], sources=[])
+        self.assertEqual([n for n in st["nodes"] if n["kind"] == "source"], [])
+
+    def test_malformed_file_never_crashes(self):
+        with tempfile.TemporaryDirectory() as td:
+            bad = pathlib.Path(td) / "canvas-sources.json"
+            bad.write_text("{not json", encoding="utf-8")
+            self.assertEqual(pc.read_canvas_sources(bad), [])
+            bad.write_text('{"not": "a list"}', encoding="utf-8")
+            self.assertEqual(pc.read_canvas_sources(bad), [])
+            bad.write_text('[{"component": "x"}, {"no_component": true}, 42]',
+                           encoding="utf-8")
+            self.assertEqual(pc.read_canvas_sources(bad), [])  # all entries invalid
+
+    def test_entries_require_component_name_and_files_to(self):
+        with tempfile.TemporaryDirectory() as td:
+            f = pathlib.Path(td) / "canvas-sources.json"
+            f.write_text(json.dumps([
+                {"component": "scheduler", "name": "OK", "files_to": "ALPHA"},
+                {"component": "", "name": "no comp", "files_to": "ALPHA"},
+                {"component": "scheduler", "name": "", "files_to": "ALPHA"},
+                {"component": "scheduler", "name": "no target", "files_to": ""},
+            ]), encoding="utf-8")
+            got = pc.read_canvas_sources(f)
+        self.assertEqual(len(got), 1)
+        self.assertEqual(got[0]["name"], "OK")
+
+    def test_env_override_points_at_the_local_file(self):
+        import os
+        from unittest import mock
+        with tempfile.TemporaryDirectory() as td:
+            f = pathlib.Path(td) / "custom.json"
+            f.write_text(json.dumps(
+                [{"component": "scheduler", "name": "Timer", "files_to": "ALPHA"}]),
+                encoding="utf-8")
+            with mock.patch.dict(os.environ, {"CANVAS_SOURCES_FILE": str(f)}):
+                got = pc.read_canvas_sources()
+        self.assertEqual(len(got), 1)
+        self.assertEqual(got[0]["files_to"], "ALPHA")
 
 
 class LayoutBodyCap(unittest.TestCase):

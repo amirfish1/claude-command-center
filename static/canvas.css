@@ -328,6 +328,21 @@ body {
 .pc-node[data-health="warn"] .pc-status { background: var(--orange); }
 .pc-node[data-health="parked"] .pc-status { background: var(--amber); }
 .pc-node[data-health="gate"] .pc-status { background: var(--amber); color: var(--amber); }
+.pc-node[data-health="live"] .pc-status { background: var(--mint); color: var(--mint); }
+.pc-node[data-health="live"] .pc-status::after { animation: pc-pulse 3.2s ease-out infinite; }
+.pc-chip-live {
+  font: 700 9px var(--font-ui);
+  letter-spacing: 0.08em; text-transform: uppercase;
+  color: var(--mint);
+  border: 1px solid #1e4d33;
+  background: rgba(126, 224, 163, 0.08);
+  border-radius: 999px;
+  padding: 2px 8px;
+  width: fit-content;
+}
+/* Source filing edges: the sources-category hue, convention weight. */
+.pc-edge-group.is-source .pc-edge-line { stroke: rgba(126, 224, 163, 0.45); }
+.pc-edge-group.is-source .pc-edge-flow { stroke: var(--mint); }
 .pc-node[data-health="muted"] { opacity: 0.62; }
 .pc-node[data-health="muted"]:hover, .pc-node[data-health="muted"].is-selected { opacity: 1; }
 .pc-node[data-health="ok"] { box-shadow: var(--shadow-1), 0 0 22px rgba(63, 185, 80, 0.10); }

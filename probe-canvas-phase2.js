@@ -59,6 +59,33 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
     console.log(vp.tag, 'filter all:', JSON.stringify(filterAll));
     await page.screenshot({ path: 'out/canvas-polish/phase2/' + vp.tag + '-filter-all.png' });
 
+    // Runtime source nodes (with All queues visible): count must equal the
+    // server's own source-node count (dangling entries already skipped),
+    // each with a filing edge; inspector shows Pattern + schedule.
+    const sources = await page.evaluate(async () => {
+      const st = await fetch('/api/canvas/state').then((r) => r.json());
+      const expected = st.nodes.filter((n) => n.kind === 'source').length;
+      const dom = Array.from(document.querySelectorAll('.pc-node'))
+        .filter((n) => n.dataset.id.startsWith('source:') && !n.classList.contains('is-filtered-out'));
+      const srcEdges = document.querySelectorAll('.pc-edge-group.is-source').length;
+      if (dom.length) {
+        dom[0].dispatchEvent(new PointerEvent('pointerdown', { bubbles: true, button: 0, clientX: 700, clientY: 400 }));
+        document.dispatchEvent(new PointerEvent('pointerup', { bubbles: true, button: 0, clientX: 700, clientY: 400 }));
+      }
+      return { expected, visible: dom.length, srcEdges };
+    });
+    await sleep(400);
+    const sourceInsp = await page.evaluate(() => {
+      const body = document.getElementById('pcInspectorBody').textContent;
+      return { anchor: !!document.querySelector('.pc-insp-anchor'),
+               schedule: body.includes('Schedule'),
+               filesInto: body.includes('Files into') };
+    });
+    console.log(vp.tag, 'sources:', JSON.stringify(sources), 'inspector:', JSON.stringify(sourceInsp));
+    await page.screenshot({ path: 'out/canvas-polish/phase2/' + vp.tag + '-sources.png' });
+    // Clear the inspector selection so later steps are unaffected.
+    await page.keyboard.press('Escape');
+
     // Toggle back → 11 again. Clean up stored choice: default must stay ON.
     await page.click('#pcActivityToggle');
     await sleep(500);

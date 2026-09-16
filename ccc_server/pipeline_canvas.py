@@ -23,6 +23,8 @@ from __future__ import annotations
 
 import json
 import math
+import os
+import re
 import time
 from pathlib import Path
 
@@ -67,6 +69,104 @@ REVIEWER_HINTS = ("VERIFY", "REVIEW")
 # never as runtime nodes.
 
 GATE_NODE_ID = "gate:decision-inbox"
+
+# Runtime source nodes: the real timers/crons/webhooks that file tickets
+# INTO the queues. The mechanism ships in the repo; the list itself lives
+# in a LOCAL, untracked file (it names private queues) — missing or
+# malformed file simply means no source nodes.
+SOURCES_FILE_NAME = "canvas-sources.json"
+
+
+def sources_path(path=None):
+    if path is not None:
+        return Path(path)
+    env = os.environ.get("CANVAS_SOURCES_FILE")
+    if env:
+        return Path(env)
+    try:
+        base = Path(_core.COMMAND_CENTER_STATE_DIR)
+    except Exception:
+        base = Path.home() / ".claude" / "command-center"
+    return base / SOURCES_FILE_NAME
+
+
+def _slug(text, fallback):
+    s = re.sub(r"[^a-z0-9]+", "-", str(text or "").strip().lower()).strip("-")
+    return s or fallback
+
+
+def read_canvas_sources(path=None):
+    """[{component, name, schedule, files_to, contract?}] from the local
+    sources file. Missing/malformed → [] (never raises, never errors)."""
+    try:
+        raw = json.loads(sources_path(path).read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return []
+    if not isinstance(raw, list):
+        return []
+    out = []
+    for entry in raw:
+        if not isinstance(entry, dict):
+            continue
+        component = _norm_component(entry.get("component"))
+        files_to = _norm(entry.get("files_to"))
+        name = str(entry.get("name") or "").strip()[:120]
+        schedule = str(entry.get("schedule") or "").strip()[:120]
+        if not component or not files_to or not name:
+            continue
+        out.append({
+            "component": component,
+            "name": name,
+            "schedule": schedule,
+            "files_to": files_to,
+            "contract": str(entry.get("contract") or "").strip()[:200],
+        })
+    return out
+
+
+def _norm_component(value):
+    return re.sub(r"[^a-z0-9-]", "", str(value or "").strip().lower())[:60]
+
+
+def _source_nodes_and_edges(sources, queue_names):
+    """One typed source node + one filing edge per entry. An entry whose
+    files_to queue does not exist in the live queue set is skipped whole —
+    dangling means no node and no edge (the X-DESIGN rule)."""
+    nodes = []
+    edges = []
+    used_ids = set()
+    for entry in sources or []:
+        target = _norm(entry.get("files_to"))
+        if not target or target not in queue_names:
+            continue
+        slug = _slug(entry.get("name"), "source")
+        node_id = f"source:{slug}"
+        i = 2
+        while node_id in used_ids:
+            node_id = f"source:{slug}-{i}"
+            i += 1
+        used_ids.add(node_id)
+        contract = str(entry.get("contract") or "").strip()
+        nodes.append({
+            "id": node_id,
+            "kind": "source",
+            "archetype": "stream",
+            "component": entry["component"],
+            "name": entry["name"],
+            "label": entry["name"],
+            "schedule": entry.get("schedule") or "",
+            "files_to": target,
+            "contract": contract,
+        })
+        edges.append({
+            "id": f"src:{node_id}->{target}",
+            "source": node_id,
+            "target": f"queue:{target}",
+            "kind": "source",
+            "label": "files into",
+            "contract": contract or f"scheduled producer files into {target}",
+        })
+    return nodes, edges
 
 
 def _norm(name):
@@ -233,13 +333,15 @@ def _decision_inbox_open_cards():
     return None
 
 
-def canvas_state(configs=None, health_rows=None, now=None):
+def canvas_state(configs=None, health_rows=None, now=None, sources=None):
     """GET /api/canvas/state payload: runtime nodes + convention edges + gate.
 
     Inputs are injectable for tests; the defaults read live truth through
     ``_core`` (queue-config.json and the memoized per-queue health rollup).
     A queue present in config but without tickets still renders (idle is
     truth); a queue with tickets but no config entry renders unconfigured.
+    ``sources`` is the local timers/crons list — ``None`` reads the local
+    file, an explicit list (even empty) is used as-is.
     """
     if configs is None:
         try:
@@ -253,6 +355,8 @@ def canvas_state(configs=None, health_rows=None, now=None):
         except Exception:
             health_rows = []
     health_rows = health_rows if isinstance(health_rows, list) else []
+    if sources is None:
+        sources = read_canvas_sources()
 
     conf_by_q = {}
     for raw_name, conf in configs.items():
@@ -270,9 +374,12 @@ def canvas_state(configs=None, health_rows=None, now=None):
     nodes = []
     for q in sorted(set(conf_by_q) | set(health_by_q)):
         nodes.append(_queue_node(q, conf_by_q.get(q), health_by_q.get(q)))
+    queue_names = set(conf_by_q) | set(health_by_q)
+    src_nodes, src_edges = _source_nodes_and_edges(sources, queue_names)
+    nodes.extend(src_nodes)
     nodes.append(_gate_node(open_cards=_decision_inbox_open_cards()))
 
-    edges = derive_convention_edges(conf_by_q.keys() | health_by_q.keys(), configs)
+    edges = derive_convention_edges(queue_names, configs) + src_edges
     return {
         "ok": True,
         "generated_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(now or time.time())),

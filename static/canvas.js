@@ -42,15 +42,18 @@
   var TEMPLATES = window.CCC_CANVAS_TEMPLATES.TEMPLATES;
 
   function compOf(n) {
-    /* The registry entry for a designed node, or a {cat} shim for runtime. */
-    if (n.kind === "designed" && n.component && COMP_BY_ID[n.component]) {
+    /* The registry entry for a designed/source node, or a {cat} shim. */
+    if ((n.kind === "designed" || n.kind === "source") &&
+        n.component && COMP_BY_ID[n.component]) {
       return COMP_BY_ID[n.component];
     }
     return { cat: categoryOf(n) };
   }
   function categoryOf(n) {
-    if (n.kind === "designed" && n.category && CATS[n.category]) return n.category;
-    if (n.kind === "designed" && n.component && COMP_BY_ID[n.component]) return COMP_BY_ID[n.component].cat;
+    if ((n.kind === "designed" || n.kind === "source")) {
+      if (n.category && CATS[n.category]) return n.category;
+      if (n.component && COMP_BY_ID[n.component]) return COMP_BY_ID[n.component].cat;
+    }
     return ARCH_CAT[n.archetype] || "workers";
   }
   function letterOf(n) {
@@ -134,9 +137,15 @@
   try { activityFilterOn = localStorage.getItem(ACTIVITY_LS_KEY) !== "0"; } catch (e) {}
 
   function activityVisible(n) {
+    if (n.kind === "source") {
+      // Sources have no own activity — they mirror their target queue.
+      var d = n.data || {};
+      var target = d.files_to && nodes.get("queue:" + d.files_to);
+      return target ? activityVisible(target) : true;
+    }
     if (n.kind !== "queue") return true; // gates + designed nodes always show
-    var d = n.data || {};
-    return d.last_activity_seconds != null && d.last_activity_seconds <= ACTIVITY_WINDOW_S;
+    var qd = n.data || {};
+    return qd.last_activity_seconds != null && qd.last_activity_seconds <= ACTIVITY_WINDOW_S;
   }
   function visibleNodes() {
     var out = [];
@@ -148,10 +157,10 @@
   function applyVisibility() {
     var visible = 0, total = 0;
     nodes.forEach(function (n) {
-      if (n.kind === "queue") {
-        total += 1;
+      if (n.kind === "queue" || n.kind === "source") {
+        if (n.kind === "queue") total += 1;
         var show = !activityFilterOn || activityVisible(n);
-        if (show) visible += 1;
+        if (show && n.kind === "queue") visible += 1;
         n.filteredOut = !show;
         n.el.classList.toggle("is-filtered-out", !show);
       } else {
@@ -325,6 +334,7 @@
 
   function healthOf(n) {
     if (n.kind === "gate") return { tone: "gate", label: "human gate" };
+    if (n.kind === "source") return { tone: "live", label: "live source" };
     if (n.kind === "designed") return { tone: "draft", label: "design intent" };
     var d = n.data || {};
     if (!d.configured) return { tone: "muted", label: "not configured" };
@@ -432,6 +442,13 @@
       }
       if (c.desired_workers) badges.appendChild(el("span", "pc-badge pc-badge-dim", c.desired_workers + (c.desired_workers === 1 ? " worker" : " workers")));
       if (badges.childNodes.length) body.appendChild(badges);
+    } else if (n.kind === "source") {
+      var sd = n.data || {};
+      var sb = el("div", "pc-badge-row");
+      sb.appendChild(el("span", "pc-chip-live", "live source"));
+      if (sd.files_to) sb.appendChild(el("span", "pc-badge pc-badge-dim", "→ " + sd.files_to));
+      body.appendChild(sb);
+      if (sd.schedule) body.appendChild(el("div", "pc-counts", sd.schedule));
     } else if (n.kind === "gate") {
       var gb = el("div", "pc-badge-row");
       gb.appendChild(el("span", "pc-badge", "Decision Inbox"));
@@ -655,7 +672,10 @@
     var tt = el("div");
     tt.appendChild(el("div", "pc-insp-name", n.label));
     tt.appendChild(el("div", "pc-insp-sub", kindNameOf(n) +
-      (n.kind === "designed" ? " · design intent" : n.kind === "gate" ? " · human gate" : " · live queue")));
+      (n.kind === "designed" ? " · design intent"
+       : n.kind === "gate" ? " · human gate"
+       : n.kind === "source" ? " · live source"
+       : " · live queue")));
     title.appendChild(tt);
     inspectorBody.appendChild(title);
 
@@ -668,6 +688,8 @@
       gl.appendChild(ga);
       gs.appendChild(gl);
       inspectorBody.appendChild(gs);
+    } else if (n.kind === "source") {
+      renderSourceInspector(n);
     } else if (n.kind === "designed") {
       renderDesignedInspector(n);
     } else {
@@ -717,6 +739,33 @@
     var q = el("a", null, "Open in Queues ↗");
     q.href = "/q2.html";
     links.appendChild(q);
+    inspectorBody.appendChild(links);
+  }
+
+  function renderSourceInspector(n) {
+    var d = n.data || {};
+    var comp = compOf(n);
+
+    var pattern = patternSection(comp);
+    if (pattern) inspectorBody.appendChild(pattern);
+
+    var live = section("This source");
+    if (d.schedule) live.appendChild(kv("Schedule", d.schedule));
+    if (d.files_to) live.appendChild(kv("Files into", d.files_to));
+    if (d.contract) live.appendChild(kv("Contract", d.contract));
+    inspectorBody.appendChild(live);
+
+    var note = el("div", "pc-insp-note",
+      "A real scheduled producer, read from your local canvas-sources.json. " +
+      "It files into the queue on its cadence — the canvas only watches.");
+    inspectorBody.appendChild(note);
+
+    var links = el("div", "pc-insp-links");
+    if (d.files_to) {
+      var q = el("a", null, "Open " + d.files_to + " in Queues ↗");
+      q.href = "/q2.html";
+      links.appendChild(q);
+    }
     inspectorBody.appendChild(links);
   }
 
@@ -1599,7 +1648,7 @@
     });
 
     var colors = { ok: "#3fb950", bad: "#f85149", warn: "#d29922", parked: "#ffb340",
-                   gate: "#ffb340", muted: "#4a5462", draft: "#7a6a9e" };
+                   gate: "#ffb340", muted: "#4a5462", draft: "#7a6a9e", live: "#7ee0a3" };
     visSet.forEach(function (n) {
       var tone = healthOf(n).tone;
       var nh = n.el ? n.el.offsetHeight : 110;
@@ -1723,8 +1772,9 @@
       var r = archRank(a) - archRank(b);
       return r !== 0 ? r : (a.label < b.label ? -1 : a.label > b.label ? 1 : 0);
     });
-    var regular = needPlace.filter(function (n) { return n.kind !== "gate"; });
+    var regular = needPlace.filter(function (n) { return n.kind !== "gate" && n.kind !== "source"; });
     var gates = needPlace.filter(function (n) { return n.kind === "gate"; });
+    var sources = needPlace.filter(function (n) { return n.kind === "source"; });
     regular.forEach(function (n, i) {
       var p = gridPos(gridSlotsUsed + i);
       n.x = p.x; n.y = p.y;
@@ -1742,6 +1792,32 @@
       n._grid = true;
       placeNodeEl(n);
     });
+    // Sources are pipeline heads: they sit immediately LEFT of the queue
+    // they file into, cascading down when several share a target.
+    var perTarget = {};
+    sources.forEach(function (n) {
+      var d = n.data || {};
+      var target = d.files_to && nodes.get("queue:" + d.files_to);
+      var tx = target ? target.x : LAYOUT_ORIGIN.x + LAYOUT_COL_W;
+      var ty = target ? target.y : LAYOUT_ORIGIN.y;
+      var idx = perTarget[d.files_to] || 0;
+      perTarget[d.files_to] = idx + 1;
+      var sx = tx - LAYOUT_COL_W;
+      var sy = ty + idx * 108;
+      // Nudge down if the slot is taken (e.g. a planner column sits there).
+      for (var guard = 0; guard < 40; guard++) {
+        var hit = false;
+        nodes.forEach(function (o) {
+          if (o === n || hit) return;
+          if (Math.abs(o.x - sx) < NODE_W + 30 && Math.abs(o.y - sy) < 120) hit = true;
+        });
+        if (!hit) break;
+        sy += 132;
+      }
+      n.x = sx; n.y = sy;
+      n._grid = true;
+      placeNodeEl(n);
+    });
   }
 
   function applyRuntimeState(payload) {
@@ -1754,9 +1830,12 @@
       if (!n) {
         n = {
           id: d.id,
-          kind: d.kind === "gate" ? "gate" : "queue",
+          kind: d.kind === "gate" ? "gate" : d.kind === "source" ? "source" : "queue",
           archetype: d.archetype || "executor",
-          label: d.kind === "gate" ? (d.label || "Decision Inbox") : d.queue,
+          component: d.component || null,
+          label: d.kind === "gate" ? (d.label || "Decision Inbox")
+               : d.kind === "source" ? (d.name || d.label || "Source")
+               : d.queue,
           x: 0, y: 0
         };
         nodes.set(d.id, n);
@@ -1772,13 +1851,14 @@
       }
       n.data = d;
       if (n.kind === "gate") n.label = d.label || "Decision Inbox";
+      if (n.kind === "source") n.label = d.name || d.label || n.label;
       fillNodeEl(n);
     });
     if (needPlace.length) gridLayout(needPlace);
-    // Queues that vanished from truth disappear from the canvas (their saved
-    // position is simply unused if they ever return).
+    // Queues/sources that vanished from truth disappear from the canvas
+    // (their saved position is simply unused if they ever return).
     Array.from(nodes.values()).forEach(function (n) {
-      if ((n.kind === "queue" || n.kind === "gate") && !seen[n.id]) {
+      if ((n.kind === "queue" || n.kind === "gate" || n.kind === "source") && !seen[n.id]) {
         removeNodeEl(n.id);
         if (selection && selection.type === "node" && selection.id === n.id) clearSelection();
       }
