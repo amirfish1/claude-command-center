@@ -9158,6 +9158,8 @@ def _archive_session_is_live_uncached(session_id):
     # queued input once its current turn becomes idle.
     if engine in ("kimi", "grok"):
         return bool(_acp_resolve_bin(engine).get("available"))
+    if engine == "hermes":
+        return bool(_hermes_active_session_status(session_id).get("live"))
     is_non_claude_engine = engine in {
         "codex", "cursor", "gemini", "antigravity", "kilo", "opencode",
     }
@@ -9235,6 +9237,10 @@ def _discover_live_session_ids():
         pass
     try:
         sids.update(_live_engine_session_ids())
+    except Exception:
+        pass
+    try:
+        sids.update(_hermes_active_session_ids())
     except Exception:
         pass
     if SIDECAR_STATE_DIR.is_dir():
@@ -9486,6 +9492,10 @@ def _live_activity_entry_for_session(session_id):
         entry["last_event_type"] = tail.get("last_event_type")
     elif engine in ("kimi", "grok"):
         entry.update(_acp_live_activity_fields(engine, session_id))
+    elif engine == "hermes":
+        # Hermes has no Claude sidecars; its runtime lease is the liveness
+        # signal and was already applied above.
+        pass
     else:
         _add_sidecar_fields(entry)
     return entry
@@ -21482,7 +21492,7 @@ def _conv_parse_jsonl_mtime(conversation_id, repo_path=None):
         elif _is_antigravity_session(conversation_id):
             resolved = _antigravity_transcript_path(conversation_id)
         elif _is_hermes_session(conversation_id):
-            return _hermes_cache_key()
+            return _hermes_session_cache_key(conversation_id)
         elif _is_devin_cli_session(conversation_id):
             return _devin_cli_cache_key()
         elif _is_grok_session(conversation_id):
@@ -25851,8 +25861,8 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                 status.update(_antigravity_activity_fields_from_tail(tail, status.get("live")))
             elif is_hermes_status:
                 status.update({
-                    "live": False,
-                    "status": "history",
+                    "live": bool(status.get("live")),
+                    "status": status.get("status") or ("idle" if status.get("live") else "history"),
                     "engine": "hermes",
                     "sidecar_tool": None,
                     "sidecar_file": None,

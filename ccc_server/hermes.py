@@ -47,6 +47,7 @@ _HERMES_ID_CACHE = {"key": None, "ids": set()}
 # _hermes_session_ids() and keyed by the same (mtime,size) cache key.
 _HERMES_DB_INDEX = {"key": None, "by_session": {}}
 _HERMES_GATEWAY_CACHE = {"key": None, "by_session": {}}
+_HERMES_ACTIVE_REGISTRY_CACHE = {"key": None, "entries": []}
 _HERMES_BRIDGE_PREFIX = "hermes-whatsapp-bridge:"
 _HERMES_PENDING_PREFIX = "hermes-whatsapp-pending:"
 
@@ -154,6 +155,159 @@ def _hermes_cache_key():
     paths.extend(_hermes_pending_paths())
     file_mtime, file_size = _hermes_file_key(paths)
     return (max(db_mtime, file_mtime), db_size + file_size)
+
+
+def _hermes_session_cache_key(session_id):
+    """Freshness key for one Hermes conversation's actual backing source."""
+    sid = str(session_id or "").strip()
+    if _hermes_external_session_kind(sid):
+        paths = [_core.HERMES_WHATSAPP_BRIDGE_LOG]
+        paths.extend(_hermes_pending_paths())
+        return _hermes_file_key(paths)
+    db = _hermes_db_for_session(sid)
+    if db is not None:
+        return _hermes_file_key((db, Path(str(db) + "-wal")))
+    return _hermes_cache_key()
+
+
+def _hermes_active_registry_paths():
+    """Runtime ownership ledgers for the gateway and every profile home."""
+    homes = {Path(_core.HERMES_HOME).expanduser()}
+    for db in _hermes_db_paths():
+        homes.add(Path(db).parent)
+    return sorted((home / "runtime" / "active_sessions.json" for home in homes), key=str)
+
+
+def _hermes_pid_alive(pid, expected_start=None):
+    """Cheap, stdlib-only owner check for a Hermes active-session lease."""
+    try:
+        pid = int(pid)
+    except (TypeError, ValueError):
+        return False
+    if pid <= 0:
+        return False
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        pass
+    except OSError:
+        return False
+    # kill(pid, 0) succeeds for zombies on Linux; a zombie cannot own a live
+    # conversation. While /proc is available, also compare the recorded
+    # process birth time so a recycled PID cannot revive a stale lease.
+    try:
+        raw_stat = (Path("/proc") / str(pid) / "stat").read_text(encoding="utf-8")
+        stat_fields = raw_stat.rsplit(")", 1)[1].strip().split()
+        if stat_fields and stat_fields[0] == "Z":
+            return False
+        if expected_start not in (None, "") and len(stat_fields) > 19:
+            boot_time = next(
+                int(line.split()[1])
+                for line in Path("/proc/stat").read_text(encoding="utf-8").splitlines()
+                if line.startswith("btime ")
+            )
+            actual_start = boot_time + int(stat_fields[19]) / os.sysconf("SC_CLK_TCK")
+            if abs(actual_start - float(expected_start)) >= 1.0:
+                return False
+    except OSError:
+        pass
+    except (IndexError, StopIteration, TypeError, ValueError):
+        # An unreadable birth time is not evidence the live process is dead.
+        pass
+    return True
+
+
+def _hermes_active_registry_entries():
+    """Cached union of Hermes' small active-session ownership ledgers."""
+    paths = _hermes_active_registry_paths()
+    key_parts = []
+    for path in paths:
+        try:
+            st = path.stat()
+        except OSError:
+            continue
+        key_parts.append((str(path), st.st_mtime_ns, st.st_size))
+    key = tuple(key_parts)
+    if _HERMES_ACTIVE_REGISTRY_CACHE.get("key") == key:
+        return list(_HERMES_ACTIVE_REGISTRY_CACHE.get("entries") or [])
+    entries = []
+    for path, _mtime, _size in key_parts:
+        try:
+            raw = json.loads(Path(path).read_text(encoding="utf-8"))
+        except (OSError, ValueError, json.JSONDecodeError):
+            continue
+        values = raw.get("entries") if isinstance(raw, dict) else raw
+        if isinstance(values, list):
+            entries.extend(item for item in values if isinstance(item, dict))
+    _HERMES_ACTIVE_REGISTRY_CACHE["key"] = key
+    _HERMES_ACTIVE_REGISTRY_CACHE["entries"] = list(entries)
+    return entries
+
+
+def _hermes_active_session_status(session_id):
+    """Hermes runtime ownership and transcript freshness for one session.
+
+    Hermes desktop/gateway sessions share a long-running process, so process
+    command lines cannot identify the active conversation. Hermes already
+    maintains the authoritative mapping in runtime/active_sessions.json; use
+    that instead of making every Hermes row permanently look historical.
+    """
+    sid = str(session_id or "").strip()
+    cache_mtime_ns, _cache_size = _hermes_session_cache_key(sid)
+    transcript_mtime = cache_mtime_ns / 1_000_000_000.0 if cache_mtime_ns else 0.0
+    result = {
+        "live": False,
+        "pid": None,
+        "tty": None,
+        "terminal_app": None,
+        "status": "history",
+        "kind": "hermes",
+        "recently_written": bool(transcript_mtime and time.time() - transcript_mtime < 300),
+        "transcript_mtime": transcript_mtime,
+        "match_count": 0,
+        "ambiguous": False,
+    }
+    if not sid:
+        return result
+    matches = []
+    for entry in _hermes_active_registry_entries():
+        stored_sid = str(entry.get("session_id") or "").strip()
+        live_sid = str((entry.get("metadata") or {}).get("live_session_id") or "").strip()
+        if sid not in (stored_sid, live_sid) or not _hermes_pid_alive(
+            entry.get("pid"), entry.get("process_start_time")
+        ):
+            continue
+        matches.append(entry)
+    result["match_count"] = len(matches)
+    if not matches:
+        return result
+    # Prefer the lease keyed directly by the persisted session id. The
+    # metadata id is a runtime alias used during continuation hand-offs.
+    matches.sort(key=lambda item: str(item.get("session_id") or "") != sid)
+    owner = matches[0]
+    result.update({
+        "live": True,
+        "pid": int(owner["pid"]),
+        "status": "idle",
+        "cwd": "",
+        "hermes_surface": str(owner.get("surface") or ""),
+        "ambiguous": len(matches) > 1,
+    })
+    return result
+
+
+def _hermes_active_session_ids():
+    """Persisted Hermes session ids whose recorded owner process is alive."""
+    out = set()
+    for entry in _hermes_active_registry_entries():
+        if not _hermes_pid_alive(entry.get("pid"), entry.get("process_start_time")):
+            continue
+        sid = str(entry.get("session_id") or "").strip()
+        if sid:
+            out.add(sid)
+    return out
 
 
 def _hermes_bridge_session_id(chat_id):
