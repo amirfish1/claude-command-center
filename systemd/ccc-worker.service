@@ -1,0 +1,38 @@
+[Unit]
+Description=Claude Command Center persistent execution worker
+After=network-online.target
+Wants=network-online.target
+StartLimitIntervalSec=300
+StartLimitBurst=5
+
+[Service]
+Type=simple
+User=hermes
+Group=hermes
+WorkingDirectory=/home/hermes/Apps/claude-command-center
+
+Environment=HOME=/home/hermes
+Environment=PATH=/home/hermes/.local/bin:/home/hermes/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+Environment=PYTHONUNBUFFERED=1
+Environment=LANG=en_US.UTF-8
+
+ExecStart=/usr/bin/python3 /home/hermes/Apps/claude-command-center/ccc_worker.py
+
+Restart=always
+RestartSec=2s
+
+# Use KillMode=process so worker restarts signal the worker process only
+KillMode=process
+
+# --- Blast-radius containment ---
+MemoryHigh=3G
+MemoryMax=4G
+MemorySwapMax=512M
+
+LimitNOFILE=4096
+
+StandardOutput=append:/home/hermes/.claude/command-center/logs/vm-worker.out.log
+StandardError=append:/home/hermes/.claude/command-center/logs/vm-worker.err.log
+
+[Install]
+WantedBy=multi-user.target

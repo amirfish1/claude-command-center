@@ -1,0 +1,58 @@
+[Unit]
+Description=Claude Command Center (port 8091)
+After=network-online.target ccc-worker.service
+Wants=network-online.target ccc-worker.service
+StartLimitIntervalSec=300
+StartLimitBurst=5
+
+[Service]
+Type=simple
+User=hermes
+Group=hermes
+WorkingDirectory=/home/hermes/Apps/claude-command-center
+
+# Environment
+Environment=HOME=/home/hermes
+Environment=PATH=/home/hermes/.local/bin:/home/hermes/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+Environment=PYTHONUNBUFFERED=1
+Environment=LANG=en_US.UTF-8
+Environment=CCC_BIND_HOST=127.0.0.1
+Environment=CCC_ALLOWED_ORIGIN=https://hermes-eu.taild20a42.ts.net
+Environment=CLAUDE_INDEX_BIN=/home/hermes/tools/indexing/.venv/bin/claude-index
+Environment=CCC_ENGINE_UPDATE_SKIP=hermes
+
+# PORT 8091, NOT default 8090.
+# On hermes, port 8090 is held by the Hermes agent gateway (hermes_cli.main gateway run).
+# Running CCC on the default 8090 collides with the gateway and caused bym-studio-digest's
+# DECISION_INBOX_URL (originally pointing at hermes:8090) to 404 against the gateway.
+# CCC is pinned to port 8091 so it does not collide with the gateway, and DECISION_INBOX_URL
+# points to http://127.0.0.1:8091/api/decision-inbox.
+# Long-term ownership decision: Hermes gateway owns 8090 as the host agent gateway,
+# while CCC durably binds to 8091 on this host.
+Environment=PORT=8091
+
+ExecStart=/bin/bash /home/hermes/Apps/claude-command-center/run.sh
+
+Restart=on-failure
+RestartSec=5s
+
+# Process management:
+# Use KillMode=process so systemd restarts signal the main server process only.
+# Persistent workers and spawned engine subprocesses survive service reloads.
+KillMode=process
+
+# --- Blast-radius containment ---
+# Bound memory usage so runaway sessions or memory leaks do not exhaust host
+# memory and swap-thrash the system (mirroring bym-dev.service convention).
+MemoryHigh=6G
+MemoryMax=8G
+MemorySwapMax=1G
+
+# Increase file descriptor limit for persistent engine handles and sockets
+LimitNOFILE=4096
+
+StandardOutput=append:/home/hermes/.claude/command-center/logs/vm-service.out.log
+StandardError=append:/home/hermes/.claude/command-center/logs/vm-service.err.log
+
+[Install]
+WantedBy=multi-user.target
