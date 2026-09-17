@@ -58,6 +58,7 @@
   }
 
   function onEsc(e) {
+    if (e && (e.isComposing || e.keyCode === 229)) return;
     if (e.key === 'Escape') { exitPick(); closeModal(); }
   }
 

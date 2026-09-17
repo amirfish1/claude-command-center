@@ -720,6 +720,7 @@
     if (e.target.closest('.fleet-action-check')) fleetUpdatePlanConfirm();
   });
   document.addEventListener('keydown', (e) => {
+    if (e && (e.isComposing || e.keyCode === 229)) return;
     if (e.key !== 'Escape') return;
     if ($fleetPlanModal && $fleetPlanModal.classList.contains('open')) fleetPlanClose();
   });

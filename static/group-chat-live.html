@@ -1082,6 +1082,7 @@
 
   /* ── Post message ── */
   window.handlePostKey = function(e) {
+    if (e && (e.isComposing || e.keyCode === 229)) return;
     if (e.key === 'Enter' && !e.shiftKey) {
       e.preventDefault();
       postMessage();

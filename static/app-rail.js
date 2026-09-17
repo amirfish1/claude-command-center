@@ -199,10 +199,15 @@
         a.className = "active";
         a.setAttribute("aria-current", "page");
       }
-      // Everything stays inside the CCC window. An absolute URL is wrapped
-      // by /app/<id>, which frames it and offers a way out if the site
-      // refuses to be embedded.
+      // Canvas is deliberately a companion workspace: leave the dashboard
+      // where it is and put the topology in its own same-origin window.
+      // All other apps stay inside the CCC window; absolute URLs are wrapped
+      // by /app/<id>, which frames them and offers a way out if needed.
       a.href = app.nav || app.url;
+      if (app.id === "pipeline-canvas") {
+        a.target = "_blank";
+        a.rel = "noopener";
+      }
       var icon = document.createElement("span");
       icon.className = "icon";
       icon.textContent = app.icon || "•";
@@ -293,7 +298,10 @@
       scrim.remove();
       refresh();          // apps may have been added, renamed, or removed
     }
-    function onKey(e) { if (e.key === "Escape") shut(); }
+    function onKey(e) {
+      if (e && (e.isComposing || e.keyCode === 229)) return;
+      if (e.key === "Escape") shut();
+    }
     close.onclick = shut;
     scrim.onclick = function (e) { if (e.target === scrim) shut(); };
     document.addEventListener("keydown", onKey);

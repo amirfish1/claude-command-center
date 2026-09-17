@@ -26,6 +26,8 @@
   var SAVE_DEBOUNCE_MS = 800;
   var HISTORY_CAP = 50;
 
+  function isImeKey(e) { return !!(e && (e.isComposing || e.keyCode === 229)); }
+
   var GATE_ID = "gate:decision-inbox";
 
   /* The component ecosystem is data-driven: static/canvas-components.js
@@ -1424,6 +1426,7 @@
     var search = $("pcLibSearch");
     search.addEventListener("input", renderLibraryItems);
     search.addEventListener("keydown", function (e) {
+      if (isImeKey(e)) return;
       if (e.key === "ArrowDown") { e.preventDefault(); moveSearchHighlight(1); }
       else if (e.key === "ArrowUp") { e.preventDefault(); moveSearchHighlight(-1); }
       else if (e.key === "Enter") { e.preventDefault(); placeSearchHighlight(); }
@@ -1982,6 +1985,7 @@
   /* ── keyboard ──────────────────────────────────────────────────────── */
 
   document.addEventListener("keydown", function (e) {
+    if (isImeKey(e)) return;
     var inField = /^(INPUT|TEXTAREA|SELECT)$/.test((e.target && e.target.tagName) || "") || (e.target && e.target.isContentEditable);
     if (e.key === " " && !inField) {
       spaceDown = true;

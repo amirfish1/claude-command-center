@@ -408,6 +408,7 @@
   $("cancelBtn").onclick = closeForm;
   $("saveBtn").onclick = save;
   $("f-label").addEventListener("keydown", function (e) {
+    if (e && (e.isComposing || e.keyCode === 229)) return;
     if (e.key === "Enter") save();
   });
 

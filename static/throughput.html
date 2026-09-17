@@ -5225,6 +5225,7 @@
       if (e.target === this) closeAnnotate();
     });
     document.addEventListener('keydown', function(e) {
+      if (e && (e.isComposing || e.keyCode === 229)) return;
       if (e.key === 'Escape') {
         if (_annotatePickerActive) {
           stopAnnotatePicker();
@@ -5486,6 +5487,7 @@
     };
 
     document.addEventListener('keydown', (e) => {
+      if (e && (e.isComposing || e.keyCode === 229)) return;
       if (e.key !== 'Escape' || !zoom) return;
       e.stopImmediatePropagation();
       if (zoom.level === 2) {

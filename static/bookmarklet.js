@@ -60,6 +60,7 @@
   window.__cccBookmarkletCancel = cleanup;
 
   function onKey(e) {
+    if (e && (e.isComposing || e.keyCode === 229)) return;
     if (e.key === 'Escape') {
       e.preventDefault();
       e.stopPropagation();

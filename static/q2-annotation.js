@@ -104,6 +104,10 @@
           var payload = { note: note, url: location.href, title: document.title, source: 'ccc', rect: info.rect, viewport_crop: info.rect, element: { tag: info.tag, id: info.id, role: info.role, selector: info.selector, text: info.text }, capture_screen: true };
           var noteEl = document.getElementById('q2Note');
           function showNote(text) {
+            if (options && typeof options.onStatus === 'function') {
+              options.onStatus(text);
+              return;
+            }
             if (!noteEl) return;
             noteEl.textContent = text; noteEl.hidden = false;
             setTimeout(function () { noteEl.hidden = true; }, 3000);
@@ -140,7 +144,10 @@
         });
       }
 
-      function onKey(event) { if (event.key === 'Escape') stop(); }
+      function onKey(event) {
+        if (event && (event.isComposing || event.keyCode === 229)) return;
+        if (event.key === 'Escape') stop();
+      }
       button.addEventListener('click', function () {
         if (state) { stop(); return; }
         var overlay = document.createElement('div');

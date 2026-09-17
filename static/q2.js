@@ -2910,6 +2910,7 @@
     }
   }
   function modalKey(e) {
+    if (e && (e.isComposing || e.keyCode === 229)) return;
     if (e.key === 'Escape') { e.preventDefault(); closeModal(); }
   }
   function openModal(html, onMount) {
@@ -3570,6 +3571,7 @@
   document.addEventListener('keydown', function (e) {
     var titleTa = e.target.closest && e.target.closest('[data-q2-input="title"]');
     if (titleTa) {
+      if (e && (e.isComposing || e.keyCode === 229)) return;
       if (e.key === 'Escape') { e.preventDefault(); state.editingTitle = false; renderDetail(); return; }
       if (e.key === 'Enter' && !e.shiftKey) {
         e.preventDefault();

@@ -1901,6 +1901,7 @@
         <button type="button" class="sys-tab active" id="sysTabBtnStatus">Status</button>
         <button type="button" class="sys-tab" id="sysTabBtnHealth">Health</button>
         <button type="button" class="sys-tab" id="sysTabBtnProcesses">Processes</button>
+        <button type="button" class="sys-tab" id="sysTabBtnJobs">Scheduled Jobs</button>
       </div>
 
       <!-- Tab Content: Status -->
@@ -2060,6 +2061,24 @@
       <div id="sysTabContentProcesses" style="display: none;">
         <div class="sys-proc-body" id="sysProcBody" style="padding: 0; display: flex; flex-direction: column; gap: 12px;">
           <div style="opacity:.6">Loading processes…</div>
+        </div>
+      </div>
+
+      <!-- Tab Content: Scheduled Jobs -->
+      <div id="sysTabContentJobs" style="display: none;">
+        <div class="sys-jobs-toolbar" style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px; gap: 8px; flex-wrap: wrap;">
+          <div class="sys-jobs-filters" style="display: flex; gap: 6px; align-items: center;">
+            <button type="button" class="upd-btn sys-jobs-filter active" id="sysJobsFilterAll" data-host="all" style="font-size: 11px; padding: 4px 8px;">All (<span id="sysJobsCountAll">0</span>)</button>
+            <button type="button" class="upd-btn sys-jobs-filter" id="sysJobsFilterLaptop" data-host="laptop" style="font-size: 11px; padding: 4px 8px;">Laptop (<span id="sysJobsCountLaptop">0</span>)</button>
+            <button type="button" class="upd-btn sys-jobs-filter" id="sysJobsFilterHermes" data-host="hermes" style="font-size: 11px; padding: 4px 8px;">Hermes (<span id="sysJobsCountHermes">0</span>)</button>
+          </div>
+          <div style="display: flex; gap: 8px; align-items: center;">
+            <span id="sysJobsHostStatus" style="font-size: 11px; color: var(--text-muted);"></span>
+            <button type="button" class="upd-btn" id="sysJobsRefreshBtn" style="font-size: 11px; padding: 4px 8px;">↻ Refresh</button>
+          </div>
+        </div>
+        <div id="sysJobsList" style="display: flex; flex-direction: column; gap: 8px; max-height: 55vh; overflow-y: auto;">
+          <div style="opacity: .6; font-size: 12px;">Loading scheduled jobs…</div>
         </div>
       </div>
 
@@ -3426,6 +3445,7 @@
 <script src="/static/ticket-prose.js"></script>
 <script src="/static/app.js"></script>
 <script src="/static/codex-live-source.js"></script>
+<script src="/static/scheduled-jobs.js"></script>
 
 <!-- ── In-UI terminal panel ──────────────────────────────────────────────
      A small one-shot terminal: type a command, hit Enter, output streams
@@ -3883,6 +3903,7 @@
   $cancelBtn.addEventListener('click', cancelRunning);
 
   $input.addEventListener('keydown', (e) => {
+    if (e && (e.isComposing || e.keyCode === 229)) return;
     if (e.key === 'Enter') {
       e.preventDefault();
       const cmd = $input.value;
@@ -4155,6 +4176,7 @@
 
   $input.addEventListener('input', debouncedSearch);
   $input.addEventListener('keydown', (e) => {
+    if (e && (e.isComposing || e.keyCode === 229)) return;
     if (e.key === 'Enter') { e.preventDefault(); runSearch(); }
     if (e.key === 'Escape') { e.preventDefault(); closeDrawer(); }
   });

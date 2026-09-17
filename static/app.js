@@ -15,6 +15,11 @@
   window.cccOpenSession = function (sid) {
     try { if (sid) selectConversation(sid); } catch (_) {}
   };
+  // macOS delivers the IME confirm-Enter/Escape to the page; Windows does not.
+  // keyCode 229 covers Safari builds that clear isComposing before keydown.
+  function isImeKey(ev) { return !!(ev && (ev.isComposing || ev.keyCode === 229)); }
+  window.__cccIsImeKey = isImeKey;
+  window.isImeKey = isImeKey;
   // Always-on background pollers that have nothing to do while the window is
   // hidden — paused on document.hidden, kicked once on re-focus. View-
   // conditional pollers (gcReader, pkoodTail, codexLog, hiStatus, peer) and the
@@ -741,6 +746,7 @@
   // ── System Processes (Process Audit & Killness Score) ─────────────────────
   let _sysProcPollPromise = null;
   let _sysProcessesTimer = null;
+  let _sysJobsTimer = null;
   let _sysProcFilter = 'all';
   let _sysProcSearch = '';
   let _sysProcData = null;
@@ -1552,6 +1558,7 @@
     el.__t = setTimeout(() => { el.style.opacity = '0'; }, 1800);
   }
   document.addEventListener('keydown', (e) => {
+    if (isImeKey(e)) return;
     if (!((e.metaKey || e.ctrlKey) && e.shiftKey && e.code === 'Digit0')) return;
     e.preventDefault();
     const allOffNow = window.cccPollers.names.every(n => _pollerOff(n));
@@ -2033,6 +2040,7 @@
   // is ACTIVELY typing: within 1.5s of a real keystroke in a text control.
   let _lastTextKeyTs = 0;
   document.addEventListener('keydown', (ev) => {
+    if (isImeKey(ev)) return;
     const t = ev.target;
     if (!t || !t.tagName) return;
     const isText = t.tagName === 'TEXTAREA'
@@ -5292,6 +5300,7 @@
       _closeConvOverflow();
     });
     document.addEventListener('keydown', (e) => {
+      if (isImeKey(e)) return;
       if (e.key === 'Escape') _closeConvOverflow();
     });
   }
@@ -6344,8 +6353,10 @@
     if (engineKey === 'kimi') {
       if (hasFamily('k3')) return 'premium';
       // highspeed before coding: the id contains 'coding'. Moonshot pricing
-      // (Jul 2026): k3 $3/$15, highspeed $1.90/$8, plain k2.7-code $0.95/$4
-      // per 1M tokens — highspeed is the FAST tier, plain coding the CHEAP one.
+      // (Sep 2026): k3 $3/$15, highspeed $1.90/$8, plain coding $0.95/$4
+      // per 1M tokens — the kimi-for-coding alias now serves K2.8 Preview
+      // (upgraded in place, same price), highspeed is still K2.7 Code and is
+      // the FAST tier, plain coding the CHEAP one.
       if (hasFamily('highspeed')) return 'high';
       if (hasFamily('coding')) return 'low';
     }
@@ -7534,6 +7545,7 @@
     _handleUxQueueNudge(el);
   });
   document.addEventListener('keydown', (ev) => {
+    if (isImeKey(ev)) return;
     if (ev.key !== 'Enter' && ev.key !== ' ') return;
     const el = ev.target.closest && ev.target.closest('.conv-ux-fix-progress[data-ux-nudge]');
     if (!el) return;
@@ -8046,6 +8058,7 @@
       };
       badge.addEventListener('click', _doWake);
       badge.addEventListener('keydown', (e) => {
+        if (isImeKey(e)) return;
         if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); _doWake(); }
       });
       // Grab-back is a distinct affordance rendered inside the (non-wakeable)
@@ -8455,6 +8468,7 @@
     });
   });
   document.addEventListener('keydown', (ev) => {
+    if (isImeKey(ev)) return;
     if (ev.key !== 'Escape') return;
     document.querySelectorAll('.conv-item.is-actions-open').forEach(row => row.classList.remove('is-actions-open'));
   });
@@ -9241,6 +9255,7 @@
 
   function recallLastComposerCommand(input, ev) {
     if (!input || !ev) return false;
+    if (isImeKey(ev)) return false;
     if (ev.key !== 'ArrowUp') return false;
     if (ev.shiftKey || ev.altKey || ev.ctrlKey || ev.metaKey || ev.isComposing) return false;
     if (input.readOnly || input.disabled) return false;
@@ -10120,6 +10135,7 @@
   }
 
   function handleSlashCommandKeydown(input, ev) {
+    if (isImeKey(ev)) return false;
     if (!_slashMenuEl || _slashMenuInput !== input) return false;
     if (ev.key === 'ArrowDown') {
       ev.preventDefault();
@@ -11445,6 +11461,7 @@
     const ta = pop.querySelector('textarea');
     ta.focus();
     ta.addEventListener('keydown', (ev) => {
+      if (isImeKey(ev)) return;
       if (ev.key === 'Enter' && !ev.shiftKey) {
         ev.preventDefault();
         const note = ta.value.trim();
@@ -12884,6 +12901,7 @@
       });
     }
     $convInput.addEventListener('keydown', (e) => {
+      if (isImeKey(e)) return;
       if (handleSlashCommandKeydown($convInput, e)) return;
       if (recallLastComposerCommand($convInput, e)) return;
       // Ctrl/Cmd+S steers the running turn with the composer text (kimi-web
@@ -13010,6 +13028,7 @@
     closeLaunchChoiceMenus();
   });
   document.addEventListener('keydown', (e) => {
+    if (isImeKey(e)) return;
     if (e.key === 'Escape') closeLaunchChoiceMenus();
   });
 
@@ -14778,6 +14797,7 @@
     }
   });
   document.addEventListener('keydown', (ev) => {
+    if (isImeKey(ev)) return;
     if (ev.key === 'Escape' && _imgLightbox && _imgLightbox.classList.contains('open')) {
       _imgLightbox.classList.remove('open');
     }
@@ -14904,6 +14924,7 @@
     }
   });
   document.addEventListener('keydown', (ev) => {
+    if (isImeKey(ev)) return;
     const a = ev.target.closest && ev.target.closest('a.path-link[role="button"]');
     if (!a) return;
     if (ev.key !== 'Enter' && ev.key !== ' ') return;
@@ -15182,6 +15203,7 @@
   const $coordTopicInput = document.getElementById('coordTopicInput');
   if ($coordTopicInput) {
     $coordTopicInput.addEventListener('keydown', ev => {
+      if (isImeKey(ev)) return;
       if (ev.key === 'Enter') startCoordination();
       if (ev.key === 'Escape' && $coordModalBackdrop) $coordModalBackdrop.classList.remove('visible');
     });
@@ -15887,6 +15909,7 @@
   // nest the copy-reference <button> — see the comment there), so restore
   // the Enter/Space activation a native button gives for free.
   document.addEventListener('keydown', (ev) => {
+    if (isImeKey(ev)) return;
     if (ev.key !== 'Enter' && ev.key !== ' ') return;
     const card = ev.target.closest && ev.target.closest('.simple-task-card[role="button"]');
     if (!card || ev.target.closest('[data-simple-copy-ref]')) return;
@@ -16907,6 +16930,7 @@
     });
     // Enter in a needs-you answer box sends, same as the Send button.
     home.addEventListener('keydown', (ev) => {
+      if (isImeKey(ev)) return;
       if (ev.key !== 'Enter') return;
       const input = ev.target.closest('.simple-nya-answer-input');
       if (!input) return;
@@ -17817,6 +17841,7 @@
       if (!ev.target.closest('.sh-more-wrap')) closeSidebarMore();
     });
     document.addEventListener('keydown', (ev) => {
+      if (isImeKey(ev)) return;
       if (ev.key === 'Escape' && !$sidebarMoreMenu.hidden) closeSidebarMore();
     });
   }
@@ -21105,6 +21130,7 @@
       renderNewSessionObjectMenu(input.value);
     });
     input.addEventListener('keydown', (ev) => {
+      if (isImeKey(ev)) return;
       if (ev.key === 'ArrowDown') {
         ev.preventDefault();
         _newSessionObjectMenuIndex = Math.min(_newSessionObjectMenuItems.length - 1, _newSessionObjectMenuIndex + 1);
@@ -21642,7 +21668,9 @@
       finish(false);
     });
     input.addEventListener('keydown', ev => {
+      if (isImeKey(ev)) return;
       ev.stopPropagation();
+      if (isImeKey(ev)) return;
       if (ev.key === 'Enter') { ev.preventDefault(); finish(true); }
       else if (ev.key === 'Escape') { ev.preventDefault(); finish(false); }
     });
@@ -22195,6 +22223,7 @@
     const close = () => { modal.remove(); };
     modal.querySelectorAll('[data-foap-close]').forEach(el => el.addEventListener('click', close));
     document.addEventListener('keydown', function onKey(ev) {
+      if (isImeKey(ev)) return;
       if (ev.key === 'Escape') { close(); document.removeEventListener('keydown', onKey); }
     });
     function _render() {
@@ -22290,6 +22319,7 @@
     const close = () => { modal.remove(); };
     modal.querySelectorAll('[data-asp-close]').forEach(el => el.addEventListener('click', close));
     document.addEventListener('keydown', function onKey(ev) {
+      if (isImeKey(ev)) return;
       if (ev.key === 'Escape') { close(); document.removeEventListener('keydown', onKey); }
     });
     function _render() {
@@ -23106,6 +23136,7 @@
     const close = () => { modal.remove(); };
     modal.querySelectorAll('[data-fap-close]').forEach(el => el.addEventListener('click', close));
     document.addEventListener('keydown', function onKey(ev) {
+      if (isImeKey(ev)) return;
       if (ev.key === 'Escape') { close(); document.removeEventListener('keydown', onKey); }
     });
     modal.querySelector('[data-fap-new]').addEventListener('click', () => {
@@ -23510,6 +23541,7 @@
         resolve(null);
       }
       function onKey(e) {
+        if (isImeKey(e)) return;
         if (e.key === 'Enter') onOk();
         if (e.key === 'Escape') onCancel();
       }
@@ -24932,6 +24964,7 @@
       // Esc clears the filter — same shortcut as the dashboard's
       // search input.
       $flowSearch.addEventListener('keydown', (ev) => {
+        if (isImeKey(ev)) return;
         if (ev.key === 'Escape' && $flowSearch.value) {
           ev.preventDefault();
           $flowSearch.value = '';
@@ -25008,6 +25041,7 @@
       targetEl.addEventListener('gesturestart', handleFlowGestureStart, { passive: false });
       targetEl.addEventListener('gesturechange', handleFlowGestureChange, { passive: false });
       document.addEventListener('keydown', ev => {
+        if (isImeKey(ev)) return;
         if (ev.key === 'Escape' && flowExpanded) setFlowExpanded(false);
         // Backspace / Delete with an edge selected → drop the parent
         // assignment (the child falls back to its default repo group).
@@ -25097,6 +25131,7 @@
           input.addEventListener('input', () => saveFlowDraftInput(node.dataset.draftId, input.value));
           input.addEventListener('change', () => saveFlowDraftInput(node.dataset.draftId, input.value));
           input.addEventListener('keydown', ev => {
+            if (isImeKey(ev)) return;
             if (ev.key === 'Enter') {
               ev.preventDefault();
               ev.stopPropagation();
@@ -26685,6 +26720,7 @@
     } catch (_) { /* queue events are best-effort; never block the replay */ }
 
     _onReplayKeyDownRef = (e) => {
+      if (isImeKey(e)) return;
       if (e.key === 'Escape') {
         e.preventDefault();
         exitReplayMode();
@@ -27668,6 +27704,7 @@
 
     _onConvReplayKeyRef = (e) => {
       if (!_convReplayActive) return;
+      if (isImeKey(e)) return;
       // Typing a line number into the jump-to-line input: this listener is
       // capture-phase on `document`, so it fires before the input's own
       // keydown handler — without this guard, Space/Escape while typing "172"
@@ -27821,6 +27858,7 @@
     const doJump = () => { _convReplayJumpToLine(jumpInput.value); jumpInput.value = ''; };
     jumpBtn.addEventListener('click', doJump);
     jumpInput.addEventListener('keydown', (e) => {
+      if (isImeKey(e)) return;
       e.stopPropagation(); // don't let Space/Esc fall through to the global replay hotkeys while typing
       if (e.key === 'Enter') { e.preventDefault(); doJump(); }
     });
@@ -28589,6 +28627,7 @@
       }
     };
     const onKey = (e) => {
+      if (isImeKey(e)) return;
       if (e.key === 'Escape') { e.preventDefault(); close(); }
       else if (e.key === 'ArrowDown') { e.preventDefault(); sel++; paint(); }
       else if (e.key === 'ArrowUp') { e.preventDefault(); sel--; paint(); }
@@ -28784,6 +28823,7 @@
           window.__cccAttachImagePaste(gcHumanInput);
         }
         gcHumanInput.addEventListener('keydown', ev => {
+          if (isImeKey(ev)) return;
           if (_gcMentionMenuHandleKeydown(ev)) return;
           if (ev.key === 'Enter' && !ev.shiftKey && !ev.isComposing && !isTouchPrimary()) {
             ev.preventDefault();
@@ -28839,6 +28879,7 @@
       // scroll triggers. Without `true` the default kicks in first and
       // bubbles to us, producing a compound jump.
       document.addEventListener('keydown', (ev) => {
+        if (isImeKey(ev)) return;
         if (ev.key !== ' ' && ev.key !== 'Spacebar') return;
         if (ev.shiftKey || ev.ctrlKey || ev.metaKey || ev.altKey) return;
         const gcBody = document.getElementById('gcReaderBody');
@@ -30805,6 +30846,7 @@
           renderSidebar(filterConversations($convSearch.value));
         }
         input.addEventListener('keydown', (e) => {
+          if (isImeKey(e)) return;
           if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); commit(true); }
           else if (e.key === 'Escape') { e.preventDefault(); commit(false); }
         });
@@ -31051,6 +31093,7 @@
     targetEl.querySelectorAll('[data-action="inline-input"]').forEach(inp => {
       inp.addEventListener('click', (ev) => ev.stopPropagation());
       inp.addEventListener('keydown', (ev) => {
+        if (isImeKey(ev)) return;
         if (ev.key === 'Enter') {
           ev.preventDefault(); ev.stopPropagation();
           const card = inp.closest('.kanban-card');
@@ -31820,6 +31863,7 @@
     openBridgeRecoveryModal();
   });
   document.addEventListener('keydown', (ev) => {
+    if (isImeKey(ev)) return;
     const sysPill = ev.target && ev.target.closest && ev.target.closest('[data-open-sys-status]');
     if (sysPill && (ev.key === 'Enter' || ev.key === ' ')) {
       ev.preventDefault();
@@ -37591,6 +37635,7 @@
       };
       $archivedExpandAll.addEventListener('click', (ev) => { ev.stopPropagation(); apply(); });
       $archivedExpandAll.addEventListener('keydown', (ev) => {
+        if (isImeKey(ev)) return;
         if (ev.key === 'Enter' || ev.key === ' ') { ev.preventDefault(); ev.stopPropagation(); apply(); }
       });
     }
@@ -37847,6 +37892,7 @@
       };
       $ghIssuesRefresh.addEventListener('click', runGhIssuesRefresh);
       $ghIssuesRefresh.addEventListener('keydown', (ev) => {
+        if (isImeKey(ev)) return;
         if (ev.key === 'Enter' || ev.key === ' ') runGhIssuesRefresh(ev);
       });
     }
@@ -38013,6 +38059,7 @@
     const $currentObjectGroupToggle = $convList.querySelectorAll('[data-role="current-object-group-toggle"]');
     $currentObjectGroupToggle.forEach(toggle => {
       const toggleCurrentObjectGroup = (ev) => {
+        if (isImeKey(ev)) return;
         if (ev.type === 'keydown' && ev.key !== 'Enter' && ev.key !== ' ') return;
         ev.preventDefault();
         ev.stopPropagation();
@@ -38245,6 +38292,7 @@
       inp.addEventListener('change', () => saveFlowDraftInput(inp.getAttribute('data-draft-id') || '', inp.value));
       inp.addEventListener('blur', () => saveFlowDraftInput(inp.getAttribute('data-draft-id') || '', inp.value));
       inp.addEventListener('keydown', ev => {
+        if (isImeKey(ev)) return;
         if (ev.key === 'Enter') { ev.preventDefault(); inp.blur(); }
         else if (ev.key === 'Escape') { ev.preventDefault(); inp.blur(); }
       });
@@ -38745,6 +38793,7 @@
       };
       $ipWindowFooter.addEventListener('click', (ev) => { ev.stopPropagation(); showAll(); });
       $ipWindowFooter.addEventListener('keydown', (ev) => {
+        if (isImeKey(ev)) return;
         if (ev.key === 'Enter' || ev.key === ' ') { ev.preventDefault(); ev.stopPropagation(); showAll(); }
       });
     }
@@ -38804,6 +38853,7 @@
         toggleFolderGroup(ev);
       });
       hdr.addEventListener('keydown', (ev) => {
+        if (isImeKey(ev)) return;
         if (ev.key !== 'Enter' && ev.key !== ' ') return;
         ev.preventDefault();
         toggleFolderGroup(ev);
@@ -38831,6 +38881,7 @@
       // Don't let clicks/keys on the control toggle the folder collapse.
       box.addEventListener('click', (ev) => ev.stopPropagation());
       box.addEventListener('keydown', (ev) => {
+        if (isImeKey(ev)) return;
         if (ev.key === 'Enter' || ev.key === ' ') ev.stopPropagation();
       });
       const btn = box.querySelector('[data-role="ship-push-all"]');
@@ -38937,6 +38988,7 @@
       };
       badge.addEventListener('click', runCompact);
       badge.addEventListener('keydown', (ev) => {
+        if (isImeKey(ev)) return;
         if (ev.key === 'Enter' || ev.key === ' ') runCompact(ev);
       });
     });
@@ -39950,6 +40002,7 @@
     if (_externalDragState) _externalDragState.droppedInside = true;
   }, true);
   window.addEventListener('keydown', (ev) => {
+    if (isImeKey(ev)) return;
     if (_externalDragState && ev.key === 'Escape') _externalDragState.cancelled = true;
   }, true);
 
@@ -40560,6 +40613,7 @@
       renderSidebar(filterConversations($convSearch.value), { force: true });
     }
     input.addEventListener('keydown', (e) => {
+      if (isImeKey(e)) return;
       if (e.key === 'Enter') { e.preventDefault(); commit(true); }
       else if (e.key === 'Escape') { e.preventDefault(); commit(false); }
     });
@@ -40697,6 +40751,7 @@
       renderSidebar(filterConversations($convSearch.value));
     }
     input.addEventListener('keydown', (e) => {
+      if (isImeKey(e)) return;
       if (e.key === 'Enter') { e.preventDefault(); commit(true); }
       else if (e.key === 'Escape') { e.preventDefault(); commit(false); }
     });
@@ -41704,6 +41759,7 @@
       input.addEventListener('focus', () => refreshSlashCommandMenu(input));
       input.addEventListener('click', () => refreshSlashCommandMenu(input));
       input.addEventListener('keydown', (ev) => {
+        if (isImeKey(ev)) return;
         if (handleSlashCommandKeydown(input, ev)) return;
         if (recallLastComposerCommand(input, ev)) return;
         if (ev.key === 'Enter' && !ev.shiftKey && !isTouchPrimary()) {
@@ -45275,6 +45331,7 @@
     return !!($tab && $tab.classList.contains('is-active'));
   }
   function _uxqPickerOnKeydown(e) {
+    if (isImeKey(e)) return;
     // ⌘K / Ctrl-K — contextual queue picker open, only on the Queue tab.
     const meta = e.metaKey || e.ctrlKey;
     if (meta && (e.key === 'k' || e.key === 'K')) {
@@ -45552,7 +45609,7 @@
     const closeIt = () => _uxqCloseNoteModal();
     overlay.querySelector('.settings-modal-backdrop').addEventListener('click', closeIt);
     overlay.querySelector('.uxq-note-modal-close').addEventListener('click', closeIt);
-    _uxqNoteModalKeydownHandler = (e) => { if (e.key === 'Escape') closeIt(); };
+    _uxqNoteModalKeydownHandler = (e) => { if (isImeKey(e)) return; if (e.key === 'Escape') closeIt(); };
     document.addEventListener('keydown', _uxqNoteModalKeydownHandler);
   }
 
@@ -46014,7 +46071,7 @@
     _uxqInitTicketZoom(modal);
 
     const close = () => { modal.remove(); document.removeEventListener('keydown', onKey, true); };
-    const onKey = (e) => { if (e.key === 'Escape') { e.preventDefault(); close(); } };
+    const onKey = (e) => { if (isImeKey(e)) return; if (e.key === 'Escape') { e.preventDefault(); close(); } };
     document.addEventListener('keydown', onKey, true);
     modal.addEventListener('click', (e) => { if (e.target === modal) close(); });
 
@@ -46034,6 +46091,7 @@
       };
       badge.addEventListener('click', jump);
       badge.addEventListener('keydown', (e) => {
+        if (isImeKey(e)) return;
         if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); jump(); }
       });
     });
@@ -46173,6 +46231,7 @@
       reopenConfirmBtn.addEventListener('click', doReopen);
       if (reopenNoteInput) {
         reopenNoteInput.addEventListener('keydown', (e) => {
+          if (isImeKey(e)) return;
           if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) { e.preventDefault(); doReopen(); }
         });
       }
@@ -46213,6 +46272,7 @@
       markClosedBtn.addEventListener('click', doMarkClosed);
       if (markClosedInput) {
         markClosedInput.addEventListener('keydown', (e) => {
+          if (isImeKey(e)) return;
           if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) { e.preventDefault(); doMarkClosed(); }
         });
       }
@@ -46254,6 +46314,7 @@
       commentBtn.addEventListener('click', doComment);
       if (commentInput) {
         commentInput.addEventListener('keydown', (e) => {
+          if (isImeKey(e)) return;
           if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) { e.preventDefault(); doComment(); }
         });
       }
@@ -46271,6 +46332,7 @@
         if (newVal !== origVal) _uxqSaveField(ref, 'note', newVal);
       });
       titleEl.addEventListener('keydown', (e) => {
+        if (isImeKey(e)) return;
         if (e.key === 'Enter') { e.preventDefault(); titleEl.blur(); }
         if (e.key === 'Escape') { titleEl.textContent = origVal; titleEl.blur(); }
       });
@@ -46345,7 +46407,7 @@
         }
       };
       answerSend.addEventListener('click', submitAnswer);
-      answerInput.addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); submitAnswer(); } });
+      answerInput.addEventListener('keydown', (e) => { if (isImeKey(e)) return; if (e.key === 'Enter') { e.preventDefault(); submitAnswer(); } });
     }
 
     // Gate actions (product gate)
@@ -47321,6 +47383,7 @@
       });
       $health.addEventListener('click', scopeFromRow);
       $health.addEventListener('keydown', (ev) => {
+        if (isImeKey(ev)) return;
         if (ev.key === 'Enter' || ev.key === ' ') { openWorkerSession(ev); nudgeFromBadge(ev); toggleDrain(ev); cycleClaimTypes(ev); cycleWorkers(ev); deleteQueue(ev); openLearnings(ev); openQueueLog(ev); refreshQueue(ev); scopeFromRow(ev); }
       });
     }
@@ -47367,6 +47430,7 @@
         _uxqPickerToggle();
       });
       $trig.addEventListener('keydown', (ev) => {
+        if (isImeKey(ev)) return;
         if (ev.key === 'Enter' || ev.key === ' ') {
           ev.preventDefault();
           _uxqPickerToggle();
@@ -47385,6 +47449,7 @@
         });
         // Keep typing from leaking into the composer while open.
         $filter.addEventListener('keydown', (ev) => {
+          if (isImeKey(ev)) return;
           if (ev.key === 'ArrowDown' || ev.key === 'ArrowUp' || ev.key === 'Enter' || ev.key === 'Escape') {
             ev.stopPropagation();
           }
@@ -47521,6 +47586,7 @@
       if (!ev.target.closest('.fq-more-wrap')) _closeQueueMoreMenu();
     });
     document.addEventListener('keydown', (ev) => {
+      if (isImeKey(ev)) return;
       if (ev.key === 'Escape') _closeQueueMoreMenu();
     });
   }
@@ -47566,6 +47632,7 @@
         if (note) close(note);
       };
       function onKey(ev) {
+        if (isImeKey(ev)) return;
         if (ev.key === 'Escape') close('');
       }
       modal.querySelectorAll('[data-fq-ticket-cancel]').forEach(el => el.addEventListener('click', () => close('')));
@@ -47573,6 +47640,7 @@
       if (textarea) {
         textarea.addEventListener('input', refresh);
         textarea.addEventListener('keydown', (ev) => {
+          if (isImeKey(ev)) return;
           if ((ev.metaKey || ev.ctrlKey) && ev.key === 'Enter') {
             ev.preventDefault();
             submit();
@@ -47982,7 +48050,7 @@
     const fileBtn = $('[data-fq-import-file]');
     let lastPreview = null;   // {tickets, counts, queue}
     const close = () => { document.removeEventListener('keydown', onKey); modal.remove(); };
-    function onKey(ev) { if (ev.key === 'Escape') close(); }
+    function onKey(ev) { if (isImeKey(ev)) return; if (ev.key === 'Escape') close(); }
     const _statusLabel = { new: 'New', exists: 'Exists', filed: 'Filed' };
 
     function renderTickets(tickets, counts, applied) {
@@ -48122,7 +48190,7 @@
     }
 
     modal.querySelectorAll('[data-fq-import-cancel]').forEach(el => el.addEventListener('click', close));
-    queueEl.addEventListener('keydown', (ev) => { if (ev.key === 'Enter') { ev.preventDefault(); previewBtn.click(); } });
+    queueEl.addEventListener('keydown', (ev) => { if (isImeKey(ev)) return; if (ev.key === 'Enter') { ev.preventDefault(); previewBtn.click(); } });
     document.addEventListener('keydown', onKey);
     requestAnimationFrame(() => pathEl.focus());
   }
@@ -48503,6 +48571,7 @@
   }
 
   function _ffcEscHandler(e) {
+    if (isImeKey(e)) return;
     if (e.key === 'Escape') closeFfcModal();
   }
 
@@ -51279,6 +51348,7 @@
     openWorktreesModal(paneEl ? paneEl.getAttribute('data-pane-id') : '');
   });
   document.addEventListener('keydown', function (e) {
+    if (isImeKey(e)) return;
     const $modal = document.getElementById('worktreesModal');
     if (e.key === 'Escape' && $modal && $modal.classList.contains('open')) {
       closeWorktreesModal();
@@ -51465,6 +51535,7 @@
       if (e.target && e.target.dataset && e.target.dataset.statsClose) close();
     });
     document.addEventListener('keydown', (e) => {
+      if (isImeKey(e)) return;
       if (e.key === 'Escape' && $modal.classList.contains('open')) close();
     });
 
@@ -52731,7 +52802,7 @@
     ],
     kimi: [
       { id: 'kimi-code/k3',                          label: 'K3' },
-      { id: 'kimi-code/kimi-for-coding',             label: 'K2.7 Coding' },
+      { id: 'kimi-code/kimi-for-coding',             label: 'K2.8 Preview' },
       { id: 'kimi-code/kimi-for-coding-highspeed',   label: 'K2.7 Coding Highspeed' },
     ],
     opencode: [
@@ -53022,6 +53093,7 @@
     _planUsagePopEl = pop;
 
     _planUsageCloseHandler = (ev) => {
+      if (isImeKey(ev)) return;
       if (ev.type === 'keydown' && ev.key === 'Escape') {
         closePlanUsagePopover();
         return;
@@ -53454,6 +53526,7 @@
     if (engine === 'claude') {
       const claudeRows = Array.from(pop.querySelectorAll('.mp-claude-row[data-model]'));
       pop.__mpNumberHandler = (ev) => {
+        if (isImeKey(ev)) return;
         if (ev.key >= '1' && ev.key <= '9') {
           const row = claudeRows.find((r) => r.querySelector('.mp-num') && r.querySelector('.mp-num').textContent === ev.key);
           if (row) { ev.preventDefault(); ev.stopPropagation(); row.click(); }
@@ -53494,6 +53567,7 @@
         if (v) applyModel(v, false);
       });
       otherInput.addEventListener('keydown', (ev) => {
+        if (isImeKey(ev)) return;
         if (ev.key === 'Enter') {
           ev.preventDefault();
           otherApply.click();
@@ -53527,6 +53601,7 @@
     }
 
     _modelPickerCloseHandler = (ev) => {
+      if (isImeKey(ev)) return;
       if (ev.type === 'keydown' && ev.key === 'Escape') {
         closeModelPicker();
         return;
@@ -55876,6 +55951,7 @@
       reset();
     });
     handle.addEventListener('keydown', event => {
+      if (isImeKey(event)) return;
       if (event.key === 'Home') {
         event.preventDefault();
         reset();
@@ -56450,6 +56526,7 @@
   }
 
   document.addEventListener('keydown', (ev) => {
+    if (isImeKey(ev)) return;
     if (ev.defaultPrevented || ev.metaKey || ev.ctrlKey || ev.altKey) return;
     if (schedulePresentationEscape(ev)) return;
     if (ev.key !== 'ArrowLeft' && ev.key !== 'ArrowRight') return;
@@ -57381,7 +57458,7 @@
     const closeIt = () => closeActivityLogModal();
     overlay.querySelector('.settings-modal-backdrop').addEventListener('click', closeIt);
     overlay.querySelector('.activity-log-modal-close').addEventListener('click', closeIt);
-    _activityLogModalKeydownHandler = (e) => { if (e.key === 'Escape') closeIt(); };
+    _activityLogModalKeydownHandler = (e) => { if (isImeKey(e)) return; if (e.key === 'Escape') closeIt(); };
     document.addEventListener('keydown', _activityLogModalKeydownHandler);
 
     const body = overlay.querySelector('.activity-log-modal-body');
@@ -61672,7 +61749,7 @@
     contextEl.value = context;
     try { if (typeof attachImagePaste === 'function') attachImagePaste(issueEl); } catch (_) {}
     const close = () => { modal.remove(); document.removeEventListener('keydown', onKey, true); };
-    const onKey = (e) => { if (e.key === 'Escape') { e.preventDefault(); close(); } };
+    const onKey = (e) => { if (isImeKey(e)) return; if (e.key === 'Escape') { e.preventDefault(); close(); } };
     document.addEventListener('keydown', onKey, true);
     modal.addEventListener('click', (e) => { if (e.target === modal) close(); });
     modal.querySelector('[data-ask-issue-cancel]').addEventListener('click', close);
@@ -62022,6 +62099,7 @@
 
     form.addEventListener('submit', (ev) => { ev.preventDefault(); submit(); });
     input.addEventListener('keydown', (ev) => {
+      if (isImeKey(ev)) return;
       if (ev.isComposing) return;
       if (ev.key === 'Enter' && !ev.shiftKey) { ev.preventDefault(); submit(); }
     });
@@ -62041,6 +62119,7 @@
     if ($pill) {
       $pill.addEventListener('click', () => _hiTriggerSetup());
       $pill.addEventListener('keydown', (e) => {
+        if (isImeKey(e)) return;
         if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); _hiTriggerSetup(); }
       });
     }
@@ -62308,6 +62387,7 @@
         _setStatusRailWidth(STATUS_RAIL_DEFAULT_WIDTH, true);
       });
       $statusRailResizer.addEventListener('keydown', (e) => {
+        if (isImeKey(e)) return;
         if (!document.body.classList.contains('status-pos-right')) return;
         const current = $statusRail.getBoundingClientRect().width || _savedStatusRailWidth();
         const step = e.shiftKey ? 40 : 20;
@@ -62656,6 +62736,7 @@
     }, 180);
   });
   $convSearch.addEventListener('keydown', (ev) => {
+    if (isImeKey(ev)) return;
     if (ev.key === 'Enter') rememberConversationSearchQuery($convSearch.value);
   });
   $convSearch.addEventListener('change', () => rememberConversationSearchQuery($convSearch.value));
@@ -65359,6 +65440,7 @@
     }
   }, true);
   document.addEventListener('keydown', ev => {
+    if (isImeKey(ev)) return;
     if (ev.target.closest && ev.target.closest('.conv-worker-history')) ev.stopPropagation();
   }, true);
   document.addEventListener('toggle', ev => {
@@ -66297,6 +66379,7 @@
     };
     el.addEventListener('click', (ev) => { ev.stopPropagation(); showAll(); });
     el.addEventListener('keydown', (ev) => {
+      if (isImeKey(ev)) return;
       if (ev.key === 'Enter' || ev.key === ' ') { ev.preventDefault(); ev.stopPropagation(); showAll(); }
     });
   }
@@ -67104,6 +67187,7 @@
       }
     });
     document.addEventListener('keydown', (e) => {
+      if (isImeKey(e)) return;
       if (e.key === 'Escape' && $menu.style.display === 'flex') setOpen(false);
     });
     // Hover style for items inside the menu
@@ -68397,6 +68481,7 @@
     $kptNewSession.addEventListener('focus', routeToNewSession);
     $kptNewSession.addEventListener('input', routeToNewSession);
     $kptNewSession.addEventListener('keydown', (e) => {
+      if (isImeKey(e)) return;
       if (e.key === 'Enter') { e.preventDefault(); routeToNewSession(); }
     });
   }
@@ -68577,6 +68662,7 @@
     $cpInput.addEventListener('focus', () => refreshSlashCommandMenu($cpInput));
     $cpInput.addEventListener('click', () => refreshSlashCommandMenu($cpInput));
     $cpInput.addEventListener('keydown', (e) => {
+      if (isImeKey(e)) return;
       if (handleSlashCommandKeydown($cpInput, e)) return;
       if (recallLastComposerCommand($cpInput, e)) return;
       // Enter submits, Shift+Enter inserts a newline. Guard against IME
@@ -68724,6 +68810,7 @@
   if ($updLaterBtn) $updLaterBtn.addEventListener('click', updCloseModal);
   if ($updBackdrop) $updBackdrop.addEventListener('click', updCloseModal);
   document.addEventListener('keydown', (e) => {
+    if (isImeKey(e)) return;
     if (e.key === 'Escape' && $updModal && $updModal.classList.contains('open')) {
       updCloseModal();
     }
@@ -69705,6 +69792,7 @@
     );
   }
   function _sysTrapTab(e) {
+    if (isImeKey(e)) return;
     if (e.key !== 'Tab') return;
     if (!$sysModal || !$sysModal.classList.contains('open')) return;
     const items = _sysFocusables();
@@ -69722,47 +69810,76 @@
     const $btnStatus = document.getElementById('sysTabBtnStatus');
     const $btnHealth = document.getElementById('sysTabBtnHealth');
     const $btnProcesses = document.getElementById('sysTabBtnProcesses');
+    const $btnJobs = document.getElementById('sysTabBtnJobs');
     const $contentStatus = document.getElementById('sysTabContentStatus');
     const $contentHealth = document.getElementById('sysTabContentHealth');
     const $contentProcesses = document.getElementById('sysTabContentProcesses');
+    const $contentJobs = document.getElementById('sysTabContentJobs');
     
     if (tabName === 'health') {
       if ($btnStatus) $btnStatus.classList.remove('active');
       if ($btnHealth) $btnHealth.classList.add('active');
       if ($btnProcesses) $btnProcesses.classList.remove('active');
+      if ($btnJobs) $btnJobs.classList.remove('active');
       if ($contentStatus) $contentStatus.style.display = 'none';
       if ($contentHealth) $contentHealth.style.display = 'block';
       if ($contentProcesses) $contentProcesses.style.display = 'none';
+      if ($contentJobs) $contentJobs.style.display = 'none';
       if ($sysDialog) $sysDialog.classList.remove('is-wide');
       
       _pollSystemHealth();
       if (_sysHealthTimer) clearInterval(_sysHealthTimer);
       _sysHealthTimer = setInterval(_pollSystemHealth, 4000);
       if (_sysProcessesTimer) { clearInterval(_sysProcessesTimer); _sysProcessesTimer = null; }
+      if (_sysJobsTimer) { clearInterval(_sysJobsTimer); _sysJobsTimer = null; }
     } else if (tabName === 'processes') {
       if ($btnStatus) $btnStatus.classList.remove('active');
       if ($btnHealth) $btnHealth.classList.remove('active');
       if ($btnProcesses) $btnProcesses.classList.add('active');
+      if ($btnJobs) $btnJobs.classList.remove('active');
       if ($contentStatus) $contentStatus.style.display = 'none';
       if ($contentHealth) $contentHealth.style.display = 'none';
       if ($contentProcesses) $contentProcesses.style.display = 'block';
+      if ($contentJobs) $contentJobs.style.display = 'none';
       if ($sysDialog) $sysDialog.classList.add('is-wide');
       
       window._lastProcPromise = _pollSystemProcesses(true);
       if (_sysProcessesTimer) clearInterval(_sysProcessesTimer);
       _sysProcessesTimer = setInterval(_pollSystemProcesses, 5000);
       if (_sysHealthTimer) { clearInterval(_sysHealthTimer); _sysHealthTimer = null; }
+      if (_sysJobsTimer) { clearInterval(_sysJobsTimer); _sysJobsTimer = null; }
+    } else if (tabName === 'jobs') {
+      if ($btnStatus) $btnStatus.classList.remove('active');
+      if ($btnHealth) $btnHealth.classList.remove('active');
+      if ($btnProcesses) $btnProcesses.classList.remove('active');
+      if ($btnJobs) $btnJobs.classList.add('active');
+      if ($contentStatus) $contentStatus.style.display = 'none';
+      if ($contentHealth) $contentHealth.style.display = 'none';
+      if ($contentProcesses) $contentProcesses.style.display = 'none';
+      if ($contentJobs) $contentJobs.style.display = 'block';
+      if ($sysDialog) $sysDialog.classList.add('is-wide');
+      
+      if (window.ScheduledJobsPanel) window.ScheduledJobsPanel.poll(true);
+      if (_sysJobsTimer) clearInterval(_sysJobsTimer);
+      _sysJobsTimer = setInterval(() => {
+        if (window.ScheduledJobsPanel) window.ScheduledJobsPanel.poll(false);
+      }, 10000);
+      if (_sysHealthTimer) { clearInterval(_sysHealthTimer); _sysHealthTimer = null; }
+      if (_sysProcessesTimer) { clearInterval(_sysProcessesTimer); _sysProcessesTimer = null; }
     } else {
       if ($btnStatus) $btnStatus.classList.add('active');
       if ($btnHealth) $btnHealth.classList.remove('active');
       if ($btnProcesses) $btnProcesses.classList.remove('active');
+      if ($btnJobs) $btnJobs.classList.remove('active');
       if ($contentStatus) $contentStatus.style.display = 'block';
       if ($contentHealth) $contentHealth.style.display = 'none';
       if ($contentProcesses) $contentProcesses.style.display = 'none';
+      if ($contentJobs) $contentJobs.style.display = 'none';
       if ($sysDialog) $sysDialog.classList.remove('is-wide');
       
       if (_sysHealthTimer) { clearInterval(_sysHealthTimer); _sysHealthTimer = null; }
       if (_sysProcessesTimer) { clearInterval(_sysProcessesTimer); _sysProcessesTimer = null; }
+      if (_sysJobsTimer) { clearInterval(_sysJobsTimer); _sysJobsTimer = null; }
     }
   }
 
@@ -69809,6 +69926,7 @@
     if (_sysSpawnedTickTimer) { clearInterval(_sysSpawnedTickTimer); _sysSpawnedTickTimer = null; }
     if (_sysHealthTimer) { clearInterval(_sysHealthTimer); _sysHealthTimer = null; }
     if (_sysProcessesTimer) { clearInterval(_sysProcessesTimer); _sysProcessesTimer = null; }
+    if (_sysJobsTimer) { clearInterval(_sysJobsTimer); _sysJobsTimer = null; }
     if ($sysDialog) $sysDialog.classList.remove('is-wide');
     document.removeEventListener('keydown', _sysTrapTab, true);
     const back = (_sysReturnFocus && document.contains(_sysReturnFocus)
@@ -69836,10 +69954,13 @@
   const $tabBtnStatus = document.getElementById('sysTabBtnStatus');
   const $tabBtnHealth = document.getElementById('sysTabBtnHealth');
   const $tabBtnProcesses = document.getElementById('sysTabBtnProcesses');
+  const $tabBtnJobs = document.getElementById('sysTabBtnJobs');
   if ($tabBtnStatus) $tabBtnStatus.addEventListener('click', () => sysSelectTab('status'));
   if ($tabBtnHealth) $tabBtnHealth.addEventListener('click', () => sysSelectTab('health'));
   if ($tabBtnProcesses) $tabBtnProcesses.addEventListener('click', () => sysSelectTab('processes'));
+  if ($tabBtnJobs) $tabBtnJobs.addEventListener('click', () => sysSelectTab('jobs'));
   document.addEventListener('keydown', (e) => {
+    if (isImeKey(e)) return;
     if (e.key === 'Escape' && $sysModal && $sysModal.classList.contains('open')) {
       if (_sysRestartInFlight) {
         showOpToast('Restart is still running in the background.', 'info');
@@ -70610,6 +70731,7 @@
   }
 
   document.addEventListener('keydown', (e) => {
+    if (isImeKey(e)) return;
     if (e.key === 'Escape' && $whatsNewModal && $whatsNewModal.classList.contains('open')) {
       whatsNewCloseModal();
     }
@@ -71225,6 +71347,7 @@
     hideSidebarRefreshMenu();
   });
   document.addEventListener('keydown', (ev) => {
+    if (isImeKey(ev)) return;
     if (ev.key === 'Escape' && $sidebarRefreshMenu && $sidebarRefreshMenu.style.display !== 'none') {
       hideSidebarRefreshMenu();
     }
@@ -71826,7 +71949,7 @@
     textArea.value = promptText;
     try { if (typeof attachImagePaste === 'function') attachImagePaste(textArea); } catch (_) {}
     const close = () => { modal.remove(); document.removeEventListener('keydown', onKey, true); };
-    const onKey = (e) => { if (e.key === 'Escape') { e.preventDefault(); close(); } };
+    const onKey = (e) => { if (isImeKey(e)) return; if (e.key === 'Escape') { e.preventDefault(); close(); } };
     document.addEventListener('keydown', onKey, true);
     modal.addEventListener('click', (e) => { if (e.target === modal) close(); });
     modal.querySelector('[data-ux-copy]').addEventListener('click', async () => {
@@ -72171,6 +72294,7 @@
     }
     saveBtn.addEventListener('click', save);
     noteEl.addEventListener('keydown', (e) => {
+      if (isImeKey(e)) return;
       if ((e.metaKey || e.ctrlKey) && e.key === 'Enter') save();
       e.stopPropagation();
     });
@@ -72222,6 +72346,7 @@
   }
 
   function annHandleKeydown(e) {
+    if (isImeKey(e)) return;
     if (e.key === 'Escape' && annotationState) {
       e.preventDefault();
       annStop();
@@ -72388,6 +72513,7 @@
     }
     saveBtn.addEventListener('click', save);
     noteEl.addEventListener('keydown', (e) => {
+      if (isImeKey(e)) return;
       if ((e.metaKey || e.ctrlKey) && e.key === 'Enter') save();
       e.stopPropagation();
     });
@@ -72651,6 +72777,7 @@
     if ($backdrop) $backdrop.addEventListener('click', closeShare);
     if ($close) $close.addEventListener('click', closeShare);
     document.addEventListener('keydown', (ev) => {
+      if (isImeKey(ev)) return;
       if (ev.key === 'Escape' && $modal.classList.contains('open')) closeShare();
     });
     if ($copy) $copy.addEventListener('click', async () => {
@@ -72964,6 +73091,7 @@
   if ($bugBackdrop) $bugBackdrop.addEventListener('click', bugCloseModal);
   if ($bugCancelBtn) $bugCancelBtn.addEventListener('click', bugCloseModal);
   document.addEventListener('keydown', (e) => {
+    if (isImeKey(e)) return;
     if (e.key === 'Escape' && $bugModal && $bugModal.classList.contains('open')) {
       bugCloseModal();
     }
@@ -73727,6 +73855,7 @@
   if ($networkCancelBtn) $networkCancelBtn.addEventListener('click', networkClose);
   if ($networkSaveBtn) $networkSaveBtn.addEventListener('click', networkSave);
   document.addEventListener('keydown', (e) => {
+    if (isImeKey(e)) return;
     if (e.key === 'Escape' && $networkModal && $networkModal.classList.contains('open')) {
       networkClose();
     }
@@ -74009,12 +74138,14 @@
   if ($fedBackdrop) $fedBackdrop.addEventListener('click', fedClose);
   if ($fedCloseBtn) $fedCloseBtn.addEventListener('click', fedClose);
   document.addEventListener('keydown', (e) => {
+    if (isImeKey(e)) return;
     if (e.key === 'Escape' && $fedModal && $fedModal.classList.contains('open')) {
       fedClose();
     }
   });
   if ($fedSelfNameSave) $fedSelfNameSave.addEventListener('click', fedSaveSelfName);
   if ($fedSelfName) $fedSelfName.addEventListener('keydown', (e) => {
+    if (isImeKey(e)) return;
     if (e.key === 'Enter') fedSaveSelfName();
   });
   if ($fedPairMode) $fedPairMode.addEventListener('change', () => {
@@ -74320,6 +74451,7 @@
     } catch (_) {}
   });
   document.addEventListener('keydown', (e) => {
+    if (isImeKey(e)) return;
     if (e.key === 'Escape' && $handoffModal && $handoffModal.classList.contains('open')) {
       handoffClose();
     }
@@ -74570,6 +74702,7 @@
       el.addEventListener('click', _gcManageClose);
     });
     document.addEventListener('keydown', (ev) => {
+      if (isImeKey(ev)) return;
       if (ev.key === 'Escape' && !$gcManageModal.hidden) _gcManageClose();
     });
   }
@@ -74948,6 +75081,7 @@
     }
     folderPickerEls.backdrop.classList.add('visible');
     folderPickerKeyHandler = (ev) => {
+      if (isImeKey(ev)) return;
       if (ev.key === 'Escape') { ev.stopPropagation(); closeWebFolderPicker(); }
     };
     document.addEventListener('keydown', folderPickerKeyHandler, true);
@@ -74965,6 +75099,7 @@
     if (parent) folderPickerNavigate(parent);
   });
   if (folderPickerEls.path) folderPickerEls.path.addEventListener('keydown', (ev) => {
+    if (isImeKey(ev)) return;
     if (ev.key === 'Enter') {
       ev.preventDefault();
       folderPickerNavigate(folderPickerEls.path.value);
@@ -75098,6 +75233,7 @@
     }).catch(() => showOpToast('Could not open in Finder: network error', 'error'));
   });
   document.addEventListener('keydown', (ev) => {
+    if (isImeKey(ev)) return;
     if (ev.key !== 'Enter' && ev.key !== ' ') return;
     const el = ev.target && ev.target.closest && ev.target.closest('[data-action="reveal-path"]');
     if (!el) return;
@@ -75159,6 +75295,7 @@
     }
     if (spawnCwdInput) {
       spawnCwdInput.addEventListener('keydown', (ev) => {
+        if (isImeKey(ev)) return;
         if (ev.key === 'ArrowDown') {
           ev.preventDefault();
           openSpawnCwdMenu('');
@@ -75460,6 +75597,7 @@
     };
     createBtn.addEventListener('click', submit);
     nameEl.addEventListener('keydown', e => {
+      if (isImeKey(e)) return;
       if (e.key === 'Enter') { e.preventDefault(); submit(); }
     });
   }
@@ -77702,6 +77840,7 @@
     }
 
     $settingsModal.addEventListener('keydown', (e) => {
+      if (isImeKey(e)) return;
       if (e.key === 'Escape') {
         e.stopPropagation();
         if ($settingsSearchInput && $settingsSearchInput.value) {
@@ -77804,6 +77943,7 @@
   if ($cmdkInput) {
     $cmdkInput.addEventListener('input', (e) => renderCmdkList(e.target.value));
     $cmdkInput.addEventListener('keydown', (e) => {
+      if (isImeKey(e)) return;
       if (e.key === 'ArrowDown') { e.preventDefault(); moveCmdkSelection(1); }
       else if (e.key === 'ArrowUp') { e.preventDefault(); moveCmdkSelection(-1); }
       else if (e.key === 'Enter') { e.preventDefault(); commitCmdkSelection(); }
@@ -77826,6 +77966,7 @@
   // ── Global keyboard shortcuts ─────────────────────────────────
   // ⌘K / ⌘P → open search; ⌘\ → toggle conversation pane; ⌘N → new session.
   document.addEventListener('keydown', (e) => {
+    if (isImeKey(e)) return;
     const meta = e.metaKey || e.ctrlKey;
     if (meta && (e.key === 'k' || e.key === 'K' || e.key === 'p' || e.key === 'P')) {
       // Don't hijack the browser address bar combo when not focused on us.
@@ -78026,6 +78167,7 @@
     }
 
     $chatFindInput.addEventListener('keydown', e => {
+      if (isImeKey(e)) return;
       if (e.key === 'Enter') {
         e.preventDefault();
         if (_chatFindInputTimer) clearTimeout(_chatFindInputTimer);
@@ -79263,7 +79405,10 @@
         // The 400ms arm guard only applies to user gestures, not the
         // auto-timeout (evt is undefined when the timer fires).
         if (evt && performance.now() < armedAt) return;
-        if (evt && evt.type === 'keydown') evt.preventDefault();
+        if (evt && evt.type === 'keydown') {
+          if (isImeKey(evt)) return;
+          evt.preventDefault();
+        }
         if (dismissed) return;
         dismissed = true;
         if (root.__heroAutoTimer) clearTimeout(root.__heroAutoTimer);

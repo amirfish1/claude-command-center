@@ -925,6 +925,7 @@
 
   function onKeyDown(e) {
     if (!state.active) return;
+    if (e && (e.isComposing || e.keyCode === 229)) return;
     const key = e.key;
     const tag = (e.target && e.target.tagName) || '';
     if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') {
