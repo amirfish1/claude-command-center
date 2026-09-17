@@ -2956,6 +2956,26 @@ def session_live_status(session_id, session_cwd):
                 binding = _kap.kap_runtime_binding_cached(session_id)
                 if binding and binding.get("runtime_id"):
                     result["runtime_binding"] = binding["runtime_id"]
+                # Wire-tail cross-check (CCC-1146). The daemon's busy is
+                # authoritative while the turn is healthy, but a wedged
+                # serving process can leave it stuck true forever -- the pane
+                # then shows a bare "Working…" with no tool name and never
+                # reaches the stuck card. Surface the wire's dangling tool so
+                # the indicator can name WHAT is running, and stamp the same
+                # stale-mid-turn contract the ACP branch computes so a wire
+                # silent past CCC_STALE_TOOL_SEC flips the pane from
+                # "Working…" to the stuck card (which wins client-side).
+                try:
+                    idx_entry = _core._kimi_session_index().get(session_id) or {}
+                    tail_meta = _core._kimi_wire_tail_meta(idx_entry.get("session_dir"))
+                    result["last_event_type"] = tail_meta.get("last_event_type")
+                    if tail_meta.get("pending_tool"):
+                        result["pending_tool"] = tail_meta["pending_tool"]
+                        result["pending_tool_ts"] = tail_meta.get("wire_mtime") or 0
+                    result.update(_core._kimi_stale_tool_fields(
+                        tail_meta, acp_active=bool(status.get("busy"))))
+                except Exception:
+                    pass
                 return result
         except Exception:
             pass

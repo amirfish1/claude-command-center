@@ -8015,7 +8015,13 @@
       const _activeItem = _liveMatches ? codexActiveItemLabel(liveStatus.codexAppServerActiveItem) : { label: '', detail: '' };
       const _tokTxt = _liveMatches ? codexTokenUsageText(liveStatus.codexAppServerTokenUsage) : '';
       const _isCodex = !!currentSession && (currentSession.source === 'codex' || currentSession.engine === 'codex');
-      const _toolTxt = _activeItem.label || (_isCodex ? 'Thinking…' : (_webuiPane ? 'Working…' : 'Generating…'));
+      // Kimi webui: the server stamps the wire tail's dangling tool
+      // (Agent/Bash/...) on the status payload — surface it so a long turn
+      // reads as "▶ Agent" instead of a bare "Working…" that explains
+      // nothing about what the session is actually doing (CCC-1146).
+      const _kimiPendingTool = (!_isCodex && _webuiPane && _liveMatches && liveStatus.pendingTool)
+        ? String(liveStatus.pendingTool) : '';
+      const _toolTxt = _activeItem.label || _kimiPendingTool || (_isCodex ? 'Thinking…' : (_webuiPane ? 'Working…' : 'Generating…'));
       const _detailTxt = _activeItem.label ? _activeItem.detail : '';
       const _silenceSec = (_liveMatches && liveStatus.staleToolAgeS) || (ageSec < 9000 ? ageSec : 0);
       const showGeneratingWakeBtn = _silenceSec >= 60 && !hasWakeProgress;
@@ -8027,13 +8033,15 @@
       // busy signal — no fake per-token streaming); other engines keep the
       // generic pulse.
       inline.innerHTML = (_webuiPane && !_activeItem.label ? _kimiMoonHtml() : '<span class="cl-pulse"></span>')
-        + '<span class="cl-tool">' + (_activeItem.label ? '▶ ' : '') + escapeHtml(_toolTxt) + '</span>'
+        + '<span class="cl-tool">' + ((_activeItem.label || _kimiPendingTool) ? '▶ ' : '') + escapeHtml(_toolTxt) + '</span>'
         + (_detailTxt ? '<span class="cl-file">' + escapeHtml(truncate(_detailTxt, 80)) + '</span>' : '')
         + (_tokTxt ? '<span class="cl-age cl-tokens">' + escapeHtml(_tokTxt) + '</span>' : '')
         + _wakeBtnHtml;
       inline.title = _activeItem.label
         ? ('Codex is running: ' + _activeItem.label + (_activeItem.detail ? ' - ' + _activeItem.detail : '') + (_tokTxt ? ' (' + _tokTxt + ')' : ''))
-        : ('Session is live - model is generating' + (_tokTxt ? ' (' + _tokTxt + ')' : ''));
+        : (_kimiPendingTool
+          ? ('Kimi is running: ' + _kimiPendingTool + ' (from the wire transcript; the tool has not returned yet)')
+          : ('Session is live - model is generating' + (_tokTxt ? ' (' + _tokTxt + ')' : '')));
       _reanchorToTailUnlessOnlyTransientBetween($view, inline);
       _liveStripShown = true;
       return;
