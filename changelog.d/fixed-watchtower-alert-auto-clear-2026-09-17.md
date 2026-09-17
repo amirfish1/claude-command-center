@@ -1,0 +1,1 @@
+- Auto-clear stale WatchTower activity errors and combine identical current failures across queues.

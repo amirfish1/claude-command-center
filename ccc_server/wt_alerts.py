@@ -49,8 +49,11 @@ from ccc_server import core as _core
 # How much of activity.log to read for ERROR lines. ~1 MB is roughly a week
 # of a busy fleet's log; the time window below is the real bound.
 _LOG_TAIL_BYTES = 1_000_000
-# Only ERROR lines newer than this are alerts; older ones are history.
-_LOG_WINDOW_S = 48 * 3600
+# Activity-log ERRORs are historical observations, unlike launch-failure
+# records which persist until WatchTower reports a recovery. Keep one visible
+# only while it is actively recurring; otherwise a recovered transient stays
+# out of the queue panel and remains available in activity.log.
+_ACTIVITY_ERROR_FRESH_S = 15 * 60
 # Cap on alerts returned (the UI shows a strip, not a log).
 _MAX_ALERTS = 20
 # Acks older than this are pruned from the ack file -- any alert they would
@@ -199,7 +202,7 @@ def _error_headline(detail):
 
 
 def _parse_error_lines(text, now):
-    cutoff = now - _LOG_WINDOW_S
+    cutoff = now - _ACTIVITY_ERROR_FRESH_S
     groups = {}
     for line in text.splitlines():
         m = _LOG_LINE_RE.match(line)
@@ -216,29 +219,36 @@ def _parse_error_lines(text, now):
         queue = (m.group(3) or "").strip().upper() or "WATCHTOWER"
         detail = m.group(4).strip()
         msg = _normalize_error_message(detail)
-        key = (queue, _short_hash(msg.lower()))
+        # The same dependency failure (for example lost `gh` auth) can hit
+        # several GitHub-backed queues at once. One alert with its affected
+        # queue list is actionable; a stack of copies is not.
+        key = _short_hash(msg.lower())
         g = groups.get(key)
         if g is None:
             g = groups[key] = {
-                "queue": queue,
                 "title": _error_headline(detail),
                 "detail": msg,
                 "first_ts": ts,
                 "ts": ts,
                 "count": 0,
+                "queues": set(),
             }
         g["count"] += 1
+        g["queues"].add(queue)
         if ts > g["ts"]:
             g["ts"] = ts
         if ts < g["first_ts"]:
             g["first_ts"] = ts
     out = []
-    for (queue, h), g in groups.items():
+    for h, g in groups.items():
+        queues = sorted(g["queues"])
+        queue = queues[0] if len(queues) == 1 else "WATCHTOWER"
         out.append({
             "id": "log:%s:%s" % (queue, h),
             "kind": "activity_error",
             "severity": "warning",
             "queue": queue,
+            "queues": queues,
             "engine": "",
             "model": "",
             "worker_id": "",
@@ -276,7 +286,7 @@ def activity_error_alerts(wt_home=None, now=None):
             cached = _log_cache["alerts"]
             # Age fields depend on `now`; refresh them on the cached copies.
             return [dict(a, age_seconds=max(0, int(now - a["ts"]))) for a in cached
-                    if a["ts"] >= now - _LOG_WINDOW_S]
+                    if a["ts"] >= now - _ACTIVITY_ERROR_FRESH_S]
     try:
         with open(path, "rb") as f:
             if st.st_size > _LOG_TAIL_BYTES:

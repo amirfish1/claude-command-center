@@ -44001,6 +44001,11 @@
   function _wtAlertRowHtml(a) {
     const sev = String(a.severity || 'error');
     const queue = String(a.queue || '').toUpperCase();
+    const queues = (Array.isArray(a.queues) && a.queues.length ? a.queues : [queue])
+      .map(value => String(value || '').toUpperCase()).filter(Boolean);
+    const queueLabel = queues.length > 2
+      ? queues.slice(0, 2).join(' · ') + ' +' + (queues.length - 2)
+      : queues.join(' · ');
     const title = String(a.title || 'WatchTower error');
     const detail = String(a.detail || '');
     const count = Number(a.count) || 1;
@@ -44010,18 +44015,18 @@
       const until = new Date(a.cooldown_until_iso);
       if (!isNaN(until)) meta += (meta ? ' · ' : '') + 'retry ' + until.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
     }
-    const tip = [queue, title, detail, a.ts_iso ? 'last ' + a.ts_iso : '',
+    const tip = [queues.join(', '), title, detail, a.ts_iso ? 'last ' + a.ts_iso : '',
       a.cooldown_until_iso ? 'cooldown until ' + a.cooldown_until_iso : '',
       a.log ? 'log: ' + a.log : ''].filter(Boolean).join('\n');
     return '<div class="fq-alert-row is-' + escapeAttr(sev) + '" data-wt-alert-id="' + escapeAttr(a.id || '') + '"'
-      + ' data-wt-alert-queue="' + escapeAttr(queue) + '" title="' + escapeAttr(tip) + '">'
+      + ' data-wt-alert-queue="' + escapeAttr(queues.length === 1 ? queue : 'WATCHTOWER') + '" title="' + escapeAttr(tip) + '">'
       + '<span class="fq-alert-sev" aria-hidden="true"></span>'
       // Chips (queue · count · age) on line 1, the human-readable reason on
       // its own line (2-line clamp), raw detail last. At the 260px rail
       // width a single-line layout truncated the reason to two words.
       + '<div class="fq-alert-main">'
       +   '<div class="fq-alert-top">'
-      +     (queue ? '<span class="fq-alert-queue">' + escapeHtml(queue) + '</span>' : '')
+      +     (queueLabel ? '<span class="fq-alert-queue">' + escapeHtml(queueLabel) + '</span>' : '')
       +     (count > 1 ? '<span class="fq-alert-count" title="occurrences">×' + count + '</span>' : '')
       +     (meta ? '<span class="fq-alert-meta">' + escapeHtml(meta) + '</span>' : '')
       +   '</div>'
@@ -44068,7 +44073,9 @@
       return;
     }
     const total = Math.max(alerts.length, Number(data.total) || 0);
-    const queues = Array.from(new Set(alerts.map(a => String(a.queue || '').toUpperCase()).filter(Boolean)));
+    const queues = Array.from(new Set(alerts.flatMap(a => (
+      Array.isArray(a.queues) && a.queues.length ? a.queues : [a.queue]
+    )).map(queue => String(queue || '').toUpperCase()).filter(Boolean)));
     const summary = total + (total === 1 ? ' issue' : ' issues')
       + (queues.length ? ' · ' + queues.slice(0, 4).join(', ') + (queues.length > 4 ? ' +' + (queues.length - 4) : '') : '');
     $strip.innerHTML =
