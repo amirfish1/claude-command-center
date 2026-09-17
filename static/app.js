@@ -51153,14 +51153,14 @@
         kindCls = 'wp-kind-worktree'; kindLabel = 'worktree';
         kindTitle = 'git worktree' + inferTitle;
       } else {
-        kindCls = 'wp-kind-clone'; kindLabel = 'shared clone';
+        kindCls = 'wp-kind-clone';
         kindTitle = 'shared clone - main repo working tree' + inferTitle;
       }
     } else if (w.is_worktree) {
       kindCls = 'wp-kind-worktree'; kindLabel = 'worktree';
       kindTitle = 'worktree (not the shared clone)';
     } else if (w.is_repo) {
-      kindCls = 'wp-kind-clone'; kindLabel = 'shared clone';
+      kindCls = 'wp-kind-clone';
       kindTitle = 'shared clone - main repo working tree';
     } else if (w.exists) {
       kindCls = 'wp-kind-other'; kindLabel = 'not a git repo';
@@ -51172,7 +51172,7 @@
     }
     if (setCwdSid) {
       parts.push('<button type="button" class="wp-kind ' + kindCls + ' wp-set-cwd" data-action="set-cwd" data-sid="' + escapeAttr(setCwdSid) + '" title="' + escapeHtml(kindTitle) + '">' + escapeHtml(kindLabel) + '</button>');
-    } else {
+    } else if (kindCls !== 'wp-kind-clone') {
       parts.push('<span class="wp-kind ' + kindCls + '" title="' + escapeHtml(kindTitle) + '">' + kindLabel + '</span>');
     }
     // The responsive layout hides the descriptive WORKTREE chip in a narrow

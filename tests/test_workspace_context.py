@@ -8,6 +8,12 @@ PROJECT_ROOT = pathlib.Path(__file__).resolve().parents[1]
 
 
 class WorkspaceContextTests(unittest.TestCase):
+    def test_shared_clone_is_not_rendered_as_a_workspace_chip(self):
+        app_js = (PROJECT_ROOT / "static" / "app.js").read_text(encoding="utf-8")
+
+        self.assertNotIn("kindLabel = 'shared clone'", app_js)
+        self.assertIn("if (kindCls !== 'wp-kind-clone') {", app_js)
+
     def test_worktree_context_keeps_a_visible_glyph_when_kind_chip_is_hidden(self):
         app_js = (PROJECT_ROOT / "static" / "app.js").read_text(encoding="utf-8")
         app_css = (PROJECT_ROOT / "static" / "app.css").read_text(encoding="utf-8")
