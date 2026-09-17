@@ -44757,7 +44757,7 @@
     const html = rows.map((row, i) => {
       const item = row.item;
       const ref = _uxqItemRef(item);
-      const title = String(item.note || item.title || item.text || '').split('\n')[0];
+      const title = String(item.title || item.note || item.text || '').split('\n')[0];
       const state = row.resolved ? 'Resolved' : 'Worked · ' + String(item.status || 'open').replace(/_/g, ' ');
       const absolute = new Date(row.at).toLocaleString();
       const dates = [item.claimed_at ? 'Claimed: ' + item.claimed_at : '', item.closed_at ? 'Closed: ' + item.closed_at : ''].filter(Boolean).join('\n');
