@@ -3965,6 +3965,47 @@
     const e = F2_LAUNCH_ENGINES.find(x => x.id === launch.engine);
     return e ? e.label : String(launch.engine || '');
   }
+  // The persistent picker history retains the complete launch triple. Unlike
+  // the new-session strip (which deliberately folds effort variants into one
+  // model chip), this continuation popup must carry the recorded effort too:
+  // choosing a quick pick should recreate the exact configuration that was
+  // useful before.
+  function f2TopLaunchPicks() {
+    try {
+      const seen = new Set();
+      return (Array.isArray(_cachedServerModelPicks) ? _cachedServerModelPicks : [])
+        .filter((pick) => {
+          const engine = String(pick && pick.engine || '');
+          const model = String(pick && pick.model || '');
+          const effort = String(pick && pick.effort || '');
+          if (!F2_LAUNCH_ENGINES.some(e => e.id === engine)) return false;
+          if (!f2ModelsForEngine(engine).some(option => option.id === model)) return false;
+          if (effort && !f2EffortsForEngine(engine).some(option => option.id === effort)) return false;
+          const key = JSON.stringify([engine, model, effort]);
+          if (seen.has(key)) return false;
+          seen.add(key);
+          return true;
+        }).slice(0, 4);
+    } catch (_) { return []; }
+  }
+  function f2QuickPickHtml() {
+    const picks = f2TopLaunchPicks();
+    if (!picks.length) return '';
+    return '<div class="f2c-quick-picks" role="group" aria-label="Recently used launch configurations">'
+      + '<span class="f2c-quick-picks-label">Quick picks</span>'
+      + picks.map((pick) => {
+        const launch = { engine: pick.engine, model: pick.model, effort: pick.effort || '' };
+        const effort = f2EffortLabel(launch);
+        const label = f2EngineLabel(launch) + ' · ' + f2ModelLabel(launch)
+          + (effort ? ' · ' + effort : '');
+        return '<button type="button" class="f2c-quick-pick" data-f2-launch-pick'
+          + ' data-engine="' + escapeAttr(launch.engine) + '"'
+          + ' data-model="' + escapeAttr(launch.model) + '"'
+          + ' data-effort="' + escapeAttr(launch.effort) + '"'
+          + ' title="Launches on ' + escapeAttr(label) + '">' + escapeHtml(label) + '</button>';
+      }).join('')
+      + '</div>';
+  }
   // The launch spec collapses to a two-word chip on the row; the actual
   // engine/model/effort choice happens in this follow-up dialog, so the route
   // never grows past one line. Reads as a sentence, not a form; model options
@@ -3980,6 +4021,7 @@
       + (efforts.length
           ? '<span>at</span>' + f2SelectHtml('effort', efforts, launch.effort) + '<span>effort</span>'
           : '')
+      + f2QuickPickHtml()
       // No Done button: the caret that opened the picker closes it, and every
       // change applies immediately, so there is nothing to confirm.
       + '</div>';
@@ -4392,6 +4434,32 @@
         ev.preventDefault();
         chipSt.configOpen = !chipSt.configOpen;
         try { f2RenderComposer(chipPaneId, { force: true }); } catch (_) {}
+        // Load the persisted usage history only when this chooser is opened.
+        // The first render can use its local cache immediately; a resolved
+        // fetch repaints the same open pane with the durable top picks.
+        if (chipSt.configOpen && typeof fetchModelPickerPicksFromServer === 'function') {
+          fetchModelPickerPicksFromServer().then(() => {
+            if (chipSt.configOpen) f2RenderComposer(chipPaneId, { force: true });
+          }).catch(() => {});
+        }
+      }
+      return;
+    }
+    const quickPick = ev.target && ev.target.closest && ev.target.closest('.f2c-panel [data-f2-launch-pick]');
+    if (quickPick) {
+      const quickPanel = quickPick.closest('.f2c-panel');
+      const quickPane = quickPanel && quickPanel.closest('.conv-pane');
+      const quickPaneId = (quickPane && quickPane.getAttribute('data-pane-id')) || null;
+      const quickSt = f2PaneState.get(f2PaneKey(quickPaneId));
+      const engine = quickPick.getAttribute('data-engine') || '';
+      const model = quickPick.getAttribute('data-model') || '';
+      const effort = quickPick.getAttribute('data-effort') || '';
+      if (quickSt && quickSt.launch && F2_LAUNCH_ENGINES.some(e => e.id === engine)
+          && f2ModelsForEngine(engine).some(option => option.id === model)
+          && (!effort || f2EffortsForEngine(engine).some(option => option.id === effort))) {
+        ev.preventDefault();
+        quickSt.launch = { engine, model, effort };
+        try { f2RenderComposer(quickPaneId, { force: true }); } catch (_) {}
       }
       return;
     }

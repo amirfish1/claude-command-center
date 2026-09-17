@@ -26222,6 +26222,21 @@ a.settings-row:focus-visible .settings-launcher-btn { text-decoration: underline
 }
 .f2c-panel .f2c-config .f2c-select:hover { border-color: var(--accent); }
 .f2c-panel .f2c-config .f2c-select:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+.f2c-quick-picks {
+  display: flex; align-items: center; flex-basis: 100%; flex-wrap: wrap;
+  gap: 4px; padding-top: 2px;
+}
+.f2c-quick-picks-label {
+  font-size: 10px; color: var(--text-muted); margin-right: 2px;
+}
+.f2c-quick-pick {
+  max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  height: 22px; padding: 0 7px; border: 1px solid var(--border); border-radius: 999px;
+  background: var(--surface-2); color: var(--text-muted); font: inherit; font-size: 10px;
+  cursor: pointer;
+}
+.f2c-quick-pick:hover { color: var(--text); border-color: var(--accent); }
+.f2c-quick-pick:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
 
 /* ── Continue-in-new-session card ──────────────────────────────────────
    The inline pill was a control; this is a proposal, so it needs room for a

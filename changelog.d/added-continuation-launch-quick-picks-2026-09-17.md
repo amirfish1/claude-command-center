@@ -1,0 +1,1 @@
+- Added recently used engine, model, and effort quick picks to continuation launches.
