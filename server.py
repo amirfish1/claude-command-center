@@ -24400,6 +24400,7 @@ _BACKGROUND_API_READ_PATHS = frozenset({
     "/api/repo/worktrees",
     "/api/sessions/live-activity",
     "/api/system/services",
+    "/api/system/scheduled-jobs",
     "/api/throughput/daily",
     "/api/vercel-deploy",
     "/api/watchtower/service/status",
@@ -24526,6 +24527,21 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
             # open System status panel (5s). 3s TTL absorbs both; zero forks
             # on the warm path (see build_system_services).
             self.send_json(build_system_services())
+        elif path == "/api/system/scheduled-jobs":
+            from ccc_server.scheduled_jobs import collect_scheduled_jobs
+            qs = urllib.parse.parse_qs(parsed.query)
+            force = (qs.get("force", ["0"])[0] or "0").strip().lower() in ("1", "true", "yes")
+            self.send_json(collect_scheduled_jobs(force=force))
+        elif path == "/api/system/scheduled-jobs/log":
+            from ccc_server.scheduled_jobs import get_scheduled_job_log
+            qs = urllib.parse.parse_qs(parsed.query)
+            job_id = (qs.get("id", [""])[0] or "").strip()
+            lines = 50
+            try:
+                lines = max(1, min(500, int((qs.get("lines", ["50"])[0] or "50").strip())))
+            except Exception:
+                pass
+            self.send_json(get_scheduled_job_log(job_id, max_lines=lines))
         elif path == "/api/watchtower/service/status":
             self.send_json(_watchtower_service_status())
         elif path == "/api/watchtower/alerts":
