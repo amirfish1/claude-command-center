@@ -840,6 +840,75 @@
 
   .event.assistant { background: rgba(188, 140, 255, 0.06); border-left-color: var(--purple); }
   .event.tool_result { display: none; } /* hide tool results - they're noise */
+  .event.attachment {
+    background: rgba(56, 139, 253, 0.05);
+    border-left-color: var(--accent, #58a6ff);
+    font-size: 13px;
+    color: var(--text-muted);
+  }
+  .event.attachment .label {
+    color: var(--accent, #58a6ff);
+    font-weight: 600;
+    text-transform: uppercase;
+    font-size: 11px;
+  }
+  .hook-attachment-summary {
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    list-style: none;
+    user-select: none;
+    min-width: 0;
+  }
+  .hook-attachment-summary::-webkit-details-marker { display: none; }
+  .hook-attachment-summary .hook-arrow {
+    display: inline-block;
+    font-size: 9px;
+    transition: transform 0.15s ease;
+    color: var(--text-muted);
+    flex-shrink: 0;
+  }
+  .hook-attachment-details[open] .hook-arrow {
+    transform: rotate(90deg);
+  }
+  .hook-attachment-details[open] .hook-attachment-summary {
+    margin-bottom: 8px;
+  }
+  .hook-attachment-badge {
+    font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
+    font-size: 11px;
+    padding: 1px 6px;
+    border-radius: 4px;
+    background: var(--surface-2, rgba(255, 255, 255, 0.08));
+    border: 1px solid var(--border, rgba(255, 255, 255, 0.12));
+    color: var(--text);
+    flex-shrink: 0;
+  }
+  .hook-attachment-preview {
+    flex: 1;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    color: var(--text-muted);
+    font-size: 12px;
+  }
+  .hook-attachment-body {
+    margin: 0;
+    max-height: 420px;
+    overflow: auto;
+    white-space: pre-wrap;
+    word-break: break-word;
+    font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
+    font-size: 12px;
+    line-height: 1.5;
+    color: var(--text);
+    background: var(--bg, rgba(0, 0, 0, 0.2));
+    border: 1px solid var(--border, rgba(255, 255, 255, 0.1));
+    border-radius: 6px;
+    padding: 8px 10px;
+  }
   /* Bare no-op acknowledgments ("No response requested.") — filler replies to
      harness resume nudges. Hidden: zero signal, clutters the transcript. */
   .event.assistant.is-noop-ack { display: none; }

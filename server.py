@@ -23468,6 +23468,36 @@ def _peer_block_from_origin(origin):
     }
 
 
+def _extract_attachment_text(val):
+    """Extract string text from an attachment field (string, list, or dict)."""
+    if isinstance(val, str):
+        return val.strip()
+    if isinstance(val, list):
+        texts = []
+        for item in val:
+            if isinstance(item, str):
+                t = item.strip()
+                if t:
+                    texts.append(t)
+            elif isinstance(item, dict):
+                if item.get("type") == "text":
+                    t = str(item.get("text") or "").strip()
+                    if t:
+                        texts.append(t)
+                else:
+                    try:
+                        texts.append(json.dumps(item, indent=2))
+                    except Exception:
+                        pass
+        return "\n".join(texts)
+    if isinstance(val, dict):
+        try:
+            return json.dumps(val, indent=2)
+        except Exception:
+            return ""
+    return ""
+
+
 def _parse_conversation_event(ev, line_num):
     """Parse a single conversation JSONL event."""
     ev_type = ev.get("type", "")
@@ -23476,6 +23506,60 @@ def _parse_conversation_event(ev, line_num):
     # Skip non-message types
     if ev_type in ("file-history-snapshot", "progress"):
         return None
+
+    if ev_type == "attachment":
+        att = ev.get("attachment")
+        if not isinstance(att, dict):
+            att = {}
+        hook_event = str(att.get("hookEvent") or ev.get("hookEvent") or "").strip()
+        hook_name = str(att.get("hookName") or ev.get("hookName") or "").strip()
+        att_type = str(att.get("type") or "").strip()
+
+        stdout_text = _extract_attachment_text(att.get("stdout") or ev.get("stdout"))
+        content_text = _extract_attachment_text(att.get("content") or ev.get("content"))
+        stderr_text = _extract_attachment_text(att.get("stderr") or ev.get("stderr"))
+
+        is_hook = bool(hook_event or hook_name or att_type.startswith("hook") or att_type == "async_hook_response")
+        if not is_hook or not (stdout_text or content_text or stderr_text):
+            return None
+
+        # Determine primary display text
+        if stdout_text and stderr_text:
+            text = f"{stdout_text}\n{stderr_text}"
+        elif stdout_text:
+            text = stdout_text
+        elif content_text:
+            text = content_text
+        else:
+            text = stderr_text
+
+        if len(text) > 12000:
+            text = text[:12000] + "\n…"
+        if stdout_text and len(stdout_text) > 12000:
+            stdout_text = stdout_text[:12000] + "\n…"
+        if content_text and len(content_text) > 12000:
+            content_text = content_text[:12000] + "\n…"
+        if stderr_text and len(stderr_text) > 12000:
+            stderr_text = stderr_text[:12000] + "\n…"
+
+        out = {
+            "line": line_num,
+            "ts": ts,
+            "type": "attachment",
+            "subtype": "hook",
+            "hook_event": hook_event,
+            "hook_name": hook_name,
+            "hook_type": att_type,
+            "text": text,
+            "stdout": stdout_text,
+            "content": content_text,
+            "stderr": stderr_text,
+        }
+        if att.get("durationMs") is not None:
+            out["duration_ms"] = att.get("durationMs")
+        if att.get("exitCode") is not None:
+            out["exit_code"] = att.get("exitCode")
+        return out
 
     if ev_type == "system":
         if ev.get("subtype") == "compact_boundary":

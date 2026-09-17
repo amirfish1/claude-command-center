@@ -58982,6 +58982,26 @@
         // `.ask-user-option-pick`/`.acp-perm-opt` handlers).
         div.classList.add('codex-request-event');
         div.innerHTML = _codexRequestCardHtml(ev, renderedConversationId);
+      } else if (ev.type === 'attachment') {
+        const badge = ev.hook_name || ev.hook_event || 'hook';
+        const rawText = String(ev.text || ev.stdout || ev.content || ev.stderr || '').trim();
+        const firstLine = (rawText.split('\n')[0] || '').trim();
+        const preview = truncate(firstLine, 120);
+        const bodyHtml = rawText.indexOf('http') !== -1
+          ? _linkifyEscapedUrls(escapeHtml(rawText))
+          : escapeHtml(rawText);
+        div.classList.add('attachment-event');
+        div.innerHTML = '<details class="hook-attachment-details"' + (convVerboseOn() ? ' open' : '') + '>'
+          + '<summary class="hook-attachment-summary">'
+          + '<span class="hook-arrow" aria-hidden="true">▶</span>'
+          + '<span class="label">Hook</span>'
+          + '<span class="hook-attachment-badge">' + escapeHtml(badge) + '</span>'
+          + (preview ? '<span class="hook-attachment-preview">' + escapeHtml(preview) + '</span>' : '')
+          + (ev.line != null ? '<span class="line-num">L' + ev.line + '</span>' : '')
+          + tsSpan(ev.ts)
+          + '</summary>'
+          + '<pre class="hook-attachment-body">' + bodyHtml + '</pre>'
+          + '</details>';
       }
 
       if (ev.type === 'assistant') {
