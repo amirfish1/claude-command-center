@@ -201,19 +201,19 @@ that already exists.
 
 ## How it compares
 
-|  | CCC | Orca | Vibe Kanban | Conductor | Claude Squad | opcode |
-|---|:---:|:---:|:---:|:---:|:---:|:---:|
-| Sees sessions you launched by hand, outside the tool | ✅ | ❌ | ⚠️ partial | ❌ | ❌ | ✅ |
-| One dashboard across many agent engines | ✅ 8 spawnable + 3 read-only | ✅ | ✅ | ❌ | ✅ | ❌ |
-| Tells you which session needs you | ✅ read from the transcript | ⚠️ finish notifications | ❌ | ❌ | ❌ | ❌ |
-| Sessions coordinate without you as the relay | ✅ group chats + sibling-ask | ❌ | ❌ | ❌ | ❌ | ❌ |
-| Durable queues with workers that learn | ✅ WatchTower | ❌ | ❌ | ❌ | ❌ | ❌ |
-| GitHub issue → session → verify → close loop | ✅ closes with commit-SHA comment | ⚠️ PR/issue browsing | ⚠️ PR-focused | ❌ | ⚠️ | ❌ |
-| Survives closing the dashboard | ✅ the dashboard is a lens, not a runtime | ❌ | ⚠️ | ❌ | ✅ | ✅ |
-| Mobile companion | ✅ full dashboard in your phone browser | ✅ native app | ✅ | ❌ | ❌ | ❌ |
-| Worktree-per-task isolation | ❌ attach-first by design | ✅ | ✅ | ✅ | ✅ | ❌ |
-| No account, no cloud, runs locally | ✅ stdlib Python, no build | ⚠️ | ⚠️ Postgres | ⚠️ | ✅ | ✅ |
-| Setup | one curl line, or brew / DMG | desktop download | desktop / self-host | desktop download | terminal install | desktop download |
+|  | CCC | Orca | Vibe Kanban | Conductor | Claude Squad | opcode | herdr |
+|---|:---:|:---:|:---:|:---:|:---:|:---:|:---:|
+| Sees sessions you launched by hand, outside the tool | ✅ | ❌ | ⚠️ partial | ❌ | ❌ | ✅ | ❌ |
+| One dashboard across many agent engines | ✅ 8 spawnable + 3 read-only | ✅ | ✅ | ❌ | ✅ | ❌ | ✅ |
+| Tells you which session needs you | ✅ read from the transcript | ⚠️ finish notifications | ❌ | ❌ | ❌ | ❌ | ⚠️ status detection |
+| Sessions coordinate without you as the relay | ✅ group chats + sibling-ask | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ |
+| Durable queues with workers that learn | ✅ WatchTower | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ |
+| GitHub issue → session → verify → close loop | ✅ closes with commit-SHA comment | ⚠️ PR/issue browsing | ⚠️ PR-focused | ❌ | ⚠️ | ❌ | ❌ |
+| Survives closing the dashboard | ✅ the dashboard is a lens, not a runtime | ❌ | ⚠️ | ❌ | ✅ | ✅ | ✅ |
+| Mobile companion | ✅ full dashboard in your phone browser | ✅ native app | ✅ | ❌ | ❌ | ❌ | ❌ |
+| Worktree-per-task isolation | ❌ attach-first by design | ✅ | ✅ | ✅ | ✅ | ❌ | ❌ |
+| No account, no cloud, runs locally | ✅ stdlib Python, no build | ⚠️ | ⚠️ Postgres | ⚠️ | ✅ | ✅ | ✅ |
+| Setup | one curl line, or brew / DMG | desktop download | desktop / self-host | desktop download | terminal install | desktop download | terminal install |
 
 Competitor cells reflect a survey of 20+ tools in this space (April–August 2026) — everyone ships weekly, so check their current docs before quoting. The one deliberate ❌: CCC doesn't own worktrees per task. It attaches to the work you already have instead of wrapping every run.
 
