@@ -57695,6 +57695,19 @@
     });
   }
 
+  // Reverse reconcile: true when the rollout has already recorded a turn's
+  // completion — a confirmed (line-keyed) result row for the same turn_id.
+  // The live overlay can keep serving a stuck/ended turn's items (a session
+  // parked on a usage limit is the observed case) after the transcript has
+  // rendered in full; without this check every overlay item re-inserts as a
+  // duplicate ghost turn. A genuinely live turn has no confirmed result row
+  // yet, so this cannot false-positive on in-progress streaming.
+  function _confirmedResultForTurn(view, turnId) {
+    if (!view || turnId == null) return false;
+    const esc = (window.CSS && CSS.escape) ? CSS.escape(String(turnId)) : String(turnId);
+    return !!view.querySelector('.event.result[data-jsonl-line][data-turn-id="' + esc + '"]');
+  }
+
   function renderConversationEvents(events, paneId, opts) {
     if (!Array.isArray(events)) return true;  // defensive: backlog/unknown responses
     // Do not defer transcript rendering while the composer is focused.
@@ -57812,6 +57825,19 @@
       if (ev.live_key != null) {
         const escLiveKey = (window.CSS && CSS.escape) ? CSS.escape(String(ev.live_key)) : String(ev.live_key);
         _existingProvisionalNode = $view.querySelector('.event[data-live-key="' + escLiveKey + '"]');
+        // Reverse of the confirmed-after-provisional reconcile below: the
+        // overlay can still serve a turn whose completion the rollout has
+        // already recorded (opening a stuck/ended session re-fetches the
+        // overlay after the transcript rendered). Rendering those items
+        // duplicates the finished turn as ghost rows, so drop them — and
+        // sweep any copies a previous pass already inserted for the same
+        // stale turn.
+        const _overlayTurnId = ev.turn_id != null ? String(ev.turn_id)
+          : (String(ev.live_key).indexOf(':') !== -1 ? String(ev.live_key).split(':')[0] : null);
+        if (_overlayTurnId != null && _confirmedResultForTurn($view, _overlayTurnId)) {
+          _removeStaleProvisionalsForTurn($view, _overlayTurnId);
+          continue;
+        }
       } else if (ev.line != null) {
         const escLine = (window.CSS && CSS.escape) ? CSS.escape(String(ev.line)) : String(ev.line);
         if ($view.querySelector('.event[data-jsonl-line="' + escLine + '"]')) continue;
@@ -58644,7 +58670,9 @@
             const metaEl = document.createElement('div');
             metaEl.className = 'kimi-answer-meta';
             metaEl._agentAnswerText = _kimiAnswerText;
-            metaEl.innerHTML = '<span class="line-num">L' + ev.line + '</span>'
+            // Live (provisional) events carry no jsonl line — omit the tag
+            // instead of rendering a literal "Lundefined".
+            metaEl.innerHTML = (ev.line != null ? '<span class="line-num">L' + ev.line + '</span>' : '')
               + tsSpan(ev.ts) + assistantMessageActionsHtml(ev);
             // CCC-929: wire_tail._attach_kimi_wire_usage already stamps
             // tokens_in/tokens_out/tokens_cached on each Kimi assistant

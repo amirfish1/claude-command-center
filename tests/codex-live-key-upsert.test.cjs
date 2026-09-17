@@ -48,7 +48,7 @@ async function withPage(fn) {
 async function loadHelpers(page) {
   await page.evaluate((code) => {
     (0, eval)(code.replace(/^/, 'window.__fns = (() => {\n')
-      + '\nreturn { _turnOrdinalBefore, _lastRenderedRowAnchor, _upsertProvisionalNode, _findMatchingProvisionalNode, _removeStaleProvisionalsForTurn };\n})();');
+      + '\nreturn { _turnOrdinalBefore, _lastRenderedRowAnchor, _upsertProvisionalNode, _findMatchingProvisionalNode, _removeStaleProvisionalsForTurn, _confirmedResultForTurn };\n})();');
   }, helpersCode);
 }
 
@@ -279,5 +279,50 @@ test('Last/Previous/Next jump buttons count one copy across a provisional+rollou
     await page.evaluate(() => document.querySelector('[data-live-key]').remove());
     const countAfter = await page.evaluate((sel) => document.querySelectorAll(sel).length, CONV_USER_MESSAGE_SELECTOR);
     assert.equal(countAfter, 1);
+  });
+});
+
+// CCC-1145: a session stuck at a usage limit keeps serving a finished turn's
+// items from the live overlay after the transcript (including the turn's
+// result row) has rendered. The render loop's per-event guard consults this
+// helper to drop those stale overlay items instead of duplicating the turn.
+test('_confirmedResultForTurn is true only when a confirmed result row exists for that turn', async () => {
+  await withPage(async (page) => {
+    await page.setContent(`<div class="conversations-view">
+      <div class="event assistant" data-jsonl-line="40" data-turn-id="t1">confirmed text</div>
+      <div class="event result" data-jsonl-line="41" data-turn-id="t1">Done</div>
+      <div class="event result" data-jsonl-line="55" data-turn-id="t2">Done</div>
+    </div>`);
+    await loadHelpers(page);
+    const result = await page.evaluate(() => {
+      const view = document.querySelector('.conversations-view');
+      return {
+        withResult: window.__fns._confirmedResultForTurn(view, 't1'),
+        otherTurn: window.__fns._confirmedResultForTurn(view, 't2'),
+        missingTurn: window.__fns._confirmedResultForTurn(view, 'nope'),
+        nullTurn: window.__fns._confirmedResultForTurn(view, null),
+        noView: window.__fns._confirmedResultForTurn(null, 't1'),
+        // A provisional result row (live_key, no jsonl line) must NOT count:
+        // the turn is not confirmed-complete until the rollout says so.
+        provisionalOnly: (() => {
+          const ghost = document.createElement('div');
+          ghost.className = 'event result provisional';
+          ghost.dataset.liveKey = 't3:item-1';
+          ghost.dataset.turnId = 't3';
+          view.appendChild(ghost);
+          const verdict = window.__fns._confirmedResultForTurn(view, 't3');
+          ghost.remove();
+          return verdict;
+        })(),
+      };
+    });
+    assert.deepEqual(result, {
+      withResult: true,
+      otherTurn: true,
+      missingTurn: false,
+      nullTurn: false,
+      noView: false,
+      provisionalOnly: false,
+    });
   });
 });

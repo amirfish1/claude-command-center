@@ -138,6 +138,30 @@ test('a generation change clears only provisional (data-live-key) rows, not conf
   });
 });
 
+// CCC-1145: an overlay that goes quiet WITHOUT a generation change (a stuck
+// session's stale turn falling off the app-server's live view) used to
+// strand its provisional rows on screen forever — only a generation change
+// cleared them. An empty snapshot now clears them too.
+test('an empty overlay snapshot clears provisional rows even at the same generation', async () => {
+  await withPage(async (page) => {
+    await page.setContent('<div class="conv-pane is-codex-session" data-pane-id="p1"><div class="conversations-view"><div class="event assistant" data-jsonl-line="5">confirmed</div><div class="event assistant provisional" data-live-key="t1:old">ghost turn</div></div></div>');
+    await page.evaluate(() => { window.CCCCodexRenderLiveEvents = () => {}; });
+    await page.addScriptTag({ content: LIVE_SOURCE_JS });
+    const result = await page.evaluate(() => {
+      const pane = document.querySelector('.conv-pane');
+      const view = pane.querySelector('.conversations-view');
+      const entry = { paneEl: pane, paneId: 'p1', context: { threadId: 't', repoPath: '/r' }, generation: 'g1', active: true };
+      const stillActive = window.CCCCodexLiveSource.__testing.applySnapshot(entry, { generation: 'g1', cursor: 2, turns: [], requests: [] });
+      return {
+        stillActive,
+        confirmedSurvived: !!view.querySelector('[data-jsonl-line="5"]'),
+        ghostRemoved: !view.querySelector('[data-live-key="t1:old"]'),
+      };
+    });
+    assert.deepEqual(result, { stillActive: false, confirmedSurvived: true, ghostRemoved: true });
+  });
+});
+
 test('applySnapshot reports active=true while a turn is inProgress or a request is pending', async () => {
   await withPage(async (page) => {
     await page.setContent('<div class="conv-pane is-codex-session" data-pane-id="p1"><div class="conversations-view"></div></div>');

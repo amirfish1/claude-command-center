@@ -30,6 +30,9 @@
   // reconnect) clears only the provisional nodes already on screen; a
   // cursor change alone is not treated as a resync signal (the live-transcript
   // action always returns a fresh full snapshot, not an incremental delta).
+  // An EMPTY snapshot also clears the provisional overlay: the app-server
+  // sees nothing live for this thread anymore, so any standing provisional
+  // rows are ghosts.
   //
   // Dedupe against rollout rows is NOT this module's job -- it always hands
   // renderConversationEvents the full current overlay (turn_id + live_key on
@@ -129,6 +132,15 @@
     entry.generation = data.generation;
     entry.cursor = data.cursor;
     const events = flattenTurns(turns);
+    if (!events.length) {
+      // An empty overlay means the app-server no longer sees ANY live item
+      // for this thread. Any provisional rows still standing are ghosts
+      // (e.g. the overlay briefly served a stale turn right at pane-open);
+      // the confirmed rollout rows underneath are untouched. A generation
+      // change used to be the only cleanup path, so a same-generation
+      // quiet-down stranded them forever.
+      clearProvisional(viewEl);
+    }
     if (events.length && typeof window.CCCCodexRenderLiveEvents === 'function') {
       window.CCCCodexRenderLiveEvents(entry.paneId, events);
     }
