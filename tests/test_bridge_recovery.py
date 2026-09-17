@@ -134,6 +134,7 @@ class BridgeRecoveryTests(unittest.TestCase):
         sid = "session-target"
         with server._pending_terminal_input_lock:
             server._pending_terminal_input_queue[sid] = ["first", "selected", "last"]
+        server._save_pending_inputs({sid})
         restarted = {
             "ok": True,
             "engine": "kimi",
@@ -167,6 +168,7 @@ class BridgeRecoveryTests(unittest.TestCase):
         sid = "session-target"
         with server._pending_terminal_input_lock:
             server._pending_terminal_input_queue[sid] = ["selected", "last"]
+        server._save_pending_inputs({sid})
         restarted = {
             "ok": True,
             "engine": "codex",

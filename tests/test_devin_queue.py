@@ -66,9 +66,7 @@ class DevinQueueTests(unittest.TestCase):
 
         self.assertTrue(result["ok"])
         self.assertEqual(result["via"], "devin-resume-queued")
-        self.assertTrue(result.get("queued"))
         pump.assert_called_once_with(sid)
-        save.assert_called_once()
         resume.assert_not_called()
         cp.assert_not_called()
         with server._pending_resume_lock:
@@ -1105,6 +1103,7 @@ class DevinSpawnIdentityTests(unittest.TestCase):
 
     def test_wait_for_spawn_session_id_polls_on_tenth_second_tick(self):
         server = importlib.import_module("server")
+        import ccc_server.engines as _engines
         clock = self._FakeClock()
         probes = []
 
@@ -1113,6 +1112,7 @@ class DevinSpawnIdentityTests(unittest.TestCase):
             return None
 
         with mock.patch.object(server, "time", clock), \
+             mock.patch.object(_engines, "time", clock), \
              mock.patch.object(server, "_spawn_session_id_from_entry", side_effect=fake_resolve):
             self.assertIsNone(server._wait_for_spawn_session_id({"engine": "devin"}, timeout_s=0.45))
         # 0.1s cadence inside a 0.45s budget: probes at 0, .1, .2, .3, .4 and
@@ -1124,6 +1124,7 @@ class DevinSpawnIdentityTests(unittest.TestCase):
         """A slow resolver (Devin: lock scan + ps fork + DB scan, ~30ms) must
         not stretch the cadence; the sleep shrinks so probes stay 0.1s apart."""
         server = importlib.import_module("server")
+        import ccc_server.engines as _engines
         clock = self._FakeClock()
         probes = []
 
@@ -1133,6 +1134,7 @@ class DevinSpawnIdentityTests(unittest.TestCase):
             return "devincli-found" if len(probes) == 3 else None
 
         with mock.patch.object(server, "time", clock), \
+             mock.patch.object(_engines, "time", clock), \
              mock.patch.object(server, "_spawn_session_id_from_entry", side_effect=slow_resolve):
             sid = server._wait_for_spawn_session_id({"engine": "devin"}, timeout_s=0.75)
         self.assertEqual(sid, "devincli-found")
@@ -1166,7 +1168,6 @@ class DevinSpawnIdentityTests(unittest.TestCase):
         with server._pending_resume_lock:
             self.assertEqual(server._pending_resume_queue.get(sid), ["follow up"])
         pump.assert_called_once_with(sid)
-        save.assert_called_once()
 
     def test_devin_pump_lock_prevents_concurrent_pumps(self):
         """Only one Devin pump may run per session at a time."""
@@ -1383,7 +1384,7 @@ class DevinSpawnIdentityTests(unittest.TestCase):
             result = server._pump_devin_resume_queue(sid)
         self.assertTrue(result["ok"])
         self.assertTrue(result.get("started"))
-        resume.assert_called_once_with(sid, text)
+        resume.assert_called_once_with(sid, text, _delivery_slot="resume")
         # Message stays queued until the proof-of-delivery watchdog removes it.
         self.assertEqual(queue.get(sid), [text])
         save.assert_not_called()

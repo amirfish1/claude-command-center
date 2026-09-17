@@ -16,7 +16,7 @@ class TestF2ContinueReconciliation(unittest.TestCase):
         f2_block = app_js[f2_start:f2_end]
 
         self.assertIn("const parentTitle = sidebarRowDisplayTitle(", f2_block)
-        self.assertIn("const subject = 'Continue ' + parentTitle;", f2_block)
+        self.assertIn("const subject = parentTitle;", f2_block)
         self.assertNotIn("'continue-' + String(sid).slice(0, 8)", f2_block)
 
     def test_codex_continue_watches_for_a_durable_spawned_session(self):
@@ -29,7 +29,7 @@ class TestF2ContinueReconciliation(unittest.TestCase):
         helper_start = app_js.index("function _watchF2CodexSpawnRegistration")
         helper_end = app_js.index("function _watchPendingSpawnRegistration", helper_start)
         helper = app_js[helper_start:helper_end]
-        self.assertIn("Date.now() + 30000", helper)
+        self.assertIn("Date.now() + 3 * 60 * 1000", helper)
         self.assertIn("/api/sessions/spawned?engine=codex", helper)
         self.assertIn("row.session_id", helper)
         self.assertIn("row.spawn_id", helper)

@@ -15,11 +15,11 @@ def _hero(page):
 
 def test_landing_hero_uses_public_safe_product_screenshot():
     page = (ROOT / "docs" / "index.html").read_text(encoding="utf-8")
-    asset = ROOT / "docs" / "images" / "ccc-live-session-workspace.png"
+    asset = ROOT / "docs" / "images" / "ccc-v5-33-hero.png"
 
     assert asset.is_file()
-    assert './images/ccc-live-session-workspace.png?v=1' in page
-    assert "CCC live workspace showing sessions, a conversation, and its linked issue queue" in page
+    assert './images/ccc-v5-33-hero.png' in page
+    assert "CCC v5.33 showing the session fleet" in page
 
 
 def test_landing_page_declares_its_existing_favicon():
@@ -45,14 +45,14 @@ def test_landing_hero_has_one_direct_download_cta():
 
     assert len(ctas) == 1
     assert 'id="downloadCta"' in ctas[0]
-    assert f'href="{DMG_URL}"' in ctas[0]
-    assert re.sub(r"<[^>]+>", "", ctas[0]).strip() == "DOWNLOAD CCC"
+    assert 'href="https://github.com/amirfish1/claude-command-center/releases/latest"' in ctas[0]
+    assert re.sub(r"<[^>]+>", "", ctas[0]).strip() == "GET CCC"
 
 
 def test_landing_page_names_current_release():
     page = (ROOT / "docs" / "index.html").read_text(encoding="utf-8")
 
-    assert "v5.29" in page
+    assert "v5.33" in page
     assert "v5.8" not in page
 
 

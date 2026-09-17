@@ -8,7 +8,7 @@ APP_JS = Path(__file__).parents[1] / "static" / "app.js"
 
 def test_live_activity_browser_has_one_request_owner_and_no_full_scan_fallback():
     source = APP_JS.read_text(encoding="utf-8")
-    assert source.count("fetch('/api/sessions/live-activity?") == 1
+    assert source.count("backgroundApiFetch('/api/sessions/live-activity?") == 1
     assert "fetchJSON('/api/sessions/live-activity'" not in source
     assert "fetchJSON('/api/sessions?all=1'" not in source
 

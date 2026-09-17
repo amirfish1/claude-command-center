@@ -17,7 +17,7 @@ def test_group_chat_sidecar_exists_before_participant_is_injected(tmp_path, monk
 
     observed_sidecars = []
 
-    def inject_participant(_session_id, text):
+    def inject_participant(_session_id, text, **_kwargs):
         chat_path = Path(re.search(r'chat="([^"]+)"', text).group(1))
         sidecar_path = chat_path.with_suffix(".json")
         observed_sidecars.append(json.loads(sidecar_path.read_text(encoding="utf-8")))

@@ -19,12 +19,16 @@ def test_claude_accepts_max_reasoning_effort(monkeypatch):
 
 def test_claude_picker_uses_effort_only_requests_and_resume_flag():
     app_js = Path("static/app.js").read_text(encoding="utf-8")
-    server_py = Path("server.py").read_text(encoding="utf-8")
+    server_source = (
+        Path("server.py").read_text(encoding="utf-8")
+        + Path("ccc_server/watchtower_msg.py").read_text(encoding="utf-8")
+        + Path("ccc_server/engines.py").read_text(encoding="utf-8")
+    )
 
     assert "CLAUDE_REASONING_LEVELS" in app_js
     assert "effort_only = true" in app_js
-    assert 'f"/effort {reasoning_effort}"' in server_py
-    assert 'cmd.extend(["--effort", effort])' in server_py
+    assert 'f"/effort {reasoning_effort}"' in server_source
+    assert 'cmd.extend(["--effort", effort])' in server_source
 
 
 def test_codex_picker_marks_reasoning_updates_as_effort_only():

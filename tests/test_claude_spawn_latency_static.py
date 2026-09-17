@@ -92,7 +92,7 @@ def test_placeholder_rebind_keeps_the_owned_first_response_stream():
 
 
 def test_first_partial_text_paint_is_instrumented():
-    body = _function_source("handleSpawnEvents", 8000)
+    body = _function_source("handleSpawnEvents", 12000)
     marker = _function_source("markClaudeFirstVisibleOutput", 800)
 
     assert "streamSid" in body.split("{", 1)[0]

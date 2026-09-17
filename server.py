@@ -11738,7 +11738,20 @@ def _extract_user_prompt_text(ev):
         # blanking first_message — otherwise a session whose only prompt
         # was a slash command reads as [EMPTY] forever even with a full
         # transcript (CCC-979).
-        return _extract_command_invocation_text(text)
+        cmd = _extract_command_invocation_text(text)
+        if cmd:
+            head = (text or "").lstrip()
+            m_name = re.search(r"<command-name>([^<]+)</command-name>", head)
+            cname = (m_name.group(1).strip() if m_name else "").lower()
+            if cname in (
+                "/resume", "/clear", "/exit", "/quit", "/help", "/compact",
+                "/cost", "/doctor", "/init", "/login", "/logout", "/terminal-setup",
+            ):
+                return ""
+            m_args = re.search(r"<command-args>([^<]+)</command-args>", head)
+            if m_args and m_args.group(1).strip():
+                return cmd
+        return ""
     text = _strip_host_system_instruction(text)
     return _strip_ccc_session_state_instruction(text).strip()
 
@@ -23508,6 +23521,19 @@ def _parse_conversation_event(ev, line_num):
         return None
 
     if ev_type == "attachment":
+        queued = _extract_queued_command_prompt(ev)
+        if queued:
+            out_ev = {
+                "line": line_num,
+                "ts": ts,
+                "type": "user_text",
+                "text": queued.get("text", ""),
+                "images": queued.get("images", []),
+            }
+            if queued.get("peer"):
+                out_ev["peer"] = queued["peer"]
+            return out_ev
+
         att = ev.get("attachment")
         if not isinstance(att, dict):
             att = {}
@@ -23715,19 +23741,6 @@ def _parse_conversation_event(ev, line_num):
                         "is_error": bool(item.get("is_error")),
                     }
         return None
-
-    queued = _extract_queued_command_prompt(ev)
-    if queued:
-        out_ev = {
-            "line": line_num,
-            "ts": ts,
-            "type": "user_text",
-            "text": queued.get("text", ""),
-            "images": queued.get("images", []),
-        }
-        if queued.get("peer"):
-            out_ev["peer"] = queued["peer"]
-        return out_ev
 
     if ev_type == "assistant":
         msg = _safe_parse_message(ev.get("message", {}))

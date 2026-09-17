@@ -17,7 +17,7 @@ def test_sidebar_rows_mark_sessions_without_transcript_content():
 
     assert (
         "const emptySessionChipHtml = (!isBacklogRow && !isGithubPrRow "
-        "&& !c.first_message && !c.spawn_recent)"
+        "&& !c.first_message && !c.spawn_recent && c.source !== 'devin')"
     ) in app_js
     assert 'class="conv-empty-session-chip"' in app_js
     assert ">[EMPTY]</span>" in app_js

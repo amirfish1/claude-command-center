@@ -25,6 +25,7 @@ class TestF2CacheWarningThreshold(unittest.TestCase):
             };
             eval(pick('function _contextFieldsFromRow', '// ── F2 cold-session composer'));
             eval(pick('const F2_TOKEN_THRESHOLD', 'function f2ResolveSpawnCwd'));
+            const liveStatus = {};
             const gate = f2ResumeGate({
               sid: 'stale-200k',
               session: { source: 'claude', model: 'opus-5' },

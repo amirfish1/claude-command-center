@@ -329,6 +329,7 @@ link_ccc_cli() {
   fi
   if ln -sfn "$target" "$link" 2>/dev/null; then
     printf 'install: ccc CLI linked at %s\n' "$link"
+    # shellcheck disable=SC2016
     case ":$PATH:" in
       *":$bin_dir:"*) ;;
       *) printf 'install: note: %s is not on PATH — add it to use `ccc` from anywhere\n' "$bin_dir" ;;

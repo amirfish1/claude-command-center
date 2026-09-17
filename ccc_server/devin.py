@@ -2345,8 +2345,9 @@ def _find_devin_cli_conversations_locked(
                 key=lambda k: float(_DEVIN_CLI_LIST_CACHE[k].get("ts") or 0),
             )
             _DEVIN_CLI_LIST_CACHE.pop(oldest, None)
+        has_deferred = bool(fields_by_id and any(f.get("deferred") for f in fields_by_id.values()))
         _DEVIN_CLI_LIST_CACHE[params_key] = {
-            "key": cache_key,
+            "key": None if has_deferred else cache_key,
             "rows": rows,
             "ts": time.time(),
         }
