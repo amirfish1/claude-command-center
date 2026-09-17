@@ -3733,6 +3733,11 @@ def _ensure_codex_app_server(*, allow_stdio=True):
             except OSError:
                 stderr_log = subprocess.DEVNULL
             try:
+                popen_kwargs = {"start_new_session": True}
+                if sys.platform == "win32":
+                    detached_flag = getattr(subprocess, "DETACHED_PROCESS", 0x00000008)
+                    group_flag = getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0x00000200)
+                    popen_kwargs["creationflags"] = detached_flag | group_flag
                 proc = subprocess.Popen(
                     [resolved["bin"], *_codex_context_window_args(), "app-server", "--listen", "stdio://"],
                     stdin=subprocess.PIPE,
@@ -3740,7 +3745,7 @@ def _ensure_codex_app_server(*, allow_stdio=True):
                     stderr=stderr_log,
                     text=True,
                     bufsize=1,
-                    start_new_session=True,
+                    **popen_kwargs,
                 )
                 transport = _core._CodexAppServerTransport("stdio", proc=proc)
             except (FileNotFoundError, OSError):

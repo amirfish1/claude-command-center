@@ -84,6 +84,13 @@ function Open-AppWindow {
 
 Import-LocalEnv -Path $ConfigLocalEnv
 
+if (-not $env:PYTHONUTF8) {
+    $env:PYTHONUTF8 = "1"
+}
+if (-not $env:PYTHONIOENCODING) {
+    $env:PYTHONIOENCODING = "utf-8"
+}
+
 if (-not $env:PORT) {
     $env:PORT = "8090"
 }

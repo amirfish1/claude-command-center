@@ -360,6 +360,8 @@ def _ccc_peer_server_start():
     """
     if not _core._uds_messaging_enabled():
         return {"ok": False, "reason": "gate_off"}
+    if not hasattr(socket, "AF_UNIX"):
+        return {"ok": False, "reason": "no_af_unix"}
     with _CCC_PEER_LOCK:
         if _core._CCC_PEER_STATE["sock"] is not None:
             return {"ok": True, "reason": "already_running"}
