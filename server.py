@@ -33886,6 +33886,12 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
             else:
                 _record_interaction(sid)
                 self.send_json(_interrupt_session(sid))
+        elif re.match(r"^/api/session/[a-zA-Z0-9_-]+/force-restart$", path):
+            # CCC-27: manual escape hatch for a live session that will not
+            # take input (Stop only interrupts a running turn).
+            sid = path.split("/")[3]
+            _record_interaction(sid)
+            self.send_json(_force_restart_session(sid))
         elif path == "/api/ask":
             # Synchronous "inject and wait for the next assistant turn".
             # Used by the ccc-orchestration skill so a sibling Claude

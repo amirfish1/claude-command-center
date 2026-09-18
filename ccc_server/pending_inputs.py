@@ -4809,12 +4809,136 @@ def _drop_dead_terminal_queue(sid, *, code):
     return dropped
 
 
+# Holds that say "a turn is running" -- the only ones a wedged child can fake.
+_RECOVERABLE_HOLD_REASONS = frozenset({"headless_turn", "tool_child_blocks_inject"})
+
+
+def _inject_recovery_state_path():
+    return str(_core.COMMAND_CENTER_STATE_DIR / "inject-recovery.json")
+
+
+def _maybe_recover_stuck_hold(sid, reason, held_s, now):
+    """CCC-27: recover a live CCC-owned Claude child that holds queued input
+    while its own stdout log shows no progress. Returns True if it acted.
+
+    All loop guards live in `inject_recovery.decide`; the attempt is persisted
+    before the child is touched, and the message is re-delivered exactly once
+    through `--resume` (mirrors the GH #71 stale-headless path).
+    """
+    if reason not in _RECOVERABLE_HOLD_REASONS:
+        return False
+    from ccc_server import inject_recovery as ir
+    if not ir.enabled():
+        return False
+    spawn = _core._find_live_spawn_entry_for_session(sid)
+    if spawn is None or (spawn.get("engine") or "claude") != "claude":
+        return False
+    with _core._pending_terminal_input_lock:
+        queue = _core._pending_terminal_input_queue.get(sid) or []
+        head = str(queue[0]) if queue else None
+    if head is None:
+        return False
+    try:
+        log_silent_s = now - os.stat(spawn.get("log") or "").st_mtime
+    except OSError:
+        log_silent_s = None
+    started = _core._spawn_entry_started_epoch(spawn)
+    path = _inject_recovery_state_path()
+    msg_hash = ir.text_hash(head)
+    action, why = ir.decide(
+        ir.get(sid, path),
+        held_s=held_s,
+        log_silent_s=log_silent_s,
+        spawn_age_s=(now - started) if started else None,
+        tool_child=bool(_core._spawn_entry_active_tool_child(spawn)),
+        msg_hash=msg_hash,
+        now=now,
+    )
+    if action == ir.GIVE_UP:
+        ir.mark_stuck(sid, why, now=now, path=path)
+        _core._log_activity(
+            "inject", "RECOVER_GIVEUP",
+            f"session={sid} reason={why} — queued input is stuck behind a live "
+            "child that is not progressing; auto-recovery exhausted, needs a "
+            "manual force-restart",
+        )
+        return False
+    if action != ir.RECOVER:
+        return False
+    ir.record_attempt(sid, msg_hash, now=now, path=path)
+    transaction = _core._apply_pending_input_operations(sid, [{
+        "field": "terminal", "action": "pop_head",
+    }])
+    text = ((transaction.get("value") or [None])[0])
+    if text is None:
+        return False
+    _core._log_activity(
+        "inject", "RECOVER",
+        f"session={sid} pid={spawn.get('pid')} held={held_s:.0f}s "
+        f"log_silent={log_silent_s:.0f}s reason={reason} — retiring the "
+        "unresponsive child and re-delivering the queued message via resume",
+    )
+    _core._retire_unresponsive_spawn_entry(
+        spawn, terminate=True, reason="inject_recovery",
+        caller="terminal-queue-watcher",
+    )
+    _terminal_queue_clear_hold(sid)
+    result = None
+    try:
+        result = _core.resume_session_headless(sid, text)
+    except Exception:
+        result = None
+    if not (isinstance(result, dict) and result.get("ok")):
+        # Delivery not proven: keep the text. The recovery attempt is already
+        # spent, so the budget still bounds any retry.
+        _requeue_terminal_input_front(sid, text)
+    else:
+        _core._complete_pending_input_handoff(text)
+    return True
+
+
+def _force_restart_session(sid):
+    """Manual "Force restart": retire this session's live CCC-owned Claude
+    child and, if a message is queued for it, re-deliver that via resume.
+    A human asked, so the auto-recovery budget is reset (`inject_stuck`
+    cleared). Never touches sessions CCC does not own."""
+    from ccc_server import inject_recovery as ir
+    spawn = _core._find_live_spawn_entry_for_session(sid)
+    if spawn is None or (spawn.get("engine") or "claude") != "claude":
+        return {"ok": False, "error": "no live CCC-owned Claude process for this session"}
+    ir.clear_stuck(sid, _inject_recovery_state_path())
+    transaction = _core._apply_pending_input_operations(sid, [{
+        "field": "terminal", "action": "pop_head",
+    }])
+    text = ((transaction.get("value") or [None])[0])
+    _core._log_activity(
+        "inject", "FORCE_RESTART",
+        f"session={sid} pid={spawn.get('pid')} queued={text is not None} "
+        "— manual restart requested from the UI",
+    )
+    _core._retire_unresponsive_spawn_entry(
+        spawn, terminate=True, reason="force_restart", caller="api-force-restart",
+    )
+    _terminal_queue_clear_hold(sid)
+    if text is None:
+        return {"ok": True, "restarted": True, "redelivered": False}
+    result = _core.resume_session_headless(sid, text)
+    if not (isinstance(result, dict) and result.get("ok")):
+        _requeue_terminal_input_front(sid, text)
+        return {"ok": False, "restarted": True, "redelivered": False,
+                "error": (result or {}).get("error") or "resume failed; message kept queued"}
+    _core._complete_pending_input_handoff(text)
+    return {"ok": True, "restarted": True, "redelivered": True}
+
+
 def _terminal_queue_hold_or_expire(sid, reason):
     """Record another tick of holding `sid`'s head entry, or — once held past
     `_TERMINAL_QUEUE_HOLD_TTL_S` — drop that stale entry instead. Either way
     the caller should `continue` to the next sid; returns nothing."""
     now = time.time()
     started = _core._terminal_queue_hold_since.setdefault(sid, now)
+    if _maybe_recover_stuck_hold(sid, reason, now - started, now):
+        return
     if now - started < _core._TERMINAL_QUEUE_HOLD_TTL_S:
         _core._log_terminal_queue_hold(sid, reason)
         return

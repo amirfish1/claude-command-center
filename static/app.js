@@ -15829,6 +15829,8 @@
       const action = item.getAttribute('data-simple-action');
       if (action === 'stop') {
         _simpleStopTask();
+      } else if (action === 'force-restart') {
+        _simpleForceRestart();
       } else if (action === 'font-minus') {
         const btn = document.getElementById('fontMinus');
         if (btn) btn.click();
@@ -16062,6 +16064,25 @@
       else _simpleToast('Could not stop that: ' + ((data && data.error) || ('HTTP ' + res.status)), true);
     } catch (e) {
       _simpleToast('Could not stop that: ' + ((e && e.message) || 'network error'), true);
+    }
+  }
+
+  // CCC-27: Stop only interrupts a running turn. This retires an idle or
+  // unresponsive live child and re-delivers anything queued via --resume.
+  async function _simpleForceRestart() {
+    if (!currentSession.id) return;
+    try {
+      const res = await fetch(`/api/session/${encodeURIComponent(currentSession.id)}/force-restart`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: '{}',
+      });
+      let data = {};
+      try { data = await res.json(); } catch (_) {}
+      if (res.ok && data.ok) _simpleToast(data.redelivered ? 'Restarted and re-sent your message.' : 'Session restarted.');
+      else _simpleToast('Could not restart: ' + ((data && data.error) || ('HTTP ' + res.status)), true);
+    } catch (e) {
+      _simpleToast('Could not restart: ' + ((e && e.message) || 'network error'), true);
     }
   }
 
