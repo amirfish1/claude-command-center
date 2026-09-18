@@ -2731,12 +2731,19 @@
   }
   function _archiveWindowRowTs(row) {
     if (!row) return 0;
-    const raw = row.modified || row.mtime || row.last_interacted
-      || row.last_activity || row.last_mtime || row.archived_at
-      || row.closed_at || row.started_at || 0;
-    const ts = Number(raw);
-    if (!Number.isFinite(ts) || ts <= 0) return 0;
-    return ts > 100000000000 ? Math.floor(ts / 1000) : ts;
+    // Keep the shared Active/All window aligned with Current Sessions: an
+    // interaction can be newer than the transcript's file modification time.
+    // Normalize each candidate before comparing so mixed millisecond/second
+    // values cannot make an older millisecond timestamp win.
+    const timestamps = [
+      row.modified, row.mtime, row.last_interacted, row.last_activity,
+      row.last_mtime, row.archived_at, row.closed_at, row.started_at,
+    ].map((raw) => {
+      const ts = Number(raw);
+      if (!Number.isFinite(ts) || ts <= 0) return 0;
+      return ts > 100000000000 ? Math.floor(ts / 1000) : ts;
+    });
+    return Math.max(...timestamps);
   }
   function _archiveWindowAllowsRow(row, cutoff = _archiveWindowCutoff()) {
     if (!cutoff) return true;
@@ -18824,6 +18831,10 @@
         const editPid = card.spawn_pid || String(card.id || '').replace(/^spawning-/, '');
         const livePaneId = paneId || activePaneId();
         if (cardOriginSid && typeof card.spawn_composer_text === 'string') {
+          if (card.spawn_body && !String(card.spawn_body.repo_path || card.spawn_body.cwd || '').trim()) {
+            _showPendingSpawnRepoPathEditor(card, $view, livePaneId);
+            return;
+          }
           // Continuation card: restore the exact pre-send moment — origin
           // session selected, Continue panel pinned open, typed text back in
           // the composer — so editing and pressing Continue again just works.
@@ -19230,6 +19241,37 @@
       _failPendingSpawnCard(pid, 'Spawn failed: ' + ((e && e.message) || 'network'));
     }
     return true;
+  }
+
+  function _showPendingSpawnRepoPathEditor(card, view, paneId) {
+    const body = card && card.spawn_body;
+    const host = view && view.querySelector('.not-ack-note');
+    if (!body || !host || host.querySelector('[data-pending-spawn-repo-path]')) return;
+    const form = document.createElement('form');
+    form.className = 'not-ack-repo-path';
+    const input = document.createElement('input');
+    input.type = 'text';
+    input.required = true;
+    input.placeholder = '/path/to/repository';
+    input.setAttribute('data-pending-spawn-repo-path', '');
+    input.value = String(body.repo_path || body.cwd || popoutRepoPath() || '');
+    const submit = document.createElement('button');
+    submit.type = 'submit';
+    submit.className = 'not-ack-retry';
+    submit.textContent = 'Retry with path';
+    form.append('Repository path ', input, submit);
+    form.addEventListener('submit', async (event) => {
+      event.preventDefault();
+      const repoPath = input.value.trim();
+      if (!repoPath) { input.focus(); return; }
+      body.repo_path = repoPath;
+      body.cwd = repoPath;
+      card.repo_path = repoPath;
+      card.spawn_cwd = repoPath;
+      await _retryFailedPendingSpawn(card, paneId || activePaneId());
+    });
+    host.appendChild(form);
+    input.focus();
   }
 
   function insertPendingSpawnCard(pid, subject, sourceOrEngine, logPath, meta) {

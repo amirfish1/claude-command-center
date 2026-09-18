@@ -1024,6 +1024,14 @@
   .event.user_text.not-acknowledged .not-ack-retry:hover {
     background: rgba(210, 153, 34, 0.12);
   }
+  .event.user_text.not-acknowledged .not-ack-repo-path {
+    display: flex; align-items: center; gap: 6px; flex: 1 1 100%;
+  }
+  .event.user_text.not-acknowledged .not-ack-repo-path input {
+    min-width: 0; flex: 1 1 180px; padding: 3px 6px;
+    color: var(--text); background: var(--surface); border: 1px solid var(--border);
+    border-radius: 4px; font: inherit; font-size: 11px;
+  }
   .event.user_text.not-acknowledged .not-ack-dismiss {
     border: none; background: transparent; color: var(--text-muted);
     cursor: pointer; font-size: 14px; line-height: 1;
