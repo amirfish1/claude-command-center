@@ -1,0 +1,1 @@
+- q2 Queues: the reconciler activity log now fills the tickets column all the way to its bottom edge instead of floating at a fixed 28% (which left dead space below it, or clipped it when the sections above grew). Dragging the resize handle still pins an exact pixel height, and double-click/Home resets back to fill.

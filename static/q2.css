@@ -804,16 +804,26 @@ body.q2-resizing-v .q2-col { pointer-events: none; }
 
 /* ── reconciler log (bottom band) ─────────────────────────────────────── */
 .q2-logbar {
-  flex: 0 0 auto;
-  height: var(--q2-logbar-h, 28%);
+  /* Default: grow down to the column's bottom edge. A fixed 28% band left
+     dead space below it when the upper sections were short, and got pushed
+     past the bottom edge (clipped) when they were tall — CCC-1149. An
+     explicit drag switches the band to a fixed .is-sized height, which is
+     also what frees space for the queue-attendant band above. */
+  flex: 1 1 auto;
+  height: auto;
   min-height: 96px;
-  max-height: 60vh;
   display: flex;
   flex-direction: column;
   border-top: 1px solid var(--border);
   background: var(--surface);
 }
-.q2-logbar.is-collapsed { height: auto; min-height: 0; }
+/* Dragged (or restored from localStorage): exact pixel height, no grow. */
+.q2-logbar.is-sized {
+  flex: 0 0 auto;
+  height: var(--q2-logbar-h, 28%);
+  max-height: 60vh;
+}
+.q2-logbar.is-collapsed { flex: 0 0 auto; height: auto; min-height: 0; }
 .q2-logbar-head {
   flex: 0 0 auto;
   display: flex;

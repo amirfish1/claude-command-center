@@ -3801,6 +3801,8 @@
 
     logbarHandle.addEventListener('dblclick', function () {
       document.documentElement.style.removeProperty('--q2-logbar-h');
+      var resetHost = $('q2LogBar');
+      if (resetHost) resetHost.classList.remove('is-sized');
       try { localStorage.removeItem(LOGBAR_KEY); } catch (_) {}
     });
 
@@ -3813,6 +3815,8 @@
       else if (e.key === 'Home') {
         e.preventDefault();
         document.documentElement.style.removeProperty('--q2-logbar-h');
+        var homeHost = $('q2LogBar');
+        if (homeHost) homeHost.classList.remove('is-sized');
         try { localStorage.removeItem(LOGBAR_KEY); } catch (_) {}
       }
     });
