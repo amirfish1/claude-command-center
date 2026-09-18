@@ -72,6 +72,21 @@ def test_inprogress_window_derives_from_archive_window(app_js):
     )
 
 
+def test_archive_window_uses_newest_session_activity_timestamp(app_js):
+    """Now must retain a session whose interaction is newer than its file mtime.
+
+    Current Sessions already labels recency from the maximum of these fields.
+    The shared window helper must use that same timestamp so a row labelled
+    ``now`` cannot disappear after selecting the Now window.
+    """
+    m = re.search(r"function _archiveWindowRowTs\(row\)\s*\{(.*?)\n  \}", app_js, re.S)
+    assert m, "could not locate _archiveWindowRowTs()"
+    body = m.group(1)
+    assert "Math.max(" in body
+    assert "row.last_interacted" in body
+    assert "row.modified" in body
+
+
 def test_all_tab_cross_repo_ready_to_merge_respects_window(app_js):
     """The All tab must not reintroduce old rows from full archiveData after
     renderArchiveList already applied the 1d/7d window."""
