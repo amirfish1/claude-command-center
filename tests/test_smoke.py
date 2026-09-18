@@ -20995,11 +20995,7 @@ def test_applications_settings_routes_and_mutations():
 
 
 def test_apps_open_inside_the_ccc_window():
-    """Every app opens in-window; absolute URLs go through /app/<id>.
-
-    A rail entry with target=_blank throws the user into a browser tab, which
-    defeats the point of having the app in CCC at all.
-    """
+    """Apps stay in-window except Canvas, which is a companion workspace."""
     server_py = pathlib.Path(PROJECT_ROOT, "server.py").read_text(encoding="utf-8")
     assert 'elif re.match(r"^/app/[a-z0-9_-]+$", path):' in server_py
     import server as _server
@@ -21021,7 +21017,9 @@ def test_apps_open_inside_the_ccc_window():
             assert "Open in browser" in page
 
     rail = pathlib.Path(PROJECT_ROOT, "static", "app-rail.js").read_text(encoding="utf-8")
-    assert 'a.target = "_blank"' not in rail
+    assert 'app.id === "pipeline-canvas"' in rail
+    assert 'a.target = "_blank"' in rail
+    assert 'a.rel = "noopener"' in rail
     # The + opens a popup rather than navigating away from the current page.
     assert "ccc-apps-scrim" in rail
     # A framed page must not draw a second rail inside the first.
