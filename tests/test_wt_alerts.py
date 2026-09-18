@@ -31,6 +31,8 @@ class _Fixture(unittest.TestCase):
         self.acks = pathlib.Path(self._tmp.name) / "state" / "wt-alert-acks.json"
         wt_alerts._log_cache["key"] = None
         wt_alerts._log_cache["alerts"] = []
+        wt_alerts._outbox_cache["key"] = None
+        wt_alerts._outbox_cache["alerts"] = []
         wt_alerts._service_down_since = None
 
     def tearDown(self):
@@ -42,6 +44,9 @@ class _Fixture(unittest.TestCase):
 
     def _write_log(self, lines):
         (self.home / "activity.log").write_text("\n".join(lines) + "\n")
+
+    def _write_outbox(self, messages):
+        (self.home / "outbox.json").write_text(json.dumps({"messages": messages}))
 
     def collect(self, **kw):
         kw.setdefault("wt_home", self.home)
@@ -138,6 +143,83 @@ class TestActivityErrorAlerts(_Fixture):
         self.assertIsNotNone(key)
         self.collect()
         self.assertEqual(wt_alerts._log_cache["key"], key)
+
+
+class TestDeadNotifyAlerts(_Fixture):
+    """A notify=True message that dies in the outbox means a human was never
+    told their ticket needs input — it must pin to the strip until acked."""
+
+    def _dead_notify(self, ref, verb="needs input", ts=None, msg_id="msg-dead1",
+                     status="dead", notify=True, text=None):
+        stamp = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(ts or NOW - 60))
+        return {
+            "id": msg_id,
+            "to": "cf01808b-1c97-4dda-a060-a6447e6ea535",
+            "text": text or "[watchtower] %s %s — approve the thing?" % (ref, verb),
+            "mode": "send",
+            "created_at": stamp,
+            "attempts": 20,
+            "next_attempt_at": stamp,
+            "last_error": "fifo: no live worker fifo for target",
+            "status": status,
+            "notify": notify,
+        }
+
+    def test_dead_needs_input_notice_surfaces_with_ref_and_queue(self):
+        self._write_outbox([self._dead_notify("BECKY-DESIGN-1574")])
+        out = self.collect()
+        self.assertEqual(out["total"], 1)
+        a = out["alerts"][0]
+        self.assertEqual(a["kind"], "dead_notify")
+        self.assertEqual(a["severity"], "error")
+        self.assertEqual(a["id"], "dead-notify:BECKY-DESIGN-1574")
+        self.assertEqual(a["queue"], "BECKY-DESIGN")
+        self.assertEqual(a["title"], "Needs your input: BECKY-DESIGN-1574")
+        self.assertEqual(a["detail"], "the session that filed it is gone")
+
+    def test_dead_notice_does_not_fade_with_the_error_freshness_window(self):
+        # The ERROR-line window is 15min; a dead notice is a one-shot fact and
+        # must stay pinned until acked no matter how old.
+        self._write_outbox([self._dead_notify("OPS-9", ts=NOW - 3 * 86400)])
+        out = self.collect()
+        self.assertEqual(out["total"], 1)
+        self.assertEqual(out["alerts"][0]["title"], "Needs your input: OPS-9")
+
+    def test_non_notify_and_live_messages_raise_nothing(self):
+        self._write_outbox([
+            self._dead_notify("CCC-1", notify=False),           # dead but not a notice
+            self._dead_notify("CCC-2", status="delivered"),     # notice that got through
+            self._dead_notify("CCC-3", status="pending"),       # still retrying
+        ])
+        self.assertEqual(self.collect()["alerts"], [])
+
+    def test_missing_or_corrupt_outbox_yields_nothing(self):
+        self.assertEqual(self.collect()["alerts"], [])
+        (self.home / "outbox.json").write_text("{not json")
+        self.assertEqual(self.collect()["alerts"], [])
+
+    def test_non_needs_input_verb_gets_generic_wording(self):
+        self._write_outbox([self._dead_notify("CCC-7", verb="closed")])
+        a = self.collect()["alerts"][0]
+        self.assertEqual(a["title"], "Notice never delivered: CCC-7")
+
+    def test_ack_hides_until_a_newer_death_for_the_same_ref(self):
+        self._write_outbox([self._dead_notify("CCC-9", ts=NOW - 100)])
+        self.assertEqual(self.collect()["total"], 1)
+        wt_alerts.ack_wt_alerts(["dead-notify:CCC-9"], path=self.acks, now=NOW)
+        self.assertEqual(self.collect(now=NOW + 1)["alerts"], [])
+        # Same ref dies again later: re-surfaces past the ack.
+        wt_alerts._outbox_cache["key"] = None
+        self._write_outbox([self._dead_notify("CCC-9", ts=NOW + 50, msg_id="msg-dead2")])
+        out = self.collect(now=NOW + 60)
+        self.assertEqual([a["id"] for a in out["alerts"]], ["dead-notify:CCC-9"])
+
+    def test_retried_dead_message_clears_itself(self):
+        self._write_outbox([self._dead_notify("CCC-11")])
+        self.assertEqual(self.collect()["total"], 1)
+        # `wt outbox retry` flips status back to pending: alert disappears.
+        self._write_outbox([self._dead_notify("CCC-11", status="pending")])
+        self.assertEqual(self.collect()["alerts"], [])
 
 
 class TestServiceAlerts(_Fixture):

@@ -1,0 +1,1 @@
+The WATCHTOWER ERRORS strip now surfaces dead notify messages: when a needs-input or status notice can never reach the session that filed it (dead outbox message), the strip shows "Needs your input: <REF> — the session that filed it is gone" until acknowledged, instead of the notice dying silently as a DEADMSG line in activity.log.

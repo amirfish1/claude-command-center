@@ -8,7 +8,7 @@ in places nobody looks at: ``~/.watchtower/launch-failures.json`` and
 ``ERROR`` lines buried in a multi-MB ``activity.log``. This module folds them
 into one small, ack-able list the dashboard shows above the queue.
 
-Three sources, all cheap (no subprocess, no O(all sessions) work):
+Four sources, all cheap (no subprocess, no O(all sessions) work):
 
 * ``launch-failures.json`` -- WatchTower's durable per-(queue, engine) record
   of the last launch failure plus its cooldown. WatchTower clears a record on
@@ -18,6 +18,11 @@ Three sources, all cheap (no subprocess, no O(all sessions) work):
   Only the tail of the file is read (``_LOG_TAIL_BYTES``) and the parse is
   cached by ``(mtime, size)``. Identical messages per queue collapse into one
   alert with a count and a last-seen time.
+* ``outbox.json`` dead ``notify`` messages -- a needs-input/status notice whose
+  target session is gone dies after 20 retries as a DEADMSG line nobody reads.
+  The outbox keeps the dead record (with its ``[watchtower] REF verb`` text),
+  so the strip can surface it until acked; a retried/delivered message leaves
+  ``dead`` status and the alert clears itself.
 * WatchTower service state -- ``_watchtower_service_status`` (already cached
   by the server). A stopped or degraded daemon means NO queue drains.
 
@@ -69,6 +74,8 @@ _LOG_LINE_RE = re.compile(
 _lock = threading.Lock()
 # activity.log ERROR parse cache: {"key": (mtime, size), "alerts": [...]}
 _log_cache = {"key": None, "alerts": []}
+# outbox.json dead-notify parse cache: same (mtime, size) keying as the log.
+_outbox_cache = {"key": None, "alerts": []}
 # First time the WatchTower daemon was seen not-online (epoch). None = online.
 _service_down_since = None
 
@@ -302,7 +309,121 @@ def activity_error_alerts(wt_home=None, now=None):
     return list(alerts)
 
 
-# ── source 3: WatchTower daemon state ───────────────────────────────────────
+# ── source 3: outbox.json dead notify messages ─────────────────────────────
+
+# Ticket-event notices are sent as "[watchtower] REF verb — detail" with
+# notify=True (watchtower/queue.py _notify_ticket_event). A dead one means the
+# session it was addressed to is gone and the human was never told.
+_DEAD_NOTIFY_RE = re.compile(r"^\[watchtower\]\s+(\S+)\s+(.*?)(?:\s*—\s*|$)")
+# Verbs that hand something to a human get "Needs your input" wording; a dead
+# claimed/closed echo is informational, not a question.
+_NEEDS_INPUT_VERBS = ("needs input", "awaits product decision")
+
+
+def _iso_to_epoch(value):
+    try:
+        return datetime.strptime(
+            str(value or ""), "%Y-%m-%dT%H:%M:%SZ"
+        ).replace(tzinfo=timezone.utc).timestamp()
+    except ValueError:
+        return 0.0
+
+
+def _dead_notify_ts(msg):
+    """Approximate time the message died: last scheduled attempt, TTL expiry,
+    or creation -- whichever exists."""
+    for field in ("next_attempt_at", "expires_at", "created_at"):
+        ts = _iso_to_epoch(msg.get(field))
+        if ts:
+            return ts
+    return 0.0
+
+
+def dead_notify_alerts(wt_home=None, now=None):
+    """Dead ``notify=True`` outbox messages, grouped per ticket ref.
+
+    Unlike transient ERROR lines these are one-shot facts, so they are NOT
+    subject to ``_ACTIVITY_ERROR_FRESH_S``: the alert stands until acked or
+    until WatchTower retries/removes the dead message (``wt outbox retry``).
+    """
+    now = time.time() if now is None else now
+    path = Path(wt_home or _wt_home()) / "outbox.json"
+    try:
+        st = path.stat()
+    except OSError:
+        return []
+    key = (st.st_mtime, st.st_size)
+    with _lock:
+        if _outbox_cache["key"] == key:
+            return [dict(a, age_seconds=max(0, int(now - a["ts"])))
+                    for a in _outbox_cache["alerts"]]
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            data = json.load(f)
+    except (OSError, ValueError):
+        return []
+    messages = data.get("messages") if isinstance(data, dict) else None
+    if not isinstance(messages, list):
+        return []
+    groups = {}
+    for m in messages:
+        if not isinstance(m, dict):
+            continue
+        if m.get("status") != "dead" or not m.get("notify"):
+            continue
+        text = str(m.get("text") or "")
+        parsed = _DEAD_NOTIFY_RE.match(text.strip())
+        ref = parsed.group(1) if parsed else ""
+        verb = (parsed.group(2) or "").strip() if parsed else ""
+        key_ref = ref or str(m.get("id") or "?")
+        g = groups.get(key_ref)
+        ts = _dead_notify_ts(m)
+        if g is None:
+            g = groups[key_ref] = {"ref": ref, "verb": verb, "ts": ts,
+                                   "count": 0, "msg_id": str(m.get("id") or "")}
+        g["count"] += 1
+        if ts > g["ts"]:
+            g["ts"] = ts
+            g["msg_id"] = str(m.get("id") or "")
+            if ref:
+                g["ref"], g["verb"] = ref, verb
+    out = []
+    for key_ref, g in groups.items():
+        ref = g["ref"]
+        # "BECKY-DESIGN-1574" -> "BECKY-DESIGN"; unparseable -> generic.
+        queue = ref.rsplit("-", 1)[0] if re.match(r"^.+-\d+$", ref) else ""
+        if g["verb"] in _NEEDS_INPUT_VERBS:
+            title = "Needs your input: %s" % (ref or key_ref)
+        else:
+            title = "Notice never delivered: %s" % (ref or key_ref)
+        out.append({
+            "id": "dead-notify:%s" % key_ref,
+            "kind": "dead_notify",
+            "severity": "error",
+            "queue": queue.upper() or "WATCHTOWER",
+            "engine": "",
+            "model": "",
+            "worker_id": "",
+            "title": title,
+            "detail": "the session that filed it is gone",
+            "ts": g["ts"],
+            "ts_iso": _iso(g["ts"]),
+            "age_seconds": max(0, int(now - g["ts"])) if g["ts"] else None,
+            "first_ts_iso": _iso(g["ts"]),
+            "count": g["count"],
+            "cooldown_until": None,
+            "cooldown_until_iso": None,
+            "cooldown_active": False,
+            "log": "",
+            "session_id": "",
+        })
+    with _lock:
+        _outbox_cache["key"] = key
+        _outbox_cache["alerts"] = out
+    return [dict(a, age_seconds=max(0, int(now - a["ts"]))) for a in out]
+
+
+# ── source 4: WatchTower daemon state ───────────────────────────────────────
 
 def service_alerts(service_status=None, now=None):
     """A critical alert while the WatchTower daemon is not online.
@@ -431,6 +552,7 @@ def collect_wt_alerts(*, wt_home=None, acks_path=None, service_status=None,
     alerts.extend(service_alerts(service_status=service_status, now=now))
     alerts.extend(launch_failure_alerts(wt_home=wt_home, now=now))
     alerts.extend(activity_error_alerts(wt_home=wt_home, now=now))
+    alerts.extend(dead_notify_alerts(wt_home=wt_home, now=now))
     acks = load_wt_alert_acks(acks_path)
     visible = []
     acked_n = 0
