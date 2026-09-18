@@ -78,6 +78,28 @@ ARCHIVE_WARM_MS = _env_int("CCC_PERF_ARCHIVE_WARM_MS", 1000)
 CONV_OPEN_MS = _env_int("CCC_PERF_CONV_OPEN_MS", 5000)
 WARM_WINDOW_S = _env_int("CCC_PERF_WARM_WINDOW_S", 3600)
 
+# Process-start marker. Samples recorded during the post-restart startup
+# storm (scratch-gc, lazy state loads, the detached archive-refresh
+# subprocess all competing) measure boot contention, not steady-state perf —
+# and archive_load ones also mislabel "warm" because the persisted response
+# cache seeds _ARCHIVE_BUILD_TS, so a 9-13s first paint seconds after a
+# restart met the 1000ms warm threshold and filed a p1 via the single-2x
+# rule. That exact pattern produced CCC-1128, CCC-1138, and CCC-1159. Warmup
+# samples are still recorded (the data is real) but flagged "warmup" and
+# excluded from breach-pattern filing.
+_PROCESS_STARTED_AT = time.time()
+WARMUP_S = _env_int("CCC_PERF_WARMUP_S", 300)
+
+
+def _in_warmup(now=None):
+    """True while the process sits inside its post-boot warmup window."""
+    try:
+        t = time.time() if now is None else float(now)
+    except (TypeError, ValueError):
+        return False
+    return (t - _PROCESS_STARTED_AT) < WARMUP_S
+
+
 _VALID_KINDS = ("archive_load", "conv_open")
 _TAIL_READ_BYTES = 2 * 1024 * 1024  # the JSONL sink grows forever; only tail this much
 _OPEN_STATUSES = {"open", "in_progress", "claimed", "blocked"}
@@ -153,11 +175,12 @@ def record_event(kind, ms, boot_id="", conv_id="", detail=None):
     if not math.isfinite(ms_f) or ms_f < 0:
         raise ValueError(f"invalid ms: {ms!r}")
 
+    now = time.time()
+    warmup = _in_warmup(now)
     warm = False
     if kind == "archive_load":
         # The page started at least `ms` ago (the placeholder clock), and
         # `since_nav_ms` (navigation -> now) is longer still when present.
-        now = time.time()
         since_ms = ms_f
         if isinstance(detail, dict):
             try:
@@ -178,6 +201,7 @@ def record_event(kind, ms, boot_id="", conv_id="", detail=None):
         "boot_id": str(boot_id or ""),
         "conv_id": str(conv_id or ""),
         "warm": warm,
+        "warmup": warmup,
         "threshold_ms": threshold_ms,
         "breach": breach,
         "detail": detail if isinstance(detail, dict) else None,
@@ -201,7 +225,13 @@ def record_event(kind, ms, boot_id="", conv_id="", detail=None):
         ),
         flush=True,
     )
-    return {"ok": True, "warm": warm, "threshold_ms": threshold_ms, "breach": breach}
+    return {
+        "ok": True,
+        "warm": warm,
+        "warmup": warmup,
+        "threshold_ms": threshold_ms,
+        "breach": breach,
+    }
 
 
 def _iso_now():
@@ -340,10 +370,17 @@ def evaluate_breach_pattern(events):
     single sample is >= 2x its own threshold (one truly awful sample is
     as worth a ticket as several borderline ones). Among qualifying
     kinds, the one with the higher p95 wins.
+
+    Warmup-flagged rows (recorded inside the post-boot window) never
+    qualify: a giant first-paint outlier during startup is expected
+    contention, and counting it here refiles the same false-positive
+    ticket on every restart.
     """
     best = None
     for kind in _VALID_KINDS:
-        rows = [e for e in events if e.get("kind") == kind]
+        rows = [
+            e for e in events if e.get("kind") == kind and not e.get("warmup")
+        ]
         if not rows:
             continue
         breach_rows = [r for r in rows if r.get("breach")]
@@ -518,7 +555,12 @@ def perf_ticket_check_once(now=None):
             return "ok"
 
         events = read_events(now - 24 * 3600)
-        rows = [event for event in events if event.get("kind") == recent_pattern["kind"]]
+        rows = [
+            event
+            for event in events
+            if event.get("kind") == recent_pattern["kind"]
+            and not event.get("warmup")
+        ]
         if not rows:
             return "ok"
         pattern = {"kind": recent_pattern["kind"], **_kind_stats(rows)}

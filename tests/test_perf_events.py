@@ -308,6 +308,45 @@ class TestPerfTicketCheckOnce(PerfEventsTestBase):
         self.assertNotIn("last_ref", state)
 
 
+class TestWarmupSuppression(PerfEventsTestBase):
+    """Samples recorded inside the post-boot warmup window are real data but
+    must never qualify a breach pattern on their own -- a giant first-paint
+    outlier during startup contention is expected, not a regression."""
+
+    def test_record_event_stamps_warmup_flag(self):
+        with mock.patch.object(pe, "_PROCESS_STARTED_AT", time.time()):
+            pe.record_event("archive_load", 300, detail={"since_nav_ms": 400})
+        row = json.loads(self.events_path().read_text().strip())
+        self.assertTrue(row["warmup"])
+
+    def test_record_event_clears_warmup_after_window(self):
+        with mock.patch.object(
+            pe, "_PROCESS_STARTED_AT", time.time() - pe.WARMUP_S - 1
+        ):
+            pe.record_event("conv_open", 100)
+        row = json.loads(self.events_path().read_text().strip())
+        self.assertFalse(row["warmup"])
+
+    def test_warmup_2x_sample_does_not_qualify(self):
+        now = time.time()
+        row = _row("archive_load", 50000, now, pe.ARCHIVE_COLD_MS)
+        row["warmup"] = True
+        self.assertIsNone(pe.evaluate_breach_pattern([row]))
+        # Same sample without the flag still qualifies.
+        del row["warmup"]
+        self.assertIsNotNone(pe.evaluate_breach_pattern([row]))
+
+    def test_warmup_rows_dont_file_tickets(self):
+        now = time.time()
+        row = _row("archive_load", 30000, now - 60, pe.ARCHIVE_COLD_MS)
+        row["warmup"] = True
+        _append_raw(self.events_path(), row)
+        fake = FakeWt()
+        pe._WT_RUNNER = fake
+        self.assertEqual(pe.perf_ticket_check_once(now=now), "ok")
+        self.assertFalse(any(call[0] == "add" for call in fake.calls))
+
+
 if __name__ == "__main__":
     unittest.main()
 
