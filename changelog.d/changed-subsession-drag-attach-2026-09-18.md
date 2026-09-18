@@ -1,0 +1,1 @@
+"Attach as sub-session" is now drag-and-drop: drag a session row onto another session row to nest it (whole-row highlight, backlog/issue cards rejected, circular links refused). The link-icon button and its picker are gone; the "Detach from parent session" button is unchanged.

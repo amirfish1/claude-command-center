@@ -9830,6 +9830,13 @@
   .conv-item.drop-below {
     box-shadow: inset 0 -2px 0 0 var(--accent);
   }
+  /* Drop-onto attach (CCC-1155): the dragged row becomes a sub-session of the
+     highlighted row — a whole-row outline, not an insert line. */
+  .conv-item.drop-attach {
+    background: rgba(88, 166, 255, 0.10);
+    box-shadow: inset 0 0 0 1.5px var(--accent);
+    border-radius: 6px;
+  }
   /* Drag-to-pin: highlight the destination folder group header while the
      dragged row hovers over it. */
   .conv-folder-group-header.drop-target {

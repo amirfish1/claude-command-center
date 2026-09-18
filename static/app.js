@@ -22407,79 +22407,6 @@
     _render();
   }
 
-  // CCC-880: "Attach as sub-session of…" — same picker chrome as
-  // _flowOpenObjectAssignPicker above, but the list is sessions, not Flow
-  // objects, and the edge it writes is a plain client-side manual override
-  // (manualSubsessionParentId), not a Flow parent assignment.
-  function _openAttachSubsessionPicker(sessionId, sessionTitle) {
-    sessionId = String(sessionId || '').trim();
-    if (!sessionId) return;
-    document.querySelectorAll('.flow-object-assign-picker').forEach(n => n.remove());
-    const modal = document.createElement('div');
-    modal.className = 'upd-overlay flow-object-assign-picker open';
-    const safeTitle = String(sessionTitle || '').trim() || 'session';
-    modal.innerHTML =
-        '<div class="upd-backdrop" data-asp-close></div>'
-      + '<div class="upd-dialog" style="width:min(520px,94vw);max-height:76vh;display:flex;flex-direction:column;">'
-      +   '<div class="upd-header">'
-      +     '<h2 class="upd-title">Attach as sub-session of…</h2>'
-      +     '<button class="upd-close" type="button" data-asp-close aria-label="Close">&times;</button>'
-      +   '</div>'
-      +   '<div class="upd-body" style="overflow:hidden;display:flex;flex-direction:column;gap:8px;min-height:0;">'
-      +     '<div style="font-size:12px;color:var(--text-muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">' + escapeHtml(safeTitle) + '</div>'
-      +     '<input type="text" id="attachSubsessionSearch" class="repo-picker-search" placeholder="Search sessions..." style="width:100%;">'
-      +     '<div id="attachSubsessionList" style="flex:1 1 auto;overflow-y:auto;border:1px solid var(--border);border-radius:6px;"></div>'
-      +   '</div>'
-      + '</div>';
-    document.body.appendChild(modal);
-    const $list = modal.querySelector('#attachSubsessionList');
-    const $search = modal.querySelector('#attachSubsessionSearch');
-    const close = () => { modal.remove(); };
-    modal.querySelectorAll('[data-asp-close]').forEach(el => el.addEventListener('click', close));
-    document.addEventListener('keydown', function onKey(ev) {
-      if (isImeKey(ev)) return;
-      if (ev.key === 'Escape') { close(); document.removeEventListener('keydown', onKey); }
-    });
-    function _render() {
-      const q = ($search.value || '').trim().toLowerCase();
-      const rows = (typeof conversationsData !== 'undefined' && Array.isArray(conversationsData)) ? conversationsData : [];
-      const candidates = rows
-        .map(c => ({
-          id: String((c && (c.session_id || c.id)) || '').trim(),
-          title: (c && (c.display_name || c.ai_title || cleanIssuePrompt(c.first_message || '') || c.id)) || '(untitled)',
-        }))
-        .filter(o => o.id && o.id !== sessionId);
-      const matches = (o) => (o.title + ' ' + o.id).toLowerCase().indexOf(q) >= 0;
-      const filtered = q ? candidates.filter(matches) : candidates;
-      if (!filtered.length) {
-        $list.innerHTML = '<div style="padding:24px;color:var(--text-muted);text-align:center;font-size:13px;">No sessions match.</div>';
-        return;
-      }
-      $list.innerHTML = filtered.map(o => (
-        '<button type="button" class="flow-object-assign-row" data-session-id="' + escapeAttr(o.id) + '">'
-        +   '<div class="flow-object-assign-title">' + escapeHtml(sidebarRowDisplayTitle(o.title)) + '</div>'
-        + '</button>'
-      )).join('');
-      $list.querySelectorAll('.flow-object-assign-row').forEach(row => {
-        row.addEventListener('click', () => {
-          const parentId = row.getAttribute('data-session-id') || '';
-          if (!parentId) return;
-          setManualSubsessionParent(sessionId, parentId);
-          close();
-          if (typeof showOpToast === 'function') showOpToast('Attached as sub-session', 'success');
-          if (typeof renderArchiveList === 'function') {
-            renderArchiveList(document.getElementById('convSearch')?.value || '', { force: true });
-          }
-        });
-      });
-    }
-    if ($search) {
-      $search.addEventListener('input', _render);
-      setTimeout(() => { try { $search.focus(); } catch (_) {} }, 50);
-    }
-    _render();
-  }
-
   function expandFlowNodeAndAncestors(nodeId) {
     if (!nodeId) return false;
     let changed = false;
@@ -26081,7 +26008,6 @@
     '[data-role="wake-codex"]',
     '[data-role="start"]',
     '[data-role="elevate-to-object"]',
-    '[data-role="attach-subsession"]',
     '[data-role="detach-subsession"]',
     '[data-role="unpin-repo"]',
     '[data-role="conv-pct-compact"]',
@@ -33797,18 +33723,18 @@
           + ' data-conv-id="' + escapeAttr(c.id) + '"'
           + ' title="Elevate to its own object" aria-label="Elevate to its own object">&#8593;</button>'
         : '';
-      // CCC-880: manual "Attach as sub-session of…" — for sessions a user
-      // knows are related but that CCC has no real parent_session_id for
-      // (no actual spawn/continuation happened). Toggles to a Detach button
-      // once attached; see manualSubsessionParentId / setManualSubsessionParent.
+      // CCC-880/CCC-1155: manual sub-session links for sessions a user knows
+      // are related but that CCC has no real parent_session_id for (no actual
+      // spawn/continuation happened). Attach is drag-and-drop — drop the row
+      // onto the parent session row (see _attachConvRowAsSubsession); this
+      // button is the reverse direction only, shown once attached. See
+      // manualSubsessionParentId / setManualSubsessionParent.
       const _manualParentOf = (!isBacklogRow && !isGithubPrRow) ? manualSubsessionParentId(sidVal) : '';
-      const attachSubsessionBtn = (isBacklogRow || isGithubPrRow) ? '' : (_manualParentOf
+      const detachSubsessionBtn = (_manualParentOf && !isBacklogRow && !isGithubPrRow)
         ? '<button class="conv-attach-subsession-btn is-detach" data-role="detach-subsession"'
           + ' data-conv-id="' + escapeAttr(sidVal) + '"'
           + ' title="Detach from parent session" aria-label="Detach from parent session">&#128268;</button>'
-        : '<button class="conv-attach-subsession-btn" data-role="attach-subsession"'
-          + ' data-conv-id="' + escapeAttr(sidVal) + '"'
-          + ' title="Attach as sub-session of…" aria-label="Attach as sub-session of…">&#128279;</button>');
+        : '';
 
       let startBtn = '';
       let lifecycleButtons = '';
@@ -34245,7 +34171,7 @@
             +     quickTrashBtn
             +     '<button type="button" class="conv-kebab-btn" data-role="kebab" title="Actions" aria-label="Row actions"><span class="conv-kebab-dot"></span><span class="conv-kebab-dot"></span></button>'
             +   '</span>'
-            +   '<span class="conv-row-actions">' + ((opts.evergreenAgent && !_egSingleLine) ? '' : pctBadgeRowActionHtml) + wakeBtn + summaryActionBtn + mergeBtn + startBtn + pinBtn + moveLaneBtn + elevateObjectBtn + attachSubsessionBtn + lifecycleButtons + '</span>'
+            +   '<span class="conv-row-actions">' + ((opts.evergreenAgent && !_egSingleLine) ? '' : pctBadgeRowActionHtml) + wakeBtn + summaryActionBtn + mergeBtn + startBtn + pinBtn + moveLaneBtn + elevateObjectBtn + detachSubsessionBtn + lifecycleButtons + '</span>'
             + '</span>'
           + '</div>'
           + evergreenMetaRowHtml
@@ -38262,18 +38188,6 @@
         elevateConversationToOwnObject(btn.getAttribute('data-conv-id') || '');
       });
     });
-    $convList.querySelectorAll('[data-role="attach-subsession"]').forEach(btn => {
-      btn.addEventListener('click', (ev) => {
-        ev.preventDefault();
-        ev.stopPropagation();
-        const sid = btn.getAttribute('data-conv-id') || '';
-        const row = (typeof conversationsData !== 'undefined' && Array.isArray(conversationsData))
-          ? conversationsData.find(c => String((c && (c.session_id || c.id)) || '').trim() === sid)
-          : null;
-        const title = row && (row.display_name || row.ai_title || cleanIssuePrompt(row.first_message || '') || row.id);
-        _openAttachSubsessionPicker(sid, title);
-      });
-    });
     $convList.querySelectorAll('[data-role="detach-subsession"]').forEach(btn => {
       btn.addEventListener('click', (ev) => {
         ev.preventDefault();
@@ -40204,6 +40118,62 @@
   });
   document.addEventListener('drop', stopSidebarDragAutoScroll, true);
 
+  // CCC-1155: dropping one real session row onto another attaches it as a
+  // manual sub-session — the drag equivalent of the link-icon picker. Only
+  // real session rows qualify (backlog/issue cards have no session to nest),
+  // and rows inside an object drop-zone keep their existing reorder meaning.
+  function _isRealSessionCard(c) {
+    return !!c && c.source !== 'backlog' && c.source !== 'github_pr';
+  }
+  function _convRowAttachDropOk(el) {
+    const dstId = el && el.dataset && el.dataset.id;
+    if (!dragSourceId || !dstId || dragSourceIds.indexOf(dstId) !== -1) return false;
+    if (el.closest('[data-object-drop-zone]')) return false;
+    const dstCard = (conversationsData || []).find(c => c.id === dstId);
+    return _isRealSessionCard(dstCard);
+  }
+  function _subsessionChainContains(rootSid, needle) {
+    // True when walking effective parents up from rootSid reaches needle —
+    // attaching needle under rootSid would then create a cycle.
+    let hop = String(rootSid || '').trim();
+    const seen = new Set();
+    while (hop && !seen.has(hop)) {
+      seen.add(hop);
+      if (hop === needle) return true;
+      const row = (conversationsData || []).find(c => String((c && (c.session_id || c.id)) || '').trim() === hop)
+        || (typeof archiveData !== 'undefined' && Array.isArray(archiveData)
+            ? archiveData.find(c => String((c && (c.session_id || c.id)) || '').trim() === hop) : null);
+      hop = row ? f2EffectiveParentSessionId(hop, row.parent_session_id || row.hermes_parent_session_id || '') : '';
+    }
+    return false;
+  }
+  function _attachConvRowAsSubsession(dstCard) {
+    const parentSid = String((dstCard && (dstCard.session_id || dstCard.id)) || '').trim();
+    if (!parentSid) return;
+    const srcIds = (dragSourceIds && dragSourceIds.length ? dragSourceIds.slice() : [dragSourceId])
+      .filter(id => id && id !== dstCard.id);
+    let attached = 0, rejected = 0;
+    for (const cid of srcIds) {
+      const sc = (conversationsData || []).find(c => c.id === cid);
+      const childSid = String((sc && (sc.session_id || sc.id)) || '').trim();
+      if (!_isRealSessionCard(sc) || !childSid || childSid === parentSid
+          || _subsessionChainContains(parentSid, childSid)) { rejected++; continue; }
+      if (manualSubsessionParentId(childSid) === parentSid) continue;
+      setManualSubsessionParent(childSid, parentSid);
+      attached++;
+    }
+    if (attached) {
+      if (typeof showOpToast === 'function') {
+        showOpToast(attached > 1 ? 'Attached ' + attached + ' sessions as sub-sessions' : 'Attached as sub-session', 'success');
+      }
+      if (typeof renderArchiveList === 'function') {
+        renderArchiveList(document.getElementById('convSearch')?.value || '', { force: true });
+      }
+    } else if (rejected && typeof showOpToast === 'function') {
+      showOpToast('Drop onto a real session row — and no circular links', 'error');
+    }
+  }
+
   function attachDragHandlers(el) {
     el.addEventListener('dragstart', (ev) => {
       if (dragStartsFromTextEditor(ev.target)) {
@@ -40228,20 +40198,24 @@
       dragSourceIds = [];
       stopSidebarDragAutoScroll();
       $convList.querySelectorAll('.conv-item').forEach(n => {
-        n.classList.remove('dragging', 'drop-above', 'drop-below');
+        n.classList.remove('dragging', 'drop-above', 'drop-below', 'drop-attach');
       });
     });
     el.addEventListener('dragover', (ev) => {
       if (!dragSourceId || dragSourceIds.indexOf(el.dataset.id) !== -1) return;
       ev.preventDefault();
       try { ev.dataTransfer.dropEffect = 'move'; } catch (_) {}
+      // A real session row under the pointer is an attach target — highlight
+      // the whole row instead of the above/below insert hint.
+      const attach = _convRowAttachDropOk(el);
+      el.classList.toggle('drop-attach', attach);
       const rect = el.getBoundingClientRect();
       const before = (ev.clientY - rect.top) < rect.height / 2;
-      el.classList.toggle('drop-above', before);
-      el.classList.toggle('drop-below', !before);
+      el.classList.toggle('drop-above', !attach && before);
+      el.classList.toggle('drop-below', !attach && !before);
     });
     el.addEventListener('dragleave', () => {
-      el.classList.remove('drop-above', 'drop-below');
+      el.classList.remove('drop-above', 'drop-below', 'drop-attach');
     });
     el.addEventListener('drop', async (ev) => {
       ev.preventDefault();
@@ -40249,7 +40223,7 @@
       const dstId = el.dataset.id;
       if (!src || dragSourceIds.indexOf(dstId) !== -1) return;
       const before = el.classList.contains('drop-above');
-      el.classList.remove('drop-above', 'drop-below');
+      el.classList.remove('drop-above', 'drop-below', 'drop-attach');
       const objectDropGroup = el.closest('[data-object-drop-zone]');
       if (objectDropGroup) {
         if (reorderObjectSessionRows(el, readConvIdsFromDrop(ev), before ? 'before' : 'after')) {
@@ -40257,11 +40231,18 @@
         }
         return;
       }
+      const srcCard = conversationsData.find(c => c.id === src);
+      const dstCard = conversationsData.find(c => c.id === dstId);
+      // CCC-1155: dropping one real session row onto another attaches it as a
+      // sub-session. Non-session cards (backlog/issues) fall through to the
+      // repo-pin branch, whose folder-header drops are unchanged.
+      if (_isRealSessionCard(dstCard)) {
+        _attachConvRowAsSubsession(dstCard);
+        return;
+      }
       // When src and dst belong to different folder buckets, treat the
       // drop as a repo pin instead of a reorder.
       {
-        const srcCard = conversationsData.find(c => c.id === src);
-        const dstCard = conversationsData.find(c => c.id === dstId);
         if (srcCard && dstCard && dstCard.folder_path
             && srcCard.folder_path !== dstCard.folder_path) {
           const sid = srcCard.session_id || srcCard.id;
