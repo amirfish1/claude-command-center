@@ -2972,6 +2972,11 @@
     white-space: nowrap;
   }
   .conv-pane-action:hover { color: var(--text, #eee); background: var(--bg-hover, rgba(255,255,255,0.06)); }
+  /* CCC-1156: per-pane annotate is a split-view affordance — it only exists so
+     the user can pick WHICH pane's session to annotate. Single-pane mode uses
+     the global annotate entry points instead. #convSplit carries
+     data-orientation="vertical|horizontal" only while 2+ panes are mounted. */
+  #convSplit[data-orientation=""] [data-role="pane-annotate"] { display: none; }
   .conv-pane-icon-action,
   .conv-pane-more-trigger {
     width: 27px;
@@ -27108,7 +27113,6 @@ html:not(.ccc-debug-mode) #annotationFabBtn,
 html:not(.ccc-debug-mode) #annotationScreenBtn,
 html:not(.ccc-debug-mode) #annotationNotesBtn,
 html:not(.ccc-debug-mode) #statusRailActivityLogBtn,
-html:not(.ccc-debug-mode) [data-role="pane-annotate"],
 html:not(.ccc-debug-mode) #cccHealth,
 html:not(.ccc-debug-mode) #cccAdvisorPill,
 html:not(.ccc-debug-mode) #cccFleetPill,

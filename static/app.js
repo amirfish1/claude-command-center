@@ -72000,7 +72000,9 @@
       note,
       url: window.location.href,
       title: document.title || '',
-      session_id: (typeof currentSession !== 'undefined' && currentSession && currentSession.id) || '',
+      session_id: annotationState.paneId
+        ? (_annPaneSessionId(annotationState.paneId) || annotationState.paneSessionId || '')
+        : ((typeof currentSession !== 'undefined' && currentSession && currentSession.id) || ''),
       repo_path: (typeof popoutRepoPath === 'function' && popoutRepoPath()) || '',
       rect,
       viewport_crop: contextRect,
@@ -72522,7 +72524,17 @@
     }
   }
 
-  function annStart() {
+  // CCC-1156: a pane-scoped annotate must anchor to THAT pane's session —
+  // not whatever happens to be the globally active currentSession.
+  function _annPaneSessionId(paneId) {
+    if (!paneId) return '';
+    const pane = typeof paneByPaneId === 'function' ? paneByPaneId(paneId) : null;
+    const convId = (pane && pane.conversationId) || '';
+    if (!convId) return '';
+    return String((typeof sessionIdByConv !== 'undefined' && sessionIdByConv[convId]) || convId);
+  }
+
+  function annStart(paneId) {
     if (annotationState) { annStop(); return; }
     const overlay = document.createElement('div');
     overlay.className = 'ann-overlay';
@@ -72543,6 +72555,8 @@
       hoverElement: null,
       hoverRect: null,
       preEditorScreenshotPromise: null,
+      paneId: paneId || null,
+      paneSessionId: _annPaneSessionId(paneId),
     };
     overlay.addEventListener('pointerdown', annPointerDown);
     overlay.addEventListener('pointermove', annPointerMove);
@@ -72882,7 +72896,7 @@
     if (menu) menu.removeAttribute('open');
     const pane = btn.closest('.conv-pane[data-pane-id]');
     const paneId = (pane && pane.dataset.paneId) || activePaneId();
-    if (btn.dataset.role === 'pane-annotate') { annStart(); return; }
+    if (btn.dataset.role === 'pane-annotate') { annStart(paneId); return; }
     if (btn.dataset.role === 'pane-verbose') { toggleConvVerbose(); return; }
     if (btn.dataset.role === 'pane-replay') { startConvReplay(paneId); return; }
     clearPaneScreenForVideo(paneId);
