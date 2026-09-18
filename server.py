@@ -1745,6 +1745,9 @@ def _wt_queue_brief_status(queue):
 _QUEUE_ATTENDANT_MODEL = "opus-5"
 _QUEUE_ATTENDANT_EFFORT = "high"
 _QUEUE_ATTENDANT_REPORT_CAP = 500
+# Deferred (skip-for-now) questions are kept in the state file so a later run
+# can re-escalate them; bound the list so a busy queue can't grow it forever.
+_QUEUE_ATTENDANT_SKIPPED_CAP = 10
 
 # {Q}/{repo}/{port} are substituted with str.replace (not str.format) --
 # the JSON example in the last paragraph has literal braces that .format()
@@ -1823,13 +1826,36 @@ def _wt_queue_attend_session_running(session_id):
     return _pid_is_engine_process(pid, "claude")
 
 
-def _wt_queue_attend_prompt(queue, repo_path):
-    return (
+def _wt_queue_attend_prompt(queue, repo_path, skipped=None):
+    prompt = (
         _QUEUE_ATTENDANT_PROMPT
         .replace("{Q}", queue)
         .replace("{repo}", repo_path)
         .replace("{port}", str(PORT))
     )
+    # Skip-for-now resurface: questions the owner deferred in earlier runs are
+    # re-escalated here, one at a time, so skipping never loses them.
+    skipped = [
+        s for s in (skipped or [])
+        if isinstance(s, dict) and str(s.get("question") or "").strip()
+    ][: _QUEUE_ATTENDANT_SKIPPED_CAP]
+    if skipped:
+        lines = "\n".join(
+            "- {ref}: {question}".format(
+                ref=str(s.get("ref") or "?"),
+                question=str(s.get("question") or "").strip(),
+            )
+            for s in skipped
+        )
+        prompt += (
+            "\n\nThe owner previously SKIP-FOR-NOWed these escalations (they could not"
+            "\nanswer at the time). Re-escalate each one as its own"
+            "\n/api/queue/attend/question call, ONE at a time in the order listed,"
+            "\ninterleaved with whatever else the queue needs; do not dump them all"
+            "\nat once and do not treat them as already answered:"
+            "\n" + lines
+        )
+    return prompt
 
 
 def _wt_queue_attend_status(queue):
@@ -1860,6 +1886,7 @@ def _wt_queue_attend_status(queue):
             "running_for_s": 0,
             "last_report": None,
             "question": None,
+            "skipped_questions": [],
         }
     session_id = record.get("session_id")
     running = _wt_queue_attend_session_running(session_id)
@@ -1904,6 +1931,10 @@ def _wt_queue_attend_status(queue):
         "running_for_s": running_for_s,
         "last_report": last_report,
         "question": question,
+        # Deferred (skip-for-now) questions survive the run that skipped them;
+        # the board shows them so a skip never reads as silently answered.
+        "skipped_questions": record.get("skipped_questions")
+        if isinstance(record.get("skipped_questions"), list) else [],
     }
 
 
@@ -1931,7 +1962,12 @@ def _wt_queue_attend_start(queue):
     repo_path, error = _wt_queue_attend_resolve_repo(queue_norm)
     if error:
         return {"ok": False, "error": error, "code": "no_repo_path"}
-    prompt = _wt_queue_attend_prompt(queue_norm, repo_path)
+    # Carry deferred questions into the new run: the fresh record would
+    # otherwise drop them, and they are the next run's re-escalation list.
+    prior = _wt_queue_attend_read(path) or {}
+    prior_skipped = prior.get("skipped_questions")
+    skipped = prior_skipped if isinstance(prior_skipped, list) else []
+    prompt = _wt_queue_attend_prompt(queue_norm, repo_path, skipped)
     result = spawn_session(
         prompt,
         name=f"attendant: {queue_norm}",
@@ -1952,6 +1988,8 @@ def _wt_queue_attend_start(queue):
         "repo_path": repo_path,
         "model": _QUEUE_ATTENDANT_MODEL,
     }
+    if skipped:
+        record["skipped_questions"] = skipped
     try:
         _wt_queue_attend_write(path, record)
     except OSError:
@@ -1995,12 +2033,27 @@ def _wt_queue_attend_question(queue, ref, question, options):
         return {"ok": False, "error": "missing question"}
     options = [str(o).strip() for o in (options or []) if str(o or "").strip()][:6]
     record = _wt_queue_attend_read(path) or {"queue": str(queue).strip().upper()}
+    ref_norm = str(ref or "").strip()[:64]
     record["pending_question"] = {
-        "ref": str(ref or "").strip()[:64],
+        "ref": ref_norm,
         "question": text[:2000],
         "options": options,
         "at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
     }
+    # Re-escalating a previously-skipped ticket means its deferral is spent:
+    # drop it from the skipped list so a later skip re-appends fresh and an
+    # answered ticket never lingers as "skipped for later".
+    skipped = record.get("skipped_questions")
+    if isinstance(skipped, list) and ref_norm:
+        kept = [
+            s for s in skipped
+            if not (isinstance(s, dict) and str(s.get("ref") or "") == ref_norm)
+        ]
+        if len(kept) != len(skipped):
+            if kept:
+                record["skipped_questions"] = kept
+            else:
+                record.pop("skipped_questions", None)
     try:
         _wt_queue_attend_write(path, record)
     except OSError as e:
@@ -2034,6 +2087,61 @@ def _wt_queue_attend_answer(queue, text):
     except Exception as e:
         return {"ok": False, "error": str(e) or "inject failed"}
     return result if isinstance(result, dict) else {"ok": False, "error": "inject failed"}
+
+
+def _wt_queue_attend_skip(queue):
+    """Owner's skip-for-now on the pending question: defer it instead of
+    answering. The question moves to skipped_questions in the state file
+    (resurfaced by the next run's prompt), the pending slot clears so the
+    attendant can escalate the next ticket, and the live session is resumed
+    with a canned move-on directive. One-question-at-a-time is preserved:
+    there is never both a pending and a skipped copy of the same question.
+    """
+    path = _wt_queue_attend_path(queue)
+    if path is None:
+        return {"ok": False, "error": "invalid queue"}
+    record = _wt_queue_attend_read(path)
+    pending = (record or {}).get("pending_question")
+    if not isinstance(pending, dict) or not pending.get("question"):
+        return {"ok": False, "error": "no pending question to skip"}
+    entry = {
+        "ref": str(pending.get("ref") or "").strip()[:64],
+        "question": str(pending.get("question") or "").strip()[:2000],
+        "options": [str(o).strip() for o in (pending.get("options") or []) if str(o or "").strip()][:6],
+        "at": pending.get("at"),
+        "skipped_at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+    }
+    skipped = record.get("skipped_questions") if isinstance(record.get("skipped_questions"), list) else []
+    # Dedupe so double-clicks can't stack copies of the same question.
+    skipped = [
+        s for s in skipped
+        if not (isinstance(s, dict)
+                and str(s.get("ref") or "") == entry["ref"]
+                and str(s.get("question") or "") == entry["question"])
+    ]
+    skipped.append(entry)
+    skipped = skipped[-_QUEUE_ATTENDANT_SKIPPED_CAP:]
+    record["skipped_questions"] = skipped
+    record.pop("pending_question", None)
+    try:
+        _wt_queue_attend_write(path, record)
+    except OSError as e:
+        return {"ok": False, "error": str(e)}
+    ref = entry["ref"] or "this ticket"
+    directive = (
+        "Owner answer: Skip for now -- the owner can't answer this question yet. "
+        f"Leave {ref} as-is and move on to the next open ticket; skipped "
+        "questions are re-escalated to a later attendant run."
+    )
+    session_id = record.get("session_id")
+    if session_id:
+        try:
+            _inject_text_into_session(session_id, directive, mode="send", source="api")
+        except Exception:
+            # A dead session just means nobody hears the directive -- the
+            # state file above is the source of truth for the deferral.
+            pass
+    return {"ok": True, "skipped": entry}
 
 
 # Mirrors watchtower.config._validate_queue_label so a bad label is refused
@@ -29563,6 +29671,25 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                 result = _wt_queue_attend_answer(
                     str((payload or {}).get("queue") or "").strip(),
                     (payload or {}).get("text"),
+                )
+                self.send_json(result, 200 if result.get("ok") else 400)
+            except Exception as e:
+                self.send_json({"ok": False, "error": str(e)}, 500)
+            return
+        if path == "/api/queue/attend/skip":
+            # Owner's skip-for-now on the pending question: defer it (kept in
+            # the state file for a later run to re-escalate) and resume the
+            # attendant with a move-on directive so one hard question can't
+            # block every question behind it.
+            length = int(self.headers.get("Content-Length", "0"))
+            body = self.rfile.read(length) if length > 0 else b""
+            try:
+                payload = json.loads(body) if body else {}
+            except json.JSONDecodeError:
+                payload = {}
+            try:
+                result = _wt_queue_attend_skip(
+                    str((payload or {}).get("queue") or "").strip(),
                 )
                 self.send_json(result, 200 if result.get("ok") else 400)
             except Exception as e:

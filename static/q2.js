@@ -84,6 +84,8 @@
     attendAnswering: false,  // POST /api/queue/attend/answer in flight
     attendRefreshing: false, // manual GET /api/queue/attend in flight (Refresh button)
     attendAnswerError: '',
+    attendSkipping: false,   // POST /api/queue/attend/skip in flight
+    attendSkipped: [],       // [{ref, question, skipped_at}] deferred questions -- resurface next run
   };
   var newTicketExpires = {};
   // Only one attendant can be polled at a time: the queue on screen. Torn
@@ -783,6 +785,7 @@
     state.attendStartedAt = (data && data.started_at) || '';
     state.attendLastReport = (data && data.last_report) || null;
     state.attendQuestion = (data && data.question) || null;
+    state.attendSkipped = (data && data.skipped_questions) || [];
     // A fresh GET landed -- any earlier load/tend error is stale now.
     state.attendError = '';
     if (state.attendPhase === 'working' || state.attendPhase === 'waiting') {
@@ -806,6 +809,7 @@
     state.attendStartedAt = '';
     state.attendLastReport = null;
     state.attendQuestion = null;
+    state.attendSkipped = [];
     state.attendError = '';
     renderAttend();
     try {
@@ -895,6 +899,33 @@
       state.attendAnswering = false;
       if (projectKey(state.queue) !== projectKey(queue)) return;
       state.attendAnswerError = e.message || 'Could not send the answer.';
+      renderAttend();
+    }
+  }
+
+  // Skip-for-now on the waiting-phase card: defers the pending question
+  // instead of answering it. The server moves it to skipped_questions (the
+  // next run's prompt re-escalates it, so it is never lost) and resumes the
+  // attendant with a move-on directive -- one hard question must not block
+  // every question behind it.
+  async function skipAttendQuestion() {
+    if (!state.queue || state.viewAll || state.attendSkipping || !state.attendQuestion) return;
+    var queue = state.queue;
+    state.attendSkipping = true;
+    state.attendAnswerError = '';
+    renderAttend();
+    try {
+      await postJson('/api/queue/attend/skip', { queue: queue });
+      state.attendSkipping = false;
+      if (projectKey(state.queue) !== projectKey(queue)) return;  // moved on mid-request
+      state.attendQuestion = null;
+      state.attendPhase = 'working';  // resumed; the poll confirms shortly
+      renderAttend();
+      startAttendPoll(queue);
+    } catch (e) {
+      state.attendSkipping = false;
+      if (projectKey(state.queue) !== projectKey(queue)) return;
+      state.attendAnswerError = e.message || 'Could not skip the question.';
       renderAttend();
     }
   }
@@ -1503,6 +1534,20 @@
     try { localStorage.setItem(briefCollapsedKey(queue), on ? '1' : '0'); } catch (_) {}
   }
 
+  // Deferred (skip-for-now) questions, surfaced wherever the attendant band
+  // has body room so a skip never reads as silently answered. The list comes
+  // from the state file; the next run's prompt re-escalates each entry.
+  function attendSkippedHtml() {
+    var list = state.attendSkipped || [];
+    if (!list.length) return '';
+    var refs = list.map(function (s) {
+      return esc(String((s && s.ref) || '(no ref)'));
+    }).join(', ');
+    return '<div class="q2-attend-skipped">' + list.length + ' question'
+      + (list.length === 1 ? '' : 's') + ' skipped for later (' + refs
+      + ') &mdash; resurfaces on the next Tend queue</div>';
+  }
+
   // The pending question's answer form. Escaped throughout -- question text,
   // header, and option labels are model-provided. One button per option
   // (the attendant prompt puts its recommended direction first) plus a
@@ -1632,11 +1677,14 @@
           ? '<span class="q2-attend-error" title="The attendant session that asked this ended -- Refresh will not get a new answer. Tend queue to start a fresh run.">session ended</span>'
           : '')
         + '<span class="q2-spacer"></span>'
+        + '<button type="button" class="q2-btn q2-btn-ghost q2-attend-skip-now" data-q2-attend-skip-now'
+        + (state.attendSkipping ? ' disabled' : '') + ' title="Defer this question -- the attendant moves on to the next ticket and this one comes back on a later run">'
+        + (state.attendSkipping ? 'Skipping&hellip;' : 'Skip for now') + '</button>'
         + '<button type="button" class="q2-btn q2-btn-ghost q2-attend-refresh" data-q2-attend-refresh'
         + (state.attendRefreshing ? ' disabled' : '') + ' title="Check for a new question now">'
         + (state.attendRefreshing ? 'Refreshing&hellip;' : 'Refresh') + '</button>'
         + sessionBtn(state.attendSessionId, 'open session');
-      bodyHtml = attendQuestionHtml(state.attendQuestion);
+      bodyHtml = attendQuestionHtml(state.attendQuestion) + attendSkippedHtml();
       bodyHidden = false;
     } else {
       // Idle (never run, or ended) -- one manual trigger, disabled only
@@ -1656,13 +1704,15 @@
       if (state.attendLastReport && state.attendLastReport.summary) {
         bodyHtml = '<div class="q2-attend-report">Last tended '
           + esc(relTime(state.attendLastReport.at)) + ' &mdash; '
-          + esc(state.attendLastReport.summary) + '</div>';
+          + esc(state.attendLastReport.summary) + '</div>'
+          + attendSkippedHtml();
         bodyHidden = collapsed;
       } else if (state.attendExists) {
         // Ran to completion but never posted its report (e.g. the process
         // died mid-cleanup) -- still one click away via the session link.
         bodyHtml = '<div class="q2-attend-report">Attendant finished &mdash; '
-          + sessionBtn(state.attendSessionId, 'open session') + '</div>';
+          + sessionBtn(state.attendSessionId, 'open session') + '</div>'
+          + attendSkippedHtml();
         bodyHidden = collapsed;
       } else {
         bodyHtml = '';
@@ -3529,6 +3579,12 @@
     if (attendRefreshBtn) {
       e.stopPropagation();
       if (!attendRefreshBtn.disabled) refreshAttend();
+      return;
+    }
+    var attendSkipNowBtn = e.target.closest('[data-q2-attend-skip-now]');
+    if (attendSkipNowBtn) {
+      e.stopPropagation();
+      if (!attendSkipNowBtn.disabled) skipAttendQuestion();
       return;
     }
     var attendOptBtn = e.target.closest('[data-q2-attend-answer-opt]');
