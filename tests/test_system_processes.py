@@ -184,6 +184,39 @@ class ProcessAuditTests(unittest.TestCase):
         self.assertGreaterEqual(by[802]["score"], 4.0, by[802]["reasons"])
         self.assertEqual(by[802]["tree_root"], 801)
 
+    def test_reaper_sigterms_only_an_old_orphaned_profile_browser(self):
+        profile = "/tmp/puppeteer_dev_chrome_profile-leaked"
+        process = {
+            "pid": 801, "ppid": 1, "has_tty": False, "etime_min": 61,
+            "cmd": "chrome-headless-shell --user-data-dir=" + profile,
+            "cpu": 73.0, "cputime_min": 717.0,
+        }
+        with mock.patch.object(self.server, "build_system_processes", return_value={"processes": [process]}), \
+             mock.patch.object(self.server.os, "kill") as kill, \
+             mock.patch.object(self.server, "_log_activity") as log:
+            result = self.server._reap_orphaned_automation_browsers()
+        self.assertEqual(result["killed"], [801])
+        kill.assert_called_once_with(801, self.server.signal.SIGTERM)
+        log.assert_called_once_with(
+            "kill", "KILL",
+            "pid=801 age_min=61.0 profile=%s cpu_min=717.0 source=orphaned_automation_browser" % profile,
+        )
+
+    def test_reaper_respects_profile_keep_marker(self):
+        profile = "/tmp/playwright_test_profile"
+        process = {
+            "pid": 802, "ppid": 1, "has_tty": False, "etime_min": 61,
+            "cmd": "chrome-headless-shell --user-data-dir=" + profile,
+            "cpu": 0.0, "cputime_min": 0.0,
+        }
+        with mock.patch.object(self.server, "build_system_processes", return_value={"processes": [process]}), \
+             mock.patch.object(self.server.os.path, "isfile", return_value=True), \
+             mock.patch.object(self.server.os, "kill") as kill:
+            result = self.server._reap_orphaned_automation_browsers()
+        self.assertEqual(result["killed"], [])
+        self.assertEqual(result["whitelisted"], [802])
+        kill.assert_not_called()
+
     def test_desktop_chrome_keeps_its_gui_shield(self):
         rows = [ps_row(900, 1, "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome", etime="02-00:00:00")]
         by, _ = self._build(rows)

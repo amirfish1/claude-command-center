@@ -1192,6 +1192,11 @@ def _idle_reaper_loop():
                       f"sid={(r['sid'] or '')[:8]} idle={r['idle_hours']}h")
         except Exception as e:
             print(f"[idle-reaper] spawn-ttl sweep failed: {e}")
+        try:
+            for pid in _core._reap_orphaned_automation_browsers()["killed"]:
+                print(f"[idle-reaper] orphaned-browser SIGTERM pid={pid}")
+        except Exception as e:
+            print(f"[idle-reaper] orphaned-browser sweep failed: {e}")
 
 
 def morning_move(payload):
@@ -1426,4 +1431,3 @@ def morning_launch(goal_slug, strategy_id, custom_message=None):
         "session_id": resolved_sid,
         "session_id_saved": saved,
     }
-

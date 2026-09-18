@@ -10527,6 +10527,13 @@ _PROC_AUTOMATION_BROWSER_RE = re.compile(
     r"--remote-debugging-(?:pipe|port)|--headless|--enable-automation|chrome-headless-shell|"
     r"ms-playwright|\.cache/puppeteer|Chrome for Testing|puppeteer_dev_chrome_profile|playwright_\w+_profile"
 )
+_PROC_AUTOMATION_PROFILE_RE = re.compile(
+    r"--user-data-dir(?:=|\s+)(?:\"([^\"]+)\"|'([^']+)'|(\S+))"
+)
+_PROC_REAPABLE_AUTOMATION_PROFILE_RE = re.compile(
+    r"(?:puppeteer_dev_chrome_profile-.+|playwright_.+_profile)$"
+)
+_ORPHANED_AUTOMATION_KEEP_MARKER = ".ccc-keep-browser"
 _PROC_PARENT_PID_RE = re.compile(r"--parent-pid[= ](\d+)")
 _PROC_GIT_BASES = frozenset((
     "git", "git-remote-https", "git-remote-http", "git-remote-ssh", "git-credential-osxkeychain",
@@ -11018,6 +11025,72 @@ def build_system_processes(force=False):
         snap["data"] = data
         snap["ts"] = time.time()
         return data
+
+
+def _automation_browser_profile(cmd):
+    """Return a Puppeteer/Playwright profile path from a browser command."""
+    match = _PROC_AUTOMATION_PROFILE_RE.search(str(cmd or ""))
+    if not match:
+        return None
+    profile = next((part for part in match.groups() if part), "")
+    if not _PROC_REAPABLE_AUTOMATION_PROFILE_RE.fullmatch(os.path.basename(profile)):
+        return None
+    return profile
+
+
+def _reap_orphaned_automation_browsers():
+    """SIGTERM only the explicitly-approved stale headless-browser shape.
+
+    A profile may opt out by containing ``.ccc-keep-browser``. Any automation
+    browser with a matching profile that misses one of the PPID/TTY/age checks
+    is surfaced as an interrupt ask instead of being terminated.
+    """
+    killed, whitelisted, asks = [], [], []
+    for process in build_system_processes(force=True).get("processes", []):
+        profile = _automation_browser_profile(process.get("cmd"))
+        if not profile:
+            continue
+        pid = process.get("pid")
+        age_min = float(process.get("etime_min") or 0)
+        exact = (
+            process.get("ppid") == 1
+            and not process.get("has_tty")
+            and age_min > 60
+        )
+        if os.path.isfile(os.path.join(profile, _ORPHANED_AUTOMATION_KEEP_MARKER)):
+            whitelisted.append(pid)
+            continue
+        if not exact:
+            ask = _file_interrupt_ask(
+                f"automation-browser-{pid}", "orphaned-automation-browser",
+                f"Automation browser pid={pid} profile={profile} matched only part "
+                "of the orphan auto-reap policy; inspect before terminating.",
+                {"kind": "automation-browser-alert", "pid": pid},
+                name=os.path.basename(profile),
+            )
+            if ask:
+                asks.append(pid)
+            continue
+        try:
+            os.kill(int(pid), signal.SIGTERM)
+        except ProcessLookupError:
+            killed.append(pid)
+            continue
+        except (OSError, TypeError, ValueError):
+            continue
+        cpu_min = float(process.get("cputime_min") or 0)
+        _resume_ledger_append(
+            "kill", pid=int(pid), source="orphaned_automation_browser",
+            age_min=round(age_min, 1), profile=profile, cpu_min=round(cpu_min, 1),
+        )
+        _log_activity(
+            "kill", "KILL",
+            f"pid={pid} age_min={age_min:.1f} profile={profile} "
+            f"cpu_min={cpu_min:.1f} source=orphaned_automation_browser",
+        )
+        killed.append(pid)
+    _system_processes_snapshot["data"] = None
+    return {"killed": killed, "whitelisted": whitelisted, "asks": asks}
 
 
 def system_process_kill(pids, force=False):
