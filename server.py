@@ -2540,6 +2540,44 @@ def _render_queue_diagnostic_text(snapshot):
     return text
 
 
+_WT_DEVIN_SID_BY_PID = {}
+
+
+def _wt_devin_worker_session_id(pid):
+    """Devin CLI session id for a live WT worker pid, or None.
+
+    ``devin -p`` picks its own session slug and reports it nowhere WT can
+    see, so workers.json rows for devin keep ``session_id: null`` forever --
+    the sidebar's pending-worker row can never match the real conversation
+    and shows "starting..." indefinitely. Resolve it from the CLI's
+    session_locks/<id>.lock pid instead (the lock holds the ACP child pid;
+    the worker pid is its parent). Cached per pid: the binding is immutable
+    for a live worker, and misses are held briefly so the resolver's ``ps``
+    fallback cannot fire on every poll while the lock is still being written.
+    """
+    try:
+        want = int(pid)
+    except (TypeError, ValueError):
+        return None
+    if want <= 0:
+        return None
+    cached = _WT_DEVIN_SID_BY_PID.get(want)
+    if cached and (cached[0] or cached[1] > time.monotonic()):
+        return cached[0]
+    sid = None
+    try:
+        raw = _devin_cli_raw_id_for_pid(want)
+        if raw:
+            sid = DEVIN_CLI_SESSION_PREFIX + str(raw)
+    except Exception:
+        sid = None
+    if len(_WT_DEVIN_SID_BY_PID) > 256:
+        _WT_DEVIN_SID_BY_PID.clear()
+    _WT_DEVIN_SID_BY_PID[want] = (
+        sid, float("inf") if sid else time.monotonic() + 15.0)
+    return sid
+
+
 def _wt_read_workers(include_activity=True):
     """Live WatchTower worker records read straight from workers.json.
 
@@ -2589,6 +2627,16 @@ def _wt_read_workers(include_activity=True):
                     row["session_id"] = sid
             except Exception:
                 pass
+        # Devin workers never get a session_id -- not from WT's backfill nor
+        # the log heal above (devin emits no stream-json). Resolve it by pid
+        # even on the cheap include_activity=False path: the resolver reads a
+        # handful of tiny lock files and is memoised, so it costs far less
+        # than the transcript scan the flag exists to skip.
+        if (not row.get("session_id")
+                and str(row.get("engine") or "").lower() == "devin"):
+            sid = _wt_devin_worker_session_id(pid)
+            if sid:
+                row["session_id"] = sid
         out.append(row)
     return out
 
