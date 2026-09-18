@@ -782,6 +782,14 @@ try:
 except ImportError:
     _wt_workers = None
     _WT_WORKERS_AVAILABLE = False
+except Exception as e:
+    # A transiently broken sibling checkout (mid-merge conflict markers in
+    # watchtower/workers.py raise SyntaxError, not ImportError) used to kill
+    # every --archive-refresh-worker subprocess at import while the running
+    # dashboard stayed up. Degrade worker dispatch instead of dying.
+    _wt_workers = None
+    _WT_WORKERS_AVAILABLE = False
+    print(f"  [startup] watchtower.workers import failed: {e}", file=sys.stderr)
 try:
     # Queue-level policy (auto_drain) and the durable configured-queue list.
     # Used to enrich /api/ux-fixes/health with per-queue drain state so the
@@ -791,6 +799,10 @@ try:
 except ImportError:
     _wt_config = None
     _WT_CONFIG_AVAILABLE = False
+except Exception as e:
+    _wt_config = None
+    _WT_CONFIG_AVAILABLE = False
+    print(f"  [startup] watchtower.config import failed: {e}", file=sys.stderr)
 
 
 # WatchTower stores its state as plain JSON under ~/.watchtower. CCC is
