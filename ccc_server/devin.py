@@ -386,6 +386,20 @@ def _is_devin_session(session_id):
     return isinstance(session_id, str) and session_id.startswith(DEVIN_SESSION_PREFIX)
 
 
+_DEVIN_TOOL_DUMP_TITLE_RE = re.compile(
+    r"^functions\.[A-Za-z_][\w.]*:\d+\s*\{", re.IGNORECASE)
+
+
+def _devin_title_is_tool_dump(title):
+    """True when a stored session title is a serialized tool call.
+
+    Devin's auto-titler sometimes writes the session's first tool call into
+    the title field instead of a summary -- e.g.
+    ``functions.Bash:0{"command": "cat ..."}``. Treating that shape as
+    untitled lets the row fall back to the first user prompt."""
+    return bool(title) and bool(_DEVIN_TOOL_DUMP_TITLE_RE.match(title.strip()))
+
+
 def _devin_cloud_repo_folder(s, title, first_message, repo_name_map, pinned=None):
     """Best-effort repo folder for a Devin cloud session.
 
@@ -532,6 +546,8 @@ def find_devin_conversations(
         title = _core._strip_ccc_session_state_instruction(
             str(s.get("title") or "")
         ).strip()
+        if _devin_title_is_tool_dump(title):
+            title = ""
         first_message = ""
         messages = s.get("messages")
         if isinstance(messages, list):
@@ -2145,6 +2161,8 @@ def _find_devin_cli_conversations_locked(
             title = _core._strip_ccc_session_state_instruction(
                 str(row["title"] or "")
             ).strip()
+            if _devin_title_is_tool_dump(title):
+                title = ""
             model = str(row["model"] or "")
             # first_message/display_name are filled in after the loop via one
             # batched prompt_history query (plus a message_nodes fallback).

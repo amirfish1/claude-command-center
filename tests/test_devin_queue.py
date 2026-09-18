@@ -625,6 +625,39 @@ class DevinListPerfTests(unittest.TestCase):
         st = os.stat(db_path)
         os.utime(db_path, (st.st_atime + secs, st.st_mtime + secs))
 
+    def test_devin_tool_dump_title_falls_back_to_first_message(self):
+        """The CLI auto-titler can store a serialized tool call
+        (``functions.Bash:0{"command": ...}``) as sessions.title instead of a
+        summary (CCC-1164). The row must treat it as untitled and fall back
+        to the first user prompt."""
+        server, devin_mod, db_path, now = self._setup()
+        con = sqlite3.connect(db_path)
+        con.execute(
+            "UPDATE sessions SET title = ? WHERE id = ?",
+            (
+                'functions.Bash:0{"command": "cat ~/.watchtower/learnings/CCC.md"}',
+                "alpha-one",
+            ),
+        )
+        con.commit()
+        con.close()
+        rows = {r["id"]: r for r in server.find_devin_cli_conversations(
+            "/tmp/ccc", include_old=True)}
+        a = rows["devincli-alpha-one"]
+        self.assertEqual(a["display_name"], "fix payouts sort")
+        self.assertIsNone(a["ai_title"])
+
+    def test_devin_title_is_tool_dump_matches_only_serialized_calls(self):
+        import ccc_server.devin as devin_mod
+        self.assertTrue(devin_mod._devin_title_is_tool_dump(
+            'functions.Bash:0{"command": "cat x"}'))
+        self.assertTrue(devin_mod._devin_title_is_tool_dump(
+            'Functions.edit:12{"file_path": "/x"}'))
+        self.assertFalse(devin_mod._devin_title_is_tool_dump("Autocompact"))
+        self.assertFalse(devin_mod._devin_title_is_tool_dump("functions Bash notes"))
+        self.assertFalse(devin_mod._devin_title_is_tool_dump(""))
+        self.assertFalse(devin_mod._devin_title_is_tool_dump(None))
+
     def test_devin_list_memoizes_per_session_fields(self):
         server, devin_mod, db_path, now = self._setup()
         orig = devin_mod._devin_cli_row_fields_for_session
