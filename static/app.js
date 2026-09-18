@@ -37129,10 +37129,23 @@
       const _arcToolsLeft = _arcExpandAllToggle
         ? '<span class="conv-archived-tools-left">' + _arcExpandAllToggle + '</span>'
         : '';
+      // CCC-1158: on narrow sidebars the right-hand control stack wrapped into
+      // ~4 rows of pills. Grouping/density controls are view settings, not
+      // high-frequency actions — duplicate them into a ⋮ overflow menu that
+      // CSS swaps in below the sidebar's narrow breakpoint (the delegated
+      // click handlers match on data-* attrs, so the menu copies work as-is).
+      const _arcDisplayControls = _arcGroupingToggle
+        + (_arcHasDensity ? _arcDenseToggle : _arcWrapToggle + _arcDetailsToggle);
+      const _arcOverflow = _arcDisplayControls
+        ? '<details class="conv-archived-overflow" data-role="archived-overflow">'
+          + '<summary class="conv-archived-overflow-trigger" aria-label="Grouping and density options" title="Grouping and density options">&#8942;</summary>'
+          + '<span class="conv-archived-overflow-menu">' + _arcDisplayControls + '</span>'
+          + '</details>'
+        : '';
       const _arcTools = '<div class="conv-archived-tools" data-role="archived-tools">'
           + _arcToolsLeft
           + '<span class="conv-archived-tools-right">' + _arcWindowToggle + _arcEngineToggle + _arcGroupingToggle
-            + (_arcHasDensity ? _arcDenseToggle : _arcWrapToggle + _arcDetailsToggle) + '</span>'
+            + (_arcHasDensity ? _arcDenseToggle : _arcWrapToggle + _arcDetailsToggle) + _arcOverflow + '</span>'
           + '</div>';
       _archivedHtml =
         '<div class="conv-archived-section" data-role="archived-section">'
@@ -37523,8 +37536,10 @@
         $trashToggle.setAttribute('aria-expanded', String(!wasCollapsed));
       });
     }
-    const $archivedGroupingToggle = $convList.querySelector('[data-role="archived-grouping-toggle"]');
-    if ($archivedGroupingToggle) {
+    // querySelectorAll + forEach: the control also renders inside the narrow-
+    // sidebar ⋮ overflow menu (CCC-1158), and querySelector would bind only
+    // the first copy.
+    $convList.querySelectorAll('[data-role="archived-grouping-toggle"]').forEach($archivedGroupingToggle => {
       $archivedGroupingToggle.addEventListener('click', (ev) => {
         ev.stopPropagation();
         const opt = ev.target.closest('[data-grouping]');
@@ -37534,7 +37549,7 @@
         try { localStorage.setItem('ccc-archived-grouping', value); } catch (_) {}
         renderArchiveList(document.getElementById('convSearch')?.value || '');
       });
-    }
+    });
     // 1d / 7d / All time-window toggle for the Archived view. Mirrors the In
     // Progress window toggle: read data-window, persist, re-render. Filtering
     // happens in renderArchiveList against ARCHIVE_WINDOW_KEY.
@@ -38043,19 +38058,19 @@
       });
     }
     $convList.classList.toggle('wrap-titles', wrapTitlesOn());
-    const $wrapToggle = $convList.querySelector('[data-role="wrap-toggle"]');
-    if ($wrapToggle) {
+    // querySelectorAll + forEach: these controls also render inside the
+    // narrow-sidebar ⋮ overflow menu (CCC-1158), and querySelector would bind
+    // only the first copy.
+    $convList.querySelectorAll('[data-role="wrap-toggle"]').forEach($wrapToggle => {
       $wrapToggle.addEventListener('click', (ev) => {
         ev.stopPropagation();
         const next = localStorage.getItem('ccc-wrap-titles') !== '1';
         try { localStorage.setItem('ccc-wrap-titles', next ? '1' : '0'); } catch (_) {}
         $convList.classList.toggle('wrap-titles', next);
-        const opt = $wrapToggle.querySelector('[data-wrap-toggle]');
-        if (opt) opt.classList.toggle('is-active', next);
+        $convList.querySelectorAll('[data-wrap-toggle]').forEach(o => o.classList.toggle('is-active', next));
       });
-    }
-    const $detailsToggle = $convList.querySelector('[data-role="details-toggle"]');
-    if ($detailsToggle) {
+    });
+    $convList.querySelectorAll('[data-role="details-toggle"]').forEach($detailsToggle => {
       $detailsToggle.addEventListener('click', (ev) => {
         ev.stopPropagation();
         const compactNext = !compactRowsOn();
@@ -38063,13 +38078,12 @@
         $convList.classList.toggle('compact-rows', compactNext);
         renderArchiveList(document.getElementById('convSearch')?.value || '');
       });
-    }
+    });
     // Density re-renders rather than just toggling a class: grouping and
     // continuation folding happen while building the row list, so the DOM has
     // to be rebuilt. applyRowDensityToggles runs first so the classes are
     // right even if the re-render short-circuits on an unchanged structure.
-    const $sessionDensityToggle = $convList.querySelector('[data-role="session-density-toggle"]');
-    if ($sessionDensityToggle) {
+    $convList.querySelectorAll('[data-role="session-density-toggle"]').forEach($sessionDensityToggle => {
       $sessionDensityToggle.addEventListener('click', (ev) => {
         ev.stopPropagation();
         const opt = ev.target.closest('[data-session-density]');
@@ -38078,7 +38092,7 @@
         applyRowDensityToggles();
         renderArchiveList(document.getElementById('convSearch')?.value || '', { force: true });
       });
-    }
+    });
     // A pending worker has no session to open, so the row's normal click path
     // has nothing to select. Send it where the worker actually is instead.
     $convList.querySelectorAll('[data-role="wt-pending-worker"]').forEach(el => {

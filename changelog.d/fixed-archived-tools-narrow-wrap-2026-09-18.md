@@ -1,0 +1,1 @@
+Sidebar session toolbar no longer wraps into 4 rows on narrow sidebars — grouping and density controls fold into a ⋮ overflow menu below a 600px sidebar-width breakpoint, keeping the toolbar to one row.

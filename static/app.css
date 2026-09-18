@@ -7778,6 +7778,49 @@
     flex: 0 0 auto;
     white-space: nowrap;
   }
+  /* CCC-1158: on narrow sidebars the right-hand pill stack wrapped into ~4
+     rows. Grouping/density are view settings — below the breakpoint they fold
+     into a ⋮ overflow menu so the toolbar stays one row. */
+  #convList .conv-archived-overflow { display: none; position: relative; }
+  #convList .conv-archived-overflow-trigger {
+    list-style: none;
+    cursor: pointer;
+    user-select: none;
+    border: 1px solid var(--border, #2a2a2a);
+    border-radius: 4px;
+    color: var(--text-muted, #999);
+    padding: 1px 8px;
+    font-size: 12px;
+    line-height: 1.4;
+  }
+  #convList .conv-archived-overflow-trigger::-webkit-details-marker { display: none; }
+  #convList .conv-archived-overflow-trigger:hover {
+    color: var(--text, #eee);
+    background: var(--bg-hover, rgba(255,255,255,0.06));
+  }
+  #convList .conv-archived-overflow-menu {
+    display: none;
+    position: absolute;
+    top: calc(100% + 4px);
+    right: 0;
+    z-index: 30;
+    min-width: 150px;
+    padding: 6px;
+    border: 1px solid var(--border, #2a2a2a);
+    border-radius: 6px;
+    background: var(--surface, #161b22);
+    box-shadow: 0 8px 20px rgba(0, 0, 0, 0.35);
+  }
+  #convList .conv-archived-overflow[open] .conv-archived-overflow-menu { display: grid; gap: 6px; }
+  @container sidebar (max-width: 600px) {
+    #convList .conv-archived-tools-right > [data-role="archived-grouping-toggle"],
+    #convList .conv-archived-tools-right > [data-role="wrap-toggle"],
+    #convList .conv-archived-tools-right > [data-role="details-toggle"],
+    #convList .conv-archived-tools-right > [data-role="session-density-toggle"] {
+      display: none;
+    }
+    #convList .conv-archived-overflow { display: inline-flex; align-items: center; }
+  }
   #convList .conv-inprogress-list > .conv-item {
     padding-left: 8px;
   }
