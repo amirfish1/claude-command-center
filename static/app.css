@@ -14845,9 +14845,10 @@
     background: #0c1014; border: 1px solid #1b222b; border-radius: 8px;
   }
   .conv-workers-activity .fq-working-strip { margin-bottom: 6px; }
-  /* Queue health: one wrapping line of chips above WORKING NOW. Counts first
-     (is anything draining), alarms only when there is one — a strip that shows
-     a green "all clear" chip every day stops being read. */
+  /* Queue health: one wrapping line of chips below WORKING NOW, above the
+     recently-worked list. Counts first (is anything draining), alarms only
+     when there is one — a strip that shows a green "all clear" chip every
+     day stops being read. */
   .wa-health {
     display: flex; flex-wrap: wrap; align-items: center; gap: 4px 6px;
     padding: 0 2px 7px;

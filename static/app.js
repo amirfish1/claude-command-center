@@ -37104,12 +37104,14 @@
       // below — every clock tick would rebuild the whole list. _uxqRender-
       // WorkingNow() fills them by DOM after the innerHTML reset and again on
       // every health poll, so they stay live without touching the signature.
+      // CCC-1163: the block is the section's first child and the strip leads
+      // it — WORKING NOW is the lane's headline, so it sits directly under
+      // the tab bar ahead of the tools row, the health chips, and the list.
       let _workersActivityHtml = '';
       if (_allTabView === 'workers') {
         _wtWarmActivityForWorkersLane();
         const recentOpen = _workersRecentOpen();
         _workersActivityHtml = '<div class="conv-workers-activity" data-role="workers-activity">'
-          + '<div class="wa-health" data-role="workers-queue-health"></div>'
           + '<div class="fq-working-strip wa-now" data-role="workers-working-now"'
           +   ' aria-label="Working now across all queues">'
           +   '<div class="fq-working-head">'
@@ -37119,6 +37121,7 @@
           +   '</div>'
           +   '<div class="fq-working-rows"></div>'
           + '</div>'
+          + '<div class="wa-health" data-role="workers-queue-health"></div>'
           + '<details class="fq-recent-work wa-recent" data-role="workers-recent-work"'
           +   (recentOpen ? ' open' : '') + '>'
           +   '<summary>Recently worked tickets <span>All queues</span></summary>'
@@ -37149,9 +37152,9 @@
           + '</div>';
       _archivedHtml =
         '<div class="conv-archived-section" data-role="archived-section">'
+        + _workersActivityHtml
         + _arcTools
         + _workersUniformHtml
-        + _workersActivityHtml
         + _wtPendingHtml
         + _allHermesTabBarHtml
         + '<div class="conv-archived-list">' + _arcRows + '</div>'
