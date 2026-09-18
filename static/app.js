@@ -47881,13 +47881,14 @@
       +     '<div class="fq-config-section fq-config-github" hidden><div class="fq-config-eyebrow">GitHub</div><div class="fq-config-grid">'
       +       '<div class="fq-config-field wide"><label for="fqConfigGithubRepo">GitHub repository</label><input id="fqConfigGithubRepo" list="fqConfigGithubRepos" placeholder="owner/repository"><datalist id="fqConfigGithubRepos">' + githubRepoChoices + '</datalist><span class="fq-config-help">Choose a configured repository or enter owner/repository.</span></div>'
       +       '<div class="fq-config-field"><label for="fqConfigGithubAssignee">GitHub assignee (optional)</label><input id="fqConfigGithubAssignee" placeholder="@me"><span class="fq-config-help">Used by GitHub-backed claims.</span></div>'
+      +       '<div class="fq-config-field"><label for="fqConfigQueueLabel">Queue label (optional)</label><input id="fqConfigQueueLabel" placeholder="watchtower:QUEUE" autocomplete="off"><span class="fq-config-help">Marks an issue as this queue’s when 2+ queues share the repo. Match the GitHub label exactly (case matters); blank uses the default.</span></div>'
       +     '</div></div>'
       +   '</div>'
       +   '<div class="upd-actions"><button type="button" class="upd-btn" data-fq-config-cancel>Cancel</button><button type="button" class="upd-btn upd-primary" data-fq-config-save>Save queue</button></div>'
       + '</div>';
     document.body.appendChild(modal);
     const $ = (sel) => modal.querySelector(sel);
-    const fields = { queue: $('#fqConfigQueue'), workers: $('#fqConfigWorkers'), backend: $('#fqConfigBackend'), engine: $('#fqConfigEngine'), path: $('#fqConfigPath'), model: $('#fqConfigModel'), customModel: $('#fqConfigCustomModel'), effort: $('#fqConfigEffort'), drain: $('#fqConfigDrain'), gate: $('#fqConfigGate'), repo: $('#fqConfigGithubRepo'), assignee: $('#fqConfigGithubAssignee') };
+    const fields = { queue: $('#fqConfigQueue'), workers: $('#fqConfigWorkers'), backend: $('#fqConfigBackend'), engine: $('#fqConfigEngine'), path: $('#fqConfigPath'), model: $('#fqConfigModel'), customModel: $('#fqConfigCustomModel'), effort: $('#fqConfigEffort'), drain: $('#fqConfigDrain'), gate: $('#fqConfigGate'), repo: $('#fqConfigGithubRepo'), assignee: $('#fqConfigGithubAssignee'), queueLabel: $('#fqConfigQueueLabel') };
     // Friendly model labels + cost tiers (the "which model should this queue
     // run on" answer inline): curated labels from the picker registry, tier
     // from the production cost classifier ($$$/$$/$/low cost).
@@ -47931,6 +47932,8 @@
       if (!supportsCustom && fields.model.value === '__custom__') { fields.customModel.hidden = true; fields.customModel.value = ''; fields.model.value = ''; }
       fields.drain.checked = !!c.auto_drain; fields.gate.checked = !!c.product_gate;
       fields.repo.value = c.github_repo || ''; fields.assignee.value = c.github_assignee || '';
+      fields.queueLabel.value = c.queue_label || '';
+      fields.queueLabel.placeholder = 'watchtower:' + (String(fields.queue.value || '').trim().toUpperCase() || 'QUEUE');
       modal.querySelectorAll('input[name="fq-config-claim-type"]').forEach(box => { box.checked = Array.isArray(c.claim_types) && c.claim_types.includes(box.value); });
       modal.querySelectorAll('.fq-config-github').forEach(el => { el.hidden = fields.backend.value !== 'github'; });
       syncSegmented();
@@ -48005,7 +48008,7 @@
       const save = modal.querySelector('[data-fq-config-save]');
       const claim_types = Array.from(modal.querySelectorAll('input[name="fq-config-claim-type"]:checked')).map(box => box.value);
       const model = fields.model.value === '__custom__' ? fields.customModel.value : fields.model.value;
-      const payload = { queue: fields.queue.value, workers: fields.workers.value, backend: fields.backend.value, engine: fields.engine.value, repo_path: fields.path.value, model, effort: fields.effort.value, auto_drain: fields.drain.checked, product_gate: fields.gate.checked, claim_types, github_repo: fields.repo.value, github_assignee: fields.assignee.value };
+      const payload = { queue: fields.queue.value, workers: fields.workers.value, backend: fields.backend.value, engine: fields.engine.value, repo_path: fields.path.value, model, effort: fields.effort.value, auto_drain: fields.drain.checked, product_gate: fields.gate.checked, claim_types, github_repo: fields.repo.value, github_assignee: fields.assignee.value, queue_label: fields.queueLabel.value };
       save.disabled = true;
       save.classList.add('is-saving');
       try {

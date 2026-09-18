@@ -2024,6 +2024,22 @@ def _wt_queue_attend_answer(queue, text):
     return result if isinstance(result, dict) else {"ok": False, "error": "inject failed"}
 
 
+# Mirrors watchtower.config._validate_queue_label so a bad label is refused
+# before any setter runs (this module cannot import watchtower).
+_QUEUE_LABEL_RESERVED = {
+    "watchtower:in-progress", "watchtower:no-auto-drain", "watchtower:play",
+}
+
+
+def _validate_queue_label(label):
+    if "," in label or "\n" in label or "\r" in label:
+        raise ValueError("queue_label cannot contain commas or newlines")
+    if len(label) > 50:
+        raise ValueError("queue_label must be 50 characters or fewer")
+    if label.lower() in _QUEUE_LABEL_RESERVED:
+        raise ValueError("queue_label is reserved for a WatchTower control label")
+
+
 def _queue_config_from_payload(payload):
     """Validate and normalize the complete WatchTower queue form payload.
 
@@ -2081,11 +2097,19 @@ def _queue_config_from_payload(payload):
             if "\n" in value or "\r" in value:
                 raise ValueError(f"{source} must be one line")
             config[target] = value
+    # Only honoured when the caller sends the key: several dashboard callers
+    # re-post a queue's config without knowing this field and must not clear it.
+    if "queue_label" in payload:
+        queue_label = str(payload.get("queue_label") or "").strip()
+        _validate_queue_label(queue_label)
+        if queue_label:
+            config["queue_label"] = queue_label
     if backend == "github" and not config.get("github_repo"):
         raise ValueError("GitHub repository is required for the GitHub backend")
     if backend != "github":
         config.pop("github_repo", None)
         config.pop("github_assignee", None)
+        config.pop("queue_label", None)
     return {"queue": queue, "config": config}
 
 
@@ -30080,6 +30104,10 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                     _wt_config.set_backend(queue_name, conf.get("backend", "file"))
                     _wt_config.set_github_repo(queue_name, conf.get("github_repo", ""))
                     _wt_config.set_github_assignee(queue_name, conf.get("github_assignee", ""))
+                    if "queue_label" in payload and hasattr(_wt_config, "set_queue_label"):
+                        # Older watchtower installs predate queue_label
+                        # (2026-09-18); they just keep the default label.
+                        _wt_config.set_queue_label(queue_name, conf.get("queue_label", ""))
                     _wt_config.set_repo_path(queue_name, conf.get("repo_path", ""))
                     # Blank means "CCC spawn default" (the payload normalizer
                     # pops the key, CCC-1038) — re-injecting "claude" here made
@@ -30110,6 +30138,8 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                     cfg_path.parent.mkdir(parents=True, exist_ok=True)
                     if matched and matched != queue_name:
                         del cfg[matched]
+                    if "queue_label" not in payload and before_conf.get("queue_label"):
+                        normalized["config"]["queue_label"] = before_conf["queue_label"]
                     cfg[queue_name] = normalized["config"]
                     tmp = cfg_path.with_suffix(".json.tmp")
                     with open(tmp, "w") as f:

@@ -3177,6 +3177,9 @@
       + '</datalist>'
       + field('GitHub assignee', '<input class="q2-input" data-q2-cfg="github_assignee" value="'
           + esc(c.github_assignee || '') + '">')
+      + field('Queue label', '<input class="q2-input" data-q2-cfg="queue_label" value="'
+          + esc(c.queue_label || '') + '" placeholder="watchtower:' + esc(queueName || '<QUEUE>') + '">',
+          'GitHub label marking an issue as this queue\'s when 2+ queues share the repo. Exact case; blank = default')
       + field('Engine', '<select class="q2-input" data-q2-cfg="engine">'
           + Object.keys(models).map(function (e) { return opt(e, e, engine); }).join('')
           + '</select>')
