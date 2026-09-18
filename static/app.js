@@ -47872,6 +47872,7 @@
       +       '<div class="fq-config-field"><label>Drain policy</label><div class="fq-config-checkrow"><button type="button" class="settings-toggle" id="fqDrainToggle" role="switch" aria-checked="false" aria-label="Auto-drain new work"><span class="settings-toggle-track"><span class="settings-toggle-thumb"></span></span></button><span class="fq-config-checkrow-label">Auto-drain new work</span></div><input type="checkbox" id="fqConfigDrain" hidden><span class="fq-config-help">Off keeps tickets as a deliberate backlog until run manually.</span></div>'
       +       '<div class="fq-config-field"><label>Claim types</label><div class="fq-config-checks"><label><input name="fq-config-claim-type" value="bug" type="checkbox"> Bugs</label><label><input name="fq-config-claim-type" value="feature" type="checkbox"> Features</label></div><span class="fq-config-help">Choose neither to accept both ticket types.</span></div>'
       +       '<div class="fq-config-field"><label>Product gate</label><div class="fq-config-checkrow"><button type="button" class="settings-toggle" id="fqGateToggle" role="switch" aria-checked="false" aria-label="Require Ack before workers implement"><span class="settings-toggle-track"><span class="settings-toggle-thumb"></span></span></button><span class="fq-config-checkrow-label">Require my Ack before implementing</span></div><input type="checkbox" id="fqConfigGate" hidden><span class="fq-config-help">Workers post a short pitch after diagnosis and wait for Ack/Nack.</span></div>'
+      +       '<div class="fq-config-field"><label>Worker fallback</label><div class="fq-config-checkrow"><button type="button" class="settings-toggle" id="fqFallbackToggle" role="switch" aria-checked="false" aria-label="Revert to CCC default worker if current model is exhausted"><span class="settings-toggle-track"><span class="settings-toggle-thumb"></span></span></button><span class="fq-config-checkrow-label">Revert to CCC default worker if current model is exhausted</span></div><input type="checkbox" id="fqConfigFallback" hidden><span class="fq-config-help">Off parks the queue with a visible reason when the configured engine/model is exhausted; on retries that launch on the CCC default worker without changing the stored engine/model.</span></div>'
       +     '</div></div>'
       +     '<div class="fq-config-section fq-config-github" hidden><div class="fq-config-eyebrow">GitHub</div><div class="fq-config-grid">'
       +       '<div class="fq-config-field wide"><label for="fqConfigGithubRepo">GitHub repository</label><input id="fqConfigGithubRepo" list="fqConfigGithubRepos" placeholder="owner/repository"><datalist id="fqConfigGithubRepos">' + githubRepoChoices + '</datalist><span class="fq-config-help">Choose a configured repository or enter owner/repository.</span></div>'
@@ -47883,7 +47884,7 @@
       + '</div>';
     document.body.appendChild(modal);
     const $ = (sel) => modal.querySelector(sel);
-    const fields = { queue: $('#fqConfigQueue'), workers: $('#fqConfigWorkers'), backend: $('#fqConfigBackend'), engine: $('#fqConfigEngine'), path: $('#fqConfigPath'), model: $('#fqConfigModel'), customModel: $('#fqConfigCustomModel'), effort: $('#fqConfigEffort'), drain: $('#fqConfigDrain'), gate: $('#fqConfigGate'), repo: $('#fqConfigGithubRepo'), assignee: $('#fqConfigGithubAssignee'), queueLabel: $('#fqConfigQueueLabel') };
+    const fields = { queue: $('#fqConfigQueue'), workers: $('#fqConfigWorkers'), backend: $('#fqConfigBackend'), engine: $('#fqConfigEngine'), path: $('#fqConfigPath'), model: $('#fqConfigModel'), customModel: $('#fqConfigCustomModel'), effort: $('#fqConfigEffort'), drain: $('#fqConfigDrain'), gate: $('#fqConfigGate'), repo: $('#fqConfigGithubRepo'), assignee: $('#fqConfigGithubAssignee'), queueLabel: $('#fqConfigQueueLabel'), fallback: $('#fqConfigFallback') };
     // Friendly model labels + cost tiers (the "which model should this queue
     // run on" answer inline): curated labels from the picker registry, tier
     // from the production cost classifier ($$$/$$/$/low cost).
@@ -47926,6 +47927,7 @@
       if (customOpt) customOpt.hidden = !supportsCustom;
       if (!supportsCustom && fields.model.value === '__custom__') { fields.customModel.hidden = true; fields.customModel.value = ''; fields.model.value = ''; }
       fields.drain.checked = !!c.auto_drain; fields.gate.checked = !!c.product_gate;
+      fields.fallback.checked = !!c.fallback_to_default_worker;
       fields.repo.value = c.github_repo || ''; fields.assignee.value = c.github_assignee || '';
       fields.queueLabel.value = c.queue_label || '';
       fields.queueLabel.placeholder = 'watchtower:' + (String(fields.queue.value || '').trim().toUpperCase() || 'QUEUE');
@@ -47934,6 +47936,7 @@
       syncSegmented();
       syncDrainToggle();
       syncGateToggle();
+      syncFallbackToggle();
     };
     // Segmented engine/backend pickers drive the hidden selects (kept so the
     // payload code below is untouched); the drain switch drives its checkbox.
@@ -47965,6 +47968,10 @@
       const t = $('#fqGateToggle');
       if (t) { t.classList.toggle('is-on', fields.gate.checked); t.setAttribute('aria-checked', fields.gate.checked ? 'true' : 'false'); }
     }
+    function syncFallbackToggle() {
+      const t = $('#fqFallbackToggle');
+      if (t) { t.classList.toggle('is-on', fields.fallback.checked); t.setAttribute('aria-checked', fields.fallback.checked ? 'true' : 'false'); }
+    }
     segBtns('#fqBackendSeg', 'backend', fields.backend);
     segBtns('#fqEngineSeg', 'engine', fields.engine);
     const drainToggle = $('#fqDrainToggle');
@@ -47976,6 +47983,11 @@
     if (gateToggle) gateToggle.addEventListener('click', () => {
       fields.gate.checked = !fields.gate.checked;
       syncGateToggle();
+    });
+    const fallbackToggle = $('#fqFallbackToggle');
+    if (fallbackToggle) fallbackToggle.addEventListener('click', () => {
+      fields.fallback.checked = !fields.fallback.checked;
+      syncFallbackToggle();
     });
     const close = () => modal.remove();
     apply(findQueue(initialQueue));
@@ -48003,7 +48015,7 @@
       const save = modal.querySelector('[data-fq-config-save]');
       const claim_types = Array.from(modal.querySelectorAll('input[name="fq-config-claim-type"]:checked')).map(box => box.value);
       const model = fields.model.value === '__custom__' ? fields.customModel.value : fields.model.value;
-      const payload = { queue: fields.queue.value, workers: fields.workers.value, backend: fields.backend.value, engine: fields.engine.value, repo_path: fields.path.value, model, effort: fields.effort.value, auto_drain: fields.drain.checked, product_gate: fields.gate.checked, claim_types, github_repo: fields.repo.value, github_assignee: fields.assignee.value, queue_label: fields.queueLabel.value };
+      const payload = { queue: fields.queue.value, workers: fields.workers.value, backend: fields.backend.value, engine: fields.engine.value, repo_path: fields.path.value, model, effort: fields.effort.value, auto_drain: fields.drain.checked, product_gate: fields.gate.checked, claim_types, github_repo: fields.repo.value, github_assignee: fields.assignee.value, queue_label: fields.queueLabel.value, fallback_to_default_worker: fields.fallback.checked };
       save.disabled = true;
       save.classList.add('is-saving');
       try {

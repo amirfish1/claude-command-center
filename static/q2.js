@@ -3256,6 +3256,12 @@
       + field('Effort', '<select class="q2-input" data-q2-cfg="effort">'
           + effortOptions(engine, c.effort || '')
           + '</select>', 'Reasoning budget for workers this queue spawns')
+      + field('Revert to CCC default worker if current model is exhausted',
+          '<select class="q2-input" data-q2-cfg="fallback_to_default_worker">'
+          + opt('false', 'off', String(!!c.fallback_to_default_worker))
+          + opt('true', 'on', String(!!c.fallback_to_default_worker))
+          + '</select>',
+          'On: a launch that fails on the configured engine/model retries on the CCC default worker for that launch only (stored engine/model unchanged). Off: the queue parks with a visible reason instead of switching engines')
       + field('Desired workers', '<input class="q2-input" type="number" min="0" max="16"'
           + ' data-q2-cfg="desired_workers" value="' + esc(String(c.desired_workers != null ? c.desired_workers : 1)) + '">')
       + field('Auto-drain', '<select class="q2-input" data-q2-cfg="auto_drain">'
@@ -3313,6 +3319,7 @@
     });
     payload.auto_drain = payload.auto_drain === 'true';
     payload.product_gate = payload.product_gate === 'true';
+    payload.fallback_to_default_worker = payload.fallback_to_default_worker === 'true';
     payload.desired_workers = parseInt(payload.desired_workers, 10) || 0;
     payload.claim_types = [].slice.call(modal.querySelectorAll('[data-q2-claim]'))
       .filter(function (el) { return el.checked; })

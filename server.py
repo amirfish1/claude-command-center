@@ -2242,6 +2242,17 @@ def _queue_config_from_payload(payload):
         if grace_s < 0:
             raise ValueError("grace_s must be >= 0")
         config["grace_s"] = grace_s
+    # Present-only like grace_s: both dialogs always send the checkbox state,
+    # but a caller that predates the field must not clear a queue's
+    # fallback_to_default_worker on a full-replace save (CCC-1161).
+    if "fallback_to_default_worker" in payload:
+        raw_fallback = payload.get("fallback_to_default_worker")
+        if isinstance(raw_fallback, str):
+            config["fallback_to_default_worker"] = raw_fallback.strip().lower() in (
+                "1", "true", "yes", "on",
+            )
+        else:
+            config["fallback_to_default_worker"] = bool(raw_fallback)
     if backend == "github" and not config.get("github_repo"):
         raise ValueError("GitHub repository is required for the GitHub backend")
     if backend != "github":
@@ -30314,6 +30325,13 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                         _wt_config.set_queue_label(queue_name, conf.get("queue_label", ""))
                     if "grace_s" in payload and hasattr(_wt_config, "set_grace_s"):
                         _wt_config.set_grace_s(queue_name, conf.get("grace_s"))
+                    if ("fallback_to_default_worker" in payload
+                            and hasattr(_wt_config, "set_fallback_to_default_worker")):
+                        # Older watchtower installs predate the fallback toggle
+                        # (WATCHTOWER-30); they just keep it off.
+                        _wt_config.set_fallback_to_default_worker(
+                            queue_name, conf.get("fallback_to_default_worker", False)
+                        )
                     _wt_config.set_repo_path(queue_name, conf.get("repo_path", ""))
                     # Blank means "CCC spawn default" (the payload normalizer
                     # pops the key, CCC-1038) — re-injecting "claude" here made
@@ -30344,7 +30362,7 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                     cfg_path.parent.mkdir(parents=True, exist_ok=True)
                     if matched and matched != queue_name:
                         del cfg[matched]
-                    for kept in ("queue_label", "grace_s"):
+                    for kept in ("queue_label", "grace_s", "fallback_to_default_worker"):
                         if kept not in payload and before_conf.get(kept) is not None:
                             normalized["config"][kept] = before_conf[kept]
                     cfg[queue_name] = normalized["config"]

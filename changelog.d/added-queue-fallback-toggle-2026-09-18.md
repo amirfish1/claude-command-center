@@ -1,0 +1,1 @@
+- Queue settings (main manager and Q2) gain a "Revert to CCC default worker if current model is exhausted" toggle, wired to WatchTower's `fallback_to_default_worker` queue key — on retries a failed engine/model launch on the CCC default worker for that launch only; off parks the queue with a visible reason.
