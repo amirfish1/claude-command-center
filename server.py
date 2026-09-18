@@ -2062,12 +2062,20 @@ def _queue_config_from_payload(payload):
     engine = str(payload.get("engine", "") or "").strip().lower()
     if engine not in _QUEUE_CONFIG_ENGINES:
         raise ValueError("engine must be one of %s, or blank for CCC spawn default" % ", ".join(sorted(e for e in _QUEUE_CONFIG_ENGINES if e)))
+    # The main dialog posts `workers` (1-16); the Q2 dialog posts
+    # `desired_workers`, where 0 means "parked" and must survive a re-save.
+    if "workers" in payload:
+        raw_workers, min_workers = payload["workers"], 1
+    elif "desired_workers" in payload:
+        raw_workers, min_workers = payload["desired_workers"], 0
+    else:
+        raw_workers, min_workers = 1, 1
     try:
-        workers = int(payload.get("workers", 1))
+        workers = int(raw_workers)
     except (TypeError, ValueError):
         raise ValueError("workers must be a whole number")
-    if not 1 <= workers <= 16:
-        raise ValueError("workers must be between 1 and 16")
+    if not min_workers <= workers <= 16:
+        raise ValueError("workers must be between %d and 16" % min_workers)
     raw_types = payload.get("claim_types") or []
     if not isinstance(raw_types, list):
         raise ValueError("claim_types must be a list")
@@ -2104,6 +2112,16 @@ def _queue_config_from_payload(payload):
         _validate_queue_label(queue_label)
         if queue_label:
             config["queue_label"] = queue_label
+    # Same present-only rule as queue_label: the Q2 dialog carries a queue's
+    # grace_s through untouched, other callers omit it and leave it alone.
+    if "grace_s" in payload and payload.get("grace_s") not in (None, ""):
+        try:
+            grace_s = int(payload["grace_s"])
+        except (TypeError, ValueError):
+            raise ValueError("grace_s must be a whole number of seconds")
+        if grace_s < 0:
+            raise ValueError("grace_s must be >= 0")
+        config["grace_s"] = grace_s
     if backend == "github" and not config.get("github_repo"):
         raise ValueError("GitHub repository is required for the GitHub backend")
     if backend != "github":
@@ -30094,6 +30112,18 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                     raise ValueError(policy_error)
                 if confirm_blocked_model and _model_policy_blocks(queue_model):
                     _log_activity("queue", "CONFIRM_BLOCKED", f"queue={queue_name} model={queue_model}")
+                # A repo can have one catch-all queue ("*"); refuse a second one
+                # here, before any setter has written anything.
+                if "queue_label" in payload and normalized["config"].get("queue_label") == "*":
+                    catch_repo = str(normalized["config"].get("github_repo") or "").strip().lower()
+                    for other, oconf in cfg.items():
+                        if str(other).strip().upper() == queue_name or not isinstance(oconf, dict):
+                            continue
+                        if (str(oconf.get("queue_label") or "").strip() == "*"
+                                and str(oconf.get("github_repo") or "").strip().lower() == catch_repo):
+                            raise ValueError(
+                                f"{other} is already the catch-all queue for {catch_repo}; "
+                                "a repo can have only one")
                 if _WT_CONFIG_AVAILABLE and _wt_config is not None and not case_mismatch:
                     # WT owns queue-config.json — write through the same setters
                     # `wt config -q ...` uses. Direct write remains below for
@@ -30108,6 +30138,8 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                         # Older watchtower installs predate queue_label
                         # (2026-09-18); they just keep the default label.
                         _wt_config.set_queue_label(queue_name, conf.get("queue_label", ""))
+                    if "grace_s" in payload and hasattr(_wt_config, "set_grace_s"):
+                        _wt_config.set_grace_s(queue_name, conf.get("grace_s"))
                     _wt_config.set_repo_path(queue_name, conf.get("repo_path", ""))
                     # Blank means "CCC spawn default" (the payload normalizer
                     # pops the key, CCC-1038) — re-injecting "claude" here made
@@ -30138,8 +30170,9 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                     cfg_path.parent.mkdir(parents=True, exist_ok=True)
                     if matched and matched != queue_name:
                         del cfg[matched]
-                    if "queue_label" not in payload and before_conf.get("queue_label"):
-                        normalized["config"]["queue_label"] = before_conf["queue_label"]
+                    for kept in ("queue_label", "grace_s"):
+                        if kept not in payload and before_conf.get(kept) is not None:
+                            normalized["config"][kept] = before_conf[kept]
                     cfg[queue_name] = normalized["config"]
                     tmp = cfg_path.with_suffix(".json.tmp")
                     with open(tmp, "w") as f:

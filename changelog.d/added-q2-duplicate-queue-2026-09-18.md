@@ -1,0 +1,1 @@
+- q2 Queues: new Duplicate button next to a queue's settings gear opens the settings dialog as a new queue pre-filled from that queue (name blank and required; the membership label is not copied, and auto-drain starts off). Also: a queue label of `*` makes a GitHub queue the repo's catch-all (owns every issue no other queue claims; one per repo, enforced on save).

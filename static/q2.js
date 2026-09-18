@@ -511,6 +511,9 @@
   var ICON_PLUS = '<svg viewBox="0 0 16 16" width="13" height="13" aria-hidden="true" focusable="false">'
     + '<path fill="currentColor" d="M7.25 2.75a.75.75 0 0 1 1.5 0v4.5h4.5a.75.75 0 0 1 0 1.5h-4.5v4.5a.75.75 0 0 1-1.5 0v-4.5h-4.5a.75.75 0 0 1 0-1.5h4.5v-4.5Z"/>'
     + '</svg>';
+  var ICON_COPY = '<svg viewBox="0 0 16 16" width="13" height="13" aria-hidden="true" focusable="false">'
+    + '<rect x="5.5" y="5.5" width="8" height="8" rx="1.5" fill="none" stroke="currentColor" stroke-width="1.4"/>'
+    + '<path d="M10.5 3.5v-.5a1.5 1.5 0 0 0-1.5-1.5H3.5A1.5 1.5 0 0 0 2 3v5.5A1.5 1.5 0 0 0 3.5 10H4" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/></svg>';
   var ICON_TINY_PLAY = '<svg class="q2-tdot-play" viewBox="0 0 16 16" width="11" height="11"'
     + ' aria-hidden="true" focusable="false"><path fill="currentColor"'
     + ' d="M4.8 3.1a.6.6 0 0 1 .92-.51l6.4 4.4a.6.6 0 0 1 0 1.02l-6.4 4.4a.6.6 0 0 1-.92-.51V3.1Z"/></svg>';
@@ -2027,6 +2030,8 @@
     var editPromptBtn = $('q2EditPromptBtn');
     if (newTicketBtn) newTicketBtn.hidden = state.viewAll;
     if (settingsBtn) settingsBtn.hidden = state.viewAll;
+    var dupBtn = $('q2DuplicateQueueBtn');
+    if (dupBtn) dupBtn.hidden = state.viewAll;
     if (editPromptBtn) editPromptBtn.hidden = state.viewAll;
     if (closedBtn) {
       closedBtn.hidden = state.viewAll;
@@ -3112,7 +3117,11 @@
       + inner + (hint ? '<span class="q2-field-hint">' + esc(hint) + '</span>' : '') + '</label>';
   }
 
-  async function openQueueConfig(queueName, focusField) {
+  // opts.duplicateOf: open the dialog as a NEW queue pre-filled from that
+  // queue's settings. The name starts blank (it must be changed), and the
+  // membership label is not copied: a second queue with the same label would
+  // claim the same issues as the original.
+  async function openQueueConfig(queueName, focusField, opts) {
     var options;
     try {
       options = await postJson('/api/queue/config-options', {});
@@ -3120,11 +3129,16 @@
       note('Could not load queue options: ' + e.message);
       return;
     }
+    var dupOf = (opts && opts.duplicateOf) || '';
     var isNew = !queueName;
     var existing = (options.queues || []).filter(function (q) {
-      return projectKey(q.queue) === projectKey(queueName);
+      return projectKey(q.queue) === projectKey(dupOf || queueName);
     })[0];
     var c = Object.assign({}, options.defaults || {}, (existing && existing.config) || {});
+    // The server always starts a brand-new queue with auto-drain off, so show that.
+    if (dupOf) { delete c.queue_label; c.auto_drain = false; }
+    // Only the name is required to change; keep the rest of a duplicate visible.
+    var collapsed = isNew && !dupOf;
     var models = options.models_by_engine || {};
     var efforts = options.efforts_by_engine || {};
     var engine = c.engine || 'claude';
@@ -3155,13 +3169,14 @@
     }
 
     openModal(
-      '<div class="q2-modal-head"><h2>' + (isNew ? 'New queue' : 'Queue ' + esc(queueName)) + '</h2>'
+      '<div class="q2-modal-head"><h2>' + (dupOf ? 'Duplicate of ' + esc(dupOf) : isNew ? 'New queue' : 'Queue ' + esc(queueName)) + '</h2>'
       + '<button type="button" class="q2-icon-btn" data-q2-modal-close aria-label="Close">&times;</button></div>'
       + '<div class="q2-fields">'
       + field('Name', '<input class="q2-input" data-q2-cfg="queue" value="' + esc(queueName || '')
           + '"' + (isNew ? '' : ' readonly') + ' placeholder="MYQUEUE">',
-          isNew ? '1-64 letters, numbers, _ or -' : 'Renaming is not supported here')
-      + (isNew ? '</div><details class="q2-fields-optional"><summary>Optional settings <span class="q2-dim">(defaults are fine)</span></summary><div class="q2-fields">' : '')
+          dupOf ? 'Required: pick a new name. All other settings are copied from ' + esc(dupOf) + '.'
+            : isNew ? '1-64 letters, numbers, _ or -' : 'Renaming is not supported here')
+      + (collapsed ? '</div><details class="q2-fields-optional"><summary>Optional settings <span class="q2-dim">(defaults are fine)</span></summary><div class="q2-fields">' : '')
       + field('Repo path', '<input class="q2-input" data-q2-cfg="repo_path" list="q2RepoPaths" value="'
           + esc(c.repo_path || '') + '" placeholder="/Users/you/Apps/project">')
       + '<datalist id="q2RepoPaths">'
@@ -3179,7 +3194,11 @@
           + esc(c.github_assignee || '') + '">')
       + field('Queue label', '<input class="q2-input" data-q2-cfg="queue_label" value="'
           + esc(c.queue_label || '') + '" placeholder="watchtower:' + esc(queueName || '<QUEUE>') + '">',
-          'GitHub label marking an issue as this queue\'s when 2+ queues share the repo. Exact case; blank = default')
+          'GitHub label marking an issue as this queue\'s when 2+ queues share the repo. Exact case; * = catch-all for issues no other queue claims (one per repo); blank = default')
+      // Not editable here, but the save is a full replace: carry them through so
+      // saving (or duplicating) a queue does not silently reset them.
+      + '<input type="hidden" data-q2-cfg="product_gate" value="' + (c.product_gate ? 'true' : 'false') + '">'
+      + (c.grace_s != null ? '<input type="hidden" data-q2-cfg="grace_s" value="' + esc(String(c.grace_s)) + '">' : '')
       + field('Engine', '<select class="q2-input" data-q2-cfg="engine">'
           + Object.keys(models).map(function (e) { return opt(e, e, engine); }).join('')
           + '</select>')
@@ -3196,7 +3215,7 @@
           + '<label><input type="checkbox" data-q2-claim="bug"' + (types.indexOf('bug') !== -1 ? ' checked' : '') + '> bug</label>'
           + '<label><input type="checkbox" data-q2-claim="feature"' + (types.indexOf('feature') !== -1 ? ' checked' : '') + '> feature</label>'
           + '</span>', 'Neither ticked means every type')
-      + '</div>' + (isNew ? '</details>' : '')
+      + '</div>' + (collapsed ? '</details>' : '')
       + '<div class="q2-modal-foot">'
       // These fields override the SYSTEM spawn defaults. When a queue leaves
       // one unset it falls through to those, so the form has to say where they
@@ -3208,6 +3227,7 @@
       + '<button type="button" class="q2-btn q2-btn-primary" data-q2-save-queue>Save</button>'
       + '</div>',
       function (modal) {
+        if (dupOf) modal.setAttribute('data-q2-dup-of', dupOf);
         // Model list follows the engine, or it offers models the engine cannot run.
         var eng = modal.querySelector('[data-q2-cfg="engine"]');
         var mod = modal.querySelector('[data-q2-cfg="model"]');
@@ -3242,11 +3262,21 @@
       payload[el.getAttribute('data-q2-cfg')] = el.value;
     });
     payload.auto_drain = payload.auto_drain === 'true';
+    payload.product_gate = payload.product_gate === 'true';
     payload.desired_workers = parseInt(payload.desired_workers, 10) || 0;
     payload.claim_types = [].slice.call(modal.querySelectorAll('[data-q2-claim]'))
       .filter(function (el) { return el.checked; })
       .map(function (el) { return el.getAttribute('data-q2-claim'); });
     if (!String(payload.queue || '').trim()) { note('Queue name is required.'); return; }
+    // A duplicate must be a NEW queue: posting an existing name would overwrite
+    // that queue's config (the save is a full replace).
+    var dupSource = modal.getAttribute('data-q2-dup-of');
+    if (dupSource) {
+      var wanted = projectKey(payload.queue);
+      var taken = (state.queues || []).some(function (q) { return projectKey(q.queue) === wanted; })
+        || Object.keys(state.configs || {}).some(function (k) { return projectKey(k) === wanted; });
+      if (taken) { note('A queue named ' + wanted + ' already exists - pick a new name.'); return; }
+    }
     btn.disabled = true;
     try {
       var data = await postJson('/api/queue/config', payload);
@@ -3603,6 +3633,11 @@
       openQueueConfig(state.queue, cfgOpen.getAttribute('data-q2-cfg-open'));
       return;
     }
+    if (e.target.closest('#q2DuplicateQueueBtn')) {
+      if (!state.queue) { note('Pick a queue first.'); return; }
+      openQueueConfig('', '', { duplicateOf: state.queue });
+      return;
+    }
     if (e.target.closest('#q2QueueSettingsBtn')) {
       if (!state.queue) { note('Pick a queue first.'); return; }
       openQueueConfig(state.queue);
@@ -3919,7 +3954,7 @@
   // never depends on a font shipping a decent gear or plus.
   document.querySelectorAll('[data-q2-icon]').forEach(function (el) {
     var k = el.getAttribute('data-q2-icon');
-    el.innerHTML = k === 'gear' ? ICON_GEAR : ICON_PLUS;
+    el.innerHTML = k === 'gear' ? ICON_GEAR : k === 'copy' ? ICON_COPY : ICON_PLUS;
   });
 
   loadConfigs().then(renderAll);

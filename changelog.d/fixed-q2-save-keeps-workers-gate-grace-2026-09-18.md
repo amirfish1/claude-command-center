@@ -1,0 +1,1 @@
+- Queue settings: saving from the q2 dialog no longer resets a queue's desired workers to 1 (the dialog posted `desired_workers`, the server read only `workers`; 0 = parked is preserved), turns its product gate off, or drops its grace period. The dialog now carries product gate and grace through, and the server applies grace only when sent.
