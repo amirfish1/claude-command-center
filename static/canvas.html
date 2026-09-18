@@ -31,6 +31,8 @@
       <span class="pc-activity-count" id="pcActivityCount" title="Visible queues of total runtime queues"></span>
     </span>
     <span class="pc-spacer"></span>
+    <button type="button" class="pc-btn pc-annotate-btn" id="pcAnnotateBtn"
+            title="Annotate an element and file it to the CCC queue">⚑ Annotate</button>
     <span class="pc-sync" id="pcSync" role="status">
       <span class="pc-sync-dot"></span>
       <span id="pcSyncText">connecting…</span>
@@ -150,6 +152,21 @@
 
   <script src="/static/canvas-components.js"></script>
   <script src="/static/canvas-templates.js"></script>
+  <script src="/static/q2-annotation.js"></script>
   <script src="/static/canvas.js"></script>
+  <script>
+    var pcAnnotationToastTimer;
+    window.Q2Annotation.attach(document.getElementById('pcAnnotateBtn'), {
+      onStatus: function (message) {
+        var toast = document.getElementById('pcToast');
+        toast.textContent = message;
+        toast.classList.add('is-visible');
+        clearTimeout(pcAnnotationToastTimer);
+        pcAnnotationToastTimer = setTimeout(function () {
+          toast.classList.remove('is-visible');
+        }, 3000);
+      }
+    });
+  </script>
 </body>
 </html>

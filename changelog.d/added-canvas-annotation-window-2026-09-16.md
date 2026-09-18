@@ -1,0 +1,1 @@
+- Added Canvas annotations and separate-window navigation from the application rail.

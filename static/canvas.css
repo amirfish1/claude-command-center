@@ -173,6 +173,7 @@ body {
   color: #cfe9f5;
 }
 .pc-btn.pc-btn-primary:hover { background: #17506a; border-color: #2b7ea3; }
+.pc-annotate-btn { white-space: nowrap; }
 
 /* ── stage ───────────────────────────────────────────────────────────── */
 .pc-stage {
