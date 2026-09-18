@@ -1605,6 +1605,69 @@ def test_archive_mutation_restamps_warm_snapshot_and_refreshes_async(
     assert spawned[0].target is server._archive_serve_refresh
 
 
+class _FakeThreadFactory:
+    """Records spawned threads without starting them."""
+
+    def __init__(self, spawned):
+        self._spawned = spawned
+
+    def __call__(self, *, target, args=(), daemon=None, **_kwargs):
+        factory = self
+
+        class _Thread:
+            def __init__(self):
+                self.target = target
+                self.args = args
+                self.daemon = daemon
+
+            def start(self):
+                factory._spawned.append(self)
+
+        return _Thread()
+
+
+def test_archive_refresh_spawn_gated_when_machine_saturated(
+    isolated_archive_cache, monkeypatch,
+):
+    """CCC-1154 (C): a saturated box serves the stale snapshot instead of
+    spawning an archive-refresh worker it cannot afford; when load drops the
+    next stale poll spawns again."""
+    generation = server._archive_serve_generation
+    assert server._archive_serve_cache_store(
+        _ALL_KEY,
+        [{"session_id": "sid-a", "mtime": 1}],
+        generation,
+    )
+    with server._archive_serve_lock:
+        server._archive_serve_cache[_ALL_KEY]["ts"] = 0.0  # force stale
+
+    spawned = []
+    monkeypatch.setattr(server.threading, "Thread", _FakeThreadFactory(spawned))
+    monkeypatch.setattr(server, "machine_saturated", lambda: True)
+
+    rows, from_cache, _ver = server._archive_serve_rows_versioned(_ALL_KEY, _ALL_OPTS)
+
+    assert from_cache is True
+    assert [r["session_id"] for r in rows] == ["sid-a"]
+    assert spawned == [], "no refresh worker may spawn under saturation"
+    with server._archive_serve_lock:
+        assert _ALL_KEY not in server._archive_serve_refreshing
+
+    monkeypatch.setattr(server, "machine_saturated", lambda: False)
+    server._archive_serve_rows_versioned(_ALL_KEY, _ALL_OPTS)
+    assert len(spawned) == 1
+    assert spawned[0].target is server._archive_serve_refresh
+
+
+def test_archive_refresh_load_blocked_fails_open(monkeypatch):
+    """A broken load probe must never freeze refresh spawning."""
+    def boom():
+        raise RuntimeError("boom")
+
+    monkeypatch.setattr(server, "machine_saturated", boom)
+    assert server._archive_refresh_load_blocked(time.time()) is False
+
+
 def test_archive_mutation_restamps_are_serialized_by_publish_order(
     isolated_archive_cache, monkeypatch,
 ):

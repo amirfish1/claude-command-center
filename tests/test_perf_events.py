@@ -192,12 +192,19 @@ class TestEvaluateBreachPattern(PerfEventsTestBase):
         self.assertEqual(pattern["kind"], "conv_open")
         self.assertEqual(pattern["count"], 3)
 
-    def test_single_2x_sample_qualifies(self):
+    def test_single_3x_sample_qualifies(self):
         now = time.time()
-        events = [_row("archive_load", 11000, now, pe.ARCHIVE_COLD_MS)]
+        events = [_row("archive_load", 16000, now, pe.ARCHIVE_COLD_MS)]
         pattern = pe.evaluate_breach_pattern(events)
         self.assertIsNotNone(pattern)
         self.assertEqual(pattern["kind"], "archive_load")
+
+    def test_single_2x_sample_no_longer_qualifies(self):
+        # The single-sample bar moved to 3x (CCC-1154): a lone 2x sample
+        # still counts toward the >=2-breaches rule but does not file alone.
+        now = time.time()
+        events = [_row("archive_load", 11000, now, pe.ARCHIVE_COLD_MS)]
+        self.assertIsNone(pe.evaluate_breach_pattern(events))
 
     def test_picks_worse_p95_between_qualifying_kinds(self):
         now = time.time()
@@ -443,3 +450,169 @@ class TestTicketFilingRobustness(PerfEventsTestBase):
         with mock.patch.object(pe, "_WT_RUNNER", runner):
             pe.perf_ticket_check_once()
         self.assertGreaterEqual(seen["timeout"], 120)
+
+
+class TestSaturationDowngrade(PerfEventsTestBase):
+    """CCC-1154 (B): breaches recorded while the machine was saturated are
+    downgraded — they don't qualify a per-kind perf ticket, but roll up into
+    ONE explicit 'machine saturated' alert so the overload stays visible."""
+
+    def _saturated_row(self, kind, ms, ts, threshold_ms, load1=50.0, ncpu=8):
+        row = _row(kind, ms, ts, threshold_ms)
+        row["load1"] = load1
+        row["ncpu"] = ncpu
+        return row
+
+    def test_record_event_stamps_load(self):
+        with mock.patch.object(pe, "_machine_load", return_value=(42.0, 8)):
+            result = pe.record_event("conv_open", 100)
+        self.assertTrue(result["saturated"])
+        row = json.loads(self.events_path().read_text().strip())
+        self.assertEqual(row["load1"], 42.0)
+        self.assertEqual(row["ncpu"], 8)
+
+    def test_record_event_saturated_false_under_normal_load(self):
+        with mock.patch.object(pe, "_machine_load", return_value=(3.0, 8)):
+            result = pe.record_event("conv_open", 100)
+        self.assertFalse(result["saturated"])
+
+    def test_saturated_breaches_dont_qualify(self):
+        now = time.time()
+        events = [
+            self._saturated_row("conv_open", 6000, now, pe.CONV_OPEN_MS),
+            self._saturated_row("conv_open", 6500, now, pe.CONV_OPEN_MS),
+            self._saturated_row("conv_open", 7000, now, pe.CONV_OPEN_MS),
+        ]
+        self.assertIsNone(pe.evaluate_breach_pattern(events))
+
+    def test_saturated_single_3x_still_qualifies(self):
+        # Condition (2): a single >=3x sample files even under saturation.
+        now = time.time()
+        events = [
+            self._saturated_row("archive_load", 16000, now, pe.ARCHIVE_COLD_MS)
+        ]
+        pattern = pe.evaluate_breach_pattern(events)
+        self.assertIsNotNone(pattern)
+        self.assertEqual(pattern["kind"], "archive_load")
+
+    def test_one_clean_plus_saturated_does_not_qualify(self):
+        now = time.time()
+        events = [
+            _row("conv_open", 6000, now, pe.CONV_OPEN_MS),  # clean breach
+            self._saturated_row("conv_open", 6500, now, pe.CONV_OPEN_MS),
+            self._saturated_row("conv_open", 7000, now, pe.CONV_OPEN_MS),
+        ]
+        self.assertIsNone(pe.evaluate_breach_pattern(events))
+
+    def test_warmup_saturated_rows_file_nothing(self):
+        now = time.time()
+        row = self._saturated_row("archive_load", 30000, now, pe.ARCHIVE_COLD_MS)
+        row["warmup"] = True
+        _append_raw(self.events_path(), row)
+        _append_raw(self.events_path(), dict(row))
+        fake = FakeWt()
+        pe._WT_RUNNER = fake
+        self.assertEqual(pe.perf_ticket_check_once(now=now), "ok")
+        self.assertFalse(any(call[0] == "add" for call in fake.calls))
+
+    def _seed_saturated_breaches(self, now):
+        path = self.events_path()
+        _append_raw(
+            path,
+            self._saturated_row("archive_load", 9000, now - 60, pe.ARCHIVE_COLD_MS),
+        )
+        _append_raw(
+            path,
+            self._saturated_row("conv_open", 8000, now - 30, pe.CONV_OPEN_MS),
+        )
+
+    def test_saturated_breaches_file_one_machine_ticket(self):
+        now = time.time()
+        self._seed_saturated_breaches(now)
+        fake = FakeWt()
+        pe._WT_RUNNER = fake
+
+        result = pe.perf_ticket_check_once(now=now)
+
+        self.assertEqual(result, f"saturated-filed:{fake.add_ref}")
+        add_calls = [c for c in fake.calls if c[0] == "add"]
+        self.assertEqual(len(add_calls), 1)
+        add = add_calls[0]
+        title = add[add.index("--title") + 1]
+        self.assertIn("machine saturated", title)
+        self.assertIn("load", title)
+        self.assertEqual(add[add.index("--priority") + 1], "p2")
+        note = add[add.index("--note") + 1]
+        self.assertIn("downgraded", note)
+        state = pe._load_ticket_state()
+        self.assertEqual(state["sat_ref"], fake.add_ref)
+        self.assertEqual(state["sat_status"], "open")
+
+    def test_open_saturation_ticket_refreshes_via_throttled_comment(self):
+        now = time.time()
+        self._seed_saturated_breaches(now)
+        fake = FakeWt()
+        pe._WT_RUNNER = fake
+        pe.perf_ticket_check_once(now=now)
+
+        # Same ticket still open a moment later: no refile, no comment spam
+        # (the filing itself armed the comment timestamp).
+        self._seed_saturated_breaches(now + 5)
+        result = pe.perf_ticket_check_once(now=now + 5)
+        self.assertEqual(result, f"saturated-open:{fake.add_ref}")
+        self.assertFalse(any(c[0] == "comment" for c in fake.calls))
+        self.assertEqual(len([c for c in fake.calls if c[0] == "add"]), 1)
+
+        # Past the comment interval the open ticket gets a 'still saturated'
+        # refresh instead of a duplicate filing.
+        later = now + pe.SAT_COMMENT_MIN_INTERVAL_S + 1
+        self._seed_saturated_breaches(later)
+        result = pe.perf_ticket_check_once(now=later)
+        self.assertEqual(result, f"saturated-open:{fake.add_ref}")
+        comments = [c for c in fake.calls if c[0] == "comment"]
+        self.assertEqual(len(comments), 1)
+        self.assertEqual(comments[0][1], fake.add_ref)
+        self.assertIn("still saturated", comments[0][2])
+        self.assertEqual(len([c for c in fake.calls if c[0] == "add"]), 1)
+
+    def test_closed_saturation_ticket_dedupes_same_day_then_refiles(self):
+        now = time.time()
+        self._seed_saturated_breaches(now)
+        fake = FakeWt()
+        pe._WT_RUNNER = fake
+        self.assertTrue(pe.perf_ticket_check_once(now=now).startswith("saturated-filed:"))
+
+        # Closed, same day: still deduped by the calendar day.
+        fake.find_status = "closed"
+        self._seed_saturated_breaches(now + 60)
+        self.assertEqual(
+            pe.perf_ticket_check_once(now=now + 60), "saturated-filed-today"
+        )
+        self.assertEqual(len([c for c in fake.calls if c[0] == "add"]), 1)
+
+        # Closed, next day, still saturated: a fresh alert files.
+        next_day = now + 86400
+        self._seed_saturated_breaches(next_day)
+        fake.add_ref = "CCC-777"
+        self.assertEqual(
+            pe.perf_ticket_check_once(now=next_day), "saturated-filed:CCC-777"
+        )
+        self.assertEqual(len([c for c in fake.calls if c[0] == "add"]), 2)
+
+    def test_saturation_does_not_suppress_real_perf_ticket(self):
+        # A qualifying clean pattern files the normal p1; the saturation
+        # path never runs — the two dedupe tracks are independent.
+        now = time.time()
+        path = self.events_path()
+        _append_raw(path, _row("conv_open", 16000, now - 60, pe.CONV_OPEN_MS))
+        _append_raw(
+            path,
+            self._saturated_row("archive_load", 9000, now - 30, pe.ARCHIVE_COLD_MS),
+        )
+        fake = FakeWt()
+        pe._WT_RUNNER = fake
+        self.assertEqual(
+            pe.perf_ticket_check_once(now=now), f"filed:{fake.add_ref}"
+        )
+        state = pe._load_ticket_state()
+        self.assertNotIn("sat_ref", state)

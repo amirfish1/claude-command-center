@@ -13819,6 +13819,39 @@ def _archive_refresh_slot_available(key, now):
     return started is None or (now - started) > _ARCHIVE_REFRESH_WATCHDOG_S
 
 
+# CCC-1154 option C: when the box itself is saturated, the detached
+# --archive-refresh-worker is a load producer the machine can least afford —
+# it is exactly during saturation that refresh workers pile up behind the
+# build lock and time out (seen 7x in service.out.log). Serving the stale
+# snapshot a little longer is strictly better. The log line is throttled so
+# a saturated box doesn't also spam service.out.log on every poll.
+_ARCHIVE_REFRESH_LOAD_LOG_TS = [0.0]
+_ARCHIVE_REFRESH_LOAD_LOG_INTERVAL_S = 300.0
+
+
+def _archive_refresh_load_blocked(now):
+    """True when spawning the detached archive refresh would feed a saturated
+    machine. Any probe failure means "not blocked" — a broken load check must
+    never freeze refresh spawning or the request path."""
+    try:
+        if not machine_saturated():
+            return False
+    except Exception:
+        return False
+    try:
+        if now - _ARCHIVE_REFRESH_LOAD_LOG_TS[0] >= _ARCHIVE_REFRESH_LOAD_LOG_INTERVAL_S:
+            _ARCHIVE_REFRESH_LOAD_LOG_TS[0] = now
+            load1, ncpu = _machine_load()
+            print(
+                "  [archive-serve] refresh spawn gated: machine saturated "
+                f"(load {load1}/ncpu {ncpu})",
+                flush=True,
+            )
+    except Exception:
+        pass
+    return True
+
+
 def _archive_serve_cache_store(key, rows, generation, ts=None):
     """Store rows only if no lifecycle mutation invalidated their build.
 
@@ -14976,6 +15009,7 @@ def _archive_serve_rows_versioned(
         rows, from_cache = _archive_compute_rows(key, cache_options)
         return rows, from_cache, 0
     now = time.time()
+    load_blocked = _archive_refresh_load_blocked(now)
     with _archive_serve_lock:
         serve_generation = _archive_serve_generation
         sc = _archive_serve_cache.get(key)
@@ -14984,7 +15018,7 @@ def _archive_serve_rows_versioned(
             rows = [dict(r) for r in stored_rows] if copy_rows else stored_rows
             snap_ver = sc.get("ver", 0)
             stale = force_refresh or (now - sc.get("ts", 0)) >= _ARCHIVE_SERVE_TTL
-            if stale and _archive_refresh_slot_available(key, now):
+            if stale and not load_blocked and _archive_refresh_slot_available(key, now):
                 _archive_serve_refreshing[key] = now
                 spawn = True
             else:
@@ -15036,6 +15070,7 @@ def _archive_serve_rows_versioned(
             if (
                 stored
                 and (force_refresh or borrowed_base_snapshot or entry_stale)
+                and not load_blocked
                 and _archive_refresh_slot_available(key, now)
             ):
                 _archive_serve_refreshing[key] = now

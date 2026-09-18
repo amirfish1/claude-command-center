@@ -73,6 +73,13 @@ def _env_int(name, default):
         return default
 
 
+def _env_float(name, default):
+    try:
+        return float(os.environ.get(name, default))
+    except (TypeError, ValueError):
+        return default
+
+
 ARCHIVE_COLD_MS = _env_int("CCC_PERF_ARCHIVE_COLD_MS", 5000)
 ARCHIVE_WARM_MS = _env_int("CCC_PERF_ARCHIVE_WARM_MS", 1000)
 CONV_OPEN_MS = _env_int("CCC_PERF_CONV_OPEN_MS", 5000)
@@ -89,6 +96,63 @@ WARM_WINDOW_S = _env_int("CCC_PERF_WARM_WINDOW_S", 3600)
 # excluded from breach-pattern filing.
 _PROCESS_STARTED_AT = time.time()
 WARMUP_S = _env_int("CCC_PERF_WARMUP_S", 300)
+
+# Machine-saturation attribution (CCC-1154 option B). The recurring p1 "slow
+# archive load" stream (CCC-1128/1138/1159) was whole-machine saturation, not
+# an archive regression: loadavg hit ~138 on a ~12-core box while every heavy
+# poll queued behind the GIL. Each sample now records the 1-minute load and
+# core count; breach rows measured while load1 >= SATURATED_LOAD_PER_CPU per
+# core are downgraded — they no longer qualify a per-kind perf ticket. Two
+# carve-outs keep the signal honest:
+#   - a single sample >= _SINGLE_SAMPLE_BREACH_FACTOR x its threshold still
+#     files, saturated or not (a truly extreme sample is real either way);
+#   - downgraded breaches file/refresh ONE explicit "machine saturated"
+#     ticket instead of silence, so the overload itself stays visible.
+SATURATED_LOAD_PER_CPU = _env_float("CCC_PERF_SATURATED_LOAD_PER_CPU", 2.0)
+_SINGLE_SAMPLE_BREACH_FACTOR = 3
+# Minimum gap between "still saturated" comments on an already-open
+# saturation ticket — one refresh per few hours, not one per check cycle.
+SAT_COMMENT_MIN_INTERVAL_S = _env_int("CCC_PERF_SAT_COMMENT_INTERVAL_S", 6 * 3600)
+
+
+def _machine_load():
+    """(load1, ncpu) right now; (None, None) when unavailable."""
+    try:
+        load1 = float(os.getloadavg()[0])
+    except (OSError, AttributeError, IndexError, TypeError, ValueError):
+        load1 = None
+    try:
+        ncpu = int(os.cpu_count() or 0) or None
+    except (TypeError, ValueError):
+        ncpu = None
+    return load1, ncpu
+
+
+def _load_saturated(load1, ncpu):
+    try:
+        if load1 is None or ncpu is None:
+            return False
+        return float(load1) >= SATURATED_LOAD_PER_CPU * float(ncpu)
+    except (TypeError, ValueError):
+        return False
+
+
+def _row_saturated(row):
+    """True when a recorded event row was measured under machine saturation.
+    Rows without load data (pre-instrumentation, or platforms with no
+    getloadavg) read as not saturated — fail toward filing, same as before."""
+    return _load_saturated(row.get("load1"), row.get("ncpu"))
+
+
+def machine_saturated():
+    """True when the box's 1-minute load is >= SATURATED_LOAD_PER_CPU per
+    core. server.py uses this to gate the detached archive-refresh spawn —
+    never raises."""
+    try:
+        load1, ncpu = _machine_load()
+        return _load_saturated(load1, ncpu)
+    except Exception:
+        return False
 
 
 def _in_warmup(now=None):
@@ -193,6 +257,7 @@ def record_event(kind, ms, boot_id="", conv_id="", detail=None):
     threshold_ms = _threshold_for(kind, warm)
     ms_int = int(round(ms_f))
     breach = ms_f >= threshold_ms
+    load1, ncpu = _machine_load()
 
     row = {
         "ts": _iso_now(),
@@ -202,6 +267,8 @@ def record_event(kind, ms, boot_id="", conv_id="", detail=None):
         "conv_id": str(conv_id or ""),
         "warm": warm,
         "warmup": warmup,
+        "load1": load1,
+        "ncpu": ncpu,
         "threshold_ms": threshold_ms,
         "breach": breach,
         "detail": detail if isinstance(detail, dict) else None,
@@ -229,6 +296,7 @@ def record_event(kind, ms, boot_id="", conv_id="", detail=None):
         "ok": True,
         "warm": warm,
         "warmup": warmup,
+        "saturated": _load_saturated(load1, ncpu),
         "threshold_ms": threshold_ms,
         "breach": breach,
     }
@@ -366,15 +434,17 @@ def summarize(hours=24, now=None):
 def evaluate_breach_pattern(events):
     """Pick the worst kind that looks like a real regression, or None.
 
-    Qualifies when a kind has >= 2 breach events in the window, OR any
-    single sample is >= 2x its own threshold (one truly awful sample is
-    as worth a ticket as several borderline ones). Among qualifying
-    kinds, the one with the higher p95 wins.
+    Qualifies when a kind has >= 2 breach events measured while the machine
+    was NOT saturated, OR any single sample is >= 3x its own threshold (one
+    truly awful sample is worth a ticket even under saturation). Among
+    qualifying kinds, the one with the higher p95 wins.
 
     Warmup-flagged rows (recorded inside the post-boot window) never
     qualify: a giant first-paint outlier during startup is expected
     contention, and counting it here refiles the same false-positive
-    ticket on every restart.
+    ticket on every restart. Saturated breach rows are likewise downgraded:
+    they measure machine contention, not CCC perf — _saturation_ticket_check
+    surfaces those separately as one "machine saturated" alert.
     """
     best = None
     for kind in _VALID_KINDS:
@@ -383,11 +453,15 @@ def evaluate_breach_pattern(events):
         ]
         if not rows:
             continue
-        breach_rows = [r for r in rows if r.get("breach")]
-        single_2x = any(
-            (r.get("ms") or 0) >= 2 * (r.get("threshold_ms") or 1) for r in rows
+        breach_rows = [
+            r for r in rows if r.get("breach") and not _row_saturated(r)
+        ]
+        single_3x = any(
+            (r.get("ms") or 0)
+            >= _SINGLE_SAMPLE_BREACH_FACTOR * (r.get("threshold_ms") or 1)
+            for r in rows
         )
-        if len(breach_rows) < 2 and not single_2x:
+        if len(breach_rows) < 2 and not single_3x:
             continue
         stats = _kind_stats(rows)
         candidate = {"kind": kind, **stats}
@@ -395,6 +469,44 @@ def evaluate_breach_pattern(events):
         if best is None or candidate["p95"] > best["p95"]:
             best = candidate
     return best
+
+
+def evaluate_saturation(events):
+    """Summarize breach samples downgraded by machine saturation, or None.
+
+    Runs only when evaluate_breach_pattern found nothing to file: breach
+    rows recorded while the box was saturated are real symptoms and must
+    not vanish silently — they roll up into the single "machine saturated"
+    alert instead of a per-kind perf ticket.
+    """
+    saturated = [
+        e
+        for e in events
+        if e.get("breach") and not e.get("warmup") and _row_saturated(e)
+    ]
+    if len(saturated) < 2:
+        return None
+    kind_counts = {}
+    max_load1 = 0.0
+    ncpu = None
+    for row in saturated:
+        kind_counts[row.get("kind")] = kind_counts.get(row.get("kind"), 0) + 1
+        try:
+            max_load1 = max(max_load1, float(row.get("load1") or 0))
+        except (TypeError, ValueError):
+            pass
+        if ncpu is None and row.get("ncpu"):
+            try:
+                ncpu = int(row["ncpu"])
+            except (TypeError, ValueError):
+                pass
+    return {
+        "count": len(saturated),
+        "kinds": kind_counts,
+        "max_load1": max_load1,
+        "ncpu": ncpu,
+        "worst": _worst_rows(saturated),
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -485,26 +597,35 @@ _TICKET_REF_RE = re.compile(r"\b([A-Z][A-Z0-9]{1,15}-\d+)\b")
 _FILED_REF_RE = re.compile(r"FILED:\s*([A-Z][A-Z0-9]{1,15}-\d+)")
 
 
+def _ref_status(ref):
+    """Best-effort `wt find <ref> --json` status lookup. Returns the status
+    string ('' when the ticket reports none), or None when the lookup itself
+    failed — distinguishing "open" from "wt unreachable" matters to callers
+    deciding between refresh and refile."""
+    if not ref:
+        return None
+    rc, out = _wt_run(["find", ref, "--json"])
+    if rc != 0 or not (out or "").strip():
+        return None
+    try:
+        data = json.loads(out)
+    except ValueError:
+        return None
+    if isinstance(data, list):
+        data = data[0] if data else {}
+    if not isinstance(data, dict):
+        return None
+    return str(data.get("status") or "").lower()
+
+
 def refresh_ticket_status(state):
     """Update state['last_status'] from `wt find <ref> --json`, if any ref
     is on file. No-op (never raises) when there's no ref yet, or `wt` is
     unavailable/errors — the caller falls back to whatever status is
     already cached."""
-    ref = state.get("last_ref")
-    if not ref:
+    status = _ref_status(state.get("last_ref"))
+    if status is None:
         return state
-    rc, out = _wt_run(["find", ref, "--json"])
-    if rc != 0 or not (out or "").strip():
-        return state
-    try:
-        data = json.loads(out)
-    except ValueError:
-        return state
-    if isinstance(data, list):
-        data = data[0] if data else {}
-    if not isinstance(data, dict):
-        return state
-    status = data.get("status")
     if status:
         state["last_status"] = status
     state["last_checked_at"] = _iso_now()
@@ -541,6 +662,129 @@ def _build_note(pattern, state):
     return "\n".join(lines)
 
 
+def _build_saturation_note(sat):
+    lines = [
+        "Perf breach samples were recorded while the machine itself was",
+        "saturated (load1 >= %.1f per core). The per-kind slow-load ticket was"
+        % SATURATED_LOAD_PER_CPU,
+        "downgraded into this single alert so the overload stays visible",
+        "without refiling the false-positive slow-archive stream (CCC-1154).",
+        "",
+        "peak load1=%.1f  ncpu=%s  saturated breach samples (1h)=%d"
+        % (sat["max_load1"], sat["ncpu"] or "?", sat["count"]),
+        "kinds: %s"
+        % "  ".join(
+            "%s=%d" % (kind, sat["kinds"].get(kind, 0)) for kind in _VALID_KINDS
+        ),
+        "",
+        "Worst samples (ts  ms  warm/cold  conv_id):",
+    ]
+    for row in sat.get("worst") or []:
+        lines.append(
+            "%s  %sms  %s  %s"
+            % (
+                row.get("ts") or "?",
+                row.get("ms") or 0,
+                "warm" if row.get("warm") else "cold",
+                row.get("conv_id") or "-",
+            )
+        )
+    lines.append("")
+    lines.append(
+        "Raw samples are still recorded with load1/ncpu; any single sample "
+        "over %dx its threshold still files a normal perf ticket."
+        % _SINGLE_SAMPLE_BREACH_FACTOR
+    )
+    return "\n".join(lines)
+
+
+def _saturation_ticket_check(events, now):
+    """File or refresh the single machine-saturation alert.
+
+    Runs only when no kind qualified for a normal perf ticket: breaches
+    downgraded by machine saturation still need ONE explicit alert so the
+    overload stays visible. An already-open saturation ticket gets a
+    throttled 'still saturated' comment instead of a duplicate filing.
+    Never raises (daemon-thread caller).
+    """
+    try:
+        sat = evaluate_saturation(events)
+        if sat is None:
+            return "ok"
+        state = _load_ticket_state()
+        sat_ref = state.get("sat_ref")
+        if sat_ref:
+            status = _ref_status(sat_ref)
+            if status is not None:
+                state["sat_status"] = status
+                state["sat_checked_at"] = _iso_now()
+                _save_ticket_state(state)
+            # Fall back to the cached status when `wt find` is unreachable —
+            # refiling while a live ticket exists is the worse failure.
+            effective = (
+                status
+                if status is not None
+                else str(state.get("sat_status") or "").lower()
+            )
+            if effective in _OPEN_STATUSES:
+                if status is not None:
+                    last_comment = float(state.get("sat_last_comment_ts") or 0)
+                    if now - last_comment >= SAT_COMMENT_MIN_INTERVAL_S:
+                        text = (
+                            "still saturated: peak load %.1f/ncpu %s; "
+                            "%d downgraded breach samples in the last hour"
+                            % (sat["max_load1"], sat["ncpu"] or "?", sat["count"])
+                        )
+                        _wt_run(["comment", sat_ref, text, "--by", "system"])
+                        state["sat_last_comment_ts"] = now
+                        _save_ticket_state(state)
+                return f"saturated-open:{sat_ref}"
+        today = datetime.fromtimestamp(now).strftime("%Y-%m-%d")
+        if state.get("sat_filed_date") == today:
+            return "saturated-filed-today"
+
+        title = "[perf] machine saturated: load %.1f/ncpu %s" % (
+            sat["max_load1"],
+            sat["ncpu"] or "?",
+        )
+        rc, out = _wt_run(
+            [
+                "add",
+                "-q",
+                "CCC",
+                "--type",
+                "bug",
+                # p2, not p1: the machine being overloaded is worth one
+                # visible ticket, but it is not a CCC perf regression.
+                "--priority",
+                "p2",
+                "--title",
+                title,
+                "--note",
+                _build_saturation_note(sat),
+            ],
+            timeout=_WT_ADD_TIMEOUT_S,
+        )
+        if rc == 127:
+            return "wt-unavailable"
+
+        m = _FILED_REF_RE.search(out or "") or _TICKET_REF_RE.search(out or "")
+        ref = m.group(1) if m else ""
+        if not ref and rc != 0 and rc != _WT_TIMEOUT_RC:
+            return "error"
+
+        state["sat_ref"] = ref or state.get("sat_ref")
+        state["sat_filed_date"] = today
+        state["sat_status"] = "open"
+        state["sat_checked_at"] = _iso_now()
+        state["sat_last_comment_ts"] = now
+        _save_ticket_state(state)
+        print(f"[PERF] filed saturation alert {ref or '?'} (rc={rc})", flush=True)
+        return f"saturated-filed:{ref or '?'}"
+    except Exception:
+        return "error"
+
+
 def perf_ticket_check_once(now=None):
     """One pass of the self-filing check. Returns a short status string;
     never raises (the daemon loop would otherwise die on the first bug)."""
@@ -550,9 +794,10 @@ def perf_ticket_check_once(now=None):
         # resurrect an already-recovered incident after its old outliers keep
         # the aggregate above threshold. A ticket is actionable only when a
         # qualifying pattern is still present in the last hour.
-        recent_pattern = evaluate_breach_pattern(read_events(now - _PERF_TICKET_RECENCY_S))
+        recent_events = read_events(now - _PERF_TICKET_RECENCY_S)
+        recent_pattern = evaluate_breach_pattern(recent_events)
         if recent_pattern is None:
-            return "ok"
+            return _saturation_ticket_check(recent_events, now)
 
         events = read_events(now - 24 * 3600)
         rows = [
