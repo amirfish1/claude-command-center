@@ -1,0 +1,1 @@
+- q2 Queues: a GitHub queue with a custom `queue_label` (`wt config --queue-label`) no longer shows that membership label as a chip; the ticket's effective `watchtower_label` is treated as queue plumbing like `watchtower:*`.

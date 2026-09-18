@@ -60,3 +60,13 @@ test('row label container yields instead of pushing signals off the row', () => 
   assert.match(m[0], /min-width: 0/);
   assert.match(css, /\.q2-gh-label \{/);
 });
+
+test('a custom queue_label (watchtower_label) is plumbing too, not a chip', () => {
+  assert.deepEqual(
+    ghLabels({ watchtower_label: 'team-a', github_labels: ['team-a', 'bug', 'watchtower:play'] }),
+    ['bug']);
+  // Other queues' labels on the same issue are still real labels.
+  assert.deepEqual(
+    ghLabels({ watchtower_label: 'watchtower:X', github_labels: ['team-a'] }),
+    ['team-a']);
+});

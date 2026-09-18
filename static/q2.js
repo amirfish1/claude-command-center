@@ -1902,10 +1902,15 @@
   // GitHub-backed queues stamp the issue's labels on every item
   // (wt's github backend `github_labels`). The watchtower:* names are
   // queue plumbing (membership, in-progress, run flags), not user-facing
-  // labels, so they stay off both surfaces.
+  // labels, so they stay off both surfaces. A queue can override its
+  // membership label (`wt config --queue-label`); the backend reports the
+  // effective one as `watchtower_label`, so hide that too.
   function ghLabels(it) {
+    var member = typeof it.watchtower_label === 'string' ? it.watchtower_label : '';
     return (Array.isArray(it.github_labels) ? it.github_labels : [])
-      .filter(function (l) { return typeof l === 'string' && l && l.indexOf('watchtower:') !== 0; });
+      .filter(function (l) {
+        return typeof l === 'string' && l && l.indexOf('watchtower:') !== 0 && l !== member;
+      });
   }
 
   function ghLabelChip(l) {
@@ -3749,6 +3754,10 @@
   function setLogbarHeight(px, persist) {
     var h = Math.round(Math.max(LOGBAR_MIN, Math.min(logbarMax(), px)));
     document.documentElement.style.setProperty('--q2-logbar-h', h + 'px');
+    // A dragged height is exact: stop the band's default fill-to-bottom
+    // growth (CSS .is-sized) so the user gets the size they set.
+    var host = $('q2LogBar');
+    if (host) host.classList.add('is-sized');
     if (persist) {
       try { localStorage.setItem(LOGBAR_KEY, String(h)); } catch (_) {}
     }
