@@ -1899,6 +1899,19 @@
     return c.length ? '<span class="q2-tchips">' + c.join('') + '</span>' : '';
   }
 
+  // GitHub-backed queues stamp the issue's labels on every item
+  // (wt's github backend `github_labels`). The watchtower:* names are
+  // queue plumbing (membership, in-progress, run flags), not user-facing
+  // labels, so they stay off both surfaces.
+  function ghLabels(it) {
+    return (Array.isArray(it.github_labels) ? it.github_labels : [])
+      .filter(function (l) { return typeof l === 'string' && l && l.indexOf('watchtower:') !== 0; });
+  }
+
+  function ghLabelChip(l) {
+    return '<span class="q2-gh-label" title="GitHub label: ' + esc(l) + '">' + esc(l) + '</span>';
+  }
+
   function ticketRow(it) {
     var st = statusOf(it);
     var ref = it.ref || '';
@@ -1936,6 +1949,10 @@
       ? dotTitle + ' (source: claimed_by/claimed_session_id on this ticket matches no worker in '
         + 'workers.json whose process is still alive -- os.kill liveness check, per worker record)'
       : dotTitle;
+    // GitHub labels ride on the row only when there is room: the container
+    // shrinks below its content and clips instead of pushing the title or
+    // the age/status signals off the row.
+    var gh = ghLabels(it);
     return '<button type="button" class="q2-trow is-' + esc(st)
       + (ref === state.ref ? ' is-selected' : '')
       + (isNewTicket(ref) ? ' q2-new-ticket' : '')
@@ -1948,6 +1965,10 @@
       + (state.viewAll ? '<span class="q2-tqueue" title="Queue">' + esc(it.project || 'unknown') + '</span>' : '')
       + ticketChips(it)
       + '<span class="q2-ttitle">' + esc(title) + '</span>'
+      + (gh.length
+          ? '<span class="q2-tgh" title="GitHub labels: ' + esc(gh.join(', ')) + '">'
+            + gh.map(ghLabelChip).join('') + '</span>'
+          : '')
       // Age then dot: the status marker sits to the RIGHT of the age, matching
       // the main dashboard's .fq-row-signals order.
       + '<span class="q2-tsignals">'
@@ -2347,10 +2368,14 @@
     var githubBacked = String(item.source || '') === 'github' || !!item.github_repo;
 
     // Everything editable lives on one chip row, next to the read-only state.
+    // GitHub labels are read-only (they live on the issue) but belong here
+    // too: this row is the ticket's identity summary in the details view.
+    var gh = ghLabels(item);
     var chips = ''
       + '<span class="q2-status is-' + esc(st) + (runQueued ? ' is-run-requested' : '') + '">'
       + esc(runQueued ? 'launching\u2026' : statusLabel(st)) + '</span>'
       + (item.lane ? '<span class="q2-chip is-lane">' + esc(item.lane) + '</span>' : '')
+      + gh.map(ghLabelChip).join('')
       + editChip('type', item.type ? (TYPE_SHORT[item.type] || item.type) : 'type?',
                  item.type, item.type ? 'is-type-' + item.type : '')
       + editChip('priority', item.priority || 'prio?', item.priority,

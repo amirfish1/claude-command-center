@@ -1,0 +1,1 @@
+- q2 Queues: GitHub-backed tickets now show the issue's GitHub labels — as read-only chips in the ticket details header and as chips on each ticket row, where they yield (and ellipsize) when the row is out of room. WatchTower-internal `watchtower:*` labels are filtered out.

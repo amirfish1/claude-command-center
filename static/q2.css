@@ -1291,6 +1291,36 @@ body.q2-resizing-v .q2-col { pointer-events: none; }
 .q2-tchip.is-unready { color: var(--orange); background: rgba(210, 153, 34, 0.13); }
 .q2-tchip.is-vc { font-family: var(--font-mono); font-weight: 600; }
 .q2-trow.is-closed .q2-tchip { opacity: 0.5; }
+/* GitHub labels (GitHub-backed queues): row container can shrink below its
+   content and clips, so labels render only when the row has room; the
+   title yields first and the age/status signals never get pushed off. The
+   same pill styling is reused in the details-view chip row. */
+.q2-tgh {
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  display: inline-flex;
+  align-items: baseline;
+  gap: 3px;
+}
+.q2-gh-label {
+  flex: 0 0 auto;
+  font-size: 9.5px;
+  font-weight: 600;
+  line-height: 1.6;
+  padding: 0 6px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  color: var(--text-muted);
+  white-space: nowrap;
+  /* When the row can only fit part of a chip, the chip ellipsizes inside
+     its own box instead of being guillotined mid-letter by the row
+     container's clip. The full name is always on the title tooltip. */
+  max-width: 72px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.q2-trow.is-closed .q2-gh-label { opacity: 0.5; }
 .q2-ttitle {
   flex: 1 1 auto;
   min-width: 0;
