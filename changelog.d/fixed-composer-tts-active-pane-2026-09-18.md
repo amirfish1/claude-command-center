@@ -1,0 +1,1 @@
+- Fixed the composer speaker button in split view reading pane 1's last message even when pane 2 was focused; it now reads the active pane (same behavior as the other TTS controls).

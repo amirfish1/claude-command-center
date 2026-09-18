@@ -12796,7 +12796,7 @@
   })();
   if ($convTtsBtn) {
     $convTtsBtn.addEventListener('mousedown', (ev) => ev.preventDefault());
-    $convTtsBtn.addEventListener('click', () => readLastMessageAloud('p1'));
+    $convTtsBtn.addEventListener('click', () => readLastMessageAloud(_ttsActivePaneId || activePaneId()));
   }
   // CCC-157: capture the conversation selection on any TTS button's
   // pointer-DOWN (capture phase, before the tap collapses it on touch) so
