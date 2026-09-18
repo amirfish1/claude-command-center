@@ -45070,6 +45070,17 @@
         _uxqRenderWorkingNow();
         return;
       }
+      const $sess = ev.target.closest && ev.target.closest('[data-uxq-open-session]');
+      if ($sess) {
+        // CCC-1148: open the worker's CCC session without also opening the
+        // ticket detail the row click would trigger.
+        ev.preventDefault();
+        ev.stopPropagation();
+        const sid = $sess.getAttribute('data-uxq-open-session') || '';
+        if (sid && typeof window.cccOpenSession === 'function') window.cccOpenSession(sid);
+        else if (sid && typeof selectConversation === 'function') selectConversation(sid);
+        return;
+      }
       const $kill = ev.target.closest && ev.target.closest('[data-uxq-kill-worker]');
       if ($kill) {
         ev.preventDefault();
@@ -45221,14 +45232,23 @@
         state: Number.isFinite(idleS) && idleS < 60 ? 'working' : 'idle',
       };
       const icon = '<span class="fq-working-engine">' + sessionEngineIconHtml(iconRow) + '</span>';
+      // CCC-1148: the row itself must link to the CCC session the claim runs
+      // in — the ticket's claimed_session_id can still be empty here (reconciler
+      // backfill lag, worker-id claims), which left no path to the session.
       return { ref, title, queue: qKey, worker: String(w.worker_id || 'worker'), elapsed, icon,
-        pid: parseInt(w.pid, 10) || 0, workerId: String(w.worker_id || '') };
+        pid: parseInt(w.pid, 10) || 0, workerId: String(w.worker_id || ''), sid: sid };
     });
     const rowsHtml = rows.map(r => {
         // CCC-1050: one-click kill — releases the worker from queue staffing
         // and terminates its process (server route does both, release first).
         const killBtn = r.pid
           ? '<button type="button" class="fq-worker-kill" data-uxq-kill-worker="' + escapeAttr(r.workerId) + '" data-uxq-kill-pid="' + r.pid + '" title="Kill worker ' + escapeAttr(r.worker) + ' (pid ' + r.pid + ') — releases it from queue staffing and terminates its process" aria-label="Kill worker">&#10005;</button>'
+          : '';
+        // CCC-1148: jump straight to the CCC session the worker is running
+        // in. Hover-revealed like the kill button; never rendered without a
+        // session id (some workers, e.g. bare `kimi -p` runs, have none).
+        const sessBtn = r.sid
+          ? '<button type="button" class="fq-worker-session" data-uxq-open-session="' + escapeAttr(r.sid) + '" title="Open the CCC session this worker is running in" aria-label="Open CCC session">&#8599;</button>'
           : '';
         if (_uxqPicker.isMobile) {
           return '<div class="fq-working-row is-mobile" data-uxq-working-ref="' + escapeAttr(r.ref) + '">'
@@ -45238,6 +45258,7 @@
             + '<span class="fq-working-title">' + escapeHtml(r.title) + '</span>'
             + '<span class="fq-working-meta">' + escapeHtml(r.queue + ' · ' + r.elapsed) + '</span>'
             + '</span>'
+            + sessBtn
             + killBtn
             + '<span class="fq-working-dot"></span>'
             + '</div>';
@@ -45250,6 +45271,7 @@
           + '<span class="fq-working-queue">' + escapeHtml(r.queue) + '</span>'
           + '<span class="fq-working-worker">' + escapeHtml(r.worker) + '</span>'
           + '<span class="fq-working-elapsed">' + escapeHtml(r.elapsed) + '</span>'
+          + sessBtn
           + killBtn
           + '</span></div>';
     }).join('');
@@ -45990,13 +46012,23 @@
           // stay empty for a worker-id claim (e.g. "bymprod-cda69c9a") even
           // long after claim — the button then silently vanishes (CCC-937).
           // Fall back to matching claimed_by against a live conversation's
-          // _worker_id so the link still resolves.
+          // _worker_id so the link still resolves; when the conversation
+          // isn't loaded yet (filtered list, cold start) or lives in another
+          // repo, ask the live worker roster — it carries the session id the
+          // claim runs under (CCC-1148).
           const raw = String(item.claimed_session_id || '').trim();
           let sid = raw;
           if (!sid && item.claimed_by) {
             const key = _uxFixesIdentityKey(item.claimed_by);
             const hit = (conversationsData || []).find(c => c && _uxFixesRowIdentityKeys(c).indexOf(key) !== -1);
             if (hit) sid = hit.session_id || hit.id || '';
+            if (!sid) {
+              const roster = Array.isArray((_uxqHealthCache || {}).wt_workers)
+                ? _uxqHealthCache.wt_workers : [];
+              const w = roster.find(w => w && _uxFixesIdentityKey(w.worker_id || '') === key
+                && String(w.session_id || '').trim());
+              if (w) sid = String(w.session_id).trim();
+            }
           }
           if (!sid) return '';
           return '<div class="uxq-td-pr"><span class="uxq-td-pr-k">Session</span>'

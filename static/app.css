@@ -8938,7 +8938,7 @@
       -webkit-backdrop-filter: none; backdrop-filter: none;
     }
     /* Spawn selectors (engine / model / effort) can be wider than a phone
-       viewport together, especially with a model like "K2.7 Coding". Keep them
+       viewport together, especially with a model like "K2.8 Preview". Keep them
        on one horizontal row and scroll internally so the send/mic/tts button
        cluster on the right never gets pushed off-screen. */
     .conv-input-row-bottom {
@@ -14923,6 +14923,20 @@
   .fq-working-row:hover .fq-worker-kill { opacity: 1; }
   .fq-worker-kill:hover { background: rgba(248,81,73,0.16); border-color: #f85149; }
   .fq-worker-kill:disabled { opacity: .5; cursor: progress; }
+  /* CCC-1148: jump to the worker's CCC session. Same hover-reveal contract
+     as the kill button; neutral accent since it navigates rather than
+     destroys. */
+  .fq-worker-session {
+    flex: 0 0 auto;
+    width: 18px; height: 18px; line-height: 1;
+    display: inline-flex; align-items: center; justify-content: center;
+    padding: 0; border-radius: 4px; cursor: pointer;
+    border: 1px solid #3f4854; background: #1c242e; color: #7d8590;
+    font-size: 10px; opacity: 0; transition: opacity .12s;
+    text-decoration: none;
+  }
+  .fq-working-row:hover .fq-worker-session { opacity: 1; }
+  .fq-worker-session:hover { color: #58a6ff; border-color: #58a6ff; }
   .fq-working-queue {
     font-family: 'JetBrains Mono', ui-monospace, monospace;
     font-size: 10.5px; color: #7d8590; white-space: nowrap;

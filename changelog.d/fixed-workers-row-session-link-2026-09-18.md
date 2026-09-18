@@ -1,0 +1,1 @@
+- Workers lane: working-now rows now carry a hover-revealed "open in CCC" button that jumps straight to the session a worker is running in, even when the ticket's `claimed_session_id` hasn't been backfilled yet — the ticket detail's Session link falls back to the live worker roster too. Workers with no CCC session (e.g. bare `kimi -p` runs) correctly show no button.
