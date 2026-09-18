@@ -915,6 +915,14 @@ body.q2-resizing-v .q2-col { pointer-events: none; }
   cursor: pointer;
 }
 .q2-qrow:hover { background: var(--surface); }
+.q2-qdivider {
+  display: flex; align-items: center; gap: 8px;
+  padding: 6px 10px 4px;
+  border-bottom: 1px solid var(--border);
+  background: var(--surface);
+  color: var(--text-muted);
+  font-size: 10.5px; letter-spacing: 0.06em; text-transform: uppercase;
+}
 .q2-qrow.is-selected { background: var(--surface-2); border-left-color: var(--accent); }
 .q2-qrow-del {
   flex: 0 0 auto; align-self: center; width: 16px; height: 16px; margin-left: 2px;

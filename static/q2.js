@@ -595,12 +595,23 @@
     return parts.slice(-2).join('/');
   }
 
-  // Sort order: the four things the user asked to float up, most-actionable
-  // first. `stuck` still outranks everything — it is the only state that means
-  // something is broken rather than merely busy.
+  // Queues backed by the GitHub "TODO" repo (several queues can share it,
+  // split by label) are pinned above every other queue, with a divider.
+  var TODO_REPO_RE = /(^|\/)todo$/i;
+  function isTodoRepoQueue(q) {
+    var key = projectKey(q && q.queue);
+    var cfg = (state.configs || {})[key] || {};
+    return TODO_REPO_RE.test(String(cfg.github_repo || '').trim());
+  }
+
+  // Sort order: the TODO-repo group first, then within each group the things
+  // the user asked to float up, most-actionable first. `stuck` still outranks
+  // everything else in its group — it is the only state that means something
+  // is broken rather than merely busy.
   function queueRank(q, f) {
     f = f || {};
     return [
+      isTodoRepoQueue(q) ? 0 : 1,
       q.state === 'stuck' ? 0 : 1,
       f.needsInput ? 0 : 1,
       f.wip ? 0 : 1,
@@ -951,8 +962,12 @@
       + ((state.workers || []).length === 1 ? '' : 's') + '</span></span>'
       + '<span class="q2-qrow-br">' + allCounts.gated + allCounts.needsInput + '</span></span></span></div>';
 
-    host.innerHTML = allRow + ordered.map(function (q) {
+    var todoCount = ordered.filter(isTodoRepoQueue).length;
+    host.innerHTML = allRow + ordered.map(function (q, idx) {
       var f = facts[projectKey(q.queue)] || {};
+      // One divider, only when both groups exist: after the last TODO-repo row.
+      var divider = (todoCount > 0 && idx === todoCount)
+        ? '<div class="q2-qdivider" role="separator"><span>Other queues</span></div>' : '';
       var isSel = projectKey(q.queue) === selected;
       var c = countParts(f, q.closed, claimTypesFor(projectKey(q.queue)));
       // CCC-808: total tickets ever, not just currently-open — a queue with
@@ -966,7 +981,7 @@
       var delBtn = '<button type="button" class="q2-qrow-del" data-q2-del-queue="' + esc(q.queue)
         + '" data-q2-del-total="' + totalTickets + '"'
         + ' title="' + esc(delTitle) + '" aria-label="' + esc(delTitle) + '">&times;</button>';
-      return '<div class="q2-qrow' + (isSel ? ' is-selected' : '')
+      return divider + '<div class="q2-qrow' + (isSel ? ' is-selected' : '')
         + (q.state === 'stuck' ? ' is-stuck' : '') + '"'
         + ' role="button" tabindex="0"'
         + ' data-q2-queue="' + esc(q.queue) + '">'

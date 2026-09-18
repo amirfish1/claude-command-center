@@ -1,0 +1,1 @@
+- q2 Queues: queues backed by the GitHub `TODO` repo are now pinned to the top of the queue list, above a divider that separates them from every other queue.
