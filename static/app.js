@@ -94,6 +94,49 @@
   // click. A click superseded by a later one before it finished simply gets
   // dropped — no event fires for it.
   let _perfConvOpen = null;
+  // Hidden/frozen time inside a measured window is not load latency: a
+  // backgrounded tab throttles the timer-driven archive pipeline toward
+  // ~1 tick/min while performance.now() keeps counting, which produced the
+  // multi-minute "cold" outliers behind CCC-1169. Track hidden segments and
+  // subtract their overlap with [t0, end]; the raw wall time still ships as
+  // detail.wall_ms so a genuinely slow load stays visible.
+  const _perfHiddenSegs = [];
+  let _perfHiddenSince = null;
+  function _perfMarkHidden() {
+    try { if (_perfHiddenSince === null) _perfHiddenSince = performance.now(); } catch (_) {}
+  }
+  function _perfMarkVisible() {
+    try {
+      if (_perfHiddenSince !== null) {
+        _perfHiddenSegs.push([_perfHiddenSince, performance.now()]);
+        _perfHiddenSince = null;
+      }
+    } catch (_) {}
+  }
+  try {
+    document.addEventListener('visibilitychange', () => {
+      if (document.hidden) _perfMarkHidden(); else _perfMarkVisible();
+    });
+    // Chrome freezes hidden pages without another visibility transition;
+    // cover that path too.
+    document.addEventListener('freeze', _perfMarkHidden);
+    document.addEventListener('resume', _perfMarkVisible);
+  } catch (_) {}
+  // Wall-clock elapsed [t0, end] minus the parts the page spent hidden.
+  function _perfActiveElapsed(t0, end) {
+    try {
+      let hidden = 0;
+      for (const seg of _perfHiddenSegs) {
+        const lo = Math.max(seg[0], t0), hi = Math.min(seg[1], end);
+        if (hi > lo) hidden += hi - lo;
+      }
+      if (_perfHiddenSince !== null) {
+        const lo = Math.max(_perfHiddenSince, t0);
+        if (end > lo) hidden += end - lo;
+      }
+      return Math.max(0, end - t0 - hidden);
+    } catch (_) { return end - t0; }
+  }
   // Single source of truth for every periodic trigger: poll period (ms, used
   // for the overrun check below + the strip's interval label), a short label
   // and a one-line description for the transparency strip. ms:null = cadence
@@ -50931,12 +50974,17 @@
           if (_freshOpen && _renderOk && _perfConvOpen
               && _perfConvOpen.id === id && _perfConvOpen.paneId === fetchPaneId) {
             try {
-              _perfEvent('conv_open', performance.now() - _perfConvOpen.t0, {
+              const _perfEnd = performance.now();
+              const _perfWall = _perfEnd - _perfConvOpen.t0;
+              const _perfActive = _perfActiveElapsed(_perfConvOpen.t0, _perfEnd);
+              _perfEvent('conv_open', _perfActive, {
                 conv_id: id,
                 detail: {
                   events: Array.isArray(data.events) ? data.events.length : 0,
                   prefetch_hit: _perfPrefetchHit,
                   truncated: !!data.truncated_before,
+                  wall_ms: Math.round(_perfWall),
+                  hidden_ms: Math.round(_perfWall - _perfActive),
                 },
               });
             } catch (_) {}
@@ -67382,11 +67430,16 @@
     if (_perfArchiveT0 !== null && !_perfArchiveFired) {
       _perfArchiveFired = true;
       try {
-        _perfEvent('archive_load', performance.now() - _perfArchiveT0, {
+        const _perfEnd = performance.now();
+        const _perfWall = _perfEnd - _perfArchiveT0;
+        const _perfActive = _perfActiveElapsed(_perfArchiveT0, _perfEnd);
+        _perfEvent('archive_load', _perfActive, {
           detail: {
             rows: archiveRows.length,
             status: _lastArchiveListHttpStatus,
             since_nav_ms: performance.now(),
+            wall_ms: Math.round(_perfWall),
+            hidden_ms: Math.round(_perfWall - _perfActive),
           },
         });
       } catch (_) {}
@@ -77554,23 +77607,23 @@
   // usage, update-status), all cheap and cached server-side. Status keeps
   // itself fresh while the pane is showing; there is no refresh control.
   const ENGINE_HUB_META = {
-    claude: { label: 'Claude Code', vendor: 'Anthropic', hue: 24, docs: 'https://docs.claude.com/en/docs/claude-code' },
-    codex: { label: 'Codex', vendor: 'OpenAI', hue: 160, docs: 'https://developers.openai.com/codex/cli' },
-    cursor: { label: 'Cursor Agent', vendor: 'Cursor', hue: 220, docs: 'https://cursor.com/cli' },
-    antigravity: { label: 'Antigravity', vendor: 'Google', hue: 265, docs: 'https://antigravity.google' },
-    kimi: { label: 'Kimi Code', vendor: 'Moonshot', hue: 200, docs: 'https://www.kimi.com/code/docs/en/third-party-tools/other-coding-agents.html',
+    claude: { mono: 'Cl', label: 'Claude Code', vendor: 'Anthropic', hue: 24, docs: 'https://docs.claude.com/en/docs/claude-code' },
+    codex: { mono: 'Cx', label: 'Codex', vendor: 'OpenAI', hue: 160, docs: 'https://developers.openai.com/codex/cli' },
+    cursor: { mono: 'Cu', label: 'Cursor Agent', vendor: 'Cursor', hue: 220, docs: 'https://cursor.com/cli' },
+    antigravity: { mono: 'Ag', label: 'Antigravity', vendor: 'Google', hue: 265, docs: 'https://antigravity.google' },
+    kimi: { mono: 'Km', label: 'Kimi Code', vendor: 'Moonshot', hue: 200, docs: 'https://www.kimi.com/code/docs/en/third-party-tools/other-coding-agents.html',
       links: [['Membership', 'https://www.kimi.com/code/docs/en/kimi-code/membership.html']] },
-    opencode: { label: 'OpenCode', vendor: 'Any provider', hue: 45, docs: 'https://opencode.ai/docs',
+    opencode: { mono: 'Oc', label: 'OpenCode', vendor: 'Any provider', hue: 45, docs: 'https://opencode.ai/docs',
       install: 'curl -fsSL https://opencode.ai/install | bash', login: 'opencode auth login' },
-    kilo: { label: 'Kilo Code', vendor: 'Any provider', hue: 50, docs: 'https://kilo.ai/docs/cli', install: 'npm install -g @kilocode/cli' },
-    hermes: { label: 'Hermes', vendor: 'Nous Research', hue: 300, docs: 'https://github.com/NousResearch/hermes-agent' },
-    devin: { label: 'Devin', vendor: 'Cognition', hue: 185, docs: 'https://docs.devin.ai' },
-    grok: { label: 'Grok', vendor: 'xAI', hue: 0, docs: 'https://docs.x.ai' },
-    droid: { label: 'Droid', vendor: 'Factory', hue: 15, docs: 'https://docs.factory.ai/cli/getting-started/quickstart',
+    kilo: { mono: 'Kl', label: 'Kilo Code', vendor: 'Any provider', hue: 50, docs: 'https://kilo.ai/docs/cli', install: 'npm install -g @kilocode/cli' },
+    hermes: { mono: 'He', label: 'Hermes', vendor: 'Nous Research', hue: 300, docs: 'https://github.com/NousResearch/hermes-agent' },
+    devin: { mono: 'Dv', label: 'Devin', vendor: 'Cognition', hue: 185, docs: 'https://docs.devin.ai' },
+    grok: { mono: 'Gk', label: 'Grok', vendor: 'xAI', hue: 0, docs: 'https://docs.x.ai' },
+    droid: { mono: 'Dr', label: 'Droid', vendor: 'Factory', hue: 15, docs: 'https://docs.factory.ai/cli/getting-started/quickstart',
       install: 'curl -fsSL https://app.factory.ai/cli | sh' },
-    aider: { label: 'Aider', vendor: 'Any provider', hue: 120, docs: 'https://aider.chat/docs/install.html',
+    aider: { mono: 'Ai', label: 'Aider', vendor: 'Any provider', hue: 120, docs: 'https://aider.chat/docs/install.html',
       install: 'python -m pip install aider-install && aider-install' },
-    pi: { label: 'Pi', vendor: 'Any provider', hue: 330, docs: 'https://github.com/badlogic/pi-mono' },
+    pi: { mono: 'Pi', label: 'Pi', vendor: 'Any provider', hue: 330, docs: 'https://github.com/badlogic/pi-mono' },
   };
   const ENGINE_HUB_WORKER_ENGINES = ['claude', 'codex', 'kimi', 'grok'];
   const ENGINE_HUB_POLL_MS = 8000;
@@ -77672,7 +77725,7 @@
   }
 
   function _engHubUsageHtml(row) {
-    if (!row.installed) return '<span class="eng-usage is-none">-</span>';
+    if (!row.installed) return '';
     const u = row.usage;
     if (!u) {
       if (row.byokReady) {
@@ -77730,7 +77783,7 @@
     if (row.version) facts.push(['Version', row.version]);
     if (row.email) facts.push(['Account', row.email]);
     const model = (spawnDefaultsState.models || {})[e];
-    if (model) facts.push(['Default model', model]);
+    if (model && row.installed) facts.push(['Default model', model]);
     const note = _engHubNotes[e];
     return '<div class="eng-drawer">' + step
       + (facts.length ? '<dl class="eng-facts">' + facts.map(f => '<div><dt>' + escapeHtml(f[0]) + '</dt><dd>' + escapeHtml(f[1]) + '</dd></div>').join('') + '</dl>' : '')
@@ -77742,7 +77795,7 @@
   function _engHubRowHtml(row) {
     const e = row.engine;
     const open = _engHubOpen === e;
-    const mono = row.meta.label.replace(/[^A-Za-z]/g, '').slice(0, 2);
+    const mono = row.meta.mono || row.meta.label.replace(/[^A-Za-z]/g, '').slice(0, 2);
     const sub = [row.meta.vendor, row.version ? 'v' + row.version.replace(/^v/, '') : '', row.email].filter(Boolean).join(' · ');
     const tags = (row.isDefault ? '<span class="eng-tag">New sessions</span>' : '')
       + (row.isWorkerDefault ? '<span class="eng-tag">Workers</span>' : '');

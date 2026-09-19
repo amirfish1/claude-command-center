@@ -25984,7 +25984,13 @@ a.settings-row {
   color: var(--accent); border: 1px solid color-mix(in srgb, var(--accent) 45%, transparent);
   background: color-mix(in srgb, var(--accent) 12%, transparent);
 }
-.eng-status { flex: 1 1 auto; min-width: 0; display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+/* Fixed tracks, not wrapping flex: the three signals line up as columns
+   down the list whatever each pill happens to say. */
+.eng-status {
+  flex: 1 1 auto; min-width: 0;
+  display: grid; grid-template-columns: 104px 148px minmax(0, 1fr);
+  align-items: center; justify-items: start; gap: 6px;
+}
 .eng-pill {
   display: inline-flex; align-items: center; gap: 5px;
   font-size: 11.5px; padding: 2px 8px; border-radius: 999px;
@@ -26004,7 +26010,8 @@ a.settings-row {
 .eng-chev { flex: 0 0 auto; width: 14px; height: 14px; color: var(--text-muted); transition: transform 0.15s ease-out; }
 .eng-row.is-open .eng-chev { transform: rotate(180deg); }
 .eng-row.is-off .eng-row-main { opacity: 0.5; }
-.eng-row .settings-toggle:disabled { opacity: 0.55; cursor: not-allowed; }
+/* A default engine's switch is locked on; keep it looking on. */
+.eng-row .settings-toggle:disabled { opacity: 0.85; cursor: not-allowed; }
 
 .eng-drawer { padding: 2px 14px 14px 58px; display: flex; flex-direction: column; gap: 10px; }
 .eng-step {
@@ -26043,7 +26050,7 @@ a.settings-row {
 }
 @media (max-width: 620px) {
   .eng-row-main { flex-wrap: wrap; }
-  .eng-status { flex-basis: 100%; padding-left: 44px; }
+  .eng-status { flex-basis: 100%; padding-left: 44px; display: flex; flex-wrap: wrap; }
   .eng-list-head { flex-direction: column; align-items: flex-start; }
 }
 
