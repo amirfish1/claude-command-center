@@ -31166,6 +31166,14 @@
                 });
                 const c = conversationsData.find(x => x.id === card.dataset.id);
                 if (c) { c.display_name = newName || null; c.name_overridden = !!newName; }
+                // The All/Archived sidebar renders from archiveData — without
+                // this the card's new name snaps back on the next render.
+                if (typeof archiveData !== 'undefined' && Array.isArray(archiveData)) {
+                  const ac = archiveData.find(x => x && (x.session_id === card.dataset.sessionId
+                    || x.id === card.dataset.sessionId || x.id === card.dataset.id));
+                  if (ac) { ac.display_name = newName || null; ac.name_overridden = !!newName; }
+                }
+                _rememberRenameOverride(card.dataset.sessionId, newName || null, !!newName);
               } catch (_) {}
             }
           }
@@ -41178,8 +41186,23 @@
             });
             row.display_name = newName || null;
             row.name_overridden = !!newName;
-            const c = conversationsData.find(x => x.id === row.id);
+            const _railSid = row.session_id || row.id;
+            const c = conversationsData.find(x => x.id === row.id
+              || (_railSid && x.session_id === _railSid));
             if (c) { c.display_name = newName || null; c.name_overridden = !!newName; }
+            // The Archived/All list renders from archiveData, and the row
+            // object this rail held can be a stale snapshot — archiveData is
+            // rebuilt as fresh copies by _mergeArchivePrSnapshot on every
+            // refresh, which breaks the identity the `row` patch above
+            // relies on. Patch the live entry so the renamed title paints
+            // NOW, and pin the override so a stale server snapshot can't
+            // snap it back (same contract as startInlineRename).
+            if (typeof archiveData !== 'undefined' && Array.isArray(archiveData)) {
+              const ac = archiveData.find(x => x && (x.session_id === _railSid
+                || x.id === _railSid || x.id === row.id));
+              if (ac) { ac.display_name = newName || null; ac.name_overridden = !!newName; }
+            }
+            _rememberRenameOverride(_railSid, newName || null, !!newName);
             finalText = newName || currentText;
           } catch (_) {
             showOpToast('Rename failed', 'error');
@@ -41187,7 +41210,10 @@
         }
       }
       titleEl.textContent = finalText;
-      renderSidebar(filterConversations($convSearch.value));
+      // Force: the pointer is often still hovering a sidebar row (or focus
+      // is in a text control) right after commit, and the pause guard would
+      // defer this exact paint — the rename the user is watching for.
+      renderSidebar(filterConversations($convSearch.value), { force: true });
     }
     input.addEventListener('keydown', (e) => {
       if (isImeKey(e)) return;
@@ -41297,7 +41323,11 @@
         // only the active pane drives it.
         const railTitleEl = document.getElementById('statusRailTitle');
         const railTitle = row && row.status_rail_title || title || category || 'Session';
-        if (railTitleEl) railTitleEl.textContent = railTitle;
+        // Don't clobber the rail's inline rename input mid-edit — a pane
+        // header refresh landing here would otherwise destroy it.
+        if (railTitleEl && !railTitleEl.querySelector('.status-rail-title-input')) {
+          railTitleEl.textContent = railTitle;
+        }
         // CCC-505: the bold title can be a WT-worker label whose ticket
         // context was hard-clipped server-side (wt_ticket_context_rest
         // carries whatever got cut). Show it below, unbold, instead of the
