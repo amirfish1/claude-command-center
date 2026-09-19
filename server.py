@@ -8679,11 +8679,30 @@ def _factory_spawn_defaults():
         "worker_model": "",
         "worker_reasoning_effort": "",
         "worker_auto_compact_k": 250,
+        "disabled_engines": [],
         "models": {
             engine: _spawn_fallback_model_for_engine(engine)
             for engine in _ORCHESTRATION_SPAWN_ENGINES
         },
     }
+
+
+def _clean_disabled_engines(value, keep_enabled=()):
+    """Engines the user switched off in Settings > Engines.
+
+    A default engine can never be disabled -- a picker that hides the engine
+    every blank spawn resolves to would be a trap -- so the defaults in
+    ``keep_enabled`` are dropped from the list rather than rejected.
+    """
+    if not isinstance(value, (list, tuple)):
+        return []
+    keep = {e for e in keep_enabled if e}
+    out = []
+    for item in value:
+        engine = _normalize_orchestration_spawn_engine(item)
+        if engine in _ORCHESTRATION_SPAWN_ENGINES and engine not in keep and engine not in out:
+            out.append(engine)
+    return out
 
 
 def _write_spawn_defaults_file(payload):
@@ -8769,6 +8788,9 @@ def _load_spawn_defaults():
         "worker_model": worker_model,
         "worker_reasoning_effort": worker_reasoning_effort,
         "worker_auto_compact_k": worker_auto_compact_k,
+        "disabled_engines": _clean_disabled_engines(
+            raw.get("disabled_engines"), (engine, worker_engine),
+        ),
     }
     if needs_migration:
         # A new engine was added to _ORCHESTRATION_SPAWN_ENGINES after this
@@ -8865,8 +8887,18 @@ def _save_spawn_defaults(config):
                 return {"ok": False, "error": f"{engine} model is too long"}
             current["models"][engine] = model
 
+    if "disabled_engines" in config and not isinstance(config.get("disabled_engines"), list):
+        return {"ok": False, "error": "disabled_engines must be a list"}
+    disabled_engines = _clean_disabled_engines(
+        config.get("disabled_engines")
+        if "disabled_engines" in config
+        else current.get("disabled_engines"),
+        (current["engine"], current.get("worker_engine", "")),
+    )
+
     payload = {
         "engine": current["engine"],
+        "disabled_engines": disabled_engines,
         "reasoning_effort": current.get("reasoning_effort", ""),
         "auto_compact_k": current.get("auto_compact_k", 250),
         "worker_engine": current.get("worker_engine", ""),
