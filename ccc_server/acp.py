@@ -2058,10 +2058,23 @@ def _acp_authenticate(harness, conn):
     method = cfg.get("auth_method")
     if not method or conn.get("authenticated"):
         return True
-    now = time.monotonic()
-    if now < conn.get("auth_retry_at", 0):
-        return False
-    conn["auth_retry_at"] = now + 30
+    # Single-flight the authenticate call: devin's devin-browser method can
+    # park the request for minutes waiting on a human sign-in. A second
+    # caller must wait on the in-flight attempt — firing authenticate again
+    # pops another browser tab per retry.
+    owner = False
+    with _core._ACP_LOCK:
+        inflight = conn.get("auth_inflight")
+        if inflight is None and time.monotonic() >= conn.get("auth_retry_at", 0):
+            inflight = threading.Event()
+            conn["auth_inflight"] = inflight
+            conn["auth_retry_at"] = time.monotonic() + 30
+            owner = True
+    if not owner:
+        if inflight is None:
+            return False
+        inflight.wait(90)
+        return bool(conn.get("authenticated"))
     method_id = method if isinstance(method, str) else None
     if not method_id:
         methods = conn.get("auth_methods") or []
@@ -2069,8 +2082,18 @@ def _acp_authenticate(harness, conn):
     if not method_id:
         # Nothing advertised to authenticate against — treat as done.
         conn["authenticated"] = True
+        conn.pop("auth_inflight", None)
+        inflight.set()
         return True
-    resp = _acp_request(harness, "authenticate", {"methodId": method_id}, timeout=180)
+    _core._ACP_ENSURE_ERROR[harness] = (
+        f"{cfg.get('label', harness)} ACP sign-in in progress — complete the "
+        "browser flow; queued sends deliver after it finishes"
+    )
+    try:
+        resp = _acp_request(harness, "authenticate", {"methodId": method_id}, timeout=300)
+    finally:
+        conn.pop("auth_inflight", None)
+        inflight.set()
     if resp.get("ok"):
         conn["authenticated"] = True
         _core._ACP_ENSURE_ERROR.pop(harness, None)

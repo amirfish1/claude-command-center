@@ -665,3 +665,73 @@ def test_spawn_session_devin_acp_prompt_failure_still_returns_session(tmp_path):
     assert result["ok"] is True
     assert result["session_id"] == "devincli-raw-orphan"
     assert result["prompt_pending"] is True
+
+
+# ---------------------------------------------------------------------------
+# _acp_authenticate -- single-flight the browser sign-in
+# ---------------------------------------------------------------------------
+
+def test_devin_authenticate_single_flights_concurrent_callers():
+    """devin-browser authenticate parks for human-scale time. A concurrent
+    caller must wait on the in-flight attempt -- firing authenticate again
+    pops another browser tab per retry (observed live: three tabs from
+    three racing ensures)."""
+    import threading
+    import time
+
+    import ccc_server.acp as acp_mod
+
+    conn = {"authenticated": False, "auth_methods": [{"id": "devin-browser"}]}
+    calls = []
+
+    def slow_auth(harness, method, params=None, timeout=None, sid=None):
+        calls.append(method)
+        time.sleep(0.3)
+        return {"ok": True, "result": {}}
+
+    results = []
+    with mock.patch.object(acp_mod, "_acp_request", side_effect=slow_auth):
+        t = threading.Thread(
+            target=lambda: results.append(
+                acp_mod._acp_authenticate("devin", conn)
+            )
+        )
+        t.start()
+        time.sleep(0.05)  # let the owner claim auth_inflight
+        results.append(acp_mod._acp_authenticate("devin", conn))
+        t.join()
+
+    assert sorted(results) == [True, True]
+    assert calls == ["authenticate"]
+
+
+def test_devin_authenticate_waiter_reports_failure_and_retries_later():
+    """When the in-flight authenticate fails, waiters get False (queue the
+    send) and the 30s retry gate leaves room for a fresh attempt."""
+    import threading
+    import time
+
+    import ccc_server.acp as acp_mod
+
+    conn = {"authenticated": False, "auth_methods": [{"id": "devin-browser"}]}
+
+    def failing_auth(harness, method, params=None, timeout=None, sid=None):
+        time.sleep(0.2)
+        return {"ok": False, "error": "login cancelled"}
+
+    results = []
+    with mock.patch.object(acp_mod, "_acp_request", side_effect=failing_auth):
+        t = threading.Thread(
+            target=lambda: results.append(
+                acp_mod._acp_authenticate("devin", conn)
+            )
+        )
+        t.start()
+        time.sleep(0.05)
+        results.append(acp_mod._acp_authenticate("devin", conn))
+        t.join()
+
+    assert results == [False, False]
+    assert conn["authenticated"] is False
+    assert "devin" in acp_mod._core._ACP_ENSURE_ERROR
+    acp_mod._core._ACP_ENSURE_ERROR.pop("devin", None)

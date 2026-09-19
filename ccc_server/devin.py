@@ -38,6 +38,24 @@ from pathlib import Path
 
 from ccc_server import core as _core
 
+
+# `devin acp`, `devin -p`, and `devin --resume` watchdog WINDSURF_EXT_HOST_PID
+# and self-terminate when that pid exits — the Windsurf/Devin IDE uses it to
+# reap CLI children when its extension host dies ("Parent process exited;
+# shutting down ACP server"). A CCC process launched from a Devin Desktop
+# terminal inherits the var; once that host dies, every devin child we spawn
+# sees a dead "parent" and suicides ~2s in — observed live as
+# `authenticate` "timing out" instantly in a loop while browser sign-in
+# tabs stacked up. CCC's devin children are parented to CCC, so drop the
+# marker: the watchdog then tracks our real ppid instead.
+os.environ.pop("WINDSURF_EXT_HOST_PID", None)
+# Same inheritance vector: ACP_BACKEND=windsurf tells `devin acp` "the ACP
+# host is the sole source of credentials" and forbids falling back to the
+# stored CLI credential file — forcing a fresh PKCE browser flow on every
+# connection even when credentials.toml is already valid. With the marker
+# gone the server accepts host creds AND falls back to stored ones.
+os.environ.pop("ACP_BACKEND", None)
+
 DEVIN_API_BASE = "https://api.devin.ai/v1"
 DEVIN_HTTP_TIMEOUT_S = 10
 DEVIN_SESSION_PREFIX = "devin-"

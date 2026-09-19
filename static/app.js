@@ -5680,6 +5680,7 @@
         // Desktop / Next, a `devin` TUI, a sibling CCC) — queued sends
         // park until that client lets go, and the user should see why.
         devinExternalOwner: !!data.external_devin_owner,
+        acpError: (typeof data.acp_error === 'string' && data.acp_error) || null,
       };
       // Timestamp of this successful status read — drives the "checked Xs ago"
       // freshness label on the conversation top-bar process indicator.
@@ -5703,6 +5704,14 @@
           .forEach(p => markPendingSendQueued(p,
             "Queued - this Devin session is open in another client "
             + "(e.g. Devin Desktop); it'll deliver when that client lets go."));
+      }
+      // A pending devin-browser sign-in (or other ACP attach failure) gets
+      // the same annotation — the backend reason string already says what
+      // the human needs to do.
+      if (liveStatus.acpError && Array.isArray(_pendingSends)) {
+        _pendingSends
+          .filter(p => p && p.sid === _fetchedFor && !p.delivered && p.entry)
+          .forEach(p => markPendingSendQueued(p, "Queued - " + liveStatus.acpError));
       }
       // Audible feedback when the agent stops working for this conversation.
       // Only fire while this page is visible and the status still belongs to

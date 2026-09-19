@@ -3239,6 +3239,13 @@ def session_live_status(session_id, session_cwd):
             )
             result["model"] = snap.get("model")
             result["match_count"] = 1
+        else:
+            # ACP can't attach right now — surface why (bin missing,
+            # handshake failure, or a devin-browser sign-in parked waiting
+            # on the human) so queued sends explain themselves.
+            acp_err = _core._ACP_ENSURE_ERROR.get("devin")
+            if acp_err:
+                result["acp_error"] = acp_err
         return result
 
     if _core._is_cursor_session(session_id):
