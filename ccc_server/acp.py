@@ -142,6 +142,7 @@ _KIMI_WIRE_BUSY_SUPPRESS_UNTIL = {}
 # capability: the agent sends terminal/* requests and WE execute the command
 # as a local subprocess. One registry entry per live terminal, keyed by the
 # terminalId we hand back from terminal/create.
+_ACP_TERMINAL_SHELLS = ("bash", "sh", "zsh", "dash")
 _ACP_TERMINALS = {}        # terminalId -> {"proc","buf","limit","truncated","exit","signal","exited","harness","sid","exit_event"}
 _ACP_TERMINALS_LOCK = threading.Lock()
 _ACP_TERMINAL_DEFAULT_LIMIT = 1024 * 1024  # retained-output cap when the agent passes no outputByteLimit
@@ -1184,7 +1185,11 @@ def _acp_terminal_argv(command, args=None):
         argv = shlex.split(command, posix=True)
     except ValueError:
         argv = []
-    if len(argv) >= 2:
+    # Only a line that already invokes a shell (`/bin/bash -lc '…'`) is
+    # argv-shaped. Anything else is a shell command line (Devin sends
+    # `wt ls | jq` / `a && b > f` whole); shlex-splitting it would hand `|`,
+    # `&&` and `>` to argv[0] as literal arguments.
+    if len(argv) >= 3 and os.path.basename(argv[0]) in _ACP_TERMINAL_SHELLS and argv[1] in ("-c", "-lc", "-cl", "-ic"):
         return argv
     return ["/bin/bash", "-lc", command]
 

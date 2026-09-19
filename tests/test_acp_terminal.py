@@ -158,6 +158,26 @@ def test_terminal_argv_splits_grok_bash_lc_command_line():
     ]
 
 
+def test_terminal_argv_runs_shell_command_lines_through_bash():
+    # Devin sends whole command lines with pipes/redirects/&& in `command`.
+    for line in ("wt ls | jq .", "mkdir -p d && wt ls > f", "echo a; echo b"):
+        assert server._acp_terminal_argv(line) == ["/bin/bash", "-lc", line]
+    assert server._acp_terminal_argv("echo hi") == ["/bin/bash", "-lc", "echo hi"]
+
+
+def test_create_runs_pipeline_and_redirect_through_shell(captured, tmp_path):
+    server._acp_handle_terminal_request("devin", 1, "terminal/create", {
+        "sessionId": "s1", "cwd": str(tmp_path),
+        "command": "echo pipe-ok | tr a-z A-Z && echo hi > out.txt",
+    })
+    tid = captured[1]["result"]["terminalId"]
+    server._acp_handle_terminal_request("devin", 2, "terminal/wait_for_exit", {
+        "sessionId": "s1", "terminalId": tid,
+    })
+    assert _wait_response(captured, 2)["result"]["exitCode"] == 0
+    assert (tmp_path / "out.txt").read_text() == "hi\n"
+
+
 def test_terminal_argv_overlong_command_does_not_use_command_as_path():
     payload = "/bin/bash -lc " + repr("x" * 8000)
     argv = server._acp_terminal_argv(payload)

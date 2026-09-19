@@ -1,0 +1,1 @@
+- Fixed Devin (and any ACP agent sending a whole command line) running shell commands without a shell: `terminal/create` shlex-split `wt ls | jq` or `a && b > f` into argv, so `|`, `&&` and `>` reached the first program as literal arguments. Command lines that are not already a `bash -lc …` invocation now run under `/bin/bash -lc`.
