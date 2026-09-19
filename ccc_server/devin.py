@@ -1731,11 +1731,36 @@ def _devin_cli_row_memo_background_join(timeout=None):
             time.sleep(0.01)
 
 
+def _devin_model_list_disk_cache_path():
+    return _core.COMMAND_CENTER_STATE_DIR / "devin_models_catalog.json"
+
+
+def _devin_model_list_disk_cache():
+    """Last successfully fetched catalog, persisted across restarts.
+
+    ``devin models list`` needs an interactive login; when the CLI's auth
+    lapses the picker would otherwise go empty even though ACP-spawned
+    sessions can still set any of these models. The catalog changes rarely,
+    so the stale copy is a better fallback than nothing."""
+    try:
+        raw = json.loads(_devin_model_list_disk_cache_path().read_text())
+    except (OSError, ValueError, TypeError):
+        return None
+    if isinstance(raw, dict) and raw.get("families"):
+        return raw
+    return None
+
+
+def _devin_model_list_empty():
+    return {"families": [], "uid_to_family": {}, "family_to_uids": {}}
+
+
 def _devin_model_list_json():
     """Run ``devin models list --format json`` and cache the parsed result.
 
-    The cache is process-local, bounded, and degrades to an empty catalog when
-    the binary is missing or the command fails."""
+    The cache is process-local, bounded, falls back to the last disk copy
+    when the command fails (e.g. lapsed CLI auth), and degrades to an empty
+    catalog when nothing has ever succeeded."""
     now = time.monotonic()
     with _DEVIN_MODEL_LIST_CACHE["lock"]:
         cached = _DEVIN_MODEL_LIST_CACHE["data"]
@@ -1743,7 +1768,9 @@ def _devin_model_list_json():
             return cached
     resolved = _resolve_devin_bin()
     if not resolved.get("available"):
-        return {"families": [], "uid_to_family": {}, "family_to_uids": {}}
+        disk = _devin_model_list_disk_cache()
+        return disk if disk is not None else _devin_model_list_empty()
+    data = None
     try:
         proc = subprocess.run(
             [resolved["bin"], "models", "list", "--format", "json"],
@@ -1751,11 +1778,18 @@ def _devin_model_list_json():
             text=True,
             timeout=DEVIN_MODEL_LIST_TIMEOUT_S,
         )
-        if proc.returncode != 0:
-            return {"families": [], "uid_to_family": {}, "family_to_uids": {}}
-        data = json.loads(proc.stdout)
+        if proc.returncode == 0:
+            data = json.loads(proc.stdout)
     except (subprocess.TimeoutExpired, OSError, ValueError, TypeError):
-        return {"families": [], "uid_to_family": {}, "family_to_uids": {}}
+        pass
+    if data is None:
+        disk = _devin_model_list_disk_cache()
+        if disk is not None:
+            with _DEVIN_MODEL_LIST_CACHE["lock"]:
+                _DEVIN_MODEL_LIST_CACHE["ts"] = now
+                _DEVIN_MODEL_LIST_CACHE["data"] = disk
+            return disk
+        return _devin_model_list_empty()
     families = data.get("families") or []
     uid_to_family = {}
     family_to_uids = {}
@@ -1777,6 +1811,12 @@ def _devin_model_list_json():
         "uid_to_family": uid_to_family,
         "family_to_uids": family_to_uids,
     }
+    try:
+        cache_path = _devin_model_list_disk_cache_path()
+        cache_path.parent.mkdir(parents=True, exist_ok=True)
+        cache_path.write_text(json.dumps(result))
+    except OSError:
+        pass
     with _DEVIN_MODEL_LIST_CACHE["lock"]:
         _DEVIN_MODEL_LIST_CACHE["ts"] = now
         _DEVIN_MODEL_LIST_CACHE["data"] = result

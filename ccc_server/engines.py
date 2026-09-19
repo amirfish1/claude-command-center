@@ -3046,6 +3046,63 @@ def spawn_session_devin(prompt, name=None, cwd=None, repo_path=None, worktree=Fa
         except RuntimeError as e:
             return {"ok": False, "error": f"worktree creation failed: {e}"}
 
+    # ACP-first spawn — the same session/new path Devin Desktop uses over
+    # the shared `devin acp` conn. The sessionId arrives in-band (no
+    # sessions.db poll), the session is attached to our conn from turn 1
+    # (steer/compact work immediately), and it does not depend on the
+    # interactive-login gate `devin -p` enforces before starting a turn.
+    # Any failure falls through to the one-shot CLI spawn below.
+    try:
+        acp_spawn = _core._devin_acp_spawn_new_session(
+            prompt,
+            spawn_cwd,
+            model=model_to_use or None,
+            permission_mode=os.environ.get(
+                "CCC_DEVIN_PERMISSION_MODE", "dangerous"
+            ),
+        )
+    except Exception as exc:
+        acp_spawn = {"ok": False, "error": f"devin acp spawn error: {exc}"}
+    if isinstance(acp_spawn, dict) and acp_spawn.get("session_id"):
+        raw_id = acp_spawn["session_id"]
+        with open(log_path, "w") as spawn_log:
+            spawn_log.write(
+                f"devin acp session/new -> {raw_id} (cwd={spawn_cwd})\n"
+            )
+            if not acp_spawn.get("ok"):
+                spawn_log.write(
+                    f"initial prompt failed: {acp_spawn.get('error')}\n"
+                )
+        entry = {
+            "spawn_id": f"devin-acp-{raw_id}",
+            "session_id": _core.DEVIN_CLI_SESSION_PREFIX + raw_id,
+            "name": session_name,
+            "log": str(log_path),
+            "prompt": prompt[:200],
+            "started": timestamp,
+            "engine": "devin",
+            "cwd": spawn_cwd,
+            "repo_path": repo_for_logs,
+            "model": model_to_use or "",
+            "reasoning_effort": reasoning_effort or "",
+            "parent_session_id": parent_session_id or "",
+            "via": "devin-acp",
+        }
+        resp = {
+            "ok": True,
+            "via": "devin-acp",
+            "name": session_name,
+            "log": str(log_path),
+            "spawn_id": entry["spawn_id"],
+        }
+        if not acp_spawn.get("ok"):
+            resp["prompt_pending"] = True
+            resp["warning"] = acp_spawn.get("error")
+        if worktree_path:
+            resp["worktree_path"] = worktree_path
+            resp["worktree_branch"] = worktree_branch
+        return _finalize_spawn_response(resp, entry, ctx)
+
     cmd = [
         resolved["bin"],
         "--permission-mode", os.environ.get("CCC_DEVIN_PERMISSION_MODE", "dangerous"),
@@ -3069,8 +3126,12 @@ def spawn_session_devin(prompt, name=None, cwd=None, repo_path=None, worktree=Fa
     except (FileNotFoundError, OSError) as e:
         log_fh.close()
         return {"ok": False, "error": str(e), "code": "devin_launch_failed", "via": "devin-spawn"}
+    # Devin's startup gate (auth check + model validation against the
+    # remote catalog) takes ~1s to fail — "Not logged in" / "Unknown
+    # model" both arrive well past the default 150ms early-failure window,
+    # so this path gets a longer look before reporting success.
     failure = _spawn_early_failure_payload(
-        proc, log_path, log_fh, engine="devin", via="devin-spawn",
+        proc, log_path, log_fh, engine="devin", via="devin-spawn", delay=2.0,
     )
     if failure:
         return failure

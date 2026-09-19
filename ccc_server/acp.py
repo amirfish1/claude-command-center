@@ -644,6 +644,57 @@ def _devin_acp_try_steer(session_id, raw_id, cwd, text, *, mode="steer",
         return None
 
 
+def _devin_acp_spawn_new_session(prompt, cwd, model=None, permission_mode=None):
+    """Spawn a new Devin session through `devin acp` session/new.
+
+    This is the same path Devin Desktop uses: the sessionId arrives in-band
+    (no sessions.db poll), the session is attached to our shared conn from
+    turn 1 (steer/compact work immediately), and it does not depend on the
+    interactive-login gate that `devin -p` enforces. The initial prompt is
+    sent as a normal async turn.
+
+    ``permission_mode`` maps the one-shot CLI flag onto the ACP session
+    mode: ``dangerous`` (CCC's devin-spawn default) is Bypass Permissions.
+    Config/mode failures degrade gracefully — the session keeps its
+    session/new defaults rather than aborting a spawn that already exists.
+    """
+    if not prompt:
+        return {"ok": False, "error": "empty prompt"}
+    if not _devin_acp_steer_capable():
+        return {"ok": False, "code": "acp_unavailable",
+                "error": _core._acp_conn_error("devin")}
+    created = _core._acp_new_session("devin", cwd)
+    if not created.get("ok"):
+        return created
+    raw_id = created["session_id"]
+    mode_map = {
+        "dangerous": "bypass", "bypass": "bypass", "ask": "ask",
+        "plan": "plan", "smart": "smart", "accept-edits": "accept-edits",
+        "code": "accept-edits",
+    }
+    target_mode = mode_map.get(str(permission_mode or "").strip().lower())
+    if target_mode:
+        try:
+            _core._acp_set_config("devin", raw_id, "mode", target_mode)
+        except Exception:
+            pass
+    if model:
+        try:
+            _core._acp_set_config("devin", raw_id, "model", model)
+        except Exception:
+            pass
+    sent = _core._acp_prompt("devin", raw_id, prompt, mode="send")
+    if not sent.get("ok"):
+        # The session exists and is attached — report it so the caller can
+        # still surface a usable card, but flag the undelivered prompt.
+        return {
+            "ok": False, "session_id": raw_id, "session_created": True,
+            "error": sent.get("error") or "initial prompt failed",
+            "code": sent.get("code"),
+        }
+    return {"ok": True, "session_id": raw_id, "req_id": sent.get("req_id")}
+
+
 _grok_external_writer_cache = {}
 _grok_external_writer_lock = threading.Lock()
 
@@ -2534,6 +2585,48 @@ def _acp_load(harness, sid, cwd):
     if not resp.get("ok"):
         return resp
     return {"ok": True, "session_id": sid, "harness": harness, "via": f"acp-{method.split('/')[-1]}"}
+
+
+def _acp_new_session(harness, cwd):
+    """Create a brand-new harness session via ACP session/new.
+
+    This is the same call Devin Desktop uses to start a session — the
+    sessionId comes back in-band (no on-disk poll needed) and the session
+    is already attached to this connection, so session/prompt, cancel, and
+    set_config_option all work immediately. The returned session is marked
+    loaded on the current conn so _acp_ensure_session_loaded is a no-op.
+    """
+    conn = _core._acp_ensure(harness)
+    if conn is None:
+        return {"ok": False, "error": _core._acp_conn_error(harness)}
+    resp = _core._acp_request(harness, "session/new", {
+        "cwd": cwd, "mcpServers": [],
+    }, timeout=30)
+    if not resp.get("ok"):
+        return resp
+    result = resp.get("result") or {}
+    sid = str(result.get("sessionId") or "").strip()
+    if not sid:
+        return {"ok": False, "error": "session/new returned no sessionId"}
+    with _core._ACP_LOCK:
+        state = _core._acp_session(harness, sid, create=True, cwd=cwd)
+        state["attached"] = True
+        state["loaded_conn"] = id(conn)
+        if cwd:
+            state["cwd"] = cwd
+        options = result.get("configOptions")
+        if isinstance(options, list) and options:
+            state["config_options"] = options
+            for opt in options:
+                if isinstance(opt, dict) and opt.get("id") == "model":
+                    state["model"] = opt.get("currentValue")
+        _acp_save_state_unlocked(harness)
+    _core._acp_wire_tail_start(harness)
+    return {
+        "ok": True, "session_id": sid, "harness": harness,
+        "via": "acp-session-new", "modes": result.get("modes"),
+        "config_options": result.get("configOptions"),
+    }
 
 
 _ACP_ATTACH_VIEW_MIN_INTERVAL_S = 60.0

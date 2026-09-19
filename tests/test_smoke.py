@@ -12331,6 +12331,10 @@ class TestRepoContextHelpers(unittest.TestCase):
                 return_value={"available": True, "bin": "/usr/bin/devin-test"},
             ), mock.patch.object(
                 server,
+                "_devin_acp_spawn_new_session",
+                return_value={"ok": False, "error": "acp unavailable"},
+            ), mock.patch.object(
+                server,
                 "_create_worktree_for_spawn",
                 return_value=(str(isolated), "feat/devin-worktree"),
             ) as create_worktree, mock.patch.object(

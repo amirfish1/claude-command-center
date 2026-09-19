@@ -456,3 +456,212 @@ def test_devin_send_uses_acp_when_our_own_conn_holds_the_lock():
     assert result["via"] == "acp-prompt"
     acp_try.assert_called_once()
     pump.assert_not_called()
+
+
+# ---------------------------------------------------------------------------
+# _devin_acp_spawn_new_session -- ACP-first spawn (the Devin Desktop path)
+# ---------------------------------------------------------------------------
+
+def test_devin_acp_spawn_new_session_happy_path():
+    """session/new -> mode+model config -> initial session/prompt, all over
+    the shared devin acp conn (the same calls Devin Desktop makes)."""
+    server = _server()
+    with mock.patch.object(server, "_acp_harness_enabled", return_value=True), \
+         mock.patch.object(server, "_acp_resolve_bin", return_value={"available": True}), \
+         mock.patch.object(
+             server, "_acp_new_session",
+             return_value={"ok": True, "session_id": "raw-new-session"},
+         ) as new_session, \
+         mock.patch.object(server, "_acp_set_config") as set_config, \
+         mock.patch.object(
+             server, "_acp_prompt",
+             return_value={"ok": True, "via": "acp-prompt", "req_id": 9},
+         ) as prompt:
+        result = server._devin_acp_spawn_new_session(
+            "do work", "/tmp/work", model="swe-2-high",
+            permission_mode="dangerous",
+        )
+
+    assert result["ok"] is True
+    assert result["session_id"] == "raw-new-session"
+    new_session.assert_called_once_with("devin", "/tmp/work")
+    config_calls = {c.args[2]: c.args[3] for c in set_config.call_args_list}
+    # The one-shot CLI's --permission-mode dangerous maps onto Bypass
+    # Permissions so spawned sessions behave like the old devin -p path.
+    assert config_calls == {"mode": "bypass", "model": "swe-2-high"}
+    prompt.assert_called_once_with(
+        "devin", "raw-new-session", "do work", mode="send",
+    )
+
+
+def test_devin_acp_spawn_new_session_declines_when_uncapable():
+    server = _server()
+    with mock.patch.object(server, "_acp_harness_enabled", return_value=False), \
+         mock.patch.object(server, "_acp_new_session") as new_session:
+        result = server._devin_acp_spawn_new_session("do work", "/tmp/work")
+
+    assert result["ok"] is False
+    new_session.assert_not_called()
+
+
+def test_devin_acp_spawn_new_session_propagates_new_failure():
+    server = _server()
+    with mock.patch.object(server, "_acp_harness_enabled", return_value=True), \
+         mock.patch.object(server, "_acp_resolve_bin", return_value={"available": True}), \
+         mock.patch.object(
+             server, "_acp_new_session",
+             return_value={"ok": False, "error": "conn unavailable"},
+         ), \
+         mock.patch.object(server, "_acp_prompt") as prompt:
+        result = server._devin_acp_spawn_new_session("do work", "/tmp/work")
+
+    assert result["ok"] is False
+    assert result["error"] == "conn unavailable"
+    prompt.assert_not_called()
+
+
+def test_devin_acp_spawn_new_session_prompt_failure_keeps_session():
+    """A session that was created but whose first prompt failed is still a
+    real session -- report session_created so the caller can surface it."""
+    server = _server()
+    with mock.patch.object(server, "_acp_harness_enabled", return_value=True), \
+         mock.patch.object(server, "_acp_resolve_bin", return_value={"available": True}), \
+         mock.patch.object(
+             server, "_acp_new_session",
+             return_value={"ok": True, "session_id": "raw-orphan"},
+         ), \
+         mock.patch.object(server, "_acp_set_config"), \
+         mock.patch.object(
+             server, "_acp_prompt",
+             return_value={"ok": False, "error": "send failed", "code": "busy"},
+         ):
+        result = server._devin_acp_spawn_new_session("do work", "/tmp/work")
+
+    assert result["ok"] is False
+    assert result["session_created"] is True
+    assert result["session_id"] == "raw-orphan"
+
+
+# ---------------------------------------------------------------------------
+# spawn_session_devin -- ACP-first with devin -p fallback
+# ---------------------------------------------------------------------------
+
+def _spawn_common_mocks(server):
+    """Mocks every spawn_session_devin dependency that is NOT under test."""
+    return [
+        mock.patch.object(
+            server, "_resolve_devin_bin",
+            return_value={"available": True, "bin": "/usr/bin/devin-test"},
+        ),
+        mock.patch.object(
+            server, "_spawn_repo_context",
+            return_value={"cwd": "/tmp/work", "repo_path": "/tmp/work"},
+        ),
+        mock.patch.object(server, "_devin_resolve_model", return_value="swe-2-high"),
+        mock.patch.object(server, "_set_session_model"),
+        mock.patch.object(server, "_record_spawn_to_registry"),
+    ]
+
+
+def _enter_stack(stack):
+    for ctx in stack:
+        ctx.__enter__()
+
+
+def _exit_stack(stack):
+    for ctx in reversed(stack):
+        ctx.__exit__(None, None, None)
+
+
+def test_spawn_session_devin_uses_acp_when_available(tmp_path):
+    """ACP spawn returns the devincli- id in-band -- no pid, no DB poll."""
+    server = _server()
+    stack = _spawn_common_mocks(server)
+    _enter_stack(stack)
+    try:
+        with mock.patch.object(
+            server, "_devin_acp_spawn_new_session",
+            return_value={"ok": True, "session_id": "raw-acp-spawn"},
+        ) as acp_spawn, \
+             mock.patch.object(server.subprocess, "Popen") as popen:
+            result = server.spawn_session_devin(
+                "do work", name="acp spawn", repo_path=str(tmp_path),
+            )
+    finally:
+        _exit_stack(stack)
+
+    acp_spawn.assert_called_once()
+    popen.assert_not_called()
+    assert result["ok"] is True
+    assert result["via"] == "devin-acp"
+    assert result["session_id"] == "devincli-raw-acp-spawn"
+    assert result["session_id_pending"] is False
+
+
+def test_spawn_session_devin_falls_back_to_cli_when_acp_fails(tmp_path):
+    """When ACP can't produce a session the one-shot devin -p path runs,
+    exactly as before."""
+    server = _server()
+    proc = mock.Mock(pid=7777)
+    proc.poll.return_value = None
+    stack = _spawn_common_mocks(server)
+    _enter_stack(stack)
+    original_spawns = list(server._spawned_sessions)
+    server._spawned_sessions.clear()
+    try:
+        with mock.patch.object(
+            server, "_devin_acp_spawn_new_session",
+            return_value={"ok": False, "error": "acp down"},
+        ), \
+             mock.patch.object(
+                 server, "_devin_cli_session_id_for_spawn_entry",
+                 return_value=None,
+             ), \
+             mock.patch.object(
+                 server.subprocess, "Popen", return_value=proc,
+             ) as popen:
+            result = server.spawn_session_devin(
+                "do work", name="cli spawn", repo_path=str(tmp_path),
+            )
+    finally:
+        for entry in server._spawned_sessions:
+            fh = entry.get("log_fh")
+            if fh:
+                fh.close()
+        server._spawned_sessions.clear()
+        server._spawned_sessions.extend(original_spawns)
+        _exit_stack(stack)
+
+    popen.assert_called_once()
+    cmd = popen.call_args.args[0]
+    assert cmd[0] == "/usr/bin/devin-test"
+    assert "-p" in cmd
+    assert result["ok"] is True
+    assert result["engine"] == "devin"
+
+
+def test_spawn_session_devin_acp_prompt_failure_still_returns_session(tmp_path):
+    """session_created-but-prompt-failed surfaces the session card with a
+    warning instead of falling back to a second, duplicate spawn."""
+    server = _server()
+    stack = _spawn_common_mocks(server)
+    _enter_stack(stack)
+    try:
+        with mock.patch.object(
+            server, "_devin_acp_spawn_new_session",
+            return_value={
+                "ok": False, "session_id": "raw-orphan",
+                "session_created": True, "error": "send failed",
+            },
+        ), \
+             mock.patch.object(server.subprocess, "Popen") as popen:
+            result = server.spawn_session_devin(
+                "do work", name="orphan", repo_path=str(tmp_path),
+            )
+    finally:
+        _exit_stack(stack)
+
+    popen.assert_not_called()
+    assert result["ok"] is True
+    assert result["session_id"] == "devincli-raw-orphan"
+    assert result["prompt_pending"] is True
