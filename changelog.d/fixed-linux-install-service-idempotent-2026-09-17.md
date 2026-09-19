@@ -1,0 +1,1 @@
+`./run.sh --install-service` on Linux now stops the existing systemd units before checking the port, matching the macOS launchd path. Previously, re-running it (e.g. to repair a missing worker unit) always failed with "port already in use" once the service was installed once.

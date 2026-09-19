@@ -406,6 +406,15 @@ EOF
 
   local target_port="${PORT:-8090}"
 
+  # Stop any previous version of the units first so re-install is idempotent
+  # and the port check below sees the real "is something else holding it"
+  # answer — same reason install_service (macOS) unloads before checking.
+  # Without this, re-running --install-service to repair a partial install
+  # (e.g. a missing worker unit) always fails: the dashboard unit it already
+  # installed is still bound to the port.
+  systemctl --user stop "$SYSTEMD_UNIT_NAME" "$WORKER_SYSTEMD_UNIT_NAME" >/dev/null 2>&1 || true
+  sleep 0.3
+
   if is_port_bound "$target_port"; then
     cat >&2 <<EOF
 Error: port $target_port is already in use — looks like CCC (or something else)
