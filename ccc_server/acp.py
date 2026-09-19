@@ -105,6 +105,10 @@ _ACP_HARNESSES = {
         "acp_args": ("acp",),
         "kill_env": "CCC_DEVIN_ACP",
         "auth_method": "devin-browser",
+        # `devin acp` implements session/load only — session/resume answers
+        # -32601. When CCC already holds the transcript, attach via load
+        # and drop the history replay instead of re-folding it.
+        "no_resume": True,
     },
 }
 
@@ -1251,6 +1255,13 @@ def _acp_flush_turn_text_unlocked(harness, sid, turn, usage=None):
 def _acp_replay_flush_unlocked(harness, sid, state, replay):
     """Flush the session/load replay's pending text bucket (and any tool rows
     still waiting for a terminal status) in arrival order."""
+    if replay.get("drop"):
+        # load-as-resume on a no_resume harness: history was swallowed on
+        # arrival — nothing to flush.
+        replay["text"] = ""
+        replay["kind"] = None
+        replay["tools"] = {}
+        return
     if replay.get("kind") and replay.get("text"):
         ev = _core._acp_message_event(state, replay["kind"], replay["text"])
         if ev is not None:
@@ -1290,6 +1301,10 @@ def _acp_handle_session_update(harness, sid, update):
         # its own thinking-kind block instead of merging into surrounding text.
         replay = state.get("replay")
         if replay is not None and kind in ("user_message_chunk", "agent_message_chunk", "agent_thought_chunk"):
+            if replay.get("drop"):
+                # load-as-resume on a no_resume harness (devin): CCC already
+                # holds this history — swallow chunks instead of duplicating.
+                return
             speaker = "user" if kind == "user_message_chunk" else (
                 "thought" if kind == "agent_thought_chunk" else "assistant")
             if replay.get("kind") and replay["kind"] != speaker and replay.get("text"):
@@ -1341,6 +1356,8 @@ def _acp_handle_session_update(harness, sid, update):
             if diff:
                 entry["diff"] = diff
             if replay is not None:
+                if replay.get("drop"):
+                    return
                 # session/load history: the text bucket flushes so the row
                 # lands where the tool ran; the row itself waits for its
                 # terminal status (same as a live turn) or the load's flush.
@@ -1374,6 +1391,8 @@ def _acp_handle_session_update(harness, sid, update):
             tool_id = str(update.get("toolCallId") or "")
             turn = state.get("active_turn")
             if replay is not None:
+                if replay.get("drop"):
+                    return
                 tool = (replay.get("tools") or {}).get(tool_id)
                 if tool is None:
                     return
@@ -1439,6 +1458,10 @@ def _acp_handle_session_update(harness, sid, update):
             if norm == (state.get("plan") or []):
                 return
             state["plan"] = norm
+            if replay is not None and replay.get("drop"):
+                # Dropped history replay: keep the plan state fresh but
+                # don't emit a duplicate plan row into the transcript.
+                return
             turn = state.get("active_turn")
             if turn is not None:
                 _acp_flush_turn_text_unlocked(harness, sid, turn)
@@ -2427,14 +2450,31 @@ def _acp_load(harness, sid, cwd):
         has_history = _core._acp_transcript_path(harness, sid).stat().st_size > 0
     except OSError:
         pass
-    method = "session/resume" if has_history else "session/load"
+    cfg = _core._ACP_HARNESSES.get(harness) or {}
+    # no_resume harnesses (devin) have no session/resume — attach via
+    # session/load with the history replay dropped so the existing CCC
+    # transcript is not duplicated.
+    drop_replay = bool(has_history and cfg.get("no_resume"))
+    method = "session/resume" if (has_history and not drop_replay) else "session/load"
     with _core._ACP_LOCK:
         state = _core._acp_session(harness, sid, create=True, cwd=cwd)
         if method == "session/load" and state.get("replay") is None:
-            state["replay"] = {"kind": None, "text": ""}
+            state["replay"] = {"kind": None, "text": "", "drop": drop_replay}
     resp = _core._acp_request(harness, method, {
         "sessionId": sid, "cwd": cwd, "mcpServers": [],
     }, timeout=30, sid=sid)
+    # A harness that doesn't implement session/resume at all (-32601) —
+    # the generic version of cfg["no_resume"] for harnesses we haven't
+    # annotated — falls back to session/load with the replay dropped.
+    if not resp.get("ok") and method == "session/resume" and resp.get("code") == -32601:
+        method = "session/load"
+        with _core._ACP_LOCK:
+            state = _core._acp_session(harness, sid, create=True, cwd=cwd)
+            if state.get("replay") is None:
+                state["replay"] = {"kind": None, "text": "", "drop": True}
+        resp = _core._acp_request(harness, method, {
+            "sessionId": sid, "cwd": cwd, "mcpServers": [],
+        }, timeout=30, sid=sid)
     # A dormant harness session can be mid-write from another live consumer
     # of its own on-disk store (e.g. a native TUI the user has open outside
     # CCC) right as we attach — the harness's own resume handler can trip
@@ -2445,7 +2485,7 @@ def _acp_load(harness, sid, cwd):
     # Devin's -32015 session_locked is exempt: the session is open in
     # another ACP host (e.g. Devin Desktop) and a 750ms-later retry can
     # never succeed — the caller's queue fallback owns that case.
-    if not resp.get("ok") and not resp.get("auth_required") and resp.get("code") != -32015:
+    if not resp.get("ok") and not resp.get("auth_required") and resp.get("code") not in (-32015, -32601):
         time.sleep(0.75)
         resp = _core._acp_request(harness, method, {
             "sessionId": sid, "cwd": cwd, "mcpServers": [],
