@@ -46220,7 +46220,12 @@
     function _tlRenderEvent(ev) {
       const type = String((ev && ev.event) || '');
       if (type === 'filed') {
+        // Who opened the ticket (CCC-1166): wt folds the ticket's `submitter`
+        // (or the GitHub issue author) onto the filed event at read time;
+        // fall back to the item fields for a queue backend that doesn't.
+        const filer = String(ev.submitter || item.submitter || item.github_author || '').trim();
         return _tlEvt('uxq-tl-filed', _tlHead('Filed', ev)
+          + (filer ? ' <span class="uxq-tl-meta">by ' + escapeHtml(filer) + '</span>' : '')
           + (ev.source ? ' <span class="uxq-tl-meta">via ' + escapeHtml(ev.source) + '</span>' : ''),
           ev.project ? '<span class="uxq-tl-tag">' + escapeHtml(ev.project) + '</span>' : '');
       }
@@ -46318,6 +46323,31 @@
       + '<div class="uxq-td-pg uxq-td-pg-origin">'
       + '<div class="uxq-td-pg-label">Origin</div>'
       + (item.project  ? _propRow('Project', escapeHtml(item.project)) : '')
+      + (function () {
+          // Who opened the ticket (CCC-1166). `submitter` is wt's filer
+          // field -- `wt add` auto-captures the filing session, the CCC
+          // annotate path records the operator name; `github_author` is the
+          // issue author on GitHub-backed queues. A filer that resolves to a
+          // loaded conversation gets an open-in-CCC link like the Session row.
+          const sub = String(item.submitter || '').trim();
+          const gh = String(item.github_author || '').trim();
+          if (!sub && !gh) return '';
+          let html = '';
+          if (sub) {
+            html = '<span class="uxq-td-mono">' + escapeHtml(sub) + '</span>';
+            const conv = (conversationsData || []).find(c => c && (c.session_id === sub || c.id === sub));
+            if (conv) {
+              const sid = conv.session_id || conv.id;
+              html += ' <button type="button" class="uxq-td-session-btn" data-sid="' + escapeAttr(sid) + '">open in CCC ↗</button>';
+            }
+          }
+          if (gh) {
+            html += (html ? ' · ' : '')
+              + '<a class="uxq-td-link" href="https://github.com/' + escapeAttr(gh)
+              + '" target="_blank" rel="noopener">@' + escapeHtml(gh) + '</a>';
+          }
+          return _propRow('Filed by', html);
+        })()
       + (item.project  ? _propRow('Learnings', '<button type="button" class="uxq-td-learnings-btn" data-queue="' + escapeAttr(item.project) + '">edit learning file ↗</button>') : '')
       + (item.source   ? _propRow('Source',  escapeHtml(item.source)) : '')
       + (item.lane     ? _propRow('Lane',    escapeHtml(item.lane)) : '')

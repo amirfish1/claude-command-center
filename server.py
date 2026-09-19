@@ -17857,6 +17857,29 @@ def _find_annotation_ux_queue_session(queue_name=ANNOTATION_UX_FIXES_QUEUE_NAME)
     return matches[0]
 
 
+def _annotation_submitter(meta):
+    """Best-available "who filed this" for an annotation-filed ticket
+    (CCC-1166).
+
+    Preference: an explicit ``submitter`` in the payload, then
+    ``$CCC_USER_NAME``, then the OS account running the dashboard — CCC binds
+    loopback, so the annotator is that user. A bare name is not a
+    wt-addressable target; it is stored for display and the notification
+    lookup simply resolves to nothing (send returns ok:False, never raises).
+    """
+    explicit = str((meta or {}).get("submitter") or "").strip()
+    if explicit:
+        return explicit
+    name = str(os.environ.get("CCC_USER_NAME") or "").strip()
+    if name:
+        return name
+    try:
+        import getpass
+        return str(getpass.getuser() or "").strip()
+    except Exception:
+        return ""
+
+
 def enqueue_annotation_ux_fixes_queue(
     text, queue_name=ANNOTATION_UX_FIXES_QUEUE_NAME, engine="claude", meta=None, inject=False, project=""
 ):
@@ -17920,20 +17943,33 @@ def enqueue_annotation_ux_fixes_queue(
                 "status": 409,
             }
         _ANNOTATION_QUEUE_SUBMISSIONS_IN_FLIGHT.add(_submission_key)
+    _enqueue_kwargs = dict(
+        note=meta.get("note") or text,
+        text=text,
+        source=str(meta.get("source") or "ccc"),
+        annotation_id=str(meta.get("annotation_id") or meta.get("id") or ""),
+        url=_url,
+        title=_title,
+        selector=str(meta.get("selector") or ""),
+        screenshot_path=str(meta.get("screenshot_path") or ""),
+        repo_path=_repo_path,
+        lane=str(meta.get("lane") or "normal"),
+        project=str(project or meta.get("project") or ""),
+        # Who opened the ticket (CCC-1166). Only the payload naming its
+        # own submitter counts as explicit -- the env/OS fallbacks are
+        # auto-derived, so they keep the default notify event set.
+        submitter=_annotation_submitter(meta),
+        submitter_explicit=bool(str(meta.get("submitter") or "").strip()),
+    )
     try:
-        item = _q.enqueue(
-            note=meta.get("note") or text,
-            text=text,
-            source=str(meta.get("source") or "ccc"),
-            annotation_id=str(meta.get("annotation_id") or meta.get("id") or ""),
-            url=_url,
-            title=_title,
-            selector=str(meta.get("selector") or ""),
-            screenshot_path=str(meta.get("screenshot_path") or ""),
-            repo_path=_repo_path,
-            lane=str(meta.get("lane") or "normal"),
-            project=str(project or meta.get("project") or ""),
-        )
+        try:
+            item = _q.enqueue(**_enqueue_kwargs)
+        except TypeError:
+            # A WatchTower old enough to lack the submitter params still
+            # files the ticket -- just without the filer recorded.
+            _enqueue_kwargs.pop("submitter", None)
+            _enqueue_kwargs.pop("submitter_explicit", None)
+            item = _q.enqueue(**_enqueue_kwargs)
     except Exception as e:  # never lose a capture to a queue error
         item = None
         queue_error = str(e)
@@ -29529,6 +29565,7 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                 "repo_path": payload.get("repo_path") or "",
                 "source": payload.get("source") or "ccc",
                 "lane": payload.get("lane") or "normal",
+                "submitter": payload.get("submitter") or "",
             }
             result = enqueue_annotation_ux_fixes_queue(
                 payload.get("text") or "",
@@ -29564,6 +29601,7 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                 "repo_path": payload.get("repo_path") or "",
                 "source": payload.get("source") or "ccc",
                 "lane": payload.get("lane") or "normal",
+                "submitter": payload.get("submitter") or "",
             }
             result = enqueue_annotation_ux_fixes_queue(
                 payload.get("text") or "",
@@ -29593,6 +29631,7 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                 "outer_html": _annotation_text(payload.get("outerHtml") or "", 2000),
                 "source": "throughput-ui",
                 "project": "THROUGHPUT",
+                "submitter": payload.get("submitter") or "",
             }
             # Build a richer text body including DOM picker context when present.
             _base_note = payload.get("text") or payload.get("note") or ""
