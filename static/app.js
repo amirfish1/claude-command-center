@@ -4043,6 +4043,24 @@
     } catch (_) {}
     return F2_LAUNCH_EFFORTS;
   }
+  // Setup > Engines can switch an engine off entirely; a launch picker that
+  // still offers it would spawn a CLI the user deliberately disabled. The
+  // disabled list lives on spawnDefaultsState — a `let` declared far below
+  // this block — so read it lazily the same way f2ModelsForEngine reads
+  // MODEL_OPTIONS_BY_ENGINE. An unreadable list, or one that would leave the
+  // picker empty, falls back to the full set.
+  function f2LaunchEngines() {
+    try {
+      const off = (typeof spawnDefaultsState === 'object' && spawnDefaultsState
+          && Array.isArray(spawnDefaultsState.disabled_engines))
+        ? new Set(spawnDefaultsState.disabled_engines) : null;
+      if (off && off.size) {
+        const list = F2_LAUNCH_ENGINES.filter(e => !off.has(e.id));
+        if (list.length) return list;
+      }
+    } catch (_) {}
+    return F2_LAUNCH_ENGINES;
+  }
   // One alternative, one pill. Send stays the ordinary submit (full resume,
   // priced by the verdict line); the pill offers the cheap continuation. The
   // full description lives in the pill's tooltip.
@@ -4069,9 +4087,10 @@
       // Model and effort likewise fall back to CCC's spawn defaults rather
       // than a fixed sonnet-5/Light, so this panel tracks whatever the user
       // has set as their normal spawn engine defaults.
-      const fallbackEngine = (typeof getSpawnEngine === 'function' && F2_LAUNCH_ENGINES.some(e => e.id === getSpawnEngine()))
-        ? getSpawnEngine() : 'claude';
-      const engine = F2_LAUNCH_ENGINES.some(e => e.id === gate.engine) ? gate.engine : fallbackEngine;
+      const launchEngines = f2LaunchEngines();
+      const fallbackEngine = (typeof getSpawnEngine === 'function' && launchEngines.some(e => e.id === getSpawnEngine()))
+        ? getSpawnEngine() : launchEngines[0].id;
+      const engine = launchEngines.some(e => e.id === gate.engine) ? gate.engine : fallbackEngine;
       const models = f2ModelsForEngine(engine);
       const defaultModels = (typeof spawnDefaultsState === 'object' && spawnDefaultsState && spawnDefaultsState.models) || {};
       const preferred = defaultModels[engine] || (engine === 'claude' ? 'sonnet-5' : '');
@@ -4122,7 +4141,7 @@
           const engine = String(pick && pick.engine || '');
           const model = String(pick && pick.model || '');
           const effort = String(pick && pick.effort || '');
-          if (!F2_LAUNCH_ENGINES.some(e => e.id === engine)) return false;
+          if (!f2LaunchEngines().some(e => e.id === engine)) return false;
           if (!f2ModelsForEngine(engine).some(option => option.id === model)) return false;
           if (effort && !f2EffortsForEngine(engine).some(option => option.id === effort)) return false;
           const key = JSON.stringify([engine, model, effort]);
@@ -4156,7 +4175,13 @@
   // are scoped to the chosen engine — picking Codex must never leave
   // "sonnet-5" sitting in the box.
   function f2ConfigHtml(launch) {
-    const engines = F2_LAUNCH_ENGINES.map(e => ({ id: e.id, label: e.label }));
+    // Only enabled engines are offered — except the one the select is
+    // currently showing, which is never pulled out from under it (the same
+    // rule applyDisabledEnginesToPickers uses for the spawn pickers).
+    const enabled = f2LaunchEngines();
+    const engines = F2_LAUNCH_ENGINES
+      .filter(e => enabled.some(x => x.id === e.id) || e.id === launch.engine)
+      .map(e => ({ id: e.id, label: e.label }));
     const efforts = f2EffortsForEngine(launch.engine);
     return '<div class="f2c-config">'
       + '<span>Launches on</span>'
@@ -4598,7 +4623,7 @@
       const engine = quickPick.getAttribute('data-engine') || '';
       const model = quickPick.getAttribute('data-model') || '';
       const effort = quickPick.getAttribute('data-effort') || '';
-      if (quickSt && quickSt.launch && F2_LAUNCH_ENGINES.some(e => e.id === engine)
+      if (quickSt && quickSt.launch && f2LaunchEngines().some(e => e.id === engine)
           && f2ModelsForEngine(engine).some(option => option.id === model)
           && (!effort || f2EffortsForEngine(engine).some(option => option.id === effort))) {
         ev.preventDefault();
