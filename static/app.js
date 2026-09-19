@@ -9673,6 +9673,11 @@
     const isOpencode = currentSession.source === 'opencode';
     const isDevin = currentSession.source === 'devin';
     const isDevinCli = currentSession.source === 'devin-cli';
+    // A foreign host (Devin Desktop / Next, a sibling CCC) holds this
+    // devin-cli session's lock: sends still queue and drain on release, but
+    // the composer reads "not ours right now" instead of fully live.
+    const devinCliExtOwned = isDevinCli && liveStatusMatchesOpenConv()
+      && !!(liveStatus && liveStatus.devinExternalOwner);
     const antigravityCanSendNow = antigravityCanSend(currentSession);
     // liveStatus lags a conversation switch by up to one poll; until it matches
     // the open conversation, treat the session as not-live so we never show the
@@ -9683,6 +9688,10 @@
     const isNewSession = currentConversation === '__new__';
     if (_activeInputBar) {
       _activeInputBar.classList.toggle('is-new-session-launch', isNewSession);
+      // devin-cli session whose lock a foreign host holds: dim the composer —
+      // sends still queue (they drain on release), but the bar reads "not
+      // ours right now" instead of looking fully live.
+      _activeInputBar.classList.toggle('is-externally-managed', devinCliExtOwned);
     }
     renderNewSessionObjectContext();
     // Backlog GH issue: viewing an issue card in the right pane. Submitting
@@ -9759,8 +9768,10 @@
         activeInputControls.ttyLabel.textContent = 'devin';
         if (activeInput) activeInput.placeholder = 'Devin cloud sessions are read-only in CCC - reply at app.devin.ai…';
       } else if (isDevinCli) {
-        activeInputControls.ttyLabel.textContent = 'devin';
-        if (activeInput) activeInput.placeholder = liveStatus.live ? 'Send to Devin session…' : 'Resume Devin and send…';
+        activeInputControls.ttyLabel.textContent = devinCliExtOwned ? 'external' : 'devin';
+        if (activeInput) activeInput.placeholder = devinCliExtOwned
+          ? 'Managed externally — open in another client (e.g. Devin Desktop); sends queue until it lets go…'
+          : (liveStatus.live ? 'Send to Devin session…' : 'Resume Devin and send…');
       } else if (live) {
         activeInputControls.ttyLabel.textContent = liveStatus.tty;
         if (activeInput) activeInput.placeholder = 'Send to terminal...';
@@ -9796,9 +9807,11 @@
           ? (isDevin
               ? 'Devin cloud sessions are read-only in CCC'
               : 'Open Antigravity to continue this app session')
-          : (isAntigravity && !antigravityCanSendNow
-              ? 'Send - runs AGY headless on this session'
-              : 'Send');
+          : (devinCliExtOwned
+              ? 'Queue message - delivers when the external client releases this session'
+              : (isAntigravity && !antigravityCanSendNow
+                  ? 'Send - runs AGY headless on this session'
+                  : 'Send'));
       }
       // CCC-46: when a relayed AskUserQuestion card is showing for this
       // session there must be exactly ONE place to answer. The bottom composer
@@ -31506,6 +31519,10 @@
   // sessions, placeholder swaps).
   function devinSteerCapableNow() {
     if (!currentSession || currentSession.source !== 'devin-cli') return false;
+    // A foreign host (Devin Desktop / Next, another CCC) holding the session
+    // lock means our acp conn cannot own it — no steer or live send is
+    // possible until that client lets go, no matter what the row flag says.
+    if (liveStatusMatchesOpenConv() && liveStatus && liveStatus.devinExternalOwner) return false;
     if (currentSession.acp_steer_ready === true) return true;
     return !!(liveStatusMatchesOpenConv() && liveStatus && liveStatus.devinAcpReady === true);
   }

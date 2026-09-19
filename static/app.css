@@ -8354,6 +8354,17 @@
     transition: border-color 0.15s, box-shadow 0.15s;
     border-top: 1px solid var(--border);
   }
+  /* devin-cli session whose lock is held by a foreign host (Devin Desktop /
+     Next, a sibling CCC): the composer still accepts queued sends — they
+     drain when the other client lets go — but the bar reads "managed
+     externally" instead of fully live. */
+  .conv-input-bar.visible.is-externally-managed {
+    border-style: dashed;
+    opacity: 0.62;
+  }
+  .conv-input-bar.visible.is-externally-managed textarea {
+    color: var(--text-muted);
+  }
   /* Conversation replay: simulate the human actually typing their reply
      into the real composer, then sending it (CCC-495) — same treatment as
      the group-chat reply box. */
