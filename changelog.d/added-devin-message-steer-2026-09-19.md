@@ -1,0 +1,1 @@
+- Devin sessions now get a Steer button on sent user messages (matching Codex): while a turn runs on the shared `devin acp` connection, clicking Steer on any of your messages cancels the turn and resends it — the same live-steer path queued messages already had.
