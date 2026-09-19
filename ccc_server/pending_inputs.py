@@ -3689,6 +3689,20 @@ def _transcript_peer_receipt(session_id, msg_id, body, start_offset=0, timeout_s
 
 
 def _resume_queue_engine_busy(sid):
+    if _core._is_devin_cli_session(sid):
+        # An in-flight ACP turn on our shared `devin acp` conn is engine-busy
+        # the same as a one-shot resume process — the pump must wait for it
+        # instead of racing a `devin --resume -p` onto the locked session.
+        try:
+            snap = (
+                _core._acp_session_snapshot(
+                    "devin", _core._devin_cli_raw_id(sid))
+                or {}
+            )
+            if snap.get("status") == "active":
+                return True
+        except Exception:
+            pass
     for s in _core._spawned_sessions:
         if s.get("resumed_sid") != sid:
             continue
@@ -3957,9 +3971,15 @@ def _pump_devin_resume_queue(session_id):
             return {"ok": True, "waiting": "busy"}
         raw_id = _core._devin_cli_raw_id(session_id)
         live_spawn = _core._find_live_spawn_entry_for_session(session_id)
+        # Our own `devin acp` conn records its child pid in the session lock
+        # file — that is CCC ownership, not an external owner. Without this
+        # check every ACP-attached session would park its durable queue in
+        # "external-owner" forever.
+        acp_loaded = _core._devin_acp_session_loaded(raw_id)
         if (
             _core._devin_cli_session_live(raw_id)
             and live_spawn is None
+            and not acp_loaded
         ):
             return {
                 "ok": True,
@@ -3977,6 +3997,34 @@ def _pump_devin_resume_queue(session_id):
                 delivery_slot = "steer"
         if text is None:
             return {"ok": True, "empty": True}
+
+        # ACP-first drain: the conn already owns the session, or it is
+        # dormant and loadable. `devin --resume -p` cannot attach to a
+        # session our conn holds anyway, and cannot even start while the
+        # CLI's interactive login has lapsed — the ACP drain covers both.
+        # On an inconclusive result fall through to the CLI path.
+        snap = _core._acp_session_snapshot("devin", raw_id) or {}
+        if snap.get("status") == "active":
+            return {"ok": True, "waiting": "busy"}
+        acp_cwd = (
+            snap.get("cwd")
+            or _core._devin_cli_session_cwd(raw_id)
+            or ""
+        )
+        acp_result = _core._devin_acp_try_steer(
+            session_id, raw_id, acp_cwd, text, mode="send",
+        )
+        if acp_result and acp_result.get("ok"):
+            drop = (
+                {"field": "devin_steer", "action": "clear_if_matching",
+                 "match": text}
+                if delivery_slot == "steer"
+                else {"field": "resume", "action": "pop_head_if_matching",
+                      "match": text}
+            )
+            _core._apply_pending_input_operations(session_id, [drop])
+            return {"ok": True, "started": True, "via": "acp-prompt",
+                    "result": acp_result}
 
         result = _core.resume_session_devin(
             session_id, text, _delivery_slot=delivery_slot,

@@ -3200,10 +3200,41 @@ def session_live_status(session_id, session_cwd):
         # started outside CCC).
         if _core._devin_cli_session_live(raw_id):
             result["live"] = True
-            result["kind"] = "headless"
             result["match_count"] = 1
             result["cwd"] = _core._devin_cli_session_cwd(raw_id) or session_cwd
+            # Our own `devin acp` conn holding the lock is not a headless
+            # `devin -p` run — report the ACP transport (kimi contract:
+            # kind "acp" + snapshot status) so the pane shows the real
+            # delivery channel.
+            if _core._devin_acp_session_loaded(raw_id):
+                snap = _core._acp_session_snapshot("devin", raw_id) or {}
+                result["kind"] = "acp"
+                result["status"] = (
+                    "running" if snap.get("status") == "active" else "idle"
+                )
+                result["cwd"] = snap.get("cwd") or result["cwd"]
+                result["model"] = snap.get("model")
+            else:
+                result["kind"] = "headless"
             return result
+        # Dormant session — no live process anywhere. Same ACP contract as
+        # kimi/grok: "live" means the shared `devin acp` conn can attach and
+        # drive it (session/load + session/prompt), which is the delivery
+        # path a send will actually take.
+        if _core._devin_acp_steer_capable():
+            snap = _core._acp_session_snapshot("devin", raw_id) or {}
+            result["live"] = True
+            result["kind"] = "acp"
+            result["status"] = (
+                "running" if snap.get("status") == "active" else "idle"
+            )
+            result["cwd"] = (
+                snap.get("cwd")
+                or _core._devin_cli_session_cwd(raw_id)
+                or session_cwd
+            )
+            result["model"] = snap.get("model")
+            result["match_count"] = 1
         return result
 
     if _core._is_cursor_session(session_id):

@@ -31655,13 +31655,26 @@
         agLive ? 'sys' : ''));
       return;
     }
-    // Devin CLI sessions are one-shot `devin -p` processes — headless, no TTY.
+    // Devin CLI sessions report the transport that actually delivers a
+    // send: "acp" when the shared `devin acp` conn owns or can attach the
+    // session (the Devin Desktop path — sends, steers and /compact go
+    // live), "headless" only while a one-shot `devin -p` process or a
+    // foreign Devin process owns it.
     if (currentSession && currentSession.source === 'devin-cli') {
       const dvLive = !!ls.live;
-      setAll(pill0(dvLive, false, dvLive ? 'headless · running' : 'headless',
-        dvLive
-          ? 'Devin CLI is running headlessly (one-shot `devin -p` - there is no live terminal). Click to open System status and stop/restart the process.'
-          : 'Devin CLI is idle - CCC resumes it headlessly when you send (there is no live terminal)',
+      const dvAcp = dvLive && ls.kind === 'acp';
+      const dvBusy = dvAcp && ls.status === 'running';
+      setAll(pill0(dvLive, false,
+        dvAcp
+          ? (dvBusy ? 'Devin ACP · working' : 'Devin ACP')
+          : (dvLive ? 'headless · running' : 'headless'),
+        dvAcp
+          ? (dvBusy
+              ? 'The shared devin acp connection is running a turn right now - the same transport Devin Desktop uses.'
+              : 'CCC drives this session over the shared devin acp connection (the Devin Desktop transport) - sends, steers and /compact go live.')
+          : (dvLive
+              ? 'A Devin process holds this session (one-shot `devin -p` or another host like Devin Desktop) - sends queue until it lets go.'
+              : 'Devin CLI is idle - CCC resumes it when you send (there is no live terminal)'),
         dvLive ? 'sys' : ''));
       return;
     }
