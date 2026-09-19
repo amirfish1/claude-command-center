@@ -29430,6 +29430,20 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
         if path == "/api/engines/update-now":
             self.send_json(_start_engine_update_pass(), 202)
             return
+        if path == "/api/engines/auto-update":
+            # Settings > Engines switch for the hourly CLI update pass.
+            length = int(self.headers.get("Content-Length", "0") or 0)
+            try:
+                payload = json.loads(self.rfile.read(length)) if length > 0 else {}
+            except json.JSONDecodeError:
+                self.send_json({"ok": False, "error": "invalid JSON"}, 400)
+                return
+            if not isinstance(payload, dict) or not isinstance(payload.get("enabled"), bool):
+                self.send_json({"ok": False, "error": "enabled must be true or false"}, 400)
+                return
+            result = _set_engine_auto_update(payload["enabled"])
+            self.send_json(result, 200 if result.get("ok") else 500)
+            return
         if path in ("/api/apps/add", "/api/apps/remove", "/api/apps/arrange"):
             # Applications settings writes. Same-origin already enforced at
             # the top of do_POST; these only ever touch the user's own

@@ -623,6 +623,25 @@ def _engine_cli_version(bin_path):
     return output.splitlines()[0][:160] if output else ""
 
 
+def _engine_auto_update_enabled(state=None):
+    """The Settings > Engines switch. Lives in the update state file so the
+    dashboard and the worker (each runs the hourly loop) read one answer.
+    Missing key means on: that was the only behaviour before the switch."""
+    if state is None:
+        state = _read_engine_update_state()
+    return state.get("automatic") is not False
+
+
+def _set_engine_auto_update(enabled):
+    state = _read_engine_update_state()
+    if not isinstance(state, dict):
+        state = {}
+    state["automatic"] = bool(enabled)
+    if not _write_engine_update_state(state):
+        return {"ok": False, "error": "could not save the setting"}
+    return _engine_update_status()
+
+
 def _engine_update_status():
     state = _read_engine_update_state()
     engines = state.get("engines")
@@ -636,7 +655,7 @@ def _engine_update_status():
         })
     return {
         "ok": True,
-        "automatic": True,
+        "automatic": _engine_auto_update_enabled(state),
         "interval_seconds": _ENGINE_UPDATE_INTERVAL_SEC,
         "running": bool(_ENGINE_UPDATE_RUNNING),
         "last_started_at": state.get("last_started_at"),
@@ -754,6 +773,8 @@ def _run_engine_updates_once():
             }
 
         state = {
+            # Re-read at write time: the switch may have flipped mid-pass.
+            "automatic": _engine_auto_update_enabled(),
             "last_started_at": started_at,
             "last_finished_at": datetime.now(tz=timezone.utc).isoformat(),
             "engines": results,
@@ -761,7 +782,6 @@ def _run_engine_updates_once():
         _write_engine_update_state(state)
         return {
             "ok": True,
-            "automatic": True,
             "interval_seconds": _ENGINE_UPDATE_INTERVAL_SEC,
             "running": False,
             **state,
@@ -777,9 +797,14 @@ def _run_engine_updates_once():
         _ENGINE_UPDATE_MUTEX.release()
 
 
-def _engine_maintenance_once():
+def _engine_maintenance_once(force_updates=False):
     catalog_status = _core._refresh_claude_model_catalog()
-    update_status = _core._run_engine_updates_once()
+    # Automatic updates off only skips the CLI updaters on the hourly pass;
+    # "Update now" forces them, and the catalog/worker checks always run.
+    if force_updates or _engine_auto_update_enabled():
+        update_status = _core._run_engine_updates_once()
+    else:
+        update_status = _engine_update_status()
     # Continuous backstop for run.sh's one-shot boot-time worker-compat check
     # (see server._worker_compat_maintenance_check): retires an idle worker
     # still running stale/incompatible code, on this same hourly cadence,
@@ -803,7 +828,7 @@ def _start_engine_update_pass():
     def run():
         global _ENGINE_UPDATE_THREAD_ACTIVE
         try:
-            _core._engine_maintenance_once()
+            _core._engine_maintenance_once(force_updates=True)
         finally:
             with _ENGINE_UPDATE_START_LOCK:
                 _ENGINE_UPDATE_THREAD_ACTIVE = False
