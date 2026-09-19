@@ -888,7 +888,19 @@ def _acp_request(harness, method, params=None, timeout=20, sid=None):
         out = {"ok": False, "error": error.get("message") or f"ACP error {code}", "code": code}
         if code == -32000:
             out["auth_required"] = True
-            out["error"] = f"{_core._ACP_HARNESSES[harness]['label']} login required — run `{_A_core.CP_HARNESSES[harness]['bin_names'][0]} login`"
+            _cfg = _core._ACP_HARNESSES.get(harness) or {}
+            _method = _cfg.get("auth_method")
+            _conn = _core._ACP_CONNS.get(harness)
+            if _conn is not None:
+                # Mark the conn unauthenticated so _acp_ensure re-runs the
+                # authenticate handshake (rate-limited by auth_retry_at)
+                # instead of shortcutting to "ready".
+                _conn["authenticated"] = False
+            out["error"] = (
+                f"{_cfg.get('label', harness)} ACP login required"
+                + (f" — retrying authenticate ({_method}) on next attach" if _method
+                   else "")
+            )
         return out
     return {"ok": True, "result": response.get("result")}
 
@@ -2045,9 +2057,13 @@ def _acp_ensure(harness):
     if ready is not None:
         # Authenticate outside the lock: devin's devin-browser flow can
         # block on a real browser sign-in, and _acp_request itself takes
-        # no lock anyway.
-        _acp_authenticate(harness, ready)
-        return ready
+        # no lock anyway. A failed/pending auth returns None — session
+        # calls against an unauthenticated conn would only fail -32000,
+        # while _ACP_ENSURE_ERROR carries the clearer "login pending"
+        # reason for callers to surface.
+        if _acp_authenticate(harness, ready):
+            return ready
+        return None
 
     resolved = _core._acp_resolve_bin(harness)
     proc = None
@@ -2112,8 +2128,9 @@ def _acp_ensure(harness):
         if initialized:
             # Host-driven credential handshake (devin's devin-browser).
             # Runs outside the lock — it can block on a browser sign-in.
-            _acp_authenticate(harness, conn)
-            return conn
+            if _acp_authenticate(harness, conn):
+                return conn
+            return None
     transport.close()
     with _core._ACP_LOCK:
         _core._ACP_ENSURE_ERROR[harness] = (
