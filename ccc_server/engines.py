@@ -3089,6 +3089,23 @@ def spawn_session_devin(prompt, name=None, cwd=None, repo_path=None, worktree=Fa
             "parent_session_id": parent_session_id or "",
             "via": "devin-acp",
         }
+        # Register the spawn like the `devin -p` path below: the durable
+        # devincli-* row only carries spawn_pid — and the sidebar placeholder
+        # only swaps onto it — when _devin_spawn_pid_by_session_id can find
+        # the spawn. There is no per-session process to track (the session
+        # lives inside the shared `devin acp` conn), so the spawn_id doubles
+        # as the key; liveness comes from the session lock the conn holds
+        # while attached.
+        entry["pid"] = entry["spawn_id"]
+        _core._spawned_sessions.append(entry)
+        _core._record_spawn_to_registry(
+            pid=entry["spawn_id"], name=session_name, log_path=log_path,
+            cwd=spawn_cwd, spawned_at=timestamp, command_summary=prompt[:200],
+            fifo=None, engine="devin", session_id=entry["session_id"],
+            repo_path=repo_for_logs, model=model_to_use,
+            parent_session_id=parent_session_id,
+            reasoning_effort=reasoning_effort or "",
+        )
         resp = {
             "ok": True,
             "via": "devin-acp",

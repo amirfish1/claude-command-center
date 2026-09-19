@@ -396,6 +396,86 @@ class DevinQueueTests(unittest.TestCase):
         self.assertTrue(match)
         self.assertEqual(match[0].get("spawn_pid"), 67663)
 
+    def test_devin_list_attaches_acp_spawn_id(self):
+        """ACP spawns have no process pid — the durable row must still carry
+        the synthetic spawn id as spawn_pid so the sidebar placeholder
+        (keyed by that same id) can swap onto the real row."""
+        server = importlib.import_module("server")
+        import ccc_server.devin as devin_mod
+
+        db_fd, db_path = tempfile.mkstemp(suffix=".db")
+        os.close(db_fd)
+        self.addCleanup(lambda: os.unlink(db_path) if os.path.exists(db_path) else None)
+        now = time.time()
+        con = sqlite3.connect(db_path)
+        con.executescript(
+            """
+            CREATE TABLE sessions (
+                id TEXT PRIMARY KEY,
+                working_directory TEXT,
+                backend_type TEXT,
+                model TEXT,
+                agent_mode TEXT,
+                created_at REAL,
+                last_activity_at REAL,
+                title TEXT,
+                main_chain_id TEXT
+            );
+            CREATE TABLE prompt_history (
+                session_id TEXT,
+                content TEXT,
+                timestamp REAL,
+                is_shell INTEGER
+            );
+            """
+        )
+        con.execute(
+            "INSERT INTO sessions (id, working_directory, backend_type, model, "
+            "agent_mode, created_at, last_activity_at, title, main_chain_id) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            ("acp-raw-1", "/tmp/ccc", "", "", "", now, now, "ACP session", None),
+        )
+        con.execute(
+            "INSERT INTO prompt_history (session_id, content, timestamp, is_shell) "
+            "VALUES (?, ?, ?, ?)",
+            ("acp-raw-1", "spawn me over acp", now, 0),
+        )
+        con.commit()
+        con.close()
+
+        prev_db = os.environ.get("CCC_DEVIN_DB")
+        os.environ["CCC_DEVIN_DB"] = db_path
+        self.addCleanup(
+            lambda: (
+                os.environ.__setitem__("CCC_DEVIN_DB", prev_db)
+                if prev_db is not None
+                else os.environ.pop("CCC_DEVIN_DB", None)
+            )
+        )
+
+        # Shape produced by spawn_session_devin's ACP branch: no proc, the
+        # spawn_id doubles as the pid, session_id known in-band.
+        entry = {
+            "engine": "devin",
+            "pid": "devin-acp-acp-raw-1",
+            "spawn_id": "devin-acp-acp-raw-1",
+            "session_id": "devincli-acp-raw-1",
+            "cwd": "/tmp/ccc",
+            "repo_path": "/tmp/ccc",
+            "command_summary": "spawn me over acp",
+            "spawned_at": datetime.fromtimestamp(now).strftime("%Y%m%dT%H%M%S"),
+            "via": "devin-acp",
+            # Skip the one-shot exit-cleanup write so the test stays
+            # side-effect free; liveness is irrelevant to spawn_pid.
+            "_cleanup_done": True,
+        }
+        with mock.patch.object(server, "_spawned_sessions", [entry]), \
+             mock.patch.object(devin_mod, "_DEVIN_CLI_LIST_CACHE", {}):
+            rows = server.find_devin_cli_conversations("/tmp/ccc", include_old=True)
+        match = [r for r in rows if r.get("id") == "devincli-acp-raw-1"]
+        self.assertTrue(match)
+        self.assertEqual(match[0].get("spawn_pid"), "devin-acp-acp-raw-1")
+
     def test_devin_spawn_session_id_resolved_from_message_nodes(self):
         """One-shot `devin -p` writes message_nodes, not prompt_history."""
         server = importlib.import_module("server")

@@ -6593,7 +6593,7 @@
     if (values.includes('copilot')) return 'copilot';
     if (values.includes('copilotchat')) return 'copilotchat';
     if (values.includes('grok')) return 'grok';
-    if (values.includes('devin')) return 'devin';
+    if (values.includes('devin') || values.includes('devin-cli')) return 'devin';
     if (values.includes('opencode')) return 'opencode';
     return 'claude';
   }
@@ -6646,7 +6646,7 @@
     claude: 'Claude', codex: 'Codex', gemini: 'Gemini', cursor: 'Cursor',
     antigravity: 'Antigravity', hermes: 'Hermes', kimi: 'Kimi',
     copilot: 'Copilot', grok: 'Grok', copilotchat: 'Copilot Chat',
-    devin: 'Devin',
+    devin: 'Devin', 'devin-cli': 'Devin',
     opencode: 'OpenCode',
     // sessionIconEngine never returns these two, but the pending-spawn card
     // looks labels up by raw source and they are real spawn targets.
@@ -19931,13 +19931,22 @@
       // (handled below, after the session-id maps are rebuilt).
       let _selectionSwap = null;
       const realPids = new Set(fresh.filter(c => c.spawn_pid).map(c => String(c.spawn_pid)));
+      const realSids = new Set(fresh.map(c => String(c.session_id || c.id || '')));
       for (const pid of Array.from(pendingSpawns.keys())) {
-        if (realPids.has(String(pid))) {
-          const placeholder = pendingSpawns.get(pid);
+        const placeholder = pendingSpawns.get(pid);
+        // In-band-id engines (devin acp, kimi) return the real session_id in
+        // the spawn response, and the row can surface before it carries a
+        // matching spawn_pid — reconcile on the expected id too, or the
+        // placeholder sits next to the real row until the not-ack deadline.
+        const expectedSid = String((placeholder && placeholder.expected_session_id) || '');
+        const sidMatched = !!(expectedSid && realSids.has(expectedSid));
+        if (realPids.has(String(pid)) || sidMatched) {
           const defaultPlaceholderId = 'spawning-' + pid;
           const placeholderId = (placeholder && placeholder.id) || defaultPlaceholderId;
           const placeholderCol = columnOverrides[placeholderId] || columnOverrides[defaultPlaceholderId];
-          const realCard = fresh.find(c => String(c.spawn_pid) === String(pid));
+          const realCard = sidMatched
+            ? fresh.find(c => String(c.session_id || c.id || '') === expectedSid)
+            : fresh.find(c => String(c.spawn_pid) === String(pid));
           if (realCard && realCard.session_id) {
             carryFlowPendingSpawnNode(placeholder, realCard);
             _firstSeenSessions.set(realCard.session_id, Date.now());
@@ -31653,12 +31662,7 @@
           if (!res.ok || !data.ok) throw new Error(data.error || 'spawn_failed');
           const realSpawnId = data.spawn_id || data.pid;
           if (realSpawnId) {
-            const placeholder = conversationsData.find(x => x.id === 'spawning-' + tempPid);
-            if (placeholder) {
-              placeholder.spawn_pid = realSpawnId;
-              pendingSpawns.delete(tempPid);
-              pendingSpawns.set(realSpawnId, placeholder);
-            }
+            adoptPendingSpawnPid(tempPid, realSpawnId, data.log, data.session_id);
           }
           // Fire-and-forget: signal to GitHub that this issue is being worked on
           if (issueNum) {
@@ -34181,7 +34185,7 @@
       // cloud rows are excluded too: their transcripts live in the cloud
       // (fetched on open), so a missing local first_message says nothing
       // about usage. Devin CLI rows carry first_message from the SQLite DB.
-      const emptySessionChipHtml = (!isBacklogRow && !isGithubPrRow && !c.first_message && !c.spawn_recent && c.source !== 'devin')
+      const emptySessionChipHtml = (!isBacklogRow && !isGithubPrRow && !c.pending_spawn && !c.first_message && !c.spawn_recent && c.source !== 'devin')
         ? '<span class="conv-empty-session-chip" title="This session has no transcript messages">[EMPTY]</span>'
         : '';
       const historySnippetHtml = c._historySnippet
@@ -39813,12 +39817,7 @@
             if (!res.ok || !data.ok) throw new Error(data.error || 'spawn_failed');
             const realSpawnId = data.spawn_id || data.pid;
             if (realSpawnId) {
-              const placeholder = conversationsData.find(x => x.id === 'spawning-' + tempPid);
-              if (placeholder) {
-                placeholder.spawn_pid = realSpawnId;
-                pendingSpawns.delete(tempPid);
-                pendingSpawns.set(realSpawnId, placeholder);
-              }
+              adoptPendingSpawnPid(tempPid, realSpawnId, data.log, data.session_id);
             }
             if (issueNum && spawnRepoPath) {
               fetch('/api/issues/' + issueNum + '/mark-in-progress', {
@@ -67858,6 +67857,8 @@
   const SPAWN_DEFAULT_OTHER = '__other__';
   function normalizeSpawnDefaultEngine(v) {
     if (v === 'gemini') return 'antigravity';
+    // Rows/placeholders carry the source 'devin-cli'; the spawn engine is 'devin'.
+    if (v === 'devin-cli') return 'devin';
     return SPAWN_DEFAULT_ENGINES.includes(v) ? v : 'claude';
   }
   function readLegacySpawnEnginePref() {
@@ -67937,7 +67938,11 @@
     if (engine === 'hermes') return 'hermes';
     if (engine === 'kimi') return 'kimi';
     if (engine === 'opencode') return 'opencode';
-    if (engine === 'devin') return 'devin';
+    // The spawn engine 'devin' produces devin-cli sessions — 'devin' as a
+    // row source means the READ-ONLY cloud mirror, so labeling the
+    // placeholder 'devin' made the composer refuse input on a session that
+    // was perfectly sendable.
+    if (engine === 'devin') return 'devin-cli';
     if (engine === 'grok') return 'grok';
     if (engine === 'pkood') return 'pkood';
     return 'interactive';
@@ -68683,15 +68688,10 @@
           // the 30s auto-cleanup fires.
           const realSpawnId = data.spawn_id || data.pid;
           if (realSpawnId) {
-            const placeholder = conversationsData.find(x => x.id === 'spawning-' + tempPid);
-            if (placeholder) {
-              placeholder.spawn_pid = realSpawnId;
-              // Fire-and-watch engines stash the log path so the
-              // right-pane renderer can fetch /api/sessions/spawned/<pid>/log.
-              if (spawnUsesLogPlaceholder(engine) && data.log) placeholder.agent_log_path = data.log;
-              pendingSpawns.delete(tempPid);
-              pendingSpawns.set(realSpawnId, placeholder);
-            }
+            // adoptPendingSpawnPid also stashes agent_log_path for
+            // fire-and-watch engines and expected_session_id for in-band-id
+            // engines — both feed the placeholder→row reconciliation.
+            adoptPendingSpawnPid(tempPid, realSpawnId, data.log, data.session_id);
           }
           // Tight poll schedule so the real card replaces the placeholder fast.
           // (No-op for codex — no real card materializes — but harmless.)
